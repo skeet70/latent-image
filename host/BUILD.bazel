@@ -1,0 +1,122 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_library", "haskell_toolchain_library")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_toolchain_library(name = "base")
+
+haskell_toolchain_library(name = "aeson")
+
+haskell_toolchain_library(name = "attoparsec")
+
+haskell_toolchain_library(name = "bytestring")
+
+haskell_toolchain_library(name = "containers")
+
+haskell_toolchain_library(name = "directory")
+
+haskell_toolchain_library(name = "filepath")
+
+haskell_toolchain_library(name = "process")
+
+haskell_toolchain_library(name = "scientific")
+
+haskell_toolchain_library(name = "text")
+
+haskell_toolchain_library(name = "time")
+
+haskell_toolchain_library(name = "unix")
+
+haskell_toolchain_library(name = "vector")
+
+haskell_library(
+    name = "json",
+    srcs = ["FujiAF/JSON.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":aeson",
+        ":attoparsec",
+        ":base",
+        ":bytestring",
+        ":scientific",
+        ":text",
+        ":vector",
+    ],
+)
+
+haskell_library(
+    name = "update-container",
+    srcs = ["FujiAF/UpdateContainer.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":base",
+        ":bytestring",
+    ],
+)
+
+haskell_library(
+    name = "label-record",
+    srcs = ["FujiAF/LabelRecord.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":base",
+        ":bytestring",
+        ":update-container",
+    ],
+)
+
+haskell_library(
+    name = "recipe-bank",
+    srcs = [
+        "FujiAF/RecipeBank.hs",
+        "FujiAF/RecipeBankFields.hs",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":base",
+        ":bytestring",
+    ],
+)
+
+haskell_library(
+    name = "host-support",
+    srcs = ["FujiAF/Host.hs"],
+    ghcopts = ["-XGHC2021"],
+    src_strip_prefix = ".",
+    deps = [
+        ":aeson",
+        ":base",
+        ":bytestring",
+        ":directory",
+        ":filepath",
+        ":json",
+        ":process",
+        ":scientific",
+        ":text",
+        ":unix",
+        ":vector",
+    ],
+)

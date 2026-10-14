@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "installed_body_firmware": "1.00",
+  "artifacts": [
+    {
+      "model": "X-M1",
+      "version": "1.50",
+      "file": {
+        "path": "private-data/firmware/x-m1-1.50/FWUP0002.DAT",
+        "sha256": "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"
+      },
+      "size_bytes": 38405148,
+      "source_url": "https://dl.fujifilm-x.com/support/firmware/x-m1-150-oqijkawt/FWUP0002.DAT",
+      "acquired_at": "2026-09-28T06:43:53Z",
+      "matches_installed": false,
+      "evidence_ids": [
+        "E-FIRMWARE"
+      ]
+    }
+  ]
+}

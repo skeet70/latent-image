@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "coverage": "Selected exact public Git blobs inspected for B-01/C-01; full upstream trees and uninvoked dependencies are not runtime-audited. No submodules executed.",
+  "privacy_class": "Public source metadata; no firmware or extracted bytes.",
+  "hash_method": "SHA-256 of exact Git blob bytes.",
+  "sources": [
+    {
+      "origin": "https://github.com/tiredboffin/fffw",
+      "revision": "bedc091e0b54a1a34aaf6929dd08e1db36d13b08",
+      "git_tree": "7b2c4cfe88f62d6386ca438e9b04abafc7d0f1c0",
+      "files": [
+        {
+          "path": "README.md",
+          "size_bytes": 5002,
+          "sha256": "a5e0c086c670957982f70ec8fac2f43c2cd8ed8f472e5a6901282420d2195001",
+          "git_blob": "3fedc1ce6c4d1adf0bdb00e0e59ddcd143dc3954"
+        },
+        {
+          "path": "ffun/README.md",
+          "size_bytes": 4579,
+          "sha256": "f0423091041758793ef18e8d8f4f2fb378c4f8f68094f4ecbef585641468e609",
+          "git_blob": "d6cc3e5605193d7c834cfec1912679aec1737c49"
+        },
+        {
+          "path": "ffun/py/ffundat/ffundat.py",
+          "size_bytes": 150,
+          "sha256": "54ec431642e2cc3cac130d3e01d872c3806c27aa13f8705fd0f54cdb97c8772f",
+          "git_blob": "09aefd3cc7e76806717e3a2dda0f5403fe397e53"
+        },
+        {
+          "path": "ffun/py/ffundat/__main__.py",
+          "size_bytes": 63,
+          "sha256": "8959f6573f1996bd44863018aa606f2196307ba4ce905bd57efe6beeb87afcc6",
+          "git_blob": "8d24ce9ff40bf22599a1b0e5dd0ef0b2d0c06d71"
+        },
+        {
+          "path": "ffun/go.mod",
+          "size_bytes": 57,
+          "sha256": "b9d0eb4cbb1799ffd96d68fa4f255b9c7c2e017dcccfe664e13f655975330d9a",
+          "git_blob": "67638e38d355068ba8e7455f85613d7694be697b"
+        },
+        {
+          "path": "ffun/cmd/ffun/main.go",
+          "size_bytes": 801,
+          "sha256": "b8df5e64a502bd2ce2c83baacb10d8ae81fdb0eaebc6ff944db6ea2584c22c4e",
+          "git_blob": "73cb974126e4f3ef52b03aa1f5bedd923c396fd6"
+        },
+        {
+          "path": "ffun/internal/cli/ffundat/ffundat.go",
+          "size_bytes": 839,
+          "sha256": "5ed7d7612eb56924f39561dcc60c1ce6f42b3175446b53598b61653d4177cfd8",
+          "git_blob": "636ea3886f246b7355de6d85efdd39d24f00aabe"
+        },
+        {
+          "path": "ffun/internal/cli/ffcompress/run.go",
+          "size_bytes": 3943,
+          "sha256": "70b7c102338538f6439dcb7880d228124a898114a4896bf930a466ac91b05afe",
+          "git_blob": "48c5e33c4f6a12b7c6195e5e8afe74194627f56c"
+        },
+        {
+          "path": "ffun/internal/cli/ffindex/ffindex.go",
+          "size_bytes": 7898,
+          "sha256": "63de8023f07a2315f344b63cd609cac02661de8044fcb5025d10628202241408",
+          "git_blob": "04d811d801a6fa83a71cfad1869f7a6424abec96"
+        },
+        {
+          "path": "ffun/generate.go",
+          "size_bytes": 51,
+          "sha256": "c8d208223cba5912e96500c68d1549700fd1806c1f2d580c5a88d8ca73a130a2",
+          "git_blob": "a2f840cdc86038c46195f75369ac005079b79dc6"
+        },
+        {
+          "path": "ffun/tools/genglue/main.go",
+          "size_bytes": 2386,
+          "sha256": "e0318c87b59f73917eab6f9f993439da6e9acbc934c0621f1e635b7bc9d2efec",
+          "git_blob": "d8d5f866f2487f80b08c5de3f12a72e9150559a9"
+        },
+        {
+          "path": "boot/README",
+          "size_bytes": 57,
+          "sha256": "7882d050606ef285b6b76a839f6942f479a1c8d642ee3e015eb078561d1677f7",
+          "git_blob": "cdebf41ba096168dd0f106ebbf78c3b82882ac02"
+        },
+        {
+          "path": "boot/xe2-start.S",
+          "size_bytes": 615,
+          "sha256": "792d5b4ef9589f4ece4e6a0176f2332578fed59f8787f4a68c1b39663b3aec69",
+          "git_blob": "2778ce47ac2f9c49ff4fbb2715f51f7eac55e24b"
+        },
+        {
+          "path": "boot/xe2-led0-main.c",
+          "size_bytes": 1003,
+          "sha256": "3cd784db73d0613dee0491ca6c71b65e75fd59ae57a5de6521a0ae10f0fea757",
+          "git_blob": "4e11b171f16047456c786546cf91443127a6b808"
+        },
+        {
+          "path": "ffun/ports/xe2/0411/bootrom.h",
+          "size_bytes": 162,
+          "sha256": "0d4cbba08d04f0cf8902d30b5d3f6ccc47eaec027661033f90984debb91ccb26",
+          "git_blob": "572cccd5ff041eef968c7427baf0d75bdac262f1"
+        }
+      ]
+    },
+    {
+      "origin": "https://github.com/fujihack/fujihack",
+      "revision": "754acff9aa0322df19446cf7eca699b221c3330d",
+      "git_tree": "773b6f462cc6bfc206e2af9cfadeed75fb5c0d99",
+      "files": [
+        {
+          "path": "README.md",
+          "size_bytes": 2222,
+          "sha256": "22150dc86594db8ff482921ca1c3d29df1553b3b25916d32b3f1481da7145cef",
+          "git_blob": "155bb0ecf066eb401c0421b9479cb633350d875f"
+        },
+        {
+          "path": "etc/decrypt.c",
+          "size_bytes": 597,
+          "sha256": "15357a60f73ca66299b2ebd245886d2802550068fe813a8cd4ce972373965239",
+          "git_blob": "08e66b03456bad376795d4fe830558808d9f1dc1"
+        },
+        {
+          "path": "etc/models.json",
+          "size_bytes": 8366,
+          "sha256": "39aea8bc6cc5f16d8086d27b0e1f77796557f8be57888027195ffa3fba9954da",
+          "git_blob": "cff58281fcd453a5b540a468b6b754f9db8e0c32"
+        },
+        {
+          "path": "etc/models.h",
+          "size_bytes": 1787,
+          "sha256": "05d44da477821f3b04d8c846e5eaa4dce3063a9e16ce77d80ddff43f44224903",
+          "git_blob": "232b0de71f2734299a17a6528cfac6b4091a75a9"
+        },
+        {
+          "path": "etc/NOTES.md",
+          "size_bytes": 2153,
+          "sha256": "b1e2a686b3f4a3a1a844f7f7451900a43d2dfcf98b0601a523468ff733e030d4",
+          "git_blob": "f85d442faaa757374bad60d8b92b8fabfae1f9a1"
+        },
+        {
+          "path": "etc/unicorn/main.py",
+          "size_bytes": 3630,
+          "sha256": "eda4598891e30df406d5d07feaefaeaad7d30ae798a4ed0c83285e0836d8e593",
+          "git_blob": "ed31ede2f2e612c51af14b625485f1e83f54ba20"
+        },
+        {
+          "path": "etc/unicorn/main.c",
+          "size_bytes": 315,
+          "sha256": "9b286ff2f4546d1adcf1a179b2e5746e2585324f611b41a158b80d772654d8d3",
+          "git_blob": "d64fd1a8bdfd996dcecda0d1d933a3afa3fa74bd"
+        },
+        {
+          "path": ".gitmodules",
+          "size_bytes": 85,
+          "sha256": "41038fac27bd6960b611c02ebe8133c91a1808ededa32b4303087cff086c4f37",
+          "git_blob": "fc5aaa7caf284488328f0624a902bbdbc9b89a97"
+        }
+      ]
+    },
+    {
+      "origin": "https://github.com/fujihack/patcher",
+      "revision": "0e81431c32f2fc908d9626d255e1d758ebfe8a79",
+      "git_tree": "ed8f8b0ad4b33cb76a3686adee971666669ff1a7",
+      "files": [
+        {
+          "path": "README.md",
+          "size_bytes": 654,
+          "sha256": "d51aea15d1c4825eb2d74fd8e69dac78c81375eaca5efcf0a14d545f04174c94",
+          "git_blob": "43b7e8f4d7ee5763ee28ea9864ed942c48a26243"
+        },
+        {
+          "path": "util.js",
+          "size_bytes": 1217,
+          "sha256": "a7445f19a02125f758d0803d3d7f49552ce93ae1e540e0bc49f7cee1ffd71594",
+          "git_blob": "d2922368b7a6545c1ac2766e5df64203cb1073f0"
+        },
+        {
+          "path": "patcher.js",
+          "size_bytes": 18424,
+          "sha256": "67c029616e2032c6863e95a1f82ca0bfbc0fe1f9abe4e6b940eab4596db0c94f",
+          "git_blob": "2a141fb19512de13d639ca3640fe71a90dd7aa82"
+        },
+        {
+          "path": "cli.js",
+          "size_bytes": 1465,
+          "sha256": "d461176c51728b9ec9e47006e57c3c0a152cd6b78d458e202c06b79da30285e1",
+          "git_blob": "732098e5f705bd9c94b016f86f7dd50fc28651c5"
+        },
+        {
+          "path": "Makefile",
+          "size_bytes": 247,
+          "sha256": "3c31f9e569bedb15fd79b0cd6ae7d028cc78fb24a10c3edec1d8cf6ee04fd426",
+          "git_blob": "13dbae872e3ffccae2ae3cffd0e9e585dd6a0191"
+        },
+        {
+          "path": ".gitmodules",
+          "size_bytes": 79,
+          "sha256": "3e8ce69a77742e4971426562d74d0e072e9d2f6486b09f5deff21cfa5031c8bb",
+          "git_blob": "188fd8d615c38532afa33a00adb02691869942e3"
+        }
+      ]
+    }
+  ]
+}

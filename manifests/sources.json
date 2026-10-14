@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "id": "x70view",
+      "url": "https://github.com/justjake/x70view",
+      "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+      "status": "pin-selected",
+      "evidence_ids": [
+        "E-X70-GRANT-150",
+        "E-XM1-VIEWER-BOOT-150"
+      ]
+    },
+    {
+      "id": "fffw",
+      "url": "https://github.com/tiredboffin/fffw",
+      "revision": "bedc091e0b54a1a34aaf6929dd08e1db36d13b08",
+      "status": "audited",
+      "evidence_ids": [
+        "E-DESIGN",
+        "E-TRANSPORT"
+      ]
+    },
+    {
+      "id": "python-libusb1",
+      "url": "https://github.com/vpelletier/python-libusb1",
+      "revision": "292143c8f4465fdcb2c35ed40cdd7e4dd8d031e1",
+      "status": "audited",
+      "evidence_ids": [
+        "E-TRANSPORT"
+      ]
+    },
+    {
+      "id": "fujihack",
+      "url": "https://github.com/fujihack/fujihack",
+      "revision": "754acff9aa0322df19446cf7eca699b221c3330d",
+      "status": "pin-selected",
+      "evidence_ids": [
+        "E-FIRMWARE",
+        "E-RECOVERY"
+      ]
+    },
+    {
+      "id": "libcamera-af",
+      "url": "https://github.com/raspberrypi/libcamera",
+      "revision": null,
+      "status": "reference",
+      "evidence_ids": [
+        "E-DESIGN"
+      ]
+    },
+    {
+      "id": "libusb-native",
+      "url": "https://github.com/libusb/libusb",
+      "revision": "87a55632db62c9bdc58cd31d3ccfa673f1bb017f",
+      "status": "audited",
+      "evidence_ids": [
+        "E-NATIVE-USB"
+      ]
+    },
+    {
+      "id": "systemd-libudev",
+      "url": "https://github.com/systemd/systemd",
+      "revision": "4925d9f07fc697efccd98a93046ff535b8832445",
+      "status": "audited",
+      "evidence_ids": [
+        "E-NATIVE-USB"
+      ]
+    },
+    {
+      "id": "fujihack-patcher",
+      "url": "https://github.com/fujihack/patcher",
+      "revision": "0e81431c32f2fc908d9626d255e1d758ebfe8a79",
+      "status": "audited",
+      "evidence_ids": [
+        "E-FIRMWARE"
+      ]
+    }
+  ]
+}

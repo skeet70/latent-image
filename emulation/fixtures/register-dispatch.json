@@ -1,0 +1,119 @@
+{
+ "artifacts": [
+  {
+   "id": "register-dispatch",
+   "path": "register-dispatch.bin",
+   "sha256": "e6eb17a55b4e3c6d7a9eaa3aa84370e5d95c7286a0e65f18e5b01183b973150e",
+   "size": 32
+  }
+ ],
+ "cpu": {
+  "architecture": "arm",
+  "endian": "little",
+  "mode": "arm",
+  "model": "cortex-r5f"
+ },
+ "entry": "0x00001004",
+ "exclusions": [
+  "Synthetic Cortex-R5F user-mode ARM/little-endian only; no X-M1 behavior or ABI claim",
+  "No exceptions, coprocessors, mode switching, PC-loading returns, MMIO, interrupts, DMA, caches, scheduling or hardware timing"
+ ],
+ "exit": "0x00001080",
+ "expected": {
+  "events": [],
+  "memory": [],
+  "registers": {
+   "cpsr": "0x00000010",
+   "lr": "0x00001080",
+   "pc": "0x00001080",
+   "r0": "0x00000002",
+   "r1": "0x00000001",
+   "r10": "0x00000000",
+   "r11": "0x00000000",
+   "r12": "0x00000000",
+   "r2": "0x0000101c",
+   "r3": "0x00000000",
+   "r4": "0x00000000",
+   "r5": "0x00000000",
+   "r6": "0x00000000",
+   "r7": "0x00000000",
+   "r8": "0x00000000",
+   "r9": "0x00000000",
+   "sp": "0x00003020"
+  },
+  "status": "returned"
+ },
+ "functions": [
+  {
+   "address": "0x00001004",
+   "size": 32
+  }
+ ],
+ "id": "register-dispatch",
+ "limits": {
+  "instructions": 100,
+  "wall_ms": 1000
+ },
+ "origin": "synthetic",
+ "provenance": "PROVENANCE.md: hand-encoded ARM instructions and independent arithmetic",
+ "regions": [
+  {
+   "address": "0x00001004",
+   "id": "code",
+   "initial": {
+    "artifact": "register-dispatch",
+    "length": 32,
+    "offset": 0
+   },
+   "permissions": "rx",
+   "size": 32
+  },
+  {
+   "address": "0x00001080",
+   "id": "exit",
+   "initial": {
+    "zero": true
+   },
+   "permissions": "rx",
+   "size": 4
+  },
+  {
+   "address": "0x00002004",
+   "id": "data",
+   "initial": {
+    "zero": true
+   },
+   "permissions": "rw",
+   "size": 4
+  },
+  {
+   "address": "0x00003000",
+   "id": "stack",
+   "initial": {
+    "zero": true
+   },
+   "permissions": "rw",
+   "size": 32
+  }
+ ],
+ "registers": {
+  "cpsr": "0x00000010",
+  "lr": "0x00001080",
+  "r0": "0x00000000",
+  "r1": "0x00000001",
+  "r10": "0x00000000",
+  "r11": "0x00000000",
+  "r12": "0x00000000",
+  "r2": "0x00002004",
+  "r3": "0x00000000",
+  "r4": "0x00000000",
+  "r5": "0x00000000",
+  "r6": "0x00000000",
+  "r7": "0x00000000",
+  "r8": "0x00000000",
+  "r9": "0x00000000",
+  "sp": "0x00003020"
+ },
+ "schema_version": 1,
+ "stubs": []
+}

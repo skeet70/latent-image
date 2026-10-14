@@ -1,0 +1,133 @@
+{
+ "artifacts": [
+  {
+   "id": "register-offset-writeback",
+   "path": "register-offset-writeback.bin",
+   "sha256": "d7238df09fe2ea72e5cbf19464e908e16677831fec96e2206657c82148c1a031",
+   "size": 12
+  },
+  {
+   "id": "register-offset-writeback-data",
+   "path": "register-offset-writeback-data.bin",
+   "sha256": "dda0d6a7719e00b1ca45a23d8f7132204ca5ebf3d2247713384a645f337f9425",
+   "size": 16
+  }
+ ],
+ "cpu": {
+  "architecture": "arm",
+  "endian": "little",
+  "mode": "arm",
+  "model": "cortex-r5f"
+ },
+ "entry": "0x00001004",
+ "exclusions": [
+  "Synthetic Cortex-R5F user-mode ARM/little-endian only; no X-M1 behavior or ABI claim",
+  "No exceptions, coprocessors, mode switching, PC-loading returns, MMIO, interrupts, DMA, caches, scheduling or hardware timing"
+ ],
+ "exit": "0x00001080",
+ "expected": {
+  "events": [],
+  "memory": [
+   {
+    "hex": "111111112222222233333333aa444444",
+    "offset": 0,
+    "region": "data"
+   }
+  ],
+  "registers": {
+   "cpsr": "0x00000010",
+   "lr": "0x00001080",
+   "pc": "0x00001080",
+   "r0": "0x22222222",
+   "r1": "0x00000004",
+   "r10": "0x00000000",
+   "r11": "0x00000000",
+   "r12": "0x00000000",
+   "r2": "0x00002010",
+   "r3": "0x00000002",
+   "r4": "0x00000000",
+   "r5": "0x000000aa",
+   "r6": "0x00000000",
+   "r7": "0x00000000",
+   "r8": "0x00000000",
+   "r9": "0x00000000",
+   "sp": "0x00003020"
+  },
+  "status": "returned"
+ },
+ "functions": [
+  {
+   "address": "0x00001004",
+   "size": 12
+  }
+ ],
+ "id": "register-offset-writeback",
+ "limits": {
+  "instructions": 100,
+  "wall_ms": 1000
+ },
+ "origin": "synthetic",
+ "provenance": "PROVENANCE.md: hand-encoded ARM instructions and independent arithmetic",
+ "regions": [
+  {
+   "address": "0x00001004",
+   "id": "code",
+   "initial": {
+    "artifact": "register-offset-writeback",
+    "length": 12,
+    "offset": 0
+   },
+   "permissions": "rx",
+   "size": 12
+  },
+  {
+   "address": "0x00001080",
+   "id": "exit",
+   "initial": {
+    "zero": true
+   },
+   "permissions": "rx",
+   "size": 4
+  },
+  {
+   "address": "0x00002004",
+   "id": "data",
+   "initial": {
+    "artifact": "register-offset-writeback-data",
+    "length": 16,
+    "offset": 0
+   },
+   "permissions": "rw",
+   "size": 16
+  },
+  {
+   "address": "0x00003000",
+   "id": "stack",
+   "initial": {
+    "zero": true
+   },
+   "permissions": "rw",
+   "size": 32
+  }
+ ],
+ "registers": {
+  "cpsr": "0x00000010",
+  "lr": "0x00001080",
+  "r0": "0xfffffffe",
+  "r1": "0x00000004",
+  "r10": "0x00000000",
+  "r11": "0x00000000",
+  "r12": "0x00000000",
+  "r2": "0x00002004",
+  "r3": "0x00000002",
+  "r4": "0x00000000",
+  "r5": "0x000000aa",
+  "r6": "0x00000000",
+  "r7": "0x00000000",
+  "r8": "0x00000000",
+  "r9": "0x00000000",
+  "sp": "0x00003020"
+ },
+ "schema_version": 1,
+ "stubs": []
+}

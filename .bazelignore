@@ -1,0 +1,7 @@
+.devenv
+.direnv
+.agents
+.codex
+private-data
+build
+dist-newstyle

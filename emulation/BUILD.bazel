@@ -1,0 +1,509 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+filegroup(
+    name = "xm1-upstream",
+    srcs = glob(["xm1-upstream/**"]),
+)
+
+haskell_binary(
+    name = "xm1-viewer",
+    srcs = ["Xm1Viewer.hs"],
+    data = [":xm1-upstream"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:time",
+        "//host:unix",
+        "//host:update-container",
+    ],
+)
+
+cc_binary(
+    name = "unicorn-info",
+    srcs = ["unicorn-info.c"],
+    copts = [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Wpedantic",
+    ],
+    visibility = ["//visibility:public"],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+cc_binary(
+    name = "native-runner",
+    srcs = ["native-runner.c"],
+    copts = [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
+    visibility = ["//visibility:public"],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+cc_binary(
+    name = "rom-entry-smoke",
+    srcs = ["rom-entry-smoke.c"],
+    copts = [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
+    visibility = ["//visibility:public"],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+cc_library(
+    name = "recovery-bootstrap-devices",
+    srcs = ["recovery-bootstrap-devices.c"],
+    hdrs = ["recovery-bootstrap.h"],
+    copts = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2"],
+    deps = ["//lz:fflzd-codec"],
+)
+
+cc_test(
+    name = "recovery-bootstrap-devices-test",
+    srcs = ["recovery-bootstrap-devices-test.c"],
+    copts = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-UNDEBUG"],
+    deps = [":recovery-bootstrap-devices"],
+)
+
+cc_test(
+    name = "recovery-stage-report-smoke",
+    srcs = ["recovery-stage-report-smoke.c"],
+    args = ["$(location //host/firmware:native-rollback.bin)"],
+    data = ["//host/firmware:native-rollback.bin"],
+    copts = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2"],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+cc_test(
+    name = "seg4-recovery-stage-report-smoke",
+    srcs = ["recovery-stage-report-smoke.c"],
+    args = ["$(location //host/firmware:seg4-image-guard.bin)"],
+    data = ["//host/firmware:seg4-image-guard.bin"],
+    copts = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2"],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+cc_test(
+    name = "raw-native-rollback-smoke",
+    srcs = ["raw-native-rollback-smoke.c"],
+    args = ["$(location //host/firmware:raw-native-rollback.bin)"],
+    data = ["//host/firmware:raw-native-rollback.bin"],
+    copts = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2"],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+cc_test(
+    name = "dual-native-rollback-smoke",
+    srcs = ["dual-native-rollback-smoke.c"],
+    args = ["$(location //host/firmware:dual-native-rollback.bin)"],
+    data = ["//host/firmware:dual-native-rollback.bin"],
+    copts = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2"],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+cc_test(
+    name = "staged-recovery-bootstrap-smoke",
+    srcs = ["staged-recovery-bootstrap-smoke.c"],
+    args = ["$(location //host/firmware:staged-recovery-bootstrap.bin)"],
+    data = ["//host/firmware:staged-recovery-bootstrap.bin"],
+    copts = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2"],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+cc_test(
+    name = "persistent-repair-bootstrap-smoke",
+    srcs = ["staged-recovery-bootstrap-smoke.c"],
+    args = ["$(location //host/firmware:persistent-repair-bootstrap.bin)"],
+    data = ["//host/firmware:persistent-repair-bootstrap.bin"],
+    copts = [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-O2",
+        "-DSTAGE_BYTES=0x60000u",
+        "-DRELOC=0x00070000u",
+        "-DFAT_READS=12u",
+        "-DRAW_READS=768u",
+    ],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+cc_test(
+    name = "physical-repair-bootstrap-smoke",
+    srcs = ["staged-recovery-bootstrap-smoke.c"],
+    args = ["$(location //host/firmware:physical-repair-bootstrap.bin)"],
+    data = ["//host/firmware:physical-repair-bootstrap.bin"],
+    copts = [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-O2",
+        "-DSTAGE_BYTES=0xa0000u",
+        "-DRELOC=0x000c0000u",
+        "-DFAT_READS=20u",
+        "-DRAW_READS=1280u",
+    ],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+
+cc_test(
+    name = "persistent-repair-smoke",
+    srcs = ["persistent-repair-smoke.c"],
+    args = ["$(location //host/firmware:persistent-repair.bin)"],
+    data = ["//host/firmware:persistent-repair.bin"],
+    copts = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2"],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+cc_test(
+    name = "persistent-block14-classifier-smoke",
+    srcs = ["persistent-block14-classifier-smoke.c"],
+    args = ["$(location //host/firmware:persistent-block14-classifier.bin)"],
+    data = ["//host/firmware:persistent-block14-classifier.bin"],
+    copts = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2"],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+cc_test(
+    name = "conditional-block14-recovery-smoke",
+    srcs = ["conditional-block14-recovery-smoke.c"],
+    args = ["$(location //host/firmware:conditional-block14-recovery.bin)"],
+    data = ["//host/firmware:conditional-block14-recovery.bin"],
+    copts = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2"],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+cc_test(
+    name = "conditional-block14-recovery-coded-smoke",
+    srcs = ["conditional-block14-recovery-smoke.c"],
+    args = ["$(location //host/firmware:conditional-block14-recovery-coded.bin)"],
+    data = ["//host/firmware:conditional-block14-recovery-coded.bin"],
+    copts = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2", "-DPACKET_CODED"],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+cc_test(
+    name = "media-view-diagnostic-smoke",
+    srcs = ["media-view-diagnostic-smoke.c"],
+    args = ["$(location //host/firmware:media-view-diagnostic.bin)"],
+    data = ["//host/firmware:media-view-diagnostic.bin"],
+    copts = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2"],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+cc_test(
+    name = "physical-block14-recovery-smoke",
+    srcs = ["media-view-diagnostic-smoke.c"],
+    args = [
+        "$(location //host/firmware:physical-block14-recovery.bin)",
+        "physical",
+    ],
+    data = ["//host/firmware:physical-block14-recovery.bin"],
+    copts = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2"],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+cc_binary(
+    name = "persistent-block-writer-smoke",
+    srcs = ["persistent-block-writer-smoke.c"],
+    copts = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+cc_test(
+    name = "seg4-image-guard-smoke",
+    srcs = ["seg4-image-guard-smoke.c"],
+    args = ["$(location //host/firmware:seg4-image-guard.bin)"],
+    data = ["//host/firmware:seg4-image-guard.bin"],
+    copts = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2"],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+cc_binary(
+    name = "recovery-bootstrap-engine",
+    srcs = ["recovery-bootstrap-engine.c"],
+    copts = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":recovery-bootstrap-devices",
+        "@lab_unicorn//:unicorn",
+    ],
+)
+
+haskell_binary(
+    name = "recovery-bootstrap",
+    srcs = [
+        "RecoveryBootstrap.hs",
+        "//host/firmware:BootCard.hs",
+    ],
+    main_file = "RecoveryBootstrap.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:unix",
+        "//host:update-container",
+    ],
+)
+
+filegroup(
+    name = "native-cases",
+    srcs = glob(["fixtures/*"]),
+    visibility = ["//visibility:public"],
+)
+
+sh_test(
+    name = "native-runner-tests",
+    size = "small",
+    srcs = ["native-tests.sh"],
+    args = [
+        "$(location :native-tests-hs)",
+        "$(location :native-runner)",
+        "$(location @lab_jsonschema//:bin/check-jsonschema)",
+        "$(location :generate-fixtures)",
+    ],
+    data = [
+        ":generate-fixtures",
+        ":native-cases",
+        ":native-runner",
+        ":native-tests-hs",
+        "//schemas:all",
+        "@lab_jsonschema//:bin/check-jsonschema",
+    ],
+)
+
+haskell_library(
+    name = "native-adapter",
+    srcs = ["Emulation/NativeCase.hs"],
+    ghcopts = ["-XGHC2021"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+haskell_binary(
+    name = "native-case",
+    srcs = ["NativeCaseMain.hs"],
+    data = [
+        ":native-cases",
+        ":native-runner",
+    ],
+    ghcopts = [
+        "-XGHC2021",
+        "-threaded",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":native-adapter",
+        "//host:base",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)
+
+haskell_binary(
+    name = "native-tests-hs",
+    srcs = ["NativeTests.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        ":native-adapter",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:unix",
+    ],
+)
+
+haskell_binary(
+    name = "generate-fixtures",
+    srcs = ["GenerateFixtures.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-threaded",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":native-adapter",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+haskell_binary(
+    name = "jig-exit-barrier",
+    srcs = ["JigExitBarrier.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-threaded",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
+haskell_binary(
+    name = "recovery-emul-cases",
+    srcs = ["RecoveryEmulCases.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-threaded",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+haskell_binary(
+    name = "param-provenance",
+    srcs = ["ParamProvenance.hs"],
+    ghcopts = ["-XGHC2021", "-threaded"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+haskell_binary(
+    name = "load-window-cases",
+    srcs = ["LoadPathWindowCases.hs"],
+    ghcopts = ["-XGHC2021", "-threaded"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:text",
+    ],
+)
+
+# Cross-language recipe-bank file codec fixtures: literal slot names and
+# payloads encoded through the Haskell codec, and firmware-written files
+# decoded back against the same literals.
+haskell_binary(
+    name = "recipe-bank-interop",
+    srcs = ["RecipeBankInterop.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-threaded",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:recipe-bank",
+    ],
+)
+
+# Recipe-bank UI-behavior cases; built and run by build-recipe-bank-ui-cases.sh.
+haskell_binary(
+    name = "recipe-bank-ui-cases",
+    srcs = ["RecipeBankUiCases.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-threaded",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":native-adapter",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:text",
+    ],
+)
+
+# Recipe-bank kernel behavior cases: builds each case from the pinned blob and
+# model, runs it through the bounded runner and writes results plus findings.
+haskell_binary(
+    name = "recipe-bank-cases",
+    srcs = ["RecipeBankCases.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-threaded",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":native-adapter",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:text",
+    ],
+)

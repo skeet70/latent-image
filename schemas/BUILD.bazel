@@ -1,0 +1,10 @@
+filegroup(
+    name = "all",
+    srcs = glob(["*.json"]),
+    visibility = ["//visibility:public"],
+)
+
+exports_files(
+    ["af-session-annotation.schema.json"],
+    visibility = ["//visibility:public"],
+)

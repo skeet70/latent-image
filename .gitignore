@@ -1,0 +1,19 @@
+.devenv/
+.direnv/
+/devenv.local.nix
+/devenv.local.yaml
+/dist-newstyle/
+/build/
+target/
+/bazel-*
+__pycache__/
+*.py[cod]
+
+# Camera-specific or otherwise private research inputs
+/private-data/
+.tools/
+
+# Local credentials/configuration
+.env
+.env.*
+!.env.example

@@ -1,0 +1,164 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_library(
+    name = "readplan-core",
+    srcs = [
+        "FujiAF/AdjustmentTables.hs",
+        "FujiAF/ReadPlan.hs",
+        "FujiAF/WindowCompare.hs",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:aeson",
+        "//host:containers",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_library(
+    name = "private-path",
+    srcs = ["FujiAF/PrivatePath.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+haskell_library(
+    name = "synthetic-fixtures",
+    srcs = ["FujiAF/Synthetic.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":readplan-core",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
+)
+
+haskell_binary(
+    name = "read-plan",
+    srcs = ["PlanMain.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    deps = [
+        ":private-path",
+        ":readplan-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:unix",
+        "//host:json",
+    ],
+)
+
+haskell_binary(
+    name = "compare-windows",
+    srcs = ["CompareMain.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    deps = [
+        ":private-path",
+        ":readplan-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:filepath",
+        "//host:unix",
+        "//host:json",
+        "//host:text",
+    ],
+)
+
+haskell_test(
+    name = "readplan-tests",
+    size = "small",
+    srcs = ["Test.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    deps = [
+        ":readplan-core",
+        ":synthetic-fixtures",
+        "//host:base",
+        "//host:bytestring",
+        "//host:aeson",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_test(
+    name = "cli-tests",
+    size = "medium",
+    srcs = ["CliTest.hs"],
+    args = [
+        "$(location :read-plan)",
+        "$(location :compare-windows)",
+        "$(location @lab_jsonschema//:bin/check-jsonschema)",
+    ],
+    data = [
+        ":compare-windows",
+        ":read-plan",
+        "//schemas:all",
+        "@lab_jsonschema//:bin/check-jsonschema",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    deps = [
+        ":readplan-core",
+        ":synthetic-fixtures",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+        "//host:aeson",
+        "//host:json",
+        "//host:process",
+        "//host:text",
+    ],
+)

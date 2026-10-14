@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Camera identity v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "expected_model",
+    "observed_model",
+    "body_firmware",
+    "private_identity_path",
+    "lens",
+    "usb",
+    "evidence_ids"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "status": {
+      "enum": [
+        "unobserved",
+        "photographic",
+        "usb-verified"
+      ]
+    },
+    "expected_model": {
+      "const": "X-M1"
+    },
+    "observed_model": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "body_firmware": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "private_identity_path": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "lens": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "firmware"
+      ],
+      "properties": {
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "firmware": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      }
+    },
+    "usb": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "vendor_id",
+        "product_id",
+        "physical_path"
+      ],
+      "properties": {
+        "vendor_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{4}$"
+        },
+        "product_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{4}$"
+        },
+        "physical_path": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "photographic",
+              "usb-verified"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "observed_model": {
+            "const": "X-M1"
+          },
+          "body_firmware": {
+            "type": "string",
+            "minLength": 1
+          },
+          "private_identity_path": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "usb-verified"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "usb": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  ]
+}

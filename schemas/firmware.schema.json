@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Firmware inventory v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "installed_body_firmware",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "installed_body_firmware": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "model",
+          "version",
+          "file",
+          "size_bytes",
+          "source_url",
+          "acquired_at",
+          "matches_installed",
+          "evidence_ids"
+        ],
+        "properties": {
+          "model": {
+            "const": "X-M1"
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "file": {
+            "$ref": "common.schema.json#/$defs/artifact"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "source_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "acquired_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "matches_installed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    }
+  }
+}

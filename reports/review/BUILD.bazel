@@ -1,0 +1,87 @@
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_test")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+_GHCOPTS = [
+    "-Wall",
+    "-Werror",
+    "-O2",
+    "-XGHC2021",
+    "-threaded",
+]
+
+_HOST_DEPS = [
+    "//host:aeson",
+    "//host:base",
+    "//host:bytestring",
+    "//host:directory",
+    "//host:filepath",
+    "//host:host-support",
+    "//host:json",
+    "//host:unix",
+]
+
+haskell_binary(
+    name = "f01-source-check",
+    srcs = ["F01SourceCheck.hs"],
+    ghcopts = _GHCOPTS,
+    deps = _HOST_DEPS + ["//third_party:inventory-lib"],
+)
+
+haskell_binary(
+    name = "f01-firmware-probes",
+    srcs = ["F01FirmwareProbes.hs"],
+    ghcopts = _GHCOPTS,
+    deps = _HOST_DEPS,
+)
+
+haskell_test(
+    name = "f01-native-probes",
+    srcs = ["F01NativeProbes.hs"],
+    args = ["$(location //emulation:native-runner)"],
+    data = ["//emulation:native-runner"],
+    ghcopts = _GHCOPTS,
+    deps = _HOST_DEPS,
+)
+
+cc_library(
+    name = "review-provider-source",
+    textual_hdrs = ["//transport:native_usb.c"],
+    deps = ["@lab_libusb//:headers"],
+)
+
+cc_test(
+    name = "f02-native-probes",
+    srcs = ["f02-native-probes.c"],
+    copts = [
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
+    local_defines = ['FUJI_LIBUSB_PATH=\\"/nonexistent/libusb-1.0.so\\"'],
+    linkopts = ["-ldl"],
+    deps = [":review-provider-source"],
+)
+
+haskell_binary(
+    name = "native-metadata",
+    srcs = ["F02NativeMetadata.hs"],
+    ghcopts = _GHCOPTS,
+    deps = _HOST_DEPS,
+)
+
+haskell_test(
+    name = "f03-critical",
+    srcs = ["F03Critical.hs"],
+    ghcopts = _GHCOPTS,
+    deps = _HOST_DEPS + ["//af:simulation"],
+)
+
+sh_binary(
+    name = "f02-native-metadata",
+    srcs = ["f02-native-metadata.sh"],
+    args = ["$(location :native-metadata)"],
+    data = [":native-metadata"],
+)

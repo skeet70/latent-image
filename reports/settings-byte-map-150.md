@@ -1,0 +1,116 @@
+# Ten act-logged stored-setting bindings (X-M1 1.50)
+
+## Scope and labels
+
+Host-only analysis of the owner's `20261009T070523Z-read-media` (Read 0), `20261009T072111Z-read-media` (Read 1) and the install-day `20261009T163721Z-read-media`, with the filled note sheet in [the session script](settings-log-map-session-script.md#5-the-note-sheet). No camera was enumerated, opened or commanded. **Hardware-observed** labels the owner-run bytes and menu observations, **byte-read** labels pinned firmware data, **static-inference** labels firmware-path conclusions, and **unproved** labels missing observations. Evidence: E-SETTINGS-ACTS-150, E-DR-AVAILABILITY-150, E-QUALITY-FILETYPE-150, E-ISO-FAMILY-MEMORY-150 and E-SETTINGS-BANK-ERASE-150.
+
+## 1. Integrity before interpretation
+
+**Hardware-observed:** both sessions pass the revised `private-data/analysis/x-m1-1.50/read-media/ReadMediaCheck.hs`. Each has 18,584 journal lines, all parsed as monotonic tuples; 1,091 request payloads and 4,368 transfers match the transport table in order, including control bytes, the returned session identifier, endpoint use and requested reply lengths. All 3,275 outgoing frames match their journaled dispatches and byte encodings. All 1,058 per-request staging hashes match their address, length and bank-file slices; both 131,072-byte bank hashes match. There is no refusal, uncertain or error record. Each bank returns terminal result 0 at poll 0, and group-2 state is 0.
+
+**Hardware-observed:** the known gate pair is unchanged in both sessions: enabled SHA-256 `2264fcfdb55e94372ae267100ef670066e48f64f76101d00b100ea078efa0c4b`, restored `d167e7762de4d98874c5f6b0fe041c546e4d91b8f7ee0d51607b91e0b7a9f283`. The enabled snapshot differs only at `0xf7`, 0 to 1. The restored snapshot returns `0xf7` to 0 and leaves the intentional disarm `0x80 = 0x33`; this is not restoration of the trigger byte to its initial zero. The cache-write sequence is the contracted gate enable, per-bank disarm/staging/trigger, final disarm and restoration of `0x81..0x8a` and `0xf7`.
+
+**Hardware-observed:** the map pointer is `0x0095dae0`, start `0x380`, physical count `0x80`, entry count `0x6c`; entries `0x56`/`0x57` read 44/50, resolving to physical blocks 940/946, selectors 117/118 and staging offsets `0x80000`/`0x40000`. All occupied records pass the area-2 parity replay without correction, and the bank tails past slot 30 are erased.
+
+The original checker printed two misleading failures before interpretation: a literal 47-record assertion rejected these growing windows, and a whole-history `01 50` stamp assertion rejected the unchanged oldest record `0x239a`, stamped `01 00`. Those were baseline assumptions, not integrity deviations. The checker now derives occupancy from the 62-slot window, orders sequences after the largest circular gap, checks uniqueness, the 15-bit bound and contiguity, and reports historical stamps separately from the newest record's 1.50 stamp. Historical RAM comparisons skip records absent from a later retained window. No capture-integrity deviation remains. Existing GHC partial-function warnings are host-checker warnings, not camera refusal or uncertainty.
+
+## 2. Capacity and the boundary
+
+**Hardware-observed:** Read 0 holds 52 records, `0x239a..0x23cd`: bank 0 31/31, bank 1 21/31, ten free slots. Read 1 holds 62 records, `0x239a..0x23d7`, both banks 31/31. Bank 0 is byte-identical across reads, and bank 1's first 21 records are byte-identical. Only its ten formerly erased slots 21..30 become occupied. There was no bank erase, physical wrap or 15-bit sequence wrap during the measured interval. No act is lost or collapsed; acts 1 through 10 and boundary record `0x23cd` all survive separately.
+
+**Hardware-observed:** the older `20261009T030736Z-read-media` capture held 47 records through `0x23c8`. Its growth to Read 0 is five pre-boundary records: `0x23c9` restores the defaults body and clears the path; `0x23ca` reverses language-sized `p+011` and moves `p+05e`/`p+06d`; `0x23cb` moves `p+00c:22>24`; `0x23cc` restores the last-shot path; `0x23cd` advances counter byte `r+026:14>15` and moves `p+056:20>21`. **Unproved:** the physical acts causing those five records, including the counter/path interval. They were already present before the ten-act boundary and are not extra commits in this session.
+
+**Hardware-observed:** the count closes as `47 + 5 pre-boundary + 10 acts = 62`. From Read 0 to Read 1 it closes as `52 + 10 = 62`, with no additional or unexplained record. The noted yes for every act and the ten consecutive state differences agree with commit-on-difference. The reads' supply-cut endings and no-change verification boots add no extra observed record in that interval.
+
+**Static-inference:** ten free slots permit ten appends without an erase. Erasure happens on the eleventh append, not when the tenth fills the bank. The old six-act gate was `free - 4`, a conservative budget that charged Read 0 again after measuring it and reserved a record for Read 1 despite the cut ending. The script and `LogDiffCheck.hs` now distinguish the physical limit `free` from a conservative gate `max(0, free - 2)`, retaining two slots of margin. This run reached the physical limit and left no reserve. The next append would erase bank 0's old records, not these bank-1 act records; an erase alone is not a reason to discard an entire mapping session.
+
+### 2.1 The first captured bank erase
+
+**Hardware-observed:** that next append happened, and the install-day read `20261009T163721Z-read-media` holds the first bank erase any capture has spanned, against Read 1 as the before image. Read 1 holds bank 0 slots 0..30 = `0x239a..0x23b8` and bank 1 slots 0..30 = `0x23b9..0x23d7`, 62 of 62 slots occupied. The install-day read holds bank 0 slot 0 = `0x23d8`, slots 1..30 and the whole tail past slot 30 erased to `ff`, and bank 1 byte-identical to Read 1 (SHA-256 `23d7a3882318bcc6964facbe0b6e6395a1c2ffb88e9ba4f859f8c6e4c944efc9` both times). Exactly one commit lies between the two captures: sequence `0x23d8` = `0x23d7` + 1, a save whose `0x118` body is byte-equal to `0x23d7`'s and which moves only counter byte `r+026` `15>16` and the DCF path digits `DSCF3092`→`DSCF3094`, with the two parity regions recomputed. That is the shot signature of section 3's instrument; **unproved:** which physical act produced it, since no note sheet covers this read. The erase took the older generation `0x239a..0x23b8` and nothing else, 31 records. The ten act records, boundary record `0x23cd` and the five pre-boundary records all survive in bank 1, so the pre-boundary residual keeps its evidence.
+
+**Byte-read / static-inference:** the observed outcome matches the mapped append-and-erase chain recorded in private provenance `private-data/analysis/x-m1-1.50/end-setting/followup/area2-invalidation.md` section 4.2; [the public record-layout report](adjustment-and-service-interfaces.md#ordinary-settings-record-layout) supplies the bank and acceptance interfaces. `FUN_006a8074` commits only on a difference; `FUN_006ac7d4` reads the newest record, stamps `(newest + 1) & 0x7fff`, tries `FUN_006ad3f4` in the newest record's bank, switches bank on an append failure, retries there, and only after a second failure calls `FUN_006ad51c`, which erases every physical unit of the bank it switched to, then retries once more. The capture shows the first attempt failing in full bank 1, the switch to bank 0, bank 0's whole `0x20000` unit erased and one record programmed at its slot 0 with the contiguous sequence. The victim is the bank the append switches to, which in this append order is the older generation predicted above.
+
+**Static-inference:** the capacity arithmetic is confirmed and needs no correction. `free` counts the appends before the next erase, and the erase struck on the first append after `free` reached 0. What the erase adds is the cost model: a commit-on-difference prices one slot whatever produced it, so the shot that yielded `0x23d8` cost a slot exactly as a menu edit does, and the two-slot margin is reserve against commits of that kind. A wrap costs one generation of up to 31 records, not one record, so one capture holds at most two generations and a session whose acts sit in the newer generation survives the wrap while the older history does not.
+
+## 3. Per-act byte and bit map
+
+**Hardware-observed:** `p+N` is relative to the ordinary `0x118`-byte body at record `+0x28`; `r+N` is relative to its `0x200`-byte record. Each act's newer record is `0x23cd + act`, in bank 1 slot `20 + act` at bank offset `0x2800 + 0x200*act`. All moves below are the complete non-bookkeeping body differences for that act. Every pair also increments the sequence and changes parity; counters, path, stamp and other regions do not move in these ten pairs.
+
+| Act | Pair | Control and observed values | Property | Payload | Record | Field bits / width | Whole-byte move | Field-code move | XOR bits exercised |
+| ---: | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `23cd→23ce` | IMAGE QUALITY FINE→FINE+RAW | `0xfa` | `+0x36` | `+0x5e` | 5-7 / 3 | `09→49` | `0→2` | bit 6 |
+| 2 | `23ce→23cf` | DYNAMIC RANGE AUTO→100% | `0x104` | `+0x4a` | `+0x72` | 5-6 / 2 | `82→a2` | `0→1` | bit 5 |
+| 3 | `23cf→23d0` | HIGHLIGHT TONE 0→+2 | `0x110` | `+0x16` | `+0x3e` | 5-7 / 3 | `49→09` | `2→0` | bit 6 |
+| 4 | `23d0→23d1` | SHADOW TONE 0→+2 | `0x111` | `+0x24` | `+0x4c` | 5-7 / 3 | `49→09` | `2→0` | bit 6 |
+| 5 | `23d1→23d2` | COLOR 0→+2 | `0x10e` | `+0x1b` | `+0x43` | 5-7 / 3 | `09→69` | `0→3` | bits 5-6 |
+| 6 | `23d2→23d3` | SHARPNESS 0→+2 | `0x10f` | `+0x23` | `+0x4b` | 5-7 / 3 | `49→09` | `2→0` | bit 6 |
+| 7 | `23d3→23d4` | NOISE REDUCTION 0→+2 | `0xef` | `+0x1d` | `+0x45` | 5-7 / 3 | `49→89` | `2→4` | bits 6-7 |
+| 8 | `23d4→23d5` | WHITE BALANCE AUTO→FINE, no shift | `0xed` | `+0x75` | `+0x9d` | 4-7 / 4 | `03→13` | `0→1` | bit 4 |
+| 9 | `23d5→23d6` | ISO 200→6400 | `0x141` | `+0x42` | `+0x6a` | 0-4 / 5 | `88→97` | `8→23` | bits 0-4 |
+| 10 | `23d6→23d7` | FOCUS MODE AREA→CONTINUOUS | `0x129` | `+0x2b` | `+0x53` | 5-7 / 3 | `49→69` | `2→3` | bit 5 |
+
+**Hardware-observed:** act 1 also moves `p+070` / `r+098`, `09→49`, bits 5-6 code `0→2`; act 9 also moves `p+05e` / `r+086`, `a9→c9`, bits 5-6 code `1→2`. **Static-inference:** the ordinary getter identifies these as companion properties `0x1d` and `0x161`, both two-bit fields at ordinary offsets `+0x80` and `+0x6e` (`&0x7f >> 5`), mirrored in the custom record at `+0x06` bits 6-7 and `+0x25` bits 6-7. The extra bytes are bound to their acts, not discarded as noise or mislabeled as a second full-width copy of quality or ISO. No white-balance shift byte moves in act 8.
+
+**Byte-read / static-inference:** `0x1d` is the file-type component of IMAGE QUALITY: JPEG only, RAW only, or JPEG+RAW. The five menu rows of [custom-settings section 7](custom-settings.md#7-film-simulation-and-image-quality-against-the-menus) are a product of two fields and both commit paths state the product. The settings case `0xfa` of `FUN_00d4fc74` splits each row into a FINE/NORMAL cell and a `0x1d` cell: rows FINE and NORMAL take `0x1d` 0, rows FINE+RAW and NORMAL+RAW take 2, row RAW takes 1. The composer `FUN_006441c0` rebuilds `0xfa` from the same two cells, one `0xfa` code per pair, and `0x1d` = 1 gives RAW whatever the FINE/NORMAL cell reads. The `0x1d` cell is display cell `0x0095689c`, filled by the availability walk `FUN_0063eb60` and consumed by `FUN_00d13c38` (the RAW action; the Fn assignable list names RAW at col0 3, and `00d40770` re-syncs the quality cell whenever one of `0xfc`/`0xfd`/`0x1bc`..`0x1c1` reads 3), by `FUN_006427bc`/`FUN_006434f8` at rebuild and by `FUN_00d4d6b4` on the default refresh. So act 1 moves `p+070` because the IMAGE QUALITY commit writes the composed `0xfa` and its `0x1d` component in one commit, and the observed codes are the components: FINE holds `0x1d` 0, FINE+RAW holds 2. The 47-record window says the same from the other side: `p+070` moves in exactly the five pairs where `p+036` moves, always `0↔2`.
+
+**Byte-read / static-inference:** `0x161` is the exposure-mode memory of which value family last committed through the settings path: 1 for the IMAGE SIZE family (image size `0xf6`, movie image size `0xf2`), 2 for the ISO family (ISO `0x141`, AUTO-ISO maximum `0x14f`), 0 for the getter's default branch. `FUN_00641438` is the post-commit display update most settings cases call after their `FUN_0063c51c(0x34,0,prop)` notification, carrying a family id per property (image size 1, ISO 2, film simulation 3, dynamic range 4, colour 5, sharpness 7, tone 8, bracketing 9, focus mode `0xd`, image quality `0xe`, face detection `0xf`); it writes `0x161` only when that id is 1 or 2 and the shooting-mode cell reads `0x21`..`0x25`, and writes the sibling `0x165` instead in mode `0x1f`. `FUN_00646958` reads the property back at UI-session init (`FUN_00637478`) and after the shooting reset (`FUN_00d46d10`), `FUN_006373f4`/`FUN_006376a0` hold the per-mode RAM cells, and `FUN_0063c51c` consults the cell inside the size-line and ISO-line change branches. So act 9 moves `p+05e` because the ISO case passes family id 2. The other nine acts pass ids that never write the field: act 1 `0xe`, act 2 `4`, acts 3, 7 and 8 reach cases that call no `FUN_00641438` at all, act 4 `8`, act 5 `5`, act 6 `7` and act 10 `0xd`. The 47-record window agrees: of its fourteen `p+05e` moves, every one of the seven defaults writes returns the code to 0, the six saves carrying the owner's size/aspect state hold code 1 beside `p+06d`, and the single pair that moves ISO `p+042` holds code 2. **Unproved:** what the remembered family changes for the user; no menu node carries `0x161`, and its mapped readers reach only the change bookkeeping and the display rebuild.
+
+**Hardware-observed:** the direction and neutral of the stored code are not uniform across controls. One step of the owner's menu value moved image quality, dynamic range, colour, noise reduction, white balance, ISO and focus mode upward in code, while highlight tone, shadow tone and sharpness moved downward: the menu value 0 to +2 took code 2 to 0 for highlight, shadow and sharpness but 2 to 4 for noise reduction, both from the same starting menu value. A recipe writer cannot assume one polarity or one neutral code across the nine recipe fields. **Unproved:** each control's full menu-value-to-code table; the capture fixes exactly one transition per control, so any further code depends on the getter's width and on a new observation.
+
+## 4. Width comparison and image-quality verdict
+
+**Byte-read / static-inference:** [custom-settings section 3](custom-settings.md#3-the-payload-field-map) predicts the ten widths in the table. The ordinary branches of getter `0x0061e110` read the same widths at the offsets below from the live bank base `0x0096cc64`; the ordinary body starts at base `+0x10`, which gives the payload offsets of section 3. The observed act moves fit every predicted field mask. All ten widths agree; no primary-field width disagrees with the custom map.
+
+| Control | Property | Ordinary getter offset | Ordinary payload | Ordinary bits / width | Custom-record payload | Custom-record bits / width | Offsets |
+| --- | --- | ---: | ---: | --- | ---: | --- | --- |
+| IMAGE QUALITY | `0xfa` | `+0x46` | `+0x36` | 5-7 / 3 | `+0x0d` | 5-7 / 3 | differ |
+| DYNAMIC RANGE | `0x104` | `+0x5a` | `+0x4a` | 5-6 / 2 | `+0x05` | 6-7 / 2 | differ, bit position differs |
+| HIGHLIGHT TONE | `0x110` | `+0x26` | `+0x16` | 5-7 / 3 | `+0x17` | 5-7 / 3 | differ |
+| SHADOW TONE | `0x111` | `+0x34` | `+0x24` | 5-7 / 3 | `+0x09` | 5-7 / 3 | differ |
+| COLOR | `0x10e` | `+0x2b` | `+0x1b` | 5-7 / 3 | `+0x07` | 5-7 / 3 | differ |
+| SHARPNESS | `0x10f` | `+0x33` | `+0x23` | 5-7 / 3 | `+0x08` | 5-7 / 3 | differ |
+| NOISE REDUCTION | `0xef` | `+0x2d` | `+0x1d` | 5-7 / 3 | `+0x10` | 5-7 / 3 | differ |
+| WHITE BALANCE | `0xed` | `+0x85` | `+0x75` | 0-3 / 4 | `+0x21` | 0-3 / 4 | differ |
+| ISO | `0x141` | `+0x52` | `+0x42` | 0-4 / 5 | `+0x20` | 0-4 / 5 | differ |
+| FOCUS MODE | `0x129` | `+0x3b` | `+0x2b` | 5-7 / 3 | `+0x18` | 5-7 / 3 | differ |
+
+**Static-inference:** the custom-setting record and the ordinary body share a property model but not a payload layout. Every one of the ten controls sits at a different payload offset in the two stores, and dynamic range differs in bit position as well (bits 6-7 in the custom record, bits 5-6 in the ordinary body). Widths agree everywhere, so reading one store's offsets off the other would name the wrong bytes while looking right at field width level. The two stores need separate offset tables, and this capture pins the ordinary side for these ten controls.
+
+**Unproved from a single move:** bits that stay constant and unused codes. XOR measures changed bits, not the full field width: quality's single bit-6 toggle does not reduce its three-bit field to one bit, and white balance's bit-4 toggle does not reduce its four-bit field to one bit. The full widths come from the getter, with the capture binding the exercised codes to owner-selected values. The earlier mapping note's three-bit reading of companion `p+05e` is refuted by its two-bit getter mask; bit 7 belongs to another field.
+
+**Hardware-observed:** act 1 confirms, not refutes, the image-quality constructor guess at payload `+0x36`, record `+0x5e`, bits 5-7. Boundary FINE has code 0, and committed FINE+RAW has code 2. A defaults-versus-save correlation was previously only corroboration; this isolated act supplies the binding, and the separate property `0xfa` getter agrees on offset, bits and width. No image-quality refutation is recorded because the proposed offset moved exactly as predicted.
+
+## 5. Why DR200 and DR400 were grey
+
+**Hardware-observed:** at act 2 the owner saw DR200 and DR400 greyed in manual mode, with ISO 200 set; DR100 stayed selectable and committed. The entries remained visible, which is not how an unoffered film simulation behaves.
+
+**Byte-read:** the availability descriptor list at `0x0079944c` has 110 entries of `{property, flag, matrix}` at stride 12. Entry 16 is `{0x104, 0, 0x794c10}` and entry 17 is `{0xfe, 0, 0x795c98}`, so dynamic range and film simulation are bound by adjacent entries of one property-general list. The DR matrix at `0x00794c10` has four rows keyed by col2 and 22 mode columns listed at `0x00792fac` in the order `1, 0, 0x1f, 0x20, 0x24, 0x23, 0x22, 0x21, 5, 0x18, 8, 0xb, 0xc, 0xd, 0x12, 0x13, 0x11, 0x10, 0x16, 0x15, 0x17, 0x2c`. Row 0 (AUTO) is the mode default, cell 2 in every column except `0x1f`; rows 1, 2 and 3 (100/200/400) hold cell 1 in all five columns `0x20` through `0x24` and cell 0 elsewhere. The conversion table at `0x00775428` maps rows 0 to 5 identically, and the six-value node `0x0078ada8` shares it, which is the DR-bracket list. The DR node `0x00789ea4` names rows 0, 1, 2 and 3 as AUTO, 100, 200 and 400.
+
+**Static-inference:** render probe `FUN_00d52684` case `0x104` carries a runtime ISO predicate ahead of the matrix query. Rows 2 and 3 (200% and 400%) set state 2 when the ISO cell `0x009568b4` reads 8 or 10, both also set it at cell values of `0x1b` and above, row 2 does so as well on cell `0xb` and `0xc`, and row 3 on cells `0x1` and `0xd` through `0xf`; row 1 (100%) has no such branch. The ISO cell is written by `FUN_00633cac` from a value `FUN_0063ef60` derived through property `0x141`: the framework stores the normalized ISO there, and `FUN_006444a0`/`FUN_0061d534` feed it the same value space the matrix is keyed by. **Hardware-observed:** act 9 started with ISO 200, whose ordinary field holds code 8, and the ISO conversion table at `0x0077af48` maps row 8 to col2 10. So the gate matches ISO 200 on either scale, state 2 means shown but not selectable, and the submenu greys both entries while ISO stays at 200. Both in-scope DR cells hold 1, so the matrix does not grey them; the state-3 path (`FUN_0061d534` returning 0, or fewer than two allowed values) would instead hide entries from the count and scroll, as film simulation's rows 5 and 6 are hidden.
+
+The observed grey is therefore a runtime availability predicate inside the shared offer machinery, not a second gate type and not the same predicate the hidden film simulations fail. **Byte-read / static-inference:** the machinery is already generalized past film simulation: one 110-entry descriptor list binds each property to its own matrix, and `FUN_00d52684` carries per-property and per-row predicates for many properties, not just `0xfe`. **Unproved:** which value space the ISO cell holds in general beyond the ISO-200 case, and a hardware replay of the branch; the owner's observation and the captured ISO agree with the traced predicate without an instrumented UI execution.
+
+## 6. Reproduction
+
+All commands read host files only; none invokes `//transport:camera`.
+
+```sh
+devenv shell -- runghc private-data/analysis/x-m1-1.50/read-media/ReadMediaCheck.hs private-data/sessions/20261009T070523Z-read-media
+devenv shell -- runghc private-data/analysis/x-m1-1.50/read-media/ReadMediaCheck.hs private-data/sessions/20261009T072111Z-read-media
+devenv shell -- runghc private-data/analysis/x-m1-1.50/read-media/ReadMediaCheck.hs private-data/sessions/20261009T163721Z-read-media
+devenv shell -- runghc private-data/analysis/x-m1-1.50/read-media/LogDiffCheck.hs private-data/sessions/20261009T072111Z-read-media
+devenv shell -- runghc private-data/analysis/x-m1-1.50/read-media/LogDiffCheck.hs private-data/sessions/20261009T163721Z-read-media
+devenv shell -- runghc private-data/analysis/x-m1-1.50/read-media/SettingsActCheck.hs
+devenv shell -- bazel test //tests:research-contracts --test_output=errors
+
+# section 2.1: sequence halfword per slot, before and after the erase
+for s in 20261009T072111Z-read-media 20261009T163721Z-read-media; do
+  for b in 0 1; do for i in $(seq 0 30); do
+    od -An -tx4 -j $((i*512)) -N 4 private-data/sessions/$s/bank-$b.bin
+  done; done
+done
+sha256sum private-data/sessions/20261009T072111Z-read-media/bank-1.bin \
+          private-data/sessions/20261009T163721Z-read-media/bank-1.bin
+```
+
+Private firmware-path inputs: `af/functions/0061e110.c` (ordinary and C getters, including companions), `af/functions/0063ef60.c` and `00633cac.c` (ISO cell), `filmsim/fn_d52684.c` case `0x104` (runtime render gate), and pinned `lz/id4-0061c400.bin` (matrix descriptor, manual cells and ISO conversion). Companion fields: `af/functions/006441c0.c` and `00d4fc74.c` case `0xfa` (the image-quality product), `00d13c38.c`, `00d4d6b4.c`, `00d40770.c`, `0063eb60.c`, `006424cc.c`, `006434f8.c`, `00641438.c`, `00646958.c`, `006373f4.c`, `006376a0.c`, `0063c51c.c` and `00d46d10.c`. Erase path: `af/functions/006a8074.c`, `006ac7d4.c`, `006ad3f4.c` and `006ad51c.c`, mapped in private provenance `private-data/analysis/x-m1-1.50/end-setting/followup/area2-invalidation.md` section 4.2 and stated in this report's append-and-erase finding above. [The public record-layout report](adjustment-and-service-interfaces.md#ordinary-settings-record-layout) supplies related bank interfaces. The evidence ledger binds the capture files and these analysis inputs with computed SHA-256 objects.

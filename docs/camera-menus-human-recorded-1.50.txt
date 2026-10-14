@@ -1,0 +1,32 @@
+BODY: X-M1 (XM1-body-01), firmware 1.50
+Owner-reported 2026-10-08, ordinary controls only, menus read on the body. This is the 1.50 half of the RECIPE-00 record; the 1.00 half is camera-menus-human-recorded.txt, and each "same as the 1.00 record" line is the owner's direct comparison against it, not a re-transcription.
+
+BODY VERSION
+  1.50
+
+FILM SIMULATION (SHOOTING MENU 1 > FILM SIMULATION, and the Q menu film-simulation cell; the Fn assignment reaches the same submenu)
+  List identical to the 1.00 record (E-FILMSIM-150-OWNER, E-RECIPE-150-OWNER):
+    STD icon: PROVIA/STANDARD
+    V:        Velvia/VIVID
+    S:        ASTIA/SOFT
+    B:        B & W
+    SEPIA:    SEPIA
+  The Q menu's documented film-simulation cell scrolls its five options with the sub-command dial.
+
+CONFIRMED SAME AS THE 1.00 RECORD
+  IMAGE SIZE, IMAGE QUALITY, DYNAMIC RANGE, WHITE BALANCE (every mode and the per-mode R -9..+9 / B -9..+9 shift grid), COLOR, SHARPNESS, HIGHLIGHT TONE, SHADOW TONE, NOISE REDUCTION.
+  LONG EXPOSURE NR: OFF / ON.
+
+RANGE DISPLAY
+  Ranges are now often shown in order with 0 as the middle value and negative and positive values on either side. Which side carries each sign is not always consistent; the per-menu sides were not recorded.
+
+NEW SETTING
+  SET-UP MENU 3 has instax PRINTER CONNECTION SETTING, the only setting the owner noticed that is absent from the 1.00 record.
+
+C (custom) SLOT
+  Not observed on 1.50. The 1.00 record stands: CUSTOM SET stores one unnamed setting for the mode dial's C position, and the fields it stores are not recorded.
+
+OPEN ON 1.50
+  COLOR SPACE: not observed.
+  The C-slot field list: not observed.
+  Every menu and range not named above is not asserted for 1.50; the 1.00 record remains the source for those surfaces until re-observed.

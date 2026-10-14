@@ -1,0 +1,43 @@
+module(
+    name = "fuji-af",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "rules_haskell", version = "1.0")
+bazel_dep(name = "rules_nixpkgs_core", version = "0.14.0")
+bazel_dep(name = "rules_nixpkgs_cc", version = "0.14.0")
+bazel_dep(name = "rules_nixpkgs_posix", version = "0.14.0")
+bazel_dep(name = "rules_cc", version = "0.1.1")
+bazel_dep(name = "rules_shell", version = "0.3.0")
+bazel_dep(name = "rules_sh", version = "0.4.0")
+bazel_dep(name = "rules_license", version = "1.0.0")
+bazel_dep(name = "platforms", version = "0.0.11")
+
+# Nix integration modules are shipped as subdirectories of one upstream archive.
+archive_override(
+    module_name = "rules_nixpkgs_cc",
+    integrity = "sha256-/XnW6Botm848+R+rEzCK3wvhlZ1sZ2oXxwmvmLyoAec=",
+    strip_prefix = "rules_nixpkgs-0.14.0/toolchains/cc",
+    urls = ["https://github.com/tweag/rules_nixpkgs/releases/download/v0.14.0/rules_nixpkgs-0.14.0.tar.gz"],
+)
+
+archive_override(
+    module_name = "rules_nixpkgs_posix",
+    integrity = "sha256-/XnW6Botm848+R+rEzCK3wvhlZ1sZ2oXxwmvmLyoAec=",
+    strip_prefix = "rules_nixpkgs-0.14.0/toolchains/posix",
+    urls = ["https://github.com/tweag/rules_nixpkgs/releases/download/v0.14.0/rules_nixpkgs-0.14.0.tar.gz"],
+)
+
+single_version_override(
+    module_name = "rules_haskell",
+    patch_strip = 1,
+    patches = ["//build-support:rules-haskell-nix.patch"],
+)
+
+lab = use_extension("//build-support:repositories.bzl", "lab_dependencies")
+use_repo(lab, "lab_cc_toolchains", "lab_exiftool", "lab_ffmpeg", "lab_ghc_ghc_nixpkgs_toolchain", "lab_jq", "lab_jsonschema", "lab_libusb", "lab_libusb_runtime", "lab_unicorn")
+
+register_toolchains(
+    "@lab_cc_toolchains//:all",
+    "@lab_ghc_ghc_nixpkgs_toolchain//:toolchain",
+)

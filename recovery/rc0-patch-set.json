@@ -1,0 +1,318 @@
+{
+  "schema_version": 3,
+  "id": "FILMSIM-PATCH-01",
+  "tier": "RC0",
+  "status": "accepted-static-prefix",
+  "installable": false,
+  "recorded_at": "2026-10-09T06:10:00Z",
+  "target": {
+    "model": "X-M1",
+    "firmware_version": "1.50",
+    "firmware_sha256": "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"
+  },
+  "image": {
+    "segment_id": 4,
+    "decode_base": "0x0061c400",
+    "output_base": "0x0061c340",
+    "decode_file": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+    "decode_sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+    "file_offset_rule": "output file_offset = address - 0x0061c340; stock source offset = address - 0x0061c400",
+    "dump_correspondence": "E-DUMP-RAM-150 and the independent review exclude the 781 enumerated runtime-written bytes from the rejected write set; byte equality does not exclude value-identical writers"
+  },
+  "extension": {
+    "kind": "prefix",
+    "length": 192,
+    "current_hex": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "free_space": {
+    "chosen_region": [
+      "0x0061c340",
+      "0x0061c400"
+    ],
+    "installed_extent": [
+      "0x0061c340",
+      "0x0061c400"
+    ],
+    "residual_slack": null,
+    "ownership_evidence": "reports/filmsim-patch-01.md section 5; static-inference, not hardware-observed",
+    "checker": "private-data/analysis/x-m1-1.50/filmsim/patch-01/extension-census.c",
+    "census": "private-data/analysis/x-m1-1.50/filmsim/patch-01/prefix-census.txt",
+    "accepted_regions": 1,
+    "coverage_limit": "Raw adjacent pairs are candidates, not consumer proof. Acceptance is bound to mapped retained extents and the table-copy-before-decompression order. A later table reload or undiscovered overlapping consumer falsifies it.",
+    "rejected_placements": [
+      {
+        "region": [
+          "0x007d28fc",
+          "0x007d338a"
+        ],
+        "length": 2702,
+        "proposed_arrays": [
+          "0x007d2e00",
+          "0x007d2e40"
+        ],
+        "descriptor_address": "0x007dcf50",
+        "descriptor_base": "0x007d2180",
+        "descriptor_size": "0x00002400",
+        "descriptor_span": [
+          "0x007d2180",
+          "0x007d4580"
+        ],
+        "evidence": "byte-read descriptor and span; static-inference shipped transfer consumer"
+      },
+      {
+        "previously_named_region": [
+          "0x007e2ddc",
+          "0x007e33b4"
+        ],
+        "measured_region": [
+          "0x007e2ddc",
+          "0x007e3404"
+        ],
+        "length": 1576,
+        "record_address": "0x00810fa8",
+        "descriptor_address": "0x00810fac",
+        "descriptor_base": "0x007e1e7c",
+        "descriptor_size": "0x000019c0",
+        "descriptor_span": [
+          "0x007e1e7c",
+          "0x007e383c"
+        ],
+        "evidence": "byte-read descriptor and span; static-inference shipped transfer consumer"
+      }
+    ]
+  },
+  "array_source": {
+    "file": "private-data/analysis/x-m1-1.50/native-case/filmsim-offer/arrays-patched.bin",
+    "sha256": "1f119230453bd78db681a2b2b931c60d5e74c0c0b5c296a56501a1538e3a87f2",
+    "note": "Payloads unchanged; prefix arrays at 0x0061c340 and 0x0061c380. Current prefix bytes are the zero creation template, also equal to the stock table preload at those RAM addresses."
+  },
+  "order_rule": "Values array, labels array, 14 matrix cells, then labels before values for each of the three node pointer pairs. Offline prefix creation precedes all 68 writes; this manifest is not a live-write input.",
+  "blobs": [
+    {
+      "id": "values-array",
+      "role": "values-array",
+      "address": "0x0061c340",
+      "file_offset": "0x00000000",
+      "length": 64,
+      "order_range": [
+        1,
+        16
+      ],
+      "current_hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "new_hex": "00000000000000000300000000000000010000000000000007000000000000000c0000000000000005000000000000000600000000000000feffff7f00000000"
+    },
+    {
+      "id": "labels-array",
+      "role": "labels-array",
+      "address": "0x0061c380",
+      "file_offset": "0x00000040",
+      "length": 128,
+      "order_range": [
+        17,
+        48
+      ],
+      "current_hex": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "new_hex": "8a040000890400008c0400008b0400008e0400008d040000900400008f040000920400009104000094040000930400009f0400009e040000a2040000a0040000b0040000af040000b2040000b10400009b0400009a040000990400009c04000097040000960400009504000098040000ffffffffffffffffffffffffffffffff"
+    }
+  ],
+  "words": [
+    {
+      "order": 49,
+      "address": "0x00795db4",
+      "file_offset": "0x00179a74",
+      "current": "0x00000000",
+      "new": "0x00000001",
+      "role": "matrix key 11, column 1"
+    },
+    {
+      "order": 50,
+      "address": "0x00795db8",
+      "file_offset": "0x00179a78",
+      "current": "0x00000000",
+      "new": "0x00000001",
+      "role": "matrix key 11, column 2"
+    },
+    {
+      "order": 51,
+      "address": "0x00795dc0",
+      "file_offset": "0x00179a80",
+      "current": "0x00000000",
+      "new": "0x00000001",
+      "role": "matrix key 11, column 4"
+    },
+    {
+      "order": 52,
+      "address": "0x00795dc4",
+      "file_offset": "0x00179a84",
+      "current": "0x00000000",
+      "new": "0x00000001",
+      "role": "matrix key 11, column 5"
+    },
+    {
+      "order": 53,
+      "address": "0x00795dc8",
+      "file_offset": "0x00179a88",
+      "current": "0x00000000",
+      "new": "0x00000001",
+      "role": "matrix key 11, column 6"
+    },
+    {
+      "order": 54,
+      "address": "0x00795dcc",
+      "file_offset": "0x00179a8c",
+      "current": "0x00000000",
+      "new": "0x00000001",
+      "role": "matrix key 11, column 7"
+    },
+    {
+      "order": 55,
+      "address": "0x00795e04",
+      "file_offset": "0x00179ac4",
+      "current": "0x00000000",
+      "new": "0x00000001",
+      "role": "matrix key 11, column 21"
+    },
+    {
+      "order": 56,
+      "address": "0x00795e10",
+      "file_offset": "0x00179ad0",
+      "current": "0x00000000",
+      "new": "0x00000001",
+      "role": "matrix key 12, column 1"
+    },
+    {
+      "order": 57,
+      "address": "0x00795e14",
+      "file_offset": "0x00179ad4",
+      "current": "0x00000000",
+      "new": "0x00000001",
+      "role": "matrix key 12, column 2"
+    },
+    {
+      "order": 58,
+      "address": "0x00795e1c",
+      "file_offset": "0x00179adc",
+      "current": "0x00000000",
+      "new": "0x00000001",
+      "role": "matrix key 12, column 4"
+    },
+    {
+      "order": 59,
+      "address": "0x00795e20",
+      "file_offset": "0x00179ae0",
+      "current": "0x00000000",
+      "new": "0x00000001",
+      "role": "matrix key 12, column 5"
+    },
+    {
+      "order": 60,
+      "address": "0x00795e24",
+      "file_offset": "0x00179ae4",
+      "current": "0x00000000",
+      "new": "0x00000001",
+      "role": "matrix key 12, column 6"
+    },
+    {
+      "order": 61,
+      "address": "0x00795e28",
+      "file_offset": "0x00179ae8",
+      "current": "0x00000000",
+      "new": "0x00000001",
+      "role": "matrix key 12, column 7"
+    },
+    {
+      "order": 62,
+      "address": "0x00795e60",
+      "file_offset": "0x00179b20",
+      "current": "0x00000000",
+      "new": "0x00000001",
+      "role": "matrix key 12, column 21"
+    },
+    {
+      "order": 63,
+      "address": "0x007823c8",
+      "file_offset": "0x00166088",
+      "current": "0x0078d4f8",
+      "new": "0x0061c380",
+      "role": "labels-array pointer"
+    },
+    {
+      "order": 64,
+      "address": "0x007823c4",
+      "file_offset": "0x00166084",
+      "current": "0x0078319c",
+      "new": "0x0061c340",
+      "role": "values-array pointer"
+    },
+    {
+      "order": 65,
+      "address": "0x00785d98",
+      "file_offset": "0x00169a58",
+      "current": "0x0078d4f8",
+      "new": "0x0061c380",
+      "role": "labels-array pointer"
+    },
+    {
+      "order": 66,
+      "address": "0x00785d94",
+      "file_offset": "0x00169a54",
+      "current": "0x0078319c",
+      "new": "0x0061c340",
+      "role": "values-array pointer"
+    },
+    {
+      "order": 67,
+      "address": "0x0077d1a8",
+      "file_offset": "0x00160e68",
+      "current": "0x0078d4f8",
+      "new": "0x0061c380",
+      "role": "labels-array pointer"
+    },
+    {
+      "order": 68,
+      "address": "0x0077d1a4",
+      "file_offset": "0x00160e64",
+      "current": "0x0078319c",
+      "new": "0x0061c340",
+      "role": "values-array pointer"
+    }
+  ],
+  "totals": {
+    "array_words": 48,
+    "matrix_words": 14,
+    "pointer_words": 6,
+    "words": 68,
+    "bytes_written": 272,
+    "prefix_bytes_added": 192,
+    "changed_bytes_in_preserved_body": 32,
+    "changed_bytes_against_zero_prefix_template": 114
+  },
+  "unchanged_surfaces": [
+    "Q menu",
+    "FILM 1-3 brackets",
+    "unlabelled nine-row list",
+    "RAW conversion"
+  ],
+  "container_effect": {
+    "image4_load": "0x0061c340",
+    "decoded_size": "0x002828c0",
+    "segment_size": "0x002828e8",
+    "bss_base": "0x0089ec00",
+    "bss_length": "0x00352e00",
+    "bss_end": "0x00bf1a00",
+    "embedded_header_address": "0x0061c400",
+    "embedded_header": "unchanged",
+    "trailer_load": "0x0061c340",
+    "trailer_size": "0x002828e8",
+    "record_total_len": "encoder-measured; header word 1 includes the 20-byte header",
+    "record_chunk_count": "ceil(total_len / 0x4000)",
+    "flash_window": "0x00160000",
+    "dat_extents": "unchanged"
+  },
+  "emulation_case_parameters": {
+    "case_values_address": "0x00958000",
+    "case_labels_address": "0x00958040",
+    "verdict": "synthetic emulation addresses only, not an accepted camera placement",
+    "scope": "The executed closure reads through node +0x20/+0x24, establishing the offer decision independently of placement; array ownership and label rendering remain outside that proof"
+  }
+}

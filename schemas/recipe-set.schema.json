@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "X-M1 named film-recipe set v1",
+  "description": "Host-authored RC1 recipe set for the official X-M1 1.50 firmware (reports/recipe-design.md). Values are ordinary-control choices from the owner-recorded menus. Firmware-side tokens (stored codes, addresses, label ids, table rows) are compiler output and are refused as instance keys; recipe.id is the author's own key. No layout fingerprint appears here by design: it is pinned in recipes/layout-fingerprint.txt and compared against the compiled layout module (clause C7). Length limits are measured rendering bounds (P6) whose width budget the validator checks; count limits are design ceilings, and the compiled check enforces the layout module's bound.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tier", "origin", "target", "recipes"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "tier": {
+      "const": "RC1",
+      "description": "RC1 named recipes reuse the five offered stock processing modes. A base mode outside them is RC0/RC2 and belongs in a different tier file."
+    },
+    "origin": {
+      "const": "host-authored"
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "firmware_version", "firmware_sha256"],
+      "properties": {
+        "model": {
+          "const": "X-M1"
+        },
+        "firmware_version": {
+          "const": "1.50"
+        },
+        "firmware_sha256": {
+          "const": "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"
+        }
+      }
+    },
+    "recipes": {
+      "description": "Unique ids and the compiled index bound are checked by the Haskell validator (reports/recipe-design.md C2, C4); JSON Schema expresses neither. The ceiling of 31 comes from the five-bit C-slot copy of the recipe index; the live byte at settings-image 0x127 could hold more.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 31,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/recipe"
+      }
+    }
+  },
+  "$defs": {
+    "recipeId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+    },
+    "recipeName": {
+      "description": "ASCII letters, digits, space and ./+- only. Bound rendering ceiling (reports/recipe-design.md P6): FONT_LATIN.FDL covers every printable ASCII code, and twelve worst-case 'W' characters measure 328 px inside the 440 px name box. The validator checks the 14 667 per-mille advance budget alongside this cap.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 12,
+      "pattern": "^[A-Za-z0-9 ./+-]+$"
+    },
+    "helpLine": {
+      "description": "The film-simulation label entry has one help line; the same character set as the name plus , and '. Eighteen characters render under the draw path's code caps but can exceed the 400 px help box for near-all-W strings, so the validator checks the 13 333 per-mille advance budget alongside this cap (reports/recipe-design.md P6).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 18,
+      "pattern": "^[A-Za-z0-9 ./+,'-]+$"
+    },
+    "tone": {
+      "type": "integer",
+      "minimum": -2,
+      "maximum": 2
+    },
+    "recipe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "film_simulation", "parameters"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/recipeId"
+        },
+        "name": {
+          "$ref": "#/$defs/recipeName"
+        },
+        "help": {
+          "description": "One help line, the film-simulation label entry's single help field.",
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 1,
+          "items": {
+            "$ref": "#/$defs/helpLine"
+          }
+        },
+        "film_simulation": {
+          "enum": [
+            "PROVIA/STANDARD",
+            "Velvia/VIVID",
+            "ASTIA/SOFT",
+            "B&W",
+            "SEPIA"
+          ]
+        },
+        "parameters": {
+          "$ref": "#/$defs/parameters"
+        }
+      }
+    },
+    "whiteBalance": {
+      "description": "Mode only. The two-axis R/B shift is not representable in the payload (reports/recipe-design.md section 2, P13).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "enum": [
+            "AUTO",
+            "CUSTOM",
+            "FINE",
+            "SHADE",
+            "FLUORESCENT-1",
+            "FLUORESCENT-2",
+            "FLUORESCENT-3",
+            "INCANDESCENT"
+          ]
+        }
+      }
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dynamic_range",
+        "highlight_tone",
+        "shadow_tone",
+        "color",
+        "sharpness",
+        "noise_reduction",
+        "white_balance",
+        "iso"
+      ],
+      "properties": {
+        "dynamic_range": {
+          "enum": ["AUTO", "100", "200", "400"]
+        },
+        "highlight_tone": {
+          "$ref": "#/$defs/tone"
+        },
+        "shadow_tone": {
+          "$ref": "#/$defs/tone"
+        },
+        "color": {
+          "$ref": "#/$defs/tone"
+        },
+        "sharpness": {
+          "$ref": "#/$defs/tone"
+        },
+        "noise_reduction": {
+          "description": "Property 0xef, payload +0x10 bits 5-7. -2 is LOW, +2 is HIGH.",
+          "$ref": "#/$defs/tone"
+        },
+        "white_balance": {
+          "$ref": "#/$defs/whiteBalance"
+        },
+        "iso": {
+          "description": "The 1.50 offered set. AUTO is stored code 0x00; the menu's second AUTO row (0x1b) is not modelled.",
+          "enum": [
+            "AUTO",
+            "L100",
+            "200",
+            "250",
+            "320",
+            "400",
+            "500",
+            "640",
+            "800",
+            "1000",
+            "1250",
+            "1600",
+            "2000",
+            "2500",
+            "3200",
+            "4000",
+            "5000",
+            "6400",
+            "H12800",
+            "H25600"
+          ]
+        }
+      }
+    }
+  }
+}

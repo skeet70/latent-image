@@ -1,0 +1,23 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_library")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_library(
+    name = "core",
+    srcs = [
+        "FujiAF/Broker.hs",
+        "FujiAF/SHA256.hs",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:unix",
+    ],
+)

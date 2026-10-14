@@ -1,0 +1,80 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+
+haskell_binary(
+    name = "prepare-card",
+    srcs = ["PrepareCard.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:unix",
+    ],
+)
+
+haskell_binary(
+    name = "build-image",
+    srcs = ["BuildImage.hs"],
+    args = [
+        "$(location //lz:fflzd)",
+        "$(location //host/firmware:apply-patch-set)",
+        "$(location //lz:lz-encode)",
+        "$(location //host/firmware:rebuild-update)",
+        "$(location //host/firmware:build-persistent-repair-card)",
+        "$(location //host/firmware:physical-block14-recovery.bin)",
+        "$(location //host/firmware:physical-repair-bootstrap.bin)",
+        "$(location :rc0-patch-set.json)",
+    ],
+    data = [
+        "rc0-patch-set.json",
+        "//host/firmware:apply-patch-set",
+        "//host/firmware:build-persistent-repair-card",
+        "//host/firmware:physical-block14-recovery.bin",
+        "//host/firmware:physical-repair-bootstrap.bin",
+        "//host/firmware:rebuild-update",
+        "//lz:fflzd",
+        "//lz:lz-encode",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:process",
+    ],
+)
+
+haskell_binary(
+    name = "inspect-firmware",
+    srcs = ["InspectFirmware.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)

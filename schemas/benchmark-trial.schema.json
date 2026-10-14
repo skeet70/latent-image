@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "One benchmark attempt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "session_id",
+    "trial_id",
+    "pair_id",
+    "scene_id",
+    "controller",
+    "controller_build",
+    "evidence_label",
+    "settings",
+    "outcome",
+    "fallback_used",
+    "acquisition_latency_ms",
+    "confirmation_latency_ms",
+    "timing_uncertainty_ms",
+    "quality_score",
+    "exclusion_reason",
+    "raw_artifacts"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trial_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pair_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "scene_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "controller": {
+      "type": "string",
+      "minLength": 1
+    },
+    "controller_build": {
+      "anyOf": [
+        {
+          "$ref": "common.schema.json#/$defs/artifact"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "evidence_label": {
+      "enum": [
+        "emulated",
+        "hardware-observed"
+      ]
+    },
+    "settings": {
+      "$ref": "common.schema.json#/$defs/artifact"
+    },
+    "outcome": {
+      "enum": [
+        "success",
+        "timeout",
+        "wrong-focus",
+        "false-confirmation",
+        "incomplete",
+        "cancelled",
+        "protocol-error"
+      ]
+    },
+    "fallback_used": {
+      "type": "boolean"
+    },
+    "acquisition_latency_ms": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "confirmation_latency_ms": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "timing_uncertainty_ms": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "quality_score": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "exclusion_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "raw_artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/artifact"
+      }
+    }
+  }
+}

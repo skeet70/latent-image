@@ -1,0 +1,697 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_test")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_binary(
+    name = "framing-probe",
+    srcs = ["spike/framing_probe.c"],
+    copts = [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-O2",
+    ],
+)
+
+haskell_binary(
+    name = "check-export",
+    srcs = ["CheckExport.hs"],
+    data = ["export_payload.cjs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "framing-tests",
+    srcs = ["FramingTests.hs"],
+    args = ["$(location :framing-probe)"],
+    data = [":framing-probe"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:unix",
+    ],
+)
+
+haskell_binary(
+    name = "apply-patch-set",
+    srcs = ["ApplyPatchSet.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
+haskell_binary(
+    name = "rebuild-update",
+    srcs = ["RebuildUpdate.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:label-record",
+        "//host:update-container",
+        "//lz:lz-codec",
+    ],
+)
+
+haskell_test(
+    name = "update-container-tests",
+    srcs = ["UpdateContainerTests.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
+# The id-0x83d label record the compiled recipe name rides: the load-relative
+# buffer geometry, the layout carry and the UTF-16 write and read-back. The
+# media image is built in the test, so no artefact is read.
+haskell_test(
+    name = "label-record-tests",
+    srcs = ["LabelRecordTests.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+        "//host:label-record",
+        "//host:update-container",
+    ],
+)
+
+# The editable recipe bank's builder: the slot ABI codecs, the menu arrays and
+# node headers, the parent-list append, and the write-plan validator a runtime
+# worker consumes (reports/recipe-design.md section 17).
+haskell_binary(
+    name = "build-recipe-bank",
+    srcs = ["BuildRecipeBank.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+        "//host:json",
+        "//host:recipe-bank",
+        "//host:update-container",
+    ],
+)
+
+# The authoritative field map's emitter: reads reports/custom-settings.fields.json
+# over the pinned image 4 (conversion-table pointers) and image 5 (commit
+# dispatcher arm words) and writes the shared table the storage kernel
+# (menu/recipe_bank_fields.inc) and the host oracle
+# (host/FujiAF/RecipeBankFields.hs) read. --check re-emits in memory and fails
+# on any difference from the checked-in files.
+haskell_binary(
+    name = "emit-recipe-bank-fields",
+    srcs = ["EmitRecipeBankFields.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+        "//host:text",
+    ],
+)
+
+# The D3/Q compiled-recipe rows' compiler: the typed recipe-set mapping over
+# the pinned conversion tables, the schema-3 manifests for image 4 and image 5,
+# and the patched image-2 carrying the compiled name (reports/recipe-patch-d3.md).
+haskell_binary(
+    name = "build-compiled-recipes",
+    srcs = ["BuildCompiledRecipes.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:host-support",
+        "//host:json",
+        "//host:label-record",
+        "//host:recipe-bank",
+        "//host:update-container",
+    ],
+)
+
+haskell_test(
+    name = "recipe-bank-tests",
+    srcs = ["RecipeBankTests.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:recipe-bank",
+    ],
+)
+
+# The two CLI paths that built the filmsim prefix container:
+# apply-patch-set's schema-3 decode-prefix extension and rebuild-update
+# replace-record4 --load-address. Synthetic fixtures only; the tools under
+# test run as subprocesses, so a removed refusal is a failing case.
+haskell_test(
+    name = "container-build-tests",
+    srcs = ["ContainerBuildTests.hs"],
+    args = [
+        "$(location :apply-patch-set)",
+        "$(location :rebuild-update)",
+        "$(location //lz:fflzd)",
+    ],
+    data = [
+        ":apply-patch-set",
+        ":rebuild-update",
+        "//lz:fflzd",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:update-container",
+        "//lz:lz-codec",
+    ],
+)
+
+genrule(
+    name = "diagnostic-halt",
+    srcs = ["diagnostic-halt.S", "diagnostic-halt.ld"],
+    outs = ["diagnostic-halt.bin", "diagnostic-halt.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location diagnostic-halt.ld) $(location diagnostic-halt.S) -o $(location diagnostic-halt.elf) && llvm-objcopy -O binary $(location diagnostic-halt.elf) $(location diagnostic-halt.bin)",
+    local = True,
+)
+
+genrule(
+    name = "diagnostic-blink",
+    srcs = ["diagnostic-blink.S", "diagnostic-halt.ld"],
+    outs = ["diagnostic-blink.bin", "diagnostic-blink.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location diagnostic-halt.ld) $(location diagnostic-blink.S) -o $(location diagnostic-blink.elf) && llvm-objcopy -O binary $(location diagnostic-blink.elf) $(location diagnostic-blink.bin)",
+    local = True,
+)
+
+genrule(
+    name = "diagnostic-blink-setup",
+    srcs = ["diagnostic-blink.S", "diagnostic-halt.ld"],
+    outs = ["diagnostic-blink-setup.bin", "diagnostic-blink-setup.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -DLED_SETUP -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location diagnostic-halt.ld) $(location diagnostic-blink.S) -o $(location diagnostic-blink-setup.elf) && llvm-objcopy -O binary $(location diagnostic-blink-setup.elf) $(location diagnostic-blink-setup.bin)",
+    local = True,
+)
+
+genrule(
+    name = "diagnostic-blink-startup",
+    srcs = ["diagnostic-blink.S", "diagnostic-halt.ld"],
+    outs = ["diagnostic-blink-startup.bin", "diagnostic-blink-startup.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -DLED_SETUP -DSTARTUP_RESTORE -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location diagnostic-halt.ld) $(location diagnostic-blink.S) -o $(location diagnostic-blink-startup.elf) && llvm-objcopy -O binary $(location diagnostic-blink-startup.elf) $(location diagnostic-blink-startup.bin)",
+    local = True,
+)
+
+genrule(
+    name = "native-rollback",
+    srcs = ["native-rollback.S", "native-rollback.ld", "recovery-stage-report.S"],
+    outs = ["native-rollback.bin", "native-rollback.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location native-rollback.ld) $(location native-rollback.S) $(location recovery-stage-report.S) -o $(location native-rollback.elf) && llvm-objcopy -O binary $(location native-rollback.elf) $(location native-rollback.bin)",
+    local = True,
+)
+
+genrule(
+    name = "native-rollback-pin",
+    srcs = [":native-rollback.bin"],
+    outs = ["NativeRollbackPin.hs"],
+    cmd = "digest=$$(sha256sum $(location :native-rollback.bin)); digest=$${digest%% *}; printf 'module NativeRollbackPin (RollbackDigest (..), expectedRollbackDigest) where\\nnewtype RollbackDigest = RollbackDigest String\\nexpectedRollbackDigest :: RollbackDigest\\nexpectedRollbackDigest = RollbackDigest \"%s\"\\n' \"$$digest\" > $@",
+)
+
+genrule(
+    name = "raw-native-rollback",
+    srcs = ["raw-native-rollback.S", "raw-native-rollback.ld"],
+    outs = ["raw-native-rollback.bin", "raw-native-rollback.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location raw-native-rollback.ld) $(location raw-native-rollback.S) -o $(location raw-native-rollback.elf) && llvm-objcopy -O binary $(location raw-native-rollback.elf) $(location raw-native-rollback.bin)",
+    local = True,
+)
+
+genrule(
+    name = "raw-native-rollback-pin",
+    srcs = [":raw-native-rollback.bin"],
+    outs = ["RawNativeRollbackPin.hs"],
+    cmd = "digest=$$(sha256sum $(location :raw-native-rollback.bin)); digest=$${digest%% *}; printf 'module RawNativeRollbackPin (RollbackDigest (..), expectedRollbackDigest) where\\nnewtype RollbackDigest = RollbackDigest String\\nexpectedRollbackDigest :: RollbackDigest\\nexpectedRollbackDigest = RollbackDigest \"%s\"\\n' \"$$digest\" > $@",
+)
+
+genrule(
+    name = "dual-native-rollback",
+    srcs = ["dual-native-rollback.S", "dual-native-rollback.ld"],
+    outs = ["dual-native-rollback.bin", "dual-native-rollback.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location dual-native-rollback.ld) $(location dual-native-rollback.S) -o $(location dual-native-rollback.elf) && llvm-objcopy -O binary $(location dual-native-rollback.elf) $(location dual-native-rollback.bin)",
+    local = True,
+)
+
+genrule(
+    name = "dual-native-rollback-pin",
+    srcs = [":dual-native-rollback.bin"],
+    outs = ["DualNativeRollbackPin.hs"],
+    cmd = "digest=$$(sha256sum $(location :dual-native-rollback.bin)); digest=$${digest%% *}; printf 'module DualNativeRollbackPin (RollbackDigest (..), expectedRollbackDigest) where\\nnewtype RollbackDigest = RollbackDigest String\\nexpectedRollbackDigest :: RollbackDigest\\nexpectedRollbackDigest = RollbackDigest \"%s\"\\n' \"$$digest\" > $@",
+)
+
+genrule(
+    name = "staged-recovery-bootstrap",
+    srcs = ["staged-recovery-bootstrap.S", "staged-recovery-bootstrap.ld"],
+    outs = ["staged-recovery-bootstrap.bin", "staged-recovery-bootstrap.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location staged-recovery-bootstrap.ld) $(location staged-recovery-bootstrap.S) -o $(location staged-recovery-bootstrap.elf) && llvm-objcopy -O binary $(location staged-recovery-bootstrap.elf) $(location staged-recovery-bootstrap.bin)",
+    local = True,
+)
+
+genrule(
+    name = "staged-recovery-bootstrap-pin",
+    srcs = [":staged-recovery-bootstrap.bin"],
+    outs = ["StagedRecoveryBootstrapPin.hs"],
+    cmd = "digest=$$(sha256sum $(location :staged-recovery-bootstrap.bin)); digest=$${digest%% *}; printf 'module StagedRecoveryBootstrapPin (BootstrapDigest (..), expectedBootstrapDigest) where\\nnewtype BootstrapDigest = BootstrapDigest String\\nexpectedBootstrapDigest :: BootstrapDigest\\nexpectedBootstrapDigest = BootstrapDigest \"%s\"\\n' \"$$digest\" > $@",
+)
+
+genrule(
+    name = "persistent-repair",
+    srcs = ["persistent-repair.S", "persistent-repair.ld"],
+    outs = ["persistent-repair.bin", "persistent-repair.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location persistent-repair.ld) $(location persistent-repair.S) -o $(location persistent-repair.elf) && llvm-objcopy -O binary $(location persistent-repair.elf) $(location persistent-repair.bin)",
+    local = True,
+)
+
+genrule(
+    name = "persistent-block14-classifier",
+    srcs = ["persistent-block14-classifier.S", "persistent-repair.ld"],
+    outs = ["persistent-block14-classifier.bin", "persistent-block14-classifier.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location persistent-repair.ld) $(location persistent-block14-classifier.S) -o $(location persistent-block14-classifier.elf) && llvm-objcopy -O binary $(location persistent-block14-classifier.elf) $(location persistent-block14-classifier.bin)",
+    local = True,
+)
+
+genrule(
+    name = "conditional-block14-recovery",
+    srcs = ["conditional-block14-recovery.S", "persistent-repair.ld"],
+    outs = ["conditional-block14-recovery.bin", "conditional-block14-recovery.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location persistent-repair.ld) $(location conditional-block14-recovery.S) -o $(location conditional-block14-recovery.elf) && llvm-objcopy -O binary $(location conditional-block14-recovery.elf) $(location conditional-block14-recovery.bin)",
+    local = True,
+)
+
+genrule(
+    name = "conditional-block14-recovery-coded",
+    srcs = ["conditional-block14-recovery.S", "persistent-repair.ld"],
+    outs = ["conditional-block14-recovery-coded.bin", "conditional-block14-recovery-coded.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -DCODED_OUTCOMES -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location persistent-repair.ld) $(location conditional-block14-recovery.S) -o $(location conditional-block14-recovery-coded.elf) && llvm-objcopy -O binary $(location conditional-block14-recovery-coded.elf) $(location conditional-block14-recovery-coded.bin)",
+    local = True,
+)
+
+genrule(
+    name = "media-view-diagnostic",
+    srcs = ["media-view-diagnostic.S", "persistent-repair.ld"],
+    outs = ["media-view-diagnostic.bin", "media-view-diagnostic.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location persistent-repair.ld) $(location media-view-diagnostic.S) -o $(location media-view-diagnostic.elf) && llvm-objcopy -O binary $(location media-view-diagnostic.elf) $(location media-view-diagnostic.bin)",
+    local = True,
+)
+
+genrule(
+    name = "media-view-diagnostic-pin",
+    srcs = [":media-view-diagnostic.bin"],
+    outs = ["MediaViewDiagnosticPin.hs"],
+    cmd = "digest=$$(sha256sum $(location :media-view-diagnostic.bin)); digest=$${digest%% *}; printf 'module MediaViewDiagnosticPin (MediaViewDigest (..), expectedMediaViewDigest) where\\nnewtype MediaViewDigest = MediaViewDigest String\\nexpectedMediaViewDigest :: MediaViewDigest\\nexpectedMediaViewDigest = MediaViewDigest \"%s\"\\n' \"$$digest\" > $@",
+)
+
+genrule(
+    name = "physical-block14-recovery",
+    srcs = ["media-view-diagnostic.S", "persistent-repair.ld"],
+    outs = ["physical-block14-recovery.bin", "physical-block14-recovery.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -DPHYSICAL_WRITE -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location persistent-repair.ld) $(location media-view-diagnostic.S) -o $(location physical-block14-recovery.elf) && llvm-objcopy -O binary $(location physical-block14-recovery.elf) $(location physical-block14-recovery.bin)",
+    local = True,
+)
+
+genrule(
+    name = "physical-block14-recovery-pin",
+    srcs = [":physical-block14-recovery.bin"],
+    outs = ["PhysicalBlock14RecoveryPin.hs"],
+    cmd = "digest=$$(sha256sum $(location :physical-block14-recovery.bin)); digest=$${digest%% *}; printf 'module PhysicalBlock14RecoveryPin (PhysicalRecoveryDigest (..), expectedPhysicalRecoveryDigest) where\\nnewtype PhysicalRecoveryDigest = PhysicalRecoveryDigest String\\nexpectedPhysicalRecoveryDigest :: PhysicalRecoveryDigest\\nexpectedPhysicalRecoveryDigest = PhysicalRecoveryDigest \"%s\"\\n' \"$$digest\" > $@",
+)
+
+genrule(
+    name = "conditional-block14-recovery-coded-pin",
+    srcs = [":conditional-block14-recovery-coded.bin"],
+    outs = ["ConditionalBlock14RecoveryCodedPin.hs"],
+    cmd = "digest=$$(sha256sum $(location :conditional-block14-recovery-coded.bin)); digest=$${digest%% *}; printf 'module ConditionalBlock14RecoveryCodedPin (CodedConditionalDigest (..), expectedCodedConditionalDigest) where\\nnewtype CodedConditionalDigest = CodedConditionalDigest String\\nexpectedCodedConditionalDigest :: CodedConditionalDigest\\nexpectedCodedConditionalDigest = CodedConditionalDigest \"%s\"\\n' \"$$digest\" > $@",
+)
+
+genrule(
+    name = "conditional-block14-recovery-pin",
+    srcs = [":conditional-block14-recovery.bin"],
+    outs = ["ConditionalBlock14RecoveryPin.hs"],
+    cmd = "digest=$$(sha256sum $(location :conditional-block14-recovery.bin)); digest=$${digest%% *}; printf 'module ConditionalBlock14RecoveryPin (ConditionalDigest (..), expectedConditionalDigest) where\\nnewtype ConditionalDigest = ConditionalDigest String\\nexpectedConditionalDigest :: ConditionalDigest\\nexpectedConditionalDigest = ConditionalDigest \"%s\"\\n' \"$$digest\" > $@",
+)
+
+genrule(
+    name = "persistent-block14-classifier-pin",
+    srcs = [":persistent-block14-classifier.bin"],
+    outs = ["PersistentBlock14ClassifierPin.hs"],
+    cmd = "digest=$$(sha256sum $(location :persistent-block14-classifier.bin)); digest=$${digest%% *}; printf 'module PersistentBlock14ClassifierPin (ClassifierDigest (..), expectedClassifierDigest) where\\nnewtype ClassifierDigest = ClassifierDigest String\\nexpectedClassifierDigest :: ClassifierDigest\\nexpectedClassifierDigest = ClassifierDigest \"%s\"\\n' \"$$digest\" > $@",
+)
+
+genrule(
+    name = "persistent-repair-pin",
+    srcs = [":persistent-repair.bin"],
+    outs = ["PersistentRepairPin.hs"],
+    cmd = "digest=$$(sha256sum $(location :persistent-repair.bin)); digest=$${digest%% *}; printf 'module PersistentRepairPin (RepairDigest (..), expectedRepairDigest) where\\nnewtype RepairDigest = RepairDigest String\\nexpectedRepairDigest :: RepairDigest\\nexpectedRepairDigest = RepairDigest \"%s\"\\n' \"$$digest\" > $@",
+)
+
+genrule(
+    name = "persistent-repair-bootstrap",
+    srcs = ["persistent-repair-bootstrap.S", "persistent-repair-bootstrap.ld"],
+    outs = ["persistent-repair-bootstrap.bin", "persistent-repair-bootstrap.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location persistent-repair-bootstrap.ld) $(location persistent-repair-bootstrap.S) -o $(location persistent-repair-bootstrap.elf) && llvm-objcopy -O binary $(location persistent-repair-bootstrap.elf) $(location persistent-repair-bootstrap.bin)",
+    local = True,
+)
+
+genrule(
+    name = "persistent-repair-bootstrap-pin",
+    srcs = [":persistent-repair-bootstrap.bin"],
+    outs = ["PersistentRepairBootstrapPin.hs"],
+    cmd = "digest=$$(sha256sum $(location :persistent-repair-bootstrap.bin)); digest=$${digest%% *}; printf 'module PersistentRepairBootstrapPin (BootstrapDigest (..), expectedBootstrapDigest) where\\nnewtype BootstrapDigest = BootstrapDigest String\\nexpectedBootstrapDigest :: BootstrapDigest\\nexpectedBootstrapDigest = BootstrapDigest \"%s\"\\n' \"$$digest\" > $@",
+)
+
+genrule(
+    name = "physical-repair-bootstrap",
+    srcs = ["persistent-repair-bootstrap.S", "persistent-repair-bootstrap.ld"],
+    outs = ["physical-repair-bootstrap.bin", "physical-repair-bootstrap.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -DPHYSICAL_WRITE -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location persistent-repair-bootstrap.ld) $(location persistent-repair-bootstrap.S) -o $(location physical-repair-bootstrap.elf) && llvm-objcopy -O binary $(location physical-repair-bootstrap.elf) $(location physical-repair-bootstrap.bin)",
+    local = True,
+)
+
+genrule(
+    name = "physical-repair-bootstrap-pin",
+    srcs = [":physical-repair-bootstrap.bin"],
+    outs = ["PhysicalRepairBootstrapPin.hs"],
+    cmd = "digest=$$(sha256sum $(location :physical-repair-bootstrap.bin)); digest=$${digest%% *}; printf 'module PhysicalRepairBootstrapPin (PhysicalBootstrapDigest (..), expectedPhysicalBootstrapDigest) where\\nnewtype PhysicalBootstrapDigest = PhysicalBootstrapDigest String\\nexpectedPhysicalBootstrapDigest :: PhysicalBootstrapDigest\\nexpectedPhysicalBootstrapDigest = PhysicalBootstrapDigest \"%s\"\\n' \"$$digest\" > $@",
+)
+
+genrule(
+    name = "full-image-guard",
+    srcs = ["full-image-guard.S", "full-image-guard.ld", "recovery-stage-report.S"],
+    outs = ["full-image-guard.bin", "full-image-guard.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -DXM1_REPORT_ATTEMPT=3 -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location full-image-guard.ld) $(location full-image-guard.S) $(location recovery-stage-report.S) -o $(location full-image-guard.elf) && llvm-objcopy -O binary $(location full-image-guard.elf) $(location full-image-guard.bin)",
+    local = True,
+)
+
+genrule(
+    name = "full-image-guard-pin",
+    srcs = [":full-image-guard.bin"],
+    outs = ["FullImageGuardPin.hs"],
+    cmd = "digest=$$(sha256sum $(location :full-image-guard.bin)); digest=$${digest%% *}; printf 'module FullImageGuardPin (GuardDigest (..), expectedGuardDigest) where\\nnewtype GuardDigest = GuardDigest String\\nexpectedGuardDigest :: GuardDigest\\nexpectedGuardDigest = GuardDigest \"%s\"\\n' \"$$digest\" > $@",
+)
+
+genrule(
+    name = "seg4-image-guard",
+    srcs = ["seg4-image-guard.S", "seg4-image-guard.ld", "recovery-stage-report.S"],
+    outs = ["seg4-image-guard.bin", "seg4-image-guard.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -DXM1_REPORT_ATTEMPT=4 -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location seg4-image-guard.ld) $(location seg4-image-guard.S) $(location recovery-stage-report.S) -o $(location seg4-image-guard.elf) && llvm-objcopy -O binary $(location seg4-image-guard.elf) $(location seg4-image-guard.bin)",
+    local = True,
+)
+
+genrule(
+    name = "seg4-image-guard-pin",
+    srcs = [":seg4-image-guard.bin"],
+    outs = ["Seg4ImageGuardPin.hs"],
+    cmd = "digest=$$(sha256sum $(location :seg4-image-guard.bin)); digest=$${digest%% *}; printf 'module Seg4ImageGuardPin (GuardDigest (..), expectedGuardDigest) where\\nnewtype GuardDigest = GuardDigest String\\nexpectedGuardDigest :: GuardDigest\\nexpectedGuardDigest = GuardDigest \"%s\"\\n' \"$$digest\" > $@",
+)
+
+genrule(
+    name = "af-recorder",
+    srcs = ["af-recorder.S", "af-recorder.ld"],
+    outs = ["af-recorder.bin", "af-recorder.elf"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location af-recorder.ld) $(location af-recorder.S) -o $(location af-recorder.elf) && llvm-objcopy -O binary $(location af-recorder.elf) $(location af-recorder.bin)",
+    local = True,
+)
+
+haskell_binary(
+    name = "build-boot-card",
+    srcs = ["BuildBootCard.hs", "BootCard.hs"],
+    main_file = "BuildBootCard.hs",
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-threaded"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
+haskell_binary(
+    name = "build-recovery-card",
+    srcs = ["BuildRecoveryCard.hs", "BootCard.hs", "RecoveryStageReport.hs", ":native-rollback-pin"],
+    main_file = "BuildRecoveryCard.hs",
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-threaded"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
+haskell_binary(
+    name = "build-raw-recovery-card",
+    srcs = ["BuildRawRecoveryCard.hs", "BootCard.hs", ":raw-native-rollback-pin"],
+    main_file = "BuildRawRecoveryCard.hs",
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-threaded"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
+haskell_binary(
+    name = "build-dual-recovery-card",
+    srcs = ["BuildDualRecoveryCard.hs", "BootCard.hs", ":dual-native-rollback-pin"],
+    main_file = "BuildDualRecoveryCard.hs",
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-threaded"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
+haskell_binary(
+    name = "build-staged-recovery-card",
+    srcs = [
+        "BuildStagedRecoveryCard.hs",
+        "BootCard.hs",
+        ":dual-native-rollback-pin",
+        ":staged-recovery-bootstrap-pin",
+    ],
+    main_file = "BuildStagedRecoveryCard.hs",
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-threaded"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
+haskell_binary(
+    name = "build-persistent-repair-card",
+    srcs = [
+        "BuildPersistentRepairCard.hs",
+        "BootCard.hs",
+        ":persistent-repair-bootstrap-pin",
+        ":persistent-repair-pin",
+        ":persistent-block14-classifier-pin",
+        ":conditional-block14-recovery-pin",
+        ":conditional-block14-recovery-coded-pin",
+        ":media-view-diagnostic-pin",
+        ":physical-block14-recovery-pin",
+        ":physical-repair-bootstrap-pin",
+    ],
+    main_file = "BuildPersistentRepairCard.hs",
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-threaded"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
+haskell_binary(
+    name = "build-full-recovery-card",
+    srcs = ["BuildFullRecoveryCard.hs", "BootCard.hs", "RecoveryStageReport.hs", ":full-image-guard-pin"],
+    main_file = "BuildFullRecoveryCard.hs",
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-threaded"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
+haskell_binary(
+    name = "build-seg4-recovery-card",
+    srcs = ["BuildSeg4RecoveryCard.hs", "BootCard.hs", "RecoveryStageReport.hs", ":seg4-image-guard-pin"],
+    main_file = "BuildSeg4RecoveryCard.hs",
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-threaded"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
+haskell_test(
+    name = "boot-card-tests",
+    srcs = ["BootCardTests.hs", "BootCard.hs", "RecoveryStageReport.hs"],
+    main_file = "BootCardTests.hs",
+    args = ["$(location :diagnostic-halt.bin)"],
+    data = [":diagnostic-halt.bin"],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-threaded"],
+    deps = ["//host:base", "//host:bytestring", "//host:containers"],
+)
+
+haskell_binary(
+    name = "export-x70-map",
+    srcs = ["ExportX70Map.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:update-container",
+        "//host:unix",
+    ],
+)

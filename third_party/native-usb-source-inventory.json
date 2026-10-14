@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "scope": "source-inspected invoked host transport paths; static runtime identity; no native load or camera observation",
+  "sources": [
+    {
+      "name": "libusb",
+      "version": "1.0.30",
+      "commit": "87a55632db62c9bdc58cd31d3ccfa673f1bb017f",
+      "license": "LGPL-2.1-or-later",
+      "files": [
+        {
+          "path": "libusb/libusb.h",
+          "size_bytes": 87738,
+          "sha256": "a61260ab145b051b86df2b0575956f01810190abe2c7df6aca831c33bdc8082c"
+        },
+        {
+          "path": "libusb/libusbi.h",
+          "size_bytes": 54908,
+          "sha256": "cc234f9532988e492459b877cfd2e5e90704555a2a0a5310ee4add39627c7ed9"
+        },
+        {
+          "path": "libusb/core.c",
+          "size_bytes": 108326,
+          "sha256": "33db091fdf75b690f9c5daf65ca8e3124978e897c2824d97fbc97567afea1d7b"
+        },
+        {
+          "path": "libusb/descriptor.c",
+          "size_bytes": 55764,
+          "sha256": "4e80077f28a033ba07befceac0347a64ea0e23c34c93b96cfaf8b188d69e401d"
+        },
+        {
+          "path": "libusb/sync.c",
+          "size_bytes": 13110,
+          "sha256": "3bf6e788084956a3226933580f2cb2957c2de9e0a2ebeeec1a26e6c7529bfa68"
+        },
+        {
+          "path": "libusb/io.c",
+          "size_bytes": 112226,
+          "sha256": "c83a9e14b9ff8b9566e42d23d1e90c919e223fd1e04721c5ca1a3aff13239a3d"
+        },
+        {
+          "path": "libusb/hotplug.c",
+          "size_bytes": 15858,
+          "sha256": "7cf1e723dbae5427dd93fe8419d8efa3f3502d6def30a763b8c210e9780529fb"
+        },
+        {
+          "path": "libusb/os/linux_usbfs.c",
+          "size_bytes": 81273,
+          "sha256": "ac4401cec575cc2f12b71377cced5e5943e72366eedeffbe42e951134b26bd54"
+        },
+        {
+          "path": "libusb/os/linux_usbfs.h",
+          "size_bytes": 6900,
+          "sha256": "a5deb9f3d62c1ec8fdeb9fa95717cb9d0717fdf1758aa2dad629e82906a3738e"
+        },
+        {
+          "path": "libusb/os/linux_udev.c",
+          "size_bytes": 8543,
+          "sha256": "0ca06ccb2341f008d09465b4142154a93240abd946d3298b4ced6c2ea9248115"
+        },
+        {
+          "path": "libusb/os/events_posix.c",
+          "size_bytes": 9187,
+          "sha256": "aabddcc6ca86faba726ca87862eef9fc5d3b3168faef99c5be22827ac5b66ec0"
+        },
+        {
+          "path": "libusb/os/threads_posix.c",
+          "size_bytes": 3319,
+          "sha256": "779daa724575cd82c607563c9fe396b53d6f20c6a512444661e29ac30b82210a"
+        }
+      ]
+    },
+    {
+      "name": "systemd-libudev",
+      "version": "261.2",
+      "commit": "4925d9f07fc697efccd98a93046ff535b8832445",
+      "license": "LGPL-2.1-or-later",
+      "files": [
+        {
+          "path": "src/libudev/libudev.c",
+          "size_bytes": 3486,
+          "sha256": "1471322ab6af3603c42128a00afb8793c3c4e511a1633d588f00ab85afae053a"
+        },
+        {
+          "path": "src/libudev/libudev-device.c",
+          "size_bytes": 27625,
+          "sha256": "7876c4d2541d4fcb00c72ca4f0a93f3cde6872a7387c3d9c836f70b3cacdd329"
+        },
+        {
+          "path": "src/libudev/libudev-enumerate.c",
+          "size_bytes": 12928,
+          "sha256": "e5b51324dd8182c8ea733d495b423bf5dbcd93134857b91b887b0cdef0817bac"
+        },
+        {
+          "path": "src/libudev/libudev-list.c",
+          "size_bytes": 6466,
+          "sha256": "d41993cf0a6fb2128ae8539f878dd35306494821bf147de7a7490b0b2ef2df0e"
+        },
+        {
+          "path": "src/libudev/libudev-monitor.c",
+          "size_bytes": 9303,
+          "sha256": "0e0a49ba884274df16b894a4aac43abae4004d9889fa78784a900dccf000c804"
+        },
+        {
+          "path": "src/libc/libc-shim.h",
+          "size_bytes": 9571,
+          "sha256": "a7749a1f677c92647f69187982bd3f7781573efb213b0ab0c24603a1dfccef82"
+        },
+        {
+          "path": "src/libsystemd/sd-device/sd-device.c",
+          "size_bytes": 94791,
+          "sha256": "7b4f408c89c879284445b096dddbcd1d6b05ff30aa91cf62b7b76c09025747a6"
+        },
+        {
+          "path": "src/libsystemd/sd-device/device-private.c",
+          "size_bytes": 29199,
+          "sha256": "4598656a79238c38e22ec285ea91da662abf0d12a48468dc31f1e232bb573cdf"
+        },
+        {
+          "path": "src/libsystemd/sd-device/device-enumerator.c",
+          "size_bytes": 37962,
+          "sha256": "6acf8f4a3ff70732333f49e8ecfbfa64f605cb99646164622462dc77b1958167"
+        },
+        {
+          "path": "src/libsystemd/sd-device/device-monitor.c",
+          "size_bytes": 36033,
+          "sha256": "fd803913d98dfb57cd883231739660fc9899c6f16bc4fd22504641d617d5ab5e"
+        }
+      ]
+    }
+  ],
+  "archives": [
+    {
+      "name": "libusb-1.0.30",
+      "url": "https://github.com/libusb/libusb/archive/refs/tags/v1.0.30.tar.gz",
+      "size_bytes": 436332,
+      "sha256": "2ae28adb0bb9558c86135c4e1c11b320b0805461e207a64a6e520a114094bf07"
+    },
+    {
+      "name": "systemd-261.2",
+      "url": "https://github.com/systemd/systemd/archive/refs/tags/v261.2.tar.gz",
+      "size_bytes": 18456346,
+      "sha256": "ed1059ff964f5df35b6056434cc17cc83f86dc913f10489948a0b19b6081c5ec"
+    }
+  ],
+  "runtimes": [
+    {
+      "name": "libusb",
+      "path": "/nix/store/izifjzcz7vfmr1yfdrzmjqyxvpjrpy4m-libusb-1.0.30/lib/libusb-1.0.so.0.6.0",
+      "size_bytes": 164432,
+      "sha256": "d7665d10c8ca56407874773bedb5a28c31f4bd4bdbf9fafd4e48e1e3fa876478",
+      "scope": "ELF bytes and linked-dependency identity; not whole-library/OS certification"
+    },
+    {
+      "name": "libudev",
+      "path": "/nix/store/g909pi91zmvb7zp27cvn6ip27s2mr48q-systemd-minimal-libs-261.2/lib/libudev.so.1.7.14",
+      "size_bytes": 1917744,
+      "sha256": "413e53f9d398e7c5894aff64fb4b01204f2f9a0e9834001e91741a7042fc0dd9",
+      "scope": "ELF bytes and linked-dependency identity; not whole-library/OS certification"
+    },
+    {
+      "name": "libc",
+      "path": "/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/libc.so.6",
+      "size_bytes": 2404904,
+      "sha256": "b8cb091b34bdd88f6902eebff8761f9ea306e6789b4ac4d06d4470c0d568c80c",
+      "scope": "ELF bytes and linked-dependency identity; not whole-library/OS certification"
+    },
+    {
+      "name": "libpthread",
+      "path": "/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/libpthread.so.0",
+      "size_bytes": 16536,
+      "sha256": "9d02cade61289234b7203fd73a4115207734f6c9ed1a6eeddd4b9f530ea46b28",
+      "scope": "ELF bytes and linked-dependency identity; not whole-library/OS certification"
+    },
+    {
+      "name": "loader",
+      "path": "/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/ld-linux-x86-64.so.2",
+      "size_bytes": 263056,
+      "sha256": "05657061620b22dbeb881cd13630ef66d39916d3b9c2a8efeb9ec6244367051f",
+      "scope": "ELF bytes and linked-dependency identity; not whole-library/OS certification"
+    }
+  ]
+}

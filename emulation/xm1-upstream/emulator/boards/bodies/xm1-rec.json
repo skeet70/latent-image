@@ -1,0 +1,288 @@
+{
+  "schema": 1,
+  "id": "xm1",
+  "soc_id": "exr2",
+  "execution_scope": "offline-boot-development",
+  "dram": {
+    "size": "0x20000000",
+    "basis": "Explicit borrowed512MiB backing for X-M1 offline development; physical DRAM population unmeasured."
+  },
+  "devices": [
+    {
+      "name": "bootcontrols",
+      "kind": "BootControls",
+      "refs": {}
+    },
+    {
+      "name": "kernelinterrupts",
+      "kind": "KernelInterrupts",
+      "refs": {}
+    },
+    {
+      "name": "nandcontroller",
+      "kind": "NandController",
+      "refs": {}
+    },
+    {
+      "name": "fujidecompressor",
+      "kind": "FujiDecompressor",
+      "refs": {}
+    },
+    {
+      "name": "loadermemorydma",
+      "kind": "LoaderMemoryDMA",
+      "refs": {}
+    },
+    {
+      "name": "usbcontrol",
+      "kind": "USBControl",
+      "refs": {
+        "power": "powerdevices"
+      }
+    },
+    {
+      "name": "powerdevices",
+      "kind": "PowerDevices",
+      "refs": {}
+    },
+    {
+      "name": "audioserialcontrol",
+      "kind": "AudioSerialControl",
+      "refs": {}
+    },
+    {
+      "name": "pulseoutputs",
+      "kind": "PulseOutputs",
+      "refs": {}
+    },
+    {
+      "name": "lensendpoint",
+      "kind": "LensEndpoint",
+      "refs": {}
+    },
+    {
+      "name": "spi2serial",
+      "kind": "SPI2Serial",
+      "refs": {
+        "endpoint": "lensendpoint"
+      }
+    },
+    {
+      "name": "controlbus",
+      "kind": "ControlBus",
+      "refs": {}
+    },
+    {
+      "name": "secondarycontrolbus",
+      "kind": "SecondaryControlBus",
+      "refs": {
+        "power": "powerdevices"
+      }
+    },
+    {
+      "name": "fe80control",
+      "kind": "FE80Control",
+      "refs": {}
+    },
+    {
+      "name": "inputprocessingcontrol",
+      "kind": "InputProcessingControl",
+      "refs": {}
+    },
+    {
+      "name": "inputauxiliarycontrol",
+      "kind": "InputAuxiliaryControl",
+      "refs": {}
+    },
+    {
+      "name": "producercontrol",
+      "kind": "ProducerControl",
+      "refs": {}
+    },
+    {
+      "name": "imageparametercontrol",
+      "kind": "ImageParameterControl",
+      "refs": {}
+    },
+    {
+      "name": "imageworkcontrol",
+      "kind": "ImageWorkControl",
+      "refs": {}
+    },
+    {
+      "name": "faceanalysiscontrol",
+      "kind": "FaceAnalysisControl",
+      "refs": {}
+    },
+    {
+      "name": "hdmistartup",
+      "kind": "HDMIStartup",
+      "refs": {}
+    },
+    {
+      "name": "outputcontrol",
+      "kind": "OutputControl",
+      "refs": {}
+    },
+    {
+      "name": "graphicsaccelerator",
+      "kind": "GraphicsAccelerator",
+      "refs": {}
+    },
+    {
+      "name": "displayscanout",
+      "kind": "DisplayScanout",
+      "refs": {}
+    },
+    {
+      "name": "displaytiming",
+      "kind": "DisplayTiming",
+      "refs": {}
+    },
+    {
+      "name": "displayformatter",
+      "kind": "DisplayFormatter",
+      "refs": {}
+    }
+  ],
+  "construction_order": [
+    "bootcontrols",
+    "kernelinterrupts",
+    "nandcontroller",
+    "fujidecompressor",
+    "loadermemorydma",
+    "powerdevices",
+    "usbcontrol",
+    "audioserialcontrol",
+    "pulseoutputs",
+    "lensendpoint",
+    "spi2serial",
+    "controlbus",
+    "secondarycontrolbus",
+    "fe80control",
+    "inputprocessingcontrol",
+    "inputauxiliarycontrol",
+    "producercontrol",
+    "imageparametercontrol",
+    "imageworkcontrol",
+    "faceanalysiscontrol",
+    "hdmistartup",
+    "outputcontrol",
+    "graphicsaccelerator",
+    "displayscanout",
+    "displaytiming",
+    "displayformatter"
+  ],
+  "attachment_order": [
+    "bootcontrols",
+    "kernelinterrupts",
+    "nandcontroller",
+    "fujidecompressor",
+    "loadermemorydma",
+    "usbcontrol",
+    "powerdevices",
+    "audioserialcontrol",
+    "pulseoutputs",
+    "lensendpoint",
+    "spi2serial",
+    "controlbus",
+    "secondarycontrolbus",
+    "fe80control",
+    "inputprocessingcontrol",
+    "inputauxiliarycontrol",
+    "producercontrol",
+    "imageparametercontrol",
+    "imageworkcontrol",
+    "faceanalysiscontrol",
+    "hdmistartup",
+    "outputcontrol",
+    "graphicsaccelerator",
+    "displayscanout",
+    "displaytiming",
+    "displayformatter"
+  ],
+  "limits": [
+    "Explicit offline synthetic power-on and acquisition-actuator inputs; no physical camera observation or accepted hardware-ready profile.",
+    "Rear-panel SPI1 takes whole sixteen-bit words (first stock word 0x401); panel register meaning is unknown.",
+    "Same canonical graph; status transitions depend only on completed wire commands, not firmware task RAM.",
+    "ADC8 and ADC9 use released level1023; S1/S2 pins are static active-low inputs.",
+    "Owner-captured X-M1 ROM and declared512MiB DRAM backing; unselected initial input values remain unmeasured.",
+    "Explicit absent external-flash input atGPIO11/2=0 and fixed-low SPI0 MISO; existing bounded law, unmeasured external part/line.",
+    "Declared acquisition actuator response: GPIO1 pins1/2 drive GPIO0 pin9 rising / pin6 falling through target EXR IRQ11; initial GPIO0 sensors high and GPIO2 pin8 low. Motion law, actuator identity and latency are unmeasured."
+  ],
+  "inputs": {
+    "gpio": {
+      "gpio_inputs": {
+        "0": 3688,
+        "2": 4608,
+        "3": 776,
+        "12": 128,
+        "11": 0
+      },
+      "profile_name": "X-M1 synthetic normal power-on and idle acquisition sensors; physical levels unmeasured.",
+      "acquisition_actuator_profile": "xm1-150-declared-acquisition-gpio-motion-unmeasured"
+    },
+    "power": {
+      "profile_name": "Synthetic loader boot reason0; remaining ADC borrowed; MCU runtime status still separate rehearsal input",
+      "adc_samples": [
+        0,
+        0,
+        1023,
+        63,
+        534,
+        640,
+        0,
+        825,
+        1023,
+        1023,
+        0,
+        0
+      ],
+      "boot_reply": 0,
+      "spi0_input_profile": "absent-external-flash-fixed-low-miso",
+      "panel_contract": [
+        [
+          224,
+          6
+        ],
+        [
+          11,
+          3,
+          0,
+          12,
+          3,
+          1
+        ],
+        [
+          16,
+          null,
+          null
+        ],
+        1
+      ]
+    },
+    "mcu_packet_hex": "00000000d00700ff008000040000aafc",
+    "usb_connected": false
+  },
+  "service_controllers": {
+    "control_bus0": {
+      "profile": "endpoint7-and9-virtual-write-ack",
+      "transfer_ticks": 4,
+      "sensor": {
+        "address": "0x1c",
+        "reply_model": "write-only",
+        "basis": "XM1 descriptor6 at7cad90; explicit transport-only writes, no status/XYZ reply; actual sensor use remains a frontier."
+      },
+      "basis": "Seven-row XM1 topology and mutable polarity words; no X-E2S endpoint2 reply inherited."
+    },
+    "display_timing": {
+      "phase_profile": "declared-external-phase-clock-unmeasured",
+      "frame_period_ticks": 400000,
+      "stop_delay_ticks": 2,
+      "basis": "Explicit external phase waveform on the requested/ready clock, controller bit8 programmed. Calibration timing bytes remain zero; no physical timing or scanout claim."
+    },
+    "fe80": {
+      "basis": "Explicit firmware-selected descriptor/program/count and disabled-phase contracts; fe80-xm1.md pins the stock consumers. No X70 upload map inherited."
+    }
+  }
+}

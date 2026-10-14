@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "firmware_id": "xm1-150",
+  "source_sha256": "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490",
+  "descriptors": {
+    "address": "0x7cad48",
+    "size": "0x54",
+    "sha256": "ce5cef2fc7be16b53b02402ffb43486b653418202d193a301ea4f549405d6cb9",
+    "sampling": "immutable-source",
+    "count": 7,
+    "format": "little-endian address/polarity-selector/channel u32"
+  },
+  "polarity_words": {
+    "address": "0x7cb7c4",
+    "size": "0x8",
+    "sha256": "01acecb507abfe1a354aa8064f4af5d3f1acd019e37db3c11c97523b71c76e9d",
+    "sampling": "transaction"
+  },
+  "evidence": [
+    "research/service-exit/xm1-150.md",
+    "stock6a6124:6a6140 bounds6;6a6154..60 triples;6a61d0..e0 polarity"
+  ],
+  "limits": [
+    "Descriptor grammar verified from stock indexed consumer; no external reply or physical identity inferred."
+  ]
+}

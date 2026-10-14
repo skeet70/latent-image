@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "subject": "X-M1 1.50 custom-setting (C slot) record payload",
+  "pinned_input": {
+    "artifact": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+    "base": "0x0061c400",
+    "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+  },
+  "commit_dispatcher_input": {
+    "artifact": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin",
+    "base": "0x00bf1a00",
+    "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+    "role": "the commit dispatcher 0x00d4fc74's 637-word arm table at 0x00d4fcd4: a word is either an arm address or a B to the shared arm 0x00d52664, which is the per-field arm column this map carries"
+  },
+  "record": {
+    "logical_area": 3,
+    "record_size": "0x34",
+    "record_count": "0xfe (127 per bank, two banks)",
+    "descriptor_rows": ["0x007c8d38 = {1, 0x3d8, 3}", "0x007c8d44 = {1, 0x3d9, 3}"],
+    "ram_live_copy": "0x0089f838",
+    "ram_snapshot": "0x0089f874",
+    "ram_settings_image_payload": "0x409c295c",
+    "layout": {
+      "0x00-0x01": "log sequence halfword, 15 bits, stamped by 0x006ad3f4 as (last + 1) & 0x7fff; 0xffff is an empty slot",
+      "0x02-0x03": "compared by 0x006a86c4 and covered by the parity, no writer found in image 4",
+      "0x04-0x2b": "payload, 0x28 bytes, the record whose field map is below",
+      "0x2c-0x2f": "per-word parity region, written by the write callback 0x006a8484 and validated by 0x006a84d4",
+      "0x30-0x33": "per-bit-plane parity region, same callbacks"
+    },
+    "parity_scope_bytes": "0x2c (word at 0x00828570 over the bytes 0x00-0x2b)"
+  },
+  "payload_field_map": {
+    "note": "The authoritative payload field map: the walk table in apply order (payload offset order) that menu/recipe_bank_fields.inc and host/FujiAF/RecipeBankFields.hs are generated from, and the table the host oracle and the tests read. Payload offsets are record-relative minus 0x04 (payload byte 0 = record byte 0x04 = settings-image byte 0x409c295c). The getter FUN_0061e110 reads each property's payload field at the same offset in three 0x28-byte records: the bank slot record at 0x0096cc64 + 0x1c2*bank + 0x140 + 0x28*slot, the per-slot defaults block at 0x007cb804 + 0x28*slot, and (for some properties) the extra record at bank + 0x19a. Property numbers are the getter's own dispatch indices: 0x0061e11c subtracts 1, 0x0061e120 compares with 644, so the absolute table at 0x0061e12c has 645 entries (indices 0..644) ending at 0x0061eb3c. Corrections to the earlier revision: property 0x1a is one bit at +0x27 bit 1 (getter arms 0x0061ecec and 0x0061ed14 both read ubfx #1,#1), so the earlier bits 1-2 row was one bit too wide; the two halfword properties 0x1cb/0x1cc at +0x00/+0x02, which the earlier revision omitted, are carried first at full width (raw ldrh/strh, null conversion-table pointers at 0x0081b7c8/0x0081b7cc). Every row here is walked; bound bits no walk carries are listed under bound_not_walked.",
+    "walk_count": 83,
+    "edit_count": 9,
+    "sources": {
+      "derived": "re-derived in this pass: dispatch table at 0x0061e12c plus the property's block read offset",
+      "lead": "private-data/analysis/x-m1-1.50/filmsim/slot-fields.txt (private author-only map); offset agrees with the derived value wherever both exist",
+      "node": "menu node header in the private node listing (X= property, labels), used only for the meaning column"
+    },
+    "fields": [
+      { "offset": "0x00", "bits": "0-15", "property": "0x1cb", "bytes": 2, "label": null, "evidence": "getter arm 0x00623198 reads ldrh with no mask (defaults arm 0x6231b4 reads the defaults row, live arm 0x6231cc the ordinary block head); setter arm is the matching raw strh; conversion-table pointer at 0x0081b7c8 is null, so the field is carried at full width" },
+      { "offset": "0x02", "bits": "0-15", "property": "0x1cc", "bytes": 2, "label": null, "evidence": "getter arm 0x00623130 reads ldrh with no mask (live arm 0x62314c reads record + 2); conversion-table pointer at 0x0081b7cc is null, so the field is carried at full width" },
+      { "offset": "0x04", "bits": "0-7", "property": "0x1c6", "label": null, "evidence": "lead" },
+      { "offset": "0x05", "bits": "0-5", "property": "0x1cf", "label": null, "evidence": "lead" },
+      { "offset": "0x05", "bits": "6-7", "property": "0x104", "label": "DYNAMIC RANGE", "edit_index": 0, "evidence": "derived+lead+node" },
+      { "offset": "0x06", "bits": "0-5", "property": "0x1ce", "label": null, "evidence": "lead" },
+      { "offset": "0x06", "bits": "6-7", "property": "0x1d", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x07", "bits": "0-4", "property": "0x123", "label": null, "evidence": "lead" },
+      { "offset": "0x07", "bits": "5-7", "property": "0x10e", "label": "COLOR", "edit_index": 3, "evidence": "derived+lead+node" },
+      { "offset": "0x08", "bits": "0-4", "property": "0x121", "label": null, "evidence": "lead" },
+      { "offset": "0x08", "bits": "5-7", "property": "0x10f", "label": "SHARPNESS", "edit_index": 4, "evidence": "derived+lead+node" },
+      { "offset": "0x09", "bits": "0-4", "property": "0x11f", "label": null, "evidence": "lead" },
+      { "offset": "0x09", "bits": "5-7", "property": "0x111", "label": "SHADOW TONE", "edit_index": 2, "evidence": "derived+lead+node" },
+      { "offset": "0x0a", "bits": "0-4", "property": "0x117", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x0b", "bits": "0-4", "property": "0x11d", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x0b", "bits": "5-7", "property": "0x152", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x0c", "bits": "0-4", "property": "0x11b", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x0c", "bits": "5-7", "property": "0x14f", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x0d", "bits": "0-4", "property": "0x125", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x0d", "bits": "5-7", "property": "0xfa", "label": "IMAGE QUALITY", "evidence": "derived+lead+node" },
+      { "offset": "0x0e", "bits": "0-4", "property": "0x115", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x0e", "bits": "5-7", "property": "0x1fb", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x0f", "bits": "0-4", "property": "0x124", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x0f", "bits": "5-7", "property": "0x1fe", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x10", "bits": "0-4", "property": "0x122", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x10", "bits": "5-7", "property": "0xef", "label": "NOISE REDUCTION", "edit_index": 5, "evidence": "derived (lsr #5 at 0x6209fc)+lead+node" },
+      { "offset": "0x11", "bits": "0-4", "property": "0x120", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x11", "bits": "5-7", "property": "0x1fd", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x12", "bits": "0-4", "property": "0x118", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x12", "bits": "5-7", "property": "0xf2", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x13", "bits": "0-4", "property": "0x11e", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x13", "bits": "5-7", "property": "0x137", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x14", "bits": "0-4", "property": "0x11c", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x14", "bits": "5-7", "property": "0x10c", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x15", "bits": "0-4", "property": "0x126", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x15", "bits": "5-7", "property": "0x109", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x16", "bits": "0-4", "property": "0x116", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x16", "bits": "5-7", "property": "0x217", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x17", "bits": "0-4", "property": "0xee", "label": "WHITE BALANCE fine shift (values 0x00-0x1e)", "evidence": "derived+lead+node" },
+      { "offset": "0x17", "bits": "5-7", "property": "0x110", "label": "HIGHLIGHT TONE", "edit_index": 1, "evidence": "derived+lead+node" },
+      { "offset": "0x18", "bits": "0-4", "property": "0x15c", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x18", "bits": "5-7", "property": "0x129", "label": "FOCUS MODE", "evidence": "derived+lead+node" },
+      { "offset": "0x19", "bits": "0-4", "property": "0x15b", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x19", "bits": "5-7", "property": "0x1fc", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x1a", "bits": "0-4", "property": "0x15d", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x1a", "bits": "5-6", "property": "0xf6", "label": "IMAGE SIZE", "evidence": "derived+lead+node" },
+      { "offset": "0x1a", "bits": "7", "property": "0x1e3", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x1b", "bits": "0-4", "property": "0x15a", "label": null, "evidence": "lead" },
+      { "offset": "0x1b", "bits": "5-6", "property": "0x1c2", "label": "PHOTOMETRY", "evidence": "derived+lead+node" },
+      { "offset": "0x1b", "bits": "7", "property": "0x1e2", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x1c", "bits": "0-4", "property": "0x158", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x1c", "bits": "5-6", "property": "0x139", "label": "AE BKT step", "evidence": "derived+lead+node" },
+      { "offset": "0x1c", "bits": "7", "property": "0xf3", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x1d", "bits": "0-4", "property": "0x159", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x1d", "bits": "5-6", "property": "0x1d9", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x1d", "bits": "7", "property": "0x17e", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x1e", "bits": "0-4", "property": "0x14e", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x1e", "bits": "5-6", "property": "0xf9", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x1e", "bits": "7", "property": "0x147", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x1f", "bits": "0-4", "property": "0x14b", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x1f", "bits": "5-6", "property": "0x162", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x1f", "bits": "7", "property": "0x146", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x20", "bits": "0-4", "property": "0x141", "label": "ISO", "edit_index": 7, "evidence": "derived+lead+node" },
+      { "offset": "0x20", "bits": "5-6", "property": "0x164", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x20", "bits": "7", "property": "0x149", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x21", "bits": "0-3", "property": "0xed", "label": "WHITE BALANCE mode", "edit_index": 6, "evidence": "derived+lead+node" },
+      { "offset": "0x21", "bits": "4-7", "property": "0x156", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x22", "bits": "0-3", "property": "0x153", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x22", "bits": "4-7", "property": "0x1c5", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x23", "bits": "0-3", "property": "0x1b1", "label": "bracketing/drive selector", "evidence": "derived+lead+node" },
+      { "offset": "0x23", "bits": "4-7", "property": "0x138", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x24", "bits": "0-3", "property": "0xfe", "label": "FILM SIMULATION (stored code, see table)", "edit_index": 8, "evidence": "derived+lead+node" },
+      { "offset": "0x24", "bits": "4-7", "property": "0x1d8", "label": "display-information custom setting", "evidence": "derived+lead+node" },
+      { "offset": "0x25", "bits": "0-3", "property": "0x214", "label": "movie frame rate", "evidence": "derived+lead+node" },
+      { "offset": "0x25", "bits": "4-5", "property": "0x163", "label": null, "evidence": "derived (ubfx #4,#2 at 0x621c08)" },
+      { "offset": "0x25", "bits": "6-7", "property": "0x161", "label": null, "evidence": "derived (lsr #6 at 0x621b20)" },
+      { "offset": "0x26", "bits": "0-1", "property": "0x183", "label": "ISO bracketing step", "evidence": "derived+lead+node" },
+      { "offset": "0x26", "bits": "2-3", "property": "0x107", "label": null, "evidence": "derived (ubfx #2,#2 at 0x620ed0)" },
+      { "offset": "0x26", "bits": "4-5", "property": "0x106", "label": null, "evidence": "derived (ubfx #4,#2 at 0x620f44)" },
+      { "offset": "0x26", "bits": "6", "property": "0x148", "label": null, "evidence": "derived (ubfx #6,#1 at 0x61faec)" },
+      { "offset": "0x26", "bits": "7", "property": "0x142", "label": null, "evidence": "derived (lsr #7 at 0x61f918)" },
+      { "offset": "0x27", "bits": "0", "property": "0x1e8", "label": null, "evidence": "derived+lead" },
+      { "offset": "0x27", "bits": "1", "property": "0x1a", "label": null, "evidence": "derived (ubfx #1,#1 at 0x61ecec and 0x61ed14, the record and live payload arms) + lead; the earlier bits 1-2 row was one bit too wide" }
+    ],
+    "bound_not_walked": [
+      { "offset": "0x0a", "bits": "5-7", "property": "0xe9", "label": null, "evidence": "derived (getter arms 0x6245a8 defaults and 0x6245cc live, both lsr #5); the record's own mode field, written by the mode path and by the explicit C-copy write FUN_0061c92c(0xe9,...) in FUN_00d4e2a0, and carried by no bank walk" }
+    ]
+  },
+  "reset_after_jig_cycle": {
+    "constructor": "0x006a877c",
+    "commit": "0x006a86c4",
+    "default_block": {
+      "address": "0x007cb804",
+      "bytes": 40,
+      "sha256": "1787a2535e60bbcbc13f515b1f786786a38e5482269e8d4a65f4e4739c10cd81",
+      "hex": "00 00 00 00 7f 22 22 09 49 49 69 49 49 09 09 09 49 29 09 69 09 09 a9 40 43 22 03 02 82 82 8f 8f 88 30 63 60 30 07 40 00"
+    },
+    "cache_carried_fields": [
+      { "cache_index": "0x217", "payload": "0x1a bits 5-6", "property": "0xf6", "meaning": "IMAGE SIZE" },
+      { "cache_index": "0x218", "payload": "0x0d bits 5-7", "property": "0xfa", "meaning": "IMAGE QUALITY" },
+      { "cache_index": "0x219", "payload": "0x1e bits 5-6", "property": "0xf9", "meaning": null },
+      { "cache_index": "0x208", "payload": "0x19 bits 0-4", "property": "0x15b", "meaning": null },
+      { "cache_index": "0x209", "payload": "0x18 bits 0-4", "property": "0x15c", "meaning": null },
+      { "cache_index": "0x20a", "payload": "0x1a bits 0-4", "property": "0x15d", "meaning": null }
+    ],
+    "everything_else": "the remaining C-payload fields take the default block value, including the film-simulation nibble 0x30 & 0x0f = 0 (PROVIA); this bounds the C payload only, while the ordinary defaults use their own block and their own cache inputs (0x215, 0x216, 0x20b beside the six above)"
+  },
+  "menu_value_maps": {
+    "film_simulation": {
+      "property": "0xfe",
+      "payload": "0x24 bits 0-3",
+      "table": "0x0077ac30, rows {col0, 0x7ffffffe, col2}, 0xffff terminates",
+      "menu_rows": [
+        { "row": "0", "stored": "0", "label": "PROVIA" },
+        { "row": "3", "stored": "3", "label": "Velvia" },
+        { "row": "1", "stored": "1", "label": "ASTIA" },
+        { "row": "7", "stored": "0xb", "label": "B&W" },
+        { "row": "0xc", "stored": "0xc", "label": "SEPIA" }
+      ],
+      "cited": "reports/film-simulation.md"
+    },
+    "image_quality": {
+      "property": "0xfa",
+      "payload": "0x0d bits 5-7",
+      "table": "0x0077a084, rows {col0, 0x7ffffffe, col2}, 0xffff terminates",
+      "menu_rows": [
+        { "row": "0", "stored": "0", "label": "FINE" },
+        { "row": "1", "stored": "1", "label": "NORMAL" },
+        { "row": "2", "stored": "2", "label": "FINE+RAW" },
+        { "row": "3", "stored": "3", "label": "NORMAL+RAW" },
+        { "row": "4", "stored": "4", "label": "RAW" }
+      ],
+      "node": "0x00784cb4 (X=0xfa); the same five rows appear at 0x0077d934 and 0x00783e0c"
+    },
+    "image_size": {
+      "property": "0xf6",
+      "payload": "0x1a bits 5-6",
+      "table": "0x0077aa38, twelve 12-byte rows whose col0 groups as 0,0,0,0,1,1,1,1,2,2,2,2",
+      "menu_rows": [
+        { "row": "1", "stored": "0", "label": "L 3:2" },
+        { "row": "2", "stored": "0", "label": "L 16:9" },
+        { "row": "3", "stored": "0", "label": "L 1:1" },
+        { "row": "5", "stored": "1", "label": "M 3:2" },
+        { "row": "6", "stored": "1", "label": "M 16:9" },
+        { "row": "7", "stored": "1", "label": "M 1:1" },
+        { "row": "9", "stored": "2", "label": "S 3:2" },
+        { "row": "0xa", "stored": "2", "label": "S 16:9" },
+        { "row": "0xb", "stored": "2", "label": "S 1:1" }
+      ],
+      "note": "node 0x00784014 offers the nine rows {1,2,3,5,6,7,9,0xa,0xb} and the owner's 1.00 quick menu lists the same nine sizes; the two-bit payload field carries only the L/M/S group, so the aspect ratio is not in this field and where it is carried is unproved"
+    }
+  }
+}

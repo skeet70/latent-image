@@ -1,0 +1,133 @@
+{
+ "artifacts": [
+  {
+   "id": "strd",
+   "path": "strd.bin",
+   "sha256": "e6fd3ef3a38510468cf2943cf247814837c4640f77783be417a435c28ffe4788",
+   "size": 12
+  },
+  {
+   "id": "strd-data",
+   "path": "strd-data.bin",
+   "sha256": "0d9a20154ac4366ff1103cc82cb7cbf83f7f5c6f546c51d7e2ee07ce4965906a",
+   "size": 24
+  }
+ ],
+ "cpu": {
+  "architecture": "arm",
+  "endian": "little",
+  "mode": "arm",
+  "model": "cortex-r5f"
+ },
+ "entry": "0x00001004",
+ "exclusions": [
+  "Synthetic Cortex-R5F user-mode ARM/little-endian only; no X-M1 behavior or ABI claim",
+  "No exceptions, coprocessors, mode switching, PC-loading returns, MMIO, interrupts, DMA, caches, scheduling or hardware timing"
+ ],
+ "exit": "0x00001080",
+ "expected": {
+  "events": [],
+  "memory": [
+   {
+    "hex": "11111111222222220300aaaa0500aaaa0600aaaa66666666",
+    "offset": 0,
+    "region": "data"
+   }
+  ],
+  "registers": {
+   "cpsr": "0x00000010",
+   "lr": "0x00001080",
+   "pc": "0x00001080",
+   "r0": "0xfffffffe",
+   "r1": "0x00000005",
+   "r10": "0x00000000",
+   "r11": "0x00000000",
+   "r12": "0x00000000",
+   "r2": "0x00002010",
+   "r3": "0x00000000",
+   "r4": "0xaaaa0003",
+   "r5": "0xaaaa0004",
+   "r6": "0xaaaa0005",
+   "r7": "0xaaaa0006",
+   "r8": "0x00000000",
+   "r9": "0x00000000",
+   "sp": "0x00003020"
+  },
+  "status": "returned"
+ },
+ "functions": [
+  {
+   "address": "0x00001004",
+   "size": 12
+  }
+ ],
+ "id": "strd",
+ "limits": {
+  "instructions": 100,
+  "wall_ms": 1000
+ },
+ "origin": "synthetic",
+ "provenance": "PROVENANCE.md: hand-encoded ARM instructions and independent arithmetic",
+ "regions": [
+  {
+   "address": "0x00001004",
+   "id": "code",
+   "initial": {
+    "artifact": "strd",
+    "length": 12,
+    "offset": 0
+   },
+   "permissions": "rx",
+   "size": 12
+  },
+  {
+   "address": "0x00001080",
+   "id": "exit",
+   "initial": {
+    "zero": true
+   },
+   "permissions": "rx",
+   "size": 4
+  },
+  {
+   "address": "0x00002004",
+   "id": "data",
+   "initial": {
+    "artifact": "strd-data",
+    "length": 24,
+    "offset": 0
+   },
+   "permissions": "rw",
+   "size": 24
+  },
+  {
+   "address": "0x00003000",
+   "id": "stack",
+   "initial": {
+    "zero": true
+   },
+   "permissions": "rw",
+   "size": 32
+  }
+ ],
+ "registers": {
+  "cpsr": "0x00000010",
+  "lr": "0x00001080",
+  "r0": "0xfffffffe",
+  "r1": "0x00000005",
+  "r10": "0x00000000",
+  "r11": "0x00000000",
+  "r12": "0x00000000",
+  "r2": "0x00002004",
+  "r3": "0x00000000",
+  "r4": "0xaaaa0003",
+  "r5": "0xaaaa0004",
+  "r6": "0xaaaa0005",
+  "r7": "0xaaaa0006",
+  "r8": "0x00000000",
+  "r9": "0x00000000",
+  "sp": "0x00003020"
+ },
+ "schema_version": 1,
+ "stubs": []
+}

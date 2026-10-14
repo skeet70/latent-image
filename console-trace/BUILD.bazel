@@ -1,0 +1,64 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_library(
+    name = "console-store",
+    srcs = ["FujiAF/ConsoleStore.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)
+
+haskell_binary(
+    name = "ring-check",
+    srcs = ["RingCheck.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [":console-store", "//host:base", "//host:containers"],
+)
+
+haskell_binary(
+    name = "trace-census",
+    srcs = ["TraceCensus.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [":console-store", "//host:base", "//host:bytestring", "//host:containers"],
+)
+
+haskell_binary(
+    name = "log-diff-check",
+    srcs = ["LogDiffCheck.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":console-store",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "decoder-tests",
+    srcs = ["Tests.hs"],
+    args = [
+        "$(location :ring-check)",
+        "$(location :trace-census)",
+        "$(location :log-diff-check)",
+    ],
+    data = [":ring-check", ":trace-census", ":log-diff-check"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:process",
+    ],
+)

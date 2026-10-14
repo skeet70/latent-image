@@ -1,0 +1,375 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+exports_files(["native_usb.c"])
+
+_GHCOPTS = [
+    "-Wall",
+    "-Werror",
+    "-O2",
+    "-XGHC2021",
+]
+
+# The locked Nix libusb, resolved to its store path at build time. Nothing opens
+# it outside the live camera operations.
+genrule(
+    name = "libusb-path",
+    srcs = ["@lab_libusb_runtime//:lib/libusb-1.0.so"],
+    outs = ["libusb_path.h"],
+    cmd = "printf '#define FUJI_LIBUSB_PATH \"%s\"\\n' \"$$(readlink -f $<)\" > $@",
+)
+
+cc_library(
+    name = "native-shim",
+    srcs = [
+        "native_usb.c",
+        ":libusb-path",
+    ],
+    copts = [
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
+    linkopts = ["-ldl"],
+    deps = ["@lab_libusb//:headers"],
+)
+
+haskell_library(
+    name = "camera-core",
+    srcs = [
+        "FujiAF/Area2.hs",
+        "FujiAF/ArmAutoAct.hs",
+        "FujiAF/BootRom.hs",
+        "FujiAF/CodeProbe.hs",
+        "FujiAF/DumpRam.hs",
+        "FujiAF/EndSetting.hs",
+        "FujiAF/Identify.hs",
+        "FujiAF/Log.hs",
+        "FujiAF/Ownership.hs",
+        "FujiAF/PlanDocument.hs",
+        "FujiAF/Probe.hs",
+        "FujiAF/Read.hs",
+        "FujiAF/ReadMedia.hs",
+        "FujiAF/Rehearsal.hs",
+        "FujiAF/Routes.hs",
+        "FujiAF/Straps.hs",
+        "FujiAF/Transport.hs",
+    ],
+    ghcopts = _GHCOPTS,
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+        "//host:aeson",
+        "//host:json",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_library(
+    name = "native-provider",
+    srcs = ["FujiAF/Native.hs"],
+    ghcopts = _GHCOPTS,
+    src_strip_prefix = ".",
+    deps = [
+        ":camera-core",
+        ":native-shim",
+        "//host:base",
+        "//broker:core",
+    ],
+)
+
+# The one test that builds the native provider and runs the C lister: repeated
+# enumeration of the host bus, needing no camera. Every other test injects its
+# own UsbApi and cannot fail on the C.
+haskell_test(
+    name = "native-usb-tests",
+    srcs = ["NativeUsbTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        ":native-provider",
+        "//host:base",
+        "//broker:core",
+    ],
+)
+
+haskell_binary(
+    name = "camera",
+    srcs = ["Main.hs"],
+    ghcopts = _GHCOPTS,
+    visibility = ["//visibility:public"],
+    deps = [
+        ":camera-core",
+        ":native-provider",
+        "//host:base",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+        "//host:time",
+    ],
+)
+
+haskell_test(
+    name = "identify-tests",
+    srcs = ["IdentifyTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "read-tests",
+    srcs = ["ReadTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "log-tests",
+    srcs = ["LogTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "bootrom-tests",
+    srcs = ["BootRomTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "probe-tests",
+    srcs = ["ProbeTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "area2-tests",
+    srcs = ["Area2Test.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "straps-tests",
+    srcs = ["StrapsTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "code-probe-tests",
+    srcs = ["CodeProbeTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "ownership-tests",
+    srcs = ["OwnershipTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "dump-ram-tests",
+    srcs = ["DumpRamTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "probe-routes-tests",
+    srcs = ["RoutesTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+# The happy case runs the full 1058-slice session with its durable per-frame
+# journaling; on a filesystem with slow fsync that alone can run for minutes.
+haskell_test(
+    name = "read-media-tests",
+    size = "enormous",
+    srcs = ["ReadMediaTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "end-setting-tests",
+    srcs = ["EndSettingTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+# The guard-never-sets case runs the watch's full ninety-poll cap, about
+# ninety seconds of the one-second spacing, on top of the fast cases.
+haskell_test(
+    name = "arm-auto-act-tests",
+    size = "large",
+    srcs = ["ArmAutoActTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+# The rehearsal positives run each operation's full session with its durable
+# per-frame journaling, so the large stores cost minutes of fsync work and the
+# 1058-slice read-media rehearsal alone can run for minutes on a filesystem
+# with slow fsync.
+sh_test(
+    name = "cli-rejections",
+    size = "enormous",
+    srcs = ["cli-rejections.sh"],
+    args = ["$(location :camera)"],
+    data = [":camera"],
+)
+
+# The marker-0 read session's five steps against a stub camera, so the
+# derivation and the derived form's plan parse run without one.
+sh_test(
+    name = "marker0-schedule",
+    srcs = ["marker0-schedule-test.sh"],
+    args = [
+        "$(location :camera)",
+        "$(location marker0-read-session.sh)",
+    ],
+    data = [
+        ":camera",
+        "marker0-read-session.sh",
+    ],
+)
+
+haskell_binary(
+    name = "audit-inventory",
+    srcs = ["AuditInventory.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:filepath",
+        "//host:aeson",
+        "//host:json",
+    ],
+)

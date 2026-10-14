@@ -1,0 +1,142 @@
+{
+  "schema": 1,
+  "id": "xm1-150",
+  "model": "X-M1",
+  "model_slug": "x-m1",
+  "version": "1.50",
+  "generation": {
+    "sensor": "X-Trans CMOS",
+    "processor": "EXR Processor II",
+    "x70_family": true,
+    "basis": "Type-4 DAT, whole-file XOR 0xff, method-4 LZ and 32-bit inner-header mappings decode with the X70-family decoder; processor identification from repos/fffw-wiki/CPU-and-OS-History-Table.md."
+  },
+  "cpu": {
+    "arch": "arm32",
+    "isa": "ARMv7 ARM state (Thumb not assessed)",
+    "ghidra_language": "ARM:LE:32:v7",
+    "uncached_alias": "0x40000000",
+    "uncached_alias_basis": "This firmware's descriptor pointers use bit 0x40000000 and its storage reader ORRs the destination with that bit at 0x006a8fac (A32 word 0xe3877101). The uncached interpretation is inferred from X70, not observed on this model."
+  },
+  "source": {
+    "path": "firmware/x-m1/1.50/original/FWUP0002.DAT",
+    "filename": "FWUP0002.DAT",
+    "size": 38405148,
+    "sha256": "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490",
+    "url": "https://dl.fujifilm-x.com/support/firmware/x-m1-150-oqijkawt/FWUP0002.DAT",
+    "page": "https://www.fujifilm-x.com/global/support/download/firmware/cameras/x-m1/",
+    "downloaded_at": "2026-10-11",
+    "release_date": "2017-11-21",
+    "outer_type": 4
+  },
+  "unpack": {
+    "method": "inner-header-scan",
+    "transform": "whole DAT XOR 0xff; method-4 LZ streams",
+    "streams": [
+      {
+        "name": "stream-0016025c",
+        "dat_offset": "0x16025c",
+        "packed_size": 1336679,
+        "decoded_size": 2631680,
+        "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+        "header_word_bits": 32,
+        "base": "0x61c400",
+        "initialized_size": "0x282828",
+        "executable": true
+      },
+      {
+        "name": "stream-002c025c",
+        "dat_offset": "0x2c025c",
+        "packed_size": 2909905,
+        "decoded_size": 5185120,
+        "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+        "header_word_bits": 32,
+        "base": "0xbf1a00",
+        "initialized_size": "0x4f1e60",
+        "executable": true
+      }
+    ],
+    "limits": "Two compressed main streams and three independent raw overlay units, derived from this firmware's loader and descriptor table. Static mappings, not camera RAM observations. Update checksums/signatures, BSS, boot ROM and CPU identity are not validated. Two raw initialized kernel images are additionally pinned from their own inner headers and complete initialized-image hashes; no BSS or hardware identity is inferred.",
+    "overlays": {
+      "method": "section-table-32",
+      "dat_offset": "0x14025c",
+      "base": "0x61c000",
+      "size": "0x400",
+      "sha256": "aa9216fb44c6d46d7ef17a23dc2ddca04d0402e7a23e93a44e798aa58284a25c",
+      "flash_dat_bias": "0x25c",
+      "section_id": 6,
+      "loader_evidence": {
+        "load_overlay_sections": "0x6a9844",
+        "app_get_section4_header_address": "0x6570f4",
+        "get_section_descriptor": "0x657114",
+        "get_overlay_descriptor": "0x6571a0",
+        "app_find_overlay_record_by_id": "0x6571bc"
+      },
+      "units": [
+        {
+          "name": "overlay44",
+          "logical_id": 0,
+          "semaphore": "0x44",
+          "address": "0x1100000",
+          "size": "0xac5a0",
+          "dat_offset": "0x5a025c",
+          "sha256": "2dfaa5d4bd025d68e991a329cc1377d5da16de656148dc4027d9a6bc0c349f5c"
+        },
+        {
+          "name": "overlay46",
+          "logical_id": 2,
+          "semaphore": "0x46",
+          "address": "0x11c0000",
+          "size": "0x1cca0",
+          "dat_offset": "0x66025c",
+          "sha256": "a9dee59faaec1765d9f3a2dd7f75fd7d423a8b8061599b5d7f6752b6bdd4cf84"
+        },
+        {
+          "name": "overlay47",
+          "logical_id": 3,
+          "semaphore": "0x47",
+          "address": "0x11e0000",
+          "size": "0x26a5e0",
+          "dat_offset": "0x68025c",
+          "sha256": "0cf67b7221c3b0755092da0ae4c6d6fb817f2b32771ee53dff691fc59b28770c"
+        }
+      ]
+    },
+    "raw_units": [
+      {
+        "name": "kernel0",
+        "method": "inner-header",
+        "dat_offset": "0x8025c",
+        "header_word_bits": 32,
+        "base": "0x40000",
+        "initialized_size": "0xdae0",
+        "entry_point": "0x40020",
+        "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+      },
+      {
+        "name": "kernel1",
+        "method": "inner-header",
+        "dat_offset": "0xa025c",
+        "header_word_bits": 32,
+        "base": "0xd0000",
+        "initialized_size": "0xdaa0",
+        "entry_point": "0xd0020",
+        "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+      }
+    ]
+  },
+  "paths": {
+    "mapped": ".tools/firmware/xm1-150",
+    "corpus": ".tools/corpus/xm1-150",
+    "ledger": "decomp/firmwares/xm1-150"
+  },
+  "decomp": {
+    "matching": false,
+    "toolchain": null
+  },
+  "mods": null,
+  "emulator": "firmware/x-m1/1.50/emulator-rec.json",
+  "camera": null,
+  "notes": [
+    "research/multi-firmware.md#first-results"
+  ]
+}

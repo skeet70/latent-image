@@ -1,0 +1,60 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_library(
+    name = "inventory-lib",
+    srcs = ["PublicInventory.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+        "//host:text",
+    ],
+)
+
+haskell_test(
+    name = "inventory-tests",
+    srcs = ["InventoryTest.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        ":inventory-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
+haskell_binary(
+    name = "source-inventory",
+    srcs = ["SourceInventory.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        ":inventory-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+        "//host:json",
+    ],
+)

@@ -1,0 +1,260 @@
+{
+  "schema_version": 1,
+  "id": "E-01-STOCK-PILOT",
+  "status": "draft-offline",
+  "evidence_label": "static-inference",
+  "target_model": "Fujifilm X-M1",
+  "report_path": "reports/stock-pilot-protocol.md",
+  "authorization": {
+    "camera_operations_authorized": false,
+    "required_before_session": [
+      "owner's go per spec/07 camera-run procedure",
+      "frozen protocol snapshot"
+    ]
+  },
+  "settings": {
+    "body_identity": null,
+    "camera_firmware": null,
+    "lens_model": null,
+    "lens_firmware": null,
+    "focal_length_mm": null,
+    "aperture": null,
+    "exposure_mode": null,
+    "shutter_time_s": null,
+    "gain_iso": null,
+    "af_mode": null,
+    "af_region": null,
+    "af_assist": null,
+    "pre_af": null,
+    "processing": null,
+    "video_frame_rate_hz": null
+  },
+  "design": {
+    "controllers": [
+      "stock"
+    ],
+    "repeats_per_combination": 10,
+    "planned_attempts": 110,
+    "scene_weights": "equal scene weight; equal start weight within each scene",
+    "combinations": [
+      {
+        "id": "P01-near",
+        "scene_id": "P01",
+        "scenario": "bright",
+        "fixture": "static high-contrast intended plane",
+        "start": "near",
+        "target_roi": null,
+        "target_plane": null,
+        "lighting_setup": null,
+        "staging_distance_m": null
+      },
+      {
+        "id": "P01-far",
+        "scene_id": "P01",
+        "scenario": "bright",
+        "fixture": "static high-contrast intended plane",
+        "start": "far",
+        "target_roi": null,
+        "target_plane": null,
+        "lighting_setup": null,
+        "staging_distance_m": null
+      },
+      {
+        "id": "P01-near-focused",
+        "scene_id": "P01",
+        "scenario": "bright",
+        "fixture": "static high-contrast intended plane",
+        "start": "near-focused",
+        "target_roi": null,
+        "target_plane": null,
+        "lighting_setup": null,
+        "staging_distance_m": null
+      },
+      {
+        "id": "P02-near",
+        "scene_id": "P02",
+        "scenario": "indoor",
+        "fixture": "static textured intended plane",
+        "start": "near",
+        "target_roi": null,
+        "target_plane": null,
+        "lighting_setup": null,
+        "staging_distance_m": null
+      },
+      {
+        "id": "P02-far",
+        "scene_id": "P02",
+        "scenario": "indoor",
+        "fixture": "static textured intended plane",
+        "start": "far",
+        "target_roi": null,
+        "target_plane": null,
+        "lighting_setup": null,
+        "staging_distance_m": null
+      },
+      {
+        "id": "P03-near",
+        "scene_id": "P03",
+        "scenario": "dim",
+        "fixture": "static textured intended plane with fixed low illumination",
+        "start": "near",
+        "target_roi": null,
+        "target_plane": null,
+        "lighting_setup": null,
+        "staging_distance_m": null
+      },
+      {
+        "id": "P03-far",
+        "scene_id": "P03",
+        "scenario": "dim",
+        "fixture": "static textured intended plane with fixed low illumination",
+        "start": "far",
+        "target_roi": null,
+        "target_plane": null,
+        "lighting_setup": null,
+        "staging_distance_m": null
+      },
+      {
+        "id": "P04-near",
+        "scene_id": "P04",
+        "scenario": "low-contrast",
+        "fixture": "static low-contrast intended plane",
+        "start": "near",
+        "target_roi": null,
+        "target_plane": null,
+        "lighting_setup": null,
+        "staging_distance_m": null
+      },
+      {
+        "id": "P04-far",
+        "scene_id": "P04",
+        "scenario": "low-contrast",
+        "fixture": "static low-contrast intended plane",
+        "start": "far",
+        "target_roi": null,
+        "target_plane": null,
+        "lighting_setup": null,
+        "staging_distance_m": null
+      },
+      {
+        "id": "P05-near",
+        "scene_id": "P05",
+        "scenario": "hunting",
+        "fixture": "intended foreground target with distracting textured background; hunting is an observation, not an assumed behavior",
+        "start": "near",
+        "target_roi": null,
+        "target_plane": null,
+        "lighting_setup": null,
+        "staging_distance_m": null
+      },
+      {
+        "id": "P05-far",
+        "scene_id": "P05",
+        "scenario": "hunting",
+        "fixture": "intended foreground target with distracting textured background; hunting is an observation, not an assumed behavior",
+        "start": "far",
+        "target_roi": null,
+        "target_plane": null,
+        "lighting_setup": null,
+        "staging_distance_m": null
+      }
+    ]
+  },
+  "randomization": {
+    "seed": "E01-stock-pilot-v1",
+    "algorithm": "sha256-ascii-v1",
+    "blocks": "one complete combination block per repeat, repeats 01 through 10",
+    "sort_key": "SHA256 ASCII(seed + | + two-digit repeat + | + combination_id), ascending hex; tie by combination_id",
+    "pair_id": "E01:<scene_id>:<start>:<two-digit repeat>",
+    "future_controller_order": "ascending SHA256 ASCII(seed + | + pair_id + | + controller); tie by controller",
+    "replacement_policy": "keep original; any replacement gets a new attempt ID and reason"
+  },
+  "timing": {
+    "clock": "external video presentation timestamps in one recording",
+    "start_event": "visible half-press onset proxy; AF acceptance time unobserved",
+    "confirmation_event": "first visible camera confirmation indication",
+    "acceptable_focus_onset": "null unless independently validated continuous ROI/plane observations bound onset",
+    "default_report": "confirmation latency and independently verified final quality",
+    "deadline_ms": 10000,
+    "attempt_window_ms": 15000,
+    "uncertainty": "event frame brackets plus synchronization/occlusion bounds; unknown remains null",
+    "fallback": "stock-only pilot has no candidate fallback; future fallback counts from original start under same deadline"
+  },
+  "quality": {
+    "domain": "saved photographs, fixed processing and intended target ROI/plane",
+    "metric": "edge acutance normalized by same-scene reference sweep maximum",
+    "reference": "bounded ordinary manual-focus sweep bracketing optimum, fixed geometry/settings; repeat best-position captures",
+    "acceptance_threshold": null,
+    "repeatability_bound": null,
+    "freeze_rule": "calibrate independent metric and wrong-plane check before timed acquisitions; threshold and repeatability cannot be selected from controller outcomes"
+  },
+  "attempt_policy": {
+    "outcomes": [
+      "success",
+      "timeout",
+      "wrong-focus",
+      "false-confirmation",
+      "incomplete",
+      "cancelled",
+      "protocol-error"
+    ],
+    "all_attempts_retained": true,
+    "time_origin_includes_prework": true,
+    "deadline_penalty_ms": 10000,
+    "all_attempt_metric": "mean deadline-capped independent acquisition time if observable; otherwise failure fraction and mean deadline-capped confirmation proxy, explicitly labelled",
+    "invalid_policy": "retain protocol-error/cancelled attempts and reasons; include deadline penalty in conservative all-attempt result; separate valid-only sensitivity",
+    "censoring": "unobserved focus onset is missing, not zero or confirmation; deadline-crossing observed intervals are right-censored",
+    "exclusions": "no silent removal; frozen reasons applied equally to controllers"
+  },
+  "split_policy": {
+    "pilot_scenes": [
+      "P01",
+      "P02",
+      "P03",
+      "P04",
+      "P05"
+    ],
+    "reserved_scene_ids": [
+      "H01",
+      "H02",
+      "H03",
+      "H04",
+      "H05"
+    ],
+    "reserved_session_ids": [
+      "CONFIRM-01",
+      "CONFIRM-02"
+    ],
+    "held_out_rule": "entire new scenes and sessions, including reference sweeps, remain unavailable to candidate tuning; no adjacent-frame split",
+    "pilot_use": "measurement calibration, fixture revision, variance and sample-size planning only",
+    "confirmation_freeze": [
+      "candidate/build",
+      "scene fixtures and weights",
+      "settings and start recipes",
+      "quality threshold and repeatability",
+      "deadlines/outcome/exclusion/fallback rules",
+      "sample size and stopping rule",
+      "estimators/confidence method and bounds",
+      "seed/order and paired IDs"
+    ]
+  },
+  "analysis": {
+    "confidence_level": 0.95,
+    "pilot_decision": "descriptive readiness and large regressions only; no acceptance gate or target forecast",
+    "latency": "per-combination and weighted aggregate median; descriptive p95 with explicit small-sample limitation",
+    "uncertainty": "carry event intervals; cluster by scene/session, preserve paired attempts; do not treat all repeats as independent scenes",
+    "confirmatory_method": "freeze hierarchical paired resampling and interval sensitivity before confirmation; insufficient clusters or narrow-margin power means inconclusive",
+    "decision_states": [
+      "pass",
+      "fail",
+      "inconclusive"
+    ],
+    "provisional_targets": {
+      "median_improvement_fraction": 0.2,
+      "p95_max_regression_fraction": 0.1,
+      "success_max_loss_percentage_points": 2,
+      "quality_noninferiority_bound": null
+    },
+    "target_policy": "specification choices, revisable by recorded decision before confirmation; bounds must be supported by confidence intervals and independent quality repeatability"
+  }
+}

@@ -1,0 +1,594 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Offline stock pilot protocol v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "status",
+    "evidence_label",
+    "target_model",
+    "report_path",
+    "authorization",
+    "settings",
+    "design",
+    "randomization",
+    "timing",
+    "quality",
+    "attempt_policy",
+    "split_policy",
+    "analysis"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "id": {
+      "const": "E-01-STOCK-PILOT"
+    },
+    "status": {
+      "const": "draft-offline"
+    },
+    "evidence_label": {
+      "const": "static-inference"
+    },
+    "target_model": {
+      "const": "Fujifilm X-M1"
+    },
+    "report_path": {
+      "const": "reports/stock-pilot-protocol.md"
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "camera_operations_authorized",
+        "required_before_session"
+      ],
+      "properties": {
+        "camera_operations_authorized": {
+          "const": false
+        },
+        "required_before_session": {
+          "const": [
+            "owner's go per spec/07 camera-run procedure",
+            "frozen protocol snapshot"
+          ]
+        }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "body_identity",
+        "camera_firmware",
+        "lens_model",
+        "lens_firmware",
+        "focal_length_mm",
+        "aperture",
+        "exposure_mode",
+        "shutter_time_s",
+        "gain_iso",
+        "af_mode",
+        "af_region",
+        "af_assist",
+        "pre_af",
+        "processing",
+        "video_frame_rate_hz"
+      ],
+      "properties": {
+        "body_identity": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "camera_firmware": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "lens_model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "lens_firmware": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "focal_length_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "aperture": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "exposure_mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "shutter_time_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "gain_iso": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "af_mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "af_region": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "af_assist": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "pre_af": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "processing": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "video_frame_rate_hz": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "design": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "controllers",
+        "repeats_per_combination",
+        "planned_attempts",
+        "scene_weights",
+        "combinations"
+      ],
+      "properties": {
+        "controllers": {
+          "const": [
+            "stock"
+          ]
+        },
+        "repeats_per_combination": {
+          "const": 10
+        },
+        "planned_attempts": {
+          "const": 110
+        },
+        "scene_weights": {
+          "const": "equal scene weight; equal start weight within each scene"
+        },
+        "combinations": {
+          "type": "array",
+          "minItems": 11,
+          "maxItems": 11,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "scene_id",
+              "scenario",
+              "fixture",
+              "start",
+              "target_roi",
+              "target_plane",
+              "lighting_setup",
+              "staging_distance_m"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^P0[1-5]-(near|far|near-focused)$"
+              },
+              "scene_id": {
+                "enum": [
+                  "P01",
+                  "P02",
+                  "P03",
+                  "P04",
+                  "P05"
+                ]
+              },
+              "scenario": {
+                "enum": [
+                  "bright",
+                  "indoor",
+                  "dim",
+                  "low-contrast",
+                  "hunting"
+                ]
+              },
+              "fixture": {
+                "type": "string",
+                "minLength": 1
+              },
+              "start": {
+                "enum": [
+                  "near",
+                  "far",
+                  "near-focused"
+                ]
+              },
+              "target_roi": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1
+              },
+              "target_plane": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1
+              },
+              "lighting_setup": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1
+              },
+              "staging_distance_m": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "exclusiveMinimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "randomization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "seed",
+        "algorithm",
+        "blocks",
+        "sort_key",
+        "pair_id",
+        "future_controller_order",
+        "replacement_policy"
+      ],
+      "properties": {
+        "seed": {
+          "const": "E01-stock-pilot-v1"
+        },
+        "algorithm": {
+          "const": "sha256-ascii-v1"
+        },
+        "blocks": {
+          "const": "one complete combination block per repeat, repeats 01 through 10"
+        },
+        "sort_key": {
+          "const": "SHA256 ASCII(seed + | + two-digit repeat + | + combination_id), ascending hex; tie by combination_id"
+        },
+        "pair_id": {
+          "const": "E01:<scene_id>:<start>:<two-digit repeat>"
+        },
+        "future_controller_order": {
+          "const": "ascending SHA256 ASCII(seed + | + pair_id + | + controller); tie by controller"
+        },
+        "replacement_policy": {
+          "const": "keep original; any replacement gets a new attempt ID and reason"
+        }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clock",
+        "start_event",
+        "confirmation_event",
+        "acceptable_focus_onset",
+        "default_report",
+        "deadline_ms",
+        "attempt_window_ms",
+        "uncertainty",
+        "fallback"
+      ],
+      "properties": {
+        "clock": {
+          "const": "external video presentation timestamps in one recording"
+        },
+        "start_event": {
+          "const": "visible half-press onset proxy; AF acceptance time unobserved"
+        },
+        "confirmation_event": {
+          "const": "first visible camera confirmation indication"
+        },
+        "acceptable_focus_onset": {
+          "const": "null unless independently validated continuous ROI/plane observations bound onset"
+        },
+        "default_report": {
+          "const": "confirmation latency and independently verified final quality"
+        },
+        "deadline_ms": {
+          "const": 10000
+        },
+        "attempt_window_ms": {
+          "const": 15000
+        },
+        "uncertainty": {
+          "const": "event frame brackets plus synchronization/occlusion bounds; unknown remains null"
+        },
+        "fallback": {
+          "const": "stock-only pilot has no candidate fallback; future fallback counts from original start under same deadline"
+        }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "metric",
+        "reference",
+        "acceptance_threshold",
+        "repeatability_bound",
+        "freeze_rule"
+      ],
+      "properties": {
+        "domain": {
+          "const": "saved photographs, fixed processing and intended target ROI/plane"
+        },
+        "metric": {
+          "const": "edge acutance normalized by same-scene reference sweep maximum"
+        },
+        "reference": {
+          "const": "bounded ordinary manual-focus sweep bracketing optimum, fixed geometry/settings; repeat best-position captures"
+        },
+        "acceptance_threshold": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "repeatability_bound": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "freeze_rule": {
+          "const": "calibrate independent metric and wrong-plane check before timed acquisitions; threshold and repeatability cannot be selected from controller outcomes"
+        }
+      }
+    },
+    "attempt_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcomes",
+        "all_attempts_retained",
+        "time_origin_includes_prework",
+        "deadline_penalty_ms",
+        "all_attempt_metric",
+        "invalid_policy",
+        "censoring",
+        "exclusions"
+      ],
+      "properties": {
+        "outcomes": {
+          "const": [
+            "success",
+            "timeout",
+            "wrong-focus",
+            "false-confirmation",
+            "incomplete",
+            "cancelled",
+            "protocol-error"
+          ]
+        },
+        "all_attempts_retained": {
+          "const": true
+        },
+        "time_origin_includes_prework": {
+          "const": true
+        },
+        "deadline_penalty_ms": {
+          "const": 10000
+        },
+        "all_attempt_metric": {
+          "const": "mean deadline-capped independent acquisition time if observable; otherwise failure fraction and mean deadline-capped confirmation proxy, explicitly labelled"
+        },
+        "invalid_policy": {
+          "const": "retain protocol-error/cancelled attempts and reasons; include deadline penalty in conservative all-attempt result; separate valid-only sensitivity"
+        },
+        "censoring": {
+          "const": "unobserved focus onset is missing, not zero or confirmation; deadline-crossing observed intervals are right-censored"
+        },
+        "exclusions": {
+          "const": "no silent removal; frozen reasons applied equally to controllers"
+        }
+      }
+    },
+    "split_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pilot_scenes",
+        "reserved_scene_ids",
+        "reserved_session_ids",
+        "held_out_rule",
+        "pilot_use",
+        "confirmation_freeze"
+      ],
+      "properties": {
+        "pilot_scenes": {
+          "const": [
+            "P01",
+            "P02",
+            "P03",
+            "P04",
+            "P05"
+          ]
+        },
+        "reserved_scene_ids": {
+          "const": [
+            "H01",
+            "H02",
+            "H03",
+            "H04",
+            "H05"
+          ]
+        },
+        "reserved_session_ids": {
+          "const": [
+            "CONFIRM-01",
+            "CONFIRM-02"
+          ]
+        },
+        "held_out_rule": {
+          "const": "entire new scenes and sessions, including reference sweeps, remain unavailable to candidate tuning; no adjacent-frame split"
+        },
+        "pilot_use": {
+          "const": "measurement calibration, fixture revision, variance and sample-size planning only"
+        },
+        "confirmation_freeze": {
+          "const": [
+            "candidate/build",
+            "scene fixtures and weights",
+            "settings and start recipes",
+            "quality threshold and repeatability",
+            "deadlines/outcome/exclusion/fallback rules",
+            "sample size and stopping rule",
+            "estimators/confidence method and bounds",
+            "seed/order and paired IDs"
+          ]
+        }
+      }
+    },
+    "analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "confidence_level",
+        "pilot_decision",
+        "latency",
+        "uncertainty",
+        "confirmatory_method",
+        "decision_states",
+        "provisional_targets",
+        "target_policy"
+      ],
+      "properties": {
+        "confidence_level": {
+          "const": 0.95
+        },
+        "pilot_decision": {
+          "const": "descriptive readiness and large regressions only; no acceptance gate or target forecast"
+        },
+        "latency": {
+          "const": "per-combination and weighted aggregate median; descriptive p95 with explicit small-sample limitation"
+        },
+        "uncertainty": {
+          "const": "carry event intervals; cluster by scene/session, preserve paired attempts; do not treat all repeats as independent scenes"
+        },
+        "confirmatory_method": {
+          "const": "freeze hierarchical paired resampling and interval sensitivity before confirmation; insufficient clusters or narrow-margin power means inconclusive"
+        },
+        "decision_states": {
+          "const": [
+            "pass",
+            "fail",
+            "inconclusive"
+          ]
+        },
+        "provisional_targets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "median_improvement_fraction",
+            "p95_max_regression_fraction",
+            "success_max_loss_percentage_points",
+            "quality_noninferiority_bound"
+          ],
+          "properties": {
+            "median_improvement_fraction": {
+              "const": 0.2
+            },
+            "p95_max_regression_fraction": {
+              "const": 0.1
+            },
+            "success_max_loss_percentage_points": {
+              "const": 2
+            },
+            "quality_noninferiority_bound": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        },
+        "target_policy": {
+          "const": "specification choices, revisable by recorded decision before confirmation; bounds must be supported by confidence intervals and independent quality repeatability"
+        }
+      }
+    }
+  }
+}

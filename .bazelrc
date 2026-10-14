@@ -1,0 +1,5 @@
+common --enable_bzlmod
+build --host_platform=//build-support:host
+build --platforms=//build-support:host
+build --enable_runfiles
+test --test_output=errors

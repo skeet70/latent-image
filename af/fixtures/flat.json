@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "origin": "synthetic",
+  "status": "synthetic-only",
+  "controller": "A1-coarse-fine-v1",
+  "clock_id": "synthetic-ms",
+  "position_units": "synthetic-lens-unit",
+  "fixture_id": "flat",
+  "config": {
+    "position_min": 0,
+    "position_max": 100,
+    "coarse_step": 25,
+    "fine_step": 5,
+    "min_peak_score": 100,
+    "min_contrast_span": 100,
+    "confirmation_drop": 100,
+    "settle_ms": 5,
+    "max_age_ms": 100,
+    "max_moves": 128,
+    "max_measurements": 128,
+    "max_steps": 512,
+    "max_duration_ms": 5000,
+    "require_measured_position": true,
+    "require_completion": true,
+    "exposure_epoch": 0
+  },
+  "model": {
+    "curve": {
+      "kind": "flat",
+      "peak_position": 60,
+      "peak_score": 10000,
+      "slope": 1
+    },
+    "initial_position": 100,
+    "travel_ms_per_unit": 1,
+    "move_base_ms": 5,
+    "frame_period_ms": 10,
+    "delivery_delay_ms": 15,
+    "noise_amplitude": 0,
+    "noise_seed": 1,
+    "position_available": true,
+    "completion_available": true,
+    "stuck_lens": false
+  },
+  "faults": [],
+  "event_limit": 4096,
+  "expected": {
+    "kind": "fail",
+    "reason": "low_confidence",
+    "position": null,
+    "tolerance": 0
+  }
+}

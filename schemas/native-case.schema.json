@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "native-case.schema.json",
+  "title": "Bounded native case v1, Cortex-R5F ARM-only profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "origin", "provenance", "cpu", "artifacts", "entry", "exit", "registers", "regions", "functions", "stubs", "limits", "expected", "exclusions"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "id": {"$ref": "#/$defs/id"},
+    "origin": {"enum": ["synthetic", "stock"]},
+    "provenance": {"type": "string", "minLength": 1},
+    "cpu": {
+      "type": "object", "additionalProperties": false,
+      "required": ["architecture", "model", "mode", "endian"],
+      "properties": {"architecture": {"const": "arm"}, "model": {"const": "cortex-r5f"}, "mode": {"const": "arm"}, "endian": {"const": "little"}}
+    },
+    "artifacts": {
+      "type": "array", "maxItems": 16,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "path", "size", "sha256"],
+        "properties": {
+          "id": {"$ref": "#/$defs/id"},
+          "path": {"type": "string", "minLength": 1},
+          "size": {"$ref": "#/$defs/size"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "entry": {"$ref": "#/$defs/u32"}, "exit": {"$ref": "#/$defs/u32"},
+    "registers": {
+      "allOf": [{"$ref": "#/$defs/registers"}],
+      "required": ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "sp", "lr", "cpsr"],
+      "not": {"required": ["pc"]}
+    },
+    "regions": {
+      "type": "array", "minItems": 1, "maxItems": 16,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "address", "size", "permissions", "initial"],
+        "properties": {
+          "id": {"$ref": "#/$defs/id"}, "address": {"$ref": "#/$defs/u32"},
+          "size": {"$ref": "#/$defs/size"}, "permissions": {"enum": ["r", "rw", "rx"]},
+          "initial": {
+            "oneOf": [
+              {"type": "object", "additionalProperties": false, "required": ["zero"], "properties": {"zero": {"const": true}}},
+              {"type": "object", "additionalProperties": false, "required": ["artifact", "offset", "length"], "properties": {"artifact": {"$ref": "#/$defs/id"}, "offset": {"type": "integer", "minimum": 0, "maximum": 1048576}, "length": {"$ref": "#/$defs/size"}}}
+            ]
+          }
+        }
+      }
+    },
+    "functions": {
+      "type": "array", "minItems": 1, "maxItems": 32,
+      "items": {"type": "object", "additionalProperties": false, "required": ["address", "size"], "properties": {"address": {"$ref": "#/$defs/u32"}, "size": {"$ref": "#/$defs/size"}}}
+    },
+    "stubs": {
+      "type": "array", "maxItems": 32,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["address", "inputs", "outputs", "side_effects"],
+        "properties": {"address": {"$ref": "#/$defs/u32"}, "inputs": {"$ref": "#/$defs/stubRegisters"}, "outputs": {"$ref": "#/$defs/stubRegisters", "minProperties": 1}, "side_effects": {"const": "registers-only"}}
+      }
+    },
+    "limits": {
+      "type": "object", "additionalProperties": false, "required": ["instructions", "wall_ms"],
+      "properties": {"instructions": {"type": "integer", "minimum": 1, "maximum": 1000000}, "wall_ms": {"type": "integer", "minimum": 1, "maximum": 10000}}
+    },
+    "expected": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "registers", "memory", "events"],
+      "properties": {
+        "status": {"enum": ["returned", "instruction_budget", "wall_budget", "memory_guard", "fetch_guard", "unknown_call", "unsupported_instruction", "stub_contract"]},
+        "registers": {"$ref": "#/$defs/registers", "minProperties": 1},
+        "memory": {
+          "type": "array", "maxItems": 64,
+          "items": {"type": "object", "additionalProperties": false, "required": ["region", "offset", "hex"], "properties": {"region": {"$ref": "#/$defs/id"}, "offset": {"type": "integer", "minimum": 0, "maximum": 1048576}, "hex": {"type": "string", "pattern": "^([0-9a-f]{2})+$", "maxLength": 2097152}}}
+        },
+        "events": {
+          "type": "array", "maxItems": 32,
+          "items": {"type": "object", "additionalProperties": false, "required": ["address", "inputs", "outputs"], "properties": {"address": {"$ref": "#/$defs/u32"}, "inputs": {"$ref": "#/$defs/stubRegisters"}, "outputs": {"$ref": "#/$defs/stubRegisters"}}}
+        }
+      }
+    },
+    "exclusions": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"},
+    "u32": {"type": "string", "pattern": "^0x[0-9a-f]{8}$"},
+    "size": {"type": "integer", "minimum": 1, "maximum": 1048576},
+    "registers": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "r0": {"$ref": "#/$defs/u32"}, "r1": {"$ref": "#/$defs/u32"}, "r2": {"$ref": "#/$defs/u32"}, "r3": {"$ref": "#/$defs/u32"}, "r4": {"$ref": "#/$defs/u32"}, "r5": {"$ref": "#/$defs/u32"}, "r6": {"$ref": "#/$defs/u32"}, "r7": {"$ref": "#/$defs/u32"}, "r8": {"$ref": "#/$defs/u32"}, "r9": {"$ref": "#/$defs/u32"}, "r10": {"$ref": "#/$defs/u32"}, "r11": {"$ref": "#/$defs/u32"}, "r12": {"$ref": "#/$defs/u32"}, "sp": {"$ref": "#/$defs/u32"}, "lr": {"$ref": "#/$defs/u32"}, "cpsr": {"$ref": "#/$defs/u32"}, "pc": {"$ref": "#/$defs/u32"}
+      }
+    },
+    "stubRegisters": {"allOf": [{"$ref": "#/$defs/registers"}], "not": {"anyOf": [{"required": ["sp"]}, {"required": ["lr"]}, {"required": ["cpsr"]}, {"required": ["pc"]}]}}
+  }
+}

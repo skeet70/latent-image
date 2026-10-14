@@ -1,0 +1,9 @@
+# The stock-reproduction gate's inputs (//lz:lz-round-trip): the two decoded
+# X-M1 1.50 images and the complemented payload carrying their shipped records.
+# Fields are IMAGE PAYLOAD OFFSET WINDOW, the same quad the test's --pinned
+# argument takes; paths are relative to the workspace root, and this file is
+# the test's Bazel data dependency that fixes which tree that is. The record
+# sizes, the offsets and the flash windows are in reports/firmware-extraction.md
+# (the encoder section). Blank lines and # comments are ignored.
+private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin private-data/analysis/x-m1-1.50/payload.bin 0x160048 0x160000
+private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin private-data/analysis/x-m1-1.50/payload.bin 0x2c0048 0x2e0000

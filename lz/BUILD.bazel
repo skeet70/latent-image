@@ -1,0 +1,126 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_library(
+    name = "lz-codec",
+    srcs = [
+        "FujiAF/Lz/Encode.hs",
+        "FujiAF/Lz/Format.hs",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:vector",
+    ],
+)
+
+cc_library(
+    name = "fflzd-codec",
+    srcs = ["fflzd-codec.c"],
+    hdrs = ["fflzd-codec.h"],
+    copts = [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-O2",
+    ],
+)
+
+cc_binary(
+    name = "fflzd",
+    srcs = ["fflzd.c"],
+    copts = [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-O2",
+    ],
+    deps = [":fflzd-codec"],
+)
+
+cc_test(
+    name = "fflzd-stream-test",
+    srcs = ["fflzd-stream-test.c"],
+    copts = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-UNDEBUG"],
+    deps = [":fflzd-codec"],
+)
+
+haskell_binary(
+    name = "lz-encode",
+    srcs = ["EncodeMain.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        ":lz-codec",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
+_ROUND_TRIP_GHCOPTS = [
+    "-Wall",
+    "-Werror",
+    "-O2",
+    "-XGHC2021",
+    "-threaded",
+]
+
+_ROUND_TRIP_DEPS = [
+    ":lz-codec",
+    "//host:base",
+    "//host:bytestring",
+    "//host:directory",
+    "//host:filepath",
+    "//host:host-support",
+]
+
+haskell_test(
+    name = "lz-synthetic-round-trip",
+    size = "small",
+    srcs = ["RoundTripTest.hs"],
+    args = [
+        "--synthetic",
+        "--decoder",
+        "$(location :fflzd)",
+    ],
+    data = [":fflzd"],
+    ghcopts = _ROUND_TRIP_GHCOPTS,
+    deps = _ROUND_TRIP_DEPS,
+)
+
+# Stock reproduction requires owner-supplied inputs from the pinned manifest.
+haskell_test(
+    name = "lz-round-trip",
+    size = "small",
+    srcs = ["RoundTripTest.hs"],
+    args = [
+        "--decoder",
+        "$(location :fflzd)",
+        "--pinned-manifest",
+        "$(location :pinned-stock-images.txt)",
+    ],
+    data = [
+        ":fflzd",
+        ":pinned-stock-images.txt",
+    ],
+    ghcopts = _ROUND_TRIP_GHCOPTS,
+    tags = ["manual"],
+    deps = _ROUND_TRIP_DEPS,
+)

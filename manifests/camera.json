@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "status": "unobserved",
+  "expected_model": "X-M1",
+  "observed_model": null,
+  "body_firmware": null,
+  "private_identity_path": null,
+  "lens": { "model": "Viltrox AF 28mm F4.5", "firmware": null },
+  "usb": null,
+  "evidence_ids": []
+}

@@ -1,0 +1,16 @@
+exports_files([
+    "ghc.nix",
+    "nixpkgs.nix",
+    "repositories.bzl",
+    "rules-haskell-nix.patch",
+])
+
+platform(
+    name = "host",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+        "@rules_nixpkgs_core//constraints:support_nix",
+    ],
+    visibility = ["//visibility:public"],
+)

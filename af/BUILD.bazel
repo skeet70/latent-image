@@ -1,0 +1,122 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+package(default_visibility = ["//visibility:public"])
+
+_COPTS = [
+    "-std=c11",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-Wconversion",
+    "-Wshadow",
+]
+
+cc_library(
+    name = "kernel",
+    srcs = ["af_kernel.c"],
+    hdrs = ["af_kernel.h"],
+    copts = _COPTS,
+)
+
+cc_binary(
+    name = "decision-stdio",
+    srcs = ["decision_stdio.c"],
+    copts = _COPTS,
+    deps = [":kernel"],
+)
+
+cc_test(
+    name = "kernel-tests",
+    size = "small",
+    srcs = ["kernel_test.c"],
+    copts = _COPTS,
+    deps = [":kernel"],
+)
+
+sh_binary(
+    name = "simulate",
+    srcs = ["simulate.sh"],
+    args = [
+        "$(location :simulate-hs)",
+        "$(location :decision-stdio)",
+        "$(location @lab_jsonschema//:bin/check-jsonschema)",
+    ],
+    data = [
+        ":decision-stdio",
+        ":simulate-hs",
+        "//schemas:all",
+        "@lab_jsonschema//:bin/check-jsonschema",
+    ] + glob(["fixtures/*.json"]),
+)
+
+sh_test(
+    name = "simulation-tests",
+    size = "small",
+    srcs = ["simulation-tests.sh"],
+    args = [
+        "$(location :simulation-tests-hs)",
+        "$(location :decision-stdio)",
+        "$(location @lab_jsonschema//:bin/check-jsonschema)",
+        "$(location :simulate-hs)",
+    ],
+    data = [
+        ":decision-stdio",
+        ":simulate-hs",
+        ":simulation-tests-hs",
+        "//schemas:all",
+        "@lab_jsonschema//:bin/check-jsonschema",
+    ] + glob(["fixtures/*.json"]),
+)
+
+haskell_library(
+    name = "simulation",
+    srcs = ["AF/Simulation.hs"],
+    ghcopts = ["-XGHC2021"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+        "//host:json",
+        "//host:process",
+        "//host:unix",
+    ],
+)
+
+haskell_binary(
+    name = "simulate-hs",
+    srcs = ["SimulateMain.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        ":simulation",
+        "//host:base",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)
+
+haskell_binary(
+    name = "simulation-tests-hs",
+    srcs = ["SimulationTests.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        ":simulation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:unix",
+    ],
+)

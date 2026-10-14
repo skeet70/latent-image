@@ -1,0 +1,14 @@
+--- a/MODULE.bazel
++++ b/MODULE.bazel
+@@ -126,5 +126,4 @@
+ bazel_dep(
+     name = "rules_nixpkgs_core",
+     version = "0.12.0",
+-    dev_dependency = True,
+ )
+@@ -146,5 +145,4 @@
+ bazel_dep(
+     name = "rules_nixpkgs_posix",
+     version = "0.12.0",
+-    dev_dependency = True,
+ )

@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "id": "conditional-memory-skipped",
+  "origin": "synthetic",
+  "provenance": "PROVENANCE.md: hand-encoded ARM instructions and independent arithmetic",
+  "cpu": {
+    "architecture": "arm",
+    "model": "cortex-r5f",
+    "mode": "arm",
+    "endian": "little"
+  },
+  "artifacts": [
+    {
+      "id": "conditional-memory-skipped",
+      "path": "conditional-memory-skipped.bin",
+      "size": 8,
+      "sha256": "cb2dac55614e4911da216a2fdd964d06aa546331e91c5d04ad59aa2576c10c64"
+    }
+  ],
+  "entry": "0x00001004",
+  "exit": "0x00001080",
+  "registers": {
+    "r0": "0xfffffffe",
+    "r1": "0x00000005",
+    "r2": "0x40000000",
+    "r3": "0x00000000",
+    "r4": "0x00000000",
+    "r5": "0x00000000",
+    "r6": "0x00000000",
+    "r7": "0x00000000",
+    "r8": "0x00000000",
+    "r9": "0x00000000",
+    "r10": "0x00000000",
+    "r11": "0x00000000",
+    "r12": "0x00000000",
+    "sp": "0x00003020",
+    "lr": "0x00001080",
+    "cpsr": "0x00000010"
+  },
+  "regions": [
+    {
+      "id": "code",
+      "address": "0x00001004",
+      "size": 8,
+      "permissions": "rx",
+      "initial": {
+        "artifact": "conditional-memory-skipped",
+        "offset": 0,
+        "length": 8
+      }
+    },
+    {
+      "id": "exit",
+      "address": "0x00001080",
+      "size": 4,
+      "permissions": "rx",
+      "initial": {
+        "zero": true
+      }
+    },
+    {
+      "id": "data",
+      "address": "0x00002004",
+      "size": 4,
+      "permissions": "rw",
+      "initial": {
+        "zero": true
+      }
+    },
+    {
+      "id": "stack",
+      "address": "0x00003000",
+      "size": 32,
+      "permissions": "rw",
+      "initial": {
+        "zero": true
+      }
+    }
+  ],
+  "functions": [
+    {
+      "address": "0x00001004",
+      "size": 8
+    }
+  ],
+  "stubs": [],
+  "limits": {
+    "instructions": 100,
+    "wall_ms": 1000
+  },
+  "expected": {
+    "status": "returned",
+    "registers": {
+      "r0": "0xfffffffe",
+      "r1": "0x00000005",
+      "r2": "0x40000000",
+      "r3": "0x00000000",
+      "r4": "0x00000000",
+      "r5": "0x00000000",
+      "r6": "0x00000000",
+      "r7": "0x00000000",
+      "r8": "0x00000000",
+      "r9": "0x00000000",
+      "r10": "0x00000000",
+      "r11": "0x00000000",
+      "r12": "0x00000000",
+      "sp": "0x00003020",
+      "lr": "0x00001080",
+      "cpsr": "0x00000010",
+      "pc": "0x00001080"
+    },
+    "memory": [],
+    "events": []
+  },
+  "exclusions": [
+    "Synthetic Cortex-R5F user-mode ARM/little-endian only; no X-M1 behavior or ABI claim",
+    "No exceptions, coprocessors, mode switching, PC-loading returns, MMIO, interrupts, DMA, caches, scheduling or hardware timing"
+  ]
+}

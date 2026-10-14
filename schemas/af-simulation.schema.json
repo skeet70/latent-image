@@ -1,0 +1,355 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Synthetic AF closed-loop simulation v1",
+  "description": "Arbitrary artificial lens units, curves and timings. Not recorded replay or calibrated camera behavior. Consumers enforce position/configuration cross-field bounds.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "origin",
+    "status",
+    "controller",
+    "clock_id",
+    "position_units",
+    "fixture_id",
+    "config",
+    "model",
+    "faults",
+    "event_limit",
+    "expected"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "origin": {
+      "const": "synthetic"
+    },
+    "status": {
+      "const": "synthetic-only"
+    },
+    "controller": {
+      "const": "A1-coarse-fine-v1"
+    },
+    "clock_id": {
+      "const": "synthetic-ms"
+    },
+    "position_units": {
+      "const": "synthetic-lens-unit"
+    },
+    "fixture_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]{1,80}$"
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position_min",
+        "position_max",
+        "coarse_step",
+        "fine_step",
+        "min_peak_score",
+        "min_contrast_span",
+        "confirmation_drop",
+        "settle_ms",
+        "max_age_ms",
+        "max_moves",
+        "max_measurements",
+        "max_steps",
+        "max_duration_ms",
+        "require_measured_position",
+        "require_completion",
+        "exposure_epoch"
+      ],
+      "properties": {
+        "position_min": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "position_max": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "coarse_step": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "fine_step": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "min_peak_score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "min_contrast_span": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "confirmation_drop": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "settle_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "max_age_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        },
+        "max_moves": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "max_measurements": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "max_steps": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
+        },
+        "max_duration_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60000
+        },
+        "require_measured_position": {
+          "type": "boolean"
+        },
+        "require_completion": {
+          "type": "boolean"
+        },
+        "exposure_epoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "curve",
+        "initial_position",
+        "travel_ms_per_unit",
+        "move_base_ms",
+        "frame_period_ms",
+        "delivery_delay_ms",
+        "noise_amplitude",
+        "noise_seed",
+        "position_available",
+        "completion_available",
+        "stuck_lens"
+      ],
+      "properties": {
+        "curve": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "peak_position",
+            "peak_score",
+            "slope"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "parabola",
+                "flat"
+              ]
+            },
+            "peak_position": {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            },
+            "peak_score": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "slope": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          }
+        },
+        "initial_position": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "travel_ms_per_unit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "move_base_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "frame_period_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "delivery_delay_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "noise_amplitude": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "noise_seed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "position_available": {
+          "type": "boolean"
+        },
+        "completion_available": {
+          "type": "boolean"
+        },
+        "stuck_lens": {
+          "type": "boolean"
+        }
+      }
+    },
+    "faults": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "at_sequence",
+          "repeat_count",
+          "kind"
+        ],
+        "properties": {
+          "at_sequence": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,9}$"
+          },
+          "repeat_count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1024
+          },
+          "kind": {
+            "enum": [
+              "previous_command",
+              "stale",
+              "invalid",
+              "cancel",
+              "unsupported_mode",
+              "exposure_change",
+              "position_mismatch",
+              "future_acquisition",
+              "duplicate_sequence",
+              "clock_regression"
+            ]
+          }
+        }
+      }
+    },
+    "event_limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4096
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "reason",
+        "position",
+        "tolerance"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "finish",
+            "fail",
+            "hand_back_to_stock"
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "start_search",
+                "scan_coarse",
+                "scan_fine",
+                "confirm_peak",
+                "confirmed",
+                "wait_completion",
+                "wait_position",
+                "early_sample",
+                "stale_sample",
+                "acquisition_command_mismatch",
+                "invalid_observation",
+                "duplicate_sequence",
+                "exposure_changed",
+                "cancelled",
+                "unsupported_mode",
+                "clock_error",
+                "observation_limit",
+                "measurement_limit",
+                "move_limit",
+                "time_limit",
+                "low_confidence",
+                "final_verification_failed",
+                "terminal",
+                "bounds_error"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "position": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tolerance": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        }
+      }
+    }
+  }
+}

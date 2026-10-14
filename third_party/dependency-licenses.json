@@ -1,0 +1,439 @@
+{
+  "scope": "Declared source/dependency licenses for the committed lock inputs. This is not a redistribution approval, complete bundled-component inventory, or binary closure audit. See ../LICENSING.md.",
+  "bazel_modules": [
+    {
+      "name": "abseil-cpp",
+      "version": "20230802.0.bcr.1",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/abseil-cpp/20230802.0.bcr.1/source.json",
+      "source_archive": "https://github.com/abseil/abseil-cpp/archive/refs/tags/20230802.0.tar.gz",
+      "license_member": "abseil-cpp-20230802.0/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "apple_support",
+      "version": "1.5.0",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/apple_support/1.5.0/source.json",
+      "source_archive": "https://github.com/bazelbuild/apple_support/releases/download/1.5.0/apple_support.1.5.0.tar.gz",
+      "license_member": "./LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "aspect_bazel_lib",
+      "version": "1.38.1",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/aspect_bazel_lib/1.38.1/source.json",
+      "source_archive": "https://github.com/aspect-build/bazel-lib/releases/download/v1.38.1/bazel-lib-v1.38.1.tar.gz",
+      "license_member": "bazel-lib-1.38.1/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "aspect_rules_js",
+      "version": "1.34.0",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/aspect_rules_js/1.34.0/source.json",
+      "source_archive": "https://github.com/aspect-build/rules_js/releases/download/v1.34.0/rules_js-v1.34.0.tar.gz",
+      "license_member": "rules_js-1.34.0/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "bazel_features",
+      "version": "1.36.0",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/bazel_features/1.36.0/source.json",
+      "source_archive": "https://github.com/bazel-contrib/bazel_features/releases/download/v1.36.0/bazel_features-v1.36.0.tar.gz",
+      "license_member": "bazel_features-1.36.0/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "bazel_skylib",
+      "version": "1.7.1",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/bazel_skylib/1.7.1/source.json",
+      "source_archive": "https://github.com/bazelbuild/bazel-skylib/releases/download/1.7.1/bazel-skylib-1.7.1.tar.gz",
+      "license_member": "LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "buildozer",
+      "version": "7.1.2",
+      "license": "MIT",
+      "evidence": "https://bcr.bazel.build/modules/buildozer/7.1.2/source.json",
+      "source_archive": "https://github.com/fmeum/buildozer/releases/download/v7.1.2/buildozer-v7.1.2.tar.gz",
+      "license_member": "buildozer-7.1.2/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "googletest",
+      "version": "1.14.0",
+      "license": "BSD-3-Clause",
+      "evidence": "https://bcr.bazel.build/modules/googletest/1.14.0/source.json",
+      "source_archive": "https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz",
+      "license_member": "googletest-1.14.0/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "jsoncpp",
+      "version": "1.9.5",
+      "license": "LicenseRef-JsonCpp-Public-Domain-or-MIT",
+      "evidence": "https://bcr.bazel.build/modules/jsoncpp/1.9.5/source.json",
+      "source_archive": "https://github.com/open-source-parsers/jsoncpp/archive/refs/tags/1.9.5.tar.gz",
+      "license_member": "jsoncpp-1.9.5/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "platforms",
+      "version": "0.0.11",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/platforms/0.0.11/source.json",
+      "source_archive": "https://github.com/bazelbuild/platforms/releases/download/0.0.11/platforms-0.0.11.tar.gz",
+      "license_member": "LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "protobuf",
+      "version": "27.0",
+      "license": "BSD-3-Clause",
+      "evidence": "https://bcr.bazel.build/modules/protobuf/27.0/source.json",
+      "source_archive": "https://github.com/protocolbuffers/protobuf/releases/download/v27.0/protobuf-27.0.zip",
+      "license_member": "protobuf-27.0/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "rules_cc",
+      "version": "0.1.1",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/rules_cc/0.1.1/source.json",
+      "source_archive": "https://github.com/bazelbuild/rules_cc/releases/download/0.1.1/rules_cc-0.1.1.tar.gz",
+      "license_member": "rules_cc-0.1.1/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "rules_haskell",
+      "version": "1.0",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/rules_haskell/1.0/source.json",
+      "source_archive": "https://github.com/tweag/rules_haskell/releases/download/v1.0/rules_haskell-1.0.tar.gz",
+      "license_member": "rules_haskell-1.0/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "rules_java",
+      "version": "7.6.5",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/rules_java/7.6.5/source.json",
+      "source_archive": "https://github.com/bazelbuild/rules_java/releases/download/7.6.5/rules_java-7.6.5.tar.gz",
+      "license_member": "./LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "rules_jvm_external",
+      "version": "5.1",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/rules_jvm_external/5.1/source.json",
+      "source_archive": "https://github.com/bazelbuild/rules_jvm_external/releases/download/5.1/rules_jvm_external-5.1.tar.gz",
+      "license_member": "rules_jvm_external-5.1/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "rules_license",
+      "version": "1.0.0",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/rules_license/1.0.0/source.json",
+      "source_archive": "https://github.com/bazelbuild/rules_license/releases/download/1.0.0/rules_license-1.0.0.tar.gz",
+      "license_member": "./LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "rules_nixpkgs_core",
+      "version": "0.14.0",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/rules_nixpkgs_core/0.14.0/source.json",
+      "source_archive": "https://github.com/tweag/rules_nixpkgs/releases/download/v0.14.0/rules_nixpkgs-0.14.0.tar.gz",
+      "license_member": "rules_nixpkgs-0.14.0/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "rules_nodejs",
+      "version": "5.8.3",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/rules_nodejs/5.8.3/source.json",
+      "source_archive": "https://github.com/bazelbuild/rules_nodejs/releases/download/5.8.3/rules_nodejs-core-5.8.3.tar.gz",
+      "license_member": "./LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "rules_pkg",
+      "version": "0.7.0",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/rules_pkg/0.7.0/source.json",
+      "source_archive": "https://github.com/bazelbuild/rules_pkg/releases/download/0.7.0/rules_pkg-0.7.0.tar.gz",
+      "license_member": "./LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "rules_proto",
+      "version": "5.3.0-21.7",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/rules_proto/5.3.0-21.7/source.json",
+      "source_archive": "https://github.com/bazelbuild/rules_proto/archive/refs/tags/5.3.0-21.7.tar.gz",
+      "license_member": "rules_proto-5.3.0-21.7/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "rules_python",
+      "version": "0.22.1",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/rules_python/0.22.1/source.json",
+      "source_archive": "https://github.com/bazelbuild/rules_python/releases/download/0.22.1/rules_python-0.22.1.tar.gz",
+      "license_member": "rules_python-0.22.1/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "rules_sh",
+      "version": "0.4.0",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/rules_sh/0.4.0/source.json",
+      "source_archive": "https://github.com/tweag/rules_sh/releases/download/v0.4.0/rules_sh-0.4.0.tar.gz",
+      "license_member": "rules_sh-0.4.0/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "rules_shell",
+      "version": "0.3.0",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/rules_shell/0.3.0/source.json",
+      "source_archive": "https://github.com/bazelbuild/rules_shell/releases/download/v0.3.0/rules_shell-v0.3.0.tar.gz",
+      "license_member": "rules_shell-0.3.0/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "stardoc",
+      "version": "0.5.4",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/stardoc/0.5.4/source.json",
+      "source_archive": "https://github.com/bazelbuild/stardoc/releases/download/0.5.4/stardoc-0.5.4.tar.gz",
+      "license_member": "LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "zlib",
+      "version": "1.3.1.bcr.3",
+      "license": "Zlib",
+      "evidence": "https://bcr.bazel.build/modules/zlib/1.3.1.bcr.3/source.json",
+      "source_archive": "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz",
+      "license_member": "zlib-1.3.1/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "rules_nixpkgs_cc",
+      "version": "0.14.0",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/rules_nixpkgs_core/0.14.0/source.json",
+      "source_archive": "https://github.com/tweag/rules_nixpkgs/releases/download/v0.14.0/rules_nixpkgs-0.14.0.tar.gz",
+      "license_member": "rules_nixpkgs-0.14.0/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    },
+    {
+      "name": "rules_nixpkgs_posix",
+      "version": "0.14.0",
+      "license": "Apache-2.0",
+      "evidence": "https://bcr.bazel.build/modules/rules_nixpkgs_core/0.14.0/source.json",
+      "source_archive": "https://github.com/tweag/rules_nixpkgs/releases/download/v0.14.0/rules_nixpkgs-0.14.0.tar.gz",
+      "license_member": "rules_nixpkgs-0.14.0/LICENSE",
+      "scope": "top-level source archive notice; bundled components not exhaustively classified"
+    }
+  ],
+  "cargo_packages": [
+    {
+      "name": "cfg-if",
+      "version": "1.0.5",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/cfg-if/1.0.5",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "heck",
+      "version": "0.5.0",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/heck/0.5.0",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "libc",
+      "version": "0.2.190",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/libc/0.2.190",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "libloading",
+      "version": "0.9.0",
+      "license": "ISC",
+      "evidence": "https://crates.io/api/v1/crates/libloading/0.9.0",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "once_cell",
+      "version": "1.21.4",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/once_cell/1.21.4",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "portable-atomic",
+      "version": "1.15.0",
+      "license": "Apache-2.0 OR MIT",
+      "evidence": "https://crates.io/api/v1/crates/portable-atomic/1.15.0",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "proc-macro2",
+      "version": "1.0.107",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/proc-macro2/1.0.107",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "pyo3",
+      "version": "0.29.3",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/pyo3/0.29.3",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "pyo3-build-config",
+      "version": "0.29.3",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/pyo3-build-config/0.29.3",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "pyo3-ffi",
+      "version": "0.29.3",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/pyo3-ffi/0.29.3",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "pyo3-macros",
+      "version": "0.29.3",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/pyo3-macros/0.29.3",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "pyo3-macros-backend",
+      "version": "0.29.3",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/pyo3-macros-backend/0.29.3",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "quote",
+      "version": "1.0.47",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/quote/1.0.47",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "syn",
+      "version": "2.0.119",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/syn/2.0.119",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "target-lexicon",
+      "version": "0.13.5",
+      "license": "Apache-2.0 WITH LLVM-exception",
+      "evidence": "https://crates.io/api/v1/crates/target-lexicon/0.13.5",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "unicode-ident",
+      "version": "1.0.26",
+      "license": "(MIT OR Apache-2.0) AND Unicode-3.0",
+      "evidence": "https://crates.io/api/v1/crates/unicode-ident/1.0.26",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    },
+    {
+      "name": "windows-link",
+      "version": "0.2.1",
+      "license": "MIT OR Apache-2.0",
+      "evidence": "https://crates.io/api/v1/crates/windows-link/0.2.1",
+      "scope": "published version license metadata; package notices remain in dependency source"
+    }
+  ],
+  "nix_packages": [
+    {
+      "name": "python-unicorn",
+      "nixpkgs_revision": "c7def046b9a883d46974757852106483d741586f",
+      "license": "GPL-2.0-or-later",
+      "evidence": "https://raw.githubusercontent.com/NixOS/nixpkgs/c7def046b9a883d46974757852106483d741586f/pkgs/development/python-modules/unicorn/default.nix",
+      "scope": "pinned package metadata; not a complete binary closure audit"
+    },
+    {
+      "name": "libusb1",
+      "nixpkgs_revision": "c7def046b9a883d46974757852106483d741586f",
+      "license": "LGPL-2.1-or-later",
+      "evidence": "https://raw.githubusercontent.com/NixOS/nixpkgs/c7def046b9a883d46974757852106483d741586f/pkgs/by-name/li/libusb1/package.nix",
+      "scope": "pinned package metadata; not a complete binary closure audit"
+    },
+    {
+      "name": "check-jsonschema",
+      "nixpkgs_revision": "c7def046b9a883d46974757852106483d741586f",
+      "license": "Apache-2.0",
+      "evidence": "https://raw.githubusercontent.com/NixOS/nixpkgs/c7def046b9a883d46974757852106483d741586f/pkgs/by-name/ch/check-jsonschema/package.nix",
+      "scope": "pinned package metadata; not a complete binary closure audit"
+    },
+    {
+      "name": "jq",
+      "nixpkgs_revision": "c7def046b9a883d46974757852106483d741586f",
+      "license": "MIT",
+      "evidence": "https://raw.githubusercontent.com/NixOS/nixpkgs/c7def046b9a883d46974757852106483d741586f/pkgs/by-name/jq/jq/package.nix",
+      "scope": "pinned package metadata; not a complete binary closure audit"
+    },
+    {
+      "name": "unicorn",
+      "version": "2.1.4",
+      "nixpkgs_revision": "c7def046b9a883d46974757852106483d741586f",
+      "license": "GPL-2.0-only",
+      "evidence": "https://raw.githubusercontent.com/NixOS/nixpkgs/c7def046b9a883d46974757852106483d741586f/pkgs/by-name/un/unicorn/package.nix",
+      "scope": "engine package metadata; per-file notices and components remain applicable"
+    },
+    {
+      "name": "numpy",
+      "version": "2.5.2",
+      "nixpkgs_revision": "c7def046b9a883d46974757852106483d741586f",
+      "license": "BSD-3-Clause",
+      "evidence": "https://raw.githubusercontent.com/NixOS/nixpkgs/c7def046b9a883d46974757852106483d741586f/pkgs/development/python-modules/numpy/2.nix",
+      "scope": "NumPy 2 package metadata; numerical backend closure not audited"
+    },
+    {
+      "name": "ffmpeg",
+      "nixpkgs_revision": "c7def046b9a883d46974757852106483d741586f",
+      "license": "configuration-dependent LGPL/GPL, see package evidence",
+      "evidence": "https://raw.githubusercontent.com/NixOS/nixpkgs/c7def046b9a883d46974757852106483d741586f/pkgs/development/libraries/ffmpeg/generic.nix",
+      "scope": "withGPL and withVersion3 default true; exact distributed closure requires evaluation"
+    },
+    {
+      "name": "exiftool",
+      "version": "13.59",
+      "nixpkgs_revision": "c7def046b9a883d46974757852106483d741586f",
+      "license": "GPL-1.0-or-later OR Artistic-2.0",
+      "evidence": "https://raw.githubusercontent.com/NixOS/nixpkgs/c7def046b9a883d46974757852106483d741586f/pkgs/development/perl-modules/ImageExifTool/default.nix",
+      "upstream_evidence": "https://github.com/exiftool/exiftool/blob/13.59/README",
+      "scope": "Nix package declaration; upstream README grants same terms as Perl and META.json says perl_5, so verify selected license/version for redistribution; Perl and compression-module closure not audited"
+    },
+    {
+      "name": "systemd",
+      "version": "261.2",
+      "nixpkgs_revision": "c7def046b9a883d46974757852106483d741586f",
+      "license": "mixed per-component licenses",
+      "evidence": "https://raw.githubusercontent.com/NixOS/nixpkgs/c7def046b9a883d46974757852106483d741586f/pkgs/os-specific/linux/systemd/default.nix",
+      "scope": "libudev source pin separately verified LGPL-2.1-or-later; whole systemd not uniformly licensed"
+    }
+  ]
+}

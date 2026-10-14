@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "id": "explicit-stub",
+  "origin": "synthetic",
+  "provenance": "PROVENANCE.md: hand-encoded ARM instructions and independent arithmetic",
+  "cpu": {
+    "architecture": "arm",
+    "model": "cortex-r5f",
+    "mode": "arm",
+    "endian": "little"
+  },
+  "artifacts": [
+    {
+      "id": "explicit-stub",
+      "path": "explicit-stub.bin",
+      "size": 20,
+      "sha256": "e721099876c14f51f6a7743fcf1b2ab4a02d5616144a260d67fd756607946db4"
+    }
+  ],
+  "entry": "0x00001004",
+  "exit": "0x00001080",
+  "registers": {
+    "r0": "0x00000006",
+    "r1": "0x00000009",
+    "r2": "0x00002004",
+    "r3": "0x00000000",
+    "r4": "0x00000000",
+    "r5": "0x00000000",
+    "r6": "0x00000000",
+    "r7": "0x00000000",
+    "r8": "0x00000000",
+    "r9": "0x00000000",
+    "r10": "0x00000000",
+    "r11": "0x00000000",
+    "r12": "0x00000000",
+    "sp": "0x00003020",
+    "lr": "0x00001080",
+    "cpsr": "0x00000010"
+  },
+  "regions": [
+    {
+      "id": "code",
+      "address": "0x00001004",
+      "size": 20,
+      "permissions": "rx",
+      "initial": {
+        "artifact": "explicit-stub",
+        "offset": 0,
+        "length": 20
+      }
+    },
+    {
+      "id": "exit",
+      "address": "0x00001080",
+      "size": 4,
+      "permissions": "rx",
+      "initial": {
+        "zero": true
+      }
+    },
+    {
+      "id": "data",
+      "address": "0x00002004",
+      "size": 4,
+      "permissions": "rw",
+      "initial": {
+        "zero": true
+      }
+    },
+    {
+      "id": "stack",
+      "address": "0x00003000",
+      "size": 32,
+      "permissions": "rw",
+      "initial": {
+        "zero": true
+      }
+    }
+  ],
+  "functions": [
+    {
+      "address": "0x00001004",
+      "size": 20
+    }
+  ],
+  "stubs": [
+    {
+      "address": "0x00004000",
+      "inputs": {
+        "r0": "0x00000006",
+        "r1": "0x00000009"
+      },
+      "outputs": {
+        "r0": "0x0000000f"
+      },
+      "side_effects": "registers-only"
+    }
+  ],
+  "limits": {
+    "instructions": 100,
+    "wall_ms": 1000
+  },
+  "expected": {
+    "status": "returned",
+    "registers": {
+      "r0": "0x00000011",
+      "r1": "0x00000009",
+      "r2": "0x00002004",
+      "r3": "0x00000000",
+      "r4": "0x00001080",
+      "r5": "0x00000000",
+      "r6": "0x00000000",
+      "r7": "0x00000000",
+      "r8": "0x00000000",
+      "r9": "0x00000000",
+      "r10": "0x00000000",
+      "r11": "0x00000000",
+      "r12": "0x00000000",
+      "sp": "0x00003020",
+      "lr": "0x00001080",
+      "cpsr": "0x00000010",
+      "pc": "0x00001080"
+    },
+    "memory": [],
+    "events": [
+      {
+        "address": "0x00004000",
+        "inputs": {
+          "r0": "0x00000006",
+          "r1": "0x00000009"
+        },
+        "outputs": {
+          "r0": "0x0000000f"
+        }
+      }
+    ]
+  },
+  "exclusions": [
+    "Synthetic Cortex-R5F user-mode ARM/little-endian only; no X-M1 behavior or ABI claim",
+    "No exceptions, coprocessors, mode switching, PC-loading returns, MMIO, interrupts, DMA, caches, scheduling or hardware timing"
+  ]
+}

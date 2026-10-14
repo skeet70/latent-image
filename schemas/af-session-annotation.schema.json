@@ -1,0 +1,551 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AF session attempt annotation v1",
+  "description": "Timing annotation for one ordinary-photography AF attempt, read from one external recording. The latency interval is a physical-trigger-proxy-to-displayed-confirmation interval: the half-press onset is a proxy for the operator's action, not for AF acceptance, and the frame rate bounds this sampling only. Barrel timing is a signed confirmation-minus-motion-end interval, widened by the declared uncertainty, and its relation is reported only where the widened sign resolves. Decimal strings preserve PTS integer precision; millisecond strings carry no accuracy claim beyond the declared clock and uncertainty. Bracket order, index bounds, interval arithmetic, anomaly refusal and the validity coupling are enforced by //af-session:af-session, not by this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "session_id",
+    "trial_id",
+    "pair_id",
+    "scene_id",
+    "start",
+    "video",
+    "clock",
+    "recording",
+    "events",
+    "latency_ms",
+    "latency_missing_reason",
+    "barrel_relation",
+    "capture_window",
+    "validity",
+    "secondary_flags",
+    "reference",
+    "reviewer_notes"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "record_type": {
+      "const": "af-attempt-annotation"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trial_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pair_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "scene_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "start": {
+      "type": "string",
+      "minLength": 1
+    },
+    "video": {
+      "$ref": "common.schema.json#/$defs/artifact"
+    },
+    "clock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clock_id",
+        "source",
+        "time_base",
+        "origin",
+        "wrap_width",
+        "synchronization",
+        "uncertainty_ms"
+      ],
+      "properties": {
+        "clock_id": {
+          "const": "ext-video-pts"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "time_base": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*/[1-9][0-9]*$"
+        },
+        "origin": {
+          "type": "string",
+          "minLength": 1
+        },
+        "wrap_width": {
+          "$ref": "#/$defs/ticksOrNull"
+        },
+        "synchronization": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uncertainty_ms": {
+          "$ref": "#/$defs/msOrNull"
+        }
+      }
+    },
+    "recording": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "frame_count",
+        "first_pts_ticks",
+        "last_pts_ticks",
+        "duplicate_pts",
+        "non_monotonic_pts",
+        "spacing_min_ms",
+        "spacing_max_ms",
+        "spacing_mean_ms",
+        "gaps_above_1_5_median",
+        "stream"
+      ],
+      "properties": {
+        "frame_count": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "first_pts_ticks": {
+          "$ref": "#/$defs/ticks"
+        },
+        "last_pts_ticks": {
+          "$ref": "#/$defs/ticks"
+        },
+        "duplicate_pts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "non_monotonic_pts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "spacing_min_ms": {
+          "$ref": "#/$defs/ms"
+        },
+        "spacing_max_ms": {
+          "$ref": "#/$defs/ms"
+        },
+        "spacing_mean_ms": {
+          "$ref": "#/$defs/ms"
+        },
+        "gaps_above_1_5_median": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stream": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "codec_name",
+            "width",
+            "height",
+            "avg_frame_rate"
+          ],
+          "properties": {
+            "codec_name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "width": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "avg_frame_rate": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "events": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "confirmation",
+        "barrel_motion_end",
+        "s1_release",
+        "s2_press",
+        "capture"
+      ],
+      "properties": {
+        "start": {
+          "$ref": "#/$defs/bracketOrNull"
+        },
+        "confirmation": {
+          "$ref": "#/$defs/bracketOrNull"
+        },
+        "barrel_motion_end": {
+          "$ref": "#/$defs/bracketOrNull"
+        },
+        "s1_release": {
+          "$ref": "#/$defs/bracketOrNull"
+        },
+        "s2_press": {
+          "$ref": "#/$defs/bracketOrNull"
+        },
+        "capture": {
+          "$ref": "#/$defs/bracketOrNull",
+          "description": "First visible external capture proxy after the full press: an LCD blackout or the visible shutter action. Audio may be recorded as secondary evidence but is not admissible as this bracket without a recorded audio-to-video synchronization contract and its uncertainty."
+        }
+      }
+    },
+    "latency_ms": {
+      "$ref": "#/$defs/intervalOrNull",
+      "description": "Physical-trigger-proxy-to-displayed-confirmation latency. Not acceptable-focus onset: the barrel recording bounds visible motion, not optically acceptable focus, so the trial acquisition latency stays null."
+    },
+    "latency_missing_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "barrel_relation": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/barrelRelation"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "capture_window": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/captureWindow"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Full-press-to-visible-capture window, present when both the s2_press and capture brackets are complete."
+    },
+    "validity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "valid",
+        "invalid_reason"
+      ],
+      "properties": {
+        "valid": {
+          "type": "boolean"
+        },
+        "invalid_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "secondary_flags": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hunting_observed",
+        "focus_restart_observed",
+        "wrong_plane_suspected"
+      ],
+      "properties": {
+        "hunting_observed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "focus_restart_observed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "wrong_plane_suspected": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "roi",
+        "target_plane",
+        "sweep_id"
+      ],
+      "properties": {
+        "roi": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target_plane": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sweep_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "reviewer_notes": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "$defs": {
+    "ticks": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "ticksOrNull": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ticks"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ms": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]{6}$"
+    },
+    "msOrNull": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ms"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "signedMs": {
+      "type": "string",
+      "pattern": "^-?[0-9]+\\.[0-9]{6}$"
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "frame_index",
+        "pts"
+      ],
+      "properties": {
+        "frame_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pts": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        }
+      }
+    },
+    "bracket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "before",
+        "after",
+        "ambiguous"
+      ],
+      "properties": {
+        "before": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/edge"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Last frame that does not show the event; null when the recording starts with the event already visible."
+        },
+        "after": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/edge"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "First frame that shows the event; null when the event is not in the recording."
+        },
+        "ambiguous": {
+          "type": "boolean",
+          "description": "An occluded or unreadable edge. Timing is withheld rather than widened to a guess."
+        }
+      }
+    },
+    "bracketOrNull": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/bracket"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "interval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lower_ms",
+        "upper_ms",
+        "method",
+        "sync_uncertainty_ms",
+        "rounding"
+      ],
+      "properties": {
+        "lower_ms": {
+          "$ref": "#/$defs/ms"
+        },
+        "upper_ms": {
+          "$ref": "#/$defs/ms"
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sync_uncertainty_ms": {
+          "$ref": "#/$defs/msOrNull"
+        },
+        "rounding": {
+          "const": "outward to 1e-6 ms"
+        }
+      }
+    },
+    "intervalOrNull": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/interval"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "signedInterval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lower_ms",
+        "upper_ms",
+        "method",
+        "sync_uncertainty_ms",
+        "rounding"
+      ],
+      "properties": {
+        "lower_ms": {
+          "$ref": "#/$defs/signedMs"
+        },
+        "upper_ms": {
+          "$ref": "#/$defs/signedMs"
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sync_uncertainty_ms": {
+          "$ref": "#/$defs/msOrNull"
+        },
+        "rounding": {
+          "const": "outward to 1e-6 ms"
+        }
+      }
+    },
+    "signedIntervalOrNull": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/signedInterval"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "barrelRelation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relation",
+        "interval_ms"
+      ],
+      "properties": {
+        "relation": {
+          "enum": [
+            "trails",
+            "overlaps",
+            "leads",
+            "unresolved"
+          ],
+          "description": "trails: the widened interval is strictly positive. leads: strictly negative. overlaps: the motion and confirmation brackets interleave. unresolved: the bracketed order is trails or leads but the widened interval spans zero, so the sign is not resolved."
+        },
+        "interval_ms": {
+          "$ref": "#/$defs/signedIntervalOrNull",
+          "description": "Signed confirmation-minus-motion-end interval [confirmation.before - motion.after, confirmation.after - motion.before], widened by the declared uncertainty."
+        }
+      }
+    },
+    "captureWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verdict",
+        "deadline_ms",
+        "interval_ms"
+      ],
+      "properties": {
+        "verdict": {
+          "enum": [
+            "within",
+            "after",
+            "unresolved"
+          ],
+          "description": "within: the widened upper bound is at most the 2 s deadline. after: the widened lower bound exceeds it. unresolved: the widened interval spans the deadline."
+        },
+        "deadline_ms": {
+          "const": "2000.000000"
+        },
+        "interval_ms": {
+          "$ref": "#/$defs/interval",
+          "description": "Full-press-to-capture interval [max(0, capture.before - press.after), capture.after - press.before], widened by the declared uncertainty with ordered, nonnegative bounds. A capture bracket that entirely precedes the full press is refused before this interval is computed; brackets whose first-with frames do not resolve the order give the unresolved verdict."
+        }
+      }
+    }
+  }
+}

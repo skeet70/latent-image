@@ -1,0 +1,205 @@
+{
+  "schema": 1,
+  "firmware_id": "xm1-150",
+  "source_sha256": "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490",
+  "board_id": "xm1",
+  "soc_id": "exr2",
+  "execution_scope": "offline-boot-development",
+  "rom": {
+    "path": "inputs/x-m1-1.50/bootrom.bin",
+    "sha256": "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be",
+    "size": "0x4000",
+    "basis": "Owner-captured X-M1 16KiB processor ROM; E-BOOTROM-PROBE-150 and E-BOOTROM-DISCRIMINATOR-150. Content hash also matches the sibling capture."
+  },
+  "manifest": {
+    "path": ".tools/firmware/xm1-150/manifest.json",
+    "sha256": "618b50085c3f1a283cc65d0a02f16190aa58c443b99dc5909de5557fc82a413e"
+  },
+  "entry_labels": {
+    "0x69cdf8": "application entry",
+    "0x1800": "primary loader",
+    "0x11800": "secondary loader",
+    "0x40020": "primary kernel",
+    "0xd0020": "secondary kernel"
+  },
+  "flash_dat_bias": "0x25c",
+  "loader_validation": {
+    "entry": "0x69cdf8",
+    "sections": [
+      "stream-0016025c",
+      "stream-002c025c"
+    ]
+  },
+  "reset_release": {
+    "register": "0xfffb40cc",
+    "mask": "0x01000000",
+    "source": 120,
+    "target": "0x3fff0000",
+    "checks": [
+      {
+        "address": "0x3fff0000",
+        "expected_hex": "18f09fe5"
+      },
+      {
+        "address": "0x3fff0020",
+        "expected_hex": "00180100"
+      }
+    ],
+    "basis": "Unused by isolated caller; legacy probe reset assumption, no hardware claim."
+  },
+  "limits": [
+    "Captured X-M1 ROM; 512MiB DRAM aperture remains a declared model, not measured population.",
+    "Exact registry kernels/app/boot slice; no per-model CPU subclass or second factory.",
+    "Connected USB uses selected bounded transport; external parts, config/storage and completed JIG remain unvalidated frontiers.",
+    "No X-E2S endpoint2 status replies, FE80 program allowlist, cfgdata remapper or A3 bypass inherited."
+  ],
+  "boot_layout": {
+    "units": [
+      {
+        "unit": "kernel0",
+        "manifest": {
+          "path": ".tools/firmware/xm1-150/raw/kernel0/manifest.json",
+          "sha256": "3c3c56426f8e253e2d5ba198615aac97fb748dc894b506f4aaf335e188b74461"
+        }
+      },
+      {
+        "unit": "kernel1",
+        "manifest": {
+          "path": ".tools/firmware/xm1-150/raw/kernel1/manifest.json",
+          "sha256": "f64987e3414e4810635805eb82cdeffb103126723d183832334f4da08fb155f9"
+        }
+      }
+    ],
+    "flash_slices": [
+      {
+        "name": "boot",
+        "offset": "0x40000",
+        "size": "0x20000",
+        "address": "0x0",
+        "sha256": "09fd75ed2dc8f444754f0cfa2b19229808efc17660912b32c3bb6b7272076ace",
+        "file": ".tools/firmware/xm1-150/emulator/boot.bin"
+      }
+    ]
+  },
+  "control_bus_views": {
+    "path": "emulator/boards/firmware_views/control-bus-xm1-150.json",
+    "sha256": "4df043b0884e6121dcc2937f30051835a86ed92d3c35039402be7a07b9a60d96"
+  },
+  "usb_irq_wiring": {
+    "irq": 84,
+    "dma_irq": 85,
+    "views": [
+      {
+        "name": "irq",
+        "address": "0x7c91d8",
+        "size": "0xc",
+        "sha256": "5cc548bd54d16b6bd80ce6376a79b9ccbc8a7b17e379bcab9c9b58e7f1ebcbb1",
+        "sampling": "immutable-source"
+      },
+      {
+        "name": "dma_irq",
+        "address": "0x7c946c",
+        "size": "0xc",
+        "sha256": "879883a19c7732f9ec2115a2a01006f101c4762956464fd7107bc25166125600",
+        "sampling": "immutable-source"
+      }
+    ]
+  },
+  "fe80_programs": [
+    {
+      "descriptor": {
+        "address": "0x89e820",
+        "size": "0x10",
+        "sha256": "c2de37e1cf80e829c9d1128bac499f8c6f40a709a4f088f06ade45fecb71fdcf",
+        "sampling": "immutable-source"
+      },
+      "program": {
+        "address": "0x81c630",
+        "size": "0x48e0",
+        "sha256": "34131494b53051b95fe32c3a672fe606a5f0eed75d85f1533eb5a25ff1f0db18",
+        "sampling": "immutable-source"
+      },
+      "period": 12,
+      "setup_phase": "disabled",
+      "basis": "Stock reset/count659734 omits fe80cc20; caller selects this exact descriptor/period. Only bit0/bit4 transport acknowledgements; opaque program has no modeled execution effect. research/emulator-boards/fe80-xm1.md."
+    },
+    {
+      "descriptor": {
+        "address": "0x89e880",
+        "size": "0x10",
+        "sha256": "a4cd4b8c0fee21b98600cbf1235d742b7b1a5e03e8207eb0494caa5c20f3d86f",
+        "sampling": "immutable-source"
+      },
+      "program": {
+        "address": "0x7a2430",
+        "size": "0xe408",
+        "sha256": "d8bb7f4a49066b185ac27fd093d6d41a2c55048d2f2866b9b05b414e19414d2b",
+        "sampling": "immutable-source"
+      },
+      "period": 18,
+      "setup_phase": "disabled",
+      "basis": "Stock reset/count659734 omits fe80cc20; caller selects this exact descriptor/period. Only bit0/bit4 transport acknowledgements; opaque program has no modeled execution effect. research/emulator-boards/fe80-xm1.md."
+    },
+    {
+      "descriptor": {
+        "address": "0x820f10",
+        "size": "0x10",
+        "sha256": "0389734db2dc167aa050cc923dacaf8e2b2d5ab0403b24816bda18fc366839d9",
+        "sampling": "immutable-source"
+      },
+      "program": {
+        "address": "0x7b0840",
+        "size": "0x124d8",
+        "sha256": "e6c8c3095d920a4f0a1ec055ed5d801f4ddbd39af5535d51fefe7f84f50c4ce8",
+        "sampling": "immutable-source"
+      },
+      "period": 12,
+      "setup_phase": "disabled",
+      "basis": "Stock reset/count659734 omits fe80cc20; caller selects this exact descriptor/period. Only bit0/bit4 transport acknowledgements; opaque program has no modeled execution effect. research/emulator-boards/fe80-xm1.md."
+    }
+  ],
+  "fe80_setup_views": [
+    {
+      "address": "0x659734",
+      "size": "0x90",
+      "sha256": "e83e29a4a267c7d49286658acde7bf5bdf28bc6261d5ca178d7e243b4df0326b",
+      "sampling": "immutable-source"
+    },
+    {
+      "address": "0x6598ec",
+      "size": "0xac",
+      "sha256": "b8633872e95807bb6e52e7b4a7f13d44d80933e9926a5bbd16e67ce079ad411d",
+      "sampling": "immutable-source"
+    },
+    {
+      "address": "0x6595d8",
+      "size": "0x64",
+      "sha256": "74f13a56aded33ca3eb7e3da73935d5d53c3850239a71b2110728c1102e78d4a",
+      "sampling": "immutable-source"
+    },
+    {
+      "address": "0x658a98",
+      "size": "0x48",
+      "sha256": "3fdbb4684a385c7a76717b07504dfa0e03f45286e8d16ff26065889382f77489",
+      "sampling": "immutable-source"
+    },
+    {
+      "address": "0x659164",
+      "size": "0x48",
+      "sha256": "6e255158ca14839d71dc4a027171d8250fc71917cde2b536d31b7d60d6d971b5",
+      "sampling": "immutable-source"
+    },
+    {
+      "address": "0x659814",
+      "size": "0x74",
+      "sha256": "a2cf7319d2565a7f082182deefe79edf1ba07f70a33b13b18982caefb6196dc3",
+      "sampling": "immutable-source"
+    },
+    {
+      "address": "0x6597c4",
+      "size": "0x50",
+      "sha256": "2a23b11c25fbfdd18f1da1597c490388ba8c4392272d1fdba84fda2ce528eda1",
+      "sampling": "immutable-source"
+    }
+  ]
+}

@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>X-M1 firmware viewer</title>
+<style>
+:root{color-scheme:dark;font:16px system-ui;background:#141920;color:#edf0f4}body{max-width:1120px;margin:32px auto;padding:0 22px}h1{font-size:28px;margin-bottom:8px}p{line-height:1.55;color:#b4c1ce}button,select{font:inherit;padding:9px 14px;border:1px solid #4b6175;border-radius:6px;background:#263544;color:inherit}button{cursor:pointer}button:disabled,select:disabled{opacity:.45;cursor:wait}.controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:24px 0 10px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:22px}.panel{background:#1c242e;border:1px solid #344557;border-radius:8px;padding:20px;min-width:0}#display{min-height:270px;display:flex;align-items:center;justify-content:center;background:#090d12;color:#8da0b3;padding:8px;text-align:center}img{max-width:100%;height:auto}h2{font-size:18px;margin-top:0}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.5 ui-monospace,monospace}li{margin:8px 0}.badge{color:#8ddcb9}.refresh{font-size:13px;margin:0 0 22px}.boundary{border-left:3px solid #526b84;padding-left:12px;font-size:14px}#displayInfo{font:13px/1.5 ui-monospace,monospace;overflow-wrap:anywhere;white-space:pre-wrap;max-height:280px;overflow:auto}a{color:#a1cfff}summary{cursor:pointer;color:#b4c1ce}details+details{margin-top:16px}#milestones{max-height:220px;overflow:auto;padding-left:22px;font-size:13px}#status{max-height:190px;overflow:auto}#events{max-height:240px;overflow:auto}.progress{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin:0 0 22px}.progress div{background:#1c242e;border:1px solid #344557;border-radius:6px;padding:12px}.progress dt{font-size:12px;color:#b4c1ce}.progress dd{margin:5px 0 0;font-size:20px;font-variant-numeric:tabular-nums}#latest{font-size:13px;margin:0 0 12px;overflow-wrap:anywhere}@media(max-width:720px){.grid{grid-template-columns:1fr}.progress{grid-template-columns:repeat(3,minmax(0,1fr))}body{margin:20px auto;padding:0 14px}.panel{padding:16px}}
+</style>
+<style>
+.menu #intro{display:none}.menu .controls{margin:12px 0}#navigationInfo,#inputLevels{font-size:13px;margin:8px 0}#navigation{padding:12px 18px;margin-bottom:16px}#refresh{margin-bottom:12px}#displayInfo{max-height:100px}#navigation h2{display:none}.grid{grid-template-columns:1fr}#firmwareInfo{overflow-wrap:anywhere}#firmware-file{max-width:100%}.panel+ .panel,#execution-debugging{margin-top:22px}#execution-debugging>summary{font-size:18px}#display img{width:100%;image-rendering:pixelated}
+</style>
+<body id="page">
+<h1 id="title">Fujifilm X-M1 firmware viewer</h1>
+<p id="intro">Captured ROM → stock loader → kernels → application. Actual ARM firmware instructions execute against modeled devices. Reached entries and generated buffers are evidence of that execution; hardware timing, peripherals and reset conditions include explicit assumptions.</p>
+<section id="firmware-selection" class="panel"><h2>Active firmware</h2><p id="firmwareInfo">Loading firmware identity…</p><div class="controls"><label for="firmware-file">Firmware DAT</label><input id="firmware-file" type="file" accept=".dat,.DAT" disabled><button id="load-firmware" disabled>Load firmware</button></div><p>Load firmware restarts the emulator with the selected X-M1 1.50-compatible DAT and replaces the session checkpoint. Older firmware layouts are not supported.</p><p id="firmware-message" role="status"></p></section>
+<div class="controls" role="group" aria-label="Session checkpoint"><button id="save-screen" disabled>Set checkpoint</button><button id="restore" disabled>Restore checkpoint</button><button id="reset">Reset and boot</button></div>
+<p>Set checkpoint saves the current emulator state. Restore checkpoint rewinds to it without advancing firmware. Checkpoints live only in this server session.</p>
+<p id="checkpoint" class="boundary" hidden></p>
+<p id="refresh" class="refresh" role="status">Status refreshes every 2 seconds while this page is visible.</p>
+<section id="navigation" class="panel" hidden><h2>Firmware menu controls</h2><div class="controls" role="group" aria-label="Camera menu buttons"><button id="key-menu">MENU (M)</button><button id="key-ok">OK (Enter)</button><button id="key-back">BACK (Escape)</button><button id="key-up" aria-label="Up">↑</button><button id="key-down" aria-label="Down">↓</button><button id="key-left" aria-label="Left">←</button><button id="key-right" aria-label="Right">→</button><button id="key-q">Q</button><button id="key-play">PLAY (P)</button><button id="key-fn">Fn (F)</button><button id="key-dial-push">Dial push</button></div></section>
+<section class="panel"><h2>Firmware display</h2><div id="display">Waiting for a supported firmware display configuration.</div><p id="displayInfo">No display frame has been produced by this boot run.</p></section>
+<section id="navigation-state" class="panel" hidden><h2>State and selected row</h2><p id="navigationInfo"></p><pre id="menuState"></pre><details><summary>Current input levels</summary><pre id="inputLevels"></pre></details></section>
+<p id="boundary" class="boundary">Checking the current boot entry and model profile…</p>
+<details id="execution-debugging" class="panel"><summary>Execution debugging</summary><p>The instruction budget affects manual advance only. Step firmware executes more instructions from the paused state. Camera buttons automatically execute the press, release and menu rendering; they do not use this dropdown.</p><div class="controls"><select id="limit" aria-label="Manual instruction budget"><option value="100000">100,000 instructions</option><option value="1000000" selected>1,000,000 instructions</option><option value="10000000">10,000,000 instructions</option></select><button id="advance">Step firmware</button><span id="count" class="badge"></span></div><p id="performance" class="refresh"></p><p id="backend" class="refresh"></p><dl id="progress" class="progress" aria-label="Observed execution counters"></dl><h2>Execution status</h2><pre id="status">Loading…</pre><h2>Reached entries</h2><ul id="milestones"></ul><h2>Recent device events</h2><p id="latest"></p><pre id="events"></pre><p id="artifact"></p><details><summary>Selected model inputs</summary><pre id="profiles"></pre></details><details><summary>Model limits and fixture assumptions</summary><ul id="limits"></ul></details><details><summary>Firmware and execution provenance</summary><pre id="provenance"></pre></details></details>
+<script>
+const el = id => document.getElementById(id);
+let busy = false, polling = false, revision = 0, pollAbort = null;
+let displayedFrame = null, pendingFrame = null, frameRevision = 0;
+let checkpointPresent = false;
+let navigation = null;
+let navigationReady = false;
+let activeFirmware = null;
+const menuKeys = ['menu', 'ok', 'back', 'up', 'down', 'left', 'right', 'q', 'play', 'fn', 'dial-push'];
+
+function keySupported(key) {
+  if (!navigation) return false;
+  const name = navigation.aliases && navigation.aliases[key] || key;
+  return Array.isArray(navigation.keys) && navigation.keys.includes(name);
+}
+
+function controls() {
+  el('advance').disabled = el('reset').disabled = el('limit').disabled = busy;
+  el('restore').disabled = busy || !checkpointPresent;
+  el('restore').hidden = false;
+  el('save-screen').disabled = busy || !navigation || navigation.can_save_checkpoint !== true;
+  el('firmware-file').disabled = busy || !activeFirmware || activeFirmware.can_replace !== true;
+  el('load-firmware').disabled = el('firmware-file').disabled || !el('firmware-file').files.length;
+  const menuMode = Boolean(navigation);
+  el('page').className = menuMode ? 'menu' : '';
+  el('title').textContent = activeFirmware ? 'Fujifilm ' + activeFirmware.model + ' · firmware ' + activeFirmware.version : 'Fujifilm X-M1 firmware viewer';
+  el('reset').hidden = menuMode;
+  el('advance').textContent = 'Step firmware';
+  el('restore').textContent = 'Restore checkpoint';
+  for (const key of menuKeys) {
+    el('key-' + key).disabled = busy || !keySupported(key) || !navigationReady;
+  }
+}
+
+function showNavigation(state) {
+  navigation = state && state.navigation || null;
+  navigationReady = Boolean(navigation && navigation.ready === true && navigation.can_input === true
+    && !state.failure && !state.execution_error);
+  el('navigation').hidden = !navigation;
+  el('navigation-state').hidden = !navigation;
+  if (el('navigation').hidden) return;
+  el('navigationInfo').textContent = 'Arrow keys, Enter = OK, Escape = BACK, M = MENU/OK, Q = Q, P = PLAY, F = Fn.'
+    + ' Target ready: ' + String(navigation.ready) + ' · can input: ' + String(navigation.can_input)
+    + (state.failure || state.execution_error ? '. Execution stopped; inspect the error below or restore a checkpoint.'
+      : !navigationReady ? '. Buttons are not ready.' : '. Buttons are ready.');
+  el('menuState').textContent = JSON.stringify(navigation.current_menu ?? null, null, 2);
+  el('inputLevels').textContent = JSON.stringify({
+    adc_samples: navigation.adc_samples,
+    pressed: navigation.pressed,
+    asserted_keys: navigation.asserted_keys,
+    inputs_released: navigation.inputs_released
+  }, null, 2);
+}
+
+function list(items) {
+  return items.map(text => {
+    const li = document.createElement('li');
+    li.textContent = text;
+    return li;
+  });
+}
+
+function deviceName(device) {
+  return String(device.device || device.name || device.kind || 'Unnamed device');
+}
+
+function counter(label, value) {
+  const row = document.createElement('div'), title = document.createElement('dt'), number = document.createElement('dd');
+  title.textContent = label;
+  number.textContent = Number.isFinite(value) && value >= 0 ? value.toLocaleString() : '—';
+  row.append(title, number);
+  return row;
+}
+
+function show(state) {
+  activeFirmware = state && state.firmware || null;
+  el('firmwareInfo').textContent = activeFirmware
+    ? activeFirmware.filename + ' · ' + activeFirmware.model + ' ' + activeFirmware.version
+      + ' · ' + (activeFirmware.modified ? 'Modified firmware' : 'Stock firmware')
+      + '\nSHA-256: ' + activeFirmware.sha256
+    : 'Active firmware identity unavailable.';
+  showNavigation(state);
+  const checkpoint = state && state.resume_checkpoint;
+  checkpointPresent = Boolean(checkpoint && checkpoint.present);
+  el('checkpoint').hidden = !checkpointPresent;
+  if (checkpointPresent) {
+    const count = checkpoint.metadata && checkpoint.metadata.instructions;
+    el('checkpoint').textContent = 'In-memory checkpoint at ' + (Number.isFinite(count)
+      ? count.toLocaleString() + ' instructions' : 'a saved scheduler boundary')
+      + '. Restore rolls back to this boundary without advancing.'
+      + ' Available for this server session.';
+  }
+  controls();
+  const performance = state && state.performance;
+  const seconds = performance && (performance.execution_and_frame_sampling_seconds ?? performance.execution_seconds);
+  const ips = performance && performance.instructions_per_second;
+  el('performance').textContent = Number.isFinite(seconds) && seconds >= 0
+    ? 'Last run: ' + seconds.toFixed(2) + ' s' + (Number.isFinite(ips) && ips >= 0
+      ? ' · ' + Math.round(ips).toLocaleString() + ' instructions/s' : '') : '';
+  if (!state) {
+    el('status').textContent = 'No boot state yet. Use Step firmware to start execution.';
+    el('boundary').textContent = 'No current boot state has been published by the server.';
+    el('count').textContent = '';
+    ++frameRevision;
+    displayedFrame = pendingFrame = null;
+    el('display').replaceChildren();
+    el('display').textContent = 'Waiting for a supported firmware display configuration.';
+    el('displayInfo').textContent = 'No current display frame has been reported.';
+    el('progress').replaceChildren();
+    el('milestones').replaceChildren();
+    el('events').textContent = el('latest').textContent = el('artifact').textContent = '';
+    el('profiles').textContent = el('provenance').textContent = '';
+    el('backend').textContent = '';
+    el('limits').replaceChildren();
+    return;
+  }
+  const devices = Array.isArray(state.devices) ? state.devices.filter(device => device && typeof device === 'object') : [];
+  const backend = state.execution_backend || {};
+  const native = backend.provenance || {};
+  const models = native.models || {};
+  const sourceModels = models.source_at_process_start || {};
+  const loadedModels = models.loaded_python_models || {};
+  const activeDevices = native.active_devices || {};
+  const backendName = backend.name || native.backend || 'unavailable';
+  const nativeSelected = backendName === 'rust-unicorn' || backendName === 'x70-native';
+  el('backend').textContent = 'Execution backend: ' + (nativeSelected ? 'Rust / Unicorn' : String(backendName))
+    + '. Devices, display interpretation and timing retain the selected model assumptions.';
+  const findDevice = name => devices.find(device => deviceName(device) === name);
+  const reached = Object.entries(state.milestones || {});
+  const power = findDevice('PowerDevices'), gpu = findDevice('GraphicsAccelerator');
+  const decomp = findDevice('FujiDecompressor'), bus = findDevice('ControlBus');
+  const secondaryBus = findDevice('SecondaryControlBus');
+  const knownBuses = [bus, secondaryBus].filter(device => device && Array.isArray(device.transactions));
+  const busTransactions = knownBuses.length ? knownBuses.reduce((count, device) => count + device.transactions.length, 0) : undefined;
+  const frames = state.display && state.display.frame_count;
+  el('progress').replaceChildren(counter('Reached entries', reached.length),
+    counter('Decompressions', decomp && decomp.jobs_completed),
+    counter('GPU jobs', gpu && gpu.jobs_completed),
+    counter('Panel words', power && power.panel_serial && power.panel_serial.words_received),
+    counter('Bus transactions', busTransactions),
+    counter('Display frames', Number.isFinite(frames) ? frames : 0));
+  el('count').textContent = Number(state.instructions || 0).toLocaleString() + ' instructions';
+  const stopped = state.failure || state.execution_error;
+  el('status').textContent = stopped ? JSON.stringify(stopped, null, 2)
+    : state.quiescent ? 'Quiescent: modeled CPUs are waiting and no future wake event is available. Normal operation has not been established.'
+    : 'Firmware paused. Execution can continue; normal operation has not been established.';
+  const render = state.navigation && state.navigation.render_settle;
+  if (!stopped && render) {
+    if (render.status === 'budget-exhausted') {
+      el('status').textContent = 'Render budget reached. Firmware is paused; Step firmware to continue.';
+    } else if (render.status === 'probe-unavailable') {
+      el('status').textContent = 'Menu render boundary is unavailable. Firmware is paused.';
+    } else if (render.status === 'scanout-unavailable') {
+      el('status').textContent = 'Display composition is unavailable for this screen. Firmware is paused.';
+    } else if (render.status === 'prior-render-pending') {
+      el('status').textContent = 'Earlier menu drawing is still pending. The button was not applied; Step firmware to continue.';
+    }
+  }
+  const entry = state.entry === 'rom' ? 'Captured ROM reset entry executes before the stock loader.'
+    : state.entry === 'loader' ? 'Selected loader entry: the captured ROM reset path is skipped.'
+    : 'Entry: ' + String(state.entry || 'unspecified') + '.';
+  const scanout = findDevice('DisplayScanout');
+  const profile = scanout && scanout.graphics_profile;
+  const timing = findDevice('DisplayTiming') || devices.find(device =>
+    device.kind === 'stock display timing registers with explicit virtual phase profile');
+  const phases = timing && timing.phase_profile;
+  const storage = typeof state.storage_profile === 'object' && state.storage_profile
+    ? state.storage_profile.profile || state.storage_profile.name || JSON.stringify(state.storage_profile)
+    : state.storage_profile;
+  el('boundary').textContent = entry + ' Storage profile: ' + String(storage || 'unspecified')
+    + '. Graphics interpretation: ' + String(profile || 'no explicit profile')
+    + '. Phase profile: ' + String(phases || 'unspecified')
+    + (phases === 'configured-clocked' ? ' (inferred cadence)' : '')
+    + '. Display frames interpret firmware buffers through a software model; they do not validate the physical LCD or HDMI output.';
+  el('milestones').replaceChildren(...list(reached.map(([name, item]) =>
+    name + ' at ' + item.pc + ' · virtual tick ' + item.tick)));
+  const latest = reached.slice().sort((a, b) => (a[1].tick || 0) - (b[1].tick || 0)).pop();
+  el('latest').textContent = latest ? 'Latest reached entry: ' + latest[0] + ' at ' + latest[1].pc
+    + '. Counters describe observed execution and modeled transactions; they do not establish boot completion.'
+    : 'No firmware entry milestones have been recorded yet.';
+  const journals = state.storage_profile && state.storage_profile.user_journals;
+  const arbitration = devices.find(device => device.tie_arbitration);
+  const inputProcessing = findDevice('InputProcessingControl');
+  const inputAuxiliary = findDevice('InputAuxiliaryControl');
+  const producer = findDevice('ProducerControl');
+  const pulse = findDevice('PulseOutputs');
+  el('profiles').textContent = [
+    'MCU input: ' + String(power && power.profile_name || 'unspecified'),
+    'User journals: ' + String(journals && (journals.name || journals.profile) || 'not supplied'),
+    'SPI0 input: ' + String(power && power.spi0 && power.spi0.input_profile || 'unresolved; transfers stop'),
+    'Bus0 input: ' + String(bus && bus.profile || 'unresolved; transfers stop'),
+    'Bus1 input: ' + String(secondaryBus && secondaryBus.profile || 'unresolved; transfers stop'),
+    'Input command interpretation: ' + String(inputProcessing && inputProcessing.command_profile || 'strict default')
+      + ' · inactive phase: ' + String(inputProcessing && inputProcessing.phase_profile || 'strict default')
+      + (inputProcessing && inputProcessing.phase_profile ? ' · virtual ack ticks: ' + String(inputProcessing.phase_ticks ?? 'unspecified') : ''),
+    'Input edge: ' + String(inputProcessing && inputProcessing.event_profile || 'strict default')
+      + (inputProcessing && inputProcessing.event_profile
+        ? ' · unmeasured virtual delay ticks: ' + String(inputProcessing.event_ticks ?? 'unspecified')
+          + ' · assertions: ' + String(inputProcessing.event_assertions ?? 0)
+          + ' · acknowledgments: ' + String(inputProcessing.event_acknowledgments ?? 0)
+          + ' · source: ' + String(inputProcessing.event_source ?? 'unselected')
+          + ' · IRQ: ' + (Number.isInteger(inputProcessing.event_irq) ? '0x' + inputProcessing.event_irq.toString(16) : 'unselected')
+          + ' · ack selector: ' + String(inputProcessing.event_ack_selector ?? 'unselected')
+          + ' · source flag pending: ' + String(Boolean(inputProcessing.event_pending)) : ''),
+    'Auxiliary control acknowledgment: ' + String(inputAuxiliary && inputAuxiliary.control_profile || 'strict default')
+      + (inputAuxiliary && inputAuxiliary.control_profile
+        ? ' · unmeasured virtual ack ticks: ' + String(inputAuxiliary.control_ticks ?? 'unspecified')
+          + ' · requests: ' + String(inputAuxiliary.control_requests ?? 0)
+          + ' · completions: ' + String(inputAuxiliary.control_completions ?? 0)
+          + ' · pending ack: ' + String(Boolean(inputAuxiliary.busy)) : ''),
+    'Producer stop acknowledgment: ' + String(producer && producer.stop_profile || 'strict default')
+      + (producer && producer.stop_profile
+        ? ' · unmeasured virtual ack ticks: ' + String(producer.stop_ticks ?? 'unspecified')
+          + ' · requests: ' + String(producer.stop_requests ?? 0)
+          + ' · acknowledgments: ' + String(producer.stop_acknowledgments ?? 0)
+          + ' · pending ack: ' + String(Boolean(producer.busy)) : ''),
+    'Focus count inputs: ' + String(pulse && pulse.counter_input_profile || 'strict default')
+      + (pulse && pulse.counter_input_profile
+        ? ' · stationary/disconnected fixture · channel0 samples: ' + String(pulse.counter_samples && pulse.counter_samples[0] || 0)
+          + ' · channel4 samples: ' + String(pulse.counter_samples && pulse.counter_samples[4] || 0) : ''),
+    'Graphics interpretation: ' + String(profile || 'unresolved'),
+    'GPU copy: ' + String(gpu && gpu.copy_profile || 'unresolved'),
+    'GPU clear: ' + String(gpu && gpu.clear_profile || 'unresolved'),
+    'Display phases: ' + String(phases || 'unspecified') + ' · virtual frame ticks: ' + String(timing && timing.frame_period_ticks || 'disabled'),
+    'IRQ tie profile: ' + String(arbitration && arbitration.tie_arbitration.profile || 'strict default')
+  ].join('\n');
+  el('events').textContent = (state.events || []).slice(-10).map(item => JSON.stringify(item)).join('\n');
+  el('artifact').textContent = state.artifact_directory ? 'Saved evidence: ' + state.artifact_directory : 'No saved evidence directory reported.';
+  const limits = [...(state.limits || [])];
+  limits.push(...(native.limits || []).map(text => 'Backend: ' + text));
+  limits.push(...(sourceModels.limits || []).map(text => 'Initial model source: ' + text));
+  limits.push(...(loadedModels.limits || []).map(text => 'Loaded models: ' + text));
+  limits.push(...(activeDevices.limits || []).map(text => 'Attached device classes: ' + text));
+  if (state.storage_profile && typeof state.storage_profile === 'object') {
+    limits.push(...(state.storage_profile.limits || []).map(text => 'Storage: ' + text));
+  }
+  for (const device of devices) {
+    for (const text of [...(device.limits || []), ...(device.limitations || [])]) {
+      limits.push(deviceName(device) + ': ' + text);
+    }
+  }
+  el('limits').replaceChildren(...list([...new Set(limits)]));
+  el('provenance').textContent = 'Firmware SHA-256: ' + String(state.firmware_sha256 || 'unavailable')
+    + '\nCaptured ROM SHA-256: ' + String(state.rom_sha256 || 'unavailable')
+    + '\nVirtual ticks: ' + String(state.virtual_ticks ?? 'unavailable')
+    + '\nExecution backend: ' + String(backendName)
+    + (models.schema ? '\nInitial model source snapshot SHA-256: ' + String(sourceModels.sha256 || 'unavailable')
+      + '\nSource capture point: ' + String(sourceModels.capture_point || 'unavailable')
+      + '\nLoaded model code/constants SHA-256: ' + String(loadedModels.sha256 || 'unavailable')
+      + '\nLoaded models captured at: ' + String(loadedModels.captured_at_utc || 'unavailable') : '')
+    + (activeDevices.schema ? '\nAttached device classes SHA-256: ' + String(activeDevices.sha256 || 'unavailable')
+      + '\nAttached classes captured at: ' + String(activeDevices.captured_at_utc || 'unavailable') : '')
+    + (nativeSelected ? '\nRust extension SHA-256: ' + String(native.extension_sha256 || 'unavailable')
+      + '\nUnicorn library SHA-256: ' + String(native.unicorn_library_sha256 || 'unavailable')
+      + '\nRust compiler: ' + String(native.rustc || 'unavailable') : '')
+    + (backend.metrics ? '\nCumulative backend diagnostics (not checkpoint state):\n' + JSON.stringify(backend.metrics, null, 2) : '');
+  const display = state.display;
+  if (!display || !display.frame_count) {
+    if (displayedFrame !== null || pendingFrame !== null) {
+      ++frameRevision;
+      displayedFrame = pendingFrame = null;
+      el('display').replaceChildren();
+    }
+    el('display').textContent = 'Waiting for a supported firmware display configuration.';
+    const errors = display && (display.instances || []).filter(instance => instance.render_error)
+      .map(instance => 'Instance ' + instance.instance + ': ' + String(instance.render_error));
+    el('displayInfo').textContent = display && (display.render_error || errors.length)
+      ? 'Display model could not render: ' + (display.render_error || errors.join('\n'))
+      : 'No display frame has been produced by this boot run.';
+    return;
+  }
+  el('displayInfo').textContent = JSON.stringify(display, null, 2);
+  const key = JSON.stringify([activeFirmware && activeFirmware.sha256, state.entry, display.frame_count, display.last_frame || state.instructions]);
+  if (key === displayedFrame || key === pendingFrame) return;
+  const image = new Image(), version = ++frameRevision, runRevision = revision;
+  pendingFrame = key;
+  image.alt = 'Firmware framebuffer interpreted by the modeled display';
+  image.onload = () => {
+    if (version !== frameRevision || runRevision !== revision) return;
+    displayedFrame = key;
+    pendingFrame = null;
+    el('display').replaceChildren(image);
+  };
+  image.onerror = () => {
+    if (version !== frameRevision || runRevision !== revision) return;
+    pendingFrame = null;
+    el('displayInfo').textContent += '\nFrame image could not be loaded; the previous frame is retained.';
+  };
+  image.src = '/frame.png?frame=' + encodeURIComponent(key);
+}
+
+async function refresh() {
+  if (busy || polling || document.hidden) return;
+  polling = true;
+  const version = revision, controller = new AbortController();
+  pollAbort = controller;
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch('/api/state', {cache: 'no-store', signal: controller.signal});
+    const state = await response.json();
+    if (busy || version !== revision) return;
+    if (!response.ok) throw new Error(state && state.error || 'Status request failed');
+    show(state);
+    el('refresh').textContent = 'Status updated ' + new Date().toLocaleTimeString() + ' · refreshes every 2 seconds';
+  } catch (error) {
+    if (busy || version !== revision) return;
+    el('refresh').textContent = 'Status refresh unavailable; retrying. ' + String(error);
+  } finally {
+    clearTimeout(timeout);
+    if (pollAbort === controller) pollAbort = null;
+    polling = false;
+  }
+}
+
+async function run(reset, restore = false) {
+  if (busy || restore && !checkpointPresent) return;
+  busy = true;
+  ++revision;
+  ++frameRevision;
+  pendingFrame = null;
+  if (pollAbort) pollAbort.abort();
+  controls();
+  el('status').textContent = restore ? 'Restoring checkpoint…' : 'Executing firmware…';
+  el('refresh').textContent = 'Automatic refresh pauses while this run executes.';
+  try {
+    const response = await fetch('/api/run', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(restore ? {limit: 0, restore: true}
+        : {limit: Number(el('limit').value), reset})});
+    const state = await response.json();
+    if (!response.ok) throw new Error(state && state.error || 'Run request failed');
+    show(state);
+    el('refresh').textContent = 'Run finished ' + new Date().toLocaleTimeString() + ' · refreshes every 2 seconds';
+  } catch (error) {
+    el('status').textContent = String(error);
+    el('refresh').textContent = 'Run request failed. Automatic status refresh will resume.';
+  } finally {
+    busy = false;
+    controls();
+  }
+}
+
+async function pressKey(key) {
+  if (busy || !keySupported(key) || !navigationReady) return;
+  const settleRender = navigation.render_supported === true;
+  busy = true;
+  ++revision;
+  ++frameRevision;
+  pendingFrame = null;
+  if (pollAbort) pollAbort.abort();
+  controls();
+  el('status').textContent = settleRender ? 'Drawing menu after ' + key.toUpperCase() + ' input…'
+    : 'Applying ' + key.toUpperCase() + ' input and executing firmware…';
+  el('refresh').textContent = settleRender ? 'Automatic refresh pauses while the firmware draws.'
+    : 'Automatic refresh pauses while the button pulse executes.';
+  try {
+    const request = {key};
+    if (settleRender) request.render = true;
+    const response = await fetch('/api/key', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(request)});
+    const state = await response.json();
+    if (!response.ok) throw new Error(state && state.error || 'Button request failed');
+    show(state);
+    el('refresh').textContent = 'Button run finished ' + new Date().toLocaleTimeString() + ' · refreshes every 2 seconds';
+  } catch (error) {
+    el('status').textContent = String(error);
+    el('refresh').textContent = 'Button request failed. Automatic status refresh will resume.';
+  } finally {
+    busy = false;
+    controls();
+  }
+}
+
+async function saveScreen() {
+  if (busy || !navigation) return;
+  busy = true;
+  ++revision;
+  if (pollAbort) pollAbort.abort();
+  controls();
+  try {
+    const response = await fetch('/api/checkpoint', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: '{}'});
+    const state = await response.json();
+    if (!response.ok) throw new Error(state && state.error || 'Checkpoint request failed');
+    show(state);
+    el('refresh').textContent = 'Checkpoint set at this screen.';
+  } catch (error) {
+    el('status').textContent = String(error);
+  } finally {
+    busy = false;
+    controls();
+  }
+}
+
+async function loadFirmware() {
+  const file = el('firmware-file').files[0];
+  if (busy || !file || !activeFirmware || activeFirmware.can_replace !== true) return;
+  busy = true;
+  const version = ++revision;
+  ++frameRevision;
+  pendingFrame = null;
+  if (pollAbort) pollAbort.abort();
+  controls();
+  el('firmware-message').textContent = 'Loading firmware and restarting the emulator…';
+  el('refresh').textContent = 'Automatic refresh pauses while firmware loads.';
+  let rejected = false;
+  try {
+    const response = await fetch('/api/firmware', {method: 'POST',
+      headers: {'Content-Type': 'application/octet-stream', 'X-Firmware-Filename': encodeURIComponent(file.name)},
+      body: file});
+    const state = await response.json();
+    if (version !== revision) return;
+    if (!response.ok) {
+      rejected = true;
+      throw new Error(state && state.error || 'Firmware load failed');
+    }
+    displayedFrame = null;
+    show(state);
+    el('firmware-file').value = '';
+    el('firmware-message').textContent = 'Firmware loaded. Emulator restarted and a new session checkpoint created.';
+    el('refresh').textContent = 'Firmware loaded ' + new Date().toLocaleTimeString() + ' · refreshes every 2 seconds';
+  } catch (error) {
+    if (version !== revision) return;
+    el('firmware-message').textContent = 'Firmware load failed: ' + String(error);
+    el('refresh').textContent = rejected
+      ? 'Upload rejected. Current firmware, display and checkpoint retained. Automatic status refresh will resume.'
+      : 'Firmware load could not be confirmed. Display retained; automatic status refresh will recover the active firmware state.';
+  } finally {
+    busy = false;
+    controls();
+  }
+}
+
+el('firmware-file').onchange = controls;
+el('load-firmware').onclick = loadFirmware;
+el('advance').onclick = () => run(false);
+el('reset').onclick = () => run(true);
+el('restore').onclick = () => run(false, true);
+el('save-screen').onclick = () => saveScreen();
+for (const key of menuKeys) el('key-' + key).onclick = () => pressKey(key);
+document.addEventListener('keydown', event => {
+  const key = {ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right', Enter:'ok', Escape:'back', m:'menu', M:'menu', q:'q', Q:'q', p:'play', P:'play', f:'fn', F:'fn'}[event.key];
+  if (!key || event.repeat || event.metaKey || event.ctrlKey || event.altKey || !keySupported(key) || !navigationReady || busy
+      || ['INPUT','SELECT','TEXTAREA'].includes(event.target && event.target.tagName) || event.target && event.target.isContentEditable) return;
+  event.preventDefault();
+  pressKey(key);
+});
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+setInterval(refresh, 2000);
+refresh();
+</script></body></html>

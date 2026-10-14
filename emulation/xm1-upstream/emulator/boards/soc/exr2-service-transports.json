@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "id": "exr2",
+  "architecture": "arm32",
+  "cpu_model": "Cortex-R5F proxy for R4",
+  "dram_alias": "0x40000000",
+  "rom_address": "0x80000000",
+  "rom_size": "0x4000",
+  "sram_address": "0xfff00000",
+  "sram_size": "0x1000",
+  "vector_aliases": [
+    "0x3fff0000",
+    "0x7fff0000"
+  ],
+  "private_mmio": [
+    {
+      "address": "0xfe318000",
+      "size": "0x1000"
+    },
+    {
+      "address": "0xfe3b0000",
+      "size": "0x1000"
+    },
+    {
+      "address": "0xfe80c000",
+      "size": "0x1000"
+    },
+    {
+      "address": "0xfe80d000",
+      "size": "0x1000"
+    }
+  ],
+  "register_maps": {
+    "control_bus0": {
+      "base": "0xfff85000",
+      "offsets": [
+        0,
+        4,
+        8,
+        16,
+        24
+      ],
+      "irq": "0x65",
+      "modes": [
+        1,
+        9
+      ]
+    },
+    "control_bus1": {
+      "base": "0xfff85040",
+      "irq": "0x66"
+    },
+    "interrupts": {
+      "bases": [
+        "0xfffb3000",
+        "0xfffb4000"
+      ],
+      "timer_base": "0xfff91000"
+    },
+    "nand": {
+      "base": "0xfff52000"
+    },
+    "loader_dma": {
+      "base": "0xfff02000"
+    },
+    "decompressor": {
+      "base": "0xfff43000"
+    },
+    "usb": {
+      "core": "0xfff54000",
+      "phy": "0xfff55000",
+      "basis": "Stock controller helpers; extended bounded FIFO/DMA subset, shared SoC grammar."
+    }
+  },
+  "evidence": {
+    "basis": "Existing X70 modeled contract, not a new hardware observation",
+    "sources": [
+      "research/emulator-boards/README.md",
+      "research/emulator-boards/implementation.md",
+      "emulator/boot.py",
+      "emulator/board.py"
+    ]
+  },
+  "limits": [
+    "Only the existing supported EXR II register subset; no inference of sibling reset values or device replies."
+  ],
+  "runtime_abi": "exr2-r5f-fixed-map-v1",
+  "tcm": {
+    "atcm": {
+      "size": "0x2000",
+      "reset_base": "0xffff8000",
+      "reset_enabled": true,
+      "basis": "8KiB inferred from X70 loader size-field4 and high stack/clear extent18b8..1920; explicit enabled high reset default preserves existing constructor private stacks, not a captured reset pin. ARM DDI0363E names opc2=1 ATCM."
+    },
+    "btcm": {
+      "size": 0,
+      "reset_base": 0,
+      "reset_enabled": false,
+      "basis": "Unselected/absent synthetic interface: no established EXRII size for opc2=0. It is explicitly disabled, not evidence of physical absence. Existing high-vector/reset scratch alias remains separate from TCM."
+    }
+  }
+}

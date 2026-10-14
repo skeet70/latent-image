@@ -1,0 +1,158 @@
+module Main (main) where
+
+import BootCard
+import Control.Exception (SomeException, displayException, try)
+import Control.Monad (forM_)
+import Data.Bits (complement)
+import qualified Data.ByteString as B
+import Data.List (isPrefixOf)
+import qualified FujiAF.Host as H
+import qualified FujiAF.UpdateContainer as U
+import RawNativeRollbackPin (RollbackDigest (..), expectedRollbackDigest)
+import System.Directory (canonicalizePath, createDirectory, getCurrentDirectory)
+import System.Environment (getArgs, lookupEnv)
+import System.Exit (exitFailure)
+import System.FilePath ((</>), addTrailingPathSeparator, isAbsolute, takeDirectory, takeFileName)
+import System.IO (hPutStrLn, stderr)
+
+newtype BootOffset = BootOffset Int
+newtype StockBootSpan = StockBootSpan B.ByteString
+newtype RollbackStub = RollbackStub B.ByteString
+newtype NativeBootstrap = NativeBootstrap B.ByteString
+
+data RecoveryInputs = RecoveryInputs Config NativeBootstrap
+
+data Command = Build FilePath FilePath FilePath | Verify FilePath FilePath FilePath
+
+checked :: Either String a -> IO a
+checked = either H.failH pure
+
+workspaceRoot :: IO FilePath
+workspaceRoot = lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= maybe getCurrentDirectory pure
+
+resolve :: FilePath -> IO FilePath
+resolve path = do
+  root <- workspaceRoot
+  pure (if isAbsolute path then path else root </> path)
+
+stockInputs :: FilePath -> IO (Config, StockBootSpan)
+stockInputs given = do
+  path <- resolve given
+  dat <- H.readRegular (64*1024*1024) path
+  digest <- H.sha256 dat
+  H.ensure (digest == "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490") "requires pinned official X-M1 1.50 DAT"
+  parsed <- checked (U.parseContainer dat)
+  H.ensure (all U.checkPassed (U.checks parsed ++ U.carriedChecks parsed ++ U.stockChecks parsed)) "official DAT contract failed"
+  config <- checked (stockConfig (B.map complement (B.take 0x1048 (B.drop 0x214 dat))))
+  H.ensure (U.word32At (configBytes config) 0x33c == 0x80000000) "stock optional SD clock gate changed"
+  let staged = B.map complement (B.take 0x40000 (B.drop (0x214+0x40048) dat))
+  H.ensure (B.length staged == 0x40000) "native boot staging span truncated"
+  primaryHash <- H.sha256 (B.take 0x4300 staged)
+  secondaryHash <- H.sha256 (B.take 0x4c80 (B.drop 0x10000 staged))
+  H.ensure (primaryHash == "c2da900dcd3f193b05b5ae968dfcb87723571462eafd84c0fed8467f66f7dff3") "primary boot record does not match"
+  H.ensure (secondaryHash == "2f1bf3f0e483b892d2890599679c1b515cfc1be8b8c27cbb06d4d913e428abb4") "companion boot record does not match"
+  forM_ [(BootOffset 0x20,0x1800),(BootOffset 0x1fdc,0xeb000018),(BootOffset 0x1fe0,0xe3003000),(BootOffset 0x1ac4,0x4300),(BootOffset 0x1ac8,0x5280)] $ \(BootOffset offset,wanted) ->
+    H.ensure (U.word32At staged offset == wanted) "native vector, call or BSS contract changed"
+  putStrLn (path ++ ": pinned official DAT sha256 " ++ digest)
+  pure (config, StockBootSpan staged)
+
+readStub :: FilePath -> IO RollbackStub
+readStub given = do
+  path <- resolve given
+  bytes <- H.readRegular 0xa8 path
+  H.ensure (B.length bytes > 0x40 && B.length bytes <= 0xa8 && B.length bytes `mod` 4 == 0) "rollback must contain only the guard and callback below 0x60a8"
+  digest <- H.sha256 bytes
+  let RollbackDigest expected = expectedRollbackDigest
+  H.ensure (digest == expected) "stub is not the current build's linked raw native rollback"
+  putStrLn (path ++ ": build-pinned raw native rollback sha256 " ++ digest)
+  pure (RollbackStub bytes)
+
+assembleBootstrap :: StockBootSpan -> RollbackStub -> NativeBootstrap
+assembleBootstrap (StockBootSpan staged) (RollbackStub stub) = NativeBootstrap (B.concat
+  [ B.take 0x20 staged
+  , U.putWord32 0x6000
+  , B.take (0x1fdc-0x24) (B.drop 0x24 staged)
+  , U.putWord32 0xeb001017
+  , B.take (0x6000-0x1fe0) (B.drop 0x1fe0 staged)
+  , stub
+  , B.drop (0x6000+B.length stub) staged
+  ])
+
+inputs :: FilePath -> FilePath -> IO RecoveryInputs
+inputs datPath stubPath = do
+  (config, staged) <- stockInputs datPath
+  stub <- readStub stubPath
+  pure (RecoveryInputs config (assembleBootstrap staged stub))
+
+rawConfig :: Config -> B.ByteString
+rawConfig config = B.concat
+  [ B.take 0x18 stock
+  , U.putWord32 512
+  , B.take (0x33c-0x1c) (B.drop 0x1c stock)
+  , U.putWord32 0
+  , B.drop 0x340 stock
+  ]
+  where stock = configBytes config
+
+canonicalImage :: RecoveryInputs -> B.ByteString
+canonicalImage (RecoveryInputs config (NativeBootstrap bootstrap)) = rawConfig config <> bootstrap
+
+verifyRecovery :: RecoveryInputs -> B.ByteString -> IO ()
+verifyRecovery prepared@(RecoveryInputs config (NativeBootstrap bootstrap)) image = do
+  H.ensure (B.length image == 263168 && image == canonicalImage prepared) "raw recovery image differs from canonical 263168-byte layout"
+  raw <- checked (readRawRom image)
+  H.ensure (mode2ConfigBytes raw == rawConfig config) "raw configuration differs"
+  H.ensure (mode2PayloadBytes raw == bootstrap && B.length bootstrap == 0x40000) "raw mode does not stage the exact 256 KiB native payload"
+  H.ensure (rawConfigDifferences config raw ==
+    [ ConfigDifference (ConfigWordOffset 0x18) 2 512
+    , ConfigDifference (ConfigWordOffset 0x33c) 0x80000000 0
+    ]) "raw configuration has additional controller changes"
+
+privateOutput :: FilePath -> IO FilePath
+privateOutput given = do
+  output <- resolve given
+  H.ensure (takeFileName output `notElem` ["", ".", ".."]) "output must name a new directory"
+  root <- workspaceRoot
+  guard <- canonicalizePath (root </> "private-data")
+  parent <- canonicalizePath (takeDirectory output)
+  H.ensure (addTrailingPathSeparator guard `isPrefixOf` addTrailingPathSeparator parent) "output must be beneath private-data"
+  pure output
+
+writeArtifact :: FilePath -> (FilePath,B.ByteString) -> IO ()
+writeArtifact directory (name,bytes) = do
+  let path = directory </> name
+  B.writeFile path bytes
+  saved <- H.readRegular 263168 path
+  H.ensure (saved == bytes) "saved artifact differs from emitted bytes"
+  digest <- H.sha256 saved
+  putStrLn (path ++ ": " ++ show (B.length saved) ++ " bytes, sha256 " ++ digest)
+
+run :: Command -> IO ()
+run (Build datPath stubPath outPath) = do
+  prepared@(RecoveryInputs config (NativeBootstrap bootstrap)) <- inputs datPath stubPath
+  let image = canonicalImage prepared
+  verifyRecovery prepared image
+  output <- privateOutput outPath
+  createDirectory output
+  forM_ [("ffsys.bin",rawConfig config),("ffboot.bin",bootstrap),("raw-native-recovery-sd.img",image)] (writeArtifact output)
+  putStrLn "Raw-only layout: 1024-byte configuration, then exact 256 KiB staging payload at LBA 2."
+  putStrLn "Host-generated candidate only; physical entry and native rollback remain unproved."
+run (Verify datPath stubPath imagePath) = do
+  prepared <- inputs datPath stubPath
+  path <- resolve imagePath
+  image <- H.readRegular 263168 path
+  verifyRecovery prepared image
+  digest <- H.sha256 image
+  putStrLn ("raw native recovery card layout verified; sha256 " ++ digest)
+
+parseCommand :: [String] -> IO Command
+parseCommand ["build",datPath,stubPath,output] = pure (Build datPath stubPath output)
+parseCommand ["verify",datPath,stubPath,image] = pure (Verify datPath stubPath image)
+parseCommand _ = H.failH "usage: build-raw-recovery-card build PINNED_DAT LINKED_STUB_BIN NEW_PRIVATE_DIRECTORY | verify PINNED_DAT LINKED_STUB_BIN IMAGE"
+
+main :: IO ()
+main = do
+  result <- try (getArgs >>= parseCommand >>= run) :: IO (Either SomeException ())
+  case result of
+    Left failure -> hPutStrLn stderr (displayException failure) >> exitFailure
+    Right () -> pure ()

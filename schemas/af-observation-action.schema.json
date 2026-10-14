@@ -1,0 +1,383 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Synthetic AF observation/action v1",
+  "description": "Strict host-only synthetic contract. Decimal strings preserve counter/clock integer precision; consumers enforce uint32 counter and uint64 tick bounds and temporal relationships. No X-M1 telemetry or restoration claim.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "origin",
+        "clock_id",
+        "position_units",
+        "record_type",
+        "sequence_id",
+        "command_id_at_acquisition",
+        "commanded_position_at_acquisition",
+        "acquired_at",
+        "delivered_at",
+        "reported_position",
+        "reported_completion",
+        "valid",
+        "invalid_reason",
+        "sharpness",
+        "exposure_epoch",
+        "cancelled",
+        "mode"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "origin": {
+          "const": "synthetic"
+        },
+        "clock_id": {
+          "const": "synthetic-ms"
+        },
+        "position_units": {
+          "const": "synthetic-lens-unit"
+        },
+        "record_type": {
+          "const": "observation"
+        },
+        "sequence_id": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,9})$"
+        },
+        "command_id_at_acquisition": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,9})$"
+        },
+        "commanded_position_at_acquisition": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "acquired_at": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "delivered_at": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "reported_position": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reported_completion": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "invalid_reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "synthetic_invalid",
+                "sample_unavailable",
+                "saturated"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sharpness": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exposure_epoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "cancelled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "enum": [
+            "single-af",
+            "continuous-af",
+            "video-af",
+            "manual"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "valid": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "sharpness": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "invalid_reason": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "sharpness": {
+                "type": "null"
+              },
+              "invalid_reason": {
+                "enum": [
+                  "synthetic_invalid",
+                  "sample_unavailable",
+                  "saturated"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "origin",
+        "clock_id",
+        "position_units",
+        "record_type",
+        "kind",
+        "reason",
+        "command_id",
+        "triggering_sequence_id",
+        "target_position",
+        "delta_position",
+        "expected_next_event",
+        "measurements",
+        "moves",
+        "steps",
+        "terminal"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "origin": {
+          "const": "synthetic"
+        },
+        "clock_id": {
+          "const": "synthetic-ms"
+        },
+        "position_units": {
+          "const": "synthetic-lens-unit"
+        },
+        "record_type": {
+          "const": "action"
+        },
+        "kind": {
+          "enum": [
+            "hold",
+            "move_to",
+            "move_by",
+            "finish",
+            "fail",
+            "hand_back_to_stock"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "start_search",
+            "scan_coarse",
+            "scan_fine",
+            "confirm_peak",
+            "confirmed",
+            "wait_completion",
+            "wait_position",
+            "early_sample",
+            "stale_sample",
+            "acquisition_command_mismatch",
+            "invalid_observation",
+            "duplicate_sequence",
+            "exposure_changed",
+            "cancelled",
+            "unsupported_mode",
+            "clock_error",
+            "observation_limit",
+            "measurement_limit",
+            "move_limit",
+            "time_limit",
+            "low_confidence",
+            "final_verification_failed",
+            "terminal",
+            "bounds_error"
+          ]
+        },
+        "command_id": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,9})$"
+        },
+        "triggering_sequence_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,9})$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_position": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "delta_position": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected_next_event": {
+          "enum": [
+            "fresh_settled_sample",
+            "terminal"
+          ]
+        },
+        "measurements": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 256
+        },
+        "moves": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 256
+        },
+        "steps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1025
+        },
+        "terminal": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "move_to",
+                  "finish"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target_position": {
+                "type": "integer",
+                "minimum": -2147483648,
+                "maximum": 2147483647
+              },
+              "delta_position": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "move_by"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target_position": {
+                "type": "null"
+              },
+              "delta_position": {
+                "type": "integer",
+                "minimum": -2147483648,
+                "maximum": 2147483647
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "hold",
+                  "fail",
+                  "hand_back_to_stock"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target_position": {
+                "type": "null"
+              },
+              "delta_position": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,122 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_library(
+    name = "session",
+    srcs = ["FujiAF/Session.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-XGHC2021",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:scientific",
+    ],
+)
+
+haskell_binary(
+    name = "af-session",
+    srcs = ["Main.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        ":session",
+        "//host:base",
+        "//host:host-support",
+    ],
+)
+
+haskell_binary(
+    name = "session-tests-hs",
+    srcs = ["SessionTests.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+sh_test(
+    name = "session-tests",
+    size = "small",
+    srcs = ["session-tests.sh"],
+    args = [
+        "$(location :session-tests-hs)",
+        "$(location :af-session)",
+        "$(location @lab_jsonschema//:bin/check-jsonschema)",
+        "$(location @lab_ffmpeg//:bin/ffmpeg)",
+        "$(location @lab_ffmpeg//:bin/ffprobe)",
+    ],
+    data = [
+        ":af-session",
+        ":session-tests-hs",
+        "//schemas:all",
+        "@lab_ffmpeg//:bin/ffmpeg",
+        "@lab_ffmpeg//:bin/ffprobe",
+        "@lab_jsonschema//:bin/check-jsonschema",
+    ],
+)
+
+sh_binary(
+    name = "check-annotation",
+    srcs = ["check-annotation.sh"],
+    args = [
+        "$(location @lab_jsonschema//:bin/check-jsonschema)",
+        "$(location //schemas:af-session-annotation.schema.json)",
+    ],
+    data = [
+        "//schemas:af-session-annotation.schema.json",
+        "@lab_jsonschema//:bin/check-jsonschema",
+    ],
+)
+
+sh_binary(
+    name = "check-exif",
+    srcs = ["check-exif.sh"],
+    args = [
+        "$(location @lab_jq//:bin/jq)",
+        "$(location @lab_exiftool//:bin/exiftool)",
+    ],
+    data = [
+        "@lab_jq//:bin/jq",
+        "@lab_exiftool//:bin/exiftool",
+    ],
+)
+
+sh_test(
+    name = "check-exif-test",
+    size = "small",
+    srcs = ["check-exif-test.sh"],
+    args = [
+        "$(location :check-exif.sh)",
+        "$(location @lab_jq//:bin/jq)",
+    ],
+    data = [
+        ":check-exif.sh",
+        "@lab_jq//:bin/jq",
+    ],
+)

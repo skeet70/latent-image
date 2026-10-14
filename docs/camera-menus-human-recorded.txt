@@ -1,0 +1,278 @@
+BODY: X-M1, firmware 1.00, no lens attached
+
+WB button
+  AUTO
+    → shift grid: R -9..+9 (cyan↔red) (X axis), B -9..+9 (yellow↔blue) (Y axis)
+  CUSTOM
+    → SHUTTER: NEW WB with what may be a viewfinder box, no graph. Options are "BACK NOT CHANGE" and "OK SHIFT"
+  FINE
+    → shift grid: same
+  SHADE
+    → shift grid: same
+  FLUORESCENT LIGHT-1
+    → shift grid: same
+  FLUORESCENT LIGHT-2
+    → shift grid: same
+  FLUORESCENT LIGHT-3
+    → shift grid: same
+  INCANDESCENT
+    → shift grid: same
+TRASH ICON/AF button
+  does nothing, probably due to no lens
+BURST SHOOTING BUTTON
+  STILL IMAGE
+  BURST
+    → H burst icon: 5.6fps
+    → burst icon: 3.0fps 
+  AE BKT
+    → +- 1
+	→ +- 2/3
+	→ +- 1/3
+  ISO BKT
+    → +- 1
+	→ +- 2/3
+	→ +- 1/3
+  FILM SIMULATION BKT
+  DYNAMIC RANGE BKT
+MACRO BUTTON
+  → OFF (shows flower icon with off also under it inside the icon)
+  → MACRO (next to flower icon) with the text "Close-up shots"
+PLAYBACK BUTTON
+  NO IMAGE, have to press again to exit, not DISP/BACK button
+  MENU > PLAYBACK MENU 1
+    ERASE
+	CROP
+	RESIZE
+	PROTECT
+	IMAGE ROTATE
+	RED EYE REMOVAL
+	SLIDE SHOW
+  MENU > PLAYBACK MENU 2
+    PHOTOBOOK ASSIST
+	MARK FOR UPLOAD TO
+	IMAGE SEARCH
+	PRINT ORDER (DPOF)
+	DISP ASPECT
+	WIRELESS TRANSFER
+	PC AUTO SAVE
+  MENU > PLAYBACK MENU 3
+    RAW CONVERSION
+	  REFLECT SHOOTING COND.
+	  PUSH/PULL PROCESSING
+	  DYNAMIC RANGE (greyed out/not selectable for the raw shot with no lens I took, maybe my range setting there wasn't changable)
+	  FILM SIMULATION
+	    takes you to the same menu as SHOOTING MENU 1 > FILM SIMULATION
+	  WHITE BALANCE
+	  WB SHIFT
+	  COLOR
+	  SHARPNESS
+	  HIGHLIGHT TONE
+	  SHADOW TONE
+	  NOISE REDUCTION
+  MENU > SET-UP MENU 1
+    same as main menu press setup 1
+  MENU > SET-UP MENU 2
+    same as main menu press setup 2
+  MENU > SET-UP MENU 3
+    same as main menu press setup 3
+MOVIE RECORDING BUTTON
+  does nothing right now, probably due to no lens
+Q (quick menu) BUTTON
+  brings up a 3 row by 4 column grid, options in each slot are selected via the sub-command wheel with:
+  [
+    [
+	  RED A (for auto? can't hover it right now),
+	  FOCUS MODE (AF area, icon of person with box on face, AF tracking, MF (presume manual focus), AF with + mark in area),
+	  ISO (ISO AUTO 3200, ISO H25600, ISO H12800, ISO 6400, ISO 5000, ISO 4000, ISO 3200, ISO 2500, ISO 2000, ISO 1600, ISO 1250, ISO 1000, ISO 800, ISO 640, ISO 500, ISO 400, ISO 320, ISO 250, ISO 200, ISO L100),
+	  DYNAMIC RANGE (DR 400, DR AUTO, DR 100, DR 200)
+	],
+	[
+	  NOISE REDUCTION (NR-2, NR+2, NR+1, NR 0, NR -1),
+	  IMAGE SIZE (L16:9, L1:1, M3:2, M16:9, M1:1, S3:2, S16:9, S1:1, L3:2),
+	  IMAGE QUALITY (FINE, NORMAL, RAWF, RAWN, RAW),
+	  FILM SIMULATION (STD, V, S, B, SEPIA)
+	],
+	[
+	  HIGHLIGHT TONE (HTONE-2, HTONE+2, HTONE+1, HTONE 0, HTONE-1),
+	  SHADOW TONE (STONE-1, STONE-2, STONE+2, STONE+1, STONE 0),
+	  COLOR (COLOR-2, COLOR+2, COLOR+1, COLOR 0, COLOR-1),
+	  SHARPNESS (SHARP 0, SHARP-1, SHARP-2, SHARP+2, SHARP+1)
+	]
+  ]
+  theres another row of lighter gray boxes: [SELF-TIMER (OFF, 10, 2), IS MODE, FLASH MODE, LCD BRIGHTNESS (-5...5)]
+MENU > SHOOTING MENU 1
+  CUSTOM (just a label, changes when the shooting mode selector dial on top of the camera is changed)
+  ISO
+    → a side submenu with the same 20 options as the ISO in quick settings
+  IMAGE SIZE
+    → same options as image size quick settings, with number of frames for each added on the right side
+  IMAGE QUALITY
+    → FINE, NORMAL, FINE+RAW, NORMAL+RAW, RAW
+  DYNAMIC RANGE
+    → AUTO, 100%, 200%, 400%
+  FILM SIMULATION
+    → PROVIA/STANDARD
+    → Velvia/VIVID
+    → ASTIA/SOFT
+	→ B & W
+	→ SEPIA
+  FILM SIMULATION BKT
+    → FILM 1
+      → same options as FILM SIMULATION	
+	→ FILM 2
+      → same options as FILM SIMULATION
+    → FILM 3
+      → same options as FILM SIMULATION
+MENU > SHOOTING MENU 2
+  SELF TIMER
+    → OFF
+	→ 10 SEC
+	→ 2 SEC
+  COLOR
+	→ (+2) HIGH
+	→ (+1) MEDIUM HIGH
+	→ ( 0) MID
+	→ (-1) MEDIUM LOW
+    → (-2) LOW
+  SHARPNESS
+    → (+2) HARD
+	→ (+1) MEDIUM HARD
+	→ ( 0) STANDARD
+	→ (-1) MEDIUM SOFT
+	→ (-2) SOFT
+  HIGHLIGHT TONE
+    → (+2) HARD
+	→ (+1) MEDIUM HARD
+	→ ( 0) STANDARD
+	→ (-1) MEDIUM SOFT
+	→ (-2) SOFT
+  SHADOW TONE
+    → (+2) HARD
+	→ (+1) MEDIUM HARD
+	→ ( 0) STANDARD
+	→ (-1) MEDIUM SOFT
+	→ (-2) SOFT
+  NOISE REDUCTION
+	→ (+2) HIGH
+	→ (+1) MEDIUM HIGH
+	→ ( 0) MID
+	→ (-1) MEDIUM LOW
+    → (-2) LOW
+  LONG EXPOSURE NR
+	→ OFF
+    → ON
+MENU > SHOOTING MENU 3
+  CUSTOM SET
+    header at the top with "SET OK?"
+    → OK (that's the only text, selecting it changes what's at the C option on the mode dial with no other output, no further confirm step)
+	→ CANCEL
+  FUNCTION (Fn) SETTING
+    setting to any of these and clicking the button brings up the normal submenu for it (not a special or quickmenu style selector)
+    → PREVIEW DEPTH OF FIELD
+	→ ISO
+	→ SELF-TIMER
+	→ IMAGE SIZE
+	→ IMAGE QUALITY
+	→ DYNAMIC RANGE
+	→ FILM SIMULATION
+	→ PHOTOMETRY
+	→ AE/AF LOCK
+	→ INSTANT AF
+	→ FOCUS MODE
+	→ FACE DETECTION
+	→ LOCATION INFO SEARCH
+	→ MOVIE MODE
+	→ RAW
+  DISP. CUSTOM SETTING
+  FRAMING GUIDELINE
+  MOUNT ADAPTOR SETTINGS
+  SHOOT WITHOUT LENS
+  IS MODE
+MENU > SHOOTING MENU 4
+  PHOTOMETRY
+  FACE DETECTION
+  FOCUS MODE
+  MF ASSIST
+  AF ILLUMINATOR
+  AE/AF-LOCK BUTTON
+  MOVIE SET-UP
+MENU > SHOOTING MENU 5
+  FLASH MODE
+  FLASH COMPENSATION
+  RED EYE REMOVAL
+  SAVE ORG IMAGE
+MENU > SET-UP MENU 1
+  DATE/TIME
+  TIME DIFFERENCE
+  KANJISYMBOLS/LANG.
+  RESET
+    SHOOTING MENU RESET
+	  submenu like CUSTOM RESET's with the dialog header as "SHOOTING MENU RESET" and dialog content "RESET SHOOTING MENU OK? RESET SETTINGS TO DEFAULT"
+	  OK
+	  CANCEL
+    SET-UP RESET
+	  same as above but header is "SET-UP RESET" with dialog content "RESET SET-UP MENU OK? RESET SETTINGS TO DEFAULT"
+	  OK
+	  CANCEL
+  SILENT MODE
+    ON
+	OFF
+  SOUND SET-UP
+    neither of these options do anything with SILENT MODE on
+	OPERATION VOL.
+	PLAYBACK VOLUME
+  SCREEN SET-UP
+    IMAGE DISP.
+	  CONTINUOUS
+	  1.5 SEC
+	  0.5 SEC
+	  OFF
+	LCD BRIGHTNESS
+	  slider from -5 ... +5
+	  "OK SET" "BACK CANCEL"
+	MONITOR SUNLIGHT MODE
+	  ON
+	  OFF
+	AUTOROTATE PB
+	  ON
+	  OFF
+	BACKGROUND COLOR
+	  SILVER
+	  GOLD
+      BLUE
+	  YELLOW
+	  GREEN
+	  WHITE
+	  "OK SET" "BACK CANCEL"
+MENU > SET-UP MENU 2
+  FOCUS RING
+  POWER MANAGEMENT
+    AUTO POWER OFF
+      → 5 MIN
+	  → 2 MIN
+	  → OFF (current setting)
+	QUICK START MODE
+      → ON
+      → OFF (current setting)
+  FRAME NO.
+  DATE STAMP
+  SENSOR CLEANING
+  FOCUS SCALE UNITS
+  CUSTOM RESET
+    submenu red header "CUSTOM RESET" with dialog "RESET OK?" 
+    → OK
+	→ CANCEL
+MENU > SET-UP MENU 3
+  GEOTAGGING SET-UP
+  WIRELESS SETTINGS
+  PC AUTO SAVE SETTING
+    SIMPLE SETUP (description box with SET UP CONNECTION TO DESTINATION PC (SIMPLE BUTTON OPERATION))
+      description box with PUSH WPS BUTTON ON Wi-Fi ROUTER UNTIL LAMP ON Wi-Fi ROUTER STARTS FLASHING
+	  with "^ CONNECT BY PIN CODE" and "BACK CANCEL" options
+	  CANCEL then displays a "DISCONNECTED" screen for a few seconds before going back to the main operating screen
+	MANUAL SETUP  (description box with SET UP CONNECTION TO DESTINATION PC (NETWORK LIST OR DIRECT INPUT))
+      → SELECT FROM NETWORK LIST
+	    → full list of nearby wi-fi networks. presumably selecting one will lead to further submenus to put in password, etc
+      → ENTER SSID
+        → full keyboard opens with the option to "SET" and "OK ENTER" "BACK CANCEL" buttons
+  FORMAT
