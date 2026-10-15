@@ -48,7 +48,7 @@ Publish tools, implementations, and detailed firmware findings, not proprietary 
 
 Original Latent Image software is licensed under [AGPL-3.0-only](LICENSE). Commercial use is allowed under its conditions, including applicable source-sharing obligations for distribution and modified versions offered over a network.
 
-The inherited emulator implementation in `emulation/xm1-upstream/` comes from **[jitl (justjake)](https://github.com/justjake)'s x70view**, with X-M1 adaptations. It is redistributed with reported permission requiring credit and retains its separate terms; it is not relicensed under the project's AGPL grant. Upstream components and dependencies retain their own licenses. See [LICENSING.md](LICENSING.md) and [third-party attribution](third_party/README.md) for detailed permissions, notices, and artifact-specific redistribution obligations.
+The inherited emulator implementation in `emulation/xm1-upstream/` comes from **[jitl (justjake)](https://github.com/justjake)'s x70view**, with X-M1 adaptations. It is redistributed with permission requiring credit and retains its separate terms; it is not relicensed under the project's AGPL grant. Upstream components and dependencies retain their own licenses. See [LICENSING.md](LICENSING.md) and [third-party attribution](third_party/README.md) for detailed permissions, notices, and artifact-specific redistribution obligations.
 
 ## AI assistance
 

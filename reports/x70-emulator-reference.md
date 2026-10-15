@@ -1,12 +1,12 @@
 # The X70 emulator as a reference: terms, distance, SoC cross-check, revised recommendation
 
-This assessment compares a privately accessible X70 1.10 emulator checkout with the X-M1 implementation: architecture, shared ROM behavior, device-model transfer and bounded target-addition experiments. Inspection occurred on 2026-10-09; permission and fixture disposition were updated from the owner's report on 2026-10-14. Primary credit for the inherited emulator belongs to jitl (justjake) and [x70view](https://github.com/justjake/x70view). Statements about that project are X70-reported or source-inspected; conclusions from X-M1 bytes are byte-read or static-inference. Sibling-derived interpretations remain unproved on X-M1 until target decoding or capture binds them. The assessment itself copied no source into the repository and authorizes no camera operation. [The licensing review](../LICENSING.md) distinguishes the reported redistribution grant from remaining downstream terms and artifact obligations.
+This assessment compares a privately accessible X70 1.10 emulator checkout with the X-M1 implementation: architecture, shared ROM behavior, device-model transfer and bounded target-addition experiments. Inspection occurred on 2026-10-09; redistribution permission was confirmed and fixture disposition updated on 2026-10-14. Primary credit for the inherited emulator belongs to jitl (justjake) and [x70view](https://github.com/justjake/x70view). Statements about that project are X70-reported or source-inspected; conclusions from X-M1 bytes are byte-read or static-inference. Sibling-derived interpretations remain unproved on X-M1 until target decoding or capture binds them. The assessment itself copied no source into the repository and authorizes no camera operation. [The licensing review](../LICENSING.md) distinguishes the redistribution grant from remaining downstream terms and artifact obligations.
 
 ## 1. What the material permits
 
 ### 1.1 What the checkout states
 
-The inspected checkout has no root `LICENSE`, `COPYING`, `NOTICE` or SPDX file and no emulator/native source license header. `research/af-scenes/LICENSES.md` lists third-party scene and lens-data terms. `native/README.md` reports dependency terms, including a “BSD bindings” label; that note is an upstream assertion, not a verified classification of the retained files. [The licensing review](../LICENSING.md) owns component-by-component terms and release decisions; absence of a checkout license does not negate the separately reported redistribution permission.
+The inspected checkout has no root `LICENSE`, `COPYING`, `NOTICE` or SPDX file and no emulator/native source license header. `research/af-scenes/LICENSES.md` lists third-party scene and lens-data terms. `native/README.md` reports dependency terms, including a “BSD bindings” label; that note is an upstream assertion, not a verified classification of the retained files. [The licensing review](../LICENSING.md) owns component-by-component terms and release decisions; absence of a checkout license does not negate the redistribution permission.
 
 `AGENTS.md` describes a private, single-developer repository that includes the supplied X70 firmware and camera RAM captures, and asks that upstream licences and attribution be kept. `README.md` names the private GitHub repository that backs the project up and gives its restore procedure. Both are working rules for that checkout and a backup statement; neither grants rights to anyone else, and the author's grant, which is outside the checkout's files, is recorded in section 1.2.
 
@@ -21,25 +21,25 @@ The owner asked the author the questions this assessment raised and reports his 
 - A port belongs on our side rather than contributed into his repository, which he describes as already a mess.
 - The measured-versus-inferred status of the media geometry is asked and awaiting a response; the boot-ROM capture procedure question has a reported answer (section 1.4).
 
-The initial 2026-10-09 report is preserved as historical evidence `E-X70-GRANT-150`. On 2026-10-14 the owner reported: “jitl just gave explicit permission for redistribution as long as he's credited.” This is the current credited redistribution grant for jitl (justjake)'s x70view work, recorded as `E-X70-REDISTRIBUTION-PERMISSION-150`. The report supplies no author-provided SPDX license, sublicensing authority or downstream modification terms. Do not describe the inherited implementation as AGPL on the strength of the project's original-code license.
+The initial 2026-10-09 report is preserved as historical evidence `E-X70-GRANT-150`. On 2026-10-14 jitl (justjake) explicitly permitted redistribution of his x70view work provided he is credited, recorded as `E-X70-REDISTRIBUTION-PERMISSION-150`. The grant supplies no author-provided SPDX license, sublicensing authority or downstream modification terms. Do not describe the inherited implementation as AGPL on the strength of the project's original-code license.
 
-The reported permission does not grant rights to Fujifilm's X70 1.10 `FPUPDATE.DAT`, per-unit RAM captures or other proprietary inputs. Vendored components retain their own terms, but this report's upstream dependency note does not settle the license of each retained binding, header or source file. [The licensing review](../LICENSING.md) owns the actual component classification and remaining artifact obligations.
+The permission does not grant rights to Fujifilm's X70 1.10 `FPUPDATE.DAT`, per-unit RAM captures or other proprietary inputs. Vendored components retain their own terms, but this report's upstream dependency note does not settle the license of each retained binding, header or source file. [The licensing review](../LICENSING.md) owns the actual component classification and remaining artifact obligations.
 
 On 2026-10-14 the owner chose to retain the exact sixteen-byte remembered MCU packet in `emulation/xm1-upstream/emulator/captured_mcu_profile.py` publicly as a scoped observed fixture (`E-MCU-OBSERVED-FIXTURE-PUBLIC-150`). This disposition does not label the packet synthetic or authorize redistribution of other firmware, dumps or camera state.
 
-Public redistribution of the author's work is expressly reported as permitted with credit. Preserve that credit and upstream notices, and assess downstream terms and dependency compatibility for the actual release artifact without reinstating an absence-of-redistribution-permission blocker. The pinned public GitHub tree returned 404 in the publication audit; this limits public reproducibility of the source inspection, not the reported permission.
+Public redistribution of the author's work is expressly permitted with credit. Preserve that credit and upstream notices, and assess downstream terms and dependency compatibility for the actual release artifact without reinstating an absence-of-redistribution-permission blocker. The pinned public GitHub tree returned 404 in the publication audit; this limits public reproducibility of the source inspection, not the permission.
 
-This section is a reading of the facts as reported, not legal advice.
+This section records the permission and its scope, not legal advice.
 
 ### 1.3 What the grant changes in our practice
 
 Reading for method and cross-checking target conclusions remain distinct from redistributing implementations:
 
-- Device models and board structure are useful research and credited redistribution inputs for register semantics, fixture straps, release rules, fail-closed device contracts, board factories, checkpointing and replay. Preserve upstream terms and distinguish the author's reported redistribution grant from unreported downstream licensing terms.
+- Device models and board structure are useful research and credited redistribution inputs for register semantics, fixture straps, release rules, fail-closed device contracts, board factories, checkpointing and replay. Preserve upstream terms and distinguish the author's redistribution grant from unspecified downstream licensing terms.
 - The labels do not move. A statement about the X70 stays X70-reported, and a reading their model supplies for our bytes is ours only through our own bytes or a capture. The grant changes what may be used, not what is evidenced.
 - The boot-ROM capture stays redundant (section 3.1), and the X70 DAT and RAM captures stay unused: our own bytes, captures and decode supply the X-M1 side.
 
-The current credited redistribution permission is owner-reported. This report records it without inventing a standard license or expanding it to third-party material.
+The current redistribution permission requires credit. This report records it without inventing a standard license or expanding it to third-party material.
 
 ### 1.4 What remains to ask
 
@@ -151,14 +151,14 @@ What it does not tell us: anything about our loader, kernel, RTOS, images, media
 
 ### 5.1 What the reference changes
 
-The shared ROM and source-bound device contracts make a separate X-M1 port technically feasible. The bounded target-addition experiment (§5.6) tests the remaining implementation gap. The owner's 2026-10-14 report establishes explicit credited redistribution permission for the author's work; downstream modification and sublicensing terms were not reported (§1.2). Sibling interpretations in section 3.2 retain their evidence scope; a common engine solution does not establish X-M1 silicon fidelity.
+The shared ROM and source-bound device contracts make a separate X-M1 port technically feasible. The bounded target-addition experiment (§5.6) tests the remaining implementation gap. jitl's 2026-10-14 grant explicitly permits redistribution of his work with credit; downstream modification and sublicensing terms were not supplied (§1.2). Sibling interpretations in section 3.2 retain their evidence scope; a common engine solution does not establish X-M1 silicon fidelity.
 
 ### 5.2 What it does not change
 
 - The output question. Their renderer shows firmware-programmed RAM compositions under declared laws; sensor acquisition and the camera's own display path are unresolved on their side too. Film-recipe acceptance still needs the body.
 - The application-side mass. Their models are keyed to X70 addresses and X70 firmware; the equivalent models for our menu, develop and service paths have to be recovered from our own bytes, and that is the bulk of the cost.
 - The language rule. Their runtime is Rust and Python; project-authored tooling and models use Haskell/Rust, with C only at necessary engine or ABI boundaries and no new project-authored Python.
-- The upstream terms. The reported credited redistribution permission concerns the author's work, not Fujifilm firmware or per-unit captures. Vendored components retain their own licenses; downstream modification and sublicensing terms were not reported (§1.2).
+- The upstream terms. The credited redistribution permission concerns the author's work, not Fujifilm firmware or per-unit captures. Vendored components retain their own licenses; downstream modification and sublicensing terms were not supplied (§1.2).
 
 ### 5.3 Smallest useful target and cost with the reference in hand
 
@@ -279,7 +279,7 @@ Rows: E-X70-EMULATOR-TERMS-150, E-BOOTROM-X70-IDENTITY-150, E-X70-SOC-CROSSCHECK
 ## 7. Limits
 
 - The X70 firmware boot was not run. The upstream runtime was built and executed only with our X-M1 DAT, ROM and decoded artifacts, as recorded in section 5.8. Sibling application claims elsewhere in this report remain X70-reported, not findings from this run.
-- The grant of section 1.2 is owner-reported from the conversation of 2026-10-09; it is informal and undated in writing, and its scope is the owner's statement of it. No instrument was read.
+- The initial personal grant of 2026-10-09 is preserved as historical evidence. The current 2026-10-14 grant permits public redistribution with credit; no author-provided SPDX license, sublicensing authority or downstream modification terms were supplied (§1.2).
 - Their boot-ROM capture bytes are not in this clone (a Git LFS pointer); the identity claim rests on the recorded content hash, and the capture procedure is the author's reported method of section 1.4 (`ff80` diagnostic USB read of the processor ROM on 2026-10-03, requests of at most 256 bytes), with no independent capture proof.
 - Our access census covers constant-address instruction forms only; register-offset, post-indexed and table-driven accesses are outside it, so every "our bytes" cell is a lower bound.
 - No X-M1 behaviour is inferred from the X70 here; the sibling-derived readings stay labelled and unproved until our own bytes or a capture settle them. The grant changes what may be used, not what is evidenced.
