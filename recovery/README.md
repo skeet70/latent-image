@@ -2,7 +2,7 @@
 
 Build an X-M1 SD BOOT candidate directly from a **known-good firmware DAT**, prepare its card with two complete readback checks, and retain the unchanged DAT for the ordinary updater. All commands run on the Linux host; none operates the camera.
 
-**The general route is now exercised through persistent restoration in the host model, not demonstrated on a physical camera. This pattern _did_ recover an actually bricked camera, and was extrapolated into this more generic tool.** A firmware-derived 1.50 recovery card boots both CPUs with independently damaged installed applications, enters the ordinary updater, runs its real confirmation/write path and produces committed main media matching the unchanged restore DAT. A new process boots that media without the recovery card into shooting and working menus. Supplied 1.01, 1.20 and modified 1.50 inputs also generate source-bound cards; their complete restoration runs remain unverified.
+**The general route is now exercised through persistent restoration in the host model, not demonstrated on a physical camera. An earlier, narrower SD BOOT repair, the [recorder-v2-v5 rollback](#demonstrated-repair-recorder-v2-v5), recovered an actually bricked camera; this tool generalizes that approach.** A firmware-derived 1.50 recovery card boots both CPUs with independently damaged installed applications, enters the ordinary updater, runs its real confirmation/write path and produces committed main media matching the unchanged restore DAT. A new process boots that media without the recovery card into shooting and working menus. Supplied 1.01, 1.20 and modified 1.50 inputs also generate source-bound cards; their complete restoration runs remain unverified.
 
 ## Start here
 
