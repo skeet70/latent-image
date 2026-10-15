@@ -59,6 +59,7 @@ haskell_library(
         "//host:host-support",
         "//host:update-container",
     ],
+    visibility = ["//extensions:__pkg__"],
 )
 
 haskell_binary(

@@ -36,42 +36,26 @@ The [specification](spec/README.md) describes the intended system and acceptance
 
 Apply these at your own risk. Each has worked on at least one physical X-M1, but nothing guarantees it will not brick your camera. Start from the exact firmware version and checksum listed for the extension. If you don't know what your camera is running, the surest way to be certain is to install the listed stock firmware first with Fujifilm's [ordinary update procedure](https://www.fujifilm-x.com/global/support/download/firmware/cameras/x-m1/).
 
-| Extension | Patch set | Base firmware | Built `FWUP0002.DAT` SHA-256 | Known limits |
+| Extension | Extension manifest | Base firmware | Built `FWUP0002.DAT` SHA-256 | Known limits |
 | --- | --- | --- | --- | --- |
-| Unlock the PRO Neg. Std and PRO Neg. Hi film simulations that already exist in the stock firmware | [`rc0-patch-set.json`](recovery/rc0-patch-set.json) | Official X-M1 1.50 `FWUP0002.DAT`, SHA-256 `43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490` | `acb0fbbb9507421f48a6254920cafb5ce20e1fd6bf821bc80c912c1f99c29ca8` | Adds both modes to SHOOTING MENU > FILM SIMULATION. The Q menu's film-simulation cell still offers the stock five. [Patch report](reports/filmsim-patch-01.md) |
+| Unlock the PRO Neg. Std and PRO Neg. Hi film simulations that already exist in the stock firmware | [`extensions/rc0.json`](extensions/rc0.json) | Official X-M1 1.50 `FWUP0002.DAT`, SHA-256 `43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490` | `acb0fbbb9507421f48a6254920cafb5ce20e1fd6bf821bc80c912c1f99c29ca8` | Adds both modes to SHOOTING MENU > FILM SIMULATION. The Q menu's film-simulation cell still offers the stock five. [Patch report](reports/filmsim-patch-01.md) |
 
-A patch set lists the target addresses, the expected current values and the replacement values. It is not a firmware image: you build the patched firmware yourself from the official DAT you download.
+An extension manifest names the base firmware, the patch sets and other parts to apply, and the expected result. It is not a firmware image: you build the patched firmware yourself from the official DAT you download.
 
 ### Build the patched firmware
 
-1. Download the base firmware from [Fujifilm's X-M1 page](https://www.fujifilm-x.com/global/support/download/firmware/cameras/x-m1/) and the extension's patch set from the table. Put both under `private-data/` in your checkout.
-2. Set the three paths below, with `PATCH_SET` pointing at the patch set you downloaded, then build:
+Download the base firmware from [Fujifilm's X-M1 page](https://www.fujifilm-x.com/global/support/download/firmware/cameras/x-m1/) into `private-data/` in your checkout, then run the command with the row's extension manifest as the first argument:
 
 ```sh
-devenv shell
-STOCK=private-data/FWUP0002.DAT
-PATCH_SET=private-data/rc0-patch-set.json
-OUT=private-data/extension-build
-
-sha256sum "$STOCK"   # must equal the row's base firmware SHA-256
-bazel build //recovery:inspect-firmware //lz:fflzd //lz:lz-encode \
-  //host/firmware:apply-patch-set //host/firmware:rebuild-update
-bazel run //recovery:inspect-firmware -- extract "$STOCK" "$OUT"
-bazel-bin/lz/fflzd "$OUT/segment-4.bin" 0 "$OUT/stock-id4.bin"
-bazel-bin/host/firmware/apply-patch-set "$PATCH_SET" "$OUT/stock-id4.bin" "$OUT/patched-id4.bin"
-bazel-bin/lz/lz-encode 0x160000 "$OUT/patched-id4.bin" "$OUT/patched-record4.bin"
-bazel-bin/host/firmware/rebuild-update replace-record4 --decoder bazel-bin/lz/fflzd \
-  --load-address "$(jq -r .image.output_base "$PATCH_SET")" \
-  "$STOCK" "$OUT/patched-record4.bin" "$OUT/patched-id4.bin" "$OUT/FWUP0002.DAT"
-bazel-bin/host/firmware/rebuild-update verify "$OUT/FWUP0002.DAT"
-sha256sum "$OUT/FWUP0002.DAT"   # must equal the row's built SHA-256
+devenv shell -- bazel run //extensions:build-extension -- \
+  extensions/rc0.json private-data/FWUP0002.DAT private-data/rc0-build
 ```
 
-`$OUT` must not already exist. `apply-patch-set` refuses a decoded image that doesn't match the patch set's pinned base. Every command must succeed, and the final hash must match the table exactly. On any mismatch, stop and do not install. Firmware extraction and decoding are explained in [firmware triage](recovery/README.md#firmware-triage-for-other-failures), and the container rebuild in [the update-container contract](reports/update-container-rebuild.md).
+The output directory must be new. The tool works out which firmware parts the extension changes and runs the matching rebuild steps. It refuses the build if the stock DAT, any part or the result differs from the hashes in the manifest, or if the manifest needs a step it doesn't support. It writes `FWUP0002.DAT` into the output directory and prints `PASS` with its SHA-256 only when every check succeeds. On any failure it removes the output directory, and you should not install anything. [The extensions README](extensions/README.md) describes the manifest format and the steps.
 
 ### Install it
 
-1. Format a card in the camera, then copy `$OUT/FWUP0002.DAT` to the card's root as its only file, keeping that exact name.
+1. Format a card in the camera, then copy the built `FWUP0002.DAT` to the card's root as its only file, keeping that exact name.
 2. Use a fully charged battery, close the card and battery doors, and disconnect USB.
 3. Power on while holding DISP/BACK, then check the version screen. It should offer an update from 1.50 to 1.50. If the screen differs or refuses the update, power off. Nothing has been written yet.
 4. Select BODY and confirm each screen. The final confirmation starts the write. From then on, don't press anything, open a door or remove power until the camera reports completion and asks you to switch it off.

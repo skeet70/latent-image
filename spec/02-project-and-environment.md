@@ -21,6 +21,7 @@ This repository is the Latent Image research platform. Package READMEs own suppo
 | `af/`, `af-session/` | Controller simulation and session preparation/analysis; E | Haskell host orchestration and existing C decision prototype; no calibrated lens or target integration |
 | `payload/` | Target hook and integration requirements; B/E | Target-specific entry, ABI, lifetime and synchronization need evidence |
 | `recovery/` | Host firmware triage, scoped image generation and card preparation; C | [Public kit](../recovery/README.md); failed-boot incident and adjacent checks complete; [recovery status](../reports/recovery-status.md) records R3 demonstrated 2026-10-13 and R4 unclaimed |
+| `extensions/` | Firmware extension manifests and `//extensions:build-extension`; B | [Published extensions](../README.md#firmware-extensions); [manifest format](../extensions/README.md) |
 | `tests/` and package test targets | Focused format, protocol, emulator, and AF checks | Synthetic host suite implemented; [validation scope](../reports/validation.md); hardware opt-in |
 | `fixtures/` | Synthetic or redistributable fixture policy | Public synthetic cases under `emulation/fixtures/` and `af/fixtures/`; captured proprietary inputs remain private |
 | `reports/` | Firmware-version-bound findings, procedures and evidence scope | Static, emulated and camera-observed results with their limitations |

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "RC0",
+  "title": "Unlock PRO Neg. Std and PRO Neg. Hi",
+  "base": {
+    "model": "X-M1",
+    "firmware_version": "1.50",
+    "sha256": "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"
+  },
+  "steps": [
+    {
+      "kind": "image-patch-set",
+      "path": "../recovery/rc0-patch-set.json",
+      "sha256": "586bbb6fc6a9865e4419627e1251296fd5a5050e4072bc03811f7592c88a94e1"
+    }
+  ],
+  "output_sha256": "acb0fbbb9507421f48a6254920cafb5ce20e1fd6bf821bc80c912c1f99c29ca8"
+}

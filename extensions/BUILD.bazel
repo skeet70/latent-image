@@ -1,0 +1,36 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+
+haskell_binary(
+    name = "build-extension",
+    srcs = ["BuildExtension.hs"],
+    args = [
+        "$(location //lz:fflzd)",
+        "$(location //host/firmware:apply-patch-set)",
+        "$(location //lz:lz-encode)",
+        "$(location //host/firmware:rebuild-update)",
+    ],
+    data = [
+        "//host/firmware:apply-patch-set",
+        "//host/firmware:rebuild-update",
+        "//lz:fflzd",
+        "//lz:lz-encode",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:process",
+        "//host:update-container",
+        "//recovery:firmware-reader",
+    ],
+)
