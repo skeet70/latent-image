@@ -1,5 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary")
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_test")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -517,6 +517,23 @@ genrule(
     outs = ["af-recorder.bin", "af-recorder.elf"],
     cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location af-recorder.ld) $(location af-recorder.S) -o $(location af-recorder.elf) && llvm-objcopy -O binary $(location af-recorder.elf) $(location af-recorder.bin)",
     local = True,
+)
+
+haskell_library(
+    name = "boot-card",
+    srcs = ["BootCard.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
 )
 
 haskell_binary(

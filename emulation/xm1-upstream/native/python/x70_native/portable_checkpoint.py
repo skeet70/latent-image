@@ -48,7 +48,7 @@ FACTORY_METHODS = {"read_bytes": "read_memory", "write_bytes": "write_memory",
                    "schedule": "schedule", "record": "record", "raise_irq": "queue_irq"}
 VALUE_FIELDS = {"emulator.loader_devices.FujiLZStream": ("history", "pending"),
                 "emulator.panel_serial.PanelSerial": ("board", "words_received", "words", "_transport", "_selection", "_framing", "ENDPOINT"),
-                "emulator.sd_card.SparseCard": ("sectors", "max_dirty_sectors", "data")}
+                "emulator.sd_card.SparseCard": ("sectors", "max_dirty_sectors", "data", "base_image")}
 # Finite execution/reconstruction helpers used by the stock device family.
 # Pin their own globals/private functions as well as imported function bodies.
 # Diagnostic server and process-provenance timestamp modules are excluded.
@@ -189,9 +189,12 @@ def _validate_value(value):
             SparseCard(value.sectors, max_dirty_sectors=value.max_dirty_sectors)
         except ValueError as error:
             raise PortableCheckpointError("SparseCard capacity/bound differs") from error
+        if (type(value.base_image) is not bytes or len(value.base_image) > 128 << 20
+                or len(value.base_image) % 512 or len(value.base_image) > value.sectors * 512):
+            raise PortableCheckpointError("SparseCard immutable base extent differs")
         if (type(value.data) is not dict or len(value.data) > value.max_dirty_sectors
                 or any(type(sector) is not int or not 0 <= sector < value.sectors
-                       or type(block) is not bytes or len(block) != 512 or not any(block)
+                       or type(block) is not bytes or len(block) != 512 or block == value._base_sector(sector)
                        for sector, block in value.data.items())):
             raise PortableCheckpointError("SparseCard sector data differs")
     if _name(type(value)) in ("emulator.control_bus_contracts.ControlBusRegisters",

@@ -6,6 +6,7 @@ import Data.Bits (complement)
 import qualified Data.ByteString as B
 import Data.List (isPrefixOf)
 import qualified FujiAF.Host as H
+import qualified RamImage as R
 import System.Directory (canonicalizePath, createDirectory, getCurrentDirectory, removeDirectoryRecursive)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitFailure)
@@ -13,9 +14,9 @@ import System.FilePath ((</>), addTrailingPathSeparator, isAbsolute, takeDirecto
 import System.IO (hPutStrLn, stderr)
 import System.Process (callProcess)
 
-data Tools = Tools FilePath FilePath FilePath FilePath FilePath FilePath FilePath FilePath
+data Tools = Tools FilePath FilePath FilePath FilePath FilePath FilePath FilePath FilePath R.NativeBootstrapFile
 
-data RecoveryProfile = RecorderV2V5
+data RecoveryProfile = RamBoot | Restore | RecorderV2V5
 
 resolve :: FilePath -> IO FilePath
 resolve path = do
@@ -23,7 +24,11 @@ resolve path = do
   pure (if isAbsolute path then path else root </> path)
 
 build :: RecoveryProfile -> Tools -> FilePath -> FilePath -> IO ()
-build RecorderV2V5 (Tools decoder applier encoder rebuild repair stage entry manifest) givenStock givenOutput = do
+build RamBoot (Tools decoder _ _ _ _ _ _ _ bootstrap) firmware output =
+  R.buildRamImage R.BootOnly (R.DecoderExecutable decoder) bootstrap firmware output
+build Restore (Tools decoder _ _ _ _ _ _ _ bootstrap) firmware output =
+  R.buildRamImage R.NativeUpdater (R.DecoderExecutable decoder) bootstrap firmware output
+build RecorderV2V5 (Tools decoder applier encoder rebuild repair stage entry manifest _) givenStock givenOutput = do
   stockPath <- resolve givenStock >>= canonicalizePath
   stock <- H.readRegular (64*1024*1024) stockPath
   digest <- H.sha256 stock
@@ -63,16 +68,30 @@ main = do
   result <- try $ do
     args <- getArgs
     case args of
-      decoder:applier:encoder:rebuild:repair:stage:entry:manifest:rest ->
+      decoder:applier:encoder:rebuild:repair:stage:entry:manifest:ramBootstrap:rest ->
         case rest of
-          ["--help"] -> putStrLn "Usage: bazel run //recovery:build-image -- recorder-v2-v5 OFFICIAL_XM1_150_DAT NEW_PRIVATE_OUTPUT_DIRECTORY\nProfile recorder-v2-v5 reproduces the demonstrated repair of this project's exact 1.50 recorder revision-2 failure. It does not repair arbitrary firmware failures. No card or camera I/O."
-          ["recorder-v2-v5", stock, output] -> do
+          ["--help"] -> putStrLn $ unlines
+            [ "Usage: bazel run //recovery:build-image -- restore KNOWN_GOOD_XM1_DAT NEW_PRIVATE_OUTPUT_DIRECTORY"
+            , "       bazel run //recovery:build-image -- ram-boot KNOWN_GOOD_XM1_DAT NEW_PRIVATE_OUTPUT_DIRECTORY"
+            , "       bazel run //recovery:build-image -- recorder-v2-v5 OFFICIAL_XM1_150_DAT NEW_PRIVATE_OUTPUT_DIRECTORY"
+            , "restore derives a FAT32 RAM card requesting the ordinary updater, with unchanged DAT and visible confirmation."
+            , "ram-boot is a diagnostic FAT16 RAM card without an updater request."
+            , "Both are candidates, not accepted physical recovery. See recovery/README.md for persistence steps and limits."
+            , "recorder-v2-v5 reproduces the historical exact recorder revision-2 repair. No card or camera I/O."
+            ]
+          [profileName, firmware, output] -> do
+            profile <- case profileName of
+              "ram-boot" -> pure RamBoot
+              "restore" -> pure Restore
+              "recorder-v2-v5" -> pure RecorderV2V5
+              _ -> H.failH "Supported image modes: restore, ram-boot, recorder-v2-v5"
             tools <- Tools <$> canonicalizePath decoder <*> canonicalizePath applier
               <*> canonicalizePath encoder <*> canonicalizePath rebuild
               <*> canonicalizePath repair <*> canonicalizePath stage
               <*> canonicalizePath entry <*> canonicalizePath manifest
-            build RecorderV2V5 tools stock output
-          _ -> H.failH "Supported command: build-image recorder-v2-v5 OFFICIAL_XM1_150_DAT NEW_PRIVATE_OUTPUT_DIRECTORY. No general stock restore or other repair profile is implemented."
+              <*> (R.NativeBootstrapFile <$> canonicalizePath ramBootstrap)
+            build profile tools firmware output
+          _ -> H.failH "Usage: build-image restore|ram-boot KNOWN_GOOD_XM1_DAT NEW_PRIVATE_OUTPUT_DIRECTORY | recorder-v2-v5 OFFICIAL_XM1_150_DAT NEW_PRIVATE_OUTPUT_DIRECTORY"
       _ -> H.failH "Run through //recovery:build-image to supply the Bazel-built tools"
   case result :: Either SomeException () of
     Left failure -> hPutStrLn stderr (displayException failure) >> exitFailure

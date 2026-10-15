@@ -18,9 +18,6 @@ data RecoveryImage = RecoveryImage FilePath ImageBytes Sha256
 
 data DeviceKind = WholeDisk | Partition
 
-v5Digest :: Sha256
-v5Digest = Sha256 "15d0cc28fc76d7d78ecf59a455284761333cd0e345929d3f88393fe991f5f343"
-
 parseDigest :: String -> IO Sha256
 parseDigest given = do
   let value = map toLower given
@@ -113,9 +110,6 @@ resolveImage given digest = do
   status <- getFileStatus path
   let bytes = toInteger (fileSize status)
   ensure (isRegularFile status && bytes > 0 && bytes `mod` 512 == 0) "Expected a nonempty, sector-aligned regular SD BOOT image"
-  let Sha256 expected = digest
-      Sha256 known = v5Digest
-  ensure (expected /= known || bytes == 17826304) "Unexpected demonstrated-v5 image size"
   pure (RecoveryImage path (ImageBytes bytes) digest)
 
 readback :: RecoveryImage -> Card -> IO ()
@@ -132,8 +126,8 @@ prepare = do
   confirmation <- prompt ("ERASE the whole disk. Type " ++ disk ++ " to confirm: ")
   ensure (confirmation == disk) "Cancelled"
   given <- prompt "Recovery SD BOOT image location: "
-  expected <- prompt "Expected SHA-256 from the image build/review (Enter for demonstrated recorder-v2 v5): "
-  digest <- if null expected then pure v5Digest else parseDigest expected
+  expected <- prompt "Expected SHA-256 from the image build/review: "
+  digest <- parseDigest expected
   image@(RecoveryImage _ imageSize (Sha256 hash)) <- resolveImage given digest
   putStrLn ("Expected image SHA-256: " ++ hash)
   putStrLn "A matching hash verifies image identity, not compatibility or safety. Use only an image reviewed for your exact failure and firmware."
@@ -159,17 +153,13 @@ main = do
     args <- getArgs
     case args of
       [] -> prepare
-      ["--verify-image", path] -> do
-        image <- resolveImage path v5Digest
-        checkImage image
-        putStrLn "PASS: exact demonstrated v5 image"
       ["--verify-image", path, "--sha256", expected] -> do
         digest <- parseDigest expected
         image <- resolveImage path digest
         checkImage image
         putStrLn "PASS: image matches the supplied SHA-256"
-      ["--help"] -> putStrLn "Usage: prepare-card [--help | --verify-image IMAGE [--sha256 HASH]]\nInteractive, destructive spare-SD preparation with full readback and physical-reinsertion readback. Prompts for a mount point/device, erase confirmation, image and expected SHA-256. Empty SHA-256 selects the demonstrated recorder-v2 v5 image. A supplied hash does not establish camera compatibility. No camera I/O."
-      _ -> ioError (userError "Usage: prepare-card [--help | --verify-image IMAGE [--sha256 HASH]]")
+      ["--help"] -> putStrLn "Usage: prepare-card [--help | --verify-image IMAGE --sha256 HASH]\nInteractive, destructive spare-SD preparation with full readback and physical-reinsertion readback. Prompts for a mount point/device, erase confirmation, image and required expected SHA-256. A supplied hash does not establish camera compatibility. No camera I/O."
+      _ -> ioError (userError "Usage: prepare-card [--help | --verify-image IMAGE --sha256 HASH]")
   case result :: Either SomeException () of
     Left failure -> hPutStrLn stderr (displayException failure) >> exitFailure
     Right () -> pure ()

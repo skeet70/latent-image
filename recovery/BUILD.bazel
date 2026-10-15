@@ -1,4 +1,5 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 
 haskell_binary(
     name = "prepare-card",
@@ -19,9 +20,55 @@ haskell_binary(
     ],
 )
 
+genrule(
+    name = "ram-rescue-bootstrap",
+    srcs = [
+        "ram-rescue-bootstrap.S",
+        "ram-rescue-bootstrap.ld",
+    ],
+    outs = [
+        "ram-rescue-bootstrap.bin",
+        "ram-rescue-bootstrap.elf",
+    ],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location ram-rescue-bootstrap.ld) $(location ram-rescue-bootstrap.S) -o $(location ram-rescue-bootstrap.elf) && llvm-objcopy -O binary $(location ram-rescue-bootstrap.elf) $(location ram-rescue-bootstrap.bin)",
+    local = True,
+)
+
+genrule(
+    name = "ram-rescue-bootstrap-pin",
+    srcs = [":ram-rescue-bootstrap.bin"],
+    outs = ["RamBootstrapPin.hs"],
+    cmd = "digest=$$(sha256sum $(location :ram-rescue-bootstrap.bin)); digest=$${digest%% *}; printf 'module RamBootstrapPin (BootstrapDigest (..), expectedBootstrapDigest) where\\nnewtype BootstrapDigest = BootstrapDigest String\\nexpectedBootstrapDigest :: BootstrapDigest\\nexpectedBootstrapDigest = BootstrapDigest \"%s\"\\n' \"$$digest\" > $@",
+)
+
+haskell_library(
+    name = "firmware-reader",
+    srcs = ["RecoveryFirmware.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
 haskell_binary(
     name = "build-image",
-    srcs = ["BuildImage.hs"],
+    srcs = [
+        "BuildImage.hs",
+        "RamImage.hs",
+        "UpdaterRoute.hs",
+        ":ram-rescue-bootstrap-pin",
+    ],
     args = [
         "$(location //lz:fflzd)",
         "$(location //host/firmware:apply-patch-set)",
@@ -31,9 +78,11 @@ haskell_binary(
         "$(location //host/firmware:physical-block14-recovery.bin)",
         "$(location //host/firmware:physical-repair-bootstrap.bin)",
         "$(location :rc0-patch-set.json)",
+        "$(location :ram-rescue-bootstrap.bin)",
     ],
     data = [
         "rc0-patch-set.json",
+        ":ram-rescue-bootstrap.bin",
         "//host/firmware:apply-patch-set",
         "//host/firmware:build-persistent-repair-card",
         "//host/firmware:physical-block14-recovery.bin",
@@ -49,13 +98,17 @@ haskell_binary(
         "-XGHC2021",
         "-threaded",
     ],
+    main_file = "BuildImage.hs",
     deps = [
+        ":firmware-reader",
         "//host:base",
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
         "//host:host-support",
         "//host:process",
+        "//host:update-container",
+        "//host/firmware:boot-card",
     ],
 )
 
@@ -70,11 +123,53 @@ haskell_binary(
         "-threaded",
     ],
     deps = [
+        ":firmware-reader",
         "//host:base",
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
         "//host:host-support",
         "//host:update-container",
+    ],
+)
+
+cc_binary(
+    name = "ram-rescue-engine",
+    srcs = ["ram-rescue-engine.c"],
+    copts = [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-O2",
+    ],
+    deps = ["@lab_unicorn//:unicorn"],
+)
+
+haskell_test(
+    name = "ram-rescue-tests",
+    srcs = ["RamRescueTests.hs"],
+    args = [
+        "$(location :ram-rescue-engine)",
+        "$(location :ram-rescue-bootstrap.bin)",
+    ],
+    data = [
+        ":ram-rescue-bootstrap.bin",
+        ":ram-rescue-engine",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:process",
     ],
 )

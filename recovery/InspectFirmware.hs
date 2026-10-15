@@ -9,80 +9,16 @@ import Data.List (intercalate, isPrefixOf)
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
 import Numeric (showHex)
-import System.Directory (canonicalizePath, createDirectory, getCurrentDirectory)
-import System.Environment (getArgs, lookupEnv)
+import System.Directory (canonicalizePath, createDirectory)
+import System.Environment (getArgs)
 import System.Exit (exitFailure)
-import System.FilePath ((</>), addTrailingPathSeparator, isAbsolute, takeDirectory, takeFileName)
+import System.FilePath ((</>), addTrailingPathSeparator, takeDirectory, takeFileName)
 import System.IO (hPutStrLn, stderr)
-import Data.Word (Word32)
-
-newtype FileOffset = FileOffset Int
-newtype ByteCount = ByteCount Int
-newtype LogicalBlock = LogicalBlock Int
-newtype FirmwareDigest = FirmwareDigest String
-newtype IdentityDigest = IdentityDigest String deriving (Eq)
-
-data FirmwareVersion = FirmwareVersion Word32 Word32
-
-data SegmentKind = PrimaryKernel | CompanionKernel | Resource2 | Resource3 | Application4 | Application5 | PlainImage | ReservedImage
-  deriving (Enum, Show)
-
-data Segment = Segment SegmentKind U.SegmentEntry
-
-data Firmware = Firmware
-  { firmwarePath :: FilePath
-  , firmwareDigest :: FirmwareDigest
-  , firmwareVersion :: FirmwareVersion
-  , firmwareIdentity :: IdentityDigest
-  , firmwareMain :: B.ByteString
-  , firmwareAux1 :: B.ByteString
-  , firmwareAux2 :: B.ByteString
-  , firmwareSegments :: [Segment]
-  }
+import RecoveryFirmware
 
 hex :: Integral a => a -> String
 hex value = "0x" ++ showHex (toInteger value) ""
 
-slice :: B.ByteString -> FileOffset -> ByteCount -> IO B.ByteString
-slice bytes (FileOffset offset) (ByteCount count) = do
-  H.ensure (offset >= 0 && count >= 0 && offset <= B.length bytes && count <= B.length bytes-offset) "Declared range extends outside the file"
-  pure (B.take count (B.drop offset bytes))
-
-resolve :: FilePath -> IO FilePath
-resolve path = do
-  root <- lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= maybe getCurrentDirectory pure
-  pure (if isAbsolute path then path else root </> path)
-
-readFirmware :: FilePath -> IO Firmware
-readFirmware given = do
-  path <- resolve given
-  bytes <- H.readRegular (64*1024*1024) path
-  H.ensure (B.length bytes >= U.stagingLength) "Truncated DAT header"
-  H.ensure (U.word32At bytes 0 == 4) "Unsupported DAT container type"
-  H.ensure (U.word32At bytes 0x23c == 0) "Unsupported nonzero main-range origin"
-  let word = U.word32At bytes
-      range at = slice bytes (FileOffset (U.stagingLength + fromIntegral (word at))) (ByteCount (fromIntegral (word (at+4))))
-  mainBytes <- range 0x23c
-  aux1 <- range 0x244
-  aux2 <- range 0x250
-  H.ensure (not (B.null mainBytes) && U.mainChecksum mainBytes == word 0x20c) "Main checksum mismatch"
-  H.ensure (U.auxChecksum aux1 == word 0x24c) "Auxiliary-1 checksum mismatch"
-  H.ensure (U.auxChecksum aux2 == word 0x258) "Auxiliary-2 checksum mismatch"
-  H.ensure (B.length aux1 `mod` 4 == 0 && B.length aux2 `mod` 8 == 0) "Invalid restore-list alignment"
-  _ <- slice mainBytes (FileOffset U.segmentTableOffset) (ByteCount (U.segmentCount*U.segmentEntryBytes+4))
-  H.ensure (U.mediaWordAt mainBytes (U.segmentTableOffset+U.segmentCount*U.segmentEntryBytes) == 0xffffffff) "Unsupported segment-table terminator"
-  segments <- forM [PrimaryKernel .. ReservedImage] $ \kind -> do
-    let index = fromEnum kind
-        offset = U.segmentTableOffset + index*U.segmentEntryBytes
-        field at = U.mediaWordAt mainBytes (offset+at*4)
-        entry = U.SegmentEntry (field 0) (field 1) (field 2) (field 3) (field 4) (field 5) (field 6) (field 7) (field 8)
-    H.ensure (U.segId entry == fromIntegral index) "Unsupported segment numbering"
-    _ <- slice mainBytes (FileOffset (fromIntegral (U.segFlash entry))) (ByteCount (fromIntegral (U.segFlashLen entry)))
-    pure (Segment kind entry)
-  identity <- slice bytes (FileOffset 4) (ByteCount U.identityBytes)
-  digest <- FirmwareDigest <$> H.sha256 bytes
-  identityDigest <- IdentityDigest <$> H.sha256 identity
-  pure (Firmware path digest (FirmwareVersion (word 0x204) (word 0x208)) identityDigest mainBytes aux1 aux2 segments)
 
 printFirmware :: Firmware -> IO ()
 printFirmware firmware = do
@@ -94,9 +30,13 @@ printFirmware firmware = do
   putStrLn ("Version words: " ++ hex major ++ "/" ++ hex minor)
   putStrLn ("Identity-record SHA-256: " ++ identity)
   putStrLn "PASS: main and auxiliary checksums verified; bounded eight-entry segment table"
-  putStrLn "Segment | Load | Size | BSS | BSS size | Logical flash offset | Flash length"
+  putStrLn "Segment | Load word | Size word | BSS word | BSS size word | Logical flash offset | Flash length"
   forM_ (firmwareSegments firmware) $ \(Segment kind entry) ->
     putStrLn (intercalate " | " [show kind, hex (U.segLoad entry), hex (U.segSize entry), hex (U.segBss entry), hex (U.segBssLen entry), hex (U.segFlash entry), hex (U.segFlashLen entry)])
+  let RamAddress destination = firmwarePlainDestination firmware
+      FileOffset destinationOffset = firmwarePlainDestinationOffset firmware
+  putStrLn ("Plain-image destination word at media " ++ hex destinationOffset ++ ": " ++ hex destination)
+  putStrLn "The segment-6 load/BSS words are not the plain-image loader destination. All addresses above are file-declared fields, not runtime observations."
   putStrLn "This validates an X-M1-style DAT layout, not model/vendor authenticity, physical NAND mapping, installed-byte identity or a recovery image."
 
 extractFirmware :: Firmware -> FilePath -> IO ()

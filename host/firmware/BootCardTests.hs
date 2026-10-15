@@ -80,6 +80,17 @@ main = do
   persistentRecovery <- checked (stagedRepairCard cfg payload stagedBody repairBlock)
   persistentVolume <- checked (mountRom persistentRecovery)
   persistentRaw <- checked (readRawRom persistentRecovery)
+  let firmwareBootstrap = chainPayload 4096
+      firmwareBody = stagedBody <> repairBlock
+      firmwareRestore = restore <> "unchanged DAT tail"
+  firmwareRecovery <- checked (firmwareRecoveryCardFat32 cfg firmwareBootstrap firmwareBody firmwareRestore)
+  firmwareVolume <- checked (mountRom firmwareRecovery)
+  firmwareRaw <- checked (readRawRom firmwareRecovery)
+  CardSector firmwareBodyLba <- checked (firmwareRecoveryBodyLbaFat32 firmwareBootstrap)
+  let firmwareRootOffset = dataStart firmwareVolume*512
+      firmwareFatOffset = firstFat firmwareVolume*512
+      firmwareBodyCluster = firmwareBodyLba-dataStart firmwareVolume+2
+      verifyFirmware = verifyFirmwareRecoveryCard cfg firmwareBootstrap firmwareBody firmwareRestore
   extentCases <- mapM (\size -> do
     let staged = chainPayload size
     image <- checked (bootCard cfg staged)
@@ -145,6 +156,58 @@ main = do
         , ("FAT32 recovery carries the mode-1 payload", readRomFile recovery32 recovery32Volume BootPayload == Right payload)
         , ("FAT32 recovery raw route carries only the guarded payload", fmap mode2PayloadBytes (readRawRom recovery32) == Right payload)
         , ("FAT32 recovery report sectors start empty", all (B.all (== 0)) recovery32Reports)
+        , ("firmware carrier exposes all four files byte-for-byte",
+            mapM (readRomFile firmwareRecovery firmwareVolume) [SystemConfig,BootPayload,RecoveryStage,RestoreContainer] ==
+              Right [config,firmwareBootstrap,firmwareBody,firmwareRestore])
+        , ("firmware carrier has real FAT32 data capacity and root cluster two",
+            fatKind firmwareVolume == Fat32 && clusterSectors firmwareVolume == 1 &&
+              rootLocation firmwareVolume == 2 && clusterLimit firmwareVolume-2 > 65525)
+        , ("firmware carrier occupies its bounded partition and report sectors",
+            B.length firmwareRecovery == (recoveryReportBaseLba+recoveryReportSectorCount)*512 &&
+              B.length firmwareRecovery <= 128*1024*1024)
+        , ("firmware raw bootstrap transport stages exactly eight sectors",
+            mode2PayloadBytes firmwareRaw == firmwareBootstrap &&
+              word32At (mode2ConfigBytes firmwareRaw) 0x18 == 8 &&
+              rawConfigDifferences cfg firmwareRaw ==
+                [ ConfigDifference (ConfigWordOffset 0x18) 2 8
+                , ConfigDifference (ConfigWordOffset 0x1c0) 0 0x00040000
+                , ConfigDifference (ConfigWordOffset 0x1c4) 0 0x08000000
+                , ConfigDifference (ConfigWordOffset 0x1fc) 0x01000101 0xaa550101
+                ])
+        , ("firmware metadata addresses the complete contiguous raw body",
+            B.take (B.length firmwareBody) (B.drop (firmwareBodyLba*512) firmwareRecovery) == firmwareBody)
+        , ("firmware verifier rejects raw bootstrap changes",
+            isLeft (verifyFirmware (change firmwareRecovery 1024 "x")))
+        , ("firmware verifier rejects body transport changes",
+            isLeft (verifyFirmware (change firmwareRecovery (firmwareBodyLba*512) "x")))
+        , ("firmware verifier rejects DAT changes",
+            isLeft (verifyFirmware (change firmwareRecovery ((firmwareBodyLba*512)+B.length firmwareBody) "x")))
+        , ("firmware verifier rejects missing report capacity",
+            isLeft (verifyFirmware (B.take (B.length firmwareRecovery-512) firmwareRecovery)))
+        , ("firmware verifier rejects excess card capacity",
+            isLeft (verifyFirmware (firmwareRecovery <> B.replicate 512 0)))
+        , ("firmware verifier rejects noncontiguous body chains",
+            isLeft (verifyFirmware (change firmwareRecovery (firmwareFatOffset+firmwareBodyCluster*4) (word 4 (firmwareBodyCluster+2)))))
+        , ("firmware ROM reader rejects cyclic root chains",
+            isLeft (readRomFile (change firmwareRecovery (firmwareFatOffset+8) (word 4 2)) firmwareVolume BootPayload))
+        , ("firmware ROM reader rejects roots beyond the data region",
+            isLeft (readRomFile (change firmwareRecovery (firmwareFatOffset+8) (word 4 (clusterLimit firmwareVolume))) firmwareVolume BootPayload))
+        , ("firmware ROM reader rejects file clusters beyond the data region",
+            isLeft (readRomFile (change (change firmwareRecovery (firmwareRootOffset+3*32+26)
+              (word 2 (clusterLimit firmwareVolume))) (firmwareRootOffset+3*32+20)
+              (word 2 (clusterLimit firmwareVolume `shiftR` 16))) firmwareVolume RecoveryStage))
+        , ("firmware ROM mount rejects out-of-bounds FAT32 root",
+            isLeft (mountRom (change firmwareRecovery (2048*512+44) (word 4 (clusterLimit firmwareVolume)))))
+        , ("firmware carrier refuses wrong bootstrap lengths",
+            isLeft (firmwareRecoveryCardFat32 cfg payload firmwareBody firmwareRestore) &&
+              isLeft (firmwareRecoveryBodyLbaFat32 payload))
+        , ("firmware carrier refuses empty and unaligned bodies",
+            isLeft (firmwareRecoveryCardFat32 cfg firmwareBootstrap B.empty firmwareRestore) &&
+              isLeft (firmwareRecoveryCardFat32 cfg firmwareBootstrap (firmwareBody <> "x") firmwareRestore))
+        , ("firmware carrier refuses empty restore containers",
+            isLeft (firmwareRecoveryCardFat32 cfg firmwareBootstrap firmwareBody B.empty))
+        , ("firmware carrier refuses files beyond actual data capacity",
+            isLeft (firmwareRecoveryCardFat32 cfg firmwareBootstrap firmwareBody (B.replicate (64*1024*1024) 0)))
         , ("staged FAT route exposes the one-sector entry", readRomFile stagedRecovery stagedVolume BootPayload == Right payload)
         , ("staged FAT route exposes the complete recovery body", readRomFile stagedRecovery stagedVolume RecoveryStage == Right stagedBody)
         , ("staged raw ROM load stops after the one-sector entry", mode2PayloadBytes stagedRaw == payload)

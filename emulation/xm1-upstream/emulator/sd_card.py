@@ -18,7 +18,7 @@ PROFILES = (BLANK_SDHC_PROFILE,)
 
 
 class SparseCard:
-    """512-byte sectors; absent entries read as zeros without a large image."""
+    """512-byte sectors with immutable image backing and bounded write overlays."""
     def __init__(self, sectors=0x800000, *, max_dirty_sectors=65536):
         if (type(sectors) is not int or not 0x400000 <= sectors <= 0x4000000
                 or sectors % 1024 or type(max_dirty_sectors) is not int
@@ -27,6 +27,7 @@ class SparseCard:
         self.sectors = sectors
         self.max_dirty_sectors = max_dirty_sectors
         self.data = {}
+        self.base_image = b''
 
     def _range(self, first, count):
         if (type(first) is not int or type(count) is not int or first < 0
@@ -35,7 +36,18 @@ class SparseCard:
 
     def read(self, first, count):
         self._range(first, count)
-        return b''.join(self.data.get(sector, bytes(512)) for sector in range(first, first + count))
+        return self._sector_bytes(first, count)
+
+    def _sector_bytes(self, first, count):
+        self._range(first, count)
+        chunks = []
+        for sector in range(first, first + count):
+            offset = sector * 512
+            block = self.data.get(sector)
+            if block is None:
+                block = self.base_image[offset:offset + 512] if offset < len(self.base_image) else bytes(512)
+            chunks.append(block)
+        return b''.join(chunks)
 
     def _updates(self, first, payload):
         """Preflight a sector update without partially changing sparse media."""
@@ -46,7 +58,7 @@ class SparseCard:
         updates = {first + index: payload[index * 512:(index + 1) * 512]
                    for index in range(count)}
         retained = set(self.data) - set(updates)
-        if len(retained) + sum(bool(any(block)) for block in updates.values()) > self.max_dirty_sectors:
+        if len(retained) + sum(block != self._base_sector(sector) for sector, block in updates.items()) > self.max_dirty_sectors:
             raise UnsupportedDevice('SD sparse dirty-sector bound exceeded')
         return updates
 
@@ -54,43 +66,87 @@ class SparseCard:
         """Apply whole sectors atomically, including a bounded guest SDMA chunk."""
         updates = self._updates(first, payload)
         for sector, block in updates.items():
-            if any(block):
+            if block != self._base_sector(sector):
                 self.data[sector] = block
             else:
                 self.data.pop(sector, None)
 
+    def _base_sector(self, sector):
+        offset = sector * 512
+        return self.base_image[offset:offset + 512] if offset < len(self.base_image) else bytes(512)
 
-def load_raw_image(card, path):
-    """Copy a raw card image's nonzero sectors into a SparseCard (host fixture).
+    def retained_copy(self):
+        retained = SparseCard(self.sectors, max_dirty_sectors=self.max_dirty_sectors)
+        retained.base_image = self.base_image
+        retained.data = dict(self.data)
+        return retained
 
-    For declared test media such as a FAT32 card with photos, built by a host
-    formatter. Returns provenance for the run record; zero sectors stay sparse.
-    """
+
+def load_raw_image(card, path, *, immutable_backing=False):
+    """Load a regular whole-sector image atomically; complete backing is capped at128MiB."""
     import hashlib
-    digest = hashlib.sha256()
-    loaded = 0
-    with open(path, 'rb') as image:
-        first = 0
-        while True:
-            chunk = image.read(512 * 2048)
-            if not chunk:
-                break
-            digest.update(chunk)
-            if len(chunk) % 512:
-                raise ValueError('Card image must contain whole 512-byte sectors')
-            # Empty FAT32 fixtures are almost entirely zero. Compare in C
-            # before allocating millions of Python sector slices; every byte
-            # still contributes to the logical image digest above.
-            if chunk != bytes(len(chunk)):
-                for index in range(len(chunk) // 512):
-                    block = chunk[index * 512:(index + 1) * 512]
-                    if block != bytes(512):
-                        card.write(first + index, block)
-                        loaded += 1
-            first += len(chunk) // 512
-    if first > card.sectors:
-        raise ValueError('Card image is larger than the declared card capacity')
-    return {'path': str(path), 'sha256': digest.hexdigest(), 'sectors': first, 'nonzero_sectors': loaded}
+    import os
+    import stat
+    if type(immutable_backing) is not bool:
+        raise ValueError('SD image backing selection must be a boolean')
+    if immutable_backing and (card.data or card.base_image):
+        raise ValueError('Complete SD backing requires pristine media')
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'rb') as image:
+        before = os.fstat(image.fileno())
+        maximum = min(card.sectors * 512, 128 << 20) if immutable_backing else card.sectors * 512
+        if (not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= maximum
+                or before.st_size % 512):
+            raise ValueError('SD image requires a bounded regular whole-sector file')
+        digest = hashlib.sha256()
+        if immutable_backing:
+            payload = image.read(before.st_size + 1)
+            consumed = len(payload)
+            digest.update(payload)
+        else:
+            staged = card.retained_copy()
+            first = loaded = consumed = 0
+            while consumed < before.st_size:
+                chunk = image.read(min(512 * 2048, before.st_size - consumed))
+                if not chunk or len(chunk) % 512:
+                    raise ValueError('SD image was truncated during import')
+                digest.update(chunk)
+                if chunk != bytes(len(chunk)):
+                    for index in range(len(chunk) // 512):
+                        block = chunk[index * 512:(index + 1) * 512]
+                        if block != bytes(512):
+                            staged.write(first + index, block)
+                            loaded += 1
+                first += len(chunk) // 512
+                consumed += len(chunk)
+        extra = image.read(1)
+        after = os.fstat(image.fileno())
+    if (consumed != before.st_size or extra
+            or (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+            != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+        raise ValueError('SD image changed during import')
+    if immutable_backing:
+        card.base_image = payload
+        return {'path': str(path), 'sha256': digest.hexdigest(),
+                'sectors': before.st_size // 512,
+                'backing': 'immutable-complete-image-with-bounded-write-overlays'}
+    card.data = staged.data
+    return {'path': str(path), 'sha256': digest.hexdigest(),
+            'sectors': first, 'nonzero_sectors': loaded}
+
+
+def save_raw_image(card, path):
+    """Export logical image bytes, including zero-valued writes over the base."""
+    extent = max(len(card.base_image), (max(card.data) + 1) * 512 if card.data else 0)
+    if not 0 < extent <= 128 << 20:
+        raise ValueError('SD export requires a nonempty logical image up to128MiB')
+    with open(path, 'xb') as image:
+        image.write(card.base_image)
+        image.truncate(extent)
+        for sector, block in sorted(card.data.items()):
+            image.seek(sector * 512)
+            image.write(block)
+    return {'path': str(path), 'sectors': extent // 512}
 
 
 class SDCardController:
@@ -334,8 +390,7 @@ class SDCardController:
         plan = self._plan(word, argument)
         data = plan['payload'] is not None
         expected_status = 2 if data else 1
-        # A command without data may run with its completion masked: X-M1 1.50
-        # sends CMD12 with 0x34/0x38=0xee02 and polls present-state inhibit.
+        # R1b commands can mask command-complete and await busy completion.
         if ((data and not self.regs[0x34] & self.regs[0x38] & expected_status)
                 or self.regs[0x30] or self.regs[0x32]):
             raise UnsupportedDevice('SD command requires cleared status and enabled completion signal')
@@ -436,6 +491,8 @@ class SDCardController:
                     self.board.write_memory(self._physical(address, len(data)), data)
                 request['cursor'] = end
                 self.regs[0] = request['dma_start'] + end
+                if request['command'] in (18, 25):
+                    self.regs[6] = ((quantity - end + 511) // 512) & 0xffff
             response = request['response']
             self.response = response if isinstance(response, bytes) else response.to_bytes(4, 'little') + bytes(12)
             if end < quantity:
@@ -444,12 +501,15 @@ class SDCardController:
                 self.dma_boundaries += 1
                 self._irq(request)
                 return
-            self._finish(request, 3 if quantity else 1)
+            busy_response = request['word'] >> 16 & 3 == 3
+            self._finish(request, 3 if quantity or busy_response else 1)
         self.board.schedule(self.transfer_ticks, complete)
 
     def _finish(self, request, status):
         self.state, self.application_pending = request['next_state'], request['next_app']
         self.block_length, self.bus_width = request['block_length'], request['bus_width']
+        if request['command'] in (18, 25):
+            self.regs[6] = 0
         self.regs[0x30] |= status
         self.request = None
         self.completed += 1
@@ -483,6 +543,7 @@ class SDCardController:
             self._check_request(request)
             self.card.write(request['argument'] + request['cursor'] // 512, pio['buffer'])
             request['cursor'] += 512
+            self.regs[6] = ((request['quantity'] - request['cursor']) // 512) & 0xffff
             pio['buffer'] = b''
             if request['cursor'] == request['quantity']:
                 self._finish(request, 2)
@@ -512,6 +573,7 @@ class SDCardController:
                 if self.request is not request or request['generation'] != self.generation:
                     return
                 self._check_request(request)
+                self.regs[6] = ((request['quantity'] - request['cursor']) // 512) & 0xffff
                 if request['cursor'] == request['quantity']:
                     self._finish(request, 2)
                 else:
@@ -591,6 +653,7 @@ class SDCardController:
     def snapshot(self):
         return {'name': 'SDCardController', 'profile': self.profile, 'present': self._present(),
                 'state': self.state, 'sectors': self.card.sectors, 'dirty_sectors': len(self.card.data),
+                'immutable_base_bytes': len(self.card.base_image),
                 'block_length': self.block_length, 'bus_width': self.bus_width,
                 'started': self.started, 'completed': self.completed, 'irqs': self.irqs,
                 'dma_boundaries': self.dma_boundaries, 'pending': self.request is not None,

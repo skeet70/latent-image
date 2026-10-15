@@ -7,6 +7,8 @@ module BootCard
   , BootFile (..), FatKind (..), Volume (..), mountRom, readRomFile
   , Mode2Load, mode2ConfigBytes, mode2PayloadBytes, readRawRom
   , ConfigWordOffset (..), ConfigDifference (..), rawConfigDifferences
+  , CardSector (..), firmwareRecoveryBodyLba, firmwareRecoveryCard, verifyFirmwareRecoveryCard
+  , firmwareRecoveryBodyLbaFat32, firmwareRecoveryCardFat32
   ) where
 
 import Control.Monad (unless)
@@ -17,6 +19,7 @@ import Data.Word (Word32)
 
 newtype ConfigWordOffset = ConfigWordOffset Int deriving (Eq, Show)
 newtype RawSectorCount = RawSectorCount Int
+newtype CardSector = CardSector Int deriving (Eq, Show)
 
 newtype BootPayloadBytes = BootPayloadBytes { bootPayloadByteCount :: Int }
 
@@ -340,6 +343,125 @@ fatChain start count =
   | index <- [0..count-1]
   ]
 
+data FirmwareLayout = FirmwareLayout [Int] [Int] CardSector
+
+firmwareLayout :: [Int] -> Either String FirmwareLayout
+firmwareLayout sizes = do
+  require (length sizes == 4 && all (> 0) sizes) "firmware recovery requires four nonempty files"
+  let counts = map (`clustersFor` (recoveryClusterSectors*512)) sizes
+      starts = take 4 (scanl (+) 2 counts)
+      metadata = 1 + 2*recoveryFatSectors + recoveryRootEntries `div` 16
+      limit = (recoveryPartitionSectors-metadata) `div` recoveryClusterSectors + 2
+      end = 2 + sum counts
+      body = recoveryPartitionStart + metadata + (starts !! 2-2)*recoveryClusterSectors
+  require (end <= limit && end <= recoveryFatSectors*256) "firmware recovery files exceed FAT16 volume"
+  pure (FirmwareLayout starts counts (CardSector body))
+
+recoveryFat32Reserved, recoveryFat32FatSectors :: Int
+recoveryFat32Reserved = 32
+recoveryFat32FatSectors = 1024
+
+firmwareLayoutFat32 :: [Int] -> Either String FirmwareLayout
+firmwareLayoutFat32 sizes = do
+  require (length sizes == 4 && all (\size -> size > 0 && size <= recoveryPartitionSectors*512) sizes)
+    "firmware recovery requires four nonempty files within volume capacity"
+  let counts = map (`clustersFor` 512) sizes
+      starts = take 4 (scanl (+) 3 counts)
+      metadata = recoveryFat32Reserved + 2*recoveryFat32FatSectors
+      limit = recoveryPartitionSectors - metadata + 2
+      end = 3 + sum counts
+      body = recoveryPartitionStart + metadata + starts !! 2 - 2
+  require (limit-2 > 65525 && end <= limit && limit <= recoveryFat32FatSectors*128)
+    "firmware recovery files exceed FAT32 volume"
+  pure (FirmwareLayout starts counts (CardSector body))
+
+firmwareRecoveryBodyLbaFat32 :: B.ByteString -> Either String CardSector
+firmwareRecoveryBodyLbaFat32 bootstrap = do
+  require (B.length bootstrap == 4096) "firmware bootstrap must occupy exactly 4096 bytes"
+  FirmwareLayout _ _ sector <- firmwareLayoutFat32 [1024,B.length bootstrap,512,1]
+  pure sector
+
+firmwareRecoveryCardFat32 :: Config -> B.ByteString -> B.ByteString -> B.ByteString -> Either String B.ByteString
+firmwareRecoveryCardFat32 config bootstrap body restore = do
+  count <- payloadSectorCount bootstrap
+  require (B.length bootstrap == 4096 && B.length (configBytes config) == 1024) "firmware entry/configuration size mismatch"
+  require (not (B.null body) && B.length body `mod` 512 == 0) "firmware body must be nonempty and sector-aligned"
+  let files = [configBytes config,bootstrap,body,restore]
+  FirmwareLayout _ _ _ <- firmwareLayoutFat32 (map B.length files)
+  image <- recoveryFat32Image config count bootstrap
+    (zip [SystemConfig,BootPayload,RecoveryStage,RestoreContainer] files)
+  verifyFirmwareRecoveryCard config bootstrap body restore image
+  pure image
+
+firmwareRecoveryBodyLba :: B.ByteString -> Either String CardSector
+firmwareRecoveryBodyLba bootstrap = do
+  require (B.length bootstrap == 4096) "firmware bootstrap must occupy exactly 4096 bytes"
+  FirmwareLayout _ _ sector <- firmwareLayout [1024,B.length bootstrap,512,1]
+  pure sector
+
+firmwareRecoveryCard :: Config -> B.ByteString -> B.ByteString -> B.ByteString -> Either String B.ByteString
+firmwareRecoveryCard config bootstrap body restore = do
+  count <- payloadSectorCount bootstrap
+  require (B.length bootstrap == 4096 && B.length (configBytes config) == 1024) "firmware entry/configuration size mismatch"
+  require (not (B.null body) && B.length body `mod` 512 == 0) "firmware body must be nonempty and sector-aligned"
+  let files = [configBytes config,bootstrap,body,restore]
+      sizes = map B.length files
+  FirmwareLayout starts counts _ <- firmwareLayout sizes
+  let boot = patch (B.replicate 512 0)
+        [ (0,"\xeb\x3c\x90XM1RECV "), (11,putLE 2 512), (13,putLE 1 recoveryClusterSectors)
+        , (14,putLE 2 1), (16,putLE 1 2), (17,putLE 2 recoveryRootEntries)
+        , (21,"\xf8"), (22,putLE 2 recoveryFatSectors), (24,putLE 2 32), (26,putLE 2 64)
+        , (28,putLE 4 recoveryPartitionStart), (32,putLE 4 recoveryPartitionSectors)
+        , (36,"\x80\x00\x29"), (39,putLE 4 0x150), (43,"XM1RECOVERYFAT16   "), (510,"\x55\xaa")
+        ]
+      fatBytes = B.concat (map (putLE 2) ([0xfff8,0xffff] <> concat (zipWith fatChain starts counts)))
+      fat = fatBytes <> B.replicate (recoveryFatSectors*512-B.length fatBytes) 0
+      entry file cluster size = patch (B.replicate 32 0)
+        [(0,shortName file),(11,"\x20"),(26,putLE 2 cluster),(28,putLE 4 size)]
+      directory = B.concat (zipWith3 entry [SystemConfig,BootPayload,RecoveryStage,RestoreContainer] starts sizes)
+      root = directory <> B.replicate (recoveryRootEntries*32-B.length directory) 0
+      volumePrefix = B.concat ([boot,fat,fat,root] ++ map (padTo (recoveryClusterSectors*512)) files)
+      rawPrefix = rawConfiguration config count <> bootstrap
+        <> B.replicate (recoveryPartitionStart*512-1024-B.length bootstrap) 0
+      image = B.concat [rawPrefix,volumePrefix,B.replicate (recoveryPartitionSectors*512-B.length volumePrefix) 0,B.replicate (recoveryReportSectorCount*512) 0]
+  verifyFirmwareRecoveryCard config bootstrap body restore image
+  pure image
+
+verifyFirmwareRecoveryCard :: Config -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either String ()
+verifyFirmwareRecoveryCard config bootstrap body restore image = do
+  require (B.length bootstrap == 4096 && B.length body > 0 && B.length body `mod` 512 == 0) "firmware recovery entry/body size mismatch"
+  vol <- mountRom image
+  FirmwareLayout starts counts (CardSector bodyLba) <- case fatKind vol of
+    Fat16 -> do
+      require (clusterSectors vol == recoveryClusterSectors) "firmware recovery FAT16 cluster geometry differs"
+      firmwareLayout (map B.length [configBytes config,bootstrap,body,restore])
+    Fat32 -> do
+      require (B.length image == (recoveryReportBaseLba+recoveryReportSectorCount)*512 &&
+        B.length image <= 128*1024*1024) "firmware recovery FAT32 image capacity differs"
+      require (clusterSectors vol == 1 && rootLocation vol == 2 &&
+        clusterLimit vol-2 > 65525 &&
+        firstFat vol == recoveryPartitionStart+recoveryFat32Reserved &&
+        dataStart vol == recoveryPartitionStart+recoveryFat32Reserved+2*recoveryFat32FatSectors)
+        "firmware recovery FAT32 geometry differs"
+      firmwareLayoutFat32 (map B.length [configBytes config,bootstrap,body,restore])
+    Fat12 -> Left "firmware recovery volume must be FAT16 or FAT32"
+  actual <- mapM (readRomFile image vol) [SystemConfig,BootPayload,RecoveryStage,RestoreContainer]
+  require (actual == [configBytes config,bootstrap,body,restore]) "firmware recovery FAT files differ"
+  raw <- readRawRom image
+  require (mode2ConfigBytes raw == rawConfiguration config (RawSectorCount 8) && mode2PayloadBytes raw == bootstrap) "firmware recovery raw bootstrap differs"
+  contiguous <- slice image (bodyLba*512) (B.length body)
+  require (contiguous == body) "firmware recovery raw body differs"
+  let root = if fatKind vol == Fat32 then dataStart vol*512+32 else rootLocation vol*512
+  low <- le image (root+2*32+26) 2
+  high <- le image (root+2*32+20) 2
+  let actualStart = low .|. (high `shiftL` 16)
+  require (actualStart == starts !! 2 && dataStart vol+(actualStart-2)*clusterSectors vol == bodyLba) "firmware recovery body starts at unexpected LBA"
+  mapM_ (\cluster -> do
+    next <- nextCluster image vol cluster
+    require (next == if cluster+1 == actualStart+counts !! 2 then 0 else cluster+1) "firmware recovery body is not contiguous") [actualStart..actualStart+counts !! 2-1]
+  reports <- recoveryReportSectors image
+  require (all (B.all (== 0)) reports) "firmware recovery report sectors are not initially empty"
+
 recoveryCard :: Config -> B.ByteString -> B.ByteString -> B.ByteString -> Either String B.ByteString
 recoveryCard config rawPayload payload restore = do
   count <- payloadSectorCount rawPayload
@@ -395,13 +517,25 @@ recoveryCardFat32 config rawPayload payload restore = do
   require (B.length payload >= B.length rawPayload && B.take (B.length rawPayload) payload == rawPayload)
     "mode-1 payload must begin with the raw-mode refusal payload"
   require (not (B.null restore)) "restore container must be nonempty"
-  let reserved = 32
-      fatSectors = 1024
+  image <- recoveryFat32Image config count rawPayload
+    (zip [SystemConfig,BootPayload,RestoreContainer] [configBytes config,payload,restore])
+  verifyRecoveryCard config rawPayload payload restore image
+  pure image
+
+recoveryFat32Image :: Config -> RawSectorCount -> B.ByteString -> [(BootFile,B.ByteString)] -> Either String B.ByteString
+recoveryFat32Image config count rawPayload namedFiles = do
+  let files = map snd namedFiles
+      reserved = recoveryFat32Reserved
+      fatSectors = recoveryFat32FatSectors
       clusterSize = 512
-      sizes = map B.length [configBytes config, payload, restore]
+      sizes = map B.length files
+  require (not (null files) && length files <= 15 &&
+    all (\size -> size > 0 && size <= recoveryPartitionSectors*512) sizes)
+    "recovery files exceed FAT32 volume capacity"
+  let
       counts = map (`clustersFor` clusterSize) sizes
-      starts = take 3 (scanl (+) 3 counts)
-      finalCluster = last starts + last counts
+      starts = take (length files) (scanl (+) 3 counts)
+      finalCluster = 3 + sum counts
       metadataSectors = reserved + 2*fatSectors
       clusterLimit = recoveryPartitionSectors - metadataSectors + 2
       fatCapacity = fatSectors * 128
@@ -458,9 +592,9 @@ recoveryCardFat32 config rawPayload payload restore = do
         , (28,putLE 4 size)
         ]
       label = patch (B.replicate 32 0) [(0,"XM1RECOVERY"),(11,"\x08")]
-      rootEntries = zipWith3 entry [SystemConfig,BootPayload,RestoreContainer] starts sizes
+      rootEntries = zipWith3 entry (map fst namedFiles) starts sizes
       root = label <> B.concat rootEntries <> B.replicate (clusterSize-32*(1+length rootEntries)) 0
-      fileData = B.concat (map (padTo clusterSize) [configBytes config,payload,restore])
+      fileData = B.concat (map (padTo clusterSize) files)
       volumePrefix = reservedBytes <> fat <> fat <> root <> fileData
       volume = volumePrefix <> B.replicate (recoveryPartitionSectors*512-B.length volumePrefix) 0
       rawPrefix = rawConfiguration config count <> rawPayload
@@ -469,7 +603,6 @@ recoveryCardFat32 config rawPayload payload restore = do
   require (B.length rawPrefix == recoveryPartitionStart*512) "raw-mode payload overlaps recovery FAT volume"
   vol <- mountRom image
   require (fatKind vol == Fat32) "recovery volume is not FAT32"
-  verifyRecoveryCard config rawPayload payload restore image
   pure image
 
 verifyRecoveryCard :: Config -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either String ()

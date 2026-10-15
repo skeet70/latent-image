@@ -27,10 +27,11 @@ from unicorn.arm_const import (UC_ARM_REG_PC, UC_ARM_REG_CPSR, UC_ARM_REG_R0,
     UC_ARM_REG_R5, UC_ARM_REG_R9, UC_ARM_REG_R10)
 
 
-def ready(*, firmware_profile=None, rectangle_profile=None):
+def ready(*, firmware_profile=None, rectangle_profile=None, sd_card_profile=None):
     board = make_board(entry='loader', quantum=8, storage_profile='erased',
                        counter_input_profile=PulseOutputs.COUNTER_LENS_PROFILE,
-                       firmware_profile=firmware_profile, rectangle_profile=rectangle_profile)
+                       firmware_profile=firmware_profile, rectangle_profile=rectangle_profile,
+                       sd_card_profile=sd_card_profile)
     board.core_state[1]['runnable'] = False
     board.interrupts.banks[0].enabled = 1 << 22
     controls = next(d for d in board.devices if type(d) is BootControls)
@@ -434,6 +435,56 @@ class PortableCheckpointTests(unittest.TestCase):
             with self.assertRaises(PortableCheckpointError):
                 load(path)
         self.assertEqual(semantic_fingerprint(board), saved['fingerprint'])
+
+
+class RecoveryCardMediaTests(unittest.TestCase):
+    def test_complete_backing_exceeds_dirty_budget_and_remains_immutable(self):
+        from emulator.sd_card import SparseCard, load_raw_image
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / 'complete.img'
+            with image.open('wb') as target:
+                target.write(b'\x6a' * (33 << 20))
+            card = SparseCard(max_dirty_sectors=1)
+            load_raw_image(card, image, immutable_backing=True)
+            image.write_bytes(b'\x91' * 512)
+            self.assertEqual(card.read(0, 1), b'\x6a' * 512)
+            self.assertEqual(card.read(65536, 1), b'\x6a' * 512)
+            card.write(0, bytes(512))
+            self.assertEqual(card.read(0, 2), bytes(512) + b'\x6a' * 512)
+            from emulator.hardware import UnsupportedDevice
+            with self.assertRaises(UnsupportedDevice):
+                card.write(1, b'\x33' * 512)
+            self.assertEqual(card.read(1, 1), b'\x6a' * 512)
+
+    def test_logical_export_keeps_zero_overwrite_and_untouched_base(self):
+        from emulator.sd_card import SparseCard, load_raw_image, save_raw_image
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / 'original.img'
+            image.write_bytes(b'\xa7' * 1024 + b'\x38' * 512)
+            card = SparseCard()
+            load_raw_image(card, image, immutable_backing=True)
+            card.write(1, bytes(512))
+            exported = Path(directory) / 'exported.img'
+            save_raw_image(card, exported)
+            self.assertEqual(exported.read_bytes(), b'\xa7' * 512 + bytes(512) + b'\x38' * 512)
+            with self.assertRaises(FileExistsError):
+                save_raw_image(card, exported)
+
+    def test_portable_restore_keeps_complete_card_and_zero_overlay(self):
+        from emulator.sd_card import BLANK_SDHC_PROFILE, SDCardController, load_raw_image
+        board = ready(sd_card_profile=BLANK_SDHC_PROFILE)
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / 'input.img'
+            image.write_bytes(b'\xa1' * 512 + b'\xb2' * 512)
+            controller = next(device for device in board.devices if isinstance(device, SDCardController))
+            load_raw_image(controller.card, image, immutable_backing=True)
+            controller.card.write(0, bytes(512))
+            paused = Path(directory) / 'paused'
+            save(board, paused)
+            image.unlink()
+            restored = load(paused)
+            restored_card = next(device.card for device in restored.devices if isinstance(device, SDCardController))
+            self.assertEqual(restored_card.read(0, 3), bytes(512) + b'\xb2' * 512 + bytes(512))
 
 
 if __name__ == '__main__':
