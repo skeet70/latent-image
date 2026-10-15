@@ -32,6 +32,53 @@ These commands perform no camera I/O. The simulation exercises a contrast-search
 
 The [specification](spec/README.md) describes the intended system and acceptance criteria, not a list of shipped camera features. Technical reports distinguish static findings, host experiments, and hardware observations; addresses and behavior are firmware-version-specific.
 
+## Firmware extensions
+
+Apply these at your own risk. Each has worked on at least one physical X-M1, but nothing guarantees it will not brick your camera. Start from the exact firmware version and checksum listed for the extension. If you don't know what your camera is running, the surest way to be certain is to install the listed stock firmware first with Fujifilm's [ordinary update procedure](https://www.fujifilm-x.com/global/support/download/firmware/cameras/x-m1/).
+
+| Extension | Patch set | Base firmware | Built `FWUP0002.DAT` SHA-256 | Known limits |
+| --- | --- | --- | --- | --- |
+| Unlock the PRO Neg. Std and PRO Neg. Hi film simulations that already exist in the stock firmware | [`rc0-patch-set.json`](recovery/rc0-patch-set.json) | Official X-M1 1.50 `FWUP0002.DAT`, SHA-256 `43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490` | `acb0fbbb9507421f48a6254920cafb5ce20e1fd6bf821bc80c912c1f99c29ca8` | Adds both modes to SHOOTING MENU > FILM SIMULATION. The Q menu's film-simulation cell still offers the stock five. [Patch report](reports/filmsim-patch-01.md) |
+
+A patch set lists the target addresses, the expected current values and the replacement values. It is not a firmware image: you build the patched firmware yourself from the official DAT you download.
+
+### Build the patched firmware
+
+1. Download the base firmware from [Fujifilm's X-M1 page](https://www.fujifilm-x.com/global/support/download/firmware/cameras/x-m1/) and the extension's patch set from the table. Put both under `private-data/` in your checkout.
+2. Set the three paths below, with `PATCH_SET` pointing at the patch set you downloaded, then build:
+
+```sh
+devenv shell
+STOCK=private-data/FWUP0002.DAT
+PATCH_SET=private-data/rc0-patch-set.json
+OUT=private-data/extension-build
+
+sha256sum "$STOCK"   # must equal the row's base firmware SHA-256
+bazel build //recovery:inspect-firmware //lz:fflzd //lz:lz-encode \
+  //host/firmware:apply-patch-set //host/firmware:rebuild-update
+bazel run //recovery:inspect-firmware -- extract "$STOCK" "$OUT"
+bazel-bin/lz/fflzd "$OUT/segment-4.bin" 0 "$OUT/stock-id4.bin"
+bazel-bin/host/firmware/apply-patch-set "$PATCH_SET" "$OUT/stock-id4.bin" "$OUT/patched-id4.bin"
+bazel-bin/lz/lz-encode 0x160000 "$OUT/patched-id4.bin" "$OUT/patched-record4.bin"
+bazel-bin/host/firmware/rebuild-update replace-record4 --decoder bazel-bin/lz/fflzd \
+  --load-address "$(jq -r .image.output_base "$PATCH_SET")" \
+  "$STOCK" "$OUT/patched-record4.bin" "$OUT/patched-id4.bin" "$OUT/FWUP0002.DAT"
+bazel-bin/host/firmware/rebuild-update verify "$OUT/FWUP0002.DAT"
+sha256sum "$OUT/FWUP0002.DAT"   # must equal the row's built SHA-256
+```
+
+`$OUT` must not already exist. `apply-patch-set` refuses a decoded image that doesn't match the patch set's pinned base. Every command must succeed, and the final hash must match the table exactly. On any mismatch, stop and do not install. Firmware extraction and decoding are explained in [firmware triage](recovery/README.md#firmware-triage-for-other-failures), and the container rebuild in [the update-container contract](reports/update-container-rebuild.md).
+
+### Install it
+
+1. Format a card in the camera, then copy `$OUT/FWUP0002.DAT` to the card's root as its only file, keeping that exact name.
+2. Use a fully charged battery, close the card and battery doors, and disconnect USB.
+3. Power on while holding DISP/BACK, then check the version screen. It should offer an update from 1.50 to 1.50. If the screen differs or refuses the update, power off. Nothing has been written yet.
+4. Select BODY and confirm each screen. The final confirmation starts the write. From then on, don't press anything, open a door or remove power until the camera reports completion and asks you to switch it off.
+5. Switch off, remove the card and start normally. Check that the menus and photography work and that the new film simulations appear.
+
+[The install procedure](reports/install-procedure.md#6-the-procedure-step-by-step) explains each step, the [abort points](reports/install-procedure.md#7-abort-points-and-the-point-of-no-return), and what an [interrupted update](reports/install-procedure.md#8-interruption-residues-and-which-are-recoverable-by-repeating-the-update) leaves behind. To return to stock, install the official base DAT the same way. That direction has not yet been tried on hardware. If the camera no longer starts, read [the recovery kit](recovery/README.md) before trying anything else.
+
 ## Contribute
 
 Use [GitHub Issues](https://github.com/skeet70/latent-image/issues) to find open work, report bugs, or propose research. Check existing issues before starting, and include the tool, firmware version where relevant, and a reproducible example that does not disclose proprietary inputs or private camera data.
