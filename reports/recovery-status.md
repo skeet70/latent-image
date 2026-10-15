@@ -2,7 +2,9 @@
 
 **The recorder rev-2 failed-boot incident and recovery-adjacent checks are complete.** Exact v5 physical rollback reports successful writer return, complete RC0 readback and unchanged physical block 14. The owner reports ordinary startup after power removal, working photography, normal-card operation/playback and retained film simulations/settings, including C-slot color +2 (E-RECOVERY-FRAGMENTED-V5-STATUS20-150, E-RECOVERY-V5-NORMAL-CARD-PLAYBACK-150, E-RECOVERY-V5-RETENTION-150). The [exact result](sd-boot-card-entry.md#260-physical-rollback-readback-status-20) owns byte identity, writer/readback fields and scope.
 
-Recovery levels are defined by [the specification](../spec/04-recovery.md#101-evidence-levels); current gate decisions and open work belong on [the task board](../docs/task-board.md). R1 is accepted, R2 and R3 are demonstrated, and formal R4 acceptance remains unclaimed. The demonstrated repair is the recorder-v2-v5 rollback, not arbitrary interrupted-flash recovery, calibration restoration or damaged-ROM/controller recovery.
+Recovery restored physical block 14, not the whole installed container. Other installed blocks were not reread after repair. Build new candidates from pinned source/input manifests, not an assumed wholly restored installed image.
+
+Recovery levels are defined by [the specification](../spec/04-recovery.md#101-evidence-levels); open gate work is tracked in [GitHub Issues](https://github.com/skeet70/latent-image/issues). R1 is accepted, R2 and R3 are demonstrated, and formal R4 acceptance remains unclaimed. The demonstrated repair is the recorder-v2-v5 rollback, not arbitrary interrupted-flash recovery, calibration restoration or damaged-ROM/controller recovery.
 
 Preserve the successful recovery card. No new recovery write, writer retry or firmware reinstall is justified by these results. Host packaging and feature work can proceed; camera operations still require [the camera-run procedure](../spec/07-governance-and-handoff.md#3-camera-runs). The [public kit](../recovery/README.md) owns supported preparation and reproduction commands.
 
@@ -85,7 +87,7 @@ No artifact here is a complete backup. Public container preservation does not co
 | Boot/controller metadata corruption | ROM fallback or external recovery, if the board supports it | Dependencies unknown; no coverage |
 | Lens or physical damage | Separate repair route | Excluded from body firmware recovery |
 
-Remaining recovery research concerns generality, not another attempt on the recovered body: reproducible route/timing selection, controller and cache fidelity, complete persistent backup coverage and defined interrupted-update residues. [The R3/R4 plan](recovery-r3-r4-plan.md) owns those requirements, and [the task board](../docs/task-board.md) owns their priority. New diagnostic bytes need target-bound entry/stack/output and a complete initialization-write audit before a camera proposal.
+Remaining recovery research concerns generality, not another attempt on the recovered body: reproducible route/timing selection, controller and cache fidelity, complete persistent backup coverage and defined interrupted-update residues. [The R3/R4 plan](recovery-r3-r4-plan.md) owns those requirements, and [GitHub Issues](https://github.com/skeet70/latent-image/issues) owns their priority. New diagnostic bytes need target-bound entry/stack/output and a complete initialization-write audit before a camera proposal.
 
 ## Owner observation: power-on presses with no card (2026-10-09, hardware-observed)
 

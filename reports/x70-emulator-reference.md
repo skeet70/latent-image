@@ -274,7 +274,7 @@ The exact revision-3 candidate was exported and run from ROM with the DTCM fixtu
 
 ## 6. Files and labels
 
-Rows: E-X70-EMULATOR-TERMS-150, E-BOOTROM-X70-IDENTITY-150, E-X70-SOC-CROSSCHECK-150, E-X70-SOC-LABELS-150 and E-X70-REFERENCE-ASSESS-150 from the first assessment; E-X70-GRANT-150 records the author's grant and replaces the use-only reading E-X70-EMULATOR-TERMS-150 took before his answers arrived, whose file facts stand; E-X70-ASKS-REVISED-150 records the two asked facts, whose capture-procedure answer is now reported (section 1.4), E-X70-T1-COST-REVISION-150 the revised estimate, E-X70-TARGET-ADD-PLAN-150 the experiment, E-X70-TARGET-ADD-150 the executed result of sections 5.7 and 5.8, E-AF-RECORDER-RESIDENCY-EMU-150 the installed-candidate reproduction and E-AF-RECORDER-STAGE-EMU-150 the revision-3 activation result of section 5.9; task-board row X70-REFERENCE-01. Existing reports are not rewritten from a sibling model.
+Rows: E-X70-EMULATOR-TERMS-150, E-BOOTROM-X70-IDENTITY-150, E-X70-SOC-CROSSCHECK-150, E-X70-SOC-LABELS-150 and E-X70-REFERENCE-ASSESS-150 from the first assessment; E-X70-GRANT-150 records the author's grant and replaces the use-only reading E-X70-EMULATOR-TERMS-150 took before his answers arrived, whose file facts stand; E-X70-ASKS-REVISED-150 records the two asked facts, whose capture-procedure answer is now reported (section 1.4), E-X70-T1-COST-REVISION-150 the revised estimate, E-X70-TARGET-ADD-PLAN-150 the experiment, E-X70-TARGET-ADD-150 the executed result of sections 5.7 and 5.8, E-AF-RECORDER-RESIDENCY-EMU-150 the installed-candidate reproduction and E-AF-RECORDER-STAGE-EMU-150 the revision-3 activation result of section 5.9. Existing reports are not rewritten from a sibling model.
 
 ## 7. Limits
 

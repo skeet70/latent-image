@@ -8,14 +8,14 @@
 
 Tasks:
 
-1. Maintain the repository, worktrees, private immutable inputs, task board and evidence schema. Use [the camera-run procedure](07-governance-and-handoff.md#3-camera-runs) for device access.
+1. Maintain the repository, worktrees, private immutable inputs, GitHub Issues and evidence schema. Use [the camera-run procedure](07-governance-and-handoff.md#3-camera-runs) for device access.
 2. Reproduce the environment and record exact source revisions. Inventory public code separately from README descriptions of private tools.
 3. Read the minimal transport call chain before executing it: device selection, session open/close, identity queries, configuration reads, memory reads, exception handling, and imports.
 4. Build a fake USB transport that captures outgoing bytes and supplies captured or synthetic responses. Add tests for missing device, wrong model, short reply, zero-progress read, address overflow, timeout, and restore-on-exception behavior where relevant.
 5. Expose only reviewed closed operations with internally built bytes; do not expose raw experimental service dispatch.
 6. Separate all hardware tests from the default test command. In the offline environment, device opening should be impossible through the normal project API.
 
-These phases define research requirements, not a setup checklist or current completion status. [The task board](../docs/task-board.md) owns accepted gates and open work; [current principles](../docs/principles.md#implementation-and-build) own implementation and build policy. Roles describe ownership, not camera authorization.
+These phases define research requirements, not a setup checklist or current completion status. [GitHub Issues](https://github.com/skeet70/latent-image/issues) owns open work and gate tracking. Completed work and earlier gate decisions remain in Git history; reports and the evidence ledger retain their supporting technical findings. [Current principles](../docs/principles.md#implementation-and-build) own implementation and build policy. Roles describe ownership, not camera authorization.
 
 **Deliverables:** source/build inventory, command-side-effect matrix, pinned environment, offline broker tests and repository instructions.
 
@@ -107,7 +107,7 @@ Use Unicorn's C ABI through a narrow engine boundary under [the implementation p
 
 **G3 acceptance:** one useful native path reproduces independently known behavior under bounded conditions; all stubs and coverage exclusions are listed. C separately reports the current recovery level, even if still low. Do not require a full-system emulator merely to complete this gate.
 
-The accepted G3 result is the reviewed 1.50 area-3 record-validation callback `0x006a84d4` (E-AREA3-VALIDATOR-NATIVE-150). E-DUMP-RAM-150 establishes installed-byte correspondence for its seven executed-code windows at `0x006a8300`/`0x006a8400`/`0x006a8500`/`0x006a8600`/`0x00722100`/`0x00722200`/`0x00722300`. The owner's acceptance is recorded on the board on 2026-10-08; `probe-code` remains an optional reviewed fresh-boot re-confirmation, not a required unperformed acceptance step.
+The accepted G3 result is the reviewed 1.50 area-3 record-validation callback `0x006a84d4` (E-AREA3-VALIDATOR-NATIVE-150). E-DUMP-RAM-150 establishes installed-byte correspondence for its seven executed-code windows at `0x006a8300`/`0x006a8400`/`0x006a8500`/`0x006a8600`/`0x00722100`/`0x00722200`/`0x00722300`. The owner accepted this scoped result on 2026-10-08; `probe-code` remains an optional reviewed fresh-boot re-confirmation, not a required unperformed acceptance step.
 
 ### Phase 4 — Establish a reversible execution and observation loop
 

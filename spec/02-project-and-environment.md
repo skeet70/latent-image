@@ -2,7 +2,7 @@
 
 ## 5. Repository and evidence layout
 
-This repository is the `fuji-af` research platform. Package READMEs own supported commands; [the task board](../docs/task-board.md) owns implementation work and gate decisions.
+This repository is the Latent Image research platform. Package READMEs own supported commands; [GitHub Issues](https://github.com/skeet70/latent-image/issues) owns implementation work and open gate tracking.
 
 | Path | Contents and owner | Current state |
 | --- | --- | --- |
@@ -10,7 +10,7 @@ This repository is the `fuji-af` research platform. Package READMEs own supporte
 | `devenv.nix`, `devenv.yaml`, `devenv.lock` | Pinned host environment; A | Present; host checks only |
 | `MODULE.bazel`, `MODULE.bazel.lock`, `.bazelversion`, `.bazelrc` | Pinned build rules and shared build settings; A | Bazel build/test graph; preserved Rust engine built with locked Nix |
 | `build-support/`, package `BUILD.bazel` files | Nix-backed host toolchains and declared targets; A | GHC/Rust/GCC/Unicorn and validation tools use the locked Nixpkgs input |
-| `docs/task-board.md`, `docs/principles.md` | Open work and current decisions | Current work, gates and rules |
+| [GitHub Issues](https://github.com/skeet70/latent-image/issues), `docs/principles.md` | Open work and current decisions | Current work, open gates and rules |
 | `docs/evidence.jsonl` | Scoped evidence ledger | Compact durable claims with evidence labels |
 | `manifests/`, `schemas/` | Versioned identities, maps, experiments and evidence/trial contracts; coordinator | Public provenance and offline contracts; unknown fields stay explicit |
 | `broker/FujiAF/` | Protocol profile and packet types shared with `transport/` | Haskell library |
@@ -20,14 +20,14 @@ This repository is the `fuji-af` research platform. Package READMEs own supporte
 | `emulation/` | Bounded native execution and full-system viewer; D | Haskell orchestration, existing C Unicorn harness and pinned upstream Rust/Python components; [supported scope](../emulation/README.md) |
 | `af/`, `af-session/` | Controller simulation and session preparation/analysis; E | Haskell host orchestration and existing C decision prototype; no calibrated lens or target integration |
 | `payload/` | Target hook and integration requirements; B/E | Target-specific entry, ABI, lifetime and synchronization need evidence |
-| `recovery/` | Host firmware triage, scoped image generation and card preparation; C | [Public kit](../recovery/README.md); failed-boot incident and adjacent checks complete; board records R3 demonstrated 2026-10-13 and R4 unclaimed |
+| `recovery/` | Host firmware triage, scoped image generation and card preparation; C | [Public kit](../recovery/README.md); failed-boot incident and adjacent checks complete; [recovery status](../reports/recovery-status.md) records R3 demonstrated 2026-10-13 and R4 unclaimed |
 | `tests/` and package test targets | Focused format, protocol, emulator, and AF checks | Synthetic host suite implemented; [validation scope](../reports/validation.md); hardware opt-in |
 | `fixtures/` | Synthetic or redistributable fixture policy | Public synthetic cases under `emulation/fixtures/` and `af/fixtures/`; captured proprietary inputs remain private |
 | `reports/` | Firmware-version-bound findings, procedures and evidence scope | Static, emulated and camera-observed results with their limitations |
 | `third_party/` | Selected source inventories and notices | Firmware/native audit provenance retained; whole Git inventories regenerable; acquired checkouts outside source control |
 | `private-data/` | Ignored owner-supplied firmware, dumps, serials, session outputs and captures | Private inputs and body-specific backups, not distributed with the source |
 
-Keep expensive or irreproducible camera data in two durable copies, with checksums. The Git history must retain code, schemas, manifests, and provenance without requiring camera dumps to be published. A fresh agent should be able to resume from `docs/task-board.md`.
+Keep expensive or irreproducible camera data in two durable copies, with checksums. The Git history must retain code, schemas, manifests, and provenance without requiring camera dumps to be published. Contributors can resume open work from GitHub Issues and the linked specifications, reports and evidence.
 
 ## 6. Reproducible host environment with devenv
 

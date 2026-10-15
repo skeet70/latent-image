@@ -1,6 +1,6 @@
 # What R3 and R4 require on this body, and how recovery can be tested
 
-This report defines general recovery-loader requirements and limits under [spec 10.1](../spec/04-recovery.md#101-evidence-levels) and [failure classification](../spec/04-recovery.md#103-required-failure-classification). It retains the X-M1 1.50 storage addresses, target checks, dry-run contract and non-destructive test alternatives. R2 and scoped R3 are demonstrated; the exact v5 rollback and reported ordinary operation repair the recorder failure, while formal R4 acceptance remains unclaimed. [Recovery status](recovery-status.md) owns present coverage; [the task board](../docs/task-board.md) owns gate decisions and open work.
+This report defines general recovery-loader requirements and limits under [spec 10.1](../spec/04-recovery.md#101-evidence-levels) and [failure classification](../spec/04-recovery.md#103-required-failure-classification). It retains the X-M1 1.50 storage addresses, target checks, dry-run contract and non-destructive test alternatives. R2 and scoped R3 are demonstrated; the exact v5 rollback and reported ordinary operation repair the recorder failure, while formal R4 acceptance remains unclaimed. [Recovery status](recovery-status.md) owns present coverage and gate distinctions; [GitHub Issues](https://github.com/skeet70/latent-image/issues) owns open work.
 
 ## The central question, answered first
 
@@ -117,7 +117,7 @@ A general recovery capability needs independently reachable entry, validated sto
 
 ## The one-body verdict and the options
 
-On 2026-10-09 the owner chose explicit informed acceptance rather than deliberately corrupting his only body (RECOVERY-R4-PRACTICE-01). That decision does not authorize later operations. Persistent camera changes still need reviewed bytes, a named owner go and the stated residual risks under [the camera-run procedure](../spec/07-governance-and-handoff.md#3-camera-runs). A real failure repaired through the route supplies evidence; formal gate acceptance belongs on the task board.
+On 2026-10-09 the owner chose explicit informed acceptance rather than deliberately corrupting his only body (RECOVERY-R4-PRACTICE-01). That decision does not authorize later operations. Persistent camera changes still need reviewed bytes, a named owner go and the stated residual risks under [the camera-run procedure](../spec/07-governance-and-handoff.md#3-camera-runs). A real failure repaired through the route supplies evidence; formal gate acceptance must be recorded with its evidence scope in the relevant report and ledger.
 
 The unavailable factory ZJ02217 package is not an input dependency for project-authored SD payloads. Its documented initialization clears adjustment data, and its behavior on a non-blank damaged board remains unproved. Acquiring that package or sacrificial hardware is the owner's decision.
 

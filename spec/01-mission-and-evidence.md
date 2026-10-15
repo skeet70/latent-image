@@ -27,7 +27,7 @@ The primary target is the owner's Viltrox AF 28mm F4.5 on lens firmware 1.05, id
 
 ## 2. Source baseline and evidence scope
 
-The table records the scope of the source leads, not current gate status. Bind X-M1 hardware claims to the owner's exact body and firmware. Current selected-path audits and source/format findings are in [the evidence ledger](../docs/evidence.jsonl), [transport audit](../reports/source-and-transport-audit.md) and [firmware findings](../reports/firmware-extraction.md); [the task board](../docs/task-board.md) records accepted gates. Reproduce exact source pins and attach new observations to their scopes.
+The table records the scope of the source leads, not current gate status. Bind X-M1 hardware claims to the owner's exact body and firmware. Current selected-path audits and source/format findings are in [the evidence ledger](../docs/evidence.jsonl), [transport audit](../reports/source-and-transport-audit.md) and [firmware findings](../reports/firmware-extraction.md). Recorded gate decisions retain their evidence scope; open gate work belongs in [GitHub Issues](https://github.com/skeet70/latent-image/issues). Reproduce exact source pins and attach new observations to their scopes.
 
 | Evidence | What it supports | What remains unproved |
 | --- | --- | --- |

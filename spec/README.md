@@ -7,7 +7,7 @@ The target is Fujifilm X-M1, using version-bound firmware findings and a Linux h
 | Question | Start here |
 | --- | --- |
 | Current policy, language/build choices and public/private asset boundary | [Current principles](../docs/principles.md) |
-| Open work, feature priority and accepted gates | [Task board](../docs/task-board.md) |
+| Open work, feature priority and open gates | [GitHub Issues](https://github.com/skeet70/latent-image/issues) |
 | Research requirements and safety acceptance criteria | Numbered specification sections below |
 | Supported host and camera commands | Package READMEs linked from [the repository overview](../README.md) |
 | Camera authority, review and stop rules | [Camera-run procedure](07-governance-and-handoff.md#3-camera-runs) |
@@ -43,4 +43,4 @@ Recommended sequence: accepted stock/access observations, exact-input mapping an
 | Film simulation and recipes | [Film-simulation findings](../reports/film-simulation.md), [settings map](../reports/custom-settings.md), [recipe design](../reports/recipe-design.md), [D3 patch](../reports/recipe-patch-d3.md) | [Compiled recipe builder](../reports/compiled-recipes-builder.md), [installation constraints](../reports/install-procedure.md) |
 | Validation scope and synthetic provenance | [Validation report](../reports/validation.md) | [Schemas](../schemas/README.md), [fixture policy](../fixtures/README.md), [build integration](../build-support/README.md) |
 
-The recorder rev-2 failed boot is repaired and recovery-adjacent checks are complete. The [exact v5 physical result](../reports/sd-boot-card-entry.md#260-physical-rollback-readback-status-20) owns that bounded claim; the task board owns formal gate status. Detailed lens/AF and new-recipe acceptance remain separate. Historical session scripts are not current authorization or evidence that a feature works.
+The recorder rev-2 failed boot is repaired and recovery-adjacent checks are complete. The [exact v5 physical result](../reports/sd-boot-card-entry.md#260-physical-rollback-readback-status-20) owns that bounded claim; [recovery status](../reports/recovery-status.md) records the formal gate distinctions. Detailed lens/AF and new-recipe acceptance remain separate. Historical session scripts are not current authorization or evidence that a feature works.

@@ -10,7 +10,7 @@ This is the whole process for any camera operation.
 2. **Owner:** says go in chat. For H3 the go names the operation.
 3. **Owner:** enters jig mode and runs the single command the model gives, e.g. `devenv shell -- bazel run //transport:camera -- end-setting`. The command picks the one connected `04cb:ff80` device, journals every outgoing byte before sending it, writes its output under `private-data/sessions/` and prints the result.
 4. **Owner:** exits jig mode, power-cycles, takes a shot and plays it back, and tells the model the result in chat, with photos or logs only if something looked wrong.
-5. **Model:** records the result on the task board or in the relevant report, adds an evidence-ledger entry if it is a durable research claim, and commits.
+5. **Model:** records the result in the relevant report, updates its GitHub issue if open work changes, adds an evidence-ledger entry if it is a durable research claim, and commits.
 
 A failed or stopped run needs no cleanup record. Fix the code, rehearse, commit, and go back to step 2.
 
@@ -38,7 +38,7 @@ Classify by camera effect, not USB direction. A routine named `read` can modify 
 
 Agents may be spawned with the models listed in [AGENTS.md](../AGENTS.md). Split work by workstream (transport, firmware analysis, boot/recovery, emulation, AF experiments) when that helps; one agent can hold several. Independent review is required only for new H2/H3 camera bytes, and an agent must not review its own change.
 
-Gate acceptance is a recorded decision linked to evidence and its limitations; it is distinct from task completion. Use [the task board](../docs/task-board.md) for current state.
+Gate acceptance is a recorded decision linked to evidence and its limitations; it is distinct from task completion. Use [GitHub Issues](https://github.com/skeet70/latent-image/issues) for open gate tracking. Completed decisions remain in Git history; retain their technical findings and limitations in the relevant reports and evidence ledger.
 
 A task that establishes a research result states what was established and on which firmware/input, how to reproduce it, its evidence label, and what remains open. Avoid arguments from sibling-camera similarity alone; caller tracing, address mapping and behavior establish the X-M1 contract.
 
