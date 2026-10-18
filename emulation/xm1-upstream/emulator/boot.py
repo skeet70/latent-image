@@ -27,7 +27,7 @@ from .pulse_devices import PulseOutputs
 from .spi2_devices import SPI2Serial
 from .lens_endpoint import LensEndpoint, RESPONSE_PROFILES as LENS_RESPONSE_PROFILES
 from .lens_homing_fixture import HOMING_PROFILE, LensHomingFixture, CONTINUATION_PROFILES as LENS_CONTINUATION_PROFILES
-from .sd_card import SDCardController, PROFILES as SD_CARD_PROFILES
+from .sd_card import SDCardController, MediaImage, load_raw_image, PROFILES as SD_CARD_PROFILES
 from .wifi_sdio import WiFiSDIOController, PROFILES as WIFI_SDIO_PROFILES
 from .control_bus import ControlBus,PROFILES as CONTROL_BUS_PROFILES
 from .secondary_control_bus import SecondaryControlBus,PROFILES as SECONDARY_BUS_PROFILES
@@ -38,7 +38,7 @@ from .input_processing_devices import (InputProcessingControl,REC_DISPLAY_EVENT_
 from .input_auxiliary_devices import InputAuxiliaryControl,CONTROL_PROFILES as AUXILIARY_CONTROL_PROFILES
 from .producer_devices import (ProducerControl,STOP_PROFILES as PRODUCER_STOP_PROFILES,
                                DATA_PROFILES as PRODUCER_DATA_PROFILES,HISTOGRAM_PROFILES)
-from .image_parameter_devices import ImageParameterControl
+from .image_parameter_devices import ImageParameterControl, DeclaredUIConversion, UIConversionProfile
 from .image_work_devices import (ImageWorkControl, STOP_PROFILES as IMAGE_WORK_STOP_PROFILES,
                                  DATA_PROFILES as IMAGE_WORK_DATA_PROFILES)
 from .face_analysis_devices import FaceAnalysisControl, STOP_PROFILES as FACE_STOP_PROFILES
@@ -58,6 +58,7 @@ def make_board(entry='rom', quantum=1000,storage_profile='erased',graphics_profi
                input_event_profile=None,input_event_ticks=400000,counter_input_profile=None,pulse_timer_profile=None,
                lens_response_profile=None,lens_response_ticks=400000,lens_continuation_profile=None,
                sd_card_profile=None,sd_card_present=False,sd_card_transfer_ticks=100,sd_card_sectors=0x800000,
+               sd_card_image=None,
                wifi_sdio_profile=None,wifi_sdio_transfer_ticks=100,
                auxiliary_control_profile=None,auxiliary_control_ticks=2,
                producer_stop_profile=None,producer_stop_ticks=2,cache_instructions=True,
@@ -68,10 +69,15 @@ def make_board(entry='rom', quantum=1000,storage_profile='erased',graphics_profi
                movrsz_profile=None,movrsz_ticks=400000,face_stop_profile=None,
                af_extraction_profile=None,af_extraction_ticks=400000,af_extraction_stop_ticks=2,
                shutter_irq_profile=None,afs_frame_source_profile=None,afs_frame_source_ticks=400000,still_pipeline_profile=None,
-               instructions_per_tick=1,settings=None,firmware_profile=None):
+               instructions_per_tick=1,settings=None,firmware_profile=None,ui_conversion_profile=None):
     factory_options={key: str(value) if isinstance(value, Path) else value
                      for key, value in locals().items()
-                     if (key not in ('settings','firmware_profile') or value is not None) and (key not in ('still_pipeline_profile','instructions_per_tick') or value not in (None,1))}
+                     if key != 'sd_card_image' and (key not in ('settings','firmware_profile') or value is not None) and (key not in ('still_pipeline_profile','instructions_per_tick') or value not in (None,1))}
+    ui_conversion_profile = UIConversionProfile.parse(ui_conversion_profile)
+    if ui_conversion_profile is None:
+        factory_options.pop('ui_conversion_profile', None)
+    else:
+        factory_options['ui_conversion_profile'] = ui_conversion_profile.value
     if 'instructions_per_tick' in factory_options:
         from x70_native.board import normalize_instructions_per_tick, ratio_option
         factory_options['instructions_per_tick']=ratio_option(normalize_instructions_per_tick(instructions_per_tick))
@@ -87,6 +93,8 @@ def make_board(entry='rom', quantum=1000,storage_profile='erased',graphics_profi
         raise ValueError('SD card requires a named profile and explicit boolean presence')
     if sd_card_present and sd_card_profile is None:
         raise ValueError('SD presence requires an explicitly selected card profile')
+    if sd_card_image is not None and (sd_card_profile is None or not sd_card_present):
+        raise ValueError('SD image initialization requires an explicitly present profiled card')
     if (wifi_sdio_profile not in (None,*WIFI_SDIO_PROFILES)
             or type(wifi_sdio_transfer_ticks) is not int or wifi_sdio_transfer_ticks<1):
         raise ValueError('WiFi SDIO requires a named profile and positive virtual transfer ticks')
@@ -195,8 +203,11 @@ def make_board(entry='rom', quantum=1000,storage_profile='erased',graphics_profi
             if sd_card_profile is not None:
                 if sd_card_present:
                     controls.set_gpio_input_pin(12,7,0,source=sd_card_profile)
-                board.attach(SDCardController(board,controls,profile=sd_card_profile,
-                    transfer_ticks=sd_card_transfer_ticks,sectors=sd_card_sectors))
+                controller=SDCardController(board,controls,profile=sd_card_profile,
+                    transfer_ticks=sd_card_transfer_ticks,sectors=sd_card_sectors)
+                if sd_card_image is not None:
+                    controller.image=MediaImage(**load_raw_image(controller.card,sd_card_image))
+                board.attach(controller)
             if wifi_sdio_profile is not None:
                 board.attach(WiFiSDIOController(board,controls,profile=wifi_sdio_profile,
                                                transfer_ticks=wifi_sdio_transfer_ticks))
@@ -253,11 +264,35 @@ def make_board(entry='rom', quantum=1000,storage_profile='erased',graphics_profi
         board.attach(JPEGEncodeControl(board,profile=JPEG_IDLE_RESET_PROFILE))
         if still_pipeline_profile == STILL_PIPELINE_RESIZE_PROFILE:
             board.attach(StillResizeControl(board,profile=STILL_RESIZE_PROFILE))
+    if ui_conversion_profile is not None:
+        board.attach(DeclaredUIConversion(board, profile=ui_conversion_profile))
     if settings not in (None,'default','owner'):
         raise ValueError('Settings must be default or owner')
     if settings=='owner' and (storage_profile!='captured' or user_journals not in (None,'restored') or mcu_profile not in (None,'captured-backup')):
         raise ValueError('Owner settings require captured storage and compatible journals/MCU inputs')
     return board
+
+
+def restart_with_sd_media(board):
+    """Construct a cold board retaining only SD sectors and external card levels."""
+    cards=[device for device in board.devices if isinstance(device,SDCardController)]
+    if len(cards)!=1:
+        raise ValueError('Media-only cold restart requires exactly one supported SD controller')
+    source=cards[0]
+    options=dict(board._portable_factory_options)
+    if options.get('firmware_profile') is not None:
+        from x70_native.portable_checkpoint import _resolve_factory_profile
+        options['firmware_profile']=_resolve_factory_profile(options['firmware_profile'])
+    options['sd_card_present']=source._present()
+    replacement=make_board(**options)
+    target=next(device for device in replacement.devices if isinstance(device,SDCardController))
+    target.card=source.card.retained_copy()
+    target.image=source.image
+    target.controls.set_gpio_input_pin(12,6,int(bool(source.controls.gpio_input_pin(12,6))),
+                                      source='declared-sd-media-cold-restart')
+    replacement.record('SD media-only cold restart',retained='SD base and guest sector overlays only',
+                       excluded='RAM, CPU, pending events, NAND/settings mutations and failure controls')
+    return replacement
 
 
 # Keep optional extensions below the original factory callback definitions:
@@ -289,7 +324,9 @@ class BootSession:
                  movrsz_profile=None,movrsz_ticks=400000,face_stop_profile=None,
                  af_extraction_profile=None,af_extraction_ticks=400000,af_extraction_stop_ticks=2,
                  shutter_irq_profile=None,afs_frame_source_profile=None,afs_frame_source_ticks=400000,
-                 still_pipeline_profile=None,settings=None,firmware_profile=None,instructions_per_tick=1):
+                 still_pipeline_profile=None,settings=None,firmware_profile=None,instructions_per_tick=1,
+                 ui_conversion_profile=None):
+        self.ui_conversion_profile = UIConversionProfile.parse(ui_conversion_profile)
         self.output=output
         output.mkdir(parents=True,exist_ok=False)
         self.entry,self.quantum,self.storage_profile=entry,quantum,storage_profile
@@ -365,6 +402,7 @@ class BootSession:
                               afs_frame_source_ticks=afs_frame_source_ticks,
                               still_pipeline_profile=still_pipeline_profile,
                               firmware_profile=firmware_profile,instructions_per_tick=instructions_per_tick,
+                              ui_conversion_profile=self.ui_conversion_profile,
                               cache_instructions=cache_instructions)
         self.state=None
         self.checkpoint=None
@@ -462,6 +500,7 @@ class BootSession:
                                   afs_frame_source_ticks=self.afs_frame_source_ticks,
                                   still_pipeline_profile=self.still_pipeline_profile,
                                   firmware_profile=self.firmware_profile,instructions_per_tick=self.instructions_per_tick,
+                                  ui_conversion_profile=self.ui_conversion_profile,
                                   cache_instructions=self.cache_instructions)
             self.raw=self.png=b''
             self.frame_instance=None
@@ -575,6 +614,9 @@ def main(*, session_factory=None):
     parser.add_argument('--afs-frame-source-ticks',type=int,default=400000)
     parser.add_argument('--still-pipeline-profile',choices=STILL_PIPELINE_PROFILES,
                         help='Explicit mode0 processing and JPEG devices; scene completions require separate admission')
+    parser.add_argument('--ui-conversion-profile',type=UIConversionProfile.parse,
+                        choices=tuple(UIConversionProfile),
+                        help='Explicit declared UI CPU fallback; silicon behavior and timing unmeasured')
     parser.add_argument('--auxiliary-control-profile',choices=AUXILIARY_CONTROL_PROFILES,
                         help='Opt-in exact auxiliary3→2→3 acknowledgment; hardware meaning/delay unmeasured, no pixels')
     parser.add_argument('--auxiliary-control-ticks',type=int,default=2,
@@ -658,6 +700,7 @@ def main(*, session_factory=None):
     session=session_factory(output,entry=args.entry,quantum=args.quantum,
                         firmware_profile=resolve('xm1-150',profile_file=str(args.firmware_profile)) if args.firmware_profile else None,
                         instructions_per_tick=args.instructions_per_tick,
+                        ui_conversion_profile=args.ui_conversion_profile,
                         storage_profile=args.storage_profile,graphics_profile=args.graphics_profile,
                         backdrop_profile=args.backdrop_profile,
                         display_frame_ticks=args.display_frame_ticks,copy_profile=args.copy_profile,

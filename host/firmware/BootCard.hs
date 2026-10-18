@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module BootCard
-  ( Config, configBytes, stockConfig, bootCard, stagedRecoveryCard, stagedRepairCard, recoveryCard, recoveryCardFat32
+  ( Config, configBytes, stockConfig, StageMarker (..), stageMarkerConfig, bootCard, stagedRecoveryCard, stagedRepairCard, recoveryCard, recoveryCardFat32
   , BootPayloadBytes, bootPayloadByteCount, maxBootPayloadBytes
   , verifyCard, verifyStagedRecoveryCard, verifyStagedRepairCard, verifyRecoveryCard
   , recoveryReportBaseLba, recoveryReportSectorCount, recoveryReportSectors
@@ -82,6 +82,41 @@ stockConfig payload = do
   let pairs = [(0xfffb2004,0x5f5f),(0xfffb2008,1),(0xfffb200c,0x11),(0xfffb2010,0x1111),(0xfffb2014,0x1111),(0xfff98100,0x50000100),(0xfff98104,0)]
   mapM_ (\(i,(address,value)) -> do a <- le bytes (0x34c+8*i) 4; v <- le bytes (0x350+8*i) 4; require (a == address && v == value) "stock config pair write mismatch") (zip [0..] pairs)
   pure (Config bytes)
+
+-- Where in 0x80000304 the LED lights.
+-- AfterApply: the +0x348 table runs last (0x800006cc-0x80000714), after the clock,
+-- memory and +0x33c SD-divider steps, before mode 1 opens ffboot.bin.
+-- BeforeMemoryWait: slot +0xb8 (0x80000510) enables 0xfff88084 after the 0xfff88080,
+-- 0x80000b50 and 0xfff88038 waits; slots +0xc8/+0xd0 (0x80000600-0x80000628) set up and
+-- light the LED after the 0xfff01000 register writes, before the 0xfff01090 wait.
+-- Nonzero +0xb8 and +0xc8 enable the +0x158 and +0x15c cycle delays.
+data StageMarker = AfterApply | BeforeMemoryWait deriving (Eq, Show)
+
+-- 0xfff893c0 = 0x00010000 is the lit state of the blink payload's long gap on this body.
+ledSetup, ledLit :: (Int,Int)
+ledSetup = (0xfff893c4,0x00050001)
+ledLit = (0xfff893c0,0x00010000)
+
+writePairs :: [(Int,Int)] -> B.ByteString
+writePairs writes = B.concat [putLE 4 address <> putLE 4 value | (address,value) <- writes]
+
+-- +0x10 bit 0 is stored to 0xfff88084 at 0x80000330; bit 1 is the argument of the
+-- ffboot-failure teardown 0x80000b3c, which also stores it to 0xfff88084.
+stageMarkerConfig :: StageMarker -> Config -> Either String Config
+stageMarkerConfig marker (Config bytes) = do
+  control <- le bytes 0x10 4
+  count <- le bytes 0x348 4
+  optionalSlots <- slice bytes 0xb8 0x20
+  require (control == 0x300 && count == 7 && B.all (== 0) optionalSlots) "stage marker requires the stock control word, pair count and empty optional slots"
+  case marker of
+    AfterApply -> do
+      let tableEnd = 0x34c+8*count
+          extension = writePairs [(0xfff88084,1),ledSetup,ledLit]
+      tableTail <- slice bytes tableEnd (B.length extension)
+      require (B.all (== 0) tableTail) "stage marker pairs would overwrite nonzero configuration bytes"
+      pure (Config (patch bytes [(0x10,putLE 4 0x302),(0x348,putLE 4 (count+3)),(tableEnd,extension)]))
+    BeforeMemoryWait ->
+      pure (Config (patch bytes [(0x10,putLE 4 0x302),(0xb8,writePairs [(0xfff88084,1),(0,0),ledSetup,ledLit])]))
 
 -- ROM mount: 0x80001ae0 and 0x80001ba0, not a filesystem-library mount.
 mountRom :: B.ByteString -> Either String Volume

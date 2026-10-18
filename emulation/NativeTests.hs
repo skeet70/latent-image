@@ -8,6 +8,10 @@ import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
+import Data.Bits
+import Data.Word
+import Data.Char(toLower)
+import Numeric(showHex)
 import FujiAF.JSON(encodeCanonical)
 import Data.List
 import System.Directory
@@ -21,6 +25,51 @@ modifyAt key index change c=set key (arr[if i==index then change v else v|(i,v)<
 remove :: String -> Value -> Value
 remove key(Object x)=Object(KM.delete(K.fromString key)x)
 remove _ x=x
+data DispatchForm = PcTable | RegisterTable deriving (Eq,Show)
+data DispatchControl = DeclaredTarget | InteriorTarget | LocalTarget | ConditionFalse | ThumbTarget | UnalignedTarget | UnknownTarget | ShortFunction | UnreadableTable | OverflowTable deriving (Eq,Show)
+
+dispatchRegressions :: FilePath -> IO ()
+dispatchRegressions runner=withTemporary "fuji-dispatch-tests"$ \root->do
+ base<-B.readFile "emulation/fixtures/arithmetic.json" >>= jsonRead
+ let hex value=s("0x"++replicate(8-length text)'0'++text) where text=showHex(value::Word32)""
+     fn address size=obj[("address",hex address),("size",n size)]
+     region name address size permissions initial=obj[("id",s name),("address",hex address),("size",n size),("permissions",s permissions),("initial",initial)]
+     controls=[DeclaredTarget,InteriorTarget,LocalTarget,ConditionFalse,ThumbTarget,UnalignedTarget,UnknownTarget,ShortFunction,UnreadableTable,OverflowTable]
+ forM_[(form,control)|form<-[PcTable,RegisterTable],control<-controls]$ \(form,control)->do
+  let name=map toLower(show form++"-"++show control)
+      target=case control of
+       InteriorTarget->0x1044
+       LocalTarget->0x1024
+       ThumbTarget->0x1041
+       UnalignedTarget->0x1042
+       UnknownTarget->0x1048
+       ShortFunction->0x1044
+       _->0x1040
+      instruction=case form of PcTable->0x979ff100;RegisterTable->0x9792f103
+      words'=[0xe1a0400e,0xeb000004,0xe2800002,0xe1a0e004,0xe12fff1e,0,0, instruction,0xe12fff1e,target,0,0,0,0,0,0xe3a00007,0xe12fff1e,0xe12fff1e]::[Word32]
+      bytes=B.pack[fromIntegral(word `shiftR` offset)|word<-words',offset<-[0,8,16,24]]
+      artifactName=name<.>"bin"
+      tableBase=if control `elem` [UnreadableTable,ConditionFalse] then 0x2000 else if control==OverflowTable then 0xfffffffc else 0x1028
+      index=if control==OverflowTable || control==ConditionFalse then (case form of PcTable->0x40000000;RegisterTable->1) else if control==UnreadableTable && form==PcTable then 0x400 else 0
+      status=case control of
+       ThumbTarget->"unsupported_instruction"
+       UnalignedTarget->"unsupported_instruction"
+       UnknownTarget->"unknown_call"
+       ShortFunction->"unknown_call"
+       UnreadableTable->"memory_guard"
+       OverflowTable->"memory_guard"
+       _->"returned"
+      returned=status=="returned"
+      result=if control==DeclaredTarget then 9 else if control==ConditionFalse && form==PcTable then 0x40000002 else 2
+  B.writeFile(root </> artifactName)bytes
+  hash<-sha256 bytes
+  let art=obj[("id",s "dispatch"),("path",s artifactName),("size",n(fromIntegral(B.length bytes))),("sha256",s hash)]
+      registers=merge(get base "registers")[("r0",hex(if form==PcTable then index else 0)),("r2",hex tableBase),("r3",hex index),("cpsr",hex(if control==ConditionFalse then 0x20000010 else 0x10))]
+      fixture=merge base[("id",s name),("provenance",s "NativeTests.hs: hand-encoded A32 dispatch, caller adds two after preserved-frame return"),("artifacts",arr[art]),("registers",registers),("regions",arr[region "code" 0x1004(fromIntegral(B.length bytes))"rx"(obj[("artifact",s "dispatch"),("offset",n 0),("length",n(fromIntegral(B.length bytes)))]),region "exit" 0x1080 4 "rx"(obj[("zero",b True)]),region "stack" 0x3000 32 "rw"(obj[("zero",b True)])]),("functions",arr[fn 0x1004 20,fn 0x1020 8,fn 0x1040(if control==ShortFunction then 4 else 8)]),("expected",obj[("status",s status),("registers",if returned then obj[("r0",hex result),("lr",hex 0x1080),("pc",hex 0x1080)] else obj[("r4",hex 0x1080)]),("memory",arr[]),("events",arr[])])]
+      path=root </> name<.>"json"
+  B.writeFile path(encodeCanonical fixture)
+  (code,report)<-runCase runner path
+  ensure(code==0 && get report "status"==s "passed")(name++": "++show report)
 main :: IO ()
 main=do
  [runner,generator]<-getArgs
@@ -42,6 +91,7 @@ main=do
   when(name=="arithmetic.json")$ensure(get result "instructions"==s "3")"arithmetic instruction count"
   when(name=="instruction-budget.json")$ensure(get result "instructions"==s "3" && get result "trace"==arr(replicate 3(obj[("pc",s "0x00001004"),("instruction",s "0xeafffffe")])) )"exact budget trace"
   when(name=="wall-budget.json")$ensure(num(get result "elapsed_ns")<1000000000)"wall bound"
+ dispatchRegressions runner
  withTemporary "fuji-native-tests"$ \root->do
   artifacts<-filter((==".bin").takeExtension) <$> listDirectory "emulation/fixtures"
   forM_ artifacts$ \name->copyFile("emulation/fixtures" </> name)(root </> name)

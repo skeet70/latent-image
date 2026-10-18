@@ -16,6 +16,10 @@ SCANNER_REGISTERED = 0x89f7c8
 NODE_REGISTRY = 0x81babc
 CURRENT_NODE = 0x9571d0
 ROW_CAP = 0x4f
+SUBCOMMAND_DESCRIPTOR = 0x7cb1e4
+SUBCOMMAND_TRANSITIONS = 0x7cb200
+SUBCOMMAND_REGISTERED = 0x89f808
+SUBCOMMAND_SAMPLED = 0x955be9
 ALIASES = {'menu': 'ok', 'disp': 'back'}
 
 
@@ -30,6 +34,8 @@ class MenuKey(str, Enum):
     PLAY = 'play'
     FN = 'fn'
     DIAL_PUSH = 'dial-push'
+    DIAL_LEFT = 'dial-left'
+    DIAL_RIGHT = 'dial-right'
 
     @classmethod
     def parse(cls, value):
@@ -53,8 +59,15 @@ class KeyCode(IntEnum):
     PLAY = 0x0b
     FN = 0x28
     DIAL_PUSH = 0x2b
+    DIAL_LEFT = 0x2c
+    DIAL_RIGHT = 0x2d
     Q = 0x32
     MOVIE = 0x34
+
+
+class GpioLevel(IntEnum):
+    LOW = 0
+    HIGH = 1
 
 
 class AdcChannel(IntEnum):
@@ -108,6 +121,12 @@ class GpioBinding:
 
 
 @dataclass(frozen=True)
+class DialBinding:
+    code: KeyCode
+    phases: tuple[tuple[GpioLevel, GpioLevel], ...]
+
+
+@dataclass(frozen=True)
 class CalibratedRange:
     binding: AdcBinding
     low: int
@@ -134,6 +153,15 @@ GPIO_KEY_RECORDS = {
     MenuKey.PLAY: GpioBinding(KeyCode.PLAY, 12, 2, 9, 0),
     MenuKey.FN: GpioBinding(KeyCode.FN, 13, 0, 11, 0),
     MenuKey.DIAL_PUSH: GpioBinding(KeyCode.DIAL_PUSH, 22, 0, 10, 0),
+}
+# FUN_006a3b4c indexes 0x7cb200 by current*4+previous; only 00->01/01->00 emit.
+DIAL_KEY_RECORDS = {
+    MenuKey.DIAL_LEFT: DialBinding(KeyCode.DIAL_LEFT, (
+        (GpioLevel.HIGH, GpioLevel.LOW), (GpioLevel.LOW, GpioLevel.LOW),
+        (GpioLevel.LOW, GpioLevel.HIGH), (GpioLevel.HIGH, GpioLevel.HIGH))),
+    MenuKey.DIAL_RIGHT: DialBinding(KeyCode.DIAL_RIGHT, (
+        (GpioLevel.LOW, GpioLevel.HIGH), (GpioLevel.LOW, GpioLevel.LOW),
+        (GpioLevel.HIGH, GpioLevel.LOW), (GpioLevel.HIGH, GpioLevel.HIGH))),
 }
 ADC_RECORDS = tuple(KEY_RECORDS.values()) + (
     AdcBinding(KeyCode.MOVIE, 21, AdcChannel.BUTTONS, CalibrationTag.MOVIE_LOW, CalibrationTag.MOVIE_HIGH),
@@ -296,6 +324,16 @@ class MenuInputs:
                 target != (binding.port << 16 | binding.pin) or pressed != binding.pressed_level):
             raise ValueError('GPIO key record does not match X-M1 1.50: ' + binding.code.name)
 
+    def _dial_record(self):
+        if struct.unpack('<4I', _raw(self.board, SUBCOMMAND_DESCRIPTOR, 16)) != (1, 0x30008, 0x30009, 0):
+            raise ValueError('Sub-command GPIO descriptor does not match X-M1 1.50')
+        transitions = struct.unpack('<16I', _raw(self.board, SUBCOMMAND_TRANSITIONS, 64))
+        if transitions != (0, KeyCode.DIAL_RIGHT, 0, 0, KeyCode.DIAL_LEFT, 0, 0, 0,
+                           0, 0, 0, 0, 0, 0, 0, 0):
+            raise ValueError('Sub-command transition table does not match X-M1 1.50')
+        if _word(self.board, SUBCOMMAND_REGISTERED) != 1:
+            raise ValueError('X-M1 sub-command GPIO scanner is not registered')
+
     def availability(self):
         if not _word(self.board, CALIBRATION_POINTER):
             return {'ready': False, 'reason': 'X-M1 calibration is not loaded'}
@@ -313,6 +351,7 @@ class MenuInputs:
                     raise ValueError('Calibration midpoint asserts competing keys on one ADC channel')
             for binding in GPIO_KEY_RECORDS.values():
                 self._gpio_record(binding)
+            self._dial_record()
         except ValueError as error:
             return {'ready': False, 'reason': 'X-M1 input calibration is not ready: ' + str(error)}
         return {'ready': True, 'reason': None}
@@ -333,6 +372,27 @@ class MenuInputs:
                                          binding.pressed_level if pressed else 1 - binding.pressed_level,
                                          source='MenuInputs X-M1 1.50 ' + binding.code.name)
 
+    def _dial_levels(self):
+        return tuple(self.controls.gpio_input_pin(3, pin) for pin in (8, 9))
+
+    def phase_acknowledged(self):
+        levels = self._dial_levels()
+        return _raw(self.board, SUBCOMMAND_SAMPLED, 1)[0] == (levels[0] << 1 | levels[1])
+
+    @property
+    def phase_count(self):
+        return 4 if self._pressed is not None and isinstance(self._pressed[1], DialBinding) else 1
+
+    def phase(self, index):
+        if self._pressed is None or not isinstance(self._pressed[1], DialBinding):
+            raise ValueError('Sub-command phase requires an active dial input')
+        key, binding = self._pressed
+        if type(index) is not int or not 0 <= index < len(binding.phases):
+            raise ValueError('Sub-command phase must be 0..3')
+        levels = binding.phases[index]
+        for pin, level in zip((8, 9), levels):
+            self.controls.set_gpio_input_pin(3, pin, int(level), source='MenuInputs X-M1 1.50 ' + key.value)
+
     def press(self, name):
         key = MenuKey.parse(name)
         if self._pressed is not None:
@@ -340,8 +400,15 @@ class MenuInputs:
         availability = self.availability()
         if not availability['ready']:
             raise ValueError(availability['reason'])
-        binding = GPIO_KEY_RECORDS.get(key) or KEY_RECORDS[key]
+        binding = DIAL_KEY_RECORDS.get(key) or GPIO_KEY_RECORDS.get(key) or KEY_RECORDS[key]
+        if isinstance(binding, DialBinding) and self._dial_levels() != (1, 1):
+            raise ValueError('Sub-command rotation requires released GPIO3/8 and GPIO3/9')
+        if isinstance(binding, DialBinding) and not self.phase_acknowledged():
+            raise ValueError('Wait for the sub-command scanner to sample released GPIO3/8 and GPIO3/9')
         self._pressed = (key, binding)
+        if isinstance(binding, DialBinding):
+            self.phase(0)
+            return None
         if isinstance(binding, GpioBinding):
             self._gpio(binding, True)
             return None
@@ -351,7 +418,11 @@ class MenuInputs:
         if self._pressed is None:
             return None
         _, binding = self._pressed
-        if isinstance(binding, GpioBinding):
+        if isinstance(binding, DialBinding):
+            for pin in (8, 9):
+                self.controls.set_gpio_input_pin(3, pin, 1, source='MenuInputs X-M1 1.50 release')
+            result = None
+        elif isinstance(binding, GpioBinding):
             self._gpio(binding, False)
             result = None
         else:
@@ -368,8 +439,14 @@ class MenuInputs:
                           if intervals[binding.code].contains(samples[binding.channel]))
             active.extend(key.value for key, binding in GPIO_KEY_RECORDS.items()
                           if self.controls.gpio_input_pin(binding.port, binding.pin) == binding.pressed_level)
+            if self._pressed is not None and isinstance(self._pressed[1], DialBinding):
+                active.append(self._pressed[0].value)
         return {'adc_samples': {str(int(channel)): samples[channel] for channel in AdcChannel},
+                'subcommand_dial_levels': {'gpio3_8': self._dial_levels()[0], 'gpio3_9': self._dial_levels()[1]},
+                'subcommand_dial_sampled': ready and self.phase_acknowledged(),
                 'pressed': active[0] if len(active) == 1 else None, 'asserted_keys': active,
                 'inputs_released': (self._pressed is None and ready and not active
+                                    and self._dial_levels() == (1, 1)
+                                    and self.phase_acknowledged()
                                     and all(samples[channel] == RELEASED for channel in AdcChannel)),
                 'current_menu': current_menu(self.board)}

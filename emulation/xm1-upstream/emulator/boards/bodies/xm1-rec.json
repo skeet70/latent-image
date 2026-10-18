@@ -219,6 +219,8 @@
         "12": 128,
         "11": 0
       },
+      "shutter_wiring": [[0, 2, 10], [0, 3, 11]],
+      "shutter_bindings": [[10, 6958996, 8], [11, 6958976, 8]],
       "profile_name": "X-M1 synthetic normal power-on and idle acquisition sensors; physical levels unmeasured.",
       "acquisition_actuator_profile": "xm1-150-declared-acquisition-gpio-motion-unmeasured"
     },

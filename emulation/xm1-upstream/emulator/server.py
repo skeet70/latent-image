@@ -176,11 +176,13 @@ def make_menu_server(session, port=0, *, page='index.html', bind='127.0.0.1', ho
                 except Exception as error:
                     self._json({'error': str(error)}, 400)
                 return
-            if self.path != '/api/checkpoint':
+            actions = {'/api/checkpoint': 'checkpoint_current',
+                       '/api/media': 'media_control', '/api/media/restart': 'restart_media'}
+            if self.path not in actions:
                 return super().do_POST()
             if not self._allowed():
                 return
-            action = getattr(session, 'checkpoint_current', None)
+            action = getattr(session, actions[self.path], None)
             if not callable(action):
                 self._json({'error': 'Not found'}, 404)
                 return

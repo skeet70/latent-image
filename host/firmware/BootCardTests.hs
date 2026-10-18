@@ -58,6 +58,23 @@ main = do
   volume <- checked (mountRom card)
   raw <- checked (readRawRom card)
   superVolume <- checked (mountRom (B.drop (2048*512) card))
+  markerCfg <- checked (stageMarkerConfig AfterApply cfg)
+  markerCard <- checked (bootCard markerCfg payload)
+  markerVolume <- checked (mountRom markerCard)
+  markerSystem <- checked (readRomFile markerCard markerVolume SystemConfig)
+  markerRaw <- checked (readRawRom markerCard)
+  let romPairs bytes = [(word32At bytes (0x34c+8*i), word32At bytes (0x350+8*i)) | i <- [0..fromIntegral (word32At bytes 0x348)-1]]
+      markerPairs = [(fromIntegral a, fromIntegral v) | (a,v) <- pairs] ++ [(0xfff88084,1),(0xfff893c4,0x00050001),(0xfff893c0,0x00010000)]
+      markerUnchanged = [0,4..1020] `except` ([0x10,0x348] ++ [0x384,0x388..0x398])
+      except xs ys = filter (`notElem` ys) xs
+  memoryCfg <- checked (stageMarkerConfig BeforeMemoryWait cfg)
+  memoryCard <- checked (bootCard memoryCfg payload)
+  memoryVolume <- checked (mountRom memoryCard)
+  memorySystem <- checked (readRomFile memoryCard memoryVolume SystemConfig)
+  memoryRaw <- checked (readRawRom memoryCard)
+  let optionalSlots bytes = [(word32At bytes off, word32At bytes (off+4)) | off <- [0xb8,0xc0,0xc8,0xd0]]
+      memorySlots = [(0xfff88084,1),(0,0),(0xfff893c4,0x00050001),(0xfff893c0,0x00010000)]
+      memoryUnchanged = [0,4..1020] `except` ([0x10] ++ [0xb8,0xbc..0xd4])
   let restore = B.replicate 4096 0xa5
   recovery <- checked (recoveryCard cfg payload payload restore)
   recoveryVolume <- checked (mountRom recovery)
@@ -107,6 +124,18 @@ main = do
         [ ("mode 1 reads unchanged stock configuration", readRomFile card volume SystemConfig == Right config)
         , ("mode 1 stages the supplied diagnostic", readRomFile card volume BootPayload == Right payload)
         , ("mode 2 stages the same diagnostic", mode2PayloadBytes raw == payload)
+        , ("stage marker: both ROM routes write the stock pairs, then LED enable, setup and lit state",
+            romPairs markerSystem == markerPairs && romPairs (mode2ConfigBytes markerRaw) == markerPairs)
+        , ("stage marker: ffboot-failure teardown argument set, retry budget unchanged", word32At markerSystem 0x10 == 0x302)
+        , ("stage marker leaves every other configuration word stock",
+            all (\off -> word32At markerSystem off == word32At config off) markerUnchanged)
+        , ("stage marker cannot be applied twice", isLeft (stageMarkerConfig AfterApply markerCfg) && isLeft (stageMarkerConfig BeforeMemoryWait markerCfg))
+        , ("memory-wait marker: both ROM routes enable 0xfff88084 at +0xb8 and set up and light the LED at +0xc8/+0xd0",
+            optionalSlots memorySystem == memorySlots && optionalSlots (mode2ConfigBytes memoryRaw) == memorySlots)
+        , ("memory-wait marker: 0xfff88084 stock through the clock waits, teardown argument set", word32At memorySystem 0x10 == 0x302)
+        , ("memory-wait marker keeps the stock pair table and every other configuration word",
+            romPairs memorySystem == take 7 markerPairs && all (\off -> word32At memorySystem off == word32At config off) memoryUnchanged)
+        , ("memory-wait marker cannot be applied twice", isLeft (stageMarkerConfig BeforeMemoryWait memoryCfg) && isLeft (stageMarkerConfig AfterApply memoryCfg))
         , ("raw configuration changes only the count and three MBR-overlap words", rawConfigDifferences cfg raw ==
             [ ConfigDifference (ConfigWordOffset 0x18) 2 1
             , ConfigDifference (ConfigWordOffset 0x1c0) 0 0x00040000

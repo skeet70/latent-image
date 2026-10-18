@@ -27,7 +27,7 @@ from emulator import board as reference
 from emulator import strict_audit
 from emulator.board import BoardPlatform, ENTRY_LABELS, ROOT, ROM_FILE, ROM_HASH
 from emulator.boards.bindings import firmware_bindings
-from ._native import Machine, NativeError
+from ._native import DeclaredUIConversionPlan, Machine, NativeError
 
 
 @functools.lru_cache(maxsize=None)
@@ -548,17 +548,34 @@ class RustBoard(BoardPlatform):
                 self.exclusive, dict(self.exclusive_stats), set(self.cp14_sites), self._execution_invalidations,
                 [list(r) for r in self.recent])
 
+    def prepare_declared_ui_conversion(self, src_phys: int, dst_phys: int, width: int,
+                                       height: int, stride: int) -> DeclaredUIConversionPlan:
+        """Validate metadata without sampling or modifying DRAM."""
+        return self._native.prepare_declared_ui_conversion(src_phys, dst_phys, width, height, stride)
+
+    def apply_declared_ui_conversion(self, plan: DeclaredUIConversionPlan, cpu_id: int = 0) -> None:
+        """Sample live source DRAM and publish tracked ABGR output."""
+        self._push_native()
+        try:
+            self._native.convert_declared_ui(plan, cpu_id, self.instructions, self.virtual_ticks)
+        finally:
+            self._pull_native(trace=False)
+        self._remove_paused_write_caches(plan.destination_physical, plan.destination_bytes)
+
     def write_memory(self, address, data, cpu_id=0):
         self._push_native()
         self._native.write_bus(cpu_id, address, bytes(data))
         self._pull_native(trace=False)
+        self._remove_paused_write_caches(address, len(data))
+
+    def _remove_paused_write_caches(self, address, size):
         if self.executing_cpu is None:
             for cpu in self.cpus:
-                cpu.ctl_remove_cache(address, address + len(data))
+                cpu.ctl_remove_cache(address, address + size)
                 if address < len(self.ram):
-                    cpu.ctl_remove_cache(address | 0x40000000, (address | 0x40000000) + len(data))
+                    cpu.ctl_remove_cache(address | 0x40000000, (address | 0x40000000) + size)
                 elif 0x40000000 <= address < 0x40000000 + len(self.ram):
-                    cpu.ctl_remove_cache(address & 0x3fffffff, (address & 0x3fffffff) + len(data))
+                    cpu.ctl_remove_cache(address & 0x3fffffff, (address & 0x3fffffff) + size)
 
     def invalidate_execution_caches(self):
         self._native.clear_caches()

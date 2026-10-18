@@ -5,6 +5,8 @@ supported. Files contain typed model data and explicit architectural fields;
 never Unicorn contexts, executable callbacks, pickle, or process pointers.
 The same Python/models/native/Unicorn build is required. Physical-device
 assumptions remain those of the selected profiles, not measured mechanics.
+Declared UI conversion captures retain only typed inactive/completed metadata.
+Incoming ACTIVE state is refused before saved RAM or model state is published.
 """
 from __future__ import annotations
 
@@ -48,7 +50,7 @@ FACTORY_METHODS = {"read_bytes": "read_memory", "write_bytes": "write_memory",
                    "schedule": "schedule", "record": "record", "raise_irq": "queue_irq"}
 VALUE_FIELDS = {"emulator.loader_devices.FujiLZStream": ("history", "pending"),
                 "emulator.panel_serial.PanelSerial": ("board", "words_received", "words", "_transport", "_selection", "_framing", "ENDPOINT"),
-                "emulator.sd_card.SparseCard": ("sectors", "max_dirty_sectors", "data", "base_image")}
+                "emulator.sd_card.SparseCard": ("sectors", "max_dirty_sectors", "data", "base_image", "failure")}
 # Finite execution/reconstruction helpers used by the stock device family.
 # Pin their own globals/private functions as well as imported function bodies.
 # Diagnostic server and process-provenance timestamp modules are excluded.
@@ -132,17 +134,20 @@ def _value_classes():
     from emulator.loader_devices import FujiLZStream, PeripheralDmaState
     from emulator.panel_serial import PanelSerial
     from emulator.recorded_statistics import RecordedStatisticsFixture
-    from emulator.sd_card import SparseCard
+    from emulator.sd_card import SparseCard, MediaImage
     from emulator.pulse_devices import PulseTimer
     from emulator.input_processing_devices import PhaseClockEdge
     from emulator.boot_devices import AcquisitionActuator
     from emulator.producer_stream import StatisticsFrame
     from emulator.control_bus_contracts import ControlBusRegisters, ControlBusReplies
     from emulator.boards.control_bus_parameters import EndpointDescriptor, FirmwareView
+    from emulator.image_parameter_devices import (UIPhysicalAddress, UIPixelStride,
+        UIPixelGeometry, UIVirtualTick, UIConversionProgramming)
     return {_name(cls): cls for cls in (InterruptBank, PolledTimer, ApplicationTimer,
         TimingBank, FormatterBank, FujiLZStream, PeripheralDmaState, PulseTimer, PhaseClockEdge, AcquisitionActuator,
         ControlBusRegisters, ControlBusReplies, EndpointDescriptor, FirmwareView,
-        PanelSerial, RecordedStatisticsFixture, SparseCard, StatisticsFrame)}
+        PanelSerial, RecordedStatisticsFixture, SparseCard, MediaImage, StatisticsFrame,
+        UIPhysicalAddress, UIPixelStride, UIPixelGeometry, UIVirtualTick, UIConversionProgramming)}
 
 
 def _enum_classes():
@@ -153,12 +158,37 @@ def _enum_classes():
     from emulator.image_stream import ImageStreamProfile
     from emulator.producer_stream import ProducerStreamProfile
     from emulator.scanout import RectangleProfile
+    from emulator.sd_card import MediaFault
+    from emulator.interrupts import DeclaredUIIRQTarget
+    from emulator.image_parameter_devices import (UIConversionProfile, UIConversionCommand,
+        UIConversionPhase, UIConversionMask, UIConversionRegister, UIConversionSelector,
+        UIConversionZero, UIConversionAlpha, UIConversionCompletion, UIOriginCore)
     return {_name(cls): cls for cls in (AudioRegister, PhaseSource, PulseClockProfile,
                                       AcquisitionActuatorProfile, AcquisitionDrive, ImageStreamProfile,
-                                      ProducerStreamProfile, RectangleProfile)}
+                                      ProducerStreamProfile, RectangleProfile, MediaFault,
+                                      DeclaredUIIRQTarget, UIConversionProfile, UIConversionCommand,
+                                      UIConversionPhase, UIConversionMask, UIConversionRegister,
+                                      UIConversionSelector, UIConversionZero, UIConversionAlpha,
+                                      UIConversionCompletion, UIOriginCore)}
 
 
 def _validate_value(value):
+    from emulator.image_parameter_devices import (UIPhysicalAddress, UIPixelStride,
+        UIPixelGeometry, UIVirtualTick, UIConversionProgramming)
+    if type(value) in (UIPhysicalAddress, UIPixelStride, UIPixelGeometry, UIVirtualTick,
+                       UIConversionProgramming):
+        try:
+            if type(value) is UIConversionProgramming:
+                value.validate()
+            else:
+                value.__post_init__()
+        except ValueError as error:
+            raise PortableCheckpointError("UI conversion value contract differs") from error
+    if _name(type(value)) == "emulator.sd_card.MediaImage":
+        try:
+            value.__post_init__()
+        except ValueError as error:
+            raise PortableCheckpointError("SD image provenance contract differs") from error
     if _name(type(value)) == "emulator.producer_stream.StatisticsFrame":
         try:
             value.__post_init__()
@@ -184,11 +214,13 @@ def _validate_value(value):
         except ValueError as error:
             raise PortableCheckpointError("Panel serial value contract differs") from error
     if _name(type(value)) == "emulator.sd_card.SparseCard":
-        from emulator.sd_card import SparseCard
+        from emulator.sd_card import SparseCard, MediaFault
         try:
             SparseCard(value.sectors, max_dirty_sectors=value.max_dirty_sectors)
         except ValueError as error:
             raise PortableCheckpointError("SparseCard capacity/bound differs") from error
+        if type(value.failure) is not MediaFault:
+            raise PortableCheckpointError("SD failure control differs")
         if (type(value.base_image) is not bytes or len(value.base_image) > 128 << 20
                 or len(value.base_image) % 512 or len(value.base_image) > value.sectors * 512):
             raise PortableCheckpointError("SparseCard immutable base extent differs")
@@ -772,12 +804,19 @@ def _preflight(board):
             and board._portable_factory_options.get("still_pipeline_profile") ==
                 getattr(boot,"STILL_PIPELINE_RESIZE_PROFILE",None)):
         names.append("StillResizeControl")
+    if board._portable_factory_options.get("ui_conversion_profile") is not None:
+        names.append("DeclaredUIConversion")
     if (len(board.devices) != len(names)
             or any(type(device) is not getattr(boot, name) for name, device in zip(names, board.devices))):
         raise PortableCheckpointError("Portable checkpoint requires the complete stock device topology")
     for device in board.devices:
         if type(device) is boot.BootControls:
             _validate_acquisition_state(vars(device), board.virtual_ticks)
+        if type(device) is boot.DeclaredUIConversion:
+            try:
+                device.validate_capture_state(vars(device))
+            except ValueError as error:
+                raise PortableCheckpointError("UI conversion capture state differs") from error
     return _require_native_portable(board)
 
 
@@ -927,8 +966,8 @@ def _load(directory, *, revisions=None, instructions_per_tick=None, override_rat
     signature = inspect.signature(make_board)
     # Optional selections deliberately omit their unselected keys from saved
     # options. No selected peripheral or owner settings are added on restore.
-    optional_absent = {"still_pipeline_profile", "instructions_per_tick", "settings", "firmware_profile"} & set(signature.parameters)
-    if (type(options) is not dict or not (set(options) <= set(signature.parameters) and set(signature.parameters) - set(options) <= optional_absent)
+    optional_absent = {"still_pipeline_profile", "ui_conversion_profile", "instructions_per_tick", "settings", "firmware_profile", "sd_card_image"} & set(signature.parameters)
+    if (type(options) is not dict or "sd_card_image" in options or not (set(options) <= set(signature.parameters) and set(signature.parameters) - set(options) <= optional_absent)
             or any(value is not None and type(value) not in (str, int, bool, float)
                    for key, value in options.items() if key != "firmware_profile")):
         raise PortableCheckpointError("Factory option schema differs")
@@ -985,6 +1024,12 @@ def _load(directory, *, revisions=None, instructions_per_tick=None, override_rat
     for device, state in zip(board.devices, devices):
         if type(device) is BootControls:
             _validate_acquisition_state(state, python.get("virtual_ticks"))
+        from emulator.image_parameter_devices import DeclaredUIConversion
+        if type(device) is DeclaredUIConversion:
+            try:
+                device.validate_capture_state(state)
+            except ValueError as error:
+                raise PortableCheckpointError("Incoming UI conversion state differs") from error
     if revisions is not None:
         for device, state in zip(board.devices, devices):
             if not set(vars(device)) <= set(state):

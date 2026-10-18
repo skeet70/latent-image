@@ -30,6 +30,8 @@ FIELDS = {
     'initialized': MemoryField(0x15e470d, 1), 'display_suppression': MemoryField(0x15e4820),
     'sender_token': MemoryField(0x14e32bc, 1), 'consumer_token': MemoryField(0x14e3338, 1),
     'sender_command': MemoryField(0x14e32ba, 2),
+    'staged_render_command': MemoryField(0x15e46e8, 2),
+    'staged_render_token': MemoryField(0x15e46ea, 1),
     'batch_busy': MemoryField(0x95a69c), 'batch_callback': MemoryField(0x95a6a0),
     'commands_dirty': MemoryField(0x95a6a8), 'display_pending': MemoryField(0x95a6ac),
     'ui_mode': MemoryField(0x9500ec), 'ui_pending': MemoryField(0x9500f8),
@@ -134,11 +136,21 @@ def _drained(probe):
             and graphics['acknowledgements'] >= graphics['completed'])
 
 
+def _auxiliary_render_acknowledged(probe):
+    # DB6804's stack packet preserves DB673C's retained render staging.
+    return (probe['copied_command'] == probe['sender_command'] == 0x8000
+            and probe['packet_token'] == 0
+            and probe.get('staged_render_command', 0) & 0xf000 == 0x4000
+            and probe.get('staged_render_token', 0)
+            == probe['sender_token'] == probe['consumer_token'] != 0)
+
+
 def _consumer_finished(probe):
     # 01109130 finishes the entire 011090A4 dispatch before waiting again.
     return (probe.get('ready') and probe['tasks']['uilib']['status'] == 0x12
             and probe['sender_token'] != 0
-            and probe['packet_token'] == probe['sender_token'] == probe['consumer_token']
+            and (probe['packet_token'] == probe['sender_token'] == probe['consumer_token']
+                 or _auxiliary_render_acknowledged(probe))
             and probe['copied_command'] == probe['sender_command'])
 
 
@@ -257,10 +269,16 @@ class MenuRenderSettle:
                 break
             if after['sender_token'] != before['sender_token']:
                 requested_token = after['sender_token']
-            consumed = (requested_token is not None and after['copied_command'] & 0xf000 == 0x4000
-                        and after['packet_token'] == requested_token
-                        and after['consumer_token'] == requested_token
-                        and after['copied_command'] == after['sender_command'])
+            # Nonzero packet tokens cycle from 1 through 255.
+            consumed = (requested_token is not None and (
+                (after['copied_command'] & 0xf000 == 0x4000
+                 and after['packet_token'] == requested_token
+                 and after['consumer_token'] == requested_token
+                 and after['copied_command'] == after['sender_command'])
+                or (_auxiliary_render_acknowledged(after)
+                    and after['staged_render_token'] == requested_token
+                    and before.get('staged_render_token') is not None
+                    and before['staged_render_token'] != requested_token)))
             new_work = (after['graphics']['completed'] > completed_floor
                         and after['graphics']['bytes_completed'] > bytes_floor)
             if after['graphics']['started'] > before['graphics']['started']:

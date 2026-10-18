@@ -129,9 +129,24 @@ def prepare_xm1_viewer(source, filename):
     stock = load('xm1-150')
     entry = copy.deepcopy(stock)
     inverted = invert(source)
+    root_offset = 0x25c + 0x140000
+    if len(inverted) < root_offset + 16:
+        raise RegistryError('Firmware lacks the segment root header')
+    table_pointer = struct.unpack_from('<I', inverted, root_offset)[0]
+    if table_pointer not in (0x4061c040, 0x4061c010):
+        raise RegistryError('Unsupported segment-table root pointer')
+    row_base = root_offset + table_pointer - 0x4061c000
+    table_end = row_base + 8 * 36
+    if table_end + 4 > len(inverted):
+        raise RegistryError('Segment table extends past the DAT')
+    rows = [struct.unpack_from('<9I', inverted, row_base + index * 36)
+            for index in range(8)]
+    if ([row[0] for row in rows] != list(range(8)) or
+            struct.unpack_from('<I', inverted, table_end)[0] != 0xffffffff):
+        raise RegistryError('Unsupported segment numbering or terminator')
     from tools.unpack_x70 import decompress
     for index, stream in enumerate(entry['unpack']['streams'], 4):
-        row = struct.unpack_from('<9I', inverted, 0x25c + 0x140040 + index * 36)
+        row = rows[index]
         offset = number(stream['dat_offset'])
         window = row[6]
         declared, packed = struct.unpack_from('<2I', inverted, offset)

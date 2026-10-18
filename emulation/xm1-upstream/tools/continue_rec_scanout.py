@@ -262,8 +262,8 @@ def compact_board_state(board):
     ui = ui_state(Reader(board))
     devices = []
     fields = {
-        'GraphicsAccelerator': ('clear_profile', 'copy_profile', 'busy', 'jobs_started',
-                                'jobs_completed', 'irqs_raised', 'acknowledgements'),
+        'GraphicsAccelerator': ('clear_profile', 'copy_profile', 'max_command_capture_bytes',
+                                'busy', 'jobs_started', 'jobs_completed', 'irqs_raised', 'acknowledgements'),
         'InputProcessingControl': ('event_profile', 'event_enable_generation', 'event_due',
                                   'event_source', 'event_irq', 'event_pending', 'event_arms',
                                   'event_assertions', 'event_acknowledgments', 'event_cancellations',

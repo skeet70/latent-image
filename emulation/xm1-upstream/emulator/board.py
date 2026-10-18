@@ -558,8 +558,13 @@ class BoardPlatform:
                     for device in tickers:
                         device.tick(self)
                     if deferrable:
-                        due=min((t for t in (d.next_event_tick(self.virtual_ticks) for d in tickers)
-                                 if t is not None),default=1<<64)
+                        due=None
+                        for device in tickers:
+                            tick=device.next_event_tick(self.virtual_ticks)
+                            if tick is not None and (due is None or tick<due):
+                                due=tick
+                        if due is None:
+                            due=1<<64
                 self.last_quantum_complete=self.instructions>=natural_end or natural_yield
                 if (pause_after is not None and self.instructions>=pause_after
                         and self.last_quantum_complete and not self.failure):
@@ -578,17 +583,17 @@ class BoardPlatform:
             if not active and not self.failure:
                 self.flush_deferred_ticks()
                 due=None
-                future=[self.scheduled[0][0]] if self.scheduled else []
+                future=self.scheduled[0][0] if self.scheduled else None
                 for device in self.devices:
                     if hasattr(device,'next_event_tick'):
-                        due=device.next_event_tick(self.virtual_ticks)
-                        if due is not None:
-                            future.append(due)
-                if not future:
+                        tick=device.next_event_tick(self.virtual_ticks)
+                        if tick is not None and (future is None or tick<future):
+                            future=tick
+                if future is None:
                     self.quiescent=True
                     self.record('All released CPUs waiting; no future modeled event')
                     break
-                self.virtual_ticks=max(self.virtual_ticks+1,min(future))
+                self.virtual_ticks=max(self.virtual_ticks+1,future)
                 while self.scheduled and self.scheduled[0][0]<=self.virtual_ticks:
                     _,_,callback=heapq.heappop(self.scheduled)
                     callback()

@@ -74,6 +74,10 @@ def add_profile_arguments(parser):
     parser.add_argument('--afs-frame-source-profile', choices=('none', *AFS_FRAME_SOURCE_PROFILES))
     parser.add_argument('--afs-frame-source-ticks', type=int, default=400000)
     parser.add_argument('--still-pipeline-profile', choices=('none', *STILL_PIPELINE_PROFILES))
+    from emulator.image_parameter_devices import UIConversionProfile
+    parser.add_argument('--ui-conversion-profile', type=UIConversionProfile.parse,
+                        choices=tuple(UIConversionProfile),
+                        help='Declared UI CPU fallback; arithmetic and timing are not silicon measurements')
 
 
 def profile_options(args):
@@ -121,7 +125,7 @@ def profile_options(args):
             'af_extraction_profile', 'af_extraction_ticks', 'af_extraction_stop_ticks',
             'shutter_irq_profile',
             'afs_frame_source_profile', 'afs_frame_source_ticks',
-            'still_pipeline_profile',
+            'still_pipeline_profile', 'ui_conversion_profile',
         ) if getattr(args, name) is not None
     }
     optional = dict(mcu_profile=None, user_journals=None, spi0_input_profile=None)

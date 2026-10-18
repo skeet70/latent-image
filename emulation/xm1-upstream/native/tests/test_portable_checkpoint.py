@@ -24,14 +24,17 @@ from x70_native.checkpoint import capture, semantic_fingerprint
 from x70_native.portable_checkpoint import load, save, PortableCheckpointError, _require_native_portable
 from unicorn.arm_const import (UC_ARM_REG_PC, UC_ARM_REG_CPSR, UC_ARM_REG_R0,
     UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3, UC_ARM_REG_R4,
-    UC_ARM_REG_R5, UC_ARM_REG_R9, UC_ARM_REG_R10)
+    UC_ARM_REG_R5, UC_ARM_REG_R9, UC_ARM_REG_R10, UC_ARM_REG_SP)
 
 
-def ready(*, firmware_profile=None, rectangle_profile=None, sd_card_profile=None):
+def ready(*, firmware_profile=None, rectangle_profile=None, sd_card_profile=None, sd_card_image=None,
+          ui_conversion_profile=None):
+    options = {} if ui_conversion_profile is None else {'ui_conversion_profile': ui_conversion_profile}
     board = make_board(entry='loader', quantum=8, storage_profile='erased',
                        counter_input_profile=PulseOutputs.COUNTER_LENS_PROFILE,
                        firmware_profile=firmware_profile, rectangle_profile=rectangle_profile,
-                       sd_card_profile=sd_card_profile)
+                       sd_card_profile=sd_card_profile, sd_card_image=sd_card_image,
+                       sd_card_present=sd_card_image is not None, **options)
     board.core_state[1]['runnable'] = False
     board.interrupts.banks[0].enabled = 1 << 22
     controls = next(d for d in board.devices if type(d) is BootControls)
@@ -485,6 +488,278 @@ class RecoveryCardMediaTests(unittest.TestCase):
             restored = load(paused)
             restored_card = next(device.card for device in restored.devices if isinstance(device, SDCardController))
             self.assertEqual(restored_card.read(0, 3), bytes(512) + b'\xb2' * 512 + bytes(512))
+
+
+class DeclaredUIConversionNativeTests(unittest.TestCase):
+    SOURCE = 0x10000
+    DESTINATION = 0x18000
+    PAIR = bytes((10, 11, 129, 128))
+    PIXELS = bytes((255, 11, 9, 10, 255, 12, 10, 11))
+
+    def machine(self, ram_size=0x40000):
+        from x70_native._native import Machine
+        from x70_native.board import unicorn_library
+        machine = Machine(str(unicorn_library()), ram_size, bytes(0x4000), False)
+        machine.set_handler(self.unexpected_event)
+        return machine
+
+    def unexpected_event(self, *event):
+        self.fail(('Unexpected native event', event))
+
+    def write_register(self, machine, core, register, value):
+        machine.reg_write(core, register, value.to_bytes(16, 'little'))
+
+    def read_register(self, machine, core, register):
+        return int.from_bytes(machine.reg_read(core, register), 'little')
+
+    def fill(self, machine, source=None, destination=None):
+        source = self.SOURCE if source is None else source
+        destination = self.DESTINATION if destination is None else destination
+        rows = (self.PAIR * 8 + b'\xcd' * 32) * 8
+        machine.mem_write(0, source - 16, b'\x91' * 16 + rows + b'\x92' * 16)
+        machine.mem_write(0, destination - 16, b'\xa5' * 544)
+        return rows
+
+    def prepare(self, machine):
+        return machine.prepare_declared_ui_conversion(self.SOURCE, self.DESTINATION, 16, 8, 32)
+
+    def exclusive_program(self, machine, core, address):
+        machine.mem_write(core, 0x8000, struct.pack('<2I', 0xe1910f9f, 0xe1812f93))
+        self.write_register(machine, core, UC_ARM_REG_CPSR, 0xd3)
+        self.write_register(machine, core, UC_ARM_REG_R1, address)
+        self.write_register(machine, core, UC_ARM_REG_R3, 0x12345678)
+        self.assertEqual(machine.emu_start(core, 0x8000, 0, count=1), 0)
+
+    def test_literal_conversion_reads_padded_rows_live_and_preserves_guards(self):
+        machine = self.machine()
+        rows = self.fill(machine)
+        plan = self.prepare(machine)
+        machine.mem_write(0, self.SOURCE, bytes((0, 255, 0, 255)))
+        self.assertIsNone(machine.convert_declared_ui(plan, 1, 123, 456))
+        expected = bytes((255, 0, 0, 178, 255, 28, 208, 255)) + self.PIXELS * 63
+        self.assertEqual(machine.mem_read(0, self.DESTINATION - 16, 544),
+                         b'\xa5' * 16 + expected + b'\xa5' * 16)
+        self.assertEqual(machine.mem_read(0, self.SOURCE - 16, len(rows) + 32),
+                         b'\x91' * 16 + bytes((0, 255, 0, 255)) + rows[4:] + b'\x92' * 16)
+
+    def test_prepare_rejects_invalid_boundary_values_without_writing(self):
+        machine = self.machine()
+        self.fill(machine)
+        valid = (self.SOURCE, self.DESTINATION, 16, 8, 32)
+        cases = []
+        for index in range(5):
+            for value in (True, False, None, '16', 16.0, -1, 1 << 64):
+                arguments = list(valid)
+                arguments[index] = value
+                cases.append(tuple(arguments))
+        cases.extend((
+            (self.SOURCE + 1, self.DESTINATION, 16, 8, 32),
+            (self.SOURCE, self.DESTINATION + 1, 16, 8, 32),
+            (self.SOURCE, self.DESTINATION, 0, 8, 32),
+            (self.SOURCE, self.DESTINATION, 15, 8, 32),
+            (self.SOURCE, self.DESTINATION, 16, 0, 32),
+            (self.SOURCE, self.DESTINATION, 16, 7, 32),
+            (self.SOURCE, self.DESTINATION, 32, 8, 16),
+            (self.SOURCE, self.DESTINATION, 16, 8, 31),
+            (self.SOURCE, self.DESTINATION, 8192, 8, 8192),
+            (self.SOURCE, self.DESTINATION, 16, 8192, 32),
+            (self.SOURCE, self.DESTINATION, 16, 8, 32768),
+            (self.SOURCE, self.SOURCE + 16, 16, 8, 32),
+            (self.SOURCE, self.SOURCE - 16, 16, 8, 32),
+            (0x3fff0, self.DESTINATION, 16, 8, 32),
+            (self.SOURCE, 0x3fff0, 16, 8, 32),
+            (0x40010000, self.DESTINATION, 16, 8, 32),
+            (self.SOURCE, 0x40018000, 16, 8, 32),
+            (0xfffffff0, self.DESTINATION, 16, 8, 32),
+        ))
+        for arguments in cases:
+            with self.subTest(arguments=arguments):
+                with self.assertRaises(ValueError):
+                    machine.prepare_declared_ui_conversion(*arguments)
+                self.assertEqual(machine.mem_read(0, self.DESTINATION - 16, 544), b'\xa5' * 544)
+
+    def test_output_limit_accepts_exact_64mib_and_refuses_larger_metadata(self):
+        machine = self.machine(0x8000000)
+        machine.mem_write(0, 0x3000000, b'\xa5' * 16)
+        machine.prepare_declared_ui_conversion(0x1000, 0x3000000, 4096, 4096, 4096)
+        with self.assertRaises(ValueError):
+            machine.prepare_declared_ui_conversion(0x1000, 0x3000000, 4096, 4104, 4096)
+        self.assertEqual(machine.mem_read(0, 0x3000000, 16), b'\xa5' * 16)
+
+    def test_apply_revalidates_plan_against_target_backing(self):
+        owner = self.machine(0x80000)
+        plan = owner.prepare_declared_ui_conversion(0x10000, 0x50000, 16, 8, 32)
+        target = self.machine()
+        self.fill(target)
+        with self.assertRaises(ValueError):
+            target.convert_declared_ui(plan, 0, 0, 0)
+        self.assertEqual(target.mem_read(0, self.DESTINATION - 16, 544), b'\xa5' * 544)
+        source_plan = owner.prepare_declared_ui_conversion(0x50000, self.DESTINATION, 16, 8, 32)
+        with self.assertRaises(ValueError):
+            target.convert_declared_ui(source_plan, 0, 0, 0)
+        self.assertEqual(target.mem_read(0, self.DESTINATION - 16, 544), b'\xa5' * 544)
+
+    def test_apply_rejects_invalid_plan_core_and_clock_types_before_writes(self):
+        machine = self.machine()
+        self.fill(machine)
+        plan = self.prepare(machine)
+        for invalid_plan in (None, True, 'plan', object()):
+            with self.subTest(plan=invalid_plan):
+                with self.assertRaises(ValueError):
+                    machine.convert_declared_ui(invalid_plan, 0, 123, 456)
+                self.assertEqual(machine.mem_read(0, self.DESTINATION - 16, 544), b'\xa5' * 544)
+        for index in range(3):
+            values = (True, None, '1', 1.0, -1, 1 << 64)
+            if index == 0:
+                values += (2,)
+            for value in values:
+                with self.subTest(index=index, value=value):
+                    arguments = [0, 123, 456]
+                    arguments[index] = value
+                    with self.assertRaises(ValueError):
+                        machine.convert_declared_ui(plan, *arguments)
+                    self.assertEqual(machine.mem_read(0, self.DESTINATION - 16, 544), b'\xa5' * 544)
+
+    def test_each_core_audit_refuses_before_destination_or_reservation_effects(self):
+        from x70_native._native import NativeError
+        for audit_core in (0, 1):
+            with self.subTest(audit_core=audit_core):
+                machine = self.machine()
+                self.fill(machine)
+                plan = self.prepare(machine)
+                self.exclusive_program(machine, 0, 0x40000000 + self.DESTINATION)
+                machine.audit_begin(audit_core, 0x30000, 0x31000)
+                self.write_register(machine, 0, UC_ARM_REG_SP, 0x30800)
+                with self.assertRaises(NativeError):
+                    machine.convert_declared_ui(plan, 0, 123, 456)
+                self.assertEqual(machine.mem_read(0, self.DESTINATION - 16, 544), b'\xa5' * 544)
+                self.assertEqual(machine.emu_start(0, 0x8004, 0, count=1), 0)
+                self.assertEqual(self.read_register(machine, 0, UC_ARM_REG_R2), 0)
+
+    def test_probe_records_exact_rows_then_output_with_originating_clock(self):
+        machine = self.machine()
+        self.fill(machine)
+        plan = self.prepare(machine)
+        machine.access_probe_begin([(self.SOURCE, self.SOURCE + 512),
+                                    (self.DESTINATION, self.DESTINATION + 512)], limit=9)
+        machine.convert_declared_ui(plan, 1, 123, 456)
+        state = machine.access_probe_state()
+        self.assertIsNone(state['violation'])
+        observed = [(row['core'], row['address'], row['physical'], row['size'],
+                     row['instructions'], row['ticks']) for row in state['records']]
+        expected = [(1, self.SOURCE + 64 * row, self.SOURCE + 64 * row, 32, 123, 456)
+                    for row in range(8)]
+        expected.append((1, self.DESTINATION, self.DESTINATION, 512, 123, 456))
+        self.assertEqual(observed, expected)
+        machine.access_probe_end()
+        self.assertEqual(machine.mem_read(0, self.DESTINATION, 512), self.PIXELS * 64)
+
+    def test_probe_exhaustion_on_final_row_or_output_precedes_any_write(self):
+        from x70_native._native import NativeError
+        for limit in (7, 8):
+            with self.subTest(limit=limit):
+                machine = self.machine()
+                self.fill(machine)
+                plan = self.prepare(machine)
+                self.exclusive_program(machine, 0, self.DESTINATION)
+                machine.access_probe_begin([(self.SOURCE, self.SOURCE + 512),
+                                            (self.DESTINATION, self.DESTINATION + 512)], limit=limit)
+                with self.assertRaises(NativeError):
+                    machine.convert_declared_ui(plan, 0, 123, 456)
+                self.assertIsNotNone(machine.access_probe_state()['violation'])
+                machine.access_probe_end()
+                self.assertEqual(machine.mem_read(0, self.DESTINATION - 16, 544), b'\xa5' * 544)
+                self.assertEqual(machine.emu_start(0, 0x8004, 0, count=1), 0)
+                self.assertEqual(self.read_register(machine, 0, UC_ARM_REG_R2), 0)
+
+    def test_physical_dma_invalidates_other_core_alias_exclusive_store(self):
+        machine = self.machine()
+        self.fill(machine)
+        plan = self.prepare(machine)
+        self.exclusive_program(machine, 1, 0x40000000 + self.DESTINATION)
+        machine.convert_declared_ui(plan, 0, 123, 456)
+        self.assertEqual(machine.emu_start(1, 0x8004, 0, count=1), 0)
+        self.assertEqual(self.read_register(machine, 1, UC_ARM_REG_R2), 1)
+        self.assertEqual(machine.mem_read(0, self.DESTINATION, 512), self.PIXELS * 64)
+
+    def test_dma_output_replaces_already_executed_thumb_code_in_other_alias(self):
+        machine = self.machine()
+        self.fill(machine)
+        plan = self.prepare(machine)
+        machine.mem_write(0, self.SOURCE, bytes((32, 32, 128, 128)) * 8)
+        machine.mem_write(0, self.DESTINATION, b'\x07\x20')
+        self.write_register(machine, 1, UC_ARM_REG_CPSR, 0xf3)
+        self.assertEqual(machine.emu_start(1, (0x40000000 + self.DESTINATION) | 1, 0, count=1), 0)
+        self.assertEqual(self.read_register(machine, 1, UC_ARM_REG_R0), 7)
+        machine.convert_declared_ui(plan, 0, 123, 456)
+        self.assertEqual(machine.emu_start(1, (0x40000000 + self.DESTINATION) | 1, 0, count=1), 0)
+        self.assertEqual(self.read_register(machine, 1, UC_ARM_REG_R0), 255)
+
+    def test_tcm_straddling_destination_refuses_for_each_core_and_alias(self):
+        from x70_native._native import NativeError
+        for core in (0, 1):
+            for alias in (0, 0x40000000):
+                with self.subTest(core=core, alias=alias):
+                    machine = self.machine()
+                    destination = 0x21ff0
+                    self.fill(machine, destination=destination)
+                    plan = machine.prepare_declared_ui_conversion(self.SOURCE, destination, 16, 8, 32)
+                    machine.cpr(core, 15, 0, 9, 1, 1, 0, False, alias + 0x20001)
+                    register = machine.cpr(core, 15, 0, 9, 1, 1, 0, False)
+                    self.assertEqual(register & 0xfffff001, alias + 0x20001)
+                    with self.assertRaises(NativeError):
+                        machine.convert_declared_ui(plan, 1 - core, 123, 456)
+                    machine.cpr(core, 15, 0, 9, 1, 1, 0, False, register & ~1)
+                    self.assertEqual(machine.mem_read(0, destination - 16, 544), b'\xa5' * 544)
+
+    def test_board_apply_pulls_dma_tracking_before_next_public_push(self):
+        board = ready()
+        board.write_memory(self.SOURCE, (self.PAIR * 8 + b'\xcd' * 32) * 8)
+        board.write_memory(self.DESTINATION, b'\xa5' * 512)
+        plan = board.prepare_declared_ui_conversion(self.SOURCE, self.DESTINATION, 16, 8, 32)
+        board.write_memory(0x8000, struct.pack('<2I', 0xe1910f9f, 0xe1812f93))
+        cpu = board.cpus[0]
+        for register, value in ((UC_ARM_REG_CPSR, 0xd3),
+                                (UC_ARM_REG_R1, 0x40000000 + self.DESTINATION),
+                                (UC_ARM_REG_R3, 0x12345678)):
+            cpu.reg_write(register, value)
+        cpu.emu_start(0x8000, 0, count=1)
+        self.assertIsNone(board.apply_declared_ui_conversion(plan))
+        self.assertEqual(board.read_memory(self.DESTINATION, 512), self.PIXELS * 64)
+        board.write_memory(0x9000, b'\x17')
+        cpu.emu_start(0x8004, 0, count=1)
+        self.assertEqual(cpu.reg_read(UC_ARM_REG_R2), 1)
+        self.assertEqual(board.read_memory(self.DESTINATION, 512), self.PIXELS * 64)
+        self.assertIsNone(board.failure)
+
+    def test_board_apply_keeps_executed_alias_code_visible_after_public_push(self):
+        board = ready()
+        board.write_memory(self.SOURCE, bytes((32, 32, 128, 128)) * 64)
+        board.write_memory(self.DESTINATION, b'\x07\x20' + b'\xa5' * 510)
+        plan = board.prepare_declared_ui_conversion(self.SOURCE, self.DESTINATION, 16, 8, 16)
+        cpu = board.cpus[0]
+        cpu.reg_write(UC_ARM_REG_CPSR, 0xf3)
+        address = (0x40000000 + self.DESTINATION) | 1
+        cpu.emu_start(address, 0, count=1)
+        self.assertEqual(cpu.reg_read(UC_ARM_REG_R0), 7)
+        board.apply_declared_ui_conversion(plan)
+        board.write_memory(0x9000, b'\x17')
+        cpu.emu_start(address, 0, count=1)
+        self.assertEqual(cpu.reg_read(UC_ARM_REG_R0), 255)
+        self.assertEqual(board.read_memory(self.DESTINATION, 512), bytes((255, 32, 32, 32)) * 128)
+        self.assertIsNone(board.failure)
+
+    def test_board_prepare_rejects_bool_without_destination_changes(self):
+        board = ready()
+        board.write_memory(self.DESTINATION, b'\xa5' * 512)
+        valid = (self.SOURCE, self.DESTINATION, 16, 8, 32)
+        for index in range(5):
+            with self.subTest(index=index):
+                arguments = list(valid)
+                arguments[index] = True
+                with self.assertRaises(ValueError):
+                    board.prepare_declared_ui_conversion(*arguments)
+                self.assertEqual(board.read_memory(self.DESTINATION, 512), b'\xa5' * 512)
 
 
 if __name__ == '__main__':

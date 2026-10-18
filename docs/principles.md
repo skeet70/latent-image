@@ -26,6 +26,8 @@ Camera code exposes only closed operations whose bytes are built internally. It 
 
 Contribute host tooling, firmware analysis, emulation, AF experiments or documentation through [GitHub Issues](https://github.com/skeet70/latent-image/issues). Independent review is required for new camera bytes that change camera state (H2/H3 in [the operation classes](../spec/07-governance-and-handoff.md#32-operation-classes)); the author fixes findings and the reviewer confirms. Assistant-specific instructions are in [AGENTS.md](../AGENTS.md).
 
+Development loop: concurrent agents work in separate worktrees and Bazel output bases ([build integration](../build-support/README.md)) and leave their changes uncommitted there; one integration owner commits and merges them. A full-system candidate is checked in the emulator, including the owner's visual check, before independent review. Emulator runs are serialized by `~/.cache/latent-image-emulator.lock`, run under a memory cap, and start from a saved portable checkpoint where one exists; a new harness step is tried on a short checkpointed run before a full one. Assignments are sized to finish within one agent's request budget.
+
 Maintain current conclusions, not a diary. Keep one authoritative home for each rule or design and link to it. Update GitHub Issues for changed open work and the evidence ledger for changed durable claims. Commits and handoffs carry ordinary checks.
 
 Historical evidence-ledger paths and hashes identify the recorded artifact versions and private provenance aliases, not necessarily current files or distributed inputs. Previously tracked public files can be consulted in this repository's Git history; files from the private research archive are not provided here.

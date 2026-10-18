@@ -986,6 +986,7 @@ class GraphicsAccelerator:
     CLEAR_STATUS = 1 << 31
     CLEAR_PROFILE = CLEAR_PROFILE
     UI_PROFILE = UI_PROFILE
+    UI_CAPTURE_BYTES = 0x80000
     # Values actually written by the unchanged initializer0xbcdcf8.
     INIT_VALUES = {
         0x1800: {0}, 0x1880: {0x12345678},
@@ -1015,8 +1016,8 @@ class GraphicsAccelerator:
         if not 0 < max_copy_bytes <= ram_bytes or copy_profile not in (None, self.COPY_PROFILE):
             raise ValueError('Invalid graphics copy profile/bounds')
         if max_command_capture_bytes is None:
-            max_command_capture_bytes = 0x40000 if clear_profile == self.UI_PROFILE else 0x10000
-        capture_limit = 0x40000 if clear_profile == self.UI_PROFILE else 0x10000
+            max_command_capture_bytes = self.UI_CAPTURE_BYTES if clear_profile == self.UI_PROFILE else 0x10000
+        capture_limit = self.UI_CAPTURE_BYTES if clear_profile == self.UI_PROFILE else 0x10000
         if not 8 <= max_command_capture_bytes <= capture_limit or max_command_capture_bytes & 7:
             raise ValueError('Invalid graphics command capture bound')
         if max_clear_bytes is None:

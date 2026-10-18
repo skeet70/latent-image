@@ -15,7 +15,7 @@ use engine::{Inner, Runner};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::{PyTraverseError, PyVisit};
-use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyTuple};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
@@ -24,6 +24,16 @@ use std::rc::Rc;
 pyo3::create_exception!(_native, NativeError, PyRuntimeError);
 fn error(message: String) -> PyErr {
     NativeError::new_err(message)
+}
+
+fn conversion_integer(value: &Bound<'_, PyAny>, name: &str) -> PyResult<u64> {
+    if !value.is_exact_instance_of::<PyInt>() {
+        return Err(PyValueError::new_err(format!(
+            "{name} must be an actual Python int, not bool or a coercible value",
+        )));
+    }
+    value.extract::<u64>()
+        .map_err(|_| PyValueError::new_err(format!("{name} must be in 0..2^64-1")))
 }
 
 #[pyclass(unsendable, module = "x70_native._native")]
@@ -750,6 +760,41 @@ impl Machine {
             "model-bus-write", None).map_err(error)?;
         self.inner.write_bus(core, address, data).map_err(error)
     }
+    fn prepare_declared_ui_conversion(
+        &self,
+        src_phys: &Bound<'_, PyAny>,
+        dst_phys: &Bound<'_, PyAny>,
+        width: &Bound<'_, PyAny>,
+        height: &Bound<'_, PyAny>,
+        stride: &Bound<'_, PyAny>,
+    ) -> PyResult<raster::DeclaredUIConversionPlan> {
+        raster::DeclaredUIConversionPlan::prepare(
+            conversion_integer(src_phys, "src_phys")?,
+            conversion_integer(dst_phys, "dst_phys")?,
+            conversion_integer(width, "width")?,
+            conversion_integer(height, "height")?,
+            conversion_integer(stride, "stride")?,
+            self.inner.ram.len(),
+        ).map_err(PyValueError::new_err)
+    }
+
+    fn convert_declared_ui(
+        &self,
+        plan: &Bound<'_, PyAny>,
+        core: &Bound<'_, PyAny>,
+        instructions: &Bound<'_, PyAny>,
+        ticks: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let plan = plan.extract::<PyRef<'_, raster::DeclaredUIConversionPlan>>()
+            .map_err(|_| PyValueError::new_err("Expected a DeclaredUIConversionPlan"))?;
+        let origin = engine::ConversionOrigin::new(
+            conversion_integer(core, "core")?,
+            conversion_integer(instructions, "instructions")?,
+            conversion_integer(ticks, "ticks")?,
+        ).map_err(PyValueError::new_err)?;
+        self.inner.convert_declared_ui(&plan, origin)
+    }
+
     fn mem_unmap(&self, core: usize, address: u64, size: usize) -> PyResult<()> {
         self.inner.paused().map_err(error)?;
         self.inner
@@ -1373,6 +1418,7 @@ impl Machine {
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Machine>()?;
     m.add_class::<CpuContext>()?;
+    m.add_class::<raster::DeclaredUIConversionPlan>()?;
     m.add("NativeError", m.py().get_type::<NativeError>())?;
     m.add("UNICORN_ABI", "2.1.4")?;
     m.add("VERSION", env!("CARGO_PKG_VERSION"))?;

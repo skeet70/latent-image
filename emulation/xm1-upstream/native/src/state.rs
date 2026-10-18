@@ -344,6 +344,9 @@ impl State {
         }
     }
     pub fn invalidate_exclusive(&mut self, address: u64, size: u64, core: usize, ram_size: u64) {
+        if !self.reservations.iter().flatten().any(|reservation| reservation.valid) {
+            return;
+        }
         if let Some(canonical) = self.canonical_address(address, core, ram_size) {
             let mut touched = false;
             for r in self.reservations.iter_mut().flatten() {
@@ -500,9 +503,12 @@ impl State {
         for page in address >> 12..=(address + size.max(1) - 1) >> 12 {
             self.watch_page(core, page << 12, ram_size);
             let bits = self.code_bytes[core].entry(page).or_insert_with(|| Box::new([0; 64]));
-            for byte in address.max(page << 12)..(address + size).min((page + 1) << 12) {
-                let offset = (byte & 0xfff) as usize;
-                bits[offset / 64] |= 1 << (offset % 64);
+            let first = (address.max(page << 12) & 0xfff) as usize;
+            let end = ((address + size).min((page + 1) << 12) - (page << 12)) as usize;
+            for word in first / 64..end.div_ceil(64) {
+                let low = first.saturating_sub(word * 64);
+                let high = (end - word * 64).min(64);
+                bits[word] |= (u64::MAX << low) & (u64::MAX >> (64 - high));
             }
         }
     }
@@ -732,6 +738,20 @@ mod tests {
         assert_eq!(State::canonical(0xffff0080, 1, 0x200000), Some(0x3fff0080));
     }
     #[test]
+    fn stores_without_live_reservations_leave_exclusive_counts_unchanged() {
+        let mut s = State::new(vec![]);
+        s.invalidate_exclusive(0x2000, 4, 0, 0x200000);
+        assert_eq!(s.exclusive.invalidations, 0);
+        assert_eq!(s.aux_version, 0);
+        s.reservations[1] = Some(Reservation { address: 0x2000, valid: true });
+        s.invalidate_exclusive(0x40002000, 4, 0, 0x200000);
+        assert_eq!(s.exclusive.invalidations, 1);
+        let version = s.aux_version;
+        s.invalidate_exclusive(0x2000, 4, 1, 0x200000);
+        assert_eq!(s.exclusive.invalidations, 1);
+        assert_eq!(s.aux_version, version);
+    }
+    #[test]
     fn invalidation_tracks_both_cpus_and_aliases() {
         let mut s = State::new(vec![]);
         for core in 0..2 {
@@ -758,6 +778,43 @@ mod tests {
         assert!(s.cache[0].is_empty());
         assert!(s.pending[0].contains(&2));
         assert!(s.code_bytes[0].is_empty());
+    }
+    #[test]
+    fn translated_byte_boundaries_preserve_neighboring_data_stores() {
+        for (start, size) in [
+            (0x2000, 1),
+            (0x203f, 1),
+            (0x203f, 2),
+            (0x2040, 64),
+            (0x203f, 130),
+            (0x2fff, 1),
+            (0x2fff, 2),
+            (0x2fff, 4098),
+        ] {
+            for (address, overlaps) in [
+                (start - 1, false),
+                (start, true),
+                (start + size / 2, true),
+                (start + size - 1, true),
+                (start + size, false),
+            ] {
+                let mut s = State::new(vec![]);
+                s.note_code(0, start, size, 0x200000);
+                s.invalidate_code(address, 1, 0, 0x200000);
+                assert_eq!(s.pending[0].contains(&(address >> 12)), overlaps);
+                assert!(s.pending[1].is_empty());
+            }
+        }
+    }
+    #[test]
+    fn separately_translated_spans_keep_the_gap_writable() {
+        for (address, overlaps) in [(0x203f, true), (0x2040, false), (0x207f, true)] {
+            let mut s = State::new(vec![]);
+            s.note_code(0, 0x203e, 2, 0x200000);
+            s.note_code(0, 0x207f, 2, 0x200000);
+            s.invalidate_code(address, 1, 0, 0x200000);
+            assert_eq!(s.pending[0].contains(&2), overlaps);
+        }
     }
     #[test]
     fn trace_ring_extend_equals_pushes() {

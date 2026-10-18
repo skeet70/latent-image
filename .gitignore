@@ -10,7 +10,7 @@ __pycache__/
 *.py[cod]
 
 # Camera-specific or otherwise private research inputs
-/private-data/
+/private-data
 .tools/
 
 # Local credentials/configuration

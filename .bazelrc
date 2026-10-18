@@ -3,3 +3,8 @@ build --host_platform=//build-support:host
 build --platforms=//build-support:host
 build --enable_runfiles
 test --test_output=errors
+# Shared across output bases, so a concurrent agent on its own --output_base reuses actions.
+build --disk_cache=~/.cache/bazel-disk/latent-image
+# Every output base runs its own server; idle ones exit instead of holding memory for 3 h.
+startup --max_idle_secs=600
+startup --host_jvm_args=-Xmx2g

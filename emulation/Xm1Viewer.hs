@@ -11,7 +11,7 @@ import System.Environment (getArgs, getExecutablePath, lookupEnv, setEnv)
 import System.Exit (exitFailure)
 import System.FilePath ((</>), isAbsolute, splitDirectories, takeDirectory, takeFileName)
 import System.IO (IOMode (ReadMode), hFlush, hPutStrLn, stderr, stdout, withBinaryFile)
-import System.Posix.Files (setFileMode)
+import System.Posix.Files (getFileStatus, isRegularFile, setFileMode)
 import System.Posix.Process (executeFile, getProcessID)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Text.Read (readMaybe)
@@ -19,16 +19,21 @@ import Text.Read (readMaybe)
 newtype Workspace = Workspace FilePath
 newtype Runtime = Runtime FilePath
 newtype Firmware = Firmware FilePath
+newtype VirtualSDImage = VirtualSDImage FilePath
 newtype Python = Python FilePath
 newtype NativePackage = NativePackage FilePath
 newtype Port = Port Word16
 
 data Bind = IPv4Loopback
 
+data UiConversionProfile = StrictUiConversion | DeclaredUiCpuFallback
+
 data Options = Options
   { workspaceOption :: Maybe Workspace
   , outputOption :: Maybe Runtime
   , firmwareOption :: Maybe Firmware
+  , virtualSDImageOption :: Maybe VirtualSDImage
+  , uiConversionProfileOption :: UiConversionProfile
   , portOption :: Port
   , bindOption :: Bind
   }
@@ -48,6 +53,10 @@ usage = unlines
   , "  --workspace PATH       Repository root (default: BUILD_WORKSPACE_DIRECTORY)"
   , "  --output PATH          Fresh runtime directory under workspace/private-data/"
   , "  --firmware PATH        Stock or modified X-M1 1.50-compatible DAT input"
+  , "  --sd-card-image PATH   Regular raw virtual-card image beneath private-data/"
+  , "  --ui-conversion-profile PROFILE"
+  , "                         strict (default) or declared-ui-cpu-fallback"
+  , "                         The fallback is an unmeasured UI-only model."
   , ""
   , "Default DAT: private-data/firmware/x-m1-1.50/FWUP0002.DAT"
   , "Source: emulation/xm1-upstream; native engine and Python come from devenv."
@@ -64,7 +73,7 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing (Port 0) IPv4Loopback
+    defaults = Options Nothing Nothing Nothing Nothing StrictUiConversion (Port 0) IPv4Loopback
     go options [] = pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
@@ -83,6 +92,15 @@ parseCommand args
     go options ("--firmware" : value : rest) = do
       require (not (null value)) "--firmware must be nonempty"
       go options { firmwareOption = Just (Firmware value) } rest
+    go options ("--sd-card-image" : value : rest) = do
+      require (not (null value)) "--sd-card-image must be nonempty"
+      go options { virtualSDImageOption = Just (VirtualSDImage value) } rest
+    go options ("--ui-conversion-profile" : value : rest) = do
+      profile <- case value of
+        "strict" -> pure StrictUiConversion
+        "declared-ui-cpu-fallback" -> pure DeclaredUiCpuFallback
+        _ -> ioError (userError "--ui-conversion-profile must be strict or declared-ui-cpu-fallback")
+      go options { uiConversionProfileOption = profile } rest
     go _ (argument : _) = ioError (userError ("Unknown option or missing value: " ++ argument ++ "\n" ++ usage))
 
 resolve :: Workspace -> FilePath -> FilePath
@@ -94,6 +112,15 @@ workspace options = do
     Just (Workspace path) -> pure path
     Nothing -> lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= maybe getCurrentDirectory pure
   Workspace <$> canonicalizePath root
+
+validateVirtualSDImage :: Workspace -> VirtualSDImage -> IO VirtualSDImage
+validateVirtualSDImage root (VirtualSDImage supplied) = do
+  private <- canonicalizePath (resolve root "private-data")
+  path <- canonicalizePath (resolve root supplied)
+  require (splitDirectories private `isPrefixOf` splitDirectories path) "--sd-card-image must be beneath workspace/private-data/"
+  status <- getFileStatus path
+  require (isRegularFile status) "--sd-card-image must be a regular file"
+  pure (VirtualSDImage path)
 
 requiredEnvironment :: String -> IO FilePath
 requiredEnvironment name = do
@@ -155,7 +182,7 @@ validateFirmware (Firmware path) = do
         { U.partSegments = take 4 segments ++ [image4 {U.segLoad = 0x0061c400, U.segSize = 0x00282828}] ++ drop 5 segments
         , U.partTrailer = trailer {U.trImageLoad = 0x0061c400, U.trImageSize = 0x00282828}
         }}
-      variableFields = ["stock main checksum", "stock image 4 header", "stock image 5 header"]
+      variableFields = ["stock main checksum", "stock image 4 header", "stock image 5 header", "stock table layout"]
       results = U.checks parsed ++ U.carriedChecks parsed ++
         filter ((`notElem` variableFields) . U.checkField) (U.stockChecks normalized)
   forM_ results $ \result -> require (U.checkPassed result)
@@ -167,6 +194,7 @@ bindAddress IPv4Loopback = "127.0.0.1"
 launch :: Options -> IO ()
 launch options = do
   root <- workspace options
+  media <- traverse (validateVirtualSDImage root) (virtualSDImageOption options)
   Python python <- Python <$> requiredEnvironment "XM1_VIEWER_PYTHON"
   NativePackage native <- NativePackage <$> requiredEnvironment "XM1_VIEWER_NATIVE_PACKAGE"
   unicorn <- requiredEnvironment "X70_UNICORN_LIBRARY"
@@ -199,14 +227,20 @@ launch options = do
   putStrLn ("X-M1 viewer runtime: " ++ destination)
   hFlush stdout
   let Port port = portOption options
+      mediaArguments = case media of
+        Nothing -> []
+        Just (VirtualSDImage path) -> ["--sd-card-image", path]
+      conversionArguments = case uiConversionProfileOption options of
+        StrictUiConversion -> []
+        DeclaredUiCpuFallback -> ["--ui-conversion-profile", "declared-ui-cpu-fallback"]
   executeFile python False
-    [ "tools/start_setup_viewer.py"
-    , "--firmware", "inputs/selected.DAT"
-    , "--firmware-name", takeFileName dat
-    , "--bind", bindAddress (bindOption options)
-    , "--port", show port
-    , "--output", destination </> "viewer"
-    ] Nothing
+    ([ "tools/start_setup_viewer.py"
+     , "--firmware", "inputs/selected.DAT"
+     , "--firmware-name", takeFileName dat
+     , "--bind", bindAddress (bindOption options)
+     , "--port", show port
+     , "--output", destination </> "viewer"
+     ] ++ mediaArguments ++ conversionArguments) Nothing
 
 main :: IO ()
 main = (getArgs >>= parseCommand >>= run) `catch` report

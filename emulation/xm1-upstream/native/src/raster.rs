@@ -1,14 +1,167 @@
-//! Sample-grid scanline fill behind `emulator.graphics_devices._ui_coverage`.
+//! Sample-grid scanline fill, UI compositing and declared YYCbCr conversion.
 //!
-//! The scalar loop kept in `tests/test_emulator_graphics_vectorized.py`
-//! (`reference_raster`) defines the behavior. This walks the same sample rows
-//! with the same f64 operations in the same order and returns, per pixel, how
-//! many of its `scale * scale` samples are inside, so `count / scale**2`
-//! equals the reference raster's mean. It has no machine or memory access.
+//! Fill behavior follows `reference_raster` in
+//! `tests/test_emulator_graphics_vectorized.py`.
+//! Declared conversion uses stock CPU-fallback decimal coefficients, complete
+//! signed-numerator division toward zero and `[255, B, G, R]` byte order.
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes, PyDict, PyList, PyTuple};
+
+#[derive(Clone, Copy)]
+struct DramOffset(usize);
+#[derive(Clone, Copy)]
+struct PixelWidth(usize);
+#[derive(Clone, Copy)]
+struct PixelHeight(usize);
+#[derive(Clone, Copy)]
+struct PixelStride(usize);
+
+#[pyclass(frozen, module = "x70_native._native")]
+pub(crate) struct DeclaredUIConversionPlan {
+    source: DramOffset,
+    destination: DramOffset,
+    width: PixelWidth,
+    height: PixelHeight,
+    stride: PixelStride,
+    source_bytes: usize,
+    destination_bytes: usize,
+}
+
+impl DeclaredUIConversionPlan {
+    pub(crate) fn prepare(
+        source: u64,
+        destination: u64,
+        width: u64,
+        height: u64,
+        stride: u64,
+        ram_size: usize,
+    ) -> Result<Self, String> {
+        if !source.is_multiple_of(16) || !destination.is_multiple_of(16) {
+            return Err("Declared UI conversion requires 16-aligned physical DRAM offsets".into());
+        }
+        if width == 0 || width >= 1 << 13 || !width.is_multiple_of(16)
+            || height == 0 || height >= 1 << 13 || !height.is_multiple_of(8)
+            || stride >= 1 << 15 || !stride.is_multiple_of(16) || stride < width
+        {
+            return Err("Invalid declared UI conversion width, height or pixel stride".into());
+        }
+        let source_bytes = stride.checked_mul(2)
+            .and_then(|pitch| pitch.checked_mul(height - 1))
+            .and_then(|rows| width.checked_mul(2).and_then(|last| rows.checked_add(last)))
+            .ok_or("Declared UI source extent overflow")?;
+        let destination_bytes = width.checked_mul(height)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .filter(|&bytes| bytes <= 64 * 1024 * 1024)
+            .ok_or("Declared UI output exceeds its 64MiB bound")?;
+        let source_end = source.checked_add(source_bytes)
+            .ok_or("Declared UI source physical extent overflow")?;
+        let destination_end = destination.checked_add(destination_bytes)
+            .ok_or("Declared UI destination physical extent overflow")?;
+        if source_end > ram_size as u64 || destination_end > ram_size as u64 {
+            return Err("Declared UI conversion extents must lie in physical DRAM".into());
+        }
+        if source < destination_end && destination < source_end {
+            return Err("Declared UI conversion source and destination must be disjoint".into());
+        }
+        Ok(Self {
+            source: DramOffset(source as usize),
+            destination: DramOffset(destination as usize),
+            width: PixelWidth(width as usize),
+            height: PixelHeight(height as usize),
+            stride: PixelStride(stride as usize),
+            source_bytes: source_bytes as usize,
+            destination_bytes: destination_bytes as usize,
+        })
+    }
+
+    pub(crate) fn validate_bounds(&self, ram_size: usize) -> Result<(), String> {
+        if self.source.0.checked_add(self.source_bytes).is_none_or(|end| end > ram_size)
+            || self.destination.0.checked_add(self.destination_bytes).is_none_or(|end| end > ram_size)
+        {
+            return Err("Declared UI conversion plan exceeds the target Machine DRAM".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn source_range(&self) -> std::ops::Range<usize> {
+        self.source.0..self.source.0 + self.source_bytes
+    }
+
+    pub(crate) fn destination_range(&self) -> std::ops::Range<usize> {
+        self.destination.0..self.destination.0 + self.destination_bytes
+    }
+
+    pub(crate) fn source_rows(&self) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
+        let pitch = 2 * self.stride.0;
+        let bytes = 2 * self.width.0;
+        (0..self.height.0).map(move |row| {
+            let start = self.source.0 + pitch * row;
+            start..start + bytes
+        })
+    }
+
+    pub(crate) fn convert(&self, source: &[u8], destination: &mut [u8]) {
+        let source_pitch = 2 * self.stride.0;
+        let source_width = 2 * self.width.0;
+        let destination_pitch = 4 * self.width.0;
+        // Every signed channel numerator lies in -22_681_600..=48_004_400.
+        for (row, output) in destination.chunks_exact_mut(destination_pitch).enumerate() {
+            let start = row * source_pitch;
+            for (pair, pixels) in source[start..start + source_width].chunks_exact(4)
+                .zip(output.chunks_exact_mut(8))
+            {
+                let u = i32::from(pair[2]) - 128;
+                let v = i32::from(pair[3]) - 128;
+                let blue = 177_200 * u;
+                let green = -34_414 * u - 71_414 * v;
+                let red = 140_200 * v;
+                for (luma, pixel) in [pair[0], pair[1]].into_iter().zip(pixels.chunks_exact_mut(4)) {
+                    let y = 100_000 * i32::from(luma);
+                    pixel[0] = 255;
+                    pixel[1] = ((y + blue) / 100_000).clamp(0, 255) as u8;
+                    pixel[2] = ((y + green) / 100_000).clamp(0, 255) as u8;
+                    pixel[3] = ((y + red) / 100_000).clamp(0, 255) as u8;
+                }
+            }
+        }
+    }
+}
+
+#[pymethods]
+impl DeclaredUIConversionPlan {
+    #[getter]
+    fn source_physical(&self) -> usize {
+        self.source.0
+    }
+
+    #[getter]
+    fn destination_physical(&self) -> usize {
+        self.destination.0
+    }
+
+    #[getter]
+    fn width(&self) -> usize {
+        self.width.0
+    }
+
+    #[getter]
+    fn height(&self) -> usize {
+        self.height.0
+    }
+
+    #[getter]
+    fn stride_pixels(&self) -> usize {
+        self.stride.0
+    }
+
+
+    #[getter]
+    fn destination_bytes(&self) -> usize {
+        self.destination_bytes
+    }
+}
 
 /// Inside-sample counts (u8, row-major `height` x `width` pixels).
 ///

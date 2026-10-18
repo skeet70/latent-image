@@ -26,7 +26,23 @@ The initial acquisition can download pinned Bazel modules and Nix store paths. A
 devenv shell -- bazel test --lockfile_mode=error --repository_disable_download --nocache_test_results //...
 ```
 
+One Bazel server serves one output base, so two commands in the same checkout queue on its lock even when their targets do not overlap. Concurrent agents each use their own output base; `.bazelrc` points every base at the same local disk cache, `~/.cache/bazel-disk/latent-image`, so an action built in one base is reused by the others. The cache holds build outputs of private-data inputs and stays on this machine.
+
+Each output base starts its own server JVM. `.bazelrc` caps that heap at 2 GiB and stops a server after 10 idle minutes, which keeps several concurrent bases inside host memory.
+
+Concurrent agents also work in separate git worktrees, so an edit in one never invalidates another agent's build or emulator run. `build-support/agent-worktree.sh NAME [BASE]` creates `../latent-image-worktrees/NAME` on branch `agent/NAME`, symlinks the checkout's ignored `private-data/` into it and prints the output base to use. The agent leaves its changes uncommitted there; the integration owner commits and merges them. Remove a finished worktree with `git worktree remove ../latent-image-worktrees/NAME` and delete its branch and output base by hand.
+
+```sh
+devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-$AGENT" test //emulation:native-runner-tests
+```
+
+A new output base still resolves its Nix repositories once. Delete `~/.cache/bazel/latent-image-*` and `~/.cache/bazel-disk/latent-image` by hand when they are no longer needed.
+
+Full-system emulator runs share host CPU and memory, so they run one at a time under `flock ~/.cache/latent-image-emulator.lock` and inside a memory-capped scope (`systemd-run --user --scope -p MemoryMax=…`).
+
 The C import uses Unicorn's `libunicorn.so.2` runtime name so Bazel's runtime symlinks satisfy its SONAME in both `bazel run` and sandboxed tests. No `LD_LIBRARY_PATH` override is required. Upstream Haskell rule helpers and the schema checker use Python internally; project-authored tools use Haskell/Rust, with C limited to necessary boundaries under [current principles](../docs/principles.md#implementation-and-build). JSON parsing uses the shared strict Haskell parser, including duplicate-key rejection, and canonical review bindings retain sorted ASCII JSON semantics.
+
+The X-M1 viewer's locked `xm1-native.nix` build runs Rust unit checks before installing the native extension. The preserved Python checkpoint/profile integration suite separately exercises that extension's supported Python boundary and requires staged pinned ROM/DAT/unpacked fixtures. Those checks do not imply that retained Python orchestration or avoidable C host models have been migrated.
 
 ## Extending the graph
 

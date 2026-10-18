@@ -5,21 +5,22 @@
 :root{color-scheme:dark;font:16px system-ui;background:#141920;color:#edf0f4}body{max-width:1120px;margin:32px auto;padding:0 22px}h1{font-size:28px;margin-bottom:8px}p{line-height:1.55;color:#b4c1ce}button,select{font:inherit;padding:9px 14px;border:1px solid #4b6175;border-radius:6px;background:#263544;color:inherit}button{cursor:pointer}button:disabled,select:disabled{opacity:.45;cursor:wait}.controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:24px 0 10px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:22px}.panel{background:#1c242e;border:1px solid #344557;border-radius:8px;padding:20px;min-width:0}#display{min-height:270px;display:flex;align-items:center;justify-content:center;background:#090d12;color:#8da0b3;padding:8px;text-align:center}img{max-width:100%;height:auto}h2{font-size:18px;margin-top:0}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.5 ui-monospace,monospace}li{margin:8px 0}.badge{color:#8ddcb9}.refresh{font-size:13px;margin:0 0 22px}.boundary{border-left:3px solid #526b84;padding-left:12px;font-size:14px}#displayInfo{font:13px/1.5 ui-monospace,monospace;overflow-wrap:anywhere;white-space:pre-wrap;max-height:280px;overflow:auto}a{color:#a1cfff}summary{cursor:pointer;color:#b4c1ce}details+details{margin-top:16px}#milestones{max-height:220px;overflow:auto;padding-left:22px;font-size:13px}#status{max-height:190px;overflow:auto}#events{max-height:240px;overflow:auto}.progress{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin:0 0 22px}.progress div{background:#1c242e;border:1px solid #344557;border-radius:6px;padding:12px}.progress dt{font-size:12px;color:#b4c1ce}.progress dd{margin:5px 0 0;font-size:20px;font-variant-numeric:tabular-nums}#latest{font-size:13px;margin:0 0 12px;overflow-wrap:anywhere}@media(max-width:720px){.grid{grid-template-columns:1fr}.progress{grid-template-columns:repeat(3,minmax(0,1fr))}body{margin:20px auto;padding:0 14px}.panel{padding:16px}}
 </style>
 <style>
-.menu #intro{display:none}.menu .controls{margin:12px 0}#navigationInfo,#inputLevels{font-size:13px;margin:8px 0}#navigation{padding:12px 18px;margin-bottom:16px}#refresh{margin-bottom:12px}#displayInfo{max-height:100px}#navigation h2{display:none}.grid{grid-template-columns:1fr}#firmwareInfo{overflow-wrap:anywhere}#firmware-file{max-width:100%}.panel+ .panel,#execution-debugging{margin-top:22px}#execution-debugging>summary{font-size:18px}#display img{width:100%;image-rendering:pixelated}
+.menu #intro{display:none}.menu .controls{margin:12px 0}#navigationInfo,#inputLevels,#inputQueue{font-size:13px;margin:8px 0}#navigation{padding:12px 18px;margin-top:22px;margin-bottom:0}#navigation+.panel{margin-top:12px}#refresh{margin-bottom:12px}#displayInfo{max-height:100px}#navigation h2{display:none}.grid{grid-template-columns:1fr}#firmwareInfo{overflow-wrap:anywhere}#firmware-file{max-width:100%}.panel+ .panel,#execution-debugging{margin-top:22px}#execution-debugging>summary{font-size:18px}#display img{width:100%;image-rendering:pixelated}#display:focus-visible{outline:2px solid #a1cfff;outline-offset:3px}#menuState{margin-bottom:0}
 </style>
 <body id="page">
 <h1 id="title">Fujifilm X-M1 firmware viewer</h1>
 <p id="intro">Captured ROM → stock loader → kernels → application. Actual ARM firmware instructions execute against modeled devices. Reached entries and generated buffers are evidence of that execution; hardware timing, peripherals and reset conditions include explicit assumptions.</p>
-<section id="firmware-selection" class="panel"><h2>Active firmware</h2><p id="firmwareInfo">Loading firmware identity…</p><div class="controls"><label for="firmware-file">Firmware DAT</label><input id="firmware-file" type="file" accept=".dat,.DAT" disabled><button id="load-firmware" disabled>Load firmware</button></div><p>Load firmware restarts the emulator with the selected X-M1 1.50-compatible DAT and replaces the session checkpoint. Older firmware layouts are not supported.</p><p id="firmware-message" role="status"></p></section>
+<section id="firmware-selection" class="panel"><h2>Active firmware</h2><p id="firmwareInfo">Loading firmware identity…</p><div class="controls"><label for="firmware-file">Firmware DAT</label><input id="firmware-file" type="file" accept=".dat,.DAT" disabled><button id="load-firmware" disabled>Load firmware</button></div><p>Load firmware boots the selected X-M1 1.50-compatible DAT in a replacement emulator and creates a new session checkpoint. A rejected candidate preserves the current guest, display and checkpoint. Older firmware layouts are not supported.</p><p id="firmware-message" role="status"></p></section>
 <div class="controls" role="group" aria-label="Session checkpoint"><button id="save-screen" disabled>Set checkpoint</button><button id="restore" disabled>Restore checkpoint</button><button id="reset">Reset and boot</button></div>
-<p>Set checkpoint saves the current emulator state. Restore checkpoint rewinds to it without advancing firmware. Checkpoints live only in this server session.</p>
+<p>Set checkpoint saves the full guest state, not a screenshot. Restore checkpoint rewinds to it without advancing firmware. Checkpoints live only in this server session.</p>
 <p id="checkpoint" class="boundary" hidden></p>
 <p id="refresh" class="refresh" role="status">Status refreshes every 2 seconds while this page is visible.</p>
-<section id="navigation" class="panel" hidden><h2>Firmware menu controls</h2><div class="controls" role="group" aria-label="Camera menu buttons"><button id="key-menu">MENU (M)</button><button id="key-ok">OK (Enter)</button><button id="key-back">BACK (Escape)</button><button id="key-up" aria-label="Up">↑</button><button id="key-down" aria-label="Down">↓</button><button id="key-left" aria-label="Left">←</button><button id="key-right" aria-label="Right">→</button><button id="key-q">Q</button><button id="key-play">PLAY (P)</button><button id="key-fn">Fn (F)</button><button id="key-dial-push">Dial push</button></div></section>
-<section class="panel"><h2>Firmware display</h2><div id="display">Waiting for a supported firmware display configuration.</div><p id="displayInfo">No display frame has been produced by this boot run.</p></section>
-<section id="navigation-state" class="panel" hidden><h2>State and selected row</h2><p id="navigationInfo"></p><pre id="menuState"></pre><details><summary>Current input levels</summary><pre id="inputLevels"></pre></details></section>
+<section id="navigation" class="panel" hidden><h2>Firmware menu controls</h2><div class="controls" role="group" aria-label="Camera menu buttons"><button id="key-menu">MENU (M)</button><button id="key-ok">OK (Enter)</button><button id="key-back">BACK (Escape)</button><button id="key-up" aria-label="Up">↑</button><button id="key-down" aria-label="Down">↓</button><button id="key-left" aria-label="Left">←</button><button id="key-right" aria-label="Right">→</button><button id="key-q">Q</button><button id="key-play">PLAY (P)</button><button id="key-fn">Fn (F)</button><button id="key-dial-push">Dial push</button><button id="key-dial-left">Sub-command left ([)</button><button id="key-dial-right">Sub-command right (])</button></div><p>Wheel over the display: negative = firmware left, positive = firmware right, one pulse per wheel event. Physical clockwise direction and value increase/decrease are not measured.</p><p id="inputQueue" role="status"></p><button id="clear-inputs" disabled>Clear pending inputs</button></section>
+<section class="panel"><h2>Firmware display</h2><div id="display" tabindex="0" aria-label="Firmware display and sub-command wheel input">Waiting for a supported firmware display configuration.</div><p id="displayInfo">No display frame has been produced by this boot run.</p></section>
+<section id="navigation-state" class="panel" hidden><h2>State and selected row</h2><p id="navigationInfo"></p><pre id="menuState"></pre><p>The guest image is authoritative. Retained row fields do not establish that a setting was committed.</p><details><summary>Current input levels</summary><pre id="inputLevels"></pre></details></section>
+<section id="diagnostics" class="panel"><h2>Execution status</h2><pre id="status" role="status">Loading…</pre><p><a id="download-diagnostics" href="/api/state" download="xm1-viewer-state.json">Download diagnostics</a>. Include the last actions and what you expected. Save before restoring or restarting; the report describes the current guest and is not a restorable checkpoint. Keep reports under <code>private-data/</code>: they contain private firmware metadata and device logs.</p></section>
 <p id="boundary" class="boundary">Checking the current boot entry and model profile…</p>
-<details id="execution-debugging" class="panel"><summary>Execution debugging</summary><p>The instruction budget affects manual advance only. Step firmware executes more instructions from the paused state. Camera buttons automatically execute the press, release and menu rendering; they do not use this dropdown.</p><div class="controls"><select id="limit" aria-label="Manual instruction budget"><option value="100000">100,000 instructions</option><option value="1000000" selected>1,000,000 instructions</option><option value="10000000">10,000,000 instructions</option></select><button id="advance">Step firmware</button><span id="count" class="badge"></span></div><p id="performance" class="refresh"></p><p id="backend" class="refresh"></p><dl id="progress" class="progress" aria-label="Observed execution counters"></dl><h2>Execution status</h2><pre id="status">Loading…</pre><h2>Reached entries</h2><ul id="milestones"></ul><h2>Recent device events</h2><p id="latest"></p><pre id="events"></pre><p id="artifact"></p><details><summary>Selected model inputs</summary><pre id="profiles"></pre></details><details><summary>Model limits and fixture assumptions</summary><ul id="limits"></ul></details><details><summary>Firmware and execution provenance</summary><pre id="provenance"></pre></details></details>
+<details id="execution-debugging" class="panel"><summary>Execution debugging</summary><p>The instruction budget and Step firmware are manual debugging controls, not menu navigation. Step firmware executes more instructions from the paused state. Camera buttons and dial inputs automatically execute the input, release and menu rendering; they do not use this dropdown.</p><div class="controls"><select id="limit" aria-label="Manual instruction budget"><option value="100000">100,000 instructions</option><option value="1000000" selected>1,000,000 instructions</option><option value="10000000">10,000,000 instructions</option></select><button id="advance">Step firmware</button><span id="count" class="badge"></span></div><p id="performance" class="refresh"></p><p id="backend" class="refresh"></p><dl id="progress" class="progress" aria-label="Observed execution counters"></dl><h2>Reached entries</h2><ul id="milestones"></ul><h2>Recent device events</h2><p id="latest"></p><pre id="events"></pre><p id="artifact"></p><details><summary>Selected model inputs</summary><pre id="profiles"></pre></details><details><summary>Model limits and fixture assumptions</summary><ul id="limits"></ul></details><details><summary>Firmware and execution provenance</summary><pre id="provenance"></pre></details></details>
 <script>
 const el = id => document.getElementById(id);
 let busy = false, polling = false, revision = 0, pollAbort = null;
@@ -28,7 +29,49 @@ let checkpointPresent = false;
 let navigation = null;
 let navigationReady = false;
 let activeFirmware = null;
-const menuKeys = ['menu', 'ok', 'back', 'up', 'down', 'left', 'right', 'q', 'play', 'fn', 'dial-push'];
+/** @typedef {'menu'|'ok'|'back'|'up'|'down'|'left'|'right'|'q'|'play'|'fn'|'dial-push'|'dial-left'|'dial-right'} MenuKey */
+/** @type {ReadonlyArray<MenuKey>} */
+const menuKeys = ['menu', 'ok', 'back', 'up', 'down', 'left', 'right', 'q', 'play', 'fn', 'dial-push', 'dial-left', 'dial-right'];
+/** @type {MenuKey[]} */
+const pendingKeys = [];
+const inputQueueLimit = 32;
+let inputBlocked = false, inputNotice = '';
+
+function showInputQueue() {
+  el('inputQueue').textContent = pendingKeys.length + '/' + inputQueueLimit + ' pending inputs (first in, first out).'
+    + (inputNotice ? ' ' + inputNotice : '');
+  el('clear-inputs').disabled = pendingKeys.length === 0;
+}
+
+function clearPendingInputs(reason) {
+  const count = pendingKeys.length;
+  pendingKeys.length = 0;
+  if (count) inputNotice = count + ' pending input(s) cleared: ' + reason + '.';
+  showInputQueue();
+}
+
+function pumpKeys() {
+  if (busy || inputBlocked || !pendingKeys.length) return;
+  if (!navigationReady || !keySupported(pendingKeys[0])) {
+    clearPendingInputs('guest input unavailable');
+    return;
+  }
+  executeKey(pendingKeys.shift());
+  showInputQueue();
+}
+
+/** @param {MenuKey} key */
+function pressKey(key) {
+  if (inputBlocked || document.hidden || !keySupported(key) || !navigationReady) return;
+  if (pendingKeys.length === inputQueueLimit) {
+    inputNotice = 'Latest input rejected at the queue limit; accepted inputs retained. Wait or clear pending inputs.';
+    showInputQueue();
+    return;
+  }
+  pendingKeys.push(key);
+  pumpKeys();
+  showInputQueue();
+}
 
 function keySupported(key) {
   if (!navigation) return false;
@@ -41,6 +84,7 @@ function controls() {
   el('restore').disabled = busy || !checkpointPresent;
   el('restore').hidden = false;
   el('save-screen').disabled = busy || !navigation || navigation.can_save_checkpoint !== true;
+  el('save-screen').title = navigation && navigation.checkpoint_unavailable_reason || 'Set checkpoint with all inputs released.';
   el('firmware-file').disabled = busy || !activeFirmware || activeFirmware.can_replace !== true;
   el('load-firmware').disabled = el('firmware-file').disabled || !el('firmware-file').files.length;
   const menuMode = Boolean(navigation);
@@ -50,8 +94,9 @@ function controls() {
   el('advance').textContent = 'Step firmware';
   el('restore').textContent = 'Restore checkpoint';
   for (const key of menuKeys) {
-    el('key-' + key).disabled = busy || !keySupported(key) || !navigationReady;
+    el('key-' + key).disabled = inputBlocked || !keySupported(key) || !navigationReady;
   }
+  showInputQueue();
 }
 
 function showNavigation(state) {
@@ -61,13 +106,26 @@ function showNavigation(state) {
   el('navigation').hidden = !navigation;
   el('navigation-state').hidden = !navigation;
   if (el('navigation').hidden) return;
-  el('navigationInfo').textContent = 'Arrow keys, Enter = OK, Escape = BACK, M = MENU/OK, Q = Q, P = PLAY, F = Fn.'
+  el('navigationInfo').textContent = 'Arrow keys, Enter = OK, Escape = BACK, M = MENU/OK, Q = Q, P = PLAY, F = Fn, [ / ] = sub-command left / right.'
     + ' Target ready: ' + String(navigation.ready) + ' · can input: ' + String(navigation.can_input)
     + (state.failure || state.execution_error ? '. Execution stopped; inspect the error below or restore a checkpoint.'
       : !navigationReady ? '. Buttons are not ready.' : '. Buttons are ready.');
-  el('menuState').textContent = JSON.stringify(navigation.current_menu ?? null, null, 2);
+  if (navigation.checkpoint_unavailable_reason) el('navigationInfo').textContent += ' Checkpoint unavailable: ' + navigation.checkpoint_unavailable_reason;
+  const menu = navigation.current_menu;
+  const row = menu && menu.selected_item;
+  el('menuState').textContent = menu ? JSON.stringify({
+    ready: menu.ready, reason: menu.reason,
+    menu_id: menu.menu_id, type_code: menu.type_code, setting_id: menu.setting_id,
+    cursor: menu.cursor, subcursor: menu.subcursor, page_cursor: menu.page_cursor,
+    visible_count: menu.visible_count, filtered_count: menu.filtered_count,
+    selected_row: row ? {
+      index: row.index, value: row.value, status: row.status,
+      visible: row.visible, selectable: row.selectable
+    } : null
+  }, null, 2) : 'No retained menu node.';
   el('inputLevels').textContent = JSON.stringify({
     adc_samples: navigation.adc_samples,
+    subcommand_dial_levels: navigation.subcommand_dial_levels,
     pressed: navigation.pressed,
     asserted_keys: navigation.asserted_keys,
     inputs_released: navigation.inputs_released
@@ -163,6 +221,7 @@ function show(state) {
     counter('Display frames', Number.isFinite(frames) ? frames : 0));
   el('count').textContent = Number(state.instructions || 0).toLocaleString() + ' instructions';
   const stopped = state.failure || state.execution_error;
+  el('status').setAttribute('role', stopped ? 'alert' : 'status');
   el('status').textContent = stopped ? JSON.stringify(stopped, null, 2)
     : state.quiescent ? 'Quiescent: modeled CPUs are waiting and no future wake event is available. Normal operation has not been established.'
     : 'Firmware paused. Execution can continue; normal operation has not been established.';
@@ -336,6 +395,8 @@ async function refresh() {
 
 async function run(reset, restore = false) {
   if (busy || restore && !checkpointPresent) return;
+  inputBlocked = reset || restore;
+  if (inputBlocked) clearPendingInputs(restore ? 'checkpoint restore' : 'guest reset');
   busy = true;
   ++revision;
   ++frameRevision;
@@ -355,13 +416,18 @@ async function run(reset, restore = false) {
   } catch (error) {
     el('status').textContent = String(error);
     el('refresh').textContent = 'Run request failed. Automatic status refresh will resume.';
+    navigationReady = false;
+    clearPendingInputs('run request failed');
   } finally {
     busy = false;
+    inputBlocked = false;
     controls();
+    pumpKeys();
   }
 }
 
-async function pressKey(key) {
+/** @param {MenuKey} key */
+async function executeKey(key) {
   if (busy || !keySupported(key) || !navigationReady) return;
   const settleRender = navigation.render_supported === true;
   busy = true;
@@ -386,9 +452,12 @@ async function pressKey(key) {
   } catch (error) {
     el('status').textContent = String(error);
     el('refresh').textContent = 'Button request failed. Automatic status refresh will resume.';
+    navigationReady = false;
+    clearPendingInputs('input request failed');
   } finally {
     busy = false;
     controls();
+    pumpKeys();
   }
 }
 
@@ -407,15 +476,20 @@ async function saveScreen() {
     el('refresh').textContent = 'Checkpoint set at this screen.';
   } catch (error) {
     el('status').textContent = String(error);
+    navigationReady = false;
+    clearPendingInputs('checkpoint request failed');
   } finally {
     busy = false;
     controls();
+    pumpKeys();
   }
 }
 
 async function loadFirmware() {
   const file = el('firmware-file').files[0];
   if (busy || !file || !activeFirmware || activeFirmware.can_replace !== true) return;
+  inputBlocked = true;
+  clearPendingInputs('firmware replacement');
   busy = true;
   const version = ++revision;
   ++frameRevision;
@@ -442,12 +516,14 @@ async function loadFirmware() {
     el('refresh').textContent = 'Firmware loaded ' + new Date().toLocaleTimeString() + ' · refreshes every 2 seconds';
   } catch (error) {
     if (version !== revision) return;
+    if (!rejected) navigationReady = false;
     el('firmware-message').textContent = 'Firmware load failed: ' + String(error);
     el('refresh').textContent = rejected
       ? 'Upload rejected. Current firmware, display and checkpoint retained. Automatic status refresh will resume.'
       : 'Firmware load could not be confirmed. Display retained; automatic status refresh will recover the active firmware state.';
   } finally {
     busy = false;
+    inputBlocked = false;
     controls();
   }
 }
@@ -459,14 +535,38 @@ el('reset').onclick = () => run(true);
 el('restore').onclick = () => run(false, true);
 el('save-screen').onclick = () => saveScreen();
 for (const key of menuKeys) el('key-' + key).onclick = () => pressKey(key);
+el('clear-inputs').onclick = () => clearPendingInputs('cancelled by user');
+el('display').addEventListener('pointerdown', () => el('display').focus({preventScroll: true}));
+/** @type {Readonly<Record<string, MenuKey>>} */
+const keyboardKeys = {ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right', Enter:'ok', Escape:'back', m:'menu', M:'menu', q:'q', Q:'q', p:'play', P:'play', f:'fn', F:'fn', '[':'dial-left', ']':'dial-right'};
+function editingControl(target) {
+  return target && (['INPUT','SELECT','TEXTAREA'].includes(target.tagName) || target.isContentEditable);
+}
 document.addEventListener('keydown', event => {
-  const key = {ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right', Enter:'ok', Escape:'back', m:'menu', M:'menu', q:'q', Q:'q', p:'play', P:'play', f:'fn', F:'fn'}[event.key];
-  if (!key || event.repeat || event.metaKey || event.ctrlKey || event.altKey || !keySupported(key) || !navigationReady || busy
-      || ['INPUT','SELECT','TEXTAREA'].includes(event.target && event.target.tagName) || event.target && event.target.isContentEditable) return;
+  const key = keyboardKeys[event.key];
+  if (!key || event.repeat || event.metaKey || event.ctrlKey || event.altKey || !keySupported(key) || !navigationReady || inputBlocked
+      || editingControl(event.target) || event.key === 'Enter' && event.target && event.target.closest('button,a,summary')) return;
   event.preventDefault();
+  el('display').focus({preventScroll: true});
   pressKey(key);
 });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+el('display').addEventListener('wheel', event => {
+  if (!event.deltaY || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || inputBlocked
+      || !navigationReady || editingControl(document.activeElement)) return;
+  const key = event.deltaY > 0 ? 'dial-right' : 'dial-left';
+  if (!keySupported(key)) return;
+  event.preventDefault();
+  el('display').focus({preventScroll: true});
+  pressKey(key);
+}, {passive: false});
+document.addEventListener('focusin', event => {
+  if (editingControl(event.target)) clearPendingInputs('focus moved to an editing control');
+});
+window.addEventListener('blur', () => clearPendingInputs('viewer lost focus'));
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) clearPendingInputs('viewer hidden');
+  else refresh();
+});
 setInterval(refresh, 2000);
 refresh();
 </script></body></html>

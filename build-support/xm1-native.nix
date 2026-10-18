@@ -13,7 +13,7 @@ pkgs.rustPlatform.buildRustPackage {
   cargoLock.lockFile = ../emulation/xm1-upstream/native/Cargo.lock;
   nativeBuildInputs = [ pkgs.python3 ];
   PYO3_PYTHON = "${pkgs.python3}/bin/python3";
-  doCheck = false;
+  doCheck = true;
   installPhase = ''
     runHook preInstall
     mkdir -p "$out/x70_native"

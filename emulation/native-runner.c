@@ -102,9 +102,7 @@ static bool condition(unsigned cond,uint32_t f)
     }
 }
 static void memory_hook(uc_engine *,uc_mem_type,uint64_t,int,int64_t,void *);
-/* The one admitted load-to-PC form: the PC-relative jump-table dispatch ldr pc,[pc,Rm,LSL#2].
-   The table entry read is preflighted like any word read and the fetched target is contained to the
-   current function range by the code hook. */
+/* The admitted PC-relative dispatch: ldr pc,[pc,Rm,LSL#2], pre-indexed, no writeback. */
 static bool jump_table_form(uint32_t ins)
 {
     unsigned top=(ins>>25)&7, rn=(ins>>16)&15, rd=(ins>>12)&15, rm=ins&15, shift=(ins>>4)&255;
@@ -129,9 +127,8 @@ static bool doubleword_form(uint32_t ins)
     if (rn==15 || rt%2 || rt==14) return false;
     return !(wb && (rn==rt || rn==rt+1));
 }
-/* The admitted register-base load-to-PC dispatch: ldr pc,[Rn,Rm{,shift}], pre-indexed, no writeback,
-   word, immediate LSL/LSR/ASR, Rn and Rm not the PC. The entry read is preflighted as a word and the
-   fetched target's containment is the code hook's property, as for the PC-relative dispatch. */
+/* The admitted register-base dispatch: ldr pc,[Rn,Rm{,shift}], pre-indexed, no writeback,
+   word, immediate LSL/LSR/ASR, Rn and Rm not the PC. */
 static bool register_dispatch_form(uint32_t ins)
 {
     unsigned top=(ins>>25)&7, rn=(ins>>16)&15, rd=(ins>>12)&15, rm=ins&15, shift=(ins>>4)&255;
@@ -207,6 +204,7 @@ static bool preflight_access(Case *c,uint64_t address,unsigned size,bool write,u
     }
     return true;
 }
+static void tail_transfer(Case *c,uint32_t target);
 static bool preflight_dispatch(Case *c,uint64_t address)
 {
     if (!preflight_access(c,address,4,false,0)) return false;
@@ -214,6 +212,7 @@ static bool preflight_dispatch(Case *c,uint64_t address)
     if (!checked(c,uc_mem_read(c->uc,address,bytes,4))) return false;
     uint32_t target=(uint32_t)bytes[0]|(uint32_t)bytes[1]<<8|(uint32_t)bytes[2]<<16|(uint32_t)bytes[3]<<24;
     if (target&3u) { fail(c,"unsupported_instruction"); return false; }
+    tail_transfer(c,target);
     return true;
 }
 /* Every address computation here is 32-bit: a U=0 offset subtracts modulo 2^32, and only a carry out of
@@ -328,10 +327,8 @@ static void tracked_call(Case *c,uint32_t target,uint32_t ret)
     c->stack[c->depth].ret=ret;
     c->stack[c->depth++].function=c->current; c->current=(unsigned)fn;
 }
-/* The tail-transfer contract for B and BX: an in-function target keeps the engine's jump; a declared
-   function target outside the current function becomes current with the call frame untouched, so a
-   later return in the target resolves against the original caller's frame; any other target is left to
-   the engine and the fetch checks refuse it. */
+/* In-function targets retain the current function. Declared targets change the current function
+   without changing the call frame. Fetch checks refuse other targets. */
 static void tail_transfer(Case *c,uint32_t target)
 {
     if (contains(c->functions[c->current].address,c->functions[c->current].size,target,4)) return;

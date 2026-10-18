@@ -9,12 +9,48 @@ BootControls retains the existing FFF5002C clock register. This owner covers
 SD0 only; stock SDMA and finite word-fed PIO sector reads/writes are bounded.
 MMC, UHS/tuning and erase remain strict stops.
 """
+from dataclasses import asdict, dataclass
+from enum import Enum
+
 from .board import RAM_SIZE
 from .hardware import UnsupportedDevice
 
 
 BLANK_SDHC_PROFILE = 'declared-blank-sdhc-default-speed-unmeasured'
 PROFILES = (BLANK_SDHC_PROFILE,)
+
+
+class MediaAction(Enum):
+    INSERT = 'insert'
+    REMOVE = 'remove'
+    PROTECT = 'protect'
+    UNPROTECT = 'unprotect'
+    FAIL_NEXT_READ = 'fail-next-read'
+    FAIL_NEXT_WRITE = 'fail-next-write'
+    CLEAR_FAILURE = 'clear-failure'
+
+
+class MediaFault(Enum):
+    NONE = 'none'
+    READ = 'read'
+    WRITE = 'write'
+
+
+@dataclass(frozen=True)
+class MediaImage:
+    path: str
+    sha256: str
+    sectors: int
+    nonzero_sectors: int
+
+    def __post_init__(self):
+        if (type(self.path) is not str or not self.path
+                or type(self.sha256) is not str or len(self.sha256) != 64
+                or any(c not in '0123456789abcdef' for c in self.sha256)
+                or type(self.sectors) is not int or not 1 <= self.sectors <= 0x4000000
+                or type(self.nonzero_sectors) is not int
+                or not 0 <= self.nonzero_sectors <= min(self.sectors, 65536)):
+            raise ValueError('SD image provenance differs from the bounded raw-image contract')
 
 
 class SparseCard:
@@ -28,6 +64,7 @@ class SparseCard:
         self.max_dirty_sectors = max_dirty_sectors
         self.data = {}
         self.base_image = b''
+        self.failure = MediaFault.NONE
 
     def _range(self, first, count):
         if (type(first) is not int or type(count) is not int or first < 0
@@ -36,6 +73,7 @@ class SparseCard:
 
     def read(self, first, count):
         self._range(first, count)
+        self._fail(MediaFault.READ)
         return self._sector_bytes(first, count)
 
     def _sector_bytes(self, first, count):
@@ -65,6 +103,7 @@ class SparseCard:
     def write(self, first, payload):
         """Apply whole sectors atomically, including a bounded guest SDMA chunk."""
         updates = self._updates(first, payload)
+        self._fail(MediaFault.WRITE)
         for sector, block in updates.items():
             if block != self._base_sector(sector):
                 self.data[sector] = block
@@ -74,6 +113,11 @@ class SparseCard:
     def _base_sector(self, sector):
         offset = sector * 512
         return self.base_image[offset:offset + 512] if offset < len(self.base_image) else bytes(512)
+
+    def _fail(self, operation):
+        if self.failure is operation:
+            self.failure = MediaFault.NONE
+            raise UnsupportedDevice(f'Declared SD next-{operation.value} model refusal')
 
     def retained_copy(self):
         retained = SparseCard(self.sectors, max_dirty_sectors=self.max_dirty_sectors)
@@ -175,6 +219,7 @@ class SDCardController:
         self.board, self.controls = board, controls
         self.profile, self.transfer_ticks = profile, transfer_ticks
         self.card = SparseCard(sectors)
+        self.image = None
         self.regs = {offset: 0 for offset in self.HALFWORDS | self.WORDS}
         self.state, self.rca, self.block_length, self.bus_width = 'idle', 0x1234, 512, 1
         self.application_pending = False
@@ -188,6 +233,23 @@ class SDCardController:
         # Same-engine checkpoint preflight also refuses a drained SDMA
         # boundary that still needs a real firmware ACK/resume transaction.
         return self.request is not None
+
+    def media_control(self, action):
+        if type(action) is not MediaAction:
+            raise ValueError('SD media control requires a typed MediaAction')
+        if action in (MediaAction.FAIL_NEXT_READ, MediaAction.FAIL_NEXT_WRITE, MediaAction.CLEAR_FAILURE):
+            if self.busy:
+                raise ValueError('SD failure control requires no active controller transaction')
+            self.card.failure = {MediaAction.FAIL_NEXT_READ: MediaFault.READ,
+                                 MediaAction.FAIL_NEXT_WRITE: MediaFault.WRITE,
+                                 MediaAction.CLEAR_FAILURE: MediaFault.NONE}[action]
+        else:
+            pin = 7 if action in (MediaAction.INSERT, MediaAction.REMOVE) else 6
+            level = int(action in (MediaAction.REMOVE, MediaAction.PROTECT))
+            self.controls.set_gpio_input_pin(12, pin, level, source='declared-sd-media-control')
+        self.board.record('SD media control', action=action.value,
+                          semantics='external GPIO or explicit model refusal; no guest result injected')
+        return self.snapshot()
 
     def contains(self, address, size):
         # No overlap with the existing BootControls halfword clock owner.
@@ -476,7 +538,7 @@ class SDCardController:
                     # its other bytes instead of rounding the transfer up.
                     first = cursor // 512
                     count = (end + 511) // 512 - first
-                    sectors = bytearray(self.card.read(payload[1] + first, count))
+                    sectors = bytearray(self.card._sector_bytes(payload[1] + first, count))
                     sectors[cursor % 512:cursor % 512 + len(data)] = data
                     self.card.write(payload[1] + first, bytes(sectors))
                 elif isinstance(payload, tuple):
@@ -654,6 +716,11 @@ class SDCardController:
         return {'name': 'SDCardController', 'profile': self.profile, 'present': self._present(),
                 'state': self.state, 'sectors': self.card.sectors, 'dirty_sectors': len(self.card.data),
                 'immutable_base_bytes': len(self.card.base_image),
+                'write_protected': bool(self.controls.gpio_input_pin(12, 6)),
+                'failure_control': self.card.failure.value,
+                'image': None if self.image is None else asdict(self.image),
+                'media_actions': [action.value for action in MediaAction],
+                'storage_failure_semantics': 'Failure controls are strict model refusals, not guest-returned I/O errors. Sparse dirty capacity is a host bound, not filesystem full.',
                 'block_length': self.block_length, 'bus_width': self.bus_width,
                 'started': self.started, 'completed': self.completed, 'irqs': self.irqs,
                 'dma_boundaries': self.dma_boundaries, 'pending': self.request is not None,

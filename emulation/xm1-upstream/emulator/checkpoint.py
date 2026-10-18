@@ -15,8 +15,13 @@ import ctypes
 from dataclasses import fields, is_dataclass
 import hashlib
 import json
+import sys
 from pathlib import PurePath
 from time import perf_counter
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .board import Board
 
 from unicorn.arm_const import (
     UC_ARM_REG_R0, UC_ARM_REG_R8, UC_ARM_REG_SP, UC_ARM_REG_LR,
@@ -71,6 +76,14 @@ def _paused(board, *, capturing):
             if state.get("waiting", False) and (bank is None or not bank.pending & bank.enabled):
                 continue
             raise CheckpointError("Pause would change CPU scheduling order; capture after the final ready core")
+
+
+def capture_blocker(board: Board) -> CheckpointError | None:
+    try:
+        _paused(board, capturing=True)
+    except CheckpointError as error:
+        return error
+    return None
 
 
 def _memo(board):
@@ -309,6 +322,16 @@ def _canonical(value, board, seen=None):
             {field.name: getattr(value, field.name) for field in fields(value)}, board)}
     if hasattr(value, "__dict__"):
         return {"class": type(value).__name__, "fields": _canonical(value.__dict__, board)}
+    native_module = sys.modules.get('x70_native._native')
+    native_plan = getattr(native_module, 'DeclaredUIConversionPlan', None)
+    if native_plan is not None and type(value) is native_plan:
+        return {"class": type(value).__name__, "fields": _canonical({
+            "source_physical": value.source_physical,
+            "destination_physical": value.destination_physical,
+            "width": value.width,
+            "height": value.height,
+            "stride_pixels": value.stride_pixels,
+        }, board)}
     raise CheckpointError(f"Cannot fingerprint state type {type(value).__name__}")
 
 

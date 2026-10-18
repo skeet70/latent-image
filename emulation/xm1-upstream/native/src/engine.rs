@@ -11,6 +11,35 @@ use std::ffi::{CStr, c_void};
 use std::path::Path;
 use std::rc::Rc;
 
+enum ConversionCore {
+    Primary,
+    Secondary,
+}
+
+pub(crate) struct ConversionOrigin {
+    core: ConversionCore,
+    instructions: u64,
+    ticks: u64,
+}
+
+impl ConversionOrigin {
+    pub(crate) fn new(core: u64, instructions: u64, ticks: u64) -> Result<Self, String> {
+        let core = match core {
+            0 => ConversionCore::Primary,
+            1 => ConversionCore::Secondary,
+            _ => return Err("Declared UI conversion CPU index must be 0 or 1".into()),
+        };
+        Ok(Self { core, instructions, ticks })
+    }
+
+    fn core(&self) -> usize {
+        match self.core {
+            ConversionCore::Primary => 0,
+            ConversionCore::Secondary => 1,
+        }
+    }
+}
+
 pub struct HookData {
     pub inner: *const Inner,
     pub core: usize,
@@ -547,6 +576,64 @@ impl Inner {
         }
         Ok(())
     }
+    pub(crate) fn convert_declared_ui(
+        &self,
+        plan: &crate::raster::DeclaredUIConversionPlan,
+        origin: ConversionOrigin,
+    ) -> PyResult<()> {
+        plan.validate_bounds(self.ram.len()).map_err(pyo3::exceptions::PyValueError::new_err)?;
+        if (0..2).any(|core| crate::audit::enabled(self, core)) {
+            return Err(crate::error("Declared UI conversion is unavailable during CPU routine audits".into()));
+        }
+        let destination = plan.destination_range();
+        {
+            let tcm = unsafe { &*self.tcm.get() };
+            for core in 0..2 {
+                for bank in 0..2 {
+                    if let Some((base, size)) = tcm.extent(core, bank) {
+                        let end = base + size as u64;
+                        for alias in [0, 0x40000000] {
+                            let start = destination.start as u64 + alias;
+                            let finish = destination.end as u64 + alias;
+                            if start >= base && start < end && finish > end {
+                                return Err(crate::error(
+                                    "Declared UI destination crosses a live TCM endpoint".into(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let core = origin.core();
+        let counters = Some((origin.instructions, origin.ticks));
+        for row in plan.source_rows() {
+            crate::access_probe::record(self, core, row.start as u64, row.len() as u64,
+                "model-bus-read", counters).map_err(crate::error)?;
+        }
+        crate::access_probe::record(self, core, destination.start as u64, destination.len() as u64,
+            "model-bus-write", counters).map_err(crate::error)?;
+        let source = plan.source_range();
+        // SAFETY: the immutable plan bounds disjoint spans in this fixed backing.
+        // The owner thread holds the GIL; no Python, FFI or detachment occurs during conversion.
+        unsafe {
+            let input = std::slice::from_raw_parts(self.ram.as_ptr().add(source.start), source.len());
+            let output = std::slice::from_raw_parts_mut(
+                self.ram.as_ptr().add(destination.start), destination.len(),
+            );
+            plan.convert(input, output);
+        }
+        unsafe {
+            (*self.state.get()).bus_write_dram(
+                destination.start as u64, destination.len() as u64, self.ram.len() as u64,
+            );
+        }
+        if self.executing.get().is_none() {
+            self.flush_pending().map_err(crate::error)?;
+        }
+        Ok(())
+    }
+
     pub fn instruction(&self, core: usize, address: u64, size: u32) -> Result<Instruction, String> {
         if size != 2 && size != 4 {
             return Err(format!("Unsupported instruction size {size}"));

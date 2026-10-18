@@ -326,10 +326,9 @@ class BootControls:
     def _shutter_irq_route(self, port, pin, previous, level):
         """Preflight a wired S1/S2 falling edge against actual guest routing.
 
-        Source numbers come from the unchanged type4 input records and
-        AEAFE0 polarity/IRQ table. Mode2 in the controller's 180 family is
-        the declared falling-edge interpretation of kernel attribute 87.
-        This is an opt-in peripheral law, not a measured electrical model.
+        The selected board supplies wiring and firmware registration inputs.
+        Mode2 in the controller's 180 family has a declared falling-edge
+        interpretation; its electrical meaning remains unmeasured.
         No key/event, RAM flag, guest ISR or callback is supplied here.
         """
         if (getattr(self, 'shutter_irq_profile', None) is None

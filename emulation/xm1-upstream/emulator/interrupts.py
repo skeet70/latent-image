@@ -11,6 +11,7 @@ research/emulator-kernel/interrupts.md for addresses and remaining limits.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import IntEnum
 
 from unicorn.arm_const import (UC_ARM_REG_CPSR, UC_ARM_REG_SPSR,
                                UC_ARM_REG_LR, UC_ARM_REG_PC)
@@ -23,6 +24,11 @@ TIMER_BASE = 0xfff91000
 IRQ_MODE = 0x12
 IRQ_MASK = 0x80
 ASYNC_ABORT_MASK = 0x100
+
+
+class DeclaredUIIRQTarget(IntEnum):
+    CPU0 = 0
+    CPU1 = 1
 
 
 @dataclass
@@ -556,6 +562,21 @@ class KernelInterrupts:
         # Selection is read-only: neither a WFI wake check nor repeated polling
         # acknowledges a source or consumes the other pending requests.
         return self._pending_selection(cpu_id)[0]
+
+    def declared_ui_irq_target(self):
+        """Read the fresh-request predicate for the declared IRQ67 peripheral."""
+        line, bit = 67, 1 << 67
+        targets = []
+        for cpu_id, bank in enumerate(self.banks):
+            self._validate_bank(bank)
+            if (bank.pending & bit or bank.injected == line or bank.active == line
+                    or any(entry['line'] == line for entry in bank.active_stack)):
+                raise UnsupportedDevice('Declared UI conversion requires fresh IRQ67 state in both banks')
+            if bank.enabled & bit:
+                targets.append(DeclaredUIIRQTarget(cpu_id))
+        if len(targets) != 1:
+            raise UnsupportedDevice('Declared UI conversion requires exactly one enabled IRQ67 bank')
+        return targets[0]
 
     def inject(self, cpu_id, cpu, *, vector_base=None, sctlr=None):
         """Enter architectural IRQ state; firmware performs dispatch/return.
