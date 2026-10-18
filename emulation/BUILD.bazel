@@ -1,10 +1,94 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 filegroup(
     name = "xm1-upstream",
     srcs = glob(["xm1-upstream/**"]),
+)
+
+haskell_library(
+    name = "emulator-slot-lib",
+    srcs = ["Emulation/EmulatorSlot.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+haskell_binary(
+    name = "emulator-slot",
+    srcs = ["EmulatorSlotRun.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":emulator-slot-lib",
+        "//host:base",
+        "//host:directory",
+        "//host:unix",
+    ],
+)
+
+haskell_library(
+    name = "viewer-runtime-lib",
+    srcs = ["Emulation/ViewerRuntime.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:time",
+        "//host:unix",
+        "//host:update-container",
+    ],
+)
+
+haskell_library(
+    name = "flash-boot-route-lib",
+    srcs = ["Emulation/FlashBootRoute.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+    ],
+)
+
+haskell_test(
+    name = "flash-boot-route-tests",
+    size = "small",
+    srcs = ["FlashBootRouteTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":flash-boot-route-lib",
+        "//host:base",
+    ],
+)
+
+haskell_binary(
+    name = "flash-boot-check",
+    srcs = ["FlashBootCheck.hs"],
+    data = [":xm1-upstream"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":emulator-slot-lib",
+        ":flash-boot-route-lib",
+        ":viewer-runtime-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:json",
+        "//host:process",
+    ],
 )
 
 haskell_binary(
@@ -14,13 +98,12 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     visibility = ["//visibility:public"],
     deps = [
+        ":emulator-slot-lib",
+        ":viewer-runtime-lib",
         "//host:base",
-        "//host:bytestring",
         "//host:directory",
         "//host:filepath",
-        "//host:time",
         "//host:unix",
-        "//host:update-container",
     ],
 )
 

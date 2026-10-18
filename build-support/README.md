@@ -30,7 +30,7 @@ One Bazel server serves one output base, so two commands in the same checkout qu
 
 Each output base starts its own server JVM. `.bazelrc` caps that heap at 2 GiB and stops a server after 10 idle minutes, which keeps several concurrent bases inside host memory.
 
-Concurrent agents also work in separate git worktrees, so an edit in one never invalidates another agent's build or emulator run. `build-support/agent-worktree.sh NAME [BASE]` creates `../latent-image-worktrees/NAME` on branch `agent/NAME`, symlinks the checkout's ignored `private-data/` into it and prints the output base to use. The agent leaves its changes uncommitted there; the integration owner commits and merges them. Remove a finished worktree with `git worktree remove ../latent-image-worktrees/NAME` and delete its branch and output base by hand.
+Concurrent agents also work in separate git worktrees, so an edit in one never invalidates another agent's build or emulator run. `build-support/agent-worktree.sh NAME [BASE]` creates `../latent-image-worktrees/NAME` on branch `agent/NAME`, symlinks the checkout's ignored `private-data/` into it and prints the output base to use. The agent commits on its `agent/NAME` branch; the integration owner merges it. Once the branch is merged into the main work branch, the integration owner removes the worktree (`git worktree remove ../latent-image-worktrees/NAME`), deletes the branch and deletes `~/.cache/bazel/latent-image-NAME`.
 
 ```sh
 devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-$AGENT" test //emulation:native-runner-tests
@@ -38,7 +38,11 @@ devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-$AGENT" tes
 
 A new output base still resolves its Nix repositories once. Delete `~/.cache/bazel/latent-image-*` and `~/.cache/bazel-disk/latent-image` by hand when they are no longer needed.
 
-Full-system emulator runs share host CPU and memory, so they run one at a time under `flock ~/.cache/latent-image-emulator.lock` and inside a memory-capped scope (`systemd-run --user --scope -p MemoryMax=…`).
+Full-system emulator runs share host CPU and memory. `//emulation:xm1-viewer` waits for one of the host's emulator slots, POSIX locks under `~/.cache/xm1-emulator-slots/` that every checkout on the host shares, then re-executes itself in a `systemd-run --user --scope` with `MemoryMax=8G` and no swap. `XM1_EMULATOR_SLOTS` (default 2) and `XM1_EMULATOR_MEMORY_MAX` override the policy. Emulator commands outside the viewer, such as the preserved Python suites, take a slot through `//emulation:emulator-slot`:
+
+```sh
+devenv shell -- bazel run //emulation:emulator-slot -- sh -c 'cd RUNTIME && PYTHONPATH=native/python:. "$XM1_VIEWER_PYTHON" -m unittest native.tests.test_portable_checkpoint'
+```
 
 The C import uses Unicorn's `libunicorn.so.2` runtime name so Bazel's runtime symlinks satisfy its SONAME in both `bazel run` and sandboxed tests. No `LD_LIBRARY_PATH` override is required. Upstream Haskell rule helpers and the schema checker use Python internally; project-authored tools use Haskell/Rust, with C limited to necessary boundaries under [current principles](../docs/principles.md#implementation-and-build). JSON parsing uses the shared strict Haskell parser, including duplicate-key rejection, and canonical review bindings retain sorted ASCII JSON semantics.
 

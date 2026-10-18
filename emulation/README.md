@@ -388,7 +388,7 @@ devenv shell -- bazel run //emulation:xm1-viewer -- --port 0
 
 Open the printed loopback URL. The default inputs are `private-data/firmware/x-m1-1.50/FWUP0002.DAT` and the captured ROM at `private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin`. Their declared identities are checked. `--output` may name a fresh directory beneath `private-data/`; without it, the launcher chooses one. `--port 0` chooses an available port. `--firmware PATH` selects a compatible X-M1 1.50 DAT, including modified candidates, using the same validation as the browser picker. Compatibility is limited to the retained layout and bounded image-4 prefix; a valid container is not proof that its application boots.
 
-The viewer exits after 15 minutes with no HTTP request, or after 240 minutes with no request other than an open page's `/api/state` poll. `tools/start_setup_viewer.py` takes `--idle-exit-minutes` and `--untouched-exit-minutes` (0 disables either); the launcher uses the defaults.
+The viewer exits after 15 minutes with no HTTP request, or after 240 minutes with no request other than an open page's `/api/state` poll. `tools/start_setup_viewer.py` takes `--idle-exit-minutes` and `--untouched-exit-minutes` (0 disables either); the launcher uses the defaults. The launcher runs inside an [emulator slot](../build-support/README.md#commands) with a memory cap.
 
 `--sd-card-image PATH` starts with a raw, whole-sector virtual SD image. The launcher requires a regular file beneath `private-data/`. The guest mounts and accesses its filesystem through the modeled controller; the launcher does not preload recipe state or filesystem readiness. Guest sector writes remain in the emulated card, not the source image file.
 
@@ -436,4 +436,21 @@ The configured stock Nix Unicorn lacks the optional `uc_x70_*` acceleration expo
 Haskell owns the supported launcher and candidate validation; Rust owns native execution/raster/statistics paths. Substantial retained Python device/scheduler/viewer code remains migration debt. Unicorn bindings are available to Haskell and Rust; C ABI dependencies do not require C callers. [Current Haskell/Rust ownership](../docs/principles.md) applies to new work.
 
 This is a usable stock-firmware UI testbed, not a complete silicon-faithful hardware emulator. It does not accept the original T1 captured-dump gate, autofocus/exposure accuracy, physical recovery or every menu/mode. [Current evidence and ABI boundary](../reports/full-system-emulation.md#119-interactive-x-m1-application-emulation); capture upgrades are tracked in [GitHub Issues](https://github.com/skeet70/latent-image/issues).
+
+## Flash-image boot check
+
+`//emulation:flash-boot-check` checks that an exact flash image boots to the stock menus in the full-system emulator. A flash image, such as a `//extensions:build-extension` output, must pass it before a flash go ([camera-run procedure](../spec/07-governance-and-handoff.md#3-camera-runs)).
+
+```sh
+devenv shell -- bazel run //emulation:flash-boot-check -- --firmware CANDIDATE.DAT [--output private-data/flash-boot-checks/NAME]
+devenv shell -- bazel test //emulation:flash-boot-route-tests
+```
+
+The launcher applies the viewer's container validation, takes an emulator slot and stages a runtime with the viewer's inputs (`emulation/Emulation/ViewerRuntime.hs`). `--output` names a fresh directory beneath `private-data/` whose parent exists; the default is `private-data/flash-boot-check-PID-MICROS`. The upstream `start_setup_viewer.py` cold-boots the staged DAT bytes with the captured ROM, from erased settings with no card, to 80,000,280 instructions and saves a portable snapshot. The upstream `probe_setup_menus.py --interactive` then drives the route from that snapshot: Up twelve times and OK (English), OK (date), 40,000,000 instructions to live view, MENU, and 90,000,000 instructions for the menu to render. The command exits 0 only when every step completes without a model stop and the retained menu node ends at SHOOTING MENU, menu id 1, setting id 5, cursor 2. Any other outcome exits 1 and names the phase.
+
+The receipt is `OUTPUT/flash-boot-receipt.json`. It records the result; the failure kind (`boot-stopped`, `model-stopped`, `input-refused`, `drive-ended` or `menu-missed`), phase, message and the viewer's `boot-failure.json`; the DAT path, size and SHA-256; the emulator source identity (one SHA-256 over the staged `emulator`, `firmware`, `native`, `tools` and `inputs/x-m1-1.50` trees, plus the ROM, native engine and Unicorn library digests and the Python path); the boot instruction and tick counts and boot frame hash; the route; one milestone per phase with instruction count, menu node and frame hash; the final instruction count and frame hash; and the final frame PNG for the owner's visual check. `boot.stderr`, `drive.stdout` and `drive.stderr` sit beside it.
+
+Observed 2026-10-18 (emulated): stock 1.50 boots to 80,000,280 instructions, reaches menu node (1, 5, 2) at 360,016,051 and passes at 450,019,207 with the rendered SHOOTING MENU page 1. The negative control replaces the image-4 entry word at `0x0069cdf8` with `UDF` in the decoded image, re-encodes it with `//lz:lz-encode` and rebuilds the container with `//host/firmware:rebuild-update replace-record4`; `rebuild-update verify` and the launcher's container validation pass. That DAT stops at 7,867,227 instructions with an invalid instruction at CPU0 PC `0x0069cdf8` and fails as `boot-stopped`.
+
+Boot to the stock menus is necessary, not sufficient. The check covers the first-start route from erased settings storage with no card; it does not exercise retained settings or body calibration, the updater install, card or USB paths, extension behaviour, menus past SHOOTING MENU page 1, or peripherals the model refuses. The menu node is retained firmware state, and the rendered frame is not compared automatically; the owner's visual check covers it. A model stop can be an emulator gap rather than a firmware defect, such as an unsupported peripheral transport; either way the check fails and the stop needs an explanation before a go.
 
