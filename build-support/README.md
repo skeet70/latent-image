@@ -48,6 +48,8 @@ The C import uses Unicorn's `libunicorn.so.2` runtime name so Bazel's runtime sy
 
 The X-M1 viewer's locked `xm1-native.nix` build runs Rust unit checks before installing the native extension. The preserved Python checkpoint/profile integration suite separately exercises that extension's supported Python boundary and requires staged pinned ROM/DAT/unpacked fixtures. Those checks do not imply that retained Python orchestration or avoidable C host models have been migrated.
 
+`unicorn-x70.nix` builds jitl's Unicorn fork from a pinned GitHub revision and source hash, ARM-only, for the viewer's `X70_UNICORN_LIBRARY` ([engine paths and measurements](../emulation/README.md#interactive-x-m1-firmware-viewer)). The Bazel `lab_unicorn` repository and the Python binding stay on stock nixpkgs Unicorn.
+
 ## Extending the graph
 
 Add dependencies through pinned module/Nix inputs and explicit target declarations. Update `.bazelversion` and the devenv Bazel package together; regenerate the module lock, format with buildifier, and validate all targets. Record both lockfile hashes and effective build flags with experiment artifacts. Host checks do not verify firmware architecture, target ABI, or camera behavior.

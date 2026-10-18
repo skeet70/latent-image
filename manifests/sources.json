@@ -12,6 +12,15 @@
       ]
     },
     {
+      "id": "unicorn-x70",
+      "url": "https://github.com/justjake/unicorn",
+      "revision": "f12467851d10175cd2856089c39c7e561c9cb25e",
+      "status": "pin-selected",
+      "evidence_ids": [
+        "E-UNICORN-X70-SPEEDUP-150"
+      ]
+    },
+    {
       "id": "fffw",
       "url": "https://github.com/tiredboffin/fffw",
       "revision": "bedc091e0b54a1a34aaf6929dd08e1db36d13b08",

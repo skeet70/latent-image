@@ -404,6 +404,15 @@
       "scope": "engine package metadata; per-file notices and components remain applicable"
     },
     {
+      "name": "unicorn-x70",
+      "version": "2.1.4-x70-f1246785",
+      "nixpkgs_revision": "c7def046b9a883d46974757852106483d741586f",
+      "source": "https://github.com/justjake/unicorn/tree/f12467851d10175cd2856089c39c7e561c9cb25e",
+      "license": "GPL-2.0-only",
+      "evidence": "https://github.com/justjake/unicorn/blob/f12467851d10175cd2856089c39c7e561c9cb25e/COPYING",
+      "scope": "Unicorn 2.1.4 COPYING unchanged by the fork's engine-source patches; per-file QEMU notices remain applicable"
+    },
+    {
       "name": "numpy",
       "version": "2.5.2",
       "nixpkgs_revision": "c7def046b9a883d46974757852106483d741586f",
