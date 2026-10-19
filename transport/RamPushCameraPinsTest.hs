@@ -1,6 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- Runs //transport:camera ram-push and ram-unload on inputs that parse but
 -- differ from the compiled reviewed contract, with no camera attached.
+-- With `--classic-chrome` the inputs have the Classic Chrome payload's size
+-- and publication counts, so the camera checks them against
+-- `reviewedCcContract`.
 module Main where
 
 import Control.Monad (unless)
@@ -21,6 +24,7 @@ import FujiAF.RamPush
 import FujiAF.SHA256 (sha256)
 import FujiAF.Transport (writePrivateBytes)
 import RamPushReviewedPins (reviewedContract)
+import RamPushCcReviewedPins (reviewedCcContract)
 
 base :: Word32
 base = 0x00c20000
@@ -28,32 +32,35 @@ base = 0x00c20000
 hexWord :: Word32 -> String
 hexWord value = "0x" ++ replicate (8 - length digits) '0' ++ digits where digits = showHex value ""
 
-publications :: [Publication]
-publications =
-  [ Publication index (if index < setupCount then Setup else Activation)
+-- | The payload the inputs are sized for, its compiled contract, and an entry offset inside it.
+data Target = Target Payload ReviewedContract Word32
+
+publications :: Payload -> [Publication]
+publications payload =
+  [ Publication index (if index < payloadSetupCount payload then Setup else Activation)
       (Address (0x00630000 + fromIntegral (4*index)))
       (WordValue (0xe1000000 + fromIntegral index))
       (WordValue (0xea000000 + fromIntegral index)) Both
-  | index <- [0..publicationCount-1] ]
+  | index <- [0..payloadPublicationCount payload-1] ]
 
-entries :: RamPushEntries
-entries = RamPushEntries (Address (base+0xa200)) (Address (base+0xa204)) (Address (base+0xa208))
+entries :: Word32 -> RamPushEntries
+entries offset = RamPushEntries (Address (base+offset)) (Address (base+offset+4)) (Address (base+offset+8))
 
-runtime :: B.ByteString
-runtime = B.replicate reviewedAllocationSize 0
+runtime :: Payload -> B.ByteString
+runtime payload = B.replicate (payloadAllocationSize payload) 0
 
-manifestDocument :: [(String,String)] -> B.ByteString
-manifestDocument identity = BL.toStrict (encode (object
+manifestDocument :: Target -> [(String,String)] -> B.ByteString
+manifestDocument (Target payload _ offset) identity = BL.toStrict (encode (object
   [ "schema" .= (1 :: Int)
   , "base" .= hexWord base
-  , "size" .= reviewedAllocationSize
-  , "runtime_sha256" .= sha256 runtime
+  , "size" .= payloadAllocationSize payload
+  , "runtime_sha256" .= sha256 (runtime payload)
   , "source_identity" .= object [K.fromString name .= digest | (name,digest) <- identity]
   , "entry" .= object
-      [ "install" .= hexWord (unAddress (installEntry entries))
-      , "rollback" .= hexWord (unAddress (rollbackEntry entries))
-      , "status" .= hexWord (unAddress (statusEntry entries)) ]
-  , "publications" .= map publication publications ]))
+      [ "install" .= hexWord (unAddress (installEntry (entries offset)))
+      , "rollback" .= hexWord (unAddress (rollbackEntry (entries offset)))
+      , "status" .= hexWord (unAddress (statusEntry (entries offset))) ]
+  , "publications" .= map publication (publications payload) ]))
   where
     publication p = object
       [ "index" .= publicationIndex p
@@ -77,21 +84,24 @@ refuses camera label arguments reason = do
 
 main :: IO ()
 main = do
-  [cameraArgument] <- getArgs
+  (cameraArgument, target@(Target payload contract offset)) <- getArgs >>= \arguments -> case arguments of
+    [camera] -> pure (camera, Target bankD3Payload reviewedContract 0xa200)
+    [camera, "--classic-chrome"] -> pure (camera, Target classicChromePayload reviewedCcContract 0x1000)
+    _ -> putStrLn "usage: ram-push-camera-pins CAMERA [--classic-chrome]" >> exitFailure
   camera <- makeAbsolute cameraArgument
   temporary <- lookupEnv "TEST_TMPDIR" >>= maybe (ioError (userError "TEST_TMPDIR is unset")) makeAbsolute
   root <- privateDirectory (temporary </> "camera-pins")
 
   allocDir <- privateDirectory (root </> "alloc")
   allocPath <- writeAllocStateFile allocDir
-    (RamAllocState (Address base) reviewedAllocationSize 0x4003 callbackTableAddress callbackStockWord bootstrapBytes (replicate 64 '0') "X-M1" 1)
+    (RamAllocState (Address base) (payloadAllocationSize payload) 0x4003 callbackTableAddress callbackStockWord bootstrapBytes (replicate 64 '0') "X-M1" 1)
 
   let manifestCase name identity = do
         directory <- privateDirectory (root </> name)
-        writePrivateBytes (directory </> "runtime.bin") runtime
-        writePrivateBytes (directory </> "ram-push-manifest.json") (manifestDocument identity)
+        writePrivateBytes (directory </> "runtime.bin") (runtime payload)
+        writePrivateBytes (directory </> "ram-push-manifest.json") (manifestDocument target identity)
         pure (directory </> "ram-push-manifest.json")
-      reviewed = reviewedSourceIdentity reviewedContract
+      reviewed = reviewedSourceIdentity contract
       substituted = [(name, if name == "menu/ram_push_installer.c" then replicate 64 'f' else digest) | (name,digest) <- reviewed]
   unreviewedSource <- manifestCase "unreviewed-source" substituted
   refuses camera "ram-push with an unreviewed source identity"
@@ -104,7 +114,7 @@ main = do
 
   stateDir <- privateDirectory (root </> "state")
   statePath <- writeStateFile stateDir
-    (RamPushState (replicate 64 'a') (sha256 runtime) (Address base) reviewedAllocationSize entries publications callbackStockWord bootstrapBytes 1)
+    (RamPushState (replicate 64 'a') (sha256 (runtime payload)) (Address base) (payloadAllocationSize payload) (entries offset) (publications payload) callbackStockWord bootstrapBytes 1)
   refuses camera "ram-unload of an unreviewed publication contract"
     ["ram-unload", statePath, root </> "unload-unreviewed-contract"]
     "installed state publication contract differs from the compiled reviewed contract"

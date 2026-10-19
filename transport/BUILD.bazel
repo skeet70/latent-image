@@ -579,11 +579,35 @@ haskell_binary(
     name = "ram-push-reviewed-build-check",
     srcs = ["RamPushReviewedBuildCheck.hs"],
     ghcopts = _GHCOPTS,
+    main_file = "RamPushReviewedBuildCheck.hs",
     deps = [
         ":camera-core",
+        ":ram-push-cc-pins",
         ":ram-push-pins",
         "//host:base",
         "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+        "//host/firmware:ram-push-toolchain",
+    ],
+)
+
+# The same for the Classic Chrome payload and reviewedCcContract.
+haskell_binary(
+    name = "ram-push-cc-reviewed-build-check",
+    srcs = ["RamPushReviewedBuildCheck.hs"],
+    args = ["--classic-chrome"],
+    ghcopts = _GHCOPTS,
+    main_file = "RamPushReviewedBuildCheck.hs",
+    deps = [
+        ":camera-core",
+        ":ram-push-cc-pins",
+        ":ram-push-pins",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
         "//host:directory",
         "//host:filepath",
         "//host:unix",
@@ -599,8 +623,36 @@ haskell_test(
     args = ["$(location :camera)"],
     data = [":camera"],
     ghcopts = _GHCOPTS,
+    main_file = "RamPushCameraPinsTest.hs",
     deps = [
         ":camera-core",
+        ":ram-push-cc-pins",
+        ":ram-push-pins",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+        "//host:aeson",
+        "//host:process",
+    ],
+)
+
+# The same with Classic Chrome-sized inputs, against reviewedCcContract.
+haskell_test(
+    name = "ram-push-cc-camera-pins",
+    srcs = ["RamPushCameraPinsTest.hs"],
+    args = [
+        "$(location :camera)",
+        "--classic-chrome",
+    ],
+    data = [":camera"],
+    ghcopts = _GHCOPTS,
+    main_file = "RamPushCameraPinsTest.hs",
+    deps = [
+        ":camera-core",
+        ":ram-push-cc-pins",
         ":ram-push-pins",
         "//host:base",
         "//host:bytestring",
