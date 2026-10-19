@@ -1,4 +1,24 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+haskell_library(
+    name = "extension-manifest",
+    srcs = ["ExtensionManifest.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:label-record",
+    ],
+)
 
 haskell_binary(
     name = "build-extension",
@@ -23,14 +43,38 @@ haskell_binary(
         "-threaded",
     ],
     deps = [
-        "//host:aeson",
+        ":extension-manifest",
         "//host:base",
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
         "//host:host-support",
+        "//host:label-record",
         "//host:process",
         "//host:update-container",
         "//recovery:firmware-reader",
+    ],
+)
+
+# Manifest parsing and container-order refusals over synthetic manifests and
+# parts written to a temporary directory; no firmware is read.
+haskell_test(
+    name = "build-extension-tests",
+    srcs = ["BuildExtensionTests.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        ":extension-manifest",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:label-record",
     ],
 )

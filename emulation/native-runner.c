@@ -116,15 +116,17 @@ static bool doubleword_space(uint32_t ins)
 {
     return ((ins>>25)&7)==0 && (ins&0xd0u)==0xd0u && !(ins&(1u<<20));
 }
-/* The admitted doubleword forms: LDRD/STRD with an immediate offset, pre-indexed, writeback optional
-   when the base is not one of the two transferred registers, Rt even with Rt+1 below the PC and Rn not
-   the PC. */
+/* The admitted doubleword forms: LDRD/STRD pre-indexed with an immediate offset, writeback optional
+   when the base is not one of the two transferred registers, or with a register offset and no
+   writeback, Rm not the PC and, for LDRD, not one of the pair (the colour stage's
+   ldrd r4,r5,[r0,r3]); Rt even with Rt+1 below the PC and Rn not the PC. */
 static bool doubleword_form(uint32_t ins)
 {
-    unsigned rn=(ins>>16)&15, rt=(ins>>12)&15;
-    bool pre=ins&(1u<<24), imm=ins&(1u<<22), wb=ins&(1u<<21);
-    if (!doubleword_space(ins) || !pre || !imm) return false;
+    unsigned rn=(ins>>16)&15, rt=(ins>>12)&15, rm=ins&15;
+    bool pre=ins&(1u<<24), imm=ins&(1u<<22), wb=ins&(1u<<21), load=(ins&0x20u)==0;
+    if (!doubleword_space(ins) || !pre) return false;
     if (rn==15 || rt%2 || rt==14) return false;
+    if (!imm) return !wb && ((ins>>8)&15u)==0 && rm!=15 && !(load && (rm==rt || rm==rt+1));
     return !(wb && (rn==rt || rn==rt+1));
 }
 /* The admitted register-base dispatch: ldr pc,[Rn,Rm{,shift}], pre-indexed, no writeback,
@@ -137,10 +139,11 @@ static bool register_dispatch_form(uint32_t ins)
 }
 /* The admitted halfword transfer forms: LDRH/STRH with an immediate offset, pre-indexed with optional
    writeback or post-indexed (the compiled hook walk's ldrh r0,[r6],#2), or a pre-indexed register
-   offset with writeback optional, and the signed loads LDRSB/LDRSH with a pre-indexed immediate
-   offset and no writeback (the arm consumers sign-extend a mode-table byte). The signed loads'
-   post-indexed encodings, the unprivileged P=0 W=1 forms and the register-offset post-indexed forms
-   stay refused. */
+   offset with writeback optional, and the signed loads LDRSB/LDRSH pre-indexed with no writeback and
+   either an immediate offset (the arm consumers sign-extend a mode-table byte) or a register offset
+   with no PC index (the develop record builder's ldrsh r3,[r4,r3]). The signed loads' post-indexed and
+   writeback encodings, the unprivileged P=0 W=1 forms and the register-offset post-indexed forms stay
+   refused. */
 static bool halfword_form(uint32_t ins)
 {
     unsigned top=(ins>>25)&7, rn=(ins>>16)&15, rd=(ins>>12)&15, rm=ins&15;
@@ -149,18 +152,20 @@ static bool halfword_form(uint32_t ins)
     if (top!=0 || rn==15 || rd==15) return false;
     if (!signed_load && (ins&0xf0u)!=0xb0u) return false;
     if (rd==rn && (!pre || wb)) return false;
-    if (signed_load) return pre && imm && !wb && (ins&(1u<<20))!=0;
+    if (signed_load) return pre && !wb && (ins&(1u<<20))!=0 && (imm || (((ins>>8)&15u)==0 && rm!=15));
     if (imm) return pre || !wb;
     return pre && ((ins>>8)&15u)==0 && rm!=15;
 }
-/* The admitted multiply forms: MUL and MLA without S and without a PC operand.
-   The S-bit forms, the long multiplies and the signed multiply-accumulates stay refused. */
+/* The admitted multiply forms: MUL, MLA and MLS, and the long multiplies UMULL and SMULL with RdHi
+   distinct from RdLo; none with the S bit or a PC operand. UMLAL/SMLAL, the S-bit forms and the
+   signed halfword multiplies stay refused. */
 static bool multiply_form(uint32_t ins)
 {
     unsigned rd=(ins>>16)&15, ra=(ins>>12)&15, rm=(ins>>8)&15, rn=ins&15;
     if (ins&(1u<<20)) return false;
     if ((ins&0x0fe0f0f0u)==0x00000090u) return rd!=15 && rn!=15 && rm!=15;
-    if ((ins&0x0fe000f0u)==0x00200090u) return rd!=15 && rn!=15 && rm!=15 && ra!=15;
+    if ((ins&0x0fe000f0u)==0x00200090u || (ins&0x0ff000f0u)==0x00600090u) return rd!=15 && rn!=15 && rm!=15 && ra!=15;
+    if ((ins&0x0fe000f0u)==0x00800090u || (ins&0x0fe000f0u)==0x00c00090u) return rd!=15 && ra!=15 && rm!=15 && rn!=15 && rd!=ra;
     return false;
 }
 /* The admitted bitfield forms: UBFX and SBFX with width-1 + 1 + lsb <= 32, and BFI (Rm != 15) or BFC
@@ -181,13 +186,13 @@ static bool bitfield_space(uint32_t ins)
 {
     return (ins&0x0f000000u)==0x07000000u && ((ins>>21)&7)>=5 && !(ins&0x20u) && (ins&0x10u);
 }
-/* The admitted extend forms: UXTB, UXTH and SXTB with ROR #0/8/16/24 and no PC operand.
-   SXTH, the 16-bit variants and PC destinations stay refused. */
+/* The admitted extend forms: UXTB, UXTH, SXTB and SXTH with ROR #0/8/16/24 and no PC operand.
+   The accumulating and 16-bit variants and PC destinations stay refused. */
 static bool extend_form(uint32_t ins)
 {
     unsigned op=(ins>>20)&15, rd=(ins>>12)&15, rotate=(ins>>8)&15, rm=ins&15;
     return (ins&0x0f000000u)==0x06000000u && ((ins>>16)&15u)==15u &&
-        (op==0xeu||op==0xfu||op==0xau) && (ins&0xf0u)==0x70u && !(rotate&3u) && rd!=15 && rm!=15;
+        (op==0xeu||op==0xfu||op==0xau||op==0xbu) && (ins&0xf0u)==0x70u && !(rotate&3u) && rd!=15 && rm!=15;
 }
 /* CLZ, register-only: the kernel's not-found test compiles to clz/lsr.
    Rd and Rm at the PC stay refused. */
@@ -248,13 +253,14 @@ static bool preflight_memory(Case *c,uint32_t ins,uint32_t pc)
         if (load && rd==15) return preflight_dispatch(c,adjusted);
         return preflight_access(c,adjusted,byte?1:4,!load,value);
     }
-    if (doubleword_space(ins)) { /* LDRD/STRD: two consecutive words at the pre-indexed immediate address. */
+    if (doubleword_space(ins)) { /* LDRD/STRD: two consecutive words at the pre-indexed immediate or register-offset address. */
         if (!doubleword_form(ins)) { fail(c,"unsupported_instruction"); return false; }
         unsigned rt=(ins>>12)&15;
         bool up=(ins>>23)&1, load=(ins&0x20u)==0; /* LDRD carries H clear, STRD H set. */
         uint32_t base, value=pc+12, second=pc+12;
         if (!read_reg(c,rn,&base)) return false;
         uint64_t offset=((ins>>4)&0xf0u)|(ins&15);
+        if (!(ins&(1u<<22))) { uint32_t index; if (!read_reg(c,ins&15,&index)) return false; offset=index; }
         uint64_t adjusted=up?(uint64_t)base+offset:(uint32_t)(base-(uint32_t)offset);
         if (adjusted>UINT32_MAX) { fail(c,"memory_guard"); return false; }
         if (!load && !read_reg(c,rt,&value)) return false;
@@ -291,12 +297,15 @@ static bool preflight_memory(Case *c,uint32_t ins,uint32_t pc)
         if (!load && rd!=15 && !read_reg(c,rd,&value)) return false;
         return preflight_access(c,address,byte?1:4,!load,value);
     }
-    if (top==4) { /* LDM/STM: check the complete transfer before any write. */
+    if (top==4) { /* LDM/STM: check the complete transfer before any write. An STM with writeback may name
+                     its base only as the lowest listed register, which stores the original base value
+                     (the 64-bit divide wrapper's push {sp,lr}); LDM with the base listed stays refused. */
         bool pre=(ins>>24)&1, up=(ins>>23)&1, special=(ins>>22)&1;
         bool wb=(ins>>21)&1, load=(ins>>20)&1;
         unsigned list=ins&65535, n=0;
         for(unsigned i=0;i<16;++i) if(list&(1u<<i)) ++n;
-        if (!n||rn==15||special||(wb&&(list&(1u<<rn)))) { fail(c,"unsupported_instruction"); return false; }
+        bool base_listed=wb&&(list&(1u<<rn));
+        if (!n||rn==15||special||(base_listed&&(load||(list&(0u-list))!=(1u<<rn)))) { fail(c,"unsupported_instruction"); return false; }
         uint32_t base; if(!read_reg(c,rn,&base)) return false;
         if(wb && (up ? (uint64_t)base+n*4>UINT32_MAX : base<n*4)) { fail(c,"memory_guard"); return false; }
         uint64_t below=(uint64_t)n*4-(pre?0:4);

@@ -151,3 +151,24 @@ haskell_library(
         ":vector",
     ],
 )
+
+haskell_library(
+    name = "classic-chrome",
+    srcs = ["FujiAF/ClassicChrome.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":aeson",
+        ":base",
+        ":bytestring",
+        ":json",
+        ":scientific",
+        ":text",
+        ":vector",
+    ],
+)

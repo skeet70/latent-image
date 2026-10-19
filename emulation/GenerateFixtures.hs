@@ -65,7 +65,7 @@ main=do
  make "multiple-write-boundary" [0xe8a20003,0xe12fff1e] "memory_guard" >>= finish
  shared<-make "shared-page-readonly" [0xe5820000,0xe12fff1e] "memory_guard"
  finish$at "regions" 2(set "address"(h 0x1020))$nest "registers"(set "r2"(h 0x1004))shared
- forM_[("unsupported-psr-write",0xe129f000,"unsupported_instruction"),("unsupported-psr-immediate",0xe328f000,"unsupported_instruction"),("unsupported-arm-divide",0xe710f110,"unsupported_instruction"),("unsupported-register-offset-pc-index",0xe7d2000f,"unsupported_instruction"),("unsupported-register-offset-store-pc",0xe7c2f003,"unsupported_instruction"),("unsupported-store-pc",0xe582f000,"unsupported_instruction"),("unsupported-register-offset-shift",0xe7920311,"unsupported_instruction"),("unsupported-register-offset-postindex",0xe6920001,"unsupported_instruction"),("unsupported-halfword-register-postindex",0xe09250b3,"unsupported_instruction"),("unsupported-multiply-flags",0xe0100291,"unsupported_instruction"),("unsupported-multiply-long",0xe0810392,"unsupported_instruction"),("unsupported-sxth",0xe6bf0071,"unsupported_instruction"),("unsupported-jump-table-subtract",0x971ff101,"unsupported_instruction")]$ \(name,word,status)->make name[word]status >>= finish
+ forM_[("unsupported-psr-write",0xe129f000,"unsupported_instruction"),("unsupported-psr-immediate",0xe328f000,"unsupported_instruction"),("unsupported-arm-divide",0xe710f110,"unsupported_instruction"),("unsupported-register-offset-pc-index",0xe7d2000f,"unsupported_instruction"),("unsupported-register-offset-store-pc",0xe7c2f003,"unsupported_instruction"),("unsupported-store-pc",0xe582f000,"unsupported_instruction"),("unsupported-register-offset-shift",0xe7920311,"unsupported_instruction"),("unsupported-register-offset-postindex",0xe6920001,"unsupported_instruction"),("unsupported-halfword-register-postindex",0xe09250b3,"unsupported_instruction"),("unsupported-multiply-flags",0xe0100291,"unsupported_instruction"),("unsupported-multiply-long-flags",0xe0910392,"unsupported_instruction"),("unsupported-multiply-accumulate-long",0xe0a10392,"unsupported_instruction"),("unsupported-multiply-long-same-destination",0xe0c11392,"unsupported_instruction"),("unsupported-sxtah",0xe6b10071,"unsupported_instruction"),("unsupported-ldrsh-register-writeback",0xe1b210f3,"unsupported_instruction"),("unsupported-jump-table-subtract",0x971ff101,"unsupported_instruction")]$ \(name,word,status)->make name[word]status >>= finish
  hwo<-make "halfword-odd-address" [0xe1d210b1,0xe12fff1e] "memory_guard"
  finish$expectedRegs[("pc",h 0x1004)]hwo
  wide<-make "movw-movt" [0xe3050678,0xe3410234,0xe30b1eef,0xe34c2afe,0xe12fff1e] "returned"
@@ -124,6 +124,30 @@ main=do
  finish$expectedRegs[("r0",h 0x2233),("pc",h 0x1080)]$nest "registers"(\v->merge v[("r1",h 0x11223344)])uxthf
  sxtbf<-make "sxtb" [0xe6af0071,0xe12fff1e] "returned"
  finish$expectedRegs[("r0",h 0xffffff85),("pc",h 0x1080)]$nest "registers"(\v->merge v[("r1",h 0x85)])sxtbf
+ umul<-make "umull" [0xe0810392,0x10854392,0xe12fff1e] "returned"
+ finish$expectedRegs[("r0",h 0xfffffffa),("r1",h 2),("r4",h 0xfffffffa),("r5",h 2),("pc",h 0x1080)]$nest "registers"(\v->merge v[("r2",h 0xfffffffe),("r3",h 3)])umul
+ smul<-make "smull" [0xe0c10392,0xe0c54796,0xe12fff1e] "returned"
+ finish$expectedRegs[("r0",h 0xfffffffa),("r1",h 0xffffffff),("r4",h 0),("r5",h 0x40000000),("pc",h 0x1080)]$nest "registers"(\v->merge v[("r2",h 0xfffffffe),("r3",h 3),("r6",h 0x80000000),("r7",h 0x80000000)])smul
+ mlsx<-make "multiply-mls" [0xe0603291,0xe12fff1e] "returned"
+ finish$expectedRegs[("r0",h 0xffff5ff3),("pc",h 0x1080)]$nest "registers"(\v->merge v[("r3",h 7)])mlsx
+ sxthf<-make "sxth" [0xe6bf0071,0xe6bf2473,0xe12fff1e] "returned"
+ finish$expectedRegs[("r0",h 0xffff8765),("r2",h 0xffffff80),("pc",h 0x1080)]$nest "registers"(\v->merge v[("r1",h 0x00018765),("r3",h 0x00ff8000)])sxthf
+ forM_ [("ldrsh-register",0xe19210f3,0xabcd0000,0xffffabcd),("ldrsb-register",0xe19210d3,0x00800000,0xffffff80)] $ \(name,word,seed,result)->do
+  item<-make name [word,0xe12fff1e] "returned"
+  dat<-artifact root (name++"-data") [seed]
+  finish$expectedRegs[("r1",h result),("pc",h 0x1080)]$set "artifacts"(arr(list(get item "artifacts")++[dat]))$at "regions" 2(set "initial"(obj[("artifact",get dat "id"),("offset",n 0),("length",n 4)]))$nest "registers"(set "r3"(h 2))item
+ lshb<-make "ldrsh-register-boundary" [0xe19210f3,0xe12fff1e] "memory_guard"
+ finish$expectedRegs[("pc",h 0x1004)]$at "regions" 2(set "size"(n 3))$nest "registers"(set "r3"(h 2))lshb
+ pushsp<-make "push-sp-lr" [0xe92d6000,0xe28dd008,0xe12fff1e] "returned"
+ finish$nest "expected"(set "memory"(arr[memory "stack" 24 "2030000080100000"]))$expectedRegs[("pc",h 0x1080)]pushsp
+ pushbad<-make "unsupported-stm-base-not-lowest" [0xe92d2001] "unsupported_instruction"
+ finish$expectedRegs[("pc",h 0x1004)]pushbad
+ ldrr<-make "ldrd-register" [0xe18240d3,0xe12fff1e] "returned"
+ ldrrData<-artifact root "ldrd-register-data" [0x11111111,0x22222222,0x33333333]
+ finish$expectedRegs[("r4",h 0x22222222),("r5",h 0x33333333),("pc",h 0x1080)]$set "artifacts"(arr(list(get ldrr "artifacts")++[ldrrData]))$at "regions" 2(set "size"(n 12) . set "initial"(obj[("artifact",get ldrrData "id"),("offset",n 0),("length",n 12)]))$nest "registers"(set "r3"(h 4))ldrr
+ strr<-make "strd-register" [0xe10240f3,0xe12fff1e] "returned"
+ finish$nest "expected"(set "memory"(arr[memory "data" 0 "0400aaaa0500aaaa"]))$expectedRegs[("r2",h 0x200c),("pc",h 0x1080)]$at "regions" 2(set "size"(n 12))$nest "registers"(\v->merge v[("r2",h 0x200c),("r3",h 8),("r4",h 0xaaaa0004),("r5",h 0xaaaa0005)])strr
+ forM_ [("unsupported-ldrd-register-writeback",0xe1a240d3),("unsupported-ldrd-register-rm-in-pair",0xe18240d4)] $ \(name,word)->make name [word] "unsupported_instruction" >>= finish . expectedRegs[("pc",h 0x1004)]
  blx<-make "blx-register" [0xe1a0400e,0xe12fff35,0xe2800002,0xe1a0e004,0xe12fff1e] "returned"
  calleeBlx<-artifact root "callee-blx" [0xe0800001,0xe12fff1e]
  let blx'=merge blx[("artifacts",arr(list(get blx "artifacts")++[calleeBlx])),("regions",arr(list(get blx "regions")++[region "callee" 0x1040 8 "rx"(Just calleeBlx)])),("functions",arr(list(get blx "functions")++[obj[("address",h 0x1040),("size",n 8)]]))]

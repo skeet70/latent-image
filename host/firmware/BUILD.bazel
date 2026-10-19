@@ -117,9 +117,10 @@ haskell_test(
     ],
 )
 
-# The id-0x83d label record the compiled recipe name rides: the load-relative
-# buffer geometry, the layout carry and the UTF-16 write and read-back. The
-# media image is built in the test, so no artefact is read.
+# The special label records 0x83c..0x83e in image 2: the load-relative
+# geometry, the 0x83d name write with its layout carry, the id-parameterised
+# record write with its current-bytes check, and read-back. The media image is
+# built in the test, so no artefact is read.
 haskell_test(
     name = "label-record-tests",
     srcs = ["LabelRecordTests.hs"],
@@ -826,5 +827,80 @@ haskell_binary(
         "//host:json",
         "//host:update-container",
         "//host:unix",
+    ],
+)
+
+# Classic Chrome stubs (reports/classic-chrome-patch.md sections 4.3-4.5):
+# one blob per replaced image-4 converter plus the symbol table the patch-set
+# builder reads for the five hook branch targets.
+genrule(
+    name = "classic-chrome-stubs",
+    srcs = ["classic-chrome-stubs.S", "classic-chrome-stubs.ld"],
+    outs = [
+        "classic-chrome-capture.bin",
+        "classic-chrome-settings.bin",
+        "classic-chrome-stubs.elf",
+        "classic-chrome-stubs.sym",
+    ],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location classic-chrome-stubs.ld) $(location classic-chrome-stubs.S) -o $(location classic-chrome-stubs.elf) && llvm-objcopy -O binary -j .capture $(location classic-chrome-stubs.elf) $(location classic-chrome-capture.bin) && llvm-objcopy -O binary -j .settings $(location classic-chrome-stubs.elf) $(location classic-chrome-settings.bin) && llvm-nm --defined-only $(location classic-chrome-stubs.elf) | sort > $(location classic-chrome-stubs.sym)",
+    local = True,
+)
+
+# Classic Chrome extension parts (reports/classic-chrome-patch.md section 8.1)
+# from a parameter file, the linked stubs and the pinned stock images.
+haskell_binary(
+    name = "build-classic-chrome",
+    srcs = ["BuildClassicChrome.hs"],
+    args = [
+        "$(location :classic-chrome-capture.bin)",
+        "$(location :classic-chrome-settings.bin)",
+        "$(location :classic-chrome-stubs.sym)",
+    ],
+    data = [
+        ":classic-chrome-capture.bin",
+        ":classic-chrome-settings.bin",
+        ":classic-chrome-stubs.sym",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:classic-chrome",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:time",
+        "//host:update-container",
+    ],
+)
+
+haskell_test(
+    name = "classic-chrome-tests",
+    srcs = ["ClassicChromeTests.hs"],
+    args = ["$(location classic-chrome-synthetic.json)"],
+    data = ["classic-chrome-synthetic.json"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:classic-chrome",
+        "//host:host-support",
+        "//host:json",
+        "//host:scientific",
     ],
 )

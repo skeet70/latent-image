@@ -590,3 +590,51 @@ haskell_binary(
         "//host:text",
     ],
 )
+
+# Classic Chrome develop-builder cases: stock and patched still develop path
+# from a request to the hardware parameter block, with the generator's
+# comparisons over the runner reports.
+haskell_binary(
+    name = "classic-chrome-builder-cases",
+    srcs = ["ClassicChromeBuilderCases.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-threaded",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":native-adapter",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+# Classic Chrome patch-site cases: emits stock-origin native cases from the
+# pinned stock images and the build-classic-chrome decodes, runs each through
+# the native-case adapter and writes the reports.
+haskell_binary(
+    name = "classic-chrome-site-cases",
+    srcs = ["ClassicChromeSiteCases.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-threaded",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":native-adapter",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)

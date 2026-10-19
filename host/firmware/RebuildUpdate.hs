@@ -1045,6 +1045,81 @@ writeLabel [stockPath, text, outputPath] = do
   putStrLn ("wrote " ++ outputPath ++ ": " ++ show (B.length written) ++ " bytes, sha256 " ++ digest)
 writeLabel _ = H.failH "usage: rebuild-update write-label STOCK_DAT TEXT OUTPUT_DAT"
 
+writeRecordUsage :: String
+writeRecordUsage = "usage: rebuild-update write-record --id 0xID --layout A,B,C,D,E --current-hex HEX INPUT_DAT TEXT OUTPUT_DAT"
+
+-- write-record options: the special id, the five layout halfwords in decimal
+-- and the record's current 66 bytes in media form as 132 lowercase hex digits.
+parseWriteRecord :: [String] -> IO (L.SpecialLabelId, L.LabelLayout, L.SpecialRecordBytes, [String])
+parseWriteRecord arguments = case arguments of
+  "--id" : idText : "--layout" : layoutText : "--current-hex" : currentText : rest -> do
+    value <- hexValue "special id" idText
+    ident <- either H.failH pure (L.specialLabelId (toInteger value))
+    values <- mapM decimal (splitCommas layoutText)
+    layout <- either H.failH pure (L.labelLayout values)
+    current <- either H.failH pure (L.specialRecordFromHex currentText)
+    pure (ident, layout, current, rest)
+  _ -> H.failH writeRecordUsage
+  where
+    decimal text = case reads text of
+      [(v, "")] | not (null text), all (`elem` ("0123456789" :: String)) text -> pure v
+      _ -> H.failH ("layout: decimal halfword required, got " ++ show text)
+    splitCommas text = case break (== ',') text of
+      (field, []) -> [field]
+      (field, _ : rest) -> field : splitCommas rest
+
+writeRecord :: L.SpecialLabelId -> L.LabelLayout -> L.SpecialRecordBytes -> [String] -> IO ()
+writeRecord ident layout current [stockPath, text, outputPath] = do
+  name <- either (\message -> H.failH ("record write refused: " ++ message)) pure (L.labelName text)
+  stockBytes <- readContainer stockPath
+  stock <- parseOrFail stockPath stockBytes
+  let (_, size, load) = U.image2Extent (U.parsedParts stock)
+      stockMedia = mediaExtent stock
+      idName = "id-0x" ++ showHexInt (fromInteger (L.specialLabelIdValue ident))
+  offset <- case L.specialRecordOffset ident load size of
+    Left message -> hPutStrLn stderr ("record write refused: " ++ message) >> exitFailure
+    Right value -> pure value
+  media <- case L.writeSpecialRecord load stockMedia ident current name layout of
+    Left message -> hPutStrLn stderr ("record write refused: " ++ message) >> exitFailure
+    Right value -> pure value
+  putStrLn
+    ( idName
+        ++ " record: image offset "
+        ++ U.showHexWord (fromIntegral offset)
+        ++ " (RAM "
+        ++ U.showHexWord (L.specialRecordAddress ident)
+        ++ ", image load "
+        ++ U.showHexWord load
+        ++ "), current bytes match "
+        ++ L.specialRecordHex current
+    )
+  putStrLn ("name: " ++ show text ++ ", layout " ++ show (L.labelLayoutList layout))
+  let (changed, first) = U.firstDiff (U.mediaImageBytes stockMedia) (U.mediaImageBytes media)
+  putStrLn ("extent vs input: " ++ show changed ++ " bytes differ, first at image offset " ++ maybe "-" show first)
+  (written, reparsed) <- emitImage2 stock stockBytes media outputPath
+  (readName, readLayout) <- case L.readSpecialRecord load (mediaExtent reparsed) ident of
+    Left message -> hPutStrLn stderr ("the emitted container's " ++ idName ++ " record did not read back: " ++ message) >> exitFailure
+    Right value -> pure value
+  H.ensure (readName == text) ("the emitted container reads back " ++ show readName ++ " against " ++ show text)
+  H.ensure (readLayout == layout) ("the emitted record's layout halfwords are " ++ show (L.labelLayoutList readLayout))
+  putStrLn
+    ( "read back from the emitted container: "
+        ++ show readName
+        ++ " at image offset "
+        ++ U.showHexWord (fromIntegral offset)
+        ++ ", zero terminator, layout "
+        ++ show (L.labelLayoutList readLayout)
+    )
+  putStrLn
+    ( "main checksum word: "
+        ++ U.showHexWord (U.hMainChecksum (U.parsedHeader stock))
+        ++ " -> "
+        ++ U.showHexWord (U.hMainChecksum (U.parsedHeader reparsed))
+    )
+  digest <- H.sha256 written
+  putStrLn ("wrote " ++ outputPath ++ ": " ++ show (B.length written) ++ " bytes, sha256 " ++ digest)
+writeRecord _ _ _ _ = H.failH writeRecordUsage
+
 showHexInt :: Int -> String
 showHexInt n
   | n < 16 = [digit n]
@@ -1075,9 +1150,12 @@ main = do
         (flashOffset, files) <- parseReplacePlain rest
         replacePlain flashOffset files
       ("write-label" : rest) -> writeLabel rest
+      ("write-record" : rest) -> do
+        (ident, layout, current, files) <- parseWriteRecord rest
+        writeRecord ident layout current files
       _ ->
         H.failH
-          "usage: rebuild-update verify|verify-stock|round-trip|diff|replace-record4|extract-record5|replace-record5|extract-image2|replace-image2|extract-plain|replace-plain|write-label ..."
+          "usage: rebuild-update verify|verify-stock|round-trip|diff|replace-record4|extract-record5|replace-record5|extract-image2|replace-image2|extract-plain|replace-plain|write-label|write-record ..."
   case outcome :: Either SomeException () of
     Left err -> hPutStrLn stderr (displayException err) >> exitFailure
     Right () -> pure ()

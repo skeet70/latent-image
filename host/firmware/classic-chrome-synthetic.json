@@ -1,0 +1,31 @@
+{
+  "schema": "latent-image.classic-chrome-parameters.v1",
+  "target": {
+    "model": "X-M1",
+    "firmware_version": "1.50",
+    "firmware_sha256": "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"
+  },
+  "approximation_of": "none: synthetic test set",
+  "provenance": {
+    "method": "Synthetic test set written by hand: identity colour matrix (0x400 on the diagonal), chroma {0x400, 0, 0, 0x400} in storage order, nine zero tone head bytes and the linear ramp floor(i * 0x3fff / 27) for i = 0..27. It carries no Fujifilm data and approximates no film simulation; e_method is not a measurement.",
+    "inputs": [],
+    "e_method": 0,
+    "e_model": null
+  },
+  "colour_matrix": [
+    [1024, 0, 0],
+    [0, 1024, 0],
+    [0, 0, 1024]
+  ],
+  "chroma": [1024, 0, 0, 1024],
+  "tone_record": {
+    "head": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "curve": [0, 606, 1213, 1820, 2427, 3033, 3640, 4247, 4854, 5461, 6067, 6674, 7281, 7888, 8494, 9101, 9708, 10315, 10922, 11528, 12135, 12742, 13349, 13955, 14562, 15169, 15776, 16383]
+  },
+  "reuse": {
+    "luma_band": "PROVIA",
+    "chroma_gain": "PROVIA",
+    "hs_tone": "PROVIA",
+    "tone_scalar": "PROVIA"
+  }
+}
