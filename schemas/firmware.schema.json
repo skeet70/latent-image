@@ -24,6 +24,20 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
+        "if": {
+          "properties": {
+            "model": {
+              "const": "X-T1"
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "matches_installed": {
+              "const": null
+            }
+          }
+        },
         "required": [
           "model",
           "version",
@@ -36,7 +50,10 @@
         ],
         "properties": {
           "model": {
-            "const": "X-M1"
+            "enum": [
+              "X-M1",
+              "X-T1"
+            ]
           },
           "version": {
             "type": "string",

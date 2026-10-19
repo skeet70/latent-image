@@ -233,6 +233,122 @@ haskell_test(
     ],
 )
 
+# Classic Chrome host colour model (spec/10 section 19.5): the sibling tables
+# from the pinned DATs, oracle inputs and comparison against x70view
+# film_stage.py, the private parameter bundle, the leave-one-out method
+# error, the Classic Chrome fit and the owner photo session analysis
+# (section 19.5.6, X-M1 model check).
+haskell_binary(
+    name = "classic-chrome-model",
+    srcs = [
+        "ClassicChromeModel.hs",
+        "PhotoSession.hs",
+        "SiblingTables.hs",
+    ],
+    main_file = "ClassicChromeModel.hs",
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+        "//host:film-model",
+        "//host:host-support",
+        "//host:json",
+        "//host:text",
+    ],
+)
+
+# The film-stage model against x70view film_stage.py outputs on synthetic
+# parameter sets, CIEDE2000 against Sharma et al. (2005), the colour fit and
+# the inverse stage.
+haskell_test(
+    name = "film-stage-tests",
+    size = "small",
+    srcs = ["FilmStageTests.hs"],
+    args = ["fixtures/film-stage"],
+    data = ["//fixtures/film-stage"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+        "//host:film-model",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+# The Classic Chrome parameter file (v1) on a synthetic candidate: field
+# encoding, chroma storage order, read-back and refusals.
+haskell_test(
+    name = "candidate-tests",
+    size = "small",
+    srcs = ["CandidateTests.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:film-model",
+        "//host:host-support",
+        "//host:vector",
+    ],
+)
+
+# The photo-session commands through the command line, on flat-patch JPEGs the
+# pinned ffmpeg writes from synthetic fixture stage outputs.
+haskell_test(
+    name = "photo-session-tests",
+    size = "small",
+    srcs = ["PhotoSessionTests.hs"],
+    args = [
+        "$(location :classic-chrome-model)",
+        "$(location @lab_ffmpeg//:bin/ffmpeg)",
+        "$(location @lab_ffmpeg//:bin/ffprobe)",
+        "fixtures/film-stage",
+    ],
+    data = [
+        ":classic-chrome-model",
+        "//fixtures/film-stage",
+        "@lab_ffmpeg//:bin/ffmpeg",
+        "@lab_ffmpeg//:bin/ffprobe",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+        "//host:film-model",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
 # The two CLI paths that built the filmsim prefix container:
 # apply-patch-set's schema-3 decode-prefix extension and rebuild-update
 # replace-record4 --load-address. Synthetic fixtures only; the tools under

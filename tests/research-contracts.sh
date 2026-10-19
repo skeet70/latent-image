@@ -29,6 +29,12 @@ if "$fuji_af_schema_checker" --schemafile schemas/sources.schema.json "$TEST_TMP
   exit 1
 fi
 
+"$fuji_af_jq" '(.artifacts[] | select(.model == "X-T1") | .matches_installed) = true' manifests/firmware.json > "$TEST_TMPDIR/invalid.json"
+if "$fuji_af_schema_checker" --schemafile schemas/firmware.schema.json "$TEST_TMPDIR/invalid.json"; then
+  echo 'Sibling firmware claimed as installed incorrectly accepted' >&2
+  exit 1
+fi
+
 # This public design draft must not claim a frozen or authorized camera session,
 # discard failed attempts, or equate confirmation with acceptable-focus onset.
 for fuji_af_mutation in \

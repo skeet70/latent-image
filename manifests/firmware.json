@@ -16,6 +16,22 @@
       "evidence_ids": [
         "E-FIRMWARE"
       ]
+    },
+    {
+      "model": "X-T1",
+      "version": "5.52",
+      "file": {
+        "path": "private-data/firmware/x-t1-5.52/FWUP0005.DAT",
+        "sha256": "4cf56ba6abb4298a844422c016289228bb0acce0a2ae2c6755c05fffb38e92db"
+      },
+      "size_bytes": 42599472,
+      "source_url": "https://dl.fujifilm-x.com/support/firmware/x-t1-552-9cy17ibx/FWUP0005.DAT",
+      "acquired_at": "2026-10-11T18:41:49Z",
+      "matches_installed": null,
+      "evidence_ids": [
+        "E-CC-XT1-FALLBACK-552",
+        "E-CC-XT1-TONE-552"
+      ]
     }
   ]
 }

@@ -101,6 +101,37 @@ haskell_library(
     ],
 )
 
+# The EXR Processor II film-stage model, colorimetry, the colour fit, the
+# X-M1 1.50 develop-stage readers and the Classic Chrome parameter file
+# behind spec/10 section 19.5.4.
+haskell_library(
+    name = "film-model",
+    srcs = [
+        "FujiAF/ClassicChromeCandidate.hs",
+        "FujiAF/Colour.hs",
+        "FujiAF/FilmFit.hs",
+        "FujiAF/FilmGrid.hs",
+        "FujiAF/FilmInvert.hs",
+        "FujiAF/FilmStage.hs",
+        "FujiAF/XM1Develop.hs",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":aeson",
+        ":base",
+        ":bytestring",
+        ":scientific",
+        ":text",
+        ":vector",
+    ],
+)
+
 haskell_library(
     name = "host-support",
     srcs = ["FujiAF/Host.hs"],

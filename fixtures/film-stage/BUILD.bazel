@@ -1,0 +1,9 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "film-stage",
+    srcs = glob([
+        "*.params.json",
+        "*.ycc",
+    ]),
+)
