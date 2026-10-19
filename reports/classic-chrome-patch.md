@@ -363,20 +363,85 @@ The public synthetic set `host/firmware/classic-chrome-synthetic.json` (identity
 
 Because the data block carries private values, the generated patch sets, the manifest and the output digest of a real candidate stay under `private-data/`; the public tree holds the build tool, the stub source, the synthetic parameter set and the tests. `//host/firmware:build-classic-chrome PARAMETERS_JSON NEW_OUTPUT_DIRECTORY` validates the parameter file, takes the linked stubs from `//host/firmware:classic-chrome-stubs` (A32 assembly, `host/firmware/classic-chrome-stubs.S` and `.ld`; assembly because the stubs are register-contract shims at stock call sites), checks every current word and blob against the pinned stock decodes and RC0's write set (`recovery/rc0-patch-set.json`, SHA-256 `586bbb6f…94e1`), and writes `cc-image4.json`, `cc-image5.json`, `cc-plain.json`, the extension manifest `classic-chrome.json`, `data-block.bin` and the changed-word listing. `//extensions:build-extension --unpinned` builds a development image and prints its digest; after review the digest is pinned with `build-classic-chrome --output-sha256` and the pinned manifest must reproduce it. The flash image then needs `rebuild-update verify`, the native cases of section 9, `//emulation:flash-boot-check` and the owner's per-run go naming its digest (spec 07 H3).
 
-### 8.2 RAM payload (unbuilt; route in //transport:camera)
+### 8.2 RAM payload over the RAM-push route (built, emulated, unreviewed)
 
-The RAM variant writes the same final bytes as the flash variant over the RC0-installed body, as an ordered word list `{address, expected current word on the RC0 body, new word}`. The RAM-push route ([RAM-DELIVERY-01](https://github.com/skeet70/latent-image/issues/77), [RAM-PUSH-TRUST-01](https://github.com/skeet70/latent-image/issues/78), [transport README](../transport/README.md)) exists: `ram-alloc`, `ram-relink`, `ram-push`, `ram-unload` and `ram-free` in `//transport:camera`, an installer that validates and stores an ordered publication list under a two-core rendezvous with rollback, the review record, the bank ELF allowlist check and the emulator e2e. Its builder, contract and pins are the recipe bank's and D3's: the 250 publications include D3's conversion row 2, code `0xd` and prefix-window writes, which CC owns (section 10). A CC RAM variant therefore needs its own publication list and contract in place of D3's, a relinker build of the CC stubs and data block into the allocation instead of the prefix window, an allowlist for that code and an independent review of the new mechanism bytes (spec 07 section 3.2). None of these is built.
+The owner directed a RAM-push test before any flash. The CC RAM payload is a second payload kind of the imported route ([RAM-DELIVERY-01](https://github.com/skeet70/latent-image/issues/77), [RAM-PUSH-TRUST-01](https://github.com/skeet70/latent-image/issues/78), [transport README](../transport/README.md)): it reuses the generic route (USB push-and-run in an ordinary boot with stored `0xf7 = 0x01`, the bootstraps, the allocation, the two-core masked installer with per-line D-clean and `ICIALLU` on both cores, exact-reverse rollback, the relinker mechanics) and nothing of the recipe bank. The bank+D3 payload, its bytes and its pins are unchanged.
 
-Order the delta encodes, so that no live pointer or branch names unwritten bytes and CC becomes selectable only after its processing is in place:
+#### 8.2.1 No recipe-bank code (review finding B1)
 
-1. Gate: read back every target word and require the RC0-body value (image 4 at load `0x0061c340`, prefix below it zero, stock image 5, plain and image 2). This is the RAM version gate.
-2. Unreferenced data: the data block, RAW values and shooting labels into `[0x0061c200, 0x0061c340)`; the image-2 `0x83e` record; the 25 plain gate words (no surface names `0x83e` yet).
-3. Rows no array names yet: conversion row 2 and the key-`0xd` availability row.
-4. Code, with capture, develop and menu activity quiesced: converter bodies and stubs, the marker setter, FilmMode, Saturation and the RAW code sites; D-cache clean to the point of unification and I-cache invalidate for those lines (stock helpers `0x0061c4fc`, `0x0061c4ec`); then the five hook branch words, each followed by the same maintenance.
-5. Publish the shooting row: the three labels pointers (`0x0061c380` to `0x0061c2b0`, values pointers unchanged); the values terminator at `0x0061c380` (old labels head, now unreferenced); then `0x0061c378` from `0x7ffffffe` to 2, which names row 2 in one word.
-6. Publish the RAW row: RAW labels into `[0x0061c388, 0x0061c3f8)` (old RC0 labels, unreferenced after step 5), then the RAW node words, labels `0x0078bd80` before values `0x0078bd7c`.
+The imported bank runtime (`563cbaa3…`) is the one that wrote the aspect field 0 behind the persistent save hang (E-SAVE-HANG-ASPECT-150), so the CC runtime links, publishes and reaches no bank code. It is linked from exactly two objects, `classic_chrome_ram.o` (`menu/classic_chrome_ram.S`) and `ram_push_installer.o` (the unchanged `menu/ram_push_installer.c` compiled against a generated copy of `menu/ram_push_abi.h` whose count, setup-count and ABI-version lines are substituted, each substitution checked to hit once), with `menu/classic_chrome_ram_runtime.ld` and the stock-symbol script `menu/classic_chrome_ram_stock.ld`. The complete symbol list of the base-`0x00c20000` link (`kernel.syms`):
 
-Constraints: a non-atomic word write must not race execution of that word, so the route must quiesce capture, develop and menu activity while code words change; image 5, plain and image 2 load once per power session and image 4 at each boot, so every write is lost at power-off, which is the removal path; second-core coherence is unproved.
+- CC: `__cc_image_start`, `cc_ram_convert`, `cc_ram_marker`, `cc_ram_filmmode`, `cc_ram_saturation`, `cc_ram_raw_commit`, `cc_ram_raw_highlight`, `cc_ram_raw_request`, `cc_ram_colour`, `cc_ram_chroma`, `cc_ram_copy`, `cc_ram_tone`, `cc_ram_data`, `cc_ram_matrix`, `cc_ram_chroma_fields`, `cc_ram_tone_head`, `cc_ram_data_end`, `__cc_image_end`.
+- Installer: `__ram_push_start`, `__ram_push_installer_start`, `ram_push_install`, `ram_push_rollback`, `ram_push_status`, `execute_operation`, `publish_mailbox`, `run_rendezvous`, `ram_push_rendezvous_locked`, `validate_old_words`, `validate_rollback_words`, `publish_words_locked`, `store_new_words`, `restore_old_words`, `line_seen_before`, `synchronize_current_core`, `post_peer_park`, `wait_for_signal`, `read_peer_report`, `peer_park_action`, `peer_park_complete`, `peer_cache_action`, `peer_park_request`, `peer_park_job`, `ram_push_cpu0_window_exit`, `ram_push_cpu1_window_exit`, `ram_push_publications`, `rendezvous`, `ram_push_mailbox` and the section bounds `__ram_push_publications_start/_end`, `__ram_push_rendezvous_start/_end`, `__ram_push_mailbox_start/_end`, `__ram_push_end`.
+- Absolute: `RAM_PUSH_BASE`, `RAM_PUSH_PUBLICATION_COUNT` and the twelve `cc_stock_*` continuation and reader addresses.
+
+No symbol has the prefix `rb_`, `recipe_bank` or `__rb_`, and the link map names no other object. The builder (`host/FujiAF/ClassicChromeRam.hs`) refuses a link whose symbols or map contain either; `//host/firmware:classic-chrome-ram-tests` covers the refusal. No CC publication names a bank site, and no CC code calls anything but the stock continuations and readers listed.
+
+#### 8.2.2 The payload
+
+| Item | Value |
+| --- | --- |
+| ABI version | 3 (bank+D3 stays 2) |
+| Publications | 131: 84 setup, 47 activation |
+| Allocation size | `0x1560` (5,472 bytes): CC code and data at the base (`cc_ram_data` at base `+0x120`, image `0x184` bytes), the installer at `align32(base + 0x184)` |
+| Contract digest (index, phase, address, old, core) | `0030860616947ebaa1cade89c36ca40d43ffaaf610258400220b1879cf4432d9` |
+| Runtime SHA-256, candidate block `833b6452…2774` | base `0x00c20000` `ce050d3a1ac978112b2e58b02e11a26d34d5cfa1d9cb7748f59b26d97814ea17`; `0x00c21f88` `c5f6241f61a3165efe913c28f5f19866518689846c646c903784cebea6d559bb`; e2e base `0x00a7e8c8` `e01952a67169196b9021fb202abcd458519c62578fd5746cb5115092537805eb` |
+| Runtime SHA-256, synthetic block | base `0x00c20000` `c42fa36a26c8a6c848003a3dd96f5063a18295c514b2314a5706ed0183e1a2c9` |
+| Review record | `transport/ram-push-cc-review.json`, separate from the bank record, 17 pins all `unreviewed` at `4fe4e62`; `//transport:ram-push-cc-review-bytes` passes, `//transport:ram-push-cc-review-verdicts` fails on the 17 unreviewed pins, so the camera refuses the CC payload until review |
+| Read plans | `private-data/analysis/classic-chrome-patch/ram-push/read-plans/cc-ram-push-prepush.json` (51 windows: every old word plus the route's reviewer windows) and `cc-ram-push-post-reboot.json` (42 windows); both pass `rehearse read-ram` |
+
+Rebuilding gives byte-identical runtime and manifest. A parameter-only revision changes only the 100 bytes at `cc_ram_data` inside the allocation and leaves the contract digest unchanged.
+
+#### 8.2.3 Changed-word groups and what each mechanism word does
+
+Every publication's old word is the RC0 body's (image 4 at `0x0061c340`, zero below it; stock images 5, plain and 2); the shape check in `ClassicChromeRam.hs` refuses any other diff. Data words make the same final bytes as the flash candidate at those addresses; code changes are single aligned words, so a task already inside a changed stock range continues on stock bytes.
+
+| Phase | Group | Words | Content |
+| --- | --- | ---: | --- |
+| setup | RAW values `[0x0061c264, 0x0061c29c)`, shooting labels `[0x0061c2b0, 0x0061c340)` | changed words only | the flash candidate's arrays; nothing names them yet |
+| setup | image-2 `0x83e` record `[0x0037b808, 0x0037b84c)` | changed words | `CLASSIC CHROME`, layout `{40, 0, 30, 36, 48}`; no surface names `0x83e` yet |
+| setup | plain label gates | 25 | `#0x83d` to `#0x83e`, two `#0x83c` to `#0x83d` (section 4.7) |
+| setup | conversion row 2, availability key row | 2 + 8 | `{0xd, -, 0xd}`; key `0xd`, cells 1, 2, 4, 5, 6, 7, 21; no values array names row 2 yet |
+| activation | entry words (mechanism) | 8 | see below |
+| activation | hook words (mechanism) | 5 | see below |
+| activation | shooting labels pointers; values tail | 3 + 3 | `0x007823c8`, `0x00785d98`, `0x0077d1a8` to `0x0061c2b0`; then `0x0061c380` = `0x7ffffffe`, `0x0061c384` = 0; then `0x0061c378` from `0x7ffffffe` to 2, which names the CC row |
+| activation | RAW labels `[0x0061c388, 0x0061c3f8)`; RAW node words | changed words + 2 | old RC0 labels words, unreferenced after the pointer move; then `0x0078bd80` before `0x0078bd7c` |
+
+RC0's `0xffffffff` at `0x0061c3f8` and `0x0061c3fc` lies past every array and stays unpublished (the flash candidate has 0 there).
+
+Mechanism words, each a single aligned word written inside the masked rendezvous:
+
+| Address | Stock word | New | Effect |
+| --- | --- | --- | --- |
+| `0x00738fe8` | `e52db004` | `b cc_ram_convert` | canonical film to capture `+0x508`: 0..13 pass, else 0 (stock passed 0..12) |
+| `0x00736a74` | `e52db004` | `b cc_ram_convert` | live film to settings object `+0x3c`, same mapping |
+| `0x00d7851c` | `e52db004` | `b cc_ram_marker` | develop record `+0x110` = 13 for film value 13, else 0 (stock: always 0) |
+| `0x00eab2e0` | `ea00000b` (FilmMode default arm) | `b cc_ram_filmmode` | col2 13 returns `0x600` through the stock epilogue `0x00eab350`; every other default goes to stock `0x00eab314` (0) |
+| `0x00eaac88` | `ea00004e` (Saturation default arm) | `b cc_ram_saturation` | col2 13 takes PROVIA's mode arm `0x00eaacc8`; others stock `0x00eaadc8` (0) |
+| `0x00d461ec` | `e5832008` (RAW commit) | `b cc_ram_raw_commit` | row 10 stores colour 8, others store the stock 0; resumes at stock `0x00d461f0` |
+| `0x00d5ada4` | `e3530000` (RAW highlight) | `b cc_ram_raw_highlight` | colour 8 highlights row 10 and exits through `0x00d5b344`; others re-run the stock compare and resume at `0x00d5ada8` |
+| `0x012548a4` | `e2433003` (plain RAW request) | `b cc_ram_raw_request` | settings field 8 sets request word 2 (`0x01514220`) to 13 and resumes at `0x01254928`; others resume stock at `0x012548a8` |
+| `0x00d67284` | `ebffff85` | `bl cc_ram_colour` | `+0x110 = 13`: nine data-block halfwords as u64; else tail to stock `0x00d670a0` |
+| `0x00d60f60`, `0x00d64ef4` | `ebffff57`, `ebffef72` | `bl cc_ram_chroma` | `+0x110 = 13`: four halfwords as u64; else stock `0x00d60cc4` |
+| `0x00d677ac`, `0x00d677bc` | `ebe4a45c`, `ebe4a458` | `bl cc_ram_tone` | `+0x110 = 13`: nine head bytes and 28 curve halfwords; else stock `0x00690924` |
+
+#### 8.2.4 Native cases on the RAM images
+
+The generators take a RAM set: RC0 decodes with the manifest's publications applied in order (each must find its old word) and only the CC part of the runtime mapped (text 288 bytes, data 100 bytes; no installer or bank bytes). All pass: site cases 510/510 (three RAM sets x 160, plus 30 stock RAW references) and builder checks 136/136 (70 flash plus 3 x 22 RAM). Stock films col2 0..12 give block, record and final state byte-identical to the stock images; CC col2 13 matches the substitution oracle inside the colour, tone and chroma ranges and stock PROVIA outside them, presets 2 and 15, and the RAM CC block equals the flash CC block byte for byte (candidate `f76aaf5a…d5fc` preset 2, `ea5bf245…74d2` preset 15; synthetic `b31623dd…3b3d`, `4b827681…cec5`). Flash-mode cases are unchanged (322/322, 70/70).
+
+#### 8.2.5 Emulator rehearsal (emulated, `--ram-push-e2e --classic-chrome` with `--unreviewed-relink`)
+
+Receipts under `private-data/analysis/classic-chrome-patch/ram-push/` (`e2e-run-1` to `-3`, `e2e-raw-run-1`), RC0 DAT, `0xf7` NAND, from the e2e checkpoints:
+
+1. **Install: pass.** Allocation `0x1560` at `0x00a7e8c8`, relink, push: mailbox ABI 3, status 0, 131 validated, 84 setup and 47 activation stored, peer report 131 lines, every new word read back.
+2. **Fetch watch: fetches recorded.** From attach to install with the camera idle at live view, the settings converter entry `0x00736a74` executed 18 times (run 1) and 13 times (RAW run), r0 = 0; no other entry word and no hook site was entered. The idle path therefore does reach a rewritten entry; the single-word swap inside the masked window is what makes this safe: a task entering after the store takes the trampoline, one already past the entry word runs the unchanged stock body.
+3. **Menus: pass.** FILM SIMULATION lists eight rows, row 7 draws `CLASSIC CHROME` with an empty icon cell; committing it sets `0x009568b8 = 0x0d`, settings object `+0x3c = 0x0d`, the film nibble `0x009c28a6 = 0xd0` and `0x016995e0 = 0x0d`; reopening lands on row 7; the stock HIGHLIGHT TONE segment matches. While rows were highlighted the emulator entered the marker entry and the colour, tone and chroma hooks.
+4. **RAW conversion: blocked by an emulator model gap.** With a virtual card holding the owner's `DSCF3095.RAF`, PLAY showed a busy indicator, then the emulator stopped strictly on an unknown MMIO write to `0xfff63118` (PC `0x0065a4a4`); PLAYBACK > RAW CONVERSION was not reached. Not a payload result; the playback device model needs that register before this step can run.
+5. **Unload and cold restart: pass.** With PROVIA selected, `ram-unload` restored 131/131 with old words verified, the list shows seven rows, and a cold restart read every CC word as its old value.
+
+#### 8.2.6 Review state and what remains
+
+The CC payload is H2 new mechanism under spec 07 section 3.2 (13 mechanism words redirect stock control flow, all publications outside the allocation, new contract and ABI). Before a camera run: one independent review of the CC runtime, contract and this section, then the CC record's pins move to `approved`; the emulator run (done except step 4) and the owner's visual check; the owner's go naming `ram-push`, the reviewed commit, the contract digest `00308606…32d9` and the reference runtimes. Operating rules for the session: a stock film selected before the push and before power-off, no CUSTOM SET with CC selected, no capture or card write in progress at push or unload. Open: RAW conversion with the payload resident (emulator model gap above; on the body, the session's RAW CONVERSION step); spin counts near 131 publications on the body.
 
 ### 8.3 Version gate
 

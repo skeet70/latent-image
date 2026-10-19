@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "before_unload": [
+    {"phase": "cc-raw-playback", "observe": true, "steps": [["menu", 67, 56, 0], ["play", 0, 0, 0]], "capture": "cc-raw-playback"},
+    {"phase": "cc-raw-menu", "observe": true, "requires": ["cc-raw-playback"], "steps": [["menu", 0, 0, 0]], "capture": "cc-raw-menu"},
+    {"phase": "cc-raw-conversion", "observe": true, "requires": ["cc-raw-menu"], "steps": [["ok", 0, 0, 0]], "capture": "cc-raw-conversion"},
+    {"phase": "cc-raw-film-item", "observe": true, "requires": ["cc-raw-conversion"], "steps": [["down", 0, 0, 0], ["down", 0, 0, 0], ["down", 0, 0, 0]], "capture": "cc-raw-film-item"},
+    {"phase": "cc-raw-film-list", "observe": true, "requires": ["cc-raw-film-item"], "steps": [["right", 0, 0, 0]], "reads": [["raw-colour-field", "00954d78", 16]], "capture": "cc-raw-film-list"},
+    {"phase": "cc-raw-film-rows", "observe": true, "requires": ["cc-raw-film-list"], "steps": [["down", 0, 0, 0], ["down", 0, 0, 0], ["down", 0, 0, 0], ["down", 0, 0, 0], ["down", 0, 0, 0]], "capture": "cc-raw-film-last-row"},
+    {"phase": "cc-raw-film-commit", "observe": true, "requires": ["cc-raw-film-rows"], "steps": [["ok", 0, 0, 0]], "reads": [["raw-colour-field", "00954d78", 16], ["request-words", "01514218", 16]], "capture": "cc-raw-film-committed"},
+    {"phase": "cc-raw-start", "observe": true, "requires": ["cc-raw-film-commit"], "steps": [["q", 0, 0, 0]], "reads": [["raw-colour-field", "00954d78", 16], ["request-words", "01514218", 16]], "capture": "cc-raw-started"}
+  ],
+  "after_unload": []
+}
