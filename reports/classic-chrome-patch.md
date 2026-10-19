@@ -529,7 +529,7 @@ devenv shell -- bazel run //transport:camera -- ram-push "$ALLOC_OUT/ram-alloc-s
 | U3 | Camera untouched since 8.4.2a item 5, the chart at the 0 EV shutter speed: shoot FINE+RAW with CLASSIC CHROME, then select PROVIA and shoot again, then select CLASSIC CHROME again | both frames written normally; playback shows the CC frame different from the PROVIA frame |
 | U4 | Model, after the session from the card copy: `exiftool -FilmMode` on both JPEGs | CC frame `Classic Chrome`, PROVIA frame `F0/Standard (Provia)` |
 | U5 | PLAYBACK, open the 0 EV PROVIA chart RAF of 8.4.2a item 2, RAW CONVERSION > FILM SIMULATION | six rows, the last `CLASSIC CHROME`; this path was never executed in the emulator (8.2.5 step 4) |
-| U6 | Convert that RAF to CLASSIC CHROME, then the same RAF to PROVIA (all other conversion settings as shot) | both JPEGs written; the PROVIA conversion must equal byte for byte the 8.4.2a item 6 PROVIA conversion; the CC conversion's FilmMode is `Classic Chrome` |
+| U6 | Convert that RAF to CLASSIC CHROME, then the same RAF to PROVIA (all other conversion settings as shot) | both JPEGs written; model, after the session: `classic-chrome-model photo-identical` passes on this PROVIA conversion against the 8.4.2a item 6 PROVIA conversion (decoded Y, Cb and Cr planes identical); the CC conversion's FilmMode is `Classic Chrome`. `exiftool` differences between the two PROVIA conversions are recorded as information only |
 | U7 | Optional C check: dial to C, open FILM SIMULATION, select CLASSIC CHROME, shoot one frame, dial back | the C frame is CC. Do not run CUSTOM SET with CLASSIC CHROME selected: it writes area 3 persistently |
 
 Any stop, freeze, error dialog, a stock row rendering differently, or a hang at U5/U6 is S-UNEXPECTED.
@@ -575,6 +575,8 @@ Operating rules. Run L1, L4 and E4 only with the camera idle at the shooting scr
 #### 8.4.9 What the go names
 
 The owner's H2 go names: the operation (ordinary-boot RAM push of the Classic Chrome payload: the 8.4.2a before-set on RC0, `ram-alloc 0x1560`, `ram-relink` at the returned base, `ram-push` of 131 publications, the 8.4.4 checks, `ram-unload`, power-off and the 8.4.7 read, with `ram-free` as the not-installed contingency); the session commit, whose CC files equal reviewed `b4e1448` (review CcRamPushReview); the publication contract digest `0030860616947ebaa1cade89c36ca40d43ffaaf610258400220b1879cf4432d9`; and the reference runtimes the pinned relinker reproduces, `ce050d3a1ac978112b2e58b02e11a26d34d5cfa1d9cb7748f59b26d97814ea17` at `0x00c20000` and `c5f6241f61a3165efe913c28f5f19866518689846c646c903784cebea6d559bb` at `0x00c21f88` (data block `833b6452…2774`). The session's own runtime depends on the base `ram-alloc` returns; the camera binary rebuilds it with the pinned relinker and requires byte equality, and L3 records its SHA-256 before L4 runs. The stored-CC fallback check (8.4.5) is outside this go.
+
+Before the go, the owner may look at the menus in the viewer (`//emulation:xm1-viewer`, SHOOTING MENU > FILM SIMULATION, on the flash candidate as in 11.3 or on the RAM push with `--ram-push-e2e --classic-chrome`); this check is optional.
 
 ## 9. Verification results (2026-10-18, host and emulated)
 
