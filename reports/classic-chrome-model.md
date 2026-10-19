@@ -235,7 +235,7 @@ With `e_model = 0` the item 1 bounds are 1.4 / 3.0 / 3.8; the candidate's modell
 
 ## 8. Owner photo session
 
-Ordinary photography on the body as it stands (1.50 with RC0, PRO Neg in the shooting menu). It needs no USB connection and changes no firmware or adjustment data.
+Ordinary photography on the body as it stands (1.50 with RC0, PRO Neg in the shooting menu). It needs no USB connection and changes no firmware or adjustment data. It can run inside the first Classic Chrome RAM-push session: [patch report 8.4.2a](classic-chrome-patch.md#842a-before-set-on-rc0) shoots the chart set of 8.1 (frames 1 to 3, one natural scene, and the conversions of the 0 EV PROVIA RAF to PROVIA, Velvia and ASTIA) on RC0 before the push, and the rest of 8.1 is optional extra material there. A push leaves the body on RC0 after unload or power-off, so the set serves both as `e_model` input and as the RC0 before-set.
 
 ### 8.1 Checklist
 

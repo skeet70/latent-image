@@ -471,18 +471,31 @@ A script, not a run, modelled on [the bank RAM-push session script](ram-push-ses
 
 #### 8.4.1 Before the session
 
-1. **Photo session first.** The owner photo session of [the model report section 8](classic-chrome-model.md#8-owner-photo-session) runs before any push, on the RC0 body, so the before-set (PROVIA, PRO Neg, the RAW conversions to PROVIA, Velvia and ASTIA) exists from unpatched RC0 firmware. Its RAFs are the known RAFs of this session.
-2. **Host:** on the session commit, `devenv shell -- bazel test //transport:ram-push-tests //transport:cli-rejections //host/firmware:classic-chrome-ram-tests //transport:ram-push-cc-review-bytes //transport:ram-push-cc-review-verdicts //transport:ram-push-cc-camera-pins` passes, and `devenv shell -- bazel run //transport:ram-push-cc-reviewed-build-check` exits 0 after printing `reviewed CC contract accepted at 0xc20000`, `reviewed CC contract accepted at 0xc21f88` and a `refused as expected` line for each of its ten perturbation cases. Rehearsals exit 0 with these final lines: `rehearse ram-alloc 0x1560` prints `rehearsal: ram-alloc; no native provider, USB enumeration or camera execution;allocation-bytes=5472`; `rehearse read-config "$PWD/private-data/read-plans/gate-byte.json"` prints `rehearsed read-config: 4 windows`; `rehearse read-ram "$PWD/private-data/read-plans/cc-ram-push-prepush.json"` prints `rehearsed read-ram: 51 read requests; no write sent`; `rehearse read-ram "$PWD/private-data/read-plans/cc-ram-push-post-reboot.json"` prints `rehearsed read-ram: 42 read requests; no write sent` (all observed on `b4e1448`, 2026-10-18).
-3. **Output paths** must not exist: `private-data/sessions/xm1-cc-ram-alloc-1`, `private-data/analysis/classic-chrome-patch/ram-push/operator-linked-1`, `private-data/sessions/xm1-cc-ram-push-1`. An existing OUTDIR refuses before USB.
-4. **Body:** the RC0 body (seven film rows), ordinary boot with no buttons held, stored `0xf7 = 0x01` (it enumerates `04cb:ff80` on attach), USB attached and left attached until 8.4.7 ends, exactly one `04cb:ff80` device on the bus. No `commit-f7-*` command is part of this session.
-5. **Power:** a freshly charged battery showing full, or the mains-backed dummy supply ([install-procedure.md section 5](install-procedure.md#5-power-arrangements)). Reserve 45 uninterrupted minutes.
-6. **Card:** a camera-formatted card holding at least two known RAFs from the photo session (one ColorChecker frame, one natural scene), with free space for about 20 JPEGs. Note their file names.
-7. **Pre-session record, photographed:** SHOOTING MENU > FILM SIMULATION (seven rows, a stock row selected), the Q film tile, the C slot values (dial to C, read, dial back; no CUSTOM SET or CUSTOM RESET), DR, WB, COLOR, HIGHLIGHT, SHADOW, SHARPNESS, NR, image quality.
+1. **Host:** on the session commit, `devenv shell -- bazel test //transport:ram-push-tests //transport:cli-rejections //host/firmware:classic-chrome-ram-tests //transport:ram-push-cc-review-bytes //transport:ram-push-cc-review-verdicts //transport:ram-push-cc-camera-pins` passes, and `devenv shell -- bazel run //transport:ram-push-cc-reviewed-build-check` exits 0 after printing `reviewed CC contract accepted at 0xc20000`, `reviewed CC contract accepted at 0xc21f88` and a `refused as expected` line for each of its ten perturbation cases. Rehearsals exit 0 with these final lines: `rehearse ram-alloc 0x1560` prints `rehearsal: ram-alloc; no native provider, USB enumeration or camera execution;allocation-bytes=5472`; `rehearse read-config "$PWD/private-data/read-plans/gate-byte.json"` prints `rehearsed read-config: 4 windows`; `rehearse read-ram "$PWD/private-data/read-plans/cc-ram-push-prepush.json"` prints `rehearsed read-ram: 51 read requests; no write sent`; `rehearse read-ram "$PWD/private-data/read-plans/cc-ram-push-post-reboot.json"` prints `rehearsed read-ram: 42 read requests; no write sent` (all observed on `b4e1448`, 2026-10-18).
+2. **Output paths** must not exist: `private-data/sessions/xm1-cc-ram-alloc-1`, `private-data/analysis/classic-chrome-patch/ram-push/operator-linked-1`, `private-data/sessions/xm1-cc-ram-push-1`. An existing OUTDIR refuses before USB.
+3. **Body:** the RC0 body (seven film rows), ordinary boot with no buttons held, stored `0xf7 = 0x01` (it enumerates `04cb:ff80` on attach), USB attached and left attached until 8.4.7 ends, exactly one `04cb:ff80` device on the bus. No `commit-f7-*` command is part of this session.
+4. **Power:** a freshly charged battery showing full, or the mains-backed dummy supply ([install-procedure.md section 5](install-procedure.md#5-power-arrangements)). Reserve two uninterrupted hours of daylight: 8.4.2a and 8.4.4 are shot outdoors or by a window.
+5. **Card and equipment:** an empty camera-formatted card with room for 40 FINE+RAW frames; the ColorChecker Classic, the tripod and the lens of [the model report 8.1](classic-chrome-model.md#81-checklist). The laptop sits by the tripod so the cable stays attached from 8.4.2 to 8.4.7.
+6. **Pre-session record, photographed:** SHOOTING MENU > FILM SIMULATION (seven rows, a stock row selected), the Q film tile, the C slot values (dial to C, read, dial back; no CUSTOM SET or CUSTOM RESET), DR, WB, COLOR, HIGHLIGHT, SHADOW, SHARPNESS, NR, image quality. These are the owner's settings to restore after the session.
 
 #### 8.4.2 Model reads before the push (standing read grant)
 
 1. `devenv shell -- bazel run //transport:camera -- read-config "$PWD/private-data/read-plans/gate-byte.json"`: product `X-M1`, `0xf7` nonzero.
 2. `devenv shell -- bazel run //transport:camera -- read-ram "$PWD/private-data/read-plans/cc-ram-push-prepush.json"`: one pass, 51 requests, about 7.9 s plus overhead. The model decodes every CC publication address and requires its RC0 `old` word (131 words, including the 128 words never read on the body before), service mode 3, table `0x015c22a0`, slot `0x00dc7874`, and the route's reviewer windows at their recorded values (queue-size word `0x40a0fbac = 0x24`, prehook `0x4089ea94 = 0x00726478`, trace state, execcpu rows). Any mismatch stops the session before any write (S-PREREAD).
+
+#### 8.4.2a Before-set on RC0
+
+Runs after 8.4.2 and before L1, with the cable attached and nothing pushed; the body is RC0. The RC0 frames and conversions here are both the `e_model` inputs of [the model report 8.2](classic-chrome-model.md#82-analysis) and the RC0 before-set for U6 (spec 19.5.6 item 4); a push leaves no trace after unload or power-off, so no separate pre-install photo session is needed.
+
+1. Set the camera settings of the model report 8.1 (FINE+RAW, L 3:2, ISO 200, DR100, WB Daylight R0 B0, COLOR, SHARPNESS, HIGHLIGHT, SHADOW and NR 0, M exposure, 2 s self-timer, flash off) and photograph them as the session settings record.
+2. Chart in daylight on the tripod, as 8.1 describes: PROVIA/STANDARD at 0 EV, then -2, -1 and +1 EV by shutter speed only; write down the speeds.
+3. Without moving the camera: PRO Neg Std at the same four exposures, then PRO Neg Hi at the same four.
+4. One natural scene on the tripod at one exposure: PROVIA, then PRO Neg Std, then PRO Neg Hi.
+5. Move the camera back to the chart framing of item 2 and leave it untouched until U3 is shot.
+6. In-camera RAW CONVERSION of the 0 EV PROVIA chart RAF, three times, every other conversion setting as shot: to PROVIA, to Velvia, to ASTIA. Note the three file names; the PROVIA conversion is the U6 reference.
+7. Select PROVIA/STANDARD in SHOOTING MENU > FILM SIMULATION and return to the shooting screen with no menu open.
+
+Further material of the model report 8.1 (more natural scenes, conversions of their RAFs) is optional and may be shot here in the same way. Any freeze, error dialog or frame not written is S-UNEXPECTED; nothing has been pushed, so the session ends with an orderly power-off.
 
 #### 8.4.3 Load commands
 
@@ -513,10 +526,10 @@ devenv shell -- bazel run //transport:camera -- ram-push "$ALLOC_OUT/ram-alloc-s
 | --- | --- | --- |
 | U1 | SHOOTING MENU > FILM SIMULATION | eight rows; the last draws `CLASSIC CHROME` with no icon; the seven RC0 rows unchanged |
 | U2 | Select CLASSIC CHROME, leave the menu, reopen FILM SIMULATION | the cursor sits on CLASSIC CHROME; live view looks like PROVIA (known limitation) |
-| U3 | On a tripod, one fixed scene: shoot FINE+RAW with CLASSIC CHROME, then select PROVIA and shoot the same scene, then select CLASSIC CHROME again | both frames written normally; playback shows the CC frame different from the PROVIA frame |
+| U3 | Camera untouched since 8.4.2a item 5, the chart at the 0 EV shutter speed: shoot FINE+RAW with CLASSIC CHROME, then select PROVIA and shoot again, then select CLASSIC CHROME again | both frames written normally; playback shows the CC frame different from the PROVIA frame |
 | U4 | Model, after the session from the card copy: `exiftool -FilmMode` on both JPEGs | CC frame `Classic Chrome`, PROVIA frame `F0/Standard (Provia)` |
-| U5 | PLAYBACK, open a known RAF from the photo session, RAW CONVERSION > FILM SIMULATION | six rows, the last `CLASSIC CHROME`; this path was never executed in the emulator (8.2.5 step 4) |
-| U6 | Convert the known RAF to CLASSIC CHROME, then the same RAF to PROVIA (all other conversion settings as shot) | both JPEGs written; the PROVIA conversion must equal byte for byte the PROVIA conversion of the same RAF made in the photo session on RC0; the CC conversion's FilmMode is `Classic Chrome` |
+| U5 | PLAYBACK, open the 0 EV PROVIA chart RAF of 8.4.2a item 2, RAW CONVERSION > FILM SIMULATION | six rows, the last `CLASSIC CHROME`; this path was never executed in the emulator (8.2.5 step 4) |
+| U6 | Convert that RAF to CLASSIC CHROME, then the same RAF to PROVIA (all other conversion settings as shot) | both JPEGs written; the PROVIA conversion must equal byte for byte the 8.4.2a item 6 PROVIA conversion; the CC conversion's FilmMode is `Classic Chrome` |
 | U7 | Optional C check: dial to C, open FILM SIMULATION, select CLASSIC CHROME, shoot one frame, dial back | the C frame is CC. Do not run CUSTOM SET with CLASSIC CHROME selected: it writes area 3 persistently |
 
 Any stop, freeze, error dialog, a stock row rendering differently, or a hang at U5/U6 is S-UNEXPECTED.
@@ -529,7 +542,7 @@ The first session ends with a stock film selected before `ram-unload` and power-
 
 | Code | Action | Must show |
 | --- | --- | --- |
-| E1 | Owner: select a stock film (the 8.4.1 item 7 row) in SHOOTING MENU > FILM SIMULATION | that row under the cursor |
+| E1 | Owner: select PROVIA/STANDARD in SHOOTING MENU > FILM SIMULATION | that row under the cursor |
 | E2 | Owner: dial to C; if FILM SIMULATION shows CLASSIC CHROME there (U7), select the stock row recorded for C; dial back. No CUSTOM SET | C shows its recorded film |
 | E3 | Owner: back to the shooting screen, no menu, no card activity; confirm in chat | none |
 | E4 | Model: `devenv shell -- bazel run //transport:camera -- ram-unload "$PUSH_OUT/ram-push-state.json"` | `ram-unload: rollback verified; allocation retained until power-off`; the camera required validated 131 and restored 131 |
@@ -538,7 +551,7 @@ The first session ends with a stock film selected before `ram-unload` and power-
 
 #### 8.4.7 Reboot check
 
-Power on normally, same card, cable attached. B1 normal start-up and live view; B2 FILM SIMULATION seven rows with the E1 row selected, Q five rows; B3 watched settings equal the 8.4.1 item 7 record, C values unchanged; B4 a fixed-scene shot and playback normal. B5 model: `devenv shell -- bazel run //transport:camera -- read-ram "$PWD/private-data/read-plans/cc-ram-push-post-reboot.json"` (42 requests, about 6.5 s): all 131 publication words equal their `old` values and slot `0x015c22ac = 0x00dc7874`. Stored `0xf7 = 0x01` is unchanged by this session.
+Power on normally, same card, cable attached. B1 normal start-up and live view; B2 FILM SIMULATION seven rows with the E1 row selected, Q five rows; B3 watched settings equal the 8.4.2a item 1 record, C values equal the 8.4.1 item 6 record; B4 a chart shot and playback normal. B5 model: `devenv shell -- bazel run //transport:camera -- read-ram "$PWD/private-data/read-plans/cc-ram-push-post-reboot.json"` (42 requests, about 6.5 s): all 131 publication words equal their `old` values and slot `0x015c22ac = 0x00dc7874`. Stored `0xf7 = 0x01` is unchanged by this session. After B5 the owner may restore the 8.4.1 item 6 settings.
 
 #### 8.4.8 Stop rules
 
@@ -561,7 +574,7 @@ Operating rules. Run L1, L4 and E4 only with the camera idle at the shooting scr
 
 #### 8.4.9 What the go names
 
-The owner's H2 go names: the operation (ordinary-boot RAM push of the Classic Chrome payload: `ram-alloc 0x1560`, `ram-relink` at the returned base, `ram-push` of 131 publications, the 8.4.4 checks, `ram-unload`, power-off and the 8.4.7 read, with `ram-free` as the not-installed contingency); the session commit, whose CC files equal reviewed `b4e1448` (review CcRamPushReview); the publication contract digest `0030860616947ebaa1cade89c36ca40d43ffaaf610258400220b1879cf4432d9`; and the reference runtimes the pinned relinker reproduces, `ce050d3a1ac978112b2e58b02e11a26d34d5cfa1d9cb7748f59b26d97814ea17` at `0x00c20000` and `c5f6241f61a3165efe913c28f5f19866518689846c646c903784cebea6d559bb` at `0x00c21f88` (data block `833b6452…2774`). The session's own runtime depends on the base `ram-alloc` returns; the camera binary rebuilds it with the pinned relinker and requires byte equality, and L3 records its SHA-256 before L4 runs. The stored-CC fallback check (8.4.5) is outside this go.
+The owner's H2 go names: the operation (ordinary-boot RAM push of the Classic Chrome payload: the 8.4.2a before-set on RC0, `ram-alloc 0x1560`, `ram-relink` at the returned base, `ram-push` of 131 publications, the 8.4.4 checks, `ram-unload`, power-off and the 8.4.7 read, with `ram-free` as the not-installed contingency); the session commit, whose CC files equal reviewed `b4e1448` (review CcRamPushReview); the publication contract digest `0030860616947ebaa1cade89c36ca40d43ffaaf610258400220b1879cf4432d9`; and the reference runtimes the pinned relinker reproduces, `ce050d3a1ac978112b2e58b02e11a26d34d5cfa1d9cb7748f59b26d97814ea17` at `0x00c20000` and `c5f6241f61a3165efe913c28f5f19866518689846c646c903784cebea6d559bb` at `0x00c21f88` (data block `833b6452…2774`). The session's own runtime depends on the base `ram-alloc` returns; the camera binary rebuilds it with the pinned relinker and requires byte equality, and L3 records its SHA-256 before L4 runs. The stored-CC fallback check (8.4.5) is outside this go.
 
 ## 9. Verification results (2026-10-18, host and emulated)
 
@@ -645,7 +658,7 @@ Install as for RC0 ([install procedure](install-procedure.md)): card copy named 
 
 ### 11.4 Acceptance after install (spec 19.4 and 19.5.6)
 
-The owner photo session ([model report section 8](classic-chrome-model.md#8-owner-photo-session)) runs on the RC0 body before the install; its in-camera RAW conversions of the fixed RAFs are the RC0 reference for item 4.
+The before-set of the RAM session (8.4.2a), shot on the RC0 body with nothing pushed, is the RC0 reference for item 4.
 
 1. Boot, menus, capture and playback normal; settings and C slot retained.
 2. FILM SIMULATION shows eight rows with `CLASSIC CHROME` last; selectable in P/S/A/M/C and modes 0/`0x1f`; survives a power cycle.
