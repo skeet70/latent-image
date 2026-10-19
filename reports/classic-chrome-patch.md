@@ -367,6 +367,23 @@ Because the data block carries private values, the generated patch sets, the man
 
 The owner directed a RAM-push test before any flash. The CC RAM payload is a second payload kind of the imported route ([RAM-DELIVERY-01](https://github.com/skeet70/latent-image/issues/77), [RAM-PUSH-TRUST-01](https://github.com/skeet70/latent-image/issues/78), [transport README](../transport/README.md)): it reuses the generic route (USB push-and-run in an ordinary boot with stored `0xf7 = 0x01`, the bootstraps, the allocation, the two-core masked installer with per-line D-clean and `ICIALLU` on both cores, exact-reverse rollback, the relinker mechanics) and nothing of the recipe bank. The bank+D3 payload, its bytes and its pins are unchanged.
 
+#### 8.2.0 The route and how CC fits it
+
+- **Delivery:** USB push-and-run in an ordinary boot. The body's stored config byte `0xf7 = 0x01` makes a cable attach enumerate `04cb:ff80` service mode 3 while the camera stays in ordinary use (hardware-observed). No jig session and no SD-boot, so the E-SERVICE-SHOOT-150 limit of a jig write does not apply.
+- **Upload and activation:** debug opcode `0x200001` function 3 writes the runtime (installer, publication table, mailbox) byte by byte into a stock-heap allocation with readback. The stock `0x450006` query then calls a temporarily retargeted callback slot (`0x015c22ac`, stock `0x00dc7874`), restored and verified after each call. Function 3 never writes a stock word; every publication is one aligned `str` by the installer.
+- **Quiescence:** the installer runs on CPU0 in the USB-task callback with IRQs masked and parks CPU1 IRQ-masked in a stock worker job (`0x0072503c`, channel `0x58`); it validates every old word, then stores all new words, then maintains caches, then releases CPU1. Rollback (`ram-unload`) is the exact reverse with old-or-new validation.
+- **Cache maintenance:** `DCCIMVAC` on every publication line, `DSB`, `ICIALLU`, `DSB`, `ISB` on both cores, plus stock range maintenance over the allocation before upload.
+- **Checks:** the host refuses unaligned or duplicate words, words inside the allocation, the callback slot or the bootstrap window, and any build whose publication-contract digest (over index, phase, address, old, core) or source-identity pins differ from the payload's review record. The installer has no allowlist.
+- **Lifetime:** resident until power-off. Images 2, 5 and plain load once per power session and image 4 at boot; no mode change reloads them. Hardware-observed residency on the bank route: a 94-word payload through menus, a capture and playback; a 250-word payload through menu use, film-list commits and the Q tile. After a power cycle every publication word read its old value.
+
+| Question | Answer | Evidence |
+| --- | --- | --- |
+| Can it write image 4, image 5, plain and image 2 while menu and develop are quiescent? | Yes: every class has been written on the body by this route inside the masked two-core window. A task already preempted inside a changed stock function is covered by the single-word form of every CC code change (8.2.3) | hardware-observed (E-RAM-PUSH-FULL-SESSION-150), byte-read installer |
+| Does it stay resident through menu use, capture and RAW conversion? | Menu use and capture: yes, observed on the bank route. RAW conversion: never exercised by any push or emulator run (8.2.5 step 4); residency there is static-inference (no loader runs mid-session) | hardware-observed, static-inference |
+| Does the route execute code overlapping the CC window, the converter extents or the hook sites? | No. It executes the bootstrap request window `[0x01469b20, 0x01469b40)`, the heap allocation, and stock `0x0061c4f4`, `0x0061c490`, `0x0089cda4`, `0x0089cdc4`, `0x006b0c3c`, `0x006b0aa8`, `0x0072503c`, `0x00042634`, `0x00dc7874`; none is in `[0x0061c200, 0x0061c400)`, `[0x00736a74, 0x00736adc)`, `[0x00738fe8, 0x0073904c)` or the five hook sites | byte-read |
+| Is any CC word outside the route's rules? | No: all 131 publications are aligned, distinct and outside the allocation, slot and bootstrap window; the CC payload has its own contract, counts, ABI 3 and pins | computed, `ClassicChromeRam.hs` |
+| Is `[0x0061c200, 0x0061c340)` free on the RC0 body? | Yes: free zero RAM. Written only by the boot table-block copy (zeros), named by nothing in the RC0 images, untouched in the emulated RC0 boot (section 6.5), hardware-observed zero in an ordinary RC0 boot on 2026-10-18 and then used by the D3 push in the same session | byte-read, emulated, hardware-observed |
+
 #### 8.2.1 No recipe-bank code (review finding B1)
 
 The imported bank runtime (`563cbaa3…`) is the one that wrote the aspect field 0 behind the persistent save hang (E-SAVE-HANG-ASPECT-150), so the CC runtime links, publishes and reaches no bank code. It is linked from exactly two objects, `classic_chrome_ram.o` (`menu/classic_chrome_ram.S`) and `ram_push_installer.o` (the unchanged `menu/ram_push_installer.c` compiled against a generated copy of `menu/ram_push_abi.h` whose count, setup-count and ABI-version lines are substituted, each substitution checked to hit once), with `menu/classic_chrome_ram_runtime.ld` and the stock-symbol script `menu/classic_chrome_ram_stock.ld`. The complete symbol list of the base-`0x00c20000` link (`kernel.syms`):
@@ -445,7 +462,109 @@ The CC payload is H2 new mechanism under spec 07 section 3.2 (13 mechanism words
 
 ### 8.3 Version gate
 
-Flash: the extension manifest's base SHA-256 and version words, each patch set's `target.firmware_sha256` and `decode_sha256`, the current-word check of every write and the manifest's `output_sha256` (byte-read in `BuildExtension.hs` and `ApplyPatchSet.hs`); the container replaces code and data together, so no runtime check is needed. RAM: the pre-write readback of step 1. Any other firmware fails both.
+Flash: the extension manifest's base SHA-256 and version words, each patch set's `target.firmware_sha256` and `decode_sha256`, the current-word check of every write and the manifest's `output_sha256` (byte-read in `BuildExtension.hs` and `ApplyPatchSet.hs`); the container replaces code and data together, so no runtime check is needed. RAM: the pre-push read of every old word (8.4) and the installer's masked old-word validation of all 131 publications before any store. Any other firmware fails both.
+
+### 8.4 Camera session script: first Classic Chrome RAM push
+
+A script, not a run, modelled on [the bank RAM-push session script](ram-push-session-script.md). Nothing here authorizes a camera operation; the run waits for the review of 8.2.6 and the owner's go (8.4.9). Record every item in `private-data/sessions/<date>-cc-ram-push/notes.md`; any item not done is a stop.
+
+#### 8.4.1 Before the session
+
+1. **Photo session first.** The owner photo session of [the model report section 8](classic-chrome-model.md#8-owner-photo-session) runs before any push, on the RC0 body, so the before-set (PROVIA, PRO Neg, the RAW conversions to PROVIA, Velvia and ASTIA) exists from unpatched RC0 firmware. Its RAFs are the known RAFs of this session.
+2. **Host:** on the reviewed commit, `devenv shell -- bazel test //transport:ram-push-tests //transport:cli-rejections //host/firmware:classic-chrome-ram-tests //transport:ram-push-cc-review-bytes //transport:ram-push-cc-review-verdicts` passes (verdicts pass only after the review has moved every CC pin to `approved`). Rehearsals exit 0 with these final lines: `rehearse ram-alloc 0x1560` prints `rehearsal: ram-alloc; no native provider, USB enumeration or camera execution;allocation-bytes=5472`; `rehearse read-config "$PWD/private-data/read-plans/gate-byte.json"` prints `rehearsed read-config: 4 windows`; `rehearse read-ram "$PWD/private-data/read-plans/cc-ram-push-prepush.json"` prints `rehearsed read-ram: 51 read requests; no write sent`; `rehearse read-ram "$PWD/private-data/read-plans/cc-ram-push-post-reboot.json"` prints `rehearsed read-ram: 42 read requests; no write sent` (all observed on `b4e1448`, 2026-10-18).
+3. **Output paths** must not exist: `private-data/sessions/xm1-cc-ram-alloc-1`, `private-data/analysis/classic-chrome-patch/ram-push/operator-linked-1`, `private-data/sessions/xm1-cc-ram-push-1`. An existing OUTDIR refuses before USB.
+4. **Body:** the RC0 body (seven film rows), ordinary boot with no buttons held, stored `0xf7 = 0x01` (it enumerates `04cb:ff80` on attach), USB attached and left attached until 8.4.7 ends, exactly one `04cb:ff80` device on the bus. No `commit-f7-*` command is part of this session.
+5. **Power:** a freshly charged battery showing full, or the mains-backed dummy supply ([install-procedure.md section 5](install-procedure.md#5-power-arrangements)). Reserve 45 uninterrupted minutes.
+6. **Card:** a camera-formatted card holding at least two known RAFs from the photo session (one ColorChecker frame, one natural scene), with free space for about 20 JPEGs. Note their file names.
+7. **Pre-session record, photographed:** SHOOTING MENU > FILM SIMULATION (seven rows, a stock row selected), the Q film tile, the C slot values (dial to C, read, dial back; no CUSTOM SET or CUSTOM RESET), DR, WB, COLOR, HIGHLIGHT, SHADOW, SHARPNESS, NR, image quality.
+
+#### 8.4.2 Model reads before the push (standing read grant)
+
+1. `devenv shell -- bazel run //transport:camera -- read-config "$PWD/private-data/read-plans/gate-byte.json"`: product `X-M1`, `0xf7` nonzero.
+2. `devenv shell -- bazel run //transport:camera -- read-ram "$PWD/private-data/read-plans/cc-ram-push-prepush.json"`: one pass, 51 requests, about 7.9 s plus overhead. The model decodes every CC publication address and requires its RC0 `old` word (131 words, including the 128 words never read on the body before), service mode 3, table `0x015c22a0`, slot `0x00dc7874`, and the route's reviewer windows at their recorded values (queue-size word `0x40a0fbac = 0x24`, prehook `0x4089ea94 = 0x00726478`, trace state, execcpu rows). Any mismatch stops the session before any write (S-PREREAD).
+
+#### 8.4.3 Load commands
+
+Run from the repository root in one shell, no power-off between L1 and L4, camera idle at the shooting screen with no menu open, no shot being written and no card activity. Each live command first prints `output: <OUTDIR>`; a stop prints one `camera:` line on stderr and exits nonzero.
+
+```sh
+ALLOC_OUT="$PWD/private-data/sessions/xm1-cc-ram-alloc-1"
+LINK_OUT="$PWD/private-data/analysis/classic-chrome-patch/ram-push/operator-linked-1"
+PUSH_OUT="$PWD/private-data/sessions/xm1-cc-ram-push-1"
+SIZE=0x1560
+devenv shell -- bazel run //transport:camera -- ram-alloc "$SIZE" "$ALLOC_OUT"
+BASE="$(devenv shell -- jq -r .base "$ALLOC_OUT/ram-alloc-state.json")"
+devenv shell -- bazel run //transport:camera -- ram-relink "$ALLOC_OUT/ram-alloc-state.json" "$LINK_OUT"
+devenv shell -- bazel run //transport:camera -- ram-push "$ALLOC_OUT/ram-alloc-state.json" "$LINK_OUT/ram-push-manifest.json" "$PUSH_OUT"
+```
+
+| Step | Command | Camera effect | Expected and record |
+| --- | --- | --- | --- |
+| L0 | the assignments; the owner confirms in chat that a stock film row is selected and the dial is not at C | none | `echo "$SIZE"` prints `0x1560` |
+| L1 | `ram-alloc` | allocates 5,472 bytes, peer-core range maintenance, restores the callback slot | `ram-alloc: retained;state=…/xm1-cc-ram-alloc-1/ram-alloc-state.json;relink before ram-push`. Record `jq .` of the state: `kind` `xm1-ram-alloc-state`, `size` 5472, `product` `X-M1`, `config_f7` nonzero, `cpu0` `0x00004003`, `table_pointer` `0x015c22a0`, `slot_old` `0x00dc7874`, `base` nonzero and 8-byte aligned |
+| L2 | `BASE=…` | none | `echo "$BASE"`: `0x` plus eight hex digits, last digit `0` or `8` |
+| L3 | `ram-relink` | none (host build with the pinned CC relinker) | `ram-relink: manifest=…/operator-linked-1/ram-push-manifest.json`. Record `sha256sum "$LINK_OUT"/runtime.bin "$LINK_OUT"/ram-push-manifest.json`; the manifest must name 131 publications and the contract digest of 8.4.9 |
+| L4 | `ram-push` | runtime upload with readback, INSTALL rendezvous, 131 stores, slot restore, readback | `ram-push: installed;state=…/xm1-cc-ram-push-1/ram-push-state.json;power-off clears RAM`. The camera already required: mailbox magic `0x31504d52`, ABI 3, status 0, validated 131, setup 84, activation 47, restored 0, service core `0x4003`, peer status 0 with 131 lines, park and ack spins below the bound `0x80000`. Note the wall time and paste all output |
+
+#### 8.4.4 Owner checks with the payload resident
+
+| Code | Owner action | Must show |
+| --- | --- | --- |
+| U1 | SHOOTING MENU > FILM SIMULATION | eight rows; the last draws `CLASSIC CHROME` with no icon; the seven RC0 rows unchanged |
+| U2 | Select CLASSIC CHROME, leave the menu, reopen FILM SIMULATION | the cursor sits on CLASSIC CHROME; live view looks like PROVIA (known limitation) |
+| U3 | On a tripod, one fixed scene: shoot FINE+RAW with CLASSIC CHROME, then select PROVIA and shoot the same scene, then select CLASSIC CHROME again | both frames written normally; playback shows the CC frame different from the PROVIA frame |
+| U4 | Model, after the session from the card copy: `exiftool -FilmMode` on both JPEGs | CC frame `Classic Chrome`, PROVIA frame `F0/Standard (Provia)` |
+| U5 | PLAYBACK, open a known RAF from the photo session, RAW CONVERSION > FILM SIMULATION | six rows, the last `CLASSIC CHROME`; this path was never executed in the emulator (8.2.5 step 4) |
+| U6 | Convert the known RAF to CLASSIC CHROME, then the same RAF to PROVIA (all other conversion settings as shot) | both JPEGs written; the PROVIA conversion must equal byte for byte the PROVIA conversion of the same RAF made in the photo session on RC0; the CC conversion's FilmMode is `Classic Chrome` |
+| U7 | Optional C check: dial to C, open FILM SIMULATION, select CLASSIC CHROME, shoot one frame, dial back | the C frame is CC. Do not run CUSTOM SET with CLASSIC CHROME selected: it writes area 3 persistently |
+
+Any stop, freeze, error dialog, a stock row rendering differently, or a hang at U5/U6 is S-UNEXPECTED.
+
+#### 8.4.5 Stored-CC fallback (adapted from 11.4 item 5)
+
+RAM is lost at power-off, so persistence of CC is not tested in this session; what is tested is that a stored code `0xd` falls back cleanly on RC0. This runs as the last part of the session, after 8.4.6 and 8.4.7, with a second push only if the owner's go includes it:
+
+1. The film nibble of the ordinary block persists at orderly power-off (area 2). With CC selected in the shooting menu (not at C) and the payload resident, power off normally without `ram-unload`.
+2. Power on. RC0 has no conversion row for `0xd`: `FUN_00631a00` sets `0x0089edc8` and returns 0, so the camera shows and renders PROVIA (static-inference, review N1). Expected: start-up and live view normal; SHOOTING MENU > FILM SIMULATION lists seven rows with PROVIA/STANDARD under the cursor; the Q film tile shows PROVIA's glyph; one shot plays back normally and exiftool reads FilmMode `F0/Standard (Provia)`.
+3. Select PROVIA/STANDARD explicitly in FILM SIMULATION, power off and on, and check the row stays PROVIA.
+
+Any start-up fault, a missing or blank film row, a shot that does not save, or a FilmMode other than PROVIA is S-UNEXPECTED. The C record is not used for this check, because a C record carrying `0xd` would need CUSTOM SET with CC selected, which writes area 3.
+
+#### 8.4.6 Leaving the payload
+
+| Code | Action | Must show |
+| --- | --- | --- |
+| E1 | Owner: select a stock film (the 8.4.1 item 7 row) in SHOOTING MENU > FILM SIMULATION | that row under the cursor |
+| E2 | Owner: dial to C; if FILM SIMULATION shows CLASSIC CHROME there (U7), select the stock row recorded for C; dial back. No CUSTOM SET | C shows its recorded film |
+| E3 | Owner: back to the shooting screen, no menu, no card activity; confirm in chat | none |
+| E4 | Model: `devenv shell -- bazel run //transport:camera -- ram-unload "$PUSH_OUT/ram-push-state.json"` | `ram-unload: rollback verified; allocation retained until power-off`; the camera required validated 131 and restored 131 |
+| E5 | Owner: SHOOTING MENU > FILM SIMULATION, RAW CONVERSION menu if convenient | seven rows; RAW CONVERSION five rows |
+| E6 | Owner: power off normally | none |
+
+#### 8.4.7 Reboot check
+
+Power on normally, same card, cable attached. B1 normal start-up and live view; B2 FILM SIMULATION seven rows with the E1 row selected, Q five rows; B3 watched settings equal the 8.4.1 item 7 record, C values unchanged; B4 a fixed-scene shot and playback normal. B5 model: `devenv shell -- bazel run //transport:camera -- read-ram "$PWD/private-data/read-plans/cc-ram-push-post-reboot.json"` (42 requests, about 6.5 s): all 131 publication words equal their `old` values and slot `0x015c22ac = 0x00dc7874`. Stored `0xf7 = 0x01` is unchanged by this session.
+
+#### 8.4.8 Stop rules
+
+Every stop ends camera operations for the session; nothing is retried; a new attempt needs a new go. Power-off is the recovery for every outcome: the allocation, runtime, callback retarget and all publications are RAM state.
+
+| Code | Seen | Action |
+| --- | --- | --- |
+| S-PREREAD | 8.4.2 mismatch, refusal or disconnect | no write was sent; stop |
+| S-HOST | L0 or L3 fails | before L1 nothing to undo; after L1 run `ram-free "$ALLOC_OUT/ram-alloc-state.json"` (expect `ram-free: allocation freed`), power off, 8.4.7 |
+| S-ALLOC-REFUSED / S-ALLOC-UNCERTAIN | `ram-alloc refused` / `ram-alloc uncertain …;send nothing further and power off` | refused: nothing to free; uncertain: mandatory power-off, 8.4.7 |
+| S-PUSH-REFUSED | `ram-push refused: …` before upload (manifest, runtime, pins, base, size, product, slot, old word) | `ram-free`, power off, 8.4.7; if the reason is the allocation guard, power off without `ram-free` |
+| S-PUSH-REFUSED-PARK | `installer refused before publication: CPU1 park rendezvous timed out` | power off without `ram-free`, 8.4.7 |
+| S-PUSH-UNCERTAIN | `ram-push uncertain: …;send nothing further and power off` (including completion timeout, status -8) | mandatory power-off now, no button first, 8.4.7 |
+| S-UNEXPECTED | anything in 8.4.4 or 8.4.5 differing from its row | stop using the camera; photograph; if the menu responds select the recorded stock film; no `ram-unload` unless the model asks after reading the journals; power off, 8.4.7 |
+| S-UNLOAD-REFUSED / -UNCERTAIN | `ram-unload refused` / `ram-unload uncertain` | power off, 8.4.7 (uncertain: mandatory, now) |
+| S-USB | cable pulled, host crash, or a command without a final line for 10 minutes | treat as uncertain: power off, 8.4.7 |
+| S-HUNG | no response to the power switch within 60 s | remove the battery for 10 s, reinsert, 8.4.7 |
+
+#### 8.4.9 What the go names
+
+The owner's H2 go names: the operation (ordinary-boot RAM push of the Classic Chrome payload: `ram-alloc 0x1560`, `ram-relink` at the returned base, `ram-push` of 131 publications, the 8.4.4 checks, `ram-unload`, power-off and the 8.4.7 read, with `ram-free` as the not-installed contingency, and whether the 8.4.5 fallback with a second push is included); the reviewed commit (the commit whose `transport/ram-push-cc-review.json` carries the approving review, replacing `b4e1448`); the publication contract digest `0030860616947ebaa1cade89c36ca40d43ffaaf610258400220b1879cf4432d9`; and the reference runtimes the pinned relinker reproduces, `ce050d3a1ac978112b2e58b02e11a26d34d5cfa1d9cb7748f59b26d97814ea17` at `0x00c20000` and `c5f6241f61a3165efe913c28f5f19866518689846c646c903784cebea6d559bb` at `0x00c21f88` (data block `833b6452…2774`). The session's own runtime depends on the base `ram-alloc` returns; the camera binary rebuilds it with the pinned relinker and requires byte equality, and L3 records its SHA-256 before L4 runs.
 
 ## 9. Verification results (2026-10-18, host and emulated)
 
