@@ -464,10 +464,12 @@ Install as for RC0 ([install procedure](install-procedure.md)): card copy named 
 
 ### 11.4 Acceptance after install (spec 19.4 and 19.5.6)
 
+The owner photo session ([model report section 8](classic-chrome-model.md#8-owner-photo-session)) runs on the RC0 body before the install; its in-camera RAW conversions of the fixed RAFs are the RC0 reference for item 4.
+
 1. Boot, menus, capture and playback normal; settings and C slot retained.
 2. FILM SIMULATION shows eight rows with `CLASSIC CHROME` last; selectable in P/S/A/M/C and modes 0/`0x1f`; survives a power cycle.
 3. A CC JPEG differs from PROVIA on a fixed scene; exiftool reads FilmMode `Classic Chrome`.
-4. RAW CONVERSION offers CLASSIC CHROME; the fixed RAFs re-render in CC, and stock modes re-render byte-identical to the RC0 body.
+4. RAW CONVERSION offers CLASSIC CHROME; the fixed RAFs re-render in CC, and stock modes re-render byte-identical to the conversions made on the RC0 body in the photo session.
 5. Live persistence and capture with CC stored (review M1): select CC in the shooting menu, shoot and review the frame; register CC in C and shoot at C; power off and on with CC stored in the shooting setting and in C, check both still show CC, then shoot again in each. Any stop, freeze, error dialog or stock-mode change ends the session (spec 07 section 3.3).
 6. Known limitations: live view previews CC as PROVIA and movie records PROVIA; the Q cell shows PROVIA's glyph for a stored CC and does not offer CC; FILM 1-3 brackets cannot select CC; the CC row has no icon or help line; CC's tone curve does not follow DR or filter selection (section 4.5), which for stills matches PROVIA's own behaviour.
 7. Look acceptance (CIEDE2000 bounds, discrimination, neutrals, adjustments) per spec 19.5.6 with cc-model's thresholds.
