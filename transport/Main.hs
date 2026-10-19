@@ -35,6 +35,7 @@ import FujiAF.Native (nativeApi)
 import FujiAF.Rehearsal
 import qualified FujiAF.Broker as P
 import RamPushReviewedPins (reviewedContract)
+import RamPushCcReviewedPins (reviewedCcContract)
 
 data RouteSource = RoutesFixed | RoutesDerived FilePath
 data Operation = Identify | ReadConfig FilePath | EndSetting | ProbeRam | ReadLog | ProbeBootRom | ProbeArea2 | ProbeStraps | ProbeCode | ProbeOwnership | ProbeRoutes RouteSource | DumpRam DumpSegment | ReadMedia | ArmAutoAct DeviceStart | CommitF7 CommitDirection FilePath | ReadRam FilePath (Maybe (Int,Int)) | RamAlloc Int | RamRelink FilePath | RamPush FilePath FilePath | RamFree FilePath | RamUnload FilePath
@@ -149,8 +150,8 @@ dispatch Help = putStr $ unlines
   , "commit-f7-enable REFERENCE_BIN [OUTDIR] stores adjustment index 0xf7 = 0x01 through the whole-area commit, which also stores 0x80 = 0x22, 0x81 = 0xff and every other cache byte: identity, start windows equal to the private at-rest window-0 capture REFERENCE_BIN outside 0x80/0x81/0xf7 with 0xa2 = 0, state precondition, 0xf7 write, 0x81 = 0xff arm, 0x80 = 0x22 trigger with its reply held up to 33 s, bounded result poll, 0x80 = 0x33 disarm, C4. Afterwards every ordinary-boot USB attach starts ff80 service mode 3 instead of PTP, runs a 41 MB 0xff fill and gives any host the debug RAM write, and a cable at a button-less boot gives mode 3; an ordinary firmware update with its refresh flags set returns 0xf7/0x80/0x81 to 0x00 and is the only reverse route not marked unproved; whether a jig session starts with 0xf7 stored, for verification or restore, is unproved. End by dummy-battery supply cut unless the result says to wait"
   , "commit-f7-restore REFERENCE_BIN [OUTDIR] the same sequence from stored 0xf7 = 0x01, storing 0xf7 = 0x00; stored 0x80 stays 0x22; needs a session to start with 0xf7 stored, which is unproved"
   , "read-ram PLAN_JSON [--repeat N --interval-ms M] [OUTDIR] read-only RAM watch on a body with 0xf7 already nonzero, in a jig boot or an ordinary boot's ff80 route: identity, config window 0x000000 refused unless 0xf7 != 0, then one 0x200001 function 2 request per plan window (1..248 bytes) for N passes M ms apart (N 1..600, M 100..10000, N * windows <= 2032), C4; no write is sent, so no supply cut is needed"
-  , "ram-alloc SIZE [OUTDIR]       allocate and peer-prepare an X-M1 RAM workspace; use the relinker's fixed bound 0x1b6d8; retain ram-alloc-state.json"
-  , "ram-relink STATE OUTDIR        build the reviewed manifest and runtime at the retained base with the camera's pinned relinker; no USB"
+  , "ram-alloc SIZE [OUTDIR]       allocate and peer-prepare an X-M1 RAM workspace; SIZE is a payload's fixed bound, 0x1b6d8 (recipe bank and D3) or 0x1560 (Classic Chrome); retain ram-alloc-state.json"
+  , "ram-relink STATE OUTDIR        build the reviewed manifest and runtime of the allocation's payload at the retained base with the camera's pinned relinker; no USB"
   , "ram-push STATE MANIFEST [OUTDIR] upload a manifest linked to the retained allocation, install and write ram-push-state.json"
   , "ram-free STATE [OUTDIR]       free a retained allocation that was not installed"
   , "ram-unload STATE [OUTDIR]     rollback and verify the exact active publication set; retain the block until power-off"
@@ -266,13 +267,13 @@ dispatch (Live operation requested) = case operation of
   RamRelink path -> do
     allocation <- readRetainedAllocation path
     withOutput operation requested $ \directory -> do
-      manifest <- runRamRelink reviewedContract allocation directory
+      manifest <- runRamRelink (contractFor (allocSize (retainedAllocation allocation))) allocation directory
       pure ("ram-relink: manifest="++manifest)
   RamPush statePath manifestPath -> do
     allocation <- readRetainedAllocation statePath
     manifest <- readRamPushManifest manifestPath
     withOutput operation requested $ \directory -> do
-      outcome <- runRamPush reviewedContract allocation manifest realClock nativeApi directory
+      outcome <- runRamPush (contractFor (allocSize (retainedAllocation allocation))) allocation manifest realClock nativeApi directory
       case outcome of
         RamPushInstalled state -> pure ("ram-push: installed;state="++state++";power-off clears RAM")
         RamPushRefused reason -> P.reject ("ram-push refused: "++reason)
@@ -288,11 +289,17 @@ dispatch (Live operation requested) = case operation of
   RamUnload path -> do
     state <- readRamPushState path
     withOutput operation requested $ \directory -> do
-      outcome <- runRamUnload reviewedContract state realClock nativeApi directory
+      outcome <- runRamUnload (contractFor (stateSize state)) state realClock nativeApi directory
       case outcome of
         RamUnloaded -> pure "ram-unload: rollback verified; allocation retained until power-off"
         RamUnloadRefused reason -> P.reject ("ram-unload refused: "++reason)
         RamUnloadUncertain reason -> P.reject ("ram-unload uncertain: "++reason++";send nothing further and power off")
+
+-- | The compiled contract of the payload whose allocation has `size` bytes.
+contractFor :: Int -> ReviewedContract
+contractFor size = case payloadKind <$> payloadOfSize size of
+  Just ClassicChrome -> reviewedCcContract
+  _ -> reviewedContract
 
 ramWatch :: FilePath -> Maybe (Int,Int) -> IO RamWatch
 ramWatch path pacing = do

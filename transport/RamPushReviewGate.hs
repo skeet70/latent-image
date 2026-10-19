@@ -1,4 +1,5 @@
--- The RAM-push pre-go gate over transport/ram-push-review.json.
+-- The RAM-push pre-go gate over a review record (transport/ram-push-review.json
+-- or transport/ram-push-cc-review.json).
 --   verdicts RECORD: every pin and the publication contract is approved by an
 --     approving review, or content-checked (bank-content pins only).
 --   bytes RECORD: every workspace pin's file and the builder and toolchain
@@ -14,18 +15,19 @@ import System.Environment (getArgs)
 import System.Exit (die, exitFailure)
 import FujiAF.RamPushReview
 import FujiAF.SHA256 (sha256)
+import ClassicChromeRamBuilder (classicChromeRamBuilderDigest)
 import RamPushToolchain (ramPushToolchainDigest, recipeBankBuilderDigest)
 
 data Gate = Verdicts | Bytes
 
-currentDigest :: Pin -> IO (Maybe GateFinding)
-currentDigest pin = case pinSource pin of
+currentDigest :: RecordKind -> Pin -> IO (Maybe GateFinding)
+currentDigest kind pin = case pinSource pin of
   WorkspaceFile path -> do
     bytes <- try (B.readFile path)
     pure $ case bytes of
       Left failure -> Just (BytesUnreadable (pinIdentity pin) (show (failure :: IOException)))
       Right contents -> compareTo (sha256 contents)
-  BuilderSources -> pure (compareTo recipeBankBuilderDigest)
+  BuilderSources -> pure (compareTo (case kind of BankD3Record -> recipeBankBuilderDigest; ClassicChromeRecord -> classicChromeRamBuilderDigest))
   Toolchain -> pure (compareTo ramPushToolchainDigest)
   PrivateFile _ -> pure Nothing
   where
@@ -45,7 +47,7 @@ main = do
   record <- either (die . ((recordPath ++ ": ") ++)) pure . parseReviewRecord =<< B.readFile recordPath
   findings <- case gate of
     Verdicts -> pure (verdictFindings record)
-    Bytes -> catMaybes <$> forM (recordPins record) currentDigest
+    Bytes -> catMaybes <$> forM (recordPins record) (currentDigest (recordKind record))
   mapM_ (putStrLn . describeFinding) findings
   unless (null findings) $ do
     putStrLn (show (length findings) ++ " RAM-push review gate findings; ram-push is not ready for a go")

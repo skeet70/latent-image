@@ -5,7 +5,7 @@ import Control.Monad (when)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
-import Xm1RamPushE2E (AllowlistPolicy (..), BootMode (..), E2ESettings (..), OverrideReason (..), PushMode (..), RelinkMode (..), runRamPushE2E)
+import Xm1RamPushE2E (AllowlistPolicy (..), BootMode (..), E2ESettings (..), OverrideReason (..), PushMode (..), RelinkMode (..), bankD3Payload, classicChromePayload, runRamPushE2E)
 import Data.List (isPrefixOf, nub)
 import qualified Data.Text as T
 import Data.Word (Word16)
@@ -44,6 +44,7 @@ data Options = Options
   , segmentsOption :: Maybe [T.Text]
   , pushModeOption :: PushMode
   , trajectoriesOption :: Maybe TrajectoryFile
+  , classicChromeOption :: Bool
   , uiConversionProfileOption :: UiConversionProfile
   , portOption :: Port
   , bindOption :: Bind
@@ -79,7 +80,9 @@ usage = unlines
   , "  --receipt-output PATH  Fresh receipt directory beneath private-data/"
   , "  --flash-candidate      --ram-push-e2e: --firmware is a flash candidate whose loader publishes the"
   , "                         bank; boot it and run every segment (or --segments) without the RAM push"
+  , "  --classic-chrome       --ram-push-e2e: push the Classic Chrome payload in place of the recipe bank and D3"
   , "  --trajectories PATH    --ram-push-e2e trajectory file (default: emulation/ram-push-e2e-trajectories.json,"
+  , "                         emulation/ram-push-cc-e2e-trajectories.json with --classic-chrome,"
   , "                         or emulation/ui-trajectories.json with --flash-candidate)"
   , "  --ui-conversion-profile PROFILE"
   , "                         strict (default) or declared-ui-cpu-fallback"
@@ -97,7 +100,7 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing StrictUiConversion (Port 0) IPv4Loopback
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing False StrictUiConversion (Port 0) IPv4Loopback
     go options [] = pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
@@ -136,6 +139,8 @@ parseCommand args
       go options { segmentsOption = Just names } rest
     go options ("--flash-candidate" : rest) =
       go options { pushModeOption = FlashCandidate } rest
+    go options ("--classic-chrome" : rest) =
+      go options { classicChromeOption = True } rest
     go options ("--installed-nand" : value : rest) = do
       require (not (null value)) "--installed-nand must be nonempty"
       go options { installedNandOption = Just (InstalledNand value) } rest
@@ -222,6 +227,9 @@ launch options = do
     require (bootModeOption options == CheckpointedBoot) "--fresh-boot belongs to --ram-push-e2e"
     require (segmentsOption options == Nothing) "--segments belongs to --ram-push-e2e"
     require (pushModeOption options == RamPush) "--flash-candidate belongs to --ram-push-e2e"
+    require (not (classicChromeOption options)) "--classic-chrome belongs to --ram-push-e2e"
+  require (not (classicChromeOption options && pushModeOption options == FlashCandidate))
+    "--classic-chrome pushes a RAM payload; --flash-candidate pushes none"
   require (allowlistOverrideOption options == Nothing || relinkModeOption options /= ReviewedRelink)
     "--allowlist-override belongs to --unreviewed-relink"
   -- Without `--output`, `--ram-push-e2e` restages into one fixed directory.
@@ -256,9 +264,10 @@ launch options = do
             cardPath = case media of Just (VirtualSDImage path) -> path; Nothing -> error "validated SD image missing"
             receiptPath = case receipt of Just (ReceiptDirectory path) -> path; Nothing -> error "validated receipt directory missing"
             Workspace workspacePath = root
-            defaultTrajectories = case pushModeOption options of
-              RamPush -> "emulation/ram-push-e2e-trajectories.json"
-              FlashCandidate -> "emulation/ui-trajectories.json"
+            defaultTrajectories = case (pushModeOption options, classicChromeOption options) of
+              (RamPush, False) -> "emulation/ram-push-e2e-trajectories.json"
+              (RamPush, True) -> "emulation/ram-push-cc-e2e-trajectories.json"
+              (FlashCandidate, _) -> "emulation/ui-trajectories.json"
             TrajectoryFile trajectories = maybe (TrajectoryFile defaultTrajectories) id
               (trajectoriesOption options)
             relinkMode = case (relinkModeOption options, allowlistOverrideOption options) of
@@ -267,6 +276,7 @@ launch options = do
             settings = E2ESettings relinkMode (bootModeOption options)
               (resolve root "private-data/emulator-checkpoints/xm1-ram-push") (segmentsOption options)
               (pushModeOption options)
+              (if classicChromeOption options then classicChromePayload else bankD3Payload)
         runRamPushE2E settings python workspacePath (resolve root trajectories) stagedFirmwarePath nandPath cardPath receiptPath
       else do
         let Port port = portOption options

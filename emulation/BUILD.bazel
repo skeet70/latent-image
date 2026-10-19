@@ -123,6 +123,7 @@ haskell_binary(
         "//host:text",
         "//host:update-container",
         "//transport:camera-core",
+        "//transport:ram-push-cc-pins",
         "//transport:ram-push-pins",
     ],
 )
@@ -612,6 +613,26 @@ haskell_binary(
     ],
 )
 
+# A Classic Chrome RAM-push manifest applied to the RC0 decodes and the CC
+# extents of its runtime, for the builder and site cases.
+haskell_library(
+    name = "classic-chrome-ram",
+    srcs = ["Emulation/ClassicChromeRam.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
 # Classic Chrome develop-builder cases: stock and patched still develop path
 # from a request to the hardware parameter block, with the generator's
 # comparisons over the runner reports.
@@ -624,6 +645,7 @@ haskell_binary(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":classic-chrome-ram",
         ":native-adapter",
         "//host:aeson",
         "//host:base",
@@ -648,6 +670,7 @@ haskell_binary(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":classic-chrome-ram",
         ":native-adapter",
         "//host:aeson",
         "//host:base",

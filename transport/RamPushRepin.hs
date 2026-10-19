@@ -1,9 +1,10 @@
--- Rewrites entries of transport/ram-push-review.json with the digests of the
+-- Rewrites entries of transport/ram-push-review.json, or with a leading
+-- --classic-chrome transport/ram-push-cc-review.json, with the digests of the
 -- current tree's relink and one status. `bazel run` only: the relink reads
 -- private-data under BUILD_WORKSPACE_DIRECTORY.
---   ram-push-repin approved REVIEW_ID COMMIT SUBJECT...
---   ram-push-repin content-checked CHECK_ID SUBJECT...
---   ram-push-repin unreviewed COMMIT SUBJECT...
+--   ram-push-repin [--classic-chrome] approved REVIEW_ID COMMIT SUBJECT...
+--   ram-push-repin [--classic-chrome] content-checked CHECK_ID SUBJECT...
+--   ram-push-repin [--classic-chrome] unreviewed COMMIT SUBJECT...
 -- SUBJECT is a pin identity or `publication-contract`.
 module Main where
 
@@ -28,12 +29,16 @@ statusArguments arguments = case arguments of
 
 main :: IO ()
 main = do
-  (status, subjects) <- either die pure . statusArguments =<< getArgs
+  arguments <- getArgs
+  let (payload, recordName, rest) = case arguments of
+        "--classic-chrome" : more -> (classicChromePayload, "ram-push-cc-review.json", more)
+        _ -> (bankD3Payload, "ram-push-review.json", arguments)
+  (status, subjects) <- either die pure (statusArguments rest)
   when (null subjects) (die "name at least one pin identity or publication-contract")
   workspace <- lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= maybe (die "run with bazel run") pure
-  let recordPath = workspace </> "transport" </> "ram-push-review.json"
+  let recordPath = workspace </> "transport" </> recordName
   record <- either (die . ((recordPath ++ ": ") ++)) pure . parseReviewRecord =<< B.readFile recordPath
-  relinker <- runfilesRamPushRelinker
+  relinker <- runfilesRelinker payload
   manifest <- withRelinkedBuildUsing relinker EnforceAllowlist (Address 0x00c20000) (pure . pinnedManifest)
   let built = sourceIdentity manifest
       recorded = [identity | pin <- recordPins record, let PinIdentity identity = pinIdentity pin]

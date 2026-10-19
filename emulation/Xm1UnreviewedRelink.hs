@@ -10,9 +10,9 @@ module Xm1UnreviewedRelink
 import FujiAF.RamPush
 import FujiAF.Transport (Clock, UsbApi)
 
-withUnreviewedBuild :: AllowlistPolicy -> Address -> (PinnedBuild -> IO a) -> IO a
-withUnreviewedBuild policy base action = do
-  relinker <- runfilesRamPushRelinker
+withUnreviewedBuild :: Payload -> AllowlistPolicy -> Address -> (PinnedBuild -> IO a) -> IO a
+withUnreviewedBuild payload policy base action = do
+  relinker <- runfilesRelinker payload
   withRelinkedBuildUsing relinker policy base action
 
 runUnreviewedRamPush :: RetainedAllocation -> RamPushManifest -> Clock -> UsbApi -> FilePath -> IO RamPushOutcome

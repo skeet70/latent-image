@@ -39,7 +39,7 @@ expect label wanted outcome = case outcome of
 main :: IO ()
 main = do
   forM_ [0x00c20000, 0x00c21f88] $ \base -> do
-    manifest <- pinnedReviewedManifest reviewedContract (Address base)
+    manifest <- pinnedReviewedManifest reviewedContract bankD3Payload (Address base)
     unless (allocationBase manifest == Address base && length (manifestPublications manifest) == publicationCount) $ do
       putStrLn ("pinned manifest does not describe base 0x" ++ showHex base "")
       exitFailure
@@ -50,10 +50,10 @@ main = do
   root <- privateDirectory (temporary </> ("ram-push-reviewed-build-check-"++show pid))
   setCurrentDirectory root
   let base = Address 0x00c20000
-  PinnedBuild reviewed document runtime _ _ <- withPinnedReviewedBuild reviewedContract base pure
+  PinnedBuild reviewed document runtime _ _ <- withPinnedReviewedBuild reviewedContract bankD3Payload base pure
 
   substituted <- privateDirectory (root </> "substituted-tool")
-  relinker <- runfilesRamPushRelinker
+  relinker <- runfilesRelinker bankD3Payload
   let tools = relinkerToolchain relinker
       wrapper = substituted </> "clang"
   writePrivateBytes wrapper (C.pack ("#!"++toolBash tools++"\nexec "++toolClang tools++" \"$@\"\n"))

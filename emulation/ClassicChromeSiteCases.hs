@@ -22,6 +22,11 @@
 --   rawreq-*    plain FUN_012546a8 request word 2
 --   offer-*     FUN_00bfa800 list open on the stock, RC0 and patched arrays
 --   label-*     plain FUN_01179b0c; locator-* plain 0x0117dfd8
+--
+-- RAM mode (--ram-set, repeatable): the same families on the RC0 decodes with
+-- a CC RAM-push manifest's publications applied, the runtime's CC code mapped
+-- rx and its data block r at their link addresses, with the flash cases'
+-- expectations. The stock request-builder cases run too as the residue source.
 module Main where
 
 import Control.Monad
@@ -35,6 +40,7 @@ import Data.List (intercalate, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.Word
+import Emulation.ClassicChromeRam
 import Emulation.NativeCase (runCase)
 import FujiAF.Host
 import FujiAF.JSON (decodeStrict, encodeCanonical)
@@ -353,8 +359,10 @@ stockId2Sha = "236d12a11c8b386f71192675c12398358840327f21e392e6eaa91ddfd6e020a5"
 rc0Id4Sha = "a4d169bd961ec7df34e3b9b7108b624b79680c3cc50297e434e0b3607fb65551"
 payloadSha = "8c6f806ef4554128e5be887a76e438a91b7d6cb030c940fc1c8fd6d32d5926c0"
 
+data RamOpt = RamOpt {roTag :: String, roParams :: FilePath, roManifest :: FilePath, roRuntime :: FilePath, roSyms :: FilePath}
+
 data Opts = Opts
-  { oOut :: FilePath
+  { oOut :: Maybe FilePath
   , oRunnerPath :: FilePath
   , oSynthBuild :: FilePath
   , oCandBuild :: FilePath
@@ -362,12 +370,13 @@ data Opts = Opts
   , oCandParams :: FilePath
   , oStubs :: FilePath
   , oPrivate :: FilePath
+  , oRams :: [RamOpt]
   }
 
 defaults :: Opts
 defaults =
   Opts
-    { oOut = "private-data/analysis/x-m1-1.50/native-case/classic-chrome/sites"
+    { oOut = Nothing
     , oRunnerPath = "bazel-bin/emulation/native-runner"
     , oSynthBuild = "private-data/analysis/classic-chrome-patch/synthetic-build-1"
     , oCandBuild = "private-data/analysis/classic-chrome-patch/candidate-build-1"
@@ -375,12 +384,17 @@ defaults =
     , oCandParams = "private-data/analysis/classic-chrome/candidate.json"
     , oStubs = "bazel-bin/host/firmware"
     , oPrivate = "private-data/analysis/x-m1-1.50"
+    , oRams = []
     }
+
+outDir :: Opts -> FilePath
+outDir o = fromMaybe (if null (oRams o) then "private-data/analysis/x-m1-1.50/native-case/classic-chrome/sites" else "private-data/analysis/x-m1-1.50/native-case/classic-chrome/sites-ram") (oOut o)
 
 parseOpts :: Opts -> [String] -> IO Opts
 parseOpts o [] = pure o
+parseOpts o ("--ram-set" : tag : params : manifest : runtime : syms : rest) = parseOpts o {oRams = oRams o ++ [RamOpt tag params manifest runtime syms]} rest
 parseOpts o (flag : v : rest) = case flag of
-  "--out" -> parseOpts o {oOut = v} rest
+  "--out" -> parseOpts o {oOut = Just v} rest
   "--runner" -> parseOpts o {oRunnerPath = v} rest
   "--synthetic-build" -> parseOpts o {oSynthBuild = v} rest
   "--candidate-build" -> parseOpts o {oCandBuild = v} rest
@@ -398,7 +412,27 @@ data World = World
   , wAdj :: B.ByteString
   , wSynth, wCand :: Params
   , wCapture, wSettings :: B.ByteString
+  , wRams :: [RamWorld]
   }
+
+-- The RC0 decodes with one manifest's publications applied, and its runtime.
+data RamWorld = RamWorld {rwTag :: String, rwPayload :: RamPayload, rwParams :: Params, rwId4, rwId5, rwPlain, rwId2 :: Img}
+
+loadRam :: Img -> Img -> Img -> Img -> RamOpt -> IO RamWorld
+loadRam rc0 id5 plain id2 ro = do
+  let tag = roTag ro
+  ensure (take 4 tag == "ram-" && all (\x -> x `elem` ['a' .. 'z'] || x `elem` ['0' .. '9'] || x == '-') tag && length tag <= 24) (tag ++ ": a RAM set tag is ram- followed by lowercase letters, digits and hyphens")
+  params <- loadParams (roParams ro)
+  rp <- loadRamPayload (roManifest ro) (roRuntime ro) (roSyms ro)
+  ensure (runtimeSlice rp (dataRange rp) == dataBlock params) (roRuntime ro ++ ": cc_ram_data differs from the contract encoding of " ++ roParams ro)
+  let asRam img = RamImage (iName img) (iBase img) (iBytes img)
+  applied <- applyPublications rp [RamImage (iName rc0) 0x0061c200 (B.replicate 0x140 0 <> iBytes rc0), asRam id5, asRam plain, asRam id2]
+  imgs <- forM (zip3 applied [rc0, id5, plain, id2] ["id4", "id5", "plain", "id2"]) $ \(ri, src, kind) -> do
+    digest <- sha256 (riBytes ri)
+    pure (Img (tag ++ "-" ++ kind) (iPath src ++ " with the publications of " ++ roManifest ro) (riBase ri) (riBytes ri) digest)
+  case imgs of
+    [r4, r5, rp', r2] -> pure (RamWorld tag rp params r4 r5 rp' r2)
+    _ -> failH (tag ++ ": RAM images")
 
 loadWorld :: Opts -> IO World
 loadWorld o = do
@@ -425,7 +459,8 @@ loadWorld o = do
   capture <- B.readFile (oStubs o </> "classic-chrome-capture.bin")
   settings <- B.readFile (oStubs o </> "classic-chrome-settings.bin")
   ensure (B.length capture == 96 && B.length settings == 84) "stub blob sizes"
-  pure (World id4 id5 plain id2 rc0 p4 p5 pp c4 adj synth cand capture settings)
+  rams <- mapM (loadRam rc0 id5 plain id2) (oRams o)
+  pure (World id4 id5 plain id2 rc0 p4 p5 pp c4 adj synth cand capture settings rams)
 
 -- Contract words at every site the cases execute, on the stock and patched images.
 checkContract :: World -> IO ()
@@ -468,6 +503,53 @@ checkContract w = do
   checkWords (wPPlain w) 0x01179b14 [0xe300383e]
   ensure (sl (wId2 w) 0x0037b808 66 == B.replicate 66 0) "id2: the stock 0x83e record is not 66 zero bytes"
 
+-- Words the RAM cases' expectations rest on, read from the RAM images.
+checkRam :: World -> RamWorld -> IO ()
+checkRam w rw = do
+  let r4 = rwId4 rw
+  checkWords r4 0x0061c340 [0, 0, 3, 0, 1, 0, 7, 0, 0xc, 0, 5, 0, 6, 0, 2, 0, 0x7ffffffe, 0]
+  forM_ [0x007823c4, 0x00785d94, 0x0077d1a4] $ \a -> checkWords r4 a [0x0061c340]
+  forM_ [0x007823c8, 0x00785d98, 0x0077d1a8] $ \a -> checkWords r4 a [0x0061c2b0]
+  forM_ [0x0077ac48, 0x0077ac50, 0x0079608c, 0x00796094, 0x00796098, 0x007960a0, 0x007960a4, 0x007960a8, 0x007960ac, 0x007960e4] $ \a -> checkWords r4 a [wd (wP4 w) a]
+  -- RAW values through RAW labels; RC0's words from 0x0061c3f8 stay unpublished.
+  let window = [0x0061c264, 0x0061c268 .. 0x0061c3f4]
+  ensure (all (\a -> wd r4 a == wd (wP4 w) a) window) (rwTag rw ++ ": the RAM prefix arrays [0x0061c264, 0x0061c3f8) differ from the flash build's at " ++ unwords [h32 a ++ " " ++ h32 (wd r4 a) ++ "/" ++ h32 (wd (wP4 w) a) | a <- window, wd r4 a /= wd (wP4 w) a])
+  checkWords (rwPlain rw) 0x01179b14 [0xe300383e]
+  ensure (sl (rwId2 rw) 0x0037b808 66 == ccRecord) (rwTag rw ++ ": the RAM image-2 0x83e record is not the contract record")
+
+-- The images a family case runs on; a RAM side also maps its runtime.
+data Side = Side {sdTag :: String, sdId4, sdId5, sdPlain :: Img, sdPatched :: Bool, sdRam :: Maybe RamWorld}
+
+flashSides :: World -> [Side]
+flashSides w = [Side "stock" (wId4 w) (wId5 w) (wPlain w) False Nothing, Side "patched" (wP4 w) (wP5 w) (wPPlain w) True Nothing]
+
+ramSides :: World -> [Side]
+ramSides w = [Side (rwTag rw) (rwId4 rw) (rwId5 rw) (rwPlain rw) True (Just rw) | rw <- wRams w]
+
+ramRegs :: RamWorld -> [Reg]
+ramRegs rw =
+  [ Reg "runtime-text" ta tl "rx" (runtimeSlice rp (ta, tl)) ("runtime " ++ rpRuntimePath rp ++ " CC code [" ++ h32 ta ++ ", " ++ h32 (ta + fromIntegral tl) ++ ")")
+  , Reg "runtime-data" (rpData rp) 100 "r" (runtimeSlice rp (dataRange rp)) ("runtime " ++ rpRuntimePath rp ++ " cc_ram_data [" ++ h32 (rpData rp) ++ ", " ++ h32 (rpData rp + 100) ++ ")")
+  ]
+  where
+    rp = rwPayload rw
+    (ta, tl) = textRange rp
+
+-- On a RAM side: the runtime regions and the named entry functions when any
+-- entry runs, and the payload's provenance, exclusion and inputs.
+onRam :: Side -> [CcEntry] -> Case -> Case
+onRam side entries c = case sdRam side of
+  Nothing -> c
+  Just rw ->
+    let rp = rwPayload rw
+     in c
+          { cProv = cProv c ++ " RAM images: the RC0 decodes (image 4 at 0x0061c340 with zeros from 0x0061c200, stock images 5, plain and 2) with the " ++ show (length (rpPublications rp)) ++ " publications of " ++ rpManifestPath rp ++ " applied in manifest order; runtime linked at " ++ h32 (rpBase rp) ++ (if null entries then "" else ", entered at " ++ intercalate ", " [ccSymbol e ++ " " ++ h32 (entryAddress rp e) | e <- entries]) ++ "."
+          , cRegs = cRegs c ++ (if null entries then [] else ramRegs rw)
+          , cFns = cFns c ++ map (entryFunction rp) entries
+          , cExcl = cExcl c ++ ["RAM-image bytes are the RC0 decodes with the manifest's publications applied by this generator, not bytes read from a body; of the runtime only its CC code and data block are mapped."]
+          , cInputs = cInputs c ++ [("manifest", rpManifestPath rp ++ " (SHA-256 " ++ rpManifestSha rp ++ ")"), ("runtime", rpRuntimePath rp ++ " (SHA-256 " ++ rpRuntimeSha rp ++ ")")]
+          }
+
 imgInput :: Img -> (String, String)
 imgInput img = (iName img, iPath img ++ " (SHA-256 " ++ iSha img ++ ", base " ++ h32 (iBase img) ++ ")")
 
@@ -490,9 +572,9 @@ convStock img x
       let key = wd img (0x00817180 + 8 * i + 4)
        in if key .&. 0x80000000 /= 0 then 0 else if key == x then wd img (0x00817180 + 8 * i) else go (i + 1)
 
-convCases :: World -> [Case]
-convCases w =
-  [ Case
+convCases :: World -> [Side] -> [Case]
+convCases w sides =
+  [ onRam side [CcConvert] Case
       { cId = "conv-" ++ fname ++ "-" ++ tag ++ "-" ++ inTag x
       , cFamily = "1 converters"
       , cProv = fname' ++ " on the " ++ tag ++ " image 4, entered with r0 = the film value (callers 0x00eb1a34 and 0x00739930 pass it in r0 and read r0)."
@@ -512,7 +594,8 @@ convCases w =
       , cInputs = [imgInput img]
       }
   | (fname, fname', fa, fsize) <- [("capture", "FUN_00738fe8 (canonical +0x9c to capture +0x508)", 0x00738fe8, 100), ("settings", "FUN_00736a74 (live col2 to settings object +0x3c)", 0x00736a74, 104)]
-  , (tag, img, patched) <- [("stock", wId4 w, False), ("patched", wP4 w, True)]
+  , side <- sides
+  , let (tag, img, patched) = (sdTag side, sdId4 side, sdPatched side)
   , x <- convInputs
   , let out = if patched then (if x <= 13 then x else 0) else convStock (wId4 w) x
   , let rule = if patched then "contract body cmp r0,#13; movhi r0,#0: 0..13 pass, else 0" else "table 0x00817180 read from the stock image: identity 0..12, else 0"
@@ -546,10 +629,10 @@ devCode col2 = case col2 of
   12 -> 7
   _ -> 0
 
-devCases :: World -> [Case]
-devCases w =
+devCases :: [Side] -> [Case]
+devCases sides =
   concat
-    [ [ Case
+    [ [ onRam side [] Case
           { cId = "devcode-" ++ tag ++ "-col2-" ++ inTag col2
           , cFamily = "2 develop dispatch"
           , cProv = "FUN_00d78a80 on the " ++ tag ++ " image 5, which adds 0x104 to the develop record and calls FUN_00d78418(record + 0x104, col2). r0 = develop record, r1 = film value col2 (request[9]); the record is filled with 0xa5."
@@ -568,7 +651,7 @@ devCases w =
           , cBudget = 10000
           , cInputs = [imgInput img]
           }
-      , Case
+      , onRam side [CcMarker] Case
           { cId = "marker-" ++ tag ++ "-col2-" ++ inTag col2
           , cFamily = "2 develop marker"
           , cProv = "FUN_00d78538 on the " ++ tag ++ " image 5, which adds 0x110 to the develop record and calls the setter FUN_00d7851c with the film value in r1. r0 = develop record, r1 = col2; the record is filled with 0xa5."
@@ -588,7 +671,8 @@ devCases w =
           , cInputs = [imgInput img]
           }
       ]
-    | (tag, img, patched) <- [("stock", wId5 w, False), ("patched", wP5 w, True)]
+    | side <- sides
+    , let (tag, img, patched) = (sdTag side, sdId5 side, sdPatched side)
     , col2 <- [0 .. 13]
     , let mark = if patched && col2 == 13 then 13 else 0
     ]
@@ -655,24 +739,32 @@ saturationPatched mode e504 col2
 captureRecord :: Word32 -> Word32 -> Word32 -> B.ByteString
 captureRecord mode e504 col2 = B.replicate 0x4b4 0 <> le32 mode <> B.replicate (0x504 - 0x4b8) 0 <> le32 e504 <> le32 col2 <> B.replicate 4 0
 
-metaCases :: World -> [Case]
-metaCases w =
-  [ mk "filmmode" "FUN_00eab258 (FilmMode, maker-note +0xf0)" 0x00eab258 0x104 tag img mode 0 col2 (if patched then filmModePatched mode col2 else filmModeStock mode col2) note
-  | (tag, img, patched) <- imgs
+metaCases :: [Side] -> [Case]
+metaCases sides =
+  [ mk "filmmode" "FUN_00eab258 (FilmMode, maker-note +0xf0)" 0x00eab258 0x104 side mode 0 col2 (if patched then filmModePatched mode col2 else filmModeStock mode col2) note
+  | side <- sides
+  , let patched = sdPatched side
   , (mode, cols) <- [(0, [0 .. 15]), (5, [0, 13])]
   , col2 <- cols
-  , let note = if patched then "stock table with the contract arms F1-F6: col2 0xd in a gated mode gives 0x600" else "stock switch read from image 5"
+  , let note = case (patched, sdRam side) of
+          (_, Just _) -> "stock table with the default arm branching to cc_ram_filmmode: col2 0xd in a gated mode gives 0x600"
+          (True, _) -> "stock table with the contract arms F1-F6: col2 0xd in a gated mode gives 0x600"
+          _ -> "stock switch read from image 5"
   ]
-    ++ [ mk "saturation" "FUN_00eaac74 (Saturation, maker-note +0x40)" 0x00eaac74 0x17c tag img mode e504 col2 (if patched then saturationPatched mode e504 col2 else saturationStock mode e504 col2) note
-       | (tag, img, patched) <- imgs
+    ++ [ mk "saturation" "FUN_00eaac74 (Saturation, maker-note +0x40)" 0x00eaac74 0x17c side mode e504 col2 (if patched then saturationPatched mode e504 col2 else saturationStock mode e504 col2) note
+       | side <- sides
+       , let patched = sdPatched side
        , (mode, e504, cols) <- [(0x24, 4, [0 .. 15]), (0, 4, [0 .. 15]), (5, 4, [0, 13])]
        , col2 <- cols
-       , let note = if patched then "stock switch with the contract arms S1-S9: col2 0xd takes the mode arm col2 0 takes" else "stock switch read from image 5"
+       , let note = case (patched, sdRam side) of
+               (_, Just _) -> "stock switch with the default arm branching to cc_ram_saturation: col2 0xd takes the mode arm col2 0 takes"
+               (True, _) -> "stock switch with the contract arms S1-S9: col2 0xd takes the mode arm col2 0 takes"
+               _ -> "stock switch read from image 5"
        ]
   where
-    imgs = [("stock", wId5 w, False), ("patched", wP5 w, True)]
-    mk fam fname fa fsize tag img mode e504 col2 out note =
-      Case
+    mk fam fname fa fsize side mode e504 col2 out note =
+      let (tag, img) = (sdTag side, sdId5 side)
+       in onRam side [if fam == "filmmode" then CcFilmMode else CcSaturation] Case
         { cId = fam ++ "-" ++ tag ++ "-m" ++ inTag mode ++ "-col2-" ++ inTag col2
         , cFamily = "3 metadata"
         , cProv = fname ++ " on the " ++ tag ++ " image 5. r0 = capture record with +0x4b4 = mode " ++ hx mode ++ ", +0x504 = " ++ hx e504 ++ ", +0x508 = col2 " ++ hx col2 ++ ", other bytes 0."
@@ -701,10 +793,43 @@ adjBase = 0x30000000
 adjPtrCell = 0x0096ca50
 destBase = 0x21000000
 
-stubCases :: World -> [Case]
-stubCases w = concat [build bt img params | (bt, img, params) <- [("synthetic", wP4 w, wSynth w), ("candidate", wC4 w, wCand w)]]
+data StubKind = StubColour | StubChroma | StubTone
+
+-- A build whose stage stubs the cases enter: per stub its symbol, entry, code
+-- and data-block regions and functions.
+data StubHost = StubHost
+  { shTag :: String
+  , shId4, shId5 :: Img
+  , shParams :: Params
+  , shHead :: String
+  , shSite :: StubKind -> (String, Word32, [Reg], [(Word32, Int)])
+  , shWrap :: Case -> Case
+  }
+
+flashStubHosts :: World -> [StubHost]
+flashStubHosts w = [host bt img4 params | (bt, img4, params) <- [("synthetic", wP4 w, wSynth w), ("candidate", wC4 w, wCand w)]]
   where
-    id5 = wP5 w
+    host bt img4 params = StubHost bt img4 (wP5 w) params ("Stage hook stub in isolation on the " ++ bt ++ " build's patched image 4 (data block from " ++ pPath params ++ ", SHA-256 " ++ pSha params ++ ").") (site img4) id
+    site img4 k =
+      let capture = [codeReg "code-capture" img4 0x00738fe8 100, dataReg "datablock" "r" img4 0x0061c200 100]
+       in case k of
+            StubColour -> ("cc_colour", 0x00738ff4, capture, [(0x00738ff4, 0x0073904c - 0x00738ff4)])
+            StubChroma -> ("cc_chroma", 0x00739010, capture, [(0x00739010, 0x0073904c - 0x00739010)])
+            StubTone -> ("cc_tone", 0x00736a80, [codeReg "code-settings" img4 0x00736a74 104, dataReg "datablock" "r" img4 0x0061c200 100], [(0x00736a80, 0x00736adc - 0x00736a80)])
+
+ramStubHost :: Side -> RamWorld -> StubHost
+ramStubHost side rw = StubHost (rwTag rw) (rwId4 rw) (rwId5 rw) (rwParams rw) ("Stage hook stub in isolation in the " ++ rwTag rw ++ " runtime (data block cc_ram_data from " ++ pPath (rwParams rw) ++ ", SHA-256 " ++ pSha (rwParams rw) ++ ").") site (onRam side [])
+  where
+    rp = rwPayload rw
+    entry e es = (ccSymbol e, entryAddress rp e, ramRegs rw, map (entryFunction rp) es)
+    site k = case k of
+      StubColour -> entry CcColour [CcColour, CcChroma]
+      StubChroma -> entry CcChroma [CcChroma]
+      StubTone -> entry CcTone [CcTone]
+
+stubCases :: World -> [StubHost] -> [Case]
+stubCases w hosts = concat [build h | h <- hosts]
+  where
     adj = wAdj w
     adjField f = le16At adj (fromIntegral f)
     record mark = B.replicate 0x110 0 <> le32 mark <> B.replicate (0x200 - 0x114) 0
@@ -720,23 +845,22 @@ stubCases w = concat [build bt img params | (bt, img, params) <- [("synthetic", 
     colourId = 0 :: Word32
     toneKey img4 = wd img4 (0x00824bc8 + 72)
     toneCount img4 = wd img4 0x00824bc4
-    build bt img4 params =
-      concat
+    build h =
+      map (shWrap h) $ concat
         [ [ base
               { cId = "stub-colour-" ++ bt ++ "-m" ++ inTag mark
-              , cProv = provHead ++ " cc_colour (0x00738ff4, hook at 0x00d67284) entered with r0 = 72-byte destination, r1 = colour id-1 = " ++ show colourId ++ ", r5 = develop record whose +0x110 = " ++ hx mark ++ "; the stock reader FUN_00d670a0 and its callees are mapped over the fallback adjustment image."
-              , cEntry = 0x00738ff4
+              , cProv = provHead ++ " " ++ colourName ++ " (" ++ h32 colourEntry ++ ", hook at 0x00d67284) entered with r0 = 72-byte destination, r1 = colour id-1 = " ++ show colourId ++ ", r5 = develop record whose +0x110 = " ++ hx mark ++ "; the stock reader FUN_00d670a0 and its callees are mapped over the fallback adjustment image."
+              , cEntry = colourEntry
               , cArgs = [("r0", destBase), ("r1", colourId), ("r5", recordBase)]
               , cRegs =
-                  [ codeReg "code-capture" img4 0x00738fe8 100
-                  , dataReg "datablock" "r" img4 0x0061c200 100
-                  , synthReg "record" "r" recordBase (record mark) "develop record"
-                  , synthReg "dest" "rw" destBase dest "destination, 0xee"
-                  , codeReg "code-reader" id5 0x00d670a0 276
-                  , dataReg "fieldtab" "r" id5 0x00d67f88 360
-                  ]
+                  colourRegs
+                    ++ [ synthReg "record" "r" recordBase (record mark) "develop record"
+                       , synthReg "dest" "rw" destBase dest "destination, 0xee"
+                       , codeReg "code-reader" id5 0x00d670a0 276
+                       , dataReg "fieldtab" "r" id5 0x00d67f88 360
+                       ]
                     ++ readerRegs img4
-              , cFns = [(0x00738ff4, 0x0073904c - 0x00738ff4), (0x00d670a0, 276)] ++ readerFns
+              , cFns = colourFns ++ [(0x00d670a0, 276)] ++ readerFns
               , cClaims = [("dest", 0, colourOut)]
               , cExpect =
                   if mark == 13
@@ -745,19 +869,18 @@ stubCases w = concat [build bt img params | (bt, img, params) <- [("synthetic", 
               }
           , base
               { cId = "stub-chroma-" ++ bt ++ "-m" ++ inTag mark
-              , cProv = provHead ++ " cc_chroma (0x00739010, hooks at 0x00d60f60 and 0x00d64ef4) entered with r0 = 32-byte destination, r1 = chroma id-1 = " ++ show colourId ++ ", r4 = develop record whose +0x110 = " ++ hx mark ++ "; the stock reader FUN_00d60cc4 and its callees are mapped over the fallback adjustment image."
-              , cEntry = 0x00739010
+              , cProv = provHead ++ " " ++ chromaName ++ " (" ++ h32 chromaEntry ++ ", hooks at 0x00d60f60 and 0x00d64ef4) entered with r0 = 32-byte destination, r1 = chroma id-1 = " ++ show colourId ++ ", r4 = develop record whose +0x110 = " ++ hx mark ++ "; the stock reader FUN_00d60cc4 and its callees are mapped over the fallback adjustment image."
+              , cEntry = chromaEntry
               , cArgs = [("r0", destBase), ("r1", colourId), ("r4", recordBase)]
               , cRegs =
-                  [ codeReg "code-capture" img4 0x00738fe8 100
-                  , dataReg "datablock" "r" img4 0x0061c200 100
-                  , synthReg "record" "r" recordBase (record mark) "develop record"
-                  , synthReg "dest" "rw" destBase dest "destination, 0xee"
-                  , codeReg "code-reader" id5 0x00d60cc4 152
-                  , dataReg "fieldtab" "r" id5 0x00d61e14 0x58
-                  ]
+                  chromaRegs
+                    ++ [ synthReg "record" "r" recordBase (record mark) "develop record"
+                       , synthReg "dest" "rw" destBase dest "destination, 0xee"
+                       , codeReg "code-reader" id5 0x00d60cc4 152
+                       , dataReg "fieldtab" "r" id5 0x00d61e14 0x58
+                       ]
                     ++ readerRegs img4
-              , cFns = [(0x00739010, 0x0073904c - 0x00739010), (0x00d60cc4, 152)] ++ readerFns
+              , cFns = chromaFns ++ [(0x00d60cc4, 152)] ++ readerFns
               , cClaims = [("dest", 0, chromaOut)]
               , cExpect =
                   if mark == 13
@@ -766,18 +889,17 @@ stubCases w = concat [build bt img params | (bt, img, params) <- [("synthetic", 
               }
           , base
               { cId = "stub-tone-" ++ bt ++ "-m" ++ inTag mark
-              , cProv = provHead ++ " cc_tone (0x00736a80, hooks at 0x00d677ac and 0x00d677bc) entered with r0 = curve id " ++ hx (toneKey img4) ++ " (the key of record 1 of table 0x00824bc8), r1 = nine-byte head destination, r2 = 28-halfword curve destination, r7 = develop record whose +0x110 = " ++ hx mark ++ "; the stock reader FUN_00690924 is mapped over the image-4 tone table."
-              , cEntry = 0x00736a80
+              , cProv = provHead ++ " " ++ toneName ++ " (" ++ h32 toneEntry ++ ", hooks at 0x00d677ac and 0x00d677bc) entered with r0 = curve id " ++ hx (toneKey img4) ++ " (the key of record 1 of table 0x00824bc8), r1 = nine-byte head destination, r2 = 28-halfword curve destination, r7 = develop record whose +0x110 = " ++ hx mark ++ "; the stock reader FUN_00690924 is mapped over the image-4 tone table."
+              , cEntry = toneEntry
               , cArgs = [("r0", toneKey img4), ("r1", destBase), ("r2", destBase + 0x10), ("r7", recordBase)]
               , cRegs =
-                  [ codeReg "code-settings" img4 0x00736a74 104
-                  , dataReg "datablock" "r" img4 0x0061c200 100
-                  , synthReg "record" "r" recordBase (record mark) "develop record"
-                  , synthReg "dest" "rw" destBase dest "destination, 0xee"
-                  , codeReg "code-reader" img4 0x00690924 592
-                  , dataReg "tonetab" "r" img4 0x00824bc4 (4 + 72 * fromIntegral (toneCount img4))
-                  ]
-              , cFns = [(0x00736a80, 0x00736adc - 0x00736a80), (0x00690924, 592)]
+                  toneRegs
+                    ++ [ synthReg "record" "r" recordBase (record mark) "develop record"
+                       , synthReg "dest" "rw" destBase dest "destination, 0xee"
+                       , codeReg "code-reader" img4 0x00690924 592
+                       , dataReg "tonetab" "r" img4 0x00824bc4 (4 + 72 * fromIntegral (toneCount img4))
+                       ]
+              , cFns = toneFns ++ [(0x00690924, 592)]
               , cClaims = [("dest", 0, toneHead), ("dest", 0x10, toneCurve)]
               , cExpect =
                   if mark == 13
@@ -796,7 +918,11 @@ stubCases w = concat [build bt img params | (bt, img, params) <- [("synthetic", 
         , let toneCurve = if cc then B.concat (map le16 (pCurve params)) else B.take 56 (B.drop 14 toneRec)
         ]
       where
-        provHead = "Stage hook stub in isolation on the " ++ bt ++ " build's patched image 4 (data block from " ++ pPath params ++ ", SHA-256 " ++ pSha params ++ ")."
+        (bt, img4, id5, params) = (shTag h, shId4 h, shId5 h, shParams h)
+        (colourName, colourEntry, colourRegs, colourFns) = shSite h StubColour
+        (chromaName, chromaEntry, chromaRegs, chromaFns) = shSite h StubChroma
+        (toneName, toneEntry, toneRegs, toneFns) = shSite h StubTone
+        provHead = shHead h
         base =
           Case
             { cId = ""
@@ -856,9 +982,9 @@ convTableLen img prop = go 0
     tbl = wd img (0x0081b09c + 4 * prop)
     go i = if all (\k -> wd img (tbl + 12 * i + 4 * k) == 0xffff) [0 .. 2] then 12 * (fromIntegral i + 1) else go (i + 1)
 
-rawCases :: World -> [Case]
-rawCases w =
-  [ Case
+rawCases :: [Side] -> [Case]
+rawCases sides =
+  [ onRam side [CcRawCommit] Case
       { cId = "rawcommit-" ++ tag ++ "-row-" ++ inTag row
       , cFamily = "5 RAW commit"
       , cProv = "FUN_00d46010 on the " ++ tag ++ " image 5 (commit, called from FUN_00cc453c), property 0x22b arm, with its FUN_0061d514 conversion through FUN_00631a00 on image 4. r0 = 0x22b, r1 = row token " ++ show row ++ "; field record 0x00954d78 seeded +0x08 = 0xa5a5a5a5 (colour) and +0x1c = 8 (a mono value), other bytes 0."
@@ -885,12 +1011,13 @@ rawCases w =
       , cBudget = 20000
       , cInputs = [imgInput img5, imgInput img4]
       }
-  | (tag, img5, img4, patched) <- [("stock", wId5 w, wId4 w, False), ("patched", wP5 w, wP4 w, True)]
+  | side <- sides
+  , let (tag, img5, img4, patched) = (sdTag side, sdId5 side, sdId4 side, sdPatched side)
   , row <- [0 .. 10]
   , let (colour, mono) = rawCommit patched row
   , let flag = snd (convIndex img4 0x22b row)
   ]
-    ++ [ Case
+    ++ [ onRam side [CcRawHighlight] Case
            { cId = "rawrow-" ++ tag ++ "-colour-" ++ inTag colour
            , cFamily = "5 RAW highlight"
            , cProv = "FUN_00d588b8 on the " ++ tag ++ " image 5 (selection query), property 0x22b arm: r2 = 0x22b, r0 = r1 = 0; field record 0x00954d78 with +0x08 = colour " ++ show colour ++ " and +0x1c = 0 (no mono value)."
@@ -909,11 +1036,12 @@ rawCases w =
            , cBudget = 20000
            , cInputs = [imgInput img5]
            }
-       | (tag, img5, patched) <- [("stock", wId5 w, False), ("patched", wP5 w, True)]
+       | side <- sides
+       , let (tag, img5, patched) = (sdTag side, sdId5 side, sdPatched side)
        , colour <- [0 .. 8]
        , let row = rawRow patched colour
        ]
-    ++ [ Case
+    ++ [ onRam side [CcRawRequest] Case
            { cId = "rawreq-" ++ tag ++ "-film-" ++ inTag film
            , cFamily = "5 RAW request"
            , cProv = "Plain FUN_012546a8 on the " ++ tag ++ " plain image (RAW develop request builder, from FUN_01205afc) with its memset FUN_007221c8/FUN_007221a0 on image 4. The settings record pointer *(0x014ea86c) = 0x00954d78; the record has +0x08 = " ++ show film ++ " and every other field 0. The request block 0x01514218 (52 bytes) is seeded 0xee."
@@ -938,7 +1066,8 @@ rawCases w =
            , cBudget = 50000
            , cInputs = [imgInput plainImg, imgInput img4]
            }
-       | (tag, plainImg, img4, patched) <- [("stock", wPlain w, wId4 w, False), ("patched", wPPlain w, wP4 w, True)]
+       | side <- sides
+       , let (tag, plainImg, img4, patched) = (sdTag side, sdPlain side, sdId4 side, sdPatched side)
        , film <- [0 .. 9]
        , let word2 = rawRequest patched film
        ]
@@ -1005,9 +1134,17 @@ offerGlobalsFinal o =
     slots = take 0x4f (ofStates o ++ repeat 0)
     tail4 = if ofGreyed o then [ff, ff, ff, ff] else [0, 0, ff, 0]
 
-offerCases :: World -> [Case]
-offerCases w =
-  [ Case
+-- Sides with the name of their label and values arrays.
+flashOfferSides :: World -> [(Side, String)]
+flashOfferSides w = [(stock, "stock"), (Side "rc0" (wRc0 w) (wId5 w) (wPlain w) False Nothing, "RC0 (installed decode)"), (patched, "patched")]
+  where
+    (stock, patched) = case flashSides w of
+      [a, c] -> (a, c)
+      _ -> error "flash sides"
+
+offerCases :: [(Side, String)] -> [Case]
+offerCases sides =
+  [ onRam side [] Case
       { cId = "offer-" ++ tag ++ "-mode-" ++ inTag mode
       , cFamily = "6 offer list"
       , cProv = "The FILMSIM-EMUL-01 list-open ABI (FUN_00bfa800 kind 1, call site 0x00bfa3e4-0x00bfa3f0: r0 = 1, r1 = 1, r2 = 21) on the shooting-menu node 0x007823a4 over the " ++ arrays ++ " arrays, mode cell DAT_00956838 = " ++ hx mode ++ " (column " ++ show column ++ " of list 0x00792fac). DAT_00956840, DAT_00956844, DAT_009568b8 and DAT_009575fc are 0. The list block 0x009571d0 is seeded with the node pointer and 0xff. FUN_00bfa234 (event post) is a registers-only stub returning r0 = 0."
@@ -1050,7 +1187,8 @@ offerCases w =
       , cBudget = 400000
       , cInputs = [imgInput img5, imgInput img4]
       }
-  | (tag, arrays, img4, img5) <- [("stock", "stock", wId4 w, wId5 w), ("rc0", "RC0 (installed decode)", wRc0 w, wId5 w), ("patched", "patched", wP4 w, wP5 w)]
+  | (side, arrays) <- sides
+  , let (tag, img4, img5) = (sdTag side, sdId4 side, sdId5 side)
   , mode <- [0, 5]
   , let o = offerModel img4 mode
   , let values = wd img4 (offerNode + 0x20)
@@ -1071,36 +1209,49 @@ ccRecord =
   let units = map (fromIntegral . fromEnum) "CLASSIC CHROME" ++ [0]
    in B.concat (map le16 units) <> B.replicate (56 - 2 * length units) 0 <> B.concat (map le16 [40, 0, 30, 36, 48])
 
-labelCases :: World -> [Case]
-labelCases w =
-  [ mk kind tag plainImg recs labelId
-  | (tag, plainImg, recs) <- [("stock", wPlain w, stockRecs), ("patched", wPPlain w, ccRecs)]
+-- Per side: image 2, the special records the case maps, and their provenance
+-- and region notes.
+flashLabelSources :: World -> [(Side, Img, B.ByteString, String, String)]
+flashLabelSources w = case flashSides w of
+  [stock, patched] ->
+    [ (stock, wId2 w, stockRecs, "the stock image 2", "id2-stock [0x0037b784, 0x0037b84a)")
+    , (patched, wId2 w, B.take 132 stockRecs <> ccRecord, "the stock image 2 with the 0x83e record replaced by the contract record (UTF-16LE \"CLASSIC CHROME\", zero unit, zero fill to 56 bytes, layout halfwords 40, 0, 30, 36, 48), built by this generator", "image 2 [0x0037b784, 0x0037b84a) with the CC 0x83e record")
+    ]
+  _ -> error "flash sides"
+  where
+    stockRecs = sl (wId2 w) recordsBase 198
+
+ramLabelSource :: Side -> RamWorld -> (Side, Img, B.ByteString, String, String)
+ramLabelSource side rw = (side, rwId2 rw, sl (rwId2 rw) recordsBase 198, "the RAM image 2 " ++ iName (rwId2 rw) ++ " (the stock image 2 with the manifest's image-2 publications)", iName (rwId2 rw) ++ " [0x0037b784, 0x0037b84a)")
+
+labelCases :: [(Side, Img, B.ByteString, String, String)] -> [Case]
+labelCases sources =
+  [ mk kind source labelId
+  | source <- sources
   , kind <- ["label", "locator"]
   , labelId <- [0x83c, 0x83d, 0x83e, 0x83f]
   ]
   where
-    stockRecs = sl (wId2 w) recordsBase 198
-    ccRecs = B.take 132 stockRecs <> ccRecord
     locate i = if i >= 0x83c && i <= 0x83e then recordsBase + 66 * (i - 0x83c) else 0
     accessor patched i = if i <= (if patched then 0x83e else 0x83d) then locate i else 0
-    mk kind tag plainImg recs labelId =
-      let patched = tag == "patched"
+    mk kind (side, id2, recs, provSource, regSource) labelId =
+      let (tag, plainImg, patched) = (sdTag side, sdPlain side, sdPatched side)
           out = if kind == "label" then accessor patched labelId else locate labelId
           text = if out == 0 then "" else recordText (B.drop (fromIntegral (out - recordsBase)) recs)
-       in Case
+       in onRam side [] Case
             { cId = kind ++ "-" ++ tag ++ "-" ++ showHex labelId ""
             , cFamily = "7 label"
             , cProv =
                 (if kind == "label" then "Plain text accessor FUN_01179b0c with its record locator 0x0117dfd8" else "Plain record locator 0x0117dfd8 entered directly")
                   ++ " on the " ++ tag ++ " plain image, r0 = string id " ++ hx labelId ++ ", r1 = 0. Records 0x0037b784 (three 66-byte special records) come from "
-                  ++ (if patched then "the stock image 2 with the 0x83e record replaced by the contract record (UTF-16LE \"CLASSIC CHROME\", zero unit, zero fill to 56 bytes, layout halfwords 40, 0, 30, 36, 48), built by this generator" else "the stock image 2")
+                  ++ provSource
                   ++ "."
             , cEntry = if kind == "label" then 0x01179b0c else 0x0117dfd8
             , cArgs = [("r0", labelId)]
             , cRegs =
                 [ codeReg "code-textid" plainImg 0x01179b0c 120
                 , codeReg "code-locator" plainImg 0x0117dfd8 112
-                , Reg "records" recordsBase 198 "r" recs (if patched then "image 2 [0x0037b784, 0x0037b84a) with the CC 0x83e record" else "id2-stock [0x0037b784, 0x0037b84a)")
+                , Reg "records" recordsBase 198 "r" recs regSource
                 ]
             , cFns = [(0x01179b0c, 120) | kind == "label"] ++ [(0x0117dfd8, 112)]
             , cStubs = []
@@ -1115,7 +1266,7 @@ labelCases w =
                   ++ "."
             , cExcl = ["The returned pointer is the result; drawing, metrics and the other 24 gate sites are outside the case."]
             , cBudget = 10000
-            , cInputs = [imgInput plainImg, imgInput (wId2 w)]
+            , cInputs = [imgInput plainImg, imgInput id2]
             }
 
 recordText :: B.ByteString -> String
@@ -1129,20 +1280,35 @@ main = do
   w <- loadWorld o
   checkContract w
   ensure (recordText (B.take 66 ccRecord) == "CLASSIC CHROME" && B.length ccRecord == 66) "CC record encoding"
-  createDirectoryIfMissing True (oOut o)
+  let offerKey img mode = let x = offerModel img mode in (ofTokens x, ofStates x, ofGreyed x)
+  forM_ (wRams w) $ \rw -> do
+    checkRam w rw
+    forM_ [0, 5] $ \mode -> ensure (offerKey (rwId4 rw) mode == offerKey (wP4 w) mode) (rwTag rw ++ ": the offer model in mode " ++ show mode ++ " differs from the flash build's")
+  let out = outDir o
+  createDirectoryIfMissing True out
   runner <- makeAbsolute (oRunnerPath o)
   arts <- newIORef M.empty
   finals <- newIORef M.empty
-  let env = Env (oOut o) runner arts finals
-      cases = convCases w ++ devCases w ++ metaCases w ++ stubCases w ++ rawCases w ++ offerCases w ++ labelCases w
+  let env = Env out runner arts finals
+      fs = flashSides w
+      rs = ramSides w
+      flashCases = convCases w fs ++ devCases fs ++ metaCases fs ++ stubCases w (flashStubHosts w) ++ rawCases fs ++ offerCases (flashOfferSides w) ++ labelCases (flashLabelSources w)
+      ramPairs = zip rs (wRams w)
+      ramCases =
+        convCases w rs ++ devCases rs ++ metaCases rs
+          ++ stubCases w [ramStubHost side rw | (side, rw) <- ramPairs]
+          ++ rawCases (take 1 fs ++ rs)
+          ++ offerCases [(side, "RAM (RC0 with the CC publications)") | side <- rs]
+          ++ labelCases [ramLabelSource side rw | (side, rw) <- ramPairs]
+      cases = if null (wRams w) then flashCases else ramCases
   outcomes <- forM cases $ \c -> do
     r <- runOne env c
     putStrLn (oStatus r ++ " " ++ cId c ++ " runner=" ++ oRunner r ++ " r0=" ++ oR0 r ++ " instructions=" ++ show (oInstr r) ++ concatMap (" " ++) (oMismatch r))
     pure r
   let row r = "| " ++ cId (oCase r) ++ " | " ++ cFamily (oCase r) ++ " | " ++ cExpect (oCase r) ++ " | " ++ oStatus r ++ ", " ++ oRunner r ++ ", r0 " ++ oR0 r ++ ", " ++ show (oInstr r) ++ " instructions |"
-  writeFile (oOut o </> "results.md") (unlines (["| Case | Family | Expected before execution | Observed |", "| --- | --- | --- | --- |"] ++ map row outcomes))
+  writeFile (out </> "results.md") (unlines (["| Case | Family | Expected before execution | Observed |", "| --- | --- | --- | --- |"] ++ map row outcomes))
   B.writeFile
-    (oOut o </> "results.json")
+    (out </> "results.json")
     ( encodeCanonical
         ( arr
             [ obj

@@ -1101,3 +1101,96 @@ genrule(
     "00c20000",
     "00c21f88",
 ]]
+
+# The Classic Chrome RAM-push builder (reports/classic-chrome-patch.md
+# section 8.2): menu/classic_chrome_ram.S and the generic installer.
+haskell_binary(
+    name = "build-classic-chrome-ram",
+    srcs = [
+        "BuildClassicChromeRam.hs",
+        "RecipeBankRamLayout.hs",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    main_file = "BuildClassicChromeRam.hs",
+    deps = [
+        ":classic-chrome-ram-builder",
+        ":ram-push-toolchain",
+        "//host:base",
+        "//host:bytestring",
+        "//host:classic-chrome",
+        "//host:classic-chrome-ram",
+        "//host:directory",
+        "//host:host-support",
+        "//host:json",
+        "//host:unix",
+    ],
+)
+
+# Their digest is the builder identity a Classic Chrome RAM-push manifest carries.
+filegroup(
+    name = "build-classic-chrome-ram-sources",
+    srcs = [
+        "BuildClassicChromeRam.hs",
+        "RecipeBankRamLayout.hs",
+        "//host:FujiAF/ClassicChrome.hs",
+        "//host:FujiAF/ClassicChromeRam.hs",
+        "//host:FujiAF/Host.hs",
+        "//host:FujiAF/JSON.hs",
+    ],
+)
+
+genrule(
+    name = "classic-chrome-ram-builder-module",
+    srcs = [
+        ":build-classic-chrome-ram-sources",
+        "@lab_bash//:bin/bash",
+        "@lab_coreutils//:bin/sha256sum",
+        "@lab_coreutils//:bin/sort",
+    ],
+    outs = ["ClassicChromeRamBuilder.hs"],
+    cmd = "$(location @lab_bash//:bin/bash) $(location classic-chrome-ram-builder-digest.sh) $@ $(location @lab_coreutils//:bin/sha256sum) $(location @lab_coreutils//:bin/sort) $(locations :build-classic-chrome-ram-sources)",
+    tools = ["classic-chrome-ram-builder-digest.sh"],
+)
+
+haskell_library(
+    name = "classic-chrome-ram-builder",
+    srcs = [":ClassicChromeRamBuilder.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-XGHC2021",
+    ],
+    deps = ["//host:base"],
+)
+
+# What FujiAF.RamPush runs to relink a Classic Chrome payload at a retained base.
+filegroup(
+    name = "classic-chrome-ram-relinker",
+    srcs = [
+        "build-classic-chrome-ram.sh",
+        ":build-classic-chrome-ram",
+    ],
+)
+
+haskell_test(
+    name = "classic-chrome-ram-tests",
+    srcs = ["ClassicChromeRamTests.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:classic-chrome",
+        "//host:classic-chrome-ram",
+    ],
+)

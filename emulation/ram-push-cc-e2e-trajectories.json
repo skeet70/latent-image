@@ -1,0 +1,443 @@
+{
+  "schema": 1,
+  "before_unload": [
+    {
+      "phase": "cc-film-list-open",
+      "observe": true,
+      "steps": [
+        [
+          "menu",
+          67,
+          56,
+          0
+        ],
+        [
+          "menu",
+          1,
+          5,
+          2
+        ],
+        [
+          "down",
+          1,
+          5,
+          3
+        ],
+        [
+          "down",
+          1,
+          5,
+          4
+        ],
+        [
+          "down",
+          1,
+          5,
+          5
+        ],
+        [
+          "down",
+          1,
+          5,
+          6
+        ],
+        [
+          "ok",
+          1,
+          254,
+          0
+        ]
+      ],
+      "reads": [
+        [
+          "ordinary-block-0",
+          "0096cc64",
+          248
+        ],
+        [
+          "live-cells-sharpness-film-dr",
+          "009568a0",
+          32
+        ],
+        [
+          "settings-object-0-film",
+          "0096ec0c",
+          4
+        ],
+        [
+          "settings-object-1-film",
+          "00970d64",
+          4
+        ],
+        [
+          "film-nibble",
+          "009c28a6",
+          1
+        ],
+        [
+          "shooting-values",
+          "0061c340",
+          72
+        ],
+        [
+          "shooting-labels",
+          "0061c2b0",
+          144
+        ],
+        [
+          "raw-node",
+          "0078bd7c",
+          8
+        ]
+      ],
+      "capture": "cc-film-list-open"
+    },
+    {
+      "phase": "cc-film-list-rows",
+      "observe": true,
+      "requires": [
+        "cc-film-list-open"
+      ],
+      "steps": [
+        [
+          "down",
+          1,
+          254,
+          1
+        ],
+        [
+          "down",
+          1,
+          254,
+          2
+        ],
+        [
+          "down",
+          1,
+          254,
+          3
+        ],
+        [
+          "down",
+          1,
+          254,
+          4
+        ],
+        [
+          "down",
+          1,
+          254,
+          5
+        ],
+        [
+          "down",
+          1,
+          254,
+          6
+        ],
+        [
+          "down",
+          1,
+          254,
+          7
+        ]
+      ],
+      "capture": "cc-film-list-row7"
+    },
+    {
+      "phase": "cc-film-commit",
+      "observe": true,
+      "requires": [
+        "cc-film-list-rows"
+      ],
+      "steps": [
+        [
+          "ok",
+          1,
+          5,
+          6
+        ]
+      ],
+      "reads": [
+        [
+          "ordinary-block-0",
+          "0096cc64",
+          248
+        ],
+        [
+          "live-cells-sharpness-film-dr",
+          "009568a0",
+          32
+        ],
+        [
+          "settings-object-0-film",
+          "0096ec0c",
+          4
+        ],
+        [
+          "settings-object-1-film",
+          "00970d64",
+          4
+        ],
+        [
+          "film-nibble",
+          "009c28a6",
+          1
+        ],
+        [
+          "film-word-016995e0",
+          "016995e0",
+          4
+        ]
+      ],
+      "capture": "cc-after-commit"
+    },
+    {
+      "phase": "cc-film-reopen",
+      "observe": true,
+      "requires": [
+        "cc-film-commit"
+      ],
+      "steps": [
+        [
+          "ok",
+          1,
+          254,
+          7
+        ]
+      ],
+      "reads": [
+        [
+          "live-cells-sharpness-film-dr",
+          "009568a0",
+          32
+        ],
+        [
+          "settings-object-0-film",
+          "0096ec0c",
+          4
+        ]
+      ],
+      "capture": "cc-film-list-reopened"
+    },
+    {
+      "phase": "cc-film-stock",
+      "observe": true,
+      "requires": [
+        "cc-film-reopen"
+      ],
+      "steps": [
+        [
+          "cursor:up:0:8",
+          1,
+          254,
+          0
+        ],
+        [
+          "ok",
+          1,
+          5,
+          6
+        ]
+      ],
+      "reads": [
+        [
+          "live-cells-sharpness-film-dr",
+          "009568a0",
+          32
+        ],
+        [
+          "settings-object-0-film",
+          "0096ec0c",
+          4
+        ],
+        [
+          "settings-object-1-film",
+          "00970d64",
+          4
+        ],
+        [
+          "film-nibble",
+          "009c28a6",
+          1
+        ]
+      ],
+      "capture": "cc-after-stock-film"
+    },
+    {
+      "phase": "cc-stock-menu",
+      "requires": [
+        "cc-film-stock"
+      ],
+      "steps": [
+        [
+          "down",
+          1,
+          5,
+          7
+        ],
+        [
+          "down",
+          1,
+          5,
+          8
+        ],
+        [
+          "down",
+          1,
+          5,
+          9
+        ],
+        [
+          "down",
+          1,
+          5,
+          10
+        ],
+        [
+          "down",
+          1,
+          5,
+          11
+        ],
+        [
+          "ok",
+          1,
+          272,
+          2
+        ],
+        [
+          "back",
+          1,
+          5,
+          11
+        ]
+      ],
+      "capture": "cc-stock-highlight-before-unload"
+    }
+  ],
+  "after_unload": [
+    {
+      "phase": "cc-film-list-after-unload",
+      "observe": true,
+      "requires": [
+        "cc-stock-menu"
+      ],
+      "steps": [
+        [
+          "menu",
+          1,
+          5,
+          11
+        ],
+        [
+          "menu",
+          1,
+          5,
+          11
+        ],
+        [
+          "up",
+          1,
+          5,
+          10
+        ],
+        [
+          "up",
+          1,
+          5,
+          9
+        ],
+        [
+          "up",
+          1,
+          5,
+          8
+        ],
+        [
+          "up",
+          1,
+          5,
+          7
+        ],
+        [
+          "up",
+          1,
+          5,
+          6
+        ],
+        [
+          "ok",
+          1,
+          254,
+          0
+        ],
+        [
+          "down",
+          1,
+          254,
+          1
+        ],
+        [
+          "down",
+          1,
+          254,
+          2
+        ],
+        [
+          "down",
+          1,
+          254,
+          3
+        ],
+        [
+          "down",
+          1,
+          254,
+          4
+        ],
+        [
+          "down",
+          1,
+          254,
+          5
+        ],
+        [
+          "down",
+          1,
+          254,
+          6
+        ],
+        [
+          "down",
+          1,
+          254,
+          6
+        ]
+      ],
+      "reads": [
+        [
+          "live-cells-sharpness-film-dr",
+          "009568a0",
+          32
+        ],
+        [
+          "shooting-values",
+          "0061c340",
+          72
+        ],
+        [
+          "shooting-labels-window",
+          "0061c2b0",
+          144
+        ],
+        [
+          "raw-node",
+          "0078bd7c",
+          8
+        ]
+      ],
+      "capture": "cc-film-list-after-unload"
+    }
+  ]
+}

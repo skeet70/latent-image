@@ -8,12 +8,13 @@ module FujiAF.RamPush
   , callbackTablePointerAddress, callbackTableAddress, callbackStockWord
   , queryOutputAddress, configGateIndex, mailboxBytes
   , reviewedAllocationSize, installerAbiVersion, publicationCount, setupCount, activationCount
+  , PayloadKind(..), Payload(..), bankD3Payload, classicChromePayload, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
   , readRamPushManifest, parseRamPushManifest, readRamAllocState, readRetainedAllocation, readRamPushState
   , consumedMarkerPath, writeAllocStateFile, writeStateFile
   , ramAllocArguments, ramPushArguments, ramFreeArguments, ramUnloadArguments, ramRelinkArguments
   , ramAllocJournalCapBytes, ramPushJournalCapBytes, ramFreeJournalCapBytes, ramUnloadJournalCapBytes
   , validateReviewedContract, requireReviewedBytes, requireReviewedState, ReviewedContract(..), publicationContractDigest
-  , RamPushRelinker(..), runfilesRamPushRelinker, PinnedBuild(..)
+  , RamPushRelinker(..), runfilesRelinker, PinnedBuild(..)
   , AllowlistPolicy(..), OverrideReason(..), AllowlistOutcome(..), allowlistReceipt
   , pinnedReviewedManifest, withPinnedReviewedBuild, withPinnedReviewedBuildUsing, withRelinkedBuildUsing
   , runRamAlloc, runRamAllocWith, runRamPush, runRamPushWith, runRamRelink
@@ -137,11 +138,97 @@ cacheCleanInvalidate = Address 0x0061c4f4
 cacheControl = Address 0x0061c490
 
 -- | The source identity and publication contract digest a manifest must carry.
--- The camera binary's value is generated from transport/ram-push-review.json.
+-- The camera binary's values are generated from transport/ram-push-review.json
+-- and transport/ram-push-cc-review.json.
 data ReviewedContract = ReviewedContract
   { reviewedSourceIdentity :: [(String,String)]
   , reviewedPublicationContractDigest :: String
   }
+
+data PayloadKind = RecipeBankD3 | ClassicChrome deriving (Eq, Show)
+
+-- | What a payload kind's relink links, and the allocation, ABI word, counts
+-- and entries its installer has. A runtime's allocation size names its kind.
+data Payload = Payload
+  { payloadKind :: PayloadKind
+  , payloadAllocationSize :: Int
+  , payloadAbiVersion :: Word32
+  , payloadSetupCount :: Int
+  , payloadActivationCount :: Int
+  , payloadInstallerStart :: Word32 -> Word32
+  , payloadRelinkScript :: FilePath
+  , payloadRelinkBuilder :: FilePath
+  , payloadBuildRoot :: FilePath
+  , payloadRelinkInputs :: [(String,FilePath)]
+  , payloadLinksBank :: Bool
+  }
+
+bankD3Payload, classicChromePayload :: Payload
+bankD3Payload = Payload
+  { payloadKind = RecipeBankD3
+  , payloadAllocationSize = reviewedAllocationSize
+  , payloadAbiVersion = installerAbiVersion
+  , payloadSetupCount = setupCount
+  , payloadActivationCount = activationCount
+  , payloadInstallerStart = \base ->
+      let candidate = (base .&. 0xffff0000) .|. 0xb784
+          nameRecord = if toInteger candidate < toInteger base + 0x9800 then candidate + 0x10000 else candidate
+      in (nameRecord + 14*66 + 31) .&. 0xffffffe0
+  , payloadRelinkScript = "build-recipe-bank-ram.sh"
+  , payloadRelinkBuilder = "build-recipe-bank"
+  , payloadBuildRoot = "private-data/analysis/x-m1-1.50/ram-push"
+  , payloadRelinkInputs =
+      [ ("SPEC","private-data/analysis/x-m1-1.50/recipes/bank-spec.json")
+      , ("RC0_ID4","private-data/analysis/x-m1-1.50/update/prefix/id4-patched.bin")
+      , ("RC0_ID5","private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin")
+      , ("RC0_PLAIN","private-data/analysis/x-m1-1.50/lz/plain-01100000.bin")
+      ]
+  , payloadLinksBank = True
+  }
+-- | reports/classic-chrome-patch.md section 8.2: 84 setup and 47 activation
+-- publications; menu/classic_chrome_ram.S takes 0x184 bytes at the base.
+classicChromePayload = Payload
+  { payloadKind = ClassicChrome
+  , payloadAllocationSize = 0x1560
+  , payloadAbiVersion = 3
+  , payloadSetupCount = 84
+  , payloadActivationCount = 47
+  , payloadInstallerStart = \base -> (base + 0x184 + 31) .&. 0xffffffe0
+  , payloadRelinkScript = "build-classic-chrome-ram.sh"
+  , payloadRelinkBuilder = "build-classic-chrome-ram"
+  , payloadBuildRoot = "private-data/analysis/classic-chrome-patch/ram-push"
+  , payloadRelinkInputs =
+      [ ("CC_PARAMETERS","private-data/analysis/classic-chrome/candidate.json")
+      , ("RC0_ID4","private-data/analysis/x-m1-1.50/update/prefix/id4-patched.bin")
+      , ("RC0_ID5","private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin")
+      , ("RC0_PLAIN","private-data/analysis/x-m1-1.50/lz/plain-01100000.bin")
+      , ("RC0_ID2","private-data/analysis/x-m1-1.50/filmsim/id2-00130000.bin")
+      , ("CC_ID4","private-data/analysis/classic-chrome-patch/candidate-build-1/patched-id4.bin")
+      , ("CC_ID5","private-data/analysis/classic-chrome-patch/candidate-build-1/patched-id5.bin")
+      , ("CC_PLAIN","private-data/analysis/classic-chrome-patch/candidate-build-1/patched-plain.bin")
+      ]
+  , payloadLinksBank = False
+  }
+
+payloads :: [Payload]
+payloads = [bankD3Payload, classicChromePayload]
+
+payloadOfSize :: Int -> Maybe Payload
+payloadOfSize size = case filter ((== size) . payloadAllocationSize) payloads of
+  [payload] -> Just payload
+  _ -> Nothing
+
+requirePayload :: Int -> IO Payload
+requirePayload size = maybe (P.reject ("allocation size "++show size++" is no RAM-push payload's extent")) pure (payloadOfSize size)
+
+payloadPublicationCount :: Payload -> Int
+payloadPublicationCount payload = payloadSetupCount payload + payloadActivationCount payload
+
+-- | The installer's three entries, at fixed offsets from its start.
+payloadEntries :: Payload -> Address -> RamPushEntries
+payloadEntries payload (Address base) =
+  let install = payloadInstallerStart payload base + 0x600
+  in RamPushEntries (Address install) (Address (install+0x238)) (Address (install+0x264))
 
 configGateIndex, mailboxBytes, reviewedAllocationSize :: Int
 configGateIndex = 0xf7
@@ -245,10 +332,10 @@ parseEntries value = do
                  <*> (Address <$> hex32 (field value "rollback"))
                  <*> (Address <$> hex32 (field value "status"))
 
-parsePublication :: Value -> IO Publication
-parsePublication value = do
+parsePublication :: Int -> Value -> IO Publication
+parsePublication count value = do
   closed value ["address","core","index","new","old","phase"]
-  Publication <$> integer (field value "index") 0 (publicationCount-1)
+  Publication <$> integer (field value "index") 0 (count-1)
               <*> phaseValue (field value "phase")
               <*> (Address <$> hex32 (field value "address"))
               <*> (WordValue <$> hex32 (field value "old"))
@@ -266,9 +353,13 @@ validateManifest manifest = do
       entryAddresses = map unAddress [installEntry entries,rollbackEntry entries,statusEntry entries]
   require (B.length (runtimeBytes manifest) == size) "runtime.bin length differs from manifest size"
   require (sha256 (runtimeBytes manifest) == runtimeDigest manifest) "runtime.bin SHA256 differs from manifest"
-  require (base .&. 7 == 0 && size == reviewedAllocationSize && end <= 0x100000000) "manifest allocation range is invalid"
-  require (length publications == publicationCount && sort (map publicationIndex publications) == [0..publicationCount-1]) ("manifest publication indexes must be a permutation of 0.."++show (publicationCount-1))
-  require (map publicationPhase publications == replicate setupCount Setup ++ replicate activationCount Activation) ("manifest publication phases must be "++show setupCount++" setup then "++show activationCount++" activation")
+  payload <- requirePayload size
+  let count = payloadPublicationCount payload
+      setups = payloadSetupCount payload
+      activations = payloadActivationCount payload
+  require (base .&. 7 == 0 && end <= 0x100000000) "manifest allocation range is invalid"
+  require (length publications == count && sort (map publicationIndex publications) == [0..count-1]) ("manifest publication indexes must be a permutation of 0.."++show (count-1))
+  require (map publicationPhase publications == replicate setups Setup ++ replicate activations Activation) ("manifest publication phases must be "++show setups++" setup then "++show activations++" activation")
   require (length addresses == length (unique addresses) && all (\address -> address .&. 3 == 0) addresses) "manifest publication addresses must be distinct aligned words"
   require (all (\address -> toInteger base <= toInteger address && toInteger address + 4 <= end) entryAddresses) "manifest entries must lie inside runtime.bin"
   require (all (\address -> address .&. 3 == 0) entryAddresses && length (unique entryAddresses) == 3) "manifest entries must be distinct aligned words"
@@ -285,7 +376,8 @@ parseRamPushManifest path document runtime = do
   closed value ["base","entry","publications","runtime_sha256","schema","size","source_identity"]
   _ <- integer (field value "schema") 1 1
   Address base <- Address <$> hex32 (field value "base")
-  size <- integer (field value "size") reviewedAllocationSize reviewedAllocationSize
+  size <- integer (field value "size") (minimum (map payloadAllocationSize payloads)) (maximum (map payloadAllocationSize payloads))
+  payload <- requirePayload size
   digest <- text (field value "runtime_sha256") 64
   require (hexDigest digest) "runtime_sha256 must be lowercase SHA256"
   identity <- case field value "source_identity" of
@@ -298,7 +390,7 @@ parseRamPushManifest path document runtime = do
         pure (name,hash)
     _ -> P.reject "source_identity object required"
   entries <- parseEntries (field value "entry")
-  publications <- array (field value "publications") publicationCount publicationCount >>= mapM parsePublication
+  publications <- array (field value "publications") (payloadPublicationCount payload) (payloadPublicationCount payload) >>= mapM (parsePublication (payloadPublicationCount payload))
   validateManifest (RamPushManifest path (takeDirectory path </> "runtime.bin") (sha256 document) identity (Address base) size digest runtime entries publications)
 
 readRamPushManifest :: FilePath -> IO RamPushManifest
@@ -328,14 +420,6 @@ publicationContractValue publication = Object (M.fromList
   , ("old", String (T.pack (hexWord (unWordValue (publicationOld publication)))))
   , ("core", String (case publicationCore publication of Cpu0 -> "cpu0"; Cpu1 -> "cpu1"; Both -> "both"; UnknownCore -> "unknown")) ])
 
-reviewedEntries :: Address -> RamPushEntries
-reviewedEntries (Address base) =
-  let candidate = (base .&. 0xffff0000) .|. 0xb784
-      nameRecord = if toInteger candidate < toInteger base + 0x9800 then candidate + 0x10000 else candidate
-      installerStart = (nameRecord + 14*66 + 31) .&. 0xffffffe0
-      install = installerStart + 0x600
-  in RamPushEntries (Address install) (Address (install+0x238)) (Address (install+0x264))
-
 publicationContractDigest :: [Publication] -> String
 publicationContractDigest publications =
   sha256 (encodeCanonical (Array (V.fromList (map publicationContractValue publications))))
@@ -344,7 +428,8 @@ validateReviewedContract :: ReviewedContract -> RamPushManifest -> IO ()
 validateReviewedContract contract manifest = do
   require (sort (sourceIdentity manifest) == sort (reviewedSourceIdentity contract)) "manifest source identity differs from the compiled reviewed contract"
   require (publicationContractDigest (manifestPublications manifest) == reviewedPublicationContractDigest contract) "manifest publication contract differs from the compiled reviewed contract"
-  require (manifestEntries manifest == reviewedEntries (allocationBase manifest)) "manifest entry offsets differ from the compiled reviewed layout"
+  payload <- requirePayload (allocationSize manifest)
+  require (manifestEntries manifest == payloadEntries payload (allocationBase manifest)) "manifest entry offsets differ from the compiled reviewed layout"
 
 requireReviewedBytes :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> IO ()
 requireReviewedBytes suppliedManifest suppliedRuntime reviewedManifest reviewedRuntime = do
@@ -404,7 +489,8 @@ parseAllocState document = do
   _ <- integer (field value "schema") 1 1
   require (field value "kind" == String "xm1-ram-alloc-state") "RAM allocation state kind mismatch"
   base <- Address <$> hex32 (field value "base")
-  size <- integer (field value "size") reviewedAllocationSize reviewedAllocationSize
+  size <- integer (field value "size") (minimum (map payloadAllocationSize payloads)) (maximum (map payloadAllocationSize payloads))
+  _ <- requirePayload size
   cpu0 <- hex32 (field value "cpu0")
   table <- Address <$> hex32 (field value "table_pointer")
   slot <- WordValue <$> hex32 (field value "slot_old")
@@ -460,9 +546,10 @@ parseState document = do
   runtimeHash <- text (field value "runtime_sha256") 64
   require (hexDigest manifestHash && hexDigest runtimeHash) "state SHA256 is invalid"
   base <- Address <$> hex32 (field value "base")
-  size <- integer (field value "size") reviewedAllocationSize reviewedAllocationSize
+  size <- integer (field value "size") (minimum (map payloadAllocationSize payloads)) (maximum (map payloadAllocationSize payloads))
+  payload <- requirePayload size
   entries <- parseEntries (field value "entry")
-  publications <- array (field value "publications") publicationCount publicationCount >>= mapM parsePublication
+  publications <- array (field value "publications") (payloadPublicationCount payload) (payloadPublicationCount payload) >>= mapM (parsePublication (payloadPublicationCount payload))
   slot <- WordValue <$> hex32 (field value "slot_old")
   original <- parseHexBytes (field value "bootstrap") 32
   require (original == bootstrapBytes) "state bootstrap differs from the internally built allocator bootstrap"
@@ -485,10 +572,10 @@ parseSizeToken value = readMaybe value
 ramAllocArguments :: [String] -> Maybe (Int,Maybe FilePath)
 ramAllocArguments [size] = do
   bytes <- parseSizeToken size
-  if bytes == reviewedAllocationSize then Just (bytes,Nothing) else Nothing
+  if any ((== bytes) . payloadAllocationSize) payloads then Just (bytes,Nothing) else Nothing
 ramAllocArguments [size,out] | not (flag out) = do
   bytes <- parseSizeToken size
-  if bytes == reviewedAllocationSize then Just (bytes,Just out) else Nothing
+  if any ((== bytes) . payloadAllocationSize) payloads then Just (bytes,Just out) else Nothing
 ramAllocArguments _ = Nothing
 
 ramPushArguments :: [String] -> Maybe (FilePath,FilePath,Maybe FilePath)
@@ -535,8 +622,9 @@ exchangeTransfers exchange = case exchange of
     input = P.BulkIn 0x8f
     request out replyBytes = [control, P.BulkOut 15 (replicate out 0xff), control, input replyBytes]
 
-chunkedExchanges :: (Int -> [Exchange]) -> [Exchange]
-chunkedExchanges exchanges = concat [exchanges (min 248 (reviewedAllocationSize-offset)) | offset <- [0,248..reviewedAllocationSize-1]]
+chunkedExchanges :: Payload -> (Int -> [Exchange]) -> [Exchange]
+chunkedExchanges payload exchanges = concat [exchanges (min 248 (size-offset)) | offset <- [0,248..size-1]]
+  where size = payloadAllocationSize payload
 
 verifiedWriteExchanges :: Int -> [Exchange]
 verifiedWriteExchanges count = [WriteExchange count, ReadExchange count]
@@ -544,36 +632,37 @@ verifiedWriteExchanges count = [WriteExchange count, ReadExchange count]
 sessionExchanges :: [Exchange] -> [Exchange]
 sessionExchanges body = OpenExchange : IdentityExchange : body ++ [CloseExchange]
 
-bootstrapExchanges, retargetExchanges, outputCallExchanges, publicationReadExchanges :: [Exchange]
+bootstrapExchanges, retargetExchanges, outputCallExchanges :: [Exchange]
 bootstrapExchanges = ReadExchange 8 : replicate 6 PaddedWriteExchange ++ replicate 3 (PaddedQueryExchange 32) ++ [ReadExchange 4]
 retargetExchanges = verifiedWriteExchanges 4 ++ verifiedWriteExchanges 4 ++ [QueryExchange 32]
 outputCallExchanges = retargetExchanges ++ [ReadExchange 8, ReadExchange mailboxBytes]
-publicationReadExchanges = replicate publicationCount (ReadExchange 4)
+publicationReadExchanges :: Payload -> [Exchange]
+publicationReadExchanges payload = replicate (payloadPublicationCount payload) (ReadExchange 4)
 
 -- The note lines, the stop record and one failing transfer's outcome.
 ramJournalMarginBytes :: Int
 ramJournalMarginBytes = 65536
 
 -- Each cap is the margin plus the acquisition stages plus every transfer of
--- the operation's completed path at the reviewed size.
+-- the operation's completed path at the payload's allocation size.
 ramJournalCapFor :: [Exchange] -> Int
 ramJournalCapFor exchanges = ramJournalMarginBytes
   + sum (map stageJournalBytes ["init","list","open","claim"])
   + sum (map txJournalBytes (concatMap exchangeTransfers (sessionExchanges exchanges)))
 
-ramAllocJournalCapBytes, ramPushJournalCapBytes, ramFreeJournalCapBytes, ramUnloadJournalCapBytes :: Int
-ramAllocJournalCapBytes = ramJournalCapFor $
+ramAllocJournalCapBytes, ramPushJournalCapBytes, ramFreeJournalCapBytes, ramUnloadJournalCapBytes :: Payload -> Int
+ramAllocJournalCapBytes payload = ramJournalCapFor $
   replicate 2 (ReadExchange 4) ++ bootstrapExchanges ++ [ReadExchange 8] ++ verifiedWriteExchanges 4
-  ++ bootstrapExchanges ++ [ReadExchange 4] ++ chunkedExchanges (pure . ReadExchange)
-ramPushJournalCapBytes = ramJournalCapFor $
-  replicate 2 (ReadExchange 4) ++ publicationReadExchanges ++ chunkedExchanges (pure . ReadExchange)
-  ++ chunkedExchanges verifiedWriteExchanges ++ retargetExchanges ++ retargetExchanges ++ outputCallExchanges
-  ++ publicationReadExchanges
-ramFreeJournalCapBytes = ramJournalCapFor $
-  replicate 2 (ReadExchange 4) ++ chunkedExchanges (pure . ReadExchange)
+  ++ bootstrapExchanges ++ [ReadExchange 4] ++ chunkedExchanges payload (pure . ReadExchange)
+ramPushJournalCapBytes payload = ramJournalCapFor $
+  replicate 2 (ReadExchange 4) ++ publicationReadExchanges payload ++ chunkedExchanges payload (pure . ReadExchange)
+  ++ chunkedExchanges payload verifiedWriteExchanges ++ retargetExchanges ++ retargetExchanges ++ outputCallExchanges
+  ++ publicationReadExchanges payload
+ramFreeJournalCapBytes payload = ramJournalCapFor $
+  replicate 2 (ReadExchange 4) ++ chunkedExchanges payload (pure . ReadExchange)
   ++ verifiedWriteExchanges (B.length consumedAllocationTag) ++ bootstrapExchanges ++ [ReadExchange 4]
-ramUnloadJournalCapBytes = ramJournalCapFor $
-  replicate 2 (ReadExchange 4) ++ publicationReadExchanges ++ outputCallExchanges ++ publicationReadExchanges ++ [ReadExchange 4]
+ramUnloadJournalCapBytes payload = ramJournalCapFor $
+  replicate 2 (ReadExchange 4) ++ publicationReadExchanges payload ++ outputCallExchanges ++ publicationReadExchanges payload ++ [ReadExchange 4]
 
 ramFrame :: Int -> Word32 -> [Word8] -> [Word8]
 ramFrame function address payload = concatMap word32le [0x200001,0,0,0,fromIntegral function,0,0,address,fromIntegral (B.length (B.pack payload))] ++ payload
@@ -780,20 +869,21 @@ uploadRuntime live manifest = forM_ [0,248..allocationSize manifest-1] $ \offset
 nonceFor :: RamPushManifest -> Word32
 nonceFor manifest = fromWord32le (take 4 (B.unpack (C.pack (manifestDigest manifest)))) .&. 0x00ffffff
 
-mailboxStatus :: B.ByteString -> Word32 -> Word32 -> IO Bool
-mailboxStatus mailbox nonce operation = do
+mailboxStatus :: Payload -> B.ByteString -> Word32 -> Word32 -> IO Bool
+mailboxStatus payload mailbox nonce operation = do
   require (B.length mailbox == mailboxBytes) "installer mailbox length mismatch"
   let word offset = fromWord32le (drop offset (B.unpack mailbox))
-  require (word 0 == 0x31504d52 && word 4 == installerAbiVersion && word 8 == nonce && word 12 == operation) "installer mailbox identity mismatch"
+      count = fromIntegral (payloadPublicationCount payload)
+  require (word 0 == 0x31504d52 && word 4 == payloadAbiVersion payload && word 8 == nonce && word 12 == operation) "installer mailbox identity mismatch"
   if word 16 == 0xfffffff9
     then pure False
     else do
       when (word 16 == 0xfffffff8) $
         P.reject "installer completion timed out after rendezvous; publication state is uncertain; do not use camera; power it off now"
-      require (word 16 == 0 && word 20 == fromIntegral publicationCount) "installer refused or did not validate all publications"
-      when (operation == 1) (require (word 24 == fromIntegral setupCount && word 28 == fromIntegral activationCount && word 32 == 0) "installer publication counts mismatch")
-      when (operation == 2) (require (word 32 == fromIntegral publicationCount) "rollback restore count mismatch")
-      require (word 36 == 0x4003 && word 40 == nonce && word 44 /= word 36 && word 48 == 0 && word 52 == fromIntegral publicationCount) "installer core or peer report mismatch"
+      require (word 16 == 0 && word 20 == count) "installer refused or did not validate all publications"
+      when (operation == 1) (require (word 24 == fromIntegral (payloadSetupCount payload) && word 28 == fromIntegral (payloadActivationCount payload) && word 32 == 0) "installer publication counts mismatch")
+      when (operation == 2) (require (word 32 == count) "rollback restore count mismatch")
+      require (word 36 == 0x4003 && word 40 == nonce && word 44 /= word 36 && word 48 == 0 && word 52 == count) "installer core or peer report mismatch"
       require (word 56 == rendezvousSpinBound && word 60 < rendezvousSpinBound && word 76 < rendezvousSpinBound) "installer rendezvous spin report mismatch"
       require (word 64 == nonce && word 68 == nonce && word 72 == nonce) "installer rendezvous report mismatch"
       pure True
@@ -810,10 +900,10 @@ runRamAlloc = runRamAllocWith xm1PeerCacheAvailability
 runRamAllocWith :: PeerCacheAvailability -> Int -> Clock -> UsbApi -> FilePath -> IO RamAllocOutcome
 runRamAllocWith availability size clock api directory
   | availability == PeerCacheUnbound = pure (RamAllocRefused "X-M1 peer-core cache binding is unbound; no camera write sent")
-  | size /= reviewedAllocationSize = pure (RamAllocRefused ("allocation size must equal the reviewed "++hexWord (fromIntegral reviewedAllocationSize)++"-byte extent"))
-  | otherwise = do
+  | Nothing <- payloadOfSize size = pure (RamAllocRefused ("allocation size must equal a payload's extent: "++unwords [hexWord (fromIntegral (payloadAllocationSize p)) | p <- payloads]))
+  | Just payload <- payloadOfSize size = do
       let chunks = (size+247) `div` 248
-          cap = ramAllocJournalCapBytes
+          cap = ramAllocJournalCapBytes payload
           deadline = transferTimeoutMs*(200 + 4*chunks)
       session <- newSession clock api directory cap deadline
       held <- newHeld
@@ -858,42 +948,41 @@ writeStateFile directory state = do
   writePrivateBytes path (encodeCanonical (stateValue state) <> C.pack "\n")
   pure path
 
-reviewedBuildRoot :: FilePath
-reviewedBuildRoot = "private-data/analysis/x-m1-1.50/ram-push"
-
 -- | Workspace root: BUILD_WORKSPACE_DIRECTORY under `bazel run`, else the
 -- current directory.
 reviewedWorkspace :: IO FilePath
 reviewedWorkspace = lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= maybe getCurrentDirectory pure
 
 -- | Passes the workspace root and the build directory relative to it.
-withReviewedBuildDirectory :: (FilePath -> FilePath -> IO a) -> IO a
-withReviewedBuildDirectory action = do
+withReviewedBuildDirectory :: Payload -> (FilePath -> FilePath -> IO a) -> IO a
+withReviewedBuildDirectory payload action = do
   root <- reviewedWorkspace >>= makeAbsolute
   bracket (create root) (removeDirectoryRecursive . (root </>)) (action root)
   where
     create root = do
-      (path,temporaryHandle) <- openTempFile (root </> reviewedBuildRoot) ".transport-auth-"
+      (path,temporaryHandle) <- openTempFile (root </> payloadBuildRoot payload) ".transport-auth-"
       hClose temporaryHandle
       removeFile path
       createDirectory path
       setFileMode path 0o700
       pure (makeRelative root path)
 
--- | The relink script, builder and toolchain a pinned build runs.
+-- | The relink script, builder and toolchain a pinned build runs, and the
+-- payload they build.
 data RamPushRelinker = RamPushRelinker
   { relinkerScript :: FilePath
   , relinkerBuilder :: FilePath
   , relinkerToolchain :: RamPushToolchain
+  , relinkerPayload :: Payload
   }
 
 -- | From the running executable's runfiles, which `//transport:camera-core`
 -- populates in every binary linking it.
-runfilesRamPushRelinker :: IO RamPushRelinker
-runfilesRamPushRelinker = do
+runfilesRelinker :: Payload -> IO RamPushRelinker
+runfilesRelinker payload = do
   executable <- getExecutablePath
   let firmware = (executable ++ ".runfiles") </> "_main" </> "host" </> "firmware"
-      relinker = RamPushRelinker (firmware </> "build-recipe-bank-ram.sh") (firmware </> "build-recipe-bank") ramPushToolchain
+      relinker = RamPushRelinker (firmware </> payloadRelinkScript payload) (firmware </> payloadRelinkBuilder payload) ramPushToolchain payload
   forM_ [relinkerScript relinker, relinkerBuilder relinker] $ \path -> do
     present <- doesFileExist path
     require present ("RAM-push relinker is missing from this binary's runfiles: "++path)
@@ -914,7 +1003,8 @@ data AllowlistPolicy = EnforceAllowlist | OverrideAllowlist OverrideReason deriv
 -- | Why a failing bank build was let through.
 newtype OverrideReason = OverrideReason String deriving (Eq, Show)
 
-data AllowlistOutcome = AllowlistPassed Report | AllowlistOverridden OverrideReason Report
+-- | NoBankCode: the payload links no recipe-bank object, so no bank ELF is checked.
+data AllowlistOutcome = AllowlistPassed Report | AllowlistOverridden OverrideReason Report | NoBankCode
 
 -- | The outcome as a receipt object: the check's report, with an overridden
 -- result carrying its reason.
@@ -923,6 +1013,7 @@ allowlistReceipt (AllowlistPassed report) = reportValue report
 allowlistReceipt (AllowlistOverridden (OverrideReason reason) report) = case reportValue report of
   Object object -> Object (M.insert "result" (String "overridden") (M.insert "override_reason" (String (T.pack reason)) object))
   other -> other
+allowlistReceipt NoBankCode = Object (M.fromList [("result", String "not-applicable"), ("reason", String "the payload links no recipe-bank object")])
 
 bankAllowlistPath :: FilePath
 bankAllowlistPath = "menu/recipe_bank_allowlist.json"
@@ -945,12 +1036,12 @@ checkRelinkedBank policy root output manifest = do
 
 -- | Runs the pinned builder at `base` and returns its manifest after
 -- 'validateReviewedContract'.
-pinnedReviewedManifest :: ReviewedContract -> Address -> IO RamPushManifest
-pinnedReviewedManifest contract base = withPinnedReviewedBuild contract base (pure . pinnedManifest)
+pinnedReviewedManifest :: ReviewedContract -> Payload -> Address -> IO RamPushManifest
+pinnedReviewedManifest contract payload base = withPinnedReviewedBuild contract payload base (pure . pinnedManifest)
 
-withPinnedReviewedBuild :: ReviewedContract -> Address -> (PinnedBuild -> IO a) -> IO a
-withPinnedReviewedBuild contract base action = do
-  relinker <- runfilesRamPushRelinker
+withPinnedReviewedBuild :: ReviewedContract -> Payload -> Address -> (PinnedBuild -> IO a) -> IO a
+withPinnedReviewedBuild contract payload base action = do
+  relinker <- runfilesRelinker payload
   withPinnedReviewedBuildUsing contract relinker base action
 
 withPinnedReviewedBuildUsing :: ReviewedContract -> RamPushRelinker -> Address -> (PinnedBuild -> IO a) -> IO a
@@ -959,9 +1050,9 @@ withPinnedReviewedBuildUsing contract relinker base action = withRelinkedBuildUs
   action built
 
 -- | The relinker's output without 'validateReviewedContract', after the bank
--- ELF allowlist check under `policy`.
+-- ELF allowlist check under `policy` for a payload that links the bank.
 withRelinkedBuildUsing :: RamPushRelinker -> AllowlistPolicy -> Address -> (PinnedBuild -> IO a) -> IO a
-withRelinkedBuildUsing relinker policy base action = withReviewedBuildDirectory $ \root directory -> do
+withRelinkedBuildUsing relinker policy base action = withReviewedBuildDirectory payload $ \root directory -> do
   let tools = relinkerToolchain relinker
       environment =
         [ ("PATH",toolCoreutilsBin tools)
@@ -971,11 +1062,7 @@ withRelinkedBuildUsing relinker policy base action = withReviewedBuildDirectory 
         , ("RAM_PUSH_OBJCOPY",toolObjcopy tools)
         , ("RAM_PUSH_NM",toolNm tools)
         , ("RAM_PUSH_OBJDUMP",toolObjdump tools)
-        , ("SPEC","private-data/analysis/x-m1-1.50/recipes/bank-spec.json")
-        , ("RC0_ID4","private-data/analysis/x-m1-1.50/update/prefix/id4-patched.bin")
-        , ("RC0_ID5","private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin")
-        , ("RC0_PLAIN","private-data/analysis/x-m1-1.50/lz/plain-01100000.bin")
-        ]
+        ] ++ payloadRelinkInputs payload
       command = (proc (toolBash tools) [relinkerScript relinker,hexWord (unAddress base),directory])
         { env = Just environment, cwd = Just root }
   (exitCode,_,errors) <- readCreateProcessWithExitCode command ""
@@ -986,8 +1073,10 @@ withRelinkedBuildUsing relinker policy base action = withReviewedBuildDirectory 
   reviewedDocument <- privateRegular "reviewed RAM-push manifest" reviewedManifestPath (512*1024)
   reviewedRuntime <- privateRegular "reviewed RAM-push runtime" reviewedRuntimePath (512*1024)
   reviewed <- parseRamPushManifest reviewedManifestPath reviewedDocument reviewedRuntime
-  allowlist <- checkRelinkedBank policy root output reviewed
+  require (allocationSize reviewed == payloadAllocationSize payload) "relinked manifest is not the relinker's payload"
+  allowlist <- if payloadLinksBank payload then checkRelinkedBank policy root output reviewed else pure NoBankCode
   action (PinnedBuild reviewed reviewedDocument reviewedRuntime output allowlist)
+  where payload = relinkerPayload relinker
 
 authenticateReviewedManifest :: ReviewedContract -> RamAllocState -> RamPushManifest -> IO RamPushManifest
 authenticateReviewedManifest contract allocation supplied = do
@@ -995,15 +1084,17 @@ authenticateReviewedManifest contract allocation supplied = do
   validateReviewedContract contract supplied
   suppliedDocument <- privateRegular "supplied RAM-push manifest" (manifestPath supplied) (512*1024)
   suppliedRuntime <- privateRegular "supplied RAM-push runtime" (runtimePath supplied) (512*1024)
-  withPinnedReviewedBuild contract (allocBase allocation) $ \pinned -> do
+  payload <- requirePayload (allocSize allocation)
+  withPinnedReviewedBuild contract payload (allocBase allocation) $ \pinned -> do
     requireReviewedBytes suppliedDocument suppliedRuntime (pinnedDocument pinned) (pinnedRuntime pinned)
     pure supplied
 
 authenticateReviewedState :: ReviewedContract -> RamPushState -> IO ()
 authenticateReviewedState contract state = do
   require (publicationContractDigest (statePublications state) == reviewedPublicationContractDigest contract) "installed state publication contract differs from the compiled reviewed contract"
-  require (stateEntries state == reviewedEntries (stateBase state)) "installed state entry offsets differ from the compiled reviewed layout"
-  withPinnedReviewedBuild contract (stateBase state) $ \pinned ->
+  payload <- requirePayload (stateSize state)
+  require (stateEntries state == payloadEntries payload (stateBase state)) "installed state entry offsets differ from the compiled reviewed layout"
+  withPinnedReviewedBuild contract payload (stateBase state) $ \pinned ->
     requireReviewedState state (pinnedManifest pinned)
 
 -- | Writes the pinned build at the retained base into `directory` as
@@ -1011,7 +1102,8 @@ authenticateReviewedState contract state = do
 runRamRelink :: ReviewedContract -> RetainedAllocation -> FilePath -> IO FilePath
 runRamRelink contract retained directory = do
   requireUnconsumed retained
-  withPinnedReviewedBuild contract (allocBase (retainedAllocation retained)) $ \pinned -> do
+  payload <- requirePayload (allocSize (retainedAllocation retained))
+  withPinnedReviewedBuild contract payload (allocBase (retainedAllocation retained)) $ \pinned -> do
     let path = directory </> "ram-push-manifest.json"
     writePrivateBytes (directory </> "runtime.bin") (pinnedRuntime pinned)
     writePrivateBytes path (pinnedDocument pinned)
@@ -1028,14 +1120,15 @@ runRamPush contract retained supplied clock api directory = do
 runRamPushWith :: PeerCacheAvailability -> RamAllocState -> RamPushManifest -> Clock -> UsbApi -> FilePath -> IO RamPushOutcome
 runRamPushWith availability allocation manifest clock api directory
   | availability == PeerCacheUnbound = pure (RamPushRefused "X-M1 peer-core cache binding is unbound; no camera write sent")
-  | allocSize allocation /= reviewedAllocationSize = pure (RamPushRefused ("retained allocation size differs from the reviewed "++hexWord (fromIntegral reviewedAllocationSize)++"-byte extent"))
-  | allocationSize manifest /= reviewedAllocationSize = pure (RamPushRefused ("manifest size differs from the reviewed "++hexWord (fromIntegral reviewedAllocationSize)++"-byte extent"))
+  | Nothing <- payloadOfSize (allocSize allocation) = pure (RamPushRefused ("retained allocation size "++show (allocSize allocation)++" is no payload's extent"))
+  | allocationSize manifest /= allocSize allocation = pure (RamPushRefused "manifest size differs from the retained allocation's extent")
   | allocationBase manifest /= allocBase allocation = pure (RamPushRefused "manifest base differs from the retained allocation")
-  | otherwise = do
-      let cap = ramPushJournalCapBytes
+  | Just payload <- payloadOfSize (allocSize allocation) = do
+      let cap = ramPushJournalCapBytes payload
+          count = payloadPublicationCount payload
           runtimeChunks = (allocationSize manifest+247) `div` 248
           allocationChunks = (allocSize allocation+247) `div` 248
-          deadline = transferTimeoutMs * (200 + 2*publicationCount + 8*runtimeChunks + 4*allocationChunks)
+          deadline = transferTimeoutMs * (200 + 2*count + 8*runtimeChunks + 4*allocationChunks)
       session <- newSession clock api directory cap deadline
       held <- newHeld
       active <- newIORef False
@@ -1049,14 +1142,14 @@ runRamPushWith availability allocation manifest clock api directory
         require (slot == allocSlotWord allocation) "callback slot differs from allocation state"
         guard <- allocationDigest live (allocBase allocation) (allocSize allocation)
         require (guard == allocGuard allocation) "retained allocation guard changed before upload"
-        note session "ram-push-preflight" ("allocation state base and size, C0 identity, f7, table, slot and "++show publicationCount++" old words matched;writes=0")
+        note session "ram-push-preflight" ("allocation state base and size, C0 identity, f7, table, slot and "++show count++" old words matched;writes=0")
         note session "allocation-owned" ("base="++hexWord (unAddress (allocBase allocation))++";size="++show (allocSize allocation))
         writeIORef active True
         uploadRuntime live manifest
         synchronizeUploaded live
         nonce <- pure (nonceFor manifest)
         mailbox <- retargetOutputCall live (allocationBase manifest) (allocationSize manifest) (unAddress (installEntry (manifestEntries manifest))) nonce
-        installed <- mailboxStatus mailbox nonce 1
+        installed <- mailboxStatus payload mailbox nonce 1
         unless installed $ do
           writeIORef active False
           P.reject "installer refused before publication: CPU1 park rendezvous timed out"
@@ -1064,7 +1157,7 @@ runRamPushWith availability allocation manifest clock api directory
           current <- wordAt <$> readMemory live (publicationAddress publication) 4
           require (current == unWordValue (publicationNew publication)) ("installed word readback mismatch at "++hexWord (unAddress (publicationAddress publication)))
         statePath <- writeStateFile directory (RamPushState (manifestDigest manifest) (runtimeDigest manifest) (allocBase allocation) (allocSize allocation) (manifestEntries manifest) (manifestPublications manifest) slot bootstrapBytes nonce)
-        note session "ram-push-installed" ("state="++statePath++";publications="++show publicationCount)
+        note session "ram-push-installed" ("state="++statePath++";publications="++show count)
         writeIORef active False
         pure statePath
       isActive <- readIORef active
@@ -1117,10 +1210,10 @@ runRamFree retained clock api directory = do
 runRamFreeWith :: PeerCacheAvailability -> RamAllocState -> Clock -> UsbApi -> FilePath -> IO RamFreeOutcome
 runRamFreeWith availability allocation clock api directory
   | availability == PeerCacheUnbound = pure (RamFreeRefused "X-M1 peer-core cache binding is unbound; no camera write sent")
-  | allocSize allocation /= reviewedAllocationSize = pure (RamFreeRefused ("retained allocation size differs from the reviewed "++hexWord (fromIntegral reviewedAllocationSize)++"-byte extent"))
-  | otherwise = do
+  | Nothing <- payloadOfSize (allocSize allocation) = pure (RamFreeRefused ("retained allocation size "++show (allocSize allocation)++" is no payload's extent"))
+  | Just payload <- payloadOfSize (allocSize allocation) = do
       let chunks = (allocSize allocation+247) `div` 248
-          cap = ramFreeJournalCapBytes
+          cap = ramFreeJournalCapBytes payload
           deadline = transferTimeoutMs*(200 + 4*chunks)
       session <- newSession clock api directory cap deadline
       held <- newHeld
@@ -1167,9 +1260,10 @@ runRamUnload contract state clock api directory = do
 runRamUnloadWith :: PeerCacheAvailability -> RamPushState -> Clock -> UsbApi -> FilePath -> IO RamUnloadOutcome
 runRamUnloadWith availability state clock api directory
   | availability == PeerCacheUnbound = pure (RamUnloadRefused "X-M1 peer-core cache binding is unbound; no camera write sent")
-  | stateSize state /= reviewedAllocationSize = pure (RamUnloadRefused ("installed state size differs from the reviewed "++hexWord (fromIntegral reviewedAllocationSize)++"-byte extent"))
-  | otherwise = do
-      let cap = ramUnloadJournalCapBytes; deadline = transferTimeoutMs*(600 + 2*publicationCount)
+  | Nothing <- payloadOfSize (stateSize state) = pure (RamUnloadRefused ("installed state size "++show (stateSize state)++" is no payload's extent"))
+  | Just payload <- payloadOfSize (stateSize state) = do
+      let count = payloadPublicationCount payload
+          cap = ramUnloadJournalCapBytes payload; deadline = transferTimeoutMs*(600 + 2*count)
       session <- newSession clock api directory cap deadline
       held <- newHeld
       active <- newIORef False
@@ -1182,7 +1276,7 @@ runRamUnloadWith availability state clock api directory
         writeIORef active True
         nonce <- pure ((stateNonce state + 1) .&. 0x00ffffff)
         mailbox <- retargetOutputCall live (stateBase state) (stateSize state) (unAddress (rollbackEntry (stateEntries state))) nonce
-        rolledBack <- mailboxStatus mailbox nonce 2
+        rolledBack <- mailboxStatus payload mailbox nonce 2
         unless rolledBack $ do
           writeIORef active False
           P.reject "installer refused before rollback: CPU1 park rendezvous timed out"
@@ -1191,7 +1285,7 @@ runRamUnloadWith availability state clock api directory
           require (current == unWordValue (publicationOld publication)) ("rollback readback mismatch at "++hexWord (unAddress (publicationAddress publication)))
         slotAfter <- wordAt <$> readMemory live callbackSlotAddress 4
         require (slotAfter == unWordValue slot) "callback slot changed during unload"
-        note session "ram-unload-complete" (show publicationCount++" old words verified and callback slot restored; allocation retained until power-off")
+        note session "ram-unload-complete" (show count++" old words verified and callback slot restored; allocation retained until power-off")
         writePrivateBytes (directory </> "ram-unload-state.json") (C.pack "{\"schema\":1,\"status\":\"rolled-back\",\"allocation\":\"retained-until-power-off\"}\n")
         writeIORef active False
       isActive <- readIORef active

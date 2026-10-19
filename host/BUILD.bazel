@@ -172,3 +172,23 @@ haskell_library(
         ":vector",
     ],
 )
+
+# The Classic Chrome RAM-push publications and shape check
+# (reports/classic-chrome-patch.md section 8.2).
+haskell_library(
+    name = "classic-chrome-ram",
+    srcs = ["FujiAF/ClassicChromeRam.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":base",
+        ":bytestring",
+        ":classic-chrome",
+    ],
+)

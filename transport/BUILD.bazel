@@ -59,8 +59,11 @@ haskell_library(
         "FujiAF/StoredGate.hs",
         "FujiAF/Transport.hs",
     ],
-    # FujiAF.RamPush runs the relinker from the linking binary's runfiles.
-    data = ["//host/firmware:ram-push-relinker"],
+    # FujiAF.RamPush runs each payload's relinker from the linking binary's runfiles.
+    data = [
+        "//host/firmware:classic-chrome-ram-relinker",
+        "//host/firmware:ram-push-relinker",
+    ],
     ghcopts = _GHCOPTS,
     src_strip_prefix = ".",
     visibility = ["//visibility:public"],
@@ -113,12 +116,16 @@ haskell_test(
 haskell_binary(
     name = "camera",
     srcs = ["Main.hs"],
-    data = ["//host/firmware:build-recipe-bank"],
+    data = [
+        "//host/firmware:build-classic-chrome-ram",
+        "//host/firmware:build-recipe-bank",
+    ],
     ghcopts = _GHCOPTS,
     visibility = ["//visibility:public"],
     deps = [
         ":camera-core",
         ":native-provider",
+        ":ram-push-cc-pins",
         ":ram-push-pins",
         "//host:base",
         "//broker:core",
@@ -419,6 +426,26 @@ haskell_library(
     ],
 )
 
+genrule(
+    name = "ram-push-cc-pins-module",
+    srcs = ["ram-push-cc-review.json"],
+    outs = ["RamPushCcReviewedPins.hs"],
+    cmd = "$(location :ram-push-pins-generator) $(location ram-push-cc-review.json) $@",
+    tools = [":ram-push-pins-generator"],
+)
+
+# The camera binary's compiled Classic Chrome pins.
+haskell_library(
+    name = "ram-push-cc-pins",
+    srcs = [":RamPushCcReviewedPins.hs"],
+    ghcopts = _GHCOPTS,
+    visibility = ["//emulation:__pkg__"],
+    deps = [
+        ":camera-core",
+        "//host:base",
+    ],
+)
+
 haskell_test(
     name = "ram-push-review-record-tests",
     srcs = ["RamPushReviewRecordTest.hs"],
@@ -440,11 +467,20 @@ filegroup(
     ],
 )
 
+filegroup(
+    name = "ram-push-cc-pinned-workspace-files",
+    srcs = [
+        "//host/firmware:build-classic-chrome-ram.sh",
+        "//menu:classic-chrome-ram-relink-sources",
+    ],
+)
+
 _GATE_DEPS = [
     ":ram-push-review-record",
     "//host:base",
     "//host:bytestring",
     "//broker:core",
+    "//host/firmware:classic-chrome-ram-builder",
     "//host/firmware:ram-push-toolchain",
 ]
 
@@ -479,11 +515,56 @@ haskell_test(
     deps = _GATE_DEPS,
 )
 
+haskell_test(
+    name = "ram-push-cc-review-verdicts",
+    srcs = ["RamPushReviewGate.hs"],
+    args = [
+        "verdicts",
+        "$(location ram-push-cc-review.json)",
+    ],
+    data = ["ram-push-cc-review.json"],
+    ghcopts = _GHCOPTS,
+    tags = ["manual"],
+    deps = _GATE_DEPS,
+)
+
+haskell_test(
+    name = "ram-push-cc-review-bytes",
+    srcs = ["RamPushReviewGate.hs"],
+    args = [
+        "bytes",
+        "$(location ram-push-cc-review.json)",
+    ],
+    data = [
+        ":ram-push-cc-pinned-workspace-files",
+        "ram-push-cc-review.json",
+    ],
+    ghcopts = _GHCOPTS,
+    tags = ["manual"],
+    deps = _GATE_DEPS,
+)
+
 # Rewrites record entries from the current tree's relink; `bazel run` only.
 haskell_binary(
     name = "ram-push-repin",
     srcs = ["RamPushRepin.hs"],
     ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        ":ram-push-review-record",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+    ],
+)
+
+# The same over transport/ram-push-cc-review.json.
+haskell_binary(
+    name = "ram-push-cc-repin",
+    srcs = ["RamPushRepin.hs"],
+    args = ["--classic-chrome"],
+    ghcopts = _GHCOPTS,
+    main_file = "RamPushRepin.hs",
     deps = [
         ":camera-core",
         ":ram-push-review-record",

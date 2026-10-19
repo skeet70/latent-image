@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), E2ESettings (..), runRamPushE2E) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, runRamPushE2E) where
 
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, try)
 import Control.Monad (forM, forM_, unless, when)
@@ -28,6 +28,7 @@ import FujiAF.RamPush
 import FujiAF.Transport (ensurePrivateDirectory, realClock, writePrivateBytes)
 import Xm1UnreviewedRelink (runUnreviewedRamPush, runUnreviewedRamUnload, withUnreviewedBuild)
 import RamPushReviewedPins (reviewedContract)
+import RamPushCcReviewedPins (reviewedCcContract)
 
 -- | Unreviewed skips the compiled source-identity and publication-contract pins; its policy
 -- decides whether a bank that fails the ELF allowlist is still pushed. Reviewed enforces it.
@@ -46,7 +47,28 @@ data E2ESettings = E2ESettings
   , checkpointRoot :: FilePath
   , segmentSelection :: Maybe [T.Text]
   , pushMode :: PushMode
+  , e2ePayload :: Payload
   }
+
+payloadText :: Payload -> T.Text
+payloadText p = case payloadKind p of
+  RecipeBankD3 -> "recipe-bank-d3"
+  ClassicChrome -> "classic-chrome"
+
+payloadContract :: Payload -> ReviewedContract
+payloadContract p = case payloadKind p of
+  RecipeBankD3 -> reviewedContract
+  ClassicChrome -> reviewedCcContract
+
+-- | The Classic Chrome entry words and hook sites (reports/classic-chrome-patch.md
+-- section 8.2.7 step 2), armed from the attach to the end of install.
+classicChromeFetchSites :: [(Word32, String)]
+classicChromeFetchSites =
+  [ (0x00738fe8, "cc-entry-capture-converter"), (0x00736a74, "cc-entry-settings-converter")
+  , (0x00d7851c, "cc-entry-marker"), (0x00eab2e0, "cc-entry-filmmode"), (0x00eaac88, "cc-entry-saturation")
+  , (0x00d461ec, "cc-entry-raw-commit"), (0x00d5ada4, "cc-entry-raw-highlight"), (0x012548a4, "cc-entry-raw-request")
+  , (0x00d67284, "cc-hook-colour"), (0x00d60f60, "cc-hook-chroma-1"), (0x00d64ef4, "cc-hook-chroma-2")
+  , (0x00d677ac, "cc-hook-tone-1"), (0x00d677bc, "cc-hook-tone-2") ]
 
 relinkModeText :: RelinkMode -> T.Text
 relinkModeText ReviewedRelink = "reviewed"
@@ -345,15 +367,17 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
         , "--output", e2e
         , "--ram-push-checkpoints", checkpointRoot settings
         ] ++ ["--fresh-boot" | bootMode settings == FreshBoot]
+      selected = e2ePayload settings
       relinkAt base = case relinkMode settings of
-        ReviewedRelink -> withPinnedReviewedBuild reviewedContract base
-        UnreviewedRelink policy -> withUnreviewedBuild policy base
+        ReviewedRelink -> withPinnedReviewedBuild (payloadContract selected) selected base
+        UnreviewedRelink policy -> withUnreviewedBuild selected policy base
       pushWith = case relinkMode settings of
-        ReviewedRelink -> runRamPush reviewedContract
+        ReviewedRelink -> runRamPush (payloadContract selected)
         UnreviewedRelink _ -> runUnreviewedRamPush
       unloadWith = case relinkMode settings of
-        ReviewedRelink -> runRamUnload reviewedContract
+        ReviewedRelink -> runRamUnload (payloadContract selected)
         UnreviewedRelink _ -> runUnreviewedRamUnload
+      fetchSites = if payloadKind selected == ClassicChrome then classicChromeFetchSites else []
       relinkFiles base = relinkAt base $ \pinned -> Relinked (pinnedDocument pinned) (pinnedRuntime pinned)
         <$> B.readFile (pinnedDirectory pinned </> "kernel.syms")
         <*> B.readFile (pinnedDirectory pinned </> "kernel.disasm")
@@ -372,14 +396,15 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
             pure (case matches of
               (candidate, relinked) : _ -> (Just candidate, Just (candidate, relinked))
               [] -> (Nothing, Nothing))
-  bracket (timed "emulator-start" (startEmulator python runtime arguments choose)) (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, installed) -> do
-    putStrLn ("emulator start: " ++ show (bootStart start) ++ "; relink: " ++ T.unpack (relinkModeText (relinkMode settings)))
+  published <- bracket (timed "emulator-start" (startEmulator python runtime arguments choose)) (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, installed) -> do
+    putStrLn ("emulator start: " ++ show (bootStart start) ++ "; relink: " ++ T.unpack (relinkModeText (relinkMode settings))
+      ++ "; payload: " ++ T.unpack (payloadText selected))
     let api = emulatorUsbApi emulator
         allocationDirectory = e2e </> "alloc"
         relinkDirectory = e2e </> "relinked"
         pushDirectory = e2e </> "push"
         unloadDirectory = e2e </> "unload"
-        allocationBytes = reviewedAllocationSize
+        allocationBytes = payloadAllocationSize selected
         heapBreak = (\bytes -> hexAddress (leWord bytes 0)) <$> emulatorReadMemory emulator 0x00829a08 4
         writeRelinked relinked = do
           privateDirectory relinkDirectory
@@ -396,14 +421,17 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
     restoredHost <- forM installed $ \(candidate, _) ->
       either (ioError . userError . ("invalid install checkpoint host record: " ++)) pure
         (parseEither parseJSON (installHost candidate))
-    (retained, breakBefore, breakAfter, allowlist) <- case (installed, restoredHost) of
+    (retained, breakBefore, breakAfter, allowlist, fetchStart) <- case (installed, restoredHost) of
       (Just (_, relinked), Just host) -> do
         let path = allocationDirectory </> "ram-alloc-state.json"
         writePrivateBytes path (hostAllocationState host)
         retained <- readRetainedAllocation path
         allowlist <- writeRelinked relinked
-        pure (retained, hostBreakBefore host, hostBreakAfter host, allowlist)
+        pure (retained, hostBreakBefore host, hostBreakAfter host, allowlist, Nothing)
       _ -> do
+        fetchStart <- if null fetchSites then pure Nothing else do
+          emulatorTraceSites emulator fetchSites
+          Just . fst <$> emulatorTraceHits emulator 0
         breakBefore <- heapBreak
         allocationPath <- timed "ram-alloc" (runRamAlloc allocationBytes realClock api allocationDirectory) >>= \outcome -> case outcome of
           RamAllocated path -> pure path
@@ -411,7 +439,7 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
         retained <- readRetainedAllocation allocationPath
         breakAfter <- heapBreak
         allowlist <- timed "relink" (relinkFiles (allocBase (retainedAllocation retained))) >>= writeRelinked
-        pure (retained, breakBefore, breakAfter, allowlist)
+        pure (retained, breakBefore, breakAfter, allowlist, fetchStart)
     let allocation = retainedAllocation retained
         allocationPath = retainedStatePath retained
         Address base = allocBase allocation
@@ -435,7 +463,7 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
             , "heap_break_before" .= breakBefore, "heap_break_after" .= breakAfter ])) <> "\n")
           ioError (userError (show phase ++ " failed: " ++ message))
     let entries = manifestEntries manifest
-    emulatorTraceSites emulator
+    emulatorTraceSites emulator $
       [ (unAddress (installEntry entries), "uploaded-installer")
       , (unAddress (rollbackEntry entries), "uploaded-rollback")
       , (unAddress (statusEntry entries), "uploaded-status")
@@ -443,8 +471,7 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
       , (cpu0Exit, "cpu0-window-exit")
       , (cpu1Exit, "cpu1-window-exit")
       , (menuMessageDrawer, menuMessageSite)
-      , (d3HookEntry, d3HookSite)
-      ]
+      ] ++ [(d3HookEntry, d3HookSite) | payloadKind selected == RecipeBankD3] ++ fetchSites
     privateDirectory pushDirectory
     (statePath, installMailbox) <- case restoredHost of
       Just host -> do
@@ -456,6 +483,15 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
           RamPushInstalled path -> pure path
           other -> stop "ram-push" (show other)
         installMailbox <- readMailbox
+        forM_ fetchStart $ \from -> do
+          (_, hits) <- emulatorTraceHits emulator from
+          let fetched = [hit | hit <- hits, traceSite hit `elem` map snd fetchSites]
+          writePrivateBytes (e2e </> "e2e-fetch-watch.json") (BL.toStrict (encode (object
+            [ "scope" .= String "Classic Chrome entry words and hook sites, attach checkpoint to the end of ram-push"
+            , "sites" .= object [K.fromString label .= hexAddress address | (address, label) <- fetchSites]
+            , "hits" .= [object ["site" .= traceSite hit, "r0" .= hexAddress (traceR0 hit)] | hit <- fetched]
+            , "fetched" .= not (null fetched) ])) <> "\n")
+          putStrLn ("fetch watch: " ++ show (length fetched) ++ " entries into Classic Chrome sites from attach to install")
         host <- InstallHost <$> B.readFile allocationPath <*> B.readFile statePath
           <*> pure installMailbox <*> pure breakBefore <*> pure breakAfter
         saved <- timed "install-checkpoint" (emulatorSaveInstallCheckpoint emulator base
@@ -480,6 +516,7 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
           [ "schema" .= (1 :: Int)
           , "scope" .= String "emulated X-M1 RC0 ordinary-boot RAM push"
           , "plan" .= planName plan
+          , "payload" .= payloadText selected
           , "relink" .= object ["mode" .= relinkModeText (relinkMode settings),
                                 "source_identity" .= object [K.fromString name .= digest | (name, digest) <- sourceIdentity manifest],
                                 "allowlist" .= allowlist]
@@ -499,10 +536,43 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
           , "mailbox" .= object ["install" .= installMailbox, "rollback" .= unloadMailbox,
                                  "address" .= hexAddress mailbox]
           , "unload" .= (if planUnload plan
-              then Just (String (T.pack (show publicationCount ++ " old words verified; allocation retained until power-off")))
+              then Just (String (T.pack (show (length (manifestPublications manifest)) ++ " old words verified; allocation retained until power-off")))
               else Nothing)
           ]
     writePrivateBytes (e2e </> "e2e-result.json") (BL.toStrict (encode result) <> "\n")
+    pure (manifestPublications manifest)
+  when (planUnload plan && payloadKind selected == ClassicChrome) $
+    timed "cold-restart-read" (coldRestartRead python runtime installedMedia adjustmentNand cardImage (checkpointRoot settings) published e2e)
+
+-- | A cold boot of the same inputs, then every publication word read against its old word.
+coldRestartRead :: FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> [Publication] -> FilePath -> IO ()
+coldRestartRead python runtime installedMedia adjustmentNand cardImage checkpoints publications e2e = do
+  let directory = e2e </> "cold-restart"
+      arguments =
+        [ "tools/continue_rec_scanout.py"
+        , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
+        , "--installed-dat", installedMedia
+        , "--adjustment-nand", adjustmentNand
+        , "--menu-sd-image", cardImage
+        , "--menus"
+        , "--ram-push-server"
+        , "--output", directory
+        , "--ram-push-checkpoints", checkpoints
+        , "--fresh-boot" ]
+  bracket (startEmulator python runtime arguments (\_ -> pure (Nothing, ()))) (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, ()) -> do
+    words' <- forM publications $ \publication -> do
+      bytes <- emulatorReadMemory emulator (unAddress (publicationAddress publication)) 4
+      let current = leWord bytes 0
+      pure (publication, current)
+    let mismatched = [p | (p, current) <- words', current /= unWordValue (publicationOld p)]
+    writePrivateBytes (directory </> "e2e-cold-restart.json") (BL.toStrict (encode (object
+      [ "scope" .= String "fresh boot of the same DAT, NAND and card after ram-unload; every publication word read"
+      , "emulator_start" .= startRecord start
+      , "words" .= length words'
+      , "mismatched" .= [hexAddress (unAddress (publicationAddress p)) | p <- mismatched]
+      , "result" .= String (if null mismatched then "all old" else "mismatch") ])) <> "\n")
+    putStrLn ("cold restart: " ++ show (length words') ++ " publication words read, " ++ show (length mismatched) ++ " differ from old")
+    require (null mismatched) "cold restart read found publication words that are not old"
 
 -- | What running segments needs from its session; hits and observations accumulate across calls.
 data SegmentRunner = SegmentRunner
@@ -542,11 +612,13 @@ runSegments runner = mapM $ \segment -> runnerTimed runner ("segment " <> segmen
   writeIORef (runnerHits runner) after
   let drawn = sort (nub [traceR0 hit | hit <- hits, traceSite hit == menuMessageSite])
       hookRows = [traceR0 hit | hit <- hits, traceSite hit == d3HookSite]
-  when (segmentObserve segment || not (null (segmentReads segment)) || not (null hookRows)) $ do
+      ccHits = [traceSite hit | hit <- hits, traceSite hit `elem` map snd classicChromeFetchSites]
+  when (segmentObserve segment || not (null (segmentReads segment)) || not (null hookRows) || not (null ccHits)) $ do
     previous <- readIORef (runnerObservations runner)
     let current = object [ "phase" .= segmentPhase segment, "capture" .= segmentCapture segment
                          , "steps" .= observed, "reads" .= windows
-                         , "d3_hook_r0" .= map hexAddress hookRows ]
+                         , "d3_hook_r0" .= map hexAddress hookRows
+                         , "classic_chrome_site_entries" .= ccHits ]
     writeIORef (runnerObservations runner) (previous ++ [current])
     writePrivateBytes (runnerReceipt runner </> ("e2e-observation-" ++ show (length previous) ++ ".json"))
       (BL.toStrict (encode current) <> "\n")

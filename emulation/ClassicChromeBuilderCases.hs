@@ -20,6 +20,10 @@
 -- PROVIA block outside the colour, chroma and tone output ranges and a stock
 -- substitution oracle inside them. Each case is written with its expected
 -- final state and rerun through the native-case adapter.
+--
+-- A RAM set (--ram-set) is the RC0 decodes with a CC RAM-push manifest's
+-- publications applied and the runtime's CC code and data block mapped; it
+-- takes (a) and (c) and its CC block must equal its flash set's.
 module Main where
 
 import Control.Monad
@@ -32,6 +36,7 @@ import Data.IORef
 import Data.List (foldl', intercalate)
 import qualified Data.Map.Strict as M
 import Data.Word
+import Emulation.ClassicChromeRam
 import Emulation.NativeCase (runCase)
 import FujiAF.Host
 import FujiAF.JSON (decodeStrictIntegers, encodeCanonical)
@@ -47,11 +52,14 @@ import System.IO
 
 data Pin = Pin { pinPath :: FilePath, pinBase :: Word32, pinSha :: String }
 
-id4Pin, id5Pin, loaderPin, payloadPin :: Pin
+id4Pin, id5Pin, loaderPin, payloadPin, rc0Id4Pin, plainPin, id2Pin :: Pin
 id4Pin = Pin "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin" 0x0061c400 "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
 id5Pin = Pin "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin" 0x00bf1a00 "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
 loaderPin = Pin "private-data/analysis/x-m1-1.50/decode/loader-40000.bin" 0x00040000 "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
 payloadPin = Pin "private-data/analysis/x-m1-1.50/payload.bin" 0 "8c6f806ef4554128e5be887a76e438a91b7d6cb030c940fc1c8fd6d32d5926c0"
+rc0Id4Pin = Pin "private-data/analysis/x-m1-1.50/update/prefix/id4-patched.bin" 0x0061c340 "a4d169bd961ec7df34e3b9b7108b624b79680c3cc50297e434e0b3607fb65551"
+plainPin = Pin "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin" 0x01100000 "ee211bdaad39005b4f72e3443a76ca194905381a967cab787d6a4ef14e2d889d"
+id2Pin = Pin "private-data/analysis/x-m1-1.50/filmsim/id2-00130000.bin" 0x00130000 "236d12a11c8b386f71192675c12398358840327f21e392e6eaa91ddfd6e020a5"
 
 -- Fallback adjustment image: payload offset 0xe0048 (E-ADJ-READ-150).
 adjPayloadOffset :: Int
@@ -264,7 +272,11 @@ driverWords marker preset = zipWith ($) (map place body) [driverBase, driverBase
 -- ---------------------------------------------------------------------------
 -- Image sets and runs.
 
-data ImageSet = ImageSet { isTag :: String, isId4 :: Image, isId5 :: Image, isAdjTag :: String, isAdj :: B.ByteString, isPatched :: Bool, isParams :: Maybe Params }
+-- Stock: the pinned images or the oracle's substitutions. Flash: build-classic-chrome
+-- decodes, data block at 0x0061c200. Ram: RC0 decodes with the manifest's publications.
+data Patch = Stock | Flash | Ram RamPayload
+
+data ImageSet = ImageSet { isTag :: String, isId4 :: Image, isId5 :: Image, isAdjTag :: String, isAdj :: B.ByteString, isPatch :: Patch, isParams :: Maybe Params }
 
 data Stage = StageA | StageB deriving Eq
 
@@ -325,7 +337,11 @@ regionsFor env st r input =
              , zeroRegion "tone-scratch" toneScratch 0x100 "rw"
              , zeroRegion "stack" stackBase (fromIntegral (stackTop - stackBase)) "rw"
              , zeroRegion "exit" exitB 4 "rx" ]
-           ++ [Region "prefix" 0x0061c200 0x64 "r" (Just ("prefix-" ++ take 12 (imSha (isId4 set)), slice (isId4 set) 0x0061c200 0x64)) | isPatched set])
+           ++ [Region "prefix" 0x0061c200 0x64 "r" (Just ("prefix-" ++ take 12 (imSha (isId4 set)), slice (isId4 set) 0x0061c200 0x64)) | Flash <- [isPatch set]])
+  ++ case isPatch set of
+       Ram rp -> [ Region "runtime-text" (fst (textRange rp)) (snd (textRange rp)) "rx" (Just ("runtime-text-" ++ take 12 (rpRuntimeSha rp), runtimeSlice rp (textRange rp)))
+                 , Region "runtime-data" (rpData rp) 100 "r" (Just ("runtime-data-" ++ take 12 (rpRuntimeSha rp), runtimeSlice rp (dataRange rp))) ]
+       _ -> []
   where
     set = rnSet r
     driverName = (if rnMarker r then "driver-marker" else "driver") ++ "-p" ++ show (rnPreset r)
@@ -335,8 +351,14 @@ requestBytes :: Int -> B.ByteString
 requestBytes col2 = patchAt 0x24 (le32 (fromIntegral col2)) (B.replicate 0x1000 0)
 
 functionsFor :: Stage -> Run -> [(Word32, Word32)]
-functionsFor StageA _ = (driverBase, fromIntegral (4 * length (driverWords True 2))) : stageAFunctions
-functionsFor StageB r = stageBFunctions ++ (if isPatched (rnSet r) then stubFunctions else [])
+functionsFor st r = base' ++ case (st, isPatch (rnSet r)) of
+  (StageB, Flash) -> stubFunctions
+  (StageA, Ram rp) -> ram rp [CcMarker]
+  (StageB, Ram rp) -> ram rp [CcColour, CcChroma, CcTone]
+  _ -> []
+  where
+    base' = if st == StageA then (driverBase, fromIntegral (4 * length (driverWords True 2))) : stageAFunctions else stageBFunctions
+    ram rp = map (\e -> let (a, z) = entryFunction rp e in (a, fromIntegral z))
 
 regionJson :: Env -> Region -> IO (Value, Maybe Value)
 regionJson env rg = case rgArtifact rg of
@@ -378,6 +400,7 @@ provenanceText st r expectation = intercalate " " $
       else "Stage b: stock FUN_00d5da2c(block 0x30004000, record 0x30000000); the record artifact is the final record of case " ++ caseId StageA r ++ "."
   , "Images: id4 " ++ imSha (isId4 (rnSet r)) ++ ", id5 " ++ imSha (isId5 (rnSet r)) ++ ", loader " ++ pinSha loaderPin ++ "; adjustment area 0x41acd800 = " ++ adjNote (rnSet r) ++ "; pointer word 0x0096ca50 = 0x41acd800; bss cache 0x0095ad00.. zero."
   ] ++ [ "Parameter set " ++ prPath p ++ " sha256 " ++ prSha p ++ "." | Just p <- [isParams (rnSet r)] ]
+    ++ [ "RAM images: id4 is the RC0 decode " ++ pinPath rc0Id4Pin ++ " (sha256 " ++ pinSha rc0Id4Pin ++ ") at 0x0061c340 with zeros from 0x0061c200, id5 the pinned stock decode, each with the publications of " ++ rpManifestPath rp ++ " (sha256 " ++ rpManifestSha rp ++ ") applied in manifest order; runtime " ++ rpRuntimePath rp ++ " (sha256 " ++ rpRuntimeSha rp ++ ") at " ++ hex8 (rpBase rp) ++ ", its CC code mapped rx at " ++ hex8 (fst (textRange rp)) ++ " and its data block cc_ram_data mapped r at " ++ hex8 (rpData rp) ++ "." | Ram rp <- [isPatch (rnSet r)] ]
     ++ [ "Expected state: " ++ expectation ]
 
 adjNote :: ImageSet -> String
@@ -478,22 +501,25 @@ data Check = Check { ckName :: String, ckPass :: Bool, ckDetail :: String }
 
 usage :: IO a
 usage = do
-  hPutStrLn stderr "usage: classic-chrome-builder-cases --runner RUNNER --out DIR [--set NAME PARAMS PATCHED_ID4 PATCHED_ID5]..."
+  hPutStrLn stderr "usage: classic-chrome-builder-cases --runner RUNNER --out DIR [--set NAME PARAMS PATCHED_ID4 PATCHED_ID5]... [--ram-set NAME FLASH_SET MANIFEST RUNTIME SYMS]..."
   exitFailure
 
-parseArgs :: [String] -> Maybe (FilePath, FilePath, [(String, FilePath, FilePath, FilePath)])
-parseArgs = go Nothing Nothing [] where
-  go (Just r) (Just o) sets [] = Just (r, o, reverse sets)
-  go _ o sets ("--runner" : r : rest) = go (Just r) o sets rest
-  go r _ sets ("--out" : o : rest) = go r (Just o) sets rest
-  go r o sets ("--set" : name : p : i4 : i5 : rest) = go r o ((name, p, i4, i5) : sets) rest
-  go _ _ _ _ = Nothing
+data RamArg = RamArg { raName :: String, raFlash :: String, raManifest :: FilePath, raRuntime :: FilePath, raSyms :: FilePath }
+
+parseArgs :: [String] -> Maybe (FilePath, FilePath, [(String, FilePath, FilePath, FilePath)], [RamArg])
+parseArgs = go Nothing Nothing [] [] where
+  go (Just r) (Just o) sets rams [] = Just (r, o, reverse sets, reverse rams)
+  go _ o sets rams ("--runner" : r : rest) = go (Just r) o sets rams rest
+  go r _ sets rams ("--out" : o : rest) = go r (Just o) sets rams rest
+  go r o sets rams ("--set" : name : p : i4 : i5 : rest) = go r o ((name, p, i4, i5) : sets) rams rest
+  go r o sets rams ("--ram-set" : name : flash : m : rt : sy : rest) = go r o sets (RamArg name flash m rt sy : rams) rest
+  go _ _ _ _ _ = Nothing
 
 main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
   args <- getArgs
-  (runner, out, setArgs) <- maybe usage pure (parseArgs args)
+  (runner, out, setArgs, ramArgs) <- maybe usage pure (parseArgs args)
   createDirectoryIfMissing True out
   stale <- filter (\f -> takeExtension f `elem` [".json", ".bin"]) <$> listDirectory out
   mapM_ (removeFile . (out </>)) stale
@@ -504,7 +530,7 @@ main = do
   ref <- newIORef M.empty
   let env = Env out runner loader ref
       adj = B.take adjSize (B.drop adjPayloadOffset (imBytes payload))
-      stock = ImageSet "stock" id4 id5 "fallback" adj False Nothing
+      stock = ImageSet "stock" id4 id5 "fallback" adj Stock Nothing
       t16 base i = fromIntegral (word16At (imBytes id5) (fromIntegral (base - imBase id5) + 2 * i)) :: Int
       colourFields = [t16 0x00d67f88 i | i <- [0 .. 8]]
       chromaFields = [t16 0x00d61e14 i | i <- [0 .. 3]]
@@ -524,8 +550,27 @@ main = do
         oracleTone = B.pack (map fromIntegral (prHead params)) <> B.singleton (B.index (slice id4 toneRecord 0x48) 13) <> B.concat (map le16 (prCurve params))
         oracleId4 = id4 { imName = "id4-oracle-" ++ name, imBytes = patchAt (fromIntegral (toneRecord + 4 - imBase id4)) oracleTone (imBytes id4) }
     oracleSha <- sha256 (imBytes oracleId4)
-    pure ( ImageSet name pid4 pid5 "fallback" adj True (Just params)
-         , ImageSet ("oracle-" ++ name) oracleId4 { imSha = oracleSha } id5 ("oracle-" ++ name) oracleAdj False (Just params) )
+    pure ( ImageSet name pid4 pid5 "fallback" adj Flash (Just params)
+         , ImageSet ("oracle-" ++ name) oracleId4 { imSha = oracleSha } id5 ("oracle-" ++ name) oracleAdj Stock (Just params) )
+  ramPins <- if null ramArgs then pure [] else forM [(rc0Id4Pin, "id4-rc0"), (plainPin, "plain"), (id2Pin, "id2")] $ \(p, nm) -> loadImage nm (pinPath p) (pinBase p) (Just (pinSha p))
+  rams <- forM ramArgs $ \ra -> do
+    params <- case [pr | (pt, _) <- sets, isTag pt == raFlash ra, Just pr <- [isParams pt]] of
+      [pr] -> pure pr
+      _ -> failH (raName ra ++ ": no --set named " ++ raFlash ra)
+    rp <- loadRamPayload (raManifest ra) (raRuntime ra) (raSyms ra)
+    ensure (runtimeSlice rp (dataRange rp) == dataBlock params) (raRuntime ra ++ ": cc_ram_data differs from the data block of " ++ prPath params)
+    let asRam im = RamImage (imName im) (imBase im) (imBytes im)
+        rc0Padded im = RamImage (imName im) 0x0061c200 (B.replicate 0x140 0 <> imBytes im)
+    applied <- applyPublications rp (case ramPins of [rc0, plain, id2] -> [rc0Padded rc0, asRam id5, asRam plain, asRam id2]; _ -> [])
+    (r4, r5) <- case applied of
+      [a4, a5, _, _] -> pure (a4, a5)
+      _ -> failH "RAM images"
+    sha4 <- sha256 (riBytes r4)
+    sha5 <- sha256 (riBytes r5)
+    let ram4 = Image (raName ra ++ "-id4") 0x0061c200 (riBytes r4) sha4 (pinPath rc0Id4Pin)
+        ram5 = Image (raName ra ++ "-id5") (imBase id5) (riBytes r5) sha5 (pinPath id5Pin)
+    ensure (B.length (imBytes ram4) == B.length (imBytes id4) + 0x200) (raName ra ++ ": RAM id4 is not a decode at 0x0061c200")
+    pure (ImageSet (raName ra) ram4 ram5 "fallback" adj (Ram rp) (Just params), ra)
 
   summary <- newIORef ([] :: [Value])
   checks <- newIORef ([] :: [Check])
@@ -574,37 +619,57 @@ main = do
   (_, stockP15c13, okP15c13) <- both (Run stock 13 False 15) Nothing "the stock images' own final state from this run (preset key 15)."
   check "stock-p15-c13-equals-c0" (okP15c13 && region stockP15c13 "block" == region stockP15 "block") ("stock col2 0xd block (preset key 15) differs from col2 0 at " ++ spanText (diffOffsets (region stockP15c13 "block") (region stockP15 "block")))
 
-  forM_ sets $ \(patched, oracle) -> do
-    let name = isTag patched
-    -- (a) stock films on the patched images, expected = stock state.
-    forM_ [0 .. 12] $ \k -> do
-      (_, fb, ok) <- both (Run patched k False 2) (Just (stockA k, stockB k)) ("the stock images' final state for col2 " ++ show k ++ " (case " ++ caseId StageB (Run stock k False 2) ++ "); the stock image's own output is the reference.")
-      check (name ++ "-stock-film-c" ++ show k) (ok && region fb "block" == region (stockB k) "block") "patched block, record and final state equal the stock run"
-    -- (c) oracle and CC, for the still preset (key 2) and the second-instance preset (key 15).
-    forM_ [(2 :: Word32, provia), (15, region stockP15 "block")] $ \(preset, reference) -> do
-      let label = name ++ (if preset == 2 then "" else "-p15")
-      (_, fo, okO) <- both (Run oracle 0 False preset) Nothing "the stock images' own final state from this run over the substituted adjustment image and tone record (the substitution oracle)."
-      (fa, fb, okC) <- both (Run patched 13 False preset) Nothing "the patched images' own final state from this run, pinned for regression after the generator's comparisons with the stock PROVIA block and the substitution oracle."
-      let cc = region fb "block"
-          oracleBlock = region fo "block"
-          outside = [o | o <- diffOffsets cc reference, not (inRanges o)]
-          inside = [o | o <- diffOffsets cc oracleBlock, inRanges o]
-          changed = diffOffsets cc reference
-      check (label ++ "-cc-marker") (word32At (region fa "record") 0x110 == 13) "patched col2 0xd record carries +0x110 = 0xd"
-      check (label ++ "-cc-outside") (okC && null outside) ("CC block differs from stock PROVIA block outside the ranges at " ++ spanText outside ++ "; all CC differences: " ++ spanText changed)
-      check (label ++ "-cc-inside") (okO && null inside) ("CC block differs from the oracle inside the ranges at " ++ spanText inside ++ "; oracle differs from PROVIA at " ++ spanText (diffOffsets oracleBlock reference))
-      forM_ ccRanges $ \(stage, rs) -> do
-        let touched = [o | o <- changed, any (\(lo, hi) -> lo <= o && o <= hi) rs]
-        putStrLn (label ++ " " ++ stage ++ " bytes changed by CC: " ++ spanText touched)
-    (_, fp, okP) <- both (Run patched 0 False 15) (Just (stockP15A, stockP15)) "the stock images' final state for col2 0, preset key 15 (case b-stock-p15-c00); the stock image's own output is the reference."
-    check (name ++ "-p15-stock-film-c0") (okP && region fp "block" == region stockP15 "block") "patched block, record and final state equal the stock run (preset key 15)"
+  ccBlocks <- newIORef (M.empty :: M.Map (String, Word32) (B.ByteString, B.ByteString, Bool))
+  let patchedChecks patched oracleOf onCc = do
+        let name = isTag patched
+        -- (a) stock films on the patched images, expected = stock state.
+        forM_ [0 .. 12] $ \k -> do
+          (_, fb, ok) <- both (Run patched k False 2) (Just (stockA k, stockB k)) ("the stock images' final state for col2 " ++ show k ++ " (case " ++ caseId StageB (Run stock k False 2) ++ "); the stock image's own output is the reference.")
+          check (name ++ "-stock-film-c" ++ show k) (ok && region fb "block" == region (stockB k) "block") "patched block, record and final state equal the stock run"
+        -- (c) oracle and CC, for the still preset (key 2) and the second-instance preset (key 15).
+        forM_ [(2 :: Word32, provia), (15, region stockP15 "block")] $ \(preset, reference) -> do
+          let label = name ++ (if preset == 2 then "" else "-p15")
+          (oracleBlock, okO) <- oracleOf preset
+          (fa, fb, okC) <- both (Run patched 13 False preset) Nothing "the patched images' own final state from this run, pinned for regression after the generator's comparisons with the stock PROVIA block and the substitution oracle."
+          let cc = region fb "block"
+              outside = [o | o <- diffOffsets cc reference, not (inRanges o)]
+              inside = [o | o <- diffOffsets cc oracleBlock, inRanges o]
+              changed = diffOffsets cc reference
+          check (label ++ "-cc-marker") (word32At (region fa "record") 0x110 == 13) "patched col2 0xd record carries +0x110 = 0xd"
+          check (label ++ "-cc-outside") (okC && null outside) ("CC block differs from stock PROVIA block outside the ranges at " ++ spanText outside ++ "; all CC differences: " ++ spanText changed)
+          check (label ++ "-cc-inside") (okO && null inside) ("CC block differs from the oracle inside the ranges at " ++ spanText inside ++ "; oracle differs from PROVIA at " ++ spanText (diffOffsets oracleBlock reference))
+          forM_ ccRanges $ \(stage, rs) -> do
+            let touched = [o | o <- changed, any (\(lo, hi) -> lo <= o && o <= hi) rs]
+            putStrLn (label ++ " " ++ stage ++ " bytes changed by CC: " ++ spanText touched)
+          onCc label preset cc oracleBlock okO
+        (_, fp, okP) <- both (Run patched 0 False 15) (Just (stockP15A, stockP15)) "the stock images' final state for col2 0, preset key 15 (case b-stock-p15-c00); the stock image's own output is the reference."
+        check (name ++ "-p15-stock-film-c0") (okP && region fp "block" == region stockP15 "block") "patched block, record and final state equal the stock run (preset key 15)"
+
+  forM_ sets $ \(patched, oracle) ->
+    patchedChecks patched
+      (\preset -> do
+        (_, fo, okO) <- both (Run oracle 0 False preset) Nothing "the stock images' own final state from this run over the substituted adjustment image and tone record (the substitution oracle)."
+        pure (region fo "block", okO))
+      (\_ preset cc oracleBlock okO -> modifyIORef' ccBlocks (M.insert (isTag patched, preset) (cc, oracleBlock, okO)))
+
+  -- RAM sets: (a) and (c) against their flash set's oracle, and the CC block equal to the flash set's.
+  forM_ rams $ \(ram, ra) -> do
+    let flashRun preset = do
+          stored <- readIORef ccBlocks
+          maybe (failH (raName ra ++ ": flash set " ++ raFlash ra ++ " has no CC block for preset " ++ show preset)) pure (M.lookup (raFlash ra, preset) stored)
+    patchedChecks ram
+      (\preset -> (\(_, ob, okO) -> (ob, okO)) <$> flashRun preset)
+      (\label preset cc _ _ -> do
+        (flashCc, _, _) <- flashRun preset
+        check (label ++ "-cc-equals-flash") (cc == flashCc) ("RAM CC block differs from the CC block of flash set " ++ raFlash ra ++ " at " ++ spanText (diffOffsets cc flashCc)))
 
   results <- readIORef checks
   rows <- readIORef summary
   B.writeFile (out </> "summary" <.> "json") (encodeCanonical (obj
     [ ("generator", s "//emulation:classic-chrome-builder-cases")
-    , ("inputs", arr ([obj [("path", s (pinPath p)), ("sha256", s (pinSha p))] | p <- [id4Pin, id5Pin, loaderPin, payloadPin]]
-                      ++ concat [[obj [("path", s (imPath (isId4 pt))), ("sha256", s (imSha (isId4 pt)))], obj [("path", s (imPath (isId5 pt))), ("sha256", s (imSha (isId5 pt)))], obj [("path", s (prPath pr)), ("sha256", s (prSha pr))]] | (pt, _) <- sets, Just pr <- [isParams pt]]))
+    , ("inputs", arr ([obj [("path", s (pinPath p)), ("sha256", s (pinSha p))] | p <- [id4Pin, id5Pin, loaderPin, payloadPin] ++ (if null rams then [] else [rc0Id4Pin, plainPin, id2Pin])]
+                      ++ concat [[obj [("path", s (imPath (isId4 pt))), ("sha256", s (imSha (isId4 pt)))], obj [("path", s (imPath (isId5 pt))), ("sha256", s (imSha (isId5 pt)))], obj [("path", s (prPath pr)), ("sha256", s (prSha pr))]] | (pt, _) <- sets, Just pr <- [isParams pt]]
+                      ++ concat [[obj [("path", s (rpManifestPath rp)), ("sha256", s (rpManifestSha rp))], obj [("path", s (rpRuntimePath rp)), ("sha256", s (rpRuntimeSha rp))]] | (rs, _) <- rams, Ram rp <- [isPatch rs]]))
     , ("cases", arr rows)
     , ("checks", arr [obj [("name", s (ckName c)), ("pass", b (ckPass c)), ("detail", s (ckDetail c))] | c <- results]) ]) <> "\n")
   let failed = filter (not . ckPass) results
