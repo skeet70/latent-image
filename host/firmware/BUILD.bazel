@@ -145,7 +145,10 @@ haskell_test(
 # worker consumes (reports/recipe-design.md section 17).
 haskell_binary(
     name = "build-recipe-bank",
-    srcs = ["BuildRecipeBank.hs"],
+    srcs = [
+        "BuildRecipeBank.hs",
+        "RecipeBankRamLayout.hs",
+    ],
     ghcopts = [
         "-Wall",
         "-Werror",
@@ -153,13 +156,16 @@ haskell_binary(
         "-XGHC2021",
         "-threaded",
     ],
+    main_file = "BuildRecipeBank.hs",
     deps = [
+        ":ram-push-toolchain",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:host-support",
         "//host:json",
         "//host:recipe-bank",
+        "//host:unix",
         "//host:update-container",
     ],
 )
@@ -904,3 +910,194 @@ haskell_test(
         "//host:scientific",
     ],
 )
+
+# The bank ELF allowlist check (transport/README.md, "Bank ELF allowlist").
+haskell_library(
+    name = "bank-allowlist",
+    srcs = [
+        "A32.hs",
+        "ArmElf.hs",
+        "BankAllowlist.hs",
+        "RecipeBankRamLayout.hs",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:json",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_test(
+    name = "bank-allowlist-tests",
+    srcs = ["BankAllowlistTests.hs"],
+    args = [
+        "$(location //menu:recipe_bank_allowlist.json)",
+        "$(location :check-bank-allowlist)",
+        "$(location :bank-elf-00c20000)",
+        "$(location :bank-elf-00c21f88)",
+    ],
+    data = [
+        ":bank-elf-00c20000",
+        ":bank-elf-00c21f88",
+        ":check-bank-allowlist",
+        "//menu:recipe_bank_allowlist.json",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        ":bank-allowlist",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:process",
+    ],
+)
+
+haskell_test(
+    name = "build-recipe-bank-ram-tests",
+    srcs = [
+        "BuildRecipeBankRamTests.hs",
+        "RecipeBankRamLayout.hs",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    main_file = "BuildRecipeBankRamTests.hs",
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+# Their digest is the builder identity a RAM-push manifest carries.
+filegroup(
+    name = "build-recipe-bank-sources",
+    srcs = [
+        "BuildRecipeBank.hs",
+        "RecipeBankRamLayout.hs",
+        "//host:FujiAF/Host.hs",
+        "//host:FujiAF/JSON.hs",
+        "//host:FujiAF/RecipeBank.hs",
+        "//host:FujiAF/RecipeBankFields.hs",
+        "//host:FujiAF/UpdateContainer.hs",
+    ],
+)
+
+haskell_binary(
+    name = "check-bank-allowlist",
+    srcs = ["CheckBankAllowlist.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        ":bank-allowlist",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+# What `//transport:camera` runs to relink at a retained base.
+filegroup(
+    name = "ram-push-relinker",
+    srcs = [
+        "build-recipe-bank-ram.sh",
+        ":build-recipe-bank",
+    ],
+)
+
+haskell_library(
+    name = "ram-push-toolchain",
+    srcs = [":RamPushToolchain.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-XGHC2021",
+    ],
+    deps = ["//host:base"],
+)
+
+genrule(
+    name = "ram-push-toolchain-module",
+    srcs = [
+        ":build-recipe-bank-sources",
+        "@lab_bash//:bin/bash",
+        "@lab_clang//:bin/clang",
+        "@lab_coreutils//:bin/readlink",
+        "@lab_coreutils//:bin/sha256sum",
+        "@lab_coreutils//:bin/sort",
+        "@lab_lld//:bin/ld.lld",
+        "@lab_llvm//:bin/llvm-nm",
+        "@lab_llvm//:bin/llvm-objcopy",
+        "@lab_llvm//:bin/llvm-objdump",
+    ],
+    outs = ["RamPushToolchain.hs"],
+    cmd = "$(location @lab_bash//:bin/bash) $(location ram-push-toolchain.sh) $@ $(location @lab_coreutils//:bin/readlink) $(location @lab_coreutils//:bin/sha256sum) $(location @lab_coreutils//:bin/sort) $(location @lab_bash//:bin/bash) $(location @lab_clang//:bin/clang) $(location @lab_lld//:bin/ld.lld) $(location @lab_llvm//:bin/llvm-objcopy) $(location @lab_llvm//:bin/llvm-nm) $(location @lab_llvm//:bin/llvm-objdump) $(locations :build-recipe-bank-sources)",
+    tools = ["ram-push-toolchain.sh"],
+)
+
+# The bank ELF the relink script links at the reviewed RAM push's two
+# reference bases, with a no-op builder in place of the RC0 packaging step.
+[genrule(
+    name = "bank-elf-" + base,
+    srcs = [
+        "build-recipe-bank-ram.sh",
+        "//menu:ram-push-relink-sources",
+    ],
+    outs = ["bank-elf-" + base + ".elf"],
+    cmd = " && ".join([
+        "here=$$PWD",
+        "root=$$(mktemp -d)",
+        "out=private-data/analysis/x-m1-1.50/ram-push/bank-elf",
+        "mkdir -p $$root/menu $$root/$$out",
+        "for source in $(locations //menu:ram-push-relink-sources); do ln -s $$here/$$source $$root/menu/; done",
+        "cd $$root",
+        " ".join([
+            "RAM_PUSH_BUILDER=true",
+            "RAM_PUSH_CLANG=$$here/$(location @lab_clang//:bin/clang)",
+            "RAM_PUSH_LD_LLD=$$here/$(location @lab_lld//:bin/ld.lld)",
+            "RAM_PUSH_OBJCOPY=$$here/$(location @lab_llvm//:bin/llvm-objcopy)",
+            "RAM_PUSH_NM=$$here/$(location @lab_llvm//:bin/llvm-nm)",
+            "RAM_PUSH_OBJDUMP=$$here/$(location @lab_llvm//:bin/llvm-objdump)",
+            "SPEC=unused RC0_ID4=unused RC0_ID5=unused RC0_PLAIN=unused",
+            "$$here/$(location @lab_bash//:bin/bash) $$here/$(location build-recipe-bank-ram.sh) 0x" + base + " $$out > /dev/null",
+        ]),
+        "cp $$out/kernel.elf $$here/$@",
+        "rm -rf $$root",
+    ]),
+    tools = [
+        "@lab_bash//:bin/bash",
+        "@lab_clang//:bin/clang",
+        "@lab_lld//:bin/ld.lld",
+        "@lab_llvm//:bin/llvm-nm",
+        "@lab_llvm//:bin/llvm-objcopy",
+        "@lab_llvm//:bin/llvm-objdump",
+    ],
+) for base in [
+    "00c20000",
+    "00c21f88",
+]]

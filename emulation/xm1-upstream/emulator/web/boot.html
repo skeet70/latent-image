@@ -15,7 +15,7 @@
 <p>Set checkpoint saves the full guest state, not a screenshot. Restore checkpoint rewinds to it without advancing firmware. Checkpoints live only in this server session.</p>
 <p id="checkpoint" class="boundary" hidden></p>
 <p id="refresh" class="refresh" role="status">Status refreshes every 2 seconds while this page is visible.</p>
-<section id="navigation" class="panel" hidden><h2>Firmware menu controls</h2><div class="controls" role="group" aria-label="Camera menu buttons"><button id="key-menu">MENU (M)</button><button id="key-ok">OK (Enter)</button><button id="key-back">BACK (Escape)</button><button id="key-up" aria-label="Up">↑</button><button id="key-down" aria-label="Down">↓</button><button id="key-left" aria-label="Left">←</button><button id="key-right" aria-label="Right">→</button><button id="key-q">Q</button><button id="key-play">PLAY (P)</button><button id="key-fn">Fn (F)</button><button id="key-dial-push">Dial push</button><button id="key-dial-left">Sub-command left ([)</button><button id="key-dial-right">Sub-command right (])</button></div><p>Wheel over the display: negative = firmware left, positive = firmware right, one pulse per wheel event. Physical clockwise direction and value increase/decrease are not measured.</p><p id="inputQueue" role="status"></p><button id="clear-inputs" disabled>Clear pending inputs</button></section>
+<section id="navigation" class="panel" hidden><h2>Firmware menu controls</h2><div class="controls" role="group" aria-label="Camera menu buttons"><button id="key-menu">MENU (M)</button><button id="key-ok">OK (Enter)</button><button id="key-back">BACK (Escape)</button><button id="key-up" aria-label="Up">↑</button><button id="key-down" aria-label="Down">↓</button><button id="key-left" aria-label="Left">←</button><button id="key-right" aria-label="Right">→</button><button id="key-q">Q</button><button id="key-play">PLAY (P)</button><button id="key-fn">Fn (F)</button><button id="key-dial-push">Dial push</button><button id="key-dial-left">Sub-command left ([)</button><button id="key-dial-right">Sub-command right (])</button></div><p>Wheel over the display: negative = firmware left, positive = firmware right, one pulse per wheel event. Physical clockwise direction and value increase/decrease are not measured.</p><div class="controls" role="group" aria-label="Mode dial"><label for="mode-dial">Mode dial</label><select id="mode-dial"></select><button id="set-mode-dial">Turn mode dial</button><span id="modeDialInfo"></span></div><p id="inputQueue" role="status"></p><button id="clear-inputs" disabled>Clear pending inputs</button></section>
 <section class="panel"><h2>Firmware display</h2><div id="display" tabindex="0" aria-label="Firmware display and sub-command wheel input">Waiting for a supported firmware display configuration.</div><p id="displayInfo">No display frame has been produced by this boot run.</p></section>
 <section id="navigation-state" class="panel" hidden><h2>State and selected row</h2><p id="navigationInfo"></p><pre id="menuState"></pre><p>The guest image is authoritative. Retained row fields do not establish that a setting was committed.</p><details><summary>Current input levels</summary><pre id="inputLevels"></pre></details></section>
 <section id="diagnostics" class="panel"><h2>Execution status</h2><pre id="status" role="status">Loading…</pre><p><a id="download-diagnostics" href="/api/state" download="xm1-viewer-state.json">Download diagnostics</a>. Include the last actions and what you expected. Save before restoring or restarting; the report describes the current guest and is not a restorable checkpoint. Keep reports under <code>private-data/</code>: they contain private firmware metadata and device logs.</p></section>
@@ -96,6 +96,9 @@ function controls() {
   for (const key of menuKeys) {
     el('key-' + key).disabled = inputBlocked || !keySupported(key) || !navigationReady;
   }
+  const dial = navigation && navigation.mode_dial;
+  el('mode-dial').disabled = el('set-mode-dial').disabled = busy || inputBlocked || !navigationReady
+    || pendingKeys.length > 0 || !(dial && dial.available);
   showInputQueue();
 }
 
@@ -130,6 +133,26 @@ function showNavigation(state) {
     asserted_keys: navigation.asserted_keys,
     inputs_released: navigation.inputs_released
   }, null, 2);
+  showModeDial(navigation.mode_dial);
+}
+
+let modeDialPositions = '';
+function showModeDial(dial) {
+  const positions = dial && dial.available ? dial.positions : [];
+  const names = JSON.stringify(positions.map(item => item.position));
+  if (names !== modeDialPositions) {
+    modeDialPositions = names;
+    el('mode-dial').replaceChildren(...positions.map(item => {
+      const option = document.createElement('option');
+      option.value = item.position;
+      option.textContent = item.position + ' (' + item.firmware_name + ')';
+      return option;
+    }));
+    if (dial && dial.position) el('mode-dial').value = dial.position;
+  }
+  el('modeDialInfo').textContent = !dial ? '' : !dial.available ? 'Unavailable: ' + dial.reason
+    : 'Current: ' + (dial.position || 'no calibrated position') + ' · ADC3 ' + dial.sample
+      + ' · shooting-mode cell 0x' + dial.shooting_mode_cell.toString(16);
 }
 
 function list(items) {
@@ -461,6 +484,35 @@ async function executeKey(key) {
   }
 }
 
+async function turnModeDial() {
+  const position = el('mode-dial').value;
+  if (busy || !navigationReady || pendingKeys.length || !position) return;
+  busy = true;
+  ++revision;
+  ++frameRevision;
+  pendingFrame = null;
+  if (pollAbort) pollAbort.abort();
+  controls();
+  el('status').textContent = 'Turning the mode dial to ' + position + ' and executing firmware…';
+  el('refresh').textContent = 'Automatic refresh pauses while the firmware handles the mode dial.';
+  try {
+    const response = await fetch('/api/mode-dial', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({position})});
+    const state = await response.json();
+    if (!response.ok) throw new Error(state && state.error || 'Mode-dial request failed');
+    show(state);
+    el('refresh').textContent = 'Mode dial run finished ' + new Date().toLocaleTimeString() + ' · refreshes every 2 seconds';
+  } catch (error) {
+    el('status').textContent = String(error);
+    el('refresh').textContent = 'Mode-dial request failed. Automatic status refresh will resume.';
+    navigationReady = false;
+  } finally {
+    busy = false;
+    controls();
+    pumpKeys();
+  }
+}
+
 async function saveScreen() {
   if (busy || !navigation) return;
   busy = true;
@@ -535,6 +587,7 @@ el('reset').onclick = () => run(true);
 el('restore').onclick = () => run(false, true);
 el('save-screen').onclick = () => saveScreen();
 for (const key of menuKeys) el('key-' + key).onclick = () => pressKey(key);
+el('set-mode-dial').onclick = turnModeDial;
 el('clear-inputs').onclick = () => clearPendingInputs('cancelled by user');
 el('display').addEventListener('pointerdown', () => el('display').focus({preventScroll: true}));
 /** @type {Readonly<Record<string, MenuKey>>} */

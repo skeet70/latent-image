@@ -1,16 +1,7 @@
 {-# LANGUAGE GHC2021 #-}
 {-# LANGUAGE OverloadedStrings #-}
--- Recipe-bank UI-behavior cases (RECIPE-UI-BEHAVIOR-01). Each case drives the
--- bank's menu modules through the synthetic stock consumer in
--- emulation/recipe-bank-ui-model.c: the modal-75 cell dispatch, the 0xe/0xf
--- transitions, the stock delegates and the label-record read the drawer uses.
--- The case image is composed from the builder's plan (the emitted menu nodes,
--- values arrays, label records and name records), the linked six-module blob,
--- the storage model's media spans and id4's conversion tables and charset
--- rows. Behavior expectations are derived here from the plan, the card fixture
--- and the storage contract before execution; the residue of the regions with
--- no behavior claim is pinned only to satisfy the runner's exact-final-memory
--- contract.
+-- Recipe-bank UI cases use a modeled modal/navigation/drawer boundary and the
+-- real stock property getter, setter, commit dispatcher and consumer cells.
 module Main where
 
 import Control.Monad
@@ -20,6 +11,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
+import qualified FujiAF.RecipeBankFields as F
 import Data.Bits
 import Data.Foldable (toList)
 import Data.List
@@ -102,6 +94,37 @@ parseSyms p = Syms . M.fromList . catMaybes . map row . lines <$> readFile p
       [a, z, _, n] -> Just (n, (hexI a, hexI z))
       [a, _, n] -> Just (n, (hexI a, 0))
       _ -> Nothing
+
+data FunctionInventory = KernelUiInventory | ForeignInventory deriving (Eq)
+
+parseFunctions :: FunctionInventory -> FilePath -> IO [(Integer, Integer)]
+parseFunctions inventory path = do
+  rows <- lines <$> readFile path
+  catMaybes <$> mapM one rows
+  where
+    one line = case words line of
+      [_, address, bytes, "FUNC", _, _, section, name]
+        | section /= "UND" -> case reads bytes of
+            [(size, "")] | size > 0 ->
+              pure $
+                if inventory == KernelUiInventory && name `elem`
+                  [ "rb_bank_draw_selected", "rb_bank_emit_failure_from_stock"
+                  , "rb_bank_redraw_dispatch", "rb_call_stock_redraw_dispatch"
+                  , "rb_call_draw_action_list"
+                  , "rb_bank_current_value_label"
+                  , "rb_bank_draw_name", "rb_call_name_style"
+                  , "rb_call_name_background", "rb_call_name_title"
+                  , "rb_call_name_shell", "rb_call_name_label", "rb_call_name_material"
+                  , "rb_call_name_utf16", "rb_call_name_stretch", "rb_call_name_ascii"
+                  , "rb_call_name_footer", "rb_call_name_label_position"
+                  , "rb_media_epoch_entry_a"
+                  , "rb_media_epoch_entry_b", "rb_media_open_guard_entry", "rb_media_write_guard_entry"
+                  ]
+                then Nothing
+                else Just (hexI address, size)
+            _ -> fail ("invalid function size in " ++ path)
+      fields | "FUNC" `elem` fields -> fail ("invalid function metadata in " ++ path)
+      _ -> pure Nothing
 
 overlay :: B.ByteString -> [(Int, B.ByteString)] -> B.ByteString
 overlay = foldl (\b (o, v) -> B.take o b <> v <> B.drop (o + B.length v) b)
@@ -190,26 +213,12 @@ parseFields raw = either (error . ("invalid field map: " ++)) id (eitherDecodeSt
     str' (String t) = T.unpack t
     str' _ = ""
 
-tabImage :: B.ByteString -> B.ByteString
-tabImage id4 = B.take 0xc00 (B.drop (fromIntegral (0x81b09c - 0x61c400)) id4) `rewrite` tabAt `append` tabBlob
-  where
-    (tabBlob, tabAt) = loadTables id4
-    loadTables img = (B.concat (map snd pieces), M.fromList (zip (map fst pieces) (snd (foldl step (0x81b09c + 0xc00, []) (map snd pieces)))))
-      where
-        base = 0x61c400 :: Integer
-        u32at a = readU32 img (fromIntegral (a - base))
-        ptr p = fromIntegral (readU32 (B.take 0xc00 (B.drop (fromIntegral (0x81b09c - base)) img)) p)
-        entries = [(fromIntegral p `div` 4, ptr p) | p <- [0, 4 .. 0xbfc], ptr p /= 0]
-        nrows t = length (take 64 (takeWhile (\i -> u32at (t + 12 * i) /= 0xffff) [0 :: Integer ..]))
-        pieces = [(pr, B.take (fromIntegral (12 * n)) (B.drop (fromIntegral (t - base)) img)) | (pr, t) <- entries, let n = nrows t]
-        step (a, acc) b = (a + fromIntegral (B.length b), acc ++ [fromIntegral a])
-    rewrite blk at = B.concat [if ptr == 0 then B.take 4 (B.drop p blk) else u32le (fromIntegral (M.findWithDefault 0 (fromIntegral p `div` 4) at)) | p <- [0, 4 .. 0xbfc], let ptr = readU32 blk p]
-    append a b = a <> b
-
-tableCode :: B.ByteString -> Word32 -> Int -> Word32
-tableCode id4 a row = readU32 id4 (fromIntegral (a - 0x61c400) + 12 * row)
 
 -- steps ------------------------------------------------------------------------------
+
+newtype FieldHost = FieldHost Word32
+newtype FieldCode = FieldCode Word32
+newtype BankSlot = BankSlot Word32
 
 data Step
   = Dispatch Word32 Word32 Word32 Int
@@ -218,6 +227,11 @@ data Step
   | WriteHalf Word32 Word32
   | Copy Word32 Word32 Word32
   | Call Word32 Int
+  | InputName String
+  | ReadField Word32 Word32 Int
+  | NativeWrite GuestAddress FieldHost FieldCode Int
+  | Navigate Word32 Word32 Int
+  | Refresh
   | Halt
 
 stepWords :: Step -> [Word32]
@@ -227,10 +241,21 @@ stepWords (WriteWord a v) = [2, a, v, 0, 0]
 stepWords (WriteHalf a v) = [3, a, v, 0, 0]
 stepWords (Copy dst src n) = [4, dst, src, n, 0]
 stepWords (Call a out) = [5, a, 0, 0, fromIntegral out]
+stepWords (InputName name)
+  | length name > 12 || any (\c -> c < ' ' || c > '~') name = error "invalid modeled editor input"
+  | otherwise = 7 : [readU32 bytes o | o <- [0, 4, 8]] ++ [0]
+  where bytes = B.pack (map (fromIntegral . fromEnum) name) <> B.replicate (12 - length name) 0
+stepWords (ReadField getter host out) = [8, getter, host, 0, fromIntegral out]
+stepWords (NativeWrite setter (FieldHost host) (FieldCode code) out) =
+  [11, guestWord setter, host, code, fromIntegral out]
+stepWords (Navigate cursor event out) = [9, 0, cursor, event, fromIntegral out]
+stepWords Refresh = [10, 0, 0, 0, 0]
 stepWords Halt = [6, 0, 0, 0, 0]
 
 stepBytes :: [Step] -> B.ByteString
-stepBytes steps = B.concat (map (B.concat . map u32le . stepWords) (steps ++ [Halt]))
+stepBytes steps
+  | length steps + 1 > 63 = error "UI fixture exceeds the modeled step ABI"
+  | otherwise = B.concat (map (B.concat . map u32le . stepWords) (steps ++ [Halt]))
 
 -- the case environment ---------------------------------------------------------------
 
@@ -244,19 +269,19 @@ data Env = Env
   , eDialog :: Word32
   , eFields :: [Word32]
   , eEditor :: Word32
-  , eRootValues :: Word32
-  , eRootLabels :: Word32
   , eNameBase :: Word32
   , eCharsetCopy :: Word32
   , eRootEditRow :: Int
+  , eRootRecallRow :: Int
   , eRegions :: [(String, Word32, Int)]
   , eOut :: Word32
-  , eLog :: Word32
+  , eUiLog :: Word32
   , eOut26 :: Word32
   , eFileB :: Word32
   , eSteps :: Word32
   , eFrame :: Word32
   , eCursor :: Word32
+  , eCurrentRow :: Word32
   , eRootNode :: Word32
   , eStockNode :: Word32
   , eStockValues :: Word32
@@ -266,16 +291,16 @@ data Env = Env
   , eHandler :: Word32
   , eEpochBump :: Word32
   , eRefuse :: Word32
-  , eStagePayload :: Word32
-  , eFieldsMap :: [Field]
+  , eFieldGetter :: Word32
+  , eStatusGetter :: Word32
+  -- The bank's FUN_0115815c interposition; the 0xf1 callback FUN_01123f2c
+  -- calls it with root 1.
+  , eDrawRoot :: GuestAddress
+  -- The stock per-slot defaults row at 0x007cb804, an unset slot's payload base.
+  , eDefaultsRow :: B.ByteString
+  -- The media model's write-completion cell rbm_write_comp; 0 completes writes.
+  , eWriteComp :: Word32
   }
-
-wordAt :: Env -> Word32 -> Int -> Word32
-wordAt e a off =
-  let o = fromIntegral (a - eMenuBase e) + off
-   in if o < 0 || o + 4 > B.length (eMenu e)
-        then error ("node word outside the menu image: " ++ hex (fromIntegral a) ++ " +" ++ show off)
-        else readU32 (eMenu e) o
 
 regionOf :: Env -> Word32 -> (String, Int)
 regionOf e a = case [(n, fromIntegral (a - b)) | (n, b, s) <- eRegions e, a >= b, fromIntegral (a - b) < s] of
@@ -284,10 +309,21 @@ regionOf e a = case [(n, fromIntegral (a - b)) | (n, b, s) <- eRegions e, a >= b
   rs -> error ("address in several regions: " ++ hex (fromIntegral a) ++ " " ++ show (map fst rs))
 
 claimAt :: Env -> Word32 -> B.ByteString -> (String, Int, B.ByteString)
-claimAt e a b = let (n, o) = regionOf e a in (n, o, b)
+claimAt e a b =
+  let (n, o) = regionOf e a
+      capacity = fromMaybe (error "claim region missing") (lookup n [(r, s) | (r, _, s) <- eRegions e])
+   in if B.null b || o + B.length b > capacity
+        then error ("claim outside region: " ++ n ++ " at " ++ show o)
+        else (n, o, b)
 
 claimU32 :: Env -> Word32 -> Word32 -> (String, Int, B.ByteString)
 claimU32 e a v = claimAt e a (u32le v)
+
+-- A word of the composed menu image the case maps.
+menuWord :: Env -> Word32 -> Word32
+menuWord e a
+  | a >= eMenuBase e && fromIntegral (a - eMenuBase e) + 4 <= B.length (eMenu e) = readU32 (eMenu e) (fromIntegral (a - eMenuBase e))
+  | otherwise = error ("menu word outside the composed menu: " ++ hex (fromIntegral a))
 
 -- fixtures ---------------------------------------------------------------------------
 
@@ -300,8 +336,6 @@ swapNames = ["SWAP-A", "SWAP-B", "SWAP-C", "SWAP-D", "SWAP-E", "SWAP-F", "SWAP-G
 newCardNames :: [String]
 newCardNames = ["NEW-A", "NEW-B", "NEW-C", "NEW-D", "NEW-E", "NEW-F", "NEW-G"]
 
-staleName :: B.ByteString
-staleName = name26 "STALE00"
 
 payloadFor :: Word32 -> B.ByteString
 payloadFor k = putHalf 0x00 (0x1234 + k) (putHalf 0x02 (0x5678 + k) validPayload)
@@ -309,7 +343,9 @@ payloadFor k = putHalf 0x00 (0x1234 + k) (putHalf 0x02 (0x5678 + k) validPayload
     putHalf o v b = B.take o b <> u16le (fromIntegral v) <> B.drop (o + 2) b
 
 validPayload :: B.ByteString
-validPayload = B.pack [0x34, 0x12, 0x78, 0x56, 0x00, 0x40, 0x00, 0x80, 0x60, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0b, 0x03, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00]
+validPayload = B.take 0x13 raw <> B.singleton 0x20 <> B.drop 0x14 raw
+  where
+    raw = B.pack [0x34, 0x12, 0x78, 0x56, 0x00, 0x40, 0x00, 0x80, 0x60, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0b, 0x03, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00]
 
 slotsA :: [(B.ByteString, B.ByteString)]
 slotsA = [(name26 n, payloadFor k) | (k, n) <- zip [0 ..] slotNames]
@@ -323,30 +359,76 @@ cardB = encodeFile 9 0x7f [(name26 n, payloadFor k) | (k, n) <- zip [0 ..] swapN
 cardC :: B.ByteString
 cardC = encodeFile 9 0x7f [(name26 n, payloadFor k) | (k, n) <- zip [0 ..] newCardNames]
 
-extractLive :: [Field] -> B.ByteString
-extractLive fields = foldl (\b f -> placeCode b f (fromMaybe 0 (lookup (fProp f) extractCodes))) (B.replicate 0x1c2 0) fields
+extractLive :: B.ByteString
+extractLive = ordinaryLive (B.replicate 4 0)
 
-extractCodes :: [(Word32, Word32)]
-extractCodes = [(0x104, 1), (0x110, 3), (0x111, 4), (0x10e, 4), (0x10f, 3), (0xef, 2), (0xed, 3), (0x141, 0xb), (0xfe, 5)]
+-- Nonzero ordinary fields in the literal preset, from the stock getter map.
+ordinaryLive :: B.ByteString -> B.ByteString
+ordinaryLive halfwords =
+  overlay (B.replicate 0x1c2 0)
+    [ (0x10, halfwords)
+    , (0x5a, B.singleton 0x20)
+    , (0x26, B.singleton 0x60)
+    , (0x34, B.singleton 0x80)
+    , (0x2b, B.singleton 0x80)
+    , (0x33, B.singleton 0x60)
+    , (0x2d, B.singleton 0x40)
+    , (0x52, B.singleton 0x0b)
+    , (0x85, B.singleton 0x30)
+    , (0x8a, B.singleton 0x50)
+    , (0x36, B.singleton 0x20)
+    ]
 
 extractPayload :: B.ByteString
-extractPayload = B.pack [0, 0, 0, 0, 0, 0x40, 0, 0x80, 0x60, 0x80, 0, 0, 0, 0, 0, 0, 0x40, 0, 0, 0, 0, 0, 0, 0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0x0b, 0x03, 0, 0, 0x05, 0, 0, 0]
-
-placeCode :: B.ByteString -> Field -> Word32 -> B.ByteString
-placeCode b f c
-  | fBytes f == 2 =
-      B.take off b <> u16le (fromIntegral v16) <> B.drop (off + 2) b
-  | otherwise = B.take off b <> B.pack [fromIntegral byte] <> B.drop (off + 1) b
-  where
-    off = fOff f
-    old = B.index b off
-    cur :: Word32
-    cur = fromIntegral old .|. (fromIntegral (B.index b (off + 1)) `shiftL` 8)
-    v16 :: Word32
-    v16 = (cur .&. complement (fMask f `shiftL` fShift f)) .|. ((c `shiftL` fShift f) .&. fMask f)
-    byte = fromIntegral ((fromIntegral old .&. complement (fMask f)) .|. ((c `shiftL` fShift f) .&. fMask f))
+extractPayload = B.replicate 4 0 <> B.drop 4 validPayload
 
 -- case specs -------------------------------------------------------------------------
+
+data RecallIso = SavedIso | EditedAutoIso
+
+data StockRecallConsumer
+  = SignedProperty138Consumer | WhiteBalanceShiftConsumer | FocusModeConsumer
+  | PropertyF2Consumer | JpegFineConsumer | AeBracketingStepConsumer
+  | IsoBracketingStepConsumer | PrimaryIsoConsumer | SignedProperty1c5Consumer
+  | Property153Consumer | Property1aConsumer | MovieFrameRateConsumer
+  | Property217Consumer | SecondaryIsoConsumer
+  deriving (Enum, Bounded)
+
+stockRecallConsumerClaims :: Env -> RecallIso -> [(String, Int, B.ByteString)]
+stockRecallConsumerClaims e iso = map claim [minBound .. maxBound]
+  where
+    claim :: StockRecallConsumer -> (String, Int, B.ByteString)
+    claim consumer = case consumer of
+      SignedProperty138Consumer -> claimU32 e 0x95685c 0xfffffffa
+      WhiteBalanceShiftConsumer -> claimU32 e 0x956868 30
+      FocusModeConsumer -> claimU32 e 0x956884 1
+      PropertyF2Consumer -> claimU32 e 0x95688c 6
+      JpegFineConsumer -> claimU32 e 0x956894 0
+      AeBracketingStepConsumer -> claimU32 e 0x9568a4 1
+      IsoBracketingStepConsumer -> claimU32 e 0x9568a8 1
+      PrimaryIsoConsumer -> claimU32 e 0x9568b4 (case iso of SavedIso -> 13; EditedAutoIso -> 0)
+      SignedProperty1c5Consumer -> claimU32 e 0x9568c4 0xfffffffa
+      Property153Consumer -> claimU32 e 0x9568d8 8
+      Property1aConsumer -> claimU32 e 0x95694c 1
+      MovieFrameRateConsumer -> claimU32 e 0x956b30 7
+      Property217Consumer -> claimU32 e 0x956b34 9
+      SecondaryIsoConsumer -> claimU32 e 0x956b74 25
+
+-- Words of the model's ui_log: the stock SET delegate's calls, the stock
+-- editor confirm's calls and the last redraw request.
+data UiLogWord = SetCalls | ConfirmCalls | RedrawRequest | SetClass | SetToken
+
+uiLogIndex :: UiLogWord -> Word32
+uiLogIndex SetCalls = 0
+uiLogIndex ConfirmCalls = 2
+uiLogIndex RedrawRequest = 5
+uiLogIndex SetClass = 7
+uiLogIndex SetToken = 8
+
+data MediaSwapBoundary = BeforeDiscoveryStat
+
+swapBoundaryCell :: MediaSwapBoundary -> (String, Word32)
+swapBoundaryCell BeforeDiscoveryStat = ("rbm_swap_boundary", 4)
 
 data Spec = Spec
   { spId :: String
@@ -359,87 +441,253 @@ data Spec = Spec
   , spLive :: B.ByteString
   , spCard :: B.ByteString
   , spModelCells :: [(String, Word32)]
-  , spFunctions :: [String]
   }
 
--- No-claim residue: only the byte ranges whose contents are operational state. Every
--- other change in a case must appear as an explicit behavior claim, so a wrong claim
--- fails instead of being pinned.
-pinnedBytes :: Inputs -> [(String, Int, Int)]
-pinnedBytes in' =
-  [ ("cells", 0x7e00, 0x8800)
-  , ("cells", 0x9000, 0xa000)
-  , ("media-state", 0, 0x200)
-  , ("modal-state", 0, 0x162)
-  , ("tables-ptr", 0x89edc0 - 0x81b09c, 0x89edd0 - 0x81b09c)
-  , ("kdata", 0, B.length (inKbin in') - B.length (inKtext in'))
-  , ("span-low", 0x970000 - 0x96cc64, 0x970800 - 0x96cc64)
-  ]
+data WorkspaceKind = KernelWorkspace | MediaWorkspace | UiWorkspace | StackWorkspace
+  | ModalWorkspace | EditorWorkspace | LabelWorkspace | NavigationWorkspace | StockReloadWorkspace | ConversionWorkspace | StockProcessingWorkspace
+  deriving (Show)
 
--- the stock conversion path the kernel's code check reaches: declared as one range so
--- its thunk and table reads execute inside the mapped lowcode span
--- the arm.S trampolines every bank flow can branch to (tail branches need exact entries)
-alwaysFns :: [String]
-alwaysFns =
-  [ "rb_call_stage_open"
-  , "rb_call_transition"
-  , "rb_call_redraw"
-  , "rb_call_set_dispatch"
-  , "rb_call_editor_confirm"
-  , "rb_call_postlude"
-  , "rb_call_leave_edge"
+newtype RegionId = RegionId String deriving (Eq)
+
+data AbiWorkspace = AbiWorkspace
+  { workspaceKind :: WorkspaceKind
+  , workspaceRegion :: RegionId
+  , workspaceStart :: Int
+  , workspaceEnd :: Int
+  }
+
+-- FUN_0061ceac's copy for the bank's edit root 0x72 (0x009412d4 + id * 0x2c).
+menuSnapshotCopy :: Word32
+menuSnapshotCopy = 0x0094266c
+
+-- FUN_01165aa0 keys the field drawer's highlight (0x015e6540) and current-value
+-- marker (0x015e6544) on words 4 and 5 of a FUN_0061cd14 snapshot and computes
+-- the marker row only when word 0 is 2. FUN_011662a0 draws the list and marker
+-- only in modes that take that snapshot fresh, or in modes 7 and 13, which put
+-- the marker on the highlight; menuSnapshotCopy's word 5 never places it. For
+-- word 0 = 2 and word 2 (the node type) = 9, FUN_01165aa0 sets 0x015e64dc = 3
+-- and FUN_011662a0 draws no left pane.
+-- Each accessor takes the fresh snapshot and returns one word.
+data FrameSnapshotWord = SnapshotDepth | SnapshotNodeType | SnapshotCursorToken | SnapshotCurrentToken
+
+snapshotAccessor :: FrameSnapshotWord -> GuestAddress
+snapshotAccessor SnapshotDepth = GuestAddress 0x0061ca2c
+snapshotAccessor SnapshotNodeType = GuestAddress 0x0061d1a4
+snapshotAccessor SnapshotCursorToken = GuestAddress 0x0061d244
+snapshotAccessor SnapshotCurrentToken = GuestAddress 0x0061d294
+
+-- The cells region starts at menuSnapshotCopy and ends at the case stack's top.
+cellsBase, cellsEnd :: Word32
+cellsBase = menuSnapshotCopy
+cellsEnd = 0x0095a000
+
+defaultsRowAddress :: Word32
+defaultsRowAddress = 0x007cb804
+
+-- The tables-edit region ends with the stock defaults row.
+tablesEditEnd :: Word32
+tablesEditEnd = defaultsRowAddress + 0x28
+
+-- rb_call_stock_draw_root replays FUN_0115815c's push {r4, r5, r11, lr} and
+-- branches here. The stock drawer behind this point lies outside the mapped
+-- images; the model returns at once through FUN_0115815c's pop.
+stockDrawTail :: GuestAddress
+stockDrawTail = GuestAddress 0x01158160
+
+stockDrawTailCode :: B.ByteString
+stockDrawTailCode = u32le 0xe8bd8830
+
+-- The same region carries model bodies for FUN_0115815c's two callees, declared
+-- as one function span. Each stores its arguments in the draw-state cells at
+-- stockPaneRecord and returns: FUN_01166200(preparation) at +0,
+-- FUN_011662a0(root, kind) at +4 and +8.
+stockPaneRecord :: Word32
+stockPaneRecord = 0x015e4800
+
+stockDrawTailEnd :: Word32
+stockDrawTailEnd = 0x011662b4
+
+stockDrawTailImage :: B.ByteString
+stockDrawTailImage =
+  overlay (B.replicate (fromIntegral (stockDrawTailEnd - base)) 0)
+    [ (0, stockDrawTailCode)
+    , (fromIntegral (0x01166200 - base), B.concat (map u32le [movwR12, movtR12, 0xe58c0000, 0xe12fff1e]))
+    , (fromIntegral (0x011662a0 - base), B.concat (map u32le [movwR12, movtR12, 0xe58c0004, 0xe58c1008, 0xe12fff1e]))
+    ]
+  where
+    base = guestWord stockDrawTail
+    movwR12 = 0xe300c000 .|. ((stockPaneRecord .&. 0xf000) `shiftL` 4) .|. (stockPaneRecord .&. 0x0fff)
+    movtR12 = 0xe340c000 .|. ((stockPaneRecord `shiftR` 12) .&. 0xf0000) .|. ((stockPaneRecord `shiftR` 16) .&. 0x0fff)
+
+stockPaneCallFns :: [(Integer, Integer)]
+stockPaneCallFns = [(0x01166200, fromIntegral (stockDrawTailEnd - 0x01166200))]
+
+-- The stock bodies behind rb_bank_draw_backdrop's trampolines (draw mode
+-- 0x01112b2c, filled rect 0x01113514, backdrop gate 0x01135db0) lie outside the
+-- mapped images. The gate returns 0 (draw) and each body returns at once; one
+-- function span covers the three, which keeps the pane case inside the
+-- 160-function case limit.
+stockDrawCallsEnd :: Word32
+stockDrawCallsEnd = 0x01135db8
+
+stockDrawCallsImage :: B.ByteString
+stockDrawCallsImage =
+  overlay (B.replicate (fromIntegral (stockDrawCallsEnd - 0x01112b2c)) 0)
+    [ (0, u32le 0xe12fff1e)
+    , (0x01113514 - 0x01112b2c, u32le 0xe12fff1e)
+    , (0x01135db0 - 0x01112b2c, u32le 0xe3a00000)
+    , (0x01135db0 - 0x01112b2c + 4, u32le 0xe12fff1e)
+    ]
+
+stockDrawCallFns :: [(Integer, Integer)]
+stockDrawCallFns = [(0x01112b2c, fromIntegral (stockDrawCallsEnd - 0x01112b2c))]
+
+-- A case that calls the draw-root hook maps the stock draw tail in place of the
+-- ui-b delegates (stock SET, editor confirm, leaving edge), which only
+-- rb_ui_stock reaches; a fetch from their range faults.
+data RegionProfile = ProcessingProfile | DrawRootProfile | PaneDrawProfile deriving (Eq)
+
+regionProfile :: Env -> Spec -> RegionProfile
+regionProfile e sp
+  | any callsPane (spSteps sp) = PaneDrawProfile
+  | any callsDrawRoot (spSteps sp) = DrawRootProfile
+  | otherwise = ProcessingProfile
+  where
+    callsPane (WriteWord a _) = a == 0x015e4894
+    callsPane _ = False
+    callsDrawRoot (ReadField a _ _) = a == guestWord (eDrawRoot e)
+    callsDrawRoot _ = False
+
+-- The verb-page draw reaches no table region; the pane case drops the two
+-- field tables and the ui-b delegates to stay inside the 16-region case ABI.
+inProfile :: RegionProfile -> RegionId -> Bool
+inProfile ProcessingProfile name =
+  name `notElem` [RegionId "stock-draw-tail", RegionId "draw-state", RegionId "stock-draw-calls"]
+inProfile DrawRootProfile name =
+  name `notElem` [RegionId "ui-b", RegionId "draw-state", RegionId "stock-draw-calls"]
+inProfile PaneDrawProfile name =
+  name `notElem` [RegionId "ui-b", RegionId "tables-ptr", RegionId "tables-edit"]
+
+caseWorkspaces :: Inputs -> Env -> Spec -> [AbiWorkspace]
+caseWorkspaces in' e sp =
+  [w | w <- abiWorkspaces in' e, inProfile (regionProfile e sp) (workspaceRegion w)]
+
+cellsSize :: Int
+cellsSize = fromIntegral (cellsEnd - cellsBase)
+
+cellOffset :: Word32 -> Int
+cellOffset a = fromIntegral (a - cellsBase)
+
+abiWorkspaces :: Inputs -> Env -> [AbiWorkspace]
+abiWorkspaces in' e =
+  [ at UiWorkspace 0x00957e00 0x1200
+  , at StackWorkspace 0x00959000 0x1000
+  , area MediaWorkspace "media-state" 0 0x200
+  , area ModalWorkspace "modal-state" 2 4
+  , area ModalWorkspace "modal-state" 0x15e 0x160
+  , at EditorWorkspace 0x00954384 0xf
+  , at EditorWorkspace 0x009504a8 4
+  -- FUN_0063d688 derives this Boolean from notification query 0x1c.
+  , at StockProcessingWorkspace 0x00956858 4
+  -- FUN_0063d614 mirrors the processing gate.
+  , at StockProcessingWorkspace 0x00956c40 4
+  -- The bank's draw-time preparation writes the current-row cell, and earlier
+  -- candidates' field OK wrote both; the model has no stock walk or block
+  -- restore to rewrite them.
+  , at NavigationWorkspace (eCurrentRow e) 4
+  , at NavigationWorkspace menuSnapshotCopy 0x2c
+  , area KernelWorkspace "kdata" 0 (B.length (inKbin in') - B.length (inKtext in'))
+  , area MediaWorkspace "span-low" (0x970000 - 0x96cc64) (0x970800 - 0x96cc64)
+  -- FUN_0061d9ec reloads only the ordinary block; the C record starts at +0x140.
+  , area StockReloadWorkspace "mirror" 0x10 0x128
+  -- The ordinary property-0x1c6 setter saves its previous byte at 0x0062d744.
+  , area StockReloadWorkspace "mirror" 0x1a6 0x1a7
+  -- FUN_00631a00 writes the Boolean conversion-not-found word.
+  , area ConversionWorkspace "mirror" 0x1c8 0x1cc
   ]
+  ++ [at LabelWorkspace (eNameBase e + (3 + slot) * 0x42) 26 | slot <- [0 .. 6]]
+  ++ [at NavigationWorkspace (node + 0x1c) 4 | node <- eSlot e : eRecall e : eEditor e : eEditScreen e : eDialog e : eSubs e ++ eFields e]
+  where
+    area kind region lo hi = AbiWorkspace kind (RegionId region) lo hi
+    at kind address count = let (region, offset) = regionOf e address in area kind region offset (offset + count)
 
 stockFns :: [(Word32, Int)]
 stockFns =
-  [ (0x0061c400, 0x14dc)
-  , (0x0061d900, 0x810)
-  , (0x00630000, 0x4000)
-  , (0x00644000, 0x2000)
+  [ (0x0061c400, 0x6464cc - 0x61c400)
+  , (0x006464cc, 0x6464f4 - 0x6464cc)
+  , (0x006464f4, 0x646520 - 0x6464f4)
+  , (0x00646574, 48)
+  , (0x00646af0, 116)
+  , (0x00646c04, 152)
+  , (0x0004d978, 244)
+  , (0x0072b3a4, 16)
+  , (0x00d4d604, 20)
+  , (0x00d4fc74, 10768)
   ]
 
-specSet :: Env -> B.ByteString -> Word32 -> [Spec]
-specSet e id4 epochBump = slotCases ++ otherCases
+specSet :: Env -> Word32 -> [Spec]
+specSet e epochBump = slotCases ++ otherCases
   where
     sub k = eSubs e !! k
     field k = eFields e !! k
     out o = eOut e + 4 * fromIntegral o
+    uiLog w = eUiLog e + 4 * uiLogIndex w
+    rowToken node row = menuWord e (menuWord e (node + 0x20) + row * 8)
+    -- The edit-screen row whose child is field list k.
+    screenRow :: Int -> Word32
+    screenRow k =
+      maybe (error "a field list is not on the edit screen") fromIntegral $
+        findIndex (== field k) [menuWord e (menuWord e (eEditScreen e + 0x20) + 8 * r + 4) | r <- [0 .. 8]]
+    drawRoot o = ReadField (guestWord (eDrawRoot e)) 1 o
     cardCells = [("rbm_a_present", 1), ("rbm_a_size", 512)]
-    drRow1 = tableCode id4 0x00775428 1
-    stagedDr = B.take 0x05 validPayload <> B.pack [fromIntegral ((B.index validPayload 0x05 .&. 0x3f) .|. ((fromIntegral drRow1 `shiftL` 6) .&. 0xc0))] <> B.drop 0x06 validPayload
+    stagedDr = B.take 0x05 validPayload <> B.singleton 0x80 <> B.drop 0x06 validPayload
+    stagedDrFile = encodeFile 8 0x7f ((name26 (slotNames !! 0), stagedDr) : drop 1 slotsA)
+    -- The image-quality row-0 arm at 0x00d51c00 selects both quality flags.
+    qualityClaims = [claimU32 e 0x956890 1, claimU32 e 0x956b68 1]
+    consumerClaims =
+      [ claimU32 e cell downstream
+      | (cell, downstream) <-
+          [(0x956864, 3), (0x9568a0, 1), (0x9568b8, 9), (0x9568bc, 1),
+           (0x9568c0, 3), (0x95699c, 2), (0x956b40, 3), (0x956b44, 4)]
+      ] ++ qualityClaims ++ stockRecallConsumerClaims e SavedIso
 
     slotCases =
       [ Spec
           { spId = "n-slot-" ++ show k
           , spProv =
-              "contract: the root row " ++ hex 0x7d ++ " (index " ++ show (eRootEditRow e) ++ ") pushes the slot list, repoints its parent at the pushing frame and republishes the seven names from the card over the stale records; slot row " ++ show k ++ " opens submenu " ++ show k ++ " with the cursor at row 0; recall row " ++ show k ++ " applies slot " ++ show k ++ " (" ++ slotNames !! k ++ ") to the live row and leaves the card byte-identical"
+              "contract: the root row " ++ hex 0x7d ++ " opens the slot list and displays the card's name for slot " ++ show k ++ "; its submenu opens and BACK returns through the slot list to the shooting menu; OK on SELECT CUSTOM SETTING's row applies " ++ slotNames !! k ++ ", leaves the card byte-identical and hands the event to the stock SET delegate with the recall list's class and row token, whose leaf exit pops and blinks"
           , spSteps =
               [ Dispatch (eRootNode e) (fromIntegral (eRootEditRow e)) 8 0
               , Draw (eSlot e) k 1 k
-              , Dispatch (eSlot e) (fromIntegral k) 8 1
-              , Dispatch (eRecall e) (fromIntegral k) 8 2
+              , Navigate (fromIntegral k) 8 1
+              , Navigate 0 13 3
+              , Navigate 0 13 4
+              , Navigate (fromIntegral (eRootRecallRow e)) 8 5
+              , Navigate (fromIntegral k) 8 2
               ]
           , spClaims =
               [ claimU32 e (out 0) 0xffffffff
               , claimU32 e (out 1) 0xffffffff
-              , claimU32 e (out 2) 1
-              , claimAt e (sub k + 0x1c) (u32le (eSlot e))
-              , claimAt e (eSlot e + 0x1c) (u32le (eRootNode e))
-              , claimU32 e (eCursor e) 0
+              , claimU32 e (out 2) 0x2a
+              , claimU32 e (uiLog SetCalls) 1
+              , claimU32 e (uiLog SetClass) 0x285
+              , claimU32 e (uiLog SetToken) (rowToken (eRecall e) (fromIntegral k))
+              , claimU32 e (out 3) 0xffffffff
+              , claimU32 e (out 4) 0xffffffff
+              , claimU32 e (out 5) 0xffffffff
+              , claimU32 e (eCursor e) (fromIntegral k)
               , claimU32 e (eFrame e) (eRecall e)
               , claimAt e (eOut26 e + 32 * fromIntegral k) (name26 (slotNames !! k))
               , claimAt e 0x980000 cardA
-              , claimAt e (0x96cc64 + 0x168) (B.take 2 (payloadFor (fromIntegral k)))
-              , claimAt e (0x96cc64 + 0x16a) (B.take 2 (B.drop 2 (payloadFor (fromIntegral k))))
+              , claimAt e 0x96cc64 (ordinaryLive (B.take 4 (payloadFor (fromIntegral k))))
               ]
-                ++ [claimAt e (eNameBase e + (0x83f + fromIntegral s - 0x83c) * 0x42) (name26 (slotNames !! s)) | s <- [0 .. 6]]
+                ++ consumerClaims
           , spRefuse = 0
           , spSetResult = 0x2a
           , spConfirmResult = 0x37
           , spLive = B.replicate 0x1c2 0
           , spCard = cardA
           , spModelCells = cardCells
-          , spFunctions = ["rb_bank_interpose"]
           }
       | k <- [0 .. 6]
       ]
@@ -447,41 +695,538 @@ specSet e id4 epochBump = slotCases ++ otherCases
     otherCases =
       [ swapCase
       , swapMidScan
+      , sameFrameMediaCase
       , stockCase
       , staleBankCase
-      , staleStockCase
       , refusedCase
-      , itemCase True
-      , itemCase False
-      , editCase True
-      , editCase False
-      , confirmCase "save" True
-      , confirmCase "save" False
-      , confirmCase "reset" True
-      , confirmCase "reset" False
+      , fieldOkCase
+      , fieldStoredCase
+      , fieldColdCase
+      , editScreenRowCase
+      , editLeaveCase
+      , editFailCase False
+      , editFailCase True
+      , isoKeepsAutoFlagCase False
+      , isoKeepsAutoFlagCase True
+      , nativeEntryCase
+      , nativeHoverCase
+      , nativeDirectCase
+      , saveOkCase
+      , saveFailCase
+      , resetCase True
+      , resetCase False
       , refusedDialogCase
       , refusedDialogRetryCase
       , renameFailCase
+      , renameSuccessCase
       , renameCancelCase
+      , unnamedCase
+      , unnamedSetCase
+      , fieldGroupCase [0, 1, 2]
+      , fieldGroupCase [3, 4, 5]
+      , fieldGroupCase [6, 7, 8]
+      , editedRecallCase
+      , firstSaveCase
+      , resetRecallCase
+      , lastSlotCase
+      , verbPageCase
+      , verbPaneCase
+      , recallRefusedCase
+      , editOrderCase
+      , renameUnsetCase
+      , renameUnsetEmptyCase
+      , renameCapCase
+      , renameUnderCapCase
+      ] ++ [failureCase cancel | cancel <- [False, True]]
+
+    oneUnsetCard = encodeFile 7 0x7d (take 1 slotsA ++ [(B.replicate 26 0, B.replicate 0x28 0)] ++ drop 2 slotsA)
+
+    verbPageCase =
+      saveOkCase
+        { spId = "n-verb-page-no-left-pane"
+        , spProv = "contract: entering each slot's verb page from the slot list leaves the stock frame snapshot at depth 2 with node type 9, the inputs for which FUN_01165aa0 sets 0x015e64dc = 3 and FUN_011662a0 draws no left pane, so the slot list's selection block is not drawn on the verb page; BACK returns to the slot list on the entered slot's row"
+        , spSteps = concat
+            [ [ Dispatch (eSlot e) (fromIntegral k) 8 (4 * k)
+              , Call (guestWord (snapshotAccessor SnapshotDepth)) (4 * k + 1)
+              , Call (guestWord (snapshotAccessor SnapshotNodeType)) (4 * k + 2)
+              , Navigate 0 13 (4 * k + 3)
+              ]
+            | k <- [0 .. 6]
+            ]
+        , spClaims =
+            concat
+              [ [ claimU32 e (out (4 * k)) 0xffffffff
+                , claimU32 e (out (4 * k + 1)) 2
+                , claimU32 e (out (4 * k + 2)) 9
+                , claimU32 e (out (4 * k + 3)) 0xffffffff
+                ]
+              | k <- [0 .. 6]
+              ]
+              ++ [ claimU32 e (eFrame e) (eSlot e)
+                 , claimU32 e (eCursor e) 6
+                 , claimAt e 0x980000 (fileSlot cardA <> B.replicate 0x440 0)
+                 ]
+        }
+
+    verbPaneCase =
+      Spec
+        { spId = "n-verb-page-pane-state"
+        , spProv = "contract: a verb page drawn while the entry slide is pending (0x015e4894 = 9 and 0x015e489c = 9, the state FUN_00c77a6c's 0x92f send leaves on entry to root 0x61) starts that animation and takes the renderer's default pane branch: FUN_01166200 receives the pending preparation 9, FUN_011662a0 receives the verb page's root and kind 0, and both cells stay with the animator. Before the review fix the bank zeroed both cells, which stopped FUN_01166200 from starting the slide; FUN_011662a0's cases 7 and 9 draw the left pane's bar through 0x015e64e4, so passing kind 0 selects the branch that reads the depth-2/type-9 snapshot and draws no pane"
+        , spSteps =
+            [ WriteWord (eFrame e) (sub 2)
+            , WriteWord 0x015e4894 9
+            , WriteWord 0x015e489c 9
+            , ReadField (guestWord (eDrawRoot e)) 1 0
+            ]
+        , spClaims =
+            [ claimU32 e (eFrame e) (sub 2)
+            , claimU32 e 0x015e4894 9
+            , claimU32 e 0x015e489c 9
+            , claimU32 e stockPaneRecord 9
+            , claimU32 e (stockPaneRecord + 4) (menuWord e (sub 2))
+            , claimU32 e (stockPaneRecord + 8) 0
+            , claimAt e 0x980000 cardA
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
+            ]
+        , spRefuse = 0
+        , spSetResult = 0x2a
+        , spConfirmResult = 0x37
+        , spLive = B.replicate 0x1c2 0
+        , spCard = cardA
+        , spModelCells = []
+        }
+
+    recallRefusedCase =
+      saveOkCase
+        { spId = "n-recall-unset-refused"
+        , spProv = "contract: OK on SELECT CUSTOM SETTING's row of an unset slot records RB_UNSET and requests the failure redraw 0x400, applies nothing, leaves the card unchanged and keeps the recall list open on that row without the stock SET delegate"
+        , spSteps = [Dispatch (eRecall e) 1 8 0, Call (eStatusGetter e) 1]
+        , spClaims =
+            [ claimU32 e (out 0) 1
+            , claimU32 e (out 1) 6
+            , claimU32 e (uiLog SetCalls) 0
+            , claimU32 e (uiLog RedrawRequest) 0x400
+            , claimU32 e (eFrame e) (eRecall e)
+            , claimU32 e (eCursor e) 1
+            , claimAt e 0x980000 (fileSlot oneUnsetCard <> B.replicate 0x440 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
+            ]
+        , spLive = B.replicate 0x1c2 0
+        , spCard = oneUnsetCard
+        }
+
+    -- The shooting menu's page-1 fields in its row order (ISO, DYNAMIC RANGE,
+    -- FILM SIMULATION), WHITE BALANCE after FILM SIMULATION as in the Q menu,
+    -- then its page-2 fields in its row order (COLOR, SHARPNESS, HIGHLIGHT TONE,
+    -- SHADOW TONE, NOISE REDUCTION).
+    screenProperties = [0x141, 0x104, 0xfe, 0xed, 0x10e, 0x10f, 0x110, 0x111, 0xef]
+    fieldOfProperty p =
+      field (fromMaybe (error ("no edit field for property " ++ hex (toInteger p))) (findIndex ((== p) . F.fieldProperty) F.editFields))
+
+    editOrderCase =
+      fieldOkCase
+        { spId = "n-edit-screen-order"
+        , spProv = "contract: the edit screen's rows open ISO, DYNAMIC RANGE and FILM SIMULATION (shooting-menu page 1, in its row order), WHITE BALANCE (after FILM SIMULATION, as in the Q menu), then COLOR, SHARPNESS, HIGHLIGHT TONE, SHADOW TONE and NOISE REDUCTION (page 2, in its row order); BACK from each list returns to the edit screen on its row; nothing is written"
+        , spSteps =
+            [Dispatch (eSlot e) 0 8 0, Dispatch (sub 0) 2 8 1]
+              ++ concat
+                [ [ Dispatch (eEditScreen e) (fromIntegral r) 8 (2 + 3 * r)
+                  , Copy (out (3 + 3 * r)) (eFrame e) 4
+                  , Navigate 0 13 (4 + 3 * r)
+                  ]
+                | r <- [0 .. 8]
+                ]
+        , spClaims =
+            concat
+              [ [ claimU32 e (out (2 + 3 * r)) 0xffffffff
+                , claimU32 e (out (3 + 3 * r)) (fieldOfProperty p)
+                , claimU32 e (out (4 + 3 * r)) 0xffffffff
+                ]
+              | (r, p) <- zip [0 ..] screenProperties
+              ]
+              ++ [ claimU32 e (eFrame e) (eEditScreen e)
+                 , claimU32 e (eCursor e) 8
+                 , claimAt e 0x980000 (fileSlot cardA <> B.replicate 0x440 0)
+                 , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
+                 ]
+        }
+
+    renameUnsetCase =
+      renameFailCase
+        { spId = "n-rename-unset"
+        , spProv = "contract: renaming an unset slot to NOVEMBER sets it: the new generation carries the name over the stock per-slot defaults row 0x007cb804 with the slot's set bit, the editor returns to the slot's verb page in browse state and the slot list displays NOVEMBER"
+        , spSteps =
+            [ Dispatch (eRootNode e) (fromIntegral (eRootEditRow e)) 8 4
+            , Navigate 1 8 0
+            , Navigate 1 8 1
+            , InputName "NOVEMBER"
+            , Navigate 0x2a 8 2
+            , Draw (eSlot e) 1 1 0
+            ]
+        , spClaims =
+            [ claimU32 e (out 0) 0xffffffff
+            , claimU32 e (out 1) 0xffffffff
+            , claimU32 e (out 2) 0xffffffff
+            , claimAt e 0x146761e (u16le 0)
+            , claimU32 e (eFrame e) (sub 1)
+            , claimU32 e (eCursor e) 1
+            , claimAt e (eOut26 e) (name26 "NOVEMBER")
+            , claimAt e 0x980000 (fileSlot oneUnsetCard <> fileSlot named <> B.replicate 0x220 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
+            ]
+        , spCard = oneUnsetCard
+        , spModelCells = cardCells
+        }
+      where
+        named = encodeFile 8 0x7f (take 1 slotsA ++ [(name26 "NOVEMBER", eDefaultsRow e)] ++ drop 2 slotsA)
+
+    renameUnsetEmptyCase =
+      renameUnsetCase
+        { spId = "n-rename-unset-empty"
+        , spProv = "contract: confirming the empty name an unset slot's editor opens with writes nothing, returns to the slot's verb page in browse state and leaves the slot list displaying CUSTOM 2"
+        , spSteps =
+            [ Dispatch (eRootNode e) (fromIntegral (eRootEditRow e)) 8 4
+            , Navigate 1 8 0
+            , Navigate 1 8 1
+            , Navigate 0x2a 8 2
+            , Draw (eSlot e) 1 1 0
+            ]
+        , spClaims =
+            [ claimU32 e (out 2) 0xffffffff
+            , claimAt e 0x146761e (u16le 0)
+            , claimU32 e (eFrame e) (sub 1)
+            , claimU32 e (eCursor e) 1
+            , claimAt e (eOut26 e) (name26 "CUSTOM 2")
+            , claimAt e 0x980000 (fileSlot oneUnsetCard <> B.replicate 0x440 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
+            ]
+        }
+
+    renameCapCase =
+      renameFailCase
+        { spId = "n-rename-twelve-cap"
+        , spProv = "contract: with twelve characters staged, SET on a character row and on the space row adds nothing and does not enter the stock editor confirm, as FUN_00d4a2a0 ignores an insert into full buffer A; SET on the delete row still enters it; confirming stores the twelve characters"
+        , spSteps =
+            [ Dispatch (eRootNode e) (fromIntegral (eRootEditRow e)) 8 4
+            , Navigate 0 8 0
+            , Navigate 1 8 1
+            , InputName "ABCDEFGHIJKL"
+            , Navigate 0 8 2
+            , Navigate 0x24 8 3
+            , Navigate 0x29 8 5
+            , Navigate 0x2a 8 6
+            , Draw (eSlot e) 0 1 0
+            ]
+        , spClaims =
+            [ claimU32 e (out 2) 1
+            , claimU32 e (out 3) 1
+            , claimU32 e (out 5) 0x37
+            , claimU32 e (out 6) 0xffffffff
+            , claimU32 e (uiLog ConfirmCalls) 1
+            , claimAt e 0x146761e (u16le 0)
+            , claimU32 e (eFrame e) (sub 0)
+            , claimU32 e (eCursor e) 1
+            , claimAt e (eOut26 e) (name26 "ABCDEFGHIJKL")
+            , claimAt e 0x980000 (fileSlot cardA <> fileSlot renamed <> B.replicate 0x220 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
+            ]
+        , spModelCells = cardCells
+        }
+      where
+        renamed = encodeFile 8 0x7f ((name26 "ABCDEFGHIJKL", validPayload) : drop 1 slotsA)
+
+    renameUnderCapCase =
+      renameFailCase
+        { spId = "n-rename-eleven-insert"
+        , spProv = "contract: with eleven characters staged, SET on a character row enters the stock editor confirm and returns its result; DISP/BACK then cancels without a bank write"
+        , spSteps =
+            [ Dispatch (eRootNode e) (fromIntegral (eRootEditRow e)) 8 4
+            , Navigate 0 8 0
+            , Navigate 1 8 1
+            , InputName "ABCDEFGHIJK"
+            , Navigate 0 8 2
+            , Navigate 0 13 3
+            ]
+        , spClaims =
+            [ claimU32 e (out 2) 0x37
+            , claimU32 e (out 3) 0xffffffff
+            , claimU32 e (uiLog ConfirmCalls) 1
+            , claimAt e 0x146761e (u16le 0)
+            , claimU32 e (eFrame e) (sub 0)
+            , claimU32 e (eCursor e) 1
+            , claimAt e 0x980000 (fileSlot cardA <> B.replicate 0x440 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
+            ]
+        , spModelCells = cardCells
+        }
+
+    sameFrameMediaCase =
+      saveOkCase
+        { spId = "n-same-frame-media-refresh"
+        , spProv = "contract: replacing media and refreshing the existing verb page cannot rebind its accepted identity or authorize Save Current; refusal leaves the page, card files and live settings unchanged"
+        , spSteps =
+            [ Dispatch (eRootNode e) (fromIntegral (eRootEditRow e)) 8 0
+            , Navigate 0 8 1
+            , Copy 0x980000 (eFileB e) 512
+            , Call epochBump 2
+            , Refresh
+            , Navigate 0 8 3
+            , Navigate 0 8 4
+            , Call (eStatusGetter e) 6
+            ]
+        , spClaims =
+            [ claimU32 e (out 3) 1
+            , claimU32 e (out 4) 1
+            , claimU32 e (out 6) 13
+            , claimU32 e (uiLog SetCalls) 0
+            , claimU32 e (eCursor e) 0
+            , claimU32 e (eFrame e) (sub 0)
+            , claimAt e 0x980000 (fileSlot cardB <> B.replicate 0x440 0)
+            , claimAt e 0x96cc64 extractLive
+            ]
+        }
+
+    unnamedCase =
+      saveOkCase
+        { spId = "n-unnamed-slot-labels"
+        , spProv = "contract: seven unset slots display CUSTOM 1 through CUSTOM 7 without writing a bank file"
+        , spSteps = Dispatch (eRootNode e) (fromIntegral (eRootEditRow e)) 8 0
+            : [Draw (eSlot e) k 1 k | k <- [0 .. 6]]
+        , spClaims = [claimAt e 0x980000 (B.replicate 0x660 0)]
+            ++ [claimU32 e (eFrame e) (eSlot e), claimU32 e (eCursor e) 0]
+            ++ [claimAt e (eOut26 e + 32 * fromIntegral k) (name26 ("CUSTOM " ++ show (k + 1))) | k <- [0 .. 6]]
+        , spCard = B.replicate 0x660 0
+        , spModelCells = []
+        }
+
+    unnamedSetCase =
+      unnamedCase
+        { spId = "n-unnamed-set-slot-labels"
+        , spProv = "contract: seven set slots with empty stored names display CUSTOM 1 through CUSTOM 7 without changing their stored names or payloads"
+        , spCard = unnamedBank
+        , spModelCells = cardCells
+        , spClaims = [claimAt e 0x980000 (fileSlot unnamedBank <> B.replicate 0x440 0)]
+            ++ [claimU32 e (eFrame e) (eSlot e), claimU32 e (eCursor e) 0]
+            ++ [claimAt e (eOut26 e + 32 * fromIntegral k) (name26 ("CUSTOM " ++ show (k + 1))) | k <- [0 .. 6]]
+        }
+      where
+        unnamedBank = encodeFile 7 0x7f [(name26 "", payloadFor k) | k <- [0 .. 6]]
+
+    fieldGroupCase group =
+      fieldOkCase
+        { spId = "n-fields-" ++ intercalate "-" (map show group)
+        , spProv = "contract: OK on a row in each of fields " ++ show group ++ " stores that field before its list closes, writing one new generation per changed code into the alternate bank file, and hands the event to the stock SET delegate; BACK leaves each list and then the edit screen with no confirmation; editing never changes the live record"
+        , spSteps =
+            [Dispatch (eSlot e) 0 8 0, Dispatch (sub 0) 2 8 1]
+            ++ concat
+              [[ Dispatch (eEditScreen e) (screenRow k) 8 (2 + 3 * i)
+               , Dispatch (field k) (editCursor !! k) 8 (3 + 3 * i)
+               , Dispatch (field k) 0 13 (4 + 3 * i)
+               ] | (i, k) <- zip [0 ..] group]
+            ++ [Dispatch (eEditScreen e) 0 13 leaveOut]
+        , spClaims =
+            [ claimU32 e (out leaveOut) 0xffffffff
+            , claimU32 e (eFrame e) (sub 0)
+            , claimU32 e (eCursor e) 2
+            , claimAt e 0x980000 (fileSlot fileA <> fileSlot fileB <> B.replicate 0x220 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
+            ] ++ concat
+              [[claimU32 e (out (3 + 3 * i)) 0x2a, claimU32 e (out (4 + 3 * i)) 0xffffffff] | i <- [0 .. length group - 1]]
+        }
+      where
+        leaveOut = 2 + 3 * length group
+        -- Each changed field takes the next generation, into B for odd counts
+        -- and A for even ones; generation 7 is the input card.
+        states = scanl (\p k -> placeEdit (F.editFields !! k) p) validPayload
+          [k | k <- group, editChanged (F.editFields !! k)]
+        written = length states - 1
+        fileAt j = encodeFile (7 + fromIntegral j) 0x7f ((name26 (slotNames !! 0), states !! j) : drop 1 slotsA)
+        fileA = fileAt (if even written then written else written - 1)
+        fileB = if written == 0 then B.empty else fileAt (if odd written then written else written - 1)
+
+    editedRecallCase =
+      fieldOkCase
+        { spId = "n-recall-edited"
+        , spProv = "contract: Recall of a slot holding all nine edited field codes applies them through the stock consumers, then hands the event to the stock SET delegate with the recall list's class"
+        , spSteps = [Dispatch (eRecall e) 0 8 0]
+        , spClaims =
+            [ claimU32 e (out 0) 0x2a
+            , claimU32 e (uiLog SetCalls) 1
+            , claimU32 e (uiLog SetClass) 0x285
+            , claimU32 e (eFrame e) (eRecall e)
+            , claimU32 e (eCursor e) 0
+            , claimAt e 0x980000 (fileSlot editedCard <> B.replicate 0x440 0)
+            , claimAt e 0x96cc64 editedLive
+            ] ++ [claimU32 e cell value | (cell, value) <- [(0x956864, 0), (0x9568a0, 4), (0x9568b8, 0), (0x9568bc, 0), (0x9568c0, 2), (0x95699c, 4), (0x956b40, 0), (0x956b44, 1)]] ++ qualityClaims ++ stockRecallConsumerClaims e EditedAutoIso
+        , spCard = editedCard
+        }
+      where
+        editedCard = encodeFile 7 0x7f ((name26 (slotNames !! 0), editedPayload) : drop 1 slotsA)
+        editedLive = overlay (B.replicate 0x1c2 0)
+          [(0x10, B.take 4 validPayload), (0x2b, B.singleton 0x60), (0x34, B.singleton 0x20), (0x2d, B.singleton 0x80), (0x36, B.singleton 0x20)]
+
+    -- The row each field's OK selects, and the payload those rows produce.
+    editCursor = [0, 0, 1, 0, 0, 0, 0, 19, 0] :: [Word32]
+    editedPayload = B.pack [0x34,0x12,0x78,0x56,0,0,0,0x60,0,0x20,0,0,0,0,0,0,0x80,0,0,0x20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+    fieldValue f p = foldr (\b acc -> acc `shiftL` 8 .|. fromIntegral (B.index p (fromIntegral (F.fieldOffset f) + b))) (0 :: Word32) [0 .. fromIntegral (F.fieldBytes f) - 1]
+    masked f p = fieldValue f p .&. fromIntegral (F.fieldMask f)
+    editChanged f = masked f editedPayload /= masked f validPayload
+    -- Staging ISO (0x141) also stages its auto flag 0x146 = (code /= 0x1b).
+    placeEdit f p
+      | F.fieldProperty f == 0x141 =
+          placeBits isoAutoFlag (if masked f editedPayload `shiftR` fromIntegral (F.fieldShift f) == 0x1b then 0 else fromIntegral (F.fieldMask isoAutoFlag)) placed
+      | otherwise = placed
+      where placed = placeBits f (masked f editedPayload) p
+    isoAutoFlag = head [g | g <- F.payloadFields, F.fieldProperty g == 0x146]
+    placeBits f bits p =
+      let v = (fieldValue f p .&. complement (fromIntegral (F.fieldMask f))) .|. bits
+          o = fromIntegral (F.fieldOffset f)
+          n = fromIntegral (F.fieldBytes f)
+      in B.take o p <> B.pack [fromIntegral (v `shiftR` (8 * b)) | b <- [0 .. n - 1]] <> B.drop (o + n) p
+
+    lastSlotCase =
+      saveOkCase
+        { spId = "n-last-slot-rename-save"
+        , spProv = "contract: renaming slot 7 to a maximum-length name then overwriting its payload with Save Current preserves that name, the other six slots and live settings, and Save Current's OK hands the event to the stock SET delegate on the slot-7 verb page"
+        , spSteps =
+            [ Dispatch (eRootNode e) (fromIntegral (eRootEditRow e)) 8 0
+            , Navigate 6 8 1
+            , Navigate 1 8 2
+            , InputName "SIERRA-SLOT7"
+            , Navigate 0x2a 8 3
+            , Navigate 0 8 4
+            , Draw (eSlot e) 6 1 0
+            , Draw (eSlot e) 0 1 1
+            ]
+        , spClaims =
+            [ claimU32 e (out 3) 0xffffffff
+            , claimU32 e (out 4) 0x2a
+            , claimU32 e (uiLog SetCalls) 1
+            , claimU32 e (uiLog SetClass) 0x276
+            , claimU32 e (uiLog SetToken) (rowToken (sub 6) 0)
+            , claimU32 e (eFrame e) (sub 6)
+            , claimU32 e (eCursor e) 0
+            , claimAt e (eOut26 e) (name26 "SIERRA-SLOT7")
+            , claimAt e (eOut26 e + 32) (name26 "ALPHA")
+            , claimAt e 0x980000 (fileSlot saved <> fileSlot renamed <> B.replicate 0x220 0)
+            , claimAt e 0x96cc64 extractLive
+            ]
+        }
+      where
+        saved = encodeFile 9 0x7f (take 6 slotsA ++ [(name26 "SIERRA-SLOT7", extractPayload)])
+        renamed = encodeFile 8 0x7f (take 6 slotsA ++ [(name26 "SIERRA-SLOT7", payloadFor 6)])
+
+    firstSaveCase =
+      saveOkCase
+        { spId = "n-first-save-recall"
+        , spProv = "contract: Save Current into an empty bank writes one set slot with an empty stored name and hands the event to the stock SET delegate; reopening Recall accepts the file with six unset slots, reproduces the saved ordinary fields and hands its OK to the stock SET delegate too; the displayed name is CUSTOM 1"
+        , spSteps =
+            [ Dispatch (eRootNode e) (fromIntegral (eRootEditRow e)) 8 4
+            , Navigate 0 8 0
+            , Navigate 0 8 1
+            , Navigate 0 13 5
+            , Navigate 0 13 6
+            , Navigate (fromIntegral (eRootRecallRow e)) 8 7
+            , Navigate 0 8 3
+            , Draw (eRecall e) 0 1 0
+            ]
+        , spClaims =
+            [ claimU32 e (out 1) 0x2a
+            , claimU32 e (uiLog SetCalls) 2
+            , claimU32 e (uiLog SetClass) 0x285
+            , claimU32 e (out 3) 0x2a
+            , claimU32 e (eFrame e) (eRecall e)
+            , claimU32 e (eCursor e) 0
+            , claimAt e 0x980000 (fileSlot (encodeFile 1 1 [(name26 "", extractPayload)]) <> B.replicate 0x440 0)
+            , claimAt e 0x96cc64 extractLive
+            , claimAt e (eOut26 e) (name26 "CUSTOM 1")
+            ] ++ consumerClaims
+        , spCard = B.replicate 0x660 0
+        , spModelCells = []
+        }
+    navigationReset (BankSlot slot) =
+      [ Dispatch (eRootNode e) (fromIntegral (eRootEditRow e)) 8 4
+      , Navigate slot 8 0
+      , Navigate 3 8 1
+      , Navigate 0 8 2
+      , Navigate 0 13 5
+      , Navigate 0 13 6
+      , Navigate (fromIntegral (eRootRecallRow e)) 8 7
       ]
+
+
+    resetRecallCase =
+      (resetCase True)
+        { spId = "n-reset-recall-other"
+        , spProv = "contract: resetting slot 7 clears its maximum-length name, payload and set bit; a subsequent Recall reloads the bank, applies slot 1 unchanged, including its name and both full-width fields, and hands its OK to the stock SET delegate"
+        , spSteps = navigationReset (BankSlot 6)
+            ++ [Navigate 1 8 3, Draw (eRecall e) 1 1 0, Draw (eSlot e) 6 1 1]
+        , spClaims =
+            [ claimU32 e (out 2) 1
+            , claimU32 e (out 3) 0x2a
+            , claimU32 e (uiLog SetCalls) 1
+            , claimU32 e (eFrame e) (eRecall e)
+            , claimU32 e (eCursor e) 1
+            , claimAt e 0x980000 (fileSlot longNameBank <> fileSlot resetFile <> B.replicate 0x220 0)
+            , claimAt e 0x96cc64 (ordinaryLive (B.take 4 (payloadFor 1)))
+            , claimAt e (eOut26 e) (name26 "BRAVO")
+            , claimAt e (eOut26 e + 32) (name26 "CUSTOM 7")
+            ] ++ consumerClaims
+        , spCard = longNameBank
+        }
+      where
+        longNameBank = encodeFile 7 0x7f (take 6 slotsA ++ [(name26 "SIERRA-SLOT7", payloadFor 6)])
+        resetFile = encodeFile 8 0x3f (take 6 slotsA ++ [(name26 "", B.replicate 0x28 0)])
+
+    failureCase cancel =
+      base
+        { spId = "n-reset-write-fail" ++ (if cancel then "-cancel" else "")
+        , spProv = "contract: a read-only reset completion reports the storage error, leaves the bank unchanged and keeps the confirmation open; " ++ (if cancel then "CANCEL exits without retrying the write" else "the dialog remains on OK")
+        , spSteps = spSteps base ++ [Dispatch (eDialog e) 1 8 (lastOut + 1) | cancel]
+        , spClaims =
+            [ claimU32 e (out lastOut) 1
+            , claimU32 e (eFrame e) (if cancel then sub 0 else eDialog e)
+            , claimU32 e (eCursor e) (if cancel then 3 else 0)
+            , claimAt e 0x980000 (fileSlot cardA <> B.replicate 0x440 0)
+            , claimAt e 0x96cc64 (spLive base)
+            ] ++ [claimU32 e (out (lastOut + 1)) 1 | cancel]
+        , spModelCells = cardCells ++ [("rbm_write_comp", 8)]
+        }
+      where
+        base = resetCase True
+        lastOut = 2 :: Int
+
+    saveFailCase =
+      saveOkCase
+        { spId = "n-save-write-fail"
+        , spProv = "contract: a read-only completion of Save Current's OK reports the storage error, leaves the bank unchanged and keeps the verb page open on the Save Current row without the stock SET delegate"
+        , spClaims =
+            [ claimU32 e (out 0) 0xffffffff
+            , claimU32 e (out 1) 1
+            , claimU32 e (uiLog SetCalls) 0
+            , claimU32 e (eCursor e) 0
+            , claimU32 e (eFrame e) (sub 0)
+            , claimAt e 0x980000 (fileSlot cardA <> B.replicate 0x440 0)
+            , claimAt e 0x96cc64 extractLive
+            ]
+        , spModelCells = cardCells ++ [("rbm_write_comp", 8)]
+        }
 
     refusedDialogCase =
       Spec
         { spId = "n-refused-dialog"
-        , spProv = "contract: a refused dialog raise from the edit screen's leaving edge pops back to the submenu and restores the caller's row (2), so the hidden dialog row is not left selected"
+        , spProv = "contract: a refused Reset confirmation raise keeps the submenu frame and restores the caller's row (3), so the hidden dialog row is not left selected, and writes nothing"
         , spSteps =
             [ Dispatch (eSlot e) 0 8 0
-            , Dispatch (sub 0) 2 8 1
             , WriteWord (eRefuse e) 1
-            , Dispatch (eEditScreen e) 0 13 2
+            , Dispatch (sub 0) 3 8 1
             ]
         , spClaims =
             [ claimU32 e (out 0) 0xffffffff
             , claimU32 e (out 1) 1
-            , claimU32 e (out 2) 0xffffffff
-            , claimU32 e (eCursor e) 2
+            , claimU32 e (eCursor e) 3
             , claimU32 e (eFrame e) (sub 0)
-            , claimAt e (eEditScreen e + 0x1c) (u32le (sub 0))
+            , claimAt e 0x980000 (fileSlot cardA <> B.replicate 0x440 0)
             ]
         , spRefuse = 0
         , spSetResult = 0x2a
@@ -489,29 +1234,26 @@ specSet e id4 epochBump = slotCases ++ otherCases
         , spLive = B.replicate 0x1c2 0
         , spCard = cardA
         , spModelCells = cardCells
-        , spFunctions = ["rb_bank_interpose", "rb_stage_edit_open"]
         }
 
     refusedDialogRetryCase =
       Spec
         { spId = "n-refused-dialog-retry"
-        , spProv = "contract: after a refused dialog raise, a SET on the submenu's edit row opens the edit screen again rather than a dialog with no pending confirmation"
+        , spProv = "contract: after a refused confirmation raise, SET on the submenu's Reset row raises the confirmation dialog with its cursor on row 0"
         , spSteps =
             [ Dispatch (eSlot e) 0 8 0
-            , Dispatch (sub 0) 2 8 1
             , WriteWord (eRefuse e) 1
-            , Dispatch (eEditScreen e) 0 13 2
+            , Dispatch (sub 0) 3 8 1
             , WriteWord (eRefuse e) 0
-            , Dispatch (sub 0) 2 8 3
+            , Dispatch (sub 0) 3 8 2
             ]
         , spClaims =
             [ claimU32 e (out 0) 0xffffffff
             , claimU32 e (out 1) 1
-            , claimU32 e (out 2) 0xffffffff
-            , claimU32 e (out 3) 1
+            , claimU32 e (out 2) 1
             , claimU32 e (eCursor e) 0
-            , claimU32 e (eFrame e) (eEditScreen e)
-            , claimAt e (eEditScreen e + 0x1c) (u32le (sub 0))
+            , claimU32 e (eFrame e) (eDialog e)
+            , claimAt e 0x980000 (fileSlot cardA <> B.replicate 0x440 0)
             ]
         , spRefuse = 0
         , spSetResult = 0x2a
@@ -519,7 +1261,6 @@ specSet e id4 epochBump = slotCases ++ otherCases
         , spLive = B.replicate 0x1c2 0
         , spCard = cardA
         , spModelCells = cardCells
-        , spFunctions = ["rb_bank_interpose", "rb_stage_edit_open"]
         }
 
     swapCase =
@@ -543,10 +1284,8 @@ specSet e id4 epochBump = slotCases ++ otherCases
             , claimU32 e (eCursor e) 0
             , claimAt e (eOut26 e) (name26 (slotNames !! 0))
             , claimAt e (eOut26 e + 32 * 8) (name26 (swapNames !! 0))
-            , claimAt e (eSlot e + 0x1c) (u32le (eRootNode e))
             , claimU32 e (eFrame e) (eSlot e)
             ]
-              ++ [claimAt e (eNameBase e + (0x83f + fromIntegral s - 0x83c) * 0x42) (name26 (swapNames !! s)) | s <- [0 .. 6]]
               ++ [claimAt e 0x980000 cardB]
         , spRefuse = 0
         , spSetResult = 0x2a
@@ -554,28 +1293,26 @@ specSet e id4 epochBump = slotCases ++ otherCases
         , spLive = B.replicate 0x1c2 0
         , spCard = cardA
         , spModelCells = cardCells
-        , spFunctions = ["rb_bank_interpose", "rb_media_epoch_bump"]
         }
 
     swapMidScan =
       Spec
         { spId = "n-swap-midscan"
-        , spProv = "contract: a card change during the load's scan is refused with RB_MEDIA_CHANGED while the resident bank holds; the push still completes and the records keep their previous bytes instead of mixing the two cards"
+        , spProv = "contract: a card change during discovery completes the page push without publishing names from either partially read bank; all seven rows display their CUSTOM fallback labels"
         , spSteps = [Dispatch (eRootNode e) (fromIntegral (eRootEditRow e)) 8 0]
+            ++ [Draw (eSlot e) k 1 k | k <- [0 .. 6]]
         , spClaims =
             [ claimU32 e (out 0) 0xffffffff
             , claimU32 e (eCursor e) 0
-            , claimAt e (eSlot e + 0x1c) (u32le (eRootNode e))
             , claimU32 e (eFrame e) (eSlot e)
             , claimAt e 0x980000 swappedCard
-            ]
+            ] ++ [claimAt e (eOut26 e + 32 * fromIntegral k) (name26 ("CUSTOM " ++ show (k + 1))) | k <- [0 .. 6]]
         , spRefuse = 0
         , spSetResult = 0x2a
         , spConfirmResult = 0x37
         , spLive = B.replicate 0x1c2 0
         , spCard = cardWith3 cardA cardC
-        , spModelCells = cardCells ++ [("rbm_swap_step", 2), ("rbm_swap_a_size", 512)]
-        , spFunctions = ["rb_bank_interpose"]
+        , spModelCells = cardCells ++ [swapBoundaryCell BeforeDiscoveryStat, ("rbm_swap_a_size", 512)]
         }
       where
         swappedCard = fileSlot cardC <> B.replicate 0x220 0 <> fileSlot cardC
@@ -583,22 +1320,17 @@ specSet e id4 epochBump = slotCases ++ otherCases
     stockCase =
       Spec
         { spId = "n-stock-page"
-        , spProv = "contract: an unrelated stock page (class 5) delegates every row and the leave edge unchanged: the interposer returns the delegate's word, the frame, cursor and the stock children's parent fields are untouched, and the row whose token equals the bank root token but whose child is not a bank page is not claimed"
+        , spProv = "contract: an unrelated stock page (class 5), including a row with the bank root token but a non-bank child, preserves the frame, cursor, stock child parent fields, live state and durable bank"
         , spSteps =
             [ Dispatch (eStockNode e) 0 8 0
             , Dispatch (eStockNode e) 1 8 1
             , Dispatch (eStockNode e) 0 13 2
             ]
         , spClaims =
-            [ claimU32 e (out 0) 0x2a
-            , claimU32 e (out 1) 0x2a
-            , claimU32 e (out 2) 0
-            , claimU32 e (eLog e + 0) 2
-            , claimU32 e (eLog e + 4) 1
-            , claimU32 e (eLog e + 4 * 7) 5
-            , claimU32 e (eLog e + 4 * 8) 0x7d
-            , claimU32 e (eCursor e) 0
+            [ claimU32 e (eCursor e) 0
             , claimU32 e (eFrame e) (eStockNode e)
+            , claimAt e 0x980000 cardA
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
             ]
         , spRefuse = 0
         , spSetResult = 0x2a
@@ -606,7 +1338,6 @@ specSet e id4 epochBump = slotCases ++ otherCases
         , spLive = B.replicate 0x1c2 0
         , spCard = cardA
         , spModelCells = cardCells
-        , spFunctions = ["rb_bank_interpose"]
         }
 
     staleBankCase =
@@ -616,7 +1347,6 @@ specSet e id4 epochBump = slotCases ++ otherCases
         , spSteps = [Dispatch (eSlot e) 99 8 0]
         , spClaims =
             [ claimU32 e (out 0) 1
-            , claimU32 e (eLog e + 0) 0
             , claimU32 e (eCursor e) 0
             , claimU32 e (eFrame e) (eSlot e)
             ]
@@ -626,37 +1356,16 @@ specSet e id4 epochBump = slotCases ++ otherCases
         , spLive = B.replicate 0x1c2 0
         , spCard = cardA
         , spModelCells = cardCells
-        , spFunctions = ["rb_bank_interpose"]
         }
 
-    staleStockCase =
-      Spec
-        { spId = "n-stale-stock"
-        , spProv = "contract: a stale cursor on an unrelated stock page is clamped and dropped before delegation, so the stock delegate's unchecked values[cursor] read is never reached"
-        , spSteps = [Dispatch (eStockNode e) 9 8 0]
-        , spClaims =
-            [ claimU32 e (out 0) 1
-            , claimU32 e (eLog e + 0) 0
-            , claimU32 e (eCursor e) 0
-            , claimU32 e (eFrame e) (eStockNode e)
-            ]
-        , spRefuse = 0
-        , spSetResult = 0x2a
-        , spConfirmResult = 0x37
-        , spLive = B.replicate 0x1c2 0
-        , spCard = cardA
-        , spModelCells = cardCells
-        , spFunctions = ["rb_bank_interpose"]
-        }
 
     refusedCase =
       Spec
         { spId = "n-refused-push"
-        , spProv = "contract: a refused push transition leaves the pushed child's parent field at its emitted value and the frame, cursor and records unchanged"
-        , spSteps = [Dispatch (eSlot e) 0 8 0, Draw (eSlot e) 0 1 0]
+        , spProv = "contract: a refused submenu push returns refusal and preserves the current slot-list frame and selected row"
+        , spSteps = [Dispatch (eSlot e) 0 8 0]
         , spClaims =
             [ claimU32 e (out 0) 0
-            , claimAt e (sub 0 + 0x1c) (u32le (wordAt e (sub 0) 0x1c))
             , claimU32 e (eCursor e) 0
             , claimU32 e (eFrame e) (eSlot e)
             ]
@@ -666,36 +1375,84 @@ specSet e id4 epochBump = slotCases ++ otherCases
         , spLive = B.replicate 0x1c2 0
         , spCard = cardA
         , spModelCells = cardCells
-        , spFunctions = ["rb_bank_interpose"]
         }
 
-    itemCase ok =
-      Spec
-        { spId = if ok then "n-item-ok" else "n-item-cancel"
-        , spProv =
-            "contract: the edit screen's first row opens the DR field list, DR row 1 stages the table code, the field host's leaving edge raises the item dialog, and the dialog's "
-              ++ (if ok then "OK keeps the staged code" else "CANCEL restores the code the item session replaced")
-              ++ "; both pop back to the edit screen with the card untouched"
+    fieldColdCase =
+      fieldOkCase
+        { spId = "n-field-cold-stored-marker"
+        , spProv = "contract: opening the DR list of a slot whose stored code 1 (pinned row 1) differs from the live code 0, with the native entry cursor on row 1 and the stock current-row cell on the live row 0, the draw-root hook called with root 1 leaves the drawer's frame snapshot at depth 2, highlighting and marking row 1; the card and live record are untouched"
         , spSteps =
             [ Dispatch (eSlot e) 0 8 0
             , Dispatch (sub 0) 2 8 1
-            , Dispatch (eEditScreen e) 0 8 2
-            , Dispatch (field 0) 1 8 3
-            , Dispatch (field 0) 0 13 4
-            , Dispatch (eDialog e) (if ok then 0 else 1) 8 5
+            , Dispatch (eEditScreen e) (screenRow 0) 8 2
+            , WriteWord (eCursor e) 1
+            , WriteWord (eCurrentRow e) 0
+            , ReadField (eFieldGetter e) 0x267 3
+            , drawRoot 4
+            , Call (guestWord (snapshotAccessor SnapshotDepth)) 5
+            , Call (guestWord (snapshotAccessor SnapshotCursorToken)) 6
+            , Call (guestWord (snapshotAccessor SnapshotCurrentToken)) 7
             ]
         , spClaims =
             [ claimU32 e (out 0) 0xffffffff
             , claimU32 e (out 1) 1
             , claimU32 e (out 2) 0xffffffff
             , claimU32 e (out 3) 1
-            , claimU32 e (out 4) 1
-            , claimU32 e (out 5) 1
-            , claimU32 e (eCursor e) 0
+            , claimU32 e (out 5) 2
+            , claimU32 e (out 6) (rowToken (field 0) 1)
+            , claimU32 e (out 7) (rowToken (field 0) 1)
+            , claimU32 e (eFrame e) (field 0)
+            , claimU32 e (eCursor e) 1
+            , claimAt e 0x980000 (fileSlot cardA <> B.replicate 0x440 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
+            ]
+        }
+
+    editScreenRowCase =
+      fieldOkCase
+        { spId = "n-edit-screen-current-row"
+        , spProv = "contract: on the edit screen of a staged edit, the draw-root hook called with root 1 leaves the stock current-row cell on row 3, so the frame snapshot's current-value word stays row 3's token"
+        , spSteps =
+            [ Dispatch (eSlot e) 0 8 0
+            , Dispatch (sub 0) 2 8 1
+            , WriteWord (eCurrentRow e) 3
+            , drawRoot 3
+            , Call (guestWord (snapshotAccessor SnapshotCurrentToken)) 2
+            ]
+        , spClaims =
+            [ claimU32 e (out 0) 0xffffffff
+            , claimU32 e (out 1) 1
+            , claimU32 e (out 2) (rowToken (eEditScreen e) 3)
             , claimU32 e (eFrame e) (eEditScreen e)
-            , claimAt e (eEditScreen e + 0x1c) (u32le (sub 0))
-            , claimAt e (eDialog e + 0x1c) (u32le (field 0))
-            , claimAt e 0x980000 cardA
+            , claimAt e 0x980000 (fileSlot cardA <> B.replicate 0x440 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
+            ]
+        }
+
+    fieldOkCase =
+      Spec
+        { spId = "n-field-ok"
+        , spProv = "contract: the edit screen's DYNAMIC RANGE row opens the DR field list; OK on DR row 2, whose code differs from the stored code 1, writes a new-generation bank file carrying code 2 and the slot's name, then hands the event to the stock SET delegate with the list's class and row token and returns its result; the getter reads code 2 and the live record is untouched"
+        , spSteps =
+            [ Dispatch (eSlot e) 0 8 0
+            , Dispatch (sub 0) 2 8 1
+            , Dispatch (eEditScreen e) (screenRow 0) 8 2
+            , Dispatch (field 0) 2 8 3
+            , ReadField (eFieldGetter e) 0x267 4
+            ]
+        , spClaims =
+            [ claimU32 e (out 0) 0xffffffff
+            , claimU32 e (out 1) 1
+            , claimU32 e (out 2) 0xffffffff
+            , claimU32 e (out 3) 0x2a
+            , claimU32 e (out 4) 2
+            , claimU32 e (uiLog SetCalls) 1
+            , claimU32 e (uiLog SetClass) 0x267
+            , claimU32 e (uiLog SetToken) (rowToken (field 0) 2)
+            , claimU32 e (eCursor e) 2
+            , claimU32 e (eFrame e) (field 0)
+            , claimAt e 0x980000 (fileSlot cardA <> fileSlot stagedDrFile <> B.replicate 0x220 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
             ]
         , spRefuse = 0
         , spSetResult = 0x2a
@@ -703,124 +1460,261 @@ specSet e id4 epochBump = slotCases ++ otherCases
         , spLive = B.replicate 0x1c2 0
         , spCard = cardA
         , spModelCells = cardCells
-        , spFunctions = ["rb_bank_interpose", "rb_stage_edit_open"]
         }
 
-    editCase ok =
-      Spec
-        { spId = if ok then "n-edit-ok" else "n-edit-cancel"
-        , spProv =
-            "contract: the whole-edit dialog is raised from the edit screen's leaving edge after a staged DR change, and its "
-              ++ (if ok then "OK commits the staged payload into a new-generation RECIPEA.BIN carrying the slot's name" else "CANCEL writes nothing")
-              ++ "; both pop back to the submenu"
+    fieldStoredCase =
+      fieldOkCase
+        { spId = "n-field-ok-stored"
+        , spProv = "contract: OK on DR row 1, the slot's stored code, writes no bank file and still hands the event to the stock SET delegate; the getter reads code 1"
         , spSteps =
             [ Dispatch (eSlot e) 0 8 0
             , Dispatch (sub 0) 2 8 1
-            , Dispatch (eEditScreen e) 0 8 2
+            , Dispatch (eEditScreen e) (screenRow 0) 8 2
             , Dispatch (field 0) 1 8 3
-            , Dispatch (field 0) 0 13 4
-            , Dispatch (eDialog e) 0 8 5
-            , Dispatch (eEditScreen e) 0 13 6
-            , Dispatch (eDialog e) (if ok then 0 else 1) 8 7
+            , ReadField (eFieldGetter e) 0x267 4
             ]
         , spClaims =
-            [ claimU32 e (out 0) 0xffffffff
-            , claimU32 e (out 1) 1
-            , claimU32 e (out 2) 0xffffffff
-            , claimU32 e (out 3) 1
+            [ claimU32 e (out 3) 0x2a
             , claimU32 e (out 4) 1
-            , claimU32 e (out 5) 1
-            , claimU32 e (out 6) 1
-            , claimU32 e (out 7) 1
+            , claimU32 e (uiLog SetCalls) 1
+            , claimU32 e (uiLog SetToken) (rowToken (field 0) 1)
+            , claimU32 e (eCursor e) 1
+            , claimU32 e (eFrame e) (field 0)
+            , claimAt e 0x980000 (fileSlot cardA <> B.replicate 0x440 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
+            ]
+        }
+
+    editLeaveCase =
+      fieldOkCase
+        { spId = "n-edit-leave"
+        , spProv = "contract: after OK stores DR code 2, BACK leaves the field list and BACK on the edit screen returns to the submenu's EDIT row with no confirmation; the card holds exactly the one generation the OK wrote and the live record is untouched"
+        , spSteps =
+            spSteps fieldOkCase
+              ++ [ Navigate 0 13 5
+                 , Navigate 0 13 6
+                 ]
+        , spClaims =
+            [ claimU32 e (out 3) 0x2a
+            , claimU32 e (out 5) 0xffffffff
+            , claimU32 e (out 6) 0xffffffff
+            , claimU32 e (uiLog SetCalls) 1
             , claimU32 e (eCursor e) 2
             , claimU32 e (eFrame e) (sub 0)
-            , claimAt e (eEditScreen e + 0x1c) (u32le (sub 0))
+            , claimAt e 0x980000 (fileSlot cardA <> fileSlot stagedDrFile <> B.replicate 0x220 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
             ]
-              ++ [claimAt e 0x980220 expectedFile | ok]
+        }
+
+    editFailCase back =
+      fieldOkCase
+        { spId = "n-edit-write-fail" ++ (if back then "-back" else "")
+        , spProv = "contract: a read-only completion of the field OK's write reports the storage error, leaves the bank unchanged, keeps the DR list open without the stock SET delegate and keeps the getter on the stored code 1; " ++ (if back then "BACK then leaves the list without retrying the write" else "the list stays open")
+        , spSteps =
+            [ Dispatch (eSlot e) 0 8 0
+            , Dispatch (sub 0) 2 8 1
+            , Dispatch (eEditScreen e) (screenRow 0) 8 2
+            , Dispatch (field 0) 2 8 3
+            , ReadField (eFieldGetter e) 0x267 4
+            ] ++ [Navigate 0 13 5 | back]
+        , spClaims =
+            [ claimU32 e (out 3) 1
+            , claimU32 e (out 4) 1
+            , claimU32 e (uiLog SetCalls) 0
+            , claimU32 e (eCursor e) (if back then screenRow 0 else 2)
+            , claimU32 e (eFrame e) (if back then eEditScreen e else field 0)
+            , claimAt e 0x980000 (fileSlot cardA <> B.replicate 0x440 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
+            ] ++ [claimU32 e (out 5) 0xffffffff | back]
+        , spModelCells = cardCells ++ [("rbm_write_comp", 8)]
+        }
+
+    -- Slot 0 of cardA is a snapshot taken in ISO AUTO: 0x141 holds the numeric
+    -- code 0x0b and the 0x146 bit (+0x1f bit 7) is 0. Each case then stores DR
+    -- code 2, and the new generation must carry that flag unchanged.
+    isoCursor code =
+      fromMaybe (error "ISO code not in the list")
+        (findIndex (== code) (takeWhile (/= 0x7ffffffe) [rowToken (field 7) r | r <- [0 .. 27]]))
+    isoKeepsAutoFlagCase failed =
+      fieldOkCase
+        { spId = if failed then "n-iso-write-fail-keeps-auto-flag" else "n-iso-reselect-keeps-auto-flag"
+        , spProv = "contract: in a slot snapshotted in ISO AUTO (0x141 = 0x0b, 0x146 = 0), " ++ (if failed then "an ISO OK on code 0x0c whose write fails puts back both the stored code and the staged 0x146" else "OK on the stored ISO code 0x0b writes nothing and leaves the staged 0x146") ++ ", so the following DR OK on code 2 writes a generation whose payload differs from the slot only in DR"
+        , spSteps =
+            [ Dispatch (eSlot e) 0 8 0
+            , Dispatch (sub 0) 2 8 1
+            , Dispatch (eEditScreen e) (screenRow 7) 8 2
+            , Dispatch (field 7) (fromIntegral (isoCursor (if failed then 0x0c else 0x0b))) 8 3
+            ]
+            ++ [WriteWord (eWriteComp e) 0 | failed]
+            ++ [ if failed then Navigate 0 13 4 else Dispatch (field 7) 0 13 4
+               , Dispatch (eEditScreen e) (screenRow 0) 8 5
+               , Dispatch (field 0) 2 8 6
+               ]
+        , spClaims =
+            [ claimU32 e (out 3) (if failed then 1 else 0x2a)
+            , claimU32 e (out 6) 0x2a
+            , claimU32 e (eFrame e) (field 0)
+            , claimU32 e (eCursor e) 2
+            , claimAt e 0x980000 (fileSlot cardA <> fileSlot stagedDrFile <> B.replicate 0x220 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
+            ]
+        , spModelCells = cardCells ++ [("rbm_write_comp", 8) | failed]
+        }
+
+    nativeEntryCase =
+      fieldOkCase
+        { spId = "n-native-field-before-ok"
+        , spProv = "contract: a native property write while the DR list is open does not change its getter value or write the card; BACK returns to the edit screen without writing card or live settings"
+        , spSteps =
+            [ Dispatch (eSlot e) 0 8 0
+            , Dispatch (sub 0) 2 8 1
+            , Dispatch (eEditScreen e) (screenRow 0) 8 2
+            , NativeWrite (GuestAddress 0x0061c91c) (FieldHost 0x267) (FieldCode 2) 3
+            , ReadField (eFieldGetter e) 0x267 4
+            , Navigate 0 13 5
+            , ReadField (eFieldGetter e) 0x267 6
+            ]
+        , spClaims =
+            [ claimU32 e (out 4) 1
+            , claimU32 e (out 6) 1
+            , claimU32 e (eFrame e) (eEditScreen e)
+            , claimU32 e (eCursor e) (screenRow 0)
+            , claimAt e 0x980000 (fileSlot cardA <> B.replicate 0x440 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
+            ]
+        }
+
+    nativeHoverCase =
+      fieldOkCase
+        { spId = "n-native-field-after-ok"
+        , spProv = "contract: after DR OK stores code 2, a native cursor write of valid code 0 cannot replace it; leaving the list and the edit screen keeps code 2 as the only change on the card, with the slot name and live settings unchanged"
+        , spSteps =
+            [ Dispatch (eSlot e) 0 8 0
+            , Dispatch (sub 0) 2 8 1
+            , Dispatch (eEditScreen e) (screenRow 0) 8 2
+            , Dispatch (field 0) 2 8 3
+            , WriteWord (eCursor e) 0
+            , NativeWrite (GuestAddress 0x0061c91c) (FieldHost 0x267) (FieldCode 0) 8
+            , ReadField (eFieldGetter e) 0x267 9
+            , Navigate 0 13 4
+            , Navigate 0 13 5
+            ]
+        , spClaims =
+            [ claimU32 e (out 3) 0x2a
+            , claimU32 e (out 4) 0xffffffff
+            , claimU32 e (out 5) 0xffffffff
+            , claimU32 e (out 9) 2
+            , claimU32 e (eCursor e) 2
+            , claimU32 e (eFrame e) (sub 0)
+            , claimAt e 0x980000 (fileSlot cardA <> fileSlot stagedDrFile <> B.replicate 0x220 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
+            ]
+        }
+
+    nativeDirectCase =
+      fieldOkCase
+        { spId = "n-native-field-outside-leaf"
+        , spProv = "contract: a native DR property write from the edit screen does not change the getter value, and BACK on the edit screen returns to the submenu with no confirmation and no card write"
+        , spSteps =
+            [ Dispatch (eSlot e) 0 8 0
+            , Dispatch (sub 0) 2 8 1
+            , NativeWrite (GuestAddress 0x0061c91c) (FieldHost 0x267) (FieldCode 2) 2
+            , ReadField (eFieldGetter e) 0x267 3
+            , Navigate 0 13 4
+            ]
+        , spClaims =
+            [ claimU32 e (out 3) 1
+            , claimU32 e (out 4) 0xffffffff
+            , claimU32 e (eFrame e) (sub 0)
+            , claimU32 e (eCursor e) 2
+            , claimAt e 0x980000 (fileSlot cardA <> B.replicate 0x440 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
+            ]
+        }
+
+    saveOkCase =
+      Spec
+        { spId = "n-save-ok"
+        , spProv = "contract: OK on the submenu's Save Current row (index 0) writes a new-generation bank file carrying slot 0's live snapshot under its kept name, raises no dialog, then hands the event to the stock SET delegate with the verb page's class and row token and returns its result"
+        , spSteps =
+            [ Dispatch (eSlot e) 0 8 0
+            , Dispatch (sub 0) 0 8 1
+            ]
+        , spClaims =
+            [ claimU32 e (out 0) 0xffffffff
+            , claimU32 e (out 1) 0x2a
+            , claimU32 e (uiLog SetCalls) 1
+            , claimU32 e (uiLog SetClass) 0x270
+            , claimU32 e (uiLog SetToken) (rowToken (sub 0) 0)
+            , claimU32 e (eCursor e) 0
+            , claimU32 e (eFrame e) (sub 0)
+            , claimAt e 0x980000 (fileSlot cardA <> fileSlot savedFile <> B.replicate 0x220 0)
+            , claimAt e 0x96cc64 extractLive
+            ]
         , spRefuse = 0
         , spSetResult = 0x2a
         , spConfirmResult = 0x37
-        , spLive = B.replicate 0x1c2 0
+        , spLive = extractLive
         , spCard = cardA
         , spModelCells = cardCells
-        , spFunctions = ["rb_bank_interpose", "rb_stage_edit_open", "rb_stage_commit"]
         }
       where
-        expectedFile =
-          if ok
-            then encodeFile 8 0x7f ((name26 (slotNames !! 0), stagedDr) : drop 1 slotsA)
-            else cardA
+        savedFile = encodeFile 8 0x7f ((name26 (slotNames !! 0), extractPayload) : drop 1 slotsA)
 
-    confirmCase verb ok =
+    resetCase ok =
       Spec
-        { spId = "n-" ++ verb ++ "-" ++ (if ok then "ok" else "cancel")
+        { spId = "n-reset-" ++ (if ok then "ok" else "cancel")
         , spProv =
-            "contract: the submenu's " ++ verb ++ " row (index " ++ show verbRow ++ ") raises its confirmation dialog on the submenu page, whose parent is the submenu and whose cursor is row 0; the dialog's "
+            "contract: the submenu's reset row (index 3) raises its confirmation dialog on the submenu page, whose parent is the submenu and whose cursor is row 0; the dialog's "
               ++ (if ok then "OK runs the bank action on slot 0" else "CANCEL writes nothing")
               ++ "; both pop once back to the submenu"
         , spSteps =
             [ Dispatch (eSlot e) 0 8 0
-            , Dispatch (sub 0) (fromIntegral verbRow) 8 1
+            , Dispatch (sub 0) 3 8 1
             , Dispatch (eDialog e) (if ok then 0 else 1) 8 2
-            ]
+            ] ++ [Draw (eSlot e) 0 1 0 | ok]
         , spClaims =
             [ claimU32 e (out 0) 0xffffffff
             , claimU32 e (out 1) 1
             , claimU32 e (out 2) 1
-            , claimAt e (eDialog e + 0x1c) (u32le (sub 0))
-            , claimU32 e (eCursor e) (fromIntegral verbRow)
+            , claimU32 e (eCursor e) 3
             , claimU32 e (eFrame e) (sub 0)
-            ]
-              ++ ( if ok && verb == "save"
-                     then
-                       [ claimAt e 0x980220 (B.take 0x20 expectedFile)
-                       , claimAt e 0x980358 (B.take 0xb6 (B.drop 0x138 expectedFile))
-                       ]
-                     else [claimAt e 0x980220 expectedFile | ok]
-                 )
-              ++ [claimAt e (eNameBase e + (0x83f - 0x83c) * 0x42) expectedName | ok && verb == "reset"]
+            , claimAt e 0x980000 (fileSlot cardA <> (if ok then fileSlot resetFile else B.replicate 0x220 0) <> B.replicate 0x220 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
+            ] ++ [claimAt e (eOut26 e) (name26 "CUSTOM 1") | ok]
         , spRefuse = 0
         , spSetResult = 0x2a
         , spConfirmResult = 0x37
-        , spLive = if verb == "save" then extractLive (eFieldsMap e) else B.replicate 0x1c2 0
+        , spLive = B.replicate 0x1c2 0
         , spCard = cardA
         , spModelCells = cardCells
-        , spFunctions = ["rb_bank_interpose", "rb_save_current", "rb_reset", "rb_readback"]
         }
       where
-        verbRow = if verb == "save" then 0 else 3
-        expectedFile =
-          if not ok
-            then cardA
-            else
-              if verb == "save"
-                then encodeFile 8 0x7f ((name26 (slotNames !! 0), extractPayload) : drop 1 slotsA)
-                else encodeFile 8 0x7e ((B.replicate 26 0, B.replicate 0x28 0) : drop 1 slotsA)
-        expectedName = if ok && verb == "reset" then B.replicate 26 0 else name26 (slotNames !! 0)
+        resetFile = encodeFile 8 0x7e ((B.replicate 26 0, B.replicate 0x28 0) : drop 1 slotsA)
 
     renameFailCase =
       Spec
         { spId = "n-rename-fail"
-        , spProv = "contract: opening the bank editor from the submenu's EDIT CUSTOM NAME row pushes the editor node with its parent at the submenu and fills the buffer with the slot's name; a confirm whose write is refused keeps the editor open on the same row, reports the read-only label and leaves the card and the name records untouched"
+        , spProv = "contract: a read-only rename completion reports RB_READ_ONLY, keeps the editor open on the confirm row, and preserves the displayed slot name, card files and live settings"
         , spSteps =
-            [ Dispatch (eSlot e) 0 8 0
-            , Dispatch (sub 0) 1 8 1
-            , WriteHalf 0x146761e 0x1e
-            , Dispatch (eEditor e) 0x2a 8 2
+            [ Dispatch (eRootNode e) (fromIntegral (eRootEditRow e)) 8 4
+            , Navigate 0 8 0
+            , Navigate 1 8 1
+            , Navigate 0x2a 8 2
+            , Call (eStatusGetter e) 3
+            , Draw (eSlot e) 0 1 0
             ]
         , spClaims =
             [ claimU32 e (out 0) 0xffffffff
             , claimU32 e (out 1) 0xffffffff
             , claimU32 e (out 2) 1
-            , claimU32 e (eLog e + 4 * 5) 0x92a
-            , claimU32 e (eLog e + 4 * 10) 0x7e3
+            , claimU32 e (out 3) 2
             , claimAt e 0x146761e (u16le 0x1e)
-            , claimAt e 0x954385 (B.pack (map (fromIntegral . fromEnum) "ALPHA") <> B.replicate 9 0)
-            , claimAt e (eEditor e + 0x1c) (u32le (sub 0))
             , claimU32 e (eFrame e) (eEditor e)
             , claimU32 e (eCursor e) 0x2a
-            , claimU32 e 0x9504a8 1
-            , claimAt e 0x980000 cardA
+            , claimAt e (eOut26 e) (name26 "ALPHA")
+            , claimAt e 0x980000 (fileSlot cardA <> B.replicate 0x440 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
             ]
         , spRefuse = 0
         , spSetResult = 0x2a
@@ -828,17 +1722,51 @@ specSet e id4 epochBump = slotCases ++ otherCases
         , spLive = B.replicate 0x1c2 0
         , spCard = cardA
         , spModelCells = cardCells ++ [("rbm_write_comp", 8)]
-        , spFunctions = ["rb_bank_interpose", "rb_name_edit_open", "rb_name_commit"]
         }
+
+    renameSuccessCase =
+      renameFailCase
+        { spId = "n-rename-recall"
+        , spProv = "contract: modeled text entry supplies NOVEMBER through the opened editor; confirming persists only slot 0's name, returns to its submenu, and reopening SELECT CUSTOM SETTING displays the new name, recalls the unchanged payload and hands the recall's OK to the stock SET delegate"
+        , spSteps =
+            [ Dispatch (eRootNode e) (fromIntegral (eRootEditRow e)) 8 4
+            , Navigate 0 8 0
+            , Navigate 1 8 1
+            , InputName "NOVEMBER"
+            , Navigate 0x2a 8 2
+            , Navigate 0 13 5
+            , Navigate 0 13 6
+            , Navigate (fromIntegral (eRootRecallRow e)) 8 7
+            , Draw (eRecall e) 0 1 0
+            , Navigate 0 8 3
+            ]
+        , spClaims =
+            [ claimU32 e (out 2) 0xffffffff
+            , claimU32 e (out 3) 0x2a
+            , claimU32 e (uiLog SetCalls) 1
+            , claimAt e 0x980000 (fileSlot cardA <> fileSlot renamedBank <> B.replicate 0x220 0)
+            , claimAt e (eOut26 e) (name26 "NOVEMBER")
+            , claimAt e 0x96cc64 (ordinaryLive (B.take 4 validPayload))
+            , claimAt e 0x146761e (u16le 0)
+            , claimU32 e (eFrame e) (eRecall e)
+            , claimU32 e (eCursor e) 0
+            ] ++ consumerClaims
+        , spModelCells = cardCells
+        }
+      where
+        renamedBank = encodeFile 8 0x7f ((name26 "NOVEMBER", validPayload) : drop 1 slotsA)
 
     renameCancelCase =
       Spec
         { spId = "n-rename-cancel"
-        , spProv = "contract: the editor's unclaimed DISP/BACK cell (state 0x1e, event 13) exits without a bank write; the frame returns to the page the push repointed, the modal state clears and the card and the name records keep their bytes"
+        , spProv = "contract: DISP/BACK cancels a changed editor name without a bank write; the submenu's name row and browse state are restored and the displayed slot name remains ALPHA"
         , spSteps =
-            [ Dispatch (eSlot e) 0 8 0
-            , Dispatch (sub 0) 1 8 1
-            , Dispatch (eEditor e) 0 13 2
+            [ Dispatch (eRootNode e) (fromIntegral (eRootEditRow e)) 8 3
+            , Navigate 0 8 0
+            , Navigate 1 8 1
+            , InputName "NOVEMBER"
+            , Navigate 0 13 2
+            , Draw (eSlot e) 0 1 0
             ]
         , spClaims =
             [ claimU32 e (out 0) 0xffffffff
@@ -846,11 +1774,10 @@ specSet e id4 epochBump = slotCases ++ otherCases
             , claimU32 e (out 2) 0xffffffff
             , claimAt e 0x146761e (u16le 0)
             , claimU32 e (eFrame e) (sub 0)
-            , claimU32 e (eCursor e) 0
-            , claimU32 e 0x9504a8 1
-            , claimAt e 0x954385 (B.pack (map (fromIntegral . fromEnum) "ALPHA") <> B.replicate 9 0)
-            , claimAt e (eEditor e + 0x1c) (u32le (sub 0))
-            , claimAt e 0x980000 cardA
+            , claimU32 e (eCursor e) 1
+            , claimAt e (eOut26 e) (name26 "ALPHA")
+            , claimAt e 0x980000 (fileSlot cardA <> B.replicate 0x440 0)
+            , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
             ]
         , spRefuse = 0
         , spSetResult = 0x2a
@@ -858,17 +1785,24 @@ specSet e id4 epochBump = slotCases ++ otherCases
         , spLive = B.replicate 0x1c2 0
         , spCard = cardA
         , spModelCells = cardCells
-        , spFunctions = ["rb_bank_interpose", "rb_name_edit_open"]
         }
 
 -- inputs and the case image ----------------------------------------------------------
 
+newtype GuestAddress = GuestAddress Word32
+
+guestWord :: GuestAddress -> Word32
+guestWord (GuestAddress address) = address
+
 data Inputs = Inputs
-  { inBuild :: FilePath
-  , inKs, inMs, inUs :: Syms
+  { inKs, inMs, inUs :: Syms
   , inKbin, inKtext, inMdata :: B.ByteString
-  , inUiA, inUiB, inUiC, inUiP :: B.ByteString
+  , inFunctions :: [(Integer, Integer)]
+  , inUiA, inUiB, inUiC :: B.ByteString
   , inId4 :: B.ByteString
+  , inId5 :: B.ByteString
+  , inDivide :: B.ByteString
+  , inKernelBase :: Word32
   , inPlan :: [PlanWrite]
   , inFields :: [Field]
   , inTab :: B.ByteString
@@ -876,16 +1810,13 @@ data Inputs = Inputs
   , inNameBase :: Word32
   , inHandler :: Word32
   , inEpochBump :: Word32
-  , inStagePayload :: Word32
   , inPlanCellBytes :: [(Word32, B.ByteString)]
-  , inPresenterSize :: Int
   , inMediaLo, inMediaHi :: Word32
   , inMediaImg :: B.ByteString
   , inLowcode :: B.ByteString
+  , inLowcodeBase :: GuestAddress
   , inMenuBase :: Word32
   , inMenu :: B.ByteString
-  , inRootValues :: Word32
-  , inRootLabels :: Word32
   }
 
 nodeBytes :: Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> B.ByteString
@@ -894,22 +1825,23 @@ nodeBytes i t cls k fl par vals labs sel =
 
 cellsImage :: Inputs -> Env -> Spec -> B.ByteString
 cellsImage in' e sp =
-  overlay (B.replicate 0xa000 0) $
-    [ (fromIntegral (eCharsetCopy e - 0x950000), inCharsetBytes in')
-    , (fromIntegral (eRootNode e - 0x950000), nodeBytes 1 0 5 7 1 0 (eRootValues e) (eRootLabels e) 0x2d)
-    , (fromIntegral (eStockNode e - 0x950000), nodeBytes 0x20 6 5 6 1 (eStockParent e) (eStockValues e) 0 0)
-    , (fromIntegral (eStockValues e - 0x950000), B.concat [u32le 0x7c, u32le (eStockChild1 e), u32le 0x7d, u32le (eStockChild2 e), u32le 0x7ffffffe, u32le 0])
-    , (fromIntegral (eStockChild1 e - 0x950000), nodeBytes 0x21 6 0x100 6 1 0xdeadbeef 0 0 0)
-    , (fromIntegral (eStockChild2 e - 0x950000), nodeBytes 0x22 6 0x100 6 1 0 0 0 0)
-    , (fromIntegral (eStockParent e - 0x950000), nodeBytes 0x23 6 5 6 1 0 0 0 0)
-    , (fromIntegral (eSteps e - 0x950000), stepBytes (spSteps sp))
-    , (fromIntegral (eHandler e - 0x950000), u32le (inHandler in'))
-    , (fromIntegral (eEpochBump e - 0x950000), u32le (inEpochBump in'))
-    , (fromIntegral (addr (inUs in') "ui_name_base" - 0x950000), u32le (inNameBase in'))
-    , (fromIntegral (addr (inUs in') "ui_refuse" - 0x950000), u32le (spRefuse sp))
-    , (fromIntegral (addr (inUs in') "ui_set_result" - 0x950000), u32le (spSetResult sp))
-    , (fromIntegral (addr (inUs in') "ui_confirm_result" - 0x950000), u32le (spConfirmResult sp))
-    , (fromIntegral (eFileB e - 0x950000), cardB)
+  overlay (B.replicate cellsSize 0) $
+    [ (cellOffset 0x00951564, u32le 1)
+    , (cellOffset 0x00956838, u32le 0x21)
+    , (cellOffset (eCharsetCopy e), inCharsetBytes in')
+    , (cellOffset (eStockNode e), nodeBytes 0x20 6 5 6 1 (eStockParent e) (eStockValues e) 0 0)
+    , (cellOffset (eStockValues e), B.concat [u32le 0x7c, u32le (eStockChild1 e), u32le 0x7d, u32le (eStockChild2 e), u32le 0x7ffffffe, u32le 0])
+    , (cellOffset (eStockChild1 e), nodeBytes 0x21 6 0x100 6 1 0xdeadbeef 0 0 0)
+    , (cellOffset (eStockChild2 e), nodeBytes 0x22 6 0x100 6 1 0 0 0 0)
+    , (cellOffset (eStockParent e), nodeBytes 0x23 6 5 6 1 0 0 0 0)
+    , (cellOffset (eSteps e), stepBytes (spSteps sp))
+    , (cellOffset (eHandler e), u32le (inHandler in'))
+    , (cellOffset (eEpochBump e), u32le (inEpochBump in'))
+    , (cellOffset (fromIntegral (addr (inUs in') "ui_name_base")), u32le (inNameBase in'))
+    , (cellOffset (fromIntegral (addr (inUs in') "ui_refuse")), u32le (spRefuse sp))
+    , (cellOffset (fromIntegral (addr (inUs in') "ui_set_result")), u32le (spSetResult sp))
+    , (cellOffset (fromIntegral (addr (inUs in') "ui_confirm_result")), u32le (spConfirmResult sp))
+    , (cellOffset (eFileB e), cardB)
     ]
 
 spanLowImage :: Inputs -> Env -> Spec -> B.ByteString
@@ -928,48 +1860,59 @@ spanLowImage in' e sp =
     fieldCountAddr = fromIntegral (addr (inMs in') "rbm_field_count")
 
 regionList :: Inputs -> Env -> Spec -> [(String, Word32, Int, Int, B.ByteString)]
-regionList in' e sp =
-  [ ("ktext", 0x011dcca0, B.length ktext, 5, ktext)
-  , ("kdata", 0x011dcca0 + fromIntegral textLen, dataLen, 3, B.replicate dataLen 0)
+regionList in' e sp = filter (\(n, _, _, _, _) -> inProfile (regionProfile e sp) (RegionId n)) $
+  [ ("ktext", inKernelBase in', B.length ktext, 5, ktext)
+  , ("kdata", dataBase, B.length dataMenu, 3, dataMenu)
   , ("media", inMediaLo in', B.length (inMediaImg in'), 5, inMediaImg in')
-  , ("lowcode", 0x0061c400, B.length (inLowcode in'), 5, inLowcode in')
+  , ("lowcode", guestWord (inLowcodeBase in'), B.length (inLowcode in'), 5, inLowcode in')
+  , ("stock-divide", 0x0004d978, 244, 5, inDivide in')
+  , ("stock-draw-tail", guestWord stockDrawTail, B.length stockDrawTailImage, 5, stockDrawTailImage)
   , ("span-low", 0x0096cc64, B.length spanLow, 3, spanLow)
   , ("media-state", 0x00910140, 0x200, 3, B.replicate 0x200 0)
-  , ("tables-ptr", 0x0081b09c, 0x89edd8 - 0x81b09c, 3, inTab in')
-  , ("tables-edit", 0x00775428, 0x77b0a0 - 0x775428, 1, B.take (0x77b0a0 - 0x775428) (B.drop (0x775428 - 0x61c400) (inId4 in')))
-  , ("menu", eMenuBase e, B.length (eMenu e), 3, eMenu e)
-  , ("cells", 0x00950000, B.length cells, 3, cells)
+  , ("tables-ptr", 0x0081b09c, 0x860, 3, inTab in')
+  , ("mirror", 0x0089ec00, 0x200, 3, overlay (B.replicate 0x200 0) [(0x140, validPayload), (0x1c8, u32le 1)])
+  , ("tables-edit", 0x00774f48, fromIntegral (tablesEditEnd - 0x774f48), 1,
+      overlay (B.take (fromIntegral (tablesEditEnd - 0x774f48)) (B.drop (0x774f48 - 0x61c400) (inId4 in')))
+        [(fromIntegral (pwAddress w - 0x774f48), pwNew w) | w <- inPlan in',
+         pwRegion w == "id4_code", pwAddress w >= 0x774f48,
+         toInteger (pwAddress w) + toInteger (B.length (pwNew w)) <= toInteger tablesEditEnd])
+  , ("cells", cellsBase, B.length cells, 3, cells)
   , ("modal-cells", 0x00cd1ae4, 0xa00, 3, overlay (B.replicate 0xa00 0) [(fromIntegral (a - 0xcd1ae4), b) | (a, b) <- inPlanCellBytes in'])
   , ("modal-state", 0x0146761c, 0x162, 3, B.replicate 0x162 0)
+  , ("draw-state", 0x015e46c0, 0x200, 3, B.replicate 0x200 0)
+  , ("stock-draw-calls", 0x01112b2c, fromIntegral (stockDrawCallsEnd - 0x01112b2c), 5, stockDrawCallsImage)
   , ("ui-a", 0xc12aac, B.length (inUiA in'), 5, inUiA in')
   , ("ui-b", 0xc72e10, B.length (inUiB in'), 5, inUiB in')
-  , ("ui-c", 0xd38d98, 0xd3da00 - 0xd38d98, 5, inUiC in')
-  , ("presenter", 0x0113a014, inPresenterSize in', 5, inUiP in')
+  , ("ui-c", 0xd38d98, 0xd52684 - 0xd38d98, 5,
+      overlay (B.replicate (0xd52684 - 0xd38d98) 0)
+        [(0, inUiC in'), (0xd4d604 - 0xd38d98, B.take 20608 (B.drop (0xd4d604 - 0xbf1a00) (inId5 in')))])
   ]
   where
     ktext = inKtext in'
     textLen = B.length ktext
     dataLen = B.length (inKbin in') - textLen
+    dataBase = inKernelBase in' + fromIntegral textLen
+    dataMenu = compose dataBase (eMenuBase e + fromIntegral (B.length (eMenu e)))
+      [(dataBase, B.drop textLen (inKbin in')), (eMenuBase e, eMenu e)]
     spanLow = spanLowImage in' e sp
     cells = cellsImage in' e sp
-    planCells = overlay (B.replicate 0x63c 0) [(fromIntegral (a - 0xcd1ae4), b) | (a, b) <- inPlanCellBytes in']
 
 -- the runner -------------------------------------------------------------------------
-
-symOf :: Inputs -> String -> (Integer, Integer)
-symOf in' n
-  | hasSym (inKs in') n = (addr (inKs in') n, sizeOf (inKs in') n)
-  | hasSym (inMs in') n = (addr (inMs in') n, sizeOf (inMs in') n)
-  | hasSym (inUs in') n = (addr (inUs in') n, sizeOf (inUs in') n)
-  | otherwise = error ("unknown function symbol: " ++ n)
 
 stubDefs :: [Value]
 stubDefs =
   [ stub "0x00723cb8" [] [("r0", 3)]
   , stub "0x0071ddf0" [("r0", 0)] [("r0", 0)]
   , stub "0x0071f708" [] [("r0", 0x43)]
-  , stub "0x006439e0" [] [("r0", 1)]
-  , stub "0x0061d8dc" [("r0", 0x0096cc74)] [("r0", 0)]
+  , stub "0x0063c51c" [("r1", 0)] [("r0", 0)]
+  , stub "0x00641438" [("r1", 0)] [("r0", 0)]
+  , stub "0x00641334" [] [("r0", 0)]
+  , stub "0x0063e810" [] [("r0", 0)]
+  , stub "0x0063fb74" [] [("r0", 0)]
+  , stub "0x00640e78" [] [("r0", 0)]
+  , stub "0x0072b858" [] [("r0", 0)]
+  -- The modeled notification configuration has every enable bit clear.
+  , stub "0x00632950" [] [("r0", 0)]
   ]
   where
     stub :: String -> [(String, Word32)] -> [(String, Word32)] -> Value
@@ -977,8 +1920,43 @@ stubDefs =
     bindings :: [(String, Word32)] -> Value
     bindings bs = object [fromString k .= hex (fromIntegral v) | (k, v) <- bs]
 
-caseJson :: Inputs -> Env -> Spec -> [(String, String)] -> [Value] -> [Value] -> [String] -> Value
-caseJson in' e sp digests residues events fnNames =
+functionSpans :: Inputs -> Spec -> [(Integer, Integer)]
+functionSpans in' sp = map validate (sortOn fst declared)
+  where
+    profile = regionProfile (envFrom in') sp
+    omitted (a, z) =
+      or [ a >= fromIntegral b && a + z <= fromIntegral b + fromIntegral s
+         | (n, b, s) <- eRegions (envFrom in'), not (inProfile profile (RegionId n)) ]
+    primary = nonOverlapping (sortOn fst (nub (map validate (filter (not . omitted) (inFunctions in')))))
+    nonOverlapping spans
+      | any (\((a, z), (b, _)) -> a + z > b) (zip spans (drop 1 spans)) = error "ELF function spans overlap"
+      | otherwise = spans
+    stock = [(0x61c3ac, 76) | guestWord (inLowcodeBase in') <= 0x61c3ac]
+        ++ [(fromIntegral a, fromIntegral z) | (a, z) <- stockFns]
+        ++ [ (fromIntegral (guestWord stockDrawTail), fromIntegral (B.length stockDrawTailCode))
+           | profile /= ProcessingProfile ]
+        ++ [ (fromIntegral a, fromIntegral z) | profile == PaneDrawProfile, (a, z) <- stockDrawCallFns ++ stockPaneCallFns ]
+    stubs = [a | v <- stubDefs, Just a <- [parseMaybe (withObject "stub" (.: "address")) v >>= parseHexV]]
+    declared = foldl add primary stock
+    add spans span' = spans ++ uncovered span' (sortOn fst ([(a, a + z) | (a, z) <- spans] ++ [(a, a + 4) | a <- stubs]))
+    uncovered (a, z) = go a (a + z)
+    go lo hi _ | lo >= hi = []
+    go lo hi [] = [(lo, hi - lo)]
+    go lo hi ((a, b) : rest)
+      | b <= lo = go lo hi rest
+      | a >= hi = [(lo, hi - lo)]
+      | otherwise = [(lo, a - lo) | lo < a] ++ go (max lo b) hi rest
+    validate span'@(a, z)
+      | a `mod` 4 /= 0 || z <= 0 || z `mod` 4 /= 0 = error ("unaligned function span: " ++ show span')
+      | a <= exitAddr && exitAddr < a + z = error ("exit lies inside function span: " ++ show span')
+      | not (any contains (regionList in' (envFrom in') sp)) = error ("function outside executable region: " ++ show span')
+      | otherwise = span'
+      where contains (_, base, size, permissions, _) =
+              permissions == 5 && a >= fromIntegral base && a + z <= fromIntegral base + fromIntegral size
+    exitAddr = addr (inUs in') "ui_exit_boundary"
+
+caseJson :: Inputs -> Env -> Spec -> [(String, String)] -> Value
+caseJson in' e sp digests =
   object
     [ "schema_version" .= (1 :: Int)
     , "id" .= spId sp
@@ -994,19 +1972,22 @@ caseJson in' e sp digests residues events fnNames =
               ++ [fromString ("r" ++ show i) .= hex (0 :: Integer) | i <- [0 :: Int .. 12]]
           )
     , "regions" .= map regJson regs
-    , "functions" .= ([fnObject n | n <- fnNames] ++ [object ["address" .= hex (fromIntegral a), "size" .= (z :: Int)] | (a, z) <- stockFns])
+    , "functions" .= [object ["address" .= hex a, "size" .= z] | (a, z) <- functionSpans in' sp]
     , "stubs" .= stubDefs
     , "limits" .= object ["instructions" .= (1000000 :: Int), "wall_ms" .= (4000 :: Int)]
     , "expected" .=
         object
           [ "status" .= ("returned" :: String)
           , "registers" .= object ["r0" .= hex 0]
-          , "memory" .= ([object ["region" .= n, "offset" .= o, "hex" .= hexB b] | (n, o, b) <- spClaims sp] ++ residues)
-          , "events" .= events
+          , "memory" .= [object ["region" .= n, "offset" .= o, "hex" .= hexB b] | (n, o, b) <- spClaims sp]
+          , "events" .= ([] :: [Value])
           ]
     , "exclusions" .=
-        ( [ "OBSERVED RESIDUE (no behavior claim): the unclaimed bytes of the pinned regions"
-          , "the synthetic consumer stands in for the stock dispatch, transition, delegate and label consumers; no stock instruction executes"
+        ( [ "ABI-private workspace differences are classified by RecipeBankUiCases, never pinned from execution; explicit public claims take precedence"
+          , "stock ordinary reload workspace is mirror+0x10..0x127; the explicit C payload at mirror+0x140..0x167 remains compared"
+          , "stub contracts remain enforced; incidental stub event order is not a behavior assertion"
+          , "editor text input is modeled; rename persistence and Recall execute the public menu actions"
+          , "modal dispatch, transition, delegates and label drawing are modeled; property consumers execute stock instructions"
           , "the camera run and the real media device are outside this harness"
           ]
             :: [String]
@@ -1018,10 +1999,7 @@ caseJson in' e sp digests residues events fnNames =
     arts = [(n, b) | (n, _, _, _, b) <- regs, not (B.null b)]
     regs = regionList in' e sp
     entry = addr (inUs in') "ui_run"
-    exitAddr = 0xd3d920 :: Integer
-    fnObject n
-      | "fn-" `isPrefixOf` n = object ["address" .= hex (fromIntegral (hexI (drop 3 n) :: Integer) :: Integer), "size" .= (0x10 :: Int)]
-      | otherwise = let (a, z) = symOf in' n in object ["address" .= hex (fromIntegral a), "size" .= z]
+    exitAddr = addr (inUs in') "ui_exit_boundary"
     regJson (n, a, s, p, b) =
       object
         [ "id" .= n
@@ -1041,8 +2019,7 @@ permName 3 = "rw"
 permName 5 = "rx"
 permName _ = error "bad permission"
 
--- observed memory and residue
-
+-- Public claims and effects outside the declared ABI workspaces are compared independently.
 memMap :: Env -> Value -> M.Map String B.ByteString
 memMap e r = M.fromList (fromMaybe [] (parseMaybe p =<< parseMaybe (withObject "rep" (\o -> o .: "runner" >>= withObject "rn" (\rn -> rn .: "memory"))) r))
   where
@@ -1051,9 +2028,6 @@ memMap e r = M.fromList (fromMaybe [] (parseMaybe p =<< parseMaybe (withObject "
     nameOf a = case [n | (n, b, _) <- eRegions e, fromIntegral b == hexI a] of
       (n : _) -> n
       [] -> a
-
-runnerEvents :: Value -> [Value]
-runnerEvents r = fromMaybe [] (parseMaybe (withObject "rep" (\o -> o .: "runner" >>= withObject "rn" (.: "events"))) r)
 
 runnerStatus :: Value -> String
 runnerStatus r = fromMaybe "??" (parseMaybe (withObject "r" (.: "status")) r)
@@ -1070,65 +2044,57 @@ runnerMismatches r = fromMaybe [] (parseMaybe (withArray "m" (pure . mapMaybe st
     strV (String t) = Just (T.unpack t)
     strV _ = Nothing
 
--- the first byte where the observed final memory differs from the initial image plus the
--- claims and residues, so a claim mismatch reports its exact address and values
-firstDelta :: Env -> Spec -> [(String, Word32, Int, Int, B.ByteString)] -> [(String, Int, B.ByteString)] -> M.Map String B.ByteString -> Maybe String
-firstDelta e sp regs expected observed =
-  listToMaybe
-    [ spId sp ++ ": " ++ n ++ " 0x" ++ showHex (fromIntegral base + idx) "" ++ " expected " ++ hexB (B.singleton x) ++ " observed " ++ hexB (B.singleton y) ++ " (initial " ++ hexB (B.singleton i) ++ ")"
-    | (n, base, _s, _p, initBytes) <- regs
-    , not (B.null initBytes)
-    , Just v <- [M.lookup n observed]
-    , let desired = foldl (\bs (_, o, b) -> B.take o bs <> b <> B.drop (o + B.length b) bs) initBytes [(n', o, b) | (n', o, b) <- expected, n' == n]
-    , (idx, (x, y)) <- take 1 [(i', (B.index desired i', B.index v i')) | i' <- [0 .. min (B.length desired) (B.length v) - 1], B.index desired i' /= B.index v i']
-    , let a = fromIntegral base + idx
-    , let i = B.index initBytes idx
-    ]
+data DifferenceKind = PublicClaimDifference | NonWorkspaceDifference deriving (Eq)
+
+data MemoryDifference = MemoryDifference
+  { differenceStart :: Int
+  , differenceEnd :: Int
+  , differenceKind :: DifferenceKind
+  }
+
+memoryProblems :: Inputs -> Env -> Spec -> M.Map String B.ByteString -> [String]
+memoryProblems in' e sp observed =
+  ["runner memory inventory differs" | sort (M.keys observed) /= sort [n | (n, _, _, _, _) <- regs]]
+  ++ ["stock conversion flag is not Boolean" | Just mirror <- [M.lookup "mirror" observed], B.length mirror == 0x200, readU32 mirror 0x1c8 > 1]
+  ++ ["stock processing gate is not Boolean" | Just cells <- [M.lookup "cells" observed], B.length cells == cellsSize, readU32 cells (cellOffset 0x00956858) > 1]
+  ++ ["stock processing mirror is not Boolean" | Just cells <- [M.lookup "cells" observed], B.length cells == cellsSize, readU32 cells (cellOffset 0x00956c40) > 1]
+  ++ ["stock processing mirror differs from gate" | Just cells <- [M.lookup "cells" observed], B.length cells == cellsSize, readU32 cells (cellOffset 0x00956c40) /= readU32 cells (cellOffset 0x00956858)]
+  ++ concatMap compareRegion regs
   where
-    _ = e
-
-residueTuples :: [Value] -> [(String, Int, B.ByteString)]
-residueTuples = mapMaybe (\v -> parseMaybe (withObject "r" (\o -> (,,) <$> o .: "region" <*> o .: "offset" <*> (unhex . T.unpack <$> o .: "hex"))) v)
-
-runnerMissingFn :: Inputs -> Value -> Maybe String
-runnerMissingFn in' r = do
-  rs <- parseMaybe (withObject "rep" (\o -> o .: "runner" >>= withObject "rn" (.: "status"))) r
-  if rs == ("unknown_call" :: String) then do
-    tr <- parseMaybe (withObject "rep" (\o -> o .: "runner" >>= withObject "rn" (.: "trace"))) r
-    lastE <- case reverse (case tr of Array v -> toList v; _ -> []) of (x : _) -> Just x; [] -> Nothing
-    pc <- parseMaybe (withObject "e" (\o -> o .: "pc")) lastE >>= parseHexV
-    ins <- parseMaybe (withObject "e" (\o -> o .: "instruction")) lastE >>= parseHexV
-    if (ins .&. 0x0f000000) == 0x0b000000
-      then do
-        let imm = fromIntegral (ins .&. 0xffffff) :: Integer
-            d = (if imm >= 0x800000 then imm - 0x1000000 else imm) * 4
-        pure (fromMaybe ("fn-" ++ hex (fromIntegral pc + 8 + d)) (symAt in' (fromIntegral pc + 8 + d)))
-      else
-        if (ins .&. 0x0f000000) == 0x0a000000
-          then do
-            -- a tail branch into a block the case has not declared, e.g. a tail-merged exit
-            let imm = fromIntegral (ins .&. 0xffffff) :: Integer
-                d = (if imm >= 0x800000 then imm - 0x1000000 else imm) * 4
-            pure (fromMaybe ("fn-" ++ hex (fromIntegral pc + 8 + d)) (symAt in' (fromIntegral pc + 8 + d)))
-          else
-        if (ins .&. 0x0ffffff0) == 0x012fff30
-          then do
-            let rm = ins .&. 15
-                regName = if rm == 14 then "lr" else "r" ++ show rm
-            rv <- parseMaybe (withObject "rep" (\o -> o .: "runner" >>= withObject "rn" (\rn -> rn .: "registers" >>= withObject "regs" (\rs -> rs .: fromString regName)))) r >>= parseHexV
-            pure (fromMaybe ("fn-" ++ hex (fromIntegral rv)) (symAt in' (fromIntegral rv)))
-          else Nothing
-  else Nothing
-
-symAt :: Inputs -> Integer -> Maybe String
-symAt in' a =
-  case hit (inKs in') of
-    Just n -> Just n
-    Nothing -> case hit (inMs in') of
-      Just n -> Just n
-      Nothing -> hit (inUs in')
-  where
-    hit s = listToMaybe [n | (n, (b, z)) <- sortOn (\(_, (b, z)) -> (max z 1, b)) (M.toList (case s of Syms m -> m)), b <= a, a < b + max z 1]
+    regs = regionList in' e sp
+    workspaces = caseWorkspaces in' e sp
+    claimed n i = any (\(n', o, b) -> n == n' && o <= i && i < o + B.length b) (spClaims sp)
+    checkedSpans n size = outside 0 (sortOn fst [(workspaceStart w, workspaceEnd w) | w <- workspaces, let RegionId region = workspaceRegion w, region == n])
+      ++ [(o, o + B.length b) | (n', o, b) <- spClaims sp, n == n']
+      where
+        outside cur [] = [(cur, size) | cur < size]
+        outside cur ((lo, hi) : rest) = [(cur, lo) | cur < lo] ++ outside (max cur hi) rest
+    compareRegion (n, base, size, _, initial) = case M.lookup n observed of
+      Nothing -> ["runner omitted region " ++ n]
+      Just actual
+        | B.length actual /= size -> ["runner returned wrong size for region " ++ n]
+        | otherwise ->
+            [ n ++ " [" ++ hex (fromIntegral base + fromIntegral (differenceStart delta))
+                ++ "," ++ hex (fromIntegral base + fromIntegral (differenceEnd delta)) ++ "): "
+                ++ (case differenceKind delta of PublicClaimDifference -> "public claim differs"; NonWorkspaceDifference -> "unexpected non-workspace effect")
+            | delta <- differences n
+                [word | word : _ <- group (sort
+                  [lo + offset | (lo, hi) <- checkedSpans n size
+                    , let wanted = B.take (hi - lo) (B.drop lo expected)
+                    , let got = B.take (hi - lo) (B.drop lo actual)
+                    , wanted /= got
+                    , (offset, (before, after)) <- zip [0 ..] (B.zip wanted got), before /= after])]
+            ]
+        where
+          start = if B.null initial then B.replicate size 0 else initial
+          expected = overlay start [(o, b) | (n', o, b) <- spClaims sp, n == n']
+    differences n = foldr mergeDifference []
+      where
+        kind i = if claimed n i then PublicClaimDifference else NonWorkspaceDifference
+        mergeDifference i (delta : rest)
+          | differenceStart delta == i + 1 && differenceKind delta == kind i =
+              delta {differenceStart = i} : rest
+        mergeDifference i rest = MemoryDifference i (i + 1) (kind i) : rest
 
 parseHexV :: Value -> Maybe Integer
 parseHexV v = case str v of
@@ -1149,24 +2115,33 @@ compose lo hi ps =
     (B.replicate (fromIntegral (hi - lo)) 0)
     ps
 
-loadInputs :: FilePath -> FilePath -> FilePath -> FilePath -> String -> IO Inputs
-loadInputs build planPath id4Path fieldsPath nameRecordArg = do
+loadInputs :: FilePath -> FilePath -> FilePath -> Integer -> FilePath -> FilePath -> String -> Integer -> IO Inputs
+loadInputs build planPath id4Path id4Base id5Path fieldsPath nameRecordArg kernelBase = do
   ks <- parseSyms (build </> "kernel.syms")
+  unless (addr ks "__rb_image_start" == kernelBase) (fail "--rb-base differs from linked __rb_image_start")
   ms <- parseSyms (build </> "model.syms")
   us <- parseSyms (build </> "ui-model.syms")
   unless (hasSym us "ui_run") (error "ui-model.syms has no ui_run: build the UI model first")
+  unless (hasSym us "ui_exit_boundary" && sizeOf us "ui_exit_boundary" == 0) $
+    fail "the UI exit boundary must be a zero-size linker symbol"
+  kernelFunctions <- parseFunctions KernelUiInventory (build </> "kernel.symbols")
+  mediaFunctions <- parseFunctions ForeignInventory (build </> "model.symbols")
+  uiFunctions <- parseFunctions ForeignInventory (build </> "ui-model.symbols")
   kbin <- B.readFile (build </> "kernel.bin")
   ktext <- B.readFile (build </> "kernel-text.bin")
   mdata <- B.readFile (build </> "model-data.bin")
   uiA <- B.readFile (build </> "ui-a.bin")
   uiB <- B.readFile (build </> "ui-b.bin")
   uiC <- B.readFile (build </> "ui-c.bin")
-  uiP <- B.readFile (build </> "ui-p.bin")
-  id4 <- B.readFile id4Path
+  id4Raw <- B.readFile id4Path
+  loader <- B.readFile "private-data/analysis/x-m1-1.50/decode/loader-40000.bin"
+  let divide = B.take 244 (B.drop (0x4d978 - 0x40000) loader)
+  unless (B.length divide == 244) (fail "the retained 1.50 loader lacks the complete unsigned-divide function")
+  unless (id4Base <= 0x61c400 && id4Base >= 0x61c1fc) (fail "--id4-base outside the 1.50 prefix range")
+  let id4 = B.drop (fromIntegral (0x61c400 - id4Base)) id4Raw
+  id5 <- B.readFile id5Path
   plan <- parsePlan planPath
   fieldsRaw <- B.readFile fieldsPath
-  mgetter <- B.readFile (build </> "model-getter.bin")
-  msetter <- B.readFile (build </> "model-setter.bin")
   let jsonFields = parseFields fieldsRaw
       halfProps = [0x1cb, 0x1cc] :: [Word32]
       fields = filter (\f -> fProp f `notElem` halfProps) jsonFields ++ [Field 0x1cb 0 0 2 0xffff, Field 0x1cc 2 0 2 0xffff]
@@ -1175,31 +2150,26 @@ loadInputs build planPath id4Path fieldsPath nameRecordArg = do
         [a] -> a
         as -> error ("expected one name-record write, got " ++ show (length as))
       nameBase = fromIntegral (hexI nameRecordArg)
-      charsetAddr = 0x00957200 :: Word32
+      charsetAddr = 0x00957600 :: Word32
       charset = B.take 0x160 (B.drop (0x78bac8 - 0x61c400) id4)
       editorNode = nodeByRole plan "bank name editor node header"
       menuImg = overlay menuImg0 [(fromIntegral (editorNode - menuBase) + 0x20, u32le charsetAddr)]
       handler = fromIntegral (addr ks "rb_bank_interpose")
       epochBump = fromIntegral (addr ks "rb_media_epoch_bump")
-      stagePayload = fromIntegral (addr ks "rb_stage_payload")
-      planCells = [(pwAddress w, pwNew w) | w <- plan, pwRegion w == "image5", "modal action cell" `isInfixOf` pwRole w]
+      planCells =
+        [(pwAddress w, pwNew w) | w <- plan, pwRegion w == "image5",
+         pwAddress w >= 0x00cd1ae4,
+         fromIntegral (pwAddress w) + B.length (pwNew w) <= (0x00cd24e4 :: Int)]
       mediaSpans = ["rbm_low_close", "rbm_read", "rbm_write", "rbm_close", "rbm_open", "rbm_stat", "rbm_index_free", "rbm_mapping_delete", "rbm_resolve", "rbm_tag_release"]
-      mediaSpansHi = mediaSpans ++ ["rbm_event_hook", "rbm_detach_event", "rbm_attach_event", "rbm_media_eval"]
       mediaLo = fromIntegral (minimum [addr ms n | n <- mediaSpans])
-      mediaHi =
-        fromIntegral
-          ( maximum
-              ( (maximum [addr ms n + sizeOf ms n | n <- mediaSpansHi])
-                  : [a + max z 4 | (n, (a, z)) <- M.toList (case ms of Syms m -> m), take 3 n == "rbm", a < 0x900000]
-              )
-          )
-      getterLen = fromIntegral (sizeOf ms "rbm_get")
+      mediaHi = max 0x0072b3b4 (fromIntegral (addr ms "helpers" + sizeOf ms "helpers"))
       lowcode =
-        overlay
-          (B.take (0x646000 - 0x61c400) (B.drop 0 id4))
-          [(0x61e110 - 0x61c400, mgetter), (0x624694 - 0x61c400, msetter)]
-      parentValues = nodeByRole plan "parent values array with the two items"
-      parentLabels = nodeByRole plan "parent labels array with the two items"
+        overlay (B.take (fromIntegral (0x646c9c - id4Base)) id4Raw)
+          ([(fromIntegral (toInteger (pwAddress w) - id4Base), pwNew w) | w <- plan,
+            pwRegion w == "id4_code", toInteger (pwAddress w) >= id4Base,
+            toInteger (pwAddress w) + toInteger (B.length (pwNew w)) <= 0x646c9c]
+           ++ [(fromIntegral (0x61d9ec - id4Base), bxlr), (fromIntegral (0x61d8dc - id4Base), bxlr)])
+      bxlr = B.pack [0x1e, 0xff, 0x2f, 0xe1]
   when (nameBasePlan /= nameBase) $
     error
       ( "the plan's name-record base "
@@ -1212,8 +2182,7 @@ loadInputs build planPath id4Path fieldsPath nameRecordArg = do
   helpers <- B.readFile (build </> "model-helpers.bin")
   pure
     Inputs
-      { inBuild = build
-      , inKs = ks
+      { inKs = ks
       , inMs = ms
       , inUs = us
       , inKbin = kbin
@@ -1222,26 +2191,29 @@ loadInputs build planPath id4Path fieldsPath nameRecordArg = do
       , inUiA = uiA
       , inUiB = uiB
       , inUiC = uiC
-      , inUiP = uiP
       , inId4 = id4
+      , inId5 = id5
+      , inDivide = divide
+      , inKernelBase = fromIntegral kernelBase
       , inPlan = plan
       , inFields = fields
-      , inTab = tabImage id4
+      , inFunctions = kernelFunctions
+          ++ [(a, z) | (a, z) <- mediaFunctions, a >= fromIntegral mediaLo, a + z <= fromIntegral mediaHi]
+          ++ uiFunctions
+      , inTab = B.take 0x860 (B.drop (0x81b09c - 0x61c400) id4)
       , inCharsetBytes = charset
       , inNameBase = nameBase
       , inHandler = handler
       , inEpochBump = epochBump
-      , inStagePayload = stagePayload
       , inPlanCellBytes = planCells
-      , inPresenterSize = B.length uiP
       , inMediaLo = mediaLo
       , inMediaHi = mediaHi
-      , inMediaImg = compose mediaLo mediaHi (chunks ++ [(fromIntegral (addr ms "helpers"), helpers)])
+      , inMediaImg = compose mediaLo mediaHi (chunks ++
+          [(fromIntegral (addr ms "helpers"), helpers), (0x72b3a4, B.take 16 (B.drop (0x72b3a4 - 0x61c400) id4))])
       , inLowcode = lowcode
+      , inLowcodeBase = GuestAddress (fromIntegral id4Base)
       , inMenuBase = menuBase
       , inMenu = menuImg
-      , inRootValues = parentValues
-      , inRootLabels = parentLabels
       }
 
 envFrom :: Inputs -> Env
@@ -1256,20 +2228,21 @@ envFrom in' =
     , eDialog = nodeByRole plan "dialog node header"
     , eFields = nodesByRole plan "field-list node header"
     , eEditor = nodeByRole plan "bank name editor node header"
-    , eRootValues = inRootValues in'
-    , eRootLabels = inRootLabels in'
     , eNameBase = inNameBase in'
-    , eCharsetCopy = 0x00957200
+    , eStatusGetter = fromIntegral (addr (inKs in') "rb_status_last")
+    , eCharsetCopy = 0x00957600
     , eRootEditRow = rootEditRow
+    , eRootRecallRow = rootRecallRow
     , eRegions = regionBases in'
     , eOut = fromIntegral (addr us "ui_out")
-    , eLog = fromIntegral (addr us "ui_log")
+    , eUiLog = fromIntegral (addr us "ui_log")
     , eOut26 = fromIntegral (addr us "ui_out26")
     , eFileB = fromIntegral (addr us "ui_file_b")
     , eSteps = fromIntegral (addr us "ui_steps")
     , eFrame = 0x009571d0
     , eCursor = 0x009571d8
-    , eRootNode = 0x00957400
+    , eCurrentRow = 0x0095732c
+    , eRootNode = 0x0078ea98
     , eStockNode = 0x00957440
     , eStockValues = 0x00957480
     , eStockChild1 = 0x009574c0
@@ -1278,133 +2251,111 @@ envFrom in' =
     , eHandler = fromIntegral (addr us "ui_handler")
     , eEpochBump = fromIntegral (addr us "ui_epoch_bump")
     , eRefuse = fromIntegral (addr us "ui_refuse")
-    , eStagePayload = inStagePayload in'
-    , eFieldsMap = inFields in'
+    , eDrawRoot = GuestAddress (fromIntegral (addr (inKs in') "rb_bank_draw_root"))
+    , eFieldGetter = 0x0061c93c
+    , eDefaultsRow = B.take 0x28 (B.drop (fromIntegral (defaultsRowAddress - 0x61c400)) (inId4 in'))
+    , eWriteComp = fromIntegral (addr (inMs in') "rbm_write_comp")
     }
   where
     plan = inPlan in'
     us = inUs in'
-    menuImg = inMenu in'
-    menuBase = inMenuBase in'
+    parentBytes = case [pwNew w | w <- plan, pwRole w == "parent values array with the two items"] of
+      [bytes] -> bytes
+      _ -> error "the parent values array is not unique"
     slotNode = nodeByRole plan "slot list node header"
-    parentValues = nodeByRole plan "parent values array with the two items"
     rows =
-      [ ( readU32 menuImg (fromIntegral (parentValues - menuBase) + 8 * i)
-        , readU32 menuImg (fromIntegral (parentValues - menuBase) + 8 * i + 4)
+      [ ( readU32 parentBytes (8 * i)
+        , readU32 parentBytes (8 * i + 4)
         )
-      | i <- [0 .. 63]
+      | i <- [0 .. B.length parentBytes `div` 8 - 1]
       ]
     rootEditRow = fromMaybe (error "the root row 0x7d was not found in the emitted parent values") (findIndex (\(t, c) -> t == 0x7d && c == slotNode) rows)
+    rootRecallRow = fromMaybe (error "the root row 0x7e was not found in the emitted parent values") (findIndex (\(t, c) -> t == 0x7e && c == nodeByRole plan "recall list node header") rows)
 
 regionBases :: Inputs -> [(String, Word32, Int)]
 regionBases in' =
-  [ ("ktext", 0x011dcca0, B.length (inKtext in'))
-  , ("kdata", 0x011dcca0 + fromIntegral textLen, dataLen)
+  [ ("ktext", inKernelBase in', B.length (inKtext in'))
+  , ("kdata", inKernelBase in' + fromIntegral textLen,
+      fromIntegral (inMenuBase in' - inKernelBase in') - textLen + B.length (inMenu in'))
   , ("media", inMediaLo in', fromIntegral (inMediaHi in' - inMediaLo in'))
-  , ("lowcode", 0x0061c400, B.length (inLowcode in'))
+  , ("lowcode", guestWord (inLowcodeBase in'), B.length (inLowcode in'))
+  , ("stock-divide", 0x0004d978, 244)
+  , ("stock-draw-tail", guestWord stockDrawTail, B.length stockDrawTailImage)
   , ("span-low", 0x0096cc64, 0x980660 - 0x96cc64)
   , ("media-state", 0x00910140, 0x200)
-  , ("tables-ptr", 0x0081b09c, 0x89edd8 - 0x81b09c)
-  , ("tables-edit", 0x00775428, 0x77b0a0 - 0x775428)
-  , ("menu", inMenuBase in', B.length (inMenu in'))
-  , ("cells", 0x00950000, 0xa000)
+  , ("tables-ptr", 0x0081b09c, 0x860)
+  , ("mirror", 0x0089ec00, 0x200)
+  , ("tables-edit", 0x00774f48, fromIntegral (tablesEditEnd - 0x774f48))
+  , ("cells", cellsBase, cellsSize)
   , ("modal-cells", 0x00cd1ae4, 0xa00)
   , ("modal-state", 0x0146761c, 0x162)
+  , ("draw-state", 0x015e46c0, 0x200)
+  , ("stock-draw-calls", 0x01112b2c, fromIntegral (stockDrawCallsEnd - 0x01112b2c))
   , ("ui-a", 0xc12aac, 0xc12c00 - 0xc12aac)
   , ("ui-b", 0xc72e10, 0xc76800 - 0xc72e10)
-  , ("ui-c", 0xd38d98, 0xd3da00 - 0xd38d98)
-  , ("presenter", 0x0113a014, inPresenterSize in')
+  , ("ui-c", 0xd38d98, 0xd52684 - 0xd38d98)
   ]
   where
     textLen = B.length (inKtext in')
     dataLen = B.length (inKbin in') - textLen
 
-residueFor :: Env -> Inputs -> Spec -> M.Map String B.ByteString -> [Value]
-residueFor e in' sp observed =
-  [ object ["region" .= n, "offset" .= lo', "hex" .= hexB (B.take (hi' - lo') (B.drop lo' v))]
-  | (n, lo, hi) <- pinnedBytes in'
-  , Just v <- [M.lookup n observed]
-  , (lo', hi') <- gapsOf lo (min hi (B.length v)) (claims n)
-  ]
-  where
-    claims n = sortOn fst [(o, o + B.length b) | (n', o, b) <- spClaims sp, n' == n]
-    gapsOf lo hi spans = go lo spans
-      where
-        go cur [] = [(cur, hi) | cur < hi]
-        go cur ((a, b) : rest)
-          | b <= cur = go cur rest
-          | a > cur = (cur, min a hi) : go (max cur b) rest
-          | otherwise = go (max cur b) rest
-
 runSpec :: FilePath -> FilePath -> Env -> Inputs -> Spec -> IO Value
 runSpec runner out e in' sp = do
   let dir = out </> spId sp
+      regs = regionList in' e sp
+      workspaces = caseWorkspaces in' e sp
   createDirectoryIfMissing True dir
-  let regs = regionList in' e sp
-      modelFns =
-        [ n
-        | (n, (a, z)) <- M.toList (case inUs in' of Syms m -> m)
-        , z >= 4
-        , (a >= 0x00c00000 && a < 0x00d40000) || (a >= 0x0113a014 && a < 0x0113a100)
-        ]
-  unless (map (\(n, a, _, _, _) -> (n, a)) regs == map (\(n, a, _) -> (n, a)) (eRegions e)) $
+  unless (map (\(n, a, _, _, _) -> (n, a)) regs == [(n, a) | (n, a, _) <- eRegions e, inProfile (regionProfile e sp) (RegionId n)]) $
     error ("the region table and the case image disagree in " ++ spId sp)
+  forM_ workspaces $ \w -> do
+    let RegionId region = workspaceRegion w
+    unless (any (\(n, _, size, permissions, _) -> n == region && permissions == 3 && workspaceStart w >= 0 && workspaceStart w < workspaceEnd w && workspaceEnd w <= size) regs) $
+      error ("invalid ABI workspace in " ++ spId sp)
   let arts = [(n, b) | (n, _, _, _, b) <- regs, not (B.null b)]
   forM_ arts $ \(n, b) -> B.writeFile (dir </> (n ++ ".bin")) b
   digests <- forM arts $ \(n, b) -> (\d -> (n, d)) <$> sha256 b
-  let writeCase spc fnNames residues evs =
-        BL.writeFile (dir </> "case.json") (encode (caseJson in' e spc digests residues evs fnNames))
-      loop fns fuel = do
-        writeCase sp fns [] []
-        (_, r1) <- runCase runner (dir </> "case.json")
-        case runnerMissingFn in' r1 of
-          Just n | fuel > 0 && n `notElem` fns && not (covered fns n) -> loop (fns ++ [n]) (fuel - 1)
-          _ -> pure (fns, r1)
-      covered _ n
-        | "fn-" `isPrefixOf` n =
-            let a = fromIntegral (hexI (drop 3 n) :: Integer) :: Word32
-             in any (\(b, z) -> a >= b && a < b + fromIntegral z) stockFns
-        | otherwise = False
-  (fns, r1) <- loop (spFunctions sp ++ alwaysFns ++ modelFns) (48 :: Int)
-  let observed = memMap e r1
-      residues = residueFor e in' sp observed
-      -- the saved slot's payload bytes come from the live walk, whose expected image is
-      -- regenerated from the run; the new file's header and names stay explicit claims
-      cardPayload =
-        if spId sp == "n-save-ok"
-          then case M.lookup "span-low" observed of
-            Just v -> [("span-low", 0x980240 - 0x96cc64, B.take (0x358 - 0x240) (B.drop (0x980240 - 0x96cc64) v))]
-            Nothing -> []
-          else []
-      sp' = sp { spClaims = spClaims sp ++ cardPayload }
-  writeCase sp' fns residues (runnerEvents r1)
-  (_, r2) <- runCase runner (dir </> "case.json")
-  let status = runnerStatus r2
-      miss = if rstat == "unknown_call" then runnerMissingFn in' r2 else Nothing
-      reason = reportReason r2
-      rstat = reportRunnerStatus r2
-      delta = if status == "failed" then firstDelta e sp regs (spClaims sp ++ residueTuples residues) (memMap e r2) else Nothing
-  pure
-    ( object
-        ( [ "id" .= spId sp
-          , "status" .= status
-          , "mismatches" .= runnerMismatches r2
-          , "reason" .= reason
-          , "runner_status" .= rstat
-          ]
-            ++ maybe [] (\d -> ["first_delta" .= d]) delta
-            ++ maybe [] (\n -> ["missing_fn" .= n]) miss
-        )
-    )
+  BL.writeFile (dir </> "case.json") (encode (caseJson in' e sp digests))
+  (_, report) <- runCase runner (dir </> "case.json")
+  BL.writeFile (dir </> "native-result.json") (encode report)
+  let nativeStatus = runnerStatus report
+      rstat = reportRunnerStatus report
+      nativeProblems = runnerMismatches report
+      classified problem = problem == "stub events differ" || any (\(n, _, _, _, _) -> problem == "memory " ++ n ++ ": differs from exact allowed final bytes") regs
+      publicProblems = memoryProblems in' e sp (memMap e report)
+      problems = filter (not . classified) nativeProblems ++ publicProblems
+      status
+        | nativeStatus `notElem` ["passed", "failed"] = nativeStatus
+        | rstat /= "returned" || not (null problems) = "failed"
+        | otherwise = "passed"
+      workspaceJson w = let RegionId region = workspaceRegion w in object
+        ["kind" .= show (workspaceKind w), "region" .= region, "offset" .= workspaceStart w, "size" .= (workspaceEnd w - workspaceStart w)]
+  pure (object
+    [ "id" .= spId sp
+    , "status" .= status
+    , "mismatches" .= problems
+    , "reason" .= reportReason report
+    , "runner_status" .= rstat
+    , "native_case_status" .= nativeStatus
+    , "native_case_mismatches" .= nativeProblems
+    , "comparison" .= ("One validated execution; public claims and every non-workspace byte are checked. NativeCase whole-memory differences within declared ABI workspaces and incidental stub event order are not behavior assertions." :: String)
+    , "abi_workspaces" .= map workspaceJson workspaces
+    ])
 
 findingsText :: [Spec] -> [Value] -> String
 findingsText specs results =
   unlines
     ( [ "recipe-bank UI-behavior cases: findings"
       , ""
-      , "The consumer boundary is synthetic (emulation/recipe-bank-ui-model.c): the modal-75"
-      , "cell dispatch, the 0xe/0xf transition records, the four stock delegates and the"
-      , "label-record read stand in for the stock code; no stock instruction executes."
+      , "The modal dispatch, navigation, delegates and drawer are modeled ABI boundaries."
+      , "The property getter, setter, commit dispatcher and consumer-cell writes execute"
+      , "stock 1.50 instructions. Two ordinary-block copy wrappers are bx lr substitutions."
+      , "The notification configuration query models an all-disabled bitset."
+      , "The bank's draw-root hook runs; the stock drawer behind 0x01158160 is a modeled"
+      , "immediate return, so markers are checked through the stock frame snapshot"
+      , "accessors FUN_0061ca2c/FUN_0061d1a4/FUN_0061d244/FUN_0061d294, not through drawn pixels."
+      , "Stale current-row and entry-cursor cells are written as native preconditions."
+      , "Draw-root cases map the modeled tail in place of the ui-b stock delegates,"
+      , "which those cases never enter; a fetch there faults."
       , ""
       , "Case status:"
       ]
@@ -1412,8 +2363,10 @@ findingsText specs results =
            | (sp, r) <- zip specs results
            ]
         ++ [ ""
-           , "No behavior claim: the unclaimed bytes of the pinned regions (pinned from the"
-           , "discovery run only to satisfy the runner's exact-final-memory contract)."
+           , "Each case executes once with a closed function inventory and enforced stub contracts."
+           , "Explicit public claims and every byte outside the declared ABI workspaces are checked."
+           , "No private final-memory bytes or incidental stub-event sequence are pinned from execution."
+           , "Text entry is modeled; the name write and subsequent Recall use public menu actions."
            ]
     )
 
@@ -1428,12 +2381,15 @@ main = do
   runner <- maybe (fail "--runner") pure (opt "runner")
   planPath <- maybe (fail "--plan") pure (opt "plan")
   id4Path <- maybe (fail "--id4") pure (opt "id4")
+  id5Path <- maybe (fail "--id5") pure (opt "id5")
+  let id4Base = hexI (fromMaybe "0x0061c400" (opt "id4-base"))
+      kernelBase = hexI (fromMaybe "0x00be1f00" (opt "rb-base"))
   fieldsPath <- maybe (fail "--fields") pure (opt "fields")
   nameRecordArg <- maybe (fail "--name-record") pure (opt "name-record")
   createDirectoryIfMissing True out
-  in' <- loadInputs build planPath id4Path fieldsPath nameRecordArg
+  in' <- loadInputs build planPath id4Path id4Base id5Path fieldsPath nameRecordArg kernelBase
   let e = envFrom in'
-      specs = specSet e (inId4 in') (inEpochBump in')
+      specs = specSet e (inEpochBump in')
   results <- forM specs $ \sp -> runSpec runner out e in' sp
   BL.writeFile (out </> "results.json") (encode (object ["cases" .= results]))
   writeFile (out </> "findings.txt") (findingsText specs results)

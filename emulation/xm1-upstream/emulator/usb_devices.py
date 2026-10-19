@@ -22,6 +22,7 @@ class USBControl:
         if not isinstance(power.usb_connected,bool):
             raise ValueError('USB presence fixture must be boolean')
         self.board,self.power=board,power
+        self._endpoint=None
         self.registers={**{self.PHY+offset:0 for offset in self.WORD_OFFSETS},
                         **{address:0 for address in self.HALFWORD_REGISTERS}}
         self.started=False
@@ -100,10 +101,9 @@ class USBControl:
             'registers':{hex(address):hex(value) for address,value in self.registers.items()},
             'writes':self.writes,
             'limits':['Bit31 ofFFF55104 is explicit cable presence, retained independently of written configuration.',
-                      'Other register reset values are unmeasured zero fixtures; stock accesses retain only validated commands.',
-                      'No ready bits, bus exchanges, endpoint data, enumeration, transfer completion or IRQ are invented.',
-                      'Halfword core controls and word PHY controls are distinct; other offsets/widths/values reject.',
-                      'The supported initial core values assume a zero-reset register fixture; connected USB operations remain unsupported.']}
+                      'Other register reset values are unmeasured zero fixtures; stock accesses retain only X-M1-bound commands.',
+                      'Endpoint transport is selected independently of the initial cable level, so a paused post-boot attach can enumerate.',
+                      'Halfword core controls and word PHY controls are distinct; other offsets/widths/values reject.']}
         if self._endpoint is not None:
             state['endpoint_transport'] = self._endpoint.snapshot()
             state['limits'].append('Selected endpoint contract adds opaque FIFO/DMA/IRQ transport; it supplies no firmware command replies.')

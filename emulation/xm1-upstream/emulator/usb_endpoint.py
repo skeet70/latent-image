@@ -1,10 +1,4 @@
-"""Opt-in EXR II USB FIFO/DMA transport; all payload bytes belong to the guest.
-
-No service commands, firmware pointers or descriptors are interpreted here.
-The host supplies setup/OUT bytes and consumes bytes written to TX FIFO/DMA.
-Register roles follow the stock controller helpers, including the distinct
-halfword-read/word-write roles at CORE+0x194. Timings are synthetic inputs.
-"""
+"""Opt-in EXR II USB FIFO/DMA transport; all payload bytes belong to the guest. No service commands, firmware pointers or descriptors are interpreted here. The host supplies setup/OUT bytes and consumes bytes written to TX FIFO/DMA. Core widths and event roles are bound to the X-M1 1.50 controller closure at 0x00d7af90..0x00d7dfd4; IRQ84/85 descriptors are checked by the profile. Timings and reset values remain synthetic inputs."""
 from dataclasses import dataclass
 from .hardware import UnsupportedDevice
 
@@ -47,6 +41,8 @@ class USBEndpointContract:
 
 
 class USBEndpointEngine:
+    # X-M1 1.50 stock halfword and word accesses in 00d7af90..00d7dfd4.
+    # CORE+0x194 has distinct halfword-read and word-write roles.
     HALF = frozenset((0x004, 0x008, 0x02c, 0x030, 0x034, 0x040, 0x044, 0x048,
         0x054, 0x058, 0x05c, 0x068, 0x06c, 0x070, 0x080, 0x088,
         0x090, 0x094, 0x098, 0x09c, 0x0ac, 0x184, 0x194, 0x1ec, 0x1f0, 0x1f4, 0x1f8, 0x218, 0x21c))
@@ -393,4 +389,5 @@ class USBEndpointEngine:
                     rx_positions=dict(self.rx_positions), tx={k:[v.hex() for v in values] for k,values in self.tx.items()},
                     transfers=list(self.transfers), transfer_ticks=self.contract.transfer_ticks,
                     packet_bytes=self.contract.packet_bytes,
+                    binding='X-M1 1.50 00d7af90..00d7dfd4 core closure and checked IRQ84/85 descriptor triples',
                     limits='Synthetic register reset/latency/speed; opaque byte transport; no firmware command or descriptor emulation')

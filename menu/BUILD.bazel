@@ -1,0 +1,87 @@
+genrule(
+    name = "ram-push-installer-object",
+    srcs = [
+        "ram_push_abi.h",
+        "ram_push_installer.c",
+    ],
+    outs = ["ram_push_installer.o"],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -mfloat-abi=soft -ffreestanding -fno-builtin -fno-stack-protector -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections -Os -Wall -Wextra -Werror -c $(location ram_push_installer.c) -o $@",
+    local = True,
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "ram-push-bootstrap",
+    srcs = [
+        "ram_push_bootstrap.S",
+        "ram_push_bootstrap.ld",
+    ],
+    outs = [
+        "ram_push_bootstrap.bin",
+        "ram_push_bootstrap.elf",
+    ],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-e,ram_push_bootstrap -Wl,-T,$(location ram_push_bootstrap.ld) $(location ram_push_bootstrap.S) -o $(location ram_push_bootstrap.elf) && llvm-objcopy -O binary $(location ram_push_bootstrap.elf) $(location ram_push_bootstrap.bin)",
+    local = True,
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "ram-push-free-bootstrap",
+    srcs = [
+        "ram_push_bootstrap.ld",
+        "ram_push_free.S",
+    ],
+    outs = [
+        "ram_push_free.bin",
+        "ram_push_free.elf",
+    ],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-e,ram_push_free -Wl,-T,$(location ram_push_bootstrap.ld) $(location ram_push_free.S) -o $(location ram_push_free.elf) && llvm-objcopy -O binary $(location ram_push_free.elf) $(location ram_push_free.bin)",
+    local = True,
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "ram-push-peer-prepare",
+    srcs = [
+        "ram_push_bootstrap.ld",
+        "ram_push_peer_prepare.S",
+    ],
+    outs = [
+        "ram_push_peer_prepare.bin",
+        "ram_push_peer_prepare.elf",
+    ],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-e,ram_push_peer_prepare -Wl,-T,$(location ram_push_bootstrap.ld) $(location ram_push_peer_prepare.S) -o $(location ram_push_peer_prepare.elf) && llvm-objcopy -O binary $(location ram_push_peer_prepare.elf) $(location ram_push_peer_prepare.bin)",
+    local = True,
+    visibility = ["//visibility:public"],
+)
+
+# The menu files a RAM-push manifest's source_identity names.
+filegroup(
+    name = "ram-push-relink-sources",
+    srcs = [
+        "ram_push_abi.h",
+        "ram_push_installer.c",
+        "recipe_bank_actions.c",
+        "recipe_bank_allowlist.json",
+        "recipe_bank_arm.S",
+        "recipe_bank_boot.S",
+        "recipe_bank_boot.ld",
+        "recipe_bank_edit.c",
+        "recipe_bank_edit.h",
+        "recipe_bank_fields.inc",
+        "recipe_bank_hook.c",
+        "recipe_bank_probe.c",
+        "recipe_bank_ram.ld",
+        "recipe_bank_storage.c",
+        "recipe_bank_ui.h",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
+exports_files(
+    ["recipe_bank_allowlist.json"],
+    visibility = ["//host/firmware:__pkg__"],
+)

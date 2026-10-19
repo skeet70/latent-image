@@ -17,6 +17,7 @@ module FujiAF.UpdateContainer
   ( Pair16 (..)
   , Pair32 (..)
   , MediaImage (..)
+  , TableLayout (..)
   , SegmentEntry (..)
   , RecordHeader (..)
   , CompressedRecord (..)
@@ -29,6 +30,13 @@ module FujiAF.UpdateContainer
   , PartDiff (..)
   , parseContainer
   , rebuildContainer
+  , compactRecorderControl
+  , tableLayoutFromMedia
+  , tableEndOffset
+  , plainExtentTableOffset
+  , plainLoadOffset
+  , header3Offset
+  , windowHeaderOffset
   , image2Extent
   , replaceImage2
   , plainExtents
@@ -75,7 +83,7 @@ module FujiAF.UpdateContainer
 
 import Data.Bits (complement, shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
-import Data.List (intercalate)
+import Data.List (find, intercalate)
 import Data.Word (Word16, Word32, Word8)
 
 data Pair16 = Pair16 { pair16Offset :: Word16, pair16Length :: Word16 } deriving (Eq, Show)
@@ -133,6 +141,8 @@ data Trailer = Trailer
   , trMarkerHalf :: Word16
   } deriving (Eq, Show)
 
+data TableLayout = Stock | RecorderCompact deriving (Eq, Show)
+
 data Parts = Parts
   { partIdentity :: B.ByteString
   , partVersionMajor :: Word32
@@ -140,6 +150,7 @@ data Parts = Parts
   , partSelector :: Word32
   , partRangeFill :: B.ByteString
   , partPreTable :: B.ByteString
+  , partTableLayout :: TableLayout
   , partSegments :: [SegmentEntry]
   , partTableTail :: B.ByteString
   , partRecord4 :: CompressedRecord
@@ -208,8 +219,9 @@ segmentEntryBytes = 36
 segmentCount :: Int
 segmentCount = 8
 
-segmentTableOffset :: Int
-segmentTableOffset = 0x140040
+segmentTableOffset :: TableLayout -> Int
+segmentTableOffset Stock = 0x140040
+segmentTableOffset RecorderCompact = 0x140010
 
 recordHeaderBytes :: Int
 recordHeaderBytes = 20
@@ -217,8 +229,66 @@ recordHeaderBytes = 20
 trailerBytes :: Int
 trailerBytes = 32
 
-tableEndOffset :: Int
-tableEndOffset = segmentTableOffset + segmentEntryBytes * segmentCount + 4
+tableEndOffset :: TableLayout -> Int
+tableEndOffset layout = segmentTableOffset layout + segmentEntryBytes * segmentCount + 4
+
+plainExtentTableOffset :: TableLayout -> Int
+plainExtentTableOffset Stock = 0x1401b0
+plainExtentTableOffset RecorderCompact = 0x140160
+
+plainLoadOffset :: TableLayout -> Int
+plainLoadOffset Stock = 0x1401a8
+plainLoadOffset RecorderCompact = 0x140158
+
+header3Offset :: TableLayout -> Int
+header3Offset Stock = 0x140184
+header3Offset RecorderCompact = 0x140134
+
+windowHeaderOffset :: TableLayout -> Int
+windowHeaderOffset layout = plainLoadOffset layout - 4
+
+aliasPointer :: Int -> Word32
+aliasPointer offset = 0x4061c000 + fromIntegral (offset - 0x140000)
+
+tableLayoutFromMedia :: B.ByteString -> Either String TableLayout
+tableLayoutFromMedia body = do
+  if B.length body < 0x140010 then Left "main range lacks the root header" else pure ()
+  layout <- case mediaWordAt body 0x140000 of
+    0x4061c040 -> Right Stock
+    0x4061c010 -> Right RecorderCompact
+    _ -> Left "unsupported segment-table root pointer"
+  if B.length body < tableEndOffset layout + trailerBytes
+    then Left "main range shorter than the segment table and trailer"
+    else Right layout
+
+validateMetadata :: TableLayout -> B.ByteString -> Either String ()
+validateMetadata layout body = do
+  let extents = plainExtentTableOffset layout
+      header = windowHeaderOffset layout
+      requiredEnd = extents + 76
+  if B.length body < requiredEnd then Left "recognized metadata extends past the main range" else pure ()
+  if mediaWordAt body 0x140004 /= aliasPointer header
+      || mediaWordAt body 0x140008 /= 0
+      || mediaWordAt body 0x14000c /= aliasPointer (header3Offset layout)
+      || mediaWordAt body (header3Offset layout) /= 0x1234
+      || mediaWordAt body header /= aliasPointer extents
+      || mediaWordAt body (header + 8) /= 0x360000
+    then Left "unsupported root or recognized-header words"
+    else pure ()
+  let row k = [mediaWordAt body (extents + k * 24 + w * 4) | w <- [0 .. 5]]
+      valid k ident resource = case row k of
+        [i, _, _, a, b, r] -> i == ident && a == 0 && b == 0 && r == resource
+        _ -> False
+  if not (valid 0 0 0x44 && valid 1 2 0x46 && valid 2 3 0x47)
+    then Left "unsupported recognized extent records"
+    else pure ()
+  case mediaWordAt body (extents + 72) of
+    0xffffffff -> Right ()
+    1 | layout == RecorderCompact && B.length body >= extents + 100
+        && row 3 == [1,0x0144a5e0,0x1000,0,0,0x45]
+        && row 2 == [3,0x011e0000,0x26a5e0,0,0,0x47]
+        && mediaWordAt body (extents + 96) == 0xffffffff -> Right ()
+    _ -> Left "recognized extent terminator missing or unsupported"
 
 identityOffset :: Int
 identityOffset = 4
@@ -327,10 +397,10 @@ serializeRecordHeader h =
 serializeRecord :: CompressedRecord -> B.ByteString
 serializeRecord r = serializeRecordHeader (recHeader r) <> recStream r
 
-parseRecord :: String -> B.ByteString -> Int -> Either String CompressedRecord
-parseRecord label body start = do
+parseRecord :: TableLayout -> String -> B.ByteString -> Int -> Either String CompressedRecord
+parseRecord layout label body start = do
   let bodyLength = B.length body
-  if start < tableEndOffset
+  if start < tableEndOffset layout
     then Left (label ++ " starts inside the segment table")
     else pure ()
   if start + recordHeaderBytes > bodyLength
@@ -420,16 +490,17 @@ parseHeader bytes =
 -- flash `flash` straight to `load` (no record header, unlike ids 4 and 5), so
 -- the container's part is media [flash, flash + size) between the image-5
 -- record and the trailer.
-parseMain :: B.ByteString -> Either String (B.ByteString, [SegmentEntry], B.ByteString, CompressedRecord, B.ByteString, CompressedRecord, B.ByteString, B.ByteString, B.ByteString, Trailer)
+parseMain :: B.ByteString -> Either String (TableLayout, B.ByteString, [SegmentEntry], B.ByteString, CompressedRecord, B.ByteString, CompressedRecord, B.ByteString, B.ByteString, B.ByteString, Trailer)
 parseMain body = do
+  layout <- tableLayoutFromMedia body
+  validateMetadata layout body
   let bodyLength = B.length body
-  if bodyLength < tableEndOffset + trailerBytes
-    then Left "main range shorter than the segment table and trailer"
-    else pure ()
-  if mediaWordAt body (segmentTableOffset + segmentEntryBytes * segmentCount) /= 0xffffffff
+      tableStart = segmentTableOffset layout
+      tableEnd = tableEndOffset layout
+  if mediaWordAt body (tableStart + segmentEntryBytes * segmentCount) /= 0xffffffff
     then Left "segment table terminator missing"
     else pure ()
-  let segments = [parseSegment body (segmentTableOffset + segmentEntryBytes * k) | k <- [0 .. segmentCount - 1]]
+  let segments = [parseSegment body (tableStart + segmentEntryBytes * k) | k <- [0 .. segmentCount - 1]]
   if map segId segments /= [0 .. 7]
     then Left "segment table does not hold ids 0 through 7"
     else pure ()
@@ -438,8 +509,13 @@ parseMain body = do
       entry5 = entryById 5 segments
       record4Start = fromIntegral (segFlash entry4)
       record5Start = fromIntegral (segFlash entry5)
-  record4 <- parseRecord "image 4 record" body record4Start
-  record5 <- parseRecord "image 5 record" body record5Start
+      metadataEnd = plainExtentTableOffset layout
+        + if mediaWordAt body (plainExtentTableOffset layout + 72) == 1 then 100 else 76
+  if record4Start < metadataEnd
+    then Left "image 4 record starts inside recognized metadata"
+    else pure ()
+  record4 <- parseRecord layout "image 4 record" body record4Start
+  record5 <- parseRecord layout "image 5 record" body record5Start
   let record4End = record4Start + B.length (serializeRecord record4)
       record5End = record5Start + B.length (serializeRecord record5)
       trailerStart = bodyLength - trailerBytes
@@ -462,9 +538,10 @@ parseMain body = do
     then Left "image 2 extent overlaps the trailer"
     else pure ()
   pure
-    ( B.take segmentTableOffset body
+    ( layout
+    , B.take tableStart body
     , segments
-    , B.take (record4Start - tableEndOffset) (B.drop tableEndOffset body)
+    , B.take (record4Start - tableEnd) (B.drop tableEnd body)
     , record4
     , B.take (record5Start - record4End) (B.drop record4End body)
     , record5
@@ -507,7 +584,7 @@ parseContainer bytes = do
   if hAux2Length header `mod` 8 /= 0
     then Left "auxiliary 2 length is not a multiple of 8"
     else pure ()
-  (preTable, segments, tableTail, record4, gap45, record5, postHead, image2, postTail, trailer) <-
+  (layout, preTable, segments, tableTail, record4, gap45, record5, postHead, image2, postTail, trailer) <-
     parseMain (B.take mainLength (B.drop mainStart bytes))
   pure
     Parsed
@@ -521,6 +598,7 @@ parseContainer bytes = do
             , partSelector = word32At bytes selectorOffset
             , partRangeFill = B.take rangeFillBytes (B.drop rangeFillOffset bytes)
             , partPreTable = preTable
+            , partTableLayout = layout
             , partSegments = segments
             , partTableTail = tableTail
             , partRecord4 = record4
@@ -550,6 +628,36 @@ serializeMain parts =
     , partPostTail parts
     , serializeTrailer (partTrailer parts)
     ]
+
+compactRecorderControl :: Parsed -> Either String Parts
+compactRecorderControl source = do
+  let parts = parsedParts source
+      body = partPreTable parts <> B.concat (map serializeSegment (partSegments parts))
+        <> putMediaWord 0xffffffff <> partTableTail parts
+      entry4 = entryById 4 (partSegments parts)
+      failures = [checkField c | c <- checks source ++ carriedChecks source, not (checkPassed c)]
+  if not (null failures) then Left ("compact control source refused: " ++ intercalate ", " failures) else pure ()
+  if partTableLayout parts /= Stock then Left "compact control requires the stock table layout" else pure ()
+  validateMetadata Stock body
+  if fromIntegral (segFlash entry4) < (0x140400 :: Int)
+      || segLoad entry4 < 0x61c1fc || segLoad entry4 > 0x61c400
+      || segBss entry4 /= 0x89ec00 || segBssLen entry4 /= 0x352e00
+      || segLoad (entryById 5 (partSegments parts)) /= 0xbf1a00
+      || mediaWordAt body 0x1401f8 /= 0xffffffff
+    then Left "compact control geometry is unresolved"
+    else pure ()
+  let root = B.concat (map putMediaWord [0x4061c010,0x4061c154,0,0x4061c134])
+      window = B.concat (map putMediaWord [0x4061c160,0x01100000,0x360000])
+      tailBytes = partTableTail parts
+      oldEnd = tableEndOffset Stock
+      relocatedTail = B.take 32 (B.drop (header3Offset Stock - oldEnd) tailBytes) <> window
+        <> B.take 76 (B.drop (plainExtentTableOffset Stock - oldEnd) tailBytes)
+        <> B.drop (0x1401ac - oldEnd) tailBytes
+  pure parts
+    { partTableLayout = RecorderCompact
+    , partPreTable = B.take 0x140000 (partPreTable parts) <> root
+    , partTableTail = relocatedTail
+    }
 
 -- The id-2 extent as the container's own segment words describe it: media
 -- offset in the main range, byte length and RAM load.
@@ -585,78 +693,57 @@ postHeadStart parts =
   let entry = entryById 5 (partSegments parts)
    in fromIntegral (segFlash entry) + recordHeaderBytes + B.length (recStream (partRecord5 parts))
 
--- The plain-extent descriptors as the container stores them: the (base,
--- length) words of the three six-word entries at media 0x1401b0/0x1401c8/
--- 0x1401e0 (base at +4, length at +8), read at the offsets stockPlainExtents
--- pins. A run maps to the window run [start + (base - loadBase), + length),
--- where loadBase is the separate loader destination word stockPlainLoad
--- names.
 plainExtents :: Parts -> [(Word32, Word32)]
 plainExtents parts =
-  [ (mediaWordAt tableTail (baseOffset - tableEndOffset), mediaWordAt tableTail (lengthOffset - tableEndOffset))
-  | ((baseOffset, _), (lengthOffset, _)) <- stockPlainExtents
+  [ (mediaWordAt tableTail (offset + 4), mediaWordAt tableTail (offset + 8))
+  | k <- [0 .. count - 1]
+  , let offset = first + k * 24
   ]
   where
     tableTail = partTableTail parts
+    layout = partTableLayout parts
+    first = plainExtentTableOffset layout - tableEndOffset layout
+    count = if mediaWordAt tableTail (first + 72) == 1 then 4 else 3
 
--- The id-6 plain-image window in media offsets: entry 6's flash word and its
--- declared flash length. The loader copies that span in (flash_len + 0x1ffff)
--- >> 17 blocks of 0x20000 bytes to the destination word at media 0x1401a8
--- (id4 0x6a987c-0x6a98b0), so the whole window, the runs between the linked
--- extents included, is loaded at boot. Both flash words must be 0x20000-
--- aligned (the loader copies whole blocks), the window must sit inside the
--- carried post-head span, and it must carry every descriptor run: those
--- relations bound every plain extraction and replacement
--- (reports/update-container-rebuild.md section 8).
+-- The raw loader copies whole 0x20000-byte blocks to the destination in the
+-- recognized window header (id4 0x6a987c-0x6a98b0).
+-- The window must fit the carried post-head span and every recognized extent.
 plainWindow :: Parts -> Either String (Int, Int)
-plainWindow parts =
+plainWindow parts = do
   let entry = entryById 6 (partSegments parts)
-      start = fromIntegral (segFlash entry)
-      windowLength = fromIntegral (segFlashLen entry)
+      entry5 = entryById 5 (partSegments parts)
+      start = toInteger (segFlash entry)
+      windowLength = toInteger (segFlashLen entry)
       stop = start + windowLength
-      postHeadStop = postHeadStart parts + B.length (partPostHead parts)
+      postStart = toInteger (segFlash entry5) + toInteger recordHeaderBytes + toInteger (B.length (recStream (partRecord5 parts)))
+      postStop = postStart + toInteger (B.length (partPostHead parts))
       extents = plainExtents parts
-      (loadOffset, _) = stockPlainLoad
-      loadBase = mediaWordAt (partTableTail parts) (loadOffset - tableEndOffset)
+      layout = partTableLayout parts
+      loadBase = mediaWordAt (partTableTail parts) (plainLoadOffset layout - tableEndOffset layout)
+      nominalLength = mediaWordAt (partTableTail parts) (windowHeaderOffset layout + 8 - tableEndOffset layout)
       outside (base, extentLength) =
-        let windowOffset = fromIntegral base - fromIntegral loadBase :: Integer
-         in windowOffset < 0 || windowOffset + fromIntegral extentLength > fromIntegral windowLength
-   in if start `mod` 0x20000 /= 0 || windowLength `mod` 0x20000 /= 0
-        then
-          Left
-            ( "the plain window is not 0x20000-aligned: flash "
-                ++ showHexWord (fromIntegral start)
-                ++ " length "
-                ++ showHexWord (fromIntegral windowLength)
-            )
-        else
-          if start < postHeadStart parts
-            then
-              Left
-                ( "the plain window starts before the image-5 record ends: "
-                    ++ showHexWord (fromIntegral start)
-                    ++ " against "
-                    ++ showHexWord (fromIntegral (postHeadStart parts))
-                )
-            else
-              if stop > postHeadStop
-                then
-                  Left
-                    ( "the plain window runs past the image-2 extent: "
-                        ++ showHexWord (fromIntegral stop)
-                        ++ " against "
-                        ++ showHexWord (fromIntegral postHeadStop)
-                    )
-                else case filter outside extents of
-                  ((base, _) : _) ->
-                    Left
-                      ( "plain extent "
-                          ++ showHexWord base
-                          ++ " runs outside the plain window of "
-                          ++ show windowLength
-                          ++ " bytes"
-                      )
-                  [] -> Right (start, stop)
+        let windowOffset = toInteger base - toInteger loadBase
+         in windowOffset < 0 || windowOffset + toInteger extentLength > windowLength
+  if start `mod` 0x20000 /= 0 || windowLength `mod` 0x20000 /= 0
+    then Left ("the plain window is not 0x20000-aligned: flash " ++ showHexWord (segFlash entry) ++ " length " ++ showHexWord (segFlashLen entry))
+    else pure ()
+  if start < postStart
+    then Left ("the plain window starts before the image-5 record ends: " ++ showHexWord (segFlash entry) ++ " against " ++ show postStart)
+    else pure ()
+  if stop > postStop
+    then Left ("the plain window runs past the image-2 extent: " ++ show stop ++ " against " ++ show postStop)
+    else pure ()
+  if stop > 0x100000000 || stop > toInteger (maxBound :: Int)
+    then Left ("the plain window end exceeds the flash or host address space: " ++ show stop)
+    else pure ()
+  case find outside extents of
+    Just (base, _) ->
+      Left ("plain extent " ++ showHexWord base ++ " runs outside the plain window of " ++ show windowLength ++ " bytes")
+    Nothing -> pure ()
+  if windowLength /= toInteger nominalLength
+    then Left ("the plain window length disagrees with the recognized window header: " ++ showHexWord (segFlashLen entry) ++ " against " ++ showHexWord nominalLength)
+    else pure ()
+  pure (fromInteger start, fromInteger stop)
 
 -- The loaded plain window in media form: the bytes the loader copies to RAM,
 -- the linked extents and the runs between them. The container stores their
@@ -984,7 +1071,8 @@ checks parsed =
             "emission gate (image step must attach its decoded image)"
         ]
       recordChecks label r entry =
-        [ check
+        let recordLength = toInteger recordHeaderBytes + toInteger (B.length (recStream r))
+         in [ check
             (label ++ " header arithmetic")
             (showHexWord (recChunkCount (recHeader r)) ++ "/" ++ showHexWord (recChunkSize (recHeader r)) ++ "/" ++ showHexWord (recMode (recHeader r)))
             "ceil(record length/chunk), chunk 0x4000, mode 4"
@@ -1004,7 +1092,23 @@ checks parsed =
             (label ++ " flash window")
             (showHexWord (fromIntegral (recordHeaderBytes + B.length (recStream r))))
             ("<= " ++ showHexWord (segFlashLen entry))
-            (fromIntegral (recordHeaderBytes + B.length (recStream r)) <= segFlashLen entry)
+            (recordLength <= toInteger (segFlashLen entry))
+            "segment table layout"
+        , check
+            (label ++ " flash bounds")
+            (showHexWord (segFlash entry) ++ "/" ++ showHexWord (segFlashLen entry))
+            "actual record and declared window within the main body, next segment region and 32-bit flash address space"
+            ( let start = toInteger (segFlash entry)
+                  declaredEnd = start + toInteger (segFlashLen entry)
+                  actualEnd = start + recordLength
+                  trailerStart = toInteger (B.length mainBody) - toInteger trailerBytes
+                  withinRegion region =
+                    segId region == segId entry || segFlash region <= segFlash entry
+                      || (declaredEnd <= toInteger (segFlash region) && actualEnd <= toInteger (segFlash region))
+               in declaredEnd <= trailerStart && actualEnd <= trailerStart
+                    && declaredEnd <= 0x100000000 && actualEnd <= 0x100000000
+                    && all withinRegion (partSegments parts)
+            )
             "segment table layout"
         ]
    in [ check "header type" (showHexWord (hType stored)) "0x4" (hType stored == 4) "parser 0xdb9cd4 (status 10)"
@@ -1139,7 +1243,30 @@ checks parsed =
              (fromIntegral (parsedFileLength parsed) == hAux2Offset stored + hAux2Length stored + fromIntegral stagingLength)
              "stock bytes"
          ]
-      ++ (plainLoadCheck mainBody stockPlainLoad : [plainCheck mainBody pair | pair <- stockPlainExtents])
+      ++ (plainLoadCheck mainBody (plainLoadOffset (partTableLayout parts), snd stockPlainLoad)
+          : [plainCheck mainBody pair | pair <- plainPins parts])
+      ++ [ let window = plainWindow parts
+            in check
+                 "plain flash window"
+                 (case window of
+                    Left message -> message
+                    Right (start, stop) -> showHexWord (fromIntegral start) ++ "/" ++ show (stop - start))
+                 "aligned carried raw window containing every recognized extent, with the recognized header length"
+                 (case window of Left _ -> False; Right _ -> True)
+                 "raw loader geometry"
+         ]
+
+plainPins :: Parts -> [((Int, Word32), (Int, Word32))]
+plainPins parts =
+  [ ((start + k * 24 + 4, base), (start + k * 24 + 8, expectedLength k len))
+  | (k, ((_, base), (_, len))) <- zip [0 ..] stockPlainExtents
+  ]
+  where
+    start = plainExtentTableOffset (partTableLayout parts)
+    expectedLength k len
+      | partTableLayout parts == RecorderCompact && k == 2
+          && mediaWordAt (partTableTail parts) (start + 56 - tableEndOffset RecorderCompact) == 0x26b5e0 = 0x26b5e0
+      | otherwise = len
 
 -- Carried-intact policy: a rebuild for this body must carry the stock restore
 -- lists unchanged (E-ADJ-MOVERS-150); anything else wipes the affected
@@ -1272,6 +1399,7 @@ stockChecks parsed =
           (entryById (segId e) (partSegments parts) == e)
           "pinned container bytes"
    in [ check "stock identity records" (hex (B.take 16 (partIdentity parts)) ++ "...") (hex (B.take 16 stockIdentity) ++ "...") (partIdentity parts == stockIdentity) "pinned container bytes"
+      , check "stock table layout" (show (partTableLayout parts)) "Stock" (partTableLayout parts == Stock) "pinned root pointer"
       , check
           "stock version words"
           (showHexWord (partVersionMajor parts) ++ "/" ++ showHexWord (partVersionMinor parts))
@@ -1338,6 +1466,7 @@ partPairs =
   , ("version words", \p -> putWord32 (partVersionMajor p) <> putWord32 (partVersionMinor p), CarriedPolicyChecked)
   , ("selector word", \p -> putWord32 (partSelector p), CarriedMustMatch)
   , ("range fill", partRangeFill, CarriedMustMatch)
+  , ("table layout", putMediaWord . aliasPointer . segmentTableOffset . partTableLayout, ImageContent)
   , ("main pre-table", partPreTable, ImageContent)
   , ("segment table", \p -> B.concat (map serializeSegment (partSegments p)) <> putMediaWord 0xffffffff, ImageContent)
   , ("main table tail", partTableTail, ImageContent)

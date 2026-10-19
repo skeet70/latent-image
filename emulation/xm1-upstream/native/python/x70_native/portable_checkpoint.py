@@ -37,8 +37,9 @@ class PortableCheckpointError(reference.CheckpointError):
 
 
 SCHEMA = "x70-native-portable-checkpoint-v1"
-MAX_STATE_BYTES = 128 << 20
-MAX_NODES = 1_000_000
+# InputProcessingControl.writes grows by about 113 nodes per RAM-push host transfer (emulated).
+MAX_STATE_BYTES = 512 << 20
+MAX_NODES = 4_000_000
 PAGE_SIZE = reference.PAGE_SIZE
 STOCK_DEVICE_NAMES = ("BootControls", "KernelInterrupts", "NandController", "FujiDecompressor",
     "LoaderMemoryDMA", "USBControl", "PowerDevices", "AudioSerialControl", "PulseOutputs",
@@ -50,7 +51,10 @@ FACTORY_METHODS = {"read_bytes": "read_memory", "write_bytes": "write_memory",
                    "schedule": "schedule", "record": "record", "raise_irq": "queue_irq"}
 VALUE_FIELDS = {"emulator.loader_devices.FujiLZStream": ("history", "pending"),
                 "emulator.panel_serial.PanelSerial": ("board", "words_received", "words", "_transport", "_selection", "_framing", "ENDPOINT"),
-                "emulator.sd_card.SparseCard": ("sectors", "max_dirty_sectors", "data", "base_image", "failure")}
+                "emulator.sd_card.SparseCard": ("sectors", "max_dirty_sectors", "data", "base_image", "failure"),
+                "emulator.usb_endpoint.USBEndpointEngine": ("board", "contract", "regs", "dma", "rx", "rx_positions",
+                    "setup", "setup_position", "tx_staging", "tx", "tx_partial", "irq_asserted",
+                    "dma_generation", "dma_active", "dma_exact_fresh", "transfers")}
 # Finite execution/reconstruction helpers used by the stock device family.
 # Pin their own globals/private functions as well as imported function bodies.
 # Diagnostic server and process-provenance timestamp modules are excluded.
@@ -143,11 +147,13 @@ def _value_classes():
     from emulator.boards.control_bus_parameters import EndpointDescriptor, FirmwareView
     from emulator.image_parameter_devices import (UIPhysicalAddress, UIPixelStride,
         UIPixelGeometry, UIVirtualTick, UIConversionProgramming)
+    from emulator.usb_endpoint import USBEndpointContract, USBEndpointEngine
     return {_name(cls): cls for cls in (InterruptBank, PolledTimer, ApplicationTimer,
         TimingBank, FormatterBank, FujiLZStream, PeripheralDmaState, PulseTimer, PhaseClockEdge, AcquisitionActuator,
         ControlBusRegisters, ControlBusReplies, EndpointDescriptor, FirmwareView,
         PanelSerial, RecordedStatisticsFixture, SparseCard, MediaImage, StatisticsFrame,
-        UIPhysicalAddress, UIPixelStride, UIPixelGeometry, UIVirtualTick, UIConversionProgramming)}
+        UIPhysicalAddress, UIPixelStride, UIPixelGeometry, UIVirtualTick, UIConversionProgramming,
+        USBEndpointContract, USBEndpointEngine)}
 
 
 def _enum_classes():

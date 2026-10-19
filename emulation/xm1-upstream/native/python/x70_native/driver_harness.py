@@ -1269,7 +1269,7 @@ class DriverHarness:
                 cpu_obj.reg_write(NAMES[name], value)
         board.transactions.clear()
         board.core_state[core]["waiting"] = False
-        irq_start = len(board.interrupts.trace) if hasattr(board, "interrupts") else 0
+        irq_start = board.interrupts.trace_position if hasattr(board, "interrupts") else 0
         start, ticks = board.instructions, board.virtual_ticks
         self._hits, self._stopped_at, self._stop_info, self._hit_limit = [], None, None, max_instructions
         logging = record_stores or allowed_stores is not None
@@ -1457,7 +1457,7 @@ class DriverHarness:
             limits += "; CP14 CPU identity overridden"
         if deliver_faults:
             limits += f"; {len(faults)} native faults delivered through the board's exception entry"
-        irq_trace = board.interrupts.trace[irq_start:] if hasattr(board, "interrupts") else []
+        irq_trace = board.interrupts.trace_since(irq_start) if hasattr(board, "interrupts") else []
         result = dict(entry=entry, cpu=core, returned=returned, return_address=return_address,
                     return_value=final["r0"] if returned else None,
                     registers=final, call_index=call_index,

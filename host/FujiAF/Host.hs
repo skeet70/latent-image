@@ -89,8 +89,9 @@ readRegularWith between noLinks limit path = do
       opened <- getFdStatus fd
       ensure (isRegularFile opened && fileSize opened <= fromIntegral limit) "input descriptor must be a capped regular file"
       -- duplicate ownership: the bracket owns fd; the Handle owns its duplicate.
-      inputHandle <- dup fd >>= fdToHandle
-      bracket (pure inputHandle) hClose $ \h -> do
+      bracket (do
+        duplicate <- dup fd
+        fdToHandle duplicate `onException` closeFd duplicate) hClose $ \h -> do
         bytes <- B.hGet h (limit+1)
         ensure (B.length bytes <= limit) "input exceeds finite byte budget"
         pure bytes

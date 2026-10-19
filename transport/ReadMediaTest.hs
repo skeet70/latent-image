@@ -5,7 +5,7 @@ import Control.Monad (forM_, unless)
 import qualified Data.ByteString as B
 import Data.IORef
 import Data.List (isInfixOf)
-import Data.Word (Word8)
+import Data.Word (Word8, Word64)
 import Numeric (showHex)
 import System.Directory
 import System.FilePath
@@ -21,6 +21,10 @@ import qualified FujiAF.Broker as P
 
 check :: String -> Bool -> IO ()
 check label yes = unless yes (error label)
+
+-- A clock read from the given source whose pauses return at once.
+instantClock :: IO Word64 -> Clock
+instantClock now = TimedClock now (\_ -> pure ())
 
 syntheticDescriptors :: Descriptors
 syntheticDescriptors = Descriptors 1 0 0 255 0 0 0x81 2 512 512 0 1 []
@@ -390,7 +394,7 @@ teardownWriteValues =
 -- record.
 expectStop :: FilePath -> (String,String) -> Int -> [P.Step] -> IO ()
 expectStop dir (label,fragment) expectedSliceRequests steps = do
-  (outcome,packets,cleanupEvents) <- runCase (Clock (pure 0)) dir steps
+  (outcome,packets,cleanupEvents) <- runCase (instantClock (pure 0)) dir steps
   let sliceRequestCount = length (filter isStagingFrame packets)
       writes = map writeIndexValue (writeFramesOf packets)
   check (label++": session must stop") (either (const True) (const False) outcome)
@@ -533,7 +537,7 @@ main = do
                       , bank1FirstSliceFrame, bank1LastSliceFrame, cacheWriteFrameBytes 0x83 0xff ]
   durableChecks <- newIORef []
   (happy,packets,cleanupEvents) <- runCaseWith (durableBeforeDispatch (base </> "happy") durableChecks auditedFrames)
-    (Clock (pure 0)) (base </> "happy") (stepsFor requestPlan happyOutcome)
+    (instantClock (pure 0)) (base </> "happy") (stepsFor requestPlan happyOutcome)
   check ("happy session captures 262144 bytes: "++show happy) (either (const False) (== 0x40000) happy)
   check "happy session releases every resource once" (cleanupEvents == [Released,Closed,Exited])
   bank0 <- B.readFile (base </> "happy" </> "bank-0.bin")
@@ -658,7 +662,7 @@ main = do
   -- The same entries under a start word that is not 0x380: the run reads the
   -- start word live, so the selectors and in-window offsets follow it and a
   -- reintroduced constant fails against this scripted map.
-  (shifted,shiftedPackets,shiftedCleanup) <- runCase (Clock (pure 0)) (base </> "shifted-start")
+  (shifted,shiftedPackets,shiftedCleanup) <- runCase (instantClock (pure 0)) (base </> "shifted-start")
     (stepsFor (planForWith shiftedModels happyPolls) (outcomeForWith shiftedStart shiftedModels happyPolls))
   check ("shifted-start session captures 262144 bytes: "++show shifted) (either (const False) (== 0x40000) shifted)
   check "shifted-start session releases every resource once" (shiftedCleanup == [Released,Closed,Exited])
@@ -685,7 +689,7 @@ main = do
 
   -- A stop before the cache snapshot writes only the disarm, because nothing
   -- had been changed yet.
-  (preSnapshot,preSnapshotPackets,preSnapshotCleanup) <- runCase (Clock (pure 0)) (base </> "stop-pre-snapshot")
+  (preSnapshot,preSnapshotPackets,preSnapshotCleanup) <- runCase (instantClock (pure 0)) (base </> "stop-pre-snapshot")
     (stepsFor [WindowReq "cache-snapshot", WriteReq "end-disarm" 0x80 0x33, CloseReq]
       (mutateWith happyOutcome (WindowReq "cache-snapshot")
         (P.Reply (windowReplyWith 9 3 snapshotWindow))))
@@ -774,7 +778,7 @@ main = do
   -- disarms and restores, because the aggregate deadline has not passed.
   lateCount <- newIORef (0::Int)
   lateJump <- newIORef False
-  let lateClock = Clock (readIORef lateJump >>= \late -> pure (if late then 6000000000 else 0))
+  let lateClock = instantClock (readIORef lateJump >>= \late -> pure (if late then 6000000000 else 0))
       markLate packet = case packet of
         P.BulkIn _ size | size == 0x24+248 -> do
           count <- readIORef lateCount
@@ -796,7 +800,7 @@ main = do
   -- attempted but not dispatched and the outcome is uncertain.
   expiredCount <- newIORef (0::Int)
   expiredJump <- newIORef False
-  let expiredClock = Clock (readIORef expiredJump >>= \late -> pure (if late then 1000000000000000000 else 0))
+  let expiredClock = instantClock (readIORef expiredJump >>= \late -> pure (if late then 1000000000000000000 else 0))
       markExpired packet = case packet of
         P.BulkIn _ size | size == 0x24+248 -> do
           count <- readIORef expiredCount

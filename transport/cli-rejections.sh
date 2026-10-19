@@ -132,6 +132,99 @@ if "$binary" arm-auto-act --wait-for-device "$tmpdir/one" "$tmpdir/two"; then ex
 if "$binary" arm-auto-act --wait-for-device --verbose; then exit 1; fi
 if "$binary" rehearse arm-auto-act --wait-for-device; then exit 1; fi
 
+reference="$tmpdir/reference.bin"
+dd if=/dev/zero of="$reference" bs=256 count=1 status=none
+chmod 600 "$reference"
+dd if=/dev/zero of="$tmpdir/short.bin" bs=255 count=1 status=none
+chmod 600 "$tmpdir/short.bin"
+dd if=/dev/zero of="$tmpdir/shared.bin" bs=256 count=1 status=none
+chmod 640 "$tmpdir/shared.bin"
+for op in commit-f7-enable commit-f7-restore; do
+  if "$binary" "$op"; then exit 1; fi
+  if (cd "$tmpdir" && "$binary" "$op" "$reference" relative-session); then exit 1; fi
+  test ! -e "$tmpdir/relative-session"
+  if "$binary" "$op" "$reference" "$tmpdir"; then exit 1; fi
+  if env -u BUILD_WORKSPACE_DIRECTORY "$binary" "$op" "$reference"; then exit 1; fi
+  if "$binary" "$op" "$reference" "$tmpdir/one" "$tmpdir/two"; then exit 1; fi
+  for bad in reference.bin "$tmpdir/short.bin" "$tmpdir/shared.bin" "$tmpdir/missing.bin" "$tmpdir"; do
+    if (cd "$tmpdir" && "$binary" "$op" "$bad" "$tmpdir/refused-out"); then exit 1; fi
+    test ! -e "$tmpdir/refused-out"
+    if "$binary" rehearse "$op" "$bad"; then exit 1; fi
+  done
+  if "$binary" rehearse "$op"; then exit 1; fi
+  if "$binary" rehearse "$op" "$reference" extra; then exit 1; fi
+done
+if "$binary" commit-f7; then exit 1; fi
+if "$binary" rehearse commit-f7 "$reference"; then exit 1; fi
+
+ramplan="$tmpdir/read-ram-plan.json"
+printf '{"windows":[{"index":0,"address":"0x400a0800","length":64,"purpose":"log store header"},{"index":1,"address":"0x400c0800","length":4,"purpose":"boot tick cell"},{"index":2,"address":"0x009571d0","length":16,"purpose":"menu frame and cursor"}]}\n' > "$ramplan"
+chmod 600 "$ramplan"
+printf '{"windows":[{"index":0,"address":"0x0096bd20","length":256,"purpose":"two-request window"}]}\n' > "$tmpdir/read-ram-long.json"
+chmod 600 "$tmpdir/read-ram-long.json"
+if "$binary" read-ram; then exit 1; fi
+if (cd "$tmpdir" && "$binary" read-ram "$ramplan" relative-session); then exit 1; fi
+test ! -e "$tmpdir/relative-session"
+if "$binary" read-ram "$ramplan" "$tmpdir"; then exit 1; fi
+if env -u BUILD_WORKSPACE_DIRECTORY "$binary" read-ram "$ramplan"; then exit 1; fi
+if "$binary" read-ram "$ramplan" "$tmpdir/one" "$tmpdir/two"; then exit 1; fi
+if "$binary" read-ram "$ramplan" --verbose; then exit 1; fi
+for bad in relative-plan.json "$tmpdir/unresolved.json" "$tmpdir/read-ram-long.json" "$tmpdir/missing.json"; do
+  if (cd "$tmpdir" && "$binary" read-ram "$bad" "$tmpdir/ram-refused-out"); then exit 1; fi
+  test ! -e "$tmpdir/ram-refused-out"
+  if "$binary" rehearse read-ram "$bad"; then exit 1; fi
+done
+for pacing in "--repeat 601 --interval-ms 100" "--repeat 0 --interval-ms 100" "--repeat 2 --interval-ms 99" "--repeat 2 --interval-ms 10001" "--repeat 2" "--interval-ms 100 --repeat 2" "--repeat 0x2 --interval-ms 100"; do
+  if "$binary" read-ram "$ramplan" $pacing "$tmpdir/ram-refused-out"; then exit 1; fi
+  test ! -e "$tmpdir/ram-refused-out"
+  if "$binary" rehearse read-ram "$ramplan" $pacing; then exit 1; fi
+done
+if "$binary" rehearse read-ram; then exit 1; fi
+if "$binary" rehearse read-ram "$ramplan" "$tmpdir/ram-rehearsal-out"; then exit 1; fi
+test ! -e "$tmpdir/ram-rehearsal-out"
+if "$binary" ram-alloc; then exit 1; fi
+if "$binary" ram-alloc 0; then exit 1; fi
+if "$binary" ram-push; then exit 1; fi
+if "$binary" ram-free; then exit 1; fi
+if "$binary" ram-unload; then exit 1; fi
+if "$binary" ram-push "$tmpdir/unresolved.json" "$tmpdir/unresolved.json" "$tmpdir/ram-push-refused"; then exit 1; fi
+test ! -e "$tmpdir/ram-push-refused"
+if "$binary" ram-free "$tmpdir/unresolved.json" "$tmpdir/ram-free-refused"; then exit 1; fi
+test ! -e "$tmpdir/ram-free-refused"
+if "$binary" ram-unload "$tmpdir/unresolved.json" "$tmpdir/ram-unload-refused"; then exit 1; fi
+test ! -e "$tmpdir/ram-unload-refused"
+if (cd "$tmpdir" && "$binary" ram-push unresolved.json unresolved.json "$tmpdir/ram-push-relative"); then exit 1; fi
+test ! -e "$tmpdir/ram-push-relative"
+if (cd "$tmpdir" && "$binary" ram-free unresolved.json "$tmpdir/ram-free-relative"); then exit 1; fi
+test ! -e "$tmpdir/ram-free-relative"
+if (cd "$tmpdir" && "$binary" ram-unload unresolved.json "$tmpdir/ram-unload-relative"); then exit 1; fi
+test ! -e "$tmpdir/ram-unload-relative"
+if "$binary" ram-push "$tmpdir/unresolved.json" "$tmpdir/unresolved.json" "$tmpdir/one" "$tmpdir/two"; then exit 1; fi
+if "$binary" ram-free "$tmpdir/unresolved.json" "$tmpdir/one" "$tmpdir/two"; then exit 1; fi
+if "$binary" ram-unload "$tmpdir/unresolved.json" "$tmpdir/one" "$tmpdir/two"; then exit 1; fi
+if "$binary" rehearse ram-alloc; then exit 1; fi
+if "$binary" rehearse ram-push; then exit 1; fi
+if "$binary" rehearse ram-free; then exit 1; fi
+if "$binary" rehearse ram-unload; then exit 1; fi
+if "$binary" rehearse ram-push "$tmpdir/unresolved.json"; then exit 1; fi
+if "$binary" rehearse ram-free "$tmpdir/unresolved.json"; then exit 1; fi
+if "$binary" rehearse ram-unload "$tmpdir/unresolved.json"; then exit 1; fi
+if "$binary" ram-relink; then exit 1; fi
+if "$binary" ram-relink "$tmpdir/unresolved.json"; then exit 1; fi
+if "$binary" ram-relink "$tmpdir/unresolved.json" "$tmpdir/one" "$tmpdir/two"; then exit 1; fi
+if "$binary" ram-relink --verbose "$tmpdir/ram-relink-refused"; then exit 1; fi
+if "$binary" ram-relink "$tmpdir/unresolved.json" "$tmpdir/ram-relink-refused"; then exit 1; fi
+test ! -e "$tmpdir/ram-relink-refused"
+if (cd "$tmpdir" && "$binary" ram-relink unresolved.json "$tmpdir/ram-relink-relative"); then exit 1; fi
+test ! -e "$tmpdir/ram-relink-relative"
+if "$binary" ram-relink "$tmpdir/unresolved.json" relative-out; then exit 1; fi
+if "$binary" rehearse ram-relink "$tmpdir/unresolved.json"; then exit 1; fi
+
+# Rehearsals journal every frame with fsync; on a disk-backed temp directory
+# that alone can exceed the real-time transfer budget.
+rehearsals="$(mktemp -d /dev/shm/fuji-af-cli-rejections.XXXXXX)"
+trap 'rm -rf "$rehearsals"' EXIT
+export TMPDIR="$rehearsals"
 "$binary" rehearse identify
 "$binary" rehearse end-setting
 "$binary" rehearse probe-ram
@@ -146,4 +239,8 @@ if "$binary" rehearse arm-auto-act --wait-for-device; then exit 1; fi
 "$binary" rehearse dump-ram loaders
 "$binary" rehearse read-media
 "$binary" rehearse arm-auto-act
+"$binary" rehearse commit-f7-enable "$reference"
+"$binary" rehearse commit-f7-restore "$reference"
+"$binary" rehearse read-ram "$ramplan"
+"$binary" rehearse read-ram "$ramplan" --repeat 3 --interval-ms 250
 if readelf -d "$binary" | sed -n "/NEEDED/p" | rg "libusb|libudev"; then exit 1; fi

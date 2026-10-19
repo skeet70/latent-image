@@ -28,7 +28,7 @@ inventoryOf label result = either (\e -> error (label++" native listing failed: 
 
 main :: IO ()
 main = do
-  let api = nativeApi 0 "." -- the cap and the directory are journal arguments; the list path journals nothing
+  let api = nativeApi
   stage "native load and init" (usbInit api 0)
   first <- listOnce api
   second <- listOnce api

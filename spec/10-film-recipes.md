@@ -91,7 +91,7 @@ The design and its host verification are in [the patch report](../reports/classi
 - The label is the stock special id `0x83e`.
 - The Q cell and the FILM 1-3 bracket lists stay stock. Live view previews and movie records as PROVIA.
 - D3 as designed ([recipe-patch-d3](../reports/recipe-patch-d3.md)) is incompatible: Classic Chrome owns conversion row 2, code `0xd` and 484 of the window's 512 bytes, and D3 must be re-planned around them.
-- Delivery is a flash container built on RC0 through the extension tooling; the RAM variant waits for issues 77 and 78. The container refuses any firmware other than 1.50.
+- Delivery is a flash container built on RC0 through the extension tooling. The container refuses any firmware other than 1.50. The RAM-push route of `//transport:camera` carries the recipe bank and D3's publications; a Classic Chrome RAM variant needs its own publication list, allowlist and review ([patch report 8.2](../reports/classic-chrome-patch.md#82-ram-payload-unbuilt-route-in-transportcamera)) and is not built.
 
 #### 19.5.6 Verification
 

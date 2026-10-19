@@ -28,17 +28,25 @@ Classify by camera effect, not USB direction. A routine named `read` can modify 
 
 Mechanism is the installer, rendezvous, hooks, host operations and any code that runs outside the payload's allocation or redirects stock control flow. Content is payload code and data that the mechanical payload check confines to the allocation and allowlisted calls; a revision that changes anything else is a mechanism revision. Independent review runs alongside the emulator run and the owner's visual check, and the live run waits for all of them. Host-only, read-only and research work gets no independent review unless it becomes the basis of an H2 or H3 decision.
 
+For the RAM push the mechanical payload check is the bank ELF allowlist check `//host/firmware:check-bank-allowlist`, which every relink runs against `menu/recipe_bank_allowlist.json`; the review record is `transport/ram-push-review.json`, and its pre-go gate tests are `//transport:ram-push-review-verdicts` and `//transport:ram-push-review-bytes` with `//transport:ram-push-reviewed-build-check`; the emulator run is `//emulation:xm1-viewer -- --ram-push-e2e` ([transport README](../transport/README.md#ram-push-review-record)).
+
 ### 3.3 Standing rules
 
 - Camera code exposes only closed operations with internally built bytes. It has no raw command path, never retries, and stops on any unexpected reply, status or disconnect.
 - Do not write guessed values into configuration offsets, GPIOs, regulator registers, lens command mailboxes or boot controls.
-- Never restore another camera's dump onto this body. Keep this body's calibration backup in two verified locations; it exists for the 1.00 adjustment area (E-S03-DURABLE-PRESERVATION).
+- Never restore another camera's dump onto this body. Keep this body's calibration backup in two verified locations; it exists for the 1.00 adjustment area (E-S03-DURABLE-PRESERVATION) and the 1.50 adjustment area (E-ADJ-BACKUP-DURABLE-150).
 - Do not deliberately corrupt the owner's only camera to prove recovery.
 - After unexpected camera behavior, stop camera runs and describe it to the owner. Host work continues.
 
 ### 3.4 Standing confirmations
 
 The owner may grant in chat a standing confirmation for a named H1 operation or a reviewed H2 operation. It is recorded here with its date, scope, conditions and lapse, and while it holds the model runs the covered operation without a per-run go. H3 always needs a per-run go.
+
+**Read grant.** Granted on 2026-10-16 (E-CAMERA-READ-GRANT-150). While the owner leaves the camera attached over USB, the model and its subagents may run the read-only H1 operations `read-ram` and `read-config`. Every other operation, including `commit-f7-*` and `ram-alloc`, `ram-push`, `ram-unload` and `ram-free`, needs a go under section 3.1.
+
+- `read-ram` refuses windows outside DRAM `[0x00000000,0x20000000)` and its alias `[0x40000000,0x60000000)`; peripheral, ROM and unmapped reads are not covered by the grant.
+- Each run keeps its journal under `private-data/sessions/`. A refused, uncertain or unexpected result, a disconnect or any reported change in camera behaviour stops further reads until the owner is told.
+- The grant lapses when the owner unplugs the camera or withdraws it in chat.
 
 ## 4. Collaboration
 

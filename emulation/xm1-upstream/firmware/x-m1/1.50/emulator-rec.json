@@ -8,7 +8,7 @@
  },
  "board": {
   "path": "emulator/boards/bodies/xm1-rec.json",
-  "sha256": "ad278fdb5036dc4c4bef6423cf55ed47ad5397bbd9426428fe90baa6cec90c35"
+  "sha256": "0597cac370798d6f5490561de0d0cdda2b04c7644a94232a6658ec2d23a1335b"
  },
  "firmware": {
   "path": "emulator/boards/firmwares/xm1-150.json",

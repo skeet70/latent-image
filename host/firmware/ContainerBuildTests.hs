@@ -14,7 +14,7 @@
 module Main where
 
 import Control.Exception (SomeException, displayException, try)
-import Control.Monad (guard, unless)
+import Control.Monad (forM_, guard, unless)
 import Data.Bits (complement, xor)
 import qualified Data.Aeson as A
 import qualified Data.ByteString as B
@@ -232,7 +232,7 @@ patchMediaWord :: Int -> Word32 -> B.ByteString -> B.ByteString
 patchMediaWord offset value bytes = B.take offset bytes <> U.putMediaWord value <> B.drop (offset + 4) bytes
 
 tableEnd :: Int
-tableEnd = U.segmentTableOffset + U.segmentEntryBytes * U.segmentCount + 4
+tableEnd = U.tableEndOffset U.Stock
 
 record4Media :: Int
 record4Media = 0x140200
@@ -253,9 +253,9 @@ fixtureTail =
   foldl
     (\accumulated (offset, value) -> patchMediaWord (offset - tableEnd) value accumulated)
     (patternBytes (record4Media - tableEnd))
-    ( [(baseOffset, base) | ((baseOffset, base), _) <- U.stockPlainExtents]
-        ++ [(lengthOffset, len) | (_, (lengthOffset, len)) <- U.stockPlainExtents]
-        ++ [U.stockPlainLoad]
+    ( [(0x140184,0x1234),(0x1401a4,0x4061c1b0), U.stockPlainLoad, (0x1401ac,0x360000)]
+        ++ zip [0x1401b0,0x1401b4 .. 0x1401f8]
+          [0,0x01100000,0xac5a0,0,0,0x44,2,0x011c0000,0x1cca0,0,0,0x46,3,0x011e0000,0x26a5e0,0,0,0x47,0xffffffff]
     )
 
 fixtureAux1Bytes :: B.ByteString
@@ -316,13 +316,13 @@ baseFixture =
   Fixture
     { fxBss = 0x0089ec00
     , fxBssLen = 0x00352e00
-    , fxFlashLen4 = 0x00160000
+    , fxFlashLen4 = 0x00100000
     , fxRecord5Media = 0x240200
     , fxImage2Load = 0x3000
     , fxImage2Size = 0x200
     , fxPlainFlash = 0x00360000
     , fxPlainLen = 0x00360000
-    , fxImage2Gap = 11
+    , fxImage2Gap = 0x6c0000 - (0x240200 + U.recordHeaderBytes + 0x4001) + 11
     }
 
 -- The id-0x83d special label record's buffer address (reports/special-label-resolution.md
@@ -340,15 +340,9 @@ labelLayoutWords = [0x14, 0x14, 0x1e, 0x24, 0x30]
 labelFixture :: Fixture
 labelFixture = baseFixture {fxImage2Load = 0x0037b000, fxImage2Size = 0x900}
 
--- The plain carrier's fixture: the id-6 window (0x20000-aligned words,
--- stock-sized 0x360000 bytes) carried in the post-head gap, with the id-2
--- extent past the window. The base fixture keeps the extent at its 11-byte
--- gap, where the window runs past it and extract-plain refuses.
-plainFixture :: Fixture
-plainFixture =
-  baseFixture
-    { fxImage2Gap = fromIntegral (fxPlainFlash baseFixture + fxPlainLen baseFixture) - record5EndMedia baseFixture + 11
-    }
+-- The extraction-only fixture places image 2 eleven bytes after record 5.
+extractionRefusalFixture :: Fixture
+extractionRefusalFixture = baseFixture {fxImage2Gap = 11}
 
 -- The plain window's media bytes (the loader's raw copy): the complement of
 -- the fill run the body carries at the window's offset in the post-head gap.
@@ -356,8 +350,8 @@ fixturePlainMedia :: B.ByteString
 fixturePlainMedia =
   B.map
     complement
-    ( B.take (fromIntegral (fxPlainLen plainFixture))
-        (B.drop (fromIntegral (fxPlainFlash plainFixture) - record5EndMedia plainFixture) (patternBytes (fxImage2Gap plainFixture)))
+    ( B.take (fromIntegral (fxPlainLen baseFixture))
+        (B.drop (fromIntegral (fxPlainFlash baseFixture) - record5EndMedia baseFixture) (patternBytes (fxImage2Gap baseFixture)))
     )
 
 -- The id-2 extent's media offset: fxImage2Gap bytes past the image-5 record,
@@ -403,7 +397,9 @@ fixtureSegments fixture =
 fixtureBodyPrefix :: Fixture -> B.ByteString
 fixtureBodyPrefix fixture =
   B.concat
-    [ patternBytes U.segmentTableOffset
+    [ foldl (\bytes (off, value) -> patchMediaWord off value bytes)
+        (patternBytes (U.segmentTableOffset U.Stock))
+        [(0x140000,0x4061c040),(0x140004,0x4061c1a4),(0x140008,0),(0x14000c,0x4061c184)]
     , B.concat [serializeEntry e | e <- fixtureSegments fixture]
     , U.putMediaWord 0xffffffff
     , fixtureTail
@@ -771,12 +767,12 @@ plainCases checked rebuilder = H.withTemporary "fuji-af-plain-" $ \root -> do
       reproPath = root </> "plain-repro.dat"
       changedPath = root </> "plain-changed.bin"
       changedOutPath = root </> "plain-changed-out.dat"
-      stockBytes = fixtureBytes plainFixture
-      windowStart = fromIntegral (fxPlainFlash plainFixture)
-      windowLength = fromIntegral (fxPlainLen plainFixture)
+      stockBytes = fixtureBytes baseFixture
+      windowStart = fromIntegral (fxPlainFlash baseFixture)
+      windowLength = fromIntegral (fxPlainLen baseFixture)
       spanFileStart = U.stagingLength + windowStart + 0x1000
   B.writeFile stockPath stockBytes
-  B.writeFile baseStockPath (fixtureBytes baseFixture)
+  B.writeFile baseStockPath (fixtureBytes extractionRefusalFixture)
   putStrLn
     ( "plain fixture: window media "
         ++ U.showHexWord (fromIntegral windowStart)
@@ -861,6 +857,84 @@ plainCases checked rebuilder = H.withTemporary "fuji-af-plain-" $ \root -> do
     ["extract-plain", baseStockPath]
     "runs past the image-2 extent"
 
+data WindowImage = Compressed4 | Compressed5 | Raw6
+
+changeWindow :: WindowImage -> (U.SegmentEntry -> U.SegmentEntry) -> U.Parts -> U.Parts
+changeWindow image change parts =
+  parts {U.partSegments = map alter (U.partSegments parts)}
+  where
+    wanted = case image of
+      Compressed4 -> 4
+      Compressed5 -> 5
+      Raw6 -> 6
+    alter entry = if U.segId entry == wanted then change entry else entry
+
+geometrySourceBytes :: Fixture -> (U.Parts -> U.Parts) -> IO B.ByteString
+geometrySourceBytes fixture change = do
+  let sourceBytes = fixtureBytes fixture
+  source <- either H.failH pure (U.parseContainer sourceBytes)
+  let parts = change (U.parsedParts source)
+      tableStart = U.stagingLength + U.segmentTableOffset (U.partTableLayout parts)
+      tableBytes = B.concat (map serializeEntry (U.partSegments parts))
+      changedBytes = B.take tableStart sourceBytes <> tableBytes <> B.drop (tableStart + B.length tableBytes) sourceBytes
+      mainStart = U.stagingLength + fromIntegral (U.hMainOffset (U.parsedHeader source))
+      mainLength = fromIntegral (U.hMainLength (U.parsedHeader source))
+      checksum = mainSum (B.take mainLength (B.drop mainStart changedBytes))
+  pure (patchedWord U.mainChecksumOffset checksum changedBytes)
+
+windowAdmissionCases :: IORef Int -> FilePath -> IO ()
+windowAdmissionCases checked rebuilder = H.withTemporary "fuji-af-window-admission-" $ \root -> do
+  let controlPath = root </> "valid-source.dat"
+      controlOutput = root </> "valid-roundtrip.dat"
+      stockBytes = fixtureBytes baseFixture
+  B.writeFile controlPath stockBytes
+  control <- runTool rebuilder ["round-trip", controlPath, controlOutput]
+  unless (not (toolStopped control) && toolCode control == ExitSuccess) $
+    H.failH ("valid geometry round-trip refused: " ++ toolErr control)
+  expectEqual checked "valid geometry round-trip bytes" stockBytes =<< B.readFile controlOutput
+  let refuse name fixture change = do
+        let sourcePath = root </> (name ++ "-source.dat")
+            outputPath = root </> (name ++ "-out.dat")
+        malformed <- geometrySourceBytes fixture change
+        _ <- either H.failH pure (U.parseContainer malformed)
+        B.writeFile sourcePath malformed
+        result <- runTool rebuilder ["round-trip", sourcePath, outputPath]
+        unless (not (toolStopped result) && toolCode result /= ExitSuccess) $
+          H.failH (name ++ ": malformed geometry round-trip was accepted")
+        leftover <- doesFileExist outputPath
+        unless (not leftover) $
+          H.failH (name ++ ": refused round-trip wrote an output file")
+        modifyIORef' checked (+ 1)
+      trailerStart = B.length (fixtureBodyPrefix baseFixture)
+      mainEnd = trailerStart + U.trailerBytes
+  forM_ [(Compressed4, record4Media, fxRecord5Media baseFixture), (Compressed5, fxRecord5Media baseFixture, fromIntegral (fxPlainFlash baseFixture))] $ \(image, start, nextRegion) -> do
+    let imageLabel = case image of
+          Compressed4 -> "image4"
+          Compressed5 -> "image5"
+          Raw6 -> "image6"
+        cases =
+          [ ("oversized-declared-window", 0xffffffff)
+          , ("crosses-next-region", fromIntegral (nextRegion - start + 1))
+          , ("crosses-trailer-boundary", fromIntegral (trailerStart - start + 1))
+          , ("crosses-main-boundary", fromIntegral (mainEnd - start + 1))
+          , ("address-wrap", fromInteger (0x100000000 - toInteger start + 1))
+          ]
+    forM_ cases $ \(name, declaredLength) ->
+      refuse (imageLabel ++ "-" ++ name) baseFixture (changeWindow image (\entry -> entry {U.segFlashLen = declaredLength}))
+  forM_
+    [ ("plain-start-zero", changeWindow Raw6 (\entry -> entry {U.segFlash = 0}))
+    , ("plain-short-aligned-length", changeWindow Raw6 (\entry -> entry {U.segFlashLen = 0x20000}))
+    , ("plain-final-extent-outside-window", changeWindow Raw6 (\entry -> entry {U.segFlashLen = 0x340000}))
+    , ("plain-unaligned-start", changeWindow Raw6 (\entry -> entry {U.segFlash = fxPlainFlash baseFixture + 1}))
+    , ("plain-unaligned-length", changeWindow Raw6 (\entry -> entry {U.segFlashLen = 0x360001}))
+    ]
+    $ \(name, change) -> refuse name baseFixture change
+  refuse
+    "plain-nominal-header-disagreement"
+    (baseFixture {fxImage2Gap = fxImage2Gap baseFixture + 0x20000})
+    (changeWindow Raw6 (\entry -> entry {U.segFlashLen = 0x380000}))
+  refuse "plain-outside-carrier" extractionRefusalFixture id
+
 main :: IO ()
 main = do
   outcome <- try $ do
@@ -877,6 +951,7 @@ main = do
     loadAddressCases checked rebuilder decoder
     image2Cases checked rebuilder
     plainCases checked rebuilder
+    windowAdmissionCases checked rebuilder
     total <- readIORef checked
     putStrLn (show total ++ " container-build path checks passed")
   case outcome :: Either SomeException () of

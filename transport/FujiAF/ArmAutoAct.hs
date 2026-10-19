@@ -56,7 +56,6 @@ module FujiAF.ArmAutoAct
   , runArmAutoAct
   ) where
 
-import Control.Concurrent (threadDelay)
 import Control.Exception
 import Control.Monad (forM_, unless, when)
 import qualified Data.ByteString as B
@@ -417,7 +416,7 @@ acquireArmDevice WaitForDevice s held = do
           Right device -> pure device
           Left NoEligibleDevice -> do
             ms <- remaining (sessionClock s) deadline
-            threadDelay (min deviceWaitSpacingMs ms*1000)
+            pauseMs (sessionClock s) (min deviceWaitSpacingMs ms)
             select
           Left refusal -> P.reject (refusalMessage refusal)
   note s "waiting-for-device" ("04cb:ff80;bound-ms="++show deviceWaitBoundMs++";poll-spacing-ms="++show deviceWaitSpacingMs)
@@ -627,6 +626,6 @@ watchForFire link = do
           note s "watch-bound-expired" (show watchPollCap++" polls; the run reports the last observed state")
           pure poll
       | otherwise = do
-          threadDelay (watchSpacingMs*1000)
+          pauseMs (sessionClock s) watchSpacingMs
           cells <- pollWitness link poll
           if witnessSettled cells then finish (poll+1) else go (poll+1)

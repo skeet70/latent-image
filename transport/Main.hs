@@ -26,14 +26,18 @@ import FujiAF.DumpRam
 import FujiAF.ReadMedia
 import FujiAF.Straps
 import FujiAF.Ownership
+import FujiAF.StoredGate
 import FujiAF.Routes
+import FujiAF.ReadRam
+import FujiAF.RamPush
 import FujiAF.PlanDocument (readPlanFile, readRoutePlanFile)
-import FujiAF.Native (nativeApi, nativeApiJournaling, OutcomeJournal(..))
+import FujiAF.Native (nativeApi)
 import FujiAF.Rehearsal
 import qualified FujiAF.Broker as P
+import RamPushReviewedPins (reviewedContract)
 
 data RouteSource = RoutesFixed | RoutesDerived FilePath
-data Operation = Identify | ReadConfig FilePath | EndSetting | ProbeRam | ReadLog | ProbeBootRom | ProbeArea2 | ProbeStraps | ProbeCode | ProbeOwnership | ProbeRoutes RouteSource | DumpRam DumpSegment | ReadMedia | ArmAutoAct DeviceStart
+data Operation = Identify | ReadConfig FilePath | EndSetting | ProbeRam | ReadLog | ProbeBootRom | ProbeArea2 | ProbeStraps | ProbeCode | ProbeOwnership | ProbeRoutes RouteSource | DumpRam DumpSegment | ReadMedia | ArmAutoAct DeviceStart | CommitF7 CommitDirection FilePath | ReadRam FilePath (Maybe (Int,Int)) | RamAlloc Int | RamRelink FilePath | RamPush FilePath FilePath | RamFree FilePath | RamUnload FilePath
 data Command = Help | Live Operation (Maybe FilePath) | Rehearse Operation
 
 operationName :: Operation -> String
@@ -51,7 +55,14 @@ operationName (ProbeRoutes _) = "probe-routes"
 operationName (DumpRam segment) = "dump-ram-" ++ segmentName segment
 operationName ReadMedia = "read-media"
 operationName (ArmAutoAct _) = "arm-auto-act"
+operationName (CommitF7 direction _) = directionName direction
+operationName (ReadRam _ _) = "read-ram"
 
+operationName (RamAlloc _) = "ram-alloc"
+operationName (RamRelink _) = "ram-relink"
+operationName (RamPush _ _) = "ram-push"
+operationName (RamFree _) = "ram-free"
+operationName (RamUnload _) = "ram-unload"
 main :: IO ()
 main = (getArgs >>= run) `catch` \(e::SomeException) -> hPutStrLn stderr ("camera: "++displayException e) >> exitFailure
 
@@ -76,6 +87,14 @@ parse ("dump-ram":tokens) = (\(segment,directory) -> Live (DumpRam segment) dire
 parse ("read-media":rest) = Live ReadMedia <$> output rest
 parse ("arm-auto-act":"--wait-for-device":rest) = Live (ArmAutoAct WaitForDevice) <$> output rest
 parse ("arm-auto-act":rest) = Live (ArmAutoAct RequirePresent) <$> output rest
+parse ("commit-f7-enable":reference:rest) = Live (CommitF7 EnableStoredGate reference) <$> output rest
+parse ("commit-f7-restore":reference:rest) = Live (CommitF7 RestoreStoredGate reference) <$> output rest
+parse ("read-ram":tokens) = (\(plan,pacing,directory) -> Live (ReadRam plan pacing) directory) <$> readRamArguments tokens
+parse ("ram-alloc":tokens) = (\(size,directory) -> Live (RamAlloc size) directory) <$> ramAllocArguments tokens
+parse ("ram-relink":tokens) = (\(state,directory) -> Live (RamRelink state) (Just directory)) <$> ramRelinkArguments tokens
+parse ("ram-push":tokens) = (\(state,manifest,directory) -> Live (RamPush state manifest) directory) <$> ramPushArguments tokens
+parse ("ram-free":tokens) = (\(state,directory) -> Live (RamFree state) directory) <$> ramFreeArguments tokens
+parse ("ram-unload":tokens) = (\(state,directory) -> Live (RamUnload state) directory) <$> ramUnloadArguments tokens
 parse ["rehearse","identify"] = Just (Rehearse Identify)
 parse ["rehearse","read-config",plan] = Just (Rehearse (ReadConfig plan))
 parse ["rehearse","end-setting"] = Just (Rehearse EndSetting)
@@ -91,6 +110,17 @@ parse ["rehearse","probe-routes","derived",plan] = Just (Rehearse (ProbeRoutes (
 parse ["rehearse","dump-ram",name] = Rehearse . DumpRam <$> readSegment name
 parse ["rehearse","read-media"] = Just (Rehearse ReadMedia)
 parse ["rehearse","arm-auto-act"] = Just (Rehearse (ArmAutoAct RequirePresent))
+parse ["rehearse","commit-f7-enable",reference] = Just (Rehearse (CommitF7 EnableStoredGate reference))
+parse ["rehearse","commit-f7-restore",reference] = Just (Rehearse (CommitF7 RestoreStoredGate reference))
+parse ("rehearse":"read-ram":tokens) = case readRamArguments tokens of
+  Just (plan,pacing,Nothing) -> Just (Rehearse (ReadRam plan pacing))
+  _ -> Nothing
+parse ["rehearse","ram-alloc",size] = case ramAllocArguments [size] of
+  Just (bytes,Nothing) -> Just (Rehearse (RamAlloc bytes))
+  _ -> Nothing
+parse ["rehearse","ram-push",state,manifest] = Just (Rehearse (RamPush state manifest))
+parse ["rehearse","ram-free",state] = Just (Rehearse (RamFree state))
+parse ["rehearse","ram-unload",state] = Just (Rehearse (RamUnload state))
 parse _ = Nothing
 
 output :: [String] -> Maybe (Maybe FilePath)
@@ -116,7 +146,15 @@ dispatch Help = putStr $ unlines
   , "dump-ram SEGMENT [OUTDIR]      one named fixed RAM segment, gate enable and restore"
   , "read-media [OUTDIR]            one bounded raw storage read of the two area-2 banks, one request per bank: the cache snapshot, the gate, the state precondition, the map header (start word and entry count) and the two map entries at their own addresses, then per bank the map-derived selector, the result poll and the bank capture, with the disarm and restores on every exit path"
   , "arm-auto-act [--wait-for-device] [OUTDIR] the reviewed AUTO_ACT preconditions, arm and readback, first/end boot ticks and bounded witness watch, gate restore and C4; --wait-for-device polls for up to 120 s before the session; end by supply cut"
-  , "rehearse identify|read-config PLAN_JSON|end-setting|probe-ram|read-log|probe-bootrom|probe-area2|probe-straps|probe-code|probe-ownership|probe-routes fixed|probe-routes derived PLAN_JSON|dump-ram SEGMENT|read-media|arm-auto-act"
+  , "commit-f7-enable REFERENCE_BIN [OUTDIR] stores adjustment index 0xf7 = 0x01 through the whole-area commit, which also stores 0x80 = 0x22, 0x81 = 0xff and every other cache byte: identity, start windows equal to the private at-rest window-0 capture REFERENCE_BIN outside 0x80/0x81/0xf7 with 0xa2 = 0, state precondition, 0xf7 write, 0x81 = 0xff arm, 0x80 = 0x22 trigger with its reply held up to 33 s, bounded result poll, 0x80 = 0x33 disarm, C4. Afterwards every ordinary-boot USB attach starts ff80 service mode 3 instead of PTP, runs a 41 MB 0xff fill and gives any host the debug RAM write, and a cable at a button-less boot gives mode 3; an ordinary firmware update with its refresh flags set returns 0xf7/0x80/0x81 to 0x00 and is the only reverse route not marked unproved; whether a jig session starts with 0xf7 stored, for verification or restore, is unproved. End by dummy-battery supply cut unless the result says to wait"
+  , "commit-f7-restore REFERENCE_BIN [OUTDIR] the same sequence from stored 0xf7 = 0x01, storing 0xf7 = 0x00; stored 0x80 stays 0x22; needs a session to start with 0xf7 stored, which is unproved"
+  , "read-ram PLAN_JSON [--repeat N --interval-ms M] [OUTDIR] read-only RAM watch on a body with 0xf7 already nonzero, in a jig boot or an ordinary boot's ff80 route: identity, config window 0x000000 refused unless 0xf7 != 0, then one 0x200001 function 2 request per plan window (1..248 bytes) for N passes M ms apart (N 1..600, M 100..10000, N * windows <= 2032), C4; no write is sent, so no supply cut is needed"
+  , "ram-alloc SIZE [OUTDIR]       allocate and peer-prepare an X-M1 RAM workspace; use the relinker's fixed bound 0x1b6d8; retain ram-alloc-state.json"
+  , "ram-relink STATE OUTDIR        build the reviewed manifest and runtime at the retained base with the camera's pinned relinker; no USB"
+  , "ram-push STATE MANIFEST [OUTDIR] upload a manifest linked to the retained allocation, install and write ram-push-state.json"
+  , "ram-free STATE [OUTDIR]       free a retained allocation that was not installed"
+  , "ram-unload STATE [OUTDIR]     rollback and verify the exact active publication set; retain the block until power-off"
+  , "rehearse identify|read-config PLAN_JSON|end-setting|probe-ram|read-log|probe-bootrom|probe-area2|probe-straps|probe-code|probe-ownership|probe-routes fixed|probe-routes derived PLAN_JSON|dump-ram SEGMENT|read-media|arm-auto-act|commit-f7-enable REFERENCE_BIN|commit-f7-restore REFERENCE_BIN|read-ram PLAN_JSON [--repeat N --interval-ms M]|ram-alloc SIZE|ram-push STATE MANIFEST|ram-free STATE|ram-unload STATE"
   , "--help"
   , "OUTDIR must be absolute and must not exist; it is created with mode 0700."
   , "Without OUTDIR a live operation writes to"
@@ -138,40 +176,52 @@ dispatch (Rehearse (ProbeRoutes (RoutesDerived path))) = readRoutePlanFile path 
 dispatch (Rehearse (DumpRam segment)) = rehearseDumpRam segment
 dispatch (Rehearse ReadMedia) = rehearseReadMedia
 dispatch (Rehearse (ArmAutoAct _)) = rehearseArmAutoAct
+dispatch (Rehearse (CommitF7 direction path)) = do
+  reference <- readReferenceWindow path
+  putStrLn ("reference: "++path++" sha256="++referenceDigest reference)
+  rehearseCommitF7 direction reference
+dispatch (Rehearse (ReadRam path pacing)) = ramWatch path pacing >>= rehearseReadRam
+dispatch (Rehearse (RamAlloc size)) = rehearseRamAlloc size
+dispatch (Rehearse (RamPush state manifest)) = do
+  allocation <- readRamAllocState state
+  plan <- readRamPushManifest manifest
+  rehearseRamPush allocation plan
+dispatch (Rehearse (RamFree path)) = readRamAllocState path >>= rehearseRamFree
+dispatch (Rehearse (RamUnload path)) = readRamPushState path >>= rehearseRamUnload
+dispatch (Rehearse (RamRelink _)) = P.reject "ram-relink has no rehearsal"
 dispatch (Live operation requested) = case operation of
   Identify -> withOutput operation requested $ \directory -> do
-    ProductModel model <- runIdentify realClock (nativeApi identifyJournalCapBytes directory) directory
+    ProductModel model <- runIdentify realClock nativeApi directory
     pure ("identify: "++model)
   ReadConfig path -> do
     -- The plan is parsed and validated before the output directory exists.
     plan <- readPlanFile path
     withOutput operation requested $ \directory -> do
-      let cap = journalCapFor (length (planWindows plan))
-      windows <- runRead realClock (nativeApi cap directory) plan directory
+      windows <- runRead realClock nativeApi plan directory
       pure ("read-config: "++show windows++" windows")
   EndSetting -> withOutput operation requested $ \directory -> do
-    outcome <- runEndSetting realClock (nativeApi endJournalCapBytes directory) directory
+    outcome <- runEndSetting realClock nativeApi directory
     pure ("end-setting: "++outcomeName outcome)
   ProbeRam -> withOutput operation requested $ \directory -> do
-    probes <- runProbe realClock (nativeApi probeJournalCapBytes directory) directory
+    probes <- runProbe realClock nativeApi directory
     pure ("probe-ram: "++show probes++" windows")
   ReadLog -> withOutput operation requested $ \directory -> do
-    windows <- runReadLog realClock (nativeApi logJournalCapBytes directory) directory
+    windows <- runReadLog realClock nativeApi directory
     pure ("read-log: "++show windows++" windows")
   ProbeBootRom -> withOutput operation requested $ \directory -> do
-    windows <- runProbeBootRom realClock (nativeApi bootRomJournalCapBytes directory) directory
+    windows <- runProbeBootRom realClock nativeApi directory
     pure ("probe-bootrom: "++show windows++" windows")
   ProbeArea2 -> withOutput operation requested $ \directory -> do
-    windows <- runProbeArea2 realClock (nativeApi area2JournalCapBytes directory) directory
+    windows <- runProbeArea2 realClock nativeApi directory
     pure ("probe-area2: "++show windows++" windows")
   ProbeStraps -> withOutput operation requested $ \directory -> do
-    bytes <- runProbeStraps realClock (nativeApi strapJournalCapBytes directory) directory
+    bytes <- runProbeStraps realClock nativeApi directory
     pure ("probe-straps: "++show bytes++" bytes")
   ProbeCode -> withOutput operation requested $ \directory -> do
-    windows <- runProbeCode realClock (nativeApi codeJournalCapBytes directory) directory
+    windows <- runProbeCode realClock nativeApi directory
     pure ("probe-code: "++show windows++" windows")
   ProbeOwnership -> withOutput operation requested $ \directory -> do
-    windows <- runProbeOwnership realClock (nativeApi ownershipJournalCapBytes directory) directory
+    windows <- runProbeOwnership realClock nativeApi directory
     pure ("probe-ownership: "++show windows++" windows")
   ProbeRoutes source -> do
     -- The derived plan is parsed and validated before the output directory exists.
@@ -179,17 +229,75 @@ dispatch (Live operation requested) = case operation of
       RoutesFixed -> pure routeFixedWindows
       RoutesDerived path -> readRoutePlanFile path
     withOutput operation requested $ \directory -> do
-      requests <- runProbeRoutes realClock (nativeApi (journalCapFor (length windows)) directory) directory windows
+      requests <- runProbeRoutes realClock nativeApi directory windows
       pure ("probe-routes: "++show requests++" read requests")
   DumpRam segment -> withOutput operation requested $ \directory -> do
-    requests <- runDumpRam segment realClock (nativeApiJournaling FailingOutcomes (dumpJournalCapFor (dumpRequestCount segment)) directory) directory
+    requests <- runDumpRam segment realClock nativeApi directory
     pure ("dump-ram "++segmentName segment++": "++show requests++" requests")
   ReadMedia -> withOutput operation requested $ \directory -> do
-    bytes <- runReadMedia realClock (nativeApi mediaJournalCapBytes directory) directory
+    bytes <- runReadMedia realClock nativeApi directory
     pure ("read-media: "++show bytes++" bytes")
   ArmAutoAct mode -> withOutput operation requested $ \directory -> do
-    report <- runArmAutoAct mode realClock (nativeApi armAutoActJournalCapBytes directory) directory
+    report <- runArmAutoAct mode realClock nativeApi directory
     pure ("arm-auto-act: "++armReportLine report)
+  CommitF7 direction path -> do
+    -- The reference is read and validated before the output directory exists.
+    reference <- readReferenceWindow path
+    putStrLn ("reference: "++path++" sha256="++referenceDigest reference)
+    withOutput operation requested $ \directory -> do
+      outcome <- runCommitF7 direction reference realClock nativeApi directory
+      let line = directionName direction++": "++commitOutcomeLine direction outcome
+      case outcome of
+        Committed _ -> pure line
+        _ -> P.reject line
+  ReadRam path pacing -> do
+    -- The plan and pacing are validated before the output directory exists.
+    watch <- ramWatch path pacing
+    withOutput operation requested $ \directory -> do
+      requests <- runReadRam watch realClock nativeApi directory
+      pure ("read-ram: "++show requests++" read requests;passes="++show (pacingPasses (watchPacing watch))
+            ++";no write sent, so the session needs no supply cut")
+  RamAlloc size -> withOutput operation requested $ \directory -> do
+    outcome <- runRamAlloc size realClock nativeApi directory
+    case outcome of
+      RamAllocated state -> pure ("ram-alloc: retained;state="++state++";relink before ram-push")
+      RamAllocRefused reason -> P.reject ("ram-alloc refused: "++reason)
+      RamAllocUncertain reason -> P.reject ("ram-alloc uncertain: "++reason++";send nothing further and power off")
+  RamRelink path -> do
+    allocation <- readRetainedAllocation path
+    withOutput operation requested $ \directory -> do
+      manifest <- runRamRelink reviewedContract allocation directory
+      pure ("ram-relink: manifest="++manifest)
+  RamPush statePath manifestPath -> do
+    allocation <- readRetainedAllocation statePath
+    manifest <- readRamPushManifest manifestPath
+    withOutput operation requested $ \directory -> do
+      outcome <- runRamPush reviewedContract allocation manifest realClock nativeApi directory
+      case outcome of
+        RamPushInstalled state -> pure ("ram-push: installed;state="++state++";power-off clears RAM")
+        RamPushRefused reason -> P.reject ("ram-push refused: "++reason)
+        RamPushUncertain reason -> P.reject ("ram-push uncertain: "++reason++";send nothing further and power off")
+  RamFree path -> do
+    allocation <- readRetainedAllocation path
+    withOutput operation requested $ \directory -> do
+      outcome <- runRamFree allocation realClock nativeApi directory
+      case outcome of
+        RamFreed -> pure "ram-free: allocation freed"
+        RamFreeRefused reason -> P.reject ("ram-free refused: "++reason)
+        RamFreeUncertain reason -> P.reject ("ram-free uncertain: "++reason++";send nothing further and power off")
+  RamUnload path -> do
+    state <- readRamPushState path
+    withOutput operation requested $ \directory -> do
+      outcome <- runRamUnload reviewedContract state realClock nativeApi directory
+      case outcome of
+        RamUnloaded -> pure "ram-unload: rollback verified; allocation retained until power-off"
+        RamUnloadRefused reason -> P.reject ("ram-unload refused: "++reason)
+        RamUnloadUncertain reason -> P.reject ("ram-unload uncertain: "++reason++";send nothing further and power off")
+
+ramWatch :: FilePath -> Maybe (Int,Int) -> IO RamWatch
+ramWatch path pacing = do
+  windows <- readRoutePlanFile path
+  either P.reject pure (mkRamWatch windows =<< maybe (Right singlePass) (uncurry mkPacing) pacing)
 
 withOutput :: Operation -> Maybe FilePath -> (FilePath -> IO String) -> IO ()
 withOutput operation requested action = do

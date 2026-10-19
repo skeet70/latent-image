@@ -67,7 +67,7 @@ module FujiAF.ReadMedia
   , mapEntryAddress, mapStartOffset, mapStartAddress, MapStart, mkMapStart, mapStartBlock
   , mapEntryCountOffset, mapEntryCountAddress, mapHeaderBytes
   , resultSentinelByte, spareGateByte
-  , mediaPollCap, mediaPollSpacingUs
+  , mediaPollCap, mediaPollSpacingMs
   , mediaConfigSteps, mediaAggregateDeadlineMs
   , mediaJournalFixedBytes, mediaJournalPerRequestBytes, mediaJournalCapBytes
   , mediaFsyncEvery
@@ -77,7 +77,6 @@ module FujiAF.ReadMedia
   , runReadMedia
   ) where
 
-import Control.Concurrent (threadDelay)
 import Control.Exception
 import Control.Monad (forM, forM_, unless, when)
 import qualified Data.ByteString as B
@@ -261,8 +260,8 @@ spareGateByte = 0
 mediaPollCap :: Int
 mediaPollCap = 1024
 
-mediaPollSpacingUs :: Int
-mediaPollSpacingUs = 5000
+mediaPollSpacingMs :: Int
+mediaPollSpacingMs = 5
 
 -- 5000 ms per transfer as every command: four transfers per config or RAM
 -- step, per staging slice and per poll, plus the session's fixed eight. One
@@ -566,7 +565,7 @@ pollResult :: MediaLink -> Int -> Int -> IO Int
 pollResult link position count
   | count >= mediaPollCap = P.reject ("result code never left the sentinel after "++show mediaPollCap++" polls")
   | otherwise = do
-      when (count > 0) (threadDelay mediaPollSpacingUs)
+      when (count > 0) (pauseMs (sessionClock (linkSession link)) mediaPollSpacingMs)
       payload <- windowRead link ("result-poll-"++show position++"-"++show count)
       let code = fromIntegral (payload !! cacheIndexOf ResultIndex) :: Int
       note (linkSession link) "result-poll" ("bank="++show position++";poll="++show count++";result="++show code)

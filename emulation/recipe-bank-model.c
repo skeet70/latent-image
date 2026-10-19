@@ -27,6 +27,7 @@
  * the case generator from reports/custom-settings.fields.json.
  */
 #include <stdint.h>
+#include "../menu/recipe_bank_ui.h"
 
 #define RBM_CARD_BASE 0x00980000u
 #define RBM_FILE_STRIDE 0x220u
@@ -48,20 +49,33 @@ volatile uint32_t rbm_read_comp;
 volatile uint32_t rbm_write_comp;
 volatile uint32_t rbm_close_comp;
 volatile uint32_t rbm_close_noop;
-volatile uint32_t rbm_close_noop_at;
-volatile uint32_t rbm_open_tag_zero;
-volatile uint32_t rbm_open_tag_zero_at;
-volatile uint32_t rbm_close_keep;
-volatile uint32_t rbm_close_keep_at;
-volatile uint32_t rbm_close_late_at;
-volatile uint32_t rbm_release_guard;
-volatile uint32_t rbm_stale_close;
+enum RbmOpenFault { RBM_OPEN_NORMAL, RBM_OPEN_ZERO_TAG };
+enum RbmCloseFault {
+  RBM_CLOSE_NORMAL,
+  RBM_CLOSE_NOOP_WRITE,
+  RBM_CLOSE_KEEP_VERIFY,
+  RBM_CLOSE_LATE_VERIFY
+};
+volatile enum RbmOpenFault rbm_open_fault;
+volatile enum RbmCloseFault rbm_close_fault;
+volatile uint32_t rbm_written_file;
+volatile uint32_t rbm_detach_before_stat;
 volatile uint32_t rbm_trip_step;
 volatile uint32_t rbm_step;
-volatile uint32_t rbm_calls;
-volatile uint32_t rbm_epoch;
-volatile uint32_t rbm_event_step;
-volatile uint32_t rbm_swap_step;
+enum RbmMediaBoundary {
+  RBM_BOUNDARY_NONE,
+  RBM_BOUNDARY_DESTRUCTIVE_OPEN,
+  RBM_BOUNDARY_WRITE,
+  RBM_BOUNDARY_CLOSE,
+  RBM_BOUNDARY_DISCOVERY_STAT
+};
+volatile enum RbmMediaBoundary rbm_swap_boundary;
+typedef struct {
+  const uint8_t *bytes;
+} RbmCardSource;
+volatile RbmCardSource rbm_swap_card;
+volatile uint32_t rbm_swap_b_present;
+volatile uint32_t rbm_swap_b_size;
 volatile uint32_t rbm_swap_a_size;
 volatile uint32_t rbm_wrote;
 volatile uint32_t rbm_write_short;
@@ -73,6 +87,7 @@ volatile uint32_t rbm_b_size;
 volatile uint32_t rbm_h_used[4];
 volatile uint32_t rbm_h_file[4];
 volatile uint32_t rbm_h_cursor[4];
+volatile uint32_t rbm_h_mode[4];
 volatile uint32_t rbm_field_count;
 
 /* the media layer's own tables sit at the stock addresses the kernel's
@@ -82,17 +97,22 @@ volatile uint32_t rbm_field_count;
 #define RBM_INDEX_TABLE ((volatile uint32_t *)0x00910150u)
 #define RBM_LOW_TABLE ((volatile uint32_t *)0x00910160u)
 
-extern void rb_media_epoch_bump(void);
 
 /* one persistence boundary; the trip store fires when the boundary number
  * matches the fixture's trip step. Steps: 1 write start, 2 mid-partial write,
  * 3 after write before close, 4 after close before verify read,
  * 5 during verify. */
+__attribute__((naked, noinline)) void rbm_interrupt(uint32_t address,
+                                                   uint32_t step)
+{
+  __asm__ volatile("str r1, [r0]\n\tbx lr");
+}
+
 __attribute__((noinline)) uint32_t rbm_boundary(void)
 {
   rbm_step = rbm_step + 1u;
   if (rbm_trip_armed != 0u && rbm_trip_step != 0u && rbm_step == rbm_trip_step) {
-    *(volatile uint32_t *)RBM_TRIP_ADDR = rbm_step;
+    rbm_interrupt(RBM_TRIP_ADDR, rbm_step);
   }
   return rbm_step;
 }
@@ -107,23 +127,18 @@ static void rbm_copy(uint8_t *dst, const uint8_t *src, uint32_t n)
 
 uint32_t rbm_detach_event(uint32_t a0, uint32_t a1)
 {
-  rbm_calls = rbm_calls + 1u;
-  rbm_epoch = rbm_epoch + 1u;
   rb_media_epoch_bump();
   return a0 + a1;
 }
 
 uint32_t rbm_attach_event(uint32_t a0, uint32_t a1)
 {
-  rbm_calls = rbm_calls + 1u;
-  rbm_epoch = rbm_epoch + 1u;
   rb_media_epoch_bump();
   return a0 + a1;
 }
 
 uint32_t rbm_media_eval(uint32_t a0, uint32_t a1)
 {
-  rbm_calls = rbm_calls + 1u;
   return a0 + a1;
 }
 
@@ -137,16 +152,23 @@ static void rbm_run_swap(void)
   rbm_b_size = 0u;
 }
 
-void rbm_event_hook(void)
+static void rbm_swap_at(enum RbmMediaBoundary boundary)
 {
-  if (rbm_event_step != 0u && rbm_calls == rbm_event_step) {
-    rbm_detach_event(0u, 0u);
+  if (rbm_swap_boundary != boundary) {
+    return;
   }
-  if (rbm_swap_step != 0u && rbm_calls == rbm_swap_step) {
-    rbm_detach_event(0u, 0u);
-    rbm_attach_event(0u, 0u);
+  rbm_swap_boundary = RBM_BOUNDARY_NONE;
+  rbm_detach_event(0u, 0u);
+  rbm_attach_event(0u, 0u);
+  if (rbm_swap_card.bytes != 0u) {
+    rbm_copy((uint8_t *)RBM_CARD_BASE, rbm_swap_card.bytes, 2u * RBM_FILE_STRIDE);
+    rbm_a_present = 1u;
+    rbm_a_size = rbm_swap_a_size;
+  } else {
     rbm_run_swap();
   }
+  rbm_b_present = rbm_swap_b_present;
+  rbm_b_size = rbm_swap_b_size;
 }
 
 static uint32_t rbm_alloc_slot(void)
@@ -205,10 +227,6 @@ static void rbm_release_worker(uint32_t handle)
 {
   uint32_t s = rbm_slot(handle);
   if (s != 0xffffffffu) {
-    if (RBM_TAG_TABLE[s] == 0u) {
-      /* a release of an identity the tag table does not own */
-      rbm_release_guard = rbm_release_guard + 1u;
-    }
     RBM_TAG_TABLE[s] = 0u;
     RBM_MAP_TABLE[s] = 0u;
     RBM_INDEX_TABLE[s] = 0u;
@@ -216,17 +234,14 @@ static void rbm_release_worker(uint32_t handle)
     rbm_h_used[s] = 0u;
     rbm_h_file[s] = 0u;
     rbm_h_cursor[s] = 0u;
+    rbm_h_mode[s] = 0u;
   }
 }
 
 uint32_t rbm_tag_release(uint32_t tag)
 {
   uint32_t s = rbm_slot(tag);
-  rbm_calls = rbm_calls + 1u;
   if (s != 0xffffffffu) {
-    if (RBM_TAG_TABLE[s] == 0u) {
-      rbm_release_guard = rbm_release_guard + 1u;
-    }
     RBM_TAG_TABLE[s] = 0u;
     rbm_h_used[s] = 0u;
   }
@@ -235,14 +250,12 @@ uint32_t rbm_tag_release(uint32_t tag)
 
 uint32_t rbm_resolve(uint32_t tag)
 {
-  rbm_calls = rbm_calls + 1u;
   return rbm_slot(tag);
 }
 
 uint32_t rbm_mapping_delete(uint32_t tag)
 {
   uint32_t s = rbm_slot(tag);
-  rbm_calls = rbm_calls + 1u;
   if (s != 0xffffffffu) {
     RBM_MAP_TABLE[s] = 0u;
   }
@@ -251,7 +264,6 @@ uint32_t rbm_mapping_delete(uint32_t tag)
 
 uint32_t rbm_low_close(uint32_t index)
 {
-  rbm_calls = rbm_calls + 1u;
   if (index < 4u) {
     RBM_LOW_TABLE[index] = 0u;
   }
@@ -260,7 +272,6 @@ uint32_t rbm_low_close(uint32_t index)
 
 uint32_t rbm_index_free(uint32_t index)
 {
-  rbm_calls = rbm_calls + 1u;
   if (index < 4u) {
     RBM_INDEX_TABLE[index] = 0u;
   }
@@ -276,8 +287,14 @@ uint32_t rbm_open(rbm_cb cb, const uint8_t *path, uint32_t mode, uint32_t guard,
   (void)guard;
   (void)wait;
   (void)variant;
-  rbm_calls = rbm_calls + 1u;
-  rbm_event_hook();
+  RbMediaIdentity identity = rb_io_request_identity();
+  if (mode == 1u) {
+    rbm_swap_at(RBM_BOUNDARY_DESTRUCTIVE_OPEN);
+  }
+  if (!rb_media_worker_allows(cb, identity)) {
+    cb(2u, 0u);
+    return 1u;
+  }
   file = rbm_file_of_path(path);
   handle = rbm_alloc_slot();
   if (handle == 0u || file == 0xffffffffu) {
@@ -305,18 +322,17 @@ uint32_t rbm_open(rbm_cb cb, const uint8_t *path, uint32_t mode, uint32_t guard,
   rbm_h_used[slot] = 1u;
   rbm_h_file[slot] = file;
   rbm_h_cursor[slot] = 0u;
+  rbm_h_mode[slot] = mode;
   if (mode != 0u) {
     *rbm_file_present(file) = 1u;
     *rbm_file_size(file) = 0u;
   }
-  RBM_TAG_TABLE[slot] = 1u;
+  RBM_TAG_TABLE[slot] = handle;
   RBM_MAP_TABLE[slot] = 1u;
   RBM_INDEX_TABLE[slot] = 1u;
   RBM_LOW_TABLE[slot] = 1u;
-  if (rbm_open_tag_zero != 0u ||
-      (rbm_open_tag_zero_at != 0u && rbm_calls == rbm_open_tag_zero_at)) {
-    /* the dispatch-tag allocation returned zero while the worker still
-     * produced a closable handle */
+  if (rbm_open_fault == RBM_OPEN_ZERO_TAG) {
+    rbm_open_fault = RBM_OPEN_NORMAL;
     cb(0u, handle);
     return 0u;
   }
@@ -335,8 +351,6 @@ uint32_t rbm_read(rbm_cb cb, uint32_t handle, uint32_t len, uint8_t *buf,
   const uint8_t *src;
   (void)wait;
   (void)variant;
-  rbm_calls = rbm_calls + 1u;
-  rbm_event_hook();
   if (slot == 0xffffffffu || rbm_h_used[slot] == 0u) {
     cb(9u, 0u);
     return 0u;
@@ -396,6 +410,7 @@ rbm_write_short_case(rbm_cb cb, uint32_t handle, uint32_t len,
   }
   rbm_boundary();
   rbm_wrote = 1u;
+  rbm_written_file = file + 1u;
   cb(0u, n);
   (void)len;
   return 1u;
@@ -424,6 +439,7 @@ rbm_write_full_case(rbm_cb cb, uint32_t handle, uint32_t len, const uint8_t *src
   }
   rbm_boundary();
   rbm_wrote = 1u;
+  rbm_written_file = file + 1u;
   cb(0u, len);
   return 1u;
 }
@@ -434,8 +450,12 @@ uint32_t rbm_write(rbm_cb cb, uint32_t handle, uint32_t len, const uint8_t *src,
   uint32_t slot = rbm_slot(handle);
   (void)wait;
   (void)variant;
-  rbm_calls = rbm_calls + 1u;
-  rbm_event_hook();
+  RbMediaIdentity identity = rb_io_request_identity();
+  rbm_swap_at(RBM_BOUNDARY_WRITE);
+  if (!rb_media_worker_allows(cb, identity)) {
+    cb(2u, 0u);
+    return 1u;
+  }
   if (slot == 0xffffffffu || rbm_h_used[slot] == 0u) {
     cb(9u, 0u);
     return 0u;
@@ -456,8 +476,11 @@ uint32_t rbm_stat(uint32_t handle, uint8_t *stat)
   uint32_t slot = rbm_slot(handle);
   uint32_t i;
   uint32_t size;
-  rbm_calls = rbm_calls + 1u;
-  rbm_event_hook();
+  rbm_swap_at(RBM_BOUNDARY_DISCOVERY_STAT);
+  if (rbm_detach_before_stat != 0u) {
+    rbm_detach_before_stat = 0u;
+    rbm_detach_event(0u, 0u);
+  }
   if (slot == 0xffffffffu || rbm_h_used[slot] == 0u) {
     return 9u;
   }
@@ -472,22 +495,27 @@ uint32_t rbm_stat(uint32_t handle, uint8_t *stat)
   return 0u;
 }
 
-/* the fixture close shapes whose callback and release contract differs from a
- * stock completion: 0 none, 1 late release with the callback lost, 2 the
- * state-1 no-op, 3 a dispatched success whose tag stays allocated. Out of
- * line because rbm_close sits at its stock address span. */
 __attribute__((noinline)) static uint32_t rbm_close_shape(rbm_cb cb,
                                                           uint32_t handle)
 {
-  if (rbm_close_late_at != 0u && rbm_calls == rbm_close_late_at) {
+  uint32_t slot = rbm_slot(handle);
+  uint32_t verify = rbm_h_mode[slot] == 0u &&
+                    rbm_written_file == rbm_h_file[slot] + 1u;
+  if (rbm_close_fault == RBM_CLOSE_LATE_VERIFY && verify != 0u) {
+    rbm_close_fault = RBM_CLOSE_NORMAL;
     rbm_release_worker(handle);
     return 1u;
   }
-  if (rbm_close_noop != 0u || (rbm_close_noop_at != 0u && rbm_calls == rbm_close_noop_at)) {
+  if (rbm_close_noop != 0u ||
+      (rbm_close_fault == RBM_CLOSE_NOOP_WRITE && rbm_h_mode[slot] == 1u)) {
+    if (rbm_h_mode[slot] == 1u) {
+      rbm_close_fault = RBM_CLOSE_NORMAL;
+    }
     cb(0u, 0u);
     return 2u;
   }
-  if (rbm_close_keep != 0u || (rbm_close_keep_at != 0u && rbm_calls == rbm_close_keep_at)) {
+  if (rbm_close_fault == RBM_CLOSE_KEEP_VERIFY && verify != 0u) {
+    rbm_close_fault = RBM_CLOSE_NORMAL;
     cb(0u, 0u);
     return 3u;
   }
@@ -503,10 +531,14 @@ uint32_t rbm_close(rbm_cb cb, uint32_t handle, uint32_t z0, uint32_t z1,
   (void)z1;
   (void)wait;
   (void)variant;
-  rbm_calls = rbm_calls + 1u;
-  rbm_event_hook();
+  RbMediaIdentity identity = rb_io_request_identity();
+  rbm_swap_at(RBM_BOUNDARY_CLOSE);
+  if (!rb_media_worker_allows(cb, identity)) {
+    rbm_release_worker(handle);
+    cb(2u, 0u);
+    return 1u;
+  }
   if (slot == 0xffffffffu || rbm_h_used[slot] == 0u) {
-    rbm_stale_close = rbm_stale_close + 1u;
     cb(9u, 0u);
     return 0u;
   }
@@ -623,20 +655,14 @@ uint32_t rbm_set(uint32_t prop, uint32_t code, uint32_t zero, uint32_t sel)
   return 1u;
 }
 
+#ifndef RBM_MEDIA_ONLY
 /* case entries for contracts a single kernel call cannot express */
 extern uint32_t rb_load(void);
-extern uint32_t rb_recall(uint32_t slot);
-extern uint32_t rb_save_current(uint32_t slot, const uint8_t *name12);
-extern uint32_t rb_stage_load(uint32_t slot);
-extern uint32_t rb_stage_field(uint32_t prop, uint32_t code);
-extern uint32_t rb_stage_cancel(void);
-extern uint32_t rb_stage_commit(uint32_t slot, const uint8_t *name);
-extern uint32_t rb_readback(uint32_t slot, uint8_t *name_out,
-                            uint8_t *payload_out);
 
 uint32_t rbm_seq_stage_cancel(uint32_t slot)
 {
-  uint32_t status = rb_stage_load(slot);
+  RbMediaIdentity identity = rb_media_sample();
+  uint32_t status = rb_stage_load(slot, identity);
   if (status != 0u) {
     return status;
   }
@@ -646,7 +672,8 @@ uint32_t rbm_seq_stage_cancel(uint32_t slot)
 
 uint32_t rbm_seq_stage_field_cancel(uint32_t slot, uint32_t prop, uint32_t code)
 {
-  uint32_t status = rb_stage_load(slot);
+  RbMediaIdentity identity = rb_media_sample();
+  uint32_t status = rb_stage_load(slot, identity);
   if (status != 0u) {
     return status;
   }
@@ -661,7 +688,8 @@ uint32_t rbm_seq_stage_field_cancel(uint32_t slot, uint32_t prop, uint32_t code)
 uint32_t rbm_seq_stage_field_commit(uint32_t slot, uint32_t prop, uint32_t code,
                                     const uint8_t *name12)
 {
-  uint32_t status = rb_stage_load(slot);
+  RbMediaIdentity identity = rb_media_sample();
+  uint32_t status = rb_stage_load(slot, identity);
   if (status != 0u) {
     return status;
   }
@@ -672,39 +700,88 @@ uint32_t rbm_seq_stage_field_commit(uint32_t slot, uint32_t prop, uint32_t code,
   return rb_stage_commit(slot, name12);
 }
 
+uint32_t rbm_seq_stage_field_recall(uint32_t slot, uint32_t prop, uint32_t code)
+{
+  uint32_t status = rbm_seq_stage_field_commit(slot, prop, code, 0);
+  if (status != 0u) {
+    return status;
+  }
+  return rb_recall(slot, rb_media_sample());
+}
+
 uint32_t rbm_seq_load_recall(uint32_t slot)
 {
   uint32_t status = rb_load();
   if (status != 0u) {
     return status;
   }
-  return rb_recall(slot);
+  return rb_recall(slot, rb_media_sample());
 }
 
 uint32_t rbm_seq_stage_roundtrip(uint32_t slot, const uint8_t *name12)
 {
-  uint32_t status = rb_stage_load(slot);
+  RbMediaIdentity identity = rb_media_sample();
+  uint32_t status = rb_stage_load(slot, identity);
   if (status != 0u) {
     return status;
   }
   return rb_stage_commit(slot, name12);
 }
 
-/* two entries of one call: the second entry's first request is where a
- * deferred handle is flushed (rb_open flushes before it posts). The first
- * entry's status is kept for the case to claim. */
-volatile uint32_t rbm_seq_first;
-
-uint32_t rbm_seq_load_twice(void)
+uint32_t rbm_seq_load_readback(uint32_t slot, uint8_t *name, uint8_t *payload)
 {
-  rbm_seq_first = rb_load();
-  return rb_load();
+  uint32_t status = rb_load();
+  if (status != RB_OK) {
+    return status;
+  }
+  return rb_readback(slot, name, payload, rb_media_sample());
 }
 
-uint32_t rbm_seq_save_twice(uint32_t slot, const uint8_t *name12)
+uint32_t rbm_seq_load_all_readback(uint8_t *names, uint8_t *payloads)
 {
-  rbm_seq_first = rb_save_current(slot, name12);
-  return rb_save_current(slot, name12);
+  uint32_t status = rb_load();
+  if (status != RB_OK) {
+    return status;
+  }
+  for (uint32_t slot = 0u; slot < RB_BANK_SLOTS; slot++) {
+    status = rb_readback(slot, names + slot * 26u, payloads + slot * 40u,
+                         rb_media_sample());
+    if (status != RB_OK) {
+      return status;
+    }
+  }
+  return RB_OK;
+}
+
+uint32_t rbm_seq_load_twice(uint32_t *first_status)
+{
+  *first_status = rb_load();
+  return rbm_seq_load_readback(0u, (uint8_t *)0x009a0020u,
+                             (uint8_t *)0x009a0040u);
+}
+
+uint32_t rbm_seq_save_twice(uint32_t slot, uint32_t *first_status)
+{
+  *first_status = rb_save_current(slot, rb_media_sample());
+  return rb_save_current(slot, rb_media_sample());
+}
+
+uint32_t rbm_seq_read_after_deferred(void)
+{
+  for (uint32_t i = 0u; i < 8u; i++) {
+    rbm_close_noop = 1u;
+    uint32_t status = rb_load();
+    rbm_close_noop = 0u;
+    if (status != RB_OK) {
+      return status;
+    }
+    status = rb_readback(1u, (uint8_t *)0x009a0000u,
+                         (uint8_t *)0x009a0020u, rb_media_sample());
+    if (status != RB_OK) {
+      return status;
+    }
+  }
+  return RB_OK;
 }
 
 /* F9 menu-navigation flows (RECIPE-UI-BEHAVIOR-01). Every step sets the
@@ -712,7 +789,6 @@ uint32_t rbm_seq_save_twice(uint32_t slot, const uint8_t *name12)
  * flow goes through rb_bank_interpose exactly as the stock dispatcher
  * delivers it. The cursor cell holds the row index into the frame's values
  * array. */
-extern uint32_t rb_bank_interpose(void);
 
 #define RBM_UI_FRAME 0x009571d0u
 #define RBM_UI_CURSOR 0x009571d8u
@@ -776,3 +852,4 @@ uint32_t rbm_seq_ui_rename(uint32_t editor, uint32_t confirm)
   return rbm_ui_enter(editor, confirm != 0u ? 0x2au : 0x2bu, 0x1eu,
                       confirm != 0u ? 8u : 13u);
 }
+#endif

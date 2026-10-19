@@ -51,11 +51,16 @@ haskell_library(
         "FujiAF/Probe.hs",
         "FujiAF/Read.hs",
         "FujiAF/ReadMedia.hs",
+        "FujiAF/ReadRam.hs",
+        "FujiAF/RamPush.hs",
         "FujiAF/Rehearsal.hs",
         "FujiAF/Routes.hs",
         "FujiAF/Straps.hs",
+        "FujiAF/StoredGate.hs",
         "FujiAF/Transport.hs",
     ],
+    # FujiAF.RamPush runs the relinker from the linking binary's runfiles.
+    data = ["//host/firmware:ram-push-relinker"],
     ghcopts = _GHCOPTS,
     src_strip_prefix = ".",
     visibility = ["//visibility:public"],
@@ -70,7 +75,10 @@ haskell_library(
         "//host:json",
         "//host:scientific",
         "//host:text",
+        "//host:process",
         "//host:vector",
+        "//host/firmware:bank-allowlist",
+        "//host/firmware:ram-push-toolchain",
     ],
 )
 
@@ -87,9 +95,9 @@ haskell_library(
     ],
 )
 
-# The one test that builds the native provider and runs the C lister: repeated
-# enumeration of the host bus, needing no camera. Every other test injects its
-# own UsbApi and cannot fail on the C.
+# The one test that runs the C: repeated enumeration of the host bus, needing
+# no camera. Every other test injects its own UsbApi or NativeCalls and cannot
+# fail on the C.
 haskell_test(
     name = "native-usb-tests",
     srcs = ["NativeUsbTest.hs"],
@@ -105,11 +113,13 @@ haskell_test(
 haskell_binary(
     name = "camera",
     srcs = ["Main.hs"],
+    data = ["//host/firmware:build-recipe-bank"],
     ghcopts = _GHCOPTS,
     visibility = ["//visibility:public"],
     deps = [
         ":camera-core",
         ":native-provider",
+        ":ram-push-pins",
         "//host:base",
         "//broker:core",
         "//host:directory",
@@ -148,8 +158,12 @@ haskell_test(
     ],
 )
 
+# Each transfer makes up to five durable journal appends, its native-outcome
+# line among them; the 515-window sessions cost minutes of fsync work on a
+# disk-backed TEST_TMPDIR.
 haskell_test(
     name = "log-tests",
+    size = "large",
     srcs = ["LogTest.hs"],
     ghcopts = _GHCOPTS,
     deps = [
@@ -163,8 +177,10 @@ haskell_test(
     ],
 )
 
+# As log-tests, over the 130-window boot-ROM sessions.
 haskell_test(
     name = "bootrom-tests",
+    size = "large",
     srcs = ["BootRomTest.hs"],
     ghcopts = _GHCOPTS,
     deps = [
@@ -283,6 +299,254 @@ haskell_test(
     ],
 )
 
+haskell_test(
+    name = "read-ram-tests",
+    srcs = ["ReadRamTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+haskell_library(
+    name = "ram-push-model",
+    testonly = True,
+    srcs = ["RamPushModel.hs"],
+    ghcopts = _GHCOPTS,
+    src_strip_prefix = ".",
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:containers",
+    ],
+)
+
+haskell_test(
+    name = "ram-push-tests",
+    srcs = ["RamPushTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        ":ram-push-model",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+# Every camera operation through the native provider, with native_usb.c's
+# entry points answered by a scripted device, and through the emulator bridge
+# provider, with the bridge's JSON lines answered by the same device; the two
+# output directories must match byte for byte outside the journal clock.
+haskell_test(
+    name = "provider-parity",
+    size = "large",
+    srcs = ["ProviderParityTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        ":native-provider",
+        ":ram-push-model",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+        "//emulation:emulator-usb",
+        "//host:aeson",
+        "//host:text",
+    ],
+)
+
+# The RAM-push review record: transport/ram-push-review.json and README.md
+# section "RAM-push review record".
+haskell_library(
+    name = "ram-push-review-record",
+    srcs = ["FujiAF/RamPushReview.hs"],
+    ghcopts = _GHCOPTS,
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:aeson",
+        "//host:json",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_binary(
+    name = "ram-push-pins-generator",
+    srcs = ["RamPushPinsGenerator.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":ram-push-review-record",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+genrule(
+    name = "ram-push-pins-module",
+    srcs = ["ram-push-review.json"],
+    outs = ["RamPushReviewedPins.hs"],
+    cmd = "$(location :ram-push-pins-generator) $(location ram-push-review.json) $@",
+    tools = [":ram-push-pins-generator"],
+)
+
+# The camera binary's compiled pins; camera-core does not depend on them.
+haskell_library(
+    name = "ram-push-pins",
+    srcs = [":RamPushReviewedPins.hs"],
+    ghcopts = _GHCOPTS,
+    visibility = ["//emulation:__pkg__"],
+    deps = [
+        ":camera-core",
+        "//host:base",
+    ],
+)
+
+haskell_test(
+    name = "ram-push-review-record-tests",
+    srcs = ["RamPushReviewRecordTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":ram-push-review-record",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+filegroup(
+    name = "ram-push-pinned-workspace-files",
+    srcs = [
+        "//host/firmware:BuildRecipeBank.hs",
+        "//host/firmware:RecipeBankRamLayout.hs",
+        "//host/firmware:build-recipe-bank-ram.sh",
+        "//menu:ram-push-relink-sources",
+    ],
+)
+
+_GATE_DEPS = [
+    ":ram-push-review-record",
+    "//host:base",
+    "//host:bytestring",
+    "//broker:core",
+    "//host/firmware:ram-push-toolchain",
+]
+
+# The pre-go gate (README.md "RAM-push review record"): red while the tree
+# carries RAM-push bytes the record does not admit.
+haskell_test(
+    name = "ram-push-review-verdicts",
+    srcs = ["RamPushReviewGate.hs"],
+    args = [
+        "verdicts",
+        "$(location ram-push-review.json)",
+    ],
+    data = ["ram-push-review.json"],
+    ghcopts = _GHCOPTS,
+    tags = ["manual"],
+    deps = _GATE_DEPS,
+)
+
+haskell_test(
+    name = "ram-push-review-bytes",
+    srcs = ["RamPushReviewGate.hs"],
+    args = [
+        "bytes",
+        "$(location ram-push-review.json)",
+    ],
+    data = [
+        ":ram-push-pinned-workspace-files",
+        "ram-push-review.json",
+    ],
+    ghcopts = _GHCOPTS,
+    tags = ["manual"],
+    deps = _GATE_DEPS,
+)
+
+# Rewrites record entries from the current tree's relink; `bazel run` only.
+haskell_binary(
+    name = "ram-push-repin",
+    srcs = ["RamPushRepin.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        ":ram-push-review-record",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+    ],
+)
+
+# Rebuilds with the pinned builder from workspace private-data; `bazel run` only.
+haskell_binary(
+    name = "ram-push-reviewed-build-check",
+    srcs = ["RamPushReviewedBuildCheck.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        ":ram-push-pins",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+        "//host/firmware:ram-push-toolchain",
+    ],
+)
+
+# The camera binary refuses ram-push and ram-unload inputs that differ from
+# the compiled source identity and publication contract.
+haskell_test(
+    name = "ram-push-camera-pins",
+    srcs = ["RamPushCameraPinsTest.hs"],
+    args = ["$(location :camera)"],
+    data = [":camera"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        ":ram-push-pins",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+        "//host:aeson",
+        "//host:process",
+    ],
+)
+
+genquery(
+    name = "camera-deps",
+    expression = "deps(//transport:camera)",
+    scope = [":camera"],
+)
+
+# //emulation:ram-push-unreviewed skips the compiled pins; the camera must not link it.
+sh_test(
+    name = "camera-unreviewed-relink-exclusion",
+    srcs = ["camera-unreviewed-relink-exclusion.sh"],
+    args = ["$(location :camera-deps)"],
+    data = [":camera-deps"],
+)
+
+
 # The happy case runs the full 1058-slice session with its durable per-frame
 # journaling; on a filesystem with slow fsync that alone can run for minutes.
 haskell_test(
@@ -321,6 +585,25 @@ haskell_test(
     name = "arm-auto-act-tests",
     size = "large",
     srcs = ["ArmAutoActTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+# Simulated time keeps waits out of wall time; the per-frame fsync journaling
+# of the two 330-poll timeout cases still costs minutes on a disk-backed
+# TEST_TMPDIR (under a second on tmpfs).
+haskell_test(
+    name = "commit-f7-tests",
+    size = "large",
+    srcs = ["StoredGateTest.hs"],
     ghcopts = _GHCOPTS,
     deps = [
         ":camera-core",

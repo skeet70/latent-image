@@ -3,7 +3,7 @@
 -- parsed and validated before any camera operation starts. The route window
 -- list is the second document shape: a RAM window list the host derives from a
 -- probe-routes phase-1 capture.
-module FujiAF.PlanDocument (readPlanFile, parseReadPlan, readRoutePlanFile, parseRoutePlan) where
+module FujiAF.PlanDocument (readPlanFile, parseReadPlan, readRoutePlanFile, parseRoutePlan, privateRegular) where
 
 import Control.Exception (bracket, bracketOnError)
 import Control.Monad (forM, unless)
@@ -75,18 +75,20 @@ address v width = do
   require (length s == width+2 && take 2 s == "0x" && all (`elem` ("0123456789abcdef" :: String)) (drop 2 s)) "fixed-width lowercase hex address required"
   pure (foldl (\acc c -> acc*16+digitToInt c) 0 (drop 2 s))
 
-privateRegular :: FilePath -> Int -> IO B.ByteString
-privateRegular path cap = do
-  require (isAbsolute path) "absolute plan path required"
+-- An absolute, owned, bounded regular file with no group or other
+-- permission bits; noun names it in the refusals.
+privateRegular :: String -> FilePath -> Int -> IO B.ByteString
+privateRegular noun path cap = do
+  require (isAbsolute path) ("absolute "++noun++" path required")
   bracket acquire hClose $ \h -> do
     bytes <- B.hGet h (cap+1)
-    require (B.length bytes <= cap) "plan exceeds its input cap"
+    require (B.length bytes <= cap) (noun++" exceeds its input cap")
     pure bytes
   where
     valid st = do
-      require (isRegularFile st && fileSize st <= fromIntegral cap) "bounded regular nonsymlink plan required"
+      require (isRegularFile st && fileSize st <= fromIntegral cap) ("bounded regular nonsymlink "++noun++" required")
       uid <- getEffectiveUserID
-      require (fileOwner st == uid && fileMode st .&. 0o077 == 0) "private owned plan required"
+      require (fileOwner st == uid && fileMode st .&. 0o077 == 0) ("private owned "++noun++" required")
     acquire = do
       getSymbolicLinkStatus path >>= valid
       bracketOnError (openFd path ReadOnly defaultFileFlags {nofollow=True,nonBlock=True,cloexec=True}) closeFd $ \fd -> do
@@ -127,7 +129,7 @@ parseReadPlan v = do
 
 readPlanFile :: FilePath -> IO ReadPlan
 readPlanFile path = do
-  bytes <- privateRegular path planDocumentCap
+  bytes <- privateRegular "plan" path planDocumentCap
   value <- either P.reject pure (decodeStrictIntegers bytes)
   parseReadPlan value
 
@@ -150,6 +152,6 @@ parseRoutePlan v = do
 
 readRoutePlanFile :: FilePath -> IO [RouteWindow]
 readRoutePlanFile path = do
-  bytes <- privateRegular path routePlanDocumentCap
+  bytes <- privateRegular "plan" path routePlanDocumentCap
   value <- either P.reject pure (decodeStrictIntegers bytes)
   parseRoutePlan value

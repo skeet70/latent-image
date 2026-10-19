@@ -15,10 +15,10 @@ import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
 
 record4Media :: Int
-record4Media = 0x140200
+record4Media = 0x140400
 
 record5Media :: Int
-record5Media = 0x140240
+record5Media = 0x140440
 
 -- The fixture's plain-image base, the id-6 entry's flash word the image-5
 -- window abuts (stock: 0x5a0000, the plain image's first byte). Both id-6
@@ -49,7 +49,7 @@ fixtureImage2 :: B.ByteString
 fixtureImage2 = B.pack [fromIntegral ((i * 5 + 7) `mod` 251) | i <- [0 .. image2Size - 1]]
 
 tableEnd :: Int
-tableEnd = U.segmentTableOffset + U.segmentEntryBytes * U.segmentCount + 4
+tableEnd = U.tableEndOffset U.Stock
 
 patternBytes :: Int -> B.ByteString
 patternBytes n = B.pack [fromIntegral ((i * 7 + 3) `mod` 251) | i <- [0 .. n - 1]]
@@ -70,7 +70,7 @@ fixtureSegmentsAt image2At =
   , U.SegmentEntry 1 0x2000 0x200 0 0 0x31000 0x10000 0 0
   , U.SegmentEntry 2 0x3000 (fromIntegral image2Size) 0 0 (fromIntegral image2At) 0x10000 0 0
   , U.SegmentEntry 3 0x4000 0x200 0 0 0x33000 0x10000 0 0
-  , U.SegmentEntry 4 0x61c400 0x282828 0x89ec00 0x352e00 (fromIntegral record4Media) 0x10000 0x20 1
+  , U.SegmentEntry 4 0x61c400 0x282828 0x89ec00 0x352e00 (fromIntegral record4Media) (fromIntegral (record5Media - record4Media)) 0x20 1
   , -- The image-5 flash window closes at the id-6 base, as the stock
     -- container's closes at the plain image's flash base; the id-2 extent
     -- starts past it, as in the stock container, so a declared window overrun
@@ -104,9 +104,9 @@ fixtureTail =
   foldl
     (\t (off, w) -> patchMediaWord (off - tableEnd) w t)
     (patternBytes (record4Media - tableEnd))
-    ( [(baseOffset, base) | ((baseOffset, base), _) <- U.stockPlainExtents]
-        ++ [(lengthOffset, len) | (_, (lengthOffset, len)) <- U.stockPlainExtents]
-        ++ [U.stockPlainLoad]
+    ( [(0x140184,0x1234),(0x1401a4,0x4061c1b0), U.stockPlainLoad, (0x1401ac,0x360000)]
+        ++ zip [0x1401b0,0x1401b4 .. 0x1401f8]
+          [0,0x01100000,0xac5a0,0,0,0x44,2,0x011c0000,0x1cca0,0,0,0x46,3,0x011e0000,0x26a5e0,0,0,0x47,0xffffffff]
     )
 
 fixtureAux1Bytes :: B.ByteString
@@ -137,7 +137,9 @@ fixtureBodyPrefix = fixtureBodyPrefixAt image2Media
 fixtureBodyPrefixAt :: Int -> B.ByteString
 fixtureBodyPrefixAt image2At =
   B.concat
-    [ patternBytes U.segmentTableOffset
+    [ foldl (\bytes (off, value) -> patchMediaWord off value bytes)
+        (patternBytes (U.segmentTableOffset U.Stock))
+        [(0x140000,0x4061c040),(0x140004,0x4061c1a4),(0x140008,0),(0x14000c,0x4061c184)]
     , B.concat [serializeEntry e | e <- fixtureSegmentsAt image2At]
     , U.putMediaWord 0xffffffff
     , fixtureTail
@@ -274,6 +276,95 @@ expectEmitRefused checked label source change fragment = do
 withHeader :: (U.RecordHeader -> U.RecordHeader) -> U.CompressedRecord -> U.CompressedRecord
 withHeader change record = record {U.recHeader = change (U.recHeader record)}
 
+data WindowImage = Compressed4 | Compressed5 | Raw6
+
+changeWindow :: WindowImage -> (U.SegmentEntry -> U.SegmentEntry) -> U.Parts -> U.Parts
+changeWindow image change parts =
+  parts {U.partSegments = map alter (U.partSegments parts)}
+  where
+    wanted = case image of
+      Compressed4 -> 4
+      Compressed5 -> 5
+      Raw6 -> 6
+    alter entry = if U.segId entry == wanted then change entry else entry
+
+expectGeometryRefused :: IORef Int -> String -> Either String a -> IO ()
+expectGeometryRefused checked label result = case result of
+  Left _ -> modifyIORef' checked (+ 1)
+  Right _ -> H.failH (label ++ ": malformed geometry was accepted")
+
+parsedGeometrySource :: IORef Int -> String -> B.ByteString -> (U.Parts -> U.Parts) -> IO U.Parsed
+parsedGeometrySource checked label sourceBytes change = do
+  source <- expectAccepted checked (label ++ " source") sourceBytes
+  let parts = change (U.parsedParts source)
+      tableStart = U.stagingLength + U.segmentTableOffset (U.partTableLayout parts)
+      tableBytes = B.concat (map serializeEntry (U.partSegments parts))
+      changedBytes = B.take tableStart sourceBytes <> tableBytes <> B.drop (tableStart + B.length tableBytes) sourceBytes
+      mainStart = U.stagingLength + fromIntegral (U.hMainOffset (U.parsedHeader source))
+      mainLength = fromIntegral (U.hMainLength (U.parsedHeader source))
+      checksum = mainSum (B.take mainLength (B.drop mainStart changedBytes))
+  expectAccepted checked (label ++ " malformed parsed source") (patchWord U.mainChecksumOffset checksum changedBytes)
+
+windowAdmissionCases :: IORef Int -> U.Parsed -> B.ByteString -> U.Parsed -> B.ByteString -> IO ()
+windowAdmissionCases checked stock stockBytes compact compactBytes = do
+  forM_ [(stock, stockBytes), (compact, compactBytes)] $ \(source, sourceBytes) -> do
+    let layoutLabel = show (U.partTableLayout (U.parsedParts source))
+        trailerStart = fromIntegral (U.hMainLength (U.parsedHeader source)) - U.trailerBytes
+        mainEnd = fromIntegral (U.hMainLength (U.parsedHeader source))
+    forM_ [(Compressed4, record4Media, record5Media), (Compressed5, record5Media, plainMedia)] $ \(image, start, nextRegion) -> do
+      let imageLabel = case image of
+            Compressed4 -> "image-4"
+            Compressed5 -> "image-5"
+            Raw6 -> "image-6"
+          wrapLength = fromInteger (0x100000000 - toInteger start + 1)
+          cases =
+            [ ("oversized declared window", 0xffffffff)
+            , ("crosses next region", fromIntegral (nextRegion - start + 1))
+            , ("crosses trailer boundary", fromIntegral (trailerStart - start + 1))
+            , ("crosses main boundary", fromIntegral (mainEnd - start + 1))
+            , ("32-bit address wrap", wrapLength)
+            ]
+      forM_ cases $ \(caseLabel, declaredLength) -> do
+        let label = layoutLabel ++ " " ++ imageLabel ++ " " ++ caseLabel
+            change = changeWindow image (\entry -> entry {U.segFlashLen = declaredLength})
+        expectGeometryRefused checked (label ++ " rebuild") (U.rebuildContainer source (change (U.parsedParts source)))
+        malformed <- parsedGeometrySource checked label sourceBytes change
+        expectGeometryRefused checked (label ++ " identity rebuild") (U.rebuildContainer malformed (U.parsedParts malformed))
+        case U.partTableLayout (U.parsedParts source) of
+          U.Stock -> expectGeometryRefused checked (label ++ " compact admission") (U.compactRecorderControl malformed)
+          U.RecorderCompact -> pure ()
+    let rawCases =
+          [ ("plain start zero", changeWindow Raw6 (\entry -> entry {U.segFlash = 0}))
+          , ("plain shortened aligned length", changeWindow Raw6 (\entry -> entry {U.segFlashLen = 0x20000}))
+          , ("plain final extent outside window", changeWindow Raw6 (\entry -> entry {U.segFlashLen = 0x340000}))
+          , ("plain unaligned start", changeWindow Raw6 (\entry -> entry {U.segFlash = fromIntegral (plainMedia + 1)}))
+          , ("plain unaligned length", changeWindow Raw6 (\entry -> entry {U.segFlashLen = 0x360001}))
+          ]
+    forM_ rawCases $ \(caseLabel, change) -> do
+      let label = layoutLabel ++ " " ++ caseLabel
+      expectGeometryRefused checked (label ++ " rebuild") (U.rebuildContainer source (change (U.parsedParts source)))
+      malformed <- parsedGeometrySource checked label sourceBytes change
+      expectGeometryRefused checked (label ++ " identity rebuild") (U.rebuildContainer malformed (U.parsedParts malformed))
+      case U.partTableLayout (U.parsedParts source) of
+        U.Stock -> expectGeometryRefused checked (label ++ " compact admission") (U.compactRecorderControl malformed)
+        U.RecorderCompact -> pure ()
+  roomyStock <- expectAccepted checked "plain header disagreement roomy source" (fixtureBytesAt (image2Media + 0x20000))
+  roomyCompactParts <- either H.failH pure (U.compactRecorderControl roomyStock)
+  roomyCompactBytes <- either H.failH pure (U.rebuildContainer roomyStock roomyCompactParts)
+  roomyCompact <- expectAccepted checked "plain header disagreement roomy compact" roomyCompactBytes
+  forM_ [(roomyStock, fixtureBytesAt (image2Media + 0x20000)), (roomyCompact, roomyCompactBytes)] $ \(source, sourceBytes) -> do
+    let label = show (U.partTableLayout (U.parsedParts source)) ++ " plain nominal header disagreement"
+        change = changeWindow Raw6 (\entry -> entry {U.segFlashLen = 0x380000})
+    expectGeometryRefused checked (label ++ " rebuild") (U.rebuildContainer source (change (U.parsedParts source)))
+    malformed <- parsedGeometrySource checked label sourceBytes change
+    expectGeometryRefused checked (label ++ " identity rebuild") (U.rebuildContainer malformed (U.parsedParts malformed))
+    case U.partTableLayout (U.parsedParts source) of
+      U.Stock -> expectGeometryRefused checked (label ++ " compact admission") (U.compactRecorderControl malformed)
+      U.RecorderCompact -> pure ()
+  outsideCarrier <- expectAccepted checked "plain outside carrier admission source" (fixtureBytesAt windowRefusalImage2Media)
+  expectGeometryRefused checked "plain outside carrier rebuild" (U.rebuildContainer outsideCarrier (U.parsedParts outsideCarrier))
+  expectGeometryRefused checked "plain outside carrier compact admission" (U.compactRecorderControl outsideCarrier)
+
 main :: IO ()
 main = do
   outcome <- try run
@@ -303,6 +394,73 @@ run = do
   case U.rebuildContainer parsed parts of
     Right rebuilt -> expectTrue checked "round trip" (rebuilt == fixtureBytes)
     Left message -> H.failH ("round trip refused: " ++ message)
+  forM_ [0,0xffffffff] $ \marker ->
+    case U.parseContainer (patchMediaWord (U.stagingLength + U.header3Offset U.Stock) marker fixtureBytes) of
+      Left _ -> expectTrue checked "stock publication marker refusal" True
+      Right _ -> H.failH "stock publication marker malformed input accepted"
+  compactParts <- either H.failH pure (U.compactRecorderControl parsed)
+  compactBytes <- either H.failH pure (U.rebuildContainer parsed compactParts)
+  compact <- expectAccepted checked "compact control" compactBytes
+  let fileAt off = U.stagingLength + off
+      sliceAt bytes off count = B.take count (B.drop (fileAt off) bytes)
+      compactWord off = U.mediaWordAt compactBytes (fileAt off)
+      compactMetadataAllowed i = (i >= U.mainChecksumOffset && i < U.mainChecksumOffset + 4)
+        || (i >= fileAt 0x140000 && i < fileAt 0x1401ac)
+  expectTrue checked "compact root bytes"
+    ([compactWord (0x140000 + 4*k) | k <- [0..3]] == [0x4061c010,0x4061c154,0,0x4061c134])
+  expectTrue checked "compact segment bytes"
+    (sliceAt compactBytes 0x140010 292 == sliceAt fixtureBytes 0x140040 292)
+  expectTrue checked "compact header3 bytes"
+    (sliceAt compactBytes 0x140134 32 == sliceAt fixtureBytes 0x140184 32)
+  expectTrue checked "compact extent bytes"
+    (sliceAt compactBytes 0x140160 76 == sliceAt fixtureBytes 0x1401b0 76)
+  expectTrue checked "compact window header"
+    ([compactWord (0x140154 + 4*k) | k <- [0..2]] == [0x4061c160,0x01100000,0x360000])
+  expectTrue checked "compact source byte preservation"
+    (B.length compactBytes == B.length fixtureBytes
+      && and [compactMetadataAllowed i || B.index compactBytes i == B.index fixtureBytes i | i <- [0 .. B.length fixtureBytes - 1]])
+  expectTrue checked "compact recipe prefix preservation"
+    (sliceAt compactBytes 0x1401fc 0x204 == sliceAt fixtureBytes 0x1401fc 0x204)
+  compactRoundtrip <- either H.failH pure (U.rebuildContainer compact (U.parsedParts compact))
+  expectTrue checked "compact byte-exact roundtrip" (compactRoundtrip == compactBytes)
+  compactPlain <- either H.failH pure (U.extractPlain (U.parsedParts compact))
+  stockPlainControl <- either H.failH pure (U.extractPlain parts)
+  expectTrue checked "compact plain extraction" (compactPlain == stockPlainControl)
+  identityCompact <- either H.failH pure (U.replacePlain compact compactPlain)
+  identityCompactBytes <- either H.failH pure (U.rebuildContainer compact identityCompact)
+  expectTrue checked "compact plain identity composition" (identityCompactBytes == compactBytes)
+  case U.compactRecorderControl compact of
+    Left _ -> expectTrue checked "compact relocation refuses unsupported source layout" True
+    Right _ -> H.failH "compact metadata was relocated twice"
+  case U.tableLayoutFromMedia (B.take 0x140010 (fixtureBodyAt image2Media)) of
+    Left _ -> expectTrue checked "out-of-bounds segment pointer refusal" True
+    Right _ -> H.failH "an out-of-bounds table was accepted"
+  forM_ [0,0x61c040,0x4061c014,0x4061c041,0x4061c044,0xffffffff] $ \pointer ->
+    forM_ [fixtureBytes, compactBytes] $ \sourceBytes ->
+      case U.parseContainer (patchMediaWord (fileAt 0x140000) pointer sourceBytes) of
+        Left _ -> expectTrue checked "unsupported table pointer refusal" True
+        Right _ -> H.failH "an unsupported table pointer was accepted"
+  forM_ [(0x140004,0x4061c158),(0x14000c,0x4061c138),(0x140154,0x4061c164),
+          (0x140134,0),(0x140134,0xffffffff),(0x14015c,0x350000),(0x140160,1),
+          (0x140174,0x45),(0x140130,0),(0x1401a8,0)] $ \(offset, value) ->
+    case U.parseContainer (patchMediaWord (fileAt offset) value compactBytes) of
+      Left _ -> expectTrue checked "malformed compact metadata refusal" True
+      Right _ -> H.failH "malformed compact metadata was accepted"
+  let expandedParts = (U.parsedParts compact)
+        {U.partTableTail = patchMediaWord (0x140198 - U.tableEndOffset U.RecorderCompact) 0x26b5e0
+          (U.partTableTail (U.parsedParts compact))}
+      extraDescriptor = B.concat (map U.putMediaWord [1,0x144a5e0,0x1000,0,0,0x45,0xffffffff])
+      addedParts = (U.parsedParts compact)
+        {U.partTableTail = let { tailBytes = U.partTableTail (U.parsedParts compact);
+                                offset = 0x1401a8 - U.tableEndOffset U.RecorderCompact }
+                          in B.take offset tailBytes <> extraDescriptor <> B.drop (offset + 28) tailBytes}
+  forM_ [(expandedParts,[(0x1100000,0xac5a0),(0x11c0000,0x1cca0),(0x11e0000,0x26b5e0)]),
+         (addedParts,[(0x1100000,0xac5a0),(0x11c0000,0x1cca0),(0x11e0000,0x26a5e0),(0x144a5e0,0x1000)])] $ \(supplied, extents) -> do
+    emitted <- either H.failH pure (U.rebuildContainer compact supplied)
+    reread <- expectAccepted checked "compact recognized extent variant" emitted
+    expectTrue checked "compact recognized extents" (U.plainExtents (U.parsedParts reread) == extents)
+    roundtrip <- either H.failH pure (U.rebuildContainer reread (U.parsedParts reread))
+    expectTrue checked "compact variant byte-exact roundtrip" (roundtrip == emitted)
   -- The image-2 rebuild: the extent the stored words describe takes any
   -- same-length image, and the emitted container is checked against the words
   -- read back from the assembly.
@@ -587,7 +745,7 @@ run = do
   expectRejected checked "auxiliary 1 pair width" "multiple of 4" (patchWord 0x248 (U.word32At fixtureBytes 0x248 + 1) fixtureBytes)
   -- The id-2 extent the stored words describe must lie in the body, clear of
   -- the image-5 record and the trailer.
-  let entry2Offset = U.stagingLength + U.segmentTableOffset + U.segmentEntryBytes * 2
+  let entry2Offset = U.stagingLength + U.segmentTableOffset (U.partTableLayout parts) + U.segmentEntryBytes * 2
       entry2Flash = entry2Offset + 0x14
       entry2Size = entry2Offset + 0x8
       patchMediaWordFile offset value bytes = B.take offset bytes <> U.putMediaWord value <> B.drop (offset + 4) bytes
@@ -734,6 +892,7 @@ run = do
   case U.extractPlain unalignedLength of
     Left message -> expectTrue checked "plain unaligned length" ("not 0x20000-aligned" `isInfixOf` message)
     Right _ -> H.failH "an unaligned plain flash length was accepted"
+  windowAdmissionCases checked parsed fixtureBytes compact compactBytes
   total <- readIORef checked
   putStrLn (show total ++ " update-container contract checks passed")
 

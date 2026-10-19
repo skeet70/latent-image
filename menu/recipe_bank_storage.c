@@ -22,7 +22,7 @@
  * path and by the C-copy routine's explicit write, and a remembered payload
  * preserves those bits.
  *
- * Recall is the stock apply and recompute path, not a packed-byte poke: a
+ * Recall is the stock apply and recompute path: a
  * stored code that the property's conversion table carries resolves to its row
  * through the same table walk the menu's current-row resolver uses, and the
  * stock commit dispatcher 0x00d4fc74 then runs that property's own arm, its
@@ -30,29 +30,31 @@
  * pipeline notifications 0x0063c51c/0x00641438) and the shared change notify.
  * A field whose code no row names, the halfwords included, is written through
  * the stock write entry 0x0061c91c, the entry every commit arm uses for its
- * own field. One pass then reads every field back through the stock current-
- * value reader and re-applies any field another arm rewrote (image quality's
- * arm writes 0x1d, bracketing's writes 0x1b1); a field that still does not
- * read back its stored code answers RB_APPLY_REFUSED and the caller must not
- * trust that field.
+ * own field. A second pass re-applies any field another arm rewrote (image
+ * quality's arm writes 0x1d, bracketing's writes 0x1b1), and one assert pass
+ * then reads every field back through the stock current-value reader; a field
+ * that does not hold its stored code answers RB_APPLY_REFUSED and the caller
+ * must not trust that field.
  *
- * File requests go through the media-task base functions with wait 1 and
- * variant 0, which block until the media task has called the request's
- * callback, and the callback's status and handle or count are the operation's
- * results. Requests are serialized: one is completed before the next is
- * posted. Every request carries the media epoch sampled before it, and a
- * destructive open, the write-back and the publication are each bound to it:
- * a moved epoch refuses the request before dispatch and, after a completed
- * callback, drops the handle into the deferred list and reports
- * RB_MEDIA_CHANGED without publishing. Nothing is released in the caller
- * thread: the close worker's chain (0x711768 -> 0x71f1d4 -> 0x71eff4) is the
- * only release, an un-released handle is deferred and completed by a
- * re-dispatched close inside the media queue, and the tag allocation table
- * decides ownership. A zero dispatch tag does not prove that no object was
- * opened: a nonzero callback handle is deferred on that path too, and only a
- * zero tag with no handle leaves no closable identity to act on.
+ * ISO AUTO (0x141 code 0x1b) is the state the stock ISO list leaves: the
+ * mode's auto flag (table 0x007a0018) at 0 and the mode's ISO property (table
+ * 0x007a13c8: 0x141 in modes 0x21-0x25, 0x157 in mode 0) at the code of the
+ * step FUN_00643e58 takes from the mode's AUTO maximum (table 0x007a09fc),
+ * never 0x1b. The commit of row 0x1b writes both; it runs between the apply
+ * pass and the re-apply pass, both of which skip 0x141 and the flag, so the
+ * payload's flag bit is never applied, and the payload's AUTO maximum is
+ * applied again right before it. A mode without an auto flag or ISO property
+ * refuses the recall before any field is applied.
+ *
+ * Open and write producer shims copy the accepted identity into their queued
+ * payloads. The destructive filesystem calls are guarded in the media worker,
+ * which also executes the attach and detach handlers. Stale requests complete
+ * without opening, writing or flushing a replacement filesystem context.
+ * Post-completion checks prevent publishing across a media transition.
+ * Close ownership is released in the media task through the stock tag helpers.
  */
 #include <stdint.h>
+#include <stdbool.h>
 
 #include "recipe_bank_ui.h"
 
@@ -75,6 +77,14 @@
 #define RB_TABLE_PTRS 0x0081b09cu /* + 4*property -> conversion table pointer */
 #define RB_MODE_CLASS 0x00951564u /* == 3 while the dial is at C */
 #define RB_DEFAULTS_ROW 0x007cb804u
+#define RB_MODE_CELL 0x00956838u      /* the shooting mode index */
+#define RB_AUTO_FLAGS 0x007a0018u     /* + 4*mode -> auto-ISO flag property, 0 none */
+#define RB_AUTO_MAXIMA 0x007a09fcu    /* + 4*mode -> AUTO-maximum property, 0 none */
+#define RB_ISO_TARGETS 0x007a13c8u    /* + 4*mode -> property FUN_00644848 writes, 0 none */
+#define RB_AUTO_FLAG_READ 0x00643d94u /* (mode) -> auto flag, 1 without one */
+#define RB_ISO_STEP 0x009568b4u       /* the step FUN_00644848 converts into 0x141 */
+#define RB_ISO_PROP 0x141u
+#define RB_ISO_AUTO 0x1bu
 
 #define RB_HEADER 32u
 #define RB_PAYLOAD 0x28u
@@ -87,6 +97,18 @@
 
 #define RB_FILE_A 0u
 #define RB_FILE_B 1u
+
+
+RbMediaIdentity rb_media_sample(void)
+{
+  RbMediaIdentity identity = {rb_media_epoch()};
+  return identity;
+}
+
+bool rb_media_matches(RbMediaIdentity identity)
+{
+  return rb_media_epoch() == identity.epoch;
+}
 
 struct rb_field {
   uint16_t prop;
@@ -109,6 +131,7 @@ static uint8_t rb_path[2][16];
 static volatile uint32_t rb_io_status;
 static volatile uint32_t rb_io_value;
 static volatile uint32_t rb_io_done;
+static volatile RbMediaIdentity rb_request_identity;
 static uint32_t rb_loaded;
 static uint32_t rb_current_gen;
 static uint32_t rb_load_outcome = RB_NO_BANK;
@@ -148,6 +171,148 @@ static void rb_io_cb(uint32_t status, uint32_t value)
   rb_io_done = 1u;
 }
 
+typedef void (*rb_callback)(uint32_t, uint32_t);
+
+struct rb_media_message {
+  uint16_t id;
+  uint8_t source;
+  uint8_t destination;
+  uint32_t length;
+  void *payload;
+};
+
+/* The accepted identity occupies the recipe pathname's unused tail word. */
+struct rb_open_request {
+  rb_callback callback;
+  uint8_t path[44];
+  RbMediaIdentity identity;
+  uint32_t saved_tag;
+  uint32_t mode;
+  uint32_t tag;
+  uint32_t completion[3];
+  uint32_t wait;
+};
+
+struct rb_write_request {
+  rb_callback callback;
+  uint32_t handle;
+  uint32_t length;
+  const uint8_t *source;
+  uint32_t completion[3];
+  RbMediaIdentity identity;
+};
+
+struct rb_close_request {
+  rb_callback callback;
+  uint32_t handle;
+  uint32_t mode;
+  uint8_t path[16];
+  RbMediaIdentity identity;
+  uint32_t completion[2];
+};
+
+_Static_assert(sizeof(struct rb_media_message) == 12u, "media message ABI");
+_Static_assert(sizeof(struct rb_open_request) == 80u, "open request ABI");
+_Static_assert(sizeof(struct rb_write_request) == 32u, "write request ABI");
+_Static_assert(sizeof(struct rb_close_request) == 40u, "close request ABI");
+
+RbMediaIdentity rb_io_request_identity(void)
+{
+  RbMediaIdentity identity = {rb_request_identity.epoch};
+  return identity;
+}
+
+bool rb_media_worker_allows(rb_callback callback, RbMediaIdentity identity)
+{
+  return callback != rb_io_cb || rb_media_matches(identity);
+}
+
+/* The producer frames reserve these payload spans through the stock post call. */
+uint32_t rb_media_request_post(struct rb_media_message *message)
+{
+  uint32_t (*post)(struct rb_media_message *) =
+      (uint32_t (*)(struct rb_media_message *))0x0071fde4u;
+  if (message->id == 0x2c17u && message->length == 80u) {
+    struct rb_open_request *request = message->payload;
+    if (request->callback == rb_io_cb) {
+      request->identity = rb_io_request_identity();
+    }
+  } else if (message->id == 0x2c19u && message->length == 28u) {
+    struct rb_write_request *request = message->payload;
+    if (request->callback == rb_io_cb) {
+      request->identity = rb_io_request_identity();
+      message->length = sizeof(*request);
+    }
+  } else if (message->id == 0x2c1au && message->length == 40u) {
+    struct rb_close_request *request = message->payload;
+    if (request->callback == rb_io_cb) {
+      request->identity = rb_io_request_identity();
+    }
+  }
+  return post(message);
+}
+
+extern uint32_t rb_call_stock_media_open(struct rb_media_message *message);
+extern uint32_t rb_call_stock_media_write(struct rb_media_message *message);
+extern uint32_t rb_call_stock_media_close(struct rb_media_message *message);
+
+static void rb_media_complete(rb_callback callback, uint32_t *completion,
+                               bool has_value)
+{
+  void (*signal)(void) = (void (*)(void))0x0071c634u;
+  callback(2u, 0u);
+  if (completion[0] != 0u) {
+    if (completion[1] != 0u) {
+      *(volatile uint32_t *)(uintptr_t)completion[1] = 2u;
+    }
+    if (has_value && completion[2] != 0u) {
+      *(volatile uint32_t *)(uintptr_t)completion[2] = 0u;
+    }
+    signal();
+  }
+}
+
+uint32_t rb_media_guarded_open(struct rb_media_message *message)
+{
+  struct rb_open_request *request = message->payload;
+  void (*release)(uint32_t) = (void (*)(uint32_t))0x0071eff4u;
+  if (request->callback == rb_io_cb &&
+      !rb_media_worker_allows(request->callback, request->identity)) {
+    release(request->tag);
+    request->saved_tag = 0u;
+    rb_media_complete(request->callback, request->completion, true);
+    return 2u;
+  }
+  return rb_call_stock_media_open(message);
+}
+
+uint32_t rb_media_guarded_write(struct rb_media_message *message)
+{
+  struct rb_write_request *request = message->payload;
+  if (request->callback == rb_io_cb &&
+      !rb_media_worker_allows(request->callback, request->identity)) {
+    request->length = 0u;
+    rb_media_complete(request->callback, request->completion, true);
+    return 2u;
+  }
+  return rb_call_stock_media_write(message);
+}
+
+uint32_t rb_media_guarded_close(struct rb_media_message *message)
+{
+  struct rb_close_request *request = message->payload;
+  void (*release)(uint32_t) = (void (*)(uint32_t))0x0071eff4u;
+  void (*delete_mapping)(uint32_t) = (void (*)(uint32_t))0x0071eaacu;
+  if (request->callback == rb_io_cb &&
+      !rb_media_worker_allows(request->callback, request->identity)) {
+    release(request->handle);
+    delete_mapping(request->handle);
+    rb_media_complete(request->callback, request->completion, false);
+    return 2u;
+  }
+  return rb_call_stock_media_close(message);
+}
+
 /* the callback status is 0x71d450's completion code: 3 prepare (raw 0x20),
  * 0xe commit (raw 0xd), 8 the raw 0x24 class, 6 missing file (raw 7/8) */
 static uint32_t rb_map_completion(uint32_t code)
@@ -184,30 +349,34 @@ static uint32_t rb_tag_owned(uint32_t tag)
   return 0u;
 }
 
-static uint32_t rb_close_quiet(uint32_t handle);
+static uint32_t rb_close_quiet(uint32_t handle, RbMediaIdentity identity);
 
 /* a close that leaves its tag allocated released nothing, and the low-level
  * release would race the media worker's shared open-file counter (0x703f94's
  * unprotected update at 0x93a914), so the release is deferred until a
  * re-dispatched close completes inside the media queue. The list is sized to
  * the stock tag pool (16, 0x71ef18), so every deferred handle is tracked. */
-static uint32_t rb_pending_close[16];
+struct rb_deferred_close {
+  uint32_t handle;
+  RbMediaIdentity identity;
+};
+static struct rb_deferred_close rb_pending_close[16];
 static uint32_t rb_pending_count;
 static uint32_t rb_close_deferred_flag;
 
-static void rb_defer_close(uint32_t handle)
+static void rb_defer_close(uint32_t handle, RbMediaIdentity identity)
 {
   uint32_t i;
   if (handle == 0u) {
     return;
   }
   for (i = 0u; i < rb_pending_count; i++) {
-    if (rb_pending_close[i] == handle) {
+    if (rb_pending_close[i].handle == handle) {
       return;
     }
   }
   if (rb_pending_count < 16u) {
-    rb_pending_close[rb_pending_count] = handle;
+    rb_pending_close[rb_pending_count] = (struct rb_deferred_close){handle, identity};
     rb_pending_count++;
   }
 }
@@ -217,11 +386,11 @@ static void rb_flush_pending(void)
   uint32_t kept = 0u;
   uint32_t i;
   for (i = 0u; i < rb_pending_count; i++) {
-    if (rb_tag_owned(rb_pending_close[i]) == 0u) {
+    if (rb_tag_owned(rb_pending_close[i].handle) == 0u) {
       /* a late completion released it after our await gave up */
       continue;
     }
-    (void)rb_close_quiet(rb_pending_close[i]);
+    (void)rb_close_quiet(rb_pending_close[i].handle, rb_pending_close[i].identity);
     if (rb_close_deferred_flag != 0u) {
       rb_pending_close[kept] = rb_pending_close[i];
       kept++;
@@ -283,7 +452,7 @@ static uint32_t rb_build_path(uint32_t which)
  * shape, including the state-1 no-op, leaves it); that release is deferred to
  * a re-dispatched close. A close that never completed leaves the tag owned
  * the same way. */
-static uint32_t rb_close_quiet(uint32_t handle)
+static uint32_t rb_close_quiet(uint32_t handle, RbMediaIdentity identity)
 {
   uint32_t (*close_fn)(void *, uint32_t, uint32_t, uint32_t, uint32_t,
                        uint32_t) =
@@ -296,6 +465,7 @@ static uint32_t rb_close_quiet(uint32_t handle)
     return RB_TASK_REFUSED;
   }
   rb_io_begin();
+  rb_request_identity = identity;
   (void)close_fn((void *)rb_io_cb, handle, 0u, 0u, 1u, 0u);
   if (rb_await() != RB_OK) {
     rb_close_deferred_flag = 1u;
@@ -305,15 +475,14 @@ static uint32_t rb_close_quiet(uint32_t handle)
   if (rb_tag_owned(handle) != 0u) {
     rb_close_deferred_flag = 1u;
   }
+  if (!rb_media_matches(identity)) {
+    return RB_MEDIA_CHANGED;
+  }
   return (mapped == RB_OK && rb_io_status != 0u) ? RB_IO : mapped;
 }
 
-/* Posts one open and binds it to the caller's media identity: a moved epoch
- * refuses before dispatch, and a completion whose epoch moved drops the handle
- * into the deferred list instead of returning it. A zero dispatch tag does not
- * prove that no object was opened, so a nonzero callback handle is deferred on
- * that path as well. */
-static uint32_t rb_open(uint32_t which, uint32_t mode, uint32_t epoch,
+/* A nonzero callback handle is deferred when the completed identity is stale. */
+static uint32_t rb_open(uint32_t which, uint32_t mode, RbMediaIdentity identity,
                         uint32_t *handle_out)
 {
   uint32_t (*open_fn)(void *, const uint8_t *, uint32_t, uint32_t, uint32_t,
@@ -334,20 +503,21 @@ static uint32_t rb_open(uint32_t which, uint32_t mode, uint32_t epoch,
   if (status != RB_OK) {
     return status;
   }
-  if (rb_media_epoch() != epoch) {
+  if (!rb_media_matches(identity)) {
     return RB_MEDIA_CHANGED;
   }
   rb_io_begin();
+  rb_request_identity = identity;
   tag = open_fn((void *)rb_io_cb, rb_path[which], mode, 1u, 1u, 0u);
   if (rb_await() != RB_OK) {
     /* no callback: a dispatched request may still complete late, and without
      * the callback's handle the request has no closable identity here */
     return RB_IO;
   }
-  if (rb_media_epoch() != epoch) {
+  if (!rb_media_matches(identity)) {
     /* the identity moved between the request and its completion */
     if (rb_io_value != 0u) {
-      rb_defer_close(rb_io_value);
+      rb_defer_close(rb_io_value, identity);
     }
     return RB_MEDIA_CHANGED;
   }
@@ -360,7 +530,7 @@ static uint32_t rb_open(uint32_t which, uint32_t mode, uint32_t epoch,
   }
   if (tag == 0u || rb_io_value == 0u) {
     if (rb_io_value != 0u) {
-      rb_defer_close(rb_io_value);
+      rb_defer_close(rb_io_value, identity);
     }
     return RB_IO;
   }
@@ -369,7 +539,7 @@ static uint32_t rb_open(uint32_t which, uint32_t mode, uint32_t epoch,
 }
 
 static uint32_t rb_read_count(uint32_t handle, uint8_t *buf, uint32_t len,
-                              uint32_t *count_out)
+                              uint32_t *count_out, RbMediaIdentity identity)
 {
   uint32_t (*read_fn)(void *, uint32_t, uint32_t, uint8_t *, uint32_t,
                       uint32_t) =
@@ -378,9 +548,16 @@ static uint32_t rb_read_count(uint32_t handle, uint8_t *buf, uint32_t len,
   if (rb_task_ok() == 0u) {
     return RB_TASK_REFUSED;
   }
+  if (!rb_media_matches(identity)) {
+    return RB_MEDIA_CHANGED;
+  }
   rb_io_begin();
   (void)read_fn((void *)rb_io_cb, handle, len, buf, 1u, 0u);
-  if (rb_await() != RB_OK) {
+  bool completed = rb_await() == RB_OK;
+  if (!rb_media_matches(identity)) {
+    return RB_MEDIA_CHANGED;
+  }
+  if (!completed) {
     return RB_IO;
   }
   if (rb_io_status != 0u) {
@@ -391,17 +568,19 @@ static uint32_t rb_read_count(uint32_t handle, uint8_t *buf, uint32_t len,
   return RB_OK;
 }
 
-static uint32_t rb_read(uint32_t handle, uint8_t *buf, uint32_t len)
+static uint32_t rb_read(uint32_t handle, uint8_t *buf, uint32_t len,
+                        RbMediaIdentity identity)
 {
   uint32_t count = 0u;
-  uint32_t status = rb_read_count(handle, buf, len, &count);
+  uint32_t status = rb_read_count(handle, buf, len, &count, identity);
   if (status != RB_OK) {
     return status;
   }
   return (count == len) ? RB_OK : RB_IO;
 }
 
-static uint32_t rb_write(uint32_t handle, const uint8_t *src, uint32_t len)
+static uint32_t rb_write(uint32_t handle, const uint8_t *src, uint32_t len,
+                         RbMediaIdentity identity)
 {
   uint32_t (*write_fn)(void *, uint32_t, uint32_t, const uint8_t *, uint32_t,
                        uint32_t) =
@@ -410,9 +589,17 @@ static uint32_t rb_write(uint32_t handle, const uint8_t *src, uint32_t len)
   if (rb_task_ok() == 0u) {
     return RB_TASK_REFUSED;
   }
+  if (!rb_media_matches(identity)) {
+    return RB_MEDIA_CHANGED;
+  }
   rb_io_begin();
+  rb_request_identity = identity;
   (void)write_fn((void *)rb_io_cb, handle, len, src, 1u, 0u);
-  if (rb_await() != RB_OK) {
+  bool completed = rb_await() == RB_OK;
+  if (!rb_media_matches(identity)) {
+    return RB_MEDIA_CHANGED;
+  }
+  if (!completed) {
     return RB_IO;
   }
   if (rb_io_status != 0u) {
@@ -597,6 +784,24 @@ static uint32_t rb_current(uint32_t prop)
   return current(prop, 0u);
 }
 
+static const struct rb_field *rb_walked_field(uint32_t prop)
+{
+  uint32_t f;
+  for (f = 0u; f < RB_FIELD_COUNT; f++) {
+    if (RB_FIELDS[f].prop == prop) {
+      return &RB_FIELDS[f];
+    }
+  }
+  return 0;
+}
+
+/* the mode's entry of a per-mode property table (RB_AUTO_FLAGS, RB_AUTO_MAXIMA,
+ * RB_ISO_TARGETS), 0 when the mode has none */
+static uint32_t rb_mode_prop(uint32_t table, uint32_t mode)
+{
+  return *(const uint32_t *)(uintptr_t)(table + 4u * mode);
+}
+
 static uint32_t rb_codes_ok(const uint8_t *payload)
 {
   uint32_t f;
@@ -661,7 +866,8 @@ static uint32_t rb_file_valid(const uint8_t *file)
     if (rb_name_ok(rb_name_at((uint8_t *)file, slot)) == 0u) {
       return 0u;
     }
-    if (rb_codes_ok(rb_payload_at((uint8_t *)file, slot)) == 0u) {
+    if ((rb_slot_mask(file) & (uint16_t)(1u << slot)) != 0u &&
+        rb_codes_ok(rb_payload_at((uint8_t *)file, slot)) == 0u) {
       return 0u;
     }
     if (rb_unbound_ok(rb_payload_at((uint8_t *)file, slot)) == 0u) {
@@ -726,26 +932,32 @@ static uint32_t rb_scan_file(uint32_t which, uint32_t epoch, uint8_t *out,
   uint32_t count = 0u;
   uint8_t stat[128];
   *valid_out = 0u;
-  status = rb_open(which, 0u, epoch, &handle);
+  status = rb_open(which, 0u, (RbMediaIdentity){epoch}, &handle);
   if (status != RB_OK) {
     return (status == RB_MISSING) ? RB_OK : status;
   }
   *seen_out = 1u;
-  status = stat_fn(handle, stat);
-  if (status != 0u) {
-    status = (rb_map_completion(status) == RB_OK) ? RB_IO : rb_map_completion(status);
-  } else if (rb_u32(stat + 52) != RB_FILE_BYTES) {
-    /* empty, short or overlong: a malformed candidate */
-    status = RB_INVALID;
+  if (rb_media_epoch() != epoch) {
+    status = RB_MEDIA_CHANGED;
   } else {
-    status = rb_read_count(handle, out, RB_FILE_BYTES, &count);
-    if (status == RB_OK && count != RB_FILE_BYTES) {
+    status = stat_fn(handle, stat);
+    if (rb_media_epoch() != epoch) {
+      status = RB_MEDIA_CHANGED;
+    } else if (status != 0u) {
+      status = (rb_map_completion(status) == RB_OK) ? RB_IO : rb_map_completion(status);
+    } else if (rb_u32(stat + 52) != RB_FILE_BYTES) {
       status = RB_INVALID;
+    } else {
+      status = rb_read_count(handle, out, RB_FILE_BYTES, &count,
+                             (RbMediaIdentity){epoch});
+      if (status == RB_OK && count != RB_FILE_BYTES) {
+        status = RB_INVALID;
+      }
     }
   }
-  close_status = rb_close_quiet(handle);
+  close_status = rb_close_quiet(handle, (RbMediaIdentity){epoch});
   if (rb_close_deferred_flag != 0u) {
-    rb_defer_close(handle);
+    rb_defer_close(handle, (RbMediaIdentity){epoch});
   }
   if (close_status != RB_OK) {
     return close_status;
@@ -768,16 +980,20 @@ static uint32_t rb_scan_file(uint32_t which, uint32_t epoch, uint8_t *out,
  * posted only while the identity holds. The winner is computed from this scan
  * alone. RB_NO_BANK (no file at all) and RB_INVALID (bytes seen, no valid
  * file) both publish the empty bank and are benign for save and reset. */
-uint32_t rb_load(void)
+static uint32_t rb_load_bound(RbMediaIdentity identity)
 {
   uint32_t gen_a = 0u;
   uint32_t gen_b = 0u;
   uint32_t a_valid = 0u;
   uint32_t b_valid = 0u;
   uint32_t seen = 0u;
-  uint32_t epoch = rb_media_epoch();
+  uint32_t epoch = identity.epoch;
   uint32_t status;
 
+  if (!rb_media_matches(identity)) {
+    rb_load_outcome = RB_MEDIA_CHANGED;
+    return RB_MEDIA_CHANGED;
+  }
   status = rb_scan_file(RB_FILE_A, epoch, rb_staging, &gen_a, &a_valid, &seen);
   if (status != RB_OK) {
     rb_load_outcome = status;
@@ -813,14 +1029,14 @@ uint32_t rb_load(void)
   return rb_load_outcome;
 }
 
-/* two-generation write of rb_staging, whose header and blob the caller has
- * filled. rb_resident is untouched until the read back is byte-equal to the
- * image we wrote; there are no retries. The scan, the destructive open, the
- * write, the verify read and the publication are all bound to the epoch
- * sampled here: a request posted after a move refuses before dispatch and a
- * completed request whose epoch moved drops its handle and reports
- * RB_MEDIA_CHANGED without publishing. */
-static uint32_t rb_write_back(uint32_t generation, uint16_t mask)
+uint32_t rb_load(void)
+{
+  return rb_load_bound(rb_media_sample());
+}
+
+/* The nonwinning generation is read back before resident publication. */
+static uint32_t rb_write_back(uint32_t generation, uint16_t mask,
+                              RbMediaIdentity identity)
 {
   uint32_t gen_a = 0u;
   uint32_t gen_b = 0u;
@@ -832,35 +1048,36 @@ static uint32_t rb_write_back(uint32_t generation, uint16_t mask)
   uint32_t handle = 0u;
   uint32_t close_status;
   uint32_t status;
-  uint32_t epoch;
 
   if (generation == 0u) {
     return RB_GEN_EXHAUST;
   }
   rb_header_fill(rb_staging, generation, mask);
-  epoch = rb_media_epoch();
-  status = rb_scan_file(RB_FILE_A, epoch, rb_verify, &gen_a, &a_valid, &seen);
+  if (!rb_media_matches(identity)) {
+    return RB_MEDIA_CHANGED;
+  }
+  status = rb_scan_file(RB_FILE_A, identity.epoch, rb_verify, &gen_a, &a_valid, &seen);
   if (status != RB_OK) {
     return status;
   }
-  status = rb_scan_file(RB_FILE_B, epoch, rb_verify, &gen_b, &b_valid, &seen);
+  status = rb_scan_file(RB_FILE_B, identity.epoch, rb_verify, &gen_b, &b_valid, &seen);
   if (status != RB_OK) {
     return status;
   }
-  if (rb_media_epoch() != epoch) {
+  if (!rb_media_matches(identity)) {
     return RB_MEDIA_CHANGED;
   }
   current = rb_pick_current(gen_a, a_valid, gen_b, b_valid);
   target = (current == RB_FILE_A) ? RB_FILE_B : RB_FILE_A;
 
-  status = rb_open(target, 1u, epoch, &handle);
+  status = rb_open(target, 1u, identity, &handle);
   if (status != RB_OK) {
     return status;
   }
-  status = rb_write(handle, rb_staging, RB_FILE_BYTES);
-  close_status = rb_close_quiet(handle);
+  status = rb_write(handle, rb_staging, RB_FILE_BYTES, identity);
+  close_status = rb_close_quiet(handle, identity);
   if (rb_close_deferred_flag != 0u) {
-    rb_defer_close(handle);
+    rb_defer_close(handle, identity);
   }
   if (close_status != RB_OK && status == RB_OK) {
     status = RB_FULL;
@@ -868,18 +1085,18 @@ static uint32_t rb_write_back(uint32_t generation, uint16_t mask)
   if (status != RB_OK) {
     return status;
   }
-  if (rb_media_epoch() != epoch) {
+  if (!rb_media_matches(identity)) {
     return RB_MEDIA_CHANGED;
   }
 
-  status = rb_open(target, 0u, epoch, &handle);
+  status = rb_open(target, 0u, identity, &handle);
   if (status != RB_OK) {
     return status;
   }
-  status = rb_read(handle, rb_verify, RB_FILE_BYTES);
-  close_status = rb_close_quiet(handle);
+  status = rb_read(handle, rb_verify, RB_FILE_BYTES, identity);
+  close_status = rb_close_quiet(handle, identity);
   if (rb_close_deferred_flag != 0u) {
-    rb_defer_close(handle);
+    rb_defer_close(handle, identity);
   }
   if (close_status != RB_OK && status == RB_OK) {
     status = RB_IO;
@@ -890,7 +1107,7 @@ static uint32_t rb_write_back(uint32_t generation, uint16_t mask)
   if (rb_bytes_equal(rb_verify, rb_staging, RB_FILE_BYTES) == 0u) {
     return RB_FULL;
   }
-  if (rb_media_epoch() != epoch) {
+  if (!rb_media_matches(identity)) {
     return RB_MEDIA_CHANGED;
   }
   rb_memcpy(rb_resident, rb_staging, RB_FILE_BYTES);
@@ -902,6 +1119,7 @@ static uint32_t rb_write_back(uint32_t generation, uint16_t mask)
 /* record work ------------------------------------------------------- */
 
 static uint8_t rb_stage_name[RB_NAME];
+static RbMediaIdentity rb_stage_identity;
 
 /* the snapshot walk: the real getter reads every bound field from the source
  * slot (the FUN_006439e0 result, 1 for the ordinary block away from C) into the
@@ -923,13 +1141,14 @@ static void rb_stage_image(void)
   rb_memcpy(rb_staging, rb_resident, RB_FILE_BYTES);
 }
 
-uint32_t rb_readback(uint32_t slot, uint8_t *name_out, uint8_t *payload_out)
+uint32_t rb_readback(uint32_t slot, uint8_t *name_out, uint8_t *payload_out,
+                     RbMediaIdentity identity)
 {
   uint32_t status;
   if (slot >= RB_BANK_SLOTS) {
     return RB_RANGE;
   }
-  status = rb_load();
+  status = rb_load_bound(identity);
   if (status != RB_OK && status != RB_NO_BANK && status != RB_INVALID) {
     return status;
   }
@@ -938,17 +1157,14 @@ uint32_t rb_readback(uint32_t slot, uint8_t *name_out, uint8_t *payload_out)
   return RB_OK;
 }
 
-uint32_t rb_save_current(uint32_t slot, const uint8_t *name12)
+uint32_t rb_save_current(uint32_t slot, RbMediaIdentity identity)
 {
   uint32_t (*live)(void) = (uint32_t (*)(void))RB_LIVE_SLOT;
   uint32_t status;
   if (slot >= RB_BANK_SLOTS) {
     return RB_RANGE;
   }
-  if (rb_name_ok(name12) == 0u) {
-    return RB_RANGE;
-  }
-  status = rb_load();
+  status = rb_load_bound(identity);
   if (status != RB_OK && status != RB_NO_BANK && status != RB_INVALID) {
     return status;
   }
@@ -956,19 +1172,18 @@ uint32_t rb_save_current(uint32_t slot, const uint8_t *name12)
   rb_memset(rb_payload_at(rb_staging, slot), 0u, RB_PAYLOAD);
   rb_walk_payload_from(live(), rb_payload_at(rb_staging, slot));
   rb_payload_normalize(rb_payload_at(rb_staging, slot));
-  rb_memcpy(rb_name_at(rb_staging, slot), name12, RB_NAME);
   return rb_write_back(rb_current_gen + 1u,
                        (uint16_t)(rb_slot_mask(rb_resident) |
-                                  (uint16_t)(1u << slot)));
+                                  (uint16_t)(1u << slot)), identity);
 }
 
-uint32_t rb_reset(uint32_t slot)
+uint32_t rb_reset(uint32_t slot, RbMediaIdentity identity)
 {
   uint32_t status;
   if (slot >= RB_BANK_SLOTS) {
     return RB_RANGE;
   }
-  status = rb_load();
+  status = rb_load_bound(identity);
   if (status != RB_OK && status != RB_NO_BANK && status != RB_INVALID) {
     return status;
   }
@@ -977,13 +1192,61 @@ uint32_t rb_reset(uint32_t slot)
   rb_memset(rb_name_at(rb_staging, slot), 0u, RB_NAME);
   return rb_write_back(rb_current_gen + 1u,
                        (uint16_t)(rb_slot_mask(rb_resident) &
-                                  (uint16_t) ~(1u << slot)));
+                                  (uint16_t) ~(1u << slot)), identity);
 }
 
-uint32_t rb_recall(uint32_t slot)
+/* The last recall that did not return RB_OK, for a host RAM read after the
+ * session. `prop` is the first field the assert pass refused, 0x141 when ISO
+ * AUTO is refused in a mode without an auto flag before any field is applied,
+ * and 0 for the other refusals before the apply pass; `refused_fields` counts
+ * every refused field. */
+typedef struct {
+  uint32_t magic;
+  uint32_t count;
+  uint32_t status;
+  uint32_t slot;
+  uint32_t prop;
+  uint32_t stored;
+  uint32_t read_back;
+  uint32_t mode;
+  uint32_t refused_fields;
+} RbRecallTrace;
+
+#define RB_RECALL_TRACE_MAGIC 0x52424352u /* "RCBR" */
+
+__attribute__((used)) volatile RbRecallTrace rb_recall_trace = {
+  RB_RECALL_TRACE_MAGIC, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u
+};
+
+static void rb_refuse(RbRecallTrace *trace, uint32_t prop, uint32_t stored,
+                      uint32_t read_back)
 {
+  if (trace->refused_fields == 0u) {
+    trace->prop = prop;
+    trace->stored = stored;
+    trace->read_back = read_back;
+  }
+  trace->refused_fields++;
+}
+
+/* the fields an ISO AUTO recall leaves to the final commit of row 0x1b:
+ * 0x141 and the mode's auto flag, which that commit writes to 0 */
+static uint32_t rb_iso_auto_owns(const struct rb_field *f, uint32_t auto_flag)
+{
+  return (auto_flag != 0u && (f->prop == RB_ISO_PROP || f->prop == auto_flag))
+             ? 1u
+             : 0u;
+}
+
+static uint32_t rb_recall_run(uint32_t slot, RbMediaIdentity identity,
+                              RbRecallTrace *trace)
+{
+  uint32_t (*auto_read)(uint32_t) = (uint32_t (*)(uint32_t))RB_AUTO_FLAG_READ;
   const uint8_t *payload;
-  uint32_t refused = 0u;
+  const struct rb_field *iso = rb_walked_field(RB_ISO_PROP);
+  uint32_t mode = *(volatile uint32_t *)(uintptr_t)RB_MODE_CELL;
+  uint32_t auto_flag = 0u;
+  uint32_t iso_target = 0u;
   uint32_t f;
   uint32_t status;
   if (slot >= RB_BANK_SLOTS) {
@@ -994,9 +1257,12 @@ uint32_t rb_recall(uint32_t slot)
   if (*(volatile uint32_t *)(uintptr_t)RB_MODE_CLASS == 3u) {
     return RB_AT_C;
   }
-  status = rb_load();
+  status = rb_load_bound(identity);
   if (status != RB_OK) {
     return (status == RB_NO_BANK) ? RB_UNSET : status;
+  }
+  if (*(volatile uint32_t *)(uintptr_t)RB_MODE_CLASS == 3u) {
+    return RB_AT_C;
   }
   if ((rb_slot_mask(rb_resident) & (uint16_t)(1u << slot)) == 0u) {
     return RB_UNSET;
@@ -1006,39 +1272,104 @@ uint32_t rb_recall(uint32_t slot)
     return RB_INVALID;
   }
   payload = rb_payload_at(rb_resident, slot);
+  if (rb_extract(payload, iso) == RB_ISO_AUTO) {
+    auto_flag = rb_mode_prop(RB_AUTO_FLAGS, mode);
+    iso_target = rb_mode_prop(RB_ISO_TARGETS, mode);
+    if (auto_flag == 0u || iso_target == 0u) {
+      rb_refuse(trace, RB_ISO_PROP, RB_ISO_AUTO, rb_current(RB_ISO_PROP));
+      return RB_APPLY_REFUSED;
+    }
+  }
   /* the stock apply and recompute pass: every walked field goes through its
    * own stock commit, so the processing and menu consumers the menu commits
    * run are run here too */
   for (f = 0u; f < RB_FIELD_COUNT; f++) {
-    rb_apply_field(&RB_FIELDS[f], rb_extract(payload, &RB_FIELDS[f]));
+    if (rb_iso_auto_owns(&RB_FIELDS[f], auto_flag) == 0u) {
+      rb_apply_field(&RB_FIELDS[f], rb_extract(payload, &RB_FIELDS[f]));
+    }
   }
-  /* one assert pass: the stored code is the recall's contract, and another
-   * field's arm writes some fields (image quality's arm writes 0x1d,
-   * bracketing's writes 0x1b1), so a field that no longer reads back its code
-   * is applied once more through the same path */
+  if (auto_flag != 0u) {
+    /* the 0x14f commit writes the S/M AUTO maximum 0x152 (FUN_00643e9c), so
+     * the mode's maximum is applied again before FUN_00643e58 reads it */
+    const struct rb_field *maximum =
+        rb_walked_field(rb_mode_prop(RB_AUTO_MAXIMA, mode));
+    if (maximum != 0) {
+      rb_apply_field(maximum, rb_extract(payload, maximum));
+    }
+    rb_apply_field(iso, RB_ISO_AUTO);
+  }
+  /* another field's arm writes some fields (image quality's arm writes 0x1d,
+   * bracketing's writes 0x1b1, the ISO arms' FUN_00641438(2, 0) writes 0x161),
+   * so a field that no longer reads back its code is applied once more through
+   * the same path */
   for (f = 0u; f < RB_FIELD_COUNT; f++) {
     uint32_t code = rb_extract(payload, &RB_FIELDS[f]);
-    if (rb_current(RB_FIELDS[f].prop) == code) {
-      continue;
-    }
-    rb_apply_field(&RB_FIELDS[f], code);
-    if (rb_current(RB_FIELDS[f].prop) != code) {
-      refused = 1u;
+    if (rb_iso_auto_owns(&RB_FIELDS[f], auto_flag) == 0u &&
+        rb_current(RB_FIELDS[f].prop) != code) {
+      rb_apply_field(&RB_FIELDS[f], code);
     }
   }
-  return (refused != 0u) ? RB_APPLY_REFUSED : RB_OK;
+  /* the assert pass: the stored code is the recall's contract; ISO AUTO holds
+   * when the mode's auto flag reads 0 and the mode's ISO property holds the
+   * code of the ISO step */
+  for (f = 0u; f < RB_FIELD_COUNT; f++) {
+    uint32_t prop = RB_FIELDS[f].prop;
+    uint32_t code = rb_extract(payload, &RB_FIELDS[f]);
+    uint32_t read_back;
+    if (auto_flag != 0u && prop == auto_flag) {
+      continue;
+    }
+    if (auto_flag != 0u && prop == RB_ISO_PROP) {
+      read_back = rb_current(iso_target);
+      if (auto_read(mode) == 0u &&
+          read_back == rb_convert(RB_ISO_PROP,
+                                  *(volatile uint32_t *)(uintptr_t)RB_ISO_STEP,
+                                  3u, 1u)) {
+        continue;
+      }
+    } else {
+      read_back = rb_current(prop);
+      if (read_back == code) {
+        continue;
+      }
+    }
+    rb_refuse(trace, prop, code, read_back);
+  }
+  return (trace->refused_fields != 0u) ? RB_APPLY_REFUSED : RB_OK;
+}
+
+uint32_t rb_recall(uint32_t slot, RbMediaIdentity identity)
+{
+  RbRecallTrace trace;
+  uint32_t status;
+  trace.prop = 0u;
+  trace.stored = 0u;
+  trace.read_back = 0u;
+  trace.refused_fields = 0u;
+  status = rb_recall_run(slot, identity, &trace);
+  if (status != RB_OK) {
+    rb_recall_trace.status = status;
+    rb_recall_trace.slot = slot;
+    rb_recall_trace.prop = trace.prop;
+    rb_recall_trace.stored = trace.stored;
+    rb_recall_trace.read_back = trace.read_back;
+    rb_recall_trace.mode = *(volatile uint32_t *)(uintptr_t)RB_MODE_CELL;
+    rb_recall_trace.refused_fields = trace.refused_fields;
+    rb_recall_trace.count = rb_recall_trace.count + 1u;
+  }
+  return status;
 }
 
 /* Staged edit works over this kernel's own payload buffer and touches no
  * stock record or live setting: a staged field change is a validated bit
  * placement, and only commit or recall writes anywhere. */
-uint32_t rb_stage_load(uint32_t slot)
+uint32_t rb_stage_load(uint32_t slot, RbMediaIdentity identity)
 {
   uint32_t status;
   if (slot >= RB_BANK_SLOTS) {
     return RB_RANGE;
   }
-  status = rb_load();
+  status = rb_load_bound(identity);
   if (status != RB_OK && status != RB_NO_BANK && status != RB_INVALID) {
     return status;
   }
@@ -1051,33 +1382,45 @@ uint32_t rb_stage_load(uint32_t slot)
     rb_memset(rb_stage_name, 0u, RB_NAME);
   }
   rb_stage_slot = slot;
+  rb_stage_identity = identity;
   return RB_OK;
+}
+
+/* the session's fields: the nine edit fields and the ISO auto flag */
+static inline __attribute__((always_inline)) const struct rb_field *
+rb_stage_field_of(uint32_t prop)
+{
+  uint32_t f;
+  for (f = 0u; f < RB_EDIT_FIELD_COUNT; f++) {
+    if (RB_EDIT_FIELDS[f].prop == prop) {
+      return &RB_EDIT_FIELDS[f];
+    }
+  }
+  return (prop == RB_ISO_AUTO_FLAG) ? rb_walked_field(prop) : 0;
 }
 
 uint32_t rb_stage_field(uint32_t prop, uint32_t code)
 {
-  uint32_t f;
-  for (f = 0u; f < RB_EDIT_FIELD_COUNT; f++) {
-    if (RB_EDIT_FIELDS[f].prop == prop) {
-      if (rb_code_ok(prop, code) == 0u) {
-        return RB_RANGE;
-      }
-      rb_place(rb_stage_payload, &RB_EDIT_FIELDS[f], code);
-      return RB_OK;
-    }
+  const struct rb_field *f = rb_stage_field_of(prop);
+  uint32_t staged;
+  if (f == 0 || rb_code_ok(prop, code) == 0u) {
+    return RB_RANGE;
   }
-  return RB_RANGE;
+  staged = rb_extract(rb_stage_payload, f);
+  rb_place(rb_stage_payload, f, code);
+  /* a new ISO code takes the flag its commit arm writes, (row != 0x1b); a
+   * snapshot taken in AUTO holds a numeric code with the flag at 0 */
+  if (prop == RB_ISO_PROP && code != staged) {
+    rb_place(rb_stage_payload, rb_stage_field_of(RB_ISO_AUTO_FLAG),
+             (code != RB_ISO_AUTO) ? 1u : 0u);
+  }
+  return RB_OK;
 }
 
 uint32_t rb_stage_read(uint32_t prop)
 {
-  uint32_t f;
-  for (f = 0u; f < RB_EDIT_FIELD_COUNT; f++) {
-    if (RB_EDIT_FIELDS[f].prop == prop) {
-      return rb_extract(rb_stage_payload, &RB_EDIT_FIELDS[f]);
-    }
-  }
-  return 0xffffffffu;
+  const struct rb_field *f = rb_stage_field_of(prop);
+  return (f == 0) ? 0xffffffffu : rb_extract(rb_stage_payload, f);
 }
 
 void rb_stage_name_set(const uint8_t *name12)
@@ -1088,37 +1431,51 @@ void rb_stage_name_set(const uint8_t *name12)
 }
 
 /* A name-only generation write; a staged session for this same slot follows
- * the rename in its name field once the write has committed. */
-uint32_t rb_name_commit(uint32_t slot, const uint8_t *name26)
+ * the rename in its name field once the write has committed. An unset slot
+ * takes the stock per-slot defaults row under the name and becomes set, as the
+ * first changed Edit OK sets it; an empty name leaves an unset slot unwritten. */
+uint32_t rb_name_commit(uint32_t slot, const uint8_t *name26,
+                        RbMediaIdentity identity)
 {
   uint32_t status;
   if (slot >= RB_BANK_SLOTS) {
     return RB_RANGE;
   }
+  uint16_t bit = (uint16_t)(1u << slot);
   if (rb_name_ok(name26) == 0u) {
     return RB_RANGE;
   }
-  status = rb_load();
+  status = rb_load_bound(identity);
   if (status != RB_OK && status != RB_NO_BANK && status != RB_INVALID) {
     return status;
   }
-  if ((rb_slot_mask(rb_resident) & (uint16_t)(1u << slot)) == 0u) {
-    return RB_UNSET;
-  }
   rb_stage_image();
+  if ((rb_slot_mask(rb_resident) & bit) == 0u) {
+    const uint8_t *defaults = (const uint8_t *)RB_DEFAULTS_ROW;
+    if (name26[0] == 0u && name26[1] == 0u) {
+      return RB_OK;
+    }
+    if (rb_codes_ok(defaults) == 0u || rb_unbound_ok(defaults) == 0u) {
+      return RB_INVALID;
+    }
+    rb_memcpy(rb_payload_at(rb_staging, slot), defaults, RB_PAYLOAD);
+  }
   rb_memcpy(rb_name_at(rb_staging, slot), name26, RB_NAME);
-  status = rb_write_back(rb_current_gen + 1u, rb_slot_mask(rb_resident));
-  if (status == RB_OK && rb_stage_slot == slot) {
+  status = rb_write_back(rb_current_gen + 1u,
+                         (uint16_t)(rb_slot_mask(rb_resident) | bit), identity);
+  if (status == RB_OK && rb_stage_slot == slot &&
+      rb_stage_identity.epoch == identity.epoch) {
     rb_memcpy(rb_stage_name, name26, RB_NAME);
   }
   return status;
 }
 
+/* The session stays open after a commit; rb_stage_cancel ends it. */
 uint32_t rb_stage_commit(uint32_t slot, const uint8_t *name12)
 {
   uint32_t status;
   const uint8_t *name = (name12 != 0u) ? name12 : rb_stage_name;
-  if (slot >= RB_BANK_SLOTS) {
+  if (slot >= RB_BANK_SLOTS || rb_stage_slot != slot) {
     return RB_RANGE;
   }
   if (rb_name_ok(name) == 0u) {
@@ -1127,7 +1484,7 @@ uint32_t rb_stage_commit(uint32_t slot, const uint8_t *name12)
   if (rb_codes_ok(rb_stage_payload) == 0u || rb_unbound_ok(rb_stage_payload) == 0u) {
     return RB_INVALID;
   }
-  status = rb_load();
+  status = rb_load_bound(rb_stage_identity);
   if (status != RB_OK && status != RB_NO_BANK && status != RB_INVALID) {
     return status;
   }
@@ -1136,10 +1493,7 @@ uint32_t rb_stage_commit(uint32_t slot, const uint8_t *name12)
   rb_memcpy(rb_name_at(rb_staging, slot), name, RB_NAME);
   status = rb_write_back(rb_current_gen + 1u,
                          (uint16_t)(rb_slot_mask(rb_resident) |
-                                    (uint16_t)(1u << slot)));
-  if (status == RB_OK) {
-    rb_stage_slot = 0xffffffffu;
-  }
+                                    (uint16_t)(1u << slot)), rb_stage_identity);
   return status;
 }
 
@@ -1204,7 +1558,7 @@ uint32_t rb_meta_op_state(enum rb_bank_op op, uint32_t slot, uint32_t reload)
     return RB_OK;
   }
   if (op == RB_BANK_SAVE) {
-    return RB_OK;
+    return rb_current_gen == 0xffffffffu ? RB_GEN_EXHAUST : RB_OK;
   }
   return RB_RANGE;
 }

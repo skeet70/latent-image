@@ -93,17 +93,37 @@ haskell_binary(
 
 haskell_binary(
     name = "xm1-viewer",
-    srcs = ["Xm1Viewer.hs"],
+    srcs = [
+        "Xm1RamPushE2E.hs",
+        "Xm1Viewer.hs",
+    ],
     data = [":xm1-upstream"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    main_file = "Xm1Viewer.hs",
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         ":emulator-slot-lib",
         ":viewer-runtime-lib",
+        ":emulator-usb",
+        ":ram-push-unreviewed",
         "//host:base",
+        "//host:bytestring",
         "//host:directory",
         "//host:filepath",
+        "//broker:core",
+        "//host:process",
+        "//host:time",
         "//host:unix",
+        "//host:aeson",
+        "//host:text",
+        "//host:update-container",
+        "//transport:camera-core",
+        "//transport:ram-push-pins",
     ],
 )
 
@@ -563,6 +583,7 @@ haskell_binary(
         "//host:filepath",
         "//host:host-support",
         "//host:json",
+        "//host:recipe-bank",
         "//host:text",
     ],
 )
@@ -636,5 +657,46 @@ haskell_binary(
         "//host:filepath",
         "//host:host-support",
         "//host:json",
+    ],
+)
+
+# The emulator bridge's USB provider; //transport:provider-parity drives it.
+haskell_library(
+    name = "emulator-usb",
+    srcs = ["EmulatorUsb.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//transport:__pkg__"],
+    deps = [
+        "//broker:core",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:process",
+        "//host:text",
+        "//transport:camera-core",
+    ],
+)
+
+# The e2e's unreviewed relink; //transport:camera-unreviewed-relink-exclusion
+# checks that //transport:camera does not depend on it.
+haskell_library(
+    name = "ram-push-unreviewed",
+    srcs = ["Xm1UnreviewedRelink.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//transport:camera-core",
     ],
 )

@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "ktH2FLSBX7tzNh0TekDpu2g2LAUCiD+mSLIgDqodvjY=",
+        "bzlTransitiveDigest": "a8WHk6lGyPwzhd9jng7e2lzT0dWLkUzB1uNRmNukLwU=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -360,6 +360,91 @@
               "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
               "repositories": {},
               "build_file_content": "exports_files([\"bin/ffmpeg\", \"bin/ffprobe\"], visibility = [\"//visibility:public\"])",
+              "nixopts": [],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          },
+          "lab_bash": {
+            "bzlFile": "@@rules_nixpkgs_core~//:nixpkgs.bzl",
+            "ruleClassName": "_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "lab_bash",
+              "attribute_path": "bash",
+              "nix_file_deps": {},
+              "nix_file_content": "",
+              "nix_license_path": "",
+              "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
+              "repositories": {},
+              "build_file_content": "exports_files([\"bin/bash\"], visibility = [\"//visibility:public\"])",
+              "nixopts": [],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          },
+          "lab_clang": {
+            "bzlFile": "@@rules_nixpkgs_core~//:nixpkgs.bzl",
+            "ruleClassName": "_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "lab_clang",
+              "attribute_path": "clang",
+              "nix_file_deps": {},
+              "nix_file_content": "",
+              "nix_license_path": "",
+              "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
+              "repositories": {},
+              "build_file_content": "exports_files([\"bin/clang\"], visibility = [\"//visibility:public\"])",
+              "nixopts": [],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          },
+          "lab_lld": {
+            "bzlFile": "@@rules_nixpkgs_core~//:nixpkgs.bzl",
+            "ruleClassName": "_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "lab_lld",
+              "attribute_path": "lld",
+              "nix_file_deps": {},
+              "nix_file_content": "",
+              "nix_license_path": "",
+              "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
+              "repositories": {},
+              "build_file_content": "exports_files([\"bin/ld.lld\"], visibility = [\"//visibility:public\"])",
+              "nixopts": [],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          },
+          "lab_llvm": {
+            "bzlFile": "@@rules_nixpkgs_core~//:nixpkgs.bzl",
+            "ruleClassName": "_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "lab_llvm",
+              "attribute_path": "llvm",
+              "nix_file_deps": {},
+              "nix_file_content": "",
+              "nix_license_path": "",
+              "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
+              "repositories": {},
+              "build_file_content": "exports_files([\"bin/llvm-objcopy\", \"bin/llvm-nm\", \"bin/llvm-objdump\"], visibility = [\"//visibility:public\"])",
+              "nixopts": [],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          },
+          "lab_coreutils": {
+            "bzlFile": "@@rules_nixpkgs_core~//:nixpkgs.bzl",
+            "ruleClassName": "_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "lab_coreutils",
+              "attribute_path": "coreutils",
+              "nix_file_deps": {},
+              "nix_file_content": "",
+              "nix_license_path": "",
+              "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
+              "repositories": {},
+              "build_file_content": "exports_files([\"bin/readlink\", \"bin/sha256sum\", \"bin/sort\"], visibility = [\"//visibility:public\"])",
               "nixopts": [],
               "quiet": false,
               "fail_not_supported": true

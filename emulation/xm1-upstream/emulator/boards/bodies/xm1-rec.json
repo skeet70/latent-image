@@ -285,6 +285,13 @@
     },
     "fe80": {
       "basis": "Explicit firmware-selected descriptor/program/count and disabled-phase contracts; fe80-xm1.md pins the stock consumers. No X70 upload map inherited."
+    },
+    "usb": {
+      "transfer_ticks": 4,
+      "packet_bytes": 64,
+      "out_endpoints": [[0, 0], [2, 1]],
+      "in_endpoints": [[128, 0], [129, 1], [131, 2]],
+      "basis": "X-M1 1.50 controller and service descriptors bind EP0, bulk OUT 2, bulk IN 0x81 and interrupt IN 0x83. Cable presence remains an independent post-boot input."
     }
-  }
+}
 }

@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from emulator.checkpoint import capture_blocker
 from emulator.menu_inputs import ALIASES, KEY_NAMES, MenuKey, MenuInputs, setup_inventory
-from tools.continue_rec_scanout import MAX_CONTINUATION, WarmScanoutSession
+from tools.continue_rec_scanout import MAX_CONTINUATION, MODE_DIAL_SETTLE, WarmScanoutSession
 
 MAX_PHASE = MAX_CONTINUATION
 DEFAULT_PULSE = 8_000_000
@@ -214,6 +214,7 @@ class MenuSession(WarmScanoutSession):
             'can_save_checkpoint': ready and input_state['inputs_released'] and checkpoint_blocker is None,
             'checkpoint_unavailable_reason': None if checkpoint_blocker is None else str(checkpoint_blocker),
             'ready': ready, 'can_input': ready, 'input_readiness': availability,
+            'mode_dial': self.inputs.mode_dial_state(),
             'render_supported': True,
             **input_state,
             'limits': 'External ADC/GPIO levels and source-bound sub-command Gray cycles; electrical timing and clockwise sense are unmeasured.',
@@ -272,7 +273,7 @@ class MenuSession(WarmScanoutSession):
                         remaining = deadline - self.board.instructions
                         if remaining <= 0:
                             raise RuntimeError('X-M1 sub-command scanner did not acknowledge the external GPIO phase')
-                        self.run({'limit': min(remaining, 2 * self.board.quantum), 'pixels': False})
+                        self._advance(min(remaining, 2 * self.board.quantum))
                         if self.board.failure is not None or self.execution_error is not None:
                             break
                 if self.board.failure is not None or self.execution_error is not None:
@@ -285,6 +286,28 @@ class MenuSession(WarmScanoutSession):
         if budgets[2] and self.board.failure is None and self.execution_error is None:
             state = self.run({'limit': budgets[2]})
         return state
+
+    def mode_dial(self, options):
+        if type(options) is not dict or set(options) != {'position'}:
+            raise ValueError('Mode dial takes exactly one position')
+        if self.board.failure is not None or self.execution_error is not None:
+            raise ValueError('Restore the checkpoint before another input after a strict stop')
+        availability = self.inputs.availability()
+        if not availability['ready']:
+            raise ValueError(availability['reason'])
+        self.inputs.set_mode_dial(options['position'])
+        self._advance(MODE_DIAL_SETTLE - MAX_PHASE)
+        if self.board.failure is not None or self.execution_error is not None:
+            return self.sample()
+        return self.run({'limit': MAX_PHASE})
+
+    def _advance(self, limit):
+        """`run`'s execution and strict-stop capture without its frame sample."""
+        self._last_render_settle = None
+        try:
+            self.board.run(limit + 2 * self.board.quantum, pause_after=self.board.instructions + limit)
+        except Exception as error:
+            self.execution_error = {'type': type(error).__name__, 'error': str(error)}
 
     def checkpoint_current(self, options):
         """Replace the host restore point without advancing or changing inputs."""

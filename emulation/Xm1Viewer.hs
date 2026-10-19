@@ -1,21 +1,28 @@
 module Main where
 
 import Control.Exception (IOException, catch, displayException)
+import Control.Monad (when)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
-import Data.List (isPrefixOf)
+import Xm1RamPushE2E (AllowlistPolicy (..), BootMode (..), E2ESettings (..), OverrideReason (..), PushMode (..), RelinkMode (..), runRamPushE2E)
+import Data.List (isPrefixOf, nub)
+import qualified Data.Text as T
 import Data.Word (Word16)
-import System.Directory (canonicalizePath)
+import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, listDirectory, pathIsSymbolicLink)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
-import System.FilePath ((</>), splitDirectories, takeFileName)
+import System.FilePath ((</>), splitDirectories, takeDirectory, takeFileName)
 import System.IO (hFlush, hPutStrLn, stderr, stdout)
 import System.Posix.Files (getFileStatus, isRegularFile)
 import System.Posix.Process (executeFile)
+import System.Process (callProcess)
 import Text.Read (readMaybe)
 
-newtype VirtualSDImage = VirtualSDImage FilePath
+newtype VirtualSDImage = VirtualSDImage FilePath deriving (Eq)
+newtype InstalledNand = InstalledNand FilePath deriving (Eq)
+newtype ReceiptDirectory = ReceiptDirectory FilePath deriving (Eq)
+newtype TrajectoryFile = TrajectoryFile FilePath deriving (Eq)
 newtype Port = Port Word16
 
 data Bind = IPv4Loopback
@@ -27,6 +34,16 @@ data Options = Options
   , outputOption :: Maybe Runtime
   , firmwareOption :: Maybe Firmware
   , virtualSDImageOption :: Maybe VirtualSDImage
+  , installedNandOption :: Maybe InstalledNand
+  , receiptDirectoryOption :: Maybe ReceiptDirectory
+  , ff80RehearsalOption :: Bool
+  , ramPushE2EOption :: Bool
+  , relinkModeOption :: RelinkMode
+  , allowlistOverrideOption :: Maybe OverrideReason
+  , bootModeOption :: BootMode
+  , segmentsOption :: Maybe [T.Text]
+  , pushModeOption :: PushMode
+  , trajectoriesOption :: Maybe TrajectoryFile
   , uiConversionProfileOption :: UiConversionProfile
   , portOption :: Port
   , bindOption :: Bind
@@ -48,6 +65,22 @@ usage = unlines
   , "  --output PATH          Fresh runtime directory under workspace/private-data/"
   , "  --firmware PATH        Stock or modified X-M1 1.50-compatible DAT input"
   , "  --sd-card-image PATH   Regular raw virtual-card image beneath private-data/"
+  , "  --ff80-rehearsal       Run the closed stock ordinary-boot service session"
+  , "  --ram-push-e2e        Run allocation, relink, install, bank UI and unload in emulation"
+  , "  --unreviewed-relink    --ram-push-e2e: relink and push without the compiled source-identity"
+  , "                         and publication-contract pins; the receipt records the mode"
+  , "  --allowlist-override REASON"
+  , "                         --unreviewed-relink: push a bank whose ELF fails the allowlist check;"
+  , "                         the receipt records the reason and every violation"
+  , "  --fresh-boot           --ram-push-e2e: cold boot and replace the keyed attach checkpoint"
+  , "  --segments A,B         --ram-push-e2e: run each named trajectory segment, with the segments it"
+  , "                         requires, in its own process from the post-install checkpoint"
+  , "  --installed-nand PATH  Committed f7=1 NAND input for --ff80-rehearsal"
+  , "  --receipt-output PATH  Fresh receipt directory beneath private-data/"
+  , "  --flash-candidate      --ram-push-e2e: --firmware is a flash candidate whose loader publishes the"
+  , "                         bank; boot it and run every segment (or --segments) without the RAM push"
+  , "  --trajectories PATH    --ram-push-e2e trajectory file (default: emulation/ram-push-e2e-trajectories.json,"
+  , "                         or emulation/ui-trajectories.json with --flash-candidate)"
   , "  --ui-conversion-profile PROFILE"
   , "                         strict (default) or declared-ui-cpu-fallback"
   , "                         The fallback is an unmeasured UI-only model."
@@ -64,7 +97,7 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing StrictUiConversion (Port 0) IPv4Loopback
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing StrictUiConversion (Port 0) IPv4Loopback
     go options [] = pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
@@ -86,6 +119,32 @@ parseCommand args
     go options ("--sd-card-image" : value : rest) = do
       require (not (null value)) "--sd-card-image must be nonempty"
       go options { virtualSDImageOption = Just (VirtualSDImage value) } rest
+    go options ("--ff80-rehearsal" : rest) =
+      go options { ff80RehearsalOption = True } rest
+    go options ("--ram-push-e2e" : rest) =
+      go options { ramPushE2EOption = True } rest
+    go options ("--unreviewed-relink" : rest) =
+      go options { relinkModeOption = UnreviewedRelink EnforceAllowlist } rest
+    go options ("--allowlist-override" : value : rest) = do
+      require (not (null value)) "--allowlist-override needs a reason"
+      go options { allowlistOverrideOption = Just (OverrideReason value) } rest
+    go options ("--fresh-boot" : rest) =
+      go options { bootModeOption = FreshBoot } rest
+    go options ("--segments" : value : rest) = do
+      let names = filter (not . T.null) (T.splitOn (T.singleton ',') (T.pack value))
+      require (not (null names) && nub names == names) "--segments must name distinct segments"
+      go options { segmentsOption = Just names } rest
+    go options ("--flash-candidate" : rest) =
+      go options { pushModeOption = FlashCandidate } rest
+    go options ("--installed-nand" : value : rest) = do
+      require (not (null value)) "--installed-nand must be nonempty"
+      go options { installedNandOption = Just (InstalledNand value) } rest
+    go options ("--receipt-output" : value : rest) = do
+      require (not (null value)) "--receipt-output must be nonempty"
+      go options { receiptDirectoryOption = Just (ReceiptDirectory value) } rest
+    go options ("--trajectories" : value : rest) = do
+      require (not (null value)) "--trajectories must be nonempty"
+      go options { trajectoriesOption = Just (TrajectoryFile value) } rest
     go options ("--ui-conversion-profile" : value : rest) = do
       profile <- case value of
         "strict" -> pure StrictUiConversion
@@ -102,6 +161,32 @@ validateVirtualSDImage root (VirtualSDImage supplied) = do
   status <- getFileStatus path
   require (isRegularFile status) "--sd-card-image must be a regular file"
   pure (VirtualSDImage path)
+validateInstalledNand :: Workspace -> InstalledNand -> IO InstalledNand
+validateInstalledNand root (InstalledNand supplied) = do
+  private <- canonicalizePath (resolve root "private-data")
+  path <- canonicalizePath (resolve root supplied)
+  require (splitDirectories private `isPrefixOf` splitDirectories path) "--installed-nand must be beneath workspace/private-data/"
+  status <- getFileStatus path
+  require (isRegularFile status) "--installed-nand must be a regular file"
+  pure (InstalledNand path)
+
+freshReceiptDirectory :: Workspace -> ReceiptDirectory -> IO ReceiptDirectory
+freshReceiptDirectory root (ReceiptDirectory supplied) = do
+  private <- canonicalizePath (resolve root "private-data")
+  let path = resolve root supplied
+  require (takeFileName path `notElem` ["", ".", ".."]) "--receipt-output must name a fresh directory"
+  parent <- canonicalizePath (takeDirectory path)
+  require (splitDirectories private `isPrefixOf` splitDirectories parent) "--receipt-output must be beneath workspace/private-data/"
+  let destination = parent </> takeFileName path
+  directoryExists <- doesDirectoryExist destination
+  fileExists <- doesFileExist destination
+  if directoryExists
+    then do
+      linked <- pathIsSymbolicLink destination
+      entries <- listDirectory destination
+      require (not linked && null entries) "--receipt-output existing directory must be empty and nonsymlink"
+    else require (not fileExists) "--receipt-output must not already exist as a file"
+  pure (ReceiptDirectory destination)
 
 bindAddress :: Bind -> String
 bindAddress IPv4Loopback = "127.0.0.1"
@@ -113,27 +198,92 @@ launch options = do
   reexecInSlot policy arguments
   root <- ViewerRuntime.workspace (workspaceOption options)
   media <- traverse (validateVirtualSDImage root) (virtualSDImageOption options)
-  staged <- stageViewerRuntime root (outputOption options) (UniqueRuntime "xm1-viewer") (firmwareOption options) OmitStockOriginal
+  nand <- traverse (validateInstalledNand root) (installedNandOption options)
+  receipt <- traverse (freshReceiptDirectory root) (receiptDirectoryOption options)
+  let ff80 = ff80RehearsalOption options
+      e2e = ramPushE2EOption options
+  require (not (ff80 && e2e)) "--ff80-rehearsal and --ram-push-e2e are exclusive"
+  when ff80 $ do
+    require (media == Nothing) "--ff80-rehearsal does not accept an SD-card image"
+    require (nand /= Nothing) "--ff80-rehearsal requires --installed-nand"
+    require (receipt /= Nothing) "--ff80-rehearsal requires --receipt-output"
+  when e2e $ do
+    require (media /= Nothing) "--ram-push-e2e requires --sd-card-image"
+    require (nand /= Nothing) "--ram-push-e2e requires --installed-nand"
+    require (receipt /= Nothing) "--ram-push-e2e requires --receipt-output"
+    require (case firmwareOption options of Just _ -> True; Nothing -> False)
+      "--ram-push-e2e requires the RC0 --firmware input"
+  when (not ff80 && not e2e) $ do
+    require (nand == Nothing) "--installed-nand belongs to a closed emulator rehearsal"
+    require (receipt == Nothing) "--receipt-output belongs to a closed emulator rehearsal"
+  when (not e2e) $ do
+    require (trajectoriesOption options == Nothing) "--trajectories belongs to --ram-push-e2e"
+    require (relinkModeOption options == ReviewedRelink) "--unreviewed-relink belongs to --ram-push-e2e"
+    require (bootModeOption options == CheckpointedBoot) "--fresh-boot belongs to --ram-push-e2e"
+    require (segmentsOption options == Nothing) "--segments belongs to --ram-push-e2e"
+    require (pushModeOption options == RamPush) "--flash-candidate belongs to --ram-push-e2e"
+  require (allowlistOverrideOption options == Nothing || relinkModeOption options /= ReviewedRelink)
+    "--allowlist-override belongs to --unreviewed-relink"
+  -- Without `--output`, `--ram-push-e2e` restages into one fixed directory.
+  -- Attach checkpoints restore only into the runtime path that saved them.
+  let fallback = if e2e
+        then ReplacedRuntime ("emulator-runtimes" </> "xm1-ram-push-e2e")
+        else UniqueRuntime "xm1-viewer"
+  staged <- stageViewerRuntime root (outputOption options) fallback (firmwareOption options)
+    (if ff80 || e2e then StageStockOriginal else OmitStockOriginal)
   let destination = stagedDirectory staged
       Python python = stagedPython staged
       Firmware dat = stagedSource staged
   putStrLn ("X-M1 viewer runtime: " ++ destination)
   hFlush stdout
-  let Port port = portOption options
-      mediaArguments = case media of
-        Nothing -> []
-        Just (VirtualSDImage path) -> ["--sd-card-image", path]
-      conversionArguments = case uiConversionProfileOption options of
-        StrictUiConversion -> []
-        DeclaredUiCpuFallback -> ["--ui-conversion-profile", "declared-ui-cpu-fallback"]
-  executeFile python False
-    ([ "tools/start_setup_viewer.py"
-     , "--firmware", stagedFirmwarePath
-     , "--firmware-name", takeFileName dat
-     , "--bind", bindAddress (bindOption options)
-     , "--port", show port
-     , "--output", destination </> "viewer"
-     ] ++ mediaArguments ++ conversionArguments) Nothing
+  if ff80
+    then do
+      callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
+      let nandPath = case nand of Just (InstalledNand path) -> path; Nothing -> error "validated NAND missing"
+          receiptPath = case receipt of Just (ReceiptDirectory path) -> path; Nothing -> error "validated receipt directory missing"
+      executeFile python False
+        [ "tools/continue_rec_scanout.py"
+        , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
+        , "--installed-nand", nandPath
+        , "--menus"
+        , "--ff80-rehearsal"
+        , "--output", receiptPath
+        ] Nothing
+    else if e2e
+      then do
+        callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
+        let nandPath = case nand of Just (InstalledNand path) -> path; Nothing -> error "validated NAND missing"
+            cardPath = case media of Just (VirtualSDImage path) -> path; Nothing -> error "validated SD image missing"
+            receiptPath = case receipt of Just (ReceiptDirectory path) -> path; Nothing -> error "validated receipt directory missing"
+            Workspace workspacePath = root
+            defaultTrajectories = case pushModeOption options of
+              RamPush -> "emulation/ram-push-e2e-trajectories.json"
+              FlashCandidate -> "emulation/ui-trajectories.json"
+            TrajectoryFile trajectories = maybe (TrajectoryFile defaultTrajectories) id
+              (trajectoriesOption options)
+            relinkMode = case (relinkModeOption options, allowlistOverrideOption options) of
+              (UnreviewedRelink _, Just reason) -> UnreviewedRelink (OverrideAllowlist reason)
+              (mode, _) -> mode
+            settings = E2ESettings relinkMode (bootModeOption options)
+              (resolve root "private-data/emulator-checkpoints/xm1-ram-push") (segmentsOption options)
+              (pushModeOption options)
+        runRamPushE2E settings python workspacePath (resolve root trajectories) stagedFirmwarePath nandPath cardPath receiptPath
+      else do
+        let Port port = portOption options
+            mediaArguments = case media of
+              Nothing -> []
+              Just (VirtualSDImage path) -> ["--sd-card-image", path]
+            conversionArguments = case uiConversionProfileOption options of
+              StrictUiConversion -> []
+              DeclaredUiCpuFallback -> ["--ui-conversion-profile", "declared-ui-cpu-fallback"]
+        executeFile python False
+          ([ "tools/start_setup_viewer.py"
+           , "--firmware", stagedFirmwarePath
+           , "--firmware-name", takeFileName dat
+           , "--bind", bindAddress (bindOption options)
+           , "--port", show port
+           , "--output", destination </> "viewer"
+           ] ++ mediaArguments ++ conversionArguments) Nothing
 
 main :: IO ()
 main = (getArgs >>= parseCommand >>= run) `catch` report

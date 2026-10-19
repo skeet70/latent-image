@@ -10,7 +10,7 @@ import Control.Monad (forM_, unless)
 import qualified Data.ByteString as B
 import Data.IORef
 import Data.List (isInfixOf)
-import Data.Word (Word8)
+import Data.Word (Word8, Word64)
 import System.Directory (createDirectory, createDirectoryIfMissing, getTemporaryDirectory, removeDirectoryRecursive)
 import System.FilePath ((</>))
 import System.Posix.Process (getProcessID)
@@ -24,6 +24,10 @@ import qualified FujiAF.Broker as P
 
 check :: String -> Bool -> IO ()
 check label yes = unless yes (error label)
+
+-- A clock read from the given source whose pauses return at once.
+instantClock :: IO Word64 -> Clock
+instantClock now = TimedClock now (\_ -> pure ())
 
 testDescriptors :: Descriptors
 testDescriptors = Descriptors 1 0 0 255 0 0 0x81 2 512 512 0 1 []
@@ -250,7 +254,7 @@ happySteps = armPrefix zeros
   ++ cleanupSteps 2
 
 runCase :: FilePath -> [P.Step] -> IO (Either SomeException ArmReport, [P.Transfer], [String])
-runCase dir steps = runDeviceCase RequirePresent (Clock (pure 0)) (pure [testDevice]) dir steps
+runCase dir steps = runDeviceCase RequirePresent (instantClock (pure 0)) (pure [testDevice]) dir steps
 
 testDevice :: Candidate
 testDevice = Candidate "001:2.3" 0x04cb 0xff80 testDescriptors
@@ -429,24 +433,24 @@ main = do
   let nextInventory = atomicModifyIORef' inventory $ \lists -> case lists of
         [] -> ([],[testDevice])
         devices:rest -> (rest,devices)
-  (waited,waitedPackets,waitedCleanup) <- runDeviceCase WaitForDevice (Clock (pure 0)) nextInventory (base </> "wait-appear") happySteps
+  (waited,waitedPackets,waitedCleanup) <- runDeviceCase WaitForDevice (instantClock (pure 0)) nextInventory (base </> "wait-appear") happySteps
   check "a device appearing after empty inventories emits the reviewed session"
     (either (const False) ((== ArmRanToEnd) . reportOutcome) waited && waitedPackets == packets)
   check "waiting releases every acquired resource" (waitedCleanup == ["released","closed","exited"])
   waitJournal <- readFile (base </> "wait-appear" </> "journal.v1")
   check "waiting and its bound are journaled" ("waiting-for-device" `isInfixOf` waitJournal && "bound-ms=120000" `isInfixOf` waitJournal)
   waitTime <- newIORef 0
-  (expired,expiredPackets,expiredCleanup) <- runDeviceCase WaitForDevice (Clock (readIORef waitTime))
+  (expired,expiredPackets,expiredCleanup) <- runDeviceCase WaitForDevice (instantClock (readIORef waitTime))
     (writeIORef waitTime 120000000000 >> pure []) (base </> "wait-expired") []
   check "the overall wait bound refuses before camera requests"
     (either (const True) (const False) expired && null expiredPackets && expiredCleanup == ["exited"])
   forM_ [ ("multiple", [testDevice,testDevice])
         , ("unsupported", [testDevice { descriptors = testDescriptors { interfaceNumber = 1 } }])
         , ("inventory-overflow", replicate 65 testDevice) ] $ \(label,devices) -> do
-    (refused,refusedPackets,refusedCleanup) <- runDeviceCase WaitForDevice (Clock (pure 0)) (pure devices) (base </> label) []
+    (refused,refusedPackets,refusedCleanup) <- runDeviceCase WaitForDevice (instantClock (pure 0)) (pure devices) (base </> label) []
     check (label++": waiting preserves the selection refusal")
       (either (const True) (const False) refused && null refusedPackets && refusedCleanup == ["exited"])
-  (absent,absentPackets,absentCleanup) <- runDeviceCase RequirePresent (Clock (pure 0)) (pure []) (base </> "no-wait-absent") []
+  (absent,absentPackets,absentCleanup) <- runDeviceCase RequirePresent (instantClock (pure 0)) (pure []) (base </> "no-wait-absent") []
   check "the default mode still refuses an absent camera"
     (either (const True) (const False) absent && null absentPackets && absentCleanup == ["exited"])
   let badTick = map corruptTickReply (tickSteps 499)

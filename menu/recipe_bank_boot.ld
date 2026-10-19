@@ -36,6 +36,8 @@ ENTRY(rb_boot_entry)
  * linker-script symbol lld resolves the call pc-relatively. */
 rb_cache_dclean_inval = 0x0061c4f4;
 rb_cache_iinval = 0x0061c4ec;
+rb_plain_load_wait = 0x00724b68;
+rb_plain_load_release = 0x00724c00;
 
 SECTIONS
 {
@@ -63,4 +65,7 @@ ASSERT(SIZEOF(.text.rb_boot_check) <= 96, "validation fragment fits the film-lab
 ASSERT(rb_boot_fail > 0x00789e2c && rb_boot_fail < 0x00789e8c, "refusal path stays in its run")
 ASSERT(rb_boot_done > 0x00789e2c && rb_boot_done < 0x00789e8c, "stock branch stays in its run")
 ASSERT(rb_store_entry == RB_STORE_ENTRY, "store pass placed at its execution address")
-ASSERT(SIZEOF(.text.rb_boot_store) <= 64, "store pass fits its image slot (measured 60)")
+ASSERT(SIZEOF(.text.rb_boot_store) == 60, "store/cache pass is sixty bytes")
+ASSERT(RB_SRC_BASE == 0x011ad800, "source uses the provisional gap1 package carrier")
+ASSERT(RB_STORE_ENTRY == RB_SRC_BASE + 32 + 0x480, "store pass follows the 128-slot publication table")
+ASSERT(RB_SRC_LIMIT == RB_SRC_BASE + 32 + 0xa120 - 0x01100000, "source gate covers the fourteen-record image")

@@ -408,7 +408,7 @@ expectedSnapshots variant route parts media card image4 = do
   entry4 <- findEntry parts Segment4
   kernel0 <- spanBytes media (MediaOffset (U.segFlash entry0)) (ByteCount (fromIntegral (U.segSize entry0)))
   kernel1 <- spanBytes media (MediaOffset (U.segFlash entry1)) (ByteCount (fromIntegral (U.segSize entry1)))
-  segments <- spanBytes media (MediaOffset (fromIntegral U.segmentTableOffset)) (ByteCount (fromIntegral (U.segmentCount * U.segmentEntryBytes + 4)))
+  segments <- spanBytes media (MediaOffset (fromIntegral (U.segmentTableOffset (U.partTableLayout parts)))) (ByteCount (fromIntegral (U.segmentCount * U.segmentEntryBytes + 4)))
   let offsetInteger = toInteger (0x71feb4 :: Word32) - toInteger (U.segLoad entry4)
   H.ensure (offsetInteger >= 0 && offsetInteger + 4 <= toInteger (B.length image4)) "tap outside decoded id4 extent"
   let offset = fromInteger offsetInteger
@@ -425,7 +425,7 @@ expectedSnapshots variant route parts media card image4 = do
     , ExpectedSnapshot Id4Before (Address (U.segLoad entry4)) image4
     , ExpectedSnapshot Id4Bss (Address (U.segBss entry4)) (B.replicate (fromIntegral (U.segBssLen entry4)) 0)
     , ExpectedSnapshot Id4After (Address (U.segLoad entry4)) after
-    , ExpectedSnapshot Segments (Address 0x61c040) segments
+    , ExpectedSnapshot Segments (Address (0x61c000 + fromIntegral (U.segmentTableOffset (U.partTableLayout parts) - 0x140000))) segments
       ]
     , TapTransition (MachineWord tap) (MachineWord (U.word32At after offset))
     )

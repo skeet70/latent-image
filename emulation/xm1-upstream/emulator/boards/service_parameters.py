@@ -85,6 +85,6 @@ def service_parameters(profile):
             packet_bytes=number(spec['packet_bytes'], positive=True),
             out_endpoints=tuple((number(a), number(port)) for a, port in spec['out_endpoints']),
             in_endpoints=tuple((number(a), number(port)) for a, port in spec['in_endpoints']))
-        if profile.board['inputs']['usb_connected'] is not True:
-            raise ProfileError('Service USB binding requires an explicit connected cable input')
+        if type(profile.board['inputs']['usb_connected']) is not bool:
+            raise ProfileError('Service USB binding requires an explicit cable input')
     return result

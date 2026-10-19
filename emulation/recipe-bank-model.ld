@@ -1,6 +1,4 @@
-/* Placement for the recipe-bank runtime model: every entry sits at the
- * byte-proven stock address the kernel calls, helpers follow the last
- * address, and model data lands in its own case region. */
+/* Foreign calls retain stock addresses; host helpers occupy a separate span. */
 ENTRY(rbm_open)
 SECTIONS {
   . = 0x0061e110;
@@ -27,6 +25,7 @@ SECTIONS {
   .text.resolve : { *(.text.rbm_resolve) }
   . = 0x0071eff4;
   .text.tagrelease : { *(.text.rbm_tag_release) }
+  . = 0x00730000;
   .text.helpers : { *(.text*) }
   . = 0x00970000;
   .data : { *(.data*) *(.bss*) *(COMMON) *(.rodata*) }

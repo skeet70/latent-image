@@ -20,6 +20,7 @@ SUBCOMMAND_DESCRIPTOR = 0x7cb1e4
 SUBCOMMAND_TRANSITIONS = 0x7cb200
 SUBCOMMAND_REGISTERED = 0x89f808
 SUBCOMMAND_SAMPLED = 0x955be9
+SHOOTING_MODE_CELL = 0x956838
 ALIASES = {'menu': 'ok', 'disp': 'back'}
 
 
@@ -167,6 +168,116 @@ ADC_RECORDS = tuple(KEY_RECORDS.values()) + (
     AdcBinding(KeyCode.MOVIE, 21, AdcChannel.BUTTONS, CalibrationTag.MOVIE_LOW, CalibrationTag.MOVIE_HIGH),
 )
 KEY_NAMES = tuple(key.value for key in MenuKey)
+
+
+class ModeDialPosition(str, Enum):
+    S = 'S'
+    P = 'P'
+    SR_AUTO = 'SR+'
+    AUTO = 'AUTO'
+    ADVANCED = 'Adv.'
+    SP = 'SP'
+    SPORTS = 'Sports'
+    LANDSCAPE = 'Landscape'
+    PORTRAIT = 'Portrait'
+    C = 'C'
+    M = 'M'
+    A = 'A'
+
+    @classmethod
+    def parse(cls, value):
+        if isinstance(value, cls):
+            return value
+        try:
+            return cls(value)
+        except ValueError:
+            raise ValueError(f'Unknown mode-dial position: {value!r}') from None
+
+
+MODE_DIAL_CHANNEL = 3
+
+
+@dataclass(frozen=True)
+class ModeDialBinding:
+    """Input-map rows 24-35: class 1, analog range on ADC channel 3, named by the
+    (id, code, name) table at 0x007a0288."""
+    position: ModeDialPosition
+    code: int
+    row: int
+    firmware_name: str
+
+    @property
+    def address(self):
+        return KEY_TABLE + self.row * 28
+
+    @property
+    def low_tag(self):
+        return 0x3702 + 4 * (self.row - 24)
+
+    @property
+    def high_tag(self):
+        return 0x3700 + 4 * (self.row - 24)
+
+
+MODE_DIAL_RECORDS = (
+    ModeDialBinding(ModeDialPosition.S, 0x30f, 24, 'KEY_SHUTTER'),
+    ModeDialBinding(ModeDialPosition.P, 0x30e, 25, 'KEY_PROGRAM'),
+    ModeDialBinding(ModeDialPosition.SR_AUTO, 0x306, 26, 'KEY_SR_AUTO_MODE'),
+    ModeDialBinding(ModeDialPosition.AUTO, 0x302, 27, 'KEY_AUTO_MODE'),
+    ModeDialBinding(ModeDialPosition.ADVANCED, 0x31c, 28, 'KEY_ADVANCE_MODE'),
+    ModeDialBinding(ModeDialPosition.SP, 0x304, 29, 'KEY_SP_MODE'),
+    ModeDialBinding(ModeDialPosition.SPORTS, 0x309, 30, 'KEY_SP_SPORTS'),
+    ModeDialBinding(ModeDialPosition.LANDSCAPE, 0x308, 31, 'KEY_SP_LANDSCAPE'),
+    ModeDialBinding(ModeDialPosition.PORTRAIT, 0x307, 32, 'KEY_SP_PORTRAIT'),
+    ModeDialBinding(ModeDialPosition.C, 0x317, 33, 'KEY_C1_MODE'),
+    ModeDialBinding(ModeDialPosition.M, 0x312, 34, 'KEY_MANUAL'),
+    ModeDialBinding(ModeDialPosition.A, 0x310, 35, 'KEY_APERTURE'),
+)
+
+
+@dataclass(frozen=True)
+class ModeDialWindow:
+    binding: ModeDialBinding
+    low: int
+    high: int
+
+    def contains(self, sample):
+        return self.low <= sample <= self.high
+
+    @property
+    def midpoint(self):
+        return (self.low + self.high) // 2
+
+
+def mode_dial_windows(board):
+    """Loaded calibration windows in row order; FUN_006a0a78 keeps the first true row."""
+    base = _word(board, CALIBRATION_POINTER)
+    if not base:
+        raise ValueError('X-M1 calibration is not loaded')
+    windows = []
+    for binding in MODE_DIAL_RECORDS:
+        record = _raw(board, binding.address, 28)
+        low_tag, high_tag = struct.unpack_from('<2H', record, 16)
+        if (int.from_bytes(record[:4], 'little') != binding.code or record[8] != 1 or record[9] != 1
+                or int.from_bytes(record[12:16], 'little') != MODE_DIAL_CHANNEL
+                or low_tag != binding.low_tag or high_tag != binding.high_tag):
+            raise ValueError('Mode-dial record does not match X-M1 1.50: ' + binding.position.value)
+        low = int.from_bytes(_raw(board, base + low_tag, 2), 'little')
+        high = int.from_bytes(_raw(board, base + high_tag, 2), 'little')
+        if not 0 <= low <= high <= RELEASED:
+            raise ValueError('Mode-dial calibration window is empty or outside the 10-bit range: '
+                             + binding.position.value)
+        windows.append(ModeDialWindow(binding, low, high))
+    return tuple(windows)
+
+
+def mode_dial_window(board, position):
+    position = ModeDialPosition.parse(position)
+    windows = mode_dial_windows(board)
+    window = next(window for window in windows if window.binding.position is position)
+    if next(candidate for candidate in windows if candidate.contains(window.midpoint)) is not window:
+        raise ValueError('Mode-dial midpoint selects an earlier row: ' + position.value)
+    return window
 
 
 class RowState(IntEnum):
@@ -429,6 +540,32 @@ class MenuInputs:
             result = self._set(binding.channel, RELEASED, None)
         self._pressed = None
         return result
+
+    def set_mode_dial(self, position):
+        """Hold ADC channel 3 at the position's loaded-calibration midpoint."""
+        if self._pressed is not None:
+            raise ValueError('Release the selected input before turning the mode dial')
+        window = mode_dial_window(self.board, position)
+        samples = list(self._samples())
+        samples[MODE_DIAL_CHANNEL] = window.midpoint
+        self.power.set_adc_samples(
+            samples, source=f'mode dial {window.binding.position.value}: X-M1 1.50 loaded-calibration midpoint')
+        return window
+
+    def mode_dial_state(self):
+        try:
+            windows = mode_dial_windows(self.board)
+        except ValueError as error:
+            return {'available': False, 'reason': str(error), 'positions': [], 'position': None}
+        sample = self._samples()[MODE_DIAL_CHANNEL]
+        current = next((window for window in windows if window.contains(sample)), None)
+        return {'available': True, 'reason': None, 'sample': sample,
+                'position': None if current is None else current.binding.position.value,
+                'shooting_mode_cell': _word(self.board, SHOOTING_MODE_CELL),
+                'positions': [{'position': window.binding.position.value,
+                               'firmware_name': window.binding.firmware_name,
+                               'code': window.binding.code, 'low': window.low, 'high': window.high}
+                              for window in windows]}
 
     def current_state(self, *, ready=True):
         samples = self._samples()

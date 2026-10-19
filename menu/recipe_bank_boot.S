@@ -16,9 +16,9 @@
 @
 @ Failure contract: any failed gate or check stores 2 into the status cell
 @ and takes the same stock branch; the failure path does not run the cache
-@ pass. No store happens before the hash matches; pass one checks every
-@ destination against the allowlist with no stores, and the store pass
-@ runs only after the whole table validated. Success leaves the cell
+@ pass. No stock-word publication happens before the hash matches; pass
+@ one checks every destination against the allowlist with no stores.
+@ The store pass runs only after the whole table validated. Success leaves the cell
 @ UNCHANGED (the first budget trade; a warm-boot stale 2 reads as a fresh
 @ refusal and diagnostics corroborate against the bank's presence).
 @
@@ -39,8 +39,8 @@
 @     +0x04 u16 format       1 (the stub reads only the magic word; the
 @                               builder refuses any other format)
 @     +0x06 u16 flags        0
-@     +0x08 u32 image_bytes  >= 0xa018 (name-table end), 4-aligned,
-@                              < 0xe600 (effective max 0xe5fc)
+@     +0x08 u32 image_bytes  >= 0xa120 (fourteen-record name-table end),
+@                              4-aligned, < 0xe600
 @     +0x0c u32 hash         32-bit rotating word hash of the image
 @     +0x10 u32 reserved     0 (unread)
 @     +0x14 u32 reserved     0
@@ -50,25 +50,21 @@
 @     image offset 0x000  allowlist: 16 slots of {u32 lo, u32 span}; a
 @                        destination is allowed when lo <= addr < lo+span
 @                        and the sum does not wrap; unused slots {0,0}
-@     image offset 0x080  publication table: 64 slots of {u32 addr, u32
-@                        value}; {0,0} ends the walk; unused slots {0,0};
-@                        code words before data words at the builder's
-@                        obligation
-@     image offset 0x280  store pass: 15 instructions, 60 B, emitted by
-@                        the builder from this file's .text.rb_boot_store
-@                        and executed at RB_STORE_ENTRY
-@     image offset 0x9d84 name table: 10 records of 66 bytes (runtime
-@                        0x00beb784, the stock record base's low half
-@                        0xb784, so each record-base update is one atomic
-@                        MOVT store)
-@   The metadata region [0x000, 0x280) and the name table end 0xa018 must
-@   lie inside image_bytes; the coverage gate enforces both.
+@     image offset 0x080  publication table: 128 slots of {u32 addr, u32
+@                        value}; {0,0} ends the walk; unused slots {0,0}
+@     image offset 0x480  store/cache pass: 15 instructions, 60 B,
+@                        linked at RB_STORE_ENTRY in the source copy
+@     image offset 0x500  executable code, initialized data and zero BSS
+@     image offset 0x9d84 name table: 14 records of 66 bytes (runtime
+@                        0x00beb784), stock ids 0x83c-0x83e, seven slot
+@                        names and four UI labels
+@   The metadata region [0x000, 0x480) and name-table end 0xa120 lie
+@   inside image_bytes.
 @
-@ Validation order: gate 1 (no source read while regions 5-7 protect an
-@ unloaded span), magic, image_bytes (4-aligned, >= 0xa018, < 0xe600),
-@ gate 2 (stage-relative bytes copied), copy and hash, hash compare,
-@ pass-one walk bound and allowlist, store pass, bulk cache pass, stock
-@ exit. A package shorter than the coverage minimum cannot reach the
+@ Validation order: bounded final-extent wait and token restore,
+@ stage-relative high-water gate, magic, covered image length,
+@ copy and hash, hash compare, bounded allowlist pass, store/cache pass,
+@ stock exit. A package shorter than the coverage minimum cannot reach the
 @ table: the walk reads only the carve copy of a copied, hashed image.
 @ Address 0 is never a store target: it ends the table walk and lies in no
 @ window (an unused {0,0} slot has span 0).
@@ -121,39 +117,35 @@
 
 .equ RB_STATUS_CELL,   0x00befffc   @ top word of the bank span, reserved
 .equ RB_HDR_BYTES,     32
-.equ RB_IMAGE_MIN,     0xa018       @ name table 0x9d84 + 10*66 bytes
+.equ RB_IMAGE_MIN,     0xa120       @ name table 0x9d84 + 14*66 bytes
 .equ RB_IMAGE_LIMIT,   0xe600       @ first refused length; 4-alignment
                                     @ makes the effective maximum 0xe5fc
 .equ RB_ALLOW_BYTES,   0x80         @ 16 allowlist slots
 .equ RB_TABLE_OFF,     0x80         @ publication table in the image
-.equ RB_TABLE_SLOTS,   64           @ table slots, in the image region
-.equ RB_TABLE_LAST,    0x278        @ last table slot start (region end
-                                    @ 0x280, inside image_bytes by the
-                                    @ coverage gate)
+.equ RB_TABLE_SLOTS,   128
+.equ RB_TABLE_END,     0x480
 
 @ ------------------------------------------------- entry, gate 1, header ptr
-@ Runs from the film-values run [0x0078319c, 0x007831cc). 12 instructions,
-@ 48 B: the run's full capacity. Gate 1 reads the plain-load MPU protect
-@ regions: while any of regions 5-7 is enabled the load machinery still
-@ protects an unloaded span and the source must not be read.
+@ Runs from the film-values run [0x0078319c, 0x007831cc), 48 B.
+@ The final plain extent uses stock load resource 0x47. The wait consumes
+@ its token and the signal restores it.
 
 .section .text.rb_boot_entry,"ax",%progbits
 .global rb_boot_entry
 .type rb_boot_entry,%function
 rb_boot_entry:
     push    {r0-r12, lr}
-    mov     r4, #5
-1:
-    mcr     p15, 0, r4, c6, c2, 0       @ select MPU region r4
-    mrc     p15, 0, r0, c6, c1, 2       @ read its DRSR
-    tst     r0, #1                      @ enable bit
+    mov     r0, #0x47
+    movw    r1, #1000                   @ finite loader wait, firmware ticks
+    bl      rb_plain_load_wait
+    cmp     r0, #0
     bne     rb_boot_fail
-    add     r4, r4, #1
-    cmp     r4, #8
-    blo     1b
+    mov     r0, #0x47
+    bl      rb_plain_load_release
     movw    r4, #:lower16:RB_SRC_BASE
     movt    r4, #:upper16:RB_SRC_BASE   @ r4 = package header
     b       rb_boot_check
+    nop
 .size rb_boot_entry, .-rb_boot_entry
 
 @ --------------------- validation, covered length, gate 2, carve base
@@ -166,6 +158,13 @@ rb_boot_entry:
 .global rb_boot_check
 .type rb_boot_check,%function
 rb_boot_check:
+    movw    r0, #:lower16:RB_SRC_LIMIT  @ gate 2: bytes-copied threshold
+    movt    r0, #:upper16:RB_SRC_LIMIT
+    movw    r1, #0x4834
+    movt    r1, #0x0091                 @ reporter high-water 0x00914834
+    ldr     r1, [r1]
+    cmp     r1, r0
+    blo     rb_boot_fail
     ldr     r0, [r4]                    @ magic
     movw    r1, #0x4a46
     movt    r1, #0x4252
@@ -179,13 +178,6 @@ rb_boot_check:
     blo     rb_boot_fail
     cmp     r5, #RB_IMAGE_LIMIT
     bhs     rb_boot_fail
-    movw    r0, #:lower16:RB_SRC_LIMIT  @ gate 2: bytes-copied threshold
-    movt    r0, #:upper16:RB_SRC_LIMIT
-    movw    r1, #0x4834
-    movt    r1, #0x0091                 @ reporter high-water 0x00914834
-    ldr     r1, [r1]
-    cmp     r1, r0
-    blo     rb_boot_fail
     mov     r6, #0                      @ hash accumulator
     movw    r10, #0x1a00
     movt    r10, #0x00be                @ carve base 0x00be1a00
@@ -195,7 +187,7 @@ rb_boot_check:
 @ -------------------------------------- copy and hash, one pass
 @ Runs from the Q-values run [0x00782348, 0x00782378). 12 instructions,
 @ 48 B: the run's full capacity. r5 counts down from image_bytes
-@ (multiple of 4, >= 0xa018); r9 is the copy cursor so r10 keeps the carve
+@ (multiple of 4, >= 0xa120); r9 is the copy cursor so r10 keeps the carve
 @ base for the walk. The hash is complete and compared before the
 @ publication walk begins.
 
@@ -230,11 +222,11 @@ rb_boot_sum:
 .type rb_boot_publish,%function
 rb_boot_publish:
     add     r7, r10, #RB_TABLE_OFF      @ pass-one cursor
-    add     r9, r10, #RB_TABLE_LAST     @ last table slot
+    add     r9, r10, #RB_TABLE_END     @ exclusive publication-table end
     add     r11, r10, #RB_ALLOW_BYTES   @ allowlist region end
 .Lcheck:
     cmp     r7, r9
-    bhi     rb_boot_fail                @ no terminator inside the region
+    bhs     rb_boot_fail                @ no terminator inside the region
     ldr     r0, [r7], #8                @ addr; skip the value in pass one
     cmp     r0, #0
     beq     rb_store_entry              @ table validated: image-resident store pass

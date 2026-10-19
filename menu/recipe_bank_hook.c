@@ -12,7 +12,7 @@
 #include "recipe_bank_ui.h"
 
 #ifndef RB_NAME_RECORD
-#define RB_NAME_RECORD 0x011dcca0u
+#error "RB_NAME_RECORD must match the emitted recipe package"
 #endif
 
 #define RB_PAYLOAD 0x28u
@@ -24,28 +24,32 @@
    0x83c, and the bank's seven records start after the three stock ones. */
 #define RB_STOCK_RECORDS 3u
 
-/* Storage lane's kernel (candidate, non-installable). */
-extern uint32_t rb_recall(uint32_t slot);
-extern uint32_t rb_save_current(uint32_t slot, const uint8_t *name26);
-extern uint32_t rb_reset(uint32_t slot);
-extern uint32_t rb_readback(uint32_t slot, uint8_t *name_out, uint8_t *payload_out);
-extern uint32_t rb_load(void);
-extern uint32_t rb_name_commit(uint32_t slot, const uint8_t *name26);
-extern uint32_t rb_name_resident(uint32_t slot, uint8_t *name26);
 
 /* The label record's inline buffer only; its layout halfwords stay. */
 static void rb_name_show(uint32_t slot, const uint8_t *name)
 {
     uint8_t *record = (uint8_t *)(RB_NAME_RECORD + (RB_STOCK_RECORDS + slot) * RB_RECORD);
+    static const uint8_t prefix[] = {'C', 'U', 'S', 'T', 'O', 'M', ' '};
+    if (name == 0u || (name[0] == 0u && name[1] == 0u)) {
+        for (uint32_t i = 0u; i < RB_NAME; i++) {
+            record[i] = 0u;
+        }
+        for (uint32_t i = 0u; i < sizeof(prefix); i++) {
+            record[2u * i] = prefix[i];
+        }
+        record[2u * sizeof(prefix)] = (uint8_t)('1' + slot);
+        return;
+    }
     for (uint32_t i = 0u; i < RB_NAME; i++) {
         record[i] = name[i];
     }
 }
 
 /* Called by rb_name_edit_commit when the stock editor confirms. The storage op
- * is name-only: it preserves the slot's committed payload, and the staged-edit
- * buffers are untouched apart from refreshing a same-slot staged name. */
-uint32_t rb_name_write(uint32_t slot, const uint8_t *units)
+ * preserves a set slot's committed payload and gives an unset slot the stock
+ * defaults row (rb_name_commit); the staged-edit buffers are untouched apart
+ * from refreshing a same-slot staged name. */
+uint32_t rb_name_write(uint32_t slot, const uint8_t *units, RbMediaIdentity identity)
 {
     if (slot >= RB_BANK_SLOTS) {
         return 1u;
@@ -56,7 +60,7 @@ uint32_t rb_name_write(uint32_t slot, const uint8_t *units)
     }
     name[2u * 12u] = 0u;
     name[2u * 12u + 1u] = 0u;
-    uint32_t status = rb_name_commit(slot, name);
+    uint32_t status = rb_name_commit(slot, name, identity);
     if (status != 0u) {
         return status;
     }
@@ -93,6 +97,8 @@ uint32_t rb_slot_load(uint32_t slot)
             uint32_t status = rb_load();
             if (status != RB_OK && status != RB_NO_BANK && status != RB_INVALID) {
                 rb_discovery_status = status;
+                rb_slot_names_ready = 0u;
+                rb_name_show(slot, 0u);
                 return status;
             }
             rb_slot_names_epoch = rb_media_epoch();
@@ -100,8 +106,10 @@ uint32_t rb_slot_load(uint32_t slot)
         }
         rb_discovery_status = RB_OK;
     } else if (rb_discovery_status != RB_OK) {
+        rb_name_show(slot, 0u);
         return rb_discovery_status;
     } else if (rb_slot_names_ready == 0u) {
+        rb_name_show(slot, 0u);
         return RB_UNSET;
     }
     rb_slot_names_read();
@@ -137,21 +145,24 @@ uint32_t rb_slot_load(uint32_t slot)
 #define RB_EDIT_REDRAW 0x92au
 
 static uint32_t rb_edit_slot = 0xffffffffu;
-
-extern void rb_call_redraw(uint32_t region);
+static RbMediaIdentity rb_name_edit_identity;
+static enum rb_bank_status rb_name_edit_refused = RB_OK;
 
 /* The buffer is stock RAM and lives exactly as long as the editor screen;
  * nothing is staged in the bank until confirm. */
-uint32_t rb_name_edit_open(uint32_t slot)
+uint32_t rb_name_edit_open(uint32_t slot, RbMediaIdentity identity)
 {
     if (slot >= RB_BANK_SLOTS) {
         return 1u;
     }
     uint8_t name[RB_NAME];
     uint8_t payload[RB_PAYLOAD];
-    uint32_t status = rb_readback(slot, name, payload);
+    uint32_t status = rb_readback(slot, name, payload, identity);
     if (status != 0u) {
         return status;
+    }
+    if (!rb_media_matches(identity)) {
+        return RB_MEDIA_CHANGED;
     }
     uint8_t *buf = (uint8_t *)RB_EDIT_BUF;
     for (uint32_t i = 0u; i < RB_EDIT_CAP; i++) {
@@ -172,7 +183,29 @@ uint32_t rb_name_edit_open(uint32_t slot)
     *(volatile uint32_t *)RB_EDIT_DIRTY = 1u;
     rb_call_redraw(RB_EDIT_REDRAW);
     rb_edit_slot = slot;
+    rb_name_edit_identity = identity;
+    rb_name_edit_refused = RB_OK;
     return 0u;
+}
+
+/* Bytes staged in buffer A, up to its first zero byte. */
+static uint32_t rb_name_edit_length(void)
+{
+    const uint8_t *buf = (const uint8_t *)RB_EDIT_BUF;
+    uint32_t n = 0u;
+    while (n < RB_EDIT_CAP && buf[n] != 0u) {
+        n++;
+    }
+    return n;
+}
+
+/* Buffer A holds fourteen bytes: FUN_00d4a2a0 drops an insert once byte 13 is
+ * set, and FUN_00d49adc's right-move stops at cursor 13, appending a space
+ * where the buffer ends. Holding inserts from twelve staged bytes on, padding
+ * spaces included, keeps a trimmed name within twelve characters. */
+bool rb_name_edit_full(void)
+{
+    return rb_name_edit_length() >= RB_NAME_UNITS;
 }
 
 /* Editor confirm, the stock row-0x2a action for a bank node id. The
@@ -186,11 +219,12 @@ uint32_t rb_name_edit_commit(void)
     if (slot >= RB_BANK_SLOTS) {
         return 1u;
     }
-    const uint8_t *buf = (const uint8_t *)RB_EDIT_BUF;
-    uint32_t n = 0u;
-    while (n < RB_EDIT_CAP && buf[n] != 0u) {
-        n++;
+    if (rb_name_edit_refused != RB_OK || !rb_media_matches(rb_name_edit_identity)) {
+        rb_name_edit_refused = RB_MEDIA_CHANGED;
+        return RB_MEDIA_CHANGED;
     }
+    const uint8_t *buf = (const uint8_t *)RB_EDIT_BUF;
+    uint32_t n = rb_name_edit_length();
     uint32_t first = 0u;
     while (first < n && buf[first] == ' ') {
         first++;
@@ -210,7 +244,13 @@ uint32_t rb_name_edit_commit(void)
     for (uint32_t i = first; i < n; i++) {
         units[2u * (i - first)] = buf[i];
     }
-    return rb_name_write(slot, units);
+    uint32_t status = rb_name_write(slot, units, rb_name_edit_identity);
+    if (status == RB_OK) {
+        rb_edit_slot = 0xffffffffu;
+    } else if (status == RB_MEDIA_CHANGED) {
+        rb_name_edit_refused = RB_MEDIA_CHANGED;
+    }
+    return status;
 }
 
 /* Editor cancel: drop the staged slot without touching the bank. The

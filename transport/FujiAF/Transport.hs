@@ -1,7 +1,9 @@
+{-# LANGUAGE PatternSynonyms #-}
 -- Device selection, the injected USB API, the session journal and the bounded
 -- transfer loop every camera operation shares.
 module FujiAF.Transport where
 
+import Control.Concurrent (threadDelay)
 import Control.Exception
 import Control.Monad (unless, when)
 import Data.Bits ((.&.))
@@ -31,8 +33,8 @@ data Candidate = Candidate { physicalPath :: String, vid :: Int, pid :: Int, des
   deriving (Eq, Show, Read)
 
 -- init/list/open/claim/transfer/release/close/exit are injected as one API.
--- Synthetic tests never construct the native provider. Each stage receives
--- remaining milliseconds.
+-- Synthetic tests never call native_usb.c. Each stage receives remaining
+-- milliseconds. A transfer reports a provider failure as ProviderFailure.
 data UsbApi = UsbApi
   { usbInit :: Int -> IO (), usbList :: Int -> IO [Candidate]
   , usbOpen :: Candidate -> Int -> IO (), usbClaim :: Int -> Int -> IO ()
@@ -40,7 +42,13 @@ data UsbApi = UsbApi
   , usbRelease :: Int -> Int -> IO (), usbClose :: Int -> IO (), usbExit :: Int -> IO ()
   }
 
-newtype Clock = Clock { nowNS :: IO Word64 }
+-- pauseMs waits that many milliseconds of this clock's time.
+data Clock = TimedClock { nowNS :: IO Word64, pauseMs :: Int -> IO () }
+
+-- A clock read from the given source that pauses in real time.
+pattern Clock :: IO Word64 -> Clock
+pattern Clock now <- TimedClock now _
+  where Clock now = TimedClock now (\ms -> threadDelay (ms*1000))
 
 realClock :: Clock
 realClock = Clock getMonotonicTimeNSec
@@ -83,9 +91,41 @@ selectDevice devices
           | otherwise -> Left (UnsupportedProfile (descriptors d))
       eligible -> Left (MultipleEligibleDevices (length eligible))
 
--- The native provider refuses a larger budget; one transfer never waits longer.
+-- The budget of every transfer but a held reply.
 transferTimeoutMs :: Int
 transferTimeoutMs = 5000
+
+-- The native provider refuses a larger budget; one transfer never waits
+-- longer. Only commit-f7's trigger reply uses more than transferTimeoutMs.
+transferCeilingMs :: Int
+transferCeilingMs = 33000
+
+-- native_usb.c refuses a larger transfer.
+transferCeilingBytes :: Int
+transferCeilingBytes = 292
+
+transferLength :: P.Transfer -> Int
+transferLength (P.ControlWrite _ _ _ _ bytes) = length bytes
+transferLength (P.BulkOut _ bytes) = length bytes
+transferLength (P.BulkIn _ count) = count
+
+-- The shapes native_usb.c sends: the twelve-byte vendor control write and
+-- bulk transfers of 1..transferCeilingBytes.
+supportedTransfer :: P.Transfer -> Bool
+supportedTransfer packet = case packet of
+  P.ControlWrite 0x43 0 0 0 bytes -> length bytes == 12
+  P.ControlWrite {} -> False
+  _ -> transferLength packet >= 1 && transferLength packet <= transferCeilingBytes
+
+-- A provider transfer that ended with a nonzero status or a count outside its
+-- packet: the status, the count and the bytes read.
+data ProviderFailure = ProviderFailure Int Int [Word8] deriving (Show)
+instance Exception ProviderFailure
+
+-- Which provider outcomes a session journals as native-outcome lines. dump-ram
+-- pre-announces its frame sequence and journals one summary line per request,
+-- so it journals only a failing or short outcome.
+data OutcomeJournal = EveryOutcome | FailingOutcomes deriving (Eq, Show)
 
 remaining :: Clock -> Word64 -> IO Int
 remaining clock deadline = do
@@ -99,6 +139,35 @@ recordWithin cap dir kind body = do
   tick <- getMonotonicTimeNSec
   recordBatchWithin cap dir kind [(show tick, body)]
 
+journalLine :: String -> String -> String -> String
+journalLine tick kind body = show (1::Int,"camera"::String,tick,kind,body)++"\n"
+
+nativeOutcomeBody :: Int -> Int -> [Word8] -> String
+nativeOutcomeBody result count bytes = show (result,count,P.hexBytes bytes)
+
+-- The tick of a journal line at its widest.
+widestJournalTick :: String
+widestJournalTick = show (maxBound :: Word64)
+
+-- journal.v1 bytes of one bounded stage that completes.
+stageJournalBytes :: String -> Int
+stageJournalBytes label =
+  length (journalLine widestJournalTick "stage-intent" label) + length (journalLine widestJournalTick "stage-complete" label)
+
+-- journal.v1 bytes of one transfer that completes through tx in a session
+-- journaling every outcome. A packet of 0xff bytes bounds every packet of its
+-- length. A transfer adds fewer bytes to outgoing.v1 than to journal.v1.
+txJournalBytes :: P.Transfer -> Int
+txJournalBytes packet =
+  stageJournalBytes ("dispatch "++show packet)
+  + length (journalLine widestJournalTick "native-outcome" (nativeOutcomeBody 0 count reply))
+  + length (journalLine widestJournalTick "reply-before-deadline-check" (show (count,P.hexBytes reply)))
+  where
+    (count,reply) = case packet of
+      P.BulkIn _ n -> (n,replicate n 0)
+      P.BulkOut _ bytes -> (length bytes,[])
+      P.ControlWrite _ _ _ _ bytes -> (length bytes,[])
+
 -- recordWithin for several schema lines of one kind in one append: the same
 -- file choice and checks, one write and one fsync pair. Each entry carries its
 -- own decimal monotonic nanosecond clock.
@@ -106,7 +175,7 @@ recordBatchWithin :: Int -> FilePath -> String -> [(String,String)] -> IO ()
 recordBatchWithin cap dir kind entries = do
   let file = if kind == "outgoing-before-dispatch" then "outgoing.v1" else "journal.v1"
       path = dir </> file
-      content = concat [show (1::Int,"camera"::String,tick,kind,body)++"\n" | (tick,body) <- entries]
+      content = concatMap (\(tick,body) -> journalLine tick kind body) entries
   exists <- doesPathExist path
   when exists $ do
     status <- getSymbolicLinkStatus path
@@ -144,12 +213,16 @@ data Session = Session
   , sessionDirectory :: FilePath
   , sessionJournalCap :: Int
   , sessionDeadline :: Word64
+  , sessionOutcomes :: OutcomeJournal
   }
 
 newSession :: Clock -> UsbApi -> FilePath -> Int -> Int -> IO Session
-newSession clock api dir cap aggregateMs = do
+newSession = newSessionJournaling EveryOutcome
+
+newSessionJournaling :: OutcomeJournal -> Clock -> UsbApi -> FilePath -> Int -> Int -> IO Session
+newSessionJournaling outcomes clock api dir cap aggregateMs = do
   start <- nowNS clock
-  pure (Session clock api dir cap (start + fromIntegral aggregateMs*1000000))
+  pure (Session clock api dir cap (start + fromIntegral aggregateMs*1000000) outcomes)
 
 note :: Session -> String -> String -> IO ()
 note s = recordWithin (sessionJournalCap s) (sessionDirectory s)
@@ -157,25 +230,49 @@ note s = recordWithin (sessionJournalCap s) (sessionDirectory s)
 -- The intent is durable before the remaining budget is recomputed, so a session
 -- that crosses its deadline while journaling stops before entering the provider.
 bounded :: Session -> String -> (Int -> IO a) -> IO a
-bounded s label action = do
+bounded = boundedWithin transferTimeoutMs
+
+boundedWithin :: Int -> Session -> String -> (Int -> IO a) -> IO a
+boundedWithin budget s label action = do
+  unless (budget >= 1 && budget <= transferCeilingMs) (P.reject (label++" budget outside the transfer ceiling"))
   _ <- remaining (sessionClock s) (sessionDeadline s)
   note s "stage-intent" label
   before <- nowNS (sessionClock s)
   ms <- remaining (sessionClock s) (sessionDeadline s)
-  value <- action (min ms transferTimeoutMs)
+  value <- action (min ms budget)
   after <- nowNS (sessionClock s)
-  when (after >= sessionDeadline s || after >= before + fromIntegral transferTimeoutMs*1000000) (P.reject (label++" deadline exceeded"))
+  when (after >= sessionDeadline s || after >= before + fromIntegral budget*1000000) (P.reject (label++" deadline exceeded"))
   note s "stage-complete" label
   pure value
 
 tx :: Session -> P.Transfer -> Int -> IO [Word8]
-tx s packet count = do
+tx = txWithin transferTimeoutMs
+
+-- The one path from a session into a provider's transfer: the shape refusal and
+-- the native-outcome lines live here, not in a provider.
+dispatchTransfer :: Session -> P.Transfer -> Int -> IO (Int,[Word8])
+dispatchTransfer s packet ms = do
+  unless (supportedTransfer packet) (P.reject "unsupported native transfer")
+  outcome <- try (usbTransfer (sessionApi s) packet ms)
+  case outcome of
+    Left (ProviderFailure result count bytes) -> do
+      record result count bytes
+      if count < 0 || count > transferLength packet
+        then P.reject "invalid native byte count; raw count/status journaled without dereferencing bytes"
+        else P.reject ("native transfer status "++show result++"; partial count="++show count++"; no retry")
+    Right (count,bytes) -> do
+      when (sessionOutcomes s == EveryOutcome || count /= transferLength packet) (record 0 count bytes)
+      pure (count,bytes)
+  where record result count bytes = note s "native-outcome" (nativeOutcomeBody result count bytes)
+
+txWithin :: Int -> Session -> P.Transfer -> Int -> IO [Word8]
+txWithin budget s packet count = do
   case packet of
     P.ControlWrite _ _ _ _ bytes -> note s "outgoing-before-dispatch" (show packet++";bytes="++P.hexBytes bytes)
     P.BulkOut _ bytes -> note s "outgoing-before-dispatch" (show packet++";bytes="++P.hexBytes bytes)
     _ -> pure ()
-  (n,bytes) <- bounded s ("dispatch "++show packet) $ \ms -> do
-    outcome <- usbTransfer (sessionApi s) packet ms
+  (n,bytes) <- boundedWithin budget s ("dispatch "++show packet) $ \ms -> do
+    outcome <- dispatchTransfer s packet ms
     note s "reply-before-deadline-check" (show (fst outcome,P.hexBytes (snd outcome)))
     pure outcome
   unless (n == count) (P.reject "short/partial/oversized transfer; no retry")

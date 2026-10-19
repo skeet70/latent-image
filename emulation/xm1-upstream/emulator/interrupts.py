@@ -114,6 +114,7 @@ class KernelInterrupts:
         self.polled_timers = [PolledTimer(), PolledTimer()]
         self.application_timer = ApplicationTimer()
         self.trace = []
+        self.trace_dropped = 0
 
     @staticmethod
     def contains(address, size):
@@ -125,11 +126,26 @@ class KernelInterrupts:
         """Superset of the start addresses contains() accepts (RustBoard._mmio_device index)."""
         return tuple((base, base + 0x1000) for base in (*IRQ_BASES, TIMER_BASE))
 
+    TRACE_LIMIT = 20000
+
     def _record(self, name, **data):
         item = {'name': name, **data}
         self.trace.append(item)
+        if len(self.trace) > self.TRACE_LIMIT:
+            dropped = self.TRACE_LIMIT // 2
+            del self.trace[:dropped]
+            self.trace_dropped += dropped
         if self.board is not None:
             self.board.record(name, **data)
+
+    @property
+    def trace_position(self):
+        """Count of records ever appended, including dropped ones."""
+        return self.trace_dropped + len(self.trace)
+
+    def trace_since(self, position):
+        """Retained records appended at or after trace_position `position`."""
+        return self.trace[max(0, position - self.trace_dropped):]
 
     @staticmethod
     def _word(address, size):

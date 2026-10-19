@@ -92,4 +92,20 @@ def _lab_dependencies_impl(_ctx):
         build_file_content = 'exports_files(["bin/ffmpeg", "bin/ffprobe"], visibility = ["//visibility:public"])',
     )
 
+    # The RAM-push relinker's tools; //host/firmware:ram-push-toolchain-module
+    # resolves them to store paths.
+    for name, attribute, binaries in [
+        ("lab_bash", "bash", ["bin/bash"]),
+        ("lab_clang", "clang", ["bin/clang"]),
+        ("lab_lld", "lld", ["bin/ld.lld"]),
+        ("lab_llvm", "llvm", ["bin/llvm-objcopy", "bin/llvm-nm", "bin/llvm-objdump"]),
+        ("lab_coreutils", "coreutils", ["bin/readlink", "bin/sha256sum", "bin/sort"]),
+    ]:
+        nixpkgs_package(
+            name = name,
+            attribute_path = attribute,
+            repository = "@lab_nixpkgs",
+            build_file_content = "exports_files(%r, visibility = [\"//visibility:public\"])" % binaries,
+        )
+
 lab_dependencies = module_extension(implementation = _lab_dependencies_impl)

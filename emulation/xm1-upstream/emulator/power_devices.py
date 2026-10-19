@@ -256,6 +256,22 @@ class PowerDevices:
                 (self.DMA, self.DMA+max(self.DMA_OFFSETS)+1),
                 (0xfff98500, 0xfff98505), (0xfff55104, 0xfff55105))
 
+    def set_usb_connected(self, connected):
+        """Change the external cable presence level at a paused boundary.
+
+        Bit31 of 0xfff55104 follows it; no USB traffic, IRQ or guest state is supplied.
+        """
+        if type(connected) is not bool:
+            raise ValueError('USB presence input must be boolean')
+        if self.board.executing_cpu is not None:
+            raise ValueError('USB presence input changes only while the guest is paused')
+        if connected == self.usb_connected:
+            raise ValueError('USB presence input already has this level')
+        self.usb_connected = connected
+        self.registers[0xfff55104] = int(connected) << 31
+        self.board.record('USB cable presence input', usb_connected=connected,
+                          semantics='external level only; no USB traffic, IRQ or guest result injected')
+
     def read(self, core, address, size):
         kind = self._kind(address, size)
         if kind is None:

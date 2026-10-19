@@ -26,6 +26,7 @@
 #define RECIPE_BANK_UI_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #define RB_UI_VERBS_PER_SLOT 4u
 
@@ -40,14 +41,9 @@
 #define RB_UI_CLASS_SUB(slot) (RB_UI_CLASS_SUB0 + (slot))
 #define RB_UI_CLASS_RECALL 0x285u
 
-/* Rendering-root ids. The label resolver FUN_00bf93e0 takes a node id, looks it
- * up in the registry table 0x0081babc and resolves only that node or its
- * immediate children, so a page resolves when registry[id] is the page or its
- * immediate parent. The slot and recall pages are immediate children of the
- * shooting root (registry[1] = 0x78ea98) and keep id 1; the seven submenu pages
- * take RB_UI_SUB_ID with registry[0x61] = the slot page; the editor node takes
- * RB_UI_EDITOR_ID with registry[0x6a] = the editor node itself. Both ids are
- * zero in the registry and unused as node ids in the pinned decode. */
+/* FUN_00bf93e0 resolves the registered root and its immediate children.
+ * Slot and its verb pages share root 0x61; Recall uses shooting root 1.
+ * Edit and its fields share root 0x72; the dialog uses root 0x29. */
 #define RB_UI_SUB_ID 0x61u
 #define RB_UI_EDITOR_ID 0x6au
 
@@ -55,20 +51,21 @@
  * 0x16b only, and writes the wireless name for node ids 0x4d/0x56 only, so the
  * bank's editor node carries class 0x131 and its own id: typing routes through
  * the stock engine and its own confirm writes nothing, leaving the bank's write
- * to rb_name_edit_commit. The confirm row is charset token 0x2a. */
+ * to rb_name_edit_commit. Rows 0x27..0x29 move the cursor left and right and
+ * delete, row 0x2a confirms, and every row below 0x27 inserts a character. */
 #define RB_UI_EDITOR_CLASS 0x131u
+#define RB_UI_EDITOR_MOVE_LEFT_ROW 0x27u
 #define RB_UI_EDITOR_CONFIRM_ROW 0x2au
 
-/* Staged-edit pages this module claims: the edit screen (child rows that push
- * the field lists and the dialog) and the dialog (action rows OK/CANCEL). The
- * nine field hosts 0x267..0x26f are value lists and stay unclaimed. */
+/* Edit pages this module claims: the edit screen (child rows that push the
+ * field lists) and the dialog (action rows OK/CANCEL). The nine field hosts
+ * 0x267..0x26f are value lists. */
 #define RB_UI_CLASS_EDIT 0x277u
 #define RB_UI_CLASS_DIALOG 0x27du
 #define RB_UI_CLASS_FIELD0 0x267u
 #define RB_UI_CLASS_FIELD_LAST 0x26fu
-/* Edit screen row tokens: field row k (k = 0..8) carries
- * RB_UI_TOKEN_EDIT_ROW_BASE + k; the hidden row before the dialog carries
- * RB_UI_TOKEN_EDIT_HIDDEN_ROW (row index 9, token 0x82 per the emission). */
+/* Edit screen field row k (k = 0..8) carries RB_UI_TOKEN_EDIT_ROW_BASE + k.
+ * The verb pages' hidden dialog row carries RB_UI_TOKEN_EDIT_HIDDEN_ROW. */
 #define RB_UI_TOKEN_EDIT_ROW_BASE 0x70u
 #define RB_UI_TOKEN_EDIT_HIDDEN_ROW 0x82u
 #define RB_UI_TOKEN_DIALOG_OK 0x80u
@@ -119,6 +116,27 @@
 /* Stock cells the interposer reads. */
 #define RB_UI_FRAME_CELL 0x009571d0u
 #define RB_UI_CURSOR_CELL 0x009571d8u
+#define RB_UI_VISIBLE_CURSOR_CELL 0x009571dcu
+/* FUN_01165aa0 draws an open list's current-value marker on the row whose token
+ * is values[this row], read through a fresh FUN_0061cd14 snapshot (word 5).
+ * Only FUN_00bfa800's tail (a copy of the cursor cell, skipped for walk kind
+ * 0x13) and FUN_0061d3a8's menu-block restore write it. */
+#define RB_UI_CURRENT_ROW_CELL 0x0095732cu
+
+typedef struct {
+  uint32_t value;
+} RbMenuRoot;
+
+typedef struct {
+  uint32_t value;
+} RbViewRevision;
+
+extern volatile RbViewRevision rb_view_revision;
+
+static inline __attribute__((always_inline)) void rb_ui_view_changed(void)
+{
+  rb_view_revision.value += 1u;
+}
 
 typedef enum {
   RB_VERB_SAVE_CURRENT = 0,
@@ -252,17 +270,35 @@ static inline RbBankItemRef rb_ui_decode(uint32_t token)
   return item;
 }
 
+/* Mutation identity spans discovery, staging, verification and publication. */
+typedef struct {
+  uint32_t epoch;
+} RbMediaIdentity;
+
+RbMediaIdentity rb_media_sample(void);
+bool rb_media_matches(RbMediaIdentity identity);
+typedef void (*RbIoCallback)(uint32_t, uint32_t);
+RbMediaIdentity rb_io_request_identity(void);
+bool rb_media_worker_allows(RbIoCallback callback, RbMediaIdentity identity);
+
 /* Storage kernel (menu/recipe_bank_storage.c). */
-extern uint32_t rb_readback(uint32_t slot, uint8_t *name_out, uint8_t *payload_out);
-extern uint32_t rb_save_current(uint32_t slot, const uint8_t *name26);
-extern uint32_t rb_reset(uint32_t slot);
-extern uint32_t rb_recall(uint32_t slot);
-extern uint32_t rb_stage_load(uint32_t slot);
-extern uint32_t rb_name_commit(uint32_t slot, const uint8_t *name26);
+extern uint32_t rb_load(void);
+extern uint32_t rb_readback(uint32_t slot, uint8_t *name_out, uint8_t *payload_out,
+                            RbMediaIdentity identity);
+extern uint32_t rb_save_current(uint32_t slot, RbMediaIdentity identity);
+extern uint32_t rb_reset(uint32_t slot, RbMediaIdentity identity);
+extern uint32_t rb_recall(uint32_t slot, RbMediaIdentity identity);
+extern uint32_t rb_stage_load(uint32_t slot, RbMediaIdentity identity);
+extern uint32_t rb_name_commit(uint32_t slot, const uint8_t *name26,
+                               RbMediaIdentity identity);
 /* Resident-only name read: RB_OK with the resident name, which is zeros for an
  * unset slot (its availability is rb_meta_op_state's answer); RB_UNSET with the
  * zero name only when no bank image is resident; RB_RANGE for a bad slot. */
 extern uint32_t rb_name_resident(uint32_t slot, uint8_t *name26);
+/* The session's fields are the nine edit properties and RB_ISO_AUTO_FLAG, the
+ * payload's ISO auto flag (the 0x007a0018 entry of modes 0x21-0x24), which a
+ * new 0x141 code stages with it. */
+#define RB_ISO_AUTO_FLAG 0x146u
 extern uint32_t rb_stage_field(uint32_t prop, uint32_t code);
 extern uint32_t rb_stage_read(uint32_t prop);
 extern void rb_stage_name_set(const uint8_t *name12);
@@ -274,32 +310,20 @@ extern uint32_t rb_status_last(void);
 
 /* Name-editor glue (menu/recipe_bank_hook.c): load the slot's name into the
  * stock editor and set modal-75 state 0x1e; rb_name_edit_commit is the bank's
- * confirm write; rb_slot_load refreshes a slot's name record from the bank. */
-extern uint32_t rb_name_edit_open(uint32_t slot);
+ * confirm write; rb_name_edit_full reports whether the editor already holds
+ * the bank's twelve characters; rb_slot_load refreshes a slot's name record
+ * from the bank. */
+extern uint32_t rb_name_edit_open(uint32_t slot, RbMediaIdentity identity);
 extern uint32_t rb_name_edit_commit(void);
+extern bool rb_name_edit_full(void);
 extern uint32_t rb_slot_load(uint32_t slot);
 
-/* What a staged-edit confirmation dialog's OK runs: RB_CONFIRM_COMMIT is the
- * staged session's commit for the edit screen's leaving edge, RB_CONFIRM_ITEM is
- * one field item's leaving edge (its cancel restores the item's saved code), and
- * the Save Current and Reset items carry the other two. menu/recipe_bank_edit.h
- * includes this header instead of redefining the enum. */
-enum rb_edit_confirm {
-  RB_CONFIRM_NONE = 0,
-  RB_CONFIRM_COMMIT = 1,
-  RB_CONFIRM_SAVE = 2,
-  RB_CONFIRM_RESET = 3,
-  RB_CONFIRM_ITEM = 4
-};
-
-/* Staged-edit surface (menu/recipe_bank_edit.c): the edit screen's entry, its
- * leaving edge, the field-row select and item leaving edge, and the dialog
- * entries. */
-extern uint32_t rb_stage_edit_open(uint32_t slot);
-extern uint32_t rb_stage_edit_leave(void);
+/* Edit surface (menu/recipe_bank_edit.c): the edit screen's entry and leaving
+ * edge, the field-row OK, and the dialog entries. */
+extern uint32_t rb_stage_edit_open(uint32_t slot, RbMediaIdentity identity);
+extern void rb_stage_edit_close(void);
 extern uint32_t rb_stage_edit_row(uint32_t host, uint32_t row);
-extern uint32_t rb_stage_edit_item_leave(void);
-extern uint32_t rb_stage_edit_confirm_begin(enum rb_edit_confirm what, uint32_t slot);
+extern uint32_t rb_stage_edit_reset_begin(uint32_t slot, RbMediaIdentity identity);
 extern uint32_t rb_stage_edit_dialog_ok(void);
 extern uint32_t rb_stage_edit_dialog_cancel(void);
 
@@ -318,6 +342,45 @@ extern uint32_t rb_call_editor_confirm(void);
 extern void rb_call_stage_open(uint32_t kind, uint32_t id); /* FUN_00d3d858 */
 extern uint32_t rb_call_transition(void);                   /* FUN_00c12aac */
 extern void rb_call_postlude(uint32_t code);                /* FUN_00d38f34 */
+extern void rb_call_redraw(uint32_t code);
+extern void rb_call_stock_present(uint32_t event);
+extern void rb_call_preview_clear(void);
+extern void rb_call_stock_draw_root(uint32_t root);
+extern void rb_call_draw_root_prepare(uint32_t preparation);
+extern void rb_call_draw_pane(uint32_t root, uint32_t kind);
+extern void rb_call_draw_action_list(RbMenuRoot root);
+
+extern uint32_t rb_call_name_style(uint32_t variant);
+extern void rb_call_draw_mode(uint32_t mode);
+extern void rb_call_name_background(uint32_t background);
+extern void rb_call_name_title(uint32_t label, uint32_t variant);
+extern void rb_call_name_rect(int32_t left, int32_t top, int32_t right,
+                             int32_t bottom, uint8_t mode,
+                             uint32_t material, uint32_t opacity);
+extern void rb_call_name_shell(void);
+extern void rb_call_name_label(int32_t x, int32_t y, uint32_t label);
+extern void rb_call_name_material(uint32_t material, uint32_t opacity,
+                                 uint32_t background, uint32_t flags);
+extern void rb_call_name_utf16(int8_t x, int32_t y, const uint16_t *text);
+extern void rb_call_name_stretch(uint32_t left, int8_t right, uint32_t y,
+                                int8_t height, int8_t scale, uint32_t glyph);
+extern void rb_call_name_ascii(int8_t x, int32_t y, const char *text);
+extern uint32_t rb_call_name_footer(uint32_t label);
+extern void rb_call_name_label_position(uint32_t label, int8_t *x, int8_t *y);
+extern uint32_t rb_call_backdrop_suppressed(void);
+extern uint32_t rb_call_stock_key_right(void);
+extern uint32_t rb_call_stock_key_left(void);
+extern uint32_t rb_call_editor_cancel(void);
+extern uint32_t rb_name_edit_cancel(void);
+void rb_bank_draw_root(uint32_t root);
+/* Points RB_UI_CURRENT_ROW_CELL at the open field list's staged row. */
+void rb_bank_field_current_row(void);
+void rb_bank_draw_name(void);
+uint32_t rb_bank_key_right(void);
+uint32_t rb_bank_key_left(void);
+void rb_ui_probe_visit(void);
+enum rb_row_state rb_ui_probe_state(uint32_t property, uint32_t row);
+void rb_bank_present(uint32_t event);
 
 /* Availability lane's stock-ABI render probe: the raw property and row words
  * the blob entry passes in r5/r6, the row state out in r0. */
@@ -338,18 +401,18 @@ extern void rb_media_epoch_bump(void);
 /* Storage lane's read-only verdict for one bank operation. */
 uint32_t rb_meta_op_state(enum rb_bank_op op, uint32_t slot, uint32_t reload);
 
-/* The bank's menu entries. rb_bank_interpose is the word modal-75 action-table
+/* rb_bank_interpose is the word modal-75 action-table
  * index 1 holds; it returns the transition result for entered rows and the stock
  * handler's result otherwise. The two rows appended to the shooting root are
  * claimed by their tokens and their children's page classes and pushed through
- * rb_ui_child_enter; every other root row delegates. rb_bank_action decodes one
- * bank token, returning 1 when it handled the token and 0 when the token is not
- * a bank item. rb_ui_child_enter pushes the selected row's child with the
+ * rb_ui_child_enter; every other root row delegates.
+ * rb_ui_child_enter pushes the selected row's child with the
  * semantics this module owns (parent repointing with refusal rollback, cursor
- * reset, name republication) and is the entry the staged-edit module calls for
+ * placement, name republication) and is the entry the staged-edit module calls for
  * its dialog and edit-screen pushes. */
 uint32_t rb_bank_interpose(void);
-uint32_t rb_bank_action(uint32_t token);
+/* RB_RANGE for a token outside the bank. */
+enum rb_bank_status rb_bank_action(uint32_t token, RbMediaIdentity identity);
 uint32_t rb_ui_child_enter(void);
 
 #endif

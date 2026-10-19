@@ -176,7 +176,7 @@ def make_menu_server(session, port=0, *, page='index.html', bind='127.0.0.1', ho
                 except Exception as error:
                     self._json({'error': str(error)}, 400)
                 return
-            actions = {'/api/checkpoint': 'checkpoint_current',
+            actions = {'/api/checkpoint': 'checkpoint_current', '/api/mode-dial': 'mode_dial',
                        '/api/media': 'media_control', '/api/media/restart': 'restart_media'}
             if self.path not in actions:
                 return super().do_POST()

@@ -1,14 +1,7 @@
 {-# LANGUAGE GHC2021 #-}
 {-# LANGUAGE OverloadedStrings #-}
--- Recipe-bank kernel behavior cases. Each case's memory image is composed
--- from pinned inputs; every behavior expectation is derived from the storage
--- contract before execution. The stack region and the kernel's operational
--- cells carry no contract fact: phase 1 observes them and phase 2 pins them
--- as OBSERVED RESIDUE, never as behavior claims.
---
--- The d3-* family runs the composed candidate's own slices instead: the stock
--- commit dispatcher entered with property 0xfe and the film row token, the
--- prefix-resident compiled-recipe hook, and the consumer cells its arms write.
+-- Recipe-bank cases observe public returns, readback buffers, live settings
+-- and card bytes. Foreign media requests complete synchronously in the model.
 module Main where
 
 import Control.Monad
@@ -20,6 +13,7 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import Data.Bits
+import Data.Char (toUpper)
 import Data.Foldable (toList)
 import Data.List
 import Data.String (fromString)
@@ -80,6 +74,21 @@ name26 s = B.pack (take 26 (concatMap (\c -> [fromIntegral (fromEnum c), 0]) (ta
 
 data Field = Field { fProp :: !Word32, fOff :: !Int, fShift :: !Int, fBytes :: !Int, fMask :: !Word32 }
 
+data MediaSwapBoundary = BeforeDestructiveOpen | BeforeWrite
+
+swapBoundaryCell :: MediaSwapBoundary -> (String, Word32)
+swapBoundaryCell boundary = ("rbm_swap_boundary", case boundary of
+  BeforeDestructiveOpen -> 1
+  BeforeWrite -> 2)
+
+data CloseFault = NoopWriteClose | KeepVerifyClose | LoseVerifyCallback
+
+closeFaultCell :: CloseFault -> (String, Word32)
+closeFaultCell fault = ("rbm_close_fault", case fault of
+  NoopWriteClose -> 1
+  KeepVerifyClose -> 2
+  LoseVerifyCallback -> 3)
+
 extractCodes :: [(Word32, Word32)]
 extractCodes = [(0x104, 1), (0x110, 3), (0x111, 4), (0x10e, 4), (0x10f, 3), (0xef, 2), (0xed, 3), (0x141, 0xb), (0xfe, 5)]
 
@@ -109,6 +118,7 @@ data Model = Model
   , mLive :: B.ByteString            -- 0x1c2 bytes at 0x0096cc64
   , mCells :: M.Map String Word32    -- model-data cells by symbol
   , mMode :: Word32
+  , mShootingMode :: Word32          -- the mode cell 0x00956838 (0x21 P, 0x22 S)
   , mCase :: B.ByteString            -- bytes at 0x009a0000 (name buffers)
   , mExtra :: [(String, Integer, B.ByteString)] -- named regions at RAM addresses
   }
@@ -117,6 +127,11 @@ data Expect = Expect
   { eStatus :: String, eR0 :: Word32
   , eClaims :: [(String, Int, B.ByteString)]
   }
+
+newtype GuestAddress = GuestAddress Integer deriving (Eq, Ord)
+newtype RegionId = RegionId String deriving (Eq, Ord)
+
+data BankOperation = BankSaveCurrent | BankReset | BankRename | BankRecall
 
 data Spec = Spec
   { spId :: String, spProv :: String, spEntry :: String
@@ -156,14 +171,19 @@ main = do
   id4Path <- maybe (fail "--id4") pure (opt "id4")
   id5Path <- maybe (fail "--id5") pure (opt "id5")
   hostFix <- maybe (fail "--host-fixtures") pure (opt "host-fixtures")
-  let candidateDir = fromMaybe "private-data/analysis/x-m1-1.50/recipes/runtime/combined-candidate" (opt "candidate")
+  let candidateDir = fromMaybe "private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/package/image" (opt "candidate")
+      kernelBase = hexI (fromMaybe "0x00be1f00" (opt "rb-base"))
+      id4Base = hexI (fromMaybe "0x0061c400" (opt "id4-base"))
   createDirectoryIfMissing True out
   ks <- parseSyms (build </> "kernel.syms")
+  unless (addr ks "__rb_image_start" == kernelBase) (fail "--rb-base differs from linked __rb_image_start")
   ms <- parseSyms (build </> "model.syms")
   kbin <- B.readFile (build </> "kernel.bin")
   ktext <- B.readFile (build </> "kernel-text.bin")
   mdataRaw <- B.readFile (build </> "model-data.bin")
-  id4 <- B.readFile id4Path
+  id4Raw <- B.readFile id4Path
+  unless (id4Base <= 0x61c400 && id4Base >= 0x61c1fc) (fail "--id4-base outside the 1.50 prefix range")
+  let id4 = B.drop (fromIntegral (0x61c400 - id4Base)) id4Raw
   id5 <- B.readFile id5Path
   fieldsRaw <- B.readFile fieldsPath
   let ktextLen = B.length ktext
@@ -172,7 +192,7 @@ main = do
       fTable = B.concat [B.concat [u32le (fProp f), u32le (fromIntegral (fOff f)), u32le (fromIntegral (fShift f)), u32le (fromIntegral (fBytes f)), u32le (fMask f)] | f <- fields]
       mediaSpans = ["rbm_low_close", "rbm_read", "rbm_write", "rbm_close", "rbm_open", "rbm_stat", "rbm_index_free", "rbm_mapping_delete", "rbm_resolve", "rbm_tag_release"]
       mediaLo = minimum [addr ms n | n <- mediaSpans]
-      mediaHi = maximum [addr ms n + sizeOf ms n | n <- mediaSpans ++ ["rbm_event_hook", "rbm_detach_event", "rbm_attach_event", "rbm_media_eval", "rbm_tag_release"]]
+      mediaHi = maximum [addr ms n + sizeOf ms n | n <- mediaSpans ++ ["helpers"]]
       chunk n = B.readFile (build </> ("model-" ++ n ++ ".bin"))
   getter <- chunk "getter"
   setter <- chunk "setter"
@@ -207,7 +227,7 @@ main = do
         ++ ", id5-final "
         ++ d3Id5
     )
-  specs <- pure (specSet ks ms fields tabs hostBank (realStock id4 id5) ++ d3SpecSet id4Final id5Final)
+  specs <- pure (specSet ks ms fields tabs hostBank (realStock (GuestAddress id4Base) id4Raw id5) ++ d3SpecSet id4Final id5Final)
   results <- forM specs $ \sp -> do
     let loop s fuel = do
           r <- runSpec build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable getter setter mediaImg tabImg mediaLo s
@@ -216,10 +236,12 @@ main = do
             Just n | fuel > 0 && n `notElem` spFns s -> loop (s { spFns = spFns s ++ [n] }) (fuel - 1)
             _ -> pure r
     loop sp (48 :: Int)
-  BL.writeFile (out </> "results.json") (encode (object ["cases" .= results, "compiled_recipe_candidate" .= object ["dir" .= candidateDir, "id4_final_sha256" .= d3Id4, "id5_final_sha256" .= d3Id5]]))
-  writeFile (out </> "findings.txt") (findingsText specs results)
-  putStrLn ("ran " ++ show (length specs) ++ " cases")
-  unless (all ((== Just ("passed" :: String)) . parseMaybe (withObject "result" (.: "status"))) results) exitFailure
+  bootResults <- maybe (pure []) (\package -> (++) <$> runBootCases out runner package <*> runAllocatorCases out runner package) (opt "boot-package")
+  let allResults = results ++ bootResults
+  BL.writeFile (out </> "results.json") (encode (object ["cases" .= allResults, "compiled_recipe_candidate" .= object ["dir" .= candidateDir, "id4_final_sha256" .= d3Id4, "id5_final_sha256" .= d3Id5]]))
+  writeFile (out </> "findings.txt") (findingsText specs results ++ if null bootResults then "" else "\nBoot cases use register-only stock semaphore ABI boundaries and stop at DSB after publication stores. Cache/core/source-coherence acceptance is not claimed. Allocator cases execute the packaged stock backing allocator at its new capacity boundary.\n")
+  putStrLn ("ran " ++ show (length allResults) ++ " cases")
+  unless (all ((== Just ("passed" :: String)) . parseMaybe (withObject "result" (.: "status"))) allResults) exitFailure
 
 parseFields :: B.ByteString -> [Field]
 parseFields raw = either (error . ("invalid field map: " ++)) id (eitherDecodeStrict' raw >>= parseEither p)
@@ -274,26 +296,32 @@ packTables id4 entries = (B.concat (map snd pieces), M.fromList (zip (map fst pi
 -- storage lane's real-byte contract and the D3 row-path cases): the chain and
 -- dispatcher code with the two copy wrappers replaced by one bx lr each, the
 -- conversion tables and pointer block at their stock addresses, the cells
--- block with the mode cell 0x21 and the settings mirror with the not-found
--- flag set. The synthetic getter and setter retire: 0x0061e110 and 0x00624694
+-- block with the mode cell 0x21, the settings mirror with the not-found
+-- flag set and the stock per-slot defaults row. The menu and mode tables share
+-- one region. The synthetic getter and setter retire: 0x0061e110 and 0x00624694
 -- are the real code inside the chain.
-realStock :: B.ByteString -> B.ByteString -> [(String, Integer, B.ByteString)]
-realStock id4 id5 =
-  [ ("chain", 0x0061c91c, chain)
+realStock :: GuestAddress -> B.ByteString -> B.ByteString -> [(String, Integer, B.ByteString)]
+realStock (GuestAddress id4Base) id4Raw id5 =
+  [ ("chain", id4Base, chain)
   , ("dispatcher", 0x00d4d604, B.take 20608 (B.drop (0x00d4d604 - 0x00bf1a00) id5))
   , ("conv-tables", 0x00774f48, B.take 0x68dc (B.drop (0x774f48 - 0x61c400) id4))
   , ("conv-ptrs", 0x0081b09c, B.take 0x860 (B.drop (0x81b09c - 0x61c400) id4))
   , ("cells", 0x00956838, poke 0 (u32le 0x21) (B.replicate 0x1000 0))
-  , ("modetab", 0x007a0018, B.take 0x1400 (B.drop (0x7a0018 - 0x61c400) id4))
-  , ("menutab", 0x00780000, B.take 0x20000 (B.drop (0x780000 - 0x61c400) id4))
+  , ("menutab", 0x00780000, B.take (0x7a1460 - 0x780000) (B.drop (0x780000 - 0x61c400) id4))
+  , ("defaults-row", defaultsRowAddress, B.take 0x28 (B.drop (fromIntegral defaultsRowAddress - 0x61c400) id4))
   , ("media-state", 0x00910140, B.replicate 0x42100 0)
   , ("mirror", 0x0089ec00, poke 0x1c8 (u32le 1) (B.replicate 0x200 0))
   ]
   where
-    chain = poke (0x61d9ec - 0x61c91c) bxlr (poke (0x61d8dc - 0x61c91c) bxlr raw)
-    raw = B.take 0x2c000 (B.drop (0x61c91c - 0x61c400) id4)
+    id4 = B.drop (fromIntegral (0x61c400 - id4Base)) id4Raw
+    chain = poke (fromIntegral (0x61d9ec - id4Base)) bxlr
+      (poke (fromIntegral (0x61d8dc - id4Base)) bxlr raw)
+    raw = B.take (fromIntegral (0x64891c - id4Base)) id4Raw
     bxlr = B.pack [0x1e, 0xff, 0x2f, 0xe1]
     poke o v b = B.take o b <> v <> B.drop (o + B.length v) b
+
+defaultsRowAddress :: Integer
+defaultsRowAddress = 0x007cb804
 
 -- the compiled-recipe consumer family ---------------------------------------
 
@@ -335,7 +363,7 @@ d3SpecSet id4f id5f = map mk d3Cases
       claim
       "0x00d4fc74"
       (d3Args rowToken)
-      (Model (B.replicate 0x660 0) (B.replicate 0x1c2 0xaa) M.empty 1 B.empty (d3Extras id4f id5f))
+      (Model (B.replicate 0x660 0) (B.replicate 0x1c2 0xaa) M.empty 1 0x21 B.empty (d3Extras id4f id5f))
       (Expect "returned" 0x4d (d3Claims rowToken recipeTable))
       d3Fns
       d3Stubs
@@ -564,50 +592,102 @@ specSet ks ms fields tabs hostBank real = map ($ ()) builders
     validPayload = payloadReal
     emptyCard = B.replicate 0x660 0
     cardWith a b = B.take 0x220 (a <> B.replicate 0x220 0) <> B.take 0x220 (b <> B.replicate 0x220 0) <> B.replicate 0x220 0
-    model st = Model emptyCard liveFixture (M.fromList st) 1 B.empty real
-    builders =
-      [ \_ -> blankLoad, \_ -> validLoad, \_ -> bothLoad, \_ -> hostLoad
+    model st = Model emptyCard liveFixture (M.fromList st) 1 0x21 B.empty real
+    builders = map (\operation _ -> staleMediaOperation operation)
+      [BankRename, BankSaveCurrent, BankReset, BankRecall] ++
+      existingBuilders
+    existingBuilders =
+      [ \_ -> stageMediaChanged, \_ -> blankLoad, \_ -> validLoad, \_ -> bothLoad, \_ -> hostLoad
       , \_ -> atCRecall, \_ -> unsetRecall, \_ -> genExhaust, \_ -> extractSave
-      , \_ -> realRecall, \_ -> realConsumers, \_ -> realE9, \_ -> realRefused, \_ -> badChecksum, \_ -> badCode, \_ -> badUnbound
-      , \_ -> stageOk, \_ -> stageCancel, \_ -> resetCase, \_ -> renameCase
+      , \_ -> realRecall, \_ -> realConsumers, \_ -> realE9, \_ -> realRefused
+      , \_ -> realIsoAuto ("s", 0x22, "0x22"), \_ -> realIsoAuto ("m", 0x24, "0x24"), \_ -> realIsoAutoMode0, \_ -> realIsoAutoNoFlag, \_ -> realIsoManualAfterAuto
+      , \_ -> badChecksum, \_ -> badCode, \_ -> badUnbound
+      , \_ -> stageOk, \_ -> stageCancel, \_ -> resetCase, \_ -> renameCase, \_ -> renameUnsetCase
       , \_ -> readOnlySave, \_ -> fullCardSave, \_ -> partialWrite, \_ -> powerLoss
-      , \_ -> mediaMoveInScan, \_ -> mediaMoveInWrite, \_ -> closeDeferred
-      , \_ -> openTagZero, \_ -> writeCloseOwned, \_ -> writeCloseLate ]
+      , \_ -> mediaMoveInScan, \_ -> mediaMoveInOpen, \_ -> mediaMoveInWrite, \_ -> closeDeferred
+      , \_ -> twoDeferredReadback, \_ -> openTagZero, \_ -> writeCloseOwned, \_ -> writeCloseLate ]
+    staleMediaOperation operation =
+      let (suffix, target) = case operation of
+            BankSaveCurrent -> ("save", "rb_save_current")
+            BankReset -> ("reset", "rb_reset")
+            BankRename -> ("rename", "rb_name_commit")
+            BankRecall -> ("recall", "rb_recall")
+          identityArgument = case operation of
+            BankRename -> 0xe1a02004
+            _ -> 0xe1a01004
+          workload = B.concat (map u32le
+            [ 0xe92d4010, 0xe59fc024, 0xe12fff3c, 0xe1a04000
+            , 0xe59fc01c, 0xe12fff3c, 0xe3a00000, 0xe59f1018
+            , identityArgument, 0xe59fc00c, 0xe12fff3c, 0xe8bd8010
+            , fromIntegral (addr ks "rb_media_epoch")
+            , fromIntegral (addr ks "rb_media_epoch_bump")
+            , fromIntegral (addr ks target), 0x009a0000
+            ])
+       in Spec ("h-entry-media-" ++ suffix)
+          "contract: a caller's entry card identity cannot be rebound after a media change; the operation returns MEDIA_CHANGED and preserves both files and all live settings"
+          "0x009b0000" []
+          ((model (fileA []))
+            { mCard = cardWith validA B.empty, mLive = extractLive
+            , mCase = name26 "DELTA"
+            , mExtra = ("prefix", 0x009b0000, workload) :
+                [region | region@(name, _, _) <- real, RegionId name /= RegionId "dispatcher"]
+            })
+          (Expect "returned" 13 [("card", 0, cardWith validA B.empty), ("live-state", 0, extractLive)])
+          ("0x009b0000/48" : target : "rb_media_epoch" : "rb_media_epoch_bump" : loadFns)
+          bankStubs
+    stageMediaChanged = Spec "e-stage-media-change"
+      "contract: a card identity change after opening a staged edit refuses commit with MEDIA_CHANGED; both bank files and the live settings remain unchanged"
+      "0x009b0000" []
+      ((model (fileA []))
+        { mCard = cardWith validA B.empty
+        , mLive = extractLive
+        , mExtra = ("prefix", 0x009b0000, stageMediaWorkload) :
+            [region | region@(name, _, _) <- real, RegionId name /= RegionId "dispatcher"]
+        })
+      (Expect "returned" 13 [("card", 0, cardWith validA B.empty), ("live-state", 0, extractLive)])
+      ("0x009b0000/52" : "rb_stage_load" : "rb_stage_commit" : "rb_media_epoch_bump" : loadFns)
+      bankStubs
+    stageMediaWorkload = B.concat (map u32le
+      [ 0xe92d4010, 0xe3a00000, 0xe59fc024, 0xe12fff3c
+      , 0xe3500000, 0x1a000005, 0xe59fc018, 0xe12fff3c
+      , 0xe3a00000, 0xe3a01000, 0xe59fc00c, 0xe12fff3c, 0xe8bd8010
+      , fromIntegral (addr ks "rb_stage_load")
+      , fromIntegral (addr ks "rb_media_epoch_bump")
+      , fromIntegral (addr ks "rb_stage_commit")
+      ])
     hostLoad = Spec "a-load-host-fixture"
-      "contract: cross-language direction A - the C kernel loads a bank file encoded by the Haskell codec (host-bank.bin, literal names ALPHA..GOLF and literal halfword payloads at +0x00/+0x02) and accepts its header, checksum and all seven slots; the resident image equals the host file byte for byte"
-      "rb_load" [] ((model (fileA [])) { mCard = cardWith hostBank B.empty })
-      (Expect "returned" 0 [("kdata", fromIntegral (addr ks "rb_resident"), hostBank), ("card", 0, cardWith hostBank B.empty)]
-        )
-      loadFns ["task", "vol", "card", "live", "store"]
+      "contract: public readback returns all seven literal names and halfword-bearing payloads from the independently Haskell-encoded bank without changing card bytes"
+      "rbm_seq_load_all_readback" [0x009a0000, 0x009a0100] ((model (fileA [])) { mCard = cardWith hostBank B.empty })
+      (Expect "returned" 0
+        [("casebuf", 0, B.take 182 (B.drop 0x138 hostBank)), ("casebuf", 0x100, B.take 280 (B.drop 0x20 hostBank)), ("card", 0, cardWith hostBank B.empty)])
+      ("rbm_seq_load_all_readback" : "rb_readback" : loadFns) bankStubs
     extractLive = liveReal
     extractPayload = payloadReal
     extractSave = Spec "b-save-extract-codes"
       "contract: the fixed extraction, recipeOf 1 3 4 4 3 2 3 0xb 5 (DR/highlight/shadow/colour/sharp/NR/WB/ISO/film): the save's file payload carries the literal shifted bytes +0x05=0x40 +0x07=0x80 +0x08=0x60 +0x09=0x80 +0x10=0x40 +0x17=0x60 +0x20=0x0b +0x21=0x03 +0x24=0x05 and nothing else, and the live state (C record row 0, ordinary row 1, the wireless 0xa8/0xa9 bytes) is byte-identical after the save - the old zero-on-shift extraction would write zeros at the shifted fields and the C-preservation claim would still pass, so the payload claim is the distinguishing assertion"
-      "rb_save_current" [1, 0x009a0000]
+      "rb_save_current" [1, 0]
       ((model []) { mLive = extractLive, mCard = emptyCard })
       (Expect "returned" 0 [("card", 0, cardWith (encodeFile 1 0x0002 [(name26 "", B.replicate 0x28 0), (name26 "", extractPayload)]) B.empty),
         ("live-state", 0, extractLive)]
         )
       saveFns bankStubs
     blankLoad = Spec "a-load-blank"
-      "contract: rb_load on a card with no bank file returns 9 (no-bank) and publishes the empty bank"
-      "rb_load" [] (model []) (Expect "returned" 9 [("kdata", fromIntegral (addr ks "rb_resident"), B.replicate 512 0)])
-      ["rb_load", "rb_scan_file", "rb_open", "rb_map_completion", "rb_io_cb", "rb_memcpy"] ["task", "vol", "card", "live", "store"]
+      "contract: rb_load on a card with no bank file returns 9 (no-bank) without changing card bytes or live settings"
+      "rb_load" [] (model []) (Expect "returned" 9 [("card", 0, emptyCard), ("live-state", 0, liveFixture)])
+      loadFns bankStubs
     validA = encodeFile 7 0x0001 (replicate 7 (name26 "ALPHA", validPayload))
     fileA st = ("rbm_a_present", 1) : ("rbm_a_size", 512) : st
     validLoad = Spec "a-load-valid-a"
-      "contract: rb_load with one valid RECIPEA.BIN returns 0 and the resident image equals that file byte for byte; the A scan opens, stats, reads 512 and closes"
-      "rb_load" [] ((model (fileA [])) { mCard = cardWith validA B.empty })
-      (Expect "returned" 0 [("kdata", fromIntegral (addr ks "rb_resident"), validA), ("card", 0, cardWith validA B.empty)]
-        )
-      loadFns ["task", "vol", "card", "live", "store"]
+      "contract: one valid RECIPEA.BIN loads successfully and public readback returns slot 0's ALPHA name and payload without changing either file"
+      "rbm_seq_load_readback" [0, 0x009a0000, 0x009a0020] ((model (fileA [])) { mCard = cardWith validA B.empty })
+      (Expect "returned" 0 [("casebuf", 0, name26 "ALPHA"), ("casebuf", 0x20, validPayload), ("card", 0, cardWith validA B.empty)])
+      ("rbm_seq_load_readback" : "rb_readback" : loadFns) bankStubs
     validB = encodeFile 9 0x0002 (replicate 7 (name26 "BETA", validPayload))
     bothLoad = Spec "a-load-b-newer"
-      "contract: with both files valid the higher generation wins; B carries generation 9 against A's 7, so the resident image equals RECIPEB.BIN"
-      "rb_load" [] ((model (fileA [("rbm_b_present", 1), ("rbm_b_size", 512)])) { mCard = cardWith validA validB })
-      (Expect "returned" 0 [("kdata", fromIntegral (addr ks "rb_resident"), validB), ("card", 0, cardWith validA validB)]
-        )
-      loadFns ["task", "vol", "card", "live", "store"]
+      "contract: the higher generation wins; public readback of slot 1 returns BETA from B's generation 9 instead of ALPHA from A's generation 7"
+      "rbm_seq_load_readback" [1, 0x009a0000, 0x009a0020] ((model (fileA [("rbm_b_present", 1), ("rbm_b_size", 512)])) { mCard = cardWith validA validB })
+      (Expect "returned" 0 [("casebuf", 0, name26 "BETA"), ("casebuf", 0x20, validPayload), ("card", 0, cardWith validA validB)])
+      ("rbm_seq_load_readback" : "rb_readback" : loadFns) bankStubs
     atCRecall = Spec "c-recall-at-c"
       "contract: recall at mode-class 3 (dial at C) returns 8 and leaves the card untouched"
       "rb_recall" [2] ((model []) { mMode = 3 })
@@ -631,14 +711,16 @@ specSet ks ms fields tabs hostBank real = map ($ ()) builders
     realRecallPayload = u16le 0x1234 <> u16le 0x5678 <> B.drop 4 extractPayload
     realRecallFile = encodeFile 7 0x0001 ((name26 "ALPHA", realRecallPayload) : replicate 6 (name26 "ALPHA", payloadReal))
     realStockFns =
+      ["0x0061c3ac/76" | ("chain", a, bytes) <- real, a <= 0x61c3ac, a + fromIntegral (B.length bytes) >= 0x61c3f8]
+      ++
       [ "0x00d4d604/20", "0x00d4fc74/10768", "0x0061c91c/16"
       , "0x0061c93c/16", "0x0061d8dc/80", "0x0061d9ec/80"
       , "0x0061e110/25832", "0x00624620/44", "0x00624694/49968", "0x006309c4/112"
       , "0x0063396c/32", "0x00633b6c/32", "0x00633b8c/32"
       , "0x00633cac/32", "0x00633d0c/32", "0x0063458c/32", "0x0063460c/32"
       , "0x006347b0/32", "0x006347d0/32", "0x006439e0/40", "0x00643d94/48"
-      , "0x00643dc4/40", "0x00643e9c/40", "0x00643fb8/76", "0x00644848/476"
-      , "0x0061cd14/264", "0x0061d154/80", "0x0061d534/16", "0x00631b74/484", "0x00632860/192", "0x00632920/20", "0x00632934/28", "0x00632950/116", "0x0063386c/32", "0x006338ec/32", "0x0063390c/32", "0x0063392c/32", "0x0063394c/32", "0x0063398c/32", "0x006339ac/32", "0x00633a0c/32", "0x00633a2c/32", "0x00633a4c/32", "0x00633a8c/32", "0x00633aac/32", "0x00633acc/32", "0x00633aec/32", "0x00633b0c/32", "0x00633b4c/32", "0x00633c0c/32", "0x00633c8c/32", "0x00633ccc/32", "0x00633cec/32", "0x00633e0c/32", "0x00633e8c/32", "0x00633eac/32", "0x006340cc/32", "0x0063412c/32", "0x0063432c/32", "0x0063462c/36", "0x00634830/32", "0x00634850/32", "0x00634890/32", "0x006348b0/32", "0x006348d0/32", "0x00635aac/36", "0x00635ad0/36", "0x006394d0/24", "0x0063d3bc/220", "0x0063d5fc/24", "0x0063d614/116", "0x0063d688/1180", "0x0063db24/80", "0x0063ead0/144", "0x006425ec/80", "0x00643c4c/152", "0x00643e30/40", "0x00643ec4/68", "0x00643f08/40", "0x00644004/80", "0x00644054/44", "0x006440b4/212", "0x00644188/56", "0x006441c0/244", "0x006442b4/56", "0x006442ec/116", "0x00644360/244", "0x006464cc/40", "0x006464f4/44", "0x00646574/48", "0x00646af0/116", "0x00646c04/152" ]
+      , "0x00643dc4/40", "0x00643e9c/40", "0x00643e58/68", "0x00643fb8/76", "0x00644848/476"
+      , "0x0061cd14/264", "0x0061d154/80", "0x0061d534/16", "0x0061d544/16", "0x00631d58/388", "0x00631b74/484", "0x00632860/192", "0x00632920/20", "0x00632934/28", "0x00632950/116", "0x0063386c/32", "0x006338ec/32", "0x0063390c/32", "0x0063392c/32", "0x0063394c/32", "0x0063398c/32", "0x006339ac/32", "0x00633a0c/32", "0x00633a2c/32", "0x00633a4c/32", "0x00633a8c/32", "0x00633aac/32", "0x00633acc/32", "0x00633aec/32", "0x00633b0c/32", "0x00633b4c/32", "0x00633c0c/32", "0x00633c8c/32", "0x00633ccc/32", "0x00633cec/32", "0x00633e0c/32", "0x00633e8c/32", "0x00633eac/32", "0x006340cc/32", "0x0063412c/32", "0x0063432c/32", "0x0063462c/36", "0x00634830/32", "0x00634850/32", "0x00634890/32", "0x006348b0/32", "0x006348d0/32", "0x00635aac/36", "0x00635ad0/36", "0x006394d0/24", "0x0063d3bc/220", "0x0063d5fc/24", "0x0063d614/116", "0x0063d688/1180", "0x0063db24/80", "0x0063ead0/144", "0x006425ec/80", "0x00643c4c/152", "0x00643e30/40", "0x00643ec4/68", "0x00643f08/40", "0x00644004/80", "0x00644054/44", "0x006440b4/212", "0x00644188/56", "0x006441c0/244", "0x006442b4/56", "0x006442ec/116", "0x00644360/244", "0x006464cc/40", "0x006464f4/44", "0x00646574/48", "0x00646af0/116", "0x00646c04/152" ]
     realStubs = ["task", "vol", "card", "tone-notify", "pipeline-notify", "display-notify", "mode-state-a", "mode-state-b", "mode-state-c", "journal-stub", "out-window-stub"]
     realRecall = Spec "c-recall-real-bytes"
       "contract: recall through the real stock getter, setter, writer, reader and commit dispatcher: the status is 0 (the kernel's own re-read of all 83 walked fields agrees), the live halfwords at 0x0096cc74/0x0096cc76 carry the payload's +0x00/+0x02 codes through the setter's ordinary branch, and the film cell 0x009568b8 carries the recalled film code's col2 from the table at 0x0077ac30 (code 5 maps to col2 9)"
@@ -669,12 +751,11 @@ specSet ks ms fields tabs hostBank real = map ($ ()) builders
     e9RecallFile = encodeFile 7 0x0001 ((name26 "ALPHA", e9Payload) : replicate 6 (name26 "ALPHA", payloadReal))
     e9Reread = encodeFile 8 0x0001 ((name26 "", e9Payload) : replicate 6 (name26 "ALPHA", payloadReal))
     realE9 = Spec "c-recall-real-e9-preserved"
-      "contract: the bound-not-walked 0xe9 row (payload +0x0a bits 5-7) survives the validation and the remembered-payload write path: the loaded file carries 0xe0 at +0x0a, a staged commit of slot 0 writes the new generation whose payload keeps those bits (no walk row carries them and normalisation does not mask them), and the resident equals the written file"
+      "contract: the remembered payload's 0xe9 bits survive staged commit in the durable new generation"
       "rbm_seq_stage_roundtrip" [0, 0x009a0000]
       ((model (fileA [])) { mCard = cardWith e9RecallFile B.empty })
       (Expect "returned" 0
-        [ ("card", 0, cardWith e9RecallFile e9Reread)
-        , ("kdata", fromIntegral (addr ks "rb_resident"), e9Reread) ])
+        [ ("card", 0, cardWith e9RecallFile e9Reread) ])
       ("rbm_seq_stage_roundtrip" : "rb_stage_load" : "rb_stage_commit" : "rb_stage_image" : "rb_write_back" : loadFns ++ realStockFns) realStubs
     refusedPayload = putByte 0x23 (\v -> (v .&. 0xf0) .|. 0x0b) realRecallPayload
     refusedRecallFile = encodeFile 7 0x0001 ((name26 "ALPHA", refusedPayload) : replicate 6 (name26 "ALPHA", payloadReal))
@@ -687,6 +768,105 @@ specSet ks ms fields tabs hostBank real = map ($ ()) builders
         , ("live-state", 0x46, B.pack [0])
         , ("card", 0, cardWith refusedRecallFile B.empty) ])
       ("rb_recall" : loadFns ++ realStockFns) realStubs
+    -- ISO AUTO: property 0x141's row 0x1b, whose step word is the 0x7ffffffe
+    -- sentinel. Stock leaves the mode's auto flag from table 0x007a0018 at 0
+    -- (0x146 in modes 0x21-0x24), the ISO step 0x009568b4 at the AUTO-maximum
+    -- step (0x14f's step for the code in 0x152) and 0x141 at the code whose
+    -- step that is; 0x141 never holds 0x1b.
+    fieldOf p = fromMaybe (error ("walked field missing: " ++ show p)) (find ((== p) . fProp) fields)
+    codeIn payload p = let f = fieldOf p in (fromIntegral (B.index payload (fOff f)) .&. fMask f) `shiftR` fShift f
+    rowsOf p = fromMaybe (error ("table missing: " ++ show p)) (M.lookup p tabs)
+    stepOf p c = fromMaybe (error "code missing") (listToMaybe [ c2 | (c0 : _ : c2 : _) <- rowsOf p, c0 == c ])
+    codeOfStep p s = fromMaybe (error "step missing") (listToMaybe [ c0 | (c0 : _ : c2 : _) <- rowsOf p, c2 == s ])
+    -- live byte 0x9c carries 0x146 (bit 2), 0x149 (bit 3) and 0x148 (bit 7);
+    -- the live table's 0x149 mask 0x0f covers bit 2, so 0x146 is placed last
+    flagByte payload autoFlag =
+      B.index (foldl (\b (p, c) -> placeLive b (fieldOf p) c) (B.replicate 0x1c2 0)
+        [(0x148, codeIn payload 0x148), (0x149, codeIn payload 0x149), (0x146, autoFlag)]) 0x9c
+    cellsIsoStep = 0x7c
+    -- FUN_00641438's write in modes 0x21-0x25 (its lines 20-22): for r0 in
+    -- 1..2 it sets property 0x161 to r0 through 0x0061c91c, and the ISO arms
+    -- call it as (2, 0). The model replaces the routine's entry in the chain
+    -- image; the rest of it is not executed.
+    pipelineModelAt = 0x00641438 :: Integer
+    pipelineModel = B.concat (map u32le
+      [ 0xe306c838, 0xe340c095, 0xe59cc000 -- r12 = mode cell 0x00956838
+      , 0xe24cc021, 0xe35c0005, 0x212fff1e -- mode - 0x21 >= 5: return
+      , 0xe240c001, 0xe35c0002, 0x212fff1e -- r0 - 1 >= 2: return
+      , 0xe1a01000, 0xe3000161, 0xe3a02000 -- (0x161, r0, 0)
+      , 0xea000000 .|. (fromIntegral ((0x0061c91c - (pipelineModelAt + 48 + 8)) `div` 4) .&. 0x00ffffff) ])
+    withPipelineModel regions =
+      [ (n, a, if n == "chain" then pokeAt (fromIntegral (pipelineModelAt - a)) pipelineModel b else b) | (n, a, b) <- regions ]
+    pokeAt o v b = B.take o b <> v <> B.drop (o + B.length v) b
+    isoFns = ("0x00641438/" ++ show (B.length pipelineModel)) : loadFns ++ realStockFns
+    isoStubs = filter (/= "pipeline-notify") realStubs
+    -- a slot built by the bank editor before this fix, or snapshotted in manual
+    -- ISO and edited to AUTO: 0x141 = 0x1b with the payload's 0x146 bit at 1,
+    -- and 0x161 = 0, the defaults row's value, which the ISO arm's
+    -- FUN_00641438(2, 0) overwrites. The AUTO maxima differ: 0x14f (mode 0's)
+    -- code 0 and 0x152 (P/S/A/M's) code 2; the 0x14f commit writes 0x152.
+    isoAutoPayload =
+      putByte 0x0c (.&. 0x1f) (putByte 0x0b (\v -> (v .&. 0x1f) .|. 0x40)
+        (putByte 0x25 (.&. 0x3f) (putByte 0x1f (.|. 0x80) (putByte 0x20 (const 0x1b) realRecallPayload))))
+    isoAutoFile = encodeFile 7 0x0001 ((name26 "ALPHA", isoAutoPayload) : replicate 6 (name26 "ALPHA", payloadReal))
+    -- live manual ISO 0x0c with the auto flag at 1
+    isoManualLive = putByte 0x9c (const 0x04) (putByte 0x52 (const 0x0c) (B.replicate 0x1c2 0))
+    isoAutoStep = stepOf 0x14f (codeIn isoAutoPayload 0x152)
+    isoModel m = m { mExtra = withPipelineModel (mExtra m) }
+    liveByte p code off = B.singleton (B.index (placeLive (B.replicate 0x1c2 0) (fieldOf p) code) off)
+    realIsoAuto (modeName, mode, modeHex) = Spec ("c-recall-iso-auto-" ++ modeName)
+      ("contract: in mode " ++ map toUpper modeName ++ " (mode cell " ++ modeHex ++ ", auto flag 0x146 in table 0x007a0018, AUTO maximum 0x152 in table 0x007a09fc) a slot carrying ISO AUTO (0x141 = 0x1b) with its payload 0x146 bit at 1, 0x161 = 0, 0x152 code 2 and 0x14f code 0 recalls into the stock AUTO state and returns 0: 0x146 reads 0, 0x152 holds its stored code 2 although the 0x14f commit wrote 0 into it, the ISO step 0x009568b4 is the step table 0x14f gives code 2, 0x141 is the code whose step that is, never 0x1b, and 0x161 holds 0 after the ISO arm's FUN_00641438(2, 0) wrote 2 (modeled); rb_recall_trace keeps its initial magic and zero count")
+      "rb_recall" [0] (isoModel (model (fileA [])) { mCard = cardWith isoAutoFile B.empty, mLive = isoManualLive, mShootingMode = mode })
+      (Expect "returned" 0
+        [ ("live-state", 0x52, B.singleton (fromIntegral (codeOfStep 0x141 isoAutoStep)))
+        , ("live-state", 0x9c, B.singleton (flagByte isoAutoPayload 0))
+        , ("live-state", 0x6e, liveByte 0x161 0 0x6e)
+        , ("live-state", 0x47, liveByte 0x152 (codeIn isoAutoPayload 0x152) 0x47)
+        , ("cells", cellsIsoStep, u32le isoAutoStep)
+        , ("kdata", traceOffset, B.pack [0x52, 0x43, 0x42, 0x52] <> B.replicate 32 0)
+        , ("card", 0, cardWith isoAutoFile B.empty) ])
+      ("rb_recall" : isoFns) isoStubs
+    -- mode 0, the AUTO dial: flag 0x142, AUTO maximum 0x14f, ISO property 0x157
+    -- (tables 0x007a0018, 0x007a09fc, 0x007a13c8); live manual, 0x142 = 1. DR
+    -- (0x104, +0x05 bits 6-7) is stored as 0: in mode 0 the stored code 1 reads
+    -- back 0 and refuses the recall whatever the ISO.
+    isoManualLiveMode0 = putByte 0x9d (const 0x01) isoManualLive
+    isoAutoPayloadMode0 = putByte 0x05 (.&. 0x3f) isoAutoPayload
+    isoAutoFileMode0 = encodeFile 7 0x0001 ((name26 "ALPHA", isoAutoPayloadMode0) : replicate 6 (name26 "ALPHA", payloadReal))
+    realIsoAutoMode0 = Spec "c-recall-iso-auto-mode-0"
+      "contract: in mode 0 (the AUTO dial) an ISO AUTO slot recalls into mode 0's stock AUTO state and returns 0: the commit of row 0x1b sets the flag 0x142 to 0, the ISO step 0x009568b4 to the step table 0x14f gives the stored 0x14f code 0, and FUN_00644848 writes the matching code into 0x157, which the assert reads in place of 0x141; rb_recall_trace keeps its initial magic and zero count"
+      "rb_recall" [0] (isoModel (model (fileA [])) { mCard = cardWith isoAutoFileMode0 B.empty, mLive = isoManualLiveMode0, mShootingMode = 0 })
+      (Expect "returned" 0
+        [ ("live-state", 0x9d, liveByte 0x142 0 0x9d)
+        , ("cells", cellsIsoStep, u32le (stepOf 0x14f (codeIn isoAutoPayloadMode0 0x14f)))
+        , ("kdata", traceOffset, B.pack [0x52, 0x43, 0x42, 0x52] <> B.replicate 32 0)
+        , ("card", 0, cardWith isoAutoFileMode0 B.empty) ])
+      ("rb_recall" : isoFns) isoStubs
+    realIsoAutoNoFlag = Spec "c-recall-iso-auto-no-flag"
+      "contract: in mode cell 0x25, whose table 0x007a0018 entry is 0 (no auto flag), a slot carrying ISO AUTO is refused before any field is applied: the recall returns 14 (RB_APPLY_REFUSED), every live byte is unchanged and rb_recall_trace records count 1, status 0x0e, slot 0, property 0x141, stored 0x1b, read-back 0x0c, mode 0x25 and one refused field"
+      "rb_recall" [0] (isoModel (model (fileA [])) { mCard = cardWith isoAutoFile B.empty, mLive = isoManualLive, mShootingMode = 0x25 })
+      (Expect "returned" 14
+        [ ("live-state", 0, isoManualLive)
+        , ("kdata", traceOffset, B.concat (map u32le [0x52424352, 1, 0x0e, 0, 0x141, 0x1b, 0x0c, 0x25, 1]))
+        , ("card", 0, cardWith isoAutoFile B.empty) ])
+      ("rb_recall" : isoFns) isoStubs
+    -- a consistent AUTO slot (0x141 = 0x1b, 0x146 = 0) edited to manual ISO 6
+    -- in the bank editor, then recalled in S over a live AUTO state
+    isoAutoSlot = putByte 0x1f (.&. 0x7f) isoAutoPayload
+    isoAutoSlotFile = encodeFile 7 0x0001 ((name26 "ALPHA", isoAutoSlot) : replicate 6 (name26 "ALPHA", payloadReal))
+    isoManualPayload = putByte 0x1f (.|. 0x80) (putByte 0x20 (const 0x06) isoAutoSlot)
+    isoManualFile = encodeFile 8 0x0001 ((name26 "ALPHA", isoManualPayload) : replicate 6 (name26 "ALPHA", payloadReal))
+    isoAutoLive = putByte 0x52 (const (fromIntegral (codeOfStep 0x141 isoAutoStep))) (B.replicate 0x1c2 0)
+    realIsoManualAfterAuto = Spec "c-recall-iso-manual-after-auto"
+      "contract: editing an AUTO slot's ISO to code 6 stages 0x146 = 1 with it (the new generation's payload carries 0x141 = 6 and the +0x1f bit 7 set), and recalling that slot in S over a live AUTO state ends in manual ISO: 0x146 reads 1, 0x141 reads 6, the ISO step 0x009568b4 is row 6's step, and the recall returns 0"
+      "rbm_seq_stage_field_recall" [0, 0x141, 6]
+      (isoModel (model (fileA [])) { mCard = cardWith isoAutoSlotFile B.empty, mLive = isoAutoLive, mShootingMode = 0x22 })
+      (Expect "returned" 0
+        [ ("live-state", 0x52, B.singleton 6)
+        , ("live-state", 0x9c, B.singleton (flagByte isoManualPayload 1))
+        , ("cells", cellsIsoStep, u32le (stepOf 0x141 6))
+        , ("card", 0, cardWith isoAutoSlotFile isoManualFile) ])
+      ("rbm_seq_stage_field_recall" : "rb_recall" : "rb_stage_load" : "rb_stage_field" : "rb_stage_commit" : "rb_stage_image" : "rb_write_back" : isoFns) isoStubs
     recallApply = Spec "c-recall-apply"
       "contract: modeled recall of a set slot updates ordinary row 1 to the literal payload and leaves the card untouched; stock processing-cache application is outside this model"
       "rb_recall" [0] ((model (fileA [])) { mCard = cardWith recallFile B.empty, mLive = B.replicate 0x1c2 0 })
@@ -696,16 +876,17 @@ specSet ks ms fields tabs hostBank real = map ($ ()) builders
       ("rb_recall" : "rb_walk_payload_to_live" : loadFns) bankStubs
     putByte off f b = B.take off b <> B.pack [f (B.index b off)] <> B.drop (off + 1) b
     putWord off v b = B.take off b <> u32le v <> B.drop (off + 4) b
-    loadFns = ["rb_load", "rb_scan_file", "rb_open", "rb_map_completion", "rb_io_cb", "rb_memcpy", "rb_read", "rb_read_count", "rb_close_quiet", "rb_checksum_file", "rb_name_ok", "rb_codes_ok", "rb_code_ok", "rb_unbound_ok", "rb_extract", "rb_place",
+    traceOffset = fromIntegral (addr ks "rb_recall_trace" - addr ks "__rb_text_end")
+    loadFns = ["rb_load", "rb_scan_file", "rb_open", "rb_map_completion", "rb_io_cb", "rb_memcpy", "rb_read_count", "rb_close_quiet", "rb_checksum_file", "rb_name_ok", "rb_codes_ok", "rb_code_ok", "rb_unbound_ok", "rb_extract", "rb_place",
       "0x0061d514/16", "0x00631a00/336"]
     saveFns = loadFns ++ ["rb_save_current", "rb_write_back", "rb_stage_image", "0x0061e110/25832", "0x006439e0/40"]
     bankStubs = ["task", "vol", "card", "tone-notify", "pipeline-notify", "display-notify", "mode-state-a", "mode-state-b", "mode-state-c"]
     badChecksumFile = putWord 0x18 (readU32 validA 0x18 + 1) validA
     badCodeFile = putByte 0x40 (\v -> (v .&. 0xe0) .|. 0x1f) validA
     badUnboundFile = putByte 0x47 (.|. 0x04) validA
-    emptyBankClaim = [("kdata", fromIntegral (addr ks "rb_resident"), B.replicate 512 0)]
+    emptyBankClaim = [("live-state", 0, liveFixture)]
     badChecksum = Spec "d-load-bad-checksum"
-      "contract: a file whose checksum word does not match its bytes is refused whole: rb_load returns 5 (invalid) with bytes seen, publishes the empty bank and leaves the card untouched"
+      "contract: a checksum mismatch refuses the whole bank with INVALID and leaves the card and live settings unchanged"
       "rb_load" [] ((model (fileA [])) { mCard = cardWith badChecksumFile B.empty })
       (Expect "returned" 5 (emptyBankClaim ++ [("card", 0, cardWith badChecksumFile B.empty)])
         )
@@ -750,117 +931,130 @@ specSet ks ms fields tabs hostBank real = map ($ ()) builders
       (Expect "returned" 0 [("card", 0, cardWith validA renameFile)]
         )
       ("rb_name_commit" : "rb_stage_image" : "rb_write_back" : loadFns) bankStubs
+    defaultsRow = fromMaybe (error "defaults-row region missing") (listToMaybe [b | ("defaults-row", _, b) <- real])
+    renameUnsetFile = encodeFile 8 0x0003 ((name26 "ALPHA", validPayload) : (name26 "DELTA", defaultsRow) : replicate 5 (name26 "ALPHA", validPayload))
+    renameUnsetCase = Spec "g-rename-unset"
+      "contract: renaming unset slot 1 to DELTA sets it: the new-generation target file carries DELTA over the stock per-slot defaults row 0x007cb804 with set-mask bit 1 added, the other slots unchanged, and leaves the old file intact"
+      "rb_name_commit" [1, 0x009a0000] ((model (fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive, mCase = name26 "DELTA" })
+      (Expect "returned" 0 [("card", 0, cardWith validA renameUnsetFile)]
+        )
+      ("rb_name_commit" : "rb_stage_image" : "rb_write_back" : loadFns) bankStubs
     readOnlySave = Spec "h-write-read-only"
       "contract: a save against a read-only card (the write completion 8 maps to read-only) returns 2 and leaves both files untouched"
-      "rb_save_current" [0, 0x009a0000] ((model (("rbm_write_comp", 8) : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
+      "rb_save_current" [0, 0] ((model (("rbm_write_comp", 8) : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
       (Expect "returned" 2 [("card", 0, cardWith validA B.empty)]
         )
       saveFns bankStubs
     fullCardSave = Spec "h-write-full"
       "contract: a save against a full card (the write completion 3 maps to full) returns 3 and leaves both files untouched"
-      "rb_save_current" [0, 0x009a0000] ((model (("rbm_write_comp", 3) : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
+      "rb_save_current" [0, 0] ((model (("rbm_write_comp", 3) : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
       (Expect "returned" 3 [("card", 0, cardWith validA B.empty)]
         )
       saveFns bankStubs
-    saveFile = encodeFile 8 0x0001 ((name26 "", extractPayload) : replicate 6 (name26 "ALPHA", extractPayload))
+    saveFile = encodeFile 8 0x0001 (replicate 7 (name26 "ALPHA", extractPayload))
     partialFile = B.take 256 saveFile <> B.replicate 256 0
     partialWrite = Spec "h-partial-write"
       "contract: a write that stops at the half-way boundary returns 3 (full) and leaves exactly the first half of the new file at the target slot; the winner file is byte-identical"
-      "rb_save_current" [0, 0x009a0000] ((model (("rbm_write_short", 256) : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
+      "rb_save_current" [0, 0] ((model (("rbm_write_short", 256) : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
       (Expect "returned" 3 [("card", 0, cardWith validA partialFile)]
         )
       saveFns bankStubs
     powerLoss = Spec "h-power-loss"
-      "contract: a cut at the mid-write boundary (model trip step 2, the write's half-way boundary) stops the run at the same half-written target and leaves the winner file byte-identical; r0 pins the fault site's residue register"
-      "rb_save_current" [0, 0x009a0000] ((model (("rbm_trip_step", 2) : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
-      (Expect "memory_guard" 0x00970008 [("card", 0, cardWith validA partialFile)]
+      "contract: interruption halfway through the target-file write leaves the winning generation byte-identical"
+      "rb_save_current" [0, 0] ((model (("rbm_trip_step", 2) : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
+      (Expect "memory_guard" 0x00005150 [("card", 0, cardWith validA partialFile)]
         )
       saveFns bankStubs
     genExhaust = Spec "g2-save-gen-exhaust"
       "contract: a save against a winner at generation 0xffffffff must return 10 (generation exhausted) and truncate no file"
-      "rb_save_current" [1, 0x009a0000] ((model (fileA [])) { mCard = cardWith exhaust B.empty })
+      "rb_save_current" [1, 0] ((model (fileA [])) { mCard = cardWith exhaust B.empty })
       (Expect "returned" 10 [("card", 0, cardWith exhaust B.empty)]
         )
       saveFns bankStubs
-    -- the two media-identity races of the write-back: the twelfth media call is
-    -- the write-back's B scan open and the fourteenth is the destructive write, so
-    -- rbm_event_step (the model's detach/attach shim, which bumps the epoch at
-    -- the start of the numbered media call) places the card change inside the
-    -- scan and inside the write
+    -- The event shim runs at the worker boundary, before a mode-1 open or write.
     mediaMoveInScan = Spec "h-save-media-move-in-scan"
-      "contract: a card change at the write-back's B scan (epoch bumped by the tenth media call) returns 13 (media-changed) and writes nothing: the winner file and the resident bank are the load's, and the changed-epoch open releases nothing"
-      "rb_save_current" [0, 0x009a0000] ((model (("rbm_event_step", 12) : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
+      "contract: a card change during bank discovery returns MEDIA_CHANGED without altering either file"
+      "rb_save_current" [0, 0] ((model (("rbm_detach_before_stat", 1) : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
       (Expect "returned" 13
         [ ("card", 0, cardWith validA B.empty)
-        , ("kdata", fromIntegral (addr ks "rb_resident"), validA)
+        , ("live-state", 0, extractLive)
         ])
+      saveFns bankStubs
+    olderB = encodeFile 6 0x0002 (replicate 7 (name26 "BETA", validPayload))
+    replacementA = encodeFile 11 0x0001 (replicate 7 (name26 "REPLACED", validPayload))
+    replacementCard = cardWith replacementA olderB
+    withReplacement card =
+      B.take 0x440 card <> B.take 0x220 (validA <> B.replicate 0x220 0)
+        <> B.take 0x440 replacementCard
+    workerSwapModel boundary =
+      (model (swapBoundaryCell boundary : fileA
+        [ ("rbm_b_present", 1), ("rbm_b_size", 512)
+        , ("rbm_swap_a_size", 512), ("rbm_swap_b_present", 1), ("rbm_swap_b_size", 512)
+        , ("rbm_swap_card", 0x00980660)
+        ]))
+        { mCard = withReplacement (cardWith validA olderB), mLive = extractLive }
+    replacementClaims =
+      [ ("card", 0, withReplacement replacementCard)
+      , ("live-state", 0, extractLive)
+      ]
+    mediaMoveInOpen = Spec "h-save-media-move-before-truncate"
+      "contract: replacement after dispatch and before destructive open returns MEDIA_CHANGED and preserves the replacement bank files, including the existing target's length"
+      "rb_save_current" [0, 0] (workerSwapModel BeforeDestructiveOpen)
+      (Expect "returned" 13 replacementClaims)
       saveFns bankStubs
     mediaMoveInWrite = Spec "h-save-media-move-mid-write"
-      "contract: a card change at the destructive write (epoch bumped by the twelfth media call, after the open and before its callback) returns 13 (media-changed) with the target file carrying the written generation and the resident bank still the winner's: nothing is published across an identity"
-      "rb_save_current" [0, 0x009a0000] ((model (("rbm_event_step", 14) : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
-      (Expect "returned" 13
-        [ ("card", 0, cardWith validA saveFile)
-        , ("kdata", fromIntegral (addr ks "rb_resident"), validA)
-        ])
+      "contract: replacement after dispatch and before write returns MEDIA_CHANGED and preserves both replacement bank files and live settings"
+      "rb_save_current" [0, 0] (workerSwapModel BeforeWrite)
+      (Expect "returned" 13 replacementClaims)
       saveFns bankStubs
     closeDeferred = Spec "h-write-close-deferred-flush"
-      "contract: a close that completes with a success callback and a zero return (the state-1 no-op at the fifteenth media call, the write-back's close) releases nothing, so the handle is deferred and the next open re-dispatches its close; the write-back still succeeds and the tag table at region offset 0x80 (0x009101c0) ends all-zero, which is the release the flush performed"
-      "rb_save_current" [0, 0x009a0000] ((model (("rbm_close_noop_at", 15) : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
-      (Expect "returned" 0
-        [ ("card", 0, cardWith validA saveFile)
-        , ("kdata", fromIntegral (addr ks "rb_resident"), saveFile)
-        , ("media-state", 0x80, B.replicate 64 0)
-        ])
+      "contract: a successful no-op write close leaves the handle for a later close; readback verification still completes the save and the durable generation preserves ALPHA"
+      "rb_save_current" [0, 0] ((model (closeFaultCell NoopWriteClose : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
+      (Expect "returned" 0 [("card", 0, cardWith validA saveFile), ("live-state", 0, extractLive)])
       saveFns bankStubs
-    -- FILE-FAILURE-OWNERSHIP-01: the failure and ownership shapes of the
-    -- media identity, driven through the kernel's real request and release
-    -- code. rb_open flushes the deferred list before it posts, rb_close_quiet
-    -- defers whenever the tag table still owns the handle, and rb_flush_pending
-    -- drops a deferred handle whose late completion already released it. The
-    -- tag table at 0x009101c0 (media-state +0x80) is the release oracle: all
-    -- zero means every identity the flow took was released exactly once.
-    -- rbm_stale_close counts a close posted to a freed handle (the double
-    -- release shape) and rbm_release_guard a release applied to an unowned
-    -- slot; both must stay zero. The two entry sequences expose the first
-    -- entry's status in rbm_seq_first and the second entry's as the result.
-    gen9File = encodeFile 9 0x0001 ((name26 "", extractPayload) : replicate 6 (name26 "ALPHA", extractPayload))
-    openTagZero = Spec "h-open-zero-tag-flush"
-      "contract: an open whose dispatch-tag allocation returns zero while the worker still delivers a nonzero handle is deferred, not leaked - the first load answers 4 (RB_IO) with the tag still allocated, the second load's first open re-dispatches the close through the flush and releases it, the second load then publishes the file, and the tag table ends all-zero with no stale close and no unowned release"
-      "rbm_seq_load_twice" []
-      ((model (("rbm_open_tag_zero_at", 1) : fileA [])) { mCard = cardWith validA B.empty })
+    twoDeferredReadback = Spec "h-load-two-deferred-readback"
+      "contract: repeatedly discovering two bank files while closes are refused, then permitting closes for slot readback, returns the winning slot without exhausting handles or changing either file or live settings"
+      "rbm_seq_read_after_deferred" []
+      ((model (("rbm_close_noop", 1) : fileA [("rbm_b_present", 1), ("rbm_b_size", 512)]))
+        { mCard = cardWith validA validB, mLive = extractLive })
       (Expect "returned" 0
-        [ ("kdata", fromIntegral (addr ks "rb_resident"), validA)
-        , ("card", 0, cardWith validA B.empty)
-        , ("media-state", 0x80, B.replicate 64 0)
-        , ("model-data", fromIntegral (addr ms "rbm_seq_first" - 0x970000), u32le 4)
-        , ("model-data", fromIntegral (addr ms "rbm_stale_close" - 0x970000), u32le 0)
-        , ("model-data", fromIntegral (addr ms "rbm_release_guard" - 0x970000), u32le 0)
+        [ ("card", 0, cardWith validA validB)
+        , ("live-state", 0, extractLive)
+        , ("casebuf", 0, name26 "BETA")
+        , ("casebuf", 0x20, validPayload)
+        ])
+      ("rbm_seq_read_after_deferred" : "rb_readback" : loadFns) bankStubs
+    -- Repeated public operations expose deferred-close exhaustion as a refusal.
+    gen9File = encodeFile 9 0x0001 (replicate 7 (name26 "ALPHA", extractPayload))
+    openTagZero = Spec "h-open-zero-tag-flush"
+      "contract: a delivered handle with a zero dispatch tag refuses the first load with IO; the next load and public readback succeed without changing either file"
+      "rbm_seq_load_twice" [0x009a0000]
+      ((model (("rbm_open_fault", 1) : fileA [])) { mCard = cardWith validA B.empty })
+      (Expect "returned" 0
+        [ ("card", 0, cardWith validA B.empty)
+        , ("casebuf", 0, u32le 4)
+        , ("casebuf", 0x20, name26 "ALPHA")
+        , ("casebuf", 0x40, validPayload)
         ])
       ("rbm_seq_load_twice" : loadFns) bankStubs
     writeCloseOwned = Spec "h-write-close-tag-owned"
-      "contract: the write-back's verify close (the nineteenth media call) completes with a success callback and a dispatched return yet leaves its tag allocated, so the kernel defers the handle; the write-back still publishes (the close status was success), and the next entry's first open flushes the deferred close through the worker, releases the tag and then loads the published file - first entry 0, second entry 0, tag table all-zero, no stale close"
+      "contract: a verify close with a successful callback but retained ownership permits the first save; the second save also succeeds and preserves both durable generations"
       "rbm_seq_save_twice" [0, 0x009a0000]
-      ((model (("rbm_close_keep_at", 19) : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
+      ((model (closeFaultCell KeepVerifyClose : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
       (Expect "returned" 0
         [ ("card", 0, cardWith gen9File saveFile)
-        , ("kdata", fromIntegral (addr ks "rb_resident"), gen9File)
-        , ("media-state", 0x80, B.replicate 64 0)
-        , ("model-data", fromIntegral (addr ms "rbm_seq_first" - 0x970000), u32le 0)
-        , ("model-data", fromIntegral (addr ms "rbm_stale_close" - 0x970000), u32le 0)
-        , ("model-data", fromIntegral (addr ms "rbm_release_guard" - 0x970000), u32le 0)
+        , ("casebuf", 0, u32le 0)
+        , ("live-state", 0, extractLive)
         ])
       ("rbm_seq_save_twice" : saveFns) bankStubs
     writeCloseLate = Spec "h-write-close-late-release"
-      "contract: the write-back's verify close returns without its callback while the worker's release ran, so the kernel defers the handle and answers 4 (RB_IO) without publishing; the next entry's flush finds the tag already free and drops the entry instead of re-dispatching a close (no stale close, no unowned release), then loads the written target and completes the second save - first entry 4, second entry 0, tag table all-zero"
+      "contract: a verify close that releases the handle without a callback refuses the first save with IO; the next save loads the written generation and succeeds without changing live settings"
       "rbm_seq_save_twice" [0, 0x009a0000]
-      ((model (("rbm_close_late_at", 19) : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
+      ((model (closeFaultCell LoseVerifyCallback : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
       (Expect "returned" 0
         [ ("card", 0, cardWith gen9File saveFile)
-        , ("kdata", fromIntegral (addr ks "rb_resident"), gen9File)
-        , ("media-state", 0x80, B.replicate 64 0)
-        , ("model-data", fromIntegral (addr ms "rbm_seq_first" - 0x970000), u32le 4)
-        , ("model-data", fromIntegral (addr ms "rbm_stale_close" - 0x970000), u32le 0)
-        , ("model-data", fromIntegral (addr ms "rbm_release_guard" - 0x970000), u32le 0)
+        , ("casebuf", 0, u32le 4)
+        , ("live-state", 0, extractLive)
         ])
       ("rbm_seq_save_twice" : saveFns) bankStubs
     _ = ()
@@ -875,41 +1069,44 @@ runSpec build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable getter set
       mdata' = overlay (mdata <> B.replicate 0x1000 0) [(0x800, fTable)]
       overlay base ps = foldl (\b (o, v) -> B.take (fromIntegral o) b <> v <> B.drop (fromIntegral o + B.length v) b) base ps
       cardImg = mCard (spModel sp)
+      cardLength = max 0x660 (B.length cardImg)
       liveImg = mLive (spModel sp)
       caseImg = mCase (spModel sp)
       extras = mExtra (spModel sp)
       patchMode = overlay (B.replicate 0x42100 0) [(0x41424, u32le (mMode (spModel sp)))]
-      extrasPatch = [(rid, a, if rid == "media-state" then patchMode else b) | (rid, a, b) <- extras]
-      mediaImg' = mediaImg
+      patchCells b = u32le (mShootingMode (spModel sp)) <> B.drop 4 b
+      extrasPatch = [(rid, a, if rid == "media-state" then patchMode else if rid == "cells" then patchCells b else b) | (rid, a, b) <- extras]
+      exitAddress = mediaLo + fromIntegral (B.length mediaImg)
+      mediaImg' = mediaImg <> u32le 0xe12fff1e
       arts = [("kernel.bin", kbin), ("media.bin", mediaImg'), ("getter.bin", getter), ("setter.bin", setter), ("model-data.bin", B.take 0x1000 mdata'), ("tables.bin", tabImg), ("card.bin", cardImg), ("live.bin", liveImg)]
         ++ (if B.null caseImg then [] else [("case.bin", caseImg)])
         ++ [(rid ++ ".bin", b) | (rid, _, b) <- extrasPatch, not (B.null b)]
   forM_ (arts ++ [("mode.bin", modeCell)]) $ \(n, b) -> B.writeFile (dir </> n) b
   digests <- M.fromList <$> mapM (\(n, b) -> (,) n <$> sha256 b) (arts ++ [("mode.bin", modeCell)])
   let reg :: String -> Integer -> Int -> String -> Maybe String -> Int -> Int -> Value
+      kernelBase = addr ks "__rb_image_start"
       reg rid a sz perm art off len = object ["id" .= rid, "address" .= hex a, "size" .= (toInteger sz :: Integer), "permissions" .= (perm :: String),
         "initial" .= (if isJust art then object ["artifact" .= (takeWhile (/= '.') (fromJust art) :: String), "offset" .= (toInteger off :: Integer), "length" .= (toInteger len :: Integer)] else object ["zero" .= True])]
       regions =
-        [ reg "ktext" 0x011dcca0 ktextLen "rx" (Just "kernel.bin") 0 ktextLen
-        , reg "kdata" (0x011dcca0 + fromIntegral ktextLen) kdataLen "rw" (Just "kernel.bin") ktextLen kdataLen
+        [ reg "ktext" kernelBase ktextLen "rx" (Just "kernel.bin") 0 ktextLen
+        , reg "kdata" (kernelBase + fromIntegral ktextLen) kdataLen "rw" (Just "kernel.bin") ktextLen kdataLen
         , reg "media" mediaLo (B.length mediaImg') "rx" (Just "media.bin") 0 (B.length mediaImg')
         , reg "model-data" 0x00970000 0x1000 "rw" (Just "model-data.bin") 0 0x1000
         , reg "live-state" 0x0096cc64 0x1c2 "rw" (Just "live.bin") 0 0x1c2
-        , reg "card" 0x00980000 0x660 "rw" (Just "card.bin") 0 0x660
+        , reg "card" 0x00980000 cardLength "rw" (Just "card.bin") 0 (B.length cardImg)
         , reg "casebuf" 0x009a0000 0x2000 "rw" (if B.null caseImg then Nothing else Just "case.bin") 0 (B.length caseImg) ]
         ++ [reg rid a (max 4 (B.length b)) (extraPerms rid) (if B.null b then Nothing else Just (rid ++ ".bin")) 0 (B.length b) | (rid, a, b) <- extrasPatch]
       extraPerms rid
         | rid `elem` ["chain", "dispatcher", "conv-tables", "prefix"] = "rx"
-        | rid `elem` ["conv-ptrs", "modetab"] = "r"
+        | rid `elem` ["conv-ptrs", "modetab", "defaults-row"] = "r"
         | otherwise = "rw"
-      fns = [fnEntry n | n <- spFns sp, hasK n || hasM n || take 2 n == "0x"]
+      fns = map fnEntry (nub (spFns sp))
       fnEntry n
         | take 2 n == "0x" = case break (== '/') n of
             (a, '/' : s) -> object ["address" .= hex (hexI (drop 2 a)), "size" .= (read s :: Integer)]
             _ -> error ("raw function entry needs 0xADDR/SIZE: " ++ n)
         | otherwise = object ["address" .= hex (addrOf n), "size" .= (toInteger (sizeOf' n) :: Integer)]
       hasK n = n `elem` map fst (M.toList (case ks of Syms m -> m))
-      hasM n = n `elem` map fst (M.toList (case ms of Syms m -> m))
       addrOf n = if hasK n then addr ks n else addr ms n
       sizeOf' n = if hasK n then sizeOf ks n else sizeOf ms n
       stubs = [let (a, i, o) = stubDef n (stubVal n) in object ["address" .= a, "inputs" .= bindObj i, "outputs" .= bindObj o, "side_effects" .= ("registers-only" :: String)] | n <- spStubs sp]
@@ -918,59 +1115,56 @@ runSpec build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable getter set
         "task" -> [("task", 3)]; "card" -> [("card", 0)]; "vol" -> [("vol", 0x43)]
         "live" -> [("live", 1)]; "store" -> [("store", 0)]; _ -> []
       bindObj bs = object [fromString k .= hex (toInteger v) | (k, v) <- bs]
-      regs = object (["lr" .= hex 0x0071f890, "sp" .= hex 0x009a1ff0, "cpsr" .= hex 0x10]
+      regs = object (["lr" .= hex exitAddress, "sp" .= hex 0x009a1ff0, "cpsr" .= hex 0x10]
         ++ [fromString ("r" ++ show i) .= hex (toInteger v) | (i, v) <- take 13 (zip [0 :: Int ..] (spArgs sp ++ repeat 0))])
-      expected ph2 evs = object
+      expected = object
         [ "status" .= eStatus (spExpect sp)
         , "registers" .= object ["r0" .= hex (fromIntegral (eR0 (spExpect sp)))]
-        , "memory" .= (claimsJson ++ ph2)
-        , "events" .= evs ]
-      claimsJson = [object ["region" .= rid, "offset" .= (toInteger (off - regionBase rid) :: Integer), "hex" .= hexB bs] | (rid, off, bs) <- eClaims (spExpect sp)]
-      regionBase "kdata" = fromIntegral ktextLen + 0x011dcca0
-      regionBase _ = 0
-      caseObj ph2 evs = object
+        , "memory" .= claimsJson
+        , "events" .= ([] :: [Value]) ]
+      claimsJson = [object ["region" .= rid, "offset" .= (toInteger off :: Integer), "hex" .= hexB bs] | (rid, off, bs) <- eClaims (spExpect sp)]
+      caseObj = object
         [ "schema_version" .= (1 :: Int), "id" .= spId sp, "origin" .= ("synthetic" :: String)
         , "provenance" .= spProv sp
         , "cpu" .= object ["architecture" .= ("arm" :: String), "model" .= ("cortex-r5f" :: String), "mode" .= ("arm" :: String), "endian" .= ("little" :: String)]
         , "artifacts" .= [object ["id" .= takeWhile (/= '.') n, "path" .= n, "size" .= (toInteger (B.length b) :: Integer), "sha256" .= M.findWithDefault "" n digests] | (n, b) <- arts ++ [("mode.bin", modeCell)]]
-        , "entry" .= hex (addrOfEntry), "exit" .= hex 0x0071f890
+        , "entry" .= hex (addrOfEntry), "exit" .= hex exitAddress
         , "registers" .= regs
         , "regions" .= regions
         , "functions" .= fns, "stubs" .= stubs
         , "limits" .= object ["instructions" .= (1000000 :: Int), "wall_ms" .= (4000 :: Int)]
-        , "expected" .= expected ph2 evs
-        , "exclusions" .= (["OBSERVED RESIDUE (no behavior claim): stack region, kernel operational cells and the stub event sequence pinned from phase 1"] :: [String]) ]
+        , "expected" .= expected
+        , "exclusions" .= (["Kernel behavior is evaluated over declared public output spans, not whole-region private residue or incidental stub event order", "Foreign media completion is synchronous; stock queue, scheduler and physical SD controller are not executed"] :: [String]) ]
       addrOfEntry = case spEntry sp of
         e | take 2 e == "0x" -> hexI e
         e -> if e `elem` M.keys (case ks of Syms m -> m) then addr ks e else addr ms e
-  BL.writeFile (dir </> "case.json") (encode (caseObj [] (toJSON ([] :: [Value]))))
-  (_c1, r1) <- runCase runner (dir </> "case.json")
-  let observed = memMap r1
-      evPin = fromMaybe (toJSON ([] :: [Value])) (parseMaybe (withObject "report" (\o -> o .: "runner" >>= withObject "runner" (.: "events"))) r1)
-      pinned = ["stack", "kdata", "model-data", "media-state", "casebuf", "defaults", "mode-cell", "mirror", "live-state", "cells"]
-      residue = concat [gapPins k v | (k, v) <- M.toList observed, k `elem` pinned, not (B.null v)]
-      gapPins k v =
-        let spans = sort [(fromInteger (toInteger off - toInteger (regionBase k)), B.length bs) | (rid, off, bs) <- eClaims (spExpect sp), rid == k]
-            gaps [] = [(0, B.length v)]
-            gaps ((s, l) : rest) =
-              [(a, b) | (a, b) <- [(0, s)], b > a]
-                ++ go (s + l) rest
-            go e [] = [(e, B.length v) | B.length v > e]
-            go e ((s, l) : rest) = [(e, s) | s > e] ++ go (s + l) rest
-         in [ object ["region" .= k, "offset" .= (fromIntegral a :: Integer), "hex" .= hexB (B.take (b - a) (B.drop a v))]
-            | (a, b) <- gaps spans, b > a
-            ]
-  BL.writeFile (dir </> "case.json") (encode (caseObj residue evPin))
-  (_c2, r2) <- runCase runner (dir </> "case.json")
-  let mism = fromMaybe [] (parseMaybe (withArray "m" (pure . mapMaybe strV . toList)) =<< lookupV "mismatches" r2)
-      strV (String t) = Just (T.unpack t)
-      strV _ = Nothing
-      lookupV k v = parseMaybe (withObject "r" (.: k)) v
-      status = fromMaybe "??" (parseMaybe (withObject "r" (\o -> o .: "status" :: Parser String)) r2)
-      runnerStatus = fromMaybe "" (parseMaybe (withObject "r" (\o -> o .: "runner" >>= withObject "rn" (\rn -> rn .: "status" >>= withText "t" (pure . T.unpack)))) r2)
-      missing = if runnerStatus == "unknown_call" then missingSym ks ms r2 else Nothing
-  pure (object (["id" .= spId sp, "status" .= status, "mismatches" .= mism]
-    ++ maybe [] (\n -> ["missing_fn" .= n]) missing))
+  BL.writeFile (dir </> "case.json") (encode caseObj)
+  (_, report) <- runCase runner (dir </> "case.json")
+  BL.writeFile (dir </> "runner-report.json") (encode report)
+  let regionIds = M.fromList
+        [(GuestAddress (hexI (str (getRegionField region "address"))), RegionId (str (getRegionField region "id"))) | region <- regions]
+      getRegionField value key = fromMaybe Null (parseMaybe (withObject "region" (.: key)) value)
+      observed = memMap regionIds report
+      runnerResult = parseMaybe (withObject "report" (.: "runner")) report
+      runnerStatus = fromMaybe "" (runnerResult >>= parseMaybe (withObject "runner" (.: "status")) :: Maybe String)
+      observedR0 = runnerResult >>= parseMaybe (withObject "runner" (\o -> o .: "registers" >>= withObject "registers" (.: "r0"))) >>= parseHexV
+      mismatches =
+        ["status differs" | runnerStatus /= eStatus (spExpect sp)]
+        ++ ["register r0: differs" | observedR0 /= Just (toInteger (eR0 (spExpect sp)))]
+        ++ ["memory " ++ rid ++ " at " ++ hex (toInteger off) ++ ": differs" |
+              (rid, off, bytes) <- eClaims (spExpect sp),
+              maybe True (\actual -> B.take (B.length bytes) (B.drop off actual) /= bytes)
+                (M.lookup (RegionId rid) observed)]
+      status = if isNothing runnerResult
+        then fromMaybe "invalid_case" (parseMaybe (withObject "report" (.: "status")) report :: Maybe String)
+        else if null mismatches then "passed" else "failed"
+      missing = if runnerStatus == "unknown_call" then missingSym ks ms report else Nothing
+      result = object
+        (["id" .= spId sp, "status" .= status, "mismatches" .= mismatches,
+          "runner_status" .= runnerStatus]
+          ++ maybe [] (\n -> ["missing_fn" .= n]) missing)
+  BL.writeFile (dir </> "behavioral-result.json") (encode result)
+  pure result
 
 -- the undeclared call target of an unknown_call failure, mapped back to its
 -- symbol from the pinned kernel/model maps
@@ -980,13 +1174,13 @@ missingSym ks ms r = do
   lastE <- case reverse (case tr of Array v -> toList v; _ -> []) of (x : _) -> Just x; [] -> Nothing
   pc <- parseMaybe (withObject "e" (\o -> o .: "pc")) lastE >>= parseHexV
   ins <- parseMaybe (withObject "e" (\o -> o .: "instruction")) lastE >>= parseHexV
-  if (ins .&. 0x0f000000) == 0x0b000000
+  if (ins .&. 0x0e000000) == 0x0a000000
     then do
       let imm = fromIntegral (ins .&. 0xffffff) :: Integer
           d = (if imm >= 0x800000 then imm - 0x1000000 else imm) * 4
           target = fromIntegral pc + 8 + d
       symAt ks ms target
-    else if (ins .&. 0x0ffffff0) == 0x012fff30
+    else if (ins .&. 0x0fffffd0) == 0x012fff10
       then do
         let rm = ins .&. 15
             regName = if rm == 14 then "lr" else "r" ++ show rm
@@ -996,7 +1190,7 @@ missingSym ks ms r = do
 
 symAt :: Syms -> Syms -> Integer -> Maybe String
 symAt ks ms a =
-  let hit (Syms m) = listToMaybe [n | (n, (b, z)) <- sortOn (\(_, (b, z)) -> (max z 1, b)) (M.toList m), b <= a, a < b + max z 1]
+  let hit (Syms m) = listToMaybe [n | (n, (b, z)) <- M.toList m, b == a, z >= 4, z `mod` 4 == 0, n /= "helpers"]
    in case hit ks of Just n -> Just n; Nothing -> hit ms
 
 parseHexV :: Value -> Maybe Integer
@@ -1009,27 +1203,14 @@ parseHexV v = case str v of
     | c >= 'a' && c <= 'f' = fromEnum c - fromEnum 'a' + 10
     | otherwise = 0
 
-memMap :: Value -> M.Map String B.ByteString
-memMap r = M.fromList (fromMaybe [] (parseMaybe p =<< parseMaybe (withObject "rep" (\o -> o .: "runner" >>= withObject "rn" (\rn -> rn .: "memory"))) r))
+memMap :: M.Map GuestAddress RegionId -> Value -> M.Map RegionId B.ByteString
+memMap regionIds r = M.fromList (fromMaybe [] (parseMaybe p =<< parseMaybe (withObject "rep" (\o -> o .: "runner" >>= withObject "rn" (\rn -> rn .: "memory"))) r))
   where
-    p = withArray "mem" $ \a -> pure [(k, unhex v) | x <- toList a, Just (k, v) <- [row x]]
+    p = withArray "mem" $ \a -> pure [(k, unhex v) | x <- toList a, Just (address, v) <- [row x], Just k <- [M.lookup address regionIds]]
     row x = parseMaybe (withObject "r" $ \o -> do
-      a <- o .: "address" :: Parser String
-      b <- o .: "bytes" :: Parser String
-      pure (regionName a, b)) x
-    regionName a = case hexI a of
-      v | v == 0x009b0000 -> "stack"
-        | v == 0x011dcca0 -> "ktext"
-        | v >= 0x011dcca0 -> "kdata"
-        | v == 0x00970000 -> "model-data"
-        | v == 0x00910140 -> "media-state"
-        | v == 0x009a0000 -> "casebuf"
-        | v == 0x007cb804 -> "defaults"
-        | v == 0x0089ec00 -> "mirror"
-        | v == 0x00956838 -> "cells"
-        | v == 0x0096cc64 -> "live-state"
-        | v == 0x00951564 -> "mode-cell"
-      _ -> a
+      address <- o .: "address" :: Parser String
+      bytes <- o .: "bytes" :: Parser String
+      pure (GuestAddress (hexI address), bytes)) x
 
 shaHex :: B.ByteString -> String
 shaHex b = replicate (64 - length h) '0' ++ h
@@ -1041,148 +1222,169 @@ findingsText specs results = unlines (headerLines ++ resultLines)
     headerLines =
       [ "recipe-bank kernel runtime cases: findings"
       , ""
-      , "Blob and model hashes are recorded in results.json provenance per run;"
-      , "re-measure on any menu/ change."
+      , "Each case directory records its input artifacts, native runner report and behavioral result."
+      , "Behavioral checks cover public returns, explicit readback buffers, live settings and durable card bytes."
+      , "Private kernel/model state, stack residue and incidental stub event order are not expectations."
+      , "Native region/function bounds, instruction limits and stub input contracts remain enforced."
       , ""
-      , "Unexercised consumers:"
-      , "- on-camera staged-edit navigation, rename/editor, refusal rendering,"
-      , "  probe activation/lifecycle, and global arm-level stock-page routing."
-      , "- probe token contract (RB_UI_TOKEN_EDIT_HIDDEN_ROW 0x82, from the"
-      , "  availability lane): state 3 (hidden) on RB_UI_CLASS_EDIT 0x277, the nine"
-      , "  field hosts 0x267..0x26f and the seven submenu pages 0x270..0x276; every"
-      , "  other token on those pages stays state 0 (submenus' verb rows 0x40..0x5b"
-      , "  included). A page carrying a 0x82 placeholder draws and counts only its"
-      , "  parameter/verb rows with 0x82 excluded from the count, scroll and cursor."
-      , "  Recall rows: class 0x285, tokens 0x60..0x66, one rb_meta_op_state reload"
-      , "  per visit after a cache drop; at-C cell 0x00951564 read live every row."
-      , "- dialog expectations (Main's review additions): the per-item OK/CANCEL"
-      , "  dialog raises on a row-routed edit (reachable once the item-session"
-      , "  snapshot fix lands in the staged-edit module) and the Save Current/Reset"
-      , "  confirmations raise from the submenu pages with the 0x82 placeholder"
-      , "  excluded from count, scroll and cursor there."
+      , "The stock getter, setter, conversion tables, commit dispatcher and consumers execute from the candidate image."
+      , "The two stock settings-copy wrappers are replaced by bx lr; journal/notification boundaries remain explicit stubs."
+      , "The media ABI model completes calls synchronously with a four-handle pool."
+      , "Faults select the destructive-open, write, write-close or verification-close boundary rather than a global call count."
+      , "Worker-boundary swaps capture identity before the environment hook and check the production worker predicate before mutation."
       , ""
-      , "Compiled-recipe consumer family (d3-*):"
-      , "- the composed candidate's own id4-final and id5-final slices at their"
-      , "  runtime addresses: the prefix-resident hook and its tables, the stock"
-      , "  commit dispatcher with the patched case-0xfe site, the chain, the"
-      , "  pinned conversion tables and pointer block, the consumer cell block"
-      , "  and the settings mirror. The three render cases enter the dispatcher"
-      , "  with the film rows the body's nine-shot render check selected"
-      , "  (PROVIA 0, PRO Neg Std 5, PRO Neg Hi 6); the two recipe cases enter"
-      , "  with the compiled rows (2 and 4), so the hook walks its row table and"
-      , "  issues the eight nested property commits."
-      , "- claims are the consumer cells the film and parameter arms write (the"
-      , "  film cell 0x009568b8 and the seven parameter cells) and the record"
-      , "  bytes the stock getter reads; each expectation is read from the"
-      , "  candidate's own tables and prefix row tables at case-build time."
-      , "- outside this family: the hook's instruction fetch from the prefix,"
-      , "  the placement, the menu draw, the camera's rendering and any"
-      , "  persistence."
+      , "Unexecuted boundaries: physical SD I/O, stock media queue/scheduler, out-of-order completion, full-system menu rendering and camera acceptance."
       , ""
-      , "Declared substitution limits of the model:"
-      , "- the walked field table comes from the authoritative map"
-      , "  (reports/custom-settings.fields.json, the same rows the storage kernel"
-      , "  is generated from): 83 rows, the two halfword properties 0x1cb/0x1cc at"
-      , "  +0x00/+0x02 first, 0x1a one bit at +0x27 bit 1, and the unbound mask"
-      , "  (+0x27 bits 2-7) derived with the rows."
-      , "- getter/setter remain synthetic row-model replacements with aliases"
-      , "  0x1c6 at 0x0096ce0a and 0xe8 at 0x0096ce05 (the stock ordinary-branch"
-      , "  bytes: setter arms 0x62d728 and 0x627b60 write those two addresses)."
-      , "  The runner admits the stock setter's BFI forms; these cases do not"
-      , "  execute the stock bytes."
-      , "- the save and load paths run the stock chain itself: the snapshot walk"
-      , "  reads every walked row through the stock getter 0x0061e110 (ordinary"
-      , "  branch, the live block at 0x0096cc64), the code scan runs the stock"
-      , "  walker 0x00631a00 through 0x0061d514, and the live resolver 0x006439e0"
-      , "  is the stock function; the chain, dispatcher, conversion tables and"
-      , "  pointer block are regions at their stock addresses and the load/store"
-      , "  wrappers 0x0061d9ec/0x0061d8dc are one bx lr word each in place (their"
-      , "  copy primitive 0x00722054 is refused by the runner). CLZ (the kernel's"
-      , "  not-found test) is evaluated by the runner because the R5F model"
-      , "  interrupts on it."
-      , "- the walk fixture is derived from the getter's ordinary-branch arms"
-      , "  (offset, mask, shift per row), not from the payload's record map: the"
-      , "  layouts differ for some rows (0x1d, 0xfa, 0x1b1). Every slot of every"
-      , "  fixture card carries valid codes, because the kernel validates all"
-      , "  seven slots and row 0x137's table 0x776f34 admits no zero."
-      , "- c-recall-real-bytes passes: the recall executes the stock write entry"
-      , "  0x0061c91c, the commit dispatcher 0x00d4fc74 (all executed property"
-      , "  arms) and the reader 0x0061c93c with the real code, returns 0 (every"
-      , "  walked row read back its stored code through the kernel's assert"
-      , "  pass), and its consumers are observed: the live halfword pair at"
-      , "  0x0096cc74/0x0096cc76 carries the payload's +0x00/+0x02 codes and the"
-      , "  film cell 0x009568b8 carries the film code's col2 (9). The executed"
-      , "  arm closure was mapped evidence-first: the extended chain (0x2c000"
-      , "  from 0x0061c91c), the cell blocks 0x0094f000..0x00952200 folded into"
-      , "  media-state and 0x00956838..0x00957838, the menu data at"
-      , "  0x00780000..0x007a1400, and 67 additional stock entries in the"
-      , "  row-path set; two callees outside the mapped window (the journal"
-      , "  forwarder 0x0072b858 and 0x0004357c) are register-only stubs and are"
-      , "  the only substitutions on the arm path."
-      , "- c-recall-real-consumers passes: the eight written rows' processing and"
-      , "  menu consumers are observed effective - WB mode 0x00956864 = 3,"
-      , "  sharpness 0x009568a0 = 1, film 0x009568b8 = 9, DR 0x009568bc = 1,"
-      , "  colour 0x009568c0 = 3, noise reduction 0x0095699c = 2, highlight"
-      , "  0x00956b40 = 3 and shadow 0x00956b44 = 4, each the col2 of the"
-      , "  committed row whose col0 is the payload's stored code - with the"
-      , "  recall still reporting 0."
-      , "- c-recall-real-e9-preserved passes: the bound-not-walked 0xe9 row"
-      , "  (payload +0x0a bits 5-7 = 0xe0) survives validation and the remembered"
-      , "  payload path; the staged load/commit writes the new generation whose"
-      , "  payload keeps those bits (no walk row carries them, normalisation does"
-      , "  not mask them) and the resident equals the written file."
-      , "- c-recall-real-refused passes: 0x1b1 stored as 0xb (row 9 of table"
-      , "  0x77a54c, whose col2 is the 0x7ffffffe not-found sentinel) cannot hold"
-      , "  its code - the arm's convert round trip writes 0 at the first apply"
-      , "  and again at the re-apply - so the kernel answers 14"
-      , "  (RB_APPLY_REFUSED); the failing field's live byte at 0x0096cce7 holds"
-      , "  the arm's last write (0) and the fields other arms rewrite (0x1d,"
-      , "  0xfa) still read back their codes. The old c-recall-apply modeled"
-      , "  expectation is superseded and retired."
-      , "- a-load-host-fixture passes against the refreshed canonical fixture"
-      , "  (host-bank.bin sha256 029700fb19df5145c0339185f29dc755e05a03d501ffa3d5-"
-      , "  9a01e26cd46fc9a8): the host codec encodes slot payloads over the body's"
-      , "  defaults record, so the kernel loads the host file resident byte for"
-      , "  byte. The earlier 5 (invalid) was the pre-fix empty-slot code 0, refused"
-      , "  by table 0x776f34; the refresh was unblocked by the interop binary's"
-      , "  missing -threaded flag (the non-threaded runtime deadlocked its bounded"
-      , "  wait4), not by an encoder change."
-      , "- media-task serialization is modeled by in-call completion; no scheduler runs."
-      , "- the close worker's 0x71d66c media-evaluation call is modeled (no epoch"
-      , "  move); the epoch moves only at the 0x71fa9c/0x71f7dc device-event shims."
-      , "- the tag table at 0x009101c0 and the tag-to-index/index/low tables at"
-      , "  0x00910140+ are observable model state; pre-dispatch close shapes release"
-      , "  nothing and leave the handle for the next open to flush."
-      , "- the media-identity races are modeled by the numbered-call fixtures:"
-      , "  rbm_event_step bumps the epoch at its media call (the open/read/write/"
-      , "  close/stat entries and the device-event shims), rbm_close_noop_at"
-      , "  applies the state-1 no-op close at its call, and rbm_trip_step stops the"
-      , "  run at a write boundary. h-save-media-move-in-scan,"
-      , "  h-save-media-move-mid-write and h-write-close-deferred-flush use them"
-      , "  against the write-back's scan, write and close."
-      , "- the failure and ownership shapes of the media identity (the kernel's"
-      , "  real request and release code: rb_open's flush before it posts,"
-      , "  rb_close_quiet's defer-when-the-tag-is-owned, rb_flush_pending's"
-      , "  drop-when-already-released) are driven by three more numbered-call"
-      , "  fixtures: rbm_open_tag_zero(_at) returns a zero dispatch tag while the"
-      , "  worker still delivers a nonzero callback handle, rbm_close_keep(_at)"
-      , "  completes with a success callback while the worker release is skipped,"
-      , "  and rbm_close_late_at runs the worker release with the callback lost to"
-      , "  the caller's await. h-open-zero-tag-flush, h-write-close-tag-owned and"
-      , "  h-write-close-late-release drive them through two entries of"
-      , "  rb_load/rb_save_current; the tag table at 0x009101c0 (media-state"
-      , "  +0x80) is the release oracle (all-zero), rbm_release_guard counts a"
-      , "  release applied to an unowned slot, rbm_stale_close counts a close"
-      , "  posted to a freed handle (the double-release shapes), and rbm_seq_first"
-      , "  exposes the first entry's status. The model's hosts at the stock base"
-      , "  addresses (0x0071c2b0 open, 0x0071be74 read, 0x0071bfe0 write,"
-      , "  0x0071c134 close, 0x0071ce84 stat, 0x0071eff4 release) stand in for the"
-      , "  media worker bytes: every request completes inside the call, so the"
-      , "  stock media task, its queue and semaphore wait, the close worker chain"
-      , "  (0x711768 -> 0x71f1d4 -> 0x71eff4) and the evaluation at 0x71d66c do not"
-      , "  execute, and the handle pool is four slots against the stock 16. Named"
-      , "  but unexecuted boundaries: allocation exhaustion, queue or semaphore"
-      , "  wait failure, a true out-of-order late completion, and the raw"
-      , "  completion mapping of every status except 0/3/0xe/6/8."
       ]
     resultLines = ["case " ++ spId sp ++ ": " ++ st | (sp, r) <- zip specs results, let st = fromMaybe "?" (parseMaybe (withObject "r" (\o -> o .: "status" :: Parser String)) r)]
+
+data BootScenario = Publish | ShortImage | CorruptHash | InvalidDestination | SourceNotLoaded | WaitRefused deriving (Eq, Show)
+
+runBootCases :: FilePath -> FilePath -> FilePath -> IO [Value]
+runBootCases out runner package = do
+  syms <- parseSyms (package </> "boot/boot.syms")
+  source <- B.readFile (package </> "image/source-package.bin")
+  id5 <- B.readFile (package </> "image/id5-final.bin")
+  fragments <- forM [("entry", "rb_boot_entry"), ("sum", "rb_boot_sum"), ("check", "rb_boot_check"), ("publish", "rb_boot_publish")] $ \(file, sym) ->
+    (\bytes -> ("boot-" ++ file, sym, bytes)) <$> B.readFile (package </> "boot" </> (file ++ ".bin"))
+  let srcBase = addr syms "RB_SRC_BASE"
+      image = B.drop 32 source
+      carve = 0x00be1a00
+      status = 0x00befffc
+      exit = toInteger (readU32 id5 12)
+      entries = takeWhile ((/= 0) . fst)
+        [(toInteger (readU32 image i), readU32 image (i + 4)) | i <- [0x80, 0x88 .. 0x478]]
+      targetSpans = compact 7 [(a, a + 4) | (a, _) <- sortOn fst entries]
+      compact count spans
+        | length spans <= count = spans
+        | otherwise =
+            let gaps = [(b - aEnd, i) | (i, ((_, aEnd), (b, _))) <- zip [0 ..] (zip spans (drop 1 spans)),
+                         all (\(_, sym, bytes) -> let lo = addr syms sym; hi = lo + toInteger (B.length bytes) in hi <= aEnd || lo >= b) fragments]
+                (_, at) = minimum gaps
+                merged = (fst (spans !! at), snd (spans !! (at + 1)))
+             in compact count (take at spans ++ [merged] ++ drop (at + 2) spans)
+      initialFrame = B.concat [u32le (if i == 3 || i == 13 then fromIntegral exit else 0xa0 + fromIntegral i) | i <- [0 .. 13 :: Int]]
+      hash bytes = foldl (\h i -> rotateR (h + readU32 bytes i) 7) 0 [0, 4 .. B.length bytes - 4]
+  unless (B.length source == 32 + fromIntegral (readU32 source 8)) (fail "boot package length mismatch")
+  forM [Publish, ShortImage, CorruptHash, InvalidDestination, SourceNotLoaded, WaitRefused] $ \scenario -> do
+    let cid = case scenario of
+          Publish -> "boot-publication-barrier"
+          ShortImage -> "boot-refuse-short-image"
+          CorruptHash -> "boot-refuse-hash"
+          InvalidDestination -> "boot-refuse-destination"
+          SourceNotLoaded -> "boot-refuse-source-highwater"
+          WaitRefused -> "boot-refuse-loader-wait"
+        dir = out </> cid
+        replace off bytes original = B.take off original <> bytes <> B.drop (off + B.length bytes) original
+        apply initial spans = foldl (\bytes (off, value) -> replace off value bytes) initial spans
+        badImage = replace (0x80 + 8 * (length entries - 1)) (u32le 0x009a0000) image
+        carried = case scenario of
+          ShortImage -> replace 8 (u32le 0x100) source
+          CorruptHash -> replace 12 (u32le (readU32 source 12 `xor` 1)) source
+          InvalidDestination -> replace 12 (u32le (hash badImage)) (B.take 32 source <> badImage)
+          _ -> source
+        copied = scenario `elem` [Publish, CorruptHash, InvalidDestination]
+        published = scenario == Publish
+        runtime = if copied then B.drop 32 carried <> B.replicate (0xe600 - B.length image) 0 else B.replicate 0xe600 0
+        expectedRuntime = if published then runtime else replace (fromIntegral (status - carve)) (u32le 2) runtime
+        targets =
+          [ ("target-" ++ show i, a, B.replicate (fromIntegral (b - a)) 0,
+             apply (B.replicate (fromIntegral (b - a)) 0)
+               [(fromIntegral (dest - a), u32le value) | (dest, value) <- entries, published, dest >= a, dest < b])
+          | (i, (a, b)) <- zip [0 :: Int ..] targetSpans]
+        sourcePresent = scenario `notElem` [SourceNotLoaded, WaitRefused]
+        imageRegions =
+          [("source", srcBase, carried, "rx" :: String) | sourcePresent] ++
+          [ ("runtime", carve, B.replicate 0xe600 0, "rw")
+          , ("reporter", 0x00914834, u32le (fromIntegral (if scenario == SourceNotLoaded then srcBase + toInteger (B.length source) - 0x1100001 else srcBase + toInteger (B.length source) - 0x1100000)), "rw")
+          , ("frame", 0x009a0000, B.replicate 8 0 <> initialFrame <> B.replicate 8 0, "rw")
+          , ("stock-entry", exit, B.take 4 (B.drop (fromIntegral (exit - 0xbf1a00)) id5), "rx")
+          ] ++ [(n, addr syms sym, bytes, "rx") | (n, sym, bytes) <- fragments]
+          ++ [(n, a, bytes, "rw") | (n, a, bytes, _) <- targets]
+        fnSpans = [(addr syms sym, toInteger (B.length bytes)) | (_, sym, bytes) <- fragments]
+          ++ [(addr syms "rb_store_entry", 60) | sourcePresent]
+        waitEvent = object ["address" .= ("0x00724b68" :: String), "inputs" .= object ["r0" .= hex 0x47, "r1" .= hex 1000], "outputs" .= object ["r0" .= hex (if scenario == WaitRefused then 1 else 0)]]
+        releaseEvent = object ["address" .= ("0x00724c00" :: String), "inputs" .= object ["r0" .= hex 0x47], "outputs" .= object ["r0" .= hex 0]]
+        events = waitEvent : [releaseEvent | scenario /= WaitRefused]
+        stub event = case event of Object o -> Object (o <> case object ["side_effects" .= ("registers-only" :: String)] of Object extra -> extra; _ -> error "stub object"); _ -> error "event object"
+        claim n bytes = object ["region" .= n, "offset" .= (0 :: Int), "hex" .= hexB bytes]
+        expectedRegisters =
+          if published then object ["r0" .= hex 0, "pc" .= hex (addr syms "rb_store_entry" + 28)]
+          else object (["lr" .= hex 0x0069d2e4, "sp" .= hex 0x009a0040]
+            ++ [fromString ("r" ++ show i) .= hex (if i == 3 then exit else 0xa0 + toInteger i) | i <- [0 .. 12 :: Int]])
+    createDirectoryIfMissing True dir
+    digests <- forM imageRegions $ \(n, _, bytes, _) -> do
+      B.writeFile (dir </> (n ++ ".bin")) bytes
+      (n,) <$> sha256 bytes
+    let c = object
+          [ "schema_version" .= (1 :: Int), "id" .= cid, "origin" .= ("synthetic" :: String)
+          , "provenance" .= ("Exact packaged boot fragments/source image; modeled launcher frame and zero-filled publication destinations. Scenario " ++ show scenario)
+          , "cpu" .= object ["architecture" .= ("arm" :: String), "model" .= ("cortex-r5f" :: String), "mode" .= ("arm" :: String), "endian" .= ("little" :: String)]
+          , "artifacts" .= [object ["id" .= n, "path" .= (n ++ ".bin"), "size" .= B.length bytes, "sha256" .= fromJust (lookup n digests)] | (n, _, bytes, _) <- imageRegions]
+          , "entry" .= hex (addr syms "rb_boot_entry"), "exit" .= hex exit
+          , "registers" .= object (["sp" .= hex 0x009a0040, "lr" .= hex exit, "cpsr" .= hex 0x10] ++
+              [fromString ("r" ++ show i) .= hex (if i == 3 then exit else 0xa0 + toInteger i) | i <- [0 .. 12 :: Int]])
+          , "regions" .= [object ["id" .= n, "address" .= hex a, "size" .= B.length bytes, "permissions" .= perm,
+              "initial" .= object ["artifact" .= n, "offset" .= (0 :: Int), "length" .= B.length bytes]] | (n, a, bytes, perm) <- imageRegions]
+          , "functions" .= [object ["address" .= hex a, "size" .= z] | (a, z) <- fnSpans]
+          , "stubs" .= map stub events
+          , "limits" .= object ["instructions" .= (1000000 :: Int), "wall_ms" .= (4000 :: Int)]
+          , "expected" .= object ["status" .= (if published then "unsupported_instruction" else "unknown_call" :: String),
+              "registers" .= expectedRegisters, "memory" .= (claim ("runtime" :: String) expectedRuntime : [claim n expected | (n, _, _, expected) <- targets]), "events" .= events]
+          , "exclusions" .= (["stock semaphore wait/release are register-only ABI substitutions", "success stops at DSB after publication stores; cache, core and source-coherence acceptance require the full-system emulator", "refusals stop at the stock entry transfer, without executing that entry"] :: [String])
+          ]
+    BL.writeFile (dir </> "case.json") (encode c)
+    (_, report) <- runCase runner (dir </> "case.json")
+    pure (object ["id" .= cid, "status" .= fromMaybe "unknown" (parseMaybe (withObject "report" (.: "status")) report :: Maybe String), "report" .= report])
+
+data AllocatorScenario = ExactFit | OneByteOverflow deriving (Eq)
+
+runAllocatorCases :: FilePath -> FilePath -> FilePath -> IO [Value]
+runAllocatorCases out runner package = do
+  id4 <- B.readFile (package </> "image/id4-final.bin")
+  let code = B.take 84 (B.drop (0x72b110 - 0x61c1fc) id4)
+      originalCursor = 0x00be18e0
+  forM [ExactFit, OneByteOverflow] $ \scenario -> do
+    let fits = scenario == ExactFit
+        cid = if fits then "carve-allocator-exact-fit" else "carve-allocator-overflow"
+        dir = out </> cid
+        bytes = u32le originalCursor <> u32le 9
+        regions = [("code", 0x0072b110, code, "rx" :: String), ("allocator", 0x00829a08, bytes, "rw"),
+                   ("stack", 0x009a0000, B.replicate 32 0, "rw"), ("exit", 0x009b0000, B.pack [0x1e,0xff,0x2f,0xe1], "rx")]
+        expectedState = u32le (if fits then 0x00be19e0 else originalCursor) <> u32le (if fits then 9 else 12)
+    createDirectoryIfMissing True dir
+    digests <- forM regions $ \(n, _, raw, _) -> B.writeFile (dir </> (n ++ ".bin")) raw >> ((n,) <$> sha256 raw)
+    let caseValue = object
+          [ "schema_version" .= (1 :: Int), "id" .= cid, "origin" .= ("synthetic" :: String)
+          , "provenance" .= ("Exact packaged X-M1 1.50 backing allocator. Cursor 0x00be18e0 plus request " ++ (if fits then "256" else "257") ++ " and the stock 32-byte reserve at the emitted 0x00be1a00 upper bound.")
+          , "cpu" .= object ["architecture" .= ("arm" :: String), "model" .= ("cortex-r5f" :: String), "mode" .= ("arm" :: String), "endian" .= ("little" :: String)]
+          , "artifacts" .= [object ["id" .= n, "path" .= (n ++ ".bin"), "size" .= B.length raw, "sha256" .= fromJust (lookup n digests)] | (n, _, raw, _) <- regions]
+          , "entry" .= hex 0x0072b110, "exit" .= hex 0x009b0000
+          , "registers" .= object (["r0" .= hex 0x00829a0c, "r1" .= hex (if fits then 256 else 257), "sp" .= hex 0x009a0010, "lr" .= hex 0x009b0000, "cpsr" .= hex 0x10]
+              ++ [fromString ("r" ++ show i) .= hex 0 | i <- [2 .. 12 :: Int]])
+          , "regions" .= [object ["id" .= n, "address" .= hex a, "size" .= B.length raw, "permissions" .= perm,
+              "initial" .= object ["artifact" .= n, "offset" .= (0 :: Int), "length" .= B.length raw]] | (n, a, raw, perm) <- regions]
+          , "functions" .= [object ["address" .= hex 0x0072b110, "size" .= (84 :: Int)]]
+          , "stubs" .= ([] :: [Value])
+          , "limits" .= object ["instructions" .= (1000 :: Int), "wall_ms" .= (4000 :: Int)]
+          , "expected" .= object ["status" .= ("returned" :: String), "registers" .= object ["r0" .= hex (if fits then toInteger originalCursor else 0xffffffff)],
+              "memory" .= [object ["region" .= ("allocator" :: String), "offset" .= (0 :: Int), "hex" .= hexB expectedState]], "events" .= ([] :: [Value])]
+          , "exclusions" .= (["no heap population, exhaustion workload or carve writer ownership is established", "allocator behavior checks its public cursor/status words and return value; stack bytes are not expectations"] :: [String])
+          ]
+    BL.writeFile (dir </> "case.json") (encode caseValue)
+    (_, report) <- runCase runner (dir </> "case.json")
+    BL.writeFile (dir </> "runner-report.json") (encode report)
+    let runnerResult = parseMaybe (withObject "report" (.: "runner")) report
+        runnerStatus = runnerResult >>= parseMaybe (withObject "runner" (.: "status")) :: Maybe String
+        actualR0 = runnerResult >>= parseMaybe (withObject "runner" (\o -> o .: "registers" >>= withObject "registers" (.: "r0"))) >>= parseHexV
+        memory = memMap (M.singleton (GuestAddress 0x00829a08) (RegionId "allocator")) report
+        mismatches :: [String]
+        mismatches = ["status differs" | runnerStatus /= Just "returned"]
+          ++ ["register r0: differs" | actualR0 /= Just (if fits then toInteger originalCursor else 0xffffffff)]
+          ++ ["allocator output differs" | M.lookup (RegionId "allocator") memory /= Just expectedState]
+        status = if isNothing runnerResult
+          then fromMaybe "invalid_case" (parseMaybe (withObject "report" (.: "status")) report :: Maybe String)
+          else if null mismatches then "passed" else "failed"
+        result = object ["id" .= cid, "status" .= status, "mismatches" .= mismatches, "report" .= report]
+    BL.writeFile (dir </> "behavioral-result.json") (encode result)
+    pure result

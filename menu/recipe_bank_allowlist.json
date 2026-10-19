@@ -1,0 +1,741 @@
+{
+  "schema": 1,
+  "stock_calls": [
+    {
+      "address": "0x0061c91c",
+      "name": "RB_WRITE",
+      "source": "menu/recipe_bank_storage.c #define RB_WRITE"
+    },
+    {
+      "address": "0x0061c93c",
+      "name": "RB_CURRENT",
+      "source": "menu/recipe_bank_storage.c #define RB_CURRENT"
+    },
+    {
+      "address": "0x0061d514",
+      "name": "RB_CONVERT",
+      "source": "menu/recipe_bank_storage.c #define RB_CONVERT"
+    },
+    {
+      "address": "0x0061e110",
+      "name": "RB_GETTER",
+      "source": "menu/recipe_bank_storage.c #define RB_GETTER"
+    },
+    {
+      "address": "0x00635944",
+      "name": "rb_call_preview_clear",
+      "source": "menu/recipe_bank_arm.S rb_call_preview_clear (movw/movt)"
+    },
+    {
+      "address": "0x00643d94",
+      "name": "RB_AUTO_FLAG_READ",
+      "source": "menu/recipe_bank_storage.c #define RB_AUTO_FLAG_READ"
+    },
+    {
+      "address": "0x006439e0",
+      "name": "RB_LIVE_SLOT",
+      "source": "menu/recipe_bank_storage.c #define RB_LIVE_SLOT"
+    },
+    {
+      "address": "0x007115a8",
+      "name": "stock media open worker body",
+      "source": "menu/recipe_bank_arm.S rb_call_stock_media_open (movw/movt)"
+    },
+    {
+      "address": "0x007116e8",
+      "name": "stock media write worker body",
+      "source": "menu/recipe_bank_arm.S rb_call_stock_media_write (movw/movt)"
+    },
+    {
+      "address": "0x0071176c",
+      "name": "stock media close worker body",
+      "source": "menu/recipe_bank_arm.S rb_call_stock_media_close (movw/movt)"
+    },
+    {
+      "address": "0x0071be74",
+      "name": "RB_BASE_READ",
+      "source": "menu/recipe_bank_storage.c #define RB_BASE_READ"
+    },
+    {
+      "address": "0x0071bfe0",
+      "name": "RB_BASE_WRITE",
+      "source": "menu/recipe_bank_storage.c #define RB_BASE_WRITE"
+    },
+    {
+      "address": "0x0071c134",
+      "name": "RB_BASE_CLOSE",
+      "source": "menu/recipe_bank_storage.c #define RB_BASE_CLOSE"
+    },
+    {
+      "address": "0x0071c2b0",
+      "name": "RB_BASE_OPEN",
+      "source": "menu/recipe_bank_storage.c #define RB_BASE_OPEN"
+    },
+    {
+      "address": "0x0071c634",
+      "name": "stock media completion signal",
+      "source": "menu/recipe_bank_storage.c rb_media_complete"
+    },
+    {
+      "address": "0x0071ce84",
+      "name": "RB_FILE_STAT",
+      "source": "menu/recipe_bank_storage.c #define RB_FILE_STAT"
+    },
+    {
+      "address": "0x0071ddf0",
+      "name": "RB_CARD_STATE",
+      "source": "menu/recipe_bank_storage.c #define RB_CARD_STATE"
+    },
+    {
+      "address": "0x0071eaac",
+      "name": "stock media mapping delete",
+      "source": "menu/recipe_bank_storage.c rb_media_guarded_close"
+    },
+    {
+      "address": "0x0071eff4",
+      "name": "stock media tag release",
+      "source": "menu/recipe_bank_storage.c rb_media_guarded_open, rb_media_guarded_close"
+    },
+    {
+      "address": "0x0071f708",
+      "name": "RB_VOL_LETTER",
+      "source": "menu/recipe_bank_storage.c #define RB_VOL_LETTER"
+    },
+    {
+      "address": "0x0071f7e0",
+      "name": "rb_stock_attach_continue",
+      "source": "menu/recipe_bank_ram.ld rb_stock_attach_continue"
+    },
+    {
+      "address": "0x0071faa0",
+      "name": "rb_stock_detach_continue",
+      "source": "menu/recipe_bank_ram.ld rb_stock_detach_continue"
+    },
+    {
+      "address": "0x0071fde4",
+      "name": "stock media message post",
+      "source": "menu/recipe_bank_storage.c rb_media_request_post"
+    },
+    {
+      "address": "0x00723cb8",
+      "name": "RB_TASK_ID",
+      "source": "menu/recipe_bank_storage.c #define RB_TASK_ID"
+    },
+    {
+      "address": "0x00bf93e0",
+      "name": "stock current-value label",
+      "source": "menu/recipe_bank_arm.S rb_bank_current_value_label (movw/movt)"
+    },
+    {
+      "address": "0x00bfa800",
+      "name": "rb_stock_page_entry",
+      "source": "menu/recipe_bank_ram.ld rb_stock_page_entry"
+    },
+    {
+      "address": "0x00c12aac",
+      "name": "rb_call_transition",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_transition"
+    },
+    {
+      "address": "0x00c6f14c",
+      "name": "rb_call_stock_key_left",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_stock_key_left"
+    },
+    {
+      "address": "0x00c70528",
+      "name": "rb_call_stock_key_right",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_stock_key_right"
+    },
+    {
+      "address": "0x00c72e10",
+      "name": "rb_call_set_dispatch",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_set_dispatch"
+    },
+    {
+      "address": "0x00c75ed4",
+      "name": "rb_call_editor_confirm",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_editor_confirm"
+    },
+    {
+      "address": "0x00c76650",
+      "name": "rb_call_leave_edge",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_leave_edge"
+    },
+    {
+      "address": "0x00c77794",
+      "name": "rb_call_editor_cancel",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_editor_cancel"
+    },
+    {
+      "address": "0x00d38d98",
+      "name": "rb_call_redraw",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_redraw"
+    },
+    {
+      "address": "0x00d38e1c",
+      "name": "rb_call_stock_redraw_dispatch",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_stock_redraw_dispatch"
+    },
+    {
+      "address": "0x00d38f34",
+      "name": "rb_call_postlude",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_postlude"
+    },
+    {
+      "address": "0x00d3d858",
+      "name": "rb_call_stage_open",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_stage_open"
+    },
+    {
+      "address": "0x00d3d898",
+      "name": "rb_stock_present_continue",
+      "source": "menu/recipe_bank_ram.ld rb_stock_present_continue"
+    },
+    {
+      "address": "0x00d4fc74",
+      "name": "RB_COMMIT",
+      "source": "menu/recipe_bank_storage.c #define RB_COMMIT"
+    },
+    {
+      "address": "0x00d5868c",
+      "name": "rb_stock_probe_epilogue",
+      "source": "menu/recipe_bank_ram.ld rb_stock_probe_epilogue"
+    },
+    {
+      "address": "0x0111236c",
+      "name": "rb_call_name_label",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_name_label"
+    },
+    {
+      "address": "0x0111299c",
+      "name": "rb_call_name_label_position",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_name_label_position"
+    },
+    {
+      "address": "0x01112b2c",
+      "name": "rb_call_draw_mode",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_draw_mode"
+    },
+    {
+      "address": "0x01113514",
+      "name": "rb_call_name_rect",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_name_rect"
+    },
+    {
+      "address": "0x0112db04",
+      "name": "rb_call_name_background",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_name_background"
+    },
+    {
+      "address": "0x0112e7fc",
+      "name": "rb_call_name_footer",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_name_footer"
+    },
+    {
+      "address": "0x011301ac",
+      "name": "rb_call_name_ascii",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_name_ascii"
+    },
+    {
+      "address": "0x011302f8",
+      "name": "rb_call_name_utf16",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_name_utf16"
+    },
+    {
+      "address": "0x01130e68",
+      "name": "rb_call_name_style",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_name_style"
+    },
+    {
+      "address": "0x01135db0",
+      "name": "rb_call_backdrop_suppressed",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_backdrop_suppressed"
+    },
+    {
+      "address": "0x01137cf8",
+      "name": "rb_call_name_material",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_name_material"
+    },
+    {
+      "address": "0x01138060",
+      "name": "rb_call_name_stretch",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_name_stretch"
+    },
+    {
+      "address": "0x011392e0",
+      "name": "RB_MSG_EMIT",
+      "source": "menu/recipe_bank_probe.c #define RB_MSG_EMIT"
+    },
+    {
+      "address": "0x011397a4",
+      "name": "rb_call_name_title",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_name_title"
+    },
+    {
+      "address": "0x01139e94",
+      "name": "RB_MSG_GATE",
+      "source": "menu/recipe_bank_probe.c #define RB_MSG_GATE"
+    },
+    {
+      "address": "0x01158160",
+      "name": "rb_stock_draw_root_continue",
+      "source": "menu/recipe_bank_ram.ld rb_stock_draw_root_continue"
+    },
+    {
+      "address": "0x01158294",
+      "name": "rb_call_name_shell",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_name_shell"
+    },
+    {
+      "address": "0x01166200",
+      "name": "rb_call_draw_root_prepare",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_draw_root_prepare"
+    },
+    {
+      "address": "0x011662a0",
+      "name": "rb_call_draw_pane",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_draw_pane"
+    },
+    {
+      "address": "0x0116768c",
+      "name": "stock action-list drawer",
+      "source": "menu/recipe_bank_arm.S rb_call_draw_action_list (movw/movt)"
+    }
+  ],
+  "stock_stores": [
+    {
+      "address": "0x0089edc8",
+      "bytes": 4,
+      "name": "RB_TABLE_MISS",
+      "source": "menu/recipe_bank_storage.c #define RB_TABLE_MISS"
+    },
+    {
+      "address": "0x009504a8",
+      "bytes": 4,
+      "name": "RB_EDIT_DIRTY",
+      "source": "menu/recipe_bank_hook.c #define RB_EDIT_DIRTY"
+    },
+    {
+      "address": "0x00954384",
+      "bytes": 15,
+      "name": "RB_EDIT_CUR and the 14-byte RB_EDIT_BUF",
+      "source": "menu/recipe_bank_hook.c #define RB_EDIT_CUR, RB_EDIT_BUF, RB_EDIT_CAP"
+    },
+    {
+      "address": "0x009571d8",
+      "bytes": 4,
+      "name": "RB_UI_CURSOR_CELL",
+      "source": "menu/recipe_bank_ui.h #define RB_UI_CURSOR_CELL"
+    },
+    {
+      "address": "0x009571dc",
+      "bytes": 4,
+      "name": "RB_UI_VISIBLE_CURSOR_CELL",
+      "source": "menu/recipe_bank_ui.h #define RB_UI_VISIBLE_CURSOR_CELL"
+    },
+    {
+      "address": "0x0095732c",
+      "bytes": 4,
+      "name": "RB_UI_CURRENT_ROW_CELL",
+      "source": "menu/recipe_bank_ui.h #define RB_UI_CURRENT_ROW_CELL"
+    },
+    {
+      "address": "0x0146761e",
+      "bytes": 2,
+      "name": "RB_UI_STATE_CELL (RB_EDIT_MODE)",
+      "source": "menu/recipe_bank_ui.h #define RB_UI_STATE_CELL"
+    },
+    {
+      "address": "0x01467a08",
+      "bytes": 4,
+      "name": "stock redraw word cleared after a page redraw",
+      "source": "menu/recipe_bank_actions.c rb_ui_store(0x01467a08u, 0u)"
+    }
+  ],
+  "unproven": [
+    {
+      "function": "rb_bank_draw_selected",
+      "access": "branch",
+      "through": {
+        "argument": "r3"
+      },
+      "reason": "the stock selected-drawer call supplies its draw callback in r3 (menu/recipe_bank_arm.S)"
+    },
+    {
+      "function": "rb_media_close_guard_entry",
+      "access": "branch",
+      "through": {
+        "deref": {
+          "deref": {
+            "argument": "r0"
+          }
+        }
+      },
+      "reason": "the hooked stock close worker's message; a refused request completes through its stock callback"
+    },
+    {
+      "function": "rb_media_close_guard_entry",
+      "access": "store",
+      "through": {
+        "deref": {
+          "deref": {
+            "argument": "r0"
+          }
+        }
+      },
+      "reason": "the hooked stock close worker's message; a refused request's completion words are written"
+    },
+    {
+      "function": "rb_media_complete",
+      "access": "branch",
+      "through": {
+        "argument": "r0"
+      },
+      "reason": "calls the refused request's stock completion callback"
+    },
+    {
+      "function": "rb_media_complete",
+      "access": "store",
+      "through": {
+        "deref": {
+          "argument": "r1"
+        }
+      },
+      "reason": "writes the refused request's stock completion status words"
+    },
+    {
+      "function": "rb_media_guarded_close",
+      "access": "branch",
+      "through": {
+        "deref": {
+          "deref": {
+            "argument": "r0"
+          }
+        }
+      },
+      "reason": "completes a refused close through the stock request's callback"
+    },
+    {
+      "function": "rb_media_guarded_close",
+      "access": "store",
+      "through": {
+        "deref": {
+          "deref": {
+            "argument": "r0"
+          }
+        }
+      },
+      "reason": "completes a refused close through the stock request's completion words"
+    },
+    {
+      "function": "rb_media_guarded_open",
+      "access": "branch",
+      "through": {
+        "deref": {
+          "deref": {
+            "argument": "r0"
+          }
+        }
+      },
+      "reason": "completes a refused open through the stock request's callback"
+    },
+    {
+      "function": "rb_media_guarded_open",
+      "access": "store",
+      "through": {
+        "deref": {
+          "argument": "r0"
+        }
+      },
+      "reason": "clears the refused open request's saved tag in the stock payload"
+    },
+    {
+      "function": "rb_media_guarded_open",
+      "access": "store",
+      "through": {
+        "deref": {
+          "deref": {
+            "argument": "r0"
+          }
+        }
+      },
+      "reason": "completes a refused open through the stock request's completion words"
+    },
+    {
+      "function": "rb_media_guarded_write",
+      "access": "branch",
+      "through": {
+        "deref": {
+          "deref": {
+            "argument": "r0"
+          }
+        }
+      },
+      "reason": "completes a refused write through the stock request's callback"
+    },
+    {
+      "function": "rb_media_guarded_write",
+      "access": "store",
+      "through": {
+        "deref": {
+          "argument": "r0"
+        }
+      },
+      "reason": "zeroes the refused write request's length in the stock payload"
+    },
+    {
+      "function": "rb_media_guarded_write",
+      "access": "store",
+      "through": {
+        "deref": {
+          "deref": {
+            "argument": "r0"
+          }
+        }
+      },
+      "reason": "completes a refused write through the stock request's completion words"
+    },
+    {
+      "function": "rb_media_open_guard_entry",
+      "access": "branch",
+      "through": {
+        "deref": {
+          "deref": {
+            "argument": "r0"
+          }
+        }
+      },
+      "reason": "the hooked stock open worker's message; a refused request completes through its stock callback"
+    },
+    {
+      "function": "rb_media_open_guard_entry",
+      "access": "store",
+      "through": {
+        "deref": {
+          "argument": "r0"
+        }
+      },
+      "reason": "the hooked stock open worker passes its media message; the guard writes its request payload"
+    },
+    {
+      "function": "rb_media_open_guard_entry",
+      "access": "store",
+      "through": {
+        "deref": {
+          "deref": {
+            "argument": "r0"
+          }
+        }
+      },
+      "reason": "the hooked stock open worker's message; a refused request's completion words are written"
+    },
+    {
+      "function": "rb_media_request_post",
+      "access": "store",
+      "through": {
+        "argument": "r0"
+      },
+      "reason": "rewrites the length of the stock media message it is posting"
+    },
+    {
+      "function": "rb_media_request_post",
+      "access": "store",
+      "through": {
+        "deref": {
+          "argument": "r0"
+        }
+      },
+      "reason": "stamps the request identity into the stock message's payload"
+    },
+    {
+      "function": "rb_media_write_guard_entry",
+      "access": "branch",
+      "through": {
+        "deref": {
+          "deref": {
+            "argument": "r0"
+          }
+        }
+      },
+      "reason": "the hooked stock write worker's message; a refused request completes through its stock callback"
+    },
+    {
+      "function": "rb_media_write_guard_entry",
+      "access": "store",
+      "through": {
+        "deref": {
+          "argument": "r0"
+        }
+      },
+      "reason": "the hooked stock write worker passes its media message; the guard writes its request payload"
+    },
+    {
+      "function": "rb_media_write_guard_entry",
+      "access": "store",
+      "through": {
+        "deref": {
+          "deref": {
+            "argument": "r0"
+          }
+        }
+      },
+      "reason": "the hooked stock write worker's message; a refused request's completion words are written"
+    },
+    {
+      "function": "rb_memcpy",
+      "access": "store",
+      "through": {
+        "argument": "r0"
+      },
+      "reason": "copies into its destination argument; bank callers pass bank buffers"
+    },
+    {
+      "function": "rb_name_edit_commit",
+      "access": "store",
+      "through": {
+        "index": "stack-frame"
+      },
+      "reason": "expands the edited name into its local UTF-16 buffer, bounded by rb_name_edit_length"
+    },
+    {
+      "function": "rb_name_resident",
+      "access": "store",
+      "through": {
+        "argument": "r1"
+      },
+      "reason": "copies a resident slot name into its output argument"
+    },
+    {
+      "function": "rb_name_show",
+      "access": "store",
+      "through": {
+        "index": "generated-data"
+      },
+      "reason": "writes the slot's label record in the generated name-record table; slot comes from the callers' bounded slot loops"
+    },
+    {
+      "function": "rb_open",
+      "access": "store",
+      "through": {
+        "argument": "r3"
+      },
+      "reason": "returns the opened handle through its output argument"
+    },
+    {
+      "function": "rb_open",
+      "access": "store",
+      "through": {
+        "index": "rb_loaded"
+      },
+      "reason": "writes the request record of the selected file in the storage kernel's merged globals"
+    },
+    {
+      "function": "rb_open",
+      "access": "store",
+      "through": {
+        "index": "rb_pending_close"
+      },
+      "reason": "compacts the deferred-close table, bounded by rb_pending_count"
+    },
+    {
+      "function": "rb_place",
+      "access": "store",
+      "through": {
+        "argument": "r0"
+      },
+      "reason": "writes a field into its payload argument"
+    },
+    {
+      "function": "rb_read_count",
+      "access": "store",
+      "through": {
+        "argument": "r2"
+      },
+      "reason": "returns the read count through its output argument"
+    },
+    {
+      "function": "rb_readback",
+      "access": "store",
+      "through": {
+        "argument": "r1"
+      },
+      "reason": "copies the slot name into its name_out argument"
+    },
+    {
+      "function": "rb_readback",
+      "access": "store",
+      "through": {
+        "argument": "r2"
+      },
+      "reason": "copies the slot payload into its payload_out argument"
+    },
+    {
+      "function": "rb_scan_file",
+      "access": "store",
+      "through": {
+        "argument": "r3"
+      },
+      "reason": "writes the scan result into its output argument"
+    },
+    {
+      "function": "rb_scan_file",
+      "access": "store",
+      "through": {
+        "caller-frame": 0
+      },
+      "reason": "writes the scan status through its fifth (stack) argument"
+    },
+    {
+      "function": "rb_scan_file",
+      "access": "store",
+      "through": {
+        "caller-frame": 4
+      },
+      "reason": "writes the scan flag through its sixth (stack) argument"
+    },
+    {
+      "function": "rb_slot_load",
+      "access": "store",
+      "through": {
+        "index": "rb_slot_names"
+      },
+      "reason": "passes each of the seven rb_slot_names entries to rb_name_resident"
+    },
+    {
+      "function": "rb_stage_edit_get_arm",
+      "access": "branch",
+      "through": {
+        "caller-frame": 12
+      },
+      "reason": "returns through the {r4, r5, r11, lr} frame FUN_0061e110 saved before dispatching to the arm"
+    },
+    {
+      "function": "rb_stage_edit_set_arm",
+      "access": "branch",
+      "through": {
+        "caller-frame": 28
+      },
+      "reason": "returns through the {r3-r8, r11, lr} frame FUN_00624694 saved before dispatching to the arm"
+    },
+    {
+      "function": "rb_ui_child_enter",
+      "access": "store",
+      "through": {
+        "deref": {
+          "deref": {
+            "cell": "0x009571d0"
+          }
+        }
+      },
+      "reason": "writes the stock current frame's child list state reached from RB_UI_FRAME_CELL"
+    },
+    {
+      "function": "rb_ui_page",
+      "access": "store",
+      "through": {
+        "argument": "r1"
+      },
+      "reason": "returns the slot through its slot_out argument"
+    }
+  ]
+}

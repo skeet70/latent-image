@@ -2,9 +2,7 @@
  * consumer the UI cases drive the bank's menu modules through.
  *
  * The dispatch, transition and label shapes below are byte-read from the pinned
- * 1.50 firmware. A cell whose action is not the interposer is not entered, and
- * ui_stock_exit reproduces the one stock shape the cases need: the editor's
- * DISP/BACK exit clears the modal state and returns to the parent page.
+ * 1.50 firmware. Only cells registered to the interposer are modeled.
  *
  * The transition carries one frame/cursor record per depth. A push moves the
  * cursor cell to the child depth's recorded index, which is nonzero after a
@@ -17,6 +15,7 @@
  * ui_name_base + (id - 0x83c) * 0x42 is copied out.
  */
 #include <stdint.h>
+#include "../menu/recipe_bank_ui.h"
 
 #define UI_FRAME_CELL 0x009571d0u
 #define UI_CURSOR_CELL 0x009571d8u
@@ -33,7 +32,7 @@
 #define UI_NAME_BYTES 26u
 #define UI_STACK_DEPTH 8u
 #define UI_STEP_WORDS 5u
-#define UI_STEP_MAX 31u
+#define UI_STEP_MAX 63u
 
 /* ui_log words */
 #define UI_LOG_SET_CALLS 0u
@@ -46,7 +45,6 @@
 #define UI_LOG_SET_CLASS 7u
 #define UI_LOG_SET_TOKEN 8u
 #define UI_LOG_AUX_CALLS 9u
-#define UI_LOG_PRESENT 10u
 
 /* step opcodes */
 #define UI_OP_DISPATCH 0u
@@ -56,6 +54,13 @@
 #define UI_OP_COPY 4u
 #define UI_OP_CALL 5u
 #define UI_OP_HALT 6u
+#define UI_OP_INPUT_NAME 7u
+#define UI_OP_READ_FIELD 8u
+#define UI_OP_NAVIGATE 9u
+#define UI_OP_REFRESH 10u
+#define UI_OP_NATIVE_WRITE 11u
+#define UI_EDITOR_BUFFER 0x00954385u
+#define UI_EDITOR_CAPACITY 14u
 
 /* case inputs */
 volatile uint32_t ui_handler;      /* the action table word: the linked rb_bank_interpose */
@@ -142,7 +147,7 @@ static uint32_t ui_core_push(void)
   frame = ui_word(UI_FRAME_CELL);
   cursor = ui_word(UI_CURSOR_CELL);
   child = ui_child_of_row();
-  if (frame == 0u || child == 0u || ui_depth >= UI_STACK_DEPTH) {
+  if (frame == 0u || child == 0u || ui_depth + 1u >= UI_STACK_DEPTH) {
     return 0u;
   }
   ui_frames[ui_depth] = frame;
@@ -150,6 +155,7 @@ static uint32_t ui_core_push(void)
   ui_depth = ui_depth + 1u;
   ui_store(UI_FRAME_CELL, child);
   ui_store(UI_CURSOR_CELL, ui_leftover[ui_depth]);
+  rb_ui_probe_visit();
   return 0xffffffffu;
 }
 
@@ -162,23 +168,10 @@ static uint32_t ui_core_pop(void)
   ui_depth = ui_depth - 1u;
   ui_store(UI_FRAME_CELL, ui_frames[ui_depth]);
   ui_store(UI_CURSOR_CELL, ui_cursors[ui_depth]);
+  rb_ui_probe_visit();
   return 0xffffffffu;
 }
 
-static uint32_t ui_stock_exit(void)
-{
-  uint32_t frame = ui_word(UI_FRAME_CELL);
-  uint32_t parent;
-  ui_log[UI_LOG_AUX_CALLS] = ui_log[UI_LOG_AUX_CALLS] + 1u;
-  ui_store_half(UI_STATE_CELL, 0u);
-  if (frame == 0u) {
-    return 0u;
-  }
-  parent = ui_word(frame + UI_NODE_PARENT);
-  ui_store(UI_FRAME_CELL, parent);
-  ui_store(UI_CURSOR_CELL, 0u);
-  return 0xffffffffu;
-}
 
 static uint32_t ui_dispatch(void)
 {
@@ -189,7 +182,7 @@ static uint32_t ui_dispatch(void)
   if (action == 1u) {
     return ui_call(ui_handler);
   }
-  return ui_stock_exit();
+  __builtin_trap();
 }
 
 static void ui_draw_label(uint32_t page, uint32_t row, uint32_t field,
@@ -251,13 +244,6 @@ void ui_postlude(uint32_t code)
   ui_log[UI_LOG_POSTLUDE] = code;
 }
 
-/* The message presenter rb_status_failed tail-transfers into (0x0113a014). */
-__attribute__((section(".text.rpresenter"))) uint32_t ui_presenter(uint32_t label)
-{
-  ui_log[UI_LOG_PRESENT] = label;
-  return 0u;
-}
-
 /* ------------------------------------------------------------- the case run */
 
 uint32_t ui_run(void)
@@ -267,9 +253,13 @@ uint32_t ui_run(void)
     const volatile uint32_t *s = &ui_steps[i * UI_STEP_WORDS];
     uint32_t op = s[0];
     if (op == UI_OP_DISPATCH) {
+      uint32_t previous = ui_word(UI_FRAME_CELL);
       ui_store(UI_FRAME_CELL, s[1]);
       ui_store(UI_CURSOR_CELL, s[2]);
       ui_store_half(UI_EVENT_CELL, s[3]);
+      if (previous != s[1]) {
+        rb_ui_probe_visit();
+      }
       ui_out[s[4]] = ui_dispatch();
     } else if (op == UI_OP_DRAW) {
       ui_draw_label(s[1], s[2], s[3], s[4]);
@@ -279,11 +269,33 @@ uint32_t ui_run(void)
       ui_store_half(s[1], s[2]);
     } else if (op == UI_OP_COPY) {
       ui_copy((uint8_t *)(uintptr_t)s[1], (const uint8_t *)(uintptr_t)s[2], s[3]);
+    } else if (op == UI_OP_INPUT_NAME) {
+      volatile uint8_t *buffer = (volatile uint8_t *)UI_EDITOR_BUFFER;
+      uint32_t j;
+      for (j = 0u; j < UI_EDITOR_CAPACITY; j++) {
+        buffer[j] = j < 12u ? (uint8_t)(s[1u + j / 4u] >> (8u * (j % 4u))) : 0u;
+      }
+    } else if (op == UI_OP_READ_FIELD) {
+      uint32_t (*getter)(uint32_t, uint32_t) =
+          (uint32_t (*)(uint32_t, uint32_t))(uintptr_t)s[1];
+      ui_out[s[4]] = getter(s[2], 0u);
+    } else if (op == UI_OP_NATIVE_WRITE) {
+      uint32_t (*setter)(uint32_t, uint32_t, uint32_t) =
+          (uint32_t (*)(uint32_t, uint32_t, uint32_t))(uintptr_t)s[1];
+      ui_out[s[4]] = setter(s[2], s[3], 0u);
+    } else if (op == UI_OP_NAVIGATE) {
+      ui_store(UI_CURSOR_CELL, s[2]);
+      ui_store_half(UI_EVENT_CELL, s[3]);
+      ui_out[s[4]] = ui_dispatch();
     } else if (op == UI_OP_CALL) {
       ui_out[s[4]] = ui_call(s[1]);
-    } else {
+    } else if (op == UI_OP_REFRESH) {
+      rb_ui_probe_visit();
+    } else if (op == UI_OP_HALT) {
       return 0u;
+    } else {
+      __builtin_trap();
     }
   }
-  return 0u;
+  __builtin_trap();
 }

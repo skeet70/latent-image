@@ -134,6 +134,12 @@ checkMode file manifestPath = do
               ++ [ "slot mask: " ++ show (bankSlotValid header)
                  | bankSlotValid header /= fromIntegral (num (get manifest "slot_valid_mask"))
                  ]
+              ++ [ "slot count: " ++ show (length slots)
+                 | num (get manifest "slot_count") /= fromIntegral (length slots)
+                 ]
+              ++ [ "manifest slot rows: " ++ show (length (list (get manifest "slots")))
+                 | length (list (get manifest "slots")) /= length slots
+                 ]
               ++ concat
                   [ [ "slot " ++ show i ++ " name: " ++ show (fileSlotName slot)
                     | fileSlotName slot /= str (get row "name")

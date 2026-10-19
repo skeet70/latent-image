@@ -21,9 +21,11 @@ import argparse
 import copy
 from dataclasses import asdict
 from datetime import datetime, timezone
+import hashlib
 import inspect
 import json
 from pathlib import Path
+import struct
 import sys
 from time import perf_counter
 from uuid import uuid4
@@ -32,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 MAX_CONTINUATION = 15_000_000
+MODE_DIAL_SETTLE = 40_000_000
 
 
 def _unique_object(pairs):
@@ -99,6 +102,34 @@ def attach_installed_media(board, *, media=None, nand_image=None):
             'limits': 'Data only; OOB, bad blocks and erased padding remain explicit model fixtures'})
     else:
         board.nand.load_initial_persistent_image(Path(nand_image).read_bytes())
+
+def attach_installed_dat(board, dat):
+    """Supply an X-M1 updater container as the installed inverted NAND extent."""
+    payload = Path(dat).read_bytes()
+    bias = 0x25c
+    if len(payload) - bias != len(board.nand.flash):
+        raise ValueError('Installed DAT does not match the X-M1 1.50 NAND extent')
+    logical = payload[bias:].translate(bytes(255 - value for value in range(256)))
+    board.nand.add_data_overlay(0, logical, {
+        'kind': 'x-m1-1.50-installed-dat', 'path': str(Path(dat).resolve()),
+        'sha256': hashlib.sha256(payload).hexdigest(),
+        'dat_bias': bias,
+        'limits': 'Container bytes after the X-M1 DAT bias are inverted into logical NAND data'})
+
+def attach_adjustment_nand(board, nand_image):
+    """Overlay the complete modeled adjustment block set on installed logical media."""
+    from emulator.nand_image import restore_image
+    image = Path(nand_image).read_bytes()
+    _, _, data, spare = restore_image(
+        image, flash_sha256=board.nand.flash_sha256, flash_size=len(board.nand.flash))
+    first, end = 0x381 * 64, 0x3a2 * 64
+    adjustment_data = {page: value for page, value in data.items() if first <= page < end}
+    adjustment_spare = {page: value for page, value in spare.items() if first <= page < end}
+    expected = set(range(first, end))
+    if set(adjustment_data) != expected or set(adjustment_spare) != expected:
+        raise ValueError('Adjustment NAND must commit every page in physical blocks 0x381..0x3a1')
+    board.nand.volatile_pages.update(adjustment_data)
+    board.nand.volatile_spare_pages.update(adjustment_spare)
 
 
 def load_recovery_cpu0(board, ram_path):
@@ -510,6 +541,872 @@ class WarmScanoutSession:
         return save_raw_image(controller.card, path)
 
 
+
+class _FF80EndpointBridge:
+    """Host-side adapter for opaque transfers through the modeled X-M1 USB endpoint."""
+    def __init__(self, board, session, *, attached=False):
+        from emulator.power_devices import PowerDevices
+        from emulator.usb_devices import USBControl
+        self.board = board
+        self.session = session
+        self.power = next(device for device in board.devices if type(device) is PowerDevices)
+        usb = next(device for device in board.devices if type(device) is USBControl)
+        self.endpoint = usb._endpoint
+        if self.endpoint is None or self.power.usb_connected != attached:
+            raise ValueError('RAM-push bridge requires endpoint transport and a post-boot attach')
+        self.trace_sites = {}
+        self.trace_hits = []
+        self.screenshots = []
+        self.timing_transitions = []
+        self.transfer_count = 0
+        self.keepalive_inputs = []
+        self.keepalive_enabled = False
+        self.rendezvous_activity = []
+        self.rendezvous_activity_complete = False
+        self.key_log = []
+        self.transfer_log = []
+
+    def use_timing_ratio(self, ratio, phase):
+        wanted = (ratio, 1)
+        if self.board.tick_ratio != wanted:
+            before = self.board.tick_ratio
+            self.board.set_instructions_per_tick(ratio)
+            self.timing_transitions.append({
+                'phase': phase, 'instructions': self.board.instructions,
+                'before': f'{before[0]}/{before[1]}', 'after': f'{ratio}/1'})
+
+    # Command-dial push in stock 1.50 live view resets auto power-off and leaves the screen and the
+    # MENU path unchanged (emulated).
+    KEEPALIVE_KEY = 'dial-push'
+    # Each keepalive runs inside a host transfer's 5 s budget.
+    KEEPALIVE_PULSE = 2_000_000
+
+    def keep_session_awake(self):
+        self.use_timing_ratio(24, 'inactivity reset')
+        before = self.board.instructions
+        state = self.session.key({'key': self.KEEPALIVE_KEY, 'render': False,
+                                  'hold_instructions': self.KEEPALIVE_PULSE,
+                                  'release_instructions': self.KEEPALIVE_PULSE})
+        if self.board.failure is not None or self.session.execution_error is not None:
+            raise RuntimeError(f'inactivity reset failed: {state}')
+        self.keepalive_inputs.append({
+            'key': self.KEEPALIVE_KEY, 'before_instructions': before,
+            'after_instructions': self.board.instructions})
+        self.use_timing_ratio(2400, 'USB transfer')
+
+    # A 455,645-instruction UP hold at the USB ratio did not enter stock 1.50 focus-area selection;
+    # 1,778,831 did (emulated).
+    RENDEZVOUS_HOLD = 4_000_000
+
+    def hold_rendezvous_inputs(self):
+        from emulator.menu_inputs import MenuKey
+        from emulator.sd_card import MediaAction
+        self.session.inputs.press(MenuKey.UP)
+        self.session._sd_controller().media_control(MediaAction.PROTECT)
+        return self.board.instructions
+
+    def release_rendezvous_inputs(self, latched):
+        from emulator.sd_card import MediaAction
+        held = self.board.instructions - latched
+        if held < self.RENDEZVOUS_HOLD:
+            self.run_for(self.RENDEZVOUS_HOLD - held)
+        self.session.inputs.release()
+        self.session._sd_controller().media_control(MediaAction.UNPROTECT)
+
+    def release_rendezvous_activity(self):
+        if not self.rendezvous_activity_complete:
+            return
+        self.release_rendezvous_inputs(self.rendezvous_activity[-1]['latched_instructions'])
+        event = self.rendezvous_activity[-1]
+        event['released_instructions'] = self.board.instructions
+        event['menu_after'] = self.key_state(self.session.sample(False))
+        event['cores_after'] = self.board.snapshot()['cores']
+        self.rendezvous_activity_complete = False
+
+    def run_until(self, label, predicate, budget):
+        end = self.board.instructions + budget
+        while not predicate():
+            failure = self.board.failure or self.session.execution_error
+            if failure is not None:
+                raise RuntimeError(f'{label}: {failure}')
+            if self.board.instructions >= end:
+                raise TimeoutError(f'{label}: instruction budget expired; usb={self.endpoint.snapshot()}')
+            target = min(end, self.board.instructions + 1_000_000)
+            try:
+                self.board.run(target - self.board.instructions + 2 * self.board.quantum,
+                               pause_after=target)
+            except Exception as error:
+                self.session.execution_error = {'type': type(error).__name__, 'error': str(error)}
+
+    def run_for(self, count):
+        target = self.board.instructions + count
+        while self.board.instructions < target:
+            self.run_until('bounded continuation',
+                           lambda: self.board.instructions >= target,
+                           target - self.board.instructions)
+
+    def take_in(self, endpoint_address, count):
+        chunks = bytearray()
+        port = dict(self.endpoint.contract.in_endpoints)[endpoint_address]
+        while len(chunks) < count:
+            def reply_ready():
+                if self.endpoint.tx[port]:
+                    return True
+                if not self.endpoint.regs[0x030] & 4:
+                    self.endpoint.host_in_token(endpoint_address)
+                return False
+            self.run_until('bulk IN reply', reply_ready, 30_000_000)
+            packet = self.endpoint.host_in(endpoint_address, count - len(chunks))
+            chunks.extend(packet)
+            self.run_for(20_000)
+            if len(packet) < self.endpoint.contract.packet_bytes:
+                break
+        self.run_until('bulk IN DMA teardown',
+                       lambda: all(not channel[0x004] & 1 for channel in self.endpoint.dma),
+                       30_000_000)
+        return bytes(chunks)
+
+    def control_out(self, payload):
+        setup = bytes((0x43, 0, 0, 0, 0, 0, len(payload) & 0xff, len(payload) >> 8))
+        self.endpoint.host_setup(setup)
+        self.run_until('control OUT setup consumption',
+                       lambda: self.endpoint.setup_position == len(self.endpoint.setup),
+                       30_000_000)
+        self.run_for(20_000)
+        self.endpoint.host_out(0, payload)
+        self.run_until('control OUT status', lambda: bool(self.endpoint.tx[0]), 30_000_000)
+        if self.endpoint.host_in(0x80, 64):
+            raise RuntimeError('control OUT status packet was not empty')
+        self.run_for(20_000)
+
+    def control_status(self, setup):
+        self.endpoint.host_setup(setup)
+        self.run_until('control status IN', lambda: bool(self.endpoint.tx[0]), 30_000_000)
+        if self.endpoint.host_in(0x80, 64):
+            raise RuntimeError('control status packet was not empty')
+
+    def control_in(self, setup, count):
+        self.endpoint.host_setup(setup)
+        self.run_until('control IN data', lambda: bool(self.endpoint.tx[0]), 30_000_000)
+        payload = self.endpoint.host_in(0x80, count)
+        self.endpoint.host_out(0, b'')
+        return payload
+
+    def enumerate(self):
+        self.power.set_usb_connected(True)
+        self.run_until('USB controller activation',
+                       lambda: self.endpoint.regs[0x090] & 6 == 6, 140_000_000)
+        self.endpoint.host_reset()
+        self.run_for(1_000_000)
+        device = self.control_in(bytes((0x80, 6, 0, 1, 0, 0, 18, 0)), 18)
+        if len(device) != 18 or device[8:12] != bytes((0xcb, 0x04, 0x80, 0xff)):
+            raise RuntimeError(f'unexpected device descriptor {device.hex()}')
+        self.control_status(bytes((0, 5, 1, 0, 0, 0, 0, 0)))
+        head = self.control_in(bytes((0x80, 6, 0, 2, 0, 0, 9, 0)), 9)
+        count = int.from_bytes(head[2:4], 'little')
+        if len(head) != 9 or not 9 <= count <= 256:
+            raise RuntimeError(f'unexpected configuration descriptor head {head.hex()}')
+        configuration = self.control_in(
+            bytes((0x80, 6, 0, 2, 0, 0, count & 0xff, count >> 8)), count)
+        self.control_status(bytes((0, 9, configuration[5], 0, 0, 0, 0, 0)))
+        self.run_for(1_000_000)
+        return device, configuration
+
+    def bulk_out(self, endpoint_address, payload):
+        if endpoint_address != 2:
+            raise ValueError('RAM-push bridge admits only bulk OUT endpoint 2')
+        self.run_until('bulk OUT DMA readiness',
+                       lambda: (self.endpoint.dma_active is None
+                                or (self.endpoint.dma_active['direction'] == 'out'
+                                    and self.endpoint.dma_active['exact'] == len(payload))),
+                       30_000_000)
+        for start in range(0, len(payload), self.endpoint.contract.packet_bytes):
+            chunk = payload[start:start + self.endpoint.contract.packet_bytes]
+            self.endpoint.host_out(endpoint_address, chunk)
+            self.run_until('bulk OUT packet consumption',
+                           lambda: self.endpoint.rx_positions[1] == len(self.endpoint.rx[1]),
+                           30_000_000)
+            self.run_for(20_000)
+        self.run_until('bulk OUT DMA completion',
+                       lambda: self.endpoint.dma_active is None,
+                       30_000_000)
+        self.run_until('bulk OUT DMA teardown',
+                       lambda: all(not channel[0x004] & 1 for channel in self.endpoint.dma),
+                       30_000_000)
+        self.run_for(100_000)
+
+    def transfer(self, request):
+        started, instructions = perf_counter(), self.board.instructions
+        count, payload = self._transfer(request)
+        frame = bytes.fromhex(request.get('bytes', ''))
+        self.transfer_log.append({
+            'transfer': request.get('transfer'), 'bytes': count,
+            'opcode': frame[:4][::-1].hex() if len(frame) >= 4 else None,
+            'function': int.from_bytes(frame[16:20], 'little') if len(frame) >= 20 else None,
+            'instructions': self.board.instructions - instructions,
+            'seconds': round(perf_counter() - started, 4)})
+        return count, payload
+
+    def _transfer(self, request):
+        self.release_rendezvous_activity()
+        self.transfer_count += 1
+        if self.keepalive_enabled and self.transfer_count % 32 == 0:
+            self.keep_session_awake()
+        self.use_timing_ratio(2400, 'USB transfer')
+        kind = request.get('transfer')
+        if kind == 'control':
+            payload = bytes.fromhex(request['bytes'])
+            if len(payload) != 12:
+                raise ValueError('control transfer must carry the internal twelve-byte request')
+            self.control_out(payload)
+            return len(payload), b''
+        if kind == 'bulk-out':
+            payload = bytes.fromhex(request['bytes'])
+            self.bulk_out(request['endpoint'], payload)
+            return len(payload), b''
+        if kind == 'bulk-in':
+            count = request['count']
+            payload = self.take_in(request['endpoint'], count)
+            return len(payload), payload
+        raise ValueError('unknown bridge transfer kind')
+
+    def set_trace_sites(self, sites, enable_keepalive=True):
+        from emulator.rec_state import Reader, task_state
+        from unicorn.arm_const import (UC_ARM_REG_CPSR, UC_ARM_REG_PC, UC_ARM_REG_R0,
+                                       UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3,
+                                       UC_ARM_REG_SP)
+        if not isinstance(sites, dict) or any(not isinstance(key, str)
+                or not isinstance(value, str) for key, value in sites.items()):
+            raise ValueError('trace sites must be a string map')
+        parsed = {int(address, 0): label for address, label in sites.items()}
+        _, tasks = task_state(Reader(self.board))
+        stacks = []
+        for task in tasks:
+            if all(name in task for name in ('stack_base', 'stack_bytes', 'task_id')):
+                base = int(task['stack_base'], 16)
+                stacks.append((task['cpu'], base, base + task['stack_bytes'], task['task_id']))
+        self.trace_sites = parsed
+
+
+        def core_states():
+            states = []
+            for owner, owner_cpu in enumerate(self.board.cpus):
+                stack = owner_cpu.reg_read(UC_ARM_REG_SP)
+                task_id = next((task for cpu_id, low, high, task in stacks
+                                if cpu_id == owner and low <= stack < high), None)
+                states.append({
+                    'core': owner, 'pc': hex(owner_cpu.reg_read(UC_ARM_REG_PC)),
+                    'cpsr': hex(owner_cpu.reg_read(UC_ARM_REG_CPSR)),
+                    'irq_masked': bool(owner_cpu.reg_read(UC_ARM_REG_CPSR) & 0x80),
+                    'sp': hex(stack), 'task': task_id,
+                    'task_hex': None if task_id is None else hex(task_id),
+                    'retired_instructions': self.board.core_state[owner]['instructions'],
+                    'virtual_ticks': self.board.virtual_ticks})
+            return states
+        def handler(cpu, core, address):
+            sp = cpu.reg_read(UC_ARM_REG_SP)
+            task = next((task_id for owner, low, high, task_id in stacks
+                         if owner == core and low <= sp < high), None)
+            identities = list(self.board._native.cp14_identity())
+            request = bytes(self.board.read_memory(0x01469a9c, 0xa4))
+            self.trace_hits.append({
+                'site': self.trace_sites[address], 'address': hex(address), 'core': core,
+                'task': task, 'task_hex': None if task is None else hex(task),
+                'registers': {name: hex(cpu.reg_read(register)) for name, register in
+                              (('r0', UC_ARM_REG_R0), ('r1', UC_ARM_REG_R1),
+                               ('r2', UC_ARM_REG_R2), ('r3', UC_ARM_REG_R3))},
+                'raw_identity': hex(identities[core]), 'all_raw_identities': list(map(hex, identities)),
+                'sp': hex(sp), 'instructions': self.board.instructions,
+                'request': {'opcode': hex(int.from_bytes(request[0:4], 'little')),
+                            'tag_or_function': hex(int.from_bytes(request[0x10:0x14], 'little')),
+                            'tail_sha256': hashlib.sha256(request[0x84:0xa4]).hexdigest()}})
+            label = self.trace_sites[address]
+            if label == 'rendezvous-locked' and (
+                    not self.rendezvous_activity
+                    or 'released_instructions' in self.rendezvous_activity[-1]):
+                locked = core_states()
+                if core != 0 or any(not state['irq_masked'] for state in locked):
+                    raise RuntimeError(f'rendezvous trace lacks two masked cores: {locked}')
+                latched = self.hold_rendezvous_inputs()
+                self.rendezvous_activity.append({
+                    'latched_instructions': latched,
+                    'latched_virtual_ticks': self.board.virtual_ticks,
+                    'inputs': ['menu-up', 'sd-write-protect'],
+                    'cores_locked': locked,
+                    'window_exits': []})
+            elif (label in ('cpu0-window-exit', 'cpu1-window-exit')
+                  and self.rendezvous_activity
+                  and 'callback_instructions' not in self.rendezvous_activity[-1]):
+                self.rendezvous_activity[-1]['window_exits'].append({
+                    'label': label, 'global_instructions': self.board.instructions,
+                    'virtual_ticks': self.board.virtual_ticks, 'cores': core_states()})
+            elif label == 'query-callback-result' and self.rendezvous_activity:
+                event = self.rendezvous_activity[-1]
+                if 'callback_instructions' not in event:
+                    labels = [item['label'] for item in event['window_exits']]
+                    if labels.count('cpu0-window-exit') != 1 or labels.count('cpu1-window-exit') != 1:
+                        raise RuntimeError(f'incomplete rendezvous window trace: {labels}')
+                    event['callback_instructions'] = self.board.instructions
+                    event['callback_virtual_ticks'] = self.board.virtual_ticks
+                    event['cores_at_callback'] = core_states()
+                    event['retired_instruction_deltas'] = [
+                        after['retired_instructions'] - before['retired_instructions']
+                        for before, after in zip(event['cores_locked'], event['cores_at_callback'])]
+                    event['virtual_tick_delta'] = (
+                        event['callback_virtual_ticks'] - event['latched_virtual_ticks'])
+                    if any(delta <= 0 for delta in event['retired_instruction_deltas']):
+                        raise RuntimeError(
+                            f'rendezvous lacks two-core execution: {event["retired_instruction_deltas"]}')
+                    self.rendezvous_activity_complete = True
+        for core in range(2):
+            self.board._native.set_breakpoints(core, sorted(parsed))
+        self.board.breakpoint_handler = handler
+        self._breakpoint_handler = handler
+        if enable_keepalive:
+            self.transfer_count = 0
+            self.keepalive_enabled = True
+
+    def drain_scheduled(self):
+        """Run in 200,000-instruction steps, at most 50, until no Python closure is scheduled."""
+        for _ in range(50):
+            if not self.board.scheduled:
+                return
+            self.run_for(200_000)
+
+    def disarm_for_checkpoint(self):
+        """Release held rendezvous inputs, clear the trace breakpoints and return to the UI tick
+        ratio. Portable checkpoints cannot carry the breakpoint handler."""
+        self.release_rendezvous_activity()
+        self.use_timing_ratio(24, 'install checkpoint')
+        for core in range(2):
+            self.board._native.set_breakpoints(core, [])
+        self.board.breakpoint_handler = None
+
+    def rearm(self):
+        for core in range(2):
+            self.board._native.set_breakpoints(core, sorted(self.trace_sites))
+        self.board.breakpoint_handler = self._breakpoint_handler
+
+    def key(self, name):
+        self.use_timing_ratio(24, 'UI input')
+        started, instructions = perf_counter(), self.board.instructions
+        state = self.session.key({'key': name, 'render': True})
+        settle = state.get('navigation', {}).get('render_settle') or {}
+        self.key_log.append({'key': name, 'seconds': round(perf_counter() - started, 3),
+                             'instructions': self.board.instructions - instructions,
+                             'key_instructions': settle.get('key_instructions'),
+                             'settle_instructions': settle.get('settle_instructions'),
+                             'settle_status': settle.get('status')})
+        current = state.get('navigation', {}).get('current_menu', {})
+        return {key: current.get(key) for key in ('menu_id', 'setting_id', 'cursor')}
+
+    def mode_dial(self, name):
+        self.use_timing_ratio(24, 'UI input')
+        window = self.session.inputs.set_mode_dial(name)
+        self.run_for(MODE_DIAL_SETTLE)
+        return {'position': window.binding.position.value, 'sample': window.midpoint,
+                'low': window.low, 'high': window.high,
+                'menu': self.key_state(self.session.sample(False))}
+
+    def capture(self, label, output):
+        if not label or any(character not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for character in label):
+            raise ValueError('screenshot label must be lowercase ASCII')
+        state = self.session.sample()
+        if not self.session.png:
+            raise RuntimeError('no display plane to capture')
+        target = Path(output) / 'screenshots' / f'{label}.png'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(self.session.png)
+        frame = state.get('display', {}).get('last_frame') or {}
+        self.screenshots.append({'label': label, 'path': str(target),
+                                 'frame_number': frame.get('frame_number'),
+                                 'sha256': hashlib.sha256(self.session.png).hexdigest(),
+                                 'menu': self.key_state(state)})
+        return self.screenshots[-1]
+
+    @staticmethod
+    def key_state(state):
+        current = state.get('navigation', {}).get('current_menu', {})
+        return {key: current.get(key) for key in ('menu_id', 'setting_id', 'cursor')}
+
+
+def _ram_push_attach(board, session):
+    """Boot past the first-start language screen into live view and enumerate ff80."""
+    bridge = _FF80EndpointBridge(board, session)
+    bridge.run_until('first-start screen', lambda: board.instructions >= 100_000_000, 100_000_000)
+    for key in ['up'] * 12 + ['ok', 'ok']:
+        session.key({'key': key})
+    bridge.run_for(40_000_000)
+    pre_attach = {'instructions': board.instructions,
+                  'raw_identities': list(map(hex, board._native.cp14_identity()))}
+    device, configuration = bridge.enumerate()
+    return bridge, {'pre_attach': pre_attach, 'device': device.hex(),
+                    'configuration': configuration.hex()}
+
+
+# Staged runtime trees whose bytes decide the machine state at the attach boundary. Portable
+# checkpoint identity also carries absolute code paths under the runtime root.
+RAM_PUSH_SOURCE_TREES = ('emulator', 'firmware', 'inputs/x-m1-1.50', 'native/python', 'tools')
+RAM_PUSH_CHECKPOINT_SCHEMA = 1
+
+
+def _file_sha256(path):
+    with Path(path).open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def _emulator_source_identity():
+    import os
+    digest = hashlib.sha256()
+    for tree in RAM_PUSH_SOURCE_TREES:
+        for path in sorted((ROOT / tree).rglob('*')):
+            if path.is_file() and '__pycache__' not in path.parts:
+                digest.update(path.relative_to(ROOT).as_posix().encode() + b'\0')
+                digest.update(bytes.fromhex(_file_sha256(path)))
+    unicorn = os.environ.get('X70_UNICORN_LIBRARY')
+    digest.update(json.dumps([str(ROOT), os.path.realpath(sys.executable), list(sys.version_info),
+                              None if unicorn is None else os.path.realpath(unicorn)]).encode())
+    return digest.hexdigest()
+
+
+def _ram_push_checkpoint_key(installed_dat, adjustment_nand, menu_sd_image):
+    inputs = {'installed_dat': _file_sha256(installed_dat),
+              'adjustment_nand': _file_sha256(adjustment_nand),
+              'menu_sd_image': _file_sha256(menu_sd_image),
+              'emulator_source': _emulator_source_identity()}
+    document = json.dumps({'schema': RAM_PUSH_CHECKPOINT_SCHEMA, **inputs},
+                          sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(document.encode()).hexdigest(), inputs
+
+
+ATTACH_RECORD = 'ram-push-attach.json'
+INSTALL_RECORD = 'ram-push-install.json'
+
+
+def _save_ram_push_checkpoint(session, root, name, record_file, record, *, replace):
+    """Save the machine as ROOT/NAME with RECORD; replace swaps out an existing one."""
+    import shutil
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    partial = root / f'.partial-{uuid4().hex}'
+    session.save_snapshot(partial)
+    (partial / record_file).write_text(json.dumps(
+        {'schema': RAM_PUSH_CHECKPOINT_SCHEMA, 'recovery': session.options['recovery'], **record},
+        indent=2) + '\n')
+    target = root / name
+    if target.exists() and replace:
+        stale = root / f'.stale-{uuid4().hex}'
+        target.rename(stale)
+        partial.rename(target)
+        shutil.rmtree(stale)
+    elif target.exists():
+        shutil.rmtree(partial)
+    else:
+        partial.rename(target)
+    return target
+
+
+def _read_ram_push_record(directory, record_file, key):
+    record = json.loads((directory / record_file).read_text(), object_pairs_hook=_unique_object)
+    if record.get('schema') != RAM_PUSH_CHECKPOINT_SCHEMA or record.get('key') != key:
+        raise ValueError(f'RAM-push checkpoint record {directory / record_file} differs from key {key}')
+    return record
+
+
+def _restore_ram_push_checkpoint(directory, record, output):
+    from x70_native.portable_checkpoint import load
+    from tools.probe_setup_menus import MenuSession
+    board = load(directory)
+    options = dict(board._portable_factory_options, recovery=record['recovery'])
+    session = MenuSession(board, output, options=options)
+    bridge = _FF80EndpointBridge(board, session, attached=True)
+    attachment = {name: record[name] for name in ('pre_attach', 'device', 'configuration')}
+    return board, session, bridge, attachment
+
+
+def _install_checkpoint_name(key, manifest_sha256, runtime_sha256):
+    digest = hashlib.sha256(f'{manifest_sha256}:{runtime_sha256}'.encode()).hexdigest()
+    return f'{key}-installed-{digest}'
+
+
+def _install_checkpoints(root, key):
+    """Install checkpoints saved over the attach checkpoint KEY, with their host records."""
+    found = []
+    for directory in sorted(root.glob(f'{key}-installed-*')):
+        if directory.is_dir() and (directory / INSTALL_RECORD).is_file():
+            record = _read_ram_push_record(directory, INSTALL_RECORD, key)
+            found.append({'directory': str(directory.resolve()), 'base': record['base'],
+                          'manifest_sha256': record['manifest_sha256'],
+                          'runtime_sha256': record['runtime_sha256'], 'host': record['host']})
+    return found
+
+
+INSTALL_FIELDS = ('base', 'manifest_sha256', 'runtime_sha256', 'host')
+
+
+def _save_install_checkpoint(bridge, session, root, checkpoint, attachment, request):
+    from emulator.checkpoint import CheckpointError
+    if set(request) != {'command', *INSTALL_FIELDS}:
+        raise ValueError('save-install-checkpoint requires exactly ' + ', '.join(INSTALL_FIELDS))
+    name = _install_checkpoint_name(checkpoint['key'], request['manifest_sha256'], request['runtime_sha256'])
+    if (root / name).is_dir():
+        return {'directory': str((root / name).resolve()), 'saved': False, 'existing': True}
+    started = perf_counter()
+    bridge.drain_scheduled()
+    bridge.disarm_for_checkpoint()
+    try:
+        target = _save_ram_push_checkpoint(
+            session, root, name, INSTALL_RECORD,
+            {'key': checkpoint['key'], **attachment, **{field: request[field] for field in INSTALL_FIELDS}},
+            replace=False)
+    except CheckpointError as error:
+        return {'saved': False, 'existing': False, 'save_error': str(error)}
+    finally:
+        bridge.rearm()
+    return {'directory': str(target.resolve()), 'saved': True, 'existing': False,
+            'seconds': round(perf_counter() - started, 3)}
+
+
+def _run_ram_push_server(board, session, output, bridge, attachment, checkpoint, checkpoint_root):
+    pre_attach = attachment['pre_attach']
+    device = bytes.fromhex(attachment['device'])
+    configuration = bytes.fromhex(attachment['configuration'])
+    fixed_sites = {
+        '0x1469b20': 'request-bootstrap',
+        '0x1469b38': 'request-bootstrap-return',
+        '0xd806e8': 'query-callback-result',
+        '0xd8073c': 'query-response-ready',
+        '0x6b0aa8': 'cpu1-sync-wrapper',
+        '0x6b0c3c': 'cpu1-range-wrapper',
+        '0x61c490': 'cpu1-cache-control',
+        '0x6c6b5c': 'cpu1-worker',
+        '0x6b0704': 'cpu1-worker-completion',
+    }
+    bridge.set_trace_sites(fixed_sites, enable_keepalive=False)
+    ready = {'ok': True, 'event': 'ready', 'device': device.hex(),
+             'configuration': configuration.hex(), 'pre_attach': pre_attach,
+             'checkpoint': checkpoint}
+    print(json.dumps(ready, separators=(',', ':')), flush=True)
+    recovery = session.options['recovery']
+    inputs = {}
+    for name, path in (('installed_dat', recovery['media']),
+                       ('adjustment_nand', recovery['adjustment_nand'])):
+        source = Path(path)
+        with source.open('rb') as stream:
+            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+        inputs[name] = {'path': str(source), 'bytes': source.stat().st_size,
+                        'sha256': digest}
+    inputs['menu_sd_image'] = recovery['card']
+    receipt = {'schema': 1, 'scope': 'emulated X-M1 ordinary-boot RAM push',
+               'inputs': inputs, 'pre_attach': pre_attach,
+               'device_descriptor': device.hex(),
+               'configuration_descriptor': configuration.hex(),
+               'checkpoint': checkpoint}
+    try:
+        for line in sys.stdin:
+            request = json.loads(line, object_pairs_hook=_unique_object)
+            command = request.get('command')
+            if command == 'list':
+                result = {'candidate': {'path': 'emulator:xm1', 'vid': 0x04cb, 'pid': 0xff80,
+                    'configuration': configuration[5], 'interface': 0, 'alternate': 0,
+                    'class': configuration[14], 'subclass': configuration[15],
+                    'protocol': configuration[16], 'input': 0x81, 'output': 2,
+                    'input_packet': 64, 'output_packet': 64}}
+            elif command == 'transfer':
+                count, payload = bridge.transfer(request)
+                result = {'count': count, 'bytes': payload.hex()}
+            elif command == 'trace-sites':
+                bridge.set_trace_sites({**fixed_sites, **request['sites']})
+                result = {'sites': len(bridge.trace_sites)}
+            elif command == 'save-install-checkpoint':
+                result = _save_install_checkpoint(bridge, session, checkpoint_root, checkpoint,
+                                                  attachment, request)
+            elif command == 'trace-hits':
+                start = request.get('from')
+                if type(start) is not int or not 0 <= start <= len(bridge.trace_hits):
+                    raise ValueError('trace-hits requires a hit index within the recorded hits')
+                result = {'count': len(bridge.trace_hits), 'hits': bridge.trace_hits[start:]}
+            elif command == 'key':
+                result = {'menu': bridge.key(request['key'])}
+            elif command == 'mode-dial':
+                result = bridge.mode_dial(request['position'])
+            elif command == 'read-memory':
+                address, count = request.get('address'), request.get('count')
+                if (type(address) is not int or type(count) is not int or not 0 < count <= 4096
+                        or not 0 <= address <= 0x100000000 - count):
+                    raise ValueError('read-memory requires an address and 1..4096 bytes')
+                result = {'bytes': bytes(board.read_memory(address, count)).hex()}
+            elif command == 'capture':
+                result = bridge.capture(request['label'], output)
+            elif command == 'finish':
+                result = {'finished': True}
+                print(json.dumps({'ok': True, **result}, separators=(',', ':')), flush=True)
+                break
+            else:
+                raise ValueError('unknown RAM-push bridge command')
+            print(json.dumps({'ok': True, **result}, separators=(',', ':')), flush=True)
+    except Exception as error:
+        receipt['bridge_error'] = {'type': type(error).__name__, 'message': str(error)}
+        print(json.dumps({'ok': False, 'error': type(error).__name__,
+                          'message': str(error)}, separators=(',', ':')), flush=True)
+    from emulator.rec_state import Reader, task_state
+    task_tables, tasks = task_state(Reader(board))
+    receipt['task_tables'] = task_tables
+    receipt['worker_tasks'] = [
+        task for task in tasks if task.get('task_id') in (0x24, 0x58, 0x59, 0x5a)]
+    receipt['diagnostic_memory'] = {
+        'query_output': bytes(board.read_memory(0x01469878, 8)).hex(),
+        'callback_slot': bytes(board.read_memory(0x015c22ac, 4)).hex(),
+        'response_descriptor': bytes(board.read_memory(0x0146989c, 32)).hex(),
+        'response_state': bytes(board.read_memory(0x01469864, 32)).hex(),
+        'worker_rows': bytes(board.read_memory(0x0089e608, 0x330)).hex(),
+        'worker_payloads': bytes(board.read_memory(0x009c2f5c, 0x324)).hex(),
+    }
+    receipt['usb_endpoint'] = bridge.endpoint.snapshot()
+    receipt['timing_transitions'] = bridge.timing_transitions
+    receipt['keepalive_inputs'] = bridge.keepalive_inputs
+    receipt['key_log'] = bridge.key_log
+    receipt['transfer_log'] = bridge.transfer_log
+    receipt['rendezvous_activity'] = bridge.rendezvous_activity
+    receipt['cores'] = board.snapshot()['cores']
+    receipt.update(contexts=bridge.trace_hits, screenshots=bridge.screenshots,
+                   boundary={'instructions': board.instructions, 'failure': board.failure,
+                             'execution_error': session.execution_error,
+                             'service_mode': int.from_bytes(
+                                 board.read_memory(0x0146a0c0, 4), 'little')})
+    target = Path(output) / 'emulator-session.json'
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(receipt, indent=2) + '\n')
+
+def _run_ff80_rehearsal(board, session, output):
+    """Drive the stock ordinary-boot service session through the guest USB stack."""
+    from emulator.power_devices import PowerDevices
+    from emulator.rec_state import Reader, task_state
+    from emulator.usb_devices import USBControl
+    from tools.probe_setup_menus import MenuSession
+    from unicorn.arm_const import UC_ARM_REG_SP
+
+    if not isinstance(session, MenuSession):
+        raise ValueError('ff80 rehearsal requires --menus')
+    power = next(device for device in board.devices if type(device) is PowerDevices)
+    usb = next(device for device in board.devices if type(device) is USBControl)
+    endpoint = usb._endpoint
+    if endpoint is None:
+        raise ValueError('ff80 rehearsal requires the selected endpoint transport')
+    if power.usb_connected:
+        raise ValueError('ff80 rehearsal requires a post-boot cable attach')
+
+    def run_until(label, predicate, budget):
+        end = board.instructions + budget
+        while not predicate():
+            if board.failure is not None or session.execution_error is not None:
+                machine = board.snapshot()
+                cores = [{'pc': core.get('pc'), 'lr': core.get('lr'), 'sp': core.get('sp'),
+                          'recent': core.get('recent_instructions', [])[-12:]}
+                         for core in machine.get('cores', [])]
+                raise RuntimeError(f'{label}: {board.failure or session.execution_error}; cores={cores}')
+            if board.instructions >= end:
+                raise TimeoutError(f'{label}: instruction budget expired; usb={endpoint.snapshot()}')
+            target = min(end, board.instructions + 1_000_000)
+            try:
+                board.run(target - board.instructions + 2 * board.quantum, pause_after=target)
+            except Exception as error:
+                session.execution_error = {'type': type(error).__name__, 'error': str(error)}
+
+    def run_for(count):
+        target = board.instructions + count
+        while board.instructions < target:
+            run_until('bounded continuation', lambda: board.instructions >= target,
+                      target - board.instructions)
+
+    def take_in(endpoint_address, count):
+        chunks = bytearray()
+        while len(chunks) < count:
+            if not endpoint.tx[dict(endpoint.contract.in_endpoints)[endpoint_address]]:
+                endpoint.host_in_token(endpoint_address)
+            port = dict(endpoint.contract.in_endpoints)[endpoint_address]
+            run_until('bulk IN reply', lambda: bool(endpoint.tx[port]), 30_000_000)
+            chunks.extend(endpoint.host_in(endpoint_address, count - len(chunks)))
+            run_for(200_000)
+        return bytes(chunks)
+
+    def control_out(payload):
+        setup = bytes((0x43, 0, 0, 0, 0, 0, len(payload) & 0xff, len(payload) >> 8))
+        endpoint.host_setup(setup)
+        run_for(200_000)
+        endpoint.host_out(0, payload)
+        run_until('control OUT status', lambda: bool(endpoint.tx[0]), 30_000_000)
+        status = endpoint.host_in(0x80, 64)
+        if status:
+            raise RuntimeError('control OUT status packet was not empty')
+        run_for(200_000)
+
+    def control_status(setup):
+        endpoint.host_setup(setup)
+        run_until('control status IN', lambda: bool(endpoint.tx[0]), 30_000_000)
+        status = endpoint.host_in(0x80, 64)
+        if status:
+            raise RuntimeError('control status packet was not empty')
+        run_for(200_000)
+
+    def control_in(setup, count):
+        endpoint.host_setup(setup)
+        run_until('control IN data', lambda: bool(endpoint.tx[0]), 30_000_000)
+        payload = endpoint.host_in(0x80, count)
+        endpoint.host_out(0, b'')
+        run_for(200_000)
+        return payload
+
+    def command(op, frame, reply_bytes, sid):
+        control_out(bytes((op, 0, 0, 0, 0, 0, 0, 0,
+                           len(frame) >> 8, len(frame) & 0xff, sid >> 8, sid & 0xff)))
+        if frame:
+            endpoint.host_out(2, frame)
+            run_until('bulk OUT completion',
+                      lambda: (endpoint.rx_positions[1] == len(endpoint.rx[1])
+                               and endpoint.dma_active is None),
+                      30_000_000)
+            run_for(1_000_000)
+        if reply_bytes is None:
+            return b''
+        opcode = int.from_bytes(frame[:4], 'little') if len(frame) >= 4 else 0
+        if opcode in (0x1a0002, 0x200001):
+            published = 0x124 if opcode == 0x1a0002 else 0x11c
+            run_until('service reply publication',
+                      lambda: int.from_bytes(board.read_memory(0x0146986c, 4), 'little') == published,
+                      30_000_000)
+        else:
+            run_for(1_000_000)
+        control_out(bytes((0xd1, 0, 0, 0, 0, 0, 0, 0,
+                           reply_bytes >> 8, reply_bytes & 0xff, sid >> 8, sid & 0xff)))
+        return take_in(0x81, reply_bytes)
+
+    def words(*values):
+        return b''.join(struct.pack('<I', value) for value in values)
+
+    def debug_frame(function, address, count, payload=b''):
+        return words(0x200001, 0, 0, 0, function, 0, 0, address, count) + payload
+
+    def trace_contexts():
+        _, tasks = task_state(Reader(board))
+        stacks = []
+        for task in tasks:
+            if all(name in task for name in ('stack_base', 'stack_bytes', 'task_id')):
+                base = int(task['stack_base'], 16)
+                stacks.append((task['cpu'], base, base + task['stack_bytes'], task['task_id']))
+        hits = []
+        sites = {0x00d803cc: 'debug-dispatch', 0x00647b78: 'function-3',
+                 0x00dc7874: 'stock-query-callback'}
+        def handler(cpu, core, address):
+            sp = cpu.reg_read(UC_ARM_REG_SP)
+            task = next((task_id for owner, low, high, task_id in stacks
+                         if owner == core and low <= sp < high), None)
+            request = bytes(board.read_memory(0x01469a9c, 0x24))
+            hits.append({'site': sites[address], 'address': hex(address), 'core': core,
+                         'task': task, 'task_hex': None if task is None else hex(task),
+                         'sp': hex(sp), 'instructions': board.instructions,
+                         'request': {'opcode': hex(int.from_bytes(request[0:4], 'little')),
+                                     'function_or_tag': hex(int.from_bytes(request[0x10:0x14], 'little')),
+                                     'address': hex(int.from_bytes(request[0x1c:0x20], 'little')),
+                                     'length': int.from_bytes(request[0x20:0x24], 'little')}})
+        for core in range(2):
+            board._native.set_breakpoints(core, sorted(sites))
+        board.breakpoint_handler = handler
+        return hits
+
+    recovery = session.options.get('recovery', {})
+    nand_path = Path(recovery['media'])
+    with nand_path.open('rb') as source:
+        nand_sha256 = hashlib.file_digest(source, 'sha256').hexdigest()
+    receipt = {'schema': 1, 'scope': 'emulated X-M1 1.50 ordinary-boot ff80 service',
+               'firmware_sha256': board.snapshot().get('firmware_sha256'),
+               'installed_nand': {'sha256': nand_sha256, 'stored_f7': 1},
+               'source': 'stock guest controller, IRQ, USB task and service handlers',
+               'limits': ['Synthetic USB host timing and endpoint register reset values.',
+                          'Shared emulator RAM is not a hardware cache-coherence model.']}
+    run_until('first-start screen', lambda: board.instructions >= 100_000_000, 100_000_000)
+    for key in ['up'] * 12 + ['ok', 'ok']:
+        session.key({'key': key})
+    run_for(40_000_000)
+    receipt['pre_attach'] = {'instructions': board.instructions,
+                             'cp14': list(board._native.cp14_identity())}
+    power.set_usb_connected(True)
+    run_until('USB controller activation', lambda: endpoint.regs[0x090] & 6 == 6,
+              140_000_000)
+    endpoint.host_reset()
+    run_for(1_000_000)
+
+    device = control_in(bytes((0x80, 6, 0, 1, 0, 0, 18, 0)), 18)
+    if len(device) != 18 or device[8:12] != bytes((0xcb, 0x04, 0x80, 0xff)):
+        raise RuntimeError(f'unexpected device descriptor {device.hex()}')
+    receipt['device_descriptor'] = {'vid': '0x04cb', 'pid': '0xff80',
+                                    'reply': device.hex()}
+    control_status(bytes((0, 5, 1, 0, 0, 0, 0, 0)))
+    config_head = control_in(bytes((0x80, 6, 0, 2, 0, 0, 9, 0)), 9)
+    config_bytes = int.from_bytes(config_head[2:4], 'little')
+    if len(config_head) != 9 or not 9 <= config_bytes <= 256:
+        raise RuntimeError(f'unexpected configuration descriptor head {config_head.hex()}')
+    configuration = control_in(
+        bytes((0x80, 6, 0, 2, 0, 0, config_bytes & 0xff, config_bytes >> 8)),
+        config_bytes)
+    control_status(bytes((0, 9, configuration[5], 0, 0, 0, 0, 0)))
+    run_for(1_000_000)
+    receipt['configuration_descriptor'] = configuration.hex()
+
+    open_request = bytes((0xc0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0))
+    control_out(open_request)
+    opened = take_in(0x81, 8)
+    sid = int.from_bytes(opened[:2], 'little')
+    if opened[2:] != bytes((0, 0, 0, 0, 1, 0)):
+        raise RuntimeError(f'unexpected C0 reply {opened.hex()}')
+    receipt['c0'] = {'opcode': '0xc0', 'sid': sid, 'reply': opened.hex()}
+    contexts = trace_contexts()
+
+    identity_request = words(0x150000, 0, 0, 0, 4, 0, 0, 0)
+    identity = command(0xd0, identity_request, 128, sid)
+    if identity[:16] != words(0x150000, 0, 0, 0) or identity[16:26] != b'X\x00-\x00M\x001\x00\x00\x00':
+        raise RuntimeError(f'unexpected identity reply {identity.hex()}')
+    receipt['identity'] = {'tag': 4, 'reply': identity.hex()}
+
+    config_request = words(0x1a0002, 0, 0, 0, 2, 1, 0, 0, 256)
+    config = command(0xd0, config_request, 0x124, sid)
+    if config[0x24 + 0xf7] != 1:
+        raise RuntimeError(f'config f7 was {config[0x24 + 0xf7]:#x}')
+    receipt['config'] = {'opcode': '0x1a0002', 'function': 2, 'window': 0, 'bytes': 256,
+                         'reply_sha256': hashlib.sha256(config).hexdigest(),
+                         'f7': config[0x24 + 0xf7]}
+
+    ram_address, ram_count = 0x015c22a0, 32
+    expected = bytes(board.read_memory(ram_address, ram_count))
+    ram = command(0xd0, debug_frame(2, ram_address, ram_count), 0x24 + ram_count, sid)
+    if ram[0x24:] != expected:
+        raise RuntimeError('function-2 reply differs from guest memory')
+    receipt['ram_read'] = {'address': hex(ram_address), 'bytes': ram_count,
+                           'guest_memory_hex': expected.hex(), 'reply_hex': ram[0x24:].hex(),
+                           'sha256': hashlib.sha256(expected).hexdigest()}
+
+    scratch, payload = 0x015c22d0, b'XM1!'
+    before = bytes(board.read_memory(scratch, len(payload)))
+    write_reply = command(0xd0, debug_frame(3, scratch, len(payload), payload), 0x24, sid)
+    readback = command(0xd0, debug_frame(2, scratch, len(payload)), 0x24 + len(payload), sid)
+    if readback[0x24:] != payload or bytes(board.read_memory(scratch, len(payload))) != payload:
+        raise RuntimeError('function-3 scratch write did not read back')
+    receipt['ram_write'] = {'address': hex(scratch), 'before': before.hex(),
+                            'written': payload.hex(), 'reply': write_reply.hex(),
+                            'readback': readback[0x24:].hex()}
+
+    query = command(0xd0, words(0x450006, 0, 0, 0, 0, 0, 0, 0), 32, sid)
+    receipt['query'] = {'tag': 0, 'reply': query.hex()}
+    receipt['contexts'] = contexts
+    receipt['boundary'] = {'instructions': board.instructions,
+                           'failure': board.failure,
+                           'execution_error': session.execution_error,
+                           'service_mode': int.from_bytes(board.read_memory(0x0146a0c0, 4), 'little')}
+    output.mkdir(parents=True, exist_ok=True)
+    target = output / 'ff80-session.json'
+    target.write_text(json.dumps(receipt, indent=2) + '\n')
+    return receipt
+
+
 def main():
     from emulator.boot import make_board
     from emulator.server import make_menu_server as make_server
@@ -526,6 +1423,12 @@ def main():
     installed = parser.add_mutually_exclusive_group()
     installed.add_argument('--installed-media', type=Path, help='Independent installed logical NAND data, including damaged application bytes')
     installed.add_argument('--installed-nand', type=Path, help='Committed NAND image from an earlier modeled run; not a machine checkpoint')
+    installed.add_argument('--installed-dat', type=Path,
+                           help='X-M1 1.50 updater container installed into the modeled NAND extent')
+    parser.add_argument('--adjustment-nand', type=Path,
+                        help='Complete committed adjustment blocks layered over installed logical media')
+    parser.add_argument('--menu-sd-image', type=Path,
+                        help='Ordinary-boot virtual SD image for menu operations')
     parser.add_argument('--export-nand', type=Path, help='Save committed installed NAND to a fresh file after this run')
     parser.add_argument('--export-sd', type=Path, help='Save logical SD bytes and guest write overlays to a fresh image')
     budget = parser.add_mutually_exclusive_group()
@@ -535,24 +1438,85 @@ def main():
     parser.add_argument('--save-snapshot', type=Path, help='Save drained machine state to a fresh local directory')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--serve', action='store_true')
+    parser.add_argument('--ff80-rehearsal', action='store_true',
+                        help='Run the closed ordinary-boot ff80 endpoint session and write its receipt')
     parser.add_argument('--menus', action='store_true',
                         help='Enable declared ADC button input and stock menu navigation')
+    parser.add_argument('--ram-push-server', action='store_true',
+                        help='Serve the closed emulator-backed UsbApi line protocol')
+    parser.add_argument('--ram-push-checkpoints', type=Path,
+                        help='Directory of RAM-push attach checkpoints keyed by inputs and emulator source')
+    parser.add_argument('--fresh-boot', action='store_true',
+                        help='Cold boot even when the keyed RAM-push checkpoint exists, then replace it')
     parser.add_argument('--port', type=int, default=0)
     parser.add_argument('--bind', default='127.0.0.1')
     parser.add_argument('--hostname')
     args = parser.parse_args()
+    installed_input = args.installed_media or args.installed_nand or args.installed_dat
     recovery_start = args.recovery_ram is not None or args.rom_card is not None
-    if recovery_start and (args.snapshot is not None or not (args.installed_media or args.installed_nand)):
-        parser.error('Recovery requires a cold board and independent --installed-media or --installed-nand')
+    if recovery_start and (args.snapshot is not None or installed_input is None):
+        parser.error('Recovery requires a cold board and independent installed storage')
     if args.recovery_ram is not None and args.rom_card is not None:
         parser.error('Select direct ROM card execution or exported RAM continuation, not both')
-    if args.snapshot is not None and (args.installed_media or args.installed_nand):
-        parser.error('Installed-media inputs belong to independent cold boards, not machine checkpoints')
+    if args.snapshot is not None and installed_input is not None:
+        parser.error('Installed storage inputs belong to independent cold boards, not machine checkpoints')
     if args.sd_image is not None and args.recovery_ram is None:
         parser.error('--sd-image belongs to --recovery-ram; use --rom-card for direct ROM execution')
+    if args.adjustment_nand is not None and not (args.installed_media or args.installed_dat):
+        parser.error('--adjustment-nand requires --installed-media or --installed-dat')
+    if args.menu_sd_image is not None and not args.ram_push_server:
+        parser.error('--menu-sd-image belongs to --ram-push-server')
     for value in (args.pause_after, args.instructions):
         if value is not None and not 0 <= value <= 100_000_000:
             parser.error('Instruction threshold/budget must be 0..100000000')
+    if args.ram_push_server and (
+            args.snapshot is not None or args.installed_dat is None
+            or args.adjustment_nand is None or args.menu_sd_image is None
+            or not args.menus or args.ff80_rehearsal
+            or args.pause_after is not None or args.instructions is not None
+            or args.serve or args.save_snapshot is not None):
+        parser.error('--ram-push-server requires --profile, --installed-dat, --adjustment-nand, --menu-sd-image and --menus without another run mode')
+    if args.ram_push_checkpoints is not None and not args.ram_push_server:
+        parser.error('--ram-push-checkpoints belongs to --ram-push-server')
+    if args.fresh_boot and args.ram_push_checkpoints is None:
+        parser.error('--fresh-boot requires --ram-push-checkpoints')
+    output = args.output or ROOT / '.tools/rec-scanout' / (
+        datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid4().hex[:8])
+    checkpoint = None
+    if args.ram_push_checkpoints is not None:
+        started = perf_counter()
+        key, key_inputs = _ram_push_checkpoint_key(args.installed_dat, args.adjustment_nand, args.menu_sd_image)
+        directory = args.ram_push_checkpoints / key
+        checkpoint = {'key': key, 'inputs': key_inputs, 'directory': str(directory.resolve()),
+                      'key_seconds': round(perf_counter() - started, 3)}
+        installed = _install_checkpoints(args.ram_push_checkpoints, key)
+        print(json.dumps({'ok': True, 'event': 'start-options', 'boot_key': key, 'installed': installed},
+                         separators=(',', ':')), flush=True)
+        choice = json.loads(sys.stdin.readline(), object_pairs_hook=_unique_object)
+        if set(choice) != {'command', 'installed'} or choice['command'] != 'start':
+            raise ValueError('RAM-push start requires {"command": "start", "installed": DIRECTORY or null}')
+        if choice['installed'] is not None:
+            if choice['installed'] not in [item['directory'] for item in installed]:
+                raise ValueError('RAM-push start names no listed install checkpoint')
+            started = perf_counter()
+            directory = Path(choice['installed'])
+            record = _read_ram_push_record(directory, INSTALL_RECORD, key)
+            board, session, bridge, attachment = _restore_ram_push_checkpoint(directory, record, output)
+            checkpoint.update(start='installed', installed=str(directory),
+                              restore_seconds=round(perf_counter() - started, 3))
+            _run_ram_push_server(board, session, output, bridge, attachment, checkpoint,
+                                 args.ram_push_checkpoints)
+            return
+        if directory.is_dir() and not args.fresh_boot:
+            started = perf_counter()
+            record = _read_ram_push_record(directory, ATTACH_RECORD, key)
+            board, session, bridge, attachment = _restore_ram_push_checkpoint(directory, record, output)
+            checkpoint.update(start='restored', restore_seconds=round(perf_counter() - started, 3))
+            _run_ram_push_server(board, session, output, bridge, attachment, checkpoint,
+                                 args.ram_push_checkpoints)
+            return
+        checkpoint['start'] = 'fresh-boot' if args.fresh_boot else 'cold'
+        boot_started = perf_counter()
     if args.snapshot is not None:
         from x70_native.portable_checkpoint import load
         board = load(args.snapshot)
@@ -563,21 +1527,33 @@ def main():
         options = load_profile(args.cold_profile if args.recovery_ram is not None else args.profile, make_board)
         if args.settings is not None:
             options["settings"] = args.settings
-        if args.installed_media is not None or args.installed_nand is not None:
+        if installed_input is not None:
             if (options.get('storage_profile', 'erased') != 'erased'
                     or options.get('user_journals') is not None or options.get('settings') == 'owner'):
                 parser.error('Independent installed NAND requires erased fixture selection and no injected owner journals')
-        if recovery_start or args.installed_media is not None or args.installed_nand is not None:
+        if recovery_start or installed_input is not None:
             options['entry'] = 'rom'
-        if args.rom_card is not None or args.sd_image is not None:
+        if args.rom_card is not None or args.sd_image is not None or args.menu_sd_image is not None:
             from emulator.sd_card import BLANK_SDHC_PROFILE
             options.update(sd_card_profile=BLANK_SDHC_PROFILE, sd_card_present=True)
         board = make_board(**options)
-        if args.installed_media is not None or args.installed_nand is not None:
+        if args.installed_dat is not None:
+            attach_installed_dat(board, args.installed_dat)
+        elif args.installed_media is not None or args.installed_nand is not None:
             attach_installed_media(board, media=args.installed_media, nand_image=args.installed_nand)
+        if installed_input is not None:
             options['recovery'] = {'phase': 'independent-installed-cold-boot',
-                                   'media': str(args.installed_media or args.installed_nand),
-                                   'card_present': args.rom_card is not None or args.sd_image is not None}
+                                   'media': str(installed_input),
+                                   'card_present': any(value is not None for value in (
+                                       args.rom_card, args.sd_image, args.menu_sd_image))}
+        if args.adjustment_nand is not None:
+            attach_adjustment_nand(board, args.adjustment_nand)
+            options['recovery']['adjustment_nand'] = str(args.adjustment_nand)
+        if args.menu_sd_image is not None:
+            from emulator.sd_card import SDCardController, load_raw_image
+            controller = next(device for device in board.devices if isinstance(device, SDCardController))
+            options['recovery']['card'] = load_raw_image(
+                controller.card, args.menu_sd_image, immutable_backing=False)
         if args.recovery_ram is not None:
             options['recovery'] = load_recovery_cpu0(board, args.recovery_ram)
             if args.sd_image is not None:
@@ -592,13 +1568,38 @@ def main():
         threshold = args.pause_after if args.pause_after is not None else (0 if args.snapshot else 60_000_000)
     if threshold and threshold < board.instructions:
         parser.error('Absolute threshold precedes the saved machine; use --instructions for continuation')
-    output = args.output or ROOT / '.tools/rec-scanout' / (
-        datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid4().hex[:8])
     if args.menus:
         from tools.probe_setup_menus import MenuSession
         session = MenuSession(board, output, options=options)
     else:
         session = WarmScanoutSession(board, output, options=options)
+    if args.ram_push_server:
+        bridge, attachment = _ram_push_attach(board, session)
+        if checkpoint is not None:
+            from emulator.checkpoint import CheckpointError
+            checkpoint['boot_seconds'] = round(perf_counter() - boot_started, 3)
+            started = perf_counter()
+            bridge.drain_scheduled()
+            try:
+                _save_ram_push_checkpoint(session, args.ram_push_checkpoints, checkpoint['key'],
+                                          ATTACH_RECORD, {'key': checkpoint['key'],
+                                                          'inputs': checkpoint['inputs'], **attachment},
+                                          replace=args.fresh_boot)
+                checkpoint['saved'] = True
+            except CheckpointError as error:
+                checkpoint.update(saved=False, save_error=str(error))
+            checkpoint['save_seconds'] = round(perf_counter() - started, 3)
+        _run_ram_push_server(board, session, output, bridge, attachment, checkpoint,
+                             args.ram_push_checkpoints)
+        return
+    if args.ff80_rehearsal:
+        if (args.snapshot is not None or args.installed_nand is None or not args.menus
+                or args.pause_after is not None or args.instructions is not None
+                or args.serve or args.save_snapshot is not None):
+            parser.error('--ff80-rehearsal requires --profile, --installed-nand and --menus without another run mode')
+        receipt = _run_ff80_rehearsal(board, session, output)
+        print(json.dumps(receipt, separators=(',', ':')), flush=True)
+        return
     if args.snapshot is not None and args.serve:
         # The imported snapshot is already a validated drained boundary.
         # Retain it in this process so the viewer can undo later continuations.

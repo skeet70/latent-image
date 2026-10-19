@@ -1,7 +1,7 @@
--- Offline rehearsal: print the exact transfer plan an operation will emit and
--- run that operation against a scripted reply. The native provider is never
--- constructed here, so no libusb is loaded.
-module FujiAF.Rehearsal (rehearseIdentify, rehearseReadConfig, rehearseEndSetting, rehearseProbeRam, rehearseReadLog, rehearseProbeBootRom, rehearseProbeArea2, rehearseProbeStraps, rehearseProbeCode, rehearseProbeOwnership, rehearseProbeRoutesFixed, rehearseProbeRoutesDerived, rehearseDumpRam, rehearseReadMedia, rehearseArmAutoAct) where
+-- Offline rehearsals construct no native provider. Bound operations run
+-- against scripted replies; unbound RAM-push operations prove their
+-- pre-provider refusal.
+module FujiAF.Rehearsal (rehearseIdentify, rehearseReadConfig, rehearseEndSetting, rehearseProbeRam, rehearseReadLog, rehearseProbeBootRom, rehearseProbeArea2, rehearseProbeStraps, rehearseProbeCode, rehearseProbeOwnership, rehearseProbeRoutesFixed, rehearseProbeRoutesDerived, rehearseDumpRam, rehearseReadMedia, rehearseArmAutoAct, rehearseCommitF7, rehearseReadRam, rehearseRamAlloc, rehearseRamPush, rehearseRamFree, rehearseRamUnload, ScriptedOperation (..), scriptedApi, rehearsalCandidate, identifyScript, readConfigScript, endSettingScript, probeRamScript, readLogScript, probeBootRomScript, probeArea2Script, probeStrapsScript, probeCodeScript, probeOwnershipScript, probeRoutesScript, dumpRamScript, readMediaScript, armAutoActScript, commitF7Script, readRamScript) where
 
 import Control.Exception (bracket)
 import Control.Monad (forM_, unless)
@@ -9,6 +9,7 @@ import Data.IORef
 import Data.Word (Word8)
 import System.Directory (createDirectory, getTemporaryDirectory, removeDirectoryRecursive)
 import System.FilePath ((</>))
+import GHC.Clock (getMonotonicTimeNSec)
 import System.Posix.Process (getProcessID)
 import FujiAF.Transport
 import FujiAF.Identify
@@ -24,6 +25,9 @@ import FujiAF.ReadMedia
 import FujiAF.Straps
 import FujiAF.Ownership
 import FujiAF.Routes
+import FujiAF.StoredGate
+import FujiAF.ReadRam
+import FujiAF.RamPush
 import qualified FujiAF.ArmAutoAct as Arm
 import qualified FujiAF.Broker as P
 
@@ -52,11 +56,14 @@ openSteps =
   , P.Step (P.BulkIn 0x81 8) (P.Reply openReply) ]
 
 identifySteps :: [P.Step]
-identifySteps = openSteps ++
+identifySteps = openSteps ++ identityExchange ++ closeSteps
+
+identityExchange :: [P.Step]
+identityExchange =
   [ P.Step (P.controlTransfer (P.control 0xd0 32 rehearsalSid)) (P.Transferred 12)
   , P.Step (P.BulkOut 2 P.identityPacket) (P.Transferred 32)
   , P.Step (P.controlTransfer (P.control 0xd1 128 rehearsalSid)) (P.Transferred 12)
-  , P.Step (P.BulkIn 0x81 128) (P.Reply identityReply) ] ++ closeSteps
+  , P.Step (P.BulkIn 0x81 128) (P.Reply identityReply) ]
   where identityReply = [0,0,0x15,0] ++ replicate 12 0 ++ [88,0,45,0,77,0,49,0] ++ replicate 104 0
 
 readSteps :: ReadPlan -> [P.Step]
@@ -197,33 +204,93 @@ withRehearsalDirectory action = do
     ensurePrivateDirectory session
     action session
 
-runRehearsal :: String -> [P.Step] -> (UsbApi -> FilePath -> IO String) -> IO ()
-runRehearsal operation steps run = do
-  printPlan operation steps
-  script <- newIORef steps
-  result <- withRehearsalDirectory (run (scriptedApi script))
+-- One bound operation as rehearsed: its planned transfers in order with their
+-- scripted replies, and the run that must consume them.
+data ScriptedOperation = ScriptedOperation
+  { scriptedName :: String
+  , scriptedSteps :: [P.Step]
+  , scriptedRun :: Clock -> UsbApi -> FilePath -> IO String
+  }
+
+runRehearsal :: Clock -> ScriptedOperation -> IO ()
+runRehearsal clock operation = do
+  printPlan (scriptedName operation) (scriptedSteps operation)
+  script <- newIORef (scriptedSteps operation)
+  result <- withRehearsalDirectory (scriptedRun operation clock (scriptedApi script))
   leftover <- readIORef script
   unless (null leftover) (P.reject "rehearsal left planned transfers unsent")
-  putStrLn ("rehearsed " ++ operation ++ ": " ++ result)
+  putStrLn ("rehearsed " ++ scriptedName operation ++ ": " ++ result)
 
-rehearseIdentify :: IO ()
-rehearseIdentify = runRehearsal "identify" identifySteps $ \api dir -> do
-  ProductModel model <- runIdentify realClock api dir
+rehearseRamAlloc :: Int -> IO ()
+rehearseRamAlloc size = do
+  putStrLn ("rehearsal: ram-alloc; no native provider, USB enumeration or camera execution;allocation-bytes="++show size)
+  outcome <- withRehearsalDirectory (runRamAllocWith PeerCacheUnbound size realClock unavailableApi)
+  unless (outcome == RamAllocRefused "X-M1 peer-core cache binding is unbound; no camera write sent")
+    (P.reject ("RAM-alloc unbound rehearsal outcome changed: "++show outcome))
+
+rehearseRamPush :: RamAllocState -> RamPushManifest -> IO ()
+rehearseRamPush allocation manifest = do
+  putStrLn ("rehearsal: ram-push; no native provider, USB enumeration or camera execution;allocation-bytes="++show (allocSize allocation)++";runtime-bytes="++show (allocationSize manifest)++";publications="++show publicationCount)
+  outcome <- withRehearsalDirectory (runRamPushWith PeerCacheUnbound allocation manifest realClock unavailableApi)
+  unless (outcome == RamPushRefused "X-M1 peer-core cache binding is unbound; no camera write sent")
+    (P.reject ("RAM-push unbound rehearsal outcome changed: "++show outcome))
+
+rehearseRamFree :: RamAllocState -> IO ()
+rehearseRamFree state = do
+  putStrLn ("rehearsal: ram-free; no native provider, USB enumeration or camera execution;allocation-bytes="++show (allocSize state))
+  outcome <- withRehearsalDirectory (runRamFreeWith PeerCacheUnbound state realClock unavailableApi)
+  unless (outcome == RamFreeRefused "X-M1 peer-core cache binding is unbound; no camera write sent")
+    (P.reject ("RAM-free unbound rehearsal outcome changed: "++show outcome))
+
+rehearseRamUnload :: RamPushState -> IO ()
+rehearseRamUnload state = do
+  putStrLn ("rehearsal: ram-unload; no native provider, USB enumeration or camera execution;allocation-bytes="++show (stateSize state)++";publications="++show publicationCount)
+  outcome <- withRehearsalDirectory (runRamUnloadWith PeerCacheUnbound state realClock unavailableApi)
+  unless (outcome == RamUnloadRefused "X-M1 peer-core cache binding is unbound; no camera write sent")
+    (P.reject ("RAM-unload unbound rehearsal outcome changed: "++show outcome))
+
+unavailableApi :: UsbApi
+unavailableApi = UsbApi unavailable unavailableList unavailableOpen unavailableClaim unavailableTransfer unavailableRelease unavailableClose unavailableExit
+  where
+    unavailable _ = P.reject "rehearsal attempted native initialization"
+    unavailableList _ = P.reject "rehearsal attempted USB enumeration"
+    unavailableOpen _ _ = P.reject "rehearsal attempted USB open"
+    unavailableClaim _ _ = P.reject "rehearsal attempted USB claim"
+    unavailableTransfer _ _ = P.reject "rehearsal attempted a transfer"
+    unavailableRelease _ _ = P.reject "rehearsal attempted USB release"
+    unavailableClose _ = P.reject "rehearsal attempted USB close"
+    unavailableExit _ = P.reject "rehearsal attempted native exit"
+
+identifyScript :: ScriptedOperation
+identifyScript = ScriptedOperation "identify" identifySteps $ \clock api dir -> do
+  ProductModel model <- runIdentify clock api dir
   pure model
 
-rehearseReadConfig :: ReadPlan -> IO ()
-rehearseReadConfig plan = runRehearsal "read-config" (readSteps plan) $ \api dir -> do
-  windows <- runRead realClock api plan dir
+rehearseIdentify :: IO ()
+rehearseIdentify = runRehearsal realClock identifyScript
+
+readConfigScript :: ReadPlan -> ScriptedOperation
+readConfigScript plan = ScriptedOperation "read-config" (readSteps plan) $ \clock api dir -> do
+  windows <- runRead clock api plan dir
   pure (show windows ++ " windows")
 
+rehearseReadConfig :: ReadPlan -> IO ()
+rehearseReadConfig = runRehearsal realClock . readConfigScript
+
+endSettingScript :: ScriptedOperation
+endSettingScript = ScriptedOperation "end-setting" endSettingSteps $ \clock api dir ->
+  outcomeName <$> runEndSetting clock api dir
+
 rehearseEndSetting :: IO ()
-rehearseEndSetting = runRehearsal "end-setting" endSettingSteps $ \api dir ->
-  outcomeName <$> runEndSetting realClock api dir
+rehearseEndSetting = runRehearsal realClock endSettingScript
+
+probeRamScript :: ScriptedOperation
+probeRamScript = ScriptedOperation "probe-ram" probeSteps $ \clock api dir -> do
+  probes <- runProbe clock api dir
+  pure (show probes ++ " probes")
 
 rehearseProbeRam :: IO ()
-rehearseProbeRam = runRehearsal "probe-ram" probeSteps $ \api dir -> do
-  probes <- runProbe realClock api dir
-  pure (show probes ++ " probes")
+rehearseProbeRam = runRehearsal realClock probeRamScript
 
 -- The log windows have no oracle, so the scripted halves carry fixed filler.
 gateRehearsalPayload :: Word8 -> [Word8]
@@ -250,10 +317,13 @@ logSteps = openSteps ++ concatMap action logRequests ++ closeSteps
         , P.Step (P.controlTransfer (P.control 0xd1 debugReplyForHalf rehearsalSid)) (P.Transferred 12)
         , P.Step (P.BulkIn 0x81 debugReplyForHalf) (P.Reply (probeHalfReply address (replicate probeHalfBytes 0x11))) ]
 
-rehearseReadLog :: IO ()
-rehearseReadLog = runRehearsal "read-log" logSteps $ \api dir -> do
-  windows <- runReadLog realClock api dir
+readLogScript :: ScriptedOperation
+readLogScript = ScriptedOperation "read-log" logSteps $ \clock api dir -> do
+  windows <- runReadLog clock api dir
   pure (show windows ++ " windows")
+
+rehearseReadLog :: IO ()
+rehearseReadLog = runRehearsal realClock readLogScript
 
 -- The boot-ROM windows have no oracle, so the scripted halves carry fixed filler.
 bootRomSteps :: [P.Step]
@@ -277,10 +347,13 @@ bootRomSteps = openSteps ++ concatMap action bootRomRequests ++ closeSteps
         , P.Step (P.controlTransfer (P.control 0xd1 debugReplyForHalf rehearsalSid)) (P.Transferred 12)
         , P.Step (P.BulkIn 0x81 debugReplyForHalf) (P.Reply (probeHalfReply address (replicate probeHalfBytes 0x22))) ]
 
-rehearseProbeBootRom :: IO ()
-rehearseProbeBootRom = runRehearsal "probe-bootrom" bootRomSteps $ \api dir -> do
-  windows <- runProbeBootRom realClock api dir
+probeBootRomScript :: ScriptedOperation
+probeBootRomScript = ScriptedOperation "probe-bootrom" bootRomSteps $ \clock api dir -> do
+  windows <- runProbeBootRom clock api dir
   pure (show windows ++ " windows")
+
+rehearseProbeBootRom :: IO ()
+rehearseProbeBootRom = runRehearsal realClock probeBootRomScript
 
 -- The area-2 windows have no oracle, so the scripted halves carry fixed filler.
 area2Steps :: [P.Step]
@@ -304,10 +377,13 @@ area2Steps = openSteps ++ concatMap action area2Requests ++ closeSteps
         , P.Step (P.controlTransfer (P.control 0xd1 debugReplyForHalf rehearsalSid)) (P.Transferred 12)
         , P.Step (P.BulkIn 0x81 debugReplyForHalf) (P.Reply (probeHalfReply address (replicate probeHalfBytes 0x33))) ]
 
-rehearseProbeArea2 :: IO ()
-rehearseProbeArea2 = runRehearsal "probe-area2" area2Steps $ \api dir -> do
-  windows <- runProbeArea2 realClock api dir
+probeArea2Script :: ScriptedOperation
+probeArea2Script = ScriptedOperation "probe-area2" area2Steps $ \clock api dir -> do
+  windows <- runProbeArea2 clock api dir
   pure (show windows ++ " windows")
+
+rehearseProbeArea2 :: IO ()
+rehearseProbeArea2 = runRehearsal realClock probeArea2Script
 
 -- The strap targets have no oracle, so the scripted payloads carry filler and
 -- every reply echoes its request's exact address and length.
@@ -339,10 +415,13 @@ strapSteps = openSteps ++ concatMap action strapRequests ++ closeSteps
         , P.Step (P.controlTransfer (P.control 0xd1 (strapReplyBytes size) rehearsalSid)) (P.Transferred 12)
         , P.Step (P.BulkIn 0x81 (strapReplyBytes size)) (P.Reply (strapChunkReply address size (replicate size 0x55))) ]
 
-rehearseProbeStraps :: IO ()
-rehearseProbeStraps = runRehearsal "probe-straps" strapSteps $ \api dir -> do
-  bytes <- runProbeStraps realClock api dir
+probeStrapsScript :: ScriptedOperation
+probeStrapsScript = ScriptedOperation "probe-straps" strapSteps $ \clock api dir -> do
+  bytes <- runProbeStraps clock api dir
   pure (show bytes ++ " bytes")
+
+rehearseProbeStraps :: IO ()
+rehearseProbeStraps = runRehearsal realClock probeStrapsScript
 
 -- The code windows have no oracle, so the scripted halves carry fixed filler.
 codeSteps :: [P.Step]
@@ -366,10 +445,13 @@ codeSteps = openSteps ++ concatMap action codeRequests ++ closeSteps
         , P.Step (P.controlTransfer (P.control 0xd1 debugReplyForHalf rehearsalSid)) (P.Transferred 12)
         , P.Step (P.BulkIn 0x81 debugReplyForHalf) (P.Reply (probeHalfReply address (replicate probeHalfBytes 0x77))) ]
 
-rehearseProbeCode :: IO ()
-rehearseProbeCode = runRehearsal "probe-code" codeSteps $ \api dir -> do
-  windows <- runProbeCode realClock api dir
+probeCodeScript :: ScriptedOperation
+probeCodeScript = ScriptedOperation "probe-code" codeSteps $ \clock api dir -> do
+  windows <- runProbeCode clock api dir
   pure (show windows ++ " windows")
+
+rehearseProbeCode :: IO ()
+rehearseProbeCode = runRehearsal realClock probeCodeScript
 
 -- The ownership windows have no oracle, so the scripted halves carry fixed
 -- filler.
@@ -394,10 +476,13 @@ ownershipSteps = openSteps ++ concatMap action ownershipRequests ++ closeSteps
         , P.Step (P.controlTransfer (P.control 0xd1 debugReplyForHalf rehearsalSid)) (P.Transferred 12)
         , P.Step (P.BulkIn 0x81 debugReplyForHalf) (P.Reply (probeHalfReply address (replicate probeHalfBytes 0x66))) ]
 
-rehearseProbeOwnership :: IO ()
-rehearseProbeOwnership = runRehearsal "probe-ownership" ownershipSteps $ \api dir -> do
-  windows <- runProbeOwnership realClock api dir
+probeOwnershipScript :: ScriptedOperation
+probeOwnershipScript = ScriptedOperation "probe-ownership" ownershipSteps $ \clock api dir -> do
+  windows <- runProbeOwnership clock api dir
   pure (show windows ++ " windows")
+
+rehearseProbeOwnership :: IO ()
+rehearseProbeOwnership = runRehearsal realClock probeOwnershipScript
 
 -- The route windows have no oracle, so every scripted payload follows its own
 -- absolute address and each reply echoes its request's exact address and
@@ -434,14 +519,14 @@ routeSteps windows = openSteps ++ concatMap action (routeRequests windows) ++ cl
         , P.Step (P.BulkIn 0x81 (routeReplyBytes size)) (P.Reply (routeChunkReply address size (routeRehearsalPayload address size))) ]
 
 rehearseProbeRoutesFixed :: IO ()
-rehearseProbeRoutesFixed = rehearseProbeRoutes "probe-routes fixed" routeFixedWindows
+rehearseProbeRoutesFixed = runRehearsal realClock (probeRoutesScript "probe-routes fixed" routeFixedWindows)
 
 rehearseProbeRoutesDerived :: [RouteWindow] -> IO ()
-rehearseProbeRoutesDerived windows = rehearseProbeRoutes "probe-routes derived" windows
+rehearseProbeRoutesDerived = runRehearsal realClock . probeRoutesScript "probe-routes derived"
 
-rehearseProbeRoutes :: String -> [RouteWindow] -> IO ()
-rehearseProbeRoutes label windows = runRehearsal label (routeSteps windows) $ \api dir -> do
-  requests <- runProbeRoutes realClock api dir windows
+probeRoutesScript :: String -> [RouteWindow] -> ScriptedOperation
+probeRoutesScript label windows = ScriptedOperation label (routeSteps windows) $ \clock api dir -> do
+  requests <- runProbeRoutes clock api dir windows
   pure (show requests ++ " read requests")
 
 -- The dump-ram requests have no oracle, so the scripted payloads carry fixed
@@ -474,10 +559,13 @@ dumpSteps segment = openSteps ++ concatMap action (dumpRequests segment) ++ clos
         , P.Step (P.controlTransfer (P.control 0xd1 (dumpReplyBytes size) rehearsalSid)) (P.Transferred 12)
         , P.Step (P.BulkIn 0x81 (dumpReplyBytes size)) (P.Reply (dumpChunkReply address size (replicate size 0x44))) ]
 
-rehearseDumpRam :: DumpSegment -> IO ()
-rehearseDumpRam segment = runRehearsal ("dump-ram "++segmentName segment) (dumpSteps segment) $ \api dir -> do
-  requests <- runDumpRam segment realClock api dir
+dumpRamScript :: DumpSegment -> ScriptedOperation
+dumpRamScript segment = ScriptedOperation ("dump-ram "++segmentName segment) (dumpSteps segment) $ \clock api dir -> do
+  requests <- runDumpRam segment clock api dir
   pure (show requests ++ " requests")
+
+rehearseDumpRam :: DumpSegment -> IO ()
+rehearseDumpRam = runRehearsal realClock . dumpRamScript
 
 -- The synthetic camera for read-media: the map object at 0x0095dae0
 -- carrying the fields the 2026-10-08 captures showed there: the start word
@@ -598,10 +686,13 @@ mediaSteps = openSteps ++ concatMap step mediaPlan ++ closeSteps
         , P.Step (P.controlTransfer (P.control 0xd1 (mediaReadReplyBytes size) rehearsalSid)) (P.Transferred 12)
         , P.Step (P.BulkIn 0x81 (mediaReadReplyBytes size)) (P.Reply (dumpChunkReply address size (mediaSliceBytes address size))) ]
 
-rehearseReadMedia :: IO ()
-rehearseReadMedia = runRehearsal "read-media" mediaSteps $ \api dir -> do
-  bytes <- runReadMedia realClock api dir
+readMediaScript :: ScriptedOperation
+readMediaScript = ScriptedOperation "read-media" mediaSteps $ \clock api dir -> do
+  bytes <- runReadMedia clock api dir
   pure (show bytes ++ " bytes")
+
+rehearseReadMedia :: IO ()
+rehearseReadMedia = runRehearsal realClock readMediaScript
 
 -- The arm-auto-act rehearsal: the session as the camera answers it. The
 -- witness windows are the boot state before the arm; the first watch poll
@@ -694,7 +785,119 @@ armSteps =
     halves base window = concat [debugHalf address (slice address) | address <- Arm.witnessHalves base]
       where slice address = if address == base then take probeHalfBytes window else drop probeHalfBytes window
 
-rehearseArmAutoAct :: IO ()
-rehearseArmAutoAct = runRehearsal "arm-auto-act" armSteps $ \api dir -> do
-  report <- Arm.runArmAutoAct Arm.RequirePresent realClock api dir
+armAutoActScript :: ScriptedOperation
+armAutoActScript = ScriptedOperation "arm-auto-act" armSteps $ \clock api dir -> do
+  report <- Arm.runArmAutoAct Arm.RequirePresent clock api dir
   pure (Arm.armReportLine report)
+
+rehearseArmAutoAct :: IO ()
+rehearseArmAutoAct = runRehearsal realClock armAutoActScript
+
+-- The commit-f7 rehearsal: window 0 is the reference with the direction's
+-- start values at 0x80, 0x81 and 0xf7, group-2 state 1, and the trigger's
+-- reply arrives after the commit, so the first poll reads 0x81 = 0x00.
+data CommitStep
+  = CommitWindow Int [(Int,Word8)]
+  | CommitWriteStep CommitWrite
+  | CommitState
+  deriving (Eq, Show)
+
+commitWindowBytes :: ReferenceWindow -> Int -> [(Int,Word8)] -> [Word8]
+commitWindowBytes reference offset patches
+  | offset == 0x000100 = take productByteOffset filler ++ productOracleBytes ++ drop (productByteOffset + length productOracleBytes) filler
+  | offset == 0x000200 = take signatureByteOffset filler ++ [0x55,0xaa] ++ drop (signatureByteOffset+2) filler
+  | otherwise = [maybe byte id (lookup index patches) | (index,byte) <- zip [0..] (referenceBytes reference)]
+  where filler = replicate readWindowLength 0x11
+
+commitPlan :: CommitDirection -> [CommitStep]
+commitPlan direction =
+  [ CommitWindow 0x000000 startBytes, CommitWindow 0x000100 [], CommitWindow 0x000200 [] ]
+  ++ [CommitState | direction == RestoreStoredGate]
+  ++ [ CommitWriteStep (SetGate (directionTarget direction)), CommitWindow 0 gated ]
+  ++ [CommitState | direction == EnableStoredGate]
+  ++ [ CommitWriteStep ArmResult, CommitWindow 0 armed, CommitWriteStep TriggerCommit
+     , CommitWindow 0 (result 0x22 0), CommitWriteStep DisarmCommit, CommitWindow 0 (result 0x33 0) ]
+  where
+    startTrigger = if direction == EnableStoredGate then 0x00 else 0x22
+    startResult = if direction == EnableStoredGate then 0x00 else 0xff
+    target = gateValueByte (directionTarget direction)
+    startBytes = [(0x80,startTrigger),(0x81,startResult),(0xf7,gateValueByte (directionStart direction))]
+    gated = [(0x80,startTrigger),(0x81,startResult),(0xf7,target)]
+    armed = [(0x80,startTrigger),(0x81,0xff),(0xf7,target)]
+    result trigger code = [(0x80,trigger),(0x81,code),(0xf7,target)]
+
+commitSteps :: ReferenceWindow -> CommitDirection -> [P.Step]
+commitSteps reference direction = openSteps ++ identityExchange ++ concatMap step (commitPlan direction) ++ closeSteps
+  where
+    step request = case request of
+      CommitWindow offset patches ->
+        [ P.Step (P.controlTransfer (P.control 0xd0 readRequestBytes rehearsalSid)) (P.Transferred 12)
+        , P.Step (P.BulkOut 2 (readRequestFrame (ReadWindow 0 offset ""))) (P.Transferred readRequestBytes)
+        , P.Step (P.controlTransfer (P.control 0xd1 readReplyBytes rehearsalSid)) (P.Transferred 12)
+        , P.Step (P.BulkIn 0x81 readReplyBytes) (P.Reply (commitWindowReply offset (commitWindowBytes reference offset patches))) ]
+      CommitWriteStep write ->
+        [ P.Step (P.controlTransfer (P.control 0xd0 configWriteBytes rehearsalSid)) (P.Transferred 12)
+        , P.Step (P.BulkOut 2 (commitWriteFrame write)) (P.Transferred configWriteBytes)
+        , P.Step (P.controlTransfer (P.control 0xd1 configReplyBytes rehearsalSid)) (P.Transferred 12)
+        , P.Step (P.BulkIn 0x81 configReplyBytes) (P.Reply (commitWriteReply write)) ]
+      CommitState ->
+        [ P.Step (P.controlTransfer (P.control 0xd0 debugRequestBytes rehearsalSid)) (P.Transferred 12)
+        , P.Step (P.BulkOut 2 (mediaReadFrame stateAddress 2)) (P.Transferred debugRequestBytes)
+        , P.Step (P.controlTransfer (P.control 0xd1 (mediaReadReplyBytes 2) rehearsalSid)) (P.Transferred 12)
+        , P.Step (P.BulkIn 0x81 (mediaReadReplyBytes 2)) (P.Reply (dumpChunkReply stateAddress 2 [0x01,0x00])) ]
+    commitWindowReply offset payload = concat
+      [ word32le readOpcode, word32le 0, word32le 0, word32le 0
+      , word32le 2, word32le 1, word32le (offset `div` readWindowLength), word32le 0, word32le readWindowLength ]
+      ++ payload
+    commitWriteReply write = concat
+      [ word32le readOpcode, word32le first, word32le second, word32le 0
+      , word32le 3, word32le 1, word32le 0, word32le (commitWriteIndex write), word32le 1 ]
+      ++ replicate 256 0
+      where (first,second) = commitWriteStatus write
+
+commitF7Script :: CommitDirection -> ReferenceWindow -> ScriptedOperation
+commitF7Script direction reference = ScriptedOperation (directionName direction) (commitSteps reference direction) $ \clock api dir -> do
+  outcome <- runCommitF7 direction reference clock api dir
+  case outcome of
+    Committed _ -> pure (commitOutcomeLine direction outcome)
+    _ -> P.reject ("rehearsal did not commit: "++commitOutcomeLine direction outcome)
+
+rehearseCommitF7 :: CommitDirection -> ReferenceWindow -> IO ()
+rehearseCommitF7 direction reference = do
+  putStrLn ("budget exception: the D1 control after the 0x80 = 0x22 frame waits up to " ++ show commitAllowanceMs ++ " ms")
+  runRehearsal realClock (commitF7Script direction reference)
+
+-- The read-ram rehearsal: window 0 carries 0xf7 = 0x01 and every RAM reply
+-- echoes its request with payload that follows the address.
+readRamSteps :: RamWatch -> [P.Step]
+readRamSteps watch = openSteps ++ identityExchange ++ gateRead ++ concat (replicate passes ramReads) ++ closeSteps
+  where
+    passes = pacingPasses (watchPacing watch)
+    gateRead =
+      [ P.Step (P.controlTransfer (P.control 0xd0 readRequestBytes rehearsalSid)) (P.Transferred 12)
+      , P.Step (P.BulkOut 2 (readRequestFrame gateWindow)) (P.Transferred readRequestBytes)
+      , P.Step (P.controlTransfer (P.control 0xd1 readReplyBytes rehearsalSid)) (P.Transferred 12)
+      , P.Step (P.BulkIn 0x81 readReplyBytes) (P.Reply (probeGateWindowReply (gateRehearsalPayload 1))) ]
+    ramReads = concat
+      [ [ P.Step (P.controlTransfer (P.control 0xd0 debugRequestBytes rehearsalSid)) (P.Transferred 12)
+        , P.Step (P.BulkOut 2 (routeRequestFrame address size)) (P.Transferred debugRequestBytes)
+        , P.Step (P.controlTransfer (P.control 0xd1 (routeReplyBytes size) rehearsalSid)) (P.Transferred 12)
+        , P.Step (P.BulkIn 0x81 (routeReplyBytes size)) (P.Reply (routeChunkReply address size (routeRehearsalPayload address size))) ]
+      | window <- watchWindows watch
+      , let address = routeWindowAddress window
+            size = routeWindowBytes window ]
+
+readRamScript :: RamWatch -> ScriptedOperation
+readRamScript watch = ScriptedOperation "read-ram" (readRamSteps watch) $ \clock api dir -> do
+  requests <- runReadRam watch clock api dir
+  pure (show requests ++ " read requests; no write sent")
+
+-- Pauses advance the clock without sleeping.
+rehearseReadRam :: RamWatch -> IO ()
+rehearseReadRam watch = do
+  let pacing = watchPacing watch
+  putStrLn ("pacing: passes=" ++ show (pacingPasses pacing) ++ " interval-ms=" ++ show (pacingIntervalMs pacing))
+  skipped <- newIORef 0
+  let clock = TimedClock ((+) <$> getMonotonicTimeNSec <*> readIORef skipped)
+                         (\ms -> modifyIORef' skipped (+ fromIntegral ms * 1000000))
+  runRehearsal clock (readRamScript watch)

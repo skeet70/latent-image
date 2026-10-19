@@ -238,7 +238,7 @@ runDumpRamCore segment clock api dir = do
       requests = length chunks
       cap = dumpJournalCapFor requests
       capturePath = dir </> (segmentName segment ++ ".bin")
-  s <- newSession clock api dir cap (dumpAggregateDeadlineFor requests)
+  s <- newSessionJournaling FailingOutcomes clock api dir cap (dumpAggregateDeadlineFor requests)
   held <- newHeld
   openedSession <- newIORef Nothing
   completed <- newIORef (0::Int)
@@ -281,7 +281,7 @@ runDumpRamCore segment clock api dir = do
           chunkTransfer packet count = do
             ms <- remaining (sessionClock s) (sessionDeadline s)
             before <- nowNS (sessionClock s)
-            (n,bytes) <- usbTransfer (sessionApi s) packet (min ms transferTimeoutMs)
+            (n,bytes) <- dispatchTransfer s packet (min ms transferTimeoutMs)
             after <- nowNS (sessionClock s)
             when (after >= sessionDeadline s || after >= before + fromIntegral transferTimeoutMs*1000000)
               (P.reject ("chunk deadline exceeded;reply="++P.hexBytes bytes))
