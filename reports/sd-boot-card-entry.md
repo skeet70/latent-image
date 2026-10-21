@@ -1091,7 +1091,7 @@ The recovery-attempt authorization is consumed. The owner subsequently authorize
 
 ### 2.61 Entry timing and stage markers
 
-**Hardware-observed, 2026-10-11 to 2026-10-15, healthy body:** with Fn plus the inward sub-command-dial press held, all but two of about 80 card-present starts on the reviewed blink and marker cards stayed dark instead of reaching the application, so the ROM saw both controls; the two that booted the application are consistent with a dropped dial press (E-SDBOOT-ENTRY-TIMING-150). Entry depended on power-switch timing:
+**Hardware-observed, 2026-10-11 to 2026-10-15, healthy body:** with Fn plus the inward sub-command-dial press held, about 70 card-present starts that did not enter stayed dark except two that booted the application, so the ROM saw both controls; the two application boots are consistent with a dropped dial press (E-SDBOOT-ENTRY-TIMING-150). Entry depended on power-switch timing:
 
 | ON | OFF | Starts | Entered |
 | --- | --- | --- | --- |
