@@ -28,9 +28,10 @@ arm-auto-act [--wait-for-device] [OUTDIR]
 commit-f7-enable REFERENCE_BIN [OUTDIR]
 commit-f7-restore REFERENCE_BIN [OUTDIR]
 read-ram PLAN_JSON [--repeat N --interval-ms M] [OUTDIR]
+probe-sd-host [--repeat N --interval-ms M] [OUTDIR]
 ram-push MANIFEST [OUTDIR]
 ram-unload STATE [OUTDIR]
-rehearse identify|read-config PLAN_JSON|end-setting|probe-ram|read-log|probe-bootrom|probe-area2|probe-straps|probe-code|probe-ownership|probe-routes fixed|probe-routes derived PLAN_JSON|dump-ram SEGMENT|read-media|arm-auto-act|commit-f7-enable REFERENCE_BIN|commit-f7-restore REFERENCE_BIN|read-ram PLAN_JSON [--repeat N --interval-ms M]|ram-push MANIFEST|ram-unload STATE
+rehearse identify|read-config PLAN_JSON|end-setting|probe-ram|read-log|probe-bootrom|probe-area2|probe-straps|probe-code|probe-ownership|probe-routes fixed|probe-routes derived PLAN_JSON|dump-ram SEGMENT|read-media|arm-auto-act|commit-f7-enable REFERENCE_BIN|commit-f7-restore REFERENCE_BIN|read-ram PLAN_JSON [--repeat N --interval-ms M]|probe-sd-host [--repeat N --interval-ms M]|ram-push MANIFEST|ram-unload STATE
 --help
 ```
 
@@ -189,6 +190,10 @@ devenv shell -- bazel run //transport:camera -- read-ram "$PWD/private-data/read
 devenv shell -- bazel run //transport:camera -- read-ram "$PWD/private-data/read-plans/read-ram-first.json" --repeat 60 --interval-ms 1000
 ```
 
+**`probe-sd-host`** is the `read-ram` session over a fixed list of four windows in the SD slot's host controller at `0xfff50000`, one request each per pass, one pass unless `--repeat` is given: `+0x00..+0x1f` (32 bytes: DMA address, block size and count, argument, transfer mode and command, response), `+0x24..+0x29` (present state, host and power control), `+0x2c..+0x3b` (clock, timeout and reset control, interrupt and error status and enables) and `+0x3e..+0x3f` (host control 2). The windows cover only offsets the boot ROM ([window map](../reports/bootrom-window.md) sections 1 and 3) or the application driver accesses, at the standard SD host register offsets. No window covers the `+0x20` buffer data port, where a read consumes FIFO data; `read-ram` refuses all four windows. The function 2 handler copies with byte loads (`0x647b1c`, `ldrb`), and the ROM byte-loads `+0x28`, `+0x29`, `+0x2e` and `+0x2f` of this block; a byte load of the other offsets is not yet observed on this body, and a hang would need a supply cut. Captures go to `ram/000-fff50000.bin`, `ram/000-fff50024.bin`, `ram/000-fff5002c.bin` and `ram/000-fff5003e.bin`.
+
+`--repeat N --interval-ms M` repeats the four windows for N passes with an M ms pause between passes, under `read-ram`'s pacing bounds and its 2032-request cap, so N is at most 508. Captures are `ram/PPP-ADDRESS.bin` per pass. With the card failed, every offset of this block read `0x000e0107` (2026-10-21, `20261021T014402Z-probe-sd-host`), most likely a controller the driver has switched off (inferred); to see register contents while the driver works a card, start the watch before the card goes in.
+
 **`ram-alloc SIZE`** reads no manifest. `SIZE` must be exactly the reviewed `0x1b6d8`-byte extent. It opens C0, requires `X-M1` and config byte `0xf7 != 0`, pins callback table pointer `0x0146a0c4 -> 0x015c22a0` and slot `0x015c22ac = 0x00dc7874`, then allocates the request-owned workspace. It requires an 8-byte-aligned nonzero base and CPU0 identity `0x4003`, synchronously evicts the allocation on logical core 1, restores the stock callback slot and writes `ram-alloc-state.json`. The state records base, size, CPU0 identity, table pointer, stock slot, bootstrap identity, product, observed nonzero `0xf7` and SHA-256 of the initial allocation contents. The allocation remains owned after C4.
 
 **`ram-relink ALLOC_STATE OUTDIR`** opens no device. It refuses a consumed allocation state, runs the pinned relinker described below at the state's base and writes the resulting `ram-push-manifest.json` and `runtime.bin`, mode 0600, into the new OUTDIR. Use it to produce the manifest `ram-push` takes.
@@ -225,7 +230,7 @@ The old static-inference bootstrap tail `[0x015c22b4,0x015c22d4)` is not used. B
 
 The request-owned peer-prepare bootstrap invokes stock synchronous core-1 range wrapper `0x006b0c3c` over the allocated block before upload, evicting stale peer lines before CPU0 stores runtime bytes. CPU0 then performs whole D clean-and-invalidate and instruction-cache maintenance. Before the peer fetches uploaded adapter code, the installer repeats `0x006b0c3c` over the runtime and every distinct publication line, then submits stock action `0x0061c490` through `0x006b0aa8` for DSB/ICIALLU/ISB. The uploaded worker action repeats range maintenance through loader helper `0x00042634`, invalidates I-cache, records raw CP14 identity and returns through synchronous row completion. The callback must report CPU0 `0x4003`; the peer raw value is accepted only when it differs from the same session's CPU0 value. No X70 or emulator CPU1 identity is used. The stock synchronous waits can hard-loop on internal failure, so a host timeout is uncertain and never retried.
 
-No argument of any command can set an opcode, function, mailbox, parameter, text, endpoint or transfer order. Plan files set config window offsets (`read-config`) and RAM window addresses and lengths (`probe-routes derived`, `read-ram`), and `read-ram` takes a bounded pass count and interval; no other argument sets a length or address. There is no raw, debug, firmware, detach, reset or retry command.
+No argument of any command can set an opcode, function, mailbox, parameter, text, endpoint or transfer order. Plan files set config window offsets (`read-config`) and RAM window addresses and lengths (`probe-routes derived`, `read-ram`), and `read-ram` and `probe-sd-host` take a bounded pass count and interval; no other argument sets a length or address, and `probe-sd-host`'s peripheral windows are compiled in. There is no raw, debug, firmware, detach, reset or retry command.
 
 ## RAM-push review record
 

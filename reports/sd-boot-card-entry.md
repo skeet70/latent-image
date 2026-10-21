@@ -1089,6 +1089,28 @@ The recovery-attempt authorization is consumed. The owner subsequently authorize
 
 **Ordinary-startup and functional result:** the owner reports “Started up, with the NO CARD warning” after the authorized no-card, no-button power-disconnect/reconnect check, then confirms photography works without a card, “normal card and playback works” and retained film simulations/settings, including C-slot color +2 (E-RECOVERY-V5-COLD-START-SUCCESS-150, E-RECOVERY-V5-NO-CARD-PHOTOGRAPHY-150, E-RECOVERY-V5-NORMAL-CARD-PLAYBACK-150, E-RECOVERY-V5-RETENTION-150). Ordinary startup without the recovery card after physical rollback supports persistence through the reported power cycle. The failed-boot incident and recovery-adjacent functional/retention checks are complete. Detailed lens/AF and new recipe acceptance remain separate feature work. Both authorizations are consumed. Preserve the successful recovery card unchanged; no recovery writer retry or firmware reinstall is needed.
 
+### 2.61 Entry timing and stage markers
+
+**Hardware-observed, 2026-10-11 to 2026-10-15, healthy body:** with Fn plus the inward sub-command-dial press held, all but two of about 80 card-present starts on the reviewed blink and marker cards stayed dark instead of reaching the application, so the ROM saw both controls; the two that booted the application are consistent with a dropped dial press (E-SDBOOT-ENTRY-TIMING-150). Entry depended on power-switch timing:
+
+| ON | OFF | Starts | Entered |
+| --- | --- | --- | --- |
+| Cold start (power removed between starts) | 30 s or more | about 25 | never |
+| About 3 s | About 1 s | 30 | never |
+| About 0.75 s | About 3 s | about 9 | never |
+| 10 s or more | One deliberate flick | 3 | never |
+| About 0.75 s | About 0.75 s | every fast-toggle session | within a few switch-ons each time |
+
+No start left to run has entered. Every entry with recorded timing followed a switch-on that cut the previous attempt short after a short OFF; the first witness (section 2.13) followed a dark start and an off/on of unrecorded timing. Transition times are owner estimates and audio counts, not instrumented edges.
+
+**Stage markers.** `build-stage-marker` ([card report](diagnostic-sd-boot-card.md)) adds LED writes to the stock `ffsys.bin` so the LED lights at a chosen point of the apply `0x80000304`. The `after-apply` card lights after the whole apply, the `before-memory-wait` card at `0x80000628`; between `0x80000510` and `0x80000628` the apply runs only register writes and cycle-bounded delays. Cold starts stayed dark with both; fast toggling reached the blink payload with both (E-SDBOOT-STAGE-MARKER-150). **Static-inference:** a cold start stops before `0x80000510`, in one of:
+
+- the ROM's card bring-up: each of the four mount attempts (`0x80000830`) re-runs channel bring-up `0x80001308`, which restarts the card supply at `0x8000155c`, waits 12,582,912 cycles (`0x800015c8`) and allows 48,076,923 cycles for card start-up (`0x800012dc`);
+- the FAT mount or the `ffsys.bin` read;
+- the apply's first waits: `0xfff88080` bit 16 (`0x80000354`), the per-register handshakes of `0x80000b50` and `0xfff88038` bit 24 (`0x80000448`).
+
+The ROM consults no reset cause or retained state before these steps, so what a short OFF preserves is electrical state of the card, controller or clocks. Which one, and whether other bodies or card models behave the same, is unproved. A passive SD-bus capture of one cold and one toggled start would separate card start-up from the clock waits; the sniffer tried for it did not fit this slot (E-SD-SLOT-DAMAGE-150).
+
 
 ## 3. The built card's exact bytes
 

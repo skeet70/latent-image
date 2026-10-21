@@ -222,6 +222,10 @@ main = do
   check "a window crossing the end of DRAM is refused" (isLeft' (mkRamWatch [RouteWindow 0 0x1ffffffc 8 "edge"] singlePass))
   check "a window in the gap between DRAM and its alias is refused" (isLeft' (mkRamWatch [RouteWindow 0 0x30000000 4 "gap"] singlePass))
   check "the last word of the DRAM alias is allowed" (not (isLeft' (mkRamWatch [RouteWindow 0 0x5ffffffc 4 "alias"] singlePass)))
+  check "read-ram refuses each SD host register window"
+    (all (\window -> isLeft' (mkRamWatch [window] singlePass)) sdHostWindows)
+  check "no SD host window touches the +0x20 data port"
+    (all (\window -> routeWindowAddress window + routeWindowBytes window <= 0xfff50020 || routeWindowAddress window >= 0xfff50024) sdHostWindows)
 
   -- The CLI boundary.
   check "plan alone" (readRamArguments ["/p.json"] == Just ("/p.json",Nothing,Nothing))
@@ -259,6 +263,21 @@ main = do
   check "the happy session never pauses" (null [() | Paused _ <- runEvents happy])
   check "every outgoing frame was durable before its dispatch" (runDurable happy)
   check "happy session releases every resource once" (runCleanup happy == [Released,Closed,Exited])
+
+  -- probe-sd-host: the same session over the fixed SD host register windows.
+  sdHost <- runCase ledger fake (either error id (sdHostWatch singlePass)) (root </> "sd-host")
+  check ("probe-sd-host completes four requests: "++either displayException show (runOutcome sdHost))
+    (either (const False) (== 4) (runOutcome sdHost))
+  check "probe-sd-host reads +0x00 (32), +0x24 (6), +0x2c (16) and +0x3e (2) of 0xfff50000, in that order"
+    (ramFrames sdHost == [ramFrame 0xfff50000 32, ramFrame 0xfff50024 6, ramFrame 0xfff5002c 16, ramFrame 0xfff5003e 2])
+  sdHostJournal <- readFile (root </> "sd-host" </> "journal.v1")
+  check "probe-sd-host journals its own operation name"
+    ("probe-sd-host;windows=4" `isInfixOf` sdHostJournal && "probe-sd-host-complete-stock-unverified" `isInfixOf` sdHostJournal)
+  check "probe-sd-host fits 508 passes and refuses 509" (not (isLeft' (sdHostWatch (paced 508 100))) && isLeft' (sdHostWatch (paced 509 100)))
+  sdHostTwice <- runCase ledger fake (either error id (sdHostWatch (paced 2 250))) (root </> "sd-host-twice")
+  check "probe-sd-host repeats its four windows per pass with the pause between passes"
+    (ramFrames sdHostTwice == concat (replicate 2 [ramFrame 0xfff50000 32, ramFrame 0xfff50024 6, ramFrame 0xfff5002c 16, ramFrame 0xfff5003e 2])
+     && [ms | Paused ms <- runEvents sdHostTwice] == [250])
   happyJournal <- readFile (happyDir </> "journal.v1")
   forM_ sampleWindows $ \window -> do
     let address = routeWindowAddress window

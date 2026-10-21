@@ -17,6 +17,8 @@ module FujiAF.ReadRam
   ( Pacing, mkPacing, singlePass, pacingPasses, pacingIntervalMs
   , readRamMaxPasses, readRamMinIntervalMs, readRamMaxIntervalMs
   , RamWatch, mkRamWatch, watchWindows, watchPacing
+  , WatchOperation (..), watchOperation, watchOperationName
+  , sdHostWindows, sdHostWatch, pacingArguments
   , readRamRequestLength, readRamRequestCap, readRamRequestCount
   , readRamAggregateDeadlineMs, readRamJournalCapBytes
   , readRamArguments, ramCaptureName, gateWindow, readRamDramRanges
@@ -28,7 +30,7 @@ import Control.Monad (forM_, unless, when)
 import qualified Data.ByteString as B
 import Data.Char (isDigit)
 import Data.IORef
-import Data.List (isPrefixOf)
+import Data.List (intercalate, isPrefixOf)
 import System.FilePath ((</>))
 import FujiAF.Transport
 import FujiAF.Read
@@ -72,7 +74,14 @@ mkPacing passes intervalMs
       Left ("--interval-ms must be "++show readRamMinIntervalMs++".."++show readRamMaxIntervalMs++", not "++show intervalMs)
   | otherwise = Right (Pacing passes intervalMs)
 
-data RamWatch = RamWatch { watchWindows :: [RouteWindow], watchPacing :: Pacing }
+data WatchOperation = ReadRamOperation | SdHostOperation
+  deriving (Eq, Show)
+
+watchOperationName :: WatchOperation -> String
+watchOperationName ReadRamOperation = "read-ram"
+watchOperationName SdHostOperation = "probe-sd-host"
+
+data RamWatch = RamWatch { watchOperation :: WatchOperation, watchWindows :: [RouteWindow], watchPacing :: Pacing }
   deriving (Eq, Show)
 
 -- The DRAM backing and its 0x40000000 alias. Every other range is a peripheral,
@@ -81,19 +90,40 @@ readRamDramRanges :: [(Int,Int)]
 readRamDramRanges = [(0x00000000,0x20000000),(0x40000000,0x60000000)]
 
 mkRamWatch :: [RouteWindow] -> Pacing -> Either String RamWatch
-mkRamWatch windows pacing = do
+mkRamWatch = watchWithin ReadRamOperation readRamDramRanges
+
+-- The slot's SD host controller at 0xfff50000, limited to the offsets the boot
+-- ROM (reports/bootrom-window.md sections 1 and 3) or the application driver
+-- accesses. +0x20..+0x23 is the buffer data port, where a read consumes FIFO data.
+sdHostRanges :: [(Int,Int)]
+sdHostRanges = [(0xfff50000,0xfff50020),(0xfff50024,0xfff5002a),(0xfff5002c,0xfff5003c),(0xfff5003e,0xfff50040)]
+
+sdHostWindows :: [RouteWindow]
+sdHostWindows =
+  [ RouteWindow 0 0xfff50000 32 "SD host +0x00..+0x1f: DMA address, block size and count, argument, transfer mode and command, response"
+  , RouteWindow 1 0xfff50024 6 "SD host +0x24..+0x29: present state, host and power control"
+  , RouteWindow 2 0xfff5002c 16 "SD host +0x2c..+0x3b: clock, timeout and reset control, interrupt and error status and enables"
+  , RouteWindow 3 0xfff5003e 2 "SD host +0x3e..+0x3f: host control 2" ]
+
+sdHostWatch :: Pacing -> Either String RamWatch
+sdHostWatch = watchWithin SdHostOperation sdHostRanges sdHostWindows
+
+watchWithin :: WatchOperation -> [(Int,Int)] -> [RouteWindow] -> Pacing -> Either String RamWatch
+watchWithin operation ranges windows pacing = do
+  let name = watchOperationName operation
   validateRoutePlan windows
   unless (all ((<= readRamRequestLength) . routeWindowBytes) windows)
-    (Left ("read-ram window length must be 1.."++show readRamRequestLength++" bytes, one request per window"))
+    (Left (name++" window length must be 1.."++show readRamRequestLength++" bytes, one request per window"))
   forM_ windows $ \window ->
     let start = routeWindowAddress window
         end = start + routeWindowBytes window
-    in unless (any (\(low,high) -> low <= start && end <= high) readRamDramRanges)
-         (Left ("read-ram window 0x"++probeName start++" is outside DRAM [0x00000000,0x20000000) and its alias [0x40000000,0x60000000)"))
+    in unless (any (\(low,high) -> low <= start && end <= high) ranges)
+         (Left (name++" window 0x"++probeName start++" is outside "
+                ++intercalate ", " ["[0x"++probeName low++",0x"++probeName high++")" | (low,high) <- ranges]))
   let requests = length windows * pacingPasses pacing
   unless (requests <= readRamRequestCap)
     (Left ("plan windows times passes is "++show requests++" read requests, above the cap of "++show readRamRequestCap))
-  pure (RamWatch windows pacing)
+  pure (RamWatch operation windows pacing)
 
 readRamRequestCount :: RamWatch -> Int
 readRamRequestCount watch = length (watchWindows watch) * pacingPasses (watchPacing watch)
@@ -113,10 +143,15 @@ readRamJournalCapBytes = journalCapFor . readRamRequestCount
 -- then at most one OUTDIR. Numbers are decimal digits only.
 readRamArguments :: [String] -> Maybe (FilePath, Maybe (Int,Int), Maybe FilePath)
 readRamArguments (plan:rest)
-  | not (flag plan) = case rest of
-      "--repeat":passes:"--interval-ms":interval:more ->
-        (,,) plan <$> (Just <$> ((,) <$> decimal passes <*> decimal interval)) <*> outdir more
-      more -> (,,) plan Nothing <$> outdir more
+  | not (isPrefixOf "-" plan) = (\(pacing,directory) -> (plan,pacing,directory)) <$> pacingArguments rest
+readRamArguments _ = Nothing
+
+-- Optionally --repeat N --interval-ms M, then at most one OUTDIR.
+pacingArguments :: [String] -> Maybe (Maybe (Int,Int), Maybe FilePath)
+pacingArguments tokens = case tokens of
+  "--repeat":passes:"--interval-ms":interval:more ->
+    (,) <$> (Just <$> ((,) <$> decimal passes <*> decimal interval)) <*> outdir more
+  more -> (,) Nothing <$> outdir more
   where
     flag = isPrefixOf "-"
     decimal s
@@ -125,7 +160,6 @@ readRamArguments (plan:rest)
     outdir [] = Just Nothing
     outdir [directory] | not (flag directory) = Just (Just directory)
     outdir _ = Nothing
-readRamArguments _ = Nothing
 
 gateWindow :: ReadWindow
 gateWindow = ReadWindow 0 0 "adjustment index 0xf7"
@@ -149,7 +183,8 @@ runReadRamCore watch clock api dir = do
   held <- newHeld
   openedSession <- newIORef Nothing
   completed <- newIORef (0::Int)
-  note s "prepared" ("read-ram;windows="++show (length windows)++";passes="++show passes
+  let name = watchOperationName (watchOperation watch)
+  note s "prepared" (name++";windows="++show (length windows)++";passes="++show passes
                      ++";interval-ms="++show intervalMs++";read-requests="++show (readRamRequestCount watch)++";writes=none")
   ensurePrivateDirectory captured
   mask $ \restore -> do
@@ -161,7 +196,7 @@ runReadRamCore watch clock api dir = do
       reply <- tx s (P.BulkIn input 8) 8
       let sid = fromIntegral (reply!!0) + 256*fromIntegral (reply!!1)
           stop label response reason = do
-            note s "read-ram-stop" (label++";reply="++P.hexBytes response++";"++reason)
+            note s (name++"-stop") (label++";reply="++P.hexBytes response++";"++reason)
             P.reject reason
       writeIORef openedSession (Just (device,sid))
       unless (drop 2 reply == openReplyTail)
@@ -223,5 +258,5 @@ runReadRamCore watch clock api dir = do
       (_, _:_) -> P.reject ("cleanup uncertain: "++show failures)
       (Left (e::SomeException),[]) -> throwIO e
       (Right (),[]) -> do
-        note s "read-ram-complete-stock-unverified" (show sent++" read requests;passes="++show passes++";no write sent")
+        note s (name++"-complete-stock-unverified") (show sent++" read requests;passes="++show passes++";no write sent")
         pure sent

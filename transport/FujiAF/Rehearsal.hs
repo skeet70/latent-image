@@ -888,7 +888,7 @@ readRamSteps watch = openSteps ++ identityExchange ++ gateRead ++ concat (replic
             size = routeWindowBytes window ]
 
 readRamScript :: RamWatch -> ScriptedOperation
-readRamScript watch = ScriptedOperation "read-ram" (readRamSteps watch) $ \clock api dir -> do
+readRamScript watch = ScriptedOperation (watchOperationName (watchOperation watch)) (readRamSteps watch) $ \clock api dir -> do
   requests <- runReadRam watch clock api dir
   pure (show requests ++ " read requests; no write sent")
 

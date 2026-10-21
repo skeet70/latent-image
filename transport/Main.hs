@@ -38,7 +38,7 @@ import RamPushReviewedPins (reviewedContract)
 import RamPushCcReviewedPins (reviewedCcContract)
 
 data RouteSource = RoutesFixed | RoutesDerived FilePath
-data Operation = Identify | ReadConfig FilePath | EndSetting | ProbeRam | ReadLog | ProbeBootRom | ProbeArea2 | ProbeStraps | ProbeCode | ProbeOwnership | ProbeRoutes RouteSource | DumpRam DumpSegment | ReadMedia | ArmAutoAct DeviceStart | CommitF7 CommitDirection FilePath | ReadRam FilePath (Maybe (Int,Int)) | RamAlloc Int | RamRelink FilePath | RamPush FilePath FilePath | RamFree FilePath | RamUnload FilePath
+data Operation = Identify | ReadConfig FilePath | EndSetting | ProbeRam | ReadLog | ProbeBootRom | ProbeArea2 | ProbeStraps | ProbeCode | ProbeOwnership | ProbeRoutes RouteSource | DumpRam DumpSegment | ReadMedia | ArmAutoAct DeviceStart | CommitF7 CommitDirection FilePath | ReadRam FilePath (Maybe (Int,Int)) | ProbeSdHost (Maybe (Int,Int)) | RamAlloc Int | RamRelink FilePath | RamPush FilePath FilePath | RamFree FilePath | RamUnload FilePath
 data Command = Help | Live Operation (Maybe FilePath) | Rehearse Operation
 
 operationName :: Operation -> String
@@ -58,6 +58,7 @@ operationName ReadMedia = "read-media"
 operationName (ArmAutoAct _) = "arm-auto-act"
 operationName (CommitF7 direction _) = directionName direction
 operationName (ReadRam _ _) = "read-ram"
+operationName (ProbeSdHost _) = "probe-sd-host"
 
 operationName (RamAlloc _) = "ram-alloc"
 operationName (RamRelink _) = "ram-relink"
@@ -91,6 +92,7 @@ parse ("arm-auto-act":rest) = Live (ArmAutoAct RequirePresent) <$> output rest
 parse ("commit-f7-enable":reference:rest) = Live (CommitF7 EnableStoredGate reference) <$> output rest
 parse ("commit-f7-restore":reference:rest) = Live (CommitF7 RestoreStoredGate reference) <$> output rest
 parse ("read-ram":tokens) = (\(plan,pacing,directory) -> Live (ReadRam plan pacing) directory) <$> readRamArguments tokens
+parse ("probe-sd-host":tokens) = (\(pacing,directory) -> Live (ProbeSdHost pacing) directory) <$> pacingArguments tokens
 parse ("ram-alloc":tokens) = (\(size,directory) -> Live (RamAlloc size) directory) <$> ramAllocArguments tokens
 parse ("ram-relink":tokens) = (\(state,directory) -> Live (RamRelink state) (Just directory)) <$> ramRelinkArguments tokens
 parse ("ram-push":tokens) = (\(state,manifest,directory) -> Live (RamPush state manifest) directory) <$> ramPushArguments tokens
@@ -115,6 +117,9 @@ parse ["rehearse","commit-f7-enable",reference] = Just (Rehearse (CommitF7 Enabl
 parse ["rehearse","commit-f7-restore",reference] = Just (Rehearse (CommitF7 RestoreStoredGate reference))
 parse ("rehearse":"read-ram":tokens) = case readRamArguments tokens of
   Just (plan,pacing,Nothing) -> Just (Rehearse (ReadRam plan pacing))
+  _ -> Nothing
+parse ("rehearse":"probe-sd-host":tokens) = case pacingArguments tokens of
+  Just (pacing,Nothing) -> Just (Rehearse (ProbeSdHost pacing))
   _ -> Nothing
 parse ["rehearse","ram-alloc",size] = case ramAllocArguments [size] of
   Just (bytes,Nothing) -> Just (Rehearse (RamAlloc bytes))
@@ -150,12 +155,13 @@ dispatch Help = putStr $ unlines
   , "commit-f7-enable REFERENCE_BIN [OUTDIR] stores adjustment index 0xf7 = 0x01 through the whole-area commit, which also stores 0x80 = 0x22, 0x81 = 0xff and every other cache byte: identity, start windows equal to the private at-rest window-0 capture REFERENCE_BIN outside 0x80/0x81/0xf7 with 0xa2 = 0, state precondition, 0xf7 write, 0x81 = 0xff arm, 0x80 = 0x22 trigger with its reply held up to 33 s, bounded result poll, 0x80 = 0x33 disarm, C4. Afterwards every ordinary-boot USB attach starts ff80 service mode 3 instead of PTP, runs a 41 MB 0xff fill and gives any host the debug RAM write, and a cable at a button-less boot gives mode 3; an ordinary firmware update with its refresh flags set returns 0xf7/0x80/0x81 to 0x00 and is the only reverse route not marked unproved; whether a jig session starts with 0xf7 stored, for verification or restore, is unproved. End by dummy-battery supply cut unless the result says to wait"
   , "commit-f7-restore REFERENCE_BIN [OUTDIR] the same sequence from stored 0xf7 = 0x01, storing 0xf7 = 0x00; stored 0x80 stays 0x22; needs a session to start with 0xf7 stored, which is unproved"
   , "read-ram PLAN_JSON [--repeat N --interval-ms M] [OUTDIR] read-only RAM watch on a body with 0xf7 already nonzero, in a jig boot or an ordinary boot's ff80 route: identity, config window 0x000000 refused unless 0xf7 != 0, then one 0x200001 function 2 request per plan window (1..248 bytes) for N passes M ms apart (N 1..600, M 100..10000, N * windows <= 2032), C4; no write is sent, so no supply cut is needed"
+  , "probe-sd-host [--repeat N --interval-ms M] [OUTDIR] read-only capture of the SD slot's host-controller registers on a body with 0xf7 already nonzero: identity, config window 0x000000 refused unless 0xf7 != 0, then per pass 0xfff50000 +0x00 (32 B), +0x24 (6 B), +0x2c (16 B) and +0x3e (2 B), never the +0x20 data port, for N passes M ms apart (N 1..508, M 100..10000), C4; no write is sent"
   , "ram-alloc SIZE [OUTDIR]       allocate and peer-prepare an X-M1 RAM workspace; SIZE is a payload's fixed bound, 0x1b6d8 (recipe bank and D3) or 0x1560 (Classic Chrome); retain ram-alloc-state.json"
   , "ram-relink STATE OUTDIR        build the reviewed manifest and runtime of the allocation's payload at the retained base with the camera's pinned relinker; no USB"
   , "ram-push STATE MANIFEST [OUTDIR] upload a manifest linked to the retained allocation, install and write ram-push-state.json"
   , "ram-free STATE [OUTDIR]       free a retained allocation that was not installed"
   , "ram-unload STATE [OUTDIR]     rollback and verify the exact active publication set; retain the block until power-off"
-  , "rehearse identify|read-config PLAN_JSON|end-setting|probe-ram|read-log|probe-bootrom|probe-area2|probe-straps|probe-code|probe-ownership|probe-routes fixed|probe-routes derived PLAN_JSON|dump-ram SEGMENT|read-media|arm-auto-act|commit-f7-enable REFERENCE_BIN|commit-f7-restore REFERENCE_BIN|read-ram PLAN_JSON [--repeat N --interval-ms M]|ram-alloc SIZE|ram-push STATE MANIFEST|ram-free STATE|ram-unload STATE"
+  , "rehearse identify|read-config PLAN_JSON|end-setting|probe-ram|read-log|probe-bootrom|probe-area2|probe-straps|probe-code|probe-ownership|probe-routes fixed|probe-routes derived PLAN_JSON|dump-ram SEGMENT|read-media|arm-auto-act|commit-f7-enable REFERENCE_BIN|commit-f7-restore REFERENCE_BIN|read-ram PLAN_JSON [--repeat N --interval-ms M]|probe-sd-host [--repeat N --interval-ms M]|ram-alloc SIZE|ram-push STATE MANIFEST|ram-free STATE|ram-unload STATE"
   , "--help"
   , "OUTDIR must be absolute and must not exist; it is created with mode 0700."
   , "Without OUTDIR a live operation writes to"
@@ -182,6 +188,7 @@ dispatch (Rehearse (CommitF7 direction path)) = do
   putStrLn ("reference: "++path++" sha256="++referenceDigest reference)
   rehearseCommitF7 direction reference
 dispatch (Rehearse (ReadRam path pacing)) = ramWatch path pacing >>= rehearseReadRam
+dispatch (Rehearse (ProbeSdHost pacing)) = sdHostPacedWatch pacing >>= rehearseReadRam
 dispatch (Rehearse (RamAlloc size)) = rehearseRamAlloc size
 dispatch (Rehearse (RamPush state manifest)) = do
   allocation <- readRamAllocState state
@@ -258,6 +265,12 @@ dispatch (Live operation requested) = case operation of
       requests <- runReadRam watch realClock nativeApi directory
       pure ("read-ram: "++show requests++" read requests;passes="++show (pacingPasses (watchPacing watch))
             ++";no write sent, so the session needs no supply cut")
+  ProbeSdHost pacing -> do
+    watch <- sdHostPacedWatch pacing
+    withOutput operation requested $ \directory -> do
+      requests <- runReadRam watch realClock nativeApi directory
+      pure ("probe-sd-host: "++show requests++" read requests;passes="++show (pacingPasses (watchPacing watch))
+            ++";no write sent, so the session needs no supply cut")
   RamAlloc size -> withOutput operation requested $ \directory -> do
     outcome <- runRamAlloc size realClock nativeApi directory
     case outcome of
@@ -305,6 +318,9 @@ ramWatch :: FilePath -> Maybe (Int,Int) -> IO RamWatch
 ramWatch path pacing = do
   windows <- readRoutePlanFile path
   either P.reject pure (mkRamWatch windows =<< maybe (Right singlePass) (uncurry mkPacing) pacing)
+
+sdHostPacedWatch :: Maybe (Int,Int) -> IO RamWatch
+sdHostPacedWatch pacing = either P.reject pure (sdHostWatch =<< maybe (Right singlePass) (uncurry mkPacing) pacing)
 
 withOutput :: Operation -> Maybe FilePath -> (FilePath -> IO String) -> IO ()
 withOutput operation requested action = do

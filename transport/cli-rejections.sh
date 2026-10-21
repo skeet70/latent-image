@@ -182,6 +182,15 @@ done
 if "$binary" rehearse read-ram; then exit 1; fi
 if "$binary" rehearse read-ram "$ramplan" "$tmpdir/ram-rehearsal-out"; then exit 1; fi
 test ! -e "$tmpdir/ram-rehearsal-out"
+if "$binary" probe-sd-host "$tmpdir/one" "$tmpdir/two"; then exit 1; fi
+if (cd "$tmpdir" && "$binary" probe-sd-host relative-session); then exit 1; fi
+test ! -e "$tmpdir/relative-session"
+if "$binary" probe-sd-host --verbose; then exit 1; fi
+if "$binary" rehearse probe-sd-host extra; then exit 1; fi
+if "$binary" probe-sd-host --repeat 509 --interval-ms 100 "$tmpdir/sd-refused-out"; then exit 1; fi
+test ! -e "$tmpdir/sd-refused-out"
+if "$binary" probe-sd-host --repeat 2 "$tmpdir/sd-refused-out"; then exit 1; fi
+test ! -e "$tmpdir/sd-refused-out"
 if "$binary" ram-alloc; then exit 1; fi
 if "$binary" ram-alloc 0; then exit 1; fi
 if "$binary" ram-push; then exit 1; fi
@@ -243,4 +252,6 @@ export TMPDIR="$rehearsals"
 "$binary" rehearse commit-f7-restore "$reference"
 "$binary" rehearse read-ram "$ramplan"
 "$binary" rehearse read-ram "$ramplan" --repeat 3 --interval-ms 250
+"$binary" rehearse probe-sd-host
+"$binary" rehearse probe-sd-host --repeat 3 --interval-ms 100
 if readelf -d "$binary" | sed -n "/NEEDED/p" | rg "libusb|libudev"; then exit 1; fi
