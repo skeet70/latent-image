@@ -1091,7 +1091,7 @@ The recovery-attempt authorization is consumed. The owner subsequently authorize
 
 ### 2.61 Entry timing and stage markers
 
-**Hardware-observed, 2026-10-11 to 2026-10-15, healthy body:** with Fn plus the inward sub-command-dial press held, about 70 card-present starts that did not enter stayed dark except two that booted the application, so the ROM saw both controls; the two application boots are consistent with a dropped dial press (E-SDBOOT-ENTRY-TIMING-150). Entry depended on power-switch timing:
+**Hardware-observed, 2026-10-11 to 2026-10-15, healthy body:** with Fn plus the inward sub-command-dial press held, about 70 card-present starts that did not enter stayed dark except two that booted the application, so the reset sample left mode 4 on those starts: either both controls read pressed or the low selector read other than its captured 1. The two application boots are consistent with a dropped dial press (E-SDBOOT-ENTRY-TIMING-150). Entry depended on power-switch timing:
 
 | ON | OFF | Starts | Entered |
 | --- | --- | --- | --- |
@@ -1103,13 +1103,13 @@ The recovery-attempt authorization is consumed. The owner subsequently authorize
 
 No start left to run has entered. Every entry with recorded timing followed a switch-on that cut the previous attempt short after a short OFF; the first witness (section 2.13) followed a dark start and an off/on of unrecorded timing. Transition times are owner estimates and audio counts, not instrumented edges.
 
-**Stage markers.** `build-stage-marker` ([card report](diagnostic-sd-boot-card.md)) adds LED writes to the stock `ffsys.bin` so the LED lights at a chosen point of the apply `0x80000304`. The `after-apply` card lights after the whole apply, the `before-memory-wait` card at `0x80000628`; between `0x80000510` and `0x80000628` the apply runs only register writes and cycle-bounded delays. Cold starts stayed dark with both; fast toggling reached the blink payload with both (E-SDBOOT-STAGE-MARKER-150). **Static-inference:** a cold start stops before `0x80000510`, in one of:
+**Stage markers.** `build-stage-marker` ([card report](diagnostic-sd-boot-card.md)) adds LED writes to the stock `ffsys.bin` so the LED lights at a chosen point of the apply `0x80000304`. The `after-apply` card lights after the whole apply, the `before-memory-wait` card at `0x80000628`; between `0x80000510` and `0x80000628` the apply runs only register writes and cycle-bounded delays. Cold starts stayed dark with both; fast toggling reached the blink payload with both (E-SDBOOT-STAGE-MARKER-150). **Static-inference:** a cold start never reaches `0x80000510` of the mode-1 apply. A dark start does not show that mode 1 was selected, so either the reset-time sample (section 1) selected another handler, or mode 1 ran and stopped in one of:
 
 - the ROM's card bring-up: each of the four mount attempts (`0x80000830`) re-runs channel bring-up `0x80001308`, which restarts the card supply at `0x8000155c`, waits 12,582,912 cycles (`0x800015c8`) and allows 48,076,923 cycles for card start-up (`0x800012dc`);
 - the FAT mount or the `ffsys.bin` read;
 - the apply's first waits: `0xfff88080` bit 16 (`0x80000354`), the per-register handshakes of `0x80000b50` and `0xfff88038` bit 24 (`0x80000448`).
 
-The ROM consults no reset cause or retained state before these steps, so what a short OFF preserves is electrical state of the card, controller or clocks. Which one, and whether other bodies or card models behave the same, is unproved. A passive SD-bus capture of one cold and one toggled start would separate card start-up from the clock waits; the sniffer tried for it did not fit this slot (E-SD-SLOT-DAMAGE-150).
+Another handler means the low selector `0xfff98000` bits 2:0 read something other than the 1 every capture shows: with the pair at `0b00`, only 7, which halts; with a nonzero pair, 0 or 2 to 6, which run modes 3, 5, 6, 2, 7 or 0. Raw mode 2 runs on SD channel 1 (`0xfff51000`), which the application uses for WLAN SDIO (E-SD1-WLAN-CONTEXT-150), not the slot, so the entries ran FAT mode 1 on channel 0 (inferred). tiredboffin (reported, 2026-10-21) reads the behaviour as a race between two boot-ROM paths. The ROM consults no reset cause or retained state before these steps, so what a short OFF preserves is electrical state of the strap sources, card, controller or clocks. Which one, and whether other bodies or card models behave the same, is unproved. A passive SD-bus capture of one cold and one toggled start would show whether a cold start drives the slot at all; the sniffer tried for it did not fit this slot (E-SD-SLOT-DAMAGE-150).
 
 
 ## 3. The built card's exact bytes
