@@ -30,7 +30,7 @@ The exact source-checked upstream readable transform is payload byte XOR ff. Its
 
 ### Supplied 1.01 and 1.20 comparison
 
-The owner supplied two copies from tiredboffin on 2026-10-12. The raw header version words are `1/0x01` and `1/0x20`; all three declared checksum ranges pass on each input. These checks establish internal consistency, not vendor authenticity. Both compressed records in each file decode to their exact declared sizes with the existing `//lz:fflzd`. E-OLDER-XM1-FIRMWARE-COMPARISON records the inputs and host evidence.
+The owner supplied two copies on 2026-10-12. The raw header version words are `1/0x01` and `1/0x20`; all three declared checksum ranges pass on each input. These checks establish internal consistency, not vendor authenticity. Both compressed records in each file decode to their exact declared sizes with the existing `//lz:fflzd`. E-OLDER-XM1-FIRMWARE-COMPARISON records the inputs and host evidence.
 
 | Input | File length | Decoded id 4 size | Id 5 load / decoded size | Plain-image destination |
 | --- | ---: | --- | --- | --- |
