@@ -1091,7 +1091,7 @@ The recovery-attempt authorization is consumed. The owner subsequently authorize
 
 ### 2.61 Entry timing and stage markers
 
-**Hardware-observed, 2026-10-11 to 2026-10-15, healthy body:** with Fn plus the inward sub-command-dial press held, about 70 card-present starts that did not enter stayed dark except two that booted the application, so the reset sample left mode 4 on those starts: either both controls read pressed or the low selector read other than its captured 1. The two application boots are consistent with a dropped dial press (E-SDBOOT-ENTRY-TIMING-150). Entry depended on power-switch timing:
+**Hardware-observed, 2026-10-11 to 2026-10-15, healthy body:** with Fn plus the inward sub-command-dial press held, about 70 card-present starts that did not enter stayed dark except two that booted the application, so the reset sample did not select mode 4 on those starts: either both controls read pressed or the low selector read other than its captured 1. The two application boots are consistent with a dropped dial press (E-SDBOOT-ENTRY-TIMING-150). Entry depended on power-switch timing:
 
 | ON | OFF | Starts | Entered |
 | --- | --- | --- | --- |
@@ -1109,7 +1109,7 @@ No start left to run has entered. Every entry with recorded timing followed a sw
 - the FAT mount or the `ffsys.bin` read;
 - the apply's first waits: `0xfff88080` bit 16 (`0x80000354`), the per-register handshakes of `0x80000b50` and `0xfff88038` bit 24 (`0x80000448`).
 
-Another handler means the low selector `0xfff98000` bits 2:0 read something other than the 1 every capture shows: with the pair at `0b00`, only 7, which halts; with a nonzero pair, 0 or 2 to 6, which run modes 3, 5, 6, 2, 7 or 0. Raw mode 2 runs on SD channel 1 (`0xfff51000`), which the application uses for WLAN SDIO (E-SD1-WLAN-CONTEXT-150), not the slot, so the entries ran FAT mode 1 on channel 0 (inferred). tiredboffin (reported, 2026-10-21) reads the behaviour as a race between two boot-ROM paths. The ROM consults no reset cause or retained state before these steps, so what a short OFF preserves is electrical state of the strap sources, card, controller or clocks. Which one, and whether other bodies or card models behave the same, is unproved. A passive SD-bus capture of one cold and one toggled start would show whether a cold start drives the slot at all; the sniffer tried for it did not fit this slot (E-SD-SLOT-DAMAGE-150).
+Another handler means the low selector `0xfff98000` bits 2:0 read something other than the 1 every capture shows: with the pair at `0b00`, only 7, which halts; with a nonzero pair, 0 or 2 to 6, which run modes 3, 5, 6, 2, 7 or 0. A race between boot-ROM paths at reset would look like this. Raw mode 2 runs on SD channel 1 (`0xfff51000`), which the application uses for WLAN SDIO (E-SD1-WLAN-CONTEXT-150), not the slot, so the entries ran FAT mode 1 on channel 0 (inferred). The ROM consults no reset cause or retained state before these steps, so what a short OFF preserves is electrical state of the strap sources, card, controller or clocks. Which one, and whether other bodies or card models behave the same, is unproved. A passive SD-bus capture of one cold and one toggled start would show whether a cold start drives the slot at all; the sniffer tried for it did not fit this slot (E-SD-SLOT-DAMAGE-150).
 
 
 ## 3. The built card's exact bytes
