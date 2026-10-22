@@ -228,19 +228,17 @@ All runs use the pinned inputs; private receipts are named in each row. The comb
 
 ### 9.2 Native cases
 
-`//emulation:classic-chrome-icon-cases`: 9,007 of 9,007 pass on images built from the contract and again on the decodes of the combined DAT, with equal results (`private-data/analysis/x-m1-1.50/native-case/classic-chrome-icon/`). No runner admission was needed.
+`//emulation:classic-chrome-icon-cases` at `8fc0c53` on the design-B candidate: 9,097 of 9,097 pass, none rerun (`private-data/analysis/x-m1-1.50/native-case/classic-chrome-icon-b-qtile-1/`, results.md and results.json). The combined side's image-2 and font windows equal those of `98a66780…1606` (`--combined-dat`); images 4, 5 and plain are built from the contract and were not compared against the DAT's decodes in this run (the first submission's run compared them and found them equal; the B change touches none of them). No runner admission was needed.
 
 | Family | Result |
 | --- | --- |
-| FDL loaders `FUN_01197f98`, `FUN_0119f74c`, 2,029 codes each side (every code present in either font, U+F000-F725, both ends of every absent run) | U+F073: CC absent; combined present, count `0x172`, cursor `0x7cfe6`, advance (0, 0). U+F072: CC absent; combined present, count `0x31c73`, cursor `0x4b36d`, flags 0. Every other code identical. The host model checks all 63,270 codes with the same result |
-| Size reader `FUN_011a023c` | combined U+F073 per-mille 800 |
-| Text `FUN_01179b0c` | `0x83d` gives `0x0037b7c6` on every side, holding U+F073 on combined; `0x83e` gives `CLASSIC CHROME`; the five stock Q ids unchanged |
-| Label getters, shooting, Fn, type-9 and RAW nodes | combined `0x83d` at value 2 fields 0 and 1 and RAW value `0xa` field 1; CC 0 there; every other cell equal |
-| Q node | stock and CC rows 0-4 the five stock vector ids; combined rows 0-7 those five, `0x49a`, `0x496`, `0x83d` over values 0, 3, 1, 7, `0xc`, 5, 6, 2 |
-| Frames mapper `FUN_00e42414`, inputs 0-15 and three high or negative values, on stock, CC, combined and the two mixed states of a task preempted inside the rewritten words | combined equals stock for every input except 13, which gives class 0 instead of 6; both mixed states give the stock class for every input |
-| Validator `FUN_00ed5868` | class 6 gives -1 (stock and CC at 13), class at most 5 gives 0 (combined at 13) |
-| Site cases with the combined image 5 | 368 of 368, including the 46 live-view validator cases (0-13 pass, 14 and above `0x84`) |
-| Builder cases | 115 of 115; combined col2 0-12 byte-identical to stock on still, preset 15 and live view; col2 13 carries marker `0xd` and equals the oracle inside the CC ranges and PROVIA outside |
+| FDL loaders `FUN_01197f98`, `FUN_0119f74c`, 2,029 codes each side | U+F073: CC absent; combined present, count `0x2c4` (the 708-byte program), cursor `0x7cfe6`, advance (0, 0). U+F072 gains a nonzero span as before. Every other code identical (4,058 + 4,058) |
+| Size reader `FUN_011a023c` | combined U+F073 per-mille 800 (8) |
+| Text `FUN_01179b0c`, glyph table | `0x83d` gives `0x0037b7c6` holding U+F073 on combined; `0x83e` gives `CLASSIC CHROME`; stock ids unchanged (36 + 15) |
+| Label getters, shooting, Fn, type-9 and RAW nodes | combined `0x83d` at value 2 fields 0 and 1 and RAW value `0xa` field 1; every other cell equal (240 + 272) |
+| Q node, Q records, kind and drawer | combined rows 0-7 name the five stock vector ids, `0xff000779`, `0xff000778`, `0xff00037c` over values 0, 3, 1, 7, `0xc`, 5, 6, 2; all eight are vector kind 5 and draw at 80 x 48; Q glyph `0x37c` resolves to `0x00439390`, a `GVFF` block equal to the 1,780-byte tile; image 2 differs from CC outside the special records only in that pointer word (72 + 92 + 64 + 13 + 13) |
+| Frames mapper `FUN_00e42414` and validator `FUN_00ed5868` | combined equals stock for every input except 13, which gives class 0 instead of 6; both preempted mixed states give the stock class (95 + 57) |
+| Site and builder cases with the combined image 5 (first submission's run; image 5 is unchanged by B) | 368 of 368 and 115 of 115 |
 
 ### 9.3 Emulator
 
@@ -345,9 +343,8 @@ devenv shell -- bazel test //host/firmware:classic-chrome-icon-tests //host/firm
 
 ## 14. Full-size Q tiles
 
-This section was designed as a fragment over the first submission `78f75260…a7ba`. It is now part of the combined candidate `98a66780…1606`: the Q label words live in `qLabelsArray`, the tile and its image-2 pointer come from `build-classic-chrome-icon`, and `build-classic-chrome-q-tile` is removed. The figures below that name `78f75260`, `e91f9b67` or the 161-publication payload describe the development fragment; the current figures are in sections 1 and 9.
 
-The combined candidate draws the CC icon in the Q film tile at list size, ink 47 x 32 against the stock tiles' 82 x 44, and draws PRO Neg Std and Hi there at list size too. This fragment gives all eight Q rows full-size tiles: CC an original 80 x 48 `GVFF` tile through the unreferenced Q glyph `0x37c`, the two PRO Neg rows the stock tiles `0x779` and `0x778`. It needs no special label id, no gate, no relocation and no code byte; images 4, 5 and plain are unchanged.
+The first combined candidate `78f75260…a7ba` drew the CC icon in the Q film tile at list size, ink 47 x 32 against the stock tiles' 82 x 44, and drew PRO Neg Std and Hi there at list size too. The Q tiles now give all eight Q rows full-size tiles: CC an original 80 x 48 `GVFF` tile through the unreferenced Q glyph `0x37c`, the two PRO Neg rows the stock tiles `0x779` and `0x778`. No special label id, gate, relocation or code byte is involved; the change is the Q labels array's rows 5-7, one image-2 word and the tile in the font tail, built by `build-classic-chrome-icon` with the rest of the icon.
 
 ### 14.1 How the Q tile resolves its icon
 
@@ -385,55 +382,53 @@ Recipe ids: the fragment uses no special id, so `0x83d` stays the CC icon, `0x83
 
 | Image | Address (RAM) | Old | New | Role |
 | --- | --- | --- | --- | --- |
-| font | `0x00439200` | `0x0000049a` | `0xff000779` | Q row 5 (PRO Neg Std), over the icon's Q labels blob |
-| font | `0x00439210` | `0x00000496` | `0xff000778` | Q row 6 (PRO Neg Hi), over the icon's Q labels blob |
-| font | `0x00439220` | `0x0000083d` | `0xff00037c` | Q row 7 (CC), over the icon's Q labels blob |
-| font | `[0x00439240, 0x0043962c)` | `0x00` | `GVFF` tile, 1,004 bytes | CC Q tile |
-| image 2 | `0x0022d28c` | `0x0027dbfc` | `0x00439240` | Q glyph `0x37c` record pointer (record `0x0022d284`: `{80, 48}`, type 1, unchanged) |
+| font | Q labels rows 5, 6, 7 field 0 (`FujiAF.ClassicChromeIcon.qLabelsArray`) | (new array) | `0xff000779`, `0xff000778`, `0xff00037c` | PRO Neg Std, PRO Neg Hi, CC |
+| font | `[fontRamAddress iconTailEnd, + tile length)`; design B: `[0x00439390, 0x00439a84)` | `0x00` | `GVFF` tile, 1,780 bytes (design B) | CC Q tile |
+| image 2 | `0x0022d28c` | `0x0027dbfc` | the tile's address; design B `0x00439390` | Q glyph `0x37c` record pointer (record `0x0022d284`: `{80, 48}`, type 1, unchanged) |
 
-The font words are later writes over the icon's Q labels blob in the same font patch set (the apply-patch-set overlay rule); the icon's own writes, the `0x83d` record and the three CC label-icon words are unchanged, so the list surfaces keep the `0x83d` glyph. The tile starts at `iconTailEnd`, the first 16-aligned font offset after the icon's Q labels array (`FujiAF.ClassicChromeIcon`, which places the glyph record, Q values and Q labels each at the previous end rounded up to 16). The tile's address and the image-2 word are derived from it, and `qTileFontWrites` refuses a tile that overlaps the record or either array, is not word-aligned, runs past the 0x80000 window or lands on nonzero bytes. With the current list glyph `iconTailEnd` is `0x7d240` (the table above); with the redesigned glyphs it is `0x7d260` (A), `0x7d250` (A2) or `0x7d390` (B), so the final addresses follow the pick. The tile ends well inside the loaded tail `[0x7cfd4, 0x80000)` whose ownership section 6 establishes; with the development art and current glyph it ends at `0x7d62c`, 1,628 placed bytes of 12,332. The Q values array and Q rows 0-4 are unchanged.
+The Q labels array is the icon's own (section 5.2), so the flash candidate and the RAM payload read rows 5-7 from one source. The icon's other writes, the `0x83d` record and the three CC label-icon words are unchanged, so the list surfaces keep the `0x83d` glyph. The tile starts at `iconTailEnd`, the first 16-aligned font offset after the Q labels array (`FujiAF.ClassicChromeIcon` places the glyph record, Q values and Q labels each at the previous end rounded up to 16); with the 714-byte design-B glyph record that is `0x7d390`. The tile's address and the image-2 word are derived from it, and `qTileFontWrites` refuses a tile that overlaps the record or either array, is not word-aligned, runs past the `0x80000` window or lands on nonzero bytes. With design B the tile ends at font offset `0x7da84`, inside the loaded tail `[0x7cfd4, 0x80000)` whose ownership section 6 establishes; the tail holds 2,736 placed bytes of 12,332. The Q values array and Q rows 0-4 are unchanged.
 
 ### 14.4 The tile
 
-Original pixel art (`host/firmware/classic-chrome-q-tile.txt`, AGPL-3.0-only), one cell per unit of the 80 x 48 record, drawn in the stock film tiles' visual language: a cartridge silhouette (spool tab, canister, film strip with two rows of sprocket holes) with the film's letter knocked out of the canister. The committed art is development art (a knocked-out C) that verified the route; the final art follows the owner's pick among the list-icon redesigns A (single C), A2 (single bold C) and B (solid tile with CHROME), and Q-size drafts of all three are in `private-data/analysis/classic-chrome-icon/q-tile-drafts/`. Replacing the art file changes only the tile blob, its length and the pins that name them. No Fujifilm outline, path or block byte is copied; the tile's geometry and letter are drawn here and the `GVFF` bytes are encoded here.
+Original pixel art (`host/firmware/classic-chrome-q-tile.txt`, AGPL-3.0-only), one cell per unit of the 80 x 48 record, in design B, the owner's pick for the list icon: the solid cartridge (spool tab, canister, film strip) with `CHROME` knocked out across it in 9 x 17 letters with two-unit strokes and three sprocket holes at the strip's lower right, the stock SEPIA tile's text-on-cartridge form drawn at Q size. No Fujifilm outline, path or block byte is copied; the tile's geometry and letters are drawn here and the `GVFF` bytes are encoded here.
 
 `FujiAF.Gvff.encodeTileGvff` writes the stock tile form: the 56-byte header (`GVFF`, version 2.1, the constant word `0x001902cf` every stock block carries, header size 56, two paths, three paints, no ramp, bounds `(0, 0, 80, -48)`), the key paints red, black and white, path 0 filling the bounds white, and path 1 filling the ink black under the nonzero rule with a red 0.75 stroke, round joins and caps, dash index `0x29a` (none). Path 1's contours are the boundary of the ink traced on pixel corners, outer boundaries counter-clockwise and holes clockwise, collinear vertices dropped; the test suite checks that the nonzero winding at every pixel centre equals the art. Segment bytes are padded with 4 - count mod 4 bytes, four when the count is a multiple of four, as in every stock block.
 
 ### 14.5 Tooling
 
 - `//extensions:build-extension` gains the `image2-patch-set` step (segment 2, decode base `0x00130000`, after the records and before the font patch set; `rebuild-update extract-image2`, `apply-patch-set`, `replace-image2`), with parser tests in `//extensions:build-extension-tests`.
-- `//host/firmware:build-classic-chrome-q-tile build ICON_MANIFEST ICON_DAT OUT` reads the pinned combined manifest and DAT `78f75260…a7ba`, checks the Q glyph record and every old word, and writes `cc-q-tile-font.json` (the icon's font patch set with the three words and the tile blob appended), `cc-q-tile-image2.json`, the manifest `classic-chrome-q-tile.json` and `write-set.json`. `diff ICON_DAT Q_TILE_DAT BUILD_DIR OUT` refuses any changed byte outside that write set and the main checksum word.
+- `//host/firmware:build-classic-chrome-icon build` appends `qTileFontWrites` to the icon's font patch set and writes `cc-icon-image2.json`, an `image2-patch-set` step after the two record steps whose decode digest is the image-2 extent with both records written; the pointer word is in `write-set.json`, so `diff` checks it. Font-set blobs are padded to whole words with zero bytes, which `apply-patch-set` checks against the window (the design-B glyph record is 714 bytes).
 - `//host/firmware:classic-chrome-q-tile-tests`: the encoder over synthetic art (a ring, corner-touching pixels, a notched block, an empty tile, a segment count of 12), the tile's decode and fill, and the font writes over a synthetic window.
 
 ### 14.6 Verification
 
-Development build (development art, 1,004-byte tile). Receipts are private.
+Design-B build on `agent/q-icon` 8fc0c53 (unpinned; `agent/cc-icon` reproduces it as its pinned build). Receipts are private.
 
 | Check | Result |
 | --- | --- |
-| Build | `build-classic-chrome-q-tile build` over `parts-combined-1-pinned/classic-chrome-icon.json` and `78f75260…a7ba` (`private-data/analysis/classic-chrome-icon/q-tile-dev-1/`), then `//extensions:build-extension --unpinned`: DAT SHA-256 `e91f9b671e38dc1ba1d13570bbf779e09aab8ff3f72e1639ed881983bb9e2ae9`, `rebuild-update verify` passes |
-| Changed bytes against `78f75260…a7ba` (`q-tile-dev-1-diff/changed-bytes.json`) | image-2 extent 3 bytes (the pointer word), font window 463 bytes in the 4 writes, header bytes `0x20c`-`0x20e` (main checksum); no other container part |
-| Native cases (`//emulation:classic-chrome-icon-cases --q-tile-dat`, `private-data/analysis/x-m1-1.50/native-case/classic-chrome-q-tile-dev/`) | the qtile windows built from the contract equal the DAT's; every Q case passed: `qrec-*` 96 (width 80, height 48, type 1 for all eight glyphs on stock, combined and qtile; pointers equal on all sides except `0x37c` on qtile, `0x00439240`), `kind-*` 16 (qtile rows 0-7 kind 5; combined rows 5-7 kind 1), `qdraw-*` 16 (qtile rows draw at 80 x 48; combined rows 5-7 at 30 x 36), Q getter rows on qtile `0xff000779`, `0xff000778`, `0xff00037c`; 6,533 cases passed, none failed, before the run hit the session's one-hour limit inside the unchanged loader family |
-| Emulator (`xm1-viewer --ram-push-e2e --flash-candidate --trajectories emulation/classic-chrome-q-tile-trajectories.json`, `private-data/analysis/classic-chrome-icon-emu/q-tile-dev-1/`) | all 15 segments passed; the CC, PRO Neg Hi and PRO Neg Std tiles draw at the stock tiles' size focused (black on white) and unfocused (grey), PROVIA and Velvia as before (`segment-cc-q-film-back/screenshots/cc-q-film-cell.png`, `proneg-hi-q-film-cell.png`, `proneg-std-q-film-cell.png`; `segment-cc-q-film-unfocused/`, `segment-provia-q-film-cell/`, `segment-velvia-q-film-cell/`) |
-| `//emulation:flash-boot-check` | development DAT `e91f9b67…2ae9`: passed, boot to SHOOTING MENU (`private-data/flash-boot-checks/cc-q-tile-dev-1/flash-boot-receipt.json`) |
+| Build | `build-classic-chrome-icon build` with the live-view and frames fragments over the pinned CC manifest (`private-data/analysis/classic-chrome-icon/parts-b-qtile-1/`), then `//extensions:build-extension --unpinned`: DAT SHA-256 `98a66780f464731a184f1128aab0eb4b954adcdbbed99a214480720bd5a81606`, `rebuild-update verify` passes, and the image-2 patch set's decode digest matches the extent after the record steps |
+| Changed bytes against `16c830ad…2c89` (`diff-b-qtile-1/changed-bytes.json`) | image 2 56 bytes in 2 writes (the `0x83d` record, the `0x37c` pointer), font window 1,592 bytes in 6 writes, image-4 decode 12 bytes in 5 writes, image-5 decode 18 bytes in 8 writes, the main checksum word; nothing else |
+| Native cases (`//emulation:classic-chrome-icon-cases --combined-dat`, `private-data/analysis/x-m1-1.50/native-case/classic-chrome-icon-b-qtile-1/`) | 9,097 of 9,097 passed, none rerun. The combined side's image-2 and font windows equal the DAT's; images 4, 5 and plain are built from the contract. U+F073 count `0x2c4`, cursor `0x7cfe6`. Q families: record accessors 64 (width 80, height 48, type 1 for all eight Q-row glyphs on stock and combined; pointers equal except `0x37c`, `0x00439390` on combined), label kind 13 (combined rows 0-7 kind 5), Q drawer 13 (combined rows 0-7 draw at 80 x 48), Q getters return `0xff000779`, `0xff000778`, `0xff00037c` for rows 5-7 |
+| Emulator (`xm1-viewer --ram-push-e2e --flash-candidate --trajectories emulation/classic-chrome-q-tile-trajectories.json`, `private-data/analysis/classic-chrome-icon-emu/b-qtile-1/`) | 14 of 14 segments passed, every receipt booting or restoring `98a66780`; the CC tile (`CHROME`), PRO Neg Hi and PRO Neg Std draw at the stock tiles' size, focused black on white and unfocused grey (`segment-cc-q-film-back/screenshots/cc-q-film-cell.png`, `proneg-hi-q-film-cell.png`, `proneg-std-q-film-cell.png`, `cc-q-film-back.png`; `segment-cc-q-film-unfocused/`, `segment-proneg-std-q-film-unfocused/`), PROVIA and Velvia as before (`segment-provia-q-film-cell/`, `segment-velvia-q-film-cell/`) |
+| `//emulation:flash-boot-check` | passed on `98a66780…1606`, boot to SHOOTING MENU (`private-data/flash-boot-checks/cc-icon-b-qtile-1/flash-boot-receipt.json`) |
 
-For the final art, rebuild, diff, rerun the native cases with `--q-tile-dat` to completion, rerun the trajectories and run `flash-boot-check` on the resulting digest.
+Two viewer e2e runs without `--output` share `private-data/emulator-runtimes/xm1-ram-push-e2e`; run them one at a time or give each its own `--output`.
 
 ### 14.7 Reviewer packet addendum
 
-Scope: the bytes of 14.3 only. Everything else is bound mechanically to `78f75260…a7ba`, whose review (section 10) is separate.
+Scope: the bytes of 14.3. The rest of the combined candidate is bound to the reviewed CC candidate by the generator's carry checks and `diff` (section 10).
 
-1. Carry check: `build-classic-chrome-q-tile diff` passes against `78f75260…a7ba` with exactly the 14.3 groups changed; the icon manifest's image-4, image-5, record and plain steps are carried byte for byte, and its font patch set's entries are carried unchanged and in order before the new ones.
-2. Q label words: the three overlay words and their order after the icon's Q labels blob; Q rows 0-4 and the Q values unchanged.
+1. Carry check: `build-classic-chrome-icon diff` against `16c830ad…2c89` shows only the section 9.1 groups plus the tile (font window) and the pointer word (image 2).
+2. Q labels: rows 5-7 of `qLabelsArray` and the Q glyphs they name; Q rows 0-4 and the Q values unchanged.
 3. Image 2: the one pointer word, the record's size and type words unchanged, and the Q glyph census of 14.2 for `0x37c`, `0x778` and `0x779`.
-4. The tile: the `GVFF` layout against the stock blocks (header constants, key paints, path fields, padding rule), the outline encoder against the art, and the placement in the font tail.
-5. Tooling: the `image2-patch-set` step in `ExtensionManifest.hs` and `BuildExtension.hs`, `BuildClassicChromeQTile.hs`, `FujiAF/Gvff.hs`, `FujiAF/ClassicChromeQTile.hs`, the Q families added to `ClassicChromeIconCases.hs`.
+4. The tile: the `GVFF` layout against the stock blocks (header constants, key paints, path fields, padding rule), the outline encoder against the art, and the placement at `iconTailEnd` in the font tail.
+5. Tooling: the `image2-patch-set` step in `ExtensionManifest.hs` and `BuildExtension.hs`, the image-2 patch set, tile append and blob padding in `BuildClassicChromeIcon.hs`, `FujiAF/Gvff.hs`, `FujiAF/ClassicChromeQTile.hs`, the Q families in `ClassicChromeIconCases.hs`.
 
-Class: data only (a label array word, an image-2 record word and a vector block that the stock drawer reads); no executable byte changes. The RAM-push carry is designed in 14.8.
+Class: data only (label array words, an image-2 record word and a vector block that the stock drawer reads); no executable byte changes.
 
-### 14.8 RAM-push carry (design, not built)
+### 14.8 RAM-push carry
 
-Owner direction: the abbreviated camera test (section 11) shows the real Q tiles, so the `ClassicChromeIcon` payload carries this fragment. `agent/cc-icon` owns that payload (`FujiAF.ClassicChromeIconRam`, `build-classic-chrome-icon-ram`, `transport/ram-push-cc-icon-review.json`). The build waits for the final tile art, because the tile's length fixes the allocation size and the contract.
+Owner direction: the abbreviated camera test (section 11) shows the real Q tiles, so the `ClassicChromeIcon` payload carries them. `agent/cc-icon` owns that payload (`FujiAF.ClassicChromeIconRam`, `build-classic-chrome-icon-ram`, `transport/ram-push-cc-icon-review.json`) and has built it as 162 publications, unreviewed.
 
 | Change | Where | Publication |
 | --- | --- | --- |
@@ -441,8 +436,8 @@ Owner direction: the abbreviated camera test (section 11) shows the real Q tiles
 | The tile | new content after the Q labels copy, at the offset `FujiAF.ClassicChromeIconRam` derives in the same order as the font tail (8-aligned), the `GVFF` block of 14.4 | none: allocation content |
 | Q glyph `0x37c` record pointer | image 2 `0x0022d28c`, old `0x0027dbfc` (stock, also on the RC0 body), new the tile's allocation address | one new activation publication |
 
-The flash design writes the three label words over the icon's Q labels blob. The RAM design rewrites the same three words in the allocation copy before upload, so the Q labels pointer publication keeps its address, old word and role, and only its target bytes differ. The payload goes from 161 to 162 publications (100 setup, 62 activation). In the masked activation window the tile pointer is published first, then the Q labels pointer, then the Q values pointer: once the labels name `0xff00037c`, its record already points at the tile. Nothing draws `0x37c` before that, so the reverse order would only briefly show the EXR tile in a Q tile already on screen. The installer's masked old-word check covers the new word. `ram-unload` restores it with the rest in reverse order, the Q labels pointer before the tile pointer. Rollback is not safe against a task suspended inside rewritten words (icon review, `private-data/analysis/classic-chrome-icon-review/review.md`), so unload keeps that review's precondition: camera idle with a stock film selected and the Q menu closed. Under it nothing is drawing from `0x37c` or the allocation tile when the pointer is restored.
+The Q labels pointer publication keeps its address, old word and role; only the allocation copy it points at carries the new rows. The payload goes from 161 to 162 publications. In the masked activation window the tile pointer is published first, then the Q labels pointer, then the Q values pointer: once the labels name `0xff00037c`, its record already points at the tile. Nothing draws `0x37c` before that, so the reverse order would only briefly show the EXR tile in a Q tile already on screen. The installer's masked old-word check covers the new word. `ram-unload` restores it with the rest in reverse order, the Q labels pointer before the tile pointer. Rollback is not safe against a task suspended inside rewritten words (icon review, `private-data/analysis/classic-chrome-icon-review/review.md`), so unload keeps that review's precondition: camera idle with a stock film selected and the Q menu closed. Under it nothing is drawing from `0x37c` or the allocation tile when the pointer is restored.
 
-Size: content grows by the tile length (`0x3ec` for the development art). The publication table grows by one entry, so `ccIconInstallerExtent` (`0x15a0` for 161 entries), `ccIconContentOffset` and the allocation (about `0x1d80` instead of `0x1990`) are re-derived. The builder refuses a tile address that is not 4-aligned and a content end past the allocation.
+Size: content grows by the tile length (1,780 bytes for design B); the publication table grows by one entry, and `ccIconInstallerExtent`, `ccIconContentOffset` and the allocation are re-derived.
 
 Follow-on changes: the pre-push and post-reboot read plans add the window holding `0x0022d28c`, plus the record words `0x0022d284`-`0x0022d288`, which must read `0x00300050` and 1. `carried-publications.json` is unchanged because no CC publication changes. The contract digest, builder digest, relink runtimes and the 19 review-record pins are re-pinned, still unreviewed. The `--classic-chrome-icon` e2e trajectories add the Q film tile on CLASSIC CHROME, PRO Neg Hi and PRO Neg Std, and the cold-restart read covers 162 words. Owner check I5 becomes: the Q film tile shows the full-size CC tile, and the PRO Neg rows show their full-size stock tiles. Review scope adds the one new publication and the content change, and the reviewer-packet items of 14.7 apply unchanged.
