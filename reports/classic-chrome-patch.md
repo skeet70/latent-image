@@ -18,7 +18,7 @@ Decisions, approved by the director on 2026-10-18 after the design review:
 4. **FilmMode is written by `FUN_00eab258`, not `FUN_00eaac74`.** `FUN_00eaac74` is the Saturation encoder. Both get in-place changes (section 4.6).
 5. **The tone record is served by a hook at the two `FUN_00690924` call sites in the tone stage, not by a patched copy of the 37-record table with key 37.** The table cannot grow in place and a copy is 2,740 bytes; no key is allocated, and every stock key still resolves through the unmodified reader and table (section 4.5).
 6. **The Q cell and the FILM 1-3 bracket lists stay stock.** The prefix window is full at 484 of 512 bytes with the RAW-conversion list, which the verification needs; Q also has no CC glyph (issue 44). A stored CC shows PROVIA's Q glyph, as PRO Neg does on the RC0 body today (section 4.8).
-7. **Live view and movie stay stock.** CC previews as PROVIA and movie records as PROVIA; `FUN_00eee958` is not widened. This is a known limitation in the acceptance list (section 12.4).
+7. **Live view previews CC; movie records CC as a consequence.** In `16c830ad…2c89` both stay PROVIA because `FUN_00eee958` maps 13 to 0. On 2026-10-22 the owner required a CC preview before the first flash; the live-view fragment widens `FUN_00eee958` with 5 in-place words and leaves every reviewed CC byte unchanged (section 4.10). It joins the icon candidate.
 8. **D3 is incompatible as designed and must be re-planned around CC.** CC takes conversion row 2, code `0xd` and most of the prefix window (section 10). The CC patch set is reviewable and revertible separately from RC0 (section 11).
 9. **Delivery.** The flash container is built and reviewed (section 8.1). On 2026-10-18 the owner directed a RAM-push test before any flash: the CC RAM payload is built on the imported RAM-push route with no recipe-bank code, emulated and under review (section 8.2), and section 8.4 is the camera session script for its first run.
 
@@ -29,7 +29,7 @@ Decisions, approved by the director on 2026-10-18 after the design review:
 - PLAYBACK > RAW CONVERSION > FILM SIMULATION shows six rows, the stock five then CLASSIC CHROME; a RAF converted with it is rendered as CC.
 - A CC frame is rendered with PROVIA's processing except the colour matrix, the chroma matrix and the tone curve, which come from the patch's data block; luma-band (hue range), chroma gain, H/S tone and the tone scalar stay PROVIA's (spec 19.5.4 default).
 - EXIF/maker note: FilmMode `0x600`, which exiftool names Classic Chrome; Saturation reports the COLOR setting as it does for PROVIA.
-- Live view and movie (known limitation, decision 7): every non-still builder passes the film through `FUN_00eee958`, which maps 13 to 0, or never calls the marker setter, so a CC setting gives develop code 0 and `+0x110 = 0` there and CC previews and records movie as PROVIA. The live-view driver is probably `FUN_00f387c0` (it reads the camera-state object `0x016c0078` and its display-state branches); that identification is unproved, and the PROVIA outcome holds for every candidate builder (byte-read builders, static-inference outcome). Spec 19.5.5 requires the body's live-view behaviour to be recorded.
+- Live view and movie (section 4.10): the MOVDC builders pass the film through `FUN_00eee958`. In `16c830ad…2c89` it maps 13 to 0, so CC previews and records movie as PROVIA. With the live-view fragment it passes 13, the MOVDC record carries `+0x110 = 0xd` and the reviewed hooks serve the data block there, so CC previews and records movie as CC (native and emulated; the panel output is unproved until the camera test).
 - The C position stores `0xd` in its 4-bit film field like any other film (no clamp in getter, setter, C copy or area-3 read, byte-read in section 4.1).
 - Q menu and FILM 1-3 bracket lists: unchanged five rows.
 
@@ -183,7 +183,7 @@ Why not `0x83f`: a new id needs all 33 gates raised plus the six base pairs move
 | Q cell `0x0078b000` (values `0x00782348`, labels `0x00789e2c`) | no CC glyph in the closed `0xff000000 | n` space (issue 44); no window space | a stored CC draws PROVIA's Q glyph (no-match returns record 0), as PRO Neg does on the RC0 body | 144 bytes and two pointer words; the Q drawer renders plain string ids, so `0x83e` text may draw there (width unproved) |
 | FILM 1-3 brackets `0x00786774`, `0x00786da8`, `0x007898d4` (properties `0x100`-`0x102`) | own tables and 11-row matrices; no window space; bracket frames copy `+0x604 + 4*frame` into `+0x508` (`FUN_00e81a34`), so the marker would apply, but this is unexercised | brackets cannot select CC | 6 table words, 15 matrix words, 144-168 bytes, 3-6 pointer words |
 | nine-row list `0x0078d2d0` | blank labels, reachability unbound | none | - |
-| Movie and live-view validator `FUN_00eee958` | keeps the movie path at 0..12; which builder live view uses is unproved | CC previews and records movie as PROVIA | 8 in-place words (`0x00eee960`-`0x00eee97c`), safe under the marker design; `FUN_00eef4b0` never calls the marker setter and would stay PROVIA |
+| Movie and live-view validator `FUN_00eee958` | in `16c830ad…2c89` it keeps the MOVDC path at 0..12 | that image previews and records movie as PROVIA | widened by the live-view fragment, 5 in-place words (section 4.10) |
 
 ### 4.9 Film value 13 beyond the develop path
 
@@ -209,6 +209,38 @@ Mailbox 48 is task `movdc`. `FUN_01039500` creates mailbox `0x30` (`0x100`-byte 
 Labels: writers, readers and verdicts are byte-read unless a cell says unproved. The persistence column is static-inference: each address is compared with the area-2 source (`0x006a8074` copies `0x409c282c`, `0x118` bytes, byte-read) and with the area-3 record buffer ([custom-settings](custom-settings.md) section 2). The reading of `0x4171783c` as an alias of low RAM is inherited from [full-system emulation](full-system-emulation.md).
 
 Emulated (one emulator slot, snapshot `cc-candidate-1/boot-snapshot`, probe route of review M1, 825,036,179 instructions, `failure=None`). Committing CLASSIC CHROME set `0x00970d64` (object 1 `+0x3c`) to `0x0d` at once and `0x0096ec0c` (object 0) to `0x0d` after leaving the menu; object 0 read `0x0c`, the previously highlighted row, right after OK. The same commit set `0x009c28a6` to `0xd0` (film nibble) and `0x016995e0` to `0x0d`. Before the walk all of these read 0. `0x00919288`, the plan words, the backup, the six slot `+0x9c` words of both objects, `0x016b5ab8`, `0x0170312c`, `0x016f8394`, `0x016b797c` and `0x016d748c` stayed 0: their writers belong to capture and bracket planning, which the menu walk does not run. The probe has no shutter input (keys `up`, `down`, `left`, `right`, `ok`, `back`, `q`, `play`, `fn`, `dial-push`, `dial-left`, `dial-right`), so no capture was emulated.
+
+### 4.10 Live view and movie (live-view fragment)
+
+Owner requirement, 2026-10-22: live view previews Classic Chrome before the first flash. The change is a separate fragment, `host/firmware/classic-chrome-liveview-image5.json`, applied over the CC image 5 (`e740aeb2…89bb`, output `b361ed47…2535`); no reviewed CC byte changes. It goes into the icon candidate (`agent/cc-icon` integrates both into one flash candidate and one RAM-push payload).
+
+**Which builder drives live view.** The MOVDC builders `FUN_00edd120` (full build: record init, film fragment, preset 15/16/17, `FUN_00d5da2c`) and `FUN_00edccd8` (incremental: the same record setters, then the stage wrappers `FUN_00d5e208`.. into block `+0x101c`) build develop record `0x01699d8c` into parameter block `0x01699fd0` from the MOVDC config `0x01699584`, whose `+0x5c` is the film (`0x016995e0`). Their only entries are `FUN_00ee559c` (called from `FUN_00ed9040`, `FUN_00ed95cc`, `FUN_00ed9af0`, `FUN_00edb630` and `FUN_00ee3dac`) and `FUN_00ee5684` (from `FUN_00ee364c`, which the config push `FUN_00ed8b2c`/`FUN_00ed8b6c` calls); both build only when bit 0 of `0x01698a37` marks the config dirty (byte-read). Emulated: with the CC RAM payload resident (8.2.5 `e2e-reviewed-1`), each row highlighted in FILM SIMULATION ran the marker setter with r0 = `0x01699e9c` (record `0x01699d8c + 0x110`) and r1 = that row's film value, then the colour, tone and second chroma hooks (`0x00d67284`, `0x00d677ac`, `0x00d677bc`, `0x00d64ef4`), in task `0x2b`; the CC row gave r1 = 0 (21 marker entries, all on this record). So the body rebuilds the MOVDC block for each highlighted film, and live view and the menu's film preview use this path (static-inference over the emulated entries). `FUN_00f387c0`/`FUN_00f38e0c` → `FUN_00eef3f0` → `FUN_00eef1e4` (record `0x0169b954`, block `0x016c05a4`) never entered the marker setter during menu navigation; what it drives is unidentified. The first chroma hook `0x00d60f60` was not entered: live view uses the second stage instances (preset 15). That the ISP draws the panel from `0x01699fd0` is **unproved**: the emulator models no ISP.
+
+**Film reflection option.** None. The English label pool (payload strings `0x1120000`-`0x1141000`, 4,849 strings) holds no "NATURAL LIVE VIEW", "PREVIEW PIC. EFFECT" or "PREVIEW EXP." label; "REFLECT SHOOTING COND." is the RAW-conversion item (byte-read, label-pool scope).
+
+**The fragment.** `FUN_00eee958(film, &out)` stores the film for 0..12 through a 13-entry jump table and stores 0 with return `0x84` otherwise. Its four callers (`0x00edcddc` in `FUN_00edccd8`, `0x00edd230` in `FUN_00edd120`, `0x00eef2c0` in `FUN_00eef1e4`, `0x00eef514` in `FUN_00eef4b0`) ignore r0 and pass `out` only to `FUN_00d78a80` (develop code; `FUN_00d78418` maps 13 to 0) and, except `FUN_00eef4b0`, to the marker setter `FUN_00d78538` (byte-read; no other load of the local in any caller). Nothing else names the function: no branch, literal word or `movw`/`movt` pair in images 4, 5 or plain points into `[0x00eee958, 0x00eeea84)` (byte-read).
+
+| Address | Current | New |
+| --- | --- | --- |
+| `0x00eee960` | `e350000c` cmp r0,#12 | `e350000d` cmp r0,#13 |
+| `0x00eee964` | `979ff100` ldrls pc,[pc,r0,lsl #2] | `95810000` strls r0,[r1] |
+| `0x00eee968` | `ea00000c` b default | `93a00000` movls r0,#0 |
+| `0x00eee96c` | `00eee9b0` table[0] | `9a000041` bls `0x00eeea78` (epilogue) |
+| `0x00eee970` | `00eee9bc` table[1] | `ea00000a` b `0x00eee9a0` (default arm) |
+
+Films 0..12 give the stock output, 13 passes through, anything else takes the stock default arm. The prologue and epilogue stay, so the frame the default arm unwinds is unchanged. Table words 2..12 and the 13 arms become unreachable. RAM push: all five are activation words published in one masked window, never in setup, because the stock `ldrls` reads `0x00eee96c`/`0x00eee970` as jump targets for films 0 and 1. A task suspended inside the function resumes correctly on either side: suspended before `0x00eee960` it runs the new body; after the stock `cmp #12` the new `strls`/`movls`/`bls` act on that compare's flags and give the stock result; the table words were never instruction addresses.
+
+**Consequences.** On the MOVDC record a CC setting now gives develop code 0 and `+0x110 = 0xd`, so the reviewed hooks serve the data block there as they do for stills. `FUN_00eef1e4`'s record gets the same. `FUN_00eef4b0` always receives film 0 (its caller `FUN_00edc560` stores 0 at struct `+4`), so it stays PROVIA for every film. Movie recording uses the same MOVDC config and block, so movie records CC too; keeping it PROVIA would need a new test of a recording state inside the builders, a new mechanism the owner did not ask for. The `+0x110` census of section 4.4 already covers records `0x01699d8c` and `0x0169b954`. Live view and movie metadata are not changed.
+
+At MOVDC start, `FUN_00ee39c4` sets `0x01698a40` bit 7 (`FUN_00ee54fc`) and `FUN_00ee561c` builds the block through `FUN_00edc560` → `FUN_00eef4b0` with film 0, clearing the dirty bit; the film build follows only at the next config push (byte-read). Whether live view after power-on shows the stored film at once is not established for any film; the owner check covers it (12.2.1 item 4, 12.2.8 A2b).
+
+**Verification (native and emulated, 2026-10-22).**
+
+- Site cases (`--liveview-id5`): family `validator-*`, `FUN_00eee958` on stock and live-view image 5 for inputs 0..19, `0x7fffffff`, `0x80000000` and `0xffffffff`; expectations read from the stock jump table: 46/46 pass, 368/368 in total (`private-data/analysis/x-m1-1.50/native-case/classic-chrome/sites-lv/`).
+- Builder cases: path `lv` runs `FUN_00d77abc`, `FUN_00d791b0`, the `FUN_00edd120` film fragment (`FUN_00eee958`, `FUN_00d78a80`, `FUN_00d78538`) and preset 15, then `FUN_00d5da2c`. Stock col2 13 equals col2 0; on the CC image without the fragment col2 13 is PROVIA with marker 0; with the fragment, col2 0..12 records and blocks are byte-identical to stock, col2 13 has `+0x104 = 0`, `+0x110 = 0xd`, equals the PROVIA block outside the colour, tone and chroma ranges and the substitution oracle inside them (second instances `+0x109c..+0x10ec`, `+0x10f8..+0x10ff`). 115/115 checks with the still checks (`builder-lv/`).
+- Full-system emulator: `xm1-viewer --ram-push-e2e --flash-candidate --trajectories emulation/cc-liveview-trajectories.json` on a test DAT of `16c830ad…2c89` plus the fragment (`4fa8cad4…5931`, `liveview-parts-1/`, not a flash target) and on `16c830ad…2c89`. With the CC row highlighted, config film is `0xd` on both; the record reads `+0x104 = 0`, `+0x110 = 0xd` with the fragment and 0 without. With the fragment the block differs from the PROVIA-row block at 60 bytes, all inside the second-instance colour, tone and chroma ranges, and equals the native builder case's CC block at every range byte; without it the two blocks are identical (`liveview-e2e-lv-2/`, `liveview-e2e-cc-2/`).
+- Same emulator, segment `lv-cc-committed` (`liveview-e2e-lv-3/`): after OK on the CC row the record still reads `+0x110 = 0xd` and the block's range bytes equal the CC-row block. The harness's `back` left SHOOTING MENU open, so the shooting screen with the menu closed was not reached.
+- Camera: the abbreviated RAM-push test of the icon change carries an owner check that CC live view looks muted, not like PROVIA (12.2.1).
 
 ## 5. Why the develop code stays 0
 
@@ -679,14 +711,14 @@ The before-set of the RAM session (8.4.2a), shot on the RC0 body with nothing pu
 3. A CC JPEG differs from PROVIA on a fixed scene; exiftool reads FilmMode `Classic Chrome`.
 4. RAW CONVERSION offers CLASSIC CHROME; the fixed RAFs re-render in CC, and stock modes re-render byte-identical to the conversions made on the RC0 body in the photo session.
 5. Live persistence and capture with CC stored (review M1): select CC in the shooting menu, shoot and review the frame; register CC in C and shoot at C; power off and on with CC stored in the shooting setting and in C, check both still show CC, then shoot again in each. Any stop, freeze, error dialog or stock-mode change ends the session (spec 07 section 3.3).
-6. Known limitations: live view previews CC as PROVIA and movie records PROVIA; the Q cell shows PROVIA's glyph for a stored CC and does not offer CC; FILM 1-3 brackets cannot select CC; the CC row has no icon or help line; CC's tone curve does not follow DR or filter selection (section 4.5), which for stills matches PROVIA's own behaviour.
+6. Known limitations: without the live-view fragment (`16c830ad…2c89`) live view previews CC as PROVIA and movie records PROVIA; with it both are CC (section 4.10). The Q cell shows PROVIA's glyph for a stored CC and does not offer CC; FILM 1-3 brackets cannot select CC; the CC row has no help line, and no icon without the icon change; CC's tone curve does not follow DR or filter selection (section 4.5), which for stills matches PROVIA's own behaviour.
 7. Look acceptance (CIEDE2000 bounds, discrimination, neutrals, adjustments) per spec 19.5.6 with cc-model's thresholds.
 
 ## 12. Open questions and the flash install session
 
 ### 12.1 Open questions
 
-1. Which builder drives live view (the PROVIA outcome holds for every candidate).
+1. Live view: answered statically and in the emulator by section 4.10 (the MOVDC builders on record `0x01699d8c`); open are the ISP's use of block `0x01699fd0` for the panel, until the camera test, and what the `FUN_00f387c0` → `FUN_00eef1e4` path drives.
 2. Rendering of the `0x83e` name on hardware, the shooting-menu tile and the RAW list; tolerance of id 0 in fields 0-2 by every labels consumer on the body.
 3. RAW conversion: the binding of field `0x00954d80` to the record at `*0x014ea86c` field `+8` (static-inference), and the default row a CC RAF opens with.
 4. Maker-note field `+0x108` (`FUN_00ea9c30`) tag identity; external interpretation of `+0x110 = 0xd` in the debug dumps.
@@ -709,9 +741,9 @@ The flash target is not `16c830ad…2c89`. The owner chose a later candidate tha
 Gates `DIGEST` must clear before the go:
 
 1. Its pinned manifest rebuilds to `DIGEST` byte for byte on the session commit, as the baseline does below.
-2. One independent review of the new bytes (the icon change), scoped like review N5 against the baseline: diff the two images and explain every byte that differs.
+2. One independent review of the new bytes (the icon change and the live-view fragment of section 4.10), scoped like review N5 against the baseline: diff the two images and explain every byte that differs.
 3. `//emulation:flash-boot-check -- --firmware "$IMAGE"` passes.
-4. The RAM-push camera test of the icon change has run on the body and the owner has seen the icon in FILM SIMULATION. It comes before the flash and is this candidate's visual check.
+4. The RAM-push camera test of the icon change and the live-view fragment has run on the body before the flash: the owner has seen the icon in FILM SIMULATION, and with CLASSIC CHROME selected live view looks muted, not like PROVIA, both while the CC row is highlighted in the menu and on the shooting screen after the menu closes. It is this candidate's visual check.
 5. The 12.2.2 container check passes on `IMAGE`.
 6. The open boot-path item stays open: the hardware decompressor has never decoded an image-4 load at `0x0061c200`; RC0's `0x0061c340` is the only modified base decoded on this body (11.3 item 5, 12.1 item 6). If the icon candidate moves the image-4 load, the move is a new base, also never decoded on hardware.
 
@@ -810,6 +842,7 @@ Every stop ends camera operations for the session; nothing is retried; a new att
 | --- | --- | --- |
 | A1 | Boot normally, no USB | No setup menu; date, time, language, the P1 settings and C values unchanged; capture and playback work. BODY VERSION 1.50 is weak evidence (install procedure section 9 step 3) |
 | A2 | SHOOTING MENU > FILM SIMULATION; photograph the list | Eight rows, `CLASSIC CHROME` last with the icon the RAM-push test showed (11.4 item 2) |
+| A2b | With CLASSIC CHROME selected, close the menu and look at live view; select PROVIA and compare; also after a power cycle with CC stored | CC live view looks muted, not like PROVIA, at once after power-on as well (section 4.10) |
 | A3 | On the 2026-10-21 tabletop scene or another fixed scene, same exposure, shoot CC then PROVIA; play both back | Both frames normal; model: exiftool FilmMode `Classic Chrome` and `F0/Standard (Provia)` (11.4 item 3) |
 | A4 | RAW CONVERSION of `DSCF3149.RAF` with default settings to CLASSIC CHROME, PROVIA, Velvia and ASTIA | Six rows with CLASSIC CHROME last. Model: `classic-chrome-model photo-identical` against the RAM-session conversions, CC to `DSCF3169`, PROVIA to `DSCF3164`, Velvia to `DSCF3165`, ASTIA to `DSCF3166`. Identity is expected if `IMAGE` carries the baseline's data block and develop-path words, which the RAM payload reproduced, and stock code elsewhere (**static-inference**). A difference is a finding for host analysis, not a safety stop (11.4 item 4) |
 | A5 | Select CC, shoot, review; register CC in C and shoot at C; power off and on; both still show CC; shoot in each (review M1) | No stop, freeze or error (11.4 item 5) |
