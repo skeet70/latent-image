@@ -185,9 +185,9 @@ ccIconSetupCount = ccSetupCount + 16
 ccIconActivationCount = ccActivationCount + 7 + sum (map fragmentWordCount [minBound .. maxBound])
 ccIconPublicationCount = ccIconSetupCount + ccIconActivationCount
 
--- | From the installer start, with the 161-entry publication table.
+-- | From the installer start, with the 162-entry publication table.
 ccIconInstallerExtent :: Word32
-ccIconInstallerExtent = 0x15a0
+ccIconInstallerExtent = 0x15c0
 
 -- | The content follows the installer at every 8-byte-aligned base.
 ccIconContentOffset :: Word32
