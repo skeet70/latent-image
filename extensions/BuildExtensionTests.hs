@@ -1,10 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- Behavioural tests for the extension manifest parser: the steps an accepted
--- manifest yields and the refusals for the image2-record, font-patch-set and
--- plain-patch-set step kinds and their container order. Manifests and parts are synthetic and
--- written to a temporary directory; the base digest is a placeholder. Each
--- refusal is one change to a manifest the same run accepts.
+-- manifest yields and the refusals for the image2-record, image2-patch-set,
+-- font-patch-set and plain-patch-set step kinds and their container order.
+-- Manifests and parts are synthetic and written to a temporary directory; the
+-- base digest is a placeholder. Each refusal is one change to a manifest the
+-- same run accepts.
 module Main where
 
 import Control.Exception (IOException, SomeException, displayException, try)
@@ -251,6 +252,37 @@ run = H.withTemporary "build-extension-tests" $ \root -> do
   refuses fixture "uppercase unit hex" [with "text_utf16" (H.s "F073") iconRecord]
   refuses fixture "three hex digits" [with "text_utf16" (H.s "f07") iconRecord]
   refuses fixture "zero unit" [with "text_utf16" (H.s "0000") iconRecord]
+
+  -- image2-patch-set: after the records, before the font patch set, at most
+  -- once; segment 2 at decode_base 0x00130000.
+  let image2Image = [("segment_id", H.n 2), ("decode_base", H.s "0x00130000"), ("decode_sha256", H.s windowDigest)]
+      image2Variant name image = jsonPart fixture "image2-patch-set" name (patchSet baseDigest image)
+  image2 <- image2Variant "image2.json" image2Image
+  withImage2 <- accepts fixture "records, image 2, font, plain" [image4, image5, iconRecord, ccRecord, image2, font, plain]
+  expectSteps
+    fixture
+    "records, image 2, font, plain steps"
+    [ PatchImage Image4 (Just (LoadAddress 0x0061c200)) (root </> "image4.json")
+    , PatchImage Image5 Nothing (root </> "image5.json")
+    , WriteRecord ident83d iconName iconLayout zeros
+    , WriteRecord ident83e ccName ccLayout zeros
+    , PatchImage2 (Sha256 windowDigest) (root </> "image2.json")
+    , PatchFont (Sha256 windowDigest) (root </> "font.json")
+    , PatchPlain (Sha256 windowDigest) (root </> "plain.json")
+    ]
+    withImage2
+  _ <- accepts fixture "image-2 patch set alone" [image2]
+  refuses fixture "two image-2 patch sets" [image2, image2]
+  refuses fixture "image 2 before a record" [image2, ccRecord]
+  refuses fixture "image 2 after the font patch set" [font, image2]
+  refuses fixture "image 2 after the plain patch set" [plain, image2]
+  image2Segment3 <- image2Variant "image2-segment3.json" [("segment_id", H.n 3), ("decode_base", H.s "0x00130000"), ("decode_sha256", H.s windowDigest)]
+  refuses fixture "image 2 segment 3" [image2Segment3]
+  image2Shifted <- image2Variant "image2-shifted.json" [("segment_id", H.n 2), ("decode_base", H.s "0x00131000"), ("decode_sha256", H.s windowDigest)]
+  refuses fixture "image 2 decode_base 0x00131000" [image2Shifted]
+  image2Moved <- image2Variant "image2-moved.json" (image2Image ++ [("output_base", H.s "0x0012ff00")])
+  refuses fixture "image 2 output_base" [image2Moved]
+  refuses fixture "image 2 part digest" [with "sha256" (H.s (replicate 64 'd')) image2]
 
   total <- readIORef (fixtureChecked fixture)
   putStrLn (show total ++ " build-extension manifest checks passed")

@@ -715,8 +715,9 @@ haskell_binary(
 )
 
 # Classic Chrome icon and combined-candidate cases: FDL loaders, sizing read,
-# text resolution, label getters and the frames-remaining size class on the
-# stock, CC and combined images, run through the native-case adapter.
+# text resolution, label getters, the frames-remaining size class and the Q
+# tiles on the stock, CC, combined and Q-tile images, run through the
+# native-case adapter.
 haskell_binary(
     name = "classic-chrome-icon-cases",
     srcs = ["ClassicChromeIconCases.hs"],
@@ -731,9 +732,11 @@ haskell_binary(
         "//host:base",
         "//host:bytestring",
         "//host:classic-chrome-icon",
+        "//host:classic-chrome-q-tile",
         "//host:containers",
         "//host:directory",
         "//host:fdl-font",
+        "//host:gvff",
         "//host:filepath",
         "//host:host-support",
         "//host:json",

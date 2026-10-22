@@ -114,6 +114,14 @@ runStep tools firmware work current (index, step) = do
         ("The plain window of " ++ current ++ " has SHA-256 " ++ digest ++ ", not the plain patch set's decode_sha256")
       callProcess (toolApplier tools) [patchSet, file "plain-window.bin", file "patched-plain.bin"]
       rebuild ["replace-plain", current, file "patched-plain.bin", next]
+    PatchImage2 decodeDigest patchSet -> do
+      rebuild ["extract-image2", current, file "image2.bin"]
+      digest <- H.readRegular (16 * 1024 * 1024) (file "image2.bin") >>= H.sha256
+      H.ensure
+        (Sha256 digest == decodeDigest)
+        ("The image-2 extent of " ++ current ++ " has SHA-256 " ++ digest ++ ", not the image-2 patch set's decode_sha256")
+      callProcess (toolApplier tools) [patchSet, file "image2.bin", file "patched-image2.bin"]
+      rebuild ["replace-image2", current, file "patched-image2.bin", next]
     PatchFont decodeDigest patchSet -> do
       rebuild ["extract-font", current, file "font-window.bin"]
       digest <- H.readRegular (16 * 1024 * 1024) (file "font-window.bin") >>= H.sha256
