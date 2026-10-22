@@ -83,6 +83,23 @@ haskell_library(
 )
 
 haskell_library(
+    name = "font-window",
+    srcs = ["FujiAF/FontWindow.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":base",
+        ":bytestring",
+        ":update-container",
+    ],
+)
+
+haskell_library(
     name = "fdl-font",
     srcs = ["FujiAF/FdlFont.hs"],
     ghcopts = [

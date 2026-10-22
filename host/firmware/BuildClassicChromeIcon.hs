@@ -19,6 +19,7 @@ import FujiAF.FdlFont
 import qualified FujiAF.Host as H
 import FujiAF.JSON (encodeCanonical)
 import qualified FujiAF.LabelRecord as L
+import qualified FujiAF.FontWindow as FW
 import qualified FujiAF.UpdateContainer as U
 import Numeric (readHex, showHex)
 import System.Directory (canonicalizePath, createDirectory, doesPathExist, getCurrentDirectory)
@@ -99,7 +100,7 @@ build outputSha liveviewGiven manifestGiven outputGiven = do
   let parts = U.parsedParts parsed
 
   -- Font window, the icon's writes and the loader view before and after.
-  window <- either (H.failH . ("stock font window: " ++)) (pure . U.mediaImageBytes) (U.extractFont parts)
+  window <- either (H.failH . ("stock font window: " ++)) (pure . U.mediaImageBytes) (FW.extractFont parts)
   windowSha <- H.sha256 window
   font <- either (H.failH . ("stock font: " ++)) pure (parseFdlFont window)
   fontWrites <- either (H.failH . ("icon font writes: " ++)) pure (I.iconFontWrites font)
@@ -376,8 +377,8 @@ diff decoderGiven ccGiven iconGiven directoryGiven outputGiven = do
   image2Changed <- changedWithin "image 2" image2Load (media cc) (media icon) image2Set
 
   -- Font window.
-  ccFont <- either H.failH (pure . U.mediaImageBytes) (U.extractFont (U.parsedParts cc))
-  iconFont <- either H.failH (pure . U.mediaImageBytes) (U.extractFont (U.parsedParts icon))
+  ccFont <- either H.failH (pure . U.mediaImageBytes) (FW.extractFont (U.parsedParts cc))
+  iconFont <- either H.failH (pure . U.mediaImageBytes) (FW.extractFont (U.parsedParts icon))
   H.ensure (U.partPostTail (U.parsedParts cc) /= U.partPostTail (U.parsedParts icon) || null fontSet) "the font window did not change"
   fontChanged <- changedWithin "font window" I.fontLoadAddress ccFont iconFont fontSet
   let postTailChanged = sum [U.diffChangedBytes d | d <- partDiffs, U.diffPart d == "main post tail"]

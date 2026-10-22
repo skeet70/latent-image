@@ -16,6 +16,7 @@ import qualified Data.ByteString.Char8 as C
 import Data.Word (Word32)
 import qualified FujiAF.Lz.Format as F
 import qualified FujiAF.LabelRecord as L
+import qualified FujiAF.FontWindow as FW
 import qualified FujiAF.UpdateContainer as U
 import System.Directory (removeFile)
 import System.Environment (getArgs)
@@ -993,8 +994,8 @@ extractFont :: [FilePath] -> IO ()
 extractFont [stockPath, outputPath] = do
   stockBytes <- readContainer stockPath
   stock <- parseOrFail stockPath stockBytes
-  (windowStart, windowEnd) <- orRefuse "font carrier refused: " (U.fontWindow (U.parsedParts stock))
-  media <- orRefuse "font carrier refused: " (U.extractFont (U.parsedParts stock))
+  (windowStart, windowEnd) <- orRefuse "font carrier refused: " (FW.fontWindow (U.parsedParts stock))
+  media <- orRefuse "font carrier refused: " (FW.extractFont (U.parsedParts stock))
   B.writeFile outputPath (U.mediaImageBytes media)
   putStrLn
     ( "font window: flash "
@@ -1014,13 +1015,13 @@ replaceFont [stockPath, fontPath, outputPath] = do
   stock <- parseOrFail stockPath stockBytes
   input <- H.readRegular (8 * 1024 * 1024) fontPath
   let media = U.MediaImage input
-  (windowStart, windowEnd) <- orRefuse "font carrier refused: " (U.fontWindow (U.parsedParts stock))
-  stockWindow <- orRefuse "font carrier refused: " (U.extractFont (U.parsedParts stock))
+  (windowStart, windowEnd) <- orRefuse "font carrier refused: " (FW.fontWindow (U.parsedParts stock))
+  stockWindow <- orRefuse "font carrier refused: " (FW.extractFont (U.parsedParts stock))
   got <- H.sha256 input
   putStrLn (fontPath ++ ": " ++ show (B.length input) ++ " bytes (media form), sha256 " ++ got)
   let (changed, first) = U.firstDiff (U.mediaImageBytes stockWindow) input
   putStrLn ("font window vs input: " ++ show changed ++ " bytes differ, first at window offset " ++ maybe "-" show first)
-  parts <- orRefuse "font replacement refused: " (U.replaceFont stock media)
+  parts <- orRefuse "font replacement refused: " (FW.replaceFont stock media)
   emitted <- orRefuse "rebuild refused: " (U.rebuildContainer stock parts)
   B.writeFile outputPath emitted
   outcome <- try (verifyWindowEmitted "font window" stockBytes media (windowStart, windowEnd - windowStart) outputPath emitted)
