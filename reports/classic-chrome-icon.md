@@ -11,11 +11,11 @@ Evidence labels: **byte-read** (read from a pinned image in this pass), **static
 1. **Route: one new icon-font glyph, U+F073, reached through the free special label id `0x83d`.** Every list surface that shows a film icon draws a string id whose text is a private-use code point rendered from `FONT_ICON.FDL`; the Q tile accepts the same string ids. The glyph is added without moving any stock font byte: its record sits in the font segment's loaded window tail, one directory word points at it, and one per-mille halfword sizes it like the stock film icons (section 4).
 2. **Surfaces covered:** the shooting-menu, Fn and type-9 list rows (list icon and preview icon fields), the shooting-menu value icon, the RAW-conversion list row, and the Q film tile and Q film list. The Q list gains PRO Neg Std and PRO Neg Hi rows with their stock icon strings, so it offers the same eight films as the shooting list (section 5.3).
 3. **Surfaces left as they are:** the live-view info overlay, drawn by `FUN_01146cf0` through `0x01147c00` (emulated), shows no film icon for PROVIA and none for CC, because its switch ends at film value 12 and needs new code to reach 13 (section 2.3); the FILM 1-3 bracket lists, which cannot select CC; the unlabelled nine-row list.
-4. **Budget:** no prefix-window byte. The font segment's window tail holds 608 new bytes of its 12,332 (glyph record 376, Q values 72, Q labels 144, alignment 16); image 2 changes the 66-byte `0x83d` record in place; image 4 changes five words, three of them icon fields of the reviewed CC label arrays (section 6).
+4. **Budget:** no prefix-window byte. The font segment's window tail holds the 714-byte glyph record, the Q values (72), the Q labels (144) and the 1,780-byte Q tile from `0x7cfe0`, each start rounded to 16 bytes, of its 12,332 bytes; image 2 changes the 66-byte `0x83d` record and the Q glyph `0x37c` record pointer in place; image 4 changes five words, three of them icon fields of the reviewed CC label arrays (section 6).
 5. **The reviewed CC simulation bytes stay.** The CC patch sets, stubs, data block, `0x83e` record and gates are carried unchanged. The only words inside reviewed CC arrays that change are the three label-icon fields, from 0 to `0x83d`.
 6. **Timing (owner decision 2026-10-22):** the icon goes into the first CC flash, together with the live-view preview fragment designed by the flash-prep session and the frames-remaining fix. The reviewed `16c830ad…2c89` is not flashed. Before the flash, an abbreviated RAM-push session tests the icon surfaces, CC live view and the frame count with the CC simulation unchanged (section 11).
 7. **Frames-remaining fix (owner-approved 2026-10-22):** with CC selected the reviewed candidate shows frames remaining 0 and MEMORY FULL, because the stock film-class mapper `FUN_00e42414` sends film 13 to an invalid class (section 9.4). Three words of that mapper change so 13 takes PROVIA's class; every other input keeps its stock class.
-8. **Combined candidate:** flash DAT SHA-256 `78f7526002608540a8a1c6957306f29760371cd5146d2455587a0900bacaa7ba`; RAM payload of 161 publications, allocation `0x1990`, contract `243587bce9121f27400b83c77d61696dae1595c75e78c0df87509396be1ee9ec`, unreviewed (sections 9 and 10).
+8. **Combined candidate (design B, with the full-size Q tiles of section 14):** flash DAT SHA-256 `98a66780f464731a184f1128aab0eb4b954adcdbbed99a214480720bd5a81606`; RAM payload of 162 publications, allocation `0x21fc`, contract `04df9a5ae4574f0c28f2c2ce67a581a96c7f092036ece6c316eced593fa1de32`, unreviewed (sections 9 and 10). The first submission, `78f75260…a7ba` with the C-sub-C glyph and the 161-publication payload `243587bc…e9ec`, is superseded.
 
 ## 2. Surface inventory
 
@@ -104,9 +104,9 @@ Label id `0x83d` is the only free special id: `0x83c` is the blank id every unla
 | --- | --- | --- | --- | --- |
 | font | `0x003f821d` (unaligned word) | `0x0000d680` (begin `0xd680`, flags 0) | `0x0103f2f3` | U+F073 directory word |
 | font | `0x0043826b` (unaligned halfword) | `0x03e8` | `0x0320` | U+F073 per-mille size 800; only byte `0x0043826b` changes |
-| font | `[0x00438fe0, 0x00439158)` | `0x00` | glyph record, 376 bytes, SHA-256 `d8f69314…0429` | U+F073 outline |
-| font | `[0x00439160, 0x004391a8)` | `0x00` | Q values: rows 0, 3, 1, 7, `0xc`, 5, 6, 2, terminator | Q film list |
-| font | `[0x004391b0, 0x00439240)` | `0x00` | Q labels: `0xff00077b`, `0xff00077c`, `0xff000773`, `0xff000777`, `0xff00077a`, `0x49a`, `0x496`, `0x83d`, terminator | Q film list |
+| font | `[0x00438fe0, 0x004392aa)` | `0x00` | glyph record, 714 bytes, SHA-256 `b4bd628d…5247` | U+F073 outline |
+| font | `[0x004392b0, 0x004392f8)` | `0x00` | Q values: rows 0, 3, 1, 7, `0xc`, 5, 6, 2, terminator | Q film list |
+| font | `[0x00439300, 0x00439390)` | `0x00` | Q labels: `0xff00077b`, `0xff00077c`, `0xff000773`, `0xff000777`, `0xff00077a`, `0xff000779`, `0xff000778`, `0xff00037c`, terminator | Q film list (section 14) |
 | image 2 | `[0x0037b7c6, 0x0037b808)` | 24 `0xe1xx` units, layout `{20, 20, 30, 36, 48}` | U+F073, layout `{540, 24, 30, 36, 48}` | icon string `0x83d` |
 | image 4 | `0x0061c320` | 0 | `0x83d` | CC shooting quadruple field 0 (inside the reviewed array) |
 | image 4 | `0x0061c324` | 0 | `0x83d` | CC shooting quadruple field 1 (inside the reviewed array) |
@@ -148,7 +148,7 @@ Layout (`FujiAF.ClassicChromeIcon`): the glyph record starts at font offset `0x7
 
 ## 7. Artwork
 
-The icon is original pixel art for this project (`host/firmware/classic-chrome-icon.txt`, AGPL-3.0-only), drawn on the 45 x 45 em the font uses for a 36-pixel request, in the X-M1 icon family's visual language: a film cartridge silhouette (spool tab, canister, a leader with sprocket holes) with the film's letter knocked out of the canister. Classic Chrome takes the PRO Neg family's two-letter form: a knocked-out `C` in the canister for Classic and a solid subscript `C` below the leader for Chrome, read as C-sub-C as PRO Neg's icons read N-sub-S and N-sub-H. Strokes are three pixels, the sprocket holes two, and every outer corner steps by one pixel. No Fujifilm pixel, outline or program byte is copied: the cartridge geometry, letter shapes and their outline program are drawn and encoded here. Later Fujifilm models' Classic Chrome icon was not consulted.
+The icon is original pixel art for this project (`host/firmware/classic-chrome-icon.txt`, AGPL-3.0-only), drawn on the 45 x 45 em the font uses for a 36-pixel request. It is design B of the owner's 2026-10-22 redesign, in the style of the stock SEPIA icon: the X-M1 film-cartridge silhouette drawn solid, with the word CHROME knocked out of it in original 5 x 11 letters with one-pixel strokes and three sprocket holes along the lower right. Classic Chrome is one film, so the PRO Neg family's letter-and-subscript form (the first submission, C-sub-C) is dropped. No Fujifilm pixel, outline or program byte is copied, and later models' Classic Chrome icon was not consulted.
 
 ```
 .............................................
@@ -161,33 +161,35 @@ The icon is original pixel art for this project (`host/firmware/classic-chrome-i
 ..########################...................
 ..#########################################..
 ..##########################################.
+..##########################################.
+..##########################################.
+..###.....#.###.#....##.....#.###.#.....####.
+..###.#####.###.#.###.#.###.#..#..#.########.
+..###.#####.###.#.###.#.###.#.#.#.#.########.
+..###.#####.###.#.###.#.###.#.#.#.#.########.
+..###.#####.###.#.###.#.###.#.###.#.########.
+..###.#####.....#....##.###.#.###.#....#####.
+..###.#####.###.#.#.###.###.#.###.#.########.
+..###.#####.###.#.##.##.###.#.###.#.########.
+..###.#####.###.#.##.##.###.#.###.#.########.
+..###.#####.###.#.###.#.###.#.###.#.########.
+..###.....#.###.#.###.#.....#.###.#.....####.
+..##########################################.
+..##########################################.
+..##########################################.
+..##########################################.
 ..###########################..###..###..###.
-..#######............########..###..###..###.
-..######.............#######################.
-..######.............#######################.
-..#####...##################################.
-..#####...##################################.
-..#####...##################################.
-..#####...#################################..
-..#####...################...................
-..#####...################...................
-..#####...################...................
-..#####...################.....###########...
-..#####...################....############...
-..#####...################...#############...
-..#####...################...###.............
-..######.............#####...###.............
-..######.............#####...###.............
-..#######............#####...###.............
-..########################...###.............
-..########################...###.............
-..########################...###.............
-..########################...#############...
-..########################....############...
-...######################......###########...
+..###########################..###..###..###.
+..##########################################.
+..#########################################..
+..########################...................
+..########################...................
+...######################....................
 ```
 
-The encoder (`host/FujiAF/ClassicChromeIcon.hs`) groups the art's row spans into ten y-monotone groups and emits each as two edge chains of `b5`, `92`, `96`, `03` and `07` instructions with coordinates at pixel centres, `round((p + 0.5) * 256 / 45)`: 370 program bytes, SHA-256 `096e72a85b6f3285f92d69669976cfa9009bd59a0af36a5dc72230f86971e964`. Rasterised by the reference decoder at a 45-pixel em it equals the art pixel for pixel; at 30 and 36 pixels the sprocket holes thin to one pixel, as the stock icons' do.
+The encoder (`host/FujiAF/ClassicChromeIcon.hs`) splits the art's row spans into y-monotone groups and emits each as two edge chains of `b5`, `92`, `96`, `03` and `07` instructions. Every coordinate lies on a pixel edge, `round(p * 256 / 45)`, so two groups that meet share one boundary coordinate. The first submission placed group edges at pixel centres; the firmware draws glyphs with partial pixel coverage, so each group covered half of its first and last rows and grey seams showed where groups met, across the whole icon in line with the sprocket holes (emulated, `private-data/analysis/classic-chrome-icon-emu/redesign-1/diag-emulator-list-cell-8x.png`). The B program is 708 bytes (SHA-256 `f701df847dee3e07011df42f3eac28625ae53239331116d6f131f8d8c44935eb`) in 23 groups; the record is 714 bytes (`b4bd628d…5247`). The emulator draws it without seams on the list, the shooting-menu value and the Q tile (section 9.3).
+
+The Q tile is drawn in the same design at the stock 80 x 48 tile size (`host/firmware/classic-chrome-q-tile.txt`, encoded as GVFF by `FujiAF.Gvff`; section 14).
 
 ## 8. Composition
 
@@ -217,12 +219,12 @@ All runs use the pinned inputs; private receipts are named in each row. The comb
 
 | Item | Value |
 | --- | --- |
-| Combined DAT | `private-data/analysis/classic-chrome-icon/build-combined-1-pinned/FWUP0002.DAT`, SHA-256 `78f7526002608540a8a1c6957306f29760371cd5146d2455587a0900bacaa7ba`; the pinned manifest `parts-combined-1-pinned/classic-chrome-icon.json` (`81ae65f8…6bc9`) reproduces it |
-| Parts | `cc-icon-image4.json` `522679c1…c1ed`, `cc-icon-image5.json` `de7aeab3…55c1`, `cc-icon-font.json` `d06b3282…c4db`, the pinned `cc-plain.json`, records `0x83d` and `0x83e` |
-| Changed bytes against `16c830ad…2c89` (`diff-combined-1/changed-bytes.json`) | font window 405 bytes in 5 writes; image 2 53 bytes (`0x83d` record); image-4 decode 12 bytes in 5 writes; image-5 decode 18 bytes in 8 writes (live view 15, frames 3); otherwise only the main checksum word and the re-encoded image-4 and image-5 records; plain unchanged |
-| `//emulation:flash-boot-check` | passed, SHOOTING MENU at 450,019,215 instructions, final frame equal to the CC candidate's (`private-data/flash-boot-checks/cc-icon-78f75260/flash-boot-receipt.json`) |
+| Combined DAT (design B with the Q tiles) | `private-data/analysis/classic-chrome-icon/build-b-1-pinned/FWUP0002.DAT`, SHA-256 `98a66780f464731a184f1128aab0eb4b954adcdbbed99a214480720bd5a81606`; the pinned manifest `parts-b-1-pinned/classic-chrome-icon.json` (`670da4dc…91ca`) reproduces it, and q-icon's independent build of the same parts gives the same digest |
+| Parts | `cc-icon-image4.json`, `cc-icon-image5.json` (CC entries plus live-view and frames fragments), `cc-icon-font.json` (directory word, per-mille, record 714, Q values, Q labels, tile 1,780 bytes), `cc-icon-image2.json` (the Q glyph `0x37c` pointer `0x0022d28c`: `0x0027dbfc` to `0x00439390`), the pinned `cc-plain.json`, records `0x83d` and `0x83e` |
+| Changed bytes against `16c830ad…2c89` | image 2 56 bytes in 2 writes (`0x83d` record, tile pointer), font window 1,592 bytes in 6 writes, image-4 decode 12 bytes, image-5 decode 18 bytes (live view 15, frames 3); otherwise only the main checksum word and the re-encoded image-4 and image-5 records; plain unchanged (q-icon's diff of the same DAT) |
+| `//emulation:flash-boot-check` | passed on `98a66780` (`private-data/flash-boot-checks/cc-icon-98a66780/` and, independently, `cc-icon-b-qtile-1/`) |
 | Regression | RC0 rebuilds to `acb0fbbb…9ca8` and CC to `16c830ad…2c89` with the changed tools; every reviewed builder-digest source is byte-identical; `//transport:ram-push-review-bytes` and `//transport:ram-push-cc-review-bytes` pass |
-| RAM payload | 161 publications (100 setup, 61 activation), allocation `0x1990`, contract `243587bce9121f27400b83c77d61696dae1595c75e78c0df87509396be1ee9ec`, builder digest `098e232484be35e315c06dd63800822a8c499b232a780d198c6ea631bc3711dd`; runtimes `8e9c5b7c…1bb8` at `0x00c20000`, `ace57ba8…f7ac` at `0x00c21f88`, `021364f1…df9a` at `0x00a7e8c8` (`private-data/analysis/classic-chrome-patch/ram-push/icon-frames-relink-*/`); read plans `cc-icon-frames-ram-push-prepush.json` (56 windows) and `cc-icon-frames-ram-push-post-reboot.json` (47) |
+| RAM payload | 162 publications (100 setup, 62 activation), allocation `0x21fc`, installer extent `0x15c0`, contract `04df9a5ae4574f0c28f2c2ce67a581a96c7f092036ece6c316eced593fa1de32`, re-pinned unreviewed at `642aac4`; runtimes `4f871b2a…ebd3` at `0x00c20000`, `2fce1f08…e16a` at `0x00c21f88`, `03284c54…fe58` at `0x00a7e8c8` (`private-data/analysis/classic-chrome-patch/ram-push/icon-b-relink-*/`); read plans `cc-icon-b-ram-push-prepush.json` (57 windows) and `cc-icon-b-ram-push-post-reboot.json` (48); `//transport:ram-push-cc-icon-reviewed-build-check` accepts at both reference bases and refuses every perturbation |
 
 ### 9.2 Native cases
 
@@ -244,13 +246,14 @@ All runs use the pinned inputs; private receipts are named in each row. The comb
 
 Flash candidate runs (`xm1-viewer --ram-push-e2e --flash-candidate`, trajectories `emulation/classic-chrome-icon-trajectories.json`, receipts `private-data/analysis/classic-chrome-icon-emu/`):
 
-| Check | Reviewed CC `16c830ad` (`baseline-1`, `baseline-2`) | Combined `78f75260` (`combined-1`) |
+| Check | Reviewed CC `16c830ad` (`baseline-1`, `baseline-2`) | Combined B `98a66780` (`combined-b`, `b-qtile-1`) |
 | --- | --- | --- |
-| Frames remaining, PROVIA / Velvia / CC | 660 / 660 / 0 with MEMORY FULL on menu close; mapper class 6, validator -1, all 47 counts 0 | 660 / 660 / 660, no menu message; mapper class 0, validator 0; the 188-byte table at `0x009432a8` equals PROVIA's |
-| Icon on the FILM SIMULATION list, the shooting-menu value, the Q film tile and the Q film list | no icon | C-sub-C icon on each (`combined-1/segment-cc-q-film-back/screenshots/cc-film-list-row.png`, `cc-q-film-cell.png`, `cc-q-film-next.png`, `cc-q-film-back.png`; `segment-cc-film-value/screenshots/cc-shooting-menu-film-value.png`) |
-| Stock surfaces, 14 frames (Velvia and PROVIA menus, list, value, live view, Q tile and dial states) | reference | pixel-identical to the baseline; CC frames differ only inside the icon cells and the moving test-pattern background |
+| Frames remaining, PROVIA / Velvia / CC | 660 / 660 / 0 with MEMORY FULL on menu close; mapper class 6, validator -1, all 47 counts 0 | 660 / 660 / 660, no menu message; the 188-byte table at `0x009432a8` is byte-identical for all three (`combined-b/cc-live-view-frames-660.png`) |
+| Icon on the FILM SIMULATION list and the shooting-menu value | no icon | CHROME cartridge on both, no seams (`combined-b/cc-film-list-row.png`, `combined-b/cc-shooting-menu-film-value.png`) |
+| Q film tile, CC and both PRO Neg | CC draws PROVIA's tile; PRO Neg not offered | CHROME tile at the stock 80 x 48 size; PRO Neg Std and Hi with their stock tiles; focused and unfocused (`combined-b/cc-q-film-cell.png`, `combined-b/proneg-std-q-film-cell.png`, `combined-b/proneg-hi-q-film-cell.png`; all segments in `b-qtile-1/`) |
+| Segments | | `classic-chrome-icon-trajectories.json` 26 of 26 passed; `classic-chrome-q-tile-trajectories.json` 14 of 14 passed (q-icon) |
 
-RAM-push rehearsal of the combined payload (`xm1-viewer --ram-push-e2e --classic-chrome-icon --unreviewed-relink`, receipt `private-data/analysis/classic-chrome-icon-emu/ram-e2e-1/e2e-result.json`): install with 161 validated and 61 activation words stored; list icon, commit (film 13), shooting-menu value, Q tile, Q dial to PROVIA and back, menu close with no message and a frames table equal to PROVIA's, PROVIA reselection, `ram-unload` (161 restored), the list after unload with seven rows and every icon word old, and a cold restart reading all 161 words old: every segment passes.
+RAM-push rehearsal of the 162-publication payload (`xm1-viewer --ram-push-e2e --classic-chrome-icon --unreviewed-relink`, receipt `private-data/analysis/classic-chrome-icon-emu/ram-e2e-b2/e2e-result.json`): install with 162 validated, 100 setup and 62 activation words stored, peer lines 162; list icon, commit (film 13), shooting-menu value, Q tile, Q dial to PROVIA and back, menu close with no message and a frames table equal to PROVIA's, PROVIA reselection, `ram-unload` (162 old words verified), the list after unload with seven rows, and a cold restart reading all 162 words old: every segment passes. An earlier run (`ram-e2e-b`) is void: a concurrent viewer run restaged the shared runtime directory `private-data/emulator-runtimes/xm1-ram-push-e2e`, so its cold restart booted the flash DAT; e2e runs must not overlap.
 
 Not covered by the emulator: the RAW-conversion list (playback stops on the known MMIO gap), the live-view preview colour (synthetic camera source), the shutter (no S1/S2 input in the key model), and any hardware rendering.
 
@@ -282,7 +285,7 @@ Inputs: this report; section 5.2 and the fragments `host/firmware/classic-chrome
 
 1. Mechanical carry checks: every entry of the pinned `cc-image4.json`, `cc-image5.json` and `cc-plain.json` appears unchanged and in order in the combined sets (the generator refuses otherwise); the `0x83e` step is identical; `changed-bytes.json` shows nothing outside section 9.1's groups; the RAM manifest's CC publications equal the reviewed contract `00308606…32d9` entry for entry except index 124; RC0 and CC rebuild to their pins.
 2. Reviewed words that change: in the flash image the three label-icon words `0x0061c320`, `0x0061c324`, `0x0061c3dc` (0 to `0x83d`), written as overlay writes over the reviewed CC label blobs; in the RAM payload only CC publication 124 at `0x0061c3dc` (old `0x49c`, CC new 0, combined new `0x83d`), because the other two are 0 on RC0 and in CC and are new icon publications.
-3. Font: the U+F073 directory word and the loaders' flag rule (negative span, flag 1, record length), the U+F072 consequence, the per-mille byte, the 376-byte record against the art, and the font-tail ownership census (section 6).
+3. Font: the U+F073 directory word and the loaders' flag rule (negative span, flag 1, record length), the U+F072 consequence, the per-mille byte, the 714-byte record against the art (pixel-edge encoding, section 7), the Q tile (section 14), and the font-tail ownership census (section 6).
 4. Label data: the `0x83d` record, the Q arrays, the two Q pointers and their walker-safe order (labels before values).
 5. New mechanism: the five live-view words (flash-prep's packet, classic-chrome-patch section 4.10; they rewrite five words of `FUN_00eee958` in one masked window) and the three frames words (section 9.4, with both install mixed states executed). The install mixed states are safe for every film value; the unload mixed states are not (classic-chrome-patch 4.10): a task suspended inside `FUN_00eee958` with film 13 selected when `ram-unload` restores the words can branch to an instruction word or store into its caller's code, and one suspended inside `FUN_00e42414` gives PRO Neg Hi one transient zero count. The restore order inside the masked window cannot change this, because only tasks already suspended inside the words see a mixed state. Unload therefore carries the precondition of section 11 step 5. Rollback also restores the Q values pointer (index 152) before the labels pointer (151); a walker suspended between reading the two would pair eight value rows with the five stock label rows, which the same precondition (no menu open) excludes.
 6. Tooling: the FDL parser and encoder, the font-window carrier, the overlay rule of `apply-patch-set`, the UTF-16 record text, the `font-patch-set` step, and the RAM builder's publications, relinked offset arithmetic, contract and 19 pins (`transport/ram-push-cc-icon-review.json`, unreviewed; `//transport:ram-push-cc-icon-review-verdicts` fails until the review).
@@ -291,21 +294,21 @@ Inputs: this report; section 5.2 and the fragments `host/firmware/classic-chrome
 
 A RAM-push session on the RC0 body under its own H2 go, after the review of section 10. Stored `0xf7` is 0 on the body (E-STORED-F7-RESTORE-RUN-150), so the session assumes `commit-f7-enable` in a jig session first (H3, its own per-run go) and `commit-f7-restore` after; if the per-boot USB toggle of issue 81 lands first, it replaces both. The CC simulation is unchanged, so the CC session's look checks (classic-chrome-patch section 8.4.4 U3-U6) are not repeated.
 
-1. Host: on the session commit, `//transport:ram-push-cc-icon-review-bytes`, `-review-verdicts`, `-camera-pins` and `//host/firmware:classic-chrome-icon-ram-tests` pass and `bazel run //transport:ram-push-cc-icon-reviewed-build-check` exits 0; output directories do not exist; `rehearse ram-alloc 0x1990` and both read plans rehearse.
-2. Pre-push read with `cc-icon-frames-ram-push-prepush.json`: every old word of the 161 publications and the route's reviewer windows; any mismatch stops before a write.
-3. `ram-alloc 0x1990`, `ram-relink`, `ram-push` as in classic-chrome-patch 8.4.3, with 161 publications.
+1. Host: on the session commit, `//transport:ram-push-cc-icon-review-bytes`, `-review-verdicts`, `-camera-pins` and `//host/firmware:classic-chrome-icon-ram-tests` pass and `bazel run //transport:ram-push-cc-icon-reviewed-build-check` exits 0; output directories do not exist; `rehearse ram-alloc 0x21fc` and both read plans rehearse.
+2. Pre-push read with `cc-icon-b-ram-push-prepush.json`: every old word of the 162 publications and the route's reviewer windows; any mismatch stops before a write.
+3. `ram-alloc 0x21fc`, `ram-relink`, `ram-push` as in classic-chrome-patch 8.4.3, with 162 publications.
 4. Owner checks with the payload resident:
-   - I1 SHOOTING MENU > FILM SIMULATION: eight rows; the CC row's icon cell shows the C-sub-C icon; the seven RC0 rows unchanged.
+   - I1 SHOOTING MENU > FILM SIMULATION: eight rows; the CC row's icon cell shows the CHROME cartridge icon; the seven RC0 rows unchanged.
    - I2 select CLASSIC CHROME, back to the shooting menu page: the FILM SIMULATION item shows the CC icon as its value.
    - I3 shooting screen with CC: frames remaining equals the PROVIA count on the same card and no MEMORY FULL appears; switch to PROVIA and back to compare.
    - I4 live view with CC: the preview looks muted like CC, not like PROVIA, in the menu highlight and on the shooting screen; switch to PROVIA and back. No film icon shows in the overlay for CC or PROVIA.
-   - I5 Q menu: the film tile shows the CC icon (smaller than the stock tiles' vector icons); dialling offers eight films, PRO Neg Std and Hi with their icons, the stock five unchanged.
+   - I5 Q menu: the film tile shows the CHROME cartridge at the stock tiles' size; dialling offers eight films, PRO Neg Std and Hi with their stock full-size tiles, the stock five unchanged.
    - I6 one CC frame shot and played back normally.
    - I7 optional, with a RAF on the card: PLAYBACK > RAW CONVERSION > FILM SIMULATION shows the CC row with its icon.
    - I8 PLAYBACK > PLAYBACK MENU > IMAGE SEARCH, each search type the menu offers, on a card with images: no screen title shows the CC icon (screen 170 draws label `0x83d` as its title, section 5.4). A title showing the icon is cosmetic and is recorded, not a stop.
-5. Leaving, with this precondition for `ram-unload` (classic-chrome-patch 8.4.6 E1-E3): a stock film selected in SHOOTING MENU > FILM SIMULATION and, if CC was set at C, a stock film selected at C (no CUSTOM SET); the camera back on the shooting screen with no menu open and no card activity, confirmed in chat. A task inside `FUN_00eee958` with film 13 selected at unload can fault (section 10 item 5). Then `ram-unload` (161 restored), power off; the reboot check with `cc-icon-frames-ram-push-post-reboot.json` reads every old word. On the S-UNEXPECTED path the model asks for `ram-unload` only after the same precondition holds; otherwise power off.
+5. Leaving, with this precondition for `ram-unload` (classic-chrome-patch 8.4.6 E1-E3): a stock film selected in SHOOTING MENU > FILM SIMULATION and, if CC was set at C, a stock film selected at C (no CUSTOM SET); the camera back on the shooting screen with no menu open and no card activity, confirmed in chat. A task inside `FUN_00eee958` with film 13 selected at unload can fault (section 10 item 5). Then `ram-unload` (162 restored), power off; the reboot check with `cc-icon-b-ram-push-post-reboot.json` reads every old word. On the S-UNEXPECTED path the model asks for `ram-unload` only after the same precondition holds; otherwise power off.
 
-Any stop, freeze, error dialog or stock row drawn differently ends the session (classic-chrome-patch 8.4.8). The go names the operation, the session commit, the contract digest `243587bc…e9ec` and the reference runtimes of section 9.1. The flash of `78f75260…a7ba` follows under its own H3 go.
+Any stop, freeze, error dialog or stock row drawn differently ends the session (classic-chrome-patch 8.4.8). The go names the operation, the session commit, the contract digest `04df9a5a…de32` and the reference runtimes of section 9.1. The flash of `98a66780…1606` follows under its own H3 go.
 
 ## 12. Open questions
 
@@ -340,7 +343,9 @@ devenv shell -- bazel build //emulation:classic-chrome-icon-cases && bazel-bin/e
 devenv shell -- bazel test //host/firmware:classic-chrome-icon-tests //host/firmware:classic-chrome-icon-ram-tests //transport:ram-push-cc-icon-review-bytes
 ```
 
-## 14. Full-size Q tiles (fragment over `78f75260…a7ba`)
+## 14. Full-size Q tiles
+
+This section was designed as a fragment over the first submission `78f75260…a7ba`. It is now part of the combined candidate `98a66780…1606`: the Q label words live in `qLabelsArray`, the tile and its image-2 pointer come from `build-classic-chrome-icon`, and `build-classic-chrome-q-tile` is removed. The figures below that name `78f75260`, `e91f9b67` or the 161-publication payload describe the development fragment; the current figures are in sections 1 and 9.
 
 The combined candidate draws the CC icon in the Q film tile at list size, ink 47 x 32 against the stock tiles' 82 x 44, and draws PRO Neg Std and Hi there at list size too. This fragment gives all eight Q rows full-size tiles: CC an original 80 x 48 `GVFF` tile through the unreferenced Q glyph `0x37c`, the two PRO Neg rows the stock tiles `0x779` and `0x778`. It needs no special label id, no gate, no relocation and no code byte; images 4, 5 and plain are unchanged.
 
