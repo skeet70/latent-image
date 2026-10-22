@@ -39,6 +39,7 @@ import qualified Data.Vector as V
 import Data.Word (Word32)
 import FujiAF.ClassicChrome (Address (..), image5DecodeBase, stockFirmwareSha256)
 import FujiAF.ClassicChromeIcon (Image4Write (..), iconGlyphRecord, iconImage4Writes, iconPerMille, label83dRecord, qLabelsArray, qValuesArray)
+import FujiAF.ClassicChromeQTile (Image2Write (..), qTileGvff, qTileImage2Writes)
 import FujiAF.ClassicChromeRam (CcPublication (..), PublicationPhase (..), Rc0Images (..), ccActivationCount, ccInstallerStart, ccPublicationCount, ccSetupCount)
 import FujiAF.JSON (decodeStrictIntegers)
 import Numeric (readHex, showHex)
@@ -136,21 +137,23 @@ parseImage5Fragment fragment document = do
         '0' : 'x' : digits | length digits == 8, [(w, "")] <- readHex digits -> Right w
         _ -> Left (label ++ "eight-digit hex word required, got " ++ t)
 
--- | Allocation addresses of the glyph record and the two Q arrays.
+-- | Allocation addresses of the glyph record, the two Q arrays and the Q tile.
 data IconAllocation = IconAllocation
   { allocationRecord :: Address
   , allocationQValues :: Address
   , allocationQLabels :: Address
+  , allocationQTile :: Address
   }
   deriving (Eq, Show)
 
--- Offsets from 'ccIconContentOffset': the record, then the Q values and the
--- Q labels, each start rounded up to 8 bytes, so the arrays follow a record
--- of any length.
-recordOffset, qValuesOffset, qLabelsOffset :: Word32
+-- Offsets from 'ccIconContentOffset': the record, then the Q values, the Q
+-- labels and the Q tile, each start rounded up to 8 bytes, so what follows
+-- moves with the record's length.
+recordOffset, qValuesOffset, qLabelsOffset, qTileContentOffset :: Word32
 recordOffset = 0
 qValuesOffset = align8 (recordOffset + byteLength iconGlyphRecord)
 qLabelsOffset = align8 (qValuesOffset + byteLength qValuesArray)
+qTileContentOffset = align8 (qLabelsOffset + byteLength qLabelsArray)
 
 align8 :: Word32 -> Word32
 align8 n = (n + 7) `div` 8 * 8
@@ -158,25 +161,28 @@ align8 n = (n + 7) `div` 8 * 8
 byteLength :: B.ByteString -> Word32
 byteLength = fromIntegral . B.length
 
--- | The record, the Q values and the Q labels at their offsets from
--- 'ccIconContentOffset'.
+-- | The record, the Q values, the Q labels and the Q tile at their offsets
+-- from 'ccIconContentOffset'.
 iconContent :: B.ByteString
 iconContent =
-  pad qValuesOffset iconGlyphRecord <> pad (qLabelsOffset - qValuesOffset) qValuesArray <> qLabelsArray
+  pad qValuesOffset iconGlyphRecord
+    <> pad (qLabelsOffset - qValuesOffset) qValuesArray
+    <> pad (qTileContentOffset - qLabelsOffset) qLabelsArray
+    <> qTileGvff
   where
     pad n bytes = bytes <> B.replicate (fromIntegral n - B.length bytes) 0
 
 iconContentSize :: Word32
-iconContentSize = qLabelsOffset + byteLength qLabelsArray
+iconContentSize = qTileContentOffset + byteLength qTileGvff
 
 iconAllocation :: Word32 -> IconAllocation
 iconAllocation base =
   let at offset = Address (base + ccIconContentOffset + offset)
-   in IconAllocation (at recordOffset) (at qValuesOffset) (at qLabelsOffset)
+   in IconAllocation (at recordOffset) (at qValuesOffset) (at qLabelsOffset) (at qTileContentOffset)
 
 ccIconSetupCount, ccIconActivationCount, ccIconPublicationCount :: Int
 ccIconSetupCount = ccSetupCount + 16
-ccIconActivationCount = ccActivationCount + 6 + sum (map fragmentWordCount [minBound .. maxBound])
+ccIconActivationCount = ccActivationCount + 7 + sum (map fragmentWordCount [minBound .. maxBound])
 ccIconPublicationCount = ccIconSetupCount + ccIconActivationCount
 
 -- | From the installer start, with the 161-entry publication table.
@@ -259,8 +265,8 @@ iconRamPublications rc0 (FontWindow font) image5Words allocation cc = do
       changedWords old new lo hi = [(a, old a, new a) | a <- [lo, lo + 4 .. hi - 4], old a /= new a]
 
   unless (B.length label83dRecord == 66) $ Left "0x83d record is not 66 bytes"
-  unless (B.length iconGlyphRecord == fromIntegral qValuesOffset - fromIntegral recordOffset && B.length qValuesArray == fromIntegral (qLabelsOffset - qValuesOffset)) $
-    Left "glyph record or Q values length differs from the allocation layout"
+  unless (byteLength iconGlyphRecord <= qValuesOffset - recordOffset && byteLength qValuesArray <= qLabelsOffset - qValuesOffset && byteLength qLabelsArray <= qTileContentOffset - qLabelsOffset) $
+    Left "glyph record or Q arrays overrun the allocation layout"
   let record83dWords = changedWords image2Old image2New (record83d .&. complement 3) ((record83dEnd + 3) .&. complement 3)
 
   unless (B.unpack (slice font (directoryByte - fontRamBase) 4) == [0x80, 0xd6, 0x00, 0x00]) $
@@ -273,6 +279,12 @@ iconRamPublications rc0 (FontWindow font) image5Words allocation cc = do
       perMilleWords = changedWords fontOld (wordAt perMilleFont fontRamBase) (perMilleByte .&. complement 3) ((perMilleByte + 5) .&. complement 3)
       directoryWords = changedWords fontOld (wordAt directoryFont fontRamBase) (directoryByte .&. complement 3) ((directoryByte + 7) .&. complement 3)
 
+  tileWord <- case qTileImage2Writes of
+    [w] -> do
+      let Address target = allocationQTile allocation
+      unless (image2Old (i2Address w) == i2Old w) $ Left ("RC0 Q glyph 0x37c record pointer is not the stock " ++ hex (i2Old w))
+      pure (i2Address w, i2Old w, target, i2Role w ++ " (allocation copy)")
+    _ -> Left "the Q tile carries other than one image-2 word"
   pointers <- qPointers allocation
   qWords <- forM pointers $ \(w, Address target) -> do
     let a = i4Address w
@@ -302,6 +314,7 @@ iconRamPublications rc0 (FontWindow font) image5Words allocation cc = do
       activation =
         map (\(a, o, n) -> publication Activation (a, o, n, "U+F073 directory word to the allocation's glyph record")) directoryWords
           ++ map (publication Activation) labelWords
+          ++ [publication Activation tileWord]
           ++ map (publication Activation) qWords
           ++ map (publication Activation) fragmentWords
       carried = [maybe p (\c -> p {publicationNew = carryNew c}) (lookup i [(carryIndex c, c) | c <- carries]) | (i, p) <- zip [0 :: Int ..] cc]

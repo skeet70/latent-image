@@ -13,6 +13,7 @@ import Data.Word (Word32)
 import FujiAF.ClassicChrome (Address (..), word32LE)
 import FujiAF.ClassicChromeIcon (iconGlyphRecord, label83dRecord, qLabelsArray, qValuesArray)
 import FujiAF.ClassicChromeIconRam
+import FujiAF.ClassicChromeQTile (qTileGvff)
 import FujiAF.ClassicChromeRam
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
@@ -80,7 +81,7 @@ main = do
 
   let rc0Image4 = image 0x0061c340 (0x0089ec00 - 0x0061c340) [(0x0061c3dc, 0x49c), (0x0078b024, 0x00789e2c), (0x0078b020, 0x00782348)]
       rc0Image5 = image image5Base 0x00400000 [(a, image5WordCurrent w) | w <- image5Words, let Address a = image5WordAddress w]
-      rc0Image2 = B.replicate 0x00250000 0x11
+      rc0Image2 = let o = 0x0022d28c - fromIntegral image2Base in B.take o (B.replicate 0x00250000 0x11) <> B.pack [0xfc, 0xdb, 0x27, 0x00] <> B.drop (o + 4) (B.replicate 0x00250000 0x11)
       rc0 = Rc0Images rc0Image4 rc0Image5 (B.replicate 0x00360000 0) rc0Image2
       base = 0x00c20000
       allocation = iconAllocation base
@@ -114,10 +115,13 @@ main = do
         (not (null iconSetup) && all (\p -> let Address a = publicationAddress p in (a >= 0x0037b7c4 && a < 0x0037b808) || a == 0x00438268) iconSetup)
       let image2After = publish image2Base rc0Image2 combined
           recordOffset = 0x0037b7c6 - fromIntegral image2Base
-      check "image-2 words write the 0x83d record and keep the bytes around it"
+          tileOffset = 0x0022d28c - fromIntegral image2Base
+          Address tileTarget = allocationQTile allocation
+          outside bytes = B.take tileOffset bytes <> B.take (recordOffset - tileOffset - 4) (B.drop (tileOffset + 4) bytes) <> B.drop (recordOffset + 66) bytes
+      check "image-2 words write the 0x83d record and the Q glyph 0x37c tile pointer and keep every other byte"
         (B.take 66 (B.drop recordOffset image2After) == label83dRecord
-          && B.take recordOffset image2After == B.take recordOffset rc0Image2
-          && B.drop (recordOffset + 66) image2After == B.drop (recordOffset + 66) rc0Image2)
+          && B.take 4 (B.drop tileOffset image2After) == word32LE tileTarget
+          && outside image2After == outside rc0Image2)
       let fontBytes = B.map complement (B.take 0x80000 (B.drop 0x0106025c (datWith stockFont)))
           fontAfter = publish fontBase fontBytes combined
           directory = either (const 0) id (directoryWord (allocationRecord allocation))
@@ -161,14 +165,17 @@ main = do
   refused "a record 0x01000000 past the commands is refused" (directoryWord (Address (0x003f9ced + 0x01000000)))
   refused "a record below the commands is refused" (directoryWord (Address 0x003f9cec))
 
-  check "content holds the record, the Q values and the Q labels at their allocation offsets"
-    (B.take (B.length iconGlyphRecord) iconContent == iconGlyphRecord
-      && B.take (B.length qValuesArray) (B.drop 0x178 iconContent) == qValuesArray
-      && B.drop 0x1c0 iconContent == qLabelsArray
+  let contentAt (Address a) n = B.take n (B.drop (fromIntegral (a - base - ccIconContentOffset)) iconContent)
+  check "content holds the record, the Q arrays and the Q tile at their allocation addresses"
+    (contentAt (allocationRecord allocation) (B.length iconGlyphRecord) == iconGlyphRecord
+      && contentAt (allocationQValues allocation) (B.length qValuesArray) == qValuesArray
+      && contentAt (allocationQLabels allocation) (B.length qLabelsArray) == qLabelsArray
+      && contentAt (allocationQTile allocation) (B.length qTileGvff) == qTileGvff
+      && allocationQTile allocation == Address (base + ccIconAllocationSize - fromIntegral (B.length qTileGvff))
       && fromIntegral (B.length iconContent) == iconContentSize)
   check "allocation addresses follow the installer at every 8-byte-aligned base"
     (and [ ccInstallerStart b + ccIconInstallerExtent <= b + ccIconContentOffset
-             && allocationQLabels (iconAllocation b) == Address (b + ccIconAllocationSize - fromIntegral (B.length qLabelsArray))
+             && allocationQTile (iconAllocation b) == Address (b + ccIconAllocationSize - fromIntegral (B.length qTileGvff))
          | b <- [0x00c20000, 0x00c20008, 0x00c20010, 0x00c20018, 0x00a7e8c8] ])
   check "the allocation differs from the Classic Chrome payload's" (ccIconAllocationSize /= ccAllocationSize)
 

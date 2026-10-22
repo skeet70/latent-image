@@ -322,6 +322,7 @@ haskell_library(
         ":bytestring",
         ":classic-chrome",
         ":classic-chrome-icon",
+        ":classic-chrome-q-tile",
         ":classic-chrome-ram",
         ":json",
         ":scientific",
