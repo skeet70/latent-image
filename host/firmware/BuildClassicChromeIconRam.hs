@@ -31,9 +31,6 @@ usage =
     ++ " | BASE PARAMETERS_JSON LINKED_DIR OUT_DIR RC0_ID4 RC0_ID5 RC0_PLAIN RC0_ID2 CC_ID4 CC_ID5 CC_PLAIN (RC0_DAT in the environment)"
     ++ " | --read-plans MANIFEST PREPUSH_PLAN POST_REBOOT_PLAN"
 
-liveViewFragmentPath :: FilePath
-liveViewFragmentPath = "host/firmware/classic-chrome-liveview-image5.json"
-
 main :: IO ()
 main = do
   arguments <- getArgs
@@ -83,8 +80,8 @@ sourcePaths =
   , "menu/classic_chrome_ram_stock.ld"
   , "menu/classic_chrome_ram_runtime.ld"
   , "host/firmware/build-classic-chrome-ram.sh"
-  , liveViewFragmentPath
   ]
+    ++ map fragmentPath [minBound .. maxBound]
 
 build :: Word32 -> FilePath -> FilePath -> FilePath -> [(String, FilePath, String)] -> IO ()
 build base parametersPath linkedDir out inputs = do
@@ -99,7 +96,8 @@ build base parametersPath linkedDir out inputs = do
   parameterBytes <- H.readRegular (1024 * 1024) parametersPath
   parameters <- either (H.failH . ("parameter file refused: " ++)) pure (parseParameters parameterBytes)
   font <- either (H.failH . ("RC0 DAT refused: " ++)) pure (fontWindowFromDat rc0Dat)
-  liveView <- either H.failH pure . parseLiveViewFragment =<< H.readRegular (64 * 1024) liveViewFragmentPath
+  image5Words <- fmap concat $ forM [minBound .. maxBound] $ \fragment ->
+    either H.failH pure . parseImage5Fragment fragment =<< H.readRegular (64 * 1024) (fragmentPath fragment)
 
   symbols <- readSymbols (linkedDir ++ "/kernel.syms")
   linkMap <- readFile (linkedDir ++ "/kernel.map")
@@ -138,7 +136,7 @@ build base parametersPath linkedDir out inputs = do
       ccRamPublications rc0 (FlashImages ccId4 ccId5 ccPlainImage) ramSymbolTable
   (publications, carries) <-
     either (H.failH . ("icon publications refused: " ++)) pure $
-      iconRamPublications rc0 font liveView allocation ccPublications
+      iconRamPublications rc0 font image5Words allocation ccPublications
   let phaseCount phase = length (filter ((== phase) . publicationPhase) publications)
   H.ensure (phaseCount Setup == ccIconSetupCount && phaseCount Activation == ccIconActivationCount)
     ("publication counts " ++ show (phaseCount Setup) ++ " setup and " ++ show (phaseCount Activation) ++ " activation differ from the pinned "

@@ -214,9 +214,9 @@ classicChromePayload = Payload
 -- Q arrays follow the installer in the allocation.
 classicChromeIconPayload = classicChromePayload
   { payloadKind = ClassicChromeIcon
-  , payloadAllocationSize = 0x1970
+  , payloadAllocationSize = 0x1990
   , payloadSetupCount = 100
-  , payloadActivationCount = 58
+  , payloadActivationCount = 61
   , payloadRelinkBuilder = "build-classic-chrome-icon-ram"
   , payloadRelinkInputs = payloadRelinkInputs classicChromePayload
       ++ [("RC0_DAT","private-data/analysis/classic-chrome-patch/rc0-regression/FWUP0002.DAT")]

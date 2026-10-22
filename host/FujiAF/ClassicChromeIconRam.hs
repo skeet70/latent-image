@@ -1,13 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | The Classic Chrome icon RAM-push payload over the RC0-installed X-M1 1.50
 -- images: the reviewed Classic Chrome publications, the U+F073 icon words,
--- the Q-node pointers and the live-view image-5 words, with the glyph record
--- and the Q arrays held in the allocation after the installer. No I/O.
+-- the Q-node pointers and the image-5 fragment words (live view, frames
+-- remaining), with the glyph record and the Q arrays held in the allocation
+-- after the installer. No I/O.
 module FujiAF.ClassicChromeIconRam
   ( FontWindow
   , fontWindowFromDat
-  , LiveViewWord (..)
-  , parseLiveViewFragment
+  , Image5Fragment (..)
+  , fragmentPath
+  , Image5Word (..)
+  , parseImage5Fragment
   , IconAllocation (..)
   , iconAllocation
   , iconContent
@@ -59,29 +62,47 @@ fontWindowFromDat dat = do
   unless (B.take 8 window == "FDL Font") $ Left "font window does not start with the FDL header"
   pure (FontWindow window)
 
-data LiveViewWord = LiveViewWord
-  { liveViewAddress :: Address
-  , liveViewCurrent :: Word32
-  , liveViewNew :: Word32
-  , liveViewRole :: String
+-- | The image-5 fragments the payload publishes, in activation order.
+data Image5Fragment = LiveViewFragment | FramesFragment
+  deriving (Eq, Show, Enum, Bounded)
+
+fragmentPath :: Image5Fragment -> FilePath
+fragmentPath LiveViewFragment = "host/firmware/classic-chrome-liveview-image5.json"
+fragmentPath FramesFragment = "host/firmware/classic-chrome-frames-image5.json"
+
+fragmentId :: Image5Fragment -> String
+fragmentId LiveViewFragment = "CLASSIC-CHROME-LIVEVIEW-01-IMAGE5"
+fragmentId FramesFragment = "CLASSIC-CHROME-FRAMES-01-IMAGE5"
+
+fragmentWordCount :: Image5Fragment -> Int
+fragmentWordCount LiveViewFragment = 5
+fragmentWordCount FramesFragment = 3
+
+data Image5Word = Image5Word
+  { image5WordAddress :: Address
+  , image5WordCurrent :: Word32
+  , image5WordNew :: Word32
+  , image5WordRole :: String
   }
   deriving (Eq, Show)
 
--- | host/firmware/classic-chrome-liveview-image5.json: five in-place image-5
--- words for X-M1 1.50, in `order`.
-parseLiveViewFragment :: B.ByteString -> Either String [LiveViewWord]
-parseLiveViewFragment document = do
-  value <- either (Left . ("live-view fragment: " ++)) Right (decodeStrictIntegers document)
+-- | An in-place image-5 word patch set for X-M1 1.50 ('fragmentPath'), its
+-- words in `order`.
+parseImage5Fragment :: Image5Fragment -> B.ByteString -> Either String [Image5Word]
+parseImage5Fragment fragment document = do
+  value <- either (Left . (label ++)) Right (decodeStrictIntegers document)
   identifier <- text =<< key "id" value
-  unless (identifier == "CLASSIC-CHROME-LIVEVIEW-01-IMAGE5") $ Left "live-view fragment: id mismatch"
+  unless (identifier == fragmentId fragment) $ Left (label ++ "id mismatch")
   target <- key "target" value
   firmware <- text =<< key "firmware_sha256" target
-  unless (firmware == stockFirmwareSha256) $ Left "live-view fragment: target firmware is not X-M1 1.50"
+  unless (firmware == stockFirmwareSha256) $ Left (label ++ "target firmware is not X-M1 1.50")
   image <- key "image" value
   segment <- integer =<< key "segment_id" image
   decodeBase <- hexWord =<< key "decode_base" image
   let Address image5Base = image5DecodeBase
-  unless (segment == 5 && decodeBase == image5Base) $ Left "live-view fragment: not an image-5 patch set at 0x00bf1a00"
+  unless (segment == 5 && decodeBase == image5Base) $ Left (label ++ "not an image-5 patch set at 0x00bf1a00")
+  blobs <- array =<< key "blobs" value
+  unless (null blobs) $ Left (label ++ "blobs present; only words are published")
   entries <- array =<< key "words" value
   parsed <- forM entries $ \entry -> do
     order <- integer =<< key "order" entry
@@ -89,29 +110,31 @@ parseLiveViewFragment document = do
     current <- hexWord =<< key "current" entry
     new <- hexWord =<< key "new" entry
     role <- text =<< key "role" entry
-    pure (order, LiveViewWord (Address address) current new role)
+    pure (order, Image5Word (Address address) current new role)
   let ordered = map snd (sortOn fst parsed)
-  unless (map fst (sortOn fst parsed) == [1 .. length parsed] && length parsed == 5) $
-    Left "live-view fragment: five words ordered 1..5 required"
-  unless (all (\w -> let Address a = liveViewAddress w in a .&. 3 == 0) ordered) $
-    Left "live-view fragment: unaligned word"
+      count = fragmentWordCount fragment
+  unless (map fst (sortOn fst parsed) == [1 .. length parsed] && length parsed == count) $
+    Left (label ++ show count ++ " words ordered 1.." ++ show count ++ " required")
+  unless (all (\w -> let Address a = image5WordAddress w in a .&. 3 == 0) ordered) $
+    Left (label ++ "unaligned word")
   pure ordered
   where
-    key name (Object object) = maybe (Left ("live-view fragment: missing " ++ name)) Right (KM.lookup (K.fromString name) object)
-    key name _ = Left ("live-view fragment: object required around " ++ name)
+    label = fragmentPath fragment ++ ": "
+    key name (Object object) = maybe (Left (label ++ "missing " ++ name)) Right (KM.lookup (K.fromString name) object)
+    key name _ = Left (label ++ "object required around " ++ name)
     text (String t) = Right (T.unpack t)
-    text _ = Left "live-view fragment: text required"
+    text _ = Left (label ++ "text required")
     integer :: Value -> Either String Int
-    integer (Number n) = maybe (Left "live-view fragment: integer required") Right (toBoundedInteger n)
-    integer _ = Left "live-view fragment: integer required"
+    integer (Number n) = maybe (Left (label ++ "integer required")) Right (toBoundedInteger n)
+    integer _ = Left (label ++ "integer required")
     array (Array values) = Right (V.toList values)
-    array _ = Left "live-view fragment: list required"
+    array _ = Left (label ++ "list required")
     hexWord :: Value -> Either String Word32
     hexWord v = do
       t <- text v
       case t of
         '0' : 'x' : digits | length digits == 8, [(w, "")] <- readHex digits -> Right w
-        _ -> Left ("live-view fragment: eight-digit hex word required, got " ++ t)
+        _ -> Left (label ++ "eight-digit hex word required, got " ++ t)
 
 -- | Allocation addresses of the glyph record and the two Q arrays.
 data IconAllocation = IconAllocation
@@ -144,12 +167,12 @@ iconAllocation base =
 
 ccIconSetupCount, ccIconActivationCount, ccIconPublicationCount :: Int
 ccIconSetupCount = ccSetupCount + 16
-ccIconActivationCount = ccActivationCount + 11
+ccIconActivationCount = ccActivationCount + 6 + sum (map fragmentWordCount [minBound .. maxBound])
 ccIconPublicationCount = ccIconSetupCount + ccIconActivationCount
 
--- | From the installer start, with the 158-entry publication table.
+-- | From the installer start, with the 161-entry publication table.
 ccIconInstallerExtent :: Word32
-ccIconInstallerExtent = 0x1580
+ccIconInstallerExtent = 0x15a0
 
 -- | The content follows the installer at every 8-byte-aligned base.
 ccIconContentOffset :: Word32
@@ -206,12 +229,12 @@ qPointers allocation = forM [w | w <- iconImage4Writes, i4Address w >= windowEnd
 
 -- | The Classic Chrome publications with the icon's: setup gains the 0x83d
 -- record and per-mille words, activation the directory, label-icon, Q
--- pointer and live-view words. Refuses any address the Classic Chrome
+-- pointer and image-5 fragment words. Refuses any address the Classic Chrome
 -- publications already hold, except 'carriedAddresses'.
 iconRamPublications
-  :: Rc0Images -> FontWindow -> [LiveViewWord] -> IconAllocation -> [CcPublication]
+  :: Rc0Images -> FontWindow -> [Image5Word] -> IconAllocation -> [CcPublication]
   -> Either String ([CcPublication], [CcCarry])
-iconRamPublications rc0 (FontWindow font) liveView allocation cc = do
+iconRamPublications rc0 (FontWindow font) image5Words allocation cc = do
   unless (length cc == ccPublicationCount) $ Left "Classic Chrome publication count differs from the reviewed payload"
   let (ccSetup, ccActivation) = splitAt ccSetupCount cc
   unless (all ((== Setup) . publicationPhase) ccSetup && all ((== Activation) . publicationPhase) ccActivation) $
@@ -246,10 +269,10 @@ iconRamPublications rc0 (FontWindow font) liveView allocation cc = do
     let a = i4Address w
     unless (image4Rc0 a == i4Old w) $ Left ("RC0 Q pointer at " ++ hex a ++ " is not the stock " ++ hex (i4Old w))
     pure (a, i4Old w, target, i4Role w ++ " (allocation copy)")
-  liveWords <- forM liveView $ \w -> do
-    let Address a = liveViewAddress w
-    unless (image5Rc0 a == liveViewCurrent w) $ Left ("RC0 image-5 word at " ++ hex a ++ " is not the live-view fragment's current word")
-    pure (a, liveViewCurrent w, liveViewNew w, liveViewRole w)
+  fragmentWords <- forM image5Words $ \w -> do
+    let Address a = image5WordAddress w
+    unless (image5Rc0 a == image5WordCurrent w) $ Left ("RC0 image-5 word at " ++ hex a ++ " is not the fragment's current word")
+    pure (a, image5WordCurrent w, image5WordNew w, image5WordRole w)
 
   let ccAt a = [(i, p) | (i, p) <- zip [0 :: Int ..] cc, publicationAddress p == Address a]
   labelWords <- fmap concat $ forM labelIconWords $ \w -> let a = i4Address w in case ccAt a of
@@ -271,7 +294,7 @@ iconRamPublications rc0 (FontWindow font) liveView allocation cc = do
         map (\(a, o, n) -> publication Activation (a, o, n, "U+F073 directory word to the allocation's glyph record")) directoryWords
           ++ map (publication Activation) labelWords
           ++ map (publication Activation) qWords
-          ++ map (publication Activation) liveWords
+          ++ map (publication Activation) fragmentWords
       carried = [maybe p (\c -> p {publicationNew = carryNew c}) (lookup i [(carryIndex c, c) | c <- carries]) | (i, p) <- zip [0 :: Int ..] cc]
       (carriedSetup, carriedActivation) = splitAt ccSetupCount carried
       combined = carriedSetup ++ setup ++ carriedActivation ++ activation

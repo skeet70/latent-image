@@ -1280,7 +1280,10 @@ filegroup(
 haskell_test(
     name = "classic-chrome-icon-ram-tests",
     srcs = ["ClassicChromeIconRamTests.hs"],
-    data = ["classic-chrome-liveview-image5.json"],
+    data = [
+        "classic-chrome-frames-image5.json",
+        "classic-chrome-liveview-image5.json",
+    ],
     ghcopts = [
         "-Wall",
         "-Werror",

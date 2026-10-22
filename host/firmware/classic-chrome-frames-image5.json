@@ -1,0 +1,67 @@
+{
+  "array_source": null,
+  "blobs": [],
+  "container_effect": {
+    "dat_extents": "unchanged",
+    "decoded_size": "unchanged",
+    "load": "0x00bf1a00"
+  },
+  "emulation_case_parameters": null,
+  "free_space": null,
+  "id": "CLASSIC-CHROME-FRAMES-01-IMAGE5",
+  "image": {
+    "decode_base": "0x00bf1a00",
+    "decode_file": "private-data/analysis/classic-chrome-patch/candidate-build-1/patched-id5.bin",
+    "decode_sha256": "e740aeb28ce070a659583bd0bb5cfd9ecc5846ac302564741fcdf37b9b2089bb",
+    "dump_correspondence": "not established for this build",
+    "file_offset_rule": "output file_offset = address - 0x00bf1a00; stock source offset = address - 0x00bf1a00",
+    "segment_id": 5
+  },
+  "order_rule": "Address order; every write is in place. The three words are the tail of the FUN_00e42414 compare chain; publish them together.",
+  "recorded_at": "2026-10-22T12:00:00Z",
+  "schema_version": 3,
+  "target": {
+    "firmware_sha256": "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490",
+    "firmware_version": "1.50",
+    "model": "X-M1"
+  },
+  "tier": "RC2",
+  "totals": {
+    "blob_words": 0,
+    "bytes_written": 12,
+    "changed_bytes": 3,
+    "prefix_bytes_added": 0,
+    "word_writes": 3,
+    "words": 3
+  },
+  "unchanged_surfaces": [
+    "FUN_00e42414 classes for col2 0..12",
+    "FUN_00e42414 class 6 for col2 above 13 and for negative col2"
+  ],
+  "words": [
+    {
+      "address": "0x00e424ac",
+      "current": "0xe350000c",
+      "file_offset": "0x00250aac",
+      "new": "0xe350000d",
+      "order": 1,
+      "role": "CC frames remaining: FUN_00e42414 cmp r0,#13"
+    },
+    {
+      "address": "0x00e424b0",
+      "current": "0x13a00006",
+      "file_offset": "0x00250ab0",
+      "new": "0x83a00006",
+      "order": 2,
+      "role": "CC frames remaining: FUN_00e42414 movhi r0,#6"
+    },
+    {
+      "address": "0x00e424b4",
+      "current": "0x03a00000",
+      "file_offset": "0x00250ab4",
+      "new": "0x93a00000",
+      "order": 3,
+      "role": "CC frames remaining: FUN_00e42414 movls r0,#0"
+    }
+  ]
+}
