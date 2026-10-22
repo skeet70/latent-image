@@ -31,6 +31,7 @@ import FujiAF.FilmStage
 import qualified FujiAF.Host as H
 import FujiAF.JSON (decodeStrict, encodeCanonical)
 import FujiAF.XM1Develop
+import LookReference (LabPair (..), lutLab, parseCube, relativeStats, sector)
 import PhotoSession (Decoder (..), chartPatches, eModel, photoIdentical)
 import SiblingTables (runTables)
 
@@ -59,12 +60,18 @@ usage =
     , "classic-chrome-model chart-patches X,Y X,Y X,Y X,Y SIZE"
     , "  ColorChecker Classic patch squares from the centres of dark skin, bluish green,"
     , "  white 9.5 and black 2 (pixels), for an e-model manifest"
-    , "classic-chrome-model e-model [--ffmpeg PATH] [--ffprobe PATH] BUNDLE.json MANIFEST.json OUT.json"
+    , "classic-chrome-model e-model [--ffmpeg PATH] [--ffprobe PATH] BUNDLE.json MANIFEST.json OUT.json [CANDIDATE.json]"
     , "  e_model: each scene's Velvia, ASTIA and PRO Neg frames predicted from its PROVIA frame"
-    , "  through the X-M1 stages"
+    , "  through the X-M1 stages; with CANDIDATE.json also its classicChrome frame through the"
+    , "  X-M1 PROVIA stage with the candidate's matrix, chroma and tone record"
     , "classic-chrome-model settings BUNDLE.json CANDIDATE.json XM1-ID4.bin XM1-ID5.bin XM1-PAYLOAD.bin X70VIEW-FRONTEND.md OUT.json"
     , "  expected Color, Highlight, Shadow and DR responses of the X-M1 PROVIA stage, the Classic"
     , "  Chrome candidate and the X-Trans II Classic Chrome reference (spec/10 19.5.6 item 6)"
+    , "classic-chrome-model look-reference FILM PROVIA.cube FILM.cube BUNDLE.json CANDIDATE.json E-MODEL.json OUT.json"
+    , "  FILM (velvia, astia, proNegStd, proNegHi or classicChrome) against PROVIA by PROVIA hue,"
+    , "  chroma and lightness: Fujifilm's F-Log2 LUTs on the neutral ramp, a low-chroma grid and the"
+    , "  gamut set, the X-M1 stage (the candidate for classicChrome) on the same set, and FILM's"
+    , "  regions of an e-model output"
     ]
 
 main :: IO ()
@@ -83,9 +90,11 @@ main = do
       [p0, p1, p2, p3] -> B.putStr (encodeCanonical (chartPatches p0 p1 p2 p3 n) <> "\n")
       _ -> hPutStrLn stderr usage >> exitFailure
     ["settings", bundle, candidate, id4, id5, payload, frontend, out] -> runSettings bundle candidate id4 id5 payload frontend out
-    ["e-model", bundle, manifest, out] -> do
+    ("e-model" : bundle : manifest : out : rest) | length rest <= 1 -> do
       b <- readBundle bundle
-      eModel dec [(filmKey f, xm1 b f) | f <- [Provia .. ProNegHi]] manifest >>= writeJson out
+      cc <- forM rest $ \p -> (\c -> ("classicChrome", xm1Candidate b c)) <$> readCandidate p
+      eModel dec ([(filmKey f, xm1 b f) | f <- [Provia .. ProNegHi]] ++ cc) manifest >>= writeJson out
+    ["look-reference", film, proviaCube, filmCube, bundle, candidate, eModelOut, out] -> runLookReference (T.pack film) proviaCube filmCube bundle candidate eModelOut out
     _ -> hPutStrLn stderr usage >> exitFailure
  where
   point s = case break (== ',') s of
@@ -644,13 +653,6 @@ methodHeader =
 
 -- Classic Chrome -------------------------------------------------------------
 
--- | Hue sector of a reference colour: 30-degree sectors of CIELAB hue for
--- C* >= 5, "neutral" below.
-sector :: Lab -> T.Text
-sector (Lab _ a b)
-  | sqrt (a * a + b * b) < 5 = "neutral"
-  | otherwise = let h = atan2 b a * 180 / pi; d = if h < 0 then h + 360 else h in T.pack ("h" ++ show (30 * (floor d `div` 30 :: Int)))
-
 -- | Writes the v1 parameter file the patch build reads (CANDIDATE) and the
 -- fit's residuals and stability (REPORT).
 runFitCc :: FilePath -> FilePath -> FilePath -> FilePath -> IO ()
@@ -797,7 +799,7 @@ runSettings :: FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FileP
 runSettings bundlePath candidatePath id4 id5 payload frontend out = do
   colorFactors <- readX70ColorFactors frontend
   b <- readBundle bundlePath
-  cand <- readJson candidatePath >>= either H.failH pure . parseCandidate
+  cand <- readCandidate candidatePath
   im <- loadImages id4 id5 payload >>= either H.failH pure
   gains <- either H.failH pure (gainRecords im)
   tones <- either H.failH pure (toneRecords im)
@@ -863,3 +865,77 @@ runSettings bundlePath candidatePath id4 id5 payload frontend out = do
     putStrLn (T.unpack (T.intercalate " | " ["| " <> name, T.pack (show gainKey), T.pack (show (r3 (ratio product'))), triple rc, triple rp, triple rr, if agrees rc rr then "yes" else "no"]) ++ " |")
  where
   avg xs = if null xs then 0 else sum xs / fromIntegral (length xs)
+
+readCandidate :: FilePath -> IO Candidate
+readCandidate p = readJson p >>= either (H.failH . ((p ++ ": ") ++)) pure . parseCandidate
+
+-- | The X-M1 Classic Chrome stage at DR100 with adjustments 0: PROVIA's
+-- selectors with the candidate's matrix, chroma and tone record.
+xm1Candidate :: Bundle -> Candidate -> FilmParams
+xm1Candidate b cand = (xm1 b Provia) {filmMatrix = candidateMatrix cand, filmChroma = candidateChroma cand, filmTone = candidateTone cand}
+
+-- | A film against PROVIA for Fujifilm's F-Log2 LUTs and the X-M1 stage
+-- (the candidate for classicChrome) on the neutral ramp, a low-chroma grid
+-- and the gamut set, and for that film's regions of an e-model output
+-- (observed and predicted).
+runLookReference :: T.Text -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+runLookReference film proviaCube filmCube bundlePath candidatePath eModelPath out = do
+  let readCube p = H.readRegular (64 * 1024 * 1024) p >>= either (H.failH . ((p ++ ": ") ++)) pure . parseCube
+  pvLut <- readCube proviaCube
+  filmLut <- readCube filmCube
+  b <- readBundle bundlePath
+  cand <- readCandidate candidatePath
+  filmParams <- maybe (H.failH ("no X-M1 stage for film " ++ T.unpack film)) pure (lookup film (("classicChrome", xm1Candidate b cand) : [(filmKey f, xm1 b f) | f <- [Velvia .. ProNegHi]]))
+  eModelOut <- readJson eModelPath
+  regions <- either H.failH pure (filmRegions film eModelOut)
+  digests <- forM [proviaCube, filmCube, bundlePath, candidatePath, eModelPath] $ \p -> (K.fromString p .=) <$> (B.readFile p >>= H.sha256)
+  let lowChroma = labGrid "low-chroma" [20, 30 .. 90] [0, 20 .. 340] [4, 8, 12]
+      sets = [neutralRamp, lowChroma, gamutSet]
+      scene = concatMap setPatches sets
+      Exposure k = calibrateExposure (compileStage (xtrans2 b Provia))
+      inputs = map (sceneInput xm1Camera (Exposure k) . patchXyz) scene
+      xmProvia = compileStage (xm1 b Provia)
+      xmFilm = compileStage filmParams
+      lutPairs = [LabPair (lutLab pvLut (patchXyz p)) (lutLab filmLut (patchXyz p)) | p <- scene]
+      modelPairs = [LabPair (renderLab xmProvia w) (renderLab xmFilm w) | w <- inputs]
+      ramp cube = [r3 l | p <- setPatches neutralRamp, let Lab l _ _ = lutLab cube (patchXyz p)]
+      modelRamp st = [r3 l | p <- setPatches neutralRamp, let Lab l _ _ = renderLab st (sceneInput xm1Camera (Exposure k) (patchXyz p))]
+  writeJson out $
+    object
+      [ "inputs" .= object digests
+      , "film" .= film
+      , "scene" .= object ["reflection" .= ("D65, white Y = 1" :: T.Text), "sets" .= object [K.fromString (setName s) .= length (setPatches s) | s <- sets]]
+      , "lut"
+          .= object
+            [ "method" .= ("XYZ to F-Gamut, F-Log2 (Data Sheet Ver.1.1), trilinear 3D LUT, BT.709 output read with the sRGB transfer function, CIELAB D65" :: T.Text)
+            , "rampY" .= [r3 y | p <- setPatches neutralRamp, let Xyz _ y _ = patchXyz p]
+            , "rampL" .= object ["provia" .= ramp pvLut, "film" .= ramp filmLut]
+            , "relative" .= relativeStats lutPairs
+            ]
+      , "model"
+          .= object
+            [ "method" .= ("X-M1 sensor model, exposure of section 4, X-M1 PROVIA stage against the film's X-M1 stage (the candidate for classicChrome)" :: T.Text)
+            , "rampL" .= object ["provia" .= modelRamp xmProvia, "film" .= modelRamp xmFilm]
+            , "relative" .= relativeStats modelPairs
+            ]
+      , "pair" .= object ["observed" .= relativeStats [LabPair p o | (p, o, _) <- regions], "predicted" .= relativeStats [LabPair p q | (p, _, q) <- regions], "regions" .= length regions]
+      ]
+
+-- | (PROVIA, observed, predicted) L*a*b* of every region of one film in an
+-- e-model output.
+filmRegions :: T.Text -> Value -> Either String [(Lab, Lab, Lab)]
+filmRegions film v = do
+  scenes <- path v ["scenes"]
+  sceneList <- case scenes of
+    Object o -> Right (KM.elems o)
+    _ -> Left "scenes is not an object"
+  fmap concat $ forM sceneList $ \sc -> case path sc ["films", film, "regions"] of
+    Left _ -> Right []
+    Right rs -> do
+      items <- AT.parseEither A.parseJSON rs :: Either String [Value]
+      forM items $ \r -> (,,) <$> lab r "provia" <*> lab r "observed" <*> lab r "predicted"
+ where
+  lab r k =
+    path r [k] >>= AT.parseEither A.parseJSON >>= \xs -> case xs of
+      [l, a, bb] -> Right (Lab l a bb)
+      _ -> Left "L*a*b* needs three values"

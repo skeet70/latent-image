@@ -243,12 +243,13 @@ haskell_test(
 # Classic Chrome host colour model (spec/10 section 19.5): the sibling tables
 # from the pinned DATs, oracle inputs and comparison against x70view
 # film_stage.py, the private parameter bundle, the leave-one-out method
-# error, the Classic Chrome fit and the owner photo session analysis
-# (section 19.5.6, X-M1 model check).
+# error, the Classic Chrome fit, the owner photo session analysis (section
+# 19.5.6, X-M1 model check) and the F-Log2 LUT look reference.
 haskell_binary(
     name = "classic-chrome-model",
     srcs = [
         "ClassicChromeModel.hs",
+        "LookReference.hs",
         "PhotoSession.hs",
         "SiblingTables.hs",
     ],
@@ -264,11 +265,44 @@ haskell_binary(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:containers",
         "//host:filepath",
         "//host:film-model",
         "//host:host-support",
         "//host:json",
         "//host:text",
+        "//host:vector",
+    ],
+)
+
+# LookReference: F-Log2 against the data sheet's code values, the F-Gamut and
+# BT.709 matrices, .cube parsing and interpolation, and the relative
+# statistics on pairs with a known chroma, lightness and hue change.
+haskell_test(
+    name = "look-reference-tests",
+    size = "small",
+    srcs = [
+        "LookReference.hs",
+        "LookReferenceTests.hs",
+    ],
+    main_file = "LookReferenceTests.hs",
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:film-model",
+        "//host:host-support",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
     ],
 )
 

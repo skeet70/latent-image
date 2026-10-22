@@ -159,6 +159,27 @@ parseManifest dir = AT.parseEither $ A.withObject "manifest" $ \o -> do
     framesList <- A.withObject "frames" (\f -> traverse (\(k, v) -> (K.toText k,) . (dir </>) <$> A.parseJSON v) (KM.toList f)) frames
     pure (Scene name framesList patches blockSpec)
 
+-- | One region of one film frame: the PROVIA frame's colour, the film frame's,
+-- the model's prediction and their CIEDE2000.
+data Row = Row
+  { rowKind :: T.Text
+  , rowName :: T.Text
+  , rowProvia :: Lab
+  , rowObserved :: Lab
+  , rowPredicted :: Lab
+  , rowDelta :: Double
+  , rowUnchangedDelta :: Double
+  , rowClipped :: Bool
+  }
+
+-- | A region mean whose sRGB channel lies within half a level of 0 or 255.
+clipped :: Mean -> Bool
+clipped m = any (\v -> v <= 0.5 || v >= 254.5) [y + 1.402 * cr, y - 0.344136 * cb - 0.714136 * cr, y + 1.772 * cb]
+ where
+  y = meanY m
+  cb = meanCb m - 128
+  cr = meanCr m - 128
+
 -- | Prediction of each film's frame from the scene's PROVIA frame through
 -- the X-M1 stages of `films` (film key to parameters, "provia" included).
 eModel :: Decoder -> [(T.Text, FilmParams)] -> FilePath -> IO Value
@@ -197,20 +218,33 @@ eModel dec films manifestPath = do
                     let observed = ycbcrToLabF (meanY obs) (meanCb obs) (meanCr obs)
                         predicted = labOf (develop stage w)
                         unchanged = ycbcrToLabF (meanY m) (meanCb m) (meanCr m)
-                     in Just (kind, rectName r, ciede2000 observed predicted, ciede2000 observed unchanged)
+                     in Just (Row kind (rectName r) unchanged observed predicted (ciede2000 observed predicted) (ciede2000 observed unchanged) (clipped obs))
                   _ -> Nothing
               | (kind, r, m, mw) <- inverted
               ]
-          summary k = let ds = [d | (kd, _, d, _) <- rows, k == "all" || kd == k] in statsValue ds
-          baseline = statsValue [u | (_, _, _, u) <- rows]
+          summary k = statsValue [rowDelta row | row <- rows, k == "all" || rowKind row == k]
+          baseline = statsValue (map rowUnchangedDelta rows)
       pure
         ( key
-        , [d | (_, _, d, _) <- rows]
+        , map rowDelta rows
         , object
             [ "frame" .= file
             , "eModel" .= object ["all" .= summary "all", "patches" .= summary "patch", "blocks" .= summary "block"]
             , "proviaAsPrediction" .= baseline
-            , "patches" .= [object ["name" .= n, "deltaE00" .= r3 d] | (k, n, d, _) <- rows, k == ("patch" :: T.Text)]
+            , "targetClipped" .= length (filter rowClipped rows)
+            , "patches" .= [object ["name" .= rowName row, "deltaE00" .= r3 (rowDelta row)] | row <- rows, rowKind row == ("patch" :: T.Text)]
+            , "regions"
+                .= [ object
+                      [ "name" .= rowName row
+                      , "kind" .= rowKind row
+                      , "provia" .= labJson (rowProvia row)
+                      , "observed" .= labJson (rowObserved row)
+                      , "predicted" .= labJson (rowPredicted row)
+                      , "deltaE00" .= r3 (rowDelta row)
+                      , "targetClipped" .= rowClipped row
+                      ]
+                   | row <- rows
+                   ]
             ]
         )
     pure
@@ -232,4 +266,5 @@ eModel dec films manifestPath = do
  where
   labOf (YCbCr y cb cr) = ycbcrToLab y cb cr
   r3 x = fromIntegral (round (x * 1000) :: Integer) / 1000 :: Double
+  labJson (Lab l a b) = map r3 [l, a, b]
   statsValue ds = let Stats m p x = stats ds in object ["mean" .= r3 m, "p95" .= r3 p, "max" .= r3 x, "n" .= length ds]

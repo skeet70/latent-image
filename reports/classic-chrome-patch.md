@@ -586,8 +586,9 @@ The 8.4 script ran on the RC0 body at `ace9320` under the owner's go and passed 
 - RAW conversion (open question 7): with the payload resident, RAW CONVERSION offers six rows with CLASSIC CHROME last, converts to CC, and its PROVIA conversion of a before-set RAF is plane-identical to the RC0 before-set conversion (U6, item 4).
 - Capture: a shot frame and a conversion both carry FilmMode `Classic Chrome` (U4); on flat blocks of a pixel-aligned conversion pair, CC renders chromatic colours at about 0.6 times PROVIA's chroma and slightly lighter, with live view staying PROVIA-like as designed.
 - Deviations: no ColorChecker or tripod, incandescent light at ISO 4000 with Incandescent WB.
+- Implementation (host analysis of the card copy): on the pixel-aligned RAW conversions the body renders the data block's matrix, chroma 2x2 and tone record over PROVIA's selectors as the model's candidate stage predicts, and the look moves from PROVIA in the direction of Fujifilm's Classic Chrome LUT ([model report 8.4 and 8.5](classic-chrome-model.md#84-implementation-check-on-the-raw-conversion-set)).
 
-Open: the look acceptance (spec 19.5.6 items 1-3) and `e_model`, which need a chart session at low ISO in daylight or a fixed-WB light, or a map of the ISO- and WB-dependent develop selectors; the Q tile and C slot (U7); the stored-CC fallback (8.4.5); the flash decision. The session ended with stored `0xf7` returned to 0 (E-STORED-F7-RESTORE-RUN-150), so the next RAM session first needs `commit-f7-enable` in a jig session.
+Open: the look acceptance (spec 19.5.6 items 1-3) and the ColorChecker `e_model`, which need a chart session at low ISO in daylight or a fixed-WB light; the Q tile and C slot (U7); the stored-CC fallback (8.4.5); the flash decision. The session ended with stored `0xf7` returned to 0 (E-STORED-F7-RESTORE-RUN-150), so the next RAM session first needs `commit-f7-enable` in a jig session.
 
 ## 9. Verification results (2026-10-18, host and emulated)
 

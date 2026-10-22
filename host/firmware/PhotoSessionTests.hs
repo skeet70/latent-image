@@ -14,6 +14,7 @@ import System.Environment (getArgs)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 
+import FujiAF.ClassicChromeCandidate (Candidate (..), candidateJson)
 import FujiAF.FilmStage
 import FujiAF.Host (ensure, failH, runBounded, withTemporary)
 import FujiAF.JSON (decodeStrict, encodeCanonical)
@@ -60,7 +61,9 @@ main = do
 
     -- the model's own film output is predicted from its PROVIA output; the
     -- PROVIA frame offered as the film frame is not
-    let manifest film = object ["scenes" .= [object ["name" .= ("flat" :: String), "frames" .= object ["provia" .= ("provia.jpg" :: String), "velvia" .= film], "patches" .= [object ["name" .= ("p" ++ show i), "x" .= (64 * i), "y" .= (0 :: Int), "w" .= (64 :: Int), "h" .= (64 :: Int)] | i <- [0 .. 3 :: Int]]]]]
+    let patchList = [object ["name" .= ("p" ++ show i), "x" .= (64 * i), "y" .= (0 :: Int), "w" .= (64 :: Int), "h" .= (64 :: Int)] | i <- [0 .. 3 :: Int]]
+        manifest film = object ["scenes" .= [object ["name" .= ("flat" :: String), "frames" .= object ["provia" .= ("provia.jpg" :: String), "velvia" .= film], "patches" .= patchList]]]
+        ccManifest film = object ["scenes" .= [object ["name" .= ("flat" :: String), "frames" .= object ["provia" .= ("provia.jpg" :: String), "classicChrome" .= film], "patches" .= patchList]]]
     forM_ [("velvia.jpg", True), ("provia.jpg", False)] $ \(film, matches) -> do
       B.writeFile (root </> "manifest.json") (encodeCanonical (manifest (film :: String)))
       (c, _) <- run tool ["e-model", "--ffmpeg", ffmpeg, "--ffprobe", ffprobe, bundlePath, root </> "manifest.json", root </> "e-model.json"]
@@ -72,6 +75,23 @@ main = do
       if matches
         then ensure (mean < 0.8) ("e-model of the model's own output is " ++ show mean)
         else ensure (mean > 2) ("e-model did not separate a wrong film frame: " ++ show mean)
+
+    -- with a candidate file, the classicChrome frame is predicted through the
+    -- PROVIA stage carrying the candidate's matrix, chroma and tone record
+    candidate <- either failH pure (candidateJson (Candidate "synthetic" [] 0 Nothing (filmMatrix provia) (filmChroma other) (filmTone provia)))
+    B.writeFile (root </> "candidate.json") (encodeCanonical candidate)
+    writeJpeg ffmpeg (root </> "cc.jpg") (map (develop (compileStage provia {filmChroma = filmChroma other})) patchInputs)
+    forM_ [("cc.jpg", True), ("provia.jpg", False)] $ \(film, matches) -> do
+      B.writeFile (root </> "manifest.json") (encodeCanonical (ccManifest (film :: String)))
+      (c, _) <- run tool ["e-model", "--ffmpeg", ffmpeg, "--ffprobe", ffprobe, bundlePath, root </> "manifest.json", root </> "e-model.json", root </> "candidate.json"]
+      ensure (c == ExitSuccess) "e-model with a candidate failed"
+      result <- B.readFile (root </> "e-model.json") >>= either failH pure . decodeStrict
+      let mean = numD (field (field (field result "eModelByFilm") "classicChrome") "mean")
+          regions = field (field (field (field (field result "scenes") "flat") "films") "classicChrome") "regions"
+      ensure (case regions of Array xs -> length xs == 4; _ -> False) "e-model did not list the four classicChrome regions"
+      if matches
+        then ensure (mean < 0.8) ("e-model of the candidate's own output is " ++ show mean)
+        else ensure (mean > 2) ("e-model did not separate a PROVIA frame offered as Classic Chrome: " ++ show mean)
   putStrLn "photo-session tests passed"
  where
   fromStr = K.fromString

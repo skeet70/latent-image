@@ -6,11 +6,12 @@ Host-only work for [spec/10 section 19.5](../spec/10-film-recipes.md#195-classic
 
 | Target | Role |
 | --- | --- |
-| `//host:film-model` | `FujiAF.FilmStage` (integer film stage), `FujiAF.FilmInvert` (its floating-point inverse), `FujiAF.Colour` (CIELAB, CIEDE2000, sensor models, patch sets), `FujiAF.FilmFit` (integer matrix and chroma fit), `FujiAF.FilmGrid` (oracle grid), `FujiAF.XM1Develop` (1.50 develop-stage readers, adjustment field encoding), `FujiAF.ClassicChromeCandidate` (the v1 parameter file) |
-| `//host/firmware:classic-chrome-model` | `tables`, `oracle-input`, `oracle-compare`, `bundle`, `method`, `fit-cc`, `photo-identical`, `chart-patches`, `e-model` (usage with no arguments) |
+| `//host:film-model` | `FujiAF.FilmStage` (integer film stage), `FujiAF.FilmInvert` (its floating-point inverse), `FujiAF.Colour` (CIELAB, CIEDE2000, sensor models, patch sets and L*a*b* grids), `FujiAF.FilmFit` (integer matrix and chroma fit), `FujiAF.FilmGrid` (oracle grid), `FujiAF.XM1Develop` (1.50 develop-stage readers, adjustment field encoding), `FujiAF.ClassicChromeCandidate` (the v1 parameter file) |
+| `//host/firmware:classic-chrome-model` | `tables`, `oracle-input`, `oracle-compare`, `bundle`, `method`, `fit-cc`, `photo-identical`, `chart-patches`, `e-model`, `settings`, `look-reference` (usage with no arguments) |
 | `//host/firmware:film-stage-tests` | oracle fixtures, the 34 published CIEDE2000 pairs (Sharma, Wu and Dalal 2005), the parameter boundary, fit recovery of a reachable target, inverse round trip |
 | `//host/firmware:candidate-tests` | the v1 parameter file on a synthetic candidate: field encoding and chroma storage order against hand-worked values, read-back, refusals |
 | `//host/firmware:photo-session-tests` | the photo-session commands through the command line on flat JPEGs written by the pinned ffmpeg |
+| `//host/firmware:look-reference-tests` | F-Log2 against the data sheet's code values, the F-Gamut and BT.709 matrices, `.cube` parsing and trilinear interpolation, and the relative statistics on pairs with a known chroma, lightness and hue change |
 
 Private reproduction, from the worktree root with `P=private-data/analysis/classic-chrome`, `R=private-data/analysis/x-m1-1.50` and `X` the x70view checkout (revision `a47591d9bd`). `$R/payload.bin` is the length-correct complemented payload of the pinned DAT (bytes from 532 on, XOR 0xff, SHA-256 `8c6f806e…26c0`, [firmware extraction](firmware-extraction.md)); the two decodes come from `//lz:fflzd`:
 
@@ -285,7 +286,135 @@ Frames:
 
 ### 8.3 First session result (2026-10-21)
 
-The before-set was shot inside the first RAM-push session (E-CC-RAM-PUSH-SESSION-150) without a ColorChecker, on a tabletop scene under incandescent light at ISO 4000 with Incandescent WB. Check (a) failed there: the shot PROVIA JPEG and the PROVIA RAW conversion of its own RAF differ in all three planes, so this set's converted Velvia and ASTIA frames are not stand-ins for shot frames. `e_model` was not computed: `e-model` has no ISO or WB input, and which develop selectors change with ISO 4000 or Incandescent WB is unmapped. A repeat at ISO 200, DR100 and Daylight (or a fixed-WB light) with the chart gives the intended input.
+The before-set was shot inside the first RAM-push session (E-CC-RAM-PUSH-SESSION-150) without a ColorChecker, on a tabletop scene under incandescent light at ISO 4000 with Incandescent WB. Check (a) failed there: the shot PROVIA JPEG and the PROVIA RAW conversion of its own RAF differ in all three planes, so this set's converted Velvia and ASTIA frames are not stand-ins for shot frames. Conversions of one RAF are comparable with each other, and section 8.4 runs the `e-model` procedure on them with the ISO- and WB-dependent selectors mapped. The ColorChecker statistic of section 7 still needs a chart frame at ISO 200, DR100 and Daylight (or a fixed-WB light).
+
+### 8.4 Implementation check on the RAW-conversion set
+
+Question: does the body with the Classic Chrome RAM payload render the model's candidate stage, that is PROVIA's selectors with the data block's matrix, chroma 2x2 and tone record? Evidence class: hardware-observed images analysed with the host model, and a byte-read selector map of the 1.50 images (E-CC-IMPLEMENTATION-CHECK-150).
+
+Input: the in-camera RAW conversions of `DSCF3149.RAF` (ISO 4000, Incandescent WB, DR100 set manually, adjustments 0, exiftool-checked): `DSCF3164` PROVIA and `DSCF3165` Velvia and `DSCF3166` ASTIA on RC0, `DSCF3169` Classic Chrome with the payload resident. The payload's data block comes from `candidate.json` `188c521d…3e92` ([patch report 9](classic-chrome-patch.md#9-verification-results-2026-10-18-host-and-emulated)), and the PROVIA conversion made with the payload resident is plane-identical to `DSCF3164` (patch report 8.5).
+
+ISO and white balance are handled by mapping the selectors, not by a cancellation argument. ISO amplification and the white-balance multipliers act before the film stage's input `w`, which the inverse recovers from the PROVIA frame whatever they are. A cancellation argument covers only that and the shared gain record: the chroma gains and the luma-band factor sit after the matrix and tone curve, which differ between the two films, so a wrong gain there does not cancel. The map below lists every input of the stages the model represents, byte-read from image 5, image 4 and the fallback image. None of them is the white-balance setting, and the one ISO input leaves the DR100 values unchanged at ISO 4000:
+
+| Stage selector | Inputs | Value for these frames |
+| --- | --- | --- |
+| Gain record and tone key | develop code, mode, H/S indices, `level2` from `FUN_0073fc64` | `level2` is 0 only when record `+0x19c = 2`; `FUN_00d78db8` stores 2 there only for capture `+0x4bc = 8`, the ISO 100 code of `FUN_00eaec80` (E-FILMSIM-FIELDS-150). Every other ISO leaves `level2` to the DR setting, 1 at DR100 |
+| Luma bands, matrix, chroma 2x2 | develop code and row `+0x108` (written only 0) | as at ISO 200 |
+| Chroma gain `0xd62194[+0x10c]` | Color index | unity |
+| Chroma gain `0xd61f34[10 (+0x160) + (+0xf4)]` | `+0x160`, clamped to 0..3 by its setter `0x00d78c0c` (called from the still builder at `0x00d79568`); `+0xf4`, stored 2 by `FUN_00d791b0` | unity in every entry of rows 0..3 |
+| Chroma gain `0xd620b0[5 (sel - 1) + (+0x154)]` | film selector, DR index | unity at DR index 0 |
+| Chroma gain `0xd61e64[+0x13c]` | `+0x13c`, set only by the movie builder (`0x00d7868c` from `0x00eef3e0`), clamped to 0..9 | unity in entries 0..9 |
+| Chroma gain `0xd62134[FUN_0073f338]` | scene and filter fields `+0xe4`, `+0xe8`, stored 0 by `FUN_00d791b0` | index 0, unity |
+
+In image 5's develop code (`0x00d50000-0x00d80000`) the only word stores to `+0xe4`, `+0xe8` and `+0xf4` besides the initialiser's are in `FUN_00d753b8`, which fills a separate 0xd1c-byte buffer.
+
+Method: `classic-chrome-model e-model BUNDLE.json MANIFEST.json OUT.json CANDIDATE.json` takes the frame key `classicChrome` through the X-M1 PROVIA stage with the candidate's matrix, chroma and tone record, and writes each region's PROVIA, observed and predicted L*a*b*. Flat blocks of `DSCF3164` (32 px, luma SD at most 1.5 over the central 16 px) are inverted through the X-M1 PROVIA stage and developed through the X-M1 stage of Velvia and ASTIA with their stock parameters (the controls) and through the candidate stage, then compared with the same block of the film frame. Two looser block sets test the selection. Refused blocks are those the inverse rejects; target-clipped blocks have a film-frame mean with an sRGB channel within half a level of 0 or 255 and stay in the statistics.
+
+| Blocks | Film | Refused | Target clipped | Prediction, mean / p95 / max CIEDE2000 | PROVIA frame as prediction |
+| --- | --- | ---: | ---: | --- | --- |
+| 32 px, SD 1.5 (259) | Classic Chrome | 0 | 0 | 0.42 / 1.22 / 1.98 | 2.08 / 4.21 / 4.54 |
+| | Velvia | 0 | 3 | 0.68 / 1.60 / 2.57 | 1.46 / 2.46 / 3.95 |
+| | ASTIA | 0 | 0 | 0.98 / 1.80 / 2.96 | 0.93 / 1.70 / 2.18 |
+| 32 px, SD 3.0 (10,276) | Classic Chrome | 0 | 0 | 0.64 / 1.70 / 3.14 | 3.51 / 4.86 / 6.72 |
+| | Velvia | 0 | 474 | 0.73 / 1.64 / 3.52 | 2.48 / 4.68 / 6.04 |
+| | ASTIA | 0 | 246 | 0.91 / 1.86 / 3.74 | 1.19 / 2.08 / 3.23 |
+| 64 px, SD 3.0 (1,988) | Classic Chrome | 0 | 0 | 0.62 / 1.62 / 2.77 | 3.52 / 4.60 / 5.83 |
+| | Velvia | 0 | 80 | 0.73 / 1.61 / 2.74 | 2.41 / 4.57 / 5.14 |
+| | ASTIA | 0 | 43 | 0.91 / 1.83 / 3.91 | 1.12 / 2.03 / 3.11 |
+
+The inverse's own floor, PROVIA inverted and developed through PROVIA again, is 0.60 / 1.50 / 2.40 on the 259 blocks (0.57-0.63 mean on the other sets). On the 129 chromatic blocks of the first set (PROVIA C* at least 5) the predictions give Classic Chrome 0.48 / 1.42 / 1.98, Velvia 0.72 / 1.55 / 2.03 and ASTIA 1.12 / 1.64 / 2.08.
+
+Discrimination on the 259 blocks: the Classic Chrome frame predicted with one or more served items replaced by PROVIA's (private variant files in `private-data/analysis/classic-chrome/verify/`).
+
+| Classic Chrome stage | Mean / p95 / max |
+| --- | --- |
+| Candidate, as the data block serves it | 0.42 / 1.22 / 1.98 |
+| PROVIA's tone record | 0.88 / 1.95 / 2.05 |
+| PROVIA's matrix | 0.86 / 2.18 / 3.01 |
+| PROVIA's chroma 2x2 | 1.61 / 3.39 / 4.18 |
+| PROVIA's matrix and chroma | 2.05 / 4.60 / 4.92 |
+| PROVIA's stage | 2.38 / 5.01 / 5.64 |
+
+The Classic Chrome error is at or below both controls on every block set, and swapping any one served item back to PROVIA's doubles to quadruples it. The controls also change stages Classic Chrome shares with PROVIA (both use gain record 101, and Velvia its own luma-band preset), so a lower Classic Chrome error is expected. ASTIA differs little from PROVIA on these colours: it fixes the error level but does not discriminate on the strict block set (0.98 against 0.93 for the unchanged PROVIA frame; 0.91 against 1.19 on the looser set).
+
+Limits: the scene holds mostly yellow low-chroma highlights, a few dark blue blocks and dark neutrals (coverage in section 8.5). This is not the ColorChecker `e_model` of section 7, and it does not test the sensor models. The selector map covers word stores with immediate offsets in the develop code; a store from elsewhere or through a computed address is not excluded. The ISO code meaning of capture `+0x4bc` is static inference.
+
+Verdict: the body applies the data block's matrix, chroma 2x2 and tone record over PROVIA's other selectors as the candidate stage describes, within the inverse's resolution of about 0.6 mean CIEDE2000 on the colours this scene holds. Nothing points to a stage that differs from the model.
+
+### 8.5 Direction check against Fujifilm's F-Log2 LUTs
+
+Question: does the X-M1 candidate move colours away from PROVIA the way Fujifilm's own Classic Chrome does? The reference is the GFX ETERNA 55 3D-LUT pack v1.10 (`https://dl.fujifilm-x.com/support/lut/gfx-eterna-55-3d-lut-v110.zip`, SHA-256 `febfc7050999620651ca0cf162bf8b499970ef270b4da632765b61b958cf7940`, kept in `private-data/analysis/classic-chrome/lut/` with `SOURCE.txt`), files `FLog2_to_PROVIA` and `FLog2_to_CLASSIC-CHROME` (also `Velvia` and `ASTIA`) at grids 33 and 65, F-Gamut to BT.709. It is a 2025 cinema reference from a later sensor and processor generation, so this is a direction check, not a target. Evidence class: reported reference and host model (E-CC-LUT-DIRECTION-150).
+
+Method: `classic-chrome-model look-reference FILM PROVIA.cube FILM.cube BUNDLE.json CANDIDATE.json E-MODEL.json OUT.json` (module `LookReference`).
+
+- Scene set, D65 reflection with white Y = 1: the neutral ramp (25), a low-chroma grid (L* 20-90 by 10, hue by 20 degrees, C* 4, 8, 12; 432) and the gamut set (642), all inside F-Gamut, whose primaries equal BT.2020's.
+- LUT path, from Fujifilm's F-Log2 Data Sheet Ver.1.1 (`https://dl.fujifilm-x.com/support/lut/F-Log2_DataSheet_E_Ver.1.1.pdf`, SHA-256 `0aadf0c5…29cc`): XYZ to linear F-Gamut from the sheet's primaries and D65 white, the sheet's F-Log2 encoding (10-bit codes 95, 400 and 570 at 0, 18 and 90 % reflection, which the tests check), trilinear interpolation, and the BT.709 output read with the sRGB transfer function into CIELAB D65. The PROVIA LUT puts 18 % grey at 0.457 of full scale (117 of 255), where the model's exposure puts the camera's PROVIA (118).
+- Model path: the same scene set through the X-M1 sensor model and the section 4 exposure, X-M1 PROVIA stage against the candidate stage (against the stock X-M1 Velvia and ASTIA stages for the calibration films).
+- Pair: the 259 blocks of section 8.4, `DSCF3164` against `DSCF3169` (and the model's prediction for the same blocks).
+- Statistics per pair of renderings, binned by the PROVIA rendering's CIELAB hue (30-degree sectors, C* at least 5), L* band and C* band: mean chroma ratio C*film / C*PROVIA, mean dL* and mean hue difference dh in degrees, film minus PROVIA.
+
+The 33 and 65 grids agree within 0.017 in chroma ratio, 0.15 in dL* and 0.45 degrees in dh per sector for the three films, and within 0.31 L* on the ramp; the tables use the 65 grid.
+
+Calibration with the X-M1's own films: the same comparison for Velvia and ASTIA, whose X-M1 side uses Fujifilm's stock X-M1 parameters, shows how well the LUT generation's relative look carries over to this body. Mean (max) absolute difference between the LUT and the X-M1 stage over the 12 sectors:
+
+| Film | Chroma ratio, all chromatic, LUT / X-M1 | Chroma ratio | dL* | dh (degrees) | Sectors agreeing in sign: ratio, dL*, dh |
+| --- | --- | --- | --- | --- | --- |
+| Velvia (X-M1 stock) | 1.17 / 1.20 | 0.05 (0.08) | 0.74 (1.40) | 2.29 (7.07) | 12, 10, 8 |
+| ASTIA (X-M1 stock) | 0.99 / 1.03 | 0.05 (0.09) | 0.81 (2.32) | 1.88 (4.26) | 12, 8, 10 |
+| Classic Chrome (X-M1 candidate) | 0.76 / 0.76 | 0.03 (0.08) | 0.90 (2.18) | 1.65 (4.32) | 12, 9, 12 |
+
+Signs agree when both values have the same sign, or both lie within 0.05 of 1 (ratio), 0.5 (dL*) or 2 degrees (dh). Chroma ratio carries over closely for the stock films; sector dL* and small hue shifts are at the level of the generation difference.
+
+Classic Chrome against PROVIA per hue sector, LUT / X-M1 candidate, with the pair's observed values where the scene has blocks:
+
+| PROVIA hue sector | Chroma ratio | dL* | dh | Pair: blocks, ratio, dL*, dh |
+| --- | --- | --- | --- | --- |
+| 0-30 | 0.80 / 0.81 | -0.67 / +0.15 | +2.8 / +3.9 | none |
+| 30-60 | 0.82 / 0.83 | -1.17 / -0.01 | -1.7 / -2.0 | none |
+| 60-90 | 0.76 / 0.78 | -0.07 / +0.37 | -3.6 / -6.5 | none |
+| 90-120 | 0.71 / 0.71 | -0.40 / -0.39 | -4.7 / -6.1 | 116, 0.64, +1.46, -5.4 |
+| 120-150 | 0.70 / 0.71 | -1.47 / -3.14 | -0.4 / +1.5 | none |
+| 150-180 | 0.72 / 0.76 | -1.56 / -2.46 | +5.0 / +6.9 | none |
+| 180-210 | 0.82 / 0.88 | -1.26 / -1.73 | +1.8 / +2.2 | none |
+| 210-240 | 0.85 / 0.91 | -1.10 / -1.29 | -6.2 / -6.1 | none |
+| 240-270 | 0.80 / 0.81 | -1.55 / -1.02 | -10.6 / -14.0 | 2, 0.55, -0.35, -18.8 |
+| 270-300 | 0.70 / 0.67 | -1.30 / -0.43 | -7.8 / -12.2 | 11, 0.55, -0.38, -16.7 |
+| 300-330 | 0.69 / 0.61 | -1.33 / +0.85 | +1.5 / +0.2 | none |
+| 330-360 | 0.73 / 0.72 | -0.43 / +1.21 | +5.6 / +6.2 | none |
+
+The pair's blocks are low-chroma: 128 of 129 have PROVIA C* below 15, 114 lie above L* 70 (the 90-120 sector) and 13 below L* 35 (the blue sectors). In the same bins, LUT / candidate / pair observed / pair predicted:
+
+| Bin | Chroma ratio | dL* | dh |
+| --- | --- | --- | --- |
+| 90-120, C* 5-15 | 0.65 / 0.66 / 0.64 / 0.66 | -0.63 / +0.25 / +1.46 / +1.44 | -6.2 / -6.6 / -5.4 / -4.8 |
+| 90-120, L* above 70 | 0.63 / 0.69 / 0.64 / 0.66 | +0.43 / +0.58 / +1.45 / +1.45 | -3.2 / -4.8 / -5.4 / -4.7 |
+| 270-300, C* 5-15 | 0.64 / 0.64 / 0.55 / 0.53 | -0.08 / +0.23 / -0.38 / -0.39 | -8.2 / -11.7 / -16.7 / -19.9 |
+
+Tone curve, neutral ramp, Classic Chrome L* minus PROVIA L*:
+
+| Reflection Y | LUT PROVIA L* | LUT dL* | X-M1 PROVIA L* | Candidate dL* |
+| ---: | ---: | ---: | ---: | ---: |
+| 0.005 | 1.3 | -0.8 | 0.3 | 0.0 |
+| 0.019 | 4.9 | -2.3 | 2.7 | 0.0 |
+| 0.036 | 11.8 | -4.1 | 9.8 | -1.5 |
+| 0.071 | 24.7 | -3.6 | 24.4 | -2.3 |
+| 0.137 | 41.7 | -0.9 | 42.0 | -1.2 |
+| 0.266 | 59.4 | +1.6 | 60.6 | +1.5 |
+| 0.516 | 74.8 | +1.7 | 78.4 | +1.5 |
+| 1.0 | 84.7 | +1.0 | 93.4 | +0.7 |
+
+Reading:
+
+- Chroma: both lower chroma in every sector, by the same amount overall (0.76 against 0.76) and within 0.08 per sector, closer than the stock-film calibration. The pair shows the same reduction (0.64 against the LUT's 0.65 in its main bin).
+- Hue: the signs agree in all 12 sectors. Both turn blues (240-300) toward cyan by 8-14 degrees and yellows (60-120) toward orange, greens (150-180) toward cyan and magenta-reds (330-30) toward orange. The candidate's blue rotation is 1.3-1.6 times the LUT's, and the pair's dark low-chroma blues rotate further still (-17), which the model predicts for those blocks (-20).
+- Lightness: the signs agree in 9 sectors. In the red-magenta sectors 300-30 the LUT darkens by 0.4-1.3 and the candidate lightens by 0.2-1.2, a disagreement of the size the calibration films show (8 and 10 sectors agreeing).
+- Tone curve: the same shape, darker shadows and lighter mid-tones and highlights, crossing between Y 0.14 and 0.27. The LUT deepens the shadows about twice as much and already changes the darkest steps, where the candidate equals PROVIA up to Y 0.03; the Velvia and ASTIA LUTs show the same stronger shadow change against the X-M1's own films, so the gap belongs to the reference generation. The pair's yellow highlights are 1.45 L* lighter, which the ramp's highlight lift and the model's prediction for those blocks both give.
+
+Coverage of the pair: the scene has chromatic blocks only in the 90-120 sector (116), 270-300 (11) and 240-270 (2), all below C* 15 but one, and neutral blocks only below L* 10. It does not cover the 0-90 sectors (reds, oranges, skin), 120-240 (greens, cyans), 300-360 (purples, magentas), any C* above 15, or neutral mid-tones and highlights; for those the comparison rests on the LUT and the model alone.
+
+Limits: a different generation (GFX ETERNA 55, 2025) with its own PROVIA, rendered from F-Log2 scene data rather than through an in-camera JPEG path; the BT.709 output is read with the sRGB curve; colorimetric scene colours without spectra; the X-M1 side uses the public X-M1 sensor matrix; spec 19.5.6 asks for the F-Log2 path to be calibrated against the X-M1's own films, which is done here in relative form for Velvia and ASTIA only (no PRO Neg Std pixel-aligned frame).
+
+Verdict: the candidate's Classic Chrome moves colours from PROVIA in the same direction as Fujifilm's Classic Chrome LUT in every hue sector for chroma and hue and on the tone curve, with matching overall chroma reduction; lightness differs in sign only in the red-magenta sectors, inside the spread the stock films show.
 
 ## 9. Limits and open risks
 

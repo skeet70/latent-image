@@ -23,6 +23,7 @@ module FujiAF.Colour
   , colorChecker24
   , neutralRamp
   , gamutSet
+  , labGrid
   , inRec2020
   ) where
 
@@ -192,13 +193,18 @@ neutralRamp = PatchSet "neutral-ramp" [Patch ("grey Y=" ++ show y) (scale y d65)
 -- | L*a*b* (D65) grid, L* 20..90 by 10, hue by 20 degrees, C* 15..105 by 15,
 -- kept where linear Rec.2020 RGB lies in [0, 1].
 gamutSet :: PatchSet
-gamutSet =
+gamutSet = labGrid "gamut" [20, 30 .. 90] [0, 20 .. 340] [15, 30 .. 105]
+
+-- | The L*a*b* (D65) points of the given L*, hue (degrees) and C* values
+-- whose linear Rec.2020 RGB lies in [0, 1].
+labGrid :: String -> [Int] -> [Int] -> [Int] -> PatchSet
+labGrid name ls hs cs =
   PatchSet
-    "gamut"
+    name
     [ Patch ("L" ++ show l ++ " h" ++ show h ++ " C" ++ show c) xyz
-    | l <- [20, 30 .. 90 :: Int]
-    , h <- [0, 20 .. 340 :: Int]
-    , c <- [15, 30 .. 105 :: Int]
+    | l <- ls
+    , h <- hs
+    , c <- cs
     , let hr = fromIntegral h * pi / 180
           xyz = labToXyz d65 (Lab (fromIntegral l) (fromIntegral c * cos hr) (fromIntegral c * sin hr))
     , inRec2020 xyz
