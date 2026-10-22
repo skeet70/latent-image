@@ -44,6 +44,9 @@ module FujiAF.UpdateContainer
   , extractPlain
   , replacePlain
   , replacePlainAt
+  , fontWindow
+  , extractFont
+  , replaceFont
   , record5Window
   , replaceRecord5
   , serializeRecord
@@ -825,6 +828,51 @@ writePlain parts start stop fileBytes =
       postHead = partPostHead parts
       at = start - base
    in parts {partPostHead = B.take at postHead <> fileBytes <> B.drop (at + (stop - start)) postHead}
+
+-- The id-3 font window (FONT_ICON.FDL): entry 3's flash span, carried in the
+-- post-tail span after the id-2 extent. The loader reads the whole window raw
+-- to entry 3's load address in 0x20000-byte blocks, so the window and not the
+-- segment size bounds what is loaded.
+fontWindow :: Parts -> Either String (Int, Int)
+fontWindow parts = do
+  let entry = entryById 3 (partSegments parts)
+      (image2Start, _, _) = image2Extent parts
+      postStart = toInteger image2Start + toInteger (B.length (partImage2 parts))
+      postStop = postStart + toInteger (B.length (partPostTail parts))
+      start = toInteger (segFlash entry)
+      stop = start + toInteger (segFlashLen entry)
+  if segFlashLen entry == 0 || start `mod` 0x20000 /= 0 || toInteger (segFlashLen entry) `mod` 0x20000 /= 0
+    then Left ("the font window is not a nonempty 0x20000-aligned span: flash " ++ showHexWord (segFlash entry) ++ " length " ++ showHexWord (segFlashLen entry))
+    else pure ()
+  if toInteger (segSize entry) > toInteger (segFlashLen entry)
+    then Left ("the font size " ++ showHexWord (segSize entry) ++ " exceeds its window " ++ showHexWord (segFlashLen entry))
+    else pure ()
+  if start < postStart || stop > postStop
+    then Left ("the font window " ++ show start ++ ".." ++ show stop ++ " lies outside the span carried after the image-2 extent, " ++ show postStart ++ ".." ++ show postStop)
+    else pure ()
+  pure (fromInteger start, fromInteger stop)
+
+-- The font window in media form, the loader's raw copy.
+extractFont :: Parts -> Either String MediaImage
+extractFont parts = do
+  (start, stop) <- fontWindow parts
+  let (image2Start, _, _) = image2Extent parts
+      base = image2Start + B.length (partImage2 parts)
+  pure (MediaImage (B.map complement (B.take (stop - start) (B.drop (start - base) (partPostTail parts)))))
+
+-- The whole font window replaced in place; no segment, descriptor or trailer
+-- word changes.
+replaceFont :: Parsed -> MediaImage -> Either String Parts
+replaceFont source media = do
+  let parts = parsedParts source
+      bytes = mediaImageBytes media
+      (image2Start, _, _) = image2Extent parts
+      postTail = partPostTail parts
+  (start, stop) <- fontWindow parts
+  let offset = start - (image2Start + B.length (partImage2 parts))
+  if B.length bytes /= stop - start
+    then Left ("font window is " ++ show (B.length bytes) ++ " bytes against the stored flash length " ++ show (stop - start))
+    else Right parts {partPostTail = B.take offset postTail <> B.map complement bytes <> B.drop (offset + B.length bytes) postTail}
 
 -- The image-5 record window in media offsets: the record's own flash word and
 -- its declared flash length. Every offset inside it holds the record or the
