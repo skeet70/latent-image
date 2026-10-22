@@ -1,10 +1,11 @@
 -- Rewrites entries of transport/ram-push-review.json, or with a leading
--- --classic-chrome transport/ram-push-cc-review.json, with the digests of the
--- current tree's relink and one status. `bazel run` only: the relink reads
--- private-data under BUILD_WORKSPACE_DIRECTORY.
---   ram-push-repin [--classic-chrome] approved REVIEW_ID COMMIT SUBJECT...
---   ram-push-repin [--classic-chrome] content-checked CHECK_ID SUBJECT...
---   ram-push-repin [--classic-chrome] unreviewed COMMIT SUBJECT...
+-- --classic-chrome transport/ram-push-cc-review.json, or with a leading
+-- --classic-chrome-icon transport/ram-push-cc-icon-review.json, with the
+-- digests of the current tree's relink and one status. `bazel run` only: the
+-- relink reads private-data under BUILD_WORKSPACE_DIRECTORY.
+--   ram-push-repin [--classic-chrome|--classic-chrome-icon] approved REVIEW_ID COMMIT SUBJECT...
+--   ram-push-repin [--classic-chrome|--classic-chrome-icon] content-checked CHECK_ID SUBJECT...
+--   ram-push-repin [--classic-chrome|--classic-chrome-icon] unreviewed COMMIT SUBJECT...
 -- SUBJECT is a pin identity or `publication-contract`.
 module Main where
 
@@ -32,6 +33,7 @@ main = do
   arguments <- getArgs
   let (payload, recordName, rest) = case arguments of
         "--classic-chrome" : more -> (classicChromePayload, "ram-push-cc-review.json", more)
+        "--classic-chrome-icon" : more -> (classicChromeIconPayload, "ram-push-cc-icon-review.json", more)
         _ -> (bankD3Payload, "ram-push-review.json", arguments)
   (status, subjects) <- either die pure (statusArguments rest)
   when (null subjects) (die "name at least one pin identity or publication-contract")

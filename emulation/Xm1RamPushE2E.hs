@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, runRamPushE2E) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, classicChromeIconPayload, runRamPushE2E) where
 
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, try)
 import Control.Monad (forM, forM_, unless, when)
@@ -29,6 +29,7 @@ import FujiAF.Transport (ensurePrivateDirectory, realClock, writePrivateBytes)
 import Xm1UnreviewedRelink (runUnreviewedRamPush, runUnreviewedRamUnload, withUnreviewedBuild)
 import RamPushReviewedPins (reviewedContract)
 import RamPushCcReviewedPins (reviewedCcContract)
+import RamPushCcIconReviewedPins (reviewedCcIconContract)
 
 -- | Unreviewed skips the compiled source-identity and publication-contract pins; its policy
 -- decides whether a bank that fails the ELF allowlist is still pushed. Reviewed enforces it.
@@ -54,11 +55,17 @@ payloadText :: Payload -> T.Text
 payloadText p = case payloadKind p of
   RecipeBankD3 -> "recipe-bank-d3"
   ClassicChrome -> "classic-chrome"
+  ClassicChromeIcon -> "classic-chrome-icon"
 
 payloadContract :: Payload -> ReviewedContract
 payloadContract p = case payloadKind p of
   RecipeBankD3 -> reviewedContract
   ClassicChrome -> reviewedCcContract
+  ClassicChromeIcon -> reviewedCcIconContract
+
+-- | Whether the payload carries the Classic Chrome publications.
+carriesClassicChrome :: Payload -> Bool
+carriesClassicChrome p = payloadKind p `elem` [ClassicChrome, ClassicChromeIcon]
 
 -- | The Classic Chrome entry words and hook sites (reports/classic-chrome-patch.md
 -- section 8.2.7 step 2), armed from the attach to the end of install.
@@ -377,7 +384,7 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
       unloadWith = case relinkMode settings of
         ReviewedRelink -> runRamUnload (payloadContract selected)
         UnreviewedRelink _ -> runUnreviewedRamUnload
-      fetchSites = if payloadKind selected == ClassicChrome then classicChromeFetchSites else []
+      fetchSites = if carriesClassicChrome selected then classicChromeFetchSites else []
       relinkFiles base = relinkAt base $ \pinned -> Relinked (pinnedDocument pinned) (pinnedRuntime pinned)
         <$> B.readFile (pinnedDirectory pinned </> "kernel.syms")
         <*> B.readFile (pinnedDirectory pinned </> "kernel.disasm")
@@ -541,7 +548,7 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
           ]
     writePrivateBytes (e2e </> "e2e-result.json") (BL.toStrict (encode result) <> "\n")
     pure (manifestPublications manifest)
-  when (planUnload plan && payloadKind selected == ClassicChrome) $
+  when (planUnload plan && carriesClassicChrome selected) $
     timed "cold-restart-read" (coldRestartRead python runtime installedMedia adjustmentNand cardImage (checkpointRoot settings) published e2e)
 
 -- | A cold boot of the same inputs, then every publication word read against its old word.

@@ -255,3 +255,29 @@ haskell_library(
         ":classic-chrome",
     ],
 )
+
+# The Classic Chrome icon RAM-push publications over the Classic Chrome ones.
+haskell_library(
+    name = "classic-chrome-icon-ram",
+    srcs = ["FujiAF/ClassicChromeIconRam.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":aeson",
+        ":base",
+        ":bytestring",
+        ":classic-chrome",
+        ":classic-chrome-icon",
+        ":classic-chrome-ram",
+        ":json",
+        ":scientific",
+        ":text",
+        ":vector",
+    ],
+)

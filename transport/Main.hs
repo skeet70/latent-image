@@ -36,6 +36,7 @@ import FujiAF.Rehearsal
 import qualified FujiAF.Broker as P
 import RamPushReviewedPins (reviewedContract)
 import RamPushCcReviewedPins (reviewedCcContract)
+import RamPushCcIconReviewedPins (reviewedCcIconContract)
 
 data RouteSource = RoutesFixed | RoutesDerived FilePath
 data Operation = Identify | ReadConfig FilePath | EndSetting | ProbeRam | ReadLog | ProbeBootRom | ProbeArea2 | ProbeStraps | ProbeCode | ProbeOwnership | ProbeRoutes RouteSource | DumpRam DumpSegment | ReadMedia | ArmAutoAct DeviceStart | CommitF7 CommitDirection FilePath | ReadRam FilePath (Maybe (Int,Int)) | ProbeSdHost (Maybe (Int,Int)) | RamAlloc Int | RamRelink FilePath | RamPush FilePath FilePath | RamFree FilePath | RamUnload FilePath
@@ -156,7 +157,7 @@ dispatch Help = putStr $ unlines
   , "commit-f7-restore REFERENCE_BIN [OUTDIR] the same sequence from stored 0xf7 = 0x01, storing 0xf7 = 0x00; stored 0x80 stays 0x22; needs a session to start with 0xf7 stored, which is unproved"
   , "read-ram PLAN_JSON [--repeat N --interval-ms M] [OUTDIR] read-only RAM watch on a body with 0xf7 already nonzero, in a jig boot or an ordinary boot's ff80 route: identity, config window 0x000000 refused unless 0xf7 != 0, then one 0x200001 function 2 request per plan window (1..248 bytes) for N passes M ms apart (N 1..600, M 100..10000, N * windows <= 2032), C4; no write is sent, so no supply cut is needed"
   , "probe-sd-host [--repeat N --interval-ms M] [OUTDIR] read-only capture of the SD slot's host-controller registers on a body with 0xf7 already nonzero: identity, config window 0x000000 refused unless 0xf7 != 0, then per pass 0xfff50000 +0x00 (32 B), +0x24 (6 B), +0x2c (16 B) and +0x3e (2 B), never the +0x20 data port, for N passes M ms apart (N 1..508, M 100..10000), C4; no write is sent"
-  , "ram-alloc SIZE [OUTDIR]       allocate and peer-prepare an X-M1 RAM workspace; SIZE is a payload's fixed bound, 0x1b6d8 (recipe bank and D3) or 0x1560 (Classic Chrome); retain ram-alloc-state.json"
+  , "ram-alloc SIZE [OUTDIR]       allocate and peer-prepare an X-M1 RAM workspace; SIZE is a payload's fixed bound, 0x1b6d8 (recipe bank and D3), 0x1560 (Classic Chrome) or 0x1970 (Classic Chrome with icon); retain ram-alloc-state.json"
   , "ram-relink STATE OUTDIR        build the reviewed manifest and runtime of the allocation's payload at the retained base with the camera's pinned relinker; no USB"
   , "ram-push STATE MANIFEST [OUTDIR] upload a manifest linked to the retained allocation, install and write ram-push-state.json"
   , "ram-free STATE [OUTDIR]       free a retained allocation that was not installed"
@@ -312,6 +313,7 @@ dispatch (Live operation requested) = case operation of
 contractFor :: Int -> ReviewedContract
 contractFor size = case payloadKind <$> payloadOfSize size of
   Just ClassicChrome -> reviewedCcContract
+  Just ClassicChromeIcon -> reviewedCcIconContract
   _ -> reviewedContract
 
 ramWatch :: FilePath -> Maybe (Int,Int) -> IO RamWatch

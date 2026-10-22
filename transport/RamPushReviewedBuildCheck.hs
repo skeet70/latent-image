@@ -4,7 +4,9 @@
 -- inputs from BUILD_WORKSPACE_DIRECTORY. The remaining cases run from a fresh
 -- directory outside the workspace with a USB provider that fails every call.
 -- With `--classic-chrome` it checks the Classic Chrome payload against
--- `reviewedCcContract`; otherwise bank+D3 against `reviewedContract`.
+-- `reviewedCcContract`, with `--classic-chrome-icon` the Classic Chrome icon
+-- payload against `reviewedCcIconContract`; otherwise bank+D3 against
+-- `reviewedContract`.
 module Main where
 
 import Control.Monad (forM, unless)
@@ -26,6 +28,7 @@ import FujiAF.Transport (UsbApi(..), realClock, writePrivateBytes)
 import RamPushToolchain (RamPushToolchain(..))
 import RamPushReviewedPins (reviewedContract)
 import RamPushCcReviewedPins (reviewedCcContract)
+import RamPushCcIconReviewedPins (reviewedCcIconContract)
 
 -- | The payload under check, its compiled contract, the other payload and
 -- its contract, and the label its acceptance lines carry.
@@ -35,7 +38,8 @@ targetFor :: [String] -> IO Target
 targetFor arguments = case arguments of
   [] -> pure (Target bankD3Payload reviewedContract classicChromePayload reviewedCcContract "reviewed contract")
   ["--classic-chrome"] -> pure (Target classicChromePayload reviewedCcContract bankD3Payload reviewedContract "reviewed CC contract")
-  _ -> putStrLn "usage: ram-push-reviewed-build-check [--classic-chrome]" >> exitFailure
+  ["--classic-chrome-icon"] -> pure (Target classicChromeIconPayload reviewedCcIconContract classicChromePayload reviewedCcContract "reviewed CC icon contract")
+  _ -> putStrLn "usage: ram-push-reviewed-build-check [--classic-chrome|--classic-chrome-icon]" >> exitFailure
 
 failing :: String -> IO a
 failing what = ioError (userError ("refusal case attempted USB "++what))

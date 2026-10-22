@@ -1253,7 +1253,7 @@ genrule(
         "@lab_coreutils//:bin/sort",
     ],
     outs = ["ClassicChromeRamBuilder.hs"],
-    cmd = "$(location @lab_bash//:bin/bash) $(location classic-chrome-ram-builder-digest.sh) $@ $(location @lab_coreutils//:bin/sha256sum) $(location @lab_coreutils//:bin/sort) $(locations :build-classic-chrome-ram-sources)",
+    cmd = "$(location @lab_bash//:bin/bash) $(location classic-chrome-ram-builder-digest.sh) $@ classic-chrome-ram-builder-module ClassicChromeRamBuilder classicChromeRamBuilderDigest $(location @lab_coreutils//:bin/sha256sum) $(location @lab_coreutils//:bin/sort) $(locations :build-classic-chrome-ram-sources)",
     tools = ["classic-chrome-ram-builder-digest.sh"],
 )
 
@@ -1274,6 +1274,110 @@ filegroup(
     srcs = [
         "build-classic-chrome-ram.sh",
         ":build-classic-chrome-ram",
+    ],
+)
+
+haskell_test(
+    name = "classic-chrome-icon-ram-tests",
+    srcs = ["ClassicChromeIconRamTests.hs"],
+    data = ["classic-chrome-liveview-image5.json"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:classic-chrome",
+        "//host:classic-chrome-icon",
+        "//host:classic-chrome-icon-ram",
+        "//host:classic-chrome-ram",
+    ],
+)
+
+# The Classic Chrome icon RAM-push builder: the Classic Chrome relink script
+# and link, the icon publications and the allocation's icon content.
+haskell_binary(
+    name = "build-classic-chrome-icon-ram",
+    srcs = [
+        "BuildClassicChromeIconRam.hs",
+        "RecipeBankRamLayout.hs",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    main_file = "BuildClassicChromeIconRam.hs",
+    deps = [
+        ":classic-chrome-icon-ram-builder",
+        ":ram-push-toolchain",
+        "//host:base",
+        "//host:bytestring",
+        "//host:classic-chrome",
+        "//host:classic-chrome-icon-ram",
+        "//host:classic-chrome-ram",
+        "//host:directory",
+        "//host:host-support",
+        "//host:json",
+        "//host:unix",
+    ],
+)
+
+# Their digest is the builder identity a Classic Chrome icon RAM-push manifest carries.
+filegroup(
+    name = "build-classic-chrome-icon-ram-sources",
+    srcs = [
+        "BuildClassicChromeIconRam.hs",
+        "RecipeBankRamLayout.hs",
+        "classic-chrome-icon.txt",
+        "//host:FujiAF/ClassicChrome.hs",
+        "//host:FujiAF/ClassicChromeIcon.hs",
+        "//host:FujiAF/ClassicChromeIconRam.hs",
+        "//host:FujiAF/ClassicChromeRam.hs",
+        "//host:FujiAF/FdlFont.hs",
+        "//host:FujiAF/Host.hs",
+        "//host:FujiAF/JSON.hs",
+        "//host:FujiAF/LabelRecord.hs",
+        "//host:FujiAF/UpdateContainer.hs",
+    ],
+)
+
+genrule(
+    name = "classic-chrome-icon-ram-builder-module",
+    srcs = [
+        ":build-classic-chrome-icon-ram-sources",
+        "@lab_bash//:bin/bash",
+        "@lab_coreutils//:bin/sha256sum",
+        "@lab_coreutils//:bin/sort",
+    ],
+    outs = ["ClassicChromeIconRamBuilder.hs"],
+    cmd = "$(location @lab_bash//:bin/bash) $(location classic-chrome-ram-builder-digest.sh) $@ classic-chrome-icon-ram-builder-module ClassicChromeIconRamBuilder classicChromeIconRamBuilderDigest $(location @lab_coreutils//:bin/sha256sum) $(location @lab_coreutils//:bin/sort) $(locations :build-classic-chrome-icon-ram-sources)",
+    tools = ["classic-chrome-ram-builder-digest.sh"],
+)
+
+haskell_library(
+    name = "classic-chrome-icon-ram-builder",
+    srcs = [":ClassicChromeIconRamBuilder.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-XGHC2021",
+    ],
+    deps = ["//host:base"],
+)
+
+# What FujiAF.RamPush runs to relink a Classic Chrome icon payload: the
+# Classic Chrome relink script with this builder.
+filegroup(
+    name = "classic-chrome-icon-ram-relinker",
+    srcs = [
+        "build-classic-chrome-ram.sh",
+        ":build-classic-chrome-icon-ram",
     ],
 )
 
