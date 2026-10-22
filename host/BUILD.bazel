@@ -173,6 +173,25 @@ haskell_library(
     ],
 )
 
+# The USB personality toggle sites and image-5 merge
+# (reports/usb-personality-toggle.md).
+haskell_library(
+    name = "usb-toggle",
+    srcs = ["FujiAF/UsbToggle.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":base",
+        ":bytestring",
+        ":classic-chrome",
+    ],
+)
+
 # The Classic Chrome RAM-push publications and shape check
 # (reports/classic-chrome-patch.md section 8.2).
 haskell_library(
