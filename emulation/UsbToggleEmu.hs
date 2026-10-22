@@ -853,8 +853,8 @@ scenarios =
   [ Scenario ("e5u-ff80-" ++ datName d) "e5u" d Stored0 RouteBoot [Attach HoldQ, Detach, Attach Plain, Enumerate] | d <- toggles ] ++
   [ Scenario ("e5u-q-ptp-" ++ datName d) "e5u" d Stored0 RouteBoot
       [Attach HoldQ, Detach, Attach Plain, Detach, Attach HoldQ, Enumerate] | d <- toggles ] ++
-  [ Scenario ("e6-" ++ datName d ++ "-" ++ nandName n ++ q) "e6" d n (CableAtReset held) [Enumerate]
-  | d <- toggles, n <- [Stored0, Stored0Pid02b6], (q, held) <- [("-plain", NoQ), ("-q", QFromReset)] ] ++
+  [ Scenario ("e6-" ++ datName d ++ "-" ++ nandName Stored0Pid02b6 ++ q) "e6" d Stored0Pid02b6 (CableAtReset held) [Enumerate]
+  | d <- toggles, (q, held) <- [("-plain", NoQ), ("-q", QFromReset)] ] ++
   [ Scenario ("e7-" ++ datName d ++ "-plain") "e7" d Stored1 RouteBoot [Attach Plain, Enumerate] | d <- toggles ] ++
   [ Scenario ("e7-" ++ datName d ++ "-q") "e7" d Stored1 RouteBoot [Attach HoldQ, Enumerate] | d <- toggles ] ++
   [ Scenario "control-e3-stock" "control" StockDat Stored0 RouteBoot [Attach Plain, Enumerate]
