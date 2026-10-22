@@ -29,13 +29,18 @@ module FujiAF.LabelRecord
   , specialRecordOffset
   , LabelName
   , labelName
+  , labelNameUnits
+  , labelNameFromUnitHex
   , labelNameText
+  , labelNameUnitList
+  , labelNameUnitHex
   , LabelLayout (..)
   , labelLayout
   , labelLayoutList
   , SpecialRecordBytes
   , specialRecordBytes
   , specialRecordBytesValue
+  , specialRecordContent
   , specialRecordFromHex
   , specialRecordHex
   , writeSpecialRecord
@@ -146,31 +151,60 @@ specialRecordOffset i load extentLength
     address = specialRecordAddress i
     offset = fromIntegral (address - load)
 
--- Printable ASCII (the resident FONT_LATIN cmap), 1..27 characters.
-newtype LabelName = LabelName String
+-- 1..27 nonzero UTF-16 code units. labelName admits printable ASCII (the
+-- resident FONT_LATIN cmap); labelNameUnits admits any nonzero unit, such as
+-- an icon-font code point.
+newtype LabelName = LabelName [Word16]
   deriving (Eq, Show)
 
 labelName :: String -> Either String LabelName
 labelName text
-  | null text = Left "the recipe name is empty"
-  | length text > labelNameMax =
+  | any (not . printableAscii) text =
+      Left "the recipe name has a character outside printable ASCII (the resident FONT_LATIN cmap covers printable ASCII)"
+  | otherwise = labelNameUnits (map (fromIntegral . fromEnum) text)
+  where
+    printableAscii c = c >= ' ' && c <= '~'
+
+labelNameUnits :: [Word16] -> Either String LabelName
+labelNameUnits units
+  | null units = Left "the recipe name is empty"
+  | length units > labelNameMax =
       Left
         ( "the recipe name is "
-            ++ show (length text)
+            ++ show (length units)
             ++ " characters; the "
             ++ show labelBufferBytes
             ++ "-byte buffer holds "
             ++ show labelNameMax
             ++ " plus a terminator"
         )
-  | any (not . printableAscii) text =
-      Left "the recipe name has a character outside printable ASCII (the resident FONT_LATIN cmap covers printable ASCII)"
-  | otherwise = Right (LabelName text)
-  where
-    printableAscii c = c >= ' ' && c <= '~'
+  | 0 `elem` units = Left "the recipe name has a zero code unit (the terminator)"
+  | otherwise = Right (LabelName units)
 
+-- Four lowercase hex digits per code unit, most significant digit first:
+-- "f073" is the single unit 0xf073.
+labelNameFromUnitHex :: String -> Either String LabelName
+labelNameFromUnitHex text
+  | null text || length text `mod` 4 /= 0 = Left ("UTF-16 unit hex needs a nonzero multiple of 4 digits, not " ++ show (length text))
+  | otherwise = mapM unit (chunks text) >>= labelNameUnits
+  where
+    chunks [] = []
+    chunks xs = take 4 xs : chunks (drop 4 xs)
+    unit digits = foldl (\acc d -> acc * 16 + fromIntegral d) 0 <$> mapM digit digits
+    digit c
+      | '0' <= c && c <= '9' = Right (fromEnum c - fromEnum '0')
+      | 'a' <= c && c <= 'f' = Right (fromEnum c - fromEnum 'a' + 10)
+      | otherwise = Left ("UTF-16 unit hex must be lowercase hex: " ++ show c)
+
+-- The name as one Char per code unit, the form readSpecialRecord returns.
 labelNameText :: LabelName -> String
-labelNameText (LabelName text) = text
+labelNameText (LabelName units) = map (toEnum . fromIntegral) units
+
+labelNameUnitList :: LabelName -> [Word16]
+labelNameUnitList (LabelName units) = units
+
+labelNameUnitHex :: LabelName -> String
+labelNameUnitHex (LabelName units) = concatMap (\u -> [intToDigit (fromIntegral (u `div` 16 ^ k `mod` 16)) | k <- [3, 2, 1, 0 :: Int]]) units
 
 data LabelLayout = LabelLayout Word16 Word16 Word16 Word16 Word16
   deriving (Eq, Show)
@@ -215,14 +249,19 @@ specialRecordHex :: SpecialRecordBytes -> String
 specialRecordHex (SpecialRecordBytes bytes) =
   concatMap (\w -> [intToDigit (fromIntegral w `div` 16), intToDigit (fromIntegral w `mod` 16)]) (B.unpack bytes)
 
--- Replaces the whole record: UTF-16LE name, a zero terminator, zero fill to 56
--- bytes, then the layout halfwords. Refused unless the record currently holds
--- `expected`; no byte outside the record changes.
+-- A whole record: UTF-16LE name, a zero terminator, zero fill to 56 bytes,
+-- then the layout halfwords.
+specialRecordContent :: LabelName -> LabelLayout -> SpecialRecordBytes
+specialRecordContent name layout =
+  SpecialRecordBytes (nameBuffer name <> B.concat (map putWord16 (labelLayoutList layout)))
+
+-- Replaces the whole record with specialRecordContent. Refused unless the
+-- record currently holds `expected`; no byte outside the record changes.
 writeSpecialRecord :: Word32 -> MediaImage -> SpecialLabelId -> SpecialRecordBytes -> LabelName -> LabelLayout -> Either String MediaImage
 writeSpecialRecord load media i (SpecialRecordBytes expected) name layout = do
   offset <- specialRecordOffset i load (B.length image)
   let current = B.take labelRecordBytes (B.drop offset image)
-      record = nameBuffer name <> B.concat (map putWord16 (labelLayoutList layout))
+      SpecialRecordBytes record = specialRecordContent name layout
   if current /= expected
     then Left ("the " ++ idText i ++ " record's current bytes " ++ specialRecordHex (SpecialRecordBytes current) ++ " differ from the expected " ++ specialRecordHex (SpecialRecordBytes expected))
     else Right (MediaImage (B.take offset image <> record <> B.drop (offset + labelRecordBytes) image))
@@ -241,10 +280,8 @@ readSpecialRecord load media i = do
     image = mediaImageBytes media
 
 nameBuffer :: LabelName -> B.ByteString
-nameBuffer (LabelName text) =
-  B.concat (map putWord16 units) <> B.replicate (labelBufferBytes - 2 * length units) 0
-  where
-    units = map (fromIntegral . fromEnum) text ++ [0 :: Word16]
+nameBuffer (LabelName units) =
+  B.concat (map putWord16 (units ++ [0])) <> B.replicate (labelBufferBytes - 2 * (length units + 1)) 0
 
 bufferText :: SpecialLabelId -> B.ByteString -> Int -> Either String String
 bufferText i image offset =

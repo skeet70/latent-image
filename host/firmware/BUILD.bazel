@@ -3,6 +3,8 @@ load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "h
 
 package(default_visibility = ["//visibility:public"])
 
+exports_files(["classic-chrome-icon.txt"])
+
 cc_binary(
     name = "framing-probe",
     srcs = ["spike/framing_probe.c"],
@@ -134,6 +136,30 @@ haskell_test(
     deps = [
         "//host:base",
         "//host:bytestring",
+        "//host:host-support",
+        "//host:label-record",
+        "//host:update-container",
+    ],
+)
+
+# The Classic Chrome icon content against its pinned digests, and the FDL
+# glyph lookup over every code of a synthetic font with the stock FONT_ICON
+# geometry before and after the icon's font writes. No artefact is read.
+haskell_test(
+    name = "classic-chrome-icon-tests",
+    srcs = ["ClassicChromeIconTests.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:classic-chrome-icon",
+        "//host:fdl-font",
         "//host:host-support",
         "//host:label-record",
         "//host:update-container",
