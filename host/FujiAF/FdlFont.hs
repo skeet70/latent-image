@@ -149,8 +149,8 @@ lookupGlyph font code@(CodePoint c) = do
     else do
       inWindow record (programAt - record)
       let count = if flags /= 0 then fromIntegral (u16 bytes lengthAt) else span'
-      if count <= 0
-        then Left ("U+" ++ showHex c "" ++ ": span " ++ show count ++ " with flags 0")
+      if count < 0
+        then Left ("U+" ++ showHex c "" ++ ": negative span " ++ show count ++ " with flags 0")
         else do
           inWindow programAt count
           Right
