@@ -146,6 +146,54 @@ haskell_library(
 )
 
 haskell_library(
+    name = "gvff",
+    srcs = ["FujiAF/Gvff.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":base",
+        ":bytestring",
+        ":containers",
+    ],
+)
+
+# The Q tile art as a Haskell string, byte for byte.
+genrule(
+    name = "classic-chrome-q-tile-art",
+    srcs = ["//host/firmware:classic-chrome-q-tile.txt"],
+    outs = ["FujiAF/ClassicChromeQTileArt.hs"],
+    cmd = "{ printf 'module FujiAF.ClassicChromeQTileArt (qTileArtText) where\\nqTileArtText :: String\\nqTileArtText = map toEnum [' && od -An -v -tu1 $< | awk '{ for (i = 1; i <= NF; i++) printf \"%s%s\", (n++ ? \",\" : \"\"), $$i }' && printf ']\\n'; } > $@",
+)
+
+haskell_library(
+    name = "classic-chrome-q-tile",
+    srcs = [
+        "FujiAF/ClassicChromeQTile.hs",
+        ":classic-chrome-q-tile-art",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":base",
+        ":bytestring",
+        ":classic-chrome-icon",
+        ":fdl-font",
+        ":gvff",
+        ":update-container",
+    ],
+)
+
+haskell_library(
     name = "recipe-bank",
     srcs = [
         "FujiAF/RecipeBank.hs",

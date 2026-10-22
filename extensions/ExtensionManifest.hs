@@ -11,6 +11,7 @@ module ExtensionManifest
   , Extension (..)
   , parseExtension
   , plainDecodeBase
+  , image2DecodeBase
   , fontDecodeBase
   ) where
 
@@ -38,6 +39,8 @@ data Step
   | ReplacePlain FlashOffset SpanLength FilePath
   -- The Sha256 is the patch set's decode_sha256, the plain window it applies to.
   | PatchPlain Sha256 FilePath
+  -- The Sha256 is the patch set's decode_sha256, the image-2 extent it applies to.
+  | PatchImage2 Sha256 FilePath
   -- The Sha256 is the patch set's decode_sha256, the font window it applies to.
   | PatchFont Sha256 FilePath
   deriving (Eq, Show)
@@ -56,6 +59,11 @@ data Extension = Extension
 -- writes.
 plainDecodeBase :: Integer
 plainDecodeBase = 0x01100000
+
+-- The RAM address of the first byte of the extent rebuild-update
+-- extract-image2 writes (segment 2's load address).
+image2DecodeBase :: Integer
+image2DecodeBase = 0x00130000
 
 -- The RAM address of the first byte of the window rebuild-update extract-font
 -- writes (segment 3's load address).
@@ -80,7 +88,7 @@ parseExtension path = do
     "a plain-patch-set step cannot be combined with plain-span steps"
   H.ensure
     (containerOrder steps)
-    "extension steps must run image 4, image 5, the label, then image-2 records by increasing id distinct from the label's 0x83d, then at most one font patch set, then plain spans in increasing non-overlapping flash order or one plain patch set; each image and the label at most once"
+    "extension steps must run image 4, image 5, the label, then image-2 records by increasing id distinct from the label's 0x83d, then at most one image-2 patch set, then at most one font patch set, then plain spans in increasing non-overlapping flash order or one plain patch set; each image and the label at most once"
   pure
     Extension
       { extensionId = H.str (H.get value "id")
@@ -141,6 +149,17 @@ parseStep directory base value = case H.str (H.get value "kind") of
     H.ensure (outputBase == decodeBase) "plain patch sets cannot move the image's load address"
     decodeDigest <- digestField (H.get image "decode_sha256") "plain patch set decode_sha256"
     pure (PatchPlain decodeDigest path)
+  "image2-patch-set" -> do
+    H.fields value "kind path sha256" "image2-patch-set step"
+    (path, bytes) <- pinnedFile directory value
+    image <- patchSetImage base bytes
+    _ <- H.integer (H.get image "segment_id") 2 2 "image-2 patch set image segment_id (the image-2 extent is segment 2)"
+    decodeBase <- hexValue (H.get image "decode_base") "image-2 patch set decode_base"
+    H.ensure (decodeBase == image2DecodeBase) "image-2 patch set decode_base must be 0x00130000, the first byte of the extract-image2 extent"
+    outputBase <- patchSetOutputBase image decodeBase
+    H.ensure (outputBase == decodeBase) "image-2 patch sets cannot move the image's load address"
+    decodeDigest <- digestField (H.get image "decode_sha256") "image-2 patch set decode_sha256"
+    pure (PatchImage2 decodeDigest path)
   "font-patch-set" -> do
     H.fields value "kind path sha256" "font-patch-set step"
     (path, bytes) <- pinnedFile directory value
@@ -174,9 +193,10 @@ containerOrder steps = and (zipWith before steps (drop 1 steps))
     rank (PatchImage Image5 _ _) = 2
     rank (WriteLabel _) = 3
     rank (WriteRecord {}) = 3
-    rank (PatchFont {}) = 4
-    rank (ReplacePlain {}) = 5
-    rank (PatchPlain {}) = 5
+    rank (PatchImage2 {}) = 4
+    rank (PatchFont {}) = 5
+    rank (ReplacePlain {}) = 6
+    rank (PatchPlain {}) = 6
     before (ReplacePlain (FlashOffset a) (SpanLength n) _) (ReplacePlain (FlashOffset b) _ _) = a + n <= b
     before (WriteLabel _) (WriteRecord i _ _ _) = i /= L.SpecialLabel83d
     before (WriteRecord a _ _ _) (WriteRecord b _ _ _) = a < b

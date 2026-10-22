@@ -2,7 +2,7 @@
 -- Native-harness cases for the Classic Chrome icon (reports/classic-chrome-icon.md)
 -- and the combined Classic Chrome flash candidate, X-M1 1.50.
 --
--- Three sides run the same stock functions:
+-- Four sides run the same stock functions:
 --   stock     the pinned stock decodes and the stock FONT_ICON.FDL window
 --   cc        the reviewed Classic Chrome candidate decodes, image 2 with the CC
 --             0x83e record, the stock font window
@@ -10,6 +10,9 @@
 --             (image-4 words, the 0x83d record, the font writes), the live-view
 --             image-5 words (host/firmware/classic-chrome-liveview-image5.json)
 --             and the frames-remaining fix's three image-5 words
+--   qtile     the combined side with the Q-tile write set of
+--             FujiAF.ClassicChromeQTile (three Q label words and the GVFF tile
+--             in the font window, the Q glyph 0x37c record pointer in image 2)
 -- The frames family adds two image-5 states of a task preempted inside
 -- FUN_00e42414 while the fix is published: pre1 executes the stock cmp and the
 -- fix's two movs, pre2 the stock cmp and movne and the fix's movls.
@@ -33,6 +36,10 @@
 --   val-*       id5 FUN_00bf93e0 label value getter
 --   map-*       id5 FUN_00e42414 film col2 to frames-remaining size class
 --   valid-*     id5 FUN_00ed5868 size-class validator over the mapped class
+--   qrec-*      plain FUN_0117e048/0a4/100/15c Q glyph record accessors
+--   kind-*      plain FUN_01179a50 label kind of each Q-row label
+--   qdraw-*     plain FUN_011121d4 Q label drawer, the generic draw
+--               FUN_01179da0 a register-only stub recording the drawn size
 module Main where
 
 import Control.Concurrent
@@ -50,7 +57,9 @@ import qualified Data.Set as S
 import Data.Word
 import Emulation.NativeCase (runCase)
 import FujiAF.ClassicChromeIcon (FontWrite (..), Image4Write (..), iconFontWrites, iconGlyphRecord, iconImage4Writes, label83dRecord, qLabelsArray, qValuesArray)
+import FujiAF.ClassicChromeQTile (Image2Write (..), QGlyph (..), qGlyphLabel, qGlyphRecordAddress, qTileAddress, qTileFontWrites, qTileGvff, qTileImage2Writes)
 import FujiAF.FdlFont (FontOffset (..), parseFdlFont)
+import FujiAF.Gvff (Gvff (..), decodeGvff)
 import FujiAF.Host
 import FujiAF.JSON (decodeStrict, encodeCanonical)
 import Numeric (readHex, showHex)
@@ -412,6 +421,7 @@ data Opts = Opts
   , oFrames :: Maybe FilePath
   , oCombinedDecodes :: [(String, FilePath)]
   , oCombinedDat :: Maybe FilePath
+  , oQTileDat :: Maybe FilePath
   , oWorkers :: Int
   }
 
@@ -427,6 +437,7 @@ defaults =
     , oFrames = Nothing
     , oCombinedDecodes = []
     , oCombinedDat = Nothing
+    , oQTileDat = Nothing
     , oWorkers = 8
     }
 
@@ -444,6 +455,7 @@ parseOpts o (flag : v : rest) = case flag of
   "--combined-id5" -> parseOpts o {oCombinedDecodes = oCombinedDecodes o ++ [("id5", v)]} rest
   "--combined-plain" -> parseOpts o {oCombinedDecodes = oCombinedDecodes o ++ [("plain", v)]} rest
   "--combined-dat" -> parseOpts o {oCombinedDat = Just v} rest
+  "--q-tile-dat" -> parseOpts o {oQTileDat = Just v} rest
   "--workers" -> parseOpts o {oWorkers = read v} rest
   _ -> failH ("unknown option " ++ flag)
 parseOpts _ [flag] = failH ("option " ++ flag ++ " needs a value")
@@ -484,7 +496,7 @@ applyFragment what img ws = do
   forM_ ws $ \(addr, cur, _) -> ensure (wd img addr == cur) (what ++ ": current word at " ++ h32 addr ++ " is " ++ h32 (wd img addr) ++ ", not " ++ h32 cur)
   pure (foldl (\acc (addr, _, new) -> let o = fromIntegral (addr - iBase img) in B.take o acc <> le32 new <> B.drop (o + 4) acc) (iBytes img) ws)
 
-data World = World {wStock, wCc, wComb :: Side, wStockFont :: Img, wPre :: [(String, Img)]}
+data World = World {wStock, wCc, wComb, wQ :: Side, wStockFont :: Img, wPre :: [(String, Img)]}
 
 loadWorld :: Opts -> IO World
 loadWorld o = do
@@ -566,10 +578,28 @@ loadWorld o = do
   pre1 <- applyFragment "pre1" c5 (drop 1 framesFix) >>= mkImg "id5-pre1" (iDesc c5 ++ " with the fix's movhi and movls (stock cmp)") 0x00bf1a00
   pre2 <- applyFragment "pre2" c5 (drop 2 framesFix) >>= mkImg "id5-pre2" (iDesc c5 ++ " with the fix's movls (stock cmp and movne)") 0x00bf1a00
   ensure (wd i4 0x0078b020 == 0x00439160 && wd i4 0x0078b024 == 0x004391b0) "Q node pointers differ from the contract"
+  -- The Q-tile side: the combined font window with qTileFontWrites, the
+  -- combined image 2 with the Q glyph 0x37c record pointer.
+  qWrites <- either failH pure (qTileFontWrites (iBytes ifont))
+  ensure (map fwOffset qWrites == map FontOffset [0x7d200, 0x7d210, 0x7d220, 0x7d240] && map fwNew (take 3 qWrites) == map le32 [0xff000779, 0xff000778, 0xff00037c] && map fwNew (drop 3 qWrites) == [qTileGvff]) "the Q-tile font writes differ from the contract"
+  forM_ qTileImage2Writes $ \w -> ensure (wd i2 (i2Address w) == i2Old w && i2Address w == 0x0022d28c && i2New w == qTileAddress) "the Q-tile image-2 write differs from the contract"
+  let qFontBytes = foldl (\acc fw -> let FontOffset off = fwOffset fw in B.take off acc <> fwNew fw <> B.drop (off + B.length (fwNew fw)) acc) (iBytes ifont) qWrites
+      qId2Bytes = foldl (\acc w -> let off = fromIntegral (i2Address w - 0x00130000) in B.take off acc <> le32 (i2New w) <> B.drop (off + 4) acc) (iBytes i2) qTileImage2Writes
+  qWindows <- forM (oQTileDat o) $ \path -> do
+    dat <- B.readFile path
+    pure [("id2", datWindow dat id2Media (B.length qId2Bytes)), ("font", datWindow dat 0x01060000 0x80000)]
+  let qImg kind bytes desc = case qWindows >>= lookup kind of
+        Nothing -> mkImg (kind ++ "-qtile") desc (iBase (if kind == "id2" then i2 else ifont)) bytes
+        Just other -> do
+          ensure (other == bytes) (kind ++ " window of " ++ fromMaybe "" (oQTileDat o) ++ " differs from the Q-tile " ++ kind ++ " built from the combined side and the contract writes" ++ firstDiff bytes other)
+          mkImg (kind ++ "-qtile") (fromMaybe "" (oQTileDat o) ++ " " ++ kind ++ " window, equal to " ++ desc) (iBase (if kind == "id2" then i2 else ifont)) other
+  qi2 <- qImg "id2" qId2Bytes "the combined image 2 with the Q glyph 0x37c record pointer at 0x0022d28c set to 0x00439240"
+  qfont <- qImg "font" qFontBytes "the combined font window with the qTileFontWrites set applied"
   let stock = Side "stock" id4 id5 plain id2 font slot
       cc = Side "cc" c4 c5 cp c2 font slot
       combined = Side "combined" i4 i5 cpComb i2 ifont slot
-  pure (World stock cc combined font [("pre1", pre1), ("pre2", pre2)])
+      qtile = Side "qtile" i4 i5 cpComb qi2 qfont slot
+  pure (World stock cc combined qtile font [("pre1", pre1), ("pre2", pre2)])
 
 -- Image 2 in the DAT: complemented bytes at media 0x00ca0000 + 0x25c for RAM 0x00130000.
 id2Media :: Int
@@ -1090,6 +1120,183 @@ compareSides w = do
     ]
 
 -- ---------------------------------------------------------------------------
+-- 7. Q tiles: glyph record accessors, label kind and the Q label drawer
+-- ---------------------------------------------------------------------------
+
+-- The Q glyphs of the stock tiles, the two PRO Neg tiles and the Classic
+-- Chrome tile (glyph 0x37c).
+qTileGlyphs :: [QGlyph]
+qTileGlyphs = map QGlyph [0x77b, 0x77c, 0x773, 0x777, 0x77a, 0x779, 0x778, 0x37c]
+
+-- The record word an accessor returns: width and height halfwords of word 0,
+-- the type word, the pointer word.
+data QField = QWidth | QHeight | QType | QPointer
+  deriving (Eq, Show)
+
+qFieldEntry :: QField -> Word32
+qFieldEntry f = case f of
+  QWidth -> 0x0117e048
+  QHeight -> 0x0117e0a4
+  QType -> 0x0117e100
+  QPointer -> 0x0117e15c
+
+qRecordWord :: Side -> QGlyph -> QField -> Word32
+qRecordWord sd g f = case f of
+  QWidth -> wd img rec .&. 0xffff
+  QHeight -> wd img rec `shiftR` 16
+  QType -> wd img (rec + 4)
+  QPointer -> wd img (rec + 8)
+  where
+    img = sdId2 sd
+    rec = qGlyphRecordAddress g
+
+qrecCase :: Side -> QField -> QGlyph -> Case
+qrecCase sd f g@(QGlyph n) =
+  Case
+    { cId = "qrec-" ++ sdTag sd ++ "-" ++ map toLowerAscii (drop 1 (show f)) ++ "-" ++ showHex n ""
+    , cFamily = "7 Q glyph record accessors"
+    , cProv = "Plain FUN_" ++ drop 2 (h32 (qFieldEntry f)) ++ " (Q glyph record " ++ map toLowerAscii (drop 1 (show f)) ++ ") on the " ++ sdTag sd ++ " plain image, r0 = " ++ h32 label ++ "; the record is image-2 " ++ h32 (qGlyphRecordAddress g) ++ " of " ++ iName (sdId2 sd) ++ "."
+    , cEntry = qFieldEntry f
+    , cArgs = [("r0", label)]
+    , cSp = 0x00003400
+    , cRegs = [stackReg 0x00003400 [], codeReg "code" (sdPlain sd) (qFieldEntry f) 0x5c, dataReg "glyph-entry" "r" (sdId2 sd) (qGlyphRecordAddress g) 12]
+    , cFns = [(qFieldEntry f, 0x5c)]
+    , cStubs = []
+    , cExpR = [("r0", out)]
+    , cClaims = []
+    , cEvents = []
+    , cPin = []
+    , cExpect = "r0 = " ++ hx out ++ " (record " ++ h32 (qGlyphRecordAddress g) ++ " read from " ++ iName (sdId2 sd) ++ ")."
+    , cObserve = "record word"
+    , cExcl = ["The returned record word is the result; the drawing of the record's GVFF block is outside the case."]
+    , cInputs = [imgInput (sdPlain sd), imgInput (sdId2 sd)]
+    }
+  where
+    label = qGlyphLabel g
+    out = qRecordWord sd g f
+
+toLowerAscii :: Char -> Char
+toLowerAscii c = if c >= 'A' && c <= 'Z' then toEnum (fromEnum c + 32) else c
+
+-- FUN_01179a50's label kind read from the side's images: 1 text (string id at
+-- or below the gate, or 0xfe000000), 2 bitmap (0xfd000000/1, or a Q record of
+-- another type), 5 and 6 the Q record types 1 and 2, 0 otherwise.
+kindModel :: Side -> Word32 -> Word32
+kindModel sd i
+  | i == 0xfe000000 || i <= gate = 1
+  | i + 0x03000000 <= 1 = 2
+  | i + 0x01000000 <= 0x8c5 = case wd (sdId2 sd) (glyphEntryAddr i + 4) of
+      1 -> 5
+      2 -> 6
+      _ -> 2
+  | otherwise = 0
+  where
+    gate = wd (sdPlain sd) 0x01179a58 .&. 0xfff
+
+kindCase :: Side -> Word32 -> Case
+kindCase sd i =
+  Case
+    { cId = "kind-" ++ sdTag sd ++ "-" ++ showHex i ""
+    , cFamily = "8 Q label kind"
+    , cProv = "Plain FUN_01179a50 (label kind) with FUN_0117e100 on the " ++ sdTag sd ++ " plain image, r0 = " ++ h32 i ++ "."
+    , cEntry = 0x01179a50
+    , cArgs = [("r0", i)]
+    , cSp = 0x00003400
+    , cRegs = [stackReg 0x00003400 [], codeReg "code-kind" (sdPlain sd) 0x01179a50 0x64, codeReg "code-type" (sdPlain sd) 0x0117e100 0x5c] ++ [dataReg "glyph-entry" "r" (sdId2 sd) (glyphEntryAddr i) 12 | qGlyph]
+    , cFns = [(0x01179a50, 0x64), (0x0117e100, 0x5c)]
+    , cStubs = []
+    , cExpR = [("r0", out)]
+    , cClaims = []
+    , cEvents = []
+    , cPin = []
+    , cExpect = "r0 = " ++ hx out ++ (if qGlyph then " (Q record type " ++ hx (wd (sdId2 sd) (glyphEntryAddr i + 4)) ++ ")." else " (string id at or below the gate " ++ hx (wd (sdPlain sd) 0x01179a58 .&. 0xfff) ++ ").")
+    , cObserve = "label kind"
+    , cExcl = ["The returned kind is the result; the renderer it selects is outside the case."]
+    , cInputs = [imgInput (sdPlain sd), imgInput (sdId2 sd)]
+    }
+  where
+    qGlyph = i + 0x01000000 <= 0x8c4
+    out = kindModel sd i
+
+-- FUN_011121d4 with r0 = r1 = 1 (cell coordinates 0, 0), r2 = the label, r3
+-- = 1: a Q glyph draws at its record's width and height, a string id at its
+-- layout's +0x3c width and +0x3e height (FUN_0117dce0, FUN_0117dd48), read
+-- here from the side's image 2. The draw FUN_01179da0 is a register-only stub
+-- whose inputs r0-r3 are the position and the size.
+drawSize :: Side -> Word32 -> (Word32, Word32)
+drawSize sd i
+  | i + 0x01000000 <= 0x8c5 = (qRecordWord sd (QGlyph (fromIntegral (i .&. 0xffff))) QWidth, qRecordWord sd (QGlyph (fromIntegral (i .&. 0xffff))) QHeight)
+  | otherwise = (hw img (layout + 4), hw img (layout + 6))
+  where
+    img = sdId2 sd
+    layout = if i > 0x83b then recordsBase + 66 * (i - 0x83c) + 0x38 else 0x00130000 + 10 * i
+
+qdrawCase :: Side -> Word32 -> Case
+qdrawCase sd i =
+  Case
+    { cId = "qdraw-" ++ sdTag sd ++ "-" ++ showHex i ""
+    , cFamily = "9 Q label drawer"
+    , cProv = "Plain FUN_011121d4 (Q label drawer) on the " ++ sdTag sd ++ " plain image, r0 = 1, r1 = 1, r2 = " ++ h32 i ++ ", r3 = 1; " ++ (if qGlyph then "the Q glyph record accessors FUN_0117e048 and FUN_0117e0a4 over image-2 " ++ h32 (glyphEntryAddr i) else "the layout accessors FUN_0117ddb0, FUN_0117dce0 and FUN_0117dd48 over image-2 " ++ h32 layoutAt) ++ "; FUN_01179da0 is a register-only stub."
+    , cEntry = 0x011121d4
+    , cArgs = [("r0", 1), ("r1", 1), ("r2", i), ("r3", 1)]
+    , cSp = 0x00003400
+    , cRegs =
+        [stackReg 0x00003400 [], codeReg "code-drawer" plain 0x011121d4 0x198]
+          ++ ( if qGlyph
+                 then [codeReg "code-width" plain 0x0117e048 0x5c, codeReg "code-height" plain 0x0117e0a4 0x5c, dataReg "glyph-entry" "r" (sdId2 sd) (glyphEntryAddr i) 12]
+                 else [codeReg "code-layout" plain 0x0117dce0 0x138, dataReg "layout" "r" (sdId2 sd) layoutAt 10]
+             )
+    , cFns = [(0x011121d4, 0x198)] ++ (if qGlyph then [(0x0117e048, 0x5c), (0x0117e0a4, 0x5c)] else [(0x0117dce0, 0x68), (0x0117dd48, 0x68), (0x0117ddb0, 0x68)])
+    , cStubs = [drawStub]
+    , cExpR = [("r0", 0)]
+    , cClaims = []
+    , cEvents = [drawStub]
+    , cPin = []
+    , cExpect = "one FUN_01179da0 call with r0 = 0, r1 = 0, r2 = " ++ show w ++ ", r3 = " ++ show h ++ " (" ++ (if qGlyph then "the Q record's width and height" else "the label layout's +0x3c and +0x3e halfwords") ++ "), then r0 = 0."
+    , cObserve = "drawn size"
+    , cExcl = ["The draw call's position and size registers are the result; the stacked style, id and flag words, the renderer and the pixels are outside the case."]
+    , cInputs = [imgInput plain, imgInput (sdId2 sd)]
+    }
+  where
+    plain = sdPlain sd
+    qGlyph = i + 0x01000000 <= 0x8c4
+    (w, h) = drawSize sd i
+    layoutAt = if i > 0x83b then recordsBase + 66 * (i - 0x83c) + 0x38 else 0x00130000 + 10 * i
+    drawStub = Stub 0x01179da0 [("r0", 0), ("r1", 0), ("r2", w), ("r3", h)] [("r0", 0)]
+
+-- Generator-side checks of the Q-tile side against the combined side.
+checkQTile :: World -> IO [String]
+checkQTile w = do
+  let comb = wComb w
+      qt = wQ w
+      stock = wStock w
+      q = last nodes
+      stockQ = [0xff00077b, 0xff00077c, 0xff000773, 0xff000777, 0xff00077a]
+      diffAt a b = [k | k <- [0 .. B.length (iBytes a) - 1], B.index (iBytes a) k /= B.index (iBytes b) k]
+      id2Diff = diffAt (sdId2 comb) (sdId2 qt)
+      fontDiff = diffAt (sdFont comb) (sdFont qt)
+      inFontWrites k = k >= 0x7d200 && k < 0x7d230 || k >= 0x7d240 && k < 0x7d240 + B.length qTileGvff
+      pointer = qRecordWord qt (QGlyph 0x37c) QPointer
+  ensure (nodeValues qt q == nodeValues comb q) "Q-tile Q values differ from the combined side's"
+  ensure ([nodeLabel qt q r 0 | r <- [0 .. 7]] == stockQ ++ [0xff000779, 0xff000778, 0xff00037c]) "Q-tile Q labels"
+  ensure ([nodeLabel qt q r f | r <- [0 .. 7], f <- [1 .. 3]] == [nodeLabel comb q r f | r <- [0 .. 7], f <- [1 .. 3]]) "Q-tile Q label fields 1-3 differ from the combined side's"
+  ensure (all (\k -> k >= 0x0022d28c - 0x00130000 && k < 0x0022d290 - 0x00130000) id2Diff && not (null id2Diff)) ("Q-tile image 2 differs from the combined side outside the 0x37c pointer word: " ++ show (take 4 id2Diff))
+  ensure (all inFontWrites fontDiff) "Q-tile font window differs from the combined side outside the Q label words and the tile"
+  ensure (and [qRecordWord stock g f == qRecordWord qt g f | g <- qTileGlyphs, g /= QGlyph 0x37c, f <- [QWidth, QHeight, QType, QPointer]]) "a stock Q tile record differs between the stock and Q-tile sides"
+  ensure (and [(qRecordWord qt g QWidth, qRecordWord qt g QHeight, qRecordWord qt g QType) == (80, 48, 1) | g <- qTileGlyphs]) "a Q-row glyph record is not 80 x 48 type 1"
+  ensure (pointer == qTileAddress) "the 0x37c record does not point at the tile"
+  tile <- either failH pure (decodeGvff (B.drop (fromIntegral (pointer - fontRam)) (iBytes (sdFont qt))))
+  ensure (gvffBounds tile == [0, 0, 80, -48] && B.take (gvffLength tile) (B.drop (fromIntegral (pointer - fontRam)) (iBytes (sdFont qt))) == qTileGvff) "the block at the 0x37c pointer is not the encoded tile"
+  forM_ [QGlyph 0x778, QGlyph 0x779] $ \g -> do
+    let p = qRecordWord qt g QPointer
+    block <- either (failH . (("Q glyph " ++ show g ++ ": ") ++)) pure (decodeGvff (B.drop (fromIntegral (p - 0x00130000)) (iBytes (sdId2 qt))))
+    ensure (gvffBounds block == [0, 0, 80, -48]) ("Q glyph " ++ show g ++ ": bounds " ++ show (gvffBounds block))
+  pure
+    [ "Q-tile side: Q labels rows 5-7 are 0xff000779, 0xff000778, 0xff00037c; image 2 differs from the combined side in " ++ show (length id2Diff) ++ " bytes of the 0x37c pointer word; the font window in " ++ show (length fontDiff) ++ " bytes of the Q label words and the " ++ show (B.length qTileGvff) ++ "-byte tile."
+    , "Q glyph 0x37c points at " ++ h32 pointer ++ ", a GVFF block with bounds (0, 0, 80, -48) equal to the encoded tile; Q glyphs 0x778 and 0x779 are stock 80 x 48 type-1 tiles in image 2."
+    ]
+
+-- ---------------------------------------------------------------------------
 -- 6. Frames-remaining size class and its validator
 -- ---------------------------------------------------------------------------
 
@@ -1221,7 +1428,7 @@ main = do
   o <- getArgs >>= parseOpts defaults
   w <- loadWorld o
   checkPlain w
-  notes <- (++) <$> compareSides w <*> checkFrames w
+  notes <- concat <$> sequence [compareSides w, checkFrames w, checkQTile w]
   mapM_ putStrLn notes
   let out = oOut o
       images = out </> "images"
@@ -1229,9 +1436,9 @@ main = do
   createDirectoryIfMissing True images
   stale <- filter (\f -> takeExtension f == ".json" || (take 2 f == "a-" && takeExtension f == ".bin")) <$> listDirectory out
   mapM_ (removeFile . (out </>)) stale
-  imageNotes <- forM [("patched-id4.bin", sdId4 comb), ("patched-id5.bin", sdId5 comb), ("patched-plain.bin", sdPlain comb), ("id2.bin", sdId2 comb), ("font-window.bin", sdFont comb)] $ \(file, img) -> do
+  imageNotes <- forM [("patched-id4.bin", sdId4 comb), ("patched-id5.bin", sdId5 comb), ("patched-plain.bin", sdPlain comb), ("id2.bin", sdId2 comb), ("font-window.bin", sdFont comb), ("q-tile-id2.bin", sdId2 (wQ w)), ("q-tile-font-window.bin", sdFont (wQ w))] $ \(file, img) -> do
     B.writeFile (images </> file) (iBytes img)
-    pure ("combined " ++ file ++ ": SHA-256 " ++ iSha img ++ ", base " ++ h32 (iBase img) ++ ", " ++ iDesc img ++ ".")
+    pure (file ++ ": SHA-256 " ++ iSha img ++ ", base " ++ h32 (iBase img) ++ ", " ++ iDesc img ++ ".")
   mapM_ putStrLn imageNotes
   runner <- makeAbsolute (oRunnerPath o)
   arts <- newMVar M.empty
@@ -1258,7 +1465,7 @@ main = do
       sizeCases = [sizeCase sd (B.take 0x80 ctx) (B.take 0x18 (B.drop 0x83d4 ctx)) c | (sd, _, ctx) <- built, c <- [0xf073, 0xf06a, 0xf072, 0xe120]]
       textIds = [0x83d, 0x83e, 0x489, 0x48a, 0x49a, 0x496, 0x48b, 0xff00077b, 0xff00077c, 0xff000773, 0xff000777, 0xff00077a]
       textCases = [textCase sd False i | sd <- allSides, i <- textIds] ++ [textCase sd True i | sd <- allSides, i <- [0xff00077b, 0xff00077c, 0xff000773, 0xff000777, 0xff00077a]]
-      getterSides nd = if ndName nd == "q" then allSides else fontSides
+      getterSides nd = if ndName nd == "q" then allSides ++ [wQ w] else fontSides
       getterCases =
         concat
           [ [rowCase sd nd r f | r <- [0 .. fromIntegral (length (nodeValues sd nd)) - 1], f <- [0 .. 3]]
@@ -1266,7 +1473,11 @@ main = do
           | nd <- nodes
           , sd <- getterSides nd
           ]
-  stageB <- runAll env (oWorkers o) (validCases ++ textCases ++ getterCases ++ sizeCases ++ loaderCases)
+      qSides = [comb, wQ w]
+      qrecCases = [qrecCase sd f g | sd <- [wStock w, comb, wQ w], f <- [QWidth, QHeight, QType, QPointer], g <- qTileGlyphs]
+      kindCases = [kindCase sd (nodeLabel sd (last nodes) r 0) | sd <- qSides, r <- [0 .. 7]]
+      qdrawCases = [qdrawCase sd (nodeLabel sd (last nodes) r 0) | sd <- qSides, r <- [0 .. 7]]
+  stageB <- runAll env (oWorkers o) (validCases ++ textCases ++ getterCases ++ qrecCases ++ kindCases ++ qdrawCases ++ sizeCases ++ loaderCases)
   let outcomes = stageA ++ stageB
       row r = "| " ++ cId (oCase r) ++ " | " ++ h32 (cEntry (oCase r)) ++ " | " ++ intercalate ", " [k ++ "=" ++ hx v | (k, v) <- cArgs (oCase r)] ++ " | " ++ cExpect (oCase r) ++ " | " ++ oStatus r ++ ", " ++ oRunner r ++ ", r0 " ++ oR0 r ++ ", " ++ show (oInstr r) ++ " instructions |"
       families = M.toList (M.fromListWith (\(a, b) (c, d) -> (a + c, b + d)) [(cFamily (oCase r), (if oStatus r == "passed" then 1 else 0, 1 :: Int)) | r <- outcomes])

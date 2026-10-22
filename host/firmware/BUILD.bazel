@@ -3,7 +3,10 @@ load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "h
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["classic-chrome-icon.txt"])
+exports_files([
+    "classic-chrome-icon.txt",
+    "classic-chrome-q-tile.txt",
+])
 
 cc_binary(
     name = "framing-probe",
@@ -195,6 +198,58 @@ haskell_binary(
         "//host:json",
         "//host:label-record",
         "//host:process",
+        "//host:update-container",
+    ],
+)
+
+# The GVFF tile encoder over synthetic art and the Classic Chrome Q tile
+# content. No artefact is read.
+haskell_test(
+    name = "classic-chrome-q-tile-tests",
+    srcs = ["ClassicChromeQTileTests.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:classic-chrome-icon",
+        "//host:classic-chrome-q-tile",
+        "//host:fdl-font",
+        "//host:gvff",
+        "//host:host-support",
+    ],
+)
+
+# The Classic Chrome Q-tile fragment over the combined icon candidate, and the
+# changed-byte check between the two built candidates
+# (reports/classic-chrome-icon.md section 14).
+haskell_binary(
+    name = "build-classic-chrome-q-tile",
+    srcs = ["BuildClassicChromeQTile.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:classic-chrome-icon",
+        "//host:classic-chrome-q-tile",
+        "//host:directory",
+        "//host:fdl-font",
+        "//host:filepath",
+        "//host:font-window",
+        "//host:host-support",
+        "//host:json",
         "//host:update-container",
     ],
 )
