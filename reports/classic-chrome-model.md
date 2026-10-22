@@ -283,6 +283,10 @@ Frames:
 
 `e_model` measures the X-M1 side of the model: the stage arithmetic on this body, the selected gain records, luma bands and chroma gains, the DR100 tone keys, the inferred DR and H/S index mapping, and the JPEG path. It does not test the sensor models or the X-Trans II reference.
 
+### 8.3 First session result (2026-10-21)
+
+The before-set was shot inside the first RAM-push session (E-CC-RAM-PUSH-SESSION-150) without a ColorChecker, on a tabletop scene under incandescent light at ISO 4000 with Incandescent WB. Check (a) failed there: the shot PROVIA JPEG and the PROVIA RAW conversion of its own RAF differ in all three planes, so this set's converted Velvia and ASTIA frames are not stand-ins for shot frames. `e_model` was not computed: `e-model` has no ISO or WB input, and which develop selectors change with ISO 4000 or Incandescent WB is unmapped. A repeat at ISO 200, DR100 and Daylight (or a fixed-WB light) with the chart gives the intended input.
+
 ## 9. Limits and open risks
 
 - The X-M1 gain records, luma-band presets and chroma gains are byte-read from the 1.50 images and the fallback adjustment image, and the body's own adjustment bytes in every span the stages read equal the fallback image in four full captures (section 2.1). Two links in their selection are inference: Highlight and Shadow 0 as index 2, and DR100 as `level2 = 1` with DR index 0.

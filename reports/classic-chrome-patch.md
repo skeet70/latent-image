@@ -578,6 +578,17 @@ The owner's H2 go names: the operation (ordinary-boot RAM push of the Classic Ch
 
 Before the go, the owner may look at the menus in the viewer (`//emulation:xm1-viewer`, SHOOTING MENU > FILM SIMULATION, on the flash candidate as in 11.3 or on the RAM push with `--ram-push-e2e --classic-chrome`); this check is optional.
 
+### 8.5 Result of the first RAM-push session (2026-10-21)
+
+The 8.4 script ran on the RC0 body at `ace9320` under the owner's go and passed with no stop (E-CC-RAM-PUSH-SESSION-150, hardware-observed). The pre-push read matched all 131 old words and the reviewer windows; `ram-push` installed in 64.5 s with INSTALL status 0, validated 131, setup 84, activation 47 and peer status 0; `ram-unload` verified rollback with restored 131, and the post-reboot read found every old word and the callback slot restored.
+
+- Label rendering (open question 2, shooting-menu list only): FILM SIMULATION shows an eighth row with an empty icon cell and `CLASSIC CHROME` drawn as text, and the cursor stays on it after reopening. This is the first hardware rendering of the `0x83e` record. The Q tile was not observed.
+- RAW conversion (open question 7): with the payload resident, RAW CONVERSION offers six rows with CLASSIC CHROME last, converts to CC, and its PROVIA conversion of a before-set RAF is plane-identical to the RC0 before-set conversion (U6, item 4).
+- Capture: a shot frame and a conversion both carry FilmMode `Classic Chrome` (U4); on flat blocks of a pixel-aligned conversion pair, CC renders chromatic colours at about 0.6 times PROVIA's chroma and slightly lighter, with live view staying PROVIA-like as designed.
+- Deviations: no ColorChecker or tripod, incandescent light at ISO 4000 with Incandescent WB.
+
+Open: the look acceptance (spec 19.5.6 items 1-3) and `e_model`, which need a chart session at low ISO in daylight or a fixed-WB light, or a map of the ISO- and WB-dependent develop selectors; the Q tile and C slot (U7); the stored-CC fallback (8.4.5); the flash decision. The session ended with stored `0xf7` returned to 0 (E-STORED-F7-RESTORE-RUN-150), so the next RAM session first needs `commit-f7-enable` in a jig session.
+
 ## 9. Verification results (2026-10-18, host and emulated)
 
 All runs use the pinned inputs; patched images come from `build-classic-chrome` on the synthetic set (`host/firmware/classic-chrome-synthetic.json`, SHA-256 `8dfa7865…57ab`) and on cc-model's candidate (`candidate.json` SHA-256 `188c521d…3e92`; data block `833b6452…2774`, identical to the block from its earlier revision `867083e1…2de3`).
