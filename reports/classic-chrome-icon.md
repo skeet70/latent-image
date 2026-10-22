@@ -209,9 +209,9 @@ The icon takes special id `0x83d`, which D3 planned to use and which the recipe 
 
 ### 8.4 RAM-push variant
 
-The RAM payload is a new payload kind, `ClassicChromeIcon` (builder `//host/firmware:build-classic-chrome-icon-ram`, review record `transport/ram-push-cc-icon-review.json`), on the unchanged CC route and installer. It carries the CC payload's 131 publications and adds 30: 16 setup (15 words of the `0x83d` record, the per-mille word) and 14 activation (two directory words, two label-icon words, the Q labels pointer before the Q values pointer, flash-prep's five live-view words and the three frames words, all in one masked window). The glyph record and the Q arrays are content in the allocation (`0x1990` bytes), so U+F073's directory word names `allocation_record - 0x003f9ced` and the Q pointers name the allocation copies; the builder refuses an offset at or above `0x01000000`. One CC publication changes: the RC0 body holds `0x49c` at `0x0061c3dc` (RC0's RAW labels), CC publishes 0 there (index 124), and the combined payload publishes `0x83d` in the same entry, phase and position, because the installer refuses duplicate addresses; `carried-publications.json` records it. The per-mille change touches only word `0x00438268` (bytes `01 e8 03 e8` to `01 e8 03 20`). Everything else follows the CC route (classic-chrome-patch section 8.2).
+The RAM payload is a new payload kind, `ClassicChromeIcon` (builder `//host/firmware:build-classic-chrome-icon-ram`, review record `transport/ram-push-cc-icon-review.json`), on the unchanged CC route and installer. It carries the CC payload's 131 publications and adds 31: 16 setup (15 words of the `0x83d` record, the per-mille word) and 15 activation (two directory words, two label-icon words, the Q glyph `0x37c` tile pointer, then the Q labels pointer, then the Q values pointer, flash-prep's five live-view words and the three frames words, all in one masked window). The glyph record, the Q arrays and the Q tile are content in the allocation (`0x21fc` bytes), so U+F073's directory word names `allocation_record - 0x003f9ced`, the Q pointers name the allocation copies and the `0x37c` record names the allocation tile; the builder refuses an offset at or above `0x01000000`. One CC publication changes: the RC0 body holds `0x49c` at `0x0061c3dc` (RC0's RAW labels), CC publishes 0 there (index 124), and the combined payload publishes `0x83d` in the same entry, phase and position, because the installer refuses duplicate addresses; `carried-publications.json` records it. The per-mille change touches only word `0x00438268` (bytes `01 e8 03 e8` to `01 e8 03 20`). Everything else follows the CC route (classic-chrome-patch section 8.2).
 
-Content layout (`FujiAF.ClassicChromeIconRam`): the record starts at allocation `+0x1740`, right after `__ram_push_end`, and the Q values and Q labels each start at the end of the previous item rounded up to 8 bytes; the allocation ends at the Q labels' end. With the current 376-byte record the content is `[+0x1740, +0x1990)`: record `+0x1740`, Q values `+0x18b8`, Q labels `+0x1900`. The redesign candidates give allocations of `0x19b0` (A, 406-byte record), `0x19a8` (A2, 398) and `0x1ae8` (B, 714); any of them moves the Q pointers and changes the allocation size, which names the payload kind in `transport/FujiAF/RamPush.hs` (`payloadAllocationSize`), and the contract, so it is a mechanism revision with a re-pin. The installer's peer re-maintenance covers `[__ram_push_start, __ram_push_end)` only; the content past it is covered by `ram-alloc`'s peer prepare over the whole allocated block before upload and CPU0's whole data clean and invalidate (transport README, `peerPrepareBytes`).
+Content layout (`FujiAF.ClassicChromeIconRam`): the record starts right after `__ram_push_end`, and the Q values, the Q labels and the Q tile each start at the end of the previous item rounded up to 8 bytes; the allocation ends at the tile's end. With the 714-byte design-B record and the 1,780-byte tile the content is `[+0x1760, +0x21fc)`: record `+0x1760`, Q values `+0x1a30`, Q labels `+0x1a78`, tile `+0x1b08`. The allocation size names the payload kind in `transport/FujiAF/RamPush.hs` (`payloadAllocationSize`), so a record or tile of another length is a mechanism revision with a new contract and re-pin. The installer's peer re-maintenance covers `[__ram_push_start, __ram_push_end)` only; the content past it is covered by `ram-alloc`'s peer prepare over the whole allocated block before upload and CPU0's whole data clean and invalidate (transport README, `peerPrepareBytes`).
 
 ## 9. Verification
 
@@ -226,7 +226,7 @@ All runs use the pinned inputs; private receipts are named in each row. The comb
 | Changed bytes against `16c830ad…2c89` | image 2 56 bytes in 2 writes (`0x83d` record, tile pointer), font window 1,592 bytes in 6 writes, image-4 decode 12 bytes, image-5 decode 18 bytes (live view 15, frames 3); otherwise only the main checksum word and the re-encoded image-4 and image-5 records; plain unchanged (q-icon's diff of the same DAT) |
 | `//emulation:flash-boot-check` | passed on `98a66780` (`private-data/flash-boot-checks/cc-icon-98a66780/` and, independently, `cc-icon-b-qtile-1/`) |
 | Regression | RC0 rebuilds to `acb0fbbb…9ca8` and CC to `16c830ad…2c89` with the changed tools; every reviewed builder-digest source is byte-identical; `//transport:ram-push-review-bytes` and `//transport:ram-push-cc-review-bytes` pass |
-| RAM payload | 162 publications (100 setup, 62 activation), allocation `0x21fc`, installer extent `0x15c0`, contract `04df9a5ae4574f0c28f2c2ce67a581a96c7f092036ece6c316eced593fa1de32`, re-pinned unreviewed at `642aac4`; runtimes `4f871b2a…ebd3` at `0x00c20000`, `2fce1f08…e16a` at `0x00c21f88`, `03284c54…fe58` at `0x00a7e8c8` (`private-data/analysis/classic-chrome-patch/ram-push/icon-b-relink-*/`); read plans `cc-icon-b-ram-push-prepush.json` (57 windows) and `cc-icon-b-ram-push-post-reboot.json` (48); `//transport:ram-push-cc-icon-reviewed-build-check` accepts at both reference bases and refuses every perturbation |
+| RAM payload | 162 publications (100 setup, 62 activation), allocation `0x21fc`, installer extent `0x15c0`, contract `04df9a5ae4574f0c28f2c2ce67a581a96c7f092036ece6c316eced593fa1de32`, approved by review CcIconReview (2026-10-23) at `b8c7fd9`; runtimes `4f871b2a…ebd3` at `0x00c20000`, `2fce1f08…e16a` at `0x00c21f88`, `03284c54…fe58` at `0x00a7e8c8` (`private-data/analysis/classic-chrome-patch/ram-push/icon-b-relink-*/`); read plans `cc-icon-b-ram-push-prepush.json` (57 windows) and `cc-icon-b-ram-push-post-reboot.json` (48); `//transport:ram-push-cc-icon-reviewed-build-check` accepts at both reference bases and refuses every perturbation |
 
 ### 9.2 Native cases
 
@@ -251,6 +251,7 @@ Flash candidate runs (`xm1-viewer --ram-push-e2e --flash-candidate`, trajectorie
 | Frames remaining, PROVIA / Velvia / CC | 660 / 660 / 0 with MEMORY FULL on menu close; mapper class 6, validator -1, all 47 counts 0 | 660 / 660 / 660, no menu message; the 188-byte table at `0x009432a8` is byte-identical for all three (`combined-b/cc-live-view-frames-660.png`) |
 | Icon on the FILM SIMULATION list and the shooting-menu value | no icon | CHROME cartridge on both, no seams (`combined-b/cc-film-list-row.png`, `combined-b/cc-shooting-menu-film-value.png`) |
 | Q film tile, CC and both PRO Neg | CC draws PROVIA's tile; PRO Neg not offered | CHROME tile at the stock 80 x 48 size; PRO Neg Std and Hi with their stock tiles; focused and unfocused (`combined-b/cc-q-film-cell.png`, `combined-b/proneg-std-q-film-cell.png`, `combined-b/proneg-hi-q-film-cell.png`; all segments in `b-qtile-1/`) |
+| No card (first-start route from the `flash-boot-check` snapshot, `no-card-1/`) | CC committed; frames table 99999 in all 47 entries for PROVIA and CC, no count drawn, MEMORY FULL flag 0 (`cc16c830-cc.out`) | reaches the shooting screen; CC committed; the same table, no count drawn, flag 0; Q shows the CHROME tile (`b-provia-live-view-no-card.png`, `b-cc-live-view-no-card.png`, `b-cc-q-no-card.png`) |
 | Segments | | `classic-chrome-icon-trajectories.json` 26 of 26 passed; `classic-chrome-q-tile-trajectories.json` 14 of 14 passed (q-icon) |
 
 RAM-push rehearsal of the 162-publication payload (`xm1-viewer --ram-push-e2e --classic-chrome-icon --unreviewed-relink`, receipt `private-data/analysis/classic-chrome-icon-emu/ram-e2e-b2/e2e-result.json`): install with 162 validated, 100 setup and 62 activation words stored, peer lines 162; list icon, commit (film 13), shooting-menu value, Q tile, Q dial to PROVIA and back, menu close with no message and a frames table equal to PROVIA's, PROVIA reselection, `ram-unload` (162 old words verified), the list after unload with seven rows, and a cold restart reading all 162 words old: every segment passes. An earlier run (`ram-e2e-b`) is void: a concurrent viewer run restaged the shared runtime directory `private-data/emulator-runtimes/xm1-ram-push-e2e`, so its cold restart booted the flash DAT; e2e runs must not overlap.
@@ -287,28 +288,112 @@ Inputs: this report; section 5.2 and the fragments `host/firmware/classic-chrome
 2. Reviewed words that change: in the flash image the three label-icon words `0x0061c320`, `0x0061c324`, `0x0061c3dc` (0 to `0x83d`), written as overlay writes over the reviewed CC label blobs; in the RAM payload only CC publication 124 at `0x0061c3dc` (old `0x49c`, CC new 0, combined new `0x83d`), because the other two are 0 on RC0 and in CC and are new icon publications.
 3. Font: the U+F073 directory word and the loaders' flag rule (negative span, flag 1, record length), the U+F072 consequence, the per-mille byte, the 714-byte record against the art (pixel-edge encoding, section 7), the Q tile (section 14), and the font-tail ownership census (section 6).
 4. Label data: the `0x83d` record, the Q arrays, the two Q pointers and their walker-safe order (labels before values).
-5. New mechanism: the five live-view words (flash-prep's packet, classic-chrome-patch section 4.10; they rewrite five words of `FUN_00eee958` in one masked window) and the three frames words (section 9.4, with both install mixed states executed). The install mixed states are safe for every film value; the unload mixed states are not (classic-chrome-patch 4.10): a task suspended inside `FUN_00eee958` with film 13 selected when `ram-unload` restores the words can branch to an instruction word or store into its caller's code, and one suspended inside `FUN_00e42414` gives PRO Neg Hi one transient zero count. The restore order inside the masked window cannot change this, because only tasks already suspended inside the words see a mixed state. Unload therefore carries the precondition of section 11 step 5. Rollback also restores the Q values pointer (index 152) before the labels pointer (151); a walker suspended between reading the two would pair eight value rows with the five stock label rows, which the same precondition (no menu open) excludes.
-6. Tooling: the FDL parser and encoder, the font-window carrier, the overlay rule of `apply-patch-set`, the UTF-16 record text, the `font-patch-set` step, and the RAM builder's publications, relinked offset arithmetic, contract and 19 pins (`transport/ram-push-cc-icon-review.json`, unreviewed; `//transport:ram-push-cc-icon-review-verdicts` fails until the review).
+5. New mechanism: the five live-view words (flash-prep's packet, classic-chrome-patch section 4.10; they rewrite five words of `FUN_00eee958` in one masked window) and the three frames words (section 9.4, with both install mixed states executed). The install mixed states are safe for every film value; the unload mixed states are not (classic-chrome-patch 4.10): a task suspended inside `FUN_00eee958` with film 13 selected when `ram-unload` restores the words can branch to an instruction word or store into its caller's code, and one suspended inside `FUN_00e42414` gives PRO Neg Hi one transient zero count. The restore order inside the masked window cannot change this, because only tasks already suspended inside the words see a mixed state. Unload therefore carries the precondition of section 11.6 (E1-E3). Rollback also restores the Q values pointer (index 152) before the labels pointer (151); a walker suspended between reading the two would pair eight value rows with the five stock label rows, which the same precondition (no menu open) excludes.
+6. Tooling: the FDL parser and encoder, the font-window carrier, the overlay rule of `apply-patch-set`, the UTF-16 record text, the `font-patch-set` step, and the RAM builder's publications, relinked offset arithmetic, contract and 19 pins (`transport/ram-push-cc-icon-review.json`, approved by CcIconReview at `b8c7fd9`; `//transport:ram-push-cc-icon-review-verdicts` passes).
 
 ## 11. Abbreviated camera test
 
-A RAM-push session on the RC0 body under its own H2 go, after the review of section 10. Stored `0xf7` is 0 on the body (E-STORED-F7-RESTORE-RUN-150), so the session assumes `commit-f7-enable` in a jig session first (H3, its own per-run go) and `commit-f7-restore` after; if the per-boot USB toggle of issue 81 lands first, it replaces both. The CC simulation is unchanged, so the CC session's look checks (classic-chrome-patch section 8.4.4 U3-U6) are not repeated.
+A script, not a run, for a RAM-push session of the `ClassicChromeIcon` payload on the RC0 body (XM1-body-01) under its own H2 go (11.9). It follows [classic-chrome-patch 8.4](classic-chrome-patch.md#84-camera-session-script-first-classic-chrome-ram-push) with the payload, counts and read plans of this report, and with no card: the body's SD slot has a broken pin. The CC simulation is unchanged, so the CC session's look checks (classic-chrome-patch 8.4.4 U3-U6) are not repeated. Record every item in `private-data/sessions/<date>-cc-icon-ram-push/notes.md`; any item not done is a stop.
 
-1. Host: on the session commit, `//transport:ram-push-cc-icon-review-bytes`, `-review-verdicts`, `-camera-pins` and `//host/firmware:classic-chrome-icon-ram-tests` pass and `bazel run //transport:ram-push-cc-icon-reviewed-build-check` exits 0; output directories do not exist; `rehearse ram-alloc 0x21fc` and both read plans rehearse.
-2. Pre-push read with `cc-icon-b-ram-push-prepush.json`: every old word of the 162 publications and the route's reviewer windows; any mismatch stops before a write.
-3. `ram-alloc 0x21fc`, `ram-relink`, `ram-push` as in classic-chrome-patch 8.4.3, with 162 publications.
-4. Owner checks with the payload resident:
-   - I1 SHOOTING MENU > FILM SIMULATION: eight rows; the CC row's icon cell shows the CHROME cartridge icon; the seven RC0 rows unchanged.
-   - I2 select CLASSIC CHROME, back to the shooting menu page: the FILM SIMULATION item shows the CC icon as its value.
-   - I3 shooting screen with CC: frames remaining equals the PROVIA count on the same card and no MEMORY FULL appears; switch to PROVIA and back to compare.
-   - I4 live view with CC: the preview looks muted like CC, not like PROVIA, in the menu highlight and on the shooting screen; switch to PROVIA and back. No film icon shows in the overlay for CC or PROVIA.
-   - I5 Q menu: the film tile shows the CHROME cartridge at the stock tiles' size; dialling offers eight films, PRO Neg Std and Hi with their stock full-size tiles, the stock five unchanged.
-   - I6 one CC frame shot and played back normally.
-   - I7 optional, with a RAF on the card: PLAYBACK > RAW CONVERSION > FILM SIMULATION shows the CC row with its icon.
-   - I8 PLAYBACK > PLAYBACK MENU > IMAGE SEARCH, each search type the menu offers, on a card with images: no screen title shows the CC icon (screen 170 draws label `0x83d` as its title, section 5.4). A title showing the icon is cosmetic and is recorded, not a stop.
-5. Leaving, with this precondition for `ram-unload` (classic-chrome-patch 8.4.6 E1-E3): a stock film selected in SHOOTING MENU > FILM SIMULATION and, if CC was set at C, a stock film selected at C (no CUSTOM SET); the camera back on the shooting screen with no menu open and no card activity, confirmed in chat. A task inside `FUN_00eee958` with film 13 selected at unload can fault (section 10 item 5). Then `ram-unload` (162 restored), power off; the reboot check with `cc-icon-b-ram-push-post-reboot.json` reads every old word. On the S-UNEXPECTED path the model asks for `ram-unload` only after the same precondition holds; otherwise power off.
+### 11.1 Without a card
 
-Any stop, freeze, error dialog or stock row drawn differently ends the session (classic-chrome-patch 8.4.8). The go names the operation, the session commit, the contract digest `04df9a5a…de32` and the reference runtimes of section 9.1. The flash of `98a66780…1606` follows under its own H3 go.
+In the emulator the combined candidate `98a66780` boots from erased settings with no card to the shooting screen, opens SHOOTING MENU and FILM SIMULATION, commits CLASSIC CHROME, returns to the shooting screen and opens the Q menu with the CHROME tile (receipts `private-data/analysis/classic-chrome-icon-emu/no-card-1/`, driven from the `flash-boot-check` snapshot). That route is the first-start route, not the body's retained settings; whether the body reaches the shooting screen without a card is item 11.2 B0, before anything is pushed.
+
+With no card the frames-remaining table at `0x009432a8` holds 99999 (`0x1869f`) in all 47 entries for PROVIA and for CC, the MEMORY FULL flag `0x0152b908` stays 0, and no count is drawn. The reviewed CC candidate `16c830ad`, which lacks the frames fix, gives the same table on the same route. Without a card the frames check (I3) therefore shows only that PROVIA and CC display the same thing; it does not exercise the fix, whose evidence stays the emulated card runs of section 9.3 until a card can be used.
+
+Not possible without a card, so deferred to a later session: shooting and playing back a CC frame, RAW CONVERSION (classic-chrome-patch 8.4.4 U5), IMAGE SEARCH (I8, the screen-170 title check of section 5.4), and a hardware check that CC's frame count equals PROVIA's.
+
+### 11.2 Before the session
+
+1. **Host:** on the session commit, `devenv shell -- bazel test //transport:ram-push-tests //transport:cli-rejections //host/firmware:classic-chrome-icon-ram-tests //transport:ram-push-cc-icon-review-bytes //transport:ram-push-cc-icon-review-verdicts //transport:ram-push-cc-icon-camera-pins` passes, and `devenv shell -- bazel run //transport:ram-push-cc-icon-reviewed-build-check` exits 0 after printing `reviewed CC icon contract accepted at 0xc20000`, `reviewed CC icon contract accepted at 0xc21f88` and a `refused as expected` line for each of its ten perturbation cases. Rehearsals exit 0 with these final lines (observed 2026-10-23): `rehearse ram-alloc 0x21fc` prints `rehearsal: ram-alloc; no native provider, USB enumeration or camera execution;allocation-bytes=8700`; `rehearse read-config "$PWD/private-data/read-plans/gate-byte.json"` prints `rehearsed read-config: 4 windows`; `rehearse read-ram "$PWD/private-data/read-plans/cc-icon-ram-push-prepush.json"` prints `rehearsed read-ram: 57 read requests; no write sent`; `rehearse read-ram "$PWD/private-data/read-plans/cc-icon-ram-push-post-reboot.json"` prints `rehearsed read-ram: 48 read requests; no write sent`.
+2. **Read plans:** `private-data/read-plans/cc-icon-ram-push-prepush.json` (SHA-256 `c67fe35b…95ad`) and `cc-icon-ram-push-post-reboot.json` (`c2b63478…6737`), written by `build-classic-chrome-icon-ram --read-plans` from the pinned manifest.
+3. **Output paths** must not exist: `private-data/sessions/xm1-cc-icon-ram-alloc-1`, `private-data/analysis/classic-chrome-patch/ram-push/operator-linked-icon-1`, `private-data/sessions/xm1-cc-icon-ram-push-1`. An existing OUTDIR refuses before USB.
+4. **Body:** RC0 (seven film rows), no card in the slot, ordinary boot with no buttons held. Stored `0xf7 = 0x01` since the 2026-10-22 re-enable (E-STORED-F7-REENABLE-RUN-150), so a plain attach enumerates `04cb:ff80`; exactly one such device on the bus. USB attached and left attached until 11.7 ends. No `commit-f7-*` command is part of this session.
+5. **Power:** a freshly charged battery showing full, or the mains-backed dummy supply.
+6. **Pre-session record, photographed:** SHOOTING MENU > FILM SIMULATION (seven rows, a stock row selected), the Q film tile, the C slot's film (dial to C, read, dial back; no CUSTOM SET), and what the shooting screen shows where the frame count normally appears.
+7. **B0, no-card start:** power on with no card. The shooting screen and SHOOTING MENU must appear, and any no-card indication is recorded. If the body does not reach the shooting screen, or shows an error dialog that does not clear, the session ends here with nothing sent.
+
+### 11.3 Model reads before the push (standing read grant)
+
+1. `devenv shell -- bazel run //transport:camera -- read-config "$PWD/private-data/read-plans/gate-byte.json"`: product `X-M1`, `0xf7` nonzero.
+2. `devenv shell -- bazel run //transport:camera -- read-ram "$PWD/private-data/read-plans/cc-icon-ram-push-prepush.json"`: one pass, 57 requests. The model decodes every publication address and requires its RC0 `old` word (162 words, including the Q glyph `0x37c` pointer `0x0022d28c = 0x0027dbfc`), service mode 3, table `0x015c22a0`, slot `0x00dc7874`, and the route's reviewer windows at their recorded values. Any mismatch stops the session before any write (S-PREREAD).
+
+### 11.4 Load commands
+
+Run from the repository root in one shell, no power-off between L1 and L4, camera idle at the shooting screen with no menu open. Each live command first prints `output: <OUTDIR>`; a stop prints one `camera:` line on stderr and exits nonzero.
+
+```sh
+ALLOC_OUT="$PWD/private-data/sessions/xm1-cc-icon-ram-alloc-1"
+LINK_OUT="$PWD/private-data/analysis/classic-chrome-patch/ram-push/operator-linked-icon-1"
+PUSH_OUT="$PWD/private-data/sessions/xm1-cc-icon-ram-push-1"
+SIZE=0x21fc
+devenv shell -- bazel run //transport:camera -- ram-alloc "$SIZE" "$ALLOC_OUT"
+BASE="$(devenv shell -- jq -r .base "$ALLOC_OUT/ram-alloc-state.json")"
+devenv shell -- bazel run //transport:camera -- ram-relink "$ALLOC_OUT/ram-alloc-state.json" "$LINK_OUT"
+devenv shell -- bazel run //transport:camera -- ram-push "$ALLOC_OUT/ram-alloc-state.json" "$LINK_OUT/ram-push-manifest.json" "$PUSH_OUT"
+```
+
+| Step | Command | Camera effect | Expected and record |
+| --- | --- | --- | --- |
+| L0 | the assignments; the owner confirms in chat that a stock film row is selected and the dial is not at C | none | `echo "$SIZE"` prints `0x21fc` |
+| L1 | `ram-alloc` | allocates 8,700 bytes, peer-core range maintenance, restores the callback slot | `ram-alloc: retained;state=…/xm1-cc-icon-ram-alloc-1/ram-alloc-state.json;relink before ram-push`. Record `jq .` of the state: `kind` `xm1-ram-alloc-state`, `size` 8700, `product` `X-M1`, `config_f7` nonzero, `cpu0` `0x00004003`, `table_pointer` `0x015c22a0`, `slot_old` `0x00dc7874`, `base` nonzero and 8-byte aligned |
+| L2 | `BASE=…` | none | `echo "$BASE"`: `0x` plus eight hex digits, last digit `0` or `8` |
+| L3 | `ram-relink` | none (host build with the pinned icon relinker) | `ram-relink: manifest=…/operator-linked-icon-1/ram-push-manifest.json`. Record `sha256sum "$LINK_OUT"/runtime.bin "$LINK_OUT"/ram-push-manifest.json`; the manifest names 162 publications and the contract digest of 11.9 |
+| L4 | `ram-push` | runtime upload with readback, INSTALL rendezvous, 162 stores, slot restore, readback | `ram-push: installed;state=…/xm1-cc-icon-ram-push-1/ram-push-state.json;power-off clears RAM`. The camera already required: mailbox magic `0x31504d52`, ABI 3, status 0, validated 162, setup 100, activation 62, restored 0, service core `0x4003`, peer status 0 with 162 lines, park and ack spins below the bound `0x80000`. Note the wall time and paste all output |
+
+### 11.5 Owner checks with the payload resident
+
+| Code | Owner action | Must show |
+| --- | --- | --- |
+| I1 | SHOOTING MENU > FILM SIMULATION | eight rows; the CC row's icon cell shows the CHROME cartridge; PRO Neg Hi, PRO Neg Std and the other RC0 rows unchanged |
+| I2 | Select CLASSIC CHROME, back to the shooting menu page; repeat with PRO Neg Std and PRO Neg Hi | the FILM SIMULATION item's value shows the CC icon for CC and each PRO Neg row's stock icon for that row |
+| I3 | Shooting screen with PROVIA, then CC, then PROVIA: photograph where the frame count normally appears each time | PROVIA and CC show the same thing (a number, a blank or a no-card indication); no MEMORY FULL. Record what it is (11.1: with no card this does not test the frames fix) |
+| I4 | Live view with CC, then PROVIA, then CC, in the menu highlight and on the shooting screen | CC looks muted against PROVIA; no film icon in the overlay for either |
+| I5 | Q menu, film tile, with CC, then PRO Neg Std, then PRO Neg Hi; dial through the films | CC shows the CHROME cartridge tile at the stock tiles' size; PRO Neg Std and Hi show their full-size stock tiles; eight films offered; the stock five unchanged |
+| I8 | IMAGE SEARCH | deferred: not testable without a card (11.1) |
+
+Any stop, freeze, error dialog or stock row drawn differently is S-UNEXPECTED.
+
+### 11.6 Leaving the payload
+
+| Code | Action | Must show |
+| --- | --- | --- |
+| E1 | Owner: select PROVIA/STANDARD in SHOOTING MENU > FILM SIMULATION | that row under the cursor |
+| E2 | Owner: dial to C; if FILM SIMULATION shows CLASSIC CHROME there, select the stock film recorded for C in 11.2 item 6; dial back. No CUSTOM SET | C shows its recorded film |
+| E3 | Owner: back to the shooting screen, no menu open; confirm in chat | none |
+| E4 | Model: `devenv shell -- bazel run //transport:camera -- ram-unload "$PUSH_OUT/ram-push-state.json"` | `ram-unload: rollback verified; allocation retained until power-off`; the camera required validated 162 and restored 162 |
+| E5 | Owner: SHOOTING MENU > FILM SIMULATION; Q film tile | seven rows; the Q menu offers the stock five with their stock tiles |
+| E6 | Owner: power off normally | none |
+
+E1-E3 are the unload precondition (section 10 item 5): a task inside `FUN_00eee958` with film 13 selected when `ram-unload` restores the live-view words can fault.
+
+### 11.7 Reboot check
+
+Power on normally, no card, cable attached. B1 normal start-up to the shooting screen; B2 FILM SIMULATION seven rows with the E1 row selected, Q five films; B3 C shows its recorded film. B4 model: `devenv shell -- bazel run //transport:camera -- read-ram "$PWD/private-data/read-plans/cc-icon-ram-push-post-reboot.json"` (48 requests): all 162 publication words equal their `old` values and slot `0x015c22ac = 0x00dc7874`. Stored `0xf7 = 0x01` is unchanged by this session.
+
+### 11.8 Stop rules
+
+Every stop ends camera operations for the session; nothing is retried; a new attempt needs a new go. Power-off is the recovery for every outcome: the allocation, runtime, callback retarget and all publications are RAM state.
+
+Operating rules. Run L1, L4 and E4 only with the camera idle at the shooting screen. Never install this payload while the CC payload or the bank+D3 payload is resident, or the reverse: they publish the same addresses, so the second push refuses on its old-word check.
+
+| Code | Seen | Action |
+| --- | --- | --- |
+| S-NOCARD | B0: no shooting screen, or an error dialog that does not clear | nothing was sent; power off; stop |
+| S-PREREAD | 11.3 mismatch, refusal or disconnect | no write was sent; stop |
+| S-HOST | L0 or L3 fails | before L1 nothing to undo; after L1 run `ram-free "$ALLOC_OUT/ram-alloc-state.json"` (expect `ram-free: allocation freed`), power off, 11.7 |
+| S-ALLOC-REFUSED / S-ALLOC-UNCERTAIN | `ram-alloc refused` / `ram-alloc uncertain …;send nothing further and power off` | refused: nothing to free; uncertain: mandatory power-off, 11.7 |
+| S-PUSH-REFUSED | `ram-push refused: …` before upload (manifest, runtime, pins, base, size, product, slot, old word) | `ram-free`, power off, 11.7; if the reason is the allocation guard, power off without `ram-free` |
+| S-PUSH-REFUSED-PARK | `installer refused before publication: CPU1 park rendezvous timed out` | power off without `ram-free`, 11.7 |
+| S-PUSH-UNCERTAIN | `ram-push uncertain: …;send nothing further and power off` (including completion timeout, status -8) | mandatory power-off now, no button first, 11.7 |
+| S-UNEXPECTED | anything in 11.5 differing from its row, including PROVIA and CC showing different things at I3 | stop using the camera; photograph; if the menu responds select the recorded stock film; no `ram-unload` unless the model asks after reading the journals, and then only after E1-E3 hold; power off, 11.7 |
+| S-UNLOAD-REFUSED / -UNCERTAIN | `ram-unload refused` / `ram-unload uncertain` | power off, 11.7 (uncertain: mandatory, now) |
+| S-USB | cable pulled, host crash, or a command without a final line for 10 minutes | treat as uncertain: power off, 11.7 |
+| S-HUNG | no response to the power switch within 60 s | remove the battery for 10 s, reinsert, 11.7 |
+
+### 11.9 What the go names
+
+The owner's H2 go names: the operation (ordinary-boot RAM push of the Classic Chrome icon payload on the RC0 body with no card: the B0 no-card start, the 11.3 reads, `ram-alloc 0x21fc`, `ram-relink` at the returned base, `ram-push` of 162 publications, the 11.5 checks, `ram-unload` after E1-E3, power-off and the 11.7 read, with `ram-free` as the not-installed contingency); the session commit, whose icon RAM files equal reviewed `b8c7fd92259f18d8506210167a0baba4a73e9ced` (review CcIconReview); the publication contract digest `04df9a5ae4574f0c28f2c2ce67a581a96c7f092036ece6c316eced593fa1de32`; and the reference runtimes the pinned relinker reproduces, `4f871b2a9c488b2a68bfa0a6c006303d292b4d2dadce54f8635ec8e438f3ebd3` at `0x00c20000` and `2fce1f08317732091648eb58a3409f6bf472d0f7c8444ea153800f7da791e16a` at `0x00c21f88`. The session's own runtime depends on the base `ram-alloc` returns; the camera binary rebuilds it with the pinned relinker and requires byte equality, and L3 records its SHA-256 before L4 runs. I8, a CC frame, RAW CONVERSION and the frame-count check with a card are outside this go. The flash of `98a66780…1606` follows under its own H3 go.
 
 ## 12. Open questions
 
