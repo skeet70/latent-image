@@ -27,12 +27,13 @@ import FujiAF.ClassicChromeCandidate (Candidate (..), Input (..), candidateJson,
 import FujiAF.Colour
 import FujiAF.FilmFit
 import FujiAF.FilmGrid (oracleGrid)
+import FujiAF.FilmInvert (invert)
 import FujiAF.FilmStage
 import qualified FujiAF.Host as H
 import FujiAF.JSON (decodeStrict, encodeCanonical)
 import FujiAF.XM1Develop
 import LookReference (LabPair (..), lutLab, parseCube, relativeStats, sector)
-import PhotoSession (Decoder (..), chartPatches, eModel, photoIdentical)
+import PhotoSession (Decoder (..), PairGroup (..), Ycc (..), chartPatches, eModel, pairDeltaStats, pairDeltaTables, photoIdentical, relativePairs, yccLab)
 import SiblingTables (runTables)
 
 usage :: String
@@ -72,6 +73,10 @@ usage =
     , "  chroma and lightness: Fujifilm's F-Log2 LUTs on the neutral ramp, a low-chroma grid and the"
     , "  gamut set, the X-M1 stage (the candidate for classicChrome) on the same set, and FILM's"
     , "  regions of an e-model output"
+    , "classic-chrome-model relative [--ffmpeg PATH] [--ffprobe PATH] MANIFEST.json OUT.json [BUNDLE.json CANDIDATE.json]"
+    , "  Classic Chrome against PROVIA on same-scene frame pairs (flat blocks, binned by the PROVIA"
+    , "  colour), and with the bundle and candidate the same statistics over the patch set for the"
+    , "  X-Trans II stages and the X-M1 PROVIA stage against the candidate"
     ]
 
 main :: IO ()
@@ -95,6 +100,7 @@ main = do
       cc <- forM rest $ \p -> (\c -> ("classicChrome", xm1Candidate b c)) <$> readCandidate p
       eModel dec ([(filmKey f, xm1 b f) | f <- [Provia .. ProNegHi]] ++ cc) manifest >>= writeJson out
     ["look-reference", film, proviaCube, filmCube, bundle, candidate, eModelOut, out] -> runLookReference (T.pack film) proviaCube filmCube bundle candidate eModelOut out
+    ("relative" : manifest : out : model) | length model `elem` [0, 2] -> runRelative dec manifest out model
     _ -> hPutStrLn stderr usage >> exitFailure
  where
   point s = case break (== ',') s of
@@ -939,3 +945,60 @@ filmRegions film v = do
     path r [k] >>= AT.parseEither A.parseJSON >>= \xs -> case xs of
       [l, a, bb] -> Right (Lab l a bb)
       _ -> Left "L*a*b* needs three values"
+
+-- Classic Chrome against PROVIA ---------------------------------------------------
+
+-- | The relative statistics of every manifest group and, given a bundle and
+-- candidate, of the patch set through the X-Trans II PROVIA and Classic
+-- Chrome stages (X70 sensor) and through the X-M1 PROVIA stage and the
+-- candidate (X-M1 sensor), at the fit's exposure. For a group marked for
+-- X-M1 prediction, each PROVIA block is inverted through the X-M1 PROVIA
+-- stage and developed through the candidate, which gives a predicted source
+-- on the measured colours and the CIEDE2000 of that prediction against the
+-- measured Classic Chrome block.
+runRelative :: Decoder -> FilePath -> FilePath -> [FilePath] -> IO ()
+runRelative dec manifest out model = do
+  (groups, pairsJson) <- relativePairs dec manifest
+  let measured = [(groupName g, [(yccLab p, yccLab c) | (p, c) <- groupBlocks g]) | g <- groups]
+  (modelled, predictions) <- case model of
+    [bundlePath, candidatePath] -> do
+      b <- readBundle bundlePath
+      cand <- readCandidate candidatePath
+      let k = calibrateExposure (compileStage (xtrans2 b Provia))
+          inputs cam = map (sceneInput cam k . patchXyz) allPatches
+          pv = xm1 b Provia
+          cc = xm1Candidate b cand
+          pvStage = compileStage pv
+          ccStage = compileStage cc
+          pair p c xs = zip (renders (compileStage p) xs) (renders (compileStage c) xs)
+          predict g =
+            let rows = [(yccLab p, yccLab c, renderLab pvStage w, renderLab ccStage w) | (p@(Ycc y cb cr), c) <- groupBlocks g, Just w <- [invert pvStage y cb cr]]
+                st ds = let Stats m p x = stats ds in object ["mean" .= r3 m, "p95" .= r3 p, "max" .= r3 x, "n" .= length ds]
+             in ( (groupName g <> " predicted", [(p, q) | (p, _, _, q) <- rows])
+                , ( groupName g
+                  , object
+                      [ "notInvertible" .= (length (groupBlocks g) - length rows)
+                      , "proviaRedevelopResidual" .= st [ciede2000 p r | (p, _, r, _) <- rows]
+                      , "predictedVsMeasured" .= st [ciede2000 c q | (_, c, _, q) <- rows]
+                      , "proviaAsPrediction" .= st [ciede2000 c p | (p, c, _, _) <- rows]
+                      ]
+                  )
+                )
+          predicted = [predict g | g <- groups, groupXm1Prediction g]
+      pure
+        ( [ ("model X-Trans II", pair (xtrans2 b Provia) (xtrans2 b ClassicChrome) (inputs x70Camera))
+          , ("model X-M1 candidate", pair pv cc (inputs xm1Camera))
+          ]
+            ++ map fst predicted
+        , map snd predicted
+        )
+    _ -> pure ([], [])
+  let sources = modelled ++ measured
+  writeJson out $
+    object
+      [ "metric" .= ("per block or patch, Classic Chrome against PROVIA: C*ab ratio, dL*, hue shift in degrees; binned by the PROVIA colour's 30-degree hue sector (C* >= 5) and chroma band, and dL* by PROVIA L* for neutral (C* < 5) and chromatic blocks; sRGB L*a*b* relative to D65" :: T.Text)
+      , "pairs" .= pairsJson
+      , "sources" .= object [K.fromText n .= pairDeltaStats bs | (n, bs) <- sources]
+      , "xm1Predictions" .= object [K.fromText n .= v | (n, v) <- predictions]
+      ]
+  putStr (pairDeltaTables sources)

@@ -92,6 +92,31 @@ main = do
       if matches
         then ensure (mean < 0.8) ("e-model of the candidate's own output is " ++ show mean)
         else ensure (mean > 2) ("e-model did not separate a PROVIA frame offered as Classic Chrome: " ++ show mean)
+
+    -- relative: a frame with halved chroma reads as a chroma ratio near one
+    -- half; a frame shifted by one patch matches only with its offset
+    let outputs = map (develop (compileStage provia)) patchInputs
+        halved = [YCbCr y (128 + (cb - 128) `div` 2) (128 + (cr - 128) `div` 2) | YCbCr y cb cr <- outputs]
+        shifted = last outputs : init outputs
+    writePacked (root </> "provia.yuv") outputs
+    writePacked (root </> "halved.yuv") halved
+    writePacked (root </> "shifted.yuv") shifted
+    let pair group cc offset = object (["group" .= (group :: String), "provia" .= ("provia.yuv" :: String), "classicChrome" .= (cc :: String), "packed" .= object ["width" .= (256 :: Int), "height" .= (64 :: Int)], "blocks" .= object ["size" .= (16 :: Int), "maxLumaSd" .= (1 :: Double)]] ++ ["offset" .= [o, 0 :: Int] | Just o <- [offset]])
+    B.writeFile (root </> "pairs.json") (encodeCanonical (object ["pairs" .= [pair "halved" "halved.yuv" Nothing, pair "shifted" "shifted.yuv" (Just 64), pair "unaligned" "shifted.yuv" Nothing]]))
+    (c4, _) <- run tool ["relative", root </> "pairs.json", root </> "relative.json"]
+    ensure (c4 == ExitSuccess) "relative failed"
+    rel <- B.readFile (root </> "relative.json") >>= either failH pure . decodeStrict
+    let source g = field (field rel "sources") g
+        ratio g = numD (field (field (source g) "chromatic") "chromaRatioMean")
+        blocks g = numD (field (source g) "blocks")
+        sectorRatios g = case field (source g) "byHueSector" of
+          Array xs -> [numD (field (field s "stats") "chromaRatioMean") | s <- foldr (:) [] xs]
+          _ -> []
+    ensure (blocks "halved" == 64) ("relative kept " ++ show (blocks "halved") ++ " of 64 blocks")
+    ensure (ratio "halved" > 0.35 && ratio "halved" < 0.65) ("halved chroma read as ratio " ++ show (ratio "halved"))
+    ensure (blocks "shifted" == 48) ("the offset pair kept " ++ show (blocks "shifted") ++ " of 48 blocks")
+    ensure (all (\r -> abs (r - 1) < 0.001) (sectorRatios "shifted")) "the offset pair changed chroma in a hue sector"
+    ensure (any (\r -> abs (r - 1) > 0.05) (sectorRatios "unaligned")) "an unaligned pair read as identical"
   putStrLn "photo-session tests passed"
  where
   fromStr = K.fromString
@@ -121,3 +146,9 @@ writeJpeg ffmpeg path patches = do
       raw = B.concat [plane ycY, plane ycCb, plane ycCr]
   (timedOut, code, _, err) <- runBounded 120000000 65536 ffmpeg ["-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "yuvj444p", "-s", "256x64", "-i", "-", "-frames:v", "1", "-q:v", "1", "-pix_fmt", "yuvj444p", path] raw
   ensure (not timedOut && code == ExitSuccess) ("ffmpeg could not write " ++ path ++ ": " ++ BC.unpack (B.take 400 err))
+
+-- | A 256 x 64 packed Y0 Y1 Cb Cr plane of four flat 64 x 64 patches.
+writePacked :: FilePath -> [YCbCr] -> IO ()
+writePacked path patches = B.writeFile path (B.concat (replicate 64 row))
+ where
+  row = B.concat [B.concat (replicate 32 (B.pack (map fromIntegral [y, y, cb, cr]))) | YCbCr y cb cr <- patches]

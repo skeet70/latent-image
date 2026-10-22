@@ -7,10 +7,10 @@ Host-only work for [spec/10 section 19.5](../spec/10-film-recipes.md#195-classic
 | Target | Role |
 | --- | --- |
 | `//host:film-model` | `FujiAF.FilmStage` (integer film stage), `FujiAF.FilmInvert` (its floating-point inverse), `FujiAF.Colour` (CIELAB, CIEDE2000, sensor models, patch sets and L*a*b* grids), `FujiAF.FilmFit` (integer matrix and chroma fit), `FujiAF.FilmGrid` (oracle grid), `FujiAF.XM1Develop` (1.50 develop-stage readers, adjustment field encoding), `FujiAF.ClassicChromeCandidate` (the v1 parameter file) |
-| `//host/firmware:classic-chrome-model` | `tables`, `oracle-input`, `oracle-compare`, `bundle`, `method`, `fit-cc`, `photo-identical`, `chart-patches`, `e-model`, `settings`, `look-reference` (usage with no arguments) |
+| `//host/firmware:classic-chrome-model` | `tables`, `oracle-input`, `oracle-compare`, `bundle`, `method`, `fit-cc`, `photo-identical`, `chart-patches`, `e-model`, `settings`, `look-reference`, `relative` (usage with no arguments) |
 | `//host/firmware:film-stage-tests` | oracle fixtures, the 34 published CIEDE2000 pairs (Sharma, Wu and Dalal 2005), the parameter boundary, fit recovery of a reachable target, inverse round trip |
 | `//host/firmware:candidate-tests` | the v1 parameter file on a synthetic candidate: field encoding and chroma storage order against hand-worked values, read-back, refusals |
-| `//host/firmware:photo-session-tests` | the photo-session commands through the command line on flat JPEGs written by the pinned ffmpeg |
+| `//host/firmware:photo-session-tests` | the photo-session commands through the command line on flat JPEGs written by the pinned ffmpeg, and `relative` on packed planes: chroma ratio, block count and offset registration |
 | `//host/firmware:look-reference-tests` | F-Log2 against the data sheet's code values, the F-Gamut and BT.709 matrices, `.cube` parsing and trilinear interpolation, and the relative statistics on pairs with a known chroma, lightness and hue change |
 
 Private reproduction, from the worktree root with `P=private-data/analysis/classic-chrome`, `R=private-data/analysis/x-m1-1.50` and `X` the x70view checkout (revision `a47591d9bd`). `$R/payload.bin` is the length-correct complemented payload of the pinned DAT (bytes from 532 on, XOR 0xff, SHA-256 `8c6f806e…26c0`, [firmware extraction](firmware-extraction.md)); the two decodes come from `//lz:fflzd`:
@@ -415,6 +415,91 @@ Coverage of the pair: the scene has chromatic blocks only in the 90-120 sector (
 Limits: a different generation (GFX ETERNA 55, 2025) with its own PROVIA, rendered from F-Log2 scene data rather than through an in-camera JPEG path; the BT.709 output is read with the sRGB curve; colorimetric scene colours without spectra; the X-M1 side uses the public X-M1 sensor matrix; spec 19.5.6 asks for the F-Log2 path to be calibrated against the X-M1's own films, which is done here in relative form for Velvia and ASTIA only (no PRO Neg Std pixel-aligned frame).
 
 Verdict: the candidate's Classic Chrome moves colours from PROVIA in the same direction as Fujifilm's Classic Chrome LUT in every hue sector for chroma and hue and on the tone curve, with matching overall chroma reduction; lightness differs in sign only in the red-magenta sectors, inside the spread the stock films show.
+
+### 8.6 Relative check against X70 live view (2026-10-21 set)
+
+Without a chart, the session set is compared by relative differences: on the same scene, how Classic Chrome moves each colour away from PROVIA, set beside the same differences on real X70 frames and in the model. Evidence class: hardware-observed frames (X70 live view; X-M1 1.50 with the RAM-pushed payload, E-CC-RAM-PUSH-SESSION-150) with host analysis (E-CC-RELATIVE-XREF-150).
+
+`classic-chrome-model relative MANIFEST.json OUT.json [BUNDLE.json CANDIDATE.json]` reads pairs of a PROVIA and a Classic Chrome frame (JPEGs, or packed Y0 Y1 Cb Cr planes). It keeps the blocks whose sampled central half has luma SD at most `maxLumaSd` in both frames, the Classic Chrome block displaced by the pair's `offset`. Per block it computes the Classic Chrome over PROVIA C*ab ratio, dL* and the hue shift dh in degrees, binned by the PROVIA block's 30-degree hue sector (C* at least 5), its chroma band (5-15, 15-30, 30-50, 50 and above), and its L* for the tone response, neutral (C* below 5) and chromatic blocks separately. Given the bundle and candidate it adds two predictions:
+
+- Patch set: the 691 patches of section 4 through the X-Trans II PROVIA and Classic Chrome stages (X70 sensor), and through the X-M1 PROVIA stage and the candidate (X-M1 sensor).
+- Per block, for pairs marked `xm1Prediction`: each PROVIA block inverted through the X-M1 PROVIA stage and developed through the candidate with PROVIA's gain table, luma bands and chroma gains, as the RAM push installs it (the prediction of section 8.4, here on every block flat in both frames).
+
+| Source | Frames | Blocks (chromatic) |
+| --- | --- | ---: |
+| X70 live view | x70view `research/hardware/ff80-film-calibration-20261011T233703Z-0d92ed` (revision `a47591d9bd`), captures `stock-0` and `stock-13`: three 720x480 live-view planes each of a laptop-screen target (24 hues at two strengths, grey ramp, white). x70view's film-probe mod writes each film's stock live-view film-stage words and reads them back equal. The two films' words differ only in matrix, tone and chroma. Matrix and tone equal the bundle's X-Trans II PROVIA and Classic Chrome values, and the chroma words are the still entries scaled by one factor common to both films. Gain table and luma bands are shared. 16-pixel blocks, SD at most 2.5 | 1816 (774) |
+| X70 repeat control | PROVIA captures 0 and 1 of the same setting | 625 (283) |
+| X-M1 3164/3169 | In-camera RAW conversions of DSCF3149.RAF to PROVIA and Classic Chrome, pixel-aligned; ISO 4000, Incandescent WB, DR100, adjustments 0 (EXIF). 32-pixel blocks, SD at most 3.0 | 9714 (8858) |
+| X-M1 3168/3167 | Shot PROVIA and Classic Chrome frames of the same scene, same settings. Offset (+2, 0) from an RMSE subimage search over five regions, which give (+2, 0) at top and centre and (0, 0) at the bottom | 9631 (8150) |
+
+The X70 set holds real-hardware PROVIA and Classic Chrome renderings of one scene with read-back settings, so public same-scene pairs were not collected. The X70 set covers the live-view path only: no still develop and no JPEG encoder.
+
+Per hue sector, chromatic blocks pooled over chroma bands. Each cell is n, C* ratio, dL*, dh:
+
+| Hue sector | X70 live view | Model X-Trans II | X-M1 3164/3169 | X-M1 3164/3169 predicted per block | Model X-M1 candidate | X-M1 3168/3167 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0-30 | 66, 0.82, -1.41, +3.5 | 50, 0.81, +0.28, +3.0 | - | - | 52, 0.82, +0.23, +2.9 | 2, 0.77, -0.03, -2.4 |
+| 30-60 | 128, 0.83, -2.59, -1.3 | 70, 0.82, -0.25, -1.7 | 313, 0.83, -0.97, -5.1 | 313, 0.83, -1.08, -4.6 | 76, 0.82, -0.13, -1.7 | 278, 0.82, -0.90, -5.6 |
+| 60-90 | 217, 0.74, +0.24, -3.9 | 54, 0.78, +0.47, -2.9 | 401, 0.77, -1.61, -9.7 | 401, 0.77, -1.72, -8.4 | 48, 0.78, +0.48, -4.1 | 332, 0.75, -1.32, -10.5 |
+| 90-120 | 72, 0.77, +0.83, -5.9 | 53, 0.77, -0.46, -4.7 | 7700, 0.64, +0.04, -7.1 | 7700, 0.66, -0.02, -5.8 | 54, 0.74, -0.51, -5.8 | 7143, 0.62, +0.49, -7.6 |
+| 120-150 | 18, 0.80, -4.15, +2.4 | 105, 0.75, -3.98, +1.2 | 162, 0.58, -2.08, -4.6 | 162, 0.60, -2.16, -4.3 | 99, 0.73, -3.80, +1.5 | 69, 0.56, -1.26, -5.6 |
+| 150-180 | 26, 0.82, -2.57, +5.5 | 57, 0.79, -2.94, +6.4 | 6, 0.76, +0.29, +4.7 | 6, 0.80, +0.22, +3.3 | 45, 0.78, -3.50, +7.0 | 7, 0.75, +0.94, +8.0 |
+| 180-210 | - | 37, 0.91, -2.41, -0.1 | 2, 0.95, -0.06, +2.0 | 2, 0.92, -0.19, +1.8 | 46, 0.89, -2.64, +3.9 | 4, 0.97, +0.27, +6.3 |
+| 210-240 | - | 27, 0.92, -1.48, -7.9 | 5, 0.97, -0.51, -3.4 | 5, 0.97, -0.53, -6.3 | 34, 0.93, -2.03, -5.5 | 4, 0.99, +0.20, -2.1 |
+| 240-270 | 7, 0.86, -0.57, -18.0 | 31, 0.82, -1.59, -13.1 | 69, 0.63, -1.19, -16.2 | 69, 0.62, -1.30, -22.6 | 37, 0.82, -1.40, -12.8 | 39, 0.74, -1.18, -8.2 |
+| 270-300 | 60, 0.74, -1.41, -9.7 | 64, 0.68, -0.44, -12.2 | 110, 0.57, -1.03, -14.5 | 110, 0.55, -1.09, -18.4 | 66, 0.68, -0.57, -12.1 | 172, 0.62, -0.72, -12.5 |
+| 300-330 | 110, 0.71, +0.19, -0.5 | 52, 0.65, +0.36, -0.7 | 87, 0.53, -1.06, -4.3 | 87, 0.49, -1.17, -6.3 | 44, 0.63, +0.95, +0.7 | 98, 0.57, -0.94, -5.4 |
+| 330-360 | 70, 0.80, -0.69, +4.1 | 60, 0.72, +1.29, +5.2 | 3, 0.56, -1.28, +3.0 | 3, 0.55, -1.41, +14.4 | 59, 0.72, +1.40, +5.8 | 2, 0.66, -1.51, -4.1 |
+| All chromatic | 774, 0.77, -0.74, -1.9 | 660, 0.77, -1.06, -1.5 | 8858, 0.65, -0.15, -7.2 | 8858, 0.67, -0.21, -6.2 | 660, 0.77, -1.05, -1.4 | 8150, 0.63, +0.30, -7.7 |
+
+The sector mean mixes chroma and lightness, and the X70 target is mostly at C* above 50 while the X-M1 scene is mostly below 15, so like cells are compared by sector and chroma band. These are all cells where both X70 and X-M1 3164/3169 hold at least five blocks:
+
+| Sector, chroma band | X70 live view | X-M1 3164/3169 | X-M1 predicted per block | Model X-Trans II | Model X-M1 candidate |
+| --- | --- | --- | --- | --- | --- |
+| 30-60, 5-15 | 15, 0.72, -0.26, -0.5 | 20, 0.73, -0.94, -5.1 | 20, 0.71, -1.09, -3.0 | 4, 0.73, +0.70, +4.0 | 4, 0.76, +0.54, -1.6 |
+| 30-60, 15-30 | 8, 0.72, -1.63, -3.5 | 15, 0.76, -1.26, -4.3 | 15, 0.76, -1.39, -2.9 | 12, 0.81, +0.35, -3.9 | 12, 0.83, +0.51, -2.6 |
+| 30-60, 50+ | 105, 0.85, -3.00, -1.2 | 179, 0.85, -0.82, -5.2 | 179, 0.85, -0.92, -4.9 | 37, 0.84, -0.66, -1.1 | 43, 0.83, -0.53, -1.4 |
+| 60-90, 5-15 | 124, 0.70, +1.10, -4.9 | 74, 0.76, -1.66, -10.1 | 74, 0.77, -1.74, -6.3 | 4, 0.68, +0.83, -5.7 | 5, 0.72, +0.92, -8.6 |
+| 60-90, 15-30 | 54, 0.73, -1.63, -5.5 | 244, 0.76, -1.63, -9.9 | 244, 0.76, -1.75, -9.1 | 10, 0.72, +0.69, -6.9 | 10, 0.75, +0.81, -6.5 |
+| 90-120, 5-15 | 63, 0.75, +1.14, -6.2 | 7248, 0.64, +0.09, -6.9 | 7248, 0.66, +0.04, -5.7 | 5, 0.71, +0.61, -3.1 | 6, 0.64, +0.55, -6.3 |
+| 90-120, 50+ | 9, 0.91, -1.36, -3.8 | 14, 0.82, -0.71, -4.7 | 14, 0.82, -0.76, -4.5 | 25, 0.83, -0.76, -4.1 | 23, 0.81, -0.81, -4.8 |
+
+Tone response, each cell n and dL* for neutral blocks, then for chromatic blocks, by PROVIA L*:
+
+| PROVIA L* | X70 live view | Model X-Trans II | X-M1 3164/3169 | X-M1 predicted per block | Model X-M1 candidate | X-M1 3168/3167 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0-10 | 1025, +0.01; 46, -0.51 | 11, -0.33; 28, -1.03 | 656, -0.50; 175, -0.74 | 656, -0.54; 175, -0.83 | 11, -0.33; 28, -1.05 | 855, -0.24; 214, -0.45 |
+| 10-20 | 17, -1.30; 68, -1.54 | 2, -1.91; 26, -2.99 | 181, -1.48; 1723, -2.01 | 181, -1.57; 1723, -2.08 | 2, -1.91; 25, -2.50 | 620, -1.19; 1704, -1.61 |
+| 20-30 | -; 3, -2.26 | 1, -2.26; 45, -2.91 | 8, -2.53; 1678, -2.44 | 8, -2.56; 1678, -2.55 | 1, -2.26; 47, -2.92 | 4, -1.23; 1006, -1.67 |
+| 30-40 | -; 3, -2.44 | 3, -2.18; 62, -3.16 | 11, -2.40; 511, -1.56 | 11, -2.44; 511, -1.66 | 3, -2.18; 65, -2.77 | 2, -2.33; 401, -1.20 |
+| 40-50 | -; 193, -1.65 | 2, -0.82; 64, -1.90 | -; 122, -0.91 | -; 122, -1.02 | 2, -0.82; 67, -1.79 | -; 114, -0.70 |
+| 50-60 | -; 221, -1.07 | 2, +0.59; 97, -0.99 | -; 337, +0.80 | -; 337, +0.73 | 2, +0.59; 98, -1.00 | -; 542, +0.91 |
+| 60-70 | -; 104, -0.10 | 3, +1.63; 109, +0.21 | -; 1893, +1.66 | -; 1893, +1.62 | 3, +1.63; 107, +0.34 | -; 2474, +1.72 |
+| 70-80 | -; 134, +1.00 | 2, +1.65; 131, -0.01 | -; 2367, +1.61 | -; 2367, +1.58 | 2, +1.65; 130, -0.18 | -; 1661, +1.65 |
+| 80-90 | -; 2, +1.44 | 3, +1.19; 98, -0.70 | -; 52, +1.12 | -; 52, +1.11 | 3, +1.19; 93, -0.84 | -; 34, +1.15 |
+
+Findings:
+
+- The X70 hardware pair agrees with the model's X-Trans II pair in every sector the target covers: C* ratio within 0.08 and hue shift of the same sign within 5 degrees. The X70's ratio is higher by 0.06-0.08 in 270-360 degrees. dL* differs by up to 2.3 between the screen colours and the patch set. The repeat control stays within 0.007 in ratio, 0.09 in dL* and 0.6 degrees in every sector, so these differences are not capture noise. This is the first hardware check of the X-Trans II reference the fit targets, on the live-view path.
+- On the X-M1 conversion pair, the per-block prediction matches the measured Classic Chrome in every sector with at least 20 blocks: ratio within 0.04 and dL* within 0.11. The hue shift is within 1.3 degrees from 30 to 150 degrees. In 240-330 degrees, where the blocks are mostly below C* 15, the measured rotation is 2-6 degrees smaller than predicted. Over all blocks the prediction is 0.64 / 1.70 / 3.14 CIEDE2000 (mean / p95 / max) from the measured, at the inverse's floor (section 8.4).
+- Desaturation: every populated X-M1 sector has a ratio between 0.53 and 0.85. The ratio rises with chroma (0.64, 0.72, 0.80 and 0.85 over the four bands), as in the model (0.67-0.79) and the X70 (0.72 to 0.80-0.84). It is lowest in the blue-purple sectors (0.53-0.63 at 240-330 degrees), where the model and the X70 are also lowest. In matched cells the X-M1 ratio is within 0.06 of the X70's except at 90-120 degrees: 0.64 against 0.75 at C* 5-15, where the X70 blocks are the screen's tinted greys, and 0.82 against 0.91 at C* 50+ (14 and 9 blocks). The model gives 0.64-0.71 and 0.81-0.83 there.
+- Hue: the X-M1 rotates negative in every sector with at least 20 blocks: -4.6 to -9.7 degrees from 30 to 150 degrees, -14.5 to -16.2 from 240 to 300 and -4.3 at 300-330. The patch-set model has the same sign and a smaller rotation at 30-120 degrees (-1.7 to -5.8) and at 240-300. At 120-150 and 300-330 it gives -0.7 to +1.5, where the measurement and the per-block prediction both give -4.3 to -6.3. In matched cells the X-M1 rotates 0.7-5.2 degrees more than the X70, most in 30-90 degrees. The per-block prediction reproduces the measured rotation on the X-M1's own colours, for example -4.9 against -5.2 at 30-60 degrees, C* 50+. In the matched cells with at least 10 patches each, the two patch-set model columns agree within 1.3 degrees. The extra rotation therefore comes from where the scene's colours sit within each bin, not from the candidate departing from X-Trans II.
+- Tone: neutrals darken by 1.5 L* at PROVIA L* 10-20 and by 2.4-2.5 at L* 20-40. That is within 0.1 of the per-block prediction and within 0.45 of the model's key-38 curve on the neutral ramp. Chromatic blocks at L* 60-80 gain 1.6, within 0.05 of the per-block prediction and close to the model's neutrals at those levels (+1.63, +1.65). The patch set's chromatic patches there move -0.2 to +0.3. The X70 grey ramp renders at C* 5 and above in both films, so X70 neutral data exists only below L* 20 (-1.30 against the model's -1.91 at L* 10-20).
+- The shot pair 3168/3167 gives the same direction (pooled ratio 0.63 against 0.65, per sector within 0.11 of the conversion pair). Its predicted-against-measured residual is 1.08 mean CIEDE2000 and folds in misregistration and two exposures.
+
+Verdict: relative to PROVIA, the X-M1 Classic Chrome behaves as the model expects. Direction is right in every tested sector: lower chroma, negative hue rotation where the model has it, shadows darker and light tones lighter. Magnitude matches the per-block prediction within 0.04 in C* ratio, 0.11 in dL* and about 1.3 degrees of hue in the warm sectors. The X70 hardware frames confirm the X-Trans II reference the candidate was fitted to, within 0.08 in ratio and 5 degrees in hue. This is not the look acceptance of section 7, which needs the chart frames.
+
+Limits:
+
+- Scene coverage: the blocks come from few surfaces of one tabletop, so neighbouring blocks are not independent; counts are blocks, not surfaces. 7248 of the 8858 chromatic X-M1 blocks are low-chroma yellow (90-120 degrees, C* 5-15). Untested on the X-M1: reds (0-30 degrees, at most 2 blocks), greens through azure (150-240 degrees, at most 7 blocks per sector, all below C* 30) and magenta-red (330-360 degrees, at most 3 blocks). Chroma above 30 is tested only at 30-120 degrees. Blue (240-300 degrees) is tested only below C* 15 apart from 4 blocks, and purple (300-330) only below C* 30. Neutrals above L* 40 are not in either camera's data. The X70 target lacks 180-240 degrees.
+- ISO 4000 and Incandescent WB: section 8.4 maps the ISO- and WB-dependent develop selectors and finds the DR100 values at ISO 4000 and no white-balance input, so the per-block prediction uses this capture's selectors. The patch-set model renders D65 colours under the section 4 sensor models, so its columns give direction and rough magnitude and the per-block columns are the like-for-like comparison. The light changes which colours the scene holds and how noisy they are: most flat blocks render at C* 5-15 in the yellow sector, and at C* 8 one unit of a* or b* is 7 degrees of hue, which limits the low-chroma hue comparison.
+- The X70 frames are live view: the live view's own gain table, live-view chroma scaling, 8-bit clipping of saturated screen colours in both films, and an emissive target under the live view's own white balance.
+
+Reproduction (`P=private-data/analysis/classic-chrome`; the manifest under `$P/xref/` names the frames by absolute path, and `manifest-sd1.5.json` is the SD 1.5 variant):
+
+```sh
+classic-chrome-model relative $P/xref/manifest.json $P/xref/relative.json $P/bundle.json $P/candidate.json
+```
 
 ## 9. Limits and open risks
 
