@@ -1,9 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- Runs //transport:camera ram-push and ram-unload on inputs that parse but
 -- differ from the compiled reviewed contract, with no camera attached.
--- With `--classic-chrome` the inputs have the Classic Chrome payload's size
--- and publication counts, so the camera checks them against
--- `reviewedCcContract`.
+-- With `--classic-chrome` or `--classic-chrome-icon` the inputs have that
+-- payload's size and publication counts, so the camera checks them against
+-- `reviewedCcContract` or `reviewedCcIconContract`.
 module Main where
 
 import Control.Monad (unless)
@@ -25,6 +25,7 @@ import FujiAF.SHA256 (sha256)
 import FujiAF.Transport (writePrivateBytes)
 import RamPushReviewedPins (reviewedContract)
 import RamPushCcReviewedPins (reviewedCcContract)
+import RamPushCcIconReviewedPins (reviewedCcIconContract)
 
 base :: Word32
 base = 0x00c20000
@@ -87,7 +88,8 @@ main = do
   (cameraArgument, target@(Target payload contract offset)) <- getArgs >>= \arguments -> case arguments of
     [camera] -> pure (camera, Target bankD3Payload reviewedContract 0xa200)
     [camera, "--classic-chrome"] -> pure (camera, Target classicChromePayload reviewedCcContract 0x1000)
-    _ -> putStrLn "usage: ram-push-camera-pins CAMERA [--classic-chrome]" >> exitFailure
+    [camera, "--classic-chrome-icon"] -> pure (camera, Target classicChromeIconPayload reviewedCcIconContract 0x1000)
+    _ -> putStrLn "usage: ram-push-camera-pins CAMERA [--classic-chrome|--classic-chrome-icon]" >> exitFailure
   camera <- makeAbsolute cameraArgument
   temporary <- lookupEnv "TEST_TMPDIR" >>= maybe (ioError (userError "TEST_TMPDIR is unset")) makeAbsolute
   root <- privateDirectory (temporary </> "camera-pins")

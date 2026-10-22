@@ -1,5 +1,5 @@
--- The RAM-push pre-go gate over a review record (transport/ram-push-review.json
--- or transport/ram-push-cc-review.json).
+-- The RAM-push pre-go gate over a review record (transport/ram-push-review.json,
+-- transport/ram-push-cc-review.json or transport/ram-push-cc-icon-review.json).
 --   verdicts RECORD: every pin and the publication contract is approved by an
 --     approving review, or content-checked (bank-content pins only).
 --   bytes RECORD: every workspace pin's file and the builder and toolchain
@@ -16,6 +16,7 @@ import System.Exit (die, exitFailure)
 import FujiAF.RamPushReview
 import FujiAF.SHA256 (sha256)
 import ClassicChromeRamBuilder (classicChromeRamBuilderDigest)
+import ClassicChromeIconRamBuilder (classicChromeIconRamBuilderDigest)
 import RamPushToolchain (ramPushToolchainDigest, recipeBankBuilderDigest)
 
 data Gate = Verdicts | Bytes
@@ -27,7 +28,10 @@ currentDigest kind pin = case pinSource pin of
     pure $ case bytes of
       Left failure -> Just (BytesUnreadable (pinIdentity pin) (show (failure :: IOException)))
       Right contents -> compareTo (sha256 contents)
-  BuilderSources -> pure (compareTo (case kind of BankD3Record -> recipeBankBuilderDigest; ClassicChromeRecord -> classicChromeRamBuilderDigest))
+  BuilderSources -> pure (compareTo (case kind of
+    BankD3Record -> recipeBankBuilderDigest
+    ClassicChromeRecord -> classicChromeRamBuilderDigest
+    ClassicChromeIconRecord -> classicChromeIconRamBuilderDigest))
   Toolchain -> pure (compareTo ramPushToolchainDigest)
   PrivateFile _ -> pure Nothing
   where

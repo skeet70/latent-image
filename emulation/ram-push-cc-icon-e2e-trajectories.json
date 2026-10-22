@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "before_unload": [
+    {"phase": "cc-icon-film-list-open", "observe": true, "capture": "cc-icon-film-list-open",
+     "reads": [["icon-directory-words", "003f821c", 8], ["icon-per-mille-word", "00438268", 8], ["label-83d-record", "0037b7c4", 68],
+               ["shooting-labels-cc-quad", "0061c320", 16], ["raw-labels-cc-quad", "0061c3d8", 16], ["q-node-values-labels", "0078b020", 8],
+               ["liveview-words", "00eee960", 20], ["shooting-values", "0061c340", 72]],
+     "steps": [
+      ["menu", 67, 56, 0],
+      ["menu", 1, 5, 2],
+      ["down", 1, 5, 3],
+      ["down", 1, 5, 4],
+      ["down", 1, 5, 5],
+      ["down", 1, 5, 6],
+      ["ok", 1, 254, 0]]},
+    {"phase": "cc-icon-film-list-rows", "observe": true, "requires": ["cc-icon-film-list-open"], "capture": "cc-icon-film-list-row7", "steps": [
+      ["down", 1, 254, 1],
+      ["down", 1, 254, 2],
+      ["down", 1, 254, 3],
+      ["down", 1, 254, 4],
+      ["down", 1, 254, 5],
+      ["down", 1, 254, 6],
+      ["down", 1, 254, 7]]},
+    {"phase": "cc-icon-film-commit", "observe": true, "requires": ["cc-icon-film-list-rows"], "capture": "cc-icon-shooting-menu-after-commit",
+     "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["settings-object-0-film", "0096ec0c", 4], ["film-nibble", "009c28a6", 1]],
+     "steps": [
+      ["ok", 1, 5, 6]]},
+    {"phase": "cc-icon-film-list-reopened", "observe": true, "requires": ["cc-icon-film-commit"], "capture": "cc-icon-film-list-reopened", "steps": [
+      ["ok", 1, 254, 7]]},
+    {"phase": "cc-icon-menu-close", "observe": true, "requires": ["cc-icon-film-list-reopened"], "capture": "cc-icon-live-view-cc", "steps": [
+      ["back", 1, 5, 6],
+      ["back", 1, 5, 6]]},
+    {"phase": "cc-icon-q-film-cell", "observe": true, "requires": ["cc-icon-menu-close"], "capture": "cc-icon-q-film-cell",
+     "reads": [["live-cells-sharpness-film-dr", "009568a0", 32]],
+     "steps": [
+      ["q", 122, 5, 1],
+      ["cursor:right:7:16", 122, 5, 7]]},
+    {"phase": "cc-icon-q-next-film", "observe": true, "requires": ["cc-icon-q-film-cell"], "capture": "cc-icon-q-after-dial-right",
+     "reads": [["live-cells-sharpness-film-dr", "009568a0", 32]],
+     "steps": [
+      ["dial-right", 122, 5, 7]]},
+    {"phase": "cc-icon-q-back-to-cc", "observe": true, "requires": ["cc-icon-q-next-film"], "capture": "cc-icon-q-cc-again",
+     "reads": [["live-cells-sharpness-film-dr", "009568a0", 32]],
+     "steps": [
+      ["dial-left", 122, 5, 7]]},
+    {"phase": "cc-icon-q-exit", "observe": true, "requires": ["cc-icon-q-back-to-cc"], "capture": "cc-icon-after-q",
+     "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["settings-object-0-film", "0096ec0c", 4]],
+     "steps": [
+      ["q", 1, 5, 2]]},
+    {"phase": "cc-icon-film-stock", "observe": true, "requires": ["cc-icon-q-exit"], "capture": "cc-icon-after-stock-film",
+     "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["settings-object-0-film", "0096ec0c", 4], ["film-nibble", "009c28a6", 1]],
+     "steps": [
+      ["menu", 1, 5, 2],
+      ["down", 1, 5, 3],
+      ["down", 1, 5, 4],
+      ["down", 1, 5, 5],
+      ["down", 1, 5, 6],
+      ["ok", 1, 254, 7],
+      ["cursor:up:0:8", 1, 254, 0],
+      ["ok", 1, 5, 6],
+      ["back", 1, 5, 6]]}
+  ],
+  "after_unload": [
+    {"phase": "cc-icon-film-list-after-unload", "observe": true, "requires": ["cc-icon-film-stock"], "capture": "cc-icon-film-list-after-unload",
+     "reads": [["icon-directory-words", "003f821c", 8], ["icon-per-mille-word", "00438268", 8], ["label-83d-record", "0037b7c4", 68],
+               ["q-node-values-labels", "0078b020", 8], ["liveview-words", "00eee960", 20]],
+     "steps": [
+      ["menu", 1, 5, 2],
+      ["down", 1, 5, 3],
+      ["down", 1, 5, 4],
+      ["down", 1, 5, 5],
+      ["down", 1, 5, 6],
+      ["ok", 1, 254, 0],
+      ["down", 1, 254, 1],
+      ["down", 1, 254, 2],
+      ["down", 1, 254, 3],
+      ["down", 1, 254, 4],
+      ["down", 1, 254, 5],
+      ["down", 1, 254, 6],
+      ["down", 1, 254, 6]]}
+  ]
+}

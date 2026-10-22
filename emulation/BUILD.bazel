@@ -123,6 +123,7 @@ haskell_binary(
         "//host:text",
         "//host:update-container",
         "//transport:camera-core",
+        "//transport:ram-push-cc-icon-pins",
         "//transport:ram-push-cc-pins",
         "//transport:ram-push-pins",
     ],
