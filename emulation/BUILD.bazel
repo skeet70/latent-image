@@ -159,6 +159,37 @@ haskell_binary(
     ],
 )
 
+# Emulated USB-toggle scenarios E2-E7 (reports/usb-personality-toggle.md 8.2).
+haskell_binary(
+    name = "usb-toggle-emu",
+    srcs = ["UsbToggleEmu.hs"],
+    data = [":xm1-upstream"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    deps = [
+        ":emulator-slot-lib",
+        ":emulator-usb",
+        ":viewer-runtime-lib",
+        "//broker:core",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:scientific",
+        "//host:text",
+        "//host:unix",
+        "//host:usb-toggle",
+        "//host:vector",
+        "//transport:camera-core",
+    ],
+)
+
 cc_binary(
     name = "unicorn-info",
     srcs = ["unicorn-info.c"],
@@ -781,5 +812,71 @@ haskell_library(
     deps = [
         "//host:base",
         "//transport:camera-core",
+    ],
+)
+
+# USB toggle cases N1 (the stub over its stock image-4 callees) and N2
+# (connect handler A on the patched and stock image 5), run through the
+# native-case adapter with their reports.
+haskell_binary(
+    name = "usb-toggle-cases",
+    srcs = ["UsbToggleCases.hs"],
+    args = [
+        "--runner",
+        "$(rootpath :native-runner)",
+        "--stub",
+        "$(rootpath //host/firmware:usb-toggle-stub.bin)",
+    ],
+    data = [
+        ":native-runner",
+        "//host/firmware:usb-toggle-stub.bin",
+    ],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-threaded",
+    ],
+    deps = [
+        ":native-adapter",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:usb-toggle",
+    ],
+)
+
+# Ordinary 1.50 updater from a restore card over a committed NAND, then a
+# cold boot of the committed result; reads stored and cached adjustment bytes.
+haskell_binary(
+    name = "updater-f7",
+    srcs = ["UpdaterF7.hs"],
+    data = [":xm1-upstream"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-threaded",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":emulator-slot-lib",
+        ":viewer-runtime-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+        "//host:unix",
+        "//host:vector",
     ],
 )

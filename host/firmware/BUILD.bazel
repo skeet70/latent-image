@@ -1037,6 +1037,72 @@ haskell_test(
     ],
 )
 
+# USB personality toggle stub (reports/usb-personality-toggle.md section 3.1),
+# linked into the image-5 extent [0x00bf4454, 0x00bf44e4).
+genrule(
+    name = "usb-toggle-stub",
+    srcs = ["usb-toggle-stub.S", "usb-toggle-stub.ld"],
+    outs = [
+        "usb-toggle-stub.bin",
+        "usb-toggle-stub.elf",
+        "usb-toggle-stub.sym",
+    ],
+    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -nostdlib -static -fuse-ld=lld -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,$(location usb-toggle-stub.ld) $(location usb-toggle-stub.S) -o $(location usb-toggle-stub.elf) && llvm-objcopy -O binary -j .toggle $(location usb-toggle-stub.elf) $(location usb-toggle-stub.bin) && llvm-nm --defined-only $(location usb-toggle-stub.elf) | sort > $(location usb-toggle-stub.sym)",
+    local = True,
+)
+
+# USB toggle extension parts on a base extension manifest
+# (reports/usb-personality-toggle.md section 6.1).
+haskell_binary(
+    name = "build-usb-toggle",
+    srcs = ["BuildUsbToggle.hs"],
+    args = [
+        "$(location :usb-toggle-stub.bin)",
+        "$(location :usb-toggle-stub.sym)",
+    ],
+    data = [
+        ":usb-toggle-stub.bin",
+        ":usb-toggle-stub.sym",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:time",
+        "//host:usb-toggle",
+    ],
+)
+
+haskell_test(
+    name = "usb-toggle-tests",
+    srcs = ["UsbToggleTests.hs"],
+    args = ["$(location :usb-toggle-stub.bin)"],
+    data = [":usb-toggle-stub.bin"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:usb-toggle",
+    ],
+)
+
 # The bank ELF allowlist check (transport/README.md, "Bank ELF allowlist").
 haskell_library(
     name = "bank-allowlist",

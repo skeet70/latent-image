@@ -694,12 +694,17 @@ class _FF80EndpointBridge:
 
     def enumerate(self):
         self.power.set_usb_connected(True)
+        return self.enumerate_attached(140_000_000, bytes((0xcb, 0x04, 0x80, 0xff)))
+
+    def enumerate_attached(self, budget, expected_ids=None):
+        """Standard enumeration after the cable level is raised. EXPECTED_IDS, when given, is the
+        required VID:PID field (device descriptor bytes 8..11)."""
         self.run_until('USB controller activation',
-                       lambda: self.endpoint.regs[0x090] & 6 == 6, 140_000_000)
+                       lambda: self.endpoint.regs[0x090] & 6 == 6, budget)
         self.endpoint.host_reset()
         self.run_for(1_000_000)
         device = self.control_in(bytes((0x80, 6, 0, 1, 0, 0, 18, 0)), 18)
-        if len(device) != 18 or device[8:12] != bytes((0xcb, 0x04, 0x80, 0xff)):
+        if len(device) != 18 or (expected_ids is not None and device[8:12] != expected_ids):
             raise RuntimeError(f'unexpected device descriptor {device.hex()}')
         self.control_status(bytes((0, 5, 1, 0, 0, 0, 0, 0)))
         head = self.control_in(bytes((0x80, 6, 0, 2, 0, 0, 9, 0)), 9)
@@ -930,8 +935,10 @@ class _FF80EndpointBridge:
         return {key: current.get(key) for key in ('menu_id', 'setting_id', 'cursor')}
 
 
-def _ram_push_attach(board, session):
-    """Boot past the first-start language screen into live view and enumerate ff80."""
+def _ram_push_attach(board, session, hold_key=None):
+    """Boot past the first-start language screen into live view and enumerate ff80. HOLD_KEY is
+    pressed one default key pulse before the cable level rises and released after enumeration."""
+    from tools.probe_setup_menus import DEFAULT_PULSE
     bridge = _FF80EndpointBridge(board, session)
     bridge.run_until('first-start screen', lambda: board.instructions >= 100_000_000, 100_000_000)
     for key in ['up'] * 12 + ['ok', 'ok']:
@@ -939,7 +946,18 @@ def _ram_push_attach(board, session):
     bridge.run_for(40_000_000)
     pre_attach = {'instructions': board.instructions,
                   'raw_identities': list(map(hex, board._native.cp14_identity()))}
+    if hold_key is not None:
+        session.inputs.press(hold_key)
+        bridge.run_for(DEFAULT_PULSE)
+        hold = {'key': hold_key, 'pressed_instructions': pre_attach['instructions'],
+                'attach_instructions': board.instructions}
     device, configuration = bridge.enumerate()
+    if hold_key is not None:
+        session.inputs.release()
+        hold['released_instructions'] = board.instructions
+        bridge.run_for(DEFAULT_PULSE)
+        hold['menu_after_release'] = bridge.key_state(session.sample(False))
+        pre_attach['attach_hold'] = hold
     return bridge, {'pre_attach': pre_attach, 'device': device.hex(),
                     'configuration': configuration.hex()}
 
@@ -969,11 +987,26 @@ def _emulator_source_identity():
     return digest.hexdigest()
 
 
-def _ram_push_checkpoint_key(installed_dat, adjustment_nand, menu_sd_image):
+def _ram_push_checkpoint_key(installed_dat, adjustment_nand, menu_sd_image, attach_hold_key=None):
     inputs = {'installed_dat': _file_sha256(installed_dat),
               'adjustment_nand': _file_sha256(adjustment_nand),
               'menu_sd_image': _file_sha256(menu_sd_image),
               'emulator_source': _emulator_source_identity()}
+    if attach_hold_key is not None:
+        inputs['attach_hold_key'] = attach_hold_key
+    document = json.dumps({'schema': RAM_PUSH_CHECKPOINT_SCHEMA, **inputs},
+                          sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(document.encode()).hexdigest(), inputs
+
+
+# A USB-toggle boot checkpoint: saved at the shooting screen with the cable level as the boot left it.
+TOGGLE_RECORD = 'usb-toggle-boot.json'
+
+
+def _toggle_checkpoint_key(installed_dat, adjustment_nand, boot):
+    inputs = {'installed_dat': _file_sha256(installed_dat),
+              'adjustment_nand': _file_sha256(adjustment_nand),
+              'emulator_source': _emulator_source_identity(), 'boot': boot}
     document = json.dumps({'schema': RAM_PUSH_CHECKPOINT_SCHEMA, **inputs},
                           sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(document.encode()).hexdigest(), inputs
@@ -1407,6 +1440,210 @@ def _run_ff80_rehearsal(board, session, output):
     return receipt
 
 
+class TraceSites:
+    """Pre-instruction breakpoints on both cores recording r0-r3, sp, lr and the site's memory
+    windows; observation never writes. A site given an r0 records only entries with that r0.
+    `hits` is append-only; `counts` counts every matching entry, including those past
+    `recorded_per_site`."""
+    REGISTERS = ('r0', 'r1', 'r2', 'r3', 'sp', 'lr')
+
+    def __init__(self, board, recorded_per_site=None):
+        self.board, self.recorded_per_site = board, recorded_per_site
+        self.sites, self.hits, self.counts = {}, [], {}
+
+    def arm(self, sites):
+        """Replace the armed sites with `sites`: dicts of address, label and optional r0 and windows."""
+        parsed = {}
+        for site in sites:
+            if (type(site) is not dict or not {'address', 'label'} <= set(site) <= {'address', 'label', 'r0', 'windows'}
+                    or type(site['address']) is not int or type(site['label']) is not str
+                    or type(site.get('r0', 0)) is not int):
+                raise ValueError('a trace site takes an integer address, a label and an optional integer r0')
+            windows = tuple(tuple(window) for window in site.get('windows', ()))
+            if any(len(window) != 2 or any(type(value) is not int for value in window) for window in windows):
+                raise ValueError('a trace window is an integer start and length')
+            parsed[site['address']] = (site['label'], site.get('r0'), windows)
+        self.sites = parsed
+        for address in parsed:
+            self.counts.setdefault(address, 0)
+        for core in range(len(self.board.cpus)):
+            self.board._native.set_breakpoints(core, sorted(parsed))
+        self.board.breakpoint_handler = self._hit if parsed else None
+
+    def specs(self):
+        """The armed sites in `arm`'s input form."""
+        return [{'address': address, 'label': label, **({} if r0 is None else {'r0': r0}),
+                 **({'windows': [list(window) for window in windows]} if windows else {})}
+                for address, (label, r0, windows) in self.sites.items()]
+
+    def _hit(self, cpu, core, address):
+        from unicorn import arm_const as arm
+        label, wanted, windows = self.sites[address]
+        if wanted is not None and cpu.reg_read(arm.UC_ARM_REG_R0) != wanted:
+            return
+        self.counts[address] += 1
+        if self.recorded_per_site is not None and self.counts[address] > self.recorded_per_site:
+            return
+        hit = {'label': label, 'address': address, 'core': core,
+               'registers': {name: cpu.reg_read(getattr(arm, 'UC_ARM_REG_' + name.upper()))
+                             for name in self.REGISTERS},
+               'instructions': self.board.instructions}
+        if windows:
+            hit['windows'] = {start: bytes(self.board.read_memory(start, length)).hex()
+                              for start, length in windows}
+        self.hits.append(hit)
+
+
+def _run_toggle_server(board, session, output, start):
+    """Serve primitive commands for the USB-toggle scenarios of emulation/UsbToggleEmu.hs: run,
+    key pulses, key hold and release, raw ADC levels, cable level, memory reads, trace sites, enumeration without a
+    descriptor expectation, endpoint transfers, captures, the access probe and the boot checkpoint."""
+    from emulator.power_devices import PowerDevices
+    power = next(device for device in board.devices if type(device) is PowerDevices)
+    bridge = _FF80EndpointBridge(board, session, attached=power.usb_connected)
+    trace = TraceSites(board)
+
+    def boundary():
+        machine = board.snapshot()
+        return {'instructions': board.instructions, 'failure': board.failure,
+                'execution_error': session.execution_error,
+                'cores': [{'pc': core.get('pc'), 'lr': core.get('lr'), 'sp': core.get('sp'),
+                           'recent': core.get('recent_instructions', [])[-12:]}
+                          for core in machine.get('cores', [])]}
+
+    def run(count, stop_on):
+        seen, stopped, end = len(trace.hits), [None], board.instructions + count
+
+        def done():
+            nonlocal seen
+            for hit in trace.hits[seen:]:
+                if hit['label'] in stop_on:
+                    stopped[0] = hit['label']
+                    return True
+            seen = len(trace.hits)
+            return board.instructions >= end
+        bridge.run_until('toggle run', done, count + 1)
+        return stopped[0]
+
+    print(json.dumps({'ok': True, 'event': 'ready', **start, 'instructions': board.instructions,
+                      'usb_connected': power.usb_connected}, separators=(',', ':')), flush=True)
+    for line in sys.stdin:
+        try:
+            request = json.loads(line, object_pairs_hook=_unique_object)
+            command = request.get('command')
+            if command == 'state':
+                ready = session.inputs.availability()['ready']
+                inputs = session.inputs.current_state(ready=ready)
+                result = {'instructions': board.instructions, 'virtual_ticks': board.virtual_ticks,
+                          'usb_connected': power.usb_connected,
+                          'tick_ratio': f'{board.tick_ratio[0]}/{board.tick_ratio[1]}',
+                          'inputs_ready': ready, 'asserted_keys': inputs['asserted_keys'],
+                          'menu': bridge.key_state(session.sample(False))}
+            elif command == 'run':
+                count, stop_on = request.get('instructions'), request.get('stop_on', [])
+                if (type(count) is not int or not 0 < count <= 4_000_000_000 or type(stop_on) is not list
+                        or any(type(label) is not str for label in stop_on)):
+                    raise ValueError('run takes 1..4000000000 instructions and a list of stop labels')
+                result = {'stopped_on': run(count, set(stop_on)), 'instructions': board.instructions}
+            elif command == 'key':
+                result = {'menu': bridge.key_state(session.key({'key': request['key']}))}
+            elif command == 'press':
+                result = {'sample': session.inputs.press(request['key'])}
+            elif command == 'release':
+                result = {'sample': session.inputs.release()}
+            elif command == 'adc':
+                channel, sample = request.get('channel'), request.get('sample')
+                if type(channel) is not int or type(sample) is not int or not 0 <= channel < 12 or not 0 <= sample <= 0xffff:
+                    raise ValueError('adc takes a channel 0..11 and a sample 0..65535')
+                samples = list(power.adc_samples)
+                samples[channel] = sample
+                power.set_adc_samples(samples, source=f'USB-toggle ADC channel {channel} level')
+                result = {'samples': list(power.adc_samples)}
+            elif command == 'cable':
+                if type(request.get('connected')) is not bool:
+                    raise ValueError('cable takes a boolean level')
+                power.set_usb_connected(request['connected'])
+                result = {'usb_connected': power.usb_connected, 'instructions': board.instructions}
+            elif command == 'read-memory':
+                address, count = request.get('address'), request.get('count')
+                if (type(address) is not int or type(count) is not int or not 0 < count <= 4096
+                        or not 0 <= address <= 0x100000000 - count):
+                    raise ValueError('read-memory requires an address and 1..4096 bytes')
+                result = {'bytes': bytes(board.read_memory(address, count)).hex()}
+            elif command == 'trace-sites':
+                trace.arm(request['sites'])
+                result = {'sites': len(trace.sites)}
+            elif command == 'trace-hits':
+                first = request.get('from')
+                if type(first) is not int or not 0 <= first <= len(trace.hits):
+                    raise ValueError('trace-hits requires a hit index within the recorded hits')
+                result = {'count': len(trace.hits), 'hits': trace.hits[first:]}
+            elif command == 'enumerate':
+                budget = request.get('budget')
+                if type(budget) is not int or not 0 < budget <= 1_000_000_000:
+                    raise ValueError('enumerate takes an activation budget of 1..1000000000 instructions')
+                device, configuration = bridge.enumerate_attached(budget)
+                result = {'device': device.hex(), 'configuration': configuration.hex(),
+                          'instructions': board.instructions}
+            elif command == 'transfer':
+                count, payload = bridge.transfer(request)
+                result = {'count': count, 'bytes': payload.hex()}
+            elif command == 'capture':
+                result = bridge.capture(request['label'], output)
+            elif command == 'access-probe':
+                state = board._native.access_probe_state()
+                result = {'enabled': state['enabled'], 'violation': state['violation'],
+                          'ranges': state.get('ranges'), 'records': list(state['records'])}
+            elif command == 'save-checkpoint':
+                if start.get('checkpoint_root') is None or type(request.get('replace')) is not bool:
+                    raise ValueError('save-checkpoint needs --toggle-checkpoints and a boolean replace')
+                bridge.drain_scheduled()
+                sites = trace.specs()
+                trace.arm([])
+                try:
+                    target = _save_ram_push_checkpoint(
+                        session, Path(start['checkpoint_root']), start['key'], TOGGLE_RECORD,
+                        {'key': start['key'], 'inputs': start['inputs'], 'instructions': board.instructions},
+                        replace=request['replace'])
+                finally:
+                    trace.arm(sites)
+                result = {'directory': str(target.resolve()), 'instructions': board.instructions}
+            elif command == 'finish':
+                print(json.dumps({'ok': True, 'finished': True}, separators=(',', ':')), flush=True)
+                break
+            else:
+                raise ValueError('unknown USB-toggle command')
+            print(json.dumps({'ok': True, **result}, separators=(',', ':')), flush=True)
+        except Exception as error:
+            try:
+                stop = boundary()
+            except Exception as observed:
+                stop = {'unavailable': f'{type(observed).__name__}: {observed}'}
+            print(json.dumps({'ok': False, 'error': type(error).__name__, 'message': str(error),
+                              'boundary': stop}, separators=(',', ':'), default=str), flush=True)
+    target = Path(output) / 'emulator-session.json'
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({
+        'schema': 1, 'scope': 'emulated X-M1 USB-toggle primitive session', 'start': start,
+        'usb_endpoint': bridge.endpoint.snapshot(), 'timing_transitions': bridge.timing_transitions,
+        'transfer_log': bridge.transfer_log, 'screenshots': bridge.screenshots,
+        'trace_hits': len(trace.hits), 'boundary': boundary()}, indent=2, default=str) + '\n')
+
+
+def _console_window(field):
+    start, _, length = field.partition(':')
+    start, length = int(start, 0), int(length, 0)
+    if not 0 <= start <= 0xffffffff or not 1 <= length <= 0x1000:
+        raise ValueError('Window is ADDRESS:LENGTH with 1..0x1000 bytes')
+    return start, length
+
+
+def _console_hit(hit):
+    return {'address': hex(hit['address']), 'core': hit['core'], 'instructions': hit['instructions'],
+            'registers': {name: hex(value) for name, value in hit['registers'].items()},
+            'windows': {hex(start): data for start, data in hit.get('windows', {}).items()}}
+
+
 def main():
     from emulator.boot import make_board
     from emulator.server import make_menu_server as make_server
@@ -1448,6 +1685,18 @@ def main():
                         help='Directory of RAM-push attach checkpoints keyed by inputs and emulator source')
     parser.add_argument('--fresh-boot', action='store_true',
                         help='Cold boot even when the keyed RAM-push checkpoint exists, then replace it')
+    parser.add_argument('--attach-hold-key',
+                        help='--ram-push-server: hold this menu key across the attach edge')
+    parser.add_argument('--toggle-server', action='store_true',
+                        help='Serve the primitive USB-toggle scenario commands')
+    parser.add_argument('--toggle-checkpoints', type=Path,
+                        help='--toggle-server: directory of boot checkpoints keyed by inputs, reset inputs and emulator source')
+    parser.add_argument('--cable-at-reset', action='store_true',
+                        help='--toggle-server: raise the USB cable level before the first instruction')
+    parser.add_argument('--adc-at-reset', metavar='CHANNEL=SAMPLE',
+                        help='--toggle-server: hold one ADC channel at SAMPLE from the first instruction')
+    parser.add_argument('--access-probe-range', metavar='LOW:HIGH',
+                        help='--toggle-server: record every access to [LOW, HIGH) from the first instruction')
     parser.add_argument('--port', type=int, default=0)
     parser.add_argument('--bind', default='127.0.0.1')
     parser.add_argument('--hostname')
@@ -1480,12 +1729,38 @@ def main():
         parser.error('--ram-push-checkpoints belongs to --ram-push-server')
     if args.fresh_boot and args.ram_push_checkpoints is None:
         parser.error('--fresh-boot requires --ram-push-checkpoints')
+    if args.attach_hold_key is not None and not args.ram_push_server:
+        parser.error('--attach-hold-key belongs to --ram-push-server')
+    if args.toggle_server and (
+            args.snapshot is not None or args.installed_dat is None or args.adjustment_nand is None
+            or args.menu_sd_image is not None or not args.menus or args.ff80_rehearsal
+            or args.ram_push_server or args.pause_after is not None or args.instructions is not None
+            or args.serve or args.save_snapshot is not None):
+        parser.error('--toggle-server requires --profile, --installed-dat, --adjustment-nand and --menus without another run mode')
+    if not args.toggle_server and (args.toggle_checkpoints is not None or args.cable_at_reset
+                                   or args.adc_at_reset is not None or args.access_probe_range is not None):
+        parser.error('--toggle-checkpoints, --cable-at-reset, --adc-at-reset and --access-probe-range belong to --toggle-server')
+    adc_at_reset = probe_range = None
+    try:
+        if args.adc_at_reset is not None:
+            channel, sample = (int(field, 0) for field in args.adc_at_reset.split('='))
+            if not 0 <= channel < 12 or not 0 <= sample <= 0xffff:
+                raise ValueError
+            adc_at_reset = [channel, sample]
+        if args.access_probe_range is not None:
+            low, high = (int(field, 0) for field in args.access_probe_range.split(':'))
+            if not 0 <= low < high:
+                raise ValueError
+            probe_range = (low, high)
+    except ValueError:
+        parser.error('--adc-at-reset takes CHANNEL=SAMPLE and --access-probe-range takes LOW:HIGH')
     output = args.output or ROOT / '.tools/rec-scanout' / (
         datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid4().hex[:8])
     checkpoint = None
     if args.ram_push_checkpoints is not None:
         started = perf_counter()
-        key, key_inputs = _ram_push_checkpoint_key(args.installed_dat, args.adjustment_nand, args.menu_sd_image)
+        key, key_inputs = _ram_push_checkpoint_key(args.installed_dat, args.adjustment_nand, args.menu_sd_image,
+                                                   args.attach_hold_key)
         directory = args.ram_push_checkpoints / key
         checkpoint = {'key': key, 'inputs': key_inputs, 'directory': str(directory.resolve()),
                       'key_seconds': round(perf_counter() - started, 3)}
@@ -1517,6 +1792,35 @@ def main():
             return
         checkpoint['start'] = 'fresh-boot' if args.fresh_boot else 'cold'
         boot_started = perf_counter()
+    toggle_start = None
+    if args.toggle_server:
+        started = perf_counter()
+        boot = {'cable_at_reset': args.cable_at_reset, 'adc_at_reset': adc_at_reset}
+        key, key_inputs = _toggle_checkpoint_key(args.installed_dat, args.adjustment_nand, boot)
+        root = None if args.toggle_checkpoints is None else args.toggle_checkpoints.resolve()
+        saved = root is not None and probe_range is None and (root / key).is_dir()
+        toggle_start = {'key': key, 'inputs': key_inputs, 'checkpoint_root': None if root is None else str(root),
+                        'access_probe_range': None if probe_range is None else list(probe_range),
+                        'key_seconds': round(perf_counter() - started, 3)}
+        print(json.dumps({'ok': True, 'event': 'start-options', 'key': key, 'inputs': key_inputs,
+                          'checkpoint': str(root / key) if saved else None}, separators=(',', ':')), flush=True)
+        choice = json.loads(sys.stdin.readline(), object_pairs_hook=_unique_object)
+        if set(choice) != {'command', 'restore'} or choice['command'] != 'start' or type(choice['restore']) is not bool:
+            raise ValueError('USB-toggle start requires {"command": "start", "restore": BOOLEAN}')
+        if choice['restore']:
+            if not saved:
+                raise ValueError('USB-toggle start names no saved checkpoint')
+            from x70_native.portable_checkpoint import load
+            from tools.probe_setup_menus import MenuSession
+            started = perf_counter()
+            record = _read_ram_push_record(root / key, TOGGLE_RECORD, key)
+            board = load(root / key)
+            session = MenuSession(board, output, options=dict(board._portable_factory_options,
+                                                               recovery=record['recovery']))
+            toggle_start.update(start='restored', restore_seconds=round(perf_counter() - started, 3))
+            _run_toggle_server(board, session, output, toggle_start)
+            return
+        toggle_start['start'] = 'cold'
     if args.snapshot is not None:
         from x70_native.portable_checkpoint import load
         board = load(args.snapshot)
@@ -1574,7 +1878,7 @@ def main():
     else:
         session = WarmScanoutSession(board, output, options=options)
     if args.ram_push_server:
-        bridge, attachment = _ram_push_attach(board, session)
+        bridge, attachment = _ram_push_attach(board, session, args.attach_hold_key)
         if checkpoint is not None:
             from emulator.checkpoint import CheckpointError
             checkpoint['boot_seconds'] = round(perf_counter() - boot_started, 3)
@@ -1591,6 +1895,20 @@ def main():
             checkpoint['save_seconds'] = round(perf_counter() - started, 3)
         _run_ram_push_server(board, session, output, bridge, attachment, checkpoint,
                              args.ram_push_checkpoints)
+        return
+    if args.toggle_server:
+        if board.instructions != 0:
+            raise ValueError('USB-toggle reset inputs need an unstarted board')
+        power = next(device for device in board.devices if type(device).__name__ == 'PowerDevices')
+        if args.cable_at_reset:
+            power.set_usb_connected(True)
+        if adc_at_reset is not None:
+            samples = list(power.adc_samples)
+            samples[adc_at_reset[0]] = adc_at_reset[1]
+            power.set_adc_samples(samples, source=f'USB-toggle reset input: ADC channel {adc_at_reset[0]}')
+        if probe_range is not None:
+            board._native.access_probe_begin([probe_range], limit=100_000)
+        _run_toggle_server(board, session, output, toggle_start)
         return
     if args.ff80_rehearsal:
         if (args.snapshot is not None or args.installed_nand is None or not args.menus
@@ -1626,9 +1944,11 @@ def main():
         print(f'Warm scanout viewer: http://{args.hostname or args.bind}:{server.server_port}/', flush=True)
         server.serve_forever()
         return
-    print('Commands: sample, status, run COUNT, checkpoint, snapshot DIRECTORY, nand FILE, sd FILE, restore, quit. No camera I/O.', flush=True)
+    print('Commands: sample, status, run COUNT, checkpoint, snapshot DIRECTORY, nand FILE, sd FILE, restore,'
+          ' read ADDRESS LENGTH, watch ADDRESS [ADDRESS:LENGTH...], hits, nandstat, quit. No camera I/O.', flush=True)
     if args.menus:
         print('Menu input: key ok|back|q|up|down|left|right. Stock ADC scanning/debounce.', flush=True)
+    trace, reported = TraceSites(board, recorded_per_site=64), 0
     for line in sys.stdin:
         fields = line.split()
         try:
@@ -1652,6 +1972,21 @@ def main():
                 value = session.run({'limit': int(fields[1], 0)})
             elif args.menus and len(fields) == 2 and fields[0] == 'key':
                 value = session.key({'key': fields[1]})
+            elif len(fields) == 3 and fields[0] == 'read':
+                start, length = _console_window(fields[1] + ':' + fields[2])
+                value = {'address': hex(start), 'hex': bytes(board.read_memory(start, length)).hex()}
+            elif len(fields) >= 2 and fields[0] == 'watch':
+                address = int(fields[1], 0)
+                trace.arm([site for site in trace.specs() if site['address'] != address]
+                          + [{'address': address, 'label': hex(address),
+                              'windows': [_console_window(field) for field in fields[2:]]}])
+                value = {'watching': [hex(site) for site in sorted(trace.sites)]}
+            elif fields == ['hits']:
+                value = {'hits': [_console_hit(hit) for hit in trace.hits[reported:]],
+                         'counts': {hex(site): count for site, count in sorted(trace.counts.items())}}
+                reported = len(trace.hits)
+            elif fields == ['nandstat']:
+                value = {'busy': board.nand.busy, 'transactions': dict(board.nand.transaction_counts)}
             else:
                 raise ValueError('Unknown command')
             if fields != ['status'] and isinstance(value, dict) and 'instructions' in value and 'display' in value:

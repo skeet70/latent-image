@@ -5,7 +5,7 @@ import Control.Monad (when)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
-import Xm1RamPushE2E (AllowlistPolicy (..), BootMode (..), E2ESettings (..), OverrideReason (..), PushMode (..), RelinkMode (..), bankD3Payload, classicChromeIconPayload, classicChromePayload, runRamPushE2E)
+import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), E2ESettings (..), OverrideReason (..), PushMode (..), RelinkMode (..), bankD3Payload, classicChromeIconPayload, classicChromePayload, runRamPushE2E)
 import Data.List (isPrefixOf, nub)
 import qualified Data.Text as T
 import Data.Word (Word16)
@@ -48,6 +48,7 @@ data Options = Options
   , pushModeOption :: PushMode
   , trajectoriesOption :: Maybe TrajectoryFile
   , ramPayloadOption :: RamPayloadChoice
+  , attachHoldOption :: AttachHold
   , uiConversionProfileOption :: UiConversionProfile
   , portOption :: Port
   , bindOption :: Bind
@@ -85,6 +86,7 @@ usage = unlines
   , "                         bank; boot it and run every segment (or --segments) without the RAM push"
   , "  --classic-chrome       --ram-push-e2e: push the Classic Chrome payload in place of the recipe bank and D3"
   , "  --classic-chrome-icon  --ram-push-e2e: push the Classic Chrome payload with its icon and live-view words"
+  , "  --attach-hold-q        --ram-push-e2e: hold Q across the attach edge of every boot (USB-toggle candidates)"
   , "  --trajectories PATH    --ram-push-e2e trajectory file (default: emulation/ram-push-e2e-trajectories.json,"
   , "                         emulation/ram-push-cc-e2e-trajectories.json with --classic-chrome,"
   , "                         emulation/ram-push-cc-icon-e2e-trajectories.json with --classic-chrome-icon,"
@@ -105,7 +107,7 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice StrictUiConversion (Port 0) IPv4Loopback
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice NoAttachHold StrictUiConversion (Port 0) IPv4Loopback
     go options [] = pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
@@ -150,6 +152,8 @@ parseCommand args
     go options ("--classic-chrome-icon" : rest) = do
       require (ramPayloadOption options == BankD3Choice) "--classic-chrome and --classic-chrome-icon are exclusive"
       go options { ramPayloadOption = ClassicChromeIconChoice } rest
+    go options ("--attach-hold-q" : rest) =
+      go options { attachHoldOption = AttachHoldQ } rest
     go options ("--installed-nand" : value : rest) = do
       require (not (null value)) "--installed-nand must be nonempty"
       go options { installedNandOption = Just (InstalledNand value) } rest
@@ -237,6 +241,7 @@ launch options = do
     require (segmentsOption options == Nothing) "--segments belongs to --ram-push-e2e"
     require (pushModeOption options == RamPush) "--flash-candidate belongs to --ram-push-e2e"
     require (ramPayloadOption options == BankD3Choice) "--classic-chrome and --classic-chrome-icon belong to --ram-push-e2e"
+    require (attachHoldOption options == NoAttachHold) "--attach-hold-q belongs to --ram-push-e2e"
   require (ramPayloadOption options == BankD3Choice || pushModeOption options /= FlashCandidate)
     "--classic-chrome and --classic-chrome-icon push a RAM payload; --flash-candidate pushes none"
   require (allowlistOverrideOption options == Nothing || relinkModeOption options /= ReviewedRelink)
@@ -290,6 +295,7 @@ launch options = do
                 BankD3Choice -> bankD3Payload
                 ClassicChromeChoice -> classicChromePayload
                 ClassicChromeIconChoice -> classicChromeIconPayload)
+              (attachHoldOption options)
         runRamPushE2E settings python workspacePath (resolve root trajectories) stagedFirmwarePath nandPath cardPath receiptPath
       else do
         let Port port = portOption options

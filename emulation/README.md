@@ -481,6 +481,22 @@ Haskell owns the supported launcher and candidate validation; Rust owns native e
 
 This is a usable stock-firmware UI testbed, not a complete silicon-faithful hardware emulator. It does not accept the original T1 captured-dump gate, autofocus/exposure accuracy, physical recovery or every menu/mode. [Current evidence and ABI boundary](../reports/full-system-emulation.md#119-interactive-x-m1-application-emulation); capture upgrades are tracked in [GitHub Issues](https://github.com/skeet70/latent-image/issues).
 
+## USB toggle attach scenarios
+
+`//emulation:usb-toggle-emu` runs the full-system runs E2-E7 of [the USB toggle verification plan](../reports/usb-personality-toggle.md#82-full-system-emulator) in one emulator slot and writes one `receipt.json` per scenario plus `summary.json` into a fresh directory beneath `private-data/`. Scenarios, the expected behaviour (the table of report section 3.2) and the checks are in `emulation/UsbToggleEmu.hs`; the retained Python bridge only serves primitive commands (`continue_rec_scanout.py --toggle-server`).
+
+```sh
+devenv shell -- bazel run //emulation:usb-toggle-emu -- --receipt-output private-data/analysis/usb-toggle/emu/RUN [--runs e2,e3,e4e5,e5u,e6,e7,control] [--fresh-boot]
+```
+
+Inputs are pinned by SHA-256: the stock, Classic Chrome base, CC+toggle and RC0+toggle DATs, and three adjustment NANDs layered with `--adjustment-nand` over the installed DAT: stored `0xf7 = 1` (`stored-f7/emulation/inputs/f7-1.nand`), stored 0 (`usb-toggle/emu/inputs/f7-0.nand`, f7-1 with byte `0xf7` of page `0x381*64` restored to `00`) and stored 0 with cache bytes `0x102..0x103 = b6 02` (`f7-0-pid02b6.nand`). The template NANDs carry `0x102..0x103 = 80 ff`, which makes the boot poller choose maintenance (system mode 7) when the cable is present at reset; the body reads `b6 02` there, so E6 runs on both. Route boots restore a checkpoint saved at the shooting screen after the first-start route (100,000,000 instructions, Up twelve times, OK, OK, 40,000,000 instructions) under `private-data/emulator-checkpoints/xm1-usb-toggle/KEY`, keyed by DAT, NAND, reset inputs and emulator source; the runtime is staged at the fixed `private-data/emulator-runtimes/xm1-usb-toggle`. E2 cold-boots with the native access probe on `[0x00bf4454, 0x00bf44e4)` from the first instruction; E6 cold-boots with the cable level, and for the Q variant ADC channel 9 at Q's calibration midpoint, set before the first instruction.
+
+Each receipt names the DAT, NAND, checkpoint key and emulator-source digest, lists every check with expected and observed values, and records per step the cells (`cache[0xf7]`, system mode `0x009570dc`, `0x0146a0c0`, `0x01469810`, `0x0146a0cc`, latch `0x015c229c`, Q row 19 `+0x14..+0x16`, UI bitmap bit, driver state and status, fill witnesses), the trace hits at handler A, its three arms, `0x00ed117c`, `0x00ed11a4`, `0x00ecf894`, the service start, transport start, fill, stub entry and Q key-state read with r0, r1, SP and LR, the device descriptor, the ff80 service session (C0, identity, config window 0, one function-2 read) and the usbcont stack: SP at `0x00ecf900` and the high-water mark of the `0x07` fill.
+
+Bridge primitives added for this driver: `--toggle-server` with `run` (bounded, optionally stopping at a trace label), `key`, `press`, `release`, `adc`, `cable`, `read-memory`, `trace-sites` (optional r0 filter), `trace-hits`, `enumerate` (standard enumeration without a descriptor expectation), `transfer`, `capture`, `access-probe` and `save-checkpoint`; `--cable-at-reset`, `--adc-at-reset CHANNEL=SAMPLE` and `--access-probe-range LOW:HIGH` set inputs before the first instruction. `--ram-push-server --attach-hold-key KEY` holds a key from one default pulse before the attach edge until enumeration ends; `//emulation:xm1-viewer -- --ram-push-e2e --attach-hold-q` uses it for every boot of the e2e, including the Classic Chrome cold restart, and keys the attach checkpoint by it.
+
+Model boundary: the endpoint model raises no controller event when the cable level drops. The transport driver samples the presence bit `0xfff55104[31]` (`0x00d7b98c`) only while its state word `0x0146a180` is 0..4 (`0x00d81d04`), so a detach after a PTP start (state 8) or after enumeration (state `0xa`) never reaches connect handler A. Detach edges are observable only after an unenumerated `ff80` start; the `e5u` scenarios exercise the E5 edge sequence that way and the `e4e5` scenarios record the boundary.
+
 ## Flash-image boot check
 
 `//emulation:flash-boot-check` checks that an exact flash image boots to the stock menus in the full-system emulator. A flash image, such as a `//extensions:build-extension` output, must pass it before a flash go ([camera-run procedure](../spec/07-governance-and-handoff.md#3-camera-runs)).
@@ -498,3 +514,51 @@ Observed 2026-10-18 (emulated): stock 1.50 boots to 80,000,280 instructions, rea
 
 Boot to the stock menus is necessary, not sufficient. The check covers the first-start route from erased settings storage with no card; it does not exercise retained settings or body calibration, the updater install, card or USB paths, extension behaviour, menus past SHOOTING MENU page 1, or peripherals the model refuses. The menu node is retained firmware state, and the rendered frame is not compared automatically; the owner's visual check covers it. A model stop can be an emulator gap rather than a firmware defect, such as an unsupported peripheral transport; either way the check fails and the stop needs an explanation before a go.
 
+## Stock native cases: USB toggle (N1, N2)
+
+`//emulation:usb-toggle-cases` generates and runs the native cases of [the USB toggle verification plan](../reports/usb-personality-toggle.md#81-native-harness) into `private-data/analysis/x-m1-1.50/native-case/usb-toggle/` (`--out` overrides), with `results.md` and `results.json` beside the cases and reports. It pins the stock image-4 and image-5 decodes and the linked stub `//host/firmware:usb-toggle-stub` (SHA-256 `35a7e9597f06bdc1dda250d991df4a468d2401e5ae3c24c22e37403318746d62`), builds the patched image 5 from the stock decode with the `FujiAF.UsbToggle` writes, and refuses to run unless the stub blob and hook word equal those of the pinned CC and RC0 image-5 patch sets under `private-data/analysis/usb-toggle/`. It exits nonzero unless every case passes and all 80 Q = 0 stock/patched pairs match.
+
+```sh
+devenv shell -- bazel run //emulation:usb-toggle-cases
+```
+
+Expected results come from the design's behaviour rule (flip `cache[0xf7]`, 0 to 1 and nonzero to 0, only on an attach edge with row 19 `+0x15` = 1 and system mode not 5 or 7) and from handler A's byte-read arms, fixed before execution. Each case's stack bytes are pinned from a discovery run as residue; every other byte outside the claims must keep its initial value.
+
+- **N1.** The stub entered at `0x00bf4454` with `r0 = 0xf7` over the stock `0x0069f8fc`, `0x0069fc94`, `0x006a0d00`, `0x006a0b4c` (36-row table `0x00828120`) and `0x0073c15c`. Inputs: `cache[0xf7]` in {0, 1} on a synthetic page through `*(0x0096ca50)`, `r1` in {0, 1}, row 19 `+0x15` in {0, 1}, mode word `0x009570dc` in {1, 2, 3, 5, 7}. Claims: `r0` and `cache[0xf7]`. The bitmap family sets UI bitmap word `0x0094f8bc` to bit 18 alone with `+0x15 = 0`, and to every bit but 18 with `+0x15 = 1`.
+- **N2.** Handler A `[0x00ecf8b8, 0x00ecf9c8)` of the patched and the stock image 5, with `0x0073aff0` and `0x0073c15c` executed and register-only recording stubs at `0x00723a14`, `0x00ed117c`, `0x00ed11a4`, `0x00647398`, `0x0073abec` (returning 0 or 1) and `0x00ecf894`. Inputs: latch `0x015c229c` in {0, 1}, payload word `0xa5a5a5a4 | bit` through `*(0x015c20cc)`, stored `0xf7`, Q and mode as in N1. Claims: the boundary event sequence with arguments, latch, `cache[0xf7]` and `r0 = 0`.
+
+Observed 2026-10-21 (emulated):
+
+| Family | Cases | Observed |
+| --- | ---: | --- |
+| N1 stub matrix | 40 | 40 passed; flips in exactly the 6 cases with `r1 = 1`, Q = 1 and mode 1, 2 or 3 (207 instructions), stored value elsewhere |
+| N1 UI-bitmap edge | 4 | 4 passed: bit 18 set with `+0x15 = 0` gives no flip, bit 18 clear with `+0x15 = 1` flips |
+| N2 handler A, patched | 160 | 160 passed |
+| N2 handler A, stock control | 160 | 160 passed; Q never changes the result |
+
+All 80 Q = 0 patched cases give boundary events, `r0`, latch and `cache[0xf7]` identical to the stock case with the same inputs. The stub's deepest stack use is 28 bytes below its entry SP (its 16-byte frame, then `0x006a0d00` with `0x006a0b4c`). Handler A's deepest stack use is 36 bytes on stock and 44 bytes on the patched image, from the handler's entry SP.
+
+Scope: the stub and handler A are entered directly. Q is the debounced driver byte set as an input, so the key driver, debounce and ADC sampling are outside the cases, as are the observer, the queue-7 dispatch, the transport start and stop, the application and the boot that forms the cache pointer and mode word. Stubs match by address, so in attach-arm cases, which carry both trace calls, the trace stub checks `r0 = 0x24` but not `r1`; every other trace stub also checks `r1 = 0xb`.
+
+## Updater over a committed NAND (stored adjustment bytes)
+
+`//emulation:updater-f7` installs a restore card's DAT through the ordinary 1.50 updater over a committed NAND, then cold-boots the committed result. It holds one emulator slot and stages a runtime (stock 1.50 DAT, captured ROM) inside the receipt directory. Phase A continues the `ram-rescue-engine` raw handoff with `--recovery-ram`, `--sd-image` and `--installed-nand`, presses OK, OK, UP, OK, OK on the updater screen and runs until the whole-area commit `0x00db932c` has run and the NAND transaction counts are unchanged and idle over one 15 M-instruction chunk, then exports the NAND. Phase B starts a new process with `--profile` and that NAND alone, answers the first-start prompts (UP x12, OK, OK) and settles on the shooting screen.
+
+```sh
+bazel run //recovery:build-image -- restore DAT private-data/RESTORE
+bazel-bin/recovery/ram-rescue-engine private-data/RESTORE/FFBOOT.BIN private-data/RESTORE/firmware-ram-recovery-sd.img raw private-data/RESTORE/terminal-valid-ram.bin none
+bazel run //emulation:updater-f7 -- --recovery-ram private-data/RESTORE/terminal-valid-ram.bin --sd-image private-data/RESTORE/firmware-ram-recovery-sd.img --installed-nand NAND --receipt-output private-data/RECEIPT
+```
+
+Observation uses console commands of `tools/continue_rec_scanout.py`: `watch ADDRESS [ADDRESS:LENGTH...]` arms a pre-instruction breakpoint on both cores and records `r0`-`r3`, `sp`, `lr` and the named memory windows at each hit (first 64 per site), `hits` returns and clears them, `read ADDRESS LENGTH` reads up to 0x1000 bytes, and `nandstat` returns the NAND busy flag and transaction counts. None writes guest state. The receipt holds the hits at the header parser `0x00db9cd4`, the completion `0x00db91e0` (with the flag block `0x014e356c..0x014e357b` and `*(0x0096ca50)`), the template reload `0x0069fe20` and the commit; adjustment-cache bytes `0x80`, `0x81` and `0xf7` at the updater screen, after the commit and after the reboot; and the stored bytes from page 0 of the committed block whose first spare word equals the input's block-`0x381` tag (`10521052`). The adjustment area is a tagged block pool: the commit moves logical block 0 from physical `0x381` to `0x3a2`.
+
+Observed 2026-10-22 (emulated), installed NAND `f7-1.nand` (`baf47535...4aa0`, stored `0xf7 = 1`):
+
+| DAT | Flag word `0x014e3578` at `0x00db91e0` | Stored `0x80`/`0x81`/`0xf7` before | After | `cache[0xf7]` after reboot | Exported NAND |
+| --- | --- | --- | --- | --- | --- |
+| RC0+toggle `10feac47...2445` | `0x3` | 0/0/1 | 0/0/0 | 0 | `7da7fb61...9841` |
+| CC+toggle `507ecf32...0e1e` | `0x3` | 0/0/1 | 0/0/0 | 0 | `2814b76f...e465` |
+
+In both runs the first header-parser call (return address `0x00ec85a0`) leaves the flag word at 3, from 0, at about 29.3 M instructions; the completion runs at 1,943,243,929 instructions, followed by `0x0069fe20(0xff)` (return address `0x00db922c`) and the commit call at `0x00db932c`. The cache holds `0xf7 = 1` on the updater screen and 0 after the commit. The rebooted image carries the toggle hook word `0xebf492d3` at `0x00ecf900` and reaches the shooting screen with mode word 3 (first start). The RC0 exported NAND hash repeats across two runs.
+
+Scope: the updater runs from the recovery card's RAM copy of the DAT being installed, not from the firmware installed on the NAND. The installed NAND is the synthetic stored-f7 template (template adjustment content with only `0xf7` set), with ideal NAND and no bad blocks. The updater's body, version and completion text is not rendered by the model.
