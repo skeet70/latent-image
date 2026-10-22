@@ -111,8 +111,10 @@ Label id `0x83d` is the only free special id: `0x83c` is the blank id every unla
 | image 4 | `0x0061c320` | 0 | `0x83d` | CC shooting quadruple field 0 (inside the reviewed array) |
 | image 4 | `0x0061c324` | 0 | `0x83d` | CC shooting quadruple field 1 (inside the reviewed array) |
 | image 4 | `0x0061c3dc` | 0 | `0x83d` | CC RAW-conversion quadruple field 1 (inside the reviewed array) |
-| image 4 | `0x0078b024` | `0x00789e2c` | `0x004391b0` | Q node labels pointer |
-| image 4 | `0x0078b020` | `0x00782348` | `0x00439160` | Q node values pointer |
+| image 4 | `0x0078b024` | `0x00789e2c` | `0x00439300` | Q node labels pointer |
+| image 4 | `0x0078b020` | `0x00782348` | `0x004392b0` | Q node values pointer |
+| image 2 | `0x0022d28c` | `0x0027dbfc` | `0x00439390` | Q glyph `0x37c` record pointer to the Q tile (section 14) |
+| font | `[0x00439390, 0x00439a84)` | `0x00` | Q tile, 1,780-byte `GVFF` block | CC Q film tile (section 14) |
 
 The Q arrays are data read through the node pointers only; their placement shares the font tail's ownership argument (section 6). The shooting values array that the Q values mirror is the CC candidate's at `0x0061c340`.
 
