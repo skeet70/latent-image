@@ -403,4 +403,20 @@ Scope: the bytes of 14.3 only. Everything else is bound mechanically to `78f7526
 4. The tile: the `GVFF` layout against the stock blocks (header constants, key paints, path fields, padding rule), the outline encoder against the art, and the placement in the font tail.
 5. Tooling: the `image2-patch-set` step in `ExtensionManifest.hs` and `BuildExtension.hs`, `BuildClassicChromeQTile.hs`, `FujiAF/Gvff.hs`, `FujiAF/ClassicChromeQTile.hs`, the Q families added to `ClassicChromeIconCases.hs`.
 
-Class: data only (a label array word, an image-2 record word and a vector block that the stock drawer reads); no executable byte changes. The RAM-push payload of section 8.4 does not carry the fragment, so the abbreviated camera test (section 11, I5) would show the list-size tile; carrying it needs one image-2 publication, three Q labels words in the allocation copy and the 1,004-byte tile as allocation content.
+Class: data only (a label array word, an image-2 record word and a vector block that the stock drawer reads); no executable byte changes. The RAM-push carry is designed in 14.8.
+
+### 14.8 RAM-push carry (design, not built)
+
+Owner direction: the abbreviated camera test (section 11) shows the real Q tiles, so the `ClassicChromeIcon` payload carries this fragment. `agent/cc-icon` owns that payload (`FujiAF.ClassicChromeIconRam`, `build-classic-chrome-icon-ram`, `transport/ram-push-cc-icon-review.json`). The build waits for the final tile art, because the tile's length fixes the allocation size and the contract.
+
+| Change | Where | Publication |
+| --- | --- | --- |
+| Q labels rows 5, 6, 7 field 0: `0xff000779`, `0xff000778`, `0xff00037c` | `qLabelsArray`'s allocation copy at content offset `0x1c0` + 16 x row | none: the array is allocation content, published through the existing Q labels pointer |
+| The tile | new content at offset `0x250` (16-aligned, right after the Q labels copy), the `GVFF` block of 14.4 | none: allocation content |
+| Q glyph `0x37c` record pointer | image 2 `0x0022d28c`, old `0x0027dbfc` (stock, also on the RC0 body), new the allocation tile address `base + ccIconContentOffset + 0x250` | one new activation publication |
+
+The flash design writes the three label words over the icon's Q labels blob. The RAM design rewrites the same three words in the allocation copy before upload, so the Q labels pointer publication keeps its address, old word and role, and only its target bytes differ. The payload goes from 161 to 162 publications (100 setup, 62 activation). The image-2 word is published in activation before the Q labels pointer: once the labels name `0xff00037c`, its record already points at the tile. Nothing draws `0x37c` before that, so the reverse order would only briefly show the EXR tile in a Q tile already on screen. The installer's masked old-word check covers the new word. `ram-unload` restores it with the rest, and its reverse order restores the Q labels pointer first.
+
+Size: content grows from `0x250` to `0x250` plus the tile length (`0x3ec` for the development art). The publication table grows by one entry, so `ccIconInstallerExtent` (`0x15a0` for 161 entries) and `ccIconContentOffset` are re-derived from the relink. The allocation becomes about `0x1d80` instead of `0x1990`. The builder must refuse a tile address whose word is not 4-aligned, and a content end past the allocation.
+
+Follow-on changes: the pre-push and post-reboot read plans add the window holding `0x0022d28c`, plus the record words `0x0022d284`-`0x0022d288`, which must read `0x00300050` and 1. `carried-publications.json` is unchanged because no CC publication changes. The contract digest, builder digest, relink runtimes and the 19 review-record pins are re-pinned, still unreviewed. The `--classic-chrome-icon` e2e trajectories add the Q film tile on CLASSIC CHROME, PRO Neg Hi and PRO Neg Std, and the cold-restart read covers 162 words. Owner check I5 becomes: the Q film tile shows the full-size CC tile, and the PRO Neg rows show their full-size stock tiles. Review scope adds the one new publication and the content change, and the reviewer-packet items of 14.7 apply unchanged.
