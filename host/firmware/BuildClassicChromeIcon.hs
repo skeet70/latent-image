@@ -2,10 +2,11 @@
 -- from the reviewed Classic Chrome extension: its parts carried unchanged, the
 -- icon's image-4 words appended to its image-4 patch set, the words of each
 -- image-5 fragment (live view, frames remaining) appended to its image-5 patch
--- set, a font patch set over the FONT_ICON window, the id-0x83d record step,
--- and a manifest that keeps the 0x83e record step. `diff` decodes two built
--- containers and refuses any byte change outside the write set the build
--- recorded.
+-- set, the id-0x83d record step, an image-2 patch set pointing Q glyph 0x37c
+-- at the Classic Chrome Q tile, a font patch set over the FONT_ICON window that
+-- also places that tile, and a manifest that keeps the 0x83e record step.
+-- `diff` decodes two built containers and refuses any byte change outside the
+-- write set the build recorded.
 module Main (main) where
 
 import Control.Monad (forM, forM_, when)
@@ -16,6 +17,7 @@ import Data.Char (isDigit, isHexDigit, isLower)
 import Data.List (isPrefixOf, sortOn)
 import Data.Word (Word32)
 import qualified FujiAF.ClassicChromeIcon as I
+import qualified FujiAF.ClassicChromeQTile as Q
 import FujiAF.FdlFont
 import qualified FujiAF.Host as H
 import FujiAF.JSON (encodeCanonical)
@@ -118,6 +120,9 @@ build outputSha fragmentsGiven manifestGiven outputGiven = do
     "U+F073 does not resolve to the icon record and program"
   H.ensure (perMilleAt patchedFont I.iconCode == Right I.iconPerMille) "U+F073 per-mille is not 800"
   putStrLn ("font: " ++ show (length codes) ++ " codes looked up; only U+F072 and U+F073 change; U+F073 resolves to the record at " ++ hex32 (I.fontRamAddress I.iconRecordOffset))
+  tileWrites <- either (H.failH . ("Q tile font writes: " ++)) pure (Q.qTileFontWrites patchedWindow)
+  let allFontWrites = fontWrites ++ tileWrites
+  putStrLn ("Q tile: " ++ show (B.length Q.qTileGvff) ++ " GVFF bytes at " ++ hex32 Q.qTileAddress)
 
   -- Image 4: pinned entries unchanged, the icon words appended.
   (image4Base, pinned4) <- expandSet image4
@@ -178,13 +183,27 @@ build outputSha fragmentsGiven manifestGiven outputGiven = do
               ]
 
   -- The font patch set over the extract-font window.
-  let fontSet = fontPatchSet (H.get image4 "target") windowSha fontWrites
+  let fontSet = fontPatchSet (H.get image4 "target") windowSha allFontWrites
 
-  -- The id-0x83d record's current bytes.
+  -- Image 2: the id-0x83d record's current bytes, the extent after both
+  -- record steps, and the Q glyph 0x37c record pointer over it.
   let (_, extentSize, image2Load) = U.image2Extent parts
       image2Media = B.map complement (U.partImage2 parts)
   recordAt <- either H.failH pure (L.specialRecordOffset L.SpecialLabel83d image2Load extentSize)
   current83d <- either H.failH pure (L.specialRecordBytes (B.take 66 (B.drop recordAt image2Media)))
+  current83e <- either H.failH pure (L.specialRecordFromHex (H.str (H.get record83eStep "current_hex")))
+  name83e <- either H.failH pure (L.labelName (H.str (H.get record83eStep "text")))
+  layout83e <- either H.failH pure (L.labelLayout [H.num v | v <- H.list (H.get record83eStep "layout")])
+  afterRecords <- either (H.failH . ("image-2 records: " ++)) (pure . U.mediaImageBytes) $ do
+    with83d <- L.writeSpecialRecord image2Load (U.MediaImage image2Media) L.SpecialLabel83d current83d I.label83dName I.label83dLayout
+    L.writeSpecialRecord image2Load with83d L.SpecialLabel83e current83e name83e layout83e
+  let image2Word a = U.word32At afterRecords (fromIntegral (a - image2Load))
+      record37c = Q.qGlyphRecordAddress Q.ccQGlyph
+  H.ensure (image2Load == 0x00130000) "the image-2 extent does not load at 0x00130000"
+  H.ensure (image2Word record37c == Q.qTileRecordSize && image2Word (record37c + 4) == 1) "the Q glyph 0x37c record is not an 80 x 48 type-1 tile"
+  forM_ Q.qTileImage2Writes $ \w -> H.ensure (image2Word (Q.i2Address w) == Q.i2Old w) (hex32 (Q.i2Address w) ++ ": the image-2 word is " ++ hex32 (image2Word (Q.i2Address w)) ++ ", not " ++ hex32 (Q.i2Old w))
+  image2Sha <- H.sha256 afterRecords
+  let image2Set = image2PatchSet (H.get image4 "target") image2Sha
 
   output <- newOutputDirectory outputGiven
   let write name value = do
@@ -201,6 +220,7 @@ build outputSha fragmentsGiven manifestGiven outputGiven = do
   B.writeFile (output </> "cc-plain.json") plainBytes
   digestPlain <- H.sha256 plainBytes
   digestFont <- write "cc-icon-font.json" fontSet
+  digestImage2 <- write "cc-icon-image2.json" image2Set
   let step path digest = H.obj [("kind", H.s "image-patch-set"), ("path", H.s path), ("sha256", H.s digest)]
       record83d =
         H.obj
@@ -222,6 +242,7 @@ build outputSha fragmentsGiven manifestGiven outputGiven = do
                 , step (if null extra5 then "cc-image5.json" else "cc-icon-image5.json") digest5
                 , record83d
                 , record83eStep
+                , H.obj [("kind", H.s "image2-patch-set"), ("path", H.s "cc-icon-image2.json"), ("sha256", H.s digestImage2)]
                 , H.obj [("kind", H.s "font-patch-set"), ("path", H.s "cc-icon-font.json"), ("sha256", H.s digestFont)]
                 , H.obj [("kind", H.s "plain-patch-set"), ("path", H.s "cc-plain.json"), ("sha256", H.s digestPlain)]
                 ]
@@ -233,8 +254,8 @@ build outputSha fragmentsGiven manifestGiven outputGiven = do
     write
       "write-set.json"
       ( H.obj
-          [ ("font", H.arr [expectedJson (I.fontRamAddress (I.fwOffset w)) (I.fwNew w) | w <- fontWrites])
-          , ("image2", H.arr [expectedJson (L.specialRecordAddress L.SpecialLabel83d) I.label83dRecord])
+          [ ("font", H.arr [expectedJson (I.fontRamAddress (I.fwOffset w)) (I.fwNew w) | w <- allFontWrites])
+          , ("image2", H.arr (expectedJson (L.specialRecordAddress L.SpecialLabel83d) I.label83dRecord : [expectedJson (Q.i2Address w) (U.putWord32 (Q.i2New w)) | w <- Q.qTileImage2Writes]))
           , ("image4", H.arr [expectedJson (I.i4Address w) (U.putWord32 (I.i4New w)) | w <- I.iconImage4Writes])
           , ("image5", H.arr [e | (_, _, _, e) <- placed5])
           ]
@@ -252,6 +273,35 @@ build outputSha fragmentsGiven manifestGiven outputGiven = do
     )
   where
     kind v = H.str (H.get v "kind")
+
+image2PatchSet :: Value -> String -> Value
+image2PatchSet target extentSha =
+  H.obj
+    [ ("schema_version", H.n 1)
+    , ("id", H.s "CLASSIC-CHROME-ICON-01-IMAGE2")
+    , ("tier", H.s "RC2")
+    , ("recorded_at", H.s "2026-10-22")
+    , ("target", target)
+    , ( "image"
+      , H.obj
+          [ ("segment_id", H.n 2)
+          , ("decode_base", H.s "0x00130000")
+          , ("decode_file", H.s "rebuild-update extract-image2 extent of the step's input DAT (media form), after the 0x83d and 0x83e records")
+          , ("decode_sha256", H.s extentSha)
+          , ("file_offset_rule", H.s "file_offset = address - 0x00130000")
+          , ("dump_correspondence", H.s "not established for this build")
+          ]
+      )
+    , ("free_space", H.s "none: one record word rewritten in place")
+    , ("array_source", H.s "FujiAF.ClassicChromeQTile")
+    , ("order_rule", H.s "the Q glyph 0x37c record pointer")
+    , ("blobs", H.arr [])
+    , ("words", H.arr [wordJson k (Q.i2Address w) (fromIntegral (Q.i2Address w - 0x00130000)) (Q.i2Old w) (Q.i2New w) (Q.i2Role w) | (k, w) <- zip [1 ..] Q.qTileImage2Writes])
+    , ("totals", H.obj [("word_writes", H.n (toInteger (length Q.qTileImage2Writes)))])
+    , ("unchanged_surfaces", H.arr (map H.s ["every Q glyph record except 0x37c's pointer word", "the special label records"]))
+    , ("container_effect", H.obj [("dat_extents", H.s "unchanged"), ("segment_words", H.s "unchanged")])
+    , ("emulation_case_parameters", H.s "none")
+    ]
 
 fontPatchSet :: Value -> String -> [I.FontWrite] -> Value
 fontPatchSet target windowSha writes =
@@ -273,7 +323,7 @@ fontPatchSet target windowSha writes =
       )
     , ("free_space", H.s "the loaded tail [0x7cfd4, 0x80000) past FONT_ICON.FDL's 0x7cfd4 bytes; every placed byte is zero in the stock window")
     , ("array_source", H.s "FujiAF.ClassicChromeIcon")
-    , ("order_rule", H.s "U+F073 directory word, U+F073 per-mille word, then the glyph record, the Q values and the Q labels blobs")
+    , ("order_rule", H.s "U+F073 directory word, U+F073 per-mille word, then the glyph record, the Q values, the Q labels and the Classic Chrome Q tile blobs")
     , ("blobs", H.arr blobs)
     , ("words", H.arr wordsJson)
     , ("totals", H.obj [("word_writes", H.n (toInteger (length wordWrites))), ("blob_words", H.n (toInteger blobWords))])
@@ -284,7 +334,9 @@ fontPatchSet target windowSha writes =
   where
     wordWrites = [w | w <- writes, B.length (I.fwNew w) == 4]
     blobWrites = [w | w <- writes, B.length (I.fwNew w) /= 4]
-    blobWords = sum [B.length (I.fwNew w) `div` 4 | w <- blobWrites]
+    blobWords = sum [B.length (padded (I.fwNew w)) `div` 4 | w <- blobWrites]
+    -- A blob is whole words; the pad bytes past a record are zero in the window.
+    padded bytes = bytes <> B.replicate ((4 - B.length bytes `mod` 4) `mod` 4) 0
     offsetOf w = let FontOffset at = I.fwOffset w in at
     wordsJson =
       [ wordJson order (I.fontRamAddress (I.fwOffset w)) (offsetOf w) (le (I.fwOld w)) (le (I.fwNew w)) (I.fwRole w)
@@ -296,12 +348,12 @@ fontPatchSet target windowSha writes =
           , ("role", H.s (I.fwRole w))
           , ("address", H.s (hex32 (I.fontRamAddress (I.fwOffset w))))
           , ("file_offset", H.s (hex32 (fromIntegral (offsetOf w))))
-          , ("length", H.n (toInteger (B.length (I.fwNew w))))
-          , ("order_range", H.arr [H.n (toInteger first), H.n (toInteger (first + B.length (I.fwNew w) `div` 4 - 1))])
-          , ("current_hex", H.s (hexBytes (I.fwOld w)))
-          , ("new_hex", H.s (hexBytes (I.fwNew w)))
+          , ("length", H.n (toInteger (B.length (padded (I.fwNew w)))))
+          , ("order_range", H.arr [H.n (toInteger first), H.n (toInteger (first + B.length (padded (I.fwNew w)) `div` 4 - 1))])
+          , ("current_hex", H.s (hexBytes (padded (I.fwOld w))))
+          , ("new_hex", H.s (hexBytes (padded (I.fwNew w))))
           ]
-      | (k, w, first) <- zip3 [1 :: Int ..] blobWrites (scanl (+) (length wordWrites + 1) [B.length (I.fwNew w) `div` 4 | w <- blobWrites])
+      | (k, w, first) <- zip3 [1 :: Int ..] blobWrites (scanl (+) (length wordWrites + 1) [B.length (padded (I.fwNew w)) `div` 4 | w <- blobWrites])
       ]
     le bytes = U.word32At bytes 0
 
