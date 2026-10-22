@@ -26,11 +26,12 @@ import Data.Word (Word16, Word32)
 import qualified FujiAF.Host as H
 import qualified FujiAF.Lz.Encode as Encode
 import qualified FujiAF.UpdateContainer as U
-import System.Directory (canonicalizePath, doesFileExist)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesFileExist, doesPathExist)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath ((</>))
 import System.IO (hPutStrLn, stderr)
+import System.Process (CreateProcess (..), proc, readCreateProcessWithExitCode)
 
 data ToolRun = ToolRun
   { toolStopped :: Bool
@@ -213,6 +214,34 @@ applierCases checked applier = H.withTemporary "fuji-af-applier-" $ \root -> do
     "schema1-output-base"
     (syntheticManifest 1 (Just applierOutputBase) Nothing [] digest)
     "patch set output_base requires an extension block"
+  -- A later write over one blob word applies on top of the blob's new bytes.
+  let blob =
+        H.obj
+          [ ("id", H.s "synthetic-blob")
+          , ("role", H.s "synthetic blob")
+          , ("address", H.s (U.showHexWord 0x1000))
+          , ("file_offset", H.s (U.showHexWord 0))
+          , ("length", H.n 8)
+          , ("order_range", H.arr [H.n 1, H.n 2])
+          , ("current_hex", H.s "2021222324252627")
+          , ("new_hex", H.s "a0a1a2a3a4a5a6a7")
+          ]
+      withBlob manifest = H.set "blobs" (H.arr [blob]) manifest
+  _ <-
+    expectAccepted
+      "overlay-contained"
+      (withBlob (syntheticManifest 1 Nothing Nothing [wordEntry 3 0x1004 0x4 0xa7a6a5a4 0x0badf00d] digest))
+      (B.pack [0xa0, 0xa1, 0xa2, 0xa3, 0x0d, 0xf0, 0xad, 0x0b] <> B.drop 8 applierDecode)
+  -- The overlay's current bytes are the blob's new bytes, not the decode's.
+  expectRefused
+    "overlay-current"
+    (withBlob (syntheticManifest 1 Nothing Nothing [wordEntry 3 0x1004 0x4 0x27262524 0x0badf00d] digest))
+    "write order 3 at file offset 0x4: current bytes disagree"
+  -- A write straddling two blob words is refused.
+  expectRefused
+    "overlay-partial"
+    (withBlob (syntheticManifest 1 Nothing Nothing [wordEntry 3 0x1002 0x2 0xa5a4a3a2 0x0badf00d] digest))
+    "patch set write words overlap"
 
 -- ---------------------------------------------------------------------------
 -- rebuild-update replace-record4 --load-address
@@ -297,8 +326,9 @@ serializeRecordBytes r =
 
 -- The fixture variants differ only in the values the load-address case must
 -- discriminate (the bss base/length pair and the image-4 flash window), in
--- the id-2 extent's load and size, which the image-2 cases vary, and in the
--- id-6 plain window and the post-head gap that carries it.
+-- the id-2 extent's load and size, which the image-2 cases vary, in the
+-- id-6 plain window and the post-head gap that carries it, and in the id-3
+-- font window and the post-tail span that carries it.
 data Fixture = Fixture
   { fxBss :: Word32
   , fxBssLen :: Word32
@@ -309,6 +339,9 @@ data Fixture = Fixture
   , fxPlainFlash :: Word32
   , fxPlainLen :: Word32
   , fxImage2Gap :: Int
+  , fxFontFlash :: Word32
+  , fxPostTail :: Int
+  , fxReservedFlash :: Word32
   }
 
 baseFixture :: Fixture
@@ -323,6 +356,9 @@ baseFixture =
     , fxPlainFlash = 0x00360000
     , fxPlainLen = 0x00360000
     , fxImage2Gap = 0x6c0000 - (0x240200 + U.recordHeaderBytes + 0x4001) + 11
+    , fxFontFlash = 0x40000
+    , fxPostTail = 5
+    , fxReservedFlash = 0xb40000
     }
 
 -- The id-0x83d special label record's buffer address (reports/special-label-resolution.md
@@ -343,6 +379,24 @@ labelFixture = baseFixture {fxImage2Load = 0x0037b000, fxImage2Size = 0x900}
 -- The extraction-only fixture places image 2 eleven bytes after record 5.
 extractionRefusalFixture :: Fixture
 extractionRefusalFixture = baseFixture {fxImage2Gap = 11}
+
+-- The font fixture places the id-3 window at media 0x6e0000, 0x20000 bytes,
+-- inside the post-tail span after the id-2 extent (media 0x6c000b + 0x200),
+-- and the id-7 window after it, so every segment window lies inside the main
+-- range as build-extension's firmware reader requires.
+fontFixture :: Fixture
+fontFixture = baseFixture {fxFontFlash = 0x6e0000, fxReservedFlash = 0x700000, fxPostTail = 0x720000 - (0x6c000b + 0x200) + 5}
+
+fontWindowLength :: Int
+fontWindowLength = 0x20000
+
+-- The font window's media bytes: the complement of the fill run the body
+-- carries at the window's offset in the post-tail span.
+fixtureFontMedia :: B.ByteString
+fixtureFontMedia =
+  B.map
+    complement
+    (B.take fontWindowLength (B.drop (fromIntegral (fxFontFlash fontFixture) - (image2Media fontFixture + fxImage2Size fontFixture)) (patternBytes (fxPostTail fontFixture))))
 
 -- The plain window's media bytes (the loader's raw copy): the complement of
 -- the fill run the body carries at the window's offset in the post-head gap.
@@ -387,11 +441,11 @@ fixtureSegments fixture =
   [ U.SegmentEntry 0 0x1000 0x200 0 0 0x30000 0x10000 0 0
   , U.SegmentEntry 1 0x2000 0x200 0 0 0x31000 0x10000 0 0
   , U.SegmentEntry 2 (fxImage2Load fixture) (fromIntegral (fxImage2Size fixture)) 0 0 (fromIntegral (image2Media fixture)) 0x10000 0 0
-  , U.SegmentEntry 3 0x4000 0x200 0 0 0x33000 0x10000 0 0
+  , U.SegmentEntry 3 0x4000 0x200 0 0 (fxFontFlash fixture) (fromIntegral fontWindowLength) 0 0
   , U.SegmentEntry 4 0x0061c400 0x00282828 (fxBss fixture) (fxBssLen fixture) (fromIntegral record4Media) (fxFlashLen4 fixture) 0x20 1
   , U.SegmentEntry 5 0x00bf1a00 0x004f1e60 0x01460000 0x002bbe40 (fromIntegral (fxRecord5Media fixture)) 0x00100000 0x20 1
   , U.SegmentEntry 6 0x00bf1a00 0x004f1e60 0x01460000 0x002bbe40 (fxPlainFlash fixture) (fxPlainLen fixture) 0x20 0
-  , U.SegmentEntry 7 0 0 0 0 0xb40000 0x20000 0 0
+  , U.SegmentEntry 7 0 0 0 0 (fxReservedFlash fixture) 0x20000 0 0
   ]
 
 fixtureBodyPrefix :: Fixture -> B.ByteString
@@ -408,7 +462,7 @@ fixtureBodyPrefix fixture =
     , serializeRecordBytes fixtureRecord5
     , patternBytes (image2Media fixture - fxRecord5Media fixture - B.length (serializeRecordBytes fixtureRecord5))
     , B.map complement (fixtureImage2 fixture)
-    , patternBytes 5
+    , patternBytes (fxPostTail fixture)
     ]
 
 fixtureBody :: Fixture -> B.ByteString
@@ -857,6 +911,178 @@ plainCases checked rebuilder = H.withTemporary "fuji-af-plain-" $ \root -> do
     ["extract-plain", baseStockPath]
     "runs past the image-2 extent"
 
+-- ---------------------------------------------------------------------------
+-- rebuild-update extract-font / replace-font (the font-window carrier) and
+-- build-extension's font-patch-set step
+--
+-- The font fixture carries the id-3 window in the post-tail span after the
+-- id-2 extent. Assertions read the written files: the window in media form,
+-- the window bytes carried back, and the bytes outside the window and the
+-- main checksum word.
+-- ---------------------------------------------------------------------------
+
+fontCases :: IORef Int -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+fontCases checked rebuilder applier decoder encoder builder = H.withTemporary "fuji-af-font-" $ \root -> do
+  let stockPath = root </> "font-stock.dat"
+      windowPath = root </> "font-window.bin"
+      reproPath = root </> "font-repro.dat"
+      changedPath = root </> "font-changed.bin"
+      changedOutPath = root </> "font-changed-out.dat"
+      stockBytes = fixtureBytes fontFixture
+      windowFileStart = U.stagingLength + fromIntegral (fxFontFlash fontFixture)
+  B.writeFile stockPath stockBytes
+
+  -- extract-font writes the window in media form.
+  extracted <- runTool rebuilder ["extract-font", stockPath, windowPath]
+  unless (not (toolStopped extracted) && toolCode extracted == ExitSuccess) $
+    H.failH ("extract-font refused: " ++ toolErr extracted)
+  window <- B.readFile windowPath
+  expectEqual checked "extract-font window" fixtureFontMedia window
+
+  -- The stock window reproduces the source container byte for byte.
+  reproduced <- runTool rebuilder ["replace-font", stockPath, windowPath, reproPath]
+  unless (not (toolStopped reproduced) && toolCode reproduced == ExitSuccess) $
+    H.failH ("replace-font refused the stock window: " ++ toolErr reproduced)
+  expectEqual checked "replace-font stock bytes" stockBytes =<< B.readFile reproPath
+
+  -- A changed window byte changes that byte and the main checksum word only.
+  let changedWindow = B.take 0x1000 window <> B.singleton (B.index window 0x1000 `xor` 0xff) <> B.drop 0x1001 window
+  B.writeFile changedPath changedWindow
+  changedRun <- runTool rebuilder ["replace-font", stockPath, changedPath, changedOutPath]
+  unless (not (toolStopped changedRun) && toolCode changedRun == ExitSuccess) $
+    H.failH ("replace-font refused the changed window: " ++ toolErr changedRun)
+  changed <- B.readFile changedOutPath
+  expectEqual checked "replace-font window byte" (B.singleton (complement (B.index changedWindow 0x1000))) (B.take 1 (B.drop (windowFileStart + 0x1000) changed))
+  expectCarriedIdentity checked "replace-font" stockBytes changed [(U.mainChecksumOffset, 4), (windowFileStart + 0x1000, 1)]
+  verified <- runTool rebuilder ["verify", changedOutPath]
+  unless (not (toolStopped verified) && toolCode verified == ExitSuccess) $
+    H.failH ("verify refused the changed container: " ++ toolErr verified)
+
+  -- Refusals: a window of the wrong length, and a container whose font window
+  -- is not carried after the image-2 extent.
+  let refusal label output arguments fragment = do
+        result <- runTool rebuilder (arguments ++ [output])
+        unless (not (toolStopped result) && toolCode result /= ExitSuccess) $
+          H.failH (label ++ ": accepted")
+        unless (fragment `isInfixOf` toolErr result) $
+          H.failH (label ++ ": wrong refusal: " ++ toolErr result)
+        leftover <- doesFileExist output
+        unless (not leftover) $ H.failH (label ++ ": refused run wrote an output file")
+        modifyIORef' checked (+ 1)
+        putStrLn ("refuse " ++ label)
+      longPath = root </> "font-long.bin"
+      outsidePath = root </> "font-outside.dat"
+  B.writeFile longPath (window <> B.singleton 0)
+  B.writeFile outsidePath (fixtureBytes baseFixture)
+  refusal "replace-font long window" (root </> "font-long-out.dat") ["replace-font", stockPath, longPath] "against the stored flash length"
+  refusal "replace-font window outside the post-tail span" (root </> "font-outside-out.dat") ["replace-font", outsidePath, windowPath] "lies outside the span carried after the image-2 extent"
+  refusal "extract-font window outside the post-tail span" (root </> "font-outside.bin") ["extract-font", outsidePath] "lies outside the span carried after the image-2 extent"
+
+  -- build-extension: a font-patch-set step writes its word into the window;
+  -- the same step with a wrong current word is refused and leaves no output.
+  let workspace = root </> "workspace"
+  createDirectoryIfMissing True (workspace </> "private-data")
+  stockSha <- H.sha256 stockBytes
+  windowSha <- H.sha256 window
+  let fontSet current =
+        H.obj
+          [ ("schema_version", H.n 1)
+          , ("id", H.s "SYNTHETIC-FONT")
+          , ("tier", H.s "synthetic")
+          , ("recorded_at", H.s "2026-10-22")
+          , ("target", H.obj [("firmware_sha256", H.s stockSha)])
+          , ( "image"
+            , H.obj
+                [ ("segment_id", H.n 3)
+                , ("decode_base", H.s "0x003bc000")
+                , ("decode_file", H.s "synthetic")
+                , ("decode_sha256", H.s windowSha)
+                , ("file_offset_rule", H.s "file_offset = address - 0x003bc000")
+                , ("dump_correspondence", H.s "synthetic")
+                ]
+            )
+          , ("free_space", H.s "synthetic")
+          , ("array_source", H.s "synthetic")
+          , ("order_rule", H.s "synthetic")
+          , ("blobs", H.arr [])
+          , ("words", H.arr [wordEntry 1 (0x003bc000 + 0x1000) 0x1000 current 0xdeadbeef])
+          , ("totals", H.s "synthetic")
+          , ("unchanged_surfaces", H.s "synthetic")
+          , ("container_effect", H.s "synthetic")
+          , ("emulation_case_parameters", H.s "synthetic")
+          ]
+      runExtension name current = do
+        let setPath = workspace </> (name ++ "-font.json")
+            manifestPath = workspace </> (name ++ ".json")
+            output = workspace </> "private-data" </> name
+            setBytes = BL.toStrict (A.encode (fontSet current))
+        B.writeFile setPath setBytes
+        setSha <- H.sha256 setBytes
+        B.writeFile
+          manifestPath
+          ( BL.toStrict
+              ( A.encode
+                  ( H.obj
+                      [ ("schema_version", H.n 1)
+                      , ("id", H.s name)
+                      , ("title", H.s "synthetic font step")
+                      , ("base", H.obj [("model", H.s "X-M1"), ("firmware_version", H.s "1.50"), ("sha256", H.s stockSha)])
+                      , ("steps", H.arr [H.obj [("kind", H.s "font-patch-set"), ("path", H.s (name ++ "-font.json")), ("sha256", H.s setSha)]])
+                      , ("output_sha256", H.s (replicate 64 '0'))
+                      ]
+                  )
+              )
+          )
+        (code, _, err) <-
+          readCreateProcessWithExitCode
+            (proc builder [decoder, applier, encoder, rebuilder, "--unpinned", manifestPath, stockPath, output]) {env = Just [("BUILD_WORKSPACE_DIRECTORY", workspace)]}
+            ""
+        pure (code, err, output)
+  (acceptCode, acceptErr, acceptOutput) <- runExtension "font-accept" (U.word32At window 0x1000)
+  unless (acceptCode == ExitSuccess) $ H.failH ("build-extension refused the font step: " ++ acceptErr)
+  built <- B.readFile (acceptOutput </> "FWUP0002.DAT")
+  expectEqual checked "build-extension font word" (B.map complement (U.putWord32 0xdeadbeef)) (B.take 4 (B.drop (windowFileStart + 0x1000) built))
+  expectCarriedIdentity checked "build-extension font step" stockBytes built [(U.mainChecksumOffset, 4), (windowFileStart + 0x1000, 4)]
+  (refuseCode, refuseErr, refuseOutput) <- runExtension "font-refuse" (U.word32At window 0x1000 `xor` 1)
+  unless (refuseCode /= ExitSuccess && "current bytes disagree" `isInfixOf` refuseErr) $
+    H.failH ("build-extension accepted a wrong font current word: " ++ refuseErr)
+  leftover <- doesPathExist refuseOutput
+  unless (not leftover) $ H.failH "build-extension left an output directory after the refusal"
+  modifyIORef' checked (+ 1)
+  putStrLn "accept font: extract-font, replace-font round trip, one-byte window change, build-extension font step and its wrong-current refusal"
+
+-- ---------------------------------------------------------------------------
+-- rebuild-update write-record: the UTF-16 unit text form and the ASCII form
+-- ---------------------------------------------------------------------------
+
+recordCases :: IORef Int -> FilePath -> IO ()
+recordCases checked rebuilder = H.withTemporary "fuji-af-record-" $ \root -> do
+  let stockPath = root </> "record-stock.dat"
+      labelBytes = fixtureBytes labelFixture
+      recordOffset = fromIntegral (labelBufferAddress - fxImage2Load labelFixture)
+      extentStart = U.stagingLength + image2Media labelFixture
+      stockRecord = B.take labelRecordLength (B.drop recordOffset (fixtureImage2 labelFixture))
+      currentHex = concatMap (\b -> [hexDigit (b `div` 16), hexDigit (b `mod` 16)]) (B.unpack stockRecord)
+      hexDigit d = "0123456789abcdef" !! fromIntegral d
+      layoutWords = B.concat (map U.putWord16 [540, 24, 30, 36, 48])
+      run name arguments expected = do
+        let output = root </> (name ++ ".dat")
+        result <- runTool rebuilder (["write-record", "--id", "0x83d", "--layout", "540,24,30,36,48", "--current-hex", currentHex] ++ arguments ++ [output])
+        unless (not (toolStopped result) && toolCode result == ExitSuccess) $
+          H.failH (name ++ ": write-record refused: " ++ toolErr result)
+        written <- B.readFile output
+        let media = B.map complement (B.take (fxImage2Size labelFixture) (B.drop extentStart written))
+        expectEqual checked (name ++ " record") expected (B.take labelRecordLength (B.drop recordOffset media))
+        expectCarriedIdentity checked name labelBytes written [(U.mainChecksumOffset, 4), (extentStart + recordOffset, labelRecordLength)]
+  B.writeFile stockPath labelBytes
+  run "record-utf16" ["--text-utf16", stockPath, "f073"] (B.concat (map U.putWord16 [0xf073, 0]) <> B.replicate 52 0 <> layoutWords)
+  run "record-ascii" [stockPath, "CC"] (B.concat (map U.putWord16 [0x43, 0x43, 0]) <> B.replicate 50 0 <> layoutWords)
+  result <- runTool rebuilder ["write-record", "--id", "0x83d", "--layout", "540,24,30,36,48", "--current-hex", currentHex, "--text-utf16", stockPath, "F073", root </> "upper.dat"]
+  unless (not (toolStopped result) && toolCode result /= ExitSuccess && "lowercase" `isInfixOf` toolErr result) $
+    H.failH ("write-record accepted uppercase unit hex: " ++ toolErr result)
+  modifyIORef' checked (+ 1)
+  putStrLn "accept write-record: UTF-16 unit and ASCII texts"
+
 data WindowImage = Compressed4 | Compressed5 | Raw6
 
 changeWindow :: WindowImage -> (U.SegmentEntry -> U.SegmentEntry) -> U.Parts -> U.Parts
@@ -939,18 +1165,22 @@ main :: IO ()
 main = do
   outcome <- try $ do
     arguments <- getArgs
-    (applier, rebuilder, decoder) <- case arguments of
-      [applyPath, rebuildPath, decoderPath] -> do
+    (applier, rebuilder, decoder, encoder, builder) <- case arguments of
+      [applyPath, rebuildPath, decoderPath, encoderPath, builderPath] -> do
         applyExe <- canonicalizePath applyPath
         rebuildExe <- canonicalizePath rebuildPath
         decoderExe <- canonicalizePath decoderPath
-        pure (applyExe, rebuildExe, decoderExe)
-      _ -> H.failH "usage: container-build-tests APPLY_PATCH_SET REBUILD_UPDATE FFLZD"
+        encoderExe <- canonicalizePath encoderPath
+        builderExe <- canonicalizePath builderPath
+        pure (applyExe, rebuildExe, decoderExe, encoderExe, builderExe)
+      _ -> H.failH "usage: container-build-tests APPLY_PATCH_SET REBUILD_UPDATE FFLZD LZ_ENCODE BUILD_EXTENSION"
     checked <- newIORef 0
     applierCases checked applier
     loadAddressCases checked rebuilder decoder
     image2Cases checked rebuilder
     plainCases checked rebuilder
+    fontCases checked rebuilder applier decoder encoder builder
+    recordCases checked rebuilder
     windowAdmissionCases checked rebuilder
     total <- readIORef checked
     putStrLn (show total ++ " container-build path checks passed")

@@ -100,8 +100,9 @@ runStep tools firmware work current (index, step) = do
         , commaSeparated (map show (L.labelLayoutList layout))
         , "--current-hex"
         , L.specialRecordHex bytes
+        , "--text-utf16"
         , current
-        , L.labelNameText name
+        , L.labelNameUnitHex name
         , next
         ]
     ReplacePlain (FlashOffset offset) _ blob -> rebuild ["replace-plain", "--flash-offset", hex offset, current, blob, next]
@@ -113,6 +114,14 @@ runStep tools firmware work current (index, step) = do
         ("The plain window of " ++ current ++ " has SHA-256 " ++ digest ++ ", not the plain patch set's decode_sha256")
       callProcess (toolApplier tools) [patchSet, file "plain-window.bin", file "patched-plain.bin"]
       rebuild ["replace-plain", current, file "patched-plain.bin", next]
+    PatchFont decodeDigest patchSet -> do
+      rebuild ["extract-font", current, file "font-window.bin"]
+      digest <- H.readRegular (16 * 1024 * 1024) (file "font-window.bin") >>= H.sha256
+      H.ensure
+        (Sha256 digest == decodeDigest)
+        ("The font window of " ++ current ++ " has SHA-256 " ++ digest ++ ", not the font patch set's decode_sha256")
+      callProcess (toolApplier tools) [patchSet, file "font-window.bin", file "patched-font.bin"]
+      rebuild ["replace-font", current, file "patched-font.bin", next]
   pure next
   where
     commaSeparated = foldr1 (\a b -> a ++ "," ++ b)

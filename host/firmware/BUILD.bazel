@@ -3,6 +3,8 @@ load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "h
 
 package(default_visibility = ["//visibility:public"])
 
+exports_files(["classic-chrome-icon.txt"])
+
 cc_binary(
     name = "framing-probe",
     srcs = ["spike/framing_probe.c"],
@@ -92,6 +94,7 @@ haskell_binary(
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
+        "//host:font-window",
         "//host:host-support",
         "//host:label-record",
         "//host:update-container",
@@ -136,6 +139,62 @@ haskell_test(
         "//host:bytestring",
         "//host:host-support",
         "//host:label-record",
+        "//host:update-container",
+    ],
+)
+
+# The Classic Chrome icon content against its pinned digests, and the FDL
+# glyph lookup over every code of a synthetic font with the stock FONT_ICON
+# geometry before and after the icon's font writes. No artefact is read.
+haskell_test(
+    name = "classic-chrome-icon-tests",
+    srcs = ["ClassicChromeIconTests.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:classic-chrome-icon",
+        "//host:fdl-font",
+        "//host:host-support",
+        "//host:label-record",
+        "//host:update-container",
+    ],
+)
+
+# The Classic Chrome icon extension from the reviewed Classic Chrome
+# extension, and the changed-byte check between the two built candidates
+# (reports/classic-chrome-icon.md).
+haskell_binary(
+    name = "build-classic-chrome-icon",
+    srcs = ["BuildClassicChromeIcon.hs"],
+    args = ["$(location //lz:fflzd)"],
+    data = ["//lz:fflzd"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:classic-chrome-icon",
+        "//host:directory",
+        "//host:fdl-font",
+        "//host:filepath",
+        "//host:font-window",
+        "//host:host-support",
+        "//host:json",
+        "//host:label-record",
+        "//host:process",
         "//host:update-container",
     ],
 )
@@ -390,10 +449,11 @@ haskell_test(
     ],
 )
 
-# The two CLI paths that built the filmsim prefix container:
-# apply-patch-set's schema-3 decode-prefix extension and rebuild-update
-# replace-record4 --load-address. Synthetic fixtures only; the tools under
-# test run as subprocesses, so a removed refusal is a failing case.
+# The container CLI paths: apply-patch-set's schema-3 decode-prefix extension
+# and ordered overlay, rebuild-update replace-record4 --load-address, the
+# image-2, plain and font carriers, write-record's text forms, and
+# build-extension's font-patch-set step. Synthetic fixtures only; the tools
+# under test run as subprocesses, so a removed refusal is a failing case.
 haskell_test(
     name = "container-build-tests",
     srcs = ["ContainerBuildTests.hs"],
@@ -401,11 +461,15 @@ haskell_test(
         "$(location :apply-patch-set)",
         "$(location :rebuild-update)",
         "$(location //lz:fflzd)",
+        "$(location //lz:lz-encode)",
+        "$(location //extensions:build-extension)",
     ],
     data = [
         ":apply-patch-set",
         ":rebuild-update",
+        "//extensions:build-extension",
         "//lz:fflzd",
+        "//lz:lz-encode",
     ],
     ghcopts = [
         "-Wall",
@@ -421,6 +485,7 @@ haskell_test(
         "//host:directory",
         "//host:filepath",
         "//host:host-support",
+        "//host:process",
         "//host:update-container",
         "//lz:lz-codec",
     ],

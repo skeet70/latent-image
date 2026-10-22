@@ -54,6 +54,7 @@ haskell_binary(
         "//host:update-container",
         "//recovery:firmware-reader",
     ],
+    visibility = ["//host/firmware:__pkg__"],
 )
 
 # Manifest parsing and container-order refusals over synthetic manifests and

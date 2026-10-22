@@ -11,6 +11,7 @@ module ExtensionManifest
   , Extension (..)
   , parseExtension
   , plainDecodeBase
+  , fontDecodeBase
   ) where
 
 import Control.Monad (unless)
@@ -37,6 +38,8 @@ data Step
   | ReplacePlain FlashOffset SpanLength FilePath
   -- The Sha256 is the patch set's decode_sha256, the plain window it applies to.
   | PatchPlain Sha256 FilePath
+  -- The Sha256 is the patch set's decode_sha256, the font window it applies to.
+  | PatchFont Sha256 FilePath
   deriving (Eq, Show)
 
 data Extension = Extension
@@ -53,6 +56,11 @@ data Extension = Extension
 -- writes.
 plainDecodeBase :: Integer
 plainDecodeBase = 0x01100000
+
+-- The RAM address of the first byte of the window rebuild-update extract-font
+-- writes (segment 3's load address).
+fontDecodeBase :: Integer
+fontDecodeBase = 0x003bc000
 
 -- Part paths are resolved against the manifest's directory.
 parseExtension :: FilePath -> IO Extension
@@ -72,7 +80,7 @@ parseExtension path = do
     "a plain-patch-set step cannot be combined with plain-span steps"
   H.ensure
     (containerOrder steps)
-    "extension steps must run image 4, image 5, the label, then image-2 records by increasing id distinct from the label's 0x83d, then plain spans in increasing non-overlapping flash order or one plain patch set; each image and the label at most once"
+    "extension steps must run image 4, image 5, the label, then image-2 records by increasing id distinct from the label's 0x83d, then at most one font patch set, then plain spans in increasing non-overlapping flash order or one plain patch set; each image and the label at most once"
   pure
     Extension
       { extensionId = H.str (H.get value "id")
@@ -106,10 +114,12 @@ parseStep directory base value = case H.str (H.get value "kind") of
     H.ensure (not (null text)) "image2-label text must be nonempty"
     pure (WriteLabel text)
   "image2-record" -> do
-    H.fields value "kind id text layout current_hex" "image2-record step"
+    let textKey = if "text_utf16" `elem` H.keys value then "text_utf16" else "text"
+    H.fields value ("kind id " ++ textKey ++ " layout current_hex") "image2-record step"
     idValue <- hexValue (H.get value "id") "image2-record id"
     ident <- either H.failH pure (L.specialLabelId idValue)
-    name <- either H.failH pure (L.labelName (H.str (H.get value "text")))
+    let text = H.str (H.get value textKey)
+    name <- either H.failH pure (if textKey == "text" then L.labelName text else L.labelNameFromUnitHex text)
     halfwords <- mapM (\v -> H.integer v 0 0xffff "image2-record layout halfword") (H.list (H.get value "layout"))
     layout <- either H.failH pure (L.labelLayout halfwords)
     current <- either H.failH pure (L.specialRecordFromHex (H.str (H.get value "current_hex")))
@@ -131,6 +141,17 @@ parseStep directory base value = case H.str (H.get value "kind") of
     H.ensure (outputBase == decodeBase) "plain patch sets cannot move the image's load address"
     decodeDigest <- digestField (H.get image "decode_sha256") "plain patch set decode_sha256"
     pure (PatchPlain decodeDigest path)
+  "font-patch-set" -> do
+    H.fields value "kind path sha256" "font-patch-set step"
+    (path, bytes) <- pinnedFile directory value
+    image <- patchSetImage base bytes
+    _ <- H.integer (H.get image "segment_id") 3 3 "font patch set image segment_id (the icon font is segment 3)"
+    decodeBase <- hexValue (H.get image "decode_base") "font patch set decode_base"
+    H.ensure (decodeBase == fontDecodeBase) "font patch set decode_base must be 0x003bc000, the first byte of the extract-font window"
+    outputBase <- patchSetOutputBase image decodeBase
+    H.ensure (outputBase == decodeBase) "font patch sets cannot move the image's load address"
+    decodeDigest <- digestField (H.get image "decode_sha256") "font patch set decode_sha256"
+    pure (PatchFont decodeDigest path)
   other -> H.failH ("Unsupported extension step kind " ++ show other ++ "; this tool cannot build the extension")
 
 -- The image block of an apply-patch-set manifest that targets `base`.
@@ -153,8 +174,9 @@ containerOrder steps = and (zipWith before steps (drop 1 steps))
     rank (PatchImage Image5 _ _) = 2
     rank (WriteLabel _) = 3
     rank (WriteRecord {}) = 3
-    rank (ReplacePlain {}) = 4
-    rank (PatchPlain {}) = 4
+    rank (PatchFont {}) = 4
+    rank (ReplacePlain {}) = 5
+    rank (PatchPlain {}) = 5
     before (ReplacePlain (FlashOffset a) (SpanLength n) _) (ReplacePlain (FlashOffset b) _ _) = a + n <= b
     before (WriteLabel _) (WriteRecord i _ _ _) = i /= L.SpecialLabel83d
     before (WriteRecord a _ _ _) (WriteRecord b _ _ _) = a < b

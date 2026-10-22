@@ -83,6 +83,69 @@ haskell_library(
 )
 
 haskell_library(
+    name = "font-window",
+    srcs = ["FujiAF/FontWindow.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":base",
+        ":bytestring",
+        ":update-container",
+    ],
+)
+
+haskell_library(
+    name = "fdl-font",
+    srcs = ["FujiAF/FdlFont.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":base",
+        ":bytestring",
+    ],
+)
+
+# The icon art as a Haskell string, byte for byte.
+genrule(
+    name = "classic-chrome-icon-art",
+    srcs = ["//host/firmware:classic-chrome-icon.txt"],
+    outs = ["FujiAF/ClassicChromeIconArt.hs"],
+    cmd = "{ printf 'module FujiAF.ClassicChromeIconArt (iconArtText) where\\niconArtText :: String\\niconArtText = map toEnum [' && od -An -v -tu1 $< | awk '{ for (i = 1; i <= NF; i++) printf \"%s%s\", (n++ ? \",\" : \"\"), $$i }' && printf ']\\n'; } > $@",
+)
+
+haskell_library(
+    name = "classic-chrome-icon",
+    srcs = [
+        "FujiAF/ClassicChromeIcon.hs",
+        ":classic-chrome-icon-art",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":base",
+        ":bytestring",
+        ":fdl-font",
+        ":label-record",
+        ":update-container",
+    ],
+)
+
+haskell_library(
     name = "recipe-bank",
     srcs = [
         "FujiAF/RecipeBank.hs",
