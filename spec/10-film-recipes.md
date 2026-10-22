@@ -89,7 +89,8 @@ The design and its host verification are in [the patch report](../reports/classi
 - Body adjustment data is never written. The data block lives in the image-4 decode-prefix window.
 - Metadata `FUN_00eab258` emits FilmMode `0x600`; Saturation follows PROVIA.
 - The label is the stock special id `0x83e`.
-- The Q cell and the FILM 1-3 bracket lists stay stock. Live view previews and movie records as PROVIA.
+- The Q cell and the FILM 1-3 bracket lists stay stock.
+- Live view previews Classic Chrome (owner requirement, 2026-10-22): a 5-word widening of `FUN_00eee958` lets the MOVDC builders mark their record, so live view and, as a consequence, movie use the hooked stages ([patch report 4.10](../reports/classic-chrome-patch.md#410-live-view-and-movie-live-view-fragment)). The fragment changes no reviewed CC byte and needs its own review. Without it (`16c830ad…2c89`) live view and movie are PROVIA.
 - D3 as designed ([recipe-patch-d3](../reports/recipe-patch-d3.md)) is incompatible: Classic Chrome owns conversion row 2, code `0xd` and 484 of the window's 512 bytes, and D3 must be re-planned around them.
 - Delivery is a flash container built on RC0 through the extension tooling. The container refuses any firmware other than 1.50. The RAM-push route of `//transport:camera` carries the recipe bank and D3's publications; a Classic Chrome RAM variant needs its own publication list, allowlist and review ([patch report 8.2](../reports/classic-chrome-patch.md#82-ram-payload-unbuilt-route-in-transportcamera)) and is not built.
 

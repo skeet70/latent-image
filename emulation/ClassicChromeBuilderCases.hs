@@ -24,6 +24,14 @@
 -- A RAM set (--ram-set) is the RC0 decodes with a CC RAM-push manifest's
 -- publications applied and the runtime's CC code and data block mapped; it
 -- takes (a) and (c) and its CC block must equal its flash set's.
+--
+-- The movie/live-view path (stage a "lv") replaces FUN_00d79408 with the film
+-- fragment the MOVDC builders FUN_00edd120 and FUN_00edccd8 run on their record
+-- 0x01699d8c: FUN_00eee958(col2, &local), FUN_00d78a80(record, local),
+-- FUN_00d78538(record, local), then preset key 15. A set whose image 5
+-- carries the live-view fragment (host/firmware/classic-chrome-liveview-image5.json)
+-- takes (a) and (c) on this path; a set without it must render col2 0xd as
+-- PROVIA there.
 module Main where
 
 import Control.Monad
@@ -171,7 +179,7 @@ stageAFunctions =
   ,(0x00d78f80,0x1c),(0x00d78f9c,0x1c),(0x00d78fb8,0x20),(0x00d78fd8,0x58),(0x00d79030,0xc8),(0x00d790f8,0x14)
   ,(0x00d7910c,0x20),(0x00d7912c,0x20),(0x00d79178,0x1c),(0x00d79194,0x1c),(0x00d791b0,0x134),(0x00d792e4,0x20)
   ,(0x00d79304,0x20),(0x00d79324,0x20),(0x00d79344,0x20),(0x00d79384,0x20),(0x00d793a4,0x34),(0x00d793d8,0x30)
-  ,(0x00d79408,0x488),(0x00ef6964,0x18),(0x00ef697c,0x958)]
+  ,(0x00d79408,0x488),(0x00eee958,0x12c),(0x00ef6964,0x18),(0x00ef697c,0x958)]
 stageBFunctions =
   [(0x0004357c,0x30),(0x0004d978,0xf4),(0x0004da6c,0x20),(0x00690924,0x250),(0x00690b74,0x170),(0x0069f8fc,0x24)
   ,(0x0069fec8,0x28),(0x0069ff7c,0x28),(0x00722054,0x124),(0x007221a0,0x28),(0x007221c8,0x50),(0x0073ebcc,0x40)
@@ -234,7 +242,7 @@ bssSize = 0x0096ca60 - 0x0095ad00
 data Code = Code { cdImage :: String, cdBase :: Word32, cdSize :: Int }
 
 stageACode, stageBCode :: [Code]
-stageACode = [Code "id4" 0x0069f000 0x1000, Code "id4" 0x00722000 0x1e000, Code "id5" 0x00d5d000 0x1d000, Code "id5" 0x00ef6000 0x2000]
+stageACode = [Code "id4" 0x0069f000 0x1000, Code "id4" 0x00722000 0x1e000, Code "id5" 0x00d5d000 0x1d000, Code "id5" 0x00eee000 0x1000, Code "id5" 0x00ef6000 0x2000]
 stageBCode = [Code "loader" 0x00043000 0xaae0, Code "id4" 0x00690000 0x10000, Code "id4" 0x00722000 0x1e000, Code "id4" 0x0089a000 0x4c00, Code "id5" 0x00d5d000 0x1d000]
 
 -- Read-only id4 data window: tone records 0x824bc4.., tables 0x7c2de2, 0x8179a0, 0x829a10..
@@ -253,18 +261,30 @@ movImm :: Int -> Word32 -> Word32
 movImm rd v = 0xe3a00000 .|. fromIntegral rd `shiftL` 12 .|. v
 strImm :: Int -> Int -> Word32 -> Word32
 strImm rt rn off = 0xe5800000 .|. fromIntegral rn `shiftL` 16 .|. fromIntegral rt `shiftL` 12 .|. off
+ldrImm :: Int -> Int -> Word32 -> Word32
+ldrImm rt rn off = 0xe5900000 .|. fromIntegral rn `shiftL` 16 .|. fromIntegral rt `shiftL` 12 .|. off
 bl :: Word32 -> Word32 -> Word32
 bl at target = 0xeb000000 .|. (((target - (at + 8)) `shiftR` 2) .&. 0xffffff)
 
+-- Still: the record from a request. Lv: FUN_00edd120's film fragment, the
+-- validated film in the request word 0 as its stack local.
+data DevPath = Still | Lv deriving Eq
+
 -- r4 record, r5 request, r6 capture-side block.
-driverWords :: Bool -> Word32 -> [Word32]
-driverWords marker preset = zipWith ($) (map place body) [driverBase, driverBase + 4 ..]
+driverWords :: DevPath -> Int -> Bool -> Word32 -> [Word32]
+driverWords path col2 marker preset = zipWith ($) (map place body) [driverBase, driverBase + 4 ..]
   where
     place (Left w) _ = w
     place (Right target) at = bl at target
     body =
       map Left [0xe92d4070, movw 4 recordBase, movt 4 recordBase, movw 5 requestBase, movt 5 requestBase, movw 6 captureBase, movt 6 captureBase, movReg 0 4]
-      ++ [Right 0x00d77abc, Left (movReg 0 4), Right 0x00d791b0, Left (movReg 0 4), Left (movReg 1 5), Left (movReg 2 6), Right 0x00d79408]
+      ++ [Right 0x00d77abc, Left (movReg 0 4), Right 0x00d791b0]
+      ++ (case path of
+            Still -> [Left (movReg 0 4), Left (movReg 1 5), Left (movReg 2 6), Right 0x00d79408]
+            Lv ->
+              [ Left (movImm 0 (fromIntegral col2)), Left (movReg 1 5), Right 0x00eee958
+              , Left (movReg 0 4), Left (ldrImm 1 5 0), Right 0x00d78a80
+              , Left (movReg 0 4), Left (ldrImm 1 5 0), Right 0x00d78538 ])
       ++ (if marker then map Left [movImm 2 13, strImm 2 4 0x110] else [])
       ++ map Left [movImm 2 0, strImm 2 4 0xf0, strImm 2 4 0x140, movReg 0 4, movImm 1 preset, movImm 2 0]
       ++ [Right 0x00d77a48, Left 0xe8bd8070]
@@ -283,10 +303,10 @@ data Stage = StageA | StageB deriving Eq
 -- Preset key 2 is the still job's (FUN_00e543b0); it enables stage flags [5], [6]
 -- and [0x12]. Key 15 (preset 0xd77e58) enables the second instances [0x25],
 -- [0x26] and [0x29] instead.
-data Run = Run { rnSet :: ImageSet, rnCol2 :: Int, rnMarker :: Bool, rnPreset :: Word32 }
+data Run = Run { rnSet :: ImageSet, rnCol2 :: Int, rnMarker :: Bool, rnPreset :: Word32, rnPath :: DevPath }
 
 runTag :: Run -> String
-runTag r = isTag (rnSet r) ++ (if rnMarker r then "-mark" else "") ++ (if rnPreset r == 2 then "" else "-p" ++ show (rnPreset r)) ++ "-c" ++ (let t = show (rnCol2 r) in replicate (2 - length t) '0' ++ t)
+runTag r = isTag (rnSet r) ++ (if rnPath r == Lv then "-lv" else "") ++ (if rnMarker r then "-mark" else "") ++ (if rnPreset r == 2 then "" else "-p" ++ show (rnPreset r)) ++ "-c" ++ (let t = show (rnCol2 r) in replicate (2 - length t) '0' ++ t)
 
 caseId :: Stage -> Run -> String
 caseId st r = (if st == StageA then "a-" else "b-") ++ runTag r
@@ -331,7 +351,7 @@ regionsFor env st r input =
         then [ zeroRegion "record" recordBase recordSize "rw"
              , Region "request" requestBase 0x1000 "rw" (Just ("request-c" ++ show (rnCol2 r), requestBytes (rnCol2 r)))
              , zeroRegion "stack" stackBase (fromIntegral (stackTop - stackBase)) "rw"
-             , Region "driver" driverBase 0x104 "rx" (Just (driverName, B.concat (map le32 (driverWords (rnMarker r) (rnPreset r))))) ]
+             , Region "driver" driverBase 0x104 "rx" (Just (driverName, B.concat (map le32 (runDriver r)))) ]
         else [ Region "record" recordBase recordSize "rw" (Just ("rec-" ++ runTag r, input))
              , zeroRegion "block" blockBase blockSize "rw"
              , zeroRegion "tone-scratch" toneScratch 0x100 "rw"
@@ -344,7 +364,10 @@ regionsFor env st r input =
        _ -> []
   where
     set = rnSet r
-    driverName = (if rnMarker r then "driver-marker" else "driver") ++ "-p" ++ show (rnPreset r)
+    driverName = (if rnMarker r then "driver-marker" else "driver") ++ (if rnPath r == Lv then "-lv-c" ++ show (rnCol2 r) else "") ++ "-p" ++ show (rnPreset r)
+
+runDriver :: Run -> [Word32]
+runDriver r = driverWords (rnPath r) (rnCol2 r) (rnMarker r) (rnPreset r)
 
 -- Request: zero except request[9] (+0x24) = col2.
 requestBytes :: Int -> B.ByteString
@@ -357,7 +380,7 @@ functionsFor st r = base' ++ case (st, isPatch (rnSet r)) of
   (StageB, Ram rp) -> ram rp [CcColour, CcChroma, CcTone]
   _ -> []
   where
-    base' = if st == StageA then (driverBase, fromIntegral (4 * length (driverWords True 2))) : stageAFunctions else stageBFunctions
+    base' = if st == StageA then (driverBase, fromIntegral (4 * length (runDriver r))) : stageAFunctions else stageBFunctions
     ram rp = map (\e -> let (a, z) = entryFunction rp e in (a, fromIntegral z))
 
 regionJson :: Env -> Region -> IO (Value, Maybe Value)
@@ -396,7 +419,9 @@ provenanceText :: Stage -> Run -> String -> String
 provenanceText st r expectation = intercalate " " $
   [ "Classic Chrome develop-builder case, generated by //emulation:classic-chrome-builder-cases."
   , if st == StageA
-      then "Stage a: synthetic driver at 0x01f00000 calls stock FUN_00d77abc(record), FUN_00d791b0(record), FUN_00d79408(record, request, capture-side area) with request zero except request[9] = " ++ show (rnCol2 r) ++ (if rnMarker r then ", stores 0xd to record +0x110 after FUN_00d79408 (marker injection)," else ",") ++ " stores 0 to record +0xf0 and +0x140 as FUN_00e561b4 does, then FUN_00d77a48(record, preset key " ++ show (rnPreset r) ++ ", level 0)."
+      then case rnPath r of
+        Still -> "Stage a: synthetic driver at 0x01f00000 calls stock FUN_00d77abc(record), FUN_00d791b0(record), FUN_00d79408(record, request, capture-side area) with request zero except request[9] = " ++ show (rnCol2 r) ++ (if rnMarker r then ", stores 0xd to record +0x110 after FUN_00d79408 (marker injection)," else ",") ++ " stores 0 to record +0xf0 and +0x140 as FUN_00e561b4 does, then FUN_00d77a48(record, preset key " ++ show (rnPreset r) ++ ", level 0)."
+        Lv -> "Stage a (movie/live-view film fragment): synthetic driver at 0x01f00000 calls stock FUN_00d77abc(record), FUN_00d791b0(record), then as FUN_00edd120 does at 0x00edd228-0x00edd2d0 FUN_00eee958(" ++ show (rnCol2 r) ++ ", request word 0), FUN_00d78a80(record, request word 0) and FUN_00d78538(record, request word 0)" ++ (if rnMarker r then ", stores 0xd to record +0x110 (marker injection)," else ",") ++ " stores 0 to record +0xf0 and +0x140, then FUN_00d77a48(record, preset key " ++ show (rnPreset r) ++ ", level 0)."
       else "Stage b: stock FUN_00d5da2c(block 0x30004000, record 0x30000000); the record artifact is the final record of case " ++ caseId StageA r ++ "."
   , "Images: id4 " ++ imSha (isId4 (rnSet r)) ++ ", id5 " ++ imSha (isId5 (rnSet r)) ++ ", loader " ++ pinSha loaderPin ++ "; adjustment area 0x41acd800 = " ++ adjNote (rnSet r) ++ "; pointer word 0x0096ca50 = 0x41acd800; bss cache 0x0095ad00.. zero."
   ] ++ [ "Parameter set " ++ prPath p ++ " sha256 " ++ prSha p ++ "." | Just p <- [isParams (rnSet r)] ]
@@ -412,7 +437,8 @@ exclusions =
   , "The request is zero except request[9]; capture fields other than the film value are not modelled, so this is one record, not every record a body builds."
   , "Record init uses FUN_00d77abc and FUN_00d791b0 as the movie builders do; the still job's earlier record state is not modelled."
   , "The adjustment area is the fallback image, which equals the body's adjustment bytes over 0xa000-0xcfff (E-ADJ-READ-150); bytes outside that window are not body-verified."
-  , "The bss adjustment cache at 0x0095ad00 starts empty (all entries invalid)." ]
+  , "The bss adjustment cache at 0x0095ad00 starts empty (all entries invalid)."
+  , "On the movie/live-view path only FUN_00edd120's film fragment sets the record; its other setters, the MOVDC config at 0x01699584 and FUN_00edccd8's incremental stage wrappers are not modelled." ]
 
 runStage :: Env -> Stage -> Run -> B.ByteString -> Maybe Final -> String -> IO Outcome
 runStage env st r input reference expectation = do
@@ -594,7 +620,7 @@ main = do
         pure (ocFinal a, ocFinal bOut, ocPassed a && ocPassed bOut)
 
   stockRuns <- forM [0 .. 13] $ \k -> do
-    (fa, fb, ok) <- both (Run stock k False 2) Nothing "the stock images' own final state from this run (the stock reference)."
+    (fa, fb, ok) <- both (Run stock k False 2 Still) Nothing "the stock images' own final state from this run (the stock reference)."
     check ("stock-c" ++ show k ++ "-pinned") ok "stock run reproduces its pinned state"
     pure (k, (fa, fb))
   let stockA k = fst (maybe (error "stock") id (lookup k stockRuns))
@@ -604,7 +630,7 @@ main = do
 
   -- (b) census on stock: marker injected after the setter.
   forM_ [0 .. 12] $ \k -> do
-    (fa, fb, ok) <- both (Run stock k True 2) Nothing "the stock images' own final state from this run with record +0x110 = 0xd injected after FUN_00d79408."
+    (fa, fb, ok) <- both (Run stock k True 2 Still) Nothing "the stock images' own final state from this run with record +0x110 = 0xd injected after FUN_00d79408."
     let recDiff = diffOffsets (region fa "record") (region (stockA k) "record")
         blockDiff = diffOffsets (region fb "block") (region (stockB k) "block")
         recBDiff = diffOffsets (region fb "record") (region (stockB k) "record")
@@ -614,9 +640,9 @@ main = do
     check ("census-c" ++ show k) (ok && (null blockDiff || (code == 2 && colourOnly)) && all (\o -> o >= 0x110 && o < 0x114) (recDiff ++ recBDiff))
       ("develop code " ++ show code ++ "; block differs at " ++ spanText blockDiff ++ "; record differs at " ++ spanText recDiff ++ " (stage a), " ++ spanText recBDiff ++ " (stage b); +0x110 reads in retained provenance: stage a " ++ show (markerReads fa) ++ " of " ++ show (fnProvenanceTotal fa) ++ " events, stage b " ++ show (markerReads fb) ++ " of " ++ show (fnProvenanceTotal fb) ++ " events")
 
-  (stockP15A, stockP15, okP15) <- both (Run stock 0 False 15) Nothing "the stock images' own final state from this run (the stock reference, preset key 15)."
+  (stockP15A, stockP15, okP15) <- both (Run stock 0 False 15 Still) Nothing "the stock images' own final state from this run (the stock reference, preset key 15)."
   check "stock-p15-c0-pinned" okP15 "stock run reproduces its pinned state"
-  (_, stockP15c13, okP15c13) <- both (Run stock 13 False 15) Nothing "the stock images' own final state from this run (preset key 15)."
+  (_, stockP15c13, okP15c13) <- both (Run stock 13 False 15 Still) Nothing "the stock images' own final state from this run (preset key 15)."
   check "stock-p15-c13-equals-c0" (okP15c13 && region stockP15c13 "block" == region stockP15 "block") ("stock col2 0xd block (preset key 15) differs from col2 0 at " ++ spanText (diffOffsets (region stockP15c13 "block") (region stockP15 "block")))
 
   ccBlocks <- newIORef (M.empty :: M.Map (String, Word32) (B.ByteString, B.ByteString, Bool))
@@ -624,13 +650,13 @@ main = do
         let name = isTag patched
         -- (a) stock films on the patched images, expected = stock state.
         forM_ [0 .. 12] $ \k -> do
-          (_, fb, ok) <- both (Run patched k False 2) (Just (stockA k, stockB k)) ("the stock images' final state for col2 " ++ show k ++ " (case " ++ caseId StageB (Run stock k False 2) ++ "); the stock image's own output is the reference.")
+          (_, fb, ok) <- both (Run patched k False 2 Still) (Just (stockA k, stockB k)) ("the stock images' final state for col2 " ++ show k ++ " (case " ++ caseId StageB (Run stock k False 2 Still) ++ "); the stock image's own output is the reference.")
           check (name ++ "-stock-film-c" ++ show k) (ok && region fb "block" == region (stockB k) "block") "patched block, record and final state equal the stock run"
         -- (c) oracle and CC, for the still preset (key 2) and the second-instance preset (key 15).
         forM_ [(2 :: Word32, provia), (15, region stockP15 "block")] $ \(preset, reference) -> do
           let label = name ++ (if preset == 2 then "" else "-p15")
           (oracleBlock, okO) <- oracleOf preset
-          (fa, fb, okC) <- both (Run patched 13 False preset) Nothing "the patched images' own final state from this run, pinned for regression after the generator's comparisons with the stock PROVIA block and the substitution oracle."
+          (fa, fb, okC) <- both (Run patched 13 False preset Still) Nothing "the patched images' own final state from this run, pinned for regression after the generator's comparisons with the stock PROVIA block and the substitution oracle."
           let cc = region fb "block"
               outside = [o | o <- diffOffsets cc reference, not (inRanges o)]
               inside = [o | o <- diffOffsets cc oracleBlock, inRanges o]
@@ -642,15 +668,46 @@ main = do
             let touched = [o | o <- changed, any (\(lo, hi) -> lo <= o && o <= hi) rs]
             putStrLn (label ++ " " ++ stage ++ " bytes changed by CC: " ++ spanText touched)
           onCc label preset cc oracleBlock okO
-        (_, fp, okP) <- both (Run patched 0 False 15) (Just (stockP15A, stockP15)) "the stock images' final state for col2 0, preset key 15 (case b-stock-p15-c00); the stock image's own output is the reference."
+        (_, fp, okP) <- both (Run patched 0 False 15 Still) (Just (stockP15A, stockP15)) "the stock images' final state for col2 0, preset key 15 (case b-stock-p15-c00); the stock image's own output is the reference."
         check (name ++ "-p15-stock-film-c0") (okP && region fp "block" == region stockP15 "block") "patched block, record and final state equal the stock run (preset key 15)"
 
   forM_ sets $ \(patched, oracle) ->
     patchedChecks patched
       (\preset -> do
-        (_, fo, okO) <- both (Run oracle 0 False preset) Nothing "the stock images' own final state from this run over the substituted adjustment image and tone record (the substitution oracle)."
+        (_, fo, okO) <- both (Run oracle 0 False preset Still) Nothing "the stock images' own final state from this run over the substituted adjustment image and tone record (the substitution oracle)."
         pure (region fo "block", okO))
       (\_ preset cc oracleBlock okO -> modifyIORef' ccBlocks (M.insert (isTag patched, preset) (cc, oracleBlock, okO)))
+
+  -- Movie/live-view film fragment (FUN_00edd120's preset key 15).
+  lvStock <- forM [0 .. 13] $ \k -> do
+    (fa, fb, ok) <- both (Run stock k False 15 Lv) Nothing "the stock images' own final state from this run (the movie/live-view reference, preset key 15)."
+    check ("stock-lv-c" ++ show k ++ "-pinned") ok "stock run reproduces its pinned state"
+    pure (k, (fa, fb))
+  let lvA k = fst (maybe (error "lv stock") id (lookup k lvStock))
+      lvB k = snd (maybe (error "lv stock") id (lookup k lvStock))
+      lvProvia = region (lvB 0) "block"
+  check "stock-lv-c13-equals-c0" (region (lvB 13) "block" == lvProvia && word32At (region (lvA 13) "record") 0x110 == 0)
+    ("stock col2 0xd on the movie/live-view path: +0x110 = " ++ show (word32At (region (lvA 13) "record") 0x110) ++ ", block differs from col2 0 at " ++ spanText (diffOffsets (region (lvB 13) "block") lvProvia))
+  forM_ sets $ \(patched, oracle) -> do
+    let name = isTag patched ++ "-lv"
+        fragment = word32At (slice (isId5 patched) 0x00eee960 4) 0 == 0xe350000d
+    forM_ [0 .. 12] $ \k -> do
+      (_, fb, ok) <- both (Run patched k False 15 Lv) (Just (lvA k, lvB k)) ("the stock images' final state for col2 " ++ show k ++ " on the movie/live-view path (case " ++ caseId StageB (Run stock k False 15 Lv) ++ "); the stock image's own output is the reference.")
+      check (name ++ "-stock-film-c" ++ show k) (ok && region fb "block" == region (lvB k) "block") "patched block, record and final state equal the stock run"
+    (fa, fb, okC) <- both (Run patched 13 False 15 Lv) Nothing "the patched images' own final state from this run, pinned for regression after the generator's comparisons with the stock PROVIA block and the substitution oracle."
+    let cc = region fb "block"
+        rec = region fa "record"
+    if fragment
+      then do
+        (_, fo, okO) <- both (Run oracle 0 False 15 Lv) Nothing "the stock images' own final state from this run over the substituted adjustment image and tone record (the substitution oracle, movie/live-view path)."
+        let oracleBlock = region fo "block"
+            outside = [o | o <- diffOffsets cc lvProvia, not (inRanges o)]
+            inside = [o | o <- diffOffsets cc oracleBlock, inRanges o]
+        check (name ++ "-cc-marker") (word32At rec 0x110 == 13 && word32At rec 0x104 == 0) ("record +0x104 = " ++ show (word32At rec 0x104) ++ ", +0x110 = " ++ show (word32At rec 0x110) ++ " (expected develop code 0, marker 0xd)")
+        check (name ++ "-cc-outside") (okC && null outside) ("CC block differs from the stock PROVIA block outside the ranges at " ++ spanText outside ++ "; all CC differences: " ++ spanText (diffOffsets cc lvProvia))
+        check (name ++ "-cc-inside") (okO && null inside) ("CC block differs from the oracle inside the ranges at " ++ spanText inside ++ "; oracle differs from PROVIA at " ++ spanText (diffOffsets oracleBlock lvProvia))
+      else
+        check (name ++ "-cc-provia") (okC && cc == lvProvia && word32At rec 0x110 == 0) ("without the live-view fragment col2 0xd must render PROVIA here; +0x110 = " ++ show (word32At rec 0x110) ++ ", block differs from PROVIA at " ++ spanText (diffOffsets cc lvProvia))
 
   -- RAM sets: (a) and (c) against their flash set's oracle, and the CC block equal to the flash set's.
   forM_ rams $ \(ram, ra) -> do
