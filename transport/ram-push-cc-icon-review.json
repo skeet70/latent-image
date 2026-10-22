@@ -4,7 +4,7 @@
   "reviews": [],
   "content_checks": [],
   "pins": [
-    {"component":"mechanism","identity":"build-classic-chrome-icon-ram","sha256":"098e232484be35e315c06dd63800822a8c499b232a780d198c6ea631bc3711dd","source":"builder","status":{"commit":"c6dfad05dc4a9035911a40e2b4af83326616dce5","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"build-classic-chrome-icon-ram","sha256":"9850ce8486c2937b2c0d047250ba35615065cd3a14de035ffa334b1d7e6d67d3","source":"builder","status":{"commit":"022d7d4c20f66b3d2559f0a80debcde4ec2336ec","verdict":"unreviewed"}},
     {"component":"mechanism","identity":"cc_flash_image4","path":"private-data/analysis/classic-chrome-patch/candidate-build-1/patched-id4.bin","sha256":"00493fab3f7c67fddf3899e8f38395def2b593b93e4dcb73206bfb6cc2ddff6a","source":"private","status":{"commit":"c6dfad05dc4a9035911a40e2b4af83326616dce5","verdict":"unreviewed"}},
     {"component":"mechanism","identity":"cc_flash_image5","path":"private-data/analysis/classic-chrome-patch/candidate-build-1/patched-id5.bin","sha256":"e740aeb28ce070a659583bd0bb5cfd9ecc5846ac302564741fcdf37b9b2089bb","source":"private","status":{"commit":"c6dfad05dc4a9035911a40e2b4af83326616dce5","verdict":"unreviewed"}},
     {"component":"mechanism","identity":"cc_flash_plain","path":"private-data/analysis/classic-chrome-patch/candidate-build-1/patched-plain.bin","sha256":"7e60e04e2dde4cecea4d575e02ae64b8f6053af3f459c42b5222f980e3c301fa","source":"private","status":{"commit":"c6dfad05dc4a9035911a40e2b4af83326616dce5","verdict":"unreviewed"}},

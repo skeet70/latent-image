@@ -144,10 +144,19 @@ data IconAllocation = IconAllocation
   }
   deriving (Eq, Show)
 
+-- Offsets from 'ccIconContentOffset': the record, then the Q values and the
+-- Q labels, each start rounded up to 8 bytes, so the arrays follow a record
+-- of any length.
 recordOffset, qValuesOffset, qLabelsOffset :: Word32
 recordOffset = 0
-qValuesOffset = 0x178
-qLabelsOffset = 0x1c0
+qValuesOffset = align8 (recordOffset + byteLength iconGlyphRecord)
+qLabelsOffset = align8 (qValuesOffset + byteLength qValuesArray)
+
+align8 :: Word32 -> Word32
+align8 n = (n + 7) `div` 8 * 8
+
+byteLength :: B.ByteString -> Word32
+byteLength = fromIntegral . B.length
 
 -- | The record, the Q values and the Q labels at their offsets from
 -- 'ccIconContentOffset'.
@@ -158,7 +167,7 @@ iconContent =
     pad n bytes = bytes <> B.replicate (fromIntegral n - B.length bytes) 0
 
 iconContentSize :: Word32
-iconContentSize = qLabelsOffset + fromIntegral (B.length qLabelsArray)
+iconContentSize = qLabelsOffset + byteLength qLabelsArray
 
 iconAllocation :: Word32 -> IconAllocation
 iconAllocation base =

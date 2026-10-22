@@ -22,6 +22,7 @@ module FujiAF.ClassicChromeIcon
   , iconRecordOffset
   , qValuesOffset
   , qLabelsOffset
+  , iconTailEnd
   , qValuesArray
   , qLabelsArray
   , iconPerMille
@@ -194,11 +195,17 @@ fontLoadAddress = 0x003bc000
 fontRamAddress :: FontOffset -> Word32
 fontRamAddress (FontOffset offset) = fontLoadAddress + fromIntegral offset
 
--- Inside the loaded tail [0x7cfd4, 0x80000) past the font file.
-iconRecordOffset, qValuesOffset, qLabelsOffset :: FontOffset
+-- Inside the loaded tail [0x7cfd4, 0x80000) past the font file: the record,
+-- then the Q values, the Q labels and 'iconTailEnd', each start rounded up
+-- to 16 bytes, so a record of any length moves only what follows it.
+iconRecordOffset, qValuesOffset, qLabelsOffset, iconTailEnd :: FontOffset
 iconRecordOffset = FontOffset 0x7cfe0
-qValuesOffset = FontOffset 0x7d160
-qLabelsOffset = FontOffset 0x7d1b0
+qValuesOffset = placedAfter iconRecordOffset iconGlyphRecord
+qLabelsOffset = placedAfter qValuesOffset qValuesArray
+iconTailEnd = placedAfter qLabelsOffset qLabelsArray
+
+placedAfter :: FontOffset -> B.ByteString -> FontOffset
+placedAfter (FontOffset at) bytes = FontOffset ((at + B.length bytes + 15) `div` 16 * 16)
 
 -- Q node value pairs {row, 0}, ending with {0x7ffffffe, 0}.
 qValuesArray :: B.ByteString

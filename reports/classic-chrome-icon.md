@@ -81,7 +81,7 @@ The loaders' flag rule gives a smaller route that moves nothing:
 
 - The record lives anywhere after the command-data base reachable by a 24-bit offset; here, the loaded window tail at font offset `0x7cfe0` (RAM `0x00438fe0`), as `{u16 0, u16 0, u16 length, program}`.
 - U+F073's directory word becomes `0x01000000 | (0x7cfe0 - 0x3dced)` = `0x0103f2f3`. Its `count` is negative (its end is still U+F074's begin `0xd680`), which the loaders accept as present, and flag 1 makes them take the length from the record. `adv_x = adv_y = 0` is what an unflagged record yields.
-- U+F072's span changes from 0 to `0x3f2f3 - 0xd680` bytes starting at U+F074's record; no string contains U+F072, and the native census records its new result (section 9.1).
+- U+F072's span changes from 0 to `0x3f2f3 - 0xd680` = `0x31c73` bytes in the flash image, starting at U+F074's record. In the RAM payload U+F073's begin is allocation-relative (`0x827a53` at base `0x00c20000`), so U+F072's span is `0x81a3d3` bytes, about 8.5 MB from the font into unrelated RAM. Both loaders have two callers each, in text paths, and no string in the 35 slots or the special records contains U+F072; the native census records the flash result (section 9.2).
 - U+F073's per-mille entry at `0x7c26b` changes from 1000 to 800.
 
 Every other code keeps its directory words, so its loader result is unchanged.
@@ -96,7 +96,7 @@ The emulator check found the string id drawn at list size in the Q tile. The Q-t
 
 ### 5.1 Icon string
 
-Label id `0x83d` is the only free special id: `0x83c` is the blank id every unlabelled field uses, `0x83e` is the CC name, and `0x83f` upward needs the 264-byte relocated record table the CC report rejected (classic-chrome-patch section 4.7). No stock surface names `0x83d` (inherited census, special-label-resolution section 4), it already passes every text accessor (`FUN_01179b0c` resolves it, emulated in E-LABEL-RESOLVE-150), and D3, which planned to use it, is not installed and must be re-planned around CC anyway. Its record at RAM `0x0037b7c6` becomes UTF-16 U+F073, a zero unit, zero fill, and layout `{540, 24, 30, 36, 48}`, the stock list-icon layout of `0x489` and `0x49a`. One id serves both icon fields, so the preview field draws with the list icon's layout and the special class's fixed entry width 50 (byte-read, `0x0117de64`); the emulator check decides whether that renders correctly (section 9.2).
+Label id `0x83d` is the only free special id: `0x83c` is the blank id every unlabelled field uses, `0x83e` is the CC name, and `0x83f` upward needs the 264-byte relocated record table the CC report rejected (classic-chrome-patch section 4.7). It already passes every text accessor (`FUN_01179b0c` resolves it, emulated in E-LABEL-RESOLVE-150), and D3, which planned to use it, is not installed and must be re-planned around CC anyway. One stock code site draws it (section 5.4): screen 170's title. Its record at RAM `0x0037b7c6` becomes UTF-16 U+F073, a zero unit, zero fill, and layout `{540, 24, 30, 36, 48}`, the stock list-icon layout of `0x489` and `0x49a`. One id serves both icon fields, so the preview field draws with the list icon's layout and the special class's fixed entry width 50 (byte-read, `0x0117de64`); the emulator check decides whether that renders correctly (section 9.2).
 
 ### 5.2 Changed bytes
 
@@ -120,6 +120,19 @@ The Q arrays are data read through the node pointers only; their placement share
 
 The Q list mirrors the shooting list: PROVIA, Velvia, ASTIA, B&W, SEPIA with their stock vector ids, PRO Neg Std and PRO Neg Hi with their stock icon strings `0x49a` (`<f202>`) and `0x496` (`<f201>`), and CC with `0x83d`. A list with CC but without the two PRO Neg films would offer CC in Q while a stored PRO Neg still showed PROVIA's tile. The Q cell is property `0xfe` like the shooting list, so the availability matrix that RC0 and CC set for keys `0xb`, `0xc` and `0xd` applies unchanged.
 
+### 5.4 The stock draw of `0x83d`: screen 170
+
+The section-4 census of the special-label report counted node labels and missed one code site (review M2, byte-read): `0x0111d2d0 movw r0, #0x83d; mov r1, #0; bl 0x011397a4` in `FUN_0111d240`, the draw handler of screen 170 (entry 169 of the handler table `0x0110f9f8`, dispatched at `0x011089c8` with the screen number in halfword `0x015e46c4 + 0x480`). `FUN_011397a4` is the common title drawer, so screen 170 draws `0x83d` as its title; it is the only stock draw of `0x83d`. The stock record holds `?` and 24 icon-font letters spelling `PB_IMG_SEARCH_WGPS_BAR_F` with layout `{20, 20, 30, 36, 48}`; with this change the title draws U+F073 with layout `{540, 24, 30, 36, 48}`.
+
+Reachability (byte-read chain, verdict unproved):
+
+- Screens are requested as packet tokens `0x4000 | n` (`FUN_01108a2c`, type `0x4000` to `FUN_0110871c`). In code, token `0x40aa` is formed in one place, the arm `0x00db7708` of `FUN_00db68dc` (image 5), which maps UI event codes to screen tokens; it is entry 87 of the table for event codes `0x300`-`0x38e` (`0x00db729c`), so event `0x357` requests screen 170. No `movw` or `mov` immediate forms `0x40aa`; one aligned halfword of that value in image 4 data, two in plain data and nine in image 5 data are not classified.
+- In code, event `0x357` has one producer, `0x00d45cd8` in `FUN_00d45988`, on message `0x816` (optionally after `0x93c` or `0x90e`); the word `0x357` also sits in an image-4 list of event codes at `0x00789694`, not classified. `FUN_00d45988` has two calls, both in `FUN_00ca0320`, which is action 3 of modal 94 and is named only by its action table `0x00cf4c8c`. The dispatcher `FUN_00bfb028` indexes the matrix as `state * width + event` (`0x00bfb0a4`); modal 94's matrix `0x00cdd0d0` has width 3, and action 3 sits in state 1, event 0.
+- Modal 94 runs from `FUN_00c11ad0`, which sets its state to 0, 1 or 2 (halfword `0x014677a0`) when the playback state word `0x0094f64c` (`0x00944580 + 0xb0cc`) is 30, 31 or `0x16a`; `FUN_00ca0320` itself continues only for 31, and then only when `0x00944580 + 0xe464` is `0x804` or `+0xb0d4` is 48 and `FUN_00d45614` returns nonzero.
+- Which X-M1 operation sets playback state 31 is not established. The record text points at a with-GPS image-search bar. The X-M1 offers PLAYBACK MENU > IMAGE SEARCH (`0x7869a8`, label `0x656`), whose search types are BY DATE 0, BY UPLOAD MARK 2, BY FACE 3, BY SCENE 4, BY TYPE OF DATA 5 and BY FAVORITES 6: value 1 has no row, and this body has no GPS. That suggests screen 170 belongs to a search type the X-M1 does not offer (static-inference, not proof).
+
+Decision: keep `0x83d`. Moving the icon needs an id no stock screen draws: no free special id remains, an ordinary id below `0x83c` needs text in all 35 language slots, and a Q glyph id in a list-icon field goes through the row drawer's text path, which is not established to render a Q id. The camera test carries an owner check of IMAGE SEARCH (section 11, I8), and the open question is in section 12.
+
 ## 6. Placement and budget
 
 | Region | Used | Available | Notes |
@@ -129,7 +142,9 @@ The Q list mirrors the shooting list: PROVIA, Velvia, ASTIA, B&W, SEPIA with the
 | image-2 record `0x83d` | 66 in place | 66 | no growth |
 | image-4 words | 5 | in place | three CC label-icon fields, two Q node pointers |
 
-Ownership of the font tail (byte-read census, emulated watch in section 9): the boot loader writes the whole window, nothing else in images 4, 5, plain or 2 names `[0x00438fd4, 0x0043c000)` or its `0x40000000` alias with an aligned word or a `movw`/`movt` pair (three aligned-word hits sit inside numeric tables at id4 `0x008973d0`, `0x0089740c` and id5 `0x010d94f4`), and the update writer programs every media block of the main range, so the tail bytes reach flash. The font segment's size word stays `0x7cfd4`.
+Ownership of the font tail (byte-read census): the boot loader `FUN_006aa6f8` copies `(window + 0x1ffff) >> 17` = 4 blocks, the whole window; nothing else in images 4, 5, plain or 2 names `[0x00438fd4, 0x0043c000)` or its `0x40000000` alias with an aligned word or a `movw`/`movt` pair except the two Q node pointers this change writes and three aligned words inside numeric tables (id4 `0x008973d0` and `0x0089740c` in the float and 2/π tables, id5 `0x010d94f4`); the update writer programs every media block of the main range (install-procedure S3, inherited), so the tail bytes reach flash and RAM. No emulated watch of the tail exists. The font segment's size word stays `0x7cfd4`.
+
+Layout (`FujiAF.ClassicChromeIcon`): the glyph record starts at font offset `0x7cfe0`, and the Q values, the Q labels and the first free offset `iconTailEnd` each start at the end of the previous item rounded up to 16 bytes, so a record of any length moves only what follows it. The current 376-byte record gives Q values at `0x7d160`, Q labels at `0x7d1b0` and `iconTailEnd` `0x7d240`; the redesign candidates give record lengths of 406 (A), 398 (A2) and 714 (B) bytes, Q values at `0x7d180`, `0x7d170` and `0x7d2b0`, and `iconTailEnd` at `0x7d260`, `0x7d250` and `0x7d390`, all inside the `0x80000` window.
 
 ## 7. Artwork
 
@@ -191,6 +206,8 @@ The icon takes special id `0x83d`, which D3 planned to use and which the recipe 
 ### 8.4 RAM-push variant
 
 The RAM payload is a new payload kind, `ClassicChromeIcon` (builder `//host/firmware:build-classic-chrome-icon-ram`, review record `transport/ram-push-cc-icon-review.json`), on the unchanged CC route and installer. It carries the CC payload's 131 publications and adds 30: 16 setup (15 words of the `0x83d` record, the per-mille word) and 14 activation (two directory words, two label-icon words, the Q labels pointer before the Q values pointer, flash-prep's five live-view words and the three frames words, all in one masked window). The glyph record and the Q arrays are content in the allocation (`0x1990` bytes), so U+F073's directory word names `allocation_record - 0x003f9ced` and the Q pointers name the allocation copies; the builder refuses an offset at or above `0x01000000`. One CC publication changes: the RC0 body holds `0x49c` at `0x0061c3dc` (RC0's RAW labels), CC publishes 0 there (index 124), and the combined payload publishes `0x83d` in the same entry, phase and position, because the installer refuses duplicate addresses; `carried-publications.json` records it. The per-mille change touches only word `0x00438268` (bytes `01 e8 03 e8` to `01 e8 03 20`). Everything else follows the CC route (classic-chrome-patch section 8.2).
+
+Content layout (`FujiAF.ClassicChromeIconRam`): the record starts at allocation `+0x1740`, right after `__ram_push_end`, and the Q values and Q labels each start at the end of the previous item rounded up to 8 bytes; the allocation ends at the Q labels' end. With the current 376-byte record the content is `[+0x1740, +0x1990)`: record `+0x1740`, Q values `+0x18b8`, Q labels `+0x1900`. The redesign candidates give allocations of `0x19b0` (A, 406-byte record), `0x19a8` (A2, 398) and `0x1ae8` (B, 714); any of them moves the Q pointers and changes the allocation size, which names the payload kind in `transport/FujiAF/RamPush.hs` (`payloadAllocationSize`), and the contract, so it is a mechanism revision with a re-pin. The installer's peer re-maintenance covers `[__ram_push_start, __ram_push_end)` only; the content past it is covered by `ram-alloc`'s peer prepare over the whole allocated block before upload and CPU0's whole data clean and invalidate (transport README, `peerPrepareBytes`).
 
 ## 9. Verification
 
@@ -254,7 +271,7 @@ Byte-read over images 4, 5 and plain on the CC decodes (notes `private-data/anal
 
 - `FUN_00e42414` has exactly the two callers above; no literal, `movw`/`movt` pair or Thumb form names it. The fix covers both.
 - The state block's `+0x80` film is copied into five parameter blocks at `+0x10` (`0x015455f4`, `0x01545580`, `0x01545668`, `0x01532fe0`, and the `FUN_00dcd4cc` stack blocks); only `FUN_00e4361c` and `FUN_00e43d84` read that `+0x10`. The other 13 readers of `+0x80` are compare chains that send 13 down col2 0's path, availability walks, the reviewed converter, or the reviewed plain overlays.
-- Of the 88 jump tables with 12 or 13 entries (14 in image 4, 31 in image 5, 43 in plain), a film value reaches 10, all reviewed CC sites or sites covered by the builder and site cases: `0x00ea9cbc`, `0x00eaac84`, `0x00eab2dc`, `0x00d78428`, `0x00d79040`, `0x00d67398`, `0x00eee964`, `0x01146ec4`, `0x0114b724`, and `0x012546d8` (which switches on another field). No film source was found for the other 78 (static-inference by elimination). Of 14 long compare chains, `FUN_00e42414` is the only one on a film value.
+- Of the 89 jump tables with 12 or 13 entries on the CC decodes (15 in image 4, 31 in image 5, 43 in plain; review N1 added image 4 `0x0085ec80`, a data-type switch in a float conversion loop), a film value reaches 10, all reviewed CC sites or sites covered by the builder and site cases: `0x00ea9cbc`, `0x00eaac84`, `0x00eab2dc`, `0x00d78428`, `0x00d79040`, `0x00d67398`, `0x00eee964`, `0x01146ec4`, `0x0114b724`, and `0x012546d8` (which switches on another field). No film source was found for the other 79 (static-inference by elimination). The combined image 5 has 30, because the live-view fragment removes the table at `0x00eee964`. Of 14 long compare chains, `FUN_00e42414` is the only one on a film value.
 - Limits: A32 only; pointers reached through heap structures or indirect calls are not followed.
 
 ## 10. Reviewer packet
@@ -267,7 +284,7 @@ Inputs: this report; section 5.2 and the fragments `host/firmware/classic-chrome
 2. Reviewed words that change: in the flash image the three label-icon words `0x0061c320`, `0x0061c324`, `0x0061c3dc` (0 to `0x83d`), written as overlay writes over the reviewed CC label blobs; in the RAM payload only CC publication 124 at `0x0061c3dc` (old `0x49c`, CC new 0, combined new `0x83d`), because the other two are 0 on RC0 and in CC and are new icon publications.
 3. Font: the U+F073 directory word and the loaders' flag rule (negative span, flag 1, record length), the U+F072 consequence, the per-mille byte, the 376-byte record against the art, and the font-tail ownership census (section 6).
 4. Label data: the `0x83d` record, the Q arrays, the two Q pointers and their walker-safe order (labels before values).
-5. New mechanism: the five live-view words (flash-prep's packet, classic-chrome-patch section 4.10; they rewrite five words of `FUN_00eee958` in one masked window) and the three frames words (section 9.4, with both mixed states executed).
+5. New mechanism: the five live-view words (flash-prep's packet, classic-chrome-patch section 4.10; they rewrite five words of `FUN_00eee958` in one masked window) and the three frames words (section 9.4, with both install mixed states executed). The install mixed states are safe for every film value; the unload mixed states are not (classic-chrome-patch 4.10): a task suspended inside `FUN_00eee958` with film 13 selected when `ram-unload` restores the words can branch to an instruction word or store into its caller's code, and one suspended inside `FUN_00e42414` gives PRO Neg Hi one transient zero count. The restore order inside the masked window cannot change this, because only tasks already suspended inside the words see a mixed state. Unload therefore carries the precondition of section 11 step 5. Rollback also restores the Q values pointer (index 152) before the labels pointer (151); a walker suspended between reading the two would pair eight value rows with the five stock label rows, which the same precondition (no menu open) excludes.
 6. Tooling: the FDL parser and encoder, the font-window carrier, the overlay rule of `apply-patch-set`, the UTF-16 record text, the `font-patch-set` step, and the RAM builder's publications, relinked offset arithmetic, contract and 19 pins (`transport/ram-push-cc-icon-review.json`, unreviewed; `//transport:ram-push-cc-icon-review-verdicts` fails until the review).
 
 ## 11. Abbreviated camera test
@@ -285,7 +302,8 @@ A RAM-push session on the RC0 body under its own H2 go, after the review of sect
    - I5 Q menu: the film tile shows the CC icon (smaller than the stock tiles' vector icons); dialling offers eight films, PRO Neg Std and Hi with their icons, the stock five unchanged.
    - I6 one CC frame shot and played back normally.
    - I7 optional, with a RAF on the card: PLAYBACK > RAW CONVERSION > FILM SIMULATION shows the CC row with its icon.
-5. Leaving: select PROVIA, `ram-unload` (161 restored), power off; the reboot check with `cc-icon-frames-ram-push-post-reboot.json` reads every old word.
+   - I8 PLAYBACK > PLAYBACK MENU > IMAGE SEARCH, each search type the menu offers, on a card with images: no screen title shows the CC icon (screen 170 draws label `0x83d` as its title, section 5.4). A title showing the icon is cosmetic and is recorded, not a stop.
+5. Leaving, with this precondition for `ram-unload` (classic-chrome-patch 8.4.6 E1-E3): a stock film selected in SHOOTING MENU > FILM SIMULATION and, if CC was set at C, a stock film selected at C (no CUSTOM SET); the camera back on the shooting screen with no menu open and no card activity, confirmed in chat. A task inside `FUN_00eee958` with film 13 selected at unload can fault (section 10 item 5). Then `ram-unload` (161 restored), power off; the reboot check with `cc-icon-frames-ram-push-post-reboot.json` reads every old word. On the S-UNEXPECTED path the model asks for `ram-unload` only after the same precondition holds; otherwise power off.
 
 Any stop, freeze, error dialog or stock row drawn differently ends the session (classic-chrome-patch 8.4.8). The go names the operation, the session commit, the contract digest `243587bc…e9ec` and the reference runtimes of section 9.1. The flash of `78f75260…a7ba` follows under its own H3 go.
 
@@ -294,9 +312,10 @@ Any stop, freeze, error dialog or stock row drawn differently ends the session (
 1. Answered by section 14: the Q tile takes Q glyph ids, and the Q-tile fragment gives CC and both PRO Neg rows full-size 80 x 48 tiles without a second special id.
 2. A CC overlay icon in live view needs 32 bytes of owned executable space and proof that the overlay draw accepts a string id (section 2.3).
 3. The surface drawn by the third film switch at `0x01150cd0`.
-4. U+F072 resolves to a `0x31c73`-byte span after the change; no string contains U+F072 in the 35 slots or the special records, but a string written later with it would draw garbage.
+4. U+F072 resolves to a `0x31c73`-byte span in the flash image and an `0x81a3d3`-byte span in the RAM payload; no string contains U+F072 in the 35 slots or the special records, but a string written later with it would draw garbage.
 5. Shutter gating by a zero frame count (section 9.4) is unproved; the fix removes the case for CC.
 6. Hardware decode and rendering of the font tail and the icon are not observed.
+7. Whether screen 170, which draws label `0x83d` as its title, is reachable on the X-M1 (section 5.4): its only code path needs playback state 31 in modal 94, whose setter is not bound. I8 checks IMAGE SEARCH on the body.
 
 ## 13. Reproduction
 
