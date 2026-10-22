@@ -34,7 +34,9 @@
      "reads": [["live-cells-sharpness-film-dr", "009568a0", 32]],
      "steps": [
       ["q", 122, 5, 1],
-      ["cursor:right:7:16", 122, 5, 7]]},
+      ["right", 122, 5, 2],
+      ["down", 122, 5, 6],
+      ["right", 122, 5, 7]]},
     {"phase": "cc-icon-q-next-film", "observe": true, "requires": ["cc-icon-q-film-cell"], "capture": "cc-icon-q-after-dial-right",
      "reads": [["live-cells-sharpness-film-dr", "009568a0", 32]],
      "steps": [
@@ -46,15 +48,11 @@
     {"phase": "cc-icon-q-exit", "observe": true, "requires": ["cc-icon-q-back-to-cc"], "capture": "cc-icon-after-q",
      "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["settings-object-0-film", "0096ec0c", 4]],
      "steps": [
-      ["q", 1, 5, 2]]},
+      ["back", 1, 5, 6]]},
     {"phase": "cc-icon-film-stock", "observe": true, "requires": ["cc-icon-q-exit"], "capture": "cc-icon-after-stock-film",
      "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["settings-object-0-film", "0096ec0c", 4], ["film-nibble", "009c28a6", 1]],
      "steps": [
-      ["menu", 1, 5, 2],
-      ["down", 1, 5, 3],
-      ["down", 1, 5, 4],
-      ["down", 1, 5, 5],
-      ["down", 1, 5, 6],
+      ["menu", 1, 5, 6],
       ["ok", 1, 254, 7],
       ["cursor:up:0:8", 1, 254, 0],
       ["ok", 1, 5, 6],
@@ -65,11 +63,7 @@
      "reads": [["icon-directory-words", "003f821c", 8], ["icon-per-mille-word", "00438268", 8], ["label-83d-record", "0037b7c4", 68],
                ["q-node-values-labels", "0078b020", 8], ["liveview-words", "00eee960", 20]],
      "steps": [
-      ["menu", 1, 5, 2],
-      ["down", 1, 5, 3],
-      ["down", 1, 5, 4],
-      ["down", 1, 5, 5],
-      ["down", 1, 5, 6],
+      ["menu", 1, 5, 6],
       ["ok", 1, 254, 0],
       ["down", 1, 254, 1],
       ["down", 1, 254, 2],
