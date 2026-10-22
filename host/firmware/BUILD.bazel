@@ -1351,6 +1351,7 @@ haskell_test(
         "//host:classic-chrome",
         "//host:classic-chrome-icon",
         "//host:classic-chrome-icon-ram",
+        "//host:classic-chrome-q-tile",
         "//host:classic-chrome-ram",
     ],
 )
