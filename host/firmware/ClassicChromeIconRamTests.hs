@@ -1,7 +1,7 @@
 -- Behavioural tests for the Classic Chrome icon RAM-push publications over
 -- synthetic RC0 decodes, a synthetic font window and a synthetic Classic
--- Chrome publication list: order, carried word, refusals and the allocation
--- content.
+-- Chrome publication list: order, carried word, image-5 fragment words,
+-- refusals and the allocation content.
 module Main (main) where
 
 import Control.Monad (unless)
@@ -62,20 +62,33 @@ main :: IO ()
 main = do
   failures <- newIORef []
   let check = expect failures
-  fragment <- B.readFile "host/firmware/classic-chrome-liveview-image5.json"
-  liveView <- either (\e -> hPutStrLn stderr e >> exitFailure) pure (parseLiveViewFragment fragment)
-  check "live-view fragment has five words from 0x00eee960" (map liveViewAddress liveView == map Address [0x00eee960, 0x00eee964 .. 0x00eee970])
+      readFragment fragment = do
+        document <- B.readFile (fragmentPath fragment)
+        either (\e -> hPutStrLn stderr e >> exitFailure) pure (parseImage5Fragment fragment document)
+  liveView <- readFragment LiveViewFragment
+  frames <- readFragment FramesFragment
+  let image5Words = liveView ++ frames
+      wordTriple w = (image5WordAddress w, image5WordCurrent w, image5WordNew w)
+  check "live-view fragment has five words from 0x00eee960" (map image5WordAddress liveView == map Address [0x00eee960, 0x00eee964 .. 0x00eee970])
+  check "frames fragment rewrites the FUN_00e42414 tail to cmp #13, movhi #6, movls #0"
+    (map wordTriple frames
+      == [ (Address 0x00e424ac, 0xe350000c, 0xe350000d)
+         , (Address 0x00e424b0, 0x13a00006, 0x83a00006)
+         , (Address 0x00e424b4, 0x03a00000, 0x93a00000) ])
+  liveViewDocument <- B.readFile (fragmentPath LiveViewFragment)
+  check "the live-view file is refused as the frames fragment" (either (const True) (const False) (parseImage5Fragment FramesFragment liveViewDocument))
 
   let rc0Image4 = image 0x0061c340 (0x0089ec00 - 0x0061c340) [(0x0061c3dc, 0x49c), (0x0078b024, 0x00789e2c), (0x0078b020, 0x00782348)]
-      rc0Image5 = image image5Base 0x00400000 [(a, liveViewCurrent w) | w <- liveView, let Address a = liveViewAddress w]
+      rc0Image5 = image image5Base 0x00400000 [(a, image5WordCurrent w) | w <- image5Words, let Address a = image5WordAddress w]
       rc0Image2 = B.replicate 0x00250000 0x11
       rc0 = Rc0Images rc0Image4 rc0Image5 (B.replicate 0x00360000 0) rc0Image2
       base = 0x00c20000
       allocation = iconAllocation base
       cc = ccList [(0x0061c3dc, 0x49c, 0)]
-      run font ccPubs images = do
+      run font ccPubs images = runWith font ccPubs images image5Words
+      runWith font ccPubs images fragmentWords = do
         window <- fontWindowFromDat (datWith font)
-        iconRamPublications images window liveView allocation ccPubs
+        iconRamPublications images window fragmentWords allocation ccPubs
       refused label outcome = check label (either (const True) (const False) outcome)
 
   case run stockFont cc rc0 of
@@ -123,16 +136,24 @@ main = do
           && map publicationNew (at 0x0078b020) == [let Address a = allocationQValues allocation in a])
       check "directory words precede the label-icon and Q words in activation"
         (maximum (map position [0x003f821c, 0x003f8220]) < minimum (map position [0x0061c320, 0x0078b024]))
-      check "the live-view words end activation in fragment order"
-        (map (\p -> (publicationAddress p, publicationOld p, publicationNew p)) (drop (length combined - 5) combined)
-          == [(liveViewAddress w, liveViewCurrent w, liveViewNew w) | w <- liveView])
+      check "the live-view then the frames words end activation in fragment order"
+        (map (\p -> (publicationAddress p, publicationOld p, publicationNew p)) (drop (length combined - length image5Words) combined)
+          == map wordTriple image5Words)
+      check "the frames words are activation publications from the stock words"
+        (map (\p -> (publicationPhase p, publicationOld p, publicationNew p)) (concatMap at [0x00e424ac, 0x00e424b0, 0x00e424b4])
+          == [(Activation, 0xe350000c, 0xe350000d), (Activation, 0x13a00006, 0x83a00006), (Activation, 0x03a00000, 0x93a00000)])
 
   refused "a CC publication at the Q labels pointer is refused" (run stockFont (ccList [(0x0061c3dc, 0x49c, 0), (0x0078b024, 0x00789e2c, 1)]) rc0)
   refused "a CC publication at label-icon word 0x0061c320 is refused" (run stockFont (ccList [(0x0061c3dc, 0x49c, 0), (0x0061c320, 0, 1)]) rc0)
   refused "a CC list without the carried word is refused" (run stockFont (ccList []) rc0)
   refused "a font whose U+F073 directory word is not stock is refused" (run [(0x3c21d, [0x81, 0xd6, 0x00, 0x00]), (0x7c26b, [0xe8, 0x03])] cc rc0)
   refused "a font whose U+F073 per-mille is not stock is refused" (run [(0x3c21d, [0x80, 0xd6, 0x00, 0x00]), (0x7c26b, [0x20, 0x03])] cc rc0)
-  refused "an RC0 image 5 that differs from the live-view current words is refused" (run stockFont cc rc0 {rc0Image5 = B.replicate 0x00400000 0})
+  refused "an RC0 image 5 that differs from the live-view current words is refused"
+    (run stockFont cc rc0 {rc0Image5 = image image5Base 0x00400000 [(a, image5WordCurrent w) | w <- frames, let Address a = image5WordAddress w]})
+  refused "an RC0 image 5 that differs from the frames current words is refused"
+    (run stockFont cc rc0 {rc0Image5 = image image5Base 0x00400000 [(a, image5WordCurrent w) | w <- liveView, let Address a = image5WordAddress w]})
+  refused "a CC publication at a frames word is refused" (run stockFont (ccList [(0x0061c3dc, 0x49c, 0), (0x00e424b0, 0x13a00006, 1)]) rc0)
+  refused "a fragment word repeated across fragments is refused" (runWith stockFont cc rc0 (image5Words ++ take 1 frames))
   refused "a stock Q pointer that differs is refused" (run stockFont cc rc0 {rc0Image4 = image 0x0061c340 (0x0089ec00 - 0x0061c340) [(0x0061c3dc, 0x49c)]})
   refused "a DAT without the FDL header is refused" (fontWindowFromDat (B.replicate 0x01100000 0))
 

@@ -502,6 +502,7 @@ filegroup(
     name = "ram-push-cc-icon-pinned-workspace-files",
     srcs = [
         "//host/firmware:build-classic-chrome-ram.sh",
+        "//host/firmware:classic-chrome-frames-image5.json",
         "//host/firmware:classic-chrome-liveview-image5.json",
         "//menu:classic-chrome-ram-relink-sources",
     ],

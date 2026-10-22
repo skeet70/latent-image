@@ -1,10 +1,11 @@
 -- Build the Classic Chrome icon extension (reports/classic-chrome-icon.md)
 -- from the reviewed Classic Chrome extension: its parts carried unchanged, the
--- icon's image-4 words appended to its image-4 patch set, an optional live-view
--- fragment appended to its image-5 patch set, a font patch set over the
--- FONT_ICON window, the id-0x83d record step, and a manifest that keeps the
--- 0x83e record step. `diff` decodes two built containers and refuses any byte
--- change outside the write set the build recorded.
+-- icon's image-4 words appended to its image-4 patch set, the words of each
+-- image-5 fragment (live view, frames remaining) appended to its image-5 patch
+-- set, a font patch set over the FONT_ICON window, the id-0x83d record step,
+-- and a manifest that keeps the 0x83e record step. `diff` decodes two built
+-- containers and refuses any byte change outside the write set the build
+-- recorded.
 module Main (main) where
 
 import Control.Monad (forM, forM_, when)
@@ -44,7 +45,7 @@ data Expected = Expected Word32 B.ByteString
 usage :: String
 usage =
   unlines
-    [ "usage: build-classic-chrome-icon build [--output-sha256 HEX] [--liveview IMAGE5_PATCH_SET] CC_MANIFEST NEW_OUTPUT_DIRECTORY"
+    [ "usage: build-classic-chrome-icon build [--output-sha256 HEX] [--image5-fragment IMAGE5_PATCH_SET]... CC_MANIFEST NEW_OUTPUT_DIRECTORY"
     , "       build-classic-chrome-icon diff CC_DAT ICON_DAT BUILD_DIRECTORY NEW_OUTPUT_DIRECTORY"
     ]
 
@@ -63,20 +64,20 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    _ : "build" : rest -> parseBuild rest >>= \(digest, liveview, manifest, output) -> build digest liveview manifest output
+    _ : "build" : rest -> parseBuild rest >>= \(digest, fragments, manifest, output) -> build digest fragments manifest output
     decoder : "diff" : [cc, icon, directory, output] -> diff decoder cc icon directory output
     _ -> H.failH usage
   where
-    parseBuild = go (replicate 64 '0', Nothing)
-    go (_, liveview) ("--output-sha256" : digest : rest) = do
+    parseBuild = go (replicate 64 '0', [])
+    go (_, fragments) ("--output-sha256" : digest : rest) = do
       H.ensure (isSha256 digest) "--output-sha256: lowercase 64-digit SHA-256 required"
-      go (digest, liveview) rest
-    go (digest, _) ("--liveview" : path : rest) = go (digest, Just path) rest
-    go (digest, liveview) [manifest, output] = pure (digest, liveview, manifest, output)
+      go (digest, fragments) rest
+    go (digest, fragments) ("--image5-fragment" : path : rest) = go (digest, fragments ++ [path]) rest
+    go (digest, fragments) [manifest, output] = pure (digest, fragments, manifest, output)
     go _ _ = H.failH usage
 
-build :: String -> Maybe FilePath -> FilePath -> FilePath -> IO ()
-build outputSha liveviewGiven manifestGiven outputGiven = do
+build :: String -> [FilePath] -> FilePath -> FilePath -> IO ()
+build outputSha fragmentsGiven manifestGiven outputGiven = do
   manifestPath <- resolve manifestGiven >>= canonicalizePath
   manifest <- H.readRegular (1024 * 1024) manifestPath >>= H.jsonRead
   H.ensure (Sha256 (H.str (H.get manifest "output_sha256")) == ccOutput) "the Classic Chrome manifest's output_sha256 is not the reviewed candidate 16c830ad"
@@ -141,25 +142,29 @@ build outputSha liveviewGiven manifestGiven outputGiven = do
           , ("totals", H.obj [("pinned_orders", H.n (toInteger (next4 - 1))), ("icon_words", H.n (toInteger (length icon4)))])
           ]
 
-  -- Image 5: pinned entries unchanged, the live-view fragment's words appended.
+  -- Image 5: pinned entries unchanged, then each fragment's words in its own
+  -- order, fragments in command-line order.
   (image5Base, pinned5) <- expandSet image5
-  liveview <- forM liveviewGiven $ \given -> do
+  fragments <- forM fragmentsGiven $ \given -> do
     path <- resolve given >>= canonicalizePath
     fragment <- H.readRegular (1024 * 1024) path >>= H.jsonRead
-    H.ensure (H.get (H.get fragment "image") "segment_id" == H.get (H.get image5 "image") "segment_id") "the live-view fragment is not an image-5 patch set"
+    let name = H.str (H.get fragment "id")
+    H.ensure (H.get (H.get fragment "image") "segment_id" == H.get (H.get image5 "image") "segment_id") (name ++ " is not an image-5 patch set")
     (fragmentBase, _) <- expandSet fragment
-    H.ensure (fragmentBase == image5Base) "the live-view fragment's decode base differs from the image-5 patch set's"
-    H.ensure (null (H.list (H.get fragment "blobs"))) "the live-view fragment carries blobs; only words are merged"
-    pure (H.list (H.get fragment "words"))
+    H.ensure (fragmentBase == image5Base) (name ++ ": decode base differs from the image-5 patch set's")
+    H.ensure (null (H.list (H.get fragment "blobs"))) (name ++ " carries blobs; only words are merged")
+    pure (name, sortOn (H.num . flip H.get "order") (H.list (H.get fragment "words")))
   let next5 = 1 + maximum (0 : map swOrder pinned5)
-      fragmentWords = sortOn (H.num . flip H.get "order") (concat liveview)
-  merged5 <- forM (zip [next5 ..] fragmentWords) $ \(order, w) -> do
+      fragmentWords = [(name, w) | (name, ws) <- fragments, w <- ws]
+  placed5 <- forM (zip [next5 ..] fragmentWords) $ \(order, (name, w)) -> do
     address <- hexField (H.get w "address")
     new <- hexField (H.get w "new")
     let offset = fromIntegral address - fromIntegral image5Base
-    H.ensure (null [p | p <- pinned5, swOffset p < offset + 4, offset < swOffset p + 4]) (hex32 address ++ ": the live-view word overlaps a pinned image-5 write")
-    pure (H.set "order" (H.n (toInteger order)) w, expectedJson address (U.putWord32 new))
-  let extra5 = map fst merged5
+    H.ensure (null [p | p <- pinned5, swOffset p < offset + 4, offset < swOffset p + 4]) (hex32 address ++ ": the " ++ name ++ " word overlaps a pinned image-5 write")
+    pure (name, offset, H.set "order" (H.n (toInteger order)) w, expectedJson address (U.putWord32 new))
+  forM_ [(a, b) | (k, a) <- zip [0 :: Int ..] placed5, b <- drop (k + 1) placed5] $ \((nameA, offsetA, _, _), (nameB, offsetB, _, _)) ->
+    H.ensure (abs (offsetA - offsetB) >= 4) ("image-5 file offset " ++ hex32 (fromIntegral offsetA) ++ " of " ++ nameA ++ " overlaps " ++ hex32 (fromIntegral offsetB) ++ " of " ++ nameB)
+  let extra5 = [w | (_, _, w, _) <- placed5]
   let combined5 =
         if null extra5
           then image5
@@ -168,7 +173,8 @@ build outputSha liveviewGiven manifestGiven outputGiven = do
               image5
               [ ("id", H.s "CLASSIC-CHROME-ICON-01-IMAGE5")
               , ("words", H.arr (H.list (H.get image5 "words") ++ extra5))
-              , ("totals", H.obj [("pinned_orders", H.n (toInteger (next5 - 1))), ("liveview_words", H.n (toInteger (length extra5)))])
+              , ("order_rule", H.s (H.str (H.get image5 "order_rule") ++ " Then the fragment words, each fragment in its own order: " ++ unwords (map fst fragments) ++ "."))
+              , ("totals", H.obj [("pinned_orders", H.n (toInteger (next5 - 1))), ("fragment_words", H.obj [(name, H.n (toInteger (length ws))) | (name, ws) <- fragments])])
               ]
 
   -- The font patch set over the extract-font window.
@@ -230,7 +236,7 @@ build outputSha liveviewGiven manifestGiven outputGiven = do
           [ ("font", H.arr [expectedJson (I.fontRamAddress (I.fwOffset w)) (I.fwNew w) | w <- fontWrites])
           , ("image2", H.arr [expectedJson (L.specialRecordAddress L.SpecialLabel83d) I.label83dRecord])
           , ("image4", H.arr [expectedJson (I.i4Address w) (U.putWord32 (I.i4New w)) | w <- I.iconImage4Writes])
-          , ("image5", H.arr (map snd merged5))
+          , ("image5", H.arr [e | (_, _, _, e) <- placed5])
           ]
       )
   putStrLn
@@ -239,9 +245,10 @@ build outputSha liveviewGiven manifestGiven outputGiven = do
         ++ " pinned words carried, "
         ++ show (length icon4)
         ++ " icon words; image 5: "
+        ++ unwords [name ++ " " ++ show (length ws) ++ " words;" | (name, ws) <- fragments]
+        ++ " "
         ++ show (length extra5)
-        ++ " live-view words"
-        ++ (if liveviewGiven == Nothing then " (fragment pending)" else "")
+        ++ " fragment words"
     )
   where
     kind v = H.str (H.get v "kind")
