@@ -39,8 +39,8 @@ expectDigest checked label size digest bytes = do
 contentCases :: IORef Int -> IO ()
 contentCases checked = do
   let I.GlyphProgram program = I.iconProgram
-  expectDigest checked "glyph program" 370 "096e72a85b6f3285f92d69669976cfa9009bd59a0af36a5dc72230f86971e964" program
-  expectDigest checked "glyph record" 376 "d8f69314a25cf8f5a3e0cf340aaf1996f9102283168e41b123116d8c5e600429" I.iconGlyphRecord
+  expectDigest checked "glyph program" 708 "f701df847dee3e07011df42f3eac28625ae53239331116d6f131f8d8c44935eb" program
+  expectDigest checked "glyph record" 714 "b4bd628dfaf8567b8847ea1e9ca3add0a5098d4541e065b19f92115198805247" I.iconGlyphRecord
   expectDigest checked "Q values" 72 "01670314392c2618797a47aadebdad5fe6df4e55c564e6266d8df8c1d077b312" I.qValuesArray
   expectDigest checked "Q labels" 144 "56e79304725b4d70987cf95d6480725af8a0b9fa24559d92db88834bab277073" I.qLabelsArray
   expectTrue
@@ -120,7 +120,7 @@ fontCases checked = do
   expectTrue
     checked
     "write offsets"
-    (map I.fwOffset writes == map FontOffset [0x3c21d, 0x7c26b, 0x7cfe0, 0x7d160, 0x7d1b0])
+    (map I.fwOffset writes == [FontOffset 0x3c21d, FontOffset 0x7c26b, I.iconRecordOffset, I.qValuesOffset, I.qLabelsOffset])
   expectTrue checked "directory word" (map I.fwNew (take 1 writes) == [B.pack [0xf3, 0xf2, 0x03, 0x01]])
   expectTrue checked "old bytes are the window's" (and [I.fwOld w == B.take (B.length (I.fwNew w)) (B.drop at syntheticFont) | w <- writes, let FontOffset at = I.fwOffset w])
   patched <- either H.failH pure (parseFdlFont (applyWrites writes syntheticFont))
