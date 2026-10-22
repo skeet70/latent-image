@@ -48,7 +48,7 @@
     {"phase": "cc-icon-q-exit", "observe": true, "requires": ["cc-icon-q-back-to-cc"], "capture": "cc-icon-after-q",
      "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["settings-object-0-film", "0096ec0c", 4]],
      "steps": [
-      ["back", 1, 5, 6]]},
+      ["back", 122, 5, 7]]},
     {"phase": "cc-icon-film-stock", "observe": true, "requires": ["cc-icon-q-exit"], "capture": "cc-icon-after-stock-film",
      "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["settings-object-0-film", "0096ec0c", 4], ["film-nibble", "009c28a6", 1]],
      "steps": [
@@ -64,13 +64,13 @@
                ["q-node-values-labels", "0078b020", 8], ["liveview-words", "00eee960", 20]],
      "steps": [
       ["menu", 1, 5, 6],
-      ["ok", 1, 254, 0],
+      ["seek:ok:254:3", 1, 254, 0],
       ["down", 1, 254, 1],
       ["down", 1, 254, 2],
       ["down", 1, 254, 3],
       ["down", 1, 254, 4],
       ["down", 1, 254, 5],
       ["down", 1, 254, 6],
-      ["down", 1, 254, 6]]}
+      ["down", 1, 254, 0]]}
   ]
 }
