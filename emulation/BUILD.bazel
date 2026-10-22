@@ -714,6 +714,32 @@ haskell_binary(
     ],
 )
 
+# Classic Chrome icon and combined-candidate cases: FDL loaders, sizing read,
+# text resolution, label getters and the frames-remaining size class on the
+# stock, CC and combined images, run through the native-case adapter.
+haskell_binary(
+    name = "classic-chrome-icon-cases",
+    srcs = ["ClassicChromeIconCases.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-threaded",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":native-adapter",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:classic-chrome-icon",
+        "//host:containers",
+        "//host:directory",
+        "//host:fdl-font",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
 # The emulator bridge's USB provider; //transport:provider-parity drives it.
 haskell_library(
     name = "emulator-usb",
