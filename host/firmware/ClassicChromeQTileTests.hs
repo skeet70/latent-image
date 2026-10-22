@@ -77,16 +77,14 @@ run = do
       FontOffset labelsAt = I.qLabelsOffset
   H.ensure (Q.qTileOffset == I.iconTailEnd && tailEnd `mod` 16 == 0 && tailEnd >= labelsAt + B.length I.qLabelsArray && Q.qTileAddress == 0x003bc000 + fromIntegral tailEnd) "the tile is not at the icon's tail end"
   H.ensure (map Q.qGlyphLabel [Q.ccQGlyph, Q.proNegStdTile, Q.proNegHiTile] == [0xff00037c, 0xff000779, 0xff000778]) "Q glyph labels"
+  H.ensure ([B.take 4 (B.drop (16 * row) I.qLabelsArray) | row <- [5, 6, 7]] == map (B.pack . le . toInteger . Q.qGlyphLabel) [Q.proNegStdTile, Q.proNegHiTile, Q.ccQGlyph]) "the icon's Q labels rows 5-7 do not name the PRO Neg tiles and the Classic Chrome glyph"
   H.ensure (map Q.i2Address Q.qTileImage2Writes == [0x0022d28c] && map Q.i2New Q.qTileImage2Writes == [Q.qTileAddress]) "the image-2 write is not the 0x37c record pointer to the tile"
 
   -- The font writes over a window holding the icon's Q labels array.
   let FontOffset labels = I.qLabelsOffset
       window = B.replicate labels 0 <> I.qLabelsArray <> B.replicate (0x80000 - labels - B.length I.qLabelsArray) 0
   writes <- either H.failH pure (Q.qTileFontWrites window)
-  H.ensure (map I.fwOffset writes == map FontOffset [labels + 0x50, labels + 0x60, labels + 0x70, tailEnd]) "font write offsets"
-  H.ensure (map I.fwNew (take 3 writes) == map (B.pack . le) [0xff000779, 0xff000778, 0xff00037c]) "Q label words"
-  H.ensure (map I.fwOld (take 3 writes) == map (B.pack . le) [0x49a, 0x496, 0x83d]) "Q label old words"
-  H.ensure (map I.fwNew (drop 3 writes) == [Q.qTileGvff]) "the tile blob"
+  H.ensure (map I.fwOffset writes == [FontOffset tailEnd] && map I.fwNew writes == [Q.qTileGvff]) "the font writes are not the tile at the tail end"
   H.ensure (either (const True) (const False) (Q.qTileFontWrites (B.replicate 0x80000 0))) "a window without the icon's Q labels is accepted"
   let dirty = B.take (tailEnd + 0x40) window <> B.singleton 1 <> B.drop (tailEnd + 0x41) window
   H.ensure (either (const True) (const False) (Q.qTileFontWrites dirty)) "a nonzero byte under the tile is accepted"

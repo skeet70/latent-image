@@ -189,7 +189,6 @@ haskell_library(
         ":classic-chrome-icon",
         ":fdl-font",
         ":gvff",
-        ":update-container",
     ],
 )
 

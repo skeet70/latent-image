@@ -1,9 +1,9 @@
--- Full-size Q-menu film tiles for the Classic Chrome icon candidate
--- (reports/classic-chrome-icon.md section 14): Q rows 5 and 6 (PRO Neg Std
--- and Hi) name the stock 80 x 48 tiles 0x779 and 0x778, and row 7 (Classic
--- Chrome) names Q glyph 0x37c, whose record is pointed at an original GVFF
--- tile encoded from host/firmware/classic-chrome-q-tile.txt and placed in the
--- font window's loaded tail after the icon's Q arrays.
+-- The Classic Chrome Q-menu film tile (reports/classic-chrome-icon.md section
+-- 14): an original GVFF tile encoded from host/firmware/classic-chrome-q-tile.txt,
+-- placed in the font window's loaded tail at the icon's 'iconTailEnd', and the
+-- image-2 word that points Q glyph 0x37c's record at it. The icon's Q labels
+-- array names 0xff00037c for Classic Chrome and the stock tiles 0x779 and 0x778
+-- for PRO Neg Std and Hi.
 module FujiAF.ClassicChromeQTile
   ( -- * Q glyph ids
     QGlyph (..)
@@ -18,8 +18,6 @@ module FujiAF.ClassicChromeQTile
   , qTileOffset
   , qTileAddress
     -- * Write set
-  , QLabelWrite (..)
-  , qLabelWrites
   , qTileFontWrites
   , Image2Write (..)
   , qTileImage2Writes
@@ -33,7 +31,6 @@ import FujiAF.ClassicChromeIcon (FontWrite (..), fontRamAddress, iconGlyphRecord
 import FujiAF.ClassicChromeQTileArt (qTileArtText)
 import FujiAF.FdlFont (FontOffset (..))
 import FujiAF.Gvff (TileArt, encodeTileGvff, parseTileArt)
-import FujiAF.UpdateContainer (putWord32)
 
 -- A Q glyph: label id 0xff000000 | n, record at image-2 RAM 0x0022a8b4 + 12n
 -- for n below 0x8c5 (plain FUN_0117e15c).
@@ -71,19 +68,8 @@ qTileOffset = iconTailEnd
 qTileAddress :: Word32
 qTileAddress = fontRamAddress qTileOffset
 
--- One Q labels row's field 0: the icon's label and the tile's.
-data QLabelWrite = QLabelWrite {qlRow :: Int, qlOld :: Word32, qlNew :: QGlyph, qlRole :: String}
-  deriving (Eq, Show)
-
-qLabelWrites :: [QLabelWrite]
-qLabelWrites =
-  [ QLabelWrite 5 0x49a proNegStdTile "Q row 5 (PRO Neg Std): stock tile 0xff000779"
-  , QLabelWrite 6 0x496 proNegHiTile "Q row 6 (PRO Neg Hi): stock tile 0xff000778"
-  , QLabelWrite 7 0x83d ccQGlyph "Q row 7 (Classic Chrome): Q glyph 0xff00037c"
-  ]
-
--- Over a font window that holds the icon's writes: the three Q label words,
--- each over the icon's Q labels blob, then the tile in zero bytes.
+-- Over a font window that holds the icon's writes: the tile in zero bytes
+-- after the icon's Q labels array.
 qTileFontWrites :: B.ByteString -> Either String [FontWrite]
 qTileFontWrites window = do
   let FontOffset labels = qLabelsOffset
@@ -96,13 +82,8 @@ qTileFontWrites window = do
   require (tile `mod` 4 == 0) "the tile is not word-aligned"
   require (tile + B.length qTileGvff <= B.length window) "the tile runs past the font window"
   require (B.all (== 0) (slice tile (B.length qTileGvff))) "the tile lands on nonzero bytes"
-  labelWrites <- mapM (labelWrite labels slice) qLabelWrites
-  Right (labelWrites ++ [FontWrite qTileOffset (slice tile (B.length qTileGvff)) qTileGvff "Classic Chrome Q tile (GVFF), the record target of Q glyph 0x37c"])
+  Right [FontWrite qTileOffset (slice tile (B.length qTileGvff)) qTileGvff "Classic Chrome Q tile (GVFF), the record target of Q glyph 0x37c"]
   where
-    labelWrite labels slice w = do
-      let at = labels + 16 * qlRow w
-      require (slice at 4 == putWord32 (qlOld w)) ("Q row " ++ show (qlRow w) ++ " field 0 is not " ++ show (qlOld w))
-      Right (FontWrite (FontOffset at) (putWord32 (qlOld w)) (putWord32 (qGlyphLabel (qlNew w))) (qlRole w))
     require ok message = if ok then Right () else Left message
 
 -- One image-2 word: RAM address, the stock word and the new word.

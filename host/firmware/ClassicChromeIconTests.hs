@@ -42,7 +42,7 @@ contentCases checked = do
   expectDigest checked "glyph program" 708 "f701df847dee3e07011df42f3eac28625ae53239331116d6f131f8d8c44935eb" program
   expectDigest checked "glyph record" 714 "b4bd628dfaf8567b8847ea1e9ca3add0a5098d4541e065b19f92115198805247" I.iconGlyphRecord
   expectDigest checked "Q values" 72 "01670314392c2618797a47aadebdad5fe6df4e55c564e6266d8df8c1d077b312" I.qValuesArray
-  expectDigest checked "Q labels" 144 "56e79304725b4d70987cf95d6480725af8a0b9fa24559d92db88834bab277073" I.qLabelsArray
+  expectDigest checked "Q labels" 144 "91390fe2fa57e583ee5a50087cdf5491f95d68dfd46d6e9051cf9f2cd6648f3b" I.qLabelsArray
   expectTrue
     checked
     "0x83d record"

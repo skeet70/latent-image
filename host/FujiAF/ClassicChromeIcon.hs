@@ -202,10 +202,13 @@ placedAfter (FontOffset at) bytes = FontOffset ((at + B.length bytes + 15) `div`
 qValuesArray :: B.ByteString
 qValuesArray = B.concat [putWord32 v <> putWord32 0 | v <- [0, 3, 1, 7, 0xc, 5, 6, 2, 0x7ffffffe]]
 
--- Q node label quads {id, 0, 0, 0}, ending with sixteen 0xff bytes.
+-- Q node label quads {id, 0, 0, 0}, ending with sixteen 0xff bytes. Every
+-- row names an 80 x 48 Q glyph: the five stock film tiles, the stock PRO Neg
+-- Std and Hi tiles 0x779 and 0x778, and 0x37c, whose record
+-- FujiAF.ClassicChromeQTile points at the Classic Chrome tile.
 qLabelsArray :: B.ByteString
 qLabelsArray =
-  B.concat [putWord32 i <> B.replicate 12 0 | i <- [0xff00077b, 0xff00077c, 0xff000773, 0xff000777, 0xff00077a, 0x49a, 0x496, 0x83d]]
+  B.concat [putWord32 i <> B.replicate 12 0 | i <- [0xff00077b, 0xff00077c, 0xff000773, 0xff000777, 0xff00077a, 0xff000779, 0xff000778, 0xff00037c]]
     <> B.replicate 16 0xff
 
 -- The size the stock film icons U+F06A..F06E use.
