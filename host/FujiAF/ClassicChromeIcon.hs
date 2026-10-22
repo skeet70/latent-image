@@ -116,9 +116,11 @@ groups rows = finish (foldl step ([], [], []) (zip [0 ..] rows))
           closing = [g | g@(Group _ spans) <- open, last spans `notElem` joined]
        in (concatMap next current, closed ++ closing, current)
 
--- min(255, round((p + 0.5) * 256 / 45)), ties to even.
+-- Pixel edge p as a 1/256-em coordinate: min(255, round(p * 256 / 45)).
+-- Groups that meet share an edge coordinate, so partial-coverage drawing
+-- leaves no seam between them.
 coordinate :: Int -> Word8
-coordinate p = fromIntegral (min 255 (round (fromIntegral (2 * p + 1) * 128 / fromIntegral iconSize :: Rational) :: Integer))
+coordinate p = fromIntegral (min 255 (round (fromIntegral p * 256 / fromIntegral iconSize :: Rational) :: Integer))
 
 dedupe :: Eq a => [a] -> [a]
 dedupe (a : rest@(b : _)) | a == b = dedupe rest
@@ -135,9 +137,11 @@ chain opcode close = go 0 2
       [opcode, cur `shiftL` 4 .|. next, coordinate y, coordinate x]
         ++ go next (if next == 2 then 3 else 2) rest
 
+-- A group's outline runs on pixel edges: top edge of row s, bottom edge of
+-- row e (e + 1), left edge of column l, right edge of column r (r + 1).
 groupBody :: Group -> [Word8]
 groupBody (Group s spans) =
-  [0xb5, 0x00, coordinate s, coordinate (l s), 0xb5, 0x10, coordinate e, coordinate (r e)]
+  [0xb5, 0x00, coordinate s, coordinate (l s), 0xb5, 0x10, coordinate (e + 1), coordinate (r e + 1)]
     ++ chain 0x92 0x03 leftPoints
     ++ chain 0x96 0x07 rightPoints
   where
@@ -145,25 +149,12 @@ groupBody (Group s spans) =
     l y = fst (spans !! (y - s))
     r y = snd (spans !! (y - s))
     leftPoints =
-      dropLeading (s, l s) . dedupe $
-        concat
-          [ if l y < l (y - 1)
-              then [(y, l (y - 1)), (y, l y)]
-              else if l y > l (y - 1) then [(y - 1, l (y - 1)), (y - 1, l y)] else []
-          | y <- [s + 1 .. e]
-          ]
-          ++ [(e, l e)]
+      dedupe $
+        concat [[(y, l (y - 1)), (y, l y)] | y <- [s + 1 .. e], l y /= l (y - 1)]
+          ++ [(e + 1, l e)]
     rightPoints =
-      dedupe . dropTrailing (e, r e) $
-        (s, r s)
-          : concat
-            [ if r y > r (y - 1)
-                then [(y, r (y - 1)), (y, r y)]
-                else if r y < r (y - 1) then [(y - 1, r (y - 1)), (y - 1, r y)] else []
-            | y <- [s + 1 .. e]
-            ]
-    dropLeading p (q : rest) | p == q = rest
-    dropLeading _ ps = ps
+      dropTrailing (e + 1, r e + 1) . dedupe $
+        (s, r s + 1) : concat [[(y, r (y - 1) + 1), (y, r y + 1)] | y <- [s + 1 .. e], r y /= r (y - 1)]
     dropTrailing p ps = if not (null ps) && last ps == p then init ps else ps
 
 -- `fa 00`, the u16 body length, then the groups joined by `70 00`.
