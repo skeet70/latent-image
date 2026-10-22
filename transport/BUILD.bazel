@@ -61,6 +61,7 @@ haskell_library(
     ],
     # FujiAF.RamPush runs each payload's relinker from the linking binary's runfiles.
     data = [
+        "//host/firmware:classic-chrome-icon-ram-relinker",
         "//host/firmware:classic-chrome-ram-relinker",
         "//host/firmware:ram-push-relinker",
     ],
@@ -117,6 +118,7 @@ haskell_binary(
     name = "camera",
     srcs = ["Main.hs"],
     data = [
+        "//host/firmware:build-classic-chrome-icon-ram",
         "//host/firmware:build-classic-chrome-ram",
         "//host/firmware:build-recipe-bank",
     ],
@@ -125,6 +127,7 @@ haskell_binary(
     deps = [
         ":camera-core",
         ":native-provider",
+        ":ram-push-cc-icon-pins",
         ":ram-push-cc-pins",
         ":ram-push-pins",
         "//host:base",
@@ -446,6 +449,26 @@ haskell_library(
     ],
 )
 
+genrule(
+    name = "ram-push-cc-icon-pins-module",
+    srcs = ["ram-push-cc-icon-review.json"],
+    outs = ["RamPushCcIconReviewedPins.hs"],
+    cmd = "$(location :ram-push-pins-generator) $(location ram-push-cc-icon-review.json) $@",
+    tools = [":ram-push-pins-generator"],
+)
+
+# The camera binary's compiled Classic Chrome icon pins.
+haskell_library(
+    name = "ram-push-cc-icon-pins",
+    srcs = [":RamPushCcIconReviewedPins.hs"],
+    ghcopts = _GHCOPTS,
+    visibility = ["//emulation:__pkg__"],
+    deps = [
+        ":camera-core",
+        "//host:base",
+    ],
+)
+
 haskell_test(
     name = "ram-push-review-record-tests",
     srcs = ["RamPushReviewRecordTest.hs"],
@@ -475,11 +498,22 @@ filegroup(
     ],
 )
 
+filegroup(
+    name = "ram-push-cc-icon-pinned-workspace-files",
+    srcs = [
+        "//host/firmware:build-classic-chrome-ram.sh",
+        "//host/firmware:classic-chrome-frames-image5.json",
+        "//host/firmware:classic-chrome-liveview-image5.json",
+        "//menu:classic-chrome-ram-relink-sources",
+    ],
+)
+
 _GATE_DEPS = [
     ":ram-push-review-record",
     "//host:base",
     "//host:bytestring",
     "//broker:core",
+    "//host/firmware:classic-chrome-icon-ram-builder",
     "//host/firmware:classic-chrome-ram-builder",
     "//host/firmware:ram-push-toolchain",
 ]
@@ -544,6 +578,35 @@ haskell_test(
     deps = _GATE_DEPS,
 )
 
+haskell_test(
+    name = "ram-push-cc-icon-review-verdicts",
+    srcs = ["RamPushReviewGate.hs"],
+    args = [
+        "verdicts",
+        "$(location ram-push-cc-icon-review.json)",
+    ],
+    data = ["ram-push-cc-icon-review.json"],
+    ghcopts = _GHCOPTS,
+    tags = ["manual"],
+    deps = _GATE_DEPS,
+)
+
+haskell_test(
+    name = "ram-push-cc-icon-review-bytes",
+    srcs = ["RamPushReviewGate.hs"],
+    args = [
+        "bytes",
+        "$(location ram-push-cc-icon-review.json)",
+    ],
+    data = [
+        ":ram-push-cc-icon-pinned-workspace-files",
+        "ram-push-cc-icon-review.json",
+    ],
+    ghcopts = _GHCOPTS,
+    tags = ["manual"],
+    deps = _GATE_DEPS,
+)
+
 # Rewrites record entries from the current tree's relink; `bazel run` only.
 haskell_binary(
     name = "ram-push-repin",
@@ -574,6 +637,22 @@ haskell_binary(
     ],
 )
 
+# The same over transport/ram-push-cc-icon-review.json.
+haskell_binary(
+    name = "ram-push-cc-icon-repin",
+    srcs = ["RamPushRepin.hs"],
+    args = ["--classic-chrome-icon"],
+    ghcopts = _GHCOPTS,
+    main_file = "RamPushRepin.hs",
+    deps = [
+        ":camera-core",
+        ":ram-push-review-record",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+    ],
+)
+
 # Rebuilds with the pinned builder from workspace private-data; `bazel run` only.
 haskell_binary(
     name = "ram-push-reviewed-build-check",
@@ -582,6 +661,7 @@ haskell_binary(
     main_file = "RamPushReviewedBuildCheck.hs",
     deps = [
         ":camera-core",
+        ":ram-push-cc-icon-pins",
         ":ram-push-cc-pins",
         ":ram-push-pins",
         "//host:base",
@@ -603,6 +683,29 @@ haskell_binary(
     main_file = "RamPushReviewedBuildCheck.hs",
     deps = [
         ":camera-core",
+        ":ram-push-cc-icon-pins",
+        ":ram-push-cc-pins",
+        ":ram-push-pins",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+        "//host/firmware:ram-push-toolchain",
+    ],
+)
+
+# The same for the Classic Chrome icon payload and reviewedCcIconContract.
+haskell_binary(
+    name = "ram-push-cc-icon-reviewed-build-check",
+    srcs = ["RamPushReviewedBuildCheck.hs"],
+    args = ["--classic-chrome-icon"],
+    ghcopts = _GHCOPTS,
+    main_file = "RamPushReviewedBuildCheck.hs",
+    deps = [
+        ":camera-core",
+        ":ram-push-cc-icon-pins",
         ":ram-push-cc-pins",
         ":ram-push-pins",
         "//host:base",
@@ -626,6 +729,7 @@ haskell_test(
     main_file = "RamPushCameraPinsTest.hs",
     deps = [
         ":camera-core",
+        ":ram-push-cc-icon-pins",
         ":ram-push-cc-pins",
         ":ram-push-pins",
         "//host:base",
@@ -652,6 +756,34 @@ haskell_test(
     main_file = "RamPushCameraPinsTest.hs",
     deps = [
         ":camera-core",
+        ":ram-push-cc-icon-pins",
+        ":ram-push-cc-pins",
+        ":ram-push-pins",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+        "//host:aeson",
+        "//host:process",
+    ],
+)
+
+# The same with Classic Chrome icon-sized inputs, against reviewedCcIconContract.
+haskell_test(
+    name = "ram-push-cc-icon-camera-pins",
+    srcs = ["RamPushCameraPinsTest.hs"],
+    args = [
+        "$(location :camera)",
+        "--classic-chrome-icon",
+    ],
+    data = [":camera"],
+    ghcopts = _GHCOPTS,
+    main_file = "RamPushCameraPinsTest.hs",
+    deps = [
+        ":camera-core",
+        ":ram-push-cc-icon-pins",
         ":ram-push-cc-pins",
         ":ram-push-pins",
         "//host:base",

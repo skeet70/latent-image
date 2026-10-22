@@ -7,9 +7,13 @@
 -- else. A schema-3 extension block makes the constructed output the template
 -- prefix followed by the input decode; every write's current bytes are then
 -- checked against that constructed output, not against the input decode.
+--
+-- Writes apply in order. A write may overlap exactly one earlier-order write
+-- that fully contains it, and its current bytes are then checked against that
+-- write's new bytes; any other overlap is refused.
 module Main where
 
-import Control.Monad (forM_, unless)
+import Control.Monad (foldM, forM_, unless)
 import Data.Aeson (Value)
 import qualified Data.ByteString as B
 import Data.List (sortOn, (\\))
@@ -71,7 +75,7 @@ main = do
   let writes = sortOn pwOrder (blobWrites ++ wordWrites)
   unless (map pwOrder writes == [1 .. length writes]) $
     H.failH "patch set write orders are not contiguous from 1"
-  checkOverlap (map pwOffset (sortOn pwOffset writes))
+  checkOverlap writes
   image <- H.readRegular (16 * 1024 * 1024) inputPath
   digest <- H.sha256 image
   let output = template <> image
@@ -88,23 +92,10 @@ main = do
           ++ " bytes"
       )
   putStrLn ("patch set " ++ identifier ++ " (" ++ tier ++ "): applying " ++ show (length writes) ++ " ordered word writes")
-  forM_ writes $ \w -> do
-    let at = B.take 4 (B.drop (pwOffset w) output)
-    unless (at == pwCurrent w) $
-      H.failH
-        ( "write order "
-            ++ show (pwOrder w)
-            ++ " at file offset 0x"
-            ++ hex (pwOffset w)
-            ++ ": current bytes disagree (image "
-            ++ hexBytes at
-            ++ ", manifest "
-            ++ hexBytes (pwCurrent w)
-            ++ ")"
-        )
-  let patched = foldl (\img w -> B.take (pwOffset w) img <> pwNew w <> B.drop (pwOffset w + 4) img) output writes
-      differing = sum [length [() | i <- [0 .. 3], B.index (pwCurrent w) i /= B.index (pwNew w) i] | w <- writes]
-      spans = mergeSpans [(pwOffset w, pwOffset w + 4) | w <- sortOn pwOffset writes]
+  patched <- foldM check output writes
+  let spans = mergeSpans [(pwOffset w, pwOffset w + 4) | w <- sortOn pwOffset writes]
+      slice (a, b) = B.take (b - a) . B.drop a
+      differing = sum [length (filter id (B.zipWith (/=) (slice s output) (slice s patched))) | s <- spans]
   putStrLn ("words written: " ++ show (length writes) ++ " (orders 1.." ++ show (length writes) ++ "), bytes differing from the decode: " ++ show differing)
   putStrLn ("touched file offsets: " ++ unwords ["0x" ++ hex a ++ "..0x" ++ hex b | (a, b) <- spans])
   patchedDigest <- H.sha256 patched
@@ -155,11 +146,37 @@ parseWord outputBase v = do
       , pwNew = word32le fresh
       }
 
-checkOverlap :: [Int] -> IO ()
-checkOverlap (a : rest@(b : _)) = do
-  H.ensure (a + 4 <= b) "patch set write words overlap"
-  checkOverlap rest
-checkOverlap _ = pure ()
+apply :: B.ByteString -> PatchWord -> B.ByteString
+apply image w = B.take (pwOffset w) image <> pwNew w <> B.drop (pwOffset w + 4) image
+
+-- Checks one write's current bytes against the image the earlier writes
+-- produced, then applies it.
+check :: B.ByteString -> PatchWord -> IO B.ByteString
+check image w = do
+  let at = B.take 4 (B.drop (pwOffset w) image)
+  unless (at == pwCurrent w) $
+    H.failH
+      ( "write order "
+          ++ show (pwOrder w)
+          ++ " at file offset 0x"
+          ++ hex (pwOffset w)
+          ++ ": current bytes disagree (image "
+          ++ hexBytes at
+          ++ ", manifest "
+          ++ hexBytes (pwCurrent w)
+          ++ ")"
+      )
+  pure (apply image w)
+
+-- `writes` in order. Each write overlaps no earlier write, or exactly one
+-- earlier write at the same offset (every write is 4 bytes, so containment is
+-- equality of offsets).
+checkOverlap :: [PatchWord] -> IO ()
+checkOverlap writes = forM_ (zip [0 :: Int ..] writes) $ \(k, w) ->
+  case [e | e <- take k writes, pwOffset e < pwOffset w + 4, pwOffset w < pwOffset e + 4] of
+    [] -> pure ()
+    [e] | pwOffset e == pwOffset w -> pure ()
+    _ -> H.failH ("patch set write words overlap: order " ++ show (pwOrder w) ++ " at file offset 0x" ++ hex (pwOffset w))
 
 mergeSpans :: [(Int, Int)] -> [(Int, Int)]
 mergeSpans [] = []

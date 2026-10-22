@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "before_unload": [
+    {"phase": "boot", "steps": []},
+    {"phase": "cc-film-commit", "capture": "cc-shooting-menu-film-item", "steps": [
+      ["menu", 1, 5, 2],
+      ["down", 1, 5, 3],
+      ["down", 1, 5, 4],
+      ["down", 1, 5, 5],
+      ["down", 1, 5, 6],
+      ["ok", 1, 254, 0],
+      ["down", 1, 254, 1],
+      ["down", 1, 254, 2],
+      ["down", 1, 254, 3],
+      ["down", 1, 254, 4],
+      ["down", 1, 254, 5],
+      ["down", 1, 254, 6],
+      ["down", 1, 254, 7],
+      ["ok", 1, 5, 6]]},
+    {"phase": "cc-live-view", "requires": ["cc-film-commit"], "capture": "cc-live-view", "steps": [
+      ["back", 1, 5, 6]]},
+    {"phase": "cc-q-film-cell", "requires": ["cc-live-view"], "capture": "cc-q-film-cell", "steps": [
+      ["q", 122, 5, 1],
+      ["right", 122, 5, 2],
+      ["down", 122, 5, 6],
+      ["right", 122, 5, 7]]},
+    {"phase": "cc-q-film-unfocused", "requires": ["cc-q-film-cell"], "capture": "cc-q-film-unfocused", "steps": [
+      ["left", 122, 5, 6]]},
+    {"phase": "proneg-hi-q-film-cell", "requires": ["cc-q-film-cell"], "capture": "proneg-hi-q-film-cell",
+     "reads": [["live-cells-sharpness-film-dr", "009568a0", 32]],
+     "steps": [
+      ["dial-left", 122, 5, 7]]},
+    {"phase": "proneg-std-q-film-cell", "requires": ["proneg-hi-q-film-cell"], "capture": "proneg-std-q-film-cell",
+     "reads": [["live-cells-sharpness-film-dr", "009568a0", 32]],
+     "steps": [
+      ["dial-left", 122, 5, 7]]},
+    {"phase": "proneg-std-q-film-unfocused", "requires": ["proneg-std-q-film-cell"], "capture": "proneg-std-q-film-unfocused", "steps": [
+      ["left", 122, 5, 6]]},
+    {"phase": "cc-q-film-back", "requires": ["proneg-std-q-film-cell"], "capture": "cc-q-film-back",
+     "reads": [["live-cells-sharpness-film-dr", "009568a0", 32]],
+     "steps": [
+      ["dial-right", 122, 5, 7],
+      ["dial-right", 122, 5, 7]]},
+    {"phase": "provia-film-commit", "capture": "provia-shooting-menu-film-item", "steps": [
+      ["menu", 1, 5, 2],
+      ["down", 1, 5, 3],
+      ["down", 1, 5, 4],
+      ["down", 1, 5, 5],
+      ["down", 1, 5, 6],
+      ["ok", 1, 254, 0],
+      ["ok", 1, 5, 6]]},
+    {"phase": "provia-live-view", "requires": ["provia-film-commit"], "capture": "provia-live-view", "steps": [
+      ["back", 1, 5, 6]]},
+    {"phase": "provia-q-film-cell", "requires": ["provia-live-view"], "capture": "provia-q-film-cell", "steps": [
+      ["q", 122, 5, 1],
+      ["right", 122, 5, 2],
+      ["down", 122, 5, 6],
+      ["right", 122, 5, 7]]},
+    {"phase": "provia-q-film-unfocused", "requires": ["provia-q-film-cell"], "capture": "provia-q-film-unfocused", "steps": [
+      ["left", 122, 5, 6]]},
+    {"phase": "velvia-q-film-cell", "requires": ["provia-q-film-cell"], "capture": "velvia-q-film-cell", "steps": [
+      ["dial-right", 122, 5, 7]]}
+  ],
+  "after_unload": []
+}

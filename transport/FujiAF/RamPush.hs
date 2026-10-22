@@ -8,7 +8,7 @@ module FujiAF.RamPush
   , callbackTablePointerAddress, callbackTableAddress, callbackStockWord
   , queryOutputAddress, configGateIndex, mailboxBytes
   , reviewedAllocationSize, installerAbiVersion, publicationCount, setupCount, activationCount
-  , PayloadKind(..), Payload(..), bankD3Payload, classicChromePayload, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
+  , PayloadKind(..), Payload(..), bankD3Payload, classicChromePayload, classicChromeIconPayload, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
   , readRamPushManifest, parseRamPushManifest, readRamAllocState, readRetainedAllocation, readRamPushState
   , consumedMarkerPath, writeAllocStateFile, writeStateFile
   , ramAllocArguments, ramPushArguments, ramFreeArguments, ramUnloadArguments, ramRelinkArguments
@@ -145,7 +145,7 @@ data ReviewedContract = ReviewedContract
   , reviewedPublicationContractDigest :: String
   }
 
-data PayloadKind = RecipeBankD3 | ClassicChrome deriving (Eq, Show)
+data PayloadKind = RecipeBankD3 | ClassicChrome | ClassicChromeIcon deriving (Eq, Show)
 
 -- | What a payload kind's relink links, and the allocation, ABI word, counts
 -- and entries its installer has. A runtime's allocation size names its kind.
@@ -163,7 +163,7 @@ data Payload = Payload
   , payloadLinksBank :: Bool
   }
 
-bankD3Payload, classicChromePayload :: Payload
+bankD3Payload, classicChromePayload, classicChromeIconPayload :: Payload
 bankD3Payload = Payload
   { payloadKind = RecipeBankD3
   , payloadAllocationSize = reviewedAllocationSize
@@ -209,9 +209,21 @@ classicChromePayload = Payload
       ]
   , payloadLinksBank = False
   }
+-- | The Classic Chrome payload's publications plus the icon's, built by the
+-- Classic Chrome relink script with the icon builder; the glyph record and
+-- Q arrays follow the installer in the allocation.
+classicChromeIconPayload = classicChromePayload
+  { payloadKind = ClassicChromeIcon
+  , payloadAllocationSize = 0x21fc
+  , payloadSetupCount = 100
+  , payloadActivationCount = 62
+  , payloadRelinkBuilder = "build-classic-chrome-icon-ram"
+  , payloadRelinkInputs = payloadRelinkInputs classicChromePayload
+      ++ [("RC0_DAT","private-data/analysis/classic-chrome-patch/rc0-regression/FWUP0002.DAT")]
+  }
 
 payloads :: [Payload]
-payloads = [bankD3Payload, classicChromePayload]
+payloads = [bankD3Payload, classicChromePayload, classicChromeIconPayload]
 
 payloadOfSize :: Int -> Maybe Payload
 payloadOfSize size = case filter ((== size) . payloadAllocationSize) payloads of

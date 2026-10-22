@@ -1,0 +1,83 @@
+{
+  "array_source": null,
+  "blobs": [],
+  "container_effect": {
+    "dat_extents": "unchanged",
+    "decoded_size": "unchanged",
+    "load": "0x00bf1a00"
+  },
+  "emulation_case_parameters": null,
+  "free_space": null,
+  "id": "CLASSIC-CHROME-LIVEVIEW-01-IMAGE5",
+  "image": {
+    "decode_base": "0x00bf1a00",
+    "decode_file": "private-data/analysis/classic-chrome-patch/candidate-build-1/patched-id5.bin",
+    "decode_sha256": "e740aeb28ce070a659583bd0bb5cfd9ecc5846ac302564741fcdf37b9b2089bb",
+    "dump_correspondence": "not established for this build",
+    "file_offset_rule": "output file_offset = address - 0x00bf1a00; stock source offset = address - 0x00bf1a00",
+    "segment_id": 5
+  },
+  "order_rule": "Address order; every write is in place. The five words replace the head of FUN_00eee958 and the first two words of its jump table, which no other code reads; publish them together.",
+  "recorded_at": "2026-10-22T12:00:00Z",
+  "schema_version": 3,
+  "target": {
+    "firmware_sha256": "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490",
+    "firmware_version": "1.50",
+    "model": "X-M1"
+  },
+  "tier": "RC2",
+  "totals": {
+    "blob_words": 0,
+    "bytes_written": 20,
+    "changed_bytes": 15,
+    "prefix_bytes_added": 0,
+    "word_writes": 5,
+    "words": 5
+  },
+  "unchanged_surfaces": [
+    "FUN_00eee958 prologue, default arm (out 0, return 0x84) and epilogue",
+    "jump-table words 0x00eee974..0x00eee99c and arm code 0x00eee9b0..0x00eeea74, now unreachable"
+  ],
+  "words": [
+    {
+      "address": "0x00eee960",
+      "current": "0xe350000c",
+      "file_offset": "0x002fcf60",
+      "new": "0xe350000d",
+      "order": 1,
+      "role": "CC live view: FUN_00eee958 cmp r0,#13"
+    },
+    {
+      "address": "0x00eee964",
+      "current": "0x979ff100",
+      "file_offset": "0x002fcf64",
+      "new": "0x95810000",
+      "order": 2,
+      "role": "CC live view: FUN_00eee958 strls r0,[r1]"
+    },
+    {
+      "address": "0x00eee968",
+      "current": "0xea00000c",
+      "file_offset": "0x002fcf68",
+      "new": "0x93a00000",
+      "order": 3,
+      "role": "CC live view: FUN_00eee958 movls r0,#0"
+    },
+    {
+      "address": "0x00eee96c",
+      "current": "0x00eee9b0",
+      "file_offset": "0x002fcf6c",
+      "new": "0x9a000041",
+      "order": 4,
+      "role": "CC live view: FUN_00eee958 bls 0x00eeea78 (epilogue)"
+    },
+    {
+      "address": "0x00eee970",
+      "current": "0x00eee9bc",
+      "file_offset": "0x002fcf70",
+      "new": "0xea00000a",
+      "order": 5,
+      "role": "CC live view: FUN_00eee958 b 0x00eee9a0 (default arm)"
+    }
+  ]
+}

@@ -91,6 +91,35 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "ui-trajectory-lib",
+    srcs = ["Emulation/UiTrajectory.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":emulator-usb",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+    ],
+)
+
+haskell_test(
+    name = "ui-trajectory-tests",
+    size = "small",
+    srcs = ["UiTrajectoryTests.hs"],
+    data = glob(["*-trajectories.json"]),
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":ui-trajectory-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
+
 haskell_binary(
     name = "xm1-viewer",
     srcs = [
@@ -110,6 +139,7 @@ haskell_binary(
         ":emulator-slot-lib",
         ":viewer-runtime-lib",
         ":emulator-usb",
+        ":ui-trajectory-lib",
         ":ram-push-unreviewed",
         "//host:base",
         "//host:bytestring",
@@ -123,6 +153,7 @@ haskell_binary(
         "//host:text",
         "//host:update-container",
         "//transport:camera-core",
+        "//transport:ram-push-cc-icon-pins",
         "//transport:ram-push-cc-pins",
         "//transport:ram-push-pins",
     ],
@@ -677,6 +708,35 @@ haskell_binary(
         "//host:bytestring",
         "//host:containers",
         "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+# Classic Chrome icon and combined-candidate cases: FDL loaders, sizing read,
+# text resolution, label getters, the frames-remaining size class and the Q
+# tiles on the stock, CC, combined and Q-tile images, run through the
+# native-case adapter.
+haskell_binary(
+    name = "classic-chrome-icon-cases",
+    srcs = ["ClassicChromeIconCases.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-threaded",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":native-adapter",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:classic-chrome-icon",
+        "//host:classic-chrome-q-tile",
+        "//host:containers",
+        "//host:directory",
+        "//host:fdl-font",
+        "//host:gvff",
         "//host:filepath",
         "//host:host-support",
         "//host:json",

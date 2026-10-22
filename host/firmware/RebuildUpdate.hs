@@ -16,6 +16,7 @@ import qualified Data.ByteString.Char8 as C
 import Data.Word (Word32)
 import qualified FujiAF.Lz.Format as F
 import qualified FujiAF.LabelRecord as L
+import qualified FujiAF.FontWindow as FW
 import qualified FujiAF.UpdateContainer as U
 import System.Directory (removeFile)
 import System.Environment (getArgs)
@@ -936,7 +937,7 @@ replacePlain flashOffset [stockPath, plainPath, outputPath] = do
     Left message -> hPutStrLn stderr ("rebuild refused: " ++ message) >> exitFailure
     Right value -> pure value
   B.writeFile outputPath emitted
-  outcome <- try (verifyPlainEmitted stockBytes flashOffset media (spanStart, spanLength) outputPath emitted)
+  outcome <- try (verifyWindowEmitted (maybe "plain window" (const "plain span") flashOffset) stockBytes media (spanStart, spanLength) outputPath emitted)
   case outcome of
     Left err -> do
       removeFile outputPath
@@ -961,11 +962,11 @@ replacePlain _ _ = H.failH "usage: rebuild-update replace-plain [--flash-offset 
 
 -- Verification of the written file rather than of the bytes in memory: the
 -- contract checks, the three range checksums recomputed from the file's own
--- ranges, the supplied bytes at the span they were carried to, and byte
--- identity with the source outside the carried span and the main checksum
--- word (reports/update-container-rebuild.md section 8).
-verifyPlainEmitted :: B.ByteString -> Maybe Int -> U.MediaImage -> (Int, Int) -> FilePath -> B.ByteString -> IO (B.ByteString, U.Parsed)
-verifyPlainEmitted stockBytes flashOffset media (spanStart, spanLength) outputPath emitted = do
+-- ranges, the supplied bytes at the media span they were carried to, and byte
+-- identity with the source outside that span and the main checksum word
+-- (reports/update-container-rebuild.md section 8).
+verifyWindowEmitted :: String -> B.ByteString -> U.MediaImage -> (Int, Int) -> FilePath -> B.ByteString -> IO (B.ByteString, U.Parsed)
+verifyWindowEmitted region stockBytes media (spanStart, spanLength) outputPath emitted = do
   written <- H.readRegular maxContainer outputPath
   H.ensure (written == emitted) (outputPath ++ ": the written file differs from the emitted bytes")
   reparsed <- case U.parseContainer written of
@@ -976,16 +977,78 @@ verifyPlainEmitted stockBytes flashOffset media (spanStart, spanLength) outputPa
   let fileStart = mainFileOffset reparsed + spanStart
   H.ensure
     (B.take spanLength (B.drop fileStart written) == B.map complement (U.mediaImageBytes media))
-    (outputPath ++ ": the written container does not carry the supplied plain bytes")
-  requireCarriedIdentity
-    (case flashOffset of
-      Nothing -> "plain window"
-      Just _ -> "plain span")
-    stockBytes
-    written
-    fileStart
-    spanLength
+    (outputPath ++ ": the written container does not carry the supplied " ++ region ++ " bytes")
+  requireCarriedIdentity region stockBytes written fileStart spanLength
   pure (written, reparsed)
+
+-- ---------------------------------------------------------------------------
+-- The font-window carrier: the id-3 FONT_ICON.FDL window
+--
+-- The window is entry 3's flash span, carried after the id-2 extent.
+-- extract-font writes it in media form; replace-font carries a whole window
+-- back through the gated emitter and reads the written file back. No
+-- segment, descriptor or trailer word changes.
+-- ---------------------------------------------------------------------------
+
+extractFont :: [FilePath] -> IO ()
+extractFont [stockPath, outputPath] = do
+  stockBytes <- readContainer stockPath
+  stock <- parseOrFail stockPath stockBytes
+  (windowStart, windowEnd) <- orRefuse "font carrier refused: " (FW.fontWindow (U.parsedParts stock))
+  media <- orRefuse "font carrier refused: " (FW.extractFont (U.parsedParts stock))
+  B.writeFile outputPath (U.mediaImageBytes media)
+  putStrLn
+    ( "font window: flash "
+        ++ U.showHexWord (fromIntegral windowStart)
+        ++ " to "
+        ++ U.showHexWord (fromIntegral windowEnd)
+        ++ ", "
+        ++ show (windowEnd - windowStart)
+        ++ " bytes (the id-3 loader's raw copy)"
+    )
+  putStrLn ("wrote " ++ outputPath ++ " (media form, the loader's raw copy)")
+extractFont _ = H.failH "usage: rebuild-update extract-font STOCK_DAT OUT_FONT_WINDOW"
+
+replaceFont :: [FilePath] -> IO ()
+replaceFont [stockPath, fontPath, outputPath] = do
+  stockBytes <- readContainer stockPath
+  stock <- parseOrFail stockPath stockBytes
+  input <- H.readRegular (8 * 1024 * 1024) fontPath
+  let media = U.MediaImage input
+  (windowStart, windowEnd) <- orRefuse "font carrier refused: " (FW.fontWindow (U.parsedParts stock))
+  stockWindow <- orRefuse "font carrier refused: " (FW.extractFont (U.parsedParts stock))
+  got <- H.sha256 input
+  putStrLn (fontPath ++ ": " ++ show (B.length input) ++ " bytes (media form), sha256 " ++ got)
+  let (changed, first) = U.firstDiff (U.mediaImageBytes stockWindow) input
+  putStrLn ("font window vs input: " ++ show changed ++ " bytes differ, first at window offset " ++ maybe "-" show first)
+  parts <- orRefuse "font replacement refused: " (FW.replaceFont stock media)
+  emitted <- orRefuse "rebuild refused: " (U.rebuildContainer stock parts)
+  B.writeFile outputPath emitted
+  outcome <- try (verifyWindowEmitted "font window" stockBytes media (windowStart, windowEnd - windowStart) outputPath emitted)
+  case outcome of
+    Left err -> do
+      removeFile outputPath
+      hPutStrLn stderr (displayException (err :: SomeException))
+      hPutStrLn stderr (outputPath ++ ": removed after the read-back verification failed")
+      exitFailure
+    Right (written, reparsed) -> do
+      putStrLn
+        ( "main checksum word: "
+            ++ U.showHexWord (U.hMainChecksum (U.parsedHeader stock))
+            ++ " -> "
+            ++ U.showHexWord (U.hMainChecksum (U.parsedHeader reparsed))
+        )
+      if input == U.mediaImageBytes stockWindow
+        then do
+          H.ensure (written == stockBytes) (outputPath ++ ": the unchanged font window did not reproduce the source container byte for byte")
+          putStrLn ("unchanged font window: the emitted container is byte-identical to the source over " ++ show (B.length written) ++ " bytes")
+        else pure ()
+      digest <- H.sha256 written
+      putStrLn ("wrote " ++ outputPath ++ ": " ++ show (B.length written) ++ " bytes, sha256 " ++ digest)
+replaceFont _ = H.failH "usage: rebuild-update replace-font INPUT_DAT FONT_WINDOW OUTPUT_DAT"
+
+orRefuse :: String -> Either String a -> IO a
+orRefuse prefix = either (\message -> hPutStrLn stderr (prefix ++ message) >> exitFailure) pure
 
 writeLabel :: [FilePath] -> IO ()
 writeLabel [stockPath, text, outputPath] = do
@@ -1046,11 +1109,13 @@ writeLabel [stockPath, text, outputPath] = do
 writeLabel _ = H.failH "usage: rebuild-update write-label STOCK_DAT TEXT OUTPUT_DAT"
 
 writeRecordUsage :: String
-writeRecordUsage = "usage: rebuild-update write-record --id 0xID --layout A,B,C,D,E --current-hex HEX INPUT_DAT TEXT OUTPUT_DAT"
+writeRecordUsage = "usage: rebuild-update write-record --id 0xID --layout A,B,C,D,E --current-hex HEX [--text-utf16] INPUT_DAT TEXT OUTPUT_DAT"
 
--- write-record options: the special id, the five layout halfwords in decimal
--- and the record's current 66 bytes in media form as 132 lowercase hex digits.
-parseWriteRecord :: [String] -> IO (L.SpecialLabelId, L.LabelLayout, L.SpecialRecordBytes, [String])
+-- write-record options: the special id, the five layout halfwords in decimal,
+-- the record's current 66 bytes in media form as 132 lowercase hex digits and,
+-- with --text-utf16, TEXT as UTF-16 code units in hex (four lowercase digits
+-- each) instead of printable ASCII.
+parseWriteRecord :: [String] -> IO (L.SpecialLabelId, L.LabelLayout, L.SpecialRecordBytes, String -> Either String L.LabelName, [String])
 parseWriteRecord arguments = case arguments of
   "--id" : idText : "--layout" : layoutText : "--current-hex" : currentText : rest -> do
     value <- hexValue "special id" idText
@@ -1058,7 +1123,9 @@ parseWriteRecord arguments = case arguments of
     values <- mapM decimal (splitCommas layoutText)
     layout <- either H.failH pure (L.labelLayout values)
     current <- either H.failH pure (L.specialRecordFromHex currentText)
-    pure (ident, layout, current, rest)
+    pure $ case rest of
+      "--text-utf16" : files -> (ident, layout, current, L.labelNameFromUnitHex, files)
+      files -> (ident, layout, current, L.labelName, files)
   _ -> H.failH writeRecordUsage
   where
     decimal text = case reads text of
@@ -1068,9 +1135,10 @@ parseWriteRecord arguments = case arguments of
       (field, []) -> [field]
       (field, _ : rest) -> field : splitCommas rest
 
-writeRecord :: L.SpecialLabelId -> L.LabelLayout -> L.SpecialRecordBytes -> [String] -> IO ()
-writeRecord ident layout current [stockPath, text, outputPath] = do
-  name <- either (\message -> H.failH ("record write refused: " ++ message)) pure (L.labelName text)
+writeRecord :: L.SpecialLabelId -> L.LabelLayout -> L.SpecialRecordBytes -> (String -> Either String L.LabelName) -> [String] -> IO ()
+writeRecord ident layout current parseName [stockPath, textArgument, outputPath] = do
+  name <- either (\message -> H.failH ("record write refused: " ++ message)) pure (parseName textArgument)
+  let text = L.labelNameText name
   stockBytes <- readContainer stockPath
   stock <- parseOrFail stockPath stockBytes
   let (_, size, load) = U.image2Extent (U.parsedParts stock)
@@ -1093,7 +1161,7 @@ writeRecord ident layout current [stockPath, text, outputPath] = do
         ++ "), current bytes match "
         ++ L.specialRecordHex current
     )
-  putStrLn ("name: " ++ show text ++ ", layout " ++ show (L.labelLayoutList layout))
+  putStrLn ("name: " ++ show text ++ " (UTF-16 units " ++ L.labelNameUnitHex name ++ "), layout " ++ show (L.labelLayoutList layout))
   let (changed, first) = U.firstDiff (U.mediaImageBytes stockMedia) (U.mediaImageBytes media)
   putStrLn ("extent vs input: " ++ show changed ++ " bytes differ, first at image offset " ++ maybe "-" show first)
   (written, reparsed) <- emitImage2 stock stockBytes media outputPath
@@ -1118,7 +1186,7 @@ writeRecord ident layout current [stockPath, text, outputPath] = do
     )
   digest <- H.sha256 written
   putStrLn ("wrote " ++ outputPath ++ ": " ++ show (B.length written) ++ " bytes, sha256 " ++ digest)
-writeRecord _ _ _ _ = H.failH writeRecordUsage
+writeRecord _ _ _ _ _ = H.failH writeRecordUsage
 
 showHexInt :: Int -> String
 showHexInt n
@@ -1149,13 +1217,15 @@ main = do
       ("replace-plain" : rest) -> do
         (flashOffset, files) <- parseReplacePlain rest
         replacePlain flashOffset files
+      ("extract-font" : rest) -> extractFont rest
+      ("replace-font" : rest) -> replaceFont rest
       ("write-label" : rest) -> writeLabel rest
       ("write-record" : rest) -> do
-        (ident, layout, current, files) <- parseWriteRecord rest
-        writeRecord ident layout current files
+        (ident, layout, current, parseName, files) <- parseWriteRecord rest
+        writeRecord ident layout current parseName files
       _ ->
         H.failH
-          "usage: rebuild-update verify|verify-stock|round-trip|diff|replace-record4|extract-record5|replace-record5|extract-image2|replace-image2|extract-plain|replace-plain|write-label|write-record ..."
+          "usage: rebuild-update verify|verify-stock|round-trip|diff|replace-record4|extract-record5|replace-record5|extract-image2|replace-image2|extract-plain|replace-plain|extract-font|replace-font|write-label|write-record ..."
   case outcome :: Either SomeException () of
     Left err -> hPutStrLn stderr (displayException err) >> exitFailure
     Right () -> pure ()

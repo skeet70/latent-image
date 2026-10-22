@@ -14,6 +14,7 @@
 --
 -- Families:
 --   conv-*      FUN_00738fe8 / FUN_00736a74 converters, inputs 0..15, 0xffffffff
+--   validator-* FUN_00eee958 on stock and, with --liveview-id5, the live-view image 5
 --   devcode-*   FUN_00d78a80 -> FUN_00d78418, develop record +0x104
 --   marker-*    FUN_00d78538 -> FUN_00d7851c, develop record +0x110
 --   filmmode-*  FUN_00eab258;  saturation-*  FUN_00eaac74
@@ -371,6 +372,7 @@ data Opts = Opts
   , oStubs :: FilePath
   , oPrivate :: FilePath
   , oRams :: [RamOpt]
+  , oLiveview :: Maybe FilePath
   }
 
 defaults :: Opts
@@ -385,6 +387,7 @@ defaults =
     , oStubs = "bazel-bin/host/firmware"
     , oPrivate = "private-data/analysis/x-m1-1.50"
     , oRams = []
+    , oLiveview = Nothing
     }
 
 outDir :: Opts -> FilePath
@@ -402,6 +405,7 @@ parseOpts o (flag : v : rest) = case flag of
   "--candidate-params" -> parseOpts o {oCandParams = v} rest
   "--stubs" -> parseOpts o {oStubs = v} rest
   "--private" -> parseOpts o {oPrivate = v} rest
+  "--liveview-id5" -> parseOpts o {oLiveview = Just v} rest
   _ -> failH ("unknown option " ++ flag)
 parseOpts _ [flag] = failH ("option " ++ flag ++ " needs a value")
 
@@ -413,6 +417,7 @@ data World = World
   , wSynth, wCand :: Params
   , wCapture, wSettings :: B.ByteString
   , wRams :: [RamWorld]
+  , wLv5 :: Maybe Img
   }
 
 -- The RC0 decodes with one manifest's publications applied, and its runtime.
@@ -460,7 +465,8 @@ loadWorld o = do
   settings <- B.readFile (oStubs o </> "classic-chrome-settings.bin")
   ensure (B.length capture == 96 && B.length settings == 84) "stub blob sizes"
   rams <- mapM (loadRam rc0 id5 plain id2) (oRams o)
-  pure (World id4 id5 plain id2 rc0 p4 p5 pp c4 adj synth cand capture settings rams)
+  lv5 <- forM (oLiveview o) $ \path -> loadImg "id5-liveview" path 0x00bf1a00 Nothing
+  pure (World id4 id5 plain id2 rc0 p4 p5 pp c4 adj synth cand capture settings rams lv5)
 
 -- Contract words at every site the cases execute, on the stock and patched images.
 checkContract :: World -> IO ()
@@ -501,6 +507,20 @@ checkContract w = do
   checkWords (wPPlain w) 0x012548a0 [0xe5943008, 0xe3a02000, 0xe3530003, 0x03a02001, 0xe3530005, 0x03a02003, 0xe3530006, 0x03a0200b, 0xe3530007, 0x03a0200c, 0xe3530008, 0x03a0200d, 0xe3033a7c, 0xe3403151, 0xe58327a4, 0xea000011]
   checkWords (wPlain w) 0x01179b14 [0xe300383d]
   checkWords (wPPlain w) 0x01179b14 [0xe300383e]
+  -- The live-view fragment: five words of FUN_00eee958 over the patched image 5;
+  -- the frames-remaining fix's three FUN_00e42414 words may be present too, nothing else.
+  forM_ [0 .. 12 :: Word32] $ \k -> let arm = wd (wId5 w) (wd (wId5 w) (0x00eee96c + 4 * k)) in ensure (arm .&. 0xffff0f00 == 0xe3a00000) ("id5: FUN_00eee958 arm " ++ show k ++ " is not mov rX,#imm: " ++ h32 arm)
+  forM_ (wLv5 w) $ \l5 -> do
+    let windows = [(0x00e424ac, 12), (0x00eee960, 20)] :: [(Word32, Int)]
+        outside img = B.concat [B.take (hi - lo) (B.drop lo (iBytes img)) | (lo, hi) <- zip (0 : [fromIntegral (a - 0x00bf1a00) + z | (a, z) <- windows]) ([fromIntegral (a - 0x00bf1a00) | (a, _) <- windows] ++ [B.length (iBytes img)])]
+        framesCurrent = [0xe350000c, 0x13a00006, 0x03a00000]
+        framesFix = [0xe350000d, 0x83a00006, 0x93a00000]
+        frames = [wd l5 a | a <- [0x00e424ac, 0x00e424b0, 0x00e424b4]]
+    checkWords (wP5 w) 0x00eee960 [0xe350000c, 0x979ff100, 0xea00000c, 0x00eee9b0, 0x00eee9bc]
+    checkWords (wP5 w) 0x00e424ac framesCurrent
+    checkWords l5 0x00eee960 [0xe350000d, 0x95810000, 0x93a00000, 0x9a000041, 0xea00000a]
+    ensure (frames == framesCurrent || frames == framesFix) (iPath l5 ++ ": FUN_00e42414 tail [0x00e424ac, 0x00e424b8) is neither the patched image 5's words nor the frames-remaining fix: " ++ unwords (map h32 frames))
+    ensure (B.length (iBytes l5) == B.length (iBytes (wP5 w)) && outside l5 == outside (wP5 w)) (iPath l5 ++ ": differs from the patched image 5 outside [0x00e424ac, 0x00e424b8) and [0x00eee960, 0x00eee974)")
   ensure (sl (wId2 w) 0x0037b808 66 == B.replicate 66 0) "id2: the stock 0x83e record is not 66 zero bytes"
 
 -- Words the RAM cases' expectations rest on, read from the RAM images.
@@ -603,6 +623,54 @@ convCases w sides =
 
 inTag :: Word32 -> String
 inTag x = if x == 0xffffffff then "ffffffff" else let t = showHex x "" in replicate (2 - length t) '0' ++ t
+
+-- ---------------------------------------------------------------------------
+-- 1b. Movie/live-view film validator FUN_00eee958
+-- ---------------------------------------------------------------------------
+
+validatorInputs :: [Word32]
+validatorInputs = [0 .. 19] ++ [0x7fffffff, 0x80000000, 0xffffffff]
+
+-- Stock: for film <= 12 the jump table 0x00eee96c sends it to an arm
+-- `mov rX, #k; str rX, [r1]; mov r0, #0`, read here; else the default arm
+-- stores 0 and returns 0x84.
+validatorStock :: Img -> Word32 -> (Word32, Word32)
+validatorStock img x
+  | x <= 12 = (wd img (wd img (0x00eee96c + 4 * x)) .&. 0xff, 0)
+  | otherwise = (0, 0x84)
+
+validatorLiveview :: Word32 -> (Word32, Word32)
+validatorLiveview x = if x <= 13 then (x, 0) else (0, 0x84)
+
+outBase :: Word32
+outBase = 0x20000000
+
+validatorCases :: World -> [Case]
+validatorCases w =
+  [ Case
+      { cId = "validator-" ++ tag ++ "-" ++ inTag x
+      , cFamily = "1b movie/live-view film validator"
+      , cProv = "FUN_00eee958 on the " ++ tag ++ " image 5, entered as FUN_00edccd8, FUN_00edd120, FUN_00eef1e4 and FUN_00eef4b0 call it: r0 = film value (config +0x5c or struct +0x14), r1 = the caller's local, which the caller passes to FUN_00d78a80 and FUN_00d78538; no caller reads r0. The local is filled with 0xa5."
+      , cEntry = 0x00eee958
+      , cArgs = [("r0", x), ("r1", outBase)]
+      , cRegs = [codeReg "code" img 0x00eee958 0x12c, synthReg "out" "rw" outBase (B.replicate 4 0xa5) "caller local, 4 bytes of 0xa5"]
+      , cFns = [(0x00eee958, 0x12c)]
+      , cStubs = []
+      , cExpR = [("r0", ret)]
+      , cClaims = [("out", 0, le32 out)]
+      , cEvents = []
+      , cPin = []
+      , cPinFrom = Nothing
+      , cExpect = "local = " ++ hx out ++ ", r0 = " ++ hx ret ++ " (" ++ rule ++ ")."
+      , cExcl = ["Only the validator is exercised; FUN_00d78a80 and FUN_00d78538 on its output are the devcode- and marker- families, and the record build around them the builder cases' lv path."]
+      , cBudget = 10000
+      , cInputs = [imgInput img]
+      }
+  | (tag, img, lv) <- ("stock", wId5 w, False) : [("liveview", l5, True) | Just l5 <- [wLv5 w]]
+  , x <- validatorInputs
+  , let (out, ret) = if lv then validatorLiveview x else validatorStock (wId5 w) x
+  , let rule = if lv then "fragment cmp r0,#13; strls r0,[r1]; movls r0,#0; bls epilogue; b default arm: 0..13 pass, else 0 with 0x84" else "jump table 0x00eee96c read from the stock image: identity 0..12, else 0 with 0x84"
+  ]
 
 -- ---------------------------------------------------------------------------
 -- 2. Develop dispatch and marker
@@ -1292,7 +1360,7 @@ main = do
   let env = Env out runner arts finals
       fs = flashSides w
       rs = ramSides w
-      flashCases = convCases w fs ++ devCases fs ++ metaCases fs ++ stubCases w (flashStubHosts w) ++ rawCases fs ++ offerCases (flashOfferSides w) ++ labelCases (flashLabelSources w)
+      flashCases = convCases w fs ++ validatorCases w ++ devCases fs ++ metaCases fs ++ stubCases w (flashStubHosts w) ++ rawCases fs ++ offerCases (flashOfferSides w) ++ labelCases (flashLabelSources w)
       ramPairs = zip rs (wRams w)
       ramCases =
         convCases w rs ++ devCases rs ++ metaCases rs

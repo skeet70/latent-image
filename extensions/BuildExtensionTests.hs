@@ -1,10 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- Behavioural tests for the extension manifest parser: the steps an accepted
--- manifest yields and the refusals for the image2-record and plain-patch-set
--- step kinds and their container order. Manifests and parts are synthetic and
--- written to a temporary directory; the base digest is a placeholder. Each
--- refusal is one change to a manifest the same run accepts.
+-- manifest yields and the refusals for the image2-record, image2-patch-set,
+-- font-patch-set and plain-patch-set step kinds and their container order.
+-- Manifests and parts are synthetic and written to a temporary directory; the
+-- base digest is a placeholder. Each refusal is one change to a manifest the
+-- same run accepts.
 module Main where
 
 import Control.Exception (IOException, SomeException, displayException, try)
@@ -216,6 +217,72 @@ run = H.withTemporary "build-extension-tests" $ \root -> do
   refuses fixture "plain patch set for another firmware" [otherBase]
   plainAsImage <- jsonPart fixture "image-patch-set" "plain-as-image.json" (patchSet baseDigest plainImage)
   refuses fixture "segment 6 as an image-patch-set" [plainAsImage]
+
+  -- font-patch-set: after the records, before the plain patch set, at most
+  -- once; segment 3 at decode_base 0x003bc000.
+  let fontImage = [("segment_id", H.n 3), ("decode_base", H.s "0x003bc000"), ("decode_sha256", H.s windowDigest)]
+      fontVariant name image = jsonPart fixture "font-patch-set" name (patchSet baseDigest image)
+      iconRecord = without "text" (with "text_utf16" (H.s "f073") (record "0x83d" "" [540, 24, 30, 36, 48] zeroHex))
+  font <- fontVariant "font.json" fontImage
+  ident83d <- orFail "0x83d" (L.specialLabelId 0x83d)
+  iconName <- orFail "icon name" (L.labelNameUnits [0xf073])
+  iconLayout <- orFail "icon layout" (L.labelLayout [540, 24, 30, 36, 48])
+  withFont <- accepts fixture "records, font, plain" [image4, image5, iconRecord, ccRecord, font, plain]
+  expectSteps
+    fixture
+    "records, font, plain steps"
+    [ PatchImage Image4 (Just (LoadAddress 0x0061c200)) (root </> "image4.json")
+    , PatchImage Image5 Nothing (root </> "image5.json")
+    , WriteRecord ident83d iconName iconLayout zeros
+    , WriteRecord ident83e ccName ccLayout zeros
+    , PatchFont (Sha256 windowDigest) (root </> "font.json")
+    , PatchPlain (Sha256 windowDigest) (root </> "plain.json")
+    ]
+    withFont
+  refuses fixture "two font patch sets" [font, font]
+  refuses fixture "font before a record" [font, ccRecord]
+  refuses fixture "font after the plain patch set" [plain, font]
+  fontSegment6 <- fontVariant "font-segment6.json" [("segment_id", H.n 6), ("decode_base", H.s "0x003bc000"), ("decode_sha256", H.s windowDigest)]
+  refuses fixture "font segment 6" [fontSegment6]
+  fontShifted <- fontVariant "font-shifted.json" [("segment_id", H.n 3), ("decode_base", H.s "0x003bd000"), ("decode_sha256", H.s windowDigest)]
+  refuses fixture "font decode_base 0x003bd000" [fontShifted]
+  fontMoved <- fontVariant "font-moved.json" (fontImage ++ [("output_base", H.s "0x003bbf00")])
+  refuses fixture "font output_base" [fontMoved]
+  refuses fixture "record with text and text_utf16" [with "text" (H.s "X") iconRecord]
+  refuses fixture "uppercase unit hex" [with "text_utf16" (H.s "F073") iconRecord]
+  refuses fixture "three hex digits" [with "text_utf16" (H.s "f07") iconRecord]
+  refuses fixture "zero unit" [with "text_utf16" (H.s "0000") iconRecord]
+
+  -- image2-patch-set: after the records, before the font patch set, at most
+  -- once; segment 2 at decode_base 0x00130000.
+  let image2Image = [("segment_id", H.n 2), ("decode_base", H.s "0x00130000"), ("decode_sha256", H.s windowDigest)]
+      image2Variant name image = jsonPart fixture "image2-patch-set" name (patchSet baseDigest image)
+  image2 <- image2Variant "image2.json" image2Image
+  withImage2 <- accepts fixture "records, image 2, font, plain" [image4, image5, iconRecord, ccRecord, image2, font, plain]
+  expectSteps
+    fixture
+    "records, image 2, font, plain steps"
+    [ PatchImage Image4 (Just (LoadAddress 0x0061c200)) (root </> "image4.json")
+    , PatchImage Image5 Nothing (root </> "image5.json")
+    , WriteRecord ident83d iconName iconLayout zeros
+    , WriteRecord ident83e ccName ccLayout zeros
+    , PatchImage2 (Sha256 windowDigest) (root </> "image2.json")
+    , PatchFont (Sha256 windowDigest) (root </> "font.json")
+    , PatchPlain (Sha256 windowDigest) (root </> "plain.json")
+    ]
+    withImage2
+  _ <- accepts fixture "image-2 patch set alone" [image2]
+  refuses fixture "two image-2 patch sets" [image2, image2]
+  refuses fixture "image 2 before a record" [image2, ccRecord]
+  refuses fixture "image 2 after the font patch set" [font, image2]
+  refuses fixture "image 2 after the plain patch set" [plain, image2]
+  image2Segment3 <- image2Variant "image2-segment3.json" [("segment_id", H.n 3), ("decode_base", H.s "0x00130000"), ("decode_sha256", H.s windowDigest)]
+  refuses fixture "image 2 segment 3" [image2Segment3]
+  image2Shifted <- image2Variant "image2-shifted.json" [("segment_id", H.n 2), ("decode_base", H.s "0x00131000"), ("decode_sha256", H.s windowDigest)]
+  refuses fixture "image 2 decode_base 0x00131000" [image2Shifted]
+  image2Moved <- image2Variant "image2-moved.json" (image2Image ++ [("output_base", H.s "0x0012ff00")])
+  refuses fixture "image 2 output_base" [image2Moved]
+  refuses fixture "image 2 part digest" [with "sha256" (H.s (replicate 64 'd')) image2]
 
   total <- readIORef (fixtureChecked fixture)
   putStrLn (show total ++ " build-extension manifest checks passed")

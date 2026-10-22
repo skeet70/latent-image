@@ -1,12 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, runRamPushE2E) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, classicChromeIconPayload, runRamPushE2E) where
 
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, try)
 import Control.Monad (forM, forM_, unless, when)
-import Data.Aeson (FromJSON (..), Value (..), eitherDecodeFileStrict, encode, object, withObject, (.!=), (.:), (.:?), (.=))
+import Data.Aeson (FromJSON (..), Value (..), encode, object, withObject, (.:), (.=))
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
-import Data.List (nub, sort, stripPrefix)
+import Data.List (nub, sort)
 import Data.Maybe (catMaybes)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -23,12 +23,14 @@ import System.Directory (createDirectory, doesDirectoryExist, getCurrentDirector
 import System.FilePath ((</>))
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stdout)
 import System.Posix.Files (setFileMode)
+import Emulation.UiTrajectory
 import EmulatorUsb
 import FujiAF.RamPush
 import FujiAF.Transport (ensurePrivateDirectory, realClock, writePrivateBytes)
 import Xm1UnreviewedRelink (runUnreviewedRamPush, runUnreviewedRamUnload, withUnreviewedBuild)
 import RamPushReviewedPins (reviewedContract)
 import RamPushCcReviewedPins (reviewedCcContract)
+import RamPushCcIconReviewedPins (reviewedCcIconContract)
 
 -- | Unreviewed skips the compiled source-identity and publication-contract pins; its policy
 -- decides whether a bank that fails the ELF allowlist is still pushed. Reviewed enforces it.
@@ -54,11 +56,17 @@ payloadText :: Payload -> T.Text
 payloadText p = case payloadKind p of
   RecipeBankD3 -> "recipe-bank-d3"
   ClassicChrome -> "classic-chrome"
+  ClassicChromeIcon -> "classic-chrome-icon"
 
 payloadContract :: Payload -> ReviewedContract
 payloadContract p = case payloadKind p of
   RecipeBankD3 -> reviewedContract
   ClassicChrome -> reviewedCcContract
+  ClassicChromeIcon -> reviewedCcIconContract
+
+-- | Whether the payload carries the Classic Chrome publications.
+carriesClassicChrome :: Payload -> Bool
+carriesClassicChrome p = payloadKind p `elem` [ClassicChrome, ClassicChromeIcon]
 
 -- | The Classic Chrome entry words and hook sites (reports/classic-chrome-patch.md
 -- section 8.2.7 step 2), armed from the attach to the end of install.
@@ -73,8 +81,6 @@ classicChromeFetchSites =
 relinkModeText :: RelinkMode -> T.Text
 relinkModeText ReviewedRelink = "reviewed"
 relinkModeText (UnreviewedRelink _) = "unreviewed"
-
-data MenuState = MenuState Int Int Int deriving (Eq, Show)
 
 require :: Bool -> String -> IO ()
 require yes message = unless yes (ioError (userError message))
@@ -98,56 +104,6 @@ d3HookSite = "d3-hook"
 
 hexBytes :: B.ByteString -> String
 hexBytes = concatMap (\byte -> let digits = showHex byte "" in replicate (2 - length digits) '0' ++ digits) . B.unpack
-
--- | One trajectory segment: its phase name, the mode-dial detent set before its first key, the
--- expected menu state after each key, the message ids the menu message drawer is entered with during
--- the segment (none when absent), and an optional capture label taken after the last key. An
--- observing segment records each key's actual state instead of requiring the expected one; `reads`
--- are guest RAM windows recorded after the last key.
-data Segment = Segment
-  { segmentPhase :: T.Text
-  , segmentModeDial :: Maybe ModeDial
-  , segmentCapture :: Maybe String
-  , segmentSteps :: [(String, MenuState)]
-  , segmentMessages :: [Word32]
-  , segmentObserve :: Bool
-  , segmentReads :: [(String, ReadAddress, Int)]
-  , segmentRequires :: [T.Text]
-  }
-
--- | A read window's start: a fixed guest address, or a symbol of the relinked runtime.
-data ReadAddress = FixedAddress Word32 | RuntimeSymbol String
-
-instance FromJSON Segment where
-  parseJSON = withObject "segment" $ \segment -> Segment
-    <$> segment .: "phase"
-    <*> (traverse modeDial =<< segment .:? "mode_dial")
-    <*> segment .:? "capture"
-    <*> (map step <$> segment .: "steps")
-    <*> segment .:? "messages" .!= []
-    <*> segment .:? "observe" .!= False
-    <*> (mapM window =<< segment .:? "reads" .!= [])
-    <*> segment .:? "requires" .!= []
-    where
-      step (key, menu, setting, cursor) = (key, MenuState menu setting cursor)
-      modeDial position = case (position :: T.Text) of
-        "M" -> pure ModeDialManual
-        _ -> fail ("unsupported mode-dial position: " ++ T.unpack position)
-      window (label, address, len) = case T.unpack address of
-        text | Just symbol <- stripPrefix "runtime:" text, not (null symbol) -> pure (label, RuntimeSymbol symbol, len)
-             | [(value, "")] <- readHex text -> pure (label, FixedAddress value, len)
-             | otherwise -> fail ("read address must be hex without 0x or runtime:SYMBOL: " ++ text)
-
-data Trajectories = Trajectories
-  { beforeUnload :: [Segment]
-  , afterUnload :: [Segment]
-  }
-
-instance FromJSON Trajectories where
-  parseJSON = withObject "trajectories" $ \document -> do
-    schema <- document .: "schema"
-    unless (schema == (1 :: Int)) (fail "unsupported trajectory schema")
-    Trajectories <$> document .: "before_unload" <*> document .: "after_unload"
 
 menuState :: Value -> IO MenuState
 menuState value = either (ioError . userError . ("invalid menu response: " ++)) pure $ parseEither parser value
@@ -242,10 +198,8 @@ data Plan = Plan
   , planAfter :: [Segment]
   , planUnload :: Bool
   , planFromInstall :: Bool
+  , planTraceSites :: [TraceSite]
   }
-
-phaseNames :: Trajectories -> [T.Text]
-phaseNames trajectories = nub (map segmentPhase (beforeUnload trajectories ++ afterUnload trajectories))
 
 -- | The named phase with every phase it transitively requires, in trajectory order; a phase after
 -- unload brings the unload with it.
@@ -261,7 +215,7 @@ segmentPlan trajectories name = do
       chosen = close [name] []
       selected = filter ((`elem` chosen) . segmentPhase)
       after = selected (afterUnload trajectories)
-  pure (Plan name (selected (beforeUnload trajectories)) after (not (null after)) True)
+  pure (Plan name (selected (beforeUnload trajectories)) after (not (null after)) True (trajectoryTraceSites trajectories))
 
 -- | A relinker build held in memory.
 data Relinked = Relinked
@@ -304,10 +258,8 @@ installHostValue host = object
 runRamPushE2E :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
 runRamPushE2E settings python workspace trajectoryFile installedMedia adjustmentNand cardImage receipt = do
   hSetBuffering stdout LineBuffering
-  trajectories <- eitherDecodeFileStrict trajectoryFile
-    >>= either (ioError . userError . ("invalid RAM-push e2e trajectories: " ++)) pure
-  forM_ [phase | entry <- beforeUnload trajectories ++ afterUnload trajectories, phase <- segmentRequires entry] $ \phase ->
-    require (phase `elem` phaseNames trajectories) ("trajectory requires an unknown segment: " ++ T.unpack phase)
+  trajectories <- B.readFile trajectoryFile
+    >>= either (ioError . userError . ("invalid RAM-push e2e trajectories: " ++)) pure . decodeTrajectories
   exists <- doesDirectoryExist receipt
   when exists $ do
     entries <- listDirectory receipt
@@ -324,7 +276,7 @@ runRamPushE2E settings python workspace trajectoryFile installedMedia adjustment
         (Nothing, FlashCandidate) -> Just (phaseNames trajectories)
         (Nothing, RamPush) -> Nothing
   case selection of
-    Nothing -> session (Plan "all" (beforeUnload trajectories) (afterUnload trajectories) True False) receipt
+    Nothing -> session (Plan "all" (beforeUnload trajectories) (afterUnload trajectories) True False (trajectoryTraceSites trajectories)) receipt
     Just names -> do
       plans <- mapM (segmentPlan trajectories) names
       when (pushMode settings == FlashCandidate) $ forM_ plans $ \plan ->
@@ -377,7 +329,7 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
       unloadWith = case relinkMode settings of
         ReviewedRelink -> runRamUnload (payloadContract selected)
         UnreviewedRelink _ -> runUnreviewedRamUnload
-      fetchSites = if payloadKind selected == ClassicChrome then classicChromeFetchSites else []
+      fetchSites = if carriesClassicChrome selected then classicChromeFetchSites else []
       relinkFiles base = relinkAt base $ \pinned -> Relinked (pinnedDocument pinned) (pinnedRuntime pinned)
         <$> B.readFile (pinnedDirectory pinned </> "kernel.syms")
         <*> B.readFile (pinnedDirectory pinned </> "kernel.disasm")
@@ -471,7 +423,7 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
       , (cpu0Exit, "cpu0-window-exit")
       , (cpu1Exit, "cpu1-window-exit")
       , (menuMessageDrawer, menuMessageSite)
-      ] ++ [(d3HookEntry, d3HookSite) | payloadKind selected == RecipeBankD3] ++ fetchSites
+      ] ++ [(d3HookEntry, d3HookSite) | payloadKind selected == RecipeBankD3] ++ fetchSites ++ declaredSites plan
     privateDirectory pushDirectory
     (statePath, installMailbox) <- case restoredHost of
       Just host -> do
@@ -499,7 +451,7 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
         putStrLn ("install checkpoint: " ++ C.unpack (BL.toStrict (encode saved)))
         pure (statePath, installMailbox)
     state <- readRamPushState statePath
-    runner <- newSegmentRunner emulator e2e (\label action -> timed label action) readAddress (\phase message -> stop phase message)
+    runner <- newSegmentRunner emulator e2e (\label action -> timed label action) readAddress (\phase message -> stop phase message) plan
     let segments = runSegments runner
     capturedBefore <- segments (planBefore plan)
     unloadMailbox <- if planUnload plan
@@ -541,7 +493,7 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
           ]
     writePrivateBytes (e2e </> "e2e-result.json") (BL.toStrict (encode result) <> "\n")
     pure (manifestPublications manifest)
-  when (planUnload plan && payloadKind selected == ClassicChrome) $
+  when (planUnload plan && carriesClassicChrome selected) $
     timed "cold-restart-read" (coldRestartRead python runtime installedMedia adjustmentNand cardImage (checkpointRoot settings) published e2e)
 
 -- | A cold boot of the same inputs, then every publication word read against its old word.
@@ -581,15 +533,27 @@ data SegmentRunner = SegmentRunner
   , runnerTimed :: T.Text -> IO (Maybe Value) -> IO (Maybe Value)
   , runnerReadAddress :: ReadAddress -> IO Word32
   , runnerStop :: T.Text -> String -> IO ()
+  , runnerTraceLabels :: [String]
   , runnerHits :: IORef Int
   , runnerObservations :: IORef [Value]
   }
 
 newSegmentRunner :: Emulator -> FilePath -> (T.Text -> IO (Maybe Value) -> IO (Maybe Value))
-  -> (ReadAddress -> IO Word32) -> (T.Text -> String -> IO ()) -> IO SegmentRunner
-newSegmentRunner emulator receipt timedAction readAddress stopAction = do
+  -> (ReadAddress -> IO Word32) -> (T.Text -> String -> IO ()) -> Plan -> IO SegmentRunner
+newSegmentRunner emulator receipt timedAction readAddress stopAction plan = do
   (recorded, _) <- emulatorTraceHits emulator 0
-  SegmentRunner emulator receipt timedAction readAddress stopAction <$> newIORef recorded <*> newIORef []
+  SegmentRunner emulator receipt timedAction readAddress stopAction (map traceSiteLabel (planTraceSites plan))
+    <$> newIORef recorded <*> newIORef []
+
+-- | The plan's trajectory-declared sites in the bridge's form.
+declaredSites :: Plan -> [(Word32, String)]
+declaredSites plan = [(traceSiteAddress site, traceSiteLabel site) | site <- planTraceSites plan]
+
+traceHitValue :: TraceHit -> Value
+traceHitValue hit = object
+  [ "site" .= traceSite hit, "core" .= traceCore hit, "instructions" .= traceInstructions hit
+  , "r0" .= hexAddress (traceR0 hit), "r1" .= hexAddress (traceR1 hit)
+  , "r2" .= hexAddress (traceR2 hit), "r3" .= hexAddress (traceR3 hit) ]
 
 -- | Runs each segment and returns its capture receipt.
 runSegments :: SegmentRunner -> [Segment] -> IO [Maybe Value]
@@ -613,12 +577,16 @@ runSegments runner = mapM $ \segment -> runnerTimed runner ("segment " <> segmen
   let drawn = sort (nub [traceR0 hit | hit <- hits, traceSite hit == menuMessageSite])
       hookRows = [traceR0 hit | hit <- hits, traceSite hit == d3HookSite]
       ccHits = [traceSite hit | hit <- hits, traceSite hit `elem` map snd classicChromeFetchSites]
-  when (segmentObserve segment || not (null (segmentReads segment)) || not (null hookRows) || not (null ccHits)) $ do
+      declaredHits = [hit | hit <- hits, traceSite hit `elem` runnerTraceLabels runner]
+  when (segmentObserve segment || not (null (segmentReads segment)) || not (null hookRows) || not (null ccHits)
+        || not (null declaredHits)) $ do
     previous <- readIORef (runnerObservations runner)
     let current = object [ "phase" .= segmentPhase segment, "capture" .= segmentCapture segment
                          , "steps" .= observed, "reads" .= windows
                          , "d3_hook_r0" .= map hexAddress hookRows
-                         , "classic_chrome_site_entries" .= ccHits ]
+                         , "classic_chrome_site_entries" .= ccHits
+                         , "menu_messages" .= map hexAddress drawn
+                         , "trace_hits" .= map traceHitValue declaredHits ]
     writeIORef (runnerObservations runner) (previous ++ [current])
     writePrivateBytes (runnerReceipt runner </> ("e2e-observation-" ++ show (length previous) ++ ".json"))
       (BL.toStrict (encode current) <> "\n")
@@ -656,7 +624,7 @@ runFlashSession settings python runtime installedMedia adjustmentNand cardImage 
     putStrLn ("emulator start: " ++ show (bootStart start) ++ "; flash candidate")
     setFileMode e2e 0o700
     ensurePrivateDirectory e2e
-    emulatorTraceSites emulator [(menuMessageDrawer, menuMessageSite), (d3HookEntry, d3HookSite)]
+    emulatorTraceSites emulator ([(menuMessageDrawer, menuMessageSite), (d3HookEntry, d3HookSite)] ++ declaredSites plan)
     let readAddress (FixedAddress value) = pure value
         readAddress (RuntimeSymbol name) =
           ioError (userError ("runtime symbol " ++ name ++ " belongs to a RAM-push build, not a flash candidate"))
@@ -664,7 +632,7 @@ runFlashSession settings python runtime installedMedia adjustmentNand cardImage 
           writePrivateBytes (e2e </> "e2e-failure.json") (BL.toStrict (encode (object
             [ "phase" .= String phase, "message" .= message ])) <> "\n")
           ioError (userError (show phase ++ " failed: " ++ message))
-    runner <- newSegmentRunner emulator e2e (\label action -> timed label action) readAddress stop
+    runner <- newSegmentRunner emulator e2e (\label action -> timed label action) readAddress stop plan
     captured <- runSegments runner (planBefore plan)
     observed <- readIORef (runnerObservations runner)
     phaseTimes <- readIORef phases
