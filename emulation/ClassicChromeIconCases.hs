@@ -56,8 +56,8 @@ import Data.Maybe (fromMaybe, isJust)
 import qualified Data.Set as S
 import Data.Word
 import Emulation.NativeCase (runCase)
-import FujiAF.ClassicChromeIcon (FontWrite (..), Image4Write (..), iconFontWrites, iconGlyphRecord, iconImage4Writes, label83dRecord, qLabelsArray, qValuesArray)
-import FujiAF.ClassicChromeQTile (Image2Write (..), QGlyph (..), qGlyphLabel, qGlyphRecordAddress, qTileAddress, qTileFontWrites, qTileGvff, qTileImage2Writes)
+import FujiAF.ClassicChromeIcon (FontWrite (..), Image4Write (..), iconFontWrites, iconGlyphRecord, iconImage4Writes, iconTailEnd, label83dRecord, qLabelsArray, qLabelsOffset, qValuesArray)
+import FujiAF.ClassicChromeQTile (Image2Write (..), QGlyph (..), qGlyphLabel, qGlyphRecordAddress, qTileAddress, qTileFontWrites, qTileGvff, qTileImage2Writes, qTileOffset)
 import FujiAF.FdlFont (FontOffset (..), parseFdlFont)
 import FujiAF.Gvff (Gvff (..), decodeGvff)
 import FujiAF.Host
@@ -581,7 +581,9 @@ loadWorld o = do
   -- The Q-tile side: the combined font window with qTileFontWrites, the
   -- combined image 2 with the Q glyph 0x37c record pointer.
   qWrites <- either failH pure (qTileFontWrites (iBytes ifont))
-  ensure (map fwOffset qWrites == map FontOffset [0x7d200, 0x7d210, 0x7d220, 0x7d240] && map fwNew (take 3 qWrites) == map le32 [0xff000779, 0xff000778, 0xff00037c] && map fwNew (drop 3 qWrites) == [qTileGvff]) "the Q-tile font writes differ from the contract"
+  let FontOffset labelsAt = qLabelsOffset
+      FontOffset tileAt = qTileOffset
+  ensure (map fwOffset qWrites == map FontOffset [labelsAt + 0x50, labelsAt + 0x60, labelsAt + 0x70, tileAt] && qTileOffset == iconTailEnd && map fwNew (take 3 qWrites) == map le32 [0xff000779, 0xff000778, 0xff00037c] && map fwNew (drop 3 qWrites) == [qTileGvff]) "the Q-tile font writes differ from the contract"
   forM_ qTileImage2Writes $ \w -> ensure (wd i2 (i2Address w) == i2Old w && i2Address w == 0x0022d28c && i2New w == qTileAddress) "the Q-tile image-2 write differs from the contract"
   let qFontBytes = foldl (\acc fw -> let FontOffset off = fwOffset fw in B.take off acc <> fwNew fw <> B.drop (off + B.length (fwNew fw)) acc) (iBytes ifont) qWrites
       qId2Bytes = foldl (\acc w -> let off = fromIntegral (i2Address w - 0x00130000) in B.take off acc <> le32 (i2New w) <> B.drop (off + 4) acc) (iBytes i2) qTileImage2Writes
@@ -593,7 +595,7 @@ loadWorld o = do
         Just other -> do
           ensure (other == bytes) (kind ++ " window of " ++ fromMaybe "" (oQTileDat o) ++ " differs from the Q-tile " ++ kind ++ " built from the combined side and the contract writes" ++ firstDiff bytes other)
           mkImg (kind ++ "-qtile") (fromMaybe "" (oQTileDat o) ++ " " ++ kind ++ " window, equal to " ++ desc) (iBase (if kind == "id2" then i2 else ifont)) other
-  qi2 <- qImg "id2" qId2Bytes "the combined image 2 with the Q glyph 0x37c record pointer at 0x0022d28c set to 0x00439240"
+  qi2 <- qImg "id2" qId2Bytes ("the combined image 2 with the Q glyph 0x37c record pointer at 0x0022d28c set to " ++ h32 qTileAddress)
   qfont <- qImg "font" qFontBytes "the combined font window with the qTileFontWrites set applied"
   let stock = Side "stock" id4 id5 plain id2 font slot
       cc = Side "cc" c4 c5 cp c2 font slot
@@ -1275,7 +1277,9 @@ checkQTile w = do
       diffAt a b = [k | k <- [0 .. B.length (iBytes a) - 1], B.index (iBytes a) k /= B.index (iBytes b) k]
       id2Diff = diffAt (sdId2 comb) (sdId2 qt)
       fontDiff = diffAt (sdFont comb) (sdFont qt)
-      inFontWrites k = k >= 0x7d200 && k < 0x7d230 || k >= 0x7d240 && k < 0x7d240 + B.length qTileGvff
+      FontOffset labelsAt = qLabelsOffset
+      FontOffset tileAt = qTileOffset
+      inFontWrites k = k >= labelsAt + 0x50 && k < labelsAt + 0x80 || k >= tileAt && k < tileAt + B.length qTileGvff
       pointer = qRecordWord qt (QGlyph 0x37c) QPointer
   ensure (nodeValues qt q == nodeValues comb q) "Q-tile Q values differ from the combined side's"
   ensure ([nodeLabel qt q r 0 | r <- [0 .. 7]] == stockQ ++ [0xff000779, 0xff000778, 0xff00037c]) "Q-tile Q labels"

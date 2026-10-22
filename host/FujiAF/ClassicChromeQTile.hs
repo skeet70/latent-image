@@ -29,7 +29,7 @@ module FujiAF.ClassicChromeQTile
 import Data.Bits (shiftL, (.|.))
 import qualified Data.ByteString as B
 import Data.Word (Word16, Word32)
-import FujiAF.ClassicChromeIcon (FontWrite (..), fontRamAddress, qLabelsArray, qLabelsOffset)
+import FujiAF.ClassicChromeIcon (FontWrite (..), fontRamAddress, iconGlyphRecord, iconRecordOffset, iconTailEnd, qLabelsArray, qLabelsOffset, qValuesArray, qValuesOffset)
 import FujiAF.ClassicChromeQTileArt (qTileArtText)
 import FujiAF.FdlFont (FontOffset (..))
 import FujiAF.Gvff (TileArt, encodeTileGvff, parseTileArt)
@@ -64,9 +64,9 @@ qTileArt = either (error . ("classic-chrome-q-tile.txt: " ++)) id (parseTileArt 
 qTileGvff :: B.ByteString
 qTileGvff = encodeTileGvff qTileArt
 
--- 16-aligned, after the icon's Q labels array [0x7d1b0, 0x7d240).
+-- The first 16-aligned font offset after the icon's Q labels array.
 qTileOffset :: FontOffset
-qTileOffset = FontOffset 0x7d240
+qTileOffset = iconTailEnd
 
 qTileAddress :: Word32
 qTileAddress = fontRamAddress qTileOffset
@@ -90,7 +90,10 @@ qTileFontWrites window = do
       FontOffset tile = qTileOffset
       slice at size = B.take size (B.drop at window)
   require (slice labels (B.length qLabelsArray) == qLabelsArray) "the window does not hold the icon's Q labels array"
-  require (tile >= labels + B.length qLabelsArray) "the tile overlaps the Q labels array"
+  mapM_
+    (\(FontOffset at, bytes, what) -> require (tile >= at + B.length bytes || tile + B.length qTileGvff <= at) ("the tile overlaps " ++ what))
+    [(iconRecordOffset, iconGlyphRecord, "the glyph record"), (qValuesOffset, qValuesArray, "the Q values array"), (qLabelsOffset, qLabelsArray, "the Q labels array")]
+  require (tile `mod` 4 == 0) "the tile is not word-aligned"
   require (tile + B.length qTileGvff <= B.length window) "the tile runs past the font window"
   require (B.all (== 0) (slice tile (B.length qTileGvff))) "the tile lands on nonzero bytes"
   labelWrites <- mapM (labelWrite labels slice) qLabelWrites

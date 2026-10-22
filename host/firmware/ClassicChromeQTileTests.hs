@@ -73,20 +73,22 @@ run = do
   -- The Classic Chrome tile.
   checkSample ("Classic Chrome Q tile", Q.qTileArt)
   H.ensure ((tileArtWidth Q.qTileArt, tileArtHeight Q.qTileArt) == (80, 48)) "the Q tile art is not 80 x 48"
-  H.ensure (Q.qTileAddress == 0x00439240 && Q.qTileAddress `mod` 16 == 0) "the tile is not at 0x00439240"
+  let FontOffset tailEnd = I.iconTailEnd
+      FontOffset labelsAt = I.qLabelsOffset
+  H.ensure (Q.qTileOffset == I.iconTailEnd && tailEnd `mod` 16 == 0 && tailEnd >= labelsAt + B.length I.qLabelsArray && Q.qTileAddress == 0x003bc000 + fromIntegral tailEnd) "the tile is not at the icon's tail end"
   H.ensure (map Q.qGlyphLabel [Q.ccQGlyph, Q.proNegStdTile, Q.proNegHiTile] == [0xff00037c, 0xff000779, 0xff000778]) "Q glyph labels"
-  H.ensure (map Q.i2Address Q.qTileImage2Writes == [0x0022d28c] && map Q.i2New Q.qTileImage2Writes == [0x00439240]) "the image-2 write is not the 0x37c record pointer"
+  H.ensure (map Q.i2Address Q.qTileImage2Writes == [0x0022d28c] && map Q.i2New Q.qTileImage2Writes == [Q.qTileAddress]) "the image-2 write is not the 0x37c record pointer to the tile"
 
   -- The font writes over a window holding the icon's Q labels array.
   let FontOffset labels = I.qLabelsOffset
       window = B.replicate labels 0 <> I.qLabelsArray <> B.replicate (0x80000 - labels - B.length I.qLabelsArray) 0
   writes <- either H.failH pure (Q.qTileFontWrites window)
-  H.ensure (map I.fwOffset writes == map FontOffset [0x7d200, 0x7d210, 0x7d220, 0x7d240]) "font write offsets"
+  H.ensure (map I.fwOffset writes == map FontOffset [labels + 0x50, labels + 0x60, labels + 0x70, tailEnd]) "font write offsets"
   H.ensure (map I.fwNew (take 3 writes) == map (B.pack . le) [0xff000779, 0xff000778, 0xff00037c]) "Q label words"
   H.ensure (map I.fwOld (take 3 writes) == map (B.pack . le) [0x49a, 0x496, 0x83d]) "Q label old words"
   H.ensure (map I.fwNew (drop 3 writes) == [Q.qTileGvff]) "the tile blob"
   H.ensure (either (const True) (const False) (Q.qTileFontWrites (B.replicate 0x80000 0))) "a window without the icon's Q labels is accepted"
-  let dirty = B.take 0x7d300 window <> B.singleton 1 <> B.drop 0x7d301 window
+  let dirty = B.take (tailEnd + 0x40) window <> B.singleton 1 <> B.drop (tailEnd + 0x41) window
   H.ensure (either (const True) (const False) (Q.qTileFontWrites dirty)) "a nonzero byte under the tile is accepted"
   putStrLn ("Classic Chrome Q tile: " ++ show (B.length Q.qTileGvff) ++ " GVFF bytes; all checks passed")
   where
