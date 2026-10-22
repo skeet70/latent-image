@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, runRamPushE2E) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, runRamPushE2E) where
 
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, try)
 import Control.Monad (forM, forM_, unless, when)
@@ -41,6 +41,9 @@ data BootMode = CheckpointedBoot | FreshBoot deriving (Eq, Show)
 -- without ram-alloc, ram-push or ram-unload.
 data PushMode = RamPush | FlashCandidate deriving (Eq, Show)
 
+-- | A key held across the attach edge of every boot the e2e starts.
+data AttachHold = NoAttachHold | AttachHoldQ deriving (Eq, Show)
+
 data E2ESettings = E2ESettings
   { relinkMode :: RelinkMode
   , bootMode :: BootMode
@@ -48,7 +51,16 @@ data E2ESettings = E2ESettings
   , segmentSelection :: Maybe [T.Text]
   , pushMode :: PushMode
   , e2ePayload :: Payload
+  , attachHold :: AttachHold
   }
+
+attachHoldArguments :: AttachHold -> [String]
+attachHoldArguments NoAttachHold = []
+attachHoldArguments AttachHoldQ = ["--attach-hold-key", "q"]
+
+attachHoldText :: AttachHold -> T.Text
+attachHoldText NoAttachHold = "none"
+attachHoldText AttachHoldQ = "q"
 
 payloadText :: Payload -> T.Text
 payloadText p = case payloadKind p of
@@ -366,7 +378,7 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
         , "--ram-push-server"
         , "--output", e2e
         , "--ram-push-checkpoints", checkpointRoot settings
-        ] ++ ["--fresh-boot" | bootMode settings == FreshBoot]
+        ] ++ ["--fresh-boot" | bootMode settings == FreshBoot] ++ attachHoldArguments (attachHold settings)
       selected = e2ePayload settings
       relinkAt base = case relinkMode settings of
         ReviewedRelink -> withPinnedReviewedBuild (payloadContract selected) selected base
@@ -521,6 +533,7 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
                                 "source_identity" .= object [K.fromString name .= digest | (name, digest) <- sourceIdentity manifest],
                                 "allowlist" .= allowlist]
           , "emulator_start" .= startRecord start
+          , "attach_hold" .= attachHoldText (attachHold settings)
           , "phases" .= (phaseTimes :: [Value])
           , "allocation" .= object ["base" .= hexAddress base, "bytes" .= allocationBytes,
                                      "cpu0" .= hexAddress (allocCpu0 allocation),
@@ -542,11 +555,11 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
     writePrivateBytes (e2e </> "e2e-result.json") (BL.toStrict (encode result) <> "\n")
     pure (manifestPublications manifest)
   when (planUnload plan && payloadKind selected == ClassicChrome) $
-    timed "cold-restart-read" (coldRestartRead python runtime installedMedia adjustmentNand cardImage (checkpointRoot settings) published e2e)
+    timed "cold-restart-read" (coldRestartRead python runtime installedMedia adjustmentNand cardImage (checkpointRoot settings) (attachHold settings) published e2e)
 
 -- | A cold boot of the same inputs, then every publication word read against its old word.
-coldRestartRead :: FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> [Publication] -> FilePath -> IO ()
-coldRestartRead python runtime installedMedia adjustmentNand cardImage checkpoints publications e2e = do
+coldRestartRead :: FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> AttachHold -> [Publication] -> FilePath -> IO ()
+coldRestartRead python runtime installedMedia adjustmentNand cardImage checkpoints hold publications e2e = do
   let directory = e2e </> "cold-restart"
       arguments =
         [ "tools/continue_rec_scanout.py"
@@ -558,7 +571,7 @@ coldRestartRead python runtime installedMedia adjustmentNand cardImage checkpoin
         , "--ram-push-server"
         , "--output", directory
         , "--ram-push-checkpoints", checkpoints
-        , "--fresh-boot" ]
+        , "--fresh-boot" ] ++ attachHoldArguments hold
   bracket (startEmulator python runtime arguments (\_ -> pure (Nothing, ()))) (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, ()) -> do
     words' <- forM publications $ \publication -> do
       bytes <- emulatorReadMemory emulator (unAddress (publicationAddress publication)) 4
@@ -650,7 +663,7 @@ runFlashSession settings python runtime installedMedia adjustmentNand cardImage 
         , "--ram-push-server"
         , "--output", e2e
         , "--ram-push-checkpoints", checkpointRoot settings
-        ] ++ ["--fresh-boot" | bootMode settings == FreshBoot]
+        ] ++ ["--fresh-boot" | bootMode settings == FreshBoot] ++ attachHoldArguments (attachHold settings)
       noInstall _ = pure (Nothing, ())
   bracket (timed "emulator-start" (startEmulator python runtime arguments noInstall)) (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, ()) -> do
     putStrLn ("emulator start: " ++ show (bootStart start) ++ "; flash candidate")

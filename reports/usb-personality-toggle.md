@@ -1,6 +1,6 @@
-# USB personality toggle (X-M1 1.50, design)
+# USB personality toggle (X-M1 1.50)
 
-Design for an on-device control that switches the USB personality between the `04cb:ff80` service device (transport service mode 3, as with stored `0xf7 = 1`) and ordinary PTP `04cb:02b6`, with no jig session and no settings-area write. This report covers the stock decision path, the chosen key and its census, the patch sites, placement, composition with RC0 and the Classic Chrome flash candidate, the review class and the verification plan. Patch bytes are not written yet; the stub below is the design sequence for review. No camera or USB device was touched.
+Design, implementation and host verification of an on-device control that switches the USB personality between the `04cb:ff80` service device (transport service mode 3, as with stored `0xf7 = 1`) and ordinary PTP `04cb:02b6`, with no jig session and no settings-area write ([USB-PERSONALITY-TOGGLE-01](https://github.com/skeet70/latent-image/issues/81)). It covers the stock decision path, the key and its census, the stub and patch sites, placement, the two flash candidates and their composition with RC0 and Classic Chrome, the native and emulator evidence, the changed-byte explanation and the reviewer packet (sections 10 and 11). The owner approved the design on 2026-10-22 with the flip behaviour. No camera or USB device was touched; the candidates are not installed.
 
 Inputs, byte-identical to the pinned decodes under `private-data/analysis/x-m1-1.50/`: DAT SHA-256 `43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490`; image 4 `lz/id4-0061c400.bin` base `0x0061c400` SHA-256 `f2e2acab…dcff16`; image 5 `lz/id5-00bf1a00.bin` base `0x00bf1a00` SHA-256 `3cd501c0…fd892a`; plain `lz/plain-01100000.bin` base `0x01100000` SHA-256 `ee211bda…2d889d`; image 2, both loaders and both boot records under `filmsim/` and `decode/`; the fallback adjustment image at DAT payload `0xe0048` (`payload.bin`), equal to the body's adjustment bytes over `0xa000`-`0xcfff` (E-ADJ-READ-150).
 
@@ -8,16 +8,18 @@ Labels: **byte-read** (instruction, table or data read from the pinned images in
 
 ## 1. Summary and decision
 
-**Key: hold Q while plugging in the cable.** On an attach edge in an ordinary or playback boot, if the Q key reads held, the patch flips the RAM copy of adjustment byte `0xf7` (0 becomes 1, nonzero becomes 0) before the stock connect handler tests it. With stored `0xf7 = 0`, a Q attach gives `ff80` and every later attach in that boot stays `ff80`; a second Q attach in the same boot returns to PTP. A plain attach after power-on gives PTP. Nothing is written to storage, so every power-on starts from the stored byte.
+**Key: hold Q while plugging in the cable.** On an attach edge in an ordinary, playback or first-start boot, if the key driver reports Q held, the patch flips the RAM copy of adjustment byte `0xf7` (0 becomes 1, nonzero becomes 0) before the stock connect handler tests it. With stored `0xf7 = 0`, a Q attach gives `ff80` and every later attach in that boot stays `ff80`; a second Q attach in the same boot returns to PTP. A plain attach after power-on gives PTP. Nothing is written to storage, so every power-on starts from the stored byte.
 
-- **One hook, one stub, image 5 only.** The `bl 0x0069f8fc` at `0x00ecf900` in connect handler A becomes a `bl` to a 23-word stub placed in the unreferenced image-5 function extent `[0x00bf4454, 0x00bf44e4)` (section 5).
+- **One hook, one stub, image 5 only.** The `bl 0x0069f8fc` at `0x00ecf900` in connect handler A becomes a `bl` to a 22-word stub (`host/firmware/usb-toggle-stub.S`) placed in the unreferenced image-5 function extent `[0x00bf4454, 0x00bf44e4)` (sections 3.1 and 5).
+- **Key state from the key driver.** The stub reads Q through `0x006a0d00(0x32)`, the driver's debounced row state, not the UI key bitmap, so a UI that misses a release cannot leave a later attach armed (section 4.2).
 - **RAM only.** The stub writes `cache[0xf7]` through the stock byte setter `0x0069fc94`, the same RAM state the jig tools' gate write leaves until power-off. All 13 stock readers of `0xf7` read that RAM byte (section 2.4), so the debug channel, the `read-ram` gate check and the detach arm follow the toggle without further patching.
 - **No persisted toggle.** The only host-reachable storage route is the 33-unit whole-area commit; a stored toggle would repeat that rewrite on every switch. None is needed (section 3.4).
 - **No RAM-push variant.** The push route needs `ff80` already enumerated and `0xf7` nonzero before it can write anything, and a pushed hook is gone at power-off, so it cannot select the personality of a boot (section 3.5).
-- **Delivery.** The stub and hook word merge into the CC candidate's image-5 patch set; the prefix window, converter extents, image 2 and plain are untouched (section 6).
-- **Review class.** H3 install with new mechanism bytes: one independent review, `//emulation:flash-boot-check`, the owner's visual check and a per-run go naming the digest (section 7).
+- **Candidates.** CC+toggle `507ecf32…0e1e` (on the CC flash candidate `16c830ad…2c89`) and RC0+toggle `10feac47…2445` (on RC0 `acb0fbbb…ca8`), both built by `//host/firmware:build-usb-toggle` and `//extensions:build-extension`, pinned and reproduced. Each decoded image 5 differs from its base only in the stub bytes and the hook word; every other part equals the base (section 10).
+- **Evidence.** 364 native cases and every full-system run the emulator can deliver pass: both candidates boot to SHOOTING MENU, a plain attach gives PTP, a Q attach gives `ff80` with a working service session, a second Q attach returns PTP in the same boot, stock behaviour is unchanged without Q, the Classic Chrome RAM push runs over a Q attach, and the updater install resets stored `0xf7` to 0 (section 9).
+- **Review class.** H3 install with new mechanism bytes: one independent review, the owner's visual check and a per-run go naming the digest remain (section 11).
 
-Body state: the latest session record, `20261022T044649Z-commit-f7-restore` (private, not yet in the ledger), ends `committed;f7=0x01->0x00;result=0x00`, so the body is expected to hold stored `0xf7 = 0` at its next boot. The toggle also covers stored `0xf7 = 1` (section 3.2).
+Body state: commit-f7-restore stored `0xf7 = 0` on 2026-10-21 (E-STORED-F7-RESTORE-RUN-150), and the install would store 0 again (section 8.4). The toggle also covers stored `0xf7 = 1` (section 3.2).
 
 ## 2. The USB personality decision, byte-read
 
@@ -79,35 +81,34 @@ The raw attach bit at boot and the boot key records (USB-cable boot, system mode
 
 ### 3.1 Stub
 
-Design sequence; the linked bytes are written after this design is reviewed. Entry from `0x00ecf900` with `r0 = 0xf7`, `r1` = new attach bit, `lr = 0x00ecf904`; it returns the value handler A tests in `r0`, preserves `r4`-`r11` and the stack, and keeps 8-byte alignment.
+`host/firmware/usb-toggle-stub.S`, linked at `0x00bf4454` by `host/firmware/usb-toggle-stub.ld` through `//host/firmware:usb-toggle-stub` (`usb-toggle-stub.bin`, 88 bytes, SHA-256 `35a7e9597f06bdc1dda250d991df4a468d2401e5ae3c24c22e37403318746d62`). Entry from `0x00ecf900` with `r0 = 0xf7`, `r1` = new attach bit, `lr = 0x00ecf904`; it returns the value handler A tests in `r0`, preserves `r4`-`r11` and the stack, and keeps 8-byte alignment. Linked words:
 
 ```asm
-usb_toggle:                     @ 0x00bf4454
-    push    {r4, r5, r6, lr}
-    mov     r4, r1              @ attach bit
-    bl      0x0069f8fc          @ r0 = cache[0xf7]
-    mov     r5, r0
-    cmp     r4, #1
-    bne     1f                  @ detach edge: stored value
-    mov     r0, #0x32           @ KEY_Q
-    bl      0x00632950          @ live key state, 0 or 1
-    cmp     r0, #0
-    beq     1f
-    bl      0x0073c15c          @ system mode word 0x009570dc
-    cmp     r0, #5
-    cmpne   r0, #7
-    beq     1f                  @ USB-cable boot or maintenance
-    cmp     r5, #0
-    moveq   r5, #1
-    movne   r5, #0
-    mov     r0, #0xf7
-    mov     r1, r5
-    bl      0x0069fc94          @ cache[0xf7] = r5
-1:  mov     r0, r5
-    pop     {r4, r5, r6, pc}
+00bf4454  e92d4070  push    {r4, r5, r6, lr}
+00bf4458  e1a04001  mov     r4, r1              @ attach bit
+00bf445c  ebeaad26  bl      0x0069f8fc          @ r0 = cache[0xf7]
+00bf4460  e1a05000  mov     r5, r0
+00bf4464  e3540001  cmp     r4, #1
+00bf4468  1a00000d  bne     0x00bf44a4          @ detach edge: stored value
+00bf446c  e3a00032  mov     r0, #0x32           @ KEY_Q
+00bf4470  ebeab222  bl      0x006a0d00          @ debounced driver state, 0 or 1
+00bf4474  e3500000  cmp     r0, #0
+00bf4478  0a000009  beq     0x00bf44a4
+00bf447c  ebed1f36  bl      0x0073c15c          @ system mode word 0x009570dc
+00bf4480  e3500005  cmp     r0, #5
+00bf4484  13500007  cmpne   r0, #7
+00bf4488  0a000005  beq     0x00bf44a4          @ USB-cable boot or maintenance
+00bf448c  e3550000  cmp     r5, #0
+00bf4490  03a05001  moveq   r5, #1
+00bf4494  13a05000  movne   r5, #0
+00bf4498  e3a000f7  mov     r0, #0xf7
+00bf449c  e1a01005  mov     r1, r5
+00bf44a0  ebeaadfb  bl      0x0069fc94          @ cache[0xf7] = r5
+00bf44a4  e1a00005  mov     r0, r5
+00bf44a8  e8bd8070  pop     {r4, r5, r6, pc}
 ```
 
-23 words, 92 bytes. The stub flips the byte only where handler A will take the service attach arm with the new value; on a detach edge, with Q released, or in system mode 5 or 7 it returns the stock read. Attach and detach therefore stay paired: a session's detach reads the value its attach set.
+The stub flips the byte only where handler A will take the service attach arm with the new value; on a detach edge, with Q released, or in system mode 5 or 7 it returns the stock read. Attach and detach therefore stay paired: a session's detach reads the value its attach set. Its deepest stack use is 28 bytes below its entry SP (16-byte frame, then `0x006a0d00` at 8 and `0x006a0b4c` at 4; measured in N1).
 
 ### 3.2 Behaviour
 
@@ -122,7 +123,7 @@ usb_toggle:                     @ 0x00bf4454
 | 1 | power on, Q held at attach | PTP, RAM `0xf7 = 0` |
 | any | jig boot (system mode 7) | no flip; jig tools see the stored byte |
 
-Static-inference over sections 2.2 to 2.4. The attach must follow the startup handshake: before group-1 reaches state 3 no `0x1714` reaches handler A, and handler B reports the attached cable to the application (PTP). The 41 MB `0xff` fill runs only on attaches that start `ff80`, not on every attach as with stored 1.
+Static-inference over sections 2.2 to 2.4, emulated in section 9.3 except where the model has no disconnect event. The attach must follow the startup handshake: before group-1 reaches state 3 no `0x1714` reaches handler A, and handler B reports the attached cable to the application (PTP). The 41 MB `0xff` fill runs only on attaches that start `ff80`, not on every attach as with stored 1. A cable present at power-on selects maintenance instead of USB-cable boot when `cache[0x102..0x103]` reads `0xff80` (the firmware template's value, 2.1); this body holds `0x02b6`.
 
 ### 3.3 Why attach time and not power-on
 
@@ -132,7 +133,7 @@ A power-on variant is possible: a second hook at `0x0073ae20` could scan the boo
 - **The held key still reaches the application.** `0x006a282c`, which registers the application callback `0x0072b680` (at `0x00ec42c8` and `0x00ec5720`, two of its five call sites), copies the boot records and replays them through `0x006a1b40`, the caller of the registered callback (byte-read), so a Q held through boot is delivered as a Q press (static-inference).
 - **A power-on choice cannot be undone within the boot.**
 
-The attach-time test reads the live key state that the running UI maintains (section 4.2), the same source stock's attach-time maintenance choice in `0x00d0afe0` reads.
+The attach-time test reads the key driver's debounced state of a key pressed during normal operation (section 4.2), the same layer whose press reports drive the running UI.
 
 ### 3.4 No persisted toggle
 
@@ -174,11 +175,13 @@ Physical X-M1 controls and their condition rows (rows from the 36-row table `0x0
 | MOVIE | `0x34` | analog, channel 9 | 2 | starts recording |
 | S1, S2 | 7, 8 | shutter | 8, 13 | jig, full press at power-on |
 
-Q is the only physical button with no key-state test anywhere and no role in any stock combination at power-on or attach. It is not in the release-synthesis list and the bank sources in `menu/` reference neither `0x00632950` nor code `0x32`. The DOWN combination is inert on this body: `0x0096b480` is `cache[0xa902]` (copied at `0x0072bd88`), which reads `0x00` in the fallback image (byte-read) that equals the body over `0xa000`-`0xcfff` (E-ADJ-READ-150).
+Q is the only physical button with no key-state test anywhere and no role in any stock combination at power-on or attach. The driver-state getter `0x006a0d00` the stub uses has three stock callers, for LENS_DET `0x38` (`0x0073d064`), PLAY `0xb` (`0x00ec80ac`) and S1 7 (`0x00ec80e8`), none for Q (byte-read). Q is not in the release-synthesis list, and the bank sources in `menu/` reference neither `0x00632950` nor code `0x32`. The DOWN combination is inert on this body: `0x0096b480` is `cache[0xa902]` (copied at `0x0072bd88`), which reads `0x00` in the fallback image (byte-read) that equals the body over `0xa000`-`0xcfff` (E-ADJ-READ-150).
 
-### 4.2 The live key state
+### 4.2 The key state the stub reads
 
-`0x00632950(code)` tests bit `idx & 31` of word `0x0094f8b8 + 4 * (idx >> 5)`, where `0x00632860` maps the code to `idx` through the range table `0x007748dc`; for Q, `idx = 50`, word `0x0094f8bc`, bit 18 (byte-read). Two functions set and clear single bits: the boot fold and the UI key handler `0x00d36ea4` (callers `0x00c231fc`, `0x00d5d0e4`), which sets the bit for qualifier `0x00`/`0x40` and clears it for `0x80` (`0x00d372e4`-`0x00d37310`); `0x00638f54` zeroes the words (byte-read). `0x00d36ea4` skips the update when `0x00d35f68()` returns 1 or `[0x0094f5e0] == 2` (`0x00d36ee4`-`0x00d36f04`); in those states a Q press is not seen and the attach is plain (unproved which UI states those are; section 9).
+`0x006a0d00(code)` finds the code's condition row through `0x006a0b4c` (36 rows of 28 bytes from `0x00828120`; Q is row 19 at `0x00828334`) and returns 1 exactly when row byte `+0x15` is 1 (byte-read). `+0x15` is the driver's debounced state: the debounce step `0x006a11f4` counts identical raw samples of `+0x16` (written by the row evaluator `0x006a0888`, here the channel-9 ADC window) in `+0x18`, and once `+0x14` samples agree it stores the raw value to `+0x15` and reports the press (code) or release (code `| 0x80`) through `0x006a1038` (`0x006a11fc`-`0x006a1248`, byte-read). The stub therefore reads the same state from which the press and release events are made, at the attach edge. The release-all step `0x006a27a8` (only caller `0x00ec8248` in the startup barrier) clears held states and reports releases; it can only make a held Q read 0.
+
+Stock also offers the UI key bitmap: `0x00632950(code)` tests bit `idx & 31` of word `0x0094f8b8 + 4 * (idx >> 5)` (`0x00632860` maps the code through the range table `0x007748dc`; Q is word `0x0094f8bc`, bit 18), set and cleared by the boot fold and by the UI key handler `0x00d36ea4` (callers `0x00c231fc`, `0x00d5d0e4`), which skips the update when `0x00d35f68()` returns 1 or `[0x0094f5e0] == 2` (`0x00d36ee4`-`0x00d36f04`) (byte-read). A release skipped there would leave the bit set and arm every later attach, so the stub does not read it. N1 shows the stub ignores the bitmap (section 9.1).
 
 ## 5. Patch sites and placement
 
@@ -187,9 +190,9 @@ Q is the only physical button with no key-state test anywhere and no role in any
 | Image | Address | File offset | Current | New | Role |
 | --- | --- | --- | --- | --- | --- |
 | 5 | `0x00ecf900` | `0x002ddf00` | `ebdf3ffd` `bl 0x0069f8fc` | `ebf492d3` `bl 0x00bf4454` | handler A's `0xf7` read |
-| 5 | `0x00bf4454` | `0x00002a54` | 144-byte extent, SHA-256 `a862a878075d05fd011efb724fdd7503fb406bddac8c1a00f27998486efd4ec0` | 92-byte stub (3.1); the remaining 52 bytes stay stock | stub |
+| 5 | `0x00bf4454` | `0x00002a54` | 144-byte extent, SHA-256 `a862a878075d05fd011efb724fdd7503fb406bddac8c1a00f27998486efd4ec0` | 88-byte stub (3.1); the remaining 56 bytes stay stock | stub |
 
-The stub's calls reach `0x0069f8fc`, `0x00632950`, `0x0073c15c` and `0x0069fc94` in image 4 with A32 `bl` (displacements within range, byte-read). It uses only forms the R4F profile has.
+The stub's calls reach `0x0069f8fc`, `0x006a0d00`, `0x0073c15c` and `0x0069fc94` in image 4 with A32 `bl` (displacements within range; the builder decodes every BL of the linked blob and refuses any other target). It uses only forms the R4F profile has; the native runner ran it with no admission change.
 
 ### 5.2 Ownership of `[0x00bf4454, 0x00bf44e4)`
 
@@ -200,7 +203,7 @@ The extent is one function, from its `push {r4-r9, lr}` at `0x00bf4454` to the `
 - no `movw`/`movt` pair and no `add`/`sub rX, pc` computes an address in it;
 - Thumb listings of plain and both loaders branch nowhere into it; the image-5 Thumb listing yields only decodes of A32 upper halfwords (addresses `2 mod 4`).
 
-It is the only image-5 function with no reference by this census. Ownership is by absence of references, the class of CC's `0x0073f684` verdict, not by replacement; the emulator watch in 8.2 adds the runtime check. None of the 13 private RAM-push manifests (12 CC builds of 131 publications, one bank build of 250) names an address in the extent or in handler A.
+It is the only image-5 function with no reference by this census. Ownership is by absence of references, the class of CC's `0x0073f684` verdict, not by replacement. The emulator watch (E2, section 9.3) adds the runtime check on the executed paths. None of the 13 private RAM-push manifests (12 CC builds of 131 publications, one bank build of 250) names an address in the extent or in handler A.
 
 ## 6. Composition
 
@@ -215,62 +218,163 @@ RC0 changes only image 4. The CC candidate (`16c830ad…2c89`) changes image 4, 
 | 3 | `image2-record` | CC's `0x83e` record, unchanged |
 | 4 | `plain-patch-set` | CC's `cc-plain.json`, unchanged |
 
-Budget: the prefix window stays at CC's 484 of 512 bytes, the converter extents at 84 of 88 and 68 of 92, plain and image 2 unchanged. The toggle uses 92 of the 144 extent bytes and one in-place word; image 5 is re-encoded in place with no load or size change, so it adds no boot-path item. The combined candidate inherits CC's open base-alignment note (classic-chrome-patch.md 11.3 item 5).
+Budget: the prefix window stays at CC's 484 of 512 bytes, the converter extents at 84 of 88 and 68 of 92, plain and image 2 unchanged. The toggle uses 88 of the 144 extent bytes and one in-place word; image 5 is re-encoded in place with no load or size change, so it adds no boot-path item. The CC+toggle candidate inherits CC's open base-alignment note (classic-chrome-patch.md 11.3 item 5). The RC0+toggle candidate keeps RC0's image-4 load `0x0061c340`, which the body has decoded (E-FILMSIM-INSTALL-150), and can go ahead of CC's flash review.
 
-Tooling, following CC's re-inclusion of RC0: a Haskell builder `//host/firmware:build-usb-toggle BASE_MANIFEST NEW_OUTPUT_DIRECTORY` links the stub from `host/firmware/usb-toggle-stub.S` and `.ld` at `0x00bf4454` (assembly, as CC's stubs: a register-contract shim at a stock call site), checks the hook word and the extent hash against the stock decode, refuses a base image-5 write that overlaps either, and writes the merged image-5 patch set, the manifest reusing the base's other parts by path, and a changed-word listing that groups the toggle as `TOGGLE`, so it can be reviewed and reverted apart from CC. `build-extension` stays unchanged. Because the CC parts carry the private data block, the merged manifest and digest stay under `private-data/`, as CC's do. The same builder over `extensions/rc0.json` gives an RC0 plus toggle image whose image-4 load stays at `0x0061c340`, if the toggle should not wait for CC's flash review.
+Tooling, following CC's re-inclusion of RC0: `//host/firmware:build-usb-toggle [--output-sha256 HEX] BASE_EXTENSION_JSON NEW_OUTPUT_DIRECTORY` (`host/firmware/BuildUsbToggle.hs`, core in `host/FujiAF/UsbToggle.hs`):
+
+- it takes the linked stub and its symbol table from `//host/firmware:usb-toggle-stub`, requires `usb_toggle` at `0x00bf4454` and decodes every BL of the blob to the four stock callees;
+- it checks the stock image 5 against its pinned SHA-256, the extent against its pinned hash and the hook word against `ebdf3ffd`;
+- it reads the base manifest and each part against its step SHA-256, refuses a base image-5 patch set that names another decode or moves the load, and refuses any base write that overlaps the stub or the hook word;
+- it writes the merged image-5 patch set `usb-toggle-image5.json` (address order, contiguous write orders), copies every other base part unchanged, and writes the manifest `usb-toggle.json` with the image-5 step after the image-4 step, plus `changed-words.json`/`.md` with the toggle as group `TOGGLE`.
+
+`build-extension` is unchanged. `//host/firmware:usb-toggle-tests` checks the merge and the linked blob: two toggle writes at the extent and the hook word, the hook encoding, address order of a disjoint merge, refusal at the hook word and inside the extent, acceptance just below it, an oversized blob refused, the four callees. Because the CC parts carry the private data block, both candidates' parts and manifests stay under `private-data/analysis/usb-toggle/`, as CC's do. The RC0+toggle parts hold no private data and can move to `extensions/` once reviewed.
 
 ### 6.2 With the bank and the RAM-push route
 
 - **RAM push (bank and CC payloads).** No publication touches the toggle words. `ram-alloc` and `read-ram` refuse unless config byte `0xf7` reads nonzero (transport README); on a toggle body with stored 0 the operator makes a Q attach first. The session scripts (reports/ram-push-session-script.md, classic-chrome-patch.md 8.4) and the transport README describe that premise as stored `0xf7 = 1` and need the Q-attach wording once the toggle is installed.
 - **Recipe bank and D3 flash designs.** They use the image-4 prefix, plain and image-2 ids; no image-5 overlap with the toggle, and no key-state use.
 - **`commit-f7-*`.** In jig boots (system mode 7) the stub never flips, so they see the stored byte. In an ordinary boot after a Q attach, `commit-f7-enable` refuses (start value reads 1) and `commit-f7-restore` would commit 0 over a stored 0.
-- **Install.** The ordinary updater resets stored `0xf7`, `0x80` and `0x81` to 0 when its refresh flags are set (inherited, stored-f7 report section 4, corroborated for RC0 by E-FILMSIM-READBACK-150); the flag value for this container is unproved (8.2 item E9). The toggle works with either stored value.
+- **Install.** The update resets stored `0xf7`, `0x80` and `0x81` to 0 (section 8.4, byte-read and emulated). The toggle works with either stored value.
 
 ## 7. Review class
 
 - **Install: H3** (firmware update, spec 07 section 3.2). The hook word redirects stock control flow and the stub runs outside any payload allocation, so both are new mechanism bytes: one independent review of the stub source and linked blob, the hook word, the merged image-5 patch set and the container diff; `//emulation:flash-boot-check` on the exact DAT; the owner's visual check in `//emulation:xm1-viewer -- --firmware`; the owner's per-run go naming the operation and the digest.
 - **Use after install.** A Q attach writes only the RAM byte `0xf7`, the state the jig gate write leaves until power-off, and opens the same `ff80` channel stored `0xf7 = 1` opens today, including debug function 3 (arbitrary RAM write) for the attached host. Live commands over that channel keep their own classes (`read-ram` H1 under the read grant, `ram-push` H2).
 
-## 8. Verification plan
+## 8. Open questions, resolved
 
-### 8.1 Native harness
+### 8.1 A missed release
 
-Cases under `private-data/analysis/x-m1-1.50/native-case/usb-toggle/`, generated by a new `//emulation:usb-toggle-cases`. Expected values come from the behaviour table of 3.2, not from the stub.
+The stub reads the key driver's debounced state `+0x15`, not the UI bitmap (section 4.2). `+0x15` changes only in the driver: the debounce step, the release-all step and `0x006a0cc4`, called twice in the startup barrier for S1. The UI's skip states (`0x00d35f68() == 1`, `[0x0094f5e0] == 2`) do not touch it (byte-read). The stub reads it once per attach edge, inside handler A, so a release the UI never processed cannot arm a later attach. N1 sets the UI bitmap bit with `+0x15 = 0` (no flip) and clears it with `+0x15 = 1` (flip). E4 reads `+0x15 = 1` with Q held and 0 after release (section 9).
 
-- **N1, stub matrix.** The linked stub with the stock closures of `0x0069f8fc`, `0x0069fc94`, `0x00632950` (`0x00632920`, `0x00632934`, `0x00632860`, table `0x007748dc`, loader-A copy `0x0004357c`) and `0x0073c15c`. Inputs: cache pointer `0x0096ca50` to a synthetic page with `0xf7` in {0, 1}; `r1` in {0, 1}; word `0x0094f8bc` bit 18 in {0, 1}; `0x009570dc` in {1, 2, 3, 5, 7}. 40 cases; each checks `r0` and the final cache byte, and the permitted change set is that byte and the stack.
-- **N2, handler A.** Image-5 slice `[0x00ecf8b8, 0x00ecf9c8)` with the hook word, boundary stubs recording `0x00723a14`, `0x00ed117c`, `0x00ed11a4`, `0x00647398`, `0x0073abec` and `0x00ecf894` with their arguments, latch `0x015c229c`, payload word through `0x015c20cc`. Expected: the boundary call sequence per edge, stored value, Q and system mode. Control: the stock slice gives the same sequence for every Q = 0 case.
+### 8.2 usbcont stack headroom
 
-### 8.2 Full-system emulator
+usbcont is task 7. Its creation block, built at `0x00ed1120`, gives entry `0x00ecc058`, priority 6 and stack size `0xc00`. `0x00725dd8` allocates the stack, records it at `0x40a5b234` (size at `0x40a5b238`) and fills it with the task id byte through `0x007221c8` (byte-read). In emulation the stack is `[0x00a42200, 0x00a42e00)`. SP at `0x00ecf900` is `0x00a42db0`, 80 bytes below the top, in every run; SP at the stub's `0x006a0d00` call is `0x00a42da0`. The stub's path adds 28 bytes below its entry SP; stock reaches 4 at that call site, and handler A's own stock callees from the same frame reach more by direct calls alone (`0x00647398` 160 bytes, `0x00ecf894` 96, `0x00ed117c` 88). The cumulative high-water mark of the fill is 424 bytes on PTP-only runs (equal on stock), 1068 bytes on runs with an `ff80` start or service session, and 304 on the cable-at-reset boot, against 3072 (emulated). Static worst case over indirect calls is not bounded; the stub does not raise handler A's direct-call maximum.
 
-Each run holds one emulator slot and starts from a checkpoint saved at the shooting screen of the named DAT and NAND. "Stored-0 NAND" is the viewer's erased-settings baseline or the template NAND with `0xf7 = 0`; "stored-1 NAND" is `stored-f7/emulation/inputs/f7-1.nand`. Q is `MenuKey.Q` (ADC channel 9); the cable is `PowerDevices.set_usb_connected`. Enumeration uses the endpoint transport of the `--ff80-rehearsal` driver.
+### 8.3 PTP after an ff80 stop within one boot
 
-| Run | Inputs | Expected |
+Emulated, both candidates (E5u, section 9.3). A Q attach starts `ff80`. A detach takes the detach arm and posts `0x1706`, with no application `0x90`. A plain re-attach gives `ff80` again, enumerated with the full service session. A detach follows. A Q re-attach then flips the byte to 0, takes the application arm, posts application `0x10` and starts transport mode 2 with the PTP descriptor `04cb:02b6`. The model raises no controller disconnect event, so a detach after an enumerated session and the detach after the PTP start never reach handler A (driver state `0xa` and 8; the presence poll `0x00d7b98c` runs only in driver states 0 to 4 through `0x00d81d04`). The detach after an enumerated session therefore needs hardware.
+
+### 8.4 Updater refresh flags for this container
+
+Byte-read:
+
+- The update completion `0x00db91e0` reloads the template through `0x0069fe20(0xff)`, applies the restore pairs and commits the whole area (`0x00db932c`) when the kind-0 flag word `0x014e3578` has bit 0 or 1 set.
+- The header parser `0x00db9cd4`, kind 0 from `0x00ec8554`, clears that word at `0x00db9d08`. It sets bit 0 at `0x00dba1e8` when header `+0x244` is not `0xffffffff`, `+0x248` is in 1 to `0x10000` and `+0x24c` is nonzero, and bit 1 at `0x00dba2a8` for `+0x250`, `+0x254`, `+0x258`.
+- At file offsets `0x244`-`0x25b` the stock, CC and both toggle DATs carry `0x024a0020 0x00000188 0xffffb2d6 0x024a01a8 0x00000018 0xfffffbff`, the descriptors of the two restore lists (98 and 3 pairs, `rebuild-update verify`), so both bits are set.
+
+`0xf7`, `0x80` and `0x81` lie in no restore pair (inherited). Emulated (E9): through the RAM restore route, the updater installing either toggle DAT over the stored-1 template NAND reads the flag word as 3 at `0x00db91e0`, and stored `0x80`/`0x81`/`0xf7` go from 0/0/1 to 0/0/0. The committed logical block 0 moves from physical block `0x381` to `0x3a2`, and the updated image boots to the shooting screen with `cache[0xf7] = 0`.
+
+### 8.5 Still open
+
+For the power-on variant only: the content of the boot records at `0x0073ae10` for a held Q, and the source of the startup Fn and Q press forms. On hardware: the detach after an enumerated `ff80` session and the UI effect of the held Q.
+
+## 9. Verification results (2026-10-22, host and emulated)
+
+### 9.1 Native cases
+
+`//emulation:usb-toggle-cases` (`emulation/UsbToggleCases.hs`) generates and runs 364 cases under `private-data/analysis/x-m1-1.50/native-case/usb-toggle/`; all pass. Expected values come from the behaviour rule and handler A's byte-read arms, not from the stub. Stock id4, stock id5 and the stub blob are pinned. The run refuses to start unless the stub and hook word equal those of both pinned image-5 patch sets.
+
+- **N1, the stub with the stock closures of `0x0069f8fc`, `0x0069fc94`, `0x006a0d00`/`0x006a0b4c` and `0x0073c15c`: 44/44.** The 40-case matrix is stored `0xf7` × attach bit × Q `+0x15` × system mode {1, 2, 3, 5, 7}. The byte flips in exactly the six cases with attach bit 1, Q 1 and mode 1, 2 or 3, and every other case returns the stored byte unchanged. Four bitmap cases: bit 18 set with `+0x15 = 0` gives no flip, and bit 18 clear with `+0x15 = 1` flips, for stored 0 and 1. Deepest stack 28 bytes.
+- **N2, handler A slice `[0x00ecf8b8, 0x00ecf9c8)`: 160/160 patched and 160/160 stock.** Latch × new bit × stored `0xf7` × Q × mode × `0x0073abec` result, with recording stubs for the trace, the `0x1705`/`0x1706` posts, the registration and the application event. All 80 Q = 0 pairs give identical events, `r0`, latch and cache byte on patched and stock.
+
+### 9.2 Builds and full-system boot (E1)
+
+Both candidates build pinned and reproduce their digests; `extensions/rc0.json` still reproduces `acb0fbbb…ca8`. `//emulation:flash-boot-check` passes for CC+toggle (receipt `private-data/flash-boot-checks/usb-toggle-cc-1/`, SHOOTING MENU at 450,017,580 instructions) and RC0+toggle (`usb-toggle-rc0-1/`, 450,019,375).
+
+### 9.3 Attach scenarios (E2-E8)
+
+`//emulation:usb-toggle-emu` (`emulation/UsbToggleEmu.hs`) drives 28 scenarios from shooting-screen checkpoints in one emulator slot. It pins every DAT and NAND hash, and its expectations come from the behaviour table of 3.2. The bridge additions in `continue_rec_scanout.py` are primitives only: `--toggle-server` (run, key press and release, ADC level, cable level, memory read, trace sites, descriptor enumeration without an expected id, transfer, capture, probe readout, checkpoint), `--cable-at-reset`, `--adc-at-reset`, `--access-probe-range`, and `--attach-hold-key` for the RAM-push attach. Inputs:
+
+- stored-0 NAND `private-data/analysis/usb-toggle/emu/inputs/f7-0.nand` (SHA-256 `8e2b5243…478b`), the stored-1 template with byte `0xf7` restored to 0;
+- its body-like variant `f7-0-pid02b6.nand` (`633944533…2e04`, `cache[0x102..0x103] = b6 02`), used only for E6;
+- the stored-1 template `f7-1.nand` (`baf47535…4aa0`).
+
+The template carries `cache[0x100..0x103] = cb 04 80 ff` and PID `0x02b6` at `0x13e`.
+
+| Run | Observed on CC+toggle and RC0+toggle | Result |
 | --- | --- | --- |
-| E1 | candidate DAT | `//emulation:flash-boot-check` passes |
-| E2 | stock, CC and toggle DATs; access probe on `[0x00bf4454, 0x00bf44e4)` along the flash-boot route and one attach | stock and CC: no fetch, load or store; toggle: fetches only after the call from `0x00ecf900` |
-| E3 | toggle, stored 0, plain attach | handler A application arm (`0x00ecf99c`), no `0x1705`, no fill, `cache[0xf7] = 0`, `0x0146a0c0 = 2`, `0x01469810 = 2`; GET_DESCRIPTOR returns the template descriptor patched from `cache[0x100]`/`cache[0x13e]` |
-| E4 | toggle, stored 0, Q held, attach | `0x0094f8bc` bit 18 set before the edge; `0x1705`, the fill, `0x0146a0c0 = 3`, `0x01469810 = 3`, `0x0146a0cc = 0x00d80cf0`, `cache[0xf7] = 1`; descriptor `04cb:ff80` (`0x00d7ef00`); C0, identity `X-M1`, config window 0 with `0xf7 = 1`, one function-2 read; after Q release the bit clears; SP at `0x00ecf900` recorded against the usbcont stack extent |
-| E5 | E4 continued | detach: `0x1706`, transport stop, no application `0x90`; plain re-attach: `ff80`; detach; Q re-attach: `cache[0xf7] = 0`, application `0x10`, `0x0146a0c0 = 2`, PTP descriptor; detach: application `0x90` |
-| E6 | toggle, stored 0, cable present from reset, with and without Q held from reset | system mode 5, PTP; `cache[0xf7]` stays 0 |
-| E7 | toggle, stored-1 NAND | plain attach `ff80`; Q attach PTP with `cache[0xf7] = 0` |
-| E8 | toggle, stored 0, `--ram-push-e2e` with the attach step holding Q | CC payload alloc, push, checks and unload pass |
-| E9 | emulated updater installing the candidate over the stored-1 NAND | stored `0xf7` after the update, which settles whether the install resets it |
+| E2 | Access probe on `[0x00bf4454, 0x00bf44e4)`, boot plus one attach: stock and CC base record nothing in the extent; each toggle DAT records 12 fetches at `0x00bf4454`-`0x00bf44a8`, entered once, at the instruction after the `0x00ecf900` call. All four also show the three image-wide model transfers that load image 5. | pass |
+| E3 | Stored 0, plain attach: application arm, application `0x10`, `0xd350c4(8)`, no `0x1705`, no fill, `cache[0xf7] = 0`, `0x0146a0c0 = 2`, `0x01469810 = 2`, descriptor `04cb:02b6` | pass |
+| E4 | Stored 0, Q held across the attach: Q `+0x15 = 1` before the edge; stub entered, `0x006a0d00(0x32)` returns 1; attach arm, `0x00ed117c(7,0)`, `0x00ecc104`, fill `0x007221a0(0x43360000, 0xffffffff, …)`, transport start mode 3; `0x0146a0c0 = 3`, `0x01469810 = 3`, `0x0146a0cc = 0x00d80cf0`, `cache[0xf7] = 1`; no application event; descriptor `04cb:ff80`; C0, identity `X-M1`, config window 0 with `0xf7 = 1`, one function-2 read equal to guest memory; after release `+0x15 = 0`. The frames 8 M and 40 M instructions after release show the shooting screen with no Q panel. | pass |
+| E5 | Detach after the enumerated E4 session: no handler A edge (model boundary, 8.3). | blocked |
+| E5u | The same edges with enumeration only where named: Q attach `ff80`; detach `0x1706`, no `0x90`, byte stays 1; plain re-attach `ff80` with the full session; detach; Q re-attach flips to 0, application `0x10`, transport 2, `04cb:02b6`. The final detach after the PTP start is not delivered (model boundary). | pass to the last step |
+| E6 | Cable present from reset, body-like NAND, with and without Q held from reset: system mode 5, handler B, transport 2, `04cb:02b6`, `cache[0xf7] = 0`, stub never entered. On the template stored-0 NAND the boot selects maintenance (system mode 7, `ff80`) through `cache[0x102..0x103] = 0xff80`, again with no stub entry and `cache[0xf7] = 0`. | pass on the body-like input |
+| E7 | Stored 1: plain attach `ff80` with the full session; Q attach flips to 0, application arm, `0x10`, transport 2, `04cb:02b6` | pass |
+| Stock controls | Stock DAT, stored 0, plain and Q attach: application arm, PTP both times, no extent fetch, `cache[0xf7] = 0` | pass |
+| E8 | `--ram-push-e2e --classic-chrome --attach-hold-q`, RC0+toggle, stored-0 NAND: Q held across the attach, device `04cb:ff80`, `ram-alloc` reads `0xf7 = 1`, allocation `0x00a7e8c8`, 131 publications installed and validated, every CC segment matched, `ram-unload` restored and verified all 131 old words, and the cold restart (Q held) read all 131 old. The after-unload segment shows the known final-step mismatch of classic-chrome-patch.md 8.2.5. | pass |
 
-Harness work: the `--ff80-rehearsal` driver stages stock 1.50 and attaches without input; it needs `--firmware`, a key held across the attach, and a PTP-expectation mode that checks the descriptor and transport mode instead of running C0. The e2e attach step needs the same key hold.
+Receipts: `private-data/analysis/usb-toggle/emu/run-3/` (summary and one receipt per scenario) and `e8-cc-2/`. The boots are first-start boots (system mode 3). Mode 1 passes the same not-5-or-7 test.
 
-### 8.3 After install (owner, later)
+### 9.4 Updater (E9)
 
-Plain attach: the host lists `04cb:02b6`. Q attach after the shooting screen: the host lists `04cb:ff80` and `read-config` of the gate-byte plan reads `0xf7 = 1`. Power cycle and plain attach: `04cb:02b6` again. Shooting and playback normal after closing the Q menu.
+`//emulation:updater-f7` (`emulation/UpdaterF7.hs`) runs the ordinary updater through the RAM restore route of E-RECOVERY-RC0-RESTORE-HOST-150: a `//recovery:build-image restore` card from the toggle DAT, the `ram-rescue-engine` raw handoff, then continuation over the stored-1 template NAND with OK, OK, UP, OK, OK as ordinary ADC pulses. It then boots the exported NAND. The observed values are in 8.4; receipts are under `private-data/analysis/usb-toggle/emu-updater/`. The bridge additions are console commands `watch`, `hits`, `read` and `nandstat`, which share the trace class `TraceSites` with the toggle server.
 
-## 9. Open questions
+## 10. Changed-byte explanation
 
-1. Which UI states make `0x00d36ea4` skip the key-state update (`0x00d35f68() == 1`, `[0x0094f5e0] == 2`); a Q press in those states is not seen, and a press seen with its release skipped would leave the bit set (E4 checks the shooting screen and the Q menu).
-2. usbcont stack headroom: the stub's deepest path (`0x00632950` through `0x00632860` and the copy) adds about 100 bytes at `0x00ecf900` (E4 records SP).
-3. Whether a PTP start after an `ff80` stop in the same boot behaves on the body as in E5.
-4. For the power-on variant only: the content of the boot records at `0x0073ae10` for a held Q, and the source of the startup Fn and Q press forms.
-5. The updater refresh flags for this container (E9).
+### 10.1 Candidates
 
-## 10. Reproduction
+| Item | CC+toggle | RC0+toggle |
+| --- | --- | --- |
+| DAT | `private-data/analysis/usb-toggle/cc-pinned-dat/FWUP0002.DAT`, 38,405,148 bytes, SHA-256 `507ecf326119110713c34f15bb07d0f38bd6946127011835980f6e4d39ad0e1e` | `private-data/analysis/usb-toggle/rc0-pinned-dat/FWUP0002.DAT`, 38,405,148 bytes, SHA-256 `10feac474eee5ac178ff454397f1b4f1bc1c9a01ae4da8de8f102fa606ca2445` |
+| Pinned manifest | `private-data/analysis/usb-toggle/cc-pinned/usb-toggle.json` | `private-data/analysis/usb-toggle/rc0-pinned/usb-toggle.json` |
+| Image-5 patch set | `usb-toggle-image5.json`, 45 CC words, the hook word and the stub blob | `usb-toggle-image5.json`, the hook word and the stub blob |
+| Base | CC flash candidate `16c830ad…2c89` (reports/classic-chrome-patch.md 11.1); its image-4, `0x83e` record and plain parts copied unchanged | RC0 `acb0fbbb…ca8`; `rc0-patch-set.json` copied unchanged |
+| Replaces on the body | the installed RC0 container | the installed RC0 container |
+| Revert | reinstall CC (`16c830ad…2c89`), RC0 or stock through the same update route; nothing the toggle stores survives a power-off | the same, RC0 `acb0fbbb…ca8` |
+
+Pinning followed CC's: an unpinned `build-extension` build gave the digest, `build-usb-toggle --output-sha256` wrote it into a fresh manifest, and the pinned `build-extension` reproduced it (`PASS`, 45/45 contract checks).
+
+### 10.2 Every changed byte
+
+Toggle writes, both candidates (`changed-words.md` in each pinned directory):
+
+| Address | Current | New | Changed bytes | Role |
+| --- | --- | --- | ---: | --- |
+| `0x00bf4454` | 88 bytes of the stock extent (hash in 5.1) | the 22 stub words of 3.1 | 78 | stub |
+| `0x00ecf900` | `fd3fdfeb` | `d392f4eb` | 3 | `bl 0x00bf4454` replaces `bl 0x0069f8fc` |
+
+Decoded images, byte-compared after `rebuild-update extract-record5` and `fflzd`: CC+toggle image 5 differs from CC's image 5 only within `[0x00bf4454, 0x00bf44ac)` and at `0x00ecf900`. RC0+toggle image 5 differs from stock image 5 at the same places. `rebuild-update diff` against the CC candidate: identity records, selector, fill, segment table, image-4 header and stream, image-2 extent, trailer and both restore lists unchanged; image-5 header (2 bytes) and stream re-encoded. The extracted plain window equals the base's (CC `7e60e04e…`, RC0 and stock `ee211bda…`). DAT header bytes `0x244`-`0x25b` equal stock (8.4).
+
+## 11. Reviewer packet and remaining gates
+
+The install is H3 (spec 07 section 3.2). The review covers new mechanism bytes: the hook word redirects stock control flow and the stub runs outside any payload allocation.
+
+Reviewer inputs:
+
+- this report;
+- `host/firmware/usb-toggle-stub.S` and `.ld`, `host/FujiAF/UsbToggle.hs`, `host/firmware/BuildUsbToggle.hs` and `UsbToggleTests.hs`;
+- both pinned directories under `private-data/analysis/usb-toggle/` (manifest, `usb-toggle-image5.json`, `changed-words.*`);
+- the native cases (9.1) and the emulator receipts (9.2 to 9.4).
+
+Questions for the reviewer:
+
+1. Does the stub preserve handler A's contract at `0x00ecf904`: only `r0` consumed, `r4`-`r11` and SP preserved, flags not relied on?
+2. Is ownership of the extent by absence of references (5.2) enough, with E2's runtime watch?
+3. Is reading `+0x15` through `0x006a0d00` from usbcont context sound, given that the debounce step writes it from the key-scan context?
+4. Does a flip in system mode 1, 2 or 3 leave every other `0xf7` reader consistent (2.4)?
+5. Does the merged image-5 patch set carry CC's 45 words unchanged?
+
+Gates before an install:
+
+1. One independent review of the bytes above and the container diff. Not started.
+2. `//emulation:flash-boot-check` on the exact DAT. Passed for both (9.2).
+3. The owner's visual check: `//emulation:xm1-viewer -- --firmware <candidate>`, live view and SHOOTING MENU (for CC+toggle also FILM SIMULATION, classic-chrome-patch.md 11.3). Not started.
+4. The owner's per-run go naming the operation (firmware update) and the digest. Not given.
+5. Boot path: the toggle adds none. CC+toggle inherits CC's image-4 base note; RC0+toggle does not.
+
+After install (owner):
+
+- plain attach after the shooting screen: the host lists `04cb:02b6` and files read over PTP;
+- Q held while attaching: the host lists `04cb:ff80`, and `read-config` with the gate-byte plan reads `0xf7 = 1` (H1 under the read grant);
+- detach, then plain re-attach: `ff80`;
+- power cycle and plain attach: `04cb:02b6` again;
+- shooting, playback and settings normal;
+- a `read-config` window-0 capture in a Q boot equals the reference outside `0xf7`.
+
+The RAM-push session scripts and the transport README's ordinary-boot prerequisites change from a stored `0xf7 = 1` to a Q attach once a toggle candidate is installed.
+
+## 12. Reproduction
 
 Host reads only, from the repository root; `R=private-data/analysis/x-m1-1.50`.
 
@@ -300,4 +404,21 @@ od -An -tx1 -j $((0xe0048+0xa902)) -N 1 $R/payload.bin                        # 
 dd if=$R/lz/id5-00bf1a00.bin bs=1 skip=$((0xbf4454-0xbf1a00)) count=144 status=none | sha256sum
 ```
 
-Caller, word, pair, ADR and Thumb scans over the same listings and the eight raw inputs were run in a host session; they miss register-indirect references whose base is computed at run time, which 8.2 E2 covers on the executed paths.
+Caller, word, pair, ADR and Thumb scans over the same listings and the eight raw inputs were run in a host session; they miss register-indirect references whose base is computed at run time, which E2 (9.3) covers on the executed paths.
+
+Builds, cases and emulator runs (`D` is the resolved stock DAT, `$(readlink -f private-data/firmware/x-m1-1.50/FWUP0002.DAT)`):
+
+```sh
+devenv shell -- bazel test //host/firmware:usb-toggle-tests
+devenv shell -- bazel run //host/firmware:build-usb-toggle -- --output-sha256 507ecf326119110713c34f15bb07d0f38bd6946127011835980f6e4d39ad0e1e private-data/analysis/classic-chrome-patch/candidate-pinned/classic-chrome.json private-data/analysis/usb-toggle/NEW_CC_PARTS
+devenv shell -- bazel run //host/firmware:build-usb-toggle -- --output-sha256 10feac474eee5ac178ff454397f1b4f1bc1c9a01ae4da8de8f102fa606ca2445 extensions/rc0.json private-data/analysis/usb-toggle/NEW_RC0_PARTS
+devenv shell -- bazel run //extensions:build-extension -- private-data/analysis/usb-toggle/cc-pinned/usb-toggle.json "$D" private-data/analysis/usb-toggle/NEW_CC_DAT
+devenv shell -- bazel run //extensions:build-extension -- private-data/analysis/usb-toggle/rc0-pinned/usb-toggle.json "$D" private-data/analysis/usb-toggle/NEW_RC0_DAT
+devenv shell -- bazel run //emulation:usb-toggle-cases
+devenv shell -- bazel run //emulation:flash-boot-check -- --firmware private-data/analysis/usb-toggle/cc-pinned-dat/FWUP0002.DAT --output private-data/flash-boot-checks/NEW
+devenv shell -- bazel run //emulation:usb-toggle-emu -- --receipt-output private-data/analysis/usb-toggle/emu/NEW --runs all
+devenv shell -- bazel run //emulation:xm1-viewer -- --ram-push-e2e --classic-chrome --attach-hold-q --firmware private-data/analysis/usb-toggle/rc0-pinned-dat/FWUP0002.DAT --installed-nand private-data/analysis/usb-toggle/emu/inputs/f7-0.nand --sd-card-image private-data/analysis/classic-chrome-patch/ram-push/inputs/card.img --receipt-output private-data/analysis/usb-toggle/emu/NEW_E8
+devenv shell -- bazel run //emulation:updater-f7 -- --recovery-ram RESTORE/terminal-valid-ram.bin --sd-image RESTORE/firmware-ram-recovery-sd.img --installed-nand private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand --receipt-output private-data/analysis/usb-toggle/emu-updater/NEW
+```
+
+`RESTORE` is a `//recovery:build-image restore` output from the candidate DAT followed by the `ram-rescue-engine` raw handoff (emulation/README.md, the updater section).
