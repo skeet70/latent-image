@@ -507,15 +507,20 @@ checkContract w = do
   checkWords (wPPlain w) 0x012548a0 [0xe5943008, 0xe3a02000, 0xe3530003, 0x03a02001, 0xe3530005, 0x03a02003, 0xe3530006, 0x03a0200b, 0xe3530007, 0x03a0200c, 0xe3530008, 0x03a0200d, 0xe3033a7c, 0xe3403151, 0xe58327a4, 0xea000011]
   checkWords (wPlain w) 0x01179b14 [0xe300383d]
   checkWords (wPPlain w) 0x01179b14 [0xe300383e]
-  -- The live-view fragment: five words of FUN_00eee958 over the patched image 5, nothing else.
+  -- The live-view fragment: five words of FUN_00eee958 over the patched image 5;
+  -- the frames-remaining fix's three FUN_00e42414 words may be present too, nothing else.
   forM_ [0 .. 12 :: Word32] $ \k -> let arm = wd (wId5 w) (wd (wId5 w) (0x00eee96c + 4 * k)) in ensure (arm .&. 0xffff0f00 == 0xe3a00000) ("id5: FUN_00eee958 arm " ++ show k ++ " is not mov rX,#imm: " ++ h32 arm)
   forM_ (wLv5 w) $ \l5 -> do
-    let lo = 0x00eee960 - 0x00bf1a00
-        hi = lo + 20
-        outside img = B.take lo (iBytes img) <> B.drop hi (iBytes img)
+    let windows = [(0x00e424ac, 12), (0x00eee960, 20)] :: [(Word32, Int)]
+        outside img = B.concat [B.take (hi - lo) (B.drop lo (iBytes img)) | (lo, hi) <- zip (0 : [fromIntegral (a - 0x00bf1a00) + z | (a, z) <- windows]) ([fromIntegral (a - 0x00bf1a00) | (a, _) <- windows] ++ [B.length (iBytes img)])]
+        framesCurrent = [0xe350000c, 0x13a00006, 0x03a00000]
+        framesFix = [0xe350000d, 0x83a00006, 0x93a00000]
+        frames = [wd l5 a | a <- [0x00e424ac, 0x00e424b0, 0x00e424b4]]
     checkWords (wP5 w) 0x00eee960 [0xe350000c, 0x979ff100, 0xea00000c, 0x00eee9b0, 0x00eee9bc]
+    checkWords (wP5 w) 0x00e424ac framesCurrent
     checkWords l5 0x00eee960 [0xe350000d, 0x95810000, 0x93a00000, 0x9a000041, 0xea00000a]
-    ensure (B.length (iBytes l5) == B.length (iBytes (wP5 w)) && outside l5 == outside (wP5 w)) (iPath l5 ++ ": differs from the patched image 5 outside [0x00eee960, 0x00eee974)")
+    ensure (frames == framesCurrent || frames == framesFix) (iPath l5 ++ ": FUN_00e42414 tail [0x00e424ac, 0x00e424b8) is neither the patched image 5's words nor the frames-remaining fix: " ++ unwords (map h32 frames))
+    ensure (B.length (iBytes l5) == B.length (iBytes (wP5 w)) && outside l5 == outside (wP5 w)) (iPath l5 ++ ": differs from the patched image 5 outside [0x00e424ac, 0x00e424b8) and [0x00eee960, 0x00eee974)")
   ensure (sl (wId2 w) 0x0037b808 66 == B.replicate 66 0) "id2: the stock 0x83e record is not 66 zero bytes"
 
 -- Words the RAM cases' expectations rest on, read from the RAM images.
