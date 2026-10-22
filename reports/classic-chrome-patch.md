@@ -744,7 +744,7 @@ The flash target is not `16c830ad…2c89`. The owner chose a later candidate tha
 
 #### 12.2.1 The install bytes and their gates
 
-`DIGEST` is the combined candidate `78f7526002608540a8a1c6957306f29760371cd5146d2455587a0900bacaa7ba` (CC, the icon, the live-view fragment and the frames-remaining fix; [the icon report](classic-chrome-icon.md) sections 8-11; it keeps the image-4 load at `0x0061c200`). Gates `DIGEST` must clear before the go:
+`DIGEST` is the combined candidate `98a66780f464731a184f1128aab0eb4b954adcdbbed99a214480720bd5a81606` (CC, the design-B icon with the full-size Q tiles, the live-view fragment and the frames-remaining fix; [the icon report](classic-chrome-icon.md) sections 8-11 and 14; it keeps the image-4 load at `0x0061c200`). Review CcIconReview (2026-10-23) covered its new bytes. Gates `DIGEST` must clear before the go:
 
 1. Its pinned manifest rebuilds to `DIGEST` byte for byte on the session commit, as the baseline does below.
 2. One independent review of the new bytes (the icon change, the live-view fragment of section 4.10 and the frames fix of section 4.11), scoped by [the icon report's reviewer packet](classic-chrome-icon.md#10-reviewer-packet) against the baseline: diff the two images and explain every byte that differs.
