@@ -660,15 +660,15 @@ Container-level changes follow from these: image-4 load `0x0061c340` to `0x0061c
 
 ### 11.3 Operation class and gates (spec 07 section 3)
 
-The install is H3 (firmware update). Before a run:
+The install is H3 (firmware update). The gates below were cleared for `16c830ad…2c89`, which the owner will not flash: the first flash is a later candidate that adds a CC icon, and section 12.2 lists the gates it must clear on its own digest. Before a run:
 
 1. One independent review of the new mechanism bytes (stub source and linked blobs, the five hook words, the marker setter, the converters, the FilmMode, Saturation and RAW code words, the gate edits, the image-2 record) and of the data words and container diff. Reviewer inputs: this report, `host/firmware/classic-chrome-stubs.S`/`.ld`, `host/FujiAF/ClassicChrome.hs`, the private `candidate-pinned/` directory and the case outputs under `private-data/analysis/x-m1-1.50/native-case/classic-chrome/`.
-2. `//emulation:flash-boot-check` on the exact image: passed (9.3).
-3. The owner's visual check: `//emulation:xm1-viewer -- --firmware <candidate>`, open SHOOTING MENU > FILM SIMULATION (route in 9.3).
-4. The owner's per-run go naming the operation (firmware update) and the digest `16c830ad…2c89`.
+2. `//emulation:flash-boot-check` on the exact image: passed (9.3). Rerun on main `0f0b694` (2026-10-22, receipt `private-data/flash-boot-checks/cc-flash-prep-1/flash-boot-receipt.json`): passed with the same milestones (boot 80,000,280, SHOOTING MENU 450,017,580) and final frame `7e8e4479…` as `cc-candidate-1` and `cc-review-1`; the staged emulator tree differs from the review's (USB endpoint, cable-input and mode-dial changes), the native engine does not.
+3. The owner's visual check: satisfied on hardware by the RAM-push session (E-CC-RAM-PUSH-SESSION-150, 8.5): the owner's photographs of SHOOTING MENU > FILM SIMULATION show the eighth row, an empty icon cell with `CLASSIC CHROME` drawn as text, from the same data words this image carries (8.2.3). The viewer run is not needed. For the icon candidate, its own RAM-push camera test comes before the flash.
+4. The owner's per-run go naming the operation (firmware update) and the digest of the image flashed.
 5. Boot-path note: the image-4 load `0x0061c200` is 64-byte aligned like RC0's and decodes in the emulator's boot path; the hardware decompressor has not yet decoded this base.
 
-Install as for RC0 ([install procedure](install-procedure.md)): card copy named `FWUP0002.DAT`, uninterruptible power, the body's equal-version update.
+Install session: section 12.2.
 
 ### 11.4 Acceptance after install (spec 19.4 and 19.5.6)
 
@@ -682,7 +682,9 @@ The before-set of the RAM session (8.4.2a), shot on the RC0 body with nothing pu
 6. Known limitations: live view previews CC as PROVIA and movie records PROVIA; the Q cell shows PROVIA's glyph for a stored CC and does not offer CC; FILM 1-3 brackets cannot select CC; the CC row has no icon or help line; CC's tone curve does not follow DR or filter selection (section 4.5), which for stills matches PROVIA's own behaviour.
 7. Look acceptance (CIEDE2000 bounds, discrimination, neutrals, adjustments) per spec 19.5.6 with cc-model's thresholds.
 
-## 12. Open questions
+## 12. Open questions and the flash install session
+
+### 12.1 Open questions
 
 1. Which builder drives live view (the PROVIA outcome holds for every candidate).
 2. Rendering of the `0x83e` name on hardware, the shooting-menu tile and the RAW list; tolerance of id 0 in fields 0-2 by every labels consumer on the body.
@@ -695,6 +697,130 @@ The before-set of the RAM session (8.4.2a), shot on the RC0 body with nothing pu
 9. Scope of the review approval (review N5): it binds DAT `16c830ad…2c89` with data block `833b6452…2774`. A rebuilt parameter set changes only `[0x0061c204, 0x0061c264)` plus the container encoding; diff the new image against this one to confirm nothing else changed, then rerun the site cases, builder cases and flash-boot check on the new digest.
 10. Prefix placement (review N3): no independent placement review of `[0x0061c200, 0x0061c340)` exists; the reviewer's reference census agrees with section 6.5 (only the node pointers and the stub `movw`/`movt` pairs name the range).
 11. Film value 13 at unreached consumers (review M1, section 4.9). No reader was found for five copies of the film: the `MCST` dump `+0x100` (buffer `*(*(state+0xc)+0x50)`, written only when adjustment byte `0xa8` bit 7 is set), the record `+0x9c` that callback `FUN_00f2f56c` fills (imgdc message `0x3f3a`, whose only table entry `0x00ff2e78` does not invoke it), imgdc's copy byte `0x016f8394` (struct posted from `0x00f2d958`), `0x016d748c` (record published through `0x016b5458`) and the plan copies at `0x41717d54`/`0x4171814c` (`+0x200`). The census does not follow pointers that reach these buffers through heap or indirect calls. No capture or bracket was emulated, so the plan, slot, `0x00919288` and mailbox-48 stores were only read at 0.
+
+### 12.2 Flash install session script
+
+A script, not a run, modelled on [the install procedure](install-procedure.md) and [the RC0 install session](filmsim-install-session-script.md). Nothing here authorizes a camera operation; the install is H3 and runs only after the owner's per-run go of 12.2.9. Record every item in `private-data/sessions/<date>-cc-flash/notes.md`; any item not done is a stop.
+
+The flash target is not `16c830ad…2c89`. The owner chose a later candidate that adds a CC icon (built on `agent/cc-icon`) as the first flash. The script takes two parameters that name that candidate: `IMAGE`, the absolute path of its pinned DAT, and `DIGEST`, its SHA-256. `16c830ad…2c89` serves as the baseline the parameters are checked against.
+
+#### 12.2.1 The install bytes and their gates
+
+Gates `DIGEST` must clear before the go:
+
+1. Its pinned manifest rebuilds to `DIGEST` byte for byte on the session commit, as the baseline does below.
+2. One independent review of the new bytes (the icon change), scoped like review N5 against the baseline: diff the two images and explain every byte that differs.
+3. `//emulation:flash-boot-check -- --firmware "$IMAGE"` passes.
+4. The RAM-push camera test of the icon change has run on the body and the owner has seen the icon in FILM SIMULATION. It comes before the flash and is this candidate's visual check.
+5. The 12.2.2 container check passes on `IMAGE`.
+6. The open boot-path item stays open: the hardware decompressor has never decoded an image-4 load at `0x0061c200`; RC0's `0x0061c340` is the only modified base decoded on this body (11.3 item 5, 12.1 item 6). If the icon candidate moves the image-4 load, the move is a new base, also never decoded on hardware.
+
+Baseline `16c830ad…2c89`:
+
+| Item | Value | Evidence |
+| --- | --- | --- |
+| Image | `private-data/analysis/classic-chrome-patch/candidate-pinned-dat/FWUP0002.DAT`, 38,405,148 bytes, SHA-256 `16c830ad71b9755d22368ffaeacd6b8b4d78376c9568ac3f9717f45d48292c89` | 11.1 |
+| Reproduction on main `0f0b694` (2026-10-22) | `build-classic-chrome --output-sha256 16c830ad… candidate.json` writes parts equal to `candidate-pinned/` apart from `recorded_at`, with data block `833b6452…2774` byte-equal; `build-extension` on the pinned manifest and the stock DAT `43d67afa…1490` prints PASS with the pinned digest, and its output (`flash-prep-rebuild-1/`) is byte-identical to the image | byte-read |
+| Sources since the review | The review ran at `agent/cc-patch` `73ba53b`, closing `9763602`. Unchanged on main: `classic-chrome-stubs.S`/`.ld`, `ClassicChrome.hs`, `BuildClassicChrome.hs`, `ApplyPatchSet.hs`, `LabelRecord.hs`, `extensions/`, `lz/`, `recovery/rc0-patch-set.json`, `native-runner.c`, `FlashBootCheck.hs`, `FlashBootRoute.hs`, the synthetic set and `ClassicChromeTests.hs`. Changed: `UpdateContainer.hs` adds a second segment-table layout (`RecorderCompact`, the recovery recorder container) and selects table offsets by layout, a stock-layout container keeping the stock offsets; `Host.hs` closes a duplicated descriptor on exception; the site and builder case generators gain the RAM image sets of 8.2.4; the retained upstream emulator gains USB endpoints, a cable input, a mode-dial input and an IRQ trace cursor. The byte-identical rebuild and the unchanged flash-boot frame show none of these reaches the image | byte-read |
+| Review | Approved, final verdict for this digest (`private-data/analysis/classic-chrome-review/review.md`) | 11.3 item 1 |
+| Flash-boot check | Passed on main `0f0b694`, receipt `private-data/flash-boot-checks/cc-flash-prep-1/flash-boot-receipt.json` | 11.3 item 2, emulated |
+| Visual check | Satisfied on hardware by the RAM-push photographs, for this image's menu row | 11.3 item 3, E-CC-RAM-PUSH-SESSION-150 |
+
+#### 12.2.2 What the update does to stored state
+
+**Byte-read** on the baseline image: the factory template the refresh reads (raw DAT `0xe025c`, complemented, 270,336 bytes, `X-M1` at `+0x15c`, `55 aa` at `+0x202`) and both restore lists (raw `0x24a027c` and `0x24a0404`, 98 and 3 pairs, 1,487 bytes) are byte-identical in the stock, RC0 and baseline containers. The template holds `00` at `0x80`, `0x81`, `0xa2` and `0xf7`. The lists restore `0xa2` and not `0x80`, `0x81` or `0xf7`; their first pair `(0x0000, 0x80)` ends below `0x80`. The icon candidate must carry the same bytes; with `STOCK` the stock DAT, both commands print nothing on a pass:
+
+```sh
+cmp --ignore-initial=918108 --bytes=270336 "$STOCK" "$IMAGE"     # template, raw [0xe025c, 0x12225c)
+cmp --ignore-initial=38404732 --bytes=416 "$STOCK" "$IMAGE"      # restore lists, raw [0x24a027c, 0x24a041c)
+```
+
+The path is S4 of [the install procedure](install-procedure.md#2-what-the-camera-does-when-inside-the-update): `0xdb91e0` snapshots `[0, 0x42000)`, refreshes it from the template, stamps `+0x1e8`/`+0x1e9` and `+0x204`/`+0x205`, restores the listed bytes and commits the area. It runs only when `0x014e3578 & 3` is nonzero; that flag's setter is unmapped.
+
+**Hardware-observed** for the RC0 install (captures of E-PREINSTALL-CONFIG-150 and E-FILMSIM-READBACK-150, compared against the template on 2026-10-22): before and after, every byte of `[0, 0x42000)` outside the lists equals the template except the stamps `0xd8`, `0x1e8`, `0x1e9` and `0x4069`-`0x406e`; the update stamp moved `01 54` to `01 78`, so the refresh ran on the equal-version update; the 224 restore-covered body bytes held; area-2 bank 1 was unchanged and bank 0 gained only photo records. The official 1.00 to 1.50 update returned `0x80` from `0x22` and `0x81` from `0xff` to `0x00` (E-ADJ-GATE-BYTE-150).
+
+Body now: window-0 captures since the f7 enable show `0x80`, `0x81` and `0xf7` as the only non-template bytes outside the lists and stamps, and `commit-f7-restore` left `0xf7 = 00`, `0x80 = 22`, `0x81 = 00` (E-STORED-F7-RESTORE-RUN-150; not reread in a later boot).
+
+Expected after the update (**static-inference**): the executing updater is RC0's, whose image 5 holding `0xdb91e0` is stock, and with the check above passing the container parts the updater reads for S4 equal RC0's, so the RC0 outcome repeats. `0xf7` and `0x81` stay `00`, `0x80` returns from `0x22` to `0x00`, `0xa2` is restored at `00`, the stamps are rewritten with the values they hold, and every other byte of `[0, 0x42000)` already equals the template or is restored. Window 0 then equals the 2026-10-16 reference that `commit-f7-enable` checks against. If the refresh did not run, `0x80` stays `0x22`; the body has operated normally with either value. `[0x400000, 0x40fd00)` is outside the refresh. The mapped writer touches firmware blocks `[0, 0x126)`, the configuration area and the directory-journal pair, not the area-2 ordinary settings or the area-3 C slot; the C slot across an update has neither a byte read nor an owner report (E-FILMSIM-INSTALL-150 names manual settings, date, time and language). The owner should see the settings, C values, date, time and language as before, no setup menu, stored `0xf7 = 0` (ordinary boot enumerates PTP) and eight FILM SIMULATION rows.
+
+#### 12.2.3 Delivery to the card
+
+**Hardware-observed, 2026-10-22, read-only** (`private-data/sessions/20261022T060247Z-ptp-summary/`): `gphoto2 --summary` (gphoto2 2.5.32, libgphoto2 2.5.34) sent OpenSession, GetDeviceInfo twice, GetStorageIDs, GetObjectHandles, GetStorageInfo, 76 GetDevicePropDesc and CloseSession, nothing else. DeviceInfo lists SendObjectInfo `0x100c` and SendObject `0x100d`, but the only storage, `0x10000001` (DCIM layout, root holding only `DCIM`), reports Access Capability `0x0002`, read-only with object deletion. `gphoto2 --abilities` prints `File upload support: yes` from libgphoto2's static driver table, and kio reports the store `0444` and `DCIM` `0777` (its generic folder mode); neither reads the card's access. The camera does not offer PTP upload, and an upload attempt would be a write the device declares unsupported, so this script makes none. Whether the camera would refuse SendObjectInfo is untested. No other mapped route writes a file to the card in the slot, so delivery needs one card removal into a host card reader.
+
+| Code | Action | Must show |
+| --- | --- | --- |
+| D1 | Camera off, USB unplugged. Remove the card and insert it in the host's reader | Card mounted read-write |
+| D2 | `ls -la` the card root | `DCIM` with folder `963_FUJI` (the RAFs `DSCF3149`-`3163`, `3167`, `3168`, `3171` that A4 needs), no `FWUP*.DAT`, free space well above 38,405,148 bytes. Do not format the card: unlike the RC0 run, A4 needs these RAFs on it. The lookup opens `A:\FWUP0002.DAT` by name (install procedure section 1); that other files are ignored is **static-inference**, untested on this body |
+| D3 | `cp --no-clobber "$IMAGE" "$CARD/FWUP0002.DAT" && sync` | Exit 0; the name exactly `FWUP0002.DAT` |
+| D4 | Unmount, remove and reinsert the card in the reader, mount, then `ls -la "$CARD"` and `sha256sum "$CARD/FWUP0002.DAT"` | The size of `IMAGE` and `DIGEST`, read after a fresh mount so the bytes come from the card. Any other value: delete the copy and repeat D3-D4 |
+| D5 | Unmount, eject, insert the card in the camera with the camera off; close the door | |
+
+A partly written file cannot be picked up during the copy: the card is in the reader, and the camera opens the file only at a DISP/BACK power-on. A truncated or damaged copy fails D4. Inside the camera, a damaged file fails one of the three sums (status 5) before S1 (**byte-read**); the branch for a file shorter than its header declares is **unproved**. The cached-success byte `0x15c1e58` survives until power is removed, so after any aborted attempt switch off and cut the supply before another one (install procedure section 7).
+
+#### 12.2.4 Before the session
+
+| Code | Owner action | Must show |
+| --- | --- | --- |
+| P0 | Model: on the session commit, `sha256sum "$IMAGE"` and the 12.2.1 gates for `DIGEST`: rebuild, review, flash-boot receipt, the icon RAM-push test result and the 12.2.2 check | `DIGEST`; every gate recorded |
+| P1 | Photograph the watched settings and the C (CUSTOM) values; the RAM session waived this | Record in the notes |
+| P2 | Confirm the adjustment backup (E-ADJ-BACKUP-DURABLE-150, `c82ac937…199c`, two locations) | No new capture is needed: since that backup only `0x80`, `0x81` and `0xf7` changed (12.2.2) |
+| P3 | SHOOTING MENU > FILM SIMULATION shows a stock film (PROVIA after the RAM session) and the C slot holds a stock film (review N1) | Stock film in both; RC0 cannot store CC, so this is a check |
+| P4 | Dummy-battery supply on mains, connector secured, not on a shared switch; camera on a stable surface; lens mounted; USB unplugged | Install procedure section 5 |
+| P5 | D1-D5 done | Card in the camera, door closed |
+| P6 | Camera off. Start a video of the screen and a clock | |
+
+#### 12.2.5 Camera acts
+
+The screen order is the RC0 run's (E-FILMSIM-INSTALL-150, E-INSTALL-TIMING-150) and the vendor procedure; intermediate wording on this body is **unproved**. Do not advance an unfamiliar screen by guessing.
+
+| Code | Owner action | Must show |
+| --- | --- | --- |
+| I1 | Hold DISP/BACK, switch on, release when the firmware screen appears | The firmware upgrade screen with body version 1.50 |
+| I2 | Inspect before pressing anything | The update offered as 1.50 to 1.50, BODY route, no file error, low-battery or refusal. Anything else: abort (stop rules) |
+| I3 | If item selection appears, select BODY and press MENU/OK once | BODY, both versions 1.50 |
+| I4 | At FIRMWARE UPGRADE OK?, select OK and press MENU/OK once; at a battery-cover/power warning with BACK CANCEL, pause without pressing its OK | Last screen with a cancel |
+| I5 | Press the final OK once, only under the go | PROCESSING with progress squares. This is the point of no return |
+| I6 | Touch nothing: no button, card door, battery door, POWER switch, cable or supply | Progress; the RC0 install took 57.3 s from confirm to completion with a longest unchanged stretch of 13.7 s, which does not bound this image |
+| I7 | Wait for the completion screen asking to turn the camera off | Completion; record the screen and elapsed time |
+| I8 | Switch off as instructed and wait for shutdown. Leave the card in the camera | Ordinary shutdown |
+
+`FWUP0002.DAT` stays on the card. It runs only at a DISP/BACK power-on; delete it with the reader at the next card removal.
+
+#### 12.2.6 Stop rules
+
+Every stop ends camera operations for the session; nothing is retried; a new attempt needs a new go.
+
+- Before I5: a wrong version, model, route or file message, no equal-version offer, low or doubtful power, an unfamiliar screen: cancel where offered, switch off, cut the supply, report.
+- During I6: never cut power, open a door or press a button, whatever the screen shows. A stalled or blank display is recorded, not interrupted.
+- After I8, a body that does not boot or hangs: stop. Do not power-cycle repeatedly or follow generic battery-removal advice; keep the last display, the supply and card state, and the video (install procedure section 9 step 1).
+- The setup menu, a lost setting or changed C values: stop for host analysis; do not re-enter settings to hide the difference.
+- Seven rows instead of eight with normal operation: do not reflash; photograph the list and the mode; this is the placement-residual path of the RC0 script section 7.
+- During acceptance: any freeze, error dialog, stock-mode change or unexpected behaviour (spec 07 section 3.3).
+
+#### 12.2.7 Recovery
+
+- Interruption residues and which a repeat repairs: [install procedure section 8](install-procedure.md#8-interruption-residues-and-which-are-recoverable-by-repeating-the-update). Between S1 and the end of S3 the body cannot boot and no repair is demonstrated; the owner accepted that residual on 2026-10-09 ([install procedure section 3](install-procedure.md#3-preconditions)).
+- A decode failure of the new image-4 base at boot has the same symptom as that window and the same coverage.
+- Coverage by failure class: [recovery status](recovery-status.md#failure-coverage-and-smallest-next-experiment). The v5 rollback is specific to the recorder incident's block; the firmware-derived RAM recovery followed by the ordinary updater is a host model only; SD-boot entry is the rapid power toggle with Fn and the inward sub-command-dial press (E-SDBOOT-ENTRY-TIMING-150) and needs a card change.
+- Revert from a working CC body: 11.1 revert row (stock film in the shooting setting and in C, then RC0 `acb0fbbb…ca8` through this same route).
+
+#### 12.2.8 Acceptance after install (11.4 without a chart)
+
+| Code | Owner action | Must show |
+| --- | --- | --- |
+| A1 | Boot normally, no USB | No setup menu; date, time, language, the P1 settings and C values unchanged; capture and playback work. BODY VERSION 1.50 is weak evidence (install procedure section 9 step 3) |
+| A2 | SHOOTING MENU > FILM SIMULATION; photograph the list | Eight rows, `CLASSIC CHROME` last with the icon the RAM-push test showed (11.4 item 2) |
+| A3 | On the 2026-10-21 tabletop scene or another fixed scene, same exposure, shoot CC then PROVIA; play both back | Both frames normal; model: exiftool FilmMode `Classic Chrome` and `F0/Standard (Provia)` (11.4 item 3) |
+| A4 | RAW CONVERSION of `DSCF3149.RAF` with default settings to CLASSIC CHROME, PROVIA, Velvia and ASTIA | Six rows with CLASSIC CHROME last. Model: `classic-chrome-model photo-identical` against the RAM-session conversions, CC to `DSCF3169`, PROVIA to `DSCF3164`, Velvia to `DSCF3165`, ASTIA to `DSCF3166`. Identity is expected if `IMAGE` carries the baseline's data block and develop-path words, which the RAM payload reproduced, and stock code elsewhere (**static-inference**). A difference is a finding for host analysis, not a safety stop (11.4 item 4) |
+| A5 | Select CC, shoot, review; register CC in C and shoot at C; power off and on; both still show CC; shoot in each (review M1) | No stop, freeze or error (11.4 item 5) |
+| A6 | Check the row in P, S, A, M and C, and that it is greyed where ASTIA and Velvia are | Same availability as ASTIA and Velvia (11.4 item 2) |
+| A7 | Return the shooting setting to the owner's choice; shoot one stock-mode frame and play it back | Stock mode normal |
+
+Not evaluated without a chart: the spec 19.5.6 bounds for items 1-3 and `e_model`; the look stands on the relative checks listed under that spec section. 11.4 item 6 lists the known limitations the owner will see. A byte-level readback of the installed image has no CC plan yet; a jig `read-config` of the gate-byte plan, a separately named read with a supply-cut ending, would test the 12.2.2 expectation (`0x80 = 00`, `0x81 = 00`, `0xf7 = 00`).
+
+#### 12.2.9 What the go names
+
+The owner's per-run H3 go names the operation and the digest: "Go: firmware update of XM1-body-01 from the camera's update menu with FWUP0002.DAT SHA-256 `DIGEST`, copied by card reader to the card root", with `DIGEST` written out in full as the icon candidate's 64-digit SHA-256. A go that names another digest, another file or another delivery is not this go, and `16c830ad71b9755d22368ffaeacd6b8b4d78376c9568ac3f9717f45d48292c89` is not a flash target.
 
 ## 13. Reproduction
 
