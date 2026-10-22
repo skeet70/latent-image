@@ -1,5 +1,11 @@
 {
   "schema": 1,
+  "trace_sites": [
+    ["00e42414", "frames-film-class-entry"],
+    ["00e43964", "frames-film-class-result"],
+    ["00ed5b2c", "frames-validator-result"],
+    ["00e439f8", "frames-count-store"]
+  ],
   "before_unload": [
     {"phase": "cc-icon-film-list-open", "observe": true, "capture": "cc-icon-film-list-open",
      "reads": [["icon-directory-words", "003f821c", 8], ["icon-per-mille-word", "00438268", 8], ["label-83d-record", "0037b7c4", 68],
@@ -27,7 +33,9 @@
       ["ok", 1, 5, 6]]},
     {"phase": "cc-icon-film-list-reopened", "observe": true, "requires": ["cc-icon-film-commit"], "capture": "cc-icon-film-list-reopened", "steps": [
       ["ok", 1, 254, 7]]},
-    {"phase": "cc-icon-menu-close", "observe": true, "requires": ["cc-icon-film-list-reopened"], "capture": "cc-icon-live-view-cc", "steps": [
+    {"phase": "cc-icon-menu-close", "requires": ["cc-icon-film-list-reopened"], "capture": "cc-icon-live-view-cc",
+     "reads": [["frames-remaining-table", "009432a8", 188], ["live-cells-sharpness-film-dr", "009568a0", 32]],
+     "steps": [
       ["back", 1, 5, 6],
       ["back", 1, 5, 6]]},
     {"phase": "cc-icon-q-film-cell", "observe": true, "requires": ["cc-icon-menu-close"], "capture": "cc-icon-q-film-cell",
@@ -50,7 +58,8 @@
      "steps": [
       ["back", 122, 5, 7]]},
     {"phase": "cc-icon-film-stock", "observe": true, "requires": ["cc-icon-q-exit"], "capture": "cc-icon-after-stock-film",
-     "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["settings-object-0-film", "0096ec0c", 4], ["film-nibble", "009c28a6", 1]],
+     "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["settings-object-0-film", "0096ec0c", 4], ["film-nibble", "009c28a6", 1],
+               ["frames-remaining-table", "009432a8", 188]],
      "steps": [
       ["menu", 1, 5, 6],
       ["ok", 1, 254, 7],

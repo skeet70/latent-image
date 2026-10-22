@@ -1,0 +1,108 @@
+{
+  "schema": 1,
+  "trace_sites": [
+    ["00e42414", "frames-film-class-entry"],
+    ["00e43964", "frames-film-class-result"],
+    ["00ed5b2c", "frames-validator-result"],
+    ["00e439f8", "frames-count-store"]
+  ],
+  "before_unload": [
+    {"phase": "boot", "steps": []},
+    {"phase": "cc-shooting-menu", "capture": "cc-shooting-menu", "steps": [
+      ["menu", 1, 5, 2]]},
+    {"phase": "cc-film-item", "requires": ["cc-shooting-menu"], "capture": "cc-film-item-provia", "steps": [
+      ["down", 1, 5, 3],
+      ["down", 1, 5, 4],
+      ["down", 1, 5, 5],
+      ["down", 1, 5, 6]]},
+    {"phase": "cc-film-list-open", "requires": ["cc-film-item"], "capture": "cc-film-list-open", "steps": [
+      ["ok", 1, 254, 0]]},
+    {"phase": "cc-film-row", "requires": ["cc-film-list-open"], "capture": "cc-film-list-row", "steps": [
+      ["down", 1, 254, 1],
+      ["down", 1, 254, 2],
+      ["down", 1, 254, 3],
+      ["down", 1, 254, 4],
+      ["down", 1, 254, 5],
+      ["down", 1, 254, 6],
+      ["down", 1, 254, 7]]},
+    {"phase": "cc-film-commit", "requires": ["cc-film-row"], "capture": "cc-shooting-menu-film-item",
+     "reads": [["live-cells-sharpness-film-dr", "009568a0", 32]],
+     "steps": [
+      ["ok", 1, 5, 6]]},
+    {"phase": "cc-film-value", "requires": ["cc-film-commit"], "capture": "cc-shooting-menu-film-value", "steps": [
+      ["up", 1, 5, 5]]},
+    {"phase": "cc-film-list-reopen", "requires": ["cc-film-commit"], "capture": "cc-film-list-reopened", "steps": [
+      ["ok", 1, 254, 7]]},
+    {"phase": "cc-live-view", "requires": ["cc-film-list-reopen"], "capture": "cc-live-view",
+     "reads": [["frames-remaining-table", "009432a8", 188], ["live-cells-sharpness-film-dr", "009568a0", 32]],
+     "steps": [
+      ["back", 1, 5, 6],
+      ["back", 1, 5, 6]]},
+    {"phase": "cc-q-film-cell", "requires": ["cc-live-view"], "capture": "cc-q-film-cell", "steps": [
+      ["q", 122, 5, 1],
+      ["right", 122, 5, 2],
+      ["down", 122, 5, 6],
+      ["right", 122, 5, 7]]},
+    {"phase": "cc-q-film-next", "requires": ["cc-q-film-cell"], "capture": "cc-q-film-next",
+     "reads": [["live-cells-sharpness-film-dr", "009568a0", 32]],
+     "steps": [
+      ["dial-right", 122, 5, 7]]},
+    {"phase": "cc-q-film-back", "requires": ["cc-q-film-next"], "capture": "cc-q-film-back",
+     "reads": [["live-cells-sharpness-film-dr", "009568a0", 32]],
+     "steps": [
+      ["dial-left", 122, 5, 7]]},
+    {"phase": "velvia-shooting-menu", "capture": "velvia-shooting-menu", "steps": [
+      ["menu", 1, 5, 2]]},
+    {"phase": "velvia-film-item", "requires": ["velvia-shooting-menu"], "capture": "velvia-film-item-provia", "steps": [
+      ["down", 1, 5, 3],
+      ["down", 1, 5, 4],
+      ["down", 1, 5, 5],
+      ["down", 1, 5, 6]]},
+    {"phase": "velvia-film-list-open", "requires": ["velvia-film-item"], "capture": "velvia-film-list-open", "steps": [
+      ["ok", 1, 254, 0]]},
+    {"phase": "velvia-film-row", "requires": ["velvia-film-list-open"], "capture": "velvia-film-list-row", "steps": [
+      ["down", 1, 254, 1]]},
+    {"phase": "velvia-film-commit", "requires": ["velvia-film-row"], "capture": "velvia-shooting-menu-film-item", "steps": [
+      ["ok", 1, 5, 6]]},
+    {"phase": "velvia-film-value", "requires": ["velvia-film-commit"], "capture": "velvia-shooting-menu-film-value", "steps": [
+      ["up", 1, 5, 5]]},
+    {"phase": "velvia-film-list-reopen", "requires": ["velvia-film-commit"], "capture": "velvia-film-list-reopened", "steps": [
+      ["ok", 1, 254, 1]]},
+    {"phase": "velvia-live-view", "requires": ["velvia-film-list-reopen"], "capture": "velvia-live-view",
+     "reads": [["frames-remaining-table", "009432a8", 188], ["live-cells-sharpness-film-dr", "009568a0", 32]],
+     "steps": [
+      ["back", 1, 5, 6],
+      ["back", 1, 5, 6]]},
+    {"phase": "velvia-q-film-cell", "requires": ["velvia-live-view"], "capture": "velvia-q-film-cell", "steps": [
+      ["q", 122, 5, 1],
+      ["right", 122, 5, 2],
+      ["down", 122, 5, 6],
+      ["right", 122, 5, 7]]},
+    {"phase": "velvia-q-film-next", "requires": ["velvia-q-film-cell"], "capture": "velvia-q-film-next",
+     "reads": [["live-cells-sharpness-film-dr", "009568a0", 32]],
+     "steps": [
+      ["dial-right", 122, 5, 7]]},
+    {"phase": "velvia-q-film-back", "requires": ["velvia-q-film-next"], "capture": "velvia-q-film-back",
+     "reads": [["live-cells-sharpness-film-dr", "009568a0", 32]],
+     "steps": [
+      ["dial-left", 122, 5, 7]]},
+    {"phase": "provia-film-commit", "capture": "provia-shooting-menu-film-item", "steps": [
+      ["menu", 1, 5, 2],
+      ["down", 1, 5, 3],
+      ["down", 1, 5, 4],
+      ["down", 1, 5, 5],
+      ["down", 1, 5, 6],
+      ["ok", 1, 254, 0],
+      ["ok", 1, 5, 6]]},
+    {"phase": "provia-live-view", "requires": ["provia-film-commit"], "capture": "provia-live-view",
+     "reads": [["frames-remaining-table", "009432a8", 188], ["live-cells-sharpness-film-dr", "009568a0", 32]],
+     "steps": [
+      ["back", 1, 5, 6]]},
+    {"phase": "provia-q-film-cell", "requires": ["provia-live-view"], "capture": "provia-q-film-cell", "steps": [
+      ["q", 122, 5, 1],
+      ["right", 122, 5, 2],
+      ["down", 122, 5, 6],
+      ["right", 122, 5, 7]]}
+  ],
+  "after_unload": []
+}

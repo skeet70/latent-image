@@ -217,8 +217,17 @@ emulatorTraceSites emulator sites = do
                              "sites" .= object [K.fromString (address site) .= label | (site,label) <- sites]])
   pure ()
 
--- | One recorded entry into a traced site: its label and the r0 it was entered with.
-data TraceHit = TraceHit { traceSite :: String, traceR0 :: Word32 } deriving (Eq, Show)
+-- | One recorded entry into a traced site: its label, the core, the guest instruction count and
+-- r0-r3 at entry.
+data TraceHit = TraceHit
+  { traceSite :: String
+  , traceCore :: Int
+  , traceInstructions :: Integer
+  , traceR0 :: Word32
+  , traceR1 :: Word32
+  , traceR2 :: Word32
+  , traceR3 :: Word32
+  } deriving (Eq, Show)
 
 -- | The hit count so far and the hits recorded from index `start` on.
 emulatorTraceHits :: Emulator -> Int -> IO (Int, [TraceHit])
@@ -232,13 +241,17 @@ emulatorTraceHits emulator start = do
   where
     hit (Object item) = do
       site <- textField "site" item
+      core <- integerField "core" item
+      instructions <- objectField "instructions" item >>= \value -> case fromJSON value of
+        Success number -> pure number
+        Error message -> ioError (userError ("invalid emulator trace instruction count: " ++ message))
       registers <- objectField "registers" item >>= \value -> case value of
         Object registers -> pure registers
         _ -> ioError (userError "emulator trace hit registers must be an object")
-      r0 <- textField "r0" registers
-      case r0 of
-        '0' : 'x' : digits | [(value, "")] <- readHex digits -> pure (TraceHit site value)
-        _ -> ioError (userError ("invalid emulator trace register r0: " ++ r0))
+      let register name = textField name registers >>= \text -> case text of
+            '0' : 'x' : digits | [(word, "")] <- readHex digits -> pure word
+            _ -> ioError (userError ("invalid emulator trace register " ++ name ++ ": " ++ text))
+      TraceHit site core instructions <$> register "r0" <*> register "r1" <*> register "r2" <*> register "r3"
     hit _ = ioError (userError "emulator trace hit must be an object")
 
 emulatorKey :: Emulator -> String -> IO Value
