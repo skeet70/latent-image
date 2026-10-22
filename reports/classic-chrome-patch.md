@@ -187,7 +187,7 @@ Why not `0x83f`: a new id needs all 33 gates raised plus the six base pairs move
 
 ### 4.9 Film value 13 beyond the develop path
 
-Scope: every store review M1 names, on the candidate bytes (`16c830ad…2c89`). No reader indexes a table with the film value without a bound; no blocker.
+Scope: every store review M1 names, on the candidate bytes (`16c830ad…2c89`). No reader indexes a table with the film value without a bound. Correction (2026-10-22): a bounded reader outside this scope, the film-class mapper of the frames-remaining estimate, gives every count 0 for CC (section 4.11).
 
 Method. Units: image 4 (`0x0061c200`), image 5 (`0x00bf1a00`), plain (`0x01100000`), kernel0 (`0x00040000`), kernel1 (`0x000d0000`) and image 2 (`0x00130000`), from the flash-boot-check staging of the candidate. Overlays 44, 46 and 47 are byte-equal to plain at `[0, 0xac5a0)`, `[0xc0000, 0xdcca0)` and `[0xe0000, 0x34a5e0)` except for the 79 CC plain bytes, so the plain census covers them. All units were disassembled as A32; kernel0, kernel1 and plain were also disassembled as Thumb. The census propagated constants through `movw`/`movt`, literal loads, `add`/`sub` and register-offset addressing. It also took aligned and unaligned data words (including Thumb `+1` forms), Thumb `movw`/`movt` pairs, every `bl`/`b` to the accessors, Ghidra decompilation of images 4, 5 and plain, and mailbox and task registrations through `FUN_00724cdc`/`FUN_00725dd8`. Pointers held in globals were followed where the bytes name the global. No reference to any store below exists in kernel0, kernel1, plain/overlays or image 2.
 
@@ -241,6 +241,10 @@ At MOVDC start, `FUN_00ee39c4` sets `0x01698a40` bit 7 (`FUN_00ee54fc`) and `FUN
 - Full-system emulator: `xm1-viewer --ram-push-e2e --flash-candidate --trajectories emulation/cc-liveview-trajectories.json` on a test DAT of `16c830ad…2c89` plus the fragment (`4fa8cad4…5931`, `liveview-parts-1/`, not a flash target) and on `16c830ad…2c89`. With the CC row highlighted, config film is `0xd` on both; the record reads `+0x104 = 0`, `+0x110 = 0xd` with the fragment and 0 without. With the fragment the block differs from the PROVIA-row block at 60 bytes, all inside the second-instance colour, tone and chroma ranges, and equals the native builder case's CC block at every range byte; without it the two blocks are identical (`liveview-e2e-lv-2/`, `liveview-e2e-cc-2/`).
 - Same emulator, segment `lv-cc-committed` (`liveview-e2e-lv-3/`): after OK on the CC row the record still reads `+0x110 = 0xd` and the block's range bytes equal the CC-row block. The harness's `back` left SHOOTING MENU open, so the shooting screen with the menu closed was not reached.
 - Camera: the abbreviated RAM-push test of the icon change carries an owner check that CC live view looks muted, not like PROVIA (12.2.1).
+
+### 4.11 Frames remaining (combined-candidate fix)
+
+With CC selected, the reviewed candidate `16c830ad…2c89` shows frames remaining 0 and MEMORY FULL in the emulator (PROVIA 660 on the same card). The stock film-class mapper `FUN_00e42414` (image 5) sends film 13 to class 6, which the estimate's validator `FUN_00ed5868` rejects, so every count in the table at `0x009432a8` is 0; the film comes from `+0x80` of the state block `*0x01529fb4`, a copy section 4.9 did not enumerate, and the reader is bounded, so 4.9's verdict rule passed it. The fix rewrites `0x00e424ac`-`0x00e424b4` to `cmp r0, #13; movhi r0, #6; movls r0, #0`, which gives 13 PROVIA's class and every other input its stock class; it is in the combined candidate, not in this report's reviewed bytes. Evidence, the census of other film consumers and the shutter question: [the icon report](classic-chrome-icon.md) sections 9.4 and 9.5.
 
 ## 5. Why the develop code stays 0
 
@@ -738,12 +742,12 @@ The flash target is not `16c830ad…2c89`. The owner chose a later candidate tha
 
 #### 12.2.1 The install bytes and their gates
 
-Gates `DIGEST` must clear before the go:
+`DIGEST` is the combined candidate `78f7526002608540a8a1c6957306f29760371cd5146d2455587a0900bacaa7ba` (CC, the icon, the live-view fragment and the frames-remaining fix; [the icon report](classic-chrome-icon.md) sections 8-11; it keeps the image-4 load at `0x0061c200`). Gates `DIGEST` must clear before the go:
 
 1. Its pinned manifest rebuilds to `DIGEST` byte for byte on the session commit, as the baseline does below.
-2. One independent review of the new bytes (the icon change and the live-view fragment of section 4.10), scoped like review N5 against the baseline: diff the two images and explain every byte that differs.
+2. One independent review of the new bytes (the icon change, the live-view fragment of section 4.10 and the frames fix of section 4.11), scoped by [the icon report's reviewer packet](classic-chrome-icon.md#10-reviewer-packet) against the baseline: diff the two images and explain every byte that differs.
 3. `//emulation:flash-boot-check -- --firmware "$IMAGE"` passes.
-4. The RAM-push camera test of the icon change and the live-view fragment has run on the body before the flash: the owner has seen the icon in FILM SIMULATION, and with CLASSIC CHROME selected live view looks muted, not like PROVIA, both while the CC row is highlighted in the menu and on the shooting screen after the menu closes. It is this candidate's visual check.
+4. The RAM-push camera test of the combined payload has run on the body before the flash ([the icon report](classic-chrome-icon.md#11-abbreviated-camera-test) section 11): the owner has seen the icon in FILM SIMULATION, on the shooting-menu value and on the Q tile; with CLASSIC CHROME selected frames remaining equals PROVIA's and no MEMORY FULL appears; and live view looks muted, not like PROVIA, both while the CC row is highlighted in the menu and on the shooting screen after the menu closes. It is this candidate's visual check.
 5. The 12.2.2 container check passes on `IMAGE`.
 6. The open boot-path item stays open: the hardware decompressor has never decoded an image-4 load at `0x0061c200`; RC0's `0x0061c340` is the only modified base decoded on this body (11.3 item 5, 12.1 item 6). If the icon candidate moves the image-4 load, the move is a new base, also never decoded on hardware.
 
