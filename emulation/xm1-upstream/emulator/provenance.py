@@ -146,6 +146,9 @@ def _function(function):
 def _class(cls):
     functions, constants = {}, {}
     for name, member in sorted(vars(cls).items()):
+        # Python 3.14's per-class annotation evaluator closes over the live class dict.
+        if name == "__annotate_func__":
+            continue
         if isinstance(member, (staticmethod, classmethod)):
             functions[name] = {"descriptor": type(member).__name__, **_function(member.__func__)}
         elif isinstance(member, FunctionType):
