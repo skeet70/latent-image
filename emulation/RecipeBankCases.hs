@@ -5,7 +5,7 @@
 module Main where
 
 import Control.Monad
-import FujiAF.Host (sha256, str)
+import FujiAF.Host (str)
 import Data.Aeson hiding (encodeFile)
 import Data.Aeson.Types (Parser, parseEither, parseMaybe)
 import qualified Data.ByteString as B
@@ -21,6 +21,7 @@ import Data.String (fromString)
 import Data.Maybe
 import Data.Word
 import Emulation.NativeCase (maxFunctions, runCase)
+import Emulation.Sha256 (sha256, sha256Hex)
 import Emulation.ParallelCases (mapBounded, readJobs)
 import Numeric
 import System.Directory
@@ -441,10 +442,8 @@ main = do
   hostBank <- B.readFile (hostFix </> "host-bank.bin")
   id4Final <- B.readFile (candidateDir </> "id4-final.bin")
   id5Final <- B.readFile (candidateDir </> "id5-final.bin")
-  d3Digests <- mapM sha256 [id4Final, id5Final]
-  (d3Id4, d3Id5) <- case d3Digests of
-    [a, b] -> pure (a, b)
-    _ -> fail "compiled-recipe candidate: two image digests required"
+  let d3Id4 = sha256Hex (sha256 id4Final)
+      d3Id5 = sha256Hex (sha256 id5Final)
   putStrLn ("kernel .text " ++ show ktextLen ++ " .data " ++ show kdataLen ++ " media " ++ show (B.length mediaImg) ++ " fields " ++ show (length fields))
   putStrLn
     ( "compiled-recipe candidate "
@@ -2254,7 +2253,7 @@ runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable g
         ++ (if B.null caseImg then [] else [("case.bin", caseImg)])
         ++ [(rid ++ ".bin", b) | (rid, _, b) <- extrasPatch, not (B.null b)]
   forM_ (arts ++ [("mode.bin", modeCell)]) $ \(n, b) -> B.writeFile (dir </> n) b
-  digests <- M.fromList <$> mapM (\(n, b) -> (,) n <$> sha256 b) (arts ++ [("mode.bin", modeCell)])
+  let digests = M.fromList [(n, sha256Hex (sha256 b)) | (n, b) <- arts ++ [("mode.bin", modeCell)]]
   let reg :: String -> Integer -> Int -> String -> Maybe String -> Int -> Int -> Value
       kernelBase = addr ks "__rb_image_start"
       reg rid a sz perm art off len = object ["id" .= rid, "address" .= hex a, "size" .= (toInteger sz :: Integer), "permissions" .= (perm :: String),
@@ -2498,7 +2497,7 @@ runBootCases jobs out runner package = do
     createDirectoryIfMissing True dir
     digests <- forM imageRegions $ \(n, _, bytes, _) -> do
       B.writeFile (dir </> (n ++ ".bin")) bytes
-      (n,) <$> sha256 bytes
+      pure (n, sha256Hex (sha256 bytes))
     let c = object
           [ "schema_version" .= (1 :: Int), "id" .= cid, "origin" .= ("synthetic" :: String)
           , "provenance" .= ("Exact packaged boot fragments/source image; modeled launcher frame and zero-filled publication destinations. Scenario " ++ show scenario)
@@ -2537,7 +2536,7 @@ runAllocatorCases jobs out runner package = do
                    ("stack", 0x009a0000, B.replicate 32 0, "rw"), ("exit", 0x009b0000, B.pack [0x1e,0xff,0x2f,0xe1], "rx")]
         expectedState = u32le (if fits then 0x00be19e0 else originalCursor) <> u32le (if fits then 9 else 12)
     createDirectoryIfMissing True dir
-    digests <- forM regions $ \(n, _, raw, _) -> B.writeFile (dir </> (n ++ ".bin")) raw >> ((n,) <$> sha256 raw)
+    digests <- forM regions $ \(n, _, raw, _) -> B.writeFile (dir </> (n ++ ".bin")) raw >> pure (n, sha256Hex (sha256 raw))
     let caseValue = object
           [ "schema_version" .= (1 :: Int), "id" .= cid, "origin" .= ("synthetic" :: String)
           , "provenance" .= ("Exact packaged X-M1 1.50 backing allocator. Cursor 0x00be18e0 plus request " ++ (if fits then "256" else "257") ++ " and the stock 32-byte reserve at the emitted 0x00be1a00 upper bound.")

@@ -21,14 +21,18 @@ if [ "$RB_MODE" = volatile ] && [ -n "$KERNEL_DIR" ]; then
 fi
 RUNNER="${RUNNER:-bazel-bin/emulation/native-runner}"
 GEN="${GEN:-bazel-bin/emulation/recipe-bank-cases}"
+INTEROP="${INTEROP:-bazel-bin/emulation/recipe-bank-interop}"
 JOBS="${JOBS:-8}"
 CANDIDATE="${CANDIDATE:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/package/image}"
 ID4="${ID4:-$CANDIDATE/id4-final.bin}"
 ID4_BASE="${ID4_BASE:-0x0061c1fc}"
 ID5="${ID5:-$CANDIDATE/id5-final.bin}"
-HOST_FIXTURES="${HOST_FIXTURES:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/host-fixtures}"
 FIELDS="${FIELDS:-reports/custom-settings.fields.json}"
 mkdir -p "$BUILD_DIR" "$OUT_DIR"
+if [ -z "${HOST_FIXTURES:-}" ]; then
+  HOST_FIXTURES="$BUILD_DIR/host-fixtures"
+  "$INTEROP" encode "$HOST_FIXTURES"
+fi
 ARM=(--target=armv7r-none-eabi -march=armv7-r -marm)
 FREESTANDING=(-ffreestanding -nostdlib -fno-builtin -mno-unaligned-access)
 HARDEN=NIX_HARDENING_ENABLE=
