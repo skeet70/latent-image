@@ -3,7 +3,7 @@
  * callees. RB_* addresses are placement values the emitted plan fixes and the
  * build passes as -D macros.
  *
- * The storage lane's kernel does the record work: rb_recall, rb_save_current,
+ * The storage lane's kernel does the record work: rb_select, rb_save_current,
  * rb_reset, rb_readback and rb_name_commit. This file holds the arm entry
  * semantics, the label-record refresh and the dispatcher's notification.
  */

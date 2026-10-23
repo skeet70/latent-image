@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, classicChromeIconPayload, runRamPushE2E) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, classicChromeIconPayload, runRamPushE2E) where
 
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, try)
 import Control.Monad (forM, forM_, unless, when)
@@ -15,11 +15,12 @@ import GHC.Clock (getMonotonicTime)
 import qualified Data.Aeson.Key as K
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import Data.Bits (shiftL, (.|.))
+import Data.Bits (shiftL, shiftR, (.|.))
 import Data.Int (Int32)
 import Data.Word (Word32)
 import Numeric (readHex, showFFloat, showHex)
-import System.Directory (createDirectory, doesDirectoryExist, getCurrentDirectory, listDirectory, removeDirectory, setCurrentDirectory)
+import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectory, setCurrentDirectory)
+import System.Environment (getExecutablePath)
 import System.FilePath ((</>))
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stdout)
 import System.Posix.Files (setFileMode)
@@ -46,6 +47,14 @@ data PushMode = RamPush | FlashCandidate deriving (Eq, Show)
 -- | A key held across the attach edge of every boot the e2e starts.
 data AttachHold = NoAttachHold | AttachHoldQ deriving (Eq, Show)
 
+-- | The UI conversion contract a session boots with; DeclaredUiCpuFallback is the
+-- viewer's opt-in stock CPU conversion, which mode-dial positions with a mode guide need.
+data UiConversionProfile = StrictUiConversion | DeclaredUiCpuFallback deriving (Eq, Show)
+
+-- | CardBacked boots with the named virtual card image; Cardless boots with card-detect absent
+-- through the cardless RAM-push bridge.
+data CardMode = CardBacked FilePath | Cardless deriving (Eq, Show)
+
 data E2ESettings = E2ESettings
   { relinkMode :: RelinkMode
   , bootMode :: BootMode
@@ -54,6 +63,8 @@ data E2ESettings = E2ESettings
   , pushMode :: PushMode
   , e2ePayload :: Payload
   , attachHold :: AttachHold
+  , flashUiConversion :: UiConversionProfile
+  , emulationCardMode :: CardMode
   }
 
 attachHoldArguments :: AttachHold -> [String]
@@ -63,6 +74,41 @@ attachHoldArguments AttachHoldQ = ["--attach-hold-key", "q"]
 attachHoldText :: AttachHold -> T.Text
 attachHoldText NoAttachHold = "none"
 attachHoldText AttachHoldQ = "q"
+
+cardRecord :: CardMode -> Value
+cardRecord mode = object
+  [ "present" .= (mode /= Cardless)
+  , "image" .= (case mode of CardBacked image -> String (T.pack image); Cardless -> Null) ]
+
+-- | The bridge executable and its arguments for one boot of the session's inputs writing to `output`.
+sessionBridge :: E2ESettings -> FilePath -> FilePath -> FilePath -> BootMode -> FilePath -> IO (FilePath, [String])
+sessionBridge settings python installedMedia adjustmentNand boot output = case emulationCardMode settings of
+  CardBacked cardImage -> pure (python,
+    [ "tools/continue_rec_scanout.py"
+    , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
+    , "--installed-dat", installedMedia
+    , "--adjustment-nand", adjustmentNand
+    , "--menu-sd-image", cardImage
+    , "--menus"
+    , "--ram-push-server"
+    , "--output", output
+    , "--ram-push-checkpoints", checkpointRoot settings
+    ] ++ freshArguments ++ profileArguments ++ attachHoldArguments (attachHold settings))
+  Cardless -> do
+    require (attachHold settings == NoAttachHold) "the cardless RAM-push bridge holds no key across the attach edge"
+    bridge <- runfilesCardlessBridge
+    pure (bridge,
+      [ "--profile", "firmware/x-m1/1.50/emulator-rec.json"
+      , "--installed-dat", installedMedia
+      , "--adjustment-nand", adjustmentNand
+      , "--output", output
+      , "--ram-push-checkpoints", checkpointRoot settings
+      ] ++ freshArguments ++ profileArguments)
+  where
+    freshArguments = ["--fresh-boot" | boot == FreshBoot]
+    profileArguments = case flashUiConversion settings of
+      StrictUiConversion -> []
+      DeclaredUiCpuFallback -> ["--ui-conversion-profile", "declared-ui-cpu-fallback"]
 
 payloadText :: Payload -> T.Text
 payloadText p = case payloadKind p of
@@ -213,6 +259,7 @@ data Plan = Plan
   , planTraceSites :: [TraceSite]
   }
 
+
 -- | The named phase with every phase it transitively requires, in trajectory order; a phase after
 -- unload brings the unload with it.
 segmentPlan :: Trajectories -> T.Text -> IO Plan
@@ -267,8 +314,8 @@ installHostValue host = object
 
 -- | Runs the whole trajectory in one process, or with `segmentSelection` each named segment (and
 -- what it requires) in its own process from the install checkpoint, under RECEIPT/segment-NAME.
-runRamPushE2E :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
-runRamPushE2E settings python workspace trajectoryFile installedMedia adjustmentNand cardImage receipt = do
+runRamPushE2E :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+runRamPushE2E settings python workspace trajectoryFile installedMedia adjustmentNand receipt = do
   hSetBuffering stdout LineBuffering
   trajectories <- B.readFile trajectoryFile
     >>= either (ioError . userError . ("invalid RAM-push e2e trajectories: " ++)) pure . decodeTrajectories
@@ -281,8 +328,8 @@ runRamPushE2E settings python workspace trajectoryFile installedMedia adjustment
   -- Host RAM-push operations resolve workspace-relative builder paths.
   setCurrentDirectory workspace
   let session = case pushMode settings of
-        RamPush -> runSession settings python runtime installedMedia adjustmentNand cardImage
-        FlashCandidate -> runFlashSession settings python runtime installedMedia adjustmentNand cardImage
+        RamPush -> runSession settings python runtime installedMedia adjustmentNand
+        FlashCandidate -> runFlashSession settings python runtime installedMedia adjustmentNand
       selection = case (segmentSelection settings, pushMode settings) of
         (Just names, _) -> Just names
         (Nothing, FlashCandidate) -> Just (phaseNames trajectories)
@@ -309,8 +356,8 @@ runRamPushE2E settings python workspace trajectoryFile installedMedia adjustment
 seconds :: Double -> String
 seconds value = showFFloat (Just 1) value " s"
 
-runSession :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> Plan -> FilePath -> IO ()
-runSession settings python runtime installedMedia adjustmentNand cardImage plan e2e = do
+runSession :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> Plan -> FilePath -> IO ()
+runSession settings python runtime installedMedia adjustmentNand plan e2e = do
   phases <- newIORef []
   let timed :: T.Text -> IO a -> IO a
       timed label action = do
@@ -320,17 +367,6 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
         modifyIORef' phases (++ [object ["name" .= label, "seconds" .= (ended - started)]])
         putStrLn ("phase " ++ T.unpack label ++ ": " ++ seconds (ended - started))
         pure result
-      arguments =
-        [ "tools/continue_rec_scanout.py"
-        , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
-        , "--installed-dat", installedMedia
-        , "--adjustment-nand", adjustmentNand
-        , "--menu-sd-image", cardImage
-        , "--menus"
-        , "--ram-push-server"
-        , "--output", e2e
-        , "--ram-push-checkpoints", checkpointRoot settings
-        ] ++ ["--fresh-boot" | bootMode settings == FreshBoot] ++ attachHoldArguments (attachHold settings)
       selected = e2ePayload settings
       relinkAt base = case relinkMode settings of
         ReviewedRelink -> withPinnedReviewedBuild (payloadContract selected) selected base
@@ -360,7 +396,8 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
             pure (case matches of
               (candidate, relinked) : _ -> (Just candidate, Just (candidate, relinked))
               [] -> (Nothing, Nothing))
-  published <- bracket (timed "emulator-start" (startEmulator python runtime arguments choose)) (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, installed) -> do
+  (executable, arguments) <- sessionBridge settings python installedMedia adjustmentNand (bootMode settings) e2e
+  published <- bracket (timed "emulator-start" (startEmulator executable runtime arguments choose)) (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, installed) -> do
     putStrLn ("emulator start: " ++ show (bootStart start) ++ "; relink: " ++ T.unpack (relinkModeText (relinkMode settings))
       ++ "; payload: " ++ T.unpack (payloadText selected))
     let api = emulatorUsbApi emulator
@@ -494,6 +531,7 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
                                   "publications" .= length (manifestPublications manifest),
                                   "manifest" .= manifestPath manifest]
           , "states" .= object ["allocation" .= allocationPath, "installed" .= statePath]
+          , "card" .= cardRecord (emulationCardMode settings)
           , "menu_receipts" .= catMaybes (capturedBefore ++ capturedAfter)
           , "trajectories" .= map (\name -> object ["name" .= name, "result" .= String "matched"])
               (nub (map segmentPhase (filter (not . segmentObserve) (planBefore plan ++ planAfter plan))))
@@ -507,24 +545,14 @@ runSession settings python runtime installedMedia adjustmentNand cardImage plan 
     writePrivateBytes (e2e </> "e2e-result.json") (BL.toStrict (encode result) <> "\n")
     pure (manifestPublications manifest)
   when (planUnload plan && carriesClassicChrome selected) $
-    timed "cold-restart-read" (coldRestartRead python runtime installedMedia adjustmentNand cardImage (checkpointRoot settings) (attachHold settings) published e2e)
+    timed "cold-restart-read" (coldRestartRead settings python runtime installedMedia adjustmentNand published e2e)
 
 -- | A cold boot of the same inputs, then every publication word read against its old word.
-coldRestartRead :: FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> AttachHold -> [Publication] -> FilePath -> IO ()
-coldRestartRead python runtime installedMedia adjustmentNand cardImage checkpoints hold publications e2e = do
+coldRestartRead :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> [Publication] -> FilePath -> IO ()
+coldRestartRead settings python runtime installedMedia adjustmentNand publications e2e = do
   let directory = e2e </> "cold-restart"
-      arguments =
-        [ "tools/continue_rec_scanout.py"
-        , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
-        , "--installed-dat", installedMedia
-        , "--adjustment-nand", adjustmentNand
-        , "--menu-sd-image", cardImage
-        , "--menus"
-        , "--ram-push-server"
-        , "--output", directory
-        , "--ram-push-checkpoints", checkpoints
-        , "--fresh-boot" ] ++ attachHoldArguments hold
-  bracket (startEmulator python runtime arguments (\_ -> pure (Nothing, ()))) (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, ()) -> do
+  (executable, arguments) <- sessionBridge settings python installedMedia adjustmentNand FreshBoot directory
+  bracket (startEmulator executable runtime arguments (\_ -> pure (Nothing, ()))) (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, ()) -> do
     words' <- forM publications $ \publication -> do
       bytes <- emulatorReadMemory emulator (unAddress (publicationAddress publication)) 4
       let current = leWord bytes 0
@@ -532,6 +560,7 @@ coldRestartRead python runtime installedMedia adjustmentNand cardImage checkpoin
     let mismatched = [p | (p, current) <- words', current /= unWordValue (publicationOld p)]
     writePrivateBytes (directory </> "e2e-cold-restart.json") (BL.toStrict (encode (object
       [ "scope" .= String "fresh boot of the same DAT, NAND and card after ram-unload; every publication word read"
+      , "card" .= cardRecord (emulationCardMode settings)
       , "emulator_start" .= startRecord start
       , "words" .= length words'
       , "mismatched" .= [hexAddress (unAddress (publicationAddress p)) | p <- mismatched]
@@ -585,6 +614,12 @@ runSegments runner = mapM $ \segment -> runnerTimed runner ("segment " <> segmen
       bytes <- emulatorReadMemory emulator address count
       pure (object ["label" .= label, "address" .= hexAddress address, "bytes" .= hexBytes bytes]))
     (segmentReads segment)
+  film <- traverse (\expected -> do
+      -- Ordinary image byte 0x8a stores the film code in bits 4-7.
+      bytes <- emulatorReadMemory emulator 0x0096ccee 1
+      require (B.length bytes == 1) "film identity read must contain one byte"
+      pure (expected, fromIntegral (B.head bytes `shiftR` 4) :: Word32))
+    (segmentFilmRow segment)
   (after, hits) <- emulatorTraceHits emulator before
   writeIORef (runnerHits runner) after
   let drawn = sort (nub [traceR0 hit | hit <- hits, traceSite hit == menuMessageSite])
@@ -592,26 +627,44 @@ runSegments runner = mapM $ \segment -> runnerTimed runner ("segment " <> segmen
       ccHits = [traceSite hit | hit <- hits, traceSite hit `elem` map snd classicChromeFetchSites]
       declaredHits = [hit | hit <- hits, traceSite hit `elem` runnerTraceLabels runner]
   when (segmentObserve segment || not (null (segmentReads segment)) || not (null hookRows) || not (null ccHits)
-        || not (null declaredHits)) $ do
+        || not (null declaredHits) || not (null film)) $ do
     previous <- readIORef (runnerObservations runner)
-    let current = object [ "phase" .= segmentPhase segment, "capture" .= segmentCapture segment
-                         , "steps" .= observed, "reads" .= windows
-                         , "d3_hook_r0" .= map hexAddress hookRows
-                         , "classic_chrome_site_entries" .= ccHits
-                         , "menu_messages" .= map hexAddress drawn
-                         , "trace_hits" .= map traceHitValue declaredHits ]
+    let current = object ([ "phase" .= segmentPhase segment, "capture" .= segmentCapture segment
+                          , "steps" .= observed, "reads" .= windows
+                          , "d3_hook_r0" .= map hexAddress hookRows
+                          , "classic_chrome_site_entries" .= ccHits
+                          , "menu_messages" .= map hexAddress drawn
+                          , "trace_hits" .= map traceHitValue declaredHits ]
+                          ++ [ "film_identity" .= object
+                               ["expected_row" .= fromEnum expected, "expected_stored_code" .= filmStoredCode expected,
+                                "stored_code" .= actual]
+                             | (expected, actual) <- maybe [] pure film ])
     writeIORef (runnerObservations runner) (previous ++ [current])
     writePrivateBytes (runnerReceipt runner </> ("e2e-observation-" ++ show (length previous) ++ ".json"))
       (BL.toStrict (encode current) <> "\n")
+  forM_ film $ \(expected, actual) ->
+    unless (actual == filmStoredCode expected) $
+      stop (segmentPhase segment) ("film row " ++ show (fromEnum expected)
+        ++ " requires stored code " ++ show (filmStoredCode expected) ++ ", got " ++ show actual)
   unless (segmentObserve segment || drawn == sort (nub (segmentMessages segment))) $
     stop (segmentPhase segment) ("menu messages drawn " ++ show (map hexAddress drawn)
       ++ ", expected " ++ show (map hexAddress (segmentMessages segment)))
   pure captured
 
+-- | The cardless bridge from this binary's runfiles; //emulation:xm1-viewer lists it as data.
+runfilesCardlessBridge :: IO FilePath
+runfilesCardlessBridge = do
+  executable <- getExecutablePath
+  let path = (executable ++ ".runfiles") </> "_main" </> "emulation" </> "cardless-ram-push-bridge"
+  present <- doesFileExist path
+  require present ("cardless RAM-push bridge is missing from this binary's runfiles: " ++ path)
+  pure path
+
 -- | One flash-candidate process: boot or restore the attach checkpoint keyed by the candidate DAT,
 -- then run the plan's segments; the candidate's loader has already published the bank.
-runFlashSession :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> Plan -> FilePath -> IO ()
-runFlashSession settings python runtime installedMedia adjustmentNand cardImage plan e2e = do
+runFlashSession :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> Plan -> FilePath -> IO ()
+runFlashSession settings python runtime installedMedia adjustmentNand plan e2e = do
+  require (emulationCardMode settings /= Cardless) "--cardless belongs to the RAM push, not --flash-candidate"
   phases <- newIORef []
   let timed :: T.Text -> IO a -> IO a
       timed label action = do
@@ -621,19 +674,9 @@ runFlashSession settings python runtime installedMedia adjustmentNand cardImage 
         modifyIORef' phases (++ [object ["name" .= label, "seconds" .= (ended - started)]])
         putStrLn ("phase " ++ T.unpack label ++ ": " ++ seconds (ended - started))
         pure result
-      arguments =
-        [ "tools/continue_rec_scanout.py"
-        , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
-        , "--installed-dat", installedMedia
-        , "--adjustment-nand", adjustmentNand
-        , "--menu-sd-image", cardImage
-        , "--menus"
-        , "--ram-push-server"
-        , "--output", e2e
-        , "--ram-push-checkpoints", checkpointRoot settings
-        ] ++ ["--fresh-boot" | bootMode settings == FreshBoot] ++ attachHoldArguments (attachHold settings)
       noInstall _ = pure (Nothing, ())
-  bracket (timed "emulator-start" (startEmulator python runtime arguments noInstall)) (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, ()) -> do
+  (executable, arguments) <- sessionBridge settings python installedMedia adjustmentNand (bootMode settings) e2e
+  bracket (timed "emulator-start" (startEmulator executable runtime arguments noInstall)) (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, ()) -> do
     putStrLn ("emulator start: " ++ show (bootStart start) ++ "; flash candidate")
     setFileMode e2e 0o700
     ensurePrivateDirectory e2e

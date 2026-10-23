@@ -22,9 +22,29 @@
       "source": "menu/recipe_bank_storage.c #define RB_GETTER"
     },
     {
+      "address": "0x00631b74",
+      "name": "RB_AVAILABLE",
+      "source": "menu/recipe_bank_storage.c #define RB_AVAILABLE"
+    },
+    {
+      "address": "0x00631edc",
+      "name": "RB_AVAIL_COUNT",
+      "source": "menu/recipe_bank_storage.c #define RB_AVAIL_COUNT"
+    },
+    {
+      "address": "0x00633eac",
+      "name": "RB_1C6_KEY_SET",
+      "source": "menu/recipe_bank_storage.c #define RB_1C6_KEY_SET"
+    },
+    {
       "address": "0x00635944",
       "name": "rb_call_preview_clear",
       "source": "menu/recipe_bank_arm.S rb_call_preview_clear (movw/movt)"
+    },
+    {
+      "address": "0x006439ac",
+      "name": "stock playback mode-pair apply",
+      "source": "menu/recipe_bank_storage.c rb_mode_pair_run"
     },
     {
       "address": "0x00643d94",
@@ -35,6 +55,11 @@
       "address": "0x006439e0",
       "name": "RB_LIVE_SLOT",
       "source": "menu/recipe_bank_storage.c #define RB_LIVE_SLOT"
+    },
+    {
+      "address": "0x006464cc",
+      "name": "RB_1C6_COMMIT",
+      "source": "menu/recipe_bank_storage.c #define RB_1C6_COMMIT"
     },
     {
       "address": "0x007115a8",
@@ -167,6 +192,11 @@
       "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_editor_cancel"
     },
     {
+      "address": "0x00d1a7d8",
+      "name": "stock dial mode apply",
+      "source": "menu/recipe_bank_storage.c rb_mode_dial_apply"
+    },
+    {
       "address": "0x00d38d98",
       "name": "rb_call_redraw",
       "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_redraw"
@@ -195,6 +225,11 @@
       "address": "0x00d4fc74",
       "name": "RB_COMMIT",
       "source": "menu/recipe_bank_storage.c #define RB_COMMIT"
+    },
+    {
+      "address": "0x00d52684",
+      "name": "RB_STOCK_PROBE",
+      "source": "menu/recipe_bank_probe.c #define RB_STOCK_PROBE"
     },
     {
       "address": "0x00d5868c",
@@ -354,12 +389,108 @@
   ],
   "unproven": [
     {
+      "function": "rb_activation_now",
+      "access": "store",
+      "through": {
+        "argument": "r0"
+      },
+      "reason": "returns its 8-byte RbActivation through the AAPCS result address in r0"
+    },
+    {
+      "function": "rb_admit",
+      "access": "store",
+      "through": {
+        "argument": "r0"
+      },
+      "reason": "writes the admission state into its rb_apply argument"
+    },
+    {
+      "function": "rb_admit",
+      "access": "store",
+      "through": {
+        "argument": "r2"
+      },
+      "reason": "records refusals and skips in its RbSelectTrace argument"
+    },
+    {
+      "function": "rb_admit_base",
+      "access": "store",
+      "through": {
+        "argument": "r0"
+      },
+      "reason": "writes the RAW-only restoration state into its rb_apply argument and passes it to rb_admit"
+    },
+    {
+      "function": "rb_admit_base",
+      "access": "store",
+      "through": {
+        "argument": "r2"
+      },
+      "reason": "passes its RbSelectTrace argument to rb_admit"
+    },
+    {
+      "function": "rb_admit_family",
+      "access": "store",
+      "through": {
+        "argument": "r0"
+      },
+      "reason": "writes the family's admitted code or skip bit into its rb_apply argument"
+    },
+    {
+      "function": "rb_admit_family",
+      "access": "store",
+      "through": {
+        "argument": "r3"
+      },
+      "reason": "records a refusal or skip in its RbSelectTrace argument"
+    },
+    {
+      "function": "rb_assert_one",
+      "access": "store",
+      "through": {
+        "argument": "r2"
+      },
+      "reason": "records a refusal in its RbSelectTrace argument when that argument is not null"
+    },
+    {
+      "function": "rb_assert_run",
+      "access": "store",
+      "through": {
+        "argument": "r1"
+      },
+      "reason": "records refusals in its RbSelectTrace argument through rb_assert_one when that argument is not null"
+    },
+    {
       "function": "rb_bank_draw_selected",
       "access": "branch",
       "through": {
         "argument": "r3"
       },
       "reason": "the stock selected-drawer call supplies its draw callback in r3 (menu/recipe_bank_arm.S)"
+    },
+    {
+      "function": "rb_base_restore",
+      "access": "store",
+      "through": {
+        "argument": "r1"
+      },
+      "reason": "passes its RbSelectTrace argument to rb_admit_base, rb_assert_run and rb_assert_one"
+    },
+    {
+      "function": "rb_bits_clear",
+      "access": "store",
+      "through": {
+        "argument": "r0"
+      },
+      "reason": "clears the RB_SKIP_WORDS words of its bit-set argument"
+    },
+    {
+      "function": "rb_code_row",
+      "access": "store",
+      "through": {
+        "argument": "r2"
+      },
+      "reason": "returns whether a row carried the code through its found argument"
     },
     {
       "function": "rb_media_close_guard_entry",
@@ -590,6 +721,24 @@
       "reason": "copies into its destination argument; bank callers pass bank buffers"
     },
     {
+      "function": "rb_memset",
+      "access": "store",
+      "through": {
+        "argument": "r0"
+      },
+      "reason": "fills its destination argument; bank callers pass bank buffers"
+    },
+    {
+      "function": "rb_mode_pair_apply",
+      "access": "branch",
+      "through": {
+        "deref": {
+          "argument": "r11"
+        }
+      },
+      "reason": "after a refused mode leave, returns -1 through the {r4, r5, r11, lr} frame the state-53 playback handlers 0x00c2cecc and 0x00c2d228 saved, with r11 at the saved lr"
+    },
+    {
       "function": "rb_name_edit_commit",
       "access": "store",
       "through": {
@@ -614,28 +763,12 @@
       "reason": "writes the slot's label record in the generated name-record table; slot comes from the callers' bounded slot loops"
     },
     {
-      "function": "rb_open",
+      "function": "rb_payload_from_live",
       "access": "store",
       "through": {
-        "argument": "r3"
+        "argument": "r0"
       },
-      "reason": "returns the opened handle through its output argument"
-    },
-    {
-      "function": "rb_open",
-      "access": "store",
-      "through": {
-        "index": "rb_loaded"
-      },
-      "reason": "writes the request record of the selected file in the storage kernel's merged globals"
-    },
-    {
-      "function": "rb_open",
-      "access": "store",
-      "through": {
-        "index": "rb_pending_close"
-      },
-      "reason": "compacts the deferred-close table, bounded by rb_pending_count"
+      "reason": "builds the live payload in its payload argument"
     },
     {
       "function": "rb_place",
@@ -646,12 +779,12 @@
       "reason": "writes a field into its payload argument"
     },
     {
-      "function": "rb_read_count",
+      "function": "rb_quality_raw_code",
       "access": "store",
       "through": {
-        "argument": "r2"
+        "argument": "r1"
       },
-      "reason": "returns the read count through its output argument"
+      "reason": "returns whether the IMAGE QUALITY code's row carries a RAW code through its found argument"
     },
     {
       "function": "rb_readback",
@@ -670,28 +803,44 @@
       "reason": "copies the slot payload into its payload_out argument"
     },
     {
-      "function": "rb_scan_file",
+      "function": "rb_restore_run",
       "access": "store",
       "through": {
-        "argument": "r3"
+        "argument": "r1"
       },
-      "reason": "writes the scan result into its output argument"
+      "reason": "records the restore's refused count in its RbSelectTrace argument"
     },
     {
-      "function": "rb_scan_file",
+      "function": "rb_select",
       "access": "store",
       "through": {
-        "caller-frame": 0
+        "index": "stack-frame"
       },
-      "reason": "writes the scan status through its fifth (stack) argument"
+      "reason": "sets 0x1c6's skip bit in the local rest record (rb_select_rest, inlined); 0x1c6 is RB_FIELDS[2] in menu/recipe_bank_fields.inc, so the store reaches skip word 0"
     },
     {
-      "function": "rb_scan_file",
+      "function": "rb_selection_effective",
       "access": "store",
       "through": {
-        "caller-frame": 4
+        "argument": "r0"
       },
-      "reason": "writes the scan flag through its sixth (stack) argument"
+      "reason": "returns the effective selection through its selection_out argument"
+    },
+    {
+      "function": "rb_skip",
+      "access": "store",
+      "through": {
+        "argument": "r0"
+      },
+      "reason": "sets the field's skip bit in its rb_apply argument"
+    },
+    {
+      "function": "rb_skip",
+      "access": "store",
+      "through": {
+        "argument": "r2"
+      },
+      "reason": "counts the skip in its RbSelectTrace argument"
     },
     {
       "function": "rb_slot_load",
@@ -700,6 +849,14 @@
         "index": "rb_slot_names"
       },
       "reason": "passes each of the seven rb_slot_names entries to rb_name_resident"
+    },
+    {
+      "function": "rb_snapshot_live",
+      "access": "store",
+      "through": {
+        "argument": "r0"
+      },
+      "reason": "writes the live snapshot into its rb_apply argument"
     },
     {
       "function": "rb_stage_edit_get_arm",

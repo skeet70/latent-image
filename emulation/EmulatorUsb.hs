@@ -15,6 +15,7 @@ module EmulatorUsb
   , emulatorTraceHits
   , emulatorKey
   , ModeDial (..)
+  , modeDialName
   , emulatorModeDial
   , emulatorCapture
   , emulatorReadMemory
@@ -72,7 +73,11 @@ objectField name fields = maybe (ioError (userError ("emulator response lacks " 
 type BridgeExchange = BL.ByteString -> IO B.ByteString
 
 exchangeLine :: Emulator -> BridgeExchange
-exchangeLine emulator request = withMVar (emulatorLock emulator) $ \_ -> do
+exchangeLine emulator request = withMVar (emulatorLock emulator) $ \_ -> exchangeLocked emulator request
+
+-- Caller holds emulatorLock.
+exchangeLocked :: Emulator -> BridgeExchange
+exchangeLocked emulator request = do
   BL.hPutStr (emulatorInput emulator) request
   B.hPut (emulatorInput emulator) "\n"
   hFlush (emulatorInput emulator)
@@ -80,6 +85,10 @@ exchangeLine emulator request = withMVar (emulatorLock emulator) $ \_ -> do
 
 rpc :: Emulator -> Value -> IO (M.KeyMap Value)
 rpc = bridgeRpc . exchangeLine
+
+-- Caller holds emulatorLock.
+rpcLocked :: Emulator -> Value -> IO (M.KeyMap Value)
+rpcLocked = bridgeRpc . exchangeLocked
 
 bridgeRpc :: BridgeExchange -> Value -> IO (M.KeyMap Value)
 bridgeRpc exchange request = do
@@ -257,19 +266,42 @@ emulatorTraceHits emulator start = do
 emulatorKey :: Emulator -> String -> IO Value
 emulatorKey emulator key = Object <$> rpc emulator (object ["command" .= String "key", "key" .= key])
 
--- | A mode-dial detent the bridge can set through its calibrated ADC window.
-data ModeDial = ModeDialManual deriving (Eq, Show)
+-- | A mode-dial detent the bridge can set through its calibrated ADC window: the nine positions
+-- the viewer runs (SR+, SP and Adv. stop at unmodeled paths).
+data ModeDial
+  = ModeDialShutter | ModeDialProgram | ModeDialAperture | ModeDialManual | ModeDialAuto
+  | ModeDialCustom | ModeDialSports | ModeDialLandscape | ModeDialPortrait
+  deriving (Eq, Show, Enum, Bounded)
+
+-- | The bridge's position name, the viewer's `ModeDialPosition` value.
+modeDialName :: ModeDial -> String
+modeDialName position = case position of
+  ModeDialShutter -> "S"
+  ModeDialProgram -> "P"
+  ModeDialAperture -> "A"
+  ModeDialManual -> "M"
+  ModeDialAuto -> "AUTO"
+  ModeDialCustom -> "C"
+  ModeDialSports -> "Sports"
+  ModeDialLandscape -> "Landscape"
+  ModeDialPortrait -> "Portrait"
 
 emulatorModeDial :: Emulator -> ModeDial -> IO Value
 emulatorModeDial emulator position = Object <$> rpc emulator (object
-  ["command" .= String "mode-dial", "position" .= String (case position of ModeDialManual -> "M")])
+  ["command" .= String "mode-dial", "position" .= modeDialName position])
 
 emulatorCapture :: Emulator -> String -> IO Value
 emulatorCapture emulator label = Object <$> rpc emulator (object ["command" .= String "capture", "label" .= label])
 
 emulatorReadMemory :: Emulator -> Word32 -> Int -> IO B.ByteString
 emulatorReadMemory emulator address count = do
-  fields <- rpc emulator (object ["command" .= String "read-memory", "address" .= address, "count" .= count])
-  bytes <- textField "bytes" fields >>= decodeHex
-  require (length bytes == count) "emulator memory read length mismatch"
-  pure (B.pack bytes)
+  require (count > 0 && count <= 65536 && toInteger address + toInteger count <= 0x100000000)
+    "emulator memory read requires an address and 1..65536 bytes"
+  withMVar (emulatorLock emulator) $ \_ -> B.concat <$> mapM readChunk [0,4096..count-1]
+  where
+    readChunk offset = do
+      let chunkBytes = min 4096 (count - offset)
+      fields <- rpcLocked emulator (object ["command" .= String "read-memory", "address" .= (address + fromIntegral offset), "count" .= chunkBytes])
+      bytes <- textField "bytes" fields >>= decodeHex
+      require (length bytes == chunkBytes) "emulator memory read length mismatch"
+      pure (B.pack bytes)

@@ -76,7 +76,7 @@ volatile uint32_t ui_log[32];
 volatile uint8_t ui_out26[16][32];
 
 /* the swap fixture's second bank file */
-volatile uint8_t ui_file_b[512];
+volatile uint8_t ui_file_b[0x420];
 
 volatile uint32_t ui_steps[UI_STEP_MAX * UI_STEP_WORDS];
 

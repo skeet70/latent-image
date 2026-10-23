@@ -859,8 +859,8 @@ impl Inner {
     }
     /// Install the patched Unicorn's translation filter on `core` when `want`
     /// and nothing needs a hook on every instruction (instruction mode, the
-    /// decode cache off, breakpoints, coverage, probes, fetch guards, audits);
-    /// remove it otherwise. Either change flushes that engine's translations.
+    /// decode cache off, coverage, probes, fetch guards, audits); remove it
+    /// otherwise. Either change flushes that engine's translations.
     pub fn set_filter(&self, core: usize, want: bool) -> Result<(), String> {
         let (Some(install), Some(_), Some(_)) =
             (self.api.x70.insn_filter, self.api.x70.retry_block, self.api.x70.request_restart)
@@ -871,8 +871,7 @@ impl Inner {
         let want = want
             && state.cache_enabled
             && unsafe {
-                (*self.breakpoints.get())[core].is_empty()
-                    && (*self.coverage.get())[core].is_none()
+                (*self.coverage.get())[core].is_none()
                     && (*self.exec_probe.get())[core].is_none()
                     && (*self.fetch_guards.get())[core].is_none()
                     && (*self.audits.get())[core].is_none()
@@ -910,6 +909,24 @@ impl Inner {
         unsafe {
             (self.api.uc_emu_stop)(self.engines[core]);
         }
+    }
+    #[inline]
+    pub fn is_breakpoint(&self, core: usize, address: u64) -> bool {
+        let breakpoints = unsafe { &(*self.breakpoints.get())[core] };
+        !breakpoints.is_empty() && breakpoints.binary_search(&address).is_ok()
+    }
+    /// Replace `core`'s sorted, deduplicated breakpoint set. Translated code
+    /// and block classifications embed which instructions are hooked, so a
+    /// change discards that core's.
+    pub fn set_breakpoints(&self, core: usize, addresses: Vec<u64>) -> Result<(), String> {
+        self.paused()?;
+        let current = unsafe { &mut (*self.breakpoints.get())[core] };
+        if *current == addresses {
+            return Ok(());
+        }
+        *current = addresses;
+        unsafe { (*self.state.get()).clear_blocks(core) };
+        self.check(unsafe { (self.api.uc_ctl)(self.core(core)?, ffi::ctl(10, 0, 1)) })
     }
     pub fn event(&self, kind: &str, core: usize, address: u64, size: u32, value: i64) {
         // All machine references/RefCell borrows are dropped before Python runs;

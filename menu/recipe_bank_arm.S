@@ -17,6 +17,20 @@
 .extern rb_stock_present_continue
 .extern rb_stock_draw_root_continue
 
+@ Both playback callers save {r4,r5,r11,lr}, with r11 at the saved lr.
+.global rb_mode_pair_apply
+.type rb_mode_pair_apply,%function
+rb_mode_pair_apply:
+    push    {r4, lr}
+    bl      rb_mode_pair_run
+    pop     {r4, lr}
+    cmp     r0, #0
+    bxeq    lr
+    sub     sp, r11, #12
+    mvn     r0, #0
+    pop     {r4, r5, r11, pc}
+.size rb_mode_pair_apply, .-rb_mode_pair_apply
+
 @ The media-change shims: the detach and attach workers are the two producers of
 @ a device transition, so each entry bumps the epoch and then replays the push
 @ the branch displaced. Neither is on the file-request path.

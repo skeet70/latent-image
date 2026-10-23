@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import copy
 import struct
+from emulator.menu_inputs import MenuKey
 from emulator.rec_state import MemoryField, TASK_ENTRIES as ENTRY_ROLES, TASK_TABLES, ram_range
 from tools.continue_rec_scanout import MAX_CONTINUATION
-from tools.probe_setup_menus import DEFAULT_PULSE
+from tools.probe_setup_menus import default_key_pulse
 
 MAX_SETTLE = 90_000_000
 MAX_CHUNK = 3_000_000
-DEFAULT_CHUNK = 1_000_000
+DEFAULT_CHUNK = 250_000
 TASK_ENTRIES = {role.value: entry for entry, role in ENTRY_ROLES.items()}
 # 011090A4 receives the packet; 00DB6628 advances the sender byte token.
 # 01177C9C submits the batch; 01177760 clears busy and the callback.
@@ -52,6 +53,7 @@ def read_render_state(board):
     result = {name: int.from_bytes(raw(field.address, field.size), 'little')
               for name, field in FIELDS.items()}
     result.update(instructions=board.instructions, virtual_ticks=board.virtual_ticks)
+    result['debounced_inputs_released'] = board._native.menu_keys_released()
     tasks, unavailable = {}, []
     for cpu, address in TASK_TABLES:
         try:
@@ -126,7 +128,8 @@ def _drained(probe):
     if not probe.get('ready'):
         return False
     graphics = probe['graphics']
-    return (probe['ui_pending'] == 0 and probe['ui_busy'] == 0
+    return (probe['debounced_inputs_released']
+            and probe['ui_pending'] == 0 and probe['ui_busy'] == 0
             and probe['initialized'] == 1 and probe['display_suppression'] == 0
             and probe['batch_busy'] == 0 and probe['batch_callback'] == 0
             and probe['commands_dirty'] == 0 and probe['display_pending'] == 0
@@ -201,13 +204,11 @@ class MenuRenderSettle:
                    'max_settle_instructions', 'chunk_instructions'}
         if type(options) is not dict or set(options) - allowed:
             raise ValueError('Unknown settling key options')
-        key = options.get('key')
-        # Validate the actual helper's known input names before any key/run.
-        from emulator.menu_inputs import ALIASES, KEY_NAMES
-        if type(key) is not str or ALIASES.get(key.lower(), key.lower()) not in KEY_NAMES:
-            raise ValueError('Unknown menu key')
-        hold = options.get('hold_instructions', DEFAULT_PULSE)
-        release = options.get('release_instructions', DEFAULT_PULSE)
+        parsed_key = MenuKey.parse(options.get('key'))
+        key = parsed_key.value
+        pulse = default_key_pulse(parsed_key)
+        hold = options.get('hold_instructions', pulse.hold_instructions)
+        release = options.get('release_instructions', pulse.release_instructions)
         budget = options.get('max_settle_instructions', MAX_SETTLE)
         chunk = options.get('chunk_instructions', DEFAULT_CHUNK)
         if any(type(value) is not int or not low <= value <= high for value, low, high in

@@ -9,10 +9,11 @@
 -- `reviewedContract`.
 module Main where
 
-import Control.Monad (forM, unless)
+import Control.Monad (forM, forM_, unless)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.Bits (xor)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.List (isInfixOf)
 import Numeric (showHex)
 import System.Directory (createDirectory, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, setCurrentDirectory)
@@ -44,9 +45,11 @@ targetFor arguments = case arguments of
 failing :: String -> IO a
 failing what = ioError (userError ("refusal case attempted USB "++what))
 
+data UsbAccess = NotAttempted | Attempted deriving (Eq, Show)
+
 -- | Fails every call but the cleanup exit, so a run that reaches USB ends refused at init.
-noUsb :: UsbApi
-noUsb = UsbApi (\_ -> failing "init") (\_ -> failing "enumeration") (\_ _ -> failing "open") (\_ _ -> failing "claim")
+noUsb :: IORef UsbAccess -> UsbApi
+noUsb access = UsbApi (\_ -> writeIORef access Attempted >> failing "init") (\_ -> failing "enumeration") (\_ _ -> failing "open") (\_ _ -> failing "claim")
   (\_ _ -> failing "transfer") (\_ _ -> failing "release") (\_ -> failing "close") (\_ -> pure ())
 
 privateDirectory :: FilePath -> IO FilePath
@@ -71,13 +74,21 @@ replaceAfter anchor needle replacement document = do
   unless (B.isPrefixOf needle found) Nothing
   pure (B.concat [before, middle, replacement, B.drop (B.length needle) found])
 
+expectAccess :: IORef UsbAccess -> UsbAccess -> IO ()
+expectAccess access expected = do
+  actual <- readIORef access
+  unless (actual == expected) $ do
+    putStrLn ("expected USB access " ++ show expected ++ ", got " ++ show actual)
+    exitFailure
+
 requireJust :: String -> Maybe a -> IO a
 requireJust what = maybe (putStrLn ("cannot construct "++what) >> exitFailure) pure
 
 main :: IO ()
 main = do
   Target payload contract otherPayload otherContract label <- getArgs >>= targetFor
-  builds <- forM [0x00c20000, 0x00c21f88] $ \base -> do
+  let (lowestBase, worstBase) = payloadReferenceBases payload
+  builds <- forM [lowestBase, worstBase] $ \base -> do
     document <- withPinnedReviewedBuild contract payload (Address base) $ \built -> do
       let manifest = pinnedManifest built
       validateReviewedContract contract manifest
@@ -93,12 +104,17 @@ main = do
   (otherBaseDocument, otherBaseRuntime) <- case builds of
     [_, other] -> pure other
     _ -> exitFailure
+  -- Bases whose bank allocation would cover the image-5 mode-apply publication sites.
+  forM_ (if payloadKind payload == RecipeBankD3 then [0x00c20000, 0x00c21c88] else []) $ \base -> do
+    outcome <- try (withPinnedReviewedBuild contract payload (Address base) (pure . pinnedManifest))
+    expect ("pinned build of an allocation at 0x" ++ showHex base "" ++ " over publication sites") "pinned RAM-push builder failed before USB"
+      (case outcome of Left (failure :: SomeException) -> Left (displayException failure); Right _ -> Right "accepted")
 
   pid <- getProcessID
   temporary <- getTemporaryDirectory >>= makeAbsolute
   root <- privateDirectory (temporary </> ("ram-push-reviewed-build-check-"++show pid))
   setCurrentDirectory root
-  let base = Address 0x00c20000
+  let base = Address lowestBase
   PinnedBuild reviewed document runtime _ _ <- withPinnedReviewedBuild contract payload base pure
 
   substituted <- privateDirectory (root </> "substituted-tool")
@@ -125,10 +141,12 @@ main = do
           Left (failure::SomeException) -> expect caseLabel wanted (Left (displayException failure))
           Right supplied -> do
             pushDir <- privateDirectory (root </> (name++"-push"))
-            pushed <- runRamPush caseContract caseAllocation supplied realClock noUsb pushDir
+            access <- newIORef NotAttempted
+            pushed <- runRamPush caseContract caseAllocation supplied realClock (noUsb access) pushDir
             expect caseLabel wanted (pushOutcome pushed)
+            expectAccess access NotAttempted
 
-  pushCase "linked" "ram-push with a byte-perturbed c20000 manifest" "supplied manifest differs byte-for-byte from the pinned builder output"
+  pushCase "linked" "ram-push with a byte-perturbed manifest" "supplied manifest differs byte-for-byte from the pinned builder output"
     (document <> C.pack "\n") runtime allocation contract
 
   let flippedRuntime = B.take 0x100 runtime <> B.singleton (B.index runtime 0x100 `xor` 1) <> B.drop 0x101 runtime
@@ -146,14 +164,18 @@ main = do
   pushCase "changed-old-word" "ram-push with a changed publication old word" "manifest publication contract differs from the compiled reviewed contract"
     changedOld runtime allocation contract
 
-  pushCase "wrong-base" "ram-push of the c21f88 manifest into a c20000 allocation" "manifest base differs from the retained allocation"
+  pushCase "wrong-base" "ram-push of the other reference base's manifest" "manifest base differs from the retained allocation"
     otherBaseDocument otherBaseRuntime allocation contract
 
   wrongSizeDir <- privateDirectory (root </> "alloc-wrong-size")
   wrongSizePath <- writeAllocStateFile wrongSizeDir
     (RamAllocState base (payloadAllocationSize otherPayload) 0x4003 callbackTableAddress callbackStockWord bootstrapBytes (replicate 64 '0') "X-M1" 1)
   wrongSize <- readRetainedAllocation wrongSizePath
-  pushCase "wrong-size" "ram-push into an allocation of the other payload's size" "manifest source identity differs from the compiled reviewed contract"
+  -- A bank allocation at the Classic Chrome base would cover the bank's own publication sites, so its relink refuses first.
+  let wrongSizeRefusal = if payloadKind otherPayload == RecipeBankD3
+        then "pinned RAM-push builder failed before USB"
+        else "manifest source identity differs from the compiled reviewed contract"
+  pushCase "wrong-size" "ram-push into an allocation of the other payload's size" wrongSizeRefusal
     document runtime wrongSize contract
 
   pushCase "other-contract" "ram-push checked against the other payload's contract" "manifest source identity differs from the compiled reviewed contract"
@@ -163,8 +185,10 @@ main = do
   relinkedPath <- runRamRelink contract allocation relinkDir
   relinked <- readRamPushManifest relinkedPath
   relinkPushDir <- privateDirectory (root </> "push-relinked")
-  relinkedPush <- runRamPush contract allocation relinked realClock noUsb relinkPushDir
+  relinkAccess <- newIORef NotAttempted
+  relinkedPush <- runRamPush contract allocation relinked realClock (noUsb relinkAccess) relinkPushDir
   expect "ram-push of a ram-relink manifest reaches USB" "refusal case attempted USB" (pushOutcome relinkedPush)
+  expectAccess relinkAccess Attempted
 
   let altered = map (\c -> if c == '0' then '1' else '0') (take 1 (runtimeDigest reviewed)) ++ drop 1 (runtimeDigest reviewed)
       unloadCase name caseLabel wanted state = do
@@ -172,8 +196,10 @@ main = do
         statePath <- writeStateFile stateDir state
         readBack <- readRamPushState statePath
         unloadDir <- privateDirectory (root </> (name++"-unload"))
-        unloaded <- runRamUnload contract readBack realClock noUsb unloadDir
+        access <- newIORef NotAttempted
+        unloaded <- runRamUnload contract readBack realClock (noUsb access) unloadDir
         expect caseLabel wanted (case unloaded of RamUnloadRefused reason -> Left reason; other -> Right (show other))
+        expectAccess access NotAttempted
       stateWith digest entries = RamPushState (manifestDigest reviewed) digest base (allocationSize reviewed) entries
         (manifestPublications reviewed) callbackStockWord bootstrapBytes 1
       shifted (RamPushEntries install rollback status) = RamPushEntries (Address (unAddress install + 4)) rollback status

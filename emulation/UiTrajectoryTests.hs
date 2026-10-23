@@ -1,11 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | Decoding of e2e trajectory files: the checked-in files and synthetic trace-site cases.
+-- | Decoding of e2e trajectory files: the checked-in files and synthetic trace-site and segment cases.
 module Main (main) where
 
 import Control.Monad (unless)
 import qualified Data.ByteString.Char8 as C
 import Data.List (isSuffixOf, sort)
 import Emulation.UiTrajectory
+import EmulatorUsb (ModeDial (..))
 import System.Directory (listDirectory)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
@@ -22,6 +23,16 @@ sitesOf bytes = either (const Nothing) (Just . trajectoryTraceSites) (decodeTraj
 
 refused :: C.ByteString -> Bool
 refused = either (const True) (const False) . decodeTrajectories
+
+-- | A one-segment file whose segment carries the given extra fields.
+segmentDocument :: String -> C.ByteString
+segmentDocument fields = C.pack (concat
+  [ "{\"schema\":1,\"before_unload\":[{\"phase\":\"a\",\"steps\":[]", fields, "}],\"after_unload\":[]}" ])
+
+segmentOf :: C.ByteString -> Maybe Segment
+segmentOf bytes = case decodeTrajectories bytes of
+  Right trajectories | [segment] <- beforeUnload trajectories -> Just segment
+  _ -> Nothing
 
 expect :: String -> Bool -> IO Bool
 expect name ok = do
@@ -54,5 +65,14 @@ main = do
         refused (document "[[\"0114b6c4\",\"x\"],[\"0114b6c4\",\"y\"]]" "[]")
     , expect "a requirement naming no segment is refused" $
         refused (document "[]" "[\"missing\"]")
+    , expect "a mode-dial position decodes by its dial name" $
+        (segmentModeDial =<< segmentOf (segmentDocument ",\"mode_dial\":\"AUTO\"")) == Just ModeDialAuto
+    , expect "an unmodelled mode-dial position is refused" $
+        refused (segmentDocument ",\"mode_dial\":\"SR+\"")
+    , expect "film rows 0 and 8 decode to PROVIA and the second recipe with their stored codes" $
+        map (fmap filmStoredCode . (segmentFilmRow =<<) . segmentOf . segmentDocument)
+          [",\"film_row\":0", ",\"film_row\":8"] == [Just 0, Just 14]
+    , expect "a film row past 8 is refused" $
+        refused (segmentDocument ",\"film_row\":9")
     ]
   unless (and (checkedIn ++ results)) exitFailure

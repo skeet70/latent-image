@@ -11,7 +11,7 @@ import Data.Aeson (Value(..), encode, object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import Data.List (isInfixOf)
+import Data.List (isInfixOf, isSuffixOf)
 import Data.Word (Word32)
 import Numeric (showHex)
 import System.Directory (createDirectory, makeAbsolute)
@@ -104,7 +104,7 @@ main = do
         writePrivateBytes (directory </> "ram-push-manifest.json") (manifestDocument target identity)
         pure (directory </> "ram-push-manifest.json")
       reviewed = reviewedSourceIdentity contract
-      substituted = [(name, if name == "menu/ram_push_installer.c" then replicate 64 'f' else digest) | (name,digest) <- reviewed]
+      substituted = [(name, if "ram_push_installer.c" `isSuffixOf` name then replicate 64 'f' else digest) | (name,digest) <- reviewed]
   unreviewedSource <- manifestCase "unreviewed-source" substituted
   refuses camera "ram-push with an unreviewed source identity"
     ["ram-push", allocPath, unreviewedSource, root </> "push-unreviewed-source"]

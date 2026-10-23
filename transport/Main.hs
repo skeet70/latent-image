@@ -157,11 +157,11 @@ dispatch Help = putStr $ unlines
   , "commit-f7-restore REFERENCE_BIN [OUTDIR] the same sequence from stored 0xf7 = 0x01, storing 0xf7 = 0x00; stored 0x80 stays 0x22; needs a session to start with 0xf7 stored, which is unproved"
   , "read-ram PLAN_JSON [--repeat N --interval-ms M] [OUTDIR] read-only RAM watch on a body with 0xf7 already nonzero, in a jig boot or an ordinary boot's ff80 route: identity, config window 0x000000 refused unless 0xf7 != 0, then one 0x200001 function 2 request per plan window (1..248 bytes) for N passes M ms apart (N 1..600, M 100..10000, N * windows <= 2032), C4; no write is sent, so no supply cut is needed"
   , "probe-sd-host [--repeat N --interval-ms M] [OUTDIR] read-only capture of the SD slot's host-controller registers on a body with 0xf7 already nonzero: identity, config window 0x000000 refused unless 0xf7 != 0, then per pass 0xfff50000 +0x00 (32 B), +0x24 (6 B), +0x2c (16 B) and +0x3e (2 B), never the +0x20 data port, for N passes M ms apart (N 1..508, M 100..10000), C4; no write is sent"
-  , "ram-alloc SIZE [OUTDIR]       allocate and peer-prepare an X-M1 RAM workspace; SIZE is a payload's fixed bound, 0x1b6d8 (recipe bank and D3), 0x1560 (Classic Chrome) or 0x21fc (Classic Chrome with icon); retain ram-alloc-state.json"
+  , "ram-alloc SIZE [OUTDIR]       allocate and peer-prepare an X-M1 RAM workspace; SIZE is a payload's fixed bound, 0x1d9d8 (recipe bank and D3), 0x1560 (Classic Chrome) or 0x21fc (Classic Chrome with icon); retain ram-alloc-state.json"
   , "ram-relink STATE OUTDIR        build the reviewed manifest and runtime of the allocation's payload at the retained base with the camera's pinned relinker; no USB"
   , "ram-push STATE MANIFEST [OUTDIR] upload a manifest linked to the retained allocation, install and write ram-push-state.json"
   , "ram-free STATE [OUTDIR]       free a retained allocation that was not installed"
-  , "ram-unload STATE [OUTDIR]     rollback and verify the exact active publication set; retain the block until power-off"
+  , "ram-unload STATE [OUTDIR]     rollback and verify the exact active publication set; allocation remains retained"
   , "rehearse identify|read-config PLAN_JSON|end-setting|probe-ram|read-log|probe-bootrom|probe-area2|probe-straps|probe-code|probe-ownership|probe-routes fixed|probe-routes derived PLAN_JSON|dump-ram SEGMENT|read-media|arm-auto-act|commit-f7-enable REFERENCE_BIN|commit-f7-restore REFERENCE_BIN|read-ram PLAN_JSON [--repeat N --interval-ms M]|probe-sd-host [--repeat N --interval-ms M]|ram-alloc SIZE|ram-push STATE MANIFEST|ram-free STATE|ram-unload STATE"
   , "--help"
   , "OUTDIR must be absolute and must not exist; it is created with mode 0700."
@@ -289,7 +289,7 @@ dispatch (Live operation requested) = case operation of
     withOutput operation requested $ \directory -> do
       outcome <- runRamPush (contractFor (allocSize (retainedAllocation allocation))) allocation manifest realClock nativeApi directory
       case outcome of
-        RamPushInstalled state -> pure ("ram-push: installed;state="++state++";power-off clears RAM")
+        RamPushInstalled state -> pure ("ram-push: installed;state="++state++";exit requires full power removal and stock recovery checks")
         RamPushRefused reason -> P.reject ("ram-push refused: "++reason)
         RamPushUncertain reason -> P.reject ("ram-push uncertain: "++reason++";send nothing further and power off")
   RamFree path -> do
@@ -305,7 +305,7 @@ dispatch (Live operation requested) = case operation of
     withOutput operation requested $ \directory -> do
       outcome <- runRamUnload (contractFor (stateSize state)) state realClock nativeApi directory
       case outcome of
-        RamUnloaded -> pure "ram-unload: rollback verified; allocation retained until power-off"
+        RamUnloaded -> pure "ram-unload: rollback verified; allocation retained; full power removal and stock recovery checks required"
         RamUnloadRefused reason -> P.reject ("ram-unload refused: "++reason)
         RamUnloadUncertain reason -> P.reject ("ram-unload uncertain: "++reason++";send nothing further and power off")
 

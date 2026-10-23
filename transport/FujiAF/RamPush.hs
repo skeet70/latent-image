@@ -156,6 +156,9 @@ data Payload = Payload
   , payloadSetupCount :: Int
   , payloadActivationCount :: Int
   , payloadInstallerStart :: Word32 -> Word32
+  , payloadInstallOffset :: Word32
+  -- | The lowest and the worst-case aligned base the reviewed-build check links at.
+  , payloadReferenceBases :: (Word32, Word32)
   , payloadRelinkScript :: FilePath
   , payloadRelinkBuilder :: FilePath
   , payloadBuildRoot :: FilePath
@@ -171,9 +174,12 @@ bankD3Payload = Payload
   , payloadSetupCount = setupCount
   , payloadActivationCount = activationCount
   , payloadInstallerStart = \base ->
-      let candidate = (base .&. 0xffff0000) .|. 0xb784
-          nameRecord = if toInteger candidate < toInteger base + 0x9800 then candidate + 0x10000 else candidate
+      let minimumName = base + 0xbb00
+          candidate = (minimumName .&. 0xffff0000) .|. 0xb784
+          nameRecord = if candidate < minimumName then candidate + 0x10000 else candidate
       in (nameRecord + 14*66 + 31) .&. 0xffffffe0
+  , payloadInstallOffset = 0x560
+  , payloadReferenceBases = (0x00c40000, 0x00c4fc88)
   , payloadRelinkScript = "build-recipe-bank-ram.sh"
   , payloadRelinkBuilder = "build-recipe-bank"
   , payloadBuildRoot = "private-data/analysis/x-m1-1.50/ram-push"
@@ -194,6 +200,8 @@ classicChromePayload = Payload
   , payloadSetupCount = 84
   , payloadActivationCount = 47
   , payloadInstallerStart = \base -> (base + 0x184 + 31) .&. 0xffffffe0
+  , payloadInstallOffset = 0x600
+  , payloadReferenceBases = (0x00c20000, 0x00c21f88)
   , payloadRelinkScript = "build-classic-chrome-ram.sh"
   , payloadRelinkBuilder = "build-classic-chrome-ram"
   , payloadBuildRoot = "private-data/analysis/classic-chrome-patch/ram-push"
@@ -239,22 +247,22 @@ payloadPublicationCount payload = payloadSetupCount payload + payloadActivationC
 -- | The installer's three entries, at fixed offsets from its start.
 payloadEntries :: Payload -> Address -> RamPushEntries
 payloadEntries payload (Address base) =
-  let install = payloadInstallerStart payload base + 0x600
+  let install = payloadInstallerStart payload base + payloadInstallOffset payload
   in RamPushEntries (Address install) (Address (install+0x238)) (Address (install+0x264))
 
 configGateIndex, mailboxBytes, reviewedAllocationSize :: Int
 configGateIndex = 0xf7
 mailboxBytes = 104
-reviewedAllocationSize = 0x1b6d8
+reviewedAllocationSize = 0x1d9d8
 
 installerAbiVersion :: Word32
 installerAbiVersion = 2
 
--- | The bank's 94 publications plus D3's 156 (reports/ram-push-d3-design.md).
+-- | The bank's 97 publications plus D3's 156 (reports/ram-push-d3-design.md).
 publicationCount, setupCount, activationCount :: Int
-publicationCount = 250
+publicationCount = 253
 setupCount = 167
-activationCount = 83
+activationCount = 86
 
 rendezvousSpinBound :: Word32
 rendezvousSpinBound = 0x80000

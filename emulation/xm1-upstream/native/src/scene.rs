@@ -12,12 +12,53 @@
 
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyInt};
+use pyo3::types::{PyBytes, PyInt, PyList, PyType};
 
 pub const PROFILE: &str = "declared-rgb-bars-ramp-moving-square-bt601-limited-v1";
 const MAX_DIMENSION: u64 = 8192;
 const MAX_OUTPUT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_HISTOGRAM_SAMPLES: u64 = 16 * 1024 * 1024;
+
+#[pyfunction]
+pub(crate) fn xm1_source_tick(
+    board: &Bound<'_, PyAny>,
+    input_type: &Bound<'_, PyType>,
+) -> PyResult<Option<u64>> {
+    let devices = board.getattr(pyo3::intern!(board.py(), "devices"))?;
+    let devices = devices.cast::<PyList>()?;
+    let mut input = None;
+    for device in devices.iter() {
+        if device.get_type().is(input_type) {
+            if input.is_some() {
+                return Err(PyValueError::new_err("X-M1 scene source requires its declared physical phase clock"));
+            }
+            input = Some(device);
+        }
+    }
+    let input = input.ok_or_else(|| PyValueError::new_err(
+        "X-M1 scene source requires its declared physical phase clock"))?;
+    if !input.getattr(pyo3::intern!(board.py(), "event_profile"))?.eq(
+        pyo3::intern!(board.py(), "xm1-150-configured-phase-clock-unmeasured"))?
+    {
+        return Err(PyValueError::new_err("X-M1 scene source requires its declared physical phase clock"));
+    }
+    let history = input.getattr(pyo3::intern!(board.py(), "event_history"))?;
+    let history = history.cast::<PyList>()?;
+    for event in history.iter().rev() {
+        if event.get_item(pyo3::intern!(board.py(), "source"))?.eq(0)? {
+            let tick = event.get_item(pyo3::intern!(board.py(), "asserted_tick"))?;
+            if !tick.is_exact_instance_of::<PyInt>() {
+                return Err(PyValueError::new_err("X-M1 scene source edge has an invalid physical clock identity"));
+            }
+            let tick = tick.extract::<u64>()?;
+            if tick > board.getattr(pyo3::intern!(board.py(), "virtual_ticks"))?.extract::<u64>()? {
+                return Err(PyValueError::new_err("X-M1 scene source edge has an invalid physical clock identity"));
+            }
+            return Ok(Some(tick));
+        }
+    }
+    Ok(None)
+}
 
 #[derive(Debug, PartialEq)]
 enum SceneError {

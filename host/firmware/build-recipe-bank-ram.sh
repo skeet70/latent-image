@@ -23,14 +23,15 @@ esac
 [[ -d "$OUT" && ! -L "$OUT" ]] || { printf 'output directory must exist\n' >&2; exit 1; }
 
 base_value=$((BASE))
-(( base_value >= 0 && base_value <= 0xffffffff - 0x1b6d8 )) || {
+(( base_value >= 0 && base_value <= 0xffffffff - 0x1d9d8 )) || {
   printf 'base leaves the 32-bit RAM address space\n' >&2; exit 1;
 }
 (( (base_value & 7) == 0 )) || {
   printf 'base must be 8-byte aligned\n' >&2; exit 1;
 }
-name_record=$(((base_value & 0xffff0000) | 0xb784))
-if (( name_record < base_value + 0x9800 )); then
+minimum_name=$((base_value + 0xbb00))
+name_record=$(((minimum_name & 0xffff0000) | 0xb784))
+if (( name_record < minimum_name )); then
   name_record=$((name_record + 0x10000))
 fi
 bank_end=$((name_record + 14 * 66))
@@ -42,18 +43,19 @@ FREE=(-ffreestanding -nostdlib -fno-builtin -mno-unaligned-access)
 LINK=(-nostdlib -static -fuse-ld=lld "--ld-path=$LD_LLD" -Wl,--no-dynamic-linker -Wl,--build-id=none)
 objects=()
 for src in menu/recipe_bank_arm.S menu/recipe_bank_probe.c menu/recipe_bank_hook.c \
-  menu/recipe_bank_storage.c menu/recipe_bank_actions.c menu/recipe_bank_edit.c; do
+  menu/recipe_bank_storage.c menu/recipe_bank_actions.c menu/recipe_bank_edit.c \
+  menu/recipe_bank_diagnostic.c; do
   name="${src##*/}"
   obj="$OUT/${name%.*}.o"
   case "$src" in
     *.c) NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${FREE[@]}" -Oz -Wall -Wextra \
-      -DRB_NAME_RECORD="$rb_name_record" -c "$src" -o "$obj" ;;
+      -DRB_VOLATILE_BANK=1 -DRB_NAME_RECORD="$rb_name_record" -c "$src" -o "$obj" ;;
     *.S) NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" -c "$src" -o "$obj" ;;
   esac
   objects+=("$obj")
 done
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${FREE[@]}" -Oz -Wall -Wextra \
-  -ffunction-sections -fdata-sections -c menu/ram_push_installer.c \
+  -ffunction-sections -fdata-sections -c menu/recipe_bank_installer/ram_push_installer.c \
   -o "$OUT/ram_push_installer.o"
 objects+=("$OUT/ram_push_installer.o")
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${LINK[@]}" -Wl,-T,menu/recipe_bank_ram.ld \

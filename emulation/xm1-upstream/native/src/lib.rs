@@ -2,14 +2,21 @@ mod audit;
 mod engine;
 mod fetch_guard;
 mod ffi;
+mod fff63;
 mod fuji;
 mod raster;
+mod gradient;
 mod hooks;
 mod observe;
 mod access_probe;
 mod tcm;
 mod scene;
 mod state;
+mod menu;
+mod phase_clock;
+mod spi0;
+#[cfg(test)]
+mod tests;
 
 use engine::{Inner, Runner};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -325,7 +332,6 @@ impl Machine {
     /// Replace one core's breakpoint set; an empty list clears it. Hits are
     /// reported through the event handler on every accepted instruction entry.
     fn set_breakpoints(&self, core: usize, addresses: Vec<u64>) -> PyResult<()> {
-        self.inner.paused().map_err(error)?;
         self.inner.core(core).map_err(error)?;
         if addresses.len() > 4096 || addresses.iter().any(|&pc| pc > u32::MAX as u64) {
             return Err(error(
@@ -335,10 +341,13 @@ impl Machine {
         let mut addresses = addresses;
         addresses.sort_unstable();
         addresses.dedup();
-        unsafe {
-            (*self.inner.breakpoints.get())[core] = addresses;
-        }
-        Ok(())
+        self.inner.set_breakpoints(core, addresses).map_err(error)
+    }
+    fn release_menu_key(&self, session: &Bound<'_, PyAny>, key: &str, cap: u64) -> PyResult<()> {
+        menu::release(&self.inner, session, menu::ReleaseInput::parse(key)?, cap)
+    }
+    fn menu_keys_released(&self) -> PyResult<bool> {
+        menu::keys_released(&self.inner)
     }
     #[pyo3(signature=(core,stack_start,stack_end,allowed=None,limit=1048576,include_stack=false))]
     fn store_log_begin(
@@ -1435,5 +1444,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(raster::ui_composite, m)?)?;
     m.add_function(wrap_pyfunction!(raster::ui_composite_tiled, m)?)?;
     m.add_function(wrap_pyfunction!(raster::ui_stream_parse, m)?)?;
+    m.add_function(wrap_pyfunction!(gradient::ui_gradient, m)?)?;
+    m.add_function(wrap_pyfunction!(gradient::ui_gradient_colors, m)?)?;
+    m.add_function(wrap_pyfunction!(scene::xm1_source_tick, m)?)?;
+    m.add_function(wrap_pyfunction!(phase_clock::tick_xm1_clock, m)?)?;
+    m.add_class::<fff63::Device>()?;
+    m.add("FFF63_PROFILES", (fff63::PROFILE,))?;
+    m.add_function(wrap_pyfunction!(spi0::spi0_status_acknowledged, m)?)?;
     Ok(())
 }

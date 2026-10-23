@@ -6,7 +6,7 @@ fill. An explicit optional copy profile reproduces one stock32bpp CPU fallback;
 it does not claim independently observed GPU pixel semantics. A second opt-in
 profile accepts an exact initial rectangle clear and matched state-only
 initializers, which write zero pixels. A separate declared UI profile parses
-bounded driver-generated path/fill batches and renders affine solid/image/linear-ramp
+bounded driver-generated path/fill batches and renders affine solid/image/linear/centered-radial
 primitives with explicitly unmeasured software pixel/AA/stroke/timing laws.
 Other rasterization and copy commands stop explicitly.
 See research/emulator-graphics/README.md for driver proof and model limits.
@@ -21,6 +21,7 @@ import struct
 from .hardware import UnsupportedDevice
 from .graphics_clear_profile import (PROFILE as CLEAR_PROFILE, path_descriptor, parse_clear, render_clear,
                                      PATH_TEMPLATE, FILL_PREFIX, FILL_SUFFIX, GAMMA_BYTES, FOOTER)
+from x70_native._native import ui_gradient as _ui_gradient, ui_gradient_colors as _ui_gradient_colors
 
 
 # B6BB44/B6B9D4/B83F3C establish the list grammar. These sets describe the
@@ -34,7 +35,7 @@ _UI_PATH_REGISTERS = ({0x10, 0x20, 0x30, 0x60, 0x69, 0x6a, 0x7b, 0x7c,
 _UI_FILL_REGISTERS = ({0x18, 0x28, 0x31, 0xa0, 0xa2, 0xad, 0x100, 0x115,
                        0x117, 0x118, 0x11b, 0x140, 0x143, 0x144, 0x147, 0x14d, 0x14e,
                        0x152, 0x153, 0x154, 0x155, 0x156, 0x157, 0x16c,
-                       0x168, 0x16b, 0x16d, 0x178, 0x184, 0x185, 0x187, 0x188, 0x190, 0x1c0} |
+                       0x168, 0x169, 0x16a, 0x16b, 0x16d, 0x178, 0x184, 0x185, 0x187, 0x188, 0x190, 0x1c0} |
                       set(range(0xa4, 0xa9)) | set(range(0xc0, 0xe0)) |
                       set(range(0x106, 0x115)) | set(range(0x180, 0x184)) |
                       {0x1a0, 0x1a1, 0x1a2, 0x1a3, 0x1a4, 0x1a5, 0x1a7, 0x1a9, 0x1aa})
@@ -233,33 +234,6 @@ def _ui_affine(registers, first, *, row_major=False, allow_singular=False):
     return (a, b, c, d, e, f)
 
 
-def _ui_linear_gradient(registers):
-    """B7F000 linear coefficients and B7E24C/B7DF90's exact ramp upload.
-
-    The stock writer proves t=(106*x+108)+(10A*y+10B),128 RGBA samples
-    and128 half-difference words. Software interpolates the uploaded colors;
-    physical LUT interpolation/rounding remains unmeasured.
-    """
-    required = {0x168, 0x16d, 0x14e, 0x11b} | set(range(0x106, 0x10c))
-    if (not required.issubset(registers) or registers[0x168] != 0 or
-            registers[0x16d] not in (0x10, 0x11, 0x12) or
-            registers[0x14e] not in (0, 0x20) or registers[0x11b] != 0):
-        raise UnsupportedDevice('Graphics UI requires enabled linear gradient and known spread/premultiplication controls')
-    if any(registers.get(_UI_RAMP_LANES + index) != 15 for index in range(256)):
-        raise UnsupportedDevice('Graphics UI linear gradient requires both complete128-entry ramp banks')
-    colors = [registers[_UI_RAMP_VALUES + index] for index in range(128)]
-    for index, current in enumerate(colors):
-        following = colors[min(index + 1, 127)]
-        delta = sum(((((following >> shift & 255) - (current >> shift & 255)) & 511) >> 1) << shift
-                    for shift in (0, 8, 16, 24))
-        if registers[_UI_RAMP_VALUES + 128 + index] != delta:
-            raise UnsupportedDevice('Graphics UI gradient delta bank disagrees with B7DF90')
-    coefficients = tuple(_ui_float(registers[index]) for index in range(0x106, 0x10c))
-    if coefficients[1] != 0 or coefficients[3] != 0:
-        raise UnsupportedDevice('Graphics UI linear gradient has unsupported coordinate controls')
-    return dict(coefficients=(coefficients[0], coefficients[2], coefficients[4], coefficients[5]),
-                colors=tuple(tuple(word >> shift & 255 for shift in (0, 8, 16, 24)) for word in colors),
-                spread=registers[0x16d] & 3, premultiplied=bool(registers[0x14e]))
 
 
 def _ui_initialize(path_words, fill_words, *, initial_banks, max_bytes):
@@ -441,7 +415,7 @@ def _ui_batch(path_words, fill_words, *, initial_banks, ram_bytes, max_bytes):
                     nonzero=bool(f[0xa0] & 0x10), blend=blend,
                     color=tuple((f[0x185] >> shift) & 255 for shift in (0, 8, 16, 24)),
                     stroke=not bool(style & 0x100), texture=None,
-                    gradient=_ui_linear_gradient(f) if gradient else None)
+                    gradient=_ui_gradient(f) if gradient else None)
         if draw['stroke']:
             radius = _ui_float(p.get(0x69, 0))
             cap, join = style >> 18 & 3, style >> 16 & 3
@@ -842,30 +816,7 @@ def _ui_morton(width, height):
     return result
 
 
-def _ui_gradient_colors(gradient, shape, x0, y0):
-    """Declared pixel-center linear ramp sampling; not measured GPU precision."""
-    import numpy as np
-    yy, xx = np.indices(shape, dtype=np.float64)
-    a, c, e, f = gradient['coefficients']
-    amount = a*(xx + x0 + .5) + c + e*(yy + y0 + .5) + f
-    if gradient['spread'] == 0:
-        amount = np.clip(amount, 0, 1)
-    elif gradient['spread'] == 1:
-        amount = np.remainder(amount, 1)
-    else:
-        amount = 1 - np.abs(np.remainder(amount, 2) - 1)
-    # B7DC88 generates entry i at(i-.5)/127. Hardware interpolation of its
-    # quantized half-difference bank is not assumed; use straight interpolation
-    # between adjacent uploaded samples and clamp to the available endpoints.
-    position = np.clip(amount*127 + .5, 0, 127)
-    low = np.floor(position).astype(np.int64)
-    fraction = (position - low)[..., None]
-    table = np.asarray(gradient['colors'], dtype=np.float64)/255
-    source = table[low]*(1-fraction) + table[np.minimum(low+1, 127)]*fraction
-    if gradient['premultiplied']:
-        source[..., :3] = np.divide(source[..., :3], source[..., 3:4],
-            out=np.zeros_like(source[..., :3]), where=source[..., 3:4] != 0)
-    return source
+
 
 
 def _ui_render(draws, *, read_bytes, cpu_id):
@@ -1323,7 +1274,7 @@ class GraphicsAccelerator:
         capture.update(operation='ui-primitives', profile=self.clear_profile, accepted=True,
             draw_count=len(draws), filled_paths=sum(not draw['stroke'] and draw['texture'] is None for draw in draws),
             stroked_paths=sum(draw['stroke'] for draw in draws), sampled_images=sum(draw['texture'] is not None for draw in draws),
-            linear_gradients=sum(draw.get('gradient') is not None for draw in draws),
+            gradients=sum(draw.get('gradient') is not None for draw in draws),
             destinations=[dict(address=hex(address), bytes=len(payload)) for address, payload in output],
             changed_bytes=dma_bytes, covered_bytes_in_draw_order=touched, irq_cpu=irq_cpu,
             latency_ticks=delay, source_sha256=source_hashes,
@@ -1517,7 +1468,7 @@ class GraphicsAccelerator:
                            "State-only initializers contain no geometry and perform zero pixel writes; completion semantics remain inferred",
                            "Clear pixel packing/Morton layout derive from software; cross-stream fence/draw, bit31 completion and atomic destination snapshot are inferred",
                            "Optional declared UI profile parses byte-lane registers, fixed-arity geometry and paired draw fences; unknown commands, paints, formats or state reject before DMA/completion",
-                           "UI profile supports bounded affine format0 solid/image/linear-ramp fills and nondashed centerline strokes; gamma, radial gradients, projective, masks and nonidentity color transforms remain unsupported",
+                           "UI profile supports bounded affine format0 solid/image/linear/centered-radial fills and nondashed centerline strokes; gamma, off-center radial gradients, projective, masks and nonidentity color transforms remain unsupported",
                            "UI straight RGBA SRC/SRC_OVER, regular1/2/4 squared AA,0.125px curve flattening, reconstructed cap/join strokes with miter limit4, nearest image sampling and transparent image border are declared unmeasured laws",
                            "UI whole-batch destination/input snapshots and bit31/IRQ completion timing are model assumptions; actual driver progress does not validate hardware pixel fidelity",
                            "Logical105c retains explicit zero reset fixture; its physical post-wait value is unmeasured, never forced ready",

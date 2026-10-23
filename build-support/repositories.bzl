@@ -17,6 +17,19 @@ cc_library(
 )
 """
 
+# Headers only: the embedding loads libpython from the declared base interpreter at run time.
+_RECORDER_PYTHON_BUILD = """
+load("@rules_cc//cc:defs.bzl", "cc_library")
+package(default_visibility = ["//visibility:public"])
+_headers = glob(["include/python*/Python.h"])
+_header = _headers[0] if len(_headers) == 1 else fail("Recorder embedding requires exactly one Python.h")
+cc_library(
+    name = "headers",
+    hdrs = ["recorder-python-runtime.h"] + glob(["include/python*/**/*.h"]),
+    includes = [".", _header[:-9]],
+)
+"""
+
 _LIBUSB_HEADERS_BUILD = """
 load("@rules_cc//cc:defs.bzl", "cc_library")
 package(default_visibility = ["//visibility:public"])
@@ -60,6 +73,13 @@ def _lab_dependencies_impl(_ctx):
         attribute_path = "unicorn",
         repository = "@lab_nixpkgs",
         build_file_content = _UNICORN_BUILD,
+    )
+    nixpkgs_package(
+        name = "lab_recorder_python",
+        nix_file = "//build-support:recorder-python.nix",
+        nix_file_deps = ["//build-support:nixpkgs.nix", "//:devenv.lock"],
+        repository = "@lab_nixpkgs",
+        build_file_content = _RECORDER_PYTHON_BUILD,
     )
     nixpkgs_package(
         name = "lab_libusb",

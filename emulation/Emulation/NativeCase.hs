@@ -19,6 +19,9 @@ regs :: [String]
 regs=map (("r"++).show) [0::Int ..12]++["sp","lr","cpsr"]
 limit :: Int
 limit=4*1024*1024
+-- | The native runner's MAX_FUNCTIONS.
+maxFunctions :: Int
+maxFunctions=256
 hex :: Integer -> String
 hex x=showHex x ""
 hexBytes :: B.ByteString -> String
@@ -68,7 +71,7 @@ loadCase input = do
  ensure(reg "cpsr" .&. 0x0fffffff==0x10) "CPSR profile is user mode ARM, flags only"
  ensure(reg "lr"==exit && reg "sp" `mod` 8==0) "LR must be exit and SP eight-byte aligned"
  fields(get c "limits") "instructions wall_ms" "limits"
- budget<-integer(get(get c "limits")"instructions")1 1000000 "instructions"
+ budget<-integer(get(get c "limits")"instructions")1 4000000 "instructions"
  wall<-integer(get(get c "limits")"wall_ms")1 10000 "wall_ms"
  inventory<-arrayCheck(get c "artifacts")0 20 "artifacts limit"
  artifacts<-foldM (\done item->do
@@ -107,7 +110,7 @@ loadCase input = do
    pure(done++[Region item base size bytes]))[] regionsInput
  ensure(regionAt regions entry 4 'x' && regionAt regions exit 4 'x') "entry/exit must have explicit executable bytes"
  ensure(reg "sp">=8 && regionAt regions (reg "sp"-8) 8 'w') "stack top lacks writable eight bytes"
- functionsInput<-arrayCheck(get c "functions")1 160 "functions limit"
+ functionsInput<-arrayCheck(get c "functions")1 maxFunctions "functions limit"
  functions<-foldM(\done item->do
    fields item "address size" "function"
    base<-address(get item "address"); size<-integer(get item "size")4(fromIntegral limit) "function size"

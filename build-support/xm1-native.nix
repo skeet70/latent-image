@@ -14,6 +14,7 @@ pkgs.rustPlatform.buildRustPackage {
   nativeBuildInputs = [ pkgs.python3 ];
   PYO3_PYTHON = "${pkgs.python3}/bin/python3";
   doCheck = true;
+  X70_UNICORN_LIBRARY = "${import ./unicorn-x70.nix { inherit pkgs; }}/lib/libunicorn.so.2";
   installPhase = ''
     runHook preInstall
     mkdir -p "$out/x70_native"

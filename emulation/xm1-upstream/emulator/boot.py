@@ -49,6 +49,7 @@ from .storage_profile import (attach_captured_storage_profile, attach_captured_u
                              owner_mcu_profile, FIRMWARE_SHA256 as CAPTURE_FIRMWARE_SHA256)
 from .checkpoint import CheckpointError
 from x70_native.checkpoint import capture
+from x70_native._native import FFF63Engine, FFF63_PROFILES
 
 
 def make_board(entry='rom', quantum=1000,storage_profile='erased',graphics_profile=None,
@@ -69,7 +70,8 @@ def make_board(entry='rom', quantum=1000,storage_profile='erased',graphics_profi
                movrsz_profile=None,movrsz_ticks=400000,face_stop_profile=None,
                af_extraction_profile=None,af_extraction_ticks=400000,af_extraction_stop_ticks=2,
                shutter_irq_profile=None,afs_frame_source_profile=None,afs_frame_source_ticks=400000,still_pipeline_profile=None,
-               instructions_per_tick=1,settings=None,firmware_profile=None,ui_conversion_profile=None):
+               instructions_per_tick=1,settings=None,firmware_profile=None,ui_conversion_profile=None,
+               fff63_profile=None):
     factory_options={key: str(value) if isinstance(value, Path) else value
                      for key, value in locals().items()
                      if key != 'sd_card_image' and (key not in ('settings','firmware_profile') or value is not None) and (key not in ('still_pipeline_profile','instructions_per_tick') or value not in (None,1))}
@@ -78,6 +80,10 @@ def make_board(entry='rom', quantum=1000,storage_profile='erased',graphics_profi
         factory_options.pop('ui_conversion_profile', None)
     else:
         factory_options['ui_conversion_profile'] = ui_conversion_profile.value
+    if fff63_profile is None:
+        factory_options.pop('fff63_profile', None)
+    elif fff63_profile not in FFF63_PROFILES:
+        raise ValueError('Unknown FFF63 engine profile')
     if 'instructions_per_tick' in factory_options:
         from x70_native.board import normalize_instructions_per_tick, ratio_option
         factory_options['instructions_per_tick']=ratio_option(normalize_instructions_per_tick(instructions_per_tick))
@@ -266,6 +272,8 @@ def make_board(entry='rom', quantum=1000,storage_profile='erased',graphics_profi
             board.attach(StillResizeControl(board,profile=STILL_RESIZE_PROFILE))
     if ui_conversion_profile is not None:
         board.attach(DeclaredUIConversion(board, profile=ui_conversion_profile))
+    if fff63_profile is not None:
+        board.attach(FFF63Engine(board, profile=fff63_profile))
     if settings not in (None,'default','owner'):
         raise ValueError('Settings must be default or owner')
     if settings=='owner' and (storage_profile!='captured' or user_journals not in (None,'restored') or mcu_profile not in (None,'captured-backup')):

@@ -5,9 +5,32 @@
  * and event it was entered from.
  */
 #include "recipe_bank_ui.h"
+#include "recipe_bank_diagnostic.h"
 
 #define RB_PAYLOAD 0x28u
 #define RB_NAME 26u
+
+/* SELECT CUSTOM SETTING's values and labels, which the builder points the
+ * page's node at: NOTHING SELECTED, labelled with stock string 377 ("NONE"),
+ * then CUSTOM 1..7 with the bank-name label ids 0x83f..0x845. */
+#define RB_STOCK_STRING_NONE 0x179u
+#define RB_BANK_NAME_LABEL0 0x83fu
+#define RB_VALUES_TERMINATOR 0x7ffffffeu
+
+__attribute__((used)) const uint32_t rb_select_values[2u * (RB_UI_SELECT_ROWS + 1u)] = {
+  0x60u, 0u, 0x61u, 0u, 0x62u, 0u, 0x63u, 0u, 0x64u, 0u, 0x65u, 0u, 0x66u, 0u, 0x67u, 0u,
+  RB_VALUES_TERMINATOR, 0u};
+
+__attribute__((used)) const uint32_t rb_select_labels[4u * (RB_UI_SELECT_ROWS + 1u)] = {
+  0u, RB_STOCK_STRING_NONE, 0u, 0u,
+  RB_BANK_NAME_LABEL0, RB_BANK_NAME_LABEL0, 0u, 0u,
+  RB_BANK_NAME_LABEL0 + 1u, RB_BANK_NAME_LABEL0 + 1u, 0u, 0u,
+  RB_BANK_NAME_LABEL0 + 2u, RB_BANK_NAME_LABEL0 + 2u, 0u, 0u,
+  RB_BANK_NAME_LABEL0 + 3u, RB_BANK_NAME_LABEL0 + 3u, 0u, 0u,
+  RB_BANK_NAME_LABEL0 + 4u, RB_BANK_NAME_LABEL0 + 4u, 0u, 0u,
+  RB_BANK_NAME_LABEL0 + 5u, RB_BANK_NAME_LABEL0 + 5u, 0u, 0u,
+  RB_BANK_NAME_LABEL0 + 6u, RB_BANK_NAME_LABEL0 + 6u, 0u, 0u,
+  0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu};
 
 static uint32_t rb_ui_word(uint32_t addr)
 {
@@ -59,6 +82,17 @@ static void rb_bank_draw_backdrop(void)
   rb_call_draw_mode(saved_mode);
 }
 
+/* SELECT CUSTOM SETTING's marker row: the effective selection's, or the
+ * terminator's index, which no row's token matches, while the remembered
+ * selection is suspended. */
+static void rb_bank_select_current_row(void)
+{
+  RbSelection selection;
+  rb_ui_store(RB_UI_CURRENT_ROW_CELL,
+              rb_selection_effective(&selection) ? (uint32_t)selection.code
+                                                 : RB_UI_SELECT_ROWS);
+}
+
 /* Runs in the graphics task, after the copied display packet is consumed. A
  * field list shares the edit screen's root; at snapshot depth 2 FUN_011662a0
  * draws the edit rows with the open list beside the row whose child class is
@@ -77,6 +111,9 @@ void rb_bank_draw_root(uint32_t root)
   if (page == RB_PAGE_FIELD) {
     rb_bank_field_current_row();
   }
+  if (page == RB_PAGE_SELECT) {
+    rb_bank_select_current_row();
+  }
   if (page == RB_PAGE_SUB) {
     /* FUN_0115815c with animation kind 0: FUN_01166200 starts the pending
      * preparation (the entry slide 9 or the SET blink 7), and FUN_01165aa0's
@@ -89,7 +126,7 @@ void rb_bank_draw_root(uint32_t root)
     rb_call_draw_pane(rb_ui_word(frame + RB_NODE_ID), 0u);
     return;
   }
-  if (page == RB_PAGE_SLOT || page == RB_PAGE_RECALL ||
+  if (page == RB_PAGE_SLOT || page == RB_PAGE_SELECT ||
       page == RB_PAGE_EDIT || page == RB_PAGE_FIELD) {
     rb_call_stock_draw_root(rb_ui_word(frame + RB_NODE_ID));
     return;
@@ -254,10 +291,6 @@ void rb_bank_draw_name(void)
   rb_call_draw_mode(saved_mode.value);
 }
 
-typedef struct {
-  uint32_t address;
-} RbMenuFrame;
-
 static RbMenuFrame rb_verb_frame;
 static RbMediaIdentity rb_verb_identity;
 static uint32_t rb_verb_class;
@@ -283,8 +316,7 @@ void rb_ui_probe_visit(void)
   }
   if (rb_verb_class >= RB_UI_CLASS_SUB0 &&
       rb_verb_class < RB_UI_CLASS_SUB0 + RB_BANK_SLOTS) {
-    rb_verb_status = rb_meta_op_state(RB_BANK_SAVE,
-        rb_verb_class - RB_UI_CLASS_SUB0, 1u);
+    rb_verb_status = rb_meta_save_state(rb_verb_class - RB_UI_CLASS_SUB0, 1u);
   }
   if (!rb_media_matches(rb_verb_identity)) {
     rb_verb_status = RB_MEDIA_CHANGED;
@@ -343,7 +375,7 @@ uint32_t rb_bank_key_right(void)
     uint32_t cursor = rb_ui_word(RB_UI_CURSOR_CELL);
     if (rb_ui_row_ok(values, cursor) != 0u) {
       uint32_t token = rb_ui_word(values + cursor * 8u);
-      if (token == RB_UI_TOKEN_ITEM_EDIT_SAVE || token == RB_UI_TOKEN_ITEM_RECALL) {
+      if (token == RB_UI_TOKEN_ITEM_EDIT_SAVE || token == RB_UI_TOKEN_ITEM_SELECT) {
         return rb_bank_interpose();
       }
     }
@@ -409,8 +441,8 @@ static uint32_t rb_ui_row_ok(uint32_t values, uint32_t cursor)
  * 0x009571d8 and visible ordinal 0x009571dc both set there; a row the list does
  * not carry falls back to row 0. A refused transition puts the parent field
  * back, so a child whose emitted parent serves another caller keeps it. Entering
- * the slot list or the recall page republishes the seven slot names, so names
- * loaded from the card appear when the page is discovered. Returns the
+ * the slot list or SELECT CUSTOM SETTING republishes the seven slot names, so
+ * names loaded from the card appear when the page is discovered. Returns the
  * transition result. */
 uint32_t rb_ui_child_enter(void)
 {
@@ -433,12 +465,21 @@ uint32_t rb_ui_child_enter(void)
   if (child == 0u) {
     return 1u;
   }
+#ifdef RB_RAM_DIAGNOSTICS
+  rb_select_diag_arm((RbMenuFrame){frame}, (RbMenuFrame){child});
+#endif
   parent = rb_ui_word(child + RB_NODE_PARENT);
   rb_ui_store(child + RB_NODE_PARENT, frame);
   rb_call_stage_open(0x0eu, 0x1du);
   result = rb_call_transition();
+#ifdef RB_RAM_DIAGNOSTICS
+  rb_select_diag_freeze((RbObservedWord){result});
+#endif
   if (result != 0xffffffffu && result != 2u) {
     rb_ui_store(child + RB_NODE_PARENT, parent);
+#ifdef RB_RAM_DIAGNOSTICS
+    rb_select_diag_publish();
+#endif
     return result;
   }
   rb_ui_view_changed();
@@ -453,12 +494,15 @@ uint32_t rb_ui_child_enter(void)
       rb_ui_store(RB_UI_VISIBLE_CURSOR_CELL, 0u);
     }
   }
-  if (cls == RB_UI_CLASS_SLOT || cls == RB_UI_CLASS_RECALL) {
+  if (cls == RB_UI_CLASS_SLOT || cls == RB_UI_CLASS_SELECT) {
     uint32_t k;
     for (k = 0u; k < RB_BANK_SLOTS; k++) {
       (void)rb_slot_load(k);
     }
   }
+#ifdef RB_RAM_DIAGNOSTICS
+  rb_select_diag_publish();
+#endif
   return result;
 }
 
@@ -583,10 +627,10 @@ uint32_t rb_bank_interpose(void)
     if (frame == 0x0078ea98u && rb_ui_row_ok(values, cursor) != 0u) {
       token = rb_ui_word(values + cursor * 8u);
       child = rb_ui_word(values + cursor * 8u + 4u);
-      if ((token == RB_UI_TOKEN_ITEM_EDIT_SAVE || token == RB_UI_TOKEN_ITEM_RECALL) &&
+      if ((token == RB_UI_TOKEN_ITEM_EDIT_SAVE || token == RB_UI_TOKEN_ITEM_SELECT) &&
           child != 0u) {
         uint32_t child_cls = rb_ui_word(child + RB_NODE_X);
-        if (child_cls == RB_UI_CLASS_SLOT || child_cls == RB_UI_CLASS_RECALL) {
+        if (child_cls == RB_UI_CLASS_SLOT || child_cls == RB_UI_CLASS_SELECT) {
           return rb_ui_child_enter();
         }
       }
@@ -642,13 +686,13 @@ uint32_t rb_bank_interpose(void)
     }
     return result;
   }
-  /* OK applies the slot, then the stock SET delegate's leaf exit pops to the
-   * shooting menu, requests 0x930 and sets 0x009504a8. A refused recall has
+  /* OK selects the row, then the stock SET delegate's leaf exit pops to the
+   * shooting menu, requests 0x930 and sets 0x009504a8. A refused selection has
    * reported its status and stays on the list. */
-  if (page == RB_PAGE_RECALL) {
+  if (page == RB_PAGE_SELECT) {
     uint32_t result;
-    if (token < RB_UI_TOKEN_RECALL_BASE ||
-        token >= RB_UI_TOKEN_RECALL_BASE + RB_BANK_SLOTS) {
+    if (token < RB_UI_TOKEN_SELECT_BASE ||
+        token >= RB_UI_TOKEN_SELECT_BASE + RB_UI_SELECT_ROWS) {
       return rb_ui_stock(state, event);
     }
     if (rb_bank_action(token, rb_verb_identity) != RB_OK) {
@@ -748,8 +792,8 @@ static uint32_t rb_verb_run(RbBankItemRef item, RbMediaIdentity identity)
       return rb_verb_reset(item.slot, identity);
     }
     return (uint32_t)RB_RANGE;
-  case RB_ITEM_RECALL:
-    return rb_recall(item.slot, identity);
+  case RB_ITEM_SELECT:
+    return rb_select(item.selection, identity);
   default:
     return (uint32_t)RB_RANGE;
   }

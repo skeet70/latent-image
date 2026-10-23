@@ -46,7 +46,7 @@ import qualified Data.Vector as V
 import Data.Word (Word32)
 import FujiAF.JSON (decodeStrictIntegers)
 import Numeric (readHex, showHex)
-import RecipeBankRamLayout (runtimeAllocationSize, runtimeDataBase, runtimeExecutableBase)
+import RecipeBankRamPlacement (runtimeAllocationSize, runtimeDataBase, runtimeExecutableBase)
 
 -- * Allowlist
 
@@ -563,9 +563,11 @@ data Context = Context
   { contextElf :: Elf
   , contextLayout :: Layout
   , contextAllowlist :: Allowlist
-  , bankFunctions :: M.Map Word32 String
+  , bankFunctions :: M.Map Word32 Function
   , codeWords :: S.Set Word32
   , namedObjects :: [(Word32, Word32, String)]
+  , -- | The (callee entry, argument) pairs being analysed with that argument 0.
+    zeroArguments :: [(Word32, Reg)]
   }
 
 -- | A bank function, or a run of ARM code that no function symbol covers.
@@ -694,11 +696,17 @@ setRegister (Reg n) value state =
     }
 
 -- | Narrows the compared register on a path where `cond` holds after `cmp r, #k`.
-refine :: Cond -> State -> State
-refine (Cond 14) state = state
+-- Nothing when the register's exact values rule out an EQ or NE path.
+refine :: Cond -> State -> Maybe State
+refine (Cond 14) state = Just state
 refine (Cond c) state = case comparison state of
-  Nothing -> state
-  Just (Comparison _ _ False) | c > 1 -> state
+  Nothing -> Just state
+  Just (Comparison _ _ False) | c > 1 -> Just state
+  Just (Comparison (Reg n) k _)
+    | c <= 1
+    , Just (Exact values) <- M.lookup n (registers state)
+    , if c == 0 then S.notMember k values else values == S.singleton k ->
+        Nothing
   Just (Comparison (Reg n) k _) ->
     let current = fromMaybe Unknown (M.lookup n (registers state))
         nonNegative = maybe False ((<= 0x7fffffff) . snd) (bounds current) && k <= 0x7fffffff
@@ -718,7 +726,7 @@ refine (Cond c) state = case comparison state of
           12 | nonNegative -> clamp current (k + 1) maxBound
           13 | nonNegative -> clamp current 0 k
           _ -> Nothing
-     in maybe state (\value -> state {registers = M.insert n value (registers state)}) narrowed
+     in Just (maybe state (\value -> state {registers = M.insert n value (registers state)}) narrowed)
  where
   clamp current lo hi = case current of
     Exact values -> let kept = S.filter (\v -> lo <= v && v <= hi) values in if S.null kept then Nothing else Just (Exact kept)
@@ -862,14 +870,16 @@ execute context function address instruction state = case instruction of
 
   -- A conditional instruction runs on the path where its condition holds and
   -- is skipped on the other; each path carries what it knows about the flags
-  -- until an instruction changes them.
+  -- until an instruction changes them. A path `refine` rules out is dropped.
   conditional :: Cond -> (State -> Outcome) -> (State -> State) -> Outcome
   conditional cond run skip = case known cond of
     Just True -> run state
     Just False -> continue (skip state)
     Nothing ->
-      let taken = run (assume cond)
-       in taken {outcomeSuccessors = outcomeSuccessors taken ++ [next (skip (assume (negateCond cond)))]}
+      let failed = [next (skip s) | Just s <- [assume (negateCond cond)]]
+       in case assume cond of
+            Just held -> let taken = run held in taken {outcomeSuccessors = outcomeSuccessors taken ++ failed}
+            Nothing -> Outcome failed [] 0 0
 
   -- A transfer that leaves the straight line: the fallthrough exists only
   -- when the condition can fail.
@@ -880,7 +890,7 @@ execute context function address instruction state = case instruction of
     | cond == always || holds state == Just cond = Just True
     | holds state == Just (negateCond cond) = Just False
     | otherwise = Nothing
-  assume cond = (refine cond state) {holds = maybe (Just cond) Just (holds state)}
+  assume cond = (\s -> s {holds = maybe (Just cond) Just (holds state)}) <$> refine cond state
 
   transferAddress s rn offset indexing = case indexing of
     PostIndexed -> registerValue address s rn
@@ -1007,22 +1017,32 @@ execute context function address instruction state = case instruction of
       concat
         [ obligation s (declarationAccess d) callee r depth
         | d <- declarations allowlist
-        , declarationFunction d == callee
+        , declarationFunction d == functionName callee
         , Just (r, depth) <- [argumentRoot (declarationThrough d)]
         ]
   obligation s access callee r depth =
     let value = registerValue address s r
         what =
-          "passes " ++ regName r ++ " to " ++ callee ++ ", which "
+          "passes " ++ regName r ++ " to " ++ functionName callee ++ ", which "
             ++ (if access == StoreAccess then "stores" else "branches")
             ++ (if depth == 0 then " through it," else " through a word loaded from it,")
      in case value of
           Derived p -> unproven access what (derefs depth p)
           _
+            | value == exact 0 -> zeroArgument callee r what
             | depth == 0 && access == StoreAccess && provenPointer value -> []
             | depth == 0 && access == BranchAccess, Just targets <- enumerate value -> concatMap (targetFindings s True) targets
             | depth > 0, Just (lo, _) <- bounds value -> unproven access what (derefs (depth - 1) (Cell (locate context lo)))
             | otherwise -> [violation UnprovenArgument (what ++ " with an unproven value" ++ describe value)]
+  -- A 0 argument passes when the callee, analysed from an entry with that
+  -- argument 0, has no violation besides code that analysis does not reach.
+  zeroArgument callee r what
+    | (functionStart callee, r) `notElem` zeroArguments context
+    , let nested = context {zeroArguments = (functionStart callee, r) : zeroArguments context}
+          (found, _, _, _) = analyse nested (setRegister r (exact 0) entryState) callee
+    , all (\f -> findingVerdict f /= Violation || findingReason f == Unreached) found =
+        []
+    | otherwise = [violation UnprovenArgument (what ++ " with 0, and the callee analysed with that argument 0 has a violation")]
   provenPointer value = case value of
     StackOffset _ -> True
     StackSpan _ _ -> True
@@ -1053,7 +1073,7 @@ execute context function address instruction state = case instruction of
     kind = if call then "call" else "branch"
     through = maybe " through a loaded program counter" ((" through " ++) . regName) register
 
-  calleeAt target = Just (maybe (StockFunction target) BankFunction (M.lookup target (bankFunctions context)))
+  calleeAt target = Just (maybe (StockFunction target) (BankFunction . functionName) (M.lookup target (bankFunctions context)))
   calleeOf value = case enumerate value of
     Just [target] -> calleeAt target
     _ -> Nothing
@@ -1118,13 +1138,13 @@ checkBank allowlist elf = do
         , symbolSize s > 0
         , symbolValue s >= textStart layout && symbolValue s < imageEnd layout
         ]
-      context = Context elf layout allowlist (M.fromList [(functionStart f, functionName f) | f <- named]) code objects
+      context = Context elf layout allowlist (M.fromList [(functionStart f, f) | f <- named]) code objects []
       overlapping =
         [ Finding (functionStart g) "<layout>" Violation LayoutProblem ("function " ++ functionName g ++ " overlaps " ++ functionName f)
         | (f, g) <- zip functions (drop 1 functions)
         , functionStart g < functionEnd f
         ]
-      perFunction = map (analyse context) functions
+      perFunction = map (analyse context entryState) functions
       undeclaredNames =
         [ Finding 0 (declarationFunction d) Violation UnknownDeclaredFunction "unproven declaration names no bank function"
         | d <- declarations allowlist
@@ -1151,12 +1171,12 @@ checkBank allowlist elf = do
       , reportFunctions = length functions
       }
 
--- | Fixpoint over one function's control-flow graph, with a state per
+-- | Fixpoint over one function's control-flow graph from `entry`, with a state per
 -- address and known flag condition, then one findings pass over the final
 -- states. An address's store or branch counts as proven when it is proven
 -- in every state that reaches it.
-analyse :: Context -> Function -> ([Finding], Int, Int, Int)
-analyse context function =
+analyse :: Context -> State -> Function -> ([Finding], Int, Int, Int)
+analyse context entry function =
   ( unreached ++ concatMap (\(found, _, _) -> found) perAddress
   , sum [n | (_, n, _) <- perAddress]
   , sum [n | (_, _, n) <- perAddress]
@@ -1176,7 +1196,7 @@ analyse context function =
       [0xff, 0xffff, 0x7fffffff, maxBound]
         ++ concat [[k - 1, k, k + 1] | (_, DataProcessing _ CMP _ _ _ (Immediate k)) <- instructions, k > 0, k < maxBound]
   start = (functionStart function, Nothing)
-  states = fixpoint (M.singleton start entryState) (M.singleton start (0 :: Int)) [start]
+  states = fixpoint (M.singleton start entry) (M.singleton start (0 :: Int)) [start]
   fixpoint known _ [] = known
   fixpoint known visits (key@(a, _) : rest) = case (M.lookup a table, M.lookup key known) of
     (Just instruction, Just s) ->

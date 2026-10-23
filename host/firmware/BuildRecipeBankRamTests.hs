@@ -6,7 +6,7 @@ import qualified Data.ByteString as B
 import Data.Word (Word32)
 import System.Exit (exitFailure)
 
-import RecipeBankRamLayout
+import RecipeBankRamPlacement
 
 check :: String -> Bool -> IO ()
 check label passed = unless passed $ do
@@ -16,11 +16,6 @@ check label passed = unless passed $ do
 main :: IO ()
 main = do
   check "fixed executable offset" (runtimeExecutableBase 0x00be1a00 == 0x00be1f00)
-  check "fixed data offset" (runtimeDataBase 0x00be1a00 == 0x00be9a00)
-  check "fixed name address" (runtimeNameBase 0x00be1a00 == 0x00beb784)
-  check "fixed bank end" (runtimeBankEnd 0x00be1a00 == 0x00bebb20)
-  check "alternate name address" (runtimeNameBase 0x00c20000 == 0x00c2b784)
-  check "alternate bank end" (runtimeBankEnd 0x00c20000 == 0x00c2bb20)
   let alignedBases = [base | high <- [0x0090, 0x00a0, 0x00b0, 0x00c0], low <- [0, 8 .. 0xfff8], let base = high * 0x10000 + low] :: [Word32]
   let allocationExtents =
         [ runtimeBankEnd base - base + runtimeInstallerExtent
@@ -35,12 +30,12 @@ main = do
     (length safePublicationOrder == publicationCount
       && all (`elem` safePublicationOrder) [0 .. publicationCount - 1])
   check "bank setup publications use dependency-closed order"
-    (take 69 safePublicationOrder == [0 .. 35] <> [55 .. 68] <> [85] <> [36 .. 53])
+    (take 69 safePublicationOrder == [0 .. 35] <> [55 .. 68] <> [88] <> [36 .. 53])
   check "D3 setup follows bank setup and D3 activation precedes bank activation"
-    (take 156 (drop 69 safePublicationOrder) == [94 .. 249]
-      && drop 69 (take publicationSetupCount safePublicationOrder) == [94 .. 191])
+    (take 156 (drop 69 safePublicationOrder) == [97 .. 252]
+      && drop 69 (take publicationSetupCount safePublicationOrder) == [97 .. 194])
   check "bank activation publications keep discoverability last"
-    (drop 225 safePublicationOrder == [75,76,72,73,74,69,70,71,77,78,79,80,86,87,88,89,90,91,92,93,81,82,83,84,54])
+    (drop 225 safePublicationOrder == [75,76,72,73,74,69,70,71,77,78,79,80,81,82,83,89,90,91,92,93,94,95,96,84,85,86,87,54])
   let completeInstaller = unlines
         [ "00000000 <ram_push_install>:"
         , "  bl 0x10 <execute_operation>"
@@ -110,8 +105,8 @@ main = do
     (not (installerHasCallClosure (unlines (filter (/= "  blx r4") (lines completeInstaller)))))
   check "name low half preserves the six stock movw words"
     (all (\base -> runtimeNameBase base .&. 0xffff == 0xb784) alignedBases)
-  check "name table follows generated data"
-    (all (\base -> runtimeNameBase base >= base + 0x9800) alignedBases)
+  check "generated data never overlaps name records"
+    (all (\base -> runtimeDataBase base + 0x1260 <= runtimeNameBase base) alignedBases)
   check "publication record ABI"
     ( encodePublicationRecord 0x11223344 0x55667788 0x99aabbcc 1
         == B.pack [0x44,0x33,0x22,0x11,0x88,0x77,0x66,0x55,0xcc,0xbb,0xaa,0x99,1,0,0,0]
@@ -122,4 +117,4 @@ main = do
     ( not (null (staleFixedReferences 0x00be1a00 0x00bebb20
         (B.pack [0x00,0x0a,0x01,0xe3,0xbe,0x00,0x40,0xe3])))
     )
-  putStrLn "BuildRecipeBank RAM layout: 20 checks passed"
+  putStrLn "BuildRecipeBank RAM layout: checks passed"

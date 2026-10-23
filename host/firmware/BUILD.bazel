@@ -42,6 +42,25 @@ haskell_binary(
     ],
 )
 
+haskell_binary(
+    name = "decode-recipe-discovery",
+    srcs = ["DecodeRecipeDiscovery.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+        "//host:text",
+        "//host:update-container",
+    ],
+)
+
 haskell_test(
     name = "framing-tests",
     srcs = ["FramingTests.hs"],
@@ -234,6 +253,7 @@ haskell_binary(
     srcs = [
         "BuildRecipeBank.hs",
         "RecipeBankRamLayout.hs",
+        "RecipeBankRamPlacement.hs",
     ],
     ghcopts = [
         "-Wall",
@@ -1111,6 +1131,7 @@ haskell_library(
         "ArmElf.hs",
         "BankAllowlist.hs",
         "RecipeBankRamLayout.hs",
+        "RecipeBankRamPlacement.hs",
     ],
     ghcopts = [
         "-Wall",
@@ -1135,12 +1156,12 @@ haskell_test(
     args = [
         "$(location //menu:recipe_bank_allowlist.json)",
         "$(location :check-bank-allowlist)",
-        "$(location :bank-elf-00c20000)",
-        "$(location :bank-elf-00c21f88)",
+        "$(location :bank-elf-00c40000)",
+        "$(location :bank-elf-00c4fc88)",
     ],
     data = [
-        ":bank-elf-00c20000",
-        ":bank-elf-00c21f88",
+        ":bank-elf-00c40000",
+        ":bank-elf-00c4fc88",
         ":check-bank-allowlist",
         "//menu:recipe_bank_allowlist.json",
     ],
@@ -1165,6 +1186,7 @@ haskell_test(
     srcs = [
         "BuildRecipeBankRamTests.hs",
         "RecipeBankRamLayout.hs",
+        "RecipeBankRamPlacement.hs",
     ],
     ghcopts = [
         "-Wall",
@@ -1186,6 +1208,7 @@ filegroup(
     srcs = [
         "BuildRecipeBank.hs",
         "RecipeBankRamLayout.hs",
+        "RecipeBankRamPlacement.hs",
         "//host:FujiAF/Host.hs",
         "//host:FujiAF/JSON.hs",
         "//host:FujiAF/RecipeBank.hs",
@@ -1265,8 +1288,8 @@ genrule(
         "here=$$PWD",
         "root=$$(mktemp -d)",
         "out=private-data/analysis/x-m1-1.50/ram-push/bank-elf",
-        "mkdir -p $$root/menu $$root/$$out",
-        "for source in $(locations //menu:ram-push-relink-sources); do ln -s $$here/$$source $$root/menu/; done",
+        "mkdir -p $$root/$$out",
+        "for source in $(locations //menu:ram-push-relink-sources); do mkdir -p $$root/$$(dirname $$source) && ln -s $$here/$$source $$root/$$source; done",
         "cd $$root",
         " ".join([
             "RAM_PUSH_BUILDER=true",
@@ -1290,8 +1313,8 @@ genrule(
         "@lab_llvm//:bin/llvm-objdump",
     ],
 ) for base in [
-    "00c20000",
-    "00c21f88",
+    "00c40000",
+    "00c4fc88",
 ]]
 
 # The Classic Chrome RAM-push builder (reports/classic-chrome-patch.md

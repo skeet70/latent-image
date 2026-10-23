@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "a8WHk6lGyPwzhd9jng7e2lzT0dWLkUzB1uNRmNukLwU=",
+        "bzlTransitiveDigest": "SgUIc/NymVOsrp5qWag84h+0OP5XUWjW0igu1PmLdrU=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -258,6 +258,27 @@
               "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
               "repositories": {},
               "build_file_content": "\nload(\"@rules_cc//cc:defs.bzl\", \"cc_import\", \"cc_library\")\npackage(default_visibility = [\"//visibility:public\"])\n# Preserve the SONAME in Bazel's runtime symlinks as well as at link time.\ncc_import(name = \"shared\", shared_library = \"lib/libunicorn.so.2\")\ncc_library(\n    name = \"unicorn\",\n    hdrs = glob([\"include/unicorn/*.h\"]),\n    includes = [\"include\"],\n    deps = [\":shared\"],\n)\n",
+              "nixopts": [],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          },
+          "lab_recorder_python": {
+            "bzlFile": "@@rules_nixpkgs_core~//:nixpkgs.bzl",
+            "ruleClassName": "_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "lab_recorder_python",
+              "attribute_path": "",
+              "nix_file": "@@//build-support:recorder-python.nix",
+              "nix_file_deps": {
+                "@@//build-support:nixpkgs.nix": "//build-support:nixpkgs.nix",
+                "@@//:devenv.lock": "//:devenv.lock"
+              },
+              "nix_file_content": "",
+              "nix_license_path": "",
+              "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
+              "repositories": {},
+              "build_file_content": "\nload(\"@rules_cc//cc:defs.bzl\", \"cc_library\")\npackage(default_visibility = [\"//visibility:public\"])\n_headers = glob([\"include/python*/Python.h\"])\n_header = _headers[0] if len(_headers) == 1 else fail(\"Recorder embedding requires exactly one Python.h\")\ncc_library(\n    name = \"headers\",\n    hdrs = [\"recorder-python-runtime.h\"] + glob([\"include/python*/**/*.h\"]),\n    includes = [\".\", _header[:-9]],\n)\n",
               "nixopts": [],
               "quiet": false,
               "fail_not_supported": true

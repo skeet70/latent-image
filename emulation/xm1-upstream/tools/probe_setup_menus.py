@@ -20,11 +20,35 @@ from uuid import uuid4
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from emulator.checkpoint import capture_blocker
-from emulator.menu_inputs import ALIASES, KEY_NAMES, MenuKey, MenuInputs, setup_inventory
+from emulator.menu_inputs import ALIASES, KEY_NAMES, KEY_RECORDS, MenuKey, MenuInputs, setup_inventory
 from tools.continue_rec_scanout import MAX_CONTINUATION, MODE_DIAL_SETTLE, WarmScanoutSession
 
 MAX_PHASE = MAX_CONTINUATION
-DEFAULT_PULSE = 8_000_000
+# Dial positions that reach a usable shooting screen; the others stop at unmodelled devices.
+# Extend as devices are modelled.
+MODE_DIAL_RUNNING = frozenset({'S', 'M', 'P', 'A', 'AUTO', 'C', 'Sports', 'Landscape', 'Portrait'})
+
+
+@dataclass(frozen=True)
+class KeyPulse:
+    hold_instructions: int
+    release_instructions: int
+
+
+DIRECTIONAL_PULSE = KeyPulse(3_000_000, 12_000_000)
+MENU_PULSE = KeyPulse(4_000_000, 6_000_000)
+DIAL_PULSE = KeyPulse(4_000_000, 1_000_000)
+UNMEASURED_PULSE = KeyPulse(8_000_000, 8_000_000)
+
+
+def default_key_pulse(key: MenuKey) -> KeyPulse:
+    if key in (MenuKey.UP, MenuKey.DOWN, MenuKey.LEFT, MenuKey.RIGHT):
+        return DIRECTIONAL_PULSE
+    if key in KEY_RECORDS:
+        return MENU_PULSE
+    if key in (MenuKey.DIAL_LEFT, MenuKey.DIAL_RIGHT):
+        return DIAL_PULSE
+    return UNMEASURED_PULSE
 
 
 class _ObservationWindow(Enum):
@@ -207,8 +231,10 @@ class MenuSession(WarmScanoutSession):
         state['navigation'] = {
             'supported': True,
             'keys': list(KEY_NAMES), 'aliases': dict(ALIASES),
-            'default_hold_instructions': DEFAULT_PULSE,
-            'default_release_instructions': DEFAULT_PULSE,
+            'key_pulse_defaults': {
+                key.value: {'hold_instructions': default_key_pulse(key).hold_instructions,
+                            'release_instructions': default_key_pulse(key).release_instructions}
+                for key in MenuKey},
             'max_instructions_per_phase': MAX_PHASE,
             'checkpoint_present': self.checkpoint is not None,
             'can_save_checkpoint': ready and input_state['inputs_released'] and checkpoint_blocker is None,
@@ -241,8 +267,9 @@ class MenuSession(WarmScanoutSession):
         if render and 'settle_instructions' in options:
             raise ValueError('Render settling cannot be combined with settle_instructions')
         key = MenuKey.parse(options.get('key'))
-        budgets = [options.get('hold_instructions', DEFAULT_PULSE),
-                   options.get('release_instructions', DEFAULT_PULSE),
+        pulse = default_key_pulse(key)
+        budgets = [options.get('hold_instructions', pulse.hold_instructions),
+                   options.get('release_instructions', pulse.release_instructions),
                    options.get('settle_instructions', 0)]
         if any(type(value) is not int or not minimum <= value <= MAX_PHASE
                for value, minimum in zip(budgets, (1, 1, 0))):
@@ -282,7 +309,8 @@ class MenuSession(WarmScanoutSession):
             self.inputs.release()
         if self.board.failure is not None or self.execution_error is not None:
             return self.sample()
-        state = self.run({'limit': budgets[1]})
+        self.board._native.release_menu_key(self, key.value, budgets[1])
+        state = self.sample()
         if budgets[2] and self.board.failure is None and self.execution_error is None:
             state = self.run({'limit': budgets[2]})
         return state
@@ -292,6 +320,9 @@ class MenuSession(WarmScanoutSession):
             raise ValueError('Mode dial takes exactly one position')
         if self.board.failure is not None or self.execution_error is not None:
             raise ValueError('Restore the checkpoint before another input after a strict stop')
+        if options['position'] not in MODE_DIAL_RUNNING:
+            raise ValueError(f"{options['position']} stops the emulator at an unmodelled device; "
+                             f"positions that run: {', '.join(sorted(MODE_DIAL_RUNNING))}")
         availability = self.inputs.availability()
         if not availability['ready']:
             raise ValueError(availability['reason'])
@@ -354,14 +385,18 @@ class MenuSession(WarmScanoutSession):
 
     def interactive(self):
         self.print_state()
-        print('Commands: key NAME, run COUNT, state, inventory, checkpoint, restore, ram HEX COUNT, quit.', flush=True)
+        print('Commands: key NAME [HOLD RELEASE], run COUNT, state, inventory, checkpoint, restore, ram HEX COUNT, quit.', flush=True)
         for line in sys.stdin:
             fields = line.split()
             try:
                 if fields == ['quit']:
                     break
-                if len(fields) == 2 and fields[0] == 'key':
-                    self.print_state(self.key({'key': fields[1]}))
+                if len(fields) in (2, 4) and fields[0] == 'key':
+                    options = {'key': fields[1]}
+                    if len(fields) == 4:
+                        options.update(hold_instructions=int(fields[2], 0),
+                                       release_instructions=int(fields[3], 0))
+                    self.print_state(self.key(options))
                 elif len(fields) == 2 and fields[0] == 'run':
                     limit = int(fields[1], 0)
                     if not 0 <= limit <= MAX_PHASE:
