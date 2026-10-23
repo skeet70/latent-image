@@ -77,39 +77,9 @@
       "source": "menu/recipe_bank_arm.S rb_call_stock_media_close (movw/movt)"
     },
     {
-      "address": "0x0071be74",
-      "name": "RB_BASE_READ",
-      "source": "menu/recipe_bank_storage.c #define RB_BASE_READ"
-    },
-    {
-      "address": "0x0071bfe0",
-      "name": "RB_BASE_WRITE",
-      "source": "menu/recipe_bank_storage.c #define RB_BASE_WRITE"
-    },
-    {
-      "address": "0x0071c134",
-      "name": "RB_BASE_CLOSE",
-      "source": "menu/recipe_bank_storage.c #define RB_BASE_CLOSE"
-    },
-    {
-      "address": "0x0071c2b0",
-      "name": "RB_BASE_OPEN",
-      "source": "menu/recipe_bank_storage.c #define RB_BASE_OPEN"
-    },
-    {
       "address": "0x0071c634",
       "name": "stock media completion signal",
       "source": "menu/recipe_bank_storage.c rb_media_complete"
-    },
-    {
-      "address": "0x0071ce84",
-      "name": "RB_FILE_STAT",
-      "source": "menu/recipe_bank_storage.c #define RB_FILE_STAT"
-    },
-    {
-      "address": "0x0071ddf0",
-      "name": "RB_CARD_STATE",
-      "source": "menu/recipe_bank_storage.c #define RB_CARD_STATE"
     },
     {
       "address": "0x0071eaac",
@@ -120,11 +90,6 @@
       "address": "0x0071eff4",
       "name": "stock media tag release",
       "source": "menu/recipe_bank_storage.c rb_media_guarded_open, rb_media_guarded_close"
-    },
-    {
-      "address": "0x0071f708",
-      "name": "RB_VOL_LETTER",
-      "source": "menu/recipe_bank_storage.c #define RB_VOL_LETTER"
     },
     {
       "address": "0x0071f7e0",
@@ -418,7 +383,7 @@
       "through": {
         "argument": "r0"
       },
-      "reason": "writes the RAW-only restoration state into its rb_apply argument and passes it to rb_admit"
+      "reason": "writes the RAW-only restoration state into its rb_apply argument and passes it to rb_admit; its skip clears for 0xf9 and 0xfa index the rest record by their RB_FIELDS rows, and //host/firmware:emit-recipe-bank-fields refuses to emit or --check a walk without them"
     },
     {
       "function": "rb_admit_base",
@@ -816,7 +781,7 @@
       "through": {
         "index": "stack-frame"
       },
-      "reason": "sets 0x1c6's skip bit in the local rest record (rb_select_rest, inlined); 0x1c6 is RB_FIELDS[2] in menu/recipe_bank_fields.inc, so the store reaches skip word 0"
+      "reason": "sets 0x1c6's skip bit in the local rest record (rb_select_rest, inlined); 0x1c6 is RB_FIELDS[2] in menu/recipe_bank_fields.inc, so the store reaches skip word 0; //host/firmware:emit-recipe-bank-fields refuses to emit or --check a walk without 0x1c6, 0xf9 and 0xfa"
     },
     {
       "function": "rb_selection_effective",
