@@ -10,6 +10,7 @@ OUT_DIR="${OUT_DIR:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013
 KERNEL_DIR="${KERNEL_DIR:-}"
 RUNNER="${RUNNER:-bazel-bin/emulation/native-runner}"
 GEN="${GEN:-bazel-bin/emulation/recipe-bank-ui-cases}"
+JOBS="${JOBS:-8}"
 CANDIDATE="${CANDIDATE:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/package/image}"
 ID4="${ID4:-$CANDIDATE/id4-final.bin}"
 ID4_BASE="${ID4_BASE:-0x0061c1fc}"
@@ -95,6 +96,6 @@ for pair in a:ui-a b:ui-b c:ui-c; do
   llvm-objcopy -j ".text.${pair%%:*}" -O binary "$BUILD_DIR/ui-model.elf" "$BUILD_DIR/${pair##*:}.bin"
 done
 
-"$GEN" --runner "$RUNNER" --build "$BUILD_DIR" --out "$OUT_DIR" --plan "$PLAN" \
+"$GEN" --runner "$RUNNER" --build "$BUILD_DIR" --out "$OUT_DIR" --plan "$PLAN" --jobs "$JOBS" \
   --name-record "${RB_NAME_RECORD%u}" --rb-base "$RB_BASE" \
   --id4 "$ID4" --id4-base "$ID4_BASE" --id5 "$ID5" --fields "$FIELDS"

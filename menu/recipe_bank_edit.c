@@ -135,6 +135,17 @@ uint32_t rb_stage_edit_get(uint32_t host_minus_one)
   return 0u;
 }
 
+uint32_t rb_stage_edit_field_prop(uint32_t host)
+{
+  uint32_t f;
+  for (f = 0u; f < RB_EDIT_FIELD_COUNT; f++) {
+    if (RB_EDIT_FIELD[f].host == host) {
+      return RB_EDIT_FIELD[f].prop;
+    }
+  }
+  return 0u;
+}
+
 /* The pinned stock conversion tables of the nine fields; a row is 12 bytes and
  * its col0 word is the stored code. */
 static const uint32_t RB_EDIT_TABLE[RB_EDIT_FIELD_COUNT] = {

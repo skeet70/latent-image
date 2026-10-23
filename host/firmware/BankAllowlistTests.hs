@@ -1,7 +1,7 @@
 -- | bank-allowlist-tests ALLOWLIST CHECKER ELF_00C20000 ELF_00C21F88
 --
 -- The ELFs are //host/firmware:bank-elf-*, the relink script's output for the
--- current bank sources. Each synthetic fixture is the 0x00c20000 ELF with one
+-- current bank sources. Each synthetic fixture is the 0x00c40000 ELF with one
 -- word replaced at a site located by symbol, so it differs from a clean build
 -- in exactly the violation it names.
 module Main (main) where
@@ -51,6 +51,11 @@ main = do
       statusStore = firstWhere "rb_status_record" (\w -> w .&. 0x0ff00000 == 0x05800000)
       probeCall = firstWhere "rb_probe_entry" (\w -> w .&. 0xff000000 == 0xeb000000)
       frameSetup = firstWhere "rb_status_last" (== 0xe1a0b00d)
+      -- rb_restore_run's `bl rb_assert_run`, which passes a 0 trace that
+      -- rb_assert_one tests before storing through it; the clean ELFs above
+      -- pass with it.
+      zeroCall = maybe (error "no bl rb_assert_run in rb_restore_run") fst (find (\(a, w) -> w == branchLink a (fst (function "rb_assert_run"))) (wordsIn (function "rb_restore_run")))
+      zeroTest = firstWhere "rb_assert_one" (\w -> w .&. 0x0ff0ffff == 0x03500000)
       fixture site word = patch cleanElf clean site word
       expect label bytes reasons = do
         report <- run allowlist bytes
@@ -79,6 +84,16 @@ main = do
     [(frameSetup, ForbiddenInstruction SupervisorCall)]
   expect "interrupt mask change" (fixture frameSetup 0xf10c0080)
     [(frameSetup, ForbiddenInstruction InterruptMask)]
+  -- Signed halfword multiplies in place of `mov r11, sp`.
+  expect "SMLABB" (fixture frameSetup 0xe1030281) []
+  expect "SMLALBB" (fixture frameSetup 0xe1432281)
+    [(frameSetup, ForbiddenInstruction Unadmitted)]
+  expect "SMLABB with a PC operand" (fixture frameSetup 0xe103028f)
+    [(frameSetup, ForbiddenInstruction Unadmitted)]
+  -- rb_assert_one's `cmp rN, #0` replaced by `mov r0, r0`: the 0 trace
+  -- reaches its store.
+  expect "untested 0 argument" (fixture zeroTest 0xe1a00000)
+    [(zeroCall, UnprovenArgument)]
 
   -- The command-line checker's exit status: 0 clean, 1 with a violation.
   temporary <- getTemporaryDirectory
@@ -90,7 +105,7 @@ main = do
   (fixtureCode, output, _) <- readProcessWithExitCode checker [allowlistPath, path] ""
   removeFile path
   check ("checker exits 1 on an undeclared stock call; output: " ++ output) (fixtureCode == ExitFailure 1)
-  putStrLn "bank allowlist: 13 checks passed"
+  putStrLn "bank allowlist: 17 checks passed"
 
 run :: Allowlist -> B.ByteString -> IO Report
 run allowlist bytes = either fail pure (parseElf bytes >>= checkBank allowlist)

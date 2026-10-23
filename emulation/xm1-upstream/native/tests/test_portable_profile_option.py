@@ -943,6 +943,7 @@ class MenuRenderSettleTests(unittest.TestCase):
             'initialized': 1, 'display_suppression': 0, 'batch_busy': 0,
             'batch_callback': 0, 'commands_dirty': 0, 'display_pending': 0,
             'ui_pending': 0, 'ui_busy': 0,
+            'debounced_inputs_released': True,
             'tasks': {role: {'status': 0x12}
                       for role in ('main_ui', 'uilib', 'graphic', 'vglib')},
             'graphics': {
@@ -982,6 +983,19 @@ class MenuRenderSettleTests(unittest.TestCase):
         probe = read_render_state(board)
         self.assertEqual(probe['staged_render_command'], 0x4047)
         self.assertEqual(probe['staged_render_token'], 44)
+
+    def test_published_frame_waits_for_debounced_release(self):
+        for budget, expected in ((1, 'budget-exhausted'), (2, 'render-batch-published-candidate')):
+            with self.subTest(budget=budget):
+                session = RenderSettleSession(self.paused(), self.published())
+
+                def probe():
+                    result = session.probe()
+                    result['debounced_inputs_released'] = session.board.instructions < 2 or session.board.instructions >= 4
+                    return result
+
+                _, result = self.settle_session(session, budget=budget, probe=probe)
+                self.assertEqual(result['status'], expected)
 
     def test_auxiliary_packet_preserves_acknowledged_render_before_and_after_key(self):
         session, result = self.settle(self.paused(), self.published())

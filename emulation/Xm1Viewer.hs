@@ -5,7 +5,7 @@ import Control.Monad (when)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
-import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), E2ESettings (..), OverrideReason (..), PushMode (..), RelinkMode (..), bankD3Payload, classicChromeIconPayload, classicChromePayload, runRamPushE2E)
+import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), OverrideReason (..), PushMode (..), RelinkMode (..), UiConversionProfile (..), bankD3Payload, classicChromeIconPayload, classicChromePayload, runRamPushE2E)
 import Data.List (isPrefixOf, nub)
 import qualified Data.Text as T
 import Data.Word (Word16)
@@ -27,7 +27,7 @@ newtype Port = Port Word16
 
 data Bind = IPv4Loopback
 
-data UiConversionProfile = StrictUiConversion | DeclaredUiCpuFallback
+data CardSelection = WithCard | WithoutCard deriving (Eq)
 
 -- | The RAM payload `--ram-push-e2e` pushes.
 data RamPayloadChoice = BankD3Choice | ClassicChromeChoice | ClassicChromeIconChoice deriving (Eq)
@@ -50,6 +50,7 @@ data Options = Options
   , ramPayloadOption :: RamPayloadChoice
   , attachHoldOption :: AttachHold
   , uiConversionProfileOption :: UiConversionProfile
+  , cardModeOption :: CardSelection
   , portOption :: Port
   , bindOption :: Bind
   }
@@ -72,6 +73,8 @@ usage = unlines
   , "  --sd-card-image PATH   Regular raw virtual-card image beneath private-data/"
   , "  --ff80-rehearsal       Run the closed stock ordinary-boot service session"
   , "  --ram-push-e2e        Run allocation, relink, install, bank UI and unload in emulation"
+  , "  --cardless             --ram-push-e2e: boot the installed DAT and adjustment NAND with no SD"
+  , "                         card through the cardless RAM-push bridge"
   , "  --unreviewed-relink    --ram-push-e2e: relink and push without the compiled source-identity"
   , "                         and publication-contract pins; the receipt records the mode"
   , "  --allowlist-override REASON"
@@ -92,7 +95,8 @@ usage = unlines
   , "                         emulation/ram-push-cc-icon-e2e-trajectories.json with --classic-chrome-icon,"
   , "                         or emulation/ui-trajectories.json with --flash-candidate)"
   , "  --ui-conversion-profile PROFILE"
-  , "                         strict (default) or declared-ui-cpu-fallback"
+  , "                         declared-ui-cpu-fallback (default) or strict; also the profile a"
+  , "                         --ram-push-e2e session boots and keys its attach checkpoint with."
   , "                         The fallback is an unmeasured UI-only model."
   , ""
   , "Default DAT: private-data/firmware/x-m1-1.50/FWUP0002.DAT"
@@ -107,7 +111,7 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice NoAttachHold StrictUiConversion (Port 0) IPv4Loopback
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice NoAttachHold DeclaredUiCpuFallback WithCard (Port 0) IPv4Loopback
     go options [] = pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
@@ -129,6 +133,8 @@ parseCommand args
     go options ("--sd-card-image" : value : rest) = do
       require (not (null value)) "--sd-card-image must be nonempty"
       go options { virtualSDImageOption = Just (VirtualSDImage value) } rest
+    go options ("--cardless" : rest) =
+      go options { cardModeOption = WithoutCard } rest
     go options ("--ff80-rehearsal" : rest) =
       go options { ff80RehearsalOption = True } rest
     go options ("--ram-push-e2e" : rest) =
@@ -220,13 +226,19 @@ launch options = do
   receipt <- traverse (freshReceiptDirectory root) (receiptDirectoryOption options)
   let ff80 = ff80RehearsalOption options
       e2e = ramPushE2EOption options
+      cardless = cardModeOption options == WithoutCard
   require (not (ff80 && e2e)) "--ff80-rehearsal and --ram-push-e2e are exclusive"
+  require (e2e || not cardless) "--cardless belongs to --ram-push-e2e"
   when ff80 $ do
     require (media == Nothing) "--ff80-rehearsal does not accept an SD-card image"
     require (nand /= Nothing) "--ff80-rehearsal requires --installed-nand"
     require (receipt /= Nothing) "--ff80-rehearsal requires --receipt-output"
   when e2e $ do
-    require (media /= Nothing) "--ram-push-e2e requires --sd-card-image"
+    case cardModeOption options of
+      WithCard -> require (media /= Nothing) "--ram-push-e2e requires --sd-card-image"
+      WithoutCard -> do
+        require (media == Nothing) "--cardless boots without --sd-card-image"
+        require (pushModeOption options == RamPush) "--cardless belongs to the RAM push, not --flash-candidate"
     require (nand /= Nothing) "--ram-push-e2e requires --installed-nand"
     require (receipt /= Nothing) "--ram-push-e2e requires --receipt-output"
     require (case firmwareOption options of Just _ -> True; Nothing -> False)
@@ -274,8 +286,11 @@ launch options = do
     else if e2e
       then do
         callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
+        cardInput <- case media of
+          Just (VirtualSDImage image) -> pure (CardBacked image)
+          Nothing | cardless -> pure Cardless
+                  | otherwise -> ioError (userError "--ram-push-e2e requires --sd-card-image")
         let nandPath = case nand of Just (InstalledNand path) -> path; Nothing -> error "validated NAND missing"
-            cardPath = case media of Just (VirtualSDImage path) -> path; Nothing -> error "validated SD image missing"
             receiptPath = case receipt of Just (ReceiptDirectory path) -> path; Nothing -> error "validated receipt directory missing"
             Workspace workspacePath = root
             defaultTrajectories = case (pushModeOption options, ramPayloadOption options) of
@@ -285,18 +300,22 @@ launch options = do
               (FlashCandidate, _) -> "emulation/ui-trajectories.json"
             TrajectoryFile trajectories = maybe (TrajectoryFile defaultTrajectories) id
               (trajectoriesOption options)
+            checkpointRootPath = resolve root $ case cardModeOption options of
+              WithCard -> "private-data/emulator-checkpoints/xm1-ram-push"
+              WithoutCard -> "private-data/emulator-checkpoints/xm1-ram-push-cardless"
             relinkMode = case (relinkModeOption options, allowlistOverrideOption options) of
               (UnreviewedRelink _, Just reason) -> UnreviewedRelink (OverrideAllowlist reason)
               (mode, _) -> mode
             settings = E2ESettings relinkMode (bootModeOption options)
-              (resolve root "private-data/emulator-checkpoints/xm1-ram-push") (segmentsOption options)
+              checkpointRootPath (segmentsOption options)
               (pushModeOption options)
               (case ramPayloadOption options of
                 BankD3Choice -> bankD3Payload
                 ClassicChromeChoice -> classicChromePayload
                 ClassicChromeIconChoice -> classicChromeIconPayload)
               (attachHoldOption options)
-        runRamPushE2E settings python workspacePath (resolve root trajectories) stagedFirmwarePath nandPath cardPath receiptPath
+              (uiConversionProfileOption options) cardInput
+        runRamPushE2E settings python workspacePath (resolve root trajectories) stagedFirmwarePath nandPath receiptPath
       else do
         let Port port = portOption options
             mediaArguments = case media of

@@ -14,6 +14,10 @@ void rb_stage_edit_close(void);
 /* The getter dispatch arm for the nine hosting properties. */
 uint32_t rb_stage_edit_get(uint32_t host_minus_one);
 
+/* The stock property a field list's hosting property edits, 0 for any other
+ * property. */
+uint32_t rb_stage_edit_field_prop(uint32_t host);
+
 /* A field list's OK: store the row's code, the col0 word of the pinned stock
  * table row, into the slot; refusals are reported before returning. */
 uint32_t rb_stage_edit_row(uint32_t host, uint32_t row);

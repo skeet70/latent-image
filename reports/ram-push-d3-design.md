@@ -1,8 +1,10 @@
 # RAM-push D3 design: pushing the complete f6502602 delta over installed RC0
 
-Imported from the private research history (fuji-af) at `179c22e`; commit ids here name that history. It designs the 249-publication push; the 250-publication contract in the tree adds the D3 reopen fix ([session script](ram-push-session-script.md) P1).
+Imported from the private research history (fuji-af) at `179c22e`, with the current-layout pointer below from `cbbd8f4`; commit ids here name that history. It designs the 249-publication push; the 250-publication contract adds the D3 reopen fix (section 9.1).
 
 Host-only design, 2026-10-17. No camera I/O, no emulator run and no source change were made for this report. Evidence labels: **byte-read** (a direct read of a pinned artifact in this pass), **static-inference** (a conclusion drawn from those bytes), **hardware-observed** and **emulated** (cited records), **inherited** (a named record reused without re-derivation), **open** (a named missing fact).
+
+Current 253-publication RAM layout and readiness: [bounded bank-use session](ram-push-session-script.md). Its allocation is `0x1d9d8`; the 249/250-publication calculations below describe their named earlier inputs, not the current allocation command.
 
 ## 1. Result
 

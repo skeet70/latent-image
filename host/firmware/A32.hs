@@ -203,8 +203,21 @@ decode address word
     | word .&. 0x0fff0ff0 == 0x016f0f10 = Compute cond [reg 12 word]
     | word .&. 0x0ff000f0 == 0x01200070 = Rejected Breakpoint
     | word .&. 0x0ff000f0 == 0x01600070 = Rejected ExceptionReturn
+    | testBit word 7 = halfwordMultiply
     | field 7 4 word == 0 = Rejected SystemRegister
     | otherwise = Rejected Unadmitted
+  -- SMLA<x><y>, SMLAW<y>, SMULW<y> and SMUL<x><y>; SMLAL<x><y> and any PC
+  -- operand stay unadmitted.
+  halfwordMultiply
+    | pc `elem` [reg 16 word, reg 8 word, reg 0 word] = Rejected Unadmitted
+    | otherwise = case field 22 21 word of
+        0 | accumulator /= pc -> Compute cond [reg 16 word]
+        1 | not (testBit word 5), accumulator /= pc -> Compute cond [reg 16 word]
+        1 | testBit word 5, field 15 12 word == 0 -> Compute cond [reg 16 word]
+        3 | field 15 12 word == 0 -> Compute cond [reg 16 word]
+        _ -> Rejected Unadmitted
+   where
+    accumulator = reg 12 word
   extraTransfer =
     let load = testBit word 20
         offset

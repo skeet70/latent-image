@@ -44,7 +44,6 @@ module FujiAF.RecipeBank
   , encodeSlotPayloadOver
   , payloadBytes
   , bankCapacity
-  , bankBlobBytes
     -- * Names
   , nameUnits
   , nameBytes
@@ -78,30 +77,69 @@ module FujiAF.RecipeBank
   , PlainLoadAddress (..)
   , PlainFlashOffset (..)
   , validatePlainCarrier
+    -- * Bank state
+  , BankSlot (..)
+  , bankSlots
+  , Selection (..)
+  , AutoUpdate (..)
+  , EligibleMode (..)
+  , BankPayload
+  , bankPayload
+  , canonicalBankPayload
+  , bankPayloadContents
+  , SlotName
+  , slotName
+  , slotNameText
+  , BankBase (..)
+  , BankRecord (..)
+  , BankRecords
+  , bankRecordsFromList
+  , bankRecordList
+  , bankRecordAt
+  , BankGeneration (..)
+  , BankState (..)
+  , validateBankState
     -- * Bank file
-  , FileSlot (..)
-  , encodeFileBlob
-  , decodeFileBlob
-  , BankHeader (..)
-  , headerBytes
   , bankFileBytes
   , bankFileA
   , bankFileB
   , BankFileId (..)
   , bankChecksum
   , encodeBankFile
+  , V1Slot (..)
+  , V1Bank
+  , v1Generation
+  , v1Slots
+  , migrateV1
+  , DecodedBank (..)
+  , decodedGeneration
+  , decodedState
   , decodeBankFile
-  , pickCurrentFile
-  , chooseWriteTarget
-  , nextGeneration
+    -- * Payload safety
+  , FieldCode (..)
+  , SizePair (..)
+  , QualityRaw (..)
+  , PayloadDomain (..)
+  , payloadDomainFromImage4
+  , payloadUnsafeReason
+  , withImageSizeRow
+  , BankFileClass (..)
+  , classifyBankFile
+    -- * Choosing the bank
+  , BankOutcome (..)
+  , chooseBank
+  , WriteRefusal (..)
+  , NextWrite (..)
+  , nextWrite
   ) where
 
-import Control.Monad (when)
-import Data.Bits (complement, shiftL, shiftR, (.&.), (.|.))
+import Control.Monad (forM, unless, when)
+import Data.Bits (complement, shiftL, shiftR, testBit, (.&.), (.|.))
 import qualified Data.ByteString as B
 import Data.Char (ord)
 import Data.List (sort, sortOn)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isNothing, listToMaybe)
+import Data.Ord (Down (..))
 import Data.Word (Word16, Word32, Word8)
 import qualified FujiAF.RecipeBankFields as F
 
@@ -309,9 +347,6 @@ replaceAt bytes i w = B.concat [B.take i bytes, B.singleton w, B.drop (i + 1) by
 -- (recipe-design section 15).
 bankCapacity :: Int
 bankCapacity = 7
-
-bankBlobBytes :: Int
-bankBlobBytes = bankCapacity * (payloadBytes + nameBytes)
 
 -- names -----------------------------------------------------------------
 
@@ -614,90 +649,156 @@ hex32 w = "0x" ++ map nib [28, 24, 20, 16, 12, 8, 4, 0]
  where
   nib s = "0123456789abcdef" !! fromIntegral ((w `shiftR` s) .&. 0xf)
 
+-- bank state ------------------------------------------------------------
+
+-- | A custom bank; the stock C detent is not one of these.
+data BankSlot = C1 | C2 | C3 | C4 | C5 | C6 | C7
+  deriving (Eq, Ord, Show, Enum, Bounded)
+
+bankSlots :: [BankSlot]
+bankSlots = [minBound .. maxBound]
+
+data Selection = NothingSelected | Custom BankSlot
+  deriving (Eq, Show)
+
+data AutoUpdate = Disabled | Enabled
+  deriving (Eq, Show)
+
+-- | The shooting mode a base snapshot was captured in.
+data EligibleMode = P | S | A | M
+  deriving (Eq, Show, Enum, Bounded)
+
+-- | A 0x28 payload whose unbound bits are zero.
+newtype BankPayload = BankPayload B.ByteString
+  deriving (Eq, Show)
+
+-- | The unbound mask is the generated one the storage kernel's
+-- RB_UNBOUND_MASK carries; +0x0a bits 5-7 carry property 0xe9 and are bound.
+bankPayload :: B.ByteString -> Either String BankPayload
+bankPayload bytes
+  | B.length bytes /= payloadBytes =
+      Left ("payload: expected " ++ show payloadBytes ++ " bytes, got " ++ show (B.length bytes))
+  | not (all (== 0) (B.zipWith (.&.) bytes (B.pack F.unboundMask))) =
+      Left "payload: data in the unbound bits"
+  | otherwise = pure (BankPayload bytes)
+
+-- | The payload with its unbound bits cleared, as a write stores it.
+canonicalBankPayload :: B.ByteString -> Either String BankPayload
+canonicalBankPayload bytes
+  | B.length bytes /= payloadBytes = bankPayload bytes
+  | otherwise = bankPayload (B.pack (B.zipWith (.&.) bytes (B.pack (map complement F.unboundMask))))
+
+bankPayloadContents :: BankPayload -> B.ByteString
+bankPayloadContents (BankPayload bytes) = bytes
+
+-- | A name 'encodeName' admits.
+newtype SlotName = SlotName String
+  deriving (Eq, Show)
+
+slotName :: String -> Either String SlotName
+slotName text = SlotName text <$ encodeName text
+
+slotNameText :: SlotName -> String
+slotNameText (SlotName text) = text
+
+data BankBase = BaseInvalid | BaseValid EligibleMode BankPayload
+  deriving (Eq, Show)
+
+-- | A populated record: name, saved payload, working payload.
+data BankRecord = Unpopulated | Populated SlotName BankPayload BankPayload
+  deriving (Eq, Show)
+
+-- | Exactly 'bankCapacity' records, C1 first.
+newtype BankRecords = BankRecords [BankRecord]
+  deriving (Eq, Show)
+
+bankRecordsFromList :: [BankRecord] -> Either String BankRecords
+bankRecordsFromList records
+  | length records /= bankCapacity =
+      Left ("bank: " ++ show (length records) ++ " records, expected " ++ show bankCapacity)
+  | otherwise = pure (BankRecords records)
+
+bankRecordList :: BankRecords -> [BankRecord]
+bankRecordList (BankRecords records) = records
+
+bankRecordAt :: BankSlot -> BankRecords -> BankRecord
+bankRecordAt slot (BankRecords records) = records !! fromEnum slot
+
+newtype BankGeneration = BankGeneration Word32
+  deriving (Eq, Ord, Show)
+
+data BankState = BankState
+  { bankGeneration :: BankGeneration
+  , bankSelection :: Selection
+  , bankAutoUpdate :: AutoUpdate
+  , bankBase :: BankBase
+  , bankRecords :: BankRecords
+  }
+  deriving (Eq, Show)
+
+-- | The state-level structural rules: a custom selection names a populated
+-- slot and has a valid base, and ENABLE has working equal to saved in every
+-- populated record.
+validateBankState :: BankState -> Either String ()
+validateBankState st = do
+  case bankSelection st of
+    NothingSelected -> pure ()
+    Custom selected -> do
+      when (bankRecordAt selected (bankRecords st) == Unpopulated) $
+        Left ("bank: selection " ++ show selected ++ " names an unpopulated slot")
+      when (bankBase st == BaseInvalid) $
+        Left ("bank: selection " ++ show selected ++ " without a valid base")
+  when (bankAutoUpdate st == Enabled) $
+    sequence_
+      [ Left ("bank: ENABLE with working differing from saved in " ++ show slot)
+      | (slot, Populated _ saved working) <- zip bankSlots (bankRecordList (bankRecords st))
+      , saved /= working
+      ]
+
 -- bank file -------------------------------------------------------------
 
--- | One slot as the SD file carries it: the full 0x28 payload bytes plus the
--- 26-byte name. The file stores the snapshot byte for byte and a read back
--- round-trips it verbatim; what the property walk leaves in the payload's
--- unbound bytes is not established here.
-data FileSlot = FileSlot
-  { fileSlotName :: String
-  , fileSlotPayload :: B.ByteString
-  }
-  deriving (Eq, Show)
-
--- | The pad 'encodeFileBlob' uses when a caller passes fewer than 'bankCapacity'
--- slots. Its zero payload is not a card payload: the storage kernel's code
--- tables refuse zero for several fields, so a real card pads with the body
--- defaults through 'encodeSlotPayloadOver'.
-emptyFileSlot :: FileSlot
-emptyFileSlot = FileSlot "" (B.replicate payloadBytes 0)
-
--- | The unbound mask comes from the same generated table the storage kernel's
--- RB_UNBOUND_MASK does: writes zero only those bits and reads require them
--- zero. +0x0a bits 5-7 carry property 0xe9, which no walk carries, so they are
--- preserved.
-normalizePayload :: B.ByteString -> B.ByteString
-normalizePayload payload = B.pack (B.zipWith (.&.) payload (B.pack (map complement F.unboundMask)))
-
-unboundBitsCanonical :: B.ByteString -> Bool
-unboundBitsCanonical payload = all (== 0) (B.zipWith (.&.) payload (B.pack F.unboundMask))
-
--- | The bank blob from file slots: payloads back to back, then names. Slots
--- past the filled count are zero payloads and empty names, so the blob length
--- does not depend on the filled count.
-encodeFileBlob :: [FileSlot] -> Either String B.ByteString
-encodeFileBlob slots
-  | length slots > bankCapacity =
-      Left ("bank: " ++ show (length slots) ++ " slots exceed capacity " ++ show bankCapacity)
-  | otherwise = do
-      let full = slots ++ replicate (bankCapacity - length slots) emptyFileSlot
-      payloads <- mapM checkPayload (map fileSlotPayload full)
-      names <- mapM encodeName (map fileSlotName full)
-      pure (B.concat payloads `B.append` B.concat names)
- where
-  checkPayload bytes
-    | B.length bytes /= payloadBytes =
-        Left ("payload: expected " ++ show payloadBytes ++ " bytes, got " ++ show (B.length bytes))
-    | otherwise = pure (normalizePayload bytes)
-
-decodeFileBlob :: B.ByteString -> Either String [FileSlot]
-decodeFileBlob bytes
-  | B.length bytes /= bankBlobBytes =
-      Left ("bank: expected " ++ show bankBlobBytes ++ " bytes, got " ++ show (B.length bytes))
-  | otherwise = mapM slotAt [0 .. bankCapacity - 1]
- where
-  nameBlock = B.drop (bankCapacity * payloadBytes) bytes
-  slotAt i = do
-    name <- decodeName (B.take nameBytes (B.drop (i * nameBytes) nameBlock))
-    let payload = B.take payloadBytes (B.drop (i * payloadBytes) bytes)
-    if unboundBitsCanonical payload
-      then pure (FileSlot name payload)
-      else Left ("bank: slot " ++ show i ++ " carries data in the payload's unbound bits")
-
--- | The bank file header: 32 typed bytes, then the blob, then zero fill to
--- 512. Two files per card carry successive generations.
-data BankHeader = BankHeader
-  { bankGeneration :: Word32
-  , bankSlotValid :: Word16
-  }
-  deriving (Eq, Show)
-
-headerBytes :: Int
-headerBytes = 0x20
-
 bankFileBytes :: Int
-bankFileBytes = 512
+bankFileBytes = 1024
+
+v1FileBytes :: Int
+v1FileBytes = 512
 
 bankFileA, bankFileB :: String
 bankFileA = "RECIPEA.BIN"
 bankFileB = "RECIPEB.BIN"
 
 data BankFileId = FileA | FileB
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
+
+firmwareTag :: Word32
+firmwareTag = 150
+
+-- | The header fields that differ between the two versions.
+data FileLayout = FileLayout
+  { layoutVersion :: Word32
+  , layoutHeader :: Int
+  , layoutBody :: Int
+  }
+
+v1Layout, v2Layout :: FileLayout
+v1Layout = FileLayout 1 0x20 (bankCapacity * (payloadBytes + nameBytes))
+v2Layout = FileLayout 2 0x40 (payloadBytes + bankCapacity * recordBytes)
+
+-- | One v2 record: name, saved payload, working payload.
+recordBytes :: Int
+recordBytes = nameBytes + 2 * payloadBytes
+
+v2RecordsOffset :: Int
+v2RecordsOffset = layoutHeader v2Layout + payloadBytes
 
 le16 :: Word16 -> B.ByteString
 le16 w = B.pack [fromIntegral (w .&. 0xff), fromIntegral (w `shiftR` 8)]
+
+le16At :: B.ByteString -> Int -> Word32
+le16At bytes o = fromIntegral (B.index bytes o) .|. (fromIntegral (B.index bytes (o + 1)) `shiftL` 8)
+
+le32At :: B.ByteString -> Int -> Word32
+le32At bytes o = foldl' (.|.) 0 [fromIntegral (B.index bytes (o + i)) `shiftL` (8 * i) | i <- [0 .. 3 :: Int]]
 
 -- | The container main-range convention (E-CHECKSUM): the complement of the
 -- sum of the eight-bit complemented bytes.
@@ -706,87 +807,405 @@ bankChecksum bytes = complement (B.foldl' step 0 bytes)
  where
   step acc w = acc + fromIntegral (complement w :: Word8)
 
--- | The file checksum: the whole 512 bytes with the checksum field zeroed, so
--- generation and the slot mask are covered.
+-- | The whole file with the checksum field 0x18..0x1b zeroed.
 bankFileChecksum :: B.ByteString -> Word32
 bankFileChecksum file =
   bankChecksum (B.take 0x18 file `B.append` B.replicate 4 0 `B.append` B.drop 0x1c file)
 
-encodeBankFile :: BankHeader -> B.ByteString -> Either String B.ByteString
-encodeBankFile (BankHeader gen mask) blob
-  | B.length blob /= bankBlobBytes =
-      Left ("bank file: blob is " ++ show (B.length blob) ++ " bytes, expected " ++ show bankBlobBytes)
-  | mask >= 2 ^ bankCapacity =
-      Left ("bank file: slot mask " ++ show mask ++ " exceeds " ++ show bankCapacity ++ " slots")
-  | otherwise =
-      let header =
-            B.concat
-              [ "FJRB"
-              , le16 1
-              , le16 (fromIntegral headerBytes)
-              , le16 150
-              , le16 (fromIntegral bankCapacity)
-              , le16 (fromIntegral nameUnits)
-              , le16 (fromIntegral payloadBytes)
-              , word32 gen
-              , word32 (fromIntegral bankBlobBytes)
-              , word32 0
-              , le16 mask
-              , le16 0
-              ]
-          padded =
-            header
-              `B.append` blob
-              `B.append` B.replicate (bankFileBytes - headerBytes - bankBlobBytes) 0
-          checksum = bankFileChecksum padded
-          file = B.concat [B.take 0x18 padded, word32 checksum, B.drop 0x1c padded]
-       in pure file
-
-decodeBankFile :: B.ByteString -> Either String (BankHeader, [FileSlot])
-decodeBankFile bytes
-  | B.length bytes /= bankFileBytes =
-      Left ("bank file: expected " ++ show bankFileBytes ++ " bytes, got " ++ show (B.length bytes))
-  | B.take 4 bytes /= "FJRB" = Left "bank file: bad magic"
-  | le16At 4 /= 1 = Left "bank file: format version"
-  | le16At 6 /= fromIntegral headerBytes = Left "bank file: header length"
-  | le16At 8 /= 150 = Left "bank file: firmware tag"
-  | le16At 10 /= fromIntegral bankCapacity = Left "bank file: slot count"
-  | le16At 12 /= fromIntegral nameUnits = Left "bank file: name units"
-  | le16At 14 /= fromIntegral payloadBytes = Left "bank file: payload length"
-  | le32At 20 /= fromIntegral bankBlobBytes = Left "bank file: blob length"
-  | le16At 30 /= 0 = Left "bank file: reserved word"
-  | mask >= 2 ^ bankCapacity = Left "bank file: slot mask"
-  | B.drop (headerBytes + bankBlobBytes) bytes /= B.replicate (bankFileBytes - headerBytes - bankBlobBytes) 0 =
-      Left "bank file: trailing padding is not zero"
-  | bankFileChecksum bytes /= le32At 24 = Left "bank file: checksum"
-  | otherwise = (,) (BankHeader (le32At 16) mask) <$> decodeFileBlob blob
+-- | The v2 file of a state; a state 'validateBankState' refuses is refused.
+encodeBankFile :: BankState -> Either String B.ByteString
+encodeBankFile st = do
+  validateBankState st
+  records <- mapM encodeRecord (bankRecordList (bankRecords st))
+  let BankGeneration gen = bankGeneration st
+      (baseValid, baseMode, basePayload) = case bankBase st of
+        BaseInvalid -> (0, 0, B.replicate payloadBytes 0)
+        BaseValid mode payload -> (1, fromIntegral (fromEnum mode + 1), bankPayloadContents payload)
+      header =
+        B.concat
+          [ "FJRB"
+          , le16 (fromIntegral (layoutVersion v2Layout))
+          , le16 (fromIntegral (layoutHeader v2Layout))
+          , le16 (fromIntegral firmwareTag)
+          , le16 (fromIntegral bankCapacity)
+          , le16 (fromIntegral nameUnits)
+          , le16 (fromIntegral payloadBytes)
+          , word32 gen
+          , word32 (fromIntegral (layoutBody v2Layout))
+          , word32 0
+          , le16 (populatedMask (bankRecordList (bankRecords st)))
+          , le16 0
+          , B.pack [selectionByte (bankSelection st), autoUpdateByte (bankAutoUpdate st), baseValid, baseMode]
+          , B.replicate (layoutHeader v2Layout - 0x24) 0
+          ]
+      body = B.concat (header : basePayload : records)
+      file = body `B.append` B.replicate (bankFileBytes - B.length body) 0
+  pure (B.concat [B.take 0x18 file, word32 (bankFileChecksum file), B.drop 0x1c file])
  where
-  mask = fromIntegral (le16At 28) :: Word16
-  blob = B.take bankBlobBytes (B.drop headerBytes bytes)
-  le16At :: Int -> Word32
-  le16At o = fromIntegral (B.index bytes o) .|. (fromIntegral (B.index bytes (o + 1)) `shiftL` 8)
-  le32At :: Int -> Word32
-  le32At o = foldl' (.|.) 0 [fromIntegral (B.index bytes (o + i)) `shiftL` (8 * i) | i <- [0 .. 3 :: Int]]
+  encodeRecord Unpopulated = pure (B.replicate recordBytes 0)
+  encodeRecord (Populated (SlotName text) saved working) = do
+    encoded <- encodeName text
+    pure (B.concat [encoded, bankPayloadContents saved, bankPayloadContents working])
+  selectionByte NothingSelected = 0
+  selectionByte (Custom slot) = fromIntegral (fromEnum slot + 1)
+  autoUpdateByte Disabled = 0
+  autoUpdateByte Enabled = 1
 
--- | Load precedence: the valid file with the higher generation; a tie goes to
--- A. The write target is the file not holding the winner, and A when neither
--- is valid, so a write that dies leaves the previous bank loadable.
-pickCurrentFile :: Maybe Word32 -> Maybe Word32 -> Maybe BankFileId
-pickCurrentFile genA genB = case (genA, genB) of
-  (Just a, Just b) -> Just (if a >= b then FileA else FileB)
-  (Just _, Nothing) -> Just FileA
-  (Nothing, Just _) -> Just FileB
-  (Nothing, Nothing) -> Nothing
+populatedMask :: [BankRecord] -> Word16
+populatedMask records = foldl' (.|.) 0 [1 `shiftL` k | (k, Populated {}) <- zip [0 ..] records]
 
-chooseWriteTarget :: Maybe Word32 -> Maybe Word32 -> BankFileId
-chooseWriteTarget genA genB = case pickCurrentFile genA genB of
-  Nothing -> FileA
-  Just FileA -> FileB
-  Just FileB -> FileA
+-- | A v1 slot as migration reads it; an unpopulated slot's bytes are dropped.
+data V1Slot = V1Unpopulated | V1Populated SlotName BankPayload
+  deriving (Eq, Show)
 
-nextGeneration :: Maybe Word32 -> Maybe Word32 -> Either String Word32
-nextGeneration genA genB =
-  let top = maximum (0 : [g | Just g <- [genA, genB]])
-   in if top == 0xffffffff
-        then Left "bank file: generation exhausted"
-        else Right (top + 1)
+-- | A decoded 512-byte v1 file: its generation and 'bankCapacity' slots.
+data V1Bank = V1Bank
+  { v1Generation :: BankGeneration
+  , v1Slots :: [V1Slot]
+  }
+  deriving (Eq, Show)
+
+-- | The resident state of a v1 winner: working = saved, NOTHING SELECTED,
+-- DISABLE, base invalid, the v1 generation.
+migrateV1 :: V1Bank -> BankState
+migrateV1 v1 =
+  BankState
+    { bankGeneration = v1Generation v1
+    , bankSelection = NothingSelected
+    , bankAutoUpdate = Disabled
+    , bankBase = BaseInvalid
+    , bankRecords = BankRecords (map migrated (v1Slots v1))
+    }
+ where
+  migrated V1Unpopulated = Unpopulated
+  migrated (V1Populated named payload) = Populated named payload payload
+
+data DecodedBank = DecodedV1 V1Bank | DecodedV2 BankState
+  deriving (Eq, Show)
+
+decodedGeneration :: DecodedBank -> BankGeneration
+decodedGeneration (DecodedV1 v1) = v1Generation v1
+decodedGeneration (DecodedV2 st) = bankGeneration st
+
+-- | The resident state a decoded file loads as; a v1 file migrates.
+decodedState :: DecodedBank -> BankState
+decodedState (DecodedV1 v1) = migrateV1 v1
+decodedState (DecodedV2 st) = st
+
+-- | The structural rules of either version; the length selects the version.
+decodeBankFile :: B.ByteString -> Either String DecodedBank
+decodeBankFile bytes
+  | B.length bytes == bankFileBytes = DecodedV2 <$> decodeV2 bytes
+  | B.length bytes == v1FileBytes = DecodedV1 <$> decodeV1 bytes
+  | otherwise =
+      Left ("bank file: " ++ show (B.length bytes) ++ " bytes, expected " ++ show v1FileBytes ++ " or " ++ show bankFileBytes)
+
+-- | The header, padding and checksum rules; returns the populated mask.
+checkHeader :: FileLayout -> B.ByteString -> Either String Word32
+checkHeader layout bytes = do
+  when (B.take 4 bytes /= "FJRB") $ Left "bank file: bad magic"
+  when (le16At bytes 4 /= layoutVersion layout) $ Left "bank file: format version"
+  when (le16At bytes 6 /= fromIntegral (layoutHeader layout)) $ Left "bank file: header length"
+  when (le16At bytes 8 /= firmwareTag) $ Left "bank file: firmware tag"
+  when (le16At bytes 10 /= fromIntegral bankCapacity) $ Left "bank file: slot count"
+  when (le16At bytes 12 /= fromIntegral nameUnits) $ Left "bank file: name units"
+  when (le16At bytes 14 /= fromIntegral payloadBytes) $ Left "bank file: payload length"
+  when (le32At bytes 20 /= fromIntegral (layoutBody layout)) $ Left "bank file: body length"
+  when (le16At bytes 30 /= 0) $ Left "bank file: reserved halfword"
+  when (populated >= 2 ^ bankCapacity) $ Left "bank file: populated mask"
+  unless (B.all (== 0) (B.drop (layoutHeader layout + layoutBody layout) bytes)) $
+    Left "bank file: trailing padding is not zero"
+  when (bankFileChecksum bytes /= le32At bytes 24) $ Left "bank file: checksum"
+  pure populated
+ where
+  populated = le16At bytes 28
+
+inSlot :: Int -> Either String a -> Either String a
+inSlot k = either (Left . (("bank file: slot " ++ show k ++ ": ") ++)) Right
+
+decodeV1 :: B.ByteString -> Either String V1Bank
+decodeV1 bytes = do
+  populated <- checkHeader v1Layout bytes
+  slots <- forM [0 .. bankCapacity - 1] $ \k -> do
+    text <- inSlot k (decodeName (slice (nameBlock + k * nameBytes) nameBytes))
+    payload <- inSlot k (bankPayload (slice (layoutHeader v1Layout + k * payloadBytes) payloadBytes))
+    pure (if testBit populated k then V1Populated (SlotName text) payload else V1Unpopulated)
+  pure (V1Bank (BankGeneration (le32At bytes 16)) slots)
+ where
+  nameBlock = layoutHeader v1Layout + bankCapacity * payloadBytes
+  slice o n = B.take n (B.drop o bytes)
+
+decodeV2 :: B.ByteString -> Either String BankState
+decodeV2 bytes = do
+  populated <- checkHeader v2Layout bytes
+  selection <- case B.index bytes 0x20 of
+    0 -> pure NothingSelected
+    n
+      | n <= 7 -> pure (Custom (toEnum (fromIntegral n - 1)))
+      | otherwise -> Left ("bank file: selection byte " ++ show n)
+  autoUpdate <- case B.index bytes 0x21 of
+    0 -> pure Disabled
+    1 -> pure Enabled
+    n -> Left ("bank file: auto-update byte " ++ show n)
+  unless (B.all (== 0) (slice 0x24 (layoutHeader v2Layout - 0x24))) $
+    Left "bank file: reserved bytes 0x24..0x3f are not zero"
+  let basePayload = slice (layoutHeader v2Layout) payloadBytes
+  base <- case (B.index bytes 0x22, B.index bytes 0x23) of
+    (0, 0)
+      | B.all (== 0) basePayload -> pure BaseInvalid
+      | otherwise -> Left "bank file: invalid base with a nonzero payload"
+    (0, mode) -> Left ("bank file: invalid base with capture mode " ++ show mode)
+    (1, mode)
+      | mode >= 1 && mode <= 4 ->
+          BaseValid (toEnum (fromIntegral mode - 1))
+            <$> either (Left . ("bank file: base: " ++)) Right (bankPayload basePayload)
+      | otherwise -> Left ("bank file: base capture mode " ++ show mode)
+    (valid, _) -> Left ("bank file: base valid byte " ++ show valid)
+  records <- forM [0 .. bankCapacity - 1] $ \k -> do
+    let record = slice (v2RecordsOffset + k * recordBytes) recordBytes
+    if testBit populated k
+      then
+        Populated
+          <$> (SlotName <$> inSlot k (decodeName (B.take nameBytes record)))
+          <*> inSlot k (bankPayload (B.take payloadBytes (B.drop nameBytes record)))
+          <*> inSlot k (bankPayload (B.drop (nameBytes + payloadBytes) record))
+      else
+        if B.all (== 0) record
+          then pure Unpopulated
+          else Left ("bank file: unpopulated slot " ++ show k ++ " is not zero")
+  let st = BankState (BankGeneration (le32At bytes 16)) selection autoUpdate base (BankRecords records)
+  validateBankState st
+  pure st
+ where
+  slice o n = B.take n (B.drop o bytes)
+
+-- payload safety --------------------------------------------------------
+
+-- | A walked field's value in its conversion table's col0 terms.
+newtype FieldCode = FieldCode Word32
+  deriving (Eq, Ord, Show)
+
+-- | One IMAGE SIZE row's (0xf6, 0xf9) entry in 0x007a00cc.
+data SizePair = SizePair
+  { sizePairSize :: FieldCode
+  , sizePairAspect :: FieldCode
+  }
+  deriving (Eq, Show)
+
+-- | An IMAGE QUALITY code and the 0x1d code its 0xfa arm writes.
+data QualityRaw = QualityRaw
+  { qualityRawQuality :: FieldCode
+  , qualityRawRaw :: FieldCode
+  }
+  deriving (Eq, Show)
+
+-- | The payload values a stock menu produces: per walked property with a
+-- conversion table the codes that table holds, the offered IMAGE SIZE pairs,
+-- and the IMAGE QUALITY codes with their RAW codes.
+data PayloadDomain = PayloadDomain
+  { domainTables :: [(Word16, [FieldCode])]
+  , domainSizePairs :: [SizePair]
+  , domainQualityRaw :: [QualityRaw]
+  }
+  deriving (Eq, Show)
+
+propSize, propAspect, propQuality, propRaw :: Word16
+propSize = 0xf6
+propAspect = 0xf9
+propQuality = 0xfa
+propRaw = 0x1d
+
+tablePointerBlock :: Word32
+tablePointerBlock = 0x0081b09c
+
+sizePairTable :: Word32
+sizePairTable = 0x007a00cc
+
+imageSizeOfferedRows :: [Int]
+imageSizeOfferedRows = [1, 2, 3, 5, 6, 7, 9, 0xa, 0xb]
+
+-- | The RAW cell the 0xfa arm sets per IMAGE QUALITY row 0-4.
+qualityRawCells :: [Word32]
+qualityRawCells = [0, 0, 2, 2, 1]
+
+-- | The domain out of an image-4 decode loaded at `base`: a table pointer per
+-- walked property at 0x0081b09c + 4 * property (refused when it differs from
+-- the generated field map), the offered rows' pairs at 0x007a00cc + 16 * row,
+-- and per IMAGE QUALITY row the first 0x1d row whose effective column is that
+-- row's RAW cell.
+payloadDomainFromImage4 :: Word32 -> B.ByteString -> Either String PayloadDomain
+payloadDomainFromImage4 base image = do
+  tables <- fmap catMaybes . forM F.payloadFields $ \f -> do
+    pointer <- wordAt (tablePointerBlock + 4 * fromIntegral (F.fieldProperty f))
+    when (pointer /= F.fieldTable f) $
+      Left
+        ( "domain: property "
+            ++ show (F.fieldProperty f)
+            ++ " table pointer "
+            ++ hex32 pointer
+            ++ " differs from the field map's "
+            ++ hex32 (F.fieldTable f)
+        )
+    if pointer == 0
+      then pure Nothing
+      else Just . (,) (F.fieldProperty f) <$> rowsAt pointer 0
+  let tableOf p = maybe (Left ("domain: property " ++ show p ++ " has no conversion table")) pure (lookup p tables)
+  sizeRows <- tableOf propSize
+  pairs <- forM imageSizeOfferedRows $ \row -> do
+    when (row >= length sizeRows) $
+      Left ("domain: IMAGE SIZE row " ++ show row ++ " is past its table")
+    let at = sizePairTable + 16 * fromIntegral row
+    SizePair <$> (FieldCode <$> wordAt at) <*> (FieldCode <$> wordAt (at + 4))
+  qualityRows <- tableOf propQuality
+  rawRows <- tableOf propRaw
+  pure
+    PayloadDomain
+      { domainTables = [(p, map fst rows) | (p, rows) <- tables]
+      , domainSizePairs = pairs
+      , domainQualityRaw =
+          [ QualityRaw quality raw
+          | ((quality, _), cell) <- zip qualityRows qualityRawCells
+          , Just raw <- [lookup cell [(effective, code) | (code, effective) <- rawRows]]
+          ]
+      }
+ where
+  wordAt address
+    | address < base || toInteger (address - base) + 4 > toInteger (B.length image) =
+        Left ("domain: " ++ hex32 address ++ " is outside the image")
+    | otherwise = pure (le32At image (fromIntegral (address - base)))
+  rowsAt :: Word32 -> Word32 -> Either String [(FieldCode, Word32)]
+  rowsAt address k = do
+    code <- wordAt (address + 12 * k)
+    if code == 0xffff
+      then pure []
+      else do
+        effective <- wordAt (address + 12 * k + 8)
+        ((FieldCode code, effective) :) <$> rowsAt address (k + 1)
+
+walkedField :: Word16 -> Maybe F.PayloadField
+walkedField p = listToMaybe [f | f <- F.payloadFields, F.fieldProperty f == p]
+
+fieldCode :: B.ByteString -> F.PayloadField -> FieldCode
+fieldCode bytes f = FieldCode ((stored .&. fromIntegral (F.fieldMask f)) `shiftR` fromIntegral (F.fieldShift f))
+ where
+  at = fromIntegral (F.fieldOffset f)
+  stored
+    | F.fieldBytes f == 2 = le16At bytes at
+    | otherwise = fromIntegral (B.index bytes at)
+
+-- | Why a payload is one no stock menu produces: a walked code its table does
+-- not hold, an unoffered IMAGE SIZE pair, or a 0x1d code other than the one
+-- its IMAGE QUALITY row writes.
+payloadUnsafeReason :: PayloadDomain -> BankPayload -> Maybe String
+payloadUnsafeReason domain (BankPayload bytes) =
+  listToMaybe (catMaybes (map tableReason F.payloadFields ++ [sizeReason, qualityReason]))
+ where
+  codeOf p = fieldCode bytes <$> walkedField p
+  tableReason f = case lookup (F.fieldProperty f) (domainTables domain) of
+    Just codes
+      | fieldCode bytes f `notElem` codes ->
+          Just ("property " ++ show (F.fieldProperty f) ++ " " ++ show (fieldCode bytes f) ++ " is not a row of its table")
+    _ -> Nothing
+  sizeReason = case (codeOf propSize, codeOf propAspect) of
+    (Just size, Just aspect) | SizePair size aspect `elem` domainSizePairs domain -> Nothing
+    pair -> Just ("IMAGE SIZE pair " ++ show pair ++ " is not an offered row")
+  qualityReason = case (codeOf propQuality, codeOf propRaw) of
+    (Just quality, Just raw)
+      | lookup quality [(qualityRawQuality q, qualityRawRaw q) | q <- domainQualityRaw domain] == Just raw -> Nothing
+    pair -> Just ("IMAGE QUALITY/RAW pair " ++ show pair ++ " is not one the 0xfa arm writes")
+
+-- | Places the size and aspect codes of offered IMAGE SIZE menu row `row`.
+withImageSizeRow :: PayloadDomain -> Int -> B.ByteString -> Either String B.ByteString
+withImageSizeRow domain row bytes = case lookup row (zip imageSizeOfferedRows (domainSizePairs domain)) of
+  Nothing -> Left ("IMAGE SIZE row " ++ show row ++ " is not offered")
+  Just (SizePair size aspect) -> place propAspect aspect =<< place propSize size bytes
+ where
+  place p (FieldCode c) current = case walkedField p of
+    Just f | F.fieldBytes f == 1, fromIntegral (F.fieldOffset f) < B.length current -> do
+      let at = fromIntegral (F.fieldOffset f)
+          mask = fromIntegral (F.fieldMask f) :: Word8
+          placed = (fromIntegral c `shiftL` fromIntegral (F.fieldShift f)) .&. mask
+      when (placed `shiftR` fromIntegral (F.fieldShift f) /= fromIntegral c) $
+        Left ("IMAGE SIZE row " ++ show row ++ ": code " ++ show c ++ " does not fit property " ++ show p)
+      pure (replaceAt current at ((B.index current at .&. complement mask) .|. placed))
+    _ -> Left ("IMAGE SIZE row " ++ show row ++ ": property " ++ show p ++ " is not a one-byte walked field")
+
+-- | v1: the populated slot payloads; v2: the valid base and both payloads of
+-- every populated record.
+decodedUnsafeReason :: PayloadDomain -> DecodedBank -> Maybe String
+decodedUnsafeReason domain decoded =
+  listToMaybe (catMaybes [(place ++) <$> payloadUnsafeReason domain p | (place, p) <- payloads])
+ where
+  payloads = case decoded of
+    DecodedV1 v1 -> [("slot " ++ show k ++ ": ", p) | (k, V1Populated _ p) <- zip [0 :: Int ..] (v1Slots v1)]
+    DecodedV2 st ->
+      [("base: ", p) | BaseValid _ p <- [bankBase st]]
+        ++ concat
+          [ [(show slot ++ " saved: ", saved), (show slot ++ " working: ", working)]
+          | (slot, Populated _ saved working) <- zip bankSlots (bankRecordList (bankRecords st))
+          ]
+
+data BankFileClass
+  = StructurallyInvalid String
+  | UnsafeFile DecodedBank String
+  | ValidFile DecodedBank
+  deriving (Eq, Show)
+
+classifyBankFile :: PayloadDomain -> B.ByteString -> BankFileClass
+classifyBankFile domain bytes = case decodeBankFile bytes of
+  Left reason -> StructurallyInvalid reason
+  Right decoded -> maybe (ValidFile decoded) (UnsafeFile decoded) (decodedUnsafeReason domain decoded)
+
+-- choosing the bank -----------------------------------------------------
+
+data BankOutcome
+  = BankWinner BankFileId BankState
+  | CannotMigrate BankFileId
+  | NoBank
+  | NoCandidate
+  deriving (Eq, Show)
+
+-- | Valid and unsafe files ordered by generation, A first on a tie: an unsafe
+-- first file blocks the bank, a valid one wins. `Nothing` is a missing file;
+-- files present with no candidate among them are 'NoCandidate'.
+chooseBank :: Maybe BankFileClass -> Maybe BankFileClass -> BankOutcome
+chooseBank fileA fileB = case candidates of
+  (fid, _, UnsafeFile _ _) : _ -> CannotMigrate fid
+  (fid, _, ValidFile decoded) : _ -> BankWinner fid (decodedState decoded)
+  _
+    | isNothing fileA && isNothing fileB -> NoBank
+    | otherwise -> NoCandidate
+ where
+  candidates =
+    sortOn
+      (\(fid, generation, _) -> (Down generation, fid))
+      [ (fid, decodedGeneration found, cls)
+      | (fid, Just cls) <- [(FileA, fileA), (FileB, fileB)]
+      , Just found <- [candidateOf cls]
+      ]
+  candidateOf (ValidFile found) = Just found
+  candidateOf (UnsafeFile found _) = Just found
+  candidateOf (StructurallyInvalid _) = Nothing
+
+data WriteRefusal = BankCannotMigrate | GenerationExhausted
+  deriving (Eq, Show)
+
+data NextWrite = NextWrite
+  { nextWriteTarget :: BankFileId
+  , nextWriteGeneration :: BankGeneration
+  }
+  deriving (Eq, Show)
+
+-- | The nonwinner at winner + 1, with no wrap past 0xffffffff; file A at
+-- generation 1 when there is no winner.
+nextWrite :: BankOutcome -> Either WriteRefusal NextWrite
+nextWrite outcome = case outcome of
+  BankWinner FileA st -> NextWrite FileB <$> successor (bankGeneration st)
+  BankWinner FileB st -> NextWrite FileA <$> successor (bankGeneration st)
+  CannotMigrate _ -> Left BankCannotMigrate
+  NoBank -> pure (NextWrite FileA (BankGeneration 1))
+  NoCandidate -> pure (NextWrite FileA (BankGeneration 1))
+ where
+  successor (BankGeneration g)
+    | g == maxBound = Left GenerationExhausted
+    | otherwise = pure (BankGeneration (g + 1))

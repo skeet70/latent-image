@@ -70,6 +70,31 @@ dispatchRegressions runner=withTemporary "fuji-dispatch-tests"$ \root->do
   B.writeFile path(encodeCanonical fixture)
   (code,report)<-runCase runner path
   ensure(code==0 && get report "status"==s "passed")(name++": "++show report)
+-- A case declaring maxFunctions functions runs; one more is an invalid case.
+functionLimitRegressions :: FilePath -> IO ()
+functionLimitRegressions runner=withTemporary "fuji-function-limit-tests"$ \root->do
+ base<-B.readFile "emulation/fixtures/arithmetic.json" >>= jsonRead
+ copyFile "emulation/fixtures/arithmetic.bin"(root </> "arithmetic.bin")
+ let hex value=s("0x"++replicate(8-length text)'0'++text) where text=showHex(value::Word32)""
+     declared=list(get base "functions")
+     paddingBase=0x10000
+     padding=obj[("id",s "padding"),("address",hex paddingBase),("size",n(fromIntegral(4*maxFunctions))),("permissions",s "rx"),("initial",obj[("zero",b True)])]
+     fixture count=merge base[("regions",arr(list(get base "regions")++[padding])),("functions",arr(declared++[obj[("address",hex(paddingBase+4*fromIntegral i)),("size",n 4)]|i<-[0..count-1]]))]
+     path=root </> "function-limit.json"
+ forM_[(maxFunctions-length declared,0,"passed"),(maxFunctions-length declared+1,1,"invalid_case")]$ \(count,expected,status)->do
+  B.writeFile path(encodeCanonical(fixture count))
+  (code,report)<-runCase runner path
+  ensure(code==expected && get report "status"==s status)("function limit with "++show(count+length declared)++" functions: "++show report)
+
+instructionLimitRegressions :: FilePath -> IO ()
+instructionLimitRegressions runner=withTemporary "fuji-instruction-limit-tests"$ \root->do
+ base<-B.readFile "emulation/fixtures/arithmetic.json" >>= jsonRead
+ copyFile "emulation/fixtures/arithmetic.bin"(root </> "arithmetic.bin")
+ let path=root </> "instruction-limit.json"
+ forM_[(4000000,0,"passed"),(4000001,1,"invalid_case")]$ \(budget,expected,status)->do
+  B.writeFile path(encodeCanonical(set "limits" (obj[("instructions",n budget),("wall_ms",n 1000)])base))
+  (code,report)<-runCase runner path
+  ensure(code==expected && get report "status"==s status)("instruction limit "++show budget++": "++show report)
 main :: IO ()
 main=do
  [runner,generator]<-getArgs
@@ -92,6 +117,8 @@ main=do
   when(name=="instruction-budget.json")$ensure(get result "instructions"==s "3" && get result "trace"==arr(replicate 3(obj[("pc",s "0x00001004"),("instruction",s "0xeafffffe")])) )"exact budget trace"
   when(name=="wall-budget.json")$ensure(num(get result "elapsed_ns")<1000000000)"wall bound"
  dispatchRegressions runner
+ functionLimitRegressions runner
+ instructionLimitRegressions runner
  withTemporary "fuji-native-tests"$ \root->do
   artifacts<-filter((==".bin").takeExtension) <$> listDirectory "emulation/fixtures"
   forM_ artifacts$ \name->copyFile("emulation/fixtures" </> name)(root </> name)

@@ -35,6 +35,8 @@ sys.path.insert(0, str(ROOT))
 
 MAX_CONTINUATION = 15_000_000
 MODE_DIAL_SETTLE = 40_000_000
+FIRST_START_PULSE = 8_000_000
+ATTACH_HOLD_PULSE = 8_000_000
 
 
 def _unique_object(pairs):
@@ -74,6 +76,7 @@ def load_profile(path, factory, *, firmware_profile=None):
             'movrsz_profile': 'declared-packed-yycbcr-pyramid-unmeasured',
             'movrsz_ticks': 50000,
             'producer_data_profile': 'xm1-150-declared-continuous-statistics-scene-unmeasured',
+            'fff63_profile': 'xm1-150-declared-fff63-job4-completion-unmeasured',
         }
     if not isinstance(document, dict) or set(document) != {'options'}:
         raise ValueError('Profile must be X-M1 1.50 or contain only an options object')
@@ -327,7 +330,7 @@ def compact_board_state(board):
                 frame = item['stream'].get('frame')
                 if type(frame) is StatisticsFrame:
                     item['stream']['frame'] = asdict(frame)
-        elif name in ('BootControls', 'PulseOutputs', 'AudioSerialControl', 'FujiDecompressor', 'LoaderMemoryDMA', 'InputAuxiliaryControl', 'SDCardController'):
+        elif name in ('BootControls', 'PulseOutputs', 'AudioSerialControl', 'FujiDecompressor', 'LoaderMemoryDMA', 'InputAuxiliaryControl', 'SDCardController', 'FFF63Engine'):
             item = {'device': name, 'state': device.snapshot()}
         else:
             continue
@@ -422,11 +425,15 @@ class WarmScanoutSession:
                                      **self.execution_error}
         if self.checkpoint is not None:
             self.state['resume_checkpoint']['metadata'] = self.checkpoint.metadata
+        if pixels:
+            self._write_recovery_state()
+        return self.state
+
+    def _write_recovery_state(self):
         if 'recovery' in self.options:
             self.state['machine'] = self.board.snapshot()
             self.state['installed_nand'] = self.board.nand.snapshot()
             (self.output / 'state.json').write_text(json.dumps(self.state, indent=2) + '\n')
-        return self.state
 
     def _write_frames(self, frames):
         selected = min(frames) if frames else None
@@ -473,6 +480,7 @@ class WarmScanoutSession:
         self._write_frames(frames)
         selected = min(frames) if frames else None
         self.state['display']['last_frame'] = None if selected is None else frames[selected].state
+        self._write_recovery_state()
         return self.state
 
     def run(self, options):
@@ -937,25 +945,25 @@ class _FF80EndpointBridge:
 
 def _ram_push_attach(board, session, hold_key=None):
     """Boot past the first-start language screen into live view and enumerate ff80. HOLD_KEY is
-    pressed one default key pulse before the cable level rises and released after enumeration."""
-    from tools.probe_setup_menus import DEFAULT_PULSE
+    pressed ATTACH_HOLD_PULSE instructions before the cable level rises and released after enumeration."""
     bridge = _FF80EndpointBridge(board, session)
     bridge.run_until('first-start screen', lambda: board.instructions >= 100_000_000, 100_000_000)
     for key in ['up'] * 12 + ['ok', 'ok']:
-        session.key({'key': key})
+        session.key({'key': key, 'hold_instructions': FIRST_START_PULSE,
+                     'release_instructions': FIRST_START_PULSE})
     bridge.run_for(40_000_000)
     pre_attach = {'instructions': board.instructions,
                   'raw_identities': list(map(hex, board._native.cp14_identity()))}
     if hold_key is not None:
         session.inputs.press(hold_key)
-        bridge.run_for(DEFAULT_PULSE)
+        bridge.run_for(ATTACH_HOLD_PULSE)
         hold = {'key': hold_key, 'pressed_instructions': pre_attach['instructions'],
                 'attach_instructions': board.instructions}
     device, configuration = bridge.enumerate()
     if hold_key is not None:
         session.inputs.release()
         hold['released_instructions'] = board.instructions
-        bridge.run_for(DEFAULT_PULSE)
+        bridge.run_for(ATTACH_HOLD_PULSE)
         hold['menu_after_release'] = bridge.key_state(session.sample(False))
         pre_attach['attach_hold'] = hold
     return bridge, {'pre_attach': pre_attach, 'device': device.hex(),
@@ -987,13 +995,16 @@ def _emulator_source_identity():
     return digest.hexdigest()
 
 
-def _ram_push_checkpoint_key(installed_dat, adjustment_nand, menu_sd_image, attach_hold_key=None):
+def _ram_push_checkpoint_key(installed_dat, adjustment_nand, menu_sd_image, attach_hold_key=None,
+                             ui_conversion_profile=None):
     inputs = {'installed_dat': _file_sha256(installed_dat),
               'adjustment_nand': _file_sha256(adjustment_nand),
               'menu_sd_image': _file_sha256(menu_sd_image),
               'emulator_source': _emulator_source_identity()}
     if attach_hold_key is not None:
         inputs['attach_hold_key'] = attach_hold_key
+    if ui_conversion_profile is not None:
+        inputs['ui_conversion_profile'] = ui_conversion_profile.value
     document = json.dumps({'schema': RAM_PUSH_CHECKPOINT_SCHEMA, **inputs},
                           sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(document.encode()).hexdigest(), inputs
@@ -1358,7 +1369,8 @@ def _run_ff80_rehearsal(board, session, output):
                           'Shared emulator RAM is not a hardware cache-coherence model.']}
     run_until('first-start screen', lambda: board.instructions >= 100_000_000, 100_000_000)
     for key in ['up'] * 12 + ['ok', 'ok']:
-        session.key({'key': key})
+        session.key({'key': key, 'hold_instructions': FIRST_START_PULSE,
+                     'release_instructions': FIRST_START_PULSE})
     run_for(40_000_000)
     receipt['pre_attach'] = {'instructions': board.instructions,
                              'cp14': list(board._native.cp14_identity())}
@@ -1647,6 +1659,7 @@ def _console_hit(hit):
 def main():
     from emulator.boot import make_board
     from emulator.server import make_menu_server as make_server
+    from emulator.image_parameter_devices import UIConversionProfile
     parser = argparse.ArgumentParser(description=__doc__)
     starting = parser.add_mutually_exclusive_group(required=True)
     starting.add_argument('--profile', type=Path, help='Cold boot using the selected options JSON')
@@ -1700,6 +1713,9 @@ def main():
     parser.add_argument('--port', type=int, default=0)
     parser.add_argument('--bind', default='127.0.0.1')
     parser.add_argument('--hostname')
+    parser.add_argument('--ui-conversion-profile', type=UIConversionProfile.parse,
+                        choices=tuple(UIConversionProfile),
+                        help='Opt-in stock CPU conversion contract for a cold boot; a checkpoint keeps its own')
     args = parser.parse_args()
     installed_input = args.installed_media or args.installed_nand or args.installed_dat
     recovery_start = args.recovery_ram is not None or args.rom_card is not None
@@ -1760,7 +1776,7 @@ def main():
     if args.ram_push_checkpoints is not None:
         started = perf_counter()
         key, key_inputs = _ram_push_checkpoint_key(args.installed_dat, args.adjustment_nand, args.menu_sd_image,
-                                                   args.attach_hold_key)
+                                                   args.attach_hold_key, args.ui_conversion_profile)
         directory = args.ram_push_checkpoints / key
         checkpoint = {'key': key, 'inputs': key_inputs, 'directory': str(directory.resolve()),
                       'key_seconds': round(perf_counter() - started, 3)}
@@ -1840,6 +1856,8 @@ def main():
         if args.rom_card is not None or args.sd_image is not None or args.menu_sd_image is not None:
             from emulator.sd_card import BLANK_SDHC_PROFILE
             options.update(sd_card_profile=BLANK_SDHC_PROFILE, sd_card_present=True)
+        if args.ui_conversion_profile is not None:
+            options['ui_conversion_profile'] = args.ui_conversion_profile
         board = make_board(**options)
         if args.installed_dat is not None:
             attach_installed_dat(board, args.installed_dat)

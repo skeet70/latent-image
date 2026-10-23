@@ -41,7 +41,7 @@ main = do
   let recordPath = workspace </> "transport" </> recordName
   record <- either (die . ((recordPath ++ ": ") ++)) pure . parseReviewRecord =<< B.readFile recordPath
   relinker <- runfilesRelinker payload
-  manifest <- withRelinkedBuildUsing relinker EnforceAllowlist (Address 0x00c20000) (pure . pinnedManifest)
+  manifest <- withRelinkedBuildUsing relinker EnforceAllowlist (Address (fst (payloadReferenceBases payload))) (pure . pinnedManifest)
   let built = sourceIdentity manifest
       recorded = [identity | pin <- recordPins record, let PinIdentity identity = pinIdentity pin]
   forM_ [name | (name, _) <- built, name `notElem` recorded] $ \name ->

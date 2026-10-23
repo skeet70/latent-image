@@ -485,6 +485,7 @@ filegroup(
     srcs = [
         "//host/firmware:BuildRecipeBank.hs",
         "//host/firmware:RecipeBankRamLayout.hs",
+        "//host/firmware:RecipeBankRamPlacement.hs",
         "//host/firmware:build-recipe-bank-ram.sh",
         "//menu:ram-push-relink-sources",
     ],

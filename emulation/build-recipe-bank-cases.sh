@@ -1,15 +1,27 @@
 #!/usr/bin/env bash
 # Host-only bounded recipe kernel/D3 cases. Run under `devenv shell --`.
+# RB_MODE=volatile compiles the storage unit with RB_VOLATILE_BANK=1.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+RB_MODE="${RB_MODE:-sd}"
+case "$RB_MODE" in
+  sd|volatile) ;;
+  *) echo "RB_MODE must be sd or volatile, not '$RB_MODE'" >&2; exit 2 ;;
+esac
+if [ "$RB_MODE" = volatile ]; then MODE_SUFFIX=-volatile; else MODE_SUFFIX=; fi
 RB_BASE="${RB_BASE:-0x00be1f00}"
 RB_NAME_RECORD="${RB_NAME_RECORD:-0x00beb784u}"
-BUILD_DIR="${BUILD_DIR:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/kernel-build}"
-OUT_DIR="${OUT_DIR:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/kernel-cases}"
+BUILD_DIR="${BUILD_DIR:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/kernel-build$MODE_SUFFIX}"
+OUT_DIR="${OUT_DIR:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/kernel-cases$MODE_SUFFIX}"
 KERNEL_DIR="${KERNEL_DIR:-}"
+if [ "$RB_MODE" = volatile ] && [ -n "$KERNEL_DIR" ]; then
+  echo "RB_MODE=volatile builds its own kernel; KERNEL_DIR must be unset" >&2
+  exit 2
+fi
 RUNNER="${RUNNER:-bazel-bin/emulation/native-runner}"
 GEN="${GEN:-bazel-bin/emulation/recipe-bank-cases}"
+JOBS="${JOBS:-8}"
 CANDIDATE="${CANDIDATE:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/package/image}"
 ID4="${ID4:-$CANDIDATE/id4-final.bin}"
 ID4_BASE="${ID4_BASE:-0x0061c1fc}"
@@ -22,7 +34,7 @@ FREESTANDING=(-ffreestanding -nostdlib -fno-builtin -mno-unaligned-access)
 HARDEN=NIX_HARDENING_ENABLE=
 
 if [ -n "$KERNEL_DIR" ]; then
-  for file in kernel.bin kernel-text.bin kernel.syms; do
+  for file in kernel.elf kernel.bin kernel-text.bin kernel.syms; do
     if [ "$KERNEL_DIR" != "$BUILD_DIR" ]; then cp "$KERNEL_DIR/$file" "$BUILD_DIR/$file"; fi
   done
 else
@@ -30,9 +42,13 @@ else
   for src in menu/recipe_bank_arm.S menu/recipe_bank_probe.c menu/recipe_bank_hook.c \
     menu/recipe_bank_storage.c menu/recipe_bank_actions.c menu/recipe_bank_edit.c; do
     obj="$BUILD_DIR/$(basename "${src%.*}").o"
+    volatile_def=()
+    if [ "$RB_MODE" = volatile ] && [ "$src" = menu/recipe_bank_storage.c ]; then
+      volatile_def=(-DRB_VOLATILE_BANK=1)
+    fi
     case "$src" in
       *.c) env $HARDEN clang "${ARM[@]}" "${FREESTANDING[@]}" -Oz -Wall -Wextra \
-        -DRB_NAME_RECORD="$RB_NAME_RECORD" -c "$src" -o "$obj" ;;
+        -DRB_NAME_RECORD="$RB_NAME_RECORD" "${volatile_def[@]}" -c "$src" -o "$obj" ;;
       *.S) env $HARDEN clang "${ARM[@]}" -c "$src" -o "$obj" ;;
     esac
     OBJS+=("$obj")
@@ -44,6 +60,7 @@ else
   llvm-objcopy -j .text -O binary "$BUILD_DIR/kernel.elf" "$BUILD_DIR/kernel-text.bin"
   llvm-nm --print-size --numeric-sort "$BUILD_DIR/kernel.elf" > "$BUILD_DIR/kernel.syms"
 fi
+llvm-readelf --symbols --wide "$BUILD_DIR/kernel.elf" > "$BUILD_DIR/kernel.symbols"
 sha256sum "$BUILD_DIR/kernel.bin"
 
 env $HARDEN clang "${ARM[@]}" "${FREESTANDING[@]}" -Oz -Wall -Wextra \
@@ -62,6 +79,7 @@ env $HARDEN clang "${ARM[@]}" -nostdlib -static -fuse-ld=lld \
   -o "$BUILD_DIR/model.elf"
 llvm-objcopy -O binary "$BUILD_DIR/model.elf" "$BUILD_DIR/model.bin"
 llvm-nm --print-size --numeric-sort "$BUILD_DIR/model.elf" > "$BUILD_DIR/model.syms"
+llvm-readelf --symbols --wide "$BUILD_DIR/model.elf" > "$BUILD_DIR/model.symbols"
 for pair in getter:getter setter:setter lowclose:rbm_low_close read:rbm_read \
   write:rbm_write close:rbm_close open:rbm_open stat:rbm_stat \
   indexfree:rbm_index_free mapping:rbm_mapping_delete resolve:rbm_resolve \
@@ -76,6 +94,9 @@ sha256sum "$BUILD_DIR/model.bin"
 
 BOOT_ARGS=()
 if [ -n "${BOOT_PACKAGE:-}" ]; then BOOT_ARGS=(--boot-package "$BOOT_PACKAGE"); fi
-"$GEN" --runner "$RUNNER" --build "$BUILD_DIR" --out "$OUT_DIR" \
+CASE_ARGS=()
+if [ -n "${CASE:-}" ]; then CASE_ARGS=(--case "$CASE"); fi
+"$GEN" --runner "$RUNNER" --build "$BUILD_DIR" --out "$OUT_DIR" --jobs "$JOBS" \
   --rb-base "$RB_BASE" --fields "$FIELDS" --id4 "$ID4" --id4-base "$ID4_BASE" \
-  --id5 "$ID5" --candidate "$CANDIDATE" --host-fixtures "$HOST_FIXTURES" "${BOOT_ARGS[@]}"
+  --id5 "$ID5" --candidate "$CANDIDATE" --host-fixtures "$HOST_FIXTURES" \
+  --bank-mode "$RB_MODE" "${BOOT_ARGS[@]}" "${CASE_ARGS[@]}"

@@ -9,13 +9,17 @@
  * 0x00d526fc; the entry calls rb_probe_state(property, row token) and returns
  * the state through the probe's own epilogue at 0x00d5868c.
  *
- * Rows. The recall page carries RB_UI_CLASS_RECALL (0x285) as its X word and its
- * rows are the values tokens 0x60..0x66 (menu/recipe_bank_ui.h). The seven
+ * Rows. SELECT CUSTOM SETTING carries RB_UI_CLASS_SELECT (0x285) as its X word
+ * and its rows are the values tokens 0x60..0x67 (menu/recipe_bank_ui.h). The seven
  * submenus (0x270..0x276) hide the RB_UI_TOKEN_EDIT_HIDDEN_ROW (0x82) dialog
- * placeholder. Verb, slot, edit-screen, field-list and dialog rows stay
- * selectable; their commit-time failures surface through rb_status_failed.
+ * placeholder. A field list's row takes the state this same probe gives the
+ * row in the stock list of the property the field edits, so each list offers
+ * the stock menu's rows for the current mode (in M the ISO list hides row 0,
+ * whose availability cell is 0, and offers AUTO as row 0x1b). Verb, slot,
+ * edit-screen and dialog rows stay selectable; their commit-time failures
+ * surface through rb_status_failed.
  *
- * Verdict lifetime. The seven recall verdicts are valid only inside one page
+ * Verdict lifetime. The eight selection verdicts are valid only inside one page
  * visit. They are dropped at the real page-entry boundary (the plan points
  * FUN_00bfa800's three call sites 0x00bfa3f0, 0x00bfa7ec and 0x00bfacf0 at the
  * blob's rb_bank_page_entry, which invalidates and then calls FUN_00bfa800,
@@ -38,13 +42,12 @@
  * ordinary selected row.
  */
 #include "recipe_bank_ui.h"
-
-/* the dial position reads 3 at C (recipe-design section 16; storage lane's
- * RB_MODE_CLASS) */
-#define RB_MODE_CLASS 0x00951564u
+#include "recipe_bank_edit.h"
+#include "recipe_bank_diagnostic.h"
 
 #define RB_MSG_GATE 0x01139e94u
 #define RB_MSG_EMIT 0x011392e0u
+#define RB_STOCK_PROBE 0x00d52684u
 
 typedef enum {
     RB_MSG_NO_CARD = 0x7e1u,
@@ -63,7 +66,7 @@ typedef enum {
 static uint32_t rb_media_epoch_value;
 static uint32_t rb_probe_epoch = 0xffffffffu;
 static uint32_t rb_probe_dirty = 1u;
-static uint32_t rb_probe_recall[RB_BANK_SLOTS];
+static uint32_t rb_probe_select[RB_UI_SELECT_ROWS];
 
 typedef struct {
     uint32_t address;
@@ -89,7 +92,7 @@ volatile RbViewRevision rb_view_revision;
 /* MainUI publishes errors for its view; graphics redraws them until the view changes. */
 static volatile struct {
     RbFailureFrame frame;
-    enum rb_bank_status status;
+    RbMessageLabels labels;
     RbFailureDrawer drawer;
 } rb_failure;
 static volatile RbFailureRevision rb_failure_revision;
@@ -122,10 +125,18 @@ void rb_media_epoch_bump(void) { rb_media_epoch_value = rb_media_epoch_value + 1
 
 static void rb_probe_reload(void)
 {
-    uint32_t slot;
-    for (slot = 0u; slot < RB_BANK_SLOTS; slot++) {
-        rb_probe_recall[slot] =
-            rb_meta_op_state(RB_BANK_RECALL, slot, (slot == 0u) ? 1u : 0u);
+#ifdef RB_RAM_DIAGNOSTICS
+    RbDiagnosticWalk walk = rb_select_diag_walk_begin();
+#endif
+    uint32_t code;
+    for (code = 0u; code < RB_UI_SELECT_ROWS; code++) {
+#ifdef RB_RAM_DIAGNOSTICS
+        rb_probe_select[code] =
+            rb_meta_select_state((RbSelection){(uint8_t)code}, (code == 0u) ? 1u : 0u, walk);
+#else
+        rb_probe_select[code] =
+            rb_meta_select_state((RbSelection){(uint8_t)code}, (code == 0u) ? 1u : 0u);
+#endif
     }
 }
 
@@ -146,7 +157,12 @@ static uint32_t rb_probe_hidden_page(uint32_t property)
 enum rb_row_state rb_probe_state(uint32_t property, uint32_t row)
 {
     uint32_t epoch = rb_media_epoch_value;
-    uint32_t slot;
+    uint32_t field = rb_stage_edit_field_prop(property);
+    if (field != 0u) {
+        uint32_t (*stock)(uint32_t, uint32_t) =
+            (uint32_t (*)(uint32_t, uint32_t))RB_STOCK_PROBE;
+        return (enum rb_row_state)stock(field, row);
+    }
     if (epoch != rb_probe_epoch) {
         rb_probe_epoch = epoch;
         rb_probe_dirty = 1u;
@@ -155,11 +171,11 @@ enum rb_row_state rb_probe_state(uint32_t property, uint32_t row)
         return (row == RB_UI_TOKEN_EDIT_HIDDEN_ROW) ? RB_ROW_HIDDEN
                                                     : RB_ROW_ACTIVE;
     }
-    if (property != RB_UI_CLASS_RECALL) {
+    if (property != RB_UI_CLASS_SELECT) {
         return RB_ROW_ACTIVE;
     }
-    if (row < RB_UI_TOKEN_RECALL_BASE ||
-        row >= RB_UI_TOKEN_RECALL_BASE + RB_BANK_SLOTS) {
+    if (row < RB_UI_TOKEN_SELECT_BASE ||
+        row >= RB_UI_TOKEN_SELECT_BASE + RB_UI_SELECT_ROWS) {
         return RB_ROW_ACTIVE;
     }
     if (rb_probe_dirty != 0u) {
@@ -170,11 +186,8 @@ enum rb_row_state rb_probe_state(uint32_t property, uint32_t row)
         rb_probe_reload();
         rb_probe_dirty = 0u;
     }
-    slot = row - RB_UI_TOKEN_RECALL_BASE;
-    if (rb_probe_word(RB_MODE_CLASS) == 3u) {
-        return RB_ROW_DISABLED;
-    }
-    return (rb_probe_recall[slot] == RB_OK) ? RB_ROW_ACTIVE : RB_ROW_DISABLED;
+    return (rb_probe_select[row - RB_UI_TOKEN_SELECT_BASE] == RB_OK) ? RB_ROW_ACTIVE
+                                                                   : RB_ROW_DISABLED;
 }
 
 static RbFailureLabel rb_status_label(enum rb_bank_status status)
@@ -197,22 +210,28 @@ static RbFailureLabel rb_status_label(enum rb_bank_status status)
     }
 }
 
-void rb_status_failed(enum rb_bank_status status)
+void rb_status_present(RbMessageLabels labels)
 {
     uint8_t slot;
     RbFailureFrame frame = { rb_probe_word(RB_UI_FRAME_CELL), rb_view_revision };
     RbBankPage page = frame.address == 0u ? RB_PAGE_NONE
         : rb_ui_page(rb_probe_word(frame.address + RB_NODE_X), &slot);
-    rb_status_record(status);
     RbFailureRevision revision = rb_failure_revision;
     rb_failure_revision.value = revision.value + 1u;
-    rb_failure.status = status;
+    rb_failure.labels = labels;
     rb_failure.frame = frame;
     rb_failure.drawer = page == RB_PAGE_EDITOR
         ? RB_FAILURE_DRAW_EDITOR : RB_FAILURE_DRAW_MENU;
     rb_failure_revision.value = revision.value + 2u;
     rb_call_redraw(page == RB_PAGE_EDITOR
         ? RB_REDRAW_FAILURE_EDITOR : RB_REDRAW_FAILURE_MENU);
+}
+
+void rb_status_failed(enum rb_bank_status status)
+{
+    rb_status_record(status);
+    rb_status_present((RbMessageLabels){
+        {rb_status_label(status)}, {0u}, {0u}});
 }
 
 /* Called after the selected drawer; halt and no-draw paths keep the stock join. */
@@ -228,7 +247,7 @@ void rb_bank_emit_failure_from_stock(uint32_t packet, RbViewRevision drawn)
         return;
     }
     RbFailureFrame frame = rb_failure.frame;
-    enum rb_bank_status status = rb_failure.status;
+    RbMessageLabels labels = rb_failure.labels;
     RbFailureDrawer expected = rb_failure.drawer;
     if (rb_failure_revision.value != revision.value) {
         return;
@@ -258,9 +277,9 @@ void rb_bank_emit_failure_from_stock(uint32_t packet, RbViewRevision drawn)
         rb_redraw_revision.value = request.value + 2u;
         return;
     }
-    void (*emit)(RbFailureLabel, uint32_t, uint32_t) =
-        (void (*)(RbFailureLabel, uint32_t, uint32_t))RB_MSG_EMIT;
-    emit(rb_status_label(status), 0u, 0u);
+    void (*emit)(RbMessageLabel, RbMessageLabel, RbMessageLabel) =
+        (void (*)(RbMessageLabel, RbMessageLabel, RbMessageLabel))RB_MSG_EMIT;
+    emit(labels.text, labels.prefix, labels.button);
 }
 
 void rb_bank_redraw_dispatch(void)

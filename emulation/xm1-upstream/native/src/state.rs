@@ -598,6 +598,11 @@ impl State {
             }
         }
     }
+    pub fn clear_blocks(&mut self, core: usize) {
+        self.blocks[core].clear();
+        self.block_pages[core].clear();
+        self.block_front[core].iter_mut().for_each(|slot| *slot = None);
+    }
     pub fn portable_unsafe(
         &mut self,
         core: usize,

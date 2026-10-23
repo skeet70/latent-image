@@ -30,7 +30,7 @@
 #include "../menu/recipe_bank_ui.h"
 
 #define RBM_CARD_BASE 0x00980000u
-#define RBM_FILE_STRIDE 0x220u
+#define RBM_FILE_STRIDE 0x420u
 #define RBM_TABLE_BASE 0x00970800u
 #define RBM_TRIP_ADDR 0x00005150u
 #define RBM_ROW_BASE 0x0096cc64u
@@ -89,6 +89,33 @@ volatile uint32_t rbm_h_file[4];
 volatile uint32_t rbm_h_cursor[4];
 volatile uint32_t rbm_h_mode[4];
 volatile uint32_t rbm_field_count;
+/* Counted faults: the rbm_fail_write_at-th write completes with
+ * rbm_fail_write_code, the rbm_corrupt_write_at-th lands with its last byte
+ * complemented, and at the rbm_mode_at_write-th write or before the
+ * rbm_mode_at_stat-th size query the shooting-mode cell takes
+ * rbm_mode_race_value and the mode-class cell rbm_class_race_value. Zero arms
+ * none. */
+volatile uint32_t rbm_writes;
+volatile uint32_t rbm_stats;
+volatile uint32_t rbm_fail_write_at;
+volatile uint32_t rbm_fail_write_code;
+volatile uint32_t rbm_corrupt_write_at;
+volatile uint32_t rbm_mode_at_write;
+volatile uint32_t rbm_mode_at_stat;
+volatile uint32_t rbm_mode_race_value;
+volatile uint32_t rbm_class_race_value;
+/* the write call (1-based) at whose boundary the card swap runs */
+enum RbmRestoreFault { RBM_RESTORE_NORMAL, RBM_RESTORE_REFUSE_BASE, RBM_RESTORE_REFUSE_BOTH };
+volatile enum RbmRestoreFault rbm_restore_fault;
+volatile uint32_t rbm_swap_write_at;
+#define RBM_MODE_CELL ((volatile uint32_t *)0x00956838u)
+#define RBM_CLASS_CELL ((volatile uint32_t *)0x00951564u)
+
+static inline __attribute__((always_inline)) void rbm_mode_race(void)
+{
+  *RBM_MODE_CELL = rbm_mode_race_value;
+  *RBM_CLASS_CELL = rbm_class_race_value;
+}
 
 /* the media layer's own tables sit at the stock addresses the kernel's
  * ownership check and the worker's release chain read */
@@ -438,10 +465,40 @@ rbm_write_full_case(rbm_cb cb, uint32_t handle, uint32_t len, const uint8_t *src
     *rbm_file_size(file) = pos + len;
   }
   rbm_boundary();
+  if (rbm_writes == rbm_corrupt_write_at) {
+    dst[pos + len - 1u] = (uint8_t)~dst[pos + len - 1u];
+  }
   rbm_wrote = 1u;
   rbm_written_file = file + 1u;
   cb(0u, len);
+  if (rbm_writes == rbm_mode_at_write) {
+    rbm_mode_race();
+  }
   return 1u;
+}
+
+/* Arms the swap for the rbm_swap_write_at-th write. */
+__attribute__((noinline)) static void
+rbm_write_arm_swap(void)
+{
+  if (rbm_swap_write_at != 0u && rbm_writes + 1u == rbm_swap_write_at) {
+    rbm_swap_boundary = RBM_BOUNDARY_WRITE;
+  }
+}
+
+/* Counts the write; nonzero when its counted fault completed it. */
+__attribute__((noinline)) static uint32_t
+rbm_write_counted_fault(rbm_cb cb)
+{
+  rbm_writes = rbm_writes + 1u;
+  if (rbm_writes == rbm_fail_write_at) {
+    if (rbm_writes == rbm_mode_at_write) {
+      rbm_mode_race();
+    }
+    cb(rbm_fail_write_code, 0u);
+    return 1u;
+  }
+  return 0u;
 }
 
 uint32_t rbm_write(rbm_cb cb, uint32_t handle, uint32_t len, const uint8_t *src,
@@ -451,6 +508,7 @@ uint32_t rbm_write(rbm_cb cb, uint32_t handle, uint32_t len, const uint8_t *src,
   (void)wait;
   (void)variant;
   RbMediaIdentity identity = rb_io_request_identity();
+  rbm_write_arm_swap();
   rbm_swap_at(RBM_BOUNDARY_WRITE);
   if (!rb_media_worker_allows(cb, identity)) {
     cb(2u, 0u);
@@ -459,6 +517,9 @@ uint32_t rbm_write(rbm_cb cb, uint32_t handle, uint32_t len, const uint8_t *src,
   if (slot == 0xffffffffu || rbm_h_used[slot] == 0u) {
     cb(9u, 0u);
     return 0u;
+  }
+  if (rbm_write_counted_fault(cb)) {
+    return 1u;
   }
   if (rbm_write_comp != 0u) {
     uint32_t c = rbm_write_comp;
@@ -480,6 +541,10 @@ uint32_t rbm_stat(uint32_t handle, uint8_t *stat)
   if (rbm_detach_before_stat != 0u) {
     rbm_detach_before_stat = 0u;
     rbm_detach_event(0u, 0u);
+  }
+  rbm_stats = rbm_stats + 1u;
+  if (rbm_stats == rbm_mode_at_stat) {
+    rbm_mode_race();
   }
   if (slot == 0xffffffffu || rbm_h_used[slot] == 0u) {
     return 9u;
@@ -658,6 +723,18 @@ uint32_t rbm_set(uint32_t prop, uint32_t code, uint32_t zero, uint32_t sel)
 #ifndef RBM_MEDIA_ONLY
 /* case entries for contracts a single kernel call cannot express */
 extern uint32_t rb_load(void);
+uint32_t rbm_restore_write(uint32_t prop, uint32_t code, uint32_t zero)
+{
+  uint32_t (*write)(uint32_t, uint32_t, uint32_t) =
+      (uint32_t (*)(uint32_t, uint32_t, uint32_t))0x006309c4u;
+  if (prop == 0x104u &&
+      (rbm_restore_fault == RBM_RESTORE_REFUSE_BOTH ||
+       (rbm_restore_fault == RBM_RESTORE_REFUSE_BASE && code == 1u))) {
+    code = 0u;
+  }
+  return write(prop, code, zero);
+}
+
 
 uint32_t rbm_seq_stage_cancel(uint32_t slot)
 {
@@ -700,22 +777,133 @@ uint32_t rbm_seq_stage_field_commit(uint32_t slot, uint32_t prop, uint32_t code,
   return rb_stage_commit(slot, name12);
 }
 
-uint32_t rbm_seq_stage_field_recall(uint32_t slot, uint32_t prop, uint32_t code)
+uint32_t rbm_seq_stage_field_select(uint32_t slot, uint32_t prop, uint32_t code)
 {
   uint32_t status = rbm_seq_stage_field_commit(slot, prop, code, 0);
   if (status != 0u) {
     return status;
   }
-  return rb_recall(slot, rb_media_sample());
+  return rb_select((RbSelection){(uint8_t)(slot + 1u)}, rb_media_sample());
 }
 
-uint32_t rbm_seq_load_recall(uint32_t slot)
+uint32_t rbm_seq_rename_select(uint32_t slot, const uint8_t *name26)
 {
-  uint32_t status = rb_load();
+  uint32_t status = rb_name_commit(slot, name26, rb_media_sample());
   if (status != 0u) {
     return status;
   }
-  return rb_recall(slot, rb_media_sample());
+  return rb_select((RbSelection){(uint8_t)(slot + 1u)}, rb_media_sample());
+}
+
+/* The (mode cell, mode class) a dial detent routes, by op code 0x80 + index:
+ * P, S, A, M, AUTO, C (whose record holds mode M), Sports, SR+, Portrait,
+ * Landscape, SP and Adv. (FUN_0063b4c8, FUN_0063b728). */
+static const uint32_t RBM_DIAL[][2] = {
+  {0x21u, 0u}, {0x22u, 0u}, {0x23u, 0u}, {0x24u, 0u}, {0x00u, 0u}, {0x24u, 3u},
+  {0x0bu, 0u}, {0x01u, 0u}, {0x05u, 0u}, {0x08u, 0u}, {0x18u, 0u}, {0x20u, 0u}};
+
+static inline __attribute__((always_inline)) void rbm_observe(uint32_t *out)
+{
+  uint32_t (*current)(uint32_t, uint32_t) = (uint32_t (*)(uint32_t, uint32_t))0x0061c93cu;
+  RbSelection selected = RB_SELECTION_NONE;
+  out[0] = *RBM_MODE_CELL;
+  out[1] = *RBM_CLASS_CELL;
+  out[2] = current(0x104u, 0u);
+  out[3] = current(0xf9u, 0u);
+  out[4] = current(0x10fu, 0u);
+  out[5] = rbm_get(0x104u, 0u, 0u, 0u);
+  out[6] = rb_selection_effective(&selected) ? selected.code : 0xffffffffu;
+}
+
+static inline __attribute__((always_inline)) uint32_t rbm_dial(uint32_t index,
+                                                              uint32_t *boundary)
+{
+  uint32_t status = rb_mode_leave(RBM_DIAL[index][0], RBM_DIAL[index][1]);
+  rbm_observe(boundary);
+  if (status != 0u) {
+    return status;
+  }
+  *RBM_CLASS_CELL = RBM_DIAL[index][1];
+  *RBM_MODE_CELL = RBM_DIAL[index][0];
+  return rb_mode_resume();
+}
+
+/* codes[0..count-1] in order: a code below 0x80 is an rb_select with a fresh
+ * identity, 0x80 + k a dial move to RBM_DIAL[k]; each status lands at
+ * statuses[k] and the last is returned */
+uint32_t rbm_seq_selects(const uint8_t *codes, uint32_t count, uint32_t *statuses)
+{
+  uint32_t status = 0u;
+  uint32_t k;
+  for (k = 0u; k < count; k++) {
+    if (codes[k] == 0x90u) {
+      void (*commit)(uint32_t, uint32_t, uint32_t, uint32_t) =
+          (void (*)(uint32_t, uint32_t, uint32_t, uint32_t))0x00d4fc74u;
+      commit(0x10fu, 2u, 0u, 0u);
+      status = 0u;
+    } else if (codes[k] == 0xa0u || codes[k] == 0xa1u) {
+      rbm_restore_fault = (codes[k] == 0xa0u) ? RBM_RESTORE_REFUSE_BASE
+                                             : RBM_RESTORE_REFUSE_BOTH;
+      status = 0u;
+    } else if (codes[k] == 0xb0u || codes[k] == 0xb1u) {
+      rb_media_epoch_bump();
+      if (codes[k] == 0xb0u) {
+        rbm_a_present = 0u;
+        rbm_b_present = 0u;
+      } else {
+        rbm_run_swap();
+      }
+      status = 0u;
+    } else {
+      status = (codes[k] >= 0x80u)
+                   ? rbm_dial(codes[k] - 0x80u, statuses + 0x140u + 7u * k)
+                   : rb_select((RbSelection){codes[k]}, rb_media_sample());
+    }
+    statuses[k] = status;
+    rbm_observe(statuses + 0x40u + 7u * k);
+  }
+  return status;
+}
+uint32_t rbm_seq_select_mode_refusal(uint32_t caller)
+{
+  uint32_t (*run)(uint32_t, uint32_t) = (uint32_t (*)(uint32_t, uint32_t))caller;
+  uint32_t status = rb_select((RbSelection){1u}, rb_media_sample());
+  if (status != 0u) {
+    return status;
+  }
+  rbm_restore_fault = RBM_RESTORE_REFUSE_BASE;
+  *(volatile uint32_t *)0x0094f650u = 0x24u;
+  *(volatile uint32_t *)0x0094f654u = 3u;
+  status = run(0x24u, 3u);
+  rbm_observe((uint32_t *)0x009a0200u);
+  return status;
+}
+
+
+/* For each token of a stock values array, the bank probe's row state for the
+ * hosting property and the stock render probe's for the edited property, as
+ * word pairs at `out`; returns the token count. */
+uint32_t rbm_seq_field_rows(uint32_t host, uint32_t prop, const uint32_t *values,
+                            uint32_t *out)
+{
+  uint32_t (*stock)(uint32_t, uint32_t) =
+      (uint32_t (*)(uint32_t, uint32_t))0x00d52684u;
+  uint32_t n = 0u;
+  for (; values[0] != 0x7ffffffeu; values += 2) {
+    out[2u * n] = (uint32_t)rb_probe_state(host, values[0]);
+    out[2u * n + 1u] = stock(prop, values[0]);
+    n++;
+  }
+  return n;
+}
+
+/* rb_select of codes[0..count-1] in order, then rb_reset of `slot`; each
+ * status lands at statuses[k] and the reset's is returned */
+uint32_t rbm_seq_selects_reset(const uint8_t *codes, uint32_t count, uint32_t slot,
+                               uint32_t *statuses)
+{
+  (void)rbm_seq_selects(codes, count, statuses);
+  return rb_reset(slot, rb_media_sample());
 }
 
 uint32_t rbm_seq_stage_roundtrip(uint32_t slot, const uint8_t *name12)

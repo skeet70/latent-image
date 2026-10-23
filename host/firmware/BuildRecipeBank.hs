@@ -22,7 +22,7 @@ import FujiAF.JSON (encodeCanonical)
 import FujiAF.RecipeBank
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
-import RecipeBankRamLayout
+import RecipeBankRamPlacement
 import RamPushToolchain
 
 -- | The four label texts the submenu pages carry, in the order the actions
@@ -93,7 +93,7 @@ main = do
     PreBootstrap -> pure original
     FlashPackage kernel _ d3 _ -> carveSpec original kernel d3
     RamPush base linkedDir _ _ _ ->
-      carveSpecAt base original linkedDir ramNameImagePath
+      carveSpecAt (RamCarve (RuntimeBase base)) original linkedDir ramNameImagePath
   H.fields spec "schema image4 image4_base image5 image5_base image2 image2_base image2_compiled_name boot slots placement payload_defaults" "recipe bank spec"
   unless (H.str (H.get spec "schema") == "recipe-bank-spec-1") $
     H.failH "spec: recipe-bank-spec-1 required"
@@ -153,24 +153,37 @@ main = do
   expectedDigest <- stringField defaultsSpec "sha256"
   unless (defaultsDigest == expectedDigest) $
     H.failH ("spec: the payload defaults record hashes " ++ defaultsDigest ++ ", not the pinned defaults block")
-  slots <- parseSlots payloadDefaults tableFor spec
+  domain <- either H.failH pure (payloadDomainFromImage4 image4Base image4)
+  slots <- parseSlots domain payloadDefaults tableFor spec
+  initialWrite <- either (H.failH . show) pure (nextWrite NoBank)
+  bankSlots' <- either H.failH pure
+    (bankRecordsFromList
+      (map (\slot -> Populated (inputSlotName slot) (inputSlotPayload slot) (inputSlotPayload slot)) slots
+        ++ replicate (bankCapacity - length slots) Unpopulated))
   let ids = bankNameIds
       count = length slots
       mask = foldl' (\acc k -> acc + (1 `shiftL` (k :: Int))) 0 [0 .. count - 1] :: Word16
-  generation <- either H.failH pure (nextGeneration Nothing Nothing)
-  blob <- either H.failH pure (encodeFileBlob (slots ++ replicate (bankCapacity - length slots) (FileSlot "" payloadDefaults)))
-  let payloads = B.take (bankCapacity * payloadBytes) blob
-      names = B.drop (bankCapacity * payloadBytes) blob
+      generation = nextWriteGeneration initialWrite
+      state = BankState generation NothingSelected Disabled BaseInvalid bankSlots'
+      slotNames = map (slotNameText . inputSlotName) slots ++ replicate (bankCapacity - count) ""
       fullNames = if runtimeMode buildMode
         then ["CUSTOM " ++ show k | k <- [1 .. bankCapacity]]
-        else map fileSlotName slots ++ replicate (bankCapacity - count) ""
+        else slotNames
+  paddingPayload <- either H.failH pure (canonicalBankPayload payloadDefaults)
+  let payloads = B.concat (map (bankPayloadContents . inputSlotPayload) slots
+        ++ replicate (bankCapacity - count) (bankPayloadContents paddingPayload))
+  names <- B.concat <$> mapM (either H.failH pure . encodeName) slotNames
+  let blob = payloads <> names
   records <- mapM (either H.failH pure . encodeNameRecord) fullNames
   stockRecords <- stockNameRecords spec
   uiRecords <- mapM (either H.failH pure . encodeLabelRecord) uiTexts
   let nameTable = B.append stockRecords (B.concat records <> B.concat uiRecords)
-  cardFile <- either H.failH pure (encodeBankFile (BankHeader generation mask) blob)
-  -- the nine pages: one slot-list node, one sub-list node per slot, one recall
-  -- node. Every page is a class-0x281 list whose rows carry the tokens the
+  cardFile <- either H.failH pure (encodeBankFile state)
+  case classifyBankFile domain cardFile of
+    ValidFile (DecodedV2 _) -> pure ()
+    result -> H.failH ("spec: bank is not safe to publish: " ++ show result)
+  -- the nine pages: one slot-list node, one sub-list node per slot, one
+  -- selection node. Every page is a list whose rows carry the tokens the
   -- modal interposer decodes (bank-integration-contract).
   let slotNodeAddress = hexFieldIn menu "slot_node"
       recallNodeAddress = hexFieldIn menu "recall_node"
@@ -181,7 +194,6 @@ main = do
       subNodes = [slotNodeAddress + 0x30 + 0x2c * k | k <- [0 .. fromIntegral count - 1]]
       slotValuesAddress = hexFieldIn menu "slot_values"
       subValuesAddress = hexFieldIn menu "sub_values"
-      recallValuesAddress = hexFieldIn menu "recall_values"
       slotLabelsAddress = hexFieldIn menu "slot_labels"
       verbLabelsAddress = hexFieldIn menu "verb_labels"
       parentValuesAddress = hexFieldIn menu "parent_values_address"
@@ -190,7 +202,7 @@ main = do
       nameRecordAddress = hexFieldIn menu "name_record_address"
   unless (length subNodes == count) $ H.failH "spec: one sub-list node per slot"
   unless (recallNodeAddress == slotNodeAddress + 0x30 + 0x2c * fromIntegral count + 0xc) $
-    H.failH "spec: the recall node must follow the sub-list nodes"
+    H.failH "spec: the selection node must follow the sub-list nodes"
   editorNodeAddress <- case H.get menu "editor_node" of
     String _ -> pure (hexFieldIn menu "editor_node")
     _ -> H.failH "spec: the submenu rows open the editor node"
@@ -455,6 +467,13 @@ main = do
   mediaAttachStockWords <- hexWords host "media_attach_stock_words"
   mediaAttachWrites <-
     retargetSites image4 image4Base "id4_code" "attach-entry epoch bump" mediaAttachShim armTailBranchWord mediaAttachSites mediaAttachStockWords
+  -- SELECT CUSTOM SETTING's eight rows and labels are the kernel's own
+  -- rb_select_values and rb_select_labels
+  (selectValuesAddress, selectLabelsAddress) <- case modeKernel buildMode of
+    Nothing -> H.failH "spec: SELECT CUSTOM SETTING's arrays are linked kernel data, which pre-bootstrap placement does not carry"
+    Just kernel -> do
+      symbols <- readSymbols (kernel ++ "/kernel.syms")
+      (,) <$> linked symbols "rb_select_values" <*> linked symbols "rb_select_labels"
   slotLabels <- either H.failH pure (encodeLabelsArray [[labelId, labelId, 0, 0] | labelId <- ids])
   verbLabels <-
     either H.failH pure
@@ -471,9 +490,8 @@ main = do
         | k <- [0 .. fromIntegral count - 1]
         ]
       subValuesBases = init (scanl (+) subValuesAddress (map (fromIntegral . B.length) subValuesBlocks))
-      recallValues = encodeValuesArray [(0x60 + k, 0) | k <- [0 .. fromIntegral count - 1]]
       slotNode = encodeCustomNode subId 0 slotClass NavigationList parentNode slotValuesAddress slotLabelsAddress w28
-      recallNode = encodeCustomNode 1 0 recallClass NavigationList parentNode recallValuesAddress slotLabelsAddress w28
+      selectNode = encodeCustomNode 1 0 recallClass NavigationList parentNode selectValuesAddress selectLabelsAddress w28
   -- parent list: read its stock arrays, append two rows and two label quads
   case H.get placement "label" of
     Object _ ->
@@ -486,7 +504,7 @@ main = do
   parentLabelsSource <- hexField menu "parent_labels_source"
   stockValues <- readArray image4 image4Base parentValuesSource 8 0x7ffffffe
   stockLabels <- readArray image4 image4Base parentLabelsSource 16 0xffffffff
-  -- the two appended parent rows open the slot list and the recall list, in the
+  -- the two appended parent rows open the slot list and the selection list, in the
   -- contract's own row tokens and label ids rather than numbered after the
   -- stock list
   (parentValues', parentLabels') <-
@@ -503,8 +521,7 @@ main = do
         , sourceWrite sources "menu_values" slotNodeAddress slotNode "slot list node header"
         , sourceWrite sources "menu_values" subValuesAddress (B.concat subValuesBlocks) "sub-list values, one row per field"
         , sourceWrite sources "menu_labels" verbLabelsAddress verbLabels "verb row labels"
-        , sourceWrite sources "menu_values" recallValuesAddress recallValues "recall list values"
-        , sourceWrite sources "menu_values" recallNodeAddress recallNode "recall list node header"
+        , sourceWrite sources "menu_values" recallNodeAddress selectNode "select list node header"
         , sourceWrite sources "menu_parent" parentValuesAddress parentValues' "parent values array with the two items"
         , sourceWrite sources "menu_parent" parentLabelsAddress parentLabels' "parent labels array with the two items"
         , sourceWrite sources "name_records" nameRecordAddress nameTable "stock 0x83c-0x83e, bank records 0x83f-0x845, label texts 0x846-0x849"
@@ -591,7 +608,15 @@ main = do
       previewWrites <- retargetSites (sourceBytes plain) (sourceBase plain) "plain_sites"
         "bank current-value preview call" currentValueLabel armBranchWord
         [0x0116657c, 0x011675c4] [0xebea4b97, 0xebea4785]
-      pure $ workerWrites ++ previewWrites ++
+      -- the stock mode-apply calls a dial move runs: bl FUN_00d1a7d8 in the UI
+      -- event 0x52 handler, and bl FUN_006439ac in UI state 53's events 2 and 0x11
+      dialApply <- linked symbols "rb_mode_dial_apply"
+      pairApply <- linked symbols "rb_mode_pair_apply"
+      dialWrites <- retargetSites image5 image5Base "image5" "mode dial apply call"
+        dialApply armBranchWord [0x00c2dfbc] [0xeb03b205]
+      pairWrites <- retargetSites image5 image5Base "image5" "mode and class apply call"
+        pairApply armBranchWord [0x00c2cf88, 0x00c2d278] [0xebe85a87, 0xebe859cb]
+      pure $ workerWrites ++ previewWrites ++ dialWrites ++ pairWrites ++
         [ wordWrite sources "image5" 0x00d3d894 presentBranch "bank presenter entry branch"
         , wordWrite sources "plain_sites" 0x0115815c drawBranch "bank list graphics entry branch"
         , wordWrite sources "plain_sites" 0x011089d8 drawSelectedBranch "bank failure after selected drawer"
@@ -664,8 +689,8 @@ replaceFields value changes = H.obj
 carveBase, executableBase, dataBase, nameBase, sourceBaseAddress :: Word32
 carveBase = 0x00be1a00
 executableBase = runtimeExecutableBase carveBase
-dataBase = runtimeDataBase carveBase
-nameBase = runtimeNameBase carveBase
+dataBase = 0x00bea200
+nameBase = 0x00beb784
 sourceBaseAddress = 0x011ad800
 
 ramNameImagePath :: FilePath
@@ -679,23 +704,30 @@ ramD3Image5Path =
   "private-data/analysis/x-m1-1.50/recipes/d3-q-rows-20261017/d3-emit/id5-patched.bin"
 ramRc0Image2Path = "private-data/analysis/x-m1-1.50/filmsim/id2-00130000.bin"
 
+newtype RuntimeBase = RuntimeBase Word32
+
+data CarvePlacement = FlashCarve | RamCarve RuntimeBase
+
 carveSpec :: Value -> FilePath -> FilePath -> IO Value
 carveSpec original kernel d3 =
-  carveSpecAt carveBase original kernel (d3 ++ "/id2-patched.bin")
+  carveSpecAt FlashCarve original kernel (d3 ++ "/id2-patched.bin")
 
-carveSpecAt :: Word32 -> Value -> FilePath -> FilePath -> IO Value
-carveSpecAt base original kernel image2Path = do
+carveSpecAt :: CarvePlacement -> Value -> FilePath -> FilePath -> IO Value
+carveSpecAt placementKind original kernel image2Path = do
   unless (length (H.list (H.get original "slots")) == bankCapacity) $
     H.failH "complete package requires seven independent slots"
   symbols <- readSymbols (kernel ++ "/kernel.syms")
+  let (menuData, names) = case placementKind of
+        FlashCarve -> (dataBase, nameBase)
+        RamCarve (RuntimeBase base) -> (runtimeDataBase base, runtimeNameBase base)
   let relocate value = case value of
         Object _ -> H.obj [(key, relocate (H.get value key)) | key <- H.keys value]
         Array _ -> H.arr (map relocate (H.list value))
         String _ | take 2 (H.str value) == "0x" ->
           let address = hexValue (H.str value)
-           in if address == 0x011ac900 then H.s (hex32 (runtimeNameBase base))
+           in if address == 0x011ac900 then H.s (hex32 names)
               else if 0x011ac5a0 <= address && address < 0x011ad800
-                then H.s (hex32 (runtimeDataBase base + address - 0x011ac5a0))
+                then H.s (hex32 (menuData + address - 0x011ac5a0))
                 else value
         _ -> value
       moved = relocate original
@@ -778,7 +810,7 @@ emitPackage spec sources plan kernel boot d3 stockPath out = do
   let imageBytes = 0xa120
       runtimeWrites = [w | w <- planWrites plan, carveBase <= writeAddress w && writeAddress w < 0x00befffc]
       publications = [w | w <- planWrites plan, w `notElem` runtimeWrites, writeCurrent w /= writeNew w]
-  unless (B.length code <= 0x7b00 && length publications < 128) $
+  unless (B.length code <= 0x8300 && length publications < 128) $
     H.failH "package: code or publication table capacity exceeded"
   unless (hexFieldIn (H.get (H.get spec "placement") "menu") "name_record_address" == nameBase) $
     H.failH "package: fourteen name records require the fixed name base"
@@ -798,13 +830,14 @@ emitPackage spec sources plan kernel boot d3 stockPath out = do
          0x0071c4d4,0x0071c108,0x0071c28c,0x007115a4,0x007116e4,0x00711768] <>
         [base + 4 * host | base <- [0x0061e128,0x006246c8,0x0081b09c], host <- [0x267 .. 0x26f]] <>
         [0x00d04084,0x00d526fc,0x00bfa3f0,0x00bfa7ec,0x00bfacf0,0x00cd20a4,0x00cd211c,0x00cd243c,0x00d3d894,
-         0x0115815c,0x011089d8,0x0116657c,0x011675c4,0x00bfb1f0,0x00d04188,0x00d04114,0x00cd24b4] <>
+         0x0115815c,0x011089d8,0x0116657c,0x011675c4,0x00bfb1f0,0x00d04188,0x00d04114,0x00cd24b4,
+         0x00c2dfbc,0x00c2cf88,0x00c2d278] <>
         [0x011122c0,0x01112448,0x01112664,0x011127e8,0x01112a74,0x0111373c,0x01113994,
          0x011640f0,0x0116bbbc,0x0116bcb4,0x01178564,0x01178694,0x01178cf4,0x01178fb8,
          0x01179a58,0x01179abc,0x01179b14,0x01179efc,0x0117a734,0x0117deb8,0x0117def4,0x0117df7c,
          0x0117dc14,0x0117dc80,0x0117dcec,0x0117dd54,0x0117ddbc,0x0117de24,0x0117de70,0x0117dfe8,
          0x0117dc34,0x0117dca0,0x0117dd0c,0x0117dd74,0x0117dddc,0x0117e014]
-  unless (length publicationPairs == 94 && sortOn id (map fst publicationPairs) == sortOn id expectedSites) $
+  unless (length publicationPairs == 97 && sortOn id (map fst publicationPairs) == sortOn id expectedSites) $
     H.failH "package: publication destinations differ from the pinned bank contract"
   let allow = [(0x0061c400, 0x00282800), (0x00bf1a00, 0x004d0020), (0x01100000, 0x00080000)]
   forM_ publicationPairs $ \(address, _) ->
@@ -813,7 +846,7 @@ emitPackage spec sources plan kernel boot d3 stockPath out = do
   let activationSites = [0x0071fa9c,0x0071f7dc,0x0071c4d4,0x0071c108,0x0071c28c,0x007115a4,0x007116e4,0x00711768,
         0x00d526fc,0x00bfa3f0,0x00bfa7ec,0x00bfacf0,
         0x00d04084,0x00cd20a4,0x00cd211c,0x00cd243c,0x00d3d894,0x0115815c,0x011089d8,0x0116657c,0x011675c4,
-        0x00bfb1f0,0x00d04188,0x00d04114,0x00cd24b4]
+        0x00bfb1f0,0x00d04188,0x00d04114,0x00cd24b4,0x00c2dfbc,0x00c2cf88,0x00c2d278]
       priority address
         | address `elem` activationSites = 2 :: Int
         | address >= 0x01100000 = 0
@@ -1042,7 +1075,8 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
          0x0071c4d4,0x0071c108,0x0071c28c,0x007115a4,0x007116e4,0x00711768] <>
         [siteBase + 4 * host | siteBase <- [0x0061e128,0x006246c8,0x0081b09c], host <- [0x267 .. 0x26f]] <>
         [0x00d04084,0x00d526fc,0x00bfa3f0,0x00bfa7ec,0x00bfacf0,0x00cd20a4,0x00cd211c,0x00cd243c,0x00d3d894,
-         0x0115815c,0x011089d8,0x0116657c,0x011675c4,0x00bfb1f0,0x00d04188,0x00d04114,0x00cd24b4] <>
+         0x0115815c,0x011089d8,0x0116657c,0x011675c4,0x00bfb1f0,0x00d04188,0x00d04114,0x00cd24b4,
+         0x00c2dfbc,0x00c2cf88,0x00c2d278] <>
         [0x011122c0,0x01112448,0x01112664,0x011127e8,0x01112a74,0x0111373c,0x01113994,
          0x011640f0,0x0116bbbc,0x0116bcb4,0x01178564,0x01178694,0x01178cf4,0x01178fb8,
          0x01179a58,0x01179abc,0x01179b14,0x01179efc,0x0117a734,0x0117deb8,0x0117def4,0x0117df7c,
@@ -1052,7 +1086,7 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
         [0x0071fa9c,0x0071f7dc,0x0071c4d4,0x0071c108,0x0071c28c,0x007115a4,0x007116e4,0x00711768,
          0x00d526fc,0x00bfa3f0,0x00bfa7ec,0x00bfacf0,
          0x00d04084,0x00cd20a4,0x00cd211c,0x00cd243c,0x00d3d894,0x0115815c,0x011089d8,0x0116657c,0x011675c4,
-         0x00bfb1f0,0x00d04188,0x00d04114,0x00cd24b4]
+         0x00bfb1f0,0x00d04188,0x00d04114,0x00cd24b4,0x00c2dfbc,0x00c2cf88,0x00c2d278]
       legacyPriority publication
         | ramAddress publication `elem` legacyActivationSites = 2 :: Int
         | ramAddress publication >= 0x01100000 = 0
@@ -1060,11 +1094,11 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
       legacyOrdered = sortOn (\publication -> (legacyPriority publication, ramAddress publication)) publicationPairs
       safeOrder = safePublicationOrder
       publicationCore index
-        | index >= 94 = "unknown"
+        | index >= 97 = "unknown"
         | index <= 35 || index >= 54 && index <= 71 || index >= 75 = "cpu0"
         | otherwise = "unknown"
   unless
-    ( length legacyOrdered == 94
+    ( length legacyOrdered == 97
         && sortOn id (map ramAddress legacyOrdered) == sortOn id expectedSites
     ) $
     H.failH "ram-push: publication destinations differ from the bank contract"
@@ -1088,7 +1122,7 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
         && length (nub (map ramAddress logical)) == publicationCount
         && all (\p -> toInteger (ramAddress p) + 4 <= toInteger base || toInteger (ramAddress p) >= allocationEnd) logical
     ) $
-    H.failH "ram-push: publication order, D3 split or destinations differ from the 250-entry contract"
+    H.failH "ram-push: publication order, D3 split or destinations differ from the 253-entry contract"
   let allow = [(0x0061c400, 0x00282800), (0x00bf1a00, 0x004d0020), (0x01100000, 0x00080000)]
       metadata =
         B.concat [word32 lo <> word32 spanBytes | (lo, spanBytes) <- allow]
@@ -1129,11 +1163,13 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
         , "menu/recipe_bank_storage.c"
         , "menu/recipe_bank_actions.c"
         , "menu/recipe_bank_edit.c"
+        , "menu/recipe_bank_diagnostic.c"
+        , "menu/recipe_bank_diagnostic.h"
         , "menu/recipe_bank_ui.h"
         , "menu/recipe_bank_edit.h"
         , "menu/recipe_bank_fields.inc"
-        , "menu/ram_push_installer.c"
-        , "menu/ram_push_abi.h"
+        , "menu/recipe_bank_installer/ram_push_installer.c"
+        , "menu/recipe_bank_installer/ram_push_abi.h"
         , "menu/recipe_bank_ram.ld"
         , "menu/recipe_bank_allowlist.json"
         , "menu/recipe_bank_boot.S"
@@ -1141,6 +1177,7 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
         , "host/firmware/BuildRecipeBank.hs"
         , "host/firmware/build-recipe-bank-ram.sh"
         , "host/firmware/RecipeBankRamLayout.hs"
+        , "host/firmware/RecipeBankRamPlacement.hs"
         , ramNameImagePath
         , ramD3Image4Path
         , ramD3Image5Path
@@ -1499,11 +1536,15 @@ encodeCustomNode nodeId nodeType property kind parent values labels w28 =
 word32 :: Word32 -> B.ByteString
 word32 w = B.pack [fromIntegral ((w `div` (256 ^ i)) `mod` 256) | i <- [0 .. 3 :: Int]]
 
--- | A slot is a name plus its 0x28 payload. The spec carries the payload
--- verbatim (the full-custom rule) or, when it names the nine fields, the
--- builder encodes them into a zero base payload.
-parseSlots :: B.ByteString -> (Word16 -> ConversionTable) -> Value -> IO [FileSlot]
-parseSlots base tableFor spec = do
+data InputSlot = InputSlot
+  { inputSlotName :: SlotName
+  , inputSlotPayload :: BankPayload
+  }
+
+-- | Row-based slots overlay the pinned payload defaults: rows name the applied
+-- properties and 0xf6, whose value is an offered IMAGE SIZE menu row.
+parseSlots :: PayloadDomain -> B.ByteString -> (Word16 -> ConversionTable) -> Value -> IO [InputSlot]
+parseSlots domain base tableFor spec = do
   let slots = H.list (H.get spec "slots")
   unless (not (null slots) && length slots <= bankCapacity) $
     H.failH ("spec: 1 to " ++ show bankCapacity ++ " slots required")
@@ -1513,22 +1554,28 @@ parseSlots base tableFor spec = do
       Null -> H.fields s "name rows" "bank slot"
       _ -> H.failH "spec: a slot payload must be a hex string"
     name <- stringField s "name"
-    _ <- either H.failH pure (encodeName name)
+    typedName <- either H.failH pure (slotName name)
     payload <- case H.get s "payload" of
       String hexText -> either H.failH pure (decodePayloadHex (H.str (String hexText)))
       _ -> do
         let rows = H.get s "rows"
             keys = H.keys rows
-        unless (sortOn id (map hexValue keys) == sortOn id (map (fromIntegral :: Word16 -> Word32) appliedProperties)) $
-          H.failH ("slot " ++ name ++ ": rows must name the applied properties " ++ show appliedProperties ++ " or payload must carry all 0x28 bytes")
-        rowPairs <- forM keys $ \key -> do
+            appliedKeys = [k | k <- keys, hexValue k /= 0xf6]
+        sizeKey <- case [k | k <- keys, hexValue k == 0xf6] of
+          [k] | sortOn id (map hexValue appliedKeys) == sortOn id (map (fromIntegral :: Word16 -> Word32) appliedProperties) -> pure k
+          _ -> H.failH ("slot " ++ name ++ ": rows must name the applied properties " ++ show appliedProperties ++ " and 0xf6, or payload must carry all 0x28 bytes")
+        rowPairs <- forM appliedKeys $ \key -> do
           let property = hexValue key
               table = tableFor (fromIntegral property)
           row <- H.integer (H.get rows key) 0 (toInteger (length (tableRows table)) - 1) ("slot " ++ name ++ " row " ++ key)
           pure (property, fromInteger row)
+        sizeRow <- H.integer (H.get rows sizeKey) 0 0xff ("slot " ++ name ++ " IMAGE SIZE row")
         recipe <- either H.failH pure (recipeFromRows tableFor rowPairs)
-        either H.failH pure (encodeSlotPayloadOver base recipe)
-    pure (FileSlot name payload)
+        either H.failH pure (withImageSizeRow domain (fromInteger sizeRow) =<< encodeSlotPayloadOver base recipe)
+    typedPayload <- either H.failH pure (canonicalBankPayload payload)
+    case payloadUnsafeReason domain typedPayload of
+      Just reason -> H.failH ("slot " ++ name ++ ": " ++ reason)
+      Nothing -> pure (InputSlot typedName typedPayload)
 
 decodePayloadHex :: String -> Either String B.ByteString
 decodePayloadHex text
@@ -1566,8 +1613,8 @@ buildPlanNotes parentNode valuesAddress labelsAddress =
   , "the SD bank file is separate from this provisional pre-bootstrap RAM placement"
   ]
 
-planJson :: Word32 -> Word16 -> String -> String -> [Source] -> WritePlan -> B.ByteString -> [B.ByteString] -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Value
-planJson generation mask blobDigest payloadDigest sources plan blob records values labels parentValues parentLabels = H.obj
+planJson :: BankGeneration -> Word16 -> String -> String -> [Source] -> WritePlan -> B.ByteString -> [B.ByteString] -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Value
+planJson (BankGeneration generation) mask blobDigest payloadDigest sources plan blob records values labels parentValues parentLabels = H.obj
   [ ("schema", H.s "recipe-bank-plan-1")
   , ("installable", Bool False)
   , ("emission", H.s (if any ((< 0x00bf1a00) . regionStart . sourceRegion) [s | s <- sources, regionName (sourceRegion s) == "menu_values"]
@@ -1575,6 +1622,7 @@ planJson generation mask blobDigest payloadDigest sources plan blob records valu
   , ("generation", H.n (fromIntegral generation))
   , ("slot_valid_mask", H.n (fromIntegral mask))
   , ("bank_file_bytes", H.n (fromIntegral bankFileBytes))
+  , ("bank_file_version", H.n 2)
   , ("bank_blob_bytes", H.n (fromIntegral (B.length blob)))
   , ("bank_blob_sha256", H.s blobDigest)
   , ("slot_payloads_sha256", H.s payloadDigest)

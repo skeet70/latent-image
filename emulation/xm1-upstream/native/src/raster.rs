@@ -526,7 +526,7 @@ fn ui_known(path: bool, index: u64) -> bool {
             | 0x8d | 0x8e | 0x40..=0x48 | 0x61..=0x68 | 0x84..=0x88)
     } else {
         matches!(index, 0x18 | 0x28 | 0x31 | 0xa0 | 0xa2 | 0xad | 0x100 | 0x115 | 0x117 | 0x118 | 0x11b
-            | 0x140 | 0x143 | 0x144 | 0x147 | 0x14d | 0x14e | 0x152..=0x157 | 0x16c | 0x168 | 0x16b
+            | 0x140 | 0x143 | 0x144 | 0x147 | 0x14d | 0x14e | 0x152..=0x157 | 0x16c | 0x168..=0x16b
             | 0x16d | 0x178 | 0x184 | 0x185 | 0x187 | 0x188 | 0x190 | 0x1c0 | 0xa4..=0xa8 | 0xc0..=0xdf
             | 0x106..=0x114 | 0x180..=0x183 | 0x1a0..=0x1a5 | 0x1a7 | 0x1a9 | 0x1aa)
     }
@@ -545,5 +545,27 @@ impl<'py> Registers<'py> {
     fn set(&mut self, _py: Python<'py>, key: u64, value: u64) -> PyResult<()> {
         self.values.insert(key, value);
         self.dict.set_item(key, value)
+    }
+}
+
+#[cfg(test)]
+mod conversion_tests {
+    use super::DeclaredUIConversionPlan;
+
+    #[test]
+    fn yycbcr_conversion_publishes_abgr_and_skips_row_padding() {
+        let plan = DeclaredUIConversionPlan::prepare(0, 512, 16, 8, 32, 1024).unwrap();
+        let mut source = [0u8; 480];
+        for row in 0..8 {
+            for pair in source[row * 64..row * 64 + 32].chunks_exact_mut(4) {
+                pair.copy_from_slice(&[0, 255, 128, 128]);
+            }
+        }
+        let mut destination = [0x55; 512];
+        plan.convert(&source, &mut destination);
+        for pair in destination.chunks_exact(8) {
+            assert_eq!(pair, [255, 0, 0, 0, 255, 255, 255, 255]);
+        }
+        assert!(DeclaredUIConversionPlan::prepare(0, 16, 16, 8, 32, 1024).is_err());
     }
 }

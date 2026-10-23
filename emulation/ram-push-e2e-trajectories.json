@@ -9,7 +9,7 @@
       ["down", 0, 5, 1],
       ["down", 0, 5, 2],
       ["down", 0, 5, 3],
-      ["down", 0, 5, 4],
+      ["cursor:down:4:8", 0, 5, 4],
       ["right", 1, 5, 30],
       ["down", 1, 5, 31],
       ["down", 1, 5, 32],
@@ -39,16 +39,27 @@
       ["back", 114, 631, 6],
       ["back", 97, 624, 2],
       ["back", 97, 641, 0]]},
-    {"phase": "recall", "requires": ["edit-highlight-tone"], "capture": "bank-recall", "reads": [["rb-recall-trace", "runtime:rb_recall_trace", 36]], "steps": [
+    {"phase": "select", "requires": ["edit-highlight-tone"], "capture": "bank-select", "reads": [["rb-select-trace", "runtime:rb_select_trace", 48]], "steps": [
       ["back", 1, 5, 33],
       ["down", 1, 5, 34],
       ["ok", 1, 645, 0],
+      ["down", 1, 645, 1],
       ["ok", 1, 5, 34]]},
-    {"phase": "stock-menu", "requires": ["recall"], "capture": "stock-highlight-before-unload", "steps": [
+    {"phase": "dial", "requires": ["select"], "capture": "dial-selected", "reads": [["mode", "00956838", 4], ["highlight-shadow", "00956b40", 8], ["stock-c", "0096cda4", 40], ["activation", "runtime:rb_activation", 8], ["bank", "runtime:rb_resident", 104]], "steps": [["back", 1, 5, 34]]},
+    {"phase": "dial", "mode_dial": "P", "capture": "dial-p", "reads": [["mode", "00956838", 4], ["highlight-shadow", "00956b40", 8], ["stock-c", "0096cda4", 40], ["activation", "runtime:rb_activation", 8]], "steps": []},
+    {"phase": "dial", "mode_dial": "A", "capture": "dial-a", "reads": [["mode", "00956838", 4], ["highlight-shadow", "00956b40", 8], ["stock-c", "0096cda4", 40], ["activation", "runtime:rb_activation", 8]], "steps": []},
+    {"phase": "dial", "mode_dial": "M", "capture": "dial-m", "reads": [["mode", "00956838", 4], ["highlight-shadow", "00956b40", 8], ["stock-c", "0096cda4", 40], ["activation", "runtime:rb_activation", 8]], "steps": []},
+    {"phase": "dial", "mode_dial": "S", "capture": "dial-s", "reads": [["mode", "00956838", 4], ["highlight-shadow", "00956b40", 8], ["stock-c", "0096cda4", 40], ["activation", "runtime:rb_activation", 8]], "steps": []},
+    {"phase": "dial", "mode_dial": "AUTO", "capture": "dial-auto", "reads": [["mode", "00956838", 4], ["highlight-shadow", "00956b40", 8], ["stock-c", "0096cda4", 40], ["activation", "runtime:rb_activation", 8]], "steps": []},
+    {"phase": "dial", "mode_dial": "P", "capture": "dial-resume-p", "reads": [["mode", "00956838", 4], ["highlight-shadow", "00956b40", 8], ["stock-c", "0096cda4", 40], ["activation", "runtime:rb_activation", 8]], "steps": []},
+    {"phase": "dial", "mode_dial": "C", "capture": "dial-c", "reads": [["mode", "00956838", 4], ["highlight-shadow", "00956b40", 8], ["stock-c", "0096cda4", 40], ["activation", "runtime:rb_activation", 8]], "steps": []},
+    {"phase": "dial", "mode_dial": "S", "capture": "dial-resume-s", "reads": [["mode", "00956838", 4], ["highlight-shadow", "00956b40", 8], ["stock-c", "0096cda4", 40], ["activation", "runtime:rb_activation", 8], ["select-trace", "runtime:rb_select_trace", 48]], "steps": []},
+    {"phase": "stock-menu", "requires": ["dial"], "capture": "stock-highlight-before-unload", "steps": [
+      ["menu", 1, 5, 34],
+      ["menu", 1, 5, 34],
+      ["cursor:up:32:4", 1, 5, 32],
       ["left", 0, 5, 4],
-      ["up", 0, 5, 3],
-      ["up", 0, 5, 2],
-      ["up", 0, 5, 1],
+      ["cursor:up:1:6", 0, 5, 1],
       ["right", 1, 5, 8],
       ["down", 1, 5, 9],
       ["down", 1, 5, 10],
@@ -93,30 +104,40 @@
     {"phase": "d3-menu-close", "requires": ["d3-iso"], "observe": true, "steps": [
       ["back", 1, 5, 2],
       ["back", 1, 5, 2]]},
-    {"phase": "d3-q-film-cell", "requires": ["d3-menu-close"], "observe": true, "capture": "d3-q-film-cell", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+    {"phase": "d3-q-film-cell", "requires": ["d3-menu-close"], "film_row": 7, "capture": "d3-q-film-cell", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["q", 122, 5, 1],
-      ["cursor:right:7:16", 122, 5, 7]]},
-    {"phase": "d3-q-row-8", "requires": ["d3-q-film-cell"], "observe": true, "capture": "d3-q-row-8", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+      ["cursor:right:3:8", 122, 5, 3],
+      ["cursor:down:7:4", 122, 5, 7]]},
+    {"phase": "d3-q-row-8", "requires": ["d3-q-film-cell"], "film_row": 8, "capture": "d3-q-row-8", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["dial-right", 122, 5, 7]]},
-    {"phase": "d3-q-row-0", "requires": ["d3-q-row-8"], "observe": true, "capture": "d3-q-row-0", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+    {"phase": "d3-q-row-0", "requires": ["d3-q-row-8"], "film_row": 0, "capture": "d3-q-row-0", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["dial-right", 122, 5, 7]]},
-    {"phase": "d3-q-row-1", "requires": ["d3-q-row-0"], "observe": true, "capture": "d3-q-row-1", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+    {"phase": "d3-q-row-1", "requires": ["d3-q-row-0"], "film_row": 1, "capture": "d3-q-row-1", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["dial-right", 122, 5, 7]]},
-    {"phase": "d3-q-row-2", "requires": ["d3-q-row-1"], "observe": true, "capture": "d3-q-row-2", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+    {"phase": "d3-q-row-2", "requires": ["d3-q-row-1"], "film_row": 2, "capture": "d3-q-row-2", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["dial-right", 122, 5, 7]]},
-    {"phase": "d3-q-row-3", "requires": ["d3-q-row-2"], "observe": true, "capture": "d3-q-row-3", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+    {"phase": "d3-q-row-3", "requires": ["d3-q-row-2"], "film_row": 3, "capture": "d3-q-row-3", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["dial-right", 122, 5, 7]]},
-    {"phase": "d3-q-row-4", "requires": ["d3-q-row-3"], "observe": true, "capture": "d3-q-row-4", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+    {"phase": "d3-q-row-4", "requires": ["d3-q-row-3"], "film_row": 4, "capture": "d3-q-row-4", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["dial-right", 122, 5, 7]]},
-    {"phase": "d3-q-row-5", "requires": ["d3-q-row-4"], "observe": true, "capture": "d3-q-row-5", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+    {"phase": "d3-q-row-5", "requires": ["d3-q-row-4"], "film_row": 5, "capture": "d3-q-row-5", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["dial-right", 122, 5, 7]]},
-    {"phase": "d3-q-row-6", "requires": ["d3-q-row-5"], "observe": true, "capture": "d3-q-row-6", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+    {"phase": "d3-q-row-6", "requires": ["d3-q-row-5"], "film_row": 6, "capture": "d3-q-row-6", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["dial-right", 122, 5, 7]]},
-    {"phase": "d3-q-row-7", "requires": ["d3-q-row-6"], "observe": true, "capture": "d3-q-row-7", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+    {"phase": "d3-q-row-7", "requires": ["d3-q-row-6"], "film_row": 7, "capture": "d3-q-row-7", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["dial-right", 122, 5, 7]]},
-    {"phase": "d3-q-row-8-wrapped", "requires": ["d3-q-row-7"], "observe": true, "capture": "d3-q-row-8-wrapped", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+    {"phase": "d3-q-row-8-wrapped", "requires": ["d3-q-row-7"], "film_row": 8, "capture": "d3-q-row-8-wrapped", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["dial-right", 122, 5, 7]]},
-    {"phase": "d3-q-exit", "requires": ["d3-q-row-8-wrapped"], "observe": true, "capture": "d3-after-q-recipe-b", "reads": [["ordinary-block-0", "0096cc64", 248], ["ordinary-block-1", "0096cd5c", 248], ["ordinary-block-2", "0096ce54", 248], ["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+    {"phase":"d3-q-reverse-row-7","requires":["d3-q-row-8-wrapped"],"film_row":7,"capture":"d3-q-reverse-row-7","reads":[["film-dr","009568b8",8],["stored-film-byte","0096ccee",1]],"steps":[["dial-left",122,5,7]]},
+    {"phase":"d3-q-reverse-row-6","requires":["d3-q-reverse-row-7"],"film_row":6,"capture":"d3-q-reverse-row-6","reads":[["film-dr","009568b8",8],["stored-film-byte","0096ccee",1]],"steps":[["dial-left",122,5,7]]},
+    {"phase":"d3-q-reverse-row-5","requires":["d3-q-reverse-row-6"],"film_row":5,"capture":"d3-q-reverse-row-5","reads":[["film-dr","009568b8",8],["stored-film-byte","0096ccee",1]],"steps":[["dial-left",122,5,7]]},
+    {"phase":"d3-q-reverse-row-4","requires":["d3-q-reverse-row-5"],"film_row":4,"capture":"d3-q-reverse-row-4","reads":[["film-dr","009568b8",8],["stored-film-byte","0096ccee",1]],"steps":[["dial-left",122,5,7]]},
+    {"phase":"d3-q-reverse-row-3","requires":["d3-q-reverse-row-4"],"film_row":3,"capture":"d3-q-reverse-row-3","reads":[["film-dr","009568b8",8],["stored-film-byte","0096ccee",1]],"steps":[["dial-left",122,5,7]]},
+    {"phase":"d3-q-reverse-row-2","requires":["d3-q-reverse-row-3"],"film_row":2,"capture":"d3-q-reverse-row-2","reads":[["film-dr","009568b8",8],["stored-film-byte","0096ccee",1]],"steps":[["dial-left",122,5,7]]},
+    {"phase":"d3-q-reverse-row-1","requires":["d3-q-reverse-row-2"],"film_row":1,"capture":"d3-q-reverse-row-1","reads":[["film-dr","009568b8",8],["stored-film-byte","0096ccee",1]],"steps":[["dial-left",122,5,7]]},
+    {"phase":"d3-q-reverse-row-0","requires":["d3-q-reverse-row-1"],"film_row":0,"capture":"d3-q-reverse-row-0","reads":[["film-dr","009568b8",8],["stored-film-byte","0096ccee",1]],"steps":[["dial-left",122,5,7]]},
+    {"phase":"d3-q-reverse-row-8-wrapped","requires":["d3-q-reverse-row-0"],"film_row":8,"capture":"d3-q-reverse-row-8-wrapped","reads":[["film-dr","009568b8",8],["stored-film-byte","0096ccee",1]],"steps":[["dial-left",122,5,7]]},
+    {"phase": "d3-q-exit", "requires": ["d3-q-reverse-row-8-wrapped"], "observe": true, "film_row": 8, "capture": "d3-after-q-recipe-b", "reads": [["ordinary-block-0", "0096cc64", 248], ["ordinary-block-1", "0096cd5c", 248], ["ordinary-block-2", "0096ce54", 248], ["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["q", 1, 5, 2]]},
     {"phase": "d3-restore-highlight", "requires": ["d3-q-exit"], "observe": true, "capture": "d3-highlight-restored", "steps": [
       ["menu", 1, 5, 2],
@@ -132,47 +153,58 @@
       ["ok", 1, 272, 2],
       ["cursor:down:3:4", 1, 272, 3],
       ["ok", 1, 5, 11],
-      ["back", 1, 5, 11]]}
+      ["back", 1, 5, 11]]},
+    {"phase": "select-none", "requires": ["d3-restore-highlight"], "capture": "nothing-selected-before-unload", "reads": [["highlight-shadow", "00956b40", 8], ["stock-c", "0096cda4", 40], ["activation", "runtime:rb_activation", 8], ["bank", "runtime:rb_resident", 104], ["select-trace", "runtime:rb_select_trace", 48]], "steps": [
+      ["menu", 1, 5, 11], ["left", 0, 5, 1], ["cursor:down:2:4", 0, 5, 2], ["cursor:down:3:4", 0, 5, 3], ["cursor:down:4:4", 0, 5, 4],
+      ["cursor:right:30:4", 1, 5, 30], ["cursor:down:31:4", 1, 5, 31], ["cursor:down:32:4", 1, 5, 32], ["cursor:down:33:4", 1, 5, 33], ["cursor:down:34:4", 1, 5, 34],
+      ["ok", 1, 645, 0], ["ok", 1, 5, 34]]},
+    {"phase": "stock-film-before-unload", "requires": ["select-none"], "capture": "stock-film-before-unload", "reads": [["film-dr", "009568b8", 8]], "steps": [
+      ["cursor:up:32:4", 1, 5, 32], ["left", 0, 5, 4], ["cursor:up:3:4", 0, 5, 3], ["cursor:up:2:4", 0, 5, 2], ["cursor:up:1:4", 0, 5, 1], ["cursor:up:0:4", 0, 5, 0],
+      ["right", 1, 5, 2], ["cursor:down:3:4", 1, 5, 3], ["cursor:down:4:4", 1, 5, 4], ["cursor:down:5:4", 1, 5, 5], ["cursor:down:6:4", 1, 5, 6],
+      ["ok", 1, 254, 0], ["ok", 1, 5, 6], ["back", 1, 5, 6]]},
+    {"phase": "none-stock-highlight", "requires": ["stock-film-before-unload"], "capture": "base-highlight-before-unload", "steps": [
+      ["menu", 1, 5, 6], ["left", 0, 5, 0], ["cursor:down:1:4", 0, 5, 1], ["right", 1, 5, 8],
+      ["cursor:down:9:4", 1, 5, 9], ["cursor:down:10:4", 1, 5, 10], ["cursor:down:11:4", 1, 5, 11], ["ok", 1, 272, 2],
+      ["back", 1, 5, 11], ["back", 1, 5, 11]]}
   ],
   "after_unload": [
-    {"phase": "stock-menu-after-unload", "requires": ["d3-restore-highlight"], "capture": "stock-highlight-after-unload", "steps": [
+    {"phase": "stock-menu-after-unload", "requires": ["none-stock-highlight"], "capture": "stock-highlight-after-unload", "steps": [
       ["menu", 1, 5, 11],
       ["menu", 1, 5, 11],
-      ["ok", 1, 272, 3]]},
-    {"phase": "d3-film-list-after-unload", "requires": ["stock-menu-after-unload"], "observe": true, "capture": "d3-film-list-after-unload", "reads": [["ordinary-block-0", "0096cc64", 248], ["ordinary-block-1", "0096cd5c", 248], ["ordinary-block-2", "0096ce54", 248], ["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+      ["ok", 1, 272, 2]]},
+    {"phase": "d3-film-list-after-unload", "requires": ["stock-menu-after-unload"], "capture": "d3-film-list-after-unload", "reads": [["ordinary-block-0", "0096cc64", 248], ["ordinary-block-1", "0096cd5c", 248], ["ordinary-block-2", "0096ce54", 248], ["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["back", 1, 5, 11],
       ["up", 1, 5, 10],
       ["up", 1, 5, 9],
       ["up", 1, 5, 8],
       ["up", 1, 5, 7],
       ["up", 1, 5, 6],
-      ["ok", 1, 254, 0],
-      ["down", 1, 254, 1],
-      ["down", 1, 254, 2],
-      ["down", 1, 254, 3],
-      ["down", 1, 254, 4],
-      ["down", 1, 254, 5],
-      ["down", 1, 254, 6],
-      ["down", 1, 254, 7],
-      ["down", 1, 254, 8]]},
-    {"phase": "d3-q-after-unload", "requires": ["d3-film-list-after-unload"], "observe": true, "capture": "d3-q-film-cell-after-unload", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+      ["seek:ok:254:4", 1, 254, 0],
+      ["cursor:down:1:4", 1, 254, 1],
+      ["cursor:down:2:4", 1, 254, 2],
+      ["cursor:down:3:4", 1, 254, 3],
+      ["cursor:down:4:4", 1, 254, 4],
+      ["cursor:down:5:4", 1, 254, 5],
+      ["cursor:down:6:4", 1, 254, 6]]},
+    {"phase": "d3-q-after-unload", "requires": ["d3-film-list-after-unload"], "film_row": 0, "capture": "d3-q-film-cell-after-unload", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["back", 1, 5, 6],
       ["back", 1, 5, 6],
-      ["q", 122, 5, 1],
-      ["cursor:right:7:16", 122, 5, 7]]},
-    {"phase": "d3-q-after-unload-row-1", "requires": ["d3-q-after-unload"], "observe": true, "capture": "d3-q-after-unload-row-1", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+      ["q", 122, 5, 7]]},
+    {"phase": "d3-q-after-unload-row-1", "requires": ["d3-q-after-unload"], "film_row": 1, "capture": "d3-q-after-unload-row-1", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["dial-right", 122, 5, 7]]},
-    {"phase": "d3-q-after-unload-row-2", "requires": ["d3-q-after-unload-row-1"], "observe": true, "capture": "d3-q-after-unload-row-2", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+    {"phase": "d3-q-after-unload-row-2", "requires": ["d3-q-after-unload-row-1"], "film_row": 2, "capture": "d3-q-after-unload-row-2", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["dial-right", 122, 5, 7]]},
-    {"phase": "d3-q-after-unload-row-3", "requires": ["d3-q-after-unload-row-2"], "observe": true, "capture": "d3-q-after-unload-row-3", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+    {"phase": "d3-q-after-unload-row-3", "requires": ["d3-q-after-unload-row-2"], "film_row": 3, "capture": "d3-q-after-unload-row-3", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["dial-right", 122, 5, 7]]},
-    {"phase": "d3-q-after-unload-row-4", "requires": ["d3-q-after-unload-row-3"], "observe": true, "capture": "d3-q-after-unload-row-4", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+    {"phase": "d3-q-after-unload-row-4", "requires": ["d3-q-after-unload-row-3"], "film_row": 4, "capture": "d3-q-after-unload-row-4", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["dial-right", 122, 5, 7]]},
-    {"phase": "d3-q-after-unload-row-5", "requires": ["d3-q-after-unload-row-4"], "observe": true, "capture": "d3-q-after-unload-row-5", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
-      ["dial-right", 122, 5, 7]]},
-    {"phase": "d3-q-after-unload-row-6", "requires": ["d3-q-after-unload-row-5"], "observe": true, "capture": "d3-q-after-unload-row-6", "reads": [["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
-      ["dial-right", 122, 5, 7]]},
-    {"phase": "d3-q-after-unload-cancel", "requires": ["d3-q-after-unload-row-6"], "observe": true, "capture": "d3-after-unload-q-cancel", "reads": [["ordinary-block-0", "0096cc64", 248], ["ordinary-block-1", "0096cd5c", 248], ["ordinary-block-2", "0096ce54", 248], ["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
+    {"phase":"d3-q-after-unload-row-0-wrapped","requires":["d3-q-after-unload-row-4"],"film_row":0,"capture":"d3-q-after-unload-row-0-wrapped","reads":[["film-dr","009568b8",8],["stored-film-byte","0096ccee",1]],"steps":[["dial-right",122,5,7]]},
+    {"phase":"d3-q-after-unload-reverse-4","requires":["d3-q-after-unload-row-0-wrapped"],"film_row":4,"capture":"d3-q-after-unload-reverse-4","reads":[["film-dr","009568b8",8],["stored-film-byte","0096ccee",1]],"steps":[["dial-left",122,5,7]]},
+    {"phase":"d3-q-after-unload-reverse-3","requires":["d3-q-after-unload-reverse-4"],"film_row":3,"capture":"d3-q-after-unload-reverse-3","reads":[["film-dr","009568b8",8],["stored-film-byte","0096ccee",1]],"steps":[["dial-left",122,5,7]]},
+    {"phase":"d3-q-after-unload-reverse-2","requires":["d3-q-after-unload-reverse-3"],"film_row":2,"capture":"d3-q-after-unload-reverse-2","reads":[["film-dr","009568b8",8],["stored-film-byte","0096ccee",1]],"steps":[["dial-left",122,5,7]]},
+    {"phase":"d3-q-after-unload-reverse-1","requires":["d3-q-after-unload-reverse-2"],"film_row":1,"capture":"d3-q-after-unload-reverse-1","reads":[["film-dr","009568b8",8],["stored-film-byte","0096ccee",1]],"steps":[["dial-left",122,5,7]]},
+    {"phase":"d3-q-after-unload-reverse-0-wrapped","requires":["d3-q-after-unload-reverse-1"],"film_row":0,"capture":"d3-q-after-unload-reverse-0-wrapped","reads":[["film-dr","009568b8",8],["stored-film-byte","0096ccee",1]],"steps":[["dial-left",122,5,7]]},
+    {"phase": "d3-q-after-unload-cancel", "requires": ["d3-q-after-unload-reverse-0-wrapped"], "observe": true, "film_row": 0, "capture": "d3-after-unload-q-cancel", "reads": [["ordinary-block-0", "0096cc64", 248], ["ordinary-block-1", "0096cd5c", 248], ["ordinary-block-2", "0096ce54", 248], ["live-cells-sharpness-film-dr", "009568a0", 32], ["live-cell-nr", "0095699c", 4], ["live-cells-ht-st", "00956b40", 8]], "steps": [
       ["back", 0, 0, 0]]}
   ]
 }

@@ -4,6 +4,8 @@
 module Emulation.UiTrajectory
   ( MenuState (..)
   , ReadAddress (..)
+  , FilmRow (..)
+  , filmStoredCode
   , Segment (..)
   , TraceSite (..)
   , Trajectories (..)
@@ -17,7 +19,7 @@ import qualified Data.ByteString as B
 import Data.List (nub, stripPrefix)
 import qualified Data.Text as T
 import Data.Word (Word32)
-import EmulatorUsb (ModeDial (..))
+import EmulatorUsb (ModeDial (..), modeDialName)
 import Numeric (readHex)
 
 data MenuState = MenuState Int Int Int deriving (Eq, Show)
@@ -25,11 +27,36 @@ data MenuState = MenuState Int Int Int deriving (Eq, Show)
 -- | A read window's start: a fixed guest address, or a symbol of the relinked runtime.
 data ReadAddress = FixedAddress Word32 | RuntimeSymbol String deriving (Eq, Show)
 
+-- | A logical row of the film-simulation list.
+data FilmRow = Provia | Velvia | Astia | Monochrome | Sepia | ProNegStd | ProNegHi | WarmStandard | RecipeB
+  deriving (Bounded, Enum, Eq, Show)
+
+instance FromJSON FilmRow where
+  parseJSON value = do
+    row <- parseJSON value
+    if row >= fromEnum (minBound :: FilmRow) && row <= fromEnum (maxBound :: FilmRow)
+      then pure (toEnum row)
+      else fail "film_row must be a logical film row from 0 through 8"
+
+-- | The film code the ordinary image stores for a row.
+filmStoredCode :: FilmRow -> Word32
+filmStoredCode row = case row of
+  Provia -> 0
+  Velvia -> 3
+  Astia -> 1
+  Monochrome -> 11
+  Sepia -> 12
+  ProNegStd -> 9
+  ProNegHi -> 10
+  WarmStandard -> 13
+  RecipeB -> 14
+
 -- | One trajectory segment: its phase name, the mode-dial detent set before its first key, the
 -- expected menu state after each key, the message ids the menu message drawer is entered with during
 -- the segment (none when absent), and an optional capture label taken after the last key. An
 -- observing segment records each key's actual state instead of requiring the expected one; `reads`
--- are guest RAM windows recorded after the last key.
+-- are guest RAM windows recorded after the last key, and `film_row` is the row whose stored film code
+-- the segment requires after its last key.
 data Segment = Segment
   { segmentPhase :: T.Text
   , segmentModeDial :: Maybe ModeDial
@@ -39,6 +66,7 @@ data Segment = Segment
   , segmentObserve :: Bool
   , segmentReads :: [(String, ReadAddress, Int)]
   , segmentRequires :: [T.Text]
+  , segmentFilmRow :: Maybe FilmRow
   }
 
 instance FromJSON Segment where
@@ -51,11 +79,12 @@ instance FromJSON Segment where
     <*> segment .:? "observe" .!= False
     <*> (mapM window =<< segment .:? "reads" .!= [])
     <*> segment .:? "requires" .!= []
+    <*> segment .:? "film_row"
     where
       step (key, menu, setting, cursor) = (key, MenuState menu setting cursor)
-      modeDial position = case (position :: T.Text) of
-        "M" -> pure ModeDialManual
-        _ -> fail ("unsupported mode-dial position: " ++ T.unpack position)
+      modeDial position = case lookup (T.unpack position) [(modeDialName p, p) | p <- [minBound .. maxBound]] of
+        Just p -> pure p
+        Nothing -> fail ("unsupported mode-dial position: " ++ T.unpack position)
       window (label, address, len) = case T.unpack address of
         text | Just symbol <- stripPrefix "runtime:" text, not (null symbol) -> pure (label, RuntimeSymbol symbol, len)
              | [(value, "")] <- readHex text -> pure (label, FixedAddress value, len)

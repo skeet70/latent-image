@@ -112,6 +112,7 @@ haskell_test(
     data = glob(["*-trajectories.json"]),
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
+        ":emulator-usb",
         ":ui-trajectory-lib",
         "//host:base",
         "//host:bytestring",
@@ -126,7 +127,7 @@ haskell_binary(
         "Xm1RamPushE2E.hs",
         "Xm1Viewer.hs",
     ],
-    data = [":xm1-upstream"],
+    data = [":xm1-upstream", ":cardless-ram-push-bridge"],
     main_file = "Xm1Viewer.hs",
     ghcopts = [
         "-XGHC2021",
@@ -187,6 +188,59 @@ haskell_binary(
         "//host:usb-toggle",
         "//host:vector",
         "//transport:camera-core",
+    ],
+)
+
+haskell_library(
+    name = "embedded-python-lib",
+    srcs = ["Emulation/EmbeddedPython.hsc"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+        "//host:unix",
+        "@lab_recorder_python//:headers",
+    ],
+)
+
+haskell_test(
+    name = "embedded-python-tests",
+    size = "small",
+    srcs = ["EmbeddedPythonTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [
+        ":embedded-python-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+    ],
+)
+
+haskell_binary(
+    name = "cardless-ram-push-bridge",
+    srcs = ["CardlessRamPush.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-threaded",
+    ],
+    main_file = "CardlessRamPush.hs",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":embedded-python-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:text",
     ],
 )
 
@@ -630,11 +684,16 @@ haskell_binary(
 # Recipe-bank UI-behavior cases; built and run by build-recipe-bank-ui-cases.sh.
 haskell_binary(
     name = "recipe-bank-ui-cases",
-    srcs = ["RecipeBankUiCases.hs"],
+    srcs = [
+        "Emulation/ParallelCases.hs",
+        "RecipeBankUiCases.hs",
+    ],
     ghcopts = [
         "-XGHC2021",
         "-threaded",
+        "-O2",
     ],
+    main_file = "RecipeBankUiCases.hs",
     visibility = ["//visibility:public"],
     deps = [
         ":native-adapter",
@@ -655,11 +714,16 @@ haskell_binary(
 # model, runs it through the bounded runner and writes results plus findings.
 haskell_binary(
     name = "recipe-bank-cases",
-    srcs = ["RecipeBankCases.hs"],
+    srcs = [
+        "Emulation/ParallelCases.hs",
+        "RecipeBankCases.hs",
+    ],
     ghcopts = [
         "-XGHC2021",
         "-threaded",
+        "-O2",
     ],
+    main_file = "RecipeBankCases.hs",
     visibility = ["//visibility:public"],
     deps = [
         ":native-adapter",

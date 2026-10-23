@@ -13,18 +13,12 @@ VirtualTick = NewType('VirtualTick', int)
 
 
 def xm1_source_tick(board) -> VirtualTick | None:
-    from .input_processing_devices import InputProcessingControl, XM1_CLOCK_PROFILE, PhaseSource
-    inputs = [device for device in board.devices if type(device) is InputProcessingControl]
-    if len(inputs) != 1 or inputs[0].event_profile != XM1_CLOCK_PROFILE:
-        raise UnsupportedDevice('X-M1 scene source requires its declared physical phase clock')
-    edge = next((event for event in reversed(inputs[0].event_history)
-                 if event['source'] == PhaseSource.PRIMARY), None)
-    if edge is None:
-        return None
-    tick = edge['asserted_tick']
-    if type(tick) is not int or not 0 <= tick <= board.virtual_ticks:
-        raise UnsupportedDevice('X-M1 scene source edge has an invalid physical clock identity')
-    return VirtualTick(tick)
+    from .input_processing_devices import InputProcessingControl
+    from x70_native._native import xm1_source_tick as native_source_tick
+    try:
+        return native_source_tick(board, InputProcessingControl)
+    except (ValueError, OverflowError) as error:
+        raise UnsupportedDevice(str(error)) from error
 
 
 def source_epochs(board):

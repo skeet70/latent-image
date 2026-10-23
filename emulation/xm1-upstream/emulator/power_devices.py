@@ -7,6 +7,8 @@ Unknown requests, DMA jobs, and register accesses stop instead of succeeding.
 """
 import hashlib
 
+from x70_native._native import spi0_status_acknowledged
+
 from .hardware import UnsupportedDevice
 from .panel_serial import PanelSerial
 
@@ -331,7 +333,7 @@ class PowerDevices:
                 return
             if offset == 0xc:
                 old = self.registers.get(address, 0)
-                self.registers[address] = (value & 0xffff0000) | (old & 0xffff & ~value)
+                self.registers[address] = spi0_status_acknowledged(old, value)
             else:
                 self.registers[address] = value
             if offset == 8 and value & 0x10000000:
@@ -392,8 +394,7 @@ class PowerDevices:
         # Reject different widths, IRQ/DMA configurations and endpoint modes.
         config = tuple(self.registers.get(self.SPI0+offset, 0) for offset in (0, 4, 8))
         required_config, select, absent, endpoint_id = self._spi0_contract
-        if (config != required_config or self.registers.get(self.SPI0+0xc, 0) & 0xffff0000
-                or not 0 <= value <= 0xff):
+        if config != required_config or not 0 <= value <= 0xff:
             raise UnsupportedDevice(f'Unsupported SPI0 byte transport configuration {config!r}, TX={value:#x}')
         pins = next((d for d in getattr(self.board, 'devices', ())
                      if hasattr(d, 'gpio_output_pin') and hasattr(d, 'gpio_inputs')), None)

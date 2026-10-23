@@ -70,6 +70,7 @@ pub unsafe extern "C" fn filter(data: *mut c_void, address: u64, word: u32) -> c
     let decoded = crate::state::classify(4, word.to_le_bytes());
     let plain = (decoded.ordinary || passive_coprocessor(word))
         && !state.entries.contains(&address)
+        && !inner.is_breakpoint(hook.core, address)
         && !decoded.unmodeled_atomic
         && !decoded.unmodeled_pmu;
     // With budgeted accounting (features bit 2) a fast block may run without
@@ -205,16 +206,15 @@ fn filtered_block(inner: &Inner, core: usize, address: u64, size: u32) -> Result
 
 /// Count a plain ARM block per block instead of per instruction when that is
 /// exactly equivalent: no optional per-instruction feature is enabled, the
-/// block holds only ordinary, non-milestone instructions, and no instruction
-/// in it can reach the run's entry limit or the tick deadline. True when the
-/// block went through `block_info`.
+/// block holds only ordinary, non-milestone, non-breakpoint instructions, and
+/// no instruction in it can reach the run's entry limit or the tick deadline.
+/// True when the block went through `block_info`.
 fn start_bulk(inner: &Inner, core: usize, address: u64, size: u32) -> Result<bool, String> {
     if size == 0 || size % 4 != 0 {
         return Ok(false);
     }
     unsafe {
-        if !(*inner.breakpoints.get())[core].is_empty()
-            || (*inner.coverage.get())[core].is_some()
+        if (*inner.coverage.get())[core].is_some()
             || (*inner.exec_probe.get())[core].is_some()
             || (*inner.fetch_guards.get())[core].is_some()
             || (*inner.audits.get())[core].is_some()
@@ -284,12 +284,14 @@ fn block_info(
     let mut reason = 0u8;
     for pc in (address..address + size as u64).step_by(4) {
         let decoded = inner.instruction(core, pc, 4)?;
+        let breakpoint = inner.is_breakpoint(core, pc);
         let ok = (decoded.ordinary || passive_coprocessor(decoded.word))
             && !decoded.milestone
+            && !breakpoint
             && !decoded.unmodeled_atomic
             && !decoded.unmodeled_pmu;
         if !ok && reason == 0 {
-            reason = special_kind(&decoded);
+            reason = if breakpoint && decoded.ordinary { 7 } else { special_kind(&decoded) };
         }
         plain &= ok;
         entries.push(Trace {
@@ -620,11 +622,7 @@ fn instruction(inner: &Inner, core: usize, address: u64, size: u32) -> Result<()
     // Explicit breakpoints report on every accepted entry, before the
     // instruction is counted or executed. The handler may rewrite registers;
     // if it moves PC, this instruction must not run and is not counted.
-    if !unsafe { &(*inner.breakpoints.get())[core] }.is_empty()
-        && unsafe { &(*inner.breakpoints.get())[core] }
-            .binary_search(&address)
-            .is_ok()
-    {
+    if inner.is_breakpoint(core, address) {
         inner.event("breakpoint", core, address, size, 0);
         let mut halts = inner.breakpoint_halt.get();
         if halts[core] {

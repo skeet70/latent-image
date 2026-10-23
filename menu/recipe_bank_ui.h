@@ -39,10 +39,11 @@
 #define RB_UI_CLASS_SLOT 0x281u
 #define RB_UI_CLASS_SUB0 0x270u
 #define RB_UI_CLASS_SUB(slot) (RB_UI_CLASS_SUB0 + (slot))
-#define RB_UI_CLASS_RECALL 0x285u
+#define RB_UI_CLASS_SELECT 0x285u
 
 /* FUN_00bf93e0 resolves the registered root and its immediate children.
- * Slot and its verb pages share root 0x61; Recall uses shooting root 1.
+ * Slot and its verb pages share root 0x61; SELECT CUSTOM SETTING uses shooting
+ * root 1.
  * Edit and its fields share root 0x72; the dialog uses root 0x29. */
 #define RB_UI_SUB_ID 0x61u
 #define RB_UI_EDITOR_ID 0x6au
@@ -84,11 +85,13 @@
 
 /* Row tokens in the bank pages' values arrays. Verb rows carry
  * RB_UI_TOKEN_VERB_BASE + slot*4 + verb and child 0, except the EDIT CUSTOM
- * NAME row (verb 1), whose child is the editor node; recall rows carry
- * RB_UI_TOKEN_RECALL_BASE + slot; slot rows of the edit/save page are child rows
- * carrying RB_UI_TOKEN_SLOT_BASE + slot, which rb_ui_decode does not claim. */
+ * NAME row (verb 1), whose child is the editor node; SELECT CUSTOM SETTING's
+ * rows carry RB_UI_TOKEN_SELECT_BASE + the selection code, row index and code
+ * alike; slot rows of the edit/save page are child rows carrying
+ * RB_UI_TOKEN_SLOT_BASE + slot, which rb_ui_decode does not claim. */
 #define RB_UI_TOKEN_VERB_BASE 0x40u
-#define RB_UI_TOKEN_RECALL_BASE 0x60u
+#define RB_UI_TOKEN_SELECT_BASE 0x60u
+#define RB_UI_SELECT_ROWS 8u
 #define RB_UI_TOKEN_SLOT_BASE 0x70u
 
 /* The two items appended to the shooting-menu page 0x0078ea98 carry these
@@ -96,7 +99,7 @@
  * dispatchers branch on class 5 with cursor 0x7c, so a token that value would
  * take a stock branch. 0x7d and 0x7e appear in no branch of 0xc72e10/0xc70528. */
 #define RB_UI_TOKEN_ITEM_EDIT_SAVE 0x7du
-#define RB_UI_TOKEN_ITEM_RECALL 0x7eu
+#define RB_UI_TOKEN_ITEM_SELECT 0x7eu
 
 /* Row-count bound the stock walker itself uses (0x4f rows per page). */
 #define RB_UI_ROW_CAP 0x50u
@@ -124,12 +127,32 @@
 #define RB_UI_CURRENT_ROW_CELL 0x0095732cu
 
 typedef struct {
+  uint32_t address;
+} RbMenuFrame;
+
+#ifdef RB_RAM_DIAGNOSTICS
+typedef struct {
+  uint32_t sequence;
+} RbDiagnosticWalk;
+#endif
+
+typedef struct {
   uint32_t value;
 } RbMenuRoot;
 
 typedef struct {
   uint32_t value;
 } RbViewRevision;
+
+typedef struct {
+  uint32_t id;
+} RbMessageLabel;
+
+typedef struct {
+  RbMessageLabel text;
+  RbMessageLabel prefix;
+  RbMessageLabel button;
+} RbMessageLabels;
 
 extern volatile RbViewRevision rb_view_revision;
 
@@ -148,13 +171,22 @@ typedef enum {
 typedef enum {
   RB_ITEM_NONE = 0,
   RB_ITEM_VERB = 1,
-  RB_ITEM_RECALL = 2
+  RB_ITEM_SELECT = 2
 } RbBankItemKind;
+
+/* A persisted bank selection: code 0 is NOTHING SELECTED and code n (1-7) is
+ * CUSTOM n, the v2 file's selection byte. */
+typedef struct {
+  uint8_t code;
+} RbSelection;
+
+#define RB_SELECTION_NONE ((RbSelection){0u})
 
 typedef struct {
   RbBankItemKind kind;
   uint8_t slot;
   uint8_t verb; /* RbBankVerb when kind is RB_ITEM_VERB */
+  RbSelection selection; /* when kind is RB_ITEM_SELECT */
 } RbBankItemRef;
 
 /* The caller-visible status domain of menu/recipe_bank_storage.c's kernel. */
@@ -176,14 +208,17 @@ enum rb_bank_status {
    * and its publish or commit point: nothing was published or written, and the
    * caller must not retry within the visit. */
   RB_MEDIA_CHANGED = 13,
-  /* A recalled field did not take its stored code: the stock write path left
-   * the property at another value. The bank file is unchanged. */
-  RB_APPLY_REFUSED = 14
-};
-
-enum rb_bank_op {
-  RB_BANK_RECALL = 0,
-  RB_BANK_SAVE = 1
+  /* A bank field did not take its stored code, or a selection's base or
+   * target was refused: the stock write path left a property at another
+   * value or the mode is outside P, S, A and M. */
+  RB_APPLY_REFUSED = 14,
+  /* The newest checksum-valid generation holds a payload no stock menu
+   * produces: nothing is published and no write replaces either file. */
+  RB_UNSAFE_BANK = 15,
+  /* The shooting mode moved during a selection's I/O: nothing was applied. */
+  RB_MODE_CHANGED = 16,
+  /* The slot is the persisted selection, which a reset does not clear. */
+  RB_SLOT_SELECTED = 17
 };
 
 /* FUN_00d52684's row states, which the list machinery consumes. */
@@ -200,16 +235,16 @@ static inline uint32_t rb_ui_verb_token(uint32_t slot, RbBankVerb verb)
   return RB_UI_TOKEN_VERB_BASE + slot * RB_UI_VERBS_PER_SLOT + (uint32_t)verb;
 }
 
-static inline uint32_t rb_ui_recall_token(uint32_t slot)
+static inline uint32_t rb_ui_select_token(RbSelection selection)
 {
-  return RB_UI_TOKEN_RECALL_BASE + slot;
+  return RB_UI_TOKEN_SELECT_BASE + selection.code;
 }
 
 typedef enum {
   RB_PAGE_NONE = 0,
   RB_PAGE_SLOT,
   RB_PAGE_SUB,
-  RB_PAGE_RECALL,
+  RB_PAGE_SELECT,
   RB_PAGE_EDITOR,
   RB_PAGE_EDIT,
   RB_PAGE_DIALOG,
@@ -228,8 +263,8 @@ static inline RbBankPage rb_ui_page(uint32_t cls, uint8_t *slot_out)
     }
     return RB_PAGE_SUB;
   }
-  if (cls == RB_UI_CLASS_RECALL) {
-    return RB_PAGE_RECALL;
+  if (cls == RB_UI_CLASS_SELECT) {
+    return RB_PAGE_SELECT;
   }
   if (cls == RB_UI_EDITOR_CLASS) {
     return RB_PAGE_EDITOR;
@@ -251,7 +286,7 @@ static inline RbBankPage rb_ui_page(uint32_t cls, uint8_t *slot_out)
  * the edit/save page. */
 static inline RbBankItemRef rb_ui_decode(uint32_t token)
 {
-  RbBankItemRef item = { RB_ITEM_NONE, 0u, 0u };
+  RbBankItemRef item = { RB_ITEM_NONE, 0u, 0u, RB_SELECTION_NONE };
   uint32_t u;
   if (token >= RB_UI_TOKEN_VERB_BASE &&
       token < RB_UI_TOKEN_VERB_BASE + RB_BANK_SLOTS * RB_UI_VERBS_PER_SLOT) {
@@ -261,10 +296,10 @@ static inline RbBankItemRef rb_ui_decode(uint32_t token)
     item.verb = (uint8_t)(u & 3u);
     return item;
   }
-  if (token >= RB_UI_TOKEN_RECALL_BASE &&
-      token < RB_UI_TOKEN_RECALL_BASE + RB_BANK_SLOTS) {
-    item.kind = RB_ITEM_RECALL;
-    item.slot = (uint8_t)(token - RB_UI_TOKEN_RECALL_BASE);
+  if (token >= RB_UI_TOKEN_SELECT_BASE &&
+      token < RB_UI_TOKEN_SELECT_BASE + RB_UI_SELECT_ROWS) {
+    item.kind = RB_ITEM_SELECT;
+    item.selection = (RbSelection){(uint8_t)(token - RB_UI_TOKEN_SELECT_BASE)};
     return item;
   }
   return item;
@@ -287,12 +322,25 @@ extern uint32_t rb_readback(uint32_t slot, uint8_t *name_out, uint8_t *payload_o
                             RbMediaIdentity identity);
 extern uint32_t rb_save_current(uint32_t slot, RbMediaIdentity identity);
 extern uint32_t rb_reset(uint32_t slot, RbMediaIdentity identity);
-extern uint32_t rb_recall(uint32_t slot, RbMediaIdentity identity);
+/* The selection is written only after the base and the target are applied and
+ * read back live; a failure puts back the live settings read before the
+ * transaction. */
+extern uint32_t rb_select(RbSelection selection, RbMediaIdentity identity);
+/* The selection whose settings are live in this session, false while a
+ * remembered custom selection is suspended or no bank is resident. */
+extern bool rb_selection_effective(RbSelection *selection_out);
+/* Dial boundaries: rb_mode_leave runs before a stock mode change to (mode,
+ * class), rb_mode_resume after it; rb_mode_dial_apply and rb_mode_pair_apply
+ * wrap the two stock mode-apply calls with them. */
+extern uint32_t rb_mode_leave(uint32_t next_mode, uint32_t next_class);
+extern uint32_t rb_mode_resume(void);
+extern uint32_t rb_mode_dial_apply(void);
+extern void rb_mode_pair_apply(uint32_t next_mode, uint32_t next_class);
 extern uint32_t rb_stage_load(uint32_t slot, RbMediaIdentity identity);
 extern uint32_t rb_name_commit(uint32_t slot, const uint8_t *name26,
                                RbMediaIdentity identity);
 /* Resident-only name read: RB_OK with the resident name, which is zeros for an
- * unset slot (its availability is rb_meta_op_state's answer); RB_UNSET with the
+ * unset slot (its availability is rb_meta_select_state's answer); RB_UNSET with the
  * zero name only when no bank image is resident; RB_RANGE for a bad slot. */
 extern uint32_t rb_name_resident(uint32_t slot, uint8_t *name26);
 /* The session's fields are the nine edit properties and RB_ISO_AUTO_FLAG, the
@@ -305,6 +353,7 @@ extern void rb_stage_name_set(const uint8_t *name12);
 extern uint32_t rb_stage_commit(uint32_t slot, const uint8_t *name26);
 extern void rb_stage_cancel(void);
 extern void rb_status_failed(enum rb_bank_status status);
+extern void rb_status_present(RbMessageLabels labels);
 extern void rb_status_record(enum rb_bank_status status);
 extern uint32_t rb_status_last(void);
 
@@ -398,8 +447,14 @@ void rb_probe_invalidate(void);
 extern uint32_t rb_media_epoch(void);
 extern void rb_media_epoch_bump(void);
 
-/* Storage lane's read-only verdict for one bank operation. */
-uint32_t rb_meta_op_state(enum rb_bank_op op, uint32_t slot, uint32_t reload);
+/* Storage lane's read-only verdicts: whether a save of the slot, or the
+ * selection, would be attempted. */
+uint32_t rb_meta_save_state(uint32_t slot, uint32_t reload);
+#ifdef RB_RAM_DIAGNOSTICS
+uint32_t rb_meta_select_state(RbSelection selection, uint32_t reload, RbDiagnosticWalk walk);
+#else
+uint32_t rb_meta_select_state(RbSelection selection, uint32_t reload);
+#endif
 
 /* rb_bank_interpose is the word modal-75 action-table
  * index 1 holds; it returns the transition result for entered rows and the stock

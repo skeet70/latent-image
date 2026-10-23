@@ -42,8 +42,8 @@ main = do
   check "bootstraps are exactly 32 bytes" (all ((==32) . B.length) [bootstrapBytes,peerPrepareBytes,freeBootstrapBytes])
   check "allocator preserves callback output pointer" (B.take 4 (B.drop 4 bootstrapBytes) == B.pack [0x01,0x50,0xa0,0xe1])
   check "peer preparation calls the worker unconditionally" (B.index peerPrepareBytes 19 == 0xeb)
-  check "CLI accepts split flow" (ramAllocArguments ["0x1b6d8"] == Just (reviewedAllocationSize,Nothing)
-    && ramAllocArguments ["0x1ad18"] == Nothing
+  check "CLI accepts split flow" (ramAllocArguments ["0x1d9d8"] == Just (reviewedAllocationSize,Nothing)
+    && ramAllocArguments ["0x1b9d8"] == Nothing
     && ramPushArguments ["/a","/m"] == Just ("/a","/m",Nothing)
     && ramPushArguments ["/a","/m","/o"] == Just ("/a","/m",Just "/o")
     && ramFreeArguments ["/a"] == Just ("/a",Nothing))

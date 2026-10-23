@@ -1168,55 +1168,8 @@ class InputProcessingControl:
         self.board.record('X-M1 phase-clock source acknowledged', **self.last_event)
 
     def _tick_xm1_clock(self, board):
-        mask = self.registers.get(0x38c, 0)
-        sources = {}
-        if not self.busy and self.registers.get(0, 0) & 1:
-            if mask & 1:
-                sources[PhaseSource.PRIMARY] = (0x27, 1, 1, self.event_ticks)
-            flags = (2 if mask & 0x200 else 0) | (0x200 if mask & 2 else 0)
-            count = self.registers.get(0x24, 0)
-            if flags and count:
-                sources[PhaseSource.SECONDARY] = (0x29, 0, flags, count)
-        for source in tuple(self.phase_clock_due):
-            if source not in sources:
-                del self.phase_clock_due[source]
-        for source, (line, ack, flags, period) in sources.items():
-            pending = self.phase_clock_pending.get(source)
-            if pending is not None:
-                if pending.cpu is None:
-                    owner = self._event_route(line)
-                    if owner is not None:
-                        pending.cpu = owner
-                        board.queue_irq(owner, line)
-                        board.record('X-M1 pending phase-clock IRQ routed', source=int(source), cpu=owner, line=line)
-            due = self.phase_clock_due.get(source)
-            if due is None:
-                self.phase_clock_due[source] = board.virtual_ticks + period
-                self.event_arms += 1
-                continue
-            if board.virtual_ticks < due:
-                continue
-            self.phase_clock_due[source] = due + ((board.virtual_ticks - due) // period + 1) * period
-            self.event_arms += 1
-            if pending is not None:
-                continue
-            owner = self._event_route(line)
-            edge = PhaseClockEdge(owner, flags, board.virtual_ticks, self.event_enable_generation)
-            self.phase_clock_pending[source] = edge
-            self.registers[0x384] |= flags
-            self.event_pending = True
-            self.event_source, self.event_irq, self.event_ack_selector = source, line, ack
-            self.event_assertions += 1
-            self.last_event = dict(profile=XM1_CLOCK_PROFILE, source=int(source), physical_irq=hex(line),
-                                   cpu=owner, generation=edge.generation, asserted_tick=edge.asserted_tick,
-                                   state='asserted', status_mask=hex(flags), period_ticks=period,
-                                   limits='Independent external clocks; source1 period follows retained FFF10024 count under a declared 1:1 tick law; source0 period, physical waveform and pixel/clock ratio are unmeasured')
-            self.event_history.append(dict(self.last_event))
-            self.event_history = self.event_history[-32:]
-            if owner is not None:
-                board.queue_irq(owner, line)
-            board.record('X-M1 configured phase-clock edge', **self.last_event)
-        self.event_due = min(self.phase_clock_due.values(), default=None)
+        from x70_native._native import tick_xm1_clock
+        tick_xm1_clock(self, board, PhaseClockEdge, PhaseSource)
 
     def _tick_event(self,board):
         if self.event_profile == XM1_CLOCK_PROFILE:
