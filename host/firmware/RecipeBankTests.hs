@@ -4,11 +4,14 @@ module Main where
 
 import Control.Monad (forM_)
 import qualified Data.ByteString as B
-import Data.Char (ord)
-import Data.Word (Word32, Word8)
+import Data.Char (isHexDigit, ord)
+import Data.List (isInfixOf)
+import Data.Word (Word16, Word32, Word8)
+import Numeric (readHex)
 import System.FilePath ((</>))
 
 import FujiAF.RecipeBank
+import qualified FujiAF.RecipeBankFields as Fields
 import qualified FujiAF.Host as H
 
 main :: IO ()
@@ -127,6 +130,7 @@ main = do
     "cross-region flash aliases were admitted"
 
   bankFileTests
+  fieldTableTests
   putStrLn "Recipe-bank v1 migration, v2 reload, safety, winner and plan checks passed"
 
 bankFileTests :: IO ()
@@ -318,6 +322,30 @@ bankFileTests = do
       (nextWrite (BankWinner FileA penultimate) == Right (NextWrite FileB finalGeneration))
       "the last nonwrapping increment was refused"
     H.ensure (not (refused (encodeBankFile finalState))) "the final representable v2 generation could not be emitted"
+
+-- The bank allowlist's rb_select and rb_admit_base reasons rest on 0x1c6, 0xf9
+-- and 0xfa staying in the walk the storage kernel compiles.
+fieldTableTests :: IO ()
+fieldTableTests = do
+  let walked = map Fields.fieldProperty Fields.payloadFields
+  forM_ [0x1c6, 0xf9, 0xfa] $ \property ->
+    H.ensure (property `elem` walked) ("the walked field table dropped property " ++ show property)
+  document <- readFile "menu/recipe_bank_fields.inc"
+  table <- either H.failH pure (walkedProperties document)
+  H.ensure (table == walked) "menu/recipe_bank_fields.inc does not carry payloadFields in order"
+
+-- The property column of each RB_FIELDS row, in table order.
+walkedProperties :: String -> Either String [Word16]
+walkedProperties document = traverse property (walkedRows (lines document))
+ where
+  walkedRows (line : rest)
+    | "RB_FIELDS[RB_FIELD_COUNT]" `isInfixOf` line = takeWhile ((/= "};") . dropWhile (== ' ')) rest
+    | otherwise = walkedRows rest
+  walkedRows [] = []
+  property line =
+    case readHex (takeWhile isHexDigit (drop 3 (dropWhile (== ' ') line))) of
+      [(value, "")] -> Right value
+      _ -> Left ("unparsed field row: " ++ line)
 
 -- Synthetic payload/domain provenance: authored for this host contract, using
 -- wire field locations from custom-settings.fields.json, not firmware values.
