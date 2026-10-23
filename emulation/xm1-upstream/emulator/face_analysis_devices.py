@@ -31,9 +31,10 @@ class FaceAnalysisControl:
         self.board.record('Continuous-stream face bank enabled', profile=self.stream['profile'],
                           limits='Retained guest words only; DMA status reads idle; no detections or IRQ')
     STOP_PROFILE = STOP_PROFILE
-    FIXED_WORDS = {0x8:0x01000000,0x20:0x014721d8,0x24:0x014731d8,
-                   0x4c:0x4275c000,0x50:0x42765800,0x560:0x4276a400,
-                   0x564:0xffff,0x57c:0}
+    FIXED_WORDS = {0x8:0x01000000,0x564:0xffff,0x57c:0}
+    # Table and workspace bus addresses follow each firmware's layout. X-M1 1.50 writes 0x0106f3e8/0x01070408
+    # to 0x20/0x24 and 0x421a1800/0x421ab000/0x421afc00 to 0x4c/0x50/0x560.
+    ADDRESS_WORDS = frozenset((0x20,0x24,0x4c,0x50,0x560))
     MODE_WORDS = {0x54:frozenset((0x00800100,0x006800d0)),
                   0x60:frozenset((0x003800bc,0x002800bc,0x00880006)),
                   0x68:frozenset((0x00620004,0x00690004,0x002b0097)),
@@ -49,7 +50,7 @@ class FaceAnalysisControl:
         *(0x80+12*i for i in range(16)),
         *range(0x280,0x3e8,4),*range(0x470,0x4c0,4),*range(0x4c0,0x4d8,4),
         *range(0x4e0,0x4f8,4),*range(0x500,0x518,4),*range(0x520,0x538,4)))
-    CONFIG = frozenset((*FIXED_WORDS,*MODE_WORDS,*STRIDES,*BUFFERS,*RAW_CONFIG,0x10,0x570))
+    CONFIG = frozenset((*FIXED_WORDS,*ADDRESS_WORDS,*MODE_WORDS,*STRIDES,*BUFFERS,*RAW_CONFIG,0x10,0x570))
     DMA_WORDS = frozenset(0x800+0x80*channel+offset for channel in range(4)
                           for offset in (0,4,0x10,0x20,0x28,0x44))
     JOB_WORDS = frozenset((0x14,0x48,0x200,0x204,0x208,0x210,0x230,0x250,
@@ -99,6 +100,7 @@ class FaceAnalysisControl:
     def _config_valid(self, offset, value):
         if not self._word(value):return False
         if offset in self.FIXED_WORDS:return value==self.FIXED_WORDS[offset]
+        if offset in self.ADDRESS_WORDS:return not value&3
         if offset in self.MODE_WORDS:return value in self.MODE_WORDS[offset]
         if offset==0x10:
             return not value&~0x07000777 and all((value>>bit)&7<=4 for bit in (0,4,8,24))
