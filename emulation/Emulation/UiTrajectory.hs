@@ -15,11 +15,12 @@ module Emulation.UiTrajectory
 
 import Control.Monad (unless, when)
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.!=), (.:), (.:?))
+import Data.Aeson.Types (Object, Parser)
 import qualified Data.ByteString as B
 import Data.List (nub, stripPrefix)
 import qualified Data.Text as T
 import Data.Word (Word32)
-import EmulatorUsb (ModeDial (..), modeDialName)
+import EmulatorUsb (KeyPulse (..), ModeDial (..), modeDialName)
 import Numeric (readHex)
 
 data MenuState = MenuState Int Int Int deriving (Eq, Show)
@@ -56,7 +57,8 @@ filmStoredCode row = case row of
 -- the segment (none when absent), and an optional capture label taken after the last key. An
 -- observing segment records each key's actual state instead of requiring the expected one; `reads`
 -- are guest RAM windows recorded after the last key, and `film_row` is the row whose stored film code
--- the segment requires after its last key.
+-- the segment requires after its last key. `key_pulse` gives every key of the segment an explicit
+-- hold and release cap instead of the bridge's per-class default.
 data Segment = Segment
   { segmentPhase :: T.Text
   , segmentModeDial :: Maybe ModeDial
@@ -67,6 +69,7 @@ data Segment = Segment
   , segmentReads :: [(String, ReadAddress, Int)]
   , segmentRequires :: [T.Text]
   , segmentFilmRow :: Maybe FilmRow
+  , segmentKeyPulse :: Maybe KeyPulse
   }
 
 instance FromJSON Segment where
@@ -80,6 +83,7 @@ instance FromJSON Segment where
     <*> (mapM window =<< segment .:? "reads" .!= [])
     <*> segment .:? "requires" .!= []
     <*> segment .:? "film_row"
+    <*> (traverse keyPulse =<< segment .:? "key_pulse")
     where
       step (key, menu, setting, cursor) = (key, MenuState menu setting cursor)
       modeDial position = case lookup (T.unpack position) [(modeDialName p, p) | p <- [minBound .. maxBound]] of
@@ -89,6 +93,11 @@ instance FromJSON Segment where
         text | Just symbol <- stripPrefix "runtime:" text, not (null symbol) -> pure (label, RuntimeSymbol symbol, len)
              | [(value, "")] <- readHex text -> pure (label, FixedAddress value, len)
              | otherwise -> fail ("read address must be hex without 0x or runtime:SYMBOL: " ++ text)
+      keyPulse :: Object -> Parser KeyPulse
+      keyPulse budget = do
+        pulse <- KeyPulse <$> budget .: "hold_instructions" <*> budget .: "release_instructions"
+        when (keyPulseHold pulse == 0 || keyPulseRelease pulse == 0) (fail "key_pulse budgets must be positive")
+        pure pulse
 
 -- | An A32 instruction address whose every entry the bridge records with r0-r3, under a label.
 data TraceSite = TraceSite { traceSiteAddress :: Word32, traceSiteLabel :: String } deriving (Eq, Show)

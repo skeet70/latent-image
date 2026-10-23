@@ -172,37 +172,37 @@ menuState value = either (ioError . userError . ("invalid menu response: " ++)) 
 -- | A step key of four colon-separated fields (seek or cursor, a key, a target, a press limit) presses
 -- the key until the setting id (seek) or the cursor (cursor) equals the target, at most limit times;
 -- any other key is pressed once. Returns the key presses made and the final state.
-pressStep :: Emulator -> String -> IO ([String], MenuState)
-pressStep emulator key = case splitOn ':' key of
+pressStep :: Emulator -> Maybe KeyPulse -> String -> IO ([String], MenuState)
+pressStep emulator pulse key = case splitOn ':' key of
   [kind, seekKey, targetText, limit]
     | kind `elem` ["seek", "cursor"], [(target, "")] <- reads targetText, [(bound, "")] <- reads limit ->
     let field (MenuState _ setting cursor) = if kind == "seek" then setting else cursor
         go count pressed = do
-          actual <- emulatorKey emulator seekKey >>= menuState
+          actual <- emulatorKey emulator pulse seekKey >>= menuState
           if field actual == target || count + 1 >= (bound :: Int)
             then pure (reverse (seekKey : pressed), actual)
             else go (count + 1) (seekKey : pressed)
      in go 0 []
-  _ -> (\actual -> ([key], actual)) <$> (emulatorKey emulator key >>= menuState)
+  _ -> (\actual -> ([key], actual)) <$> (emulatorKey emulator pulse key >>= menuState)
   where
     splitOn c text = case break (== c) text of
       (front, []) -> [front]
       (front, _ : rest) -> front : splitOn c rest
 
-press :: Emulator -> String -> MenuState -> IO ()
-press emulator key expected = do
-  (_, actual) <- pressStep emulator key
+press :: Emulator -> Maybe KeyPulse -> String -> MenuState -> IO ()
+press emulator pulse key expected = do
+  (_, actual) <- pressStep emulator pulse key
   require (actual == expected) ("menu trajectory after " ++ key ++ ": expected " ++ show expected ++ ", got " ++ show actual)
 
-presses :: Emulator -> [(String, MenuState)] -> IO ()
-presses emulator = mapM_ (uncurry (press emulator))
+presses :: Emulator -> Maybe KeyPulse -> [(String, MenuState)] -> IO ()
+presses emulator pulse = mapM_ (uncurry (press emulator pulse))
 
 -- | Presses every step and records the key presses, expected and actual state and wall seconds
 -- without requiring the state.
-observe :: Emulator -> [(String, MenuState)] -> IO [Value]
-observe emulator = mapM $ \(key, expected@(MenuState em es ec)) -> do
+observe :: Emulator -> Maybe KeyPulse -> [(String, MenuState)] -> IO [Value]
+observe emulator pulse = mapM $ \(key, expected@(MenuState em es ec)) -> do
   started <- getMonotonicTime
-  (pressed, MenuState am as ac) <- pressStep emulator key
+  (pressed, MenuState am as ac) <- pressStep emulator pulse key
   ended <- getMonotonicTime
   pure (object [ "key" .= key, "pressed" .= length pressed
                , "expected" .= [em, es, ec], "actual" .= [am, as, ac]
@@ -605,8 +605,8 @@ runSegments runner = mapM $ \segment -> runnerTimed runner ("segment " <> segmen
   (before, _) <- readIORef (runnerHits runner) >>= emulatorTraceHits emulator
   forM_ (segmentModeDial segment) $ \position -> emulatorModeDial emulator position
   observed <- if segmentObserve segment
-    then observe emulator (segmentSteps segment)
-    else [] <$ (presses emulator (segmentSteps segment) `catch` \(failure :: IOException) ->
+    then observe emulator (segmentKeyPulse segment) (segmentSteps segment)
+    else [] <$ (presses emulator (segmentKeyPulse segment) (segmentSteps segment) `catch` \(failure :: IOException) ->
       stop (segmentPhase segment) (displayException failure))
   captured <- traverse (emulatorCapture emulator) (segmentCapture segment)
   windows <- mapM (\(label, location, count) -> do
