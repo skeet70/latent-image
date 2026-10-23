@@ -297,8 +297,13 @@ runUntil console target = do
   let Instructions count = progressInstructions step
   if count >= target then pure step else runUntil console target
 
+-- | Every updater and first-start press holds 8,000,000 instructions with an
+-- 8,000,000-instruction release cap; the bridge's shorter per-class defaults
+-- leave the updater confirmation screen unanswered.
 pressKey :: Console -> MenuKey -> IO Progress
-pressKey console key = request console ("key " ++ keyName key) >>= progress
+pressKey console key = request console (unwords ["key", keyName key, show keyPulse, show keyPulse]) >>= progress
+  where
+    keyPulse = 8000000 :: Int
 
 readBytes :: Console -> Address -> Int -> IO B.ByteString
 readBytes console address count = do

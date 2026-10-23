@@ -900,10 +900,13 @@ class _FF80EndpointBridge:
             self.board._native.set_breakpoints(core, sorted(self.trace_sites))
         self.board.breakpoint_handler = self._breakpoint_handler
 
-    def key(self, name):
+    def key(self, name, hold_instructions=None, release_instructions=None):
         self.use_timing_ratio(24, 'UI input')
         started, instructions = perf_counter(), self.board.instructions
-        state = self.session.key({'key': name, 'render': True})
+        options = {'key': name, 'render': True}
+        if hold_instructions is not None:
+            options.update(hold_instructions=hold_instructions, release_instructions=release_instructions)
+        state = self.session.key(options)
         settle = state.get('navigation', {}).get('render_settle') or {}
         self.key_log.append({'key': name, 'seconds': round(perf_counter() - started, 3),
                              'instructions': self.board.instructions - instructions,
@@ -1170,7 +1173,8 @@ def _run_ram_push_server(board, session, output, bridge, attachment, checkpoint,
                     raise ValueError('trace-hits requires a hit index within the recorded hits')
                 result = {'count': len(bridge.trace_hits), 'hits': bridge.trace_hits[start:]}
             elif command == 'key':
-                result = {'menu': bridge.key(request['key'])}
+                result = {'menu': bridge.key(request['key'], request.get('hold_instructions'),
+                                             request.get('release_instructions'))}
             elif command == 'mode-dial':
                 result = bridge.mode_dial(request['position'])
             elif command == 'read-memory':
@@ -1558,7 +1562,9 @@ def _run_toggle_server(board, session, output, start):
                     raise ValueError('run takes 1..4000000000 instructions and a list of stop labels')
                 result = {'stopped_on': run(count, set(stop_on)), 'instructions': board.instructions}
             elif command == 'key':
-                result = {'menu': bridge.key_state(session.key({'key': request['key']}))}
+                options = {field: request[field] for field in ('key', 'hold_instructions', 'release_instructions')
+                           if field in request}
+                result = {'menu': bridge.key_state(session.key(options))}
             elif command == 'press':
                 result = {'sample': session.inputs.press(request['key'])}
             elif command == 'release':
@@ -1965,7 +1971,7 @@ def main():
     print('Commands: sample, status, run COUNT, checkpoint, snapshot DIRECTORY, nand FILE, sd FILE, restore,'
           ' read ADDRESS LENGTH, watch ADDRESS [ADDRESS:LENGTH...], hits, nandstat, quit. No camera I/O.', flush=True)
     if args.menus:
-        print('Menu input: key ok|back|q|up|down|left|right. Stock ADC scanning/debounce.', flush=True)
+        print('Menu input: key ok|back|q|up|down|left|right [HOLD RELEASE]. Stock ADC scanning/debounce.', flush=True)
     trace, reported = TraceSites(board, recorded_per_site=64), 0
     for line in sys.stdin:
         fields = line.split()
@@ -1988,8 +1994,11 @@ def main():
                 value = session.run({'restore': True})
             elif len(fields) == 2 and fields[0] == 'run':
                 value = session.run({'limit': int(fields[1], 0)})
-            elif args.menus and len(fields) == 2 and fields[0] == 'key':
-                value = session.key({'key': fields[1]})
+            elif args.menus and len(fields) in (2, 4) and fields[0] == 'key':
+                options = {'key': fields[1]}
+                if len(fields) == 4:
+                    options.update(hold_instructions=int(fields[2], 0), release_instructions=int(fields[3], 0))
+                value = session.key(options)
             elif len(fields) == 3 and fields[0] == 'read':
                 start, length = _console_window(fields[1] + ':' + fields[2])
                 value = {'address': hex(start), 'hex': bytes(board.read_memory(start, length)).hex()}

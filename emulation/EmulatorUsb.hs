@@ -14,6 +14,7 @@ module EmulatorUsb
   , TraceHit (..)
   , emulatorTraceHits
   , emulatorKey
+  , KeyPulse (..)
   , ModeDial (..)
   , modeDialName
   , emulatorModeDial
@@ -263,8 +264,14 @@ emulatorTraceHits emulator start = do
       TraceHit site core instructions <$> register "r0" <*> register "r1" <*> register "r2" <*> register "r3"
     hit _ = ioError (userError "emulator trace hit must be an object")
 
-emulatorKey :: Emulator -> String -> IO Value
-emulatorKey emulator key = Object <$> rpc emulator (object ["command" .= String "key", "key" .= key])
+-- | A key's hold and debounced-release cap in guest instructions, both positive.
+data KeyPulse = KeyPulse { keyPulseHold :: Word32, keyPulseRelease :: Word32 } deriving (Eq, Show)
+
+-- | Presses a key with the given pulse, or with the bridge's per-class default.
+emulatorKey :: Emulator -> Maybe KeyPulse -> String -> IO Value
+emulatorKey emulator pulse key = Object <$> rpc emulator (object (["command" .= String "key", "key" .= key] ++ budget))
+  where
+    budget = maybe [] (\(KeyPulse hold release) -> ["hold_instructions" .= hold, "release_instructions" .= release]) pulse
 
 -- | A mode-dial detent the bridge can set through its calibrated ADC window: the nine positions
 -- the viewer runs (SR+, SP and Adv. stop at unmodeled paths).

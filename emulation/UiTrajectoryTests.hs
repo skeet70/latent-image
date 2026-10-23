@@ -6,7 +6,7 @@ import Control.Monad (unless)
 import qualified Data.ByteString.Char8 as C
 import Data.List (isSuffixOf, sort)
 import Emulation.UiTrajectory
-import EmulatorUsb (ModeDial (..))
+import EmulatorUsb (KeyPulse (..), ModeDial (..))
 import System.Directory (listDirectory)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
@@ -74,5 +74,12 @@ main = do
           [",\"film_row\":0", ",\"film_row\":8"] == [Just 0, Just 14]
     , expect "a film row past 8 is refused" $
         refused (segmentDocument ",\"film_row\":9")
+    , expect "a key pulse decodes to its hold and release cap" $
+        (segmentKeyPulse =<< segmentOf (segmentDocument ",\"key_pulse\":{\"hold_instructions\":8000000,\"release_instructions\":6000000}"))
+          == Just (KeyPulse 8000000 6000000)
+    , expect "a segment without a key pulse uses the bridge default" $
+        fmap segmentKeyPulse (segmentOf (segmentDocument "")) == Just Nothing
+    , expect "a zero key-pulse budget is refused" $
+        refused (segmentDocument ",\"key_pulse\":{\"hold_instructions\":0,\"release_instructions\":8000000}")
     ]
   unless (and (checkedIn ++ results)) exitFailure

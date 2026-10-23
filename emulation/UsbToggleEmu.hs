@@ -345,16 +345,20 @@ startServer env dat nand boot qSample output = do
           pure (object ["route" .= ("cable at reset; 140000000 instructions without keys" :: T.Text), "run" .= Object reply])
       pure (srv, Started key inputs kind bootRecord)
 
--- | First-start route to the shooting screen: language and date prompts.
+-- | First-start route to the shooting screen: language and date prompts. The
+-- prompts need an 8,000,000-instruction hold and release cap per key.
 firstStartRoute :: Server -> IO Value
 firstStartRoute srv = do
   _ <- call srv "run" ["instructions" .= (100000000 :: Int)]
   menus <- forM (replicate 12 "up" ++ ["ok", "ok"] :: [T.Text]) $ \key -> do
-    reply <- call srv "key" ["key" .= key]
+    reply <- call srv "key" ["key" .= key, "hold_instructions" .= firstStartPulse, "release_instructions" .= firstStartPulse]
     pure (field "menu" reply)
   _ <- call srv "run" ["instructions" .= (40000000 :: Int)]
   state <- call srv "state" []
   pure (object ["keys" .= (replicate 12 ("up" :: T.Text) ++ ["ok", "ok"]), "menus" .= menus, "state" .= Object state])
+
+firstStartPulse :: Int
+firstStartPulse = 8000000
 
 armTraces :: Server -> IO ()
 armTraces srv = do

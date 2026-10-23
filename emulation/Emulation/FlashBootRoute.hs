@@ -47,6 +47,14 @@ data RouteKey = KeyUp | KeyOk | KeyMenu
 
 data RouteStep = Press RouteKey | Continue Instructions
 
+-- | Hold and debounced-release cap of every route press. The first-start
+-- language/date screens need 8,000,000 each; the probe's per-class defaults
+-- are shorter.
+data KeyPulse = KeyPulse Instructions Instructions
+
+routePulse :: KeyPulse
+routePulse = KeyPulse (Instructions 8000000) (Instructions 8000000)
+
 data Phase = LanguagePhase | DatePhase | LiveViewPhase | ShootingMenuPhase deriving (Eq, Show)
 
 phaseName :: Phase -> String
@@ -67,10 +75,15 @@ freshBootRoute =
   ]
 
 probeCommand :: RouteStep -> String
-probeCommand (Press KeyUp) = "key up"
-probeCommand (Press KeyOk) = "key ok"
-probeCommand (Press KeyMenu) = "key menu"
+probeCommand (Press key) = unwords ["key", keyName key, show hold, show release]
+  where
+    KeyPulse (Instructions hold) (Instructions release) = routePulse
 probeCommand (Continue (Instructions count)) = "run " ++ show count
+
+keyName :: RouteKey -> String
+keyName KeyUp = "up"
+keyName KeyOk = "ok"
+keyName KeyMenu = "menu"
 
 data Observation = Observation
   { observedInstructions :: Integer
