@@ -334,6 +334,8 @@ Unicorn 2.1.4 has no Cortex-R4 model; the native runner uses `UC_CPU_ARM_CORTEX_
 
 **Host-executed, source-derived:** running the fetched `tools/progress.py --no-log` produced 38,737 of 47,439 functions (81.66%) and 5,559,796 of 10,221,224 bytes (54.39%). This default mode counts source definitions without `NONMATCHING` markers, not freshly compiled matches. The checked-in log's latest build-derived entry records 34,605 functions and 4,362,700 bytes; no native compiler rebuild was performed here.
 
+**Source-inspected:** x70view carries an X-M1 1.50 decomp tree, `decomp/firmwares/xm1-150` at `6287653605`, a matching-C lead for MATCHING-C-01; its plain-image `overlay_font_raster_find_property` (`0x0119eed8`, 188 bytes) and `overlay_font_raster_read_stream` (`0x0119f68c`, 192 bytes) stock hashes equal this project's bytes, and both are NONMATCHING there. No C is imported (E-XM1-DECOMP-CHECKPOINTS-150).
+
 **Next, host-only:** MATCHING-C-01 is a fixed ten-function pilot, two small functions from each of loader A, loader B, image 4, image 5 and the plain image, including a patch-relevant call boundary. Freeze the sample before compiler trials; determine compiler/flags per region, preserve the target ABI and R4F instruction limits, and compare fully linked bytes at original addresses including relocations and literal pools. Account separately for emitted bytes, stock padding and retained stock code/data; do not call a truncated-prefix match whole-function identity. Record exact and nonmatching outcomes separately. Obtain tools through the checked-in Nix/Bazel environment rather than copying the sibling's macOS installation procedure. This is not a whole-firmware rewrite or a new RC release gate.
 
 ### Permission-fault loading and live iteration lead
