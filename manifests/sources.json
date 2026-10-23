@@ -14,10 +14,11 @@
     {
       "id": "unicorn-x70",
       "url": "https://github.com/justjake/unicorn",
-      "revision": "f12467851d10175cd2856089c39c7e561c9cb25e",
+      "revision": "ecf0e25a2a4c308655e30e1d3198d148c4fc0819",
       "status": "pin-selected",
       "evidence_ids": [
-        "E-UNICORN-X70-SPEEDUP-150"
+        "E-UNICORN-X70-SPEEDUP-150",
+        "E-UNICORN-EMBEDDER-REPIN-150"
       ]
     },
     {

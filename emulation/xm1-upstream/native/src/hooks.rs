@@ -181,7 +181,7 @@ fn filtered_block(inner: &Inner, core: usize, address: u64, size: u32) -> Result
     if allowed < n {
         inner.acct_reset(core);
         state.retried_blocks += 1;
-        let retry = inner.api.x70.retry_block.ok_or("Filtered execution without uc_x70_retry_block")?;
+        let retry = inner.api.x70.retry_block.ok_or("Filtered execution without uc_embedder_retry_block")?;
         inner.check(unsafe { retry(inner.engines[core], allowed as u32) })?;
         return Ok(());
     }

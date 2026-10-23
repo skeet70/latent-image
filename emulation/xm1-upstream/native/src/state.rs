@@ -237,7 +237,7 @@ pub struct State {
     // PC of an instruction patched Unicorn restarted as its own block: it was
     // admitted before the restart, so a pending stop must not stop it.
     pub restart_pc: [Option<u64>; 2],
-    // Budgeted block accounting (patched Unicorn `uc_x70_accounting`), per
+    // Budgeted block accounting (patched Unicorn `uc_embedder_accounting`), per
     // core: on; the budget left at the last settle; the ring index up to
     // which blocks are in `trace`; blocks whose words were captured before a
     // store overwrote them (ring index, words).

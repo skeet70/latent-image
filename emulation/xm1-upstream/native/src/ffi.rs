@@ -34,8 +34,8 @@ pub struct MemRegion {
     pub perms: u32,
 }
 
-/// Optional exports of a patched 2.1.4 build (tools/build_unicorn.py); None
-/// with the stock wheel, whose behavior the callers then keep.
+/// Optional `uc_embedder_*` exports of jitl's Unicorn fork
+/// (build-support/unicorn-x70.nix); None with stock Unicorn.
 pub struct Extensions {
     pub write_hook_pc_sync: Option<unsafe extern "C" fn(Engine, bool) -> Error>,
     pub page_hooks: Option<unsafe extern "C" fn(Engine, bool) -> Error>,
@@ -44,13 +44,14 @@ pub struct Extensions {
     pub insn_filter: Option<unsafe extern "C" fn(Engine, Option<InsnFilter>, Option<Restart>, *mut c_void) -> Error>,
     pub retry_block: Option<unsafe extern "C" fn(Engine, u32) -> Error>,
     pub request_restart: Option<unsafe extern "C" fn(Engine) -> Error>,
-    // uc_x70_features bits (0 without the export): 1 = block hook size bit 31
-    // is the Thumb state while a translation filter is installed.
+    // uc_embedder_features bits (0 without the export): 1 = block hook size
+    // bit 31 is the Thumb state while a translation filter is installed.
     pub features: u32,
-    // uc_x70_accounting (features bit 2): the engine's accounting record.
+    // uc_embedder_accounting (features bit 2): the engine's accounting record.
     pub accounting: Option<unsafe extern "C" fn(Engine) -> *mut Accounting>,
 }
-/// Unicorn's x70 budgeted block accounting record (uc_priv.h x70_acct).
+/// The fork's budgeted block accounting record (uc_priv.h embedder_acct). The
+/// engine's trailing `pause_requested` pointer (features bit 8) stays NULL.
 #[repr(C)]
 pub struct Accounting {
     pub budget: i64,
@@ -73,31 +74,31 @@ macro_rules! api {
                     .map_err(|e| e.to_string())?;)+
                 let x70 = Extensions {
                     write_hook_pc_sync: unsafe {
-                        library.get::<unsafe extern "C" fn(Engine, bool) -> Error>(b"uc_x70_set_write_hook_pc_sync\0")
+                        library.get::<unsafe extern "C" fn(Engine, bool) -> Error>(b"uc_embedder_set_write_hook_pc_sync\0")
                     }.ok().map(|f| *f),
                     page_hooks: unsafe {
-                        library.get::<unsafe extern "C" fn(Engine, bool) -> Error>(b"uc_x70_set_page_hooks\0")
+                        library.get::<unsafe extern "C" fn(Engine, bool) -> Error>(b"uc_embedder_set_page_hooks\0")
                     }.ok().map(|f| *f),
                     hook_watched: unsafe {
-                        library.get::<unsafe extern "C" fn(Engine, usize, bool) -> Error>(b"uc_x70_set_hook_watched\0")
+                        library.get::<unsafe extern "C" fn(Engine, usize, bool) -> Error>(b"uc_embedder_set_hook_watched\0")
                     }.ok().map(|f| *f),
                     watch: unsafe {
-                        library.get::<unsafe extern "C" fn(Engine, u64, u64) -> Error>(b"uc_x70_watch\0")
+                        library.get::<unsafe extern "C" fn(Engine, u64, u64) -> Error>(b"uc_embedder_watch\0")
                     }.ok().map(|f| *f),
                     insn_filter: unsafe {
-                        library.get::<unsafe extern "C" fn(Engine, Option<InsnFilter>, Option<Restart>, *mut c_void) -> Error>(b"uc_x70_set_insn_filter\0")
+                        library.get::<unsafe extern "C" fn(Engine, Option<InsnFilter>, Option<Restart>, *mut c_void) -> Error>(b"uc_embedder_set_insn_filter\0")
                     }.ok().map(|f| *f),
                     retry_block: unsafe {
-                        library.get::<unsafe extern "C" fn(Engine, u32) -> Error>(b"uc_x70_retry_block\0")
+                        library.get::<unsafe extern "C" fn(Engine, u32) -> Error>(b"uc_embedder_retry_block\0")
                     }.ok().map(|f| *f),
                     request_restart: unsafe {
-                        library.get::<unsafe extern "C" fn(Engine) -> Error>(b"uc_x70_request_restart\0")
+                        library.get::<unsafe extern "C" fn(Engine) -> Error>(b"uc_embedder_request_restart\0")
                     }.ok().map(|f| *f),
                     accounting: unsafe {
-                        library.get::<unsafe extern "C" fn(Engine) -> *mut Accounting>(b"uc_x70_accounting\0")
+                        library.get::<unsafe extern "C" fn(Engine) -> *mut Accounting>(b"uc_embedder_accounting\0")
                     }.ok().map(|f| *f),
                     features: unsafe {
-                        library.get::<unsafe extern "C" fn() -> u32>(b"uc_x70_features\0")
+                        library.get::<unsafe extern "C" fn() -> u32>(b"uc_embedder_features\0")
                     }.ok().map(|f| unsafe { f() }).unwrap_or(0),
                 };
                 Ok(Self { $($field,)+ x70, _library: library })
