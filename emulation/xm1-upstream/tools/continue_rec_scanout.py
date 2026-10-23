@@ -1971,7 +1971,7 @@ def main():
     print('Commands: sample, status, run COUNT, checkpoint, snapshot DIRECTORY, nand FILE, sd FILE, restore,'
           ' read ADDRESS LENGTH, watch ADDRESS [ADDRESS:LENGTH...], hits, nandstat, quit. No camera I/O.', flush=True)
     if args.menus:
-        print('Menu input: key ok|back|q|up|down|left|right. Stock ADC scanning/debounce.', flush=True)
+        print('Menu input: key ok|back|q|up|down|left|right [HOLD RELEASE]. Stock ADC scanning/debounce.', flush=True)
     trace, reported = TraceSites(board, recorded_per_site=64), 0
     for line in sys.stdin:
         fields = line.split()
@@ -1994,8 +1994,11 @@ def main():
                 value = session.run({'restore': True})
             elif len(fields) == 2 and fields[0] == 'run':
                 value = session.run({'limit': int(fields[1], 0)})
-            elif args.menus and len(fields) == 2 and fields[0] == 'key':
-                value = session.key({'key': fields[1]})
+            elif args.menus and len(fields) in (2, 4) and fields[0] == 'key':
+                options = {'key': fields[1]}
+                if len(fields) == 4:
+                    options.update(hold_instructions=int(fields[2], 0), release_instructions=int(fields[3], 0))
+                value = session.key(options)
             elif len(fields) == 3 and fields[0] == 'read':
                 start, length = _console_window(fields[1] + ':' + fields[2])
                 value = {'address': hex(start), 'hex': bytes(board.read_memory(start, length)).hex()}
