@@ -185,6 +185,7 @@ decode address word
   group0
     | field 7 4 word == 9 && field 27 20 word == 0 = Multiply cond (reg 16 word) (reg 0 word) (reg 8 word) Nothing
     | field 7 4 word == 9 && field 27 20 word == 2 = Multiply cond (reg 16 word) (reg 0 word) (reg 8 word) (Just (reg 12 word))
+    | field 7 4 word == 9 && field 24 24 word == 0 && testBit word 20 = Rejected Unadmitted
     | field 7 4 word == 9 && field 24 24 word == 0 =
         if testBit word 23 || field 22 21 word == 2
           then Compute cond [reg 16 word, reg 12 word]

@@ -7,9 +7,10 @@
 -- Fail-closed: a row missing a key, rows that are not in payload order, rows
 -- whose bit ranges overlap, a width over one byte without a matching byte
 -- count, a conversion table that does not terminate inside the image, a
--- property outside the dispatcher's table, or an input whose SHA-256 is not
--- the map's pinned value stops the run. In --check mode nothing is written and
--- a difference from the emitted files is an error.
+-- property outside the dispatcher's table, a walk without the properties the
+-- bank's stack-index stores name (see 'requiredWalked'), or an input whose
+-- SHA-256 is not the map's pinned value stops the run. In --check mode nothing
+-- is written and a difference from the emitted files is an error.
 --
 --   emit-recipe-bank-fields MAP.json ID4.bin ID5.bin C_OUT.inc HS_OUT.hs
 --   emit-recipe-bank-fields --check MAP.json ID4.bin ID5.bin C_OUT.inc HS_OUT.hs
@@ -86,6 +87,7 @@ main = do
   ensure (map rowEdit edits == map (Just . id) [0 .. mapEditCount m - 1]) "map: edit indices are not 0..count-1"
   validateRows (mapWalk m ++ mapExcluded m)
   validateWalkOrder (mapWalk m)
+  validateRequired (mapWalk m)
   let tablesE = mapM (conversionTable id4 . rowProperty) (mapWalk m) :: Either String [[Word16]]
       armsE = mapM (commitArm id5 . rowProperty) (mapWalk m) :: Either String [Bool]
   _tables <- either failH pure tablesE
@@ -230,6 +232,19 @@ validateWalkOrder rows = do
         (rowOffset b == 0x02 && rowBytes b == 2 && rowShift b == 0 && rowMask b == 0xffff)
         "the second walk row is not the full-width +0x02 halfword"
     _ -> failH "the walk table does not start with its two halfword rows"
+
+-- | Properties whose walk index the bank uses as a stack-record skip-word
+-- index (rb_select's 0x1c6, rb_admit_base's 0xf9 and 0xfa); a miss sends that
+-- store outside the frame, and menu/recipe_bank_allowlist.json declares those
+-- stores on the strength of this check.
+requiredWalked :: [Word16]
+requiredWalked = [0x1c6, 0xf9, 0xfa]
+
+validateRequired :: [Row] -> IO ()
+validateRequired rows =
+  mapM_
+    (\p -> ensure (p `elem` map rowProperty rows) ("walk rows lack property 0x" ++ showHex p ""))
+    requiredWalked
 
 -- | Bytes carrying bits that no walked row and no bound-not-walked row covers:
 -- the kernel requires them zero and zeroes them on a remembered payload.

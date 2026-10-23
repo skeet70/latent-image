@@ -90,6 +90,16 @@ main = do
     [(frameSetup, ForbiddenInstruction Unadmitted)]
   expect "SMLABB with a PC operand" (fixture frameSetup 0xe103028f)
     [(frameSetup, ForbiddenInstruction Unadmitted)]
+  expect "SMULWB" (fixture frameSetup 0xe12302a1) []
+  expect "SMULBB with nonzero bits 15:12" (fixture frameSetup 0xe1631281)
+    [(frameSetup, ForbiddenInstruction Unadmitted)]
+  expect "SMLABB with PC as accumulator" (fixture frameSetup 0xe103f281)
+    [(frameSetup, ForbiddenInstruction Unadmitted)]
+  -- Flag-setting multiplies write NZCV the compare-pruned paths rely on.
+  expect "MULS" (fixture frameSetup 0xe0110392)
+    [(frameSetup, ForbiddenInstruction Unadmitted)]
+  expect "UMULLS" (fixture frameSetup 0xe0932190)
+    [(frameSetup, ForbiddenInstruction Unadmitted)]
   -- rb_assert_one's `cmp rN, #0` replaced by `mov r0, r0`: the 0 trace
   -- reaches its store.
   expect "untested 0 argument" (fixture zeroTest 0xe1a00000)
@@ -105,7 +115,7 @@ main = do
   (fixtureCode, output, _) <- readProcessWithExitCode checker [allowlistPath, path] ""
   removeFile path
   check ("checker exits 1 on an undeclared stock call; output: " ++ output) (fixtureCode == ExitFailure 1)
-  putStrLn "bank allowlist: 17 checks passed"
+  putStrLn "bank allowlist: 22 checks passed"
 
 run :: Allowlist -> B.ByteString -> IO Report
 run allowlist bytes = either fail pure (parseElf bytes >>= checkBank allowlist)
