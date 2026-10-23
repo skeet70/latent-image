@@ -60,7 +60,7 @@ impl Tcm {
     pub fn locate(&self, core: usize, address: u64, size: usize) -> Option<(usize, usize)> {
         (0..2).find_map(|i| self.extent(core, i).and_then(|(base, bytes)| {
             (address >= base && address.checked_add(size as u64)? <= base + bytes as u64)
-                .then_some((i, (address-base) as usize))
+                .then(|| (i, (address-base) as usize))
         }))
     }
     pub fn snapshot(&self, core: usize) -> Snapshot {
@@ -262,5 +262,18 @@ mod tests {
         assert!(Tcm::new(&vec![(0x2000,0x70000001),(0x2000,0x70002001)]).is_ok());
         assert!(validate_disjoint(0x2000,0x70000011,0x2000,0x70000011).is_err());
         assert!(validate_disjoint(0x2000,0x70000010,0x2000,0x70000011).is_ok());
+    }
+    #[test]
+    fn locate_refuses_addresses_outside_the_enabled_bank() {
+        let tcm = Tcm::new(&vec![(0, 0), (0x2000, 0xffff8001)]).unwrap();
+        for core in 0..2 {
+            assert_eq!(tcm.locate(core, 0x30000, 4), None);
+            assert_eq!(tcm.locate(core, 0xfff02000, 4), None);
+            assert_eq!(tcm.locate(core, 0xffff8000, 4), Some((1, 0)));
+            assert_eq!(tcm.locate(core, 0xffff9ffc, 4), Some((1, 0x1ffc)));
+            assert_eq!(tcm.locate(core, 0xffff9ffd, 4), None);
+            assert_eq!(tcm.locate(core, 0xffffa000, 1), None);
+            assert_eq!(tcm.locate(core, u64::MAX, 4), None);
+        }
     }
 }
