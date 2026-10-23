@@ -208,12 +208,13 @@
     "ADC8 and ADC9 use released level1023; S1/S2 pins are static active-low inputs.",
     "Owner-captured X-M1 ROM and declared512MiB DRAM backing; unselected initial input values remain unmeasured.",
     "Explicit absent external-flash input atGPIO11/2=0 and fixed-low SPI0 MISO; existing bounded law, unmeasured external part/line.",
-    "Declared acquisition actuator response: GPIO1 pins1/2 drive GPIO0 pin9 rising / pin6 falling through target EXR IRQ11; initial GPIO0 sensors high and GPIO2 pin8 low. Motion law, actuator identity and latency are unmeasured."
+    "Declared acquisition actuator response: GPIO1 pins1/2 drive GPIO0 pin9 rising / pin6 falling through target EXR IRQ11; initial GPIO0 sensors high and GPIO2 pin8 low. Motion law, actuator identity and latency are unmeasured.",
+    "Normal power-on status0x10 selects stock boot kind2 via6A5AAC/table7CB7AC; hardware-observed0x400a00c0 samples0x10/0x12 classify the same (E-DUMP-RAM-150). GPIO0.2=1 releases active-low S1. Status0 selected kind3, whose69CFA4 guard rejects released S1. MENU/OK ADC9=1023 releases its configured0..255 band. Pin and ADC levels are synthetic."
   ],
   "inputs": {
     "gpio": {
       "gpio_inputs": {
-        "0": 3688,
+        "0": 3692,
         "2": 4608,
         "3": 776,
         "12": 128,
@@ -225,7 +226,7 @@
       "acquisition_actuator_profile": "xm1-150-declared-acquisition-gpio-motion-unmeasured"
     },
     "power": {
-      "profile_name": "Synthetic loader boot reason0; remaining ADC borrowed; MCU runtime status still separate rehearsal input",
+      "profile_name": "Synthetic loader boot reason0x10; remaining ADC borrowed; MCU runtime status still separate rehearsal input",
       "adc_samples": [
         0,
         0,
@@ -240,7 +241,7 @@
         0,
         0
       ],
-      "boot_reply": 0,
+      "boot_reply": 16,
       "spi0_input_profile": "absent-external-flash-fixed-low-miso",
       "panel_contract": [
         [

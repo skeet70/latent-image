@@ -405,12 +405,12 @@
     },
     {
       "name": "unicorn-x70",
-      "version": "2.1.4-x70-f1246785",
+      "version": "2.1.4-embedder-ecf0e25a",
       "nixpkgs_revision": "c7def046b9a883d46974757852106483d741586f",
-      "source": "https://github.com/justjake/unicorn/tree/f12467851d10175cd2856089c39c7e561c9cb25e",
+      "source": "https://github.com/justjake/unicorn/tree/ecf0e25a2a4c308655e30e1d3198d148c4fc0819",
       "license": "GPL-2.0-only",
-      "evidence": "https://github.com/justjake/unicorn/blob/f12467851d10175cd2856089c39c7e561c9cb25e/COPYING",
-      "scope": "Unicorn 2.1.4 COPYING unchanged by the fork's engine-source patches; per-file QEMU notices remain applicable"
+      "evidence": "https://github.com/justjake/unicorn/blob/ecf0e25a2a4c308655e30e1d3198d148c4fc0819/COPYING",
+      "scope": "Unicorn 2.1.4 COPYING and the other license files unchanged by the fork; per-file QEMU notices remain applicable, including the optional TCI backend files (qemu/tcg/tci.c GPL-2.0-or-later, qemu/tcg/tci/ MIT) that the ARM JIT build does not compile"
     },
     {
       "name": "numpy",

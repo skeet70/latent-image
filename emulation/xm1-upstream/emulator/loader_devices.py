@@ -388,8 +388,13 @@ class FujiDecompressor(_Registers):
             if generation!=self.generation:
                 return
             self._movrsz_valid()
+            # An empty target list is a masked enable group (stock 42B00/42EB0 clear
+            # and restore all 32 sources); raise_irq latches pending while masked.
+            targets=list(self.irq_targets(self.IRQ))
+            same_or_masked=(not targets or len(targets)==1
+                            and type(targets[0]) is int and targets[0]==route)
             if (self.movrsz_request is not request or request['state']!='active'
-                    or self._movrsz_plan()!=plan or list(self.irq_targets(self.IRQ))!=[route]):
+                    or self._movrsz_plan()!=plan or not same_or_masked):
                 raise UnsupportedDevice('MOVRSZ active descriptor or IRQ route changed')
             output=self._movrsz_raster(plan,data)
             if len(output)!=plan['output_bytes']:

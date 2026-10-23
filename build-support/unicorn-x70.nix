@@ -1,15 +1,14 @@
 { pkgs }:
-# jitl's Unicorn 2.1.4 fork with the optional uc_x70_* exports that
-# emulation/xm1-upstream/native/src/ffi.rs loads. f1246785 is the last
-# commit exporting that prefix; the branch renamed it to uc_embedder_*.
+# jitl's Unicorn 2.1.4 fork (embedder branch) with the optional uc_embedder_*
+# exports that emulation/xm1-upstream/native/src/ffi.rs loads.
 pkgs.unicorn.overrideAttrs (old: {
   pname = "unicorn-x70";
-  version = "2.1.4-x70-f1246785";
+  version = "2.1.4-embedder-ecf0e25a";
   src = pkgs.fetchFromGitHub {
     owner = "justjake";
     repo = "unicorn";
-    rev = "f12467851d10175cd2856089c39c7e561c9cb25e";
-    hash = "sha256-pszHgW8yMt65+7SveenlQ+bjbLkooIYgWur1gdO+tRw=";
+    rev = "ecf0e25a2a4c308655e30e1d3198d148c4fc0819";
+    hash = "sha256-8qHXX4gz0nhinW+m5jHlNK7SBOsnB2l8SM8PS8H2Kik=";
   };
   cmakeFlags = (old.cmakeFlags or [ ]) ++ [
     "-DUNICORN_ARCH=arm"
