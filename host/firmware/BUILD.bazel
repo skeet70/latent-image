@@ -330,6 +330,7 @@ haskell_binary(
 haskell_test(
     name = "recipe-bank-tests",
     srcs = ["RecipeBankTests.hs"],
+    data = ["//menu:recipe_bank_fields.inc"],
     ghcopts = [
         "-Wall",
         "-Werror",

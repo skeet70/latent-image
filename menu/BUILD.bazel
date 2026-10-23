@@ -100,6 +100,9 @@ filegroup(
 )
 
 exports_files(
-    ["recipe_bank_allowlist.json"],
+    [
+        "recipe_bank_allowlist.json",
+        "recipe_bank_fields.inc",
+    ],
     visibility = ["//host/firmware:__pkg__"],
 )
