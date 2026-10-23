@@ -516,11 +516,23 @@ sh_test(
 )
 
 haskell_library(
+    name = "case-sha256",
+    srcs = ["Emulation/Sha256.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+    ],
+)
+
+haskell_library(
     name = "native-adapter",
     srcs = ["Emulation/NativeCase.hs"],
     ghcopts = ["-XGHC2021"],
     visibility = ["//visibility:public"],
     deps = [
+        ":case-sha256",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -696,6 +708,7 @@ haskell_binary(
     main_file = "RecipeBankUiCases.hs",
     visibility = ["//visibility:public"],
     deps = [
+        ":case-sha256",
         ":native-adapter",
         "//host:aeson",
         "//host:base",
@@ -726,6 +739,7 @@ haskell_binary(
     main_file = "RecipeBankCases.hs",
     visibility = ["//visibility:public"],
     deps = [
+        ":case-sha256",
         ":native-adapter",
         "//host:aeson",
         "//host:base",

@@ -12,6 +12,11 @@ haskell_toolchain_library(name = "bytestring")
 
 haskell_toolchain_library(name = "containers")
 
+haskell_toolchain_library(
+    name = "cryptohash-sha256",
+    visibility = ["//emulation:__pkg__"],
+)
+
 haskell_toolchain_library(name = "directory")
 
 haskell_toolchain_library(name = "filepath")

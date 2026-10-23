@@ -20,7 +20,8 @@ import Data.String (fromString)
 import Data.Word
 import Emulation.NativeCase (runCase)
 import Emulation.ParallelCases (mapBounded, readJobs)
-import FujiAF.Host (sha256, str)
+import Emulation.Sha256 (sha256, sha256Hex)
+import FujiAF.Host (str)
 import Numeric
 import System.Directory
 import System.Environment
@@ -2538,7 +2539,7 @@ runSpec runner out e in' sp = do
       error ("invalid ABI workspace in " ++ spId sp)
   let arts = [(n, b) | (n, _, _, _, b) <- regs, not (B.null b)]
   forM_ arts $ \(n, b) -> B.writeFile (dir </> (n ++ ".bin")) b
-  digests <- forM arts $ \(n, b) -> (\d -> (n, d)) <$> sha256 b
+  let digests = [(n, sha256Hex (sha256 b)) | (n, b) <- arts]
   BL.writeFile (dir </> "case.json") (encode (caseJson in' e sp digests))
   (_, report) <- runCase runner (dir </> "case.json")
   BL.writeFile (dir </> "native-result.json") (encode report)

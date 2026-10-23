@@ -1,6 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Emulation.NativeCase where
-import FujiAF.Host
+import FujiAF.Host hiding (sha256)
+import Emulation.Sha256 (sha256, sha256Hex)
 import Data.Aeson (Value(..))
 import FujiAF.JSON (decodeStrictIntegers)
 import qualified Data.ByteString as B
@@ -86,8 +87,7 @@ loadCase input = do
    ensure(length digest==64 && all (`elem` "0123456789abcdef")digest) "artifact SHA256 invalid"
    bytes<-readRegularWith (pure())False limit file
    ensure(B.length bytes==fromInteger size) "artifact length mismatch"
-   actualHash<-sha256 bytes
-   ensure(actualHash==digest) "artifact digest mismatch"
+   ensure(sha256Hex(sha256 bytes)==digest) "artifact digest mismatch"
    pure(done++[(ident,bytes)])) [] inventory
  regionsInput<-arrayCheck(get c "regions")1 16 "regions limit"
  regions<-foldM(\done item->do
@@ -155,7 +155,7 @@ loadCase input = do
      functionRows=[unwords[hex x,hex size]|(x,size)<-functions]
      stubRows=concat[unwords[hex t,show(length inputs),show(length outputs)]:[unwords[show(maybe 0 id(elemIndex k regs)),hex v]|bindingGroup<-[inputs,outputs],(k,v)<-bindingGroup]|(t,inputs,outputs)<-stubs]
      wire=BC.pack(unlines(rows++regionRows++functionRows++stubRows))
- digest<-sha256 raw; wireDigest<-sha256 wire
+ let digest=sha256Hex(sha256 raw); wireDigest=sha256Hex(sha256 wire)
  pure(c,regions,wire,[("case_sha256",s digest),("wire_sha256",s wireDigest),("artifacts",arr inventory)])
 checkResult :: Value -> [Region] -> Value -> IO [String]
 checkResult c regions result=do
@@ -183,7 +183,7 @@ runCase runner path = do
        report=merge ref(identity++[("case_id",get c "id"),("origin",get c "origin"),("profile",s profile),("provenance",get c "provenance"),("exclusions",get c "exclusions")])
    result<-try$do
     executable<-canonicalizePath runner
-    hash<-readRegularWith(pure())False (256*1024*1024) executable >>= sha256
+    hash<-sha256Hex . sha256 <$> readRegularWith(pure())False (256*1024*1024) executable
     (timed,exit,out,err)<-runBounded(fromInteger(num(get(get c "limits")"wall_ms")*1000+2000000))(8*1024*1024) executable [] wire
     let report'=set "runner_sha256" (s hash) report
     if timed then pure(1,merge report'[("status",s "host_timeout"),("stdout",s(BC.unpack out)),("stderr",s(BC.unpack err))]) else do
