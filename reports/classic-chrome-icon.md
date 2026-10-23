@@ -395,6 +395,18 @@ Operating rules. Run L1, L4 and E4 only with the camera idle at the shooting scr
 
 The owner's H2 go names: the operation (ordinary-boot RAM push of the Classic Chrome icon payload on the RC0 body with no card: the B0 no-card start, the 11.3 reads, `ram-alloc 0x21fc`, `ram-relink` at the returned base, `ram-push` of 162 publications, the 11.5 checks, `ram-unload` after E1-E3, power-off and the 11.7 read, with `ram-free` as the not-installed contingency); the session commit, whose icon RAM files equal reviewed `b8c7fd92259f18d8506210167a0baba4a73e9ced` (review CcIconReview); the publication contract digest `04df9a5ae4574f0c28f2c2ce67a581a96c7f092036ece6c316eced593fa1de32`; and the reference runtimes the pinned relinker reproduces, `4f871b2a9c488b2a68bfa0a6c006303d292b4d2dadce54f8635ec8e438f3ebd3` at `0x00c20000` and `2fce1f08317732091648eb58a3409f6bf472d0f7c8444ea153800f7da791e16a` at `0x00c21f88`. The session's own runtime depends on the base `ram-alloc` returns; the camera binary rebuilds it with the pinned relinker and requires byte equality, and L3 records its SHA-256 before L4 runs. I8, a CC frame, RAW CONVERSION and the frame-count check with a card are outside this go. The flash of `98a66780…1606` follows under its own H3 go.
 
+### 11.10 Result of the session (2026-10-23)
+
+Ran under the owner's H2 go ("yep, go ahead") from `1b65622`, on XM1-body-01 (1.50, RC0, stored `0xf7 = 1`, no card), with no stop (E-CC-ICON-RAM-PUSH-SESSION-150).
+
+- B0: the shooting screen and SHOOTING MENU come up with a no-card message.
+- 11.3: one `04cb:ff80` device; the pre-push read matched all 162 old words and the route windows.
+- 11.4: `ram-alloc 0x21fc` returned base `0x00a82500`; the relinked runtime (`59e92c5d…228e`) matched the approved pins; `ram-push` installed 162 publications in 83 s.
+- 11.5: I1, I2 and I5 pass. I4 passes with a hedge: the owner saw the difference clearly while scrolling and less clearly after selection. I3 is inconclusive: with no card no count is drawn for either film (11.1), and no MEMORY FULL or difference between the films was reported. I8 deferred.
+- 11.6-11.7: `ram-unload` verified 162 old words; normal power-off and restart; seven film rows and five Q films; the post-reboot read found all 162 words old and slot `0x015c22ac = 0x00dc7874`.
+
+Deferred to a card session: I3 frames, I8 IMAGE SEARCH, a CC shot and its playback, and RAW conversion.
+
 ## 12. Open questions
 
 1. Answered by section 14: the Q tile takes Q glyph ids, and the Q-tile fragment gives CC and both PRO Neg rows full-size 80 x 48 tiles without a second special id.
