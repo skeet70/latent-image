@@ -17,6 +17,7 @@ module Emulation.CandidateBaseline
   , Field (..)
   , Observation
   , observe
+  , withoutExcluded
   , Difference (..)
   , differenceField
   , compareObservations
@@ -150,7 +151,12 @@ observe spec (ReceiptDirectory root) = do
         Right value -> pure (flatten path [] value)
         Left problem -> pure [Field (FieldName path Nothing) (String (T.pack ("unparseable JSON: " ++ problem)))]
       else pure [Field (FieldName path Nothing) (String (T.pack ("sha256:" ++ sha256Hex (sha256 bytes))))])
-  pure (sortOn fieldName (filter (not . excluded (observationExclusions spec) . fieldName) fields))
+  pure (withoutExcluded spec fields)
+
+-- | The fields the spec does not exclude, in 'FieldName' order. Applied to a
+-- stored baseline, it compares under the current exclusions.
+withoutExcluded :: ObservationSpec -> Observation -> Observation
+withoutExcluded spec = sortOn fieldName . filter (not . excluded (observationExclusions spec) . fieldName)
 
 flatten :: FilePath -> [Segment] -> Value -> [Field]
 flatten path pointer value = case value of

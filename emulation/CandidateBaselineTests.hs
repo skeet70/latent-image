@@ -48,6 +48,7 @@ main = do
   removeDirectoryRecursive root
   writeReceipt root (result "cold" "1.25" "2") "png-a"
   recorded <- observe spec receipt
+  recordedWithoutExclusions <- observe spec {observationExclusions = []} receipt
   let baseline = Baseline "synthetic" "2026-10-24T00:00:00Z" root recorded
   stored <- either (\problem -> putStrLn problem >> exitFailure) pure (decodeBaseline (encodeBaseline baseline))
 
@@ -80,6 +81,8 @@ main = do
     , check "a field the baseline lacks is reported"
         (case compareObservations [field | field <- baselineFields stored, fieldFile (fieldName field) /= "shots/menu.png"] recorded of
            [AbsentFromBaseline name _] -> renderFieldName name == "shots/menu.png"
-           _ -> False) ]
+           _ -> False)
+    , check "a baseline recorded before an exclusion compares under it"
+        (null (compareObservations (withoutExcluded spec recordedWithoutExclusions) excludedOnly)) ]
   unless (and outcomes) exitFailure
   putStrLn ("passed " ++ show (length outcomes) ++ " checks")
