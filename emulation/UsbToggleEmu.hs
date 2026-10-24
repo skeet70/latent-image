@@ -24,7 +24,7 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Word (Word16, Word32, Word8)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
-import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, stageViewerRuntime, validateFirmware, workspace)
+import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, stageViewerRuntime, validateFirmware, workspace)
 import EmulatorUsb (BridgeExchange, bridgeUsbApi)
 import qualified FujiAF.Broker as P
 import FujiAF.Read (ReadWindow (..), decodeReadReply, readReplyBytes, readRequestBytes, readRequestFrame)
@@ -275,6 +275,7 @@ data Env = Env
   , envCheckpoints :: FilePath
   , envFresh :: Bool
   , envReplaced :: IORef [String]
+  , envFixedFrame :: Maybe FixedSceneFrame
   }
 
 data Started = Started
@@ -304,7 +305,7 @@ startServer env dat nand boot qSample output = do
         , "--menus", "--toggle-server"
         , "--output", output
         , "--toggle-checkpoints", envCheckpoints env
-        ] ++ resetArguments
+        ] ++ resetArguments ++ fixedSceneFrameArguments (envFixedFrame env)
   errors <- openFile (output ++ ".stderr") WriteMode
   (Just input, Just out, _, process) <- createProcess (proc (envPython env) arguments)
     { std_in = CreatePipe, std_out = CreatePipe, std_err = UseHandle errors, cwd = Just (envRuntime env) }
@@ -346,19 +347,17 @@ startServer env dat nand boot qSample output = do
       pure (srv, Started key inputs kind bootRecord)
 
 -- | First-start route to the shooting screen: language and date prompts. The
--- prompts need an 8,000,000-instruction hold and release cap per key.
+-- per-class defaults reproduce the recorded checkpoints only with a selected
+-- fixed scene frame.
 firstStartRoute :: Server -> IO Value
 firstStartRoute srv = do
   _ <- call srv "run" ["instructions" .= (100000000 :: Int)]
   menus <- forM (replicate 12 "up" ++ ["ok", "ok"] :: [T.Text]) $ \key -> do
-    reply <- call srv "key" ["key" .= key, "hold_instructions" .= firstStartPulse, "release_instructions" .= firstStartPulse]
+    reply <- call srv "key" ["key" .= key]
     pure (field "menu" reply)
   _ <- call srv "run" ["instructions" .= (40000000 :: Int)]
   state <- call srv "state" []
   pure (object ["keys" .= (replicate 12 ("up" :: T.Text) ++ ["ok", "ok"]), "menus" .= menus, "state" .= Object state])
-
-firstStartPulse :: Int
-firstStartPulse = 8000000
 
 armTraces :: Server -> IO ()
 armTraces srv = do
@@ -1036,6 +1035,7 @@ data Options = Options
   , optFamilies :: [String]
   , optFresh :: Bool
   , optWorkspace :: Maybe Workspace
+  , optFixedFrame :: Maybe FixedSceneFrame
   }
 
 usage :: String
@@ -1048,13 +1048,14 @@ usage = unlines
   , "  --runs FAMILY,...   e2, e3, e4e5, e5u, e6, e7, control or all (default: all)"
   , "  --fresh-boot        cold-boot each route checkpoint once and replace it"
   , "  --workspace PATH    repository root (default: BUILD_WORKSPACE_DIRECTORY)"
+  , "  --fixed-scene-frame N  pin every scene render to the positive frame index N for the run"
   ]
 
 families :: [String]
 families = ["e2", "e3", "e4e5", "e5u", "e6", "e7", "control"]
 
 parseOptions :: [String] -> IO Options
-parseOptions = go (Options Nothing families False Nothing)
+parseOptions = go (Options Nothing families False Nothing Nothing)
   where
     go options [] = pure options
     go options ("--receipt-output" : value : rest) = go options {optReceipts = Just value} rest
@@ -1065,6 +1066,9 @@ parseOptions = go (Options Nothing families False Nothing)
       go options {optFamilies = chosen} rest
     go options ("--fresh-boot" : rest) = go options {optFresh = True} rest
     go options ("--workspace" : value : rest) = go options {optWorkspace = Just (Workspace value)} rest
+    go options ("--fixed-scene-frame" : value : rest) = do
+      frame <- either (ioError . userError) pure (parseFixedSceneFrame value)
+      go options {optFixedFrame = Just frame} rest
     go _ (argument : _) = ioError (userError ("unknown option or missing value: " ++ argument ++ "\n" ++ usage))
     splitComma text = case break (== ',') text of
       (front, []) -> [front]
@@ -1109,7 +1113,7 @@ launch arguments options = do
   replaced <- newIORef []
   head' <- (filter (/= '\n') <$> readProcess "git" ["-C", root, "rev-parse", "HEAD"] "") `catch` \(_ :: IOException) -> pure "unknown"
   dirty <- (not . null <$> readProcess "git" ["-C", root, "status", "--porcelain", "--", "emulation", "host", "transport", "broker"] "") `catch` \(_ :: IOException) -> pure True
-  let env = Env root python runtime (root </> "private-data" </> "emulator-checkpoints" </> "xm1-usb-toggle") (optFresh options) replaced
+  let env = Env root python runtime (root </> "private-data" </> "emulator-checkpoints" </> "xm1-usb-toggle") (optFresh options) replaced (optFixedFrame options)
       chosen = [s | s <- scenarios, scFamily s `elem` optFamilies options]
   results <- mapM (runScenario env receipts) chosen
   BL.writeFile (receipts </> "summary.json") (encode (object

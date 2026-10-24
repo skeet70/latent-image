@@ -47,9 +47,9 @@ data RouteKey = KeyUp | KeyOk | KeyMenu
 
 data RouteStep = Press RouteKey | Continue Instructions
 
--- | Hold and debounced-release cap of every route press. The first-start
--- language/date screens need 8,000,000 each; the probe's per-class defaults
--- are shorter.
+-- | Hold and debounced-release cap of every route press. The per-class defaults
+-- do not reach SHOOTING MENU: the language UPs under the animated source, the
+-- MENU press under a fixed scene frame.
 data KeyPulse = KeyPulse Instructions Instructions
 
 routePulse :: KeyPulse
