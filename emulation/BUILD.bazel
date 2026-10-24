@@ -1,5 +1,6 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 filegroup(
@@ -133,6 +134,16 @@ haskell_binary(
         "//host:filepath",
         "//host:process",
     ],
+)
+
+# Re-derives the run document's address provenance from the decoded images:
+# bazel run //emulation:fujimod-xm1-provenance -- --analysis private-data/analysis/x-m1-1.50
+sh_binary(
+    name = "fujimod-xm1-provenance",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-provenance"],
+    args = ["--run", "$(rootpath @lab_fujimod_xm1//:share/fujimod-xm1/xm1-150.json)"],
+    data = ["@lab_fujimod_xm1//:share/fujimod-xm1/xm1-150.json"],
+    visibility = ["//visibility:public"],
 )
 
 haskell_binary(
