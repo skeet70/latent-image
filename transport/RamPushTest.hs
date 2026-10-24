@@ -6,6 +6,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.IORef
 import Data.List (isInfixOf)
+import Data.Word (Word32)
 import System.Directory
 import System.FilePath
 import System.Posix.Files (fileMode, getFileStatus, intersectFileModes, setFileMode)
@@ -14,6 +15,7 @@ import FujiAF.RamPush
 import FujiAF.SHA256 (sha256)
 import FujiAF.Rehearsal (rehearseRamAlloc, rehearseRamPush, rehearseRamFree, rehearseRamUnload)
 import FujiAF.Transport
+import RamPushLayout (installerInstallOffset, installerRollbackOffset, installerStatusOffset, runtimeAllocationSize, runtimeBankEnd)
 import RamPushModel
 
 contract :: ReviewedContract
@@ -48,6 +50,16 @@ main = do
     && ramAllocArguments ["0x1a99f"] == Nothing && ramAllocArguments ["0x1a9a1"] == Nothing
     && ramPushArguments ["/m"] == Nothing && ramPushArguments ["--raw","/m"] == Nothing
     && ramPushArguments ["/a","/m","/o","x"] == Nothing)
+  let alignedBases = [0x00a00000 + low | low <- [0, 8 .. 0xfff8]] :: [Word32]
+      layoutEntries kind at =
+        let start = payloadInstallerStart kind at
+        in RamPushEntries (Address (start + installerInstallOffset)) (Address (start + installerRollbackOffset)) (Address (start + installerStatusOffset))
+  check "every payload's entries are RamPushLayout's installer offsets"
+    (and [payloadEntries kind (Address at) == layoutEntries kind at | kind <- payloads, at <- alignedBases])
+  check "the bank installer starts at RamPushLayout's bank end"
+    (all (\at -> payloadInstallerStart bankD3Payload at == runtimeBankEnd at) alignedBases)
+  check "the bank allocation is RamPushLayout's"
+    (payloadAllocationSize bankD3Payload == fromIntegral runtimeAllocationSize)
 
   requireReviewedBytes (C.pack "manifest") (C.pack "runtime") (C.pack "manifest") (C.pack "runtime")
   changedRuntime <- try (requireReviewedBytes (C.pack "manifest") (C.pack "runtime") (C.pack "manifest") (C.pack "changed"))

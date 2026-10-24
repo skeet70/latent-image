@@ -360,7 +360,11 @@ haskell_library(
 
 haskell_test(
     name = "ram-push-tests",
-    srcs = ["RamPushTest.hs"],
+    srcs = [
+        "RamPushTest.hs",
+        "//host/firmware:RamPushLayout.hs",
+    ],
+    main_file = "RamPushTest.hs",
     ghcopts = _GHCOPTS,
     deps = [
         ":camera-core",

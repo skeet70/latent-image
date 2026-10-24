@@ -1,16 +1,4 @@
 genrule(
-    name = "ram-push-installer-object",
-    srcs = [
-        "ram_push_abi.h",
-        "ram_push_installer.c",
-    ],
-    outs = ["ram_push_installer.o"],
-    cmd = "NIX_HARDENING_ENABLE= clang --target=armv7r-none-eabi -march=armv7-r -marm -mfloat-abi=soft -ffreestanding -fno-builtin -fno-stack-protector -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections -Os -Wall -Wextra -Werror -DRAM_PUSH_PUBLICATION_COUNT=253u -DRAM_PUSH_SETUP_COUNT=167u -DRAM_PUSH_ACTIVATION_COUNT=86u -DRAM_PUSH_ABI_VERSION=2u -c $(location ram_push_installer.c) -o $@",
-    local = True,
-    visibility = ["//visibility:public"],
-)
-
-genrule(
     name = "ram-push-bootstrap",
     srcs = [
         "ram_push_bootstrap.S",
