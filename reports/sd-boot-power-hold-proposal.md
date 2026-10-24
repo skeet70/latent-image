@@ -34,7 +34,7 @@ Write the whole image to the expendable 7.2 GB SDHC card with the guarded write 
 
 **A. Cold starts, at most five.** For each: battery out for at least 30 seconds, battery in, switch OFF, card inserted. Hold Fn plus the inward sub-command-dial press, move the switch ON once, keep both held 10 seconds, observe 60 seconds. If the payload cadence (three short red intervals and one long, repeating) appears, go to B. If dark at 60 seconds, switch OFF, remove the battery and start the next cold start. Do not toggle in A.
 
-**B. Switch test, once, only while the cadence runs.** Release the buttons. After one full cadence cycle, move the switch OFF once and observe 20 seconds without touching anything. Record whether the cadence continues. Then remove the battery, whatever happened.
+**B. Switch test, once, only while the cadence runs.** Release the buttons. After one full cadence cycle, move the switch OFF once and observe 20 seconds without touching anything. Record whether the cadence continues. Then remove the battery, whatever happened. The payload writes `0xfff88084` = 1 itself, so B binds the bit's meaning on either card; only A tests the card change.
 
 **C. Toggled control, only if all A starts stayed dark.** From switch OFF with the battery in, hold Fn plus the inward dial press and toggle at about 0.75 second per transition, at most 40 transitions, ending ON; stop at the first LED. If the cadence runs, do B. If no LED by the 40th transition, switch OFF and remove the battery.
 
@@ -56,4 +56,4 @@ Stop on any unexpected display, sound, heat or smell: remove the battery. A blin
 
 ## Review record
 
-PENDING_REVIEW
+Independent review of commit `6003a71` and image `aec1d2b3…`, 2026-10-24: **APPROVE WITH LIMITATIONS**, no blocking finding. The reviewer reproduced the two-byte difference, censused every ROM store to `0xfff88084` (including the mode-7 teardown caller and reader `0x80000b04`), confirmed `+0x10` has no reader beyond bit 0, bit 1 and bits 10:8, confirmed the apply always returns 0 so its faults are hangs after `0x80000330`, and re-ran `verify` on the existing startup-restored, after-apply, before-memory-wait and halt-control images plus `--power-hold verify` and both negative controls. Residual unknowns: what bit 0 controls on X-M1, whether supply follows bit 0, the switch or a companion controller, whether the apply waits complete on cold starts, which ROM route entries use, and the effects of the unchanged MBR-overlap register words. The reviewer classed the value as not guessed under spec 07 section 3.3. The review is not an owner go.
