@@ -1213,6 +1213,7 @@ haskell_binary(
     srcs = ["VerifyCandidate.hs"],
     data = [
         ":flash-boot-check",
+        ":fujimod-flash-boot-check",
         ":native-runner",
         ":recipe-bank-cases",
         ":recipe-bank-interop",

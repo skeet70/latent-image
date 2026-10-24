@@ -43,6 +43,7 @@ data Route
   | UpdaterCcToggle
   | NativeVolatile
   | NativeSd
+  | FujiModFlashBootCheck
   deriving (Eq, Ord, Enum, Bounded, Show)
 
 routeName :: Route -> String
@@ -58,6 +59,11 @@ routeName route = case route of
   UpdaterCcToggle -> "updater-f7-cc-toggle"
   NativeVolatile -> "native-volatile"
   NativeSd -> "native-sd"
+  FujiModFlashBootCheck -> "fujimod-flash-boot-check"
+
+-- | A non-gating route is reported but does not decide the run's result.
+routeGating :: Route -> Bool
+routeGating route = route /= FujiModFlashBootCheck
 
 parseRoute :: String -> Maybe Route
 parseRoute name = lookup name [(routeName route, route) | route <- [minBound .. maxBound]]
@@ -73,7 +79,7 @@ routeHost route
 emulatorOrder :: [Route]
 emulatorOrder =
   [ RamPushVolatile, RamPushClassicChromeIcon, RamPushClassicChrome, UsbToggleE8
-  , FlashCandidateIcon, FlashCandidateQTile, UpdaterRc0Toggle, UpdaterCcToggle, FlashBootCheck ]
+  , FlashCandidateIcon, FlashCandidateQTile, UpdaterRc0Toggle, UpdaterCcToggle, FlashBootCheck, FujiModFlashBootCheck ]
 
 newtype Workspace = Workspace FilePath
 newtype OutputBase = OutputBase FilePath
@@ -115,6 +121,7 @@ classicChromeCard = "private-data/analysis/classic-chrome-patch/ram-push/inputs/
 routeInvocation :: Context -> Route -> FilePath -> Invocation
 routeInvocation context route receipt = case route of
   FlashBootCheck -> bazelRun "//emulation:flash-boot-check" ["--firmware", stockDat, "--output", receipt]
+  FujiModFlashBootCheck -> bazelRun "//emulation:fujimod-flash-boot-check" ["--firmware", stockDat, "--output", receipt]
   RamPushVolatile -> viewer
     ["--cardless", "--firmware", prefixDat, "--installed-nand", storedF7One
     , "--trajectories", "private-data/analysis/x-m1-1.50/ram-push/VolatileBank/scenario.json"]
@@ -202,12 +209,21 @@ flashBootSpec = ObservationSpec
   , exclude "flash-boot-receipt.json" "/firmware/path" RunLocation
   , exclude "flash-boot-receipt.json" "/frame_png" RunLocation ]
 
+fujimodFlashBootSpec :: ObservationSpec
+fujimodFlashBootSpec = ObservationSpec
+  [filePattern "fujimod-flash-boot-receipt.json"]
+  [ exclude "fujimod-flash-boot-receipt.json" "/drive_wall_seconds" Timing
+  , exclude "fujimod-flash-boot-receipt.json" "/emulator_source" CandidateIdentity
+  , exclude "fujimod-flash-boot-receipt.json" "/firmware/path" RunLocation
+  , exclude "fujimod-flash-boot-receipt.json" "/frame_png" RunLocation ]
+
 nativeSpec :: ObservationSpec
 nativeSpec = ObservationSpec (map filePattern ["results.json", "findings.txt"]) []
 
 routeSpec :: Route -> ObservationSpec
 routeSpec route = case route of
   FlashBootCheck -> flashBootSpec
+  FujiModFlashBootCheck -> fujimodFlashBootSpec
   RamPushVolatile -> ramPushSpec
   RamPushClassicChrome -> ramPushSpec
   RamPushClassicChromeIcon -> ramPushSpec
@@ -409,6 +425,7 @@ outcomeJson :: Outcome -> Value
 outcomeJson outcome = object
   ([ "route" .= routeName (outcomeRoute outcome)
    , "result" .= outcomeResult outcome
+   , "gating" .= routeGating (outcomeRoute outcome)
    , "receipt" .= outcomeReceipt outcome
    , "baseline" .= outcomeBaseline outcome
    , "problem" .= outcomeProblem outcome
@@ -490,7 +507,7 @@ main = do
     BL.writeFile (run </> "differences" </> (routeName (outcomeRoute outcome) ++ ".json"))
       (encode (map differenceJson (outcomeDifferences outcome)) <> "\n")
   let reportPath = run </> "report.json"
-      passed = all ((`elem` ["pass", "recorded"]) . outcomeResult) outcomes
+      passed = all ((`elem` ["pass", "recorded"]) . outcomeResult) (filter (routeGating . outcomeRoute) outcomes)
       Workspace rootPath = root
   BL.writeFile reportPath (encode (object
     [ "schema" .= (1 :: Int)
@@ -503,6 +520,7 @@ main = do
     , "result" .= (if passed then "pass" else "fail" :: T.Text)
     , "routes" .= map outcomeJson outcomes ]) <> "\n")
   forM_ outcomes $ \outcome -> putStrLn (routeName (outcomeRoute outcome) ++ ": " ++ T.unpack (outcomeResult outcome)
+    ++ (if routeGating (outcomeRoute outcome) then "" else " [non-gating]")
     ++ maybe "" (\problem -> " (" ++ problem ++ ")") (outcomeProblem outcome)
     ++ case outcomeDifferences outcome of
          [] -> ""
