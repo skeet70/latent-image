@@ -27,6 +27,7 @@ import System.Posix.Files (setFileMode)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, routeKey, routeKeyHex)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.UiTrajectory
+import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
 import EmulatorUsb
 import FujiAF.RamPush
 import FujiAF.Transport (ensurePrivateDirectory, realClock, writePrivateBytes)
@@ -77,6 +78,7 @@ data E2ESettings = E2ESettings
   , attachHold :: AttachHold
   , flashUiConversion :: UiConversionProfile
   , emulationCardMode :: CardMode
+  , fixedSceneFrame :: Maybe FixedSceneFrame
     -- | The card attach checkpoint key, which 'runRamPushE2E' sets.
   , cardAttachKey :: Maybe RouteKey
   , emulationRuntime :: EmulationRuntime
@@ -96,7 +98,8 @@ cardAttachRouteKey settings python runtime installedMedia adjustmentNand cardIma
     , "adjustment_nand" .= sha256Hex adjustment
     , "menu_sd_image" .= sha256Hex card ]
     ++ [ "attach_hold_key" .= String "q" | attachHold settings == AttachHoldQ ]
-    ++ [ "ui_conversion_profile" .= String "declared-ui-cpu-fallback" | flashUiConversion settings == DeclaredUiCpuFallback ]))
+    ++ [ "ui_conversion_profile" .= String "declared-ui-cpu-fallback" | flashUiConversion settings == DeclaredUiCpuFallback ]
+    ++ [ "fixed_scene_frame" .= frame | Just (FixedSceneFrame frame) <- [fixedSceneFrame settings] ]))
 
 attachHoldArguments :: AttachHold -> [String]
 attachHoldArguments NoAttachHold = []
@@ -116,6 +119,7 @@ sessionBridge :: E2ESettings -> FilePath -> FilePath -> FilePath -> BootMode -> 
 sessionBridge settings python installedMedia adjustmentNand boot output = case (emulationRuntime settings, emulationCardMode settings) of
   (FujiModRuntime bridge, Cardless) -> do
     require (attachHold settings == NoAttachHold) "the FujiMod RAM-push bridge holds no key across the attach edge"
+    require (null (fixedSceneFrame settings)) "the FujiMod RAM-push bridge takes no --fixed-scene-frame"
     pure (fujimodBridge bridge,
       [ "--run", fujimodRunDocument bridge
       , "--boot-rom", fujimodBootRom bridge
@@ -139,7 +143,7 @@ sessionBridge settings python installedMedia adjustmentNand boot output = case (
       , "--ram-push-checkpoints", checkpointRoot settings
       , "--checkpoint-key", routeKeyHex key
       , "--checkpoint-inputs", C.unpack (BL.toStrict (encode (routeKeyDocument key)))
-      ] ++ freshArguments ++ profileArguments ++ attachHoldArguments (attachHold settings))
+      ] ++ freshArguments ++ profileArguments ++ attachHoldArguments (attachHold settings) ++ frameArguments)
   (RetainedRuntime, Cardless) -> do
     require (attachHold settings == NoAttachHold) "the cardless RAM-push bridge holds no key across the attach edge"
     bridge <- runfilesCardlessBridge
@@ -149,12 +153,13 @@ sessionBridge settings python installedMedia adjustmentNand boot output = case (
       , "--adjustment-nand", adjustmentNand
       , "--output", output
       , "--ram-push-checkpoints", checkpointRoot settings
-      ] ++ freshArguments ++ profileArguments)
+      ] ++ freshArguments ++ profileArguments ++ frameArguments)
   where
     freshArguments = ["--fresh-boot" | boot == FreshBoot]
     profileArguments = case flashUiConversion settings of
       StrictUiConversion -> []
       DeclaredUiCpuFallback -> ["--ui-conversion-profile", "declared-ui-cpu-fallback"]
+    frameArguments = fixedSceneFrameArguments (fixedSceneFrame settings)
 
 payloadText :: Payload -> T.Text
 payloadText p = case payloadKind p of

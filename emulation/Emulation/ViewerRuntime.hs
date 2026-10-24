@@ -7,6 +7,7 @@ module Emulation.ViewerRuntime
   , Runtime (..)
   , Firmware (..)
   , Python (..)
+  , FixedSceneFrame (..)
   , DefaultRuntime (..)
   , StockOriginal (..)
   , StagedRuntime (..)
@@ -14,6 +15,8 @@ module Emulation.ViewerRuntime
   , resolve
   , workspace
   , freshRuntime
+  , parseFixedSceneFrame
+  , fixedSceneFrameArguments
   , validateFirmware
   , stageViewerRuntime
   , stagedFirmwarePath
@@ -24,6 +27,7 @@ import Control.Monad (forM_, unless, when)
 import qualified Data.ByteString as B
 import Data.List (isPrefixOf)
 import Data.Time.Clock.POSIX (getPOSIXTime)
+import Data.Word (Word64)
 import qualified FujiAF.UpdateContainer as U
 import System.Directory (canonicalizePath, copyFile, createDirectory, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getCurrentDirectory, getFileSize, listDirectory, pathIsSymbolicLink, removeDirectoryRecursive, setCurrentDirectory)
 import System.Environment (getExecutablePath, lookupEnv, setEnv)
@@ -31,11 +35,25 @@ import System.FilePath ((</>), isAbsolute, splitDirectories, takeDirectory, take
 import System.IO (IOMode (ReadMode), withBinaryFile)
 import System.Posix.Files (setFileMode)
 import System.Posix.Process (getProcessID)
+import Text.Read (readMaybe)
 
 newtype Workspace = Workspace FilePath
 newtype Runtime = Runtime FilePath
 newtype Firmware = Firmware FilePath
 newtype Python = Python FilePath
+
+-- | A frame index every scene render of the run uses in place of the source's
+-- advancing frame.
+newtype FixedSceneFrame = FixedSceneFrame Word64
+
+parseFixedSceneFrame :: String -> Either String FixedSceneFrame
+parseFixedSceneFrame value = case readMaybe value of
+  Just frame | frame > 0 -> Right (FixedSceneFrame frame)
+  _ -> Left "--fixed-scene-frame must be a positive integer"
+
+fixedSceneFrameArguments :: Maybe FixedSceneFrame -> [String]
+fixedSceneFrameArguments Nothing = []
+fixedSceneFrameArguments (Just (FixedSceneFrame frame)) = ["--fixed-scene-frame", show frame]
 
 -- | Where a launcher stages when no @--output@ names the runtime.
 data DefaultRuntime

@@ -15,7 +15,7 @@ import Data.List (intercalate, isPrefixOf, sort)
 import Data.Maybe (listToMaybe, mapMaybe)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.FlashBootRoute
-import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), resolve, stageViewerRuntime, stagedFirmwarePath, stagedRomPath, validateFirmware, workspace)
+import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), fixedSceneFrameArguments, parseFixedSceneFrame, resolve, stageViewerRuntime, stagedFirmwarePath, stagedRomPath, validateFirmware, workspace)
 import FujiAF.JSON (decodeStrict)
 import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, getFileSize, listDirectory)
 import System.Environment (getArgs, setEnv)
@@ -36,6 +36,7 @@ usage = unlines
   , "  --firmware PATH  Candidate X-M1 1.50-compatible DAT"
   , "  --output PATH    Fresh runtime directory beneath workspace/private-data/"
   , "                   (default: private-data/flash-boot-check-PID-MICROS)"
+  , "  --fixed-scene-frame N  Pin every scene render to the positive frame index N for the run"
   , ""
   , "The receipt is OUTPUT/flash-boot-receipt.json."
   ]
@@ -53,8 +54,8 @@ exitReport count errors code =
 
 -- | Runs the viewer until it serves, which follows the snapshot save, then
 -- stops it. A viewer that exits first failed to boot.
-bootCandidate :: StagedRuntime -> FilePath -> IO (Either CheckFailure BootResult)
-bootCandidate staged snapshot = do
+bootCandidate :: StagedRuntime -> FilePath -> Maybe FixedSceneFrame -> IO (Either CheckFailure BootResult)
+bootCandidate staged snapshot fixedFrame = do
   let Python python = stagedPython staged
       Firmware source = stagedSource staged
       directory = stagedDirectory staged
@@ -62,13 +63,13 @@ bootCandidate staged snapshot = do
       errorLog = directory </> "boot.stderr"
   (printed, served, code) <- withFile errorLog WriteMode $ \errors -> do
     (_, Just output, _, process) <- createProcess (proc python
-      [ "tools/start_setup_viewer.py"
-      , "--firmware", stagedFirmwarePath
-      , "--firmware-name", takeFileName source
-      , "--save-snapshot", snapshot
-      , "--output", viewerOutput
-      , "--port", "0"
-      ]) { std_in = NoStream, std_out = CreatePipe, std_err = UseHandle errors }
+      ([ "tools/start_setup_viewer.py"
+       , "--firmware", stagedFirmwarePath
+       , "--firmware-name", takeFileName source
+       , "--save-snapshot", snapshot
+       , "--output", viewerOutput
+       , "--port", "0"
+       ] ++ fixedSceneFrameArguments fixedFrame)) { std_in = NoStream, std_out = CreatePipe, std_err = UseHandle errors }
     (printed, served) <- readUntilServing output []
     when served (terminateProcess process)
     code <- waitForProcess process
@@ -126,19 +127,19 @@ driveDirectory = ".tools" </> "flash-boot-drive"
 
 -- | The probe must import the emulator with the snapshot's firmware selected,
 -- as @start_setup_viewer.py --snapshot@ does.
-driveRoute :: StagedRuntime -> FilePath -> IO DriveResult
-driveRoute staged snapshot = do
+driveRoute :: StagedRuntime -> FilePath -> Maybe FixedSceneFrame -> IO DriveResult
+driveRoute staged snapshot fixedFrame = do
   let Python python = stagedPython staged
       directory = stagedDirectory staged
       commands = [probeCommand step | (_, steps) <- freshBootRoute, step <- steps] ++ ["quit"]
   FirmwareId firmwareId <- snapshotFirmware snapshot
   setEnv "XM1_VIEWER_INITIAL_FIRMWARE" firmwareId
   (code, output, errors) <- readCreateProcessWithExitCode (proc python
-    [ "tools/probe_setup_menus.py"
-    , "--snapshot", snapshot
-    , "--output", directory </> driveDirectory
-    , "--interactive"
-    ]) (unlines commands)
+    ([ "tools/probe_setup_menus.py"
+     , "--snapshot", snapshot
+     , "--output", directory </> driveDirectory
+     , "--interactive"
+     ] ++ fixedSceneFrameArguments fixedFrame)) (unlines commands)
   writeFile (directory </> "drive.stdout") output
   writeFile (directory </> "drive.stderr") errors
   putStr output
@@ -245,23 +246,26 @@ failureSummary failure = case failure of
   where
     showMenu (MenuState menu setting cursor) = show (menu, setting, cursor)
 
-data Command = Help | Validate Firmware | Check (Maybe Runtime) Firmware
+data Command = Help | Validate Firmware | Check (Maybe Runtime) Firmware (Maybe FixedSceneFrame)
 
 parseCommand :: [String] -> IO Command
 parseCommand ["--validate-firmware", path]
   | path /= "--help" = pure (Validate (Firmware path))
 parseCommand arguments
   | "--help" `elem` arguments = pure Help
-  | otherwise = go Nothing Nothing arguments
+  | otherwise = go Nothing Nothing Nothing arguments
   where
-    go output (Just firmware) [] = pure (Check output firmware)
-    go _ Nothing [] = ioError (userError ("--firmware is required\n" ++ usage))
-    go output _ ("--firmware" : value : rest) | not (null value) = go output (Just (Firmware value)) rest
-    go _ firmware ("--output" : value : rest) | not (null value) = go (Just (Runtime value)) firmware rest
-    go _ _ (argument : _) = ioError (userError ("Unknown option or missing value: " ++ argument ++ "\n" ++ usage))
+    go output (Just firmware) frame [] = pure (Check output firmware frame)
+    go _ Nothing _ [] = ioError (userError ("--firmware is required\n" ++ usage))
+    go output _ frame ("--firmware" : value : rest) | not (null value) = go output (Just (Firmware value)) frame rest
+    go _ firmware frame ("--output" : value : rest) | not (null value) = go (Just (Runtime value)) firmware frame rest
+    go output firmware _ ("--fixed-scene-frame" : value : rest) = do
+      selected <- either (ioError . userError) pure (parseFixedSceneFrame value)
+      go output firmware (Just selected) rest
+    go _ _ _ (argument : _) = ioError (userError ("Unknown option or missing value: " ++ argument ++ "\n" ++ usage))
 
-check :: Maybe Runtime -> Firmware -> IO ()
-check output (Firmware supplied) = do
+check :: Maybe Runtime -> Firmware -> Maybe FixedSceneFrame -> IO ()
+check output (Firmware supplied) fixedFrame = do
   root <- workspace Nothing
   validateFirmware (Firmware (resolve root supplied))
   arguments <- getArgs
@@ -277,10 +281,10 @@ check output (Firmware supplied) = do
   datDigest <- sha256File (directory </> stagedFirmwarePath)
   datBytes <- getFileSize (directory </> stagedFirmwarePath)
   identity <- sourceIdentity staged
-  booted <- bootCandidate staged snapshot
+  booted <- bootCandidate staged snapshot fixedFrame
   DriveResult milestones final failure <- case booted of
     Left stopped -> pure (DriveResult [] Nothing (Just stopped))
-    Right _ -> driveRoute staged snapshot
+    Right _ -> driveRoute staged snapshot fixedFrame
   drivePngs <- do
     exists <- doesDirectoryExist (directory </> driveDirectory)
     if exists
@@ -327,6 +331,6 @@ main = (getArgs >>= parseCommand >>= run) `catch` report
   where
     run Help = putStr usage
     run (Validate firmware) = validateFirmware firmware
-    run (Check output firmware) = check output firmware
+    run (Check output firmware fixedFrame) = check output firmware fixedFrame
     report :: IOException -> IO ()
     report errorValue = hPutStrLn stderr (displayException errorValue) >> exitFailure

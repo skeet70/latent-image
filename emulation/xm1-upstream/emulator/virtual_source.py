@@ -49,6 +49,13 @@ def epoch_key(epoch):
     return tuple(epoch[name] for name in ('profile','generation','ordinal','attempt','asserted_tick'))
 
 
+def select_fixed_scene_frame(frame: FrameIndex | None) -> FrameIndex | None:
+    """Pin every native scene render to `frame` for the run; `None` animates again."""
+    from x70_native._native import virtual_scene_fixed_frame
+    selected = virtual_scene_fixed_frame(frame)
+    return None if selected is None else FrameIndex(selected)
+
+
 def ram_span(address, size):
     """Validate a DRAM bus span; this does not assert software pool ownership."""
     if type(address) is not int or type(size) is not int or size < 1:

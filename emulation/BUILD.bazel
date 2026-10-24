@@ -319,9 +319,10 @@ haskell_binary(
     main_file = "CardlessRamPush.hs",
     visibility = ["//visibility:public"],
     deps = [
-        ":embedded-python-lib",
         ":case-sha256",
         ":checkpoint-key-lib",
+        ":embedded-python-lib",
+        ":viewer-runtime-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

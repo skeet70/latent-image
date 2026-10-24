@@ -976,8 +976,10 @@ def _ram_push_attach(board, session, hold_key=None):
 RAM_PUSH_CHECKPOINT_SCHEMA = 1
 
 
+
 # A USB-toggle boot checkpoint: saved at the shooting screen with the cable level as the boot left it.
 TOGGLE_RECORD = 'usb-toggle-boot.json'
+
 
 
 ATTACH_RECORD = 'ram-push-attach.json'
@@ -1680,7 +1682,12 @@ def main():
     parser.add_argument('--ui-conversion-profile', type=UIConversionProfile.parse,
                         choices=tuple(UIConversionProfile),
                         help='Opt-in stock CPU conversion contract for a cold boot; a checkpoint keeps its own')
+    parser.add_argument('--fixed-scene-frame', type=int,
+                        help='Pin every scene render to this positive frame index for the run')
     args = parser.parse_args()
+    if args.fixed_scene_frame is not None:
+        from emulator.virtual_source import select_fixed_scene_frame
+        select_fixed_scene_frame(args.fixed_scene_frame)
     installed_input = args.installed_media or args.installed_nand or args.installed_dat
     recovery_start = args.recovery_ram is not None or args.rom_card is not None
     if recovery_start and (args.snapshot is not None or installed_input is None):

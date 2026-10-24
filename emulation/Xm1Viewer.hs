@@ -3,7 +3,7 @@ module Main where
 import Control.Exception (IOException, catch, displayException)
 import Control.Monad (when)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
-import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
+import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
 import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), OverrideReason (..), PushMode (..), RelinkMode (..), UiConversionProfile (..), bankD3Payload, classicChromeIconPayload, classicChromePayload, runRamPushE2E, warmAttachCheckpoint)
@@ -53,6 +53,7 @@ data Options = Options
   , ramPayloadOption :: RamPayloadChoice
   , attachHoldOption :: AttachHold
   , uiConversionProfileOption :: UiConversionProfile
+  , fixedSceneFrameOption :: Maybe FixedSceneFrame
   , cardModeOption :: CardSelection
   , runtimeOption :: RuntimeChoice
   , portOption :: Port
@@ -107,6 +108,8 @@ usage = unlines
   , "                         declared-ui-cpu-fallback (default) or strict; also the profile a"
   , "                         --ram-push-e2e session boots and keys its attach checkpoint with."
   , "                         The fallback is an unmeasured UI-only model."
+  , "  --fixed-scene-frame N  Pin every scene render to the positive frame index N for the run"
+  , "                         instead of the advancing synthetic source; unselected by default"
   , ""
   , "Default DAT: private-data/firmware/x-m1-1.50/FWUP0002.DAT"
   , "Source: emulation/xm1-upstream; native engine and Python come from devenv."
@@ -120,7 +123,7 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice NoAttachHold DeclaredUiCpuFallback WithCard RetainedChoice (Port 0) IPv4Loopback False
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False
     go options [] = pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
@@ -188,6 +191,9 @@ parseCommand args
         "declared-ui-cpu-fallback" -> pure DeclaredUiCpuFallback
         _ -> ioError (userError "--ui-conversion-profile must be strict or declared-ui-cpu-fallback")
       go options { uiConversionProfileOption = profile } rest
+    go options ("--fixed-scene-frame" : value : rest) = do
+      frame <- either (ioError . userError) pure (parseFixedSceneFrame value)
+      go options { fixedSceneFrameOption = Just frame } rest
     go _ (argument : _) = ioError (userError ("Unknown option or missing value: " ++ argument ++ "\n" ++ usage))
 
 validateVirtualSDImage :: Workspace -> VirtualSDImage -> IO VirtualSDImage
@@ -338,7 +344,7 @@ launch options = do
                 ClassicChromeChoice -> classicChromePayload
                 ClassicChromeIconChoice -> classicChromeIconPayload)
               (attachHoldOption options)
-              (uiConversionProfileOption options) cardInput Nothing runtime
+              (uiConversionProfileOption options) cardInput (fixedSceneFrameOption options) Nothing runtime
         if warmCheckpointOption options
           then warmAttachCheckpoint settings python stagedFirmwarePath nandPath (destination </> "warm-attach")
           else runRamPushE2E settings python workspacePath (resolve root trajectories) stagedFirmwarePath nandPath receiptPath
@@ -357,7 +363,8 @@ launch options = do
            , "--bind", bindAddress (bindOption options)
            , "--port", show port
            , "--output", destination </> "viewer"
-           ] ++ mediaArguments ++ conversionArguments) Nothing
+           ] ++ mediaArguments ++ conversionArguments
+              ++ fixedSceneFrameArguments (fixedSceneFrameOption options)) Nothing
 
 main :: IO ()
 main = (getArgs >>= parseCommand >>= run) `catch` report
