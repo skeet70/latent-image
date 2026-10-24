@@ -1,7 +1,7 @@
 module Main where
 
 import Control.Exception (SomeException, try)
-import Control.Monad (forM_, when)
+import Control.Monad (forM_)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.IORef
@@ -9,7 +9,7 @@ import Data.List (isInfixOf)
 import System.Directory
 import System.FilePath
 import System.Posix.Files (fileMode, getFileStatus, intersectFileModes, setFileMode)
-import System.Posix.Process (getProcessID)
+import System.Posix.Temp (mkdtemp)
 import FujiAF.RamPush
 import FujiAF.SHA256 (sha256)
 import FujiAF.Rehearsal (rehearseRamAlloc, rehearseRamPush, rehearseRamFree, rehearseRamUnload)
@@ -32,11 +32,8 @@ runPush directory model state = runRamPushWith PeerCacheBound state manifest (Cl
 
 main :: IO ()
 main = do
-  pid <- getProcessID
-  let root = "/dev/shm" </> ("fuji-af-ram-push-tests-"++show pid)
-  exists <- doesDirectoryExist root
-  when exists (removeDirectoryRecursive root)
-  createDirectory root
+  -- Concurrent Bazel runs share /dev/shm and every sandbox reports pid 12.
+  root <- mkdtemp "/dev/shm/fuji-af-ram-push-tests-XXXXXX"
   setFileMode root 0o700
 
   check "bootstraps are exactly 32 bytes" (all ((==32) . B.length) [bootstrapBytes,peerPrepareBytes,freeBootstrapBytes])
