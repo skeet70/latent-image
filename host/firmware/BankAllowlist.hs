@@ -46,7 +46,7 @@ import qualified Data.Vector as V
 import Data.Word (Word32)
 import FujiAF.JSON (decodeStrictIntegers)
 import Numeric (readHex, showHex)
-import RecipeBankRamPlacement (runtimeAllocationSize, runtimeDataBase, runtimeExecutableBase)
+import RamPushLayout (runtimeAllocationSize, runtimeDataBase, runtimeExecutableBase)
 
 -- * Allowlist
 

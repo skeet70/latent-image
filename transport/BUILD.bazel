@@ -484,8 +484,7 @@ filegroup(
     name = "ram-push-pinned-workspace-files",
     srcs = [
         "//host/firmware:BuildRecipeBank.hs",
-        "//host/firmware:RecipeBankRamLayout.hs",
-        "//host/firmware:RecipeBankRamPlacement.hs",
+        "//host/firmware:RamPushLayout.hs",
         "//host/firmware:build-recipe-bank-ram.sh",
         "//menu:ram-push-relink-sources",
     ],
