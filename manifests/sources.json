@@ -12,6 +12,18 @@
       ]
     },
     {
+      "id": "x70view-xm1-decomp",
+      "url": "https://github.com/justjake/x70view",
+      "revision": "62876536052549cbcba1e9f6abc1437e773dba2f",
+      "status": "pin-selected",
+      "evidence_ids": [
+        "E-XM1-DECOMP-CHECKPOINTS-150",
+        "E-XM1-MATCHING-C-PILOT-150",
+        "E-XM1-MATCHING-C-UNIT-PATCH-150",
+        "E-XM1-MATCHING-C-RECIPE-CENSUS-150"
+      ]
+    },
+    {
       "id": "unicorn-x70",
       "url": "https://github.com/justjake/unicorn",
       "revision": "ecf0e25a2a4c308655e30e1d3198d148c4fc0819",
@@ -84,6 +96,15 @@
       "status": "audited",
       "evidence_ids": [
         "E-FIRMWARE"
+      ]
+    },
+    {
+      "id": "fujimod",
+      "url": "https://github.com/justjake/FujiMod",
+      "revision": "ecdb6cb653ca0fa3372e4a4cf92c88bffa13ae29",
+      "status": "reference",
+      "evidence_ids": [
+        "E-FUJIMOD-XM1-CATALOG-150"
       ]
     }
   ]

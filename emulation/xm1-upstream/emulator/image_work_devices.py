@@ -29,6 +29,7 @@ from copy import deepcopy
 
 from . import strict_audit
 from .hardware import UnsupportedDevice
+from .interrupts import IrqRoute
 from .virtual_source import source_epochs, epoch_key, ram_span
 from .image_stream import ImageStreamProfile
 
@@ -1572,10 +1573,9 @@ class ImageWorkControl:
     def _data_route(self,channel):
         line=self.IRQ_CONTRACT[channel][1]
         controller=getattr(self.board,'interrupts',None)
-        targets=[] if controller is None else [cpu for cpu,bank in enumerate(controller.banks)
-            if bank.enabled&(1<<line)]
-        if len(targets)!=1:
-            raise UnsupportedDevice('Virtual image requires one firmware-enabled IRQ route per bank')
+        targets=None if controller is None else controller.route(line,IrqRoute.ExactlyOne)
+        if targets is None:
+            raise UnsupportedDevice('Virtual image requires one firmware-owned IRQ route per bank')
         return targets[0]
 
     def _data_tuple(self,channel):

@@ -1,0 +1,232 @@
+//! Cold-boots X-M1 1.50 on FujiMod's EXR II runtime and answers the
+//! interactive protocol of `tools/probe_setup_menus.py`, so
+//! `Emulation.FlashBootRoute.judgeProbeOutput` judges its transcript.
+mod guest;
+mod run;
+
+use fujimod_emulator::session::Session;
+use guest::{RouteKey, set_adc};
+use run::{RunDocument, ValidatedUpdate};
+use sha2::{Digest, Sha256};
+use std::{
+    io::{BufRead, Write},
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
+
+const USAGE: &str = "Usage: fujimod-xm1 --run RUN.json --update DAT --boot-rom ROM --output DIR\n\
+The caller validates DAT as X-M1 1.50-compatible. Commands on stdin:\n\
+  key NAME HOLD RELEASE | run COUNT | quit\n";
+
+/// Largest single continuation the probe accepts.
+const MAX_PHASE: u64 = 15_000_000;
+const RELEASE_POLL: u64 = 250_000;
+
+struct Arguments {
+    run: PathBuf,
+    update: PathBuf,
+    boot_rom: PathBuf,
+    output: PathBuf,
+}
+
+fn arguments() -> Result<Arguments, String> {
+    let mut run = None;
+    let mut update = None;
+    let mut boot_rom = None;
+    let mut output = None;
+    let mut args = std::env::args_os().skip(1);
+    while let Some(flag) = args.next() {
+        let value = args.next().map(PathBuf::from).ok_or_else(|| USAGE.to_owned())?;
+        match flag.to_str() {
+            Some("--run") => run = Some(value),
+            Some("--update") => update = Some(value),
+            Some("--boot-rom") => boot_rom = Some(value),
+            Some("--output") => output = Some(value),
+            _ => return Err(USAGE.into()),
+        }
+    }
+    match (run, update, boot_rom, output) {
+        (Some(run), Some(update), Some(boot_rom), Some(output)) => Ok(Arguments { run, update, boot_rom, output }),
+        _ => Err(USAGE.into()),
+    }
+}
+
+fn read(path: &Path) -> Result<Vec<u8>, String> {
+    std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+struct Driver {
+    document: RunDocument,
+    session: Session,
+    output: PathBuf,
+    frames: usize,
+    failure: Option<String>,
+}
+
+fn instructions(session: &Session) -> u64 {
+    session.board.instruction_counts().iter().sum()
+}
+
+/// One line per stop, without the separator words the transcript parser splits on.
+fn one_line(text: &str) -> String {
+    text.replace('\n', " ").replace(" error=", " error:").replace(" failure=", " failure:")
+}
+
+impl Driver {
+    fn run(&mut self, count: u64) {
+        if self.failure.is_some() || count == 0 {
+            return;
+        }
+        if let Err(error) = self.session.board.run_with_limits(count, self.document.execution.quantum, None, None) {
+            self.failure = Some(error);
+        }
+    }
+
+    fn key(&mut self, key: RouteKey, hold: u64, release: u64) -> Result<(), String> {
+        if self.failure.is_some() {
+            return Err("Restore the checkpoint before another input after a strict stop".into());
+        }
+        let (channel, sample) = self.document.firmware.pressed_sample(&self.session, key)?;
+        set_adc(&mut self.session, &self.document.adc, channel, sample)?;
+        self.run(hold);
+        let released = self.document.firmware.released_sample;
+        set_adc(&mut self.session, &self.document.adc, channel, released)?;
+        let start = instructions(&self.session);
+        while self.failure.is_none() && !self.document.firmware.released(&self.session, key)? {
+            let spent = instructions(&self.session) - start;
+            if spent >= release {
+                break;
+            }
+            self.run((release - spent).min(RELEASE_POLL));
+        }
+        Ok(())
+    }
+
+    /// PNG of the first scanout output presenting configured graphics.
+    fn frame(&self) -> Result<Option<Vec<u8>>, String> {
+        let name = &self.document.scanout.0;
+        let state = self.session.scanout_state(name)?;
+        let presented = state["instances"].as_array().into_iter().flatten().find(|instance| {
+            instance["graphics"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|layer| layer["channels"].as_array().into_iter().flatten())
+                .any(|channel| {
+                    channel["enabled"] == true
+                        && channel["configured"] == true
+                        && channel["width"].as_u64().is_some_and(|n| n > 1)
+                        && channel["height"].as_u64().is_some_and(|n| n > 1)
+                })
+        });
+        let Some(instance) = presented.and_then(|instance| instance["instance"].as_u64()) else {
+            return Ok(None);
+        };
+        let instance = usize::try_from(instance).map_err(|_| "scanout instance")?;
+        let Some(frame) = self.session.scanout(name, instance, true, false)? else {
+            return Ok(None);
+        };
+        let rgb = frame.rgb.ok_or("scanout did not return RGB")?;
+        let width = u32::try_from(frame.width).map_err(|_| "frame width")?;
+        let height = u32::try_from(frame.height).map_err(|_| "frame height")?;
+        Ok(Some(fujimod_recording::Frame::rgb(width, height, rgb)?.png()?.to_vec()))
+    }
+
+    fn print_state(&mut self, out: &mut impl Write) -> Result<(), String> {
+        let menu = self.document.firmware.menu(&self.session);
+        let frame = match self.frame() {
+            Ok(Some(png)) => {
+                self.frames += 1;
+                let path = self.output.join(format!("frame-{:03}.png", self.frames));
+                std::fs::write(&path, &png).map_err(|e| format!("{}: {e}", path.display()))?;
+                format!("{:x}", Sha256::digest(&png))
+            }
+            Ok(None) => "None".into(),
+            Err(error) => {
+                eprintln!("frame: {error}");
+                "None".into()
+            }
+        };
+        let failure = self.failure.as_deref().map(one_line).unwrap_or_else(|| "None".into());
+        let menu = match menu {
+            Ok(Some(menu)) => format!("id={} setting={} cursor={}", menu.menu_id, menu.setting_id, menu.cursor),
+            Ok(None) => "menu=None".into(),
+            Err(error) => format!("menu-error={}", one_line(&error).replace(' ', "_")),
+        };
+        writeln!(
+            out,
+            "instructions={} failure={failure} error=None\n  ticks={} {menu}\n  frame={frame} output={}",
+            instructions(&self.session),
+            self.session.board.now(),
+            self.output.display()
+        )
+        .map_err(|e| e.to_string())?;
+        out.flush().map_err(|e| e.to_string())
+    }
+}
+
+fn command(driver: &mut Driver, line: &str) -> Result<bool, String> {
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    let count = |text: &str| -> Result<u64, String> {
+        let value: u64 = text.parse().map_err(|_| format!("not an instruction count: {text}"))?;
+        if value > MAX_PHASE {
+            return Err(format!("continuation must be 0..{MAX_PHASE}"));
+        }
+        Ok(value)
+    };
+    match fields.as_slice() {
+        ["quit"] => Ok(false),
+        ["run", limit] => {
+            let limit = count(limit)?;
+            driver.run(limit);
+            Ok(true)
+        }
+        ["key", name, hold, release] => {
+            let key = RouteKey::parse(name)?;
+            driver.key(key, count(hold)?, count(release)?)?;
+            Ok(true)
+        }
+        _ => Err(format!("unknown command: {line}")),
+    }
+}
+
+fn drive() -> Result<(), String> {
+    fujimod_emulator_exr2_board::register_board_builder();
+    fujimod_emulator_models::register();
+    let arguments = arguments()?;
+    let document = RunDocument::parse(&read(&arguments.run)?)?;
+    let update = ValidatedUpdate(read(&arguments.update)?);
+    let boot_rom = read(&arguments.boot_rom)?;
+    std::fs::create_dir_all(&arguments.output).map_err(|e| format!("{}: {e}", arguments.output.display()))?;
+    let mut session = run::open(&document, &update, &boot_rom)?;
+    session.board.set_execution_policy(document.execution_policy.into())?;
+    let boot = document.boot_instructions;
+    let mut driver = Driver { document, session, output: arguments.output, frames: 0, failure: None };
+    driver.run(boot);
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    driver.print_state(&mut out)?;
+    writeln!(out, "Commands: key NAME HOLD RELEASE | run COUNT | quit").map_err(|e| e.to_string())?;
+    for line in std::io::stdin().lock().lines() {
+        let line = line.map_err(|e| e.to_string())?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        match command(&mut driver, &line) {
+            Ok(false) => break,
+            Ok(true) => driver.print_state(&mut out)?,
+            Err(error) => writeln!(out, "{}", one_line(&error)).map_err(|e| e.to_string())?,
+        }
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    match drive() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}

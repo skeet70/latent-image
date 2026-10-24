@@ -66,7 +66,7 @@ def historical(device):
     mask=sum(1<<line for line in IRQS)
     for cpu,bank in enumerate(controller.banks):
         bank.config=dict(bank.config);bank.active_stack=[dict(e) for e in bank.active_stack if e.get('line') not in IRQS]
-        bank.pending&=~mask
+        bank.pending&=~mask;bank.masked&=~mask;bank.latched&=~mask
         if bank.active in IRQS:bank.active=None
         if bank.injected in IRQS:bank.injected=None
         bank.enabled=(bank.enabled&~mask)|(r['route'][cpu]['enabled']&mask)

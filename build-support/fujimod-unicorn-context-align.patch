@@ -1,0 +1,13 @@
+diff --git a/crates/emulator-cpu-unicorn/vendor/unicorn/include/uc_priv.h b/crates/emulator-cpu-unicorn/vendor/unicorn/include/uc_priv.h
+index 7a3275f4..379e3b5d 100644
+--- a/crates/emulator-cpu-unicorn/vendor/unicorn/include/uc_priv.h
++++ b/crates/emulator-cpu-unicorn/vendor/unicorn/include/uc_priv.h
+@@ -511,7 +511,7 @@ struct uc_context {
+     bool ramblock_freed;  // wheter there was a some ramblock freed
+     RAMBlock *last_block; // The last element of the ramblock list
+     FlatView *fv;         // The current flatview of the memory
+-    char data[0];         // context
++    char data[0] __attribute__((aligned(16))); // context
+ };
+ 
+ // We have to support 32bit system so we can't hold uint64_t on void*

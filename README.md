@@ -24,7 +24,7 @@ These commands perform no camera I/O. The simulation exercises a contrast-search
 | Area | Start here |
 | --- | --- |
 | Autofocus models and observations | [AF simulation](af/README.md), [session annotation](reports/af-session-kit.md), [recovered AF interfaces](reports/autofocus-static-map.md) |
-| Firmware analysis | [Extraction and format findings](reports/firmware-extraction.md), [update-container contract](reports/update-container-rebuild.md) |
+| Firmware analysis | [Extraction and format findings](reports/firmware-extraction.md), [update-container contract](reports/update-container-rebuild.md), [matching-C pilot](matching/README.md) |
 | ARM execution and emulation | [Bounded native harness](emulation/README.md), [full-system findings and limits](reports/full-system-emulation.md) |
 | Recovery preparation | [X-M1 recovery kit and limits](recovery/README.md) |
 | Film recipes | [Recipe specification](spec/10-film-recipes.md), [editable-bank design](reports/recipe-design.md) |

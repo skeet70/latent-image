@@ -11,6 +11,7 @@ Its counter advances at each completed read, modulo256: an explicit unmeasured
 external liveness input, not a measured touch-controller clock or reset state.
 """
 from .hardware import UnsupportedDevice
+from .interrupts import IrqRoute
 from .control_bus_contracts import (ControlBusRegisters, ControlBusReplies,
                                     RegisterStatusReply, DEFAULT_REGISTERS, DEFAULT_REPLIES)
 
@@ -220,10 +221,9 @@ class ControlBus:
         return b'\0\0\0\0' + (counts_per_g << 4).to_bytes(2, 'big')
 
     def _target(self):
-        targets = [index for index, bank in enumerate(self.board.interrupts.banks)
-                   if bank.enabled & (1 << self.PHYSICAL_IRQ)]
-        if len(targets) != 1:
-            raise UnsupportedDevice(f'Control-bus physical IRQ{self.PHYSICAL_IRQ:#x} requires one enabled CPU route')
+        targets = self.board.interrupts.route(self.PHYSICAL_IRQ, IrqRoute.ExactlyOne)
+        if targets is None:
+            raise UnsupportedDevice(f'Control-bus physical IRQ{self.PHYSICAL_IRQ:#x} requires one owning CPU route')
         return targets[0]
 
     def _irq_bindings(self, target):
@@ -281,9 +281,8 @@ class ControlBus:
             if latched:
                 if self.profile != profile or self._irq_bindings(target) != binding:
                     raise UnsupportedDevice('Latched control-bus IRQ profile/source/vector/priority binding changed')
-                if any(cpu != target and bank.enabled & (1 << self.PHYSICAL_IRQ)
-                       for cpu, bank in enumerate(self.board.interrupts.banks)):
-                    raise UnsupportedDevice('Latched control-bus IRQ gained a competing enabled owner')
+                if any(cpu != target for cpu in self.board.interrupts.route(self.PHYSICAL_IRQ, IrqRoute.Every)):
+                    raise UnsupportedDevice('Latched control-bus IRQ gained a competing owner')
             elif self._target() != target:
                 raise UnsupportedDevice('Control-bus IRQ route changed during transfer')
             self.busy = False
@@ -479,8 +478,8 @@ class ControlBus:
                            'Separate heartbeat profile additionally permits only endpoint9 register1C06/one-byte final-NACK reads, counter0..255 advances per completed read as an unmeasured fixture',
                            'Stationary profile ideal +Z1g and MMA8452Q register interpretation are explicit inputs/inference; physical camera axes/identity/noise are unproved',
                            'Target ACK, controller command completion and latency are explicit virtual inputs, not physical capture',
-                           'Actual enabled IRQ routing wakes firmware; no host callback invocation or RAM completion flag',
-                           'The separate latched-IRQ profile requires a unique enabled owner at request, binds its source/mode/vector/priority fields at request/completion, then queues the real pending IRQ to that same owner even temporarily masked. Competing owners and changed bindings/profile/operation generation reject before completion. Later enable/delivery/ACK/EOI remain stock-kernel owned; physical masking/latching is unmeasured.',
+                           'Actual owned IRQ routing wakes firmware: the one CPU bank enabling the source, or masking it in an open kernel group-mask window, where the request latches until the restore (unmeasured); no host callback invocation or RAM completion flag',
+                           'The separate latched-IRQ profile requires a unique owner at request, binds its source/mode/vector/priority fields at request/completion, then queues the real pending IRQ to that same owner even temporarily masked. Competing owners and changed bindings/profile/operation generation reject before completion. Later enable/delivery/ACK/EOI remain stock-kernel owned; physical masking/latching is unmeasured.',
                            'Binding checks compare selected fields at request/completion; controller rewrites restored between those boundaries are not independently tracked.',
                            'Bus1, other targets/register reads, touch packets/events/reset/panel effects, high-pass/self-test/reset/offset effects, sensor IRQ/data-ready and electrical arbitration remain unsupported']}
         if '_register_map' in self.__dict__:

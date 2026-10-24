@@ -48,6 +48,25 @@ _LIBUSB_RUNTIME_BUILD = """
 exports_files(["lib/libusb-1.0.so"], visibility = ["//visibility:public"])
 """
 
+_FUJIMOD_NIX_DEPS = [
+    "//:devenv.lock",
+    "//build-support:fujimod-unicorn-context-align.patch",
+    "//build-support:fujimod.nix",
+    "//build-support:nixpkgs.nix",
+]
+
+# Every file of the driver crate; its Nix build sees only these.
+_FUJIMOD_XM1_CRATE = [
+    "//emulation:fujimod-xm1/Cargo.lock",
+    "//emulation:fujimod-xm1/Cargo.toml",
+    "//emulation:fujimod-xm1/data/xm1-150.json",
+    "//emulation:fujimod-xm1/src/guest.rs",
+    "//emulation:fujimod-xm1/src/main.rs",
+    "//emulation:fujimod-xm1/src/run.rs",
+]
+
+_NIX_BUILD_CAP = ["--max-jobs", "2", "--cores", "4"]
+
 def _lab_dependencies_impl(_ctx):
     nixpkgs_local_repository(
         name = "lab_nixpkgs",
@@ -111,6 +130,22 @@ def _lab_dependencies_impl(_ctx):
         repository = "@lab_nixpkgs",
         build_file_content = 'exports_files(["bin/ffmpeg", "bin/ffprobe"], visibility = ["//visibility:public"])',
     )
+    nixpkgs_package(
+        name = "lab_fujimod",
+        nix_file = "//build-support:fujimod.nix",
+        nix_file_deps = _FUJIMOD_NIX_DEPS,
+        nixopts = _NIX_BUILD_CAP,
+        repository = "@lab_nixpkgs",
+        build_file_content = 'exports_files(["bin/fujimod-emulator"], visibility = ["//visibility:public"])',
+    )
+    nixpkgs_package(
+        name = "lab_fujimod_xm1",
+        nix_file = "//build-support:fujimod-xm1.nix",
+        nix_file_deps = _FUJIMOD_NIX_DEPS + _FUJIMOD_XM1_CRATE,
+        nixopts = _NIX_BUILD_CAP,
+        repository = "@lab_nixpkgs",
+        build_file_content = 'exports_files(["bin/fujimod-xm1", "share/fujimod-xm1/xm1-150.json"], visibility = ["//visibility:public"])',
+    )
 
     # The RAM-push relinker's tools; //host/firmware:ram-push-toolchain-module
     # resolves them to store paths.
@@ -127,5 +162,18 @@ def _lab_dependencies_impl(_ctx):
             repository = "@lab_nixpkgs",
             build_file_content = "exports_files(%r, visibility = [\"//visibility:public\"])" % binaries,
         )
+
+    # //matching:pilot compiles x70view C with these.
+    nixpkgs_package(
+        name = "lab_exr2_gcc",
+        nix_file = "//build-support:exr2-gcc.nix",
+        nix_file_deps = [
+            "//build-support:nixpkgs.nix",
+            "//build-support:exr2-gcc/host-qsort.c",
+            "//:devenv.lock",
+        ],
+        repository = "@lab_nixpkgs",
+        build_file_content = 'exports_files(["gcc-4.6.4/bin/arm-linux-gnueabi-gcc", "gcc-4.4.7/bin/arm-linux-gnueabi-gcc", "binutils/bin/arm-linux-gnueabi-ld"], visibility = ["//visibility:public"])',
+    )
 
 lab_dependencies = module_extension(implementation = _lab_dependencies_impl)

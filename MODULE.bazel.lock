@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "SgUIc/NymVOsrp5qWag84h+0OP5XUWjW0igu1PmLdrU=",
+        "bzlTransitiveDigest": "wTk1Owi9CVPMSPc5B8kVF0YoVVf7bKLY/agbSRoRyPw=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -386,6 +386,68 @@
               "fail_not_supported": true
             }
           },
+          "lab_fujimod": {
+            "bzlFile": "@@rules_nixpkgs_core~//:nixpkgs.bzl",
+            "ruleClassName": "_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "lab_fujimod",
+              "attribute_path": "",
+              "nix_file": "@@//build-support:fujimod.nix",
+              "nix_file_deps": {
+                "@@//:devenv.lock": "//:devenv.lock",
+                "@@//build-support:fujimod-unicorn-context-align.patch": "//build-support:fujimod-unicorn-context-align.patch",
+                "@@//build-support:fujimod.nix": "//build-support:fujimod.nix",
+                "@@//build-support:nixpkgs.nix": "//build-support:nixpkgs.nix"
+              },
+              "nix_file_content": "",
+              "nix_license_path": "",
+              "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
+              "repositories": {},
+              "build_file_content": "exports_files([\"bin/fujimod-emulator\"], visibility = [\"//visibility:public\"])",
+              "nixopts": [
+                "--max-jobs",
+                "2",
+                "--cores",
+                "4"
+              ],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          },
+          "lab_fujimod_xm1": {
+            "bzlFile": "@@rules_nixpkgs_core~//:nixpkgs.bzl",
+            "ruleClassName": "_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "lab_fujimod_xm1",
+              "attribute_path": "",
+              "nix_file": "@@//build-support:fujimod-xm1.nix",
+              "nix_file_deps": {
+                "@@//:devenv.lock": "//:devenv.lock",
+                "@@//build-support:fujimod-unicorn-context-align.patch": "//build-support:fujimod-unicorn-context-align.patch",
+                "@@//build-support:fujimod.nix": "//build-support:fujimod.nix",
+                "@@//build-support:nixpkgs.nix": "//build-support:nixpkgs.nix",
+                "@@//emulation:fujimod-xm1/Cargo.lock": "//emulation:fujimod-xm1/Cargo.lock",
+                "@@//emulation:fujimod-xm1/Cargo.toml": "//emulation:fujimod-xm1/Cargo.toml",
+                "@@//emulation:fujimod-xm1/data/xm1-150.json": "//emulation:fujimod-xm1/data/xm1-150.json",
+                "@@//emulation:fujimod-xm1/src/guest.rs": "//emulation:fujimod-xm1/src/guest.rs",
+                "@@//emulation:fujimod-xm1/src/main.rs": "//emulation:fujimod-xm1/src/main.rs",
+                "@@//emulation:fujimod-xm1/src/run.rs": "//emulation:fujimod-xm1/src/run.rs"
+              },
+              "nix_file_content": "",
+              "nix_license_path": "",
+              "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
+              "repositories": {},
+              "build_file_content": "exports_files([\"bin/fujimod-xm1\", \"share/fujimod-xm1/xm1-150.json\"], visibility = [\"//visibility:public\"])",
+              "nixopts": [
+                "--max-jobs",
+                "2",
+                "--cores",
+                "4"
+              ],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          },
           "lab_bash": {
             "bzlFile": "@@rules_nixpkgs_core~//:nixpkgs.bzl",
             "ruleClassName": "_nixpkgs_package",
@@ -466,6 +528,28 @@
               "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
               "repositories": {},
               "build_file_content": "exports_files([\"bin/readlink\", \"bin/sha256sum\", \"bin/sort\"], visibility = [\"//visibility:public\"])",
+              "nixopts": [],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          },
+          "lab_exr2_gcc": {
+            "bzlFile": "@@rules_nixpkgs_core~//:nixpkgs.bzl",
+            "ruleClassName": "_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "lab_exr2_gcc",
+              "attribute_path": "",
+              "nix_file": "@@//build-support:exr2-gcc.nix",
+              "nix_file_deps": {
+                "@@//build-support:nixpkgs.nix": "//build-support:nixpkgs.nix",
+                "@@//build-support:exr2-gcc/host-qsort.c": "//build-support:exr2-gcc/host-qsort.c",
+                "@@//:devenv.lock": "//:devenv.lock"
+              },
+              "nix_file_content": "",
+              "nix_license_path": "",
+              "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
+              "repositories": {},
+              "build_file_content": "exports_files([\"gcc-4.6.4/bin/arm-linux-gnueabi-gcc\", \"gcc-4.4.7/bin/arm-linux-gnueabi-gcc\", \"binutils/bin/arm-linux-gnueabi-ld\"], visibility = [\"//visibility:public\"])",
               "nixopts": [],
               "quiet": false,
               "fail_not_supported": true
