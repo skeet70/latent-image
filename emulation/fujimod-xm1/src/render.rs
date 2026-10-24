@@ -223,6 +223,7 @@ pub fn settled_key(machine: &mut Machine, key: RouteKey, pulse: KeyPulse) -> Res
         before = probe(machine)?;
     }
     let prior = machine.instructions() - start;
+    let old_frame = machine.frame()?;
     let key_start = machine.instructions();
     machine.key(key, pulse)?;
     let settle_start = machine.instructions();
@@ -245,7 +246,7 @@ pub fn settled_key(machine: &mut Machine, key: RouteKey, pulse: KeyPulse) -> Res
         let new_work = after.graphics.started > before.graphics.started
             && after.graphics.completed > before.graphics.completed
             && after.graphics.bytes_completed > before.graphics.bytes_completed;
-        if consumed && new_work && after.drained && after.consumer_finished() {
+        if consumed && new_work && after.drained && after.consumer_finished() && machine.frame()? != old_frame {
             break SettleStatus::PacketConsumed;
         }
         let spent = prior + machine.instructions() - settle_start;
