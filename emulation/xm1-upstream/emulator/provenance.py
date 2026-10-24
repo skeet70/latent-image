@@ -14,6 +14,7 @@ import sys
 from types import CodeType, FunctionType, ModuleType
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
+_RUNTIME_ROOT = _PACKAGE_ROOT.parent
 _PACKAGE_NAME = __package__
 
 
@@ -60,13 +61,23 @@ except importlib.metadata.PackageNotFoundError:
     _UNICORN_DISTRIBUTION_VERSION = None
 
 
+def _runtime_path(path):
+    """An absolute path beneath the runtime root as ``<runtime>/RELATIVE``, else unchanged."""
+    if not path.is_absolute():
+        return str(path)
+    try:
+        return "<runtime>/" + path.resolve().relative_to(_RUNTIME_ROOT).as_posix()
+    except (ValueError, OSError):
+        return str(path)
+
+
 def _code_filename(filename):
     if filename.startswith("<"):
         return filename
     try:
         return "<model>/" + Path(filename).resolve().relative_to(_PACKAGE_ROOT).as_posix()
     except (ValueError, OSError):
-        return filename
+        return _runtime_path(Path(filename))
 
 
 def _value(value, active=None):
@@ -88,7 +99,7 @@ def _value(value, active=None):
     if isinstance(value, bytes):
         return {"type": "bytes", "hex": value.hex()}
     if isinstance(value, Path):
-        return {"type": "path", "value": str(value)}
+        return {"type": "path", "value": _runtime_path(value)}
     if isinstance(value, CodeType):
         return {"type": "code", "value": _code(value)}
     identifier = id(value)
