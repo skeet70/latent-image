@@ -61,11 +61,12 @@ nativeApiWith calls = UsbApi
   , usbClaim = \iface _ -> unless (iface==0) (P.reject "interface not allowed") >> status "claim" (callClaim calls)
   , usbTransfer = \packet milliseconds -> do
       (kind,endpoint,input,size) <- case packet of
-        P.ControlWrite 0x43 0 0 0 bytes -> pure (0::CInt,0,bytes,length bytes)
-        P.BulkOut ep bytes -> pure (1,ep,bytes,length bytes)
-        P.BulkIn ep n -> pure (2,ep,replicate n 0,n)
+        P.ControlWrite 0x43 0 0 0 bytes -> pure (0::CInt,0,Just bytes,length bytes)
+        P.BulkOut ep bytes -> pure (1,ep,Just bytes,length bytes)
+        P.BulkIn ep n -> pure (2,ep,Nothing,n)
         _ -> P.reject "unsupported native transfer"
-      withArray input $ \buffer -> alloca $ \countPtr -> do
+      let withBuffer = maybe (allocaArray size) withArray input
+      withBuffer $ \buffer -> alloca $ \countPtr -> do
         poke countPtr 0
         result <- callTransfer calls kind (fromIntegral endpoint) buffer (fromIntegral size) (fromIntegral milliseconds) countPtr
         count <- fromIntegral <$> peek countPtr

@@ -50,6 +50,7 @@ haskell_library(
         "FujiAF/PlanDocument.hs",
         "FujiAF/Probe.hs",
         "FujiAF/Read.hs",
+        "FujiAF/ReadBulk.hs",
         "FujiAF/ReadMedia.hs",
         "FujiAF/ReadRam.hs",
         "FujiAF/RamPush.hs",
@@ -71,6 +72,7 @@ haskell_library(
     deps = [
         "//host:base",
         "//host:bytestring",
+        "//host:cryptohash-sha256",
         "//broker:core",
         "//host:directory",
         "//host:filepath",
@@ -312,6 +314,21 @@ haskell_test(
 haskell_test(
     name = "read-ram-tests",
     srcs = ["ReadRamTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "read-bulk-tests",
+    srcs = ["ReadBulkTest.hs"],
     ghcopts = _GHCOPTS,
     deps = [
         ":camera-core",

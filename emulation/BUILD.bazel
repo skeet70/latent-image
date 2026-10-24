@@ -191,6 +191,34 @@ haskell_binary(
     ],
 )
 
+# read-bulk and read-ram against the emulated ff80 attach, with byte comparison
+# (FF80-BULK-READ-01).
+haskell_binary(
+    name = "xm1-bulk-read-e2e",
+    srcs = ["Xm1BulkReadE2E.hs"],
+    data = [":xm1-upstream"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    deps = [
+        ":emulator-slot-lib",
+        ":emulator-usb",
+        ":viewer-runtime-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+        "//host:vector",
+        "//transport:camera-core",
+    ],
+)
+
 haskell_library(
     name = "embedded-python-lib",
     srcs = ["Emulation/EmbeddedPython.hsc"],

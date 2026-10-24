@@ -100,22 +100,27 @@ transferTimeoutMs = 5000
 transferCeilingMs :: Int
 transferCeilingMs = 33000
 
--- native_usb.c refuses a larger transfer.
+-- native_usb.c refuses a larger control or bulk OUT transfer.
 transferCeilingBytes :: Int
 transferCeilingBytes = 292
+
+-- native_usb.c refuses a larger bulk IN: one read-bulk chunk.
+bulkInCeilingBytes :: Int
+bulkInCeilingBytes = 0x100000
 
 transferLength :: P.Transfer -> Int
 transferLength (P.ControlWrite _ _ _ _ bytes) = length bytes
 transferLength (P.BulkOut _ bytes) = length bytes
 transferLength (P.BulkIn _ count) = count
 
--- The shapes native_usb.c sends: the twelve-byte vendor control write and
--- bulk transfers of 1..transferCeilingBytes.
+-- The shapes native_usb.c sends: the twelve-byte vendor control write, bulk
+-- OUT of 1..transferCeilingBytes and bulk IN of 1..bulkInCeilingBytes.
 supportedTransfer :: P.Transfer -> Bool
 supportedTransfer packet = case packet of
   P.ControlWrite 0x43 0 0 0 bytes -> length bytes == 12
   P.ControlWrite {} -> False
-  _ -> transferLength packet >= 1 && transferLength packet <= transferCeilingBytes
+  P.BulkOut _ bytes -> length bytes >= 1 && length bytes <= transferCeilingBytes
+  P.BulkIn _ count -> count >= 1 && count <= bulkInCeilingBytes
 
 -- A provider transfer that ended with a nonzero status or a count outside its
 -- packet: the status, the count and the bytes read.

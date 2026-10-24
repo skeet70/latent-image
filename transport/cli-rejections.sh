@@ -191,6 +191,19 @@ if "$binary" probe-sd-host --repeat 509 --interval-ms 100 "$tmpdir/sd-refused-ou
 test ! -e "$tmpdir/sd-refused-out"
 if "$binary" probe-sd-host --repeat 2 "$tmpdir/sd-refused-out"; then exit 1; fi
 test ! -e "$tmpdir/sd-refused-out"
+if "$binary" read-bulk; then exit 1; fi
+if "$binary" read-bulk 0x00bf1a00; then exit 1; fi
+if (cd "$tmpdir" && "$binary" read-bulk 0x00bf1a00 0x1000 relative-session); then exit 1; fi
+test ! -e "$tmpdir/relative-session"
+if "$binary" read-bulk 0x00bf1a00 0x1000 "$tmpdir"; then exit 1; fi
+if "$binary" read-bulk 0x00bf1a00 0x1000 "$tmpdir/one" "$tmpdir/two"; then exit 1; fi
+for window in "0x00bf1a02 0x1000" "0x00bf1a00 0x1004" "0x00bf1a00 4096" "0x1fffff00 0x200" "0x80000000 0x100" "0xfff50000 0x40" "0x00000000 0x20000040" "0x00bf1a00 0x0"; do
+  if "$binary" read-bulk $window "$tmpdir/bulk-refused-out"; then exit 1; fi
+  test ! -e "$tmpdir/bulk-refused-out"
+  if "$binary" rehearse read-bulk $window; then exit 1; fi
+done
+if "$binary" rehearse read-bulk 0x00bf1a00 0x1000 "$tmpdir/bulk-rehearsal-out"; then exit 1; fi
+test ! -e "$tmpdir/bulk-rehearsal-out"
 if "$binary" ram-alloc; then exit 1; fi
 if "$binary" ram-alloc 0; then exit 1; fi
 if "$binary" ram-push; then exit 1; fi
@@ -254,4 +267,6 @@ export TMPDIR="$rehearsals"
 "$binary" rehearse read-ram "$ramplan" --repeat 3 --interval-ms 250
 "$binary" rehearse probe-sd-host
 "$binary" rehearse probe-sd-host --repeat 3 --interval-ms 100
+"$binary" rehearse read-bulk 0x00bf1a00 0x180000
+"$binary" rehearse read-bulk 0x40bf1a00 0x1000
 if readelf -d "$binary" | sed -n "/NEEDED/p" | rg "libusb|libudev"; then exit 1; fi

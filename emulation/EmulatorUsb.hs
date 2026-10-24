@@ -31,9 +31,10 @@ import qualified Data.Aeson.KeyMap as M
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Lazy as BL
-import Data.Char (digitToInt)
-import Data.Word (Word8, Word32)
+import Data.Bits (shiftL, (.|.))
+import Data.Word (Word32)
 import Numeric (readHex, showHex)
 import System.Exit (ExitCode (..))
 import System.IO
@@ -175,11 +176,19 @@ stopEmulator emulator = do
   status <- waitForProcess (emulatorProcess emulator)
   require (status == ExitSuccess) ("emulator process failed: " ++ show status)
 
-decodeHex :: String -> IO [Word8]
-decodeHex encoded = do
-  require (even (length encoded) && all (`elem` ("0123456789abcdef" :: String)) encoded) "emulator returned invalid lowercase hex"
-  pure [fromIntegral (16 * digitToInt high + digitToInt low) | (high, low) <- pairs encoded]
-  where pairs [] = []; pairs (a:b:rest) = (a,b) : pairs rest; pairs _ = []
+-- | The bytes of a lowercase hex field.
+hexField :: String -> M.KeyMap Value -> IO B.ByteString
+hexField name fields = objectField name fields >>= \value -> case value of
+  String text -> do
+    let encoded = TE.encodeUtf8 text
+        nibble c | c >= 0x30 && c <= 0x39 = Just (c - 0x30)
+                 | c >= 0x61 && c <= 0x66 = Just (c - 0x57)
+                 | otherwise = Nothing
+        byteAt i = (\high low -> high `shiftL` 4 .|. low) <$> nibble (B.index encoded (2 * i)) <*> nibble (B.index encoded (2 * i + 1))
+        decoded = traverse byteAt [0 .. B.length encoded `div` 2 - 1]
+    require (even (B.length encoded)) "emulator returned invalid lowercase hex"
+    maybe (ioError (userError "emulator returned invalid lowercase hex")) (pure . B.pack) decoded
+  _ -> ioError (userError ("invalid emulator hex " ++ name))
 
 integerField :: String -> M.KeyMap Value -> IO Int
 integerField name fields = objectField name fields >>= \value -> case fromJSON value of
@@ -217,7 +226,7 @@ bridgeUsbApi exchange = UsbApi
         P.BulkIn endpoint count -> bridgeRpc exchange (object
           ["command" .= String "transfer", "transfer" .= String "bulk-in", "endpoint" .= endpoint, "count" .= count])
       count <- integerField "count" fields
-      bytes <- textField "bytes" fields >>= decodeHex
+      bytes <- B.unpack <$> hexField "bytes" fields
       pure (count, bytes)
 
 emulatorTraceSites :: Emulator -> [(Word32, String)] -> IO ()
@@ -309,6 +318,6 @@ emulatorReadMemory emulator address count = do
     readChunk offset = do
       let chunkBytes = min 4096 (count - offset)
       fields <- rpcLocked emulator (object ["command" .= String "read-memory", "address" .= (address + fromIntegral offset), "count" .= chunkBytes])
-      bytes <- textField "bytes" fields >>= decodeHex
-      require (length bytes == chunkBytes) "emulator memory read length mismatch"
-      pure (B.pack bytes)
+      bytes <- hexField "bytes" fields
+      require (B.length bytes == chunkBytes) "emulator memory read length mismatch"
+      pure bytes

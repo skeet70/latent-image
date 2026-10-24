@@ -118,10 +118,11 @@ int fuji_usb_claim(void) {
     return result;
 }
 /* Returns API status separately from transferred count, including partial errors.
-   33000 ms is transferCeilingMs, the held commit-f7 trigger reply. */
+   33000 ms is transferCeilingMs, the held commit-f7 trigger reply. A bulk IN
+   (kind 2) admits 0x100000 bytes, one read-bulk chunk; every other kind 292. */
 int fuji_usb_transfer(int kind,int endpoint,unsigned char *bytes,int size,unsigned int timeout,int *transferred) {
     *transferred=0;
-    if (!handle || !claimed || timeout==0 || timeout>33000 || size<1 || size>292) return -114;
+    if (!handle || !claimed || timeout==0 || timeout>33000 || size<1 || size>(kind==2 ? 0x100000 : 292)) return -114;
     if (kind==0) {
         if (size!=12) return -115;
         int result=p_control_transfer(handle,0x43,0,0,0,bytes,(uint16_t)size,timeout);

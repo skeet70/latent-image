@@ -14,7 +14,10 @@ haskell_toolchain_library(name = "containers")
 
 haskell_toolchain_library(
     name = "cryptohash-sha256",
-    visibility = ["//emulation:__pkg__"],
+    visibility = [
+        "//emulation:__pkg__",
+        "//transport:__pkg__",
+    ],
 )
 
 haskell_toolchain_library(name = "directory")
