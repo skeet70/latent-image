@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, classicChromeIconPayload, runRamPushE2E) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, classicChromeIconPayload, runRamPushE2E) where
 
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, try)
 import Control.Monad (forM, forM_, unless, when)
@@ -55,6 +55,16 @@ data UiConversionProfile = StrictUiConversion | DeclaredUiCpuFallback deriving (
 -- through the cardless RAM-push bridge.
 data CardMode = CardBacked FilePath | Cardless deriving (Eq, Show)
 
+-- | The FujiMod RAM-push bridge (`emulation/fujimod-xm1`), its run document and the boot ROM.
+data FujiModBridge = FujiModBridge
+  { fujimodBridge :: FilePath
+  , fujimodRunDocument :: FilePath
+  , fujimodBootRom :: FilePath
+  } deriving (Eq, Show)
+
+-- | The engine behind the bridge protocol: the retained Python/native closure or jitl's FujiMod.
+data EmulationRuntime = RetainedRuntime | FujiModRuntime FujiModBridge deriving (Eq, Show)
+
 data E2ESettings = E2ESettings
   { relinkMode :: RelinkMode
   , bootMode :: BootMode
@@ -65,6 +75,7 @@ data E2ESettings = E2ESettings
   , attachHold :: AttachHold
   , flashUiConversion :: UiConversionProfile
   , emulationCardMode :: CardMode
+  , emulationRuntime :: EmulationRuntime
   }
 
 attachHoldArguments :: AttachHold -> [String]
@@ -82,8 +93,19 @@ cardRecord mode = object
 
 -- | The bridge executable and its arguments for one boot of the session's inputs writing to `output`.
 sessionBridge :: E2ESettings -> FilePath -> FilePath -> FilePath -> BootMode -> FilePath -> IO (FilePath, [String])
-sessionBridge settings python installedMedia adjustmentNand boot output = case emulationCardMode settings of
-  CardBacked cardImage -> pure (python,
+sessionBridge settings python installedMedia adjustmentNand boot output = case (emulationRuntime settings, emulationCardMode settings) of
+  (FujiModRuntime bridge, Cardless) -> do
+    require (attachHold settings == NoAttachHold) "the FujiMod RAM-push bridge holds no key across the attach edge"
+    pure (fujimodBridge bridge,
+      [ "--run", fujimodRunDocument bridge
+      , "--boot-rom", fujimodBootRom bridge
+      , "--installed-dat", installedMedia
+      , "--adjustment-nand", adjustmentNand
+      , "--output", output
+      , "--ram-push-checkpoints", checkpointRoot settings
+      ] ++ freshArguments)
+  (FujiModRuntime _, CardBacked _) -> ioError (userError "the FujiMod RAM-push bridge runs only --cardless")
+  (RetainedRuntime, CardBacked cardImage) -> pure (python,
     [ "tools/continue_rec_scanout.py"
     , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
     , "--installed-dat", installedMedia
@@ -94,7 +116,7 @@ sessionBridge settings python installedMedia adjustmentNand boot output = case e
     , "--output", output
     , "--ram-push-checkpoints", checkpointRoot settings
     ] ++ freshArguments ++ profileArguments ++ attachHoldArguments (attachHold settings))
-  Cardless -> do
+  (RetainedRuntime, Cardless) -> do
     require (attachHold settings == NoAttachHold) "the cardless RAM-push bridge holds no key across the attach edge"
     bridge <- runfilesCardlessBridge
     pure (bridge,

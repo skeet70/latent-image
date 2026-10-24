@@ -5,7 +5,8 @@ import Control.Monad (when)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
-import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), OverrideReason (..), PushMode (..), RelinkMode (..), UiConversionProfile (..), bankD3Payload, classicChromeIconPayload, classicChromePayload, runRamPushE2E)
+import FujiModPaths (fujimodRamPushBridge, fujimodRun)
+import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), OverrideReason (..), PushMode (..), RelinkMode (..), UiConversionProfile (..), bankD3Payload, classicChromeIconPayload, classicChromePayload, runRamPushE2E)
 import Data.List (isPrefixOf, nub)
 import qualified Data.Text as T
 import Data.Word (Word16)
@@ -29,6 +30,8 @@ data Bind = IPv4Loopback
 
 data CardSelection = WithCard | WithoutCard deriving (Eq)
 
+data RuntimeChoice = RetainedChoice | FujiModChoice deriving (Eq)
+
 -- | The RAM payload `--ram-push-e2e` pushes.
 data RamPayloadChoice = BankD3Choice | ClassicChromeChoice | ClassicChromeIconChoice deriving (Eq)
 
@@ -51,6 +54,7 @@ data Options = Options
   , attachHoldOption :: AttachHold
   , uiConversionProfileOption :: UiConversionProfile
   , cardModeOption :: CardSelection
+  , runtimeOption :: RuntimeChoice
   , portOption :: Port
   , bindOption :: Bind
   }
@@ -75,6 +79,8 @@ usage = unlines
   , "  --ram-push-e2e        Run allocation, relink, install, bank UI and unload in emulation"
   , "  --cardless             --ram-push-e2e: boot the installed DAT and adjustment NAND with no SD"
   , "                         card through the cardless RAM-push bridge"
+  , "  --fujimod              --ram-push-e2e --cardless: run the bridge protocol on jitl's FujiMod runtime"
+  , "                         (emulation/fujimod-xm1); a speed path, not payload acceptance"
   , "  --unreviewed-relink    --ram-push-e2e: relink and push without the compiled source-identity"
   , "                         and publication-contract pins; the receipt records the mode"
   , "  --allowlist-override REASON"
@@ -111,7 +117,7 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice NoAttachHold DeclaredUiCpuFallback WithCard (Port 0) IPv4Loopback
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice NoAttachHold DeclaredUiCpuFallback WithCard RetainedChoice (Port 0) IPv4Loopback
     go options [] = pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
@@ -135,6 +141,8 @@ parseCommand args
       go options { virtualSDImageOption = Just (VirtualSDImage value) } rest
     go options ("--cardless" : rest) =
       go options { cardModeOption = WithoutCard } rest
+    go options ("--fujimod" : rest) =
+      go options { runtimeOption = FujiModChoice } rest
     go options ("--ff80-rehearsal" : rest) =
       go options { ff80RehearsalOption = True } rest
     go options ("--ram-push-e2e" : rest) =
@@ -229,6 +237,7 @@ launch options = do
       cardless = cardModeOption options == WithoutCard
   require (not (ff80 && e2e)) "--ff80-rehearsal and --ram-push-e2e are exclusive"
   require (e2e || not cardless) "--cardless belongs to --ram-push-e2e"
+  require (runtimeOption options == RetainedChoice || (e2e && cardless)) "--fujimod belongs to --ram-push-e2e --cardless"
   when ff80 $ do
     require (media == Nothing) "--ff80-rehearsal does not accept an SD-card image"
     require (nand /= Nothing) "--ff80-rehearsal requires --installed-nand"
@@ -300,9 +309,14 @@ launch options = do
               (FlashCandidate, _) -> "emulation/ui-trajectories.json"
             TrajectoryFile trajectories = maybe (TrajectoryFile defaultTrajectories) id
               (trajectoriesOption options)
-            checkpointRootPath = resolve root $ case cardModeOption options of
-              WithCard -> "private-data/emulator-checkpoints/xm1-ram-push"
-              WithoutCard -> "private-data/emulator-checkpoints/xm1-ram-push-cardless"
+            checkpointRootPath = resolve root $ case (runtimeOption options, cardModeOption options) of
+              (FujiModChoice, _) -> "private-data/emulator-checkpoints/xm1-ram-push-fujimod-cardless"
+              (RetainedChoice, WithCard) -> "private-data/emulator-checkpoints/xm1-ram-push"
+              (RetainedChoice, WithoutCard) -> "private-data/emulator-checkpoints/xm1-ram-push-cardless"
+            runtime = case runtimeOption options of
+              RetainedChoice -> RetainedRuntime
+              FujiModChoice -> FujiModRuntime (FujiModBridge fujimodRamPushBridge fujimodRun
+                (resolve root "private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin"))
             relinkMode = case (relinkModeOption options, allowlistOverrideOption options) of
               (UnreviewedRelink _, Just reason) -> UnreviewedRelink (OverrideAllowlist reason)
               (mode, _) -> mode
@@ -314,7 +328,7 @@ launch options = do
                 ClassicChromeChoice -> classicChromePayload
                 ClassicChromeIconChoice -> classicChromeIconPayload)
               (attachHoldOption options)
-              (uiConversionProfileOption options) cardInput
+              (uiConversionProfileOption options) cardInput runtime
         runRamPushE2E settings python workspacePath (resolve root trajectories) stagedFirmwarePath nandPath receiptPath
       else do
         let Port port = portOption options
