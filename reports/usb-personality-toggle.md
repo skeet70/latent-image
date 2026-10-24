@@ -1,6 +1,6 @@
 # USB personality toggle (X-M1 1.50)
 
-Design, implementation and host verification of an on-device control that switches the USB personality between the `04cb:ff80` service device (transport service mode 3, as with stored `0xf7 = 1`) and ordinary PTP `04cb:02b6`, with no jig session and no settings-area write ([USB-PERSONALITY-TOGGLE-01](https://github.com/skeet70/latent-image/issues/81)). It covers the stock decision path, the key and its census, the stub and patch sites, placement, the two flash candidates and their composition with RC0 and Classic Chrome, the native and emulator evidence, the changed-byte explanation (section 10), the reviewer packet for the RC0+toggle flash (section 11) and its install session script (section 12). The owner approved the design on 2026-10-22 with the flip behaviour and chose RC0+toggle as the first flash. No camera or USB device was touched; the candidates are not installed.
+Design, implementation and host verification of an on-device control that switches the USB personality between the `04cb:ff80` service device (transport service mode 3, as with stored `0xf7 = 1`) and ordinary PTP `04cb:02b6`, with no jig session and no settings-area write ([USB-PERSONALITY-TOGGLE-01](https://github.com/skeet70/latent-image/issues/81)). It covers the stock decision path, the key and its census, the stub and patch sites, placement, the flash candidates and their composition with RC0 and Classic Chrome, the native and emulator evidence, the changed-byte explanation (section 10), the review record and reviewer packets (section 11) and the install session script (section 12). The owner approved the design on 2026-10-22 with the flip behaviour and chose RC0+toggle as the first flash; the install was abandoned that day when pin 2 of the card slot broke on reinsertion (E-STORED-F7-REENABLE-RUN-150). No camera or USB device was touched; the candidates are not installed.
 
 Inputs, byte-identical to the pinned decodes under `private-data/analysis/x-m1-1.50/`: DAT SHA-256 `43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490`; image 4 `lz/id4-0061c400.bin` base `0x0061c400` SHA-256 `f2e2acab…dcff16`; image 5 `lz/id5-00bf1a00.bin` base `0x00bf1a00` SHA-256 `3cd501c0…fd892a`; plain `lz/plain-01100000.bin` base `0x01100000` SHA-256 `ee211bda…2d889d`; image 2, both loaders and both boot records under `filmsim/` and `decode/`; the fallback adjustment image at DAT payload `0xe0048` (`payload.bin`), equal to the body's adjustment bytes over `0xa000`-`0xcfff` (E-ADJ-READ-150).
 
@@ -15,11 +15,12 @@ Labels: **byte-read** (instruction, table or data read from the pinned images in
 - **RAM only.** The stub writes `cache[0xf7]` through the stock byte setter `0x0069fc94`, the same RAM state the jig tools' gate write leaves until power-off. All 13 stock readers of `0xf7` read that RAM byte (section 2.4), so the debug channel, the `read-ram` gate check and the detach arm follow the toggle without further patching.
 - **No persisted toggle.** The only host-reachable storage route is the 33-unit whole-area commit; a stored toggle would repeat that rewrite on every switch. None is needed (section 3.4).
 - **No RAM-push variant.** The push route needs `ff80` already enumerated and `0xf7` nonzero before it can write anything, and a pushed hook is gone at power-off, so it cannot select the personality of a boot (section 3.5).
-- **Candidates.** CC+toggle `507ecf32…0e1e` (on the CC flash candidate `16c830ad…2c89`) and RC0+toggle `10feac47…2445` (on RC0 `acb0fbbb…ca8`), both built by `//host/firmware:build-usb-toggle` and `//extensions:build-extension`, pinned and reproduced. Each decoded image 5 differs from its base only in the stub bytes and the hook word; every other part equals the base (section 10). The owner chose RC0+toggle as the first flash (2026-10-22); the toggle joins the CC image later, rebased onto that image's combined candidate.
-- **Evidence.** 364 native cases and every full-system run the emulator can deliver pass: both candidates boot to SHOOTING MENU, a plain attach gives PTP, a Q attach gives `ff80` with a working service session, a second Q attach returns PTP in the same boot, stock behaviour is unchanged without Q, the Classic Chrome RAM push runs over a Q attach, and the updater install resets stored `0xf7` to 0 (section 9; E-USB-TOGGLE-DESIGN-150, E-USB-TOGGLE-EMU-150).
-- **Review class.** H3 install with new mechanism bytes: one independent review, the owner's visual check and a per-run go naming the digest remain (section 11). The install session script is section 12.
+- **Candidates.** RC0+toggle `10feac47…2445` (on RC0 `acb0fbbb…ca8`) and CC-icon+toggle `c1bfc9aa…ad8f` (on the design-B Classic Chrome flash candidate `98a66780…1606`, which carries RC0, Classic Chrome, its icon and Q tiles), both built by `//host/firmware:build-usb-toggle` and `//extensions:build-extension`, pinned and reproduced. Each decoded image 5 differs from its base only in the stub bytes and the hook word; every other part equals the base (section 10). CC+toggle `507ecf32…0e1e`, on the superseded CC candidate `16c830ad…2c89`, is not a flash target. The owner chose RC0+toggle as the first flash (2026-10-22) and later planned "PRO Neg + toggle and Classic Chrome" once the slot is repaired; CC-icon+toggle carries all of it in one update, so one card trip.
+- **Evidence.** 364 native cases and every full-system run the emulator can deliver pass: both candidates boot to SHOOTING MENU, a plain attach gives PTP, a Q attach gives `ff80` with a working service session, a second Q attach returns PTP in the same boot, stock behaviour is unchanged without Q, the Classic Chrome RAM push runs over a Q attach on RC0+toggle, and the updater install resets stored `0xf7` to 0 (section 9; E-USB-TOGGLE-DESIGN-150, E-USB-TOGGLE-EMU-150, E-USB-TOGGLE-CANDIDATES-150).
+- **Review.** Independent review `toggle-review` approved RC0+toggle `10feac47…2445` on 2026-10-22 after its five must-fix items were closed in `0de0811` (section 11.5, E-USB-TOGGLE-REVIEW-150). CC-icon+toggle combines that reviewed toggle with the separately reviewed design-B image (CcIconReview); its composition has a reviewer brief (section 11.6) and no review yet.
+- **Install.** H3. The session script is section 12. It starts only after the card slot is repaired and passes the card checks of [#85](https://github.com/skeet70/latent-image/issues/85), and it inserts the card into the camera once.
 
-Body state: commit-f7-restore stored `0xf7 = 0` on 2026-10-21 and left `0x80 = 0x22`, `0x81 = 0x00` (E-STORED-F7-RESTORE-RUN-150). The install stores `0xf7 = 0` again and is expected to return `0x80` to `0x00` (section 12.2). The toggle also covers stored `0xf7 = 1` (section 3.2).
+Body state: stored `0xf7 = 1` since the 2026-10-22 `commit-f7-enable`, with stored `0x80 = 0x22` and `0x81 = 0xff` expected (E-STORED-F7-REENABLE-RUN-150); a plain attach in an ordinary boot gives `ff80`. No card is in the slot. The install stores `0xf7 = 0` and is expected to return `0x80` and `0x81` to `0x00` (section 12.2). The toggle also covers stored `0xf7 = 1` (section 3.2).
 
 ## 2. The USB personality decision, byte-read
 
@@ -218,14 +219,16 @@ RC0 changes only image 4. The CC candidate (`16c830ad…2c89`) changes image 4, 
 | 3 | `image2-record` | CC's `0x83e` record, unchanged |
 | 4 | `plain-patch-set` | CC's `cc-plain.json`, unchanged |
 
-Budget: the prefix window stays at CC's 484 of 512 bytes, the converter extents at 84 of 88 and 68 of 92, plain and image 2 unchanged. The toggle uses 88 of the 144 extent bytes and one in-place word; image 5 is re-encoded in place with no load or size change, so it adds no boot-path item. The CC+toggle candidate inherits CC's open base-alignment note (classic-chrome-patch.md 11.3 item 5). The RC0+toggle candidate keeps RC0's image-4 load `0x0061c340`, which the body has decoded (E-FILMSIM-INSTALL-150), and can go ahead of CC's flash review.
+Budget: the prefix window stays at CC's 484 of 512 bytes, the converter extents at 84 of 88 and 68 of 92, plain and image 2 unchanged. The toggle uses 88 of the 144 extent bytes and one in-place word; image 5 is re-encoded in place with no load or size change, so it adds no boot-path item. A toggle candidate on a CC image inherits CC's open base-alignment note (classic-chrome-patch.md 11.3 item 5): the hardware decompressor has not decoded an image-4 load at `0x0061c200`. The RC0+toggle candidate keeps RC0's image-4 load `0x0061c340`, which the body has decoded (E-FILMSIM-INSTALL-150).
+
+The design-B candidate `98a66780…1606` (classic-chrome-icon.md section 8.1) adds to CC an `image2-record` for `0x83d`, an `image2-patch-set` (the Q glyph `0x37c` pointer), a `font-patch-set` and eight image-5 words (live view `0x00eee960`-`0x00eee970`, frames `0x00e424ac`-`0x00e424b4`). CC-icon+toggle keeps its seven steps in order and replaces only step 2 with the merged image-5 patch set: the 53 design-B words, the hook word and the stub blob. The design-B image-5 words run from `0x00d461ec` to `0x00eee970` and none lies in `[0x00bf4454, 0x00bf44e4)` or at `0x00ecf900`; its image-4 writes end at `0x007960e4` and touch none of the stub's callees, `0x0073c15c` or the condition-row table `[0x00828120, 0x00828510)` (byte-read, pinned parts).
 
 Tooling, following CC's re-inclusion of RC0: `//host/firmware:build-usb-toggle [--output-sha256 HEX] BASE_EXTENSION_JSON NEW_OUTPUT_DIRECTORY` (`host/firmware/BuildUsbToggle.hs`, core in `host/FujiAF/UsbToggle.hs`):
 
 - it takes the linked stub and its symbol table from `//host/firmware:usb-toggle-stub`, requires `usb_toggle` at `0x00bf4454` and decodes every BL of the blob to the four stock callees;
 - it checks the stock image 5 against its pinned SHA-256, the extent against its pinned hash and the hook word against `ebdf3ffd`;
-- it reads the base manifest and each part against its step SHA-256, refuses a base image-5 patch set that names another decode or moves the load, and refuses any base write that overlaps the stub or the hook word;
-- it writes the merged image-5 patch set `usb-toggle-image5.json` (address order, contiguous write orders), copies every other base part unchanged, and writes the manifest `usb-toggle.json` with the image-5 step after the image-4 step, plus `changed-words.json`/`.md` with the toggle as group `TOGGLE`.
+- it reads the base manifest and every step that names a file against its step SHA-256, refuses a base image-5 patch set that names another decode or moves the load, and refuses any base write that overlaps the stub or the hook word;
+- it writes the merged image-5 patch set `usb-toggle-image5.json` (address order, contiguous write orders), copies every other base step and its file unchanged, and writes the manifest `usb-toggle.json` with the image-5 step after the image-4 step, plus `changed-words.json`/`.md` with the toggle as group `TOGGLE`.
 
 `build-extension` is unchanged. `//host/firmware:usb-toggle-tests` checks the merge and the linked blob: two toggle writes at the extent and the hook word, the hook encoding, address order of a disjoint merge, refusal at the hook word and inside the extent, acceptance just below it, an oversized blob refused, the four callees. Because the CC parts carry the private data block, both candidates' parts and manifests stay under `private-data/analysis/usb-toggle/`, as CC's do. The RC0+toggle parts hold no private data and can move to `extensions/` once reviewed.
 
@@ -271,7 +274,7 @@ Byte-read:
 
 For the power-on variant only: the content of the boot records at `0x0073ae10` for a held Q, and the source of the startup Fn and Q press forms. On hardware: the detach after an enumerated `ff80` session and the UI effect of the held Q.
 
-## 9. Verification results (2026-10-22, host and emulated)
+## 9. Verification results (host and emulated)
 
 ### 9.1 Native cases
 
@@ -332,20 +335,38 @@ No scenario fails; the four blocked ones stop where the emulated USB controller 
 
 `//emulation:updater-f7` (`emulation/UpdaterF7.hs`) runs the ordinary updater through the RAM restore route of E-RECOVERY-RC0-RESTORE-HOST-150: a `//recovery:build-image restore` card from the toggle DAT, the `ram-rescue-engine` raw handoff, then continuation over the stored-1 template NAND with OK, OK, UP, OK, OK as ordinary ADC pulses. It then boots the exported NAND. The observed values are in 8.4. The receipts are `private-data/analysis/usb-toggle/emu-updater/rc0-toggle-updater-2/` and `cc-toggle-updater-2/`, run at commit `5d34bfb`. The exported NANDs are `7da7fb61…9841` (RC0+toggle) and `2814b76f…e465` (CC+toggle), the same as in the earlier runs. The bridge additions are console commands `watch`, `hits`, `read` and `nandstat`, which share the trace class `TraceSites` with the toggle server.
 
+### 9.5 Exact candidates (2026-10-24)
+
+On commit `32101c9` (clean harness tree), after the 8M key-pulse pins and the emulator re-pin of E-MERGE-EMULATOR-REVERIFY-150, every route ran on the two flash candidates' exact bytes. `usb-toggle-emu` gained the design-B base and CC-icon+toggle as DAT roles and a `--dats` filter.
+
+| Run | RC0+toggle `10feac47…2445` | CC-icon+toggle `c1bfc9aa…ad8f` |
+| --- | --- | --- |
+| E1 `flash-boot-check` | passed, SHOOTING MENU (`private-data/flash-boot-checks/usb-toggle-rc0-3/`, receipt `5b428e78…391d`) | passed, SHOOTING MENU (`usb-toggle-ccb-1/`, receipt `8ba65249…5a03`) |
+| E2 access probe | pass: the stub path only, after the `0x00ecf900` call | pass; the design-B base records nothing in the extent |
+| E3, E5u-ff80, E5u-q-ptp, E6 (two), E7 (two) | all pass | all pass |
+| E4/E5 and E5u-cycle | every step passes up to the detach after an enumerated session or after a PTP start, which the model cannot deliver (8.3) | same |
+| E8 Classic Chrome RAM push over a Q attach, stored 0 | pass: `ff80`, allocation `0x00a7e8c8`, 131 publications installed, 7 of 7 menu receipts, `ram-unload` verified 131 old words, the cold restart read 131 old (`private-data/analysis/usb-toggle/emu/e8-rc0-3/e2e-result.json`, `d00e18e1…65a1`) | not run: the reviewed CC RAM payloads publish over RC0 images, and a CC-flashed image already holds those words. E4's C0, identity, config and function-2 session is the service-channel check |
+| E9 updater over stored 1 | flag word 3, stored `0x80`/`0x81`/`0xf7` 0/0/1 to 0/0/0, reboot `cache[0xf7] = 0`, hook word `0xebf492d3`; exported NAND `7da7fb61…9841`, equal to the 2026-10-22 runs (`emu-updater/rc0-toggle-updater-4/`, receipt `64a59a83…5809`) | the same values; exported NAND `c5bff9d8…d9b5` (`emu-updater/ccb-toggle-updater-3/`, receipt `90c5d546…e09f`) |
+
+`usb-toggle-emu` with `--dats stock,rc0-toggle,cc-icon-base,cc-icon-toggle`: 24 scenarios, 20 pass and 4 blocked at the undeliverable detach, 598 checks passed and 4 not reached (`private-data/analysis/usb-toggle/emu/run-5-candidates/summary.json`, `4105ebd4…36ed`). Both restore cards carry the candidate DAT byte for byte (`emu-updater/restore-{rc0,ccb}-3/`).
+
 ## 10. Changed-byte explanation
 
 ### 10.1 Candidates
 
-| Item | CC+toggle | RC0+toggle |
+| Item | RC0+toggle | CC-icon+toggle |
 | --- | --- | --- |
-| DAT | `private-data/analysis/usb-toggle/cc-pinned-dat/FWUP0002.DAT`, 38,405,148 bytes, SHA-256 `507ecf326119110713c34f15bb07d0f38bd6946127011835980f6e4d39ad0e1e` | `private-data/analysis/usb-toggle/rc0-pinned-dat/FWUP0002.DAT`, 38,405,148 bytes, SHA-256 `10feac474eee5ac178ff454397f1b4f1bc1c9a01ae4da8de8f102fa606ca2445` |
-| Pinned manifest | `private-data/analysis/usb-toggle/cc-pinned/usb-toggle.json` | `private-data/analysis/usb-toggle/rc0-pinned/usb-toggle.json` |
-| Image-5 patch set | `usb-toggle-image5.json`, 45 CC words, the hook word and the stub blob | `usb-toggle-image5.json`, the hook word and the stub blob |
-| Base | CC flash candidate `16c830ad…2c89` (reports/classic-chrome-patch.md 11.1); its image-4, `0x83e` record and plain parts copied unchanged | RC0 `acb0fbbb…ca8`; `rc0-patch-set.json` copied unchanged |
+| DAT | `private-data/analysis/usb-toggle/rc0-pinned-dat/FWUP0002.DAT`, 38,405,148 bytes, SHA-256 `10feac474eee5ac178ff454397f1b4f1bc1c9a01ae4da8de8f102fa606ca2445` | `private-data/analysis/usb-toggle/ccb-pinned-dat/FWUP0002.DAT`, 38,405,148 bytes, SHA-256 `c1bfc9aa995861ff8a90729bf0e0e5e7bfe0747c1bac69adec2a72d7f7f0ad8f` |
+| Pinned manifest | `private-data/analysis/usb-toggle/rc0-pinned/usb-toggle.json` | `private-data/analysis/usb-toggle/ccb-pinned/usb-toggle.json` (`2fb8b01b…3df3`) |
+| Image-5 patch set | `usb-toggle-image5.json`, the hook word and the stub blob | `usb-toggle-image5.json` (`c15ff823…c1da`), the 53 design-B words, the hook word and the stub blob |
+| Base | RC0 `acb0fbbb…ca8`; `rc0-patch-set.json` copied unchanged | design-B `98a66780…1606` (classic-chrome-icon.md 8.1, manifest `parts-b-1-pinned/classic-chrome-icon.json`); its image-4, image-2, font and plain parts and both records copied unchanged |
+| Image-4 load | `0x0061c340`, decoded on this body | `0x0061c200`, never decoded by the hardware engine |
 | Replaces on the body | the installed RC0 container | the installed RC0 container |
-| Revert | reinstall CC (`16c830ad…2c89`), RC0 or stock through the same update route; nothing the toggle stores survives a power-off | the same, RC0 `acb0fbbb…ca8` |
+| Revert | reinstall RC0 `acb0fbbb…ca8` or stock through the same update route; nothing the toggle stores survives a power-off | stock film in the shooting setting and in C first (classic-chrome-patch.md 11.1), then the same |
 
-Pinning followed CC's: an unpinned `build-extension` build gave the digest, `build-usb-toggle --output-sha256` wrote it into a fresh manifest, and the pinned `build-extension` reproduced it (`PASS`, 45/45 contract checks).
+CC+toggle `507ecf32…0e1e` (`cc-pinned/`, on `16c830ad…2c89`) is superseded with its base and kept only as the history of E-USB-TOGGLE-EMU-150.
+
+Pinning followed CC's: an unpinned `build-extension` build gave the digest, `build-usb-toggle --output-sha256` wrote it into a fresh manifest, and the pinned `build-extension` reproduced it (`PASS`, 45/45 contract checks). On 2026-10-24 at `32101c9` both pinned manifests rebuild byte-identical DATs, and `build-usb-toggle` over `extensions/rc0.json` writes parts equal to `rc0-pinned/` apart from `recorded_at`.
 
 ### 10.2 Every changed byte
 
@@ -356,11 +377,13 @@ Toggle writes, both candidates (`changed-words.md` in each pinned directory):
 | `0x00bf4454` | 88 bytes of the stock extent (hash in 5.1) | the 22 stub words of 3.1 | 78 | stub |
 | `0x00ecf900` | `fd3fdfeb` | `d392f4eb` | 3 | `bl 0x00bf4454` replaces `bl 0x0069f8fc` |
 
-Decoded images, byte-compared after `rebuild-update extract-record5` and `fflzd`: CC+toggle image 5 differs from CC's image 5 only within `[0x00bf4454, 0x00bf44ac)` and at `0x00ecf900`. RC0+toggle image 5 differs from stock image 5 at the same places. `rebuild-update diff` against the CC candidate: identity records, selector, fill, segment table, image-4 header and stream, image-2 extent, trailer and both restore lists unchanged; image-5 header (2 bytes) and stream re-encoded. The extracted plain window equals the base's (CC `7e60e04e…`, RC0 and stock `ee211bda…`). DAT header bytes `0x244`-`0x25b` equal stock (8.4).
+Decoded images, byte-compared after `rebuild-update extract-record5` and `fflzd`: RC0+toggle image 5 (`cb987771…7739`) differs from stock image 5 only within `[0x00bf4454, 0x00bf44ac)` and at `0x00ecf900`, and CC-icon+toggle image 5 (`a9a994b6…cda5`) differs from design-B image 5 (`859ab5b0…6454`) in the same 81 bytes, 78 in the stub range and 3 in the hook word; the stub range equals the linked blob `35a7e959…6d62`, the rest of the extent stays stock, and the toggle bytes equal RC0+toggle's. `rebuild-update diff` and a raw byte compare of CC-icon+toggle against design-B: only the main checksum word `0x20c`-`0x20d`, the image-5 header word at `0x2c0260` (2 bytes, record length `0x2c66d1` to `0x2c670c`) and the re-encoded stream `[0x2c22e5, 0x586968)` differ; the window tail after the stream, identity records, selector, fill, segment table, image-4 header and stream, image-2 extent, font window, plain window, trailer and both restore lists are byte-equal. DAT header bytes `0x244`-`0x25b` equal stock (8.4). Private artifacts: `private-data/analysis/usb-toggle/ccb-review-diff/`.
 
-## 11. Reviewer packet (RC0+toggle)
+## 11. Review record and reviewer packets
 
-The flash target is RC0+toggle, DAT SHA-256 `10feac474eee5ac178ff454397f1b4f1bc1c9a01ae4da8de8f102fa606ca2445`. It replaces the installed RC0 container `acb0fbbb…ca8`. The install is H3 (spec 07 section 3.2); the review covers new mechanism bytes, because the hook word redirects stock control flow and the stub runs outside any payload allocation. CC+toggle is out of scope for this review: the toggle is rebased onto the combined CC candidate later, and that build gets its own diff against this reviewed image.
+Sections 11.1 to 11.3 are the packet the independent review of RC0+toggle used, as it stood at `4c55c79`; 11.5 is that review's record. 11.6 is the reviewer brief for CC-icon+toggle. Both installs are H3 (spec 07 section 3.2); the review covers new mechanism bytes, because the hook word redirects stock control flow and the stub runs outside any payload allocation.
+
+RC0+toggle: DAT SHA-256 `10feac474eee5ac178ff454397f1b4f1bc1c9a01ae4da8de8f102fa606ca2445`, replacing the installed RC0 container `acb0fbbb…ca8`.
 
 ### 11.1 What differs from the installed RC0 image
 
@@ -401,44 +424,115 @@ devenv shell -- bazel run //emulation:usb-toggle-cases
 
 ### 11.4 Gates before the install
 
-1. One independent review of the bytes and container diff above. Requested 2026-10-22; not started.
-2. `//emulation:flash-boot-check` on the exact DAT. Passed twice, the second time on the rebased tree (9.2).
-3. The owner's visual check: `devenv shell -- bazel run //emulation:xm1-viewer -- --firmware private-data/analysis/usb-toggle/rc0-pinned-dat/FWUP0002.DAT`, live view, SHOOTING MENU and FILM SIMULATION with RC0's seven rows. Not started.
-4. The owner's per-run go of 12.8. Not given.
-5. Boot path: none added. The image-4 load stays at RC0's `0x0061c340`, which the body has decoded (E-FILMSIM-INSTALL-150), and image 5 keeps its load and decoded size.
+| Gate | RC0+toggle `10feac47…2445` | CC-icon+toggle `c1bfc9aa…ad8f` |
+| --- | --- | --- |
+| 1. Independent review of the new bytes and the container diff | Approved by `toggle-review`, 2026-10-22 (11.5) | Design-B bytes approved by CcIconReview (2026-10-23) and toggle bytes by `toggle-review`; the composition is not reviewed. Brief: 11.6 |
+| 2. `//emulation:flash-boot-check` on the exact DAT | Passed three times, last at `32101c9` on 2026-10-24 (9.5) | Passed at `32101c9` on 2026-10-24 (9.5) |
+| 3. The owner's visual check, `devenv shell -- bazel run //emulation:xm1-viewer -- --firmware IMAGE`: live view, SHOOTING MENU, FILM SIMULATION and the Q menu | Not done. Expect RC0's seven rows | Not done for this DAT. The design-B RAM push showed the same CC rows, icon and Q tiles on the body (E-CC-ICON-RAM-PUSH-SESSION-150); expect eight rows and the CHROME tile |
+| 4. Boot path (spec 07 section 3.2: no open prerequisite) | None added: image-4 load `0x0061c340`, decoded on this body (E-FILMSIM-INSTALL-150); image 5 keeps its load and decoded size | Open: image-4 load `0x0061c200`, never decoded by the hardware engine (classic-chrome-patch.md 11.3 item 5). The owner must accept it in writing before the go, or choose RC0+toggle |
+| 5. Card slot | Repaired and the card checks of 12.3 passed (#85) | Same |
+| 6. The owner's per-run go of 12.8 | Not given | Not given |
 
 After the install, the RAM-push session scripts and the transport README's ordinary-boot prerequisites change from a stored `0xf7 = 1` to a Q attach.
 
-## 12. Install session script (RC0+toggle)
+### 11.5 Review record (RC0+toggle)
 
-A script, not a run, modelled on [the install procedure](install-procedure.md), [the RC0 install session](filmsim-install-session-script.md) and the Classic Chrome flash script (classic-chrome-patch.md section 12.2 on `agent/cc-icon`). Nothing here authorizes a camera operation; the install runs only after the gates of 11.4 and the owner's per-run go of 12.8. Record every item in `private-data/sessions/<date>-usb-toggle-flash/notes.md`; any item not done is a stop.
+`toggle-review` (`anthropic/claude-opus-5-5`, not the author) reviewed `agent/f7-toggle` at `4c55c79` on 2026-10-22. Record: `private-data/analysis/usb-toggle-review/review.md` (SHA-256 `a624c73c0a6847b88e2ccb72bac5f7eb75877c9df2e7eabc6a8f3f49247feab8`), with the reviewer's own rebuilds, decodes and native cases beside it.
 
-`IMAGE` is `private-data/analysis/usb-toggle/rc0-pinned-dat/FWUP0002.DAT`, 38,405,148 bytes; `DIGEST` is `10feac474eee5ac178ff454397f1b4f1bc1c9a01ae4da8de8f102fa606ca2445`. `STOCK` is the resolved stock DAT, `$(readlink -f private-data/firmware/x-m1-1.50/FWUP0002.DAT)`.
+- First verdict: approve with must-fix, no blocker. The reviewer rebuilt both DATs, scanned the raw diff against RC0, decoded image 5, checked the hook encoding, the stub's register and stack contract, the four callees, the extent census over the eight inputs, every storage writer of the adjustment area and the key census.
+- Must-fix M1 to M5: must-shows after the A8, A9 and A10 unplugs; explicit stops for `ff80` at A3 or in boot 3 and for an A7 mismatch; no `gphoto2`, because PTP requests outside `//transport:camera` are unjournaled camera access; Q's debounce is `0x006a2fa8` and `+0x15` has more key-driver writers; Q-boot limits for whole-area commits and gate-writing operations.
+- Notes N1 to N9: N1, N2, N6 and N7 are folded into 11.1, 12.6 and 9.3; N3 (builder checks only A32 BL and only the 88 written bytes), N4 (constant-index setter census), N5 (one unexplained model transfer), N8 (run provenance) and N9 (a computed-base caller would reach the stub, RAM-only effect) stand and do not gate the install.
+- Closing: all five fixed in `0de0811` with the image bytes unchanged. **Final verdict: approve** for DAT `10feac47…2445`.
+
+Since `0de0811` the toggle sources (`usb-toggle-stub.S`, `.ld`, `FujiAF/UsbToggle.hs`) are unchanged. `BuildUsbToggle.hs` changed at `32101c9` only in which base steps it copies (a step naming a file is now read, checked against its SHA-256 and copied whatever its kind); the merge and every refusal are unchanged, and the RC0+toggle rebuild is byte-identical (10.1).
+
+### 11.6 Reviewer brief (CC-icon+toggle)
+
+CC-icon+toggle, DAT SHA-256 `c1bfc9aa995861ff8a90729bf0e0e5e7bfe0747c1bac69adec2a72d7f7f0ad8f`, is the reviewed design-B image `98a66780…1606` plus the reviewed toggle. The review covers what neither earlier review saw: the composition, so that every byte differing from `98a66780…1606` is a toggle byte already approved on `10feac47…2445`, and the toggle still behaves on the CC code base. It does not re-review CC, the icon, the Q tiles or the toggle design.
+
+Inputs:
+
+- this report: 6.1 (composition), 10 (changed bytes), 9.5 (runs on the exact bytes);
+- `host/firmware/BuildUsbToggle.hs` at `32101c9` (the step-copy change) and `git diff 9d28ba1 32101c9`;
+- `private-data/analysis/usb-toggle/ccb-pinned/` (`usb-toggle.json`, `usb-toggle-image5.json`, the four copied parts, `changed-words.*`) and `ccb-pinned-dat/FWUP0002.DAT`;
+- the base: `private-data/analysis/classic-chrome-icon/parts-b-1-pinned/` and `build-b-1-pinned/FWUP0002.DAT`;
+- the reviewed toggle image `private-data/analysis/usb-toggle/rc0-pinned-dat/FWUP0002.DAT` and its decoded image 5 `private-data/analysis/usb-toggle-review/cand-id5.bin`;
+- decodes and diff artifacts in `private-data/analysis/usb-toggle/ccb-review-diff/`;
+- receipts of 9.5.
+
+Commands, no camera:
+
+```sh
+devenv shell -- bazel test //host/firmware:usb-toggle-tests
+devenv shell -- bazel run //host/firmware:build-usb-toggle -- --output-sha256 c1bfc9aa995861ff8a90729bf0e0e5e7bfe0747c1bac69adec2a72d7f7f0ad8f private-data/analysis/classic-chrome-icon/parts-b-1-pinned/classic-chrome-icon.json private-data/analysis/usb-toggle/REVIEW_PARTS
+devenv shell -- bazel run //extensions:build-extension -- private-data/analysis/usb-toggle/ccb-pinned/usb-toggle.json "$(readlink -f private-data/firmware/x-m1-1.50/FWUP0002.DAT)" private-data/analysis/usb-toggle/REVIEW_DAT
+devenv shell -- bazel run //host/firmware:rebuild-update -- diff "$PWD/private-data/analysis/classic-chrome-icon/build-b-1-pinned/FWUP0002.DAT" "$PWD/private-data/analysis/usb-toggle/ccb-pinned-dat/FWUP0002.DAT"
+bazel-bin/host/firmware/rebuild-update extract-record5 DAT RECORD5 && bazel-bin/lz/fflzd RECORD5 0 ID5 5185120
+```
+
+Questions:
+
+1. Does the merged `usb-toggle-image5.json` hold exactly the 53 words of `cc-icon-image5.json` with their current and new values, plus the hook word and the 88-byte stub blob, and nothing else?
+2. Are the copied parts and the two image-2 records byte-equal to design-B's, in design-B's step order?
+3. Does the raw DAT differ from `98a66780…1606` only in the main checksum word, the image-5 header word and the image-5 stream (10.2), with the checksum relation of 11.1 holding?
+4. Does the decoded image 5 differ from design-B's only in the 81 toggle bytes, and are those bytes and the stock remainder of the extent identical to the reviewed RC0+toggle decode?
+5. Does any design-B write (image 4 including the prefix at `0x0061c200`, image 5, plain, image 2, font) touch the stub's callees `0x0069f8fc`, `0x006a0d00`, `0x006a0b4c`, `0x0073c15c`, `0x0069fc94`, handler A `[0x00ecf8b8, 0x00ecf9c8)`, the key driver `[0x006a0cc4, 0x006a3084)`, the condition rows `[0x00828120, 0x00828510)` or `[0x00bf44ac, 0x00bf44e4)` (review N3)? Does CC code read or write `cache[0xf7]`?
+6. Is the step-copy change in `BuildUsbToggle.hs` correct, and does it leave every refusal of 6.1 in force?
+7. Do the 9.5 runs cover the composition, given that E8 (the Classic Chrome RAM push over a Q attach) does not apply to a CC-flashed image?
+8. Is section 12, with the candidate rows of 12.0, complete for this image?
+
+Gate: the verdict and any must-fix closure go in `private-data/analysis/usb-toggle-ccb-review/review.md` and a ledger entry; CC-icon+toggle is not a flash target before an approve.
+
+## 12. Install session script
+
+A script, not a run, for either candidate, modelled on [the install procedure](install-procedure.md), [the RC0 install session](filmsim-install-session-script.md) and the Classic Chrome flash script (classic-chrome-patch.md section 12.2). It follows [the camera-run procedure](../spec/07-governance-and-handoff.md#3-camera-runs): the model runs host commands, the owner handles the camera. Nothing here authorizes a camera operation; the install runs only after the gates of 11.4 and the owner's per-run go of 12.8. Record every item in `private-data/sessions/<date>-usb-toggle-flash/notes.md`; any item not done is a stop.
+
+The 2026-10-22 attempt stopped before the update when pin 2 of the card slot broke as the card went back in (E-STORED-F7-REENABLE-RUN-150); the slot had already been damaged on 2026-10-21 and seated a card only over a shim (E-SD-SLOT-DAMAGE-150). The update reads its file from the card, a repeat update after an interruption needs the card again, and the SD recovery route needs the slot (E-XM1-CARD-SLOT-UNAVAILABLE-150). This script therefore starts only on a repaired slot, checks the slot in the same session before the update, and puts the card into the camera once: from D5 to the end of the session the card stays in, and everything after D5 uses it in place.
+
+### 12.0 Candidate
+
+The go names one candidate. `STOCK` is `$(readlink -f private-data/firmware/x-m1-1.50/FWUP0002.DAT)`.
+
+| Item | RC0+toggle | CC-icon+toggle |
+| --- | --- | --- |
+| `IMAGE` | `private-data/analysis/usb-toggle/rc0-pinned-dat/FWUP0002.DAT` | `private-data/analysis/usb-toggle/ccb-pinned-dat/FWUP0002.DAT` |
+| `DIGEST` | `10feac474eee5ac178ff454397f1b4f1bc1c9a01ae4da8de8f102fa606ca2445` | `c1bfc9aa995861ff8a90729bf0e0e5e7bfe0747c1bac69adec2a72d7f7f0ad8f` |
+| `MANIFEST` | `private-data/analysis/usb-toggle/rc0-pinned/usb-toggle.json` | `private-data/analysis/usb-toggle/ccb-pinned/usb-toggle.json` |
+| Size | 38,405,148 bytes | 38,405,148 bytes |
+| `FILMS` after the install | seven rows: PROVIA, Velvia, ASTIA, B&W, SEPIA, PRO Neg Std, PRO Neg Hi | eight rows: the seven, then CLASSIC CHROME with the CHROME cartridge icon |
+| `QFILMS` after the install | as before the install | eight Q films; the CC tile and full-size PRO Neg Std and Hi tiles (E-CC-ICON-RAM-PUSH-SESSION-150) |
+| Extra acceptance | none | classic-chrome-patch.md 12.2.8 A2b to A7, run in A11 |
 
 ### 12.1 Before the session (model)
 
 | Code | Action | Must show |
 | --- | --- | --- |
-| M1 | On the session commit: `sha256sum "$IMAGE"`; rebuild with `build-extension` from `rc0-pinned/usb-toggle.json` into a fresh directory and `cmp` it against `IMAGE` | `DIGEST` both times; `cmp` prints nothing |
-| M2 | Gates 11.4 items 1 to 3 recorded: the review verdict, the flash-boot receipt, the owner's visual check | All three |
+| M1 | On the session commit: `sha256sum "$IMAGE"`; `build-extension` from `MANIFEST` into a fresh directory and `cmp` against `IMAGE` | `DIGEST` both times; `cmp` prints nothing |
+| M2 | The 11.4 gates for this candidate recorded: review, flash-boot receipt, visual check, boot path, slot | All present; for CC-icon+toggle also the owner's written acceptance of the `0x0061c200` load |
 | M3 | `cmp --ignore-initial=918108 --bytes=270336 "$STOCK" "$IMAGE"` and `cmp --ignore-initial=38404732 --bytes=416 "$STOCK" "$IMAGE"` | Both print nothing (template and restore lists equal stock, 12.2) |
 | M4 | Confirm the adjustment backup (E-ADJ-BACKUP-DURABLE-150, `c82ac937…199c`, two locations) | Present; since then only `0x80`, `0x81` and `0xf7` changed |
+| M5 | The owner reports the slot repaired (#85; the repair is invasive work, planned with the owner first) | Repair reported; a card latches home without a shim and the door closes over it |
 
 ### 12.2 What the update does to stored state
 
-The update path is S4 of [the install procedure](install-procedure.md#2-what-the-camera-does-when-inside-the-update): `0x00db91e0` snapshots `[0, 0x42000)`, refreshes it from the template, restores the listed bytes and commits the area when the flag word `0x014e3578 & 3` is nonzero (byte-read; the setter `0x00db9cd4` sets both bits for this container, 8.4). The template holds `00` at `0x80`, `0x81` and `0xf7`, and no restore pair covers them. The executing updater is RC0's stock image 5 with the container parts equal to RC0's for S4 (M3), so the RC0 install's outcome repeats (static-inference; hardware-observed for RC0 in E-FILMSIM-READBACK-150): `0xf7` and `0x81` stay `00`, and `0x80` returns from `0x22` (left by commit-f7-restore, E-STORED-F7-RESTORE-RUN-150) to `00`. E9 emulated the same container over stored `0xf7 = 1` and ended with `0x80`/`0x81`/`0xf7` at 0/0/0. If the refresh did not run, `0x80` stays `0x22`; the body has run normally with either value.
+The update path is S4 of [the install procedure](install-procedure.md#2-what-the-camera-does-when-inside-the-update): `0x00db91e0` snapshots `[0, 0x42000)`, refreshes it from the template, restores the listed bytes and commits the area when the flag word `0x014e3578 & 3` is nonzero (byte-read; the setter `0x00db9cd4` sets both bits for both candidates, 8.4). The template holds `00` at `0x80`, `0x81` and `0xf7`, and no restore pair covers them. The executing updater is RC0's stock image 5, and for S4 both containers' parts equal RC0's (M3), so the RC0 install's outcome repeats (static-inference; hardware-observed for RC0 in E-FILMSIM-READBACK-150). The body now holds stored `0xf7 = 01` with `0x80 = 22` and `0x81 = ff` expected (E-STORED-F7-REENABLE-RUN-150); after the update all three read `00`. E9 emulated both candidates over stored `0xf7 = 1` and ended with 0/0/0 (9.4, 9.5). If the refresh did not run, stored `0xf7` stays 1 and A3 shows `ff80`, a stop.
 
-### 12.3 Delivery to the card
+### 12.3 Card and slot, one insertion
 
-PTP offers no write path: the card store reports Access Capability Read Only with Object deletion (private session `20261022T060247Z-ptp-summary`). The file goes by card reader.
+PTP offers no write path: the card store reports Access Capability Read Only with Object deletion (private session `20261022T060247Z-ptp-summary`). The file goes by card reader, before the card first enters the repaired slot.
 
 | Code | Action | Must show |
 | --- | --- | --- |
-| D1 | Camera off, USB unplugged. Remove the card and insert it in the host's reader | Card mounted read-write |
-| D2 | `ls -la` the card root | `DCIM`, no `FWUP*.DAT`, free space well above 38,405,148 bytes. Do not format |
-| D3 | `cp --no-clobber "$IMAGE" "$CARD/FWUP0002.DAT" && sync` | Exit 0; the name exactly `FWUP0002.DAT` |
-| D4 | Unmount, remove and reinsert the card, mount, then `ls -la "$CARD"` and `sha256sum "$CARD/FWUP0002.DAT"` | Size 38,405,148 and `DIGEST`, read after a fresh mount so the bytes come from the card. Any other value: delete the copy and repeat D3-D4 |
-| D5 | Unmount, eject, insert the card in the camera with the camera off; close the door | |
+| D1 | Owner: camera off, USB unplugged. The card is in the host's reader, not in the camera | Card mounted read-write |
+| D2 | Model: `ls -la "$CARD" "$CARD/DCIM"` | No `FWUP*.DAT`; free space well above 38,405,148 bytes; record whether `DCIM/963_FUJI/DSCF3149.RAF` is present (CC-icon+toggle A11 uses it). Do not format |
+| D3 | Model: `cp --no-clobber "$IMAGE" "$CARD/FWUP0002.DAT" && sync` | Exit 0; the name exactly `FWUP0002.DAT` |
+| D4 | Owner: unmount, remove and reinsert the card in the reader. Model: `ls -la "$CARD"` and `sha256sum "$CARD/FWUP0002.DAT"` | Size 38,405,148 and `DIGEST`, read after a fresh mount. Any other value: delete the copy and repeat D3-D4 |
+| D5 | Owner: unmount, eject, insert the card in the camera with the camera off until the latch holds it; close the door. This is the session's only insertion | Card latched, door closed, no shim |
+| C1 | Owner: ordinary power-on, no button held, no USB | No CARD ERROR or NO MEMORY CARD; the shooting screen shows a frame count. `FWUP0002.DAT` runs only at a DISP/BACK power-on (install procedure section 6), so an ordinary boot ignores it (static-inference) |
+| C2 | Owner: one FINE+RAW shot on a fixed scene in PROVIA; play it back | Saved and played back with no error |
+| C3 | Owner: switch off and on twice, opening nothing; play the C2 shot back each time | No shutdown, no card message, the shot plays back |
+
+Any failure in D5 to C3 (the card does not latch, a card message, a shutdown, a save or playback error) ends the session before the update. The card stays where it is; report to the model. The C acts are the card-present boot and capture/save/playback of #85 acceptance; its card read-back follows at the next card removal, after this session.
 
 A damaged copy fails D4. Inside the camera a damaged file fails one of the three sums (status 5) before S1 (byte-read, install procedure section 1). The cached-success byte `0x15c1e58` survives until power is removed, so after any aborted attempt switch off and cut the supply before another one (install procedure section 7).
 
@@ -447,10 +541,9 @@ A damaged copy fails D4. Inside the camera a damaged file fails one of the three
 | Code | Owner action | Must show |
 | --- | --- | --- |
 | P1 | Photograph the watched settings and the C (CUSTOM) values | Record in the notes |
-| P2 | SHOOTING MENU > FILM SIMULATION: photograph the list | RC0's seven rows: PROVIA, Velvia, ASTIA, B&W, SEPIA, PRO Neg Std, PRO Neg Hi |
+| P2 | SHOOTING MENU > FILM SIMULATION: photograph the list; set a stock film in the shooting setting and in C (CC-icon+toggle revert precondition) | RC0's seven rows; a stock film in both |
 | P3 | Dummy-battery supply on mains, connector secured, not on a shared switch; camera on a stable surface; lens mounted; USB unplugged | Install procedure section 5 |
-| P4 | D1-D5 done | Card in the camera, door closed |
-| P5 | Camera off. Start a video of the screen and a clock | |
+| P4 | Camera off. Start a video of the screen and a clock | |
 
 ### 12.5 Camera acts
 
@@ -467,16 +560,16 @@ The screen order is the RC0 run's (E-FILMSIM-INSTALL-150, E-INSTALL-TIMING-150) 
 | I7 | Wait for the completion screen asking to turn the camera off | Completion; record the screen and elapsed time |
 | I8 | Switch off as instructed and wait for shutdown. Leave the card in the camera | Ordinary shutdown |
 
-`FWUP0002.DAT` stays on the card. It runs only at a DISP/BACK power-on; delete it with the reader at the next card removal.
+`FWUP0002.DAT` stays on the card. It runs only at a DISP/BACK power-on; delete it with the reader at the next card removal, which is not part of this session.
 
 ### 12.6 Acceptance after install
 
-Ordinary boots, the camera on the dummy supply, at the shooting screen with no menu open before each attach. Each cable act is one plug or unplug of the camera end; the host end stays connected. PTP is checked by the `lsusb` product id and by the owner browsing the card in his own file manager (an owner action); the model sends no PTP request. The model's host operations are `lsusb -d 04cb:` (reads descriptors the OS already holds) and one `read-config`, which the go names (12.8); the read grant of spec 07 section 3.4 lapses at every unplug, so it does not cover them.
+Ordinary boots, the camera on the dummy supply, the card in place, at the shooting screen with no menu open before each attach. Each cable act is one plug or unplug of the camera end; the host end stays connected. PTP is checked by the `lsusb` product id and by the owner browsing the card in his own file manager (an owner action); the model sends no PTP request. The model's host operations are `lsusb -d 04cb:` (reads descriptors the OS already holds) and one `read-config`, which the go names (12.8); the read grant of spec 07 section 3.4 lapses at every unplug, so it does not cover them.
 
 | Code | Act | Must show |
 | --- | --- | --- |
 | A1 | Boot normally, no USB | No setup menu; date, time, language, the P1 settings and C values unchanged; one shot and its playback normal |
-| A2 | SHOOTING MENU > FILM SIMULATION; photograph the list; also the Q menu's film tile | The P2 list unchanged, seven rows; Q unchanged from before the install |
+| A2 | SHOOTING MENU > FILM SIMULATION; photograph the list; also the Q menu's film tile | `FILMS` and `QFILMS` of 12.0 |
 | A3 | Boot 1. Plug the cable without touching Q. Model: `devenv shell -- lsusb -d 04cb:` | `04cb:02b6` and no `04cb:ff80`; record what the camera displays (stock application USB mode) |
 | A4 | Owner: open the camera in the host's file manager and browse `DCIM` | The card's folders and recent frames are listed; one frame opens |
 | A5 | Unplug. Switch off | Record the display after the unplug; then an ordinary shutdown |
@@ -485,7 +578,7 @@ Ordinary boots, the camera on the dummy supply, at the shooting screen with no m
 | A8 | Unplug. Then wait five seconds and plug the cable without touching Q. Model: `lsusb -d 04cb:` | After the unplug (detach after an enumerated `ff80` session): record the display; MENU opens and closes, live view runs, no reboot. After the plug: `04cb:ff80` again (the RAM byte stays 1) |
 | A9 | Unplug. Then wait five seconds, hold Q, plug, hold about two seconds, release, close the Q menu if open. Model: `lsusb -d 04cb:`. Owner: browse `DCIM` as in A4 | After the unplug (detach after a plain `ff80` session): record the display; MENU opens and closes, live view runs, no reboot. After the plug: `04cb:02b6` and no `ff80`, and the card browses as in A4. This is the second Q attach returning PTP |
 | A10 | Unplug. Switch off. Boot 3, plug the cable without touching Q. Model: `lsusb -d 04cb:`. Unplug | After the first unplug (detach after a PTP start from a byte flipped back to 0): record the display; MENU opens and closes, live view runs, no reboot; then an ordinary shutdown. In boot 3: `04cb:02b6`, the power cycle returned to the stored byte; after its unplug the same display checks |
-| A11 | Without USB: SHOOTING MENU, FILM SIMULATION and the Q menu as in A2; one shot in a PRO Neg film and its playback; switch off and on | Unchanged from A2; the shot normal; no setup menu |
+| A11 | Without USB: SHOOTING MENU, FILM SIMULATION and the Q menu as in A2; one shot in a PRO Neg film and its playback; for CC-icon+toggle the extra acceptance of 12.0, whose A4 RAW conversion uses `DSCF3149.RAF` if D2 found it and otherwise the C2 RAF without the comparison; switch off and on | Unchanged from A2; the shots normal; no setup menu |
 
 In A6 or A8 only, a PTP enumeration is a finding for host analysis, not a safety stop: record the UI state and the timing of the press, and continue with the next act. In A6 a candidate cause is contact bounce at the plug (attach, detach, attach edges while Q is held flip the byte twice; independent review N6); record any visible flicker of the USB screen. Do not repeat an attach beyond the script.
 
@@ -493,28 +586,31 @@ In A6 or A8 only, a PTP enumeration is a finding for host analysis, not a safety
 
 Every stop ends camera operations for the session; nothing is retried; a new attempt needs a new go.
 
+- D5 to C3: the card does not latch, a card message, a shutdown, a save or playback error. No update; the card stays in place.
 - Before I5: a wrong version, model, route or file message, no equal-version offer, low or doubtful power, an unfamiliar screen: cancel where offered, switch off, cut the supply, report.
 - During I6: never cut power, open a door or press a button, whatever the screen shows. A stalled or blank display is recorded, not interrupted.
 - After I8, a body that does not boot or hangs: stop. Do not power-cycle repeatedly or follow generic battery-removal advice; keep the last display, the supply and card state, and the video (install procedure section 9 step 1).
 - The setup menu, a lost setting or changed C values: stop for host analysis; do not re-enter settings to hide the difference.
-- A film list other than the seven rows of P2: stop; do not reflash.
-- During acceptance: any freeze, error dialog, unexpected reboot, stock-mode change, `read-config` refusal or stop line, or an enumeration other than `04cb:02b6` or `04cb:ff80` (spec 07 section 3.3).
+- A film list other than `FILMS`: stop; do not reflash.
+- During acceptance: any freeze, error dialog, unexpected reboot, stock-mode change, card message, `read-config` refusal or stop line, or an enumeration other than `04cb:02b6` or `04cb:ff80` (spec 07 section 3.3).
 - `04cb:ff80` at A3 or in boot 3 of A10: stored `0xf7` is nonzero after the install, or the byte flipped without Q. Stop, make no host operation over that `ff80`, unplug and report (spec 07 section 15).
 - An A7 window 0 that differs from the reference outside `0x80`, `0x81` and `0xf7`: stop and report.
 
 ### 12.8 What the go names
 
-The owner's per-run H3 go:
+The owner's per-run H3 go, with the candidate's digest written out:
 
-"Go: firmware update of XM1-body-01 from the camera's update menu with FWUP0002.DAT SHA-256 10feac474eee5ac178ff454397f1b4f1bc1c9a01ae4da8de8f102fa606ca2445 (RC0 with the USB personality toggle), copied by card reader to the card root, followed by the 12.6 acceptance acts with their host reads: lsusb listings and one read-config of the gate-byte plan in the Q boot."
+- RC0+toggle: "Go: firmware update of XM1-body-01 from the camera's update menu with FWUP0002.DAT SHA-256 10feac474eee5ac178ff454397f1b4f1bc1c9a01ae4da8de8f102fa606ca2445 (RC0 with the USB personality toggle), copied by card reader to the card root, followed by the 12.6 acceptance acts with their host reads: lsusb listings and one read-config of the gate-byte plan in the Q boot."
+- CC-icon+toggle: "Go: firmware update of XM1-body-01 from the camera's update menu with FWUP0002.DAT SHA-256 c1bfc9aa995861ff8a90729bf0e0e5e7bfe0747c1bac69adec2a72d7f7f0ad8f (Classic Chrome design B with the USB personality toggle), copied by card reader to the card root, accepting the never-decoded image-4 load 0x0061c200, followed by the 12.6 acceptance acts with their host reads: lsusb listings and one read-config of the gate-byte plan in the Q boot."
 
 A go that names another digest, another file, another delivery or other host operations is not this go.
 
 ### 12.9 Recovery and revert
 
-- Interruption residues and which a repeat repairs: [install procedure section 8](install-procedure.md#8-interruption-residues-and-which-are-recoverable-by-repeating-the-update). Between S1 and the end of S3 the body cannot boot and no repair is demonstrated; the owner accepted that residual on 2026-10-09 ([install procedure section 3](install-procedure.md#3-preconditions)).
+- Interruption residues and which a repeat repairs: [install procedure section 8](install-procedure.md#8-interruption-residues-and-which-are-recoverable-by-repeating-the-update). Between S1 and the end of S3 the body cannot boot and no repair is demonstrated; the owner accepted that residual on 2026-10-09 ([install procedure section 3](install-procedure.md#3-preconditions)). A repeat after S3 needs the card, which is in the camera already.
+- CC-icon+toggle: a decode failure of the image-4 base `0x0061c200` at boot has the same symptom as that window and the same coverage (classic-chrome-patch.md 12.2.7).
 - Coverage by failure class: [recovery status](recovery-status.md#failure-coverage-and-smallest-next-experiment).
-- Revert from a working body: reinstall RC0 `acb0fbbb…ca8` (or stock) through this same route. The toggle stores nothing; a power-off already returns the USB personality to the stored byte.
+- Revert from a working body: reinstall RC0 `acb0fbbb…ca8` (or stock) through this same route, with a stock film in the shooting setting and in C first on a CC body. The toggle stores nothing; a power-off already returns the USB personality to the stored byte.
 
 ## 13. Reproduction
 
@@ -552,13 +648,13 @@ Builds, cases and emulator runs (`D` is the resolved stock DAT, `$(readlink -f p
 
 ```sh
 devenv shell -- bazel test //host/firmware:usb-toggle-tests
-devenv shell -- bazel run //host/firmware:build-usb-toggle -- --output-sha256 507ecf326119110713c34f15bb07d0f38bd6946127011835980f6e4d39ad0e1e private-data/analysis/classic-chrome-patch/candidate-pinned/classic-chrome.json private-data/analysis/usb-toggle/NEW_CC_PARTS
+devenv shell -- bazel run //host/firmware:build-usb-toggle -- --output-sha256 c1bfc9aa995861ff8a90729bf0e0e5e7bfe0747c1bac69adec2a72d7f7f0ad8f private-data/analysis/classic-chrome-icon/parts-b-1-pinned/classic-chrome-icon.json private-data/analysis/usb-toggle/NEW_CCB_PARTS
 devenv shell -- bazel run //host/firmware:build-usb-toggle -- --output-sha256 10feac474eee5ac178ff454397f1b4f1bc1c9a01ae4da8de8f102fa606ca2445 extensions/rc0.json private-data/analysis/usb-toggle/NEW_RC0_PARTS
-devenv shell -- bazel run //extensions:build-extension -- private-data/analysis/usb-toggle/cc-pinned/usb-toggle.json "$D" private-data/analysis/usb-toggle/NEW_CC_DAT
+devenv shell -- bazel run //extensions:build-extension -- private-data/analysis/usb-toggle/ccb-pinned/usb-toggle.json "$D" private-data/analysis/usb-toggle/NEW_CCB_DAT
 devenv shell -- bazel run //extensions:build-extension -- private-data/analysis/usb-toggle/rc0-pinned/usb-toggle.json "$D" private-data/analysis/usb-toggle/NEW_RC0_DAT
 devenv shell -- bazel run //emulation:usb-toggle-cases
-devenv shell -- bazel run //emulation:flash-boot-check -- --firmware private-data/analysis/usb-toggle/cc-pinned-dat/FWUP0002.DAT --output private-data/flash-boot-checks/NEW
-devenv shell -- bazel run //emulation:usb-toggle-emu -- --receipt-output private-data/analysis/usb-toggle/emu/NEW --runs all
+devenv shell -- bazel run //emulation:flash-boot-check -- --firmware private-data/analysis/usb-toggle/ccb-pinned-dat/FWUP0002.DAT --output private-data/flash-boot-checks/NEW
+devenv shell -- bazel run //emulation:usb-toggle-emu -- --receipt-output private-data/analysis/usb-toggle/emu/NEW --runs all --dats stock,rc0-toggle,cc-icon-base,cc-icon-toggle
 devenv shell -- bazel run //emulation:xm1-viewer -- --ram-push-e2e --classic-chrome --attach-hold-q --firmware private-data/analysis/usb-toggle/rc0-pinned-dat/FWUP0002.DAT --installed-nand private-data/analysis/usb-toggle/emu/inputs/f7-0.nand --sd-card-image private-data/analysis/classic-chrome-patch/ram-push/inputs/card.img --receipt-output private-data/analysis/usb-toggle/emu/NEW_E8
 devenv shell -- bazel run //emulation:updater-f7 -- --recovery-ram RESTORE/terminal-valid-ram.bin --sd-image RESTORE/firmware-ram-recovery-sd.img --installed-nand private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand --receipt-output private-data/analysis/usb-toggle/emu-updater/NEW
 ```
