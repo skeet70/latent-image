@@ -111,18 +111,18 @@ build stubPath symbolsPath outputSha baseGiven outputGiven = do
   putStrLn ("wrote " ++ (output </> manifestName))
 
 readPart :: FilePath -> Value -> IO Part
-readPart dir step = case H.str (H.get step "kind") of
-  kind | kind `elem` ["image-patch-set", "plain-patch-set", "plain-span"] -> do
+readPart dir step = case H.get step "path" of
+  Null -> pure (Part step Nothing Nothing)
+  _ -> do
     let path = H.str (H.get step "path")
     bytes <- canonicalizePath (if isAbsolute path then path else dir </> path) >>= H.readRegular (16 * 1024 * 1024)
     digest <- H.sha256 bytes
     H.ensure (digest == H.str (H.get step "sha256")) ("base part " ++ path ++ " differs from its step SHA-256")
     segment <-
-      if kind == "image-patch-set"
+      if H.str (H.get step "kind") == "image-patch-set"
         then (\v -> Just (H.num (H.get (H.get v "image") "segment_id"))) <$> H.jsonRead bytes
         else pure Nothing
     pure (Part step segment (Just (path, bytes)))
-  _ -> pure (Part step Nothing Nothing)
 
 image5Writes :: Value -> IO [Write]
 image5Writes v = do
