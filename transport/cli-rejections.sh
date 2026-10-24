@@ -197,7 +197,7 @@ if (cd "$tmpdir" && "$binary" read-bulk 0x00bf1a00 0x1000 relative-session); the
 test ! -e "$tmpdir/relative-session"
 if "$binary" read-bulk 0x00bf1a00 0x1000 "$tmpdir"; then exit 1; fi
 if "$binary" read-bulk 0x00bf1a00 0x1000 "$tmpdir/one" "$tmpdir/two"; then exit 1; fi
-for window in "0x00bf1a02 0x1000" "0x00bf1a00 0x1004" "0x00bf1a00 4096" "0x1fffff00 0x200" "0x80000000 0x100" "0xfff50000 0x40" "0x00000000 0x20000040" "0x00bf1a00 0x0"; do
+for window in "0x00bf1a02 0x1000" "0x00bf1a00 0x1004" "0x00bf1a00 4096" "0x1fffff00 0x200" "0x80000000 0x100" "0xfff50000 0x40" "0x00000000 0x20000040" "0x00bf1a00 0x0" "0x0b3f6dc0 0x80" "0x4b3f6dc0 0x80" "0x10000000 0x40"; do
   if "$binary" read-bulk $window "$tmpdir/bulk-refused-out"; then exit 1; fi
   test ! -e "$tmpdir/bulk-refused-out"
   if "$binary" rehearse read-bulk $window; then exit 1; fi

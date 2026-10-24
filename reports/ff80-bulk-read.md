@@ -26,6 +26,17 @@ Questions for the reviewer:
 
 Host checks the reviewer can run: `//transport:read-bulk-tests`, `//transport:provider-parity`, `//transport:cli-rejections`, `bazel run //transport:camera -- rehearse read-bulk 0x00c00000 0x10000`, and `//emulation:xm1-bulk-read-e2e` with the arguments of E-BULK-READ-E2E-150.
 
+### 2.1 Review outcome
+
+BulkReadReview (anthropic/claude-opus-5-5) reviewed `992102f` and approved with two must-fix findings (`private-data/analysis/x-m1-1.50/bulk-read/review.md`, SHA-256 `0c8e4576…e96e`); it re-derived every static claim above from our decodes. The fixes, for the reviewer to confirm:
+
+- F1: a bulk IN above 292 bytes journals its `native-outcome` line as status, count and the SHA-256 of the partial bytes, so a short or failed chunk's line fits the journal cap; `//transport:read-bulk-tests` asserts the line after a short chunk (count `0xfffc0`) and after a provider failure (status -7, count 30000).
+- F2: the rate gate and the stop recovery in section 4.
+- F3: windows whose physical end exceeds `0x0b3f6e00` are refused (E-BULK-READ-BOUND-150).
+- F4: `txWithin` refuses a bulk IN above 292 bytes before the provider; only the read-bulk chunk path, which calls `dispatchTransfer` directly, admits up to `0x100000`.
+- F5: tests for a chunk past the 5000 ms budget, a `(1,0xffff)` or `(9,1)` query over an earlier published pair and a nonzero reply word at `+0x0c`, plus `fuji_usb_transfer_size_admitted`, the shim's per-kind size gate, called from `//transport:native-usb-tests`.
+- F6 and F7: the zero-length-packet outcome, the check plan and run 2's acceptance in section 4.
+
 ## 3. Emulator evidence
 
 `//emulation:xm1-bulk-read-e2e` ran the real `runReadBulk` and `runReadRam` against the emulated X-M1 1.50 through the stock guest USB task, controller and DMA path in the ordinary-boot ff80 attach with stored `0xf7 = 1` (E-BULK-READ-E2E-150). The guest programmed one 1 MiB DMA per E1 with source `0x00bf1a00` for address `0x00bf1a00` and with the same physical source for the alias `0x40bf1a00`. The 4 MiB capture, the 128-window D1 capture and the 1 MiB alias capture equal the emulated memory read afterwards; the 4 MiB capture differs from the load-time decode of image 5 in 9 bytes of writable words the running image has changed. In this emulator the bulk path moved 88.7 times as many bytes per guest instruction and 86 times as many per bridge second as the D1 reader. The bridge paces each 64-byte IN packet at 20,000 instructions, so neither figure predicts the body's rate.
@@ -42,16 +53,20 @@ devenv shell -- bazel run //transport:camera -- read-bulk 0x00c00000 0x10000
 devenv shell -- bazel run //transport:camera -- read-ram "$PWD/private-data/read-plans/read-bulk-check.json"
 ```
 
-The E1 frame is `e1 00 b5 91 32 00 00 01 00 00 S_hi S_lo`. `read-bulk-check.json` lists three 248-byte windows at `0x00c00000`, `0x00c08000` and `0x00c0ff08`; `read-ram` is covered by the standing grant and its bytes are compared offline with the same offsets of the `read-bulk` capture.
+The E1 frame is `e1 00 b5 91 32 00 00 01 00 00 S_hi S_lo`. `private-data/read-plans/read-bulk-check.json` (SHA-256 `a2998a10e0e6adbefd0aa32c5aa2e6d53f2174e07e171d9e4c3762bb050af9a4`, rehearsed: 3 read requests, no write) lists three 248-byte windows at `0x00c00000`, `0x00c08000` and `0x00c0ff08`; `read-ram` is covered by the standing grant and its bytes are compared offline with the same offsets of the `read-bulk` capture.
 
-Run 2, after run 1 compares equal, 4 MiB of image 5 as in the emulator run:
+Run 1 passes when the session completes, the three `read-ram` windows equal the capture at their offsets and the result line's `bytes-per-s` is at least 840,000: 1 MiB in at most 1250 ms, a quarter of the per-transfer budget, measured with E1 and the capture write included, so it under-reads the DMA rate. Below that, or on any other run-1 outcome, run 2 is not sent and the result is reported.
+
+Run 2, after run 1 passes, 4 MiB of image 5 as in the emulator run:
 
 ```sh
 devenv shell -- bazel run //transport:camera -- read-bulk 0x00bf1a00 0x400000
 ```
 
-Its E1 frames are `e1 00 b5 90 4c 00 00 10 00 00 S_hi S_lo`, `e1 00 b5 a0 4c 00 ...`, `e1 00 b5 b0 4c 00 ...` and `e1 00 b5 c0 4c 00 ...`, each with length `0x00100000`. The capture is compared offline with the installed image's decode and with run 1, and the result line's `bytes-per-s` is the first measured rate on this body.
+Its E1 frames are `e1 00 b5 90 4c 00 00 10 00 00 S_hi S_lo`, `e1 00 b5 a0 4c 00 ...`, `e1 00 b5 b0 4c 00 ...` and `e1 00 b5 c0 4c 00 ...`, each with length `0x00100000`. Run 2 is accepted when the session completes, its bytes at `[0x00c00000,0x00c10000)` equal run 1's capture and the `read-ram` windows, and every difference from the installed image-5 decode lies in a word the running image writes; the emulator shows 9 such bytes in this window, at `0x00d0cd9c`, `0x00d3d53c`, `0x00d7ee66`-`0x00d7ee76` and `0x00dca960` (E-BULK-READ-E2E-150). Its `bytes-per-s` is the first 1 MiB-chunk rate on this body.
 
-Stops: any refusal, uncertain cleanup, disconnect, short chunk or reply other than the documented ones ends the runs, and camera runs pause until the owner has been told. Neither run writes, so ending it needs no supply cut; the owner confirms ordinary operation afterwards (shooting screen, one shot and playback).
+A zero-length packet after a 64 KiB or 1 MiB transfer is a possible outcome: every bulk IN the body has answered so far is shorter than one high-speed packet, and whether the controller ends a 512-multiple transfer with one is unobserved. It would show as a zero-count C4 reply or a short next chunk; either stops the run, and it is reported as that observation, not as a camera fault.
 
-Not proposed: windows above physical `0x0b32cdff`, the highest address hardware-observed so far (E-PREINSTALL-MEDIA-150), until DRAM size is established; a whole-DRAM capture; any window in the staging pool while the camera may be writing it.
+Stops: any refusal, uncertain cleanup, disconnect, short chunk or reply other than the documented ones ends the runs, and camera runs pause until the owner has been told. After any stop inside the chunk loop (a transfer timeout, a short chunk, a disconnect or an uncertain cleanup) the endpoint may still hold undelivered chunk data, so no camera command of any kind, `read-ram` under the standing grant included, is sent until the owner has unplugged USB, power-cycled the body and confirmed ordinary operation. Neither run writes, so ending it needs no supply cut; the owner confirms ordinary operation afterwards (shooting screen, one shot and playback).
+
+Not proposed: a whole-DRAM capture, and any window in the staging pool while the camera may be writing it. The tool refuses windows whose physical end exceeds `0x0b3f6e00`, the end of the stock staging window; the highest bytes read from the body so far end at physical `0x0b38cdff` (E-BULK-READ-BOUND-150).

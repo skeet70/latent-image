@@ -18,7 +18,7 @@
 -- E1 and C4. No config write, RAM write or gate write exists here.
 module FujiAF.ReadBulk
   ( BulkWindow, mkBulkWindow, bulkWindowAddress, bulkWindowBytes
-  , bulkWindowRanges, bulkAddressAlignment, bulkLengthGranule, bulkWindowCapBytes
+  , bulkWindowRanges, bulkPhysicalEnd, bulkAddressAlignment, bulkLengthGranule
   , bulkChunkBytes, bulkChunks, bulkChunkCount
   , bulkSourcePointer, bulkSourceCapacities, bulkSourceStateAddress, bulkSourceStateBytes
   , bulkQueryOpcode, bulkQueryTag, bulkQueryRequestBytes, bulkQueryReplyBytes
@@ -53,7 +53,7 @@ import FujiAF.StoredGate (openReplyTail)
 import FujiAF.SHA256 (sha256)
 import qualified FujiAF.Broker as P
 
--- A window inside one DRAM range.
+-- A window inside one DRAM range whose physical end is at most bulkPhysicalEnd.
 data BulkWindow = BulkWindow { bulkWindowAddress :: Int, bulkWindowBytes :: Int }
   deriving (Eq, Show)
 
@@ -62,6 +62,12 @@ data BulkWindow = BulkWindow { bulkWindowAddress :: Int, bulkWindowBytes :: Int 
 bulkWindowRanges :: [(Int,Int)]
 bulkWindowRanges = readRamDramRanges
 
+-- The end of the stock bulk source's largest window, 0x4b2ece00 + 0x108000
+-- at physical 0x0b2ece00 (E-BULK-READ-BOUND-150). Populated DRAM above it is
+-- not established.
+bulkPhysicalEnd :: Int
+bulkPhysicalEnd = 0x0b3f6e00
+
 -- The DMA source register drops bits 1:0 and 0x00d7c92c rounds the DMA
 -- length up to 64 bytes, so a 64-byte multiple fetches nothing past the
 -- window.
@@ -69,14 +75,10 @@ bulkAddressAlignment, bulkLengthGranule :: Int
 bulkAddressAlignment = 4
 bulkLengthGranule = 64
 
--- One DRAM range: 512 chunks.
-bulkWindowCapBytes :: Int
-bulkWindowCapBytes = 0x20000000
-
 mkBulkWindow :: Int -> Int -> Either String BulkWindow
 mkBulkWindow address bytes
-  | bytes < bulkLengthGranule || bytes > bulkWindowCapBytes =
-      Left ("read-bulk length must be "++show bulkLengthGranule++"..0x"++probeName bulkWindowCapBytes++" bytes, not "++show bytes)
+  | bytes < bulkLengthGranule =
+      Left ("read-bulk length must be at least "++show bulkLengthGranule++" bytes, not "++show bytes)
   | address `mod` bulkAddressAlignment /= 0 =
       Left ("read-bulk address must be a multiple of "++show bulkAddressAlignment)
   | bytes `mod` bulkLengthGranule /= 0 =
@@ -84,6 +86,9 @@ mkBulkWindow address bytes
   | not (any (\(low,high) -> low <= address && address + bytes <= high) bulkWindowRanges) =
       Left ("read-bulk window [0x"++probeName address++",0x"++probeName (address+bytes)++") is outside "
             ++intercalate ", " ["[0x"++probeName low++",0x"++probeName high++")" | (low,high) <- bulkWindowRanges])
+  | (address .&. 0x3fffffff) + bytes > bulkPhysicalEnd =
+      Left ("read-bulk window ends at physical 0x"++probeName ((address .&. 0x3fffffff) + bytes)
+            ++", above 0x"++probeName bulkPhysicalEnd++", the highest DRAM end the record establishes")
   | otherwise = Right (BulkWindow address bytes)
 
 -- The query's base capacity; every chunk fits either published capacity.

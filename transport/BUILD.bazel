@@ -102,8 +102,8 @@ haskell_library(
 )
 
 # The one test that runs the C: repeated enumeration of the host bus, needing
-# no camera. Every other test injects its own UsbApi or NativeCalls and cannot
-# fail on the C.
+# no camera, and the shim's transfer size gate. Every other test injects its
+# own UsbApi or NativeCalls and cannot fail on the C.
 haskell_test(
     name = "native-usb-tests",
     srcs = ["NativeUsbTest.hs"],
@@ -111,6 +111,7 @@ haskell_test(
     deps = [
         ":camera-core",
         ":native-provider",
+        ":native-shim",
         "//host:base",
         "//broker:core",
     ],

@@ -60,22 +60,31 @@ data Fake = Fake
   , fakePointer :: Int
   , fakeCapacity :: Int
   , fakeQueryStatus :: (Int,Int)
+  , fakeQueryWord0c :: Int
+  -- A source pair already published by an earlier query, which a refused
+  -- query leaves in place.
+  , fakePrepublished :: Bool
   , fakeShortChunk :: Maybe Int
+  -- Chunk index, native status and partial count of a provider failure.
+  , fakeFailChunk :: Maybe (Int,Int,Int)
+  -- A chunk whose bulk IN takes six seconds of the session clock.
+  , fakeSlowChunk :: Maybe Int
   , fakeJournal :: Maybe FilePath
   }
 
 fake :: Fake
-fake = Fake 1 0x4b2ece00 0x100000 (0,0) Nothing Nothing
+fake = Fake 1 0x4b2ece00 0x100000 (0,0) 0 False Nothing Nothing Nothing Nothing
 
-data Pending = NoReply | Reply [Word8] | AwaitOut Int
+data Pending = NoReply | Reply [Word8] | Chunk Int [Word8] | AwaitOut Int
 
--- The device and the log of every transfer it received.
-fakeApi :: Fake -> IO (UsbApi, IORef [P.Transfer])
-fakeApi f = do
+-- The device and the log of every transfer it received; a slow chunk adds to
+-- the clock skew.
+fakeApi :: Fake -> IORef Word64 -> IO (UsbApi, IORef [P.Transfer])
+fakeApi f skew = do
   seen <- newIORef []
   pending <- newIORef NoReply
   request <- newIORef []
-  published <- newIORef Nothing
+  published <- newIORef (if fakePrepublished f then Just (fakePointer f, fakeCapacity f) else Nothing)
   bulkCount <- newIORef (0::Int)
   let transfer packet _ = do
         modifyIORef' seen (++[packet])
@@ -100,7 +109,7 @@ fakeApi f = do
                         start = (pointer + offset) .&. 0xffffffff
                     index <- atomicModifyIORef' bulkCount (\n -> (n+1,n))
                     let served = if fakeShortChunk f == Just index then min size capacity - 64 else min size capacity
-                    writeIORef pending (Reply [memoryByte ((start + i) .&. 0xffffffff) | i <- [0 .. served-1]])
+                    writeIORef pending (Chunk index [memoryByte ((start + i) .&. 0xffffffff) | i <- [0 .. served-1]])
               0xc4 -> writeIORef pending (Reply [0,0])
               _ -> throwIO (userError "fake: unknown control")
             pure (12,[])
@@ -113,6 +122,11 @@ fakeApi f = do
             writeIORef pending NoReply
             case state of
               Reply bytes -> let sent = take count bytes in pure (length sent, sent)
+              Chunk index bytes -> do
+                when (fakeSlowChunk f == Just index) (modifyIORef' skew (+ 6000000000))
+                case fakeFailChunk f of
+                  Just (failing,status,partial) | failing == index -> throwIO (ProviderFailure status partial (take partial bytes))
+                  _ -> let sent = take count bytes in pure (length sent, sent)
               _ -> pure (0,[])
           _ -> throwIO (userError "fake: unsupported transfer")
       d1 frame
@@ -122,7 +136,7 @@ fakeApi f = do
         | frame == queryFrame = do
             let (e1,e2) = fakeQueryStatus f
             when ((e1,e2) == (0,0)) (writeIORef published (Just (fakePointer f, fakeCapacity f)))
-            pure (le32 0x450006 ++ le32 e1 ++ le32 e2 ++ le32 0 ++ le32 0 ++ le32 (if (e1,e2) == (0,0) then fakeCapacity f else 0) ++ le32 0 ++ le32 0)
+            pure (le32 0x450006 ++ le32 e1 ++ le32 e2 ++ le32 (fakeQueryWord0c f) ++ le32 0 ++ le32 (fakeCapacity f) ++ le32 0 ++ le32 0)
         | take 4 frame == [0x01,0x00,0x20,0x00] = do
             source <- readIORef published
             let address = u32 0x1c frame
@@ -138,10 +152,12 @@ fakeApi f = do
   pure (UsbApi (\_ -> pure ()) (\_ -> pure [Candidate "001:2" 0x04cb 0xff80 (Descriptors 1 0 0 255 0 0 0x81 2 512 512 0 1 [])])
                 (\_ _ -> pure ()) (\_ _ -> pure ()) transfer (\_ _ -> pure ()) (\_ -> pure ()) (\_ -> pure ()), seen)
 
-steppingClock :: IO Clock
-steppingClock = do
+-- One microsecond per reading plus the skew a slow chunk adds.
+steppingClock :: IORef Word64 -> IO Clock
+steppingClock skew = do
   now <- newIORef (1000000000 :: Word64)
-  pure (TimedClock (atomicModifyIORef' now (\t -> (t+1000,t))) (\ms -> modifyIORef' now (+ fromIntegral ms*1000000)))
+  let reading = (+) <$> atomicModifyIORef' now (\t -> (t+1000,t)) <*> readIORef skew
+  pure (TimedClock reading (\ms -> modifyIORef' now (+ fromIntegral ms*1000000)))
 
 window :: Int -> Int -> BulkWindow
 window address size = either error id (mkBulkWindow address size)
@@ -159,22 +175,24 @@ main = do
         pure dir
       runOn f w = do
         dir <- session
-        (api,seen) <- fakeApi f { fakeJournal = Just dir }
-        clock <- steppingClock
+        skew <- newIORef 0
+        (api,seen) <- fakeApi f { fakeJournal = Just dir } skew
+        clock <- steppingClock skew
         outcome <- try (runReadBulk w clock api dir)
         transfers <- readIORef seen
         pure (dir, outcome :: Either SomeException ReadBulkReport, transfers)
       e1s transfers = [frame | P.ControlWrite _ _ _ _ frame@(0xe1:_) <- transfers]
       closed transfers = control 0xc4 2 `elem` transfers
 
-  -- Window validation.
-  check "accepts the image-5 window" (either (const False) (const True) (mkBulkWindow 0x00bf1a00 0x400000))
-  check "accepts the alias range end" (either (const False) (const True) (mkBulkWindow 0x5ff00000 0x100000))
-  check "accepts the DRAM range end" (either (const False) (const True) (mkBulkWindow 0x1fffffc0 0x40))
+  -- Window validation: DRAM or its alias, physical end at most 0x0b3f6e00.
+  forM_ [ (0x00bf1a00, 0x400000, "the image-5 window"), (0x0b3f6dc0, 0x40, "a window ending at 0x0b3f6e00")
+        , (0x4b2ece00, 0x108000, "the stock staging window through the alias"), (0x00000000, 0x40, "address 0") ] $ \(a,l,label) ->
+    check ("accepts "++label) (either (const False) (const True) (mkBulkWindow a l))
   forM_ [ (0x00bf1a02, 0x100, "unaligned address"), (0x00bf1a00, 0x104, "length not a 64-byte multiple")
-        , (0x00bf1a00, 0, "empty window"), (0x1fffff00, 0x200, "crosses the DRAM end")
+        , (0x00bf1a00, 0, "empty window"), (0x0b3f6dc0, 0x80, "a physical end past 0x0b3f6e00")
+        , (0x4b3f6dc0, 0x80, "an alias physical end past 0x0b3f6e00"), (0x1fffff00, 0x200, "crosses the DRAM end")
         , (0x3fffff00, 0x100, "between the ranges"), (0x80000000, 0x100, "boot ROM")
-        , (0xfff50000, 0x40, "peripheral"), (0x00000000, 0x20000040, "above the length cap") ] $ \(a,l,label) ->
+        , (0xfff50000, 0x40, "peripheral"), (0x00000000, 0x20000040, "the whole range") ] $ \(a,l,label) ->
     check ("refuses "++label) (either (const True) (const False) (mkBulkWindow a l))
 
   -- The CLI shape.
@@ -226,10 +244,43 @@ main = do
   _ <- stopsBeforeE1 "another source pointer" fake { fakePointer = 0x42e40000 }
   _ <- stopsBeforeE1 "an unexpected capacity" fake { fakeCapacity = 0x80000 }
   _ <- stopsBeforeE1 "a refused query" fake { fakeQueryStatus = (1,0xffff) }
-  (_,shortOutcome,shortTransfers) <- runOn fake { fakeShortChunk = Just 1 } span'
+  _ <- stopsBeforeE1 "a refused query over an earlier published pair" fake { fakeQueryStatus = (1,0xffff), fakePrepublished = True }
+  _ <- stopsBeforeE1 "a short query request reply over an earlier published pair" fake { fakeQueryStatus = (9,1), fakePrepublished = True }
+  _ <- stopsBeforeE1 "a nonzero query reply word at +0x0c" fake { fakeQueryWord0c = 1 }
+
+  let nativeOutcomes session' = filter ("native-outcome" `isInfixOf`) . lines <$> readFile (session' </> "journal.v1")
+  (shortDir,shortOutcome,shortTransfers) <- runOn fake { fakeShortChunk = Just 1 } span'
   check "a short chunk stops the run" (either (const True) (const False) shortOutcome)
   check "a short chunk is not retried and no later chunk is sent" (length (e1s shortTransfers) == 2)
   check "a short chunk still closes" (closed shortTransfers)
+  shortLines <- nativeOutcomes shortDir
+  check ("a short chunk journals status 0 and count 0xfffc0 with a digest: "++show shortLines)
+    (any (\l -> "(0,1048512,\\\"sha256=" `isInfixOf` l) shortLines)
+
+  (failDir,failOutcome,failTransfers) <- runOn fake { fakeFailChunk = Just (0,-7,30000) } (window 0x00c00000 0x10000)
+  check "a provider failure stops the run and names the native status"
+    (either (\e -> "native transfer status -7" `isInfixOf` displayException e) (const False) failOutcome)
+  check "a provider failure is not retried" (length (e1s failTransfers) == 1)
+  check "a provider failure still closes" (closed failTransfers)
+  failLines <- nativeOutcomes failDir
+  check ("a provider failure journals status -7 and count 30000 with a digest: "++show failLines)
+    (any (\l -> "(-7,30000,\\\"sha256=" `isInfixOf` l) failLines)
+
+  (_,slowOutcome,slowTransfers) <- runOn fake { fakeSlowChunk = Just 0 } span'
+  check "a chunk past the 5000 ms transfer budget stops the run" (either (const True) (const False) slowOutcome)
+  check "a slow chunk is not retried and no later chunk is sent" (length (e1s slowTransfers) == 1)
+  check "a slow chunk still closes" (closed slowTransfers)
+
+  -- Through txWithin a bulk IN above 292 bytes is refused before the provider.
+  txDir <- session
+  txSkew <- newIORef 0
+  (txApi,txSeen) <- fakeApi fake txSkew
+  txClock <- steppingClock txSkew
+  s <- newSession txClock txApi txDir 65536 60000
+  refused <- try (tx s (P.BulkIn 0x81 293) 293)
+  check "tx refuses a 293-byte bulk IN" (either (\(_::SomeException) -> True) (const False) refused)
+  txTransfers <- readIORef txSeen
+  check "the refused bulk IN never reaches the provider" (null txTransfers)
 
   removeDirectoryRecursive root
   putStrLn "read-bulk tests: ok"

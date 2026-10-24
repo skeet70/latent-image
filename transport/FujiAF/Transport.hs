@@ -7,6 +7,7 @@ import Control.Concurrent (threadDelay)
 import Control.Exception
 import Control.Monad (unless, when)
 import Data.Bits ((.&.))
+import qualified Crypto.Hash.SHA256 as H
 import qualified Data.ByteString as B
 import Data.IORef
 import Data.Word (Word8, Word64)
@@ -150,6 +151,14 @@ journalLine tick kind body = show (1::Int,"camera"::String,tick,kind,body)++"\n"
 nativeOutcomeBody :: Int -> Int -> [Word8] -> String
 nativeOutcomeBody result count bytes = show (result,count,P.hexBytes bytes)
 
+-- The native-outcome body of one transfer: status, count and the reply bytes
+-- as hex, or their SHA-256 for a bulk IN above transferCeilingBytes.
+nativeOutcomeFor :: P.Transfer -> Int -> Int -> [Word8] -> String
+nativeOutcomeFor packet result count bytes = case packet of
+  P.BulkIn _ n | n > transferCeilingBytes ->
+    show (result,count,"sha256="++P.hexBytes (B.unpack (H.hash (B.pack bytes))))
+  _ -> nativeOutcomeBody result count bytes
+
 -- The tick of a journal line at its widest.
 widestJournalTick :: String
 widestJournalTick = show (maxBound :: Word64)
@@ -268,13 +277,17 @@ dispatchTransfer s packet ms = do
     Right (count,bytes) -> do
       when (sessionOutcomes s == EveryOutcome || count /= transferLength packet) (record 0 count bytes)
       pure (count,bytes)
-  where record result count bytes = note s "native-outcome" (nativeOutcomeBody result count bytes)
+  where record result count bytes = note s "native-outcome" (nativeOutcomeFor packet result count bytes)
 
+-- A bulk IN above transferCeilingBytes is a read-bulk chunk, which calls
+-- dispatchTransfer directly; through here it is refused before the provider.
 txWithin :: Int -> Session -> P.Transfer -> Int -> IO [Word8]
 txWithin budget s packet count = do
   case packet of
     P.ControlWrite _ _ _ _ bytes -> note s "outgoing-before-dispatch" (show packet++";bytes="++P.hexBytes bytes)
     P.BulkOut _ bytes -> note s "outgoing-before-dispatch" (show packet++";bytes="++P.hexBytes bytes)
+    P.BulkIn _ n | n > transferCeilingBytes ->
+      P.reject ("bulk IN of "++show n++" bytes above "++show transferCeilingBytes++" outside the read-bulk chunk path")
     _ -> pure ()
   (n,bytes) <- boundedWithin budget s ("dispatch "++show packet) $ \ms -> do
     outcome <- dispatchTransfer s packet ms
