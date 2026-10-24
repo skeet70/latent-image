@@ -39,6 +39,24 @@ pub struct BootRom {
     pub bytes: usize,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Policy {
+    /// Stop at exact instruction boundaries.
+    Exact,
+    /// Let workers overshoot to block boundaries.
+    Interactive,
+}
+
+impl From<Policy> for fujimod_emulator_cpu::ExecutionPolicy {
+    fn from(policy: Policy) -> Self {
+        match policy {
+            Policy::Exact => Self::Exact,
+            Policy::Interactive => Self::Interactive,
+        }
+    }
+}
+
 /// Everything a run needs besides the firmware and boot-ROM bytes.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,6 +64,7 @@ pub struct RunDocument {
     pub schema: u32,
     pub catalog_configuration: CatalogConfiguration,
     pub execution: RunExecution,
+    pub execution_policy: Policy,
     /// DAT offset of the complemented NAND image.
     pub update_flash_offset: usize,
     pub boot_rom: BootRom,

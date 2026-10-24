@@ -91,6 +91,24 @@ haskell_binary(
     ],
 )
 
+haskell_binary(
+    name = "fujimod-flash-boot-check",
+    srcs = ["FujiModFlashBootCheck.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":emulator-slot-lib",
+        ":flash-boot-route-lib",
+        ":viewer-runtime-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+    ],
+)
+
 haskell_library(
     name = "ui-trajectory-lib",
     srcs = ["Emulation/UiTrajectory.hs"],
