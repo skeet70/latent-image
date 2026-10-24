@@ -1,0 +1,33 @@
+{
+  "images": {
+    "live_image": {
+      "asset": "x70-110-rec.live-pixels",
+      "height": 853,
+      "stride": 4992,
+      "width": 2496
+    }
+  },
+  "nands": {
+    "nand": {
+      "base": "nand_base",
+      "kind": "raw",
+      "options": {
+        "bytes": 134217728,
+        "page_bytes": 2048,
+        "pages_per_block": 64,
+        "spare_bytes": 512
+      },
+      "overlays": [],
+      "spare": []
+    }
+  },
+  "statistics": {
+    "live_statistics": [
+      {
+        "asset": "x70-110-rec.live-statistics",
+        "destination": 2,
+        "offset": 0
+      }
+    ]
+  }
+}
