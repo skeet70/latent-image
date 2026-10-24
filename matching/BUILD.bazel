@@ -1,12 +1,30 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 
-exports_files(["pilot-functions.json"])
+exports_files([
+    "pilot-functions.json",
+    "unit-gate.json",
+])
 
 _GHCOPTS = [
     "-Wall",
     "-Werror",
     "-O1",
     "-XGHC2021",
+]
+
+_TOOLCHAIN_ARGS = [
+    "--gcc",
+    "4.6.4=$(rootpath @lab_exr2_gcc//:gcc-4.6.4/bin/arm-linux-gnueabi-gcc)",
+    "--gcc",
+    "4.4.7=$(rootpath @lab_exr2_gcc//:gcc-4.4.7/bin/arm-linux-gnueabi-gcc)",
+    "--ld",
+    "$(rootpath @lab_exr2_gcc//:binutils/bin/arm-linux-gnueabi-ld)",
+]
+
+_TOOLCHAIN_DATA = [
+    "@lab_exr2_gcc//:binutils/bin/arm-linux-gnueabi-ld",
+    "@lab_exr2_gcc//:gcc-4.4.7/bin/arm-linux-gnueabi-gcc",
+    "@lab_exr2_gcc//:gcc-4.6.4/bin/arm-linux-gnueabi-gcc",
 ]
 
 haskell_library(
@@ -18,6 +36,24 @@ haskell_library(
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+    ],
+)
+
+haskell_library(
+    name = "build",
+    srcs = ["FujiAF/Matching/Build.hs"],
+    ghcopts = _GHCOPTS,
+    src_strip_prefix = ".",
+    deps = [
+        ":compare",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
     ],
 )
 
@@ -41,29 +77,40 @@ haskell_binary(
     args = [
         "--manifest",
         "$(rootpath :pilot-functions.json)",
-        "--gcc",
-        "4.6.4=$(rootpath @lab_exr2_gcc//:gcc-4.6.4/bin/arm-linux-gnueabi-gcc)",
-        "--gcc",
-        "4.4.7=$(rootpath @lab_exr2_gcc//:gcc-4.4.7/bin/arm-linux-gnueabi-gcc)",
-        "--ld",
-        "$(rootpath @lab_exr2_gcc//:binutils/bin/arm-linux-gnueabi-ld)",
-    ],
-    data = [
-        ":pilot-functions.json",
-        "@lab_exr2_gcc//:binutils/bin/arm-linux-gnueabi-ld",
-        "@lab_exr2_gcc//:gcc-4.4.7/bin/arm-linux-gnueabi-gcc",
-        "@lab_exr2_gcc//:gcc-4.6.4/bin/arm-linux-gnueabi-gcc",
-    ],
+    ] + _TOOLCHAIN_ARGS,
+    data = [":pilot-functions.json"] + _TOOLCHAIN_DATA,
     ghcopts = _GHCOPTS,
     deps = [
+        ":build",
         ":compare",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:containers",
-        "//host:cryptohash-sha256",
         "//host:directory",
         "//host:filepath",
-        "//host:process",
+    ],
+)
+
+# Owner-supplied inputs: --x70view CHECKOUT --out NEW_DIR --image IMAGE, plus
+# the optional patch arguments. See README.md.
+haskell_binary(
+    name = "unit-gate",
+    srcs = ["UnitGate.hs"],
+    args = [
+        "--manifest",
+        "$(rootpath :unit-gate.json)",
+    ] + _TOOLCHAIN_ARGS,
+    data = [":unit-gate.json"] + _TOOLCHAIN_DATA,
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":build",
+        ":compare",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
     ],
 )
