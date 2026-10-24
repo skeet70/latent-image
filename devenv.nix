@@ -45,6 +45,8 @@ in {
   env.XM1_VIEWER_PYTHON = "${xm1Python}/bin/python3";
   env.XM1_VIEWER_NATIVE_PACKAGE = "${xm1Native}";
   env.X70_UNICORN_LIBRARY = "${unicornX70}/lib/libunicorn.so.2";
+  # Emulator checkpoint keys hash multi-GiB card images with it.
+  env.XM1_OPENSSL = "${pkgs.openssl.bin}/bin/openssl";
 
   # No activation hook may enumerate or open a camera.
 }

@@ -547,6 +547,8 @@ haskell_library(
         "//host:base",
         "//host:bytestring",
         "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:process",
     ],
 )
 
