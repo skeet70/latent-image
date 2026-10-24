@@ -67,6 +67,81 @@ pub struct FirmwareFacts {
     pub key_table: KeyTable,
     pub released_sample: u16,
     pub keys: Vec<AdcKey>,
+    pub mode_dial: ModeDial,
+    pub dial_push: GpioKey,
+    pub render: crate::render::RenderFacts,
+}
+
+/// A GPIO key row of the control table (class 2): the pad it samples and its pressed level.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GpioKey {
+    pub code: u32,
+    pub row: u64,
+    pub port: u8,
+    pub pin: u8,
+    pub pressed_high: bool,
+}
+
+/// Mode-dial detents in the bridge protocol's names.
+#[derive(Clone, Copy, Debug, Deserialize, serde::Serialize, PartialEq, Eq)]
+pub enum ModeDialPosition {
+    S,
+    P,
+    #[serde(rename = "SR+")]
+    SrAuto,
+    #[serde(rename = "AUTO")]
+    Auto,
+    #[serde(rename = "Adv.")]
+    Advanced,
+    #[serde(rename = "SP")]
+    Scene,
+    Sports,
+    Landscape,
+    Portrait,
+    C,
+    M,
+    A,
+}
+
+impl ModeDialPosition {
+    pub fn parse(name: &str) -> Result<Self, String> {
+        serde_json::from_value(serde_json::Value::String(name.to_owned()))
+            .map_err(|_| format!("unknown mode-dial position {name}"))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModeDialRow {
+    pub position: ModeDialPosition,
+    pub code: u32,
+    pub row: u64,
+    pub low_tag: u16,
+    pub high_tag: u16,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModeDial {
+    pub channel: usize,
+    /// Positions the session runs past; the others reach unmodelled devices.
+    pub running: Vec<ModeDialPosition>,
+    pub rows: Vec<ModeDialRow>,
+}
+
+/// A position's loaded calibrated interval.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModeDialWindow {
+    pub position: ModeDialPosition,
+    pub low: u16,
+    pub high: u16,
+}
+
+impl ModeDialWindow {
+    pub fn midpoint(&self) -> u16 {
+        (self.low + self.high) / 2
+    }
 }
 
 /// The firmware's retained current menu node.
@@ -104,8 +179,60 @@ impl FirmwareFacts {
         }))
     }
 
-    fn binding(&self, key: RouteKey) -> Result<&AdcKey, String> {
+    pub fn binding(&self, key: RouteKey) -> Result<&AdcKey, String> {
         self.keys.iter().find(|binding| binding.key == key).ok_or_else(|| format!("{key:?} has no ADC row"))
+    }
+
+    fn calibration(&self, session: &Session) -> Result<u64, String> {
+        let base = u64::from(word(session, self.calibration_pointer.0)?);
+        if base == 0 {
+            return Err("X-M1 calibration is not loaded".into());
+        }
+        Ok(base)
+    }
+
+    /// Loaded windows in row order; the firmware keeps the first row that contains a sample.
+    fn mode_dial_windows(&self, session: &Session) -> Result<Vec<ModeDialWindow>, String> {
+        let base = self.calibration(session)?;
+        self.mode_dial
+            .rows
+            .iter()
+            .map(|row| {
+                let record = bytes::<28>(session, self.key_table.base.0 + row.row * self.key_table.row_bytes)?;
+                let field = |at: usize| u32::from_le_bytes([record[at], record[at + 1], record[at + 2], record[at + 3]]);
+                if field(0) != row.code
+                    || record[8] != 1
+                    || record[9] != 1
+                    || usize::try_from(field(12)).ok() != Some(self.mode_dial.channel)
+                    || u16::from_le_bytes([record[16], record[17]]) != row.low_tag
+                    || u16::from_le_bytes([record[18], record[19]]) != row.high_tag
+                {
+                    return Err(format!("mode-dial row {} differs from its declared binding", row.row));
+                }
+                let low = half(session, base + u64::from(row.low_tag))?;
+                let high = half(session, base + u64::from(row.high_tag))?;
+                if low > high || high > self.released_sample {
+                    return Err(format!("mode-dial row {} has no window in the 10-bit range", row.row));
+                }
+                Ok(ModeDialWindow { position: row.position, low, high })
+            })
+            .collect()
+    }
+
+    pub fn mode_dial_window(&self, session: &Session, position: ModeDialPosition) -> Result<ModeDialWindow, String> {
+        if !self.mode_dial.running.contains(&position) {
+            return Err(format!("{position:?} stops the emulator at an unmodelled device"));
+        }
+        let windows = self.mode_dial_windows(session)?;
+        let window = *windows
+            .iter()
+            .find(|window| window.position == position)
+            .ok_or_else(|| format!("{position:?} has no mode-dial row"))?;
+        let first = windows.iter().find(|candidate| (candidate.low..=candidate.high).contains(&window.midpoint()));
+        if first.map(|candidate| candidate.position) != Some(position) {
+            return Err(format!("{position:?} midpoint selects an earlier row"));
+        }
+        Ok(window)
     }
 
     /// The loaded pressed interval of one key, checked against its table row.
@@ -151,6 +278,27 @@ impl FirmwareFacts {
             }
         }
         Ok((binding.channel, midpoint))
+    }
+
+    /// The dial-push row, checked against its declared pad and level.
+    pub fn dial_push(&self, session: &Session) -> Result<&GpioKey, String> {
+        let key = &self.dial_push;
+        let record = bytes::<28>(session, self.key_table.base.0 + key.row * self.key_table.row_bytes)?;
+        let target = u32::from_le_bytes([record[12], record[13], record[14], record[15]]);
+        let pressed = u16::from_le_bytes([record[0x12], record[0x13]]);
+        if u32::from_le_bytes([record[0], record[1], record[2], record[3]]) != key.code
+            || record[9] != 2
+            || target != u32::from(key.port) << 16 | u32::from(key.pin)
+            || pressed != u16::from(key.pressed_high)
+        {
+            return Err(format!("GPIO key row {} differs from its declared binding", key.row));
+        }
+        Ok(key)
+    }
+
+    pub fn dial_push_released(&self, session: &Session) -> Result<bool, String> {
+        let address = self.key_table.base.0 + self.dial_push.row * self.key_table.row_bytes + self.key_table.released_offset;
+        Ok(bytes::<1>(session, address)?[0] == 0)
     }
 
     pub fn released(&self, session: &Session, key: RouteKey) -> Result<bool, String> {

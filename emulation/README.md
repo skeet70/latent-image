@@ -594,6 +594,29 @@ The run document `emulation/fujimod-xm1/data/xm1-150.json` keeps the node set, w
 
 Observed 2026-10-24 (emulated, E-FUJIMOD-XM1-FLASH-BOOT-150): stock 1.50 shows START MENU (69, 52, 12) at 80,000,000 instructions. The language phase ends at 234,250,000 on the date page (67, 56, 0), the date phase at 242,500,000 and live view at 282,500,000. MENU makes (1, 5, 2) current at 292,000,000, and the check passes at 382,000,000 with the rendered SHOOTING MENU page 1. Two runs gave identical counts and frames, in 4.4 s of driver time and 5.0 s for the whole `bazel run`, against 29.7 s for `//emulation:flash-boot-check` on the same host and DAT. The UDF control stops at 6,136,307 instructions on an invalid instruction at PC `0x0069cdf8` and fails as `model-stopped` in the language phase. FujiMod's counts are a new baseline, not comparable with the retained engine's.
 
+### RAM-push bridge on FujiMod
+
+`//emulation:xm1-viewer -- --ram-push-e2e --cardless --fujimod ...` runs the unchanged `Xm1RamPushE2E.hs` and `EmulatorUsb.hs` against `fujimod-xm1-ram-push` (crate `emulation/fujimod-xm1`, built by `@lab_fujimod_xm1`) in place of `cardless-ram-push-bridge`. It takes the same `--firmware`, `--installed-nand`, `--trajectories`, `--fresh-boot`, `--output` and `--receipt-output` options; card-backed runs and `--attach-hold-q` are refused, and the UI conversion profile is not forwarded. Checkpoints live under `private-data/emulator-checkpoints/xm1-ram-push-fujimod-cardless/` as FujiMod session snapshots, keyed by the DAT, adjustment NAND, run document, boot ROM and bridge binary. The bridge writes `emulator-session.json` into the receipt directory on `finish`.
+
+The bridge speaks the cardless bridge's events and commands (`start-options`, `start`, `ready`, `list`, `transfer`, `trace-sites`, `trace-hits`, `key`, `mode-dial`, `read-memory`, `capture`, `save-install-checkpoint`, `finish`). It maps them onto FujiMod's session API with no FujiMod source change:
+- USB host operations and bus state drive the ff80 endpoint, which uses the `xm1-rec.json` endpoint contract and IRQ 84/85 on core 0.
+- Instruction points on both cores serve the trace sites. The rendezvous UP hold is applied at `rendezvous-locked`.
+- The calibrated ADC midpoints of control-table rows 14-20 drive keys, rows 24-35 drive the mode dial, and dial-push is a GPIO 0/10 keepalive every 32 transfers.
+- Keys use a render settle ported from `tools/menu_render_settle.py`, without its selected-plane publication check.
+- The adjustment NAND's blocks 0x381..0x3a1 are programmed into the NAND medium before boot.
+
+The run document replaces FujiMod's FFF47000 packed422 scaler with an adapter device that ports the retained declared UI conversion (YYCbCr to ABGR, IRQ 67), so the mode guides render.
+
+`//emulation:fujimod-ram-push-check -- --installed-nand NAND [--firmware DAT] [--output DIR]` cold-boots a DAT (default stock 1.50) on the bridge and drives it through `EmulatorUsb.hs`:
+- `start` must cold-boot and attach;
+- `list` must return one candidate;
+- a `FujiAF.Identify` session over `transfer` must return `X-M1`;
+- `read-memory` must return code 2 for the UP row and a heap break above image 4;
+- `mode-dial` M must return a sample inside its window;
+- `key` MENU and LEFT must return (1, 5, 2) and (0, 5, 0).
+
+Observed 2026-10-24 (emulated), RC0 prefix DAT with `f7-1.nand` and `VolatileBank/scenario.json`: the attach takes 5.5 s. `ram-alloc` (261 s), relink, `ram-push` (1,022-1,229 s, against 1,632 s for the retained engine's IrqLatch run) and the install checkpoint complete, and the first two segments run. The trajectory then diverges at its first key. The recorded first MENU after the M dial is a retained-engine settle that never pressed: `prior-render-pending` after 90,000,000 instructions. On FujiMod the mode guide drains after 61,750,000, so that MENU opens (1, 5, 2). With that step removed, the next four steps match, and the third DOWN at (0, 5, 2) is not taken. The recorded trajectories therefore do not yet reproduce on FujiMod. Render and key timing differ between the engines, and FujiMod's instructions-per-tick ratio stays at 24 during transfers, where the retained bridge uses 2400.
+
 ## Stock native cases: USB toggle (N1, N2)
 
 `//emulation:usb-toggle-cases` generates and runs the native cases of [the USB toggle verification plan](../reports/usb-personality-toggle.md#81-native-harness) into `private-data/analysis/x-m1-1.50/native-case/usb-toggle/` (`--out` overrides), with `results.md` and `results.json` beside the cases and reports. It pins the stock image-4 and image-5 decodes and the linked stub `//host/firmware:usb-toggle-stub` (SHA-256 `35a7e9597f06bdc1dda250d991df4a468d2401e5ae3c24c22e37403318746d62`), builds the patched image 5 from the stock decode with the `FujiAF.UsbToggle` writes, and refuses to run unless the stub blob and hook word equal those of the pinned CC and RC0 image-5 patch sets under `private-data/analysis/usb-toggle/`. It exits nonzero unless every case passes and all 80 Q = 0 stock/patched pairs match.
