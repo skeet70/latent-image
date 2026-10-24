@@ -138,6 +138,8 @@ haskell_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":emulator-slot-lib",
+        ":case-sha256",
+        ":checkpoint-key-lib",
         ":viewer-runtime-lib",
         ":emulator-usb",
         ":ui-trajectory-lib",
@@ -173,6 +175,8 @@ haskell_binary(
     ],
     deps = [
         ":emulator-slot-lib",
+        ":case-sha256",
+        ":checkpoint-key-lib",
         ":emulator-usb",
         ":viewer-runtime-lib",
         "//broker:core",
@@ -188,6 +192,24 @@ haskell_binary(
         "//host:usb-toggle",
         "//host:vector",
         "//transport:camera-core",
+    ],
+)
+
+haskell_binary(
+    name = "checkpoint-warmup",
+    srcs = ["CheckpointWarmup.hs"],
+    data = [
+        ":usb-toggle-emu",
+        ":xm1-viewer",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":viewer-runtime-lib",
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:time",
     ],
 )
 
@@ -233,6 +255,8 @@ haskell_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":embedded-python-lib",
+        ":case-sha256",
+        ":checkpoint-key-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -523,6 +547,35 @@ haskell_library(
         "//host:base",
         "//host:bytestring",
         "//host:cryptohash-sha256",
+    ],
+)
+
+haskell_library(
+    name = "checkpoint-key-lib",
+    srcs = ["Emulation/CheckpointKey.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+        "//host:json",
+    ],
+)
+
+haskell_test(
+    name = "checkpoint-key-tests",
+    size = "small",
+    srcs = ["CheckpointKeyTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":checkpoint-key-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
     ],
 )
 

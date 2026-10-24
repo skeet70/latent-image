@@ -17,12 +17,14 @@ import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (digitToInt, isHexDigit)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
-import Data.List (find, isPrefixOf)
-import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe)
+import Data.List (find, isPrefixOf, nub)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe)
 import Data.Scientific (toBoundedInteger)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Word (Word16, Word32, Word8)
+import Emulation.CheckpointKey (CheckpointRoute (..), GuestState, Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, routeKey, routeKeyHex)
+import qualified Emulation.Sha256 as Digest
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, stageViewerRuntime, validateFirmware, workspace)
 import EmulatorUsb (BridgeExchange, bridgeUsbApi)
@@ -275,6 +277,7 @@ data Env = Env
   , envCheckpoints :: FilePath
   , envFresh :: Bool
   , envReplaced :: IORef [String]
+  , envGuest :: GuestState
   }
 
 data Started = Started
@@ -291,7 +294,21 @@ startServer :: Env -> DatRole -> NandRole -> BootKind -> Maybe Int -> FilePath -
 startServer env dat nand boot qSample output = do
   datFile <- canonicalizePath (envRoot env </> datPath dat)
   nandFile <- canonicalizePath (envRoot env </> nandPath nand)
-  let resetArguments = case boot of
+  datDigest <- Digest.sha256Hex <$> Digest.sha256File datFile
+  nandDigest <- Digest.sha256Hex <$> Digest.sha256File nandFile
+  require (Sha256 datDigest == datSha256 dat) (datName dat ++ " DAT differs from its pinned SHA-256")
+  require (Sha256 nandDigest == nandSha256 nand) (nandName nand ++ " NAND differs from its pinned SHA-256")
+  let adcAtReset = case boot of
+        CableAtReset QFromReset -> Just (9 :: Int, fromMaybe 0 qSample)
+        _ -> Nothing
+      cableAtReset = case boot of CableAtReset _ -> True; _ -> False
+      key = routeKey (envGuest env) ToggleRouteBoot
+        [ "profile" .= ("firmware/x-m1/1.50/emulator-rec.json" :: T.Text)
+        , "installed_dat" .= datDigest
+        , "adjustment_nand" .= nandDigest
+        , "boot" .= object ["cable_at_reset" .= cableAtReset, "adc_at_reset" .= fmap (\(c, v) -> [c, v]) adcAtReset]
+        , "first_start_route" .= map routeStepValue firstStartSteps ]
+      resetArguments = case boot of
         CableAtReset NoQ -> ["--cable-at-reset"]
         CableAtReset QFromReset -> ["--cable-at-reset", "--adc-at-reset", "9=" ++ show (fromMaybe 0 qSample)]
         ProbeBoot -> ["--access-probe-range", hex32 extentStart ++ ":" ++ hex32 (extentStart + fromIntegral extentLength)]
@@ -304,6 +321,8 @@ startServer env dat nand boot qSample output = do
         , "--menus", "--toggle-server"
         , "--output", output
         , "--toggle-checkpoints", envCheckpoints env
+        , "--checkpoint-key", routeKeyHex key
+        , "--checkpoint-inputs", C.unpack (BL.toStrict (encode (routeKeyDocument key)))
         ] ++ resetArguments
   errors <- openFile (output ++ ".stderr") WriteMode
   (Just input, Just out, _, process) <- createProcess (proc (envPython env) arguments)
@@ -313,17 +332,12 @@ startServer env dat nand boot qSample output = do
   lastLine <- newIORef B.empty
   hitIndex <- newIORef 0
   let srv = Server input out process lastLine hitIndex
-  prepare srv `onException` (terminateProcess process >> waitForProcess process)
+  prepare srv (routeKeyHex key) (routeKeyDocument key) `onException` (terminateProcess process >> waitForProcess process)
   where
-    prepare srv = do
+    prepare srv key inputs = do
       options <- C.hGetLine (srvOut srv) >>= decodeObject
-      key <- textField "key" options
-      let inputs = field "inputs" options
-          shaOf name = case inputs of
-            Object o -> case field name o of String s -> Sha256 (T.unpack s); _ -> Sha256 ""
-            _ -> Sha256 ""
-      require (shaOf "installed_dat" == datSha256 dat) (datName dat ++ " DAT differs from its pinned SHA-256")
-      require (shaOf "adjustment_nand" == nandSha256 nand) (nandName nand ++ " NAND differs from its pinned SHA-256")
+      echoed <- textField "key" options
+      require (echoed == key) "bridge echoed a different checkpoint key"
       replaced <- readIORef (envReplaced env)
       let saved = field "checkpoint" options /= Null
           fresh = envFresh env && key `notElem` replaced
@@ -345,17 +359,28 @@ startServer env dat nand boot qSample output = do
           pure (object ["route" .= ("cable at reset; 140000000 instructions without keys" :: T.Text), "run" .= Object reply])
       pure (srv, Started key inputs kind bootRecord)
 
+-- | One step of the first-start route.
+data RouteStep = RunInstructions Int | PulseKey T.Text
+
+routeStepValue :: RouteStep -> Value
+routeStepValue (RunInstructions count) = object ["run" .= count]
+routeStepValue (PulseKey key) = object ["key" .= key, "hold_instructions" .= firstStartPulse, "release_instructions" .= firstStartPulse]
+
 -- | First-start route to the shooting screen: language and date prompts. The
--- prompts need an 8,000,000-instruction hold and release cap per key.
+-- prompts need an 8,000,000-instruction hold and release cap per key. A route
+-- checkpoint's key includes these steps.
+firstStartSteps :: [RouteStep]
+firstStartSteps = [RunInstructions 100000000] ++ map PulseKey (replicate 12 "up" ++ ["ok", "ok"]) ++ [RunInstructions 40000000]
+
 firstStartRoute :: Server -> IO Value
 firstStartRoute srv = do
-  _ <- call srv "run" ["instructions" .= (100000000 :: Int)]
-  menus <- forM (replicate 12 "up" ++ ["ok", "ok"] :: [T.Text]) $ \key -> do
-    reply <- call srv "key" ["key" .= key, "hold_instructions" .= firstStartPulse, "release_instructions" .= firstStartPulse]
-    pure (field "menu" reply)
-  _ <- call srv "run" ["instructions" .= (40000000 :: Int)]
+  results <- forM firstStartSteps $ \routeStep -> case routeStep of
+    RunInstructions count -> Nothing <$ call srv "run" ["instructions" .= count]
+    PulseKey key -> do
+      reply <- call srv "key" ["key" .= key, "hold_instructions" .= firstStartPulse, "release_instructions" .= firstStartPulse]
+      pure (Just (field "menu" reply))
   state <- call srv "state" []
-  pure (object ["keys" .= (replicate 12 ("up" :: T.Text) ++ ["ok", "ok"]), "menus" .= menus, "state" .= Object state])
+  pure (object ["keys" .= [key | PulseKey key <- firstStartSteps], "menus" .= catMaybes results, "state" .= Object state])
 
 firstStartPulse :: Int
 firstStartPulse = 8000000
@@ -1036,6 +1061,7 @@ data Options = Options
   , optFamilies :: [String]
   , optFresh :: Bool
   , optWorkspace :: Maybe Workspace
+  , optWarm :: Bool
   }
 
 usage :: String
@@ -1047,6 +1073,8 @@ usage = unlines
   , ""
   , "  --runs FAMILY,...   e2, e3, e4e5, e5u, e6, e7, control or all (default: all)"
   , "  --fresh-boot        cold-boot each route checkpoint once and replace it"
+  , "  --warm-checkpoints  restore or cold-boot and save the route checkpoint of each DAT and NAND"
+  , "                      the chosen families boot, then stop without running scenarios"
   , "  --workspace PATH    repository root (default: BUILD_WORKSPACE_DIRECTORY)"
   ]
 
@@ -1054,7 +1082,7 @@ families :: [String]
 families = ["e2", "e3", "e4e5", "e5u", "e6", "e7", "control"]
 
 parseOptions :: [String] -> IO Options
-parseOptions = go (Options Nothing families False Nothing)
+parseOptions = go (Options Nothing families False Nothing False)
   where
     go options [] = pure options
     go options ("--receipt-output" : value : rest) = go options {optReceipts = Just value} rest
@@ -1064,6 +1092,7 @@ parseOptions = go (Options Nothing families False Nothing)
       require (not (null chosen) && all (`elem` families) chosen) ("--runs takes " ++ show families ++ " or all")
       go options {optFamilies = chosen} rest
     go options ("--fresh-boot" : rest) = go options {optFresh = True} rest
+    go options ("--warm-checkpoints" : rest) = go options {optWarm = True} rest
     go options ("--workspace" : value : rest) = go options {optWorkspace = Just (Workspace value)} rest
     go _ (argument : _) = ioError (userError ("unknown option or missing value: " ++ argument ++ "\n" ++ usage))
     splitComma text = case break (== ',') text of
@@ -1106,11 +1135,18 @@ launch arguments options = do
   let Python python = stagedPython staged
       runtime = stagedDirectory staged
   callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
+  guest <- guestState runtime (InterpreterExecutable python) (UnicornLibrary (stagedUnicorn staged))
   replaced <- newIORef []
+  let env = Env root python runtime (root </> "private-data" </> "emulator-checkpoints" </> "xm1-usb-toggle") (optFresh options) replaced guest
+      chosen = [s | s <- scenarios, scFamily s `elem` optFamilies options]
+  when (optWarm options) $ do
+    forM_ (nub [(scDat s, scNand s) | s <- chosen, scBoot s == RouteBoot]) $ \(dat, nand) -> do
+      (srv, started) <- startServer env dat nand RouteBoot Nothing (receipts </> ("warm-" ++ datName dat ++ "-" ++ nandName nand))
+      stopServer srv
+      putStrLn ("route checkpoint " ++ datName dat ++ " " ++ nandName nand ++ ": " ++ startKind started ++ " " ++ startKey started)
+    exitWith ExitSuccess
   head' <- (filter (/= '\n') <$> readProcess "git" ["-C", root, "rev-parse", "HEAD"] "") `catch` \(_ :: IOException) -> pure "unknown"
   dirty <- (not . null <$> readProcess "git" ["-C", root, "status", "--porcelain", "--", "emulation", "host", "transport", "broker"] "") `catch` \(_ :: IOException) -> pure True
-  let env = Env root python runtime (root </> "private-data" </> "emulator-checkpoints" </> "xm1-usb-toggle") (optFresh options) replaced
-      chosen = [s | s <- scenarios, scFamily s `elem` optFamilies options]
   results <- mapM (runScenario env receipts) chosen
   BL.writeFile (receipts </> "summary.json") (encode (object
     [ "schema" .= (1 :: Int), "git_head" .= head', "git_dirty_harness" .= dirty

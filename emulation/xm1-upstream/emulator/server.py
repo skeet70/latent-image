@@ -130,11 +130,7 @@ def make_server(session, port=0, *, page='index.html',bind='127.0.0.1',hostname=
 
 
 def make_menu_server(session, port=0, *, page='index.html', bind='127.0.0.1', hostname=None):
-    """Add host checkpoint controls without changing boot's server import.
-
-    Portable identity pins boot.make_server through its imported code body.
-    Keep that function stable while extending the diagnostic menu adapter.
-    """
+    """Add host checkpoint controls to the diagnostic server."""
     server = make_server(session, port, page=page, bind=bind, hostname=hostname)
     base = server.RequestHandlerClass
 
