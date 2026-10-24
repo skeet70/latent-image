@@ -3,6 +3,7 @@ let
   xm1Python = pkgs.python3.withPackages (p: [ p.numpy p.unicorn ]);
   xm1Native = import ./build-support/xm1-native.nix { inherit pkgs; };
   unicornX70 = import ./build-support/unicorn-x70.nix { inherit pkgs; };
+  fujimod = import ./build-support/fujimod.nix { inherit pkgs; };
 in {
   packages = with pkgs; [
     git
@@ -45,6 +46,7 @@ in {
   env.XM1_VIEWER_PYTHON = "${xm1Python}/bin/python3";
   env.XM1_VIEWER_NATIVE_PACKAGE = "${xm1Native}";
   env.X70_UNICORN_LIBRARY = "${unicornX70}/lib/libunicorn.so.2";
+  env.FUJIMOD_EMULATOR = "${fujimod}/bin/fujimod-emulator";
 
   # No activation hook may enumerate or open a camera.
 }

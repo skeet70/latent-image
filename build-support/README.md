@@ -51,6 +51,8 @@ The X-M1 viewer's locked `xm1-native.nix` build runs Rust unit checks before ins
 
 `unicorn-x70.nix` builds jitl's Unicorn fork from a pinned GitHub revision and source hash, ARM-only, for the viewer's `X70_UNICORN_LIBRARY` ([engine paths and measurements](../emulation/README.md#interactive-x-m1-firmware-viewer)). The Bazel `lab_unicorn` repository and the Python binding stay on stock nixpkgs Unicorn.
 
+`fujimod.nix` builds jitl's FujiMod `fujimod-emulator` CLI at the commit pinned in `manifests/sources.json`, with upstream's `Cargo.lock`, Rust 1.99.1 from a pinned rust-overlay, and its statically linked vendored Unicorn; devenv exposes it as `FUJIMOD_EMULATOR`. Its check phase runs `fujimod-emulator-cpu-unicorn`'s unit tests. It is a reference build: FujiMod is unlicensed ([licensing item 7](../LICENSING.md#release-decisions)) and its catalog boot refuses `xm1-150`.
+
 ## Extending the graph
 
 Add dependencies through pinned module/Nix inputs and explicit target declarations. Update `.bazelversion` and the devenv Bazel package together; regenerate the module lock, format with buildifier, and validate all targets. Record both lockfile hashes and effective build flags with experiment artifacts. Host checks do not verify firmware architecture, target ABI, or camera behavior.
