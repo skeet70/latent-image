@@ -22,6 +22,7 @@ from enum import Enum
 import hashlib
 
 from .hardware import UnsupportedDevice
+from .interrupts import IrqRoute
 from .virtual_source import FrameIndex, VirtualTick, ram_span, xm1_source_tick
 
 PROFILE = 'declared-testbed-continuous-statistics-stream-unmeasured'
@@ -104,10 +105,10 @@ def live(device):
 
 
 def _route(device):
-    banks = device.board.interrupts.banks
-    if [i for i, bank in enumerate(banks) if bank.enabled & (1 << IRQ)] != [0]:
+    interrupts = device.board.interrupts
+    if interrupts.route(IRQ, IrqRoute.Every) != [0]:
         return None
-    bank = banks[0]
+    bank = interrupts.banks[0]
     handler = XM1_IRQ_HANDLER if device.stream['profile'] is ProducerStreamProfile.XM1 else IRQ_HANDLER
     if (bank.config.get(0x400 + IRQ * 4) != handler or not bank.source_config & (1 << IRQ)
             or bank.pending & (1 << IRQ) or bank.active == IRQ or bank.injected == IRQ):

@@ -413,6 +413,24 @@
       "scope": "Unicorn 2.1.4 COPYING and the other license files unchanged by the fork; per-file QEMU notices remain applicable, including the optional TCI backend files (qemu/tcg/tci.c GPL-2.0-or-later, qemu/tcg/tci/ MIT) that the ARM JIT build does not compile"
     },
     {
+      "name": "exr2-gcc",
+      "version": "4.6.4 and 4.4.7, arm-linux-gnueabi",
+      "nixpkgs_revision": "c7def046b9a883d46974757852106483d741586f",
+      "source": "https://ftp.gnu.org/gnu/gcc/",
+      "license": "GPL-3.0-or-later",
+      "evidence": "https://gcc.gnu.org/onlinedocs/gcc-4.6.4/gcc/Copying.html",
+      "scope": "GNU release archives built by build-support/exr2-gcc.nix (all-gcc only, no target libraries); host compiler for //matching:pilot, not linked into project artifacts"
+    },
+    {
+      "name": "exr2-binutils",
+      "version": "2.24, arm-linux-gnueabi",
+      "nixpkgs_revision": "c7def046b9a883d46974757852106483d741586f",
+      "source": "https://ftp.gnu.org/gnu/binutils/binutils-2.24.tar.bz2",
+      "license": "GPL-3.0-or-later",
+      "evidence": "https://sourceware.org/git/?p=binutils-gdb.git;a=blob;f=COPYING3;hb=binutils-2_24",
+      "scope": "GNU release archive built by build-support/exr2-gcc.nix with x70view's host-qsort.c linked into its host programs; host tool for //matching:pilot"
+    },
+    {
       "name": "numpy",
       "version": "2.5.2",
       "nixpkgs_revision": "c7def046b9a883d46974757852106483d741586f",

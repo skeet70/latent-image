@@ -1,0 +1,149 @@
+{
+  "schema": 1,
+  "firmware": "X-M1 1.50",
+  "firmware_sha256": "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490",
+  "upstream": {
+    "repository": "https://github.com/justjake/x70view",
+    "revision": "62876536052549cbcba1e9f6abc1437e773dba2f",
+    "credit": "jitl (justjake)"
+  },
+  "regions": {
+    "loader-a": {
+      "base": "0x00040000",
+      "image": "segment id 0 loader",
+      "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+    },
+    "loader-b": {
+      "base": "0x000d0000",
+      "image": "segment id 1 loader",
+      "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+    },
+    "image-4": {
+      "base": "0x0061c400",
+      "image": "decoded segment id 4",
+      "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+    },
+    "image-5": {
+      "base": "0x00bf1a00",
+      "image": "decoded segment id 5",
+      "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+    },
+    "plain": {
+      "base": "0x01100000",
+      "image": "segment id 6 plain image",
+      "sha256": "ee211bdaad39005b4f72e3443a76ca194905381a967cab787d6a4ef14e2d889d"
+    }
+  },
+  "functions": [
+    {
+      "region": "loader-a",
+      "unit": "kernel0",
+      "address": "0x0004357c",
+      "size": 48,
+      "name": "FUN_0004357c",
+      "stock_sha256": "e50d121ff6c8881f53d3720e9570e6511103f7d253577e90f9665b9f038ba5e3",
+      "upstream_source": "decomp/firmwares/xm1-150/kernel0/src/native_recovery/native_memory.c",
+      "selection": "Kernel byte copy that the Classic Chrome builder and icon emulation cases execute from loader A",
+      "upstream_source_sha256": "913c9b261d011099e12e4c84da8618c0d3933ceda23fb371ce82e032a6b6898a"
+    },
+    {
+      "region": "loader-a",
+      "unit": "kernel0",
+      "address": "0x00040b24",
+      "size": 56,
+      "name": "FUN_00040b24",
+      "stock_sha256": "0e38fec4a20f595038b3923649e02d12900e4c3db577039f5713d06281186272",
+      "upstream_source": "decomp/firmwares/xm1-150/kernel0/src/core/runtime_entries.c",
+      "selection": "Call plus MOVW/MOVT global references",
+      "upstream_source_sha256": "48a5baad9a993614bcb46aa3c9f76e19973fb9fdc0d39427cf8ed54424749a93"
+    },
+    {
+      "region": "loader-b",
+      "unit": "kernel1",
+      "address": "0x000d0b24",
+      "size": 56,
+      "name": "FUN_000d0b24",
+      "stock_sha256": "11d726295ff21076cb51dbd13f981f538d70b4d8b2b53e1e290fc60155047be9",
+      "upstream_source": "decomp/firmwares/xm1-150/kernel1/src/core/runtime_entries.c",
+      "selection": "Loader-B counterpart of 0x00040b24 in a separate link unit",
+      "upstream_source_sha256": "e351b145b2fa63151af3c3063d2b6d31556fbbb25a6c1038043037c0c79022d1"
+    },
+    {
+      "region": "loader-b",
+      "unit": "kernel1",
+      "address": "0x000d3a0c",
+      "size": 112,
+      "name": "FUN_000d3a0c",
+      "stock_sha256": "53ce25fab5caac4958828cc111679e5cba32522d5e7d67bb620c239c76277c5d",
+      "upstream_source": "decomp/firmwares/xm1-150/kernel1/src/native_recovery/native_globals.c",
+      "selection": "PC-relative literal-pool loads plus MOVW/MOVT references",
+      "upstream_source_sha256": "8c6115060e4ee0f06960fba403dafac14c51d5bee58523c74634adbd40e40c18"
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0069f8fc",
+      "size": 36,
+      "name": "read_cfgdata_byte",
+      "stock_sha256": "0491e27ccb707594c468745512f2212604611381f49a88242f83241025c74966",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/configuration_byte_access.c",
+      "selection": "Configuration-byte getter in the Classic Chrome builder case function list",
+      "upstream_source_sha256": "cd835009d212ac5afc9eef0216f7146ebee90c17379d20f34c94fd47ea133650"
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0071fe2c",
+      "size": 80,
+      "name": "storage_receive_command",
+      "stock_sha256": "bac2dcf486b6b3336f1dd6828f23bcc7f7ba5205d4e14a0a931acc2ea7752007",
+      "upstream_source": "decomp/firmwares/xm1-150/app/storage/service/storage_command_dispatch.c",
+      "selection": "Media receive helper that the AF recorder hook tail-transfers into",
+      "upstream_source_sha256": "f26ad9cd1627949be943e60fc3b761559dbf40e5cbfdd9bc5487387292249c12"
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00ed117c",
+      "size": 40,
+      "name": "usb_start_mode_request",
+      "stock_sha256": "ecfdd7860833189119568d482a4d103d9bca1652c1547f298fc7f2b18ff7128a",
+      "upstream_source": "decomp/firmwares/xm1-150/app/drivers/usb/task7_request_wrappers.c",
+      "selection": "Call plus MOVW/MOVT global reference",
+      "upstream_source_sha256": "f196977404c1a5b8258d84c32d65888c1c8a019ea26393e90f5cf5916c3f14c3"
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d3d0c4",
+      "size": 44,
+      "name": "ui_saved_state8_bytes_differ",
+      "stock_sha256": "ebe88c5d6ffe4c6923a3453aa1d384c3d3a26c67165e4e68ece23e3d14351941",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/record/ui_record_playback_service_api.c",
+      "selection": "Call plus PC-relative literal-pool loads",
+      "upstream_source_sha256": "cd8917d7054d433b32710e3dfb1df4b5451505eed851c4995e5bd14630b80032"
+    },
+    {
+      "region": "plain",
+      "unit": "overlay44",
+      "address": "0x0118cfc4",
+      "size": 48,
+      "name": "overlay_font_flags_for_mode",
+      "stock_sha256": "cf43cb7c88880a0699daade39e4b4f683970dc2292d3e3e4180e3e1cd99ace49",
+      "upstream_source": "decomp/firmwares/xm1-150/app/graphics/fonts/font_stream_helpers.c",
+      "selection": "PC-relative literal-pool load plus MOVW/MOVT reference",
+      "upstream_source_sha256": "abf47c993f148298b081829d1a8048cfe9c693f49ff303b549cb08c372f2c266"
+    },
+    {
+      "region": "plain",
+      "unit": "overlay44",
+      "address": "0x01112b2c",
+      "size": 52,
+      "name": "overlay_select_panel_font",
+      "stock_sha256": "39e3e512d6ed86d96d1e7992f0218a3d11177be2a2f7430ef057053d8a8f1398",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/render/overlay_drawing_api.c",
+      "selection": "Call plus MOVW/MOVT references",
+      "upstream_source_sha256": "ef39088e138e79f8ff408d2cc6f1fadd8421723aca8f14a9b0ec1aed095fa0de"
+    }
+  ]
+}

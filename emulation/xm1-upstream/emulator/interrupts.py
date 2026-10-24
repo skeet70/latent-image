@@ -15,6 +15,8 @@ from enum import IntEnum
 
 from unicorn.arm_const import (UC_ARM_REG_CPSR, UC_ARM_REG_SPSR,
                                UC_ARM_REG_LR, UC_ARM_REG_PC)
+from x70_native._native import (IrqRoute, irq_enable_clear, irq_enable_set,
+                                irq_raise, irq_route)
 
 from .hardware import UnsupportedDevice
 
@@ -44,6 +46,15 @@ class InterruptBank:
     injected_priority: int | None = None
     active_stack: list[dict[str, int]] = field(default_factory=list)
     source_config: int = 0
+    # Mask-window ownership and window-latched requests (native/src/irq_mask.rs).
+    masked: int = 0
+    latched: int = 0
+
+    def lines(self):
+        return self.enabled, self.pending, self.masked, self.latched
+
+    def set_lines(self, lines):
+        self.enabled, self.pending, self.masked, self.latched = lines
 
 
 @dataclass
@@ -441,9 +452,9 @@ class KernelInterrupts:
         bank = self.banks[bank_id]
         self._validate_bank(bank)
         if self._family(offset, 0x80, 4):
-            bank.enabled |= value << ((offset - 0x80) * 8)
+            bank.set_lines(irq_enable_set(bank.lines(), (offset - 0x80) // 4, value))
         elif self._family(offset, 0xa0, 4):
-            bank.enabled &= ~(value << ((offset - 0xa0) * 8))
+            bank.set_lines(irq_enable_clear(bank.lines(), (offset - 0xa0) // 4, value))
         elif self._family(offset, 0xc0, 4):
             bank.pending |= value << ((offset - 0xc0) * 8)
             self._record('Software IRQ request', cpu_id=bank_id, bits=hex(value), group=(offset - 0xc0)//4)
@@ -497,9 +508,18 @@ class KernelInterrupts:
     def raise_irq(self, cpu_id, line):
         if type(cpu_id) is not int or cpu_id not in (0, 1) or type(line) is not int or not 0 <= line < 128:
             raise UnsupportedDevice(f'Unmodeled IRQ destination {cpu_id}/{line}')
-        self._validate_bank(self.banks[cpu_id])
-        self.banks[cpu_id].pending |= 1 << line
+        bank = self.banks[cpu_id]
+        self._validate_bank(bank)
+        bank.set_lines(irq_raise(bank.lines(), line))
         self._record('Peripheral IRQ request', cpu_id=cpu_id, line=line)
+
+    def route(self, line, policy):
+        """Banks owning `line` under `policy` (IrqRoute), or None for a refusal.
+
+        A bank owns a line it enables, or one a clear-enable write disabled
+        until the next set-enable write to that group on that bank.
+        """
+        return irq_route(tuple(bank.lines() for bank in self.banks), line, policy)
 
     def irq_candidate(self, cpu_id):
         """Whether inject() could enter an IRQ on this core now (ignoring CPSR).
@@ -687,13 +707,12 @@ class KernelInterrupts:
             return
         timer.expirations += expirations
         line = 0x20 + channel
-        targets = [cpu_id for cpu_id, bank in enumerate(self.banks)
-                   if bank.enabled & (1 << line)]
+        targets = self.route(line, IrqRoute.Every)
         for cpu_id in targets:
             board.queue_irq(cpu_id, line)
         self._record('Modeled application timer expiry', channel=channel, line=line,
                      expirations=expirations, targets=targets, virtual_ticks=now,
-                     assumption='Up-count/reload inferred; IRQ routed to firmware-enabled banks; prescaler units unknown')
+                     assumption='Up-count/reload inferred; IRQ routed to owning banks, latched while mask-window masked (unmeasured); prescaler units unknown')
 
     def next_event_tick(self, now):
         """Next modeled IRQ expiry; free-running/polled timers do not wake WFI."""
@@ -746,12 +765,13 @@ class KernelInterrupts:
                                   'source_tick_phase': self.application_timer.phase,
                                   'divider': self._divider(self.application_timer.control),
                                   'physical_irq': 0x23,
-                                  'routing': 'Firmware-enabled controller banks; inferred'},
+                                  'routing': 'Owning controller banks (enabled or mask-window masked); inferred'},
             'limitations': ['Controller reset configuration is an explicit zero fixture.',
                 'Priority order and current-source register interpretation are inferred.',
                 'Timer 0x63 up-count/0x23 countdown, reload timing, frequency and broadcast are software-derived models, not hardware validated.',
                 '12MHz timer source and powers-of-two prescalers are inferred from driver conversion constants; virtual source clock is one tick per executed instruction, with unknown real CPU/source ratio.',
                 'FIQ fails explicitly; nested IRQs and equal-priority arbitration fail without the explicit unmeasured kernel-active-scan-order profile.',
-                'Selected strict-higher nesting retains a typed, unique descending-priority ancestor stack. ACK200 promotes the injected source; only the acknowledged top appears in active bitmap230/current-source1C0. EOI200zero pops/restores the outer threshold, while pending bits change only through explicit guest clears or new requests. In-flight priority changes and unacknowledged-entry replacement/EOI remain unsupported.',
+                'Selected strict-higher nesting retains a typed, unique descending-priority ancestor stack. ACK200 promotes the injected source; only the acknowledged top appears in active bitmap230/current-source1C0. EOI200zero pops/restores the outer threshold, while pending bits change only through explicit guest clears, new requests or a mask-window restore that leaves a window-latched line disabled. In-flight priority changes and unacknowledged-entry replacement/EOI remain unsupported.',
+                'Mask-window latching is unmeasured: a clear-enable write keeps each line it disables owned by its bank until the next set-enable write to that group there; a source raised at an owned, masked line latches pending, which that write delivers if it re-enables the line and discards otherwise.',
                 'Native banked exception registers and the actual stock vector/prologue/return provide CPU nesting; this controller model supplies no handler callback, return or completion.'],
         }
