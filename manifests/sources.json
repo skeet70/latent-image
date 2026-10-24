@@ -85,6 +85,16 @@
       "evidence_ids": [
         "E-FIRMWARE"
       ]
+    },
+    {
+      "id": "fffw-wiki-unbricking-note",
+      "url": "https://github.com/tiredboffin/fffw/wiki/Note-on-unbricking-EXR-cameras",
+      "revision": "7b387068f869847055c2ca1b075f8603369c05a9",
+      "status": "pin-selected",
+      "evidence_ids": [
+        "E-FFFW-UNBRICK-NOTE-REPORTED",
+        "E-SDBOOT-NOTE-HOLD-BINDING-150"
+      ]
     }
   ]
 }
