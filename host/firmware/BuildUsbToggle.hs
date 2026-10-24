@@ -44,8 +44,6 @@ main = do
       _ -> H.failH usage
     _ -> H.failH usage
 
-data Part = Part {partStep :: Value, partSegment :: Maybe Integer, partFile :: Maybe (FilePath, B.ByteString)}
-
 build :: FilePath -> FilePath -> String -> FilePath -> FilePath -> IO ()
 build stubPath symbolsPath outputSha baseGiven outputGiven = do
   stub <- canonicalizePath stubPath >>= H.readRegular 4096
@@ -69,9 +67,9 @@ build stubPath symbolsPath outputSha baseGiven outputGiven = do
   H.ensure (H.num (H.get base "schema_version") == 1) "base extension schema_version must be 1"
   H.ensure (H.str (H.get (H.get base "base") "sha256") == stockFirmware) "base extension is not built on stock 1.50"
   parts <- forM (H.list (H.get base "steps")) (readPart (takeDirectory basePath))
-  baseImage5 <- case [p | p <- parts, partSegment p == Just 5] of
+  baseImage5 <- case [p | p <- parts, bsSegment p == Just 5] of
     [] -> pure []
-    [Part _ _ (Just (_, bytes))] -> H.jsonRead bytes >>= image5Writes
+    [BaseStep _ _ (Just (_, bytes))] -> H.jsonRead bytes >>= image5Writes
     _ -> H.failH "base extension has more than one image-5 patch set"
   merged <- either H.failH pure (mergeWrites baseImage5 toggle)
   forM_ merged $ \w -> H.ensure (at (wAddress w) (B.length (wCurrent w)) == wCurrent w) (wId w ++ ": current bytes differ from stock image 5")
@@ -81,19 +79,12 @@ build stubPath symbolsPath outputSha baseGiven outputGiven = do
   let baseId = H.str (H.get base "id")
       image5Name = "usb-toggle-image5.json"
       image5Bytes = encodeCanonical (patchSet recorded (baseId ++ "-USB-TOGGLE-IMAGE5") merged) <> BC.pack "\n"
-  B.writeFile (output </> image5Name) image5Bytes
   image5Digest <- H.sha256 image5Bytes
-  copied <- forM [p | p <- parts, partSegment p /= Just 5] $ \p -> case partFile p of
-    Nothing -> pure (partSegment p, partStep p)
-    Just (name, bytes) -> do
-      let local = takeFileName name
-      exists <- doesPathExist (output </> local)
-      when exists (H.failH ("two base parts share the file name " ++ local))
-      B.writeFile (output </> local) bytes
-      pure (partSegment p, H.set "path" (H.s local) (partStep p))
   let image5Step = H.obj [("kind", H.s "image-patch-set"), ("path", H.s image5Name), ("sha256", H.s image5Digest)]
-      steps = [s | (Just 4, s) <- copied] ++ [image5Step] ++ [s | (g, s) <- copied, g /= Just 4]
-      extension =
+  (steps, files) <- either H.failH pure (assembleSteps image5Step parts)
+  B.writeFile (output </> image5Name) image5Bytes
+  forM_ files $ \(name, bytes) -> B.writeFile (output </> name) bytes
+  let extension =
         H.obj
           [ ("schema_version", H.n 1)
           , ("id", H.s (baseId ++ "-USB-TOGGLE"))
@@ -110,19 +101,11 @@ build stubPath symbolsPath outputSha baseGiven outputGiven = do
     putStrLn ("image5 " ++ g ++ ": " ++ show n ++ " writes, " ++ show c ++ " changed bytes")
   putStrLn ("wrote " ++ (output </> manifestName))
 
-readPart :: FilePath -> Value -> IO Part
-readPart dir step = case H.get step "path" of
-  Null -> pure (Part step Nothing Nothing)
-  _ -> do
-    let path = H.str (H.get step "path")
-    bytes <- canonicalizePath (if isAbsolute path then path else dir </> path) >>= H.readRegular (16 * 1024 * 1024)
-    digest <- H.sha256 bytes
-    H.ensure (digest == H.str (H.get step "sha256")) ("base part " ++ path ++ " differs from its step SHA-256")
-    segment <-
-      if H.str (H.get step "kind") == "image-patch-set"
-        then (\v -> Just (H.num (H.get (H.get v "image") "segment_id"))) <$> H.jsonRead bytes
-        else pure Nothing
-    pure (Part step segment (Just (path, bytes)))
+readPart :: FilePath -> Value -> IO BaseStep
+readPart dir step = do
+  bytes <- forM (stepPath step) $ \path ->
+    canonicalizePath (if isAbsolute path then path else dir </> path) >>= H.readRegular (16 * 1024 * 1024)
+  either H.failH pure (baseStep step bytes)
 
 image5Writes :: Value -> IO [Write]
 image5Writes v = do
