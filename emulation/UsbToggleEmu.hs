@@ -372,12 +372,12 @@ data RouteStep = RunInstructions Int | PulseKey T.Text
 
 routeStepValue :: RouteStep -> Value
 routeStepValue (RunInstructions count) = object ["run" .= count]
-routeStepValue (PulseKey key) = object ["key" .= key]
+routeStepValue (PulseKey key) = object ["key" .= key, "hold_instructions" .= firstStartPulse, "release_instructions" .= firstStartPulse]
 
 -- | First-start route to the shooting screen: language and date prompts. The
--- prompts run with the bridge's per-class default pulses and reproduce the
--- recorded checkpoints only with a selected fixed scene frame. A route
--- checkpoint's key includes these steps.
+-- prompts need an 8,000,000-instruction hold and release cap per key; the
+-- per-class defaults leave the CC-icon+toggle e5u detach scenarios blocked at
+-- the step-2 detach. A route checkpoint's key includes these steps.
 firstStartSteps :: [RouteStep]
 firstStartSteps = [RunInstructions 100000000] ++ map PulseKey (replicate 12 "up" ++ ["ok", "ok"]) ++ [RunInstructions 40000000]
 
@@ -386,10 +386,13 @@ firstStartRoute srv = do
   results <- forM firstStartSteps $ \routeStep -> case routeStep of
     RunInstructions count -> Nothing <$ call srv "run" ["instructions" .= count]
     PulseKey key -> do
-      reply <- call srv "key" ["key" .= key]
+      reply <- call srv "key" ["key" .= key, "hold_instructions" .= firstStartPulse, "release_instructions" .= firstStartPulse]
       pure (Just (field "menu" reply))
   state <- call srv "state" []
   pure (object ["keys" .= [key | PulseKey key <- firstStartSteps], "menus" .= catMaybes results, "state" .= Object state])
+
+firstStartPulse :: Int
+firstStartPulse = 8000000
 
 armTraces :: Server -> IO ()
 armTraces srv = do
