@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module BootCard
-  ( Config, configBytes, stockConfig, StageMarker (..), stageMarkerConfig, bootCard, stagedRecoveryCard, stagedRepairCard, recoveryCard, recoveryCardFat32
+  ( Config, configBytes, stockConfig, StageMarker (..), stageMarkerConfig, powerHoldConfig, bootCard, stagedRecoveryCard, stagedRepairCard, recoveryCard, recoveryCardFat32
   , BootPayloadBytes, bootPayloadByteCount, maxBootPayloadBytes
   , verifyCard, verifyStagedRecoveryCard, verifyStagedRepairCard, verifyRecoveryCard
   , recoveryReportBaseLba, recoveryReportSectorCount, recoveryReportSectors
@@ -117,6 +117,14 @@ stageMarkerConfig marker (Config bytes) = do
       pure (Config (patch bytes [(0x10,putLE 4 0x302),(0x348,putLE 4 (count+3)),(tableEnd,extension)]))
     BeforeMemoryWait ->
       pure (Config (patch bytes [(0x10,putLE 4 0x302),(0xb8,writePairs [(0xfff88084,1),(0,0),ledSetup,ledLit])]))
+
+-- With bit 0 set, the 0x80000330 store repeats the 1 written at 0x800000ec, so on the
+-- success path 0xfff88084 bit 0 stays 1 through the ffboot.bin read and handoff.
+powerHoldConfig :: Config -> Either String Config
+powerHoldConfig (Config bytes) = do
+  control <- le bytes 0x10 4
+  require (control .&. 1 == 0) "power hold requires +0x10 bit 0 clear"
+  pure (Config (patch bytes [(0x10,putLE 4 (control .|. 1))]))
 
 -- ROM mount: 0x80001ae0 and 0x80001ba0, not a filesystem-library mount.
 mountRom :: B.ByteString -> Either String Volume
