@@ -18,12 +18,14 @@ import System.FilePath
 
 regs :: [String]
 regs=map (("r"++).show) [0::Int ..12]++["sp","lr","cpsr"]
--- The public bounded-native-case contract. schemas/native-case.schema.json and
--- the runner's MAX_* constants carry the same numbers; NativeTests.hs holds the
--- three together. Largest case measured over the recipe-bank and UI generators
--- and 2,314 generated cases: 1131576 artifact bytes, 1888202 total mapped
--- bytes, 19 artifacts, 16 regions, 210 functions, 12 stubs, 59 expected
--- events, 49 expected memory entries, 525916 expected memory bytes.
+-- The public bounded-native-case contract. schemas/native-case.schema.json carries the same
+-- numbers; NativeTests.hs holds the schema and the adapter together, and runs the runner at each
+-- limit. The runner's stub-event recording capacity (its engine MAX_RECORDED_EVENTS) is a separate,
+-- larger engine limit: an execution records far more events than a case declares (e.g., 184 recorded
+-- vs. 0 declared), measured over 2738 recipe-bank SD cases with a maximum of 284 events.
+-- Largest case measured over the recipe-bank and UI generators and 2,314 generated cases:
+-- 1131576 artifact bytes, 1888202 total mapped bytes, 19 artifacts, 16 regions, 210 functions,
+-- 12 stubs, 59 expected events, 49 expected memory entries, 525916 expected memory bytes.
 sizeBytes :: Int
 sizeBytes=2*1024*1024
 totalBytes :: Int
