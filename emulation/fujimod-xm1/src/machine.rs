@@ -1,11 +1,15 @@
-//! A strict X-M1 session and its run document; runs record armed instruction points.
+//! A strict X-M1 session and its run document; runs record armed instruction
+//! points and stop at the R4F guard's refusals.
 
 use crate::guest::{MenuState, ModeDialPosition, ModeDialWindow, RouteKey, set_adc};
+use crate::r4f::Guard;
 use crate::run::RunDocument;
 use crate::trace::TraceSites;
 use fujimod_emulator::session::Session;
 
 const RELEASE_POLL: u64 = 250_000;
+/// Longest run between two guard scans.
+const GUARD_WINDOW: u64 = 1_000_000;
 
 /// Instruction budgets of one key press: held, then at most `release` until
 /// the firmware has debounced the release.
@@ -21,6 +25,7 @@ pub struct Machine {
     /// The first strict stop; no input is admitted after it.
     pub failure: Option<String>,
     pub traces: TraceSites,
+    pub guard: Guard,
 }
 
 pub fn instructions(session: &Session) -> u64 {
@@ -28,16 +33,21 @@ pub fn instructions(session: &Session) -> u64 {
 }
 
 impl Machine {
+    /// A machine with the R4F guard armed.
     pub fn new(document: RunDocument, session: Session) -> Result<Self, String> {
-        Ok(Self { document, session, failure: None, traces: TraceSites::default() })
+        let mut guard = Guard::default();
+        guard.arm(&session.board)?;
+        Ok(Self { document, session, failure: None, traces: TraceSites::default(), guard })
     }
 
     /// Removes host instrumentation before a session checkpoint.
     pub fn disarm(&mut self) -> Result<(), String> {
-        self.traces.disarm(&self.session)
+        self.traces.disarm(&self.session)?;
+        self.guard.disarm(&self.session.board)
     }
 
     pub fn rearm(&mut self) -> Result<(), String> {
+        self.guard.arm(&self.session.board)?;
         self.traces.rearm(&self.session)
     }
 
@@ -52,8 +62,10 @@ impl Machine {
         }
         let end = self.instructions().saturating_add(count);
         while self.failure.is_none() && self.instructions() < end {
-            let result = self.session.board.run_window(end, self.document.execution.quantum, None, None);
-            if let Err(error) = result {
+            let window = end.min(self.instructions().saturating_add(GUARD_WINDOW));
+            let result = self.session.board.run_window(window, self.document.execution.quantum, None, None);
+            let refused = self.guard.scan(&self.session.board);
+            if let Err(error) = refused.and(result) {
                 self.failure = Some(error);
                 break;
             }

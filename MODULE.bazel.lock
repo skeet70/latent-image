@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "XvI5GMEYSJrnxrZiOxbfVyH+wSFT5uBp1inD7n0Ar7U=",
+        "bzlTransitiveDigest": "zbfh3kpkORVxE0c/8Yhg1XnOYE85NhESrQ7ksak3Bn4=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -440,7 +440,8 @@
                 "@@//emulation:fujimod-xm1/src/render.rs": "//emulation:fujimod-xm1/src/render.rs",
                 "@@//emulation:fujimod-xm1/src/run.rs": "//emulation:fujimod-xm1/src/run.rs",
                 "@@//emulation:fujimod-xm1/src/trace.rs": "//emulation:fujimod-xm1/src/trace.rs",
-                "@@//emulation:fujimod-xm1/src/ui_conversion.rs": "//emulation:fujimod-xm1/src/ui_conversion.rs"
+                "@@//emulation:fujimod-xm1/src/ui_conversion.rs": "//emulation:fujimod-xm1/src/ui_conversion.rs",
+                "@@//emulation:fujimod-xm1/tests/r4f_guard.rs": "//emulation:fujimod-xm1/tests/r4f_guard.rs"
               },
               "nix_file_content": "",
               "nix_license_path": "",

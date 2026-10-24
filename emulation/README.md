@@ -570,7 +570,17 @@ Boot to the stock menus is necessary, not sufficient. The check covers the first
 
 `//emulation:fujimod-flash-boot-check -- --firmware DAT [--output DIR]` runs the same route on jitl (justjake)'s FujiMod EXR II runtime ([issue 97](https://github.com/skeet70/latent-image/issues/97)). `validateFirmware` admits the DAT, then the launcher holds an emulator slot and runs the driver `@lab_fujimod_xm1//:bin/fujimod-xm1` (`build-support/fujimod-xm1.nix`, crate `emulation/fujimod-xm1`) on its run document. Bazel builds the driver through Nix the first time a target needs it, capped at two jobs and four cores; `devenv shell` does not build FujiMod. The driver builds a strict FujiMod session from the X-M1 run document: the catalog's `xm1-150` processor and memory graph, the document's EXR II device plan and scene, and the DAT complemented from offset 604 into the NAND image without a catalog identity check. It answers the probe's `key`/`run`/`quit` protocol, so `judgeProbeOutput` judges its transcript. The receipt is `OUTPUT/fujimod-flash-boot-receipt.json`, with every state's frame in `OUTPUT/frames/` and the driver's wall time in `drive_wall_seconds`.
 
-A route on FujiMod is a speed path, not payload acceptance, until the R4F guard lands ([issue 97](https://github.com/skeet70/latent-image/issues/97)): FujiMod opens Unicorn as a Cortex-R5F and the driver does not yet refuse the features a Cortex-R4F lacks or reports differently ([principles](../docs/principles.md#scope-and-evidence)), so a payload that passes here still needs the retained engine's acceptance runs.
+FujiMod opens Unicorn as a Cortex-R5F. Both FujiMod drivers arm an R4F guard (`emulation/fujimod-xm1/src/r4f.rs`, [principles](../docs/principles.md#scope-and-evidence)), built only on FujiMod's exported CPU hooks: a block hook on every core records each newly entered block, and after each run window of at most 1,000,000 instructions the guard decodes those blocks. It refuses:
+- A32 SDIV/UDIV;
+- PLDW;
+- CP15 c0 ID register reads with opc1 0, which includes MIDR, MPIDR, MPUIR and TCMTR; the cache identification registers stay admitted;
+- CP15 c15 accesses other than the stock data-cache invalidate `c15,c5,0`;
+- CP15 c9 TCM registers other than the `c9,c1,{0,1}` region registers;
+- after any block that writes CP15 c6, an enabled MPU region 12-15 on either core.
+
+A refused block stops the run with an `R4F guard:` failure naming the instruction, its address and core, even when Unicorn itself would stop on the same instruction. T32 SDIV/UDIV are admitted, as Cortex-R4 has them. A block rewritten in place with the same address and length is decoded once. The synthetic boot-ROM fixtures in `emulation/fujimod-xm1/tests/r4f_guard.rs` run in the Nix build's check phase, so a guard regression fails `@lab_fujimod_xm1`: ordinary A32 code and a CLIDR read run, each refused encoding stops, region 12 stops and region 11 runs. The stock flash-boot route passes with the guard on. On a loaded host the guard took the route driver from 10.1 s to 18.6 s.
+
+A route on FujiMod is a speed path, not payload acceptance, while the recorded trajectories do not reproduce on it ([RAM-push bridge on FujiMod](#ram-push-bridge-on-fujimod)) and its X70-derived device timings stay unmeasured on X-M1. A payload that passes here still needs the retained engine's acceptance runs.
 
 The run document `emulation/fujimod-xm1/data/xm1-150.json` keeps the node set, windows and timing values of FujiMod's `x70-110-rec` plan at `ecdb6cb6`. Those values are SoC catalog facts or unmeasured model policy, not X-M1 measurements. The X-M1 values come from the retained closure: GPIO `0xe6c`, the `xm1-rec.json` ADC samples and MCU packet, boot reply `0x10` in MCU register `0x60` (E-XM1-BODY-BOOT-STATUS-150), whole sixteen-bit panel words (`panel_serial.py`, mask `0xffff`), the input processor's mode-2 command control and field-preserving phase acknowledge (`input_processing_devices.py`), and the key rows, calibration tags, current-menu node and release byte of `menu_inputs.py` and `native/src/menu.rs`. The live image and statistics assets are declared, unmeasured scene inputs.
 
@@ -584,7 +594,7 @@ The bridge speaks the cardless bridge's events and commands (`start-options`, `s
 - USB host operations and bus state drive the ff80 endpoint, which uses the `xm1-rec.json` endpoint contract and IRQ 84/85 on core 0.
 - Instruction points on both cores serve the trace sites. The rendezvous UP hold is applied at `rendezvous-locked`.
 - The calibrated ADC midpoints of control-table rows 14-20 drive keys, rows 24-35 drive the mode dial, and dial-push is a GPIO 0/10 keepalive every 32 transfers.
-- Keys use a render settle ported from `tools/menu_render_settle.py`, without its selected-plane publication check.
+- Keys use a render settle ported from `tools/menu_render_settle.py`. Before a press it waits for the UI fields, the four UI tasks and the vector GPU to drain; after the press it waits for the press's packet to be consumed, new GPU work and a changed presented frame.
 - The adjustment NAND's blocks 0x381..0x3a1 are programmed into the NAND medium before boot.
 
 The run document replaces FujiMod's FFF47000 packed422 scaler with an adapter device that ports the retained declared UI conversion (YYCbCr to ABGR, IRQ 67), so the mode guides render.

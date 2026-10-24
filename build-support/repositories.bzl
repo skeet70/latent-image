@@ -66,11 +66,13 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/lib.rs",
     "//emulation:fujimod-xm1/src/machine.rs",
     "//emulation:fujimod-xm1/src/main.rs",
+    "//emulation:fujimod-xm1/src/r4f.rs",
     "//emulation:fujimod-xm1/src/ram_push.rs",
     "//emulation:fujimod-xm1/src/render.rs",
     "//emulation:fujimod-xm1/src/run.rs",
     "//emulation:fujimod-xm1/src/trace.rs",
     "//emulation:fujimod-xm1/src/ui_conversion.rs",
+    "//emulation:fujimod-xm1/tests/r4f_guard.rs",
 ]
 
 _NIX_BUILD_CAP = ["--max-jobs", "2", "--cores", "4"]
