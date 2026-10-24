@@ -17,7 +17,7 @@ JSON Schema draft 2020-12 definitions capture the manifest and ledger contracts.
 | `af-session-annotation.schema.json` | Each private AF-attempt annotation record from `//af-session:af-session` ([session kit](../reports/af-session-kit.md#11-annotation-workflow)) |
 | `recipe-set.schema.json` | A future `manifests/recipe-set.json`, the host-authored RC1 named-recipe set ([design](../reports/recipe-design.md)) |
 
-The native-case schema is narrower than the compiled adapter for byte sizes, artifacts and expected events; [the actual limits](../emulation/README.md#case-contract-and-execution-authority) describe this unresolved contract gap.
+The native-case schema, the compiled adapter and the runner's `MAX_*` constants carry one acceptance contract; [the limits](../emulation/README.md#case-contract-and-execution-authority) name them and the boundary tests hold them together.
 
 Camera, firmware and memory-map manifests are partial baseline records, not a current body inventory; see [their scope](../manifests/README.md). The benchmark protocol defines the offline pilot design with unresolved private settings; its schema accepts only `draft-offline`, with no camera authorization.
 

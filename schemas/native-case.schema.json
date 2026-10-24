@@ -16,7 +16,7 @@
       "properties": {"architecture": {"const": "arm"}, "model": {"const": "cortex-r5f"}, "mode": {"const": "arm"}, "endian": {"const": "little"}}
     },
     "artifacts": {
-      "type": "array", "maxItems": 16,
+      "type": "array", "maxItems": 20,
       "items": {
         "type": "object", "additionalProperties": false,
         "required": ["id", "path", "size", "sha256"],
@@ -45,7 +45,7 @@
           "initial": {
             "oneOf": [
               {"type": "object", "additionalProperties": false, "required": ["zero"], "properties": {"zero": {"const": true}}},
-              {"type": "object", "additionalProperties": false, "required": ["artifact", "offset", "length"], "properties": {"artifact": {"$ref": "#/$defs/id"}, "offset": {"type": "integer", "minimum": 0, "maximum": 1048576}, "length": {"$ref": "#/$defs/size"}}}
+              {"type": "object", "additionalProperties": false, "required": ["artifact", "offset", "length"], "properties": {"artifact": {"$ref": "#/$defs/id"}, "offset": {"type": "integer", "minimum": 0, "maximum": 2097152}, "length": {"$ref": "#/$defs/size"}}}
             ]
           }
         }
@@ -75,10 +75,10 @@
         "registers": {"$ref": "#/$defs/registers", "minProperties": 1},
         "memory": {
           "type": "array", "maxItems": 64,
-          "items": {"type": "object", "additionalProperties": false, "required": ["region", "offset", "hex"], "properties": {"region": {"$ref": "#/$defs/id"}, "offset": {"type": "integer", "minimum": 0, "maximum": 1048576}, "hex": {"type": "string", "pattern": "^([0-9a-f]{2})+$", "maxLength": 2097152}}}
+          "items": {"type": "object", "additionalProperties": false, "required": ["region", "offset", "hex"], "properties": {"region": {"$ref": "#/$defs/id"}, "offset": {"type": "integer", "minimum": 0, "maximum": 2097152}, "hex": {"type": "string", "pattern": "^([0-9a-f]{2})+$", "maxLength": 4194304}}}
         },
         "events": {
-          "type": "array", "maxItems": 32,
+          "type": "array", "maxItems": 128,
           "items": {"type": "object", "additionalProperties": false, "required": ["address", "inputs", "outputs"], "properties": {"address": {"$ref": "#/$defs/u32"}, "inputs": {"$ref": "#/$defs/stubRegisters"}, "outputs": {"$ref": "#/$defs/stubRegisters"}}}
         }
       }
@@ -88,7 +88,7 @@
   "$defs": {
     "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"},
     "u32": {"type": "string", "pattern": "^0x[0-9a-f]{8}$"},
-    "size": {"type": "integer", "minimum": 1, "maximum": 1048576},
+    "size": {"type": "integer", "minimum": 1, "maximum": 2097152},
     "registers": {
       "type": "object", "additionalProperties": false,
       "properties": {
