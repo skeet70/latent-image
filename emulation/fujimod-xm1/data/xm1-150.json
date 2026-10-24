@@ -807,16 +807,23 @@
           "irq1"
         ],
         "model": {
-          "irq": {
-            "core": 0,
-            "line": 67
+          "adapter": {
+            "implementation": "xm1-declared-ui-conversion",
+            "options": {
+              "irq": {
+                "Core": {
+                  "core": 0,
+                  "line": 67
+                }
+              },
+              "ram_bytes": 536870912
+            },
+            "references": {},
+            "wires": []
           },
-          "kind": "scaler",
-          "options": {
-            "completion_ticks": 2
-          }
+          "kind": "adapter"
         },
-        "name": "image_scaler",
+        "name": "ui_conversion",
         "windows": [
           {
             "base": 4294209536,
@@ -1398,10 +1405,52 @@
         "dependencies": [],
         "model": {
           "cable": "usb_cable",
-          "endpoints": null,
+          "endpoints": {
+            "irq": {
+              "Core": {
+                "core": 0,
+                "line": 84
+              }
+            },
+            "dma_irq": {
+              "Core": {
+                "core": 0,
+                "line": 85
+              }
+            },
+            "ram_bytes": 536870912
+          },
           "kind": "usb",
           "options": {
-            "endpoints": null
+            "endpoints": {
+              "transfer_ticks": 4,
+              "packet_bytes": 64,
+              "dma_limit": 1048576,
+              "out_endpoints": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  2,
+                  1
+                ]
+              ],
+              "in_endpoints": [
+                [
+                  128,
+                  0
+                ],
+                [
+                  129,
+                  1
+                ],
+                [
+                  131,
+                  2
+                ]
+              ]
+            }
           }
         },
         "name": "usb",
@@ -2549,6 +2598,10 @@
     }
   ],
   "adc": "adc",
+  "gpio": "serial_gpio",
+  "nand": "nand",
+  "usb": "usb",
+  "usb_cable": "usb_cable",
   "scanout": "scanout",
   "firmware": {
     "current_menu": 9794000,
@@ -2616,6 +2669,1045 @@
         "channel": 9,
         "low_tag": 14238,
         "high_tag": 14236
+      }
+    ],
+    "render": {
+      "copied_command": 22955728,
+      "packet_token": 22955730,
+      "initialized": 22955789,
+      "display_suppression": 22956064,
+      "sender_token": 21902012,
+      "consumer_token": 21902136,
+      "sender_command": 21902010,
+      "staged_render_command": 22955752,
+      "staged_render_token": 22955754,
+      "batch_busy": 9807516,
+      "batch_callback": 9807520,
+      "commands_dirty": 9807528,
+      "display_pending": 9807532,
+      "ui_pending": 9765112,
+      "ui_busy": 9765136,
+      "task_tables": [
+        [
+          0,
+          1074087440
+        ],
+        [
+          1,
+          1074087572
+        ]
+      ],
+      "graphics": "graphics",
+      "task_entries": [
+        12726112,
+        7153408,
+        7173440,
+        17862960
+      ]
+    },
+    "dial_push": {
+      "code": 43,
+      "row": 22,
+      "port": 0,
+      "pin": 10,
+      "pressed_high": false
+    },
+    "mode_dial": {
+      "channel": 3,
+      "running": [
+        "S",
+        "M",
+        "P",
+        "A",
+        "AUTO",
+        "C",
+        "Sports",
+        "Landscape",
+        "Portrait"
+      ],
+      "rows": [
+        {
+          "position": "S",
+          "code": 783,
+          "row": 24,
+          "low_tag": 14082,
+          "high_tag": 14080
+        },
+        {
+          "position": "P",
+          "code": 782,
+          "row": 25,
+          "low_tag": 14086,
+          "high_tag": 14084
+        },
+        {
+          "position": "SR+",
+          "code": 774,
+          "row": 26,
+          "low_tag": 14090,
+          "high_tag": 14088
+        },
+        {
+          "position": "AUTO",
+          "code": 770,
+          "row": 27,
+          "low_tag": 14094,
+          "high_tag": 14092
+        },
+        {
+          "position": "Adv.",
+          "code": 796,
+          "row": 28,
+          "low_tag": 14098,
+          "high_tag": 14096
+        },
+        {
+          "position": "SP",
+          "code": 772,
+          "row": 29,
+          "low_tag": 14102,
+          "high_tag": 14100
+        },
+        {
+          "position": "Sports",
+          "code": 777,
+          "row": 30,
+          "low_tag": 14106,
+          "high_tag": 14104
+        },
+        {
+          "position": "Landscape",
+          "code": 776,
+          "row": 31,
+          "low_tag": 14110,
+          "high_tag": 14108
+        },
+        {
+          "position": "Portrait",
+          "code": 775,
+          "row": 32,
+          "low_tag": 14114,
+          "high_tag": 14112
+        },
+        {
+          "position": "C",
+          "code": 791,
+          "row": 33,
+          "low_tag": 14118,
+          "high_tag": 14116
+        },
+        {
+          "position": "M",
+          "code": 786,
+          "row": 34,
+          "low_tag": 14122,
+          "high_tag": 14120
+        },
+        {
+          "position": "A",
+          "code": 784,
+          "row": 35,
+          "low_tag": 14126,
+          "high_tag": 14124
+        }
+      ]
+    }
+  },
+  "provenance": {
+    "images": [
+      {
+        "name": "id4",
+        "path": "lz/id4-0061c400.bin",
+        "load": 6407168,
+        "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+      },
+      {
+        "name": "id5",
+        "path": "lz/id5-00bf1a00.bin",
+        "load": 12524032,
+        "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+      },
+      {
+        "name": "plain",
+        "path": "decode/img6-01100000.bin",
+        "load": 17825792,
+        "sha256": "ee211bdaad39005b4f72e3443a76ca194905381a967cab787d6a4ef14e2d889d"
+      },
+      {
+        "name": "loader-a",
+        "path": "decode/loader-40000.bin",
+        "load": 262144,
+        "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+      },
+      {
+        "name": "loader-b",
+        "path": "decode/loader-d0000.bin",
+        "load": 851968,
+        "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+      },
+      {
+        "name": "boot",
+        "path": "decode/boot-40048.bin",
+        "load": 0,
+        "sha256": "c2da900dcd3f193b05b5ae968dfcb87723571462eafd84c0fed8467f66f7dff3"
+      },
+      {
+        "name": "boot-rom",
+        "path": "bootrom/bootrom-0x80000000-4000.bin",
+        "load": 2147483648,
+        "sha256": "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be"
+      }
+    ],
+    "windows": [
+      {
+        "node": "irq0",
+        "base": 4294651904,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id5",
+          "at": 15549408,
+          "value": 4294651904
+        }
+      },
+      {
+        "node": "irq1",
+        "base": 4294656000,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "loader-a",
+          "at": 272620,
+          "value": 4294656000
+        }
+      },
+      {
+        "node": "timers",
+        "base": 4294512640,
+        "size": 64,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7487556,
+          "value": 4294512640
+        }
+      },
+      {
+        "node": "serial_gpio",
+        "base": 4294479872,
+        "size": 1052,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7049104,
+          "value": 4294479872
+        }
+      },
+      {
+        "node": "serial_gpio",
+        "base": 4294480928,
+        "size": 96,
+        "binding": {
+          "kind": "fujimod-catalog-unchecked"
+        }
+      },
+      {
+        "node": "serial_spi1",
+        "base": 4294459456,
+        "size": 32,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6606480,
+          "value": 4294459464
+        }
+      },
+      {
+        "node": "dram_controller",
+        "base": 4294545408,
+        "size": 256,
+        "binding": {
+          "kind": "code",
+          "image": "boot-rom",
+          "at": 2147484440,
+          "value": 4294545408
+        }
+      },
+      {
+        "node": "dram_phy",
+        "base": 4293922816,
+        "size": 584,
+        "binding": {
+          "kind": "code",
+          "image": "id5",
+          "at": 15496988,
+          "value": 4293922816
+        }
+      },
+      {
+        "node": "reset_control",
+        "base": 4294647812,
+        "size": 20,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6667520,
+          "value": 4294647812
+        }
+      },
+      {
+        "node": "clocks",
+        "base": 4294475776,
+        "size": 136,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6595320,
+          "value": 4294475776
+        }
+      },
+      {
+        "node": "clocks",
+        "base": 4294480924,
+        "size": 4,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7291596,
+          "value": 4294480924
+        }
+      },
+      {
+        "node": "block98000",
+        "base": 4294541312,
+        "size": 768,
+        "binding": {
+          "kind": "code",
+          "image": "boot-rom",
+          "at": 2147484260,
+          "value": 4294541312
+        }
+      },
+      {
+        "node": "ui_conversion",
+        "base": 4294209536,
+        "size": 132,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6868308,
+          "value": 4294209536
+        }
+      },
+      {
+        "node": "raw_conversion",
+        "base": 4294189056,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6821284,
+          "value": 4294189056
+        }
+      },
+      {
+        "node": "prefilter",
+        "base": 4294025216,
+        "size": 560,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6920060,
+          "value": 4294025216
+        }
+      },
+      {
+        "node": "raw_statistics",
+        "base": 4294033408,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6804048,
+          "value": 4294033408
+        }
+      },
+      {
+        "node": "still_processor",
+        "base": 4294115328,
+        "size": 4,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6852416,
+          "value": 4294115328
+        }
+      },
+      {
+        "node": "still_processor",
+        "base": 4294115508,
+        "size": 72,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6855448,
+          "value": 4294115508
+        }
+      },
+      {
+        "node": "still_processor",
+        "base": 4294120448,
+        "size": 14336,
+        "binding": {
+          "kind": "code",
+          "image": "id5",
+          "at": 14306264,
+          "value": 4294120448
+        }
+      },
+      {
+        "node": "still_processor",
+        "base": 4294148096,
+        "size": 96,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6862648,
+          "value": 4294148096
+        }
+      },
+      {
+        "node": "still_processor",
+        "base": 4294180864,
+        "size": 256,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6768172,
+          "value": 4294180864
+        }
+      },
+      {
+        "node": "still_processor",
+        "base": 4294184960,
+        "size": 4096,
+        "binding": {
+          "kind": "word",
+          "image": "id4",
+          "at": 8523948,
+          "value": 4294184960
+        }
+      },
+      {
+        "node": "still_processor",
+        "base": 4294197248,
+        "size": 8320,
+        "binding": {
+          "kind": "word",
+          "image": "id4",
+          "at": 8526132,
+          "value": 4294197248
+        }
+      },
+      {
+        "node": "still_processor",
+        "base": 4294205584,
+        "size": 112,
+        "binding": {
+          "kind": "fujimod-catalog-unchecked"
+        }
+      },
+      {
+        "node": "warp",
+        "base": 4294332416,
+        "size": 332,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6864988,
+          "value": 4294332416
+        }
+      },
+      {
+        "node": "jpeg_encoder",
+        "base": 4294320128,
+        "size": 300,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6663540,
+          "value": 4294320128
+        }
+      },
+      {
+        "node": "jpeg_decoder",
+        "base": 4294324224,
+        "size": 300,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6661376,
+          "value": 4294324224
+        }
+      },
+      {
+        "node": "sd_clocks",
+        "base": 4294246444,
+        "size": 2,
+        "binding": {
+          "kind": "fujimod-catalog-unchecked"
+        }
+      },
+      {
+        "node": "adc",
+        "base": 4294483968,
+        "size": 96,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6590772,
+          "value": 4294483968
+        }
+      },
+      {
+        "node": "statistics",
+        "base": 4294017024,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6775904,
+          "value": 4294017024
+        }
+      },
+      {
+        "node": "statistics",
+        "base": 4294082560,
+        "size": 13312,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6836448,
+          "value": 4294082560
+        }
+      },
+      {
+        "node": "image_output_0",
+        "base": 4293992448,
+        "size": 256,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6757604,
+          "value": 4293992448
+        }
+      },
+      {
+        "node": "image_output_1",
+        "base": 4293996544,
+        "size": 256,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6757724,
+          "value": 4293996544
+        }
+      },
+      {
+        "node": "face_detector",
+        "base": 4294000640,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id5",
+          "at": 17189112,
+          "value": 4294000640
+        }
+      },
+      {
+        "node": "phase_detection",
+        "base": 4294066176,
+        "size": 208,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6800808,
+          "value": 4294066176
+        }
+      },
+      {
+        "node": "phase_detection",
+        "base": 4294070276,
+        "size": 164,
+        "binding": {
+          "kind": "fujimod-catalog-unchecked"
+        }
+      },
+      {
+        "node": "sdio",
+        "base": 4294250496,
+        "size": 64,
+        "binding": {
+          "kind": "code",
+          "image": "plain",
+          "at": 19470836,
+          "value": 4294250496
+        }
+      },
+      {
+        "node": "sdio",
+        "base": 4294250752,
+        "size": 8,
+        "binding": {
+          "kind": "fujimod-catalog-unchecked"
+        }
+      },
+      {
+        "node": "nand",
+        "base": 4294254592,
+        "size": 2304,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7199928,
+          "value": 4294254592
+        }
+      },
+      {
+        "node": "lz",
+        "base": 4294193152,
+        "size": 256,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6830460,
+          "value": 4294193152
+        }
+      },
+      {
+        "node": "memory_dma",
+        "base": 4293926912,
+        "size": 64,
+        "binding": {
+          "kind": "code",
+          "image": "boot",
+          "at": 14644,
+          "value": 4293926912
+        }
+      },
+      {
+        "node": "memory_dma",
+        "base": 4293927680,
+        "size": 4,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6705900,
+          "value": 4293927680
+        }
+      },
+      {
+        "node": "usb",
+        "base": 4294262784,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id5",
+          "at": 14135216,
+          "value": 4294263180
+        }
+      },
+      {
+        "node": "usb",
+        "base": 4294266880,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7581344,
+          "value": 4294270975
+        }
+      },
+      {
+        "node": "power_peripherals",
+        "base": 4294459392,
+        "size": 32,
+        "binding": {
+          "kind": "word",
+          "image": "id4",
+          "at": 8556876,
+          "value": 4294459392
+        }
+      },
+      {
+        "node": "power_peripherals",
+        "base": 4294205568,
+        "size": 16,
+        "binding": {
+          "kind": "fujimod-catalog-unchecked"
+        }
+      },
+      {
+        "node": "power_peripherals",
+        "base": 4293927040,
+        "size": 64,
+        "binding": {
+          "kind": "fujimod-catalog-unchecked"
+        }
+      },
+      {
+        "node": "power_peripherals",
+        "base": 4294542592,
+        "size": 8,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6708068,
+          "value": 4294542592
+        }
+      },
+      {
+        "node": "audio_registers",
+        "base": 4293926976,
+        "size": 64,
+        "binding": {
+          "kind": "code",
+          "image": "id5",
+          "at": 15494460,
+          "value": 4293927004
+        }
+      },
+      {
+        "node": "audio_registers",
+        "base": 4294574080,
+        "size": 4096,
+        "binding": {
+          "kind": "word",
+          "image": "id4",
+          "at": 8141620,
+          "value": 4294574080
+        }
+      },
+      {
+        "node": "audio_registers",
+        "base": 4294578176,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7238388,
+          "value": 4294582271
+        }
+      },
+      {
+        "node": "pulse",
+        "base": 4294610944,
+        "size": 3328,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6620928,
+          "value": 4294610944
+        }
+      },
+      {
+        "node": "lens_serial",
+        "base": 4294459520,
+        "size": 32,
+        "binding": {
+          "kind": "code",
+          "image": "loader-a",
+          "at": 265956,
+          "value": 4294459520
+        }
+      },
+      {
+        "node": "control_bus0",
+        "base": 4294463488,
+        "size": 64,
+        "binding": {
+          "kind": "word",
+          "image": "id4",
+          "at": 8556896,
+          "value": 4294463488
+        }
+      },
+      {
+        "node": "control_bus1",
+        "base": 4294463552,
+        "size": 64,
+        "binding": {
+          "kind": "fujimod-catalog-unchecked"
+        }
+      },
+      {
+        "node": "companion",
+        "base": 4264656896,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6658096,
+          "value": 4264656960
+        }
+      },
+      {
+        "node": "companion",
+        "base": 4265279488,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6658080,
+          "value": 4265279488
+        }
+      },
+      {
+        "node": "companion",
+        "base": 4269850624,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6658360,
+          "value": 4269850624
+        }
+      },
+      {
+        "node": "companion",
+        "base": 4269854720,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6657612,
+          "value": 4269856772
+        }
+      },
+      {
+        "node": "image_input",
+        "base": 4293984256,
+        "size": 1024,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6676968,
+          "value": 4293984256
+        }
+      },
+      {
+        "node": "input_auxiliary",
+        "base": 4293988352,
+        "size": 256,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6752320,
+          "value": 4293988352
+        }
+      },
+      {
+        "node": "parameters",
+        "base": 4294021120,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id5",
+          "at": 17052236,
+          "value": 4294021120
+        }
+      },
+      {
+        "node": "hdmi",
+        "base": 4294344704,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7108448,
+          "value": 4294344704
+        }
+      },
+      {
+        "node": "hdmi",
+        "base": 4294402048,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7165700,
+          "value": 4294402048
+        }
+      },
+      {
+        "node": "hdmi",
+        "base": 4294406144,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7164812,
+          "value": 4294410239
+        }
+      },
+      {
+        "node": "output",
+        "base": 4294467584,
+        "size": 12,
+        "binding": {
+          "kind": "word",
+          "image": "id4",
+          "at": 8556892,
+          "value": 4294467584
+        }
+      },
+      {
+        "node": "graphics",
+        "base": 4294410240,
+        "size": 20480,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 8988076,
+          "value": 4294410240
+        }
+      },
+      {
+        "node": "scanout",
+        "base": 4294356992,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7115124,
+          "value": 4294356992
+        }
+      },
+      {
+        "node": "scanout",
+        "base": 4294369280,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7115172,
+          "value": 4294369280
+        }
+      },
+      {
+        "node": "display_timing",
+        "base": 4294352896,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7109700,
+          "value": 4294352896
+        }
+      },
+      {
+        "node": "display_timing",
+        "base": 4294365184,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7109856,
+          "value": 4294365184
+        }
+      },
+      {
+        "node": "display_formatter",
+        "base": 4294348800,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7127632,
+          "value": 4294348800
+        }
+      },
+      {
+        "node": "display_formatter",
+        "base": 4294361088,
+        "size": 4096,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7128056,
+          "value": 4294361088
+        }
+      },
+      {
+        "node": "video_encoder",
+        "base": 4294312960,
+        "size": 256,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6724628,
+          "value": 4294313104
+        }
+      },
+      {
+        "node": "video_encoder",
+        "base": 4294314752,
+        "size": 1024,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6743192,
+          "value": 4294314752
+        }
+      },
+      {
+        "node": "image_combination",
+        "base": 4294213632,
+        "size": 1280,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6719972,
+          "value": 4294213632
+        }
+      }
+    ],
+    "ram": [
+      {
+        "fact": "current-menu",
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6408760,
+          "value": 9794000
+        }
+      },
+      {
+        "fact": "calibration-pointer",
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6943056,
+          "value": 9882192
+        }
+      },
+      {
+        "fact": "scanner-registered",
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6947356,
+          "value": 9041864
+        }
+      },
+      {
+        "fact": "key-table",
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 6947608,
+          "value": 8552736
+        }
       }
     ]
   }

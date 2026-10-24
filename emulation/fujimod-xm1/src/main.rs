@@ -1,12 +1,9 @@
 //! Cold-boots X-M1 1.50 on FujiMod's EXR II runtime and answers the
 //! interactive protocol of `tools/probe_setup_menus.py`, so
 //! `Emulation.FlashBootRoute.judgeProbeOutput` judges its transcript.
-mod guest;
-mod run;
-
-use fujimod_emulator::session::Session;
-use guest::{RouteKey, set_adc};
-use run::{RunDocument, ValidatedUpdate};
+use fujimod_xm1::guest::RouteKey;
+use fujimod_xm1::machine::{KeyPulse, Machine};
+use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
 use sha2::{Digest, Sha256};
 use std::{
     io::{BufRead, Write},
@@ -20,7 +17,6 @@ The caller validates DAT as X-M1 1.50-compatible. Commands on stdin:\n\
 
 /// Largest single continuation the probe accepts.
 const MAX_PHASE: u64 = 15_000_000;
-const RELEASE_POLL: u64 = 250_000;
 
 struct Arguments {
     run: PathBuf,
@@ -56,15 +52,9 @@ fn read(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 struct Driver {
-    document: RunDocument,
-    session: Session,
+    machine: Machine,
     output: PathBuf,
     frames: usize,
-    failure: Option<String>,
-}
-
-fn instructions(session: &Session) -> u64 {
-    session.board.instruction_counts().iter().sum()
 }
 
 /// One line per stop, without the separator words the transcript parser splits on.
@@ -73,68 +63,9 @@ fn one_line(text: &str) -> String {
 }
 
 impl Driver {
-    fn run(&mut self, count: u64) {
-        if self.failure.is_some() || count == 0 {
-            return;
-        }
-        if let Err(error) = self.session.board.run_with_limits(count, self.document.execution.quantum, None, None) {
-            self.failure = Some(error);
-        }
-    }
-
-    fn key(&mut self, key: RouteKey, hold: u64, release: u64) -> Result<(), String> {
-        if self.failure.is_some() {
-            return Err("Restore the checkpoint before another input after a strict stop".into());
-        }
-        let (channel, sample) = self.document.firmware.pressed_sample(&self.session, key)?;
-        set_adc(&mut self.session, &self.document.adc, channel, sample)?;
-        self.run(hold);
-        let released = self.document.firmware.released_sample;
-        set_adc(&mut self.session, &self.document.adc, channel, released)?;
-        let start = instructions(&self.session);
-        while self.failure.is_none() && !self.document.firmware.released(&self.session, key)? {
-            let spent = instructions(&self.session) - start;
-            if spent >= release {
-                break;
-            }
-            self.run((release - spent).min(RELEASE_POLL));
-        }
-        Ok(())
-    }
-
-    /// PNG of the first scanout output presenting configured graphics.
-    fn frame(&self) -> Result<Option<Vec<u8>>, String> {
-        let name = &self.document.scanout.0;
-        let state = self.session.scanout_state(name)?;
-        let presented = state["instances"].as_array().into_iter().flatten().find(|instance| {
-            instance["graphics"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .flat_map(|layer| layer["channels"].as_array().into_iter().flatten())
-                .any(|channel| {
-                    channel["enabled"] == true
-                        && channel["configured"] == true
-                        && channel["width"].as_u64().is_some_and(|n| n > 1)
-                        && channel["height"].as_u64().is_some_and(|n| n > 1)
-                })
-        });
-        let Some(instance) = presented.and_then(|instance| instance["instance"].as_u64()) else {
-            return Ok(None);
-        };
-        let instance = usize::try_from(instance).map_err(|_| "scanout instance")?;
-        let Some(frame) = self.session.scanout(name, instance, true, false)? else {
-            return Ok(None);
-        };
-        let rgb = frame.rgb.ok_or("scanout did not return RGB")?;
-        let width = u32::try_from(frame.width).map_err(|_| "frame width")?;
-        let height = u32::try_from(frame.height).map_err(|_| "frame height")?;
-        Ok(Some(fujimod_recording::Frame::rgb(width, height, rgb)?.png()?.to_vec()))
-    }
-
     fn print_state(&mut self, out: &mut impl Write) -> Result<(), String> {
-        let menu = self.document.firmware.menu(&self.session);
-        let frame = match self.frame() {
+        let menu = self.machine.menu();
+        let frame = match self.machine.frame() {
             Ok(Some(png)) => {
                 self.frames += 1;
                 let path = self.output.join(format!("frame-{:03}.png", self.frames));
@@ -147,7 +78,7 @@ impl Driver {
                 "None".into()
             }
         };
-        let failure = self.failure.as_deref().map(one_line).unwrap_or_else(|| "None".into());
+        let failure = self.machine.failure.as_deref().map(one_line).unwrap_or_else(|| "None".into());
         let menu = match menu {
             Ok(Some(menu)) => format!("id={} setting={} cursor={}", menu.menu_id, menu.setting_id, menu.cursor),
             Ok(None) => "menu=None".into(),
@@ -156,8 +87,8 @@ impl Driver {
         writeln!(
             out,
             "instructions={} failure={failure} error=None\n  ticks={} {menu}\n  frame={frame} output={}",
-            instructions(&self.session),
-            self.session.board.now(),
+            self.machine.instructions(),
+            self.machine.session.board.now(),
             self.output.display()
         )
         .map_err(|e| e.to_string())?;
@@ -178,12 +109,12 @@ fn command(driver: &mut Driver, line: &str) -> Result<bool, String> {
         ["quit"] => Ok(false),
         ["run", limit] => {
             let limit = count(limit)?;
-            driver.run(limit);
+            driver.machine.run(limit);
             Ok(true)
         }
         ["key", name, hold, release] => {
             let key = RouteKey::parse(name)?;
-            driver.key(key, count(hold)?, count(release)?)?;
+            driver.machine.key(key, KeyPulse { hold: count(hold)?, release: count(release)? })?;
             Ok(true)
         }
         _ => Err(format!("unknown command: {line}")),
@@ -201,8 +132,8 @@ fn drive() -> Result<(), String> {
     let mut session = run::open(&document, &update, &boot_rom)?;
     session.board.set_execution_policy(document.execution_policy.into())?;
     let boot = document.boot_instructions;
-    let mut driver = Driver { document, session, output: arguments.output, frames: 0, failure: None };
-    driver.run(boot);
+    let mut driver = Driver { machine: Machine::new(document, session)?, output: arguments.output, frames: 0 };
+    driver.machine.run(boot);
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     driver.print_state(&mut out)?;

@@ -16,6 +16,7 @@ import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey
 import Emulation.EmbeddedPython (PyObject, RuntimeIdentity (..))
 import qualified Emulation.EmbeddedPython as Py
 import Emulation.Sha256 (sha256File, sha256Hex)
+import Emulation.ViewerRuntime (FixedSceneFrame (..), parseFixedSceneFrame)
 import FujiAF.JSON (encodeCanonical)
 import qualified FujiAF.Host as H
 import GHC.Clock (getMonotonicTime)
@@ -47,10 +48,11 @@ data BridgeOptions = BridgeOptions
   , optionCheckpointRoot :: FilePath
   , optionFreshBoot :: Bool
   , optionUiConversion :: UiConversion
+  , optionFixedSceneFrame :: Maybe FixedSceneFrame
   }
 
 parseOptions :: [String] -> IO BridgeOptions
-parseOptions = go (BridgeOptions "firmware/x-m1/1.50/emulator-rec.json" "" "" "" "" False StrictConversion)
+parseOptions = go (BridgeOptions "firmware/x-m1/1.50/emulator-rec.json" "" "" "" "" False StrictConversion Nothing)
   where
     go options [] = do
       forM_
@@ -71,6 +73,9 @@ parseOptions = go (BridgeOptions "firmware/x-m1/1.50/emulator-rec.json" "" "" ""
       "strict" -> go options { optionUiConversion = StrictConversion } rest
       "declared-ui-cpu-fallback" -> go options { optionUiConversion = DeclaredCpuFallback } rest
       _ -> H.failH "--ui-conversion-profile must be strict or declared-ui-cpu-fallback"
+    go options ("--fixed-scene-frame" : value : rest) = do
+      frame <- either H.failH pure (parseFixedSceneFrame value)
+      go options { optionFixedSceneFrame = Just frame } rest
     go _ (argument : _) = H.failH ("unknown cardless bridge option: " ++ argument)
 
 initialize :: IO RuntimeIdentity
@@ -179,11 +184,12 @@ checkpointKey runtime options = do
   installed <- sha256File (optionInstalledDat options)
   adjustment <- sha256File (optionAdjustmentNand options)
   pure (routeKey guest CardlessAttach
-    [ ("profile", H.s (optionProfile options))
+    ([ ("profile", H.s (optionProfile options))
     , ("installed_dat", H.s (sha256Hex installed))
     , ("adjustment_nand", H.s (sha256Hex adjustment))
     , ("ui_conversion_profile", uiConversionValue (optionUiConversion options))
-    , ("cold_boot", coldBootValue cardlessColdBoot) ])
+    , ("cold_boot", coldBootValue cardlessColdBoot) ]
+    ++ [ ("fixed_scene_frame", Aeson.toJSON frame) | Just (FixedSceneFrame frame) <- [optionFixedSceneFrame options] ]))
 
 -- The start command and server share CPython's stdin buffer.
 readStart :: [FilePath] -> IO (Maybe FilePath)
@@ -243,7 +249,10 @@ serve started runtime options =
   withImport "emulator.boot" $ \boot ->
   withImport "emulator.sd_card" $ \sd ->
   withImport "emulator.image_parameter_devices" $ \parameters ->
-  withImport "tools.probe_setup_menus" $ \menus -> do
+  withImport "tools.probe_setup_menus" $ \menus ->
+  withImport "x70_native._native" $ \native -> do
+    forM_ (optionFixedSceneFrame options) $ \(FixedSceneFrame frame) ->
+      callValue native "virtual_scene_fixed_frame" [ArgJSON (Aeson.toJSON frame)] (H.obj [])
     routeKeyValue <- checkpointKey runtime options
     keySeconds <- elapsedSince started
     let key = routeKeyHex routeKeyValue

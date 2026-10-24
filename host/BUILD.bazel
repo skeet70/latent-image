@@ -18,6 +18,7 @@ haskell_toolchain_library(
         "//emulation:__pkg__",
         "//host/firmware:__pkg__",
         "//matching:__pkg__",
+        "//transport:__pkg__",
     ],
 )
 

@@ -60,9 +60,21 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/Cargo.lock",
     "//emulation:fujimod-xm1/Cargo.toml",
     "//emulation:fujimod-xm1/data/xm1-150.json",
+    "//emulation:fujimod-xm1/src/adjustment.rs",
+    "//emulation:fujimod-xm1/src/ff80.rs",
     "//emulation:fujimod-xm1/src/guest.rs",
+    "//emulation:fujimod-xm1/src/lib.rs",
+    "//emulation:fujimod-xm1/src/machine.rs",
     "//emulation:fujimod-xm1/src/main.rs",
+    "//emulation:fujimod-xm1/src/provenance.rs",
+    "//emulation:fujimod-xm1/src/provenance_main.rs",
+    "//emulation:fujimod-xm1/src/r4f.rs",
+    "//emulation:fujimod-xm1/src/ram_push.rs",
+    "//emulation:fujimod-xm1/src/render.rs",
     "//emulation:fujimod-xm1/src/run.rs",
+    "//emulation:fujimod-xm1/src/trace.rs",
+    "//emulation:fujimod-xm1/src/ui_conversion.rs",
+    "//emulation:fujimod-xm1/tests/r4f_guard.rs",
 ]
 
 _NIX_BUILD_CAP = ["--max-jobs", "2", "--cores", "4"]
@@ -144,7 +156,7 @@ def _lab_dependencies_impl(_ctx):
         nix_file_deps = _FUJIMOD_NIX_DEPS + _FUJIMOD_XM1_CRATE,
         nixopts = _NIX_BUILD_CAP,
         repository = "@lab_nixpkgs",
-        build_file_content = 'exports_files(["bin/fujimod-xm1", "share/fujimod-xm1/xm1-150.json"], visibility = ["//visibility:public"])',
+        build_file_content = 'exports_files(["bin/fujimod-xm1", "bin/fujimod-xm1-provenance", "bin/fujimod-xm1-ram-push", "share/fujimod-xm1/xm1-150.json"], visibility = ["//visibility:public"])',
     )
 
     # The RAM-push relinker's tools; //host/firmware:ram-push-toolchain-module

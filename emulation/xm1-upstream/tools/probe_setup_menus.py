@@ -435,9 +435,14 @@ def main():
     parser.add_argument('--ui-conversion-profile', type=UIConversionProfile.parse,
                         choices=tuple(UIConversionProfile),
                         help='Require this profile in the incoming snapshot; never attach it on restore')
+    parser.add_argument('--fixed-scene-frame', type=int,
+                        help='Pin every scene render to this positive frame index for the run')
     args = parser.parse_args()
     if args.output and (ROOT / '.tools' not in args.output.resolve().parents or args.output.exists()):
         parser.error('--output must be a fresh ignored .tools directory')
+    if args.fixed_scene_frame is not None:
+        from emulator.virtual_source import select_fixed_scene_frame
+        select_fixed_scene_frame(args.fixed_scene_frame)
     if args.ui_conversion_profile is not None:
         manifest = json.loads((args.snapshot / 'manifest.json').read_text())
         if manifest.get('factory_options', {}).get('ui_conversion_profile') != args.ui_conversion_profile.value:

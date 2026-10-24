@@ -24,13 +24,14 @@ import Foreign.Marshal.Array (peekArray, pokeArray)
 import Foreign.Storable (poke)
 import System.Directory
 import System.FilePath
-import System.Posix.Process (getProcessID)
+import System.Posix.Temp (mkdtemp)
 import EmulatorUsb (bridgeUsbApi)
 import FujiAF.DumpRam (DumpSegment (..))
 import FujiAF.Native (NativeCalls (..), nativeApiWith)
 import FujiAF.RamPush
 import FujiAF.Read (ReadOracle (..), ReadPlan (..), ReadWindow (..))
 import FujiAF.ReadRam (mkPacing, mkRamWatch)
+import FujiAF.ReadBulk (mkBulkWindow, readBulkResultLine, runReadBulk)
 import FujiAF.Rehearsal
 import FujiAF.Routes (RouteWindow (..), routeFixedWindows)
 import FujiAF.StoredGate (CommitDirection (..), mkReferenceWindow)
@@ -192,6 +193,15 @@ ramSessions directory provider = inSession directory $ \root -> do
   freed <- session "free" >>= runRamFree freeRetained clock freeApi
   pure (show (unloaded, freed))
 
+-- read-bulk over two and a half chunks of the bulk camera.
+bulkSession :: FilePath -> Provider -> IO Run
+bulkSession directory provider = do
+  device <- bulkCameraDevice stockBulkCamera
+  api <- provider rehearsalCandidate device
+  clock <- steppingClock
+  window <- either fail pure (mkBulkWindow 0x00bf1a00 0x280000)
+  inSession directory (\dir -> readBulkResultLine <$> runReadBulk window clock api dir)
+
 -- The first file line or outcome where the runs differ; a file one run lacks
 -- reads as empty.
 firstDifference :: Run -> Run -> Maybe String
@@ -214,18 +224,15 @@ firstDifference native emulator
 
 main :: IO ()
 main = do
-  pid <- getProcessID
-  let root = "/dev/shm" </> ("fuji-af-provider-parity-"++show pid)
-      session = root </> "session"
+  -- Concurrent Bazel runs share /dev/shm and every sandbox reports pid 12.
+  root <- mkdtemp "/dev/shm/fuji-af-provider-parity-XXXXXX"
+  let session = root </> "session"
       plan = ReadPlan "parity-plan" "synthetic 1.50 basis"
         [ReadWindow 0 0x000000 "config window 0", ReadWindow 1 0x000100 "product window", ReadWindow 2 0x000200 "signature window"]
         (ReadOracle 1 0x5c) "synthetic generator" (replicate 64 '0')
       ramWindows = [RouteWindow 0 0x400a0800 64 "log store header", RouteWindow 1 0x400c0800 4 "boot tick cell"]
   watch <- either fail pure (mkRamWatch ramWindows =<< mkPacing 2 100)
   reference <- either fail pure (mkReferenceWindow (B.replicate 256 0))
-  exists <- doesPathExist root
-  when exists (removeDirectoryRecursive root)
-  createDirectory root
   let operations =
         [ identifyScript, readConfigScript plan, endSettingScript, probeRamScript, readLogScript
         , probeBootRomScript, probeArea2Script, probeStrapsScript, probeCodeScript, probeOwnershipScript
@@ -243,4 +250,5 @@ main = do
   flip finally (removeDirectoryRecursive root) $ do
     forM_ operations $ \operation -> compareRuns (scriptedName operation) (scripted session operation)
     compareRuns "ram-alloc, ram-push, ram-unload, ram-free" (ramSessions session)
+    compareRuns "read-bulk" (bulkSession session)
   putStrLn "provider parity: ok"

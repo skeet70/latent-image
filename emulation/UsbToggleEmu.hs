@@ -26,7 +26,7 @@ import Data.Word (Word16, Word32, Word8)
 import Emulation.CheckpointKey (CheckpointRoute (..), GuestState, Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, routeKey, routeKeyHex)
 import qualified Emulation.Sha256 as Digest
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
-import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, stageViewerRuntime, validateFirmware, workspace)
+import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame (..), Python (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, stageViewerRuntime, validateFirmware, workspace)
 import EmulatorUsb (BridgeExchange, bridgeUsbApi)
 import qualified FujiAF.Broker as P
 import FujiAF.Read (ReadWindow (..), decodeReadReply, readReplyBytes, readRequestBytes, readRequestFrame)
@@ -283,6 +283,7 @@ data Env = Env
   , envCheckpoints :: FilePath
   , envFresh :: Bool
   , envReplaced :: IORef [String]
+  , envFixedFrame :: Maybe FixedSceneFrame
   , envGuest :: GuestState
   }
 
@@ -309,11 +310,12 @@ startServer env dat nand boot qSample output = do
         _ -> Nothing
       cableAtReset = case boot of CableAtReset _ -> True; _ -> False
       key = routeKey (envGuest env) ToggleRouteBoot
-        [ "profile" .= ("firmware/x-m1/1.50/emulator-rec.json" :: T.Text)
+        ([ "profile" .= ("firmware/x-m1/1.50/emulator-rec.json" :: T.Text)
         , "installed_dat" .= datDigest
         , "adjustment_nand" .= nandDigest
         , "boot" .= object ["cable_at_reset" .= cableAtReset, "adc_at_reset" .= fmap (\(c, v) -> [c, v]) adcAtReset]
         , "first_start_route" .= map routeStepValue firstStartSteps ]
+        ++ [ "fixed_scene_frame" .= frame | Just (FixedSceneFrame frame) <- [envFixedFrame env] ])
       resetArguments = case boot of
         CableAtReset NoQ -> ["--cable-at-reset"]
         CableAtReset QFromReset -> ["--cable-at-reset", "--adc-at-reset", "9=" ++ show (fromMaybe 0 qSample)]
@@ -329,7 +331,7 @@ startServer env dat nand boot qSample output = do
         , "--toggle-checkpoints", envCheckpoints env
         , "--checkpoint-key", routeKeyHex key
         , "--checkpoint-inputs", C.unpack (BL.toStrict (encode (routeKeyDocument key)))
-        ] ++ resetArguments
+        ] ++ resetArguments ++ fixedSceneFrameArguments (envFixedFrame env)
   errors <- openFile (output ++ ".stderr") WriteMode
   (Just input, Just out, _, process) <- createProcess (proc (envPython env) arguments)
     { std_in = CreatePipe, std_out = CreatePipe, std_err = UseHandle errors, cwd = Just (envRuntime env) }
@@ -373,8 +375,9 @@ routeStepValue (RunInstructions count) = object ["run" .= count]
 routeStepValue (PulseKey key) = object ["key" .= key, "hold_instructions" .= firstStartPulse, "release_instructions" .= firstStartPulse]
 
 -- | First-start route to the shooting screen: language and date prompts. The
--- prompts need an 8,000,000-instruction hold and release cap per key. A route
--- checkpoint's key includes these steps.
+-- prompts need an 8,000,000-instruction hold and release cap per key; the
+-- per-class defaults leave the CC-icon+toggle e5u detach scenarios blocked at
+-- the step-2 detach. A route checkpoint's key includes these steps.
 firstStartSteps :: [RouteStep]
 firstStartSteps = [RunInstructions 100000000] ++ map PulseKey (replicate 12 "up" ++ ["ok", "ok"]) ++ [RunInstructions 40000000]
 
@@ -1068,6 +1071,7 @@ data Options = Options
   , optDats :: [DatRole]
   , optFresh :: Bool
   , optWorkspace :: Maybe Workspace
+  , optFixedFrame :: Maybe FixedSceneFrame
   , optWarm :: Bool
   }
 
@@ -1084,13 +1088,14 @@ usage = unlines
   , "  --warm-checkpoints  restore or cold-boot and save the route checkpoint of each DAT and NAND"
   , "                      the chosen families boot, then stop without running scenarios"
   , "  --workspace PATH    repository root (default: BUILD_WORKSPACE_DIRECTORY)"
+  , "  --fixed-scene-frame N  pin every scene render to the positive frame index N for the run"
   ]
 
 families :: [String]
 families = ["e2", "e3", "e4e5", "e5u", "e6", "e7", "control"]
 
 parseOptions :: [String] -> IO Options
-parseOptions = go (Options Nothing families [minBound .. maxBound] False Nothing False)
+parseOptions = go (Options Nothing families [minBound .. maxBound] False Nothing Nothing False)
   where
     go options [] = pure options
     go options ("--receipt-output" : value : rest) = go options {optReceipts = Just value} rest
@@ -1108,6 +1113,9 @@ parseOptions = go (Options Nothing families [minBound .. maxBound] False Nothing
     go options ("--fresh-boot" : rest) = go options {optFresh = True} rest
     go options ("--warm-checkpoints" : rest) = go options {optWarm = True} rest
     go options ("--workspace" : value : rest) = go options {optWorkspace = Just (Workspace value)} rest
+    go options ("--fixed-scene-frame" : value : rest) = do
+      frame <- either (ioError . userError) pure (parseFixedSceneFrame value)
+      go options {optFixedFrame = Just frame} rest
     go _ (argument : _) = ioError (userError ("unknown option or missing value: " ++ argument ++ "\n" ++ usage))
     splitComma text = case break (== ',') text of
       (front, []) -> [front]
@@ -1151,7 +1159,7 @@ launch arguments options = do
   callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
   guest <- guestState runtime (InterpreterExecutable python) (UnicornLibrary (stagedUnicorn staged))
   replaced <- newIORef []
-  let env = Env root python runtime (root </> "private-data" </> "emulator-checkpoints" </> "xm1-usb-toggle") (optFresh options) replaced guest
+  let env = Env root python runtime (root </> "private-data" </> "emulator-checkpoints" </> "xm1-usb-toggle") (optFresh options) replaced (optFixedFrame options) guest
       chosen = [s | s <- scenarios, scFamily s `elem` optFamilies options, scDat s `elem` optDats options]
   when (optWarm options) $ do
     forM_ (nub [(scDat s, scNand s) | s <- chosen, scBoot s == RouteBoot]) $ \(dat, nand) -> do
@@ -1161,6 +1169,7 @@ launch arguments options = do
     exitWith ExitSuccess
   head' <- (filter (/= '\n') <$> readProcess "git" ["-C", root, "rev-parse", "HEAD"] "") `catch` \(_ :: IOException) -> pure "unknown"
   dirty <- (not . null <$> readProcess "git" ["-C", root, "status", "--porcelain", "--", "emulation", "host", "transport", "broker"] "") `catch` \(_ :: IOException) -> pure True
+
   results <- mapM (runScenario env receipts) chosen
   BL.writeFile (receipts </> "summary.json") (encode (object
     [ "schema" .= (1 :: Int), "git_head" .= head', "git_dirty_harness" .= dirty

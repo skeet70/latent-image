@@ -8,7 +8,7 @@ import Data.IORef
 import Data.Word (Word8)
 import System.Directory
 import System.FilePath
-import System.Posix.Process (getProcessID)
+import System.Posix.Temp (mkdtemp)
 import FujiAF.Transport
 import FujiAF.Read
 import FujiAF.Probe
@@ -148,10 +148,10 @@ expectStop dir (label,fragment) expectedLogRequests steps = do
 
 main :: IO ()
 main = do
-  pid <- getProcessID
-  tmp <- getTemporaryDirectory
-  let base = tmp </> ("fuji-af-log-tests-"++show pid)
-  createDirectory base
+  -- Every journal schema line is made durable: minutes of fsync on a
+  -- disk-backed scratch directory, under a second on tmpfs. Concurrent Bazel
+  -- runs share /dev/shm and every sandbox reports pid 12.
+  base <- mkdtemp "/dev/shm/fuji-af-log-tests-XXXXXX"
 
   let happySteps = logSteps happyOutcome
   (happy,packets,cleanupEvents) <- runCase (base </> "happy") happySteps

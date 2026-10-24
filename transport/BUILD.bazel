@@ -50,6 +50,7 @@ haskell_library(
         "FujiAF/PlanDocument.hs",
         "FujiAF/Probe.hs",
         "FujiAF/Read.hs",
+        "FujiAF/ReadBulk.hs",
         "FujiAF/ReadMedia.hs",
         "FujiAF/ReadRam.hs",
         "FujiAF/RamPush.hs",
@@ -71,6 +72,7 @@ haskell_library(
     deps = [
         "//host:base",
         "//host:bytestring",
+        "//host:cryptohash-sha256",
         "//broker:core",
         "//host:directory",
         "//host:filepath",
@@ -100,8 +102,8 @@ haskell_library(
 )
 
 # The one test that runs the C: repeated enumeration of the host bus, needing
-# no camera. Every other test injects its own UsbApi or NativeCalls and cannot
-# fail on the C.
+# no camera, and the shim's transfer size gate. Every other test injects its
+# own UsbApi or NativeCalls and cannot fail on the C.
 haskell_test(
     name = "native-usb-tests",
     srcs = ["NativeUsbTest.hs"],
@@ -109,6 +111,7 @@ haskell_test(
     deps = [
         ":camera-core",
         ":native-provider",
+        ":native-shim",
         "//host:base",
         "//broker:core",
     ],
@@ -169,8 +172,9 @@ haskell_test(
 )
 
 # Each transfer makes up to five durable journal appends, its native-outcome
-# line among them; the 515-window sessions cost minutes of fsync work on a
-# disk-backed TEST_TMPDIR.
+# line among them. The 515-window sessions cost minutes of fsync on a
+# disk-backed scratch directory and about a second on tmpfs, where the test
+# puts its synthetic output.
 haskell_test(
     name = "log-tests",
     size = "large",
@@ -312,6 +316,21 @@ haskell_test(
 haskell_test(
     name = "read-ram-tests",
     srcs = ["ReadRamTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//broker:core",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "read-bulk-tests",
+    srcs = ["ReadBulkTest.hs"],
     ghcopts = _GHCOPTS,
     deps = [
         ":camera-core",

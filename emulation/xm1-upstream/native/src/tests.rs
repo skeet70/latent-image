@@ -106,3 +106,43 @@ fn simultaneous_phase_clocks_preserve_edge_order_and_pending_routing() {
         assert_eq!(device.getattr("event_assertions").unwrap().extract::<u64>().unwrap(), 2);
     });
 }
+
+#[test]
+fn fixed_scene_frame_pins_every_render_until_cleared() {
+    Python::initialize();
+    Python::attach(|py| {
+        let module = PyModule::new(py, "_native").unwrap();
+        super::_native(&module).unwrap();
+        let fixed = module.getattr("virtual_scene_fixed_frame").unwrap();
+        let yycbcr = module.getattr("virtual_scene_yycbcr").unwrap();
+        let histogram = module.getattr("virtual_scene_histogram").unwrap();
+        let statistics = module.getattr("virtual_scene_xm1_statistics").unwrap();
+        let configuration = PyList::new(py, [0u64; 58]).unwrap();
+        let render = |frame: u64| -> Vec<u8> {
+            yycbcr.call1((128, 64, py.None(), frame, 256, 192, 0, 0, 256, 192)).unwrap()
+                .cast::<PyBytes>().unwrap().as_bytes().to_vec()
+        };
+        let bins = |frame: u64| -> Vec<u8> {
+            histogram.call1((256, 192, 0, 0, 256, 192, frame)).unwrap()
+                .cast::<PyBytes>().unwrap().as_bytes().to_vec()
+        };
+        let measured = |frame: u64| -> Vec<Option<Vec<u8>>> {
+            statistics.call1((frame, &configuration, false)).unwrap().extract().unwrap()
+        };
+        let animated = (render(7), bins(7), measured(7));
+        assert_ne!(animated.0, render(100));
+        assert_ne!(animated.1, bins(100));
+        assert_ne!(animated.2, measured(100));
+        assert!(fixed.call1((0,)).is_err());
+        assert!(fixed.call1((true,)).is_err());
+        assert_eq!(fixed.call1((7,)).unwrap().extract::<Option<u64>>().unwrap(), Some(7));
+        for passed in [0, 7, 100, u64::MAX] {
+            assert_eq!(render(passed), animated.0);
+            assert_eq!(bins(passed), animated.1);
+            assert_eq!(measured(passed), animated.2);
+        }
+        assert_eq!(fixed.call1((py.None(),)).unwrap().extract::<Option<u64>>().unwrap(), None);
+        assert_eq!(render(7), animated.0);
+        assert_ne!(render(100), animated.0);
+    });
+}

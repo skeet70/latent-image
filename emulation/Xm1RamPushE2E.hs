@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, classicChromeIconPayload, runRamPushE2E, warmAttachCheckpoint) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, classicChromeIconPayload, runRamPushE2E, warmAttachCheckpoint) where
 
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, try)
 import Control.Monad (forM, forM_, unless, when)
@@ -27,6 +27,7 @@ import System.Posix.Files (setFileMode)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, routeKey, routeKeyHex)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.UiTrajectory
+import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
 import EmulatorUsb
 import FujiAF.RamPush
 import FujiAF.Transport (ensurePrivateDirectory, realClock, writePrivateBytes)
@@ -57,6 +58,16 @@ data UiConversionProfile = StrictUiConversion | DeclaredUiCpuFallback deriving (
 -- through the cardless RAM-push bridge.
 data CardMode = CardBacked FilePath | Cardless deriving (Eq, Show)
 
+-- | The FujiMod RAM-push bridge (`emulation/fujimod-xm1`), its run document and the boot ROM.
+data FujiModBridge = FujiModBridge
+  { fujimodBridge :: FilePath
+  , fujimodRunDocument :: FilePath
+  , fujimodBootRom :: FilePath
+  } deriving (Eq, Show)
+
+-- | The engine behind the bridge protocol: the retained Python/native closure or jitl's FujiMod.
+data EmulationRuntime = RetainedRuntime | FujiModRuntime FujiModBridge deriving (Eq, Show)
+
 data E2ESettings = E2ESettings
   { relinkMode :: RelinkMode
   , bootMode :: BootMode
@@ -67,8 +78,10 @@ data E2ESettings = E2ESettings
   , attachHold :: AttachHold
   , flashUiConversion :: UiConversionProfile
   , emulationCardMode :: CardMode
+  , fixedSceneFrame :: Maybe FixedSceneFrame
     -- | The card attach checkpoint key, which 'runRamPushE2E' sets.
   , cardAttachKey :: Maybe RouteKey
+  , emulationRuntime :: EmulationRuntime
   }
 
 -- | The card attach checkpoint key: the staged guest state and the session's inputs.
@@ -85,7 +98,8 @@ cardAttachRouteKey settings python runtime installedMedia adjustmentNand cardIma
     , "adjustment_nand" .= sha256Hex adjustment
     , "menu_sd_image" .= sha256Hex card ]
     ++ [ "attach_hold_key" .= String "q" | attachHold settings == AttachHoldQ ]
-    ++ [ "ui_conversion_profile" .= String "declared-ui-cpu-fallback" | flashUiConversion settings == DeclaredUiCpuFallback ]))
+    ++ [ "ui_conversion_profile" .= String "declared-ui-cpu-fallback" | flashUiConversion settings == DeclaredUiCpuFallback ]
+    ++ [ "fixed_scene_frame" .= frame | Just (FixedSceneFrame frame) <- [fixedSceneFrame settings] ]))
 
 attachHoldArguments :: AttachHold -> [String]
 attachHoldArguments NoAttachHold = []
@@ -102,8 +116,20 @@ cardRecord mode = object
 
 -- | The bridge executable and its arguments for one boot of the session's inputs writing to `output`.
 sessionBridge :: E2ESettings -> FilePath -> FilePath -> FilePath -> BootMode -> FilePath -> IO (FilePath, [String])
-sessionBridge settings python installedMedia adjustmentNand boot output = case emulationCardMode settings of
-  CardBacked cardImage -> do
+sessionBridge settings python installedMedia adjustmentNand boot output = case (emulationRuntime settings, emulationCardMode settings) of
+  (FujiModRuntime bridge, Cardless) -> do
+    require (attachHold settings == NoAttachHold) "the FujiMod RAM-push bridge holds no key across the attach edge"
+    require (null (fixedSceneFrame settings)) "the FujiMod RAM-push bridge takes no --fixed-scene-frame"
+    pure (fujimodBridge bridge,
+      [ "--run", fujimodRunDocument bridge
+      , "--boot-rom", fujimodBootRom bridge
+      , "--installed-dat", installedMedia
+      , "--adjustment-nand", adjustmentNand
+      , "--output", output
+      , "--ram-push-checkpoints", checkpointRoot settings
+      ] ++ freshArguments)
+  (FujiModRuntime _, CardBacked _) -> ioError (userError "the FujiMod RAM-push bridge runs only --cardless")
+  (RetainedRuntime, CardBacked cardImage) -> do
     key <- maybe (ioError (userError "the card attach key is unset")) pure (cardAttachKey settings)
     pure (python,
       [ "tools/continue_rec_scanout.py"
@@ -117,8 +143,8 @@ sessionBridge settings python installedMedia adjustmentNand boot output = case e
       , "--ram-push-checkpoints", checkpointRoot settings
       , "--checkpoint-key", routeKeyHex key
       , "--checkpoint-inputs", C.unpack (BL.toStrict (encode (routeKeyDocument key)))
-      ] ++ freshArguments ++ profileArguments ++ attachHoldArguments (attachHold settings))
-  Cardless -> do
+      ] ++ freshArguments ++ profileArguments ++ attachHoldArguments (attachHold settings) ++ frameArguments)
+  (RetainedRuntime, Cardless) -> do
     require (attachHold settings == NoAttachHold) "the cardless RAM-push bridge holds no key across the attach edge"
     bridge <- runfilesCardlessBridge
     pure (bridge,
@@ -127,12 +153,13 @@ sessionBridge settings python installedMedia adjustmentNand boot output = case e
       , "--adjustment-nand", adjustmentNand
       , "--output", output
       , "--ram-push-checkpoints", checkpointRoot settings
-      ] ++ freshArguments ++ profileArguments)
+      ] ++ freshArguments ++ profileArguments ++ frameArguments)
   where
     freshArguments = ["--fresh-boot" | boot == FreshBoot]
     profileArguments = case flashUiConversion settings of
       StrictUiConversion -> []
       DeclaredUiCpuFallback -> ["--ui-conversion-profile", "declared-ui-cpu-fallback"]
+    frameArguments = fixedSceneFrameArguments (fixedSceneFrame settings)
 
 payloadText :: Payload -> T.Text
 payloadText p = case payloadKind p of
