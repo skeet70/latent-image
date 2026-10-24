@@ -25,6 +25,7 @@ import System.FilePath ((</>))
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stdout)
 import System.Posix.Files (setFileMode)
 import Emulation.UiTrajectory
+import Emulation.ViewerRuntime (FixedSceneFrame, fixedSceneFrameArguments)
 import EmulatorUsb
 import FujiAF.RamPush
 import FujiAF.Transport (ensurePrivateDirectory, realClock, writePrivateBytes)
@@ -65,6 +66,7 @@ data E2ESettings = E2ESettings
   , attachHold :: AttachHold
   , flashUiConversion :: UiConversionProfile
   , emulationCardMode :: CardMode
+  , fixedSceneFrame :: Maybe FixedSceneFrame
   }
 
 attachHoldArguments :: AttachHold -> [String]
@@ -93,7 +95,7 @@ sessionBridge settings python installedMedia adjustmentNand boot output = case e
     , "--ram-push-server"
     , "--output", output
     , "--ram-push-checkpoints", checkpointRoot settings
-    ] ++ freshArguments ++ profileArguments ++ attachHoldArguments (attachHold settings))
+    ] ++ freshArguments ++ profileArguments ++ attachHoldArguments (attachHold settings) ++ frameArguments)
   Cardless -> do
     require (attachHold settings == NoAttachHold) "the cardless RAM-push bridge holds no key across the attach edge"
     bridge <- runfilesCardlessBridge
@@ -103,12 +105,13 @@ sessionBridge settings python installedMedia adjustmentNand boot output = case e
       , "--adjustment-nand", adjustmentNand
       , "--output", output
       , "--ram-push-checkpoints", checkpointRoot settings
-      ] ++ freshArguments ++ profileArguments)
+      ] ++ freshArguments ++ profileArguments ++ frameArguments)
   where
     freshArguments = ["--fresh-boot" | boot == FreshBoot]
     profileArguments = case flashUiConversion settings of
       StrictUiConversion -> []
       DeclaredUiCpuFallback -> ["--ui-conversion-profile", "declared-ui-cpu-fallback"]
+    frameArguments = fixedSceneFrameArguments (fixedSceneFrame settings)
 
 payloadText :: Payload -> T.Text
 payloadText p = case payloadKind p of

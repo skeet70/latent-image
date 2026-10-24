@@ -28,7 +28,7 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Word (Word32, Word8)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
-import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, resolve, stageViewerRuntime, validateFirmware)
+import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, resolve, stageViewerRuntime, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
 import Numeric (showHex)
 import System.Directory (canonicalizePath, createDirectory, doesFileExist)
@@ -53,6 +53,7 @@ data Options = Options
   , sdImageOption :: Maybe FilePath
   , installedNandOption :: Maybe FilePath
   , receiptOption :: Maybe FilePath
+  , fixedSceneFrameOption :: Maybe FixedSceneFrame
   }
 
 data Command = Help | Validate Firmware | Launch Options
@@ -115,19 +116,23 @@ usage = unlines
   , "committed NAND in the full-system emulator, exports the committed NAND and cold-boots it"
   , "to the shooting screen. RAM is the ram-rescue-engine raw output for CARD (with its"
   , ".state.json companion). All paths are beneath workspace/private-data/; DIR must be new."
+  , "Optional --fixed-scene-frame N pins every scene render to the positive frame index N."
   , "Holds one emulator slot. No camera or USB I/O."
   ]
 
 parseCommand :: [String] -> IO Command
 parseCommand ["--help"] = pure Help
 parseCommand ["--validate-firmware", path] = pure (Validate (Firmware path))
-parseCommand arguments = Launch <$> go (Options Nothing Nothing Nothing Nothing) arguments
+parseCommand arguments = Launch <$> go (Options Nothing Nothing Nothing Nothing Nothing) arguments
   where
     go options [] = pure options
     go options ("--recovery-ram" : value : rest) = go options {recoveryRamOption = Just value} rest
     go options ("--sd-image" : value : rest) = go options {sdImageOption = Just value} rest
     go options ("--installed-nand" : value : rest) = go options {installedNandOption = Just value} rest
     go options ("--receipt-output" : value : rest) = go options {receiptOption = Just value} rest
+    go options ("--fixed-scene-frame" : value : rest) = do
+      frame <- either (ioError . userError) pure (parseFixedSceneFrame value)
+      go options {fixedSceneFrameOption = Just frame} rest
     go _ (flag : _) = ioError (userError ("Unknown or incomplete option " ++ flag ++ "\n" ++ usage))
 
 privateRegularFile :: Workspace -> String -> Maybe FilePath -> IO FilePath
@@ -416,8 +421,9 @@ launch options = do
 
   -- Phase A: ordinary updater over the installed NAND.
   updater <- startConsole python (receipt </> "updater.stderr")
-    [ "--recovery-ram", ramPath, "--sd-image", cardPath, "--installed-nand", nandPath
-    , "--menus", "--pause-after", "0", "--output", receipt </> "updater-frames" ]
+    ([ "--recovery-ram", ramPath, "--sd-image", cardPath, "--installed-nand", nandPath
+     , "--menus", "--pause-after", "0", "--output", receipt </> "updater-frames"
+     ] ++ fixedSceneFrameArguments (fixedSceneFrameOption options))
   watch updater completionSite [flagBlock, Window cachePointer 4]
   watch updater headerParserSite [flagBlock]
   watch updater templateReloadSite []
@@ -443,8 +449,9 @@ launch options = do
 
   -- Phase B: cold boot of the committed NAND alone.
   reboot <- startConsole python (receipt </> "reboot.stderr")
-    [ "--profile", "firmware/x-m1/1.50/emulator-rec.json", "--installed-nand", exported
-    , "--menus", "--pause-after", "0", "--output", receipt </> "reboot-frames" ]
+    ([ "--profile", "firmware/x-m1/1.50/emulator-rec.json", "--installed-nand", exported
+     , "--menus", "--pause-after", "0", "--output", receipt </> "reboot-frames"
+     ] ++ fixedSceneFrameArguments (fixedSceneFrameOption options))
   firstStart <- runUntil reboot firstStartAt
   forM_ firstStartKeys (pressKey reboot)
   shooting <- settle reboot

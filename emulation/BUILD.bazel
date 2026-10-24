@@ -233,6 +233,7 @@ haskell_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":embedded-python-lib",
+        ":viewer-runtime-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

@@ -3,7 +3,7 @@ module Main where
 import Control.Exception (IOException, catch, displayException)
 import Control.Monad (when)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
-import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
+import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
 import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), OverrideReason (..), PushMode (..), RelinkMode (..), UiConversionProfile (..), bankD3Payload, classicChromeIconPayload, classicChromePayload, runRamPushE2E)
 import Data.List (isPrefixOf, nub)
@@ -50,6 +50,7 @@ data Options = Options
   , ramPayloadOption :: RamPayloadChoice
   , attachHoldOption :: AttachHold
   , uiConversionProfileOption :: UiConversionProfile
+  , fixedSceneFrameOption :: Maybe FixedSceneFrame
   , cardModeOption :: CardSelection
   , portOption :: Port
   , bindOption :: Bind
@@ -98,6 +99,8 @@ usage = unlines
   , "                         declared-ui-cpu-fallback (default) or strict; also the profile a"
   , "                         --ram-push-e2e session boots and keys its attach checkpoint with."
   , "                         The fallback is an unmeasured UI-only model."
+  , "  --fixed-scene-frame N  Pin every scene render to the positive frame index N for the run"
+  , "                         instead of the advancing synthetic source; unselected by default"
   , ""
   , "Default DAT: private-data/firmware/x-m1-1.50/FWUP0002.DAT"
   , "Source: emulation/xm1-upstream; native engine and Python come from devenv."
@@ -111,7 +114,7 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice NoAttachHold DeclaredUiCpuFallback WithCard (Port 0) IPv4Loopback
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice NoAttachHold DeclaredUiCpuFallback Nothing WithCard (Port 0) IPv4Loopback
     go options [] = pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
@@ -175,6 +178,9 @@ parseCommand args
         "declared-ui-cpu-fallback" -> pure DeclaredUiCpuFallback
         _ -> ioError (userError "--ui-conversion-profile must be strict or declared-ui-cpu-fallback")
       go options { uiConversionProfileOption = profile } rest
+    go options ("--fixed-scene-frame" : value : rest) = do
+      frame <- either (ioError . userError) pure (parseFixedSceneFrame value)
+      go options { fixedSceneFrameOption = Just frame } rest
     go _ (argument : _) = ioError (userError ("Unknown option or missing value: " ++ argument ++ "\n" ++ usage))
 
 validateVirtualSDImage :: Workspace -> VirtualSDImage -> IO VirtualSDImage
@@ -315,6 +321,7 @@ launch options = do
                 ClassicChromeIconChoice -> classicChromeIconPayload)
               (attachHoldOption options)
               (uiConversionProfileOption options) cardInput
+              (fixedSceneFrameOption options)
         runRamPushE2E settings python workspacePath (resolve root trajectories) stagedFirmwarePath nandPath receiptPath
       else do
         let Port port = portOption options
@@ -331,7 +338,8 @@ launch options = do
            , "--bind", bindAddress (bindOption options)
            , "--port", show port
            , "--output", destination </> "viewer"
-           ] ++ mediaArguments ++ conversionArguments) Nothing
+           ] ++ mediaArguments ++ conversionArguments
+              ++ fixedSceneFrameArguments (fixedSceneFrameOption options)) Nothing
 
 main :: IO ()
 main = (getArgs >>= parseCommand >>= run) `catch` report

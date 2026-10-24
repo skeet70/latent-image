@@ -999,7 +999,7 @@ def _emulator_source_identity():
 
 
 def _ram_push_checkpoint_key(installed_dat, adjustment_nand, menu_sd_image, attach_hold_key=None,
-                             ui_conversion_profile=None):
+                             ui_conversion_profile=None, fixed_scene_frame=None):
     inputs = {'installed_dat': _file_sha256(installed_dat),
               'adjustment_nand': _file_sha256(adjustment_nand),
               'menu_sd_image': _file_sha256(menu_sd_image),
@@ -1008,6 +1008,8 @@ def _ram_push_checkpoint_key(installed_dat, adjustment_nand, menu_sd_image, atta
         inputs['attach_hold_key'] = attach_hold_key
     if ui_conversion_profile is not None:
         inputs['ui_conversion_profile'] = ui_conversion_profile.value
+    if fixed_scene_frame is not None:
+        inputs['fixed_scene_frame'] = fixed_scene_frame
     document = json.dumps({'schema': RAM_PUSH_CHECKPOINT_SCHEMA, **inputs},
                           sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(document.encode()).hexdigest(), inputs
@@ -1017,10 +1019,12 @@ def _ram_push_checkpoint_key(installed_dat, adjustment_nand, menu_sd_image, atta
 TOGGLE_RECORD = 'usb-toggle-boot.json'
 
 
-def _toggle_checkpoint_key(installed_dat, adjustment_nand, boot):
+def _toggle_checkpoint_key(installed_dat, adjustment_nand, boot, fixed_scene_frame=None):
     inputs = {'installed_dat': _file_sha256(installed_dat),
               'adjustment_nand': _file_sha256(adjustment_nand),
               'emulator_source': _emulator_source_identity(), 'boot': boot}
+    if fixed_scene_frame is not None:
+        inputs['fixed_scene_frame'] = fixed_scene_frame
     document = json.dumps({'schema': RAM_PUSH_CHECKPOINT_SCHEMA, **inputs},
                           sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(document.encode()).hexdigest(), inputs
@@ -1722,7 +1726,12 @@ def main():
     parser.add_argument('--ui-conversion-profile', type=UIConversionProfile.parse,
                         choices=tuple(UIConversionProfile),
                         help='Opt-in stock CPU conversion contract for a cold boot; a checkpoint keeps its own')
+    parser.add_argument('--fixed-scene-frame', type=int,
+                        help='Pin every scene render to this positive frame index for the run')
     args = parser.parse_args()
+    if args.fixed_scene_frame is not None:
+        from emulator.virtual_source import select_fixed_scene_frame
+        select_fixed_scene_frame(args.fixed_scene_frame)
     installed_input = args.installed_media or args.installed_nand or args.installed_dat
     recovery_start = args.recovery_ram is not None or args.rom_card is not None
     if recovery_start and (args.snapshot is not None or installed_input is None):
@@ -1782,7 +1791,8 @@ def main():
     if args.ram_push_checkpoints is not None:
         started = perf_counter()
         key, key_inputs = _ram_push_checkpoint_key(args.installed_dat, args.adjustment_nand, args.menu_sd_image,
-                                                   args.attach_hold_key, args.ui_conversion_profile)
+                                                   args.attach_hold_key, args.ui_conversion_profile,
+                                                   args.fixed_scene_frame)
         directory = args.ram_push_checkpoints / key
         checkpoint = {'key': key, 'inputs': key_inputs, 'directory': str(directory.resolve()),
                       'key_seconds': round(perf_counter() - started, 3)}
@@ -1818,7 +1828,8 @@ def main():
     if args.toggle_server:
         started = perf_counter()
         boot = {'cable_at_reset': args.cable_at_reset, 'adc_at_reset': adc_at_reset}
-        key, key_inputs = _toggle_checkpoint_key(args.installed_dat, args.adjustment_nand, boot)
+        key, key_inputs = _toggle_checkpoint_key(args.installed_dat, args.adjustment_nand, boot,
+                                                 args.fixed_scene_frame)
         root = None if args.toggle_checkpoints is None else args.toggle_checkpoints.resolve()
         saved = root is not None and probe_range is None and (root / key).is_dir()
         toggle_start = {'key': key, 'inputs': key_inputs, 'checkpoint_root': None if root is None else str(root),

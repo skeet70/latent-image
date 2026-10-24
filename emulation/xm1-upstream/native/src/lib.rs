@@ -1437,6 +1437,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("VIRTUAL_SCENE_PROFILE", scene::PROFILE)?;
     m.add_function(wrap_pyfunction!(scene::virtual_scene_yycbcr, m)?)?;
     m.add_function(wrap_pyfunction!(scene::virtual_scene_histogram, m)?)?;
+    m.add_function(wrap_pyfunction!(scene::virtual_scene_fixed_frame, m)?)?;
     m.add("XM1_STATISTICS_PROFILE", scene::XM1_STATISTICS_PROFILE)?;
     m.add_function(wrap_pyfunction!(scene::virtual_scene_xm1_statistics, m)?)?;
     m.add_function(wrap_pyfunction!(fuji::fuji_lz_feed, m)?)?;
