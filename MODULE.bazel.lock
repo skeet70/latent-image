@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "SgUIc/NymVOsrp5qWag84h+0OP5XUWjW0igu1PmLdrU=",
+        "bzlTransitiveDigest": "cqv4XxaE8PbdEsUuA8d/PnW+awYETyrtmksJsMJPodE=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -466,6 +466,28 @@
               "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
               "repositories": {},
               "build_file_content": "exports_files([\"bin/readlink\", \"bin/sha256sum\", \"bin/sort\"], visibility = [\"//visibility:public\"])",
+              "nixopts": [],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          },
+          "lab_exr2_gcc": {
+            "bzlFile": "@@rules_nixpkgs_core~//:nixpkgs.bzl",
+            "ruleClassName": "_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "lab_exr2_gcc",
+              "attribute_path": "",
+              "nix_file": "@@//build-support:exr2-gcc.nix",
+              "nix_file_deps": {
+                "@@//build-support:nixpkgs.nix": "//build-support:nixpkgs.nix",
+                "@@//build-support:exr2-gcc/host-qsort.c": "//build-support:exr2-gcc/host-qsort.c",
+                "@@//:devenv.lock": "//:devenv.lock"
+              },
+              "nix_file_content": "",
+              "nix_license_path": "",
+              "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
+              "repositories": {},
+              "build_file_content": "exports_files([\"gcc-4.6.4/bin/arm-linux-gnueabi-gcc\", \"gcc-4.4.7/bin/arm-linux-gnueabi-gcc\", \"binutils/bin/arm-linux-gnueabi-ld\"], visibility = [\"//visibility:public\"])",
               "nixopts": [],
               "quiet": false,
               "fail_not_supported": true

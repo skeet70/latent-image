@@ -128,4 +128,17 @@ def _lab_dependencies_impl(_ctx):
             build_file_content = "exports_files(%r, visibility = [\"//visibility:public\"])" % binaries,
         )
 
+    # //matching:pilot compiles x70view C with these.
+    nixpkgs_package(
+        name = "lab_exr2_gcc",
+        nix_file = "//build-support:exr2-gcc.nix",
+        nix_file_deps = [
+            "//build-support:nixpkgs.nix",
+            "//build-support:exr2-gcc/host-qsort.c",
+            "//:devenv.lock",
+        ],
+        repository = "@lab_nixpkgs",
+        build_file_content = 'exports_files(["gcc-4.6.4/bin/arm-linux-gnueabi-gcc", "gcc-4.4.7/bin/arm-linux-gnueabi-gcc", "binutils/bin/arm-linux-gnueabi-ld"], visibility = ["//visibility:public"])',
+    )
+
 lab_dependencies = module_extension(implementation = _lab_dependencies_impl)

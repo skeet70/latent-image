@@ -1,0 +1,69 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+exports_files(["pilot-functions.json"])
+
+_GHCOPTS = [
+    "-Wall",
+    "-Werror",
+    "-O1",
+    "-XGHC2021",
+]
+
+haskell_library(
+    name = "compare",
+    srcs = ["FujiAF/Matching/Compare.hs"],
+    ghcopts = _GHCOPTS,
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
+)
+
+haskell_test(
+    name = "compare-test",
+    size = "small",
+    srcs = ["CompareTest.hs"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":compare",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+# Owner-supplied inputs: --x70view CHECKOUT --out NEW_DIR --image REGION=PATH for
+# each manifest region. See README.md.
+haskell_binary(
+    name = "pilot",
+    srcs = ["MatchingPilot.hs"],
+    args = [
+        "--manifest",
+        "$(rootpath :pilot-functions.json)",
+        "--gcc",
+        "4.6.4=$(rootpath @lab_exr2_gcc//:gcc-4.6.4/bin/arm-linux-gnueabi-gcc)",
+        "--gcc",
+        "4.4.7=$(rootpath @lab_exr2_gcc//:gcc-4.4.7/bin/arm-linux-gnueabi-gcc)",
+        "--ld",
+        "$(rootpath @lab_exr2_gcc//:binutils/bin/arm-linux-gnueabi-ld)",
+    ],
+    data = [
+        ":pilot-functions.json",
+        "@lab_exr2_gcc//:binutils/bin/arm-linux-gnueabi-ld",
+        "@lab_exr2_gcc//:gcc-4.4.7/bin/arm-linux-gnueabi-gcc",
+        "@lab_exr2_gcc//:gcc-4.6.4/bin/arm-linux-gnueabi-gcc",
+    ],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":compare",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+    ],
+)
