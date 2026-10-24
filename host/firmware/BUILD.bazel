@@ -1118,8 +1118,11 @@ haskell_test(
         "-threaded",
     ],
     deps = [
+        "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:host-support",
         "//host:usb-toggle",
     ],
 )

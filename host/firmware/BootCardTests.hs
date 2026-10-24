@@ -75,6 +75,16 @@ main = do
   let optionalSlots bytes = [(word32At bytes off, word32At bytes (off+4)) | off <- [0xb8,0xc0,0xc8,0xd0]]
       memorySlots = [(0xfff88084,1),(0,0),(0xfff893c4,0x00050001),(0xfff893c0,0x00010000)]
       memoryUnchanged = [0,4..1020] `except` ([0x10] ++ [0xb8,0xbc..0xd4])
+  holdCfg <- checked (powerHoldConfig cfg)
+  holdCard <- checked (bootCard holdCfg payload)
+  holdVolume <- checked (mountRom holdCard)
+  holdSystem <- checked (readRomFile holdCard holdVolume SystemConfig)
+  holdRaw <- checked (readRawRom holdCard)
+  stockSystem <- checked (readRomFile card volume SystemConfig)
+  memoryHoldCfg <- checked (powerHoldConfig memoryCfg)
+  -- The value the ROM stores to 0xfff88084 at 0x80000330.
+  let appliedHold bytes = word32At bytes 0x10 `mod` 2
+      changedBytes a b = [i | i <- [0..B.length a-1], B.index a i /= B.index b i]
   let restore = B.replicate 4096 0xa5
   recovery <- checked (recoveryCard cfg payload payload restore)
   recoveryVolume <- checked (mountRom recovery)
@@ -136,6 +146,14 @@ main = do
         , ("memory-wait marker keeps the stock pair table and every other configuration word",
             romPairs memorySystem == take 7 markerPairs && all (\off -> word32At memorySystem off == word32At config off) memoryUnchanged)
         , ("memory-wait marker cannot be applied twice", isLeft (stageMarkerConfig BeforeMemoryWait memoryCfg) && isLeft (stageMarkerConfig AfterApply memoryCfg))
+        , ("stock card: both ROM routes release 0xfff88084 at 0x80000330", appliedHold stockSystem == 0 && appliedHold (mode2ConfigBytes raw) == 0)
+        , ("power hold: both ROM routes keep 0xfff88084 = 1 at 0x80000330", appliedHold holdSystem == 1 && appliedHold (mode2ConfigBytes holdRaw) == 1)
+        , ("power hold changes only bit 0 of the ffsys.bin byte at +0x10",
+            B.length holdSystem == 1024 && changedBytes holdSystem config == [0x10] && B.index holdSystem 0x10 == B.index config 0x10 + 1)
+        , ("power hold leaves the raw overlay to the count and three MBR-overlap words",
+            rawConfigDifferences holdCfg holdRaw == rawConfigDifferences cfg raw && mode2PayloadBytes holdRaw == payload)
+        , ("power hold cannot be applied twice", isLeft (powerHoldConfig holdCfg))
+        , ("power hold on a stage marker keeps the teardown argument", word32At (configBytes memoryHoldCfg) 0x10 == 0x303)
         , ("raw configuration changes only the count and three MBR-overlap words", rawConfigDifferences cfg raw ==
             [ ConfigDifference (ConfigWordOffset 0x18) 2 1
             , ConfigDifference (ConfigWordOffset 0x1c0) 0 0x00040000

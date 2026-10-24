@@ -35,7 +35,7 @@ single_version_override(
 )
 
 lab = use_extension("//build-support:repositories.bzl", "lab_dependencies")
-use_repo(lab, "lab_bash", "lab_cc_toolchains", "lab_clang", "lab_coreutils", "lab_exiftool", "lab_ffmpeg", "lab_ghc_ghc_nixpkgs_toolchain", "lab_jq", "lab_jsonschema", "lab_libusb", "lab_libusb_runtime", "lab_lld", "lab_llvm", "lab_recorder_python", "lab_unicorn")
+use_repo(lab, "lab_bash", "lab_cc_toolchains", "lab_clang", "lab_coreutils", "lab_exiftool", "lab_exr2_gcc", "lab_ffmpeg", "lab_fujimod", "lab_fujimod_xm1", "lab_ghc_ghc_nixpkgs_toolchain", "lab_jq", "lab_jsonschema", "lab_libusb", "lab_libusb_runtime", "lab_lld", "lab_llvm", "lab_recorder_python", "lab_unicorn")
 
 register_toolchains(
     "@lab_cc_toolchains//:all",

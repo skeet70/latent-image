@@ -4,6 +4,7 @@ mod fetch_guard;
 mod ffi;
 mod fff63;
 mod fuji;
+mod irq_mask;
 mod raster;
 mod gradient;
 mod hooks;
@@ -1452,5 +1453,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<fff63::Device>()?;
     m.add("FFF63_PROFILES", (fff63::PROFILE,))?;
     m.add_function(wrap_pyfunction!(spi0::spi0_status_acknowledged, m)?)?;
+    m.add_class::<irq_mask::IrqRoute>()?;
+    m.add_function(wrap_pyfunction!(irq_mask::irq_enable_clear, m)?)?;
+    m.add_function(wrap_pyfunction!(irq_mask::irq_enable_set, m)?)?;
+    m.add_function(wrap_pyfunction!(irq_mask::irq_raise, m)?)?;
+    m.add_function(wrap_pyfunction!(irq_mask::irq_route, m)?)?;
     Ok(())
 }

@@ -1,0 +1,2622 @@
+{
+  "schema": 1,
+  "catalog_configuration": "xm1-150",
+  "execution": {
+    "mode": "strict",
+    "engine": "unicorn",
+    "quantum": 1000,
+    "instructions_per_tick": {
+      "numerator": 24,
+      "denominator": 1
+    }
+  },
+  "execution_policy": "exact",
+  "update_flash_offset": 604,
+  "boot_rom": {
+    "address": 2147483648,
+    "bytes": 16384
+  },
+  "boot_instructions": 80000000,
+  "devices": {
+    "boot_entry": "rom",
+    "nodes": [
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "base": 4294651904,
+          "core": 0,
+          "kind": "exr2-interrupt-controller",
+          "options": {
+            "arbitration": "active-bitmap"
+          },
+          "routes": "imaging_routes",
+          "software": []
+        },
+        "name": "irq0",
+        "windows": [
+          {
+            "base": 4294651904,
+            "size": 4096
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "base": 4294656000,
+          "core": 1,
+          "kind": "exr2-interrupt-controller",
+          "options": {
+            "arbitration": "active-bitmap"
+          },
+          "routes": "imaging_routes",
+          "software": [
+            {
+              "line": 120,
+              "pulse": "release"
+            }
+          ]
+        },
+        "name": "irq1",
+        "windows": [
+          {
+            "base": 4294656000,
+            "size": 4096
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "controllers": [
+            "irq0",
+            "irq1"
+          ],
+          "kind": "exr2-system-timers",
+          "options": {
+            "main_targets": [
+              0,
+              1
+            ]
+          }
+        },
+        "name": "timers",
+        "windows": [
+          {
+            "base": 4294512640,
+            "size": 64
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "core": 1,
+          "kind": "core-release",
+          "options": {
+            "released": false
+          },
+          "request": "release"
+        },
+        "name": "release",
+        "windows": []
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "irqs": [
+            {
+              "edge": "both",
+              "outputs": [
+                {
+                  "Core": {
+                    "core": 0,
+                    "line": 8
+                  }
+                }
+              ],
+              "pin": {
+                "pin": 0,
+                "port": 0
+              }
+            },
+            {
+              "edge": "falling",
+              "outputs": [
+                {
+                  "Core": {
+                    "core": 0,
+                    "line": 10
+                  }
+                }
+              ],
+              "pin": {
+                "pin": 2,
+                "port": 0
+              }
+            },
+            {
+              "edge": "falling",
+              "outputs": [
+                {
+                  "Core": {
+                    "core": 0,
+                    "line": 11
+                  }
+                }
+              ],
+              "pin": {
+                "pin": 3,
+                "port": 0
+              }
+            }
+          ],
+          "kind": "gpio",
+          "options": {
+            "input_levels": [
+              3692,
+              0,
+              4608,
+              776,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              128,
+              0,
+              0,
+              0
+            ],
+            "output_levels": [
+              {
+                "high": true,
+                "pin": {
+                  "pin": 3,
+                  "port": 11
+                }
+              },
+              {
+                "high": true,
+                "pin": {
+                  "pin": 3,
+                  "port": 12
+                }
+              },
+              {
+                "high": true,
+                "pin": {
+                  "pin": 9,
+                  "port": 13
+                }
+              }
+            ]
+          }
+        },
+        "name": "serial_gpio",
+        "windows": [
+          {
+            "base": 4294479872,
+            "size": 1052
+          },
+          {
+            "base": 4294480928,
+            "size": 96
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "serial_gpio"
+        ],
+        "model": {
+          "kind": "spi-controller",
+          "routes": [
+            {
+              "endpoint": {
+                "kind": "registers",
+                "options": {
+                  "clock": null,
+                  "readable": false,
+                  "registers": [
+                    [
+                      0,
+                      0
+                    ],
+                    [
+                      1,
+                      0
+                    ],
+                    [
+                      3,
+                      0
+                    ],
+                    [
+                      4,
+                      0
+                    ],
+                    [
+                      5,
+                      0
+                    ],
+                    [
+                      6,
+                      0
+                    ],
+                    [
+                      7,
+                      0
+                    ],
+                    [
+                      8,
+                      0
+                    ],
+                    [
+                      9,
+                      0
+                    ],
+                    [
+                      10,
+                      0
+                    ],
+                    [
+                      11,
+                      0
+                    ],
+                    [
+                      12,
+                      0
+                    ],
+                    [
+                      13,
+                      0
+                    ],
+                    [
+                      14,
+                      0
+                    ],
+                    [
+                      15,
+                      0
+                    ],
+                    [
+                      16,
+                      0
+                    ],
+                    [
+                      18,
+                      0
+                    ],
+                    [
+                      19,
+                      0
+                    ],
+                    [
+                      23,
+                      0
+                    ],
+                    [
+                      24,
+                      0
+                    ],
+                    [
+                      25,
+                      0
+                    ],
+                    [
+                      26,
+                      0
+                    ],
+                    [
+                      27,
+                      0
+                    ],
+                    [
+                      28,
+                      0
+                    ],
+                    [
+                      29,
+                      0
+                    ],
+                    [
+                      30,
+                      0
+                    ],
+                    [
+                      31,
+                      0
+                    ],
+                    [
+                      32,
+                      0
+                    ],
+                    [
+                      33,
+                      0
+                    ],
+                    [
+                      34,
+                      0
+                    ],
+                    [
+                      35,
+                      0
+                    ],
+                    [
+                      36,
+                      0
+                    ],
+                    [
+                      37,
+                      0
+                    ],
+                    [
+                      38,
+                      0
+                    ],
+                    [
+                      39,
+                      0
+                    ],
+                    [
+                      40,
+                      0
+                    ],
+                    [
+                      41,
+                      0
+                    ],
+                    [
+                      42,
+                      0
+                    ],
+                    [
+                      43,
+                      0
+                    ],
+                    [
+                      44,
+                      0
+                    ],
+                    [
+                      45,
+                      0
+                    ],
+                    [
+                      46,
+                      0
+                    ],
+                    [
+                      47,
+                      0
+                    ]
+                  ],
+                  "status_registers": []
+                }
+              },
+              "gpio": "serial_gpio",
+              "options": {
+                "base": 4294459456,
+                "queue": "single",
+                "selection": [
+                  {
+                    "high": false,
+                    "pin": {
+                      "pin": 3,
+                      "port": 12
+                    }
+                  },
+                  {
+                    "high": true,
+                    "pin": {
+                      "pin": 3,
+                      "port": 11
+                    }
+                  }
+                ],
+                "transfer_ticks": 4,
+                "transports": [
+                  {
+                    "bits": 16,
+                    "configuration": 196612,
+                    "control": 224,
+                    "receive": true
+                  },
+                  {
+                    "bits": 16,
+                    "configuration": 196612,
+                    "control": 65760,
+                    "receive": false
+                  }
+                ]
+              }
+            },
+            {
+              "endpoint": {
+                "kind": "registers",
+                "options": {
+                  "clock": {
+                    "initial_seconds": 845000000,
+                    "maximum_seconds": 1609459199,
+                    "registers": [
+                      65,
+                      66,
+                      67,
+                      68
+                    ],
+                    "started": 0,
+                    "ticks_per_second": 12000000
+                  },
+                  "readable": true,
+                  "registers": [
+                    [
+                      65,
+                      64
+                    ],
+                    [
+                      66,
+                      173
+                    ],
+                    [
+                      67,
+                      93
+                    ],
+                    [
+                      68,
+                      50
+                    ],
+                    [
+                      69,
+                      0
+                    ],
+                    [
+                      70,
+                      0
+                    ],
+                    [
+                      73,
+                      0
+                    ],
+                    [
+                      74,
+                      0
+                    ],
+                    [
+                      75,
+                      0
+                    ],
+                    [
+                      76,
+                      0
+                    ],
+                    [
+                      78,
+                      0
+                    ],
+                    [
+                      80,
+                      0
+                    ],
+                    [
+                      81,
+                      0
+                    ],
+                    [
+                      82,
+                      0
+                    ],
+                    [
+                      83,
+                      0
+                    ],
+                    [
+                      84,
+                      208
+                    ],
+                    [
+                      85,
+                      7
+                    ],
+                    [
+                      86,
+                      0
+                    ],
+                    [
+                      87,
+                      255
+                    ],
+                    [
+                      88,
+                      0
+                    ],
+                    [
+                      89,
+                      128
+                    ],
+                    [
+                      90,
+                      0
+                    ],
+                    [
+                      91,
+                      4
+                    ],
+                    [
+                      92,
+                      0
+                    ],
+                    [
+                      93,
+                      0
+                    ],
+                    [
+                      94,
+                      170
+                    ],
+                    [
+                      95,
+                      252
+                    ],
+                    [
+                      96,
+                      16
+                    ],
+                    [
+                      104,
+                      0
+                    ],
+                    [
+                      105,
+                      0
+                    ],
+                    [
+                      106,
+                      0
+                    ]
+                  ],
+                  "status_registers": [
+                    96
+                  ]
+                }
+              },
+              "gpio": "serial_gpio",
+              "options": {
+                "base": 4294459456,
+                "queue": "single",
+                "selection": [
+                  {
+                    "high": false,
+                    "pin": {
+                      "pin": 3,
+                      "port": 12
+                    }
+                  },
+                  {
+                    "high": true,
+                    "pin": {
+                      "pin": 3,
+                      "port": 11
+                    }
+                  }
+                ],
+                "transfer_ticks": 4,
+                "transports": [
+                  {
+                    "bits": 16,
+                    "configuration": 6,
+                    "control": 224,
+                    "receive": true
+                  },
+                  {
+                    "bits": 16,
+                    "configuration": 6,
+                    "control": 65760,
+                    "receive": false
+                  }
+                ]
+              }
+            },
+            {
+              "endpoint": {
+                "kind": "panel",
+                "options": {
+                  "used_mask": 65535
+                }
+              },
+              "gpio": "serial_gpio",
+              "options": {
+                "base": 4294459456,
+                "queue": "single",
+                "selection": [
+                  {
+                    "high": false,
+                    "pin": {
+                      "pin": 3,
+                      "port": 11
+                    }
+                  },
+                  {
+                    "high": true,
+                    "pin": {
+                      "pin": 3,
+                      "port": 12
+                    }
+                  }
+                ],
+                "transfer_ticks": 4,
+                "transports": [
+                  {
+                    "bits": 16,
+                    "configuration": 6,
+                    "control": 224,
+                    "receive": false
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "name": "serial_spi1",
+        "windows": [
+          {
+            "base": 4294459456,
+            "size": 32
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "kind": "dram",
+          "options": {}
+        },
+        "name": "dram_controller",
+        "windows": [
+          {
+            "base": 4294545408,
+            "size": 256
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "kind": "dram-phy",
+          "options": {}
+        },
+        "name": "dram_phy",
+        "windows": [
+          {
+            "base": 4293922816,
+            "size": 584
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "kind": "reset",
+          "options": {}
+        },
+        "name": "reset_control",
+        "windows": [
+          {
+            "base": 4294647812,
+            "size": 20
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "kind": "clocks",
+          "options": {
+            "output_settle_ticks": 2,
+            "reset_ready": true
+          }
+        },
+        "name": "clocks",
+        "windows": [
+          {
+            "base": 4294475776,
+            "size": 136
+          },
+          {
+            "base": 4294480924,
+            "size": 4
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "kind": "block-98000",
+          "options": {
+            "boot_source": 1,
+            "selection_reset": 0
+          },
+          "wiring": {
+            "decoder": 0,
+            "selections": [
+              {
+                "choice": 0,
+                "word": 0
+              },
+              {
+                "choice": 1,
+                "word": 1
+              },
+              {
+                "choice": 1,
+                "word": 2
+              }
+            ]
+          }
+        },
+        "name": "block98000",
+        "windows": [
+          {
+            "base": 4294541312,
+            "size": 768
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "irq0",
+          "irq1"
+        ],
+        "model": {
+          "irq": {
+            "core": 0,
+            "line": 67
+          },
+          "kind": "scaler",
+          "options": {
+            "completion_ticks": 2
+          }
+        },
+        "name": "image_scaler",
+        "windows": [
+          {
+            "base": 4294209536,
+            "size": 132
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "kind": "raw-conversion",
+          "options": {}
+        },
+        "name": "raw_conversion",
+        "windows": [
+          {
+            "base": 4294189056,
+            "size": 4096
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "irq": {
+            "core": 0,
+            "line": 49
+          },
+          "kind": "prefilter",
+          "options": {
+            "completion_ticks": 1000,
+            "reset_ticks": 16
+          }
+        },
+        "name": "prefilter",
+        "windows": [
+          {
+            "base": 4294025216,
+            "size": 560
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "irq": {
+            "core": 0,
+            "line": 50
+          },
+          "kind": "raw-statistics",
+          "options": {
+            "completion_ticks": 1000,
+            "reset_ticks": 16
+          }
+        },
+        "name": "raw_statistics",
+        "windows": [
+          {
+            "base": 4294033408,
+            "size": 4096
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "irq": {
+            "core": 0,
+            "line": 61
+          },
+          "kind": "still-processor",
+          "options": {
+            "cfa": [
+              0,
+              2,
+              1,
+              2,
+              0,
+              1,
+              1,
+              1,
+              0,
+              1,
+              1,
+              2,
+              1,
+              1,
+              2,
+              1,
+              1,
+              0,
+              2,
+              0,
+              1,
+              0,
+              2,
+              1,
+              1,
+              1,
+              2,
+              1,
+              1,
+              0,
+              1,
+              1,
+              0,
+              1,
+              1,
+              2
+            ],
+            "completion_ticks": 1000
+          }
+        },
+        "name": "still_processor",
+        "windows": [
+          {
+            "base": 4294115328,
+            "size": 4
+          },
+          {
+            "base": 4294115508,
+            "size": 72
+          },
+          {
+            "base": 4294120448,
+            "size": 14336
+          },
+          {
+            "base": 4294148096,
+            "size": 96
+          },
+          {
+            "base": 4294180864,
+            "size": 256
+          },
+          {
+            "base": 4294184960,
+            "size": 4096
+          },
+          {
+            "base": 4294197248,
+            "size": 8320
+          },
+          {
+            "base": 4294205584,
+            "size": 112
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "irq": {
+            "core": 0,
+            "line": 74
+          },
+          "kind": "warp",
+          "options": {
+            "completion_ticks": 1000,
+            "stop_ticks": 16
+          },
+          "stream": "still_stream"
+        },
+        "name": "warp",
+        "windows": [
+          {
+            "base": 4294332416,
+            "size": 332
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "irq": {
+            "core": 0,
+            "line": 77
+          },
+          "kind": "jpeg-encoder",
+          "options": {
+            "completion_ticks": 1000,
+            "reset_ticks": 2
+          },
+          "stream": "still_stream"
+        },
+        "name": "jpeg_encoder",
+        "windows": [
+          {
+            "base": 4294320128,
+            "size": 300
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "irq": {
+            "core": 0,
+            "line": 76
+          },
+          "kind": "jpeg-decoder",
+          "options": {
+            "completion_ticks": 1000,
+            "reset_ticks": 2
+          }
+        },
+        "name": "jpeg_decoder",
+        "windows": [
+          {
+            "base": 4294324224,
+            "size": 300
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "kind": "sdhci-clocks",
+          "words": [
+            [
+              4294246444,
+              2
+            ]
+          ]
+        },
+        "name": "sd_clocks",
+        "windows": [
+          {
+            "base": 4294246444,
+            "size": 2
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "kind": "adc",
+          "options": {
+            "conversion_ticks": 4,
+            "samples": [
+              0,
+              0,
+              1023,
+              63,
+              534,
+              640,
+              0,
+              825,
+              1023,
+              1023,
+              0,
+              0
+            ]
+          }
+        },
+        "name": "adc",
+        "windows": [
+          {
+            "base": 4294483968,
+            "size": 96
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "live_frames"
+        ],
+        "model": {
+          "frames": "live_statistics",
+          "images": "live_image",
+          "kind": "statistics",
+          "options": {
+            "ack_ticks": 2,
+            "clock": {
+              "kind": "fixed",
+              "ticks": 400000
+            },
+            "external_statistics": false,
+            "histogram": true,
+            "stop_ticks": 2
+          },
+          "routes": "imaging_routes"
+        },
+        "name": "statistics",
+        "windows": [
+          {
+            "base": 4294017024,
+            "size": 4096
+          },
+          {
+            "base": 4294082560,
+            "size": 13312
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "live_frames"
+        ],
+        "model": {
+          "base": 4293992448,
+          "channel": 0,
+          "channels": "image_outputs",
+          "frames": "live_image",
+          "irq": 44,
+          "kind": "output-channel",
+          "memory_outputs": "memory_outputs",
+          "options": {
+            "clock": {
+              "kind": "fixed",
+              "ticks": 400000
+            },
+            "geometry": "skip_incomplete",
+            "stop_ticks": 2
+          },
+          "routes": "imaging_routes"
+        },
+        "name": "image_output_0",
+        "windows": [
+          {
+            "base": 4293992448,
+            "size": 256
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "live_frames"
+        ],
+        "model": {
+          "base": 4293996544,
+          "channel": 1,
+          "channels": "image_outputs",
+          "frames": "live_image",
+          "irq": 45,
+          "kind": "output-channel",
+          "memory_outputs": "memory_outputs",
+          "options": {
+            "clock": {
+              "kind": "fixed",
+              "ticks": 400000
+            },
+            "geometry": "skip_incomplete",
+            "stop_ticks": 2
+          },
+          "routes": "imaging_routes"
+        },
+        "name": "image_output_1",
+        "windows": [
+          {
+            "base": 4293996544,
+            "size": 256
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "kind": "face-detector",
+          "options": {
+            "mode": "retained_words"
+          }
+        },
+        "name": "face_detector",
+        "windows": [
+          {
+            "base": 4294000640,
+            "size": 4096
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "kind": "phase-detection",
+          "options": {
+            "arithmetic": "aperture_sad",
+            "data_ticks": 1800,
+            "stop_ticks": 2
+          },
+          "routes": "imaging_routes"
+        },
+        "name": "phase_detection",
+        "windows": [
+          {
+            "base": 4294066176,
+            "size": 208
+          },
+          {
+            "base": 4294070276,
+            "size": 164
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "serial_gpio"
+        ],
+        "model": {
+          "activity": {
+            "gpio": "serial_gpio",
+            "selection": {
+              "high": false,
+              "pin": {
+                "pin": 2,
+                "port": 0
+              }
+            }
+          },
+          "images": "live_image",
+          "kind": "external-frames",
+          "options": {
+            "period_ticks": 400000
+          },
+          "statistics": "live_statistics"
+        },
+        "name": "live_frames",
+        "windows": []
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "irq": {
+            "Core": {
+              "core": 0,
+              "line": 79
+            }
+          },
+          "kind": "sdio-host",
+          "module": {
+            "firmware_bytes": 0,
+            "protocol": "enumeration"
+          },
+          "options": {
+            "clock_ticks": 2,
+            "ram_bytes": 536870912,
+            "rca": 4660,
+            "transfer_ticks": 100
+          }
+        },
+        "name": "sdio",
+        "windows": [
+          {
+            "base": 4294250496,
+            "size": 64
+          },
+          {
+            "base": 4294250752,
+            "size": 8
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "kind": "nand",
+          "medium": "nand",
+          "options": {
+            "erase_ticks": 64
+          }
+        },
+        "name": "nand",
+        "windows": [
+          {
+            "base": 4294254592,
+            "size": 2304
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "irq0",
+          "irq1"
+        ],
+        "model": {
+          "base": 4294193152,
+          "controllers": [
+            "irq0",
+            "irq1"
+          ],
+          "kind": "lz",
+          "options": {
+            "resize": "declared_packed_pyramid",
+            "resize_ticks": 400000
+          }
+        },
+        "name": "lz",
+        "windows": [
+          {
+            "base": 4294193152,
+            "size": 256
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "irq0",
+          "irq1"
+        ],
+        "model": {
+          "base": 4293926912,
+          "kind": "memory-dma",
+          "options": {},
+          "routes": "imaging_routes"
+        },
+        "name": "memory_dma",
+        "windows": [
+          {
+            "base": 4293926912,
+            "size": 64
+          },
+          {
+            "base": 4293927680,
+            "size": 4
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "cable": "usb_cable",
+          "endpoints": null,
+          "kind": "usb",
+          "options": {
+            "endpoints": null
+          }
+        },
+        "name": "usb",
+        "windows": [
+          {
+            "base": 4294262784,
+            "size": 4096
+          },
+          {
+            "base": 4294266880,
+            "size": 4096
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "serial_gpio"
+        ],
+        "model": {
+          "gpio": "serial_gpio",
+          "kind": "power",
+          "options": {
+            "max_program_bytes": 536870912,
+            "spi0": {
+              "presence": {
+                "high": false,
+                "pin": {
+                  "pin": 2,
+                  "port": 11
+                }
+              },
+              "required": [
+                192,
+                48,
+                0
+              ],
+              "selection": {
+                "high": false,
+                "pin": {
+                  "pin": 2,
+                  "port": 11
+                }
+              }
+            },
+            "transfer_ticks": 4
+          }
+        },
+        "name": "power_peripherals",
+        "windows": [
+          {
+            "base": 4294459392,
+            "size": 32
+          },
+          {
+            "base": 4294205568,
+            "size": 16
+          },
+          {
+            "base": 4293927040,
+            "size": 64
+          },
+          {
+            "base": 4294542592,
+            "size": 8
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "irq0",
+          "irq1"
+        ],
+        "model": {
+          "kind": "serial-audio-transmitter",
+          "options": {
+            "max_transfer_bytes": 1048576,
+            "minimum_ticks": 1000,
+            "ram_bytes": 536870912,
+            "ticks_per_byte": 64
+          },
+          "routes": "imaging_routes",
+          "sinks": [
+            {
+              "connected": true
+            },
+            {
+              "connected": true
+            }
+          ]
+        },
+        "name": "audio_registers",
+        "windows": [
+          {
+            "base": 4293926976,
+            "size": 64
+          },
+          {
+            "base": 4294574080,
+            "size": 4096
+          },
+          {
+            "base": 4294578176,
+            "size": 4096
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "irqs": [
+            {
+              "Core": {
+                "core": 0,
+                "line": 20
+              }
+            },
+            {
+              "Core": {
+                "core": 0,
+                "line": 21
+              }
+            },
+            {
+              "Core": {
+                "core": 0,
+                "line": 22
+              }
+            },
+            {
+              "Core": {
+                "core": 0,
+                "line": 23
+              }
+            },
+            {
+              "Core": {
+                "core": 0,
+                "line": 24
+              }
+            },
+            {
+              "Core": {
+                "core": 0,
+                "line": 25
+              }
+            },
+            {
+              "Core": {
+                "core": 0,
+                "line": 26
+              }
+            },
+            {
+              "Core": {
+                "core": 0,
+                "line": 27
+              }
+            },
+            {
+              "Core": {
+                "core": 0,
+                "line": 28
+              }
+            },
+            {
+              "Core": {
+                "core": 0,
+                "line": 29
+              }
+            },
+            {
+              "Core": {
+                "core": 0,
+                "line": 30
+              }
+            },
+            {
+              "Core": {
+                "core": 0,
+                "line": 31
+              }
+            }
+          ],
+          "kind": "exr2-pulse",
+          "options": {
+            "capture_channel": null,
+            "counter_channels": [
+              0,
+              4
+            ],
+            "initial_phase": 0,
+            "quadrature": false,
+            "timer_channels": [
+              0,
+              2,
+              4,
+              6,
+              8,
+              9,
+              10,
+              11
+            ]
+          }
+        },
+        "name": "pulse",
+        "windows": [
+          {
+            "base": 4294610944,
+            "size": 3328
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "pulse",
+          "serial_gpio"
+        ],
+        "model": {
+          "kind": "spi-controller",
+          "routes": [
+            {
+              "endpoint": {
+                "completion": [
+                  {
+                    "Core": {
+                      "core": 0,
+                      "line": 14
+                    }
+                  },
+                  {
+                    "Core": {
+                      "core": 0,
+                      "line": 12
+                    }
+                  }
+                ],
+                "focus": {
+                  "infinity_position": -111,
+                  "output": "lens_focus",
+                  "steps_per_mm": 267.0
+                },
+                "gpio": "serial_gpio",
+                "kind": "lens-unit",
+                "optics": {
+                  "output": "lens_aperture",
+                  "positions": [
+                    [
+                      6,
+                      16.000000000000004
+                    ],
+                    [
+                      10,
+                      14.25437949024543
+                    ],
+                    [
+                      14,
+                      12.699208415745595
+                    ],
+                    [
+                      18,
+                      11.313708498984761
+                    ],
+                    [
+                      22,
+                      10.079368399158986
+                    ],
+                    [
+                      26,
+                      8.979696386474986
+                    ],
+                    [
+                      30,
+                      8.000000000000002
+                    ],
+                    [
+                      34,
+                      7.127189745122715
+                    ],
+                    [
+                      38,
+                      6.349604207872798
+                    ],
+                    [
+                      42,
+                      5.656854249492381
+                    ],
+                    [
+                      46,
+                      5.039684199579493
+                    ],
+                    [
+                      50,
+                      4.489848193237492
+                    ],
+                    [
+                      54,
+                      4.000000000000001
+                    ],
+                    [
+                      58,
+                      3.5635948725613575
+                    ],
+                    [
+                      62,
+                      3.174802103936399
+                    ],
+                    [
+                      78,
+                      2.8284271247461903
+                    ]
+                  ]
+                },
+                "options": {
+                  "encoder": null,
+                  "motors": [
+                    {
+                      "counters": [
+                        {
+                          "channel": 0,
+                          "divider": 4
+                        },
+                        {
+                          "channel": 4,
+                          "divider": 1
+                        }
+                      ],
+                      "home": {
+                        "pin": {
+                          "pin": 0,
+                          "port": 0
+                        },
+                        "side": "above",
+                        "threshold": 8
+                      },
+                      "initial_position": 0,
+                      "settle_ticks": 4000,
+                      "ticks_per_step": 1000,
+                      "travel_limits": [
+                        -32767,
+                        32767
+                      ]
+                    },
+                    {
+                      "counters": [],
+                      "home": null,
+                      "initial_position": 0,
+                      "settle_ticks": 4000,
+                      "ticks_per_step": 1000,
+                      "travel_limits": [
+                        -32767,
+                        32767
+                      ]
+                    }
+                  ],
+                  "protocol": {
+                    "clock": [
+                      {
+                        "kind": "microstep_stages",
+                        "ticks_per_quantum": 3
+                      },
+                      {
+                        "kind": "encoder_stages",
+                        "ticks_per_quantum": 3
+                      }
+                    ],
+                    "kind": "banked",
+                    "positive_direction_high": false,
+                    "stop_response": "settled"
+                  },
+                  "zoom": null
+                },
+                "pulses": "pulse"
+              },
+              "gpio": "serial_gpio",
+              "options": {
+                "base": 4294459520,
+                "queue": "single",
+                "selection": [
+                  {
+                    "high": false,
+                    "pin": {
+                      "pin": 9,
+                      "port": 13
+                    }
+                  }
+                ],
+                "transfer_ticks": 4,
+                "transports": [
+                  {
+                    "bits": 16,
+                    "configuration": 4,
+                    "control": 224,
+                    "receive": false
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "name": "lens_serial",
+        "windows": [
+          {
+            "base": 4294459520,
+            "size": 32
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "irq0",
+          "irq1"
+        ],
+        "model": {
+          "bridge": null,
+          "cable": null,
+          "controllers": [
+            "irq0",
+            "irq1"
+          ],
+          "kind": "i2c",
+          "options": {
+            "base": 4294463488,
+            "irq": 101,
+            "modes": [
+              9
+            ],
+            "parts": {
+              "commands": [],
+              "heartbeat_register": 7174,
+              "kind": "primary",
+              "prefix_address": 85,
+              "prefix_high": 28,
+              "sensor_address": 28,
+              "sensor_fields": [
+                14,
+                15,
+                17,
+                21,
+                23,
+                24,
+                29,
+                31,
+                32,
+                33,
+                35,
+                36,
+                37,
+                38,
+                39,
+                40,
+                41,
+                42,
+                43,
+                44,
+                45,
+                46,
+                47,
+                48,
+                49
+              ],
+              "stationary": false,
+              "status": [],
+              "topology": [
+                12,
+                24,
+                25,
+                28,
+                57,
+                68,
+                85
+              ],
+              "touch": {
+                "core": 0,
+                "irq": 15,
+                "register": 0,
+                "ticks_per_second": 12000000
+              }
+            },
+            "profile": "endpoint7-stationary-and9-heartbeat-latched-irq-unmeasured",
+            "transfer_ticks": 4
+          }
+        },
+        "name": "control_bus0",
+        "windows": [
+          {
+            "base": 4294463488,
+            "size": 64
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "irq0",
+          "irq1"
+        ],
+        "model": {
+          "bridge": null,
+          "cable": "usb_cable",
+          "controllers": [
+            "irq0",
+            "irq1"
+          ],
+          "kind": "i2c",
+          "options": {
+            "base": 4294463552,
+            "irq": 102,
+            "modes": [
+              1,
+              9
+            ],
+            "parts": {
+              "connected": false,
+              "kind": "secondary",
+              "pwic_address": 48,
+              "pwic_masks": [
+                [
+                  97,
+                  16
+                ],
+                [
+                  32,
+                  2
+                ]
+              ],
+              "pwic_modes": [
+                1
+              ],
+              "pwic_read_prefixes": [
+                [
+                  32,
+                  [
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              ],
+              "pwic_values": [
+                [
+                  97,
+                  0
+                ],
+                [
+                  32,
+                  128
+                ]
+              ],
+              "register_address": 10,
+              "register_masks": [
+                [
+                  12,
+                  255
+                ],
+                [
+                  17,
+                  255
+                ]
+              ],
+              "register_modes": [
+                9
+              ],
+              "register_values": [
+                [
+                  2,
+                  0
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  12,
+                  0
+                ],
+                [
+                  17,
+                  0
+                ],
+                [
+                  19,
+                  0
+                ]
+              ],
+              "topology": [
+                10,
+                48,
+                114
+              ]
+            },
+            "profile": "usbcharge-disconnected-pwic-startup-tagged",
+            "transfer_ticks": 4
+          }
+        },
+        "name": "control_bus1",
+        "windows": [
+          {
+            "base": 4294463552,
+            "size": 64
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "image_output_0",
+          "image_output_1",
+          "live_frames"
+        ],
+        "model": {
+          "frames": "live_image",
+          "kind": "fe80-processing",
+          "options": {
+            "irq": 88,
+            "pixels_per_tick": 64
+          },
+          "routes": "imaging_routes",
+          "transport": {}
+        },
+        "name": "companion",
+        "windows": [
+          {
+            "base": 4264656896,
+            "size": 4096
+          },
+          {
+            "base": 4265279488,
+            "size": 4096
+          },
+          {
+            "base": 4269850624,
+            "size": 4096
+          },
+          {
+            "base": 4269854720,
+            "size": 4096
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "parameters"
+        ],
+        "model": {
+          "edges": "phase_edges",
+          "frame_period": null,
+          "kind": "image-input",
+          "memory_outputs": "memory_outputs",
+          "options": {
+            "cfa": [
+              0,
+              2,
+              1,
+              2,
+              0,
+              1,
+              1,
+              1,
+              0,
+              1,
+              1,
+              2,
+              1,
+              1,
+              2,
+              1,
+              1,
+              0,
+              2,
+              0,
+              1,
+              0,
+              2,
+              1,
+              1,
+              1,
+              2,
+              1,
+              1,
+              0,
+              1,
+              1,
+              0,
+              1,
+              1,
+              2
+            ],
+            "clock": {
+              "companion_secondary": true,
+              "mode": "input_enable",
+              "secondary": true,
+              "source": {
+                "first_delay_ticks": null,
+                "kind": "periodic",
+                "period_ticks": 400000
+              }
+            },
+            "command": "packed_writes",
+            "command_controls": [
+              2
+            ],
+            "command_ticks": 2,
+            "phase_ack": "preserve_fields",
+            "phase_ticks": 2,
+            "raw_dma_ticks": 153600,
+            "readback_ticks": 750000,
+            "reset_ticks": 2,
+            "sensor_period_ticks": null
+          },
+          "parameters": "parameters",
+          "phase_irqs": [
+            {
+              "core": 0,
+              "line": 39
+            },
+            {
+              "core": 0,
+              "line": 41
+            }
+          ],
+          "raw_irq": {
+            "core": 0,
+            "line": 36
+          },
+          "readback_irq": {
+            "core": 0,
+            "line": 38
+          },
+          "sensor": null,
+          "shutter_output": null,
+          "statistics_grid": null
+        },
+        "name": "image_input",
+        "windows": [
+          {
+            "base": 4293984256,
+            "size": 1024
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "kind": "block11000",
+          "options": {
+            "control_mode": {
+              "ClearBit0Ack": {
+                "delay_ticks": 2
+              }
+            }
+          }
+        },
+        "name": "input_auxiliary",
+        "windows": [
+          {
+            "base": 4293988352,
+            "size": 256
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "image_input"
+        ],
+        "model": {
+          "bank": "parameters",
+          "kind": "parameters",
+          "options": {}
+        },
+        "name": "parameters",
+        "windows": [
+          {
+            "base": 4294021120,
+            "size": 4096
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "kind": "hdmi-sink",
+          "options": {
+            "connected": false,
+            "edid": []
+          }
+        },
+        "name": "hdmisink",
+        "windows": []
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "hdmisink"
+        ],
+        "model": {
+          "hot_plug": {
+            "Core": {
+              "core": 0,
+              "line": 9
+            }
+          },
+          "kind": "hdmi",
+          "options": {},
+          "sink": "hdmisink"
+        },
+        "name": "hdmi",
+        "windows": [
+          {
+            "base": 4294344704,
+            "size": 4096
+          },
+          {
+            "base": 4294402048,
+            "size": 4096
+          },
+          {
+            "base": 4294406144,
+            "size": 4096
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "kind": "block86000",
+          "options": {}
+        },
+        "name": "output",
+        "windows": [
+          {
+            "base": 4294467584,
+            "size": 12
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "irq0",
+          "irq1"
+        ],
+        "model": {
+          "controllers": [
+            "irq0",
+            "irq1"
+          ],
+          "kind": "vector-gpu",
+          "options": {
+            "bytes_per_tick": 16,
+            "clear_profile": "declared-vg-ui-primitives-unmeasured",
+            "copy_profile": "vg-32bpp-untile-unrotated",
+            "max_clear_bytes": 67108864,
+            "max_command_capture_bytes": 524288,
+            "max_copy_bytes": 67108864,
+            "max_fill_bytes": 67108864,
+            "ram_bytes": 536870912
+          }
+        },
+        "name": "graphics",
+        "windows": [
+          {
+            "base": 4294410240,
+            "size": 20480
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "kind": "scanout",
+          "options": {
+            "backdrop_profile": "declared-black-canvas-unmeasured",
+            "graphics_profile": "mode1-abgr8888-straight",
+            "matrix": "bt601-full",
+            "max_pixels": 8847360,
+            "packing": "yycbcr",
+            "ram_bytes": 536870912,
+            "rectangle_profile": "exr2-signed-ycbcr-rectangle-overlay-unmeasured",
+            "reset_ticks": 2
+          }
+        },
+        "name": "scanout",
+        "windows": [
+          {
+            "base": 4294356992,
+            "size": 4096
+          },
+          {
+            "base": 4294369280,
+            "size": 4096
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "clock": "clocks",
+          "controllers": [
+            "irq0",
+            "irq1"
+          ],
+          "kind": "display-timing",
+          "options": {
+            "frame_ticks": 400000,
+            "mode": "configured_clocked",
+            "stop_ticks": 2
+          }
+        },
+        "name": "display_timing",
+        "windows": [
+          {
+            "base": 4294352896,
+            "size": 4096
+          },
+          {
+            "base": 4294365184,
+            "size": 4096
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [],
+        "model": {
+          "kind": "formatter",
+          "options": {
+            "latch_delay": 2
+          }
+        },
+        "name": "display_formatter",
+        "windows": [
+          {
+            "base": 4294348800,
+            "size": 4096
+          },
+          {
+            "base": 4294361088,
+            "size": 4096
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "irq0",
+          "irq1"
+        ],
+        "model": {
+          "irq": {
+            "core": 0,
+            "line": 75
+          },
+          "kind": "video-encoder",
+          "options": {
+            "backend": "software"
+          }
+        },
+        "name": "video_encoder",
+        "windows": [
+          {
+            "base": 4294312960,
+            "size": 256
+          },
+          {
+            "base": 4294314752,
+            "size": 1024
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "irq0",
+          "irq1"
+        ],
+        "model": {
+          "irq": {
+            "core": 0,
+            "line": 68
+          },
+          "kind": "image-combination",
+          "options": {
+            "arithmetic": "packed_image_unmeasured",
+            "clock": {
+              "bytes_per_tick": 256,
+              "kind": "throughput"
+            },
+            "reset_ticks": 16
+          }
+        },
+        "name": "image_combination",
+        "windows": [
+          {
+            "base": 4294213632,
+            "size": 1280
+          }
+        ]
+      },
+      {
+        "boot_entries": [
+          "rom"
+        ],
+        "dependencies": [
+          "serial_gpio"
+        ],
+        "model": {
+          "counter": null,
+          "gpio": "serial_gpio",
+          "kind": "encoder",
+          "options": {
+            "phase_ticks": 120000,
+            "pins": [
+              {
+                "pin": 6,
+                "port": 3
+              },
+              {
+                "pin": 7,
+                "port": 3
+              }
+            ],
+            "rest_phase": 0
+          }
+        },
+        "name": "encoder_control_ring",
+        "windows": []
+      }
+    ],
+    "schema": 1,
+    "wires": {
+      "image_outputs": "output-channels",
+      "imaging_routes": "irq-routes",
+      "lens_aperture": "aperture",
+      "lens_focus": "focus",
+      "memory_outputs": "memory-outputs",
+      "parameters": "parameters",
+      "phase_edges": "phase-edges",
+      "release": "software-pulse",
+      "still_stream": "stream",
+      "usb_cable": {
+        "logic-level": false
+      }
+    }
+  },
+  "scene": {
+    "images": {
+      "live_image": {
+        "asset": "xm1-150.live-pixels",
+        "height": 853,
+        "stride": 4992,
+        "width": 2496
+      }
+    },
+    "nands": {
+      "nand": {
+        "base": "nand_base",
+        "kind": "raw",
+        "options": {
+          "bytes": 134217728,
+          "page_bytes": 2048,
+          "pages_per_block": 64,
+          "spare_bytes": 512
+        },
+        "overlays": [],
+        "spare": []
+      }
+    },
+    "statistics": {
+      "live_statistics": [
+        {
+          "asset": "xm1-150.live-statistics",
+          "destination": 2,
+          "offset": 0
+        }
+      ]
+    }
+  },
+  "generated_assets": [
+    {
+      "id": "xm1-150.live-pixels",
+      "pattern": [
+        64,
+        64,
+        128,
+        128
+      ],
+      "size": 4258176
+    },
+    {
+      "id": "xm1-150.live-statistics",
+      "pattern": [
+        0
+      ],
+      "size": 1024
+    }
+  ],
+  "adc": "adc",
+  "scanout": "scanout",
+  "firmware": {
+    "current_menu": 9794000,
+    "calibration_pointer": 9882192,
+    "scanner_registered": 9041864,
+    "key_table": {
+      "base": 8552736,
+      "row_bytes": 28,
+      "released_offset": 21
+    },
+    "released_sample": 1023,
+    "keys": [
+      {
+        "key": "up",
+        "code": 2,
+        "row": 14,
+        "channel": 8,
+        "low_tag": 14250,
+        "high_tag": 14248
+      },
+      {
+        "key": "down",
+        "code": 3,
+        "row": 15,
+        "channel": 8,
+        "low_tag": 14254,
+        "high_tag": 14252
+      },
+      {
+        "key": "left",
+        "code": 4,
+        "row": 16,
+        "channel": 8,
+        "low_tag": 14258,
+        "high_tag": 14256
+      },
+      {
+        "key": "right",
+        "code": 5,
+        "row": 17,
+        "channel": 8,
+        "low_tag": 14262,
+        "high_tag": 14260
+      },
+      {
+        "key": "ok",
+        "code": 1,
+        "row": 18,
+        "channel": 9,
+        "low_tag": 14230,
+        "high_tag": 14228
+      },
+      {
+        "key": "q",
+        "code": 50,
+        "row": 19,
+        "channel": 9,
+        "low_tag": 14234,
+        "high_tag": 14232
+      },
+      {
+        "key": "back",
+        "code": 9,
+        "row": 20,
+        "channel": 9,
+        "low_tag": 14238,
+        "high_tag": 14236
+      }
+    ]
+  }
+}

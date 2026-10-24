@@ -10,6 +10,7 @@ import weakref
 
 from . import strict_audit
 from .hardware import UnsupportedDevice
+from .interrupts import IrqRoute
 
 # Board -> weak reference to its BootControls clock device, kept outside
 # device state. The device holds its board, so a strong value would keep the
@@ -98,11 +99,10 @@ class DisplayTiming:
 
     def _targets(self, instance, phase):
         line = self.PHYSICAL_IRQS[instance][phase]
-        targets = [cpu_id for cpu_id, bank in enumerate(self.board.interrupts.banks)
-                   if bank.enabled & (1 << line)]
-        if len(targets) > 1:
+        targets = self.board.interrupts.route(line, IrqRoute.AtMostOne)
+        if targets is None:
             raise UnsupportedDevice(
-                f"Ambiguous display phase{phase} physical IRQ{line:#x}: enabled in both CPU banks")
+                f"Ambiguous display phase{phase} physical IRQ{line:#x}: owned by both CPU banks")
         return line, targets
 
     def _validate_routes(self, instance):
@@ -289,7 +289,7 @@ class DisplayTiming:
                 "Without a virtual frame profile, only configuration and delayed stop completion are modeled",
                 "Default bit16 profile conservatively gates cadence; bit16's full hardware meaning is unresolved",
                 "Opt-in configured-clocked profile infers continued phase IRQ cadence from all recovered bank offsets and FFF88048 requested/ready even with bit16 clear; delayed stop/status completion remains, but bit16 is not a full cadence gate in this profile",
-                "Masked physical sources do not generate a latched IRQ; enabled routing must identify one CPU bank",
+                "A phase raises at the CPU bank owning its source, including one masked by an open kernel group-mask window (latched, unmeasured); an unowned source raises nothing and two owners refuse",
                 "Phase0/1 share physical0x34/0x37; phase2 uses0x35/0x38; logical IRQ types are not relabeled as edges",
                 "The device raises physical sources only; actual firmware ISR/list dispatch must invoke callbacks and image commits",
                 "No panel pins, HDMI signal, pixel clock, frame rendering or GPU operation is simulated by this device",

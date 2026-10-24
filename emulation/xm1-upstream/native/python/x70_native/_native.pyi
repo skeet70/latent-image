@@ -115,6 +115,19 @@ def tick_xm1_clock(device: Any, board: Any, edge_type: type, source_type: type) 
 def spi0_status_acknowledged(status: int, written: int) -> int: ...
 def virtual_scene_fixed_frame(frame: int | None) -> int | None: ...
 
+class IrqRoute:
+    Every: IrqRoute
+    AtMostOne: IrqRoute
+    ExactlyOne: IrqRoute
+
+IrqLines = tuple[int, int, int, int]
+
+def irq_enable_clear(bank: IrqLines, group_index: int, word: int) -> IrqLines: ...
+def irq_enable_set(bank: IrqLines, group_index: int, word: int) -> IrqLines: ...
+def irq_raise(bank: IrqLines, line_index: int) -> IrqLines: ...
+def irq_route(banks: tuple[IrqLines, IrqLines], line_index: int,
+              policy: IrqRoute) -> list[int] | None: ...
+
 FFF63_PROFILES: tuple[str, ...]
 
 class FFF63Engine:

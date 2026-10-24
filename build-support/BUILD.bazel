@@ -1,3 +1,5 @@
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
 exports_files([
     "ghc.nix",
     "nixpkgs.nix",
@@ -12,5 +14,13 @@ platform(
         "@platforms//cpu:x86_64",
         "@rules_nixpkgs_core//constraints:support_nix",
     ],
+    visibility = ["//visibility:public"],
+)
+
+# FujiMod's reference CLI; its Nix build also runs the vendored Unicorn's unit tests.
+sh_binary(
+    name = "fujimod-emulator",
+    srcs = ["@lab_fujimod//:bin/fujimod-emulator"],
+    tags = ["manual"],
     visibility = ["//visibility:public"],
 )

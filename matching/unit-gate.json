@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "firmware": "X-M1 1.50",
+  "firmware_sha256": "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490",
+  "upstream": {
+    "repository": "https://github.com/justjake/x70view",
+    "revision": "62876536052549cbcba1e9f6abc1437e773dba2f",
+    "credit": "jitl (justjake)"
+  },
+  "unit": "main",
+  "region": "image-4",
+  "region_base": "0x0061c400",
+  "region_sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+  "upstream_source": "decomp/firmwares/xm1-150/app/storage/service/storage_command_dispatch.c",
+  "upstream_source_sha256": "f26ad9cd1627949be943e60fc3b761559dbf40e5cbfdd9bc5487387292249c12",
+  "functions": [
+    {
+      "name": "storage_receive_command",
+      "address": "0x0071fe2c",
+      "size": 80,
+      "stock_sha256": "bac2dcf486b6b3336f1dd6828f23bcc7f7ba5205d4e14a0a931acc2ea7752007"
+    },
+    {
+      "name": "storage_dispatch_command",
+      "address": "0x007213c0",
+      "size": 44,
+      "stock_sha256": "f07deed1e2f8a3ff4d8648bc81011eb2a7b6b549bc9f4164d048fa5ea2edff00"
+    },
+    {
+      "name": "storage_dispatch_payload",
+      "address": "0x00721560",
+      "size": 24,
+      "stock_sha256": "061c1485af0318b2797bfb9a5a49e00896021d83402e973981256ecfe0f3488e"
+    }
+  ]
+}

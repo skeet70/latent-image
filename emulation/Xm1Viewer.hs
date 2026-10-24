@@ -5,7 +5,7 @@ import Control.Monad (when)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
-import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), OverrideReason (..), PushMode (..), RelinkMode (..), UiConversionProfile (..), bankD3Payload, classicChromeIconPayload, classicChromePayload, runRamPushE2E)
+import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), OverrideReason (..), PushMode (..), RelinkMode (..), UiConversionProfile (..), bankD3Payload, classicChromeIconPayload, classicChromePayload, runRamPushE2E, warmAttachCheckpoint)
 import Data.List (isPrefixOf, nub)
 import qualified Data.Text as T
 import Data.Word (Word16)
@@ -54,6 +54,7 @@ data Options = Options
   , cardModeOption :: CardSelection
   , portOption :: Port
   , bindOption :: Bind
+  , warmCheckpointOption :: Bool
   }
 
 data Command = Help | Validate Firmware | Launch Options
@@ -82,6 +83,8 @@ usage = unlines
   , "                         --unreviewed-relink: push a bank whose ELF fails the allowlist check;"
   , "                         the receipt records the reason and every violation"
   , "  --fresh-boot           --ram-push-e2e: cold boot and replace the keyed attach checkpoint"
+  , "  --warm-checkpoint      --ram-push-e2e: restore or cold-boot and save the keyed attach checkpoint,"
+  , "                         then stop; needs no --receipt-output or trajectories"
   , "  --segments A,B         --ram-push-e2e: run each named trajectory segment, with the segments it"
   , "                         requires, in its own process from the post-install checkpoint"
   , "  --installed-nand PATH  Committed f7=1 NAND input for --ff80-rehearsal"
@@ -114,7 +117,7 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice NoAttachHold DeclaredUiCpuFallback Nothing WithCard (Port 0) IPv4Loopback
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice NoAttachHold DeclaredUiCpuFallback Nothing WithCard (Port 0) IPv4Loopback False
     go options [] = pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
@@ -149,6 +152,8 @@ parseCommand args
       go options { allowlistOverrideOption = Just (OverrideReason value) } rest
     go options ("--fresh-boot" : rest) =
       go options { bootModeOption = FreshBoot } rest
+    go options ("--warm-checkpoint" : rest) =
+      go options { warmCheckpointOption = True } rest
     go options ("--segments" : value : rest) = do
       let names = filter (not . T.null) (T.splitOn (T.singleton ',') (T.pack value))
       require (not (null names) && nub names == names) "--segments must name distinct segments"
@@ -246,13 +251,19 @@ launch options = do
         require (media == Nothing) "--cardless boots without --sd-card-image"
         require (pushModeOption options == RamPush) "--cardless belongs to the RAM push, not --flash-candidate"
     require (nand /= Nothing) "--ram-push-e2e requires --installed-nand"
-    require (receipt /= Nothing) "--ram-push-e2e requires --receipt-output"
+    if warmCheckpointOption options
+      then do
+        require (receipt == Nothing) "--warm-checkpoint writes no receipt"
+        require (trajectoriesOption options == Nothing && segmentsOption options == Nothing)
+          "--warm-checkpoint runs no trajectory"
+      else require (receipt /= Nothing) "--ram-push-e2e requires --receipt-output"
     require (case firmwareOption options of Just _ -> True; Nothing -> False)
       "--ram-push-e2e requires the RC0 --firmware input"
   when (not ff80 && not e2e) $ do
     require (nand == Nothing) "--installed-nand belongs to a closed emulator rehearsal"
     require (receipt == Nothing) "--receipt-output belongs to a closed emulator rehearsal"
   when (not e2e) $ do
+    require (not (warmCheckpointOption options)) "--warm-checkpoint belongs to --ram-push-e2e"
     require (trajectoriesOption options == Nothing) "--trajectories belongs to --ram-push-e2e"
     require (relinkModeOption options == ReviewedRelink) "--unreviewed-relink belongs to --ram-push-e2e"
     require (bootModeOption options == CheckpointedBoot) "--fresh-boot belongs to --ram-push-e2e"
@@ -265,7 +276,6 @@ launch options = do
   require (allowlistOverrideOption options == Nothing || relinkModeOption options /= ReviewedRelink)
     "--allowlist-override belongs to --unreviewed-relink"
   -- Without `--output`, `--ram-push-e2e` restages into one fixed directory.
-  -- Attach checkpoints restore only into the runtime path that saved them.
   let fallback = if e2e
         then ReplacedRuntime ("emulator-runtimes" </> "xm1-ram-push-e2e")
         else UniqueRuntime "xm1-viewer"
@@ -320,9 +330,10 @@ launch options = do
                 ClassicChromeChoice -> classicChromePayload
                 ClassicChromeIconChoice -> classicChromeIconPayload)
               (attachHoldOption options)
-              (uiConversionProfileOption options) cardInput
-              (fixedSceneFrameOption options)
-        runRamPushE2E settings python workspacePath (resolve root trajectories) stagedFirmwarePath nandPath receiptPath
+              (uiConversionProfileOption options) cardInput (fixedSceneFrameOption options) Nothing
+        if warmCheckpointOption options
+          then warmAttachCheckpoint settings python stagedFirmwarePath nandPath (destination </> "warm-attach")
+          else runRamPushE2E settings python workspacePath (resolve root trajectories) stagedFirmwarePath nandPath receiptPath
       else do
         let Port port = portOption options
             mediaArguments = case media of

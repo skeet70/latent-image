@@ -40,6 +40,7 @@ class PreviewProducerStopMixin:
             view.board.interrupts.banks = [copy(bank) for bank in self.board.interrupts.banks]
             for bank in view.board.interrupts.banks:
                 bank.enabled &= ~(1 << 0x2e)
+                bank.masked &= ~(1 << 0x2e)
                 if request.get('data') is not None:
                     # The separate current IRQ must not become an assertion
                     # about the archived released lifetime. This is a copied

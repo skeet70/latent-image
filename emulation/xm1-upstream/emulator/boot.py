@@ -14,7 +14,6 @@ from .boot_devices import BootControls,normal_power_on_gpio_profile,SHUTTER_IRQ_
 from .interrupts import KernelInterrupts
 from .loader_devices import (NandController, FujiDecompressor,
                              LoaderMemoryDMA, native_flash_from_dat)
-from .server import make_server
 from .power_devices import PowerDevices,normal_power_on_profile,absent_external_flash_profile
 from .captured_mcu_profile import captured_mcu_profile
 from .audio_devices import AudioSerialControl
@@ -757,6 +756,7 @@ def main(*, session_factory=None):
     else:
         print('Instruction limit reached; boot completion is not established.',flush=True)
     if args.serve:
+        from .server import make_server
         server=make_server(session,args.port,page='boot.html',bind=args.bind,hostname=args.hostname)
         url=f'http://{args.hostname or args.bind}:{server.server_port}/'
         print('Stock-boot viewer: '+url,flush=True)
