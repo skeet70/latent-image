@@ -336,7 +336,28 @@ Unicorn 2.1.4 has no Cortex-R4 model; the native runner uses `UC_CPU_ARM_CORTEX_
 
 **Source-inspected:** x70view carries an X-M1 1.50 decomp tree, `decomp/firmwares/xm1-150` at `6287653605`, a matching-C lead for MATCHING-C-01; its plain-image `overlay_font_raster_find_property` (`0x0119eed8`, 188 bytes) and `overlay_font_raster_read_stream` (`0x0119f68c`, 192 bytes) stock hashes equal this project's bytes, and both are NONMATCHING there. No C is imported (E-XM1-DECOMP-CHECKPOINTS-150).
 
-**Next, host-only:** MATCHING-C-01 is a fixed ten-function pilot, two small functions from each of loader A, loader B, image 4, image 5 and the plain image, including a patch-relevant call boundary. Freeze the sample before compiler trials; determine compiler/flags per region, preserve the target ABI and R4F instruction limits, and compare fully linked bytes at original addresses including relocations and literal pools. Account separately for emitted bytes, stock padding and retained stock code/data; do not call a truncated-prefix match whole-function identity. Record exact and nonmatching outcomes separately. Obtain tools through the checked-in Nix/Bazel environment rather than copying the sibling's macOS installation procedure. This is not a whole-firmware rewrite or a new RC release gate.
+**Independently reproduced, host-only (MATCHING-C-01):** ten x70view C functions, frozen in [matching/pilot-functions.json](../matching/pilot-functions.json) before any compiler trial, rebuild to their stock bytes with pinned GNU compilers and link at their original addresses (E-XM1-MATCHING-C-PILOT-150). The sample takes two small functions from each region among those x70view defines in C without a `NONMATCHING` marker, preferring calls, MOVW/MOVT references and literal pools. Three are patch boundaries: the loader-A byte copy `0x0004357c` that the Classic Chrome builder and icon cases execute, the configuration-byte getter `0x0069f8fc` in the builder case list, and the media receive helper `0x0071fe2c` that the AF recorder hook tail-transfers into. All ten stock bodies hash-equal x70view's `function-ranges.json`.
+
+| Region | Entry | Upstream label | Body bytes | GCC | Relocations | Literal-pool bytes | Result |
+| --- | --- | --- | ---: | --- | ---: | ---: | --- |
+| loader A | `0x0004357c` | `FUN_0004357c` | 48 | 4.6.4 | 0 | 0 | exact |
+| loader A | `0x00040b24` | `FUN_00040b24` | 56 | 4.4.7 | 5 | 0 | exact |
+| loader B | `0x000d0b24` | `FUN_000d0b24` | 56 | 4.4.7 | 5 | 0 | exact |
+| loader B | `0x000d3a0c` | `FUN_000d3a0c` | 112 | 4.6.4 | 12 | 8 | exact |
+| image 4 | `0x0069f8fc` | `read_cfgdata_byte` | 36 | 4.6.4 | 2 | 0 | exact |
+| image 4 | `0x0071fe2c` | `storage_receive_command` | 80 | 4.6.4 | 1 | 0 | exact |
+| image 5 | `0x00ed117c` | `usb_start_mode_request` | 40 | 4.6.4 | 1 | 0 | exact |
+| image 5 | `0x00d3d0c4` | `ui_saved_state8_bytes_differ` | 44 | 4.6.4 | 3 | 8 | exact |
+| plain | `0x0118cfc4` | `overlay_font_flags_for_mode` | 48 | 4.4.7 | 1 | 4 | exact |
+| plain | `0x01112b2c` | `overlay_select_panel_font` | 52 | 4.6.4 | 5 | 0 | exact |
+
+Result: 10 exact, 0 normalized, 0 failures. Every emitted section is exactly its stock body length, so no stock body bytes are retained and no emitted bytes extend past the body; the 20 literal-pool bytes lie inside the bodies. All 35 relocations (branch-24, MOVW/MOVT and absolute words, including one string-literal section) resolve through x70view's address tables and section placements and link to the stock values. Only the function extents are compared; surrounding stock code and data are neither rebuilt nor credited.
+
+Compiler and flags follow x70view per translation unit, not per region: GCC 4.6.4 at `-O1 -fno-omit-frame-pointer` by default, with `-marm -march=armv7-a -mfloat-abi=soft` (ARM state; none of the ten emits a hardware divide), and source annotations selecting GCC 4.4.7 and other flags; `overlay_font_flags_for_mode` uses GCC 4.4.7 with `-O2 -ftree-vectorize -mtune=cortex-r4 -mabi=apcs-gnu`. [build-support/exr2-gcc.nix](../build-support/exr2-gcc.nix) builds both releases and binutils 2.24 from GNU sources against the devenv nixpkgs; for all ten translation units its objects are byte-identical to those of x70view's own GCC 4.6.4 and 4.4.7 builds. Three translation units include x70view's generated `api.h`, which the pilot replaces with an empty header; they still reproduce exactly.
+
+Forcing one release for all ten discriminates: GCC 4.6.4 alone fails `0x0118cfc4` (6 bytes differ outside relocated fields), and GCC 4.4.7 alone fails `0x0004357c` (52 bytes emitted against 48), `0x00d3d0c4` (one byte) and `0x01112b2c` (its headers do not compile under 4.4.7). Loader A, image 5 and the plain image each hold a function that only one release reproduces; the loader-B and image-4 samples reproduce under both. This identifies output consistent with these GNU releases and flags for these ten functions, not Fujifilm's production toolchain or an X-M1 match rate; x70view's own README reports 10,675 of 41,882 X-M1 functions exact.
+
+**Recommendation:** patches can be written in C and checked by byte equality in two steps. First, the unmodified translation unit must rebuild to the stock extent of every function it owns; the pilot checked one function per unit. That fixes compiler, flags, ABI and bindings. Second, the patched build may differ from stock only inside the intended extents, with every other compared byte, including callers' linked branches, equal. Byte equality cannot verify what the changed code does; that stays with the emulator and models. This only applies where the target function already has exact upstream C, and code larger than its stock extent still needs placement (RECIPE-PLACEMENT-01). Commands and outputs are in [the pilot README](../matching/README.md); private reports stay under `private-data/matching-c/`.
 
 ### Permission-fault loading and live iteration lead
 
