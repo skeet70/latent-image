@@ -744,7 +744,9 @@ The flash target is not `16c830ad…2c89`. The owner chose a later candidate tha
 
 #### 12.2.1 The install bytes and their gates
 
-`DIGEST` is the combined candidate `98a66780f464731a184f1128aab0eb4b954adcdbbed99a214480720bd5a81606` (CC, the design-B icon with the full-size Q tiles, the live-view fragment and the frames-remaining fix; [the icon report](classic-chrome-icon.md) sections 8-11 and 14; it keeps the image-4 load at `0x0061c200`). Review CcIconReview (2026-10-23) covered its new bytes. Gates `DIGEST` must clear before the go:
+`DIGEST` is the combined candidate `98a66780f464731a184f1128aab0eb4b954adcdbbed99a214480720bd5a81606` (CC, the design-B icon with the full-size Q tiles, the live-view fragment and the frames-remaining fix; [the icon report](classic-chrome-icon.md) sections 8-11 and 14; it keeps the image-4 load at `0x0061c200`). Review CcIconReview (2026-10-23) covered its new bytes. CC-icon+toggle `c1bfc9aa995861ff8a90729bf0e0e5e7bfe0747c1bac69adec2a72d7f7f0ad8f` is this image plus the USB personality toggle, one update for both; its gates and session script are in [the toggle report](usb-personality-toggle.md) sections 11.4 and 12, and if the owner chooses it, this section's acceptance A2b to A7 runs inside that script.
+
+Gates `DIGEST` must clear before the go:
 
 1. Its pinned manifest rebuilds to `DIGEST` byte for byte on the session commit, as the baseline does below.
 2. One independent review of the new bytes (the icon change, the live-view fragment of section 4.10 and the frames fix of section 4.11), scoped by [the icon report's reviewer packet](classic-chrome-icon.md#10-reviewer-packet) against the baseline: diff the two images and explain every byte that differs.

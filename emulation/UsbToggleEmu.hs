@@ -41,7 +41,7 @@ import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), callPr
 
 -- * Inputs
 
-data DatRole = StockDat | CcBaseDat | CcToggleDat | Rc0ToggleDat deriving (Eq, Show)
+data DatRole = StockDat | CcBaseDat | CcToggleDat | Rc0ToggleDat | CcIconBaseDat | CcIconToggleDat deriving (Eq, Show, Enum, Bounded)
 
 data NandRole = Stored0 | Stored1 | Stored0Pid02b6 deriving (Eq, Show)
 
@@ -52,21 +52,27 @@ datName StockDat = "stock"
 datName CcBaseDat = "cc-base"
 datName CcToggleDat = "cc-toggle"
 datName Rc0ToggleDat = "rc0-toggle"
+datName CcIconBaseDat = "cc-icon-base"
+datName CcIconToggleDat = "cc-icon-toggle"
 
 datPath :: DatRole -> FilePath
 datPath StockDat = "private-data/firmware/x-m1-1.50/FWUP0002.DAT"
 datPath CcBaseDat = "private-data/analysis/classic-chrome-patch/candidate-pinned-dat/FWUP0002.DAT"
 datPath CcToggleDat = "private-data/analysis/usb-toggle/cc-pinned-dat/FWUP0002.DAT"
 datPath Rc0ToggleDat = "private-data/analysis/usb-toggle/rc0-pinned-dat/FWUP0002.DAT"
+datPath CcIconBaseDat = "private-data/analysis/classic-chrome-icon/build-b-1-pinned/FWUP0002.DAT"
+datPath CcIconToggleDat = "private-data/analysis/usb-toggle/ccb-pinned-dat/FWUP0002.DAT"
 
 datSha256 :: DatRole -> Sha256
 datSha256 StockDat = Sha256 "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"
 datSha256 CcBaseDat = Sha256 "16c830ad71b9755d22368ffaeacd6b8b4d78376c9568ac3f9717f45d48292c89"
 datSha256 CcToggleDat = Sha256 "507ecf326119110713c34f15bb07d0f38bd6946127011835980f6e4d39ad0e1e"
 datSha256 Rc0ToggleDat = Sha256 "10feac474eee5ac178ff454397f1b4f1bc1c9a01ae4da8de8f102fa606ca2445"
+datSha256 CcIconBaseDat = Sha256 "98a66780f464731a184f1128aab0eb4b954adcdbbed99a214480720bd5a81606"
+datSha256 CcIconToggleDat = Sha256 "c1bfc9aa995861ff8a90729bf0e0e5e7bfe0747c1bac69adec2a72d7f7f0ad8f"
 
 datHasToggle :: DatRole -> Bool
-datHasToggle role = role `elem` [CcToggleDat, Rc0ToggleDat]
+datHasToggle role = role `elem` [CcToggleDat, Rc0ToggleDat, CcIconToggleDat]
 
 nandName :: NandRole -> String
 nandName Stored0 = "stored-0"
@@ -848,7 +854,7 @@ data Scenario = Scenario
 
 scenarios :: [Scenario]
 scenarios =
-  [ Scenario ("e2-" ++ datName d) "e2" d Stored0 ProbeBoot [Attach Plain] | d <- [StockDat, CcBaseDat, CcToggleDat, Rc0ToggleDat] ] ++
+  [ Scenario ("e2-" ++ datName d) "e2" d Stored0 ProbeBoot [Attach Plain] | d <- [StockDat, CcBaseDat, CcToggleDat, Rc0ToggleDat, CcIconBaseDat, CcIconToggleDat] ] ++
   [ Scenario ("e3-" ++ datName d) "e3" d Stored0 RouteBoot [Attach Plain, Enumerate] | d <- toggles ] ++
   [ Scenario ("e4e5-" ++ datName d) "e4e5" d Stored0 RouteBoot
       [Attach HoldQ, Enumerate, Detach, Attach Plain, Enumerate, Detach, Attach HoldQ, Enumerate, Detach] | d <- toggles ] ++
@@ -863,7 +869,7 @@ scenarios =
   [ Scenario ("e7-" ++ datName d ++ "-q") "e7" d Stored1 RouteBoot [Attach HoldQ, Enumerate] | d <- toggles ] ++
   [ Scenario "control-e3-stock" "control" StockDat Stored0 RouteBoot [Attach Plain, Enumerate]
   , Scenario "control-e4-stock" "control" StockDat Stored0 RouteBoot [Attach HoldQ, Enumerate] ]
-  where toggles = [CcToggleDat, Rc0ToggleDat]
+  where toggles = [CcToggleDat, Rc0ToggleDat, CcIconToggleDat]
 
 -- | Q's loaded-calibration midpoint for ADC channel 9, read at the shooting
 -- screen of the stored-0 route checkpoint (cache tags 0x379a low, 0x3798 high).
@@ -1034,18 +1040,20 @@ probeReport srv recorder scenario hitLog = do
 data Options = Options
   { optReceipts :: Maybe FilePath
   , optFamilies :: [String]
+  , optDats :: [DatRole]
   , optFresh :: Bool
   , optWorkspace :: Maybe Workspace
   }
 
 usage :: String
 usage = unlines
-  [ "Usage: bazel run //emulation:usb-toggle-emu -- --receipt-output DIR [--runs FAMILY,...] [--fresh-boot]"
+  [ "Usage: bazel run //emulation:usb-toggle-emu -- --receipt-output DIR [--runs FAMILY,...] [--dats DAT,...] [--fresh-boot]"
   , ""
   , "Runs the emulated USB-toggle scenarios of reports/usb-personality-toggle.md 8.2 in one emulator slot."
   , "Host-only: no camera or USB device. Receipts go to DIR (fresh, beneath private-data/)."
   , ""
   , "  --runs FAMILY,...   e2, e3, e4e5, e5u, e6, e7, control or all (default: all)"
+  , "  --dats DAT,...      " ++ unwords (map datName [minBound .. maxBound]) ++ " or all (default: all)"
   , "  --fresh-boot        cold-boot each route checkpoint once and replace it"
   , "  --workspace PATH    repository root (default: BUILD_WORKSPACE_DIRECTORY)"
   ]
@@ -1054,7 +1062,7 @@ families :: [String]
 families = ["e2", "e3", "e4e5", "e5u", "e6", "e7", "control"]
 
 parseOptions :: [String] -> IO Options
-parseOptions = go (Options Nothing families False Nothing)
+parseOptions = go (Options Nothing families [minBound .. maxBound] False Nothing)
   where
     go options [] = pure options
     go options ("--receipt-output" : value : rest) = go options {optReceipts = Just value} rest
@@ -1063,6 +1071,12 @@ parseOptions = go (Options Nothing families False Nothing)
           chosen = if names == ["all"] then families else names
       require (not (null chosen) && all (`elem` families) chosen) ("--runs takes " ++ show families ++ " or all")
       go options {optFamilies = chosen} rest
+    go options ("--dats" : value : rest) = do
+      let names = splitComma value
+          known = [(datName d, d) | d <- [minBound .. maxBound]]
+          chosen = if names == ["all"] then map snd known else [d | n <- names, Just d <- [lookup n known]]
+      require (names == ["all"] || (not (null chosen) && length chosen == length names)) ("--dats takes " ++ show (map fst known) ++ " or all")
+      go options {optDats = chosen} rest
     go options ("--fresh-boot" : rest) = go options {optFresh = True} rest
     go options ("--workspace" : value : rest) = go options {optWorkspace = Just (Workspace value)} rest
     go _ (argument : _) = ioError (userError ("unknown option or missing value: " ++ argument ++ "\n" ++ usage))
@@ -1100,9 +1114,9 @@ launch arguments options = do
   policy <- slotPolicyFromEnvironment
   reexecInSlot policy arguments
   Workspace root <- workspace (optWorkspace options)
-  forM_ [StockDat, CcBaseDat, CcToggleDat, Rc0ToggleDat] $ \dat -> validateFirmware (Firmware (root </> datPath dat))
+  forM_ [minBound .. maxBound :: DatRole] $ \dat -> validateFirmware (Firmware (root </> datPath dat))
   receipts <- freshReceipts root receiptsArgument
-  staged <- stageViewerRuntime (Workspace root) Nothing (ReplacedRuntime ("emulator-runtimes" </> "xm1-usb-toggle")) Nothing StageStockOriginal
+  staged <- stageViewerRuntime (Workspace root) Nothing (UniqueRuntime "usb-toggle-emu") Nothing StageStockOriginal
   let Python python = stagedPython staged
       runtime = stagedDirectory staged
   callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
@@ -1110,11 +1124,11 @@ launch arguments options = do
   head' <- (filter (/= '\n') <$> readProcess "git" ["-C", root, "rev-parse", "HEAD"] "") `catch` \(_ :: IOException) -> pure "unknown"
   dirty <- (not . null <$> readProcess "git" ["-C", root, "status", "--porcelain", "--", "emulation", "host", "transport", "broker"] "") `catch` \(_ :: IOException) -> pure True
   let env = Env root python runtime (root </> "private-data" </> "emulator-checkpoints" </> "xm1-usb-toggle") (optFresh options) replaced
-      chosen = [s | s <- scenarios, scFamily s `elem` optFamilies options]
+      chosen = [s | s <- scenarios, scFamily s `elem` optFamilies options, scDat s `elem` optDats options]
   results <- mapM (runScenario env receipts) chosen
   BL.writeFile (receipts </> "summary.json") (encode (object
     [ "schema" .= (1 :: Int), "git_head" .= head', "git_dirty_harness" .= dirty
-    , "runtime" .= runtime, "families" .= optFamilies options, "scenarios" .= results ]) <> "\n")
+    , "runtime" .= runtime, "families" .= optFamilies options, "dats" .= map datName (optDats options), "scenarios" .= results ]) <> "\n")
   let statuses = [s | Object o <- results, String s <- [field "result" o]]
   putStrLn ("summary: " ++ receipts </> "summary.json")
   unless (all (== "pass") statuses) (exitWith (ExitFailure 1))
