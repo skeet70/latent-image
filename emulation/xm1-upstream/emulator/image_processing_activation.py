@@ -105,9 +105,9 @@ def historical(device):
     controller.banks = [copy(b) for b in device.board.interrupts.banks]
     # Do not change vectors, priorities or any other source. The prior closed
     # owner sees its retired line while the new owner checks the live route.
-    controller.banks[0].enabled &= ~(1 << 44)
-    if 'channel1' in owner(image):
-        controller.banks[0].enabled &= ~(1 << 45)
+    retired = (1 << 44) | ((1 << 45) if 'channel1' in owner(image) else 0)
+    controller.banks[0].enabled &= ~retired
+    controller.banks[0].masked &= ~retired
     board.interrupts = controller
     return views[device.board.devices.index(device)]
 
