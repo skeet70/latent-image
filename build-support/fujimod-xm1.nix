@@ -1,4 +1,4 @@
-{ pkgs }:
+{ pkgs ? import ./nixpkgs.nix { config = { }; overlays = [ ]; } }:
 # emulation/fujimod-xm1 built against the FujiMod source of fujimod.nix,
 # which the crate's path dependencies expect at ../fujimod.
 let

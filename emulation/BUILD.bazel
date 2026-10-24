@@ -91,10 +91,29 @@ haskell_binary(
     ],
 )
 
+genrule(
+    name = "fujimod-paths-module",
+    srcs = [
+        "@lab_coreutils//:bin/readlink",
+        "@lab_fujimod_xm1//:bin/fujimod-xm1",
+        "@lab_fujimod_xm1//:share/fujimod-xm1/xm1-150.json",
+    ],
+    outs = ["FujiModPaths.hs"],
+    cmd = " && ".join([
+        "driver=$$($(location @lab_coreutils//:bin/readlink) -f $(location @lab_fujimod_xm1//:bin/fujimod-xm1))",
+        "run=$$($(location @lab_coreutils//:bin/readlink) -f $(location @lab_fujimod_xm1//:share/fujimod-xm1/xm1-150.json))",
+        "printf 'module FujiModPaths (fujimodDriver, fujimodRun) where\\n\\nfujimodDriver :: FilePath\\nfujimodDriver = \"%s\"\\n\\nfujimodRun :: FilePath\\nfujimodRun = \"%s\"\\n' \"$$driver\" \"$$run\" > $@",
+    ]),
+)
+
 haskell_binary(
     name = "fujimod-flash-boot-check",
-    srcs = ["FujiModFlashBootCheck.hs"],
+    srcs = [
+        "FujiModFlashBootCheck.hs",
+        ":fujimod-paths-module",
+    ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    main_file = "FujiModFlashBootCheck.hs",
     visibility = ["//visibility:public"],
     deps = [
         ":emulator-slot-lib",

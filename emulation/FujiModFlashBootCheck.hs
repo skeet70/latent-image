@@ -11,7 +11,8 @@ import qualified Data.ByteString.Lazy as BL
 import Data.List (sort)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.FlashBootRoute
-import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Runtime (..), freshRuntime, requiredEnvironment, resolve, validateFirmware, workspace)
+import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Runtime (..), freshRuntime, resolve, validateFirmware, workspace)
+import FujiModPaths (fujimodDriver, fujimodRun)
 import GHC.Clock (getMonotonicTime)
 import System.Directory (getFileSize, listDirectory)
 import System.Environment (getArgs)
@@ -26,8 +27,9 @@ usage = unlines
   , ""
   , "Cold-boot the exact DAT bytes with the captured X-M1 ROM on FujiMod's EXR II runtime,"
   , "drive the route of //emulation:flash-boot-check and exit 0 only at SHOOTING MENU"
-  , "(menu 1, setting 5, cursor 2) with no model stop. Needs FUJIMOD_XM1_DRIVER and"
-  , "FUJIMOD_XM1_RUN from the devenv shell. Host-only: no camera or card-reader I/O."
+  , "(menu 1, setting 5, cursor 2) with no model stop. Bazel builds the driver"
+  , "(@lab_fujimod_xm1, build-support/fujimod-xm1.nix) on first use. Host-only: no"
+  , "camera or card-reader I/O."
   , ""
   , "  --firmware PATH  Candidate X-M1 1.50-compatible DAT"
   , "  --output PATH    Fresh directory beneath workspace/private-data/"
@@ -86,8 +88,8 @@ check output (Firmware supplied) = do
   arguments <- getArgs
   policy <- slotPolicyFromEnvironment
   reexecInSlot policy arguments
-  driver <- requiredEnvironment "FUJIMOD_XM1_DRIVER"
-  run <- requiredEnvironment "FUJIMOD_XM1_RUN"
+  let driver = fujimodDriver
+      run = fujimodRun
   Runtime directory <- freshRuntime root output (UniqueRuntime "fujimod-flash-boot-check")
   let commands = [probeCommand step | (_, steps) <- freshBootRoute, step <- steps] ++ ["quit"]
   started <- getMonotonicTime

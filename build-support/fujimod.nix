@@ -1,4 +1,4 @@
-{ pkgs }:
+{ pkgs ? import ./nixpkgs.nix { config = { }; overlays = [ ]; } }:
 # jitl (justjake)'s FujiMod, unlicensed (LICENSING.md); statically links its
 # vendored Unicorn submodule, justjake/unicorn 0c0e055c.
 let

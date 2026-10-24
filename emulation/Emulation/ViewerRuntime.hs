@@ -11,7 +11,6 @@ module Emulation.ViewerRuntime
   , StockOriginal (..)
   , StagedRuntime (..)
   , require
-  , requiredEnvironment
   , resolve
   , workspace
   , freshRuntime

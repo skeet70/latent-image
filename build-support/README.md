@@ -51,9 +51,9 @@ The X-M1 viewer's locked `xm1-native.nix` build runs Rust unit checks before ins
 
 `unicorn-x70.nix` builds jitl's Unicorn fork from a pinned GitHub revision and source hash, ARM-only, for the viewer's `X70_UNICORN_LIBRARY` ([engine paths and measurements](../emulation/README.md#interactive-x-m1-firmware-viewer)). The Bazel `lab_unicorn` repository and the Python binding stay on stock nixpkgs Unicorn.
 
-`fujimod.nix` builds jitl's FujiMod `fujimod-emulator` CLI at the commit pinned in `manifests/sources.json`, with upstream's `Cargo.lock`, Rust 1.99.1 from a pinned rust-overlay, and its statically linked vendored Unicorn; devenv exposes it as `FUJIMOD_EMULATOR`. Its check phase runs `fujimod-emulator-cpu-unicorn`'s unit tests. It is a reference build: FujiMod is unlicensed ([licensing item 7](../LICENSING.md#release-decisions)) and its catalog boot refuses `xm1-150`.
+`fujimod.nix` builds jitl's FujiMod `fujimod-emulator` CLI at the commit pinned in `manifests/sources.json`, with upstream's `Cargo.lock`, Rust 1.99.1 from a pinned rust-overlay, and its statically linked vendored Unicorn. Bazel exposes it as the manual target `//build-support:fujimod-emulator` (repository `lab_fujimod`). Its check phase runs `fujimod-emulator-cpu-unicorn`'s unit tests. It is a reference build: FujiMod is unlicensed ([licensing item 7](../LICENSING.md#release-decisions)) and its catalog boot refuses `xm1-150`.
 
-`fujimod-xm1.nix` builds `emulation/fujimod-xm1` against that FujiMod source, placed beside the crate at `../fujimod`, with the crate's own `Cargo.lock` (FujiMod's lock pruned to the crate's closure). devenv exposes the binary as `FUJIMOD_XM1_DRIVER` and its run document as `FUJIMOD_XM1_RUN` for `//emulation:fujimod-flash-boot-check`.
+`fujimod-xm1.nix` builds `emulation/fujimod-xm1` against that FujiMod source, placed beside the crate at `../fujimod`, with the crate's own `Cargo.lock` (FujiMod's lock pruned to the crate's closure). The repository `lab_fujimod_xm1` builds it with the crate files listed in `repositories.bzl` and exports the binary and its run document to `//emulation:fujimod-flash-boot-check`. Both FujiMod repositories build only when a target needs them, with `--max-jobs 2 --cores 4`; devenv does not build FujiMod.
 
 ## Extending the graph
 
