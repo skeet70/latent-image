@@ -6,7 +6,7 @@ import qualified Data.ByteString as B
 import Data.Word (Word32)
 import System.Exit (exitFailure)
 
-import RecipeBankRamPlacement
+import RamPushLayout
 
 check :: String -> Bool -> IO ()
 check label passed = unless passed $ do

@@ -3,11 +3,14 @@
 
 #include <stdint.h>
 
-#define RAM_PUSH_PUBLICATION_COUNT 250u
-#define RAM_PUSH_SETUP_COUNT 167u
-#define RAM_PUSH_ACTIVATION_COUNT 83u
+/* Each payload's relink script passes these four with -D. */
+#if !defined(RAM_PUSH_PUBLICATION_COUNT) || !defined(RAM_PUSH_SETUP_COUNT) || \
+    !defined(RAM_PUSH_ACTIVATION_COUNT) || !defined(RAM_PUSH_ABI_VERSION)
+#error "RAM-push payload counts and ABI version are undefined"
+#endif
+_Static_assert(RAM_PUSH_SETUP_COUNT + RAM_PUSH_ACTIVATION_COUNT == RAM_PUSH_PUBLICATION_COUNT,
+               "setup and activation counts do not sum to the publication count");
 #define RAM_PUSH_MAILBOX_MAGIC 0x31504d52u
-#define RAM_PUSH_ABI_VERSION 2u
 #define RAM_PUSH_EXPECTED_SERVICE_CORE 0x4003u
 
 enum ram_push_operation {

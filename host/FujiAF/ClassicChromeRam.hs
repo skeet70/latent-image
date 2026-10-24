@@ -21,9 +21,6 @@ module FujiAF.ClassicChromeRam
   , ccImageExtent
   , ccInstallerExtent
   , ccInstallerStart
-  , ccInstallOffset
-  , ccRollbackOffset
-  , ccStatusOffset
   , ccDataBlockSymbol
   , overlayDataBlock
   , bankSymbols
@@ -116,12 +113,9 @@ ccImageExtent = 0x184
 ccInstallerStart :: Word32 -> Word32
 ccInstallerStart base = (base + ccImageExtent + 31) .&. 0xffffffe0
 
--- | From the installer start: its extent and the three entry offsets.
-ccInstallerExtent, ccInstallOffset, ccRollbackOffset, ccStatusOffset :: Word32
+-- | From the installer start, with the 131-entry publication table.
+ccInstallerExtent :: Word32
 ccInstallerExtent = 0x13c0
-ccInstallOffset = 0x600
-ccRollbackOffset = 0x838
-ccStatusOffset = 0x864
 
 -- | The runtime extent at a 32-byte-aligned base, the largest over bases.
 ccAllocationSize :: Word32

@@ -23,7 +23,7 @@ esac
 [[ -d "$OUT" && ! -L "$OUT" ]] || { printf 'output directory must exist\n' >&2; exit 1; }
 
 base_value=$((BASE))
-(( base_value >= 0 && base_value <= 0xffffffff - 0x1d9d8 )) || {
+(( base_value >= 0 && base_value <= 0xffffffff - 0x1d9f8 )) || {
   printf 'base leaves the 32-bit RAM address space\n' >&2; exit 1;
 }
 (( (base_value & 7) == 0 )) || {
@@ -55,7 +55,9 @@ for src in menu/recipe_bank_arm.S menu/recipe_bank_probe.c menu/recipe_bank_hook
   objects+=("$obj")
 done
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${FREE[@]}" -Oz -Wall -Wextra \
-  -ffunction-sections -fdata-sections -c menu/recipe_bank_installer/ram_push_installer.c \
+  -DRAM_PUSH_PUBLICATION_COUNT=253u -DRAM_PUSH_SETUP_COUNT=167u \
+  -DRAM_PUSH_ACTIVATION_COUNT=86u -DRAM_PUSH_ABI_VERSION=2u \
+  -ffunction-sections -fdata-sections -c menu/ram_push_installer.c \
   -o "$OUT/ram_push_installer.o"
 objects+=("$OUT/ram_push_installer.o")
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${LINK[@]}" -Wl,-T,menu/recipe_bank_ram.ld \

@@ -1,5 +1,15 @@
-module RecipeBankRamLayout
-  ( runtimeExecutableBase
+-- | The RAM-push layout. The installer section holds for every payload kind:
+-- menu/ram_push_installer.c linked at a 32-byte boundary, then its
+-- publication table, rendezvous and mailbox. The runtime section is the
+-- recipe bank and D3 payload: 253 publications in an 0x1d9f8-byte allocation.
+module RamPushLayout
+  ( installerInstallOffset
+  , installerRollbackOffset
+  , installerStatusOffset
+  , installerExtent
+  , installerHasCallClosure
+  , encodePublicationRecord
+  , runtimeExecutableBase
   , runtimeDataBase
   , runtimeNameBase
   , runtimeBankEnd
@@ -8,51 +18,35 @@ module RecipeBankRamLayout
   , safePublicationOrder
   , publicationSetupCount
   , publicationCount
-  , encodePublicationRecord
-  , installerHasCallClosure
   , staleFixedReferences
   ) where
 
-import Data.List (isInfixOf, isSuffixOf)
-
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
+import Data.List (isInfixOf, isSuffixOf)
 import Data.Word (Word32)
 
-runtimeExecutableBase :: Word32 -> Word32
-runtimeExecutableBase base = base + 0x500
+-- * Installer
 
-runtimeDataBase :: Word32 -> Word32
-runtimeDataBase base = base + 0x8000
+-- | Entry offsets from the installer start.
+installerInstallOffset, installerRollbackOffset, installerStatusOffset :: Word32
+installerInstallOffset = 0x600
+installerRollbackOffset = 0x838
+installerStatusOffset = 0x864
 
-runtimeNameBase :: Word32 -> Word32
-runtimeNameBase base =
-  let candidate = (base .&. 0xffff0000) .|. 0xb784
-   in if candidate < base + 0x9800 then candidate + 0x10000 else candidate
+-- | The installer's code and read-only data from its start.
+installerCodeExtent :: Word32
+installerCodeExtent = 0xa84
 
-runtimeBankEnd :: Word32 -> Word32
-runtimeBankEnd base = runtimeNameBase base + 14 * 66
-
-runtimeInstallerExtent :: Word32
-runtimeInstallerExtent = 0x1b40
-
-runtimeAllocationSize :: Word32
-runtimeAllocationSize = 0x1b6d8
-
--- | Logical indexes in table order: the bank's 69 setup entries, D3's 98
--- setup entries (logical 94..191), D3's 58 activation entries (logical
--- 192..249), then the bank's 25 activation entries ending with root 54.
-safePublicationOrder :: [Int]
-safePublicationOrder =
-  [0 .. 35] <> [55 .. 68] <> [85] <> [36 .. 53]
-    <> [94 .. 249]
-    <> [75,76,72,73,74,69,70,71,77,78,79,80,86,87,88,89,90,91,92,93,81,82,83,84,54]
-
-publicationSetupCount :: Int
-publicationSetupCount = 167
-
-publicationCount :: Int
-publicationCount = 250
+-- | The installer's extent from its start for a payload of `count`
+-- publications: code, the 16-byte publication records, the 128-byte
+-- rendezvous and the 104-byte mailbox with its trailing byte, at the
+-- alignments of the payload linker scripts.
+installerExtent :: Int -> Word32
+installerExtent count =
+  align32 (align32 (installerCodeExtent + 16 * fromIntegral count) + 128 + 104 + 1)
+ where
+  align32 offset = (offset + 31) .&. 0xffffffe0
 
 installerHasCallClosure :: String -> Bool
 installerHasCallClosure disassembly =
@@ -102,6 +96,43 @@ encodePublicationRecord :: Word32 -> Word32 -> Word32 -> Word32 -> B.ByteString
 encodePublicationRecord address oldWord newWord phase =
   word32 address <> word32 oldWord <> word32 newWord <> word32 phase
 
+-- * Recipe bank and D3 runtime
+
+runtimeExecutableBase :: Word32 -> Word32
+runtimeExecutableBase base = base + 0x500
+
+runtimeDataBase :: Word32 -> Word32
+runtimeDataBase base = base + 0xa800
+
+runtimeNameBase :: Word32 -> Word32
+runtimeNameBase base =
+  let minimumName = base + 0xbb00
+      candidate = (minimumName .&. 0xffff0000) .|. 0xb784
+   in if candidate < minimumName then candidate + 0x10000 else candidate
+
+runtimeBankEnd :: Word32 -> Word32
+runtimeBankEnd base = runtimeNameBase base + 14 * 66
+
+runtimeInstallerExtent :: Word32
+runtimeInstallerExtent = installerExtent publicationCount
+
+runtimeAllocationSize :: Word32
+runtimeAllocationSize = 0x1d9f8
+
+-- | Logical indexes in table order: the bank's 69 setup entries, D3's 98
+-- setup entries (logical 97..194), D3's 58 activation entries (logical
+-- 195..252), then the bank's 28 activation entries ending with root 54.
+safePublicationOrder :: [Int]
+safePublicationOrder =
+  [0 .. 35] <> [55 .. 68] <> [88] <> [36 .. 53]
+    <> [97 .. 252]
+    <> [75,76,72,73,74,69,70,71,77,78,79,80,81,82,83,89,90,91,92,93,94,95,96,84,85,86,87,54]
+
+publicationSetupCount :: Int
+publicationSetupCount = 167
+
+publicationCount :: Int
+publicationCount = 253
 
 staleFixedReferences :: Word32 -> Word32 -> B.ByteString -> [(Int, Word32)]
 staleFixedReferences low high bytes = direct <> movPairs

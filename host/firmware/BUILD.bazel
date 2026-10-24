@@ -252,8 +252,7 @@ haskell_binary(
     name = "build-recipe-bank",
     srcs = [
         "BuildRecipeBank.hs",
-        "RecipeBankRamLayout.hs",
-        "RecipeBankRamPlacement.hs",
+        "RamPushLayout.hs",
     ],
     ghcopts = [
         "-Wall",
@@ -1134,8 +1133,7 @@ haskell_library(
         "A32.hs",
         "ArmElf.hs",
         "BankAllowlist.hs",
-        "RecipeBankRamLayout.hs",
-        "RecipeBankRamPlacement.hs",
+        "RamPushLayout.hs",
     ],
     ghcopts = [
         "-Wall",
@@ -1189,8 +1187,7 @@ haskell_test(
     name = "build-recipe-bank-ram-tests",
     srcs = [
         "BuildRecipeBankRamTests.hs",
-        "RecipeBankRamLayout.hs",
-        "RecipeBankRamPlacement.hs",
+        "RamPushLayout.hs",
     ],
     ghcopts = [
         "-Wall",
@@ -1211,8 +1208,7 @@ filegroup(
     name = "build-recipe-bank-sources",
     srcs = [
         "BuildRecipeBank.hs",
-        "RecipeBankRamLayout.hs",
-        "RecipeBankRamPlacement.hs",
+        "RamPushLayout.hs",
         "//host:FujiAF/Host.hs",
         "//host:FujiAF/JSON.hs",
         "//host:FujiAF/RecipeBank.hs",
@@ -1327,7 +1323,7 @@ haskell_binary(
     name = "build-classic-chrome-ram",
     srcs = [
         "BuildClassicChromeRam.hs",
-        "RecipeBankRamLayout.hs",
+        "RamPushLayout.hs",
     ],
     ghcopts = [
         "-Wall",
@@ -1356,7 +1352,7 @@ filegroup(
     name = "build-classic-chrome-ram-sources",
     srcs = [
         "BuildClassicChromeRam.hs",
-        "RecipeBankRamLayout.hs",
+        "RamPushLayout.hs",
         "//host:FujiAF/ClassicChrome.hs",
         "//host:FujiAF/ClassicChromeRam.hs",
         "//host:FujiAF/Host.hs",
@@ -1427,7 +1423,7 @@ haskell_binary(
     name = "build-classic-chrome-icon-ram",
     srcs = [
         "BuildClassicChromeIconRam.hs",
-        "RecipeBankRamLayout.hs",
+        "RamPushLayout.hs",
     ],
     ghcopts = [
         "-Wall",
@@ -1457,7 +1453,7 @@ filegroup(
     name = "build-classic-chrome-icon-ram-sources",
     srcs = [
         "BuildClassicChromeIconRam.hs",
-        "RecipeBankRamLayout.hs",
+        "RamPushLayout.hs",
         "classic-chrome-icon.txt",
         "//host:FujiAF/ClassicChrome.hs",
         "//host:FujiAF/ClassicChromeIcon.hs",

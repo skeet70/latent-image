@@ -148,7 +148,7 @@ data ReviewedContract = ReviewedContract
 data PayloadKind = RecipeBankD3 | ClassicChrome | ClassicChromeIcon deriving (Eq, Show)
 
 -- | What a payload kind's relink links, and the allocation, ABI word, counts
--- and entries its installer has. A runtime's allocation size names its kind.
+-- and installer start it has. A runtime's allocation size names its kind.
 data Payload = Payload
   { payloadKind :: PayloadKind
   , payloadAllocationSize :: Int
@@ -156,7 +156,6 @@ data Payload = Payload
   , payloadSetupCount :: Int
   , payloadActivationCount :: Int
   , payloadInstallerStart :: Word32 -> Word32
-  , payloadInstallOffset :: Word32
   -- | The lowest and the worst-case aligned base the reviewed-build check links at.
   , payloadReferenceBases :: (Word32, Word32)
   , payloadRelinkScript :: FilePath
@@ -178,7 +177,6 @@ bankD3Payload = Payload
           candidate = (minimumName .&. 0xffff0000) .|. 0xb784
           nameRecord = if candidate < minimumName then candidate + 0x10000 else candidate
       in (nameRecord + 14*66 + 31) .&. 0xffffffe0
-  , payloadInstallOffset = 0x560
   , payloadReferenceBases = (0x00c40000, 0x00c4fc88)
   , payloadRelinkScript = "build-recipe-bank-ram.sh"
   , payloadRelinkBuilder = "build-recipe-bank"
@@ -200,7 +198,6 @@ classicChromePayload = Payload
   , payloadSetupCount = 84
   , payloadActivationCount = 47
   , payloadInstallerStart = \base -> (base + 0x184 + 31) .&. 0xffffffe0
-  , payloadInstallOffset = 0x600
   , payloadReferenceBases = (0x00c20000, 0x00c21f88)
   , payloadRelinkScript = "build-classic-chrome-ram.sh"
   , payloadRelinkBuilder = "build-classic-chrome-ram"
@@ -244,16 +241,17 @@ requirePayload size = maybe (P.reject ("allocation size "++show size++" is no RA
 payloadPublicationCount :: Payload -> Int
 payloadPublicationCount payload = payloadSetupCount payload + payloadActivationCount payload
 
--- | The installer's three entries, at fixed offsets from its start.
+-- | The installer's three entries, at the offsets host/firmware/RamPushLayout.hs
+-- fixes for every payload.
 payloadEntries :: Payload -> Address -> RamPushEntries
 payloadEntries payload (Address base) =
-  let install = payloadInstallerStart payload base + payloadInstallOffset payload
+  let install = payloadInstallerStart payload base + 0x600
   in RamPushEntries (Address install) (Address (install+0x238)) (Address (install+0x264))
 
 configGateIndex, mailboxBytes, reviewedAllocationSize :: Int
 configGateIndex = 0xf7
 mailboxBytes = 104
-reviewedAllocationSize = 0x1d9d8
+reviewedAllocationSize = 0x1d9f8
 
 installerAbiVersion :: Word32
 installerAbiVersion = 2

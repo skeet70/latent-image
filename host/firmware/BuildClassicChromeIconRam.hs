@@ -22,8 +22,8 @@ import FujiAF.ClassicChromeRam
 import FujiAF.JSON (decodeStrictIntegers, encodeCanonical)
 import qualified FujiAF.Host as H
 import ClassicChromeIconRamBuilder (classicChromeIconRamBuilderDigest)
+import RamPushLayout (installerExtent, installerHasCallClosure, installerInstallOffset, installerRollbackOffset, installerStatusOffset)
 import RamPushToolchain
-import RecipeBankRamLayout (installerHasCallClosure)
 
 usage :: String
 usage =
@@ -122,7 +122,7 @@ build base parametersPath linkedDir out inputs = do
   let offsets = (imageEnd - base, linkedEnd - installerStart, install - installerStart, rollback - installerStart, status - installerStart)
   H.ensure (linkedStart == base && installerStart == ccInstallerStart base)
     "Classic Chrome code does not start the runtime at the base with the installer at the next 32-byte boundary"
-  H.ensure (offsets == (ccImageExtent, ccIconInstallerExtent, ccInstallOffset, ccRollbackOffset, ccStatusOffset))
+  H.ensure (offsets == (ccImageExtent, installerExtent ccIconPublicationCount, installerInstallOffset, installerRollbackOffset, installerStatusOffset))
     ("image extent, installer extent and entry offsets " ++ unwords [hex32 o | let (a, b, c, d, e) = offsets, o <- [a, b, c, d, e]] ++ " differ from the pinned layout")
   H.ensure (linkedEnd - base <= ccIconContentOffset) "linked runtime overlaps the icon content"
   H.ensure (dataStart >= linkedStart && dataEnd - dataStart == fromIntegral dataBlockSize && dataEnd <= imageEnd) "cc_ram_data is not the 100-byte block inside the Classic Chrome image"

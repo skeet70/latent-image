@@ -22,7 +22,7 @@ import FujiAF.JSON (encodeCanonical)
 import FujiAF.RecipeBank
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
-import RecipeBankRamPlacement
+import RamPushLayout
 import RamPushToolchain
 
 -- | The four label texts the submenu pages carry, in the order the actions
@@ -1168,16 +1168,15 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
         , "menu/recipe_bank_ui.h"
         , "menu/recipe_bank_edit.h"
         , "menu/recipe_bank_fields.inc"
-        , "menu/recipe_bank_installer/ram_push_installer.c"
-        , "menu/recipe_bank_installer/ram_push_abi.h"
+        , "menu/ram_push_installer.c"
+        , "menu/ram_push_abi.h"
         , "menu/recipe_bank_ram.ld"
         , "menu/recipe_bank_allowlist.json"
         , "menu/recipe_bank_boot.S"
         , "menu/recipe_bank_boot.ld"
         , "host/firmware/BuildRecipeBank.hs"
         , "host/firmware/build-recipe-bank-ram.sh"
-        , "host/firmware/RecipeBankRamLayout.hs"
-        , "host/firmware/RecipeBankRamPlacement.hs"
+        , "host/firmware/RamPushLayout.hs"
         , ramNameImagePath
         , ramD3Image4Path
         , ramD3Image5Path
