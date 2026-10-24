@@ -973,57 +973,11 @@ def _ram_push_attach(board, session, hold_key=None):
                     'configuration': configuration.hex()}
 
 
-# Staged runtime trees whose bytes decide the machine state at the attach boundary. Portable
-# checkpoint identity also carries absolute code paths under the runtime root.
-RAM_PUSH_SOURCE_TREES = ('emulator', 'firmware', 'inputs/x-m1-1.50', 'native/python', 'tools')
 RAM_PUSH_CHECKPOINT_SCHEMA = 1
-
-
-def _file_sha256(path):
-    with Path(path).open('rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
-
-
-def _emulator_source_identity():
-    import os
-    digest = hashlib.sha256()
-    for tree in RAM_PUSH_SOURCE_TREES:
-        for path in sorted((ROOT / tree).rglob('*')):
-            if path.is_file() and '__pycache__' not in path.parts:
-                digest.update(path.relative_to(ROOT).as_posix().encode() + b'\0')
-                digest.update(bytes.fromhex(_file_sha256(path)))
-    unicorn = os.environ.get('X70_UNICORN_LIBRARY')
-    digest.update(json.dumps([str(ROOT), os.path.realpath(sys.executable), list(sys.version_info),
-                              None if unicorn is None else os.path.realpath(unicorn)]).encode())
-    return digest.hexdigest()
-
-
-def _ram_push_checkpoint_key(installed_dat, adjustment_nand, menu_sd_image, attach_hold_key=None,
-                             ui_conversion_profile=None):
-    inputs = {'installed_dat': _file_sha256(installed_dat),
-              'adjustment_nand': _file_sha256(adjustment_nand),
-              'menu_sd_image': _file_sha256(menu_sd_image),
-              'emulator_source': _emulator_source_identity()}
-    if attach_hold_key is not None:
-        inputs['attach_hold_key'] = attach_hold_key
-    if ui_conversion_profile is not None:
-        inputs['ui_conversion_profile'] = ui_conversion_profile.value
-    document = json.dumps({'schema': RAM_PUSH_CHECKPOINT_SCHEMA, **inputs},
-                          sort_keys=True, separators=(',', ':'))
-    return hashlib.sha256(document.encode()).hexdigest(), inputs
 
 
 # A USB-toggle boot checkpoint: saved at the shooting screen with the cable level as the boot left it.
 TOGGLE_RECORD = 'usb-toggle-boot.json'
-
-
-def _toggle_checkpoint_key(installed_dat, adjustment_nand, boot):
-    inputs = {'installed_dat': _file_sha256(installed_dat),
-              'adjustment_nand': _file_sha256(adjustment_nand),
-              'emulator_source': _emulator_source_identity(), 'boot': boot}
-    document = json.dumps({'schema': RAM_PUSH_CHECKPOINT_SCHEMA, **inputs},
-                          sort_keys=True, separators=(',', ':'))
-    return hashlib.sha256(document.encode()).hexdigest(), inputs
 
 
 ATTACH_RECORD = 'ram-push-attach.json'
@@ -1701,7 +1655,11 @@ def main():
     parser.add_argument('--ram-push-server', action='store_true',
                         help='Serve the closed emulator-backed UsbApi line protocol')
     parser.add_argument('--ram-push-checkpoints', type=Path,
-                        help='Directory of RAM-push attach checkpoints keyed by inputs and emulator source')
+                        help='Directory of RAM-push attach checkpoints, one per --checkpoint-key')
+    parser.add_argument('--checkpoint-key', metavar='SHA256',
+                        help='--ram-push-checkpoints/--toggle-server: the launcher\'s checkpoint key')
+    parser.add_argument('--checkpoint-inputs', type=json.loads, metavar='JSON',
+                        help='--checkpoint-key: the key document recorded with each checkpoint')
     parser.add_argument('--fresh-boot', action='store_true',
                         help='Cold boot even when the keyed RAM-push checkpoint exists, then replace it')
     parser.add_argument('--attach-hold-key',
@@ -1709,7 +1667,7 @@ def main():
     parser.add_argument('--toggle-server', action='store_true',
                         help='Serve the primitive USB-toggle scenario commands')
     parser.add_argument('--toggle-checkpoints', type=Path,
-                        help='--toggle-server: directory of boot checkpoints keyed by inputs, reset inputs and emulator source')
+                        help='--toggle-server: directory of boot checkpoints, one per --checkpoint-key')
     parser.add_argument('--cable-at-reset', action='store_true',
                         help='--toggle-server: raise the USB cable level before the first instruction')
     parser.add_argument('--adc-at-reset', metavar='CHANNEL=SAMPLE',
@@ -1762,6 +1720,11 @@ def main():
     if not args.toggle_server and (args.toggle_checkpoints is not None or args.cable_at_reset
                                    or args.adc_at_reset is not None or args.access_probe_range is not None):
         parser.error('--toggle-checkpoints, --cable-at-reset, --adc-at-reset and --access-probe-range belong to --toggle-server')
+    keyed = args.ram_push_checkpoints is not None or args.toggle_server
+    if keyed != (args.checkpoint_key is not None) or keyed != (args.checkpoint_inputs is not None):
+        parser.error('--checkpoint-key and --checkpoint-inputs go with --ram-push-checkpoints or --toggle-server')
+    if keyed and (len(args.checkpoint_key) != 64 or any(c not in '0123456789abcdef' for c in args.checkpoint_key)):
+        parser.error('--checkpoint-key must be a lowercase SHA-256')
     adc_at_reset = probe_range = None
     try:
         if args.adc_at_reset is not None:
@@ -1780,12 +1743,9 @@ def main():
         datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid4().hex[:8])
     checkpoint = None
     if args.ram_push_checkpoints is not None:
-        started = perf_counter()
-        key, key_inputs = _ram_push_checkpoint_key(args.installed_dat, args.adjustment_nand, args.menu_sd_image,
-                                                   args.attach_hold_key, args.ui_conversion_profile)
+        key, key_inputs = args.checkpoint_key, args.checkpoint_inputs
         directory = args.ram_push_checkpoints / key
-        checkpoint = {'key': key, 'inputs': key_inputs, 'directory': str(directory.resolve()),
-                      'key_seconds': round(perf_counter() - started, 3)}
+        checkpoint = {'key': key, 'inputs': key_inputs, 'directory': str(directory.resolve())}
         installed = _install_checkpoints(args.ram_push_checkpoints, key)
         print(json.dumps({'ok': True, 'event': 'start-options', 'boot_key': key, 'installed': installed},
                          separators=(',', ':')), flush=True)
@@ -1816,14 +1776,11 @@ def main():
         boot_started = perf_counter()
     toggle_start = None
     if args.toggle_server:
-        started = perf_counter()
-        boot = {'cable_at_reset': args.cable_at_reset, 'adc_at_reset': adc_at_reset}
-        key, key_inputs = _toggle_checkpoint_key(args.installed_dat, args.adjustment_nand, boot)
+        key, key_inputs = args.checkpoint_key, args.checkpoint_inputs
         root = None if args.toggle_checkpoints is None else args.toggle_checkpoints.resolve()
         saved = root is not None and probe_range is None and (root / key).is_dir()
         toggle_start = {'key': key, 'inputs': key_inputs, 'checkpoint_root': None if root is None else str(root),
-                        'access_probe_range': None if probe_range is None else list(probe_range),
-                        'key_seconds': round(perf_counter() - started, 3)}
+                        'access_probe_range': None if probe_range is None else list(probe_range)}
         print(json.dumps({'ok': True, 'event': 'start-options', 'key': key, 'inputs': key_inputs,
                           'checkpoint': str(root / key) if saved else None}, separators=(',', ':')), flush=True)
         choice = json.loads(sys.stdin.readline(), object_pairs_hook=_unique_object)
