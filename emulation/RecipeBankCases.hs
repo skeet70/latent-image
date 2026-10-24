@@ -20,7 +20,7 @@ import Data.List
 import Data.String (fromString)
 import Data.Maybe
 import Data.Word
-import Emulation.NativeCase (maxFunctions, runCase)
+import Emulation.NativeCase (functionCount, runCase)
 import Emulation.Sha256 (sha256, sha256Hex)
 import Emulation.ParallelCases (mapBounded, readJobs)
 import Numeric
@@ -234,7 +234,7 @@ seedDomain ks ms domains sp = choose domains
   where
     choose [] = sp
     choose (ExecutableDomain spans entries : rest)
-      | length functions > maxFunctions || overlappingSpans combined || stubOverlap || foreignOverlap = choose rest
+      | length functions > functionCount || overlappingSpans combined || stubOverlap || foreignOverlap = choose rest
       | otherwise = sp { spFns = functions }
       where
         retained = [n | n <- spFns sp, maybe True (`notElem` spans) (declaredSpan ks ms n)]

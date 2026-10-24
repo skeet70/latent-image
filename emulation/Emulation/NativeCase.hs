@@ -18,11 +18,25 @@ import System.FilePath
 
 regs :: [String]
 regs=map (("r"++).show) [0::Int ..12]++["sp","lr","cpsr"]
-limit :: Int
-limit=4*1024*1024
--- | The native runner's MAX_FUNCTIONS.
-maxFunctions :: Int
-maxFunctions=256
+-- The public bounded-native-case contract. schemas/native-case.schema.json and
+-- the runner's MAX_* constants carry the same numbers; NativeTests.hs holds the
+-- three together. Largest case measured over the recipe-bank and UI generators
+-- and 2,314 generated cases: 1131576 artifact bytes, 1888202 total mapped
+-- bytes, 19 artifacts, 16 regions, 210 functions, 12 stubs, 59 expected
+-- events, 49 expected memory entries, 525916 expected memory bytes.
+sizeBytes :: Int
+sizeBytes=2*1024*1024
+totalBytes :: Int
+totalBytes=4*1024*1024
+caseBytes :: Int
+caseBytes=16*1024*1024
+artifactCount, regionCount, functionCount, stubCount, eventCount, memoryCount :: Int
+artifactCount=20
+regionCount=16
+functionCount=256
+stubCount=32
+eventCount=128
+memoryCount=64
 hex :: Integer -> String
 hex x=showHex x ""
 hexBytes :: B.ByteString -> String
@@ -35,7 +49,7 @@ address v = do
 byteString :: Value -> IO B.ByteString
 byteString v=do
  let text=str v
- ensure(case v of String _->length text<=2*limit && even(length text) && all (`elem` "0123456789abcdef") text; _->False) "bytes: lowercase hex pairs required"
+ ensure(case v of String _->length text<=2*sizeBytes && even(length text) && all (`elem` "0123456789abcdef") text; _->False) "bytes: lowercase hex pairs required"
  pure(B.pack(go text))
  where go []=[]; go (a:c:rest)=fromIntegral(digitToInt a*16+digitToInt c):go rest; go _=[]
 bindings :: Value -> [String] -> IO [(String,Integer)]
@@ -55,7 +69,7 @@ regionAt rs base size permission=any(\r->baseAddress r<=base && base+size<=baseA
 loadCase :: FilePath -> IO (Value,[Region],B.ByteString,[(String,Value)])
 loadCase input = do
  path<-canonicalizePath input
- raw<-readRegularWith (pure()) False (4*limit) path
+ raw<-readRegularWith (pure()) False caseBytes path
  c<-either failH pure(decodeStrictIntegers raw)
  fields c "schema_version id origin provenance cpu artifacts entry exit registers regions functions stubs limits expected exclusions" "case"
  void(integer(get c "schema_version")1 1 "schema version")
@@ -74,7 +88,7 @@ loadCase input = do
  fields(get c "limits") "instructions wall_ms" "limits"
  budget<-integer(get(get c "limits")"instructions")1 4000000 "instructions"
  wall<-integer(get(get c "limits")"wall_ms")1 10000 "wall_ms"
- inventory<-arrayCheck(get c "artifacts")0 20 "artifacts limit"
+ inventory<-arrayCheck(get c "artifacts")0 artifactCount "artifacts limit"
  artifacts<-foldM (\done item->do
    fields item "id path size sha256" "artifact"
    let ident=str(get item "id"); relative=str(get item "path")
@@ -82,18 +96,18 @@ loadCase input = do
    ensure(not(null relative) && isRelative relative && ".." `notElem` splitDirectories relative) "artifact path must stay under case directory"
    file<-canonicalizePath(takeDirectory path </> relative)
    ensure(not(isRelative file) && splitDirectories(takeDirectory path) `isPrefixOf` splitDirectories file) "artifact symlink escapes case directory"
-   size<-integer(get item "size")1(fromIntegral limit) "artifact size"
+   size<-integer(get item "size")1(fromIntegral sizeBytes) "artifact size"
    let digest=str(get item "sha256")
    ensure(length digest==64 && all (`elem` "0123456789abcdef")digest) "artifact SHA256 invalid"
-   bytes<-readRegularWith (pure())False limit file
+   bytes<-readRegularWith (pure())False sizeBytes file
    ensure(B.length bytes==fromInteger size) "artifact length mismatch"
    ensure(sha256Hex(sha256 bytes)==digest) "artifact digest mismatch"
    pure(done++[(ident,bytes)])) [] inventory
- regionsInput<-arrayCheck(get c "regions")1 16 "regions limit"
+ regionsInput<-arrayCheck(get c "regions")1 regionCount "regions limit"
  regions<-foldM(\done item->do
    fields item "id address size permissions initial" "region"
    ensure(validId(get item "id") && all(\r->get(description r)"id"/=get item "id")done) "region id invalid/duplicate"
-   base<-address(get item "address"); size<-integer(get item "size")1(fromIntegral limit) "region size"
+   base<-address(get item "address"); size<-integer(get item "size")1(fromIntegral sizeBytes) "region size"
    ensure(base+size<=4294967296) "region address overflow"
    ensure(get item "permissions" `elem` map s ["r","rw","rx"]) "permissions must be r/rw/rx"
    ensure(get item "permissions"/=s "rx" || base+size<=0x7ffffffc) "executable region must end by 0x7ffffffc: PMSAv7 default map is execute-never from 0x80000000"
@@ -102,24 +116,24 @@ loadCase input = do
    bytes<-if initialBytes==obj[("zero",b True)] then pure(B.replicate(fromInteger size)0) else do
      fields initialBytes "artifact offset length" "initial"
      original<-maybe(failH "unknown artifact")pure(lookup(str(get initialBytes "artifact"))artifacts)
-     offset<-integer(get initialBytes "offset")0(fromIntegral limit) "artifact offset"
+     offset<-integer(get initialBytes "offset")0(fromIntegral sizeBytes) "artifact offset"
      len<-integer(get initialBytes "length")1 size "artifact length"
      ensure(offset+len<=fromIntegral(B.length original)) "artifact slice exceeds file"
      pure(B.take(fromInteger len)(B.drop(fromInteger offset)original)<>B.replicate(fromInteger(size-len))0)
-   ensure(sum(map regionSize done)+size<=fromIntegral limit) "total mapped bytes exceeds host limit"
+   ensure(sum(map regionSize done)+size<=fromIntegral totalBytes) "total mapped bytes exceeds host limit"
    pure(done++[Region item base size bytes]))[] regionsInput
  ensure(regionAt regions entry 4 'x' && regionAt regions exit 4 'x') "entry/exit must have explicit executable bytes"
  ensure(reg "sp">=8 && regionAt regions (reg "sp"-8) 8 'w') "stack top lacks writable eight bytes"
- functionsInput<-arrayCheck(get c "functions")1 maxFunctions "functions limit"
+ functionsInput<-arrayCheck(get c "functions")1 functionCount "functions limit"
  functions<-foldM(\done item->do
    fields item "address size" "function"
-   base<-address(get item "address"); size<-integer(get item "size")4(fromIntegral limit) "function size"
+   base<-address(get item "address"); size<-integer(get item "size")4(fromIntegral sizeBytes) "function size"
    ensure(base `mod` 4==0 && size `mod` 4==0 && regionAt regions base size 'x') "function alignment/containment"
    ensure(not(base<=exit && exit<base+size)) "exit is not a function"
    ensure(all(\(x,len)->base+size<=x || x+len<=base)done) "functions overlap"
    pure(done++[(base,size)]))[] functionsInput
  ensure(entry `elem` map fst functions) "entry must start a declared function"
- stubsInput<-arrayCheck(get c "stubs")0 32 "stubs limit"
+ stubsInput<-arrayCheck(get c "stubs")0 stubCount "stubs limit"
  stubs<-foldM(\done item->do
    fields item "address inputs outputs side_effects" "stub"
    target'<-address(get item "address")
@@ -133,18 +147,18 @@ loadCase input = do
  ensure(str(get expected "status") `elem` words "returned instruction_budget wall_budget memory_guard fetch_guard unknown_call unsupported_instruction stub_contract") "unsupported expected exit"
  expectedRegs<-bindings(get expected "registers")(regs++["pc"])
  ensure(not(null expectedRegs)) "at least one independently expected register required"
- differences<-arrayCheck(get expected "memory")0 64 "expected memory limit"
+ differences<-arrayCheck(get expected "memory")0 memoryCount "expected memory limit"
  void$foldM(\occupied item->do
    fields item "region offset hex" "expected memory"
    r<-maybe(failH "unknown expected region")pure(find(\r->get(description r)"id"==get item "region")regions)
    ensure('w' `elem` str(get(description r)"permissions")) "expected difference must be writable"
-   offset<-integer(get item "offset")0(fromIntegral limit) "expected offset"
+   offset<-integer(get item "offset")0(fromIntegral sizeBytes) "expected offset"
    bytes<-byteString(get item "hex")
    let end=offset+fromIntegral(B.length bytes); ident=get item "region"
    ensure(not(B.null bytes) && end<=regionSize r) "expected memory bounds"
    ensure(all(\(name,lo,hi)->name/=ident || hi<=offset || end<=lo)occupied) "expected memory overlaps"
    pure((ident,offset,end):occupied)) [] differences
- events<-arrayCheck(get expected "events")0 512 "event limit"
+ events<-arrayCheck(get expected "events")0 eventCount "event limit"
  forM_ events $ \event->do
   fields event "address inputs outputs" "expected event"
   void(address(get event "address")); void(bindings(get event "inputs")(take 13 regs)); void(bindings(get event "outputs")(take 13 regs))

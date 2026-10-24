@@ -12,7 +12,8 @@ use fujimod_emulator::{
     session::{Session, preparation},
 };
 use fujimod_emulator_cpu::arm::Coprocessor;
-use fujimod_emulator_exr2_plan::{MemoryChoices, Plan, RefuseAdapters, Resources};
+use crate::ui_conversion::Xm1Adapters;
+use fujimod_emulator_exr2_plan::{MemoryChoices, Plan, Resources};
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use std::collections::BTreeMap;
@@ -75,6 +76,12 @@ pub struct RunDocument {
     /// A FujiMod session preparation spec naming the assets below.
     pub scene: Box<RawValue>,
     pub generated_assets: Vec<GeneratedSceneAsset>,
+    /// The GPIO node whose pads carry the GPIO keys.
+    pub gpio: NodeName,
+    pub nand: NodeName,
+    pub usb: NodeName,
+    /// The logic-level wire of the USB cable's presence.
+    pub usb_cable: NodeName,
     pub adc: NodeName,
     pub scanout: NodeName,
     pub firmware: FirmwareFacts,
@@ -136,7 +143,7 @@ pub fn open(document: &RunDocument, update: &ValidatedUpdate, boot_rom: &[u8]) -
         serde_json::from_str(document.scene.get()).map_err(|e| format!("scene: {e}"))?;
     let mut resources = Resources::default();
     resources.inputs = spec.build(&assets)?;
-    let built = plan.build(resources, 0, &mut RefuseAdapters)?;
+    let built = plan.build(resources, 0, &mut Xm1Adapters)?;
     let engine = match engine {
         RunEngine::Unicorn => factory::Engine::Unicorn,
         RunEngine::Hypervisor => factory::Engine::Hypervisor,

@@ -16,6 +16,7 @@ haskell_toolchain_library(
     name = "cryptohash-sha256",
     visibility = [
         "//emulation:__pkg__",
+        "//host/firmware:__pkg__",
         "//matching:__pkg__",
         "//transport:__pkg__",
     ],
@@ -305,9 +306,13 @@ haskell_library(
     ],
     src_strip_prefix = ".",
     deps = [
+        ":aeson",
         ":base",
         ":bytestring",
         ":classic-chrome",
+        ":cryptohash-sha256",
+        ":filepath",
+        ":host-support",
     ],
 )
 

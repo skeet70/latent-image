@@ -12,13 +12,16 @@ import qualified Data.ByteString.Lazy as BL
 import Data.List (sort)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, routeKey, routeKeyHex)
 import Emulation.EmbeddedPython (PyObject, RuntimeIdentity (..))
 import qualified Emulation.EmbeddedPython as Py
+import Emulation.Sha256 (sha256File, sha256Hex)
+import Emulation.ViewerRuntime (FixedSceneFrame (..), parseFixedSceneFrame)
 import FujiAF.JSON (encodeCanonical)
 import qualified FujiAF.Host as H
 import GHC.Clock (getMonotonicTime)
 import System.Directory (canonicalizePath, doesDirectoryExist, getCurrentDirectory)
-import System.Environment (getArgs, getExecutablePath, lookupEnv)
+import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
 import System.IO (BufferMode (LineBuffering), hFlush, hPutStrLn, hSetBuffering, stderr, stdout)
@@ -45,10 +48,11 @@ data BridgeOptions = BridgeOptions
   , optionCheckpointRoot :: FilePath
   , optionFreshBoot :: Bool
   , optionUiConversion :: UiConversion
+  , optionFixedSceneFrame :: Maybe FixedSceneFrame
   }
 
 parseOptions :: [String] -> IO BridgeOptions
-parseOptions = go (BridgeOptions "firmware/x-m1/1.50/emulator-rec.json" "" "" "" "" False StrictConversion)
+parseOptions = go (BridgeOptions "firmware/x-m1/1.50/emulator-rec.json" "" "" "" "" False StrictConversion Nothing)
   where
     go options [] = do
       forM_
@@ -69,6 +73,9 @@ parseOptions = go (BridgeOptions "firmware/x-m1/1.50/emulator-rec.json" "" "" ""
       "strict" -> go options { optionUiConversion = StrictConversion } rest
       "declared-ui-cpu-fallback" -> go options { optionUiConversion = DeclaredCpuFallback } rest
       _ -> H.failH "--ui-conversion-profile must be strict or declared-ui-cpu-fallback"
+    go options ("--fixed-scene-frame" : value : rest) = do
+      frame <- either H.failH pure (parseFixedSceneFrame value)
+      go options { optionFixedSceneFrame = Just frame } rest
     go _ (argument : _) = H.failH ("unknown cardless bridge option: " ++ argument)
 
 initialize :: IO RuntimeIdentity
@@ -151,45 +158,38 @@ elapsedSince started = do
   now <- getMonotonicTime
   pure (now - started)
 
-checkpointIdentity :: RuntimeIdentity -> PyObject -> PyObject -> BridgeOptions -> IO (String, Value)
-checkpointIdentity runtime scanout native options = do
-  source <- callValue scanout "_emulator_source_identity" [] (H.obj [])
-  installed <- fileDigest (optionInstalledDat options)
-  adjustment <- fileDigest (optionAdjustmentNand options)
-  profile <- fileDigest (optionProfile options)
-  executable <- getExecutablePath
-  bridge <- fileDigest executable
-  nativeModule <- H.str <$> attributeValue native "__file__"
-  nativeDigest <- fileDigest nativeModule
-  unicorn <- lookupEnv "X70_UNICORN_LIBRARY"
-  unicornDigest <- traverse fileDigest unicorn
-  let RuntimeIdentity home base abi declared compiled loaded = runtime
-      document = H.obj
-        [ ("schema", H.n 1)
-        , ("mode", H.s "cardless-volatile-ram-bank")
-        , ("emulator_source", source)
-        , ("inputs", H.obj
-            [ ("installed_dat", H.s installed)
-            , ("adjustment_nand", H.s adjustment)
-            , ("profile_sha256", H.s profile)
-            , ("ui_conversion_profile", uiConversionValue (optionUiConversion options))
-            , ("card_present", H.b False)
-            , ("card", Null) ])
-        , ("runtime", H.obj
-            [ ("environment_root", H.s home)
-            , ("base_interpreter", H.s base)
-            , ("python_abi", H.s abi)
-            , ("declared_version", H.s declared)
-            , ("compiled_version", H.s compiled)
-            , ("loaded_version", H.s loaded)
-            , ("unicorn_library", maybe Null H.s unicorn)
-            , ("unicorn_sha256", maybe Null H.s unicornDigest)
-            , ("native_module_sha256", H.s nativeDigest) ])
-        , ("bridge", H.obj [("sha256", H.s bridge)]) ]
-  key <- H.sha256 (encodeCanonical document)
-  pure (key, document)
-  where
-    fileDigest path = H.str <$> callValue scanout "_file_sha256" [ArgJSON (H.s path)] (H.obj [])
+-- | Board options the cold boot sets over the loaded profile. With the bridge
+-- options, this record is everything the bridge applies to the board before
+-- the attach route; the key includes both.
+data ColdBoot = ColdBoot
+  { coldEntry :: String
+  , coldCardPresent :: Bool
+    -- | An attribute of emulator.sd_card.
+  , coldCardProfile :: String
+  }
+
+cardlessColdBoot :: ColdBoot
+cardlessColdBoot = ColdBoot "rom" False "BLANK_SDHC_PROFILE"
+
+coldBootValue :: ColdBoot -> Value
+coldBootValue (ColdBoot entry present profile) = H.obj
+  [("entry", H.s entry), ("sd_card_present", H.b present), ("sd_card_profile", H.s profile)]
+
+checkpointKey :: RuntimeIdentity -> BridgeOptions -> IO RouteKey
+checkpointKey runtime options = do
+  root <- getCurrentDirectory >>= canonicalizePath
+  unicorn <- lookupEnv "X70_UNICORN_LIBRARY" >>= maybe (H.failH "X70_UNICORN_LIBRARY is missing") pure
+  let RuntimeIdentity home base abi declared _ _ = runtime
+  guest <- guestState root (EmbeddedInterpreter home base abi declared) (UnicornLibrary unicorn)
+  installed <- sha256File (optionInstalledDat options)
+  adjustment <- sha256File (optionAdjustmentNand options)
+  pure (routeKey guest CardlessAttach
+    ([ ("profile", H.s (optionProfile options))
+    , ("installed_dat", H.s (sha256Hex installed))
+    , ("adjustment_nand", H.s (sha256Hex adjustment))
+    , ("ui_conversion_profile", uiConversionValue (optionUiConversion options))
+    , ("cold_boot", coldBootValue cardlessColdBoot) ]
+    ++ [ ("fixed_scene_frame", Aeson.toJSON frame) | Just (FixedSceneFrame frame) <- [optionFixedSceneFrame options] ]))
 
 -- The start command and server share CPython's stdin buffer.
 readStart :: [FilePath] -> IO (Maybe FilePath)
@@ -251,8 +251,12 @@ serve started runtime options =
   withImport "emulator.image_parameter_devices" $ \parameters ->
   withImport "tools.probe_setup_menus" $ \menus ->
   withImport "x70_native._native" $ \native -> do
-    (key, identity) <- checkpointIdentity runtime scanout native options
+    forM_ (optionFixedSceneFrame options) $ \(FixedSceneFrame frame) ->
+      callValue native "virtual_scene_fixed_frame" [ArgJSON (Aeson.toJSON frame)] (H.obj [])
+    routeKeyValue <- checkpointKey runtime options
     keySeconds <- elapsedSince started
+    let key = routeKeyHex routeKeyValue
+        identity = routeKeyDocument routeKeyValue
     attachRecord <- attributeValue scanout "ATTACH_RECORD"
     installRecord <- attributeValue scanout "INSTALL_RECORD"
     withPath pathlib (optionCheckpointRoot options) $ \checkpointRoot -> withPath pathlib (optionOutput options) $ \output -> do
@@ -291,9 +295,9 @@ serve started runtime options =
                 settings <- callValue loaded "get" [ArgJSON (H.s "settings")] (H.obj [])
                 H.ensure (storage == H.s "erased" && journals == Null && settings /= H.s "owner")
                   "independent installed NAND requires erased fixture selection and no injected owner journals"
-                setKeyJSON loaded "entry" (H.s "rom")
-                setKeyJSON loaded "sd_card_present" (H.b False)
-                withAttr sd "BLANK_SDHC_PROFILE" $ \profile ->
+                setKeyJSON loaded "entry" (H.s (coldEntry cardlessColdBoot))
+                setKeyJSON loaded "sd_card_present" (H.b (coldCardPresent cardlessColdBoot))
+                withAttr sd (coldCardProfile cardlessColdBoot) $ \profile ->
                   setKeyObject loaded "sd_card_profile" profile
                 case optionUiConversion options of
                   StrictConversion -> pure ()

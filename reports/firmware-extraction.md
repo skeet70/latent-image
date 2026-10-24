@@ -359,6 +359,204 @@ Forcing one release for all ten discriminates: GCC 4.6.4 alone fails `0x0118cfc4
 
 **Recommendation:** patches can be written in C and checked by byte equality in two steps. First, the unmodified translation unit must rebuild to the stock extent of every function it owns; the pilot checked one function per unit. That fixes compiler, flags, ABI and bindings. Second, the patched build may differ from stock only inside the intended extents, with every other compared byte, including callers' linked branches, equal. Byte equality cannot verify what the changed code does; that stays with the emulator and models. This only applies where the target function already has exact upstream C, and code larger than its stock extent still needs placement (RECIPE-PLACEMENT-01). Commands and outputs are in [the pilot README](../matching/README.md); private reports stay under `private-data/matching-c/`.
 
+**Emulated, host-only (MATCHING-C-01 follow-up):** the two-step method works end to end on one image-4 translation unit (E-XM1-MATCHING-C-UNIT-PATCH-150). None of the 60 distinct word addresses and 14 blobs written by RC0 and the 98 private recipe and film-simulation patch sets lies inside a function x70view has C for, so the gate uses the unit owning the media receive helper `0x0071fe2c`. [`//matching:unit-gate`](../matching/README.md#translation-unit-gate-and-patch-check) rebuilds x70view's `storage_command_dispatch.c` and links all three of its functions at their stock entries: `0x0071fe2c` (80 bytes), `0x007213c0` (44) and `0x00721560` (24) are exact with GCC 4.6.4. The unit emits no allocated data and does not include x70view's generated `api.h`, so the gate needs no header reproduction.
+
+The demonstration patch is private C that changes `storage_receive_command` to copy the received four-byte header (`code`, `category`, `length`) with one `memcpy` instead of three field stores, so it stores the same values. GCC 4.6.4 emits an 80-byte body that calls `memcpy`, which x70view binds to the loader-A byte copy `0x0004357c` that the pilot rebuilt exactly. The patched unit keeps the other two functions exact, and the patched image 4 differs from stock in 27 bytes, all inside `[0x0071fe2c, 0x0071fe7c)`. `//lz:lz-encode`, `rebuild-update replace-record4` and `verify` pass, and `rebuild-update diff` changes only the image-4 header, stream and following gap. `//emulation:flash-boot-check` passes on that DAT (`154dcdb2...a9a7`): SHOOTING MENU (1, 5, 2) at 383,544,342 instructions, with the same final frame (`0d3adb84...e0fe`) as stock, which reaches it at 383,544,246. Each route milestone runs 48 to 96 instructions later than on stock. As a control, a stock image with `UDF` at `0x0071fe2c` stops the boot at 32,219,390 instructions with CPU0 at that PC, so the checked route executes the patched function. All three runs repeat with identical counts and frames on the tree merged with main at `bf3fc08`. The DAT is a demonstration only and is never installed. Its final frame was not visually checked; it hash-equals stock's.
+
+**Independently reproduced, host-only (recipe-adjacent census):** 183 functions with x70view C are touched or called by recipe work (E-XM1-MATCHING-C-RECIPE-CENSUS-150). They are the x70view function entries named by the tracked recipe, film-simulation and Classic Chrome builders, stubs, linker scripts and emulation case lists and by RC0; the private patch sets write into no such function and branch into none. [matching/recipe-candidates.json](../matching/recipe-candidates.json) freezes them: 113 in image 4, 56 in image 5, 13 in the plain image and 1 in loader A, four of them marked `NONMATCHING` by x70view. The pilot classifier links 179 exact (46,696 stock bytes), 0 normalized and 4 failures, and the failures are the four functions x70view marks. The first run also failed 12 links on pilot gaps, now closed in `FujiAF.Matching.Build`: text sections reached from a root are linked with their own relocations, a section anchor takes its section's address from a bound symbol in it, and `R_ARM_V4BX` markers are not treated as symbol references. The ten-function pilot and the unit gate reproduce unchanged after the fix.
+
+No flag or compiler choice brings a nonmatching function to exact. `//matching:pilot --annotation NAME=COPY` compiles a copy of the unit that may differ only in its `flags`/`compiler` annotations. A sweep over GCC 4.6.4 and 4.4.7 with the unit's own flags, the 43 flag sets without include or define options among the 60 most common x70view annotations, `-O2` and `-Os`, the unit's flags with each of 34 single optimization switches added and with each of its own extra switches removed compiled 612 variants. The best results equal the published annotations for three of them (2, 2 and 14 differing bytes); `0x0119eed8` improves only from 91 to 84 bytes, with GCC 4.4.7 at `-Os`. The two 2-byte cases differ at a dispatch-table entry (`0x0063d060`) and by one extra instruction (`0x006439e0`), which flags do not move. None is gated, and recipe work still has no nonmatching function within reach of an annotation change.
+
+<details><summary>Ranked recipe-adjacent functions (nonmatching first by differing bytes, then exact by entry)</summary>
+
+| Rank | Region | Entry | Stock bytes | Linked bytes | Bytes differing outside relocations | Result |
+| ---: | --- | --- | ---: | ---: | ---: | --- |
+| 1 | image 4 | `0x0063d060` | 240 | 240 | 2 | nonmatching (x70view NONMATCHING) |
+| 2 | image 4 | `0x006439e0` | 36 | 40 | 2 | nonmatching (x70view NONMATCHING) |
+| 3 | image 4 | `0x0061e110` | 25832 | 25836 | 14 | nonmatching (x70view NONMATCHING) |
+| 4 | plain | `0x0119eed8` | 188 | 136 | 91 | nonmatching (x70view NONMATCHING) |
+| 5 | loader A | `0x0004357c` | 48 | 48 | 0 | exact |
+| 6 | image 4 | `0x0061c91c` | 16 | 16 | 0 | exact |
+| 7 | image 4 | `0x0061c93c` | 16 | 16 | 0 | exact |
+| 8 | image 4 | `0x0061ca2c` | 744 | 744 | 0 | exact |
+| 9 | image 4 | `0x0061cd14` | 264 | 264 | 0 | exact |
+| 10 | image 4 | `0x0061d018` | 32 | 32 | 0 | exact |
+| 11 | image 4 | `0x0061d154` | 80 | 80 | 0 | exact |
+| 12 | image 4 | `0x0061d1a4` | 80 | 80 | 0 | exact |
+| 13 | image 4 | `0x0061d244` | 80 | 80 | 0 | exact |
+| 14 | image 4 | `0x0061d294` | 80 | 80 | 0 | exact |
+| 15 | image 4 | `0x0061d514` | 16 | 16 | 0 | exact |
+| 16 | image 4 | `0x0061d534` | 16 | 16 | 0 | exact |
+| 17 | image 4 | `0x0061d544` | 16 | 16 | 0 | exact |
+| 18 | image 4 | `0x0061d554` | 16 | 16 | 0 | exact |
+| 19 | image 4 | `0x0061d8dc` | 80 | 80 | 0 | exact |
+| 20 | image 4 | `0x0061d9ec` | 80 | 80 | 0 | exact |
+| 21 | image 4 | `0x00624620` | 44 | 44 | 0 | exact |
+| 22 | image 4 | `0x006309c4` | 112 | 112 | 0 | exact |
+| 23 | image 4 | `0x00632860` | 192 | 192 | 0 | exact |
+| 24 | image 4 | `0x00632920` | 20 | 20 | 0 | exact |
+| 25 | image 4 | `0x00632934` | 28 | 28 | 0 | exact |
+| 26 | image 4 | `0x0063386c` | 32 | 32 | 0 | exact |
+| 27 | image 4 | `0x006338ec` | 32 | 32 | 0 | exact |
+| 28 | image 4 | `0x0063390c` | 32 | 32 | 0 | exact |
+| 29 | image 4 | `0x0063392c` | 32 | 32 | 0 | exact |
+| 30 | image 4 | `0x0063394c` | 32 | 32 | 0 | exact |
+| 31 | image 4 | `0x0063396c` | 32 | 32 | 0 | exact |
+| 32 | image 4 | `0x0063398c` | 32 | 32 | 0 | exact |
+| 33 | image 4 | `0x006339ac` | 32 | 32 | 0 | exact |
+| 34 | image 4 | `0x00633a0c` | 32 | 32 | 0 | exact |
+| 35 | image 4 | `0x00633a2c` | 32 | 32 | 0 | exact |
+| 36 | image 4 | `0x00633a4c` | 32 | 32 | 0 | exact |
+| 37 | image 4 | `0x00633a8c` | 32 | 32 | 0 | exact |
+| 38 | image 4 | `0x00633aac` | 32 | 32 | 0 | exact |
+| 39 | image 4 | `0x00633acc` | 32 | 32 | 0 | exact |
+| 40 | image 4 | `0x00633aec` | 32 | 32 | 0 | exact |
+| 41 | image 4 | `0x00633b0c` | 32 | 32 | 0 | exact |
+| 42 | image 4 | `0x00633b4c` | 32 | 32 | 0 | exact |
+| 43 | image 4 | `0x00633b6c` | 32 | 32 | 0 | exact |
+| 44 | image 4 | `0x00633b8c` | 32 | 32 | 0 | exact |
+| 45 | image 4 | `0x00633c0c` | 32 | 32 | 0 | exact |
+| 46 | image 4 | `0x00633c8c` | 32 | 32 | 0 | exact |
+| 47 | image 4 | `0x00633cac` | 32 | 32 | 0 | exact |
+| 48 | image 4 | `0x00633ccc` | 32 | 32 | 0 | exact |
+| 49 | image 4 | `0x00633cec` | 32 | 32 | 0 | exact |
+| 50 | image 4 | `0x00633d0c` | 32 | 32 | 0 | exact |
+| 51 | image 4 | `0x00633e0c` | 32 | 32 | 0 | exact |
+| 52 | image 4 | `0x00633e8c` | 32 | 32 | 0 | exact |
+| 53 | image 4 | `0x00633eac` | 32 | 32 | 0 | exact |
+| 54 | image 4 | `0x006340cc` | 32 | 32 | 0 | exact |
+| 55 | image 4 | `0x0063412c` | 32 | 32 | 0 | exact |
+| 56 | image 4 | `0x0063432c` | 32 | 32 | 0 | exact |
+| 57 | image 4 | `0x0063458c` | 32 | 32 | 0 | exact |
+| 58 | image 4 | `0x0063460c` | 32 | 32 | 0 | exact |
+| 59 | image 4 | `0x0063462c` | 36 | 36 | 0 | exact |
+| 60 | image 4 | `0x006347b0` | 32 | 32 | 0 | exact |
+| 61 | image 4 | `0x006347d0` | 32 | 32 | 0 | exact |
+| 62 | image 4 | `0x00634830` | 32 | 32 | 0 | exact |
+| 63 | image 4 | `0x00634850` | 32 | 32 | 0 | exact |
+| 64 | image 4 | `0x00634890` | 32 | 32 | 0 | exact |
+| 65 | image 4 | `0x006348b0` | 32 | 32 | 0 | exact |
+| 66 | image 4 | `0x006348d0` | 32 | 32 | 0 | exact |
+| 67 | image 4 | `0x006394d0` | 24 | 24 | 0 | exact |
+| 68 | image 4 | `0x0063c51c` | 2884 | 2884 | 0 | exact |
+| 69 | image 4 | `0x0063db24` | 80 | 80 | 0 | exact |
+| 70 | image 4 | `0x0063e810` | 236 | 236 | 0 | exact |
+| 71 | image 4 | `0x0063fb74` | 316 | 316 | 0 | exact |
+| 72 | image 4 | `0x006425ec` | 80 | 80 | 0 | exact |
+| 73 | image 4 | `0x006439ac` | 52 | 52 | 0 | exact |
+| 74 | image 4 | `0x00643c4c` | 152 | 152 | 0 | exact |
+| 75 | image 4 | `0x00643ec4` | 68 | 68 | 0 | exact |
+| 76 | image 4 | `0x00644004` | 80 | 80 | 0 | exact |
+| 77 | image 4 | `0x0069d2b4` | 52 | 52 | 0 | exact |
+| 78 | image 4 | `0x0069f000` | 128 | 128 | 0 | exact |
+| 79 | image 4 | `0x0069f8fc` | 36 | 36 | 0 | exact |
+| 80 | image 4 | `0x0069fec8` | 40 | 40 | 0 | exact |
+| 81 | image 4 | `0x006b0c3c` | 48 | 48 | 0 | exact |
+| 82 | image 4 | `0x00703f94` | 128 | 128 | 0 | exact |
+| 83 | image 4 | `0x007115a4` | 320 | 320 | 0 | exact |
+| 84 | image 4 | `0x007116e4` | 132 | 132 | 0 | exact |
+| 85 | image 4 | `0x00711768` | 216 | 216 | 0 | exact |
+| 86 | image 4 | `0x0071ce84` | 48 | 48 | 0 | exact |
+| 87 | image 4 | `0x0071ddf0` | 228 | 228 | 0 | exact |
+| 88 | image 4 | `0x0071e960` | 140 | 140 | 0 | exact |
+| 89 | image 4 | `0x0071e9ec` | 72 | 72 | 0 | exact |
+| 90 | image 4 | `0x0071f1d4` | 212 | 212 | 0 | exact |
+| 91 | image 4 | `0x0071f2a8` | 368 | 368 | 0 | exact |
+| 92 | image 4 | `0x0071f708` | 16 | 16 | 0 | exact |
+| 93 | image 4 | `0x0071fa9c` | 124 | 124 | 0 | exact |
+| 94 | image 4 | `0x007211d4` | 200 | 200 | 0 | exact |
+| 95 | image 4 | `0x00722054` | 292 | 292 | 0 | exact |
+| 96 | image 4 | `0x007221a0` | 40 | 40 | 0 | exact |
+| 97 | image 4 | `0x007221c8` | 80 | 80 | 0 | exact |
+| 98 | image 4 | `0x00723cb8` | 48 | 48 | 0 | exact |
+| 99 | image 4 | `0x0072503c` | 472 | 472 | 0 | exact |
+| 100 | image 4 | `0x0072b3a4` | 44 | 44 | 0 | exact |
+| 101 | image 4 | `0x0072b3d0` | 44 | 44 | 0 | exact |
+| 102 | image 4 | `0x0073ec0c` | 56 | 56 | 0 | exact |
+| 103 | image 4 | `0x0073ec44` | 56 | 56 | 0 | exact |
+| 104 | image 4 | `0x0073ec7c` | 76 | 76 | 0 | exact |
+| 105 | image 4 | `0x0073ecc8` | 76 | 76 | 0 | exact |
+| 106 | image 4 | `0x0073ed6c` | 40 | 40 | 0 | exact |
+| 107 | image 4 | `0x0073f338` | 844 | 844 | 0 | exact |
+| 108 | image 4 | `0x0073f760` | 44 | 44 | 0 | exact |
+| 109 | image 4 | `0x0073f78c` | 44 | 44 | 0 | exact |
+| 110 | image 4 | `0x0073f7b8` | 48 | 48 | 0 | exact |
+| 111 | image 4 | `0x0073fce0` | 128 | 128 | 0 | exact |
+| 112 | image 4 | `0x0089bf0c` | 68 | 68 | 0 | exact |
+| 113 | image 4 | `0x0089bf50` | 64 | 64 | 0 | exact |
+| 114 | image 4 | `0x0089cda4` | 32 | 32 | 0 | exact |
+| 115 | image 4 | `0x0089cdc4` | 32 | 32 | 0 | exact |
+| 116 | image 5 | `0x00d3d858` | 60 | 60 | 0 | exact |
+| 117 | image 5 | `0x00d52684` | 24632 | 24632 | 0 | exact |
+| 118 | image 5 | `0x00d5da2c` | 44 | 44 | 0 | exact |
+| 119 | image 5 | `0x00d5db1c` | 460 | 460 | 0 | exact |
+| 120 | image 5 | `0x00d5ddec` | 196 | 196 | 0 | exact |
+| 121 | image 5 | `0x00d5e658` | 20 | 20 | 0 | exact |
+| 122 | image 5 | `0x00d5f0d0` | 36 | 36 | 0 | exact |
+| 123 | image 5 | `0x00d60cc4` | 152 | 152 | 0 | exact |
+| 124 | image 5 | `0x00d612b8` | 80 | 80 | 0 | exact |
+| 125 | image 5 | `0x00d61388` | 60 | 60 | 0 | exact |
+| 126 | image 5 | `0x00d61a88` | 28 | 28 | 0 | exact |
+| 127 | image 5 | `0x00d61aa4` | 36 | 36 | 0 | exact |
+| 128 | image 5 | `0x00d6266c` | 676 | 676 | 0 | exact |
+| 129 | image 5 | `0x00d64800` | 64 | 64 | 0 | exact |
+| 130 | image 5 | `0x00d64840` | 16 | 16 | 0 | exact |
+| 131 | image 5 | `0x00d64850` | 196 | 196 | 0 | exact |
+| 132 | image 5 | `0x00d64914` | 44 | 44 | 0 | exact |
+| 133 | image 5 | `0x00d64940` | 16 | 16 | 0 | exact |
+| 134 | image 5 | `0x00d64950` | 100 | 100 | 0 | exact |
+| 135 | image 5 | `0x00d649b4` | 52 | 52 | 0 | exact |
+| 136 | image 5 | `0x00d653e8` | 52 | 52 | 0 | exact |
+| 137 | image 5 | `0x00d655f4` | 184 | 184 | 0 | exact |
+| 138 | image 5 | `0x00d663e0` | 20 | 20 | 0 | exact |
+| 139 | image 5 | `0x00d66eac` | 84 | 84 | 0 | exact |
+| 140 | image 5 | `0x00d6703c` | 100 | 100 | 0 | exact |
+| 141 | image 5 | `0x00d675a4` | 52 | 52 | 0 | exact |
+| 142 | image 5 | `0x00d68a1c` | 20 | 20 | 0 | exact |
+| 143 | image 5 | `0x00d68a30` | 20 | 20 | 0 | exact |
+| 144 | image 5 | `0x00d69c10` | 116 | 116 | 0 | exact |
+| 145 | image 5 | `0x00d69c84` | 84 | 84 | 0 | exact |
+| 146 | image 5 | `0x00d6a3f0` | 208 | 208 | 0 | exact |
+| 147 | image 5 | `0x00d77590` | 1140 | 1140 | 0 | exact |
+| 148 | image 5 | `0x00d77f60` | 28 | 28 | 0 | exact |
+| 149 | image 5 | `0x00d77f7c` | 20 | 20 | 0 | exact |
+| 150 | image 5 | `0x00d77fec` | 20 | 20 | 0 | exact |
+| 151 | image 5 | `0x00d7805c` | 20 | 20 | 0 | exact |
+| 152 | image 5 | `0x00d78088` | 868 | 868 | 0 | exact |
+| 153 | image 5 | `0x00d783ec` | 20 | 20 | 0 | exact |
+| 154 | image 5 | `0x00d78508` | 20 | 20 | 0 | exact |
+| 155 | image 5 | `0x00d78538` | 20 | 20 | 0 | exact |
+| 156 | image 5 | `0x00d7854c` | 92 | 92 | 0 | exact |
+| 157 | image 5 | `0x00d786ac` | 268 | 268 | 0 | exact |
+| 158 | image 5 | `0x00d787dc` | 160 | 160 | 0 | exact |
+| 159 | image 5 | `0x00d7887c` | 308 | 308 | 0 | exact |
+| 160 | image 5 | `0x00d78a10` | 92 | 92 | 0 | exact |
+| 161 | image 5 | `0x00d78af0` | 20 | 20 | 0 | exact |
+| 162 | image 5 | `0x00d78b7c` | 92 | 92 | 0 | exact |
+| 163 | image 5 | `0x00d78bd8` | 20 | 20 | 0 | exact |
+| 164 | image 5 | `0x00d78db8` | 308 | 308 | 0 | exact |
+| 165 | image 5 | `0x00d78f80` | 28 | 28 | 0 | exact |
+| 166 | image 5 | `0x00d79030` | 200 | 200 | 0 | exact |
+| 167 | image 5 | `0x00d7910c` | 32 | 32 | 0 | exact |
+| 168 | image 5 | `0x00d7912c` | 32 | 32 | 0 | exact |
+| 169 | image 5 | `0x00e42414` | 176 | 176 | 0 | exact |
+| 170 | image 5 | `0x00ef6964` | 24 | 24 | 0 | exact |
+| 171 | image 5 | `0x00ef697c` | 24 | 24 | 0 | exact |
+| 172 | plain | `0x011121d4` | 408 | 408 | 0 | exact |
+| 173 | plain | `0x0111236c` | 20 | 20 | 0 | exact |
+| 174 | plain | `0x0111299c` | 124 | 124 | 0 | exact |
+| 175 | plain | `0x01112b2c` | 52 | 52 | 0 | exact |
+| 176 | plain | `0x011301ac` | 72 | 72 | 0 | exact |
+| 177 | plain | `0x01137cf8` | 52 | 52 | 0 | exact |
+| 178 | plain | `0x01138060` | 60 | 60 | 0 | exact |
+| 179 | plain | `0x01179a50` | 100 | 100 | 0 | exact |
+| 180 | plain | `0x01179b0c` | 120 | 120 | 0 | exact |
+| 181 | plain | `0x01179b84` | 136 | 136 | 0 | exact |
+| 182 | plain | `0x0117deb0` | 48 | 48 | 0 | exact |
+| 183 | plain | `0x0117e1b8` | 1080 | 1080 | 0 | exact |
+
+</details>
+
 ### Permission-fault loading and live iteration lead
 
 **Reported, sibling-only:** jitl describes changing X70 software over USB without reboot, and seeking the same workflow on X100VI. Tiredboffin warns that disabling protection indiscriminately may bypass abort-driven loading on X-E2. The reported one-byte-per-region change and sibling behavior do not establish an X-M1 patch or its safety (E-EXR-LIVE-ITERATION-LEAD).

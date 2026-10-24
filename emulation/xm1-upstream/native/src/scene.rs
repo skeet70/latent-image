@@ -13,11 +13,22 @@
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyInt, PyList, PyType};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const PROFILE: &str = "declared-rgb-bars-ramp-moving-square-bt601-limited-v1";
 const MAX_DIMENSION: u64 = 8192;
 const MAX_OUTPUT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_HISTOGRAM_SAMPLES: u64 = 16 * 1024 * 1024;
+
+// A selected frame is positive, so 0 keeps the animated per-call default.
+static FIXED_FRAME: AtomicU64 = AtomicU64::new(0);
+
+fn scene_frame(frame: u64) -> u64 {
+    match FIXED_FRAME.load(Ordering::SeqCst) {
+        0 => frame,
+        selected => selected,
+    }
+}
 
 #[pyfunction]
 pub(crate) fn xm1_source_tick(
@@ -276,6 +287,25 @@ fn integer(value: &Bound<'_, PyAny>, name: &'static str) -> PyResult<u64> {
         .map_err(|_| PyValueError::new_err(format!("{name} must be in 0..2^64-1")))
 }
 
+/// Pin every scene render to one frame index in place of the frame argument of
+/// `virtual_scene_yycbcr`, `virtual_scene_histogram` and
+/// `virtual_scene_xm1_statistics`, or restore the animated per-call default
+/// with `None`. A selected frame is a positive actual Python int. Returns the
+/// active selection.
+#[pyfunction]
+pub fn virtual_scene_fixed_frame(frame: &Bound<'_, PyAny>) -> PyResult<Option<u64>> {
+    let selected = if frame.is_none() {
+        None
+    } else {
+        match integer(frame, "frame")? {
+            0 => return Err(PyValueError::new_err("the fixed scene frame must be positive")),
+            value => Some(value),
+        }
+    };
+    FIXED_FRAME.store(selected.unwrap_or(0), Ordering::SeqCst);
+    Ok(selected)
+}
+
 /// Return packed bytes only. Stride may be None for a tightly packed raster;
 /// every other argument is an explicit, nonnegative, actual Python integer.
 #[pyfunction]
@@ -296,7 +326,7 @@ pub fn virtual_scene_yycbcr<'py>(
     let scene = Scene {
         width: integer(source_width, "source_width")?,
         height: integer(source_height, "source_height")?,
-        frame: integer(frame, "frame")?,
+        frame: scene_frame(integer(frame, "frame")?),
     };
     let crop = Crop {
         x: integer(crop_x, "crop_x")?,
@@ -330,7 +360,7 @@ pub fn virtual_scene_histogram<'py>(
     let scene = Scene {
         width: integer(source_width, "source_width")?,
         height: integer(source_height, "source_height")?,
-        frame: integer(frame, "frame")?,
+        frame: scene_frame(integer(frame, "frame")?),
     };
     let crop = Crop {
         x: integer(crop_x, "crop_x")?,
@@ -586,7 +616,7 @@ pub(crate) fn virtual_scene_xm1_statistics<'py>(
             .map_err(|_| PyValueError::new_err("configuration_word exceeds U32"))?;
     }
     let program = Xm1SamplingProgram::parse(&words, histogram_enabled);
-    let frame = integer(frame, "frame")?;
+    let frame = scene_frame(integer(frame, "frame")?);
     if frame == 0 {
         return Err(PyValueError::new_err("statistics frame must be positive"));
     }

@@ -1,0 +1,2836 @@
+{
+  "schema": 1,
+  "firmware": "X-M1 1.50",
+  "firmware_sha256": "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490",
+  "upstream": {
+    "repository": "https://github.com/justjake/x70view",
+    "revision": "62876536052549cbcba1e9f6abc1437e773dba2f",
+    "credit": "jitl (justjake)"
+  },
+  "regions": {
+    "image-4": {
+      "base": "0x0061c400",
+      "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+    },
+    "image-5": {
+      "base": "0x00bf1a00",
+      "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+    },
+    "loader-a": {
+      "base": "0x00040000",
+      "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+    },
+    "plain": {
+      "base": "0x01100000",
+      "sha256": "ee211bdaad39005b4f72e3443a76ca194905381a967cab787d6a4ef14e2d889d"
+    }
+  },
+  "functions": [
+    {
+      "region": "loader-a",
+      "unit": "kernel0",
+      "address": "0x0004357c",
+      "size": 48,
+      "name": "FUN_0004357c",
+      "upstream_label": "FUN_0004357c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "e50d121ff6c8881f53d3720e9570e6511103f7d253577e90f9665b9f038ba5e3",
+      "upstream_source": "decomp/firmwares/xm1-150/kernel0/src/native_recovery/native_memory.c",
+      "upstream_source_sha256": "913c9b261d011099e12e4c84da8618c0d3933ceda23fb371ce82e032a6b6898a",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs",
+        "ClassicChromeIconCases.hs",
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0061c91c",
+      "size": 16,
+      "name": "ui_setting_set_current_profile_value_forward",
+      "upstream_label": "ui_setting_set_current_profile_value_forward",
+      "upstream_nonmatching": false,
+      "stock_sha256": "c98078c58d4865acb3aa878d1c32ff8aa03f55d1c546336ef385d7e2d40898f7",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/ui_profile_backup_forwarders.c",
+      "upstream_source_sha256": "16d74f46b30bd01db3a0b1417e9d1597b41882e7822a06eacb2cf5ee65ae8334",
+      "referenced_by": [
+        "RecipeBankCases.hs",
+        "RecipeBankUiCases.hs",
+        "recipe_bank_allowlist.json",
+        "recipe_bank_storage.c"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0061c93c",
+      "size": 16,
+      "name": "ui_setting_get_current_profile_value_forward",
+      "upstream_label": "ui_setting_get_current_profile_value_forward",
+      "upstream_nonmatching": false,
+      "stock_sha256": "f77a4993471b01392d723707f73d01f0159db726e933592ed0ed5ffe5a53fef7",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/ui_profile_backup_forwarders.c",
+      "upstream_source_sha256": "16d74f46b30bd01db3a0b1417e9d1597b41882e7822a06eacb2cf5ee65ae8334",
+      "referenced_by": [
+        "RecipeBankCases.hs",
+        "RecipeBankUiCases.hs",
+        "recipe_bank_allowlist.json",
+        "recipe_bank_storage.c"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0061ca2c",
+      "size": 744,
+      "name": "ui_menu_classify_report_destination",
+      "upstream_label": "ui_menu_classify_report_destination",
+      "upstream_nonmatching": false,
+      "stock_sha256": "933d1fda77ced84fa1bb02ed76ccb409593dd281f3c3fe026a4126f4c2db4fe8",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/menus/native_menu_report_destination.c",
+      "upstream_source_sha256": "8af7140959b5fbf2dbb423ec7529f7fab0d5a2339ad5c064cc15d3e811254627",
+      "referenced_by": [
+        "RecipeBankUiCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0061cd14",
+      "size": 264,
+      "name": "get_current_menu_snapshot",
+      "upstream_label": "get_current_menu_snapshot",
+      "upstream_nonmatching": false,
+      "stock_sha256": "e8f2a34780d86ab915fb20b0963a858d6634770ec32fdc0dcb67af7d7a3082ec",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_menu_state.c",
+      "upstream_source_sha256": "6ac845b81afa10d6d0a45c07a4a1f6c7652ad6f69834847fe9dca3bcd002a339",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0061d018",
+      "size": 32,
+      "name": "FUN_0061d018",
+      "upstream_label": "FUN_0061d018",
+      "upstream_nonmatching": false,
+      "stock_sha256": "6c9752506c0f921811671de4cd060dc63a8595aa3a448bb557c0489006bea4b4",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_menu_state.c",
+      "upstream_source_sha256": "6ac845b81afa10d6d0a45c07a4a1f6c7652ad6f69834847fe9dca3bcd002a339",
+      "referenced_by": [
+        "ClassicChromeSiteCases.hs",
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0061d154",
+      "size": 80,
+      "name": "get_menu_snapshot_node_id",
+      "upstream_label": "get_menu_snapshot_node_id",
+      "upstream_nonmatching": false,
+      "stock_sha256": "5f95f37261c2f3bdee64d78bbe89d143590e0ede4d3f68a0206514a41afa85ee",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_menu_state.c",
+      "upstream_source_sha256": "6ac845b81afa10d6d0a45c07a4a1f6c7652ad6f69834847fe9dca3bcd002a339",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0061d1a4",
+      "size": 80,
+      "name": "get_menu_snapshot_node_type",
+      "upstream_label": "get_menu_snapshot_node_type",
+      "upstream_nonmatching": false,
+      "stock_sha256": "69a82493d364962c360ca34e289fa960a87fc5e4f777066feab579ca9599f72c",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_menu_state.c",
+      "upstream_source_sha256": "6ac845b81afa10d6d0a45c07a4a1f6c7652ad6f69834847fe9dca3bcd002a339",
+      "referenced_by": [
+        "RecipeBankUiCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0061d244",
+      "size": 80,
+      "name": "get_menu_snapshot_selected_row",
+      "upstream_label": "get_menu_snapshot_selected_row",
+      "upstream_nonmatching": false,
+      "stock_sha256": "704305fa0439e1e7940185b1f6c3b529efae65c69b40caf7f7484c1873083a6c",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_menu_state.c",
+      "upstream_source_sha256": "6ac845b81afa10d6d0a45c07a4a1f6c7652ad6f69834847fe9dca3bcd002a339",
+      "referenced_by": [
+        "RecipeBankUiCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0061d294",
+      "size": 80,
+      "name": "get_menu_snapshot_previous_row",
+      "upstream_label": "get_menu_snapshot_previous_row",
+      "upstream_nonmatching": false,
+      "stock_sha256": "5a70702340fa7cdd1853e58e568101aad0afca38369ec25f1c0250f846a83ac2",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_menu_state.c",
+      "upstream_source_sha256": "6ac845b81afa10d6d0a45c07a4a1f6c7652ad6f69834847fe9dca3bcd002a339",
+      "referenced_by": [
+        "RecipeBankUiCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0061d514",
+      "size": 16,
+      "name": "uicom_map_setting_code",
+      "upstream_label": "uicom_map_setting_code",
+      "upstream_nonmatching": false,
+      "stock_sha256": "5bf588f326e5d886e239fae046dab5d97d62c4bdbf5e934c50a48c88552125f8",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/uicom_setting_service.c",
+      "upstream_source_sha256": "942da281b7b0bfeb9c86d92221407cddbedd37830c1c5b6a9ac53a355e3cee17",
+      "referenced_by": [
+        "ClassicChromeSiteCases.hs",
+        "RecipeBankCases.hs",
+        "recipe_bank_allowlist.json",
+        "recipe_bank_storage.c"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0061d534",
+      "size": 16,
+      "name": "setting_value_is_available",
+      "upstream_label": "setting_value_is_available",
+      "upstream_nonmatching": false,
+      "stock_sha256": "fae0d4eca41dd07ac12df73db8eae4963542933570151014433b7dff5b1a5223",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/uicom_setting_service.c",
+      "upstream_source_sha256": "942da281b7b0bfeb9c86d92221407cddbedd37830c1c5b6a9ac53a355e3cee17",
+      "referenced_by": [
+        "ClassicChromeSiteCases.hs",
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0061d544",
+      "size": 16,
+      "name": "setting_preferred_available_value",
+      "upstream_label": "setting_preferred_available_value",
+      "upstream_nonmatching": false,
+      "stock_sha256": "a0ecf1078fcb117a557eefe60574be08c1e78e482141bb2b2728dba75cc25cd5",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/uicom_setting_service.c",
+      "upstream_source_sha256": "942da281b7b0bfeb9c86d92221407cddbedd37830c1c5b6a9ac53a355e3cee17",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0061d554",
+      "size": 16,
+      "name": "setting_available_count_capped_at_two",
+      "upstream_label": "setting_available_count_capped_at_two",
+      "upstream_nonmatching": false,
+      "stock_sha256": "c1b553b5a07f9b1691e08d319c853780cf72ab781632cb41f3bc6aedd5327470",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/uicom_setting_service.c",
+      "upstream_source_sha256": "942da281b7b0bfeb9c86d92221407cddbedd37830c1c5b6a9ac53a355e3cee17",
+      "referenced_by": [
+        "ClassicChromeSiteCases.hs",
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0061d8dc",
+      "size": 80,
+      "name": "ui_backup_write_body",
+      "upstream_label": "ui_backup_write_body",
+      "upstream_nonmatching": false,
+      "stock_sha256": "0bd112c82e634eceed4d610f85217d26cc94fabc05bf6b180554de23e4a2aff6",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/native_backup_requests.c",
+      "upstream_source_sha256": "0bfd548575042be3a5f9d2baf18485efc32450dbe7a117a6d8c68e9582e2365f",
+      "referenced_by": [
+        "RecipeBankCases.hs",
+        "RecipeBankUiCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0061d9ec",
+      "size": 80,
+      "name": "ui_backup_read_body",
+      "upstream_label": "ui_backup_read_body",
+      "upstream_nonmatching": false,
+      "stock_sha256": "57875f3e171697c711e6ebe077f5bf351ae870698124397a3eeaaf52b2146a87",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/native_backup_requests.c",
+      "upstream_source_sha256": "0bfd548575042be3a5f9d2baf18485efc32450dbe7a117a6d8c68e9582e2365f",
+      "referenced_by": [
+        "RecipeBankCases.hs",
+        "RecipeBankUiCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0061e110",
+      "size": 25832,
+      "name": "ui_profile_setting_read",
+      "upstream_label": "ui_profile_setting_read",
+      "upstream_nonmatching": true,
+      "stock_sha256": "eafa7f4a0fda6047d1567b674527a47de45d7ac4a2e293c7f62e2ef39e6bd1e1",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/profile_setting_read.c",
+      "upstream_source_sha256": "2deb30d5d2d11600418a9ce6cb4c54f2456bfcaee18f50c465f8c563473be377",
+      "referenced_by": [
+        "RecipeBankCases.hs",
+        "recipe-bank-model.c",
+        "recipe-bank-model.ld",
+        "recipe_bank_allowlist.json"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00624620",
+      "size": 44,
+      "name": "ui_setting_get_current_profile_value",
+      "upstream_label": "ui_setting_get_current_profile_value",
+      "upstream_nonmatching": false,
+      "stock_sha256": "6dbee04f29f3aefe35673c6e5f14251e01ab7d9115738bcf0fdaf89891bf8dc2",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/ui_setting_accessors_backup.c",
+      "upstream_source_sha256": "e8bc6f0e46a5fbb218cede12c3551782ba1eaf2cf1802b9d5fef734ab4001a51",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x006309c4",
+      "size": 112,
+      "name": "ui_setting_set_current_profile_value",
+      "upstream_label": "ui_setting_set_current_profile_value",
+      "upstream_nonmatching": false,
+      "stock_sha256": "e3ca0ad354c9b3d236f4a307801cf9f357b50c3fbc1a50cd0fdae2ef7938ba23",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/ui_setting_accessors_backup.c",
+      "upstream_source_sha256": "e8bc6f0e46a5fbb218cede12c3551782ba1eaf2cf1802b9d5fef734ab4001a51",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00632860",
+      "size": 192,
+      "name": "ui_setting_id_to_compact_bit_index",
+      "upstream_label": "ui_setting_id_to_compact_bit_index",
+      "upstream_nonmatching": false,
+      "stock_sha256": "12be1bf553f983af1a9d46ae31a11bac8381eadbffd0b0db95c5006e06c989b1",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/native_setting_compact_index.c",
+      "upstream_source_sha256": "8cf1511ce4d6ffc0c8904ee52b3d8f8db1090cc8c832e1a91db34f4fb8a77923",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00632920",
+      "size": 20,
+      "name": "ui_setting_bitset_word_index",
+      "upstream_label": "ui_setting_bitset_word_index",
+      "upstream_nonmatching": false,
+      "stock_sha256": "3866cb203cd1d353351488fa650db492ae3f1f4358acd417eb027d011758ad79",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/ui_setting_snapshots_commands.c",
+      "upstream_source_sha256": "dd9013f9e086b4754cfb8af6afd98e83581d78904be2af4a74065ddf623f47b0",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00632934",
+      "size": 28,
+      "name": "ui_setting_bitset_bit_mask",
+      "upstream_label": "ui_setting_bitset_bit_mask",
+      "upstream_nonmatching": false,
+      "stock_sha256": "df19f1106b6255c48a51a7fb0e5cc0eba36eeca201efa02112d433f8da75bc23",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/ui_setting_snapshots_commands.c",
+      "upstream_source_sha256": "dd9013f9e086b4754cfb8af6afd98e83581d78904be2af4a74065ddf623f47b0",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0063386c",
+      "size": 32,
+      "name": "FUN_0063386c",
+      "upstream_label": "FUN_0063386c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "8da3f4a0dbb01c0bd91938bd4e2cdc4ccf516e8ca12d73fdbc2cb45283ceeca8",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x006338ec",
+      "size": 32,
+      "name": "FUN_006338ec",
+      "upstream_label": "FUN_006338ec",
+      "upstream_nonmatching": false,
+      "stock_sha256": "10d4b73b13be473ac55b8847255b788f266904595c799570ed898af6f92ad135",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0063390c",
+      "size": 32,
+      "name": "FUN_0063390c",
+      "upstream_label": "FUN_0063390c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "24415a5ea66bba75d9b53a3870afa0a8e0c0410c66e40e23640aa029a612569c",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0063392c",
+      "size": 32,
+      "name": "FUN_0063392c",
+      "upstream_label": "FUN_0063392c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "7ace50d4364321bdbfe2725ad60063fba83f7aad70541392c50d38389200d4be",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0063394c",
+      "size": 32,
+      "name": "FUN_0063394c",
+      "upstream_label": "FUN_0063394c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "1a04093ad0e5304dcfa0b73de8574b3c48319aae9722f02baa78e9a7a00f2112",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0063396c",
+      "size": 32,
+      "name": "FUN_0063396c",
+      "upstream_label": "FUN_0063396c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "c7380edeced5cdbec88ff4603533fd5dbdb38a7a7b535af1e5b2dcf82056064d",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0063398c",
+      "size": 32,
+      "name": "FUN_0063398c",
+      "upstream_label": "FUN_0063398c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "21687882614f29ef2e0524ded68d4ffda6b2782234036c6837d3ad0cb3e68ed0",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x006339ac",
+      "size": 32,
+      "name": "set_cached_focus_mode",
+      "upstream_label": "set_cached_focus_mode",
+      "upstream_nonmatching": false,
+      "stock_sha256": "00c0a46f4502775e5667937f1087fbd45f4f9f591c7e5c5f7d6a419a5f9035a8",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633a0c",
+      "size": 32,
+      "name": "FUN_00633a0c",
+      "upstream_label": "FUN_00633a0c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "cade124635f5b31a0fa048b34ef5dae9063cde7e09e1cb8c993f981462fae200",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633a2c",
+      "size": 32,
+      "name": "FUN_00633a2c",
+      "upstream_label": "FUN_00633a2c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "3a08e2983d387fb79dc1bf870ea471e457eb664219a64e45d00167784fd8ce91",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633a4c",
+      "size": 32,
+      "name": "FUN_00633a4c",
+      "upstream_label": "FUN_00633a4c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "f46964750fcea72b40643add697d46dac04850408b44827760962d8944031929",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633a8c",
+      "size": 32,
+      "name": "FUN_00633a8c",
+      "upstream_label": "FUN_00633a8c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "f7b56f99f0dfcc4e3cb5e65b9922ca15c43b2855404326fd33e0dbd36b74bab4",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633aac",
+      "size": 32,
+      "name": "FUN_00633aac",
+      "upstream_label": "FUN_00633aac",
+      "upstream_nonmatching": false,
+      "stock_sha256": "dadc2a360d66d51dc099f90bf8d51f187035691af48a70ec451126fdd28f6e34",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633acc",
+      "size": 32,
+      "name": "FUN_00633acc",
+      "upstream_label": "FUN_00633acc",
+      "upstream_nonmatching": false,
+      "stock_sha256": "03bebc623844c6f0b090f1b303caabe9d4738d75d97b4f73d7fdc6a013c2eb98",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633aec",
+      "size": 32,
+      "name": "FUN_00633aec",
+      "upstream_label": "FUN_00633aec",
+      "upstream_nonmatching": false,
+      "stock_sha256": "79f5c27ed9a8f9d9b9245ee031896ffdd06cdff4b1796500ef21cc3ba2d800b6",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633b0c",
+      "size": 32,
+      "name": "FUN_00633b0c",
+      "upstream_label": "FUN_00633b0c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "740171cd27485789ced6fe3072aa8dc87320146602ae084652378cf0402dade6",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633b4c",
+      "size": 32,
+      "name": "FUN_00633b4c",
+      "upstream_label": "FUN_00633b4c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "175881637f785ecb860f301f97bd4283b430c99992b0d67bcf3febc9efc54773",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633b6c",
+      "size": 32,
+      "name": "FUN_00633b6c",
+      "upstream_label": "FUN_00633b6c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "b3b969774be90217f57162bc223798d89c2322afa87c8d16db068fbad055d48b",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633b8c",
+      "size": 32,
+      "name": "FUN_00633b8c",
+      "upstream_label": "FUN_00633b8c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "dfb948dc86bd07dbe5f0e2970e8646b8547990b4dcacd329cd879e9274c396a4",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633c0c",
+      "size": 32,
+      "name": "FUN_00633c0c",
+      "upstream_label": "FUN_00633c0c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "6f6fa112a1fd195f6283c8858e823fa823df8fc08b9fd80c9034097e329baa11",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633c8c",
+      "size": 32,
+      "name": "FUN_00633c8c",
+      "upstream_label": "FUN_00633c8c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "df2bfdc36e99b95fcbe71e6e38a2a6109f559b3936bd128965f716248bc9ef1d",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633cac",
+      "size": 32,
+      "name": "FUN_00633cac",
+      "upstream_label": "FUN_00633cac",
+      "upstream_nonmatching": false,
+      "stock_sha256": "20997f1516becb2da64ef7de7925880dbd616383d2bc73e02166db16dbedbe4b",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633ccc",
+      "size": 32,
+      "name": "FUN_00633ccc",
+      "upstream_label": "FUN_00633ccc",
+      "upstream_nonmatching": false,
+      "stock_sha256": "d4fefc064a97d11357ffd57c33bc7ad47c1f7a9b51908d4f2dff260ef3212181",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633cec",
+      "size": 32,
+      "name": "FUN_00633cec",
+      "upstream_label": "FUN_00633cec",
+      "upstream_nonmatching": false,
+      "stock_sha256": "8131a34b70be436b26fb903ec2a80f0493c690edbd8394dc4bfde15f89f0c029",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633d0c",
+      "size": 32,
+      "name": "FUN_00633d0c",
+      "upstream_label": "FUN_00633d0c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "9418546d7c841984f34a2b55406b7e5dc6a597c9a42b8ed195868ebf6ea98107",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633e0c",
+      "size": 32,
+      "name": "FUN_00633e0c",
+      "upstream_label": "FUN_00633e0c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "aa0e0f4a97d0a819c289cf7c506830edfa30ae901d5cc9f4a31e151af8ae3590",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633e8c",
+      "size": 32,
+      "name": "set_cached_face_detection",
+      "upstream_label": "set_cached_face_detection",
+      "upstream_nonmatching": false,
+      "stock_sha256": "96f53090b4656c471d61e5471f59d884d55567c642aedc3b09994bad94195d32",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00633eac",
+      "size": 32,
+      "name": "FUN_00633eac",
+      "upstream_label": "FUN_00633eac",
+      "upstream_nonmatching": false,
+      "stock_sha256": "d330cdf230e4e8efba892014900b8669cfdf17e2a89b3c5cdb972f73fc85cbf2",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs",
+        "recipe_bank_allowlist.json"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x006340cc",
+      "size": 32,
+      "name": "FUN_006340cc",
+      "upstream_label": "FUN_006340cc",
+      "upstream_nonmatching": false,
+      "stock_sha256": "2ffeef1f9d89cb2605e83284c5294b47b59f476cf3e87c8f7e567ee4ec1d50c9",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0063412c",
+      "size": 32,
+      "name": "FUN_0063412c",
+      "upstream_label": "FUN_0063412c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "2eb5a0b0d564ffdf6a949c8ff4b2181f1f5c59414e83d5f26f75c90b7a7d9889",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0063432c",
+      "size": 32,
+      "name": "set_cached_af_illuminator",
+      "upstream_label": "set_cached_af_illuminator",
+      "upstream_nonmatching": false,
+      "stock_sha256": "2d29643c96f8a8a781376d0a06453528d8b92177280a1b901352ed2265724fb7",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0063458c",
+      "size": 32,
+      "name": "FUN_0063458c",
+      "upstream_label": "FUN_0063458c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "09e2dc4fb82ff229834709d57fce1babef253174cdbe5cee8f3aa96df29703c9",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0063460c",
+      "size": 32,
+      "name": "FUN_0063460c",
+      "upstream_label": "FUN_0063460c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "69df3f2fda3e2674f1317a3ea3d5bf056b69fd096114edaf1590ce1277ab78a6",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0063462c",
+      "size": 36,
+      "name": "FUN_0063462c",
+      "upstream_label": "FUN_0063462c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "11993c826eb30a0a0fd2754f300099e669e352b435f7b0a7724d53a48e145c1a",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x006347b0",
+      "size": 32,
+      "name": "FUN_006347b0",
+      "upstream_label": "FUN_006347b0",
+      "upstream_nonmatching": false,
+      "stock_sha256": "43d8257bbf60bab6acdde5c4ae9c1ef22c867f1235d4fb73ddaa7ec74deab347",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x006347d0",
+      "size": 32,
+      "name": "FUN_006347d0",
+      "upstream_label": "FUN_006347d0",
+      "upstream_nonmatching": false,
+      "stock_sha256": "fd9c60e18f05dace36236560d8cf89af792c891abfb26b7795e50a863e9b2c94",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00634830",
+      "size": 32,
+      "name": "FUN_00634830",
+      "upstream_label": "FUN_00634830",
+      "upstream_nonmatching": false,
+      "stock_sha256": "6ab89f97a20f1a12561c243c8649a21402064d7fe5d3b481694737d6fde5368d",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00634850",
+      "size": 32,
+      "name": "FUN_00634850",
+      "upstream_label": "FUN_00634850",
+      "upstream_nonmatching": false,
+      "stock_sha256": "8f4a3ea9c5741d5dbb0363f0551f109c74a8e0c9fc4b47d59b3d77fbe6ab13ca",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00634890",
+      "size": 32,
+      "name": "FUN_00634890",
+      "upstream_label": "FUN_00634890",
+      "upstream_nonmatching": false,
+      "stock_sha256": "444094e7f00e37eba70216650096c89dc0c3b0867914d3a071264348d574423a",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x006348b0",
+      "size": 32,
+      "name": "FUN_006348b0",
+      "upstream_label": "FUN_006348b0",
+      "upstream_nonmatching": false,
+      "stock_sha256": "bc1bcd28210556b5e6f76f1e0243be500db3bdcbeaa03b1456cc47b93771351b",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x006348d0",
+      "size": 32,
+      "name": "FUN_006348d0",
+      "upstream_label": "FUN_006348d0",
+      "upstream_nonmatching": false,
+      "stock_sha256": "88a2998c780ea1708bd2c59a6192a98f788dc4a9ee96a8deffefe2ba4c8f02bf",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_recovery/xm1_cached_settings.c",
+      "upstream_source_sha256": "9ccecdf2a77f11b42a821a5b86c0c6cc30c3323740fd5a6a4275e14ffd6849f2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x006394d0",
+      "size": 24,
+      "name": "FUN_009042bc",
+      "upstream_label": "FUN_009042bc",
+      "upstream_nonmatching": false,
+      "stock_sha256": "122b20d4ccac9fb3a634ba673079bb3577f9f68c0aacfb650a20e27cfe3050af",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/ui_extension_stubs.c",
+      "upstream_source_sha256": "a11826801642820a6e2cc6a4a4fd54e34ad13b49a5cf022337af7013fd73d3e1",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0063c51c",
+      "size": 2884,
+      "name": "ui_update_setting_group_snapshots",
+      "upstream_label": "ui_update_setting_group_snapshots",
+      "upstream_nonmatching": false,
+      "stock_sha256": "32de1b88895676107dfa20811261529309502e8dd983faa407775831d57cc265",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_ui_snapshots/xm1_ui_snapshots.c",
+      "upstream_source_sha256": "b9e8633a2370374d2ac618e42ed0be69b15727768867aa15cc44e3a22e7a32c7",
+      "referenced_by": [
+        "RecipeBankCases.hs",
+        "RecipeBankUiCases.hs",
+        "recipe_bank_storage.c"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0063d060",
+      "size": 240,
+      "name": "FUN_0063d060",
+      "upstream_label": "FUN_0063d060",
+      "upstream_nonmatching": true,
+      "stock_sha256": "6e90b0aa5ea26f9b2100151bbb35c948f31548487b39d64708f2f2d0ef4da769",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/availability_mode_class.c",
+      "upstream_source_sha256": "88ff384297bfbfb9fe790def4e74fdafd42d216638293a92b536aa118411c0ea",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0063db24",
+      "size": 80,
+      "name": "xm1_record_reset_and_save_electronic_zoom_position",
+      "upstream_label": "xm1_record_reset_and_save_electronic_zoom_position",
+      "upstream_nonmatching": false,
+      "stock_sha256": "ad9ff0dfb5e85ce811d4317341a034cae49592ec6ca45f3f1b94d9767c9662fe",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_record_settings/xm1_record_settings.c",
+      "upstream_source_sha256": "322fd9878f8efeb44c4a4304ad5e86195717c74814ecbefe6243698dd258bab2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0063e810",
+      "size": 236,
+      "name": "xm1_record_reconcile_white_balance_compensation",
+      "upstream_label": "xm1_record_reconcile_white_balance_compensation",
+      "upstream_nonmatching": false,
+      "stock_sha256": "4de21b91abb87c85c343c83598d10bf166cb4b9693e025448ced17fc35658bde",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_record_settings/xm1_record_settings.c",
+      "upstream_source_sha256": "322fd9878f8efeb44c4a4304ad5e86195717c74814ecbefe6243698dd258bab2",
+      "referenced_by": [
+        "RecipeBankCases.hs",
+        "RecipeBankUiCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0063fb74",
+      "size": 316,
+      "name": "xm1_ui_apply_setting_00c",
+      "upstream_label": "xm1_ui_apply_setting_00c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "c67f337a0ef6e7fec8542fe2446385516500ea2f385d12a7847cbef4b62e209b",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_ui_commands/xm1_ui_commands.c",
+      "upstream_source_sha256": "489ef11436be82d90652b61150d833bc01aa087ad9ab543e41ce04a38035f8a6",
+      "referenced_by": [
+        "RecipeBankCases.hs",
+        "RecipeBankUiCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x006425ec",
+      "size": 80,
+      "name": "xm1_record_apply_property_153",
+      "upstream_label": "xm1_record_apply_property_153",
+      "upstream_nonmatching": false,
+      "stock_sha256": "1aed6fbb965b712aa693c8ccb50d812b22e006626b15b95ac0fd420e66cac80b",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_record_settings/xm1_record_settings.c",
+      "upstream_source_sha256": "322fd9878f8efeb44c4a4304ad5e86195717c74814ecbefe6243698dd258bab2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x006439ac",
+      "size": 52,
+      "name": "xm1_record_refresh_record_settings_for_changed_mode",
+      "upstream_label": "xm1_record_refresh_record_settings_for_changed_mode",
+      "upstream_nonmatching": false,
+      "stock_sha256": "b987cb1191e1db0e2183c2294f734a9b757f0d73bd57997e2e212d5369e50f05",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_record_settings/xm1_record_settings.c",
+      "upstream_source_sha256": "322fd9878f8efeb44c4a4304ad5e86195717c74814ecbefe6243698dd258bab2",
+      "referenced_by": [
+        "recipe_bank_allowlist.json"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x006439e0",
+      "size": 36,
+      "name": "xm1_record_custom_profile_is_not_three",
+      "upstream_label": "xm1_record_custom_profile_is_not_three",
+      "upstream_nonmatching": true,
+      "stock_sha256": "71a77b63ca878cc30d6f20802238bda85a2afe04c40af93113d42edbe0a60e25",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_record_settings/xm1_record_profile.c",
+      "upstream_source_sha256": "4d90660cd8f361f6cb9c2f86c496fa6afc2442f5919f4e9a4cbcf411aa1ec018",
+      "referenced_by": [
+        "RecipeBankCases.hs",
+        "recipe_bank_allowlist.json",
+        "recipe_bank_storage.c"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00643c4c",
+      "size": 152,
+      "name": "xm1_record_get_mapped_property_1ee",
+      "upstream_label": "xm1_record_get_mapped_property_1ee",
+      "upstream_nonmatching": false,
+      "stock_sha256": "ddb7801714fa22cf17b8829641c9b02e5fdeea0f350de17cf28a676013302d70",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_record_settings/xm1_record_settings.c",
+      "upstream_source_sha256": "322fd9878f8efeb44c4a4304ad5e86195717c74814ecbefe6243698dd258bab2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00643ec4",
+      "size": 68,
+      "name": "xm1_record_get_record_mode_auto_iso_base",
+      "upstream_label": "xm1_record_get_record_mode_auto_iso_base",
+      "upstream_nonmatching": false,
+      "stock_sha256": "c575525a4f928fba531ba17e8b49094fff6843a3412aa0da18a23a4dcead91bf",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_record_settings/xm1_record_settings.c",
+      "upstream_source_sha256": "322fd9878f8efeb44c4a4304ad5e86195717c74814ecbefe6243698dd258bab2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00644004",
+      "size": 80,
+      "name": "xm1_record_get_pixel_input_code_or_default",
+      "upstream_label": "xm1_record_get_pixel_input_code_or_default",
+      "upstream_nonmatching": false,
+      "stock_sha256": "2a420c9c2fa982a83bf4273d7ad29d418b1550075eac21a08327ee99cc8b3292",
+      "upstream_source": "decomp/firmwares/xm1-150/app/native_record_settings/xm1_record_settings.c",
+      "upstream_source_sha256": "322fd9878f8efeb44c4a4304ad5e86195717c74814ecbefe6243698dd258bab2",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0069d2b4",
+      "size": 52,
+      "name": "hw_startup_call_section5",
+      "upstream_label": "hw_startup_call_section5",
+      "upstream_nonmatching": false,
+      "stock_sha256": "fb42c2def949a88546d7015d2facb95edebbd84daca68f4f138a177b45d19782",
+      "upstream_source": "decomp/firmwares/xm1-150/app/drivers/isp/image_startup_stage_sequencer.c",
+      "upstream_source_sha256": "f12566eef36a4a663bb434b63ddbd8347f3117f150b39056cf9d171d4a6454e9",
+      "referenced_by": [
+        "recipe_bank_boot.S"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0069f000",
+      "size": 128,
+      "name": "flashext_worker_start",
+      "upstream_label": "flashext_worker_start",
+      "upstream_nonmatching": false,
+      "stock_sha256": "fa1a4b050b75716210ce93315c2047fb3b35ac8cb6d97c4f566cded4b08b934b",
+      "upstream_source": "decomp/firmwares/xm1-150/app/drivers/strobe/flashext_worker_start.c",
+      "upstream_source_sha256": "c40262391649a62e920b5840e8844f836460c9032aef747ca4cf1c2678fa3918",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0069f8fc",
+      "size": 36,
+      "name": "read_cfgdata_byte",
+      "upstream_label": "read_cfgdata_byte",
+      "upstream_nonmatching": false,
+      "stock_sha256": "0491e27ccb707594c468745512f2212604611381f49a88242f83241025c74966",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/configuration_byte_access.c",
+      "upstream_source_sha256": "cd835009d212ac5afc9eef0216f7146ebee90c17379d20f34c94fd47ea133650",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs",
+        "ClassicChromeSiteCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0069fec8",
+      "size": 40,
+      "name": "configuration_read_u16",
+      "upstream_label": "configuration_read_u16",
+      "upstream_nonmatching": false,
+      "stock_sha256": "4e4bc955582336fcfdda409dcd515f3eb02da9ea97b0145da2ff962c4e155226",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/configuration_ram_access.c",
+      "upstream_source_sha256": "95db713b4f7a07da298617cb82adb69470fe578d685bb21b4191d4658f1dd04e",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x006b0c3c",
+      "size": 48,
+      "name": "cpu_send_interrupt",
+      "upstream_label": "cpu_send_interrupt",
+      "upstream_nonmatching": false,
+      "stock_sha256": "868832d5b2d8191579f2392f99560b2ba2c29f84892cdbda446e12415407a180",
+      "upstream_source": "decomp/firmwares/xm1-150/app/platform/cpu/cpu_worker_control.c",
+      "upstream_source_sha256": "ebd6911bfa1549ec698ae9f68fed540a26092a9ec78d396c493e68b4a9bcc0ec",
+      "referenced_by": [
+        "ram_push_bootstrap.ld"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00703f94",
+      "size": 128,
+      "name": "fs_release_file_slot",
+      "upstream_label": "fs_release_file_slot",
+      "upstream_nonmatching": false,
+      "stock_sha256": "e56c090c740972b1529fffe549100020c7100da9e9839aa846bddbc780fa8634",
+      "upstream_source": "decomp/firmwares/xm1-150/app/storage/fs/fs_file_slot_release.c",
+      "upstream_source_sha256": "f9be0516f3beb91e44ad5c7842feb611cb37fd7c737fc03b6b4dc0712cd77dc3",
+      "referenced_by": [
+        "recipe_bank_storage.c"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x007115a4",
+      "size": 320,
+      "name": "storage_file_complete_create_named",
+      "upstream_label": "storage_file_complete_create_named",
+      "upstream_nonmatching": false,
+      "stock_sha256": "abc13686742e209951ba52f289db023a6bcadf8521d009694d1008fd98c1ac5f",
+      "upstream_source": "decomp/firmwares/xm1-150/app/storage/service/storage_file_completion.c",
+      "upstream_source_sha256": "dcfc0b87f72d756a47e6aa725a34738a727a55a3bbc47030ee2dd8faebf6b061",
+      "referenced_by": [
+        "BuildRecipeBank.hs",
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x007116e4",
+      "size": 132,
+      "name": "storage_file_complete_query",
+      "upstream_label": "storage_file_complete_query",
+      "upstream_nonmatching": false,
+      "stock_sha256": "092274cf71accb5dd90a8952c501f7d9f8248e3d28d80643fd72a08507f13319",
+      "upstream_source": "decomp/firmwares/xm1-150/app/storage/service/storage_file_completion.c",
+      "upstream_source_sha256": "dcfc0b87f72d756a47e6aa725a34738a727a55a3bbc47030ee2dd8faebf6b061",
+      "referenced_by": [
+        "BuildRecipeBank.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00711768",
+      "size": 216,
+      "name": "storage_file_complete_step",
+      "upstream_label": "storage_file_complete_step",
+      "upstream_nonmatching": false,
+      "stock_sha256": "d3391091f2b1e9e56ef2d3913018c5453475bf0b3a07c841b55271234317cee4",
+      "upstream_source": "decomp/firmwares/xm1-150/app/storage/service/storage_file_completion.c",
+      "upstream_source_sha256": "dcfc0b87f72d756a47e6aa725a34738a727a55a3bbc47030ee2dd8faebf6b061",
+      "referenced_by": [
+        "BuildRecipeBank.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0071ce84",
+      "size": 48,
+      "name": "storage_copy_file_details_if_ready",
+      "upstream_label": "storage_copy_file_details_if_ready",
+      "upstream_nonmatching": false,
+      "stock_sha256": "f0f6627de309ae0e3b12395ac1066bfa8e76541106a233006f7fb722e7105297",
+      "upstream_source": "decomp/firmwares/xm1-150/app/storage/service/storage_file_details_copy.c",
+      "upstream_source_sha256": "8d9570c29863b50384a0c809dbe3f38510ffcbbc3e771a1373a916e8cf70af67",
+      "referenced_by": [
+        "recipe-bank-model.ld",
+        "recipe_bank_storage.c"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0071ddf0",
+      "size": 228,
+      "name": "storage_check_media_ready",
+      "upstream_label": "storage_check_media_ready",
+      "upstream_nonmatching": false,
+      "stock_sha256": "264fc68c3b4a76d101fdea38939d63b30da4129a40ef6615920f5d67aad84f7f",
+      "upstream_source": "decomp/firmwares/xm1-150/app/storage/service/storage_media_ready.c",
+      "upstream_source_sha256": "101e7b5579aa92bb74147976a3dcc2b9e0b1cc44975f9a77af0a0406f2f2c027",
+      "referenced_by": [
+        "RecipeBankCases.hs",
+        "RecipeBankUiCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0071e960",
+      "size": 140,
+      "name": "storage_acquire_file_cache_slot",
+      "upstream_label": "storage_acquire_file_cache_slot",
+      "upstream_nonmatching": false,
+      "stock_sha256": "9f73ede193bbcd4eebfb416a296772ea0cf7169cebfa04cf67f26dedee566353",
+      "upstream_source": "decomp/firmwares/xm1-150/app/storage/service/storage_file_cache_slot_acquire.c",
+      "upstream_source_sha256": "21a774d91076d9c8cac786ca17d52171c585fb0e521a4ae00d17cee27c0515d8",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0071e9ec",
+      "size": 72,
+      "name": "storage_clear_file_cache",
+      "upstream_label": "storage_clear_file_cache",
+      "upstream_nonmatching": false,
+      "stock_sha256": "a3e5467b43b565059a4813973e3a0b0794efac4f3c6020d8231a88ef0d071865",
+      "upstream_source": "decomp/firmwares/xm1-150/app/storage/service/storage_page_requests.c",
+      "upstream_source_sha256": "38a3fd557da032a093676780b8868072ef7e118aa9d261156269c3042205aa30",
+      "referenced_by": [
+        "RecipeBankCases.hs",
+        "recipe-bank-model.ld"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0071f1d4",
+      "size": 212,
+      "name": "storage_change_file_entry",
+      "upstream_label": "storage_change_file_entry",
+      "upstream_nonmatching": false,
+      "stock_sha256": "385c2cb8b3dc000d9547e247d3e7ed90313bb7bb0607032457caf3b28bac897a",
+      "upstream_source": "decomp/firmwares/xm1-150/app/storage/service/storage_file_requests.c",
+      "upstream_source_sha256": "0730f05959bef6ea02156304a1405045fa41b94071b41238fe165e219910da8f",
+      "referenced_by": [
+        "recipe_bank_ui.h"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0071f2a8",
+      "size": 368,
+      "name": "storage_execute_file_open",
+      "upstream_label": "storage_execute_file_open",
+      "upstream_nonmatching": false,
+      "stock_sha256": "b7f5c58d2bd465c3f33a042f1599fdde1b5a5727af476c638cc901e36b58e286",
+      "upstream_source": "decomp/firmwares/xm1-150/app/storage/service/storage_file_open_execute.c",
+      "upstream_source_sha256": "b7a9ed88e8c0543911a78feec3a16ab7f2b886cf3e17ee12ae9f09f5a0b469ce",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0071f708",
+      "size": 16,
+      "name": "storage_current_drive_wrapper",
+      "upstream_label": "storage_current_drive_wrapper",
+      "upstream_nonmatching": false,
+      "stock_sha256": "41d27d49ec2b62a5818d682c2ed90755eb70c100dfab07e454ba73d938f3c73a",
+      "upstream_source": "decomp/firmwares/xm1-150/app/storage/service/storage_drive_current_wrapper.c",
+      "upstream_source_sha256": "f657d6202857124c76ca8780a06fb41fb26491a562c7fc2653be31c40503a25c",
+      "referenced_by": [
+        "RecipeBankCases.hs",
+        "RecipeBankUiCases.hs",
+        "recipe_bank_storage.c"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0071fa9c",
+      "size": 124,
+      "name": "storage_close_request",
+      "upstream_label": "storage_close_request",
+      "upstream_nonmatching": false,
+      "stock_sha256": "ad0cd75cd10a1f64de06cd015912618eca311803670a014bda7a0ec62372d7ce",
+      "upstream_source": "decomp/firmwares/xm1-150/app/storage/service/storage_device_routes.c",
+      "upstream_source_sha256": "010029d38a528a3ae34aafb3458e05f5905b337d960e11579ce5fc1b3e20e852",
+      "referenced_by": [
+        "BuildRecipeBank.hs",
+        "RecipeBankTests.hs",
+        "recipe-bank-model.c",
+        "recipe_bank_ui.h"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x007211d4",
+      "size": 200,
+      "name": "storage_send_command",
+      "upstream_label": "storage_send_command",
+      "upstream_nonmatching": false,
+      "stock_sha256": "055bebfd49d1527f276aa0335c3d0f30b0e21e91413330f39a590ec6f82ddb94",
+      "upstream_source": "decomp/firmwares/xm1-150/app/storage/service/storage_send_command.c",
+      "upstream_source_sha256": "0d91212402607f374707b5e604487587fa4bd0771dfcd801bc3c1e83bd7805d7",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00722054",
+      "size": 292,
+      "name": "app_copy_bytes",
+      "upstream_label": "app_copy_bytes",
+      "upstream_nonmatching": false,
+      "stock_sha256": "fdd89402855fb6d349f227be3f77f6d84336f1dfd1ff5e4ffe5bb88e27d8187f",
+      "upstream_source": "decomp/firmwares/xm1-150/app/runtime/copy_bytes.c",
+      "upstream_source_sha256": "b187579de8120b25d3650aafaa75334f361ea2055daad4f59ad00b9d6a8d5f7e",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs",
+        "ClassicChromeSiteCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x007221a0",
+      "size": 40,
+      "name": "fill_u32",
+      "upstream_label": "fill_u32",
+      "upstream_nonmatching": false,
+      "stock_sha256": "c129dcbee17753f3a8c22b072f38acfbfa7aa7e3dabf88b8adde1f0c5099b870",
+      "upstream_source": "decomp/firmwares/xm1-150/app/runtime/byte_strings.c",
+      "upstream_source_sha256": "4a6e42fdae6eee4a253d345e2f54d45e88f50f4321491901ddd879d52f901a5e",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs",
+        "ClassicChromeSiteCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x007221c8",
+      "size": 80,
+      "name": "fill_bytes",
+      "upstream_label": "fill_bytes",
+      "upstream_nonmatching": false,
+      "stock_sha256": "95075b7d736be75661473a2b8d814e2e3b0335d6dd106d90052d1877e1ebf4cf",
+      "upstream_source": "decomp/firmwares/xm1-150/app/runtime/byte_strings.c",
+      "upstream_source_sha256": "4a6e42fdae6eee4a253d345e2f54d45e88f50f4321491901ddd879d52f901a5e",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs",
+        "ClassicChromeSiteCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x00723cb8",
+      "size": 48,
+      "name": "dispatch_current_task",
+      "upstream_label": "dispatch_current_task",
+      "upstream_nonmatching": false,
+      "stock_sha256": "92681accf48089835d3c844a4fd99a7c3211ea1009cccd0f88273ce3de93a245",
+      "upstream_source": "decomp/firmwares/xm1-150/app/platform/osal/interface_dispatch_state.c",
+      "upstream_source_sha256": "dc2ceffadfd5ae5dd6fba5f911b876b2fee3c427bf81c07713fa69c0e37f412d",
+      "referenced_by": [
+        "RecipeBankCases.hs",
+        "RecipeBankUiCases.hs",
+        "recipe_bank_allowlist.json"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0072503c",
+      "size": 472,
+      "name": "dispatch_send_message",
+      "upstream_label": "dispatch_send_message",
+      "upstream_nonmatching": false,
+      "stock_sha256": "0c02b587b70e68d634585bde3cd9f34240350253bb3a4f22341f742ed7da8b37",
+      "upstream_source": "decomp/firmwares/xm1-150/app/platform/osal/dispatch/startup_requests.c",
+      "upstream_source_sha256": "631a7f38937b68db57372ebeca5a71051d8622cbd0b82a4489e1153e2c7f2cb5",
+      "referenced_by": [
+        "RecipeBankCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0072b3a4",
+      "size": 44,
+      "name": "device_apply_short_request",
+      "upstream_label": "device_apply_short_request",
+      "upstream_nonmatching": false,
+      "stock_sha256": "6283bfecf1c70728dfabbf8f984f1a55c4abdd6728c968f34b91cba82115307e",
+      "upstream_source": "decomp/firmwares/xm1-150/app/platform/osal/device_interface_locks.c",
+      "upstream_source_sha256": "3a5740d9a4010f397fa30683f82d1cb946227bd4e7d5a6615ef8568dd6bcafb0",
+      "referenced_by": [
+        "RecipeBankUiCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0072b3d0",
+      "size": 44,
+      "name": "device_apply_short_request_alternate",
+      "upstream_label": "device_apply_short_request_alternate",
+      "upstream_nonmatching": false,
+      "stock_sha256": "f11f0208b8da82a1d90ea71c3c2f3c64b17243b92039204c6c3cdd515760ccaf",
+      "upstream_source": "decomp/firmwares/xm1-150/app/platform/osal/device_interface_locks.c",
+      "upstream_source_sha256": "3a5740d9a4010f397fa30683f82d1cb946227bd4e7d5a6615ef8568dd6bcafb0",
+      "referenced_by": [
+        "recipe_bank_storage.c"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0073ec0c",
+      "size": 56,
+      "name": "configuration_read_key_bytes",
+      "upstream_label": "configuration_read_key_bytes",
+      "upstream_nonmatching": false,
+      "stock_sha256": "0ed227c442c732b7452a1736e277cf3b8eb60f2cf37842de818c4e17c9e433a3",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/configuration_lookup_cache.c",
+      "upstream_source_sha256": "8dae11ecd0729c4c9c9f19d9faab89b5791b0465ff4d1fada7f7b72504399abc",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0073ec44",
+      "size": 56,
+      "name": "configuration_read_key_bytes_copy",
+      "upstream_label": "configuration_read_key_bytes_copy",
+      "upstream_nonmatching": false,
+      "stock_sha256": "abdf71ef379a70917bb6887dfc8758e35452ee15e75dcb37f845e57e38b0e977",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/configuration_lookup_cache.c",
+      "upstream_source_sha256": "8dae11ecd0729c4c9c9f19d9faab89b5791b0465ff4d1fada7f7b72504399abc",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0073ec7c",
+      "size": 76,
+      "name": "configuration_read_key_words",
+      "upstream_label": "configuration_read_key_words",
+      "upstream_nonmatching": false,
+      "stock_sha256": "d90c5ca5a317e5e56d8d4dc8bd1272e17f877bc4d67865d9775518f7ec27f28d",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/configuration_lookup_cache.c",
+      "upstream_source_sha256": "8dae11ecd0729c4c9c9f19d9faab89b5791b0465ff4d1fada7f7b72504399abc",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0073ecc8",
+      "size": 76,
+      "name": "configuration_read_key_words_copy",
+      "upstream_label": "configuration_read_key_words_copy",
+      "upstream_nonmatching": false,
+      "stock_sha256": "c5395c3fdffcd7667b993fda4815caa42c5a482ae550922aaa509da51b87832c",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/configuration_lookup_cache.c",
+      "upstream_source_sha256": "8dae11ecd0729c4c9c9f19d9faab89b5791b0465ff4d1fada7f7b72504399abc",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0073ed6c",
+      "size": 40,
+      "name": "configuration_read_key_word",
+      "upstream_label": "configuration_read_key_word",
+      "upstream_nonmatching": false,
+      "stock_sha256": "8fe6ae097e559b2d55385146e6c3be9d7f66f4bc6bea065cf7c857ee481394ba",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/configuration_lookup_cache.c",
+      "upstream_source_sha256": "8dae11ecd0729c4c9c9f19d9faab89b5791b0465ff4d1fada7f7b72504399abc",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs",
+        "ClassicChromeSiteCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0073f338",
+      "size": 844,
+      "name": "configuration_encode_mode_identifier",
+      "upstream_label": "configuration_encode_mode_identifier",
+      "upstream_nonmatching": false,
+      "stock_sha256": "35a6ff20d41b95a861b359eca3c2f6e7651e13b287c1a1e605f8e699f46e649d",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/configuration_mode_codes.c",
+      "upstream_source_sha256": "0597e9c74fc3b1a0442a3cd28f3539fdabdce935f4bd83c0265f0d1a0d4b2144",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0073f760",
+      "size": 44,
+      "name": "configuration_select_type_mode_value",
+      "upstream_label": "configuration_select_type_mode_value",
+      "upstream_nonmatching": false,
+      "stock_sha256": "5a6b96604c6486b0ed6c49a3cda6cc3beb8100521c8bc4b677b00763a99f00be",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/configuration_lookup_cache.c",
+      "upstream_source_sha256": "8dae11ecd0729c4c9c9f19d9faab89b5791b0465ff4d1fada7f7b72504399abc",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0073f78c",
+      "size": 44,
+      "name": "configuration_select_type_mode_value_copy",
+      "upstream_label": "configuration_select_type_mode_value_copy",
+      "upstream_nonmatching": false,
+      "stock_sha256": "5a6b96604c6486b0ed6c49a3cda6cc3beb8100521c8bc4b677b00763a99f00be",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/configuration_lookup_cache.c",
+      "upstream_source_sha256": "8dae11ecd0729c4c9c9f19d9faab89b5791b0465ff4d1fada7f7b72504399abc",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0073f7b8",
+      "size": 48,
+      "name": "configuration_nonzero_within_limit",
+      "upstream_label": "configuration_nonzero_within_limit",
+      "upstream_nonmatching": false,
+      "stock_sha256": "b663effe8e5201abbe32f35b62976f95247f100c8153428f2437a0c60d71caed",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/configuration_lookup_cache.c",
+      "upstream_source_sha256": "8dae11ecd0729c4c9c9f19d9faab89b5791b0465ff4d1fada7f7b72504399abc",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0073fce0",
+      "size": 128,
+      "name": "configuration_threshold_band",
+      "upstream_label": "configuration_threshold_band",
+      "upstream_nonmatching": false,
+      "stock_sha256": "5fea2494e06ddd6ee9e6d5260800042bbb729b385dce72e719089608c5b7108a",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/configuration_lookup_cache.c",
+      "upstream_source_sha256": "8dae11ecd0729c4c9c9f19d9faab89b5791b0465ff4d1fada7f7b72504399abc",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0089bf0c",
+      "size": 68,
+      "name": "runtime_signed_wide_divmod",
+      "upstream_label": "runtime_signed_wide_divmod",
+      "upstream_nonmatching": false,
+      "stock_sha256": "86943266146f972287080efc12f9ff62da26a281a0211a5fd4cd81f032ddb737",
+      "upstream_source": "decomp/firmwares/xm1-150/app/runtime/libgcc/runtime_wide_division.c",
+      "upstream_source_sha256": "8099852aa967f3a1a4ee9ed26bfa0ab4a82e47e2cf3a04f2f7ca177ef329d795",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0089bf50",
+      "size": 64,
+      "name": "runtime_unsigned_wide_divmod",
+      "upstream_label": "runtime_unsigned_wide_divmod",
+      "upstream_nonmatching": false,
+      "stock_sha256": "134df30a3136a8972fc5d974d4b90f38ce670edb2d80f71d524850490a88725b",
+      "upstream_source": "decomp/firmwares/xm1-150/app/runtime/libgcc/runtime_wide_division.c",
+      "upstream_source_sha256": "8099852aa967f3a1a4ee9ed26bfa0ab4a82e47e2cf3a04f2f7ca177ef329d795",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0089cda4",
+      "size": 32,
+      "name": "malloc",
+      "upstream_label": "malloc",
+      "upstream_nonmatching": false,
+      "stock_sha256": "c8f3c0331edde7a69f511a93011822f5b33b62ef18d2eb3867c16dc164e55dce",
+      "upstream_source": "decomp/firmwares/xm1-150/app/runtime/libc/runtime_heap_api.c",
+      "upstream_source_sha256": "79fd7b423ec09a00d5f817d053e992545d5b97aacdb2ecb3480edc5e34d46db5",
+      "referenced_by": [
+        "ram_push_bootstrap.ld"
+      ]
+    },
+    {
+      "region": "image-4",
+      "unit": "main",
+      "address": "0x0089cdc4",
+      "size": 32,
+      "name": "free",
+      "upstream_label": "free",
+      "upstream_nonmatching": false,
+      "stock_sha256": "fca956deb0e0194c9086689ea6090abf69ccb238f58cceb7cf4cdc7f515d81f4",
+      "upstream_source": "decomp/firmwares/xm1-150/app/runtime/libc/runtime_heap_api.c",
+      "upstream_source_sha256": "79fd7b423ec09a00d5f817d053e992545d5b97aacdb2ecb3480edc5e34d46db5",
+      "referenced_by": [
+        "ram_push_bootstrap.ld"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d3d858",
+      "size": 60,
+      "name": "ui_execute_record_mode_request",
+      "upstream_label": "ui_execute_record_mode_request",
+      "upstream_nonmatching": false,
+      "stock_sha256": "635ee28964a507b3083a595ab1c06eff05714a97545862d664d907364747264b",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/record/services/event_services.c",
+      "upstream_source_sha256": "a04cfaecfc515685986781c3003913ec00e3074bcddbd611d8427fb17600b14f",
+      "referenced_by": [
+        "recipe-bank-ui-model.ld",
+        "recipe_bank_allowlist.json",
+        "recipe_bank_arm.S"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d52684",
+      "size": 24632,
+      "name": "ui_setting_availability",
+      "upstream_label": "ui_setting_availability",
+      "upstream_nonmatching": false,
+      "stock_sha256": "721ccc5d28a1c83c8bc54b1f3fdea33103bb71c47103532181f02492f908d287",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/availability.c",
+      "upstream_source_sha256": "d67f9432403df57c57485fdf5977abf85ff50706d0b7db82e68191a1d1417ae6",
+      "referenced_by": [
+        "ClassicChromeSiteCases.hs",
+        "RecipeBankCases.hs",
+        "RecipeBankUiCases.hs",
+        "recipe_bank_allowlist.json"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d5da2c",
+      "size": 44,
+      "name": "record_stage_submit_primary_request_helper_3",
+      "upstream_label": "record_stage_submit_primary_request_helper_3",
+      "upstream_nonmatching": false,
+      "stock_sha256": "108771c3537347ae3ae6b18c1ef65ab39555efcb294b69ff2cb20489ef043751",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/record/ui_record_playback_service_api.c",
+      "upstream_source_sha256": "cd8917d7054d433b32710e3dfb1df4b5451505eed851c4995e5bd14630b80032",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d5db1c",
+      "size": 460,
+      "name": "scan_expand_config_bytes_to_words_and_tail",
+      "upstream_label": "scan_expand_config_bytes_to_words_and_tail",
+      "upstream_nonmatching": false,
+      "stock_sha256": "2ed00f559152ba524e71107b70cbda90c0739f0aa8dfacae5261cb46cc44f1db",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/record/ui_record_playback_service_api.c",
+      "upstream_source_sha256": "cd8917d7054d433b32710e3dfb1df4b5451505eed851c4995e5bd14630b80032",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d5ddec",
+      "size": 196,
+      "name": "scan_select_level",
+      "upstream_label": "scan_select_level",
+      "upstream_nonmatching": false,
+      "stock_sha256": "40cc92c0330c11750a23b6d7ca134fdb93c00e639321a38db3ab36548a59328d",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_configuration_levels.c",
+      "upstream_source_sha256": "bde2435f45e50dd3b02cb489f96cc63e30cfc4472564d59ab6634af71c2dea5a",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d5e658",
+      "size": 20,
+      "name": "configuration_probe_cfg_byte_ba9d",
+      "upstream_label": "configuration_probe_cfg_byte_ba9d",
+      "upstream_nonmatching": false,
+      "stock_sha256": "e4ec6cd3c48d2858c1392b952f0fd1d374c0199049922f040451449b5cbc580a",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/record/ui_record_playback_service_api.c",
+      "upstream_source_sha256": "cd8917d7054d433b32710e3dfb1df4b5451505eed851c4995e5bd14630b80032",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d5f0d0",
+      "size": 36,
+      "name": "ui_request_configuration_read_key_bytes_8",
+      "upstream_label": "ui_request_configuration_read_key_bytes_8",
+      "upstream_nonmatching": false,
+      "stock_sha256": "0ff542625db8dceda76e62a042989ae6fee8aa3eb3526f546642b2b7ebec8e08",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/record/ui_record_playback_service_api.c",
+      "upstream_source_sha256": "cd8917d7054d433b32710e3dfb1df4b5451505eed851c4995e5bd14630b80032",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d60cc4",
+      "size": 152,
+      "name": "scan_compute_four_key_values",
+      "upstream_label": "scan_compute_four_key_values",
+      "upstream_nonmatching": false,
+      "stock_sha256": "dfe01200e8d8bf7e6a4ff8b31f49796600263486131849435fd55c8000751733",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_configuration_key_values.c",
+      "upstream_source_sha256": "75d6406de208e302882631031c924f9eeefa6c15fa87f352cbce333e24c32808",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs",
+        "ClassicChromeSiteCases.hs",
+        "ClassicChromeTests.hs",
+        "classic-chrome-stubs.ld",
+        "classic_chrome_ram_stock.ld"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d612b8",
+      "size": 80,
+      "name": "scan_caller_01095288_helper_15",
+      "upstream_label": "scan_caller_01095288_helper_15",
+      "upstream_nonmatching": false,
+      "stock_sha256": "9d8e12aaaf763f0e24338dc1c56be507032b76677d993939c384edf2e4fff03b",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/record/ui_record_playback_service_api.c",
+      "upstream_source_sha256": "cd8917d7054d433b32710e3dfb1df4b5451505eed851c4995e5bd14630b80032",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d61388",
+      "size": 60,
+      "name": "scan_read_configuration_flag8",
+      "upstream_label": "scan_read_configuration_flag8",
+      "upstream_nonmatching": false,
+      "stock_sha256": "14e9ef680b3aa646746cbce5a932e809c01bc80ac9bb990c310aa967aac3b461",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_configuration_flags.c",
+      "upstream_source_sha256": "afdd9f2fc1616ed033b9b79f046dadd0b0be1f1fef225a7118403ba3059cfec6",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d61a88",
+      "size": 28,
+      "name": "ui_request_configuration_read_key_bytes_4",
+      "upstream_label": "ui_request_configuration_read_key_bytes_4",
+      "upstream_nonmatching": false,
+      "stock_sha256": "e1fb42d3ace1ecfe54d863af3890ca2788cc0657aa9440794322ce979108a369",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/record/ui_record_playback_service_api.c",
+      "upstream_source_sha256": "cd8917d7054d433b32710e3dfb1df4b5451505eed851c4995e5bd14630b80032",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d61aa4",
+      "size": 36,
+      "name": "ui_request_configuration_read_key_bytes_5",
+      "upstream_label": "ui_request_configuration_read_key_bytes_5",
+      "upstream_nonmatching": false,
+      "stock_sha256": "802c184784ade24b3e7e61e9a21ac737feec80e634f9362c093426bfe4462d84",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/record/ui_record_playback_service_api.c",
+      "upstream_source_sha256": "cd8917d7054d433b32710e3dfb1df4b5451505eed851c4995e5bd14630b80032",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d6266c",
+      "size": 676,
+      "name": "scan_configuration_feature_enabled",
+      "upstream_label": "scan_configuration_feature_enabled",
+      "upstream_nonmatching": false,
+      "stock_sha256": "5fbe787c299a09a0e3f832702f409b1e3c004350e99ae04d582e82e873a70671",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_configuration_flags.c",
+      "upstream_source_sha256": "afdd9f2fc1616ed033b9b79f046dadd0b0be1f1fef225a7118403ba3059cfec6",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d64800",
+      "size": 64,
+      "name": "scan_copy_config_bytes_to_fields4f_52",
+      "upstream_label": "scan_copy_config_bytes_to_fields4f_52",
+      "upstream_nonmatching": false,
+      "stock_sha256": "91e4850c9d305f0c42b79d4db6733368b0f05101233803dc9702deaa471843a5",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/ui_settings_usb_scan_api.c",
+      "upstream_source_sha256": "8de64e839caa3927c97a086f8ac877b416d214f188eed0fe9d76a336d8cba7ba",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d64840",
+      "size": 16,
+      "name": "scan_forward_configuration48",
+      "upstream_label": "scan_forward_configuration48",
+      "upstream_nonmatching": false,
+      "stock_sha256": "ca71e2625d71f414fd7f008cf64c10693dbb641e9a72db28b82e16f568a71342",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_configuration_transfer.c",
+      "upstream_source_sha256": "d0772819b2999dbc49a2222e4dc6f176e980555e4129301a99cba33e51442e82",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d64850",
+      "size": 196,
+      "name": "scan_store_configuration_words",
+      "upstream_label": "scan_store_configuration_words",
+      "upstream_nonmatching": false,
+      "stock_sha256": "935546d687c590c49adf9fb1fa389a4f3b58b840794b7d1f33e1dd712c04b602",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_configuration_transfer.c",
+      "upstream_source_sha256": "d0772819b2999dbc49a2222e4dc6f176e980555e4129301a99cba33e51442e82",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d64914",
+      "size": 44,
+      "name": "scan_copy_configuration48",
+      "upstream_label": "scan_copy_configuration48",
+      "upstream_nonmatching": false,
+      "stock_sha256": "c18eaf0d177961ed4315f372b68b8661648a01488cb1afffb43629e70d7a212f",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_configuration_transfer.c",
+      "upstream_source_sha256": "d0772819b2999dbc49a2222e4dc6f176e980555e4129301a99cba33e51442e82",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d64940",
+      "size": 16,
+      "name": "scan_forward_configuration",
+      "upstream_label": "scan_forward_configuration",
+      "upstream_nonmatching": false,
+      "stock_sha256": "8d5a8a0e05610cd9e2c3cea79d95c583a23cd65f7f2e6de4034aaa92b72019b6",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_configuration_dispatch.c",
+      "upstream_source_sha256": "5ab56a21c67a03ef9b3e0abd730a915fda911af6e073f3d9896fe32d998e114d",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d64950",
+      "size": 100,
+      "name": "scan_copy_config_halfwords_to_fields80_90",
+      "upstream_label": "scan_copy_config_halfwords_to_fields80_90",
+      "upstream_nonmatching": false,
+      "stock_sha256": "3a0c6ecc772de4691f7c1d23b32d64928fa5b56f1c901ef87b35e67c200c51e2",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/ui_settings_usb_scan_api.c",
+      "upstream_source_sha256": "8de64e839caa3927c97a086f8ac877b416d214f188eed0fe9d76a336d8cba7ba",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d649b4",
+      "size": 52,
+      "name": "scan_copy_configuration24",
+      "upstream_label": "scan_copy_configuration24",
+      "upstream_nonmatching": false,
+      "stock_sha256": "53a0dc16b7385b8a59e084f2c4246397fa0fce095da1cc5bf7f018aed6f66891",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_configuration_transfer.c",
+      "upstream_source_sha256": "d0772819b2999dbc49a2222e4dc6f176e980555e4129301a99cba33e51442e82",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d653e8",
+      "size": 52,
+      "name": "scan_copy_config_halfword_block_via_scratch16",
+      "upstream_label": "scan_copy_config_halfword_block_via_scratch16",
+      "upstream_nonmatching": false,
+      "stock_sha256": "ffc3d76f0fcb739f020534deeced1d188b72c9bd4ba75b34bd6ba2f7e578c581",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/ui_settings_usb_scan_api.c",
+      "upstream_source_sha256": "8de64e839caa3927c97a086f8ac877b416d214f188eed0fe9d76a336d8cba7ba",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d655f4",
+      "size": 184,
+      "name": "scan_update_paired_record",
+      "upstream_label": "scan_update_paired_record",
+      "upstream_nonmatching": false,
+      "stock_sha256": "6fb895bd2df01c7a311608f92e368ae5603202c6457387a49438d743d314c902",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_export_records.c",
+      "upstream_source_sha256": "98c5b3a1e0d1d16716019a826d64717c48083dca3c533262eab79db473ddddbd",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d663e0",
+      "size": 20,
+      "name": "scan_apply_config_part_and_mark_bit30_if_flag12_helper_0",
+      "upstream_label": "scan_apply_config_part_and_mark_bit30_if_flag12_helper_0",
+      "upstream_nonmatching": false,
+      "stock_sha256": "06923057baae437a94c3b2f5904ebc40a3d725722555328069576625b3fe02c8",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/ui_settings_usb_scan_api.c",
+      "upstream_source_sha256": "8de64e839caa3927c97a086f8ac877b416d214f188eed0fe9d76a336d8cba7ba",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d66eac",
+      "size": 84,
+      "name": "scan_read_bounded_parameter",
+      "upstream_label": "scan_read_bounded_parameter",
+      "upstream_nonmatching": false,
+      "stock_sha256": "78d3619572be908d1bcb9e057a5695242dbcde160828a40e37233662c38effde",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_configuration_key_values.c",
+      "upstream_source_sha256": "75d6406de208e302882631031c924f9eeefa6c15fa87f352cbce333e24c32808",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d6703c",
+      "size": 100,
+      "name": "scan_copy_config_halfwords_to_fields2e_3e",
+      "upstream_label": "scan_copy_config_halfwords_to_fields2e_3e",
+      "upstream_nonmatching": false,
+      "stock_sha256": "266e5287ae392fc85a24fc2c37e0f2508b76419dfb43889625159f88b8a859b0",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/ui_settings_usb_scan_api.c",
+      "upstream_source_sha256": "8de64e839caa3927c97a086f8ac877b416d214f188eed0fe9d76a336d8cba7ba",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d675a4",
+      "size": 52,
+      "name": "scan_forward_block_to_config_fields2e_3e",
+      "upstream_label": "scan_forward_block_to_config_fields2e_3e",
+      "upstream_nonmatching": false,
+      "stock_sha256": "bdc73cb9af8ed07efa4c662b88987107fa87bcb2215cbf9c46cf40fda4b86b6d",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/ui_settings_usb_scan_api.c",
+      "upstream_source_sha256": "8de64e839caa3927c97a086f8ac877b416d214f188eed0fe9d76a336d8cba7ba",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d68a1c",
+      "size": 20,
+      "name": "ui_request_read_cfgdata_byte_a935",
+      "upstream_label": "ui_request_read_cfgdata_byte_a935",
+      "upstream_nonmatching": false,
+      "stock_sha256": "367f8a0fcf03f7951ba1c3eecc1363d505178e462dba24b6a703ef4d1ba5e3a1",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/ui_settings_usb_scan_api.c",
+      "upstream_source_sha256": "8de64e839caa3927c97a086f8ac877b416d214f188eed0fe9d76a336d8cba7ba",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d68a30",
+      "size": 20,
+      "name": "ui_request_read_cfgdata_byte_a936",
+      "upstream_label": "ui_request_read_cfgdata_byte_a936",
+      "upstream_nonmatching": false,
+      "stock_sha256": "ca14e7a55474efca7ecdb56f5a4258cad204c6c757fb6501c552b8659a41ab8d",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/ui_settings_usb_scan_api.c",
+      "upstream_source_sha256": "8de64e839caa3927c97a086f8ac877b416d214f188eed0fe9d76a336d8cba7ba",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d69c10",
+      "size": 116,
+      "name": "scan_blend_halfword_curves",
+      "upstream_label": "scan_blend_halfword_curves",
+      "upstream_nonmatching": false,
+      "stock_sha256": "367fe96ddf2672b1ef7588b5b6c02603bd4ced82ba33206424e61b601933edd1",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_halfword_blend.c",
+      "upstream_source_sha256": "fd8393863f06c34beca1c523ab55edb4e1e5d241cf5d2fbf43b7c51e02c9b9f8",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d69c84",
+      "size": 84,
+      "name": "scan_read_bounded_mode",
+      "upstream_label": "scan_read_bounded_mode",
+      "upstream_nonmatching": false,
+      "stock_sha256": "a08f6748abe82cbca4e821860603f32676e632bd4abd366603bab0dda2035cb9",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_configuration_key_values.c",
+      "upstream_source_sha256": "75d6406de208e302882631031c924f9eeefa6c15fa87f352cbce333e24c32808",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d6a3f0",
+      "size": 208,
+      "name": "scan_copy_export_words",
+      "upstream_label": "scan_copy_export_words",
+      "upstream_nonmatching": false,
+      "stock_sha256": "a6d0a186252c0de123e34255d1d185bb290d43e3d0b93c4a2f350dbd26b2dbee",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_configuration_transfer.c",
+      "upstream_source_sha256": "d0772819b2999dbc49a2222e4dc6f176e980555e4129301a99cba33e51442e82",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d77590",
+      "size": 1140,
+      "name": "scan_update_template_flags",
+      "upstream_label": "scan_update_template_flags",
+      "upstream_nonmatching": false,
+      "stock_sha256": "927f6aa52daa2cb741ad7e23fedc88358b81ec33fac71460887ecdb5ac482a54",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_template_flags.c",
+      "upstream_source_sha256": "68b956b5e15a37152ba7b74e5f32d4390d62b470ad21452f481b4747f4f7b185",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d77f60",
+      "size": 28,
+      "name": "scan_get_default_option",
+      "upstream_label": "scan_get_default_option",
+      "upstream_nonmatching": false,
+      "stock_sha256": "9b7a0e1349dfa7fed244840146a6a94806f4824fb637fcce8c73390742156002",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_option_validation.c",
+      "upstream_source_sha256": "68f8c0cfa609f29521142b235b9167bcd6df6e6029c20213316f8139f8fc4bad",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d77f7c",
+      "size": 20,
+      "name": "scan_set_default_option",
+      "upstream_label": "scan_set_default_option",
+      "upstream_nonmatching": false,
+      "stock_sha256": "9fdbadcc7c39c8eb93c8e46fe538551ebd6cc93a195f7d2d9134c99baaa48c1c",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_option_validation.c",
+      "upstream_source_sha256": "68f8c0cfa609f29521142b235b9167bcd6df6e6029c20213316f8139f8fc4bad",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d77fec",
+      "size": 20,
+      "name": "scan_set_checked_kind",
+      "upstream_label": "scan_set_checked_kind",
+      "upstream_nonmatching": false,
+      "stock_sha256": "c14c34bfc60edc2bc132b7953d8319f240efef0bd0868200cd8f05ab0a3954ec",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_option_validation.c",
+      "upstream_source_sha256": "68f8c0cfa609f29521142b235b9167bcd6df6e6029c20213316f8139f8fc4bad",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d7805c",
+      "size": 20,
+      "name": "scan_request_translate_checked_kind_100",
+      "upstream_label": "scan_request_translate_checked_kind_100",
+      "upstream_nonmatching": false,
+      "stock_sha256": "8097385654ad11ee55a240aeeee22778e7e7feaab8dfcbb81ef5c907dd34c5fd",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/core/ui_settings_usb_scan_api.c",
+      "upstream_source_sha256": "8de64e839caa3927c97a086f8ac877b416d214f188eed0fe9d76a336d8cba7ba",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d78088",
+      "size": 868,
+      "name": "scan_translate_configuration_kind",
+      "upstream_label": "scan_translate_configuration_kind",
+      "upstream_nonmatching": false,
+      "stock_sha256": "6377bec6d7aa3e05c87917fd754af451bb5e6107f9b7fb8264857e0af18b241a",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_kind_translation.c",
+      "upstream_source_sha256": "e210df0c83b9aa0c62c13766cab15aaa89b3c1304ff9d32bdf64bee6f68f2104",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d783ec",
+      "size": 20,
+      "name": "scan_set_option_e4",
+      "upstream_label": "scan_set_option_e4",
+      "upstream_nonmatching": false,
+      "stock_sha256": "f7d7b159c490595756e62cc80eb0bb1c5930dad448897996def6c8dfc5609711",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_option_validation.c",
+      "upstream_source_sha256": "68f8c0cfa609f29521142b235b9167bcd6df6e6029c20213316f8139f8fc4bad",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d78508",
+      "size": 20,
+      "name": "scan_set_option_108",
+      "upstream_label": "scan_set_option_108",
+      "upstream_nonmatching": false,
+      "stock_sha256": "c0add39251582b259d088d6af32106325d1767ecd4a578b974e6a58807da1829",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_option_adapters.c",
+      "upstream_source_sha256": "0bec3f879f6927af6745ee3f50e851337b9e4164f2b8071bde2c304bd4937fbe",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d78538",
+      "size": 20,
+      "name": "scan_set_option_110",
+      "upstream_label": "scan_set_option_110",
+      "upstream_nonmatching": false,
+      "stock_sha256": "739836929721772d6bf4aeb5f9fbc9f95387c131ed2a3bf10c6cff7d68ec5437",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_option_adapters.c",
+      "upstream_source_sha256": "0bec3f879f6927af6745ee3f50e851337b9e4164f2b8071bde2c304bd4937fbe",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs",
+        "ClassicChromeSiteCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d7854c",
+      "size": 92,
+      "name": "scan_translate_zero_one_three_four",
+      "upstream_label": "scan_translate_zero_one_three_four",
+      "upstream_nonmatching": false,
+      "stock_sha256": "32130e08262a4fd8386b2cac3cd8e3b96e0622db5d630e66f84906cb831b18be",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_option_adapters.c",
+      "upstream_source_sha256": "0bec3f879f6927af6745ee3f50e851337b9e4164f2b8071bde2c304bd4937fbe",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs",
+        "ClassicChromeSiteCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d786ac",
+      "size": 268,
+      "name": "scan_import_primary_level",
+      "upstream_label": "scan_import_primary_level",
+      "upstream_nonmatching": false,
+      "stock_sha256": "487998a267b193418891ea900287b8e7cfe34d2300f030102d4530a5c9b52ce3",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_level_import.c",
+      "upstream_source_sha256": "0a4f80319837a43b1c693ffcd5ebb3a6f374757a3a226896f404df527115c369",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d787dc",
+      "size": 160,
+      "name": "scan_import_level_value",
+      "upstream_label": "scan_configuration_import:scan_import_level_value",
+      "upstream_nonmatching": false,
+      "stock_sha256": "ae2dd375e8d6652a4dfbd063df6c3c724a645671ca0c36b9cdb4786167b7d524",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_configuration_import.c",
+      "upstream_source_sha256": "65953f0d03e4ec43f5914fcca698fd9a00c85a90b7280565b66d589a182eda77",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d7887c",
+      "size": 308,
+      "name": "scan_import_level",
+      "upstream_label": "scan_import_level",
+      "upstream_nonmatching": false,
+      "stock_sha256": "1b7c00a773946d800e5a41defbcfbfab319e49fbfd6ea9cf9e071486c3f6d8ea",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_level_import.c",
+      "upstream_source_sha256": "0a4f80319837a43b1c693ffcd5ebb3a6f374757a3a226896f404df527115c369",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d78a10",
+      "size": 92,
+      "name": "scan_translate_small_kind",
+      "upstream_label": "scan_translate_small_kind",
+      "upstream_nonmatching": false,
+      "stock_sha256": "d8ffc1116d58e59401233e8b32b080cb422444102e52ea90d4c6f593a480b37d",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_option_adapters.c",
+      "upstream_source_sha256": "0bec3f879f6927af6745ee3f50e851337b9e4164f2b8071bde2c304bd4937fbe",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d78af0",
+      "size": 20,
+      "name": "scan_set_option_10c",
+      "upstream_label": "scan_set_option_10c",
+      "upstream_nonmatching": false,
+      "stock_sha256": "642e0cca11e572d71995430e7c0183fcd5ac563f4358bbbd8bc702116a530a97",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_option_validation.c",
+      "upstream_source_sha256": "68f8c0cfa609f29521142b235b9167bcd6df6e6029c20213316f8139f8fc4bad",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d78b7c",
+      "size": 92,
+      "name": "scan_translate_reversed_kind",
+      "upstream_label": "scan_translate_reversed_kind",
+      "upstream_nonmatching": false,
+      "stock_sha256": "c32820f9ae13880e4bb3e9d1c84cf731640a9fd21ef55e4fd12fddda862f54f8",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_option_adapters.c",
+      "upstream_source_sha256": "0bec3f879f6927af6745ee3f50e851337b9e4164f2b8071bde2c304bd4937fbe",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d78bd8",
+      "size": 20,
+      "name": "scan_set_option_114",
+      "upstream_label": "scan_set_option_114",
+      "upstream_nonmatching": false,
+      "stock_sha256": "c63427118516495d91da6400e1a3b64531bc80cd8cffbd582999f59fd3f684cb",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_option_adapters.c",
+      "upstream_source_sha256": "0bec3f879f6927af6745ee3f50e851337b9e4164f2b8071bde2c304bd4937fbe",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d78db8",
+      "size": 308,
+      "name": "scan_import_mode",
+      "upstream_label": "scan_import_mode",
+      "upstream_nonmatching": false,
+      "stock_sha256": "569a9cb562dcd09d4c1384a410a9b70b0d0d76365855383f3ca77c4dedf3cad6",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_import_mode.c",
+      "upstream_source_sha256": "1cf25ff52793bd0a0fefbbb2dcf570a417fc9f5ec546f051308cd59046946bfb",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d78f80",
+      "size": 28,
+      "name": "scan_set_option_1a4",
+      "upstream_label": "scan_set_option_1a4",
+      "upstream_nonmatching": false,
+      "stock_sha256": "7da98d1bcba97509e1ae3f3e4c41df601aaf0077af491ee04901c38763d04240",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_option_adapters.c",
+      "upstream_source_sha256": "0bec3f879f6927af6745ee3f50e851337b9e4164f2b8071bde2c304bd4937fbe",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d79030",
+      "size": 200,
+      "name": "scan_translate_option_kind",
+      "upstream_label": "scan_translate_option_kind",
+      "upstream_nonmatching": false,
+      "stock_sha256": "6c6e10eb3bab49ac5a2e66ab63aa50bdf5db3983e1bab0e68241014c76cb79e9",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_translate_option_kind.c",
+      "upstream_source_sha256": "b46ed6f98e66fdbe528aa414ec5927cd53bff1e513367e34ca3519d59f2b4434",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d7910c",
+      "size": 32,
+      "name": "scan_set_enabled_dc",
+      "upstream_label": "scan_set_enabled_dc",
+      "upstream_nonmatching": false,
+      "stock_sha256": "a98c02d1d4ffd88a4b771f0967baf3c9dcab04f89a7f923708dd3cf67682c49a",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_option_setters.c",
+      "upstream_source_sha256": "23290997df4a0da10e96dcc2f7e68b2250189f805c9305f44acc0cc7c624bada",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00d7912c",
+      "size": 32,
+      "name": "scan_set_enabled_e0",
+      "upstream_label": "scan_set_enabled_e0",
+      "upstream_nonmatching": false,
+      "stock_sha256": "1585e1c0ae89e95de7b83a8dfbddd8ad76bef83acefd6eb5bbbb73a5daa09a0c",
+      "upstream_source": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/scan_option_setters.c",
+      "upstream_source_sha256": "23290997df4a0da10e96dcc2f7e68b2250189f805c9305f44acc0cc7c624bada",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00e42414",
+      "size": 176,
+      "name": "record_map_mode",
+      "upstream_label": "record_map_mode",
+      "upstream_nonmatching": false,
+      "stock_sha256": "4a16bb016df1ca63208d9c884e9b6324b25703d5f5524a2ec13b78f00f3d9cb8",
+      "upstream_source": "decomp/firmwares/xm1-150/app/capture/reccont/reccont_native_group_mapping.c",
+      "upstream_source_sha256": "eecc56c1817837464a4fba6a0d3950b204561616602dca4951fcc4cf179dc0f1",
+      "referenced_by": [
+        "ClassicChromeIconCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00ef6964",
+      "size": 24,
+      "name": "profile_value_cell_zero1",
+      "upstream_label": "profile_value_cell_zero1",
+      "upstream_nonmatching": false,
+      "stock_sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/profile_value_queries.c",
+      "upstream_source_sha256": "fbd80b36111fd97182456f492eefe184ca121790793ea5bab837aea30cadef47",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "image-5",
+      "unit": "main",
+      "address": "0x00ef697c",
+      "size": 24,
+      "name": "profile_value_cell_zero2",
+      "upstream_label": "profile_value_cell_zero2",
+      "upstream_nonmatching": false,
+      "stock_sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543",
+      "upstream_source": "decomp/firmwares/xm1-150/app/settings/profile_value_queries.c",
+      "upstream_source_sha256": "fbd80b36111fd97182456f492eefe184ca121790793ea5bab837aea30cadef47",
+      "referenced_by": [
+        "ClassicChromeBuilderCases.hs"
+      ]
+    },
+    {
+      "region": "plain",
+      "unit": "overlay44",
+      "address": "0x011121d4",
+      "size": 408,
+      "name": "overlay_draw_grid_resource_with_mode",
+      "upstream_label": "overlay_draw_grid_resource_with_mode",
+      "upstream_nonmatching": false,
+      "stock_sha256": "3c8745b121b019912bbae041a75a61f50c6d48d87d45cc4099f03fdd6fbb7954",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/render/native_grid_resource_draw.c",
+      "upstream_source_sha256": "dc70b66ae9eaae11e8147a62dcb6bd47bff6b6c9b3c31968b403d5ecb88fcce4",
+      "referenced_by": [
+        "ClassicChromeIconCases.hs"
+      ]
+    },
+    {
+      "region": "plain",
+      "unit": "overlay44",
+      "address": "0x0111236c",
+      "size": 20,
+      "name": "overlay_draw_grid_resource",
+      "upstream_label": "overlay_draw_grid_resource",
+      "upstream_nonmatching": false,
+      "stock_sha256": "7c13a8e891ba222b614490080034dc0085b5d1957e18b931dd2d941a3268d130",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/render/overlay_drawing_api.c",
+      "upstream_source_sha256": "ef39088e138e79f8ff408d2cc6f1fadd8421723aca8f14a9b0ec1aed095fa0de",
+      "referenced_by": [
+        "recipe_bank_allowlist.json",
+        "recipe_bank_arm.S"
+      ]
+    },
+    {
+      "region": "plain",
+      "unit": "overlay44",
+      "address": "0x0111299c",
+      "size": 124,
+      "name": "overlay_get_resource_grid_extent",
+      "upstream_label": "overlay_get_resource_grid_extent",
+      "upstream_nonmatching": false,
+      "stock_sha256": "1ca29c05eba41f4c2d759686f4494213fdd84801ec8010a67157968240a32491",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/render/overlay_drawing_api.c",
+      "upstream_source_sha256": "ef39088e138e79f8ff408d2cc6f1fadd8421723aca8f14a9b0ec1aed095fa0de",
+      "referenced_by": [
+        "recipe_bank_allowlist.json",
+        "recipe_bank_arm.S"
+      ]
+    },
+    {
+      "region": "plain",
+      "unit": "overlay44",
+      "address": "0x01112b2c",
+      "size": 52,
+      "name": "overlay_select_panel_font",
+      "upstream_label": "overlay_select_panel_font",
+      "upstream_nonmatching": false,
+      "stock_sha256": "39e3e512d6ed86d96d1e7992f0218a3d11177be2a2f7430ef057053d8a8f1398",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/render/overlay_drawing_api.c",
+      "upstream_source_sha256": "ef39088e138e79f8ff408d2cc6f1fadd8421723aca8f14a9b0ec1aed095fa0de",
+      "referenced_by": [
+        "RecipeBankUiCases.hs",
+        "recipe_bank_allowlist.json",
+        "recipe_bank_arm.S"
+      ]
+    },
+    {
+      "region": "plain",
+      "unit": "overlay44",
+      "address": "0x011301ac",
+      "size": 72,
+      "name": "overlay_set_grid_text",
+      "upstream_label": "overlay_set_grid_text",
+      "upstream_nonmatching": false,
+      "stock_sha256": "535a195e97db486b328e60208c395277961ab2b8d5593832096bea3717b60e90",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/menus/text_grid_helpers.c",
+      "upstream_source_sha256": "86d1f8ffd181f10cd150050fe536d2a43ed098a34674ce2e6a7803d8840256e2",
+      "referenced_by": [
+        "recipe_bank_allowlist.json",
+        "recipe_bank_arm.S"
+      ]
+    },
+    {
+      "region": "plain",
+      "unit": "overlay44",
+      "address": "0x01137cf8",
+      "size": 52,
+      "name": "overlay_set_palette_components",
+      "upstream_label": "overlay_set_palette_components",
+      "upstream_nonmatching": false,
+      "stock_sha256": "c834d8ce9dedebf259d67758617a26f5be34fa4a8dac2c8ddf1a76f68d042e22",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/render/overlay_ui_task.c",
+      "upstream_source_sha256": "7e954755ab2a27555785ad241a7915dc8b1dbd8a922b08eeb1b6fc025299e71d",
+      "referenced_by": [
+        "recipe_bank_allowlist.json",
+        "recipe_bank_arm.S"
+      ]
+    },
+    {
+      "region": "plain",
+      "unit": "overlay44",
+      "address": "0x01138060",
+      "size": 60,
+      "name": "overlay_fill_grid_rectangle",
+      "upstream_label": "overlay_fill_grid_rectangle",
+      "upstream_nonmatching": false,
+      "stock_sha256": "40178135f049a8d1dd58cb8f56c5d2c2575fb3e232d694b8f0b6ac76862a3144",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/menus/text_grid_helpers.c",
+      "upstream_source_sha256": "86d1f8ffd181f10cd150050fe536d2a43ed098a34674ce2e6a7803d8840256e2",
+      "referenced_by": [
+        "recipe_bank_allowlist.json",
+        "recipe_bank_arm.S"
+      ]
+    },
+    {
+      "region": "plain",
+      "unit": "overlay44",
+      "address": "0x01179a50",
+      "size": 100,
+      "name": "ov48b_classify_resource",
+      "upstream_label": "ov48b_classify_resource",
+      "upstream_nonmatching": false,
+      "stock_sha256": "90efdc6784c283912624846f836cb9fe6813fd24229dcd9a514817a3ccd4ebd7",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/render/native_resource_classification.c",
+      "upstream_source_sha256": "013af782e4dba812cf864b34cbca1992467b91121b5ce5a80b582bb868df52ee",
+      "referenced_by": [
+        "ClassicChromeIconCases.hs"
+      ]
+    },
+    {
+      "region": "plain",
+      "unit": "overlay44",
+      "address": "0x01179b0c",
+      "size": 120,
+      "name": "ov48b_resource_text",
+      "upstream_label": "ov48b_resource_text",
+      "upstream_nonmatching": false,
+      "stock_sha256": "677cba6b04abd547d34a01e28085998cc0a2ecd201767b0124a0187f24b35968",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/render/native_resource_text.c",
+      "upstream_source_sha256": "76b34982c68543ee71a015bc778fa75c1a0ec50d4460771ac56c4f19387e31d2",
+      "referenced_by": [
+        "ClassicChromeIconCases.hs",
+        "ClassicChromeSiteCases.hs"
+      ]
+    },
+    {
+      "region": "plain",
+      "unit": "overlay44",
+      "address": "0x01179b84",
+      "size": 136,
+      "name": "ov48b_apply_palette_options",
+      "upstream_label": "ov48b_apply_palette_options",
+      "upstream_nonmatching": false,
+      "stock_sha256": "58115107fd0eb12f36748d24b3526043fdb599ebc7bc00c40ace991575b505a9",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/render/resource_palette_options.c",
+      "upstream_source_sha256": "18e8e20ce2755a560534db9786f413e2c797978d7257d8639266988eac4983cd",
+      "referenced_by": [
+        "ClassicChromeIconCases.hs"
+      ]
+    },
+    {
+      "region": "plain",
+      "unit": "overlay44",
+      "address": "0x0117deb0",
+      "size": 48,
+      "name": "ov48b_resource_record",
+      "upstream_label": "ov48b_resource_record",
+      "upstream_nonmatching": false,
+      "stock_sha256": "5948e448c84222773b802990d576816ad238f53238dd600fd75562344f1a7979",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/render/native_resource_record.c",
+      "upstream_source_sha256": "0edff340c66e66887fa18f9f8d00d3e787d1ee1168509e676d8c22fda09d590a",
+      "referenced_by": [
+        "ClassicChromeIconCases.hs"
+      ]
+    },
+    {
+      "region": "plain",
+      "unit": "overlay44",
+      "address": "0x0117e1b8",
+      "size": 1080,
+      "name": "ov48b_select_language_catalog",
+      "upstream_label": "ov48b_select_language_catalog",
+      "upstream_nonmatching": false,
+      "stock_sha256": "acec371650573dff67d5a48236e9dc641ae1ad6991c1a24d9c0bb087fe489567",
+      "upstream_source": "decomp/firmwares/xm1-150/app/ui/render/native_language_catalog.c",
+      "upstream_source_sha256": "9383c61b31f16723e95db5d135ca6cdf8b4b52eb3b9b2d281d6054cc6d870c9a",
+      "referenced_by": [
+        "ClassicChromeIconCases.hs"
+      ]
+    },
+    {
+      "region": "plain",
+      "unit": "overlay44",
+      "address": "0x0119eed8",
+      "size": 188,
+      "name": "overlay_font_raster_find_property",
+      "upstream_label": "overlay_font_raster_find_property",
+      "upstream_nonmatching": true,
+      "stock_sha256": "b38453c052a053e4e2af5e2c338804dd857dc35105f08a32cd4a5b5a0ebd2fe8",
+      "upstream_source": "decomp/firmwares/xm1-150/app/graphics/fonts/font_raster_find_property.c",
+      "upstream_source_sha256": "79935d6c2838c2f0c70cf095ea149a3416d303e9c6a8c943f89f75ee63b975fa",
+      "referenced_by": [
+        "ClassicChromeIconCases.hs"
+      ]
+    }
+  ]
+}

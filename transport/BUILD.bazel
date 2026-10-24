@@ -172,8 +172,9 @@ haskell_test(
 )
 
 # Each transfer makes up to five durable journal appends, its native-outcome
-# line among them; the 515-window sessions cost minutes of fsync work on a
-# disk-backed TEST_TMPDIR.
+# line among them. The 515-window sessions cost minutes of fsync on a
+# disk-backed scratch directory and about a second on tmpfs, where the test
+# puts its synthetic output.
 haskell_test(
     name = "log-tests",
     size = "large",

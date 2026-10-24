@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, classicChromeIconPayload, runRamPushE2E) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, classicChromeIconPayload, runRamPushE2E, warmAttachCheckpoint) where
 
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, try)
 import Control.Monad (forM, forM_, unless, when)
@@ -20,11 +20,14 @@ import Data.Int (Int32)
 import Data.Word (Word32)
 import Numeric (readHex, showFFloat, showHex)
 import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectory, setCurrentDirectory)
-import System.Environment (getExecutablePath)
+import System.Environment (getExecutablePath, lookupEnv)
 import System.FilePath ((</>))
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stdout)
 import System.Posix.Files (setFileMode)
+import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, routeKey, routeKeyHex)
+import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.UiTrajectory
+import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
 import EmulatorUsb
 import FujiAF.RamPush
 import FujiAF.Transport (ensurePrivateDirectory, realClock, writePrivateBytes)
@@ -55,6 +58,16 @@ data UiConversionProfile = StrictUiConversion | DeclaredUiCpuFallback deriving (
 -- through the cardless RAM-push bridge.
 data CardMode = CardBacked FilePath | Cardless deriving (Eq, Show)
 
+-- | The FujiMod RAM-push bridge (`emulation/fujimod-xm1`), its run document and the boot ROM.
+data FujiModBridge = FujiModBridge
+  { fujimodBridge :: FilePath
+  , fujimodRunDocument :: FilePath
+  , fujimodBootRom :: FilePath
+  } deriving (Eq, Show)
+
+-- | The engine behind the bridge protocol: the retained Python/native closure or jitl's FujiMod.
+data EmulationRuntime = RetainedRuntime | FujiModRuntime FujiModBridge deriving (Eq, Show)
+
 data E2ESettings = E2ESettings
   { relinkMode :: RelinkMode
   , bootMode :: BootMode
@@ -65,7 +78,28 @@ data E2ESettings = E2ESettings
   , attachHold :: AttachHold
   , flashUiConversion :: UiConversionProfile
   , emulationCardMode :: CardMode
+  , fixedSceneFrame :: Maybe FixedSceneFrame
+    -- | The card attach checkpoint key, which 'runRamPushE2E' sets.
+  , cardAttachKey :: Maybe RouteKey
+  , emulationRuntime :: EmulationRuntime
   }
+
+-- | The card attach checkpoint key: the staged guest state and the session's inputs.
+cardAttachRouteKey :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO RouteKey
+cardAttachRouteKey settings python runtime installedMedia adjustmentNand cardImage = do
+  unicorn <- lookupEnv "X70_UNICORN_LIBRARY" >>= maybe (ioError (userError "X70_UNICORN_LIBRARY is missing")) pure
+  guest <- guestState runtime (InterpreterExecutable python) (UnicornLibrary unicorn)
+  installed <- sha256File (runtime </> installedMedia)
+  adjustment <- sha256File adjustmentNand
+  card <- sha256File cardImage
+  pure (routeKey guest CardAttach (
+    [ "profile" .= String "firmware/x-m1/1.50/emulator-rec.json"
+    , "installed_dat" .= sha256Hex installed
+    , "adjustment_nand" .= sha256Hex adjustment
+    , "menu_sd_image" .= sha256Hex card ]
+    ++ [ "attach_hold_key" .= String "q" | attachHold settings == AttachHoldQ ]
+    ++ [ "ui_conversion_profile" .= String "declared-ui-cpu-fallback" | flashUiConversion settings == DeclaredUiCpuFallback ]
+    ++ [ "fixed_scene_frame" .= frame | Just (FixedSceneFrame frame) <- [fixedSceneFrame settings] ]))
 
 attachHoldArguments :: AttachHold -> [String]
 attachHoldArguments NoAttachHold = []
@@ -82,19 +116,35 @@ cardRecord mode = object
 
 -- | The bridge executable and its arguments for one boot of the session's inputs writing to `output`.
 sessionBridge :: E2ESettings -> FilePath -> FilePath -> FilePath -> BootMode -> FilePath -> IO (FilePath, [String])
-sessionBridge settings python installedMedia adjustmentNand boot output = case emulationCardMode settings of
-  CardBacked cardImage -> pure (python,
-    [ "tools/continue_rec_scanout.py"
-    , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
-    , "--installed-dat", installedMedia
-    , "--adjustment-nand", adjustmentNand
-    , "--menu-sd-image", cardImage
-    , "--menus"
-    , "--ram-push-server"
-    , "--output", output
-    , "--ram-push-checkpoints", checkpointRoot settings
-    ] ++ freshArguments ++ profileArguments ++ attachHoldArguments (attachHold settings))
-  Cardless -> do
+sessionBridge settings python installedMedia adjustmentNand boot output = case (emulationRuntime settings, emulationCardMode settings) of
+  (FujiModRuntime bridge, Cardless) -> do
+    require (attachHold settings == NoAttachHold) "the FujiMod RAM-push bridge holds no key across the attach edge"
+    require (null (fixedSceneFrame settings)) "the FujiMod RAM-push bridge takes no --fixed-scene-frame"
+    pure (fujimodBridge bridge,
+      [ "--run", fujimodRunDocument bridge
+      , "--boot-rom", fujimodBootRom bridge
+      , "--installed-dat", installedMedia
+      , "--adjustment-nand", adjustmentNand
+      , "--output", output
+      , "--ram-push-checkpoints", checkpointRoot settings
+      ] ++ freshArguments)
+  (FujiModRuntime _, CardBacked _) -> ioError (userError "the FujiMod RAM-push bridge runs only --cardless")
+  (RetainedRuntime, CardBacked cardImage) -> do
+    key <- maybe (ioError (userError "the card attach key is unset")) pure (cardAttachKey settings)
+    pure (python,
+      [ "tools/continue_rec_scanout.py"
+      , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
+      , "--installed-dat", installedMedia
+      , "--adjustment-nand", adjustmentNand
+      , "--menu-sd-image", cardImage
+      , "--menus"
+      , "--ram-push-server"
+      , "--output", output
+      , "--ram-push-checkpoints", checkpointRoot settings
+      , "--checkpoint-key", routeKeyHex key
+      , "--checkpoint-inputs", C.unpack (BL.toStrict (encode (routeKeyDocument key)))
+      ] ++ freshArguments ++ profileArguments ++ attachHoldArguments (attachHold settings) ++ frameArguments)
+  (RetainedRuntime, Cardless) -> do
     require (attachHold settings == NoAttachHold) "the cardless RAM-push bridge holds no key across the attach edge"
     bridge <- runfilesCardlessBridge
     pure (bridge,
@@ -103,12 +153,13 @@ sessionBridge settings python installedMedia adjustmentNand boot output = case e
       , "--adjustment-nand", adjustmentNand
       , "--output", output
       , "--ram-push-checkpoints", checkpointRoot settings
-      ] ++ freshArguments ++ profileArguments)
+      ] ++ freshArguments ++ profileArguments ++ frameArguments)
   where
     freshArguments = ["--fresh-boot" | boot == FreshBoot]
     profileArguments = case flashUiConversion settings of
       StrictUiConversion -> []
       DeclaredUiCpuFallback -> ["--ui-conversion-profile", "declared-ui-cpu-fallback"]
+    frameArguments = fixedSceneFrameArguments (fixedSceneFrame settings)
 
 payloadText :: Payload -> T.Text
 payloadText p = case payloadKind p of
@@ -312,10 +363,35 @@ installHostValue host = object
   , "heap_break_before" .= hostBreakBefore host
   , "heap_break_after" .= hostBreakAfter host ]
 
+-- | GIVEN with its card attach key, timed and printed; the cardless bridge keys its own.
+keyedSettings :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> IO E2ESettings
+keyedSettings given python runtime installedMedia adjustmentNand = case emulationCardMode given of
+  Cardless -> pure given
+  CardBacked cardImage -> do
+    started <- getMonotonicTime
+    key <- cardAttachRouteKey given python runtime installedMedia adjustmentNand cardImage
+    ended <- getMonotonicTime
+    putStrLn ("checkpoint key: " ++ routeKeyHex key ++ " in " ++ seconds (ended - started))
+    pure given { cardAttachKey = Just key }
+
+-- | Boots or restores the session's attach checkpoint, saving it on a cold boot, then stops.
+warmAttachCheckpoint :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+warmAttachCheckpoint given python installedMedia adjustmentNand output = do
+  hSetBuffering stdout LineBuffering
+  runtime <- getCurrentDirectory
+  settings <- keyedSettings given python runtime installedMedia adjustmentNand
+  (executable, arguments) <- sessionBridge settings python installedMedia adjustmentNand (bootMode settings) output
+  started <- getMonotonicTime
+  bracket (startEmulator executable runtime arguments (\_ -> pure (Nothing, ()))) (\(emulator, _, _) -> stopEmulator emulator) $
+    \(_, start, ()) -> do
+      ended <- getMonotonicTime
+      putStrLn ("attach checkpoint: " ++ show (bootStart start) ++ " in " ++ seconds (ended - started))
+      C.putStrLn (BL.toStrict (encode (startRecord start)))
+
 -- | Runs the whole trajectory in one process, or with `segmentSelection` each named segment (and
 -- what it requires) in its own process from the install checkpoint, under RECEIPT/segment-NAME.
 runRamPushE2E :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
-runRamPushE2E settings python workspace trajectoryFile installedMedia adjustmentNand receipt = do
+runRamPushE2E given python workspace trajectoryFile installedMedia adjustmentNand receipt = do
   hSetBuffering stdout LineBuffering
   trajectories <- B.readFile trajectoryFile
     >>= either (ioError . userError . ("invalid RAM-push e2e trajectories: " ++)) pure . decodeTrajectories
@@ -325,6 +401,7 @@ runRamPushE2E settings python workspace trajectoryFile installedMedia adjustment
     require (null entries) "RAM-push receipt directory must be fresh or empty"
     removeDirectory receipt
   runtime <- getCurrentDirectory
+  settings <- keyedSettings given python runtime installedMedia adjustmentNand
   -- Host RAM-push operations resolve workspace-relative builder paths.
   setCurrentDirectory workspace
   let session = case pushMode settings of

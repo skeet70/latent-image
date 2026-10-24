@@ -814,9 +814,11 @@ dependencies = [
 name = "fujimod-xm1"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "fujimod-catalog",
  "fujimod-emulator",
  "fujimod-emulator-cpu",
+ "fujimod-emulator-devices",
  "fujimod-emulator-exr2-board",
  "fujimod-emulator-exr2-plan",
  "fujimod-emulator-models",

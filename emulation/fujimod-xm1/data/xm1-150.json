@@ -807,16 +807,23 @@
           "irq1"
         ],
         "model": {
-          "irq": {
-            "core": 0,
-            "line": 67
+          "adapter": {
+            "implementation": "xm1-declared-ui-conversion",
+            "options": {
+              "irq": {
+                "Core": {
+                  "core": 0,
+                  "line": 67
+                }
+              },
+              "ram_bytes": 536870912
+            },
+            "references": {},
+            "wires": []
           },
-          "kind": "scaler",
-          "options": {
-            "completion_ticks": 2
-          }
+          "kind": "adapter"
         },
-        "name": "image_scaler",
+        "name": "ui_conversion",
         "windows": [
           {
             "base": 4294209536,
@@ -1398,10 +1405,52 @@
         "dependencies": [],
         "model": {
           "cable": "usb_cable",
-          "endpoints": null,
+          "endpoints": {
+            "irq": {
+              "Core": {
+                "core": 0,
+                "line": 84
+              }
+            },
+            "dma_irq": {
+              "Core": {
+                "core": 0,
+                "line": 85
+              }
+            },
+            "ram_bytes": 536870912
+          },
           "kind": "usb",
           "options": {
-            "endpoints": null
+            "endpoints": {
+              "transfer_ticks": 4,
+              "packet_bytes": 64,
+              "dma_limit": 1048576,
+              "out_endpoints": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  2,
+                  1
+                ]
+              ],
+              "in_endpoints": [
+                [
+                  128,
+                  0
+                ],
+                [
+                  129,
+                  1
+                ],
+                [
+                  131,
+                  2
+                ]
+              ]
+            }
           }
         },
         "name": "usb",
@@ -2549,6 +2598,10 @@
     }
   ],
   "adc": "adc",
+  "gpio": "serial_gpio",
+  "nand": "nand",
+  "usb": "usb",
+  "usb_cable": "usb_cable",
   "scanout": "scanout",
   "firmware": {
     "current_menu": 9794000,
@@ -2617,6 +2670,147 @@
         "low_tag": 14238,
         "high_tag": 14236
       }
-    ]
+    ],
+    "render": {
+      "copied_command": 22955728,
+      "packet_token": 22955730,
+      "initialized": 22955789,
+      "display_suppression": 22956064,
+      "sender_token": 21902012,
+      "consumer_token": 21902136,
+      "sender_command": 21902010,
+      "staged_render_command": 22955752,
+      "staged_render_token": 22955754,
+      "batch_busy": 9807516,
+      "batch_callback": 9807520,
+      "commands_dirty": 9807528,
+      "display_pending": 9807532,
+      "ui_pending": 9765112,
+      "ui_busy": 9765136,
+      "task_tables": [
+        [
+          0,
+          1074087440
+        ],
+        [
+          1,
+          1074087572
+        ]
+      ],
+      "graphics": "graphics",
+      "task_entries": [
+        12726112,
+        7153408,
+        7173440,
+        17862960
+      ]
+    },
+    "dial_push": {
+      "code": 43,
+      "row": 22,
+      "port": 0,
+      "pin": 10,
+      "pressed_high": false
+    },
+    "mode_dial": {
+      "channel": 3,
+      "running": [
+        "S",
+        "M",
+        "P",
+        "A",
+        "AUTO",
+        "C",
+        "Sports",
+        "Landscape",
+        "Portrait"
+      ],
+      "rows": [
+        {
+          "position": "S",
+          "code": 783,
+          "row": 24,
+          "low_tag": 14082,
+          "high_tag": 14080
+        },
+        {
+          "position": "P",
+          "code": 782,
+          "row": 25,
+          "low_tag": 14086,
+          "high_tag": 14084
+        },
+        {
+          "position": "SR+",
+          "code": 774,
+          "row": 26,
+          "low_tag": 14090,
+          "high_tag": 14088
+        },
+        {
+          "position": "AUTO",
+          "code": 770,
+          "row": 27,
+          "low_tag": 14094,
+          "high_tag": 14092
+        },
+        {
+          "position": "Adv.",
+          "code": 796,
+          "row": 28,
+          "low_tag": 14098,
+          "high_tag": 14096
+        },
+        {
+          "position": "SP",
+          "code": 772,
+          "row": 29,
+          "low_tag": 14102,
+          "high_tag": 14100
+        },
+        {
+          "position": "Sports",
+          "code": 777,
+          "row": 30,
+          "low_tag": 14106,
+          "high_tag": 14104
+        },
+        {
+          "position": "Landscape",
+          "code": 776,
+          "row": 31,
+          "low_tag": 14110,
+          "high_tag": 14108
+        },
+        {
+          "position": "Portrait",
+          "code": 775,
+          "row": 32,
+          "low_tag": 14114,
+          "high_tag": 14112
+        },
+        {
+          "position": "C",
+          "code": 791,
+          "row": 33,
+          "low_tag": 14118,
+          "high_tag": 14116
+        },
+        {
+          "position": "M",
+          "code": 786,
+          "row": 34,
+          "low_tag": 14122,
+          "high_tag": 14120
+        },
+        {
+          "position": "A",
+          "code": 784,
+          "row": 35,
+          "low_tag": 14126,
+          "high_tag": 14124
+        }
+      ]
+    }
   }
 }

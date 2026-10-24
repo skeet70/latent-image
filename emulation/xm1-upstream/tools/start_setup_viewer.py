@@ -25,6 +25,8 @@ def main():
     parser.add_argument('--ui-conversion-profile', type=UIConversionProfile.parse,
                         choices=tuple(UIConversionProfile),
                         help='Opt-in stock CPU conversion contract; silicon behavior is unmeasured')
+    parser.add_argument('--fixed-scene-frame', type=int,
+                        help='Pin every scene render to this positive frame index for the run')
     parser.add_argument('--save-snapshot', type=Path)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--bind', default='127.0.0.1')
@@ -62,6 +64,9 @@ def main():
         document = json.loads(args.profile.read_text())
         if document.get('firmware_id'):
             os.environ['XM1_VIEWER_INITIAL_FIRMWARE'] = document['firmware_id']
+    if args.fixed_scene_frame is not None:
+        from emulator.virtual_source import select_fixed_scene_frame
+        select_fixed_scene_frame(args.fixed_scene_frame)
 
     from emulator.boot import make_board
     from emulator.server import make_menu_server
