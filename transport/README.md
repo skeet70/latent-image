@@ -277,7 +277,7 @@ Both are tagged `manual`. `ram-push-review-verdicts` reports every pin and the c
 
 ### Current state
 
-Stored `0xf7` is `0x00` on the body since 2026-10-21 (E-STORED-F7-RESTORE-RUN-150), so an ordinary boot offers PTP and no `ff80` route. `read-ram`, `ram-alloc`, `ram-push`, `ram-unload` and `ram-free` in an ordinary boot first need `commit-f7-enable` in a jig session, under its own go.
+Stored `0xf7` is `0x01` on the body since 2026-10-22 (E-STORED-F7-REENABLE-RUN-150), so a plain attach in an ordinary boot gives `ff80`. Without it, `read-ram`, `ram-alloc`, `ram-push`, `ram-unload` and `ram-free` in an ordinary boot first need `commit-f7-enable` in a jig session, under its own go.
 
 With the USB personality toggle installed (RC0+toggle, reports/usb-personality-toggle.md), a cable attach with Q held flips RAM `0xf7` for that boot and gives `ff80` with stored `0x00`. In such a Q boot only the operations that read the byte without writing it (`read-ram`, `ram-alloc`, `ram-push`, `ram-unload`, `ram-free`) are allowed. The gate-writing operations (`probe-ram`, `probe-area2`, `probe-straps`, `probe-code`, `probe-ownership`, `probe-routes`, `dump-ram`, `arm-auto-act`) and both `commit-f7` operations run only in jig boots: the gate writers restore RAM `0xf7` to `00` with the service transport still running, an unanalysed detach sequence, and a whole-area commit stores the RAM cache verbatim, so it would persist a flipped byte.
 
