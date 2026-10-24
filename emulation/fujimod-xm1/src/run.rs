@@ -1,6 +1,7 @@
 //! The X-M1 run document and the strict FujiMod session it opens.
 
 use crate::guest::FirmwareFacts;
+use crate::provenance::{Guest, Provenance, RamFact, plan_windows};
 use fujimod_catalog::configuration::{
     GeneratedSceneAsset, ResolvedConfiguration, RunEngine, RunExecution, RunExecutionMode,
 };
@@ -85,6 +86,12 @@ pub struct RunDocument {
     pub adc: NodeName,
     pub scanout: NodeName,
     pub firmware: FirmwareFacts,
+    /// Where each plan window and RAM fact address comes from.
+    pub provenance: Provenance,
+}
+
+fn guest(address: Address) -> Result<Guest, String> {
+    u32::try_from(address.0).map(Guest).map_err(|_| "RAM fact address exceeds 32 bits".into())
 }
 
 impl RunDocument {
@@ -93,6 +100,14 @@ impl RunDocument {
         if document.schema != 1 {
             return Err("run document schema must be 1".into());
         }
+        let firmware = &document.firmware;
+        let ram = [
+            (RamFact::CurrentMenu, guest(firmware.current_menu)?),
+            (RamFact::CalibrationPointer, guest(firmware.calibration_pointer)?),
+            (RamFact::ScannerRegistered, guest(firmware.scanner_registered)?),
+            (RamFact::KeyTable, guest(firmware.key_table.base)?),
+        ];
+        document.provenance.validate(&plan_windows(document.devices.get())?, &ram)?;
         Ok(document)
     }
 }
