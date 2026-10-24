@@ -1,11 +1,13 @@
 -- Offline rehearsals construct no native provider. Bound operations run
 -- against scripted replies; unbound RAM-push operations prove their
 -- pre-provider refusal.
-module FujiAF.Rehearsal (rehearseIdentify, rehearseReadConfig, rehearseEndSetting, rehearseProbeRam, rehearseReadLog, rehearseProbeBootRom, rehearseProbeArea2, rehearseProbeStraps, rehearseProbeCode, rehearseProbeOwnership, rehearseProbeRoutesFixed, rehearseProbeRoutesDerived, rehearseDumpRam, rehearseReadMedia, rehearseArmAutoAct, rehearseCommitF7, rehearseReadRam, rehearseRamAlloc, rehearseRamPush, rehearseRamFree, rehearseRamUnload, ScriptedOperation (..), scriptedApi, rehearsalCandidate, identifyScript, readConfigScript, endSettingScript, probeRamScript, readLogScript, probeBootRomScript, probeArea2Script, probeStrapsScript, probeCodeScript, probeOwnershipScript, probeRoutesScript, dumpRamScript, readMediaScript, armAutoActScript, commitF7Script, readRamScript) where
+module FujiAF.Rehearsal (rehearseIdentify, rehearseReadConfig, rehearseEndSetting, rehearseProbeRam, rehearseReadLog, rehearseProbeBootRom, rehearseProbeArea2, rehearseProbeStraps, rehearseProbeCode, rehearseProbeOwnership, rehearseProbeRoutesFixed, rehearseProbeRoutesDerived, rehearseDumpRam, rehearseReadMedia, rehearseArmAutoAct, rehearseCommitF7, rehearseReadRam, rehearseReadBulk, rehearseRamAlloc, rehearseRamPush, rehearseRamFree, rehearseRamUnload, ScriptedOperation (..), scriptedApi, rehearsalCandidate, identifyScript, readConfigScript, endSettingScript, probeRamScript, readLogScript, probeBootRomScript, probeArea2Script, probeStrapsScript, probeCodeScript, probeOwnershipScript, probeRoutesScript, dumpRamScript, readMediaScript, armAutoActScript, commitF7Script, readRamScript, BulkCamera (..), stockBulkCamera, bulkRehearsalMemory, bulkCameraDevice, bulkCameraApi) where
 
 import Control.Exception (bracket)
 import Control.Monad (forM_, unless)
+import Data.Bits ((.&.), shiftR, xor)
 import Data.IORef
+import Data.Maybe (isNothing)
 import Data.Word (Word8)
 import System.Directory (createDirectory, getTemporaryDirectory, removeDirectoryRecursive)
 import System.FilePath ((</>))
@@ -27,6 +29,7 @@ import FujiAF.Ownership
 import FujiAF.Routes
 import FujiAF.StoredGate
 import FujiAF.ReadRam
+import FujiAF.ReadBulk
 import FujiAF.RamPush
 import qualified FujiAF.ArmAutoAct as Arm
 import qualified FujiAF.Broker as P
@@ -901,3 +904,114 @@ rehearseReadRam watch = do
   let clock = TimedClock ((+) <$> getMonotonicTimeNSec <*> readIORef skipped)
                          (\ms -> modifyIORef' skipped (+ fromIntegral ms * 1000000))
   runRehearsal clock (readRamScript watch)
+
+-- The read-bulk camera. It answers C0, the tag-4 identity, config function 2,
+-- the 0x450006 tag-0x80 query, 0x200001 function 2 and E1 from its memory and
+-- the source pair the query publishes at 0x01469878, and refuses any other
+-- frame or a transfer out of protocol order.
+data BulkCamera = BulkCamera
+  { bulkCameraGate :: Word8
+  , bulkCameraPointer :: Int
+  , bulkCameraCapacity :: Int
+  , bulkCameraMemory :: Int -> Word8
+  }
+
+bulkRehearsalMemory :: Int -> Word8
+bulkRehearsalMemory address = fromIntegral ((address `xor` (address `shiftR` 8) `xor` (address `shiftR` 16) `xor` (address `shiftR` 24)) .&. 0xff)
+
+stockBulkCamera :: BulkCamera
+stockBulkCamera = BulkCamera 1 bulkSourcePointer 0x100000 bulkRehearsalMemory
+
+data BulkCameraState = BulkCameraState
+  { pendingRequest :: Maybe Int, lastRequest :: [Word8], pendingReply :: Maybe [Word8], publishedSource :: Maybe (Int,Int) }
+
+bulkCameraDevice :: BulkCamera -> IO (P.Transfer -> IO (Int,[Word8]))
+bulkCameraDevice camera = do
+  state <- newIORef (BulkCameraState Nothing [] Nothing Nothing)
+  pure $ \packet -> do
+    st <- readIORef state
+    let refuse reason = P.reject ("bulk camera: "++reason++": "++show packet)
+    case packet of
+      P.ControlWrite 0x43 0 0 0 frame@(op:_) | length frame == 12 -> do
+        unless (isNothing (pendingRequest st) && isNothing (pendingReply st)) (refuse "control frame while a transfer is pending")
+        let be32 at = foldl (\acc byte -> acc*256 + fromIntegral byte) 0 (take 4 (drop at frame)) :: Int
+            be16 at = fromIntegral (frame!!at)*256 + fromIntegral (frame!!(at+1)) :: Int
+            session = be16 10 == rehearsalSid
+        next <- case op of
+          0xc0 -> pure st { pendingReply = Just openReply }
+          0xd0 | session -> pure st { pendingRequest = Just (be16 8) }
+          0xd1 | session -> do
+            (reply,source) <- either refuse pure (bulkD1Reply camera (publishedSource st) (lastRequest st))
+            unless (length reply == be16 8) (refuse ("D1 length differs from the "++show (length reply)++"-byte reply"))
+            pure st { pendingReply = Just reply, publishedSource = source }
+          0xe1 | session && be32 6 > 0 -> case publishedSource st of
+            Nothing -> refuse "E1 before a tag-0x80 query"
+            Just (pointer,capacity) ->
+              let start = (pointer + be32 2) .&. 0xffffffff
+              in pure st { pendingReply = Just [ bulkCameraMemory camera ((start + i) .&. 0xffffffff) | i <- [0 .. min (be32 6) capacity - 1] ] }
+          0xc4 | session -> pure st { pendingReply = Just [0,0] }
+          _ -> refuse "unknown control frame"
+        writeIORef state next
+        pure (12,[])
+      P.BulkOut 2 bytes -> case pendingRequest st of
+        Just count | count == length bytes -> writeIORef state st { pendingRequest = Nothing, lastRequest = bytes } >> pure (count,[])
+        _ -> refuse "bulk OUT without a matching D0"
+      P.BulkIn 0x81 count -> case pendingReply st of
+        Just reply -> do
+          writeIORef state st { pendingReply = Nothing }
+          let sent = take count reply
+          pure (length sent, sent)
+        Nothing -> refuse "bulk IN without a reply"
+      _ -> refuse "unsupported transfer"
+
+-- The D1 reply to the last request and the source pair after it.
+bulkD1Reply :: BulkCamera -> Maybe (Int,Int) -> [Word8] -> Either String ([Word8], Maybe (Int,Int))
+bulkD1Reply camera source request
+  | request == P.identityPacket = Right ([0,0,0x15,0] ++ replicate 12 0 ++ [88,0,45,0,77,0,49,0] ++ replicate 104 0, source)
+  | request == readRequestFrame gateWindow = Right (probeGateWindowReply (gateRehearsalPayload (bulkCameraGate camera)), source)
+  | request == bulkQueryFrame =
+      Right (concatMap word32le [bulkQueryOpcode,0,0,0,0,bulkCameraCapacity camera,0,0], Just (bulkCameraPointer camera, bulkCameraCapacity camera))
+  | length request == debugRequestBytes && word32At 0 request == debugOpcode && word32At 0x10 request == debugFunction =
+      let address = word32At 0x1c request
+          size = word32At 0x20 request
+          published = maybe (replicate bulkSourceStateBytes 0) (\(pointer,capacity) -> word32le pointer ++ word32le capacity) source
+          byteAt a | a >= bulkSourceStateAddress && a < bulkSourceStateAddress + bulkSourceStateBytes = published !! (a - bulkSourceStateAddress)
+                   | otherwise = bulkCameraMemory camera a
+      in if bulkCameraGate camera == 0
+           then Right (concatMap word32le [debugOpcode,1,0xffff,0,debugFunction,0,0,address,size] ++ replicate size 0, source)
+           else Right (routeChunkReply address size (map byteAt [address .. address+size-1]), source)
+  | otherwise = Left "unknown D0 request"
+
+bulkCameraApi :: BulkCamera -> IO UsbApi
+bulkCameraApi camera = do
+  device <- bulkCameraDevice camera
+  pure (UsbApi
+    (\_ -> pure ())
+    (\_ -> pure [rehearsalCandidate])
+    (\_ _ -> pure ())
+    (\interface _ -> unless (interface == 0) (P.reject "interface not allowed"))
+    (\packet _ -> device packet)
+    (\interface _ -> unless (interface == 0) (P.reject "interface not allowed"))
+    (\_ -> pure ())
+    (\_ -> pure ()))
+
+-- Against the bulk camera, whose memory byte at A is the xor of A's bytes.
+rehearseReadBulk :: BulkWindow -> IO ()
+rehearseReadBulk window = do
+  putStrLn "rehearsal: read-bulk; no native provider, USB enumeration or camera execution"
+  putStrLn ("synthetic SID: 0x1234; IN endpoint: 0x81; OUT endpoint: 0x02; transfer budget: " ++ show transferTimeoutMs ++ " ms")
+  let frames =
+        [ P.controlTransfer (P.control 0xc0 8 0), P.BulkIn 0x81 8 ]
+        ++ exchange 32 P.identityPacket 128
+        ++ exchange readRequestBytes (readRequestFrame gateWindow) readReplyBytes
+        ++ exchange bulkQueryRequestBytes bulkQueryFrame bulkQueryReplyBytes
+        ++ exchange debugRequestBytes (routeRequestFrame bulkSourceStateAddress bulkSourceStateBytes) (routeReplyBytes bulkSourceStateBytes)
+        ++ concat [ [bulkCommandFrame rehearsalSid chunk, P.BulkIn 0x81 (snd chunk)] | chunk <- bulkChunks window ]
+        ++ [ P.controlTransfer (P.control 0xc4 2 rehearsalSid), P.BulkIn 0x81 2 ]
+      exchange requestBytes frame replyBytes =
+        [ P.controlTransfer (P.control 0xd0 requestBytes rehearsalSid), P.BulkOut 2 frame
+        , P.controlTransfer (P.control 0xd1 replyBytes rehearsalSid), P.BulkIn 0x81 replyBytes ]
+  forM_ (zip [1::Int ..] frames) $ \(index,packet) -> putStrLn (show index ++ ". " ++ describeTransfer packet)
+  api <- bulkCameraApi stockBulkCamera
+  report <- withRehearsalDirectory (runReadBulk window realClock api)
+  putStrLn ("rehearsed " ++ readBulkResultLine report)

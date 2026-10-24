@@ -117,11 +117,16 @@ int fuji_usb_claim(void) {
     if (!result) claimed=1;
     return result;
 }
+/* 1 when a transfer of this kind and size passes the size gate: a bulk IN
+   (kind 2) up to 0x100000 bytes, one read-bulk chunk, every other kind 292. */
+int fuji_usb_transfer_size_admitted(int kind,int size) {
+    return size>=1 && size<=(kind==2 ? 0x100000 : 292);
+}
 /* Returns API status separately from transferred count, including partial errors.
    33000 ms is transferCeilingMs, the held commit-f7 trigger reply. */
 int fuji_usb_transfer(int kind,int endpoint,unsigned char *bytes,int size,unsigned int timeout,int *transferred) {
     *transferred=0;
-    if (!handle || !claimed || timeout==0 || timeout>33000 || size<1 || size>292) return -114;
+    if (!handle || !claimed || timeout==0 || timeout>33000 || !fuji_usb_transfer_size_admitted(kind,size)) return -114;
     if (kind==0) {
         if (size!=12) return -115;
         int result=p_control_transfer(handle,0x43,0,0,0,bytes,(uint16_t)size,timeout);

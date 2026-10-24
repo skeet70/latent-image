@@ -31,6 +31,7 @@ import FujiAF.Native (NativeCalls (..), nativeApiWith)
 import FujiAF.RamPush
 import FujiAF.Read (ReadOracle (..), ReadPlan (..), ReadWindow (..))
 import FujiAF.ReadRam (mkPacing, mkRamWatch)
+import FujiAF.ReadBulk (mkBulkWindow, readBulkResultLine, runReadBulk)
 import FujiAF.Rehearsal
 import FujiAF.Routes (RouteWindow (..), routeFixedWindows)
 import FujiAF.StoredGate (CommitDirection (..), mkReferenceWindow)
@@ -192,6 +193,15 @@ ramSessions directory provider = inSession directory $ \root -> do
   freed <- session "free" >>= runRamFree freeRetained clock freeApi
   pure (show (unloaded, freed))
 
+-- read-bulk over two and a half chunks of the bulk camera.
+bulkSession :: FilePath -> Provider -> IO Run
+bulkSession directory provider = do
+  device <- bulkCameraDevice stockBulkCamera
+  api <- provider rehearsalCandidate device
+  clock <- steppingClock
+  window <- either fail pure (mkBulkWindow 0x00bf1a00 0x280000)
+  inSession directory (\dir -> readBulkResultLine <$> runReadBulk window clock api dir)
+
 -- The first file line or outcome where the runs differ; a file one run lacks
 -- reads as empty.
 firstDifference :: Run -> Run -> Maybe String
@@ -240,4 +250,5 @@ main = do
   flip finally (removeDirectoryRecursive root) $ do
     forM_ operations $ \operation -> compareRuns (scriptedName operation) (scripted session operation)
     compareRuns "ram-alloc, ram-push, ram-unload, ram-free" (ramSessions session)
+    compareRuns "read-bulk" (bulkSession session)
   putStrLn "provider parity: ok"
