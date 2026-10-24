@@ -763,3 +763,34 @@ Observed 2026-10-22 (emulated), installed NAND `f7-1.nand` (`baf47535...4aa0`, s
 In both runs the first header-parser call (return address `0x00ec85a0`) leaves the flag word at 3, from 0, at about 29.3 M instructions; the completion runs at 1,943,243,929 instructions, followed by `0x0069fe20(0xff)` (return address `0x00db922c`) and the commit call at `0x00db932c`. The cache holds `0xf7 = 1` on the updater screen and 0 after the commit. The rebooted image carries the toggle hook word `0xebf492d3` at `0x00ecf900` and reaches the shooting screen with mode word 3 (first start). The RC0 exported NAND hash repeats across two runs.
 
 Scope: the updater runs from the recovery card's RAM copy of the DAT being installed, not from the firmware installed on the NAND. The installed NAND is the synthetic stored-f7 template (template adjustment content with only `0xf7` set), with ideal NAND and no bad blocks. The updater's body, version and completion text is not rendered by the model.
+
+## Candidate verification across recorded routes
+
+`//emulation:verify-candidate` runs every recorded acceptance route through its existing command, compares each route's observations with a stored baseline and writes one report. Emulator routes go through `bazel run` of `xm1-viewer`, `updater-f7` and `flash-boot-check` on the same output base and take their own emulator slots; the verifier dispatches at most one per slot (`XM1_EMULATOR_SLOTS`), longest first, while the volatile and SD native suites run `emulation/build-recipe-bank-cases.sh` beside them. No camera or USB device is touched.
+
+```sh
+devenv shell -- bazel run //emulation:verify-candidate -- [--routes NAME,...] [--output private-data/verify-candidate/runs/NAME]
+devenv shell -- bazel run //emulation:verify-candidate -- --from-run private-data/verify-candidate/runs/NAME [--baselines DIR]
+devenv shell -- bazel run //emulation:verify-candidate -- --record-baseline --from-run private-data/verify-candidate/runs/NAME [--routes NAME,...]
+devenv shell -- bazel test //emulation:candidate-baseline-tests
+```
+
+| Route | Command | Observed files |
+| --- | --- | --- |
+| `flash-boot-check` | `flash-boot-check` on the stock 1.50 DAT | `flash-boot-receipt.json` |
+| `ram-push-volatile` | `xm1-viewer --ram-push-e2e --cardless`, VolatileBank scenario | RAM-push set |
+| `ram-push-cc` | `xm1-viewer --ram-push-e2e --classic-chrome` | RAM-push set |
+| `ram-push-cc-icon` | `xm1-viewer --ram-push-e2e --classic-chrome-icon` | RAM-push set |
+| `usb-toggle-e8` | `xm1-viewer --ram-push-e2e --classic-chrome --attach-hold-q`, RC0+toggle DAT over stored `0xf7 = 0` | RAM-push set |
+| `flash-candidate-icon-b` | `xm1-viewer --ram-push-e2e --flash-candidate`, design-B DAT, `classic-chrome-icon-trajectories.json` | flash-candidate set |
+| `flash-candidate-q-tile-b` | the same with `classic-chrome-q-tile-trajectories.json` | flash-candidate set |
+| `updater-f7-rc0-toggle`, `updater-f7-cc-toggle` | `updater-f7` with each restore card over `f7-1.nand` | `receipt.json` |
+| `native-volatile`, `native-sd` | `build-recipe-bank-cases.sh` with `RB_MODE` and `JOBS` (`--native-jobs`, default 4) | `results.json`, `findings.txt` |
+
+The RAM-push set is `e2e-result.json`, `e2e-fetch-watch.json`, `cold-restart/e2e-cold-restart.json`, the relinked runtime, manifest, allowlist and symbols, the alloc, push and unload state files and `screenshots/*.png`. The flash-candidate set is `e2e-segments.json`, `segment-*/e2e-result.json` and `segment-*/screenshots/*.png`. Journals, emulator state dumps and logs are not observations.
+
+A field is one JSON leaf of an observed file, named `FILE#/json/pointer`, or the SHA-256 of a non-JSON file, named `FILE`. Each route excludes fields through an explicit list of file and pointer patterns in `emulation/VerifyCandidate.hs`, where `*` matches one path component, key or index and a pointer pattern covers its subtree. Each exclusion names its reason: timing (`seconds` fields), scheduling (menu-receipt `frame_number`), run location (absolute paths), checkpoint state (checkpoint key, directory, saved and start), candidate identity (`emulator_source`) or source phase (captures over the animated live-view source). Nothing else is normalized.
+
+A baseline is `private-data/verify-candidate/baselines/NAME.json`: route, recording time, source receipt and the ordered field list after exclusions, one field per line. `--record-baseline` writes or replaces the selected baselines from a run's receipts (`--from-run`, `--receipt NAME=DIR`, or the routes it just ran) and refuses a route that exited nonzero. Without it the verifier only compares. Each `xm1-viewer` route keeps one runtime path, `private-data/emulator-runtimes/verify-candidate/NAME`, which the verifier clears before the run, so its attach checkpoint can restore on later runs.
+
+The run directory holds `receipts/NAME`, `logs/NAME.log`, `builds/` for the native suites, `report.json` and `differences/NAME.json`. The report gives the commit, total wall time and, per route, pass or fail, exit code, seconds, difference count and the first differing field with its baseline and run values. A route passes when it exits 0 and every field equals its baseline.
