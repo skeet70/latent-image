@@ -28,7 +28,7 @@ Host checks the reviewer can run: `//transport:read-bulk-tests`, `//transport:pr
 
 ### 2.1 Review outcome
 
-BulkReadReview (anthropic/claude-opus-5-5) reviewed `992102f` and approved with two must-fix findings (`private-data/analysis/x-m1-1.50/bulk-read/review.md`, SHA-256 `0c8e4576…e96e`); it re-derived every static claim above from our decodes. The fixes, for the reviewer to confirm:
+BulkReadReview (anthropic/claude-opus-5-5, not the author) reviewed `992102f` and approved with two must-fix findings, F1 and F2, and five recommendations, F3 to F7; it re-derived every static claim above from our decodes. It then confirmed every fix at `8cc0b96`, killing mutants M3, M5, M7, M9 to M13 with the tests and rerunning `//transport/...` uncached (28 of 28), and gave the final verdict **APPROVE** (E-BULK-READ-REVIEW-150; `private-data/analysis/x-m1-1.50/bulk-read/review.md`, SHA-256 `fdd1f1de4d60b54509d557cb2160fa0090d787e50db130f53630d63cdc44f504`). Its scan of the replies of all five 2026-10-09 read-media journals confirms the highest byte read from the body is physical `0x0b38cdff`. The operation now waits only for the owner's go for run 1 (section 4). The fixes:
 
 - F1: a bulk IN above 292 bytes journals its `native-outcome` line as status, count and the SHA-256 of the partial bytes, so a short or failed chunk's line fits the journal cap; `//transport:read-bulk-tests` asserts the line after a short chunk (count `0xfffc0`) and after a provider failure (status -7, count 30000).
 - F2: the rate gate and the stop recovery in section 4.
