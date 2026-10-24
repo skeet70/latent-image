@@ -1131,7 +1131,7 @@ launch arguments options = do
   Workspace root <- workspace (optWorkspace options)
   forM_ [StockDat, CcBaseDat, CcToggleDat, Rc0ToggleDat] $ \dat -> validateFirmware (Firmware (root </> datPath dat))
   receipts <- freshReceipts root receiptsArgument
-  staged <- stageViewerRuntime (Workspace root) Nothing (ReplacedRuntime ("emulator-runtimes" </> "xm1-usb-toggle")) Nothing StageStockOriginal
+  staged <- stageViewerRuntime (Workspace root) Nothing (UniqueRuntime "xm1-usb-toggle") Nothing StageStockOriginal
   let Python python = stagedPython staged
       runtime = stagedDirectory staged
   callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
