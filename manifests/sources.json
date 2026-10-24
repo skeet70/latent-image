@@ -18,7 +18,9 @@
       "status": "pin-selected",
       "evidence_ids": [
         "E-XM1-DECOMP-CHECKPOINTS-150",
-        "E-XM1-MATCHING-C-PILOT-150"
+        "E-XM1-MATCHING-C-PILOT-150",
+        "E-XM1-MATCHING-C-UNIT-PATCH-150",
+        "E-XM1-MATCHING-C-RECIPE-CENSUS-150"
       ]
     },
     {
