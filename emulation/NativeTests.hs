@@ -2,6 +2,7 @@
 module Main where
 import FujiAF.Host
 import Emulation.NativeCase
+import Control.Exception (SomeException, try)
 import Control.Monad
 import Data.Aeson(Value(..))
 import qualified Data.Aeson.Key as K
@@ -70,7 +71,7 @@ dispatchRegressions runner=withTemporary "fuji-dispatch-tests"$ \root->do
   B.writeFile path(encodeCanonical fixture)
   (code,report)<-runCase runner path
   ensure(code==0 && get report "status"==s "passed")(name++": "++show report)
--- A case declaring maxFunctions functions runs; one more is an invalid case.
+-- A case declaring functionCount functions runs; one more is an invalid case.
 functionLimitRegressions :: FilePath -> IO ()
 functionLimitRegressions runner=withTemporary "fuji-function-limit-tests"$ \root->do
  base<-B.readFile "emulation/fixtures/arithmetic.json" >>= jsonRead
@@ -78,10 +79,10 @@ functionLimitRegressions runner=withTemporary "fuji-function-limit-tests"$ \root
  let hex value=s("0x"++replicate(8-length text)'0'++text) where text=showHex(value::Word32)""
      declared=list(get base "functions")
      paddingBase=0x10000
-     padding=obj[("id",s "padding"),("address",hex paddingBase),("size",n(fromIntegral(4*maxFunctions))),("permissions",s "rx"),("initial",obj[("zero",b True)])]
+     padding=obj[("id",s "padding"),("address",hex paddingBase),("size",n(fromIntegral(4*functionCount))),("permissions",s "rx"),("initial",obj[("zero",b True)])]
      fixture count=merge base[("regions",arr(list(get base "regions")++[padding])),("functions",arr(declared++[obj[("address",hex(paddingBase+4*fromIntegral i)),("size",n 4)]|i<-[0..count-1]]))]
      path=root </> "function-limit.json"
- forM_[(maxFunctions-length declared,0,"passed"),(maxFunctions-length declared+1,1,"invalid_case")]$ \(count,expected,status)->do
+ forM_[(functionCount-length declared,0,"passed"),(functionCount-length declared+1,1,"invalid_case")]$ \(count,expected,status)->do
   B.writeFile path(encodeCanonical(fixture count))
   (code,report)<-runCase runner path
   ensure(code==expected && get report "status"==s status)("function limit with "++show(count+length declared)++" functions: "++show report)
@@ -95,6 +96,100 @@ instructionLimitRegressions runner=withTemporary "fuji-instruction-limit-tests"$
   B.writeFile path(encodeCanonical(set "limits" (obj[("instructions",n budget),("wall_ms",n 1000)])base))
   (code,report)<-runCase runner path
   ensure(code==expected && get report "status"==s status)("instruction limit "++show budget++": "++show report)
+-- Each public contract limit admits a case at the limit and refuses one past it.
+-- The size, total and JSON boundaries are adapter admissions; the counts that
+-- stay small also run to a passing result through the engine.
+contractLimitRegressions :: FilePath -> IO ()
+contractLimitRegressions runner=withTemporary "fuji-contract-limit-tests"$ \root->do
+ base<-B.readFile "emulation/fixtures/arithmetic.json" >>= jsonRead
+ copyFile "emulation/fixtures/arithmetic.bin"(root </> "arithmetic.bin")
+ let hex value=s("0x"++replicate(8-length text)'0'++text) where text=showHex(value::Word32)""
+     pad name address size=obj[("id",s name),("address",hex address),("size",n size),("permissions",s "rw"),("initial",obj[("zero",b True)])]
+     art name file size digest=obj[("id",s name),("path",s file),("size",n size),("sha256",s digest)]
+     baseBytes=sum[num(get r "size")|r<-list(get base "regions")]
+     path=root </> "case.json"
+     write item=B.writeFile path(encodeCanonical item)
+     admits=do
+       result<-try(loadCase path)
+       case result of
+        Left (_::SomeException)->pure False
+        Right _->pure True
+     boundary label at past=do
+       write at
+       yes<-admits
+       ensure yes(label++" at the limit was refused")
+       write past
+       no<-admits
+       ensure(not no)(label++" past the limit was admitted")
+     running label at past=do
+       write at
+       (code,report)<-runCase runner path
+       ensure(code==0 && get report "status"==s "passed")(label++" at the limit: "++show report)
+       write past
+       no<-admits
+       ensure(not no)(label++" past the limit was admitted")
+ big<-sha256(B.replicate sizeBytes 0x5a)
+ bigPlus<-sha256(B.replicate (sizeBytes+1) 0x5a)
+ B.writeFile(root </> "big.bin")(B.replicate sizeBytes 0x5a)
+ B.writeFile(root </> "big-plus.bin")(B.replicate (sizeBytes+1) 0x5a)
+ let artsOf xs=arr(list(get base "artifacts")++xs)
+ running "artifact size"
+   (merge base[("artifacts",artsOf[art "big" "big.bin" (toInteger sizeBytes) big])])
+   (merge base[("artifacts",artsOf[art "big" "big-plus.bin" (toInteger(sizeBytes+1)) bigPlus])])
+ let one=toInteger sizeBytes
+     two=toInteger totalBytes-baseBytes-one
+     total extra=merge base[("regions",arr(list(get base "regions")++extra))]
+ boundary "total mapped bytes"
+   (total[pad "pad-a" 0x00100000 one,pad "pad-b" 0x00300000 two])
+   (total[pad "pad-a" 0x00100000 one,pad "pad-b" 0x00300000 (two+4)])
+ extras<-forM [length(list(get base "artifacts")) .. artifactCount-1]$ \i->do
+   let name="pad"++show i<.>"bin"
+       bytes=B.pack[fromIntegral i]
+   B.writeFile(root </> name)bytes
+   digest<-sha256 bytes
+   pure(art ("pad"++show i) name 1 digest)
+ let moreBytes=B.pack[0xff::Word8]
+ B.writeFile(root </> "one-more.bin")moreBytes
+ more<-sha256 moreBytes
+ running "artifact count"
+   (merge base[("artifacts",arr(list(get base "artifacts")++extras))])
+   (merge base[("artifacts",arr(list(get base "artifacts")++extras++[art "one-more" "one-more.bin" 1 more]))])
+ let event i=obj[("address",hex(fromIntegral(0x5000+4*i))),("inputs",obj[]),("outputs",obj[("r0",hex 0)])]
+     expecting count=merge base[("expected",set "events"(arr(map event [0::Int .. count-1]))(get base "expected"))]
+ boundary "expected events" (expecting eventCount) (expecting(eventCount+1))
+ let stub i=obj[("address",hex(fromIntegral(0x6000+4*i))),("inputs",obj[]),("outputs",obj[("r0",hex 0)]),("side_effects",s "registers-only")]
+     declaring count=merge base[("stubs",arr(map stub [0::Int .. count-1]))]
+ running "declared stubs" (declaring stubCount) (declaring(stubCount+1))
+ let stripped=set "provenance"(s "")base
+     fixed=B.length(encodeCanonical stripped)
+     provenance bytes=set "provenance"(s(replicate bytes 'x'))stripped
+ boundary "case JSON bytes" (provenance(caseBytes-fixed)) (provenance(caseBytes-fixed+1))
+
+-- The schema carries the same bounds as the adapter; drift fails here.
+schemaContract :: IO ()
+schemaContract=do
+ schema<-B.readFile "schemas/native-case.schema.json" >>= jsonRead
+ let props=get schema "properties"
+     defs=get schema "$defs"
+     item=get(get(get(get props "regions")"items")"properties")"initial"
+     memory=get(get(get(get props "expected")"properties")"memory")"items"
+     expect label actual wanted=ensure(num actual==wanted)(label++" differs from the adapter: "++show actual)
+ sliced<-case[o|o<-list(get item "oneOf"),"offset"`elem`keys(get o "properties")] of
+   [only]->pure only
+   forms->failH("initial must carry exactly one artifact-slice form, saw "++show(length forms))
+ expect "$defs/size maximum"(get(get defs "size")"maximum")(toInteger sizeBytes)
+ expect "artifacts maxItems"(get(get props "artifacts")"maxItems")(toInteger artifactCount)
+ expect "regions maxItems"(get(get props "regions")"maxItems")(toInteger regionCount)
+ expect "functions maxItems"(get(get props "functions")"maxItems")(toInteger functionCount)
+ expect "stubs maxItems"(get(get props "stubs")"maxItems")(toInteger stubCount)
+ expect "expected memory maxItems"(get(get(get(get props "expected")"properties")"memory")"maxItems")(toInteger memoryCount)
+ expect "expected events maxItems"(get(get(get(get props "expected")"properties")"events")"maxItems")(toInteger eventCount)
+ expect "instructions maximum"(get(get(get(get props "limits")"properties")"instructions")"maximum") 4000000
+ expect "wall_ms maximum"(get(get(get(get props "limits")"properties")"wall_ms")"maximum") 10000
+ expect "initial offset maximum"(get(get(get sliced "properties")"offset")"maximum")(toInteger sizeBytes)
+ expect "expected offset maximum"(get(get(get memory "properties")"offset")"maximum")(toInteger sizeBytes)
+ expect "expected hex maxLength"(get(get(get memory "properties")"hex")"maxLength")(toInteger(2*sizeBytes))
+
 main :: IO ()
 main=do
  [runner,generator]<-getArgs
@@ -103,7 +198,7 @@ main=do
   let path="emulation/fixtures" </> name
   (code,report)<-runCase runner path
   ensure(code==0 && get report "status"==s "passed")(name++": "++show report)
-  fixture<-canonicalizePath path >>= readRegularWith(pure())False(4*limit) >>= jsonRead
+  fixture<-canonicalizePath path >>= readRegularWith(pure())False caseBytes >>= jsonRead
   let result=get report "runner"
   ensure(num(get result "instructions")<=num(get(get fixture "limits")"instructions"))"instruction bound"
   ensure(length(list(get result "trace"))<=64 && length(list(get result "accesses"))<=64)"trace cap"
@@ -119,6 +214,8 @@ main=do
  dispatchRegressions runner
  functionLimitRegressions runner
  instructionLimitRegressions runner
+ contractLimitRegressions runner
+ schemaContract
  withTemporary "fuji-native-tests"$ \root->do
   artifacts<-filter((==".bin").takeExtension) <$> listDirectory "emulation/fixtures"
   forM_ artifacts$ \name->copyFile("emulation/fixtures" </> name)(root </> name)
@@ -187,4 +284,4 @@ main=do
   (timed,code,out,_)<-runBounded 3000000 (8*1024*1024) runner[](BC.pack input)
   result<-jsonRead out
   ensure(not timed && code==ExitFailure 1 && get result "status"==s "invalid_case")"independent C wire rejection failed"
- putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, "++show(length bad)++" independent C rejections, execute-never boundary, stub/output/deadline checks passed")
+ putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, "++show(length bad)++" independent C rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries and schema agreement passed")

@@ -566,6 +566,7 @@ haskell_binary(
 haskell_binary(
     name = "native-tests-hs",
     srcs = ["NativeTests.hs"],
+    data = ["//schemas:all"],
     ghcopts = [
         "-XGHC2021",
         "-threaded",
