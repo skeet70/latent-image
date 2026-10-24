@@ -16,9 +16,9 @@ import Data.List (isPrefixOf)
 import qualified Data.Map.Strict as M
 import FujiAF.Matching.Build
 import FujiAF.Matching.Compare
-import System.Directory (canonicalizePath)
+import System.Directory (canonicalizePath, createDirectoryIfMissing)
 import System.Environment (getArgs)
-import System.FilePath (takeBaseName, (</>))
+import System.FilePath (takeBaseName, takeDirectory, takeFileName, (</>))
 
 -- Frozen sample --------------------------------------------------------------
 
@@ -77,13 +77,16 @@ data Options = Options
   , oImages :: M.Map Region FilePath
   -- Replaces every source's annotated GCC release.
   , oForce :: Maybe Compiler
+  -- Per-function copies of the unit that differ only in their flags and
+  -- compiler annotations.
+  , oAnnotations :: M.Map String FilePath
   }
 
 usage :: String
-usage = "usage: matching-pilot --manifest JSON --x70view DIR --out NEW_DIR --gcc VERSION=PATH... --ld TARGET-ld --image REGION=PATH... [--force-gcc VERSION]"
+usage = "usage: matching-pilot --manifest JSON --x70view DIR --out NEW_DIR --gcc VERSION=PATH... --ld TARGET-ld --image REGION=PATH... [--force-gcc VERSION] [--annotation NAME=C_FILE...]"
 
 parseOptions :: [String] -> Either String Options
-parseOptions = go (Options "" "" "" M.empty "" M.empty Nothing)
+parseOptions = go (Options "" "" "" M.empty "" M.empty Nothing M.empty)
   where
     go o [] = do
       when (any null [oManifest o, oX70view o, oOut o, oLd o]) (Left usage)
@@ -92,6 +95,10 @@ parseOptions = go (Options "" "" "" M.empty "" M.empty Nothing)
     go o ("--x70view" : v : rest) = go o {oX70view = v} rest
     go o ("--out" : v : rest) = go o {oOut = v} rest
     go o ("--ld" : v : rest) = go o {oLd = v} rest
+    go o ("--annotation" : v : rest) = do
+      let (k, p) = break (== '=') v
+      when (null k || null p) (Left usage)
+      go o {oAnnotations = M.insert k (drop 1 p) (oAnnotations o)} rest
     go o ("--force-gcc" : v : rest) = do
       c <- parseCompiler v
       go o {oForce = Just c} rest
@@ -139,8 +146,8 @@ data Result = Result
   , rOutcome :: Outcome
   }
 
-pilot :: Tools -> Maybe Compiler -> FilePath -> M.Map Region (Address, B.ByteString) -> FilePath -> Frozen -> IO Result
-pilot tools force x70 images work f = do
+pilot :: Tools -> Maybe Compiler -> M.Map String FilePath -> FilePath -> M.Map Region (Address, B.ByteString) -> FilePath -> Frozen -> IO Result
+pilot tools force annotations x70 images work f = do
   unless ("decomp/" `isPrefixOf` fSource f) (die (fSource f ++ ": upstream source must lie under decomp/"))
   source <- B.readFile (x70 </> fSource f)
   when (digest source /= fSourceDigest f) (die (fSource f ++ ": source digest differs from the frozen sample"))
@@ -148,7 +155,17 @@ pilot tools force x70 images work f = do
   when (fmap digest (stockAt region (fAddress f) (fSize f)) /= Just (fStockDigest f))
     (die (fName f ++ ": stock body digest differs from the frozen sample"))
   let sourceInTree = "src" </> drop (length ("decomp/" :: String)) (fSource f)
-  compiled <- compileUnit tools force (fUnit f) work (fName f) sourceInTree []
+  (compileSource, extra) <- case M.lookup (fName f) annotations of
+    Nothing -> pure (sourceInTree, [])
+    Just path -> do
+      annotated <- B.readFile path
+      unless (annotationFree annotated == annotationFree source)
+        (die (path ++ ": differs from " ++ fSource f ++ " outside its flags and compiler annotations"))
+      let copy = "annotated" </> fName f </> takeFileName (fSource f)
+      createDirectoryIfMissing True (work </> takeDirectory copy)
+      B.writeFile (work </> copy) annotated
+      pure (copy, ["-iquote", takeDirectory sourceInTree])
+  compiled <- compileUnit tools force (fUnit f) work (fName f) compileSource extra
   case compiled of
     Left e -> pure (Result f Nothing Nothing (CompileFailed e))
     Right c -> do
@@ -218,11 +235,12 @@ main = do
     when (digest bytes /= riDigest ri) (die (path ++ ": digest differs from the manifest's " ++ regionName r))
     pure (r, (riBase ri, bytes))
   work <- prepareWork (oOut o) x70
-  results <- mapM (pilot tools (oForce o) x70 images work) (mFunctions manifest)
+  results <- mapM (pilot tools (oForce o) (M.map owner (oAnnotations o)) x70 images work) (mFunctions manifest)
   let count c = length [() | r <- results, outcomeClass (rOutcome r) == c]
       report = A.object
         [ "x70view_revision" .= mRevision manifest
         , "forced_compiler" .= fmap compilerName (oForce o)
+        , "annotation_overrides" .= M.keys (oAnnotations o)
         , "exact" .= count ClassExact
         , "normalized" .= count ClassNormalized
         , "failure" .= count ClassFailure

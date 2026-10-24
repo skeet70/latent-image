@@ -26,6 +26,7 @@ module FujiAF.Matching.Build
   , Bindings
   , loadBindings
   , prepareWork
+  , annotationFree
   , Compiled (..)
   , compileUnit
   , Root (..)
@@ -51,7 +52,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Char (isHexDigit, isSpace)
 import Data.List (dropWhileEnd, isPrefixOf, isSuffixOf, nub, sortOn)
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
 import Data.Word (Word32)
 import FujiAF.Matching.Compare
 import Numeric (readHex, showHex)
@@ -208,17 +209,26 @@ sourceSettings :: B.ByteString -> Either String (Compiler, [String])
 sourceSettings text = do
   let ls = map BC.unpack (take 3 (BC.lines text))
       flags = case ls of
-        (first : _) | Just body <- comment "flags:" first -> words body
+        (first : _) | Just body <- annotation "flags:" first -> words body
         _ -> ["-O1", "-fno-omit-frame-pointer"]
-  compiler <- maybe (Right Gcc464) (parseCompiler . trim) (listToMaybe (mapMaybe (comment "compiler:") ls))
+  compiler <- maybe (Right Gcc464) (parseCompiler . trim) (listToMaybe (mapMaybe (annotation "compiler:") ls))
   pure (compiler, flags)
-  where
-    comment key line =
-      let t = trim line
-          inner = trim (drop 2 (take (length t - 2) t))
-      in if "/*" `isPrefixOf` t && "*/" `isSuffixOf` t && key `isPrefixOf` inner
-           then Just (drop (length key) inner)
-           else Nothing
+
+annotation :: String -> String -> Maybe String
+annotation key line =
+  let t = trim line
+      inner = trim (drop 2 (take (length t - 2) t))
+  in if "/*" `isPrefixOf` t && "*/" `isSuffixOf` t && key `isPrefixOf` inner
+       then Just (drop (length key) inner)
+       else Nothing
+
+-- The source's lines without the flags and compiler annotations among its
+-- first three.
+annotationFree :: B.ByteString -> [B.ByteString]
+annotationFree text =
+  let (headLines, rest) = splitAt 3 (BC.lines text)
+      isAnnotation l = any (\k -> isJust (annotation k (BC.unpack l))) ["flags:", "compiler:"]
+  in filter (not . isAnnotation) headLines ++ rest
 
 -- x70view symbol bindings -----------------------------------------------------
 
@@ -387,8 +397,11 @@ linkFailureText f = case f of
 -- this object that a relocation reaches are placed at their bound address.
 data Target = Target String (Maybe String) (Maybe Address) (Maybe Address)
 
-resolveTarget :: Bindings -> String -> M.Map String Address -> (Int -> String) -> Symbol -> Target
-resolveTarget bindings stem roots sectionName s =
+-- A section's address comes from a root, its "@stem:section" placement, or a
+-- bound symbol it defines (section anchors such as .LANCHOR0 have no binding
+-- of their own).
+resolveTarget :: Bindings -> String -> M.Map String Address -> M.Map String Address -> (Int -> String) -> Symbol -> Target
+resolveTarget bindings stem roots derived sectionName s =
   case (symIsSection s, symShndx s) of
     (True, Just ndx) ->
       let sec = sectionName ndx
@@ -402,31 +415,45 @@ resolveTarget bindings stem roots sectionName s =
       in Target (symName s) (Just sec) placed ((`offsetBy` symValue s) <$> placed)
     _ -> Target (symName s) Nothing Nothing named
   where
-    named = listToMaybe (mapMaybe (`M.lookup` bindings) [stem ++ ":" ++ symName s, symName s])
-    sectionAt sec = case M.lookup sec roots of
-      Just a -> Just a
-      Nothing -> M.lookup ("@" ++ stem ++ ":" ++ sec) bindings
+    named = bound bindings stem s
+    sectionAt sec = listToMaybe (catMaybes [M.lookup sec roots, M.lookup ("@" ++ stem ++ ":" ++ sec) bindings, M.lookup sec derived])
+
+bound :: Bindings -> String -> Symbol -> Maybe Address
+bound bindings stem s = listToMaybe (mapMaybe (`M.lookup` bindings) [stem ++ ":" ++ symName s, symName s])
 
 -- Links every root's .text.NAME at its entry in one ELF, with the object
 -- sections its relocations reach at their bound addresses, and returns each
--- root's linked bytes.
+-- root's linked bytes. Reached text sections are linked with their own
+-- relocations resolved but are not returned.
 linkRoots :: Tools -> Bindings -> String -> FilePath -> String -> Compiled -> [Root] -> IO (Either LinkFailure [LinkedRoot])
 linkRoots tools bindings stem work label c roots = do
   let rootSections = M.fromList [(".text." ++ rootName r, rootAddress r) | r <- roots]
       bySymbol = M.fromList [(symIndex s, s) | s <- cSymbols c]
       sectionName i = maybe ("#" ++ show i) secName (listToMaybe [s | s <- cSections c, secIndex s == i])
       sectionNamed n = listToMaybe [s | s <- cSections c, secName s == n]
+      derived = M.mapMaybe (\as -> case nub as of [a] -> Just a; _ -> Nothing) $ M.fromListWith (++)
+        [ (sectionName ndx, [Address (a - symValue s)])
+        | s <- cSymbols c, not (symIsSection s), Just ndx <- [symShndx s]
+        , Just (Address a) <- [bound bindings stem s] ]
+      -- Relocations without a symbol (R_ARM_V4BX) mark instructions, not values.
+      relocsOf sec = [rel | rel <- parseRelocs sec (cRelocations c), relSymbol rel /= 0]
+      targetsOf sec = forM (relocsOf sec) $ \rel ->
+        maybe (die (cObject c ++ ": relocation names missing symbol " ++ show (relSymbol rel)))
+          (pure . resolveTarget bindings stem rootSections derived sectionName)
+          (M.lookup (relSymbol rel) bySymbol)
+      -- Every text section reached from the roots, transitively.
+      reach done [] = pure done
+      reach done (sec : rest)
+        | M.member sec done = reach done rest
+        | otherwise = do
+            ts <- targetsOf sec
+            let next = [s | Target _ (Just s) (Just _) _ <- ts, ".text." `isPrefixOf` s]
+            reach (M.insert sec ts done) (rest ++ next)
   case [n | n <- M.keys rootSections, isNothing (sectionNamed n)] of
     (missing : _) -> pure (Left (MissingSection missing))
     [] -> do
-      perRoot <- forM roots $ \r -> do
-        let relocs = parseRelocs (".text." ++ rootName r) (cRelocations c)
-        targets <- forM relocs $ \rel ->
-          maybe (die (cObject c ++ ": relocation names missing symbol " ++ show (relSymbol rel)))
-            (pure . resolveTarget bindings stem rootSections sectionName)
-            (M.lookup (relSymbol rel) bySymbol)
-        pure (r, relocs, targets)
-      let targets = concat [ts | (_, _, ts) <- perRoot]
+      processed <- reach M.empty (M.keys rootSections)
+      let targets = concat (M.elems processed)
           unresolved = nub [n | Target n _ _ Nothing <- targets]
           placed = M.fromListWith (++)
             [(sec, [a]) | Target _ (Just sec) (Just a) _ <- targets, not (M.member sec rootSections)]
@@ -451,11 +478,14 @@ linkRoots tools bindings stem work label c roots = do
               linked <- runEither work (binutil tools "ld") ["-T", ld, "-o", elf, cObject c]
               case linked of
                 Left e -> pure (Left (LinkError e))
-                Right _ -> fmap Right $ forM (zip rootOutputs perRoot) $ \((i, r), (_, relocs, ts)) -> do
-                  let bin = label ++ "." ++ rootName r ++ ".bin"
+                Right _ -> fmap Right $ forM rootOutputs $ \(i, r) -> do
+                  let sec = ".text." ++ rootName r
+                      relocs = relocsOf sec
+                      ts = M.findWithDefault [] sec processed
+                      bin = label ++ "." ++ rootName r ++ ".bin"
                   _ <- runOk work (binutil tools "objcopy") ["-O", "binary", "-j", ".root_" ++ show i, elf, bin]
                   bytes <- B.readFile (work </> bin)
-                  text <- maybe (die ("no .text." ++ rootName r)) pure (sectionNamed (".text." ++ rootName r))
+                  text <- maybe (die ("no " ++ sec)) pure (sectionNamed sec)
                   pure LinkedRoot
                     { lrRoot = r
                     , lrBytes = bytes
