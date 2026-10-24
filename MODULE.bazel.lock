@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "ELy8RM+6EH0xzuBxPC8oRwu7NGLwvNCvC/P5fgQ8qhg=",
+        "bzlTransitiveDigest": "3FP57yrKm9c91SDs/DgryfU1bZXYUXUD2fhldj1K6Ss=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -449,7 +449,7 @@
               "nix_license_path": "",
               "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
               "repositories": {},
-              "build_file_content": "exports_files([\"bin/fujimod-xm1\", \"bin/fujimod-xm1-provenance\", \"bin/fujimod-xm1-ram-push\", \"share/fujimod-xm1/xm1-150.json\"], visibility = [\"//visibility:public\"])",
+              "build_file_content": "exports_files([\"bin/fujimod-xm1\", \"bin/fujimod-xm1-provenance\", \"bin/fujimod-xm1-ram-push\", \"share/fujimod-xm1/store-path\", \"share/fujimod-xm1/xm1-150.json\"], visibility = [\"//visibility:public\"])",
               "nixopts": [
                 "--max-jobs",
                 "2",

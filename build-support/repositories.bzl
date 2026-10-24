@@ -156,7 +156,7 @@ def _lab_dependencies_impl(_ctx):
         nix_file_deps = _FUJIMOD_NIX_DEPS + _FUJIMOD_XM1_CRATE,
         nixopts = _NIX_BUILD_CAP,
         repository = "@lab_nixpkgs",
-        build_file_content = 'exports_files(["bin/fujimod-xm1", "bin/fujimod-xm1-provenance", "bin/fujimod-xm1-ram-push", "share/fujimod-xm1/xm1-150.json"], visibility = ["//visibility:public"])',
+        build_file_content = 'exports_files(["bin/fujimod-xm1", "bin/fujimod-xm1-provenance", "bin/fujimod-xm1-ram-push", "share/fujimod-xm1/store-path", "share/fujimod-xm1/xm1-150.json"], visibility = ["//visibility:public"])',
     )
 
     # The RAM-push relinker's tools; //host/firmware:ram-push-toolchain-module

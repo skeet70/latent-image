@@ -22,8 +22,10 @@ fujimod.passthru.rustPlatform.buildRustPackage {
   cargoLock.lockFile = ../emulation/fujimod-xm1/Cargo.lock;
   nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config ];
   dontUseCmakeConfigure = true;
+  # store-path holds $out, so Bazel actions keyed on it change with the store path.
   postInstall = ''
     mkdir -p $out/share/fujimod-xm1
     cp data/xm1-150.json $out/share/fujimod-xm1/
+    printf '%s\n' "$out" > $out/share/fujimod-xm1/store-path
   '';
 }
