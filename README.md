@@ -38,12 +38,16 @@ A recipe is one plain text file of `Field: Value` lines, using the fields the ca
 
 ```sh
 # one text file per recipe, C1 first; BASE is the declared payload base
-bazel-bin/host/firmware/recipe-bank-text import BASE OUT_DIR recipe1.txt recipe2.txt ...
+bazel-bin/host/firmware/recipe-bank-text import \
+  --image4 ID4_0061C400.bin --image-size 1 BASE OUT_DIR recipe1.txt recipe2.txt ...
 # export occupied slots as C1.txt, C2.txt, ... in slot order
-bazel-bin/host/firmware/recipe-bank-text export BASE RECIPEA.BIN OUT_DIR
+bazel-bin/host/firmware/recipe-bank-text export \
+  --image4 ID4_0061C400.bin --image-size 1 BASE RECIPEA.BIN OUT_DIR
 ```
 
-`BASE` is one 0x28-byte slot payload, given as 80 hex characters or as a file that holds it: the body's own C-payload defaults record when you have one, or an all-zero payload, which gives every field stored code 0. Every field a recipe omits takes its stored code from `BASE`, and the report names those fields.
+Both commands require `--image4 PATH` (the pinned image-4 decode whose conversion tables define the payload-safety rules the camera's storage kernel applies) and `--image-size ROW`, the IMAGE SIZE menu row every slot carries; `--image4-base HEX` optionally names the decode's load address (default `0x0061c400`). The row is required because a slot whose size and aspect pair no menu offers makes the whole bank unsafe: the kernel publishes nothing and refuses every recall, so the tool replaces the base's own pair and refuses a row that is not offered. It validates each emitted payload with the same host oracle the bank builder uses, and export applies the same checks.
+
+`BASE` is one 0x28-byte slot payload, given as 80 hex characters or as a file that holds it: the body's own C-payload defaults record when you have one, or an all-zero payload, which gives every field stored code 0. The `--image-size` row overrides its size and aspect pair. Every field a recipe omits takes its stored code from `BASE`, and the report names those fields.
 
 The keys are the camera's field names; matching ignores case and spacing, so `Film Simulation`, `FILM SIMULATION` and the X70 project's `film=` all name the same field. A line may use `:` or `=`; blank lines and lines starting with `#` are ignored. One recipe per file, and the file's name without its extension is the slot name when the file has no `Name` line.
 

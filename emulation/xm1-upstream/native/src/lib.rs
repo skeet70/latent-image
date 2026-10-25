@@ -1158,6 +1158,29 @@ impl Machine {
             Err(failure) => scheduler.set_item("unavailable", format!("{failure:?}"))?,
         }
         result.set_item("xm1_150_scheduler", scheduler)?;
+        let startup = PyDict::new(py);
+        match task_state::collect_startup(ram) {
+            Ok(snapshot) => {
+                startup.set_item("phase", snapshot.phase.0)?;
+                startup.set_item("last_message", snapshot.message.0)?;
+                startup.set_item("machine_states", snapshot.machine_states.map(|state| state.0).as_slice())?;
+                startup.set_item("dispatch_modes", snapshot.dispatch_modes.map(|state| state.0).as_slice())?;
+                let loads = PyList::empty(py);
+                for (command, completion) in snapshot.load_commands {
+                    let row = PyDict::new(py);
+                    row.set_item("command", command.0)?;
+                    row.set_item("completion", match completion {
+                        task_state::Completion::NotCompleted => 0,
+                        task_state::Completion::Complete => 1,
+                        task_state::Completion::Other(value) => value,
+                    })?;
+                    loads.append(row)?;
+                }
+                startup.set_item("load_commands", loads)?;
+            }
+            Err(failure) => startup.set_item("unavailable", format!("{failure:?}"))?,
+        }
+        result.set_item("xm1_150_startup", startup)?;
         result.set_item("native_code_hooks", s.code_hooks)?;
         result.set_item("native_ram_store_hooks", s.store_hooks)?;
         result.set_item("python_event_callbacks", s.python_callbacks)?;

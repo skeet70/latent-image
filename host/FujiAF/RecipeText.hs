@@ -23,9 +23,12 @@ module FujiAF.RecipeText
     -- * Bank mapping
   , fillRecipe
   , exportRecipeText
+  , preparedBase
+  , safePayload
   ) where
 
 import Control.Monad (foldM, forM, unless, when)
+import Data.Bits ((.&.), shiftR)
 import Data.Char (isSpace, toLower)
 import Data.List (dropWhileEnd, intercalate)
 import Data.Maybe (isJust, isNothing)
@@ -34,15 +37,22 @@ import Data.Word (Word16, Word8)
 
 import FujiAF.RecipeBank
   ( Recipe
+  , RecipeField (..)
   , SlotName
   , StoredCode (..)
+  , BankPayload
+  , bankPayloadContents
+  , canonicalBankPayload
   , encodeSlotPayloadOver
   , payloadBytes
+  , payloadUnsafeReason
+  , PayloadDomain
+  , withImageSizeRow
   , recipeFromPairs
+  , recipeFields
   , recipePairs
   , slotName
   , slotNameText
-  , slotRecipe
   )
 
 -- values ---------------------------------------------------------------
@@ -433,6 +443,14 @@ baseFields fields =
  where
   missing label spelled = [label | isNothing spelled]
 
+slotRecipe :: B.ByteString -> Either String Recipe
+slotRecipe bytes
+  | B.length bytes /= payloadBytes =
+      Left ("payload: " ++ show (B.length bytes) ++ " bytes, expected " ++ show payloadBytes)
+  | otherwise = recipeFromPairs [(fieldProperty f, codeAt f) | f <- recipeFields]
+ where
+  codeAt f = StoredCode ((B.index bytes (fieldOffset f) .&. fieldMask f) `shiftR` fieldShift f)
+
 -- | The stored codes of a text recipe over the declared payload base: every
 -- field it names takes its own code and every field it omits takes the
 -- base's, with the omitted fields' names as the report. The base is read as
@@ -450,6 +468,27 @@ fillRecipe base recipe = do
       Nothing -> Left ("the declared payload base carries no " ++ label ++ " code")
   cooked <- recipeFromPairs pairs
   pure (cooked, baseFields (textFields recipe))
+
+-- | The declared base with one offered IMAGE SIZE menu row placed, in the
+-- canonical form a stored payload has. The storage kernel refuses a payload
+-- whose pair no menu offers, so a base of its own may not carry one.
+preparedBase :: PayloadDomain -> Int -> B.ByteString -> Either String B.ByteString
+preparedBase domain row base = do
+  placed <- withImageSizeRow domain row base
+  canonical <- canonicalBankPayload placed
+  case payloadUnsafeReason domain canonical of
+    Just reason -> Left reason
+    Nothing -> pure (bankPayloadContents canonical)
+
+-- | A payload the storage kernel's payload-safety walk accepts: the same
+-- conversion-table rows, IMAGE SIZE pair and IMAGE QUALITY/RAW pair the stock
+-- menus produce.
+safePayload :: PayloadDomain -> B.ByteString -> Either String BankPayload
+safePayload domain bytes = do
+  canonical <- canonicalBankPayload bytes
+  case payloadUnsafeReason domain canonical of
+    Just reason -> Left reason
+    Nothing -> pure canonical
 
 -- | The canonical text of a slot payload over the declared base: the name and
 -- exactly the fields whose stored code the payload does not take from the
