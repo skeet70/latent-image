@@ -890,11 +890,15 @@ class _FF80EndpointBridge:
                 return
             self.run_for(200_000)
 
-    def disarm_for_checkpoint(self):
-        """Release held rendezvous inputs, clear the trace breakpoints and return to the UI tick
-        ratio. Portable checkpoints cannot carry the breakpoint handler."""
+    def prepare_install_checkpoint(self):
+        """Release held rendezvous inputs, return to the UI tick ratio and drain scheduled
+        closures, whether or not the install checkpoint is then saved."""
         self.release_rendezvous_activity()
         self.use_timing_ratio(24, 'install checkpoint')
+        self.drain_scheduled()
+
+    def disarm_for_checkpoint(self):
+        """Clear the trace breakpoints, which portable checkpoints cannot carry."""
         for core in range(2):
             self.board._native.set_breakpoints(core, [])
         self.board.breakpoint_handler = None
@@ -912,11 +916,15 @@ class _FF80EndpointBridge:
             options.update(hold_instructions=hold_instructions, release_instructions=release_instructions)
         state = self.session.key(options)
         settle = state.get('navigation', {}).get('render_settle') or {}
+        latched = getattr(self.session, 'last_key_latched', None)
         self.key_log.append({'key': name, 'seconds': round(perf_counter() - started, 3),
                              'instructions': self.board.instructions - instructions,
                              'key_instructions': settle.get('key_instructions'),
                              'settle_instructions': settle.get('settle_instructions'),
-                             'settle_status': settle.get('status')})
+                             'settle_status': settle.get('status'), 'latched': latched})
+        if latched is False:
+            raise RuntimeError(f'{name} press was not latched: its key row read released when the '
+                               f'hold ended, at instruction {self.board.instructions}')
         current = state.get('navigation', {}).get('current_menu', {})
         return {key: current.get(key) for key in ('menu_id', 'setting_id', 'cursor')}
 
@@ -1055,10 +1063,10 @@ def _save_install_checkpoint(bridge, session, root, checkpoint, attachment, requ
     if set(request) != {'command', *INSTALL_FIELDS}:
         raise ValueError('save-install-checkpoint requires exactly ' + ', '.join(INSTALL_FIELDS))
     name = _install_checkpoint_name(checkpoint['key'], request['manifest_sha256'], request['runtime_sha256'])
+    bridge.prepare_install_checkpoint()
     if (root / name).is_dir():
         return {'directory': str((root / name).resolve()), 'saved': False, 'existing': True}
     started = perf_counter()
-    bridge.drain_scheduled()
     bridge.disarm_for_checkpoint()
     try:
         target = _save_ram_push_checkpoint(
