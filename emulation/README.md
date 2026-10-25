@@ -384,6 +384,12 @@ A positive result requires source-equal full staging, both kernels, the segment 
 
 The declared profile uses a low reset ROM alias, shared DRAM aliases, source-bound primary identity, virtual PMU cycles, read-only logical media with clean-read assumptions, and coherent cache substitutions. CPU1 release requests are observed but CPU1 execution is held. No application, display, physical card entry, flash programming, bad-block/OOB physics, hardware cache visibility or failed-body state reconstruction is proved. Input preparation, builds and execution perform no camera or card-reader I/O. See [the recovery assessment](../reports/full-system-emulation.md#11-recommendation) for acceptance results and limits.
 
+### Recovery application scheduler observations
+
+The retained Rust engine adds `xm1_150_scheduler` to its paused `metrics()` result. It reads the two X-M1 1.50 task-table bindings, each loaded task's entry/id, status byte, wait object and saved SP, and the primary scheduler's current/next timer words. The decoder accepts cached and uncached RAM aliases; corrupt counts, unaligned/device pointers and truncated spans produce an `unavailable` diagnostic instead of a task-progress result. Zero pointer/count pairs remain unloaded tables.
+
+`//emulation:recovery-task-state-tests` exercises both-core ready/queue-wait observations, unloaded tables, unknown states and malformed inputs using original synthetic RAM. This is a read-only observation extension, not a scheduler replacement. The [continuation report](../reports/full-system-emulation.md#117-seg4-application-continuation-and-sd-boundary) binds the installed-loader-dependent execution separately from the firmware-derived updater path.
+
 ## Physical block-14 recovery startup lifetime
 
 The physical-recovery smoke also accepts a linked stage, exact `ffrecov.bin`, captured primary kernel and independently carried recorder block. It checks stage/body identity, loads the real kernel over RAM `0x40000`, executes all three known startup zero calls, the complete zero-arm log initializer and initial idle IRQ frame, then runs the delayed recovery stage with a mutable modeled physical block. Success requires every RC0 reference fragment to survive, status 20 and complete media equality with the carried RC0 block.
