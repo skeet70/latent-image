@@ -553,6 +553,10 @@ filegroup(
         "//host/firmware:BuildRecipeBank.hs",
         "//host/firmware:RamPushLayout.hs",
         "//host/firmware:build-recipe-bank-ram.sh",
+        "//host/firmware:classic-chrome-liveview-image5.json",
+        "//host/firmware:classic-chrome-frames-image5.json",
+        "//host:FujiAF/ClassicChrome.hs",
+        "//host:FujiAF/ClassicChromeRam.hs",
         "//menu:ram-push-relink-sources",
     ],
 )

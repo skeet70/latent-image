@@ -23,7 +23,7 @@ esac
 [[ -d "$OUT" && ! -L "$OUT" ]] || { printf 'output directory must exist\n' >&2; exit 1; }
 
 base_value=$((BASE))
-(( base_value >= 0 && base_value <= 0xffffffff - 0x1d9f8 )) || {
+(( base_value >= 0 && base_value <= 0xffffffff - 0x1dc98 )) || {
   printf 'base leaves the 32-bit RAM address space\n' >&2; exit 1;
 }
 (( (base_value & 7) == 0 )) || {
@@ -34,7 +34,7 @@ name_record=$(((minimum_name & 0xffff0000) | 0xb784))
 if (( name_record < minimum_name )); then
   name_record=$((name_record + 0x10000))
 fi
-bank_end=$((name_record + 14 * 66))
+bank_end=$(((name_record + 0x800 + 31) & 0xffffffe0))
 printf -v rb_name_record '0x%08xu' "$name_record"
 printf -v rb_bank_end '0x%08x' "$bank_end"
 
@@ -49,19 +49,22 @@ for src in menu/recipe_bank_arm.S menu/recipe_bank_probe.c menu/recipe_bank_hook
   obj="$OUT/${name%.*}.o"
   case "$src" in
     *.c) NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${FREE[@]}" -Oz -Wall -Wextra \
-      -DRB_VOLATILE_BANK=1 -DRB_NAME_RECORD="$rb_name_record" -c "$src" -o "$obj" ;;
+      -DRB_VOLATILE_BANK=1 -DRB_CC_BANK=1 -DRB_NAME_RECORD="$rb_name_record" -c "$src" -o "$obj" ;;
     *.S) NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" -c "$src" -o "$obj" ;;
   esac
   objects+=("$obj")
 done
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${FREE[@]}" -Oz -Wall -Wextra \
-  -DRAM_PUSH_PUBLICATION_COUNT=253u -DRAM_PUSH_SETUP_COUNT=167u \
-  -DRAM_PUSH_ACTIVATION_COUNT=86u -DRAM_PUSH_ABI_VERSION=2u \
+  -DRAM_PUSH_PUBLICATION_COUNT=222u -DRAM_PUSH_SETUP_COUNT=131u \
+  -DRAM_PUSH_ACTIVATION_COUNT=91u -DRAM_PUSH_ABI_VERSION=5u \
   -ffunction-sections -fdata-sections -c menu/ram_push_installer.c \
   -o "$OUT/ram_push_installer.o"
 objects+=("$OUT/ram_push_installer.o")
+NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" -c menu/classic_chrome_ram.S -o "$OUT/classic_chrome_ram.o"
+objects+=("$OUT/classic_chrome_ram.o")
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${LINK[@]}" -Wl,-T,menu/recipe_bank_ram.ld \
   -Wl,--defsym=RAM_PUSH_BASE="$BASE" -Wl,--defsym=RAM_PUSH_BANK_END="$rb_bank_end" \
+  -Wl,menu/classic_chrome_ram_stock.ld \
   "${objects[@]}" -o "$OUT/kernel.elf"
 "$OBJCOPY" -O binary "$OUT/kernel.elf" "$OUT/linked.bin"
 "$NM" --defined-only --print-size --numeric-sort "$OUT/kernel.elf" > "$OUT/kernel.syms"

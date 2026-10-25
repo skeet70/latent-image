@@ -157,7 +157,11 @@
 #define RB_RECORDS_END (RB_RECORDS_AT + RB_BANK_SLOTS * RB_RECORD)
 #define RB_BODY (RB_RECORDS_END - RB_HEADER)
 #define RB_FILE_BYTES 1024u
+#ifdef RB_CC_BANK
+#define RB_FORMAT_VERSION 3u
+#else
 #define RB_FORMAT_VERSION 2u
+#endif
 #define RB_MODE_CODE_M 4u
 #define RB_V1_HEADER 32u
 #define RB_V1_BLOB (RB_BANK_SLOTS * (RB_PAYLOAD + RB_NAME))
@@ -1024,6 +1028,11 @@ static uint32_t rb_payload_safe(const uint8_t *payload)
 static uint32_t rb_header_ok(const uint8_t *file, uint16_t version,
                              uint16_t header, uint32_t body)
 {
+#ifdef RB_CC_BANK
+  if (version != RB_FORMAT_VERSION) {
+    return 0u;
+  }
+#endif
   return (file[0] == 'F' && file[1] == 'J' && file[2] == 'R' && file[3] == 'B' &&
           rb_u16(file + 0x04u) == version && rb_u16(file + 0x06u) == header &&
           rb_u16(file + 0x08u) == RB_FIRMWARE_TAG &&

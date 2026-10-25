@@ -1,6 +1,18 @@
 {
   "schema": 1,
   "stock_calls": [
+    {"address":"0x00eab350","name":"cc_stock_filmmode_return","source":"menu/classic_chrome_ram_stock.ld"},
+    {"address":"0x00eab314","name":"cc_stock_filmmode_zero","source":"menu/classic_chrome_ram_stock.ld"},
+    {"address":"0x00eaacc8","name":"cc_stock_saturation_mode_arm","source":"menu/classic_chrome_ram_stock.ld"},
+    {"address":"0x00eaadc8","name":"cc_stock_saturation_zero","source":"menu/classic_chrome_ram_stock.ld"},
+    {"address":"0x00d461f0","name":"cc_stock_raw_commit_resume","source":"menu/classic_chrome_ram_stock.ld"},
+    {"address":"0x00d5b344","name":"cc_stock_raw_highlight_done","source":"menu/classic_chrome_ram_stock.ld"},
+    {"address":"0x00d5ada8","name":"cc_stock_raw_highlight_resume","source":"menu/classic_chrome_ram_stock.ld"},
+    {"address":"0x012548a8","name":"cc_stock_raw_request_resume","source":"menu/classic_chrome_ram_stock.ld"},
+    {"address":"0x01254928","name":"cc_stock_raw_request_done","source":"menu/classic_chrome_ram_stock.ld"},
+    {"address":"0x00d670a0","name":"cc_stock_colour_read","source":"menu/classic_chrome_ram_stock.ld"},
+    {"address":"0x00d60cc4","name":"cc_stock_chroma_read","source":"menu/classic_chrome_ram_stock.ld"},
+    {"address":"0x00690924","name":"cc_stock_tone_read","source":"menu/classic_chrome_ram_stock.ld"},
     {
       "address": "0x0061c91c",
       "name": "RB_WRITE",
@@ -308,6 +320,7 @@
     }
   ],
   "stock_stores": [
+    {"address":"0x01514220","bytes":4,"name":"CC RAW request film","source":"menu/classic_chrome_ram.S cc_ram_raw_request"},
     {
       "address": "0x0089edc8",
       "bytes": 4,
@@ -358,6 +371,13 @@
     }
   ],
   "unproven": [
+    {"function":"cc_ram_marker","access":"store","through":{"argument":"r0"},"reason":"writes the develop-record marker through the setter destination"},
+    {"function":"cc_ram_raw_commit","access":"store","through":{"argument":"r3"},"reason":"writes the RAW film field at r3+8"},
+    {"function":"cc_ram_raw_highlight","access":"store","through":{"argument":"r11"},"reason":"writes the selected RAW row at frame pointer minus 0x18"},
+    {"function":"cc_ram_colour","access":"store","through":{"argument":"r0"},"reason":"passes the nine-u64 colour destination to cc_ram_copy"},
+    {"function":"cc_ram_copy","access":"store","through":{"argument":"r0"},"reason":"writes zero-extended halfwords to the stage destination"},
+    {"function":"cc_ram_tone","access":"store","through":{"argument":"r1"},"reason":"writes the nine-byte tone head"},
+    {"function":"cc_ram_tone","access":"store","through":{"argument":"r2"},"reason":"writes the 28-halfword tone curve"},
     {
       "function": "rb_activation_now",
       "access": "store",

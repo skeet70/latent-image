@@ -176,7 +176,7 @@ bankD3Payload = Payload
       let minimumName = base + 0xbb00
           candidate = (minimumName .&. 0xffff0000) .|. 0xb784
           nameRecord = if candidate < minimumName then candidate + 0x10000 else candidate
-      in (nameRecord + 14*66 + 31) .&. 0xffffffe0
+      in (nameRecord + 0x800 + 31) .&. 0xffffffe0
   , payloadReferenceBases = (0x00c40000, 0x00c4fc88)
   , payloadRelinkScript = "build-recipe-bank-ram.sh"
   , payloadRelinkBuilder = "build-recipe-bank"
@@ -186,6 +186,10 @@ bankD3Payload = Payload
       , ("RC0_ID4","private-data/analysis/x-m1-1.50/update/prefix/id4-patched.bin")
       , ("RC0_ID5","private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin")
       , ("RC0_PLAIN","private-data/analysis/x-m1-1.50/lz/plain-01100000.bin")
+      , ("CC_PARAMETERS","private-data/analysis/classic-chrome/candidate.json")
+      , ("CC_ID4","private-data/analysis/classic-chrome-patch/candidate-build-1/patched-id4.bin")
+      , ("CC_ID5","private-data/analysis/classic-chrome-patch/candidate-build-1/patched-id5.bin")
+      , ("CC_PLAIN","private-data/analysis/classic-chrome-patch/candidate-build-1/patched-plain.bin")
       ]
   , payloadLinksBank = True
   }
@@ -269,16 +273,16 @@ payloadEntries payload (Address base) =
 configGateIndex, mailboxBytes, reviewedAllocationSize :: Int
 configGateIndex = 0xf7
 mailboxBytes = 104
-reviewedAllocationSize = 0x1d9f8
+reviewedAllocationSize = 0x1dc98
 
 installerAbiVersion :: Word32
-installerAbiVersion = 2
+installerAbiVersion = 5
 
--- | The bank's 97 publications plus D3's 156 (reports/ram-push-d3-design.md).
+-- | Bank, relocated compiled recipes and Classic Chrome publications.
 publicationCount, setupCount, activationCount :: Int
-publicationCount = 253
-setupCount = 167
-activationCount = 86
+publicationCount = 222
+setupCount = 131
+activationCount = 91
 
 rendezvousSpinBound :: Word32
 rendezvousSpinBound = 0x80000

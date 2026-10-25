@@ -22,6 +22,8 @@ import FujiAF.JSON (encodeCanonical)
 import FujiAF.RecipeBank
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
+import qualified FujiAF.ClassicChrome as CC
+import qualified FujiAF.ClassicChromeRam as CC
 import RamPushLayout
 import RamPushToolchain
 
@@ -107,16 +109,20 @@ main = do
   menu <- pure (H.get placement "menu")
   host <- pure (H.get placement "host")
   image4Base <- hexField spec "image4_base"
-  image4 <- B.readFile =<< stringField spec "image4"
+  stockImage4 <- B.readFile =<< stringField spec "image4"
   image5Base <- hexField spec "image5_base"
   image5 <- B.readFile =<< stringField spec "image5"
   unless (image4Base == 0x0061c400 && image5Base == 0x00bf1a00) $
     H.failH "spec: pinned X-M1 1.50 decode bases required"
-  checkImageHash "image4" image4 "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+  checkImageHash "image4" stockImage4 "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+  image4 <- case buildMode of
+    RamPush {} -> overlay stockImage4
+      [(0x0077ac48 - image4Base, word32 13), (0x0077ac50 - image4Base, word32 13)]
+    _ -> pure stockImage4
   checkImageHash "image5" image5 "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
   sources <- parseRegions placement
   forM_ sources $ \source -> case regionName (sourceRegion source) of
-    "id4_code" -> unless (sourceBase source == image4Base && sourceBytes source == image4) $
+    "id4_code" -> unless (sourceBase source == image4Base && sourceBytes source == stockImage4) $
       H.failH "spec: id4_code source must be the pinned image4"
     "image5" -> unless (sourceBase source == image5Base && sourceBytes source == image5) $
       H.failH "spec: image5 region source must be the pinned image5"
@@ -175,12 +181,21 @@ main = do
   names <- B.concat <$> mapM (either H.failH pure . encodeName) slotNames
   let blob = payloads <> names
   records <- mapM (either H.failH pure . encodeNameRecord) fullNames
-  stockRecords <- stockNameRecords spec
+  originalRecords <- stockNameRecords spec
+  stockRecords <- case buildMode of
+    RamPush {} -> do
+      chromeRecord <- either H.failH pure (encodeLabelRecord "CLASSIC CHROME")
+      pure (B.take (2 * nameRecordBytes) originalRecords <> chromeRecord)
+    _ -> pure originalRecords
   uiRecords <- mapM (either H.failH pure . encodeLabelRecord) uiTexts
   let nameTable = B.append stockRecords (B.concat records <> B.concat uiRecords)
-  cardFile <- either H.failH pure (encodeBankFile state)
-  case classifyBankFile domain cardFile of
-    ValidFile (DecodedV2 _) -> pure ()
+  let filmEncoding = case buildMode of
+        RamPush {} -> ClassicChromeFilmEncoding
+        _ -> D3FilmEncoding
+  cardFile <- either H.failH pure (encodeBankFileFor filmEncoding state)
+  case classifyBankFileFor filmEncoding domain cardFile of
+    ValidFile (DecodedV2 _) | filmEncoding == D3FilmEncoding -> pure ()
+    ValidFile (DecodedV3 _) | filmEncoding == ClassicChromeFilmEncoding -> pure ()
     result -> H.failH ("spec: bank is not safe to publish: " ++ show result)
   -- the nine pages: one slot-list node, one sub-list node per slot, one
   -- selection node. Every page is a list whose rows carry the tokens the
@@ -270,18 +285,21 @@ main = do
       , labelId
       )
   filmLabelsAddress <- hexField edit "film_labels"
-  let filmTokens = [0, 3, 1, 7, 0xc, 5, 6]
+  let chromeBank = case buildMode of RamPush {} -> True; _ -> False
+      filmTokens = [0, 3, 1, 7, 0xc, 5, 6] ++ [2 | chromeBank]
   forM_ fields $ \(index, property, _, table, labels, tokens, _) -> do
     let field = recipeFields !! index
     unless (property == fieldProperty field && table == fieldTable field) $
       H.failH "spec: edit fields must follow the pinned property and conversion-table order"
     when (property == 0xfe && (tokens /= filmTokens || labels /= filmLabelsAddress)) $
-      H.failH "spec: film edit rows and labels must use the seven pinned stock modes"
+      H.failH "spec: film edit rows and labels differ from the package's supported films"
   stockFilmLabels <- readArray image4 image4Base 0x0078d4f8 16 0xffffffff
   unless (B.length stockFilmLabels == 96) $
     H.failH "spec: the pinned stock film label array must have five rows"
   filmLabelsBytes <- either H.failH pure $
-    appendLabelQuadruples stockFilmLabels [[0x49b, 0x49a, 0x499, 0x49c], [0x497, 0x496, 0x495, 0x498]]
+    appendLabelQuadruples stockFilmLabels
+      ([[0x49b, 0x49a, 0x499, 0x49c], [0x497, 0x496, 0x495, 0x498]]
+        ++ [[0, 0, 0, 0x83e] | chromeBank])
   -- the edit screen's rows are claimed by class only, so the pairing of a row
   -- token with the field it opens rides the row's child pointer: the field order
   -- in the spec must match the host stride or a token would open another field
@@ -697,11 +715,9 @@ ramNameImagePath :: FilePath
 ramNameImagePath =
   "private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/package-field-marker/d3/id2-patched.bin"
 
-ramD3Image4Path, ramD3Image5Path, ramRc0Image2Path :: FilePath
+ramD3Image4Path, ramRc0Image2Path :: FilePath
 ramD3Image4Path =
   "private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/package-field-marker/d3/id4-patched.bin"
-ramD3Image5Path =
-  "private-data/analysis/x-m1-1.50/recipes/d3-q-rows-20261017/d3-emit/id5-patched.bin"
 ramRc0Image2Path = "private-data/analysis/x-m1-1.50/filmsim/id2-00130000.bin"
 
 newtype RuntimeBase = RuntimeBase Word32
@@ -747,9 +763,23 @@ carveSpecAt placementKind original kernel image2Path = do
           then replaceFields r [("source", H.s "<carve-zero-template>"),
             ("source_base", H.get r "start"), ("flash_offset", Null)]
           else r | r <- H.list (H.get placement "regions"), H.str (H.get r "name") /= "image4"]
-      edit = replaceFields (H.get menu "edit")
+      originalEdit = H.get menu "edit"
+      chromeEdit = case placementKind of
+        FlashCarve -> originalEdit
+        RamCarve {} ->
+          let labels = hexFieldIn originalEdit "film_labels" + 8
+              fields = [if hexFieldIn field "property" == 0xfe
+                  then replaceFields field [("tokens", H.arr (H.list (H.get field "tokens") ++ [H.s "0x2"])),
+                    ("labels", H.s (hex32 labels))]
+                  else field | field <- H.list (H.get originalEdit "fields")]
+           in replaceFields originalEdit [("film_labels", H.s (hex32 labels)), ("fields", H.arr fields)]
+      edit = replaceFields chromeEdit
         [("get_address", H.s (hex32 getAddress)), ("set_address", H.s (hex32 setAddress))]
-      newPlacement = replaceFields placement [("mode", H.s "complete"), ("regions", H.arr regions),
+      sizedRegions = [case placementKind of
+          RamCarve {} | H.str (H.get region "name") == "edit_half" ->
+            replaceFields region [("bytes", H.n 1692)]
+          _ -> region | region <- regions]
+      newPlacement = replaceFields placement [("mode", H.s "complete"), ("regions", H.arr sizedRegions),
         ("host", replaceFields host hostSymbols), ("menu", replaceFields menu [("edit", edit), ("w28", H.s "0x1")])]
   pure (replaceFields moved [("placement", newPlacement), ("image2", H.s image2Path)])
 
@@ -956,57 +986,53 @@ data RamPublication = RamPublication
   , ramNew :: Word32
   }
 
--- | D3's 156 publications over the RC0-installed images, as (setup,
--- activation) in table order (reports/ram-push-d3-design.md section 3.2).
--- The prefix window is published whole; below the RC0 image-4 load its old
--- words are zero.
-d3RamPublications
-  :: B.ByteString -> B.ByteString -> B.ByteString
-  -> B.ByteString -> B.ByteString -> B.ByteString
-  -> Either String ([RamPublication], [RamPublication])
-d3RamPublications rc0Id4 rc0Id5 rc0Id2 d3Id4 d3Id5 d3Id2 = do
-  let rc0Image4Base = 0x0061c340
-      d3Image4Base = 0x0061c1fc
-      image4End = 0x0089ec00
-      image5Base = 0x00bf1a00
-      image2Base = 0x00130000
-      windowEnd = 0x0061c400
-      imageEnd imageBase bytes = imageBase + fromIntegral (B.length bytes)
-      changed old oldBase new newBase lo hi =
-        [a | a <- [lo, lo + 4 .. hi - 4], readWord old oldBase a /= readWord new newBase a]
-      rc0Word4 a = if a < rc0Image4Base then 0 else readWord rc0Id4 rc0Image4Base a
-      image4Word a = RamPublication a (rc0Word4 a) (readWord d3Id4 d3Image4Base a)
-      image5Word a = RamPublication a (readWord rc0Id5 image5Base a) (readWord d3Id5 image5Base a)
-      image2Word a = RamPublication a (readWord rc0Id2 image2Base a) (readWord d3Id2 image2Base a)
-      filmRows = [0x0077ac48, 0x0077ac50, 0x0077ac60, 0x0077ac68]
-      listPointers = [0x007823c8, 0x007823c4, 0x00785d98, 0x00785d94, 0x0077d1a8, 0x0077d1a4]
-      qPointers = [0x0078b024, 0x0078b020]
-      site = 0x00d50a48
-      rowGetter = 0x00d5a088
-      nameWords = [0x0037b7c4, 0x0037b7c8 .. 0x0037b7f4]
-  unless
-    ( imageEnd rc0Image4Base rc0Id4 == image4End && imageEnd d3Image4Base d3Id4 == image4End
-        && B.length rc0Id5 == B.length d3Id5 && B.length rc0Id2 == B.length d3Id2
-    ) $
-    Left "ram-push: D3 and RC0 decodes differ in extent"
-  unless
-    (sortOn id (changed rc0Id4 rc0Image4Base d3Id4 d3Image4Base windowEnd image4End)
-       == sortOn id (filmRows <> listPointers <> qPointers)) $
-    Left "ram-push: D3 image-4 body words differ from the pinned rows and pointers"
-  unless (changed rc0Id5 image5Base d3Id5 image5Base image5Base (imageEnd image5Base rc0Id5) == [site, rowGetter]) $
-    Left "ram-push: D3 image-5 words differ from the pinned site and row getter"
-  unless (changed rc0Id2 image2Base d3Id2 image2Base image2Base (imageEnd image2Base rc0Id2) == nameWords) $
-    Left "ram-push: D3 image-2 words differ from the pinned 0x83d record"
-  let setup =
-        map image4Word [d3Image4Base, d3Image4Base + 4 .. rc0Image4Base - 4]
-          <> map image2Word nameWords
-          <> map image4Word filmRows
-      activation =
-        map image4Word listPointers
-          <> map image4Word [rc0Image4Base, rc0Image4Base + 4 .. windowEnd - 4]
-          <> map image4Word qPointers
-          <> [image5Word site, image5Word rowGetter]
-  pure (setup, activation)
+-- | D3's rows and tables move out of Classic Chrome's prefix window.
+relocatedD3
+  :: Word32 -> B.ByteString -> B.ByteString -> B.ByteString
+  -> IO ([(Word32, B.ByteString)], [RamPublication])
+relocatedD3 base rc0Id4 rc0Id5 d3Id4 = do
+  let start = runtimeNameBase base + 0x400
+      values = start
+      labels = start + 88
+      qLabels = start + 264
+      rows = start + 440
+      props = start + 456
+      hook = start + 472
+      table = start + 548
+      oldBase = 0x0061c1fc
+      slice address bytes = B.take bytes (B.drop (fromIntegral (address - oldBase)) d3Id4)
+      rowA = slice 0x0077ac48 12
+      tableRows' = slice 0x0077ac30 156
+      oldHook = slice 0x0061c3ac 76
+      mov rd address upper =
+        let immediate = if upper then address `shiftR` 16 else address .&. 0xffff
+         in word32 ((if upper then 0xe3400000 else 0xe3000000)
+              .|. (rd `shiftL` 12) .|. ((immediate .&. 0xf000) `shiftL` 4) .|. (immediate .&. 0xfff))
+  call <- either H.failH pure (armBranchWord (hook + 52) 0x00d4fc74)
+  hookBytes' <- overlay oldHook
+    [(8, mov 4 rows False), (12, mov 4 rows True), (24, word32 0xe355000d),
+     (32, mov 6 props False), (36, mov 6 props True), (52, word32 call)]
+  chromeLabels <- either H.failH pure (encodeLabelsArray
+    ([[readWord (slice 0x0061c24c 144) 0 (fromIntegral (16 * k + 4 * j)) | j <- [0 :: Int .. 3]] | k <- [0 :: Int .. 8]]
+      ++ [[0, 0, 0, 0x83e]]))
+  chromeQ <- either H.failH pure (encodeLabelsArray
+    ([[readWord (slice 0x0061c2ec 144) 0 (fromIntegral (16 * k + 4 * j)) | j <- [0 :: Int .. 3]] | k <- [0 :: Int .. 8]]
+      ++ [[0x83e, 0, 0, 0]]))
+  filmTable <- overlay (tableRows' <> word32 15 <> B.drop 4 rowA <> B.concat (replicate 3 (word32 0xffff)))
+    [(24, word32 13), (32, word32 13)]
+  let pointers =
+        [(0x007823c8, labels), (0x007823c4, values), (0x00785d98, labels),
+         (0x00785d94, values), (0x0077d1a8, labels), (0x0077d1a4, values),
+         (0x0078b024, qLabels), (0x0078b020, values), (0x0081b494, table)]
+      pub4 (address, value) = RamPublication address (readWord rc0Id4 0x0061c340 address) value
+  branch <- either H.failH pure (armBranchWord 0x00d50a48 hook)
+  pure
+    ([(values, encodeValuesArray [(row, 0) | row <- [0,3,1,7,12,5,6,13,4,2]]),
+      (labels, chromeLabels), (qLabels, chromeQ), (rows, slice 0x0061c38c 16),
+      (props, slice 0x0061c39c 16), (hook, hookBytes'), (table, filmTable)],
+     map pub4 pointers ++
+       [RamPublication 0x00d50a48 (readWord rc0Id5 0x00bf1a00 0x00d50a48) branch,
+        RamPublication 0x00d5a088 (readWord rc0Id5 0x00bf1a00 0x00d5a088) 0xe320f000])
 
 emitRamPush :: Word32 -> WritePlan -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
 emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out = do
@@ -1104,25 +1130,60 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
     H.failH "ram-push: publication destinations differ from the bank contract"
   rc0Id2 <- B.readFile ramRc0Image2Path
   d3Id4 <- B.readFile ramD3Image4Path
-  d3Id5 <- B.readFile ramD3Image5Path
-  d3Id2 <- B.readFile ramNameImagePath
   checkImageHash "RC0 image2" rc0Id2 "236d12a11c8b386f71192675c12398358840327f21e392e6eaa91ddfd6e020a5"
   checkImageHash "D3 image4" d3Id4 "6e5df0b7a8a8083679d5cd78e314598e192f7aa04969ca296f5ea381ea5661e0"
-  checkImageHash "D3 image5" d3Id5 "9050aae0d456aae40b90630a3aea16cab57ecafc66dce28e9cfa77eb1cea7d76"
-  checkImageHash "D3 image2" d3Id2 "1b8a281c34450ae7d9a195298fb66398e750ddbb599c3b98e152782416dcf294"
-  (d3Setup, d3Activation) <- either H.failH pure (d3RamPublications rc0Id4 rc0Id5 rc0Id2 d3Id4 d3Id5 d3Id2)
-  let logical = legacyOrdered <> d3Setup <> d3Activation
+  (d3Chunks, d3Activation) <- relocatedD3 base rc0Id4 rc0Id5 d3Id4
+  let ccInputs =
+        [ ("CC_ID4", "private-data/analysis/classic-chrome-patch/candidate-build-1/patched-id4.bin",
+            "00493fab3f7c67fddf3899e8f38395def2b593b93e4dcb73206bfb6cc2ddff6a")
+        , ("CC_ID5", "private-data/analysis/classic-chrome-patch/candidate-build-1/patched-id5.bin",
+            "e740aeb28ce070a659583bd0bb5cfd9ecc5846ac302564741fcdf37b9b2089bb")
+        , ("CC_PLAIN", "private-data/analysis/classic-chrome-patch/candidate-build-1/patched-plain.bin",
+            "7e60e04e2dde4cecea4d575e02ae64b8f6053af3f459c42b5222f980e3c301fa")
+        ]
+  ccInputsRead <- forM ccInputs $ \(variable, fallback, digest) -> do
+    path <- maybe fallback id <$> lookupEnv variable
+    bytes <- B.readFile path
+    checkImageHash variable bytes digest
+    pure (path, bytes)
+  ccFlash <- case map snd ccInputsRead of
+    [a, b, c] -> pure (CC.FlashImages a b c)
+    _ -> H.failH "ram-push: three Classic Chrome images required"
+  ccSymbols <- either H.failH pure (CC.ramSymbols [(symbolName s, CC.Address (symbolAddress s)) | s <- symbols])
+  ccPublications <- either H.failH pure
+    (CC.ccRamPublications (CC.Rc0Images rc0Id4 rc0Id5 rc0Plain rc0Id2) ccFlash ccSymbols)
+  extra <- fmap concat $ forM
+    ["host/firmware/classic-chrome-liveview-image5.json", "host/firmware/classic-chrome-frames-image5.json"] $ \path -> do
+      fragment <- H.jsonRead =<< B.readFile path
+      forM (H.list (H.get fragment "words")) $ \w -> do
+        address <- hexField w "address"
+        old <- hexField w "current"
+        new <- hexField w "new"
+        unless (readWord rc0Id5 0x00bf1a00 address == old) $
+          H.failH ("ram-push: Classic Chrome fragment old word differs at " ++ hex32 address)
+        pure (RamPublication address old new)
+  parameterPath <- maybe "private-data/analysis/classic-chrome/candidate.json" id <$> lookupEnv "CC_PARAMETERS"
+  parameters <- either H.failH pure . CC.parseParameters =<< B.readFile parameterPath
+  ccData <- linked symbols "cc_ram_data"
+  let reserved = map ramAddress (legacyOrdered ++ d3Activation)
+      ccKept = [p | p <- ccPublications, let CC.Address address = CC.publicationAddress p,
+        address `notElem` reserved]
+      convert p = let CC.Address address = CC.publicationAddress p
+                   in RamPublication address (CC.publicationOld p) (CC.publicationNew p)
+      ccSetup = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Setup]
+      ccActivation = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Activation]
+      logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra
       ordered = [logical !! index | index <- safeOrder]
       allocationEnd = toInteger base + toInteger runtimeAllocationSize
   unless
     ( length logical == publicationCount
         && length safeOrder == publicationCount
         && sortOn id safeOrder == [0 .. publicationCount - 1]
-        && length d3Setup == publicationSetupCount - 69
+        && length ccSetup == publicationSetupCount - 69
         && length (nub (map ramAddress logical)) == publicationCount
         && all (\p -> toInteger (ramAddress p) + 4 <= toInteger base || toInteger (ramAddress p) >= allocationEnd) logical
     ) $
-    H.failH "ram-push: publication order, D3 split or destinations differ from the 253-entry contract"
+    H.failH "ram-push: publication order or destinations differ from the combined bank/Classic Chrome contract"
   let allow = [(0x0061c400, 0x00282800), (0x00bf1a00, 0x004d0020), (0x01100000, 0x00080000)]
       metadata =
         B.concat [word32 lo <> word32 spanBytes | (lo, spanBytes) <- allow]
@@ -1150,6 +1211,8 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
   runtime1 <- overlay runtime0
     ( [(0, metadata), (0x480, store)]
         <> [(writeAddress w - base, writeNew w) | w <- runtimeWrites]
+        <> [(address - base, bytes) | (address, bytes) <- d3Chunks]
+        <> [(ccData - base, CC.encodeDataBlock parameters)]
     )
   runtime <- overlay runtime1
     [(publicationsStart - base, installerPublications)]
@@ -1179,9 +1242,15 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
         , "host/firmware/RamPushLayout.hs"
         , ramNameImagePath
         , ramD3Image4Path
-        , ramD3Image5Path
         , ramRc0Image2Path
-        ]
+        , "menu/classic_chrome_ram.S"
+        , "menu/classic_chrome_ram_stock.ld"
+        , "host/FujiAF/ClassicChrome.hs"
+        , "host/FujiAF/ClassicChromeRam.hs"
+        , "host/firmware/classic-chrome-liveview-image5.json"
+        , "host/firmware/classic-chrome-frames-image5.json"
+        , parameterPath
+        ] ++ map fst ccInputsRead
   sourceIdentity <- forM sourcePaths $ \path -> do
     digest <- H.sha256 =<< B.readFile path
     pure (path, H.s digest)

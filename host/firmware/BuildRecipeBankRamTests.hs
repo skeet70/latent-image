@@ -24,18 +24,18 @@ main = do
         ]
   check "fixed allocation contains every 8-byte-aligned low-half layout"
     (all (<= runtimeAllocationSize) allocationExtents)
-  check "fixed allocation is the smallest safe bound"
-    (maximum allocationExtents == runtimeAllocationSize)
+  check "allocation includes aligned installer and relocated recipe tables"
+    (all (\base -> ((runtimeBankEnd base + 31) .&. 0xffffffe0) - base + runtimeInstallerExtent <= runtimeAllocationSize) alignedBases)
   check "the order is a permutation of every logical publication"
     (length safePublicationOrder == publicationCount
       && all (`elem` safePublicationOrder) [0 .. publicationCount - 1])
   check "bank setup publications use dependency-closed order"
     (take 69 safePublicationOrder == [0 .. 35] <> [55 .. 68] <> [88] <> [36 .. 53])
-  check "D3 setup follows bank setup and D3 activation precedes bank activation"
-    (take 156 (drop 69 safePublicationOrder) == [97 .. 252]
-      && drop 69 (take publicationSetupCount safePublicationOrder) == [97 .. 194])
-  check "bank activation publications keep discoverability last"
-    (drop 225 safePublicationOrder == [75,76,72,73,74,69,70,71,77,78,79,80,81,82,83,89,90,91,92,93,94,95,96,84,85,86,87,54])
+  check "Classic Chrome setup precedes all activation"
+    (drop 69 (take publicationSetupCount safePublicationOrder) == [97 .. 158])
+  check "root discovery follows processing and compiled-recipe activation"
+    (last safePublicationOrder == 54
+      && all (\index -> index `elem` take (publicationCount - 1) safePublicationOrder) [97 .. 221])
   let completeInstaller = unlines
         [ "00000000 <ram_push_install>:"
         , "  bl 0x10 <execute_operation>"

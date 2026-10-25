@@ -1,7 +1,7 @@
 -- | The RAM-push layout. The installer section holds for every payload kind:
 -- menu/ram_push_installer.c linked at a 32-byte boundary, then its
 -- publication table, rendezvous and mailbox. The runtime section is the
--- recipe bank and D3 payload: 253 publications in an 0x1d9f8-byte allocation.
+-- recipe bank, relocated D3 and Classic Chrome payload.
 module RamPushLayout
   ( installerInstallOffset
   , installerRollbackOffset
@@ -111,28 +111,27 @@ runtimeNameBase base =
    in if candidate < minimumName then candidate + 0x10000 else candidate
 
 runtimeBankEnd :: Word32 -> Word32
-runtimeBankEnd base = runtimeNameBase base + 14 * 66
+runtimeBankEnd base = (runtimeNameBase base + 0x800 + 31) .&. 0xffffffe0
 
 runtimeInstallerExtent :: Word32
 runtimeInstallerExtent = installerExtent publicationCount
 
 runtimeAllocationSize :: Word32
-runtimeAllocationSize = 0x1d9f8
+runtimeAllocationSize = 0x1dc98
 
--- | Logical indexes in table order: the bank's 69 setup entries, D3's 98
--- setup entries (logical 97..194), D3's 58 activation entries (logical
--- 195..252), then the bank's 28 activation entries ending with root 54.
+-- | Bank setup, Classic Chrome setup and activation, relocated D3 activation,
+-- then bank activation with root discovery last.
 safePublicationOrder :: [Int]
 safePublicationOrder =
   [0 .. 35] <> [55 .. 68] <> [88] <> [36 .. 53]
-    <> [97 .. 252]
+    <> [97 .. 221]
     <> [75,76,72,73,74,69,70,71,77,78,79,80,81,82,83,89,90,91,92,93,94,95,96,84,85,86,87,54]
 
 publicationSetupCount :: Int
-publicationSetupCount = 167
+publicationSetupCount = 131
 
 publicationCount :: Int
-publicationCount = 253
+publicationCount = 222
 
 staleFixedReferences :: Word32 -> Word32 -> B.ByteString -> [(Int, Word32)]
 staleFixedReferences low high bytes = direct <> movPairs
