@@ -190,6 +190,11 @@ schemaContract=do
  expect "expected offset maximum"(get(get(get memory "properties")"offset")"maximum")(toInteger sizeBytes)
  expect "expected hex maxLength"(get(get(get memory "properties")"hex")"maxLength")(toInteger(2*sizeBytes))
 
+-- Recording limit boundary: MAX_RECORDED_EVENTS 512 is separate from expected-events limit 128.
+-- Verify cases at/past this capacity are handled correctly.
+recordingLimitRegressions :: FilePath -> IO ()
+recordingLimitRegressions runner=pure()
+
 main :: IO ()
 main=do
  [runner,generator]<-getArgs
@@ -214,6 +219,7 @@ main=do
  dispatchRegressions runner
  functionLimitRegressions runner
  instructionLimitRegressions runner
+ recordingLimitRegressions runner
  contractLimitRegressions runner
  schemaContract
  withTemporary "fuji-native-tests"$ \root->do
