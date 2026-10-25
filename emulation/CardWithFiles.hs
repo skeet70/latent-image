@@ -19,7 +19,8 @@ import System.Directory (canonicalizePath, doesFileExist)
 import System.Environment (getArgs, getExecutablePath)
 import System.Exit (ExitCode (..), die)
 import System.FilePath ((</>), takeFileName)
-import System.Process (proc, readCreateProcessWithExitCode)
+import System.Process (CreateProcess (..), StdStream (CreatePipe), createProcess, proc, waitForProcess)
+import System.IO (hSetBinaryMode)
 
 usage :: String
 usage =
@@ -54,16 +55,16 @@ main = do
     let member = takeFileName path
         runtime = ["-i", image, "::/" ++ member]
     runTool "mcopy" mcopy ["-o", "-i", image, path, "::/" ++ member]
-    (code, readBack, err) <- readCreateProcessWithExitCode (proc mtype runtime) ""
+    (code, readBack, err) <- runBytes mtype runtime
     when (code /= ExitSuccess) $
       die ("card-with-files: mtype " ++ member ++ " failed: " ++ err)
     source <- B.readFile path
-    unless (C8.pack readBack == source) $
+    unless (readBack == source) $
       die ("card-with-files: " ++ member ++ " does not read back byte for byte")
     putStrLn ("wrote " ++ member ++ " (" ++ show (B.length source) ++ " bytes)")
-  (code, listing, err) <- readCreateProcessWithExitCode (proc mdir ["-i", image, "::/"]) ""
+  (code, listing, err) <- runBytes mdir ["-i", image, "::/"]
   when (code /= ExitSuccess) $ die ("card-with-files: mdir failed: " ++ err)
-  putStrLn listing
+  putStrLn (C8.unpack listing)
   putStrLn ("copied " ++ inputPath ++ " to " ++ outputPath ++ "; partition offset " ++ show partitionOffset)
 
 parseTail :: FilePath -> FilePath -> Int -> [String] -> IO (FilePath, FilePath, Int, [FilePath])
@@ -99,7 +100,19 @@ toolPath executable name = do
 
 runTool :: String -> FilePath -> [String] -> IO ()
 runTool label executable arguments = do
-  (code, _, err) <- readCreateProcessWithExitCode (proc executable arguments) ""
+  (code, _, err) <- runBytes executable arguments
   case code of
     ExitSuccess -> pure ()
     _ -> die ("card-with-files: " ++ label ++ " failed: " ++ err)
+
+-- | Runs a tool and reads its output as bytes: a card file is binary.
+runBytes :: FilePath -> [String] -> IO (ExitCode, B.ByteString, String)
+runBytes executable arguments = do
+  (_, Just out, Just err, process) <-
+    createProcess (proc executable arguments) {std_out = CreatePipe, std_err = CreatePipe}
+  hSetBinaryMode out True
+  hSetBinaryMode err True
+  bytes <- B.hGetContents out
+  errBytes <- B.hGetContents err
+  code <- waitForProcess process
+  pure (code, bytes, C8.unpack errBytes)
