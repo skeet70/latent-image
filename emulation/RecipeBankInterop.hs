@@ -157,6 +157,7 @@ checkMode file manifestPath = do
   state <- case decodeBankFile bytes of
     Left reason -> failH ("decode refused: " ++ reason)
     Right (DecodedV1 _) -> failH "interop check requires a v2 file"
+    Right (DecodedV3 _) -> failH "interop check requires the legacy D3 film encoding"
     Right (DecodedV2 decoded) -> pure decoded
   let problems =
         [ key ++ ": decoded metadata differs from manifest"
