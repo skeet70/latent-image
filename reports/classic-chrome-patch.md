@@ -912,3 +912,11 @@ Independent mechanism review must cover:
 - CC selection and metadata/RAW hooks alongside the unchanged meanings of stock films and the two relocated D3 choices.
 
 The combined deployment remains volatile RAM. The standalone legacy D3 flash builders remain separate; this change does not accept a flash candidate, SD persistence, power-cycle retention or camera color output.
+
+### 14.1 Behavioral verification
+
+`E-CC-BANK-FORMAT-3-150` (emulated) records the host codec checks, 21 CC-aware native storage cases, the legacy reader's v3 refusal and 405 standalone CC site cases. The added site cases cover stored-CC fallback across the 22 mode columns and the real ordinary/C film getters and setters. They do not exercise CUSTOM SET persistence.
+
+`E-CC-BANK-RAM-150` (emulated) records the strict combined-package trajectory `bank-cc-save-select-none`. The installed mailbox reports ABI 5, status 0, 222 validated publications, 131 setup and 91 activation. CLASSIC CHROME renders at film-list index 9. Save Current stores film `0xd` in CUSTOM 1's saved and working payloads; after ordinary PROVIA, CUSTOM 1 recalls `0xd`, and NONE restores film 0 while retaining the CC recipe. The resident file is v3, selection moves 0/1/0, and the captured 40-byte C record remains unchanged. The entry follows the existing volatile scenario's M-mode preparation and records the first MENU's `prior-render-pending` skip before the next MENU opens the shooting menu.
+
+These are host and emulator results on an unreviewed mechanism. The current volatile deployment does not read or persist SD bank files. Flash installation, camera color, power-cycle retention, CUSTOM SET persistence and unload are outside this trajectory.

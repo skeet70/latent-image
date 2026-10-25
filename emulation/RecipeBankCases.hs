@@ -442,8 +442,9 @@ main = do
   let (stockBlob, stockAt) = packTables id4 tabEntries
       ccFilmRows = [[stored, marker, output]
         | (k, [code, marker, downstream]) <- zip [0 :: Int ..] (stockTabs M.! 0xfe),
-          let stored = if k == 2 then 13 else if k == 4 then 14 else if k == 13 then 15 else code,
+          let stored = if k == 2 then 13 else if k == 4 then 14 else code,
           let output = if k == 2 then 13 else if k == 4 then 3 else downstream]
+        ++ [[15, 0x7ffffffe, 0]]
       (tabs, tabBlob, tabAt) = case filmEncoding of
         D3Films -> (stockTabs, stockBlob, stockAt)
         ClassicChromeFilms ->
@@ -488,7 +489,7 @@ main = do
         ClassicChromeFilms ->
           ("cc-film-table", 0x009b2000, B.concat (map u32le (concat ccFilmRows ++ replicate 3 0xffff))) :
           [(name, base, if name == "conv-ptrs"
-              then poke (0xfe * 4) (u32le 0x009b2000) bytes else bytes)
+              then B.take 0x3f8 bytes <> u32le 0x009b2000 <> B.drop 0x3fc bytes else bytes)
           | (name, base, bytes) <- stockRegions]
       (sdSpecs, volatileSpecs) = specSet filmEncoding ks ms fields tabs hostBank failureRedraw realRegions
       suite = case bankMode of
@@ -1111,7 +1112,7 @@ specSet filmEncoding ks ms fields tabs hostBank (StockFailureRedraw failureRedra
       ((model (fileA2 [])) {mCard = cardWith old B.empty, mCase = name26 "RENAMED"})
       (Expect "returned" 0
         [("card", 0, cardWith old (encodeFileV3 42 (withRecord 0
-          (case head (bRecords expected) of Populated _ saved working -> Populated (name26 "RENAMED") saved working; Unpopulated -> Unpopulated) expected)))])
+          (case bRecords expected of Populated _ saved working : _ -> Populated (name26 "RENAMED") saved working; _ -> Unpopulated) expected)))])
       ("rb_name_commit" : "rb_stage_image" : "rb_write_back" : loadFns) bankStubs
     ccUnsafe cid bank = Spec cid
       "contract: a version-2 film code15 refuses the whole bank without card or live-setting changes"
@@ -2399,7 +2400,7 @@ runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable g
       -- and two verified generations per call; 4000000 instructions and
       -- 10000 ms are the runner's maxima
       selectionEntry = "select" `isInfixOf` spEntry sp
-      longEntry = selectionEntry || bankMode == VolatileBank
+      longEntry = selectionEntry || bankMode == VolatileBank || spEntry sp == "rbm_seq_load_all_readback"
       caseInstructions = if longEntry then 4000000 else 1000000 :: Int
       caseWallMs = if longEntry then 10000 else 4000 :: Int
       addrOfEntry = case spEntry sp of

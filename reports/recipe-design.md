@@ -796,6 +796,8 @@ For an existing v2 bank, the CC-aware storage path presents the same names and c
 
 The deployed combined RAM candidate still uses `RB_VOLATILE_BANK`: it starts empty and does not read SD bank files. The compatibility matrix applies to the host codec and the CC-aware storage kernel, not a claim that this RAM deployment gained SD persistence or that a new flash installation was accepted. Text import writes v3; legacy-bank export refuses rather than relabelling D3 A as Classic Chrome.
 
+Behavioral verification `E-CC-BANK-FORMAT-3-150` (emulated) covers the compatibility matrix in the host codec and the native SD kernels. The CC-aware kernel reads v2 D3 A as code `0xf` across all seven saved/working pairs and the valid base, leaves both source files unchanged on load, and writes the migrated v3 image only on a normal mutation. The legacy kernel refuses v3. CC v3 round-trips, preserves auto-update and rejects legacy code `0xf`. These checks do not approve the format decision or enable SD persistence in the volatile deployment.
+
 ## 19. Implemented host tooling, prerequisites and smoke commands
 
 Built in this pass, host-only and offline:
