@@ -203,10 +203,13 @@
           ]
         },
         "repeats_per_combination": {
-          "const": 10
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 99
         },
         "planned_attempts": {
-          "const": 110
+          "type": "integer",
+          "minimum": 1
         },
         "scene_weights": {
           "const": "equal scene weight; equal start weight within each scene"
@@ -317,7 +320,7 @@
           "const": "sha256-ascii-v1"
         },
         "blocks": {
-          "const": "one complete combination block per repeat, repeats 01 through 10"
+          "const": "one complete combination block per repeat; count from design.repeats_per_combination"
         },
         "sort_key": {
           "const": "SHA256 ASCII(seed + | + two-digit repeat + | + combination_id), ascending hex; tie by combination_id"
@@ -349,13 +352,13 @@
       ],
       "properties": {
         "clock": {
-          "const": "external video presentation timestamps in one recording"
+          "const": "declared camera acquisition/event clocks; optional video clock with synchronization uncertainty"
         },
         "start_event": {
-          "const": "visible half-press onset proxy; AF acceptance time unobserved"
+          "const": "source-bound AF request when established; otherwise declared visible half-press proxy"
         },
         "confirmation_event": {
-          "const": "first visible camera confirmation indication"
+          "const": "declared camera confirmation event; internal result and visible indication reported separately"
         },
         "acceptable_focus_onset": {
           "const": "null unless independently validated continuous ROI/plane observations bound onset"
@@ -370,7 +373,7 @@
           "const": 15000
         },
         "uncertainty": {
-          "const": "event frame brackets plus synchronization/occlusion bounds; unknown remains null"
+          "const": "source clock resolution, acquisition intervals and synchronization/visibility bounds; unknown remains null"
         },
         "fallback": {
           "const": "stock-only pilot has no candidate fallback; future fallback counts from original start under same deadline"
@@ -390,13 +393,13 @@
       ],
       "properties": {
         "domain": {
-          "const": "saved photographs, fixed processing and intended target ROI/plane"
+          "const": "declared coherent image domain with fixed processing and intended target ROI/plane; preview is not saved-photo quality"
         },
         "metric": {
-          "const": "edge acutance normalized by same-scene reference sweep maximum"
+          "const": "independently validated intended-region sharpness and plane correctness; same-scene reference normalization"
         },
         "reference": {
-          "const": "bounded ordinary manual-focus sweep bracketing optimum, fixed geometry/settings; repeat best-position captures"
+          "const": "bounded validated stock lens-control sweep at fixed geometry/settings; both approach directions and repeated best-region captures"
         },
         "acceptance_threshold": {
           "type": [
@@ -513,6 +516,7 @@
             "scene fixtures and weights",
             "settings and start recipes",
             "quality threshold and repeatability",
+            "positive accuracy endpoint, minimum effect and confidence rule",
             "deadlines/outcome/exclusion/fallback rules",
             "sample size and stopping rule",
             "estimators/confidence method and bounds",
@@ -586,7 +590,7 @@
           }
         },
         "target_policy": {
-          "const": "specification choices, revisable by recorded decision before confirmation; bounds must be supported by confidence intervals and independent quality repeatability"
+          "const": "specification choices, revisable before confirmation; confidence bounds support speed and noninferiority, and a separate frozen positive accuracy endpoint is required to claim more accurate AF"
         }
       }
     }

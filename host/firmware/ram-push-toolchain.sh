@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # Writes the RamPushToolchain module: the RAM-push relink tools' resolved store
 # paths, a SHA-256 over those paths and a SHA-256 over the builder sources.
-# usage: OUT READLINK SHA256SUM SORT BASH CLANG LD_LLD OBJCOPY NM OBJDUMP SOURCE...
+# usage: OUT SHA256SUM SORT BASH_STORE_PATH CLANG_STORE_PATH LD_LLD_STORE_PATH OBJCOPY_STORE_PATH NM_STORE_PATH OBJDUMP_STORE_PATH SHA256SUM_STORE_PATH SOURCE...
 set -euo pipefail
 
-out="$1" readlink="$2" sha256sum="$3" sort="$4"
-shift 4
+out="$1" sha256sum="$2" sort="$3"
+shift 3
 labels=(bash clang ld.lld llvm-objcopy llvm-nm llvm-objdump)
 paths=()
 for label in "${labels[@]}"; do
-  paths+=("$("$readlink" -f "$1")")
+  IFS= read -r path < "$1"
+  paths+=("$path")
   shift
 done
-sha_path="$("$readlink" -f "$sha256sum")"
+IFS= read -r sha_path < "$1"
+shift
 coreutils_bin="${sha_path%/*}"
 
 toolchain_digest="$(

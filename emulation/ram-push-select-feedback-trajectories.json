@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "entry": "Cardless volatile bank SELECT C1 then NONE confirmation feedback. Requires the ordinary empty RAM-bank installation and no card.",
+  "before_unload": [
+    {"phase": "select-feedback-setup", "capture": "feedback-slot-list", "steps": [
+      ["menu", 67, 56, 0], ["menu", 1, 5, 2], ["left", 0, 5, 0],
+      ["down", 0, 5, 1], ["down", 0, 5, 2], ["down", 0, 5, 3], ["cursor:down:4:8", 0, 5, 4],
+      ["right", 1, 5, 30], ["down", 1, 5, 31], ["down", 1, 5, 32], ["down", 1, 5, 33],
+      ["ok", 97, 641, 0], ["ok", 97, 624, 0], ["ok", 97, 641, 0]]},
+    {"phase": "select-feedback-c1", "requires": ["select-feedback-setup"], "capture": "feedback-c1-blink",
+     "reads": [["select-snapshot", "00941300", 44], ["pane-state", "015e64d8", 116], ["animation", "015e4894", 28]],
+     "steps": [["back", 1, 5, 33], ["down", 1, 5, 34], ["ok", 1, 645, 0], ["down", 1, 645, 1],
+       ["ok", 1, 5, 34, {"hold_instructions": 3000000, "release_instructions": 1}]]},
+    {"phase": "select-feedback-none-open", "requires": ["select-feedback-c1"], "capture": "feedback-none-cursor-c1-current",
+     "reads": [["animation", "015e4894", 28]], "steps": [["ok", 1, 645, 0]]},
+    {"phase": "select-feedback-none", "requires": ["select-feedback-none-open"], "capture": "feedback-none-blink",
+     "reads": [["select-snapshot", "00941300", 44], ["pane-state", "015e64d8", 116], ["animation", "015e4894", 28], ["activation", "runtime:rb_activation", 8]],
+     "steps": [["ok", 1, 5, 34, {"hold_instructions": 3000000, "release_instructions": 1}]]}
+  ],
+  "after_unload": []
+}

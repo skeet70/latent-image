@@ -11,14 +11,18 @@ module Emulation.EmulatorSlot
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, try)
-import Control.Monad (unless)
+import Control.Monad (forM_, unless, when)
+import qualified Data.ByteString as B
 import Data.Char (isDigit)
-import System.Directory (createDirectoryIfMissing, getHomeDirectory)
+import Data.List (isSuffixOf, stripPrefix)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getHomeDirectory, listDirectory, removeFile)
 import System.Environment (getExecutablePath, lookupEnv, setEnv)
 import System.FilePath ((</>))
-import System.IO (SeekMode (AbsoluteSeek), hFlush, hPutStrLn, stderr)
+import System.IO (Handle, IOMode (ReadMode, WriteMode), SeekMode (AbsoluteSeek), hFlush, hPutStrLn, stderr, withBinaryFile)
+import System.IO.Error (catchIOError, isDoesNotExistError)
+import System.Posix.Files (createSymbolicLink, setFileMode)
 import System.Posix.IO (LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setLock)
-import System.Posix.Process (executeFile)
+import System.Posix.Process (executeFile, getProcessID)
 import Text.Read (readMaybe)
 
 newtype SlotCount = SlotCount Int
@@ -58,15 +62,20 @@ slotPolicyFromEnvironment = do
 -- the process with itself under @systemd-run --user --scope@. The slot is a
 -- POSIX record lock, which execve preserves, so it is held until the scope's
 -- main process exits.
+--
+-- The re-exec runs a pinned copy of the running executable, never its original
+-- path: a concurrent build relinks that path while the wait runs, and
+-- systemd-run must not start the replacement or a deleted path.
 reexecInSlot :: SlotPolicy -> [String] -> IO ()
 reexecInSlot policy arguments = do
   inside <- lookupEnv slotVariable
   case inside of
     Just _ -> pure ()
     Nothing -> do
-      Slot slot <- acquire policy
+      directory <- slotDirectory
+      Slot slot <- acquire directory policy
       setEnv slotVariable (show slot)
-      executable <- getExecutablePath
+      executable <- pinExecutable directory
       let MemoryMax memory = memoryMax policy
       executeFile "systemd-run" True
         ([ "--user", "--scope", "--quiet", "--collect"
@@ -76,10 +85,14 @@ reexecInSlot policy arguments = do
          , executable
          ] ++ arguments) Nothing
 
-acquire :: SlotPolicy -> IO Slot
-acquire policy = do
+slotDirectory :: IO FilePath
+slotDirectory = do
   directory <- (</> ".cache" </> "xm1-emulator-slots") <$> getHomeDirectory
   createDirectoryIfMissing True directory
+  pure directory
+
+acquire :: FilePath -> SlotPolicy -> IO Slot
+acquire directory policy = do
   let SlotCount count = slotCount policy
       attempt announced = do
         free <- firstFree directory [1 .. count]
@@ -101,3 +114,73 @@ firstFree directory (slot : rest) = do
   case locked of
     Right () -> pure (Just (Slot slot))
     Left _ -> closeFd fd >> firstFree directory rest
+
+-- | A private copy of the running executable beneath the slot directory, named
+-- for the PID execve preserves. systemd-run starts the scope by path, and the
+-- original path is not stable across the slot wait. The bytes come from the
+-- running inode through @/proc/self/exe@, so no relink of the on-disk file
+-- changes them.
+pinExecutable :: FilePath -> IO FilePath
+pinExecutable directory = do
+  sweepPinned directory
+  pid <- getProcessID
+  executable <- getExecutablePath
+  let pinned = directory </> ("pin-" ++ show pid)
+  -- A crashed run with a reused PID can leave either path behind.
+  removeIfPresent pinned
+  removeIfPresent (pinned ++ ".runfiles")
+  withBinaryFile "/proc/self/exe" ReadMode $ \running ->
+    withBinaryFile pinned WriteMode $ \copy -> copyChunks running copy
+  setFileMode pinned 0o700
+  linkRunfiles executable pinned
+  pure pinned
+
+removeIfPresent :: FilePath -> IO ()
+removeIfPresent path = removeFile path `catchIOError` \problem ->
+  unless (isDoesNotExistError problem) (ioError problem)
+
+copyChunks :: Handle -> Handle -> IO ()
+copyChunks source target = do
+  chunk <- B.hGet source copyChunkBytes
+  unless (B.null chunk) (B.hPut target chunk >> copyChunks source target)
+
+copyChunkBytes :: Int
+copyChunkBytes = 1024 * 1024
+
+-- | Bazel tools locate their data at @getExecutablePath ++ ".runfiles"@; the
+-- pinned copy keeps that adjacency through a link to the original tree.
+linkRunfiles :: FilePath -> FilePath -> IO ()
+linkRunfiles executable pinned = do
+  let runfiles = onDiskPath executable ++ ".runfiles"
+  present <- doesDirectoryExist runfiles
+  when present (createSymbolicLink runfiles (pinned ++ ".runfiles"))
+
+-- | @readlink(2)@ of @/proc/self/exe@ reports the kernel's last path for the
+-- inode, with @ (deleted)@ appended once a relink has replaced it.
+onDiskPath :: FilePath -> FilePath
+onDiskPath path
+  | deletedSuffix `isSuffixOf` path = take (length path - length deletedSuffix) path
+  | otherwise = path
+
+deletedSuffix :: String
+deletedSuffix = " (deleted)"
+
+-- | Removes pinned copies whose PID is gone. The scope's parent process holds
+-- the PID until the run ends, and a run reads its own pinned path throughout,
+-- so only that absence makes a copy dead.
+sweepPinned :: FilePath -> IO ()
+sweepPinned directory = do
+  entries <- listDirectory directory
+  forM_ entries $ \entry -> case pinnedPid entry of
+    Nothing -> pure ()
+    Just pid -> do
+      alive <- doesDirectoryExist ("/proc" </> show pid)
+      unless alive $ do
+        _ <- try (removeFile (directory </> entry)) :: IO (Either IOException ())
+        pure ()
+
+pinnedPid :: String -> Maybe Int
+pinnedPid entry = do
+  rest <- stripPrefix "pin-" entry
+  let (digits, suffix) = span isDigit rest
+  if not (null digits) && suffix `elem` ["", ".runfiles"] then readMaybe digits else Nothing

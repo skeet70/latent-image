@@ -9,7 +9,7 @@ module Main (main) where
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newEmptyMVar, newMVar, putMVar, readMVar, takeMVar)
 import Control.Exception (SomeException, finally, try)
-import Control.Monad (forM, forM_, replicateM, unless, when)
+import Control.Monad (filterM, forM, forM_, replicateM, unless, when)
 import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, withObject, (.:), (.:?), (.=))
 import Data.Aeson.Types (Pair, parseEither)
 import qualified Data.ByteString as B
@@ -26,7 +26,7 @@ import GHC.Clock (getMonotonicTime)
 import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectoryRecursive)
 import System.Environment (getArgs, getEnvironment, getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure, exitSuccess)
-import System.FilePath (splitDirectories, takeDirectory, takeFileName, (</>))
+import System.FilePath (dropExtension, splitDirectories, takeDirectory, takeFileName, (</>))
 import System.IO (BufferMode (LineBuffering), IOMode (WriteMode), hFlush, hPutStrLn, hSetBuffering, stderr, stdout, withFile)
 import System.Posix.Files (setFileMode)
 import System.Process (CreateProcess (..), StdStream (..), createProcess, proc, readProcessWithExitCode, waitForProcess)
@@ -45,6 +45,15 @@ data Route
   | NativeVolatile
   | NativeSd
   | FujiModFlashBootCheck
+  | RamPushCcCardless
+  | RamPushCcIconCardless
+  | UsbToggleEmu
+  | FujiModRamPushVolatile
+  | FujiModRamPushCcCardless
+  | FujiModRamPushCcIconCardless
+  | FujiModRamPushCc
+  | FujiModUsbToggleE8
+  | FujiModUsbToggleEmu
   deriving (Eq, Ord, Enum, Bounded, Show)
 
 routeName :: Route -> String
@@ -61,10 +70,31 @@ routeName route = case route of
   NativeVolatile -> "native-volatile"
   NativeSd -> "native-sd"
   FujiModFlashBootCheck -> "fujimod-flash-boot-check"
+  RamPushCcCardless -> "ram-push-cc-cardless"
+  RamPushCcIconCardless -> "ram-push-cc-icon-cardless"
+  UsbToggleEmu -> "usb-toggle-emu"
+  FujiModRamPushVolatile -> "fujimod-ram-push-volatile"
+  FujiModRamPushCcCardless -> "fujimod-ram-push-cc-cardless"
+  FujiModRamPushCcIconCardless -> "fujimod-ram-push-cc-icon-cardless"
+  FujiModRamPushCc -> "fujimod-ram-push-cc"
+  FujiModUsbToggleE8 -> "fujimod-usb-toggle-e8"
+  FujiModUsbToggleEmu -> "fujimod-usb-toggle-emu"
 
--- | A non-gating route is reported but does not decide the run's result.
+-- | The recorded routes of E-MERGE-EMULATOR-REVERIFY-150 decide the run's
+-- result; the FujiMod routes and their retained counterparts are reported only.
 routeGating :: Route -> Bool
-routeGating route = route /= FujiModFlashBootCheck
+routeGating route = route `elem`
+  [ FlashBootCheck, RamPushVolatile, RamPushClassicChrome, RamPushClassicChromeIcon, FlashCandidateIcon
+  , FlashCandidateQTile, UsbToggleE8, UpdaterRc0Toggle, UpdaterCcToggle, NativeVolatile, NativeSd ]
+
+-- | How a route's outcome is judged.
+data Check
+  = AgainstBaseline ObservationSpec
+  -- | @e2e-observation-compare@ of the counterpart's receipt and this one,
+  -- passing with no difference; the flag requires this route to exit 0.
+  | AgainstCounterpart Route Bool
+  -- | Run only as a counterpart's reference; not judged.
+  | Reference
 
 parseRoute :: String -> Maybe Route
 parseRoute name = lookup name [(routeName route, route) | route <- [minBound .. maxBound]]
@@ -79,8 +109,10 @@ routeHost route
 -- | Emulator routes in dispatch order, longest recorded run first.
 emulatorOrder :: [Route]
 emulatorOrder =
-  [ RamPushVolatile, RamPushClassicChromeIcon, RamPushClassicChrome, UsbToggleE8
-  , FlashCandidateIcon, FlashCandidateQTile, UpdaterRc0Toggle, UpdaterCcToggle, FlashBootCheck, FujiModFlashBootCheck ]
+  [ UsbToggleEmu, RamPushVolatile, RamPushClassicChromeIcon, RamPushClassicChrome, UsbToggleE8
+  , FlashCandidateIcon, FlashCandidateQTile, UpdaterRc0Toggle, UpdaterCcToggle, RamPushCcIconCardless, RamPushCcCardless
+  , FujiModUsbToggleEmu, FlashBootCheck, FujiModRamPushVolatile, FujiModRamPushCcIconCardless, FujiModRamPushCcCardless
+  , FujiModRamPushCc, FujiModUsbToggleE8, FujiModFlashBootCheck ]
 
 newtype Workspace = Workspace FilePath
 newtype OutputBase = OutputBase FilePath
@@ -93,6 +125,8 @@ data Context = Context
   , contextRun :: RunDirectory
   , contextNativeJobs :: Int
   , contextBazelOptions :: [String]
+  -- | The @NAME.fujimod.json@ trajectory variants present in the workspace.
+  , contextVariants :: [FilePath]
   }
 
 data Invocation = Invocation
@@ -110,6 +144,15 @@ storedF7One = "private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.n
 storedF7Zero = "private-data/analysis/usb-toggle/emu/inputs/f7-0.nand"
 classicChromeCard = "private-data/analysis/classic-chrome-patch/ram-push/inputs/card.img"
 
+volatileScenario, classicChromeTrajectories, classicChromeIconTrajectories :: FilePath
+volatileScenario = "private-data/analysis/x-m1-1.50/ram-push/VolatileBank/scenario.json"
+classicChromeTrajectories = "emulation/ram-push-cc-e2e-trajectories.json"
+classicChromeIconTrajectories = "emulation/ram-push-cc-icon-e2e-trajectories.json"
+
+-- | @NAME.fujimod.json@ beside a retained @NAME.json@.
+fujimodVariant :: FilePath -> FilePath
+fujimodVariant path = dropExtension path ++ ".fujimod.json"
+
 -- | @bazel run@ of an emulator launcher on this output base, at niceness 10 so
 -- the native suites' wall-clock case deadlines keep CPU priority.
 bazelRun :: Context -> String -> [String] -> Invocation
@@ -122,8 +165,7 @@ routeInvocation context route receipt = case route of
   FlashBootCheck -> launcher "//emulation:flash-boot-check" ["--firmware", stockDat, "--output", receipt]
   FujiModFlashBootCheck -> launcher "//emulation:fujimod-flash-boot-check" ["--firmware", stockDat, "--output", receipt]
   RamPushVolatile -> ramPush
-    ["--cardless", "--firmware", prefixDat, "--installed-nand", storedF7One
-    , "--trajectories", "private-data/analysis/x-m1-1.50/ram-push/VolatileBank/scenario.json"]
+    ["--cardless", "--firmware", prefixDat, "--installed-nand", storedF7One, "--trajectories", volatileScenario]
   RamPushClassicChrome -> ramPush (["--classic-chrome", "--firmware", prefixDat, "--installed-nand", storedF7One] ++ card)
   RamPushClassicChromeIcon -> ramPush (["--classic-chrome-icon", "--firmware", prefixDat, "--installed-nand", storedF7One] ++ card)
   FlashCandidateIcon -> viewer (["--flash-candidate", "--firmware", iconFlashDat, "--installed-nand", storedF7One] ++ card
@@ -135,6 +177,19 @@ routeInvocation context route receipt = case route of
   UpdaterCcToggle -> updater "restore-cc-toggle"
   NativeVolatile -> native "volatile"
   NativeSd -> native "sd"
+  -- Unpinned: against a pinned run the icon e2e's develop passes differed from FujiMod's.
+  RamPushCcCardless -> viewer ["--cardless", "--classic-chrome", "--firmware", prefixDat, "--installed-nand", storedF7One]
+  RamPushCcIconCardless -> viewer ["--cardless", "--classic-chrome-icon", "--firmware", prefixDat, "--installed-nand", storedF7One]
+  UsbToggleEmu -> launcher "//emulation:usb-toggle-emu" ["--fresh-boot", "--runs", "all", "--receipt-output", receipt]
+  FujiModRamPushVolatile -> fujimod volatileScenario ["--cardless", "--firmware", prefixDat, "--installed-nand", storedF7One]
+  FujiModRamPushCcCardless -> fujimod classicChromeTrajectories
+    ["--cardless", "--classic-chrome", "--firmware", prefixDat, "--installed-nand", storedF7One]
+  FujiModRamPushCcIconCardless -> fujimod classicChromeIconTrajectories
+    ["--cardless", "--classic-chrome-icon", "--firmware", prefixDat, "--installed-nand", storedF7One]
+  FujiModRamPushCc -> fujimod classicChromeTrajectories (["--classic-chrome", "--firmware", prefixDat, "--installed-nand", storedF7One] ++ card)
+  FujiModUsbToggleE8 -> fujimod classicChromeTrajectories
+    (["--classic-chrome", "--attach-hold-q", "--firmware", rc0ToggleDat, "--installed-nand", storedF7Zero] ++ card)
+  FujiModUsbToggleEmu -> launcher "//emulation:usb-toggle-emu" ["--fujimod", "--fresh-boot", "--runs", "all", "--receipt-output", receipt]
   where
     Workspace root = contextWorkspace context
     RunDirectory run = contextRun context
@@ -145,12 +200,20 @@ routeInvocation context route receipt = case route of
     -- The RAM push's host-paced transfer moves the animated source's phase
     -- between runs; frame 7 is the fixture of the fixed-scene icon e2e record.
     ramPush arguments = viewer (arguments ++ ["--fixed-scene-frame", "7"])
+    -- FujiMod refuses --fixed-scene-frame; a route runs its retained file's
+    -- FujiMod variant when one exists.
+    fujimod trajectories arguments = viewer (["--fujimod"] ++ arguments ++
+      ["--trajectories", if fujimodVariant trajectories `elem` contextVariants context then fujimodVariant trajectories else trajectories])
     updater restore =
       let card' = "private-data/analysis/usb-toggle/emu-updater" </> restore
        in launcher "//emulation:updater-f7"
             [ "--recovery-ram", card' </> "terminal-valid-ram.bin", "--sd-image", card' </> "firmware-ram-recovery-sd.img"
             , "--installed-nand", storedF7One, "--receipt-output", receipt ]
-    native mode = Invocation "bash" [root </> "emulation" </> "build-recipe-bank-cases.sh"]
+    -- Each emulator route runs in its own user scope at the default CPUWeight
+    -- of 100, where niceness does not reach; the suites get ten times that.
+    native mode = Invocation "systemd-run"
+      [ "--user", "--scope", "--quiet", "--collect", "--property=CPUWeight=1000", "--"
+      , "bash", root </> "emulation" </> "build-recipe-bank-cases.sh" ]
       [ ("RB_MODE", mode), ("JOBS", show (contextNativeJobs context))
       , ("BUILD_DIR", run </> "builds" </> routeName route), ("OUT_DIR", receipt)
       , ("RUNNER", tool "native-runner"), ("GEN", tool "recipe-bank-cases"), ("INTEROP", tool "recipe-bank-interop") ]
@@ -229,20 +292,30 @@ fujimodFlashBootSpec = ObservationSpec
 nativeSpec :: ObservationSpec
 nativeSpec = ObservationSpec (map filePattern ["results.json", "findings.txt"]) []
 
-routeSpec :: Route -> ObservationSpec
-routeSpec route = case route of
-  FlashBootCheck -> flashBootSpec
-  FujiModFlashBootCheck -> fujimodFlashBootSpec
-  RamPushVolatile -> ramPushSpec []
-  RamPushClassicChrome -> ramPushSpec []
-  RamPushClassicChromeIcon -> ramPushSpec iconRunLength
-  UsbToggleE8 -> ramPushSpec []
-  FlashCandidateIcon -> flashCandidateSpec
-  FlashCandidateQTile -> flashCandidateSpec
-  UpdaterRc0Toggle -> updaterSpec
-  UpdaterCcToggle -> updaterSpec
-  NativeVolatile -> nativeSpec
-  NativeSd -> nativeSpec
+routeCheck :: Route -> Check
+routeCheck route = case route of
+  FlashBootCheck -> AgainstBaseline flashBootSpec
+  FujiModFlashBootCheck -> AgainstBaseline fujimodFlashBootSpec
+  RamPushVolatile -> AgainstBaseline (ramPushSpec [])
+  RamPushClassicChrome -> AgainstBaseline (ramPushSpec [])
+  RamPushClassicChromeIcon -> AgainstBaseline (ramPushSpec iconRunLength)
+  UsbToggleE8 -> AgainstBaseline (ramPushSpec [])
+  FlashCandidateIcon -> AgainstBaseline flashCandidateSpec
+  FlashCandidateQTile -> AgainstBaseline flashCandidateSpec
+  UpdaterRc0Toggle -> AgainstBaseline updaterSpec
+  UpdaterCcToggle -> AgainstBaseline updaterSpec
+  NativeVolatile -> AgainstBaseline nativeSpec
+  NativeSd -> AgainstBaseline nativeSpec
+  RamPushCcCardless -> Reference
+  RamPushCcIconCardless -> Reference
+  UsbToggleEmu -> Reference
+  FujiModRamPushVolatile -> AgainstCounterpart RamPushVolatile True
+  FujiModRamPushCcCardless -> AgainstCounterpart RamPushCcCardless True
+  FujiModRamPushCcIconCardless -> AgainstCounterpart RamPushCcIconCardless True
+  FujiModRamPushCc -> AgainstCounterpart RamPushClassicChrome True
+  FujiModUsbToggleE8 -> AgainstCounterpart UsbToggleE8 True
+  -- usb-toggle-emu exits 1 while any scenario blocks; the summary's results are compared.
+  FujiModUsbToggleEmu -> AgainstCounterpart UsbToggleEmu False
 
 data Options = Options
   { optionRoutes :: Maybe [Route]
@@ -270,14 +343,14 @@ usage = unlines
   , "  --from-run DIR       reuse DIR/receipts/NAME of an earlier run instead of running routes"
   , "  --receipt NAME=DIR   reuse DIR as route NAME's receipt instead of running it"
   , "  --record-baseline    write BASELINES/NAME.json from the receipts instead of comparing"
-  , "  --native-jobs N      JOBS for the native case suites (default: 8, the script's default)"
+  , "  --native-jobs N      JOBS for the native case suites (default: 4)"
   , "  --bazel-option OPT   option passed to each route's bazel run"
   , ""
   , "Routes: " ++ intercalate ", " (map routeName [minBound .. maxBound :: Route])
   ]
 
 parseOptions :: [String] -> IO Options
-parseOptions = go (Options Nothing Nothing Nothing Nothing [] False 8 [])
+parseOptions = go (Options Nothing Nothing Nothing Nothing [] False 4 [])
   where
     go options [] = pure options
     go options ("--routes" : value : rest) = do
@@ -410,7 +483,8 @@ data Outcome = Outcome
   , outcomeResult :: T.Text
   , outcomeProblem :: Maybe String
   , outcomeDifferences :: [Difference]
-  , outcomeBaseline :: FilePath
+  , outcomeBaseline :: Maybe FilePath
+  , outcomeCounterpart :: Maybe (Route, FilePath)
   }
 
 differenceJson :: Difference -> Value
@@ -429,6 +503,7 @@ outcomeJson outcome = object
    , "gating" .= routeGating (outcomeRoute outcome)
    , "receipt" .= outcomeReceipt outcome
    , "baseline" .= outcomeBaseline outcome
+   , "counterpart" .= fmap (\(route, path) -> object ["route" .= routeName route, "receipt" .= path]) (outcomeCounterpart outcome)
    , "problem" .= outcomeProblem outcome
    , "differences" .= length (outcomeDifferences outcome)
    , "first_difference" .= fmap differenceJson (case outcomeDifferences outcome of first : _ -> Just first; [] -> Nothing)
@@ -461,37 +536,68 @@ earlierExecutions run = do
           pure (Just (route, Execution (if exitCode == (0 :: Int) then ExitSuccess else ExitFailure exitCode) seconds logPath))
         _ -> pure Nothing
 
-judge :: Bool -> String -> Route -> FilePath -> Maybe Execution -> IO Outcome
-judge record baselines route receipt execution = do
-  let baselinePath = baselines </> (routeName route ++ ".json")
-      outcome = Outcome route receipt execution
+-- | What judging needs beyond the route: whether to record, where baselines
+-- live, the comparison tool, each route's receipt and where comparison output goes.
+data Judging = Judging
+  { judgingRecord :: Bool
+  , judgingBaselines :: FilePath
+  , judgingCompare :: FilePath
+  , judgingReceipt :: Route -> FilePath
+  , judgingOutput :: FilePath
+  }
+
+judge :: Judging -> Route -> Maybe Execution -> IO Outcome
+judge judging route execution = do
+  let receipt = judgingReceipt judging route
       failedRun = case executionExit <$> execution of
         Just (ExitFailure code) -> Just ("route exited " ++ show code)
         _ -> Nothing
   present <- doesDirectoryExist receipt
-  if not present then pure (outcome "fail" (Just "receipt directory is missing") [] baselinePath) else do
-    observed <- observe (routeSpec route) (ReceiptDirectory receipt)
-    if record
-      then case failedRun of
-        Just problem -> pure (outcome "fail" (Just (problem ++ "; baseline not recorded")) [] baselinePath)
-        Nothing | null observed -> pure (outcome "fail" (Just "no observed files; baseline not recorded") [] baselinePath)
-                | otherwise -> do
-          now <- formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" <$> getCurrentTime
-          createDirectoryIfMissing True baselines
-          setFileMode baselines 0o700
-          B.writeFile baselinePath (encodeBaseline (Baseline (T.pack (routeName route)) (T.pack now) receipt observed))
-          setFileMode baselinePath 0o600
-          pure (outcome "recorded" Nothing [] baselinePath)
-      else do
-        exists <- doesFileExist baselinePath
-        if not exists then pure (outcome "fail" (Just "no baseline") [] baselinePath) else do
-          parsed <- decodeBaseline <$> B.readFile baselinePath
-          case parsed of
-            Left problem -> pure (outcome "fail" (Just ("unreadable baseline: " ++ problem)) [] baselinePath)
-            Right baseline -> do
-              let differences = compareObservations (withoutExcluded (routeSpec route) (baselineFields baseline)) observed
-                  passed = null differences && not (isJust failedRun)
-              pure (outcome (if passed then "pass" else "fail") failedRun differences baselinePath)
+  case routeCheck route of
+    _ | not present -> pure (Outcome route receipt execution "fail" (Just "receipt directory is missing") [] Nothing Nothing)
+    Reference -> pure (Outcome route receipt execution "reference" failedRun [] Nothing Nothing)
+    AgainstCounterpart counterpart requireExit -> do
+      let reference = judgingReceipt judging counterpart
+          outcome result problem = Outcome route receipt execution result problem [] Nothing (Just (counterpart, reference))
+      referencePresent <- doesDirectoryExist reference
+      if not referencePresent then pure (outcome "fail" (Just ("counterpart " ++ routeName counterpart ++ " has no receipt"))) else do
+        (code, out, err) <- readProcessWithExitCode (judgingCompare judging) [reference, receipt] ""
+        createDirectoryIfMissing True (judgingOutput judging </> "differences")
+        writeFile (judgingOutput judging </> "differences" </> (routeName route ++ ".compare.txt")) (out ++ err)
+        let reported = [drop (length prefix) line | line <- lines out, prefix `isPrefixOf` line]
+            prefix = "e2e-observation-compare: "
+            exitProblem = if requireExit then failedRun else Nothing
+        pure $ case (code, exitProblem) of
+          (ExitSuccess, Nothing) -> outcome "pass" Nothing
+          (ExitSuccess, Just problem) -> outcome "fail" (Just problem)
+          (ExitFailure _, _) -> outcome "fail" (Just (intercalate "; " (maybe [] pure exitProblem
+            ++ [case reported of first : _ : _ -> last reported ++ ", first " ++ first; _ -> unwords (lines (out ++ err))])))
+    AgainstBaseline spec -> do
+      let baselinePath = judgingBaselines judging </> (routeName route ++ ".json")
+          outcome result problem differences = Outcome route receipt execution result problem differences (Just baselinePath) Nothing
+      observed <- observe spec (ReceiptDirectory receipt)
+      if judgingRecord judging
+        then case failedRun of
+          Just problem -> pure (outcome "fail" (Just (problem ++ "; baseline not recorded")) [])
+          Nothing | null observed -> pure (outcome "fail" (Just "no observed files; baseline not recorded") [])
+                  | otherwise -> do
+            now <- formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" <$> getCurrentTime
+            let baselines = judgingBaselines judging
+            createDirectoryIfMissing True baselines
+            setFileMode baselines 0o700
+            B.writeFile baselinePath (encodeBaseline (Baseline (T.pack (routeName route)) (T.pack now) receipt observed))
+            setFileMode baselinePath 0o600
+            pure (outcome "recorded" Nothing [])
+        else do
+          exists <- doesFileExist baselinePath
+          if not exists then pure (outcome "fail" (Just "no baseline") []) else do
+            parsed <- decodeBaseline <$> B.readFile baselinePath
+            case parsed of
+              Left problem -> pure (outcome "fail" (Just ("unreadable baseline: " ++ problem)) [])
+              Right baseline -> do
+                let differences = compareObservations (withoutExcluded spec (baselineFields baseline)) observed
+                    passed = null differences && not (isJust failedRun)
+                pure (outcome (if passed then "pass" else "fail") failedRun differences)
 
 -- | Removes what a passing route staged beside its observed files: its viewer
 -- runtime, native build directory, native case directories and updater
@@ -533,22 +639,26 @@ main = do
   let toExecute = [route | route <- selected, fst (sourceOf route) == Execute]
       receiptOf route = fromMaybe (run </> "receipts" </> routeName route) (snd (sourceOf route))
   commit <- readProcessWithExitCode "git" ["-C", let Workspace path = root in path, "rev-parse", "HEAD"] ""
+  executable <- getExecutablePath
+  let runfiles = executable ++ ".runfiles"
+  variants <- filterM (doesFileExist . resolve root)
+    (map fujimodVariant [volatileScenario, classicChromeTrajectories, classicChromeIconTrajectories])
   clockStart <- getMonotonicTime
   executions <- if null toExecute then pure Map.empty else do
     forM_ ["receipts", "logs", "builds", "runtimes"] $ \directory -> createDirectory (run </> directory)
-    executable <- getExecutablePath
     base <- outputBase executable
     policy <- slotPolicyFromEnvironment
     let SlotCount slots = slotCount policy
-        context = Context root base (executable ++ ".runfiles") (RunDirectory run) (optionNativeJobs options) (optionBazel options)
+        context = Context root base runfiles (RunDirectory run) (optionNativeJobs options) (optionBazel options) variants
     putStrLn ("verify-candidate run: " ++ run)
     schedule context slots [(route, receiptOf route) | route <- toExecute]
   clockEnd <- getMonotonicTime
   let executionOf route
         | isJust (lookup route receipts) = Nothing
         | otherwise = maybe (Map.lookup route earlier) Just (Map.lookup route executions)
-  outcomes <- forM selected $ \route -> judge (optionRecord options) baselines route (receiptOf route) (executionOf route)
-  forM_ outcomes $ \outcome -> when (outcomeRoute outcome `elem` toExecute && outcomeResult outcome `elem` ["pass", "recorded"]) $
+      judging = Judging (optionRecord options) baselines (runfiles </> "_main" </> "emulation" </> "e2e-observation-compare") receiptOf run
+  outcomes <- forM selected $ \route -> judge judging route (executionOf route)
+  forM_ outcomes $ \outcome -> when (outcomeRoute outcome `elem` toExecute && outcomeResult outcome `elem` ["pass", "recorded", "reference"]) $
     prune (RunDirectory run) outcome
   forM_ outcomes $ \outcome -> unless (null (outcomeDifferences outcome)) $ do
     createDirectoryIfMissing True (run </> "differences")

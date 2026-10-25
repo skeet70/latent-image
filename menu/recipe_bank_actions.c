@@ -115,6 +115,8 @@ void rb_bank_draw_root(uint32_t root)
     rb_bank_select_current_row();
   }
   if (page == RB_PAGE_SUB) {
+    /* The hidden dialog row has no visible current-value marker. */
+    rb_ui_store(RB_UI_CURRENT_ROW_CELL, RB_UI_VERBS_PER_SLOT);
     /* FUN_0115815c with animation kind 0: FUN_01166200 starts the pending
      * preparation (the entry slide 9 or the SET blink 7), and FUN_01165aa0's
      * default branch reads the depth-2/type-9 snapshot and sets 0x015e64dc = 3.
@@ -499,6 +501,10 @@ uint32_t rb_ui_child_enter(void)
     for (k = 0u; k < RB_BANK_SLOTS; k++) {
       (void)rb_slot_load(k);
     }
+  }
+  if (cls == RB_UI_CLASS_SELECT) {
+    /* The stock push saved its snapshot before the entry cursor adjustment. */
+    rb_call_snapshot_store((RbMenuRoot){rb_ui_word(child + RB_NODE_ID)});
   }
 #ifdef RB_RAM_DIAGNOSTICS
   rb_select_diag_publish();

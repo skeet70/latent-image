@@ -36,6 +36,21 @@ Historical evidence-ledger paths and hashes identify the recorded artifact versi
 
 Private body-specific artifacts stay under ignored `private-data/`. Body-specific backups need two verified durable locations.
 
+## Issues and comments
+
+Issues and their comments are a public record for people who were not in the session. Write them as a maintainer of an ordinary open-source project would: the problem, what changed, what was found, the decision needed and what blocks progress. Detail lives in the report, ledger entry or commit, and the comment links to it; a comment is a few sentences or a short list.
+
+Keep the issue body current: when scope, plan or status changes, edit the body instead of appending the new state as a comment. A comment marks an event a follower should be notified of: a finding, a merged change, a decision, a question for the owner, a blocker or the reason for closing. Post when one of those happens, not at the end of each assignment, and not again for a step already reported.
+
+Every reference must open for a public reader. Link pushed commits, files on `main` and ledger IDs; describe unpushed work without naming its branch or hash. Leave out of issues:
+
+- agent, subagent and model names, worktrees, `agent/NAME` branches and integration bookkeeping;
+- `private-data/` paths and digests of private files;
+- lists of passing checks, test counts and wall times, unless the issue is about them;
+- finding, mutant or step numbers defined only in a private review or plan;
+- quoted chat, and camera-run choreography (awaiting a go, gate conditions, stop rules), which stays in chat and the session record until it produces a result;
+- disclaimers of what was not done, accessed, pushed or authorized; state what remains open instead.
+
 ## Publication and asset boundaries
 
 Publish tools, implementations, and distilled findings; don’t redistribute proprietary source material.

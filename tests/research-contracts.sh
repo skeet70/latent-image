@@ -41,6 +41,9 @@ for fuji_af_mutation in \
   '.status = "frozen"' \
   '.authorization.camera_operations_authorized = true' \
   '.attempt_policy.all_attempts_retained = false' \
+  '.design.repeats_per_combination = 0' \
+  '.design.repeats_per_combination = 100' \
+  '.design.planned_attempts = 0' \
   '.timing.acceptable_focus_onset = "camera confirmation"'; do
   "$fuji_af_jq" "$fuji_af_mutation" manifests/benchmark-protocol.json > "$TEST_TMPDIR/invalid.json"
   if "$fuji_af_schema_checker" --schemafile schemas/benchmark-protocol.schema.json "$TEST_TMPDIR/invalid.json"; then
@@ -64,6 +67,7 @@ fuji_af_protocol_consistency='
 "$fuji_af_jq" -e "$fuji_af_protocol_consistency" manifests/benchmark-protocol.json > /dev/null
 for fuji_af_mutation in \
   '.design.combinations[0].start = "far"' \
+  '.design.planned_attempts += 1' \
   '.design.combinations[0].scenario = "indoor"'; do
   "$fuji_af_jq" "$fuji_af_mutation" manifests/benchmark-protocol.json > "$TEST_TMPDIR/invalid.json"
   if "$fuji_af_jq" -e "$fuji_af_protocol_consistency" "$TEST_TMPDIR/invalid.json" > /dev/null; then

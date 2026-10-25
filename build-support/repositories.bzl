@@ -45,7 +45,7 @@ cc_library(
 
 # Exported for its store path alone; nothing depends on these bytes at link time.
 _LIBUSB_RUNTIME_BUILD = """
-exports_files(["lib/libusb-1.0.so"], visibility = ["//visibility:public"])
+exports_files(["share/libusb-runtime/store-path"], visibility = ["//visibility:public"])
 """
 
 _FUJIMOD_NIX_DEPS = [
@@ -127,7 +127,8 @@ def _lab_dependencies_impl(_ctx):
     )
     nixpkgs_package(
         name = "lab_libusb_runtime",
-        attribute_path = "libusb1.out",
+        nix_file = "//build-support:libusb-runtime.nix",
+        nix_file_deps = ["//build-support:nixpkgs.nix", "//:devenv.lock"],
         repository = "@lab_nixpkgs",
         build_file_content = _LIBUSB_RUNTIME_BUILD,
     )
@@ -166,14 +167,14 @@ def _lab_dependencies_impl(_ctx):
         build_file_content = 'exports_files(["bin/fujimod-xm1", "bin/fujimod-xm1-provenance", "bin/fujimod-xm1-ram-push", "bin/fujimod-xm1-toggle", "bin/fujimod-xm1-updater", "share/fujimod-xm1/store-path", "share/fujimod-xm1/xm1-150.json"], visibility = ["//visibility:public"])',
     )
 
-    # The RAM-push relinker's tools; //host/firmware:ram-push-toolchain-module
-    # resolves them to store paths.
+    # The RAM-push relinker's tools; ram-push-toolchain-paths records their
+    # store paths.
     for name, attribute, binaries in [
         ("lab_bash", "bash", ["bin/bash"]),
         ("lab_clang", "clang", ["bin/clang"]),
         ("lab_lld", "lld", ["bin/ld.lld"]),
         ("lab_llvm", "llvm", ["bin/llvm-objcopy", "bin/llvm-nm", "bin/llvm-objdump"]),
-        ("lab_coreutils", "coreutils", ["bin/readlink", "bin/sha256sum", "bin/sort"]),
+        ("lab_coreutils", "coreutils", ["bin/sha256sum", "bin/sort"]),
     ]:
         nixpkgs_package(
             name = name,
@@ -181,6 +182,24 @@ def _lab_dependencies_impl(_ctx):
             repository = "@lab_nixpkgs",
             build_file_content = "exports_files(%r, visibility = [\"//visibility:public\"])" % binaries,
         )
+
+    # //host/firmware:ram-push-toolchain-module bakes these store paths into
+    # RamPushToolchain.hs.
+    nixpkgs_package(
+        name = "lab_ram_push_toolchain_paths",
+        nix_file = "//build-support:ram-push-toolchain-paths.nix",
+        nix_file_deps = ["//build-support:nixpkgs.nix", "//:devenv.lock"],
+        repository = "@lab_nixpkgs",
+        build_file_content = "exports_files(%r, visibility = [\"//visibility:public\"])" % [
+            "share/ram-push-toolchain-paths/bash",
+            "share/ram-push-toolchain-paths/clang",
+            "share/ram-push-toolchain-paths/ld.lld",
+            "share/ram-push-toolchain-paths/llvm-nm",
+            "share/ram-push-toolchain-paths/llvm-objcopy",
+            "share/ram-push-toolchain-paths/llvm-objdump",
+            "share/ram-push-toolchain-paths/sha256sum",
+        ],
+    )
 
     # //matching:pilot compiles x70view C with these.
     nixpkgs_package(

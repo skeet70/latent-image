@@ -15,6 +15,7 @@ haskell_library(
     src_strip_prefix = ".",
     deps = [
         "//host:base",
+        "//host:bytestring",
         "//host:directory",
         "//host:filepath",
         "//host:unix",
@@ -30,6 +31,35 @@ haskell_binary(
         ":emulator-slot-lib",
         "//host:base",
         "//host:directory",
+        "//host:unix",
+    ],
+)
+
+haskell_binary(
+    name = "emulator-slot-probe",
+    srcs = ["EmulatorSlotProbe.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":emulator-slot-lib",
+        "//host:base",
+    ],
+)
+
+# systemd-run must reach the host's user systemd manager, whose bus drops
+# clients arriving from a PID namespace, so the linux-sandbox cannot host this.
+haskell_test(
+    name = "emulator-slot-tests",
+    size = "small",
+    srcs = ["EmulatorSlotTests.hs"],
+    args = ["$(rootpath :emulator-slot-probe)"],
+    data = [":emulator-slot-probe"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    tags = ["no-sandbox"],
+    deps = [
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
         "//host:unix",
     ],
 )
@@ -983,6 +1013,14 @@ haskell_binary(
     ],
 )
 
+sh_test(
+    name = "recipe-bank-ui-plan-tests",
+    size = "small",
+    srcs = ["recipe-bank-ui-plan-tests.sh"],
+    args = ["$(location :recipe-bank-ui-cases)"],
+    data = [":recipe-bank-ui-cases"],
+)
+
 # Recipe-bank kernel behavior cases: builds each case from the pinned blob and
 # model, runs it through the bounded runner and writes results plus findings.
 haskell_binary(
@@ -1258,10 +1296,12 @@ haskell_binary(
     name = "verify-candidate",
     srcs = ["VerifyCandidate.hs"],
     data = [
+        ":e2e-observation-compare",
         ":flash-boot-check",
         ":fujimod-flash-boot-check",
         ":native-runner",
         ":recipe-bank-cases",
+        ":usb-toggle-emu",
         ":recipe-bank-interop",
         ":updater-f7",
         ":xm1-viewer",
@@ -1280,5 +1320,25 @@ haskell_binary(
         "//host:text",
         "//host:time",
         "//host:unix",
+    ],
+)
+
+haskell_binary(
+    name = "ram-calibration",
+    srcs = ["RamCalibration.hs"],
+    data = [":cardless-ram-push-bridge", ":xm1-upstream"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":emulator-slot-lib",
+        ":emulator-usb",
+        ":fujimod-paths",
+        ":viewer-runtime-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
     ],
 )

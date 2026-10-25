@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "3BTZsOlH1eahUYDW6ziJOuubTstwIv8Fbv2+C6oQ/B0=",
+        "bzlTransitiveDigest": "SFoJZRLbwEBHdwB9HJtY3i96/CTQ1QdQfsSa6MZJHCY=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -306,13 +306,17 @@
             "ruleClassName": "_nixpkgs_package",
             "attributes": {
               "unmangled_name": "lab_libusb_runtime",
-              "attribute_path": "libusb1.out",
-              "nix_file_deps": {},
+              "attribute_path": "",
+              "nix_file": "@@//build-support:libusb-runtime.nix",
+              "nix_file_deps": {
+                "@@//build-support:nixpkgs.nix": "//build-support:nixpkgs.nix",
+                "@@//:devenv.lock": "//:devenv.lock"
+              },
               "nix_file_content": "",
               "nix_license_path": "",
               "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
               "repositories": {},
-              "build_file_content": "\nexports_files([\"lib/libusb-1.0.so\"], visibility = [\"//visibility:public\"])\n",
+              "build_file_content": "\nexports_files([\"share/libusb-runtime/store-path\"], visibility = [\"//visibility:public\"])\n",
               "nixopts": [],
               "quiet": false,
               "fail_not_supported": true
@@ -546,7 +550,28 @@
               "nix_license_path": "",
               "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
               "repositories": {},
-              "build_file_content": "exports_files([\"bin/readlink\", \"bin/sha256sum\", \"bin/sort\"], visibility = [\"//visibility:public\"])",
+              "build_file_content": "exports_files([\"bin/sha256sum\", \"bin/sort\"], visibility = [\"//visibility:public\"])",
+              "nixopts": [],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          },
+          "lab_ram_push_toolchain_paths": {
+            "bzlFile": "@@rules_nixpkgs_core~//:nixpkgs.bzl",
+            "ruleClassName": "_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "lab_ram_push_toolchain_paths",
+              "attribute_path": "",
+              "nix_file": "@@//build-support:ram-push-toolchain-paths.nix",
+              "nix_file_deps": {
+                "@@//build-support:nixpkgs.nix": "//build-support:nixpkgs.nix",
+                "@@//:devenv.lock": "//:devenv.lock"
+              },
+              "nix_file_content": "",
+              "nix_license_path": "",
+              "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
+              "repositories": {},
+              "build_file_content": "exports_files([\"share/ram-push-toolchain-paths/bash\", \"share/ram-push-toolchain-paths/clang\", \"share/ram-push-toolchain-paths/ld.lld\", \"share/ram-push-toolchain-paths/llvm-nm\", \"share/ram-push-toolchain-paths/llvm-objcopy\", \"share/ram-push-toolchain-paths/llvm-objdump\", \"share/ram-push-toolchain-paths/sha256sum\"], visibility = [\"//visibility:public\"])",
               "nixopts": [],
               "quiet": false,
               "fail_not_supported": true
