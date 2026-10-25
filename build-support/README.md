@@ -41,7 +41,7 @@ devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-$AGENT" tes
 
 A new output base still resolves its Nix repositories once. Delete `~/.cache/bazel/latent-image-*` and `~/.cache/bazel-disk/latent-image` by hand when they are no longer needed.
 
-Full-system emulator runs share host CPU and memory. `//emulation:xm1-viewer` waits for one of the host's emulator slots, POSIX locks under `~/.cache/xm1-emulator-slots/` that every checkout on the host shares, then re-executes itself in a `systemd-run --user --scope` with `MemoryMax=8G` and no swap. `XM1_EMULATOR_SLOTS` (default 2) and `XM1_EMULATOR_MEMORY_MAX` override the policy. Emulator commands outside the viewer, such as the preserved Python suites, take a slot through `//emulation:emulator-slot`:
+Full-system emulator runs share host CPU and memory. `//emulation:xm1-viewer` waits for one of the host's emulator slots, POSIX locks under `~/.cache/xm1-emulator-slots/` that every checkout on the host shares, then re-executes a pinned copy of its running executable (a concurrent build can replace the on-disk binary while the wait runs) in a `systemd-run --user --scope` with `MemoryMax=8G` and no swap. `XM1_EMULATOR_SLOTS` (default 2) and `XM1_EMULATOR_MEMORY_MAX` override the policy. Emulator commands outside the viewer, such as the preserved Python suites, take a slot through `//emulation:emulator-slot`:
 
 ```sh
 devenv shell -- bazel run //emulation:emulator-slot -- sh -c 'cd RUNTIME && PYTHONPATH=native/python:. "$XM1_VIEWER_PYTHON" -m unittest native.tests.test_portable_checkpoint'
