@@ -16,6 +16,8 @@ mod state;
 mod menu;
 mod phase_clock;
 mod spi0;
+mod mode_devices;
+mod menu_media;
 #[cfg(test)]
 mod tests;
 
@@ -1452,6 +1454,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(phase_clock::tick_xm1_clock, m)?)?;
     m.add_class::<fff63::Device>()?;
     m.add("FFF63_PROFILES", (fff63::PROFILE,))?;
+    m.add_class::<mode_devices::Device>()?;
+    m.add("MODE_DEVICE_PROFILE", mode_devices::PROFILE)?;
+    m.add_function(wrap_pyfunction!(mode_devices::face_mode_write, m)?)?;
+    m.add_function(wrap_pyfunction!(mode_devices::face_mode_read, m)?)?;
+    menu_media::register(m)?;
+    menu::register(m)?;
     m.add_function(wrap_pyfunction!(spi0::spi0_status_acknowledged, m)?)?;
     m.add_class::<irq_mask::IrqRoute>()?;
     m.add_function(wrap_pyfunction!(irq_mask::irq_enable_clear, m)?)?;

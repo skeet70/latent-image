@@ -8,6 +8,7 @@ result request. They do not produce detections, transfers or an interrupt.
 from copy import deepcopy
 import hashlib
 import json
+from x70_native._native import face_mode_write, face_mode_read
 
 from .hardware import UnsupportedDevice
 
@@ -22,6 +23,7 @@ class FaceAnalysisControl:
     # Opt-in stream mode (emulator/testbed/STREAM.md): a permissive retained-word bank that
     # produces no detections, DMA or IRQ. Class default keeps older checkpoints loadable.
     stream = None
+    mode_profile = None
 
     def enable_stream(self):
         if self.stream is not None:
@@ -63,7 +65,7 @@ class FaceAnalysisControl:
     RECONFIG_ORDER = (0,2,3,1)
     ARM_ORDER = (1,3,0,2)
 
-    def __init__(self, board, result_profile=None, result_ticks=400000, *, stop_profile=None):
+    def __init__(self, board, result_profile=None, result_ticks=400000, *, stop_profile=None, mode_profile=None):
         if result_profile is not None:
             raise ValueError('Face result production is not implemented; use result_profile=None')
         if type(result_ticks) is not int or result_ticks <= 0:
@@ -80,6 +82,7 @@ class FaceAnalysisControl:
         self.result_ticks = result_ticks
         self.request = None
         self.stop_profile,self.stop=stop_profile,None
+        self.mode_profile=mode_profile
         board.record('Face analysis passive configuration fixture',base=hex(self.BASE),
             words=len(self.CONFIG),evidence='145DC7C configuration;1464330/14647FC already-inactive DMA init',
             limits='Initial zeros and physical masks unmeasured; request retention supplies no results, transfers, completion, IRQ or pixels')
@@ -464,6 +467,9 @@ class FaceAnalysisControl:
 
     def read(self, core, address, size):
         offset=address-self.BASE
+        value=face_mode_read(self,core,address,size)
+        if value is not None:
+            return value
         if isinstance(self.stop,dict) and 'reconfiguration' in self.stop:
             from . import face_still_reconfiguration
             return face_still_reconfiguration.access(self,'read',core,address,size)
@@ -480,6 +486,8 @@ class FaceAnalysisControl:
 
     def write(self, core, address, size, value):
         offset=address-self.BASE
+        if face_mode_write(self,core,address,size,value):
+            return
         if isinstance(self.stop,dict) and 'reconfiguration' in self.stop:
             from . import face_still_reconfiguration
             return face_still_reconfiguration.access(self,'write',core,address,size,value)
@@ -531,6 +539,7 @@ class FaceAnalysisControl:
             writes=self.writes,dma_states=self.dma_states,dma_events=self.dma_events,
             last_rejected=self.last_rejected,
             result_profile=self.result_profile,result_ticks=self.result_ticks,
+            mode_profile=self.mode_profile,mode_resets=getattr(self,'mode_resets',0),
             stop_profile=self.stop_profile,stop=deepcopy(self.stop),
             request=deepcopy(self.request),awaiting_result=(self.stop is None and self.request is not None and self.request['phase']=='armed-awaiting-result'),
             limits=['203 recovered configuration offsets retain guest words, not face detections.',

@@ -77,6 +77,7 @@ def load_profile(path, factory, *, firmware_profile=None):
             'movrsz_ticks': 50000,
             'producer_data_profile': 'xm1-150-declared-continuous-statistics-scene-unmeasured',
             'fff63_profile': 'xm1-150-declared-fff63-job4-completion-unmeasured',
+            'mode_devices_profile': 'xm1-150-declared-mode-device-idle-unmeasured',
         }
     if not isinstance(document, dict) or set(document) != {'options'}:
         raise ValueError('Profile must be X-M1 1.50 or contain only an options object')
@@ -1854,10 +1855,14 @@ def main():
             attach_adjustment_nand(board, args.adjustment_nand)
             options['recovery']['adjustment_nand'] = str(args.adjustment_nand)
         if args.menu_sd_image is not None:
-            from emulator.sd_card import SDCardController, load_raw_image
+            from emulator.sd_card import MediaImage, SDCardController, load_raw_image
+            from x70_native._native import copy_menu_card
+            private_card = copy_menu_card(args.menu_sd_image, output.with_name(output.name + '-private-card'))
             controller = next(device for device in board.devices if isinstance(device, SDCardController))
             options['recovery']['card'] = load_raw_image(
-                controller.card, args.menu_sd_image, immutable_backing=False)
+                controller.card, Path(private_card.path), immutable_backing=False)
+            controller.image = MediaImage(**options['recovery']['card'])
+            board._s2_private_card = private_card
         if args.recovery_ram is not None:
             options['recovery'] = load_recovery_cpu0(board, args.recovery_ram)
             if args.sd_image is not None:

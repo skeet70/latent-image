@@ -814,6 +814,8 @@ def _preflight(board):
         names.append("DeclaredUIConversion")
     if board._portable_factory_options.get("fff63_profile") is not None:
         names.append("FFF63Engine")
+    if board._portable_factory_options.get("mode_devices_profile") is not None:
+        names.append("FFF48Engine")
     if (len(board.devices) != len(names)
             or any(type(device) is not getattr(boot, name) for name, device in zip(names, board.devices))):
         raise PortableCheckpointError("Portable checkpoint requires the complete stock device topology")
@@ -974,7 +976,7 @@ def _load(directory, *, revisions=None, instructions_per_tick=None, override_rat
     signature = inspect.signature(make_board)
     # Optional selections deliberately omit their unselected keys from saved
     # options. No selected peripheral or owner settings are added on restore.
-    optional_absent = {"still_pipeline_profile", "ui_conversion_profile", "fff63_profile", "instructions_per_tick", "settings", "firmware_profile", "sd_card_image"} & set(signature.parameters)
+    optional_absent = {"still_pipeline_profile", "ui_conversion_profile", "fff63_profile", "mode_devices_profile", "instructions_per_tick", "settings", "firmware_profile", "sd_card_image"} & set(signature.parameters)
     if (type(options) is not dict or "sd_card_image" in options or not (set(options) <= set(signature.parameters) and set(signature.parameters) - set(options) <= optional_absent)
             or any(value is not None and type(value) not in (str, int, bool, float)
                    for key, value in options.items() if key != "firmware_profile")):

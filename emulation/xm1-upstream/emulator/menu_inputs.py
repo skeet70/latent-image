@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 import struct
+from x70_native._native import MainDialDirection, main_dial_sample
 
 RELEASED = 1023
 KEY_TABLE = 0x828120
@@ -37,7 +38,12 @@ class MenuKey(str, Enum):
     DIAL_PUSH = 'dial-push'
     DIAL_LEFT = 'dial-left'
     DIAL_RIGHT = 'dial-right'
+    MAIN_DIAL_UP = 'main-dial-up'
+    MAIN_DIAL_DOWN = 'main-dial-down'
     HALF_PRESS = 'half-press'
+    FULL_PRESS = 'full-press'
+    MOVIE = 'movie'
+    POWER = 'power'
 
     @classmethod
     def parse(cls, value):
@@ -57,7 +63,9 @@ class KeyCode(IntEnum):
     DOWN = 0x03
     LEFT = 0x04
     RIGHT = 0x05
+    POWER = 0x06
     S1 = 0x07
+    S2 = 0x08
     BACK = 0x09
     PLAY = 0x0b
     FN = 0x28
@@ -74,6 +82,7 @@ class GpioLevel(IntEnum):
 
 
 class AdcChannel(IntEnum):
+    MAIN_DIAL = 4
     ARROWS = 8
     BUTTONS = 9
 
@@ -125,13 +134,18 @@ class GpioBinding:
 
 @dataclass(frozen=True)
 class ShutterBinding(GpioBinding):
-    pass
+    interrupt_index: int
 
 
 @dataclass(frozen=True)
 class DialBinding:
     code: KeyCode
     phases: tuple[tuple[GpioLevel, GpioLevel], ...]
+
+
+@dataclass(frozen=True)
+class MainDialBinding:
+    direction: MainDialDirection
 
 
 @dataclass(frozen=True)
@@ -155,10 +169,12 @@ KEY_RECORDS = {
     MenuKey.RIGHT: AdcBinding(KeyCode.RIGHT, 17, AdcChannel.ARROWS, CalibrationTag.RIGHT_LOW, CalibrationTag.RIGHT_HIGH),
     MenuKey.OK: AdcBinding(KeyCode.OK, 18, AdcChannel.BUTTONS, CalibrationTag.OK_LOW, CalibrationTag.OK_HIGH),
     MenuKey.BACK: AdcBinding(KeyCode.BACK, 20, AdcChannel.BUTTONS, CalibrationTag.BACK_LOW, CalibrationTag.BACK_HIGH),
+    MenuKey.MOVIE: AdcBinding(KeyCode.MOVIE, 21, AdcChannel.BUTTONS, CalibrationTag.MOVIE_LOW, CalibrationTag.MOVIE_HIGH),
     MenuKey.Q: AdcBinding(KeyCode.Q, 19, AdcChannel.BUTTONS, CalibrationTag.Q_LOW, CalibrationTag.Q_HIGH),
 }
 GPIO_KEY_RECORDS = {
-    MenuKey.HALF_PRESS: ShutterBinding(KeyCode.S1, 5, 0, 2, 0),
+    MenuKey.HALF_PRESS: ShutterBinding(KeyCode.S1, 5, 0, 2, 0, 0x1f),
+    MenuKey.FULL_PRESS: ShutterBinding(KeyCode.S2, 6, 0, 3, 0, 0x21),
     MenuKey.PLAY: GpioBinding(KeyCode.PLAY, 12, 2, 9, 0),
     MenuKey.FN: GpioBinding(KeyCode.FN, 13, 0, 11, 0),
     MenuKey.DIAL_PUSH: GpioBinding(KeyCode.DIAL_PUSH, 22, 0, 10, 0),
@@ -172,9 +188,11 @@ DIAL_KEY_RECORDS = {
         (GpioLevel.LOW, GpioLevel.HIGH), (GpioLevel.LOW, GpioLevel.LOW),
         (GpioLevel.HIGH, GpioLevel.LOW), (GpioLevel.HIGH, GpioLevel.HIGH))),
 }
-ADC_RECORDS = tuple(KEY_RECORDS.values()) + (
-    AdcBinding(KeyCode.MOVIE, 21, AdcChannel.BUTTONS, CalibrationTag.MOVIE_LOW, CalibrationTag.MOVIE_HIGH),
-)
+MAIN_DIAL_RECORDS = {
+    MenuKey.MAIN_DIAL_UP: MainDialBinding(MainDialDirection.Up),
+    MenuKey.MAIN_DIAL_DOWN: MainDialBinding(MainDialDirection.Down),
+}
+ADC_RECORDS = tuple(KEY_RECORDS.values())
 KEY_NAMES = tuple(key.value for key in MenuKey)
 
 
@@ -439,7 +457,7 @@ class MenuInputs:
         record = _raw(self.board, binding.address, 28)
         target = int.from_bytes(record[12:16], 'little')
         predicate = (record[9] == 4 and target == binding.pin
-                     and struct.unpack_from('<2H', record, 16) == (1, 0x1f)
+                     and struct.unpack_from('<2H', record, 16) == (1, binding.interrupt_index)
                      if isinstance(binding, ShutterBinding) else
                      record[9] == 2 and target == (binding.port << 16 | binding.pin)
                      and struct.unpack_from('<H', record, 0x12)[0] == binding.pressed_level)
@@ -522,6 +540,23 @@ class MenuInputs:
         availability = self.availability()
         if not availability['ready']:
             raise ValueError(availability['reason'])
+        if key is MenuKey.FULL_PRESS:
+            from x70_native._native import permit_full_press
+            permit_full_press(self.board)
+        if key in MAIN_DIAL_RECORDS:
+            binding = MAIN_DIAL_RECORDS[key]
+            sample = main_dial_sample(self.board, binding.direction, self._samples()[AdcChannel.MAIN_DIAL])
+            self._pressed = (key, binding)
+            return self._set(AdcChannel.MAIN_DIAL, sample, key)
+        if key is MenuKey.POWER:
+            record = _raw(self.board, KEY_TABLE + 11 * 28, 28)
+            if (int.from_bytes(record[:4], 'little') != KeyCode.POWER or record[9] != 5
+                    or int.from_bytes(record[12:16], 'little') != 0x6a00a8):
+                raise ValueError('POWER callback does not match X-M1 1.50')
+            self._pressed = (key, None)
+            self.power.set_mcu_status(self.power.spi_endpoint_registers[9][0x60] | 1,
+                                      source='MenuInputs X-M1 1.50 power switch OFF')
+            return None
         binding = DIAL_KEY_RECORDS.get(key) or GPIO_KEY_RECORDS.get(key) or KEY_RECORDS[key]
         if isinstance(binding, DialBinding) and self._dial_levels() != (1, 1):
             raise ValueError('Sub-command rotation requires released GPIO3/8 and GPIO3/9')
@@ -543,6 +578,12 @@ class MenuInputs:
         if self._pressed is None:
             return None
         _, binding = self._pressed
+        if binding is None:
+            self._pressed = None
+            return None
+        if isinstance(binding, MainDialBinding):
+            self._pressed = None
+            return None
         if isinstance(binding, DialBinding):
             for pin in (8, 9):
                 self.controls.set_gpio_input_pin(3, pin, 1, source='MenuInputs X-M1 1.50 release')
@@ -591,6 +632,8 @@ class MenuInputs:
             active.extend(key.value for key, binding in GPIO_KEY_RECORDS.items()
                           if self.controls.gpio_input_pin(binding.port, binding.pin) == binding.pressed_level)
             if self._pressed is not None and isinstance(self._pressed[1], DialBinding):
+                active.append(self._pressed[0].value)
+            if self._pressed is not None and isinstance(self._pressed[1], MainDialBinding):
                 active.append(self._pressed[0].value)
         return {'adc_samples': {str(int(channel)): samples[channel] for channel in AdcChannel},
                 'subcommand_dial_levels': {'gpio3_8': self._dial_levels()[0], 'gpio3_9': self._dial_levels()[1]},

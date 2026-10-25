@@ -424,6 +424,29 @@ haskell_binary(
 )
 
 haskell_binary(
+    name = "xm1-viewer-inputs-e2e",
+    srcs = ["Xm1ViewerInputsE2E.hs"],
+    data = [":cardless-ram-push-bridge", ":xm1-upstream"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":checkpoint-key-lib",
+        ":emulator-slot-lib",
+        ":emulator-usb",
+        ":viewer-runtime-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//transport:camera-core",
+    ],
+)
+
+haskell_binary(
     name = "xm1-af-ring-e2e",
     srcs = ["Xm1AfRingE2E.hs"],
     data = [
