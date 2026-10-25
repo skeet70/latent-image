@@ -200,7 +200,7 @@ Direct reads of the pinned image-4 table establish code 1 for the following ids.
 | Evaluation callback delivery | `0x00f3c104 -> 0x00ef9a94`, operation `0x89` | `0x3b89` at `0x008157ec` |
 | Successful higher-layer result send | `0x00defa30 -> 0x00dcb950` only when status is zero | `0x13a5` at `0x00814ddc` |
 
-The ordinary extraction candidate is physical `0x000a0800`, length `0x1fff4`, through the existing bounded `read-bulk` operation, decoded with `//console-trace:ring-check` and `//console-trace:trace-census`. Prepare that extraction from existing captures before any new run, check the current header/filter/writer gates and preserve both raw bytes and uncertainty. Read in the same boot before clearing or overwrite. A moving next index, wrap ambiguity or non-atomic read prevents a completeness claim. Message `0x3f0d` dates a callback send after the stock completion path, not optical settling; `0x420c` does not prove successful movement, and `0x13a5` does not carry the entire 16-byte result in the default mode-0 console record.
+The ordinary extraction candidate is physical `0x000a0800`, length `0x1fff4`, through the existing bounded `read-bulk` operation, decoded with `//console-trace:ring-check` and `//console-trace:trace-census`. The [stock-first block](#stock-first-console-observation-block) below supplies two admitted bulk windows whose union is the store; `0x1fff4` itself is not an admitted bulk length. Check the current header/filter/writer gates and preserve raw bytes and uncertainty. Read in the same boot before clearing or overwrite. A moving next index, wrap ambiguity or non-atomic read prevents a completeness claim. Message `0x3f0d` dates a callback send after the stock completion path, not optical settling; `0x420c` does not prove successful movement, and `0x13a5` does not carry the entire 16-byte result in the default mode-0 console record.
 
 | Frozen ring event | Stock coverage first | Increment supplied only by the proposed entry hook |
 | --- | --- | --- |
@@ -232,3 +232,150 @@ The revised wrapper preserves the original registers/flags, records the event, r
 This needs three activation publications, zero setup publications, a new publication/ABI identity and newly bound installer extents/entries for that count tuple. Existing reviewed installer source, other payload offsets and their pins stay unchanged. The checker must bind each original first word, branch destination/range, untouched second word, replayed `PUSH`, continuation and register/flags/SP/LR preservation. Review the complete findings before implementing it. A range-limited owned veneer could be considered separately if direct branches cannot be placed; no such placement/lifetime evidence or adjacent literal slot is assumed.
 
 The next emulator cases must resume a context saved at entry+4 with the first `PUSH` already reflected in its stack, and another already inside the stock body, across install. They must preserve the stock outcome and stack/register behavior while allowing the installation-boundary event gap. The one-word redirect removes this particular data-resumption hazard; it does not justify freeing wrapper memory while a saved PC can still reference it, prove safe hot unload, fix snapshot coherence, or establish the remaining AfRingReview findings. Physical session exit remains battery removal and post-reboot stock-word reads.
+
+## Stock-first console observation block
+
+### Observed Run-3 controls and retained traffic
+
+**Hardware-observed bytes, host-only decoding, E-AF-STOCK-CONSOLE-RUN3-150:** the existing Run-3 capture contains a valid console store with capacity 8188, next index **2419 (`0x0973`)** and 2419 occupied records. `ring-check --quiet` counts 1189 type-`0x0f` messages; `trace-census` agrees on the index and occupied count. The 2419 records are the retained history of that boot, not a newly performed or isolated AF attempt. Unknown type `0x81` has no decoded tick.
+
+| Control | Physical capture address | Observed bytes/value |
+| --- | --- | --- |
+| Trace mode, filter enable, threshold | `0x00a5b5e0..e2` | `00 01 01`, mode 0, enabled, threshold 1 |
+| Compact-buffer write offset | `0x00a5b5e4` | `30 1d 00 00`, `0x1d30`, not the initializer's 8 |
+| Compact-buffer pointer | `0x00a5b5ec` | `00 98 ac 41`, `0x41ac9800` |
+| Loader console-writer gate | `0x0004f25c` | `01 00 00 00`, enabled |
+| Installed send-hook pointer | `0x0089ea94` | `78 64 72 00`, `0x00726478` |
+| Header capacity / next index | `0x000a081c / 0x000a081e` | `fc 1f / 73 09`, 8188 / 2419 |
+
+All 6864 bytes of the 1716-row filter table in Run 3 match the pinned image-4 table. Thus the seven previously bound AF ids have observed code 1 under the observed threshold 1, not merely initializer-based admission.
+
+| Bound id | Retained sends | Slots | Decoded send ticks |
+| --- | --- | --- | --- |
+| `0x3b0d`, signature `0x3b0d032b` | 8 | 456, 541, 630, 790, 1960, 2045, 2172, 2257 | 602, 963, 1155, 1410, 71250, 71318, 127303, 127373 |
+| `0x13a5`, signature `0x13a52b03` | 8 | 457, 542, 631, 791, 1961, 2046, 2173, 2258 | 603, 963, 1155, 1410, 71250, 71318, 127303, 127373 |
+| `0x721d`, signature `0x721d3262` | 3 | 134, 1090, 1620 | 63, 1710, 14006 |
+| `0x3f2e`, `0x420c`, `0x3f0d`, `0x3b89` | 0 each | None in this retained store | Unavailable |
+
+The eight request/result pairs establish retained AF-layer sends, not an observed lens search, physical focus, evaluation completion or green-box success. Their times span the boot; boot initialization and earlier ordinary interactions are not separated by an attempt marker. A new before/after block must establish that association. Do not infer USB caused an AF failure from these bytes alone.
+
+Reproduce the retained decode from the repository root. Absolute decoder paths avoid dependence on Bazel's run directory. The commands operate on private files only:
+
+```sh
+ROOT=$PWD
+BAZEL_BASE="$HOME/.cache/bazel/latent-image-AfLoop"
+S="$ROOT/private-data/sessions/20261025T050355Z-read-bulk/ram-00000000-05aa0000.bin"
+STORE="$ROOT/private-data/analysis/x-m1-1.50/af-ring/run3-console-store.bin"
+export S STORE
+sha256sum "$S"
+devenv shell -- ghc -e 'import qualified Data.ByteString as B' -e 'import System.Environment (getEnv)' -e 'do { s <- getEnv "S"; out <- getEnv "STORE"; bytes <- B.readFile s; B.writeFile out (B.take 0x1fff4 (B.drop 0xa0800 bytes)) }'
+devenv shell -- bazel --output_base="$BAZEL_BASE" run --jobs=8 --local_resources=memory=6144 //console-trace:ring-check -- --quiet store "$STORE"
+devenv shell -- bazel --output_base="$BAZEL_BASE" run --jobs=8 --local_resources=memory=6144 //console-trace:trace-census -- store "$STORE"
+xxd -g1 -s0x00a5b5e0 -l16 "$S"
+xxd -g1 -s0x0004f25c -l4 "$S"
+xxd -g4 -s0x0089ea94 -l4 "$S"
+cmp --ignore-initial=8472668:2065500 --bytes=6864 "$S" "$ROOT/private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin"
+```
+
+Private provenance: Run-3 source SHA-256 `fa933fcf723ff46d435161cfecf48edc4a29cc4dc4c0ff5232fd0c70e7a6fee2`; extracted `0x1fff4`-byte store SHA-256 `e9ec7b74c11fe3d868bccc58c4d706d420795b3767bc67964a1bce6ef2f19d75`. The decoders and the three operation shapes below were exercised offline. These observations do not establish a coherent DMA snapshot.
+
+### Closed operation, scope and preparation
+
+Under [spec/07 §3.2](../spec/07-governance-and-handoff.md#32-operation-classes), preparation and retained decoding are **H0**; the five-window `read-ram` operation is **H1**; this combined camera block is **H2**, using the already reviewed `read-bulk` mechanism. It installs no payload or hook and sends no config, gate, lens, storage or register write. Nevertheless the stock bulk query/E1 path rewrites its published source pair and transfer bookkeeping, so “read” does not make it H1. The manual half-press is an ordinary owner action, not a new USB focus-control mechanism. The standing H1 grant alone does not cover this H2 block; request the operation-specific confirmation in chat. No new mechanism review is required for these existing closed operations and bounded RAM windows.
+
+Scope: ordinary X-M1 1.50 shooting screen, current baseline, no card, unchanged target and mode, one half-press and release, same boot. The owner places the supported camera on a table, points it at a clear book/package edge and confirms an adequate battery and normal preview. Do not enter a menu, jig mode or playback; insert no card. There is no preview/statistic snapshot, automated lens action, recorder, gate enable, full shutter press or persistent change.
+
+The console extent is not a multiple of 64. Two single-chunk operations avoid reading the adjacent twelve bytes or the tick cell through DMA:
+
+| Read | Address | Length | End, exclusive |
+| --- | --- | --- | --- |
+| Main | `0x000a0800` | `0x0001ffc0`, 131008 bytes | `0x000c07c0` |
+| Tail | `0x000c07b4` | `0x00000040`, 64 bytes | `0x000c07f4` |
+
+The windows overlap by twelve bytes and their union is `[0x000a0800,0x000c07f4)`. Reconstruction checks the overlap and lengths before dropping the duplicate twelve bytes. Gate/header/tick reads use the fixed `read-ram` plan, not a widened bulk window.
+
+Run the following setup and rehearsals **before attachment**. Keep the shell open. The plan must be an owned regular file with mode 600. The shell functions are command abbreviations, not additional camera operations.
+
+```sh
+ROOT=$PWD
+BAZEL_BASE="$HOME/.cache/bazel/latent-image-AfLoop"
+PLAN="$ROOT/private-data/read-plans/stock-af-console-controls.json"
+SESSION="$ROOT/private-data/sessions/$(date -u +%Y%m%dT%H%M%SZ)-stock-af-console"
+export ROOT PLAN SESSION
+umask 077
+mkdir -p "$ROOT/private-data/read-plans" "$SESSION/pre" "$SESSION/post"
+printf '%s\n' '{"windows":[{"index":0,"address":"0x40a5b5e0","length":16,"purpose":"stock trace mode, filter enable, threshold, compact offset and pointer"},{"index":1,"address":"0x4004f25c","length":4,"purpose":"loader console writer gate"},{"index":2,"address":"0x4089ea94","length":4,"purpose":"stock send-hook pointer"},{"index":3,"address":"0x400a0800","length":52,"purpose":"console header, capacity and next index"},{"index":4,"address":"0x400c0800","length":4,"purpose":"console tick cell"}]}' > "$PLAN"
+chmod 600 "$PLAN"
+run_target() { devenv shell -- bazel --output_base="$BAZEL_BASE" run --jobs=8 --local_resources=memory=6144 "$@"; }
+camera() { run_target //transport:camera -- "$@"; }
+assemble_decode() {
+  export AF_PARTS="$1"
+  devenv shell -- ghc -e 'import qualified Data.ByteString as B' -e 'import System.Environment (getEnv)' -e 'getEnv "AF_PARTS" >>= \d -> do { a <- B.readFile (d ++ "/main/ram-000a0800-0001ffc0.bin"); b <- B.readFile (d ++ "/tail/ram-000c07b4-00000040.bin"); if B.length a == 0x1ffc0 && B.length b == 64 && B.drop 0x1ffb4 a == B.take 12 b then B.writeFile (d ++ "/store.bin") (a <> B.drop 12 b) else fail "console length or overlap mismatch" }' &&
+    run_target //console-trace:ring-check -- --quiet store "$1/store.bin" &&
+    run_target //console-trace:trace-census -- store "$1/store.bin"
+}
+camera rehearse read-ram "$PLAN"
+camera rehearse read-bulk 0x000a0800 0x0001ffc0
+camera rehearse read-bulk 0x000c07b4 0x00000040
+```
+
+### Baseline, one attempt and same-boot extraction
+
+Execute each live line only after the scoped confirmation. A failure stops the sequence; do not paste the block as an unattended batch. Every output directory below is new.
+
+```sh
+camera read-ram "$PLAN" "$SESSION/pre/controls-before"
+camera read-bulk 0x000a0800 0x0001ffc0 "$SESSION/pre/main"
+camera read-bulk 0x000c07b4 0x00000040 "$SESSION/pre/tail"
+camera read-ram "$PLAN" "$SESSION/pre/controls-after"
+assemble_decode "$SESSION/pre"
+```
+
+Inspect both control snapshots before touching the shutter. Each `read-ram` capture contains `config-000000.bin` and `ram/000-ADDRESS.bin`. `0xf7` at config offset 247 must be nonzero; the operation itself enforces this. Require mode/enable/threshold `00 01 01`, writer gate `01 00 00 00`, hook pointer `78 64 72 00`, capacity 8188 and compact pointer `00 98 ac 41`. The compact write offset is dynamic, not required to equal Run 3. Record the tick and both next indices. A different gate/route requires a different proposal, not a write to repair it.
+
+```sh
+for phase in controls-before controls-after; do
+  D="$SESSION/pre/$phase"
+  od -An -tx1 -j247 -N1 "$D/config-000000.bin"
+  xxd -g1 "$D/ram/000-40a5b5e0.bin"
+  xxd -g1 "$D/ram/000-4004f25c.bin"
+  xxd -g1 "$D/ram/000-4089ea94.bin"
+  od --endian=little -An -tu2 -j28 -N4 "$D/ram/000-400a0800.bin"
+  od --endian=little -An -tu4 "$D/ram/000-400c0800.bin"
+done
+```
+
+The preceding `assemble_decode` call checks the overlap and runs both public decoders on the baseline. Require a contiguous occupied prefix with `entries-decoded == next-index < 7164`, leaving at least 1024 slots, and zero unoccupied slots as represented by the census. Existing wrap, a hole, overlap mismatch or a changing stable prefix makes this block unsuitable for a bounded before/after comparison. A next index advancing during extraction is recorded, not silently normalized into an atomic boundary.
+
+The owner then half-presses **once**, holds only until a normal AF indication or at most five seconds, and releases without fully pressing. Record whether the box turned green and visible focus motion occurred, plus the approximate host time of press/release. If the owner reports **no green box or no focus motion**, stop the block without further camera commands. Record “USB-attached AF feasibility not established”; do not retry, disconnect/reconnect to force AF, modify gates, or infer that USB caused the outcome.
+
+Only if normal AF behavior was reported, leave the body/target untouched and run:
+
+```sh
+camera read-ram "$PLAN" "$SESSION/post/controls-before"
+camera read-bulk 0x000a0800 0x0001ffc0 "$SESSION/post/main"
+camera read-bulk 0x000c07b4 0x00000040 "$SESSION/post/tail"
+camera read-ram "$PLAN" "$SESSION/post/controls-after"
+assemble_decode "$SESSION/post"
+```
+
+Repeat the displayed control inspection loop with `D="$SESSION/post/$phase"` after a completed post read. Reject wrap/regressing index, changed gates/hook/capacity, torn/partial records, overlap mismatch or mutation of the pre-attempt occupied prefix. For the prefix comparison, use the decoded pre index, not a count inferred from a message family:
+
+```sh
+PRE_INDEX=$(od --endian=little -An -tu2 -j30 -N2 "$SESSION/pre/store.bin")
+POST_INDEX=$(od --endian=little -An -tu2 -j30 -N2 "$SESSION/post/store.bin")
+test "$POST_INDEX" -ge "$PRE_INDEX" &&
+  cmp --ignore-initial=52:52 --bytes="$((16 * PRE_INDEX))" "$SESSION/pre/store.bin" "$SESSION/post/store.bin"
+```
+
+Compare only newly retained slots and their full signatures against the baseline. The census `arg` high halfword is the message id; its separately printed `code` is not the id. Retain failed/no-new-message outcomes. Do not call unchanged bytes or a structural pass proof of freshness: dirty lines on the other core can remain stale under bulk DMA, and the store has no immutable export or acquisition identity. This block answers whether one ordinary observed AF attempt leaves a useful stock send sequence, not #107 coherence, calibrated lens position, timing or #106 bounded automatic control.
+
+### Duration, stops and ending
+
+At Run 3's measured 5,933,421 bytes/s, 131072 transferred bytes per main/tail pair imply about **22 ms of payload transfer**. Session setup, filesystem sync, tool startup and the five debug reads dominate this small block. **Planning estimate, not a body measurement:** allow one to five seconds per command, about 8–40 seconds of extraction commands plus the owner's at-most-five-second attempt and inspection. Build/download time belongs before attachment.
+
+Each bulk command has one chunk, a 5000 ms transfer limit and a 130 s aggregate operation budget; each five-window `read-ram` has a 180 s aggregate budget. These are operation/provider budgets, not process watchdogs. Do not add an external kill timer or retry. Eight live commands, four of each shape, are the finite maximum; baseline failure or missing AF indication ends the sequence earlier.
+
+Stop on an unexpected reply/status, wrong identity or route, nonzero camera error, short read, disconnect, uncertain cleanup, unexpected camera behavior, gate/filter mismatch, unrecognized format, near-capacity/wrapped store or missing owner-reported AF behavior. Preserve completed captures and journals. After a failed bulk chunk, send no camera command until USB is unplugged, the body is power-cycled and ordinary operation is confirmed, following the reviewed bulk operation's incident procedure.
+
+After success, end this read-only-content block through the reviewed bulk operation's normal cardless exit: ask whether the body remains at its ordinary shooting screen and works normally, then detach USB when the owner wishes. No `ram-unload`, `ram-free`, payload rollback, gate restore or mandatory battery pull is introduced for this block. This is distinct from any later RAM-hook experiment, whose power-removal ending remains required. Card/save/playback behavior is outside this cardless exception.
