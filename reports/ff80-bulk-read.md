@@ -82,3 +82,59 @@ Run 2 passes every acceptance condition of section 4 (E-BULK-READ-RUN2-150). On 
 The capture at `[0x00c00000,0x00c10000)` equals run 1's capture and its three `read-ram` windows. Against the image-5 decode it differs in 3 bytes, `0x00d0cd9c`, `0x00d3d53c` and `0x00dca960`, each `0x00` on the body as in the emulator. The emulator's other 6 differing bytes, `0x00d7ee66`-`0x00d7ee76`, equal the decode on the body. They lie in the endpoint descriptors of bulk OUT `0x01`, bulk IN `0x82` and interrupt IN `0x83`, which hold the high-speed wMaxPacketSize `0x0200` and bInterval 4 on the body and full-speed `0x0040` and bInterval 1 in the emulator, whose bridge moves 64-byte packets. That the image rewrites these words by bus speed is inferred from the bytes; no write to them is traced.
 
 Run 2's exit check is cardless under the same exception. Asked "is the body at a normal shooting screen and still working?", the owner answers "yes". That closes the exception for run 2.
+
+## 6. Proposed run 3: low-DRAM snapshot at the idle shooting screen
+
+Run 3 captures DRAM below the staging pool in one session with the body idle at the shooting screen. The snapshot is for offline comparison of live RAM with the emulators' state at the same screen (#51, #53) and for runtime-state questions (#28) that would otherwise each need their own reads. It is not atomic: the CPUs keep running during the transfer, and chunks covering the live-view buffers hold whatever frame was there when each chunk was read.
+
+Class and review: H1 under [spec 07 section 3.2](../spec/07-governance-and-handoff.md#32-operation-classes). Run 3 sends the same closed operation, frame layouts, window rules and stops that BulkReadReview approved (E-BULK-READ-REVIEW-150); only the address and length inputs change, and the reviewed window check admits them. Section 3.2 asks for an independent review of new mechanism bytes, and a new window adds none, so run 3 needs no new review. The [read grant](../spec/07-governance-and-handoff.md#34-standing-confirmations) covers `read-ram` and `read-config` only, so run 3 needs the owner's go.
+
+### 6.1 DRAM coverage below `0x0b2ece00`
+
+The MPU's region 0 `[0,0x40000000)` is a window, not a DRAM size (E-XM1-MPU-BOOT-RECORD-150), and the emulator's 512 MiB is borrowed backing; its board file says "physical DRAM population unmeasured". What shows a physical range is DRAM is a read from the body or the firmware's own use of it on the body:
+
+| Physical range | Evidence |
+| --- | --- |
+| `[0x00000000,0x00000100)` | Hardware-read: the live vector table of the boot record the ROM stages at 0, byte-identical in two captures (E-BOOTROM-EXTENT-150, E-BOOTROM-DISCRIMINATOR-150); the second record is staged at `0x10000` (E-BOOTROM-MODE4-150). |
+| Loader A at `0x00040000`, the log store `[0x000a0800,0x000c07f4)`, loader B at `0x000d0000` | Hardware-read (E-RAM-PROBE-150, E-DUMP-RAM-150, the read-log sessions of [firmware-extraction.md](firmware-extraction.md#the-whole-store)). |
+| `[0x0061c000,0x01460000)` | Hardware-read: the segment table and the image 4, image 5 and plain-image extents (E-DUMP-RAM-150); the RAM-push allocations near `0x00a8xxxx` were written and read on the body. Image 4's bss fill `[0x0089ec00,0x00bf1a00)` lies between them. |
+| `[0x01460000,0x03360000)` | Hardware-read at `0x015c22a0`, `0x01667000`, `0x01677700` and `0x01acd800`. Firmware use: the face workspace at `0x021a1800`-`0x021afc00` (E-FACE-ADDRESS-WORDS-150), the load-path graphics fills `[0x0228c800,0x027b3200)` (emulated, [classic-chrome-patch.md](classic-chrome-patch.md)) and the updater's main-range staging from `0x02e4025c` or `0x02fb7600` (E-UPDATE-WRITE-ORDER-150). |
+| `[0x03360000,0x05aa0000)` | Firmware use on every ff80 attach in an ordinary boot: the mode-3 start fills `0x43360000`-`0x45a9ffff` with `0xffffffff`, and the range holds the displayed live-view buffer and the display module's windows `[0x03700000,0x04a00000)` (E-STORED-F7-ORDINARY-READ-150, static; E-STORED-F7-ATTACH-EMU-150, emulated). The attaches of runs 1 and 2 took that path, and the body was at a working shooting screen after each. |
+| `[0x05aa0000,0x0b2ece00)`, 88.3 MiB | No read from the body and no firmware use traced on the body. Its only lead is the DCAA object table at `0x06b5612c`, a static result (E-AUTOACT-150). |
+
+Verdict: `[0x05aa0000,0x0b2ece00)` is the sub-range the evidence does not show is DRAM. Both of its edges are DRAM, so it is DRAM if the controller decodes populated memory contiguously up to `0x0b3f6e00`; that is an inference about the memory controller, not X-M1 evidence, and a DMA from an unpopulated address has unknown bus behaviour. Run 3 therefore reads `[0x00000000,0x05aa0000)` and leaves that span out. The unread stretches inside `[0,0x05aa0000)` lie between ranges listed above. The span becomes readable when a firmware buffer in it is traced statically and bound to ordinary operation, or when the owner accepts the contiguity inference for it.
+
+The tool admits both the proposed window and the full one: `rehearse read-bulk 0x00000000 0x0b2ece00` prints 179 E1 frames, the first `e1 00 b4 d1 32 00 00 10 00 00 12 34` and the last `e1 00 bf f1 32 00 00 0e ce 00 12 34`, 187,616,768 bytes.
+
+### 6.2 Run
+
+Camera state: an ordinary boot with no card and stored `0xf7 = 0x01`, USB attached at the shooting screen, the body enumerated as `04cb:ff80`, idle with no menu, capture, live-view change or playback.
+
+```sh
+devenv shell -- bazel run //transport:camera -- rehearse read-bulk 0x00000000 0x05aa0000
+devenv shell -- bazel run //transport:camera -- read-bulk 0x00000000 0x05aa0000
+```
+
+The rehearsal prints 91 E1 frames with the synthetic session `0x1234`: the first `e1 00 b4 d1 32 00 00 10 00 00 12 34` and the last `e1 00 ba 71 32 00 00 0a 00 00 12 34`, 90 chunks of `0x100000` and one of `0xa0000`, 95,027,200 bytes. Every offset wraps through `0x4b2ece00 + offset` as run 1's did. At run 2's 10.5 MB/s the transfer takes about 9 s. The capture is `ram-00000000-05aa0000.bin` in the new session directory. Host disk: `df -h /var/home` reports 61 GB available on 2026-10-25; the full window would need 179 MiB.
+
+Stops: those of section 4, unchanged. Any refusal, uncertain cleanup, disconnect, short chunk or reply other than the documented ones ends the run, and camera runs pause until the owner has been told. After a stop inside the chunk loop no camera command of any kind is sent until the owner has unplugged USB, power-cycled the body and confirmed ordinary operation.
+
+Acceptance: the session completes with 91 chunks of the sizes above, and the capture's bytes at `[0x00c00000,0x00c10000)` equal run 1's capture (SHA-256 `80b00c2c…af6b`). The result line's `bytes-per-s` is reported.
+
+Exit check: cardless, as for runs 1 and 2. The model asks the owner whether the body is at a normal shooting screen and still working, and the owner's confirmation closes the exception for run 3.
+
+### 6.3 Comparison after the run
+
+With `S` naming the capture, this lists every byte that differs from the image-4 and image-5 decodes over their load ranges as address, body byte and decode byte:
+
+```sh
+S=private-data/sessions/SESSION-read-bulk/ram-00000000-05aa0000.bin
+D=private-data/analysis/x-m1-1.50/lz
+for img in id4-0061c400:0x0061c400:0x282800 id5-00bf1a00:0x00bf1a00:0x4f1e60; do
+  IFS=: read -r name load size <<<"$img"
+  cmp -l --ignore-initial=$((load)):0 --bytes=$((size)) "$S" "$D/$name.bin" |
+    gawk -v base=$((load)) '{printf "0x%08x %02x %02x\n", base+$1-1, strtonum("0"$2), strtonum("0"$3)}' > "${S%.bin}-vs-$name.txt"
+done
+```
+
+On run 2's capture, with its base subtracted from `--ignore-initial`, the same command gives the three image-5 bytes of section 5. The maintenance-boot baseline is E-DUMP-RAM-150: 542 differing bytes in image 4 and 233 in image 5.
