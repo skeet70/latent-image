@@ -26,7 +26,7 @@ import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stdout)
 import System.Posix.Files (setFileMode)
 import System.Posix.Temp (mkdtemp)
-import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, routeKey, routeKeyHex)
+import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, hostProcedure, procedureHex, routeKey, routeKeyHex)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
 import Emulation.UiTrajectory
@@ -36,6 +36,7 @@ import FujiAF.RamPush
 import FujiAF.Transport (ensurePrivateDirectory, realClock, writePrivateBytes)
 import Xm1UnreviewedRelink (runUnreviewedRamPush, runUnreviewedRamUnload, withUnreviewedBuild)
 import RamPushReviewedPins (reviewedContract)
+import RamPushProcedure (procedureSourcesDigest)
 import RamPushCcReviewedPins (reviewedCcContract)
 import RamPushCcIconReviewedPins (reviewedCcIconContract)
 
@@ -466,6 +467,9 @@ seconds value = showFFloat (Just 1) value " s"
 runSession :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> Plan -> FilePath -> IO ()
 runSession settings python runtime installedMedia adjustmentNand plan e2e = do
   phases <- newIORef []
+  procedure <- case emulationRuntime settings of
+    RetainedRuntime -> Just . procedureHex <$> hostProcedure runtime procedureSourcesDigest
+    FujiModRuntime _ -> pure Nothing
   let timed :: T.Text -> IO a -> IO a
       timed label action = do
         started <- getMonotonicTime
@@ -499,7 +503,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
                   | candidate <- candidates
                   , Just relinked <- [lookup (installBase candidate) built]
                   , manifestDigest (relinkedManifest relinked) == installManifestDigest candidate
-                  , runtimeDigest (relinkedManifest relinked) == installRuntimeDigest candidate ]
+                  , runtimeDigest (relinkedManifest relinked) == installRuntimeDigest candidate
+                  , installProcedureDigest candidate == procedure ]
             pure (case matches of
               (candidate, relinked) : _ -> (Just candidate, Just (candidate, relinked))
               [] -> (Nothing, Nothing))
@@ -603,7 +608,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         host <- InstallHost <$> B.readFile allocationPath <*> B.readFile statePath
           <*> pure installMailbox <*> pure breakBefore <*> pure breakAfter
         saved <- timed "install-checkpoint" (emulatorSaveInstallCheckpoint emulator base
-          (manifestDigest manifest) (runtimeDigest manifest) (installHostValue host))
+          (manifestDigest manifest) (runtimeDigest manifest) procedure (installHostValue host))
         putStrLn ("install checkpoint: " ++ C.unpack (BL.toStrict (encode saved)))
         pure (statePath, installMailbox)
     state <- readRamPushState statePath

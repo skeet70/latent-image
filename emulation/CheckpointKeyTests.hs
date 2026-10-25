@@ -28,8 +28,10 @@ stagedFiles =
   , ("native/python/x70_native/_native.abi3.so", "engine")
   , ("native/src/lib.rs", "fn main() {}\n")
   , ("native/tests/test_usb_endpoint.py", "pass\n")
-  , ("tools/continue_rec_scanout.py", "FIRST_START_PULSE = 8000000\n")
+  , ("tools/continue_rec_scanout.py", "import tools.scanout_attach\n")
   , ("tools/firmware_registry.py", "pass\n")
+  , ("tools/scanout_attach.py", "def attach(): pass\n")
+  , ("tools/scanout_commands.py", "def transfer(): pass\n")
   , ("tools/start_setup_viewer.py", "def main(): pass\n")
   , ("viewer-validator", "launcher")
   , (".tools/firmware/xm1-150/manifest.json", "{}\n")
@@ -71,6 +73,23 @@ keeps base counter change = do
   after <- keyOf fixture routeInputs
   pure (before == after)
 
+-- | The compiled push driver digest a test tree stands in for.
+compiledSources :: String
+compiledSources = "a compiled push driver"
+
+procedureOf :: Fixture -> String -> IO String
+procedureOf fixture sources =
+  procedureHex <$> hostProcedure (fixtureRuntime fixture) sources
+
+-- | Whether applying CHANGE to a fresh fixture leaves its install identity as before.
+keepsProcedure :: FilePath -> IORef Int -> (Fixture -> IO ()) -> IO Bool
+keepsProcedure base counter change = do
+  fixture <- newFixture base counter
+  before <- procedureOf fixture compiledSources
+  change fixture
+  after <- procedureOf fixture compiledSources
+  pure (before == after)
+
 edit :: FilePath -> Fixture -> IO ()
 edit path fixture = appendFile (fixtureRuntime fixture </> path) "# edited\n"
 
@@ -85,6 +104,8 @@ main = do
   counter <- newIORef 0
   let kept name change = keeps base counter change >>= expect ("keeps the key: " ++ name)
       changed name change = keeps base counter change >>= expect ("changes the key: " ++ name) . not
+      keptProcedure name change = keepsProcedure base counter change >>= expect ("keeps the install identity: " ++ name)
+      changedProcedure name change = keepsProcedure base counter change >>= expect ("changes the install identity: " ++ name) . not
   results <- sequence
     [ kept "a viewer launcher edit" (edit "tools/start_setup_viewer.py")
     , kept "a viewer HTTP server edit" (edit "emulator/server.py")
@@ -99,7 +120,9 @@ main = do
     , changed "a firmware profile edit" (edit "firmware/x-m1/1.50/emulator-rec.json")
     , changed "an engine Python edit" (edit "native/python/x70_native/board.py")
     , changed "a different native engine" (edit "native/python/x70_native/_native.abi3.so")
-    , changed "a route-driving tool edit" (edit "tools/continue_rec_scanout.py")
+    , kept "a scanout launcher edit" (edit "tools/continue_rec_scanout.py")
+    , kept "a bridge command-handling edit" (edit "tools/scanout_commands.py")
+    , changed "an attach injection edit" (edit "tools/scanout_attach.py")
     , changed "a firmware registry edit" (edit "tools/firmware_registry.py")
     , changed "a different ROM" (edit "inputs/x-m1-1.50/bootrom.bin")
     , changed "a different selected DAT" (edit "inputs/selected.DAT")
@@ -127,5 +150,18 @@ main = do
         guest <- guestState (fixtureRuntime fixture) (InterpreterExecutable (fixturePython fixture)) (UnicornLibrary (fixtureUnicorn fixture))
         expect "changes the key: another checkpoint route"
           (routeKeyHex (routeKey guest CardAttach routeInputs) /= routeKeyHex (routeKey guest CardlessAttach routeInputs))
+    , keptProcedure "a viewer launcher edit" (edit "tools/start_setup_viewer.py")
+    , do
+        first <- newFixture base counter
+        second <- newFixture base counter
+        a <- procedureOf first compiledSources
+        b <- procedureOf second compiledSources
+        expect "keeps the install identity: the same staged bytes under another runtime root" (a == b)
+    , changedProcedure "a bridge command-handling edit" (edit "tools/scanout_commands.py")
+    , do
+        fixture <- newFixture base counter
+        before <- procedureOf fixture compiledSources
+        after <- procedureOf fixture "another compiled push driver"
+        expect "changes the install identity: a different compiled push driver" (before /= after)
     ]
   unless (and results) exitFailure

@@ -2,7 +2,10 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
-exports_files(["native_usb.c"])
+exports_files(
+    ["FujiAF/RamPush.hs", "FujiAF/Transport.hs", "native_usb.c"],
+    visibility = ["//visibility:public"],
+)
 
 _GHCOPTS = [
     "-Wall",
