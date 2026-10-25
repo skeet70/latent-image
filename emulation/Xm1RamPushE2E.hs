@@ -19,15 +19,16 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Bits (shiftL, shiftR, (.|.))
 import Data.Int (Int32)
 import Data.Word (Word32)
-import Numeric (readHex, showFFloat, showHex)
+import Numeric (showFFloat, showHex)
 import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectory, removeDirectoryRecursive, setCurrentDirectory)
 import System.Environment (getExecutablePath, lookupEnv)
-import System.FilePath (takeFileName, (</>))
+import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stdout)
 import System.Posix.Files (setFileMode)
 import System.Posix.Temp (mkdtemp)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, routeKey, routeKeyHex)
 import Emulation.Sha256 (sha256File, sha256Hex)
+import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
 import Emulation.UiTrajectory
 import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
 import EmulatorUsb
@@ -84,6 +85,8 @@ data E2ESettings = E2ESettings
     -- | The card attach checkpoint key, which 'runRamPushE2E' sets.
   , cardAttachKey :: Maybe RouteKey
   , emulationRuntime :: EmulationRuntime
+  -- | The DAT the user supplied, which a flash candidate's symbol table sits beside.
+  , firmwareSource :: FilePath
   }
 
 -- | The card attach checkpoint key: the staged guest state and the session's inputs.
@@ -288,19 +291,16 @@ hexAddress value = "0x" ++ replicate (8 - length digits) '0' ++ digits where dig
 
 symbolAddress :: FilePath -> String -> IO Word32
 symbolAddress path name = do
-  rows <- lines <$> readFile path
-  let addresses =
-        [ value
-        | row <- rows
-        , let fields = words row
-        , not (null fields)
-        , last fields == name
-        , (address : _) <- [fields]
-        , (value, "") <- readHex address
-        ]
-  case addresses of
-    [address] -> pure address
-    _ -> ioError (userError ("linked symbol is not unique: " ++ name))
+  table <- parseSymbolTable <$> B.readFile path
+  either (ioError . userError) pure (resolveSymbol table name)
+
+-- | The bank symbol table a flash candidate's package carries beside its linked kernel.
+flashCandidateSymbols :: FilePath -> IO SymbolTable
+flashCandidateSymbols firmware = do
+  let path = takeDirectory firmware </> "kernel" </> "kernel.syms"
+  present <- doesFileExist path
+  unless present (ioError (userError ("the flash candidate has no symbol table: " ++ path)))
+  parseSymbolTable <$> B.readFile path
 
 mailboxFields :: [String]
 mailboxFields =
@@ -558,10 +558,10 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     mailbox <- symbolAddress (relinkDirectory </> "kernel.syms") "ram_push_mailbox"
     readSymbols <- mapM (\name -> (,) name <$> symbolAddress (relinkDirectory </> "kernel.syms") name)
       (nub [name | segment <- planBefore plan ++ planAfter plan
-                 , (_, RuntimeSymbol name, _) <- segmentReads segment])
+                 , (_, RuntimeSymbol name _, _) <- segmentReads segment])
     let readAddress (FixedAddress value) = pure value
-        readAddress (RuntimeSymbol name) =
-          maybe (ioError (userError ("unresolved runtime symbol: " ++ name))) pure (lookup name readSymbols)
+        readAddress (RuntimeSymbol name offset) =
+          maybe (ioError (userError ("unresolved runtime symbol: " ++ name))) (pure . (+ offset)) (lookup name readSymbols)
     let readMailbox = mailboxReport <$> emulatorReadMemory emulator mailbox 104
         stop phase message = do
           report <- readMailbox
@@ -789,8 +789,9 @@ runFlashSession settings python runtime installedMedia adjustmentNand plan e2e =
     ensurePrivateDirectory e2e
     emulatorTraceSites emulator ([(menuMessageDrawer, menuMessageSite), (d3HookEntry, d3HookSite)] ++ declaredSites plan)
     let readAddress (FixedAddress value) = pure value
-        readAddress (RuntimeSymbol name) =
-          ioError (userError ("runtime symbol " ++ name ++ " belongs to a RAM-push build, not a flash candidate"))
+        readAddress (RuntimeSymbol name offset) = do
+          symbols <- flashCandidateSymbols (firmwareSource settings)
+          either (ioError . userError) (pure . (+ offset)) (resolveSymbol symbols name)
         stop phase message = do
           writePrivateBytes (e2e </> "e2e-failure.json") (BL.toStrict (encode (object
             [ "phase" .= String phase, "message" .= message ])) <> "\n")
