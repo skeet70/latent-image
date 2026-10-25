@@ -347,7 +347,7 @@ launch options = do
                 ClassicChromeChoice -> classicChromePayload
                 ClassicChromeIconChoice -> classicChromeIconPayload)
               (attachHoldOption options)
-              (uiConversionProfileOption options) cardInput (fixedSceneFrameOption options) Nothing runtime
+              (uiConversionProfileOption options) cardInput (fixedSceneFrameOption options) Nothing runtime dat
         if warmCheckpointOption options
           then warmAttachCheckpoint settings python stagedFirmwarePath nandPath (destination </> "warm-attach")
           else runRamPushE2E settings python workspacePath (resolve root trajectories) stagedFirmwarePath nandPath receiptPath
