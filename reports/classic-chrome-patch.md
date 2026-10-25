@@ -894,3 +894,19 @@ for f in $R/lz/id4.dis $R/lz/id5.dis $R/filmsim/plain.dis; do awk -F'\t' '$2 ~ /
 # fallback adjustment bytes: tone overrides and the preset flag byte
 od -An -tx1 -j $((0xe0048+0xb5)) -N 1 $R/payload.bin; od -An -tx1 -j $((0xe0048+0xcb74)) -N 3 $R/payload.bin; od -An -tx1 -j $((0xe0048+0xaf93)) -N 1 $R/payload.bin
 ```
+
+## 14. Combined recipe-bank RAM mechanism review brief
+
+The bank relinker now composes the existing Classic Chrome RAM processing publications with the editable bank, D3, live-view and frames-remaining fragments. This is a new combined mechanism, not an extension of either prior approval. Its changed source identities and publication contract are re-pinned **unreviewed**. The standalone Classic Chrome records are also re-pinned unreviewed wherever shared source identities change.
+
+The allocation reserves Classic Chrome's existing prefix data and leaves conversion row 2 and film code `0xd` to CC. D3's tables, expanded film conversion table and hook move after the bank's name records. D3 A uses appended row 13/code `0xf`; D3 B remains row 4/code `0xe`. Existing shooting/Q indices 0-8 are preserved and CC appends at index 9. Bank Edit offers the seven existing editable films plus CC. The [format-3 compatibility decision](recipe-design.md#1811-classic-chrome-bank-encoding-needs-the-owners-decision) separately needs the owner's approval.
+
+Independent mechanism review must cover:
+
+- The relocated D3 branch targets and table consumers, CC prefix ownership, allocation bounds and installer placement.
+- The merged setup-before-activation ordering, publication count, overlap exclusion, stock expected words and complete rollback closure.
+- The stored-CC availability/default path and ordinary/C film getters and setters. Unsupported modes use the stock PROVIA fallback without changing the stored CC nibble.
+- Format-2 D3 A migration in every valid-base and populated saved/working payload, refusal of legacy code `0xf`, format-3 admission and legacy-reader refusal.
+- CC selection and metadata/RAW hooks alongside the unchanged meanings of stock films and the two relocated D3 choices.
+
+The combined deployment remains volatile RAM. The standalone legacy D3 flash builders remain separate; this change does not accept a flash candidate, SD persistence, power-cycle retention or camera color output.

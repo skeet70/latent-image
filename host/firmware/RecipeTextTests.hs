@@ -137,6 +137,12 @@ realRecipeChecks = do
   check
     "the second Velvia entry round-trips byte for byte"
     (reimportedPayload testBase (payloadOf testBase second) == payloadOf testBase second)
+  let chrome = fixture (parseRecipeText "chrome" "Film Simulation: Classic Chrome\n")
+      chromePayload = payloadOf testBase chrome
+  check "Classic Chrome parses as a supported film" (fieldFilm (textFields chrome) == Just ClassicChrome)
+  check "Classic Chrome stores code 0xd" (lookup 0xfe (recipePairs (fst (fixture (fillRecipe testBase chrome)))) == Just (StoredCode 0x0d))
+  check "Classic Chrome exports with its canonical film name" (fmap fst (exportRecipeText testBase (textName chrome) chromePayload) == Right "Name: chrome\nFilm Simulation: Classic Chrome\n")
+  check "Classic Chrome round-trips byte for byte" (reimportedPayload testBase chromePayload == chromePayload)
 
 -- | Import, export and import a payload over the declared base.
 reimportedPayload :: B.ByteString -> B.ByteString -> B.ByteString
@@ -184,7 +190,7 @@ rejections =
   , ("Color Chrome", "Color Chrome: WEAK\n", "is unsupported")
   , ("clarity", "Clarity: +1\n", "is unsupported")
   , ("exposure compensation", "ev: -1/3\n", "is unsupported")
-  , ("unsupported film", "Film Simulation: Classic Chrome\n", "is unsupported for Film Simulation")
+  , ("unsupported film", "Film Simulation: Eterna\n", "is unsupported for Film Simulation")
   , ("unsupported white balance", "White Balance: DAYLIGHT\n", "is unsupported for White Balance")
   , ("unsupported ISO preset", "ISO: auto1\n", "is unsupported for ISO")
   , ("unknown white balance", "White Balance: SHADEE\n", "is not a White Balance value")
@@ -246,11 +252,13 @@ cliChecks binary = do
   writeFile (root </> "warmstandard.txt") warmStandardText
   writeFile (root </> "chrome.txt") "Film Simulation: Classic Chrome\n"
   writeFile (root </> "tone.txt") "Highlight Tone: +3\n"
+  writeFile (root </> "eterna.txt") "Film Simulation: Eterna\n"
   (importCode, importOut, importErr) <-
-    run ["import", hexBase, outDir, "warmstandard.txt", "chrome.txt", "tone.txt"]
+    run ["import", hexBase, outDir, "warmstandard.txt", "chrome.txt", "eterna.txt", "tone.txt"]
   check ("mixed set imports the valid recipe: " ++ show importErr) (importCode == ExitSuccess)
   check ("mixed set reports C1: " ++ show importOut) ("IMPORTED C1 from warmstandard.txt as \"warmstandard\"" `isInfixOf` importOut)
-  check ("mixed set reports the unsupported film: " ++ show importOut) ("REJECTED chrome.txt:" `isInfixOf` importOut && "Classic Chrome" `isInfixOf` importOut)
+  check ("mixed set reports Classic Chrome as C2: " ++ show importOut) ("IMPORTED C2 from chrome.txt as \"chrome\"" `isInfixOf` importOut)
+  check ("mixed set reports the unsupported film: " ++ show importOut) ("REJECTED eterna.txt:" `isInfixOf` importOut && "Eterna" `isInfixOf` importOut)
   check ("mixed set reports the out-of-range value: " ++ show importOut) ("REJECTED tone.txt:" `isInfixOf` importOut && "out of range" `isInfixOf` importOut)
   check ("mixed set reports no field from the base: " ++ show importOut) ("from base: none" `isInfixOf` importOut)
   bank <- B.readFile (outDir </> bankFileA)
@@ -259,20 +267,28 @@ cliChecks binary = do
       occupied = [(k, name, bankPayloadContents saved) | (k, Populated name saved _) <- zip [0 :: Int ..] (bankRecordList (bankRecords state))]
   check "the generated bank decodes with its checksum" (case decoded of Right _ -> True; Left _ -> False)
   check "the generated bank is generation 1" (bankGeneration state == BankGeneration 1)
-  check "the generated bank has one populated slot" (length occupied == 1)
+  check "the generated bank has the Classic Chrome encoding" (decodedFilmEncoding (fixture decoded) == ClassicChromeFilmEncoding)
+  check "the generated bank has two populated slots" (length occupied == 2)
+  let expectedPayloads = [payloadOf testBase (fixture (parseRecipeText "warmstandard" warmStandardText)), payloadOf testBase (fixture (parseRecipeText "chrome" "Film Simulation: Classic Chrome\n"))]
   check
-    "the populated slot carries the recipe's payload"
-    (occupied == [(0, fixture (slotName "warmstandard"), payloadOf testBase (fixture (parseRecipeText "warmstandard" warmStandardText)))])
+    "the populated slots carry their recipe payloads"
+    (occupied == zipWith3 (,,) [0,1] (map (fixture . slotName) ["warmstandard","chrome"]) expectedPayloads)
   (exportCode, exportOut, exportErr) <- run ["export", hexBase, outDir </> bankFileA, exportDir]
   check ("the bank exports: " ++ show exportErr) (exportCode == ExitSuccess)
   check ("the bank reports its slot: " ++ show exportOut) ("EXPORTED C1" `isInfixOf` exportOut)
   exported <- readFile (exportDir </> "C1.txt")
   check "the exported text is the canonical recipe" (exported == "Name: warmstandard\n" ++ warmStandardText)
-  (againCode, againOut, againErr) <- run ["import", hexBase, secondDir, exportDir </> "C1.txt"]
+  chromeExported <- readFile (exportDir </> "C2.txt")
+  check "the exported CC text preserves Classic Chrome" (chromeExported == "Name: chrome\nFilm Simulation: Classic Chrome\n")
+  (againCode, againOut, againErr) <- run ["import", hexBase, secondDir, exportDir </> "C1.txt", exportDir </> "C2.txt"]
   check ("the exported text imports again: " ++ show againErr) (againCode == ExitSuccess)
   check ("the exported text reports its slot: " ++ show againOut) ("IMPORTED C1" `isInfixOf` againOut)
   again <- B.readFile (secondDir </> bankFileA)
   let againState = decodedState (fixture (decodeBankFile again))
       againOccupied = [bankPayloadContents saved | Populated _ saved _ <- bankRecordList (bankRecords againState)]
-  check "export followed by import reproduces the slot byte for byte" (againOccupied == [payloadOf testBase (fixture (parseRecipeText "warmstandard" warmStandardText))])
+  check "export followed by import reproduces both slots byte for byte" (againOccupied == expectedPayloads)
+  legacy <- either (error . show) pure (encodeBankFile state)
+  B.writeFile (root </> "legacy.bin") legacy
+  (legacyCode, _, _) <- run ["export", hexBase, "legacy.bin", root </> "legacy-export"]
+  check "export refuses a legacy D3 bank instead of relabelling code 0xd as Classic Chrome" (legacyCode /= ExitSuccess)
   removeDirectoryRecursive root

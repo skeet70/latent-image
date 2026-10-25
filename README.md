@@ -34,7 +34,7 @@ The [specification](spec/README.md) describes the intended system and acceptance
 
 ## Share recipes as text
 
-A recipe is one plain text file of `Field: Value` lines, using the fields the camera's menus show, so recipes can be written and shared on a computer and imported into the editable custom bank. The tool is host-only: import writes the bank file and the user copies it to the card; no camera operation is involved.
+A recipe is one plain text file of `Field: Value` lines, using the fields the camera's menus show, so recipes can be written and shared on a computer and imported into the editable custom bank. The tool is host-only: import writes a bank file without operating a camera.
 
 ```sh
 # one text file per recipe, C1 first; BASE is the declared payload base
@@ -45,12 +45,14 @@ bazel-bin/host/firmware/recipe-bank-text export BASE RECIPEA.BIN OUT_DIR
 
 `BASE` is one 0x28-byte slot payload, given as 80 hex characters or as a file that holds it: the body's own C-payload defaults record when you have one, or an all-zero payload, which gives every field stored code 0. Every field a recipe omits takes its stored code from `BASE`, and the report names those fields.
 
+The current text tool writes format-3 banks for the Classic Chrome-aware bank encoding. Classic Chrome is the sibling-derived approximation described in the [model report](reports/classic-chrome-model.md), not a stock X-M1 mode. The combined RAM bank is volatile and does not consume SD bank files; legacy flash banks refuse format 3. Text import is offline preparation, not an installation or a way to add persistence to that RAM deployment. The [format decision and compatibility matrix](reports/recipe-design.md#1811-classic-chrome-bank-encoding-needs-the-owners-decision) still need the owner's decision.
+
 The keys are the camera's field names; matching ignores case and spacing, so `Film Simulation`, `FILM SIMULATION` and the X70 project's `film=` all name the same field. A line may use `:` or `=`; blank lines and lines starting with `#` are ignored. One recipe per file, and the file's name without its extension is the slot name when the file has no `Name` line.
 
 | Key | Values |
 | --- | --- |
 | `Name` | up to 12 printable ASCII characters, the bank's slot-name bound |
-| `Film Simulation` | `PROVIA/STANDARD`, `Velvia/VIVID`, `ASTIA/SOFT`, `B&W`, `SEPIA`, `PRO Neg. Std`, `PRO Neg. Hi` |
+| `Film Simulation` | `PROVIA/STANDARD`, `Velvia/VIVID`, `ASTIA/SOFT`, `B&W`, `SEPIA`, `PRO Neg. Std`, `PRO Neg. Hi`, `Classic Chrome` |
 | `Dynamic Range` | `AUTO`, `100`, `200`, `400` |
 | `Highlight Tone`, `Shadow Tone`, `Sharpness` | `-2`, `-1`, `0`, `+1`, `+2` (the menu names `SOFT`..`HARD` are accepted) |
 | `Color` | `-2`, `-1`, `0`, `+1`, `+2` (the menu names `LOW`..`HIGH` are accepted) |
@@ -60,9 +62,11 @@ The keys are the camera's field names; matching ignores case and spacing, so `Fi
 
 The X70 project's `film=`, `dr=`, `highlight=`, `shadow=`, `color=`, `sharpness=`, `nr=`, `wb=`, `iso=` and `name=` spellings are accepted where they mean the same thing on this body, and so are `dr200`, `Pro Neg Std` and the numeric ISO spellings `100`, `12800` and `25600`.
 
-A file is rejected as a whole, with no substitution and no dropped field, when it names an unknown field; a feature the X-M1 1.50 does not implement (`Kelvin`, `WB Shift`, `Clarity`, `Grain`, `Color Chrome`, `D Range Priority`, exposure compensation); an X70 Auto ISO preset (`auto_iso1_*`..`auto_iso3_*`, `iso=auto1`..`auto3`); an unavailable film (`Classic Chrome`, `Eterna`, filtered monochrome) or white balance (`DAYLIGHT`, `CLOUDY`); a value outside the field's offered set; a field twice; an empty value; a line without a separator; or a name longer than 12 characters. Import reports each rejection and continues with the other files.
+A file is rejected as a whole, with no substitution and no dropped field, when it names an unknown field; a feature the X-M1 1.50 does not implement (`Kelvin`, `WB Shift`, `Clarity`, `Grain`, `Color Chrome`, `D Range Priority`, exposure compensation); an X70 Auto ISO preset (`auto_iso1_*`..`auto_iso3_*`, `iso=auto1`..`auto3`); an unavailable film (`Eterna`, filtered monochrome) or white balance (`DAYLIGHT`, `CLOUDY`); a value outside the field's offered set; a field twice; an empty value; a line without a separator; or a name longer than 12 characters. Import reports each rejection and continues with the other files.
 
 Export writes the canonical form: the `Name` line and exactly the fields whose stored code differs from `BASE`, in the order of the table above. Importing an exported file over the same `BASE` reproduces the slot payload byte for byte. Each occupied slot exports its saved payload. A slot whose payload leaves fields the text cannot spell (for example ISO's second AUTO row, stored code 0x1b) or whose bytes differ from `BASE` outside the nine fields is reported and skipped rather than approximated.
+
+Export requires a format-3 bank. It refuses a legacy D3 bank before exporting any slot; legacy code `0xd` denotes D3 A, not Classic Chrome.
 
 Both commands exit 0 when they write their output, reporting each rejected file or skipped slot on stdout; they exit 1 for a run they refuse (an unreadable `BASE`, more files than slots, or nothing imported or exported).
 

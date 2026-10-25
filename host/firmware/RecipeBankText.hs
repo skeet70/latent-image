@@ -63,7 +63,7 @@ importRun baseArg outDir recipePaths = do
       bankRecordsFromList (map recordOf accepted ++ replicate (bankCapacity - length accepted) Unpopulated)
   file <-
     either die pure $
-      encodeBankFile (BankState (BankGeneration 1) NothingSelected Disabled BaseInvalid records)
+      encodeBankFileFor ClassicChromeFilmEncoding (BankState (BankGeneration 1) NothingSelected Disabled BaseInvalid records)
   createDirectoryIfMissing True outDir
   B.writeFile (outDir </> bankFileA) file
  where
@@ -97,6 +97,8 @@ exportRun baseArg bankPath outDir = do
   base <- loadBase baseArg
   file <- B.readFile bankPath
   decoded <- either die pure (decodeBankFile file)
+  when (decodedFilmEncoding decoded /= ClassicChromeFilmEncoding) $
+    die "export: legacy D3 bank encoding; Classic Chrome banks use format version 3"
   let state = decodedState decoded
       occupied =
         [ (k, name, saved)

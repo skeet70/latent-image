@@ -3,11 +3,8 @@
 -- boundary into closed value types and mapped to the bank's stored codes.
 -- Host-only; no camera, no container access.
 --
--- The stored codes are the col0 words of the values' rows in the pinned 1.50
--- conversion tables (the addresses FujiAF.RecipeBankFields carries), byte-read
--- from the pinned image-4 decode f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16.
--- The rows reports/recipe-patch-d3.md section 6.1 and reports/recipe-design.md
--- section 2 pin carry the same codes.
+-- Stock stored codes are the col0 words of the pinned 1.50 conversion tables.
+-- Classic Chrome uses row 2, stored code 0xd, in the combined RAM bank.
 module FujiAF.RecipeText
   ( -- * Recipe values
     FilmValue (..)
@@ -56,6 +53,7 @@ data FilmValue
   | Sepia
   | ProNegStd
   | ProNegHi
+  | ClassicChrome
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 -- | The DYNAMIC RANGE values the bank offers.
@@ -157,6 +155,7 @@ renderFilm value = case value of
   Sepia -> "SEPIA"
   ProNegStd -> "PRO Neg. Std"
   ProNegHi -> "PRO Neg. Hi"
+  ClassicChrome -> "Classic Chrome"
 
 renderRange :: DynamicRange -> String
 renderRange value = case value of
@@ -238,6 +237,7 @@ filmStored value = StoredCode $ case value of
   ProNegHi -> 0x0a
   BlackAndWhite -> 0x0b
   Sepia -> 0x0c
+  ClassicChrome -> 0x0d
 
 filmOfStored :: StoredCode -> Maybe FilmValue
 filmOfStored (StoredCode code) = case code of
@@ -248,6 +248,7 @@ filmOfStored (StoredCode code) = case code of
   0x0a -> Just ProNegHi
   0x0b -> Just BlackAndWhite
   0x0c -> Just Sepia
+  0x0d -> Just ClassicChrome
   _ -> Nothing
 
 rangeStored :: DynamicRange -> StoredCode
@@ -634,6 +635,7 @@ filmAliases =
   , ("sepia", Sepia)
   , ("pronegstd", ProNegStd)
   , ("proneghi", ProNegHi)
+  , ("classicchrome", ClassicChrome)
   ]
 
 rangeAliases :: [(String, DynamicRange)]
@@ -721,8 +723,7 @@ isoAliases =
 -- spells several of them.
 filmUnsupported, balanceUnsupported, isoUnsupported :: [(String, String)]
 filmUnsupported =
-  [ ("classicchrome", "the X-M1 1.50 does not implement Classic Chrome")
-  , ("eterna", "the X-M1 1.50 does not implement Eterna")
+  [ ("eterna", "the X-M1 1.50 does not implement Eterna")
   , ("monochromeyellow", "filtered monochrome is not offered on the X-M1 1.50")
   , ("monochromered", "filtered monochrome is not offered on the X-M1 1.50")
   , ("monochromegreen", "filtered monochrome is not offered on the X-M1 1.50")

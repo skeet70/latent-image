@@ -924,6 +924,26 @@ decodedState (DecodedV1 v1) = migrateV1 v1
 decodedState (DecodedV2 st) = st
 decodedState (DecodedV3 st) = st
 
+migrateD3Films :: BankState -> Either String BankState
+migrateD3Films state = do
+  film <- fieldForProperty 0xfe
+  let migratePayload payload = do
+        let bytes = bankPayloadContents payload
+            current = B.index bytes (fieldOffset film)
+            code = (current .&. fieldMask film) `shiftR` fieldShift film
+        case code of
+          15 -> Left "legacy D3 bank: film code 0xf is not a legacy row"
+          13 -> bankPayload (replaceAt bytes (fieldOffset film) ((current .&. complement (fieldMask film)) .|. (15 `shiftL` fieldShift film)))
+          _ -> Right payload
+      migrateRecord Unpopulated = Right Unpopulated
+      migrateRecord (Populated name saved working) =
+        Populated name <$> migratePayload saved <*> migratePayload working
+  base <- case bankBase state of
+    BaseInvalid -> Right BaseInvalid
+    BaseValid mode payload -> BaseValid mode <$> migratePayload payload
+  records <- mapM migrateRecord (bankRecordList (bankRecords state))
+  pure state {bankBase = base, bankRecords = BankRecords records}
+
 -- | The structural rules of the version carried by the file.
 decodeBankFile :: B.ByteString -> Either String DecodedBank
 decodeBankFile bytes
@@ -1193,9 +1213,16 @@ classifyBankFile = classifyBankFileFor D3FilmEncoding
 classifyBankFileFor :: BankFilmEncoding -> PayloadDomain -> B.ByteString -> BankFileClass
 classifyBankFileFor encoding domain bytes = case decodeBankFile bytes of
   Left reason -> StructurallyInvalid reason
-  Right decoded
-    | decodedFilmEncoding decoded /= encoding -> StructurallyInvalid "bank file: film encoding"
-    | otherwise -> maybe (ValidFile decoded) (UnsafeFile decoded) (decodedUnsafeReason domain decoded)
+  Right decoded -> case (encoding, decoded) of
+    (ClassicChromeFilmEncoding, DecodedV2 state) ->
+      case migrateD3Films state of
+        Left reason -> UnsafeFile decoded reason
+        Right migrated -> admit (DecodedV3 migrated)
+    _
+      | decodedFilmEncoding decoded /= encoding -> StructurallyInvalid "bank file: film encoding"
+      | otherwise -> admit decoded
+ where
+  admit decoded = maybe (ValidFile decoded) (UnsafeFile decoded) (decodedUnsafeReason domain decoded)
 
 -- choosing the bank -----------------------------------------------------
 
