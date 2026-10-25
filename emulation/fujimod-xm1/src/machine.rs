@@ -4,6 +4,7 @@
 use crate::guest::{DialTurn, MenuState, ModeDialPosition, ModeDialWindow, Press, RouteKey, set_adc};
 use crate::r4f::Guard;
 use crate::run::RunDocument;
+use crate::sd_host::{Contacts, RetainedCard, SdHost};
 use crate::trace::TraceSites;
 use fujimod_emulator::session::Session;
 
@@ -239,5 +240,33 @@ impl Machine {
     pub fn word(&self, address: u64) -> Result<u32, String> {
         let bytes = self.read(address, 4)?;
         Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    fn card_contacts(&self) -> Result<Contacts, String> {
+        let node = self.session.node(&self.document.sd.0)?;
+        self.session.board.inspect_device::<SdHost, _>(node, |host| Ok(host.contacts()))
+    }
+
+    /// Inserts `card` into the unexecuted SD host and drives card detect low.
+    pub fn insert_card(&mut self, card: RetainedCard) -> Result<(), String> {
+        let node = self.session.node(&self.document.sd.0)?;
+        self.session.board.edit_device::<SdHost, _>(node, |host| host.insert(card))?;
+        let Contacts { gpio, detect, .. } = self.card_contacts()?;
+        self.session.gpio(&gpio.0, detect.port, detect.pin, false)?;
+        if self.session.gpio_level(&gpio.0, detect.port, detect.pin)? {
+            return Err("the SD card detect pad did not settle low".into());
+        }
+        Ok(())
+    }
+
+    /// Drives the SD host's write-protect pad.
+    pub fn protect_card(&mut self, protected: bool) -> Result<(), String> {
+        let Contacts { gpio, protect, .. } = self.card_contacts()?;
+        self.session.gpio(&gpio.0, protect.port, protect.pin, protected)
+    }
+
+    /// The SD host's diagnostic state: presence, card state, counters and recent commands.
+    pub fn card_state(&self) -> Result<serde_json::Value, String> {
+        self.session.board.device_save(self.session.node(&self.document.sd.0)?)
     }
 }

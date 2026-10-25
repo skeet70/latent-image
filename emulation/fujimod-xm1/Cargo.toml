@@ -36,6 +36,7 @@ fujimod-emulator-exr2-plan = { path = "../fujimod/crates/emulator-exr2-plan" }
 fujimod-emulator-models = { path = "../fujimod/crates/emulator-models" }
 fujimod-recording = { path = "../fujimod/crates/recording" }
 flate2 = "1"
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 sha2 = "0.10"

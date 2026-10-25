@@ -13,8 +13,9 @@ use fujimod_emulator::{
     session::{Session, preparation},
 };
 use fujimod_emulator_cpu::arm::Coprocessor;
-use crate::ui_conversion::Xm1Adapters;
-use fujimod_emulator_exr2_plan::{MemoryChoices, Plan, Resources};
+use crate::adapters::Xm1Adapters;
+use crate::sd_host;
+use fujimod_emulator_exr2_plan::{Adapter, MemoryChoices, Model, Plan, Resources};
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use std::collections::BTreeMap;
@@ -85,6 +86,8 @@ pub struct RunDocument {
     pub usb_cable: NodeName,
     pub adc: NodeName,
     pub scanout: NodeName,
+    /// The SD0 host adapter node.
+    pub sd: NodeName,
     pub firmware: FirmwareFacts,
     /// Where each plan window and RAM fact address comes from.
     pub provenance: Provenance,
@@ -107,8 +110,23 @@ impl RunDocument {
             (RamFact::ScannerRegistered, guest(firmware.scanner_registered)?),
             (RamFact::KeyTable, guest(firmware.key_table.base)?),
         ];
-        document.provenance.validate(&plan_windows(document.devices.get())?, &ram)?;
+        let registers: Vec<(&str, Guest)> =
+            sd_host::REGISTERS.iter().map(|address| (document.sd.0.as_str(), Guest(*address))).collect();
+        document.provenance.validate(&plan_windows(document.devices.get())?, &ram, &registers)?;
+        document.sd_host()?;
         Ok(document)
+    }
+
+    pub fn sd_host(&self) -> Result<Adapter, String> {
+        Plan::parse(self.devices.get().as_bytes())?
+            .nodes
+            .into_iter()
+            .find(|node| node.name == self.sd.0)
+            .and_then(|node| match node.model {
+                Model::Adapter { adapter } if adapter.implementation == sd_host::IMPLEMENTATION => Some(adapter),
+                _ => None,
+            })
+            .ok_or_else(|| format!("run document node {} is not the {} adapter", self.sd.0, sd_host::IMPLEMENTATION))
     }
 }
 

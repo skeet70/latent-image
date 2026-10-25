@@ -823,6 +823,7 @@ dependencies = [
  "fujimod-emulator-exr2-plan",
  "fujimod-emulator-models",
  "fujimod-recording",
+ "libc",
  "serde",
  "serde_json",
  "sha2",

@@ -5,7 +5,7 @@
 
 use fujimod_emulator_devices::bus::InterruptLine;
 use fujimod_emulator_devices::{Cx, Device};
-use fujimod_emulator_exr2_plan::{Adapter, AdapterFactory, Resources};
+use fujimod_emulator_exr2_plan::Adapter;
 use fujimod_emulator_devices::graph::Mapping;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -291,27 +291,13 @@ impl Device for UiConversion {
     }
 }
 
-/// Builds the driver's adapter devices; every other implementation is refused.
-pub struct Xm1Adapters;
-
-impl AdapterFactory for Xm1Adapters {
-    fn construct(
-        &mut self,
-        name: &str,
-        spec: &Adapter,
-        windows: &[Mapping],
-        _: &Resources,
-        _: &BTreeMap<String, usize>,
-    ) -> Result<Box<dyn Device>, String> {
-        if spec.implementation != IMPLEMENTATION {
-            return Err(format!("{name} requires unavailable adapter {}", spec.implementation));
-        }
-        if windows.len() != 1 || windows[0].base != BASE || windows[0].size < WINDOW_BYTES {
-            return Err(format!("{name} requires the FFF47000 register window"));
-        }
-        let options: Options = serde_json::from_value(spec.options.clone()).map_err(|e| format!("{name}: {e}"))?;
-        Ok(Box::new(UiConversion::new(options)?))
+/// Builds the declared UI conversion over its FFF47000 window.
+pub fn construct(name: &str, spec: &Adapter, windows: &[Mapping]) -> Result<Box<dyn Device>, String> {
+    if windows.len() != 1 || windows[0].base != BASE || windows[0].size < WINDOW_BYTES {
+        return Err(format!("{name} requires the FFF47000 register window"));
     }
+    let options: Options = serde_json::from_value(spec.options.clone()).map_err(|e| format!("{name}: {e}"))?;
+    Ok(Box::new(UiConversion::new(options)?))
 }
 
 #[cfg(test)]

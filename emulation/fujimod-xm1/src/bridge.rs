@@ -5,6 +5,7 @@ use crate::adjustment::AdjustmentNand;
 use crate::guest::MenuState;
 use crate::machine::Machine;
 use crate::run::{self, RunDocument, ValidatedUpdate};
+use crate::sd_host::{self, RetainedCard};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::io::Write;
@@ -42,6 +43,8 @@ pub struct Inputs {
     pub update: Vec<u8>,
     pub boot_rom: Vec<u8>,
     pub adjustment: AdjustmentNand,
+    /// The card inserted before the first instruction; absent leaves the slot empty.
+    pub card: Option<RetainedCard>,
 }
 
 impl Inputs {
@@ -50,8 +53,19 @@ impl Inputs {
         let mut session = run::open(&document, &ValidatedUpdate(self.update.clone()), &self.boot_rom)?;
         session.board.set_execution_policy(document.execution_policy.into())?;
         self.adjustment.apply(&mut session, &document.nand)?;
-        Machine::new(document, session)
+        let mut machine = Machine::new(document, session)?;
+        if let Some(card) = &self.card {
+            machine.insert_card(card.clone())?;
+        }
+        Ok(machine)
     }
+}
+
+/// Loads the raw image at `path` as a card of the document's SD host.
+pub fn load_card(document_bytes: &[u8], path: &Path) -> Result<RetainedCard, String> {
+    let document = RunDocument::parse(document_bytes)?;
+    let (sectors, max_dirty_sectors) = sd_host::card_geometry(&document.sd_host()?)?;
+    sd_host::load_image(path, sectors, max_dirty_sectors)
 }
 
 /// Saves the machine's session under `root/name` through a partial directory,

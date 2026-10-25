@@ -1063,21 +1063,53 @@
         "boot_entries": [
           "rom"
         ],
-        "dependencies": [],
+        "dependencies": [
+          "irq0",
+          "irq1",
+          "serial_gpio"
+        ],
         "model": {
-          "kind": "sdhci-clocks",
-          "words": [
-            [
-              4294246444,
-              2
-            ]
-          ]
+          "adapter": {
+            "implementation": "xm1-retained-sd-host",
+            "options": {
+              "detect": {
+                "pin": 7,
+                "port": 12
+              },
+              "irq": {
+                "core": 0,
+                "line": 78
+              },
+              "max_dirty_sectors": 65536,
+              "protect": {
+                "pin": 6,
+                "port": 12
+              },
+              "ram_bytes": 536870912,
+              "rca": 4660,
+              "sectors": 8388608,
+              "transfer_ticks": 100
+            },
+            "references": {
+              "gpio": "serial_gpio"
+            },
+            "wires": []
+          },
+          "kind": "adapter"
         },
-        "name": "sd_clocks",
+        "name": "sd",
         "windows": [
           {
-            "base": 4294246444,
-            "size": 2
+            "base": 4294246400,
+            "size": 48
+          },
+          {
+            "base": 4294246448,
+            "size": 16
+          },
+          {
+            "base": 4294246656,
+            "size": 8
           }
         ]
       },
@@ -2603,6 +2635,7 @@
   "usb": "usb",
   "usb_cable": "usb_cable",
   "scanout": "scanout",
+  "sd": "sd",
   "firmware": {
     "current_menu": 9794000,
     "calibration_pointer": 9882192,
@@ -3161,9 +3194,25 @@
         }
       },
       {
-        "node": "sd_clocks",
-        "base": 4294246444,
-        "size": 2,
+        "node": "sd",
+        "base": 4294246400,
+        "size": 48,
+        "binding": {
+          "kind": "fujimod-catalog-unchecked"
+        }
+      },
+      {
+        "node": "sd",
+        "base": 4294246448,
+        "size": 16,
+        "binding": {
+          "kind": "fujimod-catalog-unchecked"
+        }
+      },
+      {
+        "node": "sd",
+        "base": 4294246656,
+        "size": 8,
         "binding": {
           "kind": "fujimod-catalog-unchecked"
         }
