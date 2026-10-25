@@ -5,7 +5,7 @@ use crate::run::{Address, NodeName};
 use fujimod_emulator::session::Session;
 use serde::Deserialize;
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum RouteKey {
     Up,
@@ -316,10 +316,31 @@ impl FirmwareFacts {
         Ok((low, high))
     }
 
+    pub fn scanner_registered(&self, session: &Session) -> Result<bool, String> {
+        Ok(word(session, self.scanner_registered.0)? == 1)
+    }
+
+    /// The ADC keys whose calibrated interval holds their channel's sample in
+    /// `samples`; none before the scanner registers.
+    pub fn asserted_keys(&self, session: &Session, samples: &[u16]) -> Result<Vec<RouteKey>, String> {
+        if !self.scanner_registered(session)? {
+            return Ok(Vec::new());
+        }
+        let mut asserted = Vec::new();
+        for binding in &self.keys {
+            let (low, high) = self.interval(session, binding)?;
+            let sample = *samples.get(binding.channel).ok_or("ADC channel is absent")?;
+            if (low..=high).contains(&sample) {
+                asserted.push(binding.key);
+            }
+        }
+        Ok(asserted)
+    }
+
     /// The calibrated midpoint of `key`, refused while the scanner is not
     /// registered or when it also falls in another key's interval.
     pub fn pressed_sample(&self, session: &Session, key: RouteKey) -> Result<(usize, u16), String> {
-        if word(session, self.scanner_registered.0)? != 1 {
+        if !self.scanner_registered(session)? {
             return Err("X-M1 input scanner is not registered".into());
         }
         let binding = self.binding(key)?;

@@ -99,7 +99,7 @@ genrule(
     outs = ["FujiModPaths.hs"],
     cmd = " && ".join([
         "read -r store < $(location @lab_fujimod_xm1//:share/fujimod-xm1/store-path)",
-        "printf 'module FujiModPaths (fujimodDriver, fujimodRamPushBridge, fujimodRun) where\\n\\nfujimodDriver :: FilePath\\nfujimodDriver = \"%s\"\\n\\nfujimodRamPushBridge :: FilePath\\nfujimodRamPushBridge = \"%s\"\\n\\nfujimodRun :: FilePath\\nfujimodRun = \"%s\"\\n' \"$$store/bin/fujimod-xm1\" \"$$store/bin/fujimod-xm1-ram-push\" \"$$store/share/fujimod-xm1/xm1-150.json\" > $@",
+        "printf 'module FujiModPaths (fujimodDriver, fujimodRamPushBridge, fujimodToggleBridge, fujimodRun) where\\n\\nfujimodDriver :: FilePath\\nfujimodDriver = \"%s\"\\n\\nfujimodRamPushBridge :: FilePath\\nfujimodRamPushBridge = \"%s\"\\n\\nfujimodToggleBridge :: FilePath\\nfujimodToggleBridge = \"%s\"\\n\\nfujimodRun :: FilePath\\nfujimodRun = \"%s\"\\n' \"$$store/bin/fujimod-xm1\" \"$$store/bin/fujimod-xm1-ram-push\" \"$$store/bin/fujimod-xm1-toggle\" \"$$store/share/fujimod-xm1/xm1-150.json\" > $@",
     ]),
 )
 
@@ -204,6 +204,33 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "observation-compare-lib",
+    srcs = ["Emulation/ObservationCompare.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_test(
+    name = "observation-compare-tests",
+    size = "small",
+    srcs = ["ObservationCompareTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":observation-compare-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:text",
+    ],
+)
+
 # bazel run //emulation:e2e-observation-compare -- RETAINED_RECEIPTS FUJIMOD_RECEIPTS
 haskell_binary(
     name = "e2e-observation-compare",
@@ -211,9 +238,9 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     visibility = ["//visibility:public"],
     deps = [
+        ":observation-compare-lib",
         "//host:aeson",
         "//host:base",
-        "//host:bytestring",
         "//host:directory",
         "//host:filepath",
         "//host:text",
@@ -279,6 +306,7 @@ haskell_binary(
         ":case-sha256",
         ":checkpoint-key-lib",
         ":emulator-usb",
+        ":fujimod-paths",
         ":viewer-runtime-lib",
         "//broker:core",
         "//host:aeson",

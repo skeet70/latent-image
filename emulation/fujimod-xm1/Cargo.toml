@@ -18,6 +18,10 @@ name = "fujimod-xm1-ram-push"
 path = "src/ram_push.rs"
 
 [[bin]]
+name = "fujimod-xm1-toggle"
+path = "src/toggle.rs"
+
+[[bin]]
 name = "fujimod-xm1-provenance"
 path = "src/provenance_main.rs"
 

@@ -3,17 +3,16 @@
 //! `cardless-ram-push-bridge`, with attach and install checkpoints saved as
 //! FujiMod session snapshots.
 use fujimod_xm1::adjustment::AdjustmentNand;
+use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, menu_value, read, restore, sha256, write};
 use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, Transfer, encode_hex};
-use fujimod_xm1::guest::{DialTurn, MenuState, ModeDialPosition, Press, RouteKey};
+use fujimod_xm1::guest::{DialTurn, ModeDialPosition, Press, RouteKey};
 use fujimod_xm1::machine::{KeyPulse, Machine};
 use fujimod_xm1::render::MAX_SETTLE;
-use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    io::{BufRead, Write},
+    io::BufRead,
     path::{Path, PathBuf},
     process::ExitCode,
     time::Instant,
@@ -24,7 +23,6 @@ const USAGE: &str = "Usage: fujimod-xm1-ram-push --run RUN.json --boot-rom ROM -
 
 const ATTACH_RECORD: &str = "ram-push-attach.json";
 const INSTALL_RECORD: &str = "ram-push-install.json";
-const SNAPSHOT: &str = "session.fujimod";
 const CHECKPOINT_SCHEMA: u32 = 1;
 const FIRST_START_SCREEN: u64 = 100_000_000;
 const FIRST_START_PULSE: KeyPulse = KeyPulse { hold: 8_000_000, release: 8_000_000 };
@@ -92,30 +90,6 @@ fn arguments() -> Result<Arguments, String> {
     })
 }
 
-fn read(path: &Path) -> Result<Vec<u8>, String> {
-    std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
-
-fn emit(value: &Value) -> Result<(), String> {
-    let mut out = std::io::stdout().lock();
-    writeln!(out, "{value}").and_then(|()| out.flush()).map_err(|e| e.to_string())
-}
-
-fn menu_value(menu: Option<MenuState>) -> Value {
-    match menu {
-        Some(menu) => json!({"menu_id": menu.menu_id, "setting_id": menu.setting_id, "cursor": menu.cursor}),
-        None => json!({"menu_id": null, "setting_id": null, "cursor": null}),
-    }
-}
-
 /// The attach checkpoint's key and the identity document it hashes.
 struct BootKey {
     key: CheckpointKey,
@@ -141,24 +115,6 @@ enum StartKind {
     FreshBoot,
     Restored,
     Installed,
-}
-
-/// Everything needed to build the same unexecuted session again.
-struct Inputs {
-    document_bytes: Vec<u8>,
-    update: Vec<u8>,
-    boot_rom: Vec<u8>,
-    adjustment: AdjustmentNand,
-}
-
-impl Inputs {
-    fn machine(&self) -> Result<Machine, String> {
-        let document = RunDocument::parse(&self.document_bytes)?;
-        let mut session = run::open(&document, &ValidatedUpdate(self.update.clone()), &self.boot_rom)?;
-        session.board.set_execution_policy(document.execution_policy.into())?;
-        self.adjustment.apply(&mut session, &document.nand)?;
-        Machine::new(document, session)
-    }
 }
 
 fn boot_key(arguments: &Arguments, inputs: &Inputs, adjustment: &[u8]) -> Result<BootKey, String> {
@@ -234,36 +190,10 @@ fn install_checkpoints(root: &Path, key: &CheckpointKey) -> Result<Vec<(PathBuf,
     Ok(found)
 }
 
-/// Writes through a partial directory and replaces an existing checkpoint of the same name.
-fn save_checkpoint(bridge: &mut Ff80, root: &Path, name: &str, record_file: &str, record: &Value) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
-    let partial = root.join(format!(".partial-{name}-{}", std::process::id()));
-    std::fs::create_dir(&partial).map_err(|e| format!("{}: {e}", partial.display()))?;
-    bridge.release_rendezvous()?;
-    bridge.machine.disarm()?;
-    let snapshot = bridge.machine.session.checkpoint(None).and_then(|snapshot| snapshot.export());
-    bridge.machine.rearm()?;
-    write(&partial.join(SNAPSHOT), &snapshot?)?;
-    write(&partial.join(record_file), format!("{record:#}\n").as_bytes())?;
-    let target = root.join(name);
-    if target.exists() {
-        let stale = root.join(format!(".stale-{name}-{}", std::process::id()));
-        std::fs::rename(&target, &stale).map_err(|e| e.to_string())?;
-        std::fs::rename(&partial, &target).map_err(|e| e.to_string())?;
-        std::fs::remove_dir_all(&stale).map_err(|e| e.to_string())?;
-    } else {
-        std::fs::rename(&partial, &target).map_err(|e| e.to_string())?;
-    }
-    Ok(target)
-}
-
-fn restore(inputs: &Inputs, directory: &Path) -> Result<Machine, String> {
-    let mut machine = inputs.machine()?;
-    let snapshot = machine.session.import_snapshot(&read(&directory.join(SNAPSHOT))?)?;
-    machine.disarm()?;
-    machine.session.restore(&snapshot)?;
-    machine.rearm()?;
-    Ok(machine)
+/// Releases a held rendezvous first.
+fn save_checkpoint(host: &mut Ff80, root: &Path, name: &str, record_file: &str, record: &Value) -> Result<PathBuf, String> {
+    host.release_rendezvous()?;
+    bridge::save_checkpoint(&mut host.machine, root, name, record_file, record)
 }
 
 struct Attachment {

@@ -176,10 +176,11 @@ impl Machine {
         Ok(())
     }
 
-    /// Holds the ADC key `key` pressed until `release_key`.
-    pub fn press(&mut self, key: RouteKey) -> Result<(), String> {
+    /// Holds the ADC key `key` pressed until `release_key`; returns the held sample.
+    pub fn press(&mut self, key: RouteKey) -> Result<u16, String> {
         let (channel, sample) = self.document.firmware.pressed_sample(&self.session, key)?;
-        set_adc(&mut self.session, &self.document.adc, channel, sample)
+        set_adc(&mut self.session, &self.document.adc, channel, sample)?;
+        Ok(sample)
     }
 
     pub fn release_key(&mut self, key: RouteKey) -> Result<(), String> {
