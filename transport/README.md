@@ -259,6 +259,8 @@ No argument of any command can set an opcode, function, mailbox, parameter, text
 
 Mechanism pins are `menu/ram_push_*`, `menu/recipe_bank_ram.ld`, `menu/recipe_bank_boot.S` and `.ld`, `menu/recipe_bank_allowlist.json` (its `stock_calls`, `stock_stores` and 55 `unproven` declarations included), the relinker and builder sources, the builder and toolchain identities, the RC0 images and the publication contract. Bank-content pins are `menu/recipe_bank_{actions,arm,edit,fields,hook,probe,storage,ui}.*`, `recipe_bank_spec` and the D3 images: the sources the [bank ELF allowlist](#bank-elf-allowlist) confines.
 
+The `build-recipe-bank` identity is a source digest, not the executable's hash. `//host/firmware:ram-push-toolchain-module` sorts the paths in `//host/firmware:build-recipe-bank-sources` with `LC_ALL=C`, hashes each file with `sha256sum`, then hashes the concatenated checksum lines, including paths and newlines. The list includes `host/FujiAF/RecipeBank.hs` and its shared helpers as well as `BuildRecipeBank.hs` and `RamPushLayout.hs`. Any byte change in those inputs changes this mechanism pin, even an unused export. Host-only text-recipe decoding lives in `FujiAF.RecipeText`, outside that source list.
+
 ### Pre-go gate
 
 Before asking the owner for a `ram-push` go, the model runs

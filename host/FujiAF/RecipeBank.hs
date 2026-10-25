@@ -42,7 +42,6 @@ module FujiAF.RecipeBank
   , recipeFromPairs
   , encodeSlotPayload
   , encodeSlotPayloadOver
-  , slotRecipe
   , payloadBytes
   , bankCapacity
     -- * Names
@@ -337,16 +336,6 @@ encodeSlotPayloadOver base recipe
 -- is built with 'encodeSlotPayloadOver' over the body defaults.
 encodeSlotPayload :: Recipe -> Either String B.ByteString
 encodeSlotPayload = encodeSlotPayloadOver (B.replicate payloadBytes 0)
-
--- | The stored codes a payload carries at the nine applied fields: the read
--- direction of 'encodeSlotPayloadOver' placement.
-slotRecipe :: B.ByteString -> Either String Recipe
-slotRecipe bytes
-  | B.length bytes /= payloadBytes =
-      Left ("payload: " ++ show (B.length bytes) ++ " bytes, expected " ++ show payloadBytes)
-  | otherwise = recipeFromPairs [(fieldProperty f, codeAt f) | f <- recipeFields]
- where
-  codeAt f = StoredCode ((B.index bytes (fieldOffset f) .&. fieldMask f) `shiftR` fieldShift f)
 
 maskWidth :: Word8 -> Int
 maskWidth m = length [() | bit <- [0 .. 7 :: Int], m .&. (1 `shiftL` bit) /= 0]

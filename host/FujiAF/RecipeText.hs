@@ -26,6 +26,7 @@ module FujiAF.RecipeText
   ) where
 
 import Control.Monad (foldM, forM, unless, when)
+import Data.Bits ((.&.), shiftR)
 import Data.Char (isSpace, toLower)
 import Data.List (dropWhileEnd, intercalate)
 import Data.Maybe (isJust, isNothing)
@@ -34,15 +35,16 @@ import Data.Word (Word16, Word8)
 
 import FujiAF.RecipeBank
   ( Recipe
+  , RecipeField (..)
   , SlotName
   , StoredCode (..)
   , encodeSlotPayloadOver
   , payloadBytes
   , recipeFromPairs
+  , recipeFields
   , recipePairs
   , slotName
   , slotNameText
-  , slotRecipe
   )
 
 -- values ---------------------------------------------------------------
@@ -432,6 +434,14 @@ baseFields fields =
     ]
  where
   missing label spelled = [label | isNothing spelled]
+
+slotRecipe :: B.ByteString -> Either String Recipe
+slotRecipe bytes
+  | B.length bytes /= payloadBytes =
+      Left ("payload: " ++ show (B.length bytes) ++ " bytes, expected " ++ show payloadBytes)
+  | otherwise = recipeFromPairs [(fieldProperty f, codeAt f) | f <- recipeFields]
+ where
+  codeAt f = StoredCode ((B.index bytes (fieldOffset f) .&. fieldMask f) `shiftR` fieldShift f)
 
 -- | The stored codes of a text recipe over the declared payload base: every
 -- field it names takes its own code and every field it omits takes the
