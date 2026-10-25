@@ -48,7 +48,7 @@ from .storage_profile import (attach_captured_storage_profile, attach_captured_u
                              owner_mcu_profile, FIRMWARE_SHA256 as CAPTURE_FIRMWARE_SHA256)
 from .checkpoint import CheckpointError
 from x70_native.checkpoint import capture
-from x70_native._native import FFF63Engine, FFF63_PROFILES
+from x70_native._native import FFF63Engine, FFF63_PROFILES, FFF48Engine, FFF42InitControl, MODE_DEVICE_PROFILE
 
 
 def make_board(entry='rom', quantum=1000,storage_profile='erased',graphics_profile=None,
@@ -70,7 +70,7 @@ def make_board(entry='rom', quantum=1000,storage_profile='erased',graphics_profi
                af_extraction_profile=None,af_extraction_ticks=400000,af_extraction_stop_ticks=2,
                shutter_irq_profile=None,afs_frame_source_profile=None,afs_frame_source_ticks=400000,still_pipeline_profile=None,
                instructions_per_tick=1,settings=None,firmware_profile=None,ui_conversion_profile=None,
-               fff63_profile=None):
+               fff63_profile=None,mode_devices_profile=None):
     factory_options={key: str(value) if isinstance(value, Path) else value
                      for key, value in locals().items()
                      if key != 'sd_card_image' and (key not in ('settings','firmware_profile') or value is not None) and (key not in ('still_pipeline_profile','instructions_per_tick') or value not in (None,1))}
@@ -83,6 +83,10 @@ def make_board(entry='rom', quantum=1000,storage_profile='erased',graphics_profi
         factory_options.pop('fff63_profile', None)
     elif fff63_profile not in FFF63_PROFILES:
         raise ValueError('Unknown FFF63 engine profile')
+    if mode_devices_profile is None:
+        factory_options.pop('mode_devices_profile', None)
+    elif mode_devices_profile != MODE_DEVICE_PROFILE:
+        raise ValueError('Unknown mode device profile')
     if 'instructions_per_tick' in factory_options:
         from x70_native.board import normalize_instructions_per_tick, ratio_option
         factory_options['instructions_per_tick']=ratio_option(normalize_instructions_per_tick(instructions_per_tick))
@@ -188,7 +192,7 @@ def make_board(entry='rom', quantum=1000,storage_profile='erased',graphics_profi
         'ImageParameterControl': lambda **refs: ImageParameterControl(board),
         'ImageWorkControl': lambda **refs: ImageWorkControl(board,stop_profile=image_work_stop_profile,stop_ticks=image_work_stop_ticks,
         data_profile=image_work_data_profile,data_ticks=image_work_data_ticks),
-        'FaceAnalysisControl': lambda **refs: FaceAnalysisControl(board,stop_profile=face_stop_profile),
+        'FaceAnalysisControl': lambda **refs: FaceAnalysisControl(board,stop_profile=face_stop_profile,mode_profile=mode_devices_profile),
         'HDMIStartup': lambda **refs: HDMIStartup(board),
         'OutputControl': lambda **refs: OutputControl(board),
         'GraphicsAccelerator': lambda **refs: GraphicsAccelerator(raise_irq=board.queue_irq,ram_bytes=len(board.ram),copy_profile=copy_profile,
@@ -270,9 +274,12 @@ def make_board(entry='rom', quantum=1000,storage_profile='erased',graphics_profi
         if still_pipeline_profile == STILL_PIPELINE_RESIZE_PROFILE:
             board.attach(StillResizeControl(board,profile=STILL_RESIZE_PROFILE))
     if ui_conversion_profile is not None:
-        board.attach(DeclaredUIConversion(board, profile=ui_conversion_profile))
+        board.attach(DeclaredUIConversion(board, profile=ui_conversion_profile, scene_profile=mode_devices_profile))
     if fff63_profile is not None:
         board.attach(FFF63Engine(board, profile=fff63_profile))
+    if mode_devices_profile is not None:
+        board.attach(FFF48Engine(board, profile=mode_devices_profile))
+        board.attach(FFF42InitControl(board, profile=mode_devices_profile))
     if settings not in (None,'default','owner'):
         raise ValueError('Settings must be default or owner')
     if settings=='owner' and (storage_profile!='captured' or user_journals not in (None,'restored') or mcu_profile not in (None,'captured-backup')):
@@ -646,8 +653,8 @@ def main(*, session_factory=None):
     parser.add_argument('--histogram-profile',choices=HISTOGRAM_PROFILES,
                         help='Declared virtual post-ISP histogram; sampling, clock and latching are unmeasured')
     parser.add_argument('--histogram-data-ticks',type=int,default=400000)
-    parser.add_argument('--movrsz-profile',choices=(FujiDecompressor.MOVRSZ_PROFILE,),
-                        help='Declared source-derived pyramid resize; pixel filter and timing unmeasured')
+    parser.add_argument('--movrsz-profile',choices=FujiDecompressor.MOVRSZ_PROFILES,
+                        help='Declared pyramid resize or scene format2 stride transfer; filtering and timing unmeasured')
     parser.add_argument('--movrsz-ticks',type=int,default=400000)
     parser.add_argument('--face-stop-profile',choices=FACE_STOP_PROFILES,
                         help='Declared cancellation of the armed face request with idle DMA polls')

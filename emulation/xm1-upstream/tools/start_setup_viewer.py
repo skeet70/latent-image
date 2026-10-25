@@ -74,6 +74,7 @@ def main():
     from tools.probe_setup_menus import MenuSession
 
     output = args.output or ROOT / '.tools/xm1-viewer' / uuid4().hex[:12]
+    private_card = None
     if args.snapshot:
         from x70_native.portable_checkpoint import load
         board = load(args.snapshot)
@@ -87,8 +88,10 @@ def main():
             options['ui_conversion_profile'] = args.ui_conversion_profile
         if args.sd_card_image:
             from emulator.sd_card import BLANK_SDHC_PROFILE
+            from x70_native._native import copy_menu_card
+            private_card = copy_menu_card(args.sd_card_image, output.with_name(output.name + '-private-card'))
             options.update(sd_card_profile=BLANK_SDHC_PROFILE, sd_card_present=True,
-                           sd_card_image=args.sd_card_image)
+                           sd_card_image=Path(private_card.path))
         if identity is None:
             from tools import firmware_registry as registry
             entry = registry.load(options['firmware_profile'].firmware_id)
@@ -97,6 +100,8 @@ def main():
                             modified=entry['source']['sha256'] != registry.load('xm1-150')['source']['sha256'])
         print(f'Executing X-M1 {identity["version"]}: {identity["filename"]} SHA-256 {identity["sha256"]}', flush=True)
         session = MenuSession.cold_boot(options, output, firmware=identity)
+        if private_card is not None:
+            session.board._s2_private_card = private_card
     if args.save_snapshot:
         print(json.dumps(session.save_snapshot(args.save_snapshot)), flush=True)
     print(json.dumps(console_summary(session.state)), flush=True)

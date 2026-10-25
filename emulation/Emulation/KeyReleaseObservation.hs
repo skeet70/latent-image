@@ -53,7 +53,7 @@ instance FromJSON KeyRow where
     row <- parseJSON value
     if row < 36 then pure (KeyRow row) else fail "A key row must be within the firmware table"
 
-data ReleaseKey = Up | Down | LeftKey | RightKey | Ok | Q | Back | Play | Fn | DialPush | HalfPress | DialLeft | DialRight
+data ReleaseKey = Up | Down | LeftKey | RightKey | Ok | Q | Back | Play | Fn | DialPush | HalfPress | FullPress | Movie | Power | DialLeft | DialRight | MainDialUp | MainDialDown
   deriving (Eq)
 
 keyNames :: [(T.Text, ReleaseKey)]
@@ -61,6 +61,8 @@ keyNames =
   [ ("up", Up), ("down", Down), ("left", LeftKey), ("right", RightKey), ("ok", Ok)
   , ("q", Q), ("back", Back), ("play", Play), ("fn", Fn), ("dial-push", DialPush)
   , ("half-press", HalfPress), ("dial-left", DialLeft), ("dial-right", DialRight)
+  , ("full-press", FullPress), ("movie", Movie), ("power", Power)
+  , ("main-dial-up", MainDialUp), ("main-dial-down", MainDialDown)
   ]
 
 instance FromJSON ReleaseKey where
@@ -82,6 +84,11 @@ instance ToJSON ReleaseKey where
     HalfPress -> "half-press"
     DialLeft -> "dial-left"
     DialRight -> "dial-right"
+    FullPress -> "full-press"
+    Movie -> "movie"
+    Power -> "power"
+    MainDialUp -> "main-dial-up"
+    MainDialDown -> "main-dial-down"
 
 data KeyReleaseObservation = KeyReleaseObservation
   { observedRoute :: Maybe ReleaseRoute
@@ -97,8 +104,8 @@ instance FromJSON KeyReleaseObservation where
   parseJSON = withObject "incomplete key release" $ \value -> do
     key <- value .: "key"
     row <- value .: "row"
-    unless ((key `elem` [DialLeft, DialRight]) == maybe True (const False) row)
-      (fail "Only subcommand inputs have no key-table row")
+    unless ((key `elem` [DialLeft, DialRight, MainDialUp, MainDialDown]) == maybe True (const False) row)
+      (fail "Only rotary inputs have no key-table row")
     KeyReleaseObservation <$> value .: "route" <*> value .: "segment" <*> pure key <*> pure row
       <*> value .: "cap" <*> value .: "instructions_used" <*> value .: "instructions"
 

@@ -24,18 +24,25 @@ main = do
       receiptPath = root </> "receipt.json"
       tableEvent = "{\"route\":\"ram-push-cc\",\"segment\":\"cc-film-list-open\",\"key\":\"ok\",\"row\":18,\"cap\":6000000,\"instructions_used\":6000594,\"instructions\":514905236}"
       dialEvent = "{\"route\":\"ram-push-cc\",\"segment\":null,\"key\":\"dial-left\",\"row\":null,\"cap\":1000000,\"instructions_used\":1000000,\"instructions\":515905236}"
+      viewerEvents =
+        [ "{\"route\":\"viewer\",\"segment\":null,\"key\":\"full-press\",\"row\":6,\"cap\":1,\"instructions_used\":1,\"instructions\":1}"
+        , "{\"route\":\"viewer\",\"segment\":null,\"key\":\"movie\",\"row\":21,\"cap\":1,\"instructions_used\":1,\"instructions\":1}"
+        , "{\"route\":\"viewer\",\"segment\":null,\"key\":\"power\",\"row\":11,\"cap\":1,\"instructions_used\":1,\"instructions\":1}"
+        , "{\"route\":\"viewer\",\"segment\":null,\"key\":\"main-dial-up\",\"row\":null,\"cap\":1,\"instructions_used\":1,\"instructions\":1}"
+        , "{\"route\":\"viewer\",\"segment\":null,\"key\":\"main-dial-down\",\"row\":null,\"cap\":1,\"instructions_used\":1,\"instructions\":1}"
+        ]
+      events = tableEvent : dialEvent : viewerEvents
   createDirectoryIfMissing True root
-  C.writeFile logPath (tableEvent <> "\n" <> dialEvent <> "\n")
+  C.writeFile logPath (C.unlines events)
   observations <- readReleaseObservationLog logPath
   writeReleaseObservationReceipt receiptPath observations
   receipt <- eitherDecodeStrict' <$> C.readFile receiptPath
   let expected = do
-        table <- eitherDecodeStrict' tableEvent
-        dial <- eitherDecodeStrict' dialEvent
+        values <- mapM eitherDecodeStrict' events
         pure (object
           [ "schema" .= (1 :: Int)
           , "scope" .= ("incomplete debounced key releases; observational, not an acceptance gate" :: String)
-          , "incomplete_releases" .= ([table, dial] :: [Value])
+          , "incomplete_releases" .= (values :: [Value])
           ])
   retained <- readReleaseObservationReceipt receiptPath
   absent <- readReleaseObservationLog (root </> "no-events.jsonl")
@@ -45,7 +52,7 @@ main = do
   negativeInstructions <- try (readReleaseObservationLog logPath) :: IO (Either IOException [KeyReleaseObservation])
   outcomes <- sequence
     [ check "receipt preserves all incomplete-release fields and nullable segment/row" (receipt == expected)
-    , check "each logged event survives receipt serialization" (length retained == 2)
+    , check "each logged event survives receipt serialization" (length retained == 7)
     , check "a session with no events has no incomplete releases" (null absent)
     , check "a table key cannot be recorded without its row" (case missingRow of Left _ -> True; Right _ -> False)
     , check "instruction counts cannot be negative" (case negativeInstructions of Left _ -> True; Right _ -> False)

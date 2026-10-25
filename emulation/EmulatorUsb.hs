@@ -318,11 +318,11 @@ emulatorKey emulator (KeyTiming pulse settle) key =
     budget = maybe [] (\(KeyPulse hold release) -> ["hold_instructions" .= hold, "release_instructions" .= release]) pulse
     cap = maybe [] (\(SettleBudget instructions) -> ["settle_instructions" .= instructions]) settle
 
--- | A mode-dial detent the bridge can set through its calibrated ADC window: the nine positions
--- the viewer runs (SR+, SP and Adv. stop at unmodeled paths).
+-- | A mode-dial detent selected through its calibrated ADC window.
 data ModeDial
   = ModeDialShutter | ModeDialProgram | ModeDialAperture | ModeDialManual | ModeDialAuto
   | ModeDialCustom | ModeDialSports | ModeDialLandscape | ModeDialPortrait
+  | ModeDialSRAuto | ModeDialScene | ModeDialAdvanced
   deriving (Eq, Show, Enum, Bounded)
 
 -- | The bridge's position name, the viewer's `ModeDialPosition` value.
@@ -337,6 +337,9 @@ modeDialName position = case position of
   ModeDialSports -> "Sports"
   ModeDialLandscape -> "Landscape"
   ModeDialPortrait -> "Portrait"
+  ModeDialSRAuto -> "SR+"
+  ModeDialScene -> "SP"
+  ModeDialAdvanced -> "Adv."
 
 emulatorModeDial :: Emulator -> ModeDial -> IO Value
 emulatorModeDial emulator position = Object <$> rpc emulator (object

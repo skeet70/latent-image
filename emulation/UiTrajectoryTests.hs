@@ -102,8 +102,12 @@ main = do
         refused (document "[]" "[\"missing\"]")
     , expect "a mode-dial position decodes by its dial name" $
         (segmentModeDial =<< segmentOf (segmentDocument ",\"mode_dial\":\"AUTO\"")) == Just ModeDialAuto
-    , expect "an unmodelled mode-dial position is refused" $
-        refused (segmentDocument ",\"mode_dial\":\"SR+\"")
+    , expect "the three remaining mode-dial positions decode by their dial names" $
+        map ((segmentModeDial =<<) . segmentOf . segmentDocument)
+          [",\"mode_dial\":\"SR+\"", ",\"mode_dial\":\"SP\"", ",\"mode_dial\":\"Adv.\""]
+          == [Just ModeDialSRAuto, Just ModeDialScene, Just ModeDialAdvanced]
+    , expect "an unknown mode-dial position is refused" $
+        refused (segmentDocument ",\"mode_dial\":\"T\"")
     , expect "film rows 0 and 8 decode to PROVIA and the second recipe with their stored codes" $
         map (fmap filmStoredCode . (segmentFilmRow =<<) . segmentOf . segmentDocument)
           [",\"film_row\":0", ",\"film_row\":8"] == [Just 0, Just 14]

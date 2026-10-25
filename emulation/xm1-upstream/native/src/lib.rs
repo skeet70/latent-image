@@ -17,6 +17,12 @@ mod menu;
 mod phase_clock;
 mod spi0;
 mod task_state;
+mod mode_devices;
+mod menu_media;
+mod mode_resize;
+mod scene_scaler;
+mod scene_device;
+mod fff42;
 #[cfg(test)]
 mod tests;
 
@@ -796,14 +802,20 @@ impl Machine {
         instructions: &Bound<'_, PyAny>,
         ticks: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        let plan = plan.extract::<PyRef<'_, raster::DeclaredUIConversionPlan>>()
-            .map_err(|_| PyValueError::new_err("Expected a DeclaredUIConversionPlan"))?;
+        let ui_plan = plan.extract::<PyRef<'_, raster::DeclaredUIConversionPlan>>();
+        let scene_plan = plan.extract::<PyRef<'_, scene_scaler::Plan>>();
         let origin = engine::ConversionOrigin::new(
             conversion_integer(core, "core")?,
             conversion_integer(instructions, "instructions")?,
             conversion_integer(ticks, "ticks")?,
         ).map_err(PyValueError::new_err)?;
-        self.inner.convert_declared_ui(&plan, origin)
+        if let Ok(plan) = ui_plan {
+            self.inner.convert_declared_ui(&*plan, origin)
+        } else if let Ok(plan) = scene_plan {
+            self.inner.convert_declared_ui(&*plan, origin)
+        } else {
+            Err(PyValueError::new_err("Expected a declared UI or scene raster plan"))
+        }
     }
 
     fn mem_unmap(&self, core: usize, address: u64, size: usize) -> PyResult<()> {
@@ -1505,6 +1517,15 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(phase_clock::tick_xm1_clock, m)?)?;
     m.add_class::<fff63::Device>()?;
     m.add("FFF63_PROFILES", (fff63::PROFILE,))?;
+    m.add_class::<mode_devices::Device>()?;
+    fff42::register(m)?;
+    m.add("MODE_DEVICE_PROFILE", mode_devices::PROFILE)?;
+    m.add_function(wrap_pyfunction!(mode_devices::face_mode_write, m)?)?;
+    m.add_function(wrap_pyfunction!(mode_devices::face_mode_read, m)?)?;
+    menu_media::register(m)?;
+    mode_resize::register(m)?;
+    scene_device::register(m)?;
+    menu::register(m)?;
     m.add_function(wrap_pyfunction!(spi0::spi0_status_acknowledged, m)?)?;
     m.add_class::<irq_mask::IrqRoute>()?;
     m.add_function(wrap_pyfunction!(irq_mask::irq_enable_clear, m)?)?;

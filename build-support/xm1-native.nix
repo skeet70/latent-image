@@ -13,6 +13,12 @@ pkgs.rustPlatform.buildRustPackage {
   cargoLock.lockFile = ../emulation/xm1-upstream/native/Cargo.lock;
   nativeBuildInputs = [ pkgs.python3 ];
   PYO3_PYTHON = "${pkgs.python3}/bin/python3";
+  XM1_EMULATOR_PYTHON_PATH = builtins.path {
+    path = ../emulation/xm1-upstream/emulator;
+    name = "xm1-mode-device-test-inputs";
+    filter = path: type: type == "directory" || builtins.elem (builtins.baseNameOf path)
+      [ "hardware.py" "face_analysis_devices.py" "face_still_reconfiguration.py" ];
+  };
   doCheck = true;
   X70_UNICORN_LIBRARY = "${import ./unicorn-x70.nix { inherit pkgs; }}/lib/libunicorn.so.2";
   installPhase = ''

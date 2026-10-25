@@ -43,6 +43,7 @@ from tools.scanout_commands import (_FF80CommandBridge as _FF80EndpointBridge,
                                     _restore_ram_push_checkpoint, _run_ram_push_server)
 
 MAX_CONTINUATION = 15_000_000
+
 def _pick(obj, keys):
     return {key: copy.deepcopy(getattr(obj, key)) for key in keys if hasattr(obj, key)}
 
@@ -967,7 +968,7 @@ def main():
         if args.settings is not None and options.get("settings", "default") != args.settings:
             parser.error("Snapshot settings selection differs; cold boot the requested settings")
     else:
-        board, options = cold_board(args, make_board, parser.error)
+        board, options = cold_board(args, make_board, parser.error, output)
     if args.instructions is not None:
         threshold = board.instructions + args.instructions if args.instructions else 0
     else:

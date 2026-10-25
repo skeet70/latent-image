@@ -9,6 +9,25 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes, PyDict, PyList, PyTuple};
 
+pub(crate) trait DeclaredRasterPlan {
+    fn source_range(&self) -> std::ops::Range<usize>;
+    fn destination_range(&self) -> std::ops::Range<usize>;
+    fn source_rows(&self) -> impl Iterator<Item = std::ops::Range<usize>>;
+    fn convert(&self, source: &[u8], destination: &mut [u8]);
+
+    fn validate_bounds(&self, ram_size: usize) -> Result<(), String> {
+        let source = self.source_range();
+        let destination = self.destination_range();
+        if source.start >= source.end || destination.start >= destination.end
+            || source.end > ram_size || destination.end > ram_size
+            || source.start < destination.end && destination.start < source.end
+        {
+            return Err("Declared raster requires bounded disjoint DRAM spans".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy)]
 struct DramOffset(usize);
 #[derive(Clone, Copy)]
@@ -76,24 +95,19 @@ impl DeclaredUIConversionPlan {
         })
     }
 
-    pub(crate) fn validate_bounds(&self, ram_size: usize) -> Result<(), String> {
-        if self.source.0.checked_add(self.source_bytes).is_none_or(|end| end > ram_size)
-            || self.destination.0.checked_add(self.destination_bytes).is_none_or(|end| end > ram_size)
-        {
-            return Err("Declared UI conversion plan exceeds the target Machine DRAM".into());
-        }
-        Ok(())
-    }
+}
 
-    pub(crate) fn source_range(&self) -> std::ops::Range<usize> {
+impl DeclaredRasterPlan for DeclaredUIConversionPlan {
+
+    fn source_range(&self) -> std::ops::Range<usize> {
         self.source.0..self.source.0 + self.source_bytes
     }
 
-    pub(crate) fn destination_range(&self) -> std::ops::Range<usize> {
+    fn destination_range(&self) -> std::ops::Range<usize> {
         self.destination.0..self.destination.0 + self.destination_bytes
     }
 
-    pub(crate) fn source_rows(&self) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
+    fn source_rows(&self) -> impl Iterator<Item = std::ops::Range<usize>> {
         let pitch = 2 * self.stride.0;
         let bytes = 2 * self.width.0;
         (0..self.height.0).map(move |row| {
@@ -102,7 +116,7 @@ impl DeclaredUIConversionPlan {
         })
     }
 
-    pub(crate) fn convert(&self, source: &[u8], destination: &mut [u8]) {
+    fn convert(&self, source: &[u8], destination: &mut [u8]) {
         let source_pitch = 2 * self.stride.0;
         let source_width = 2 * self.width.0;
         let destination_pitch = 4 * self.width.0;
@@ -550,7 +564,7 @@ impl<'py> Registers<'py> {
 
 #[cfg(test)]
 mod conversion_tests {
-    use super::DeclaredUIConversionPlan;
+    use super::{DeclaredRasterPlan, DeclaredUIConversionPlan};
 
     #[test]
     fn yycbcr_conversion_publishes_abgr_and_skips_row_padding() {

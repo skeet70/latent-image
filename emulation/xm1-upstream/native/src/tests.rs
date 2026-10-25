@@ -275,5 +275,30 @@ fn key_release_returns_its_latched_state_and_observes_only_incomplete_releases()
             observations.extract::<Vec<(String, Option<usize>, u64, u64, u64)>>().unwrap(),
             vec![("dial-left".into(), None, 500_000, 500_000, stopped_at + 500_000)],
         );
+        for (key, row, latched) in [
+            ("full-press", Some(6usize), Some(true)),
+            ("movie", Some(21), Some(true)),
+            ("power", Some(11), None),
+            ("main-dial-up", None, None),
+            ("main-dial-down", None, None),
+        ] {
+            observations.call_method0("clear").unwrap();
+            if let Some(row) = row {
+                machine.call_method1(
+                    "mem_write",
+                    (0, 0x0082_8120u64 + row as u64 * 28 + 0x15, PyBytes::new(py, &[1])),
+                ).unwrap();
+            }
+            let before = board.getattr("instructions").unwrap().extract::<u64>().unwrap();
+            assert_eq!(
+                machine.call_method1("release_menu_key", (&session, key, 500_000u64))
+                    .unwrap().extract::<Option<bool>>().unwrap(),
+                latched,
+            );
+            assert_eq!(
+                observations.extract::<Vec<(String, Option<usize>, u64, u64, u64)>>().unwrap(),
+                vec![(key.into(), row, 500_000, 500_000, before + 500_000)],
+            );
+        }
     });
 }

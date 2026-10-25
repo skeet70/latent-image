@@ -27,7 +27,7 @@ from emulator import board as reference
 from emulator import strict_audit
 from emulator.board import BoardPlatform, ENTRY_LABELS, ROOT, ROM_FILE, ROM_HASH
 from emulator.boards.bindings import firmware_bindings
-from ._native import DeclaredUIConversionPlan, Machine, NativeError
+from ._native import DeclaredSceneScalePlan, DeclaredUIConversionPlan, Machine, NativeError
 
 
 @functools.lru_cache(maxsize=None)
@@ -553,8 +553,8 @@ class RustBoard(BoardPlatform):
         """Validate metadata without sampling or modifying DRAM."""
         return self._native.prepare_declared_ui_conversion(src_phys, dst_phys, width, height, stride)
 
-    def apply_declared_ui_conversion(self, plan: DeclaredUIConversionPlan, cpu_id: int = 0) -> None:
-        """Sample live source DRAM and publish tracked ABGR output."""
+    def apply_declared_ui_conversion(self, plan: DeclaredUIConversionPlan | DeclaredSceneScalePlan, cpu_id: int = 0) -> None:
+        """Publish tracked declared raster output from live source DRAM."""
         self._push_native()
         try:
             self._native.convert_declared_ui(plan, cpu_id, self.instructions, self.virtual_ticks)

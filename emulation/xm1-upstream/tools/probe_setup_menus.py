@@ -25,9 +25,7 @@ from emulator.menu_inputs import ALIASES, KEY_NAMES, KEY_RECORDS, MenuKey, MenuI
 from tools.continue_rec_scanout import MAX_CONTINUATION, MODE_DIAL_SETTLE, WarmScanoutSession
 
 MAX_PHASE = MAX_CONTINUATION
-# Dial positions that reach a usable shooting screen; the others stop at unmodelled devices.
-# Extend as devices are modelled.
-MODE_DIAL_RUNNING = frozenset({'S', 'M', 'P', 'A', 'AUTO', 'C', 'Sports', 'Landscape', 'Portrait'})
+MODE_DIAL_RUNNING = frozenset({'S', 'M', 'P', 'A', 'AUTO', 'C', 'Sports', 'Landscape', 'Portrait', 'SR+', 'SP', 'Adv.'})
 
 
 @dataclass(frozen=True)
@@ -299,8 +297,8 @@ class MenuSession(WarmScanoutSession):
             'mode_dial': self.inputs.mode_dial_state(),
             'render_supported': True,
             **input_state,
-            'limits': 'External ADC/GPIO levels and source-bound sub-command Gray cycles; electrical timing and clockwise sense are unmeasured.',
-            'unsupported_inputs': 'Main command-dial rotation is not bound to this input adapter.',
+            'limits': 'External ADC/GPIO/MCU levels, calibrated ADC4 detents and source-bound sub-command Gray cycles; electrical timing and clockwise sense are unmeasured. S2 requires no card or a run-owned private image.',
+            'unsupported_inputs': None,
             'observer_supported': False}
         if getattr(self, '_last_render_settle', None) is not None:
             state['navigation']['render_settle'] = copy.deepcopy(self._last_render_settle)
