@@ -1,4 +1,4 @@
-use crate::gpu_startup::{AckRegister, CoreId, Device, RamBytes, VirtualTick};
+use crate::gpu_startup::{AckRegister, CoreId, Device, PathWords, RamBytes, VirtualTick};
 use pyo3::prelude::*;
 use pyo3::pyclass::{PyTraverseError, PyVisit};
 use pyo3::types::{PyDict, PyList, PyModule, PyString};
@@ -38,7 +38,7 @@ impl Stream {
     }
 }
 
-fn words<const N: usize>(capture: &Bound<'_, PyDict>, bank: Stream) -> PyResult<[u32; N]> {
+fn captured_words<'py>(capture: &Bound<'py, PyDict>, bank: Stream) -> PyResult<Bound<'py, PyList>> {
     let py = capture.py();
     let streams = capture.get_item("streams")?
         .ok_or_else(|| refused(py, "GPU startup capture has no streams"))?;
@@ -48,7 +48,12 @@ fn words<const N: usize>(capture: &Bound<'_, PyDict>, bank: Stream) -> PyResult<
         return Err(refused(py, "GPU startup requires a complete command capture"));
     }
     let source = stream.get_item("words")?;
-    let source = source.cast::<PyList>()?;
+    source.cast_into::<PyList>().map_err(Into::into)
+}
+
+fn words<const N: usize>(source: &Bound<'_, PyList>, bank: Stream) -> PyResult<[u32; N]> {
+    let py = source.py();
+    let bank = bank.name();
     if source.len() != N {
         return Err(refused(py, format!("GPU startup {bank} word count {} != {N}", source.len())));
     }
@@ -60,6 +65,15 @@ fn words<const N: usize>(capture: &Bound<'_, PyDict>, bank: Stream) -> PyResult<
             .map_err(|_| refused(py, "GPU startup capture contains an invalid command word"))?;
     }
     Ok(result)
+}
+
+fn path_words(capture: &Bound<'_, PyDict>) -> PyResult<PathWords> {
+    let source = captured_words(capture, Stream::Path)?;
+    match source.len() {
+        16 => Ok(PathWords::Initialized(words(&source, Stream::Path)?)),
+        32 => Ok(PathWords::FirstGlobal(words(&source, Stream::Path)?)),
+        length => Err(refused(capture.py(), format!("GPU startup path word count {length} is not 16 or 32"))),
+    }
 }
 
 #[pyclass(unsendable)]
@@ -165,7 +179,8 @@ pub(crate) fn gpu_startup_submit(
         _ => return Err(refused(py, "GPU startup trigger is outside the paired initialization protocol")),
     };
     let ram = RamBytes(device.getattr("ram_bytes")?.extract()?);
-    let path = words::<32>(capture, Stream::Path)?;
+    let path = path_words(capture)?;
+    let path = path.as_slice();
     let frame_bytes = FrameBytes(u64::from(path[3] >> 16) * u64::from(path[3] & 0xffff) * 4);
     let frame_limit = FrameBytes(device.getattr("max_clear_bytes")?.extract()?);
     if frame_bytes.0 > frame_limit.0 {
@@ -173,7 +188,7 @@ pub(crate) fn gpu_startup_submit(
     }
     let native = native(device)?;
     if matches!(submission, Stream::Path) {
-        native.borrow_mut().inner.start_path(CoreId(cpu), &path, ram)
+        native.borrow_mut().inner.start_path(CoreId(cpu), path, ram)
             .map_err(|error| refused(py, format!("GPU startup path: {error:?}")))?;
         let pending = PyDict::new(py);
         pending.set_item("cpu", cpu)?;
@@ -184,7 +199,7 @@ pub(crate) fn gpu_startup_submit(
         device.call_method("record", ("X-M1 GPU startup path validated",), Some(capture))?;
         return Ok(true);
     }
-    let fill = words::<592>(capture, Stream::Fill)?;
+    let fill = words::<592>(&captured_words(capture, Stream::Fill)?, Stream::Fill)?;
     let targets = device.getattr("irq_targets")?;
     if targets.is_none() {
         return Err(refused(py, "GPU startup requires firmware-enabled IRQ routing"));
@@ -198,7 +213,7 @@ pub(crate) fn gpu_startup_submit(
     let schedule = device.getattr("schedule")?;
     let board = schedule.getattr("__self__")?;
     let now = VirtualTick(board.getattr("virtual_ticks")?.extract()?);
-    let due = native.borrow_mut().inner.start_fill(CoreId(cpu), &path, &fill, irq_core, now, ram)
+    let due = native.borrow_mut().inner.start_fill(CoreId(cpu), path, &fill, irq_core, now, ram)
         .map_err(|error| refused(py, format!("GPU startup fill: {error:?}")))?;
     let delay = due.0 - now.0;
     device.setattr("_command_pending", py.None())?;
@@ -211,7 +226,7 @@ pub(crate) fn gpu_startup_submit(
     capture.set_item("changed_bytes", 0)?;
     capture.set_item("irq_cpu", irq_core.0)?;
     capture.set_item("latency_ticks", delay)?;
-    capture.set_item("pixel_semantics", "No geometry or pixel reads/writes; first-global register initialization only")?;
+    capture.set_item("pixel_semantics", "No geometry or pixel reads/writes; bounded register initialization only")?;
     capture.set_item("completion_semantics", "Declared two-tick bit31 and physical IRQ3c; actual ISR acknowledges both zero stores and wakes submitting task")?;
     device.call_method("record", ("X-M1 GPU startup init started",), Some(capture))?;
     let callback = Py::new(py, StartupCompletion {

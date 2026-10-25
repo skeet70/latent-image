@@ -1,7 +1,8 @@
-//! State-only first-process-global paired-list initialization.
+//! State-only paired-list initialization.
 //! The two-tick completion delay is unmeasured.
 
 const PATH_WORDS: usize = 32;
+const INITIALIZED_PATH_WORDS: usize = 16;
 const FILL_WORDS: usize = 592;
 const MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 const COMPLETION_STATUS: u32 = 0x8000_0000;
@@ -16,6 +17,12 @@ const PATH: [u32; PATH_WORDS] = [
     0x40070047, 0, 0x40070048, 0x003f0000,
     0x40020080, 0, 0x40010060, 2,
     0x40010081, 1, 0x40010060, 2,
+];
+
+const INITIALIZED_PATH: [u32; INITIALIZED_PATH_WORDS] = [
+    0x40080081, 0x01000000, 0x400f007b, 0,
+    0x40010060, 2, 0x40010081, 1,
+    0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
 const FILL_PREFIX: [u32; 36] = [
@@ -120,9 +127,23 @@ impl Dimensions {
     }
 }
 
+pub(crate) enum PathWords {
+    FirstGlobal([u32; PATH_WORDS]),
+    Initialized([u32; INITIALIZED_PATH_WORDS]),
+}
+
+impl PathWords {
+    pub(crate) fn as_slice(&self) -> &[u32] {
+        match self {
+            Self::FirstGlobal(words) => words,
+            Self::Initialized(words) => words,
+        }
+    }
+}
+
 struct PendingPath {
     core: CoreId,
-    words: [u32; PATH_WORDS],
+    words: PathWords,
     dimensions: Dimensions,
 }
 
@@ -162,18 +183,26 @@ impl Device {
         if !matches!(self.phase, Phase::Idle) {
             return Err(Error::Busy);
         }
-        if words.len() != PATH_WORDS {
-            return Err(Error::PathLength { actual: words.len() });
-        }
-        for (word, (&actual, &expected)) in words.iter().zip(PATH.iter()).enumerate() {
-            if word != 3 && actual != expected {
+        let captured = match words.len() {
+            PATH_WORDS => {
+                let mut captured = PATH;
+                captured[3] = words[3];
+                PathWords::FirstGlobal(captured)
+            }
+            INITIALIZED_PATH_WORDS => {
+                let mut captured = INITIALIZED_PATH;
+                captured[3] = words[3];
+                PathWords::Initialized(captured)
+            }
+            _ => return Err(Error::PathLength { actual: words.len() }),
+        };
+        for (word, (&actual, &expected)) in words.iter().zip(captured.as_slice()).enumerate() {
+            if actual != expected {
                 return Err(Error::UnsupportedPath { word });
             }
         }
         let dimensions = Dimensions::parse(words[3], ram)?;
-        let mut pending_words = [0; PATH_WORDS];
-        pending_words.copy_from_slice(words);
-        self.phase = Phase::Path(PendingPath { core, words: pending_words, dimensions });
+        self.phase = Phase::Path(PendingPath { core, words: captured, dimensions });
         Ok(())
     }
 
@@ -322,6 +351,14 @@ mod tests {
         ]
     }
 
+    fn initialized_path(width: u32, height: u32) -> [u32; 16] {
+        [
+            0x40080081, 0x01000000, 0x400f007b, width << 16 | height,
+            0x40010060, 2, 0x40010081, 1,
+            0, 0, 0, 0, 0, 0, 0, 0,
+        ]
+    }
+
     fn fill(width: u32, height: u32, target: u32, zero_clip: bool) -> [u32; 592] {
         let mut words = [0; 592];
         words[..36].copy_from_slice(&[
@@ -376,6 +413,48 @@ mod tests {
         assert_eq!(device.complete(VirtualTick(12)), Ok(None));
         assert_eq!(device.complete(VirtualTick(u64::MAX)), Ok(None));
         assert_eq!(device.status(), 0x80000000);
+    }
+
+    #[test]
+    fn initialized_path_with_gamma_fill_completes_without_identity_refresh() {
+        let path = initialized_path(WIDTH, HEIGHT);
+        let fill = fill(WIDTH, HEIGHT, TARGET, true);
+        let mut device = Device::new();
+        device.start_path(CoreId(0), &path, RAM).unwrap();
+        assert_eq!(device.complete(VirtualTick(u64::MAX)), Ok(None));
+        assert_eq!(device.start_fill(CoreId(0), &path, &fill, CoreId(1), VirtualTick(10), RAM), Ok(VirtualTick(12)));
+        assert_eq!(device.complete(VirtualTick(11)), Ok(None));
+        assert_eq!(device.complete(VirtualTick(12)), Ok(Some(event(CoreId(1)))));
+        assert_eq!(device.complete(VirtualTick(u64::MAX)), Ok(None));
+        device.acknowledge(AckRegister::Fill, 0).unwrap();
+        assert_eq!(device.status(), 0x80000000);
+        device.acknowledge(AckRegister::Path, 0).unwrap();
+        assert_eq!(device.status(), 0);
+    }
+
+    #[test]
+    fn initialized_path_unknown_commands_padding_and_mutation_never_complete() {
+        let path = initialized_path(WIDTH, HEIGHT);
+        for word in 0..path.len() {
+            if word == 3 { continue; }
+            let mut unknown = path;
+            unknown[word] ^= 1;
+            let mut device = Device::new();
+            assert_eq!(device.start_path(CoreId(0), &unknown, RAM), Err(Error::UnsupportedPath { word }));
+            assert_eq!(device.complete(VirtualTick(u64::MAX)), Ok(None));
+        }
+        let mut device = Device::new();
+        assert_eq!(device.start_path(CoreId(0), &path[..15], RAM), Err(Error::PathLength { actual: 15 }));
+        let mut extended = [0; 17];
+        extended[..16].copy_from_slice(&path);
+        assert_eq!(device.start_path(CoreId(0), &extended, RAM), Err(Error::PathLength { actual: 17 }));
+        device.start_path(CoreId(0), &path, RAM).unwrap();
+        let mut changed = path;
+        changed[3] = 640 << 16 | HEIGHT;
+        let fill = fill(WIDTH, HEIGHT, TARGET, true);
+        assert_eq!(device.start_fill(CoreId(0), &changed, &fill, CoreId(0), VirtualTick(10), RAM), Err(Error::PathChanged));
+        assert_eq!(device.start_fill(CoreId(0), &self::path(WIDTH, HEIGHT), &fill, CoreId(0), VirtualTick(10), RAM), Err(Error::PathChanged));
+        assert_eq!(device.complete(VirtualTick(u64::MAX)), Ok(None));
     }
 
     #[test]
@@ -530,7 +609,9 @@ mod tests {
         let fill = fill(WIDTH, HEIGHT, TARGET, false);
         let mut device = Device::new();
         device.start_path(CoreId(0), &path, RAM).unwrap();
-        assert_eq!(device.start_fill(CoreId(0), &path, &fill[..591], CoreId(0), VirtualTick(0), RAM), Err(Error::FillLength { actual: 591 }));
+        for length in [576, 591] {
+            assert_eq!(device.start_fill(CoreId(0), &path, &fill[..length], CoreId(0), VirtualTick(0), RAM), Err(Error::FillLength { actual: length }));
+        }
         let mut extended = [0; 656];
         extended[..592].copy_from_slice(&fill);
         for length in [593, 656] {
