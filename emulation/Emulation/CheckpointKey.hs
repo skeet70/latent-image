@@ -13,6 +13,10 @@ module Emulation.CheckpointKey
   , guestState
   , guestStateDigest
   , guestStateValue
+  , HostProcedure
+  , hostProcedure
+  , procedureDigest
+  , procedureHex
   , CheckpointRoute (..)
   , RouteKey (..)
   , routeKey
@@ -32,7 +36,8 @@ data FileRole = GuestInput | HostOnly deriving (Eq, Show)
 
 -- | The role of a runtime-relative path. Only the staged emulator, firmware,
 -- inputs, native and tools trees hold guest inputs; the launcher's validator
--- copy, `.tools/` and run outputs beside them do not.
+-- copy, `.tools/`, run outputs and the bridge command handling beside them do
+-- not.
 fileRole :: FilePath -> FileRole
 fileRole path = case splitDirectories path of
   components | "__pycache__" `elem` components -> HostOnly
@@ -42,11 +47,14 @@ fileRole path = case splitDirectories path of
 guestTrees :: [FilePath]
 guestTrees = ["emulator", "firmware", "inputs", "native", "tools"]
 
--- | The viewer's HTTP server, page and launcher, and the Rust sources and
--- tests; the engine runs as the staged `_native.abi3.so`.
+-- | The viewer's HTTP server, page and launcher, the Rust sources and tests;
+-- the engine runs as the staged `_native.abi3.so`. The scanout launcher and its
+-- command module serve the bridges; they hold no guest input a checkpoint saves.
 hostOnly :: FilePath -> [FilePath] -> Bool
 hostOnly "emulator" ["server.py"] = True
 hostOnly "emulator" ("web" : _) = True
+hostOnly "tools" ["continue_rec_scanout.py"] = True
+hostOnly "tools" ["scanout_commands.py"] = True
 hostOnly "tools" ["start_setup_viewer.py"] = True
 hostOnly "native" ("src" : _) = True
 hostOnly "native" ("tests" : _) = True
@@ -122,6 +130,33 @@ guestStateValue guest = object
   , "unicorn_library_sha256" .= sha256Hex (guestUnicorn guest)
   , "interpreter" .= interpreterValue (guestInterpreter guest)
   ]
+
+-- | The host RAM-push procedure: the compiled driver's source identity and the
+-- staged bridge files that execute its commands between the attach checkpoint
+-- and INSTALL. A post-INSTALL checkpoint names this digest, so a procedure
+-- change leaves the attach checkpoint reusable and replaces the install one.
+data HostProcedure = HostProcedure
+  { procedureSources :: String
+  , procedureStaged :: [(FilePath, Sha256)]
+  }
+
+-- | The staged bridge files of the procedure, relative to the runtime root.
+procedureFiles :: [FilePath]
+procedureFiles = ["tools/scanout_commands.py"]
+
+hostProcedure :: FilePath -> String -> IO HostProcedure
+hostProcedure runtime sources = HostProcedure sources
+  <$> mapM (\path -> (,) path <$> sha256File (runtime </> path)) procedureFiles
+
+procedureDigest :: HostProcedure -> Sha256
+procedureDigest procedure = sha256 . encodeCanonical $ object
+  [ "schema" .= (1 :: Int)
+  , "compiled_sources" .= procedureSources procedure
+  , "staged" .= [[path, sha256Hex digest] | (path, digest) <- procedureStaged procedure]
+  ]
+
+procedureHex :: HostProcedure -> String
+procedureHex = sha256Hex . procedureDigest
 
 -- | The boundary a checkpoint is saved at.
 data CheckpointRoute

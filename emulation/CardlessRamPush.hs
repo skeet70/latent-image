@@ -209,25 +209,25 @@ readStart directories = do
     _ -> H.failH "RAM-push start installed must be a listed directory or null"
 
 withRestored :: PyObject -> PyObject -> Value -> PyObject -> (PyObject -> PyObject -> PyObject -> PyObject -> IO a) -> IO a
-withRestored scanout directory record output continuation =
-  callObject scanout "_restore_ram_push_checkpoint" [ArgObject directory, ArgJSON record, ArgObject output] (H.obj []) $ \tuple ->
+withRestored commands directory record output continuation =
+  callObject commands "_restore_ram_push_checkpoint" [ArgObject directory, ArgJSON record, ArgObject output] (H.obj []) $ \tuple ->
     withItem tuple 0 $ \board ->
       withItem tuple 1 $ \session ->
         withItem tuple 2 $ \bridge ->
           withItem tuple 3 $ \attachment -> continuation board session bridge attachment
 
 runServer :: PyObject -> PyObject -> PyObject -> PyObject -> PyObject -> PyObject -> Value -> PyObject -> IO ()
-runServer scanout board session output bridge attachment checkpoint checkpointRoot =
-  callObject scanout "_run_ram_push_server"
+runServer commands board session output bridge attachment checkpoint checkpointRoot =
+  callObject commands "_run_ram_push_server"
     [ ArgObject board, ArgObject session, ArgObject output, ArgObject bridge
     , ArgObject attachment, ArgJSON checkpoint, ArgObject checkpointRoot ]
     (H.obj []) (\_ -> pure ())
 
 saveAttachCheckpoint :: PyObject -> String -> Value -> PyObject -> PyObject -> PyObject -> Bool -> Value -> IO ()
-saveAttachCheckpoint scanout key identity attachment session checkpointRoot replace attachRecord =
+saveAttachCheckpoint attach key identity attachment session checkpointRoot replace attachRecord =
   withJSON (H.obj [("key", H.s key), ("inputs", identity)]) $ \record -> do
     callObject record "update" [ArgObject attachment] (H.obj []) (\_ -> pure ())
-    callObject scanout "_save_ram_push_checkpoint"
+    callObject attach "_save_ram_push_checkpoint"
       [ ArgObject session, ArgObject checkpointRoot, ArgJSON (H.s key)
       , ArgJSON attachRecord, ArgObject record ]
       (Aeson.object ["replace" .= replace]) (\_ -> pure ())
@@ -244,7 +244,8 @@ recoveryMetadata options = Aeson.object
 
 serve :: Double -> RuntimeIdentity -> BridgeOptions -> IO ()
 serve started runtime options =
-  withImport "tools.continue_rec_scanout" $ \scanout ->
+  withImport "tools.scanout_attach" $ \attach ->
+  withImport "tools.scanout_commands" $ \commands ->
   withImport "pathlib" $ \pathlib ->
   withImport "emulator.boot" $ \boot ->
   withImport "emulator.sd_card" $ \sd ->
@@ -257,12 +258,12 @@ serve started runtime options =
     keySeconds <- elapsedSince started
     let key = routeKeyHex routeKeyValue
         identity = routeKeyDocument routeKeyValue
-    attachRecord <- attributeValue scanout "ATTACH_RECORD"
-    installRecord <- attributeValue scanout "INSTALL_RECORD"
+    attachRecord <- attributeValue attach "ATTACH_RECORD"
+    installRecord <- attributeValue attach "INSTALL_RECORD"
     withPath pathlib (optionCheckpointRoot options) $ \checkpointRoot -> withPath pathlib (optionOutput options) $ \output -> do
       installed <- if optionFreshBoot options
         then pure (Aeson.toJSON ([] :: [Value]))
-        else callValue scanout "_install_checkpoints"
+        else callValue commands "_install_checkpoints"
           [ArgObject checkpointRoot, ArgJSON (H.s key)] (H.obj [])
       let directories =
             [ directory
@@ -275,7 +276,7 @@ serve started runtime options =
           serveRestored :: RestoredFrom -> FilePath -> Value -> Double -> IO ()
           serveRestored start directory record restoreStarted = do
             withPath pathlib directory $ \directoryPath ->
-              withRestored scanout directoryPath record output $ \board session bridge attachment -> do
+              withRestored commands directoryPath record output $ \board session bridge attachment -> do
                 restoreSeconds <- elapsedSince restoreStarted
                 let installedField = case start of
                       InstalledCheckpoint -> ["installed" .= directory]
@@ -284,11 +285,11 @@ serve started runtime options =
                       ([ "key" .= key, "inputs" .= identity, "directory" .= checkpointDirectory
                        , "key_seconds" .= keySeconds, "start" .= restoreValue start
                        , "restore_seconds" .= restoreSeconds ] ++ installedField)
-                runServer scanout board session output bridge attachment checkpoint checkpointRoot
+                runServer commands board session output bridge attachment checkpoint checkpointRoot
           coldBoot = do
             bootStarted <- getMonotonicTime
             withAttr boot "make_board" $ \factory ->
-              callObject scanout "load_profile"
+              callObject attach "load_profile"
                 [ArgJSON (H.s (optionProfile options)), ArgObject factory] (H.obj []) $ \loaded -> do
                 storage <- callValue loaded "get" [ArgJSON (H.s "storage_profile"), ArgJSON (H.s "erased")] (H.obj [])
                 journals <- callValue loaded "get" [ArgJSON (H.s "user_journals")] (H.obj [])
@@ -307,9 +308,9 @@ serve started runtime options =
                         [ArgJSON (uiConversionValue DeclaredCpuFallback)] (H.obj []) $ \uiProfile ->
                           setKeyObject loaded "ui_conversion_profile" uiProfile
                 callCallable factory [] loaded $ \board -> do
-                  callObject scanout "attach_installed_dat"
+                  callObject attach "attach_installed_dat"
                     [ArgObject board, ArgJSON (H.s (optionInstalledDat options))] (H.obj []) (\_ -> pure ())
-                  callObject scanout "attach_adjustment_nand"
+                  callObject attach "attach_adjustment_nand"
                     [ArgObject board, ArgJSON (H.s (optionAdjustmentNand options))] (H.obj []) (\_ -> pure ())
                   withJSON (recoveryMetadata options) $ \recovery ->
                     setKeyObject loaded "recovery" recovery
@@ -317,13 +318,13 @@ serve started runtime options =
                     withJSON (H.obj []) $ \keywords -> do
                       setKeyObject keywords "options" loaded
                       callCallable sessionClass [ArgObject board, ArgObject output] keywords $ \session ->
-                        callObject scanout "_ram_push_attach" [ArgObject board, ArgObject session] (H.obj []) $ \pair ->
-                          withItem pair 0 $ \bridge ->
-                            withItem pair 1 $ \attachment -> do
+                        callObject commands "_ram_push_bridge" [ArgObject board, ArgObject session] (H.obj []) $ \bridge ->
+                          callObject attach "_ram_push_attach"
+                            [ArgObject board, ArgObject session, ArgObject bridge] (H.obj []) $ \attachment -> do
                               bootSeconds <- elapsedSince bootStarted
                               saveStarted <- getMonotonicTime
                               callObject bridge "drain_scheduled" [] (H.obj []) (\_ -> pure ())
-                              saveAttachCheckpoint scanout key identity attachment session
+                              saveAttachCheckpoint attach key identity attachment session
                                 checkpointRoot (optionFreshBoot options) attachRecord
                               saveSeconds <- elapsedSince saveStarted
                               let checkpoint = Aeson.object
@@ -331,7 +332,7 @@ serve started runtime options =
                                     , "key_seconds" .= keySeconds, "start" .= freshStart
                                     , "boot_seconds" .= bootSeconds, "saved" .= True
                                     , "save_seconds" .= saveSeconds ]
-                              runServer scanout board session output bridge attachment checkpoint checkpointRoot
+                              runServer commands board session output bridge attachment checkpoint checkpointRoot
       writeEvent (Aeson.object
         [ "ok" .= True
         , "event" .= ("start-options" :: String)
@@ -342,7 +343,7 @@ serve started runtime options =
         Just directory -> do
           restoreStarted <- getMonotonicTime
           record <- withPath pathlib directory $ \directoryPath ->
-            callValue scanout "_read_ram_push_record"
+            callValue attach "_read_ram_push_record"
               [ArgObject directoryPath, ArgJSON installRecord, ArgJSON (H.s key)] (H.obj [])
           serveRestored InstalledCheckpoint directory record restoreStarted
         Nothing -> do
@@ -351,7 +352,7 @@ serve started runtime options =
             then do
               restoreStarted <- getMonotonicTime
               record <- withPath pathlib checkpointDirectory $ \directoryPath ->
-                callValue scanout "_read_ram_push_record"
+                callValue attach "_read_ram_push_record"
                   [ArgObject directoryPath, ArgJSON attachRecord, ArgJSON (H.s key)] (H.obj [])
               serveRestored AttachCheckpoint checkpointDirectory record restoreStarted
             else coldBoot

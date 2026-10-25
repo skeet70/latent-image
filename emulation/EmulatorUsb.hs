@@ -59,12 +59,14 @@ data BootStart = ColdStart | FreshBootStart | RestoredStart | InstalledStart der
 data EmulatorStart = EmulatorStart { bootStart :: BootStart, startRecord :: Value }
 
 -- | A saved post-install machine over the current attach checkpoint: the allocation base, the
--- pushed manifest and runtime hashes, and the host record the e2e stored with it.
+-- pushed manifest and runtime hashes, the host procedure that pushed them and the host record
+-- the e2e stored with it.
 data InstallCheckpoint = InstallCheckpoint
   { installDirectory :: FilePath
   , installBase :: Word32
   , installManifestDigest :: String
   , installRuntimeDigest :: String
+  , installProcedureDigest :: Maybe String
   , installHost :: Value
   }
 
@@ -161,15 +163,17 @@ startEmulator python directory arguments choose = bracketOnError create stopEmul
       InstallCheckpoint directoryValue base
         <$> textField "manifest_sha256" fields
         <*> textField "runtime_sha256" fields
+        <*> optionalTextField "procedure_sha256" fields
         <*> objectField "host" fields
     installCheckpoint _ = ioError (userError "install checkpoint must be an object")
 
 -- | Saves the attached machine after INSTALL unless the same build's checkpoint exists; the
 -- response says which.
-emulatorSaveInstallCheckpoint :: Emulator -> Word32 -> String -> String -> Value -> IO Value
-emulatorSaveInstallCheckpoint emulator base manifest runtime host = Object <$> rpc emulator (object
-  [ "command" .= String "save-install-checkpoint", "base" .= ("0x" ++ showHex base "")
-  , "manifest_sha256" .= manifest, "runtime_sha256" .= runtime, "host" .= host ])
+emulatorSaveInstallCheckpoint :: Emulator -> Word32 -> String -> String -> Maybe String -> Value -> IO Value
+emulatorSaveInstallCheckpoint emulator base manifest runtime procedure host = Object <$> rpc emulator (object
+  ([ "command" .= String "save-install-checkpoint", "base" .= ("0x" ++ showHex base "")
+   , "manifest_sha256" .= manifest, "runtime_sha256" .= runtime, "host" .= host ]
+   ++ [ "procedure_sha256" .= value | Just value <- [procedure] ]))
 
 -- | A bridge that answered a command with an error has left its command loop; the failed
 -- `finish` is dropped so that error is the one reported.
@@ -204,6 +208,12 @@ textField :: String -> M.KeyMap Value -> IO String
 textField name fields = objectField name fields >>= \value -> case value of
   String text -> pure (T.unpack text)
   _ -> ioError (userError ("invalid emulator text " ++ name))
+
+optionalTextField :: String -> M.KeyMap Value -> IO (Maybe String)
+optionalTextField name fields = case M.lookup (K.fromString name) fields of
+  Nothing -> pure Nothing
+  Just (String text) -> pure (Just (T.unpack text))
+  Just _ -> ioError (userError ("invalid emulator text " ++ name))
 
 emulatorUsbApi :: Emulator -> UsbApi
 emulatorUsbApi = bridgeUsbApi . exchangeLine

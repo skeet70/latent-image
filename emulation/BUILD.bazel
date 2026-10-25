@@ -318,6 +318,7 @@ haskell_binary(
         ":emulator-usb",
         ":ui-trajectory-lib",
         ":ram-push-unreviewed",
+        ":ram-push-procedure",
         "//host:base",
         "//host:bytestring",
         "//host:directory",
@@ -824,6 +825,28 @@ haskell_library(
         "//host:filepath",
         "//host:json",
     ],
+)
+
+# The RAM-push host procedure's compiled sources, hashed as one digest. A post-INSTALL
+# checkpoint names it, so a change here replaces that checkpoint and keeps the attach one.
+genrule(
+    name = "ram-push-procedure-module",
+    srcs = [
+        "CardlessRamPush.hs",
+        "EmulatorUsb.hs",
+        "Xm1RamPushE2E.hs",
+        "//transport:FujiAF/RamPush.hs",
+        "//transport:FujiAF/Transport.hs",
+    ],
+    outs = ["RamPushProcedure.hs"],
+    cmd = "digest=$$(cat $(SRCS) | sha256sum); digest=$${digest%% *}; printf 'module RamPushProcedure (procedureSourcesDigest) where\\n\\nprocedureSourcesDigest :: String\\nprocedureSourcesDigest = \"%s\"\\n' \"$$digest\" > $@",
+)
+
+haskell_library(
+    name = "ram-push-procedure",
+    srcs = [":ram-push-procedure-module"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = ["//host:base"],
 )
 
 haskell_test(
