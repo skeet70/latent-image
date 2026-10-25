@@ -17,7 +17,11 @@ newtype Score = Score Integer deriving (Show)
 newtype CurveName = CurveName String
 newtype SampleCount = SampleCount Integer
 newtype Travel = Travel Integer
-data Candidate = A1 | A2 deriving (Show)
+data Candidate = A0Structural | A1 | A2
+instance Show Candidate where
+  show A0Structural = "A0-structural"
+  show A1 = "A1"
+  show A2 = "A2"
 data Curve = Curve CurveName Position Position [(Position, Score)]
 data Failure = Budget | FlatCurve | InvalidObservation | Cancelled deriving (Show, Read)
 data Outcome = Focused Position | Rejected Failure
@@ -62,7 +66,7 @@ runCandidate :: FilePath -> Candidate -> Curve -> IO (Outcome, SampleCount, Trav
 runCandidate binary candidate (Curve _ _ (Position start) points) =
   bracket open close $ \(input, output, process) -> do
     let Position high = fst (last points)
-    hPutStrLn input (unwords ["CANDIDATE1", show candidate, show high])
+    hPutStrLn input (unwords ["CANDIDATE2", show candidate, show high, show start])
     hFlush input
     result <- timeout 30000000 (loop input output start 0 0)
     answer <- maybe (fail "candidate host deadline") pure result
@@ -118,7 +122,7 @@ main = do
       putStrLn "origin,curve,candidate,sample_count,simulated_travel_units,final_position_error_units,outcome"
       forM_ paths $ \path -> do
         curve@(Curve (CurveName name) (Position optimum) _ _) <- loadCurve path
-        forM_ [A1, A2] $ \candidate -> do
+        forM_ [A0Structural, A1, A2] $ \candidate -> do
           (outcome, SampleCount count, Travel travel) <- runCandidate binary candidate curve
           let (err, status) = case outcome of
                 Focused (Position position) -> (show (abs (position - optimum)), "focused")

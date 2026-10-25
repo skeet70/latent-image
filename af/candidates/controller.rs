@@ -1,5 +1,8 @@
 #![no_std]
 
+mod structural;
+pub use structural::{Direction, EvidenceCount, Percent, SearchStep, StructuralFit, StructuralParameters};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Position(u16);
 impl Position {
@@ -16,7 +19,7 @@ impl Score {
 pub struct RequestId(u16);
 impl RequestId { pub const fn units(self) -> u16 { self.0 } }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Candidate { CoarseFine, AdaptivePeak }
+pub enum Candidate { StructuralReference(StructuralParameters), CoarseFine, AdaptivePeak }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Failure { Budget, FlatCurve, InvalidObservation, Cancelled }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,7 +31,7 @@ pub enum Action {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
-    Start,
+    Start { position: Position },
     Missing,
     Cancel,
     Sample { request: RequestId, position: Position, score: Score, fresh: bool, settled: bool },
@@ -53,7 +56,16 @@ impl Config {
 struct Point { position: Position, score: Score }
 const EMPTY: Point = Point { position: Position(0), score: Score(0) };
 #[derive(Clone, Copy, Debug)]
-enum Phase { Idle, Coarse, Refine { low: Position, high: Position }, Verify, Terminal(Action) }
+enum Phase {
+    Idle,
+    Coarse,
+    Refine { low: Position, high: Position },
+    StructuralDirection { direction: Direction, evidence: u8 },
+    StructuralPeak { direction: Direction, start: u16 },
+    StructuralTarget,
+    Verify,
+    Terminal(Action),
+}
 
 #[derive(Debug)]
 pub struct Controller {
@@ -91,10 +103,15 @@ impl Controller {
     fn measured(&self, position: Position) -> bool {
         self.points[..usize::from(self.count)].iter().any(|p| p.position == position)
     }
-    fn verify(&mut self) -> Action {
-        self.phase = Phase::Verify;
-        self.request(self.best().position)
+    fn contrast_span(&self) -> bool {
+        let min = self.points[..usize::from(self.count)].iter().map(|p| p.score.0).min().unwrap_or(0);
+        self.best().score.0 - min >= self.config.min_span.0
     }
+    fn verify_at(&mut self, position: Position) -> Action {
+        self.phase = Phase::Verify;
+        self.request(position)
+    }
+    fn verify(&mut self) -> Action { self.verify_at(self.best().position) }
     fn adaptive(&mut self, low: Position, high: Position) -> Action {
         let best = self.best();
         let points = &self.points[..usize::from(self.count)];
@@ -131,7 +148,11 @@ impl Controller {
         self.calls += 1;
         if self.calls > 256 { return self.terminal(Action::Fail(Failure::Budget)); }
         if matches!(self.phase, Phase::Idle) {
-            return if matches!(event, Event::Start) {
+            return if let Event::Start { position } = event {
+                if position < self.config.low || position > self.config.high {
+                    return self.terminal(Action::Fail(Failure::InvalidObservation));
+                }
+                if matches!(self.candidate, Candidate::StructuralReference(_)) { return self.structural_start(position); }
                 self.phase = Phase::Coarse;
                 self.request(self.config.low)
             } else { self.terminal(Action::Fail(Failure::InvalidObservation)) };
@@ -148,8 +169,7 @@ impl Controller {
             }
             Phase::Coarse => {
                 let best = self.best();
-                let min = self.points[..usize::from(self.count)].iter().map(|p| p.score.0).min().unwrap_or(0);
-                if best.score.0 - min < self.config.min_span.0 {
+                if !self.contrast_span() {
                     return self.terminal(Action::Fail(Failure::FlatCurve));
                 }
                 let low = Position(best.position.0.saturating_sub(self.config.coarse).max(self.config.low.0));
@@ -158,6 +178,9 @@ impl Controller {
                 self.refine(low, high)
             }
             Phase::Refine { low, high } => self.refine(low, high),
+            Phase::StructuralDirection { direction, evidence } => self.structural_direction(Point { position, score }, direction, evidence),
+            Phase::StructuralPeak { direction, start } => self.structural_peak(Point { position, score }, direction, start),
+            Phase::StructuralTarget => self.verify_at(position),
             Phase::Verify => {
                 let previous = self.points[..usize::from(self.count - 1)].iter()
                     .filter(|p| p.position == position).map(|p| p.score.0).max().unwrap_or(0);
