@@ -29,17 +29,35 @@ toggleIgnored :: [K.Key]
 toggleIgnored = e2eIgnored ++
   [ "engine", "emulator", "directory", "image_wide_transfers_covering_extent", "sid", "cells_after_start" ]
 
+-- | The two converter sites' entries.
+converterEntry :: T.Text -> Bool
+converterEntry name = name `elem` ["cc-entry-settings-converter", "cc-entry-capture-converter"]
+
+converters :: [T.Text] -> [T.Text]
+converters = filter converterEntry
+
 converts :: [T.Text] -> Bool
-converts = elem "cc-entry-settings-converter"
+converts = not . null . converters
 
 -- | A segment's Classic Chrome site entries as live-view develop passes, each starting at
--- `cc-entry-marker`. Consecutive identical passes collapse to one, and the passes before the
--- first and after the last pass that enters `cc-entry-settings-converter` are dropped.
+-- `cc-entry-marker`. One converter pass split by idle passes counts as one pass, holding the
+-- converter entries of every part in order after the first part's entries. Consecutive
+-- identical passes collapse to one, and the passes before the first and after the last
+-- converter pass are dropped.
 passes :: [T.Text] -> [[T.Text]]
-passes entries = trim (map NE.head (NE.group (split entries)))
+passes entries = trim (map NE.head (NE.group (merge (split entries))))
   where
     split [] = []
     split (first : rest) = let (pass, more) = break (== "cc-entry-marker") rest in (first : pass) : split more
+    merge [] = []
+    merge (pass : rest)
+      | converts pass = let (absorbed, more) = absorb [] rest in (pass ++ absorbed) : merge more
+      | otherwise = pass : merge rest
+    -- The converter entries of the converter passes beyond REST's idle passes, with what
+    -- follows them.
+    absorb held rest = case span (not . converts) rest of
+      (idle, next : after) | not (null idle) -> absorb (held ++ converters next) after
+      _ -> (held, rest)
     trim = dropWhileEnd (not . converts) . dropWhile (not . converts)
 
 -- | VALUE without the fields named in KEYS at any depth. A segment's
