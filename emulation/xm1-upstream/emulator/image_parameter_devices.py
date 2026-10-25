@@ -14,6 +14,8 @@ from dataclasses import dataclass, fields, replace
 from enum import Enum, IntEnum
 
 from .hardware import UnsupportedDevice
+from x70_native._native import (scene_scaler_busy, scene_scaler_read, scene_scaler_write,
+    scene_scaler_next, scene_scaler_tick, scene_scaler_validate, scene_scaler_snapshot)
 
 
 class ImageParameterControl:
@@ -310,11 +312,12 @@ class DeclaredUIConversion:
         UIConversionRegister.ALPHA: ('alpha', UIConversionAlpha),
     }
 
-    def __init__(self, board, *, profile):
+    def __init__(self, board, *, profile, scene_profile=None):
         self.board = board
         self.profile = UIConversionProfile.parse(profile)
         if self.profile is None:
             raise ValueError('Declared UI conversion requires explicit selection')
+        self.scene_profile, self.scene_state = scene_profile, None
         self.phase = UIConversionPhase.IDLE
         self.programming = UIConversionProgramming()
         self.reset_seen = False
@@ -326,7 +329,7 @@ class DeclaredUIConversion:
 
     @property
     def busy(self):
-        return self.phase is UIConversionPhase.ACTIVE
+        return self.phase is UIConversionPhase.ACTIVE or scene_scaler_busy(self)
 
     def contains(self, address, size):
         return self.BASE <= address < self.BASE + 0x1000
@@ -352,6 +355,9 @@ class DeclaredUIConversion:
             geometry.width, geometry.height, programming.source_stride.value)
 
     def read(self, core, address, size):
+        value = scene_scaler_read(self, core, address, size)
+        if value is not None:
+            return value
         register = self._register(address, size)
         if (register is not UIConversionRegister.STATUS
                 or self.phase is not UIConversionPhase.COMPLETED_LATCHED):
@@ -359,6 +365,8 @@ class DeclaredUIConversion:
         return UIConversionCompletion.SUCCESS.value
 
     def write(self, core, address, size, value):
+        if scene_scaler_write(self, core, address, size, value):
+            return
         register = self._register(address, size)
         if type(value) is not int or not 0 <= value < 1 << 32:
             self._reject('word value is not an unsigned 32-bit integer')
@@ -429,9 +437,13 @@ class DeclaredUIConversion:
         self.phase = UIConversionPhase.PROGRAMMING
 
     def next_event_tick(self, now):
+        if self.scene_state is not None:
+            return scene_scaler_next(self, now)
         return max(now, self.deadline.value) if self.busy and not self.failed else None
 
     def tick(self, board):
+        if scene_scaler_tick(self, board):
+            return
         if not self.busy:
             return
         if self.failed:
@@ -456,6 +468,7 @@ class DeclaredUIConversion:
         from .interrupts import DeclaredUIIRQTarget
         if set(state) != set(vars(self)) or state.get('board') is not self.board:
             raise ValueError('UI conversion device field schema differs')
+        scene_scaler_validate(self, state)
         if (state['profile'] is not UIConversionProfile.DECLARED_UI_CPU_FALLBACK
                 or type(state['phase']) is not UIConversionPhase
                 or type(state['programming']) is not UIConversionProgramming
@@ -486,6 +499,9 @@ class DeclaredUIConversion:
             raise ValueError('Inactive UI conversion retains active metadata')
 
     def snapshot(self):
+        scene = scene_scaler_snapshot(self)
+        if scene is not None:
+            return scene
         return dict(name=type(self).__name__, base=hex(self.BASE), phase=self.phase.value,
             busy=self.busy, failed=self.failed,
             deadline=None if self.deadline is None else self.deadline.value,

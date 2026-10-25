@@ -48,7 +48,7 @@ from .storage_profile import (attach_captured_storage_profile, attach_captured_u
                              owner_mcu_profile, FIRMWARE_SHA256 as CAPTURE_FIRMWARE_SHA256)
 from .checkpoint import CheckpointError
 from x70_native.checkpoint import capture
-from x70_native._native import FFF63Engine, FFF63_PROFILES, FFF48Engine, MODE_DEVICE_PROFILE
+from x70_native._native import FFF63Engine, FFF63_PROFILES, FFF48Engine, FFF42InitControl, MODE_DEVICE_PROFILE
 
 
 def make_board(entry='rom', quantum=1000,storage_profile='erased',graphics_profile=None,
@@ -274,11 +274,12 @@ def make_board(entry='rom', quantum=1000,storage_profile='erased',graphics_profi
         if still_pipeline_profile == STILL_PIPELINE_RESIZE_PROFILE:
             board.attach(StillResizeControl(board,profile=STILL_RESIZE_PROFILE))
     if ui_conversion_profile is not None:
-        board.attach(DeclaredUIConversion(board, profile=ui_conversion_profile))
+        board.attach(DeclaredUIConversion(board, profile=ui_conversion_profile, scene_profile=mode_devices_profile))
     if fff63_profile is not None:
         board.attach(FFF63Engine(board, profile=fff63_profile))
     if mode_devices_profile is not None:
         board.attach(FFF48Engine(board, profile=mode_devices_profile))
+        board.attach(FFF42InitControl(board, profile=mode_devices_profile))
     if settings not in (None,'default','owner'):
         raise ValueError('Settings must be default or owner')
     if settings=='owner' and (storage_profile!='captured' or user_journals not in (None,'restored') or mcu_profile not in (None,'captured-backup')):
@@ -652,8 +653,8 @@ def main(*, session_factory=None):
     parser.add_argument('--histogram-profile',choices=HISTOGRAM_PROFILES,
                         help='Declared virtual post-ISP histogram; sampling, clock and latching are unmeasured')
     parser.add_argument('--histogram-data-ticks',type=int,default=400000)
-    parser.add_argument('--movrsz-profile',choices=(FujiDecompressor.MOVRSZ_PROFILE,),
-                        help='Declared source-derived pyramid resize; pixel filter and timing unmeasured')
+    parser.add_argument('--movrsz-profile',choices=FujiDecompressor.MOVRSZ_PROFILES,
+                        help='Declared pyramid resize or scene format2 stride transfer; filtering and timing unmeasured')
     parser.add_argument('--movrsz-ticks',type=int,default=400000)
     parser.add_argument('--face-stop-profile',choices=FACE_STOP_PROFILES,
                         help='Declared cancellation of the armed face request with idle DMA polls')

@@ -578,7 +578,7 @@ impl Inner {
     }
     pub(crate) fn convert_declared_ui(
         &self,
-        plan: &crate::raster::DeclaredUIConversionPlan,
+        plan: &impl crate::raster::DeclaredRasterPlan,
         origin: ConversionOrigin,
     ) -> PyResult<()> {
         plan.validate_bounds(self.ram.len()).map_err(pyo3::exceptions::PyValueError::new_err)?;

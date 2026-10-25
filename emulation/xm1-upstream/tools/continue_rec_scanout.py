@@ -73,11 +73,12 @@ def load_profile(path, factory, *, firmware_profile=None):
             'image_work_stop_profile': 'stock-initial-image-banks-bit0-stop-ack-unmeasured',
             'image_work_data_profile': 'xm1-150-declared-continuous-postisp-scene-unmeasured',
             'image_work_data_ticks': 50000,
-            'movrsz_profile': 'declared-packed-yycbcr-pyramid-unmeasured',
+            'movrsz_profile': 'xm1-150-declared-movrsz-scene-identity-unmeasured',
             'movrsz_ticks': 50000,
+            'face_stop_profile': 'declared-armed-face-dma-idle-abort-unmeasured',
             'producer_data_profile': 'xm1-150-declared-continuous-statistics-scene-unmeasured',
             'fff63_profile': 'xm1-150-declared-fff63-job4-completion-unmeasured',
-            'mode_devices_profile': 'xm1-150-declared-mode-device-idle-unmeasured',
+            'mode_devices_profile': 'xm1-150-declared-mode-devices-unmeasured',
         }
     if not isinstance(document, dict) or set(document) != {'options'}:
         raise ValueError('Profile must be X-M1 1.50 or contain only an options object')

@@ -815,7 +815,7 @@ def _preflight(board):
     if board._portable_factory_options.get("fff63_profile") is not None:
         names.append("FFF63Engine")
     if board._portable_factory_options.get("mode_devices_profile") is not None:
-        names.append("FFF48Engine")
+        names.extend(("FFF48Engine", "FFF42InitControl"))
     if (len(board.devices) != len(names)
             or any(type(device) is not getattr(boot, name) for name, device in zip(names, board.devices))):
         raise PortableCheckpointError("Portable checkpoint requires the complete stock device topology")

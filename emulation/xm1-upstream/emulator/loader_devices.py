@@ -16,9 +16,13 @@ from dataclasses import dataclass
 
 from .hardware import UnsupportedDevice
 from .nand_image import export_image, restore_image
+from x70_native._native import DeclaredMovrszPlan, MovrszProfile
 
 DAT_SHA256 = "7dd5b358a66f38d1fc7dad899a77d35fe4e6ed0edd0ed1d04fbca512d5dc8fd6"
 MOVRSZ_PROFILE = 'declared-packed-yycbcr-pyramid-unmeasured'
+MOVRSZ_SCENE_PROFILE = 'xm1-150-declared-movrsz-scene-identity-unmeasured'
+MOVRSZ_PROFILES = {MOVRSZ_PROFILE: MovrszProfile.Pyramid,
+                   MOVRSZ_SCENE_PROFILE: MovrszProfile.SceneIdentity}
 
 
 def native_flash_from_dat(path):
@@ -135,6 +139,7 @@ class FujiLZStream:
 class FujiDecompressor(_Registers):
     BASE = 0xfff43000
     MOVRSZ_PROFILE = MOVRSZ_PROFILE
+    MOVRSZ_PROFILES = tuple(MOVRSZ_PROFILES)
     # The shared block also implements the stock MOVRSZ mode1 submission.
     # These words are desired configuration, not LZ data/count registers.
     MOVRSZ_CONFIG = {0x08:0x00011113,0x10:0xffffffff,0x14:0x00007ff0,
@@ -142,13 +147,6 @@ class FujiDecompressor(_Registers):
         0x30:0x000003ff,0x34:0x007f7f7f,0x38:0xffffffff,
         0x3c:0x03ff03ff,0x80:0x31ff31ff}
     MOVRSZ_ORDER = tuple(MOVRSZ_CONFIG)
-    #1359BA0 /1443384 /14433D4 submit these four pyramid stages. Their
-    #software packing is known; the physical filter/format law is not.
-    MOVRSZ_STAGES = (
-        (0x500,0x01e00280,0x280,0x00f00140,0x00a00140,0x10001000),
-        (0x280,0x00f00140,0x140,0x007800a0,0x00a00140,0x10001000),
-        (0x140,0x007800a0,0x0a0,0x003c0050,0x005000a0,0x00001000),
-        (0x0a0,0x003c0050,0x050,0x001e0028,0x00280050,0x00000000))
     OFFSETS = {0x00, 0x04, 0x40, 0x44, 0x48, 0x4c, 0x80, 0x88, 0x8c} | set(MOVRSZ_CONFIG)
     IRQ = 0x45  # Logical100 table0xaeafe0: physical69, priority13, mode1.
 
@@ -159,7 +157,7 @@ class FujiDecompressor(_Registers):
             raise ValueError("Decompressor virtual throughput must be a positive integer")
         if (raise_irq is None) != (irq_targets is None):
             raise ValueError("Decompressor IRQ requires both delivery and firmware-enabled routing callbacks")
-        if movrsz_profile not in (None,MOVRSZ_PROFILE):
+        if movrsz_profile is not None and movrsz_profile not in MOVRSZ_PROFILES:
             raise ValueError('Unknown MOVRSZ completion profile')
         if type(movrsz_ticks) is not int or movrsz_ticks<1:
             raise ValueError('MOVRSZ delay must be a positive actual integer')
@@ -216,8 +214,9 @@ class FujiDecompressor(_Registers):
                 "movrsz_limits":["93278C desired12-WORD configuration plus8C=1/04=1 submission only",
                     "Default mode1 awaits an external result; it produces no raster, status/count, completion, IRQ or callback",
                     "Logical34 and loaderlogical100 share physicalIRQ45 but have separate firmware owners",
-                    "Explicit pyramid profile assumes packed YYCbCr format1, little-endian U16 luma format0, two-to-one box averaging and source latching at arm; physical filter/phase/format/latency are unmeasured",
-                    "Only the four stock4103 stage configurations complete; no callback or queue event is injected, and MOVRSZ count4C remains unsupported"]}
+                    "Pyramid output uses declared packed YYCbCr format1, U16 luma format0 and two-to-one box averaging",
+                    "The scene profile also transfers equal-geometry opaque format2 rows between declared strides; destination padding is zero",
+                    "Physical filter, phase, format2 pixel interpretation and latency are unmeasured; MOVRSZ count4C remains unsupported"]}
 
     def read(self,cpu_id,address,size):
         offset=self._offset(address,size)
@@ -274,7 +273,8 @@ class FujiDecompressor(_Registers):
                 or self.regs.get(0x8c)!=(0xffffffff if request['state']=='released' else 1)):
             raise UnsupportedDevice("MOVRSZ arm lacks its exact enable/trigger")
         if request['state'] in ('active','completed-awaiting-ack','acknowledged','released'):
-            if self.movrsz_profile!=MOVRSZ_PROFILE or self.busy!=(request['state']=='active'):
+            if (self.movrsz_profile not in MOVRSZ_PROFILES or request.get('profile')!=self.movrsz_profile
+                    or self.busy!=(request['state']=='active')):
                 raise UnsupportedDevice('MOVRSZ completion state/profile/busy ownership changed')
 
     def _movrsz_configure(self,cpu_id,offset,value):
@@ -319,8 +319,8 @@ class FujiDecompressor(_Registers):
         plan=None
         if self.movrsz_profile is not None:
             plan=self._movrsz_plan()
-            data=bytes(self.read_bytes(plan['source'],plan['source_bytes'],cpu_id=cpu_id))
-            if len(data)!=plan['source_bytes']:
+            data=bytes(self.read_bytes(plan.source,plan.source_bytes,cpu_id=cpu_id))
+            if len(data)!=plan.source_bytes:
                 raise UnsupportedDevice('MOVRSZ source read differs from its bounded DRAM span')
         self.regs[0x04]=1
         request.update(state='armed-awaiting-result',completion_irq_cpu=route,
@@ -334,55 +334,20 @@ class FujiDecompressor(_Registers):
             self._movrsz_schedule(plan,data,route)
 
     def _movrsz_plan(self):
-        from .virtual_source import ram_span
-        r=self.regs
-        stage=tuple(r[o] for o in (0x14,0x18,0x24,0x28,0x3c,0x80))
-        if (stage not in self.MOVRSZ_STAGES or r[0x08]!=0 or r[0x30]!=0x40
-                or r[0x34]!=0x2040 or r[0x38]!=0x4080):
-            raise UnsupportedDevice('MOVRSZ completion profile supports only exact stock4103 pyramid stages')
-        source_width,source_height=r[0x18]&0x1fff,r[0x18]>>16&0x1fff
-        width,height=r[0x28]&0x1fff,r[0x28]>>16&0x1fff
-        source_bytes,output_bytes=r[0x14]*source_height,r[0x24]*height
-        source_span=ram_span(r[0x10],source_bytes)
-        output_span=ram_span(r[0x20],output_bytes)
-        if source_span[0]<output_span[1] and output_span[0]<source_span[1]:
-            raise UnsupportedDevice('MOVRSZ completion source/destination DRAM spans overlap')
-        return dict(stage=self.MOVRSZ_STAGES.index(stage),source=r[0x10],destination=r[0x20],
-            source_width=source_width,source_height=source_height,source_pitch=r[0x14],
-            width=width,height=height,pitch=r[0x24],source_bytes=source_bytes,
-            output_bytes=output_bytes,source_format=r[0x80]>>12&3,format=r[0x80]>>28&3)
-
-    @staticmethod
-    def _movrsz_raster(plan,data):
-        """Declared box-filter approximation, not a recovered Fuji filter."""
-        import numpy as np
-        h,w=plan['height'],plan['width']
-        rows=np.frombuffer(data,dtype=np.uint8).reshape(plan['source_height'],plan['source_pitch'])
-        if plan['source_format']==1:
-            pairs=rows.reshape(2*h,w,4).astype(np.uint16)
-            luma=pairs[:,:,:2].reshape(2*h,2*w)
-            reduced=(luma[0::2,0::2]+luma[0::2,1::2]
-                     +luma[1::2,0::2]+luma[1::2,1::2]+2)//4
-            if plan['format']==0:
-                return reduced.astype('<u2').tobytes()
-            chroma=(pairs[0::2,0::2,2:]+pairs[0::2,1::2,2:]
-                    +pairs[1::2,0::2,2:]+pairs[1::2,1::2,2:]+2)//4
-            output=np.empty((h,w//2,4),dtype=np.uint8)
-            output[:,:,:2]=reduced.reshape(h,w//2,2)
-            output[:,:,2:]=chroma
-            return output.tobytes()
-        luma=np.frombuffer(data,dtype='<u2').reshape(2*h,2*w).astype(np.uint32)
-        return ((luma[0::2,0::2]+luma[0::2,1::2]
-                 +luma[1::2,0::2]+luma[1::2,1::2]+2)//4).astype('<u2').tobytes()
+        try:
+            return DeclaredMovrszPlan(MOVRSZ_PROFILES[self.movrsz_profile],
+                tuple(self.regs[offset] for offset in self.MOVRSZ_ORDER))
+        except ValueError as error:
+            raise UnsupportedDevice(str(error)) from error
 
     def _movrsz_schedule(self,plan,data,route):
         request=self.movrsz_request
-        request.update(state='active',profile=self.movrsz_profile,stage=plan['stage'],
-            source_bytes=plan['source_bytes'],output_bytes=plan['output_bytes'],irq_raised=False)
+        request.update(state='active',profile=self.movrsz_profile,stage=plan.stage,
+            source_bytes=plan.source_bytes,output_bytes=plan.output_bytes,irq_raised=False)
         self.busy=True
         self.movrsz_last_job=dict(request)
-        self.record('MOVRSZ approximate resize start',cpu=request['cpu'],stage=plan['stage'],
-            profile=self.movrsz_profile,source_bytes=plan['source_bytes'],output_bytes=plan['output_bytes'])
+        self.record('MOVRSZ approximate resize start',cpu=request['cpu'],stage=plan.stage,
+            profile=self.movrsz_profile,source_bytes=plan.source_bytes,output_bytes=plan.output_bytes)
         generation=self.generation
         def complete():
             if generation!=self.generation:
@@ -396,10 +361,10 @@ class FujiDecompressor(_Registers):
             if (self.movrsz_request is not request or request['state']!='active'
                     or self._movrsz_plan()!=plan or not same_or_masked):
                 raise UnsupportedDevice('MOVRSZ active descriptor or IRQ route changed')
-            output=self._movrsz_raster(plan,data)
-            if len(output)!=plan['output_bytes']:
+            output=plan.raster(data)
+            if len(output)!=plan.output_bytes:
                 raise UnsupportedDevice('MOVRSZ approximate raster differs from its destination span')
-            self.write_bytes(plan['destination'],output,cpu_id=request['cpu'])
+            self.write_bytes(plan.destination,output,cpu_id=request['cpu'])
             self.regs[0x88]=1
             request['state']='completed-awaiting-ack'
             self.busy=False
@@ -410,7 +375,7 @@ class FujiDecompressor(_Registers):
             self.movrsz_irqs_raised+=1
             request['irq_raised']=True
             self.movrsz_last_job=dict(request)
-            self.record('MOVRSZ approximate resize complete',cpu=request['cpu'],stage=plan['stage'],
+            self.record('MOVRSZ approximate resize complete',cpu=request['cpu'],stage=plan.stage,
                 output_bytes=len(output),irq_cpu=route,physical_irq=hex(self.IRQ))
         self.schedule(self.movrsz_ticks,complete)
 

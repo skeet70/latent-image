@@ -3,13 +3,13 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyInt, PyModule};
+use pyo3::types::{PyDict, PyInt, PyList, PyModule};
 
-pub(crate) const PROFILE: &str = "xm1-150-declared-mode-device-idle-unmeasured";
+pub(crate) const PROFILE: &str = "xm1-150-declared-mode-devices-unmeasured";
 const FACE_BASE: u64 = 0xfff1_4000;
 const ENGINE_BASE: u64 = 0xfff4_8000;
 
-fn unsupported(py: Python<'_>, reason: &str) -> PyErr {
+pub(crate) fn unsupported(py: Python<'_>, reason: &str) -> PyErr {
     match PyModule::import(py, "emulator.hardware").and_then(|module| module.getattr("UnsupportedDevice")) {
         Ok(class) => match class.call1((reason,)) {
             Ok(error) => PyErr::from_value(error),
@@ -19,11 +19,11 @@ fn unsupported(py: Python<'_>, reason: &str) -> PyErr {
     }
 }
 
-fn exact_int(value: &Bound<'_, PyAny>) -> Option<u64> {
+pub(crate) fn exact_int(value: &Bound<'_, PyAny>) -> Option<u64> {
     value.is_exact_instance_of::<PyInt>().then(|| value.extract().ok()).flatten()
 }
 
-fn word(value: &Bound<'_, PyAny>) -> Option<u32> {
+pub(crate) fn word(value: &Bound<'_, PyAny>) -> Option<u32> {
     exact_int(value).and_then(|value| value.try_into().ok())
 }
 
@@ -31,6 +31,79 @@ struct Cpu(u8);
 
 fn cpu(core: &Bound<'_, PyAny>) -> Option<Cpu> {
     exact_int(core).filter(|core| *core < 2).map(|core| Cpu(core as u8))
+}
+
+// 0x0106d8f0 cancels, 0x0106d8f4 stops four channels, and 0x0106d8fc submits a replacement.
+fn face_restart(
+    device: &Bound<'_, PyAny>, core: &Bound<'_, PyAny>, address: u64, size: u64,
+    value: Option<&Bound<'_, PyAny>>,
+) -> PyResult<bool> {
+    if address != FACE_BASE + 0x14 || value.is_none() {
+        return Ok(false);
+    }
+    let stopped = device.getattr("stop")?;
+    let Ok(stopped) = stopped.cast::<PyDict>() else {
+        return Ok(false);
+    };
+    if stopped.get_item("step")?.as_ref().and_then(exact_int) != Some(26) {
+        return Ok(false);
+    }
+    let py = device.py();
+    let Some(owner) = cpu(core) else {
+        return Err(unsupported(py, "Face replacement requires CPU 0 or 1"));
+    };
+    let Some(value) = value.and_then(word).filter(|value| *value < 0x1000) else {
+        return Err(unsupported(py, "Face replacement requires the recovered parameter field"));
+    };
+    if size != 4 || stopped.get_item("cpu")?.as_ref().and_then(exact_int) != Some(owner.0 as u64)
+        || !device.call_method0("_stop_valid")?.extract::<bool>()?
+    {
+        return Err(unsupported(py, "Face replacement requires its complete same-CPU idle abort"));
+    }
+    let registers = device.getattr("registers")?.cast_into::<PyDict>()?;
+    for channel in 0..4u64 {
+        let read = |offset| -> PyResult<Option<u32>> {
+            Ok(registers.get_item(0x800 + channel * 0x80 + offset)?.as_ref().and_then(word))
+        };
+        if read(0)? != Some(0) || read(4)? != Some(0) || read(0x10)? != Some(0)
+            || !read(0x20)?.is_some_and(|value| value & !0x0070_0000 == 0x3000 && value >> 20 <= 4)
+            || read(0x28)? != Some(0x100)
+            || !matches!(read(0x44)?, Some(0 | 2))
+        {
+            return Err(unsupported(py, "Face replacement requires four retained inactive DMA channels"));
+        }
+    }
+    let state = device.getattr("__dict__")?.cast_into::<PyDict>()?;
+    let restarts = state.get_item("mode_restarts")?.map(|value| exact_int(&value))
+        .unwrap_or(Some(0)).and_then(|value| value.checked_add(1))
+        .ok_or_else(|| PyValueError::new_err("Invalid face replacement count"))?;
+    let anchor = registers.copy()?;
+    let accesses = PyList::empty(py);
+    let request = PyDict::new(py);
+    request.set_item("phase", "parameter-byte")?;
+    request.set_item("step", 0)?;
+    request.set_item("channel_index", 0)?;
+    request.set_item("optional_mask_words", py.None())?;
+    request.set_item("configured_channels", PyList::empty(py))?;
+    request.set_item("selected_channel", py.None())?;
+    request.set_item("initial_registers", &anchor)?;
+    request.set_item("initial_sha256", device.call_method1("_digest", (&anchor,))?)?;
+    request.set_item("accesses", &accesses)?;
+    request.set_item("accesses_sha256", device.call_method1("_digest", (&accesses,))?)?;
+    request.set_item("input_pointer", py.None())?;
+    request.set_item("requested_tick", py.None())?;
+    request.set_item("result_state", "unproduced")?;
+    request.set_item("effects", "Desired request only; no data, result or IRQ")?;
+    state.set_item("mode_canceled_request", device.getattr("request")?)?;
+    state.set_item("mode_canceled_stop", stopped)?;
+    state.set_item("request", &request)?;
+    state.set_item("stop", py.None())?;
+    let phases = device.getattr("dma_states")?.cast_into::<PyList>()?;
+    for channel in 0..4 { phases.set_item(channel, DmaPhase::Configured.name())?; }
+    device.call_method1("_request_record", ("write", owner.0, 0x14, value))?;
+    request.set_item("protocol_sha256", device.call_method1("_protocol_digest", (&request,))?)?;
+    state.set_item("mode_restarts", restarts)?;
+    Ok(true)
 }
 
 // 0x010648e8 writes reset 0/1; 0x01069e00 cancels without requiring a submitted job.
@@ -45,6 +118,9 @@ fn face_mode_access(
     }
     if !profile.eq(PROFILE)? {
         return Err(PyValueError::new_err("Unknown mode device profile"));
+    }
+    if face_restart(device, core, address, size, value)? {
+        return Ok(value.and_then(word));
     }
     let state = device.getattr("__dict__")?.cast_into::<PyDict>()?;
     let pending = state.get_item("mode_reset_cpu")?.filter(|value| !value.is_none());
@@ -187,10 +263,10 @@ pub(crate) fn face_mode_read(
     face_mode_access(device, core, address, size, None)
 }
 
-// Masks follow the software field construction in 0x006689d4..0x00669a88.
+// Masks follow 0x006670a4..0x00667118 and 0x006689d4..0x00669a88 field construction.
 fn programming_mask(offset: u64) -> Option<u32> {
     match offset {
-        0x004 => Some(0x77),
+        0x004 => Some(0x3077),
         0x010 | 0x018 | 0x020 | 0x028 | 0x030 | 0x054 => Some(0x3fff_ffff),
         0x014 | 0x01c | 0x024 | 0x02c | 0x034 | 0x058 => Some(0x7fff),
         0x038 | 0x048 => Some(0x1fff_1fff),
@@ -496,6 +572,9 @@ mod tests {
             write(&device, ENGINE_BASE, 0x14, 0x200).unwrap();
             write(&device, ENGINE_BASE, 0xc8, 0x331).unwrap();
             assert_eq!(read(&device, ENGINE_BASE, 4).unwrap(), 0x20);
+            write(&device, ENGINE_BASE, 4, 0x2020).unwrap();
+            assert_eq!(read(&device, ENGINE_BASE, 4).unwrap(), 0x2020);
+            write(&device, ENGINE_BASE, 4, 0x20).unwrap();
             assert_eq!(read(&device, ENGINE_BASE, 0xc0).unwrap(), 0);
             write(&device, ENGINE_BASE, 0xc4, 0x331).unwrap();
             assert_eq!(read(&device, ENGINE_BASE, 0xc0).unwrap(), 0);
