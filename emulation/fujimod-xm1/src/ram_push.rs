@@ -300,6 +300,51 @@ enum Request {
     Finish,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum RequestKind {
+    List,
+    Transfer,
+    TraceSites,
+    TraceHits,
+    Key,
+    ModeDial,
+    ReadMemory,
+    Capture,
+    SaveInstallCheckpoint,
+    Finish,
+}
+
+impl Request {
+    fn kind(&self) -> RequestKind {
+        match self {
+            Request::List => RequestKind::List,
+            Request::Transfer(_) => RequestKind::Transfer,
+            Request::TraceSites { .. } => RequestKind::TraceSites,
+            Request::TraceHits { .. } => RequestKind::TraceHits,
+            Request::Key { .. } => RequestKind::Key,
+            Request::ModeDial { .. } => RequestKind::ModeDial,
+            Request::ReadMemory { .. } => RequestKind::ReadMemory,
+            Request::Capture { .. } => RequestKind::Capture,
+            Request::SaveInstallCheckpoint { .. } => RequestKind::SaveInstallCheckpoint,
+            Request::Finish => RequestKind::Finish,
+        }
+    }
+}
+
+/// Host seconds per request kind, and seconds spent waiting for the host's next request.
+#[derive(Default, Serialize)]
+struct RequestProfile {
+    kinds: BTreeMap<RequestKind, KindProfile>,
+    host_wait_seconds: f64,
+}
+
+#[derive(Default, Serialize)]
+struct KindProfile {
+    requests: u64,
+    seconds: f64,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Start {
@@ -323,6 +368,7 @@ struct Server {
     output: PathBuf,
     screenshots: Vec<Value>,
     key_log: Vec<Value>,
+    requests: RequestProfile,
 }
 
 fn parse_address(text: &str) -> Result<u32, String> {
@@ -452,6 +498,8 @@ impl Server {
             "bridge_error": error,
             "key_log": self.key_log,
             "transfer_log": self.bridge.transfer_log,
+            "transfer_profile": self.bridge.profile,
+            "request_profile": self.requests,
             "rendezvous_activity": self.bridge.rendezvous,
             "keepalive_inputs": self.bridge.keepalive_inputs,
             "contexts": self.bridge.machine.traces.hits,
@@ -465,15 +513,26 @@ impl Server {
             "configuration": encode_hex(&self.attachment.configuration),
             "pre_attach": self.attachment.pre_attach, "checkpoint": self.checkpoint}))?;
         let mut error = None;
+        let mut waiting = Instant::now();
         for line in std::io::stdin().lock().lines() {
             let line = line.map_err(|e| e.to_string())?;
+            self.requests.host_wait_seconds += waiting.elapsed().as_secs_f64();
             let result = serde_json::from_str::<Request>(&line)
                 .map_err(|e| format!("invalid RAM-push bridge request: {e}"))
-                .and_then(|request| self.handle(request));
+                .and_then(|request| {
+                    let started = Instant::now();
+                    let kind = request.kind();
+                    let result = self.handle(request);
+                    let profile = self.requests.kinds.entry(kind).or_default();
+                    profile.requests += 1;
+                    profile.seconds += started.elapsed().as_secs_f64();
+                    result
+                });
             match result {
                 Ok(Some(mut value)) => {
                     value.as_object_mut().ok_or("response must be an object")?.insert("ok".into(), json!(true));
                     emit(&value)?;
+                    waiting = Instant::now();
                 }
                 Ok(None) => {
                     emit(&json!({"ok": true, "finished": true}))?;
@@ -581,6 +640,7 @@ fn drive() -> Result<(), String> {
         output: arguments.output,
         screenshots: Vec::new(),
         key_log: Vec::new(),
+        requests: RequestProfile::default(),
     };
     server.arm(&BTreeMap::new())?;
     server.serve()

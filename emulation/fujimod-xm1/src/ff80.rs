@@ -7,7 +7,10 @@ use crate::guest::RouteKey;
 use crate::machine::{KeyPulse, Machine};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::time::Instant;
 
+/// A wait polls after this many instructions and then at doubling intervals up to `WAIT_STEP`.
+const FIRST_POLL: u64 = 1_000;
 const WAIT_STEP: u64 = 200_000;
 const WAIT_BUDGET: u64 = 30_000_000;
 const ACTIVATION_BUDGET: u64 = 140_000_000;
@@ -76,7 +79,6 @@ struct ActiveTransfer {
 
 #[derive(Deserialize)]
 struct EndpointDma {
-    dma: [[u32; 18]; 2],
     active: Option<ActiveTransfer>,
 }
 
@@ -112,6 +114,21 @@ pub enum Transfer {
     BulkIn { endpoint: u8, count: usize },
 }
 
+/// Where transfer time goes: host-side bus queries and guest instructions
+/// spent waiting for the endpoint.
+#[derive(Default, Serialize)]
+pub struct TransferProfile {
+    pub transfers: u64,
+    pub transfer_seconds: f64,
+    pub transfer_instructions: u64,
+    pub polls: u64,
+    pub wait_instructions: u64,
+    pub status_calls: u64,
+    pub status_seconds: f64,
+    pub dma_calls: u64,
+    pub dma_seconds: f64,
+}
+
 pub struct Ff80 {
     pub machine: Machine,
     pub rendezvous: Vec<Rendezvous>,
@@ -123,6 +140,7 @@ pub struct Ff80 {
     pub keepalive: bool,
     transfers: u64,
     pub keepalive_inputs: Vec<Value>,
+    pub profile: TransferProfile,
 }
 
 pub fn decode_hex(text: &str) -> Result<Vec<u8>, String> {
@@ -150,6 +168,7 @@ impl Ff80 {
             keepalive: false,
             transfers: 0,
             keepalive_inputs: Vec::new(),
+            profile: TransferProfile::default(),
         }
     }
 
@@ -163,15 +182,23 @@ impl Ff80 {
         self.machine.document.usb.0.clone()
     }
 
-    fn status(&self) -> Result<BusStatus, String> {
+    fn status(&mut self) -> Result<BusStatus, String> {
+        let started = Instant::now();
         let status = self.machine.session.usb_status(&self.usb())?;
-        serde_json::from_value(status["endpoint"].clone()).map_err(|e| format!("USB bus status: {e}"))
+        let status = serde_json::from_value(status["endpoint"].clone()).map_err(|e| format!("USB bus status: {e}"));
+        self.profile.status_calls += 1;
+        self.profile.status_seconds += started.elapsed().as_secs_f64();
+        status
     }
 
-    fn dma(&self) -> Result<EndpointDma, String> {
+    /// The endpoint's active DMA transfer, from the controller's full diagnostic state.
+    fn dma(&mut self) -> Result<EndpointDma, String> {
+        let started = Instant::now();
         let node = self.machine.session.node(&self.usb())?;
         let save: ControllerSave = serde_json::from_value(self.machine.session.board.device_save(node)?)
             .map_err(|e| format!("USB controller state: {e}"))?;
+        self.profile.dma_calls += 1;
+        self.profile.dma_seconds += started.elapsed().as_secs_f64();
         save.endpoints.ok_or_else(|| "USB endpoints are not connected".into())
     }
 
@@ -242,18 +269,23 @@ impl Ff80 {
         self.machine.require_running()
     }
 
+    /// Runs until `ready` holds.
     fn wait(&mut self, label: &str, budget: u64, mut ready: impl FnMut(&mut Self) -> Result<bool, String>) -> Result<(), String> {
         let start = self.machine.instructions();
+        let mut step = FIRST_POLL;
         loop {
             self.machine.require_running().map_err(|e| format!("{label}: {e}"))?;
+            self.profile.polls += 1;
             if ready(self)? {
+                self.profile.wait_instructions += self.machine.instructions() - start;
                 return Ok(());
             }
             let spent = self.machine.instructions() - start;
             if spent >= budget {
                 return Err(format!("{label}: instruction budget expired"));
             }
-            self.advance((budget - spent).min(WAIT_STEP)).map_err(|e| format!("{label}: {e}"))?;
+            self.advance((budget - spent).min(step)).map_err(|e| format!("{label}: {e}"))?;
+            step = (step * 2).min(WAIT_STEP);
         }
     }
 
@@ -312,40 +344,34 @@ impl Ff80 {
             let status = host.status()?;
             Ok(status.setup_position == status.setup_length)
         })?;
-        self.advance(20_000)?;
         self.machine.session.usb_out(&self.usb(), 0, payload)?;
         self.wait("control OUT status", WAIT_BUDGET, |host| Ok(host.status()?.tx_packets[0] > 0))?;
         if !self.machine.session.usb_in(&self.usb(), 0x80, 64)?.is_empty() {
             return Err("control OUT status packet was not empty".into());
         }
-        self.advance(20_000)
-    }
-
-    fn dma_torn_down(&mut self, label: &str) -> Result<(), String> {
-        self.wait(label, WAIT_BUDGET, |host| Ok(host.dma()?.dma.iter().all(|channel| channel[1] & 1 == 0)))
+        Ok(())
     }
 
     fn bulk_out(&mut self, endpoint: u8, payload: &[u8]) -> Result<(), String> {
         if endpoint != BULK_OUT {
             return Err("RAM-push bridge admits only bulk OUT endpoint 2".into());
         }
-        self.wait("bulk OUT DMA readiness", WAIT_BUDGET, |host| {
-            Ok(match host.dma()?.active {
-                None => true,
-                Some(active) => active.direction == Direction::Out && active.exact == payload.len(),
-            })
-        })?;
+        if self.status()?.active_dma {
+            self.wait("bulk OUT DMA readiness", WAIT_BUDGET, |host| {
+                Ok(match host.dma()?.active {
+                    None => true,
+                    Some(active) => active.direction == Direction::Out && active.exact == payload.len(),
+                })
+            })?;
+        }
         for chunk in payload.chunks(PACKET_BYTES) {
             self.machine.session.usb_out(&self.usb(), BULK_OUT, chunk)?;
             self.wait("bulk OUT packet consumption", WAIT_BUDGET, |host| {
                 let status = host.status()?;
                 Ok(status.rx_position[1] == status.rx_length[1])
             })?;
-            self.advance(20_000)?;
         }
-        self.wait("bulk OUT DMA completion", WAIT_BUDGET, |host| Ok(!host.status()?.active_dma))?;
-        self.dma_torn_down("bulk OUT DMA teardown")?;
-        self.advance(100_000)
+        self.wait("bulk OUT DMA completion", WAIT_BUDGET, |host| Ok(!host.status()?.active_dma))
     }
 
     fn bulk_in(&mut self, endpoint: u8, count: usize) -> Result<Vec<u8>, String> {
@@ -368,12 +394,10 @@ impl Ff80 {
             let packet = self.machine.session.usb_in(&self.usb(), BULK_IN, count - payload.len())?;
             let short = packet.len() < PACKET_BYTES;
             payload.extend(packet);
-            self.advance(20_000)?;
             if short {
                 break;
             }
         }
-        self.dma_torn_down("bulk IN DMA teardown")?;
         Ok(payload)
     }
 
@@ -406,6 +430,7 @@ impl Ff80 {
 
     pub fn transfer(&mut self, request: &Transfer) -> Result<(usize, Vec<u8>), String> {
         let started = self.machine.instructions();
+        let clock = Instant::now();
         self.release_rendezvous()?;
         self.transfers += 1;
         if self.keepalive && self.transfers % KEEPALIVE_PERIOD == 0 {
@@ -439,7 +464,11 @@ impl Ff80 {
         self.transfer_log.push(json!({
             "transfer": kind, "bytes": result.0, "opcode": opcode, "function": function,
             "instructions": self.machine.instructions() - started,
+            "host_seconds": clock.elapsed().as_secs_f64(),
         }));
+        self.profile.transfers += 1;
+        self.profile.transfer_seconds += clock.elapsed().as_secs_f64();
+        self.profile.transfer_instructions += self.machine.instructions() - started;
         Ok(result)
     }
 

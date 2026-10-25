@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, classicChromeIconPayload, runRamPushE2E, warmAttachCheckpoint) where
 
-import Control.Exception (IOException, SomeException, bracket, catch, displayException, try)
+import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, try)
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON (..), Value (..), encode, object, withObject, (.:), (.=))
 import Data.Aeson.Types (parseEither)
@@ -19,11 +19,12 @@ import Data.Bits (shiftL, shiftR, (.|.))
 import Data.Int (Int32)
 import Data.Word (Word32)
 import Numeric (readHex, showFFloat, showHex)
-import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectory, setCurrentDirectory)
+import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectory, removeDirectoryRecursive, setCurrentDirectory)
 import System.Environment (getExecutablePath, lookupEnv)
-import System.FilePath ((</>))
+import System.FilePath (takeFileName, (</>))
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stdout)
 import System.Posix.Files (setFileMode)
+import System.Posix.Temp (mkdtemp)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, routeKey, routeKeyHex)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.UiTrajectory
@@ -196,6 +197,17 @@ require yes message = unless yes (ioError (userError message))
 
 privateDirectory :: FilePath -> IO ()
 privateDirectory path = createDirectory path >> setFileMode path 0o700
+
+-- | Runs a transport session in a private directory on tmpfs (XDG_RUNTIME_DIR, else /dev/shm),
+-- then copies its files into DIRECTORY, which must exist, whether or not the session succeeded.
+-- The transport fsyncs every journal line, which costs tens of milliseconds a transfer on disk.
+stagedSession :: FilePath -> (FilePath -> IO a) -> IO a
+stagedSession directory session = do
+  root <- maybe "/dev/shm" id <$> lookupEnv "XDG_RUNTIME_DIR"
+  bracket (mkdtemp (root </> "xm1-e2e-session-")) removeDirectoryRecursive $ \staging -> do
+    let work = staging </> "session"
+    privateDirectory work
+    session work `finally` (listDirectory work >>= mapM_ (\name -> B.readFile (work </> name) >>= writePrivateBytes (directory </> name)))
 
 -- | Entry of the plain-image drawer that renders a menu message banner; r0 is the message id.
 menuMessageDrawer :: Word32
@@ -511,8 +523,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           emulatorTraceSites emulator fetchSites
           Just . fst <$> emulatorTraceHits emulator 0
         breakBefore <- heapBreak
-        allocationPath <- timed "ram-alloc" (runRamAlloc allocationBytes realClock api allocationDirectory) >>= \outcome -> case outcome of
-          RamAllocated path -> pure path
+        allocationPath <- timed "ram-alloc" (stagedSession allocationDirectory (runRamAlloc allocationBytes realClock api)) >>= \outcome -> case outcome of
+          RamAllocated path -> pure (allocationDirectory </> takeFileName path)
           other -> ioError (userError ("ram-alloc failed: " ++ show other))
         retained <- readRetainedAllocation allocationPath
         breakAfter <- heapBreak
@@ -557,8 +569,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         writePrivateBytes path (hostPushState host)
         pure (path, hostInstallMailbox host)
       Nothing -> do
-        statePath <- timed "ram-push" (pushWith retained manifest realClock api pushDirectory) >>= \outcome -> case outcome of
-          RamPushInstalled path -> pure path
+        statePath <- timed "ram-push" (stagedSession pushDirectory (pushWith retained manifest realClock api)) >>= \outcome -> case outcome of
+          RamPushInstalled path -> pure (pushDirectory </> takeFileName path)
           other -> stop "ram-push" (show other)
         installMailbox <- readMailbox
         forM_ fetchStart $ \from -> do
@@ -583,7 +595,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     unloadMailbox <- if planUnload plan
       then do
         privateDirectory unloadDirectory
-        unload <- timed "ram-unload" (unloadWith state realClock api unloadDirectory)
+        unload <- timed "ram-unload" (stagedSession unloadDirectory (unloadWith state realClock api))
         unless (unload == RamUnloaded) (stop "ram-unload" (show unload))
         Just <$> readMailbox
       else pure Nothing
