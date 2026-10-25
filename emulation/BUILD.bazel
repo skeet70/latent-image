@@ -1212,7 +1212,6 @@ haskell_binary(
     name = "verify-candidate",
     srcs = ["VerifyCandidate.hs"],
     data = [
-        ":checkpoint-warmup",
         ":flash-boot-check",
         ":fujimod-flash-boot-check",
         ":native-runner",

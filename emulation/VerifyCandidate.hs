@@ -10,13 +10,13 @@ import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newEmptyMVar, newMVar, putMVar, readMVar, takeMVar)
 import Control.Exception (SomeException, finally, try)
 import Control.Monad (forM, forM_, replicateM, unless, when)
-import Data.Aeson (Value (..), encode, object, (.=))
-import Data.Aeson.Types (Pair)
+import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, withObject, (.:), (.:?), (.=))
+import Data.Aeson.Types (Pair, parseEither)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.List (intercalate, isPrefixOf)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (catMaybes, fromMaybe, isJust)
 import qualified Data.Text as T
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
@@ -121,16 +121,16 @@ routeInvocation :: Context -> Route -> FilePath -> Invocation
 routeInvocation context route receipt = case route of
   FlashBootCheck -> launcher "//emulation:flash-boot-check" ["--firmware", stockDat, "--output", receipt]
   FujiModFlashBootCheck -> launcher "//emulation:fujimod-flash-boot-check" ["--firmware", stockDat, "--output", receipt]
-  RamPushVolatile -> viewer
+  RamPushVolatile -> ramPush
     ["--cardless", "--firmware", prefixDat, "--installed-nand", storedF7One
     , "--trajectories", "private-data/analysis/x-m1-1.50/ram-push/VolatileBank/scenario.json"]
-  RamPushClassicChrome -> viewer (["--classic-chrome", "--firmware", prefixDat, "--installed-nand", storedF7One] ++ card)
-  RamPushClassicChromeIcon -> viewer (["--classic-chrome-icon", "--firmware", prefixDat, "--installed-nand", storedF7One] ++ card)
+  RamPushClassicChrome -> ramPush (["--classic-chrome", "--firmware", prefixDat, "--installed-nand", storedF7One] ++ card)
+  RamPushClassicChromeIcon -> ramPush (["--classic-chrome-icon", "--firmware", prefixDat, "--installed-nand", storedF7One] ++ card)
   FlashCandidateIcon -> viewer (["--flash-candidate", "--firmware", iconFlashDat, "--installed-nand", storedF7One] ++ card
     ++ ["--trajectories", "emulation/classic-chrome-icon-trajectories.json"])
   FlashCandidateQTile -> viewer (["--flash-candidate", "--firmware", iconFlashDat, "--installed-nand", storedF7One] ++ card
     ++ ["--trajectories", "emulation/classic-chrome-q-tile-trajectories.json"])
-  UsbToggleE8 -> viewer (["--classic-chrome", "--attach-hold-q", "--firmware", rc0ToggleDat, "--installed-nand", storedF7Zero] ++ card)
+  UsbToggleE8 -> ramPush (["--classic-chrome", "--attach-hold-q", "--firmware", rc0ToggleDat, "--installed-nand", storedF7Zero] ++ card)
   UpdaterRc0Toggle -> updater "restore-rc0-toggle"
   UpdaterCcToggle -> updater "restore-cc-toggle"
   NativeVolatile -> native "volatile"
@@ -142,6 +142,9 @@ routeInvocation context route receipt = case route of
     launcher = bazelRun context
     viewer arguments = launcher "//emulation:xm1-viewer"
       (["--ram-push-e2e"] ++ arguments ++ ["--output", run </> "runtimes" </> routeName route, "--receipt-output", receipt])
+    -- The RAM push's host-paced transfer moves the animated source's phase
+    -- between runs; frame 7 is the fixture of the fixed-scene icon e2e record.
+    ramPush arguments = viewer (arguments ++ ["--fixed-scene-frame", "7"])
     updater restore =
       let card' = "private-data/analysis/usb-toggle/emu-updater" </> restore
        in launcher "//emulation:updater-f7"
@@ -178,21 +181,21 @@ e2eResult file = emulatorStart file "/emulator_start" ++
   , exclude file "/menu_receipts/*/frame_number" Scheduling
   , exclude file "/menu_receipts/*/path" RunLocation ]
 
--- | The film list captured after ram-unload, by its menu-receipt index. It is
--- drawn over the animated live-view source, and its pixels differed between
--- runs whose menu states and observations were equal.
-afterUnloadCapture :: String -> Int -> [Exclusion]
-afterUnloadCapture screenshot index =
-  [ exclude ("screenshots/" ++ screenshot) "" SourcePhase
-  , exclude "e2e-result.json" ("/menu_receipts/" <> T.pack (show index) <> "/sha256") SourcePhase ]
+-- | The Classic Chrome icon trajectory's per-observation trace-hit instruction
+-- counters and recurring live-view develop markers. Both differed between two
+-- runs of one tree on the same restored checkpoint.
+iconRunLength :: [Exclusion]
+iconRunLength =
+  [ exclude "e2e-result.json" "/observations/*/trace_hits/*/instructions" Scheduling
+  , exclude "e2e-result.json" "/observations/*/classic_chrome_site_entries" Scheduling ]
 
 ramPushSpec :: [Exclusion] -> ObservationSpec
-ramPushSpec captures = ObservationSpec
+ramPushSpec extra = ObservationSpec
   (map filePattern
     [ "e2e-result.json", "e2e-fetch-watch.json", "cold-restart/e2e-cold-restart.json"
     , "relinked/runtime.bin", "relinked/ram-push-manifest.json", "relinked/bank-allowlist.json", "relinked/kernel.syms"
     , "alloc/ram-alloc-state.json", "push/ram-push-state.json", "unload/ram-unload-state.json", "screenshots/*.png" ])
-  (e2eResult "e2e-result.json" ++ emulatorStart "cold-restart/e2e-cold-restart.json" "/emulator_start" ++ captures ++
+  (e2eResult "e2e-result.json" ++ emulatorStart "cold-restart/e2e-cold-restart.json" "/emulator_start" ++ extra ++
     [ exclude "e2e-result.json" "/states" RunLocation
     , exclude "e2e-result.json" "/runtime/manifest" RunLocation
     , exclude "e2e-result.json" "/card/image" RunLocation ])
@@ -231,9 +234,9 @@ routeSpec route = case route of
   FlashBootCheck -> flashBootSpec
   FujiModFlashBootCheck -> fujimodFlashBootSpec
   RamPushVolatile -> ramPushSpec []
-  RamPushClassicChrome -> ramPushSpec (afterUnloadCapture "cc-film-list-after-unload.png" 6)
-  RamPushClassicChromeIcon -> ramPushSpec (afterUnloadCapture "cc-icon-film-list-after-unload.png" 10)
-  UsbToggleE8 -> ramPushSpec (afterUnloadCapture "cc-film-list-after-unload.png" 6)
+  RamPushClassicChrome -> ramPushSpec []
+  RamPushClassicChromeIcon -> ramPushSpec iconRunLength
+  UsbToggleE8 -> ramPushSpec []
   FlashCandidateIcon -> flashCandidateSpec
   FlashCandidateQTile -> flashCandidateSpec
   UpdaterRc0Toggle -> updaterSpec
@@ -250,18 +253,15 @@ data Options = Options
   , optionRecord :: Bool
   , optionNativeJobs :: Int
   , optionBazel :: [String]
-  , optionWarmup :: Bool
   }
 
 usage :: String
 usage = unlines
   [ "verify-candidate [--routes NAME,...] [--output DIR] [--baselines DIR] [--native-jobs N]"
   , "                 [--from-run DIR] [--receipt NAME=DIR]... [--record-baseline] [--bazel-option OPTION]..."
-  , "                 [--skip-warmup]"
   , ""
-  , "Runs //emulation:checkpoint-warmup, then each selected route through its existing command,"
-  , "compares its observations with BASELINES/NAME.json and writes OUTPUT/report.json."
-  , "Emulator routes hold emulator slots."
+  , "Runs each selected route through its existing command, compares its observations with"
+  , "BASELINES/NAME.json and writes OUTPUT/report.json. Emulator routes hold emulator slots."
   , ""
   , "  --routes NAME,...    routes to verify (default: all)"
   , "  --output DIR         fresh run directory beneath private-data/"
@@ -272,13 +272,12 @@ usage = unlines
   , "  --record-baseline    write BASELINES/NAME.json from the receipts instead of comparing"
   , "  --native-jobs N      JOBS for the native case suites (default: 4)"
   , "  --bazel-option OPT   option passed to each route's bazel run"
-  , "  --skip-warmup        start emulator routes without //emulation:checkpoint-warmup"
   , ""
   , "Routes: " ++ intercalate ", " (map routeName [minBound .. maxBound :: Route])
   ]
 
 parseOptions :: [String] -> IO Options
-parseOptions = go (Options Nothing Nothing Nothing Nothing [] False 4 [] True)
+parseOptions = go (Options Nothing Nothing Nothing Nothing [] False 4 [])
   where
     go options [] = pure options
     go options ("--routes" : value : rest) = do
@@ -297,7 +296,6 @@ parseOptions = go (Options Nothing Nothing Nothing Nothing [] False 4 [] True)
       Just jobs | jobs >= 1 && jobs <= 64 -> go options {optionNativeJobs = jobs} rest
       _ -> failure "--native-jobs takes an integer 1..64"
     go options ("--bazel-option" : value : rest) = go options {optionBazel = optionBazel options ++ [value]} rest
-    go options ("--skip-warmup" : rest) = go options {optionWarmup = False} rest
     go _ (argument : _) = failure ("unknown option or missing value: " ++ argument)
     route name = maybe (failure ("unknown route: " ++ name)) pure (parseRoute name)
     failure message = ioError (userError (message ++ "\n" ++ usage))
@@ -382,10 +380,10 @@ showExit (ExitFailure code) = "exit " ++ show code
 showSeconds :: Double -> String
 showSeconds value = show (fromIntegral (round (value * 10) :: Integer) / 10 :: Double) ++ " s"
 
--- | The checkpoint warm-up, then emulator routes on @slots@ workers in
--- 'emulatorOrder'; native suites on one worker from the start.
-schedule :: Context -> Int -> Bool -> [(Route, FilePath)] -> IO (Maybe Execution, Map.Map Route Execution)
-schedule context slots warm jobs = do
+-- | Emulator routes on @slots@ workers in 'emulatorOrder' and native suites
+-- on one worker, all from the start.
+schedule :: Context -> Int -> [(Route, FilePath)] -> IO (Map.Map Route Execution)
+schedule context slots jobs = do
   lock <- newMVar ()
   results <- newMVar Map.empty
   let emulator = [(route, receipt) | route <- emulatorOrder, Just receipt <- [lookup route jobs]]
@@ -401,13 +399,9 @@ schedule context slots warm jobs = do
         done <- newEmptyMVar
         _ <- forkIO (action `finally` putMVar done ())
         pure done
-  nativeDone <- fork (mapM_ runRoute native)
-  warmup <- if warm && not (null emulator)
-    then Just <$> execute context lock "checkpoint-warmup" (bazelRun context "//emulation:checkpoint-warmup" [])
-    else pure Nothing
-  workers <- replicateM (max 1 (min slots (length emulator))) (fork emulatorWorker)
-  mapM_ takeMVar (nativeDone : workers)
-  (,) warmup <$> readMVar results
+  workers <- (:) <$> fork (mapM_ runRoute native) <*> replicateM (max 1 (min slots (length emulator))) (fork emulatorWorker)
+  mapM_ takeMVar workers
+  readMVar results
 
 data Outcome = Outcome
   { outcomeRoute :: Route
@@ -446,8 +440,26 @@ executionFields execution =
   , "seconds" .= executionSeconds execution
   , "log" .= executionLog execution ]
 
-executionJson :: Execution -> Value
-executionJson = object . executionFields
+-- | The executions an earlier verifier run reported, so its receipts are
+-- judged and recorded under their routes' exit codes.
+earlierExecutions :: FilePath -> IO (Map.Map Route Execution)
+earlierExecutions run = do
+  let path = run </> "report.json"
+  present <- doesFileExist path
+  if not present then pure Map.empty else do
+    bytes <- B.readFile path
+    either (\problem -> ioError (userError ("unreadable earlier report " ++ path ++ ": " ++ problem))) (pure . Map.fromList)
+      (eitherDecodeStrict' bytes >>= parseEither (withObject "report" (\report -> report .: "routes" >>= fmap catMaybes . mapM entry)))
+  where
+    entry = withObject "route" $ \value -> do
+      name <- value .: "route"
+      code <- value .:? "exit_code"
+      case (parseRoute name, code) of
+        (Just route, Just exitCode) -> do
+          seconds <- value .: "seconds"
+          logPath <- value .: "log"
+          pure (Just (route, Execution (if exitCode == (0 :: Int) then ExitSuccess else ExitFailure exitCode) seconds logPath))
+        _ -> pure Nothing
 
 judge :: Bool -> String -> Route -> FilePath -> Maybe Execution -> IO Outcome
 judge record baselines route receipt execution = do
@@ -493,8 +505,9 @@ main = do
   receipts <- forM (optionReceipts options) $ \(route, directory) -> (,) route <$> canonicalizePath (resolve root directory)
   let sourceOf route = case (lookup route receipts, fromRun) of
         (Just directory, _) -> (Existing, Just directory)
-        (Nothing, Just run) -> (Existing, Just (run </> "receipts" </> routeName route))
+        (Nothing, Just earlier) -> (Existing, Just (earlier </> "receipts" </> routeName route))
         (Nothing, Nothing) -> (Execute, Nothing)
+  earlier <- maybe (pure Map.empty) earlierExecutions fromRun
   started <- stamp
   run <- beneathPrivate root (fromMaybe ("private-data/verify-candidate/runs" </> started) (optionOutput options)) "--output"
   createDirectory run
@@ -504,7 +517,7 @@ main = do
       receiptOf route = fromMaybe (run </> "receipts" </> routeName route) (snd (sourceOf route))
   commit <- readProcessWithExitCode "git" ["-C", let Workspace path = root in path, "rev-parse", "HEAD"] ""
   clockStart <- getMonotonicTime
-  (warmup, executions) <- if null toExecute then pure (Nothing, Map.empty) else do
+  executions <- if null toExecute then pure Map.empty else do
     forM_ ["receipts", "logs", "builds", "runtimes"] $ \directory -> createDirectory (run </> directory)
     executable <- getExecutablePath
     base <- outputBase executable
@@ -512,9 +525,12 @@ main = do
     let SlotCount slots = slotCount policy
         context = Context root base (executable ++ ".runfiles") (RunDirectory run) (optionNativeJobs options) (optionBazel options)
     putStrLn ("verify-candidate run: " ++ run)
-    schedule context slots (optionWarmup options) [(route, receiptOf route) | route <- toExecute]
+    schedule context slots [(route, receiptOf route) | route <- toExecute]
   clockEnd <- getMonotonicTime
-  outcomes <- forM selected $ \route -> judge (optionRecord options) baselines route (receiptOf route) (Map.lookup route executions)
+  let executionOf route
+        | isJust (lookup route receipts) = Nothing
+        | otherwise = maybe (Map.lookup route earlier) Just (Map.lookup route executions)
+  outcomes <- forM selected $ \route -> judge (optionRecord options) baselines route (receiptOf route) (executionOf route)
   forM_ outcomes $ \outcome -> unless (null (outcomeDifferences outcome)) $ do
     createDirectoryIfMissing True (run </> "differences")
     BL.writeFile (run </> "differences" </> (routeName (outcomeRoute outcome) ++ ".json"))
@@ -530,7 +546,6 @@ main = do
     , "started_at" .= started
     , "mode" .= (if optionRecord options then "record" else "compare" :: T.Text)
     , "wall_seconds" .= (clockEnd - clockStart)
-    , "checkpoint_warmup" .= fmap executionJson warmup
     , "result" .= (if passed then "pass" else "fail" :: T.Text)
     , "routes" .= map outcomeJson outcomes ]) <> "\n")
   forM_ outcomes $ \outcome -> putStrLn (routeName (outcomeRoute outcome) ++ ": " ++ T.unpack (outcomeResult outcome)
@@ -540,7 +555,6 @@ main = do
          [] -> ""
          first : _ -> "; " ++ show (length (outcomeDifferences outcome)) ++ " differences, first "
            ++ T.unpack (renderFieldName (differenceField first)))
-  forM_ warmup $ \execution -> putStrLn ("checkpoint-warmup: " ++ showExit (executionExit execution))
   putStrLn ("wall time: " ++ showSeconds (clockEnd - clockStart))
   putStrLn ("report: " ++ reportPath)
   unless passed (hPutStrLn stderr "verification failed" >> exitFailure)
