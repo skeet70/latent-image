@@ -399,7 +399,7 @@ main = do
   id5Path <- maybe (fail "--id5") pure (opt "id5")
   hostFix <- maybe (fail "--host-fixtures") pure (opt "host-fixtures")
   jobs <- readJobs (opt "jobs")
-  let candidateDir = fromMaybe "private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/package-20261024/image" (opt "candidate")
+  let candidateDir = fromMaybe "private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/package-20261024b/image" (opt "candidate")
       kernelBase = hexI (fromMaybe "0x00be1f00" (opt "rb-base"))
       id4Base = hexI (fromMaybe "0x0061c400" (opt "id4-base"))
   createDirectoryIfMissing True out
