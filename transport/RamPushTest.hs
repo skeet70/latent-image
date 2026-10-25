@@ -15,7 +15,7 @@ import FujiAF.RamPush
 import FujiAF.SHA256 (sha256)
 import FujiAF.Rehearsal (rehearseRamAlloc, rehearseRamPush, rehearseRamFree, rehearseRamUnload)
 import FujiAF.Transport
-import RamPushLayout (installerInstallOffset, installerRollbackOffset, installerStatusOffset, runtimeAllocationSize, runtimeBankEnd)
+import RamPushLayout (installerInstallOffset, installerRollbackOffset, installerStatusOffset, runtimeAllocationSize, runtimeInstallerBase)
 import RamPushModel
 
 contract :: ReviewedContract
@@ -58,8 +58,8 @@ main = do
           _ -> RamPushEntries (Address (start + installerInstallOffset)) (Address (start + installerRollbackOffset)) (Address (start + installerStatusOffset))
   check "every payload's entries match its compiled installer layout"
     (and [payloadEntries kind (Address at) == layoutEntries kind at | kind <- payloads, at <- alignedBases])
-  check "the bank installer starts at RamPushLayout's bank end"
-    (all (\at -> payloadInstallerStart bankD3Payload at == runtimeBankEnd at) alignedBases)
+  check "the bank installer uses RamPushLayout's separate installer base"
+    (all (\at -> payloadInstallerStart bankD3Payload at == runtimeInstallerBase at) alignedBases)
   check "the bank allocation is RamPushLayout's"
     (payloadAllocationSize bankD3Payload == fromIntegral runtimeAllocationSize)
 
