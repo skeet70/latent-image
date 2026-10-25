@@ -61,16 +61,22 @@ pub(crate) fn keys_released(inner: &Inner) -> PyResult<bool> {
     Ok(true)
 }
 
+/// Whether a key row's debounced level still read pressed when the physical hold ended; a row
+/// already reading released never latched the press. None for the sub-command dial.
 pub(crate) fn release(
     inner: &Inner,
     session: &Bound<'_, PyAny>,
     input: ReleaseInput,
     cap: u64,
-) -> PyResult<()> {
+) -> PyResult<Option<bool>> {
     inner.paused().map_err(crate::error)?;
     if !(1..=15_000_000).contains(&cap) {
         return Err(PyValueError::new_err("Release cap must be 1..15M instructions"));
     }
+    let latched = match input {
+        ReleaseInput::Key(_) => Some(!input.released(inner)?),
+        ReleaseInput::Subcommand => None,
+    };
     let board = session.getattr("board")?;
     let start = board.getattr("instructions")?.extract::<u64>()?;
     loop {
@@ -79,11 +85,11 @@ pub(crate) fn release(
             || !board.getattr("failure")?.is_none()
             || !session.getattr("execution_error")?.is_none()
         {
-            return Ok(());
+            return Ok(latched);
         }
         session.call_method1("_advance", ((cap - spent).min(RELEASE_POLL_INSTRUCTIONS),))?;
         if board.getattr("instructions")?.extract::<u64>()? == start + spent {
-            return Ok(());
+            return Ok(latched);
         }
     }
 }

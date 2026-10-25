@@ -16,7 +16,7 @@
       ["menu", 1, 5, 2],
       ["down", 1, 5, 3],
       ["down", 1, 5, 4],
-      ["down", 1, 5, 5],
+      ["down", 1, 5, 5, {"hold_instructions": 8000000, "release_instructions": 8000000}],
       ["down", 1, 5, 6],
       ["ok", 1, 254, 0]]},
     {"phase": "cc-icon-film-list-rows", "observe": true, "requires": ["cc-icon-film-list-open"], "capture": "cc-icon-film-list-row7", "steps": [

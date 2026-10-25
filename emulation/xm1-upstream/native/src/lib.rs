@@ -344,7 +344,7 @@ impl Machine {
         addresses.dedup();
         self.inner.set_breakpoints(core, addresses).map_err(error)
     }
-    fn release_menu_key(&self, session: &Bound<'_, PyAny>, key: &str, cap: u64) -> PyResult<()> {
+    fn release_menu_key(&self, session: &Bound<'_, PyAny>, key: &str, cap: u64) -> PyResult<Option<bool>> {
         menu::release(&self.inner, session, menu::ReleaseInput::parse(key)?, cap)
     }
     fn menu_keys_released(&self) -> PyResult<bool> {

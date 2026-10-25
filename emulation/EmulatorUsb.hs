@@ -26,7 +26,7 @@ module EmulatorUsb
   ) where
 
 import Control.Concurrent.MVar
-import Control.Exception (bracketOnError)
+import Control.Exception (IOException, bracketOnError, try)
 import Control.Monad (unless)
 import Data.Aeson (Result (..), Value (..), eitherDecodeStrict', encode, fromJSON, object, (.=))
 import qualified Data.Aeson.Key as K
@@ -171,9 +171,11 @@ emulatorSaveInstallCheckpoint emulator base manifest runtime host = Object <$> r
   [ "command" .= String "save-install-checkpoint", "base" .= ("0x" ++ showHex base "")
   , "manifest_sha256" .= manifest, "runtime_sha256" .= runtime, "host" .= host ])
 
+-- | A bridge that answered a command with an error has left its command loop; the failed
+-- `finish` is dropped so that error is the one reported.
 stopEmulator :: Emulator -> IO ()
 stopEmulator emulator = do
-  _ <- rpc emulator (object ["command" .= String "finish"])
+  _ <- try (rpc emulator (object ["command" .= String "finish"])) :: IO (Either IOException (M.KeyMap Value))
   hClose (emulatorInput emulator)
   hClose (emulatorOutput emulator)
   status <- waitForProcess (emulatorProcess emulator)
