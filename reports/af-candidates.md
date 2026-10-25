@@ -32,7 +32,7 @@ Prioritize the source-available contrast-controller ideas and the independent A1
 
 The request means move to the bounded position and obtain a new, settled measurement. A caller must bind the request ID, actual observation position and verified freshness/completion at acquisition before submitting `Sample`. `fresh` and `settled` are explicit adapter obligations, not values inferred from host elapsed time. Stale, missing and unsettled observations produce `Wait`, consume the step budget and cannot finish focus. A wrong matching position/request fails. Cancellation terminates the controller. A terminal controller returns the same terminal action without issuing another observation.
 
-- A0-structural instantiates the direction-search, peak-scan and three-position refinement structure decoded from X-M1 1.50. It uses hardware-observed Run-3 parameter-bank values for the mounted Viltrox lens; its unresolved lens increments and scalar statistic mapping remain synthetic. It is not a calibrated or bit-exact stock controller.
+- A0-structural instantiates the direction-search, peak-scan and three-position refinement structure decoded from X-M1 1.50. It uses hardware-observed Run-3 parameter-bank values for the mounted Viltrox lens; its unresolved lens increments and scalar statistic mapping remain synthetic. It does not reproduce stock convergence and is not usable as a controller reference until the increments and statistic units are bound.
 - A1 scans the full configured range at coarse increments, including the upper endpoint, then measures unvisited positions at fine increments in the clamped one-coarse-step bracket around the strongest coarse sample. It revisits the best observed position for final verification. This is stock-like coarse/fine search, not a reconstruction of X-M1 stock states or tables.
 - A2 uses the same full coarse scan. It fits an unequal-spacing three-point parabola around the strongest observation when curvature is negative, clamps the estimated peak to its sampled neighbours and requests that position if unvisited. Otherwise it halves the larger neighbouring interval. It stops when both gaps are within the fine step or no new integer position is available, then requests final verification. It never treats a local quadratic as a global scene model.
 - All three reject insufficient contrast span and a final verification score differing by more than the configured span threshold. These thresholds are artificial score units, not calibrated probabilities. A1/A2 can miss multi-peak structure narrower than their coarse spacing. A flat-curve refusal does not establish a general low-light confidence policy.
@@ -69,6 +69,40 @@ The three-position record corresponds to preceding, maximum and following sample
 | Fit arithmetic | Three positions; factors 2 and 10; rounding cutoff 4 | Fixed decoded arithmetic, not empirical tuning. |
 
 The model still assumes stable context, aliases the firmware's separate focus statistics to one synthetic score, seeds peak history with the last two direction samples and omits frame/episode warm-up. The first-episode scale `0x8783` is now observed as 4, but its transient/context path is not implemented. Bound termination, fit clamping, flat-curve refusal, final verification and the 64-sample/256-call limits are host safeguards, not recovered firmware termination semantics. With the observed direction-evidence threshold, the reduced controller exhausts its budget near the single/noisy peak; the threshold is not retuned to hide that limitation.
+
+#### Bounded convergence diagnosis
+
+The bounded check revisited the direction and peak decodes and stopped a host-adapter diagnostic after its first 12 observation requests on the synthetic single-peak fixture. No threshold, increment or host budget was changed. This was a simulated diagnostic, not a stock AF trace.
+
+| Apparent stock limit | Decoded behavior | What it establishes |
+| --- | --- | --- |
+| Direction-stall counter `0x016c11ae`, key `0x87d3` | `0x00f41c48` saturates the counter at `0xff`; the below-threshold branch clears the step and returns direction-search state `0x0d`. | A conditional stall-path count, not a whole-attempt sample or time limit. |
+| Direction-search counter `0x016c11ab`, key `0x8816` | `0x00f41c48` saturates the counter at `0xfe`; one at-threshold branch clears the step and returns `0x0d`, while other branches can enter peak search. | A state-local branch bound, not a globally terminating budget. |
+| Peak metadata guard `0x016c121c > 0xf7` | `0x00f42abc` calls `0x00f3e1cc` and returns peak-search state `0x0e`. | An early branch whose producer and units remain unbound, not a proven frame deadline. |
+| Peak history index `0x016c1e38` | `0x00f42abc` clamps it to `0xff` before writing the three history arrays and incrementing it. | A storage-index bound, not termination of the attempt. |
+
+No whole-attempt sample limit or elapsed-time limit is bound by this inspected routine pair. This agrees with the [static map's termination boundary](autofocus-static-map.md#3-search-decisions-and-constants); it does not establish that stock has no such limit elsewhere. None of these constants can replace the host's 64-sample cap as a decoded stock limit.
+
+The threshold holding this host search open is **direction evidence `0x8811 = 3`**, applied by the reduced model to consecutive rising observations. Every score in the diagnostic prefix selects the highest observed direction band. The synthetic base step 50 becomes `50 * 50 / 10 = 250`, then observed key `0x8776 = 30` caps it to `1000 / 30 = 33` synthetic position units. The public adapter requested this prefix; the evidence column is derived from `structural_direction`'s rise/reset predicate:
+
+| Request | Synthetic position | Synthetic score | Derived host rising evidence |
+| ---: | ---: | ---: | ---: |
+| 1 | 500 | 998631 | 0 |
+| 2 | 467 | 995079 | 0 |
+| 3 | 500 | 998631 | 1 |
+| 4 | 533 | 999963 | 2 |
+| 5 | 566 | 999135 | 0 |
+| 6 | 533 | 999963 | 1 |
+| 7 | 500 | 998631 | 0 |
+| 8 | 533 | 999963 | 1 |
+| 9 | 566 | 999135 | 0 |
+| 10 | 533 | 999963 | 1 |
+| 11 | 500 | 998631 | 0 |
+| 12 | 533 | 999963 | 1 |
+
+After the transient, the reduced transition rule repeats `533 -> 566 -> 533 -> 500 -> 533`: each decline reverses direction and clears the evidence. Evidence reaches only 2 initially and 1 in the repeating cycle, never 3. The peak phase is never entered, so neither its eight-decline threshold nor its 20-percent-plus-50-score-unit drop threshold keeps this case open. [INFERENCE] Raising the host sample budget alone would extend the cycle rather than produce convergence.
+
+The native `0x00f3c9f4` compares key `0x8811` against two directional counters, `0x016c11a7` and `0x016c11a6`, and has context-dependent alternate exits; this model's single consecutive-rise count is not an exact reconstruction of those branches. The bounded diagnostic distinguishes a nonconvergent reduced policy from an insufficient host cap. It does not isolate synthetic increments, statistic mapping and omitted stock transitions as independent causes. **A0-structural with observed thresholds and synthetic increments does not reproduce stock convergence. It is not usable as a reference until the increments and statistic units are bound and the reduced transitions are validated.** The observed thresholds remain unchanged.
 
 #### Bounded Run-3 parameter lead
 
@@ -187,7 +221,7 @@ An additional inline Rust replay fixture, tagged synthetic, samples `max(1, 2^(-
 
 ### Exercised simulated comparison
 
-The rerun of the five-fixture `//af:candidate-compare` command produced the table below after the alias correction and hardware-observed parameter update. Travel and errors are artificial position units. A0-structural now reaches the stronger depth in the two-depth example, but its reduced direction model exhausts the 64-sample budget on the single/noisy examples. Its mixed observed/synthetic profile differs from A1/A2; these figures cannot rank calibrated controllers or establish a camera improvement. A0-structural does not close §11.2's calibrated controller-reference requirement.
+The rerun of the five-fixture `//af:candidate-compare` command produced the table below after the alias correction and hardware-observed parameter update. Travel and errors are artificial position units. A0-structural now reaches the stronger depth in the two-depth example, but its reduced direction model exhausts the 64-sample budget on the single/noisy examples. The bounded diagnosis above identifies a repeating direction-search cycle, not evidence that stock needs a larger budget. Its mixed observed/synthetic profile differs from A1/A2; these figures cannot rank calibrated controllers or establish a camera improvement. A0-structural is not usable as §11.2's controller reference until its increments and statistic units are bound.
 
 | Origin | Curve | Candidate | Sample count | Simulated travel | Final-position error | Outcome |
 | --- | --- | --- | ---: | ---: | ---: | --- |
