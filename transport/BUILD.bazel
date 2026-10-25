@@ -11,13 +11,14 @@ _GHCOPTS = [
     "-XGHC2021",
 ]
 
-# The locked Nix libusb, resolved to its store path at build time. Nothing opens
-# it outside the live camera operations.
+# The locked Nix libusb's store path, read from the package's store-path file so
+# the action's key follows the store path. Nothing opens it outside the live
+# camera operations.
 genrule(
     name = "libusb-path",
-    srcs = ["@lab_libusb_runtime//:lib/libusb-1.0.so"],
+    srcs = ["@lab_libusb_runtime//:share/libusb-runtime/store-path"],
     outs = ["libusb_path.h"],
-    cmd = "printf '#define FUJI_LIBUSB_PATH \"%s\"\\n' \"$$(readlink -f $<)\" > $@",
+    cmd = "read -r runtime < $(location @lab_libusb_runtime//:share/libusb-runtime/store-path) && printf '#define FUJI_LIBUSB_PATH \"%s\"\\n' \"$$runtime\" > $@",
 )
 
 cc_library(
