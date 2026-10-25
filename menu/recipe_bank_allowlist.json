@@ -12,6 +12,11 @@
       "source": "menu/recipe_bank_storage.c #define RB_CURRENT"
     },
     {
+      "address": "0x0061ceac",
+      "name": "rb_call_snapshot_store",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_snapshot_store; X-M1 1.50 FUN_0061ceac stores FUN_0061cd14's 0x2c-byte frame snapshot by root and depth (reports/recipe-design.md section 17.13)"
+    },
+    {
       "address": "0x0061d514",
       "name": "RB_CONVERT",
       "source": "menu/recipe_bank_storage.c #define RB_CONVERT"

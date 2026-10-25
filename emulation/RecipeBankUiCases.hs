@@ -582,9 +582,9 @@ snapshotAccessor SnapshotNodeType = GuestAddress 0x0061d1a4
 snapshotAccessor SnapshotCursorToken = GuestAddress 0x0061d244
 snapshotAccessor SnapshotCurrentToken = GuestAddress 0x0061d294
 
--- The cells region starts at menuSnapshotCopy and ends at the case stack's top.
+-- Includes SELECT's depth-2 snapshot, root 1 at 0x009412d4 + 0x2c.
 cellsBase, cellsEnd :: Word32
-cellsBase = menuSnapshotCopy
+cellsBase = 0x00941300
 cellsEnd = 0x0095a000
 
 defaultsRowAddress :: Word32
@@ -709,6 +709,7 @@ abiWorkspaces in' e =
   -- restore to rewrite them.
   , at NavigationWorkspace (eCurrentRow e) 4
   , at NavigationWorkspace menuSnapshotCopy 0x2c
+  , at NavigationWorkspace 0x00941300 0x2c
   , area KernelWorkspace "kdata" 0 (B.length (inKbin in') - B.length (inKtext in'))
   , area MediaWorkspace "span-low" (0x970000 - 0x96cc64) (0x970800 - 0x96cc64)
   -- FUN_0061d9ec reloads only the ordinary block; the C record starts at +0x140.
@@ -919,6 +920,7 @@ specSet e epochBump = slotCases ++ otherCases
             , claimU32 e (out 3) 0xffffffff
             , claimU32 e (out 5) (selectToken row)
             , claimU32 e (out 6) (selectToken 0)
+            , claimU32 e (0x00941300 + 4 * 4) (selectToken 0)
             , claimU32 e (out 7) 0xffffffff
             , claimU32 e (out 8) 0xffffffff
             , claimU32 e (out 9) 0xffffffff
@@ -978,6 +980,7 @@ specSet e epochBump = slotCases ++ otherCases
             , WriteWord 0x015e4894 9
             , WriteWord 0x015e489c 9
             , ReadField (guestWord (eDrawRoot e)) 1 0
+            , Call (guestWord (snapshotAccessor SnapshotCurrentToken)) 1
             ]
         , spClaims =
             [ claimU32 e (eFrame e) (sub 2)
@@ -986,6 +989,7 @@ specSet e epochBump = slotCases ++ otherCases
             , claimU32 e stockPaneRecord 9
             , claimU32 e (stockPaneRecord + 4) (menuWord e (sub 2))
             , claimU32 e (stockPaneRecord + 8) 0
+            , claimU32 e (out 1) 0x82
             , claimAt e 0x980000 cardA
             , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
             ]
