@@ -5,7 +5,7 @@
 use fujimod_emulator::board::observation::MemoryWatch;
 use fujimod_xm1::adjustment::AdjustmentNand;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, menu_value, read, sha256, write};
-use fujimod_xm1::ff80::{Ff80, Transfer, encode_hex};
+use fujimod_xm1::ff80::{Ff80, SET_ADDRESS_RECOVERY, Transfer, encode_hex};
 use fujimod_xm1::guest::{RouteKey, set_adc};
 use fujimod_xm1::machine::KeyPulse;
 use fujimod_xm1::run::{self, RunDocument};
@@ -420,7 +420,7 @@ impl Server {
                 if !(1..=MAX_ENUMERATE).contains(&budget) {
                     return Err(format!("enumerate takes an activation budget of 1..{MAX_ENUMERATE} instructions"));
                 }
-                let (device, configuration) = self.bridge.enumerate_attached(budget)?;
+                let (device, configuration) = self.bridge.enumerate_attached(budget, SET_ADDRESS_RECOVERY)?;
                 self.collect(&BTreeSet::new())?;
                 json!({"device": encode_hex(&device), "configuration": encode_hex(&configuration),
                     "instructions": self.bridge.machine.instructions()})
