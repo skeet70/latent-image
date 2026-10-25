@@ -214,6 +214,59 @@ parsePlan p = do
       Number n -> pure (truncate n)
       _ -> fail "bad plan address"
 
+data BankPointer = BankGetter | BankSetter | BankSelectValues | BankSelectLabels
+
+bankPointers :: PlanWrite -> [(Int, BankPointer)]
+bankPointers w = case (pwRegion w, pwRole w) of
+  ("id4_code", "getter dispatch arm") -> [(0, BankGetter)]
+  ("id4_code", "setter dispatch arm") -> [(0, BankSetter)]
+  ("menu_values", "select list node header") -> [(0x20, BankSelectValues), (0x24, BankSelectLabels)]
+  _ -> []
+
+bankPointerSymbol :: BankPointer -> String
+bankPointerSymbol BankGetter = "rb_stage_edit_get_arm"
+bankPointerSymbol BankSetter = "rb_stage_edit_set_arm"
+bankPointerSymbol BankSelectValues = "rb_select_values"
+bankPointerSymbol BankSelectLabels = "rb_select_labels"
+
+usedPlanWrite :: PlanWrite -> Bool
+usedPlanWrite w =
+  pwRegion w `elem` menuRegions
+    || (pwRegion w == "id4_code" && (within 0x61c1fc 0x646c9c || within 0x774f48 tablesEditEnd))
+    || (pwRegion w == "image5" && within 0xcd1ae4 0xcd24e4)
+  where
+    within lo hi = pwAddress w >= lo && toInteger (pwAddress w) + toInteger (B.length (pwNew w)) <= toInteger hi
+
+validateBankPlan :: Syms -> [PlanWrite] -> IO ()
+validateBankPlan syms = mapM_ check . filter usedPlanWrite
+  where
+    check w = do
+      let pointers = bankPointers w
+          bytes = pwNew w
+      forM_ pointers $ \(offset, pointer) -> do
+        let name = bankPointerSymbol pointer
+            expected = u32le (fromIntegral (addr syms name))
+            actual = B.take 4 (B.drop offset bytes)
+        unless (actual == expected) $
+          fail ("bank-plan pointer at " ++ hex (fromIntegral (pwAddress w) + fromIntegral offset) ++ " does not match " ++ name
+            ++ ": expected " ++ hexB expected ++ ", got " ++ hexB actual)
+      when (any kernelCode [readU32 bytes offset | offset <- [0, 4 .. B.length bytes - 4], offset `notElem` map fst pointers]) $
+        fail ("unbound bank-plan code pointer in " ++ pwRole w ++ " at " ++ hex (fromIntegral (pwAddress w)))
+    kernelCode value =
+      addr syms "__rb_image_start" <= toInteger value && toInteger value < addr syms "__rb_text_end"
+
+bindBankPlan :: FilePath -> FilePath -> FilePath -> IO ()
+bindBankPlan build source output = do
+  syms <- parseSyms (build </> "kernel.syms")
+  plan <- parsePlan source
+  let bind w = w { pwNew = overlay (pwNew w)
+        [(offset, u32le (fromIntegral (addr syms (bankPointerSymbol pointer)))) | (offset, pointer) <- bankPointers w] }
+      bound = map bind plan
+  validateBankPlan syms bound
+  BL.writeFile output (encode (object ["writes" .=
+    [ object ["region" .= pwRegion w, "address" .= pwAddress w, "new" .= hexB (pwNew w), "role" .= pwRole w]
+    | w <- bound ]]))
+
 menuRegions :: [String]
 menuRegions = ["menu_values", "menu_labels", "menu_parent", "name_records", "edit_half"]
 
@@ -2371,6 +2424,7 @@ loadInputs build planPath id4Path id4Base id5Path fieldsPath nameRecordArg kerne
   let id4 = B.drop (fromIntegral (0x61c400 - id4Base)) id4Raw
   id5 <- B.readFile id5Path
   plan <- parsePlan planPath
+  validateBankPlan ks plan
   fieldsRaw <- B.readFile fieldsPath
   let jsonFields = parseFields fieldsRaw
       halfProps = [0x1cb, 0x1cc] :: [Word32]
@@ -2604,6 +2658,16 @@ findingsText specs results =
 main :: IO ()
 main = do
   args <- getArgs
+  case args of
+    ["bind-plan", "--build", build, "--plan", source, "--out", output] ->
+      bindBankPlan build source output
+    ["check-plan", "--build", build, "--plan", source] -> do
+      syms <- parseSyms (build </> "kernel.syms")
+      parsePlan source >>= validateBankPlan syms
+    _ -> runCases args
+
+runCases :: [String] -> IO ()
+runCases args = do
   let opt n = lookup n [(drop 2 a, b) | (a, b) <- pair args]
       pair (a : b : r) = (a, b) : pair r
       pair _ = []

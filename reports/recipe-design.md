@@ -570,6 +570,8 @@ Verb pages have no current setting. Before their pane draw, the bank sets `RB_UI
 
 The new `0x0061ceac` stock call is admitted explicitly in `menu/recipe_bank_allowlist.json`. That allowlist change is a mechanism revision under governance section 3.2, even though the bank assembly, actions and header are bank-content pins. Independent review and the owner's visual check remain required before a live run. `emulation/ram-push-select-feedback-trajectories.json` is the cardless C1-to-NONE feedback trajectory; its captures and raw stock snapshot/animation reads are private emulator evidence, not camera acceptance.
 
+The native UI fixture binds its getter/setter callbacks and SELECT value/label arrays from the current kernel symbols before execution. The generator refuses stale declared bank pointers and unbound bank-code pointers. Its refusal tests use synthetic plans and require no private firmware. At JOBS=4, the updated branch and unchanged main `3525e2e` both pass 52/55 cases with the same three `stub_contract` failures; comparison details live in `private-data/analysis/select-blink-83/ui-main-comparison.json`.
+
 ## 18. Persistent custom-bank selection (owner decision supplied as 2026-10-19)
 
 ### 18.1 Contract and evidence boundary

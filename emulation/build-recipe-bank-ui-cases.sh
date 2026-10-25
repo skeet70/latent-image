@@ -96,6 +96,7 @@ for pair in a:ui-a b:ui-b c:ui-c; do
   llvm-objcopy -j ".text.${pair%%:*}" -O binary "$BUILD_DIR/ui-model.elf" "$BUILD_DIR/${pair##*:}.bin"
 done
 
-"$GEN" --runner "$RUNNER" --build "$BUILD_DIR" --out "$OUT_DIR" --plan "$PLAN" --jobs "$JOBS" \
+"$GEN" bind-plan --build "$BUILD_DIR" --plan "$PLAN" --out "$BUILD_DIR/bank-plan-ui.json"
+"$GEN" --runner "$RUNNER" --build "$BUILD_DIR" --out "$OUT_DIR" --plan "$BUILD_DIR/bank-plan-ui.json" --jobs "$JOBS" \
   --name-record "${RB_NAME_RECORD%u}" --rb-base "$RB_BASE" \
   --id4 "$ID4" --id4-base "$ID4_BASE" --id5 "$ID5" --fields "$FIELDS"
