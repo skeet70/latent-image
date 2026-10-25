@@ -612,7 +612,6 @@ haskell_test(
         "ram-push-review.json",
     ],
     ghcopts = _GHCOPTS,
-    tags = ["manual"],
     deps = _GATE_DEPS,
 )
 
@@ -641,7 +640,6 @@ haskell_test(
         "ram-push-cc-review.json",
     ],
     ghcopts = _GHCOPTS,
-    tags = ["manual"],
     deps = _GATE_DEPS,
 )
 
@@ -670,7 +668,6 @@ haskell_test(
         "ram-push-cc-icon-review.json",
     ],
     ghcopts = _GHCOPTS,
-    tags = ["manual"],
     deps = _GATE_DEPS,
 )
 
