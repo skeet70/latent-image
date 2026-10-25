@@ -176,10 +176,12 @@ runTrajectory :: Emulator -> [Segment] -> IO ([Value], Bool)
 runTrajectory emulator segments = do
   results <- forM segments $ \segment -> do
     mode <- traverse (emulatorModeDial emulator) (segmentModeDial segment)
-    steps <- forM (segmentSteps segment) $ \step -> do
-      let key = stepKey step
-      response <- emulatorKey emulator (stepTiming step) key
-      pure (object ["key" .= key, "response" .= response, "accepted" .= True], key == "half-press")
+    steps <- forM (segmentSteps segment) $ \step -> case stepKey step of
+      "half-press" -> pure (object ["key" .= stepKey step, "accepted" .= False
+        , "unsupported" .= String "The retained MenuKey API has no shutter half-press binding; sending this key terminates its bridge. See issue #102 and e2e-fifth."], False)
+      key -> do
+        response <- emulatorKey emulator (stepTiming step) key
+        pure (object ["key" .= key, "response" .= response, "accepted" .= True], False)
     pure (object ["phase" .= segmentPhase segment, "mode_dial" .= mode, "steps" .= map fst steps], any snd steps)
   pure (map fst results, any snd results)
 
@@ -286,8 +288,9 @@ run options = do
               , "global_monitor_relied_on" .= False
               ]
           , "every_event_cpu0_validated" .= all ((== AfCpu0) . eventCore) (ringEvents result)
-          , "missing_input" .= (if genuine then Null else
-              String "S1 is bound to the stock input scanner. The declared model has no initialized lens, and its default SHOOT WITHOUT LENS OFF interlock remains active. X-M1 lens attach/replies and non-synthetic statistics remain required; see reports/autofocus-static-map.md.")
+          , "missing_input" .= (if genuine then Null else if halfPressAccepted
+              then String "The half-press request was accepted but no new AF hook events reached the ring within its bounded pulse. The bridge session receipt and trajectory record the supplied inputs; a working ordinary AF statistic/lens-response producer is not established by this run."
+              else String "The retained ram-push bridge routes key requests through emulator/menu_inputs.py MenuKey, which has no shutter half-press binding. The unsupported input is flagged without sending the bridge-terminating request. No ordinary AF statistic producer or lens response was added by this runner.")
           , "capture_contract" .= String "best-effort bulk capture, not a coherent snapshot; shared decoder validates header and slot sequences"
           , "result" .= afRingValue result, "unload" .= String "mandatory after capture; see unload journals and e2e-complete.json" ])
     writeJson (receipt </> "e2e-complete.json") (object ["unloaded" .= True, "allocation_retained_until_power_off" .= True])

@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 const KEY_TABLE: usize = 0x0082_8120;
 const RELEASE_POLL_INSTRUCTIONS: u64 = 250_000;
 /// Menu key names and their KEY_TABLE rows.
-const KEY_ROWS: [(&str, usize); 11] = [
+const KEY_ROWS: [(&str, usize); 10] = [
     ("up", 14),
     ("down", 15),
     ("left", 16),
@@ -16,7 +16,6 @@ const KEY_ROWS: [(&str, usize); 11] = [
     ("play", 12),
     ("fn", 13),
     ("dial-push", 22),
-    ("half-press", 5),
 ];
 
 pub(crate) struct KeyRow(usize);

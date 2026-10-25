@@ -37,7 +37,6 @@ class MenuKey(str, Enum):
     DIAL_PUSH = 'dial-push'
     DIAL_LEFT = 'dial-left'
     DIAL_RIGHT = 'dial-right'
-    HALF_PRESS = 'half-press'
 
     @classmethod
     def parse(cls, value):
@@ -57,7 +56,6 @@ class KeyCode(IntEnum):
     DOWN = 0x03
     LEFT = 0x04
     RIGHT = 0x05
-    S1 = 0x07
     BACK = 0x09
     PLAY = 0x0b
     FN = 0x28
@@ -124,11 +122,6 @@ class GpioBinding:
 
 
 @dataclass(frozen=True)
-class ShutterBinding(GpioBinding):
-    pass
-
-
-@dataclass(frozen=True)
 class DialBinding:
     code: KeyCode
     phases: tuple[tuple[GpioLevel, GpioLevel], ...]
@@ -158,7 +151,6 @@ KEY_RECORDS = {
     MenuKey.Q: AdcBinding(KeyCode.Q, 19, AdcChannel.BUTTONS, CalibrationTag.Q_LOW, CalibrationTag.Q_HIGH),
 }
 GPIO_KEY_RECORDS = {
-    MenuKey.HALF_PRESS: ShutterBinding(KeyCode.S1, 5, 0, 2, 0),
     MenuKey.PLAY: GpioBinding(KeyCode.PLAY, 12, 2, 9, 0),
     MenuKey.FN: GpioBinding(KeyCode.FN, 13, 0, 11, 0),
     MenuKey.DIAL_PUSH: GpioBinding(KeyCode.DIAL_PUSH, 22, 0, 10, 0),
@@ -438,12 +430,9 @@ class MenuInputs:
     def _gpio_record(self, binding):
         record = _raw(self.board, binding.address, 28)
         target = int.from_bytes(record[12:16], 'little')
-        predicate = (record[9] == 4 and target == binding.pin
-                     and struct.unpack_from('<2H', record, 16) == (1, 0x1f)
-                     if isinstance(binding, ShutterBinding) else
-                     record[9] == 2 and target == (binding.port << 16 | binding.pin)
-                     and struct.unpack_from('<H', record, 0x12)[0] == binding.pressed_level)
-        if int.from_bytes(record[:4], 'little') != binding.code or not predicate:
+        pressed = struct.unpack_from('<H', record, 0x12)[0]
+        if (int.from_bytes(record[:4], 'little') != binding.code or record[9] != 2 or
+                target != (binding.port << 16 | binding.pin) or pressed != binding.pressed_level):
             raise ValueError('GPIO key record does not match X-M1 1.50: ' + binding.code.name)
 
     def _dial_record(self):
@@ -531,9 +520,6 @@ class MenuInputs:
         if isinstance(binding, DialBinding):
             self.phase(0)
             return None
-        if isinstance(binding, ShutterBinding):
-            from .boot_devices import SHUTTER_IRQ_PROFILE
-            self.controls.configure_shutter_irq_profile(SHUTTER_IRQ_PROFILE)
         if isinstance(binding, GpioBinding):
             self._gpio(binding, True)
             return None
