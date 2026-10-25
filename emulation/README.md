@@ -575,6 +575,20 @@ Bridge primitives added for this driver: `--toggle-server` with `run` (bounded, 
 
 Model boundary: the endpoint model raises no controller event when the cable level drops. The transport driver samples the presence bit `0xfff55104[31]` (`0x00d7b98c`) only while its state word `0x0146a180` is 0..4 (`0x00d81d04`), so a detach after a PTP start (state 8) or after enumeration (state `0xa`) never reaches connect handler A. Detach edges are observable only after an unenumerated `ff80` start; the `e5u` scenarios exercise the E5 edge sequence that way and the `e4e5` scenarios record the boundary.
 
+### USB toggle on FujiMod
+
+`//emulation:usb-toggle-emu -- --fujimod ...` serves the same primitives from `fujimod-xm1-toggle` (crate `emulation/fujimod-xm1`, built by `@lab_fujimod_xm1`) on jitl (justjake)'s FujiMod runtime, with the R4F guard armed. It takes the same `--runs`, `--dats`, `--fresh-boot` and `--warm-checkpoints` options and refuses `--fixed-scene-frame`. Route checkpoints are FujiMod snapshots under `private-data/emulator-checkpoints/xm1-usb-toggle-fujimod/`; the bridge keys them on the launcher's route description, the DAT, NAND, run document, boot ROM and its own binary, and echoes the key in `start-options`. Each receipt and `summary.json` name the `engine`.
+
+The FujiMod mapping:
+- the cable level is the run document's `usb_cable` logic input, and `--adc-at-reset` sets a raw sample before the first instruction;
+- `state` reports `asserted_keys` as the ADC keys whose calibrated interval holds their channel's sample, and `inputs_ready` as the scanner-registered word;
+- `enumerate` waits for controller activation within the budget, then enumerates with no descriptor expectation; the host waits 1,000,000 instructions after SetAddress's status stage, standing for USB 2.0's 2 ms recovery interval (without it, the CC+toggle configuration-descriptor request after a Q-held attach went unanswered);
+- the access probe is FujiMod's memory watch over the extent. Its CPU records are converted to the retained probe's count (instructions executed before the access, one less than FujiMod's entered count), and a fetch FujiMod records twice at one count is kept once. Model transfers carry no PC or count.
+
+`bazel run //emulation:e2e-observation-compare -- RETAINED_RECEIPTS FUJIMOD_RECEIPTS` compares two usb-toggle-emu receipt directories: the scenario list, each result and failed-check list, and each whole `receipt.json`. Besides the e2e rule's timing fields it leaves out `virtual_ticks`, the engine name, the emulator's checkpoint identity and directories, the probe's `image_wide_transfers_covering_extent` (each engine's device models make different transfers), the C0 session id `sid` (it differs between hardware sessions too) and an attach's `cells_after_start` (the cells at the first settle round the personality predicate accepts, a moment set by guest timing). Both directories need the same checkpoint state, so run both engines with `--fresh-boot`.
+
+Observed 2026-10-24 (emulated), all families on six DATs: FujiMod 6.4 min and retained 23.8 min, each with 29 passes and 6 blocked scenarios. The retained runs block at the model boundary above (`e4e5`, `e5u-cycle`); before the SetAddress wait, FujiMod's `e4e5` on cc-toggle and cc-icon-toggle blocked earlier, at that configuration-descriptor request. Besides boot records that differed by checkpoint state, the comparison found five classes, since fixed or exempted as above: probe counts, `asserted_keys`, that request, `sid` and `cells_after_start`. A full-run pair with `--fresh-boot` on both engines has not been compared yet. With the fixes, the rerun `e4e5` and `e6` scenarios on cc-toggle and rc0-toggle block and pass as the retained ones do, and differ only in their boot records.
+
 ## Flash-image boot check
 
 `//emulation:flash-boot-check` checks that an exact flash image boots to the stock menus in the full-system emulator. A flash image, such as a `//extensions:build-extension` output, must pass it before a flash go ([camera-run procedure](../spec/07-governance-and-handoff.md#3-camera-runs)).

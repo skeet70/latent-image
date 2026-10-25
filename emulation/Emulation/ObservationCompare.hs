@@ -22,9 +22,12 @@ import qualified Data.Vector as V
 e2eIgnored :: [K.Key]
 e2eIgnored = ["seconds", "instructions", "virtual_ticks", "sp", "path", "frame_number", "sha256"]
 
--- | The access probe's device-model transfers come from each engine's own models.
+-- | Also the access probe's device-model transfers, which come from each engine's own models;
+-- the C0 session id, which differs between hardware sessions too; and an attach's cells at the
+-- first settle round its personality predicate accepts, a moment set by guest timing.
 toggleIgnored :: [K.Key]
-toggleIgnored = e2eIgnored ++ ["engine", "emulator", "directory", "image_wide_transfers_covering_extent"]
+toggleIgnored = e2eIgnored ++
+  [ "engine", "emulator", "directory", "image_wide_transfers_covering_extent", "sid", "cells_after_start" ]
 
 converts :: [T.Text] -> Bool
 converts = elem "cc-entry-settings-converter"
