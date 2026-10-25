@@ -25,6 +25,10 @@ path = "src/toggle.rs"
 name = "fujimod-xm1-provenance"
 path = "src/provenance_main.rs"
 
+[[bin]]
+name = "fujimod-xm1-updater"
+path = "src/updater.rs"
+
 # build-support/fujimod-xm1.nix places FujiMod's source at ../fujimod.
 [dependencies]
 fujimod-catalog = { path = "../fujimod/crates/catalog" }
@@ -32,6 +36,7 @@ fujimod-emulator = { path = "../fujimod/crates/emulator" }
 fujimod-emulator-cpu = { path = "../fujimod/crates/emulator-cpu" }
 fujimod-emulator-devices = { path = "../fujimod/crates/emulator-devices" }
 fujimod-emulator-ip = { path = "../fujimod/crates/emulator-ip" }
+fujimod-emulator-exr2-system = { path = "../fujimod/crates/emulator-exr2-system" }
 fujimod-emulator-exr2-board = { path = "../fujimod/crates/emulator-exr2-board" }
 fujimod-emulator-exr2-plan = { path = "../fujimod/crates/emulator-exr2-plan" }
 fujimod-emulator-models = { path = "../fujimod/crates/emulator-models" }

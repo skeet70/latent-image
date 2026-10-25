@@ -21,6 +21,8 @@ fujimod.passthru.rustPlatform.buildRustPackage {
   sourceRoot = "fujimod-xm1-workspace/fujimod-xm1";
   cargoLock.lockFile = ../emulation/fujimod-xm1/Cargo.lock;
   nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config ];
+  # nand_image.rs links zlib for retained-identical committed NAND exports.
+  buildInputs = [ pkgs.zlib ];
   dontUseCmakeConfigure = true;
   # store-path holds $out, so Bazel actions keyed on it change with the store path.
   postInstall = ''
