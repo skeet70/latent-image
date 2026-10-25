@@ -243,6 +243,9 @@ struct Attachment {
 fn attach(machine: Machine, rendezvous: RendezvousInputs, hold: Option<RouteKey>) -> Result<(Ff80, Attachment), String> {
     let mut bridge = Ff80::new(machine, rendezvous);
     bridge.advance(FIRST_START_SCREEN.saturating_sub(bridge.machine.instructions()))?;
+    if rendezvous == RendezvousInputs::MenuUpAndWriteProtect && !bridge.machine.card_present()? {
+        return Err("the SD host does not read the inserted card as present".into());
+    }
     for key in [RouteKey::Up; 12].into_iter().chain([RouteKey::Ok, RouteKey::Ok]) {
         bridge.key(key, FIRST_START_PULSE)?;
     }

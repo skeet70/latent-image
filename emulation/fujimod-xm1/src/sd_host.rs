@@ -1,19 +1,21 @@
 //! The retained engine's SD0 host and declared blank SDHC card
-//! (`emulator/sd_card.py`, `SDCardController`), with the `0xfff5002c` clock
-//! word of `emulator/boot_devices.py` (`BootControls`). Card identity,
-//! capacity and transfer latency are declared, unmeasured inputs; MMC,
-//! UHS/tuning and erase refuse.
+//! (`emulator/sd_card.py`, `SDCardController`). Card identity, capacity and
+//! transfer latency are declared, unmeasured inputs; MMC, UHS/tuning and
+//! erase refuse. The `0xfff5002c` clock word keeps the law of the plan's
+//! former `sd_clocks` node, FujiMod's `sdhci::Clocks`: stable after
+//! `clock_ticks`, bits 3-5 refused.
 //!
 //! Not ported: the retained host's check of the interrupt controller's
 //! line-78 programming, and its media-failure controls.
 
+use crate::run::NodeName;
 use fujimod_emulator_devices::exr2::gpio::Pads;
 use fujimod_emulator_devices::graph::Mapping;
 use fujimod_emulator_devices::parts::pins::{InputPins, Pin};
 use fujimod_emulator_devices::parts::sd_card::{self, Card, SECTOR};
 use fujimod_emulator_devices::{Cx, Device};
 use fujimod_emulator_exr2_plan::{Adapter, Resources};
-use crate::run::NodeName;
+use fujimod_emulator_ip::sdhci::Clocks;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -97,6 +99,7 @@ struct Options {
     protect: Pin,
     ram_bytes: u64,
     transfer_ticks: u64,
+    clock_ticks: u64,
     sectors: u32,
     max_dirty_sectors: usize,
     rca: u16,
@@ -252,7 +255,9 @@ pub struct SdHost {
     card: Card,
     image: Option<MediaImage>,
     regs: Registers,
+    /// The guest-written `+0x2c` control, without the stable bit.
     clock: u16,
+    clocks: Clocks,
     state: CardState,
     block_length: u32,
     bus_width: u8,
@@ -274,6 +279,7 @@ impl SdHost {
             return Err("SD detect and protect must use distinct pads".into());
         }
         let card = Card::new(sd_card::Options { sectors: options.sectors, max_dirty_sectors: options.max_dirty_sectors })?;
+        let clocks = Clocks::new(&[(BASE + CLOCK, options.clock_ticks)])?;
         Ok(Self {
             options,
             contacts,
@@ -282,6 +288,7 @@ impl SdHost {
             image: None,
             regs: Registers([0; 132]),
             clock: 0,
+            clocks,
             state: CardState::Idle,
             block_length: 512,
             bus_width: 1,
@@ -311,7 +318,7 @@ impl SdHost {
         &self.card
     }
 
-    fn present(&self) -> Result<bool, String> {
+    pub fn present(&self) -> Result<bool, String> {
         Ok(!self.contacts.level(self.options.detect)?)
     }
 
@@ -917,6 +924,7 @@ impl Device for SdHost {
         image: Option<MediaImage>,
         regs: Registers,
         clock: u16,
+        clocks: Clocks,
         state: CardState,
         block_length: u32,
         bus_width: u8,
@@ -930,7 +938,7 @@ impl Device for SdHost {
     fn fingerprint(&self) -> Result<serde_json::Value, String> {
         Ok(serde_json::json!({
             "card": self.card.fingerprint(), "image": self.image, "registers": self.regs.0.as_slice(),
-            "clock": self.clock, "state": self.state, "block_length": self.block_length, "bus_width": self.bus_width,
+            "clock": self.clock, "clocks": self.clocks.save(), "state": self.state, "block_length": self.block_length, "bus_width": self.bus_width,
             "application_pending": self.application_pending, "request": self.request, "response": self.response,
             "counters": self.counters, "history": self.history,
         }))
@@ -943,7 +951,7 @@ impl Device for SdHost {
     fn read(&mut self, cx: &mut Cx<'_>, address: u64, size: u8) -> u64 {
         let offset = address.wrapping_sub(BASE);
         if offset == CLOCK && size == 2 {
-            return u64::from(if self.clock & 1 != 0 { self.clock | 2 } else { self.clock });
+            return self.clocks.read(cx, address, size);
         }
         if !Self::admitted(offset, size) {
             cx.unsupported(format!("Unknown SD0 register/access {address:#x}/{size}"));
@@ -964,8 +972,15 @@ impl Device for SdHost {
 
     fn write(&mut self, cx: &mut Cx<'_>, address: u64, size: u8, value: u64) {
         let offset = address.wrapping_sub(BASE);
-        if offset == CLOCK && size == 2 && value <= u64::from(u16::MAX) {
-            self.clock = value as u16 | if value & 1 != 0 { 2 } else { 0 };
+        if offset == CLOCK && size == 2 {
+            if self.request.is_some() {
+                cx.fail("SD clock changed during an active transaction");
+                return;
+            }
+            self.clocks.write(cx, address, size, value);
+            if cx.refusal().is_none() {
+                self.clock = value as u16 & !2;
+            }
             return;
         }
         if !Self::admitted(offset, size) || value >> (8 * u32::from(size)) != 0 {
@@ -986,13 +1001,15 @@ impl Device for SdHost {
     }
 
     fn advance(&mut self, cx: &mut Cx<'_>) {
+        self.clocks.advance(cx);
         if let Err(error) = self.complete(cx) {
             cx.fail(error);
         }
     }
 
     fn next_deadline(&self, now: u64) -> Option<u64> {
-        self.request.as_ref().and_then(|request| request.due).map(|(at, _)| at.max(now))
+        let transfer = self.request.as_ref().and_then(|request| request.due).map(|(at, _)| at.max(now));
+        transfer.into_iter().chain(self.clocks.next_deadline(now)).min()
     }
 
     fn pollable(&self, address: u64, size: u8) -> bool {
@@ -1155,6 +1172,7 @@ mod tests {
                 protect: PROTECT,
                 ram_bytes: 0x10_0000,
                 transfer_ticks: 100,
+                clock_ticks: 2,
                 sectors: 0x80_0000,
                 max_dirty_sectors: 65536,
                 rca: 0x1234,
@@ -1328,12 +1346,15 @@ mod tests {
     }
 
     #[test]
-    fn clock_reports_stable_once_enabled() {
+    fn clock_reports_stable_after_its_settling_ticks() {
         let mut rig = Rig::new();
         rig.write(CLOCK, 2, 0x8001).unwrap();
+        assert_eq!(rig.read(CLOCK, 2), 0x8001);
+        rig.elapse();
         assert_eq!(rig.read(CLOCK, 2), 0x8003);
         rig.write(CLOCK, 2, 0).unwrap();
         assert_eq!(rig.read(CLOCK, 2), 0);
+        assert!(rig.write(CLOCK, 2, 0x8).is_err());
     }
 
     #[test]

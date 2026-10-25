@@ -1072,6 +1072,7 @@
           "adapter": {
             "implementation": "xm1-retained-sd-host",
             "options": {
+              "clock_ticks": 2,
               "detect": {
                 "pin": 7,
                 "port": 12

@@ -31,6 +31,7 @@ fujimod-catalog = { path = "../fujimod/crates/catalog" }
 fujimod-emulator = { path = "../fujimod/crates/emulator" }
 fujimod-emulator-cpu = { path = "../fujimod/crates/emulator-cpu" }
 fujimod-emulator-devices = { path = "../fujimod/crates/emulator-devices" }
+fujimod-emulator-ip = { path = "../fujimod/crates/emulator-ip" }
 fujimod-emulator-exr2-board = { path = "../fujimod/crates/emulator-exr2-board" }
 fujimod-emulator-exr2-plan = { path = "../fujimod/crates/emulator-exr2-plan" }
 fujimod-emulator-models = { path = "../fujimod/crates/emulator-models" }

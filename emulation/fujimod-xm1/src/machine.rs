@@ -247,16 +247,18 @@ impl Machine {
         self.session.board.inspect_device::<SdHost, _>(node, |host| Ok(host.contacts()))
     }
 
-    /// Inserts `card` into the unexecuted SD host and drives card detect low.
+    /// Inserts `card` into the unexecuted SD host and requests card detect low; the GPIO
+    /// applies the request once the board runs.
     pub fn insert_card(&mut self, card: RetainedCard) -> Result<(), String> {
         let node = self.session.node(&self.document.sd.0)?;
         self.session.board.edit_device::<SdHost, _>(node, |host| host.insert(card))?;
         let Contacts { gpio, detect, .. } = self.card_contacts()?;
-        self.session.gpio(&gpio.0, detect.port, detect.pin, false)?;
-        if self.session.gpio_level(&gpio.0, detect.port, detect.pin)? {
-            return Err("the SD card detect pad did not settle low".into());
-        }
-        Ok(())
+        self.session.gpio(&gpio.0, detect.port, detect.pin, false)
+    }
+
+    pub fn card_present(&self) -> Result<bool, String> {
+        let node = self.session.node(&self.document.sd.0)?;
+        self.session.board.inspect_device::<SdHost, _>(node, |host| host.present())
     }
 
     /// Drives the SD host's write-protect pad.
