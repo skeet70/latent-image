@@ -32,23 +32,63 @@ Prioritize the source-available contrast-controller ideas and the independent A1
 
 The request means move to the bounded position and obtain a new, settled measurement. A caller must bind the request ID, actual observation position and verified freshness/completion at acquisition before submitting `Sample`. `fresh` and `settled` are explicit adapter obligations, not values inferred from host elapsed time. Stale, missing and unsettled observations produce `Wait`, consume the step budget and cannot finish focus. A wrong matching position/request fails. Cancellation terminates the controller. A terminal controller returns the same terminal action without issuing another observation.
 
+- A0-structural instantiates the direction-search, peak-scan and three-position refinement structure decoded from X-M1 1.50. Its parameters and scalar statistic mapping remain synthetic. It is not a calibrated or bit-exact stock controller.
 - A1 scans the full configured range at coarse increments, including the upper endpoint, then measures unvisited positions at fine increments in the clamped one-coarse-step bracket around the strongest coarse sample. It revisits the best observed position for final verification. This is stock-like coarse/fine search, not a reconstruction of X-M1 stock states or tables.
 - A2 uses the same full coarse scan. It fits an unequal-spacing three-point parabola around the strongest observation when curvature is negative, clamps the estimated peak to its sampled neighbours and requests that position if unvisited. Otherwise it halves the larger neighbouring interval. It stops when both gaps are within the fine step or no new integer position is available, then requests final verification. It never treats a local quadratic as a global scene model.
-- Both reject insufficient contrast span and a final verification score differing by more than the configured span threshold. These thresholds are artificial score units, not calibrated probabilities. Multi-peak structure narrower than the coarse spacing can be missed by both candidates. A flat-curve refusal does not establish a general low-light confidence policy.
+- All three reject insufficient contrast span and a final verification score differing by more than the configured span threshold. These thresholds are artificial score units, not calibrated probabilities. A1/A2 can miss multi-peak structure narrower than their coarse spacing. A flat-curve refusal does not establish a general low-light confidence policy.
 
 ### Arithmetic and resource contract
 
 Positions use a `u16` newtype; scores are validated into 0 through 1,000,000. Configuration requires ordered limits, `1 <= fine <= coarse <= range`, a positive contrast span and a sample budget between 3 and 64. There are 64 fixed history slots and at most 256 nonterminal step calls. Accepted samples, including final verification, consume the sample budget; waits consume the step budget. No decision-path allocation, I/O, image crops, recursion, floating point or mutable globals are used.
 
-Position additions/subtractions saturate before clamping. Curve fitting converts differences to signed `i64`; with these score/position bounds its products remain below 2^54. Division truncates towards zero; the fitted integer is clamped before conversion to `u16`. A1 searches at most 65 successive grid positions in one refinement call before finding an unmeasured point or exhausting the visited grid; each membership test checks at most 64 slots. A2 scans the bounded history for its local neighbours. State/history sizes and iteration bounds are explicit; exact ABI layout, compiled text size, stack high-water, integer-division lowering and execution time still require the actual target toolchain. No FPU, SIMD, cache size or available camera CPU budget is assumed.
+Position additions/subtractions saturate before clamping. A2 converts differences to signed `i64`; its products remain below 2^54. A0-structural's absolute-position polynomial and tenths rounding remain below 2^58 under the shared score/position bounds. Its source-bound decimal rounding differs from A2's truncation. Fitted positions are clamped before conversion to `u16`. A1 searches at most 65 grid positions in a refinement call, checking at most 64 history slots per membership test. A2 and A0-structural scan bounded history. Exact target ABI, text size, stack high-water, division lowering and execution time remain unmeasured. No FPU, SIMD, cache size or available camera CPU budget is assumed.
 
-The host-only stdio executable uses the same library with range 0 through the supplied curve maximum, coarse step 125, fine step 10, 64 samples and contrast span 100. It parses `CANDIDATE1 A1|A2 maximum`, emits `OBSERVE request position` and consumes one bounded score per request. `FINISH position samples` and `FAIL reason samples` terminate. The host adapter models each observation as fresh and settled; it does not implement real movement/completion semantics.
+The host-only stdio executable uses range 0 through the supplied curve maximum, 64 samples and contrast span 100. A1/A2 use coarse step 125 and fine step 10; A0-structural uses the separate synthetic parameter profile below. It parses `CANDIDATE2 A0-structural|A1|A2 maximum initial_position`, emits `OBSERVE request position` and consumes one bounded score per request. `FINISH position samples` and `FAIL reason samples` terminate. All candidates receive the fixture's initial position; A1/A2 deliberately begin their full-range scan at the low bound. The adapter supplies fresh, settled synthetic observations, not a camera movement/completion contract.
+
+### A0-structural: decode-bound policy and parameter gap
+
+The structural model is [original Rust decision code](../af/candidates/structural.rs), not copied firmware. Its anchors are [the static AF map](autofocus-static-map.md#3-search-decisions-and-constants), [the observation plan](af-observation-plan.md), and the private per-function decodes under `private-data/analysis/x-m1-1.50/af/functions/`. The decoded id5 image is SHA-256 `3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a`. Source addresses identify X-M1 1.50 code, not target hooks installed by this change.
+
+The explicit phases are direction search, peak scan, fitted-target observation and final verification. Direction search probes from the initial position, reverses on a decline, counts rising evidence and forces inward motion at a limit. This scalar reduction uses `0x00f41c48`, the rise counters in `0x00f3c6c0`, threshold/direction decisions in `0x00f3c9f4` and the bound rule in `0x00f3d554`. It does not reproduce all the firmware's context, weak-signal, counter and failure branches. Peak scan follows one direction until consecutive declines or a relative-plus-absolute decline confirms a peak, using the scalar history predicate `0x00fa936c` called through `0x00f3de28` by `0x00f42abc`. Reaching a limit also ends this model's scan. It does not search for a globally stronger second depth.
+
+The three-position record corresponds to preceding, maximum and following samples in `0x00f3e468`, `0x00f3e4bc` and `0x00f3e63c`; the latter duplicates its two endpoint records before calling `0x00f8e9e4`. Ordered positions and a center maximum permit refinement; incomplete or unordered triples retain the measured center in this model. The `0x927a == 0` route uses `0x00f8deb0`'s three-point parabola or `0x00f8dd3c`'s linear-side fallback. Both compute a truncated tenths quotient, round remainders greater than 4 away from zero, then divide by 10. The alternate transformed-statistic fit `0x00f8e0c0` is excluded.
+
+| Model input or fixed arithmetic | Synthetic profile | Decode source and unresolved calibration |
+| --- | --- | --- |
+| Direction step | 50 artificial position units | `0x00f41c48` calls `0x00faab3c`, which obtains runtime lens/configuration calibration. This is an injected resolved step, not a decoded literal. |
+| Peak step | 50 artificial position units | `0x00f3ec50` constructs a lens-derived peak movement plan through `0x00faa990` and associated lens helpers. The model injects a resolved increment. |
+| Direction evidence threshold | 1 | `0x00f3c9f4` compares directional evidence against key `0x8811`; real counter/context mapping is reduced to one rising-evidence count. |
+| Consecutive decline threshold | 2 | `0x00fa936c`, key `0x8831` for `param_5 != 1`; the `0x8833` alternate-mode branch is excluded. |
+| Relative decline | 1 percent | `0x00f3de28`, fixed key `0x8826` branch; statistic-dependent blending with `0x882a/0x882d/0x882e` is excluded. `0x00fa936c` divides the product by decoded literal 100. |
+| Absolute decline | 100 artificial score units | `0x00fa936c`, synthetic key `0x8823 = 10` multiplied by decoded literal 10. |
+| Initial direction | Increasing | The direction is a model input; `0x00f3c8d8` and `0x00f3c9f4` provide different decoded direction-selection paths, including key `0x880e`. |
+| Fit selection | Parabolic, with zero-denominator linear-side fallback | `0x00f8e9e4`, synthetic key `0x927a = 0`; the `0x00f8deb0` curvature test against `0x927b` is assumed open. Both fit modes are available through the typed library configuration. |
+| Fit arithmetic | Three positions; factors 2 and 10; rounding cutoff 4 | Fixed decoded arithmetic in `0x00f8deb0` and `0x00f8dd3c`, not empirical tuning. |
+
+The profile disables direction-band rescaling (`0x8778 != 1`), optional range cap (`0x8776 == 0`) and direction-change compensation (`0x878c != 1`), and assumes stable context. The firmware's four statistic thresholds `0x877f..0x8782`, scales `0x8750..0x8754` or `0x8779..0x877d`, and first-episode scale `0x8783` remain unresolved inputs, not hidden constants. The model aliases the firmware's separate focus statistics to one synthetic score, seeds peak history with the last two direction samples and omits frame/episode warm-up. That history mapping is an explicit modeling assumption. Bound termination, fit clamping, flat-curve refusal, final verification and the 64-sample/256-call limits are host safeguards, not recovered firmware termination semantics.
+
+#### Bounded Run-3 parameter lead
+
+The archived capture `private-data/sessions/20261025T050355Z-read-bulk/ram-00000000-05aa0000.bin` was inspected without camera or USB access. It is 95,027,200 bytes, address range `[0, 0x05aa0000)`, SHA-256 `fa933fcf723ff46d435161cfecf48edc4a29cc4dc4c0ff5232fd0c70e7a6fee2`. Values below are little-endian, hardware-observed in this archived capture for the mounted Viltrox lens. They do not establish an active AF episode or reusable step calibration.
+
+| Captured address | Hardware-observed value for this lens | Interpretation boundary |
+| --- | --- | --- |
+| `0x0093c544` | Descriptor prefix `LY050A`, followed at `+8` by `FLSNW036AF 28/4.5 XF` | Identifies this capture's descriptor, not a universal lens profile. |
+| `0x009504d4` / `0x00950508` | 32-bit 1 / 0 | Lens-present / lens-ready admission words from the existing lens-state decode. Presence is not readiness. |
+| `0x00942ab0` | 32-bit 0 | State returned by `0x0076a224`, through `0x0076d9b8` / `0x0076d9c8`, in the direction-step lookup chain. |
+| `0x016c0fc0` | 32-bit `0x0d` | Captured search state only. |
+| `0x016c0fd8`, `0x016c0fda`, `0x016c0fe2`, `0x016c100c`, `0x016c100e` | 16-bit 0 at each address | Captured bound/step/plan fields are zero, not valid positive host step parameters. |
+| `0x016c1040`, `0x016c1190`, `0x016c1f44`, `0x016c21f8` | 32-bit 0 at each address | Captured lookup context is insufficient to select an active focus-step table. |
+| `0x0096ca50` | 32-bit `0x41acd800` | `0x0069f8fc` dereferences this parameter-bank base plus the key; the resulting addresses are outside this capture. |
+
+The bounded lookup chain is `0x00faab3c -> 0x00fab390 / 0x007492ac -> 0x00749254 -> 0x0074888c / 0x00748818`. It depends on keyed parameters such as `0x87df/0x87e1`, `0x87da`, `0x9285`, `0x3e144d`, `0x3e1445`, `0x3e2640`, `0x3e15a6` and `0x3e162f`. For example, captured-base lookups for keys `0x8811` and `0x3e1445` would address `0x41ad6011` and `0x41eaec45`, both outside `[0, 0x05aa0000)`. `0x0069fec8` combines two such bytes into a little-endian halfword. Further lens-table transformations remain behind `0x0074690c` and `0x0074782c`. No active resolved step or policy threshold was recovered from this bounded lead, so every A0-structural parameter remains synthetic. The raw capture and proprietary tables are not redistributed.
+
 
 ## Comparison and replay
 
-[Supported commands](../af/README.md#shared-rust-candidate-controller) build the library, replay tests and Haskell comparison harness through Bazel and the locked Nix compiler. No Cargo build graph is added. `//af:candidate-compare` runs A1 and A2 independently on every supplied curve with identical configuration, reference optimum and initial position. Its trusted child processes are bounded to 30 seconds for the observation loop. Curve files are capped regular files read through the shared host helper, with at most 4096 strictly ordered positions and bounded scores.
+[Supported commands](../af/README.md#shared-rust-candidate-controller) build the library, replay tests and Haskell comparison harness through Bazel and the locked Nix compiler. No Cargo graph is added. `//af:candidate-compare` runs A0-structural, A1 and A2 independently on each supplied curve, sharing bounds, sample budget, reference optimum and initial position. Their different search parameters are explicit above. Child observation loops are bounded to 30 seconds. Curve inputs are capped regular files with at most 4096 strictly ordered positions and bounded scores.
 
-The capped regular-file reader follows fixture symlinks, including Bazel runfiles, and checks the opened target's type and size. `//af:candidate-compare-tests` exercises both candidates through the Haskell CLI using runfiles fixtures and checks focused positions, flat-curve refusal and accounting bounds without fixing the search's sample counts.
+The capped reader follows fixture symlinks, including Bazel runfiles, and checks the opened target's type and size. `//af:candidate-compare-tests` exercises all three candidates through the Haskell CLI, checking focused positions, A0-structural's first-depth outcome, flat-curve refusal and accounting bounds without fixing sample counts.
 
 CSV fields are `origin,curve,candidate,sample_count,simulated_travel_units,final_position_error_units,outcome`. Every result row says `simulated`. Travel is the sum of absolute moves from the fixture's initial position through every requested observation, including returning for final verification. Final-position error is absolute distance from the declared analytic optimum; a refusal leaves error empty. These are position/sample comparisons, not latency, acquisition frequency or motor-energy measurements. The harness reports the actually accepted count and checks it against the adapter's count.
 
@@ -60,27 +100,32 @@ The five [`.curve` fixtures](../af/candidates/fixtures/) are original project-au
 
 | Fixture | Score before clipping | Reference / initial position | Expected replay behaviour | SHA-256 |
 | --- | --- | --- | --- | --- |
-| `single-peak.curve` | `1000000 - (p - 537)^2` | 537 / 500 | Both finish within 10 artificial units of 537. | `e92306a1bf3f337fb9b7d7fa15dda904d008a5072c26a2231246605667519c82` |
-| `two-depths.curve` | `max(900000 - 2*(p - 230)^2, 1000000 - 3*(p - 730)^2)` | 730 / 100 | Both select the stronger sampled depth within 10 units. This is not a guarantee for arbitrary narrow peaks. | `edfa4c83fce1db3d0ee786dc9d6603acf631a502a4d3794bda1c2a593e981a9f` |
-| `edge-peak.curve` | `1000000 - p^2` | 0 / 900 | Both may finish at the declared synthetic endpoint. A measured edge maximum would invalidate a physical reference sweep under §11.3. | `728683fbc0be835cacd90303bbcbc6bc214cf86b1ffe631b93d1511840b1edb9` |
-| `noisy-peak.curve` | `1000000 - (p - 537)^2 + ((17*p) mod 101) - 50` | 537 / 500 | Both finish within 10 units. Noise is deterministic spatial perturbation, not repeated-measurement noise. | `74b356edc28af8ec315782c2b93f8d0ecef504161a907507db0fa400c575f342` |
-| `flat.curve` | `500000` | 0 / 500 | Both refuse as flat; optimum 0 is a format sentinel, not a unique focus label. | `a45ee14cbcf76ccb14b21103ecfd54edbb06688cf2ff6d7f7c29f32051b9b7a3` |
+| `single-peak.curve` | `1000000 - (p - 537)^2` | 537 / 500 | All finish within 10 artificial units of 537. | `e92306a1bf3f337fb9b7d7fa15dda904d008a5072c26a2231246605667519c82` |
+| `two-depths.curve` | `max(900000 - 2*(p - 230)^2, 1000000 - 3*(p - 730)^2)` | 730 / 100 | A0-structural selects the first local depth near 230; A1/A2 select the stronger sampled depth near 730. | `edfa4c83fce1db3d0ee786dc9d6603acf631a502a4d3794bda1c2a593e981a9f` |
+| `edge-peak.curve` | `1000000 - p^2` | 0 / 900 | All may finish at the synthetic endpoint. A measured edge maximum invalidates a physical reference sweep under §11.3. | `728683fbc0be835cacd90303bbcbc6bc214cf86b1ffe631b93d1511840b1edb9` |
+| `noisy-peak.curve` | `1000000 - (p - 537)^2 + ((17*p) mod 101) - 50` | 537 / 500 | All finish within 10 units. Noise is deterministic spatial perturbation, not repeated-measurement noise. | `74b356edc28af8ec315782c2b93f8d0ecef504161a907507db0fa400c575f342` |
+| `flat.curve` | `500000` | 0 / 500 | All refuse as flat; optimum 0 is a format sentinel, not a unique focus label. | `a45ee14cbcf76ccb14b21103ecfd54edbb06688cf2ff6d7f7c29f32051b9b7a3` |
 
 The behavioural Rust replay suite consumes these public curves and checks the result positions/refusals, bounded samples, stale/missing/unsettled waits, wrong-position refusal, changed-final-score refusal, cancellation and eventual budget failure. The replay target passed in the checked-in environment. No synthetic result accepts a camera speed/accuracy gate.
 
 ### Exercised simulated comparison
 
-The five-fixture `//af:candidate-compare` smoke command produced the following table. All travel and errors are artificial position units under the synthetic model above. A2 uses fewer samples and less simulated travel on these four non-flat examples; this does not establish a general ranking or camera improvement.
+The five-fixture `//af:candidate-compare` smoke command produced the following table. Travel and errors are artificial position units. A0-structural stops at the first depth in the two-depth scene, leaving error 500 against the declared stronger peak. Its parameter profile differs from A1/A2; the sample/travel figures cannot rank calibrated controllers or establish a camera improvement. A0-structural does not close §11.2's calibrated controller-reference requirement.
 
 | Origin | Curve | Candidate | Sample count | Simulated travel | Final-position error | Outcome |
 | --- | --- | --- | ---: | ---: | ---: | --- |
+| simulated | single-peak | A0-structural | 6 | 263 | 0 | focused |
 | simulated | single-peak | A1 | 34 | 2425 | 2 | focused |
 | simulated | single-peak | A2 | 17 | 2071 | 2 | focused |
+| simulated | two-depths | A0-structural | 8 | 370 | 500 | focused |
 | simulated | two-depths | A1 | 34 | 1835 | 5 | focused |
 | simulated | two-depths | A2 | 16 | 1507 | 1 | focused |
+| simulated | edge-peak | A0-structural | 23 | 1000 | 0 | focused |
 | simulated | edge-peak | A1 | 22 | 3120 | 0 | focused |
 | simulated | edge-peak | A2 | 14 | 2900 | 0 | focused |
+| simulated | noisy-peak | A0-structural | 6 | 263 | 0 | focused |
 | simulated | noisy-peak | A1 | 34 | 2425 | 2 | focused |
 | simulated | noisy-peak | A2 | 15 | 2056 | 3 | focused |
+| simulated | flat | A0-structural | 31 | 1500 | | FlatCurve |
 | simulated | flat | A1 | 9 | 1500 | | FlatCurve |
 | simulated | flat | A2 | 9 | 1500 | | FlatCurve |

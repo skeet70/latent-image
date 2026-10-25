@@ -123,7 +123,7 @@ haskell_binary(
 
 genrule(
     name = "candidate-controller",
-    srcs = ["candidates/controller.rs"],
+    srcs = ["candidates/controller.rs", "candidates/structural.rs"],
     outs = ["libaf_candidates.rlib"],
     cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --crate-name af_candidates --crate-type rlib -C opt-level=2 $(location candidates/controller.rs) -o $@",
     tools = ["@lab_rustc//:bin/rustc"],
