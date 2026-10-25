@@ -82,17 +82,54 @@ The stock card-edge handler `0x006a1c50` handles codes `0x11` and `0x91` by call
 
 Restoring the electrical absent indication would let stock firmware take that route. How to restore it is physical repair work, not a proposed contact manipulation, card insertion, switch-short or GPIO write. The slot remains unavailable for save/playback and SD recovery even if a detect repair alone permits no-card AF.
 
-### Smallest useful camera check, if chosen later
+### Ready H1 plan: idle detect and media state, two passes
 
-The archived capture already answers what the scanner saw in Run 3. To establish the current boot's condition before selecting option 2, propose one read-only `read-ram` pass over three RAM windows while idle at the ordinary shooting screen, without touching the slot, changing modes or pressing the shutter:
+The ready plan is `private-data/read-plans/cardless-detect-idle.json`. Its contents are reproduced below because private plan files are ignored by Git. It uses the existing closed `read-ram` operation: identity and stored-gate queries, then five RAM windows per pass, two passes with a 1000 ms pause between the last reply of pass 0 and the first request of pass 1. It performs ten RAM reads, transferring 44 payload bytes. The transport's aggregate timeout budget is 281,000 ms, including that pause; it never retries. This is an H1 read/query plan, not an AF or capture operation.
 
-| Window | Length | Readout |
-| --- | ---: | --- |
-| `0x00828200` | 28 bytes | Detect row configuration and current/previous sampled bytes |
-| `0x00918af8` | 8 bytes | Media status and the separate neighboring state |
-| `0x00950114` | 20 bytes | Cached warning and active-warning bitset |
+```json
+{"windows":[{"index":0,"address":"0x00828216","length":2,"purpose":"KEY_CARD_DET current and previous asserted-state scanner bytes"},{"index":1,"address":"0x400a0030","length":4,"purpose":"port-12 boot input mirror; bit7 is active-low card detect, not live MMIO"},{"index":2,"address":"0x009738c4","length":4,"purpose":"raw SD initialization/status flags"},{"index":3,"address":"0x00918af8","length":4,"purpose":"registered media status"},{"index":4,"address":"0x00950114","length":8,"purpose":"cached warning and first active-warning mask word"}]}
+```
 
-If the row still reads asserted and status 4 / warning `0x13` remain, no mode-switch sweep is justified by this mapping. If the row is deasserted but media status stays 4, the stale media-refresh branch needs a separate, bounded ordinary reinitialization check; that is not evidence to clear warnings or media words from the host. If status 2 with warning `0x11` is obtained, a separately approved S1-only observation can test AF, with no S2 or save. Direct MMIO reads are unnecessary for this first distinction. This is a proposal, not a command performed by this host-only investigation.
+All windows lie in previously captured DRAM or its uncached alias. The mirror is RAM at physical `0x000a0030`, not the live GPIO register `0xfff89314`. Reading it twice does not cause the firmware to refresh it. The scanner bytes provide the current software-sampled detect observation; the mirror supplies the boot comparison. Each pass and each window can still be torn relative to running firmware, so two agreeing passes support a stable sampled state, not an atomic trace or proof of a permanently stuck contact.
+
+#### Conditions and commands
+
+The owner decides whether to run this plan. This draft does not invoke the standing read grant or authorize a run. If chosen, the owner leaves the body idle at the ordinary shooting screen with the slot empty and untouched, attaches USB through the already established ordinary-boot `ff80` route, and gives a go naming this plan and its two-pass limit. Do not enter jig/service imaging, change modes, touch the slot, press S1/S2, or write any gate/configuration/media word. The existing tool requires exactly one `04cb:ff80` device, X-M1 identity and a nonzero stored `0xf7`; refusal is not a reason to change those conditions.
+
+Host-only rehearsal command, which does not open USB:
+
+```sh
+devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-CardlessCapture" \
+  run --jobs=4 --local_resources=memory=6144 //transport:camera -- \
+  rehearse read-ram "$PWD/private-data/read-plans/cardless-detect-idle.json" \
+  --repeat 2 --interval-ms 1000
+```
+
+Exact live command, only after the owner's decision and the required host rehearsal:
+
+```sh
+devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-CardlessCapture" \
+  run --jobs=4 --local_resources=memory=6144 //transport:camera -- \
+  read-ram "$PWD/private-data/read-plans/cardless-detect-idle.json" \
+  --repeat 2 --interval-ms 1000
+```
+
+The tool creates a journaled session under `private-data/sessions/`. Decode the two scanner bytes in file order and the remaining fields as little-endian 32-bit words. Each pass is stored as `ram/000-ADDRESS.bin` or `ram/001-ADDRESS.bin`; the warning file contains the cached id followed by the first active-mask word. The session's `pass-start` and `ram-read` records supply timing and window identities. A normal result is `read-ram: 10 read requests;passes=2;no write sent, so the session needs no supply cut`. This is an expected result, not an observed run.
+
+#### Interpretation
+
+| Field | Stable present and initialization error, as in Run 3 | Stable absent, after media refresh |
+| --- | --- | --- |
+| Scanner current / previous, `0x00828216` | `01 01` | `00 00`; a differing pair indicates an edge or unsettled sampling |
+| Port-12 RAM mirror bit 7, `0x400a0030` | Clear; Run 3 word `0x28` | Set if the boot mirror recorded absence; do not require it to track a later transition |
+| Raw SD flags, `0x009738c4` | Run 3 `0x10` | Absent branch sets bit `0x1`; other retained bits can coexist, so do not require exactly `0x1` |
+| Media status, `0x00918af8` | 4 | 2 |
+| Cached warning, `0x00950114` | `0x13`, CARD ERROR | `0x11`, NO CARD, if no higher-priority active warning wins presentation |
+| Active mask, `0x00950118` | Bit `0x00080000` set for `0x13` | Bit `0x00020000` set for `0x11`, with CARD ERROR bit clear after warning refresh; unrelated warning bits may coexist |
+
+Stop after the two passes. Any refused reply, timeout, disconnect, unexpected indication or reported behavior change stops further reads and is reported to the owner. Do not automatically re-run, clear warnings, reset the media state, change modes or press the shutter to force a preferred result.
+
+Two agreeing present/error passes would confirm that the current software scanner still sees card-present on the empty broken slot. That leaves physical detect repair versus a separately reviewed software admission route for the owner's decision; it does not identify the damaged contact. Two absent/NO CARD passes would establish the stock media condition for a separately approved S1-only observation, not AF success. If the row is absent but status remains 4, or the two passes disagree, retain the evidence and investigate refresh/timing before selecting a route. No live check was performed to prepare this plan.
 
 ## 3. Full-resolution capture-to-RAM
 
