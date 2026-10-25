@@ -1390,3 +1390,20 @@ haskell_binary(
         "//host:process",
     ],
 )
+
+genrule(
+    name = "recovery-task-state-test-bin",
+    srcs = ["xm1-upstream/native/src/task_state.rs"],
+    outs = ["recovery-task-state-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location xm1-upstream/native/src/task_state.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
+)
+
+sh_test(
+    name = "recovery-task-state-tests",
+    size = "small",
+    srcs = ["recovery-task-state-tests.sh"],
+    args = ["$(location :recovery-task-state-test-bin)"],
+    data = [":recovery-task-state-test-bin"],
+)
