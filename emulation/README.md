@@ -606,7 +606,7 @@ FujiMod opens Unicorn as a Cortex-R5F. Both FujiMod drivers arm an R4F guard (`e
 
 A refused block stops the run with an `R4F guard:` failure naming the instruction, its address and core, even when Unicorn itself would stop on the same instruction. T32 SDIV/UDIV are admitted, as Cortex-R4 has them. A block rewritten in place with the same address and length is decoded once. The synthetic boot-ROM fixtures in `emulation/fujimod-xm1/tests/r4f_guard.rs` run in the Nix build's check phase, so a guard regression fails `@lab_fujimod_xm1`: ordinary A32 code and a CLIDR read run, each refused encoding stops, region 12 stops and region 11 runs. The stock flash-boot route passes with the guard on. On a loaded host the guard took the route driver from 10.1 s to 18.6 s.
 
-A FujiMod route counts as payload acceptance only once that route's recorded observations reproduce on FujiMod. The trajectory gap on [issue 97](https://github.com/skeet70/latent-image/issues/97) currently prevents that for the RAM-push e2e ([RAM-push bridge on FujiMod](#ram-push-bridge-on-fujimod)), so a payload that passes here still needs the retained engine's acceptance runs.
+A FujiMod route counts as payload acceptance only under the [trajectory variant rule](#trajectory-variants-on-fujimod).
 
 The run document `emulation/fujimod-xm1/data/xm1-150.json` keeps the node set, windows and timing values of FujiMod's `x70-110-rec` plan at `ecdb6cb6`. The timings are unmeasured model policy, and the windows carry the provenance below. The X-M1 values come from the retained closure: GPIO `0xe6c`, the `xm1-rec.json` ADC samples and MCU packet, boot reply `0x10` in MCU register `0x60` (E-XM1-BODY-BOOT-STATUS-150), whole sixteen-bit panel words (`panel_serial.py`, mask `0xffff`), the input processor's mode-2 command control and field-preserving phase acknowledge (`input_processing_devices.py`), and the key rows, calibration tags, current-menu node and release byte of `menu_inputs.py` and `native/src/menu.rs`. The live image and statistics assets are declared, unmeasured scene inputs.
 
@@ -646,6 +646,25 @@ The run document replaces FujiMod's FFF47000 packed422 scaler with an adapter de
 Observed 2026-10-24 (emulated), RC0 prefix DAT with `f7-1.nand` and `VolatileBank/scenario.json`, before the readiness waits (bridge `9065629` to `c20516a`): emulator start 5.5-17 s, `ram-alloc` 261-360 s, `ram-push` 1,022-1,229 s. Transfers ran 5.38 G guest instructions, and the bridge's polls of the DMA state took 423 s of host time. Each transfer also cost the host 21-66 ms for the transport's durable journal lines.
 
 With the readiness waits, replaying the 10,076 recorded transfers of a cardless run against the bridge (2,084 for `ram-alloc`, 7,992 for `ram-push`) returns the reply recorded before for every transfer. The camera session ids, the rendezvous and the 249 keepalive presses also match. Guest instructions in transfers fall from 5.38 G to 1.12 G, and replay time from 398 s (77 + 321) to 29 s (2.7 + 25.9). In the e2e, `ram-alloc` takes 3.8 s and `ram-push` 40.8 s, so the first segment starts 60 s after launch instead of 22-25 min. The receipt's `transfer_profile` and `request_profile` record transfer count, polls, guest instructions spent waiting, bus queries and host seconds per request kind. Render and key timing still differ between the engines, and FujiMod's instructions-per-tick ratio stays at 24 during transfers, where the retained bridge uses 2400.
+
+### Trajectory variants on FujiMod
+
+Render and key timing differ between the engines, so a recorded trajectory can need different press timing on FujiMod. A FujiMod variant of `NAME.json` is a separate file, `NAME.fujimod.json`, next to it. It may differ from the retained file only in press timing:
+- a segment's `key_pulse`;
+- a step's optional fifth element `{"hold_instructions": H, "release_instructions": R, "settle_instructions": S}`. H and R, both or neither, replace the segment's pulse for that key. S caps the instructions the bridge runs for the render drain before the key plus the settle after it (default 90,000,000), and a key whose drain does not finish within S is not pressed (`prior-render-pending`). Only the FujiMod bridge takes S, and the e2e refuses a trajectory carrying S on the retained engine.
+
+Every other field is an assertion and must equal the retained file's: phases, mode dials, captures, keys and expected menu states, messages, observe flags, reads, requirements, film rows and trace sites. `bazel run //emulation:trajectory-variant-check -- RETAINED.json VARIANT.json` checks this, and `//emulation:ui-trajectory-tests` checks every checked-in `*-trajectories.fujimod.json` against its retained file.
+
+A FujiMod route counts as acceptance for a payload only when all three hold:
+1. Its variant passes `trajectory-variant-check` against the retained file. A route without a variant runs the retained file itself.
+2. The FujiMod e2e passes with the variant, so every required menu state, message id and film row holds.
+3. `bazel run //emulation:e2e-observation-compare -- RETAINED_RECEIPTS FUJIMOD_RECEIPTS` reports no difference from a retained-engine run of the retained file with the same payload, DAT, NAND and card mode. It compares every `e2e-observation-N.json` (steps, reads, menu message ids, D3 hook entries, Classic Chrome site entries and trace hits) and every capture's menu state.
+
+The comparison leaves out wall seconds, guest instruction counts, stack pointers, file paths, frame numbers and capture PNG digests. Any other difference fails the rule.
+
+Observed 2026-10-24 (emulated), cardless, RC0 prefix DAT with `f7-1.nand`:
+- Volatile bank. On the retained engine the first MENU after the M dial is never pressed: the mode guide's render is still pending after 90,000,000 instructions, so the state stays (67, 56, 0). On FujiMod the guide drains after 7,500,000, and that MENU opens (1, 5, 2). The variant `private-data/analysis/x-m1-1.50/ram-push/VolatileBank/scenario.fujimod.json` adds only `{"settle_instructions": 5000000}` to that step. The FujiMod e2e then passes all seven segments and the unload in 2.9 min of phases from a fresh boot. `e2e-observation-compare` against the retained run of `scenario.json` reports 0 differences in 7 observation files.
+- Classic Chrome (`--classic-chrome`). `emulation/ram-push-cc-e2e-trajectories.json` passes unchanged on FujiMod, so it needs no variant. Its six segments, the unload, the after-unload segment and the cold-restart read take 2.0 min of phases from a cold start, against 6.3 min on the retained engine from a restored attach checkpoint. `e2e-observation-compare` against the retained cardless run reports 0 differences in 7 observation files.
 
 ## Stock native cases: USB toggle (N1, N2)
 

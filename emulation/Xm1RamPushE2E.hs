@@ -1,13 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, classicChromeIconPayload, runRamPushE2E, warmAttachCheckpoint) where
 
+import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, try)
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON (..), Value (..), encode, object, withObject, (.:), (.=))
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (nub, sort)
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, isJust)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Char8 as C
@@ -235,41 +236,48 @@ menuState value = either (ioError . userError . ("invalid menu response: " ++)) 
 -- | A step key of four colon-separated fields (seek or cursor, a key, a target, a press limit) presses
 -- the key until the setting id (seek) or the cursor (cursor) equals the target, at most limit times;
 -- any other key is pressed once. Returns the key presses made and the final state.
-pressStep :: Emulator -> Maybe KeyPulse -> String -> IO ([String], MenuState)
-pressStep emulator pulse key = case splitOn ':' key of
+pressStep :: Emulator -> KeyTiming -> String -> IO ([String], MenuState)
+pressStep emulator timing key = case splitOn ':' key of
   [kind, seekKey, targetText, limit]
     | kind `elem` ["seek", "cursor"], [(target, "")] <- reads targetText, [(bound, "")] <- reads limit ->
     let field (MenuState _ setting cursor) = if kind == "seek" then setting else cursor
         go count pressed = do
-          actual <- emulatorKey emulator pulse seekKey >>= menuState
+          actual <- emulatorKey emulator timing seekKey >>= menuState
           if field actual == target || count + 1 >= (bound :: Int)
             then pure (reverse (seekKey : pressed), actual)
             else go (count + 1) (seekKey : pressed)
      in go 0 []
-  _ -> (\actual -> ([key], actual)) <$> (emulatorKey emulator pulse key >>= menuState)
+  _ -> (\actual -> ([key], actual)) <$> (emulatorKey emulator timing key >>= menuState)
   where
     splitOn c text = case break (== c) text of
       (front, []) -> [front]
       (front, _ : rest) -> front : splitOn c rest
 
-press :: Emulator -> Maybe KeyPulse -> String -> MenuState -> IO ()
-press emulator pulse key expected = do
-  (_, actual) <- pressStep emulator pulse key
-  require (actual == expected) ("menu trajectory after " ++ key ++ ": expected " ++ show expected ++ ", got " ++ show actual)
+-- | A step's own pulse, else the segment's; its own settle cap.
+stepKeyTiming :: Maybe KeyPulse -> Step -> KeyTiming
+stepKeyTiming segmentPulse step = KeyTiming (keyTimingPulse timing <|> segmentPulse) (keyTimingSettle timing)
+  where timing = stepTiming step
 
-presses :: Emulator -> Maybe KeyPulse -> [(String, MenuState)] -> IO ()
-presses emulator pulse = mapM_ (uncurry (press emulator pulse))
+press :: Emulator -> Maybe KeyPulse -> Step -> IO ()
+press emulator pulse step = do
+  (_, actual) <- pressStep emulator (stepKeyTiming pulse step) (stepKey step)
+  require (actual == stepExpected step)
+    ("menu trajectory after " ++ stepKey step ++ ": expected " ++ show (stepExpected step) ++ ", got " ++ show actual)
+
+presses :: Emulator -> Maybe KeyPulse -> [Step] -> IO ()
+presses emulator pulse = mapM_ (press emulator pulse)
 
 -- | Presses every step and records the key presses, expected and actual state and wall seconds
 -- without requiring the state.
-observe :: Emulator -> Maybe KeyPulse -> [(String, MenuState)] -> IO [Value]
-observe emulator pulse = mapM $ \(key, expected@(MenuState em es ec)) -> do
+observe :: Emulator -> Maybe KeyPulse -> [Step] -> IO [Value]
+observe emulator pulse = mapM $ \step -> do
+  let MenuState em es ec = stepExpected step
   started <- getMonotonicTime
-  (pressed, MenuState am as ac) <- pressStep emulator pulse key
+  (pressed, MenuState am as ac) <- pressStep emulator (stepKeyTiming pulse step) (stepKey step)
   ended <- getMonotonicTime
-  pure (object [ "key" .= key, "pressed" .= length pressed
+  pure (object [ "key" .= stepKey step, "pressed" .= length pressed
                , "expected" .= [em, es, ec], "actual" .= [am, as, ac]
-               , "matched" .= (MenuState am as ac == expected), "seconds" .= (ended - started) ])
+               , "matched" .= (MenuState am as ac == stepExpected step), "seconds" .= (ended - started) ])
 
 hexAddress :: Word32 -> String
 hexAddress value = "0x" ++ replicate (8 - length digits) '0' ++ digits where digits = showHex value ""
@@ -407,6 +415,12 @@ runRamPushE2E given python workspace trajectoryFile installedMedia adjustmentNan
   hSetBuffering stdout LineBuffering
   trajectories <- B.readFile trajectoryFile
     >>= either (ioError . userError . ("invalid RAM-push e2e trajectories: " ++)) pure . decodeTrajectories
+  let settleCaps = [ () | segment <- beforeUnload trajectories ++ afterUnload trajectories
+                        , step <- segmentSteps segment, isJust (keyTimingSettle (stepTiming step)) ]
+  case emulationRuntime given of
+    RetainedRuntime | not (null settleCaps) ->
+      ioError (userError "settle_instructions is FujiMod press timing; the retained bridge takes no settle cap")
+    _ -> pure ()
   exists <- doesDirectoryExist receipt
   when exists $ do
     entries <- listDirectory receipt

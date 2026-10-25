@@ -6,6 +6,7 @@ use fujimod_xm1::adjustment::AdjustmentNand;
 use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, Transfer, encode_hex};
 use fujimod_xm1::guest::{MenuState, ModeDialPosition, RouteKey};
 use fujimod_xm1::machine::{KeyPulse, Machine};
+use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -292,7 +293,7 @@ enum Request {
     Transfer(Transfer),
     TraceSites { sites: BTreeMap<String, String> },
     TraceHits { from: usize },
-    Key { key: String, hold_instructions: Option<u64>, release_instructions: Option<u64> },
+    Key { key: String, hold_instructions: Option<u64>, release_instructions: Option<u64>, settle_instructions: Option<u64> },
     ModeDial { position: ModeDialPosition },
     ReadMemory { address: u64, count: usize },
     Capture { label: String },
@@ -423,7 +424,7 @@ impl Server {
                 }
                 json!({"count": hits.len(), "hits": &hits[from..]})
             }
-            Request::Key { key, hold_instructions, release_instructions } => {
+            Request::Key { key, hold_instructions, release_instructions, settle_instructions } => {
                 let route = RouteKey::parse(&key)?;
                 let pulse = match (hold_instructions, release_instructions) {
                     (None, None) => default_pulse(route),
@@ -432,13 +433,18 @@ impl Server {
                     }
                     _ => return Err(format!("hold and release must both be 1..{MAX_PHASE}")),
                 };
+                let budget = match settle_instructions {
+                    None => MAX_SETTLE,
+                    Some(budget) if (1..=MAX_SETTLE).contains(&budget) => budget,
+                    Some(_) => return Err(format!("settle_instructions must be 1..{MAX_SETTLE}")),
+                };
                 let started = Instant::now();
                 let before = self.bridge.machine.instructions();
-                let settle = self.bridge.settled_key(route, pulse)?;
+                let settle = self.bridge.settled_key(route, pulse, budget)?;
                 self.bridge.machine.require_running()?;
                 self.key_log.push(json!({"key": key, "seconds": started.elapsed().as_secs_f64(),
                     "instructions": self.bridge.machine.instructions() - before, "settle": settle}));
-                json!({"menu": menu_value(self.bridge.machine.menu()?)})
+                json!({"menu": menu_value(self.bridge.machine.menu()?), "settle": settle})
             }
             Request::ModeDial { position } => {
                 let window = self.bridge.machine.set_mode_dial(position)?;
