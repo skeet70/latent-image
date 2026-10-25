@@ -763,3 +763,20 @@ Observed 2026-10-22 (emulated), installed NAND `f7-1.nand` (`baf47535...4aa0`, s
 In both runs the first header-parser call (return address `0x00ec85a0`) leaves the flag word at 3, from 0, at about 29.3 M instructions; the completion runs at 1,943,243,929 instructions, followed by `0x0069fe20(0xff)` (return address `0x00db922c`) and the commit call at `0x00db932c`. The cache holds `0xf7 = 1` on the updater screen and 0 after the commit. The rebooted image carries the toggle hook word `0xebf492d3` at `0x00ecf900` and reaches the shooting screen with mode word 3 (first start). The RC0 exported NAND hash repeats across two runs.
 
 Scope: the updater runs from the recovery card's RAM copy of the DAT being installed, not from the firmware installed on the NAND. The installed NAND is the synthetic stored-f7 template (template adjustment content with only `0xf7` set), with ideal NAND and no bad blocks. The updater's body, version and completion text is not rendered by the model.
+
+### updater-f7 on FujiMod
+
+`bazel run //emulation:fujimod-updater-f7 -- --recovery-ram RAM --sd-image CARD --installed-nand NAND --output DIR` runs the same route on FujiMod (`fujimod-xm1-updater`, crate `emulation/fujimod-xm1`) in one emulator slot, with the run document, the captured boot ROM and the stock 1.50 DAT (the committed image's flash base). Sites, schedule, presses and receipt fields follow `UpdaterF7.hs`. Phase B is a second session in the same process, built from the exported file alone.
+- The session starts from the raw handoff as `load_recovery_cpu0` does (`src/handoff.rs`): the companion's CRC, native-entry frame, SRAM return witness and cache-off MPU/CP15 state are checked; selection word 1 is written to `0xfff98008` so address 0 decodes DRAM, and the 32 MiB RAM image and 4 KiB SRAM are written; CPU0's banked, general, MPU, CP15 and VFP registers are set; and the three bootstrap device writes go to the clock and GPIO devices. CPU1 stays held at reset.
+- The restore card loads whole (`Backing::Complete`): an image of at most 128 MiB, like the retained `immutable_backing=True`, with the 65,536-sector dirty bound left for guest writes.
+- The committed NAND image (`src/nand_image.rs`) is applied by erasing every committed block and programming its pages over the base and the recorded data overlay. Export writes the retained `export_image` bytes: sorted keys, no spaces, ASCII escapes, Python's gzip header with mtime 0, and the deflate stream of zlib's `compress2` at level 9 (linked from nixpkgs). zlib-ng and zlib-rs streams differ from it.
+- The run counts as idle when the whole-area commit has run, the NAND controller is not busy and the medium's fingerprint is unchanged over one 15 M-instruction chunk.
+
+Observed 2026-10-24 (emulated), installed `f7-1.nand`, stock 1.50 base: both restore cards pass every receipt expectation, and the exported NAND files equal the retained runs byte for byte.
+
+| Restore card | Exported NAND | Flag word | Reboot: mode word, hook word, menu node | Phase A / B |
+| --- | --- | --- | --- | ---: |
+| RC0+toggle (`restore-rc0-3`) | `7da7fb61...9841` | `0x3` | 3, `0xebf492d3`, (67, 56, 0) | 67 s / 9 s |
+| CC+toggle (`restore-cc-toggle`) | `2814b76f...e465` | `0x3` | 3, `0xebf492d3`, (67, 56, 0) | 73 s / 7 s |
+
+Both runs repeat byte for byte through `bazel run //emulation:fujimod-updater-f7`. RC0+toggle's phase A reached the idle committed NAND at 1,929,250,000 FujiMod instructions; instruction counts are not comparable between the engines.
