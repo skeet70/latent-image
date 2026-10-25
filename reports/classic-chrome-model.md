@@ -7,10 +7,10 @@ Host-only work for [spec/10 section 19.5](../spec/10-film-recipes.md#195-classic
 | Target | Role |
 | --- | --- |
 | `//host:film-model` | `FujiAF.FilmStage` (integer film stage), `FujiAF.FilmInvert` (its floating-point inverse), `FujiAF.Colour` (CIELAB, CIEDE2000, sensor models, patch sets and L*a*b* grids), `FujiAF.FilmFit` (integer matrix and chroma fit), `FujiAF.FilmGrid` (oracle grid), `FujiAF.XM1Develop` (1.50 develop-stage readers, adjustment field encoding), `FujiAF.ClassicChromeCandidate` (the v1 parameter file) |
-| `//host/firmware:classic-chrome-model` | `tables`, `oracle-input`, `oracle-compare`, `bundle`, `method`, `fit-cc`, `photo-identical`, `chart-patches`, `e-model`, `settings`, `look-reference`, `relative` (usage with no arguments) |
+| `//host/firmware:classic-chrome-model` | `tables`, `oracle-input`, `oracle-compare`, `bundle`, `method`, `fit-cc`, `photo-identical`, `photo-difference`, `capture-difference`, `chart-patches`, `e-model`, `settings`, `look-reference`, `relative` (usage with no arguments) |
 | `//host/firmware:film-stage-tests` | oracle fixtures, the 34 published CIEDE2000 pairs (Sharma, Wu and Dalal 2005), the parameter boundary, fit recovery of a reachable target, inverse round trip |
 | `//host/firmware:candidate-tests` | the v1 parameter file on a synthetic candidate: field encoding and chroma storage order against hand-worked values, read-back, refusals |
-| `//host/firmware:photo-session-tests` | the photo-session commands through the command line on flat JPEGs written by the pinned ffmpeg, and `relative` on packed planes: chroma ratio, block count and offset registration |
+| `//host/firmware:photo-session-tests` | the photo-session commands through the command line on flat JPEGs written by the pinned ffmpeg, native-plane difference summaries, and `relative` on packed planes: chroma ratio, block count and offset registration |
 | `//host/firmware:look-reference-tests` | F-Log2 against the data sheet's code values, the F-Gamut and BT.709 matrices, `.cube` parsing and trilinear interpolation, and the relative statistics on pairs with a known chroma, lightness and hue change |
 
 Private reproduction, from the worktree root with `P=private-data/analysis/classic-chrome`, `R=private-data/analysis/x-m1-1.50` and `X` the x70view checkout (revision `a47591d9bd`). `$R/payload.bin` is the length-correct complemented payload of the pinned DAT (bytes from 532 on, XOR 0xff, SHA-256 `8c6f806e…26c0`, [firmware extraction](firmware-extraction.md)); the two decodes come from `//lz:fflzd`:
@@ -286,7 +286,85 @@ Frames:
 
 ### 8.3 First session result (2026-10-21)
 
-The before-set was shot inside the first RAM-push session (E-CC-RAM-PUSH-SESSION-150) without a ColorChecker, on a tabletop scene under incandescent light at ISO 4000 with Incandescent WB. Check (a) failed there: the shot PROVIA JPEG and the PROVIA RAW conversion of its own RAF differ in all three planes, so this set's converted Velvia and ASTIA frames are not stand-ins for shot frames. Conversions of one RAF are comparable with each other, and section 8.4 runs the `e-model` procedure on them with the ISO- and WB-dependent selectors mapped. The ColorChecker statistic of section 7 still needs a chart frame at ISO 200, DR100 and Daylight (or a fixed-WB light).
+The before-set was shot inside the first RAM-push session (E-CC-RAM-PUSH-SESSION-150) without a ColorChecker, on a tabletop scene under incandescent light at ISO 4000 with Incandescent WB. Check (a) failed there: the shot PROVIA JPEG and the PROVIA RAW conversion of its own RAF differ in all three planes, so this set's converted Velvia and ASTIA frames are not stand-ins for shot frames. Conversions of one RAF are comparable with each other, and section 8.4 runs the `e-model` procedure on them with the ISO- and WB-dependent selectors mapped. The chart-based thresholds are not evaluated under spec 19.5.6's relative-check acceptance.
+
+#### Diagnosis and scope (2026-10-25)
+
+**The observed identity failure is a stock capture-versus-conversion difference, not a Classic Chrome hook failure. Its exact WB/ISO or image-processing cause is unresolved.** Evidence: hardware-observed session results inherited from E-CC-RAM-PUSH-SESSION-150, fresh native-plane and forward-model analysis of its private card copy, JPEG-header parsing, and source inspection/static inference on X-M1 1.50 (E-CC-RAW-MISMATCH-DIAGNOSIS-150). The original identity failure is taken from the session; the new analysis measures its magnitude and tests gain counterfactuals.
+
+| Comparison | Session state | Recorded result |
+| --- | --- | --- |
+| `DSCF3149.JPG` shot versus `DSCF3164.JPG`, the PROVIA conversion of `DSCF3149.RAF` | Both before the CC payload was loaded, on RC0 | Y/Cb/Cr differing samples 10,321,106 / 4,576,542 / 749,330 of 15,980,544 / 7,990,272 / 7,990,272 |
+| `DSCF3164.JPG` versus `DSCF3170.JPG`, PROVIA conversions of that same RAF | Before versus during the CC payload | All three decoded planes identical |
+| `DSCF3164.JPG` versus `DSCF3169.JPG`, PROVIA versus CC conversion | Same RAF; CC payload resident for the CC conversion | Candidate prediction 0.42 mean CIEDE2000 on the strict block set; section 8.4 |
+
+The first comparison establishes that CC is not necessary for the failure. The second excludes a payload-induced change to this PROVIA conversion. The third supports correct CC substitutions on the conversion path, within the inverse's resolution and this scene's coverage. Neither the second nor the third proves that every shooting-path CC hook is correct.
+
+**WB and ISO observations.** A fresh `exiftool` extraction finds ISO 4000, exposure 1/60, Incandescent WB, R0 B0, DR100 and zero Color, Highlight, Shadow, Sharpness and NR in both the shot `3149` and conversion `3164`, and again in `3170`. All three are 4896x3264 FINE JPEGs. There is no recorded menu-setting mismatch that explains the failure. `DSCF3149.RAF` records `WB_GRBLevels = 302 342 876`, the same selected-WB triplet as the later CC shot `3167`, PROVIA shot `3168` and post-unload PROVIA shot `3171`. Their Auto-WB triplets differ, but the selected mode is manual Incandescent; that is not evidence that Auto-WB was applied. The RAF's `RawExposureBias = -1.5` and embedded-preview `Quality = NORMAL` are not evidence of a -1.5 EV conversion adjustment or a NORMAL saved JPEG.
+
+The JPEG metadata does not expose the conversion job's actual WB multipliers, black-level correction, digital gain, denoise state or JPEG quantization. Equal ISO/WB names do not establish equal processing inputs. There is no paired low-ISO/daylight control in this session, so the dependence on ISO 4000 or incandescent illumination cannot be isolated.
+
+**Firmware and model boundary.** The private per-function decodes show distinct WB-source routes. `FUN_00eb17a4` can copy the shooting parameter triplet through `FUN_0075d024` into capture `+0x2224/+0x2226/+0x2228`. RAW-conversion builder `FUN_012546a8` maps its WB setting to request word 3; `FUN_00ebf880` selects either a stored preset triplet at capture `+0x1894` through `+0x18c2`, a temperature-indexed triplet at `+0x18c4`, or the default triplet at `+0x71c/+0x71e/+0x720`, and writes the same `+0x2224` destination. The default and first six preset selections are also visible in the image-5 instruction window `0x00ebf8cc` through `0x00ebfac4`. `FUN_00e54870` contains subsequent triplet adjustment and a conversion-state branch; `FUN_00e56cb0` contains an additional conversion/exposure adjustment. These paths establish that the WB label alone is insufficient; no runtime values for those jobs were captured, and these source paths do not prove which operation first diverged.
+
+The `FujiAF.FilmStage` forward model starts at already white-balanced 14-bit RGB. `FujiAF.FilmInvert.invert` recovers an effective input from each PROVIA block; neither implements RAW decoding, black-level subtraction, WB production, demosaic, denoise, sharpening or JPEG encoding. `PhotoSession.eModel` predicts a different film from the same PROVIA rendering. It does not predict a shot from its RAF. The mapped film selectors in section 8.4 have no WB input and leave ISO 4000 at the DR100 selection, so changing those selectors to force shot/conversion identity would not be supported by this evidence. The remaining gap is in full capture/conversion equivalence outside the demonstrated film-stage comparison, not a demonstrated error in the candidate matrix/chroma/tone model.
+
+**Measured magnitude and counterfactuals.** `photo-difference A.JPG B.JPG OUT.json` measures native-plane signed B-minus-A histograms without registration or colour conversion. For `3149` to `3164`:
+
+| Plane | Mean signed difference | Mean absolute difference | RMS | Maximum absolute difference |
+| --- | ---: | ---: | ---: | ---: |
+| Y | -0.352 | 0.877 | 1.205 | 15 |
+| Cb | -0.606 | 0.619 | 0.844 | 8 |
+| Cr | +0.027 | 0.096 | 0.319 | 7 |
+
+Units are 8-bit decoded sample levels. Cb differs by -1 at 4,168,581 samples and is unchanged at 3,413,730; Cr is unchanged at 7,240,942 samples. The large changed-sample counts therefore do not represent a large colour displacement.
+
+`capture-difference BUNDLE.json MANIFEST.json OUT.json` samples the central half of 32-pixel blocks flat in both frames (luma SD at most 3). It inverts each block through the X-M1 PROVIA stage and tests input-gain counterfactuals through that same stage. All 10,049 selected blocks are invertible; no hypothesis leaves the 14-bit range. The RAF's selected GRB triplet is 302/342/876; its Auto triplet is 302/370/912. The WB proxy applies the ratio of the corresponding R/G and B/G values. ISO proxies multiply all channels by $2^{\pm1/3}$; they are digital-input-gain sensitivities, not a model of actual sensor ISO or noise reduction.
+
+| Prediction compared with conversion | RGB input gains | Mean / p95 / max CIEDE2000 |
+| --- | --- | --- |
+| Shot block unchanged | No inverse or re-render | 0.598 / 1.430 / 2.719 |
+| Identity through inverse and PROVIA | 1 / 1 / 1 | 0.773 / 1.708 / 3.450 |
+| Auto instead of selected WB | 1.08187 / 1 / 1.04110 | 6.150 / 8.251 / 10.442 |
+| Reverse WB substitution | 0.92432 / 1 / 0.96053 | 4.605 / 6.313 / 8.431 |
+| +1/3 stop input gain | 1.25992 in each channel | 4.554 / 5.760 / 7.115 |
+| -1/3 stop input gain | 0.79370 in each channel | 4.612 / 6.174 / 7.236 |
+| Median inverse-ratio estimate per channel | 0.99537 / 0.99508 / 0.98646 | 0.763 / 1.726 / 3.891 |
+| Median inverse-ratio scalar estimate | 0.99401 in each channel | 0.793 / 1.751 / 4.344 |
+
+The inverse/re-render floor on these blocks is 0.578 mean for the shot and 0.571 for the conversion. Gain estimates use channel values at least 64 in both recovered inputs; all 10,049 blocks qualify in each channel. They are medians, not residual-minimizing fits, and the same blocks estimate and evaluate the gains. The channel estimate improves the identity mean by only 0.009, below the inverse's resolving power. A switch between this RAF's selected and Auto WB, or a one-third-stop input amplification error, predicts a much larger displacement than observed under this model. Small WB/gain arithmetic differences are not excluded. `FilmParams` has no ISO/NR state or spatial filtering, so it cannot predict noise-reduction sensitivity or distinguish that mechanism from JPEG rounding.
+
+**JPEG structure.** ExifTool 13.59 and libjpeg-turbo 3.1.4.1's `djpeg` find the same coding settings in `3149` and `3164`: baseline SOF0, 8-bit 4896x3264, Y sampling 2x1 with quantization table 0, Cb/Cr sampling 1x1 with table 1, all 64 values of each quantization table equal, restart interval 4 and identical scan table assignments. Both report co-sited chroma (`YCbCrPositioning = 2`); neither parser reports a JFIF or Adobe application marker. Application-marker sequence/lengths and Huffman code-length counts match. Thus a different declared subsampling, chroma positioning or quantization table is not the explanation. Equal headers do not establish equal DCT/rounding implementation or equal uncompressed encoder input. The small Cb bias is compatible with a rounding/processing difference, not proof of an encoder defect.
+
+Both Haskell analysis commands were consumed on the private session inputs through `runghc`; no Bazel build, test suite or formatter was run. Behavioral CLI cases were added for the integration check.
+
+Private reproduction inputs: `S=private-data/photo-sessions/2026-10-21-cc-ram-push`, `R=private-data/analysis/x-m1-1.50`; session chronology is `private-data/sessions/2026-10-21-cc-ram-push/notes.md`, sections 12, 15 and 22. The selected metadata observations are retained in `private-data/analysis/classic-chrome/raw-mismatch/metadata.json`. The pinned image-4, image-5 and plain digests match section 2.1 and the patch report. Metadata/source-inspection reproduction, inside `devenv shell`:
+
+```sh
+exiftool -G1 -a -s -ISO -ExposureTime -WhiteBalance -WhiteBalanceFineTune \
+  -WB_GRBLevels -WB_GRBLevelsStandard -WB_GRBLevelsAuto -RawExposureBias \
+  -FilmMode -DevelopmentDynamicRange -HighlightTone -ShadowTone -Saturation \
+  -Sharpness -NoiseReduction -ImageSize -Quality \
+  "$S/DSCF3149.JPG" "$S/DSCF3149.RAF" "$S/DSCF3164.JPG" "$S/DSCF3169.JPG" "$S/DSCF3170.JPG"
+exiftool -G1 -a -s -WhiteBalance -WhiteBalanceFineTune -WB_GRBLevels \
+  -WB_GRBLevelsStandard -WB_GRBLevelsAuto -RawExposureBias -ISO -FilmMode -Quality \
+  "$S/DSCF3167.RAF" "$S/DSCF3168.RAF" "$S/DSCF3171.RAF"
+llvm-objdump -d --adjust-vma=0xbf1a00 --start-address=0x2cdec0 --stop-address=0x2ce0d0 "$R/lz/id5.elf"
+llvm-objdump -d --mcpu=cortex-r4 --adjust-vma=0x1100000 --start-address=0x154a08 --stop-address=0x154ac0 "$R/filmsim/plain.elf"
+```
+
+Measured-analysis reproduction (`P=private-data/analysis/classic-chrome/raw-mismatch`), from the worktree root:
+
+```sh
+devenv shell -- runghc -ihost -ihost/firmware host/firmware/ClassicChromeModel.hs photo-difference "$S/DSCF3149.JPG" "$S/DSCF3164.JPG" "$P/shot-conversion.json"
+devenv shell -- runghc -ihost -ihost/firmware host/firmware/ClassicChromeModel.hs capture-difference private-data/analysis/classic-chrome/bundle.json "$P/capture-manifest.json" "$P/capture-difference.json"
+devenv shell -- exiftool -v3 "$S/DSCF3149.JPG" "$S/DSCF3164.JPG"
+nix shell nixpkgs#libjpeg_turbo --command djpeg -verbose -verbose -outfile /dev/null "$S/DSCF3149.JPG"
+nix shell nixpkgs#libjpeg_turbo --command djpeg -verbose -verbose -outfile /dev/null "$S/DSCF3164.JPG"
+```
+
+The counterfactual manifest supplies `shot` and `conversion` paths relative to the manifest, `selectedWb` and `autoWb` objects with positive `green`, `red` and `blue` gains, `blockSize: 32` and `maxLumaSd: 3`. Selected metadata, the manifest, measured outputs and the JPEG-structure observations remain private.
+
+Residual uncertainty: the archived files and static paths do not identify whether the first divergence is in small WB arithmetic, ISO/digital amplification, raw reconstruction, filtering or encoder arithmetic. Resolving the stage needs each job's actual post-adjustment WB triplet at capture `+0x2224/+0x2226/+0x2228`, black-level/digital-gain and denoise/sharpening parameters, or the pre-JPEG YCbCr samples for the same RAF. The model can express input-gain perturbations, but lacks those capture/conversion RAW/ISP route inputs and all NR/encoder arithmetic. The metadata, small residual and matched JPEG settings do not supply the missing values. No additional camera operation is implied by this host diagnosis.
 
 ### 8.4 Implementation check on the RAW-conversion set
 

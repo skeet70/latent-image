@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 -- Host analysis of the owner photo session for spec/10 section 19.5.6 (X-M1
 -- model check): pixel identity of two JPEGs, ColorChecker patch rectangles,
@@ -7,6 +8,8 @@
 module PhotoSession
   ( Decoder (..)
   , photoIdentical
+  , photoDifference
+  , captureDifference
   , chartPatches
   , eModel
   , Ycc (..)
@@ -18,6 +21,7 @@ module PhotoSession
   ) where
 
 import Control.Monad (forM, unless, when)
+import Control.Monad.ST (runST)
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
@@ -29,6 +33,8 @@ import qualified Data.ByteString.Unsafe as BU
 import Data.List (sort)
 import Data.Maybe (catMaybes)
 import qualified Data.Text as T
+import qualified Data.Vector.Unboxed as U
+import qualified Data.Vector.Unboxed.Mutable as UM
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import Text.Printf (printf)
@@ -110,6 +116,150 @@ photoIdentical dec a b = do
       let counts = [differing (planesY pa) (planesY pb), differing (planesCb pa) (planesCb pb), differing (planesCr pa) (planesCr pb)]
       putStrLn ("differing samples Y, Cb, Cr: " ++ show counts ++ " of " ++ show [B.length (planesY pa), B.length (planesCb pa), B.length (planesCr pa)])
       pure (all (== 0) counts)
+
+newtype PlaneDifference = PlaneDifference (U.Vector Int)
+
+planeDifference :: B.ByteString -> B.ByteString -> PlaneDifference
+planeDifference a b = PlaneDifference $ runST $ do
+  histogram <- UM.replicate 511 (0 :: Int)
+  let go !i
+        | i == B.length a = U.unsafeFreeze histogram
+        | otherwise = do
+            let d = fromIntegral (BU.unsafeIndex b i) - fromIntegral (BU.unsafeIndex a i)
+            UM.modify histogram (+ 1) (d + 255)
+            go (i + 1)
+  go 0
+
+differenceJson :: PlaneDifference -> Value
+differenceJson (PlaneDifference histogram) =
+  object
+    [ "samples" .= n
+    , "differing" .= (n - histogram U.! 255)
+    , "meanSigned" .= mean (weighted id)
+    , "meanAbsolute" .= mean (weighted abs)
+    , "rootMeanSquare" .= sqrt (mean (weighted (\d -> d * d)))
+    , "maxAbsolute" .= maximum (0 : [abs d | (d, _) <- bins])
+    , "histogram" .= [object ["difference" .= d, "samples" .= count] | (d, count) <- bins]
+    ]
+ where
+  n = U.sum histogram
+  bins = [(i - 255, count) | (i, count) <- zip [0 :: Int ..] (U.toList histogram), count /= 0]
+  weighted f = sum [fromIntegral (f d) * fromIntegral count | (d, count) <- bins] :: Double
+  mean x = if n == 0 then 0 else x / fromIntegral n
+
+-- | Signed differences are B minus A in native decoded sample levels.
+photoDifference :: Decoder -> FilePath -> FilePath -> IO Value
+photoDifference dec a b = do
+  pa <- decode dec a
+  pb <- decode dec b
+  H.ensure ((planesWidth pa, planesHeight pa, planesLayout pa) == (planesWidth pb, planesHeight pb, planesLayout pb)) "different dimensions or chroma layout"
+  pure $
+    object
+      [ "a" .= a
+      , "b" .= b
+      , "width" .= planesWidth pa
+      , "height" .= planesHeight pa
+      , "chromaLayout" .= show (planesLayout pa)
+      , "planes" .= object [name .= differenceJson (planeDifference (plane pa) (plane pb)) | (name, plane) <- [("Y", planesY), ("Cb", planesCb), ("Cr", planesCr)]]
+      ]
+
+data WbGains = WbGains {wbGreen :: !Double, wbRed :: !Double, wbBlue :: !Double}
+
+data CaptureComparison = CaptureComparison
+  { captureShot :: FilePath
+  , captureConversion :: FilePath
+  , captureSelectedWb :: WbGains
+  , captureAutoWb :: WbGains
+  , captureBlockSize :: !Int
+  , captureMaxLumaSd :: !Double
+  }
+
+parseCaptureComparison :: FilePath -> Value -> Either String CaptureComparison
+parseCaptureComparison dir = AT.parseEither $ A.withObject "capture comparison" $ \o -> do
+  let gains = A.withObject "GRB gains" $ \g -> do
+        result <- WbGains <$> g A..: "green" <*> g A..: "red" <*> g A..: "blue"
+        unless (all (\v -> v > 0 && not (isInfinite v || isNaN v)) [wbGreen result, wbRed result, wbBlue result]) (fail "WB gains must be finite and positive")
+        pure result
+  shot <- (dir </>) <$> o A..: "shot"
+  conversion <- (dir </>) <$> o A..: "conversion"
+  selected <- o A..: "selectedWb" >>= gains
+  auto <- o A..: "autoWb" >>= gains
+  size <- o A..: "blockSize"
+  sd <- o A..: "maxLumaSd"
+  unless (size >= 4 && sd >= 0 && not (isInfinite sd || isNaN sd)) (fail "invalid block selection")
+  pure (CaptureComparison shot conversion selected auto size sd)
+
+-- | Input-gain counterfactuals, not RAW or noise-reduction models.
+captureDifference :: Decoder -> FilmParams -> FilePath -> IO Value
+captureDifference dec params manifestPath = do
+  manifest <- H.readRegular (1024 * 1024) manifestPath >>= either H.failH pure . decodeStrict
+  comparison <- either H.failH pure (parseCaptureComparison (takeDirectory manifestPath) manifest)
+  shot <- decode dec (captureShot comparison)
+  converted <- decode dec (captureConversion comparison)
+  H.ensure ((planesWidth shot, planesHeight shot, planesLayout shot) == (planesWidth converted, planesHeight converted, planesLayout converted)) "different dimensions or chroma layout"
+  let stage = compileStage params
+      size = captureBlockSize comparison
+      flat m = lumaSd m <= captureMaxLumaSd comparison
+      blocks =
+        [ (a, b)
+        | y <- [0, size .. planesHeight shot - size]
+        , x <- [0, size .. planesWidth shot - size]
+        , let r = Rect "" x y size size
+        , Just a <- [rectMean shot r]
+        , Just b <- [rectMean converted r]
+        , flat a && flat b
+        ]
+      recover m = invert stage (meanY m) (meanCb m) (meanCr m)
+      recovered = [(a, b, wa, wb) | (a, b) <- blocks, Just wa <- [recover a], Just wb <- [recover b]]
+      channels (Rgb14 r g b) = [r, g, b]
+      ratios channel =
+        [ fromIntegral target / fromIntegral source
+        | (_, _, a, b) <- recovered
+        , let source = channels a !! channel
+              target = channels b !! channel
+        , source >= 64 && target >= 64
+        ]
+      median xs = case sort xs of
+        [] -> Nothing
+        ordered -> let n = length ordered in Just (if odd n then ordered !! (n `div` 2) else (ordered !! (n `div` 2 - 1) + ordered !! (n `div` 2)) / 2)
+      selected = captureSelectedWb comparison
+      auto = captureAutoWb comparison
+      wbRatios = zipWith (/) [wbRed auto / wbGreen auto, 1, wbBlue auto / wbGreen auto] [wbRed selected / wbGreen selected, 1, wbBlue selected / wbGreen selected]
+      scalar v = [v, v, v]
+      fixedHypotheses =
+        [ ("identity", scalar 1)
+        , ("auto-instead-of-selected-wb", wbRatios)
+        , ("selected-instead-of-auto-wb", map recip wbRatios)
+        , ("plus-third-stop-input-gain-proxy", scalar (2 ** (1 / 3)))
+        , ("minus-third-stop-input-gain-proxy", scalar (2 ** (-1 / 3)))
+        ]
+      fitDiagonal = traverse (median . ratios) [0, 1, 2]
+      fitScalar = median (concatMap ratios [0, 1, 2])
+      fitted = [("fitted-diagonal-input-gain", g) | Just g <- [fitDiagonal]] ++ [("fitted-scalar-input-gain", scalar g) | Just g <- [fitScalar]]
+      scaled gains w = case zipWith (\g v -> round (g * fromIntegral v)) gains (channels w) of
+        [r, g, b] | all (\v -> v >= 0 && v <= 16383) [r, g, b] -> Just (Rgb14 r g b)
+        _ -> Nothing
+      lab m = ycbcrToLabF (meanY m) (meanCb m) (meanCr m)
+      renderLab w = let YCbCr y cb cr = develop stage w in ycbcrToLab y cb cr
+      statistics ds = let Stats mean p95 largest = stats ds in object ["n" .= length ds, "mean" .= mean, "p95" .= p95, "max" .= largest]
+      hypothesis (name, gains) =
+        let usable = [(b, w) | (_, b, source, _) <- recovered, Just w <- [scaled gains source]]
+         in object ["name" .= (name :: T.Text), "rgbInputGain" .= gains, "outOfRange" .= (length recovered - length usable), "conversionResidual" .= statistics [ciede2000 (lab b) (renderLab w) | (b, w) <- usable]]
+  H.ensure (not (null recovered)) "no invertible flat blocks"
+  pure $
+    object
+      [ "shot" .= captureShot comparison
+      , "conversion" .= captureConversion comparison
+      , "blockSize" .= size
+      , "maxLumaSd" .= captureMaxLumaSd comparison
+      , "flatBlocks" .= length blocks
+      , "invertibleBlocks" .= length recovered
+      , "gainFitCountsRGB" .= map (length . ratios) [0, 1, 2]
+      , "unchangedShotResidual" .= statistics [ciede2000 (lab a) (lab b) | (a, b, _, _) <- recovered]
+      , "shotInverseRoundTrip" .= statistics [ciede2000 (lab a) (renderLab w) | (a, _, w, _) <- recovered]
+      , "conversionInverseRoundTrip" .= statistics [ciede2000 (lab b) (renderLab w) | (_, b, _, w) <- recovered]
+      , "hypotheses" .= map hypothesis (fixedHypotheses ++ fitted)
+      ]
 
 data Rect = Rect {rectName :: T.Text, rectX :: Int, rectY :: Int, rectW :: Int, rectH :: Int}
 
