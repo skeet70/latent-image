@@ -98,6 +98,8 @@ This search supplies a concrete next lead: correlate the receive-word history an
 
 Frame-relative cadence is **unresolved**. No frame period, AF-statistics samples/frame, exposure-to-ready delay or post-move validity delay was measured or proved from a closed producer/interrupt graph. The display/movie frame rate is not used as a substitute. Addresses above name observation candidates; they do not establish safe hooks.
 
+The [snapshot-producer report](xm1-snapshot-producers.md) binds the bridge's `0x5c4`-byte metadata copies, AF worker completion and cached-result distinction against Run 3. It also binds the processed preview destinations at `0x031cc700` and `0x03386000`, joint image-bank completion and software ownership transitions, and records two private camera-derived PNGs. It separates hardware statistic banks, bridge copies and the 112-byte computed result, and defines the owned-copy review boundary for [#107](https://github.com/skeet70/latent-image/issues/107). The non-atomic near-black rasters do not establish fresh coherent frames or a stock extraction lease.
+
 ### Non-synthetic statistic producer gaps for #102
 
 The retained emulator already has an explicitly X-M1-selected continuous producer in `emulator/producer_stream.py`. It latches firmware destination/configuration words, checks interrupt `0x2e` against X-M1 handler `0x0067bfdc`, writes nine bounded windows before raising that interrupt, and follows the guest's paired channel acknowledgments. Window extents are `0x800, 0x50, 0x1000, 0x140, 0x400, 0x400, 0x20, 0x200, 0x200` bytes, with a separate optional histogram. This is more than an unbound interrupt, but its profile name explicitly says `declared-continuous-statistics-scene-unmeasured`.
