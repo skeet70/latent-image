@@ -15,6 +15,7 @@ haskell_library(
     src_strip_prefix = ".",
     deps = [
         "//host:base",
+        "//host:bytestring",
         "//host:directory",
         "//host:filepath",
         "//host:unix",
@@ -30,6 +31,35 @@ haskell_binary(
         ":emulator-slot-lib",
         "//host:base",
         "//host:directory",
+        "//host:unix",
+    ],
+)
+
+haskell_binary(
+    name = "emulator-slot-probe",
+    srcs = ["EmulatorSlotProbe.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":emulator-slot-lib",
+        "//host:base",
+    ],
+)
+
+# systemd-run must reach the host's user systemd manager, whose bus drops
+# clients arriving from a PID namespace, so the linux-sandbox cannot host this.
+haskell_test(
+    name = "emulator-slot-tests",
+    size = "small",
+    srcs = ["EmulatorSlotTests.hs"],
+    args = ["$(rootpath :emulator-slot-probe)"],
+    data = [":emulator-slot-probe"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    tags = ["no-sandbox"],
+    deps = [
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
         "//host:unix",
     ],
 )
