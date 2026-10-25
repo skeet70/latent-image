@@ -345,6 +345,82 @@ haskell_binary(
     ],
 )
 
+# The flash recipe package: links the bank kernel, boot fragments and D3 hook,
+# runs the D3 compiler, the bank builder and the container chain
+# (reports/recipe-design.md section 19). `bazel run` from the workspace root:
+# `bazel run //host/firmware:build-recipe-package -- OUT_DIR`.
+haskell_binary(
+    name = "build-recipe-package",
+    srcs = ["BuildRecipePackage.hs"],
+    args = [
+        "$(rootpath :build-recipe-bank)",
+        "$(rootpath :build-compiled-recipes)",
+        "$(rootpath :apply-patch-set)",
+        "$(rootpath :rebuild-update)",
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //lz:fflzd)",
+        "$(rootpath @lab_clang//:bin/clang)",
+        "$(rootpath @lab_lld//:bin/ld.lld)",
+        "$(rootpath @lab_llvm//:bin/llvm-objcopy)",
+        "$(rootpath @lab_llvm//:bin/llvm-nm)",
+        "$(rootpath @lab_llvm//:bin/llvm-objdump)",
+    ],
+    data = [
+        ":apply-patch-set",
+        ":build-compiled-recipes",
+        ":build-recipe-bank",
+        ":rebuild-update",
+        "//lz:fflzd",
+        "//lz:lz-encode",
+        "@lab_clang//:bin/clang",
+        "@lab_lld//:bin/ld.lld",
+        "@lab_llvm//:bin/llvm-nm",
+        "@lab_llvm//:bin/llvm-objcopy",
+        "@lab_llvm//:bin/llvm-objdump",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:filepath",
+        "//host:json",
+        "//host:process",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_test(
+    name = "build-recipe-package-tests",
+    size = "small",
+    srcs = ["BuildRecipePackageTests.hs"],
+    args = ["$(rootpath :build-recipe-package)"],
+    data = [":build-recipe-package"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+    ],
+)
+
 haskell_test(
     name = "recipe-bank-tests",
     srcs = ["RecipeBankTests.hs"],
