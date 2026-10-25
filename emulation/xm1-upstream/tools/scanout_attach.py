@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT))
 
 FIRST_START_PULSE = 8_000_000
 ATTACH_HOLD_PULSE = 8_000_000
+MODE_DIAL_SETTLE = 40_000_000
 
 
 def _unique_object(pairs):
@@ -438,9 +439,12 @@ class _FF80EndpointBridge:
         return {key: current.get(key) for key in ('menu_id', 'setting_id', 'cursor')}
 
 
-def _ram_push_attach(board, session, bridge, hold_key=None):
+def _ram_push_attach(board, session, hold_key=None, bridge=None):
     """Boot past the first-start language screen into live view and enumerate ff80. HOLD_KEY is
     pressed ATTACH_HOLD_PULSE instructions before the cable level rises and released after enumeration."""
+    if bridge is None:
+        from tools.scanout_commands import _ram_push_bridge
+        bridge = _ram_push_bridge(board, session)
     bridge.run_until('first-start screen', lambda: board.instructions >= 100_000_000, 100_000_000)
     for key in ['up'] * 12 + ['ok', 'ok']:
         session.key({'key': key, 'hold_instructions': FIRST_START_PULSE,
@@ -460,8 +464,8 @@ def _ram_push_attach(board, session, bridge, hold_key=None):
         bridge.run_for(ATTACH_HOLD_PULSE)
         hold['menu_after_release'] = bridge.key_state(session.sample(False))
         pre_attach['attach_hold'] = hold
-    return {'pre_attach': pre_attach, 'device': device.hex(),
-            'configuration': configuration.hex()}
+    return bridge, {'pre_attach': pre_attach, 'device': device.hex(),
+                    'configuration': configuration.hex()}
 
 
 RAM_PUSH_CHECKPOINT_SCHEMA = 1

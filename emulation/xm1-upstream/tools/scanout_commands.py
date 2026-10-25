@@ -13,10 +13,8 @@ import sys
 from pathlib import Path
 from time import perf_counter
 
-from tools.scanout_attach import (_FF80EndpointBridge, INSTALL_RECORD, _read_ram_push_record,
-                                  _save_ram_push_checkpoint, _unique_object)
-
-MODE_DIAL_SETTLE = 40_000_000
+from tools.scanout_attach import (_FF80EndpointBridge, INSTALL_RECORD, MODE_DIAL_SETTLE,
+                                  _read_ram_push_record, _save_ram_push_checkpoint, _unique_object)
 
 
 class _FF80CommandBridge(_FF80EndpointBridge):

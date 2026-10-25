@@ -35,9 +35,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from tools.scanout_attach import (ATTACH_RECORD, FIRST_START_PULSE, INSTALL_RECORD,
-                                  _ram_push_attach, _read_ram_push_record,
-                                  _save_ram_push_checkpoint, _unique_object, cold_board)
-from tools.scanout_commands import (_install_checkpoints, _ram_push_bridge,
+                                  MODE_DIAL_SETTLE, _ram_push_attach, _read_ram_push_record,
+                                  _save_ram_push_checkpoint, _unique_object, cold_board,
+                                  load_profile)
+from tools.scanout_commands import (_FF80CommandBridge as _FF80EndpointBridge,
+                                    _install_checkpoints, _ram_push_bridge,
                                     _restore_ram_push_checkpoint, _run_ram_push_server)
 
 MAX_CONTINUATION = 15_000_000
@@ -973,8 +975,7 @@ def main():
     else:
         session = WarmScanoutSession(board, output, options=options)
     if args.ram_push_server:
-        bridge = _ram_push_bridge(board, session)
-        attachment = _ram_push_attach(board, session, bridge, args.attach_hold_key)
+        bridge, attachment = _ram_push_attach(board, session, args.attach_hold_key)
         if checkpoint is not None:
             from emulator.checkpoint import CheckpointError
             checkpoint['boot_seconds'] = round(perf_counter() - boot_started, 3)

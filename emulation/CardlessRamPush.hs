@@ -318,9 +318,9 @@ serve started runtime options =
                     withJSON (H.obj []) $ \keywords -> do
                       setKeyObject keywords "options" loaded
                       callCallable sessionClass [ArgObject board, ArgObject output] keywords $ \session ->
-                        callObject commands "_ram_push_bridge" [ArgObject board, ArgObject session] (H.obj []) $ \bridge ->
-                          callObject attach "_ram_push_attach"
-                            [ArgObject board, ArgObject session, ArgObject bridge] (H.obj []) $ \attachment -> do
+                        callObject attach "_ram_push_attach" [ArgObject board, ArgObject session] (H.obj []) $ \pair ->
+                          withItem pair 0 $ \bridge ->
+                            withItem pair 1 $ \attachment -> do
                               bootSeconds <- elapsedSince bootStarted
                               saveStarted <- getMonotonicTime
                               callObject bridge "drain_scheduled" [] (H.obj []) (\_ -> pure ())
