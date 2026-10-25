@@ -23,7 +23,7 @@ import Data.Time.Format (defaultTimeLocale, formatTime)
 import Emulation.CandidateBaseline
 import Emulation.EmulatorSlot (SlotCount (..), SlotPolicy (..), slotPolicyFromEnvironment)
 import GHC.Clock (getMonotonicTime)
-import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getCurrentDirectory)
+import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectoryRecursive)
 import System.Environment (getArgs, getEnvironment, getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure, exitSuccess)
 import System.FilePath (splitDirectories, takeDirectory, takeFileName, (</>))
@@ -493,6 +493,23 @@ judge record baselines route receipt execution = do
                   passed = null differences && not (isJust failedRun)
               pure (outcome (if passed then "pass" else "fail") failedRun differences baselinePath)
 
+-- | Removes what a passing route staged beside its observed files: its viewer
+-- runtime, native build directory, native case directories and updater
+-- runtime. A full run's native case directories alone take about 10 GB.
+prune :: RunDirectory -> Outcome -> IO ()
+prune (RunDirectory run) outcome = do
+  let name = routeName (outcomeRoute outcome)
+      receipt = outcomeReceipt outcome
+  caseDirectories <- if routeHost (outcomeRoute outcome) == NativeSuite
+    then do
+      present <- doesDirectoryExist receipt
+      entries <- if present then listDirectory receipt else pure []
+      pure (map (receipt </>) entries)
+    else pure []
+  forM_ ([run </> "runtimes" </> name, run </> "builds" </> name, receipt </> "runtime"] ++ caseDirectories) $ \path -> do
+    directory <- doesDirectoryExist path
+    when directory (removeDirectoryRecursive path)
+
 main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
@@ -531,6 +548,8 @@ main = do
         | isJust (lookup route receipts) = Nothing
         | otherwise = maybe (Map.lookup route earlier) Just (Map.lookup route executions)
   outcomes <- forM selected $ \route -> judge (optionRecord options) baselines route (receiptOf route) (executionOf route)
+  forM_ outcomes $ \outcome -> when (outcomeRoute outcome `elem` toExecute && outcomeResult outcome `elem` ["pass", "recorded"]) $
+    prune (RunDirectory run) outcome
   forM_ outcomes $ \outcome -> unless (null (outcomeDifferences outcome)) $ do
     createDirectoryIfMissing True (run </> "differences")
     BL.writeFile (run </> "differences" </> (routeName (outcomeRoute outcome) ++ ".json"))
