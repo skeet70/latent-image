@@ -810,9 +810,9 @@ devenv shell -- bazel test //emulation:candidate-baseline-tests
 | `ram-push-cc` | `xm1-viewer --ram-push-e2e --classic-chrome --fixed-scene-frame 7` | RAM-push set |
 | `ram-push-cc-icon` | `xm1-viewer --ram-push-e2e --classic-chrome-icon --fixed-scene-frame 7` | RAM-push set |
 | `usb-toggle-e8` | `xm1-viewer --ram-push-e2e --classic-chrome --attach-hold-q --fixed-scene-frame 7`, RC0+toggle DAT over stored `0xf7 = 0` | RAM-push set |
-| `flash-candidate-icon-b` | `xm1-viewer --ram-push-e2e --flash-candidate`, design-B DAT, `classic-chrome-icon-trajectories.json` | flash-candidate set |
+| `flash-candidate-icon-b` | `xm1-viewer --ram-push-e2e --flash-candidate --fixed-scene-frame 7`, design-B DAT, `classic-chrome-icon-trajectories.json` | flash-candidate set |
 | `flash-candidate-q-tile-b` | the same with `classic-chrome-q-tile-trajectories.json` | flash-candidate set |
-| `flash-candidate-refresh` | `xm1-viewer --ram-push-e2e --flash-candidate`, the recipe package's `recipe-complete.DAT`, `ui-trajectories.json` `dial-refresh` | flash-candidate set |
+| `flash-candidate-refresh` | `xm1-viewer --ram-push-e2e --flash-candidate --fixed-scene-frame 7`, the recipe package's `recipe-complete.DAT`, `ui-trajectories.json` `dial-refresh` | flash-candidate set |
 | `updater-f7-rc0-toggle`, `updater-f7-cc-toggle` | `updater-f7` with each restore card over `f7-1.nand` | `receipt.json` |
 | `native-volatile`, `native-sd` | `build-recipe-bank-cases.sh` with `RB_MODE` and `JOBS` (`--native-jobs`, default 4) | `results.json`, `findings.txt` |
 

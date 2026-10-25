@@ -172,11 +172,11 @@ routeInvocation context route receipt = case route of
     ["--cardless", "--firmware", prefixDat, "--installed-nand", storedF7One, "--trajectories", volatileScenario]
   RamPushClassicChrome -> ramPush (["--classic-chrome", "--firmware", prefixDat, "--installed-nand", storedF7One] ++ card)
   RamPushClassicChromeIcon -> ramPush (["--classic-chrome-icon", "--firmware", prefixDat, "--installed-nand", storedF7One] ++ card)
-  FlashCandidateIcon -> viewer (["--flash-candidate", "--firmware", iconFlashDat, "--installed-nand", storedF7One] ++ card
+  FlashCandidateIcon -> ramPush (["--flash-candidate", "--firmware", iconFlashDat, "--installed-nand", storedF7One] ++ card
     ++ ["--trajectories", "emulation/classic-chrome-icon-trajectories.json"])
-  FlashCandidateQTile -> viewer (["--flash-candidate", "--firmware", iconFlashDat, "--installed-nand", storedF7One] ++ card
+  FlashCandidateQTile -> ramPush (["--flash-candidate", "--firmware", iconFlashDat, "--installed-nand", storedF7One] ++ card
     ++ ["--trajectories", "emulation/classic-chrome-q-tile-trajectories.json"])
-  FlashCandidateRefresh -> viewer (["--flash-candidate", "--firmware", refreshFlashDat, "--installed-nand", storedF7One
+  FlashCandidateRefresh -> ramPush (["--flash-candidate", "--firmware", refreshFlashDat, "--installed-nand", storedF7One
     , "--sd-card-image", refreshCard, "--trajectories", "emulation/ui-trajectories.json", "--segments", "dial-refresh"])
   UsbToggleE8 -> ramPush (["--classic-chrome", "--attach-hold-q", "--firmware", rc0ToggleDat, "--installed-nand", storedF7Zero] ++ card)
   UpdaterRc0Toggle -> updater "restore-rc0-toggle"
