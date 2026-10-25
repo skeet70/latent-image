@@ -2,9 +2,9 @@
 
 ## Shared Rust candidate controller
 
-`//af:candidate-controller` builds the allocation-free Rust library in [candidates/controller.rs](candidates/controller.rs). Its explicit `Controller::step(Event) -> Action` interface runs A0-structural's decode-bound direction/peak/three-position model, A1 coarse/fine scanning and A2 adaptive local peak estimation. The [candidate report](../reports/af-candidates.md) records source reproducibility, hardware-observed Run-3 parameter values, alias translation, remaining synthetic lens increments and resource bounds.
+`//af:candidate-controller` builds the allocation-free Rust library in [candidates/controller.rs](candidates/controller.rs). Its explicit `Controller::step(Event) -> Action` interface runs A0-structural's decode-bound direction/peak/three-position model, A1 coarse/fine scanning, A2 adaptive local peak estimation and A3-libcamera's independent contrast-only S13 policy. The [candidate report](../reports/af-candidates.md) records the pinned source/defaults, licence, synthetic adaptations, hardware-observed Run-3 values and resource bounds.
 
-The Haskell comparison harness sends all three candidates the same linearly interpolated synthetic focus curves and initial position. It prints CSV with `origin=simulated`, accepted sample count, simulated travel in artificial position units and absolute final-position error against the declared optimum. A refusal has no final-position error. A0-structural combines observed parameter-bank values for one mounted lens with unresolved synthetic increments and context assumptions. It cycles on the clean single-peak fixture and is not usable as a controller reference until the increments and statistic units are bound; the report records the bounded diagnosis. It is not calibrated stock X-M1 behavior or camera timing.
+The Haskell comparison harness sends all four candidates the same linearly interpolated synthetic curves and initial position. Its `origin=simulated` CSV reports accepted contrast observations, simulated frames, travel and final-position error. Frame count includes A3's startup, slew and settling waits; the other candidates have no frame-delay model. A refusal has no final-position error. A0-structural cycles on the clean single peak and is not usable as a reference until increments and statistic units are bound. A3-libcamera's default confidence rejects the flat and two-depth fixtures. None of these results is calibrated X-M1 behavior or camera timing.
 
 ```sh
 devenv shell -- bazel test --lockfile_mode=error //af:candidate-replay-tests //af:candidate-compare-tests
@@ -12,6 +12,10 @@ devenv shell -- bazel run //af:candidate-compare -- af/candidates/fixtures/singl
 ```
 
 The library has no I/O, allocator, floating-point dependency or global mutable state. The stdio adapter is host-only. It does not supply a camera movement, completion or freshness contract.
+
+`WaitFrame` requests one fresh, settled frame without a decision contrast measurement; `Event::Frame` completes it. Scalar observations cannot bypass that wait. A3's continuous mode uses `SceneSample` with typed contrast/RGB means and returns nonterminal `Monitor` actions after focused or failed settling. A scene change starts a ten-observation stability window; completing it retriggers a programmed scan without resetting the session budgets.
+
+The stdio adapter accepts `CANDIDATE2 A3-libcamera maximum initial_position` for triggered scanning, or `A3-libcamera-continuous` for continuous replay. Reply to `WAIT_FRAME request position` with `FRAME`, to `OBSERVE` with a score or `SCENE contrast red green blue`, and to `MONITOR request position focused|failed` with `SCENE`. Continuous mode requires scene statistics throughout its scan and monitoring. The five-curve harness runs triggered mode; the Rust replay suite exercises continuous scene changes.
 
 ## Legacy synthetic C prototype
 
