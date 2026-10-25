@@ -4,7 +4,7 @@
 //! FujiMod session snapshots.
 use fujimod_xm1::adjustment::AdjustmentNand;
 use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, Transfer, encode_hex};
-use fujimod_xm1::guest::{MenuState, ModeDialPosition, RouteKey};
+use fujimod_xm1::guest::{DialTurn, MenuState, ModeDialPosition, Press, RouteKey};
 use fujimod_xm1::machine::{KeyPulse, Machine};
 use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
@@ -32,6 +32,8 @@ const LIVE_VIEW_SETTLE: u64 = 40_000_000;
 const MODE_DIAL_SETTLE: u64 = 40_000_000;
 const DIRECTIONAL_PULSE: KeyPulse = KeyPulse { hold: 3_000_000, release: 12_000_000 };
 const MENU_PULSE: KeyPulse = KeyPulse { hold: 4_000_000, release: 6_000_000 };
+/// `tools/probe_setup_menus.py` DIAL_PULSE.
+const DIAL_PULSE: KeyPulse = KeyPulse { hold: 4_000_000, release: 1_000_000 };
 const MAX_PHASE: u64 = 15_000_000;
 const MAX_READ: usize = 4096;
 
@@ -378,10 +380,11 @@ fn parse_address(text: &str) -> Result<u32, String> {
         .ok_or_else(|| format!("invalid trace site address {text}"))
 }
 
-fn default_pulse(key: RouteKey) -> KeyPulse {
+fn default_pulse(key: Press) -> KeyPulse {
     match key {
-        RouteKey::Up | RouteKey::Down | RouteKey::Left | RouteKey::Right => DIRECTIONAL_PULSE,
-        RouteKey::Ok | RouteKey::Back | RouteKey::Q => MENU_PULSE,
+        Press::Key(RouteKey::Up | RouteKey::Down | RouteKey::Left | RouteKey::Right) => DIRECTIONAL_PULSE,
+        Press::Key(RouteKey::Ok | RouteKey::Back | RouteKey::Q) => MENU_PULSE,
+        Press::Dial(DialTurn::Left | DialTurn::Right) => DIAL_PULSE,
     }
 }
 
@@ -425,7 +428,7 @@ impl Server {
                 json!({"count": hits.len(), "hits": &hits[from..]})
             }
             Request::Key { key, hold_instructions, release_instructions, settle_instructions } => {
-                let route = RouteKey::parse(&key)?;
+                let route = Press::parse(&key)?;
                 let pulse = match (hold_instructions, release_instructions) {
                     (None, None) => default_pulse(route),
                     (Some(hold), Some(release)) if (1..=MAX_PHASE).contains(&hold) && (1..=MAX_PHASE).contains(&release) => {

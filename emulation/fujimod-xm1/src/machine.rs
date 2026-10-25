@@ -1,13 +1,14 @@
 //! A strict X-M1 session and its run document; runs record armed instruction
 //! points and stop at the R4F guard's refusals.
 
-use crate::guest::{MenuState, ModeDialPosition, ModeDialWindow, RouteKey, set_adc};
+use crate::guest::{DialTurn, MenuState, ModeDialPosition, ModeDialWindow, Press, RouteKey, set_adc};
 use crate::r4f::Guard;
 use crate::run::RunDocument;
 use crate::trace::TraceSites;
 use fujimod_emulator::session::Session;
 
 const RELEASE_POLL: u64 = 250_000;
+const PHASE_POLL: u64 = 20_000;
 /// Longest run between two guard scans.
 const GUARD_WINDOW: u64 = 1_000_000;
 
@@ -105,6 +106,54 @@ impl Machine {
 
     pub fn menu(&self) -> Result<Option<MenuState>, String> {
         self.document.firmware.menu(&self.session)
+    }
+
+    pub fn press_once(&mut self, press: Press, pulse: KeyPulse) -> Result<(), String> {
+        match press {
+            Press::Key(key) => self.key(key, pulse),
+            Press::Dial(turn) => self.turn_dial(turn, pulse),
+        }
+    }
+
+    /// Drives the dial's four phases, each within a quarter of `pulse.hold` and refused unless
+    /// the scanner samples it, then waits up to `pulse.release` for the released phase.
+    pub fn turn_dial(&mut self, turn: DialTurn, pulse: KeyPulse) -> Result<(), String> {
+        if self.failure.is_some() {
+            return Err("Restore the checkpoint before another input after a strict stop".into());
+        }
+        self.document.firmware.subcommand_ready(&self.session)?;
+        const RELEASED: u8 = 0b11;
+        if self.document.firmware.subcommand_sampled(&self.session)? != RELEASED {
+            return Err("the sub-command scanner has not sampled released pads".into());
+        }
+        let (port, pins) = (self.document.firmware.subcommand.port, self.document.firmware.subcommand.pins);
+        let gpio = self.document.gpio.0.clone();
+        let phase_budget = pulse.hold / 4;
+        for (pin8, pin9) in turn.phases() {
+            self.session.gpio(&gpio, port, pins[0], pin8)?;
+            self.session.gpio(&gpio, port, pins[1], pin9)?;
+            let phase = u8::from(pin8) << 1 | u8::from(pin9);
+            if !self.run_until_sampled(phase, phase_budget)? {
+                return Err(format!("the sub-command scanner did not sample phase {phase:02b}"));
+            }
+        }
+        self.run_until_sampled(RELEASED, pulse.release)?;
+        self.require_running()
+    }
+
+    fn run_until_sampled(&mut self, phase: u8, budget: u64) -> Result<bool, String> {
+        let start = self.instructions();
+        loop {
+            self.require_running()?;
+            if self.document.firmware.subcommand_sampled(&self.session)? == phase {
+                return Ok(true);
+            }
+            let spent = self.instructions() - start;
+            if spent >= budget {
+                return Ok(false);
+            }
+            self.run((budget - spent).min(PHASE_POLL));
+        }
     }
 
     pub fn key(&mut self, key: RouteKey, pulse: KeyPulse) -> Result<(), String> {

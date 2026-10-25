@@ -216,6 +216,7 @@ haskell_binary(
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
+        "//host:text",
         "//host:vector",
     ],
 )
