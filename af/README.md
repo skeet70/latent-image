@@ -7,7 +7,7 @@
 The Haskell comparison harness sends both candidates the same linearly interpolated synthetic focus curves. It prints CSV with `origin=simulated`, accepted sample count, simulated travel in artificial lens units and absolute final-position error against the fixture's declared optimum. A refusal has no final-position error. This is not camera timing or a reproduction of stock X-M1 behavior.
 
 ```sh
-devenv shell -- bazel test //af:candidate-replay-tests
+devenv shell -- bazel test --lockfile_mode=error //af:candidate-replay-tests //af:candidate-compare-tests
 devenv shell -- bazel run //af:candidate-compare -- af/candidates/fixtures/single-peak.curve af/candidates/fixtures/two-depths.curve af/candidates/fixtures/edge-peak.curve af/candidates/fixtures/noisy-peak.curve af/candidates/fixtures/flat.curve
 ```
 

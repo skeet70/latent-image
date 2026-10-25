@@ -171,3 +171,31 @@ sh_binary(
     ],
     data = [":candidate-compare-hs", ":candidate-decision"] + glob(["candidates/fixtures/*.curve"]),
 )
+
+haskell_binary(
+    name = "candidate-compare-tests-hs",
+    srcs = ["CandidateCompareTests.hs"],
+    ghcopts = ["-XGHC2021", "-threaded"],
+    deps = ["//host:base", "//host:process"],
+)
+
+sh_test(
+    name = "candidate-compare-tests",
+    size = "small",
+    srcs = ["candidate-replay-tests.sh"],
+    args = [
+        "$(location :candidate-compare-tests-hs)",
+        "$(location :candidate-compare-hs)",
+        "$(location :candidate-decision)",
+        "$(location candidates/fixtures/single-peak.curve)",
+        "$(location candidates/fixtures/two-depths.curve)",
+        "$(location candidates/fixtures/edge-peak.curve)",
+        "$(location candidates/fixtures/noisy-peak.curve)",
+        "$(location candidates/fixtures/flat.curve)",
+    ],
+    data = [
+        ":candidate-compare-tests-hs",
+        ":candidate-compare-hs",
+        ":candidate-decision",
+    ] + glob(["candidates/fixtures/*.curve"]),
+)

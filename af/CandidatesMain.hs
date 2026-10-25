@@ -27,17 +27,21 @@ number text = maybe (fail "invalid curve integer") pure (readMaybe text)
 
 loadCurve :: FilePath -> IO Curve
 loadCurve path = do
-  rows <- map words . lines . BC.unpack <$> Host.readRegular (128 * 1024) path
+  rows <- map words . lines . BC.unpack <$> Host.readRegularWith (pure ()) False (128 * 1024) path
   case rows of
     ["synthetic", name, optimum, initial] : values -> do
       best <- Position <$> number optimum
       start <- Position <$> number initial
       points <- mapM point values
       let positions = map fst points
-      unless (length points >= 3 && length points <= 4096 && head positions == Position 0
-        && last positions >= Position 125 && last positions <= Position 65535 && and (zipWith (<) positions (drop 1 positions))
-        && best >= head positions && best <= last positions && start >= head positions && start <= last positions)
-        (fail "unsupported focus curve bounds")
+      case positions of
+        low : remaining -> do
+          let high = foldl max low remaining
+          unless (length points >= 3 && length points <= 4096 && low == Position 0
+            && high >= Position 125 && high <= Position 65535 && and (zipWith (<) positions remaining)
+            && best >= low && best <= high && start >= low && start <= high)
+            (fail "unsupported focus curve bounds")
+        [] -> fail "empty focus curve"
       pure (Curve (CurveName name) best start points)
     _ -> fail "expected tagged synthetic curve"
   where

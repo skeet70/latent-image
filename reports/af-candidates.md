@@ -48,6 +48,8 @@ The host-only stdio executable uses the same library with range 0 through the su
 
 [Supported commands](../af/README.md#shared-rust-candidate-controller) build the library, replay tests and Haskell comparison harness through Bazel and the locked Nix compiler. No Cargo build graph is added. `//af:candidate-compare` runs A1 and A2 independently on every supplied curve with identical configuration, reference optimum and initial position. Its trusted child processes are bounded to 30 seconds for the observation loop. Curve files are capped regular files read through the shared host helper, with at most 4096 strictly ordered positions and bounded scores.
 
+The capped regular-file reader follows fixture symlinks, including Bazel runfiles, and checks the opened target's type and size. `//af:candidate-compare-tests` exercises both candidates through the Haskell CLI using runfiles fixtures and checks focused positions, flat-curve refusal and accounting bounds without fixing the search's sample counts.
+
 CSV fields are `origin,curve,candidate,sample_count,simulated_travel_units,final_position_error_units,outcome`. Every result row says `simulated`. Travel is the sum of absolute moves from the fixture's initial position through every requested observation, including returning for final verification. Final-position error is absolute distance from the declared analytic optimum; a refusal leaves error empty. These are position/sample comparisons, not latency, acquisition frequency or motor-energy measurements. The harness reports the actually accepted count and checks it against the adapter's count.
 
 This is closed-loop synthetic curve simulation. Arbitrary requested scores use integer linear interpolation between the listed samples, with division towards zero. Movement is instantaneous and settled, repeated observations at one position have the same score, and there is no backlash, acquisition delay, exposure drift or time-varying noise. Interpolation is not recorded-path replay and does not calibrate counterfactual camera observations. Recorded camera inputs and target ranking remain dependent on #108. The existing delayed C simulator remains a separate legacy experiment, not a second implementation of these new candidates.
@@ -64,4 +66,21 @@ The five [`.curve` fixtures](../af/candidates/fixtures/) are original project-au
 | `noisy-peak.curve` | `1000000 - (p - 537)^2 + ((17*p) mod 101) - 50` | 537 / 500 | Both finish within 10 units. Noise is deterministic spatial perturbation, not repeated-measurement noise. | `74b356edc28af8ec315782c2b93f8d0ecef504161a907507db0fa400c575f342` |
 | `flat.curve` | `500000` | 0 / 500 | Both refuse as flat; optimum 0 is a format sentinel, not a unique focus label. | `a45ee14cbcf76ccb14b21103ecfd54edbb06688cf2ff6d7f7c29f32051b9b7a3` |
 
-The behavioural Rust replay suite consumes these public curves and checks the result positions/refusals, bounded samples, stale/missing/unsettled waits, wrong-position refusal, changed-final-score refusal, cancellation and eventual budget failure. These are specified expectations, not a claim that this report contains an exercised test result. No synthetic result accepts a camera speed/accuracy gate.
+The behavioural Rust replay suite consumes these public curves and checks the result positions/refusals, bounded samples, stale/missing/unsettled waits, wrong-position refusal, changed-final-score refusal, cancellation and eventual budget failure. The replay target passed in the checked-in environment. No synthetic result accepts a camera speed/accuracy gate.
+
+### Exercised simulated comparison
+
+The five-fixture `//af:candidate-compare` smoke command produced the following table. All travel and errors are artificial position units under the synthetic model above. A2 uses fewer samples and less simulated travel on these four non-flat examples; this does not establish a general ranking or camera improvement.
+
+| Origin | Curve | Candidate | Sample count | Simulated travel | Final-position error | Outcome |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| simulated | single-peak | A1 | 34 | 2425 | 2 | focused |
+| simulated | single-peak | A2 | 17 | 2071 | 2 | focused |
+| simulated | two-depths | A1 | 34 | 1835 | 5 | focused |
+| simulated | two-depths | A2 | 16 | 1507 | 1 | focused |
+| simulated | edge-peak | A1 | 22 | 3120 | 0 | focused |
+| simulated | edge-peak | A2 | 14 | 2900 | 0 | focused |
+| simulated | noisy-peak | A1 | 34 | 2425 | 2 | focused |
+| simulated | noisy-peak | A2 | 15 | 2056 | 3 | focused |
+| simulated | flat | A1 | 9 | 1500 | | FlatCurve |
+| simulated | flat | A2 | 9 | 1500 | | FlatCurve |
