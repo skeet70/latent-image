@@ -27,10 +27,44 @@ These commands perform no camera I/O. The simulation exercises a contrast-search
 | Firmware analysis | [Extraction and format findings](reports/firmware-extraction.md), [update-container contract](reports/update-container-rebuild.md), [matching-C pilot](matching/README.md) |
 | ARM execution and emulation | [Bounded native harness](emulation/README.md), [full-system findings and limits](reports/full-system-emulation.md) |
 | Recovery preparation | [X-M1 recovery kit and limits](recovery/README.md) |
-| Film recipes | [Recipe specification](spec/10-film-recipes.md), [editable-bank design](reports/recipe-design.md) |
+| Film recipes | [Recipe specification](spec/10-film-recipes.md), [editable-bank design](reports/recipe-design.md), [shareable recipe text](#share-recipes-as-text) |
 | Camera interfaces and read planning | [Transport tools](transport/README.md), [bounded read plans](readplan/README.md), [service and settings findings](reports/service-query-and-jig-reset.md) |
 
 The [specification](spec/README.md) describes the intended system and acceptance criteria, not a list of shipped camera features. Technical reports distinguish static findings, host experiments, and hardware observations; addresses and behavior are firmware-version-specific.
+
+## Share recipes as text
+
+A recipe is one plain text file of `Field: Value` lines, using the fields the camera's menus show, so recipes can be written and shared on a computer and imported into the editable custom bank. The tool is host-only: import writes the bank file and the user copies it to the card; no camera operation is involved.
+
+```sh
+# one text file per recipe, C1 first; BASE is the declared payload base
+bazel-bin/host/firmware/recipe-bank-text import BASE OUT_DIR recipe1.txt recipe2.txt ...
+# export occupied slots as C1.txt, C2.txt, ... in slot order
+bazel-bin/host/firmware/recipe-bank-text export BASE RECIPEA.BIN OUT_DIR
+```
+
+`BASE` is one 0x28-byte slot payload, given as 80 hex characters or as a file that holds it: the body's own C-payload defaults record when you have one, or an all-zero payload, which gives every field stored code 0. Every field a recipe omits takes its stored code from `BASE`, and the report names those fields.
+
+The keys are the camera's field names; matching ignores case and spacing, so `Film Simulation`, `FILM SIMULATION` and the X70 project's `film=` all name the same field. A line may use `:` or `=`; blank lines and lines starting with `#` are ignored. One recipe per file, and the file's name without its extension is the slot name when the file has no `Name` line.
+
+| Key | Values |
+| --- | --- |
+| `Name` | up to 12 printable ASCII characters, the bank's slot-name bound |
+| `Film Simulation` | `PROVIA/STANDARD`, `Velvia/VIVID`, `ASTIA/SOFT`, `B&W`, `SEPIA`, `PRO Neg. Std`, `PRO Neg. Hi` |
+| `Dynamic Range` | `AUTO`, `100`, `200`, `400` |
+| `Highlight Tone`, `Shadow Tone`, `Sharpness` | `-2`, `-1`, `0`, `+1`, `+2` (the menu names `SOFT`..`HARD` are accepted) |
+| `Color` | `-2`, `-1`, `0`, `+1`, `+2` (the menu names `LOW`..`HIGH` are accepted) |
+| `Noise Reduction` | `-2`, `-1`, `0`, `+1`, `+2` (`LOW`..`HIGH`) |
+| `White Balance` | `AUTO`, `CUSTOM`, `FINE`, `SHADE`, `FLUORESCENT LIGHT-1`, `FLUORESCENT LIGHT-2`, `FLUORESCENT LIGHT-3`, `INCANDESCENT` |
+| `ISO` | `AUTO`, `L100`, `200`..`6400`, `H12800`, `H25600` |
+
+The X70 project's `film=`, `dr=`, `highlight=`, `shadow=`, `color=`, `sharpness=`, `nr=`, `wb=`, `iso=` and `name=` spellings are accepted where they mean the same thing on this body, and so are `dr200`, `Pro Neg Std` and the numeric ISO spellings `100`, `12800` and `25600`.
+
+A file is rejected as a whole, with no substitution and no dropped field, when it names an unknown field; a feature the X-M1 1.50 does not implement (`Kelvin`, `WB Shift`, `Clarity`, `Grain`, `Color Chrome`, `D Range Priority`, exposure compensation); an X70 Auto ISO preset (`auto_iso1_*`..`auto_iso3_*`, `iso=auto1`..`auto3`); an unavailable film (`Classic Chrome`, `Eterna`, filtered monochrome) or white balance (`DAYLIGHT`, `CLOUDY`); a value outside the field's offered set; a field twice; an empty value; a line without a separator; or a name longer than 12 characters. Import reports each rejection and continues with the other files.
+
+Export writes the canonical form: the `Name` line and exactly the fields whose stored code differs from `BASE`, in the order of the table above. Importing an exported file over the same `BASE` reproduces the slot payload byte for byte. Each occupied slot exports its saved payload. A slot whose payload leaves fields the text cannot spell (for example ISO's second AUTO row, stored code 0x1b) or whose bytes differ from `BASE` outside the nine fields is reported and skipped rather than approximated.
+
+Both commands exit 0 when they write their output, reporting each rejected file or skipped slot on stdout; they exit 1 for a run they refuse (an unreadable `BASE`, more files than slots, or nothing imported or exported).
 
 ## Firmware extensions
 
