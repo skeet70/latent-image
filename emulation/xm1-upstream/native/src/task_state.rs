@@ -38,6 +38,34 @@ pub(crate) enum Error {
     InvalidAddress,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StartupPhase(pub u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MachineState(pub u16);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MessageId(pub u16);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LoadCommand(pub u16);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Completion {
+    NotCompleted,
+    Complete,
+    Other(u32),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Startup {
+    pub phase: StartupPhase,
+    pub message: MessageId,
+    pub machine_states: [MachineState; 6],
+    pub dispatch_modes: [MachineState; 6],
+    pub load_commands: [(LoadCommand, Completion); 9],
+}
+
 fn physical(address: Address) -> Result<usize, Error> {
     let address = address.0;
     let address = if (0x4000_0000..0x6000_0000).contains(&address) { address - 0x4000_0000 } else { address };
@@ -93,9 +121,28 @@ pub(crate) fn collect(ram: &[u8]) -> Result<Snapshot, Error> {
     Ok(snapshot)
 }
 
+pub(crate) fn collect_startup(ram: &[u8]) -> Result<Startup, Error> {
+    let [phase] = words(ram, Address(0x0095_709c))?;
+    let [message] = words(ram, Address(0x0095_7084))?;
+    let states = words::<3>(ram, Address(0x0097_2e88))?;
+    let modes = words::<3>(ram, Address(0x0091_9a28))?;
+    let loads = words::<9>(ram, Address(0x0094_4440))?;
+    let half = |words: &[u32; 3], index: usize| MachineState((words[index / 2] >> ((index % 2) * 16)) as u16);
+    Ok(Startup {
+        phase: StartupPhase(phase),
+        message: MessageId(message as u16),
+        machine_states: std::array::from_fn(|index| half(&states, index)),
+        dispatch_modes: std::array::from_fn(|index| half(&modes, index)),
+        load_commands: std::array::from_fn(|index| {
+            let completion = match loads[index] { 0 => Completion::NotCompleted, 1 => Completion::Complete, value => Completion::Other(value) };
+            (LoadCommand(0x4c00 + index as u16), completion)
+        }),
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{collect, Address, Error, Status, TaskId};
+    use super::{collect, collect_startup, Address, Completion, Error, LoadCommand, MachineState, MessageId, StartupPhase, Status, TaskId};
 
     fn fixture() -> Vec<u8> {
         let mut ram = vec![0; 0x60000];
@@ -147,5 +194,29 @@ mod tests {
         ram[0x5800c] = 0x33;
         assert_eq!(collect(&ram).unwrap().tasks[0].status, Status::Other(0x33));
         assert_eq!(collect(&ram[..0x5a040]), Err(Error::Truncated));
+    }
+
+    #[test]
+    fn reports_guest_startup_states_and_completed_load_commands() {
+        let mut ram = vec![0; 0x973000];
+        for (address, value) in [
+            (0x95709c, 1u32), (0x957084, 0x003b4b04),
+            (0x972e88, 0x00020001), (0x972e8c, 0x00040003), (0x972e90, 0x00060005),
+            (0x919a28, 0x00080007), (0x919a2c, 0x000a0009), (0x919a30, 0x000c000b),
+            (0x944440, 1), (0x944448, 7),
+        ] {
+            ram[address..address + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let startup = collect_startup(&ram).unwrap();
+        assert_eq!(startup.phase, StartupPhase(1));
+        assert_eq!(startup.message, MessageId(0x4b04));
+        assert_eq!(startup.machine_states, [1, 2, 3, 4, 5, 6].map(MachineState));
+        assert_eq!(startup.dispatch_modes, [7, 8, 9, 10, 11, 12].map(MachineState));
+        assert_eq!(startup.load_commands[0], (LoadCommand(0x4c00), Completion::Complete));
+        assert_eq!(startup.load_commands[1], (LoadCommand(0x4c01), Completion::NotCompleted));
+        assert_eq!(startup.load_commands[2], (LoadCommand(0x4c02), Completion::Other(7)));
+        ram[0x944444..0x944448].copy_from_slice(&1u32.to_le_bytes());
+        assert_eq!(collect_startup(&ram).unwrap().load_commands[1].1, Completion::Complete);
+        assert_eq!(collect_startup(&ram[..0x950000]), Err(Error::Truncated));
     }
 }
