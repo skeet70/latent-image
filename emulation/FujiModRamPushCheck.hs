@@ -114,8 +114,8 @@ check (Options output (Firmware supplied) nandSupplied) = do
             (Just low, Just sample, Just high) -> low <= sample && sample <= high
             _ -> False
       record "mode-dial" (field "position" dial == Just (String "M") && inWindow) dial
-      menu <- emulatorKey emulator Nothing "menu"
-      left <- emulatorKey emulator Nothing "left"
+      menu <- emulatorKey emulator defaultKeyTiming "menu"
+      left <- emulatorKey emulator defaultKeyTiming "left"
       record "key" (field "menu" menu == Just shootingMenu && field "menu" left == Just tabRow)
         (object ["menu" .= menu, "left" .= left])
   passed <- readIORef results

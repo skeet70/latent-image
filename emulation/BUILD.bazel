@@ -177,7 +177,7 @@ haskell_test(
     name = "ui-trajectory-tests",
     size = "small",
     srcs = ["UiTrajectoryTests.hs"],
-    data = glob(["*-trajectories.json"]),
+    data = glob(["*-trajectories.json", "*-trajectories.fujimod.json"]),
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":emulator-usb",
@@ -186,6 +186,37 @@ haskell_test(
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
+    ],
+)
+
+# bazel run //emulation:trajectory-variant-check -- RETAINED.json VARIANT.json
+haskell_binary(
+    name = "trajectory-variant-check",
+    srcs = ["TrajectoryVariantCheck.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ui-trajectory-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
+
+# bazel run //emulation:e2e-observation-compare -- RETAINED_RECEIPTS FUJIMOD_RECEIPTS
+haskell_binary(
+    name = "e2e-observation-compare",
+    srcs = ["E2EObservationCompare.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:vector",
     ],
 )
 

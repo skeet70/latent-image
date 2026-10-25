@@ -9,7 +9,8 @@ use crate::machine::{KeyPulse, Machine};
 use crate::run::{Address, NodeName};
 use serde::{Deserialize, Serialize};
 
-const MAX_SETTLE: u64 = 90_000_000;
+/// The default cap on a key's prior drain plus settle.
+pub const MAX_SETTLE: u64 = 90_000_000;
 const CHUNK: u64 = 250_000;
 const QUEUE_WAIT: u8 = 0x12;
 const ALIAS: u64 = 0x4000_0000;
@@ -208,18 +209,19 @@ impl Probe {
     }
 }
 
-/// Presses `key` once the preceding render has drained, then settles.
-pub fn settled_key(machine: &mut Machine, key: RouteKey, pulse: KeyPulse) -> Result<Settle, String> {
+/// Presses `key` once the preceding render has drained, then settles; `budget`
+/// caps the instructions run for both.
+pub fn settled_key(machine: &mut Machine, key: RouteKey, pulse: KeyPulse, budget: u64) -> Result<Settle, String> {
     let probe = |machine: &Machine| machine.document.firmware.render.probe(machine);
     let start = machine.instructions();
     let mut before = probe(machine)?;
     while !(before.drained && before.consumer_finished()) {
         machine.require_running()?;
         let spent = machine.instructions() - start;
-        if spent >= MAX_SETTLE {
+        if spent >= budget {
             return Ok(Settle { status: SettleStatus::PriorRenderPending, prior_instructions: spent, key_instructions: 0, settle_instructions: 0 });
         }
-        machine.run((MAX_SETTLE - spent).min(CHUNK));
+        machine.run((budget - spent).min(CHUNK));
         before = probe(machine)?;
     }
     let prior = machine.instructions() - start;
@@ -250,10 +252,10 @@ pub fn settled_key(machine: &mut Machine, key: RouteKey, pulse: KeyPulse) -> Res
             break SettleStatus::PacketConsumed;
         }
         let spent = prior + machine.instructions() - settle_start;
-        if spent >= MAX_SETTLE {
+        if spent >= budget {
             break SettleStatus::BudgetExhausted;
         }
-        machine.run((MAX_SETTLE - spent).min(CHUNK));
+        machine.run((budget - spent).min(CHUNK));
     };
     Ok(Settle {
         status,

@@ -15,6 +15,9 @@ module EmulatorUsb
   , emulatorTraceHits
   , emulatorKey
   , KeyPulse (..)
+  , KeyTiming (..)
+  , SettleBudget (..)
+  , defaultKeyTiming
   , ModeDial (..)
   , modeDialName
   , emulatorModeDial
@@ -276,11 +279,23 @@ emulatorTraceHits emulator start = do
 -- | A key's hold and debounced-release cap in guest instructions, both positive.
 data KeyPulse = KeyPulse { keyPulseHold :: Word32, keyPulseRelease :: Word32 } deriving (Eq, Show)
 
--- | Presses a key with the given pulse, or with the bridge's per-class default.
-emulatorKey :: Emulator -> Maybe KeyPulse -> String -> IO Value
-emulatorKey emulator pulse key = Object <$> rpc emulator (object (["command" .= String "key", "key" .= key] ++ budget))
+-- | A positive cap, in guest instructions, on the render drain before a key plus the settle after
+-- it. Only the FujiMod bridge takes one.
+newtype SettleBudget = SettleBudget Word32 deriving (Eq, Show)
+
+-- | How a key is pressed; Nothing leaves the bridge's per-class pulse or its settle cap.
+data KeyTiming = KeyTiming { keyTimingPulse :: Maybe KeyPulse, keyTimingSettle :: Maybe SettleBudget } deriving (Eq, Show)
+
+defaultKeyTiming :: KeyTiming
+defaultKeyTiming = KeyTiming Nothing Nothing
+
+-- | Presses a key with the given timing.
+emulatorKey :: Emulator -> KeyTiming -> String -> IO Value
+emulatorKey emulator (KeyTiming pulse settle) key =
+  Object <$> rpc emulator (object (["command" .= String "key", "key" .= key] ++ budget ++ cap))
   where
     budget = maybe [] (\(KeyPulse hold release) -> ["hold_instructions" .= hold, "release_instructions" .= release]) pulse
+    cap = maybe [] (\(SettleBudget instructions) -> ["settle_instructions" .= instructions]) settle
 
 -- | A mode-dial detent the bridge can set through its calibrated ADC window: the nine positions
 -- the viewer runs (SR+, SP and Adv. stop at unmodeled paths).

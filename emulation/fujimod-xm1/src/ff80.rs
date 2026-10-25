@@ -477,8 +477,8 @@ impl Ff80 {
         self.observe()
     }
 
-    pub fn settled_key(&mut self, key: RouteKey, pulse: KeyPulse) -> Result<crate::render::Settle, String> {
-        let settle = crate::render::settled_key(&mut self.machine, key, pulse)?;
+    pub fn settled_key(&mut self, key: RouteKey, pulse: KeyPulse, budget: u64) -> Result<crate::render::Settle, String> {
+        let settle = crate::render::settled_key(&mut self.machine, key, pulse, budget)?;
         self.observe()?;
         Ok(settle)
     }
