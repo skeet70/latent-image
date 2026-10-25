@@ -151,6 +151,19 @@ def _lab_dependencies_impl(_ctx):
         repository = "@lab_nixpkgs",
         build_file_content = 'exports_files(["bin/ffmpeg", "bin/ffprobe"], visibility = ["//visibility:public"])',
     )
+    # //emulation:card-with-files writes files into a card image's FAT partition.
+    nixpkgs_package(
+        name = "lab_mtools",
+        attribute_path = "mtools",
+        repository = "@lab_nixpkgs",
+        build_file_content = 'exports_files(["bin/mcopy", "bin/mdir", "bin/mtype"], visibility = ["//visibility:public"])',
+    )
+    nixpkgs_package(
+        name = "lab_dosfstools",
+        attribute_path = "dosfstools",
+        repository = "@lab_nixpkgs",
+        build_file_content = 'exports_files(["bin/mkfs.vfat"], visibility = ["//visibility:public"])',
+    )
     nixpkgs_package(
         name = "lab_fujimod",
         nix_file = "//build-support:fujimod.nix",

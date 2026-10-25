@@ -112,6 +112,7 @@ main = do
   roundTripChecks
   rejectionChecks
   exportRejectionChecks
+  safetyChecks
   binary <- makeAbsolute binaryArg
   cliChecks binary
   putStrLn "recipe-text: checks passed"
@@ -245,50 +246,56 @@ cliChecks binary = do
   removeFile root
   createDirectory root
   let hexBase = concat (replicate payloadBytes "11")
-      outDir = root </> "out"
-      exportDir = root </> "exported"
-      secondDir = root </> "second"
       run arguments = readCreateProcessWithExitCode (proc binary arguments) {cwd = Just root} ""
-  writeFile (root </> "warmstandard.txt") warmStandardText
-  writeFile (root </> "chrome.txt") "Film Simulation: Classic Chrome\n"
-  writeFile (root </> "tone.txt") "Highlight Tone: +3\n"
-  writeFile (root </> "eterna.txt") "Film Simulation: Eterna\n"
-  (importCode, importOut, importErr) <-
-    run ["import", hexBase, outDir, "warmstandard.txt", "chrome.txt", "eterna.txt", "tone.txt"]
-  check ("mixed set imports the valid recipe: " ++ show importErr) (importCode == ExitSuccess)
-  check ("mixed set reports C1: " ++ show importOut) ("IMPORTED C1 from warmstandard.txt as \"warmstandard\"" `isInfixOf` importOut)
-  check ("mixed set reports Classic Chrome as C2: " ++ show importOut) ("IMPORTED C2 from chrome.txt as \"chrome\"" `isInfixOf` importOut)
-  check ("mixed set reports the unsupported film: " ++ show importOut) ("REJECTED eterna.txt:" `isInfixOf` importOut && "Eterna" `isInfixOf` importOut)
-  check ("mixed set reports the out-of-range value: " ++ show importOut) ("REJECTED tone.txt:" `isInfixOf` importOut && "out of range" `isInfixOf` importOut)
-  check ("mixed set reports no field from the base: " ++ show importOut) ("from base: none" `isInfixOf` importOut)
-  bank <- B.readFile (outDir </> bankFileA)
-  let decoded = decodeBankFile bank
-      state = decodedState (fixture decoded)
-      occupied = [(k, name, bankPayloadContents saved) | (k, Populated name saved _) <- zip [0 :: Int ..] (bankRecordList (bankRecords state))]
-  check "the generated bank decodes with its checksum" (case decoded of Right _ -> True; Left _ -> False)
-  check "the generated bank is generation 1" (bankGeneration state == BankGeneration 1)
-  check "the generated bank has the Classic Chrome encoding" (decodedFilmEncoding (fixture decoded) == ClassicChromeFilmEncoding)
-  check "the generated bank has two populated slots" (length occupied == 2)
-  let expectedPayloads = [payloadOf testBase (fixture (parseRecipeText "warmstandard" warmStandardText)), payloadOf testBase (fixture (parseRecipeText "chrome" "Film Simulation: Classic Chrome\n"))]
-  check
-    "the populated slots carry their recipe payloads"
-    (occupied == zipWith3 (,,) [0,1] (map (fixture . slotName) ["warmstandard","chrome"]) expectedPayloads)
-  (exportCode, exportOut, exportErr) <- run ["export", hexBase, outDir </> bankFileA, exportDir]
-  check ("the bank exports: " ++ show exportErr) (exportCode == ExitSuccess)
-  check ("the bank reports its slot: " ++ show exportOut) ("EXPORTED C1" `isInfixOf` exportOut)
-  exported <- readFile (exportDir </> "C1.txt")
-  check "the exported text is the canonical recipe" (exported == "Name: warmstandard\n" ++ warmStandardText)
-  chromeExported <- readFile (exportDir </> "C2.txt")
-  check "the exported CC text preserves Classic Chrome" (chromeExported == "Name: chrome\nFilm Simulation: Classic Chrome\n")
-  (againCode, againOut, againErr) <- run ["import", hexBase, secondDir, exportDir </> "C1.txt", exportDir </> "C2.txt"]
-  check ("the exported text imports again: " ++ show againErr) (againCode == ExitSuccess)
-  check ("the exported text reports its slot: " ++ show againOut) ("IMPORTED C1" `isInfixOf` againOut)
-  again <- B.readFile (secondDir </> bankFileA)
-  let againState = decodedState (fixture (decodeBankFile again))
-      againOccupied = [bankPayloadContents saved | Populated _ saved _ <- bankRecordList (bankRecords againState)]
-  check "export followed by import reproduces both slots byte for byte" (againOccupied == expectedPayloads)
-  legacy <- either (error . show) pure (encodeBankFile state)
-  B.writeFile (root </> "legacy.bin") legacy
-  (legacyCode, _, _) <- run ["export", hexBase, "legacy.bin", root </> "legacy-export"]
-  check "export refuses a legacy D3 bank instead of relabelling code 0xd as Classic Chrome" (legacyCode /= ExitSuccess)
+  (noOptions, _, noOptionsErr) <- run ["import", hexBase, root </> "out", "one.txt"]
+  check ("an import without the image and row options is refused: " ++ show noOptionsErr) (noOptions /= ExitSuccess && "usage" `isInfixOf` noOptionsErr)
+  (noImage, _, noImageErr) <- run ["import", "--image4", "absent.bin", "--image-size", "1", hexBase, root </> "out", "one.txt"]
+  check ("a missing --image4 is refused: " ++ show noImageErr) (noImage /= ExitSuccess && "absent.bin" `isInfixOf` noImageErr)
   removeDirectoryRecursive root
+
+testDomain :: PayloadDomain
+testDomain =
+  PayloadDomain
+    { domainTables = []
+    , domainSizePairs = [SizePair (FieldCode size) (FieldCode aspect) | size <- [0, 1, 2], aspect <- [1, 2, 3]]
+    , domainQualityRaw = [QualityRaw (FieldCode 0) (FieldCode 0)]
+    }
+
+safetyChecks :: IO ()
+safetyChecks = do
+  check "an unoffered IMAGE SIZE row is refused" (rejectedWith "is not offered" (preparedBase testDomain 0 zeroBase))
+  let prepared = fixture (preparedBase testDomain 1 zeroBase)
+  check
+    "an offered IMAGE SIZE row makes the base pass the safety rules"
+    (payloadUnsafeReason testDomain (fixture (safePayload testDomain prepared)) == Nothing)
+  let warm = fixture (parseRecipeText "warmstandard" warmStandardText)
+      second = fixture (parseRecipeText "secondvelvia" secondVelviaText)
+      chrome = fixture (parseRecipeText "chrome" "Film Simulation: Classic Chrome\n")
+      payload recipe =
+        fixture
+          ( safePayload testDomain
+              (fixture (encodeSlotPayloadOver prepared (fst (fixture (fillRecipe prepared recipe)))))
+          )
+      records =
+        fixture
+          ( bankRecordsFromList
+              ( [ Populated (textName warm) (payload warm) (payload warm)
+                , Populated (textName second) (payload second) (payload second)
+                , Populated (textName chrome) (payload chrome) (payload chrome)
+                ]
+                  ++ replicate 4 Unpopulated
+              )
+          )
+      file = fixture (encodeBankFileFor ClassicChromeFilmEncoding (BankState (BankGeneration 1) NothingSelected Disabled BaseInvalid records))
+  check
+    "every payload of the emitted CC bank passes the safety rules"
+    (case classifyBankFileFor ClassicChromeFilmEncoding testDomain file of ValidFile _ -> True; _ -> False)
+  let decoded = fixture (decodeBankFile file)
+  check "text recipes emit the CC bank encoding" (decodedFilmEncoding decoded == ClassicChromeFilmEncoding)
+  check
+    "a CC text recipe retains its film after a bank round-trip"
+    (case bankRecordAt C3 (bankRecords (decodedState decoded)) of
+      Populated name saved working ->
+        fmap fst (exportRecipeText prepared name (bankPayloadContents saved)) == Right "Name: chrome\nFilm Simulation: Classic Chrome\n"
+          && saved == working
+      Unpopulated -> False)

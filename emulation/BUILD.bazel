@@ -3,6 +3,60 @@ load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "h
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
+# Copies a card image to a new path and writes named files into its FAT
+# partition with mtools, for --sd-card-image inputs.
+haskell_binary(
+    name = "card-with-files",
+    srcs = ["CardWithFiles.hs"],
+    data = [
+        "@lab_mtools//:bin/mcopy",
+        "@lab_mtools//:bin/mdir",
+        "@lab_mtools//:bin/mtype",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+    ],
+)
+
+haskell_test(
+    name = "card-with-files-tests",
+    size = "small",
+    srcs = ["CardWithFilesTests.hs"],
+    args = ["$(rootpath :card-with-files)"],
+    data = [
+        ":card-with-files",
+        "@lab_dosfstools//:bin/mkfs.vfat",
+        "@lab_mtools//:bin/mdir",
+        "@lab_mtools//:bin/mtype",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+    ],
+)
+
 filegroup(
     name = "xm1-upstream",
     srcs = glob(["xm1-upstream/**"]),
