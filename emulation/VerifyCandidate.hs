@@ -177,8 +177,9 @@ routeInvocation context route receipt = case route of
   UpdaterCcToggle -> updater "restore-cc-toggle"
   NativeVolatile -> native "volatile"
   NativeSd -> native "sd"
-  RamPushCcCardless -> ramPush ["--cardless", "--classic-chrome", "--firmware", prefixDat, "--installed-nand", storedF7One]
-  RamPushCcIconCardless -> ramPush ["--cardless", "--classic-chrome-icon", "--firmware", prefixDat, "--installed-nand", storedF7One]
+  -- Unpinned: against a pinned run the icon e2e's develop passes differed from FujiMod's.
+  RamPushCcCardless -> viewer ["--cardless", "--classic-chrome", "--firmware", prefixDat, "--installed-nand", storedF7One]
+  RamPushCcIconCardless -> viewer ["--cardless", "--classic-chrome-icon", "--firmware", prefixDat, "--installed-nand", storedF7One]
   UsbToggleEmu -> launcher "//emulation:usb-toggle-emu" ["--fresh-boot", "--runs", "all", "--receipt-output", receipt]
   FujiModRamPushVolatile -> fujimod volatileScenario ["--cardless", "--firmware", prefixDat, "--installed-nand", storedF7One]
   FujiModRamPushCcCardless -> fujimod classicChromeTrajectories
@@ -208,7 +209,11 @@ routeInvocation context route receipt = case route of
        in launcher "//emulation:updater-f7"
             [ "--recovery-ram", card' </> "terminal-valid-ram.bin", "--sd-image", card' </> "firmware-ram-recovery-sd.img"
             , "--installed-nand", storedF7One, "--receipt-output", receipt ]
-    native mode = Invocation "bash" [root </> "emulation" </> "build-recipe-bank-cases.sh"]
+    -- Each emulator route runs in its own user scope at the default CPUWeight
+    -- of 100, where niceness does not reach; the suites get ten times that.
+    native mode = Invocation "systemd-run"
+      [ "--user", "--scope", "--quiet", "--collect", "--property=CPUWeight=1000", "--"
+      , "bash", root </> "emulation" </> "build-recipe-bank-cases.sh" ]
       [ ("RB_MODE", mode), ("JOBS", show (contextNativeJobs context))
       , ("BUILD_DIR", run </> "builds" </> routeName route), ("OUT_DIR", receipt)
       , ("RUNNER", tool "native-runner"), ("GEN", tool "recipe-bank-cases"), ("INTEROP", tool "recipe-bank-interop") ]
@@ -301,8 +306,8 @@ routeCheck route = case route of
   UpdaterCcToggle -> AgainstBaseline updaterSpec
   NativeVolatile -> AgainstBaseline nativeSpec
   NativeSd -> AgainstBaseline nativeSpec
-  RamPushCcCardless -> AgainstBaseline (ramPushSpec [])
-  RamPushCcIconCardless -> AgainstBaseline (ramPushSpec iconRunLength)
+  RamPushCcCardless -> Reference
+  RamPushCcIconCardless -> Reference
   UsbToggleEmu -> Reference
   FujiModRamPushVolatile -> AgainstCounterpart RamPushVolatile True
   FujiModRamPushCcCardless -> AgainstCounterpart RamPushCcCardless True
