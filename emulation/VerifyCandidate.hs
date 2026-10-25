@@ -39,6 +39,7 @@ data Route
   | RamPushClassicChromeIcon
   | FlashCandidateIcon
   | FlashCandidateQTile
+  | FlashCandidateRefresh
   | UsbToggleE8
   | UpdaterRc0Toggle
   | UpdaterCcToggle
@@ -64,6 +65,7 @@ routeName route = case route of
   RamPushClassicChromeIcon -> "ram-push-cc-icon"
   FlashCandidateIcon -> "flash-candidate-icon-b"
   FlashCandidateQTile -> "flash-candidate-q-tile-b"
+  FlashCandidateRefresh -> "flash-candidate-refresh"
   UsbToggleE8 -> "usb-toggle-e8"
   UpdaterRc0Toggle -> "updater-f7-rc0-toggle"
   UpdaterCcToggle -> "updater-f7-cc-toggle"
@@ -85,7 +87,7 @@ routeName route = case route of
 routeGating :: Route -> Bool
 routeGating route = route `elem`
   [ FlashBootCheck, RamPushVolatile, RamPushClassicChrome, RamPushClassicChromeIcon, FlashCandidateIcon
-  , FlashCandidateQTile, UsbToggleE8, UpdaterRc0Toggle, UpdaterCcToggle, NativeVolatile, NativeSd ]
+  , FlashCandidateQTile, FlashCandidateRefresh, UsbToggleE8, UpdaterRc0Toggle, UpdaterCcToggle, NativeVolatile, NativeSd ]
 
 -- | How a route's outcome is judged.
 data Check
@@ -110,7 +112,7 @@ routeHost route
 emulatorOrder :: [Route]
 emulatorOrder =
   [ UsbToggleEmu, RamPushVolatile, RamPushClassicChromeIcon, RamPushClassicChrome, UsbToggleE8
-  , FlashCandidateIcon, FlashCandidateQTile, UpdaterRc0Toggle, UpdaterCcToggle, RamPushCcIconCardless, RamPushCcCardless
+  , FlashCandidateIcon, FlashCandidateQTile, FlashCandidateRefresh, UpdaterRc0Toggle, UpdaterCcToggle, RamPushCcIconCardless, RamPushCcCardless
   , FujiModUsbToggleEmu, FlashBootCheck, FujiModRamPushVolatile, FujiModRamPushCcIconCardless, FujiModRamPushCcCardless
   , FujiModRamPushCc, FujiModUsbToggleE8, FujiModFlashBootCheck ]
 
@@ -135,14 +137,16 @@ data Invocation = Invocation
   , invocationEnvironment :: [(String, String)]
   }
 
-prefixDat, stockDat, iconFlashDat, rc0ToggleDat, storedF7One, storedF7Zero, classicChromeCard :: FilePath
+prefixDat, stockDat, iconFlashDat, refreshFlashDat, rc0ToggleDat, storedF7One, storedF7Zero, classicChromeCard, refreshCard :: FilePath
 prefixDat = "private-data/analysis/x-m1-1.50/update/prefix/FWUP0002-prefix.DAT"
 stockDat = "private-data/firmware/x-m1-1.50/FWUP0002.DAT"
 iconFlashDat = "private-data/analysis/classic-chrome-icon/build-b-1-pinned/FWUP0002.DAT"
+refreshFlashDat = "private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/package-20261024b/recipe-complete.DAT"
 rc0ToggleDat = "private-data/analysis/usb-toggle/rc0-pinned-dat/FWUP0002.DAT"
 storedF7One = "private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand"
 storedF7Zero = "private-data/analysis/usb-toggle/emu/inputs/f7-0.nand"
 classicChromeCard = "private-data/analysis/classic-chrome-patch/ram-push/inputs/card.img"
+refreshCard = "private-data/analysis/x-m1-1.50/recipes/bank-selection-stage4/fast-ui/card-sel.img"
 
 volatileScenario, classicChromeTrajectories, classicChromeIconTrajectories :: FilePath
 volatileScenario = "private-data/analysis/x-m1-1.50/ram-push/VolatileBank/scenario.json"
@@ -172,6 +176,8 @@ routeInvocation context route receipt = case route of
     ++ ["--trajectories", "emulation/classic-chrome-icon-trajectories.json"])
   FlashCandidateQTile -> viewer (["--flash-candidate", "--firmware", iconFlashDat, "--installed-nand", storedF7One] ++ card
     ++ ["--trajectories", "emulation/classic-chrome-q-tile-trajectories.json"])
+  FlashCandidateRefresh -> viewer (["--flash-candidate", "--firmware", refreshFlashDat, "--installed-nand", storedF7One
+    , "--sd-card-image", refreshCard, "--trajectories", "emulation/ui-trajectories.json", "--segments", "dial-refresh"])
   UsbToggleE8 -> ramPush (["--classic-chrome", "--attach-hold-q", "--firmware", rc0ToggleDat, "--installed-nand", storedF7Zero] ++ card)
   UpdaterRc0Toggle -> updater "restore-rc0-toggle"
   UpdaterCcToggle -> updater "restore-cc-toggle"
@@ -302,6 +308,7 @@ routeCheck route = case route of
   UsbToggleE8 -> AgainstBaseline (ramPushSpec [])
   FlashCandidateIcon -> AgainstBaseline flashCandidateSpec
   FlashCandidateQTile -> AgainstBaseline flashCandidateSpec
+  FlashCandidateRefresh -> AgainstBaseline flashCandidateSpec
   UpdaterRc0Toggle -> AgainstBaseline updaterSpec
   UpdaterCcToggle -> AgainstBaseline updaterSpec
   NativeVolatile -> AgainstBaseline nativeSpec
