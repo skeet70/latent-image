@@ -63,7 +63,7 @@ Record new durable observations with their body/firmware/lens, source domain, cl
 
 ## First transient G5 ring loop
 
-Status: frozen host-only prototype `d3b8c1e`, not a live-ready candidate or G5 acceptance. AfRingReview has identified a blocking suspended-context hazard in its two-word entry redirects; see the [one-word-hook design](#one-word-hook-replacement-design-not-implemented). Payload source and build files remain unchanged pending the full review. [#72](https://github.com/skeet70/latent-image/issues/72) owns the loop; [#102](https://github.com/skeet70/latent-image/issues/102) owns actual emulator half-press/producer inputs; [#103](https://github.com/skeet70/latent-image/issues/103) owns independent review and live-run readiness.
+Status: frozen host-only prototype `d3b8c1e`, **rejected for live use** by AfRingReview. Its two-word entry redirects have a blocking suspended-context hazard; the installer inventory below corrects the other executable differences identified in review. Hook rework waits for the stock-first observation and the per-hook necessity gate below. Payload source and build files remain unchanged. [#72](https://github.com/skeet70/latent-image/issues/72) owns the loop; [#102](https://github.com/skeet70/latent-image/issues/102) owns actual emulator half-press/producer inputs; [#103](https://github.com/skeet70/latent-image/issues/103) owns re-review and live-run readiness.
 
 ### Content and publication contract
 
@@ -121,15 +121,27 @@ All inputs and receipts stay under `private-data/`. The completion receipt disti
 
 ### Independent review brief
 
-Re-derive the prologues, six publications, activation/rollback order, continuations and complete register/flags/SP preservation. Explicit review question: does the CPU0 guard precede every ring and exclusive access, so the local monitor suffices without any cross-core exclusivity assumption? Inspect the primary-kernel task binding, local monitor behavior under preemption, sticky contention loss, alias ownership and every declared ring/output-cell store. Cover the actual-base relink, decoder rejection behavior and full-system push/read/decode/unload. The stock installer review does not close these items.
+The completed independent review rejects the current six-publication mechanism. Its required corrections are: remove the suspended-entry+4 hazard if hooks are still needed; account for every installer specialization, including the different reverse-restore lowering; and establish the indispensable observation for each retained hook. CPU0 confinement, bounded ring stores and synthetic extraction were inspected, but those findings do not close the install hazard. Emulator unload/checkpoint behavior supplies no body-side hot-unload guarantee.
 
-The AF payload has no approved review record or compiled AF pins. Live `ram-relink`, `ram-push` and `ram-unload` refuse it. [#103](https://github.com/skeet70/latent-image/issues/103) tracks the independent review and reviewed-live registration. Host-only unreviewed emulation remains available.
+The AF payload has no approved review record or compiled AF pins. Live `ram-relink`, `ram-push` and `ram-unload` continue to refuse it. [#103](https://github.com/skeet70/latent-image/issues/103) records rejection and the stock-first dependency. Any reduced hook mechanism returns to the same independent reviewer after implementation and deliberate suspended-context cases.
+
+#### Per-hook necessity gate before rework
+
+Do not implement the one-word design merely to retain the existing three hooks. First inspect the before/after stock trace and existing bounded state/history observations. For each proposed hook, state the unresolved research question, the indispensable ordered observation, its producer meaning and why the existing observations cannot answer it. Remove a hook justified only by reading a current scalar or an already logged event. No hook currently has that necessity established.
+
+| Candidate entry | Distinct signal it could add | Required stock-first decision |
+| --- | --- | --- |
+| Direction `0x00f41c48` | Ordered occurrence of this entry and its raw entry-time register/state sample, not a completed direction choice | Identify a question requiring invocation history that admitted request/lens sends and retained state/history cannot answer; bind the needed arguments before treating raw registers as decisions |
+| Peak `0x00f42abc` | Ordered peak-routine entry history between stock sends, not a completed peak result | Establish why entry count/order is indispensable beyond the trace and retained peak arrays; otherwise omit it |
+| Statistic consumer `0x00f44fec` | Entry occurrence and the **prior** `0x016c1160` value | Name an entry-order question that needs this history. A fresh accepted statistic is not supplied: the stock write is later at `0x00f4507c`; use the completed-producer/coherence work in #107 for that question |
+
+If the stock observations suffice, retain no hooks. If they do not, reduce the publication contract to the justified subset, then implement and re-review it. Preserve the no-hot-unload, power-removal ending for any later hook trial.
 
 ### Camera-run proposal, not authorization
 
 The next camera block is the stock-first feasibility question in [specification §11.0](../spec/05-autofocus.md#110-stock-first-sensor-backed-iteration) and the [first-session procedure](af-first-session-script.md), not installation of this prototype. Prepare the existing console decoder against saved captures, freeze the actual installed body/firmware and Viltrox AF 28mm F4.5 firmware 1.05, AF-S/one-region settings, household target, observation window and authorized read operations. Observe one ordinary stock AF and extract its console store in the same boot, after the attempt. If USB inhibits AF, stop and establish a safe same-boot alternative rather than assuming attachment changes preserve state. Keep empty, wrapped, torn and failed observations. Add a hook only for a named question the stock observations cannot answer.
 
-Any later ring trial requires the one-word replacement below to be implemented, checked and independently reviewed, the complete AfRingReview findings closed, and a separate owner H2 go naming the revised contract and actual-base digest. The frozen `d3b8c1e` bytes must not be installed on the body. Stored nonzero `0xf7` and ordinary photography-capable ff80 must already exist. The broken SD slot removes a recovery route and prevents ordinary save/playback acceptance; neither the stock-first block nor the ring trial repairs that limitation.
+Any later ring trial first requires the stock observation to establish which hooks, if any, provide indispensable information. A justified subset then needs a safe one-word replacement, revised checks, deliberate suspended-context cases, re-review by the same reviewer and a separate owner H2 go naming the revised contract and actual-base digest. The rejected `d3b8c1e` bytes must not be installed on the body. Stored nonzero `0xf7` and ordinary photography-capable ff80 must already exist. The broken SD slot removes a recovery route and prevents ordinary save/playback acceptance; neither the stock-first block nor the ring trial repairs that limitation.
 
 1. Freeze the unresolved event question, source/build identities, observed settings, intended region, clocks/unknowns, finite observation/session budget and exit procedure. Do not demand a manual-focus ring, per-attempt target movement or external high-speed video.
 2. At the idle shooting screen, perform the existing scalar/worker preflight and compare all three original entry words and their three untouched `ADD` words. Require the stock query callback and the installer's preconditions.
@@ -152,19 +164,98 @@ An isolated comparison compiled the unchanged installer with the bank's exact pi
 | `installer-253.bin` | 7008 | `64009309819378629a024642aac3429770176caa94c6f8d56f460f9421c2a898` |
 | `installer-af.bin` | 3040 | `562bdb3dfbe1db02b801a4f394ee0e0e626983756efca0e2c597f0868472cc0f` |
 
-The following exact instruction differences are section-relative in the two relocatable objects:
+The earlier inventory omitted seven count-immediate instructions in six functions and the different lowering of `restore_old_words`. The claim that the differences are only count/ABI immediates plus `r0` reuse is withdrawn. A fresh LLVM 21.1.8 disassembly of **both retained relocatable objects**, with a full text diff and separate relocation inspection, gives the complete changed-code-section inventory below. Offsets are relative to each function, not the linked installer base. All other disassembled code sections are identical before relocation.
 
-| Function and offset | 253 build | AF build |
-|---|---|---|
+| Function and offset | 253 instruction word and instruction | AF instruction word and instruction |
+| --- | --- | --- |
+| `validate_old_words+0x18` | `e37300fd`, `cmn r3,#253` | `e3730006`, `cmn r3,#6` |
+| `validate_rollback_words+0x18` | `e37300fd`, `cmn r3,#253` | `e3730006`, `cmn r3,#6` |
+| `peer_park_action+0x120` | `e3a010fd`, `mov r1,#253` | `e3a01006`, `mov r1,#6` |
 | `synchronize_current_core+0x10` | `e35400fd`, `cmp r4,#253` | `e3540006`, `cmp r4,#6` |
+| `read_peer_report+0x54` | `e25100fd`, `subs r0,r1,#253` | `e2510006`, `subs r0,r1,#6` |
 | `execute_operation+0x44` | `e3a01002`, `mov r1,#2` | `e3a01005`, `mov r1,#5` |
 | `execute_operation+0x84` | `e35000fd`, `cmp r0,#253` | `e3500006`, `cmp r0,#6` |
 | `execute_operation+0x9c` | `e35000a6`, `cmp r0,#166` | `e3500002`, `cmp r0,#2` |
-| Rendezvous count setup | `+0x114: e3a020fd`, `mov r2,#253`; `+0x134: e58d2014`, `str r2,[sp,#0x14]` | The existing `+0x138: e3a00006`, `mov r0,#6`, also supplies the count; `+0x150: e58d0014`, `str r0,[sp,#0x14]` |
+| `store_new_words+0x14` | `e35000fd`, `cmp r0,#253` | `e3500006`, `cmp r0,#6` |
+| `store_new_words+0x20` | `e35000a6`, `cmp r0,#166` | `e3500002`, `cmp r0,#2` |
+| `peer_cache_action+0x40` | `935700fd`, `cmpls r7,#253` | `93570006`, `cmpls r7,#6` |
 
-Register allocation in that setup also changes zero from `r3` to `r2`, and the fixed 32-byte argument from `+0x140: e3a03020` to `+0x114: e3a03020`. The AF function is four bytes shorter. Branch displacements, literal-load displacements and relocated addresses consequently differ. Publication table length and following data addresses also differ. No byte-identity claim is made.
+In `execute_operation`, every changed same-offset PC-relative load/early branch is listed here. The exit moves from `+0x198` to `+0x194`; the literal pool moves back four bytes. The target roles remain unchanged.
 
-Reviewer question: after accounting for relocation, branch displacement and data-layout consequences, are the executable differences only count and ABI immediates plus the `r0` reuse and associated register allocation, with control flow equivalent? Review this alongside the CPU0 confinement and local-exclusive-monitor question above. The camera proposal remains blocked on this independent review.
+| Offset | 253 word | AF word |
+| --- | --- | --- |
+| `0x0c` | `e59f7190` | `e59f718c` |
+| `0x38` | `e59f1168` | `e59f1164` |
+| `0x74` | `1a000047` | `1a000046` |
+| `0x78` | `e59f412c` | `e59f4128` |
+| `0x94` | `1a00003f` | `1a00003e` |
+| `0xb8` | `ea000036` | `ea000035` |
+| `0xbc` | `e59f10ec` | `e59f10e8` |
+| `0xc0` | `e59f00ec` | `e59f00e8` |
+| `0xc8` | `e59f00e8` | `e59f00e4` |
+| `0xe4` | `1a00002b` | `1a00002a` |
+| `0xe8` | `e59f10cc` | `e59f10c8` |
+| `0xf0` | `e59f50c0` | `e59f50bc` |
+| `0x104` | `1a000023` | `1a000022` |
+| `0x108` | `e59f10b0` | `e59f10ac` |
+| `0x130` | `e59f0078` | `e59f0074` |
+
+The rendezvous argument setup has these instruction-level changes or moves. Instructions at `+0x110`, `+0x118`, `+0x11c`, `+0x124` and `+0x12c` are unchanged. The fixed payload length remains 32 bytes, zero begin index remains zero and every stack argument retains its role.
+
+| 253 offset, word and instruction | AF offset, word and instruction |
+| --- | --- |
+| `+0x10c e3a03000 mov r3,#0` | `+0x10c e3a02000 mov r2,#0` |
+| `+0x114 e3a020fd mov r2,#253` | Removed; AF reuses the syscall argument `r0=6` at `+0x138` |
+| `+0x120 e5813004 str r3,[r1,#4]` | `+0x120 e5812004 str r2,[r1,#4]` |
+| `+0x128 e581300c str r3,[r1,#12]` | `+0x128 e581200c str r2,[r1,#12]` |
+| `+0x134 e58d2014 str r2,[sp,#20]` | `+0x150 e58d0014 str r0,[sp,#20]` |
+| `+0x138 e28d2004 add r2,sp,#4` | `+0x140 e28d2004 add r2,sp,#4` |
+| `+0x13c e58d3010 str r3,[sp,#16]` | `+0x13c e58d2010 str r2,[sp,#16]` |
+| `+0x140 e3a03020 mov r3,#32` | `+0x114 e3a03020 mov r3,#32` |
+| `+0x144 e58d0018 str r0,[sp,#24]` | `+0x134 e58d0018 str r0,[sp,#24]` |
+| `+0x148 e3a00006 mov r0,#6` | `+0x138 e3a00006 mov r0,#6` |
+| `+0x14c e58d400c str r4,[sp,#12]` | `+0x144 e58d400c str r4,[sp,#12]` |
+| `+0x150 e58d1020 str r1,[sp,#32]` | `+0x148 e58d1020 str r1,[sp,#32]` |
+| `+0x154 e58d901c str r9,[sp,#28]` | `+0x14c e58d901c str r9,[sp,#28]` |
+
+Every instruction from 253 `+0x158..+0x1a0` moves to AF `+0x154..+0x19c` with its instruction word unchanged. This includes cache maintenance, DSB, the indirect peer-cache call, `read_peer_report`, the two conditional exits, `run_rendezvous` and the epilogue. The call relocations move `+0x170 -> +0x16c` and `+0x190 -> +0x18c`, retaining their target symbols. The nine literal slots at `+0x1a4..+0x1c4` move to `+0x1a0..+0x1c0`; their values/symbol roles are unchanged. The relocation table has no other target/offset change. Linked branch words and absolute addresses also follow the changed function/table/mailbox layout; they are not new calls or new stock addresses.
+
+`restore_old_words` has a different loop, frame and epilogue, not merely a shifted immediate. Its full executable sequence is:
+
+| Offset | 253 word and instruction | AF word and instruction |
+| --- | --- | --- |
+| `0x00` | `e92d4800 push {r11,lr}` | `e92d4830 push {r4,r5,r11,lr}` |
+| `0x04` | `e1a0b00d mov r11,sp` | `e28db008 add r11,sp,#8` |
+| `0x08` | `e59fc030 ldr r12,[pc,#48]` | `e59f1030 ldr r1,[pc,#48]` |
+| `0x0c` | `e3a00000 mov r0,#0` | `e3a00000 mov r0,#0` |
+| `0x10` | `e59f202c ldr r2,[pc,#44]` | `e59f202c ldr r2,[pc,#44]` |
+| `0x14` | `e3700efd cmn r0,#4048` | `e3700006 cmn r0,#6` |
+| `0x18` | `08bd8800 popeq {r11,pc}` | `0a000007 beq +0x3c` |
+| `0x1c` | `e08c3000 add r3,r12,r0` | `e0813200 add r3,r1,r0,lsl#4` |
+| `0x20` | `e2400010 sub r0,r0,#16` | `e2400001 sub r0,r0,#1` |
+| `0x24` | `e5931fc0 ldr r1,[r3,#4032]` | `e1c345d0 ldrd r4,r5,[r3,#80]` |
+| `0x28` | `e5933fc4 ldr r3,[r3,#4036]` | `e5845000 str r5,[r4]` |
+| `0x2c` | `e5813000 str r3,[r1]` | `e5923020 ldr r3,[r2,#32]` |
+| `0x30` | `e5921020 ldr r1,[r2,#32]` | `e2833001 add r3,r3,#1` |
+| `0x34` | `e2811001 add r1,r1,#1` | `e5823020 str r3,[r2,#32]` |
+| `0x38` | `e5821020 str r1,[r2,#32]` | `eafffff5 b +0x14` |
+| `0x3c` | `eafffff4 b +0x14` | `e8bd8830 pop {r4,r5,r11,pc}` |
+
+Both forms start at the last publication and restore descending rows, updating the restored count once per store. Bank `r0=0,-16,..,-4032` addresses rows 252 through 0 using `table+r0+0xfc0`; `r0=-4048` exits before a read. AF `r0=0,-1,..,-5` addresses rows 5 through 0 using `table+16*r0+0x50`; `r0=-6` branches to its separate epilogue. AF's LDRD loads the adjacent address/old-word pair. At the exercised link the table starts at `0x00a83780`, so every load address `0x00a837d0..0x00a83780` in descending sixteen-byte steps is sixteen-byte aligned and its eight-byte pair stays within a row. The new access does not rely on unaligned LDRD support.
+
+AF saves/restores the newly used callee-saved `r4,r5` along with `r11,lr`; its stack frame is sixteen bytes rather than the bank form's eight, and its frame pointer is entry-SP minus eight. Each matching POP restores that frame and returns through the saved LR. Both have balanced SP, but their instruction paths, frame sizes and register allocation are not identical. The reviewer found equivalent reverse-restore effects for these aligned records, not an unchanged control-flow graph or approval of the AF hooks.
+
+Reproduction uses the two objects recorded in E-AF-RING-REVIEW-CORRECTION-150 and the pinned development shell. Keep the full diff and the independent semantic delta privately; the tables above enumerate all executable changes rather than selecting only the ABI setup:
+
+```sh
+# BANK_OBJECT and AF_OBJECT name the retained controlled-253 and AF installer objects.
+devenv shell -- llvm-objdump -d --print-imm-hex --triple=armv7-none-eabi "$BANK_OBJECT" > "$PRIVATE_OUTPUT/installer-253-object.txt"
+devenv shell -- llvm-objdump -d --print-imm-hex --triple=armv7-none-eabi "$AF_OBJECT" > "$PRIVATE_OUTPUT/installer-af-object.txt"
+diff -u "$PRIVATE_OUTPUT/installer-253-object.txt" "$PRIVATE_OUTPUT/installer-af-object.txt"
+devenv shell -- llvm-objdump -r "$BANK_OBJECT" "$AF_OBJECT"
+```
+
+The private `author-installer-{253,af}-object.txt`, `author-installer-object-delta.diff` and independently produced `reviewer-installer-semantic-delta.json` retain the reproduced comparison. `installer-{253,af}.bin` remain unchanged. Corrected reviewer question: do all listed count/ABI changes, argument rescheduling and the distinct reverse-restore lowering preserve their bounded publication/rendezvous effects, with the LDRD alignment and callee-saved invariants stated above? This is broader than the withdrawn immediate-only question. The current hook mechanism remains rejected independently of the installer comparison.
 
 ### Exercised host and emulator result
 
@@ -223,13 +314,13 @@ Keep callbacks independent of USB and add only bounded copies after the active p
 
 ### One-word-hook replacement design, not implemented
 
-The blocking finding forwarded from AfRingReview applies to `d3b8c1e`: setup overwrites each executable `ADD` at entry+4 with pointer data. The installer rendezvous stops the running cores but does not prove that no suspended task has a saved PC at entry+4 after executing the original `PUSH`. Resuming such a task can execute the pointer word as an instruction. Idle-screen preflight and a passing synthetic push/unload do not exclude that context. Do not install those bytes on the body.
+The critical independent review finding on `d3b8c1e` is confirmed: setup overwrites each executable `ADD` at entry+4 with pointer data. The installer rendezvous stops the running cores but does not prove that no suspended task has a saved PC at entry+4 after executing the original `PUSH`. Resuming such a task can execute the pointer word as an instruction. Idle-screen preflight and a passing synthetic push/unload do not exclude that context. Do not install those bytes on the body.
 
 Prefer one aligned A32 unconditional `B` at each entry, directly to its wrapper in the owned allocation. A `B`, unlike `BL`, leaves the incoming LR unchanged. At relink, compute the signed displacement `wrapper-(entry+8)` without unsigned wrap, require four-byte alignment and the exact A32 range `[-0x02000000,+0x01fffffc]`, then encode `0xea000000 | ((displacement >> 2) & 0x00ffffff)`. Require every selected entry to fit for the actual allocation. The earlier emulator allocation is evidence of one address only, not a guarantee about the next allocation. Reject an out-of-range allocation; do not search for an unowned code cave, write an adjacent literal, widen the read bound or truncate the branch.
 
 The revised wrapper preserves the original registers/flags, records the event, replays only the displaced first `PUSH`, and returns to untouched entry+4. It must no longer replay the second `ADD`; the stock instruction executes it once. A suspended task at entry+4 has already pushed and resumes its unchanged `ADD`; a task at entry enters through either the synchronized old `PUSH` path or the new branch/wrapper path. Tasks already beyond the entry continue stock code and may contribute no event. Activation therefore does not retroactively give complete coverage of an in-flight attempt.
 
-This needs three activation publications, zero setup publications, a new publication/ABI identity and newly bound installer extents/entries for that count tuple. Existing reviewed installer source, other payload offsets and their pins stay unchanged. The checker must bind each original first word, branch destination/range, untouched second word, replayed `PUSH`, continuation and register/flags/SP/LR preservation. Review the complete findings before implementing it. A range-limited owned veneer could be considered separately if direct branches cannot be placed; no such placement/lifetime evidence or adjacent literal slot is assumed.
+This is a design option, not an instruction to implement three hooks now. Stock-first observations decide whether any hook is necessary. For a justified subset of N entries, use N activation publications and zero setup publications, a new publication/ABI identity and newly bound installer extents/entries for that count tuple. Existing reviewed installer source, other payload offsets and their pins stay unchanged. The checker must bind each selected original first word, branch destination/range, untouched second word, replayed `PUSH`, continuation and register/flags/SP/LR preservation. Rework then returns to the same independent reviewer. A range-limited owned veneer could be considered separately if direct branches cannot be placed; no such placement/lifetime evidence or adjacent literal slot is assumed.
 
 The next emulator cases must resume a context saved at entry+4 with the first `PUSH` already reflected in its stack, and another already inside the stock body, across install. They must preserve the stock outcome and stack/register behavior while allowing the installation-boundary event gap. The one-word redirect removes this particular data-resumption hazard; it does not justify freeing wrapper memory while a saved PC can still reference it, prove safe hot unload, fix snapshot coherence, or establish the remaining AfRingReview findings. Physical session exit remains battery removal and post-reboot stock-word reads.
 
