@@ -103,7 +103,25 @@ Image-4 `0x00673c28` installs logical events `0x2e/0x2f`, mapping through the X-
 
 Run 3 retains output-0 records `{0x43098000,state0,640,480}`, `{0x4312e000,state3,640,480}` and `{0x431c4000,state2,640,480}`. Output-1 records include `{0x43386000,state2,720,480}`, `{0x4342ec00,state5,720,480}`, `{0x434d7800,state3,720,480}` and `{0x43580400,state0,720,480}`. Cached/uncached aliases name the same physical rasters. The descriptors and image bytes were read in different bulk chunks; their agreement is a binding lead, not proof they described the same instant.
 
-There is no evidenced host retain/release path for those stock slots. State 2 means the software completion path has advanced a slot, not that USB owns it until extraction finishes. The next stock acquisition/recycle can reuse it. The display-ready, producer-complete and USB-export lifetimes remain distinct.
+There is no evidenced host retain/release path for those stock slots. Neither state 2 nor consumer selection gives USB ownership until extraction finishes. The next stock acquisition/recycle can reuse a slot. The display-ready, producer-complete and USB-export lifetimes remain distinct.
+
+### Live pool rotation and state-binding limits
+
+**Hardware-observed, E-PREVIEW-POOL-ROTATION-LIVE-150:** a single seven-window control read on 2026-10-25 found both preview destinations and pool states different from Run 3. The body was reported at the ordinary shooting screen in mode S, without a card. The geometries remained 640 by 426 and 720 by 480, with pixel strides 640 and 720.
+
+| Output | Current committed destination | Matching allocation record, zero-based slot | Observed state |
+| --- | --- | --- | --- |
+| 0 | `0x03136700` | Slot 1, `0x4312e000`; active raster starts at physical base plus `0x8700` | 0 |
+| 1 | `0x0342ec00` | Slot 1, `0x4342ec00` | 2 |
+
+The Run-3 output-0 allocation `0x431c4000` was now state 3, and output-1 allocation `0x43386000` was state 5. Completion callbacks remained `0x00ed848c/0x00ed844c`, continuous state was 1, consumer was `0x01031b78`, observed/required completion masks were `0/0x300`, and the software counter was `0x1de82`. These sequential windows support rotating pool identities across captures, not a timed rotation sequence or simultaneous ownership. The fixed-address observation stopped at these controls; no new pixel read or PNG followed.
+
+**Source-inspected state bindings:** shared acquisition helper `0x0103fb50` treats state 0 as free/acquirable and normally sets it to state 1, pending producer completion. However, with `0x0170306c == 1` it sets state 2 directly at acquisition. State 2 is therefore not an unconditional completion marker. Completion helper `0x0103f1fc` advances state 1 or `0x1b` to 2 and, under retention flag `0x0170319c`, preserves an older state-2 slot as state 3. Output-0 consumer selector `0x010401f0` selects state 3; output-1 selector `0x01040190`, used by `0x0102fd28`, selects state 5. Output-1 transition `0x0103fd88` promotes state 2 or 3 to 5 according to `0x0170327c`, retires prior state 5 through 6, and recycles it. `0x0104006c` can also force a selected slot to state 5. State 4 remains unbound in the inspected pool-management paths; the states are not a closed 0-5 enum.
+
+Route qualification must account for pool selector `0x016fec4c`, special-acquisition flag `0x0170306c`, comparison counter `0x01703080` against `0x01703084`, retention flag `0x0170319c`, and completion/consumer route flag `0x0170327c`. The control read did not capture these branch inputs. The consumer selectors return the first matching slot, not a proved chronological maximum across all routes, so no source-qualified “most recent completed” fallback was established.
+
+A fixed address or a state-only read cannot establish a completed frame. A coherent preview export needs a route-qualified completion predicate plus an evidenced source lifetime and DMA visibility, or the [owned-copy design](#preview-only-copy-point). Neither matching pre/post controls nor selecting state 3 or 5 supplies that lifetime.
+
 
 ### First camera-derived preview visualizations
 
