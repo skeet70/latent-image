@@ -1252,3 +1252,23 @@ haskell_binary(
         "//host:unix",
     ],
 )
+
+haskell_binary(
+    name = "ram-calibration",
+    srcs = ["RamCalibration.hs"],
+    data = [":cardless-ram-push-bridge", ":xm1-upstream"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":emulator-slot-lib",
+        ":emulator-usb",
+        ":fujimod-paths",
+        ":viewer-runtime-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+    ],
+)
