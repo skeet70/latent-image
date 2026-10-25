@@ -3,6 +3,7 @@
 module Main where
 
 import Control.Monad (forM_)
+import Data.Bits ((.&.), (.|.))
 import qualified Data.ByteString as B
 import Data.Char (isHexDigit, ord)
 import Data.List (isInfixOf)

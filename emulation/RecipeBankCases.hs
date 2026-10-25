@@ -442,9 +442,8 @@ main = do
   let (stockBlob, stockAt) = packTables id4 tabEntries
       ccFilmRows = [[stored, marker, output]
         | (k, [code, marker, downstream]) <- zip [0 :: Int ..] (stockTabs M.! 0xfe),
-          let stored = if k == 2 then 13 else if k == 4 then 14 else code,
-          let output = if k == 2 then 13 else if k == 4 then 0 else downstream]
-        ++ [[15, 0x7ffffffe, 0]]
+          let stored = if k == 2 then 13 else if k == 4 then 14 else if k == 13 then 15 else code,
+          let output = if k == 2 then 13 else if k == 4 then 3 else downstream]
       (tabs, tabBlob, tabAt) = case filmEncoding of
         D3Films -> (stockTabs, stockBlob, stockAt)
         ClassicChromeFilms ->
@@ -483,7 +482,15 @@ main = do
       pure [domain, restrictDomain mediaRegion domain]
     VolatileBank -> pure []
   let failureRedraw = StockFailureRedraw (B.take 132 (B.drop (0x00d38d98 - 0x00bf1a00) id5))
-      (sdSpecs, volatileSpecs) = specSet filmEncoding ks ms fields tabs hostBank failureRedraw (realStock (GuestAddress id4Base) id4Raw id5)
+      stockRegions = realStock (GuestAddress id4Base) id4Raw id5
+      realRegions = case filmEncoding of
+        D3Films -> stockRegions
+        ClassicChromeFilms ->
+          ("cc-film-table", 0x009b2000, B.concat (map u32le (concat ccFilmRows ++ replicate 3 0xffff))) :
+          [(name, base, if name == "conv-ptrs"
+              then poke (0xfe * 4) (u32le 0x009b2000) bytes else bytes)
+          | (name, base, bytes) <- stockRegions]
+      (sdSpecs, volatileSpecs) = specSet filmEncoding ks ms fields tabs hostBank failureRedraw realRegions
       suite = case bankMode of
         VolatileBank -> volatileSpecs
         SdBank -> map (seedDomain ks ms domains) sdSpecs

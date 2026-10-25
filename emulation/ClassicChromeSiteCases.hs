@@ -1295,7 +1295,8 @@ storedFilmCases sides =
           (0x00631d58,388), (0x0063458c,32)]
       , cStubs = [current | mode /= 0x2c]
       , cExpR = []
-      , cClaims = [("state-block", 0, replaceAt 0x80 (le32 expected) state)]
+      , cClaims = [("state-block", 0, replaceAt 0x80 (le32 expected) state),
+          ("conv-flag", 0, le32 (if not (sdPatched side) && mode /= 0x2c then 1 else 0))]
       , cEvents = [current | mode /= 0x2c]
       , cPin = []
       , cPinFrom = Nothing
@@ -1341,7 +1342,7 @@ customFilmCases sides =
       }
   | side <- sides
   , let img = sdId4 side
-  , (selector,record,offset,shift) <- [(0,"C",0x164,0),(1,"ordinary",0x8a,4)]
+  , (selector,record,offset,shift) <- [(0,"c",0x164,0),(1,"ordinary",0x8a,4)]
   , film <- [0,13]
   , action <- ["get","set"]
   , let writing = action == "set"
