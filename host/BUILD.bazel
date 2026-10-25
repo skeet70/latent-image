@@ -221,6 +221,26 @@ haskell_library(
     ],
 )
 
+# The shareable text recipe format for the editable custom bank (issue #76):
+# one file per recipe, the camera's field names as keys, parsed at the
+# boundary into closed value types and mapped to the bank's stored codes.
+haskell_library(
+    name = "recipe-text",
+    srcs = ["FujiAF/RecipeText.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":base",
+        ":bytestring",
+        ":recipe-bank",
+    ],
+)
+
 # The EXR Processor II film-stage model, colorimetry, the colour fit, the
 # X-M1 1.50 develop-stage readers and the Classic Chrome parameter file
 # behind spec/10 section 19.5.4.

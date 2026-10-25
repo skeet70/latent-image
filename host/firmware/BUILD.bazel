@@ -441,6 +441,56 @@ haskell_test(
     ],
 )
 
+# The shareable text recipe importer and exporter (issue #76, README section
+# "Share recipes as text"): one text file per recipe into and out of the
+# two-generation bank file, over the declared payload base.
+haskell_binary(
+    name = "recipe-bank-text",
+    srcs = ["RecipeBankText.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:recipe-bank",
+        "//host:recipe-text",
+    ],
+)
+
+# The text format's behavioural checks: the round trip, every rejection, the
+# two recipes reports/recipe-patch-d3.md section 6.1 documents, and the
+# mixed-set acceptance of issue #76.
+haskell_test(
+    name = "recipe-text-tests",
+    size = "small",
+    srcs = ["RecipeTextTests.hs"],
+    args = ["$(rootpath :recipe-bank-text)"],
+    data = [":recipe-bank-text"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:recipe-bank",
+        "//host:recipe-text",
+    ],
+)
+
 # Classic Chrome host colour model (spec/10 section 19.5): the sibling tables
 # from the pinned DATs, oracle inputs and comparison against x70view
 # film_stage.py, the private parameter bundle, the leave-one-out method
