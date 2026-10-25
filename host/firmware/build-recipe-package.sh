@@ -2,7 +2,7 @@
 # Host-only executable recipe image composition. Run from the repository root under devenv.
 set -euo pipefail
 
-OUT="${1:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/package}"
+OUT="${1:?usage: build-recipe-package.sh OUT_DIR under private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/}"
 STOCK="${STOCK:-private-data/firmware/x-m1-1.50/FWUP0002.DAT}"
 SPEC="${SPEC:-private-data/analysis/x-m1-1.50/recipes/bank-spec.json}"
 D3_SPEC="${D3_SPEC:-private-data/analysis/x-m1-1.50/recipes/d3-compiled.json}"

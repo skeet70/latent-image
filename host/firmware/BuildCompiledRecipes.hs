@@ -32,7 +32,8 @@
 --                          tables, the property table, the hook), the two
 --                          film conversion-row rewrites, the fourteen PRO Neg
 --                          availability cells and the eight node pointer words
---   patch-set-image5.json  the case-0xfe site word at 0x00d50a48
+--   patch-set-image5.json  the case-0xfe site word at 0x00d50a48 and the
+--                          current-row getter branch at 0x00d5a088
 --   id2-patched.bin        the image-2 decode carrying the compiled name in
 --                          the id-0x83d record's inline buffer (the input,
 --                          unmodified, when no recipe is named)
@@ -116,6 +117,15 @@ siteAddress, menuCommit, siteCurrentWord :: Word32
 siteAddress = 0x00d50a48
 menuCommit = 0x00d4fc74
 siteCurrentWord = 0xe1a00004
+
+-- FUN_00d588b8 case 0xfe: `cmp r0, #0x13; bne` selects the live col2 cell
+-- 0x009568b8 reverse-mapped through col2, whose first match is the base row
+-- for a recipe; the NOP makes every caller take the stored-code path
+-- (FUN_0061c93c(0xfe, 0) mapped through col0), which is unique per row.
+currentRowBranchAddress, currentRowBranchWord, currentRowNopWord :: Word32
+currentRowBranchAddress = 0x00d5a088
+currentRowBranchWord = 0x1a000009
+currentRowNopWord = 0xe320f000
 
 -- the film conversion table rows the two recipes rewrite in place: the only
 -- rows no stock values array names (reports/recipe-patch-d3.md section 1),
@@ -858,9 +868,12 @@ manifestImage5 current fresh = H.obj
   , ("image", image5Json)
   , ("free_space", freeSpaceJson5)
   , ("array_source", arraySourceJson5)
-  , ("order_rule", H.s "one word write: the case-0xfe site instruction becomes the branch to the compiled-recipe hook")
+  , ("order_rule", H.s "two word writes: the case-0xfe site instruction becomes the branch to the compiled-recipe hook, and the film current-row getter's live-cell branch becomes a NOP")
   , ("blobs", H.arr [])
-  , ("words", H.arr [wordJson5 1 siteAddress current fresh "code change: case 0xfe's first instruction becomes bl to the compiled-recipe hook"])
+  , ("words", H.arr
+      [ wordJson5 1 siteAddress current fresh "code change: case 0xfe's first instruction becomes bl to the compiled-recipe hook"
+      , wordJson5 2 currentRowBranchAddress currentRowBranchWord currentRowNopWord "code change: FUN_00d588b8 case 0xfe always maps the stored film code through col0, so a recipe row is the current row"
+      ])
   , ("totals", totalsJson5)
   , ("unchanged_surfaces", unchangedSurfacesJson5)
   , ("container_effect", containerEffectJson5)
@@ -879,26 +892,26 @@ image5Json = H.obj
 
 freeSpaceJson5 :: Value
 freeSpaceJson5 = H.obj
-  [ ("chosen_region", H.arr [H.s (hex32 siteAddress), H.s (hex32 (siteAddress + 4))])
-  , ("note", H.s "no decode-prefix placement: the only image-5 write is the site word in the preserved body, and the image-5 record keeps its decoded size and segment entry")
+  [ ("chosen_region", H.arr [H.arr [H.s (hex32 siteAddress), H.s (hex32 (siteAddress + 4))], H.arr [H.s (hex32 currentRowBranchAddress), H.s (hex32 (currentRowBranchAddress + 4))]])
+  , ("note", H.s "no decode-prefix placement: the two image-5 writes are words in the preserved body, and the image-5 record keeps its decoded size and segment entry")
   ]
 
 arraySourceJson5 :: Value
 arraySourceJson5 = H.obj
   [ ("file", H.s image5File)
   , ("sha256", H.s image5Sha256)
-  , ("note", H.s "the site word's current bytes are read from the pinned decode and checked against 0xe1a00004 (mov r0, r4)")
+  , ("note", H.s "the current bytes are read from the pinned decode and checked against 0xe1a00004 (mov r0, r4) at the site and 0x1a000009 (bne 0xd5a0b4) at the getter branch")
   ]
 
 totalsJson5 :: Value
 totalsJson5 = H.obj
-  [ ("words", H.n 1)
-  , ("bytes_written", H.n 4)
+  [ ("words", H.n 2)
+  , ("bytes_written", H.n 8)
   , ("record5_note", H.s "the record-5 stream moves inside its window [0x002c0000, 0x005a0000) as rebuild-update replace-record5 measures it; record-5 header word 1 (stream length) always moves with the stream, word 2 (chunk count) only when ceil(total_len / 0x4000) changes, and the main checksum word moves with the container")
   ]
 
 unchangedSurfacesJson5 :: Value
-unchangedSurfacesJson5 = H.arr (map H.s ["every image-5 word except the site word at 0x00d50a48", "the image-5 decode size, segment entry and stage header"])
+unchangedSurfacesJson5 = H.arr (map H.s ["every image-5 word except the site word at 0x00d50a48 and the getter branch at 0x00d5a088", "the image-5 decode size, segment entry and stage header"])
 
 containerEffectJson5 :: Value
 containerEffectJson5 = H.obj
@@ -994,6 +1007,8 @@ main = do
   let siteCurrent = readWord32 image5 image5Base siteAddress
   H.ensure (siteCurrent == siteCurrentWord) ("image5: site word at " ++ hex32 siteAddress ++ " is 0x" ++ hex siteCurrent ++ ", not the stock mov r0, r4")
   siteFresh <- either H.failH pure (armBranchWord siteAddress hookAddress)
+  let branchCurrent = readWord32 image5 image5Base currentRowBranchAddress
+  H.ensure (branchCurrent == currentRowBranchWord) ("image5: getter branch at " ++ hex32 currentRowBranchAddress ++ " is 0x" ++ hex branchCurrent ++ ", not the stock bne 0xd5a0b4")
   B.writeFile (outDir ++ "/patch-set-image5.json") (encodeCanonical (manifestImage5 siteCurrent siteFresh))
   patchedId2 <- case [name | recipe <- recipesInput, name <- maybe [] pure (riName recipe)] of
     [] -> pure image2
