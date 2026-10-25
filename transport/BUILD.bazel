@@ -62,6 +62,8 @@ haskell_library(
     ],
     # FujiAF.RamPush runs each payload's relinker from the linking binary's runfiles.
     data = [
+        "//host/firmware:af-ring-ram-relinker",
+        "//menu:af-ring-ram-relink-sources",
         "//host/firmware:classic-chrome-icon-ram-relinker",
         "//host/firmware:classic-chrome-ram-relinker",
         "//host/firmware:ram-push-relinker",
@@ -85,6 +87,47 @@ haskell_library(
         "//host:vector",
         "//host/firmware:bank-allowlist",
         "//host/firmware:ram-push-toolchain",
+    ],
+)
+
+haskell_library(
+    name = "af-ring",
+    srcs = ["FujiAF/AfRing.hs"],
+    ghcopts = _GHCOPTS,
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":camera-core",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+    ],
+)
+
+haskell_test(
+    name = "af-ring-tests",
+    srcs = ["AfRingTest.hs"],
+    args = [
+        "$(location :camera)",
+        "$(location //host/firmware:read-af-ring)",
+    ],
+    data = [
+        ":camera",
+        "//host/firmware:read-af-ring",
+    ],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":af-ring",
+        ":camera-core",
+        "//broker:core",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:unix",
     ],
 )
 
