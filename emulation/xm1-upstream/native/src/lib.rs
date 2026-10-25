@@ -16,6 +16,7 @@ mod state;
 mod menu;
 mod phase_clock;
 mod spi0;
+mod task_state;
 #[cfg(test)]
 mod tests;
 
@@ -1128,6 +1129,58 @@ impl Machine {
     fn metrics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let s = unsafe { &*self.inner.state.get() };
         let result = PyDict::new(py);
+        self.inner.paused().map_err(error)?;
+        let ram = unsafe { std::slice::from_raw_parts(self.inner.ram.as_ptr(), self.inner.ram.len()) };
+        let scheduler = PyDict::new(py);
+        match task_state::collect(ram) {
+            Ok(snapshot) => {
+                scheduler.set_item("table_counts", snapshot.table_counts.to_vec())?;
+                scheduler.set_item("timer_now", snapshot.timer_now)?;
+                scheduler.set_item("timer_next", snapshot.timer_next)?;
+                let tasks = PyList::empty(py);
+                for task in snapshot.tasks {
+                    let row = PyDict::new(py);
+                    row.set_item("core", task.core)?;
+                    row.set_item("task_id", task.id.0)?;
+                    row.set_item("entry", task.entry.0)?;
+                    row.set_item("wait_object", task.wait_object.0)?;
+                    row.set_item("saved_sp", task.saved_sp.0)?;
+                    let status = match task.status {
+                        task_state::Status::Ready => 1,
+                        task_state::Status::QueueWait => 0x12,
+                        task_state::Status::Other(value) => value,
+                    };
+                    row.set_item("status_byte", status)?;
+                    tasks.append(row)?;
+                }
+                scheduler.set_item("tasks", tasks)?;
+            }
+            Err(failure) => scheduler.set_item("unavailable", format!("{failure:?}"))?,
+        }
+        result.set_item("xm1_150_scheduler", scheduler)?;
+        let startup = PyDict::new(py);
+        match task_state::collect_startup(ram) {
+            Ok(snapshot) => {
+                startup.set_item("phase", snapshot.phase.0)?;
+                startup.set_item("last_message", snapshot.message.0)?;
+                startup.set_item("machine_states", snapshot.machine_states.map(|state| state.0).as_slice())?;
+                startup.set_item("dispatch_modes", snapshot.dispatch_modes.map(|state| state.0).as_slice())?;
+                let loads = PyList::empty(py);
+                for (command, completion) in snapshot.load_commands {
+                    let row = PyDict::new(py);
+                    row.set_item("command", command.0)?;
+                    row.set_item("completion", match completion {
+                        task_state::Completion::NotCompleted => 0,
+                        task_state::Completion::Complete => 1,
+                        task_state::Completion::Other(value) => value,
+                    })?;
+                    loads.append(row)?;
+                }
+                startup.set_item("load_commands", loads)?;
+            }
+            Err(failure) => startup.set_item("unavailable", format!("{failure:?}"))?,
+        }
+        result.set_item("xm1_150_startup", startup)?;
         result.set_item("native_code_hooks", s.code_hooks)?;
         result.set_item("native_ram_store_hooks", s.store_hooks)?;
         result.set_item("python_event_callbacks", s.python_callbacks)?;
