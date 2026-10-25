@@ -4,13 +4,15 @@
 
 **The archived cardless body capture sampled the slot as card-present.** Run 3 contains the active-low card-detect row in its asserted state, the SD initialization error latch, filesystem error flags, media status 4 and warning `0x13` (CARD ERROR). This is not the stock absent-card state. The firmware has a stock NO CARD route when detection reads absent, including a card-edge reset of SD initialization. No inspected mode or power path makes an unchanged present indication mean absent. A mode change can clear warning presentation, but does not turn this media failure into NO CARD.
 
+A live read on 2026-10-25 confirms that detect reads present with the slot empty in both passes (E-CARD-DETECT-LIVE-150).
+
 **Full-resolution capture-to-RAM is not implemented or ready for a body run.** Stock image processing already uses RAM, and USB can read a retained extent. Neither fact supplies a completed fresh exposure, a buffer lease across the transfer, storage-independent transaction completion or preview restoration. The service imaging jobs are separate diagnostic branches, not a drop-in ordinary-capture implementation. Keep [#105](https://github.com/skeet70/latent-image/issues/105) conditional on a quality question that coherent preview/statistic observations cannot answer.
 
 The next cardless AF decision is therefore between restoring an absent electrical indication, repairing the slot, or separately reviewing the AF-only admission override described in the [observation plan](af-observation-plan.md#cardless-s1-result-and-decision-options). This report does not select or authorize a camera operation.
 
 ## Evidence and scope
 
-This is host-only inspection of the X-M1 1.50 decodes and the existing ordinary-boot Run-3 RAM capture, not a new camera experiment. The official DAT identity is SHA-256 `43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490`. Addresses below belong to those X-M1 images; `0x4xxxxxxx` is the uncached alias of physical `0x0xxxxxxx`. No behavior or address is imported from another model.
+The static analysis below uses host-only inspection of the X-M1 1.50 decodes and the existing ordinary-boot Run-3 RAM capture; the new live confirmation is E-CARD-DETECT-LIVE-150. The official DAT identity is SHA-256 `43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490`. Addresses below belong to those X-M1 images; `0x4xxxxxxx` is the uncached alias of physical `0x0xxxxxxx`. No behavior or address is imported from another model.
 
 - **E-AF-CARD-DETECT-RUN3-150:** observations extracted from the retained body capture, including sampled detect, SD and filesystem flags, registered media destination and pool selector. Run 3 is non-atomic and precedes the failed S1 attempt.
 - **E-AF-CARD-MEDIA-PRODUCER-150:** source inspection and targeted A32 disassembly of detection, initialization, status translation and warning refresh. This supplies a control-flow explanation, not the exact failed SD command or an instruction trace of that boot.
