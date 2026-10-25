@@ -385,6 +385,8 @@ volWorkload calls = BL.toStrict (BB.toLazyByteString (foldMap BB.word32LE (volWo
       Just e -> [VolMove r e]
       Nothing -> [VolLoad r (toInteger v)]
 
+data FilmEncoding = D3Films | ClassicChromeFilms deriving (Eq)
+
 main :: IO ()
 main = do
   args <- getArgs
@@ -399,6 +401,10 @@ main = do
   id5Path <- maybe (fail "--id5") pure (opt "id5")
   hostFix <- maybe (fail "--host-fixtures") pure (opt "host-fixtures")
   jobs <- readJobs (opt "jobs")
+  filmEncoding <- case fromMaybe "d3" (opt "film-encoding") of
+    "d3" -> pure D3Films
+    "classic-chrome" -> pure ClassicChromeFilms
+    _ -> fail "--film-encoding must be d3 or classic-chrome"
   let candidateDir = fromMaybe "private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/package-20261024b/image" (opt "candidate")
       kernelBase = hexI (fromMaybe "0x00be1f00" (opt "rb-base"))
       id4Base = hexI (fromMaybe "0x0061c400" (opt "id4-base"))
@@ -432,8 +438,19 @@ main = do
     pure (addr ms n, b)
   let mediaImg = compose mediaLo mediaHi (mediaParts ++ extraParts)
       compose lo hi ps = foldl (\acc (a, p) -> B.take (fromIntegral (a - lo)) acc <> p <> B.drop (fromIntegral (a - lo) + B.length p) acc) (B.replicate (fromIntegral (hi - lo)) 0) ps
-  (tabs, tabEntries) <- loadTables id4
-  let (tabBlob, tabAt) = packTables id4 tabEntries
+  (stockTabs, tabEntries) <- loadTables id4
+  let (stockBlob, stockAt) = packTables id4 tabEntries
+      ccFilmRows = [[stored, marker, output]
+        | (k, [code, marker, downstream]) <- zip [0 :: Int ..] (stockTabs M.! 0xfe),
+          let stored = if k == 2 then 13 else if k == 4 then 14 else code,
+          let output = if k == 2 then 13 else if k == 4 then 0 else downstream]
+        ++ [[15, 0x7ffffffe, 0]]
+      (tabs, tabBlob, tabAt) = case filmEncoding of
+        D3Films -> (stockTabs, stockBlob, stockAt)
+        ClassicChromeFilms ->
+          (M.insert 0xfe ccFilmRows stockTabs,
+           stockBlob <> B.concat (map u32le (concat ccFilmRows ++ replicate 3 0xffff)),
+           M.insert 0xfe (0x81bc9c + fromIntegral (B.length stockBlob)) stockAt)
       tabImg = B.take 0xc00 (B.drop (fromIntegral (0x81b09c - 0x61c400)) id4) `rewrite` tabAt `append` tabBlob
       rewrite blk at = B.concat [if ptr == 0 then B.take 4 (B.drop p blk) else u32le (fromIntegral (M.findWithDefault 0 (fromIntegral p `div` 4) at)) | p <- [0, 4 .. 0xbfc], let ptr = readU32 blk p]
       append :: B.ByteString -> B.ByteString -> B.ByteString
@@ -466,10 +483,11 @@ main = do
       pure [domain, restrictDomain mediaRegion domain]
     VolatileBank -> pure []
   let failureRedraw = StockFailureRedraw (B.take 132 (B.drop (0x00d38d98 - 0x00bf1a00) id5))
-      (sdSpecs, volatileSpecs) = specSet ks ms fields tabs hostBank failureRedraw (realStock (GuestAddress id4Base) id4Raw id5)
+      (sdSpecs, volatileSpecs) = specSet filmEncoding ks ms fields tabs hostBank failureRedraw (realStock (GuestAddress id4Base) id4Raw id5)
       suite = case bankMode of
         VolatileBank -> volatileSpecs
-        SdBank -> map (seedDomain ks ms domains) sdSpecs ++ relaySpecSet ks (GuestAddress id4Base) id4Raw ++ d3SpecSet id4Final id5Final
+        SdBank -> map (seedDomain ks ms domains) sdSpecs
+          ++ [sp | filmEncoding == D3Films, sp <- relaySpecSet ks (GuestAddress id4Base) id4Raw ++ d3SpecSet id4Final id5Final]
       -- --case ID runs one case; ID* runs every case whose id starts with ID
       selects cid = case reverse cid of
         '*' : prefix -> (reverse prefix `isPrefixOf`)
@@ -802,9 +820,13 @@ d3SpecSet id4f id5f = map mk d3Cases
     ]
   d3Stubs = ["tone-notify", "pipeline-notify", "display-notify", "mode-state-a", "mode-state-b", "mode-state-c"]
 
-specSet :: Syms -> Syms -> [Field] -> M.Map Word32 [[Word32]] -> B.ByteString -> StockFailureRedraw -> [(String, Integer, B.ByteString)] -> ([Spec], [Spec])
-specSet ks ms fields tabs hostBank (StockFailureRedraw failureRedraw) real = (map ($ ()) builders, volatileBuilders)
+specSet :: FilmEncoding -> Syms -> Syms -> [Field] -> M.Map Word32 [[Word32]] -> B.ByteString -> StockFailureRedraw -> [(String, Integer, B.ByteString)] -> ([Spec], [Spec])
+specSet filmEncoding ks ms fields tabs hostBank (StockFailureRedraw failureRedraw) real =
+  (sdBuilders, volatileBuilders)
   where
+    sdBuilders = case filmEncoding of
+      D3Films -> legacyV3Refused : map ($ ()) builders
+      ClassicChromeFilms -> ccCompatibility
     -- contract-derived fixture: every field carries a distinct valid code
     liveFixture :: B.ByteString
     liveFixture = foldl lay (B.replicate 0x1c2 0) [(f, i) | (f, i) <- zip fields [1 ..]]
@@ -1057,6 +1079,64 @@ specSet ks ms fields tabs hostBank (StockFailureRedraw failureRedraw) real = (ma
     fileB st = ("rbm_b_present", 1) : ("rbm_b_size", 512) : st
     fileB2 st = ("rbm_b_present", 1) : ("rbm_b_size", 1024) : st
     emptyBank = BankV2 0 0 BaseInvalid []
+    encodeFileV3 generation = putChecksum . putByte 4 (const 3) . encodeFileV2 generation
+    filmPayload code = placePayload validPayload (fieldOf 0xfe) code
+    ccLegacyBank = BankV2 3 0 (BaseValid CaptureP (filmPayload 13))
+      [Populated (name26 ("SLOT " ++ show k)) (filmPayload 13) (filmPayload (if k == 1 then 14 else 13))
+      | k <- [0 :: Int .. 6]]
+    ccMigratedBank = BankV2 3 0 (BaseValid CaptureP (filmPayload 15))
+      [Populated (name26 ("SLOT " ++ show k)) (filmPayload 15) (filmPayload (if k == 1 then 14 else 15))
+      | k <- [0 :: Int .. 6]]
+    ccCurrentBank = BankV2 3 0 (BaseValid CaptureP (filmPayload 13))
+      [Populated (name26 ("SLOT " ++ show k)) (filmPayload 13) (filmPayload 13) | k <- [0 :: Int .. 6]]
+    ccRead cid file expected = Spec cid
+      "contract: loading returns all seven names and working films without changing either card file"
+      "rbm_seq_load_all_readback" [0x009a0000, 0x009a0100]
+      ((model (fileA2 [])) {mCard = cardWith file B.empty})
+      (Expect "returned" 0
+        [("casebuf", 0, B.concat [name | Populated name _ _ <- bRecords expected]),
+         ("casebuf", 0x100, B.concat [working | Populated _ _ working <- bRecords expected]),
+         ("card", 0, cardWith file B.empty)])
+      ("rbm_seq_load_all_readback" : "rb_readback" : loadFns) bankStubs
+    ccRewrite cid old expected = Spec cid
+      "contract: Rename preserves generation order, selection, base, every saved and working film and the winning original file"
+      "rb_name_commit" [0, 0x009a0000]
+      ((model (fileA2 [])) {mCard = cardWith old B.empty, mCase = name26 "RENAMED"})
+      (Expect "returned" 0
+        [("card", 0, cardWith old (encodeFileV3 42 (withRecord 0
+          (case head (bRecords expected) of Populated _ saved working -> Populated (name26 "RENAMED") saved working; Unpopulated -> Unpopulated) expected)))])
+      ("rb_name_commit" : "rb_stage_image" : "rb_write_back" : loadFns) bankStubs
+    ccUnsafe cid bank = Spec cid
+      "contract: a version-2 film code15 refuses the whole bank without card or live-setting changes"
+      "rb_load" [] ((model (fileA2 [])) {mCard = cardWith (encodeFileV2 41 bank) B.empty})
+      (Expect "returned" 15 [("card", 0, cardWith (encodeFileV2 41 bank) B.empty), ("live-state", 0, liveFixture)])
+      loadFns bankStubs
+    ccCompatibility =
+      [ccV1Refused, ccRead "cc-v2-read-all" (encodeFileV2 41 ccLegacyBank) ccMigratedBank,
+       ccRewrite "cc-v2-write-v3" (encodeFileV2 41 ccLegacyBank) ccMigratedBank,
+       ccRead "cc-v3-read-cc" (encodeFileV3 41 ccCurrentBank) ccCurrentBank,
+       ccRewrite "cc-v3-roundtrip" (encodeFileV3 41 ccCurrentBank) ccCurrentBank,
+       ccRewrite "cc-v2-auto-update-preserved"
+         (encodeFileV2 41 (ccCurrentBank {bAuto = 1}))
+         (ccMigratedBank {bAuto = 1, bRecords = [Populated name (filmPayload 15) (filmPayload 15)
+           | Populated name _ _ <- bRecords ccMigratedBank]}),
+       ccUnsafe "cc-v2-code15-base" (ccLegacyBank {bBase = BaseValid CaptureP (filmPayload 15)})]
+      ++ [ccUnsafe ("cc-v2-code15-saved-" ++ show k)
+            (withRecord k (Populated (name26 "UNSAFE") (filmPayload 15) (filmPayload 13)) ccLegacyBank)
+         | k <- [0 .. 6]]
+      ++ [ccUnsafe ("cc-v2-code15-working-" ++ show k)
+            (withRecord k (Populated (name26 "UNSAFE") (filmPayload 13) (filmPayload 15)) ccLegacyBank)
+         | k <- [0 .. 6]]
+    ccV1Refused = Spec "cc-reader-refuses-v1"
+      "contract: the Classic Chrome reader refuses version1 without changing card or live settings"
+      "rb_load" [] ((model (fileA [])) {mCard = cardWith validA B.empty})
+      (Expect "returned" 5 [("card", 0, cardWith validA B.empty), ("live-state", 0, liveFixture)])
+      loadFns bankStubs
+    legacyV3Refused = Spec "v2-reader-refuses-v3"
+      "contract: the legacy D3 reader refuses version3 without changing card or live settings"
+      "rb_load" [] ((model (fileA2 [])) {mCard = cardWith (encodeFileV3 41 ccCurrentBank) B.empty})
+      (Expect "returned" 5 [("card", 0, cardWith (encodeFileV3 41 ccCurrentBank) B.empty), ("live-state", 0, liveFixture)])
+      loadFns bankStubs
     -- the v2 generation a write over v1 bank `mask`/`slots` produces with
     -- record `k` replaced
     writtenOver gen mask slots k r = encodeFileV2 gen (withRecord k r (migrated mask slots))
