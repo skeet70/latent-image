@@ -6,7 +6,7 @@ const MULTI: &str = include_str!("fixtures/two-depths.curve");
 const EDGE: &str = include_str!("fixtures/edge-peak.curve");
 const NOISY: &str = include_str!("fixtures/noisy-peak.curve");
 const FLAT: &str = include_str!("fixtures/flat.curve");
-const A0: Candidate = Candidate::StructuralReference(StructuralParameters::synthetic());
+const A0: Candidate = Candidate::StructuralReference(StructuralParameters::run3_viltrox());
 fn config(budget: u16) -> Config {
     Config::new(Position::new(0), Position::new(1000), 125, 10, budget, Score::new(100).unwrap()).unwrap()
 }
@@ -40,7 +40,7 @@ fn replay(candidate: Candidate, fixture: &str, budget: u16) -> (Action, u16) {
 }
 #[test]
 fn synthetic_single_peak_and_noise_focus_within_fine_step() {
-    for candidate in [A0, Candidate::CoarseFine, Candidate::AdaptivePeak] {
+    for candidate in [Candidate::CoarseFine, Candidate::AdaptivePeak] {
         for fixture in [SINGLE, NOISY] {
             let (action, samples) = replay(candidate, fixture, 64);
             assert!(matches!(action, Action::Finish(p) if p.units().abs_diff(537) <= 10));
@@ -102,9 +102,34 @@ fn wrong_position_and_changing_final_measurement_refuse_focus() {
 }
 
 #[test]
-fn structural_reference_stays_on_the_first_depth_and_reaches_a_boundary_peak() {
-    assert!(matches!(replay(A0, MULTI, 64).0, Action::Finish(p) if p.units().abs_diff(230) <= 10));
+fn observed_structural_profile_reaches_the_stronger_depth_and_boundary() {
+    assert!(matches!(replay(A0, MULTI, 64).0, Action::Finish(p) if p.units().abs_diff(730) <= 10));
     assert_eq!(replay(A0, EDGE, 64).0, Action::Finish(Position::new(0)));
+}
+
+#[test]
+fn observed_direction_evidence_exposes_the_structural_models_near_peak_limit() {
+    for fixture in [SINGLE, NOISY] {
+        assert_eq!(replay(A0, fixture, 64).0, Action::Fail(Failure::Budget));
+    }
+}
+
+#[test]
+fn observed_range_divisor_limits_the_requested_direction_motion() {
+    let mut controller = Controller::new(config(64), A0);
+    let Action::Observe { request, position } = controller.step(Event::Start { position: Position::new(1000) }) else { panic!() };
+    assert!(matches!(controller.step(Event::Sample { request, position, score: Score::new(500000).unwrap(),
+        fresh: true, settled: true }), Action::Observe { position, .. } if position == Position::new(967)));
+}
+
+#[test]
+fn logarithmic_fit_returns_the_peak_of_a_synthetic_exponential_quadratic() {
+    let fixture = "synthetic exponential-quadratic 67 0\n0 128\n50 4096\n100 2048\n150 16\n1000 1\n";
+    let parameters = StructuralParameters::new(SearchStep::new(50).unwrap(), SearchStep::new(50).unwrap(),
+        EvidenceCount::new(1).unwrap(), EvidenceCount::new(2).unwrap(), Percent::new(1).unwrap(),
+        Score::new(100).unwrap(), Direction::Increasing, StructuralFit::LogarithmicParabolic);
+    assert_eq!(replay(Candidate::StructuralReference(parameters), fixture, 64).0,
+        Action::Finish(Position::new(67)));
 }
 
 #[test]

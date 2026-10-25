@@ -2,9 +2,9 @@
 
 ## Shared Rust candidate controller
 
-`//af:candidate-controller` builds the allocation-free Rust library in [candidates/controller.rs](candidates/controller.rs). Its explicit `Controller::step(Event) -> Action` interface runs A0-structural's decode-bound direction/peak/three-position model, A1 coarse/fine scanning and A2 adaptive local peak estimation. The [candidate report](../reports/af-candidates.md) records source reproducibility, synthetic parameter provenance, the bounded Run-3 calibration gap and resource bounds.
+`//af:candidate-controller` builds the allocation-free Rust library in [candidates/controller.rs](candidates/controller.rs). Its explicit `Controller::step(Event) -> Action` interface runs A0-structural's decode-bound direction/peak/three-position model, A1 coarse/fine scanning and A2 adaptive local peak estimation. The [candidate report](../reports/af-candidates.md) records source reproducibility, hardware-observed Run-3 parameter values, alias translation, remaining synthetic lens increments and resource bounds.
 
-The Haskell comparison harness sends all three candidates the same linearly interpolated synthetic focus curves and initial position. It prints CSV with `origin=simulated`, accepted sample count, simulated travel in artificial position units and absolute final-position error against the declared optimum. A refusal has no final-position error. A0-structural is an explicitly synthetic parameter instantiation, not calibrated stock X-M1 behavior or camera timing.
+The Haskell comparison harness sends all three candidates the same linearly interpolated synthetic focus curves and initial position. It prints CSV with `origin=simulated`, accepted sample count, simulated travel in artificial position units and absolute final-position error against the declared optimum. A refusal has no final-position error. A0-structural combines observed parameter-bank values for one mounted lens with unresolved synthetic increments and context assumptions; it is not calibrated stock X-M1 behavior or camera timing.
 
 ```sh
 devenv shell -- bazel test --lockfile_mode=error //af:candidate-replay-tests //af:candidate-compare-tests

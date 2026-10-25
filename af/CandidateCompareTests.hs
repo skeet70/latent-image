@@ -23,14 +23,18 @@ result line = case words (map (\c -> if c == ',' then ' ' else c) line) of
   ["simulated", "flat", candidate, samples, travel, "FlatCurve"] -> do
     checkCounts samples travel
     Result Flat <$> parseCandidate candidate
+  ["simulated", curve, "A0-structural", samples, travel, "Budget"] -> do
+    checkCounts samples travel
+    name <- case curve of
+      "single-peak" -> pure SinglePeak
+      "noisy-peak" -> pure NoisyPeak
+      _ -> fail "unexpected structural budget refusal"
+    pure (Result name A0Structural)
   ["simulated", curve, candidate, samples, travel, err, "focused"] -> do
     checkCounts samples travel
     selected <- parseCandidate candidate
     errorUnits <- number err
-    let acceptable = if selected == A0Structural && curve == "two-depths"
-          then errorUnits >= 490 && errorUnits <= 510
-          else errorUnits >= 0 && errorUnits <= 10
-    ensure acceptable "synthetic final-position error outside policy contract"
+    ensure (errorUnits >= 0 && errorUnits <= 10) "synthetic final-position error outside policy contract"
     name <- case curve of
       "single-peak" -> pure SinglePeak
       "two-depths" -> pure TwoDepths

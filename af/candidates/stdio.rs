@@ -8,7 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fields: Vec<_> = config.split_whitespace().collect();
     if fields.len() != 4 || fields[0] != "CANDIDATE2" { return Err("invalid configuration".into()); }
     let candidate = match fields[1] {
-        "A0-structural" => Candidate::StructuralReference(StructuralParameters::synthetic()),
+        "A0-structural" => Candidate::StructuralReference(StructuralParameters::run3_viltrox()),
         "A1" => Candidate::CoarseFine,
         "A2" => Candidate::AdaptivePeak,
         _ => return Err("unknown candidate".into()),
