@@ -22,6 +22,8 @@ from .hardware import UnsupportedDevice
 from .graphics_clear_profile import (PROFILE as CLEAR_PROFILE, path_descriptor, parse_clear, render_clear,
                                      PATH_TEMPLATE, FILL_PREFIX, FILL_SUFFIX, GAMMA_BYTES, FOOTER)
 from x70_native._native import ui_gradient as _ui_gradient, ui_gradient_colors as _ui_gradient_colors
+from x70_native._native import (GPU_STARTUP_PROFILE, gpu_startup_submit as _gpu_startup_submit,
+                                gpu_startup_ack as _gpu_startup_ack)
 
 
 # B6BB44/B6B9D4/B83F3C establish the list grammar. These sets describe the
@@ -936,6 +938,7 @@ class GraphicsAccelerator:
     COPY_PROFILE = 'stock-vg-32bpp-fallback'
     CLEAR_STATUS = 1 << 31
     CLEAR_PROFILE = CLEAR_PROFILE
+    STARTUP_PROFILE = GPU_STARTUP_PROFILE
     UI_PROFILE = UI_PROFILE
     UI_CAPTURE_BYTES = 0x80000
     # Values actually written by the unchanged initializer0xbcdcf8.
@@ -973,7 +976,7 @@ class GraphicsAccelerator:
             raise ValueError('Invalid graphics command capture bound')
         if max_clear_bytes is None:
             max_clear_bytes = min(0x04000000, ram_bytes)
-        if not 0 < max_clear_bytes <= ram_bytes or clear_profile not in (None, self.CLEAR_PROFILE, self.UI_PROFILE):
+        if not 0 < max_clear_bytes <= ram_bytes or clear_profile not in (None, self.CLEAR_PROFILE, self.UI_PROFILE, self.STARTUP_PROFILE):
             raise ValueError('Invalid graphics clear profile/bounds')
         self.write_bytes, self.schedule, self.raise_irq = write_bytes, schedule, raise_irq
         self.read_bytes = read_bytes
@@ -1057,6 +1060,7 @@ class GraphicsAccelerator:
         elif offset in self.INIT_VALUES:
             if value not in self.INIT_VALUES[offset]:
                 raise UnsupportedDevice(f"Unknown graphics initialization {offset:#x}={value:#x}")
+            _gpu_startup_ack(self, offset, value)
             if offset in (0x1800, 0x1020) and self.regs.get(0x34, 0) & self.CLEAR_STATUS:
                 if self.busy:
                     raise UnsupportedDevice('Graphics clear abort semantics are not modeled')
@@ -1164,6 +1168,8 @@ class GraphicsAccelerator:
             raise UnsupportedDevice('Graphics clear requires idle and acknowledged previous completion')
         if self.read_bytes is None or self.raise_irq is None:
             raise UnsupportedDevice('Graphics clear-only requires memory and IRQ routing')
+        if _gpu_startup_submit(self, cpu_id, offset, trigger, capture):
+            return
         if offset == 0x10d0:
             if trigger != 0x10001 or self._command_pending is not None:
                 raise UnsupportedDevice('Graphics clear-only path trigger/order is unsupported')

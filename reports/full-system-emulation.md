@@ -389,6 +389,37 @@ Reproduce the clock-only extension with the section 11.7 archived-runtime comman
 
 `//emulation:recovery-task-state-tests` covers six-column startup observations, message extraction, per-command completion changes, unknown completion values and truncation using synthetic RAM. The clocked run establishes progress through a declared missing external input, not a measured display clock, GPU/panel behavior, main-UI creation, completed mount, updater readiness or physical recovery. All prior card, busy-response, IRQ-arbitration, timer, installed-loader and shared-cache limitations remain.
 
+#### GPU startup completion and execution boundary
+
+The next GPU dependency is bounded for the first state-only initialization, not for general command-list rasterization (E-RECOVERY-GPU-COMPLETION-BINDING-150). X-M1 submitter `0x008929f4` saves the calling task id at `0x00992930`, registers `0x008924c0` through source index `0x4f`, and calls `0x008928c4`. The latter programs path address/count and trigger `0x10001`, then separately programs fill address/count and trigger 1. Accessors `0x00892454`/`0x0089249c` map logical offsets to `0xfff78000 + 2*offset`; the observed `0xfff7a1a0` write is logical `0x10d0`. Index `0x4f` in the table at `0x007c9124` contains `{0x3c,0xc,1}`: the physical GPU IRQ and priority are `0x3c` and `0xc`.
+
+The consumer is not a synthetic mount or application-ready flag. `0x00892718` calls task sleep `0x007240c8` after submission. ISR `0x008924c0` reads logical status `0x34`; for bit 31 it stores zero to logical `0x1800` and `0x1020`, then reads status again until the upper status bits clear. It saves the accumulated status at `0x00992934` and wakes the saved task through `0x00724144`. The resumed caller reads logical `0x105c` and only writes logical `0x1248 = 1` if that value equals `0xf`. The existing zero-reset value for `0x105c` remains an unmeasured fixture; this extension never substitutes `0xf`.
+
+The command grammar also has own-model producers, rather than relying on the retained template's sibling-model address labels (E-RECOVERY-GPU-INIT-WRITERS-150). `0x008303dc` selects path versus fill rings and encodes ordinary register updates as `{0x40000000 | lanes<<16 | register, value}`. Initializer `0x00831738` emits dimensions, first-global identity registers `0x40`-`0x48`, mode/configuration, target register `0x1a4` and endpoint `target + width*height - 8` at `0x1a8`. Gamma writer `0x008313c8` emits exactly 256 register-`0x188` updates with the same table byte in all three low channels. Dirty-state writer `0x0085578c` supplies the mode refresh and the optional zero clip-count/mode updates. Finalizer `0x00854e98` appends the exact `0x28`/`0x31`/`0x18` footer with values `0x12345678`/`0xf0`/`0x12345678`, then zero-pads both streams to 16-word boundaries. This binds the restricted software grammar; it does not establish hardware pixel or timing behavior.
+
+The original Rust `gpu_startup.rs` model and its native bridge add the explicit `xm1-150-init-no-draw` profile. It accepts only the bounded 32-word first-global path and 592-word fill-state grammar: identity/configuration updates, 256 grayscale gamma-register updates, bounded RAM target configuration, optional exact zero-clip state, mandatory footer and zero padding. Gamma values are validated as state updates without copying the proprietary curve. The model exposes no pixel-memory operation. Any other path, geometry, draw trigger, register command, malformed footer/padding, changed path, cross-core submission, unresolved RAM alias or range/arithmetic error refuses before completion.
+
+After the separate fill trigger validates, the model schedules bit 31 and the firmware-enabled physical IRQ `0x3c` after two virtual ticks. Timing is declared, not measured. Completion occurs once; both actual zero acknowledgments are required before another submission. The bridge does not invoke guest handlers or wake tasks directly. The new behavioral target defines independent synthetic command fixtures and checks those observable lifecycle and refusal behaviors.
+
+**Execution boundary:** the archived native extension now builds and imports the new profile. The slot-wrapped ROM route stops after **41,558,171 stock instructions** at CPU0 PC `0x008924b0`, on a four-byte write of `0x10001` to `0xfff7a1a0`. The bridge refuses with `GPU startup path word count 16 != 32` (E-RECOVERY-GPU-INIT-BOUNDARY-150). The captured path contains 16 words, while this model admits only the 32-word first-global path. The fill capture contains 592 words, including gamma updates and its footer. No command-list job is accepted, no new completion IRQ is raised and the guest ISR/wakeup acceptance remains unestablished.
+
+The accelerator's two completed jobs and 1,382,400 completed bytes belong to the earlier pattern-fill startup operations, not this refused command-list submission. The new profile selects no copy profile and makes no guest RAM-ready or logical-`0x105c` ready substitution. Main UI, mount completion, updater readiness and physical recovery remain unproved.
+
+The standalone behavioral target passes all 13 tests, including drawing and unknown-command refusal, bounded targets, exact list lengths, one-shot completion and both zero acknowledgments. The model has no pixel-memory operation; copying is outside the admitted grammar. The public native package activation/build and `//... //tests:research-contracts` pass, with 93 test targets passing, 91 cached. Those synthetic results do not establish acceptance of the captured 16-word path.
+
+Reproduction uses the retained native runtime with owner-supplied ROM, firmware and card inputs. Rebuild/install its native extension after synchronizing both `gpu_startup` Rust modules, then run `python3 -m x70_native` under `//emulation:emulator-slot` with:
+
+```text
+--entry rom --rom-sd-profile xm1-native-frame-card --storage-profile erased
+--sd-card-profile declared-blank-sdhc-default-speed-unmeasured --sd-card-present
+--irq-tie-profile kernel-active-scan-order --phase-profile configured-clocked
+--display-frame-ticks 400000 --clear-profile xm1-150-init-no-draw
+--limit 100000000 --quantum 1000 --output <fresh-output-directory>
+```
+
+Build the standalone test executable with `devenv shell -- bazel build //emulation:recovery-gpu-startup-test-bin`; run the complete checks with `devenv shell -- bazel test //... //tests:research-contracts`. The existing card, busy-response, IRQ-arbitration, timer, installed-loader, peer-reset and coherent-cache assumptions are unchanged.
+
+
 
 
 ### 11.8 Raw-only native recovery

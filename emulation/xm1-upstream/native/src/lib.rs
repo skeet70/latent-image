@@ -17,6 +17,8 @@ mod menu;
 mod phase_clock;
 mod spi0;
 mod task_state;
+mod gpu_startup;
+mod gpu_startup_bridge;
 #[cfg(test)]
 mod tests;
 
@@ -1506,6 +1508,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<fff63::Device>()?;
     m.add("FFF63_PROFILES", (fff63::PROFILE,))?;
     m.add_function(wrap_pyfunction!(spi0::spi0_status_acknowledged, m)?)?;
+    m.add("GPU_STARTUP_PROFILE", gpu_startup_bridge::PROFILE)?;
+    m.add_function(wrap_pyfunction!(gpu_startup_bridge::gpu_startup_submit, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_startup_bridge::gpu_startup_ack, m)?)?;
     m.add_class::<irq_mask::IrqRoute>()?;
     m.add_function(wrap_pyfunction!(irq_mask::irq_enable_clear, m)?)?;
     m.add_function(wrap_pyfunction!(irq_mask::irq_enable_set, m)?)?;

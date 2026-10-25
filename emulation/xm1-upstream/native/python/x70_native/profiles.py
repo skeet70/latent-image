@@ -35,7 +35,7 @@ def add_profile_arguments(parser):
         parser.add_argument('--'+name)
     parser.add_argument('--backdrop-profile',choices=('none',*DisplayScanout.BACKDROP_PROFILES))
     parser.add_argument('--clear-profile', choices=('none', GraphicsAccelerator.CLEAR_PROFILE,
-                                                  GraphicsAccelerator.UI_PROFILE))
+                                                  GraphicsAccelerator.UI_PROFILE, GraphicsAccelerator.STARTUP_PROFILE))
     parser.add_argument('--mcu-profile', choices=('none', 'captured-backup'))
     parser.add_argument('--user-journals', choices=('none', 'restored', 'main-read'))
     parser.add_argument('--display-frame-ticks', type=int)
