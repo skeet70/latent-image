@@ -65,6 +65,10 @@ main = do
       approvedRecord = document [review "R1" "approve"] [check]
         [installerPin (approvedBy "R1"), contentPin contentChecked, builderPin (approvedBy "R1")] (approvedBy "R1")
 
+      manyPins count = document [] [] [pin ("menu/source" ++ show index ++ ".c") "workspace" "mechanism" unreviewed | index <- [1 .. count :: Int]] unreviewed
+
+  expect "a combined payload can carry 64 source pins" (case parsed (manyPins 64) of Right _ -> True; Left _ -> False)
+  expect "more than 64 source pins are refused" (isLeft (parsed (manyPins 65)))
   expect "an all-approved record has no verdict findings" (findingsOf approvedRecord == Just [])
   expect "an unreviewed pin is a verdict finding"
     (findingsOf (document [review "R1" "approve"] [] [installerPin (approvedBy "R1"), contentPin unreviewed] (approvedBy "R1"))

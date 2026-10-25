@@ -422,7 +422,7 @@ parseRamPushManifest path document runtime = do
   require (hexDigest digest) "runtime_sha256 must be lowercase SHA256"
   identity <- case field value "source_identity" of
     Object object -> do
-      require (not (M.null object) && M.size object <= 32) "bounded nonempty source_identity required"
+      require (not (M.null object) && M.size object <= 64) "bounded nonempty source_identity required"
       forM (M.toList object) $ \(key,item) -> do
         name <- pure (K.toString key)
         hash <- text item 64
