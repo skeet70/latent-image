@@ -212,6 +212,7 @@ captureDifference dec params manifestPath = do
       recover m = invert stage (meanY m) (meanCb m) (meanCr m)
       recovered = [(a, b, wa, wb) | (a, b) <- blocks, Just wa <- [recover a], Just wb <- [recover b]]
       channels (Rgb14 r g b) = [r, g, b]
+      ratios :: Int -> [Double]
       ratios channel =
         [ fromIntegral target / fromIntegral source
         | (_, _, a, b) <- recovered
