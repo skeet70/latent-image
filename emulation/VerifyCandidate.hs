@@ -244,19 +244,16 @@ emulatorStart file prefix =
 
 -- | Fields of an @e2e-result.json@ that every RAM-push and flash-candidate run writes.
 e2eResult :: String -> [Exclusion]
-e2eResult file = emulatorStart file "/emulator_start" ++
+e2eResult file = emulatorStart file "/emulator_start" ++ instructionTimingExclusions (filePattern file) ++
   [ exclude file "/phases/*/seconds" Timing
   , exclude file "/observations/*/steps/*/seconds" Timing
   , exclude file "/menu_receipts/*/frame_number" Scheduling
   , exclude file "/menu_receipts/*/path" RunLocation ]
 
--- | The Classic Chrome icon trajectory's per-observation trace-hit instruction
--- counters and recurring live-view develop markers. Both differed between two
--- runs of one tree on the same restored checkpoint.
+-- | Recurring live-view develop markers differed between runs of one tree on the same restored checkpoint.
 iconRunLength :: [Exclusion]
 iconRunLength =
-  [ exclude "e2e-result.json" "/observations/*/trace_hits/*/instructions" Scheduling
-  , exclude "e2e-result.json" "/observations/*/classic_chrome_site_entries" Scheduling ]
+  [ exclude "e2e-result.json" "/observations/*/classic_chrome_site_entries" Scheduling ]
 
 ramPushSpec :: [Exclusion] -> ObservationSpec
 ramPushSpec extra = ObservationSpec
@@ -280,12 +277,6 @@ updaterSpec = ObservationSpec
   [ exclude "receipt.json" "/exported_nand/path" RunLocation
   , exclude "receipt.json" "/inputs/*/path" RunLocation ]
 
-flashBootSpec :: ObservationSpec
-flashBootSpec = ObservationSpec
-  [filePattern "flash-boot-receipt.json"]
-  [ exclude "flash-boot-receipt.json" "/emulator_source" CandidateIdentity
-  , exclude "flash-boot-receipt.json" "/firmware/path" RunLocation
-  , exclude "flash-boot-receipt.json" "/frame_png" RunLocation ]
 
 fujimodFlashBootSpec :: ObservationSpec
 fujimodFlashBootSpec = ObservationSpec

@@ -13,13 +13,15 @@ const PHASE_POLL: u64 = 20_000;
 /// Longest run between two guard scans.
 const GUARD_WINDOW: u64 = 1_000_000;
 
-/// Instruction budgets of one key press: held, then at most `release` until
-/// the firmware has debounced the release.
+/// Fixed hold and debounced-release cap in guest instructions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeyPulse {
     pub hold: u64,
     pub release: u64,
 }
+
+/// E-XM1-KEY-RELEASE-CAPS-150: observed OK release10,506,741; cap margin23.7%.
+pub const MENU_PULSE: KeyPulse = KeyPulse { hold: 4_000_000, release: 13_000_000 };
 
 pub struct Machine {
     pub document: RunDocument,
@@ -91,7 +93,7 @@ impl Machine {
         while self.failure.is_none() && !self.document.firmware.dial_push_released(&self.session)? {
             let spent = self.instructions() - start;
             if spent >= pulse.release {
-                break;
+                return Err("X-M1 dial push release did not latch before its release cap".into());
             }
             self.run((pulse.release - spent).min(RELEASE_POLL));
         }
@@ -138,7 +140,9 @@ impl Machine {
                 return Err(format!("the sub-command scanner did not sample phase {phase:02b}"));
             }
         }
-        self.run_until_sampled(RELEASED, pulse.release)?;
+        if !self.run_until_sampled(RELEASED, pulse.release)? {
+            return Err("X-M1 sub-command release did not latch before its release cap".into());
+        }
         self.require_running()
     }
 
@@ -170,7 +174,7 @@ impl Machine {
         while self.failure.is_none() && !self.document.firmware.released(&self.session, key)? {
             let spent = self.instructions() - start;
             if spent >= pulse.release {
-                break;
+                return Err(format!("X-M1 key {key:?} release did not latch before its release cap"));
             }
             self.run((pulse.release - spent).min(RELEASE_POLL));
         }

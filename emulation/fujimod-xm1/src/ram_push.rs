@@ -7,7 +7,7 @@ use fujimod_xm1::adjustment::AdjustmentNand;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, load_card, menu_value, read, restore, sha256, write};
 use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, encode_hex};
 use fujimod_xm1::guest::{DialTurn, ModeDialPosition, Press, RouteKey};
-use fujimod_xm1::machine::{KeyPulse, Machine};
+use fujimod_xm1::machine::{KeyPulse, Machine, MENU_PULSE};
 use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::sd_host::{Backing, MediaImage};
 use serde::{Deserialize, Serialize};
@@ -32,7 +32,6 @@ const FIRST_START_PULSE: KeyPulse = KeyPulse { hold: 8_000_000, release: 8_000_0
 const LIVE_VIEW_SETTLE: u64 = 40_000_000;
 const MODE_DIAL_SETTLE: u64 = 40_000_000;
 const DIRECTIONAL_PULSE: KeyPulse = KeyPulse { hold: 3_000_000, release: 12_000_000 };
-const MENU_PULSE: KeyPulse = KeyPulse { hold: 4_000_000, release: 6_000_000 };
 /// `tools/probe_setup_menus.py` DIAL_PULSE.
 const DIAL_PULSE: KeyPulse = KeyPulse { hold: 4_000_000, release: 1_000_000 };
 const MAX_PHASE: u64 = 15_000_000;

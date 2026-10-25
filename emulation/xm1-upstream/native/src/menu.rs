@@ -82,15 +82,18 @@ pub(crate) fn release(
     let start = board.getattr("instructions")?.extract::<u64>()?;
     loop {
         let spent = board.getattr("instructions")?.extract::<u64>()? - start;
-        if spent >= cap || input.released(inner)?
+        if input.released(inner)?
             || !board.getattr("failure")?.is_none()
             || !session.getattr("execution_error")?.is_none()
         {
             return Ok(latched);
         }
+        if spent >= cap {
+            return Err(PyValueError::new_err("Key release did not latch before its release cap"));
+        }
         session.call_method1("_advance", ((cap - spent).min(RELEASE_POLL_INSTRUCTIONS),))?;
         if board.getattr("instructions")?.extract::<u64>()? == start + spent {
-            return Ok(latched);
+            return Err(PyValueError::new_err("Key release made no guest progress"));
         }
     }
 }

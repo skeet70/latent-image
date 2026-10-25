@@ -146,3 +146,80 @@ fn fixed_scene_frame_pins_every_render_until_cleared() {
         assert_ne!(render(100), animated.0);
     });
 }
+
+#[pyclass(unsendable)]
+struct SampledKeySession {
+    #[pyo3(get)]
+    board: Py<PyAny>,
+    #[pyo3(get)]
+    execution_error: Option<Py<PyAny>>,
+    machine: Py<PyAny>,
+    changes_at: u64,
+    level: u8,
+}
+
+#[pymethods]
+impl SampledKeySession {
+    fn _advance(&self, py: Python<'_>, limit: u64) -> PyResult<()> {
+        let board = self.board.bind(py);
+        let next = board.getattr("instructions")?.extract::<u64>()? + limit;
+        board.setattr("instructions", next)?;
+        if next >= self.changes_at {
+            self.machine.bind(py).call_method1(
+                "mem_write",
+                (0, 0x0082_82d9u64, PyBytes::new(py, &[self.level])),
+            )?;
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn key_release_requires_the_debounced_edge_before_its_cap() {
+    Python::initialize();
+    Python::attach(|py| {
+        let module = PyModule::new(py, "_native").unwrap();
+        super::_native(&module).unwrap();
+        let library = std::env::var("X70_UNICORN_LIBRARY").expect("Pinned Unicorn test library");
+        let machine = module.getattr("Machine").unwrap().call1((
+            library, 0x0100_0000, PyBytes::new(py, &[0; 0x4000]), false,
+            Vec::<u64>::new(), vec![(0u32, 0u32), (0, 0)],
+        )).unwrap();
+        let board = py.import("types").unwrap().getattr("SimpleNamespace").unwrap().call0().unwrap();
+        board.setattr("instructions", 0u64).unwrap();
+        board.setattr("failure", py.None()).unwrap();
+        let session = Py::new(py, SampledKeySession {
+            board: board.clone().unbind(),
+            execution_error: None,
+            machine: machine.clone().unbind(),
+            changes_at: 400_000,
+            level: 0,
+        }).unwrap();
+        machine.call_method1(
+            "mem_write", (0, 0x0082_82d9u64, PyBytes::new(py, &[1])),
+        ).unwrap();
+        let latched = machine.call_method1("release_menu_key", (&session, "down", 8_000_000u64))
+            .unwrap().extract::<Option<bool>>().unwrap();
+        assert_eq!(latched, Some(true));
+        assert!(machine.call_method0("menu_keys_released").unwrap().extract::<bool>().unwrap());
+        let released_at = board.getattr("instructions").unwrap().extract::<u64>().unwrap();
+        assert!((400_000..650_000).contains(&released_at));
+        assert_eq!(
+            machine.call_method1("release_menu_key", (&session, "down", 500_000u64))
+                .unwrap().extract::<Option<bool>>().unwrap(),
+            Some(false),
+        );
+        session.borrow_mut(py).changes_at = u64::MAX;
+        machine.call_method1(
+            "mem_write", (0, 0x0082_82d9u64, PyBytes::new(py, &[1])),
+        ).unwrap();
+        let before_expired_release = board.getattr("instructions").unwrap().extract::<u64>().unwrap();
+        let refused = machine.call_method1("release_menu_key", (&session, "down", 500_000u64))
+            .unwrap_err();
+        assert!(refused.is_instance_of::<pyo3::exceptions::PyValueError>(py));
+        assert_eq!(
+            board.getattr("instructions").unwrap().extract::<u64>().unwrap(),
+            before_expired_release + 500_000,
+        );
+    });
+}

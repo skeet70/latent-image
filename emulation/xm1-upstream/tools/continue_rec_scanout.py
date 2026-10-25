@@ -587,14 +587,16 @@ class _FF80EndpointBridge:
     # MENU path unchanged (emulated).
     KEEPALIVE_KEY = 'dial-push'
     # Each keepalive runs inside a host transfer's 5 s budget.
-    KEEPALIVE_PULSE = 2_000_000
+    KEEPALIVE_HOLD = 2_000_000
+    # E-XM1-KEY-RELEASE-CAPS-150: observed dial-push release2,754,219; cap margin45.2%.
+    KEEPALIVE_RELEASE = 4_000_000
 
     def keep_session_awake(self):
         self.use_timing_ratio(24, 'inactivity reset')
         before = self.board.instructions
         state = self.session.key({'key': self.KEEPALIVE_KEY, 'render': False,
-                                  'hold_instructions': self.KEEPALIVE_PULSE,
-                                  'release_instructions': self.KEEPALIVE_PULSE})
+                                  'hold_instructions': self.KEEPALIVE_HOLD,
+                                  'release_instructions': self.KEEPALIVE_RELEASE})
         if self.board.failure is not None or self.session.execution_error is not None:
             raise RuntimeError(f'inactivity reset failed: {state}')
         self.keepalive_inputs.append({

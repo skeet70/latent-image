@@ -7,7 +7,7 @@ use fujimod_xm1::adjustment::AdjustmentNand;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, menu_value, read, sha256, write};
 use fujimod_xm1::ff80::{Ff80, RendezvousInputs, SET_ADDRESS_RECOVERY, Transfer, encode_hex};
 use fujimod_xm1::guest::{RouteKey, set_adc};
-use fujimod_xm1::machine::KeyPulse;
+use fujimod_xm1::machine::{KeyPulse, MENU_PULSE};
 use fujimod_xm1::run::{self, RunDocument};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -32,7 +32,6 @@ const MAX_READ: usize = 4096;
 const ADC_CHANNELS: usize = 12;
 const PROBE_LIMIT: usize = 100_000;
 const DIRECTIONAL_PULSE: KeyPulse = KeyPulse { hold: 3_000_000, release: 12_000_000 };
-const MENU_PULSE: KeyPulse = KeyPulse { hold: 4_000_000, release: 6_000_000 };
 
 struct Arguments {
     run: PathBuf,
