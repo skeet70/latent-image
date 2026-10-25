@@ -560,6 +560,18 @@ Current host packaging replaces the provisional gap2 executable placement with s
 
 Capacity, per storage option, with the stock bank addressing as the floor: the property layer addresses `bank*0x1c2 + 0x140 + 0x28*slot` with 1 reserved for the live values, so a bank image holds slot codes 0 and 2 (code 0 is the C record and stays stock) and slots beyond 0x1b8 overrun the 0x1c2-byte image. Two codes with the stock addressing, six if bank 1's records were proven, seven with a separate bank object that the property layer does not address. The reach report's internal census stands: the payload, the record's two unnamed bytes and the settings image's three free bytes together hold under ten unclaimed bytes, so seven names plus seven payloads need a new internal area (unproven flash allocation) or the SD-backed file the owner prefers.
 
+### 17.13 SELECT confirmation snapshot and verb current-value marker (#83)
+
+Static inference, X-M1 1.50: the stock child transition `FUN_00bfab98` calls `FUN_00bfa800` and then `FUN_0061ceac(root)` at `0x00bfacfc`. The bank's `rb_ui_child_enter` subsequently resets a non-field entry cursor to row 0. Before the fix, SELECT's live cursor could therefore be NONE while the saved depth-2 snapshot still carried the previous C1 cursor. The blink's kind-7 branch of `FUN_01165aa0` obtains that saved snapshot through `FUN_0061ce1c(root, 2, snapshot)`, including its cursor token. Moving the cursor before OK refreshes the snapshot through stock navigation; confirming the entry row without moving does not.
+
+After a successful SELECT child entry, `rb_ui_child_enter` calls `FUN_0061ceac` again with the child's root, 1, after its cursor adjustment and name refresh. `FUN_0061ceac` obtains the stock frame depth and writes a fresh eleven-word snapshot through `FUN_0061cd14`. For SELECT at depth 2, its destination is `[0x00941300,0x0094132c)`, `0x009412d4 + 1 * 0x2c`. It writes only menu presentation state, not settings or persistent storage. No call is made on a refused transition or for another child class.
+
+Verb pages have no current setting. Before their pane draw, the bank sets `RB_UI_CURRENT_ROW_CELL` to row 4, the hidden dialog row emitted after the four verbs by `BuildRecipeBank`. The stock snapshot then carries token `0x82` as its current-value token, which matches no visible verb. The navigation cursor and the stock entry/SET animation preparation remain unchanged.
+
+The new `0x0061ceac` stock call is admitted explicitly in `menu/recipe_bank_allowlist.json`. That allowlist change is a mechanism revision under governance section 3.2, even though the bank assembly, actions and header are bank-content pins. Independent review and the owner's visual check remain required before a live run. `emulation/ram-push-select-feedback-trajectories.json` is the cardless C1-to-NONE feedback trajectory; its captures and raw stock snapshot/animation reads are private emulator evidence, not camera acceptance.
+
+The native UI fixture binds its getter/setter callbacks and SELECT value/label arrays from the current kernel symbols before execution. The generator refuses stale declared bank pointers and unbound bank-code pointers. Its refusal tests use synthetic plans and require no private firmware. At JOBS=4, the updated branch and unchanged main `3525e2e` both pass 52/55 cases with the same three `stub_contract` failures; comparison details live in `private-data/analysis/select-blink-83/ui-main-comparison.json`.
+
 ## 18. Persistent custom-bank selection (owner decision supplied as 2026-10-19)
 
 ### 18.1 Contract and evidence boundary

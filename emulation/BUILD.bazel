@@ -983,6 +983,14 @@ haskell_binary(
     ],
 )
 
+sh_test(
+    name = "recipe-bank-ui-plan-tests",
+    size = "small",
+    srcs = ["recipe-bank-ui-plan-tests.sh"],
+    args = ["$(location :recipe-bank-ui-cases)"],
+    data = [":recipe-bank-ui-cases"],
+)
+
 # Recipe-bank kernel behavior cases: builds each case from the pinned blob and
 # model, runs it through the bounded runner and writes results plus findings.
 haskell_binary(
