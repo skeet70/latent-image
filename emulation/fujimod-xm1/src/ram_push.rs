@@ -9,7 +9,7 @@ use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, enc
 use fujimod_xm1::guest::{DialTurn, ModeDialPosition, Press, RouteKey};
 use fujimod_xm1::machine::{KeyPulse, Machine};
 use fujimod_xm1::render::MAX_SETTLE;
-use fujimod_xm1::sd_host::MediaImage;
+use fujimod_xm1::sd_host::{Backing, MediaImage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -558,7 +558,11 @@ fn drive() -> Result<(), String> {
     let arguments = arguments()?;
     let adjustment_bytes = read(&arguments.adjustment_nand)?;
     let document_bytes = read(&arguments.run)?;
-    let card = arguments.sd_card_image.as_deref().map(|path| load_card(&document_bytes, path)).transpose()?;
+    let card = arguments
+        .sd_card_image
+        .as_deref()
+        .map(|path| load_card(&document_bytes, path, Backing::Sparse))
+        .transpose()?;
     let rendezvous = if card.is_some() { RendezvousInputs::MenuUpAndWriteProtect } else { RendezvousInputs::MenuUp };
     let inputs = Inputs {
         document_bytes,

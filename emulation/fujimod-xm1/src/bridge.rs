@@ -5,7 +5,7 @@ use crate::adjustment::AdjustmentNand;
 use crate::guest::MenuState;
 use crate::machine::Machine;
 use crate::run::{self, RunDocument, ValidatedUpdate};
-use crate::sd_host::{self, RetainedCard};
+use crate::sd_host::{self, Backing, RetainedCard};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::io::Write;
@@ -62,10 +62,10 @@ impl Inputs {
 }
 
 /// Loads the raw image at `path` as a card of the document's SD host.
-pub fn load_card(document_bytes: &[u8], path: &Path) -> Result<RetainedCard, String> {
+pub fn load_card(document_bytes: &[u8], path: &Path, backing: Backing) -> Result<RetainedCard, String> {
     let document = RunDocument::parse(document_bytes)?;
     let (sectors, max_dirty_sectors) = sd_host::card_geometry(&document.sd_host()?)?;
-    sd_host::load_image(path, sectors, max_dirty_sectors)
+    sd_host::load_image(path, sectors, max_dirty_sectors, backing)
 }
 
 /// Saves the machine's session under `root/name` through a partial directory,

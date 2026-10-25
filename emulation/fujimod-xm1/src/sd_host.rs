@@ -1028,10 +1028,21 @@ impl Device for SdHost {
     }
 }
 
-/// Loads a regular whole-sector image of at most the declared capacity: its
-/// nonzero sectors, within the dirty-sector bound, become the card's content.
-/// Refuses an image that changes while it is read.
-pub fn load_image(path: &Path, sectors: u32, max_dirty_sectors: usize) -> Result<RetainedCard, String> {
+/// How `load_image` bounds an image, after the retained `load_raw_image`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backing {
+    /// At most the declared capacity; its nonzero sectors count against the dirty-sector bound.
+    Sparse,
+    /// At most 128 MiB held whole, with the dirty-sector bound left for guest writes
+    /// (`immutable_backing=True`).
+    Complete,
+}
+
+const COMPLETE_BACKING_BYTES: u64 = 128 << 20;
+
+/// Loads a regular whole-sector image as the card's content. Refuses an image
+/// that changes while it is read.
+pub fn load_image(path: &Path, sectors: u32, max_dirty_sectors: usize, backing: Backing) -> Result<RetainedCard, String> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let fail = |e: std::io::Error| format!("{}: {e}", path.display());
     let mut file = std::fs::OpenOptions::new()
@@ -1041,10 +1052,18 @@ pub fn load_image(path: &Path, sectors: u32, max_dirty_sectors: usize) -> Result
         .map_err(fail)?;
     let before = file.metadata().map_err(fail)?;
     let size = before.len();
-    if !before.file_type().is_file() || size == 0 || size > u64::from(sectors) * SECTOR as u64 || size % SECTOR as u64 != 0 {
+    let limit = match backing {
+        Backing::Sparse => u64::from(sectors) * SECTOR as u64,
+        Backing::Complete => (u64::from(sectors) * SECTOR as u64).min(COMPLETE_BACKING_BYTES),
+    };
+    if !before.file_type().is_file() || size == 0 || size > limit || size % SECTOR as u64 != 0 {
         return Err(format!("{}: SD image requires a bounded regular whole-sector file", path.display()));
     }
-    let mut card = Card::new(sd_card::Options { sectors, max_dirty_sectors })?;
+    let bound = match backing {
+        Backing::Sparse => max_dirty_sectors,
+        Backing::Complete => max_dirty_sectors + (size / SECTOR as u64) as usize,
+    };
+    let mut card = Card::new(sd_card::Options { sectors, max_dirty_sectors: bound })?;
     let mut digest = Sha256::new();
     let mut chunk = vec![0; SECTOR * 2048];
     let (mut consumed, mut nonzero) = (0u64, 0u64);
@@ -1374,5 +1393,26 @@ mod tests {
             }
         }
         assert_eq!(readable, REGISTERS);
+    }
+
+    #[test]
+    fn complete_backing_holds_an_image_beyond_the_dirty_bound_and_keeps_it_for_writes() {
+        let path = std::env::temp_dir().join(format!("sd-host-backing-{}.img", std::process::id()));
+        let image: Vec<u8> = (0..8 * SECTOR).map(|i| (i / SECTOR + 1) as u8).collect();
+        std::fs::write(&path, &image).unwrap();
+        assert!(load_image(&path, 0x40_0000, 4, Backing::Sparse).is_err());
+        let mut loaded = load_image(&path, 0x40_0000, 4, Backing::Complete).unwrap();
+        assert_eq!(loaded.image.nonzero_sectors, 8);
+        let mut sector = [0; SECTOR];
+        loaded.card.read_bytes(7 * SECTOR as u64, &mut sector).unwrap();
+        assert_eq!(sector, [8; SECTOR]);
+        for lba in 100..104u64 {
+            loaded.card.write_bytes(lba * SECTOR as u64, &[1; SECTOR]).unwrap();
+        }
+        assert!(loaded.card.write_bytes(104 * SECTOR as u64, &[1; SECTOR]).is_err());
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(COMPLETE_BACKING_BYTES + SECTOR as u64).unwrap();
+        assert!(load_image(&path, 0x40_0000, 4, Backing::Complete).is_err());
+        std::fs::remove_file(&path).unwrap();
     }
 }

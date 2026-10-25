@@ -65,9 +65,11 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/bridge.rs",
     "//emulation:fujimod-xm1/src/ff80.rs",
     "//emulation:fujimod-xm1/src/guest.rs",
+    "//emulation:fujimod-xm1/src/handoff.rs",
     "//emulation:fujimod-xm1/src/lib.rs",
     "//emulation:fujimod-xm1/src/machine.rs",
     "//emulation:fujimod-xm1/src/main.rs",
+    "//emulation:fujimod-xm1/src/nand_image.rs",
     "//emulation:fujimod-xm1/src/provenance.rs",
     "//emulation:fujimod-xm1/src/provenance_main.rs",
     "//emulation:fujimod-xm1/src/r4f.rs",
@@ -78,6 +80,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/toggle.rs",
     "//emulation:fujimod-xm1/src/trace.rs",
     "//emulation:fujimod-xm1/src/ui_conversion.rs",
+    "//emulation:fujimod-xm1/src/updater.rs",
     "//emulation:fujimod-xm1/tests/r4f_guard.rs",
 ]
 
@@ -160,7 +163,7 @@ def _lab_dependencies_impl(_ctx):
         nix_file_deps = _FUJIMOD_NIX_DEPS + _FUJIMOD_XM1_CRATE,
         nixopts = _NIX_BUILD_CAP,
         repository = "@lab_nixpkgs",
-        build_file_content = 'exports_files(["bin/fujimod-xm1", "bin/fujimod-xm1-provenance", "bin/fujimod-xm1-ram-push", "bin/fujimod-xm1-toggle", "share/fujimod-xm1/store-path", "share/fujimod-xm1/xm1-150.json"], visibility = ["//visibility:public"])',
+        build_file_content = 'exports_files(["bin/fujimod-xm1", "bin/fujimod-xm1-provenance", "bin/fujimod-xm1-ram-push", "bin/fujimod-xm1-toggle", "bin/fujimod-xm1-updater", "share/fujimod-xm1/store-path", "share/fujimod-xm1/xm1-150.json"], visibility = ["//visibility:public"])',
     )
 
     # The RAM-push relinker's tools; //host/firmware:ram-push-toolchain-module

@@ -764,6 +764,23 @@ In both runs the first header-parser call (return address `0x00ec85a0`) leaves t
 
 Scope: the updater runs from the recovery card's RAM copy of the DAT being installed, not from the firmware installed on the NAND. The installed NAND is the synthetic stored-f7 template (template adjustment content with only `0xf7` set), with ideal NAND and no bad blocks. The updater's body, version and completion text is not rendered by the model.
 
+### updater-f7 on FujiMod
+
+`bazel run //emulation:fujimod-updater-f7 -- --recovery-ram RAM --sd-image CARD --installed-nand NAND --output DIR` runs the same route on FujiMod (`fujimod-xm1-updater`, crate `emulation/fujimod-xm1`) in one emulator slot, with the run document, the captured boot ROM and the stock 1.50 DAT (the committed image's flash base). Sites, schedule, presses and receipt fields follow `UpdaterF7.hs`. Phase B is a second session in the same process, built from the exported file alone.
+- The session starts from the raw handoff as `load_recovery_cpu0` does (`src/handoff.rs`): the companion's CRC, native-entry frame, SRAM return witness and cache-off MPU/CP15 state are checked; selection word 1 is written to `0xfff98008` so address 0 decodes DRAM, and the 32 MiB RAM image and 4 KiB SRAM are written; CPU0's banked, general, MPU, CP15 and VFP registers are set; and the three bootstrap device writes go to the clock and GPIO devices. CPU1 stays held at reset.
+- The restore card loads whole (`Backing::Complete`): an image of at most 128 MiB, like the retained `immutable_backing=True`, with the 65,536-sector dirty bound left for guest writes.
+- The committed NAND image (`src/nand_image.rs`) is applied by erasing every committed block and programming its pages over the base and the recorded data overlay. Export writes the retained `export_image` bytes: sorted keys, no spaces, ASCII escapes, Python's gzip header with mtime 0, and the deflate stream of zlib's `compress2` at level 9 (linked from nixpkgs). zlib-ng and zlib-rs streams differ from it.
+- The run counts as idle when the whole-area commit has run, the NAND controller is not busy and the medium's fingerprint is unchanged over one 15 M-instruction chunk.
+
+Observed 2026-10-24 (emulated), installed `f7-1.nand`, stock 1.50 base: both restore cards pass every receipt expectation, and the exported NAND files equal the retained runs byte for byte.
+
+| Restore card | Exported NAND | Flag word | Reboot: mode word, hook word, menu node | Phase A / B |
+| --- | --- | --- | --- | ---: |
+| RC0+toggle (`restore-rc0-3`) | `7da7fb61...9841` | `0x3` | 3, `0xebf492d3`, (67, 56, 0) | 67 s / 9 s |
+| CC+toggle (`restore-cc-toggle`) | `2814b76f...e465` | `0x3` | 3, `0xebf492d3`, (67, 56, 0) | 73 s / 7 s |
+
+Both runs repeat byte for byte through `bazel run //emulation:fujimod-updater-f7`. RC0+toggle's phase A reached the idle committed NAND at 1,929,250,000 FujiMod instructions; instruction counts are not comparable between the engines.
+
 ## Candidate verification across recorded routes
 
 `//emulation:verify-candidate` runs every recorded acceptance route through its existing command, compares each route's observations with a stored baseline and writes one report. Emulator routes go through `bazel run` of `xm1-viewer`, `updater-f7`, `flash-boot-check` and `fujimod-flash-boot-check` on the same output base at niceness 10 and take their own emulator slots; the verifier dispatches at most one per slot (`XM1_EMULATOR_SLOTS`), longest first. The volatile and SD native suites run `emulation/build-recipe-bank-cases.sh` beside them from the start at normal priority; their cases have wall-clock deadlines, and seven SD cases ended in `host_timeout` when the emulator routes shared their priority on a loaded host. The four RAM-push routes pass `--fixed-scene-frame 7`: after the transfer speedup `7a57c87`, two unpinned runs of one tree from the same restored checkpoint wrote different film-list PNGs over the animated live-view source with equal menu states. Each route restores the attach checkpoint it saved on an earlier run with the same key; `//emulation:checkpoint-warmup` saves unpinned checkpoints, which a pinned route never restores, so the verifier does not run it. No camera or USB device is touched.

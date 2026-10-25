@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "yu60xRgDYeSTckpld9XMYrMbc0JJBrRfP9PKNvnXeRE=",
+        "bzlTransitiveDigest": "3BTZsOlH1eahUYDW6ziJOuubTstwIv8Fbv2+C6oQ/B0=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -434,9 +434,11 @@
                 "@@//emulation:fujimod-xm1/src/bridge.rs": "//emulation:fujimod-xm1/src/bridge.rs",
                 "@@//emulation:fujimod-xm1/src/ff80.rs": "//emulation:fujimod-xm1/src/ff80.rs",
                 "@@//emulation:fujimod-xm1/src/guest.rs": "//emulation:fujimod-xm1/src/guest.rs",
+                "@@//emulation:fujimod-xm1/src/handoff.rs": "//emulation:fujimod-xm1/src/handoff.rs",
                 "@@//emulation:fujimod-xm1/src/lib.rs": "//emulation:fujimod-xm1/src/lib.rs",
                 "@@//emulation:fujimod-xm1/src/machine.rs": "//emulation:fujimod-xm1/src/machine.rs",
                 "@@//emulation:fujimod-xm1/src/main.rs": "//emulation:fujimod-xm1/src/main.rs",
+                "@@//emulation:fujimod-xm1/src/nand_image.rs": "//emulation:fujimod-xm1/src/nand_image.rs",
                 "@@//emulation:fujimod-xm1/src/provenance.rs": "//emulation:fujimod-xm1/src/provenance.rs",
                 "@@//emulation:fujimod-xm1/src/provenance_main.rs": "//emulation:fujimod-xm1/src/provenance_main.rs",
                 "@@//emulation:fujimod-xm1/src/r4f.rs": "//emulation:fujimod-xm1/src/r4f.rs",
@@ -447,13 +449,14 @@
                 "@@//emulation:fujimod-xm1/src/toggle.rs": "//emulation:fujimod-xm1/src/toggle.rs",
                 "@@//emulation:fujimod-xm1/src/trace.rs": "//emulation:fujimod-xm1/src/trace.rs",
                 "@@//emulation:fujimod-xm1/src/ui_conversion.rs": "//emulation:fujimod-xm1/src/ui_conversion.rs",
+                "@@//emulation:fujimod-xm1/src/updater.rs": "//emulation:fujimod-xm1/src/updater.rs",
                 "@@//emulation:fujimod-xm1/tests/r4f_guard.rs": "//emulation:fujimod-xm1/tests/r4f_guard.rs"
               },
               "nix_file_content": "",
               "nix_license_path": "",
               "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
               "repositories": {},
-              "build_file_content": "exports_files([\"bin/fujimod-xm1\", \"bin/fujimod-xm1-provenance\", \"bin/fujimod-xm1-ram-push\", \"bin/fujimod-xm1-toggle\", \"share/fujimod-xm1/store-path\", \"share/fujimod-xm1/xm1-150.json\"], visibility = [\"//visibility:public\"])",
+              "build_file_content": "exports_files([\"bin/fujimod-xm1\", \"bin/fujimod-xm1-provenance\", \"bin/fujimod-xm1-ram-push\", \"bin/fujimod-xm1-toggle\", \"bin/fujimod-xm1-updater\", \"share/fujimod-xm1/store-path\", \"share/fujimod-xm1/xm1-150.json\"], visibility = [\"//visibility:public\"])",
               "nixopts": [
                 "--max-jobs",
                 "2",
