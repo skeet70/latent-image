@@ -1228,10 +1228,12 @@ haskell_binary(
     name = "verify-candidate",
     srcs = ["VerifyCandidate.hs"],
     data = [
+        ":e2e-observation-compare",
         ":flash-boot-check",
         ":fujimod-flash-boot-check",
         ":native-runner",
         ":recipe-bank-cases",
+        ":usb-toggle-emu",
         ":recipe-bank-interop",
         ":updater-f7",
         ":xm1-viewer",

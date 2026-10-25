@@ -803,9 +803,21 @@ devenv shell -- bazel test //emulation:candidate-baseline-tests
 | `flash-candidate-q-tile-b` | the same with `classic-chrome-q-tile-trajectories.json` | flash-candidate set |
 | `updater-f7-rc0-toggle`, `updater-f7-cc-toggle` | `updater-f7` with each restore card over `f7-1.nand` | `receipt.json` |
 | `native-volatile`, `native-sd` | `build-recipe-bank-cases.sh` with `RB_MODE` and `JOBS` (`--native-jobs`, default 8) | `results.json`, `findings.txt` |
-| `fujimod-flash-boot-check` (non-gating) | `fujimod-flash-boot-check` on the stock 1.50 DAT | `fujimod-flash-boot-receipt.json` |
 
-The FujiMod route is reported but does not decide the run's result; FujiMod routes are a speed path until the R4F guard lands.
+The routes below are reported but do not decide the run's result: FujiMod routes are a speed path until the R4F guard lands, and the retained counterparts serve their comparisons. A FujiMod RAM-push route runs `xm1-viewer --ram-push-e2e --fujimod` with its retained trajectory file's `NAME.fujimod.json` variant when one exists, and passes when it exits 0 and `//emulation:e2e-observation-compare COUNTERPART ROUTE` reports no difference. The FujiMod toggle route passes on the comparison alone, since `usb-toggle-emu` exits 1 while any scenario blocks. The comparison output is `differences/NAME.compare.txt`. FujiMod refuses `--fixed-scene-frame`; its comparison leaves out capture PNG digests, so it runs against the pinned retained receipts.
+
+| Route | Command | Judged against |
+| --- | --- | --- |
+| `fujimod-flash-boot-check` | `fujimod-flash-boot-check` on the stock 1.50 DAT | baseline of `fujimod-flash-boot-receipt.json` |
+| `ram-push-cc-cardless` | `xm1-viewer --ram-push-e2e --cardless --classic-chrome --fixed-scene-frame 7` | baseline (RAM-push set) |
+| `ram-push-cc-icon-cardless` | `xm1-viewer --ram-push-e2e --cardless --classic-chrome-icon --fixed-scene-frame 7` | baseline (RAM-push set, icon exclusions) |
+| `usb-toggle-emu` | `usb-toggle-emu --fresh-boot --runs all` | not judged; the FujiMod toggle route's counterpart |
+| `fujimod-ram-push-volatile` | `--cardless --fujimod`, `VolatileBank/scenario.fujimod.json` | `ram-push-volatile` |
+| `fujimod-ram-push-cc-cardless` | `--cardless --fujimod --classic-chrome` | `ram-push-cc-cardless` |
+| `fujimod-ram-push-cc-icon-cardless` | `--cardless --fujimod --classic-chrome-icon` | `ram-push-cc-icon-cardless` |
+| `fujimod-ram-push-cc` | `--fujimod --classic-chrome`, Classic Chrome card | `ram-push-cc` |
+| `fujimod-usb-toggle-e8` | `--fujimod --classic-chrome --attach-hold-q`, RC0+toggle DAT over stored `0xf7 = 0`, card | `usb-toggle-e8` |
+| `fujimod-usb-toggle-emu` | `usb-toggle-emu --fujimod --fresh-boot --runs all` | `usb-toggle-emu` |
 
 The RAM-push set is `e2e-result.json`, `e2e-fetch-watch.json`, `cold-restart/e2e-cold-restart.json`, the relinked runtime, manifest, allowlist and symbols, the alloc, push and unload state files and `screenshots/*.png`. The flash-candidate set is `e2e-segments.json`, `segment-*/e2e-result.json` and `segment-*/screenshots/*.png`. Journals, emulator state dumps and logs are not observations.
 
