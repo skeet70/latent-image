@@ -2,7 +2,7 @@
 -- | Compares the observations of two RAM-push e2e receipt directories: every
 -- e2e-observation-N.json and the menu state of every capture in e2e-result.json, leaving out
 -- wall seconds, guest instruction counts, stack pointers, file paths, frame numbers and capture
--- PNG digests.
+-- PNG digests, and comparing Classic Chrome site entries as develop passes (see 'passes').
 module Main (main) where
 
 import Control.Monad (forM, unless)
@@ -10,8 +10,10 @@ import Data.Aeson (Value (..), eitherDecodeFileStrict', encode)
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy.Char8 as BL
-import Data.List (isPrefixOf, isSuffixOf, sort)
+import Data.List (dropWhileEnd, isPrefixOf, isSuffixOf, sort)
+import qualified Data.List.NonEmpty as NE
 import Data.Maybe (fromMaybe)
+import qualified Data.Text as T
 import qualified Data.Vector as V
 import System.Directory (doesFileExist, listDirectory)
 import System.Environment (getArgs, lookupEnv)
@@ -21,8 +23,25 @@ import System.FilePath ((</>))
 ignored :: [K.Key]
 ignored = ["seconds", "instructions", "sp", "path", "frame_number", "sha256"]
 
+-- | A segment's Classic Chrome site entries as live-view develop passes, each starting at
+-- `cc-entry-marker`. Consecutive identical passes collapse to one, and the passes before the
+-- first and after the last pass that enters `cc-entry-settings-converter` are dropped.
+passes :: [T.Text] -> [[T.Text]]
+passes entries = trim (map NE.head (NE.group (split entries)))
+  where
+    split [] = []
+    split (first : rest) = let (pass, more) = break (== "cc-entry-marker") rest in (first : pass) : split more
+    converts = elem "cc-entry-settings-converter"
+    trim = dropWhileEnd (not . converts) . dropWhile (not . converts)
+
 strip :: Value -> Value
-strip (Object fields) = Object (KM.map strip (KM.filterWithKey (\key _ -> key `notElem` ignored) fields))
+strip (Object fields) = Object (KM.mapWithKey site (KM.filterWithKey (\key _ -> key `notElem` ignored) fields))
+  where
+    site "classic_chrome_site_entries" (Array items) | Just names <- mapM text (V.toList items) =
+      Array (V.fromList [Array (V.fromList (map String pass)) | pass <- passes names])
+    site _ value = strip value
+    text (String name) = Just name
+    text _ = Nothing
 strip (Array items) = Array (V.map strip items)
 strip value = value
 

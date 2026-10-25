@@ -3,7 +3,7 @@
 //! OUT 2 and IN 0x81, with the RAM-push rendezvous hold of the retained
 //! bridge (`tools/continue_rec_scanout.py`, `_FF80EndpointBridge`).
 
-use crate::guest::RouteKey;
+use crate::guest::{Press, RouteKey};
 use crate::machine::{KeyPulse, Machine};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -477,7 +477,7 @@ impl Ff80 {
         self.observe()
     }
 
-    pub fn settled_key(&mut self, key: RouteKey, pulse: KeyPulse, budget: u64) -> Result<crate::render::Settle, String> {
+    pub fn settled_key(&mut self, key: Press, pulse: KeyPulse, budget: u64) -> Result<crate::render::Settle, String> {
         let settle = crate::render::settled_key(&mut self.machine, key, pulse, budget)?;
         self.observe()?;
         Ok(settle)

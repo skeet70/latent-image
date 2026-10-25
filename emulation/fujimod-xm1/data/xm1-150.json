@@ -2712,6 +2712,16 @@
       "pin": 10,
       "pressed_high": false
     },
+    "subcommand": {
+      "descriptor": 8172004,
+      "transitions": 8172032,
+      "registered": 9041928,
+      "sampled": 9788393,
+      "port": 3,
+      "pins": [8, 9],
+      "left_code": 44,
+      "right_code": 45
+    },
     "mode_dial": {
       "channel": 3,
       "running": [

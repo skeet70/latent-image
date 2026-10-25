@@ -4,7 +4,7 @@
 //! graphics-accelerator counters and selected-plane publication that the
 //! retained settle also requires are not read here.
 
-use crate::guest::RouteKey;
+use crate::guest::Press;
 use crate::machine::{KeyPulse, Machine};
 use crate::run::{Address, NodeName};
 use serde::{Deserialize, Serialize};
@@ -211,7 +211,7 @@ impl Probe {
 
 /// Presses `key` once the preceding render has drained, then settles; `budget`
 /// caps the instructions run for both.
-pub fn settled_key(machine: &mut Machine, key: RouteKey, pulse: KeyPulse, budget: u64) -> Result<Settle, String> {
+pub fn settled_key(machine: &mut Machine, key: Press, pulse: KeyPulse, budget: u64) -> Result<Settle, String> {
     let probe = |machine: &Machine| machine.document.firmware.render.probe(machine);
     let start = machine.instructions();
     let mut before = probe(machine)?;
@@ -227,7 +227,7 @@ pub fn settled_key(machine: &mut Machine, key: RouteKey, pulse: KeyPulse, budget
     let prior = machine.instructions() - start;
     let old_frame = machine.frame()?;
     let key_start = machine.instructions();
-    machine.key(key, pulse)?;
+    machine.press_once(key, pulse)?;
     let settle_start = machine.instructions();
     let mut requested = None;
     let status = loop {

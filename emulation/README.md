@@ -630,6 +630,7 @@ The bridge speaks the cardless bridge's events and commands (`start-options`, `s
 - A transfer waits only for the endpoint: setup consumed, status packet queued, each OUT packet consumed, the OUT DMA finished, each IN packet queued. A wait polls after 1,000 guest instructions, doubling to 200,000. The bridge adds no fixed gaps and does not wait for DMA channel teardown, which it could read only from the controller's full diagnostic state (a 1 MiB scratch buffer serialised to JSON, 36-56 ms per read).
 - Instruction points on both cores serve the trace sites. The rendezvous UP hold is applied at `rendezvous-locked`.
 - The calibrated ADC midpoints of control-table rows 14-20 drive keys, rows 24-35 drive the mode dial, and dial-push is a GPIO 0/10 keepalive every 32 transfers.
+- `dial-left` and `dial-right` step the sub-command dial (the `subcommand` facts of the run document, from `menu_inputs.py`). The bridge checks the scanner's descriptor `0x007cb1e4`, transition table `0x007cb200` and registration word `0x0089f808`. It then drives GPIO 3/8 and 3/9 through the four phases of the step, and each phase must reach the sampled byte `0x00955be9` within a quarter of the hold. The default pulse is `probe_setup_menus.py`'s 4,000,000 hold and 1,000,000 release.
 - Keys use a render settle ported from `tools/menu_render_settle.py`. Before a press it waits for the UI fields, the four UI tasks and the vector GPU to drain; after the press it waits for the press's packet to be consumed, new GPU work and a changed presented frame.
 - The adjustment NAND's blocks 0x381..0x3a1 are programmed into the NAND medium before boot.
 
@@ -660,11 +661,22 @@ A FujiMod route counts as acceptance for a payload only when all three hold:
 2. The FujiMod e2e passes with the variant, so every required menu state, message id and film row holds.
 3. `bazel run //emulation:e2e-observation-compare -- RETAINED_RECEIPTS FUJIMOD_RECEIPTS` reports no difference from a retained-engine run of the retained file with the same payload, DAT, NAND and card mode. It compares every `e2e-observation-N.json` (steps, reads, menu message ids, D3 hook entries, Classic Chrome site entries and trace hits) and every capture's menu state.
 
-The comparison leaves out wall seconds, guest instruction counts, stack pointers, file paths, frame numbers and capture PNG digests. Any other difference fails the rule.
+The comparison leaves out wall seconds, guest instruction counts, stack pointers, file paths, frame numbers and capture PNG digests. It compares a segment's Classic Chrome site entries as live-view develop passes, each starting at `cc-entry-marker`: consecutive identical passes count once, and the passes before the first and after the last pass that enters `cc-entry-settings-converter` are dropped. How many frames a segment window spans is timing. Any other difference fails the rule.
 
 Observed 2026-10-24 (emulated), cardless, RC0 prefix DAT with `f7-1.nand`:
 - Volatile bank. On the retained engine the first MENU after the M dial is never pressed: the mode guide's render is still pending after 90,000,000 instructions, so the state stays (67, 56, 0). On FujiMod the guide drains after 7,500,000, and that MENU opens (1, 5, 2). The variant `private-data/analysis/x-m1-1.50/ram-push/VolatileBank/scenario.fujimod.json` adds only `{"settle_instructions": 5000000}` to that step. The FujiMod e2e then passes all seven segments and the unload in 2.9 min of phases from a fresh boot. `e2e-observation-compare` against the retained run of `scenario.json` reports 0 differences in 7 observation files.
-- Classic Chrome (`--classic-chrome`). `emulation/ram-push-cc-e2e-trajectories.json` passes unchanged on FujiMod, so it needs no variant. Its six segments, the unload, the after-unload segment and the cold-restart read take 2.0 min of phases from a cold start, against 6.3 min on the retained engine from a restored attach checkpoint. `e2e-observation-compare` against the retained cardless run reports 0 differences in 7 observation files.
+- Classic Chrome (`--classic-chrome`). `emulation/ram-push-cc-e2e-trajectories.json` passes unchanged on FujiMod, so it needs no variant. `e2e-observation-compare` against the retained cardless run reports 0 differences in 7 observation files.
+- Classic Chrome icon (`--classic-chrome-icon`). `emulation/ram-push-cc-icon-e2e-trajectories.json` passes unchanged on FujiMod once the bridge turns the sub-command dial, so it needs no variant. `e2e-observation-compare` against the retained cardless run reports 0 differences in 11 observation files. Compared entry for entry, two segments' site entries differed: `cc-icon-q-film-cell` held 22 entries on FujiMod against 32, and `cc-icon-film-stock` 73 against 113. The surplus is repeated develop passes, and in `cc-icon-film-stock` one idle pass after the last converter pass.
+
+Wall time of `bazel run //emulation:xm1-viewer -- --ram-push-e2e --cardless [--fujimod] ... --fresh-boot`, 2026-10-24. Each route boots, allocates, pushes, runs every segment and unloads, and the Classic Chrome routes also read after a cold restart. The two engines' routes ran at the same time on one workstation.
+
+| Route | FujiMod | Retained |
+| --- | ---: | ---: |
+| Volatile bank (variant on FujiMod) | 138 s | 641 s |
+| Classic Chrome | 97 s | 219 s |
+| Classic Chrome icon | 82 s | 318 s |
+
+On FujiMod `ram-alloc` and `ram-push` took 6.0 and 60.6 s (volatile), 1.6 and 11.0 s (Classic Chrome) and 1.9 and 10.8 s (icon). On the retained engine they took 57.3 and 303.4 s, 8.2 and 35.4 s, and 10.6 and 59.4 s. Every pair's `e2e-observation-compare` reports 0 differences.
 
 ## Stock native cases: USB toggle (N1, N2)
 
