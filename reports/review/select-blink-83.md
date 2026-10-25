@@ -36,9 +36,9 @@ The call remains in the stock menu action task after the successful push. It ref
 
 ## Review gates and limits
 
-Every relink must pass the bank ELF allowlist without an override. Re-pin the four changed source identities as unreviewed: actions, arm, header and allowlist. The publication contract and installer do not intentionally change. Byte and reviewed-build checks establish the pins; verdict checks must continue refusing a camera go until an independent reviewer approves the mechanism. The cardless volatile e2e, dedicated screenshot trajectory and verifier bank routes other than native-sd are the current host gate. Native-sd is deferred under the owner's explicit instruction until EventsCap's fix reaches main, then main is merged and that route runs once.
+Every relink must pass the bank ELF allowlist without an override. The four changed source identities (actions, arm, header and allowlist) are approved by SelectBlinkReview at `fe96d7d`. The publication contract and installer do not change. The bank, Classic Chrome and icon byte gates and bank verdict gate pass; review-record tests pass from cache. The cardless volatile e2e, dedicated screenshot trajectory and verifier bank routes other than native-sd are the current host gate. Native-sd remains deferred pending the owner's instruction.
 
-Screenshots and receipts live under `private-data/analysis/select-blink-83/`. They establish emulated presentation only. Independent review, the owner's visual check, and any separately authorized physical acceptance remain open.
+Screenshots and receipts live under `private-data/analysis/select-blink-83/`. They establish emulated presentation only. SelectBlinkReview approved the mechanism and content with no findings in `review.md`, SHA-256 `9465a55a2000d263293182fba68911a9889fca1658c17f6406221029d82cdbaf`. The review record and four re-pins name SelectBlinkReview and the reviewed commit `fe96d7d444af2fc8579b311ff23a7bfab5eb61f4`. The owner's visual check and live-run go remain open.
 
 ## Host gate results
 
