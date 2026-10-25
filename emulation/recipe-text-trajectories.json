@@ -1,10 +1,11 @@
 {
   "schema": 1,
-  "entry": "The text-bank acceptance from the flash candidate attach checkpoint: each segment boots fresh, opens SELECT CUSTOM SETTING and reads the bank state after selecting C1, C2 or NONE.",
+  "entry": "The text-bank acceptance from the flash candidate attach checkpoint: each segment boots fresh, loads the card bank, recalls a slot and saves it into an empty slot, then reads the resident records so the recalled fields can be compared with the imported payload.",
   "before_unload": [
     {
       "phase": "recipe-text-open",
       "capture": "recipe-text-open",
+      "observe": true,
       "steps": [
         ["menu", 1, 5, 2],
         ["left", 0, 5, 0],
@@ -21,17 +22,15 @@
       ],
       "reads": [
         ["rb-path", "runtime:rb_path", 32],
-        ["rb-io-status", "runtime:rb_io_status", 4],
-        ["rb-io-value", "runtime:rb_io_value", 4],
         ["rb-load-outcome", "runtime:rb_load_outcome", 4],
         ["rb-resident-header", "runtime:rb_resident", 64],
-        ["rb-current-gen", "runtime:rb_current_gen", 4],
-        ["rb-activation", "runtime:rb_activation", 8]
+        ["rb-current-gen", "runtime:rb_current_gen", 4]
       ]
     },
     {
-      "phase": "recipe-text-c1",
-      "capture": "recipe-text-c1",
+      "phase": "recipe-text-c1-save-c3",
+      "capture": "recipe-text-c1-save-c3",
+      "observe": true,
       "steps": [
         ["menu", 1, 5, 2],
         ["left", 0, 5, 0],
@@ -46,17 +45,25 @@
         ["down", 1, 5, 34],
         ["ok", 1, 645, 0],
         ["down", 1, 645, 1],
-        ["ok", 1, 5, 34]
+        ["ok", 1, 5, 34],
+        ["up", 1, 5, 33],
+        ["ok", 97, 641, 0],
+        ["down", 97, 641, 1],
+        ["down", 97, 641, 2],
+        ["ok", 97, 624, 0],
+        ["ok", 97, 641, 2]
       ],
       "reads": [
-        ["live-payload", "0096cc74", 40],
-        ["rb-activation", "runtime:rb_activation", 8],
-        ["rb-load-outcome", "runtime:rb_load_outcome", 4]
+        ["resident-c1-saved", "runtime:rb_resident+0x82", 40],
+        ["resident-c3-saved", "runtime:rb_resident+0x156", 40],
+        ["resident-c3-working", "runtime:rb_resident+0x17e", 40],
+        ["rb-activation", "runtime:rb_activation", 8]
       ]
     },
     {
-      "phase": "recipe-text-c2",
-      "capture": "recipe-text-c2",
+      "phase": "recipe-text-c2-save-c4",
+      "capture": "recipe-text-c2-save-c4",
+      "observe": true,
       "steps": [
         ["menu", 1, 5, 2],
         ["left", 0, 5, 0],
@@ -72,17 +79,26 @@
         ["ok", 1, 645, 0],
         ["down", 1, 645, 1],
         ["down", 1, 645, 2],
-        ["ok", 1, 5, 34]
+        ["ok", 1, 5, 34],
+        ["up", 1, 5, 33],
+        ["ok", 97, 641, 0],
+        ["down", 97, 641, 1],
+        ["down", 97, 641, 2],
+        ["down", 97, 641, 3],
+        ["ok", 97, 624, 0],
+        ["ok", 97, 641, 3]
       ],
       "reads": [
-        ["live-payload", "0096cc74", 40],
-        ["rb-activation", "runtime:rb_activation", 8],
-        ["rb-load-outcome", "runtime:rb_load_outcome", 4]
+        ["resident-c2-saved", "runtime:rb_resident+0xec", 40],
+        ["resident-c4-saved", "runtime:rb_resident+0x1c0", 40],
+        ["resident-c4-working", "runtime:rb_resident+0x1e8", 40],
+        ["rb-activation", "runtime:rb_activation", 8]
       ]
     },
     {
       "phase": "recipe-text-none",
       "capture": "recipe-text-none",
+      "observe": true,
       "steps": [
         ["menu", 1, 5, 2],
         ["left", 0, 5, 0],
@@ -99,7 +115,6 @@
         ["ok", 1, 5, 34]
       ],
       "reads": [
-        ["live-payload", "0096cc74", 40],
         ["rb-activation", "runtime:rb_activation", 8],
         ["rb-load-outcome", "runtime:rb_load_outcome", 4]
       ]
