@@ -355,6 +355,22 @@ nix-shell private-data/experiments/x70-target-add/native-shell.nix --run '
 
 The upstream SD profile name remains `declared-blank-sdhc-default-speed-unmeasured`; the startup adaptation seeds its sparse media from the reviewed recovery image. These runs exercise host emulated devices only. They establish neither visible UI nor updater readiness, physical entry, silicon cache behavior or permanent recovery. They use the installed-image RAM rollback route, not the separate [preloaded full-RAM candidate](sd-boot-card-entry.md#224-preloaded-full-ram-recovery-candidate).
 
+#### Read-only application scheduler binding
+
+The retained Rust engine's `xm1_150_scheduler` observation decodes the X-M1 1.50 task-table bindings at `0x40054610` and `0x40054694`. Kernel initializer `0x00043ac0` copies the table/count pair into offset `+0x44` of each `0x84`-byte class record rooted at `0x400545cc`. Each task control block is `0x38` bytes; its descriptor pointer is at `+8`, status byte at `+0xc`, wait object at `+0x14` and saved SP at `+0x18`. The descriptor's entry and task id are at `+8` and `+0x20`. These are this body's loader bytes and the existing X-M1 task decoder, not a sibling scheduler layout.
+
+The primary timer pair at `0x4005476c`/`0x40054770` starts at `0`/`10` in `0x00044a50`; timer service `0x00044d8c` publishes current time and advances the next deadline by ten. The blocking receive service `0x0004a56c` writes status `0x12` at `0x0004a8e8`-`0x0004a8ec`. A paused queue-wait observation therefore binds a firmware scheduler state beyond SD command completion. Unknown status bytes remain uninterpreted.
+
+The observer reads only paused DRAM backing. Both aliases resolve to the same modeled bytes; invalid addresses, counts or truncated records yield an unavailable diagnostic. Synthetic behavioral tests cover both core tables and malformed inputs. The extension changes no task, timer, interrupt, SD completion or peer state.
+
+E-RECOVERY-TASK-STATE-EXEC-150 binds those observations to a fresh exact-card recorder rollback run from ROM. At 100,000,000 instructions both tables contain 120 slots, with 49 non-null task entries in total and 43 tasks in queue wait. CPU0 task 28, entry `0x0071fe7c`, is in queue wait after the restored `0x0071feb4` receive call. The same entry's X-M1 source sets up its receive buffer before that call. The named `graphic` task 40 (`0x006d2700`) and `vglib` task 73 (`0x006d7540`) also report queue wait. The primary timer pair is `51640`/`51650`, matching 5,164 modeled timer expirations.
+
+The run retains full source-equal two-kernel comparisons and the complete image-4 comparison with only the three expected rollback bytes changed. Application SD completes 28 commands, including CMD18 reads at sectors 0 and 2048, with no pending request. No model failure is recorded; CPU0 ends at `0x00047618` and CPU1 at `0x0069cbfc`. These observations bind actual scheduler/task states beyond command counts, but the main-UI task is absent from the decoded loaded entries. They do not establish visible UI, mounting or updater readiness.
+
+The executable observation uses the checked-in `task_state.rs` decoder and the `metrics()` adapter in the archived continuation runtime. Reproduction uses the existing section 11.7 command and a fresh output path after rebuilding that native adapter. The output is `private-data/experiments/x70-target-add/recovery-task-state-70/checkpoint-e4574bfa2f88/`; `native-backend.json` carries the typed scheduler records and native-binary provenance, while `state.json` carries the source comparisons, SD history, IRQ/timer state and terminal PCs.
+
+Interrupts retain the exact X-M1 IRQ78 binding and the explicit equal-priority scan-order fixture. Card identity/capacity, transfer latency and timer frequency remain declared inputs. Busy-response command/transfer completion still shares the earlier dual-event latency fixture. Both CPUs execute from ROM/native release under the model's shared coherent backing and secondary-reset assumptions; this observation does not establish silicon cache or reset behavior. The route still depends on installed loaders/table/marker, not the independent firmware-derived updater route.
+
 
 
 ### 11.8 Raw-only native recovery
