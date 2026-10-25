@@ -1,6 +1,8 @@
 use af_candidates::{Action, Candidate, Config, Controller, Direction, Event, Failure, Position,
     EvidenceCount, Percent, Score, SearchStep, StructuralFit, StructuralParameters};
 
+mod libcamera_tests;
+
 const SINGLE: &str = include_str!("fixtures/single-peak.curve");
 const MULTI: &str = include_str!("fixtures/two-depths.curve");
 const EDGE: &str = include_str!("fixtures/edge-peak.curve");
@@ -32,6 +34,11 @@ fn replay(candidate: Candidate, fixture: &str, budget: u16) -> (Action, u16) {
                 action = controller.step(Event::Sample { request, position,
                     score: score(fixture, position), fresh: true, settled: true });
             }
+            Action::WaitFrame { request, position } => {
+                assert!(position.units() <= 1000);
+                action = controller.step(Event::Frame { request, position, fresh: true, settled: true });
+            }
+            Action::Monitor { .. } => return (action, controller.samples()),
             Action::Finish(_) | Action::Fail(_) => return (action, controller.samples()),
             Action::Wait => panic!("fresh settled synthetic sample unexpectedly waited"),
         }
