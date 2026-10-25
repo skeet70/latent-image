@@ -761,12 +761,12 @@
       "reason": "updates only the generated 0xfe field in a 40-byte saved, working or base payload"
     },
     {
-      "function": "rb_migrate_v2_film",
+      "function": "rb_load_bound",
       "access": "store",
       "through": {
-        "argument": "r0"
+        "index": "rb_resident"
       },
-      "reason": "migrates the valid base and the populated saved and working payloads of seven slots, then seals its 1024-byte resident file"
+      "reason": "migrates the populated saved and working payloads inside the 1024-byte resident file; the slot loop runs over the seven records"
     },
     {
       "function": "rb_seal",
