@@ -120,3 +120,82 @@ haskell_binary(
         "//host:unix",
     ],
 )
+
+genrule(
+    name = "candidate-controller",
+    srcs = ["candidates/controller.rs"],
+    outs = ["libaf_candidates.rlib"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --crate-name af_candidates --crate-type rlib -C opt-level=2 $(location candidates/controller.rs) -o $@",
+    tools = ["@lab_rustc//:bin/rustc"],
+)
+
+genrule(
+    name = "candidate-decision",
+    srcs = ["candidates/stdio.rs", ":candidate-controller"],
+    outs = ["candidate-decision-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 -C opt-level=2 -C linker=$(location @lab_clang//:bin/clang) --extern af_candidates=$(location :candidate-controller) $(location candidates/stdio.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
+)
+
+genrule(
+    name = "candidate-replay-test-bin",
+    srcs = ["candidates/replay_tests.rs", ":candidate-controller"] + glob(["candidates/fixtures/*.curve"]),
+    outs = ["candidate-replay-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) --extern af_candidates=$(location :candidate-controller) $(location candidates/replay_tests.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
+)
+
+sh_test(
+    name = "candidate-replay-tests",
+    size = "small",
+    srcs = ["candidate-replay-tests.sh"],
+    args = ["$(location :candidate-replay-test-bin)"],
+    data = [":candidate-replay-test-bin"],
+)
+
+haskell_binary(
+    name = "candidate-compare-hs",
+    srcs = ["CandidatesMain.hs"],
+    ghcopts = ["-XGHC2021", "-threaded"],
+    deps = ["//host:base", "//host:bytestring", "//host:host-support", "//host:process"],
+)
+
+sh_binary(
+    name = "candidate-compare",
+    srcs = ["candidate-compare.sh"],
+    args = [
+        "$(location :candidate-compare-hs)",
+        "$(location :candidate-decision)",
+    ],
+    data = [":candidate-compare-hs", ":candidate-decision"] + glob(["candidates/fixtures/*.curve"]),
+)
+
+haskell_binary(
+    name = "candidate-compare-tests-hs",
+    srcs = ["CandidateCompareTests.hs"],
+    ghcopts = ["-XGHC2021", "-threaded"],
+    deps = ["//host:base", "//host:process"],
+)
+
+sh_test(
+    name = "candidate-compare-tests",
+    size = "small",
+    srcs = ["candidate-replay-tests.sh"],
+    args = [
+        "$(location :candidate-compare-tests-hs)",
+        "$(location :candidate-compare-hs)",
+        "$(location :candidate-decision)",
+        "$(location candidates/fixtures/single-peak.curve)",
+        "$(location candidates/fixtures/two-depths.curve)",
+        "$(location candidates/fixtures/edge-peak.curve)",
+        "$(location candidates/fixtures/noisy-peak.curve)",
+        "$(location candidates/fixtures/flat.curve)",
+    ],
+    data = [
+        ":candidate-compare-tests-hs",
+        ":candidate-compare-hs",
+        ":candidate-decision",
+    ] + glob(["candidates/fixtures/*.curve"]),
+)

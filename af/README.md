@@ -1,4 +1,19 @@
-# Synthetic A1 autofocus prototype
+# Host autofocus experiments
+
+## Shared Rust candidate controller
+
+`//af:candidate-controller` builds the allocation-free Rust library in [candidates/controller.rs](candidates/controller.rs). Its explicit `Controller::step(Event) -> Action` interface runs A1 coarse/fine scanning and A2 adaptive local peak estimation. The [candidate report](../reports/af-candidates.md) contains source reproducibility, algorithm scope, bounds and synthetic-fixture provenance.
+
+The Haskell comparison harness sends both candidates the same linearly interpolated synthetic focus curves. It prints CSV with `origin=simulated`, accepted sample count, simulated travel in artificial lens units and absolute final-position error against the fixture's declared optimum. A refusal has no final-position error. This is not camera timing or a reproduction of stock X-M1 behavior.
+
+```sh
+devenv shell -- bazel test --lockfile_mode=error //af:candidate-replay-tests //af:candidate-compare-tests
+devenv shell -- bazel run //af:candidate-compare -- af/candidates/fixtures/single-peak.curve af/candidates/fixtures/two-depths.curve af/candidates/fixtures/edge-peak.curve af/candidates/fixtures/noisy-peak.curve af/candidates/fixtures/flat.curve
+```
+
+The library has no I/O, allocator, floating-point dependency or global mutable state. The stdio adapter is host-only. It does not supply a camera movement, completion or freshness contract.
+
+## Legacy synthetic C prototype
 
 This package exercises one bounded coarse/fine contrast search in portable C. It has no camera adapter, firmware bytes, lens calibration, or target addresses. A `move_to` is an output decision consumed by an artificial lens model. `hand_back_to_stock` requests hand-back; it does not demonstrate restoration of any target state.
 

@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "SFoJZRLbwEBHdwB9HJtY3i96/CTQ1QdQfsSa6MZJHCY=",
+        "bzlTransitiveDigest": "+aBWw/8iom/NMhMG+bEqf/A12cd/AbTTWMBtsLAk1ZM=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -351,6 +351,23 @@
               "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
               "repositories": {},
               "build_file_content": "exports_files([\"bin/jq\"], visibility = [\"//visibility:public\"])",
+              "nixopts": [],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          },
+          "lab_rustc": {
+            "bzlFile": "@@rules_nixpkgs_core~//:nixpkgs.bzl",
+            "ruleClassName": "_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "lab_rustc",
+              "attribute_path": "rustc",
+              "nix_file_deps": {},
+              "nix_file_content": "",
+              "nix_license_path": "",
+              "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
+              "repositories": {},
+              "build_file_content": "exports_files([\"bin/rustc\"], visibility = [\"//visibility:public\"])",
               "nixopts": [],
               "quiet": false,
               "fail_not_supported": true

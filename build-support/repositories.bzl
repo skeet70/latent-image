@@ -135,6 +135,7 @@ def _lab_dependencies_impl(_ctx):
     for name, attribute, binary in [
         ("lab_jsonschema", "check-jsonschema", "check-jsonschema"),
         ("lab_jq", "jq", "jq"),
+        ("lab_rustc", "rustc", "rustc"),
         ("lab_exiftool", "exiftool", "exiftool"),
     ]:
         nixpkgs_package(
