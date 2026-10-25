@@ -2,7 +2,7 @@
 
 ## Scope and evidence
 
-Static inference on the public X-M1 1.50 DAT, SHA-256 `43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490`. The owner's body runs 1.00. These addresses are not installed-body addresses. This analysis performed no camera enumeration, opening, service command, state change, reset, lens command, firmware write or emulation. No payload or patch is proposed. This report advances no research gate or restoration claim.
+The baseline below is static inference on the public X-M1 1.50 DAT, SHA-256 `43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490`. Later source-bound emulator input findings are identified separately. The body now runs 1.50; decoded addresses are not automatically proof of an installed instruction path. No research gate or physical AF timing claim follows from this map.
 
 The load interpretation and inferred decompression are owned by [firmware extraction](firmware-extraction.md): decoded id4 at `0x0061c400`, decoded id5 at `0x00bf1a00`, plain image at `0x01100000`, loader at `0x00040000`. Private artifacts are under `private-data/analysis/x-m1-1.50/`. Original `filmsim/ghidra/proj` and `filmsim/ghidra/all.c` were read only; Ghidra queries used the separate private `af/proj` copy. `FUN_` names are analysis labels. Decompiler return types and omitted forwarded registers are not an ABI specification.
 
@@ -12,7 +12,7 @@ Detailed menu and lens evidence is preserved privately in `af/menus/findings.md`
 
 | Boundary | Address / code | Evidence and confidence |
 | --- | --- | --- |
-| S1-named key mapping | table starts `0x007a018c`, 12-byte records; S1 row `0x007a01b0` | Direct id4 words are `{0x104,7,0x00780df0}`, with the last word pointing to `KEY_S1`. `0x00d0b318` searches the second word of each record against `0x00944580`, then conditionally calls `0x00db54e4`, which forwards to `0x00726b88`. High-static for bytes/branch; physical switch producer and normalization remain open. |
+| S1 key mapping | table starts `0x007a018c`, 12-byte records; S1 row `0x007a01b0` | Direct id4 words are `{0x104,7,0x00780df0}`, with the last word pointing to `KEY_S1`. `0x00d0b318` searches the second word of each record against `0x00944580`, then conditionally calls `0x00db54e4`, which forwards to `0x00726b88`. The physical input table binds code 7 to row 5 at `0x008281ac`, type 4, GPIO0 pin 2, active low. See the emulator input binding below. |
 | conditional UI event 0x88/0x87 emitters (no S1 binding) | `0x00d0b2a0`, `0x00d18198`, `0x00d1b15c -> 0x006334dc` | Explicit emitters submit `0x88` with argument `0x110`; `0x00d0b2a0` also submits `0x87`. These are conditional synthesized UI events with no proven S1 binding. Their domain is distinct from the S1 mapping row `{0x104,7,...}`. |
 | Shooting request assembly | `0x00d3a46c`, `0x00d396f0`, `0x00db3df8` | First function selects command `0x88` for states `0xca`/`0xcb` and `0x87` for states `0xcd` through `0xcf`, then forwards a five-word block; `0x00db3df8` wraps it with message `0x11b` to task 4 through `0x00db2ed4`. Exact event-to-current-state cell selecting this handler remains open. |
 | Recording S1 branch | `0x00db46f8 -> 0x00dca544` | Compares request code against `0x89`, stores a halfword at `0x014e31b0`, queues message `0x13e8` to task 3 with callback `0x00db3ea0`. `0x00db53a8` forwards to it. Bridge selector tables are not fully closed. |
@@ -34,7 +34,50 @@ AF-area coordinate grid: two axis counts and two index-to-coordinate maps. `0x00
 
 Selected-area-to-request binding: `0x00dcbef8` selects the axis-A index `param_1`, converting it with `0x0073aad8` into `0x0091682c` (via `0x0072d988`) and with `0x00738ce0` into `_DAT_01529fb8+0xe8`, and storing the index at `_DAT_01529fbc+0x20`; `0x00dcc01c` selects the axis-B index, converting it with `0x00738d14` into `0x0091682e` (via `0x0072d9cc`) and `_DAT_01529fb8+0xea`. The AF request API `0x00df48dc` derives its context with `0x00eb2838(_DAT_01529fbc)`, which is not the handle itself: `0x00eb2838` reads a slot at `_DAT_01529fbc+2` and returns the stride-`0x17d0` slot record `_DAT_015b73b8 + 0x30 + (slot-1)*0x17d0` (default `0x00eb2888`, 0 when the slot is `-1`). That record is the 0x90-byte request context `0x00ef9264` copies (`0x0074213c`); `0x00df48dc` reads its fields at `+0x2e`/`+0x31`/`+0x32`/`+0x80`/`+0x84`. The solid AF-area path is the coordinate: `0x00df48dc` reads `_DAT_01529fb8+0xe8` through `0x00737cb4` into `param_3`, which `0x00ef9264` places in the 0xa0-byte argument block sent as message `0x3b0d` (opcode `0x0d + 0x3b00`) to task `0x2b` (saclac) via `0x00ef9a94`. The stored indices do not reach the request: within the analysed functions `_DAT_01529fbc+0x20` is touched only by `0x00dcbef8` for change detection (`!= param_1`), and axis-B writes `0x00eb2958(_DAT_01529fbc)`, a `+0xc0` slot record distinct from the `+0x30` context. The request carries the AF-area as the coordinate, not the index. The 0xa0-byte block is callback `0x00defa30` at its head (8-byte slot), the 0x90-byte per-slot context at `+0x08`, the AF-area coordinate at `+0x98`, and state `_DAT_01535ce4` at `+0x9c`, per the `0x00ef9264` stack layout and the `0x90`/`0xa0` sizes. The dynamic-state callback `0x00632ea8` is not a request field: `0x00639500` consumes it into a UI code array (`*param_1`) when state `0x009500ec` is 3 and the selector is `0x7f`, resolving which AF-area variant property is displayed.
 
-Still open within this section: the head-slot width of the 0xa0 block (8 bytes by stack layout, though ARM32 pointers are 4). The `0x006b01e4` block is unreferenced across the id4 and id5 images (0 BL callers and 0 data-pointer words in each, checked against the raw `lz/id4-0061c400.bin` and `lz/id5-00bf1a00.bin`), so it is dead within the analysed images; a runtime-populated reference is not excluded. No complete setting-to-request field map is claimed. The physical S1-to-AF path is therefore a set of bound segments, not a fully closed graph. These are research blockers, not inferred links.
+Still open within this section: the head-slot width of the 0xa0 block (8 bytes by stack layout, though ARM32 pointers are 4). The `0x006b01e4` block is unreferenced across the id4 and id5 images (0 BL callers and 0 data-pointer words in each, checked against the raw `lz/id4-0061c400.bin` and `lz/id5-00bf1a00.bin`), so it is dead within the analysed images; a runtime-populated reference is not excluded. No complete setting-to-request field map is claimed.
+
+### Emulator S1 binding and media admission
+
+The X-M1 1.50 input record at `0x008281ac` has key code 7, scanner type 4, GPIO selector 2 and the two halfword parameters `(1, 0x1f)`. The emulator's `half-press` input drives GPIO0.2 low, then high. The selected X-M1 board binds the falling edge to physical interrupt 10, vector `0x006a2f94`, priority 8. Firmware owns the key row's debounced byte at `+0x15`, event dispatch and S1 admission; the host does not write a key event or an AF request into guest RAM.
+
+The real body's no-card S1/card-error observation is not a general rule that every absent card prevents AF. The stock action `0x00c58c38` calls inhibition predicate `0x00d24e34`, whose `0x00d19324` query rejects active warning `0x13` (CARD ERROR), but not warning `0x11` (NO CARD) in still mode. Media status at `0x00918af8`, warning presentation at `0x00950114` and active-warning mask at `0x00950118` are separate fields. The [cardless admission analysis](af-observation-plan.md#s1-refusal-predicate-not-a-raw-presence-check) owns the predicate and physical observation.
+
+`//emulation:xm1-half-press-e2e` starts stock ordinary boots with the supplied virtual SD card and with card-detect released. The declared emulator has no initialized lens; its stock SHOOT WITHOUT LENS setting defaults to OFF, and `0x00d24e34` returns inhibition 2 before checking media. The test selects ON through ordinary menu keys at shooting-menu row 20, node `0x0077eae4`, property `0xa3` (ON value 0, OFF value 1). It does not write that property or the lens-state words from the host. It captures the media/warning words before and after S1, plus both console stores. Its card-present assertion requires a new type-`0x0f` send of message `0x3b0d` to receiver `0x2b`; the allowlist row is `0x008155fc`. An active CARD ERROR warning must inhibit that request. The no-card case records the firmware's actual admission state rather than replacing it with a host card-presence decision.
+
+SHOOT WITHOUT LENS ON is a configuration difference from the owner's body, which has the Viltrox AF 28mm F4.5 mounted. It removes one no-lens interlock; it does not make an attached lens, run lens initialization or require stock code to request AF. In the observed ON run, S1 reaches `0x00d24e34`, the media predicate and admission result 0, but neither request wrapper `0x00df48dc` nor sender `0x00ef9264` is reached. The console has two `0x3b0d` records before S1 and the same two afterward. Those earlier menu-triggered sends are not an S1 AF attempt.
+
+The bounded `half-press-lens-5` emulator capture records these states before and after S1:
+
+| Input case | SD peripheral | Media status `0x00918af8` | Cached warning `0x00950114` | Active warnings `0x00950118` | Lens words `0x009504d4`, `0x00950508` | S1 admission result | New S1 `0x3b0d` |
+| --- | --- | ---: | ---: | ---: | --- | ---: | --- |
+| Supplied virtual card | Present, transfer state | 1 | 0 | 0 | 0, 0 | 0 | No |
+| No card | Absent, idle, zero SD commands | 1 | 0 | 0 | 0, 0 | 0 | No |
+
+The absent-card emulator does **not** reproduce the physical body's CARD ERROR state: Run 3 has media status 4, cached warning `0x13` and active mask `0x00080000`. This is a remaining media/MCU-state producer divergence, not a reason to replace the stock warning predicate with a host presence check. Both boot routes are keyed separately; the absent-card receipt confirms `sd_card_present=false`. Physical S1 timing and the mounted lens are also different conditions.
+
+The manual target stays outside wildcard target sets and deliberately fails until S1 produces a new request. Its comparison uses complete console-record bytes, not the total count alone, and does not accept the two earlier menu-triggered sends. Receipts are under `private-data/analysis/x-m1-1.50/af-ring/half-press-lens-5/`, with paused before/after stores and per-case results. No AF recorder is installed in this test.
+
+### Minimal X-M1 lens model gap for #102
+
+The S1 predicate's literal at `0x00d2529c` is `0x00944580`; its `+0xbf54` and `+0xbf88` lens-state words are therefore `0x009504d4` and `0x00950508`. With SHOOT WITHOUT LENS OFF, both zero cause refusal 2 at `0x00d25150`-`0x00d2517c`, before media admission. The existing Run-3 body capture (`E-BULK-READ-RUN3-150`) contains **1 and 0**, respectively. It also contains descriptor `LY050A` at `0x0093c544`, the descriptor text `AF 28/4.5 XF`, and raw focus position `0x0060` at `0x00942b84`. This is captured Viltrox-mounted state, not a lens initialization transcript or a distance calibration.
+
+A minimal lens model must provide the external attach/readiness inputs and responses that let stock firmware establish those words. Copying the body's nonzero word into emulator RAM would skip that producer. Descriptor acquisition through `0x006c24ec -> 0x006c3b70` must receive the corresponding descriptor and per-lens data through the decoded X-M1 transport; a captured final descriptor does not establish its successful response framing.
+
+Movement support must consume actual lenscom traffic. X-M1 focus serializer `0x006bc8d8` submits internal `0x721d` to task `0x62`, carrying three pairs with controls `0x1500` (rate), `0x1540` (options) and `0x1580` (full signed raw target). Request ACK decoding at `0x006b868c`, queried position through `0x720d`/control `0x0840`, and the separate busy/status callback `0x006b8538` on `0xfff89014` bit `0x80` are distinct obligations. The predicted AF callback `0x00ff9178` cannot substitute for them. Run 3 retains three `0x721d` sends, but no associated on-wire responses or coherent movement/settling capture.
+
+Still missing are the closed attach-to-lens-state producer graph, successful X-M1 descriptor/calibration reply framing, successful command ACK bytes, position-query response progression and the external busy transition's meaning/timing. Existing upstream lens fixtures are not evidence for these X-M1 facts. The final RAM words and serializer alone do not bound a faithful endpoint implementation. No lens-state patch, sibling-model response fixture or invented completion is added. These requirements join the non-synthetic statistic gaps below in the pending #102 issue update.
+
+#### Bounded Run-3 lens reply search
+
+The Run-3 RAM capture retains concrete X-M1 receive-side state worth binding before inventing a lens profile. `0x006b97f8` takes the current response from `0x0091a554/58`, records its first word in the ten-word history at `0x0091a5fc`, and dequeues its matching 16-byte command/callback record through `0x006b9058`. Literal `0x006b999c` points its decoder's data argument at RX scratch `0x0091a628`; `0x006b95dc` separately checks a variable-length payload's additive checksum. These addresses come from X-M1 code, not sibling models.
+
+The bounded host-only search inspected that task workspace, the descriptor/lens-state neighborhoods, the 16-entry association ring `0x009737b8..0x009738b7`, and the lower transport state at `0x00955dd0`. Observed remnants are:
+
+- History `0x0091a5fc..0x0091a607`: `0x03010818, 0x01031542, 0x006015ba`. The history count at `0x0091a624` is zero; `0x006b97f8` resets it on a terminal associated record without clearing the array. These are retained response-word candidates, not a complete ordered wire transcript.
+- RX scratch `0x0091a628..0x0091a64f` is zero in this snapshot. The current task message begins `0x62ff7251`, with retained word `0x03010818` at `0x0091a554`. The variable-length receive-control word `0x0091a658` is 1; no live payload pointer is retained at `0x0091a558`.
+- All 16 association slots contain consumed `0x0001720c` or `0x00017211` records, with command fields `0x00000800` or `0x00000980` and callbacks `0x006c2cd8` or `0x006c2c88`. Producer/consumer indices at `0x009738b8/bc` are both 5 and occupancy `0x009738c0` is 0. None is a retained `0x721d` association.
+
+This search supplies a concrete next lead: correlate the receive-word history and the low-level RX store path with the X-M1 `0x720c`/`0x7211` callbacks, then recover descriptor and focus-command response framing from those same captured buffers. The captured `0x006015ba` word and raw focus value `0x0060` are a correlation candidate, not yet a decoded successful focus ACK. The ring's consumed records and zero scratch do not establish the missing successful `0x721d` reply sequence, so they do not yet bound an endpoint implementation.
 
 ## 2. Measurement, hardware evaluation and cadence
 
@@ -54,6 +97,21 @@ Still open within this section: the head-slot width of the 0xa0 block (8 bytes b
 `0x00f873cc` returns a cached result when input field `0x016d6060` is zero. `0x00f3ebd4` and `0x00f0ce6c` gate sample processing using `0x016c11fc` and movement-request field `0x016c2204`; evaluation-in-flight field `0x016c2200` is separate. Callback occurrence alone does not establish a fresh statistic for a completed lens movement.
 
 Frame-relative cadence is **unresolved**. No frame period, AF-statistics samples/frame, exposure-to-ready delay or post-move validity delay was measured or proved from a closed producer/interrupt graph. The display/movie frame rate is not used as a substitute. Addresses above name observation candidates; they do not establish safe hooks.
+
+### Non-synthetic statistic producer gaps for #102
+
+The retained emulator already has an explicitly X-M1-selected continuous producer in `emulator/producer_stream.py`. It latches firmware destination/configuration words, checks interrupt `0x2e` against X-M1 handler `0x0067bfdc`, writes nine bounded windows before raising that interrupt, and follows the guest's paired channel acknowledgments. Window extents are `0x800, 0x50, 0x1000, 0x140, 0x400, 0x400, 0x20, 0x200, 0x200` bytes, with a separate optional histogram. This is more than an unbound interrupt, but its profile name explicitly says `declared-continuous-statistics-scene-unmeasured`.
+
+Its `virtual_scene_xm1_statistics` source in `native/src/scene.rs` takes a frame number, 58 configuration words and a histogram flag. It generates an analytic scene, samples at most an 8-by-8 grid per region and computes declared color/luma/contrast values. The numerical law, phase splitting and row/column field meanings are unmeasured. It has no captured X-M1 pixels, measured statistics or lens-position input. Enabling this stream is not supplying non-synthetic AF observations.
+
+A non-synthetic producer needs these remaining inputs and bindings:
+
+- An X-M1 1.50 capture of all enabled statistic banks, their configuration/destination words, producer/ACK ordering and frame identity. A prerecorded bank without that provenance cannot establish that AF consumed a fresh sample from the selected extraction window.
+- The X-M1 field packing, scale, saturation and filtering law for each AF-consumed bank, or captured bank bytes for each replayed acquisition. Actual image pixels alone do not specify the hardware contrast statistic.
+- Acquisition-to-ready timing and post-move validity correlated with the exposure and actual lens position. The current frame-number-driven analytic source has no optical-motion feedback.
+- X-M1 lens identity/calibration, relative-move responses and completion/busy transitions. The predicted-position callback at `0x00ff9178` is not a measured settled position; substituting it would erase the distinction in §4.
+
+No private X-M1 statistic-bank capture or measured pixel-to-statistic law is supplied by the decoded DAT. Implementing another analytic law or replaying invented bytes would not close these gaps. This change leaves the existing declared producer labeled synthetic and does not add a substitute AF-input provider. This list is the pending #102 issue update; no issue comment is posted before merge.
 
 ## 3. Search decisions and constants
 
@@ -119,7 +177,7 @@ Official [X-M1 release notes](https://www.fujifilm-x.com/en-us/support/download/
 
 | §11.1 point | Bound candidates | Observable status / uncertainty |
 | --- | --- | --- |
-| 1. AF request accepted and target selected | S1-named mapping `{0x104,7,...}`, conditional UI event `0x88` (S1 binding unproven), request `0x3b0d`, task `saclac`; AREA mode mapping | S1 actuation is an external candidate. Internal request boundary is static; its link to S1 is unproven. Key normalization, target-area grid and complete input-to-state cell unresolved. |
+| 1. AF request accepted and target selected | Source-bound S1 row 5/GPIO0.2, stock action `0x00c58c38`, request `0x3b0d`, task `saclac`; AREA mode mapping | Emulator input now reaches the stock S1 action and admission predicate. Request-send evidence and media state are separate observations. Target-area grid and physical timing remain unresolved. |
 | 2. Measurement acquired and available | Evaluation configuration `0x00ee71a0`; record copy `0x00ff6b4c/0x00ff6f94`; intake `0x00f40944` | Internal candidates only. Exposure/acquisition/IRQ/DMA/freshness ordering and cadence unmeasured. |
 | 3. Search decision | Direction `0x00f41c48`, peak search `0x00f42abc`, movement request `0x00f3e9cc` | Internal candidates with bound branches and runtime parameter dependencies. Decision cost/avoidable waits unmeasured. |
 | 4. Command, ACK, movement complete | Request API `0x0076e2d0`, serializer `0x006bc8d8`, response `0x006b868c`, busy/status `0x006b8538`, separate lensdc callback `0x00ff5d80` | Separate internal candidates. Predicted callback `0x00ff9178` follows an unchecked request attempt and does not wait for completion. Successful enqueue, ACK values, physical motor stopping and settling unresolved. |

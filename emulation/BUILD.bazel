@@ -399,6 +399,31 @@ haskell_binary(
 )
 
 haskell_binary(
+    name = "xm1-half-press-e2e",
+    srcs = ["Xm1HalfPressE2E.hs"],
+    data = [":cardless-ram-push-bridge", ":xm1-upstream"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":checkpoint-key-lib",
+        ":emulator-slot-lib",
+        ":emulator-usb",
+        ":viewer-runtime-lib",
+        "//console-trace:console-store",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//transport:camera-core",
+    ],
+)
+
+haskell_binary(
     name = "xm1-af-ring-e2e",
     srcs = ["Xm1AfRingE2E.hs"],
     data = [
