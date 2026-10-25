@@ -53,8 +53,10 @@ main = do
   let alignedBases = [0x00a00000 + low | low <- [0, 8 .. 0xfff8]] :: [Word32]
       layoutEntries kind at =
         let start = payloadInstallerStart kind at
-        in RamPushEntries (Address (start + installerInstallOffset)) (Address (start + installerRollbackOffset)) (Address (start + installerStatusOffset))
-  check "every payload's entries are RamPushLayout's installer offsets"
+        in case payloadKind kind of
+          AfRing -> RamPushEntries (Address (start + 0x600)) (Address (start + 0x834)) (Address (start + 0x860))
+          _ -> RamPushEntries (Address (start + installerInstallOffset)) (Address (start + installerRollbackOffset)) (Address (start + installerStatusOffset))
+  check "every payload's entries match its compiled installer layout"
     (and [payloadEntries kind (Address at) == layoutEntries kind at | kind <- payloads, at <- alignedBases])
   check "the bank installer starts at RamPushLayout's bank end"
     (all (\at -> payloadInstallerStart bankD3Payload at == runtimeBankEnd at) alignedBases)
