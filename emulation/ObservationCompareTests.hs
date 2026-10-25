@@ -19,6 +19,28 @@ pass' = ["cc-entry-marker", "cc-entry-builder"]
 converting :: [T.Text]
 converting = ["cc-entry-marker", "cc-entry-settings-converter"]
 
+-- | A develop pass holding two converter entries, and the idle pass that splits it.
+twoConverters :: [T.Text]
+twoConverters = ["cc-entry-marker", "cc-entry-settings-converter", "cc-entry-settings-converter"]
+
+idlePass :: [T.Text]
+idlePass = ["cc-entry-marker"]
+
+fourConverters :: [T.Text]
+fourConverters = twoConverters ++ ["cc-entry-settings-converter", "cc-entry-settings-converter"]
+
+-- | The same four converter entries with the capture converter first.
+reordered :: [T.Text]
+reordered =
+  [ "cc-entry-marker", "cc-entry-capture-converter", "cc-entry-settings-converter"
+  , "cc-entry-settings-converter", "cc-entry-settings-converter" ]
+
+threeConverters :: [T.Text]
+threeConverters = ["cc-entry-marker", "cc-entry-settings-converter", "cc-entry-settings-converter", "cc-entry-settings-converter"]
+
+fiveConverters :: [T.Text]
+fiveConverters = fourConverters ++ ["cc-entry-settings-converter"]
+
 cases :: [(String, Bool)]
 cases =
   [ ( "converter-free segments with different entries differ"
@@ -31,6 +53,14 @@ cases =
     , null (compared (segment (pass' ++ converting ++ pass')) (segment (pass' ++ pass' ++ converting ++ pass' ++ pass'))) )
   , ( "converting segments with different converter passes differ"
     , not (null (compared (segment converting) (segment (converting ++ ["cc-entry-builder"])))) )
+  , ( "a converter pass split by idle passes equals the unsplit pass"
+    , null (compared (segment (twoConverters ++ idlePass ++ twoConverters)) (segment fourConverters)) )
+  , ( "a split whose converter entries run in a different order differs"
+    , not (null (compared (segment (twoConverters ++ idlePass ++ twoConverters)) (segment reordered))) )
+  , ( "a split with a different converter entry total differs"
+    , not (null (compared (segment (twoConverters ++ idlePass ++ twoConverters)) (segment threeConverters))) )
+  , ( "a split with a converting pass in between differs"
+    , not (null (compared (segment (twoConverters ++ converting ++ twoConverters)) (segment fiveConverters))) )
   , ( "timing fields are left out"
     , null (compared (object ["instructions" .= (1 :: Int), "r0" .= ("0x1" :: T.Text)])
                      (object ["instructions" .= (2 :: Int), "r0" .= ("0x1" :: T.Text)])) )
