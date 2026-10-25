@@ -753,6 +753,30 @@
       "reason": "writes the slot's label record in the generated name-record table; slot comes from the callers' bounded slot loops"
     },
     {
+      "function": "rb_migrate_v2_payload",
+      "access": "store",
+      "through": {
+        "argument": "r0"
+      },
+      "reason": "updates only the generated 0xfe field in a 40-byte saved, working or base payload"
+    },
+    {
+      "function": "rb_migrate_v2_film",
+      "access": "store",
+      "through": {
+        "argument": "r0"
+      },
+      "reason": "migrates the valid base and the populated saved and working payloads of seven slots, then seals its 1024-byte resident file"
+    },
+    {
+      "function": "rb_seal",
+      "access": "store",
+      "through": {
+        "argument": "r0"
+      },
+      "reason": "writes the header, reserved gap and trailing padding within its 1024-byte resident or staging file"
+    },
+    {
       "function": "rb_payload_from_live",
       "access": "store",
       "through": {
