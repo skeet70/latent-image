@@ -4,6 +4,7 @@
 const PATH_WORDS: usize = 32;
 const INITIALIZED_PATH_WORDS: usize = 16;
 const FILL_WORDS: usize = 592;
+const INITIALIZED_FILL_WORDS: usize = 576;
 const MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 const COMPLETION_STATUS: u32 = 0x8000_0000;
 const COMPLETION_IRQ: u8 = 0x3c;
@@ -78,6 +79,7 @@ pub(crate) enum Error {
     FrameTooLarge,
     ArithmeticOverflow,
     FillLength { actual: usize },
+    FillRequiresInitializedPath,
     UnsupportedFill { word: usize },
     InvalidGamma { entry: usize },
     InvalidOrder,
@@ -229,7 +231,7 @@ impl Device {
             return Err(Error::PathChanged);
         }
         pending.dimensions.validate_ram(ram)?;
-        validate_fill(fill, &pending.dimensions, ram)?;
+        validate_fill(fill, &pending.words, &pending.dimensions, ram)?;
         let deadline = VirtualTick(now.0.checked_add(2).ok_or(Error::ArithmeticOverflow)?);
         self.phase = Phase::Running { deadline, irq_core };
         Ok(deadline)
@@ -266,9 +268,12 @@ impl Device {
     }
 }
 
-fn validate_fill(words: &[u32], dimensions: &Dimensions, ram: RamBytes) -> Result<(), Error> {
-    if words.len() != FILL_WORDS {
+fn validate_fill(words: &[u32], path: &PathWords, dimensions: &Dimensions, ram: RamBytes) -> Result<(), Error> {
+    if !matches!(words.len(), FILL_WORDS | INITIALIZED_FILL_WORDS) {
         return Err(Error::FillLength { actual: words.len() });
+    }
+    if words.len() == INITIALIZED_FILL_WORDS && !matches!(path, PathWords::Initialized(_)) {
+        return Err(Error::FillRequiresInitializedPath);
     }
     for (word, &expected) in FILL_PREFIX.iter().enumerate() {
         let expected = if word == 31 { dimensions.reversed_word() } else { expected };
@@ -288,6 +293,11 @@ fn validate_fill(words: &[u32], dimensions: &Dimensions, ram: RamBytes) -> Resul
         if offset != 11 {
             expect_fill_word(words, 548 + offset, expected)?;
         }
+    }
+    if words.len() == INITIALIZED_FILL_WORDS {
+        expect_fill_word(words, 568, 0x400101a1)?;
+        expect_fill_word(words, 569, 0)?;
+        return validate_footer(words, 570);
     }
     let target = words[571];
     if !matches!(target & 0xc0000000, 0 | 0x40000000) || target & 3 != 0 {
@@ -316,10 +326,14 @@ fn validate_fill(words: &[u32], dimensions: &Dimensions, ram: RamBytes) -> Resul
     } else {
         576
     };
+    validate_footer(words, footer_start)
+}
+
+fn validate_footer(words: &[u32], footer_start: usize) -> Result<(), Error> {
     for (offset, &expected) in FOOTER.iter().enumerate() {
         expect_fill_word(words, footer_start + offset, expected)?;
     }
-    for word in footer_start + FOOTER.len()..FILL_WORDS {
+    for word in footer_start + FOOTER.len()..words.len() {
         expect_fill_word(words, word, 0)?;
     }
     Ok(())
@@ -385,6 +399,17 @@ mod tests {
         };
         words[footer..footer + 6].copy_from_slice(&[
             0x400f0028, 0x12345678, 0x40010031, 0xf0, 0x400f0018, 0x12345678,
+        ]);
+        words
+    }
+
+    fn initialized_fill(width: u32, height: u32) -> [u32; 576] {
+        let template = fill(width, height, TARGET, false);
+        let mut words = [0; 576];
+        words[..568].copy_from_slice(&template[..568]);
+        words[568..].copy_from_slice(&[
+            0x400101a1, 0, 0x400f0028, 0x12345678,
+            0x40010031, 0xf0, 0x400f0018, 0x12345678,
         ]);
         words
     }
@@ -455,6 +480,69 @@ mod tests {
         assert_eq!(device.start_fill(CoreId(0), &changed, &fill, CoreId(0), VirtualTick(10), RAM), Err(Error::PathChanged));
         assert_eq!(device.start_fill(CoreId(0), &self::path(WIDTH, HEIGHT), &fill, CoreId(0), VirtualTick(10), RAM), Err(Error::PathChanged));
         assert_eq!(device.complete(VirtualTick(u64::MAX)), Ok(None));
+    }
+
+    #[test]
+    fn initialized_fill_without_first_global_target_completes_once() {
+        let path = initialized_path(WIDTH, HEIGHT);
+        let fill = initialized_fill(WIDTH, HEIGHT);
+        let mut device = Device::new();
+        device.start_path(CoreId(0), &path, RAM).unwrap();
+        assert_eq!(device.complete(VirtualTick(u64::MAX)), Ok(None));
+        assert_eq!(device.start_fill(CoreId(0), &path, &fill, CoreId(1), VirtualTick(10), RAM), Ok(VirtualTick(12)));
+        assert_eq!(device.status(), 0);
+        assert_eq!(device.complete(VirtualTick(11)), Ok(None));
+        assert_eq!(device.complete(VirtualTick(12)), Ok(Some(event(CoreId(1)))));
+        assert_eq!(device.complete(VirtualTick(u64::MAX)), Ok(None));
+        device.acknowledge(AckRegister::Path, 0).unwrap();
+        assert_eq!(device.status(), 0x80000000);
+        device.acknowledge(AckRegister::Fill, 0).unwrap();
+        assert_eq!(device.status(), 0);
+    }
+
+    #[test]
+    fn initialized_fill_requires_initialized_path() {
+        let path = path(WIDTH, HEIGHT);
+        let fill = initialized_fill(WIDTH, HEIGHT);
+        let mut device = Device::new();
+        device.start_path(CoreId(0), &path, RAM).unwrap();
+        assert_eq!(device.start_fill(CoreId(0), &path, &fill, CoreId(0), VirtualTick(10), RAM), Err(Error::FillRequiresInitializedPath));
+        assert_eq!(device.complete(VirtualTick(u64::MAX)), Ok(None));
+        assert_eq!(device.status(), 0);
+        let first_global_fill = self::fill(WIDTH, HEIGHT, TARGET, false);
+        assert_eq!(device.start_fill(CoreId(0), &path, &first_global_fill, CoreId(0), VirtualTick(10), RAM), Ok(VirtualTick(12)));
+    }
+
+    #[test]
+    fn initialized_fill_unknown_words_draws_and_nonexact_lengths_never_complete() {
+        let path = initialized_path(WIDTH, HEIGHT);
+        let fill = initialized_fill(WIDTH, HEIGHT);
+        for word in 0..fill.len() {
+            if word == 559 { continue; }
+            let mut unknown = fill;
+            unknown[word] ^= 1;
+            let mut device = Device::new();
+            device.start_path(CoreId(0), &path, RAM).unwrap();
+            assert!(device.start_fill(CoreId(0), &path, &unknown, CoreId(0), VirtualTick(10), RAM).is_err(), "word {word}");
+            assert_eq!(device.complete(VirtualTick(u64::MAX)), Ok(None));
+            assert_eq!(device.status(), 0);
+            assert_eq!(device.start_fill(CoreId(0), &path, &fill, CoreId(0), VirtualTick(10), RAM), Ok(VirtualTick(12)));
+        }
+        let mut device = Device::new();
+        device.start_path(CoreId(0), &path, RAM).unwrap();
+        for (word, value) in [(559, 2), (568, 0x400700ad), (570, 0x28000000), (570, 0x400101a9)] {
+            let mut unknown = fill;
+            unknown[word] = value;
+            assert!(device.start_fill(CoreId(0), &path, &unknown, CoreId(0), VirtualTick(10), RAM).is_err());
+        }
+        assert_eq!(device.start_fill(CoreId(0), &path, &fill[..575], CoreId(0), VirtualTick(10), RAM), Err(Error::FillLength { actual: 575 }));
+        let mut padded = [0; 608];
+        padded[..576].copy_from_slice(&fill);
+        for length in [577, 592, 608] {
+            assert!(device.start_fill(CoreId(0), &path, &padded[..length], CoreId(0), VirtualTick(10), RAM).is_err());
+        }
+        assert_eq!(device.complete(VirtualTick(u64::MAX)), Ok(None));
+        assert_eq!(device.status(), 0);
     }
 
     #[test]
@@ -609,9 +697,8 @@ mod tests {
         let fill = fill(WIDTH, HEIGHT, TARGET, false);
         let mut device = Device::new();
         device.start_path(CoreId(0), &path, RAM).unwrap();
-        for length in [576, 591] {
-            assert_eq!(device.start_fill(CoreId(0), &path, &fill[..length], CoreId(0), VirtualTick(0), RAM), Err(Error::FillLength { actual: length }));
-        }
+        assert_eq!(device.start_fill(CoreId(0), &path, &fill[..576], CoreId(0), VirtualTick(0), RAM), Err(Error::FillRequiresInitializedPath));
+        assert_eq!(device.start_fill(CoreId(0), &path, &fill[..591], CoreId(0), VirtualTick(0), RAM), Err(Error::FillLength { actual: 591 }));
         let mut extended = [0; 656];
         extended[..592].copy_from_slice(&fill);
         for length in [593, 656] {

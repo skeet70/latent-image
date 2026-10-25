@@ -29,6 +29,20 @@ enum Stream {
     Fill,
 }
 
+enum FillWords {
+    TargetConfigured([u32; 592]),
+    Initialized([u32; 576]),
+}
+
+impl FillWords {
+    fn as_slice(&self) -> &[u32] {
+        match self {
+            Self::TargetConfigured(words) => words,
+            Self::Initialized(words) => words,
+        }
+    }
+}
+
 impl Stream {
     fn name(self) -> &'static str {
         match self {
@@ -73,6 +87,15 @@ fn path_words(capture: &Bound<'_, PyDict>) -> PyResult<PathWords> {
         16 => Ok(PathWords::Initialized(words(&source, Stream::Path)?)),
         32 => Ok(PathWords::FirstGlobal(words(&source, Stream::Path)?)),
         length => Err(refused(capture.py(), format!("GPU startup path word count {length} is not 16 or 32"))),
+    }
+}
+
+fn fill_words(capture: &Bound<'_, PyDict>) -> PyResult<FillWords> {
+    let source = captured_words(capture, Stream::Fill)?;
+    match source.len() {
+        576 => Ok(FillWords::Initialized(words(&source, Stream::Fill)?)),
+        592 => Ok(FillWords::TargetConfigured(words(&source, Stream::Fill)?)),
+        length => Err(refused(capture.py(), format!("GPU startup fill word count {length} is not 576 or 592"))),
     }
 }
 
@@ -199,7 +222,7 @@ pub(crate) fn gpu_startup_submit(
         device.call_method("record", ("X-M1 GPU startup path validated",), Some(capture))?;
         return Ok(true);
     }
-    let fill = words::<592>(&captured_words(capture, Stream::Fill)?, Stream::Fill)?;
+    let fill = fill_words(capture)?;
     let targets = device.getattr("irq_targets")?;
     if targets.is_none() {
         return Err(refused(py, "GPU startup requires firmware-enabled IRQ routing"));
@@ -213,7 +236,7 @@ pub(crate) fn gpu_startup_submit(
     let schedule = device.getattr("schedule")?;
     let board = schedule.getattr("__self__")?;
     let now = VirtualTick(board.getattr("virtual_ticks")?.extract()?);
-    let due = native.borrow_mut().inner.start_fill(CoreId(cpu), path, &fill, irq_core, now, ram)
+    let due = native.borrow_mut().inner.start_fill(CoreId(cpu), path, fill.as_slice(), irq_core, now, ram)
         .map_err(|error| refused(py, format!("GPU startup fill: {error:?}")))?;
     let delay = due.0 - now.0;
     device.setattr("_command_pending", py.None())?;
