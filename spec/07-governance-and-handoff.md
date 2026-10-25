@@ -10,7 +10,7 @@ This is the whole process for any camera operation.
 2. **Owner:** confirms in chat, with a go for this run or a standing confirmation in section 3.4 that covers it. For H3 the go is per run and names the operation and the image or payload digest.
 3. **Owner:** puts the camera in the mode the operation needs, for example jig mode, and leaves it attached. **Model:** runs the single command, e.g. `devenv shell -- bazel run //transport:camera -- end-setting`. The command picks the one connected `04cb:ff80` device, journals every outgoing byte before sending it, writes its output under `private-data/sessions/` and prints the result, which the model reports in chat.
 4. **Owner:** exits jig mode, power-cycles, takes a shot and plays it back, and tells the model the result in chat, with photos or logs only if something looked wrong.
-5. **Model:** keeps the session record under `private-data/sessions/`. At a milestone or decision it records the result in the relevant report and GitHub issue, adds an evidence-ledger entry if it is a durable research claim, and commits.
+5. **Model:** keeps the session record under `private-data/sessions/`. At a milestone or decision it records the result in the relevant report, posts it to the GitHub issue under [issues and comments](../docs/principles.md#issues-and-comments), adds an evidence-ledger entry if it is a durable research claim, and commits.
 
 A failed or stopped run needs no cleanup record. Fix the code, rehearse, commit, and go back to step 2.
 
