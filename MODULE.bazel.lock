@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "OqoXQxncxnTkE48iE2m2mUetxDFg3E6MxBpSofXwtcI=",
+        "bzlTransitiveDigest": "yu60xRgDYeSTckpld9XMYrMbc0JJBrRfP9PKNvnXeRE=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -429,6 +429,7 @@
                 "@@//emulation:fujimod-xm1/Cargo.lock": "//emulation:fujimod-xm1/Cargo.lock",
                 "@@//emulation:fujimod-xm1/Cargo.toml": "//emulation:fujimod-xm1/Cargo.toml",
                 "@@//emulation:fujimod-xm1/data/xm1-150.json": "//emulation:fujimod-xm1/data/xm1-150.json",
+                "@@//emulation:fujimod-xm1/src/adapters.rs": "//emulation:fujimod-xm1/src/adapters.rs",
                 "@@//emulation:fujimod-xm1/src/adjustment.rs": "//emulation:fujimod-xm1/src/adjustment.rs",
                 "@@//emulation:fujimod-xm1/src/bridge.rs": "//emulation:fujimod-xm1/src/bridge.rs",
                 "@@//emulation:fujimod-xm1/src/ff80.rs": "//emulation:fujimod-xm1/src/ff80.rs",
@@ -442,6 +443,7 @@
                 "@@//emulation:fujimod-xm1/src/ram_push.rs": "//emulation:fujimod-xm1/src/ram_push.rs",
                 "@@//emulation:fujimod-xm1/src/render.rs": "//emulation:fujimod-xm1/src/render.rs",
                 "@@//emulation:fujimod-xm1/src/run.rs": "//emulation:fujimod-xm1/src/run.rs",
+                "@@//emulation:fujimod-xm1/src/sd_host.rs": "//emulation:fujimod-xm1/src/sd_host.rs",
                 "@@//emulation:fujimod-xm1/src/toggle.rs": "//emulation:fujimod-xm1/src/toggle.rs",
                 "@@//emulation:fujimod-xm1/src/trace.rs": "//emulation:fujimod-xm1/src/trace.rs",
                 "@@//emulation:fujimod-xm1/src/ui_conversion.rs": "//emulation:fujimod-xm1/src/ui_conversion.rs",

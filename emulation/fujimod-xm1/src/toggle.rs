@@ -5,7 +5,7 @@
 use fujimod_emulator::board::observation::MemoryWatch;
 use fujimod_xm1::adjustment::AdjustmentNand;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, menu_value, read, sha256, write};
-use fujimod_xm1::ff80::{Ff80, SET_ADDRESS_RECOVERY, Transfer, encode_hex};
+use fujimod_xm1::ff80::{Ff80, RendezvousInputs, SET_ADDRESS_RECOVERY, Transfer, encode_hex};
 use fujimod_xm1::guest::{RouteKey, set_adc};
 use fujimod_xm1::machine::KeyPulse;
 use fujimod_xm1::run::{self, RunDocument};
@@ -524,6 +524,7 @@ fn drive() -> Result<(), String> {
         update: read(&arguments.installed_dat)?,
         boot_rom: read(&arguments.boot_rom)?,
         adjustment: AdjustmentNand::parse(&adjustment_bytes)?,
+        card: None,
     };
     std::fs::create_dir_all(&arguments.output).map_err(|e| format!("{}: {e}", arguments.output.display()))?;
     let (key, key_inputs) = route_key(&arguments, &inputs, &adjustment_bytes)?;
@@ -570,7 +571,7 @@ fn drive() -> Result<(), String> {
         machine
     };
     let mut server = Server {
-        bridge: Ff80::new(machine),
+        bridge: Ff80::new(machine, RendezvousInputs::MenuUp),
         start: record,
         key,
         inputs: key_inputs,

@@ -81,8 +81,9 @@ usage = unlines
   , "  --ram-push-e2e        Run allocation, relink, install, bank UI and unload in emulation"
   , "  --cardless             --ram-push-e2e: boot the installed DAT and adjustment NAND with no SD"
   , "                         card through the cardless RAM-push bridge"
-  , "  --fujimod              --ram-push-e2e --cardless: run the bridge protocol on jitl's FujiMod runtime"
-  , "                         (emulation/fujimod-xm1); a speed path, not payload acceptance"
+  , "  --fujimod              --ram-push-e2e: run the bridge protocol on jitl's FujiMod runtime"
+  , "                         (emulation/fujimod-xm1), card-backed or --cardless; a speed path, not"
+  , "                         payload acceptance"
   , "  --unreviewed-relink    --ram-push-e2e: relink and push without the compiled source-identity"
   , "                         and publication-contract pins; the receipt records the mode"
   , "  --allowlist-override REASON"
@@ -248,7 +249,8 @@ launch options = do
       cardless = cardModeOption options == WithoutCard
   require (not (ff80 && e2e)) "--ff80-rehearsal and --ram-push-e2e are exclusive"
   require (e2e || not cardless) "--cardless belongs to --ram-push-e2e"
-  require (runtimeOption options == RetainedChoice || (e2e && cardless)) "--fujimod belongs to --ram-push-e2e --cardless"
+  require (runtimeOption options == RetainedChoice || (e2e && pushModeOption options == RamPush))
+    "--fujimod belongs to the --ram-push-e2e RAM push"
   when ff80 $ do
     require (media == Nothing) "--ff80-rehearsal does not accept an SD-card image"
     require (nand /= Nothing) "--ff80-rehearsal requires --installed-nand"
@@ -326,7 +328,8 @@ launch options = do
             TrajectoryFile trajectories = maybe (TrajectoryFile defaultTrajectories) id
               (trajectoriesOption options)
             checkpointRootPath = resolve root $ case (runtimeOption options, cardModeOption options) of
-              (FujiModChoice, _) -> "private-data/emulator-checkpoints/xm1-ram-push-fujimod-cardless"
+              (FujiModChoice, WithCard) -> "private-data/emulator-checkpoints/xm1-ram-push-fujimod"
+              (FujiModChoice, WithoutCard) -> "private-data/emulator-checkpoints/xm1-ram-push-fujimod-cardless"
               (RetainedChoice, WithCard) -> "private-data/emulator-checkpoints/xm1-ram-push"
               (RetainedChoice, WithoutCard) -> "private-data/emulator-checkpoints/xm1-ram-push-cardless"
             runtime = case runtimeOption options of

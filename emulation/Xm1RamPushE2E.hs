@@ -119,8 +119,8 @@ cardRecord mode = object
 -- | The bridge executable and its arguments for one boot of the session's inputs writing to `output`.
 sessionBridge :: E2ESettings -> FilePath -> FilePath -> FilePath -> BootMode -> FilePath -> IO (FilePath, [String])
 sessionBridge settings python installedMedia adjustmentNand boot output = case (emulationRuntime settings, emulationCardMode settings) of
-  (FujiModRuntime bridge, Cardless) -> do
-    require (attachHold settings == NoAttachHold) "the FujiMod RAM-push bridge holds no key across the attach edge"
+  (FujiModRuntime bridge, card) -> do
+    require (card /= Cardless || attachHold settings == NoAttachHold) "the cardless RAM-push bridge holds no key across the attach edge"
     require (null (fixedSceneFrame settings)) "the FujiMod RAM-push bridge takes no --fixed-scene-frame"
     pure (fujimodBridge bridge,
       [ "--run", fujimodRunDocument bridge
@@ -129,8 +129,7 @@ sessionBridge settings python installedMedia adjustmentNand boot output = case (
       , "--adjustment-nand", adjustmentNand
       , "--output", output
       , "--ram-push-checkpoints", checkpointRoot settings
-      ] ++ freshArguments)
-  (FujiModRuntime _, CardBacked _) -> ioError (userError "the FujiMod RAM-push bridge runs only --cardless")
+      ] ++ freshArguments ++ cardArguments card ++ attachHoldArguments (attachHold settings))
   (RetainedRuntime, CardBacked cardImage) -> do
     key <- maybe (ioError (userError "the card attach key is unset")) pure (cardAttachKey settings)
     pure (python,
@@ -162,6 +161,8 @@ sessionBridge settings python installedMedia adjustmentNand boot output = case (
       StrictUiConversion -> []
       DeclaredUiCpuFallback -> ["--ui-conversion-profile", "declared-ui-cpu-fallback"]
     frameArguments = fixedSceneFrameArguments (fixedSceneFrame settings)
+    cardArguments (CardBacked image) = ["--sd-card-image", image]
+    cardArguments Cardless = []
 
 payloadText :: Payload -> T.Text
 payloadText p = case payloadKind p of
@@ -383,11 +384,12 @@ installHostValue host = object
   , "heap_break_before" .= hostBreakBefore host
   , "heap_break_after" .= hostBreakAfter host ]
 
--- | GIVEN with its card attach key, timed and printed; the cardless bridge keys its own.
+-- | GIVEN with its card attach key, timed and printed; the cardless and FujiMod bridges key their own.
 keyedSettings :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> IO E2ESettings
-keyedSettings given python runtime installedMedia adjustmentNand = case emulationCardMode given of
-  Cardless -> pure given
-  CardBacked cardImage -> do
+keyedSettings given python runtime installedMedia adjustmentNand = case (emulationRuntime given, emulationCardMode given) of
+  (FujiModRuntime _, _) -> pure given
+  (RetainedRuntime, Cardless) -> pure given
+  (RetainedRuntime, CardBacked cardImage) -> do
     started <- getMonotonicTime
     key <- cardAttachRouteKey given python runtime installedMedia adjustmentNand cardImage
     ended <- getMonotonicTime

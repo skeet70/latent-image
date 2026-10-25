@@ -31,11 +31,13 @@ fujimod-catalog = { path = "../fujimod/crates/catalog" }
 fujimod-emulator = { path = "../fujimod/crates/emulator" }
 fujimod-emulator-cpu = { path = "../fujimod/crates/emulator-cpu" }
 fujimod-emulator-devices = { path = "../fujimod/crates/emulator-devices" }
+fujimod-emulator-ip = { path = "../fujimod/crates/emulator-ip" }
 fujimod-emulator-exr2-board = { path = "../fujimod/crates/emulator-exr2-board" }
 fujimod-emulator-exr2-plan = { path = "../fujimod/crates/emulator-exr2-plan" }
 fujimod-emulator-models = { path = "../fujimod/crates/emulator-models" }
 fujimod-recording = { path = "../fujimod/crates/recording" }
 flate2 = "1"
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 sha2 = "0.10"

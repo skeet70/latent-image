@@ -89,7 +89,24 @@ struct ControllerSave {
     endpoints: Option<EndpointDma>,
 }
 
-/// One UP plus rendezvous hold, from the locked entry to its release.
+/// The inputs held from the rendezvous lock to its release (the retained
+/// bridge's `hold_rendezvous_inputs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RendezvousInputs {
+    MenuUp,
+    MenuUpAndWriteProtect,
+}
+
+impl RendezvousInputs {
+    fn names(self) -> Vec<&'static str> {
+        match self {
+            Self::MenuUp => vec!["menu-up"],
+            Self::MenuUpAndWriteProtect => vec!["menu-up", "sd-write-protect"],
+        }
+    }
+}
+
+/// One rendezvous hold, from the locked entry to its release.
 #[derive(Serialize)]
 pub struct Rendezvous {
     latched_instructions: u64,
@@ -134,6 +151,7 @@ pub struct TransferProfile {
 pub struct Ff80 {
     pub machine: Machine,
     pub rendezvous: Vec<Rendezvous>,
+    rendezvous_inputs: RendezvousInputs,
     rendezvous_complete: bool,
     hits_seen: usize,
     pub transfer_log: Vec<Value>,
@@ -159,11 +177,12 @@ pub fn encode_hex(bytes: &[u8]) -> String {
 }
 
 impl Ff80 {
-    pub fn new(machine: Machine) -> Self {
+    pub fn new(machine: Machine, rendezvous_inputs: RendezvousInputs) -> Self {
         let hits_seen = machine.traces.hits.len();
         Self {
             machine,
             rendezvous: Vec::new(),
+            rendezvous_inputs,
             rendezvous_complete: false,
             hits_seen,
             transfer_log: Vec::new(),
@@ -225,9 +244,12 @@ impl Ff80 {
                         return Err(format!("rendezvous trace lacks two masked cores: core {} masks {masked:?}", hit.core));
                     }
                     self.machine.press(RouteKey::Up)?;
+                    if self.rendezvous_inputs == RendezvousInputs::MenuUpAndWriteProtect {
+                        self.machine.protect_card(true)?;
+                    }
                     self.rendezvous.push(Rendezvous {
                         latched_instructions: hit.instructions,
-                        inputs: vec!["menu-up"],
+                        inputs: self.rendezvous_inputs.names(),
                         window_exits: Vec::new(),
                         callback_instructions: None,
                         released_instructions: None,
@@ -301,6 +323,9 @@ impl Ff80 {
             self.advance(RENDEZVOUS_HOLD - held)?;
         }
         self.machine.release_key(RouteKey::Up)?;
+        if self.rendezvous_inputs == RendezvousInputs::MenuUpAndWriteProtect {
+            self.machine.protect_card(false)?;
+        }
         let released = self.machine.instructions();
         let menu = self.machine.menu()?;
         let event = self.rendezvous.last_mut().ok_or("rendezvous activity is missing")?;

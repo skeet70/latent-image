@@ -1,13 +1,15 @@
-//! The cardless RAM-push bridge of `emulation/EmulatorUsb.hs` on FujiMod's
-//! EXR II runtime: the same JSON-lines events and commands as the retained
-//! `cardless-ram-push-bridge`, with attach and install checkpoints saved as
-//! FujiMod session snapshots.
+//! The RAM-push bridge of `emulation/EmulatorUsb.hs` on FujiMod's EXR II
+//! runtime: the same JSON-lines events and commands as the retained
+//! `continue_rec_scanout.py --ram-push-server` (with `--sd-card-image`) and
+//! `cardless-ram-push-bridge` (without), with attach and install checkpoints
+//! saved as FujiMod session snapshots.
 use fujimod_xm1::adjustment::AdjustmentNand;
-use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, menu_value, read, restore, sha256, write};
-use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, Transfer, encode_hex};
+use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, load_card, menu_value, read, restore, sha256, write};
+use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, encode_hex};
 use fujimod_xm1::guest::{DialTurn, ModeDialPosition, Press, RouteKey};
 use fujimod_xm1::machine::{KeyPulse, Machine};
 use fujimod_xm1::render::MAX_SETTLE;
+use fujimod_xm1::sd_host::MediaImage;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -19,7 +21,8 @@ use std::{
 };
 
 const USAGE: &str = "Usage: fujimod-xm1-ram-push --run RUN.json --boot-rom ROM --installed-dat DAT \
---adjustment-nand NAND --output DIR --ram-push-checkpoints DIR [--fresh-boot]\n";
+--adjustment-nand NAND --output DIR --ram-push-checkpoints DIR [--sd-card-image CARD] [--attach-hold-key KEY] \
+[--fresh-boot]\n";
 
 const ATTACH_RECORD: &str = "ram-push-attach.json";
 const INSTALL_RECORD: &str = "ram-push-install.json";
@@ -33,6 +36,9 @@ const MENU_PULSE: KeyPulse = KeyPulse { hold: 4_000_000, release: 6_000_000 };
 /// `tools/probe_setup_menus.py` DIAL_PULSE.
 const DIAL_PULSE: KeyPulse = KeyPulse { hold: 4_000_000, release: 1_000_000 };
 const MAX_PHASE: u64 = 15_000_000;
+/// `tools/continue_rec_scanout.py` ATTACH_HOLD_PULSE: the held key's lead before the cable rises
+/// and its settle after release.
+const ATTACH_HOLD_PULSE: u64 = 8_000_000;
 const MAX_READ: usize = 4096;
 
 /// Sites the retained bridge arms for every session.
@@ -55,12 +61,15 @@ struct Arguments {
     adjustment_nand: PathBuf,
     output: PathBuf,
     checkpoints: PathBuf,
+    sd_card_image: Option<PathBuf>,
+    attach_hold: Option<RouteKey>,
     fresh_boot: bool,
 }
 
 fn arguments() -> Result<Arguments, String> {
     let mut values: BTreeMap<String, PathBuf> = BTreeMap::new();
     let mut fresh_boot = false;
+    let mut attach_hold = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(flag) = args.next() {
         let flag = flag.to_str().ok_or(USAGE)?.to_owned();
@@ -68,8 +77,23 @@ fn arguments() -> Result<Arguments, String> {
             fresh_boot = true;
             continue;
         }
-        if !["--run", "--boot-rom", "--installed-dat", "--adjustment-nand", "--output", "--ram-push-checkpoints"]
-            .contains(&flag.as_str())
+        if flag == "--attach-hold-key" {
+            let name = args.next().ok_or(USAGE)?;
+            if attach_hold.replace(RouteKey::parse(name.to_str().ok_or(USAGE)?)?).is_some() {
+                return Err(USAGE.into());
+            }
+            continue;
+        }
+        if ![
+            "--run",
+            "--boot-rom",
+            "--installed-dat",
+            "--adjustment-nand",
+            "--output",
+            "--ram-push-checkpoints",
+            "--sd-card-image",
+        ]
+        .contains(&flag.as_str())
         {
             return Err(USAGE.into());
         }
@@ -78,6 +102,7 @@ fn arguments() -> Result<Arguments, String> {
             return Err(USAGE.into());
         }
     }
+    let sd_card_image = values.remove("--sd-card-image");
     let mut take = |name: &str| values.remove(name).ok_or_else(|| USAGE.to_owned());
     Ok(Arguments {
         run: take("--run")?,
@@ -86,6 +111,8 @@ fn arguments() -> Result<Arguments, String> {
         adjustment_nand: take("--adjustment-nand")?,
         output: take("--output")?,
         checkpoints: take("--ram-push-checkpoints")?,
+        sd_card_image,
+        attach_hold,
         fresh_boot,
     })
 }
@@ -119,18 +146,27 @@ enum StartKind {
 
 fn boot_key(arguments: &Arguments, inputs: &Inputs, adjustment: &[u8]) -> Result<BootKey, String> {
     let bridge = read(&std::env::current_exe().map_err(|e| e.to_string())?)?;
+    let card: Option<&MediaImage> = inputs.card.as_ref().map(|card| &card.image);
+    let mut keyed = json!({
+        "installed_dat": sha256(&inputs.update),
+        "adjustment_nand": sha256(adjustment),
+        "run_document": sha256(&inputs.document_bytes),
+        "boot_rom": sha256(&inputs.boot_rom),
+        "card_present": card.is_some(),
+    });
+    if let Some(card) = card {
+        keyed["menu_sd_image"] = json!(card.sha256);
+    }
+    if let Some(key) = arguments.attach_hold {
+        keyed["attach_hold_key"] = json!(key);
+    }
     let inputs = json!({
         "schema": CHECKPOINT_SCHEMA,
-        "mode": "fujimod-cardless-volatile-ram-bank",
-        "inputs": {
-            "installed_dat": sha256(&inputs.update),
-            "adjustment_nand": sha256(adjustment),
-            "run_document": sha256(&inputs.document_bytes),
-            "boot_rom": sha256(&inputs.boot_rom),
-            "card_present": false,
-        },
+        "mode": if card.is_some() { "fujimod-card-volatile-ram-bank" } else { "fujimod-cardless-volatile-ram-bank" },
+        "inputs": keyed,
         "bridge": {"sha256": sha256(&bridge)},
-        "paths": {"installed_dat": arguments.installed_dat, "adjustment_nand": arguments.adjustment_nand},
+        "paths": {"installed_dat": arguments.installed_dat, "adjustment_nand": arguments.adjustment_nand,
+            "menu_sd_image": arguments.sd_card_image},
     });
     let mut identity = inputs.clone();
     identity.as_object_mut().ok_or("key document")?.remove("paths");
@@ -202,15 +238,34 @@ struct Attachment {
     configuration: Vec<u8>,
 }
 
-fn attach(machine: Machine) -> Result<(Ff80, Attachment), String> {
-    let mut bridge = Ff80::new(machine);
+/// Boots to live view past the first-start screens and enumerates ff80. A held key is pressed
+/// `ATTACH_HOLD_PULSE` before the cable rises and released after enumeration.
+fn attach(machine: Machine, rendezvous: RendezvousInputs, hold: Option<RouteKey>) -> Result<(Ff80, Attachment), String> {
+    let mut bridge = Ff80::new(machine, rendezvous);
     bridge.advance(FIRST_START_SCREEN.saturating_sub(bridge.machine.instructions()))?;
+    if rendezvous == RendezvousInputs::MenuUpAndWriteProtect && !bridge.machine.card_present()? {
+        return Err("the SD host does not read the inserted card as present".into());
+    }
     for key in [RouteKey::Up; 12].into_iter().chain([RouteKey::Ok, RouteKey::Ok]) {
         bridge.key(key, FIRST_START_PULSE)?;
     }
     bridge.advance(LIVE_VIEW_SETTLE)?;
-    let pre_attach = json!({"instructions": bridge.machine.instructions()});
+    let pressed = bridge.machine.instructions();
+    let mut pre_attach = json!({"instructions": pressed});
+    if let Some(key) = hold {
+        bridge.machine.press(key)?;
+        bridge.advance(ATTACH_HOLD_PULSE)?;
+    }
+    let attached = bridge.machine.instructions();
     let (device, configuration) = bridge.enumerate()?;
+    if let Some(key) = hold {
+        bridge.machine.release_key(key)?;
+        let released = bridge.machine.instructions();
+        bridge.advance(ATTACH_HOLD_PULSE)?;
+        pre_attach["attach_hold"] = json!({"key": key, "pressed_instructions": pressed,
+            "attach_instructions": attached, "released_instructions": released,
+            "menu_after_release": menu_value(bridge.machine.menu()?)});
+    }
     Ok((bridge, Attachment { pre_attach, device, configuration }))
 }
 
@@ -302,6 +357,7 @@ struct Server {
     screenshots: Vec<Value>,
     key_log: Vec<Value>,
     requests: RequestProfile,
+    rendezvous: RendezvousInputs,
 }
 
 fn parse_address(text: &str) -> Result<u32, String> {
@@ -426,9 +482,13 @@ impl Server {
     }
 
     fn receipt(&self, error: Option<&str>) -> Value {
+        let card = match self.rendezvous {
+            RendezvousInputs::MenuUpAndWriteProtect => "card-backed",
+            RendezvousInputs::MenuUp => "cardless",
+        };
         json!({
             "schema": 1,
-            "scope": "emulated X-M1 ordinary-boot cardless RAM push on FujiMod's EXR II runtime",
+            "scope": format!("emulated X-M1 ordinary-boot {card} RAM push on FujiMod's EXR II runtime"),
             "inputs": self.key.inputs,
             "pre_attach": self.attachment.pre_attach,
             "device_descriptor": encode_hex(&self.attachment.device),
@@ -443,6 +503,7 @@ impl Server {
             "keepalive_inputs": self.bridge.keepalive_inputs,
             "contexts": self.bridge.machine.traces.hits,
             "screenshots": self.screenshots,
+            "sd_host": self.bridge.machine.card_state().unwrap_or_else(|error| json!({"error": error})),
             "boundary": {"instructions": self.bridge.machine.instructions(), "failure": self.bridge.machine.failure},
         })
     }
@@ -496,11 +557,15 @@ fn drive() -> Result<(), String> {
     let started = Instant::now();
     let arguments = arguments()?;
     let adjustment_bytes = read(&arguments.adjustment_nand)?;
+    let document_bytes = read(&arguments.run)?;
+    let card = arguments.sd_card_image.as_deref().map(|path| load_card(&document_bytes, path)).transpose()?;
+    let rendezvous = if card.is_some() { RendezvousInputs::MenuUpAndWriteProtect } else { RendezvousInputs::MenuUp };
     let inputs = Inputs {
-        document_bytes: read(&arguments.run)?,
+        document_bytes,
         update: read(&arguments.installed_dat)?,
         boot_rom: read(&arguments.boot_rom)?,
         adjustment: AdjustmentNand::parse(&adjustment_bytes)?,
+        card,
     };
     std::fs::create_dir_all(&arguments.output).map_err(|e| format!("{}: {e}", arguments.output.display()))?;
     let key = boot_key(&arguments, &inputs, &adjustment_bytes)?;
@@ -535,7 +600,7 @@ fn drive() -> Result<(), String> {
             let checkpoint = json!({"key": key.key, "inputs": key.inputs, "directory": attach_directory,
                 "key_seconds": key_seconds, "start": StartKind::Installed, "installed": directory,
                 "restore_seconds": restore_started.elapsed().as_secs_f64()});
-            (Ff80::new(machine), attachment, checkpoint)
+            (Ff80::new(machine, rendezvous), attachment, checkpoint)
         }
         None if attach_directory.join(SNAPSHOT).is_file() && !arguments.fresh_boot => {
             let record: AttachRecord = serde_json::from_slice(&read(&attach_directory.join(ATTACH_RECORD))?)
@@ -552,11 +617,11 @@ fn drive() -> Result<(), String> {
             let checkpoint = json!({"key": key.key, "inputs": key.inputs, "directory": attach_directory,
                 "key_seconds": key_seconds, "start": StartKind::Restored,
                 "restore_seconds": restore_started.elapsed().as_secs_f64()});
-            (Ff80::new(machine), attachment, checkpoint)
+            (Ff80::new(machine, rendezvous), attachment, checkpoint)
         }
         None => {
             let boot_started = Instant::now();
-            let (mut bridge, attachment) = attach(inputs.machine()?)?;
+            let (mut bridge, attachment) = attach(inputs.machine()?, rendezvous, arguments.attach_hold)?;
             let boot_seconds = boot_started.elapsed().as_secs_f64();
             let save_started = Instant::now();
             let record = json!({"schema": CHECKPOINT_SCHEMA, "key": key.key, "inputs": key.inputs,
@@ -580,6 +645,7 @@ fn drive() -> Result<(), String> {
         screenshots: Vec::new(),
         key_log: Vec::new(),
         requests: RequestProfile::default(),
+        rendezvous,
     };
     server.arm(&BTreeMap::new())?;
     server.serve()
