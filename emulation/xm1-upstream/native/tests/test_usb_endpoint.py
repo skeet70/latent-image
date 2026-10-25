@@ -59,7 +59,7 @@ class USBEndpointSelectionTests(unittest.TestCase):
         endpoint = Endpoint()
         bridge = object.__new__(_FF80EndpointBridge)
         bridge.endpoint = endpoint
-        bridge.run_until = lambda label, predicate, budget: self.assertTrue(predicate(), label)
+        bridge.run_until = lambda label, predicate, budget, step=None: self.assertTrue(predicate(), label)
         bridge.run_for = lambda count: None
         payload = bytes(range(164))
 
@@ -97,7 +97,7 @@ class USBEndpointSelectionTests(unittest.TestCase):
         endpoint = Endpoint()
         bridge = object.__new__(_FF80EndpointBridge)
         bridge.endpoint = endpoint
-        def run_until(label, predicate, budget):
+        def run_until(label, predicate, budget, step=None):
             for _ in range(4):
                 if predicate():
                     return
@@ -128,7 +128,7 @@ class USBEndpointSelectionTests(unittest.TestCase):
 
         bridge = object.__new__(_FF80EndpointBridge)
         bridge.endpoint = Endpoint()
-        bridge.run_until = lambda label, predicate, budget: self.assertTrue(predicate(), label)
+        bridge.run_until = lambda label, predicate, budget, step=None: self.assertTrue(predicate(), label)
         bridge.run_for = lambda count: None
 
         reply = bridge.take_in(0x81, 36)
