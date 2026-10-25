@@ -6,7 +6,7 @@ The RAM-push and bulk-read results now supply a same-boot transient alternative 
 
 ## Available instruments and feature scope
 
-Ordinary-boot RAM access is hardware-observed with stored `0xf7 = 1`, including bounded `read-bulk` transfers while cardless at the shooting screen (E-BULK-READ-RUN1-150, E-BULK-READ-RUN2-150, E-BULK-READ-RUN3-150). Their [report](ff80-bulk-read.md) owns exact bytes, rates and exit checks. This removes the maintenance-only premise of E-AF-TRACE-TENSION-150. It does not establish AF operation with USB attached, a coherent image buffer or a recorded ordinary AF search.
+Ordinary-boot RAM access is hardware-observed with stored `0xf7 = 1`, including bounded `read-bulk` transfers while cardless at the shooting screen (E-BULK-READ-RUN1-150, E-BULK-READ-RUN2-150, E-BULK-READ-RUN3-150). Their [report](ff80-bulk-read.md) owns exact bytes, rates and exit checks. This removes the maintenance-only premise of E-AF-TRACE-TENSION-150. It does not establish AF operation with USB attached, a coherent image buffer or a recorded ordinary AF search. The first stock-first attempt instead encountered the card-error indication on S1 (E-AF-CARDLESS-S1-BLOCKED-150); [the cardless result and options](#cardless-s1-result-and-decision-options) now gate an ordinary AF trial.
 
 The existing console store admits AF request, lens and result messages (E-AF-TRACE-MECH-150). The characterized tick is about 10 ms; its source/rate must remain bound to the measured operating condition. It records message sends, not handler execution or sensor acquisition. The [console decoder](console-trace-instrument.md) owns layout, wrap and non-atomic-read limits. Maintenance captures show boot traffic, not a search (E-AF-LENS-TRAFFIC-150).
 
@@ -14,7 +14,7 @@ The retained emulator has a host image-source callback, while its X-M1 statistic
 
 ## The lane's questions, in order
 
-1. **Can the ordinary-boot stock search run while its observations remain readable?** Prepare decoders from existing captures, then use a separately approved small ordinary-AF session with post-attempt trace reads in the same boot. If USB inhibits AF, establish a safe same-boot alternative before relying on attachment changes. Do not revive the persistent recorder merely to retrieve events already in RAM.
+1. **Can the ordinary-boot stock search run while its observations remain readable?** Resolve the observed cardless S1/card-error gate before another ordinary-AF attempt, then use a separately approved small session with post-attempt trace reads in the same boot. USB-attached AF remains unestablished independently of the storage gate. Do not revive the persistent recorder merely to retrieve events already in RAM.
 2. **Can one fresh image/statistic observation be exported coherently?** Bind the active producer, format, source extent, completion and ownership. Include an obvious scene change to distinguish fresh sensor output from stale or synthetic bytes. A large non-atomic dump or a plausible picture is insufficient.
 3. **Which missing events require a hook?** Add only the observations needed to distinguish acquisition, delivery, accepted statistics, lens request, actual completion and optical settling. The first AF ring's ordered entries and state snapshots do not by themselves supply those times or freshness.
 4. **Can bounded stock lens operations automate measurements?** Validate units, safe bounds, completion, cancellation and one-controller ownership before reference sweeps or a host-controlled algorithm. Use small records/crops in the feedback loop and larger images between attempts.
@@ -22,7 +22,7 @@ The retained emulator has a host image-source callback, while its X-M1 statistic
 
 ## The trace-versus-search tension
 
-The store remains per boot and must be extracted before its initializer clears it. What changed is readability: the ordinary-boot transport now exists. The earlier conclusion that every search requires a RAM-to-card carry is superseded; the proposed same-boot trace experiment remains unperformed.
+The store remains per boot and must be extracted before its initializer clears it. What changed is readability: the ordinary-boot transport now exists. The earlier conclusion that every search requires a RAM-to-card carry is superseded. The first same-boot trace attempt reached a valid baseline but stopped at the cardless S1 error without post-attempt reads; it did not capture a search.
 
 The old persistent recorder is host-only/non-installable under [#50](https://github.com/skeet70/latent-image/issues/50) and is off the AF critical path. Preserve its useful ABI/residency findings and the repaired incident's evidence. Do not reflash to remove inert residue or assume the installed plain image is pristine; [RAM calibration](ram-calibration.md) records the bounded installed-byte differences.
 
@@ -41,9 +41,69 @@ The [snapshot/session contract](../spec/08-artifact-and-runtime-contracts.md#cam
 
 ## Cardless research and optional full-resolution capture
 
-Use cardless preview and statistics first. SD-slot repair is not a prerequisite for those observations or offline algorithm work; the unavailable recovery route is a run-specific risk and ordinary storage acceptance remains deferred under [#85](https://github.com/skeet70/latent-image/issues/85).
+Idle cardless preview, bounded reads of already available statistics and offline algorithm work remain separate from executing an AF search. The first ordinary S1 attempt was blocked by the card-error indication, so SD repair cannot be dismissed as irrelevant to AF execution. Spec §11.0's cardless-first premise is not established for ordinary AF-S on this body. The unavailable recovery route and ordinary storage acceptance remain separate limitations under [#85](https://github.com/skeet70/latent-image/issues/85).
 
 If preview cannot support independent quality, investigate a bounded fresh capture-to-RAM path with classified pixels, finite buffer ownership, complete cleanup and normal preview restoration. A no-card-guard bypass or global successful-write stub is not that path. The service imaging jobs in [#39](https://github.com/skeet70/latent-image/issues/39) remain alternatives with unproved exposure and adjacent storage hazards, not the default preview experiment.
+
+## Cardless S1 result and decision options
+
+### Hardware observation
+
+E-AF-CARDLESS-S1-BLOCKED-150 records the first stock-first block on 2026-10-25. The baseline met every required control value and contained 1245 contiguous console records, below the 7164-slot admission bound. The control snapshots' next indices were 1241 and 1249, so the extraction is not an atomic snapshot. At the requested ordinary half-press, the owner reported: “I can't, half press blinks the RED led, because of the card error.” Stock AF did not run according to that report. The block stopped without post-attempt reads or further camera commands.
+
+This is hardware-observed card-error behavior, not a captured instruction trace or proof that no internal AF message was emitted. There is no post store to associate new messages with the attempt. It does not establish USB as the cause. The body remained at its ordinary shooting screen. Do not repeat the cardless script below as if the feasibility premise had passed.
+
+### Firmware state and presentation
+
+The X-M1's resolved English layout ids distinguish `0x7e1` (“NO CARD”) from `0x7e2` (“CARD ERROR”). `0x0112ede0` maps reason `0x11`/`0x2d` to the former and `0x13`/`0x2e` to the latter. `0x01127e04` and `0x0112a550` read the cached warning at `[DAT_00940de4 + 0xbb94]` and select those messages for `0x11` and `0x13`.
+
+The older Run-3 capture binds `DAT_00940de4 = 0x00944580`, making that cached word `0x00950114`; its captured value is `0x13`, consistent with the reported CARD ERROR rather than a generic no-card label. This is another boot's non-atomic RAM observation, not the state at the attempted half-press. The cache is not a raw card-detect bit and its message consumer is not itself the S1 admission predicate. Clearing it globally would also affect unrelated error and mode consumers.
+
+#### S1 refusal predicate, not a raw presence check
+
+The bound check is a **media-error warning predicate**, not a direct SD-detect read. `0x00d0c87c` maps the cached media-status word `0x00918af8`: value 2 activates warning `0x11` (NO CARD), 3 activates `0x12` (CARD NOT INITIALIZED), and 4 activates `0x13` (CARD ERROR), through `0x00d3bc34`. `0x00632478`/`0x006322f0` maintain the active-warning bitset at `0x00950118`; `0x0063249c(id)` tests it. Run 3 contains media status 4 and active mask `0x00080000`, with warning `0x13` also present in the presentation-history bitset `0x00950128`. Those agree with its cached CARD ERROR word. Raw `KEY_CARD_DET` is a different input, code `0x11`, from port `0xfff89314` bit 7 ([input-map binding](input-map-150.md#4-code-to-control-map-and-firmware-comparison)); the identical number does not make that input the warning predicate.
+
+The ordinary S1 route is bound through the UI tables:
+
+| Boundary | X-M1 bytes and decoded effect |
+| --- | --- |
+| Press dispatch | `0x00c09d24` sees event `0x0007` in `0x00944580` and qualifier 0 in `0x00944588`, sets modal `0x4a` event 0 and calls `0x00bfb028` |
+| Shooting-state action | Modal `0x4a` has 38 states, matrix `0x00cea6e8`, action table `0x00d0150c`; state 4, observed at `0x0146761c` in Run 3, selects cell `0x00cea6f8 = 0x00010003`, action 3 at `0x00d01518 = 0x00c58c38` |
+| Common inhibition | At `0x00c58cc8`, word `0xeb033059` calls `0x00d24e34`; results above 1 branch at `0x00c58cdc` to the refusal arm `0x00c58d60` |
+| Card-error predicate | `0x00d24e34` calls `0x00d19324` at `0x00d25180`. That routine's first query, `0x00d1932c`-`0x00d1933c`, is `MOV r0,#0x13; BL 0x0063249c; CMP r0,#1; MOVEQ r0,#1; POPEQ {r11,pc}`. Its true result becomes inhibition result 3 at `0x00d25188` |
+| Refusal rather than normal request | Result 3 makes `0x00c58d68`-`0x00c58d70` call `0x00d14480`, `0x00d1513c` and `0x00d1d464`, then return. The normal input/request dispatch in this action is not reached |
+| Warning selection | `0x00d1d464 -> 0x00d1d440(0x13) -> 0x00d3bb18` selects the active warning in bitset `0x00950138` and marks the warning state changed. `0x00d3b64c` chooses the highest active warning, updates `0x00950114`, and requests its display, tone and indicator policy |
+
+For warning `0x13`, Run 3's five-byte policy at `0x009501af` is `03 01 01 00 00`. The indicator arm calls `0x00d39410(8)`, whose stock profile at `0x00d0a1c4` is `{0xc9,250,250}`; `0x00db50b0` forwards that as `0x006a4d84(1,3,250,250)`. These are stock request values, not a measured blink period or an independent pin-to-visible-red binding. The red blink itself is the owner's hardware observation.
+
+This establishes an S1-to-card-error refusal route with byte-backed tables and instructions. The attempted block did not read the current UI modal state or the media-warning words, so it cannot identify the executed branch on that attempt. The older state-4/media-error capture and the reported indication support this route without replacing that missing observation.
+
+#### Stock no-card alternatives
+
+The distinction between NO CARD and CARD ERROR matters. `0x00d19324` does **not** reject warning `0x11`; it rejects `0x13`, `0x14`, `0x12`, `0x15`, `0x18`, `0x17`, `0x36`, `0x1d`, `0x1b` and conditional warning 8. In still mode, a stock NO CARD-only state can therefore pass this S1 media-error predicate if the remaining inhibition checks pass. This is a source-bound candidate, not demonstrated cardless AF or proof that the damaged body's current error can be cleared by an ordinary setting.
+
+S2 uses a distinct action. `0x00c09d24` maps input 8/qualifier 0 to modal `0x4a` event 2; state 4 selects `0x00cea828 = 0x0001001c`, action 28 at `0x00d01580 = 0x00c595f4`. That action calls `0x00d24b58` in still mode, which independently calls the same `0x00d19324` and refuses its CARD ERROR result. In movie mode it instead calls `0x00d1944c`, which rejects both `0x00d19324` errors and NO CARD explicitly at `0x00d19480`-`0x00d19490`. A local S1-only interception must leave these paths unchanged.
+
+The X-M1 menu inventory offers SHOOT WITHOUT LENS, node `0x0077eae4`, property `0xa3`, not a bound SHOOT WITHOUT CARD setting. `0x00d24e34` reads `0xa3` for separate lens-state checks before the media-error predicate; changing it does not remove warning `0x13`. No supplied menu label establishes a no-card override.
+
+Switching to video does not avoid this S1 error predicate. Mode `0x2c` additionally rejects NO CARD through `0x0063249c(0x11)` at `0x00d25190`-`0x00d251b0`. Downstream movie/continuous AF actions exist, including `0x00e24ad0 -> 0x00df48b4(0x19,...)`, but their outer scheduling/admission path without recording is not closed. Likewise, `0x00e33c58`'s initial `0x00df5590(3,0)` call dispatches machine `0x48`; its return predicate cannot be inferred from the event number or from the absence of a literal card flag in the wrapper. These are research candidates, not an authorized or verified stock workaround. Playback has no bound fresh-AF route in the inspected paths.
+
+#### Minimal override review boundary
+
+If an override is chosen, the narrow candidate is the **S1 action's call site `0x00c58cc8`**, not the global warning bitset, media-status producer or generic `0x00d19324` routine. A range-checked one-word `BL` to an owned veneer can preserve the next instruction and limit interception to that S1 route. The veneer would have to preserve the complete stock inhibition decision except the specifically justified `0x13` refusal, retain all other lens/mode/error checks, and refuse an unbound context. Merely changing result 3 to success would also hide other failures and is not the proposed scope.
+
+Re-review must establish that only AF initiation becomes possible, that all S2/capture paths retain their independent media refusal, that no storage work or persistent setting change is introduced, and that entry/call/return state, cache publication, cancellation and session bounds remain valid. The separate state-4 S2 action above is one relevant guard, not a complete capture-exclusion proof across all UI states. No override bytes or revised ring hooks are implemented.
+
+### Decision options
+
+| Option | What it could unblock | Risks and advancement boundary |
+| --- | --- | --- |
+| Repair the SD slot | Ordinary stock AF with a usable card, plus capture/save/playback and the missing card-backed recovery route | Physical connector/board damage and repair quality are separate risks. A repair decision and its physical operation belong to the owner; afterward establish normal card recognition and ordinary behavior before AF comparison. This adds no firmware bypass. |
+| Establish a stock no-card AF route | A pure NO CARD-only still state passes the bound S1 media-error predicate, conditional on other gates | AF success and a safe stock transition from this body's CARD ERROR state remain unproved. No menu setting is bound to that transition; SHOOT WITHOUT LENS does not bypass it, and video adds a NO CARD refusal. Alternate background AF requires its outer admission path to be bound and must not start recording or media work. |
+| Review a minimal transient AF-only admission override | A narrowly scoped ordinary S1 experiment if the required stock route does not exist | This is a new privileged RAM mechanism, not approval to patch a global media-ready result. Bind the local predicate, all bypassed checks, task/PC safety, S2/capture exclusion, cancellation and bounded completion. Keep storage workers, filesystem results and persistent settings untouched; use the reviewed installer, independent review, scoped authorization, power removal and post-reboot stock-word reads. The broken slot still removes the recovery route. |
+
+These are alternatives for the owner's decision, not authorization or a selected implementation. An AF-only admission override would not implement fresh exposure capture-to-RAM, establish buffer ownership, replace storage completion or satisfy capture/save/playback acceptance. The rejected recorder remains unchanged; an admission override and any future necessary observation hook have distinct justification and review scopes.
+
 
 ## G4/G5-gated internal bindings (question three)
 
@@ -139,7 +199,7 @@ If the stock observations suffice, retain no hooks. If they do not, reduce the p
 
 ### Camera-run proposal, not authorization
 
-The next camera block is the stock-first feasibility question in [specification §11.0](../spec/05-autofocus.md#110-stock-first-sensor-backed-iteration) and the [first-session procedure](af-first-session-script.md), not installation of this prototype. Prepare the existing console decoder against saved captures, freeze the actual installed body/firmware and Viltrox AF 28mm F4.5 firmware 1.05, AF-S/one-region settings, household target, observation window and authorized read operations. Observe one ordinary stock AF and extract its console store in the same boot, after the attempt. If USB inhibits AF, stop and establish a safe same-boot alternative rather than assuming attachment changes preserve state. Keep empty, wrapped, torn and failed observations. Add a hook only for a named question the stock observations cannot answer.
+The stock-first block reached a valid baseline but not ordinary AF: cardless S1 produced the card-error indication. Resolve [the card-admission decision](#cardless-s1-result-and-decision-options) before proposing another attempt. After that decision, the feasibility question remains [specification §11.0](../spec/05-autofocus.md#110-stock-first-sensor-backed-iteration), not installation of this prototype: freeze the actual body/firmware, Viltrox AF 28mm F4.5 firmware 1.05, intended AF mode/region, household target, observation window and authorized read operations, then compare a completed ordinary AF attempt with its same-boot stock trace.
 
 Any later ring trial first requires the stock observation to establish which hooks, if any, provide indispensable information. A justified subset then needs a safe one-word replacement, revised checks, deliberate suspended-context cases, re-review by the same reviewer and a separate owner H2 go naming the revised contract and actual-base digest. The rejected `d3b8c1e` bytes must not be installed on the body. Stored nonzero `0xf7` and ordinary photography-capable ff80 must already exist. The broken SD slot removes a recovery route and prevents ordinary save/playback acceptance; neither the stock-first block nor the ring trial repairs that limitation.
 
@@ -325,6 +385,8 @@ This is a design option, not an instruction to implement three hooks now. Stock-
 The next emulator cases must resume a context saved at entry+4 with the first `PUSH` already reflected in its stack, and another already inside the stock body, across install. They must preserve the stock outcome and stack/register behavior while allowing the installation-boundary event gap. The one-word redirect removes this particular data-resumption hazard; it does not justify freeing wrapper memory while a saved PC can still reference it, prove safe hot unload, fix snapshot coherence, or establish the remaining AfRingReview findings. Physical session exit remains battery removal and post-reboot stock-word reads.
 
 ## Stock-first console observation block
+
+**Blocked after the first attempt:** baseline extraction passed, but cardless S1 produced the red card-error indication and the block stopped without post reads (E-AF-CARDLESS-S1-BLOCKED-150). The script below records the attempted operation; it is not a proposal to retry until the card-admission decision is resolved.
 
 ### Observed Run-3 controls and retained traffic
 
