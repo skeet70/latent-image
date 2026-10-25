@@ -4,44 +4,71 @@ use pyo3::prelude::*;
 
 const KEY_TABLE: usize = 0x0082_8120;
 const RELEASE_POLL_INSTRUCTIONS: u64 = 250_000;
-/// Menu key names and their KEY_TABLE rows.
-const KEY_ROWS: [(&str, usize); 11] = [
-    ("up", 14),
-    ("down", 15),
-    ("left", 16),
-    ("right", 17),
-    ("ok", 18),
-    ("q", 19),
-    ("back", 20),
-    ("play", 12),
-    ("fn", 13),
-    ("dial-push", 22),
-    ("half-press", 5),
+const KEY_ROWS: [KeyRow ; 11] = [
+    KeyRow::Up, KeyRow::Down, KeyRow::Left, KeyRow::Right, KeyRow::Ok,
+    KeyRow::Q, KeyRow::Back, KeyRow::Play, KeyRow::Fn, KeyRow::DialPush,
+    KeyRow::HalfPress,
 ];
 
-pub(crate) struct KeyRow(usize);
+#[derive(Clone, Copy)]
+pub(crate) enum KeyRow {
+    Up = 14,
+    Down = 15,
+    Left = 16,
+    Right = 17,
+    Ok = 18,
+    Q = 19,
+    Back = 20,
+    Play = 12,
+    Fn = 13,
+    DialPush = 22,
+    HalfPress = 5,
+}
+
+impl KeyRow {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Up => "up",
+            Self::Down => "down",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Ok => "ok",
+            Self::Q => "q",
+            Self::Back => "back",
+            Self::Play => "play",
+            Self::Fn => "fn",
+            Self::DialPush => "dial-push",
+            Self::HalfPress => "half-press",
+        }
+    }
+}
+
+pub(crate) enum DialDirection {
+    Left,
+    Right,
+}
 
 pub(crate) enum ReleaseInput {
     Key(KeyRow),
-    Subcommand,
+    Subcommand(DialDirection),
 }
 
 impl ReleaseInput {
     pub(crate) fn parse(key: &str) -> PyResult<Self> {
-        if matches!(key, "dial-left" | "dial-right") {
-            return Ok(Self::Subcommand);
+        match key {
+            "dial-left" => Ok(Self::Subcommand(DialDirection::Left)),
+            "dial-right" => Ok(Self::Subcommand(DialDirection::Right)),
+            _ => KEY_ROWS.into_iter()
+                .find(|row| row.name() == key)
+                .map(Self::Key)
+                .ok_or_else(|| PyValueError::new_err("Unknown X-M1 menu input")),
         }
-        KEY_ROWS
-            .iter()
-            .find(|(name, _)| *name == key)
-            .map(|(_, row)| Self::Key(KeyRow(*row)))
-            .ok_or_else(|| PyValueError::new_err("Unknown X-M1 menu input"))
     }
 
     fn released(&self, inner: &Inner) -> PyResult<bool> {
         let (address, expected) = match self {
-            Self::Key(KeyRow(row)) => (KEY_TABLE + row * 28 + 0x15, 0),
-            Self::Subcommand => (0x0095_5be9, 3),
+            Self::Key(row) => (KEY_TABLE + *row as usize * 28 + 0x15, 0),
+            Self::Subcommand(_) => (0x0095_5be9, 3),
         };
         if address >= inner.ram.len() {
             return Err(PyValueError::new_err("X-M1 input row is outside DRAM"));
@@ -49,13 +76,32 @@ impl ReleaseInput {
         // The owner thread pauses guest execution between release samples.
         Ok(unsafe { *inner.ram.as_ptr().add(address) } == expected)
     }
+
+    fn observe_incomplete(
+        &self,
+        session: &Bound<'_, PyAny>,
+        cap: u64,
+        used: u64,
+        instructions: u64,
+    ) -> PyResult<()> {
+        let (key, row) = match self {
+            Self::Key(row) => (row.name(), Some(*row as usize)),
+            Self::Subcommand(DialDirection::Left) => ("dial-left", None),
+            Self::Subcommand(DialDirection::Right) => ("dial-right", None),
+        };
+        session.call_method1(
+            "_observe_incomplete_key_release",
+            (key, row, cap, used, instructions),
+        )?;
+        Ok(())
+    }
 }
 
 /// Whether every key row's debounced level reads released.
 pub(crate) fn keys_released(inner: &Inner) -> PyResult<bool> {
     inner.paused().map_err(crate::error)?;
-    for (_, row) in KEY_ROWS {
-        if !ReleaseInput::Key(KeyRow(row)).released(inner)? {
+    for row in KEY_ROWS {
+        if !ReleaseInput::Key(row).released(inner)? {
             return Ok(false);
         }
     }
@@ -76,24 +122,28 @@ pub(crate) fn release(
     }
     let latched = match input {
         ReleaseInput::Key(_) => Some(!input.released(inner)?),
-        ReleaseInput::Subcommand => None,
+        ReleaseInput::Subcommand(_) => None,
     };
     let board = session.getattr("board")?;
     let start = board.getattr("instructions")?.extract::<u64>()?;
     loop {
-        let spent = board.getattr("instructions")?.extract::<u64>()? - start;
-        if input.released(inner)?
+        let instructions = board.getattr("instructions")?.extract::<u64>()?;
+        let spent = instructions - start;
+        if spent >= cap || input.released(inner)?
             || !board.getattr("failure")?.is_none()
             || !session.getattr("execution_error")?.is_none()
         {
+            if !input.released(inner)? {
+                input.observe_incomplete(session, cap, spent, instructions)?;
+            }
             return Ok(latched);
         }
-        if spent >= cap {
-            return Err(PyValueError::new_err("Key release did not latch before its release cap"));
-        }
         session.call_method1("_advance", ((cap - spent).min(RELEASE_POLL_INSTRUCTIONS),))?;
-        if board.getattr("instructions")?.extract::<u64>()? == start + spent {
-            return Err(PyValueError::new_err("Key release made no guest progress"));
+        if board.getattr("instructions")?.extract::<u64>()? == instructions {
+            if !input.released(inner)? {
+                input.observe_incomplete(session, cap, spent, instructions)?;
+            }
+            return Ok(latched);
         }
     }
 }

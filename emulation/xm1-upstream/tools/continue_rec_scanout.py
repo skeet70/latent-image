@@ -588,8 +588,7 @@ class _FF80EndpointBridge:
     KEEPALIVE_KEY = 'dial-push'
     # Each keepalive runs inside a host transfer's 5 s budget.
     KEEPALIVE_HOLD = 2_000_000
-    # E-XM1-KEY-RELEASE-CAPS-150: observed dial-push release2,754,219; cap margin45.2%.
-    KEEPALIVE_RELEASE = 4_000_000
+    KEEPALIVE_RELEASE = 2_000_000
 
     def keep_session_awake(self):
         self.use_timing_ratio(24, 'inactivity reset')
@@ -1131,6 +1130,11 @@ def _run_ram_push_server(board, session, output, bridge, attachment, checkpoint,
             elif command == 'transfer':
                 count, payload = bridge.transfer(request)
                 result = {'count': count, 'bytes': payload.hex()}
+            elif command == 'release-context':
+                if set(request) != {'command', 'segment'}:
+                    raise ValueError('release-context requires exactly a segment')
+                session.set_release_context(request['segment'])
+                result = {'segment': request['segment']}
             elif command == 'trace-sites':
                 bridge.set_trace_sites({**fixed_sites, **request['sites']})
                 result = {'sites': len(bridge.trace_sites)}
@@ -1531,6 +1535,11 @@ def _run_toggle_server(board, session, output, start):
                         or any(type(label) is not str for label in stop_on)):
                     raise ValueError('run takes 1..4000000000 instructions and a list of stop labels')
                 result = {'stopped_on': run(count, set(stop_on)), 'instructions': board.instructions}
+            elif command == 'release-context':
+                if set(request) != {'command', 'segment'}:
+                    raise ValueError('release-context requires exactly a segment')
+                session.set_release_context(request['segment'])
+                result = {'segment': request['segment']}
             elif command == 'key':
                 options = {field: request[field] for field in ('key', 'hold_instructions', 'release_instructions')
                            if field in request}

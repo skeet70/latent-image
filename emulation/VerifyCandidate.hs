@@ -22,6 +22,7 @@ import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Emulation.CandidateBaseline
 import Emulation.EmulatorSlot (SlotCount (..), SlotPolicy (..), slotPolicyFromEnvironment)
+import Emulation.KeyReleaseObservation (KeyReleaseObservation, readReleaseObservationLog, readReleaseObservationReceipt, writeReleaseObservationReceipt)
 import GHC.Clock (getMonotonicTime)
 import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectoryRecursive)
 import System.Environment (getArgs, getEnvironment, getExecutablePath, lookupEnv)
@@ -451,6 +452,9 @@ showExit (ExitFailure code) = "exit " ++ show code
 showSeconds :: Double -> String
 showSeconds value = show (fromIntegral (round (value * 10) :: Integer) / 10 :: Double) ++ " s"
 
+releaseLogPath :: RunDirectory -> Route -> FilePath
+releaseLogPath (RunDirectory run) route = run </> "key-releases" </> (routeName route ++ ".jsonl")
+
 -- | Emulator routes on @slots@ workers in 'emulatorOrder' and native suites
 -- on one worker, all from the start.
 schedule :: Context -> Int -> [(Route, FilePath)] -> IO (Map.Map Route Execution)
@@ -461,8 +465,14 @@ schedule context slots jobs = do
       native = [(route, receipt) | (route, receipt) <- jobs, routeHost route == NativeSuite]
   queue <- newMVar emulator
   let take' = modifyMVar queue (\pending -> pure (drop 1 pending, take 1 pending))
-      runRoute (route, receipt) = execute context lock (routeName route) (routeInvocation context route receipt)
-        >>= \execution -> modifyMVar_ results (pure . Map.insert route execution)
+      runRoute (route, receipt) = do
+        let invocation = routeInvocation context route receipt
+            observed = invocation {invocationEnvironment =
+              [ ("XM1_KEY_RELEASE_ROUTE", routeName route)
+              , ("XM1_KEY_RELEASE_LOG", releaseLogPath (contextRun context) route)
+              ] ++ invocationEnvironment invocation}
+        execution <- execute context lock (routeName route) observed
+        modifyMVar_ results (pure . Map.insert route execution)
       emulatorWorker = take' >>= \next -> case next of
         [] -> pure ()
         job : _ -> runRoute job >> emulatorWorker
@@ -483,6 +493,7 @@ data Outcome = Outcome
   , outcomeDifferences :: [Difference]
   , outcomeBaseline :: Maybe FilePath
   , outcomeCounterpart :: Maybe (Route, FilePath)
+  , outcomeIncompleteReleases :: [KeyReleaseObservation]
   }
 
 differenceJson :: Difference -> Value
@@ -504,6 +515,7 @@ outcomeJson outcome = object
    , "counterpart" .= fmap (\(route, path) -> object ["route" .= routeName route, "receipt" .= path]) (outcomeCounterpart outcome)
    , "problem" .= outcomeProblem outcome
    , "differences" .= length (outcomeDifferences outcome)
+   , "incomplete_releases" .= outcomeIncompleteReleases outcome
    , "first_difference" .= fmap differenceJson (case outcomeDifferences outcome of first : _ -> Just first; [] -> Nothing)
    ] ++ maybe [] executionFields (outcomeExecution outcome))
 
@@ -552,11 +564,11 @@ judge judging route execution = do
         _ -> Nothing
   present <- doesDirectoryExist receipt
   case routeCheck route of
-    _ | not present -> pure (Outcome route receipt execution "fail" (Just "receipt directory is missing") [] Nothing Nothing)
-    Reference -> pure (Outcome route receipt execution "reference" failedRun [] Nothing Nothing)
+    _ | not present -> pure (Outcome route receipt execution "fail" (Just "receipt directory is missing") [] Nothing Nothing [])
+    Reference -> pure (Outcome route receipt execution "reference" failedRun [] Nothing Nothing [])
     AgainstCounterpart counterpart requireExit -> do
       let reference = judgingReceipt judging counterpart
-          outcome result problem = Outcome route receipt execution result problem [] Nothing (Just (counterpart, reference))
+          outcome result problem = Outcome route receipt execution result problem [] Nothing (Just (counterpart, reference)) []
       referencePresent <- doesDirectoryExist reference
       if not referencePresent then pure (outcome "fail" (Just ("counterpart " ++ routeName counterpart ++ " has no receipt"))) else do
         (code, out, err) <- readProcessWithExitCode (judgingCompare judging) [reference, receipt] ""
@@ -572,7 +584,7 @@ judge judging route execution = do
             ++ [case reported of first : _ : _ -> last reported ++ ", first " ++ first; _ -> unwords (lines (out ++ err))])))
     AgainstBaseline spec -> do
       let baselinePath = judgingBaselines judging </> (routeName route ++ ".json")
-          outcome result problem differences = Outcome route receipt execution result problem differences (Just baselinePath) Nothing
+          outcome result problem differences = Outcome route receipt execution result problem differences (Just baselinePath) Nothing []
       observed <- observe spec (ReceiptDirectory receipt)
       if judgingRecord judging
         then case failedRun of
@@ -643,7 +655,7 @@ main = do
     (map fujimodVariant [volatileScenario, classicChromeTrajectories, classicChromeIconTrajectories])
   clockStart <- getMonotonicTime
   executions <- if null toExecute then pure Map.empty else do
-    forM_ ["receipts", "logs", "builds", "runtimes"] $ \directory -> createDirectory (run </> directory)
+    forM_ ["receipts", "logs", "builds", "runtimes", "key-releases"] $ \directory -> createDirectory (run </> directory)
     base <- outputBase executable
     policy <- slotPolicyFromEnvironment
     let SlotCount slots = slotCount policy
@@ -655,7 +667,16 @@ main = do
         | isJust (lookup route receipts) = Nothing
         | otherwise = maybe (Map.lookup route earlier) Just (Map.lookup route executions)
       judging = Judging (optionRecord options) baselines (runfiles </> "_main" </> "emulation" </> "e2e-observation-compare") receiptOf run
-  outcomes <- forM selected $ \route -> judge judging route (executionOf route)
+  outcomes <- forM selected $ \route -> do
+    outcome <- judge judging route (executionOf route)
+    let receipt = receiptOf route </> "key-release-observations.json"
+    observations <- if route `elem` toExecute
+      then do
+        records <- readReleaseObservationLog (releaseLogPath (RunDirectory run) route)
+        writeReleaseObservationReceipt receipt records
+        pure records
+      else readReleaseObservationReceipt receipt
+    pure outcome {outcomeIncompleteReleases = observations}
   forM_ outcomes $ \outcome -> when (outcomeRoute outcome `elem` toExecute && outcomeResult outcome `elem` ["pass", "recorded", "reference"]) $
     prune (RunDirectory run) outcome
   forM_ outcomes $ \outcome -> unless (null (outcomeDifferences outcome)) $ do

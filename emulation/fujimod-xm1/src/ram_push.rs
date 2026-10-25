@@ -7,7 +7,7 @@ use fujimod_xm1::adjustment::AdjustmentNand;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, load_card, menu_value, read, restore, sha256, write};
 use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, encode_hex};
 use fujimod_xm1::guest::{DialTurn, ModeDialPosition, Press, RouteKey};
-use fujimod_xm1::machine::{KeyPulse, Machine, MENU_PULSE};
+use fujimod_xm1::machine::{KeyPulse, Machine, MENU_PULSE, ReleaseSegment};
 use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::sd_host::{Backing, MediaImage};
 use serde::{Deserialize, Serialize};
@@ -280,6 +280,7 @@ enum Request {
     TraceSites { sites: BTreeMap<String, String> },
     TraceHits { from: usize },
     Key { key: String, hold_instructions: Option<u64>, release_instructions: Option<u64>, settle_instructions: Option<u64> },
+    ReleaseContext { segment: Option<ReleaseSegment> },
     ModeDial { position: ModeDialPosition },
     ReadMemory { address: u64, count: usize },
     Capture { label: String },
@@ -295,6 +296,7 @@ enum RequestKind {
     TraceSites,
     TraceHits,
     Key,
+    ReleaseContext,
     ModeDial,
     ReadMemory,
     Capture,
@@ -310,6 +312,7 @@ impl Request {
             Request::TraceSites { .. } => RequestKind::TraceSites,
             Request::TraceHits { .. } => RequestKind::TraceHits,
             Request::Key { .. } => RequestKind::Key,
+            Request::ReleaseContext { .. } => RequestKind::ReleaseContext,
             Request::ModeDial { .. } => RequestKind::ModeDial,
             Request::ReadMemory { .. } => RequestKind::ReadMemory,
             Request::Capture { .. } => RequestKind::Capture,
@@ -411,6 +414,10 @@ impl Server {
                     return Err("trace-hits requires a hit index within the recorded hits".into());
                 }
                 json!({"count": hits.len(), "hits": &hits[from..]})
+            }
+            Request::ReleaseContext { segment } => {
+                self.bridge.machine.set_release_context(segment);
+                json!({})
             }
             Request::Key { key, hold_instructions, release_instructions, settle_instructions } => {
                 let route = Press::parse(&key)?;

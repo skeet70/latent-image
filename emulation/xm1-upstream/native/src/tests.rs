@@ -156,11 +156,17 @@ struct SampledKeySession {
     machine: Py<PyAny>,
     changes_at: u64,
     level: u8,
+    stalled: bool,
+    #[pyo3(get)]
+    release_observations: Py<PyList>,
 }
 
 #[pymethods]
 impl SampledKeySession {
     fn _advance(&self, py: Python<'_>, limit: u64) -> PyResult<()> {
+        if self.stalled {
+            return Ok(());
+        }
         let board = self.board.bind(py);
         let next = board.getattr("instructions")?.extract::<u64>()? + limit;
         board.setattr("instructions", next)?;
@@ -172,10 +178,24 @@ impl SampledKeySession {
         }
         Ok(())
     }
+
+    fn _observe_incomplete_key_release(
+        &self,
+        py: Python<'_>,
+        key: &str,
+        row: Option<usize>,
+        cap: u64,
+        instructions_used: u64,
+        instructions: u64,
+    ) -> PyResult<()> {
+        self.release_observations.bind(py).append(
+            (key, row, cap, instructions_used, instructions),
+        )
+    }
 }
 
 #[test]
-fn key_release_requires_the_debounced_edge_before_its_cap() {
+fn key_release_returns_its_latched_state_and_observes_only_incomplete_releases() {
     Python::initialize();
     Python::attach(|py| {
         let module = PyModule::new(py, "_native").unwrap();
@@ -188,12 +208,15 @@ fn key_release_requires_the_debounced_edge_before_its_cap() {
         let board = py.import("types").unwrap().getattr("SimpleNamespace").unwrap().call0().unwrap();
         board.setattr("instructions", 0u64).unwrap();
         board.setattr("failure", py.None()).unwrap();
+        let observations = PyList::empty(py);
         let session = Py::new(py, SampledKeySession {
             board: board.clone().unbind(),
             execution_error: None,
             machine: machine.clone().unbind(),
             changes_at: 400_000,
             level: 0,
+            stalled: false,
+            release_observations: observations.clone().unbind(),
         }).unwrap();
         machine.call_method1(
             "mem_write", (0, 0x0082_82d9u64, PyBytes::new(py, &[1])),
@@ -209,17 +232,48 @@ fn key_release_requires_the_debounced_edge_before_its_cap() {
                 .unwrap().extract::<Option<bool>>().unwrap(),
             Some(false),
         );
+        assert!(observations.is_empty());
         session.borrow_mut(py).changes_at = u64::MAX;
         machine.call_method1(
             "mem_write", (0, 0x0082_82d9u64, PyBytes::new(py, &[1])),
         ).unwrap();
         let before_expired_release = board.getattr("instructions").unwrap().extract::<u64>().unwrap();
-        let refused = machine.call_method1("release_menu_key", (&session, "down", 500_000u64))
-            .unwrap_err();
-        assert!(refused.is_instance_of::<pyo3::exceptions::PyValueError>(py));
+        assert_eq!(
+            machine.call_method1("release_menu_key", (&session, "down", 500_000u64))
+                .unwrap().extract::<Option<bool>>().unwrap(),
+            Some(true),
+        );
         assert_eq!(
             board.getattr("instructions").unwrap().extract::<u64>().unwrap(),
             before_expired_release + 500_000,
+        );
+        assert_eq!(
+            observations.extract::<Vec<(String, Option<usize>, u64, u64, u64)>>().unwrap(),
+            vec![("down".into(), Some(15), 500_000, 500_000, before_expired_release + 500_000)],
+        );
+        observations.call_method0("clear").unwrap();
+        session.borrow_mut(py).stalled = true;
+        let stopped_at = board.getattr("instructions").unwrap().extract::<u64>().unwrap();
+        assert_eq!(
+            machine.call_method1("release_menu_key", (&session, "down", 500_000u64))
+                .unwrap().extract::<Option<bool>>().unwrap(),
+            Some(true),
+        );
+        assert_eq!(board.getattr("instructions").unwrap().extract::<u64>().unwrap(), stopped_at);
+        assert_eq!(
+            observations.extract::<Vec<(String, Option<usize>, u64, u64, u64)>>().unwrap(),
+            vec![("down".into(), Some(15), 500_000, 0, stopped_at)],
+        );
+        observations.call_method0("clear").unwrap();
+        session.borrow_mut(py).stalled = false;
+        assert_eq!(
+            machine.call_method1("release_menu_key", (&session, "dial-left", 500_000u64))
+                .unwrap().extract::<Option<bool>>().unwrap(),
+            None,
+        );
+        assert_eq!(
+            observations.extract::<Vec<(String, Option<usize>, u64, u64, u64)>>().unwrap(),
+            vec![("dial-left".into(), None, 500_000, 500_000, stopped_at + 500_000)],
         );
     });
 }

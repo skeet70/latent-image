@@ -7,7 +7,7 @@ use fujimod_xm1::adjustment::AdjustmentNand;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, menu_value, read, sha256, write};
 use fujimod_xm1::ff80::{Ff80, RendezvousInputs, SET_ADDRESS_RECOVERY, Transfer, encode_hex};
 use fujimod_xm1::guest::{RouteKey, set_adc};
-use fujimod_xm1::machine::{KeyPulse, MENU_PULSE};
+use fujimod_xm1::machine::{KeyPulse, MENU_PULSE, ReleaseSegment};
 use fujimod_xm1::run::{self, RunDocument};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -187,6 +187,7 @@ enum Request {
     State,
     Run { instructions: u64, #[serde(default)] stop_on: Vec<String> },
     Key { key: RouteKey, hold_instructions: Option<u64>, release_instructions: Option<u64> },
+    ReleaseContext { segment: Option<ReleaseSegment> },
     Press { key: RouteKey },
     Release,
     Adc { channel: usize, sample: u16 },
@@ -343,6 +344,10 @@ impl Server {
                 }
                 let stopped = self.run(instructions, stop_on.into_iter().collect())?;
                 json!({"stopped_on": stopped, "instructions": self.bridge.machine.instructions()})
+            }
+            Request::ReleaseContext { segment } => {
+                self.bridge.machine.set_release_context(segment);
+                json!({})
             }
             Request::Key { key: route, hold_instructions, release_instructions } => {
                 let pulse = match (hold_instructions, release_instructions) {
