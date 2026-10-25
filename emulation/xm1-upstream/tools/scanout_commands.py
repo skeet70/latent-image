@@ -24,14 +24,15 @@ class _FF80CommandBridge(_FF80EndpointBridge):
     # (emulated).
     KEEPALIVE_KEY = 'dial-push'
     # Each keepalive runs inside a host transfer's 5 s budget.
-    KEEPALIVE_PULSE = 2_000_000
+    KEEPALIVE_HOLD = 2_000_000
+    KEEPALIVE_RELEASE = 2_000_000
 
     def keep_session_awake(self):
         self.use_timing_ratio(24, 'inactivity reset')
         before = self.board.instructions
         state = self.session.key({'key': self.KEEPALIVE_KEY, 'render': False,
-                                  'hold_instructions': self.KEEPALIVE_PULSE,
-                                  'release_instructions': self.KEEPALIVE_PULSE})
+                                  'hold_instructions': self.KEEPALIVE_HOLD,
+                                  'release_instructions': self.KEEPALIVE_RELEASE})
         if self.board.failure is not None or self.session.execution_error is not None:
             raise RuntimeError(f'inactivity reset failed: {state}')
         self.keepalive_inputs.append({
@@ -396,6 +397,11 @@ def _run_ram_push_server(board, session, output, bridge, attachment, checkpoint,
             elif command == 'transfer':
                 count, payload = bridge.transfer(request)
                 result = {'count': count, 'bytes': payload.hex()}
+            elif command == 'release-context':
+                if set(request) != {'command', 'segment'}:
+                    raise ValueError('release-context requires exactly a segment')
+                session.set_release_context(request['segment'])
+                result = {'segment': request['segment']}
             elif command == 'trace-sites':
                 bridge.set_trace_sites({**fixed_sites, **request['sites']})
                 result = {'sites': len(bridge.trace_sites)}

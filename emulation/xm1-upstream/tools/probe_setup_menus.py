@@ -16,6 +16,7 @@ from pathlib import Path
 import sys
 import struct
 from uuid import uuid4
+from typing import NewType
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -49,6 +50,33 @@ def default_key_pulse(key: MenuKey) -> KeyPulse:
     if key in (MenuKey.DIAL_LEFT, MenuKey.DIAL_RIGHT):
         return DIAL_PULSE
     return UNMEASURED_PULSE
+
+
+ReleaseRoute = NewType('ReleaseRoute', str)
+ReleaseSegment = NewType('ReleaseSegment', str)
+ReleaseRow = NewType('ReleaseRow', int)
+GuestInstructions = NewType('GuestInstructions', int)
+
+
+@dataclass(frozen=True)
+class KeyReleaseContext:
+    route: ReleaseRoute | None
+    segment: ReleaseSegment | None = None
+
+
+@dataclass(frozen=True)
+class KeyReleaseObservation:
+    context: KeyReleaseContext
+    key: MenuKey
+    row: ReleaseRow | None
+    cap: GuestInstructions
+    instructions_used: GuestInstructions
+    instructions: GuestInstructions
+
+    def as_json(self):
+        return {'route': self.context.route, 'segment': self.context.segment,
+                'key': self.key.value, 'row': self.row, 'cap': self.cap,
+                'instructions_used': self.instructions_used, 'instructions': self.instructions}
 
 
 class _ObservationWindow(Enum):
@@ -119,6 +147,12 @@ class MenuSession(WarmScanoutSession):
         output = output or ROOT / '.tools/menu-probes' / uuid4().hex[:12]
         super().__init__(board, output, options=options)
         self.inputs = MenuInputs(board)
+        route = os.environ.get('XM1_KEY_RELEASE_ROUTE')
+        self.key_release_context = KeyReleaseContext(None if route is None else ReleaseRoute(route))
+        self.key_release_observations: list[KeyReleaseObservation] = []
+        log_path = os.environ.get('XM1_KEY_RELEASE_LOG')
+        self._key_release_log = None if log_path is None else Path(log_path)
+        self.key_release_log_errors: list[str] = []
         if firmware is None:
             from tools import firmware_registry as registry
             selected = self.options.get('firmware_profile') or {}
@@ -130,6 +164,28 @@ class MenuSession(WarmScanoutSession):
         self.firmware = dict(firmware, can_replace=bool(os.environ.get('XM1_VIEWER_VALIDATOR')))
         from x70_native.provenance import provenance
         self._execution_provenance = provenance()
+
+    def set_release_context(self, segment: str | None):
+        if segment is not None and type(segment) is not str:
+            raise ValueError('Release context segment must be text or null')
+        self.key_release_context = KeyReleaseContext(
+            self.key_release_context.route, None if segment is None else ReleaseSegment(segment))
+
+    def _observe_incomplete_key_release(self, key: str, row: int | None, cap: int,
+                                        instructions_used: int, instructions: int):
+        observation = KeyReleaseObservation(
+            self.key_release_context, MenuKey.parse(key), None if row is None else ReleaseRow(row),
+            GuestInstructions(cap), GuestInstructions(instructions_used), GuestInstructions(instructions))
+        self.key_release_observations.append(observation)
+        if self._key_release_log is not None:
+            try:
+                with self._key_release_log.open('a') as output:
+                    output.write(json.dumps(observation.as_json(), separators=(',', ':')) + '\n')
+            except OSError as error:
+                self.key_release_log_errors.append(str(error))
+
+    def key_release_observations_json(self):
+        return [observation.as_json() for observation in self.key_release_observations]
 
     @classmethod
     def cold_boot(cls, options, output, *, firmware, retained_from=None):

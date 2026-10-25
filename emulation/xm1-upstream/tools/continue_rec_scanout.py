@@ -665,6 +665,11 @@ def _run_toggle_server(board, session, output, start):
                         or any(type(label) is not str for label in stop_on)):
                     raise ValueError('run takes 1..4000000000 instructions and a list of stop labels')
                 result = {'stopped_on': run(count, set(stop_on)), 'instructions': board.instructions}
+            elif command == 'release-context':
+                if set(request) != {'command', 'segment'}:
+                    raise ValueError('release-context requires exactly a segment')
+                session.set_release_context(request['segment'])
+                result = {'segment': request['segment']}
             elif command == 'key':
                 options = {field: request[field] for field in ('key', 'hold_instructions', 'release_instructions')
                            if field in request}

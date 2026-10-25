@@ -13,6 +13,9 @@ module EmulatorUsb
   , emulatorTraceSites
   , TraceHit (..)
   , emulatorTraceHits
+  , ReleaseSegment
+  , releaseSegment
+  , emulatorReleaseContext
   , emulatorKey
   , KeyPulse (..)
   , KeyTiming (..)
@@ -43,6 +46,7 @@ import System.Exit (ExitCode (..))
 import System.IO
 import System.Process
 import FujiAF.Transport
+import Emulation.KeyReleaseObservation (ReleaseSegment, releaseSegment)
 import qualified FujiAF.Broker as P
 
 data Emulator = Emulator
@@ -96,6 +100,11 @@ rpc = bridgeRpc . exchangeLine
 -- Caller holds emulatorLock.
 rpcLocked :: Emulator -> Value -> IO (M.KeyMap Value)
 rpcLocked = bridgeRpc . exchangeLocked
+
+emulatorReleaseContext :: Emulator -> Maybe ReleaseSegment -> IO ()
+emulatorReleaseContext emulator segment = do
+  _ <- rpc emulator (object ["command" .= ("release-context" :: T.Text), "segment" .= segment])
+  pure ()
 
 bridgeRpc :: BridgeExchange -> Value -> IO (M.KeyMap Value)
 bridgeRpc exchange request = do

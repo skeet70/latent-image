@@ -1265,6 +1265,7 @@ haskell_library(
     src_strip_prefix = ".",
     visibility = ["//transport:__pkg__"],
     deps = [
+        ":key-release-observations",
         "//broker:core",
         "//host:aeson",
         "//host:base",
@@ -1360,6 +1361,36 @@ haskell_binary(
 )
 
 haskell_library(
+    name = "key-release-observations",
+    srcs = ["Emulation/KeyReleaseObservation.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+    ],
+)
+
+haskell_test(
+    name = "key-release-observation-tests",
+    size = "small",
+    srcs = ["KeyReleaseObservationTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":key-release-observations",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
+
+haskell_library(
     name = "candidate-baseline-lib",
     srcs = ["Emulation/CandidateBaseline.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
@@ -1412,6 +1443,7 @@ haskell_binary(
     deps = [
         ":candidate-baseline-lib",
         ":emulator-slot-lib",
+        ":key-release-observations",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

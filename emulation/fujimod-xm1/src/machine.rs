@@ -7,18 +7,70 @@ use crate::run::RunDocument;
 use crate::sd_host::{Contacts, RetainedCard, SdHost};
 use crate::trace::TraceSites;
 use fujimod_emulator::session::Session;
+use serde::{Deserialize, Serialize};
+use std::io::Write;
+use std::path::PathBuf;
 
 const RELEASE_POLL: u64 = 250_000;
 const PHASE_POLL: u64 = 20_000;
 /// Longest run between two guard scans.
 const GUARD_WINDOW: u64 = 1_000_000;
 
-/// Instruction budgets of one key press: held, then at most `release` until
-/// the firmware has debounced the release.
+/// Fixed hold and debounced-release cap in guest instructions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeyPulse {
     pub hold: u64,
     pub release: u64,
+}
+
+pub const MENU_PULSE: KeyPulse = KeyPulse { hold: 4_000_000, release: 6_000_000 };
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(transparent)]
+struct ReleaseRoute(String);
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct ReleaseSegment(String);
+
+#[derive(Default, Debug, Serialize)]
+struct ReleaseContext {
+    route: Option<ReleaseRoute>,
+    segment: Option<ReleaseSegment>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(transparent)]
+struct GuestInstructions(u64);
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(transparent)]
+struct KeyRow(u64);
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum GpioReleaseKey {
+    DialPush,
+    DialLeft,
+    DialRight,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(untagged)]
+enum ReleaseKey {
+    Adc(RouteKey),
+    Gpio(GpioReleaseKey),
+}
+
+#[derive(Debug, Serialize)]
+pub struct KeyReleaseObservation {
+    route: Option<ReleaseRoute>,
+    segment: Option<ReleaseSegment>,
+    key: ReleaseKey,
+    row: Option<KeyRow>,
+    cap: GuestInstructions,
+    instructions_used: GuestInstructions,
+    instructions: GuestInstructions,
 }
 
 pub struct Machine {
@@ -28,6 +80,9 @@ pub struct Machine {
     pub failure: Option<String>,
     pub traces: TraceSites,
     pub guard: Guard,
+    pub key_release_observations: Vec<KeyReleaseObservation>,
+    release_context: ReleaseContext,
+    release_log: Option<PathBuf>,
 }
 
 pub fn instructions(session: &Session) -> u64 {
@@ -39,7 +94,44 @@ impl Machine {
     pub fn new(document: RunDocument, session: Session) -> Result<Self, String> {
         let mut guard = Guard::default();
         guard.arm(&session.board)?;
-        Ok(Self { document, session, failure: None, traces: TraceSites::default(), guard })
+        Ok(Self {
+            document, session, failure: None, traces: TraceSites::default(), guard,
+            key_release_observations: Vec::new(),
+            release_context: ReleaseContext {
+                route: std::env::var("XM1_KEY_RELEASE_ROUTE").ok().map(ReleaseRoute),
+                segment: None,
+            },
+            release_log: std::env::var_os("XM1_KEY_RELEASE_LOG").map(PathBuf::from),
+        })
+    }
+
+    pub fn set_release_context(&mut self, segment: Option<ReleaseSegment>) {
+        self.release_context.segment = segment;
+    }
+
+    fn observe_incomplete_release(&mut self, key: ReleaseKey, row: Option<KeyRow>, cap: u64, start: u64) {
+        let instructions = self.instructions();
+        let observation = KeyReleaseObservation {
+            route: self.release_context.route.clone(),
+            segment: self.release_context.segment.clone(),
+            key,
+            row,
+            cap: GuestInstructions(cap),
+            instructions_used: GuestInstructions(instructions - start),
+            instructions: GuestInstructions(instructions),
+        };
+        if let Some(path) = &self.release_log {
+            let result = (|| -> Result<(), String> {
+                let mut line = serde_json::to_vec(&observation).map_err(|error| error.to_string())?;
+                line.push(b'\n');
+                std::fs::OpenOptions::new().create(true).append(true).open(path)
+                    .and_then(|mut file| file.write_all(&line)).map_err(|error| error.to_string())
+            })();
+            if let Err(error) = result {
+                eprintln!("{}: key-release observation: {error}", path.display());
+            }
+        }
+        self.key_release_observations.push(observation);
     }
 
     /// Removes host instrumentation before a session checkpoint.
@@ -82,7 +174,7 @@ impl Machine {
     pub fn dial_push(&mut self, pulse: KeyPulse) -> Result<(), String> {
         self.require_running()?;
         let key = self.document.firmware.dial_push(&self.session)?;
-        let (port, pin, pressed) = (key.port, key.pin, key.pressed_high);
+        let (port, pin, pressed, row) = (key.port, key.pin, key.pressed_high, KeyRow(key.row));
         let gpio = self.document.gpio.0.clone();
         self.session.gpio(&gpio, port, pin, pressed)?;
         self.run(pulse.hold);
@@ -91,6 +183,7 @@ impl Machine {
         while self.failure.is_none() && !self.document.firmware.dial_push_released(&self.session)? {
             let spent = self.instructions() - start;
             if spent >= pulse.release {
+                self.observe_incomplete_release(ReleaseKey::Gpio(GpioReleaseKey::DialPush), Some(row), pulse.release, start);
                 break;
             }
             self.run((pulse.release - spent).min(RELEASE_POLL));
@@ -138,7 +231,14 @@ impl Machine {
                 return Err(format!("the sub-command scanner did not sample phase {phase:02b}"));
             }
         }
-        self.run_until_sampled(RELEASED, pulse.release)?;
+        let start = self.instructions();
+        if !self.run_until_sampled(RELEASED, pulse.release)? {
+            let key = match turn {
+                DialTurn::Left => GpioReleaseKey::DialLeft,
+                DialTurn::Right => GpioReleaseKey::DialRight,
+            };
+            self.observe_incomplete_release(ReleaseKey::Gpio(key), None, pulse.release, start);
+        }
         self.require_running()
     }
 
@@ -170,6 +270,8 @@ impl Machine {
         while self.failure.is_none() && !self.document.firmware.released(&self.session, key)? {
             let spent = self.instructions() - start;
             if spent >= pulse.release {
+                let row = KeyRow(self.document.firmware.binding(key)?.row);
+                self.observe_incomplete_release(ReleaseKey::Adc(key), Some(row), pulse.release, start);
                 break;
             }
             self.run((pulse.release - spent).min(RELEASE_POLL));

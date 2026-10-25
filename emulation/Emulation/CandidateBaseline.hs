@@ -12,6 +12,8 @@ module Emulation.CandidateBaseline
   , ExclusionReason (..)
   , Exclusion (..)
   , ObservationSpec (..)
+  , flashBootSpec
+  , instructionTimingExclusions
   , Segment (..)
   , FieldName (..)
   , Field (..)
@@ -79,6 +81,23 @@ data ObservationSpec = ObservationSpec
   { observedFiles :: [FilePattern]
   , observationExclusions :: [Exclusion]
   }
+
+-- Absolute, milestone and trace-hit instruction counters measure execution timing.
+instructionTimingExclusions :: FilePattern -> [Exclusion]
+instructionTimingExclusions file =
+  [ Exclusion file (pointerPattern pointer) Timing
+  | pointer <- ["/instructions", "/milestones/*/instructions", "/observations/*/trace_hits/*/instructions"]
+  ]
+
+flashBootSpec :: ObservationSpec
+flashBootSpec = ObservationSpec
+  [filePattern "flash-boot-receipt.json"]
+  ([ omit "/emulator_source" CandidateIdentity
+   , omit "/firmware/path" RunLocation
+   , omit "/frame_png" RunLocation
+   ] ++ instructionTimingExclusions (filePattern "flash-boot-receipt.json"))
+  where
+    omit pointer = Exclusion (filePattern "flash-boot-receipt.json") (pointerPattern pointer)
 
 data Segment = Key T.Text | Index Int
   deriving (Eq, Ord, Show)

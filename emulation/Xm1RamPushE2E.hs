@@ -714,6 +714,8 @@ runSegments :: SegmentRunner -> [Segment] -> IO [Maybe Value]
 runSegments runner = mapM $ \segment -> runnerTimed runner ("segment " <> segmentPhase segment) $ do
   let emulator = runnerEmulator runner
       stop = runnerStop runner
+  context <- either (ioError . userError) pure (releaseSegment (segmentPhase segment))
+  emulatorReleaseContext emulator (Just context)
   (before, _) <- readIORef (runnerHits runner) >>= emulatorTraceHits emulator
   forM_ (segmentModeDial segment) $ \position -> emulatorModeDial emulator position
   observed <- if segmentObserve segment
@@ -761,6 +763,7 @@ runSegments runner = mapM $ \segment -> runnerTimed runner ("segment " <> segmen
   unless (segmentObserve segment || drawn == sort (nub (segmentMessages segment))) $
     stop (segmentPhase segment) ("menu messages drawn " ++ show (map hexAddress drawn)
       ++ ", expected " ++ show (map hexAddress (segmentMessages segment)))
+  emulatorReleaseContext emulator Nothing
   pure captured
 
 -- | The cardless bridge from this binary's runfiles; //emulation:xm1-viewer lists it as data.
