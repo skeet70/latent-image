@@ -19,6 +19,7 @@ import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getHomeDi
 import System.Environment (getExecutablePath, lookupEnv, setEnv)
 import System.FilePath ((</>))
 import System.IO (Handle, IOMode (ReadMode, WriteMode), SeekMode (AbsoluteSeek), hFlush, hPutStrLn, stderr, withBinaryFile)
+import System.IO.Error (catchIOError, isDoesNotExistError)
 import System.Posix.Files (createSymbolicLink, setFileMode)
 import System.Posix.IO (LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setLock)
 import System.Posix.Process (executeFile, getProcessID)
@@ -125,11 +126,18 @@ pinExecutable directory = do
   pid <- getProcessID
   executable <- getExecutablePath
   let pinned = directory </> ("pin-" ++ show pid)
+  -- A crashed run with a reused PID can leave either path behind.
+  removeIfPresent pinned
+  removeIfPresent (pinned ++ ".runfiles")
   withBinaryFile "/proc/self/exe" ReadMode $ \running ->
     withBinaryFile pinned WriteMode $ \copy -> copyChunks running copy
   setFileMode pinned 0o700
   linkRunfiles executable pinned
   pure pinned
+
+removeIfPresent :: FilePath -> IO ()
+removeIfPresent path = removeFile path `catchIOError` \problem ->
+  unless (isDoesNotExistError problem) (ioError problem)
 
 copyChunks :: Handle -> Handle -> IO ()
 copyChunks source target = do
