@@ -1172,3 +1172,67 @@ haskell_binary(
         "//host:vector",
     ],
 )
+
+haskell_library(
+    name = "candidate-baseline-lib",
+    srcs = ["Emulation/CandidateBaseline.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_test(
+    name = "candidate-baseline-tests",
+    size = "small",
+    srcs = ["CandidateBaselineTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":candidate-baseline-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+    ],
+)
+
+# Every recorded emulator route and native case suite against private baselines.
+haskell_binary(
+    name = "verify-candidate",
+    srcs = ["VerifyCandidate.hs"],
+    data = [
+        ":flash-boot-check",
+        ":fujimod-flash-boot-check",
+        ":native-runner",
+        ":recipe-bank-cases",
+        ":recipe-bank-interop",
+        ":updater-f7",
+        ":xm1-viewer",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [
+        ":candidate-baseline-lib",
+        ":emulator-slot-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+        "//host:time",
+        "//host:unix",
+    ],
+)

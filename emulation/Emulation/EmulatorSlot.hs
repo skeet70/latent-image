@@ -2,7 +2,7 @@
 -- locks under @~/.cache/xm1-emulator-slots/@, shared by every checkout on the
 -- host, and executes inside a systemd user scope with a memory cap and no swap.
 module Emulation.EmulatorSlot
-  ( SlotCount
+  ( SlotCount (..)
   , MemoryMax
   , SlotPolicy (..)
   , slotPolicyFromEnvironment
