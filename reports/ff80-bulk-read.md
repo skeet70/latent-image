@@ -138,3 +138,11 @@ done
 ```
 
 On run 2's capture, with its base subtracted from `--ignore-initial`, the same command gives the three image-5 bytes of section 5. The maintenance-boot baseline is E-DUMP-RAM-150: 542 differing bytes in image 4 and 233 in image 5.
+
+### 6.4 Run 3 outcome
+
+Run 3 passes (E-BULK-READ-RUN3-150). On 2026-10-25 the owner wrote "Yes, lets go with A then B", accepting the proposed go "go read-bulk 0x00000000 0x05aa0000, run 3, cardless exit check". The body was enumerated alone as `04cb:ff80`. The rehearsal prints 91 E1 frames from `e1 00 b4 d1 32 00 00 10 00 00 12 34` to `e1 00 ba 71 32 00 00 0a 00 00 12 34`. Session `20261025T050355Z-read-bulk` returns 90 chunks of 1,048,576 bytes and one of 655,360, 95,027,200 bytes, SHA-256 `fa933fcf723ff46d435161cfecf48edc4a29cc4dc4c0ff5232fd0c70e7a6fee2`, `bulk-ms=16015`, `bytes-per-s=5933421`. That is 56% of run 2's rate. No chunk is short and no zero-length packet occurs. The bytes at `[0x00c00000,0x00c10000)` equal run 1's capture.
+
+The section 6.3 comparison gives 542 differing bytes (273 words) in image 4 and 57 bytes (28 words) in image 5. Image 4: header and segment 1 `[0x0061c400,0x007748dc)` 0, segment 2 488, segment 3 39, segment 4 15. Image 5: 53 bytes in the main body and 4 in the tail `[0x010e366c,0x010e3860)`. Twenty image-4 words, 32 bytes, are RC0's installed patch words, and each equals the RC0 decode `update/prefix/id4-patched.bin` (SHA-256 `a4d169bd…5551`): the six shooting-list pointers at `0x0077d1a4`/`a8`, `0x007823c4`/`c8` and `0x00785d94`/`98` and the 14 availability cells in `[0x00795db4,0x00795e64)`. RC0 changes no other image-4 word in this range. Against the maintenance-boot baseline of E-DUMP-RAM-150, image 4 shares 497 bytes. Its 45 new bytes are the RC0 words plus the runtime words `0x00820f24`, `0x00829d0c`, `0x0088dd80`/`84` and `0x0089d4fc`/`508`/`50c`, and 45 baseline bytes now equal the decode. Image 5 shares 56 bytes, its new byte `0x00dca960` is the one run 2 already showed, and 177 baseline bytes now equal the decode. No differing word has an A32 AL condition nibble in either the body or the decode. All are pointer, flag, zero-fill, list-head or table words, so no range looks non-writable.
+
+Exit check, cardless: asked "Is the body at a normal shooting screen and still working?", the owner answers "yep". That closes the exception for run 3.
