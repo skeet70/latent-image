@@ -621,22 +621,22 @@
       "reads": [
         [
           "rb-resident-header",
-          "00be8bf0",
+          "runtime:rb_resident",
           64
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ]
       ],
@@ -840,43 +840,28 @@
       "reads": [
         [
           "rb-resident-header",
-          "00be8bf0",
+          "runtime:rb_resident",
           64
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ],
         [
           "live-cells-ht-st",
           "00956b40",
           8
-        ],
-        [
-          "live-payload",
-          "0096cc74",
-          40
-        ],
-        [
-          "rb-load-outcome",
-          "00be8b8c",
-          4
-        ],
-        [
-          "rb-resident-header",
-          "00be8cc8",
-          64
         ]
       ],
       "steps": [
@@ -990,43 +975,28 @@
       "reads": [
         [
           "rb-resident-header",
-          "00be8bf0",
+          "runtime:rb_resident",
           64
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ],
         [
           "live-cells-ht-st",
           "00956b40",
           8
-        ],
-        [
-          "live-payload",
-          "0096cc74",
-          40
-        ],
-        [
-          "rb-load-outcome",
-          "00be8b8c",
-          4
-        ],
-        [
-          "rb-resident-header",
-          "00be8cc8",
-          64
         ]
       ],
       "steps": [
@@ -1182,22 +1152,22 @@
       "reads": [
         [
           "rb-resident-header",
-          "00be8bf0",
+          "runtime:rb_resident",
           64
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ],
         [
@@ -1472,17 +1442,17 @@
       "reads": [
         [
           "rb-resident-header",
-          "00be8bf0",
+          "runtime:rb_resident",
           64
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ]
       ],
@@ -1537,17 +1507,17 @@
       "reads": [
         [
           "rb-resident-header",
-          "00be8bf0",
+          "runtime:rb_resident",
           64
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ]
       ],
@@ -1788,22 +1758,22 @@
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-resident-selection",
-          "00be8c10",
+          "runtime:rb_resident+0x20",
           4
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ]
       ],
@@ -1891,22 +1861,22 @@
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-resident-selection",
-          "00be8c10",
+          "runtime:rb_resident+0x20",
           4
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ]
       ],
@@ -1957,22 +1927,22 @@
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-resident-selection",
-          "00be8c10",
+          "runtime:rb_resident+0x20",
           4
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ]
       ],
@@ -2023,22 +1993,22 @@
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-resident-selection",
-          "00be8c10",
+          "runtime:rb_resident+0x20",
           4
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ]
       ],
@@ -2089,22 +2059,22 @@
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-resident-selection",
-          "00be8c10",
+          "runtime:rb_resident+0x20",
           4
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ]
       ],
@@ -2338,22 +2308,22 @@
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-resident-selection",
-          "00be8c10",
+          "runtime:rb_resident+0x20",
           4
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ]
       ],
@@ -2441,22 +2411,22 @@
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-resident-selection",
-          "00be8c10",
+          "runtime:rb_resident+0x20",
           4
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ]
       ],
@@ -2507,22 +2477,22 @@
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-resident-selection",
-          "00be8c10",
+          "runtime:rb_resident+0x20",
           4
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ]
       ],
@@ -2756,22 +2726,22 @@
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-resident-selection",
-          "00be8c10",
+          "runtime:rb_resident+0x20",
           4
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ]
       ],
@@ -2859,22 +2829,22 @@
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-resident-selection",
-          "00be8c10",
+          "runtime:rb_resident+0x20",
           4
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ]
       ],
@@ -2925,22 +2895,22 @@
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-resident-selection",
-          "00be8c10",
+          "runtime:rb_resident+0x20",
           4
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ]
       ],
@@ -3174,22 +3144,22 @@
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-resident-selection",
-          "00be8c10",
+          "runtime:rb_resident+0x20",
           4
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ]
       ],
@@ -3277,22 +3247,22 @@
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-resident-selection",
-          "00be8c10",
+          "runtime:rb_resident+0x20",
           4
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ]
       ],
@@ -3343,22 +3313,22 @@
         ],
         [
           "rb-activation",
-          "00be98d8",
+          "runtime:rb_activation",
           8
         ],
         [
           "rb-resident-selection",
-          "00be8c10",
+          "runtime:rb_resident+0x20",
           4
         ],
         [
           "rb-current-gen",
-          "00be98bc",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-select-trace",
-          "00be8a8c",
+          "runtime:rb_select_trace",
           48
         ]
       ],
@@ -3381,6 +3351,813 @@
         ]
       ],
       "steps": []
+    },
+    {
+      "phase": "dial-refresh",
+      "steps": [
+        [
+          "menu",
+          1,
+          5,
+          2
+        ],
+        [
+          "left",
+          0,
+          5,
+          0
+        ],
+        [
+          "down",
+          0,
+          5,
+          1
+        ],
+        [
+          "down",
+          0,
+          5,
+          2
+        ],
+        [
+          "down",
+          0,
+          5,
+          3
+        ],
+        [
+          "down",
+          0,
+          5,
+          4
+        ],
+        [
+          "right",
+          1,
+          5,
+          30
+        ],
+        [
+          "down",
+          1,
+          5,
+          31
+        ],
+        [
+          "down",
+          1,
+          5,
+          32
+        ],
+        [
+          "down",
+          1,
+          5,
+          33
+        ],
+        [
+          "ok",
+          97,
+          641,
+          0
+        ],
+        [
+          "ok",
+          97,
+          624,
+          0
+        ],
+        [
+          "ok",
+          97,
+          641,
+          0
+        ],
+        [
+          "down",
+          97,
+          641,
+          1
+        ],
+        [
+          "ok",
+          97,
+          625,
+          0
+        ],
+        [
+          "ok",
+          97,
+          641,
+          1
+        ]
+      ]
+    },
+    {
+      "phase": "dial-refresh",
+      "steps": [
+        [
+          "ok",
+          97,
+          625,
+          0
+        ],
+        [
+          "down",
+          97,
+          625,
+          1
+        ],
+        [
+          "down",
+          97,
+          625,
+          2
+        ],
+        [
+          "ok",
+          114,
+          631,
+          0
+        ],
+        [
+          "down",
+          114,
+          631,
+          1
+        ],
+        [
+          "down",
+          114,
+          631,
+          2
+        ],
+        [
+          "down",
+          114,
+          631,
+          3
+        ],
+        [
+          "down",
+          114,
+          631,
+          4
+        ],
+        [
+          "down",
+          114,
+          631,
+          5
+        ],
+        [
+          "down",
+          114,
+          631,
+          6
+        ],
+        [
+          "ok",
+          114,
+          616,
+          2
+        ],
+        [
+          "down",
+          114,
+          616,
+          3
+        ],
+        [
+          "ok",
+          114,
+          631,
+          6
+        ]
+      ]
+    },
+    {
+      "phase": "dial-refresh",
+      "capture": "dial-auto-c2-selected",
+      "reads": [
+        [
+          "mode-cell",
+          "00956838",
+          4
+        ],
+        [
+          "class-cell",
+          "00951564",
+          4
+        ],
+        [
+          "size-consumers",
+          "00956888",
+          24
+        ],
+        [
+          "live-cells-ht-st",
+          "00956b40",
+          8
+        ],
+        [
+          "c-record",
+          "0096cda4",
+          40
+        ],
+        [
+          "rb-base",
+          "runtime:rb_resident+0x40",
+          40
+        ],
+        [
+          "rb-activation",
+          "runtime:rb_activation",
+          8
+        ],
+        [
+          "rb-resident-selection",
+          "runtime:rb_resident+0x20",
+          4
+        ],
+        [
+          "rb-current-gen",
+          "runtime:rb_current_gen",
+          4
+        ],
+        [
+          "rb-select-trace",
+          "runtime:rb_select_trace",
+          48
+        ]
+      ],
+      "steps": [
+        [
+          "back",
+          97,
+          625,
+          2
+        ],
+        [
+          "back",
+          97,
+          641,
+          1
+        ],
+        [
+          "back",
+          1,
+          5,
+          33
+        ],
+        [
+          "down",
+          1,
+          5,
+          34
+        ],
+        [
+          "ok",
+          1,
+          645,
+          0
+        ],
+        [
+          "down",
+          1,
+          645,
+          1
+        ],
+        [
+          "down",
+          1,
+          645,
+          2
+        ],
+        [
+          "ok",
+          1,
+          5,
+          34
+        ]
+      ]
+    },
+    {
+      "phase": "dial-refresh",
+      "steps": [
+        [
+          "left",
+          0,
+          5,
+          4
+        ],
+        [
+          "up",
+          0,
+          5,
+          3
+        ],
+        [
+          "up",
+          0,
+          5,
+          2
+        ],
+        [
+          "up",
+          0,
+          5,
+          1
+        ],
+        [
+          "right",
+          1,
+          5,
+          8
+        ],
+        [
+          "down",
+          1,
+          5,
+          9
+        ],
+        [
+          "down",
+          1,
+          5,
+          10
+        ],
+        [
+          "down",
+          1,
+          5,
+          11
+        ]
+      ]
+    },
+    {
+      "phase": "dial-refresh",
+      "mode_dial": "AUTO",
+      "capture": "refresh-auto-before",
+      "reads": [
+        [
+          "mode-cell",
+          "00956838",
+          4
+        ],
+        [
+          "class-cell",
+          "00951564",
+          4
+        ],
+        [
+          "size-consumers",
+          "00956888",
+          24
+        ],
+        [
+          "live-cells-ht-st",
+          "00956b40",
+          8
+        ],
+        [
+          "c-record",
+          "0096cda4",
+          40
+        ],
+        [
+          "rb-base",
+          "runtime:rb_resident+0x40",
+          40
+        ],
+        [
+          "rb-activation",
+          "runtime:rb_activation",
+          8
+        ],
+        [
+          "rb-resident-selection",
+          "runtime:rb_resident+0x20",
+          4
+        ],
+        [
+          "rb-current-gen",
+          "runtime:rb_current_gen",
+          4
+        ],
+        [
+          "rb-select-trace",
+          "runtime:rb_select_trace",
+          48
+        ]
+      ],
+      "steps": []
+    },
+    {
+      "phase": "dial-refresh",
+      "capture": "refresh-size-list",
+      "steps": [
+        [
+          "menu",
+          1,
+          5,
+          2
+        ],
+        [
+          "down",
+          1,
+          5,
+          3
+        ],
+        [
+          "ok",
+          1,
+          246,
+          0
+        ]
+      ]
+    },
+    {
+      "phase": "dial-refresh",
+      "capture": "refresh-auto-edited",
+      "reads": [
+        [
+          "mode-cell",
+          "00956838",
+          4
+        ],
+        [
+          "class-cell",
+          "00951564",
+          4
+        ],
+        [
+          "size-consumers",
+          "00956888",
+          24
+        ],
+        [
+          "live-cells-ht-st",
+          "00956b40",
+          8
+        ],
+        [
+          "c-record",
+          "0096cda4",
+          40
+        ],
+        [
+          "rb-base",
+          "runtime:rb_resident+0x40",
+          40
+        ],
+        [
+          "rb-activation",
+          "runtime:rb_activation",
+          8
+        ],
+        [
+          "rb-resident-selection",
+          "runtime:rb_resident+0x20",
+          4
+        ],
+        [
+          "rb-current-gen",
+          "runtime:rb_current_gen",
+          4
+        ],
+        [
+          "rb-select-trace",
+          "runtime:rb_select_trace",
+          48
+        ]
+      ],
+      "steps": [
+        [
+          "cursor:down:5:9",
+          1,
+          246,
+          5
+        ],
+        [
+          "ok",
+          1,
+          5,
+          3
+        ]
+      ]
+    },
+    {
+      "phase": "dial-refresh",
+      "mode_dial": "P",
+      "capture": "refresh-mode-guide",
+      "steps": []
+    },
+    {
+      "phase": "dial-refresh",
+      "capture": "refresh-resumed",
+      "reads": [
+        [
+          "mode-cell",
+          "00956838",
+          4
+        ],
+        [
+          "class-cell",
+          "00951564",
+          4
+        ],
+        [
+          "size-consumers",
+          "00956888",
+          24
+        ],
+        [
+          "live-cells-ht-st",
+          "00956b40",
+          8
+        ],
+        [
+          "c-record",
+          "0096cda4",
+          40
+        ],
+        [
+          "rb-base",
+          "runtime:rb_resident+0x40",
+          40
+        ],
+        [
+          "rb-activation",
+          "runtime:rb_activation",
+          8
+        ],
+        [
+          "rb-resident-selection",
+          "runtime:rb_resident+0x20",
+          4
+        ],
+        [
+          "rb-current-gen",
+          "runtime:rb_current_gen",
+          4
+        ],
+        [
+          "rb-select-trace",
+          "runtime:rb_select_trace",
+          48
+        ]
+      ],
+      "steps": [
+        [
+          "menu",
+          1,
+          5,
+          3
+        ],
+        [
+          "menu",
+          1,
+          5,
+          3
+        ]
+      ]
+    },
+    {
+      "phase": "dial-refresh",
+      "capture": "refresh-none",
+      "reads": [
+        [
+          "mode-cell",
+          "00956838",
+          4
+        ],
+        [
+          "class-cell",
+          "00951564",
+          4
+        ],
+        [
+          "size-consumers",
+          "00956888",
+          24
+        ],
+        [
+          "live-cells-ht-st",
+          "00956b40",
+          8
+        ],
+        [
+          "c-record",
+          "0096cda4",
+          40
+        ],
+        [
+          "rb-base",
+          "runtime:rb_resident+0x40",
+          40
+        ],
+        [
+          "rb-activation",
+          "runtime:rb_activation",
+          8
+        ],
+        [
+          "rb-resident-selection",
+          "runtime:rb_resident+0x20",
+          4
+        ],
+        [
+          "rb-current-gen",
+          "runtime:rb_current_gen",
+          4
+        ],
+        [
+          "rb-select-trace",
+          "runtime:rb_select_trace",
+          48
+        ]
+      ],
+      "steps": [
+        [
+          "left",
+          0,
+          5,
+          0
+        ],
+        [
+          "down",
+          0,
+          5,
+          1
+        ],
+        [
+          "down",
+          0,
+          5,
+          2
+        ],
+        [
+          "down",
+          0,
+          5,
+          3
+        ],
+        [
+          "down",
+          0,
+          5,
+          4
+        ],
+        [
+          "right",
+          1,
+          5,
+          30
+        ],
+        [
+          "down",
+          1,
+          5,
+          31
+        ],
+        [
+          "down",
+          1,
+          5,
+          32
+        ],
+        [
+          "down",
+          1,
+          5,
+          33
+        ],
+        [
+          "down",
+          1,
+          5,
+          34
+        ],
+        [
+          "ok",
+          1,
+          645,
+          0
+        ],
+        [
+          "ok",
+          1,
+          5,
+          34
+        ]
+      ]
+    },
+    {
+      "phase": "dial-refresh",
+      "capture": "refresh-none-stock-size",
+      "reads": [
+        [
+          "mode-cell",
+          "00956838",
+          4
+        ],
+        [
+          "class-cell",
+          "00951564",
+          4
+        ],
+        [
+          "size-consumers",
+          "00956888",
+          24
+        ],
+        [
+          "live-cells-ht-st",
+          "00956b40",
+          8
+        ],
+        [
+          "c-record",
+          "0096cda4",
+          40
+        ],
+        [
+          "rb-base",
+          "runtime:rb_resident+0x40",
+          40
+        ],
+        [
+          "rb-activation",
+          "runtime:rb_activation",
+          8
+        ],
+        [
+          "rb-resident-selection",
+          "runtime:rb_resident+0x20",
+          4
+        ],
+        [
+          "rb-current-gen",
+          "runtime:rb_current_gen",
+          4
+        ],
+        [
+          "rb-select-trace",
+          "runtime:rb_select_trace",
+          48
+        ]
+      ],
+      "steps": [
+        [
+          "left",
+          0,
+          5,
+          4
+        ],
+        [
+          "up",
+          0,
+          5,
+          3
+        ],
+        [
+          "up",
+          0,
+          5,
+          2
+        ],
+        [
+          "up",
+          0,
+          5,
+          1
+        ],
+        [
+          "up",
+          0,
+          5,
+          0
+        ],
+        [
+          "right",
+          1,
+          5,
+          2
+        ],
+        [
+          "down",
+          1,
+          5,
+          3
+        ],
+        [
+          "ok",
+          1,
+          246,
+          5
+        ]
+      ]
     },
     {
       "phase": "stock-highlight",
@@ -5245,39 +6022,42 @@
     {
       "phase": "recipe-text-recall",
       "capture": "recipe-text-recall",
+      "observe": true,
       "reads": [
         [
           "rb-resident-header",
-          "00be8cc8",
+          "runtime:rb_resident",
           64
         ],
         [
           "rb-load-outcome",
-          "00be8b8c",
+          "runtime:rb_load_outcome",
           4
         ],
         [
           "rb-current-gen",
-          "00be9994",
+          "runtime:rb_current_gen",
           4
         ],
         [
           "rb-activation",
-          "00be99b0",
+          "runtime:rb_activation",
           8
         ],
         [
           "live-payload",
           "0096cc74",
           40
-        ],
-        [
-          "live-cells-ht-st",
-          "00956b40",
-          8
         ]
       ],
-      "steps": []
+      "steps": [
+        [
+          "menu",
+          1,
+          5,
+          2
+        ]
+      ]
     }
   ],
   "after_unload": []
