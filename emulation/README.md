@@ -785,7 +785,7 @@ devenv shell -- bazel test //emulation:candidate-baseline-tests
 | `flash-candidate-icon-b` | `xm1-viewer --ram-push-e2e --flash-candidate`, design-B DAT, `classic-chrome-icon-trajectories.json` | flash-candidate set |
 | `flash-candidate-q-tile-b` | the same with `classic-chrome-q-tile-trajectories.json` | flash-candidate set |
 | `updater-f7-rc0-toggle`, `updater-f7-cc-toggle` | `updater-f7` with each restore card over `f7-1.nand` | `receipt.json` |
-| `native-volatile`, `native-sd` | `build-recipe-bank-cases.sh` with `RB_MODE` and `JOBS` (`--native-jobs`, default 4) | `results.json`, `findings.txt` |
+| `native-volatile`, `native-sd` | `build-recipe-bank-cases.sh` with `RB_MODE` and `JOBS` (`--native-jobs`, default 8) | `results.json`, `findings.txt` |
 | `fujimod-flash-boot-check` (non-gating) | `fujimod-flash-boot-check` on the stock 1.50 DAT | `fujimod-flash-boot-receipt.json` |
 
 The FujiMod route is reported but does not decide the run's result; FujiMod routes are a speed path until the R4F guard lands.

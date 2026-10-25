@@ -270,14 +270,14 @@ usage = unlines
   , "  --from-run DIR       reuse DIR/receipts/NAME of an earlier run instead of running routes"
   , "  --receipt NAME=DIR   reuse DIR as route NAME's receipt instead of running it"
   , "  --record-baseline    write BASELINES/NAME.json from the receipts instead of comparing"
-  , "  --native-jobs N      JOBS for the native case suites (default: 4)"
+  , "  --native-jobs N      JOBS for the native case suites (default: 8, the script's default)"
   , "  --bazel-option OPT   option passed to each route's bazel run"
   , ""
   , "Routes: " ++ intercalate ", " (map routeName [minBound .. maxBound :: Route])
   ]
 
 parseOptions :: [String] -> IO Options
-parseOptions = go (Options Nothing Nothing Nothing Nothing [] False 4 [])
+parseOptions = go (Options Nothing Nothing Nothing Nothing [] False 8 [])
   where
     go options [] = pure options
     go options ("--routes" : value : rest) = do
