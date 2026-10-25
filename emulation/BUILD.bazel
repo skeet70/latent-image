@@ -204,6 +204,33 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "observation-compare-lib",
+    srcs = ["Emulation/ObservationCompare.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_test(
+    name = "observation-compare-tests",
+    size = "small",
+    srcs = ["ObservationCompareTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":observation-compare-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:text",
+    ],
+)
+
 # bazel run //emulation:e2e-observation-compare -- RETAINED_RECEIPTS FUJIMOD_RECEIPTS
 haskell_binary(
     name = "e2e-observation-compare",
@@ -211,9 +238,9 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     visibility = ["//visibility:public"],
     deps = [
+        ":observation-compare-lib",
         "//host:aeson",
         "//host:base",
-        "//host:bytestring",
         "//host:directory",
         "//host:filepath",
         "//host:text",
