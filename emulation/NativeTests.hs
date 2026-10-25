@@ -190,6 +190,39 @@ schemaContract=do
  expect "expected offset maximum"(get(get(get memory "properties")"offset")"maximum")(toInteger sizeBytes)
  expect "expected hex maxLength"(get(get(get memory "properties")"hex")"maxLength")(toInteger(2*sizeBytes))
 
+-- The recording capacity (MAX_RECORDED_EVENTS 512) is a separate engine limit from the 128 public
+-- expected-events bound: an execution records far more stub events than a case declares (the
+-- 6a24474 regression lowered this to 128, breaking cases that recorded more). A case recording
+-- more than 128 events still runs, and the 512th recorded event is admitted while the 513th is
+-- refused as stub_contract.
+recordingLimitRegressions :: FilePath -> IO ()
+recordingLimitRegressions runner=withTemporary "fuji-recording-limit-tests"$ \root->do
+ base<-B.readFile "emulation/fixtures/arithmetic.json" >>= jsonRead
+ let hex value=s("0x"++replicate(8-length text)'0'++text) where text=showHex(value::Word32)""
+     bl a=0xeb000000 .|. ((0x4000-a-8)`div`4 .&. 0xffffff)
+     enc k=B.pack[fromIntegral(word`shiftR`offset)|word<-[0xe1a0400e]++[bl(0x1008+fromIntegral i*4)|i<-[0::Int .. k-1]]++[0xe1a0e004,0xe12fff1e]::[Word32],offset<-[0,8,16,24]]
+ forM_[(129,"returned",129),(512,"returned",512),(513,"stub_contract",512)]$ \(k,statusWanted,eventWanted)->do
+  let bytes=enc k
+  digest<-sha256 bytes
+  let codeSize=fromIntegral(B.length bytes)::Integer
+      exit=fromIntegral 0x1004+codeSize
+      exitH=hex(fromIntegral exit::Word32)
+      codeRegion=obj[("id",s "code"),("address",hex 0x1004),("size",n codeSize),("permissions",s "rx"),("initial",obj[("artifact",s "rec"),("offset",n 0),("length",n codeSize)])]
+      exitRegion=obj[("id",s "exit"),("address",exitH),("size",n 4),("permissions",s "rx"),("initial",obj[("zero",b True)])]
+      stackRegion=obj[("id",s "stack"),("address",hex 0x3000),("size",n 32),("permissions",s "rw"),("initial",obj[("zero",b True)])]
+      artifact=obj[("id",s "rec"),("path",s "rec.bin"),("size",n codeSize),("sha256",s digest)]
+      registers=merge(get base "registers")[("r4",exitH),("lr",exitH)]
+      expected=obj[("status",s "returned"),("registers",obj[("r0",hex 0),("r4",exitH),("lr",exitH),("pc",exitH)]),("memory",arr[]),("events",arr[])]
+      stub=obj[("address",hex 0x4000),("inputs",obj[]),("outputs",obj[("r0",hex 0)]),("side_effects",s "registers-only")]
+      caseJSON=merge base[("artifacts",arr[artifact]),("entry",hex 0x1004),("exit",exitH),("registers",registers),("regions",arr[codeRegion,exitRegion,stackRegion]),("functions",arr[obj[("address",hex 0x1004),("size",n codeSize)]]),("stubs",arr[stub]),("limits",obj[("instructions",n 100000),("wall_ms",n 10000)]),("expected",expected)]
+      path=root </> "rec.json"
+  B.writeFile(root </> "rec.bin")bytes
+  B.writeFile path(encodeCanonical caseJSON)
+  (code,report)<-runCase runner path
+  let runnerResult=get report "runner"
+  ensure(get runnerResult "status"==s statusWanted)("recording capacity "++show k++" status: "++show report)
+  ensure(length(list(get runnerResult "events"))==eventWanted)("recording capacity "++show k++" events: "++show report)
+
 main :: IO ()
 main=do
  [runner,generator]<-getArgs
@@ -214,6 +247,7 @@ main=do
  dispatchRegressions runner
  functionLimitRegressions runner
  instructionLimitRegressions runner
+ recordingLimitRegressions runner
  contractLimitRegressions runner
  schemaContract
  withTemporary "fuji-native-tests"$ \root->do
