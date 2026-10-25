@@ -39,6 +39,8 @@ The old persistent recorder is host-only/non-installable under [#50](https://git
 
 The [snapshot/session contract](../spec/08-artifact-and-runtime-contracts.md#camera-snapshots-and-live-experiment-sessions) owns buffer lifetime, overflow, cache visibility, bounded actions, host loss and checkpoint invalidation. The [benchmark specification](../spec/06-benchmarks.md) owns quality, clock uncertainty and failure accounting.
 
+The [X-M1 snapshot-producer findings](xm1-snapshot-producers.md) distinguish captured preview/statistic source bytes from coherent exports and bind a completed AF-result copy point. The existing idle Run-3 capture retains no completed AF worker result. A new hook remains conditional on stock-buffer lifetime, acquisition provenance and independent mechanism review.
+
 ## Cardless research and optional full-resolution capture
 
 Idle cardless preview, bounded reads of already available statistics and offline algorithm work remain separate from executing an AF search. The first ordinary S1 attempt was blocked by the card-error indication, so SD repair cannot be dismissed as irrelevant to AF execution. Spec §11.0's cardless-first premise is not established for ordinary AF-S on this body. The unavailable recovery route and ordinary storage acceptance remain separate limitations under [#85](https://github.com/skeet70/latent-image/issues/85).

@@ -16,10 +16,16 @@ newtype Position = Position Integer deriving (Eq, Ord, Show)
 newtype Score = Score Integer deriving (Show)
 newtype CurveName = CurveName String
 newtype SampleCount = SampleCount Integer
+newtype FrameCount = FrameCount Integer
 newtype Travel = Travel Integer
-data Candidate = A1 | A2 deriving (Show)
+data Candidate = A0Structural | A1 | A2 | A3Libcamera
+instance Show Candidate where
+  show A0Structural = "A0-structural"
+  show A1 = "A1"
+  show A2 = "A2"
+  show A3Libcamera = "A3-libcamera"
 data Curve = Curve CurveName Position Position [(Position, Score)]
-data Failure = Budget | FlatCurve | InvalidObservation | Cancelled deriving (Show, Read)
+data Failure = Budget | FlatCurve | InvalidObservation | Cancelled | LowConfidence deriving (Show, Read)
 data Outcome = Focused Position | Rejected Failure
 
 number :: String -> IO Integer
@@ -58,13 +64,13 @@ interpolate ((Position x, Score y) : rest@((Position x', Score y') : _)) target@
   | otherwise = interpolate rest target
 interpolate _ _ = fail "candidate requested unsupported position"
 
-runCandidate :: FilePath -> Candidate -> Curve -> IO (Outcome, SampleCount, Travel)
+runCandidate :: FilePath -> Candidate -> Curve -> IO (Outcome, SampleCount, FrameCount, Travel)
 runCandidate binary candidate (Curve _ _ (Position start) points) =
   bracket open close $ \(input, output, process) -> do
     let Position high = fst (last points)
-    hPutStrLn input (unwords ["CANDIDATE1", show candidate, show high])
+    hPutStrLn input (unwords ["CANDIDATE2", show candidate, show high, show start])
     hFlush input
-    result <- timeout 30000000 (loop input output start 0 0)
+    result <- timeout 30000000 (loop input output start 0 0 0)
     answer <- maybe (fail "candidate host deadline") pure result
     hClose input
     status <- waitForProcess process
@@ -80,28 +86,37 @@ runCandidate binary candidate (Curve _ _ (Position start) points) =
       terminateProcess process
       _ <- waitForProcess process
       mapM_ (\h -> hClose h `catchClosed` pure ()) [input, output]
-    loop :: Handle -> Handle -> Integer -> Integer -> Integer -> IO (Outcome, SampleCount, Travel)
-    loop input output previous count travel
-      | count > 64 = fail "candidate sample budget"
+    loop :: Handle -> Handle -> Integer -> Integer -> Integer -> Integer -> IO (Outcome, SampleCount, FrameCount, Travel)
+    loop input output previous count frames travel
+      | count > 64 || frames > 256 = fail "candidate observation or frame budget"
       | otherwise = do
         fields <- words <$> hGetLine output
         case fields of
           ["OBSERVE", _, text] -> do
+            unless (count < 64 && frames < 256) (fail "candidate observation or frame budget")
             position <- number text
             Score score <- interpolate points (Position position)
             hPutStrLn input (show score)
             hFlush input
-            loop input output position (count + 1) (travel + abs (position - previous))
+            loop input output position (count + 1) (frames + 1) (travel + abs (position - previous))
+          ["WAIT_FRAME", _, text] -> do
+            unless (frames < 256) (fail "candidate frame budget")
+            position <- number text
+            let Position high = fst (last points)
+            unless (position >= 0 && position <= high) (fail "candidate requested unsupported frame position")
+            hPutStrLn input "FRAME"
+            hFlush input
+            loop input output position count (frames + 1) (travel + abs (position - previous))
           ["FINISH", text, samples] -> do
             position <- number text
             reported <- number samples
             unless (reported == count && position == previous) (fail "candidate final accounting mismatch")
-            pure (Focused (Position position), SampleCount count, Travel travel)
+            pure (Focused (Position position), SampleCount count, FrameCount frames, Travel travel)
           ["FAIL", reason, samples] -> do
             reported <- number samples
             unless (reported == count) (fail "candidate failure accounting mismatch")
             failure <- maybe (fail "unknown candidate failure") pure (readMaybe reason)
-            pure (Rejected failure, SampleCount count, Travel travel)
+            pure (Rejected failure, SampleCount count, FrameCount frames, Travel travel)
           _ -> fail "invalid candidate action"
 
 catchClosed :: IO () -> IO () -> IO ()
@@ -115,13 +130,13 @@ main = do
   args <- getArgs
   case args of
     binary : paths@(_ : _) -> do
-      putStrLn "origin,curve,candidate,sample_count,simulated_travel_units,final_position_error_units,outcome"
+      putStrLn "origin,curve,candidate,sample_count,simulated_frame_count,simulated_travel_units,final_position_error_units,outcome"
       forM_ paths $ \path -> do
         curve@(Curve (CurveName name) (Position optimum) _ _) <- loadCurve path
-        forM_ [A1, A2] $ \candidate -> do
-          (outcome, SampleCount count, Travel travel) <- runCandidate binary candidate curve
+        forM_ [A0Structural, A1, A2, A3Libcamera] $ \candidate -> do
+          (outcome, SampleCount count, FrameCount frames, Travel travel) <- runCandidate binary candidate curve
           let (err, status) = case outcome of
                 Focused (Position position) -> (show (abs (position - optimum)), "focused")
                 Rejected reason -> ("", show reason)
-          putStrLn (intercalate "," ["simulated", name, show candidate, show count, show travel, err, status])
+          putStrLn (intercalate "," ["simulated", name, show candidate, show count, show frames, show travel, err, status])
     _ -> throwIO (userError "usage: candidate-compare DECISION_BINARY SYNTHETIC.curve ...")

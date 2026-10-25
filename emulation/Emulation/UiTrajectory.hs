@@ -29,8 +29,10 @@ import Numeric (readHex)
 
 data MenuState = MenuState Int Int Int deriving (Eq, Show)
 
--- | A read window's start: a fixed guest address, or a symbol of the relinked runtime.
-data ReadAddress = FixedAddress Word32 | RuntimeSymbol String deriving (Eq, Show)
+-- | A read window's start: a fixed guest address, or a symbol of the loaded build and a
+-- byte offset into it. The build is the relinked runtime for a RAM push and the candidate's
+-- linked kernel for a flash candidate.
+data ReadAddress = FixedAddress Word32 | RuntimeSymbol String Word32 deriving (Eq, Show)
 
 -- | A logical row of the film-simulation list.
 data FilmRow = Provia | Velvia | Astia | Monochrome | Sepia | ProNegStd | ProNegHi | WarmStandard | RecipeB
@@ -117,9 +119,19 @@ instance FromJSON Segment where
         Just p -> pure p
         Nothing -> fail ("unsupported mode-dial position: " ++ T.unpack position)
       window (label, address, len) = case T.unpack address of
-        text | Just symbol <- stripPrefix "runtime:" text, not (null symbol) -> pure (label, RuntimeSymbol symbol, len)
-             | [(value, "")] <- readHex text -> pure (label, FixedAddress value, len)
-             | otherwise -> fail ("read address must be hex without 0x or runtime:SYMBOL: " ++ text)
+        text | Just rest <- stripPrefix "runtime:" text, not (null rest) -> do
+                 let (name, suffix) = break (== '+') rest
+                     digits = dropWhile (== '+') suffix
+                 when (null name) (fail ("read address names no runtime symbol: " ++ text))
+                 offset <- case digits of
+                   "" -> pure 0
+                   _ -> maybe (fail ("read address offset is not hex: " ++ text)) pure (hexValue digits)
+                 pure (label, RuntimeSymbol name offset, len)
+             | Just value <- hexValue text -> pure (label, FixedAddress value, len)
+             | otherwise -> fail ("read address must be hex without 0x or runtime:SYMBOL+0xOFFSET: " ++ text)
+      hexValue digits = case readHex (case stripPrefix "0x" digits of Just rest -> rest; Nothing -> digits) of
+        [(value, "")] -> Just value
+        _ -> Nothing
 
 keyPulse :: Object -> Parser KeyPulse
 keyPulse budget = do

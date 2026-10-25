@@ -207,7 +207,7 @@ haskell_binary(
 
 haskell_library(
     name = "ui-trajectory-lib",
-    srcs = ["Emulation/UiTrajectory.hs"],
+    srcs = ["Emulation/Symbols.hs", "Emulation/UiTrajectory.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
     deps = [

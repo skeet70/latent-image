@@ -4,7 +4,8 @@ module Main (main) where
 
 import Control.Monad (unless)
 import qualified Data.ByteString.Char8 as C
-import Data.List (isSuffixOf, sort)
+import Data.List (isInfixOf, isSuffixOf, sort)
+import Emulation.Symbols
 import Emulation.UiTrajectory
 import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming)
 import System.Directory (listDirectory)
@@ -47,6 +48,18 @@ mismatchesOf (oldSteps, oldFields) (newSteps, newFields) = do
   old <- either (const Nothing) Just (decodeTrajectories (file oldSteps oldFields))
   new <- either (const Nothing) Just (decodeTrajectories (file newSteps newFields))
   pure (variantMismatches old new)
+
+-- | A linked build's @llvm-nm --print-size@ rows, one symbol each.
+symbolTable :: SymbolTable
+symbolTable = parseSymbolTable (C.pack (unlines
+  [ "00be8cc8 00000400 d rb_resident"
+  , "00be9994 00000004 d rb_current_gen"
+  , "00be99b0 00000008 d rb_activation" ]))
+
+repeatedSymbols :: SymbolTable
+repeatedSymbols = parseSymbolTable (C.pack (unlines
+  [ "00be8cc8 00000400 d rb_resident"
+  , "00be8d00 00000004 d rb_resident" ]))
 
 expect :: String -> Bool -> IO Bool
 expect name ok = do
@@ -118,6 +131,27 @@ main = do
         stepsOf "[\"menu\",1,5,2,{\"settle_instructions\":0}]" == Nothing
     , expect "an unknown step timing field is refused" $
         stepsOf "[\"menu\",1,5,2,{\"wait_instructions\":5}]" == Nothing
+    , expect "a read address decodes to a fixed guest window" $
+        fmap segmentReads (segmentOf (segmentDocument ",\"reads\":[[\"mode\",\"00956838\",4]]"))
+          == Just [("mode", FixedAddress 0x00956838, 4 :: Int)]
+    , expect "a read address decodes to a build symbol and its byte offset" $
+        fmap segmentReads (segmentOf (segmentDocument ",\"reads\":[[\"base\",\"runtime:rb_resident+0x40\",40]]"))
+          == Just [("base", RuntimeSymbol "rb_resident" 0x40, 40 :: Int)]
+    , expect "a read address names a symbol without an offset" $
+        fmap segmentReads (segmentOf (segmentDocument ",\"reads\":[[\"gen\",\"runtime:rb_current_gen\",4]]"))
+          == Just [("gen", RuntimeSymbol "rb_current_gen" 0, 4 :: Int)]
+    , expect "a read address with a non-hex offset is refused" $
+        refused (segmentDocument ",\"reads\":[[\"base\",\"runtime:rb_resident+zz\",40]]")
+    , expect "a symbol table resolves a name to its address" $
+        resolveSymbol symbolTable "rb_resident" == Right 0x00be8cc8
+    , expect "a read naming a symbol the loaded build lacks fails with that name" $
+        (case resolveSymbol symbolTable "rb_base" of
+           Left problem -> "rb_base" `isInfixOf` problem
+           Right _ -> False)
+    , expect "a symbol the loaded build repeats fails" $
+        (case resolveSymbol repeatedSymbols "rb_resident" of
+           Left _ -> True
+           Right _ -> False)
     , expect "a variant that changes only step timing and key pulses asserts what its retained file asserts" $
         mismatchesOf ("[\"menu\",67,56,0],[\"menu\",1,5,2]", "")
           ("[\"menu\",67,56,0,{\"settle_instructions\":5000000}],[\"menu\",1,5,2]", ",\"key_pulse\":{\"hold_instructions\":8000000,\"release_instructions\":8000000}")

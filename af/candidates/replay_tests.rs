@@ -1,10 +1,14 @@
-use af_candidates::{Action, Candidate, Config, Controller, Event, Failure, Position, Score};
+use af_candidates::{Action, Candidate, Config, Controller, Direction, Event, Failure, Position,
+    EvidenceCount, Percent, Score, SearchStep, StructuralFit, StructuralParameters};
+
+mod libcamera_tests;
 
 const SINGLE: &str = include_str!("fixtures/single-peak.curve");
 const MULTI: &str = include_str!("fixtures/two-depths.curve");
 const EDGE: &str = include_str!("fixtures/edge-peak.curve");
 const NOISY: &str = include_str!("fixtures/noisy-peak.curve");
 const FLAT: &str = include_str!("fixtures/flat.curve");
+const A0: Candidate = Candidate::StructuralReference(StructuralParameters::run3_viltrox());
 fn config(budget: u16) -> Config {
     Config::new(Position::new(0), Position::new(1000), 125, 10, budget, Score::new(100).unwrap()).unwrap()
 }
@@ -21,7 +25,8 @@ fn score(fixture: &str, position: Position) -> Score {
 fn replay(candidate: Candidate, fixture: &str, budget: u16) -> (Action, u16) {
     assert!(fixture.starts_with("synthetic "));
     let mut controller = Controller::new(config(budget), candidate);
-    let mut action = controller.step(Event::Start);
+    let initial = fixture.lines().next().unwrap().split_whitespace().nth(3).unwrap().parse().unwrap();
+    let mut action = controller.step(Event::Start { position: Position::new(initial) });
     for _ in 0..256 {
         match action {
             Action::Observe { request, position } => {
@@ -29,6 +34,11 @@ fn replay(candidate: Candidate, fixture: &str, budget: u16) -> (Action, u16) {
                 action = controller.step(Event::Sample { request, position,
                     score: score(fixture, position), fresh: true, settled: true });
             }
+            Action::WaitFrame { request, position } => {
+                assert!(position.units() <= 1000);
+                action = controller.step(Event::Frame { request, position, fresh: true, settled: true });
+            }
+            Action::Monitor { .. } => return (action, controller.samples()),
             Action::Finish(_) | Action::Fail(_) => return (action, controller.samples()),
             Action::Wait => panic!("fresh settled synthetic sample unexpectedly waited"),
         }
@@ -54,7 +64,7 @@ fn synthetic_coarse_search_selects_stronger_depth_and_edge() {
 }
 #[test]
 fn synthetic_flat_curve_and_exhausted_budget_refuse_focus() {
-    for candidate in [Candidate::CoarseFine, Candidate::AdaptivePeak] {
+    for candidate in [A0, Candidate::CoarseFine, Candidate::AdaptivePeak] {
         assert_eq!(replay(candidate, FLAT, 64).0, Action::Fail(Failure::FlatCurve));
         assert_eq!(replay(candidate, SINGLE, 3).0, Action::Fail(Failure::Budget));
     }
@@ -62,7 +72,7 @@ fn synthetic_flat_curve_and_exhausted_budget_refuse_focus() {
 #[test]
 fn missing_stale_and_unsettled_observations_do_not_advance_focus() {
     let mut controller = Controller::new(config(64), Candidate::AdaptivePeak);
-    let Action::Observe { request, position } = controller.step(Event::Start) else { panic!() };
+    let Action::Observe { request, position } = controller.step(Event::Start { position: Position::new(500) }) else { panic!() };
     assert_eq!(controller.step(Event::Missing), Action::Wait);
     for (fresh, settled) in [(false, true), (true, false)] {
         assert_eq!(controller.step(Event::Sample { request, position, score: Score::new(1).unwrap(), fresh, settled }), Action::Wait);
@@ -74,7 +84,7 @@ fn missing_stale_and_unsettled_observations_do_not_advance_focus() {
 #[test]
 fn repeated_missing_observations_fail_in_finite_time() {
     let mut controller = Controller::new(config(64), Candidate::CoarseFine);
-    controller.step(Event::Start);
+    controller.step(Event::Start { position: Position::new(500) });
     let mut result = Action::Wait;
     for _ in 0..256 { result = controller.step(Event::Missing); }
     assert_eq!(result, Action::Fail(Failure::Budget));
@@ -82,11 +92,11 @@ fn repeated_missing_observations_fail_in_finite_time() {
 #[test]
 fn wrong_position_and_changing_final_measurement_refuse_focus() {
     let mut controller = Controller::new(config(64), Candidate::CoarseFine);
-    let Action::Observe { request, .. } = controller.step(Event::Start) else { panic!() };
+    let Action::Observe { request, .. } = controller.step(Event::Start { position: Position::new(500) }) else { panic!() };
     assert_eq!(controller.step(Event::Sample { request, position: Position::new(1),
         score: Score::new(1).unwrap(), fresh: true, settled: true }), Action::Fail(Failure::InvalidObservation));
     let mut controller = Controller::new(config(64), Candidate::AdaptivePeak);
-    let mut action = controller.step(Event::Start);
+    let mut action = controller.step(Event::Start { position: Position::new(500) });
     let mut measured = Vec::new();
     while let Action::Observe { request, position } = action {
         let repeated = measured.contains(&position);
@@ -96,4 +106,54 @@ fn wrong_position_and_changing_final_measurement_refuse_focus() {
             fresh: true, settled: true });
     }
     assert_eq!(action, Action::Fail(Failure::InvalidObservation));
+}
+
+#[test]
+fn observed_structural_profile_reaches_the_stronger_depth_and_boundary() {
+    assert!(matches!(replay(A0, MULTI, 64).0, Action::Finish(p) if p.units().abs_diff(730) <= 10));
+    assert_eq!(replay(A0, EDGE, 64).0, Action::Finish(Position::new(0)));
+}
+
+#[test]
+fn observed_direction_evidence_exposes_the_structural_models_near_peak_limit() {
+    for fixture in [SINGLE, NOISY] {
+        assert_eq!(replay(A0, fixture, 64).0, Action::Fail(Failure::Budget));
+    }
+}
+
+#[test]
+fn observed_range_divisor_limits_the_requested_direction_motion() {
+    let mut controller = Controller::new(config(64), A0);
+    let Action::Observe { request, position } = controller.step(Event::Start { position: Position::new(1000) }) else { panic!() };
+    assert!(matches!(controller.step(Event::Sample { request, position, score: Score::new(500000).unwrap(),
+        fresh: true, settled: true }), Action::Observe { position, .. } if position == Position::new(967)));
+}
+
+#[test]
+fn logarithmic_fit_returns_the_peak_of_a_synthetic_exponential_quadratic() {
+    let fixture = "synthetic exponential-quadratic 67 0\n0 128\n50 4096\n100 2048\n150 16\n1000 1\n";
+    let parameters = StructuralParameters::new(SearchStep::new(50).unwrap(), SearchStep::new(50).unwrap(),
+        EvidenceCount::new(1).unwrap(), EvidenceCount::new(2).unwrap(), Percent::new(1).unwrap(),
+        Score::new(100).unwrap(), Direction::Increasing, StructuralFit::LogarithmicParabolic);
+    assert_eq!(replay(Candidate::StructuralReference(parameters), fixture, 64).0,
+        Action::Finish(Position::new(67)));
+}
+
+#[test]
+fn structural_reference_accepts_either_direction_and_linear_side_refinement() {
+    let parameters = StructuralParameters::new(SearchStep::new(50).unwrap(), SearchStep::new(50).unwrap(),
+        EvidenceCount::new(1).unwrap(), EvidenceCount::new(2).unwrap(), Percent::new(1).unwrap(),
+        Score::new(100).unwrap(), Direction::Decreasing, StructuralFit::LinearSides);
+    assert!(matches!(replay(Candidate::StructuralReference(parameters), SINGLE, 64).0,
+        Action::Finish(p) if p.units().abs_diff(537) <= 10));
+}
+
+#[test]
+fn structural_reference_uses_initial_position_and_rejects_outside_bounds() {
+    let mut controller = Controller::new(config(64), A0);
+    assert!(matches!(controller.step(Event::Start { position: Position::new(700) }),
+        Action::Observe { position, .. } if position == Position::new(700)));
+    let mut controller = Controller::new(config(64), A0);
+    assert_eq!(controller.step(Event::Start { position: Position::new(1001) }),
+        Action::Fail(Failure::InvalidObservation));
 }
