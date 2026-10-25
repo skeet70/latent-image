@@ -94,3 +94,20 @@ exports_files(
     ],
     visibility = ["//host/firmware:__pkg__"],
 )
+
+filegroup(
+    name = "af-ring-ram-relink-sources",
+    srcs = [
+        "af_ring_payload.c",
+        "af_ring_hooks.S",
+        "af_ring_ram.ld",
+        "af_ring_allowlist.json",
+        "ram_push_abi.h",
+        "ram_push_installer.c",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//transport:__pkg__",
+        "//emulation:__pkg__",
+    ],
+)
