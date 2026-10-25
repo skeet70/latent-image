@@ -169,14 +169,12 @@ payloadText p = case payloadKind p of
   RecipeBankD3 -> "recipe-bank-d3"
   ClassicChrome -> "classic-chrome"
   ClassicChromeIcon -> "classic-chrome-icon"
-  AfRing -> "af-ring"
 
 payloadContract :: Payload -> ReviewedContract
 payloadContract p = case payloadKind p of
   RecipeBankD3 -> reviewedContract
   ClassicChrome -> reviewedCcContract
   ClassicChromeIcon -> reviewedCcIconContract
-  AfRing -> error "AF ring has no live reviewed contract; use //emulation:xm1-af-ring-e2e"
 
 -- | Whether the payload carries the Classic Chrome publications.
 carriesClassicChrome :: Payload -> Bool

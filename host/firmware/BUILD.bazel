@@ -3,25 +3,6 @@ load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "h
 
 package(default_visibility = ["//visibility:public"])
 
-haskell_binary(
-    name = "read-af-ring",
-    srcs = ["ReadAfRing.hs"],
-    ghcopts = [
-        "-Wall",
-        "-Werror",
-        "-O2",
-        "-XGHC2021",
-    ],
-    deps = [
-        "//transport:af-ring",
-        "//transport:camera-core",
-        "//host:base",
-        "//host:bytestring",
-        "//host:host-support",
-        "//host:json",
-    ],
-)
-
 exports_files([
     "classic-chrome-icon.txt",
     "classic-chrome-q-tile.txt",
@@ -1537,32 +1518,5 @@ haskell_test(
         "//host:bytestring",
         "//host:classic-chrome",
         "//host:classic-chrome-ram",
-    ],
-)
-
-haskell_binary(
-    name = "build-af-ring-ram",
-    srcs = [
-        "AfRingAllowlist.hs",
-        "BuildAfRingRam.hs",
-    ],
-    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-threaded"],
-    main_file = "BuildAfRingRam.hs",
-    deps = [
-        ":bank-allowlist",
-        ":ram-push-toolchain",
-        "//host:base",
-        "//host:bytestring",
-        "//host:host-support",
-        "//host:json",
-        "//host:unix",
-    ],
-)
-
-filegroup(
-    name = "af-ring-ram-relinker",
-    srcs = [
-        "build-af-ring-ram.sh",
-        ":build-af-ring-ram",
     ],
 )

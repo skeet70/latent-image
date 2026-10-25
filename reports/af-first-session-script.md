@@ -1,6 +1,6 @@
 # First AF observation session: ordinary-boot feasibility (1.50)
 
-Status: general procedure design, not camera authorization. The [stock-first console block](af-observation-plan.md#stock-first-console-observation-block) now supplies the closed operations, source-bound windows, one-attempt script, finite budgets and operation-specific ending for the first stock trace observation. Other preview/statistic/session work below remains design. The [observation plan](af-observation-plan.md) owns the questions and the [camera-run procedure](../spec/07-governance-and-handoff.md#3-camera-runs) owns authority.
+Status: procedure design, not an executable camera plan or authorization. Freeze the actual closed operations, source-bound read windows, finite budgets and exit procedure before requesting a go. The [observation plan](af-observation-plan.md) owns the questions and the [camera-run procedure](../spec/07-governance-and-handoff.md#3-camera-runs) owns authority. No new camera command is introduced by this document.
 
 ## 1. Host preparation
 

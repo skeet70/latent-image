@@ -8,7 +8,7 @@ module FujiAF.RamPush
   , callbackTablePointerAddress, callbackTableAddress, callbackStockWord
   , queryOutputAddress, configGateIndex, mailboxBytes
   , reviewedAllocationSize, installerAbiVersion, publicationCount, setupCount, activationCount
-  , PayloadKind(..), Payload(..), bankD3Payload, classicChromePayload, classicChromeIconPayload, afRingPayload, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
+  , PayloadKind(..), Payload(..), bankD3Payload, classicChromePayload, classicChromeIconPayload, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
   , readRamPushManifest, parseRamPushManifest, readRamAllocState, readRetainedAllocation, readRamPushState
   , consumedMarkerPath, writeAllocStateFile, writeStateFile
   , ramAllocArguments, ramPushArguments, ramFreeArguments, ramUnloadArguments, ramRelinkArguments
@@ -145,7 +145,7 @@ data ReviewedContract = ReviewedContract
   , reviewedPublicationContractDigest :: String
   }
 
-data PayloadKind = RecipeBankD3 | ClassicChrome | ClassicChromeIcon | AfRing deriving (Eq, Show)
+data PayloadKind = RecipeBankD3 | ClassicChrome | ClassicChromeIcon deriving (Eq, Show)
 
 -- | What a payload kind's relink links, and the allocation, ABI word, counts
 -- and installer start it has. A runtime's allocation size names its kind.
@@ -227,24 +227,8 @@ classicChromeIconPayload = classicChromePayload
       ++ [("RC0_DAT","private-data/analysis/classic-chrome-patch/rc0-regression/FWUP0002.DAT")]
   }
 
-afRingPayload :: Payload
-afRingPayload = Payload
-  { payloadKind = AfRing
-  , payloadAllocationSize = 0x6800
-  , payloadAbiVersion = 5
-  , payloadSetupCount = 3
-  , payloadActivationCount = 3
-  , payloadInstallerStart = \base -> (base + 0x1000 + 31) .&. 0xffffffe0
-  , payloadReferenceBases = (0x00c40000, 0x00c4fc88)
-  , payloadRelinkScript = "build-af-ring-ram.sh"
-  , payloadRelinkBuilder = "build-af-ring-ram"
-  , payloadBuildRoot = "private-data/analysis/x-m1-1.50/af-ring/ram-push"
-  , payloadRelinkInputs = [("RC0_ID5","private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin")]
-  , payloadLinksBank = False
-  }
-
 payloads :: [Payload]
-payloads = [bankD3Payload, classicChromePayload, classicChromeIconPayload, afRingPayload]
+payloads = [bankD3Payload, classicChromePayload, classicChromeIconPayload]
 
 payloadOfSize :: Int -> Maybe Payload
 payloadOfSize size = case filter ((== size) . payloadAllocationSize) payloads of
@@ -257,14 +241,12 @@ requirePayload size = maybe (P.reject ("allocation size "++show size++" is no RA
 payloadPublicationCount :: Payload -> Int
 payloadPublicationCount payload = payloadSetupCount payload + payloadActivationCount payload
 
--- | Entry offsets for each payload's count-specialized installer.
+-- | The installer's three entries, at the offsets host/firmware/RamPushLayout.hs
+-- fixes for every payload.
 payloadEntries :: Payload -> Address -> RamPushEntries
 payloadEntries payload (Address base) =
   let install = payloadInstallerStart payload base + 0x600
-      (rollbackOffset, statusOffset) = case payloadKind payload of
-        AfRing -> (0x234, 0x260)
-        _ -> (0x238, 0x264)
-  in RamPushEntries (Address install) (Address (install+rollbackOffset)) (Address (install+statusOffset))
+  in RamPushEntries (Address install) (Address (install+0x238)) (Address (install+0x264))
 
 configGateIndex, mailboxBytes, reviewedAllocationSize :: Int
 configGateIndex = 0xf7

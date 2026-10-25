@@ -399,36 +399,6 @@ haskell_binary(
 )
 
 haskell_binary(
-    name = "xm1-af-ring-e2e",
-    srcs = ["Xm1AfRingE2E.hs"],
-    data = [
-        ":xm1-upstream",
-        "af-ring-e2e-trajectories.json",
-    ],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":case-sha256",
-        ":checkpoint-key-lib",
-        ":emulator-slot-lib",
-        ":emulator-usb",
-        ":ram-push-unreviewed",
-        ":ui-trajectory-lib",
-        ":viewer-runtime-lib",
-        "//broker:core",
-        "//host:aeson",
-        "//host:base",
-        "//host:bytestring",
-        "//host:directory",
-        "//host:filepath",
-        "//host:process",
-        "//host:text",
-        "//transport:af-ring",
-        "//transport:camera-core",
-    ],
-)
-
-haskell_binary(
     name = "checkpoint-warmup",
     srcs = ["CheckpointWarmup.hs"],
     data = [
