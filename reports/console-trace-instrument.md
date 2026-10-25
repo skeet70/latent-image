@@ -12,6 +12,8 @@ The X70 emulator's author wants to record autofocus traces on a camera and repla
 
 What a third party takes from this: the request shape, the fixed window list, the gate discipline and the stop rules are published and reimplementable. The wire bytes are X-M1 1.50's service surface, so whether another body's firmware exposes the same opcodes is **unproved**; a different body needs its own equivalent read channel, and the store format of section 2 is what that read must return.
 
+Ordinary-boot `read-ram`/`read-bulk` are now a separate reviewed extraction route ([bulk-read report](ff80-bulk-read.md), E-BULK-READ-RUN1-150 through E-BULK-READ-RUN3-150). This supersedes the maintenance-only access premise, not the decoder's coherence limits. The [AF observation plan](af-observation-plan.md) still requires actual stock AF under USB and same-boot extraction to be demonstrated.
+
 ### 1.2 The format knowledge: what the decoders are
 
 The store geometry, per-type layouts and tick derivation are implemented in [the public shared decoder](../console-trace/FujiAF/ConsoleStore.hs). Section 2 retains the version-bound format and evidence.
@@ -87,7 +89,7 @@ Completeness is bounded by an allowlist. The hook looks each message id up in a 
 - The read is not atomic: `read-log` walks 512 windows over minutes while the ring keeps appending, so the header's next index can move during the read and a decode must expect the header index and the occupied slots to differ, with the acts preceding the read (**hardware-observed**, **static-inference**, input map section 1).
 - Tick resolution is about 10 ms and the `+2` delta is not comparable across boots (section 2.3).
 - Type `0x71`'s two payload words, the type `0x09` thread fields, the type `0x0f` `+8` pair for non-input sends, the `+0x24` first-record copy and the second store's contents are **unproved**.
-- On this body the read channel exists only in a maintenance boot, where the keys take no shot and no menu is dispatched, so the boots whose trace can be read are boots in which no AF search runs (**byte-read**, E-SERVICE-SHOOT-150; [the AF-observe instrument report](af-observe-instruments-150.md) section 4). The instrument carries boot and lens-handshake traffic with ticks; on this body it does not yet carry a search.
+- Ordinary-boot RAM access is hardware-observed, but an ordinary AF search and its useful trace with USB attached remain unproved. Maintenance-mode key behavior does not constrain this new route; a RAM-to-card recorder is no longer an access prerequisite.
 - The console text ring that service opcode `0x200001` functions 1 and 4 drain is a different facility, an 8 KiB ring at `0x41acb800` installed at the connect edge; whether those drains reach this store is **unproved**, and the operation's own module comment records the same open question.
 
 ## 3. What a third party needs, and what is unavailable to them
@@ -98,7 +100,7 @@ Completeness is bounded by an allowlist. The hook looks each message id up in a 
 | The store format | Published here (section 2); before this report it was split across published prose and private notes |
 | Working decoders | Public Haskell/Bazel targets in [console-trace](../console-trace/BUILD.bazel); commands and input requirements below |
 | Id and name bindings for their firmware | Public version-bound findings in the AF and input maps; another firmware must establish its own applicability |
-| A boot whose trace can be read while AF runs | **Unproved** on this body; the maintenance-boot wall is section 2.6 |
+| A boot whose trace can be read while AF runs | Ordinary-boot reads are demonstrated; simultaneous AF and useful same-boot search observations remain to establish |
 
 ## 4. Publication boundary
 
@@ -116,7 +118,7 @@ The original format claims inherit the labels of the ledger rows and notes they 
 
 ## 6. The carry path a third party needs for an ordinary boot
 
-A reader of the store on the camera's own body meets the wall in section 2.6: the read operation exists only in a maintenance boot, and an AF search runs only in an ordinary one. The hop from RAM to a card file is what closes that gap, and the stock images carry a file client for it. This section states the client as bound, host-only and **byte-read**; the full derivation, the activation sites and the placement arithmetic are in [the instrument report](af-observe-instruments-150.md#96-the-stock-card-file-client-abi) sections 9.6 to 9.8.
+This section retains the earlier stock card-file-client binding as **host-only, byte-read** research. Ordinary-boot RAM reads remove the former need for this carry on the X-M1; [recorder work #50](https://github.com/skeet70/latent-image/issues/50) is parked, non-installable and not an AF prerequisite. The full derivation, activation sites and placement arithmetic remain in [the instrument report](af-observe-instruments-150.md#96-the-stock-card-file-client-abi) sections 9.6 to 9.8. Another body must establish its own extraction route.
 
 The card-file client in image 4, callback forms:
 

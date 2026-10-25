@@ -33,8 +33,8 @@
     "controllers": [
       "stock"
     ],
-    "repeats_per_combination": 10,
-    "planned_attempts": 110,
+    "repeats_per_combination": 2,
+    "planned_attempts": 22,
     "scene_weights": "equal scene weight; equal start weight within each scene",
     "combinations": [
       {
@@ -163,27 +163,27 @@
   "randomization": {
     "seed": "E01-stock-pilot-v1",
     "algorithm": "sha256-ascii-v1",
-    "blocks": "one complete combination block per repeat, repeats 01 through 10",
+    "blocks": "one complete combination block per repeat; count from design.repeats_per_combination",
     "sort_key": "SHA256 ASCII(seed + | + two-digit repeat + | + combination_id), ascending hex; tie by combination_id",
     "pair_id": "E01:<scene_id>:<start>:<two-digit repeat>",
     "future_controller_order": "ascending SHA256 ASCII(seed + | + pair_id + | + controller); tie by controller",
     "replacement_policy": "keep original; any replacement gets a new attempt ID and reason"
   },
   "timing": {
-    "clock": "external video presentation timestamps in one recording",
-    "start_event": "visible half-press onset proxy; AF acceptance time unobserved",
-    "confirmation_event": "first visible camera confirmation indication",
+    "clock": "declared camera acquisition/event clocks; optional video clock with synchronization uncertainty",
+    "start_event": "source-bound AF request when established; otherwise declared visible half-press proxy",
+    "confirmation_event": "declared camera confirmation event; internal result and visible indication reported separately",
     "acceptable_focus_onset": "null unless independently validated continuous ROI/plane observations bound onset",
     "default_report": "confirmation latency and independently verified final quality",
     "deadline_ms": 10000,
     "attempt_window_ms": 15000,
-    "uncertainty": "event frame brackets plus synchronization/occlusion bounds; unknown remains null",
+    "uncertainty": "source clock resolution, acquisition intervals and synchronization/visibility bounds; unknown remains null",
     "fallback": "stock-only pilot has no candidate fallback; future fallback counts from original start under same deadline"
   },
   "quality": {
-    "domain": "saved photographs, fixed processing and intended target ROI/plane",
-    "metric": "edge acutance normalized by same-scene reference sweep maximum",
-    "reference": "bounded ordinary manual-focus sweep bracketing optimum, fixed geometry/settings; repeat best-position captures",
+    "domain": "declared coherent image domain with fixed processing and intended target ROI/plane; preview is not saved-photo quality",
+    "metric": "independently validated intended-region sharpness and plane correctness; same-scene reference normalization",
+    "reference": "bounded validated stock lens-control sweep at fixed geometry/settings; both approach directions and repeated best-region captures",
     "acceptance_threshold": null,
     "repeatability_bound": null,
     "freeze_rule": "calibrate independent metric and wrong-plane check before timed acquisitions; threshold and repeatability cannot be selected from controller outcomes"
@@ -232,6 +232,7 @@
       "scene fixtures and weights",
       "settings and start recipes",
       "quality threshold and repeatability",
+      "positive accuracy endpoint, minimum effect and confidence rule",
       "deadlines/outcome/exclusion/fallback rules",
       "sample size and stopping rule",
       "estimators/confidence method and bounds",
@@ -255,6 +256,6 @@
       "success_max_loss_percentage_points": 2,
       "quality_noninferiority_bound": null
     },
-    "target_policy": "specification choices, revisable by recorded decision before confirmation; bounds must be supported by confidence intervals and independent quality repeatability"
+    "target_policy": "specification choices, revisable before confirmation; confidence bounds support speed and noninferiority, and a separate frozen positive accuracy endpoint is required to claim more accurate AF"
   }
 }

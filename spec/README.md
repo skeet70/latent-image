@@ -29,7 +29,7 @@ Reports retain technical findings, interfaces, bounded experiments and unresolve
 9. [Sources and starting references](09-sources.md)
 10. [Film recipes](10-film-recipes.md)
 
-Recommended sequence: accepted stock/access observations, exact-input mapping and recovery research, bounded native emulation and AF models, reversible target observation, measured improvement, then a separate installation decision. Host work can proceed around dependencies without inventing target facts. Original design v1.0 provenance is SHA-256 `62d08fb6dc2b0362139a595a8260a73c7bc753085598e1b64f192c5c17115efe` (2026-09-28).
+Recommended AF sequence: ordinary-boot stock trace and coherent observations, a bounded transient adapter, short automated household-scene batches, recorded/calibrated host experiments, then measured on-camera speed and accuracy with untethered validation. Cardless research can proceed before SD repair; recovery availability and ordinary save/playback acceptance remain separate. [Section 11.0](05-autofocus.md#110-stock-first-sensor-backed-iteration) owns this process. Host work can proceed around dependencies without inventing target facts. Original design v1.0 provenance is SHA-256 `62d08fb6dc2b0362139a595a8260a73c7bc753085598e1b64f192c5c17115efe` (2026-09-28).
 
 ## Technical findings and reproduction
 

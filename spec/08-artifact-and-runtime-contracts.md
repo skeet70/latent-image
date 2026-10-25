@@ -34,6 +34,21 @@ Actions are `hold`, `move_to`, `move_by`, `finish`, `fail`, or `hand_back_to_sto
 
 Keep this contract small enough to mirror in a bounded state/step interface. Define integer widths, units, arithmetic/overflow, structure layout where relevant, and serialization explicitly. Do not serialize raw host structs or require Haskell on the camera. Haskell can orchestrate files/stdio around the controller and native runner; use a narrow FFI only if a measured requirement justifies it. Implementation languages follow [current principles](../docs/principles.md#implementation-and-build).
 
+### Camera snapshots and live experiment sessions
+
+The future camera-observation producer must publish a versioned snapshot contract before its consumers ship. Reuse the observation/action identities above; do not label raw bytes as a validated frame or add hardware origins to the synthetic-only simulator contract.
+
+- Bind each snapshot to session epoch, frame/sample identity, source domain, format, dimensions/stride/crop, payload extent, sensor/region/processing configuration, exposure/gain and acquisition-time lens command. Unknown acquisition time, position or completion stays explicitly unknown.
+- Establish producer completion, ownership and cache/alias visibility. Reading a header twice or obtaining a checksum does not prove a DMA buffer remained immutable during extraction.
+- Prefer a completed stock buffer with a justified lifetime; otherwise copy a bounded crop/statistic record into owned export storage. Publish it only after completion, retain it until release or a bounded expiry, and reject stale epochs or released snapshots.
+- Never wait for USB inside an acquisition callback or stall the sensor for a slow consumer. Bound copying, storage and callback time; record overflow/drop/contention and incomplete samples.
+- Validate active extents against evidenced memory backing and ownership. Firmware pool tables and emulator RAM capacity do not justify widening physical read bounds.
+- Permit one active focus controller. Camera-side and host-side checks enforce the reviewed mode, command family, position/rate/travel bounds, finite attempt/session budgets and cancellation. Expose no arbitrary memory/MMIO forwarding from an emulator.
+- A host loss or uncertain state-changing reply stops new actions without retry. Define safe completion/cleanup of already accepted work; a timeout cannot guarantee recovery from arbitrary privileged-code corruption.
+- Reconnect, reset or emulator checkpoint restore invalidates the live session and pending actions. Re-establish identity and observed state before a separately admitted continuation.
+- Offline source providers cannot enumerate or open a camera. Hardware transport exists only inside explicit reviewed `//transport:camera` operations.
+
+
 ## Native-case and payload requirements
 
 A native case names exact input hashes/offsets, evidenced CPU family/model/mode/endianness, initial registers/flags, stack/global bytes, mapped regions/permissions, transitive calls, explicit stub contracts, and nonzero instruction/wall-time budgets. Expected results include registers, allowed memory differences, exit reason, and stub/event logs. An independent known result is required for a stock case; a self-generated expected value is insufficient.

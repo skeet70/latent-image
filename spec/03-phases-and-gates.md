@@ -27,20 +27,20 @@ These phases define research requirements, not a setup checklist or current comp
 
 #### First physical session
 
-1. Record model and installed body/lens firmware through normal camera controls; photograph the version screen if practical. Record normal power-up behavior and take reference images before service work.
-2. Use a reliable data cable and an adequately charged battery. Remove accessories not needed for this session. Keep experiments that do not need a lens separate from lens-control work.
-3. Ask the user to enter the documented service-mode button sequence after confirming it is the one being evaluated for this body. `fffw` documents powering on with USB connected while holding Shutter and Up. [S02](09-sources.md#s02)
-4. On Linux, inspect USB enumeration. `lsusb -d 04cb:ff80` is the documented identification check. A USB product ID alone does not identify the camera model. [S02](09-sources.md#s02)
-5. Execute the audited identity query through the broker. Save raw bytes and parsed fields. Confirm there is exactly one eligible device and the model is X-M1.
-6. End the session cleanly, return to ordinary camera operation, and confirm the same baseline functions work. Repeat entry/exit enough to establish a reproducible sequence, not a large endurance test.
+1. Record the observed body/lens firmware and available normal startup, preview, focus and capture behavior. Cardless startup is not capture/save/playback acceptance.
+2. Use an adequately charged battery and a reliable data cable. Keep experiments that do not need a lens separate from lens-control work.
+3. Prefer the demonstrated ordinary-boot access route. Establish whether preview and AF remain usable while USB is attached; menu operation alone does not establish either.
+4. Through a reviewed closed operation, require exactly one eligible device and verify model/version. A USB product ID alone does not identify the camera.
+5. Read existing stock observations after bounded ordinary focus attempts in the same boot, with large transfers outside timed acquisitions.
+6. Follow the operation-specific exit and stock-return checks. Do not enter maintenance mode, alter stored debug gates or require a card merely to repeat already established access.
 
-Select the device as in [the runtime contract](08-artifact-and-runtime-contracts.md#device-selection). Record service-mode restrictions on live view, AF, and lens communication as soon as they can be observed through audited operations; this feasibility finding should guide mapping priorities before a large emulator is built.
+Select the device as in [the runtime contract](08-artifact-and-runtime-contracts.md#device-selection). Maintenance entry remains a separately scoped diagnostic when an experiment needs it, not the default AF loop. Record any access-induced restriction before expanding the experiment.
 
 Do not start with an address-space sweep. Do not run an X-E2-specific example merely because it appears in the CLI.
 
 #### Stock AF benchmark
 
-E defines the first small test matrix while A works on access. Use a stationary target and manual camera controls if no programmatic control exists. Label manually gathered positions as approximate until actuator positions can be measured.
+E defines a small household-scene feasibility block while A works on observation access. Use a few ordinary focus attempts before programmatic control exists; add automated bounded starts and reference sweeps only after the lens contract is validated. The [pilot protocol](../reports/stock-pilot-protocol.md) separates feasibility, development calibration and confirmation.
 
 Collect at least:
 
@@ -50,7 +50,7 @@ Collect at least:
 - A scene that often hunts, plus a case already focused near the subject.
 - Fixed AF area, aperture, exposure policy, focal length, and repeatable starting state.
 
-Use external video or other documented timing observations for a coarse first measurement. Record timing uncertainty. Half-press to green confirmation and half-press to independently acceptable sharpness are distinct metrics; retain both where observable. Do not use JPEG save time as a focus-speed measurement.
+Prefer source-bound internal observations and coherent intended-region images. Optional ordinary video provides a coarse external check, not a required rig. Record timing uncertainty. Half-press to green confirmation and half-press to independently acceptable sharpness are distinct metrics; retain both where observable. Do not use JPEG save time as a focus-speed measurement.
 
 **G1 acceptance:** exact body/lens identity, a reproducible service entry/exit procedure or a documented failure, stock camera baseline, and a small AF dataset. If service mode fails, host analysis and the photographic baseline continue; the result is a blocker for hardware access, not permission to probe arbitrary commands.
 
@@ -119,18 +119,18 @@ This phase depends on measured access, not only a source claim about writable ex
 
 Prerequisites are specific to the experiment: an early independent diagnostic cannot require proof of the later runtime hook it is intended to investigate. Static mapping and synthetic native fixtures can progress before a camera arrives; they do not satisfy hardware correspondence in G2 or stock-path behavior in G3. Record partial evidence and blockers without weakening the eventual gates.
 
-1. Determine whether service mode can coexist with live view, lens communication, and AF. This is an early feasibility question. A dump taken while photography is disabled cannot establish an AF instrumentation path.
+1. Establish AF and useful preview/statistic production with the ordinary-boot access route. Reuse the stock message trace before adding hooks. A dump taken while photography is disabled cannot establish an AF instrumentation path.
 2. Establish a legitimate RAM allocation or reserved region and its lifetime. Zeros, apparent free space, and an unused-looking global buffer do not establish ownership.
 3. Choose the smallest demonstrated call mechanism. Characterize how it enters/exits, stack and register handling, reentrancy, timing, cache maintenance, and interrupted transfers. Avoid patching a currently executing multi-instruction path without a justified synchronization mechanism.
 4. Start with a payload that computes a constant or checksum and returns through the expected path. No lens, storage, GPIO, or register control. Verify exact binary/disassembly and expected write set in the emulator first.
 5. Capture the bytes that will change. Match them immediately before the write. Load payload/data, verify readback, perform required instruction/data synchronization, then activate the reviewed entry mechanism.
 6. Confirm clean return, inspect allowed memory effects, restore the entry mechanism, and return to normal camera operation. Repeat after an ordinary cold start. Preserve the pre-session and post-session configuration observations, comparing stable fields.
-7. Add an observation-only probe that records an AF event/measurement into a bounded ring buffer. Avoid per-frame file writes and expensive logging in timing-critical code. Detect ring-buffer overflow explicitly.
+7. Add only missing observations: a bounded AF event ring and coherent image/statistic snapshots under the [snapshot contract](08-artifact-and-runtime-contracts.md#camera-snapshots-and-live-experiment-sessions). Avoid per-frame file writes, unbounded buffer retention and expensive timing-path logging; detect overflow and incomplete observations.
 8. Measure instrumentation overhead. Validate that stock AF with the probe behaves within baseline measurement variability before attributing later changes to an AF algorithm.
 
 **G4 acceptance:** target identity and patch sites verified; owned RAM; demonstrated enter/return/cleanup; reviewed external-call set; recovery level recorded; no unexplained state changes; session scope covers this execution. Early independent SD boot at R2 is preferred before novel payloads. If R2 is unavailable, the coordinator must describe the remaining recovery limitation when seeking the initial H2 execution scope. Source review and a host broker reduce error risk but do not sandbox privileged code running on the camera.
 
-**G5 acceptance:** a repeatable capture → replay → rebuild → load → observe → unload cycle, without a firmware flash, that can gather AF data in a photography-capable mode. If mode limitations prevent this, produce a feasibility report and continue offline while investigating an alternative transient entry path.
+**G5 acceptance:** a repeatable capture, replay, rebuild, load, observe and verified-removal cycle without firmware flash, with actual AF observations in an AF-capable mode. Cardless preview/statistic capture may satisfy this research loop once established; synthetic trigger publication, a maintenance dump or unclassified pixels do not. Record the exact cleanup route rather than inferring physical hot-unload safety from emulator success. A bounded host-control batch additionally requires the reviewed lens/action contract; full-system AF emulation is a separate integration consumer, not a prerequisite for every host experiment.
 
 ### Phase 5 — Characterize the real AF loop and evaluate candidates
 
@@ -140,8 +140,8 @@ Prerequisites are specific to the experiment: an early independent diagnostic ca
 2. Determine what is actually slow: frame cadence, image-processing queue, too many focus samples, lens travel/settling, unnecessary reinitialization, focus confirmation, or some combination.
 3. Establish actuator units, bounds, smallest useful step, backlash/direction effects, repeatability, completion signaling, and variation with aperture or lens firmware. Use existing bounded Fuji lens operations where possible; do not replace low-level motor drivers.
 4. Gather additional focus sweeps and event traces for the primary lens. Record noise, exposure changes, stale samples, and dropped frames. Work with the existing sharpness statistic first if it is useful and accessible.
-5. Implement the candidate sequence in section 11 against one contract. Compare to stock behavior on recorded paths and to a calibrated search baseline in the replay environment.
-6. Use held-out scene-level splits and timed hardware verification. Reject a synthetic improvement that depends on unachievable lens steps, unrealistically fresh frames, or unavailable pixel data.
+5. Implement the candidate sequence in section 11 against one contract, including tuned stock. Use recorded-path replay for reproduction, measured closed-loop simulation for counterfactuals and bounded host control of the real optical system for development.
+6. Use held-out scene/session splits and timed on-camera verification. Reject gains that depend on unachievable lens steps, unrealistically fresh frames, unavailable pixels or host transport being omitted from a host-controlled measurement.
 
 **Deliverables:** timing breakdown, camera/lens model with uncertainty, trace dataset, baseline controller, candidate comparisons, and target compute/memory estimates.
 
@@ -159,7 +159,9 @@ Prerequisites are specific to the experiment: an early independent diagnostic ca
 
 Also verify the declared untethered photography workflow: after the validated host-disconnect path, the camera retains control/inference and handles absent logging, unsupported modes, and cancellation. Record activation and cold-start loss for a RAM implementation. G6 requires this operational evidence alongside the benchmark.
 
-**G6 acceptance:** real-camera evidence of a useful improvement, documented operating envelope, no silent regression in the required cases, target resource budgets met, and reliable removal/reload. A faster but less accurate controller fails the stated goal unless the user explicitly chooses that trade-off.
+Cardless research and validated RAM-image quality do not wait for SD repair. Ordinary capture/save/playback compatibility remains unaccepted until exercised through a working storage route; do not present a cardless research result as a complete ordinary-photography release.
+
+**G6 acceptance:** real-camera evidence of the declared speed and accuracy improvement, documented operating envelope, no silent regression in required cases, target resource budgets met, and reliable removal/reload. Apply the positive accuracy endpoint as well as noninferiority in section 12. A faster but less accurate controller fails the stated goal unless the owner explicitly chooses that trade-off.
 
 ### Phase 7 — Release a reproducible result and decide installation separately
 
@@ -184,6 +186,9 @@ Assess persistence only after the runtime result is useful. If a session loader 
 | Meaningful native AF emulation | Mapped functions plus state/observation fixtures | Recovery work and dataset gathering. |
 | First RAM execution | G2/G3-relevant evidence and G4 review | Offline algorithm work; complete recovery may still be in progress. |
 | Controlled AF changes | G5, lens/measurement contracts, replay results | Recovery advancement and independent benchmark review. |
+| Coherent camera snapshots | Active buffer/producer bindings and reviewed extraction; G4 for a new RAM mechanism | Existing stock trace analysis, source research and synthetic host work. |
+| Cardless host optical feedback | Validated snapshots, bounded stock lens operations and scoped H2 session | Recorded-data replay and selected-function/full-system integration. |
+| Optional capture-to-RAM | Demonstrated preview-quality limitation, fresh-exposure/output/cleanup contracts and review | SD repair and ordinary-storage acceptance; not a prerequisite for preview AF research. |
 | Persistent installation | Proven useful prototype plus the required recovery evidence | Not on the critical path for the initial research loop. |
 
 If blocked, keep unrelated H0 tasks moving. Do not turn an unknown X-M1 address into a guessed experiment merely to unblock a worker.
