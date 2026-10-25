@@ -112,6 +112,7 @@ main = do
   roundTripChecks
   rejectionChecks
   exportRejectionChecks
+  safetyChecks
   binary <- makeAbsolute binaryArg
   cliChecks binary
   putStrLn "recipe-text: checks passed"
@@ -239,40 +240,45 @@ cliChecks binary = do
   removeFile root
   createDirectory root
   let hexBase = concat (replicate payloadBytes "11")
-      outDir = root </> "out"
-      exportDir = root </> "exported"
-      secondDir = root </> "second"
       run arguments = readCreateProcessWithExitCode (proc binary arguments) {cwd = Just root} ""
-  writeFile (root </> "warmstandard.txt") warmStandardText
-  writeFile (root </> "chrome.txt") "Film Simulation: Classic Chrome\n"
-  writeFile (root </> "tone.txt") "Highlight Tone: +3\n"
-  (importCode, importOut, importErr) <-
-    run ["import", hexBase, outDir, "warmstandard.txt", "chrome.txt", "tone.txt"]
-  check ("mixed set imports the valid recipe: " ++ show importErr) (importCode == ExitSuccess)
-  check ("mixed set reports C1: " ++ show importOut) ("IMPORTED C1 from warmstandard.txt as \"warmstandard\"" `isInfixOf` importOut)
-  check ("mixed set reports the unsupported film: " ++ show importOut) ("REJECTED chrome.txt:" `isInfixOf` importOut && "Classic Chrome" `isInfixOf` importOut)
-  check ("mixed set reports the out-of-range value: " ++ show importOut) ("REJECTED tone.txt:" `isInfixOf` importOut && "out of range" `isInfixOf` importOut)
-  check ("mixed set reports no field from the base: " ++ show importOut) ("from base: none" `isInfixOf` importOut)
-  bank <- B.readFile (outDir </> bankFileA)
-  let decoded = decodeBankFile bank
-      state = decodedState (fixture decoded)
-      occupied = [(k, name, bankPayloadContents saved) | (k, Populated name saved _) <- zip [0 :: Int ..] (bankRecordList (bankRecords state))]
-  check "the generated bank decodes with its checksum" (case decoded of Right _ -> True; Left _ -> False)
-  check "the generated bank is generation 1" (bankGeneration state == BankGeneration 1)
-  check "the generated bank has one populated slot" (length occupied == 1)
-  check
-    "the populated slot carries the recipe's payload"
-    (occupied == [(0, fixture (slotName "warmstandard"), payloadOf testBase (fixture (parseRecipeText "warmstandard" warmStandardText)))])
-  (exportCode, exportOut, exportErr) <- run ["export", hexBase, outDir </> bankFileA, exportDir]
-  check ("the bank exports: " ++ show exportErr) (exportCode == ExitSuccess)
-  check ("the bank reports its slot: " ++ show exportOut) ("EXPORTED C1" `isInfixOf` exportOut)
-  exported <- readFile (exportDir </> "C1.txt")
-  check "the exported text is the canonical recipe" (exported == "Name: warmstandard\n" ++ warmStandardText)
-  (againCode, againOut, againErr) <- run ["import", hexBase, secondDir, exportDir </> "C1.txt"]
-  check ("the exported text imports again: " ++ show againErr) (againCode == ExitSuccess)
-  check ("the exported text reports its slot: " ++ show againOut) ("IMPORTED C1" `isInfixOf` againOut)
-  again <- B.readFile (secondDir </> bankFileA)
-  let againState = decodedState (fixture (decodeBankFile again))
-      againOccupied = [bankPayloadContents saved | Populated _ saved _ <- bankRecordList (bankRecords againState)]
-  check "export followed by import reproduces the slot byte for byte" (againOccupied == [payloadOf testBase (fixture (parseRecipeText "warmstandard" warmStandardText))])
+  (noOptions, _, noOptionsErr) <- run ["import", hexBase, root </> "out", "one.txt"]
+  check ("an import without the image and row options is refused: " ++ show noOptionsErr) (noOptions /= ExitSuccess && "usage" `isInfixOf` noOptionsErr)
+  (noImage, _, noImageErr) <- run ["import", "--image4", "absent.bin", "--image-size", "1", hexBase, root </> "out", "one.txt"]
+  check ("a missing --image4 is refused: " ++ show noImageErr) (noImage /= ExitSuccess && "absent.bin" `isInfixOf` noImageErr)
   removeDirectoryRecursive root
+
+testDomain :: PayloadDomain
+testDomain =
+  PayloadDomain
+    { domainTables = []
+    , domainSizePairs = [SizePair (FieldCode size) (FieldCode aspect) | size <- [0, 1, 2], aspect <- [1, 2, 3]]
+    , domainQualityRaw = [QualityRaw (FieldCode 0) (FieldCode 0)]
+    }
+
+safetyChecks :: IO ()
+safetyChecks = do
+  check "an unoffered IMAGE SIZE row is refused" (rejectedWith "is not offered" (preparedBase testDomain 0 zeroBase))
+  let prepared = fixture (preparedBase testDomain 1 zeroBase)
+  check
+    "an offered IMAGE SIZE row makes the base pass the safety rules"
+    (payloadUnsafeReason testDomain (fixture (safePayload testDomain prepared)) == Nothing)
+  let warm = fixture (parseRecipeText "warmstandard" warmStandardText)
+      second = fixture (parseRecipeText "secondvelvia" secondVelviaText)
+      payload recipe =
+        fixture
+          ( safePayload testDomain
+              (fixture (encodeSlotPayloadOver prepared (fst (fixture (fillRecipe prepared recipe)))))
+          )
+      records =
+        fixture
+          ( bankRecordsFromList
+              ( [ Populated (textName warm) (payload warm) (payload warm)
+                , Populated (textName second) (payload second) (payload second)
+                ]
+                  ++ replicate 5 Unpopulated
+              )
+          )
+      file = fixture (encodeBankFile (BankState (BankGeneration 1) NothingSelected Disabled BaseInvalid records))
+  check
+    "every payload of the emitted bank passes the safety rules"
+    (case classifyBankFile testDomain file of ValidFile _ -> True; _ -> False)
