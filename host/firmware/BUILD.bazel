@@ -3,6 +3,25 @@ load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "h
 
 package(default_visibility = ["//visibility:public"])
 
+haskell_binary(
+    name = "read-af-ring",
+    srcs = ["ReadAfRing.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    deps = [
+        "//transport:af-ring",
+        "//transport:camera-core",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
 exports_files([
     "classic-chrome-icon.txt",
     "classic-chrome-q-tile.txt",
@@ -1256,22 +1275,25 @@ haskell_library(
     deps = ["//host:base"],
 )
 
+# The relink tools' store paths are read from ram-push-toolchain-paths' files,
+# so the action's key follows them.
 genrule(
     name = "ram-push-toolchain-module",
     srcs = [
         ":build-recipe-bank-sources",
         "@lab_bash//:bin/bash",
-        "@lab_clang//:bin/clang",
-        "@lab_coreutils//:bin/readlink",
         "@lab_coreutils//:bin/sha256sum",
         "@lab_coreutils//:bin/sort",
-        "@lab_lld//:bin/ld.lld",
-        "@lab_llvm//:bin/llvm-nm",
-        "@lab_llvm//:bin/llvm-objcopy",
-        "@lab_llvm//:bin/llvm-objdump",
+        "@lab_ram_push_toolchain_paths//:share/ram-push-toolchain-paths/bash",
+        "@lab_ram_push_toolchain_paths//:share/ram-push-toolchain-paths/clang",
+        "@lab_ram_push_toolchain_paths//:share/ram-push-toolchain-paths/ld.lld",
+        "@lab_ram_push_toolchain_paths//:share/ram-push-toolchain-paths/llvm-nm",
+        "@lab_ram_push_toolchain_paths//:share/ram-push-toolchain-paths/llvm-objcopy",
+        "@lab_ram_push_toolchain_paths//:share/ram-push-toolchain-paths/llvm-objdump",
+        "@lab_ram_push_toolchain_paths//:share/ram-push-toolchain-paths/sha256sum",
     ],
     outs = ["RamPushToolchain.hs"],
-    cmd = "$(location @lab_bash//:bin/bash) $(location ram-push-toolchain.sh) $@ $(location @lab_coreutils//:bin/readlink) $(location @lab_coreutils//:bin/sha256sum) $(location @lab_coreutils//:bin/sort) $(location @lab_bash//:bin/bash) $(location @lab_clang//:bin/clang) $(location @lab_lld//:bin/ld.lld) $(location @lab_llvm//:bin/llvm-objcopy) $(location @lab_llvm//:bin/llvm-nm) $(location @lab_llvm//:bin/llvm-objdump) $(locations :build-recipe-bank-sources)",
+    cmd = "$(location @lab_bash//:bin/bash) $(location ram-push-toolchain.sh) $@ $(location @lab_coreutils//:bin/sha256sum) $(location @lab_coreutils//:bin/sort) $(location @lab_ram_push_toolchain_paths//:share/ram-push-toolchain-paths/bash) $(location @lab_ram_push_toolchain_paths//:share/ram-push-toolchain-paths/clang) $(location @lab_ram_push_toolchain_paths//:share/ram-push-toolchain-paths/ld.lld) $(location @lab_ram_push_toolchain_paths//:share/ram-push-toolchain-paths/llvm-objcopy) $(location @lab_ram_push_toolchain_paths//:share/ram-push-toolchain-paths/llvm-nm) $(location @lab_ram_push_toolchain_paths//:share/ram-push-toolchain-paths/llvm-objdump) $(location @lab_ram_push_toolchain_paths//:share/ram-push-toolchain-paths/sha256sum) $(locations :build-recipe-bank-sources)",
     tools = ["ram-push-toolchain.sh"],
 )
 
@@ -1515,5 +1537,32 @@ haskell_test(
         "//host:bytestring",
         "//host:classic-chrome",
         "//host:classic-chrome-ram",
+    ],
+)
+
+haskell_binary(
+    name = "build-af-ring-ram",
+    srcs = [
+        "AfRingAllowlist.hs",
+        "BuildAfRingRam.hs",
+    ],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-threaded"],
+    main_file = "BuildAfRingRam.hs",
+    deps = [
+        ":bank-allowlist",
+        ":ram-push-toolchain",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+        "//host:json",
+        "//host:unix",
+    ],
+)
+
+filegroup(
+    name = "af-ring-ram-relinker",
+    srcs = [
+        "build-af-ring-ram.sh",
+        ":build-af-ring-ram",
     ],
 )

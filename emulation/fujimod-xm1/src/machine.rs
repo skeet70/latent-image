@@ -1,13 +1,15 @@
 //! A strict X-M1 session and its run document; runs record armed instruction
 //! points and stop at the R4F guard's refusals.
 
-use crate::guest::{MenuState, ModeDialPosition, ModeDialWindow, RouteKey, set_adc};
+use crate::guest::{DialTurn, MenuState, ModeDialPosition, ModeDialWindow, Press, RouteKey, set_adc};
 use crate::r4f::Guard;
 use crate::run::RunDocument;
+use crate::sd_host::{Contacts, RetainedCard, SdHost};
 use crate::trace::TraceSites;
 use fujimod_emulator::session::Session;
 
 const RELEASE_POLL: u64 = 250_000;
+const PHASE_POLL: u64 = 20_000;
 /// Longest run between two guard scans.
 const GUARD_WINDOW: u64 = 1_000_000;
 
@@ -107,6 +109,54 @@ impl Machine {
         self.document.firmware.menu(&self.session)
     }
 
+    pub fn press_once(&mut self, press: Press, pulse: KeyPulse) -> Result<(), String> {
+        match press {
+            Press::Key(key) => self.key(key, pulse),
+            Press::Dial(turn) => self.turn_dial(turn, pulse),
+        }
+    }
+
+    /// Drives the dial's four phases, each within a quarter of `pulse.hold` and refused unless
+    /// the scanner samples it, then waits up to `pulse.release` for the released phase.
+    pub fn turn_dial(&mut self, turn: DialTurn, pulse: KeyPulse) -> Result<(), String> {
+        if self.failure.is_some() {
+            return Err("Restore the checkpoint before another input after a strict stop".into());
+        }
+        self.document.firmware.subcommand_ready(&self.session)?;
+        const RELEASED: u8 = 0b11;
+        if self.document.firmware.subcommand_sampled(&self.session)? != RELEASED {
+            return Err("the sub-command scanner has not sampled released pads".into());
+        }
+        let (port, pins) = (self.document.firmware.subcommand.port, self.document.firmware.subcommand.pins);
+        let gpio = self.document.gpio.0.clone();
+        let phase_budget = pulse.hold / 4;
+        for (pin8, pin9) in turn.phases() {
+            self.session.gpio(&gpio, port, pins[0], pin8)?;
+            self.session.gpio(&gpio, port, pins[1], pin9)?;
+            let phase = u8::from(pin8) << 1 | u8::from(pin9);
+            if !self.run_until_sampled(phase, phase_budget)? {
+                return Err(format!("the sub-command scanner did not sample phase {phase:02b}"));
+            }
+        }
+        self.run_until_sampled(RELEASED, pulse.release)?;
+        self.require_running()
+    }
+
+    fn run_until_sampled(&mut self, phase: u8, budget: u64) -> Result<bool, String> {
+        let start = self.instructions();
+        loop {
+            self.require_running()?;
+            if self.document.firmware.subcommand_sampled(&self.session)? == phase {
+                return Ok(true);
+            }
+            let spent = self.instructions() - start;
+            if spent >= budget {
+                return Ok(false);
+            }
+            self.run((budget - spent).min(PHASE_POLL));
+        }
+    }
+
     pub fn key(&mut self, key: RouteKey, pulse: KeyPulse) -> Result<(), String> {
         if self.failure.is_some() {
             return Err("Restore the checkpoint before another input after a strict stop".into());
@@ -127,10 +177,11 @@ impl Machine {
         Ok(())
     }
 
-    /// Holds the ADC key `key` pressed until `release_key`.
-    pub fn press(&mut self, key: RouteKey) -> Result<(), String> {
+    /// Holds the ADC key `key` pressed until `release_key`; returns the held sample.
+    pub fn press(&mut self, key: RouteKey) -> Result<u16, String> {
         let (channel, sample) = self.document.firmware.pressed_sample(&self.session, key)?;
-        set_adc(&mut self.session, &self.document.adc, channel, sample)
+        set_adc(&mut self.session, &self.document.adc, channel, sample)?;
+        Ok(sample)
     }
 
     pub fn release_key(&mut self, key: RouteKey) -> Result<(), String> {
@@ -189,5 +240,35 @@ impl Machine {
     pub fn word(&self, address: u64) -> Result<u32, String> {
         let bytes = self.read(address, 4)?;
         Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    fn card_contacts(&self) -> Result<Contacts, String> {
+        let node = self.session.node(&self.document.sd.0)?;
+        self.session.board.inspect_device::<SdHost, _>(node, |host| Ok(host.contacts()))
+    }
+
+    /// Inserts `card` into the unexecuted SD host and requests card detect low; the GPIO
+    /// applies the request once the board runs.
+    pub fn insert_card(&mut self, card: RetainedCard) -> Result<(), String> {
+        let node = self.session.node(&self.document.sd.0)?;
+        self.session.board.edit_device::<SdHost, _>(node, |host| host.insert(card))?;
+        let Contacts { gpio, detect, .. } = self.card_contacts()?;
+        self.session.gpio(&gpio.0, detect.port, detect.pin, false)
+    }
+
+    pub fn card_present(&self) -> Result<bool, String> {
+        let node = self.session.node(&self.document.sd.0)?;
+        self.session.board.inspect_device::<SdHost, _>(node, |host| host.present())
+    }
+
+    /// Drives the SD host's write-protect pad.
+    pub fn protect_card(&mut self, protected: bool) -> Result<(), String> {
+        let Contacts { gpio, protect, .. } = self.card_contacts()?;
+        self.session.gpio(&gpio.0, protect.port, protect.pin, protected)
+    }
+
+    /// The SD host's diagnostic state: presence, card state, counters and recent commands.
+    pub fn card_state(&self) -> Result<serde_json::Value, String> {
+        self.session.board.device_save(self.session.node(&self.document.sd.0)?)
     }
 }

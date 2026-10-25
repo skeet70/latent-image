@@ -34,7 +34,7 @@ References retain source pins, inspection dates and evidence scope. Reproduce pi
 
 <a id="s08"></a>
 
-- **[S08] Official X-M1 firmware:** [Fujifilm support page](https://www.fujifilm-x.com/en-us/support/download/firmware/cameras/x-m1/).
+- **[S08] Official X-M1 firmware:** [Fujifilm support page](https://www.fujifilm-x.com/en-us/support/download/firmware/cameras/x-m1/), read 2026-10-25. The vendor lists 1.50 and reports still-image AF accuracy changes in 1.01, lens-specific AF/compatibility changes in 1.20, 1.30 and 1.50, and lens focus-limiter support in 1.40. These motivate source-bound same-model comparisons and lens-parameter research; they do not establish a defect or an improvement for the current Viltrox lens. No firmware download, installation or acceptance of new license terms is part of this source inspection.
 
 <a id="s09"></a>
 
@@ -46,15 +46,15 @@ References retain source pins, inspection dates and evidence scope. Reproduce pi
 
 <a id="s11"></a>
 
-- **[S11] Learned image-based AF:** [Deep Learning for Camera Autofocus — author code](https://github.com/ChengyuWang1007/Deep-Learning-for-Camera-Autofocus), [Intelligent Autofocus preprint](https://arxiv.org/abs/2002.12389), [IEEE article summary](https://signalprocessingsociety.org/publications-resources/ieee-transactions-computational-imaging/2022/01/deep-learning-camera-autofocus).
+- **[S11] Learned image-based AF:** [Deep Learning for Camera Autofocus, author code](https://github.com/ChengyuWang1007/Deep-Learning-for-Camera-Autofocus), [Intelligent Autofocus preprint](https://arxiv.org/abs/2002.12389), [IEEE article summary](https://signalprocessingsociety.org/publications-resources/ieee-transactions-computational-imaging/2022/01/deep-learning-camera-autofocus). Inspection on 2026-10-25 found estimator/discriminator code, calibration code, an RL-agent directory and pretrained weights. Reuse permission was not established; public files alone are not a license. First reproduce a bounded ordinary-image experiment and quantify lens/domain calibration and target cost.
 
 <a id="s12"></a>
 
-- **[S12] Learning to Autofocus (CVPR 2020):** [project, paper links, and dataset](https://learntoautofocus-google.github.io/).
+- **[S12] Learning to Autofocus (CVPR 2020):** [project, paper links and dataset](https://learntoautofocus-google.github.io/), read 2026-10-25. The project provides 510 real-world focal stacks and compares single-image, two-step and full-stack prediction with conventional and dual-pixel inputs. Only the conventional-image branch is an X-M1 candidate absent independent hardware evidence. The project describes MobileNetV2 with ordinal regression and offers code contact rather than a turnkey reproduction. Establish data rights and a bounded subset before large downloads; prediction error is not end-to-end AF latency.
 
 <a id="s13"></a>
 
-- **[S13] Practical contrast-scan reference:** [Raspberry Pi libcamera AF controller](https://github.com/raspberrypi/libcamera/blob/main/src/ipa/rpi/controller/rpi/af.cpp). Pin the revision used and account for its hybrid-AF assumptions.
+- **[S13] Practical contrast-scan reference:** [Raspberry Pi libcamera AF controller at revision `957f0f4bd06a163466ff1f3adda66f64fb66cd64`](https://github.com/raspberrypi/libcamera/blob/957f0f4bd06a163466ff1f3adda66f64fb66cd64/src/ipa/rpi/controller/rpi/af.cpp), source and file-revision history inspected 2026-10-25. The file declares BSD-2-Clause. Reference for coarse/fine search, peak interpolation, confidence and settling policy. Account for its hybrid-AF assumptions and sensor tuning; none of its lens units, PDAF inputs or physical timing transfers to X-M1 by analogy.
 
 <a id="s14"></a>
 
@@ -129,4 +129,12 @@ The hash-verified S15 source binds all three SD-BOOT files to the extracted ZJ02
 <a id="s32"></a>
 
 - **[S32] Mode-7 controller identity cross-checks:** `fffw` X-E2 4.11 [`bootrom.h`](https://github.com/tiredboffin/fffw/blob/master/ffun/ports/xe2/0411/bootrom.h) and [commit `7f313c704dee7df98a5ea19abe3bf8113e6ead90`](https://github.com/tiredboffin/fffw/commit/7f313c704dee7df98a5ea19abe3bf8113e6ead90), plus Linux [`milbeaut_usio.c`](https://github.com/torvalds/linux/blob/master/drivers/tty/serial/milbeaut_usio.c) and [`sdhci-milbeaut.c`](https://github.com/torvalds/linux/blob/master/drivers/mmc/host/sdhci-milbeaut.c), read 2026-10-12. The upstream enum calls value 7 `BOOT_DEV56` without naming a controller. The later Milbeaut UART and SDHCI drivers expose register layouts incompatible with the captured ROM's `0xfff56000` block. Scope: X-E2 sibling naming and later-generation Milbeaut controller sources only; none maps FF4227 pins, framing or a physical connector.
+
+<a id="s33"></a>
+
+- **[S33] Expert-trajectory-regularized autofocus, CVPR 2025:** Shouhang Zhu et al., [paper and supplementary material](https://openaccess.thecvf.com/content/CVPR2025/html/Zhu_Stabilizing_and_Accelerating_Autofocus_with_Expert_Trajectory_Regularized_Deep_Reinforcement_CVPR_2025_paper.html), pp. 26440-26450, inspected 2026-10-25. The authors propose relative lens-movement prediction and expert-trajectory regularization to reduce hunting in multi-step learned AF. Reproduction lead only: no implementation, weights or reuse license was established by this inspection, and published prediction/hunting results do not measure X-M1 latency or target cost.
+
+<a id="s34"></a>
+
+- **[S34] Fujifilm X-T3 4.0 AF update:** [official announcement](https://www.fujifilm-x.com/en-us/news/fujifilm-releases-free-firmware-update-upgrading-the-af-performance-of-the-fujifilm-x-t3/), published 2020-10-15, read 2026-10-25. Vendor-reported algorithm changes include movement prediction, face/eye tracking, focus limiter and AF speed; the low-light result explicitly uses phase detection and XF50mmF1.0. It demonstrates a source of policy hypotheses, not portability to X-M1. Donor firmware comparison needs exact inputs, applicable rights/provenance review and independent target binding; no binaries, addresses or calibration tables are transplanted.
 

@@ -286,7 +286,11 @@
           "down",
           1,
           5,
-          9
+          9,
+          {
+            "hold_instructions": 8000000,
+            "release_instructions": 8000000
+          }
         ],
         [
           "down",

@@ -15,6 +15,7 @@ haskell_library(
     src_strip_prefix = ".",
     deps = [
         "//host:base",
+        "//host:bytestring",
         "//host:directory",
         "//host:filepath",
         "//host:unix",
@@ -30,6 +31,35 @@ haskell_binary(
         ":emulator-slot-lib",
         "//host:base",
         "//host:directory",
+        "//host:unix",
+    ],
+)
+
+haskell_binary(
+    name = "emulator-slot-probe",
+    srcs = ["EmulatorSlotProbe.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":emulator-slot-lib",
+        "//host:base",
+    ],
+)
+
+# systemd-run must reach the host's user systemd manager, whose bus drops
+# clients arriving from a PID namespace, so the linux-sandbox cannot host this.
+haskell_test(
+    name = "emulator-slot-tests",
+    size = "small",
+    srcs = ["EmulatorSlotTests.hs"],
+    args = ["$(rootpath :emulator-slot-probe)"],
+    data = [":emulator-slot-probe"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    tags = ["no-sandbox"],
+    deps = [
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
         "//host:unix",
     ],
 )
@@ -99,7 +129,7 @@ genrule(
     outs = ["FujiModPaths.hs"],
     cmd = " && ".join([
         "read -r store < $(location @lab_fujimod_xm1//:share/fujimod-xm1/store-path)",
-        "printf 'module FujiModPaths (fujimodDriver, fujimodRamPushBridge, fujimodRun) where\\n\\nfujimodDriver :: FilePath\\nfujimodDriver = \"%s\"\\n\\nfujimodRamPushBridge :: FilePath\\nfujimodRamPushBridge = \"%s\"\\n\\nfujimodRun :: FilePath\\nfujimodRun = \"%s\"\\n' \"$$store/bin/fujimod-xm1\" \"$$store/bin/fujimod-xm1-ram-push\" \"$$store/share/fujimod-xm1/xm1-150.json\" > $@",
+        "printf 'module FujiModPaths (fujimodDriver, fujimodRamPushBridge, fujimodToggleBridge, fujimodRun) where\\n\\nfujimodDriver :: FilePath\\nfujimodDriver = \"%s\"\\n\\nfujimodRamPushBridge :: FilePath\\nfujimodRamPushBridge = \"%s\"\\n\\nfujimodToggleBridge :: FilePath\\nfujimodToggleBridge = \"%s\"\\n\\nfujimodRun :: FilePath\\nfujimodRun = \"%s\"\\n' \"$$store/bin/fujimod-xm1\" \"$$store/bin/fujimod-xm1-ram-push\" \"$$store/bin/fujimod-xm1-toggle\" \"$$store/share/fujimod-xm1/xm1-150.json\" > $@",
     ]),
 )
 
@@ -126,6 +156,22 @@ haskell_binary(
         "//host:directory",
         "//host:filepath",
         "//host:process",
+    ],
+)
+
+# The updater-f7 route on FujiMod; see README "updater-f7 on FujiMod".
+sh_binary(
+    name = "fujimod-updater-f7",
+    srcs = ["fujimod-updater-f7.sh"],
+    args = [
+        "$(rootpath :emulator-slot)",
+        "$(rootpath @lab_fujimod_xm1//:bin/fujimod-xm1-updater)",
+        "$(rootpath @lab_fujimod_xm1//:share/fujimod-xm1/xm1-150.json)",
+    ],
+    data = [
+        ":emulator-slot",
+        "@lab_fujimod_xm1//:bin/fujimod-xm1-updater",
+        "@lab_fujimod_xm1//:share/fujimod-xm1/xm1-150.json",
     ],
 )
 
@@ -177,7 +223,7 @@ haskell_test(
     name = "ui-trajectory-tests",
     size = "small",
     srcs = ["UiTrajectoryTests.hs"],
-    data = glob(["*-trajectories.json"]),
+    data = glob(["*-trajectories.json", "*-trajectories.fujimod.json"]),
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":emulator-usb",
@@ -186,6 +232,65 @@ haskell_test(
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
+    ],
+)
+
+# bazel run //emulation:trajectory-variant-check -- RETAINED.json VARIANT.json
+haskell_binary(
+    name = "trajectory-variant-check",
+    srcs = ["TrajectoryVariantCheck.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ui-trajectory-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
+
+haskell_library(
+    name = "observation-compare-lib",
+    srcs = ["Emulation/ObservationCompare.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_test(
+    name = "observation-compare-tests",
+    size = "small",
+    srcs = ["ObservationCompareTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":observation-compare-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:text",
+    ],
+)
+
+# bazel run //emulation:e2e-observation-compare -- RETAINED_RECEIPTS FUJIMOD_RECEIPTS
+haskell_binary(
+    name = "e2e-observation-compare",
+    srcs = ["E2EObservationCompare.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":observation-compare-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:vector",
     ],
 )
 
@@ -247,6 +352,7 @@ haskell_binary(
         ":case-sha256",
         ":checkpoint-key-lib",
         ":emulator-usb",
+        ":fujimod-paths",
         ":viewer-runtime-lib",
         "//broker:core",
         "//host:aeson",
@@ -288,6 +394,36 @@ haskell_binary(
         "//host:process",
         "//host:text",
         "//host:vector",
+        "//transport:camera-core",
+    ],
+)
+
+haskell_binary(
+    name = "xm1-af-ring-e2e",
+    srcs = ["Xm1AfRingE2E.hs"],
+    data = [
+        ":xm1-upstream",
+        "af-ring-e2e-trajectories.json",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":checkpoint-key-lib",
+        ":emulator-slot-lib",
+        ":emulator-usb",
+        ":ram-push-unreviewed",
+        ":ui-trajectory-lib",
+        ":viewer-runtime-lib",
+        "//broker:core",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+        "//transport:af-ring",
         "//transport:camera-core",
     ],
 )
@@ -877,6 +1013,14 @@ haskell_binary(
     ],
 )
 
+sh_test(
+    name = "recipe-bank-ui-plan-tests",
+    size = "small",
+    srcs = ["recipe-bank-ui-plan-tests.sh"],
+    args = ["$(location :recipe-bank-ui-cases)"],
+    data = [":recipe-bank-ui-cases"],
+)
+
 # Recipe-bank kernel behavior cases: builds each case from the pinned blob and
 # model, runs it through the bounded runner and writes results plus findings.
 haskell_binary(
@@ -1110,5 +1254,91 @@ haskell_binary(
         "//host:text",
         "//host:unix",
         "//host:vector",
+    ],
+)
+
+haskell_library(
+    name = "candidate-baseline-lib",
+    srcs = ["Emulation/CandidateBaseline.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_test(
+    name = "candidate-baseline-tests",
+    size = "small",
+    srcs = ["CandidateBaselineTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":candidate-baseline-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+    ],
+)
+
+# Every recorded emulator route and native case suite against private baselines.
+haskell_binary(
+    name = "verify-candidate",
+    srcs = ["VerifyCandidate.hs"],
+    data = [
+        ":e2e-observation-compare",
+        ":flash-boot-check",
+        ":fujimod-flash-boot-check",
+        ":native-runner",
+        ":recipe-bank-cases",
+        ":usb-toggle-emu",
+        ":recipe-bank-interop",
+        ":updater-f7",
+        ":xm1-viewer",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [
+        ":candidate-baseline-lib",
+        ":emulator-slot-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+        "//host:time",
+        "//host:unix",
+    ],
+)
+
+haskell_binary(
+    name = "ram-calibration",
+    srcs = ["RamCalibration.hs"],
+    data = [":cardless-ram-push-bridge", ":xm1-upstream"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":emulator-slot-lib",
+        ":emulator-usb",
+        ":fujimod-paths",
+        ":viewer-runtime-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
     ],
 )

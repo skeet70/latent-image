@@ -29,6 +29,7 @@ import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame (..), Python (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, stageViewerRuntime, validateFirmware, workspace)
 import EmulatorUsb (BridgeExchange, bridgeUsbApi)
 import qualified FujiAF.Broker as P
+import FujiModPaths (fujimodRun, fujimodToggleBridge)
 import FujiAF.Read (ReadWindow (..), decodeReadReply, readReplyBytes, readRequestBytes, readRequestFrame)
 import FujiAF.Transport (UsbApi (..))
 import FujiAF.UsbToggle (extentLength, extentStart, hookSite)
@@ -255,6 +256,11 @@ intField name fields = case field name fields of
   Number n | Just value <- toBoundedInteger n -> pure (toInteger (value :: Int))
   other -> ioError (userError ("bridge field " ++ name ++ " is not an integer: " ++ show other))
 
+optionalInt :: String -> M.KeyMap Value -> IO (Maybe Integer)
+optionalInt name fields = case field name fields of
+  Null -> pure Nothing
+  _ -> Just <$> intField name fields
+
 textField :: String -> M.KeyMap Value -> IO String
 textField name fields = case field name fields of
   String text -> pure (T.unpack text)
@@ -276,15 +282,23 @@ data BootKind
 
 data QAtReset = NoQ | QFromReset deriving (Eq, Show)
 
+-- | The emulator serving the toggle primitives: the retained Python bridge in
+-- a staged runtime, or @fujimod-xm1-toggle@ with the captured boot ROM.
+data BridgeLaunch
+  = RetainedLaunch FilePath FilePath GuestState
+  | FujiModLaunch FilePath
+
+engineName :: BridgeLaunch -> T.Text
+engineName RetainedLaunch {} = "retained"
+engineName FujiModLaunch {} = "fujimod"
+
 data Env = Env
   { envRoot :: FilePath
-  , envPython :: FilePath
-  , envRuntime :: FilePath
+  , envLaunch :: BridgeLaunch
   , envCheckpoints :: FilePath
   , envFresh :: Bool
   , envReplaced :: IORef [String]
   , envFixedFrame :: Maybe FixedSceneFrame
-  , envGuest :: GuestState
   }
 
 data Started = Started
@@ -309,43 +323,62 @@ startServer env dat nand boot qSample output = do
         CableAtReset QFromReset -> Just (9 :: Int, fromMaybe 0 qSample)
         _ -> Nothing
       cableAtReset = case boot of CableAtReset _ -> True; _ -> False
-      key = routeKey (envGuest env) ToggleRouteBoot
-        ([ "profile" .= ("firmware/x-m1/1.50/emulator-rec.json" :: T.Text)
-        , "installed_dat" .= datDigest
+      route =
+        [ "installed_dat" .= datDigest
         , "adjustment_nand" .= nandDigest
         , "boot" .= object ["cable_at_reset" .= cableAtReset, "adc_at_reset" .= fmap (\(c, v) -> [c, v]) adcAtReset]
         , "first_start_route" .= map routeStepValue firstStartSteps ]
-        ++ [ "fixed_scene_frame" .= frame | Just (FixedSceneFrame frame) <- [envFixedFrame env] ])
       resetArguments = case boot of
         CableAtReset NoQ -> ["--cable-at-reset"]
         CableAtReset QFromReset -> ["--cable-at-reset", "--adc-at-reset", "9=" ++ show (fromMaybe 0 qSample)]
         ProbeBoot -> ["--access-probe-range", hex32 extentStart ++ ":" ++ hex32 (extentStart + fromIntegral extentLength)]
         RouteBoot -> []
-      arguments =
-        [ "tools/continue_rec_scanout.py"
-        , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
-        , "--installed-dat", datFile
-        , "--adjustment-nand", nandFile
-        , "--menus", "--toggle-server"
-        , "--output", output
-        , "--toggle-checkpoints", envCheckpoints env
-        , "--checkpoint-key", routeKeyHex key
-        , "--checkpoint-inputs", C.unpack (BL.toStrict (encode (routeKeyDocument key)))
-        ] ++ resetArguments ++ fixedSceneFrameArguments (envFixedFrame env)
+      -- The retained bridge echoes the launcher's key; FujiMod's names its own.
+      (program, arguments, directory, expected) = case envLaunch env of
+        RetainedLaunch python runtime guest ->
+          let key = routeKey guest ToggleRouteBoot
+                ([ "profile" .= ("firmware/x-m1/1.50/emulator-rec.json" :: T.Text) ] ++ route
+                ++ [ "fixed_scene_frame" .= frame | Just (FixedSceneFrame frame) <- [envFixedFrame env] ])
+           in ( python
+              , [ "tools/continue_rec_scanout.py"
+                , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
+                , "--installed-dat", datFile
+                , "--adjustment-nand", nandFile
+                , "--menus", "--toggle-server"
+                , "--output", output
+                , "--toggle-checkpoints", envCheckpoints env
+                , "--checkpoint-key", routeKeyHex key
+                , "--checkpoint-inputs", C.unpack (BL.toStrict (encode (routeKeyDocument key)))
+                ] ++ resetArguments ++ fixedSceneFrameArguments (envFixedFrame env)
+              , runtime
+              , Just (routeKeyHex key, routeKeyDocument key) )
+        FujiModLaunch bootRom ->
+          ( fujimodToggleBridge
+          , [ "--run", fujimodRun, "--boot-rom", bootRom
+            , "--installed-dat", datFile, "--adjustment-nand", nandFile
+            , "--output", output, "--toggle-checkpoints", envCheckpoints env
+            , "--checkpoint-inputs", C.unpack (BL.toStrict (encode (object route)))
+            ] ++ resetArguments
+          , envRoot env
+          , Nothing )
   errors <- openFile (output ++ ".stderr") WriteMode
-  (Just input, Just out, _, process) <- createProcess (proc (envPython env) arguments)
-    { std_in = CreatePipe, std_out = CreatePipe, std_err = UseHandle errors, cwd = Just (envRuntime env) }
+  (Just input, Just out, _, process) <- createProcess (proc program arguments)
+    { std_in = CreatePipe, std_out = CreatePipe, std_err = UseHandle errors, cwd = Just directory }
   hSetBinaryMode input True
   hSetBinaryMode out True
   lastLine <- newIORef B.empty
   hitIndex <- newIORef 0
   let srv = Server input out process lastLine hitIndex
-  prepare srv (routeKeyHex key) (routeKeyDocument key) `onException` (terminateProcess process >> waitForProcess process)
+  prepare srv expected `onException` (terminateProcess process >> waitForProcess process)
   where
-    prepare srv key inputs = do
+    prepare srv expected = do
       options <- C.hGetLine (srvOut srv) >>= decodeObject
       echoed <- textField "key" options
-      require (echoed == key) "bridge echoed a different checkpoint key"
+      (key, inputs) <- case expected of
+        Just (launcherKey, document) -> do
+          require (echoed == launcherKey) "bridge echoed a different checkpoint key"
+          pure (launcherKey, document)
+        Nothing -> pure (echoed, field "inputs" options)
       replaced <- readIORef (envReplaced env)
       let saved = field "checkpoint" options /= Null
           fresh = envFresh env && key `notElem` replaced
@@ -981,7 +1014,7 @@ runScenario env receipts scenario = do
         , "nand" .= object ["role" .= nandName (scNand scenario), "path" .= nandPath (scNand scenario)
                            , "sha256" .= sha (nandSha256 (scNand scenario)), "stored_f7" .= storedF7 (scNand scenario)]
         , "boot" .= show (scBoot scenario), "steps_planned" .= map show (scSteps scenario)
-        , "emulator" .= identity
+        , "engine" .= engineName (envLaunch env), "emulator" .= identity
         , "result" .= status, "boundary" .= boundary
         , "checks" .= [object ["name" .= n, "pass" .= ok, "expected" .= e, "observed" .= o] | Check n ok e o <- checks]
         , "steps" .= steps, "access_probe" .= probe, "stack" .= stack ]
@@ -1010,18 +1043,19 @@ runSteps ctx ((index, current) : rest) = case current of
           ++ show (map fst rest) ++ " not run") (detachBoundary cells (lastObserver hits))))
   where lastObserver hits = sitesOf ConnectObserver hits
 
+-- | A model transfer on FujiMod carries no PC or instruction count.
 data AccessRecord = AccessRecord
   { accSource :: String
-  , accPc :: Word32
+  , accPc :: Maybe Word32
   , accAddress :: Word32
   , accPhysical :: Word32
   , accSize :: Integer
-  , accAt :: Integer
+  , accAt :: Maybe Integer
   }
 
 accessValue :: AccessRecord -> Value
 accessValue r = object
-  [ "source" .= accSource r, "pc" .= hex32 (accPc r), "address" .= hex32 (accAddress r)
+  [ "source" .= accSource r, "pc" .= fmap hex32 (accPc r), "address" .= hex32 (accAddress r)
   , "physical" .= hex32 (accPhysical r), "size" .= accSize r, "instructions" .= accAt r ]
 
 -- | E2: CPU accesses confined to the extent, against image-wide transfers
@@ -1032,8 +1066,8 @@ probeReport srv recorder scenario hitLog = do
   items <- case field "records" reply of Array values -> pure (V.toList values); _ -> ioError (userError "access records")
   records <- forM items $ \item -> case item of
     Object o -> AccessRecord <$> textField "source" o
-      <*> (fromInteger <$> intField "pc" o) <*> (fromInteger <$> intField "address" o)
-      <*> (fromInteger <$> intField "physical" o) <*> intField "size" o <*> intField "instructions" o
+      <*> (fmap fromInteger <$> optionalInt "pc" o) <*> (fromInteger <$> intField "address" o)
+      <*> (fromInteger <$> intField "physical" o) <*> intField "size" o <*> optionalInt "instructions" o
     _ -> ioError (userError "access record")
   hits <- readIORef hitLog
   let low = extentStart
@@ -1043,18 +1077,19 @@ probeReport srv recorder scenario hitLog = do
       wide = filter (not . confined) records
       fetches = filter ((== "cpu-fetch") . accSource) inside
       reads' = sitesOf F7Read hits
-      entries = filter ((== low) . accPc) fetches
-      precededByRead r = any (\h -> hitAt h + 1 == accAt r) reads'
+      entries = filter ((== Just low) . accPc) fetches
+      precededByRead r = any (\h -> Just (hitAt h + 1) == accAt r) reads'
   if datHasToggle (scDat scenario)
     then do
       equal recorder "probe: only CPU fetches inside the extent" (length inside) (length fetches)
-      check recorder "probe: fetches only within the 22-word stub" (all (\r -> accPc r >= low && accPc r < low + stubBytes) fetches)
-        (String "PCs in [0x00bf4454, 0x00bf44ac)") (toValue (map accPc fetches))
-      check recorder "probe: first fetch is the stub entry" (fmap accPc (listToMaybe fetches) == Just low)
-        (toValue low) (toValue (map accPc (take 1 fetches)))
+      check recorder "probe: fetches only within the 22-word stub" (all (\r -> maybe False (\pc -> pc >= low && pc < low + stubBytes) (accPc r)) fetches)
+        (String "PCs in [0x00bf4454, 0x00bf44ac)") (toValue (catMaybes (map accPc fetches)))
+      check recorder "probe: first fetch is the stub entry" ((listToMaybe fetches >>= accPc) == Just low)
+        (toValue low) (toValue (catMaybes (map accPc (take 1 fetches))))
       check recorder "probe: each stub entry is the instruction after a 0x00ecf900 bl" (not (null entries) && all precededByRead entries)
         (String "entry at the 0x00ecf900 hit's instruction count + 1")
-        (object ["f7_reads" .= map hitAt reads', "entries" .= map accAt entries])
+        (object [ "f7_reads" .= [object ["instructions" .= hitAt h] | h <- reads']
+                , "entries" .= [object ["instructions" .= accAt r, "after_f7_read" .= precededByRead r] | r <- entries] ])
       equal recorder "probe: stub entries equal 0x00ecf900 reads" (length reads') (length entries)
     else equal recorder "probe: CPU fetches, loads and stores inside the extent" (0 :: Int) (length inside)
   pure (object
@@ -1065,6 +1100,8 @@ probeReport srv recorder scenario hitLog = do
 
 -- * Command line
 
+data Engine = RetainedEngine | FujiModEngine deriving (Eq)
+
 data Options = Options
   { optReceipts :: Maybe FilePath
   , optFamilies :: [String]
@@ -1073,11 +1110,12 @@ data Options = Options
   , optWorkspace :: Maybe Workspace
   , optFixedFrame :: Maybe FixedSceneFrame
   , optWarm :: Bool
+  , optEngine :: Engine
   }
 
 usage :: String
 usage = unlines
-  [ "Usage: bazel run //emulation:usb-toggle-emu -- --receipt-output DIR [--runs FAMILY,...] [--dats DAT,...] [--fresh-boot]"
+  [ "Usage: bazel run //emulation:usb-toggle-emu -- --receipt-output DIR [--runs FAMILY,...] [--dats DAT,...] [--fresh-boot] [--fujimod]"
   , ""
   , "Runs the emulated USB-toggle scenarios of reports/usb-personality-toggle.md 8.2 in one emulator slot."
   , "Host-only: no camera or USB device. Receipts go to DIR (fresh, beneath private-data/)."
@@ -1089,13 +1127,15 @@ usage = unlines
   , "                      the chosen families boot, then stop without running scenarios"
   , "  --workspace PATH    repository root (default: BUILD_WORKSPACE_DIRECTORY)"
   , "  --fixed-scene-frame N  pin every scene render to the positive frame index N for the run"
+  , "  --fujimod           serve the primitives from jitl's FujiMod runtime (emulation/fujimod-xm1)"
+  , "                      instead of the retained Python bridge; refuses --fixed-scene-frame"
   ]
 
 families :: [String]
 families = ["e2", "e3", "e4e5", "e5u", "e6", "e7", "control"]
 
 parseOptions :: [String] -> IO Options
-parseOptions = go (Options Nothing families [minBound .. maxBound] False Nothing Nothing False)
+parseOptions = go (Options Nothing families [minBound .. maxBound] False Nothing Nothing False RetainedEngine)
   where
     go options [] = pure options
     go options ("--receipt-output" : value : rest) = go options {optReceipts = Just value} rest
@@ -1112,6 +1152,7 @@ parseOptions = go (Options Nothing families [minBound .. maxBound] False Nothing
       go options {optDats = chosen} rest
     go options ("--fresh-boot" : rest) = go options {optFresh = True} rest
     go options ("--warm-checkpoints" : rest) = go options {optWarm = True} rest
+    go options ("--fujimod" : rest) = go options {optEngine = FujiModEngine} rest
     go options ("--workspace" : value : rest) = go options {optWorkspace = Just (Workspace value)} rest
     go options ("--fixed-scene-frame" : value : rest) = do
       frame <- either (ioError . userError) pure (parseFixedSceneFrame value)
@@ -1153,13 +1194,20 @@ launch arguments options = do
   Workspace root <- workspace (optWorkspace options)
   forM_ [minBound .. maxBound :: DatRole] $ \dat -> validateFirmware (Firmware (root </> datPath dat))
   receipts <- freshReceipts root receiptsArgument
-  staged <- stageViewerRuntime (Workspace root) Nothing (UniqueRuntime "xm1-usb-toggle") Nothing StageStockOriginal
-  let Python python = stagedPython staged
-      runtime = stagedDirectory staged
-  callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
-  guest <- guestState runtime (InterpreterExecutable python) (UnicornLibrary (stagedUnicorn staged))
+  (bridgeLaunch, checkpoints, runtime) <- case optEngine options of
+    RetainedEngine -> do
+      staged <- stageViewerRuntime (Workspace root) Nothing (UniqueRuntime "xm1-usb-toggle") Nothing StageStockOriginal
+      let Python python = stagedPython staged
+          runtime = stagedDirectory staged
+      callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
+      guest <- guestState runtime (InterpreterExecutable python) (UnicornLibrary (stagedUnicorn staged))
+      pure (RetainedLaunch python runtime guest, "xm1-usb-toggle", Just runtime)
+    FujiModEngine -> do
+      require (isNothing (optFixedFrame options)) "--fixed-scene-frame belongs to the retained engine"
+      bootRom <- canonicalizePath (root </> "private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin")
+      pure (FujiModLaunch bootRom, "xm1-usb-toggle-fujimod", Nothing)
   replaced <- newIORef []
-  let env = Env root python runtime (root </> "private-data" </> "emulator-checkpoints" </> "xm1-usb-toggle") (optFresh options) replaced (optFixedFrame options) guest
+  let env = Env root bridgeLaunch (root </> "private-data" </> "emulator-checkpoints" </> checkpoints) (optFresh options) replaced (optFixedFrame options)
       chosen = [s | s <- scenarios, scFamily s `elem` optFamilies options, scDat s `elem` optDats options]
   when (optWarm options) $ do
     forM_ (nub [(scDat s, scNand s) | s <- chosen, scBoot s == RouteBoot]) $ \(dat, nand) -> do
@@ -1173,7 +1221,7 @@ launch arguments options = do
   results <- mapM (runScenario env receipts) chosen
   BL.writeFile (receipts </> "summary.json") (encode (object
     [ "schema" .= (1 :: Int), "git_head" .= head', "git_dirty_harness" .= dirty
-    , "runtime" .= runtime, "families" .= optFamilies options, "dats" .= map datName (optDats options), "scenarios" .= results ]) <> "\n")
+    , "engine" .= engineName bridgeLaunch, "runtime" .= runtime, "families" .= optFamilies options, "dats" .= map datName (optDats options), "scenarios" .= results ]) <> "\n")
   let statuses = [s | Object o <- results, String s <- [field "result" o]]
   putStrLn ("summary: " ++ receipts </> "summary.json")
   unless (all (== "pass") statuses) (exitWith (ExitFailure 1))

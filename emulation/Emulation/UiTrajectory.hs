@@ -6,21 +6,25 @@ module Emulation.UiTrajectory
   , ReadAddress (..)
   , FilmRow (..)
   , filmStoredCode
+  , Step (..)
   , Segment (..)
   , TraceSite (..)
   , Trajectories (..)
   , phaseNames
   , decodeTrajectories
+  , variantMismatches
   ) where
 
 import Control.Monad (unless, when)
-import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.!=), (.:), (.:?))
+import Data.Aeson (FromJSON (..), eitherDecodeStrict', withArray, withObject, (.!=), (.:), (.:?))
+import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (Object, Parser)
 import qualified Data.ByteString as B
+import Data.Foldable (toList)
 import Data.List (nub, stripPrefix)
 import qualified Data.Text as T
 import Data.Word (Word32)
-import EmulatorUsb (KeyPulse (..), ModeDial (..), modeDialName)
+import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming, modeDialName)
 import Numeric (readHex)
 
 data MenuState = MenuState Int Int Int deriving (Eq, Show)
@@ -52,18 +56,42 @@ filmStoredCode row = case row of
   WarmStandard -> 13
   RecipeB -> 14
 
+-- | One key press and the menu state required (or, in an observing segment, recorded) after it.
+-- The press timing is the only part of a step a FujiMod trajectory variant may change: a
+-- fifth element {"hold_instructions", "release_instructions", "settle_instructions"} overrides
+-- the segment's key pulse and the bridge's settle cap for this key.
+data Step = Step { stepKey :: String, stepExpected :: MenuState, stepTiming :: KeyTiming } deriving (Eq, Show)
+
+instance FromJSON Step where
+  parseJSON = withArray "step" $ \items -> case toList items of
+    [key, menu, setting, cursor] -> step key menu setting cursor defaultKeyTiming
+    [key, menu, setting, cursor, timing] -> step key menu setting cursor =<< withObject "step timing" keyTiming timing
+    _ -> fail "a step is [key, menu, setting, cursor] with an optional timing object"
+    where
+      step key menu setting cursor timing =
+        Step <$> parseJSON key <*> (MenuState <$> parseJSON menu <*> parseJSON setting <*> parseJSON cursor) <*> pure timing
+      keyTiming timing = do
+        unless (all (`elem` ["hold_instructions", "release_instructions", "settle_instructions"]) (KM.keys timing))
+          (fail "step timing takes only hold_instructions, release_instructions and settle_instructions")
+        pulse <- if KM.member "hold_instructions" timing || KM.member "release_instructions" timing
+          then Just <$> keyPulse timing
+          else pure Nothing
+        settle <- timing .:? "settle_instructions"
+        when (settle == Just 0) (fail "settle_instructions must be positive")
+        pure (KeyTiming pulse (SettleBudget <$> settle))
+
 -- | One trajectory segment: its phase name, the mode-dial detent set before its first key, the
--- expected menu state after each key, the message ids the menu message drawer is entered with during
--- the segment (none when absent), and an optional capture label taken after the last key. An
--- observing segment records each key's actual state instead of requiring the expected one; `reads`
--- are guest RAM windows recorded after the last key, and `film_row` is the row whose stored film code
--- the segment requires after its last key. `key_pulse` gives every key of the segment an explicit
--- hold and release cap instead of the bridge's per-class default.
+-- steps, the message ids the menu message drawer is entered with during the segment (none when
+-- absent), and an optional capture label taken after the last key. An observing segment records
+-- each key's actual state instead of requiring the expected one; `reads` are guest RAM windows
+-- recorded after the last key, and `film_row` is the row whose stored film code the segment
+-- requires after its last key. `key_pulse` gives every key of the segment an explicit hold and
+-- release cap instead of the bridge's per-class default.
 data Segment = Segment
   { segmentPhase :: T.Text
   , segmentModeDial :: Maybe ModeDial
   , segmentCapture :: Maybe String
-  , segmentSteps :: [(String, MenuState)]
+  , segmentSteps :: [Step]
   , segmentMessages :: [Word32]
   , segmentObserve :: Bool
   , segmentReads :: [(String, ReadAddress, Int)]
@@ -77,7 +105,7 @@ instance FromJSON Segment where
     <$> segment .: "phase"
     <*> (traverse modeDial =<< segment .:? "mode_dial")
     <*> segment .:? "capture"
-    <*> (map step <$> segment .: "steps")
+    <*> segment .: "steps"
     <*> segment .:? "messages" .!= []
     <*> segment .:? "observe" .!= False
     <*> (mapM window =<< segment .:? "reads" .!= [])
@@ -85,7 +113,6 @@ instance FromJSON Segment where
     <*> segment .:? "film_row"
     <*> (traverse keyPulse =<< segment .:? "key_pulse")
     where
-      step (key, menu, setting, cursor) = (key, MenuState menu setting cursor)
       modeDial position = case lookup (T.unpack position) [(modeDialName p, p) | p <- [minBound .. maxBound]] of
         Just p -> pure p
         Nothing -> fail ("unsupported mode-dial position: " ++ T.unpack position)
@@ -93,11 +120,12 @@ instance FromJSON Segment where
         text | Just symbol <- stripPrefix "runtime:" text, not (null symbol) -> pure (label, RuntimeSymbol symbol, len)
              | [(value, "")] <- readHex text -> pure (label, FixedAddress value, len)
              | otherwise -> fail ("read address must be hex without 0x or runtime:SYMBOL: " ++ text)
-      keyPulse :: Object -> Parser KeyPulse
-      keyPulse budget = do
-        pulse <- KeyPulse <$> budget .: "hold_instructions" <*> budget .: "release_instructions"
-        when (keyPulseHold pulse == 0 || keyPulseRelease pulse == 0) (fail "key_pulse budgets must be positive")
-        pure pulse
+
+keyPulse :: Object -> Parser KeyPulse
+keyPulse budget = do
+  pulse <- KeyPulse <$> budget .: "hold_instructions" <*> budget .: "release_instructions"
+  when (keyPulseHold pulse == 0 || keyPulseRelease pulse == 0) (fail "key_pulse budgets must be positive")
+  pure pulse
 
 -- | An A32 instruction address whose every entry the bridge records with r0-r3, under a label.
 data TraceSite = TraceSite { traceSiteAddress :: Word32, traceSiteLabel :: String } deriving (Eq, Show)
@@ -144,3 +172,28 @@ decodeTrajectories bytes = do
                , phase <- segmentRequires entry, phase `notElem` phaseNames trajectories ] of
     [] -> Right trajectories
     phase : _ -> Left ("trajectory requires an unknown segment: " ++ T.unpack phase)
+
+-- | Where VARIANT differs from RETAINED in anything but press timing (segment key pulses and step
+-- timing); empty when VARIANT asserts exactly what RETAINED asserts.
+variantMismatches :: Trajectories -> Trajectories -> [String]
+variantMismatches retained variant =
+  [ "trace sites differ" | trajectoryTraceSites retained /= trajectoryTraceSites variant ]
+  ++ segments "before_unload" (beforeUnload retained) (beforeUnload variant)
+  ++ segments "after_unload" (afterUnload retained) (afterUnload variant)
+  where
+    segments list old new
+      | length old /= length new = [list ++ " has " ++ show (length new) ++ " segments, not " ++ show (length old)]
+      | otherwise =
+          [ list ++ " segment " ++ show index ++ " (" ++ T.unpack (segmentPhase a) ++ ") differs in " ++ field
+          | (index, a, b) <- zip3 [0 :: Int ..] old new, (field, same) <- fields a b, not same ]
+    fields a b =
+      [ ("phase", segmentPhase a == segmentPhase b)
+      , ("mode_dial", segmentModeDial a == segmentModeDial b)
+      , ("capture", segmentCapture a == segmentCapture b)
+      , ("steps", map assertion (segmentSteps a) == map assertion (segmentSteps b))
+      , ("messages", segmentMessages a == segmentMessages b)
+      , ("observe", segmentObserve a == segmentObserve b)
+      , ("reads", segmentReads a == segmentReads b)
+      , ("requires", segmentRequires a == segmentRequires b)
+      , ("film_row", segmentFilmRow a == segmentFilmRow b) ]
+    assertion step = (stepKey step, stepExpected step)

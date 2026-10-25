@@ -1063,21 +1063,54 @@
         "boot_entries": [
           "rom"
         ],
-        "dependencies": [],
+        "dependencies": [
+          "irq0",
+          "irq1",
+          "serial_gpio"
+        ],
         "model": {
-          "kind": "sdhci-clocks",
-          "words": [
-            [
-              4294246444,
-              2
-            ]
-          ]
+          "adapter": {
+            "implementation": "xm1-retained-sd-host",
+            "options": {
+              "clock_ticks": 2,
+              "detect": {
+                "pin": 7,
+                "port": 12
+              },
+              "irq": {
+                "core": 0,
+                "line": 78
+              },
+              "max_dirty_sectors": 65536,
+              "protect": {
+                "pin": 6,
+                "port": 12
+              },
+              "ram_bytes": 536870912,
+              "rca": 4660,
+              "sectors": 8388608,
+              "transfer_ticks": 100
+            },
+            "references": {
+              "gpio": "serial_gpio"
+            },
+            "wires": []
+          },
+          "kind": "adapter"
         },
-        "name": "sd_clocks",
+        "name": "sd",
         "windows": [
           {
-            "base": 4294246444,
-            "size": 2
+            "base": 4294246400,
+            "size": 48
+          },
+          {
+            "base": 4294246448,
+            "size": 16
+          },
+          {
+            "base": 4294246656,
+            "size": 8
           }
         ]
       },
@@ -2603,6 +2636,7 @@
   "usb": "usb",
   "usb_cable": "usb_cable",
   "scanout": "scanout",
+  "sd": "sd",
   "firmware": {
     "current_menu": 9794000,
     "calibration_pointer": 9882192,
@@ -2711,6 +2745,16 @@
       "port": 0,
       "pin": 10,
       "pressed_high": false
+    },
+    "subcommand": {
+      "descriptor": 8172004,
+      "transitions": 8172032,
+      "registered": 9041928,
+      "sampled": 9788393,
+      "port": 3,
+      "pins": [8, 9],
+      "left_code": 44,
+      "right_code": 45
     },
     "mode_dial": {
       "channel": 3,
@@ -3151,11 +3195,36 @@
         }
       },
       {
-        "node": "sd_clocks",
-        "base": 4294246444,
-        "size": 2,
+        "node": "sd",
+        "base": 4294246400,
+        "size": 48,
         "binding": {
-          "kind": "fujimod-catalog-unchecked"
+          "kind": "code",
+          "image": "id4",
+          "at": 7202168,
+          "value": 4294246400
+        }
+      },
+      {
+        "node": "sd",
+        "base": 4294246448,
+        "size": 16,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7202768,
+          "value": 4294246448
+        }
+      },
+      {
+        "node": "sd",
+        "base": 4294246656,
+        "size": 8,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7203384,
+          "value": 4294246656
         }
       },
       {
@@ -3259,7 +3328,10 @@
         "base": 4294250752,
         "size": 8,
         "binding": {
-          "kind": "fujimod-catalog-unchecked"
+          "kind": "code",
+          "image": "plain",
+          "at": 19472016,
+          "value": 4294250752
         }
       },
       {
@@ -3707,6 +3779,283 @@
           "image": "id4",
           "at": 6947608,
           "value": 8552736
+        }
+      }
+    ],
+    "registers": [
+      {
+        "node": "sd",
+        "address": 4294246400,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7202168,
+          "value": 4294246400
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246404,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7203168,
+          "value": 4294246404
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246406,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7203244,
+          "value": 4294246406
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246408,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7202372,
+          "value": 4294246408
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246410,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7202412,
+          "value": 4294246410
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246412,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7202272,
+          "value": 4294246412
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246414,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7202232,
+          "value": 4294246414
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246416,
+        "binding": {
+          "kind": "retained-model-unchecked"
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246418,
+        "binding": {
+          "kind": "word",
+          "image": "id5",
+          "at": 17289120,
+          "value": 4294246418
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246420,
+        "binding": {
+          "kind": "word",
+          "image": "id5",
+          "at": 13474172,
+          "value": 4294246420
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246422,
+        "binding": {
+          "kind": "retained-model-unchecked"
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246424,
+        "binding": {
+          "kind": "retained-model-unchecked"
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246426,
+        "binding": {
+          "kind": "word",
+          "image": "id5",
+          "at": 13470972,
+          "value": 4294246426
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246428,
+        "binding": {
+          "kind": "retained-model-unchecked"
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246430,
+        "binding": {
+          "kind": "retained-model-unchecked"
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246432,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7203312,
+          "value": 4294246432
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246436,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7202492,
+          "value": 4294246436
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246440,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7202536,
+          "value": 4294246440
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246444,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7202616,
+          "value": 4294246444
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246446,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7202692,
+          "value": 4294246446
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246448,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7202768,
+          "value": 4294246448
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246450,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7202848,
+          "value": 4294246450
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246452,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7202928,
+          "value": 4294246452
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246454,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7203008,
+          "value": 4294246454
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246456,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7203088,
+          "value": 4294246456
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246458,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7203128,
+          "value": 4294246458
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246462,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7203540,
+          "value": 4294246462
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246656,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7203384,
+          "value": 4294246656
+        }
+      },
+      {
+        "node": "sd",
+        "address": 4294246660,
+        "binding": {
+          "kind": "code",
+          "image": "id4",
+          "at": 7203464,
+          "value": 4294246660
         }
       }
     ]

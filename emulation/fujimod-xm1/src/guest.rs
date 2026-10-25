@@ -5,7 +5,7 @@ use crate::run::{Address, NodeName};
 use fujimod_emulator::session::Session;
 use serde::Deserialize;
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum RouteKey {
     Up,
@@ -31,6 +31,59 @@ impl RouteKey {
             _ => return Err(format!("unknown X-M1 key {name}")),
         })
     }
+}
+
+/// One sub-command dial step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DialTurn {
+    Left,
+    Right,
+}
+
+impl DialTurn {
+    /// GPIO levels of (pin 8, pin 9) the step drives in order, ending released.
+    pub fn phases(self) -> [(bool, bool); 4] {
+        match self {
+            DialTurn::Left => [(true, false), (false, false), (false, true), (true, true)],
+            DialTurn::Right => [(false, true), (false, false), (true, false), (true, true)],
+        }
+    }
+}
+
+/// A bridge key: an analog key row or a sub-command dial step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Press {
+    Key(RouteKey),
+    Dial(DialTurn),
+}
+
+impl Press {
+    pub fn parse(name: &str) -> Result<Self, String> {
+        Ok(match name {
+            "dial-left" => Press::Dial(DialTurn::Left),
+            "dial-right" => Press::Dial(DialTurn::Right),
+            _ => Press::Key(RouteKey::parse(name)?),
+        })
+    }
+}
+
+/// The sub-command dial scanner over two GPIO pads.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Subcommand {
+    /// Descriptor {1, port<<16|pin, port<<16|pin, 0}.
+    pub descriptor: u64,
+    /// Codes indexed by current*4 + previous sampled phase.
+    pub transitions: u64,
+    /// Word that reads 1 once the scanner is registered.
+    pub registered: u64,
+    /// Byte holding the last sampled phase, pin 8 level << 1 | pin 9 level.
+    pub sampled: u64,
+    pub port: u8,
+    pub pins: [u8; 2],
+    pub left_code: u32,
+    pub right_code: u32,
 }
 
 /// One analog key row of the firmware's control table.
@@ -69,6 +122,7 @@ pub struct FirmwareFacts {
     pub keys: Vec<AdcKey>,
     pub mode_dial: ModeDial,
     pub dial_push: GpioKey,
+    pub subcommand: Subcommand,
     pub render: crate::render::RenderFacts,
 }
 
@@ -262,10 +316,31 @@ impl FirmwareFacts {
         Ok((low, high))
     }
 
+    pub fn scanner_registered(&self, session: &Session) -> Result<bool, String> {
+        Ok(word(session, self.scanner_registered.0)? == 1)
+    }
+
+    /// The ADC keys whose calibrated interval holds their channel's sample in
+    /// `samples`; none before the scanner registers.
+    pub fn asserted_keys(&self, session: &Session, samples: &[u16]) -> Result<Vec<RouteKey>, String> {
+        if !self.scanner_registered(session)? {
+            return Ok(Vec::new());
+        }
+        let mut asserted = Vec::new();
+        for binding in &self.keys {
+            let (low, high) = self.interval(session, binding)?;
+            let sample = *samples.get(binding.channel).ok_or("ADC channel is absent")?;
+            if (low..=high).contains(&sample) {
+                asserted.push(binding.key);
+            }
+        }
+        Ok(asserted)
+    }
+
     /// The calibrated midpoint of `key`, refused while the scanner is not
     /// registered or when it also falls in another key's interval.
     pub fn pressed_sample(&self, session: &Session, key: RouteKey) -> Result<(usize, u16), String> {
-        if word(session, self.scanner_registered.0)? != 1 {
+        if !self.scanner_registered(session)? {
             return Err("X-M1 input scanner is not registered".into());
         }
         let binding = self.binding(key)?;
@@ -305,6 +380,34 @@ impl FirmwareFacts {
         let binding = self.binding(key)?;
         let address = self.key_table.base.0 + binding.row * self.key_table.row_bytes + self.key_table.released_offset;
         Ok(bytes::<1>(session, address)?[0] == 0)
+    }
+
+    /// Refuses a dial step unless the scanner's descriptor, transition table and registration
+    /// match the declared pads and codes.
+    pub fn subcommand_ready(&self, session: &Session) -> Result<(), String> {
+        let dial = &self.subcommand;
+        let pad = |pin: u8| u32::from(dial.port) << 16 | u32::from(pin);
+        let descriptor = bytes::<16>(session, dial.descriptor)?;
+        let field = |at: usize| u32::from_le_bytes([descriptor[at], descriptor[at + 1], descriptor[at + 2], descriptor[at + 3]]);
+        if [field(0), field(4), field(8), field(12)] != [1, pad(dial.pins[0]), pad(dial.pins[1]), 0] {
+            return Err("sub-command GPIO descriptor differs from its declared pads".into());
+        }
+        let table = bytes::<64>(session, dial.transitions)?;
+        let codes: Vec<u32> = table.chunks(4).map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]])).collect();
+        let mut expected = vec![0; 16];
+        expected[1] = dial.right_code;
+        expected[4] = dial.left_code;
+        if codes != expected {
+            return Err("sub-command transition table differs from its declared codes".into());
+        }
+        if word(session, dial.registered)? != 1 {
+            return Err("sub-command scanner is not registered".into());
+        }
+        Ok(())
+    }
+
+    pub fn subcommand_sampled(&self, session: &Session) -> Result<u8, String> {
+        Ok(bytes::<1>(session, self.subcommand.sampled)?[0])
     }
 }
 

@@ -6,25 +6,25 @@ This answers the instrument half of AF-OBSERVE-01: which of the instruments buil
 
 ## 1. The AF lane's obstacle, restated
 
-The static map binds the AF request path, the completion graph and the confirmation path in code, and [the observation plan](af-observation-plan.md) says what camera access reaches: visible indications, quality, cancellation and external intervals. Every internal event, the plan says, needs G4/G5 hooks.
+The static map binds the AF request, completion and confirmation paths. The current [observation plan](af-observation-plan.md) starts with the stock message trace and coherent observations in ordinary boot, then adds hooks only for missing signals.
 
-The newer instruments change the *read* side only. None of them makes an ordinary shooting boot readable, because the vendor service session exists only in maintenance mode `0xb` and the log store is cleared at every boot. What they do give is an in-body read of a *maintenance* boot: its message trace with body ticks, its RAM state, and its adjustment area. The AF lane's question is therefore whether a maintenance boot carries the AF layer at all, which is what the first session tests.
+Ordinary-boot RAM extraction is now hardware-observed with stored `0xf7 = 1` (E-BULK-READ-RUN1-150 through E-BULK-READ-RUN3-150). The [bulk-read report](ff80-bulk-read.md) supersedes this survey's former maintenance-only access premise. No ordinary AF timeline or coherent sensor-frame export is established by those reads. The store still must be extracted within its boot.
 
 ## 2. The five instruments
 
 | Instrument | What reaches the host | What it would show for AF | Bound today |
 | --- | --- | --- | --- |
-| Store trace, `read-log` | The whole 0x1fff4-byte log store at `0x400a0800`, 515 windows | The boot's message trace: every traced inter-task send with sender, receiver, message id and a tick, including the AF task's own sends | Reviewed operation; read works, but only in a maintenance boot |
-| Debug RAM read, `probe-ram`, `dump-ram` | Named RAM windows or one of 21 fixed segments, over `0x200001` function 2 | The AF task's state cells, the AF request context and slot record, the lens position, the AF-frame and UI cells, the trace facility's filter bytes | Reviewed operation; reaches every listed segment |
+| Store trace | The 0x1fff4-byte store at `0x400a0800` | Traced message sends with task IDs and ticks | Layout and maintenance captures are established; ordinary-boot RAM reads now permit a same-boot search-trace experiment without a new recorder |
+| RAM reads | Bounded named windows through reviewed `read-ram` or `read-bulk` operations | AF state, lens and UI cells, trace storage and source-bound image/statistic windows | Ordinary-boot bytes are demonstrated; atomicity, frame provenance and AF behavior with USB remain separate |
 | Config read, `read-config` | 256-byte windows of the adjustment area at `0x41acd800` plus the flash-log settings area | The stored FOCUS MODE and AF-area properties, and the three AF debug gate bytes at `0x887d`, `0x887e` and `0xe8` | Reviewed operation; it does not read arbitrary RAM, so the AF state cells are outside it |
 | Service opcodes | `0x200001` functions 1 to 5 | Function 2 is the RAM read above; function 5 is the text/debug key used by `end-setting`. Functions 1 and 4 drain the console *text* ring at `*(0x409c1e2c)` and no built operation sends them; function 3 writes RAM byte by byte and is not a closed operation | Function 2 and 5 bound; 1, 3 and 4 not built |
-| Imaging-job family | Whitelist values `0xa0`-`0xac` as a host config write, then `0x450006` ids `0x12`/`0x263` | The only mapped way to make a readable boot run recorder and capture machinery, and so the only candidate that could put an AF search into the trace | Not a closed operation; the exposure link inside mode `0xb` is unproved ([E-SERVICE-CAPTURE-PATH-150](../docs/evidence.jsonl)) |
+| Imaging-job family | Whitelist values `0xa0`-`0xac`, then `0x450006` ids `0x12`/`0x263` | Alternative recorder/capture paths in maintenance mode | Not a closed capture operation; exposure remains unproved and adjacent storage hazards apply; not required for the ordinary-boot preview route |
 
 - The store trace is the only instrument that carries *when* something happened in body time. A search driven inside a readable boot would appear as its message sequence with ticks, which is the §11.1 timeline at the message level, without hooks.
 - The RAM read is the only instrument that carries AF *state*: the orchestration state, the search state, the in-flight and status fields, the accepted statistic, the request context and the lens position. It shows state, not time.
 - The config read carries what the body *stored*, including the debug gates that decide whether the firmware's own AF printer can ever run. It cannot see live AF state.
 - The service opcodes are the transport for both reads. Their text-ring functions would carry the firmware's own AF debug lines, and they are unreachable, see section 4.
-- The imaging-job family is the only write-side candidate. Without it, nothing inside a readable boot asks the AF layer to do anything.
+- Service imaging jobs are optional capture candidates, not the only possible agency for an AF search in a readable boot.
 
 ## 3. What the store carries about AF
 
@@ -54,44 +54,39 @@ The AF orchestration task (`0x2b`) writes no record of its own: no function in i
 
 ## 4. Where the wall is
 
-- The store is cleared by loader A at every boot and has been read only in maintenance boots.
-- In maintenance mode `0xb` the keys take no shot, no menu is dispatched and no preview starts (E-SERVICE-SHOOT-150, byte-read), so no AF request and no search happen there.
-- Therefore no reviewed operation today can carry an AF *search* off the body: the boots whose trace can be read are boots in which AF does not run.
+- The store is cleared by loader A at every boot; the characterized AF/lens captures are maintenance-boot traffic.
+- Maintenance mode still does not dispatch the ordinary shutter/menu route or start ordinary preview (E-SERVICE-SHOOT-150).
+- Ordinary-boot reads remove the old access obstruction, but stock AF under USB and its actual same-boot search trace remain observations to perform. A torn snapshot or a message timestamp does not establish sensor freshness.
 
-The firmware's own AF debug printer is a second candidate for AF internals and it is inert here. **Byte-read:** `0x00f26d78` formats a line naming the search state (`DIRTION`, `PEK_SRH`, `PEAK`, `FOCUS`, `FCS_DRI`, `WOB`), the signed position from `0x016b66e8` and the focus value from `0x016b66e0`, and calls `0x0064744c`, which writes only when `cache[0xf7] == 1` and the text ring at `0x41acb800` is installed. The printer's own gates are `cache[0x887d] != 0`, with `cache[0x887e]` as its counter bound, and `cache[0xe8]` bit 7 deciding the emit; its state argument comes from the setter `0x00f26ff0`, which stores its argument to `0x016b66f4` and calls the printer with 1, and from `0x00f26fbc`, which calls it with 0. **Hardware-observed in the 2026-10-08 config capture:** the body stores `0x887d` = `0x00`, `0x887e` = `0x0a` and `0xe8` = `0x00`, so the printer is off in the stored configuration; and `0x0089edd4`, the flag set when the connect edge installs the text ring, reads 0 in the captured jig boots, so the ring was never installed there. Reaching the printer would need a committed gate byte (the persistent `f7` route the standing rules forbid) and an AF run in a jig boot, which the mode does not provide.
+The firmware's AF debug printer is a separate candidate. **Byte-read:** `0x00f26d78` formats search state, position `0x016b66e8` and focus value `0x016b66e0`; the state setter is `0x00f26ff0`. Output depends on `cache[0xf7]`, the installed text ring at `0x41acb800`, the `0x887d`/`0x887e` gates and `0xe8` bit 7. The 2026-10-08 captures had those debug enables off and text-ring installation flag `0x0089edd4` zero. Those historical captures do not establish the current installation state. Stored `0xf7 = 1` alone does not enable the other gates; no new persistent debug-gate write is part of the AF plan.
 
 ## 5. What the newer work settles in the observation plan
 
-- The plan's G4/G5 table lists internal bindings as hook-only. The store trace and the RAM read make a *maintenance* boot readable at the state and message level, so part of that can be observed without hooks, in that boot only.
-- The plan's camera-access rows stand unchanged. Nothing here dates an internal event of an ordinary session, so the request-proxy-to-visible-indication latency, the quality sweep and the cancellation sequence keep their external form, and the AF debug text route does not add an internal endpoint.
-- The plan's "any service command needs a reviewed byte plan" no longer gates the first step: the store read, the RAM read and the config read are reviewed operations, so the first session needs no new bytes.
-- The plan's settling-versus-confirmation block needs a validated continuous measure; unchanged.
+- Existing reads and the stock trace can answer some internal questions without a new hook. Their operation-specific scope still applies.
+- Coherent acquisition-time images/statistics, lens-state association and optical settling need additional source binding and possibly reviewed instrumentation.
+- External video is optional corroboration. Confirmation, acquisition and presentation remain distinct clocks/events.
+- No transport result accepts a new observation mechanism, AF gate or camera run.
 
 ## 6. The first question
 
-**Does a maintenance boot carry the autofocus layer at all: do the AF task's own state cells and message trace read back in one jig boot, and does the physical shutter press move either?**
+**Can ordinary stock AF run while its same-boot trace and a fresh coherent image/statistic observation remain readable?**
 
-Four properties put it first.
-
-- It gates the only internal instrument that needs no hook. Every later AF design that wants in-body timing or in-body state in a readable boot depends on this answer.
-- It costs one jig entry, uses four reviewed read operations and a few key taps, and writes nothing beyond the gate byte every read operation already writes and restores.
-- Both answers are actionable. Positive: the AF-layer cells become the project's idle baseline, and the next step is a reviewed operation that drives one recorder job inside a readable boot, the only mapped agency, with those cells as the predeclared control. Negative: the jig-session route is closed for AF and the lane keeps to the external kit and G4/G5.
-- The peripheral parts are already answered, so the session tests the remaining unknown. The AF and lens tasks do emit traced sends in a jig boot (section 3.3), the lens position cell `0x00942b84` reads `0x36`, `0x20` and `0` in three jig captures, and the text-ring install flag reads 0.
-
-This question is first in the lane's order; [the plan](af-observation-plan.md) states the second and third questions and answers the trace-versus-search tension this survey exposes.
+Prepare extraction from existing captures, then freeze the [first-session procedure](af-first-session-script.md) around the smallest approved observation block. Keep large reads outside timed acquisition. Do not require another maintenance boot, SD carry, a new stored gate write or the superseded multi-hour manual pilot.
 
 ## 7. What the first session would settle
 
+The following source-bound fields remain useful mapping leads from the earlier maintenance experiment. They are not instructions to run that superseded session, and zero, nonzero or query-invalid values alone do not prove an AF layer or lens is usable.
+
 | Read | Addresses | Expected result | What the other outcome means |
 | --- | --- | --- | --- |
-| AF state machine | `0x0169d4b4` state vector, `0x0169d468` event vector, `0x0169d4e2` orchestration state | Nonzero, defined values: the AF task brought its state machine up in the maintenance boot | All zero or the loader's fill: the AF layer is not running despite the task existing |
-| Search and evaluation fields | `0x016c0fbc`/`0x016c0fc0`, `0x016c0fe2`/`0x016c0fe4`/`0x016c0fe5`, `0x016c11fc`, `0x016c1160`-`0x016c1178`, `0x016c1f10`/`0x016c1f14`/`0x016c1f74`, `0x016c2200`/`0x016c2204`/`0x016c2208`, `0x016c21e4`/`0x016c21e6` | Idle values that repeat across a boot: the control a later drive session is read against | Movement between the two reads with no act directed at AF, which would itself be the finding |
-| AF request context | `0x01529fb8`, `0x01529fbc`, the slot base `0x015b73b8` at stride `0x17d0` | A live slot index or pointer binds the AF-area-to-request derivation, an open item of the static map, to live RAM | Zero or the `-1` sentinel: the context is not bound before a request, which is what the static map's "target selected" point needs to be read against |
-| Lens layer | `0x00942b84` position, `0x00942b88`, the protocol flags `0x0095b394`/`0x0095b398` | A plausible position with the flags set: the lens layer is live in mode `0xb` | The `-0x8000` query-invalid sentinel: the lens is not queried in a maintenance boot, and no jig-session instrument can move it |
-| AF-frame and UI cells | `0x00950544` queue, `0x00951424`/`0x00951428`/`0x0095142c`, `0x0094f64c`-`0x0094f65c`, `0x0094f888`-`0x0094f894`, `0x0094f650`/`0x0094f654` | Zero, matching the 2026-10-08 dumps; any nonzero value after the shutter probe is new evidence about S1 in maintenance mode | Zero both times confirms the presentation path is untouched without a shooting mode |
-| Text ring | `0x0089edd4` install flag, `0x0089edd8` callback slot | Zero, as in the captured boots: the AF debug text route stays inert under the current procedure | Nonzero would show the facility arming in-session and would reopen the text route |
-| Trace facility | `0x40a5b5e1` enable, `0x40a5b5e2` threshold, `0x40a5b5e4` offset, `0x40a5b5ec` pointer | The initialiser's values (1, 1, 8, `0x41ac9800`): the trace is filtered by the allowlist and the buffer is where the code says | Different values would bound how complete the trace is, which matters before any AF timeline is read from it |
-| Store trace | the whole store | The AF and lens send set up to the read, with ticks, and the acts' records for tick alignment | Any `0x3f2e`, `0x3b0d` or `0x13a5` record after the shutter acts would show the press reaching the AF layer in maintenance mode, which the mode's key dispatch says it should not |
+| AF state machine | `0x0169d4b4`, `0x0169d468`, `0x0169d4e2` | Observe state transitions around actual requests | Initialization values alone do not establish AF execution |
+| Search/evaluation state | Static-map search, accepted-statistic and in-flight fields | Correlate with actual requests and accepted samples | State snapshots do not establish acquisition time |
+| Request context | `0x01529fb8`, `0x01529fbc`, slot stride `0x17d0` | Bind the selected request and its lifetime | An invalid/unbound handle is not proof that every route is unavailable |
+| Lens position | `0x00942b84` and associated protocol state | Distinguish reported position from command/prediction | `-0x8000` is query-invalid, not a demonstration that the lens cannot move |
+| AF frame/UI state | Static-map presentation fields | Correlate internal result and visible indication | UI state alone does not bound presentation delay |
+| Text ring | `0x0089edd4`, `0x0089edd8` | Establish installation/lifetime if this route becomes necessary | Historical zero values are scoped to their captures |
+| Trace filter | `0x40a5b5e1`, `0x40a5b5e2`, `0x40a5b5e4`, `0x40a5b5ec` | Validate filtering/completeness for the actual session | The static allowlist does not prove every runtime send was retained |
+| Store trace | Whole store | Seek actual request/search/result records with same-boot provenance | Missing records may reflect no search, filtering, overflow or an invalid extraction |
 
 ## 8. Reproduction
 
@@ -126,7 +121,7 @@ xxd -s $((0x0089edd4-0x0089ec00)) -l 8 private-data/sessions/20261008T181841Z-du
 
 ## 9. Same-boot carry closure over the pinned bytes
 
-This is **source-inspected** and **static-inference**, host-only. It adds no camera observation and no executable recorder. The owner approved building a same-boot recorder, not installing one. The examined stock routines establish a card-file route and real allocation APIs, but do not yet establish a bounded recorder activation through those APIs. A live, non-atomic RAM-to-card capture remains a viable design direction; the coherent-timeline residual below is not a reason by itself to reject it.
+This section retains **source-inspected** and **static-inference** findings for the older RAM-to-card recorder, not the current critical path. Ordinary-boot reads now permit direct same-boot extraction, and the damaged SD slot is unavailable for this carry. [Issue #50](https://github.com/skeet70/latent-image/issues/50) remains parked and non-installable with its own residency, liveness and recovery blockers. The historical owner approval was to build a recorder, not install it.
 
 ### 9.1 Inputs and ownership
 

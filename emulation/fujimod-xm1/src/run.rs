@@ -13,8 +13,9 @@ use fujimod_emulator::{
     session::{Session, preparation},
 };
 use fujimod_emulator_cpu::arm::Coprocessor;
-use crate::ui_conversion::Xm1Adapters;
-use fujimod_emulator_exr2_plan::{MemoryChoices, Plan, Resources};
+use crate::adapters::Xm1Adapters;
+use crate::sd_host;
+use fujimod_emulator_exr2_plan::{Adapter, MemoryChoices, Model, Plan, Resources};
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use std::collections::BTreeMap;
@@ -85,6 +86,8 @@ pub struct RunDocument {
     pub usb_cable: NodeName,
     pub adc: NodeName,
     pub scanout: NodeName,
+    /// The SD0 host adapter node.
+    pub sd: NodeName,
     pub firmware: FirmwareFacts,
     /// Where each plan window and RAM fact address comes from.
     pub provenance: Provenance,
@@ -107,8 +110,23 @@ impl RunDocument {
             (RamFact::ScannerRegistered, guest(firmware.scanner_registered)?),
             (RamFact::KeyTable, guest(firmware.key_table.base)?),
         ];
-        document.provenance.validate(&plan_windows(document.devices.get())?, &ram)?;
+        let registers: Vec<(&str, Guest)> =
+            sd_host::REGISTERS.iter().map(|address| (document.sd.0.as_str(), Guest(*address))).collect();
+        document.provenance.validate(&plan_windows(document.devices.get())?, &ram, &registers)?;
+        document.sd_host()?;
         Ok(document)
+    }
+
+    pub fn sd_host(&self) -> Result<Adapter, String> {
+        Plan::parse(self.devices.get().as_bytes())?
+            .nodes
+            .into_iter()
+            .find(|node| node.name == self.sd.0)
+            .and_then(|node| match node.model {
+                Model::Adapter { adapter } if adapter.implementation == sd_host::IMPLEMENTATION => Some(adapter),
+                _ => None,
+            })
+            .ok_or_else(|| format!("run document node {} is not the {} adapter", self.sd.0, sd_host::IMPLEMENTATION))
     }
 }
 
@@ -116,21 +134,31 @@ impl RunDocument {
 /// 1.50-compatible; its identity is not compared with a catalog entry.
 pub struct ValidatedUpdate(pub Vec<u8>);
 
+fn graph(document: &RunDocument) -> Result<(ResolvedConfiguration, factory::Graph), String> {
+    let resolved = ResolvedConfiguration::with_overlays(&document.catalog_configuration.0, &[])?;
+    let graph = fujimod_emulator::boot::graph::assemble_with_starts(
+        &resolved.reference,
+        document.execution.instructions_per_tick,
+        None,
+        &[],
+    )?;
+    graph.validate()?;
+    Ok((resolved, graph))
+}
+
+/// The processors' memory maps of the session `open` builds.
+pub fn memory_maps(document: &RunDocument) -> Result<Vec<factory::MemoryMap>, String> {
+    Ok(graph(document)?.1.mappings)
+}
+
 /// Construct an unexecuted strict board. Mirrors `fujimod_emulator::boot::open_prepared`
 /// with the catalog DAT identity check replaced by the caller's validation.
 pub fn open(document: &RunDocument, update: &ValidatedUpdate, boot_rom: &[u8]) -> Result<Session, String> {
     if boot_rom.len() != document.boot_rom.bytes {
         return Err(format!("boot ROM must be {} bytes", document.boot_rom.bytes));
     }
-    let RunExecution { mode: RunExecutionMode::Strict, engine, instructions_per_tick, .. } = document.execution;
-    let resolved = ResolvedConfiguration::with_overlays(&document.catalog_configuration.0, &[])?;
-    let graph = fujimod_emulator::boot::graph::assemble_with_starts(
-        &resolved.reference,
-        instructions_per_tick,
-        None,
-        &[],
-    )?;
-    graph.validate()?;
+    let RunExecution { mode: RunExecutionMode::Strict, engine, .. } = document.execution;
+    let (resolved, graph) = graph(document)?;
     let plan = Plan::parse(document.devices.get().as_bytes())?;
     plan.validate_reset_outputs(&graph.processors.iter().map(|p| p.released).collect::<Vec<_>>())?;
     plan.validate_memory_outputs(

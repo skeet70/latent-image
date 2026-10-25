@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "stock_calls": [
+    {"address":"0x00f41c50","name":"direction continuation","source":"reports/autofocus-static-map.md section 3; af_ring_hooks.S"},
+    {"address":"0x00f42ac4","name":"peak continuation","source":"reports/autofocus-static-map.md section 3; af_ring_hooks.S"},
+    {"address":"0x00f44ff4","name":"accepted-statistic continuation","source":"reports/autofocus-static-map.md section 2; af_ring_hooks.S"}
+  ],
+  "stock_stores": [],
+  "unproven": [
+    {"access":"store","function":"af_ring_record","through":{"cell":"af_ring_storage"},"reason":"Indexed writes use the uncached alias of the allocation-owned ring; source review must establish the 255 index mask and publication order."},
+    {"access":"store","function":"af_ring_synthetic","through":{"argument":"r1"},"reason":"Stock query callback output pointer cell."},
+    {"access":"store","function":"af_ring_synthetic","through":{"argument":"r2"},"reason":"Stock query callback output length cell."}
+  ]
+}

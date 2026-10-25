@@ -6,6 +6,6 @@
 
 The X-T1 5.52 update in `firmware.json` is a sibling reference input for Classic Chrome ([spec/10 section 19.5.3](../spec/10-film-recipes.md#1953-inputs-and-rights)); it is read on the host only, so its `matches_installed` is null.
 
-`benchmark-protocol.json` is an offline design draft with no results; `E01-stock-pilot-v1-order.txt` is its checked-in 110-attempt visit order, regenerable by the shell pipeline in [the session kit](../reports/af-session-kit.md#6-attempt-order) and fixed by SHA-256 `05d509d2c1c8ff12e6b312b90e1895a6708aeb080f52fc1ac9c4af10e4470f9b`.
+`benchmark-protocol.json` is an offline stock-pilot draft with no results or camera authorization. `stock-pilot-order.txt` contains its 22-attempt development example, generated from the manifest's seed, repeat count and SHA-256 ordering rule. The [pilot protocol](../reports/stock-pilot-protocol.md) separates a smaller feasibility check, this automatic pilot and a separately powered confirmation; the public example is not a mandatory owner workload.
 
 Use private aliases publicly and keep serials/raw captures private. See [artifact/runtime contracts](../spec/08-artifact-and-runtime-contracts.md).

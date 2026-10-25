@@ -293,12 +293,14 @@ dispatch (Live operation requested) = case operation of
       RamAllocUncertain reason -> P.reject ("ram-alloc uncertain: "++reason++";send nothing further and power off")
   RamRelink path -> do
     allocation <- readRetainedAllocation path
+    refuseAfRingLive (allocSize (retainedAllocation allocation))
     withOutput operation requested $ \directory -> do
       manifest <- runRamRelink (contractFor (allocSize (retainedAllocation allocation))) allocation directory
       pure ("ram-relink: manifest="++manifest)
   RamPush statePath manifestPath -> do
     allocation <- readRetainedAllocation statePath
     manifest <- readRamPushManifest manifestPath
+    refuseAfRingLive (allocSize (retainedAllocation allocation))
     withOutput operation requested $ \directory -> do
       outcome <- runRamPush (contractFor (allocSize (retainedAllocation allocation))) allocation manifest realClock nativeApi directory
       case outcome of
@@ -315,6 +317,7 @@ dispatch (Live operation requested) = case operation of
         RamFreeUncertain reason -> P.reject ("ram-free uncertain: "++reason++";send nothing further and power off")
   RamUnload path -> do
     state <- readRamPushState path
+    refuseAfRingLive (stateSize state)
     withOutput operation requested $ \directory -> do
       outcome <- runRamUnload (contractFor (stateSize state)) state realClock nativeApi directory
       case outcome of
@@ -328,6 +331,10 @@ contractFor size = case payloadKind <$> payloadOfSize size of
   Just ClassicChrome -> reviewedCcContract
   Just ClassicChromeIcon -> reviewedCcIconContract
   _ -> reviewedContract
+
+refuseAfRingLive :: Int -> IO ()
+refuseAfRingLive size = when (fmap payloadKind (payloadOfSize size) == Just AfRing)
+  (P.reject "AF ring has no approved live reviewed contract; use the host-only AF ring harness")
 
 ramWatch :: FilePath -> Maybe (Int,Int) -> IO RamWatch
 ramWatch path pacing = do

@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "entry": "Ordinary ff80 attach after the shared transient AF ring installer. Menu states are observations, not assertions. A rejected half-press input is recorded before the real payload synthetic recorder is used.",
+  "trace_sites": [
+    ["00f41c48", "af-direction-decision"],
+    ["00f42abc", "af-peak-decision"],
+    ["00f44fec", "af-accepted-statistic"]
+  ],
+  "before_unload": [
+    {
+      "phase": "ordinary-half-press",
+      "observe": true,
+      "steps": [
+        ["half-press", 0, 0, 0, {"hold_instructions": 8000000, "release_instructions": 8000000}]
+      ]
+    }
+  ],
+  "after_unload": []
+}

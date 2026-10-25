@@ -6,7 +6,7 @@ import Control.Monad (unless)
 import qualified Data.ByteString.Char8 as C
 import Data.List (isSuffixOf, sort)
 import Emulation.UiTrajectory
-import EmulatorUsb (KeyPulse (..), ModeDial (..))
+import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming)
 import System.Directory (listDirectory)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
@@ -34,6 +34,20 @@ segmentOf bytes = case decodeTrajectories bytes of
   Right trajectories | [segment] <- beforeUnload trajectories -> Just segment
   _ -> Nothing
 
+-- | The steps of a one-segment file whose segment carries STEPS.
+stepsOf :: String -> Maybe [Step]
+stepsOf steps = segmentSteps <$> segmentOf (C.pack (concat
+  [ "{\"schema\":1,\"before_unload\":[{\"phase\":\"a\",\"steps\":[", steps, "]}],\"after_unload\":[]}" ]))
+
+-- | variantMismatches over two one-segment files with the given steps and segment fields.
+mismatchesOf :: (String, String) -> (String, String) -> Maybe [String]
+mismatchesOf (oldSteps, oldFields) (newSteps, newFields) = do
+  let file steps fields = C.pack (concat
+        [ "{\"schema\":1,\"before_unload\":[{\"phase\":\"a\",\"steps\":[", steps, "]", fields, "}],\"after_unload\":[]}" ])
+  old <- either (const Nothing) Just (decodeTrajectories (file oldSteps oldFields))
+  new <- either (const Nothing) Just (decodeTrajectories (file newSteps newFields))
+  pure (variantMismatches old new)
+
 expect :: String -> Bool -> IO Bool
 expect name ok = do
   putStrLn ((if ok then "ok   " else "FAIL ") ++ name)
@@ -46,6 +60,14 @@ main = do
       decoded <- decodeTrajectories <$> C.readFile ("emulation" </> file)
       expect ("checked-in " ++ file ++ " decodes") (either (const False) (const True) decoded))
     files
+  variants <- sort . filter ("-trajectories.fujimod.json" `isSuffixOf`) <$> listDirectory "emulation"
+  checkedInVariants <- mapM (\file -> do
+      let retainedFile = take (length file - length (".fujimod.json" :: String)) file ++ ".json"
+      retained <- decodeTrajectories <$> C.readFile ("emulation" </> retainedFile)
+      variant <- decodeTrajectories <$> C.readFile ("emulation" </> file)
+      expect ("checked-in " ++ file ++ " asserts what " ++ retainedFile ++ " asserts")
+        (either (const False) null (variantMismatches <$> retained <*> variant)))
+    variants
   results <- sequence
     [ expect "the checked-in trajectory files are present" (not (null files))
     , expect "a trace site decodes to its address and label" $
@@ -81,5 +103,24 @@ main = do
         fmap segmentKeyPulse (segmentOf (segmentDocument "")) == Just Nothing
     , expect "a zero key-pulse budget is refused" $
         refused (segmentDocument ",\"key_pulse\":{\"hold_instructions\":0,\"release_instructions\":8000000}")
+    , expect "a step without timing leaves the bridge defaults" $
+        fmap (map stepTiming) (stepsOf "[\"menu\",1,5,2]") == Just [defaultKeyTiming]
+    , expect "a step's timing object decodes to its pulse and settle cap" $
+        fmap (map stepTiming) (stepsOf "[\"menu\",67,56,0,{\"hold_instructions\":3,\"release_instructions\":4,\"settle_instructions\":5000000}]")
+          == Just [KeyTiming (Just (KeyPulse 3 4)) (Just (SettleBudget 5000000))]
+    , expect "a step hold without its release is refused" $
+        stepsOf "[\"menu\",1,5,2,{\"hold_instructions\":3}]" == Nothing
+    , expect "a zero settle cap is refused" $
+        stepsOf "[\"menu\",1,5,2,{\"settle_instructions\":0}]" == Nothing
+    , expect "an unknown step timing field is refused" $
+        stepsOf "[\"menu\",1,5,2,{\"wait_instructions\":5}]" == Nothing
+    , expect "a variant that changes only step timing and key pulses asserts what its retained file asserts" $
+        mismatchesOf ("[\"menu\",67,56,0],[\"menu\",1,5,2]", "")
+          ("[\"menu\",67,56,0,{\"settle_instructions\":5000000}],[\"menu\",1,5,2]", ",\"key_pulse\":{\"hold_instructions\":8000000,\"release_instructions\":8000000}")
+          == Just []
+    , expect "a variant that changes an expected menu state is a mismatch" $
+        fmap null (mismatchesOf ("[\"menu\",67,56,0],[\"menu\",1,5,2]", "") ("[\"menu\",1,5,2]", "")) == Just False
+    , expect "a variant that changes a capture is a mismatch" $
+        fmap null (mismatchesOf ("[\"menu\",1,5,2]", "") ("[\"menu\",1,5,2]", ",\"capture\":\"x\"")) == Just False
     ]
-  unless (and (checkedIn ++ results)) exitFailure
+  unless (and (checkedIn ++ checkedInVariants ++ results)) exitFailure

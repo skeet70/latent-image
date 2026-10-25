@@ -15,6 +15,7 @@ pub struct Hit {
     pub instructions: u64,
     pub registers: BTreeMap<&'static str, String>,
     pub sp: String,
+    pub lr: String,
     pub cpsr: u32,
 }
 
@@ -89,6 +90,7 @@ impl TraceSites {
                 instructions,
                 registers,
                 sp: format!("{:#x}", register(session, *core, arm::Register::R(13))?),
+                lr: format!("{:#x}", register(session, *core, arm::Register::R(14))?),
                 cpsr: register(session, *core, arm::Register::Cpsr)?,
             });
             let current = session.board.read_register(*core, Register::Pc)?;

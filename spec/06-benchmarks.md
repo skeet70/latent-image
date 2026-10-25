@@ -8,6 +8,8 @@
 
 **Confirmatory run:** freeze the candidate, scene list, settings, success definition, and analysis before collecting held-out results. Determine trial count from the observed variance and the desired confidence in speed and focus-success differences. A narrow failure-rate margin can require hundreds or thousands of trials; if that cannot be collected, report the interval and a narrower claim rather than treating an inconclusive test as a pass.
 
+Collect development data in short automated household-scene batches under the [sensor-backed process](05-autofocus.md#110-stock-first-sensor-backed-iteration). A small feasibility block checks the instruments before an expanded pilot; neither is a rare-failure or p95 demonstration. Minimize owner actions through automated starts, references and records, not by weakening confidence requirements. No specialized photography equipment is required.
+
 Pair stock and candidate by target, start state, lens, lighting, and aperture. Randomize order. Include trials starting substantially out of focus and near the correct focus. Keep pre-AF behavior, AF-assist illumination, frame rate, and exposure policy matched or report their changes as part of the feature's cost. Do not hide focus work performed before the timing start.
 
 Store the randomization seed, attempt/pair IDs, scene/session grouping, and settings/build hashes with every trial. Reserve scenes and sessions for confirmation before tuning. Account for correlations within a scene/session when estimating uncertainty; repeated acquisitions from the same scene are not automatically independent evidence of generalization.
@@ -30,6 +32,8 @@ Final-sharpness evaluation must use a defined ROI and target plane. A background
 
 A saved photograph can establish final quality but cannot by itself timestamp the first acceptable focus. If continuous quality observations are unavailable, report confirmation latency plus independently verified final quality, or a bounded timing interval. Carry clock/video-frame uncertainty through the estimate rather than labeling a confirmation event as exact acquisition latency.
 
+Preview, raw sensor, developed capture and saved-image quality are distinct domains. Validate the chosen metric against deliberately defocused and reference observations, exposure/noise variation and target-plane correctness before using it as independent quality. A coherent full-resolution RAM capture can support cardless quality evidence once its provenance and processing are established. Preview alone does not establish saved-photo sharpness, and neither RAM capture nor a cardless exit check establishes normal save/playback compatibility.
+
 ### 12.3 Provisional performance target
 
 Use the following as a starting product target, fixed or revised in a recorded decision after stock characterization and before confirmatory tests:
@@ -39,6 +43,10 @@ Use the following as a starting product target, fixed or revised in a recorded d
 - No material final-sharpness loss. Define the noninferiority threshold using repeatability of the independent sharpness measurement.
 - Focus-success rate no more than **2 percentage points below stock**, with confidence intervals reported. Insufficient data for that margin leaves the reliability claim unproved.
 - No repeated camera hangs, unexplained persistent changes, uncontrolled lens motion, or failure to restore stock operation during accepted tests.
+
+The default product goal includes an accuracy improvement, not only speed with noninferior accuracy. After stock characterization, predeclare difficult-scene false-confirmation, wrong-plane or unacceptable-focus rate as an accuracy endpoint and freeze its minimum meaningful improvement and confidence rule. A faster/noninferior controller is an intermediate result; claim both faster and more accurate only when both endpoints pass. Keep the provisional success-loss guardrail above separate from this positive improvement requirement.
+
+Host-in-the-loop latency includes transport and host execution and is not target AF latency. Validate finalists with local on-camera control and bulk extraction outside timed acquisitions. Record stock versus instrumented overhead separately. Research crashes trigger investigation; repeated battery-removal recovery is not acceptable operation for an accepted feature.
 
 These are project acceptance choices, not a forecast. A smaller but robust gain in one well-defined scenario may still be worth retaining as an experimental mode; label it accordingly. A speedup limited to bright static targets cannot be presented as an overall AF improvement.
 

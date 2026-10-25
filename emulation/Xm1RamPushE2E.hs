@@ -1,13 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, classicChromeIconPayload, runRamPushE2E, warmAttachCheckpoint) where
 
-import Control.Exception (IOException, SomeException, bracket, catch, displayException, try)
+import Control.Applicative ((<|>))
+import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, try)
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON (..), Value (..), encode, object, withObject, (.:), (.=))
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (nub, sort)
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, isJust)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Char8 as C
@@ -19,11 +20,12 @@ import Data.Bits (shiftL, shiftR, (.|.))
 import Data.Int (Int32)
 import Data.Word (Word32)
 import Numeric (readHex, showFFloat, showHex)
-import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectory, setCurrentDirectory)
+import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectory, removeDirectoryRecursive, setCurrentDirectory)
 import System.Environment (getExecutablePath, lookupEnv)
-import System.FilePath ((</>))
+import System.FilePath (takeFileName, (</>))
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stdout)
 import System.Posix.Files (setFileMode)
+import System.Posix.Temp (mkdtemp)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, routeKey, routeKeyHex)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.UiTrajectory
@@ -117,8 +119,8 @@ cardRecord mode = object
 -- | The bridge executable and its arguments for one boot of the session's inputs writing to `output`.
 sessionBridge :: E2ESettings -> FilePath -> FilePath -> FilePath -> BootMode -> FilePath -> IO (FilePath, [String])
 sessionBridge settings python installedMedia adjustmentNand boot output = case (emulationRuntime settings, emulationCardMode settings) of
-  (FujiModRuntime bridge, Cardless) -> do
-    require (attachHold settings == NoAttachHold) "the FujiMod RAM-push bridge holds no key across the attach edge"
+  (FujiModRuntime bridge, card) -> do
+    require (card /= Cardless || attachHold settings == NoAttachHold) "the cardless RAM-push bridge holds no key across the attach edge"
     require (null (fixedSceneFrame settings)) "the FujiMod RAM-push bridge takes no --fixed-scene-frame"
     pure (fujimodBridge bridge,
       [ "--run", fujimodRunDocument bridge
@@ -127,8 +129,7 @@ sessionBridge settings python installedMedia adjustmentNand boot output = case (
       , "--adjustment-nand", adjustmentNand
       , "--output", output
       , "--ram-push-checkpoints", checkpointRoot settings
-      ] ++ freshArguments)
-  (FujiModRuntime _, CardBacked _) -> ioError (userError "the FujiMod RAM-push bridge runs only --cardless")
+      ] ++ freshArguments ++ cardArguments card ++ attachHoldArguments (attachHold settings))
   (RetainedRuntime, CardBacked cardImage) -> do
     key <- maybe (ioError (userError "the card attach key is unset")) pure (cardAttachKey settings)
     pure (python,
@@ -160,18 +161,22 @@ sessionBridge settings python installedMedia adjustmentNand boot output = case (
       StrictUiConversion -> []
       DeclaredUiCpuFallback -> ["--ui-conversion-profile", "declared-ui-cpu-fallback"]
     frameArguments = fixedSceneFrameArguments (fixedSceneFrame settings)
+    cardArguments (CardBacked image) = ["--sd-card-image", image]
+    cardArguments Cardless = []
 
 payloadText :: Payload -> T.Text
 payloadText p = case payloadKind p of
   RecipeBankD3 -> "recipe-bank-d3"
   ClassicChrome -> "classic-chrome"
   ClassicChromeIcon -> "classic-chrome-icon"
+  AfRing -> "af-ring"
 
 payloadContract :: Payload -> ReviewedContract
 payloadContract p = case payloadKind p of
   RecipeBankD3 -> reviewedContract
   ClassicChrome -> reviewedCcContract
   ClassicChromeIcon -> reviewedCcIconContract
+  AfRing -> error "AF ring has no live reviewed contract; use //emulation:xm1-af-ring-e2e"
 
 -- | Whether the payload carries the Classic Chrome publications.
 carriesClassicChrome :: Payload -> Bool
@@ -196,6 +201,17 @@ require yes message = unless yes (ioError (userError message))
 
 privateDirectory :: FilePath -> IO ()
 privateDirectory path = createDirectory path >> setFileMode path 0o700
+
+-- | Runs a transport session in a private directory on tmpfs (XDG_RUNTIME_DIR, else /dev/shm),
+-- then copies its files into DIRECTORY, which must exist, whether or not the session succeeded.
+-- The transport fsyncs every journal line, which costs tens of milliseconds a transfer on disk.
+stagedSession :: FilePath -> (FilePath -> IO a) -> IO a
+stagedSession directory session = do
+  root <- maybe "/dev/shm" id <$> lookupEnv "XDG_RUNTIME_DIR"
+  bracket (mkdtemp (root </> "xm1-e2e-session-")) removeDirectoryRecursive $ \staging -> do
+    let work = staging </> "session"
+    privateDirectory work
+    session work `finally` (listDirectory work >>= mapM_ (\name -> B.readFile (work </> name) >>= writePrivateBytes (directory </> name)))
 
 -- | Entry of the plain-image drawer that renders a menu message banner; r0 is the message id.
 menuMessageDrawer :: Word32
@@ -223,41 +239,48 @@ menuState value = either (ioError . userError . ("invalid menu response: " ++)) 
 -- | A step key of four colon-separated fields (seek or cursor, a key, a target, a press limit) presses
 -- the key until the setting id (seek) or the cursor (cursor) equals the target, at most limit times;
 -- any other key is pressed once. Returns the key presses made and the final state.
-pressStep :: Emulator -> Maybe KeyPulse -> String -> IO ([String], MenuState)
-pressStep emulator pulse key = case splitOn ':' key of
+pressStep :: Emulator -> KeyTiming -> String -> IO ([String], MenuState)
+pressStep emulator timing key = case splitOn ':' key of
   [kind, seekKey, targetText, limit]
     | kind `elem` ["seek", "cursor"], [(target, "")] <- reads targetText, [(bound, "")] <- reads limit ->
     let field (MenuState _ setting cursor) = if kind == "seek" then setting else cursor
         go count pressed = do
-          actual <- emulatorKey emulator pulse seekKey >>= menuState
+          actual <- emulatorKey emulator timing seekKey >>= menuState
           if field actual == target || count + 1 >= (bound :: Int)
             then pure (reverse (seekKey : pressed), actual)
             else go (count + 1) (seekKey : pressed)
      in go 0 []
-  _ -> (\actual -> ([key], actual)) <$> (emulatorKey emulator pulse key >>= menuState)
+  _ -> (\actual -> ([key], actual)) <$> (emulatorKey emulator timing key >>= menuState)
   where
     splitOn c text = case break (== c) text of
       (front, []) -> [front]
       (front, _ : rest) -> front : splitOn c rest
 
-press :: Emulator -> Maybe KeyPulse -> String -> MenuState -> IO ()
-press emulator pulse key expected = do
-  (_, actual) <- pressStep emulator pulse key
-  require (actual == expected) ("menu trajectory after " ++ key ++ ": expected " ++ show expected ++ ", got " ++ show actual)
+-- | A step's own pulse, else the segment's; its own settle cap.
+stepKeyTiming :: Maybe KeyPulse -> Step -> KeyTiming
+stepKeyTiming segmentPulse step = KeyTiming (keyTimingPulse timing <|> segmentPulse) (keyTimingSettle timing)
+  where timing = stepTiming step
 
-presses :: Emulator -> Maybe KeyPulse -> [(String, MenuState)] -> IO ()
-presses emulator pulse = mapM_ (uncurry (press emulator pulse))
+press :: Emulator -> Maybe KeyPulse -> Step -> IO ()
+press emulator pulse step = do
+  (_, actual) <- pressStep emulator (stepKeyTiming pulse step) (stepKey step)
+  require (actual == stepExpected step)
+    ("menu trajectory after " ++ stepKey step ++ ": expected " ++ show (stepExpected step) ++ ", got " ++ show actual)
+
+presses :: Emulator -> Maybe KeyPulse -> [Step] -> IO ()
+presses emulator pulse = mapM_ (press emulator pulse)
 
 -- | Presses every step and records the key presses, expected and actual state and wall seconds
 -- without requiring the state.
-observe :: Emulator -> Maybe KeyPulse -> [(String, MenuState)] -> IO [Value]
-observe emulator pulse = mapM $ \(key, expected@(MenuState em es ec)) -> do
+observe :: Emulator -> Maybe KeyPulse -> [Step] -> IO [Value]
+observe emulator pulse = mapM $ \step -> do
+  let MenuState em es ec = stepExpected step
   started <- getMonotonicTime
-  (pressed, MenuState am as ac) <- pressStep emulator pulse key
+  (pressed, MenuState am as ac) <- pressStep emulator (stepKeyTiming pulse step) (stepKey step)
   ended <- getMonotonicTime
-  pure (object [ "key" .= key, "pressed" .= length pressed
+  pure (object [ "key" .= stepKey step, "pressed" .= length pressed
                , "expected" .= [em, es, ec], "actual" .= [am, as, ac]
-               , "matched" .= (MenuState am as ac == expected), "seconds" .= (ended - started) ])
+               , "matched" .= (MenuState am as ac == stepExpected step), "seconds" .= (ended - started) ])
 
 hexAddress :: Word32 -> String
 hexAddress value = "0x" ++ replicate (8 - length digits) '0' ++ digits where digits = showHex value ""
@@ -363,11 +386,12 @@ installHostValue host = object
   , "heap_break_before" .= hostBreakBefore host
   , "heap_break_after" .= hostBreakAfter host ]
 
--- | GIVEN with its card attach key, timed and printed; the cardless bridge keys its own.
+-- | GIVEN with its card attach key, timed and printed; the cardless and FujiMod bridges key their own.
 keyedSettings :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> IO E2ESettings
-keyedSettings given python runtime installedMedia adjustmentNand = case emulationCardMode given of
-  Cardless -> pure given
-  CardBacked cardImage -> do
+keyedSettings given python runtime installedMedia adjustmentNand = case (emulationRuntime given, emulationCardMode given) of
+  (FujiModRuntime _, _) -> pure given
+  (RetainedRuntime, Cardless) -> pure given
+  (RetainedRuntime, CardBacked cardImage) -> do
     started <- getMonotonicTime
     key <- cardAttachRouteKey given python runtime installedMedia adjustmentNand cardImage
     ended <- getMonotonicTime
@@ -395,6 +419,12 @@ runRamPushE2E given python workspace trajectoryFile installedMedia adjustmentNan
   hSetBuffering stdout LineBuffering
   trajectories <- B.readFile trajectoryFile
     >>= either (ioError . userError . ("invalid RAM-push e2e trajectories: " ++)) pure . decodeTrajectories
+  let settleCaps = [ () | segment <- beforeUnload trajectories ++ afterUnload trajectories
+                        , step <- segmentSteps segment, isJust (keyTimingSettle (stepTiming step)) ]
+  case emulationRuntime given of
+    RetainedRuntime | not (null settleCaps) ->
+      ioError (userError "settle_instructions is FujiMod press timing; the retained bridge takes no settle cap")
+    _ -> pure ()
   exists <- doesDirectoryExist receipt
   when exists $ do
     entries <- listDirectory receipt
@@ -511,8 +541,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           emulatorTraceSites emulator fetchSites
           Just . fst <$> emulatorTraceHits emulator 0
         breakBefore <- heapBreak
-        allocationPath <- timed "ram-alloc" (runRamAlloc allocationBytes realClock api allocationDirectory) >>= \outcome -> case outcome of
-          RamAllocated path -> pure path
+        allocationPath <- timed "ram-alloc" (stagedSession allocationDirectory (runRamAlloc allocationBytes realClock api)) >>= \outcome -> case outcome of
+          RamAllocated path -> pure (allocationDirectory </> takeFileName path)
           other -> ioError (userError ("ram-alloc failed: " ++ show other))
         retained <- readRetainedAllocation allocationPath
         breakAfter <- heapBreak
@@ -557,8 +587,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         writePrivateBytes path (hostPushState host)
         pure (path, hostInstallMailbox host)
       Nothing -> do
-        statePath <- timed "ram-push" (pushWith retained manifest realClock api pushDirectory) >>= \outcome -> case outcome of
-          RamPushInstalled path -> pure path
+        statePath <- timed "ram-push" (stagedSession pushDirectory (pushWith retained manifest realClock api)) >>= \outcome -> case outcome of
+          RamPushInstalled path -> pure (pushDirectory </> takeFileName path)
           other -> stop "ram-push" (show other)
         installMailbox <- readMailbox
         forM_ fetchStart $ \from -> do
@@ -583,7 +613,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     unloadMailbox <- if planUnload plan
       then do
         privateDirectory unloadDirectory
-        unload <- timed "ram-unload" (unloadWith state realClock api unloadDirectory)
+        unload <- timed "ram-unload" (stagedSession unloadDirectory (unloadWith state realClock api))
         unless (unload == RamUnloaded) (stop "ram-unload" (show unload))
         Just <$> readMailbox
       else pure Nothing

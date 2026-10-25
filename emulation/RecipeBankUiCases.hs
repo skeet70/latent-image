@@ -214,6 +214,59 @@ parsePlan p = do
       Number n -> pure (truncate n)
       _ -> fail "bad plan address"
 
+data BankPointer = BankGetter | BankSetter | BankSelectValues | BankSelectLabels
+
+bankPointers :: PlanWrite -> [(Int, BankPointer)]
+bankPointers w = case (pwRegion w, pwRole w) of
+  ("id4_code", "getter dispatch arm") -> [(0, BankGetter)]
+  ("id4_code", "setter dispatch arm") -> [(0, BankSetter)]
+  ("menu_values", "select list node header") -> [(0x20, BankSelectValues), (0x24, BankSelectLabels)]
+  _ -> []
+
+bankPointerSymbol :: BankPointer -> String
+bankPointerSymbol BankGetter = "rb_stage_edit_get_arm"
+bankPointerSymbol BankSetter = "rb_stage_edit_set_arm"
+bankPointerSymbol BankSelectValues = "rb_select_values"
+bankPointerSymbol BankSelectLabels = "rb_select_labels"
+
+usedPlanWrite :: PlanWrite -> Bool
+usedPlanWrite w =
+  pwRegion w `elem` menuRegions
+    || (pwRegion w == "id4_code" && (within 0x61c1fc 0x646c9c || within 0x774f48 tablesEditEnd))
+    || (pwRegion w == "image5" && within 0xcd1ae4 0xcd24e4)
+  where
+    within lo hi = pwAddress w >= lo && toInteger (pwAddress w) + toInteger (B.length (pwNew w)) <= toInteger hi
+
+validateBankPlan :: Syms -> [PlanWrite] -> IO ()
+validateBankPlan syms = mapM_ check . filter usedPlanWrite
+  where
+    check w = do
+      let pointers = bankPointers w
+          bytes = pwNew w
+      forM_ pointers $ \(offset, pointer) -> do
+        let name = bankPointerSymbol pointer
+            expected = u32le (fromIntegral (addr syms name))
+            actual = B.take 4 (B.drop offset bytes)
+        unless (actual == expected) $
+          fail ("bank-plan pointer at " ++ hex (fromIntegral (pwAddress w) + fromIntegral offset) ++ " does not match " ++ name
+            ++ ": expected " ++ hexB expected ++ ", got " ++ hexB actual)
+      when (any kernelCode [readU32 bytes offset | offset <- [0, 4 .. B.length bytes - 4], offset `notElem` map fst pointers]) $
+        fail ("unbound bank-plan code pointer in " ++ pwRole w ++ " at " ++ hex (fromIntegral (pwAddress w)))
+    kernelCode value =
+      addr syms "__rb_image_start" <= toInteger value && toInteger value < addr syms "__rb_text_end"
+
+bindBankPlan :: FilePath -> FilePath -> FilePath -> IO ()
+bindBankPlan build source output = do
+  syms <- parseSyms (build </> "kernel.syms")
+  plan <- parsePlan source
+  let bind w = w { pwNew = overlay (pwNew w)
+        [(offset, u32le (fromIntegral (addr syms (bankPointerSymbol pointer)))) | (offset, pointer) <- bankPointers w] }
+      bound = map bind plan
+  validateBankPlan syms bound
+  BL.writeFile output (encode (object ["writes" .=
+    [ object ["region" .= pwRegion w, "address" .= pwAddress w, "new" .= hexB (pwNew w), "role" .= pwRole w]
+    | w <- bound ]]))
+
 menuRegions :: [String]
 menuRegions = ["menu_values", "menu_labels", "menu_parent", "name_records", "edit_half"]
 
@@ -582,9 +635,9 @@ snapshotAccessor SnapshotNodeType = GuestAddress 0x0061d1a4
 snapshotAccessor SnapshotCursorToken = GuestAddress 0x0061d244
 snapshotAccessor SnapshotCurrentToken = GuestAddress 0x0061d294
 
--- The cells region starts at menuSnapshotCopy and ends at the case stack's top.
+-- Includes SELECT's depth-2 snapshot, root 1 at 0x009412d4 + 0x2c.
 cellsBase, cellsEnd :: Word32
-cellsBase = menuSnapshotCopy
+cellsBase = 0x00941300
 cellsEnd = 0x0095a000
 
 defaultsRowAddress :: Word32
@@ -709,6 +762,7 @@ abiWorkspaces in' e =
   -- restore to rewrite them.
   , at NavigationWorkspace (eCurrentRow e) 4
   , at NavigationWorkspace menuSnapshotCopy 0x2c
+  , at NavigationWorkspace 0x00941300 0x2c
   , area KernelWorkspace "kdata" 0 (B.length (inKbin in') - B.length (inKtext in'))
   , area MediaWorkspace "span-low" (0x970000 - 0x96cc64) (0x970800 - 0x96cc64)
   -- FUN_0061d9ec reloads only the ordinary block; the C record starts at +0x140.
@@ -919,6 +973,7 @@ specSet e epochBump = slotCases ++ otherCases
             , claimU32 e (out 3) 0xffffffff
             , claimU32 e (out 5) (selectToken row)
             , claimU32 e (out 6) (selectToken 0)
+            , claimU32 e (0x00941300 + 4 * 4) (selectToken 0)
             , claimU32 e (out 7) 0xffffffff
             , claimU32 e (out 8) 0xffffffff
             , claimU32 e (out 9) 0xffffffff
@@ -978,6 +1033,7 @@ specSet e epochBump = slotCases ++ otherCases
             , WriteWord 0x015e4894 9
             , WriteWord 0x015e489c 9
             , ReadField (guestWord (eDrawRoot e)) 1 0
+            , Call (guestWord (snapshotAccessor SnapshotCurrentToken)) 1
             ]
         , spClaims =
             [ claimU32 e (eFrame e) (sub 2)
@@ -986,6 +1042,7 @@ specSet e epochBump = slotCases ++ otherCases
             , claimU32 e stockPaneRecord 9
             , claimU32 e (stockPaneRecord + 4) (menuWord e (sub 2))
             , claimU32 e (stockPaneRecord + 8) 0
+            , claimU32 e (out 1) 0x82
             , claimAt e 0x980000 cardA
             , claimAt e 0x96cc64 (B.replicate 0x1c2 0)
             ]
@@ -2367,6 +2424,7 @@ loadInputs build planPath id4Path id4Base id5Path fieldsPath nameRecordArg kerne
   let id4 = B.drop (fromIntegral (0x61c400 - id4Base)) id4Raw
   id5 <- B.readFile id5Path
   plan <- parsePlan planPath
+  validateBankPlan ks plan
   fieldsRaw <- B.readFile fieldsPath
   let jsonFields = parseFields fieldsRaw
       halfProps = [0x1cb, 0x1cc] :: [Word32]
@@ -2600,6 +2658,16 @@ findingsText specs results =
 main :: IO ()
 main = do
   args <- getArgs
+  case args of
+    ["bind-plan", "--build", build, "--plan", source, "--out", output] ->
+      bindBankPlan build source output
+    ["check-plan", "--build", build, "--plan", source] -> do
+      syms <- parseSyms (build </> "kernel.syms")
+      parsePlan source >>= validateBankPlan syms
+    _ -> runCases args
+
+runCases :: [String] -> IO ()
+runCases args = do
   let opt n = lookup n [(drop 2 a, b) | (a, b) <- pair args]
       pair (a : b : r) = (a, b) : pair r
       pair _ = []

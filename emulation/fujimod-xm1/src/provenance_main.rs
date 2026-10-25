@@ -2,6 +2,7 @@
 //! 1.50 images: every word or code binding must be formed where it says, and
 //! no listed image may form an address the document marks unchecked.
 use fujimod_xm1::provenance::{self, Guest, Provenance, RamFact, Target, Window};
+use fujimod_xm1::sd_host;
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use std::{path::PathBuf, process::ExitCode};
@@ -24,6 +25,7 @@ struct Firmware {
 #[derive(Deserialize)]
 struct Document {
     devices: Box<RawValue>,
+    sd: String,
     firmware: Firmware,
     provenance: Provenance,
 }
@@ -55,7 +57,8 @@ fn drive() -> Result<bool, String> {
         (RamFact::ScannerRegistered, Guest(firmware.scanner_registered)),
         (RamFact::KeyTable, Guest(firmware.key_table.base)),
     ];
-    document.provenance.validate(&windows, &ram)?;
+    let registers: Vec<(&str, Guest)> = sd_host::REGISTERS.iter().map(|address| (document.sd.as_str(), Guest(*address))).collect();
+    document.provenance.validate(&windows, &ram, &registers)?;
     let in_window = |value: Guest| windows.iter().any(|(_, window): &(String, Window)| value.0.wrapping_sub(window.base.0) < window.size);
     let wanted = |value: Guest| in_window(value) || ram.iter().any(|(_, address)| *address == value);
     let references = provenance::image_references(&document.provenance, &analysis, &wanted)?;
@@ -73,6 +76,9 @@ fn drive() -> Result<bool, String> {
     for entry in &document.provenance.ram {
         let address = ram.iter().find(|(fact, _)| *fact == entry.fact).map(|(_, address)| *address).ok_or("RAM fact")?;
         report(Target::Ram { fact: entry.fact, address }, &entry.binding);
+    }
+    for entry in &document.provenance.registers {
+        report(Target::Register { node: &entry.node, address: entry.address }, &entry.binding);
     }
     Ok(passed)
 }

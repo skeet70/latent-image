@@ -261,6 +261,7 @@ class MenuSession(WarmScanoutSession):
         if not isinstance(options, dict) or set(options) - {
                 'key', 'hold_instructions', 'release_instructions', 'settle_instructions', 'render'}:
             raise ValueError('Unknown menu key options')
+        self.last_key_latched = None
         render = options.get('render', False)
         if type(render) is not bool:
             raise ValueError('Render must be a boolean')
@@ -309,7 +310,7 @@ class MenuSession(WarmScanoutSession):
             self.inputs.release()
         if self.board.failure is not None or self.execution_error is not None:
             return self.sample()
-        self.board._native.release_menu_key(self, key.value, budgets[1])
+        self.last_key_latched = self.board._native.release_menu_key(self, key.value, budgets[1])
         state = self.sample()
         if budgets[2] and self.board.failure is None and self.execution_error is None:
             state = self.run({'limit': budgets[2]})

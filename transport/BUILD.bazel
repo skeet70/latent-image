@@ -11,13 +11,14 @@ _GHCOPTS = [
     "-XGHC2021",
 ]
 
-# The locked Nix libusb, resolved to its store path at build time. Nothing opens
-# it outside the live camera operations.
+# The locked Nix libusb's store path, read from the package's store-path file so
+# the action's key follows the store path. Nothing opens it outside the live
+# camera operations.
 genrule(
     name = "libusb-path",
-    srcs = ["@lab_libusb_runtime//:lib/libusb-1.0.so"],
+    srcs = ["@lab_libusb_runtime//:share/libusb-runtime/store-path"],
     outs = ["libusb_path.h"],
-    cmd = "printf '#define FUJI_LIBUSB_PATH \"%s\"\\n' \"$$(readlink -f $<)\" > $@",
+    cmd = "read -r runtime < $(location @lab_libusb_runtime//:share/libusb-runtime/store-path) && printf '#define FUJI_LIBUSB_PATH \"%s\"\\n' \"$$runtime\" > $@",
 )
 
 cc_library(
@@ -62,6 +63,8 @@ haskell_library(
     ],
     # FujiAF.RamPush runs each payload's relinker from the linking binary's runfiles.
     data = [
+        "//host/firmware:af-ring-ram-relinker",
+        "//menu:af-ring-ram-relink-sources",
         "//host/firmware:classic-chrome-icon-ram-relinker",
         "//host/firmware:classic-chrome-ram-relinker",
         "//host/firmware:ram-push-relinker",
@@ -85,6 +88,47 @@ haskell_library(
         "//host:vector",
         "//host/firmware:bank-allowlist",
         "//host/firmware:ram-push-toolchain",
+    ],
+)
+
+haskell_library(
+    name = "af-ring",
+    srcs = ["FujiAF/AfRing.hs"],
+    ghcopts = _GHCOPTS,
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":camera-core",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+    ],
+)
+
+haskell_test(
+    name = "af-ring-tests",
+    srcs = ["AfRingTest.hs"],
+    args = [
+        "$(location :camera)",
+        "$(location //host/firmware:read-af-ring)",
+    ],
+    data = [
+        ":camera",
+        "//host/firmware:read-af-ring",
+    ],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":af-ring",
+        ":camera-core",
+        "//broker:core",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:unix",
     ],
 )
 
