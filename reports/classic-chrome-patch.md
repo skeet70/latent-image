@@ -897,11 +897,13 @@ od -An -tx1 -j $((0xe0048+0xb5)) -N 1 $R/payload.bin; od -An -tx1 -j $((0xe0048+
 
 ## 14. Combined recipe-bank RAM mechanism review brief
 
-The bank relinker now composes the existing Classic Chrome RAM processing publications with the editable bank, D3, live-view and frames-remaining fragments. This is a new combined mechanism, not an extension of either prior approval. Its changed source identities and publication contract are re-pinned **unreviewed**. The standalone Classic Chrome records are also re-pinned unreviewed wherever shared source identities change.
+The bank relinker now composes the existing Classic Chrome RAM processing publications with the editable bank, D3, live-view and frames-remaining fragments. This is a new combined mechanism, not an extension of either prior approval. Its changed source identities and publication contract are re-pinned **unreviewed**. The standalone Classic Chrome and icon records retain their existing approval provenance for unchanged emitted bytes; current source hashes are retained for the assembly's ELF function metadata and bank-only shared layout changes.
 
 The allocation reserves Classic Chrome's existing prefix data and leaves conversion row 2 and film code `0xd` to CC. D3's tables, expanded film conversion table and hook move after the bank's name records. D3 A uses appended row 13/code `0xf`; D3 B remains row 4/code `0xe`. Existing shooting/Q indices 0-8 are preserved and CC appends at index 9. Bank Edit offers the seven existing editable films plus CC. The [format-3 compatibility decision](recipe-design.md#1811-classic-chrome-bank-encoding-needs-the-owners-decision) separately needs the owner's approval.
 
 The reference relink passes the ELF allowlist under enforcement. Its ABI is 5, allocation size `0x1dc98`, with 222 publications ordered as 131 setup and 91 activation. The new contract digest is `bca512954d90a2225d19fc3117fe4efcfe1c7d11f446da12c72976f5b1e4fb46`. The source-identity and review-record bounds rise from 32 to 64 entries to carry both processing implementations. The migration helpers and the compiler-outlined `rb_seal` have argument/object-specific store declarations; those declarations need independent review alongside the new CC entry declarations.
+
+Writable generated bank data ends at `names+0x400`, before the relocated D3 bundle. The bundle through `ALIGN(names+0x800,32)` is non-writable to bank code; the installer starts at that aligned address. `RAM_PUSH_BANK_END` and `RAM_PUSH_INSTALLER_START` carry those separate bounds. The checker validates both against the runtime layout and refuses stores into the bundle, linked bank/CC code and installer, while admitting stores into generated bank name data.
 
 Independent mechanism review must cover:
 

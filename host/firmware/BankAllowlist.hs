@@ -46,7 +46,7 @@ import qualified Data.Vector as V
 import Data.Word (Word32)
 import FujiAF.JSON (decodeStrictIntegers)
 import Numeric (readHex, showHex)
-import RamPushLayout (runtimeAllocationSize, runtimeDataBase, runtimeExecutableBase)
+import RamPushLayout (runtimeAllocationSize, runtimeBankEnd, runtimeDataBase, runtimeExecutableBase, runtimeInstallerBase)
 
 -- * Allowlist
 
@@ -278,6 +278,7 @@ data Region
   | BankData
   | AllocationGap
   | GeneratedArea
+  | ExecutableBundle
   | InstallerArea
   | AllocationTail
   | StockImage String
@@ -292,6 +293,7 @@ regionName region = case region of
   BankData -> "bank data"
   AllocationGap -> "unassigned allocation space"
   GeneratedArea -> "generated bank data"
+  ExecutableBundle -> "the relocated executable bundle"
   InstallerArea -> "the RAM-push installer"
   AllocationTail -> "the allocation past the runtime"
   StockImage name -> "stock " ++ name ++ " code"
@@ -326,6 +328,7 @@ regionOf layout address
   | address < textEnd layout = BankCode
   | address >= dataStart layout && address < imageEnd layout = BankData
   | address >= generatedStart layout && address < bankEnd layout = GeneratedArea
+  | address >= bankEnd layout && address < installerStart layout = ExecutableBundle
   | address >= installerStart layout && address < runtimeEnd layout = InstallerArea
   | address >= runtimeEnd layout = AllocationTail
   | otherwise = AllocationGap
@@ -390,8 +393,9 @@ layoutFindings elf layout =
         sectionAddress s >= textEnd layout && sectionAddress s + sectionSize s == imageEnd layout
           && sectionWritable s && not (sectionExecutable s)
     , check (imageEnd layout <= generatedStart layout) (imageEnd layout) "bank image overlaps generated data"
-    , check (generatedStart layout <= bankEnd layout && bankEnd layout <= installerStart layout) (bankEnd layout) "generated data overlaps the installer"
-    , check (installerStart layout == (bankEnd layout + 31) .&. complement 31) (installerStart layout) "installer does not start at the 32-byte boundary after the bank"
+    , check (bankEnd layout == runtimeBankEnd (allocationBase layout)) (bankEnd layout) "generated bank data has the wrong writable end"
+    , check (generatedStart layout <= bankEnd layout && bankEnd layout <= installerStart layout) (bankEnd layout) "generated data overlaps the executable bundle"
+    , check (installerStart layout == runtimeInstallerBase (allocationBase layout)) (installerStart layout) "installer has the wrong placement after the executable bundle"
     , check (runtimeEnd layout <= allocationEnd layout) (runtimeEnd layout) "runtime exceeds the allocation"
     , [ violation (sectionAddress s) ("installer section " ++ sectionName s ++ " lies outside the installer extent")
       | s <- allocated

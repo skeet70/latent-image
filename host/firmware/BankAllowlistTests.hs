@@ -77,6 +77,20 @@ main = do
     [(statusStore, StoreOutside (symbol "rb_status_record") (symbol "rb_status_record" + 3) BankCode)]
   expect "store into the installer mailbox" (fixture statusLiteral (symbol "ram_push_mailbox"))
     [(statusStore, StoreOutside (symbol "ram_push_mailbox") (symbol "ram_push_mailbox" + 3) InstallerArea)]
+  expect "store into Classic Chrome code" (fixture statusLiteral (symbol "cc_ram_convert"))
+    [(statusStore, StoreOutside (symbol "cc_ram_convert") (symbol "cc_ram_convert" + 3) BankCode)]
+  let bundleStart = symbol "RAM_PUSH_BANK_END"
+  forM_
+    [ ("relocated D3 hook", bundleStart + 0x1d8)
+    , ("relocated bundle start", bundleStart)
+    , ("relocated bundle tail", symbol "__ram_push_installer_start" - 4)
+    ] $ \(label, address) ->
+      expect ("store into " ++ label) (fixture statusLiteral address)
+        [(statusStore, StoreOutside address (address + 3) ExecutableBundle)]
+  expect "store into installer code" (fixture statusLiteral (symbol "ram_push_install"))
+    [(statusStore, StoreOutside (symbol "ram_push_install") (symbol "ram_push_install" + 3) InstallerArea)]
+  expect "store into generated bank name data" (fixture statusLiteral (bundleStart - 0x400)) []
+  expect "store into the last generated bank word" (fixture statusLiteral (bundleStart - 4)) []
   -- Forbidden instruction classes in place of `mov r11, sp`.
   expect "cp15 cache maintenance" (fixture frameSetup 0xee070f15)
     [(frameSetup, ForbiddenInstruction (Coprocessor 15))]
@@ -115,7 +129,7 @@ main = do
   (fixtureCode, output, _) <- readProcessWithExitCode checker [allowlistPath, path] ""
   removeFile path
   check ("checker exits 1 on an undeclared stock call; output: " ++ output) (fixtureCode == ExitFailure 1)
-  putStrLn "bank allowlist: 22 checks passed"
+  putStrLn "bank allowlist: confinement and instruction checks passed"
 
 run :: Allowlist -> B.ByteString -> IO Report
 run allowlist bytes = either fail pure (parseElf bytes >>= checkBank allowlist)

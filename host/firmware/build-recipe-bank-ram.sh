@@ -34,9 +34,11 @@ name_record=$(((minimum_name & 0xffff0000) | 0xb784))
 if (( name_record < minimum_name )); then
   name_record=$((name_record + 0x10000))
 fi
-bank_end=$(((name_record + 0x800 + 31) & 0xffffffe0))
+bank_end=$((name_record + 0x400))
+installer_start=$(((name_record + 0x800 + 31) & 0xffffffe0))
 printf -v rb_name_record '0x%08xu' "$name_record"
 printf -v rb_bank_end '0x%08x' "$bank_end"
+printf -v rb_installer_start '0x%08x' "$installer_start"
 
 ARM=(--target=armv7r-none-eabi -march=armv7-r -marm)
 FREE=(-ffreestanding -nostdlib -fno-builtin -mno-unaligned-access)
@@ -64,6 +66,7 @@ NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" -c menu/classic_chrome_ram.S -o "$OUT
 objects+=("$OUT/classic_chrome_ram.o")
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${LINK[@]}" -Wl,-T,menu/recipe_bank_ram.ld \
   -Wl,--defsym=RAM_PUSH_BASE="$BASE" -Wl,--defsym=RAM_PUSH_BANK_END="$rb_bank_end" \
+  -Wl,--defsym=RAM_PUSH_INSTALLER_START="$rb_installer_start" \
   -Wl,menu/classic_chrome_ram_stock.ld \
   "${objects[@]}" -o "$OUT/kernel.elf"
 "$OBJCOPY" -O binary "$OUT/kernel.elf" "$OUT/linked.bin"

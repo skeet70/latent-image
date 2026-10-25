@@ -13,6 +13,7 @@ module RamPushLayout
   , runtimeDataBase
   , runtimeNameBase
   , runtimeBankEnd
+  , runtimeInstallerBase
   , runtimeInstallerExtent
   , runtimeAllocationSize
   , safePublicationOrder
@@ -110,8 +111,12 @@ runtimeNameBase base =
       candidate = (minimumName .&. 0xffff0000) .|. 0xb784
    in if candidate < minimumName then candidate + 0x10000 else candidate
 
+-- | Exclusive end of writable generated bank data.
 runtimeBankEnd :: Word32 -> Word32
-runtimeBankEnd base = (runtimeNameBase base + 0x800 + 31) .&. 0xffffffe0
+runtimeBankEnd base = runtimeNameBase base + 0x400
+
+runtimeInstallerBase :: Word32 -> Word32
+runtimeInstallerBase base = (runtimeNameBase base + 0x800 + 31) .&. 0xffffffe0
 
 runtimeInstallerExtent :: Word32
 runtimeInstallerExtent = installerExtent publicationCount

@@ -18,14 +18,14 @@ main = do
   check "fixed executable offset" (runtimeExecutableBase 0x00be1a00 == 0x00be1f00)
   let alignedBases = [base | high <- [0x0090, 0x00a0, 0x00b0, 0x00c0], low <- [0, 8 .. 0xfff8], let base = high * 0x10000 + low] :: [Word32]
   let allocationExtents =
-        [ runtimeBankEnd base - base + runtimeInstallerExtent
+        [ runtimeInstallerBase base - base + runtimeInstallerExtent
         | low <- [0, 8 .. 0xfff8]
         , let base = 0x00c00000 + low
         ]
   check "fixed allocation contains every 8-byte-aligned low-half layout"
     (all (<= runtimeAllocationSize) allocationExtents)
   check "allocation includes aligned installer and relocated recipe tables"
-    (all (\base -> ((runtimeBankEnd base + 31) .&. 0xffffffe0) - base + runtimeInstallerExtent <= runtimeAllocationSize) alignedBases)
+    (all (\base -> runtimeInstallerBase base - base + runtimeInstallerExtent <= runtimeAllocationSize) alignedBases)
   check "the order is a permutation of every logical publication"
     (length safePublicationOrder == publicationCount
       && all (`elem` safePublicationOrder) [0 .. publicationCount - 1])

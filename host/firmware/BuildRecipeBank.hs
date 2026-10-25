@@ -991,7 +991,7 @@ relocatedD3
   :: Word32 -> B.ByteString -> B.ByteString -> B.ByteString
   -> IO ([(Word32, B.ByteString)], [RamPublication])
 relocatedD3 base rc0Id4 rc0Id5 d3Id4 = do
-  let start = runtimeNameBase base + 0x400
+  let start = runtimeBankEnd base
       values = start
       labels = start + 88
       qLabels = start + 264
@@ -1056,7 +1056,7 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
   unless
     ( linkedStart == runtimeExecutableBase base
         && rbEnd <= runtimeDataBase base
-        && installerStart == runtimeBankEnd base
+        && installerStart == runtimeInstallerBase base
         && installerStart < linkedEnd
         && linkedEnd - installerStart == runtimeInstallerExtent
         && linkedEnd - base <= runtimeAllocationSize
