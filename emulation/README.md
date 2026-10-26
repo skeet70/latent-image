@@ -667,6 +667,12 @@ Model boundary: the endpoint model raises no controller event when the cable lev
 
 `//emulation:usb-toggle-emu -- --fujimod ...` serves the same primitives from `fujimod-xm1-toggle` (crate `emulation/fujimod-xm1`, built by `@lab_fujimod_xm1`) on jitl (justjake)'s FujiMod runtime, with the R4F guard armed. It takes the same `--runs`, `--dats`, `--fresh-boot` and `--warm-checkpoints` options and refuses `--fixed-scene-frame`. Route checkpoints are FujiMod snapshots under `private-data/emulator-checkpoints/xm1-usb-toggle-fujimod/`; the bridge keys them on the launcher's route description, the DAT, NAND, run document, boot ROM and its own binary, and echoes the key in `start-options`. Each receipt and `summary.json` name the `engine`.
 
+`--fujimod --ram-push` selects the [RAM-toggle session](../reports/usb-personality-toggle.md#14-ram-push-variant): boot unpatched RC0 (`rc0`, `acb0fbbb…ca8`) with stored 1, enumerate `ff80`, allocate `0xd20`, authenticate the relink at the returned base, upload/publish the exact 23-word payload, then attempt detach and both Q attaches. The receipt retains the actual-base runtime and manifest digests and writes `installed-stub.bin` for exact-byte native cases. It stops at the first undelivered detach; that boundary and all later unexecuted steps remain hardware-only. The ordinary flash-toggle scenarios are separate component evidence, not a substitute for a successful pushed-session disconnect.
+
+```sh
+devenv shell -- bazel run //emulation:usb-toggle-emu -- --fujimod --ram-push --receipt-output private-data/analysis/usb-toggle/ram-push/SESSION
+```
+
 The FujiMod mapping:
 - the cable level is the run document's `usb_cable` logic input, and `--adc-at-reset` sets a raw sample before the first instruction;
 - `state` reports `asserted_keys` as the ADC keys whose calibrated interval holds their channel's sample, and `inputs_ready` as the scanner-registered word;

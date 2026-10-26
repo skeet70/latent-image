@@ -113,3 +113,16 @@ filegroup(
         "//emulation:__pkg__",
     ],
 )
+
+filegroup(
+    name = "usb-toggle-ram-relink-sources",
+    srcs = [
+        "ram_push_abi.h",
+        "ram_push_installer.c",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//transport:__pkg__",
+        "//emulation:__pkg__",
+    ],
+)

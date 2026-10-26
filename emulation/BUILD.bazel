@@ -408,6 +408,7 @@ haskell_binary(
         "//transport:ram-push-cc-icon-pins",
         "//transport:ram-push-cc-pins",
         "//transport:ram-push-pins",
+        "//transport:ram-push-toggle-pins",
     ],
 )
 
@@ -442,6 +443,7 @@ haskell_binary(
         "//host:usb-toggle",
         "//host:vector",
         "//transport:camera-core",
+        "//transport:ram-push-toggle-pins",
     ],
 )
 

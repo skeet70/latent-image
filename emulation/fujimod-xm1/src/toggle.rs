@@ -185,6 +185,7 @@ struct Site {
 #[serde(tag = "command", rename_all = "kebab-case")]
 enum Request {
     State,
+    List,
     Run { instructions: u64, #[serde(default)] stop_on: Vec<String> },
     Key { key: RouteKey, hold_instructions: Option<u64>, release_instructions: Option<u64> },
     ReleaseContext { segment: Option<ReleaseSegment> },
@@ -337,6 +338,12 @@ impl Server {
                         &machine.session, &machine.session.adc_samples(&machine.document.adc.0)?)?,
                     "menu": menu_value(machine.menu()?),
                 })
+            }
+            Request::List => {
+                if !self.usb_connected()? {
+                    return Err("no emulated USB device is attached".into());
+                }
+                json!({})
             }
             Request::Run { instructions, stop_on } => {
                 if !(1..=MAX_RUN).contains(&instructions) {

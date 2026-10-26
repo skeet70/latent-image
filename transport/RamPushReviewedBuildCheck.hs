@@ -3,16 +3,13 @@
 -- `bazel run`; the builder comes from this binary's runfiles and the private
 -- inputs from BUILD_WORKSPACE_DIRECTORY. The remaining cases run from a fresh
 -- directory outside the workspace with a USB provider that fails every call.
--- With `--classic-chrome` it checks the Classic Chrome payload against
--- `reviewedCcContract`, with `--classic-chrome-icon` the Classic Chrome icon
--- payload against `reviewedCcIconContract`; otherwise bank+D3 against
--- `reviewedContract`.
+-- Selects bank+D3 by default, or the payload named by its leading flag.
 module Main where
 
-import Control.Monad (forM, forM_, unless)
+import Control.Monad (forM, forM_, unless, when)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
-import Data.Bits (xor)
+import Data.Bits (shiftR, xor)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.List (isInfixOf)
 import Numeric (showHex)
@@ -30,6 +27,7 @@ import RamPushToolchain (RamPushToolchain(..))
 import RamPushReviewedPins (reviewedContract)
 import RamPushCcReviewedPins (reviewedCcContract)
 import RamPushCcIconReviewedPins (reviewedCcIconContract)
+import RamPushToggleReviewedPins (reviewedToggleContract)
 
 -- | The payload under check, its compiled contract, the other payload and
 -- its contract, and the label its acceptance lines carry.
@@ -40,7 +38,8 @@ targetFor arguments = case arguments of
   [] -> pure (Target bankD3Payload reviewedContract classicChromePayload reviewedCcContract "reviewed contract")
   ["--classic-chrome"] -> pure (Target classicChromePayload reviewedCcContract bankD3Payload reviewedContract "reviewed CC contract")
   ["--classic-chrome-icon"] -> pure (Target classicChromeIconPayload reviewedCcIconContract classicChromePayload reviewedCcContract "reviewed CC icon contract")
-  _ -> putStrLn "usage: ram-push-reviewed-build-check [--classic-chrome|--classic-chrome-icon]" >> exitFailure
+  ["--usb-toggle"] -> pure (Target usbTogglePayload reviewedToggleContract classicChromePayload reviewedCcContract "reviewed USB toggle contract")
+  _ -> putStrLn "usage: ram-push-reviewed-build-check [--classic-chrome|--classic-chrome-icon|--usb-toggle]" >> exitFailure
 
 failing :: String -> IO a
 failing what = ioError (userError ("refusal case attempted USB "++what))
@@ -98,8 +97,22 @@ main = do
           && manifestEntries manifest == payloadEntries payload (Address base)) $ do
         putStrLn ("pinned manifest does not describe base 0x" ++ showHex base "")
         exitFailure
+      when (payloadKind payload == UsbToggle) $ do
+        let publications = manifestPublications manifest
+            setup = take 22 publications
+            stub = B.pack [fromIntegral (unWordValue (publicationNew p) `shiftR` shift) | p <- setup, shift <- [0,8,16,24]]
+        unless (allocationSize manifest == 0xd20
+            && map publicationAddress publications == map Address ([0x00bf4454,0x00bf4458..0x00bf44a8] ++ [0x00ecf900])
+            && map publicationPhase publications == replicate 22 Setup ++ [Activation]
+            && sha256 stub == "35a7e9597f06bdc1dda250d991df4a468d2401e5ae3c24c22e37403318746d62"
+            && publicationOld (last publications) == WordValue 0xebdf3ffd
+            && publicationNew (last publications) == WordValue 0xebf492d3) $ do
+          putStrLn "USB toggle fixed stub or activation contract differs"
+          exitFailure
       pure (pinnedDocument built, pinnedRuntime built)
     putStrLn (label ++ " accepted at 0x" ++ showHex base "")
+    when (payloadKind payload == UsbToggle) $
+      putStrLn ("runtime SHA256 " ++ sha256 (snd document) ++ "; manifest SHA256 " ++ sha256 (fst document))
     pure document
   (otherBaseDocument, otherBaseRuntime) <- case builds of
     [_, other] -> pure other
@@ -154,6 +167,25 @@ main = do
     (replaceAfter (C.pack "runtime_sha256") (C.pack (runtimeDigest reviewed)) (C.pack (sha256 flippedRuntime)) document)
   pushCase "changed-runtime" "ram-push with one runtime byte changed and its digest updated" "supplied manifest differs byte-for-byte from the pinned builder output"
     flippedDocument flippedRuntime allocation contract
+
+  forM_ (zip [0 :: Int ..] (sourceIdentity reviewed)) $ \(index, (name, digest)) -> do
+    let changedDigest = case digest of
+          first : rest -> (if first == '0' then '1' else '0') : rest
+          [] -> "0"
+        caseName = "source-" ++ show index
+    changedIdentity <- requireJust ("the changed source identity for " ++ name)
+      (replaceAfter (C.pack ("\"" ++ name ++ "\"")) (C.pack digest) (C.pack changedDigest) document)
+    pushCase caseName ("ram-push with substituted source " ++ name) "manifest source identity differs from the compiled reviewed contract"
+      changedIdentity runtime allocation contract
+
+  changedNew <- requireJust "the changed-new-word manifest" $ do
+    let (before,rest) = B.breakSubstring (C.pack "\"new\"") document
+        (middle,word) = B.breakSubstring (C.pack "0x") rest
+    digit <- fst <$> C.uncons (C.drop 9 word)
+    unless (C.length word >= 10) Nothing
+    pure (B.concat [before, middle, C.take 9 word, C.singleton (if digit == '0' then '1' else '0'), C.drop 10 word])
+  pushCase "changed-new-word" "ram-push with a changed publication new word" "supplied manifest differs byte-for-byte from the pinned builder output"
+    changedNew runtime allocation contract
 
   changedOld <- requireJust "the changed-old-word manifest" $ do
     let (before,rest) = B.breakSubstring (C.pack "\"old\"") document

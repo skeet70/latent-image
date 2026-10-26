@@ -1,9 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- Runs //transport:camera ram-push and ram-unload on inputs that parse but
 -- differ from the compiled reviewed contract, with no camera attached.
--- With `--classic-chrome` or `--classic-chrome-icon` the inputs have that
--- payload's size and publication counts, so the camera checks them against
--- `reviewedCcContract` or `reviewedCcIconContract`.
+-- A leading payload flag selects its allocation size and compiled contract.
 module Main where
 
 import Control.Monad (unless)
@@ -26,6 +24,7 @@ import FujiAF.Transport (writePrivateBytes)
 import RamPushReviewedPins (reviewedContract)
 import RamPushCcReviewedPins (reviewedCcContract)
 import RamPushCcIconReviewedPins (reviewedCcIconContract)
+import RamPushToggleReviewedPins (reviewedToggleContract)
 
 base :: Word32
 base = 0x00c20000
@@ -89,7 +88,8 @@ main = do
     [camera] -> pure (camera, Target bankD3Payload reviewedContract 0xa200)
     [camera, "--classic-chrome"] -> pure (camera, Target classicChromePayload reviewedCcContract 0x1000)
     [camera, "--classic-chrome-icon"] -> pure (camera, Target classicChromeIconPayload reviewedCcIconContract 0x1000)
-    _ -> putStrLn "usage: ram-push-camera-pins CAMERA [--classic-chrome|--classic-chrome-icon]" >> exitFailure
+    [camera, "--usb-toggle"] -> pure (camera, Target usbTogglePayload reviewedToggleContract 0x600)
+    _ -> putStrLn "usage: ram-push-camera-pins CAMERA [--classic-chrome|--classic-chrome-icon|--usb-toggle]" >> exitFailure
   camera <- makeAbsolute cameraArgument
   temporary <- lookupEnv "TEST_TMPDIR" >>= maybe (ioError (userError "TEST_TMPDIR is unset")) makeAbsolute
   root <- privateDirectory (temporary </> "camera-pins")
@@ -117,6 +117,9 @@ main = do
   stateDir <- privateDirectory (root </> "state")
   statePath <- writeStateFile stateDir
     (RamPushState (replicate 64 'a') (sha256 (runtime payload)) (Address base) (payloadAllocationSize payload) (entries offset) (publications payload) callbackStockWord bootstrapBytes 1)
-  refuses camera "ram-unload of an unreviewed publication contract"
-    ["ram-unload", statePath, root </> "unload-unreviewed-contract"]
-    "installed state publication contract differs from the compiled reviewed contract"
+  let unloadReason = case payloadKind payload of
+        UsbToggle -> "ram-unload refused: USB toggle requires full battery removal"
+        _ -> "installed state publication contract differs from the compiled reviewed contract"
+  refuses camera "ram-unload is refused before USB"
+    ["ram-unload", statePath, root </> "unload-refused"]
+    unloadReason

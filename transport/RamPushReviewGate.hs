@@ -1,5 +1,4 @@
--- The RAM-push pre-go gate over a review record (transport/ram-push-review.json,
--- transport/ram-push-cc-review.json or transport/ram-push-cc-icon-review.json).
+-- The RAM-push pre-go gate over a payload's review record.
 --   verdicts RECORD: every pin and the publication contract is approved by an
 --     approving review, or content-checked (bank-content pins only).
 --   bytes RECORD: every workspace pin's file and the builder and toolchain
@@ -17,6 +16,7 @@ import FujiAF.RamPushReview
 import FujiAF.SHA256 (sha256)
 import ClassicChromeRamBuilder (classicChromeRamBuilderDigest)
 import ClassicChromeIconRamBuilder (classicChromeIconRamBuilderDigest)
+import UsbToggleRamBuilder (usbToggleRamBuilderDigest)
 import RamPushToolchain (ramPushToolchainDigest, recipeBankBuilderDigest)
 
 data Gate = Verdicts | Bytes
@@ -31,9 +31,15 @@ currentDigest kind pin = case pinSource pin of
   BuilderSources -> pure (compareTo (case kind of
     BankD3Record -> recipeBankBuilderDigest
     ClassicChromeRecord -> classicChromeRamBuilderDigest
-    ClassicChromeIconRecord -> classicChromeIconRamBuilderDigest))
+    ClassicChromeIconRecord -> classicChromeIconRamBuilderDigest
+    UsbToggleRecord -> usbToggleRamBuilderDigest))
   Toolchain -> pure (compareTo ramPushToolchainDigest)
   PrivateFile _ -> pure Nothing
+  UsbToggleStub -> do
+    bytes <- try (B.readFile "host/firmware/usb-toggle-stub.bin")
+    pure $ case bytes of
+      Left failure -> Just (BytesUnreadable (pinIdentity pin) (show (failure :: IOException)))
+      Right contents -> compareTo (sha256 contents)
   where
     compareTo current = case sha256Hex current of
       Nothing -> Just (BytesUnreadable (pinIdentity pin) ("not a SHA-256: "++current))

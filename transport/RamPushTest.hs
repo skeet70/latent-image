@@ -46,6 +46,12 @@ main = do
     && ramPushArguments ["/a","/m"] == Just ("/a","/m",Nothing)
     && ramPushArguments ["/a","/m","/o"] == Just ("/a","/m",Just "/o")
     && ramFreeArguments ["/a"] == Just ("/a",Nothing))
+  check "CLI accepts the USB toggle allocation extent"
+    (ramAllocArguments ["0xd20"] == Just (0xd20, Nothing)
+      && ramAllocArguments ["3360", "/toggle-allocation"] == Just (0xd20, Just "/toggle-allocation")
+      && ramAllocArguments ["0xd00"] == Nothing
+      && ramAllocArguments ["0xd28"] == Nothing
+      && fmap payloadKind (payloadOfSize 0xd20) == Just UsbToggle)
   check "CLI rejects flags, non-reviewed sizes and excess arguments" (ramAllocArguments ["0"] == Nothing
     && ramAllocArguments ["0x1a99f"] == Nothing && ramAllocArguments ["0x1a9a1"] == Nothing
     && ramPushArguments ["/m"] == Nothing && ramPushArguments ["--raw","/m"] == Nothing
@@ -55,6 +61,7 @@ main = do
         let start = payloadInstallerStart kind at
         in case payloadKind kind of
           AfRing -> RamPushEntries (Address (start + 0x600)) (Address (start + 0x834)) (Address (start + 0x860))
+          UsbToggle -> RamPushEntries (Address (start + 0x600)) (Address (start + 0x83c)) (Address (start + 0x868))
           _ -> RamPushEntries (Address (start + installerInstallOffset)) (Address (start + installerRollbackOffset)) (Address (start + installerStatusOffset))
   check "every payload's entries match its compiled installer layout"
     (and [payloadEntries kind (Address at) == layoutEntries kind at | kind <- payloads, at <- alignedBases])
@@ -62,6 +69,12 @@ main = do
     (all (\at -> payloadInstallerStart bankD3Payload at == runtimeInstallerBase at) alignedBases)
   check "the bank allocation is RamPushLayout's"
     (payloadAllocationSize bankD3Payload == fromIntegral runtimeAllocationSize)
+  check "USB toggle exposes 22 setup publications then one activation"
+    (payloadSetupCount usbTogglePayload == 22 && payloadActivationCount usbTogglePayload == 1
+      && payloadPublicationCount usbTogglePayload == 23 && payloadAbiVersion usbTogglePayload == 6)
+  check "USB toggle's installer fits every accepted base alignment"
+    (all (\at -> toInteger (payloadInstallerStart usbTogglePayload at) + 0xd00
+        <= toInteger at + toInteger (payloadAllocationSize usbTogglePayload)) alignedBases)
 
   requireReviewedBytes (C.pack "manifest") (C.pack "runtime") (C.pack "manifest") (C.pack "runtime")
   changedRuntime <- try (requireReviewedBytes (C.pack "manifest") (C.pack "runtime") (C.pack "manifest") (C.pack "changed"))
