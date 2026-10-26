@@ -41,6 +41,38 @@ threeConverters = ["cc-entry-marker", "cc-entry-settings-converter", "cc-entry-s
 fiveConverters :: [T.Text]
 fiveConverters = fourConverters ++ ["cc-entry-settings-converter"]
 
+-- | A converter pass whose frame prefix holds a declared non-converter site.
+markedPass :: [T.Text]
+markedPass =
+  [ "cc-entry-marker", "cc-hook-chroma-2", "cc-entry-settings-converter", "cc-entry-settings-converter" ]
+
+-- | The same pass plus the two converter entries fourConverters holds in one frame.
+markedUnsplit :: [T.Text]
+markedUnsplit = markedPass ++ ["cc-entry-settings-converter", "cc-entry-settings-converter"]
+
+prefixExtra :: [T.Text]
+prefixExtra =
+  [ "cc-entry-marker", "cc-hook-chroma-2", "cc-entry-filmmode"
+  , "cc-entry-settings-converter", "cc-entry-settings-converter" ]
+
+bodyExtra :: [T.Text]
+bodyExtra =
+  [ "cc-entry-marker", "cc-hook-chroma-2", "cc-entry-settings-converter"
+  , "cc-entry-filmmode", "cc-entry-settings-converter" ]
+
+reorderedPrefix :: [T.Text]
+reorderedPrefix =
+  [ "cc-entry-marker", "cc-hook-tone-2", "cc-hook-tone-1", "cc-entry-settings-converter" ]
+
+orderedPrefix :: [T.Text]
+orderedPrefix = ["cc-entry-marker", "cc-hook-tone-1", "cc-hook-tone-2", "cc-entry-settings-converter"]
+
+missingPrefix :: [T.Text]
+missingPrefix = ["cc-entry-marker", "cc-entry-settings-converter"]
+
+chromaPrefix :: [T.Text]
+chromaPrefix = ["cc-entry-marker", "cc-hook-chroma-2", "cc-entry-settings-converter"]
+
 cases :: [(String, Bool)]
 cases =
   [ ( "converter-free segments with different entries differ"
@@ -59,6 +91,18 @@ cases =
     , not (null (compared (segment (twoConverters ++ idlePass ++ twoConverters)) (segment reordered))) )
   , ( "a split with a different converter entry total differs"
     , not (null (compared (segment (twoConverters ++ idlePass ++ twoConverters)) (segment threeConverters))) )
+  , ( "a continuation with an extra declared prefix entry differs"
+    , not (null (compared (segment (markedPass ++ idlePass ++ prefixExtra)) (segment markedUnsplit))) )
+  , ( "a continuation with an extra declared body entry differs"
+    , not (null (compared (segment (markedPass ++ idlePass ++ bodyExtra)) (segment markedUnsplit))) )
+  , ( "a continuation with a reordered prefix differs"
+    , not (null (compared
+        (segment (orderedPrefix ++ idlePass ++ reorderedPrefix))
+        (segment (orderedPrefix ++ ["cc-entry-settings-converter"])))) )
+  , ( "a continuation with a missing prefix entry differs"
+    , not (null (compared
+        (segment (chromaPrefix ++ idlePass ++ missingPrefix))
+        (segment (chromaPrefix ++ ["cc-entry-settings-converter"])))) )
   , ( "a split with a converting pass in between differs"
     , not (null (compared (segment (twoConverters ++ converting ++ twoConverters)) (segment fiveConverters))) )
   , ( "timing fields are left out"

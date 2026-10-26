@@ -15,7 +15,7 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.List (dropWhileEnd, sort)
 import qualified Data.List.NonEmpty as NE
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 
@@ -33,17 +33,21 @@ toggleIgnored = e2eIgnored ++
 converterEntry :: T.Text -> Bool
 converterEntry name = name `elem` ["cc-entry-settings-converter", "cc-entry-capture-converter"]
 
-converters :: [T.Text] -> [T.Text]
-converters = filter converterEntry
+-- | A pass split at its first converter: the entries before it, and the rest.
+converterSplit :: [T.Text] -> Maybe ([T.Text], [T.Text])
+converterSplit pass = case break converterEntry pass of
+  (_, []) -> Nothing
+  (prefix, body) -> Just (prefix, body)
 
 converts :: [T.Text] -> Bool
-converts = not . null . converters
+converts = isJust . converterSplit
 
 -- | A segment's Classic Chrome site entries as live-view develop passes, each starting at
--- `cc-entry-marker`. One converter pass split by idle passes counts as one pass, holding the
--- converter entries of every part in order after the first part's entries. Consecutive
--- identical passes collapse to one, and the passes before the first and after the last
--- converter pass are dropped.
+-- `cc-entry-marker`. A converter pass split by idle passes counts as one pass when every pass
+-- between the parts is idle and a continuation's entries before its first converter equal the
+-- first part's. The merge drops that duplicated prefix and keeps every remaining entry of the
+-- continuation in order. Consecutive identical passes collapse to one, and the passes before
+-- the first and after the last converter pass are dropped.
 passes :: [T.Text] -> [[T.Text]]
 passes entries = trim (map NE.head (NE.group (merge (split entries))))
   where
@@ -51,13 +55,14 @@ passes entries = trim (map NE.head (NE.group (merge (split entries))))
     split (first : rest) = let (pass, more) = break (== "cc-entry-marker") rest in (first : pass) : split more
     merge [] = []
     merge (pass : rest)
-      | converts pass = let (absorbed, more) = absorb [] rest in (pass ++ absorbed) : merge more
+      | Just (prefix, _) <- converterSplit pass = absorb prefix [pass] rest
       | otherwise = pass : merge rest
-    -- The converter entries of the converter passes beyond REST's idle passes, with what
-    -- follows them.
-    absorb held rest = case span (not . converts) rest of
-      (idle, next : after) | not (null idle) -> absorb (held ++ converters next) after
-      _ -> (held, rest)
+    -- Parts are collected in reverse and concatenated once per merged pass.
+    absorb prefix parts rest = case span (isNothing . converterSplit) rest of
+      (idle, next : after)
+        | Just (prefix', body) <- converterSplit next, prefix' == prefix, not (null idle) ->
+            absorb prefix (body : parts) after
+      _ -> concat (reverse parts) : merge rest
     trim = dropWhileEnd (not . converts) . dropWhile (not . converts)
 
 -- | VALUE without the fields named in KEYS at any depth. A segment's
