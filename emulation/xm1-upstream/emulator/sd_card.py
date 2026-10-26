@@ -17,7 +17,8 @@ from .hardware import UnsupportedDevice
 
 
 BLANK_SDHC_PROFILE = 'declared-blank-sdhc-default-speed-unmeasured'
-PROFILES = (BLANK_SDHC_PROFILE,)
+PRESENT_INIT_FAILS_PROFILE = 'present-init-fails'
+PROFILES = (BLANK_SDHC_PROFILE, PRESENT_INIT_FAILS_PROFILE)
 
 
 class MediaAction(Enum):
@@ -362,7 +363,8 @@ class SDCardController:
         elif command == 8:
             if self.state != 'idle' or argument != 0x1aa:
                 raise UnsupportedDevice('SDHC CMD8 requires idle/voltage-pattern1AA')
-            response = 0x1aa
+            # X-M1 1.50 006f96f4 rejects three CMD8 echo mismatches with 0xb.
+            response = 0 if self.profile == PRESENT_INIT_FAILS_PROFILE else 0x1aa
         elif command == 55:
             if argument not in (0, self.rca << 16) or self.state not in ('idle', 'standby', 'transfer'):
                 raise UnsupportedDevice('SD CMD55 has unsupported RCA/card state')
