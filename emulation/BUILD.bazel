@@ -194,6 +194,25 @@ haskell_library(
     deps = ["//host:base"],
 )
 
+haskell_library(
+    name = "ff80-rehearsal-lib",
+    srcs = ["Emulation/Ff80Rehearsal.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        ":fujimod-paths",
+        ":viewer-runtime-lib",
+        "//broker:core",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+        "//transport:camera-core",
+    ],
+)
+
 haskell_binary(
     name = "fujimod-flash-boot-check",
     srcs = ["FujiModFlashBootCheck.hs"],
@@ -368,6 +387,7 @@ haskell_binary(
         ":case-sha256",
         ":checkpoint-key-lib",
         ":fujimod-paths",
+        ":ff80-rehearsal-lib",
         ":viewer-runtime-lib",
         ":emulator-usb",
         ":ui-trajectory-lib",

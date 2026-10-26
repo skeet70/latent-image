@@ -3,6 +3,7 @@ module Main where
 import Control.Exception (IOException, catch, displayException)
 import Control.Monad (when)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
+import Emulation.Ff80Rehearsal (runFujiModRehearsal)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
@@ -81,9 +82,7 @@ usage = unlines
   , "  --ram-push-e2e        Run allocation, relink, install, bank UI and unload in emulation"
   , "  --cardless             --ram-push-e2e: boot the installed DAT and adjustment NAND with no SD"
   , "                         card through the cardless RAM-push bridge"
-  , "  --fujimod              --ram-push-e2e: run the bridge protocol on jitl's FujiMod runtime"
-  , "                         (emulation/fujimod-xm1), card-backed or --cardless; a speed path, not"
-  , "                         payload acceptance"
+  , "  --fujimod              Run RAM-push E2E or the closed ff80 rehearsal on pinned FujiMod"
   , "  --unreviewed-relink    --ram-push-e2e: relink and push without the compiled source-identity"
   , "                         and publication-contract pins; the receipt records the mode"
   , "  --allowlist-override REASON"
@@ -249,8 +248,8 @@ launch options = do
       cardless = cardModeOption options == WithoutCard
   require (not (ff80 && e2e)) "--ff80-rehearsal and --ram-push-e2e are exclusive"
   require (e2e || not cardless) "--cardless belongs to --ram-push-e2e"
-  require (runtimeOption options == RetainedChoice || (e2e && pushModeOption options == RamPush))
-    "--fujimod belongs to the --ram-push-e2e RAM push"
+  require (runtimeOption options == RetainedChoice || ff80 || (e2e && pushModeOption options == RamPush))
+    "--fujimod belongs to --ram-push-e2e or --ff80-rehearsal"
   when ff80 $ do
     require (media == Nothing) "--ff80-rehearsal does not accept an SD-card image"
     require (nand /= Nothing) "--ff80-rehearsal requires --installed-nand"
@@ -303,17 +302,19 @@ launch options = do
   hFlush stdout
   if ff80
     then do
-      callProcess executable ["tools/firmware_registry.py", "unpack", "xm1-150"]
       let nandPath = case nand of Just (InstalledNand path) -> path; Nothing -> error "validated NAND missing"
           receiptPath = case receipt of Just (ReceiptDirectory path) -> path; Nothing -> error "validated receipt directory missing"
-      executeFile executable False
-        [ "tools/continue_rec_scanout.py"
-        , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
-        , "--installed-nand", nandPath
-        , "--menus"
-        , "--ff80-rehearsal"
-        , "--output", receiptPath
-        ] Nothing
+      case runtimeOption options of
+        FujiModChoice -> runFujiModRehearsal destination nandPath
+          (resolve root "private-data/emulator-checkpoints/xm1-ff80-fujimod") receiptPath
+        RetainedChoice -> do
+          callProcess executable ["tools/firmware_registry.py", "unpack", "xm1-150"]
+          executeFile executable False
+            [ "tools/continue_rec_scanout.py"
+            , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
+            , "--installed-nand", nandPath
+            , "--menus", "--ff80-rehearsal", "--output", receiptPath
+            ] Nothing
     else if e2e
       then do
         when (runtimeOption options == RetainedChoice) $
