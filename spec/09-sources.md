@@ -140,3 +140,7 @@ The hash-verified S15 source binds all three SD-BOOT files to the extracted ZJ02
 
 - **[S34] Fujifilm X-T3 4.0 AF update:** [official announcement](https://www.fujifilm-x.com/en-us/news/fujifilm-releases-free-firmware-update-upgrading-the-af-performance-of-the-fujifilm-x-t3/), published 2020-10-15, read 2026-10-25. Vendor-reported algorithm changes include movement prediction, face/eye tracking, focus limiter and AF speed; the low-light result explicitly uses phase detection and XF50mmF1.0. It demonstrates a source of policy hypotheses, not portability to X-M1. Donor firmware comparison needs exact inputs, applicable rights/provenance review and independent target binding; no binaries, addresses or calibration tables are transplanted.
 
+<a id="s35"></a>
+
+- **[S35] x70view exact-source provenance:** [original repository](https://github.com/justjake/x70view), preserved runtime and matching-toolchain revisions in the [source manifest](../manifests/sources.json), and the [bounded public recovery findings and retained dependency comparison](../third_party/README.md#exact-source-recovery-boundary), inspected 2026-10-26. Original commit/tree objects survive privately; a matching public immutable archive or exact patch chain was not recovered. This source limitation does not replace either original pin or change the separately recorded redistribution terms.
+
