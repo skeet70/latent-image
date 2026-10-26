@@ -290,19 +290,23 @@ launch options = do
   let fallback = if e2e
         then ReplacedRuntime ("emulator-runtimes" </> "xm1-ram-push-e2e")
         else UniqueRuntime "xm1-viewer"
-  staged <- stageViewerRuntime root (outputOption options) fallback (firmwareOption options)
-    (if ff80 || e2e then StageStockOriginal else OmitStockOriginal)
-  let destination = stagedDirectory staged
-      Python python = stagedPython staged
-      Firmware dat = stagedSource staged
+  (destination, Firmware dat, executable) <- case runtimeOption options of
+    FujiModChoice -> do
+      (Runtime path, source) <- ViewerRuntime.stageFujiModRuntime root (outputOption options) fallback (firmwareOption options)
+      pure (path, source, fujimodRamPushBridge)
+    RetainedChoice -> do
+      staged <- stageViewerRuntime root (outputOption options) fallback (firmwareOption options)
+        (if ff80 || e2e then StageStockOriginal else OmitStockOriginal)
+      let Python python = stagedPython staged
+      pure (stagedDirectory staged, stagedSource staged, python)
   putStrLn ("X-M1 viewer runtime: " ++ destination)
   hFlush stdout
   if ff80
     then do
-      callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
+      callProcess executable ["tools/firmware_registry.py", "unpack", "xm1-150"]
       let nandPath = case nand of Just (InstalledNand path) -> path; Nothing -> error "validated NAND missing"
           receiptPath = case receipt of Just (ReceiptDirectory path) -> path; Nothing -> error "validated receipt directory missing"
-      executeFile python False
+      executeFile executable False
         [ "tools/continue_rec_scanout.py"
         , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
         , "--installed-nand", nandPath
@@ -312,7 +316,8 @@ launch options = do
         ] Nothing
     else if e2e
       then do
-        callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
+        when (runtimeOption options == RetainedChoice) $
+          callProcess executable ["tools/firmware_registry.py", "unpack", "xm1-150"]
         cardInput <- case media of
           Just (VirtualSDImage image) -> pure (CardBacked image)
           Nothing | cardless -> pure Cardless
@@ -349,8 +354,8 @@ launch options = do
               (attachHoldOption options)
               (uiConversionProfileOption options) cardInput (fixedSceneFrameOption options) Nothing runtime dat
         if warmCheckpointOption options
-          then warmAttachCheckpoint settings python stagedFirmwarePath nandPath (destination </> "warm-attach")
-          else runRamPushE2E settings python workspacePath (resolve root trajectories) stagedFirmwarePath nandPath receiptPath
+          then warmAttachCheckpoint settings executable stagedFirmwarePath nandPath (destination </> "warm-attach")
+          else runRamPushE2E settings executable workspacePath (resolve root trajectories) stagedFirmwarePath nandPath receiptPath
       else do
         let Port port = portOption options
             mediaArguments = case media of
@@ -359,7 +364,7 @@ launch options = do
             conversionArguments = case uiConversionProfileOption options of
               StrictUiConversion -> []
               DeclaredUiCpuFallback -> ["--ui-conversion-profile", "declared-ui-cpu-fallback"]
-        executeFile python False
+        executeFile executable False
           ([ "tools/start_setup_viewer.py"
            , "--firmware", stagedFirmwarePath
            , "--firmware-name", takeFileName dat
