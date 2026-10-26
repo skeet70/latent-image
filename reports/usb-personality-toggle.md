@@ -678,6 +678,8 @@ devenv shell -- bazel run //emulation:updater-f7 -- --recovery-ram RESTORE/termi
 
 ## 14. RAM-push variant
 
+**Status:** The first hardware RAM-push installation and stock restoration after full power removal passed, but a host crash followed by owner switch-off ended the trial before A1, leaving the Q-toggle cycle unexercised (E-USB-TOGGLE-RAM-PUSH-SESSION-1-150).
+
 ### 14.1 Placement and lifetime
 
 The stub remains at its reviewed image-5 address `0x00bf4454`, with the exact 88 bytes of section 3.1 and unchanged calls, stack contract and hook encoding. This retains section 5.2's ownership census and the native/full-system behavior evidence. Relinking it into an allocation would change its BL words, entry target and placement argument without changing the toggle behavior. The push overwrites 22 aligned words in `[0x00bf4454,0x00bf44ac)` and the hook word at `0x00ecf900`; the remaining 56 bytes of the reviewed extent stay stock.
