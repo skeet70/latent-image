@@ -67,7 +67,7 @@ The 35-scenario toggle route is **3.09 times faster** by whole-route wall time, 
 Use the documented owner-supplied firmware/ROM/NAND/card inputs and the existing VolatileBank scenario plus its FujiMod timing variant. Private receipts are retained under `private-data/verify-candidate/runs/fujimod-decision-main-9b169a3` and its `-remainder` companion; the latter's completed receipts were judged in `fujimod-decision-main-9b169a3-remainder-judge`. The first `report.json` binds the source commit, verdicts and execution seconds; `differences/*.compare.txt` records counterpart file counts and failures. The receipt-only report has baseline verdicts, not the interrupted invocation's execution timings. Raw artifacts stay private. Evidence: `E-FUJIMOD-RUNTIME-DECISION-150` in the [ledger](../docs/evidence.jsonl).
 
 ```sh
-export XM1_EMULATOR_SLOTS=8
+export XM1_EMULATOR_SLOTS=2
 BASE="$HOME/.cache/bazel/latent-image-FujiModDecision"
 PAIRS=flash-boot-check,fujimod-flash-boot-check,ram-push-volatile,fujimod-ram-push-volatile,ram-push-cc-cardless,fujimod-ram-push-cc-cardless,ram-push-cc-icon-cardless,fujimod-ram-push-cc-icon-cardless,ram-push-cc,fujimod-ram-push-cc,usb-toggle-e8,fujimod-usb-toggle-e8,usb-toggle-emu,fujimod-usb-toggle-emu
 REMAINDER=ram-push-cc-icon,flash-candidate-icon-b,flash-candidate-q-tile-b,updater-f7-rc0-toggle,updater-f7-cc-toggle,native-volatile,native-sd
@@ -86,7 +86,19 @@ devenv shell -- bazel --output_base="$BASE" run --jobs=4 --local_resources=memor
   --output private-data/verify-candidate/runs/DECISION-REMAINDER-JUDGE
 ```
 
-The first two commands above are shown sequentially for reproducibility; the measured invocations overlapped. The third reproduces receipt-only judging if a run is interrupted after those six routes complete. Use fresh output directory names. Do not use `--record-baseline` to make a changed candidate pass.
+The first two commands above are shown sequentially for reproducibility; the measured invocations overlapped. The third reproduces receipt-only judging if a run is interrupted after those six routes complete. Use fresh output directory names. Do not use `--record-baseline` to make a changed candidate pass. The two-slot replay does not reproduce the eight-slot wall times in the table above.
+
+## Direct route checks
+
+Six direct producer pairs use a local unintegrated FujiMod prototype and matched run reports. Three pass: `flash-candidate-icon-b` over 106 files, `flash-candidate-q-tile-b` over 8, and `ram-push-cc-icon` over 11. Both producers exited 0 and each comparison reported 0 differences. The cardless #110 develop-pass split is a different comparison from the passing card-backed `ram-push-cc-icon` pair. These checks cover only the listed pairs and do not qualify a supported current CLI, a current source pin, or a main-integrated port, and do not promote a baseline or gate.
+
+Three pairs fail. The updater RC0 and CC pairs each compared 2 receipt files with 24 differences, while their exported NAND files were byte-identical. All five receipt expectations passed on both sides. The comparator first difference is `receipt.json.engine: missing from reference`; the remaining differences are producer field shape, candidate-only CPSR and menu values, stock-only hit windows and NAND idle statistics, and PNG hashes. The aggregate report pass for these routes reflects non-gating status, not route success.
+
+The `flash-candidate-refresh` pair had stock exit 0 and FujiMod exit 1. Expected menu states were `[1, 5, 3]`; actual states were `[1, 246, 0]`. The candidate `segment-dial-refresh/e2e-result.json` is missing after the trajectory failure, so the comparator cannot complete; the numeric 0 differences field is not an equality result. The recorded first MENU input differs: stock produced no physical pulse, FujiMod produced one, and the second MENU had unmatched input. The precise prior-drain predicate or probe that was false is not retained. This is a bounded input-scheduling finding, not an engine bug verdict.
+
+All retained updater and reboot PNGs are 720 by 480. The stock retention run retains eight step PNGs per receipt. Seven pairs are decoded-pixel identical after `compare -alpha off`: `screen`, `key-0` through `key-4`, and `first-start`; the six updater hash differences and the first-start hash difference are encoding-only. `shooting` differs at 122787 pixels. All images have alpha undefined.
+
+No baseline was re-recorded, no comparator or source pin changed, and the comparison rules are unchanged.
 
 ## What parity means
 
