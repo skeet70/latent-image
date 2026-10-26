@@ -274,7 +274,7 @@ Byte-read:
 
 ### 8.5 Still open
 
-For the power-on variant only: the content of the boot records at `0x0073ae10` for a held Q, and the source of the startup Fn and Q press forms. On hardware: the detach after an enumerated `ff80` session and the UI effect of the held Q.
+For the power-on variant only: the content of the boot records at `0x0073ae10` for a held Q, and the source of the startup Fn and Q press forms. The detach after an enumerated `ff80` session, the detach after PTP and the held-Q UI effect are now hardware-observed (E-USB-TOGGLE-RAM-PUSH-SESSION-2-150); reading the key driver from usbcont remains open.
 
 ## 9. Verification results (host and emulated)
 
@@ -678,6 +678,8 @@ devenv shell -- bazel run //emulation:updater-f7 -- --recovery-ram RESTORE/termi
 
 ## 14. RAM-push variant
 
+**Status:** Two hardware RAM-push sessions installed the payload and restored stock after full power removal. The first stopped before A1, leaving the Q-toggle cycle unexercised (E-USB-TOGGLE-RAM-PUSH-SESSION-1-150). The second ran the full sequence: A1 and A4 detaches, A2 and A5 Q attaches, A6 reads, A7 and stock restoration (E-USB-TOGGLE-RAM-PUSH-SESSION-2-150). Its held-Q attach also toggled the stock long-press-Q sun indicator, which persisted as a stored setting.
+
 ### 14.1 Placement and lifetime
 
 The stub remains at its reviewed image-5 address `0x00bf4454`, with the exact 88 bytes of section 3.1 and unchanged calls, stack contract and hook encoding. This retains section 5.2's ownership census and the native/full-system behavior evidence. Relinking it into an allocation would change its BL words, entry target and placement argument without changing the toggle behavior. The push overwrites 22 aligned words in `[0x00bf4454,0x00bf44ac)` and the hook word at `0x00ecf900`; the remaining 56 bytes of the reviewed extent stay stock.
@@ -698,7 +700,9 @@ This is not an idle-screen-only argument and does not claim the entire connect h
 
 Installation leaves RAM `0xf7 = 1` and the existing `ff80` session intact. After detach, Q attach flips the RAM byte to 0 and selects PTP `04cb:02b6`. `read-ram` and `ram-alloc` refuse with the byte at 0, and service commands cannot run over PTP. The script therefore uses the OS-cached enumeration descriptor as the observation, does not attempt an intermediate RAM read, and checks the RAM byte and installed words only after a second Q attach restores `ff80` and RAM 1.
 
-The complete requested sequence is push, detach, Q attach to PTP, detach, Q attach to `ff80`, optional plain-attach retention, full power removal and a fresh ordinary-boot read. The emulator's configured-session disconnect boundary of section 8.3 remains hardware-only; an undelivered detach stops a scenario and is never replaced by a guessed controller event. Held-Q UI behavior and reading the key driver from usbcont remain hardware-only checks. Model RAM inspection is not counted as an available host read while the gate is 0.
+The complete requested sequence is push, detach, Q attach to PTP, detach, Q attach to `ff80`, optional plain-attach retention, full power removal and a fresh ordinary-boot read. The emulator's configured-session disconnect boundary of section 8.3 is hardware-observed in E-USB-TOGGLE-RAM-PUSH-SESSION-2-150; an undelivered detach still stops a scenario and is never replaced by a guessed controller event. Reading the key driver from usbcont remains a hardware-only check. Model RAM inspection is not counted as an available host read while the gate is 0.
+
+The Q-flip variant is being replaced: a momentary select, designed on a separate branch, gives PTP on every plain attach and `ff80` only while the sub-command dial push is held at attach, which avoids the Q hold's stock long-press-Q sun-indicator side effect.
 
 The [session script](usb-toggle-ram-push-session-script.md) contains stop rules, the exact four-window private read plan and the standard battery-removal ending. The [independent reviewer brief](review/usb-toggle-ram-push.md) covers the new publication mechanism separately from the reviewed stub bytes.
 
@@ -710,4 +714,4 @@ The next planned detach did not reach handler A within 80 million instructions. 
 
 Native cases consumed the stub read back from that installed payload, rather than a fresh build: `private-data/analysis/usb-toggle/ram-push/native-exact-2`, held inside an emulator slot. All 364 cases passed: 44 stub cases, 160 patched handler-A cases and 160 stock controls, including both Q toggle directions. The 80 plain-edge stock/patched pairs had identical boundary events, `r0`, latch and RAM `0xf7`. Maximum stack depths were 44 bytes patched and 36 bytes stock.
 
-FujiMod component runs in `private-data/analysis/usb-toggle/ram-push/transitions-1` passed `e5u-ff80-rc0-toggle`, `e5u-q-ptp-rc0-toggle`, `e7-rc0-toggle-plain` and `e7-rc0-toggle-q`. They exercise the identical stub and hook installed by the flash-toggle composition, not a continuation of the RAM-pushed session. `e5u-cycle-rc0-toggle` stopped at a PTP detach with driver state `0x08`, status `0x01`; its one failed detach-delivery check is also hardware-only. The requested continuous cycle, both configured detach edges, held-Q UI effect and key-driver read from usbcont remain physical-body acceptance criteria.
+FujiMod component runs in `private-data/analysis/usb-toggle/ram-push/transitions-1` passed `e5u-ff80-rc0-toggle`, `e5u-q-ptp-rc0-toggle`, `e7-rc0-toggle-plain` and `e7-rc0-toggle-q`. They exercise the identical stub and hook installed by the flash-toggle composition, not a continuation of the RAM-pushed session. `e5u-cycle-rc0-toggle` stopped at a PTP detach with driver state `0x08`, status `0x01`; its one failed detach-delivery check is also hardware-only. The requested continuous cycle completed on hardware in the second session, including both configured detach edges and the held-Q UI effect; the key-driver read from usbcont remains a physical-body acceptance item.

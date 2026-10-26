@@ -42,7 +42,7 @@ The publication-contract digest binds addresses, order, phases and old words. Ne
 
 ## Host-only reproduction
 
-Use a dedicated worktree/output base with `--jobs=4 --local_resources=memory=6144` and `XM1_EMULATOR_SLOTS=8`. These commands build and emulate only:
+Use a dedicated worktree/output base with `--jobs=2 --local_resources=memory=6144`, `XM1_EMULATOR_SLOTS=1`, `JOBS=1` and `CARGO_BUILD_JOBS=2`. Run these build and emulation commands serially:
 
 ```sh
 devenv shell -- bazel test //host/firmware:usb-toggle-ram-tests //transport:ram-push-tests //transport:ram-push-review-record-tests //transport:ram-push-toggle-review-verdicts //transport:ram-push-toggle-review-bytes //transport:ram-push-toggle-camera-pins
