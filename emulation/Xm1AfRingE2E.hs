@@ -2,7 +2,7 @@
 module Main (main) where
 
 import Control.Exception (IOException, bracket, catch, displayException, finally)
-import Control.Monad (forM, forM_, unless)
+import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', encode, object, withObject, (.:), (.=))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
@@ -18,6 +18,7 @@ import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.UiTrajectory (Segment (..), Step (..), TraceSite (..), Trajectories (..), decodeTrajectories)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, resolve, stageViewerRuntime, stagedFirmwarePath)
 import qualified Emulation.ViewerRuntime as Runtime
+import FujiModPaths (fujimodRamPushBridge, fujimodRun)
 import EmulatorUsb
 import FujiAF.AfRing
 import qualified FujiAF.Broker as P
@@ -25,10 +26,10 @@ import FujiAF.RamPush
 import FujiAF.StoredGate (openReplyTail)
 import FujiAF.Transport (Clock (..), UsbApi, acquireDevice, descriptors, ensurePrivateDirectory, inputEndpoint, newHeld, newSession, outputEndpoint, releaseHeld, transferTimeoutMs, tx, writePrivateBytes)
 import Numeric (readHex, showHex)
-import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist)
+import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, listDirectory)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
-import System.FilePath (splitDirectories, takeDirectory, takeFileName, (</>))
+import System.FilePath (splitDirectories, takeDirectory, takeExtension, takeFileName, (</>))
 import System.IO (BufferMode (LineBuffering), hPutStrLn, hSetBuffering, stderr, stdout)
 import System.Process (callProcess)
 import Xm1UnreviewedRelink
@@ -51,12 +52,16 @@ instance FromJSON RingMetadata where
         '0' : 'x' : digits | not (null digits), length digits <= 8, [(value, "")] <- readHex digits -> pure value
         _ -> fail "metadata address must be a 32-bit 0x-hex address"
 
+data Engine = Retained | FujiMod deriving (Eq)
+
 data Options = Options
   { optNand :: Maybe FilePath
   , optCard :: Maybe FilePath
   , optReceipt :: Maybe FilePath
   , optFirmware :: Maybe FilePath
   , optFresh :: Bool
+  , optEngine :: Engine
+  , optRetainedReceipt :: Maybe FilePath
   }
 
 usage :: String
@@ -66,10 +71,11 @@ usage = unlines
   , "NAND must carry stored 0xf7 != 0. Inputs and the new output directory belong beneath private-data/."
   , "Uses an emulator slot and the keyed card-attach checkpoint. No camera or USB I/O."
   , "If the bridge cannot supply ordinary AF, calls the payload's synthetic recorder through ff80."
+  , "--fujimod uses the pinned FujiMod bridge; --compare-retained DIR requires identical captures, decoder results and unload."
   ]
 
 parseOptions :: [String] -> IO Options
-parseOptions = go (Options Nothing Nothing Nothing Nothing False)
+parseOptions = go (Options Nothing Nothing Nothing Nothing False Retained Nothing)
   where
     go options [] = pure options
     go options ("--installed-nand" : value : rest) = go options { optNand = Just value } rest
@@ -77,6 +83,8 @@ parseOptions = go (Options Nothing Nothing Nothing Nothing False)
     go options ("--receipt-output" : value : rest) = go options { optReceipt = Just value } rest
     go options ("--firmware" : value : rest) = go options { optFirmware = Just value } rest
     go options ("--fresh-boot" : rest) = go options { optFresh = True } rest
+    go options ("--fujimod" : rest) = go options { optEngine = FujiMod } rest
+    go options ("--compare-retained" : value : rest) = go options { optRetainedReceipt = Just value } rest
     go _ (argument : _) = ioError (userError ("unknown option or missing value: " ++ argument ++ "\n" ++ usage))
 
 privateInput :: Workspace -> String -> Maybe FilePath -> IO FilePath
@@ -198,26 +206,37 @@ run options = do
   trajectoryBytes <- B.readFile (workspace </> "emulation/af-ring-e2e-trajectories.json")
   trajectory <- either (ioError . userError) pure (decodeTrajectories trajectoryBytes)
   writePrivateBytes (receipt </> "trajectory.json") trajectoryBytes
-  staged <- stageViewerRuntime root Nothing (UniqueRuntime "xm1-af-ring-e2e") (Firmware <$> optFirmware options) StageStockOriginal
-  let runtime = stagedDirectory staged
-      Python python = stagedPython staged
-  callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
-  guest <- guestState runtime (InterpreterExecutable python) (UnicornLibrary (stagedUnicorn staged))
-  installed <- sha256File (runtime </> stagedFirmwarePath)
-  adjustment <- sha256File nand
-  cardDigest <- sha256File card
-  let key = routeKey guest CardAttach
-        [ "profile" .= String "firmware/x-m1/1.50/emulator-rec.json", "installed_dat" .= sha256Hex installed
-        , "adjustment_nand" .= sha256Hex adjustment, "menu_sd_image" .= sha256Hex cardDigest
-        , "ui_conversion_profile" .= String "declared-ui-cpu-fallback" ]
-      bridgeArguments =
+  let fallback = UniqueRuntime "xm1-af-ring-e2e"
+  (runtime, executable, bridgeArguments) <- case optEngine options of
+    FujiMod -> do
+      (Runtime.Runtime destination, _) <- Runtime.stageFujiModRuntime root Nothing fallback (Firmware <$> optFirmware options)
+      pure (destination, fujimodRamPushBridge,
+        [ "--run", fujimodRun, "--boot-rom", destination </> Runtime.stagedRomPath
+        , "--installed-dat", stagedFirmwarePath, "--adjustment-nand", nand
+        , "--sd-card-image", card, "--output", receipt </> "bridge"
+        , "--ram-push-checkpoints", workspace </> "private-data/emulator-checkpoints/xm1-af-ring-fujimod" ]
+        ++ ["--fresh-boot" | optFresh options])
+    Retained -> do
+      staged <- stageViewerRuntime root Nothing fallback (Firmware <$> optFirmware options) StageStockOriginal
+      let destination = stagedDirectory staged
+          Python python = stagedPython staged
+      callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
+      guest <- guestState destination (InterpreterExecutable python) (UnicornLibrary (stagedUnicorn staged))
+      installed <- sha256File (destination </> stagedFirmwarePath)
+      adjustment <- sha256File nand
+      cardDigest <- sha256File card
+      let key = routeKey guest CardAttach
+            [ "profile" .= String "firmware/x-m1/1.50/emulator-rec.json", "installed_dat" .= sha256Hex installed
+            , "adjustment_nand" .= sha256Hex adjustment, "menu_sd_image" .= sha256Hex cardDigest
+            , "ui_conversion_profile" .= String "declared-ui-cpu-fallback" ]
+      pure (destination, python,
         [ "tools/continue_rec_scanout.py", "--profile", "firmware/x-m1/1.50/emulator-rec.json"
         , "--installed-dat", stagedFirmwarePath, "--adjustment-nand", nand, "--menu-sd-image", card
         , "--menus", "--ram-push-server", "--output", receipt </> "bridge"
         , "--ram-push-checkpoints", workspace </> "private-data/emulator-checkpoints/xm1-ram-push"
         , "--checkpoint-key", routeKeyHex key, "--checkpoint-inputs", C.unpack (BL.toStrict (encode (routeKeyDocument key)))
-        , "--ui-conversion-profile", "declared-ui-cpu-fallback" ] ++ ["--fresh-boot" | optFresh options]
-  bracket (startEmulator python runtime bridgeArguments (\_ -> pure (Nothing, ()))) (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, ()) -> do
+        , "--ui-conversion-profile", "declared-ui-cpu-fallback" ] ++ ["--fresh-boot" | optFresh options])
+  bracket (startEmulator executable runtime bridgeArguments (\_ -> pure (Nothing, ()))) (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, ()) -> do
     let api = emulatorUsbApi emulator
         allocDirectory = receipt </> "alloc"
     ensurePrivateDirectory allocDirectory
@@ -291,7 +310,35 @@ run options = do
           , "capture_contract" .= String "best-effort bulk capture, not a coherent snapshot; shared decoder validates header and slot sequences"
           , "result" .= afRingValue result, "unload" .= String "mandatory after capture; see unload journals and e2e-complete.json" ])
     writeJson (receipt </> "e2e-complete.json") (object ["unloaded" .= True, "allocation_retained_until_power_off" .= True])
+  forM_ (optRetainedReceipt options) $ \supplied -> do
+    retained <- canonicalizePath (resolve root supplied)
+    private <- canonicalizePath (resolve root "private-data")
+    require (optEngine options == FujiMod && splitDirectories private `isPrefixOf` splitDirectories retained)
+      "--compare-retained requires --fujimod and a retained receipt beneath private-data/"
+    forM_ ["baseline", "ordinary-half-press", "synthetic-fallback"] $ \phase -> do
+      expectedExists <- doesDirectoryExist (retained </> phase)
+      actualExists <- doesDirectoryExist (receipt </> phase)
+      require (expectedExists == actualExists) ("AF capture phase differs: " ++ phase)
+      when expectedExists $ do
+        expectedBytes <- captureBytes (retained </> phase)
+        actualBytes <- captureBytes (receipt </> phase)
+        require (expectedBytes == actualBytes) ("AF capture bytes differ: " ++ phase)
+        case (decodeAfRing expectedBytes, decodeAfRing actualBytes) of
+          (Right expected, Right actual) -> require (expected == actual) ("AF decoder outcomes differ: " ++ phase)
+          _ -> ioError (userError ("AF counterpart capture does not decode: " ++ phase))
+    expectedComplete <- B.readFile (retained </> "e2e-complete.json")
+    actualComplete <- B.readFile (receipt </> "e2e-complete.json")
+    require (expectedComplete == actualComplete) "AF mandatory-unload receipts differ"
+    writeJson (receipt </> "counterpart.json") (object
+      ["equal" .= True, "captured_bytes" .= True, "decoder_outcomes" .= True, "mandatory_unload" .= True])
   putStrLn ("AF ring e2e complete: " ++ receipt </> "e2e-result.json")
+
+captureBytes :: FilePath -> IO B.ByteString
+captureBytes directory = do
+  names <- filter ((== ".bin") . takeExtension) <$> listDirectory directory
+  case names of
+    [name] -> B.readFile (directory </> name)
+    _ -> ioError (userError ("AF capture directory must contain one binary: " ++ directory))
 
 main :: IO ()
 main = do

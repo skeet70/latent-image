@@ -440,6 +440,7 @@ haskell_binary(
     deps = [
         ":emulator-slot-lib",
         ":emulator-usb",
+        ":fujimod-paths",
         ":viewer-runtime-lib",
         "//host:aeson",
         "//host:base",
@@ -515,6 +516,7 @@ haskell_binary(
         ":checkpoint-key-lib",
         ":emulator-slot-lib",
         ":emulator-usb",
+        ":fujimod-paths",
         ":ram-push-unreviewed",
         ":ui-trajectory-lib",
         ":viewer-runtime-lib",

@@ -7,7 +7,7 @@
 module Main (main) where
 
 import Control.Exception (IOException, bracket, catch, displayException)
-import Control.Monad (forM, unless)
+import Control.Monad (forM, forM_, unless)
 import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
@@ -22,6 +22,7 @@ import Data.Word (Word32)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
+import FujiModPaths (fujimodRamPushBridge, fujimodRun)
 import EmulatorUsb (EmulatorStart (..), emulatorReadMemory, emulatorUsbApi, startEmulator, stopEmulator)
 import FujiAF.ReadBulk (ReadBulkReport (..), bulkCaptureName, bulkChunkCount, bulkWindowAddress, bulkWindowBytes, mkBulkWindow, readBulkResultLine, runReadBulk)
 import FujiAF.ReadRam (mkRamWatch, ramCaptureName, readRamRequestLength, runReadRam, singlePass)
@@ -38,6 +39,8 @@ import System.FilePath (splitDirectories, takeDirectory, takeFileName, (</>))
 import System.IO (BufferMode (LineBuffering), hPutStrLn, hSetBuffering, stderr, stdout)
 import System.Process (callProcess)
 
+data Engine = Retained | FujiMod deriving (Eq)
+
 data Options = Options
   { optNand :: Maybe FilePath
   , optCard :: Maybe FilePath
@@ -48,6 +51,8 @@ data Options = Options
   , optD1Windows :: Int
   , optReference :: Maybe FilePath
   , optFresh :: Bool
+  , optEngine :: Engine
+  , optRetainedReceipt :: Maybe FilePath
   }
 
 data Command = Help | Validate Firmware | Run Options
@@ -68,12 +73,14 @@ usage = unlines
   , "  --d1-windows N          read-ram windows, 1..2032 (default: 128)"
   , "  --reference FILE        also compare the read-bulk capture with FILE's first LENGTH bytes"
   , "  --fresh-boot            cold-boot and replace the attach checkpoint"
+  , "  --fujimod               use the pinned FujiMod endpoint bridge"
+  , "  --compare-retained DIR  require identical captures from an earlier retained invocation"
   ]
 
 parseCommand :: [String] -> IO Command
 parseCommand ["--help"] = pure Help
 parseCommand ["--validate-firmware", path] = pure (Validate (Firmware path))
-parseCommand arguments = Run <$> go (Options Nothing Nothing Nothing Nothing 0x00bf1a00 0x400000 128 Nothing False) arguments
+parseCommand arguments = Run <$> go (Options Nothing Nothing Nothing Nothing 0x00bf1a00 0x400000 128 Nothing False Retained Nothing) arguments
   where
     go options [] = pure options
     go options ("--installed-nand" : value : rest) = go options { optNand = Just value } rest
@@ -87,6 +94,8 @@ parseCommand arguments = Run <$> go (Options Nothing Nothing Nothing Nothing 0x0
       _ -> ioError (userError "--d1-windows must be 1..2032")
     go options ("--reference" : value : rest) = go options { optReference = Just value } rest
     go options ("--fresh-boot" : rest) = go options { optFresh = True } rest
+    go options ("--fujimod" : rest) = go options { optEngine = FujiMod } rest
+    go options ("--compare-retained" : value : rest) = go options { optRetainedReceipt = Just value } rest
     go _ (argument : _) = ioError (userError ("unknown option or missing value: " ++ argument ++ "\n" ++ usage))
     hex ('0' : 'x' : digits) | not (null digits) && length digits <= 8 && all isHexDigit digits, [(v, "")] <- readHex digits = pure v
     hex value = ioError (userError ("expected 0x-hex, not " ++ value))
@@ -120,10 +129,10 @@ steppingClock = do
   pure (TimedClock (atomicModifyIORef' now (\tick -> (tick + 1000, tick)))
                    (\ms -> modifyIORef' now (+ fromIntegral ms * 1000000)))
 
--- | The emulated bytes of [address, address + count) in 64 KiB reads.
+-- | The emulated bytes of [address, address + count) in 4 KiB reads.
 emulatedBytes :: (Word32 -> Int -> IO B.ByteString) -> Int -> Int -> IO B.ByteString
 emulatedBytes readMemory address count =
-  B.concat <$> forM [0, 0x10000 .. count - 1] (\offset -> readMemory (fromIntegral (address + offset)) (min 0x10000 (count - offset)))
+  B.concat <$> forM [0, 0x1000 .. count - 1] (\offset -> readMemory (fromIntegral (address + offset)) (min 0x1000 (count - offset)))
 
 -- | Offsets where the two strings differ.
 differences :: B.ByteString -> B.ByteString -> [Int]
@@ -172,24 +181,35 @@ run options = do
       d1Windows = [ RouteWindow i (optAddress options + i * readRamRequestLength) readRamRequestLength "read-bulk comparison window" | i <- [0 .. d1Count - 1] ]
   watch <- either (ioError . userError) pure (mkRamWatch d1Windows singlePass)
   let Workspace workspacePath = root
-      checkpoints = workspacePath </> "private-data" </> "emulator-checkpoints" </> "xm1-bulk-read"
-  staged <- stageViewerRuntime root Nothing (ReplacedRuntime ("emulator-runtimes" </> "xm1-bulk-read-e2e"))
-    (Firmware <$> optFirmware options) StageStockOriginal
-  let destination = stagedDirectory staged
-      Python python = stagedPython staged
+      checkpoints = workspacePath </> "private-data" </> "emulator-checkpoints" </>
+        (if optEngine options == FujiMod then "xm1-bulk-read-fujimod" else "xm1-bulk-read")
+      fallback = ReplacedRuntime ("emulator-runtimes" </> "xm1-bulk-read-e2e")
+  (destination, executable) <- case optEngine options of
+    FujiMod -> do
+      (ViewerRuntime.Runtime path, _) <- ViewerRuntime.stageFujiModRuntime root Nothing fallback (Firmware <$> optFirmware options)
+      pure (path, fujimodRamPushBridge)
+    Retained -> do
+      staged <- stageViewerRuntime root Nothing fallback (Firmware <$> optFirmware options) StageStockOriginal
+      let Python python = stagedPython staged
+      callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
+      pure (stagedDirectory staged, python)
   putStrLn ("X-M1 bulk-read runtime: " ++ destination)
-  callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
-  let bridgeArguments =
-        [ "tools/continue_rec_scanout.py"
-        , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
-        , "--installed-dat", stagedFirmwarePath
-        , "--adjustment-nand", nand
-        , "--menu-sd-image", card
-        , "--menus", "--ram-push-server"
-        , "--output", receipt </> "bridge"
-        , "--ram-push-checkpoints", checkpoints
-        , "--ui-conversion-profile", "declared-ui-cpu-fallback"
-        ] ++ ["--fresh-boot" | optFresh options]
+  let bridgeArguments = (case optEngine options of
+        FujiMod ->
+          [ "--run", fujimodRun
+          , "--boot-rom", destination </> ViewerRuntime.stagedRomPath
+          , "--installed-dat", stagedFirmwarePath
+          , "--adjustment-nand", nand, "--sd-card-image", card
+          , "--output", receipt </> "bridge", "--ram-push-checkpoints", checkpoints ]
+        Retained ->
+          [ "tools/continue_rec_scanout.py"
+          , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
+          , "--installed-dat", stagedFirmwarePath
+          , "--adjustment-nand", nand, "--menu-sd-image", card
+          , "--menus", "--ram-push-server"
+          , "--output", receipt </> "bridge", "--ram-push-checkpoints", checkpoints
+          , "--ui-conversion-profile", "declared-ui-cpu-fallback" ])
+        ++ ["--fresh-boot" | optFresh options]
       bulkDirectory = receipt </> "read-bulk"
       d1Directory = receipt </> "read-ram"
       aliasDirectory = receipt </> "read-bulk-alias"
@@ -197,7 +217,7 @@ run options = do
   aliasWindow <- either (ioError . userError) pure
     (mkBulkWindow (bulkWindowAddress window `xor` 0x40000000) (min 0x100000 (bulkWindowBytes window)))
   (bulkReport, bulkWall, d1Wall, comparisons, referenceComparison) <-
-    bracket (startEmulator python destination bridgeArguments (\_ -> pure (Nothing, ()))) (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, ()) -> do
+    bracket (startEmulator executable destination bridgeArguments (\_ -> pure (Nothing, ()))) (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, ()) -> do
       putStrLn ("emulator start: " ++ show (bootStart start))
       let api = emulatorUsbApi emulator
       ensurePrivateDirectory bulkDirectory
@@ -264,6 +284,18 @@ run options = do
   writePrivateBytes (receipt </> "summary.json") (BL.toStrict (encode summary))
   BL.putStr (encode summary) >> putStrLn ""
   unless equal (ioError (userError "a captured byte differs from the emulated memory"))
+  forM_ (optRetainedReceipt options) $ \supplied -> do
+    retained <- canonicalizePath (resolve root supplied)
+    private <- canonicalizePath (resolve root "private-data")
+    require (optEngine options == FujiMod && splitDirectories private `isPrefixOf` splitDirectories retained)
+      "--compare-retained requires --fujimod and a retained receipt beneath private-data/"
+    forM_ (["read-bulk" </> bulkCaptureName window, "read-bulk-alias" </> bulkCaptureName aliasWindow] ++
+      ["read-ram" </> "ram" </> (ramCaptureName 0 (routeWindowAddress w) ++ ".bin") | w <- d1Windows]) $ \relative -> do
+      expectedBytes <- B.readFile (retained </> relative)
+      actualBytes <- B.readFile (receipt </> relative)
+      require (expectedBytes == actualBytes) ("FujiMod capture differs from retained receipt: " ++ relative)
+    writePrivateBytes (receipt </> "counterpart.json")
+      (BL.toStrict (encode (object ["equal" .= True, "captured_bytes_and_alias_reads" .= True, "sessions_closed" .= True])))
 
 main :: IO ()
 main = (getArgs >>= parseCommand >>= dispatch) `catch` report
