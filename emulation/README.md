@@ -859,6 +859,8 @@ bazel run //emulation:updater-f7 -- --recovery-ram private-data/RESTORE/terminal
 
 Observation uses console commands of `tools/continue_rec_scanout.py`: `watch ADDRESS [ADDRESS:LENGTH...]` arms a pre-instruction breakpoint on both cores and records `r0`-`r3`, `sp`, `lr` and the named memory windows at each hit (first 64 per site), `hits` returns and clears them, `read ADDRESS LENGTH` reads up to 0x1000 bytes, and `nandstat` returns the NAND busy flag and transaction counts. None writes guest state. The receipt holds the hits at the header parser `0x00db9cd4`, the completion `0x00db91e0` (with the flag block `0x014e356c..0x014e357b` and `*(0x0096ca50)`), the template reload `0x0069fe20` and the commit; adjustment-cache bytes `0x80`, `0x81` and `0xf7` at the updater screen, after the commit and after the reboot; and the stored bytes from page 0 of the committed block whose first spare word equals the input's block-`0x381` tag (`10521052`). The adjustment area is a tagged block pool: the commit moves logical block 0 from physical `0x381` to `0x3a2`.
 
+Each updater and reboot capture is retained under `updater-frames/screen.png`, `updater-frames/key-0.png` through `key-4.png`, and `reboot-frames/first-start.png` and `shooting.png`. The viewer regenerates `frame-1.png` on every capture; the route renames it at each capture return. The `frames` hashes are unchanged.
+
 Observed 2026-10-22 (emulated), installed NAND `f7-1.nand` (`baf47535...4aa0`, stored `0xf7 = 1`):
 
 | DAT | Flag word `0x014e3578` at `0x00db91e0` | Stored `0x80`/`0x81`/`0xf7` before | After | `cache[0xf7]` after reboot | Exported NAND |

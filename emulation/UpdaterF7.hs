@@ -31,7 +31,7 @@ import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, resolve, stageViewerRuntime, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
 import Numeric (showHex)
-import System.Directory (canonicalizePath, createDirectory, doesFileExist)
+import System.Directory (canonicalizePath, createDirectory, doesFileExist, renameFile)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath (splitDirectories, takeDirectory, takeFileName, (</>))
@@ -59,6 +59,12 @@ data Options = Options
 data Command = Help | Validate Firmware | Launch Options
 
 data MenuKey = KeyOk | KeyUp deriving (Eq)
+
+data RetainedCapture
+  = UpdaterScreen
+  | UpdaterKey Word
+  | RebootFirstStart
+  | RebootShooting
 
 keyName :: MenuKey -> String
 keyName KeyOk = "ok"
@@ -341,6 +347,19 @@ watch console address windows = do
   _ <- request console (unwords ("watch" : showAddress address : [showAddress start ++ ":" ++ show count | Window start count <- windows]))
   pure ()
 
+-- Each capture recreates frame-1.png.
+retainFrame :: ReceiptDirectory -> RetainedCapture -> IO ()
+retainFrame receipt capture =
+  renameFile (directory </> "frame-1.png") (directory </> name)
+  where
+    (directory, name) = case capture of
+      UpdaterScreen -> (updaterFrames receipt, "screen.png")
+      UpdaterKey index -> (updaterFrames receipt, "key-" ++ show index ++ ".png")
+      RebootFirstStart -> (rebootFrames receipt, "first-start.png")
+      RebootShooting -> (rebootFrames receipt, "shooting.png")
+    updaterFrames (ReceiptDirectory path) = path </> "updater-frames"
+    rebootFrames (ReceiptDirectory path) = path </> "reboot-frames"
+
 data Hit = Hit {hitAddress :: T.Text, hitWindows :: Map.Map T.Text T.Text, hitRaw :: Value}
 
 takeHits :: Console -> IO [Hit]
@@ -405,7 +424,7 @@ launch options = do
       InstalledNand nandPath = nand
   companion <- doesFileExist (ramPath ++ ".state.json")
   require companion "--recovery-ram needs its .state.json companion"
-  ReceiptDirectory receipt <- freshReceipt root (receiptOption options)
+  receiptDirectory@(ReceiptDirectory receipt) <- freshReceipt root (receiptOption options)
   inputHashes <- forM [("recovery_ram", ramPath), ("sd_image", cardPath), ("installed_nand", nandPath)] $ \(name, path) -> do
     digest <- fileSha256 path
     pure (K.fromString name .= object ["path" .= path, "sha256" .= digest])
@@ -429,9 +448,11 @@ launch options = do
   watch updater templateReloadSite []
   watch updater wholeAreaCommitSite [flagBlock]
   screen <- runUntil updater updaterScreenAt
+  retainFrame receiptDirectory UpdaterScreen
   cacheAtScreen <- readCache updater
-  keyFrames <- forM updaterKeys $ \key -> do
+  keyFrames <- forM (zip [0 :: Word ..] updaterKeys) $ \(index, key) -> do
     step <- pressKey updater key
+    retainFrame receiptDirectory (UpdaterKey index)
     pure (T.pack ("after " ++ keyName key), progressFrame step)
   let updaterFrames = ("updater screen", progressFrame screen) : keyFrames
   early <- takeHits updater
@@ -453,8 +474,10 @@ launch options = do
      , "--menus", "--pause-after", "0", "--output", receipt </> "reboot-frames"
      ] ++ fixedSceneFrameArguments (fixedSceneFrameOption options))
   firstStart <- runUntil reboot firstStartAt
+  retainFrame receiptDirectory RebootFirstStart
   forM_ firstStartKeys (pressKey reboot)
   shooting <- settle reboot
+  retainFrame receiptDirectory RebootShooting
   cacheAfterReboot <- readCache reboot
   mode <- readWord reboot systemModeWord
   hook <- readWord reboot connectHookWord
