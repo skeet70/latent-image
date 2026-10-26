@@ -415,6 +415,8 @@ data Execution = Execution
   , executionLog :: FilePath
   }
 
+data ExecutionEvidence = ExecutionUnknown | ExecutionKnown Execution
+
 stamp :: IO String
 stamp = formatTime defaultTimeLocale "%Y%m%dT%H%M%SZ" <$> getCurrentTime
 
@@ -487,7 +489,7 @@ schedule context slots jobs = do
 data Outcome = Outcome
   { outcomeRoute :: Route
   , outcomeReceipt :: FilePath
-  , outcomeExecution :: Maybe Execution
+  , outcomeExecution :: ExecutionEvidence
   , outcomeResult :: T.Text
   , outcomeProblem :: Maybe String
   , outcomeDifferences :: [Difference]
@@ -517,7 +519,9 @@ outcomeJson outcome = object
    , "differences" .= length (outcomeDifferences outcome)
    , "incomplete_releases" .= outcomeIncompleteReleases outcome
    , "first_difference" .= fmap differenceJson (case outcomeDifferences outcome of first : _ -> Just first; [] -> Nothing)
-   ] ++ maybe [] executionFields (outcomeExecution outcome))
+   ] ++ case outcomeExecution outcome of
+     ExecutionUnknown -> []
+     ExecutionKnown execution -> executionFields execution)
 
 executionFields :: Execution -> [Pair]
 executionFields execution =
@@ -556,11 +560,11 @@ data Judging = Judging
   , judgingOutput :: FilePath
   }
 
-judge :: Judging -> Route -> Maybe Execution -> IO Outcome
+judge :: Judging -> Route -> ExecutionEvidence -> IO Outcome
 judge judging route execution = do
   let receipt = judgingReceipt judging route
-      failedRun = case executionExit <$> execution of
-        Just (ExitFailure code) -> Just ("route exited " ++ show code)
+      failedRun = case execution of
+        ExecutionKnown result | ExitFailure code <- executionExit result -> Just ("route exited " ++ show code)
         _ -> Nothing
   present <- doesDirectoryExist receipt
   case routeCheck route of
@@ -576,7 +580,10 @@ judge judging route execution = do
         writeFile (judgingOutput judging </> "differences" </> (routeName route ++ ".compare.txt")) (out ++ err)
         let reported = [drop (length prefix) line | line <- lines out, prefix `isPrefixOf` line]
             prefix = "e2e-observation-compare: "
-            exitProblem = if requireExit then failedRun else Nothing
+            exitProblem
+              | not requireExit = Nothing
+              | ExecutionUnknown <- execution = Just "route exit status is unknown"
+              | otherwise = failedRun
         pure $ case (code, exitProblem) of
           (ExitSuccess, Nothing) -> outcome "pass" Nothing
           (ExitSuccess, Just problem) -> outcome "fail" (Just problem)
@@ -650,7 +657,7 @@ main = do
       receiptOf route = fromMaybe (run </> "receipts" </> routeName route) (snd (sourceOf route))
   commit <- readProcessWithExitCode "git" ["-C", let Workspace path = root in path, "rev-parse", "HEAD"] ""
   executable <- getExecutablePath
-  let runfiles = executable ++ ".runfiles"
+  runfiles <- fromMaybe (executable ++ ".runfiles") <$> lookupEnv "RUNFILES_DIR"
   variants <- filterM (doesFileExist . resolve root)
     (map fujimodVariant [volatileScenario, classicChromeTrajectories, classicChromeIconTrajectories])
   clockStart <- getMonotonicTime
@@ -664,8 +671,9 @@ main = do
     schedule context slots [(route, receiptOf route) | route <- toExecute]
   clockEnd <- getMonotonicTime
   let executionOf route
-        | isJust (lookup route receipts) = Nothing
-        | otherwise = maybe (Map.lookup route earlier) Just (Map.lookup route executions)
+        | isJust (lookup route receipts) = ExecutionUnknown
+        | otherwise = maybe ExecutionUnknown ExecutionKnown
+            (maybe (Map.lookup route earlier) Just (Map.lookup route executions))
       judging = Judging (optionRecord options) baselines (runfiles </> "_main" </> "emulation" </> "e2e-observation-compare") receiptOf run
   outcomes <- forM selected $ \route -> do
     outcome <- judge judging route (executionOf route)

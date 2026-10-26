@@ -913,6 +913,17 @@ devenv shell -- bazel test //emulation:candidate-baseline-tests
 
 The routes below are reported but do not decide the run's result: FujiMod remains comparison-only pending the [runtime decision](../reports/emulator-runtime-decision.md), and the retained counterparts serve its comparisons. A FujiMod RAM-push route runs `xm1-viewer --ram-push-e2e --fujimod` with its retained trajectory file's `NAME.fujimod.json` variant when one exists, and passes when it exits 0 and `//emulation:e2e-observation-compare COUNTERPART ROUTE` reports no difference. The FujiMod toggle route passes on the comparison alone, since `usb-toggle-emu` exits 1 while any scenario blocks. The comparison output is `differences/NAME.compare.txt`. FujiMod refuses `--fixed-scene-frame`. The comparison leaves out capture PNG digests, and the FujiMod volatile, card-backed Classic Chrome and E8 routes matched the pinned gating routes. The cardless counterparts run unpinned; the icon route's develop-pass timing split remains under [#110](https://github.com/skeet70/latent-image/issues/110).
 
+Counterpart routes that require exit 0 reject missing or null producer execution evidence, even when receipts compare equal. `--from-run` reads evidence from `report.json`; `--receipt NAME=DIR` supplies only receipts and never borrows an earlier exit code. Child invocations resolve tools from inherited `RUNFILES_DIR`, falling back to the verifier's adjacent `.runfiles` directory.
+
+The checked-in regression generates nine synthetic E2E and USB-toggle cases through the public verifier CLI and real comparator. It is the public reproduction; the retained before/after fixture is private and is not released.
+
+```sh
+devenv --no-tui --max-jobs 2 --cores 4 shell -- \
+  bazel --batch test --jobs=4 --local_resources=memory=6144 \
+  --lockfile_mode=error --repository_disable_download --nocache_test_results \
+  //emulation:verify-candidate-tests
+```
+
 | Route | Command | Judged against |
 | --- | --- | --- |
 | `fujimod-flash-boot-check` | `fujimod-flash-boot-check` on the stock 1.50 DAT | baseline of `fujimod-flash-boot-receipt.json` |

@@ -1506,6 +1506,24 @@ haskell_binary(
     ],
 )
 
+haskell_test(
+    name = "verify-candidate-tests",
+    size = "small",
+    srcs = ["VerifyCandidateTests.hs"],
+    args = ["$(rootpath :verify-candidate)"],
+    data = [":verify-candidate"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:unix",
+    ],
+)
+
 haskell_binary(
     name = "ram-calibration",
     srcs = ["RamCalibration.hs"],
