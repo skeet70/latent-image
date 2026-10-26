@@ -84,7 +84,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/tests/r4f_guard.rs",
 ]
 
-_NIX_BUILD_CAP = ["--max-jobs", "2", "--cores", "4"]
+_NIX_BUILD_CAP = ["--max-jobs", "2", "--cores", "2"]
 
 def _lab_dependencies_impl(_ctx):
     nixpkgs_local_repository(
