@@ -6,7 +6,7 @@ Assessment for [#71](https://github.com/skeet70/latent-image/issues/71) against 
 
 G4's acceptance line is written at mechanism level, and the recipe-bank volatile trials demonstrate most of it on hardware. Run B (E-RAM-PUSH253-CONVERGED-RUN-150) and the #83 run (E-SELECT-BLINK-83-RUN-150) install a 253-publication payload from a camera-retained allocation, exercise it through owner-observed menu use, end with full power removal, and post-reboot reads find all 253 publication words and the callback slot `0x015c22ac` at their stock values.
 
-Issue #71 defines the gate's acceptance around the AF payload: hardware evidence of the AF mechanism entering, returning and being removed with stock behavior restored, supported by pre/post state and original-byte comparisons. That does not exist. The frozen AF ring hooks are rejected for live use (E-AF-RING-REVIEW-CORRECTION-150), their emulator run uses a synthetic producer only (E-AF-RAM-RING-E2E-150), and the first ordinary AF attempt stopped at the cardless CARD ERROR refusal before any AF ran (E-AF-CARDLESS-S1-BLOCKED-150). G4 is therefore not ready for acceptance as #71 scopes it. The cleanup-criterion wording conflict and the remaining coverage limits are recorded below.
+Issue #71 defines the gate's acceptance around the AF payload: hardware evidence of the AF mechanism entering, returning and being removed with stock behavior restored, supported by pre/post state and original-byte comparisons. That does not exist. The frozen AF ring hooks are rejected for live use (E-AF-RING-REVIEW-CORRECTION-150), their emulator run uses a synthetic producer only (E-AF-RAM-RING-E2E-150), and the first ordinary AF attempt stopped at the cardless CARD ERROR refusal before any AF ran (E-AF-CARDLESS-S1-BLOCKED-150). G4 is therefore not ready for acceptance as #71 scopes it. The remaining coverage limits are recorded below, and the cleanup-criterion wording conflict this document raised is closed by the owner's decision of 2026-10-25.
 
 ## Acceptance criteria, one by one
 
@@ -57,17 +57,19 @@ Missing for AF: the AF trial exists only as a proposal, not authorization ([AF p
 - Step 7, bounded AF event ring and coherent snapshots: emulator-only (E-AF-RAM-RING-E2E-150) and rejected for live use; snapshot work sits in [#107](https://github.com/skeet70/latent-image/issues/107).
 - Step 8, instrumentation overhead within stock variability: not measured.
 
-## Cleanup criterion: unload or power removal
+## Cleanup criterion: battery removal, decided 2026-10-25
 
-G4's cleanup criterion is not written around either route explicitly. The acceptance line says only "demonstrated enter/return/cleanup", and Phase 4 step 6 says "restore the entry mechanism, and return to normal camera operation. Repeat after an ordinary cold start", which reads as a software restore with the cold start as a repeat check.
+This document's one wording item is closed. Phase 4 step 6, the G4 acceptance line and [spec/05 §11.0](../spec/05-autofocus.md#110-stock-first-sensor-backed-iteration) now name battery removal with a post-reboot original-byte read as the ending and say that software unload and switch-off are optional and not required. [spec/07 §3.4](../spec/07-governance-and-handoff.md#34-standing-confirmations) records the owner's decision of 2026-10-25 with its reasons: battery removal has always restored the pre-RAM-push state fully, and manual unloads and warm switch-off power cycles work but cost extra work for no value.
 
-That wording conflicts with the current rules and the evidence:
+The text it replaces said "restore the entry mechanism, and return to normal camera operation. Repeat after an ordinary cold start", which read as a software restore. The [session script](ram-push-session-script.md) section 4 step 7 forbids `ram-unload` and `ram-free` as cleanup, and E-RAM-PUSH253-SWITCH-RECOVERY-FAIL-150 shows a switch cycle alone left an earlier push active.
 
-- [spec/05 §11.0](../spec/05-autofocus.md#110-stock-first-sensor-backed-iteration) says not to assume safe hot unload or checkpoint restoration on the body.
-- Issue #71's acceptance requires the physical cleanup route recorded, with every supply including USB removed for at least ten seconds, and states that a switch cycle or emulator unload is no substitute.
-- The demonstrated and only approved route is full power removal with post-reboot stock-word readback. The [session script](ram-push-session-script.md) section 4 step 7 forbids `ram-unload` and `ram-free` as cleanup, the #83 run ends with "no hot unload, free, restore or retry", and E-RAM-PUSH253-SWITCH-RECOVERY-FAIL-150 shows a switch cycle alone left the push active.
+It closes no acceptance criterion. Criteria 1 to 7 stand as recorded for the bank mechanism, including criterion 3's cleanup half by power removal with post-reboot stock-word readback, so the rewording writes down the route that evidence already used. Criteria 3 and 4 for AF, steps 1, 4, 7 and 8, and issue #71's AF-mechanism requirement stay open.
 
-Recommendation: reword Phase 4 step 6 to name power removal plus post-reboot original-byte comparison as the cleanup of record, and treat any software unload as unproven for a new payload. One historical body unload succeeded (E-RAM-PUSH-SESSION-150), so hot unload is not impossible, but no rule or review carries it forward, and the AF hooks' suspended-context hazard shows why it must not be assumed. G5 already says to record the exact cleanup route; G4 should say the same.
+What the decision leaves in force:
+
+- Issue #71's acceptance still requires the physical cleanup route recorded, with every supply including USB removed for at least ten seconds. The demonstrated route satisfies it (E-RAM-PUSH253-VOLATILE-RECOVERED-150, run B and the #83 run).
+- Hot unload stays unproven for a new payload: one historical body `ram-unload` succeeded (E-RAM-PUSH-SESSION-150), and no rule or review carries it forward. A new payload's exit is power removal.
+- A setting a payload changed persists only after an orderly switch-off, which commits the ordinary settings in area 2 (E-AREA2-WRITERS-150); a battery pull does not. A run that changes a setting and must not persist it ends by battery removal.
 
 ## Smallest experiments that would close the gaps
 
