@@ -78,7 +78,7 @@ usage = unlines
   , "  --output PATH          Fresh runtime directory under workspace/private-data/"
   , "  --firmware PATH        Stock or modified X-M1 1.50-compatible DAT input"
   , "  --sd-card-image PATH   Regular raw virtual-card image beneath private-data/"
-  , "  --ff80-rehearsal       Run the closed stock ordinary-boot service session"
+  , "  --ff80-rehearsal       Run our Haskell service client against pinned FujiMod"
   , "  --ram-push-e2e        Run allocation, relink, install, bank UI and unload in emulation"
   , "  --cardless             --ram-push-e2e: boot the installed DAT and adjustment NAND with no SD"
   , "                         card through the cardless RAM-push bridge"
@@ -289,13 +289,15 @@ launch options = do
   let fallback = if e2e
         then ReplacedRuntime ("emulator-runtimes" </> "xm1-ram-push-e2e")
         else UniqueRuntime "xm1-viewer"
-  (destination, Firmware dat, executable) <- case runtimeOption options of
-    FujiModChoice -> do
-      (Runtime path, source) <- ViewerRuntime.stageFujiModRuntime root (outputOption options) fallback (firmwareOption options)
-      pure (path, source, fujimodRamPushBridge)
-    RetainedChoice -> do
+      stageFujiMod = do
+        (Runtime path, source) <- ViewerRuntime.stageFujiModRuntime root (outputOption options) fallback (firmwareOption options)
+        pure (path, source, fujimodRamPushBridge)
+  (destination, Firmware dat, executable) <- case (ff80, runtimeOption options) of
+    (True, _) -> stageFujiMod
+    (False, FujiModChoice) -> stageFujiMod
+    (False, RetainedChoice) -> do
       staged <- stageViewerRuntime root (outputOption options) fallback (firmwareOption options)
-        (if ff80 || e2e then StageStockOriginal else OmitStockOriginal)
+        (if e2e then StageStockOriginal else OmitStockOriginal)
       let Python python = stagedPython staged
       pure (stagedDirectory staged, stagedSource staged, python)
   putStrLn ("X-M1 viewer runtime: " ++ destination)
@@ -304,17 +306,8 @@ launch options = do
     then do
       let nandPath = case nand of Just (InstalledNand path) -> path; Nothing -> error "validated NAND missing"
           receiptPath = case receipt of Just (ReceiptDirectory path) -> path; Nothing -> error "validated receipt directory missing"
-      case runtimeOption options of
-        FujiModChoice -> runFujiModRehearsal destination nandPath
-          (resolve root "private-data/emulator-checkpoints/xm1-ff80-fujimod") receiptPath
-        RetainedChoice -> do
-          callProcess executable ["tools/firmware_registry.py", "unpack", "xm1-150"]
-          executeFile executable False
-            [ "tools/continue_rec_scanout.py"
-            , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
-            , "--installed-nand", nandPath
-            , "--menus", "--ff80-rehearsal", "--output", receiptPath
-            ] Nothing
+      runFujiModRehearsal destination nandPath
+        (resolve root "private-data/emulator-checkpoints/xm1-ff80-fujimod") receiptPath
     else if e2e
       then do
         when (runtimeOption options == RetainedChoice) $
