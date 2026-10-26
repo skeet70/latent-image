@@ -354,13 +354,20 @@ On commit `32101c9` (clean harness tree), after the 8M key-pulse pins and the em
 
 ### 9.6 Local StockClick prototype (unintegrated)
 
-A local unintegrated stock-UI click prototype is not in main `699f59b` and is not part of this documentation change. It is recorded here only so the bounded result is not lost while the source remains unreviewed.
+A local unintegrated stock-UI click prototype is not in main `699f59b` and is not part of this documentation change. It is recorded here as a bounded result; the implementation remains unintegrated and unqualified.
 
-The ADC path matched the source path. The scanner uses a phase-dependent two-sample debounce, so a fixed 3M or 8M hold is not a universal release or latch law. In the one recorded run, the first Up click at the FOCUS MODE root moved the offered cursor from 2 to 32, the debounced row reached 1, the release reached 0, and the full 15-field publication predicate drained. The latch phase used 48 runs and 196,164 instructions; the release phase used 92 runs and 13,348,269 instructions.
+The ADC path matched the source path. The scanner uses a phase-dependent two-sample debounce, so a fixed 3M or 8M hold is not a universal release or latch law. The retained observer and source bindings are in `private-data/analysis/usb-select/cost-fast1-20261026/analysis.md#guest-row-and-adc-binding` and `emulation/README.md#interactive-x-m1-firmware-viewer`; the corrected2 receipt alone does not contain that separate observer result.
 
-Two further Up clicks completed from 32 to 31 and 31 to 30. A fourth Up attempt started from cursor 30, latched after 41 runs and 168,719 instructions, and stopped at the existing 512 timer-normalizer stops during release after one run and 703,906 instructions. Its release and publication drain did not complete, and no landed cursor was recorded. The first S scenario did not run. The result establishes three completed clicks at cursors 32, 31 and 30 and one blocked fourth attempt, not a complete path. Legacy instruction parity is unmeasured, and six-scenario or 144-endpoint acceptance is not claimed.
+In the one recorded run, the first Up click at the FOCUS MODE root moved the offered cursor from 2 to 32, the debounced row reached 1, the release reached 0, and the full 15-field publication predicate drained.
 
-Additional source review defects are being corrected separately. This section does not approve the prototype, its source or a camera action.
+| Phase | Runs | Retired instructions |
+| --- | ---: | ---: |
+| Latch | 48 | 196,164 |
+| Release | 92 | 13,348,269 |
+
+Two further Up clicks completed from 32 to 31 and 31 to 30. The fourth Up attempt started from cursor 30 and was blocked during release before release/drain completion was verified. It stopped at the existing 512 timer-normalizer stops; no landed cursor was recorded. The first S scenario did not run. The result establishes three completed clicks at cursors 32, 31 and 30 and one blocked fourth attempt, not a complete path. Legacy instruction parity is unmeasured, and six-scenario or 144-endpoint acceptance is not claimed.
+
+The implementation remains unintegrated and unqualified. This section does not approve it or a camera action.
 
 ## 10. Changed-byte explanation
 
