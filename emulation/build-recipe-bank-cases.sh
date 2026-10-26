@@ -33,7 +33,7 @@ fi
 RUNNER="${RUNNER:-bazel-bin/emulation/native-runner}"
 GEN="${GEN:-bazel-bin/emulation/recipe-bank-cases}"
 INTEROP="${INTEROP:-bazel-bin/emulation/recipe-bank-interop}"
-JOBS="${JOBS:-8}"
+JOBS="${JOBS:-2}"
 CANDIDATE="${CANDIDATE:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/package-20261024b/image}"
 ID4="${ID4:-$CANDIDATE/id4-final.bin}"
 ID4_BASE="${ID4_BASE:-0x0061c1fc}"

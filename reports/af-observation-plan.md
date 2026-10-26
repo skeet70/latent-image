@@ -181,9 +181,9 @@ devenv shell -- bazel run //host/firmware:read-af-ring -- decode RING.bin [OUT.j
 `//emulation:xm1-af-ring-e2e` holds an emulator slot, uses a keyed ordinary-boot attach checkpoint, allocates/pushes with the shared installer, flags the unsupported half-press input, bulk-reads/decodes and unloads. The retained bridge lacks a half-press `MenuKey`; sending it terminated the bridge in `af-ring/e2e-fifth`, whose exact rejection remains in `bridge/emulator-session.json`. The explicit fallback calls the real synthetic recorder through the emulated query callback, emits 300 events and requires 256 retained synthetic events with overwrite accounting. [#102](https://github.com/skeet70/latent-image/issues/102) separates missing actual input/producer support from ring publication coverage.
 
 ```sh
-XM1_EMULATOR_SLOTS=8 devenv shell -- bazel \
+XM1_EMULATOR_SLOTS=1 devenv shell -- bazel \
   --output_base="$HOME/.cache/bazel/latent-image-AfLoop" run \
-  --jobs=8 --local_resources=memory=6144 //emulation:xm1-af-ring-e2e -- \
+  --jobs=2 --local_resources=memory=6144 //emulation:xm1-af-ring-e2e -- \
   --firmware PRIVATE_RC0_DAT --installed-nand PRIVATE_F7_NONZERO_NAND \
   --sd-card-image PRIVATE_CARD_IMAGE --receipt-output PRIVATE_NEW_OUTPUT
 ```
@@ -433,8 +433,8 @@ STORE="$ROOT/private-data/analysis/x-m1-1.50/af-ring/run3-console-store.bin"
 export S STORE
 sha256sum "$S"
 devenv shell -- ghc -e 'import qualified Data.ByteString as B' -e 'import System.Environment (getEnv)' -e 'do { s <- getEnv "S"; out <- getEnv "STORE"; bytes <- B.readFile s; B.writeFile out (B.take 0x1fff4 (B.drop 0xa0800 bytes)) }'
-devenv shell -- bazel --output_base="$BAZEL_BASE" run --jobs=8 --local_resources=memory=6144 //console-trace:ring-check -- --quiet store "$STORE"
-devenv shell -- bazel --output_base="$BAZEL_BASE" run --jobs=8 --local_resources=memory=6144 //console-trace:trace-census -- store "$STORE"
+devenv shell -- bazel --output_base="$BAZEL_BASE" run --jobs=2 --local_resources=memory=6144 //console-trace:ring-check -- --quiet store "$STORE"
+devenv shell -- bazel --output_base="$BAZEL_BASE" run --jobs=2 --local_resources=memory=6144 //console-trace:trace-census -- store "$STORE"
 xxd -g1 -s0x00a5b5e0 -l16 "$S"
 xxd -g1 -s0x0004f25c -l4 "$S"
 xxd -g4 -s0x0089ea94 -l4 "$S"
@@ -470,7 +470,7 @@ umask 077
 mkdir -p "$ROOT/private-data/read-plans" "$SESSION/pre" "$SESSION/post"
 printf '%s\n' '{"windows":[{"index":0,"address":"0x40a5b5e0","length":16,"purpose":"stock trace mode, filter enable, threshold, compact offset and pointer"},{"index":1,"address":"0x4004f25c","length":4,"purpose":"loader console writer gate"},{"index":2,"address":"0x4089ea94","length":4,"purpose":"stock send-hook pointer"},{"index":3,"address":"0x400a0800","length":52,"purpose":"console header, capacity and next index"},{"index":4,"address":"0x400c0800","length":4,"purpose":"console tick cell"}]}' > "$PLAN"
 chmod 600 "$PLAN"
-run_target() { devenv shell -- bazel --output_base="$BAZEL_BASE" run --jobs=8 --local_resources=memory=6144 "$@"; }
+run_target() { devenv shell -- bazel --output_base="$BAZEL_BASE" run --jobs=2 --local_resources=memory=6144 "$@"; }
 camera() { run_target //transport:camera -- "$@"; }
 assemble_decode() {
   export AF_PARTS="$1"
