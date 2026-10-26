@@ -2,7 +2,7 @@
 
 Status: approved research direction, not camera authorization or gate acceptance. The [AF specification](../spec/05-autofocus.md#110-stock-first-sensor-backed-iteration) owns the process; this report owns observation order and current instrument limits. The [first-session procedure](af-first-session-script.md), [pilot protocol](stock-pilot-protocol.md) and [session kit](af-session-kit.md) separate feasibility, measurement and owner actions.
 
-The RAM-push and bulk-read results now supply a same-boot transient alternative to the historical media-carry route below. [The first transient ring design](#first-transient-g5-ring-loop) owns the new implementation and its narrower observation scope.
+RAM push and bulk read supply a same-boot transient route. The [cardless admission stage](#stage-1-publication-and-review-brief) is the selected implementation work; the [earlier event ring](#first-transient-g5-ring-loop) remains rejected and supplies no camera-ready observation mechanism.
 
 ## Available instruments and feature scope
 
@@ -43,9 +43,9 @@ The [X-M1 snapshot-producer findings](xm1-snapshot-producers.md) distinguish cap
 
 ## Cardless research and optional full-resolution capture
 
-Idle cardless preview, bounded reads of already available statistics and offline algorithm work remain separate from executing an AF search. The first ordinary S1 attempt was blocked by the card-error indication, so SD repair cannot be dismissed as irrelevant to AF execution. Spec §11.0's cardless-first premise is not established for ordinary AF-S on this body. The unavailable recovery route and ordinary storage acceptance remain separate limitations under [#85](https://github.com/skeet70/latent-image/issues/85).
+The owner has selected a transient cardless shooting mode while broken pin 2 awaits port replacement. Stage 1 admits ordinary still S1 past CARD ERROR without changing unrelated inhibitions; stage 2 separately completes no-save captures, initially by discarding the frame. The physical slot, SD recovery and ordinary save/playback remain unavailable under [#85](https://github.com/skeet70/latent-image/issues/85). The owner approved the spec §11.0 amendment as written on 2026-10-26; [§3.4 records that policy approval](../spec/07-governance-and-handoff.md#34-standing-confirmations), not camera authorization.
 
-If preview cannot support independent quality, investigate a bounded fresh capture-to-RAM path with classified pixels, finite buffer ownership, complete cleanup and normal preview restoration. A no-card-guard bypass or global successful-write stub is not that path. The service imaging jobs in [#39](https://github.com/skeet70/latent-image/issues/39) remain alternatives with unproved exposure and adjacent storage hazards, not the default preview experiment.
+The implementation is tracked in [#113](https://github.com/skeet70/latent-image/issues/113). AF admission does not supply a fresh exposure, classified pixels, finite ownership, save completion, cleanup or preview restoration. The [stage-2 design](cardless-capture-feasibility.md) incorporates [#105](https://github.com/skeet70/latent-image/issues/105); the service imaging jobs in [#39](https://github.com/skeet70/latent-image/issues/39) remain separate diagnostic paths with adjacent storage hazards. A global successful-write stub or media-ready fiction is not the selected design.
 
 ## Cardless S1 result and decision options
 
@@ -84,7 +84,7 @@ This establishes an S1-to-card-error refusal route with byte-backed tables and i
 
 The distinction between NO CARD and CARD ERROR matters. `0x00d19324` does **not** reject warning `0x11`; it rejects `0x13`, `0x14`, `0x12`, `0x15`, `0x18`, `0x17`, `0x36`, `0x1d`, `0x1b` and conditional warning 8. In still mode, a stock NO CARD-only state can therefore pass this S1 media-error predicate if the remaining inhibition checks pass. This is a source-bound candidate, not demonstrated cardless AF or proof that the damaged body's current error can be cleared by an ordinary setting.
 
-S2 uses a distinct action. `0x00c09d24` maps input 8/qualifier 0 to modal `0x4a` event 2; state 4 selects `0x00cea828 = 0x0001001c`, action 28 at `0x00d01580 = 0x00c595f4`. That action calls `0x00d24b58` in still mode, which independently calls the same `0x00d19324` and refuses its CARD ERROR result. In movie mode it instead calls `0x00d1944c`, which rejects both `0x00d19324` errors and NO CARD explicitly at `0x00d19480`-`0x00d19490`. A local S1-only interception must leave these paths unchanged.
+S2 uses distinct actions. `0x00c09d24` maps input 8/qualifier 0 to modal `0x4a` event 2. State 4 selects cell `0x00cea828 = 0x0001001c`, action 28 at `0x00d0157c = 0x00c59578`; its ordinary input-8 argument can post the S1/S2 warm-up inputs with tag `0x100`. State 6 selects action 29 at `0x00d01580 = 0x00c595f4`. That action calls stock `0x00d24b58` before its drive/capture continuation; the still-mode predicate independently calls `0x00d19324` and retains its CARD ERROR refusal. The movie predicate `0x00d1944c` also retains both that error and its explicit NO CARD rejection at `0x00d19480`-`0x00d19490`. A local S1-only interception leaves these paths unchanged.
 
 The X-M1 menu inventory offers SHOOT WITHOUT LENS, node `0x0077eae4`, property `0xa3`, not a bound SHOOT WITHOUT CARD setting. `0x00d24e34` reads `0xa3` for separate lens-state checks before the media-error predicate; changing it does not remove warning `0x13`. No supplied menu label establishes a no-card override.
 
@@ -96,24 +96,273 @@ Host inspection now closes the producer chain for Run 3 (E-AF-CARD-DETECT-RUN3-1
 
 The stock absent path exists: GPIO12.7 high returns absence through `0x006eddc0 -> 0x006f4d24`, yielding media status 2 / NO CARD `0x11`. Card-edge handling in `0x006a1c50` invalidates SD initialization through `0x006fae5c`, so a real detect transition has a stock re-detect path. No inspected mode or power path makes an unchanged present indication mean absent. Mode changes may clear warning presentation; they do not repair the media producer, which can reassert `0x13`.
 
-Option 2 therefore requires the detect input to become electrically absent, not a warning clear, media-word write or demonstrated menu workaround. The sampled input supports a present indication on this damaged body but does not identify a permanently stuck switch, short or pin-level cause. The smallest later camera check is one idle read-only pass over the detect row, media status and warning RAM windows specified in the report, without slot manipulation, mode sweeps or a shutter press. No such check was performed here.
+The subsequent idle read E-CARD-DETECT-LIVE-150 confirms that the empty slot still reads present/error. A stock absent-state route would require the detect input to become electrically absent, not a warning clear or demonstrated menu workaround. The owner has selected a software admission mechanism rather than contact manipulation, a mode sweep or repair before port replacement.
 
 
 #### Minimal override review boundary
 
-If an override is chosen, the narrow candidate is the **S1 action's call site `0x00c58cc8`**, not the global warning bitset, media-status producer or generic `0x00d19324` routine. A range-checked one-word `BL` to an owned veneer can preserve the next instruction and limit interception to that S1 route. The veneer would have to preserve the complete stock inhibition decision except the specifically justified `0x13` refusal, retain all other lens/mode/error checks, and refuse an unbound context. Merely changing result 3 to success would also hide other failures and is not the proposed scope.
+The stage-1 implementation uses one function-entry A32 `B` at `0x00d19324`, replacing only its first `PUSH {r11,lr}`. Its owned veneer requires incoming LR `0x00d25184`, the saved caller LR at `[r11]` equal to `0x00c58ccc`, and mode `0x00956838` to be neither `0x1f` nor `0x2c`. The first guard binds `0x00d24e34`; its pinned frame prologue makes `[r11]` the saved return to the exact S1 action. Nonmatching contexts replay the displaced PUSH and resume untouched `0x00d19328`. The matching still-S1 context replays PUSH/ADD-frame-pointer and resumes `0x00d19340`, skipping only the first CARD ERROR query and its early return. Mode `0x1f` has a distinct `app 0x78 -> 0x00c2f830 -> 0x00d13e88(0x30) -> 0x00db4254` configuration route producing reccont `0x209/0x23c0`; that route is not eligible for this bounded AF-only bypass.
 
-Re-review must establish that only AF initiation becomes possible, that all S2/capture paths retain their independent media refusal, that no storage work or persistent setting change is introduced, and that entry/call/return state, cache publication, cancellation and session bounds remain valid. The separate state-4 S2 action above is one relevant guard, not a complete capture-exclusion proof across all UI states. No override bytes or revised ring hooks are implemented.
+Four read-only UI-cache guards also require `u32[0x00956b6c] != 1`, `u32[0x00956900]` to be neither 9 nor 10, and `(u32[0x00956938] != 0 || u32[0x00956934] != 1)`. They confine the bypass to the normal AF branch selected by `0x00d0f6f4`. The alternate `0xad` application request changes mode/configuration and queues reccont `0x20c`, not ordinary AF `0x204`; it retains the stock CARD ERROR refusal. The four canonical setters and their explicit call-owner families are listed in the [reccont closure](cardless-capture-feasibility.md#21-selected-stage-1-scope-and-post-admission-graph). This is a bounded UI-actor contract with no concurrent mode/property/service changes, not a global IRQ-ownership claim.
 
-### Decision options
+The pending-input guard requires `(u8[0x00951fc4] & 6) == 0`. Bit 2 represents pending S2 input 8; bit 4 replays movie input `0x34` through `0x00c5a858 -> app 0xb3/0x7f -> 0x00c2de74 -> 0x00d20098`, which changes mode/configuration and sends reccont `0x20c`. Bit 1 represents ordinary S1 input 7 and remains allowed. `0x00d36310` with the `0x2000` family copies the current input cache into its backup before publishing the first S1 job. The selected S1 notifications cannot recreate an old input 8 or `0x34` from that backup. No held, external or previously queued S2, movie, mode-change or lifecycle command is permitted during the bounded attempt.
+
+The notification-route guard additionally requires `u32[0x009134f8] != 1`. Stock `0x0073abec` reads that word; value 1 redirects relevant AF notifications to service queue 7 instead of the audited ordinary UI queue. Run 3 observed zero and the stock callback chain `u32[0x0095b074] = 0x0072b680 -> u32[0x00829a0c] = 0x0072b210`. Independent review must accept the source-bound ownership and no-service-transition contract before body use.
+
+The initial lens-readiness guard requires `u32[0x0095e1f4] == 1`. It is not an asynchronous lifetime proof: a selected lens-transport error can reset queue-`0x63` state `0x0096aff4` and later invoke `0x006c31f0`, clear the latch and produce `0xb8` during owned recovery. The post-admission closure must include that recovery and the `0xb8` receiver. Any new S1 entry reevaluates the latch.
+
+The photographic flash-charge guard requires `u16[0x0096b56c]` to be idle 0 or paused 7. The selected pause/resume messages `0x1a08/0x1a09` and timer messages stay within `{0,7}` and do not invoke a prior capture's saved flash callback. Allowing state 7 preserves S1 reentry while a stock internal-profile fetch has paused charging. Run 3 observed lens latch 1 and flash state 0. The payload neither changes these values nor commands the photographic flash.
+
+The profile guards pin `u32[0x01529fb4] = 0x0095a6b4` and the secondary context `u32[0x01529fb8] = 0x009432a0`, require cached mode `u32[0x0095a6b4]` to equal current mode `u32[0x00956838]`, require cached/current profile field `+0x320` at `0x0095a9d4` and `0x00956b58` to match, and refuse requested capacity-refresh bit 3 at `0x0152c8d0`. Stock `0x00dd1254` can request that bit only for a transition into movie mode or a changed `+0x320` field. Its capacity-refresh path `0x00de9b7c -> 0x0070f718 -> FileTask 0x2c26 -> 0x00715a58 -> 0x007012a0` can read FAT storage and is forbidden here. The source proof must preserve these equalities through selected profile copies and configuration callbacks, not just observe a clear bit at entry.
+
+The read-only actor guards require the following initial context. A mismatch retains the stock CARD ERROR refusal.
+
+| Actor field | RAM address and width | Required initial value |
+| --- | --- | --- |
+| Recorder `0x04` | `u16[0x01545858]` | `1` |
+| Recorder `0x05` | `u16[0x0154585a]` | `3` |
+| Recorder `0x06` | `u16[0x0154585c]` | `0` |
+| Recorder `0x07` | `u16[0x0154585e]` | `0` |
+| Recorder `0x0f` | `u16[0x0154586e]` | `0` |
+| Recorder `0x14` | `u16[0x01545878]` | `0` |
+| Recorder `0x15` | `u16[0x0154587a]` | `0` |
+| Recorder `0x4a` | `u16[0x015458e4]` | `0` |
+| Recorder `0x4b` | `u16[0x015458e6]` | `0` |
+| Recorder `0x4d` | `u16[0x015458ea]` | `0` |
+| Recorder `0x4e` | `u16[0x015458ec]` | `0` |
+| Recorder `0x59` | `u16[0x01545902]` | `0` |
+| Recorder `0x5a` | `u16[0x01545904]` | `0` |
+| System root | `u16[0x015b8078]` | `1` |
+| System module 2 | `u16[0x015b807c]` | `2` |
+| Queue-`0x3b` startup root | `u16[0x00972e88]` | `1` |
+| Packed frame 0/1 states | `u32[0x0157bd20]` | `1`, meaning frame 0 state 1 and frame 1 state 0 |
+| Frame 6 | `u16[0x0157bd2c]` | `0` |
+
+These are initial-domain checks, not a general claim that their values stay constant after admission. Owned `0x201` completion can set recorder `0x04` to zero and start initialization through `0x0f`, `0x59` and `0x5a`. Initial `0x0f = 0` excludes an inherited callback at `0x0152c988`; initial `0x59/0x5a = 0` excludes inherited profile and mask transactions. Initial `0x4a/0x4b = 0` excludes an inherited alternate-initialization profile, callback or already-ready child. Initial `0x4e = 0` excludes capture-promotion continuations in its foreign states 1, 2 and 5; initial `0x07 = 0` excludes foreign configuration buffers. Initial `0x15 = 0` selects the fresh AF entry rather than its busy diagnostic branch. The selected callbacks require their own state fixed point. The all-state configuration union contains capture-control keys `0x1334/0x1335/0x1337/0x1339/0x138b/0x138c`; the selected state-cell and callback projection must exclude them.
+
+Initial system module 2 state 2 excludes inherited startup and nested lifecycle transactions. Its owned `0x13e7` transaction can move it to 3 and back to 2; this field is not constant after admission. The selected module-2 prefix for the `0x1200` completion must be composed with that cycle, rather than inferred from system-root state 1.
+
+Normal startup completes the bank initializer before creating its initcont owner: `0x0069d1e4 BL 0x0069f204` returns before `0x0069d27c BL 0x0069ca44`, then `0x0069cbc0 BL 0x0073afe0 → 0x0073afe8 BL 0x0073c0d4`, which creates task entry `0x0073e048`. That task later invokes module-5 startup `0x00d985a4`, which creates reccont. This is call-return-before-task-creation ordering, not a snapshot or a cross-core monitor assumption. Root store `0x0073e1bc` still publishes 1 before `0x0073e1c0 BL 0x0073cdc0` invokes module-5 startup, so root 1 does not prove that later startup has returned; it does not demonstrate a pending bank initializer on this normal creation path. `0x0069f000` creates the `flashext` status worker, whose timer callback is `0x0069e03c`, not the bank initializer. Alternate actor creation, computed/global reentry and later bank reload or guard mutation remain unclosed.
+
+Run 3 sampled these initial fields, matching modes `0x24`, matching profile `+0x320` values 1, zero requested/issued/completed masks and sequencer phase 3 (`E-CARDLESS-AF-CONTEXT-RUN3-150`). These historical, separately sampled values are not a coherent snapshot or a future preflight. The payload does not force readiness or clear a prior transaction.
+
+The sensor-sequencer guards require `u32[0x0096bd70] = 0` and phase `u32[0x0096bd74]` in `{1,3,5,7,9,0xb,0xd}`. The selected kind-2 queue-`0x22` request can target only the initialized odd-phase family. This excludes the uninitialized/even or busy contexts whose descriptor pairs can contain negative counts. The payload does not stop the sequencer or assume that a busy flag proves the absence of unrelated queued work.
+
+All remaining warning, lens, mode, busy and readiness checks execute stock instructions. General registers and CPSR flags are restored before either continuation; the veneer writes only its current stack frame. It has no mutable shared state, lock, exclusive access, core-ID assumption, storage/lens/register operation or global media-warning override. Movie and S2 reach the original predicate. Entry+4 remains executable, including for a task already suspended after the old PUSH. Power removal, not hot unload, ends a body session.
+
+The current UI-event argument `u32[0x00944584]` must not be `0x100`. S2 action `0x00c59578` can call `0x00d3b198(7,0x100,0)` and then `0x00d3b198(8,0x100,0)` without setting pending-input bit 2. Its first queued event can therefore reach the ordinary S1 action while that bit is clear. `0x00d3b0dc` copies the queued record at `0x0094fa58` into `0x00944580`; queued second word `0x0094fa5c` becomes the guarded current argument. The argument guard preserves stock CARD ERROR refusal for this S2-origin warm-up. Pending-mask checks alone do not distinguish it. The native trajectory includes this argument-`0x100`/pending-zero refusal and argument-`0x110` S1 replay as separate cases.
+
+The ordinary GPIO publisher `0x006a1c50 -> 0x006a1b40(key,0)` supplies argument zero. S1 replay `0x00d1973c -> 0x006334dc(7,0x110)` carries argument `0x110` through the ordinary queue-1 message into the same current field. After the UI actor copies or receives a record, its preprocessing, the `0x00c58c38` prefix and the `0x00d24e34` prefix before `0x00d19324` neither pump another event nor rewrite that argument. The synchronous guard therefore observes the dispatched argument, not the producer's next queued record.
+
+This is not a claim to recognize every physical S2 origin. `0x006a1c50` can synthesize an ordinary `7,0` record when it sees key 8 while its cached key-7 slot is clear. That record is indistinguishable from ordinary S1 at this boundary. The actual S2 capture-admission predicate remains untouched, and the bounded stage-1 source contract still excludes held, queued or new external S2/movie input. The `0x100` guard additionally preserves refusal for the distinct UI-generated S2 warm-up; it does not replace that contract.
+
+The assembly ABI veneer uses 32 additional bytes of the current task's stack before calling the separately compiled C guard in `menu/cardless_af.c`. It saves `r0..r3`, `r12`, LR and CPSR flags, restores that space and the incoming registers/flags before either continuation, then reproduces the stock 8-byte prologue. Review must account for the veneer frame plus the emitted C guard's own frame. The elided warning query is a read-only bit test; the media status, warning bitmap and error presentation are not cleared.
+
+#### Diagnostic-file guards and observed configuration
+
+The owner-confirmed storage boundary, recorded on 2026-10-26 in [§3.4](../spec/07-governance-and-handoff.md#34-standing-confirmations), permits existing stock read-only internal NAND fetches of firmware or calibration profiles, including the `0xfff52400` profile load. SD controller access, filesystem calls, file numbering, and NAND program or erase are forbidden after admission. Every reached forbidden branch must be refused or neutralized; the permission for internal profile reads is not a permission for NAND mutation.
+
+The bound S1 AF producer union permits a conditional internal profile fetch: operation `0x0d` through `0x00df48dc/0x00ef9264`, selector `0x0c` at `0x00f08be0`, changed-mask path `0x00f31548`, imgdc `0x3f34`, `0x00ff412c -> 0x00fe977c`, and queue-`0x37` request `0x4703` can reach `0x006f1440` and the `0xfff52400` NAND FIFO. The bound NAND commands are read `0x00/0x30`; this path is not a filesystem or SD request. It is source-permitted under the profile/cache conditions, not an observed fresh read from the later S1 session. The [AF source map](autofocus-static-map.md#sd-error-s1-admission-boundary) records the full chain and the separate program/erase exclusions.
+
+The owned lens-error recovery also reaches stock read-only calibration-cache fetches: registered lens data through `0x006ac16c -> 0x006a8e84 -> 0x006faf00 -> 0x006fb49c -> 0x006fce40 -> 0x006f1a74 -> 0x006f1440`, or defaults through `0x006aa1fc -> 0x006a8ff0 -> 0x006fb058`. These are additional allowed internal NAND reads, not evidence that the whole recovery is storage-free.
+
+Admission also requires the stock byte-property bank pointer at `0x0096ca50` to equal `0x41acd800`. It refuses the bypass if property `0x24c & 7` or `0x22c & 7` is nonzero, `0xa8 & 0x80` is nonzero, `0xdc & 0x80` is nonzero, `0xb6 == 1`, `0x98c0 != 0`, or `0x8cfc == 1`. Each failed guard resumes the untouched stock predicate, so CARD ERROR continues to refuse admission. These are read-only guards, not changes to diagnostic settings.
+
+The property getter `0x0069f8fc(key)` reads one byte at `[0x0096ca50] + key`; startup `0x0069f204` supplies bank `0x41acd800`, whose physical alias in the bulk snapshot is `0x01acd800`. Property `0x24c` therefore lives at virtual `0x41acda4c`, physical `0x01acda4c`. Its bits 1, 2 and 4 enable the `0x00f48f54 -> 0x00ee92e4` statistic dumps. That facade calls `0x0070fbfc -> 0x0070fb68 -> 0x00716324` for DCIM/file-number allocation before `0x0071c648` opens a file; trapping file open alone would be too late.
+
+Owned mode-`0x200` initialization adds a separate diagnostic-file producer: recorder `0x59` row `0x17 -> 0x00e388ec -> 0x00dd2c68 -> 0x00eb0c24 -> 0x00ed3de4`. The latter opens a TS log, writes records and closes it through `0x0071c648/0x0071c75c/0x0071c7bc`, publishing FileTask operations `0x2c17/0x2c19/0x2c1a`. Property `0x22c` controls its three event classes; the guard requires mask `7` to be clear without relying on the secondary enable at `0x4089ebec` or the initial `0x00dca960` query result. Its byte is at virtual `0x41acda2c`, physical `0x01acda2c`. This is distinct from the `0x24c` statistic dump.
+
+Run 3's idle capture observed the expected bank pointer and the following low bytes. They are historical observations from a different boot, not preflight authorization for a future session.
+
+| Property | Physical byte address | Observed byte | Admission requirement |
+| --- | --- | --- | --- |
+| `0x24c` | `0x01acda4c` | `0x00` | `(value & 7) == 0` |
+| `0x22c` | `0x01acda2c` | `0x00` | `(value & 7) == 0` |
+| `0xa8` | `0x01acd8a8` | `0x00` | `(value & 0x80) == 0` |
+| `0xdc` | `0x01acd8dc` | `0x00` | `(value & 0x80) == 0` |
+| `0xb6` | `0x01acd8b6` | `0x00` | `value != 1` |
+| `0x98c0` | `0x01ad70c0` | `0x00` | `value == 0` |
+| `0x8cfc` | `0x01ad64fc` | `0x00` | `value != 1` |
+
+The known mutation routes are startup/default loading, bank reload, the generic service parameter writer `0x00dc7564`, and the service-mode parameter editor `0x00d5cc04/0x00d5cc08`. The editor requires mode `0x0096b480 == 3`; Run 3 observed mode 0. The retained AF/control/queue-30 projection does not reload the bank or write these seven offsets. Its reachable generic setter `0x00742098` restricts keys to `0x81..0xa1`. This is not yet a lifetime proof for the expanded recorder/UI recovery projection. The guards remain mandatory.
+
+Review must explicitly confirm stability across the asynchronous continuation, including the reccont and image-control message receivers. The proposed session excludes external service/editor activity and parameter-write USB operations. Operator restrictions cannot exclude a reload or writer reached by the firmware's own S1 continuation. If the final source closure cannot exclude those effects, admission-time checks are insufficient and the design must instead use a scoped no-dump boundary. The live CLI remains refused.
+
+#### Storage-closure status, 2026-10-26
+
+The composed post-admission graph is not closed. The owner-confirmed boundary remains unchanged: existing stock read-only internal-NAND firmware/calibration profile fetches are allowed; SD controller access, filesystem calls, file numbering, and NAND program or erase are forbidden.
+
+- Queue `0x28`/`0x3800` scripts `0x007cf138/0x007cf15c` and their selected IRQ callbacks are bound through delivery to `0x00ec558c`. This does not close the receiving system continuation. Queue `0x29` scripts/completions and the selected queue-`0x3b` requests are bound under the initial root-1 guard.
+- Phase-0 action `0x00c6bc78` can advance to phase 4 before queued reconciliation keys drain. The phase-4 route `0x00c6898c → 0x00d427ec → APP7D → 0x00d1a7d8 → 0x006337d8/0x006434f8` remains open. The lifetimes of `0x009514a4`, `0x00954cf8`, `0x00952000`, `0x00952018`, the physical mode-key bitmap, current/cached mode, and field `+0x320` must be composed before pruning it. Alternate initialization states 1, 2, `0x1e` and `0x21` are not yet excluded.
+- Whole-profile copy `0x0063219c` copies `0x1000` bytes, including mode and field `+0x320`. Its selected callers `0x00637e5c`, `0x00d20098`, `0x00d203e4`, `0x00d21590` and `0x00d2163c` remain part of the mode-lifetime frontier.
+- The E7 suffix reaches `0x00ec3740 → 0x00ec6790 → 0x0071f550 → 0x0071fde4`, publishing `0x2c00` to queue `0x65`; dispatch through `0x00721744/0x00721578/0x007213c0` reaches queue `0x1c`, whose table record `0x008147d0 = {0x2c00, 0x007120d8}` selects FileTask work. Selectors `0x41/0x42/0x43` reach `0x0071f7dc`, with additional `0x0071f4d8/0x0071f418` work when `0x00910204` is nonzero. The complete prefix from admitted still-S1 is unproved: `0x00c2ce18 → 0x00c24994 → 0x0063975c → EC5/APP8 → 0x00c31948 → system 0x300/E7` requires pending control `u32[0x009500f8] = 5` at the callback and the selected initialization flag path. Run 3 sampled pending control 0 and `u32[0x00d3d53c] = 0`; neither is a lifetime invariant. The source of pending control 5 in the owned S1 trajectory, the later `AC00`/`0x1200`/mask completions, ownership and preview restoration remain unresolved.
+- Bank exports are not read-only: `0x0069fea8 → 0x006a9fdc` and `0x006a0028 → 0x006abfb4` reach `0x006a8de0 → 0x006fb38c → 0x006fdf00`, which calls NAND program `0x006f0f6c` and erase `0x006f0e18`. UI/system callers `0x00ec88c8`, `0x00ecc654` and `0x00ecc66c` are generic reverse candidates, not established post-admission paths. Each requires either a concrete forward path from admitted still-S1 with its predicates or a source-bound infeasibility proof. They are not allowed profile reads.
+- Bank reload `0x0069f920` can reload offsets `0x3000..0x41fff`, including guards `0x8cfc/0x98c0`, when byte property `0x244` is 1. Run 3 retains word `0x01f30000` at physical `0x01acda44`, so that byte was zero; this is one historical snapshot, not a lifetime invariant. Its actual writers, ownership and reload transitions must be composed with the selected S1 continuation. Exact kind-6 producers `0x0073cd4c`, `0x00e54c84`, `0x00e575fc` and `0x00ec4618` require that forward composition. No additional snapshot guard is accepted as a substitute.
+- Queue `0x49`/`0x5902` still needs the final byte-backed effect contracts for its new format/GPU paths, including leaf `0x00890fac`. Operation 7 through `0x008935b8` returns `-1`; it is not evidence of a successful format operation.
+
+The earlier APP6-only, invariant-lens-latch and phase-0-null arguments are withdrawn. Stage 1 remains non-admissible and mechanism changes are frozen while the forbidden-path and guard-lifetime proofs remain open. If a forbidden path cannot be excluded, the next design must refuse or neutralize that path at a source-bound boundary; another admission-time snapshot does not close it. Current source and guard changes have not been rebuilt or exercised during the thermal hold.
+
+#### Revised boundary design for review, not implementation
+
+The existing one-publication candidate is non-admissible. If the complete prefix establishes the E7 filesystem substep as reachable from admitted still-S1, one conditional design option is to intercept at or before entry `0x00ec6790`, before either `0x0071f6ac` query. A hook at `0x0071f550` would be too late. This is not yet a proven required fix: the prefix, ownership and completion contracts remain open. No revised hook, additional guard or CLI admission is implemented here.
+
+- Bind the complete admitted-S1 prefix and its recovery predicates before selecting or implementing this option. The boundary must distinguish the owned still-AF E7 transaction from boot, movie, capture and foreign lifecycle work using stock ownership or request provenance. The `0x00ec3740` caller and `0x00ec591c` callback identify a system completion path, not by themselves its S1 origin. A historical mode, pending-control value or root snapshot is not sufficient.
+- Suppress the selected E7 filesystem substep as a whole, including its queries, parameter construction and queue-`0x65` publication. Do not globally disable FileTask, change media status or pretend that a volume was initialized. The exact entry instruction, argument preservation and original continuation require byte binding before any future one-word A32 branch publication.
+- Preserve work before this boundary: the preceding image-fill completion and `0x00ec5c0c(2)` sensor/configuration request remain stock. Their ownership, callback delivery and failure paths must still run.
+- Account for completion through the existing `0x00ec591c` contract, which posts `AC00` to queue 2. A future replacement must deliver that owned completion exactly once without directly editing module state or masks, and preserve the original `0x00ec6790` return value. The selected `AC00` and `0x1200` handlers must be shown to tolerate either arrival order and to complete only the matching transaction.
+- Delivering `AC00` alone does not close storage effects. Handler `0x00ec3778` reads cached status through `0x00ec607c → 0x007101e4(0)`. When that status is not 7, `0x00ec6800 → 0x00db971c → 0x0071c648 → 0x0071c2b0` publishes FileTask `0x2c17` or `0x2c2d` for `A:\XFUPDATE.DAT` or `A:\XFTCDATE.DAT`; callback `0x00ec6360` posts `AC17` and also closes the handle on status zero. A conditional no-filesystem design must account for this substep and its failure/completion ownership too. It must not force cached status 7 to simulate an initialization that never occurred.
+- Bind completion mask `0x015c1e68`, final UI `0x816`/token `0x015c2020`, and every buffer release and preview-restoration effect. `0x00ec62e4` belongs to the E5 timer path and is not evidence of E7 preview restoration. Skipping filesystem work is acceptable only if completion does not depend on a filesystem-owned resource or on an unperformed initialization. Otherwise the design needs a source-bound abort/release path, not a fabricated success.
+- Reuse the established normal-startup return-before-task-creation ordering for the original bank initialization. Separately bind later startup work, alternate actor creation, reentry and any pre-existing E7 transaction that could still own resources. A future entry hook protects future calls, not a task already suspended inside `0x00ec6790`. Root 1 is not an overall-startup completion witness.
+- Any added publication changes the count-specialized installer and the payload allowlist/review scope. It requires a new complete byte inventory and independent review while leaving the shared installer, ABI and existing payload pins unchanged.
+
+This is a host-only design review. The mechanism remains frozen and non-admissible; no camera authorization follows from this proposal.
+
+#### Review evidence classification
+
+| Class | Current claim |
+| --- | --- |
+| Established source and byte bindings | E7's `0x2c00` FileTask suffix; the `0x008147d0` dispatcher record; the NAND program/erase effects below `0x006fdf00`; normal startup's synchronous bank-initializer return before initcont task creation; the later root-1 store before module-5 startup; `flashext` being a status worker rather than a bank initializer. |
+| Conditional path | Reaching the E7 suffix from admitted still-S1 requires pending control 5 at the selected callback. No complete owned producer path or source-bound infeasibility proof has been established. The `0x00ec6790` boundary is a conditional option, not an implemented or approved fix. |
+| Invalidated reasoning | Phase-4 notification `0x939 → 0x00c68744` calls `0x00d350c4(1)` and sets pending control 3, not case 3/pending control 5. In phase 6, notification `0x939` selects `0x00c59500 → APP5A → 0x205` stop. Neither establishes the earlier claimed pending-control-5 prefix. Root 1 and `0x0095709c = 1` do not establish completed startup. |
+| Unresolved facts | Complete admitted-S1 predicates; compatibility and lifetime of pending control 5; E7 completion ownership/release/preview; alternate actor creation and computed/global reentry; later bank reload and guard mutation; forward reachability or exclusion of the three bank-export candidates; property-`0x244` writers and reload transitions. |
+
+#### Finite initial-domain source cut
+
+One inherited-state candidate is incompatible with a specific stock entry path. Physical key 7 selects UI-root default row `0x30`; in root state 3, cell `0x00ce0290 = 0x00010061` selects `0x00c24994`. That function calls `0x00d3a678` before `0x00c09d24`. With latch byte `0x00950110 == 1`, the gate refuses key 7: `0x00d35f3c` is exactly `currentKey < 0x600`, and the permissive latch-1 exceptions require key 9 or `0xb`. Thus an initial pending-5/latch-1 state does not reach the hook through this root-3 action.
+
+The configured transition does not add a callback after that refusal: `u32[0x00d0013c] = 0x00cfdf34` is the root transition vector and its transition-1 slot `0x00cfdf38` is null.
+
+The normal owner is task 1, created by `0x00d0a238` with entry `0x00c22f60`. Its loop consults two internal event rings before receiving queue 1 and invokes `0x00bfbd20 → 0x00bfb20c`. This binds a stock consumer and its action boundary, not an empty-queue observation. The framework invokes an action before its transition. The current guard does not explicitly pin root state 3, and alternate root handlers, writer/reentry ownership and transient pending-5/latch-0 windows remain open.
+
+The pending-control publisher `0x00d350c4` publishes A05 through `0x006334dc` before setting `0x00950110 = 1`, then copies the current event. Any persistent pending/latch invariant needs the stock UI-owner serialization. The enqueue alone does not establish that invariant across cores.
+
+The non-latching initial writer has a narrower configured source path. `0x006330d8` can change pending 3 to 5 inside `0x00635280`; `0x00639b1c` then calls `0x00637478` and `0x0063975c`, which consumes and clears pending before returning. The configured coordinator's row-0/state-0 cell `0x00817724 = 0x0102` selects `0x0073e0b0`, whose `0x0073ccb8 → 0x00639b1c` call returns before its root-1 publication. A scan of both pinned images finds aligned immediate callers only along this constructor chain and no aligned pointer to its four inner entries. This narrows that transient writer; it is not computed-reentry, foreign-writer or complete initial-work closure.
+
+The separate aligned-reference census binds all 17 immediate caller entries of `0x00c09d24` to literal slots in the UI-root function vector, and the sole aligned `0x00c58c38` pointer to `0x00d01518`. It does not prove that computed pointers or an alternate actor cannot enter these paths.
+
+The extra literal-9 producer `0x00c327a0` is not a direct physical-S1 action. Its sole aligned pointer `0x00cfe244` selects UI module `0x31`, row 1, states 0 through 4. `0x00c029d0:12–20` selects that row for key `0x10`, qualifier `0x80`. This binds a key-`0x10` release action, not key 7 or its release. Internal production of key `0x10`, dynamic arguments to `0x00d350c4`, and the earlier literal-3 producers remain separate joins.
+
+The selected physical-root-3 prefix also has an owned timer path. Before `0x00c09d24`, `0x00c24994 → 0x00d0c188` can reach `0x00d0bf78`: `u32[0x009500ec]` must differ from `0xb`, the argument must differ from `u32[0x0094f6e4]` and `u32[0x0094f6f0]`, and `u32[0x0094f664] != 0x20e`. Unless byte `0x0096b465 = 1`, a nonzero property-`0x36`-selected delay arms callback `0x00d0a8f4` through `0x00d0b97c → 0x00db51dc → 0x0069b328`, with handle destination `0x0094f934`. That callback publishes queue-1 event `0xa02`. Its root-state-3 action `0x00c23f0c` calls `0x00c09d24` and, on `0xffffffff`, invokes notification `0x00d38f34(0x11)` and pending writer `0x00d350c4(0xe)`. UI `0x4a`/row `0x90`/state 9 selects the exact-constant-`0xffffffff` action `0x00c61aec`; other states have their own predicates. The timer-cancel chain `0x00d0bf3c → 0x00d0ba20 → 0x00db5214 → 0x0069b7a4` has not been shown to remove an already queued `0xa02`. Callback scheduling, normal initial handle state and its composition with selected S1 remain open. This is an internal-work candidate, not a proved forbidden continuation or a proved cancellation race.
+
+Notification identifiers are not UI-input identifiers. The pre-dispatch `0x00d3d658 → 0x00d38d28(0x935)` branch maps through `0x00db68dc` to notification `0x5054` and `0x00db6804`, subject to inhibition and duplicate suppression. It is not a bound queue-1 key-`0x935` producer. These source cuts are recorded separately in `private-data/analysis/x-m1-1.50/af/s1-ui-owned-events-cut.txt`.
+
+This is a partial cut for proof order A, not complete initial-domain closure or an E7 exclusion. A later A05 replay is not physical key 7 and can reach a C-query without this physical-input gate. Subsequent selected events, all 15 query responses and stop/201 completion still need composition. The separate author artifacts are `private-data/analysis/x-m1-1.50/af/s1-initial-domain-cut.txt`, `af/s1-initial-owner-addendum.txt` and `af/s1-ui-entry-candidates.json`; the original design packet and independent review remain unchanged.
+
+#### Conditional fifteen-child query composition
+
+The ordered `0x00ca4bb8:23–43` query has a source-bound sufficient response vector, not yet a selected-S1 history. With APP word `u32[0x0094f64c] = 0xc`, each listed UI actor in state 0, and the two additional query-time predicates below, all 15 children return `0xffffffff`:
+
+| Order | UI module / row | State-0 action | Additional query-time predicate |
+| --- | --- | --- | --- |
+| 1 | `0xa6 / 0` | `0x00ccf3e8` | None |
+| 2 | `0x1a / 4` | `0x00c2d03c` | None |
+| 3 | `0x1e / 0x44` | `0x00c2d8d4` | None |
+| 4 | `0x8f / 3` | `0x00cc3470` | None |
+| 5 | `0x18 / 6` | `0x00c2caa8` | None |
+| 6 | `0x16 / 6` | `0x00c2b910` | None |
+| 7 | `0x1c / 3` | `0x00c2d650` | None |
+| 8 | `0x1d / 3` | `0x00c2d754` | `u32[0x00951560] != 1` |
+| 9 | `0x1f / 0x16` | `0x00c2f984` | Mode `u32[0x00956838] != 0x1f` |
+| 10 | `0x17 / 0xc` | `0x00c2bc5c` | None |
+| 11 | `0x1b / 4` | `0x00c2d3f4` | None |
+| 12 | `0x20 / 6` | `0x00c31754` | None |
+| 13 | `0x8e / 8` | `0x00cc32bc` | None |
+| 14 | `0x6b / 6` | `0x00caacb4` | None |
+| 15 | `0x76 / 4` | `0x00cb41e4` | None |
+
+The 13 unconditional actions have the same six-word constant-return body. The selected branches of the other two actions have no shared-state stores or calls. Every listed cell has null transition 1. The common `0x00bfb028 → 0x00d0cc68` pre-call writes only the dispatch-context halfwords before an empty `0x00d3cde8`; wrappers 9 and 10 can additionally call `0x00635ec0`, whose sole store is `u32[0x00951508] = argument`. None of those bound effects changes APP, the remaining queried actors, `0x00951560` or mode. Thus the synchronous response vector composes within one UI-owner invocation if no foreign writer changes those fields. Ownership and absence of foreign writes are conditions still to prove, not inferred from a snapshot.
+
+An all-`0xffffffff` vector invokes `0x00bff63c`. APP `0xc` then selects module `0x19`, row 0; in state 0 its action is `0x00c2cd30`. That action calls `0x00d3cf28` before testing `u32[0x00950438]`: only a value other than 1 takes `0x00d191f0` and its opcode-`0x201` request. The other branch invokes notification `0x00d38d28(0x50d)`, not by itself a bound queue-1 event. These module-`0x19` and flag conditions are additional to the 15-child lemma.
+
+The selected S1's APP-`0xc` producer, query-time actor states, pending-5 production/preservation, request-stop ordering and successful `0x201` completion are not yet composed. Admission-time mode is not a lifetime invariant. The lemma neither establishes initial-work closure nor makes the E7/FileTask suffix feasible. Byte-backed cell/action inventories and the conditional proof are separate author artifacts `af/s1-query-cells-first.txt`, `af/s1-query-cells-second.txt` and `af/s1-query-idle-lemma.txt`; the frozen review packet is unchanged. Stage 1 remains **NON-ADMISSIBLE**.
+
+
+
+#### Selected bank-writer predicates and review sources
+
+These selections identify the reverse candidates precisely. They do not establish a forward path from admitted S1.
+
+| Candidate | Required dispatch selection |
+| --- | --- |
+| `0x00ec88c8` | System module 9, message `0x603`, state 0, cell `0x00ec5152 = {0x06,0x01}`, then cached status `u32[u32[0x015c20a8] + 0x224] = 0`. Its UI publisher `0x00c32588` uses token `0x1540` and is selected by `APP2C3` initial row 0/state 0. |
+| `0x00ecc654` | Task-7 module 2, message `0x1707`, first payload byte `0x21`, row 25 and state in `{0,1,2,3,5,6}`. The function-table slot is `0x1c`; state 4 selects another action. |
+| `0x00ecc66c` | Task-7 module 2, message `0x1707`, first payload byte `0x22`, row 26 and state in `{0,1,2,3,5,6}`. The function-table slot is `0x1d`; state 4 selects another action. |
+
+The `0x00dc7564` interface is exported by `0x00ecc104`, selected by Task-7 module 0 message `0x1705` in state 0 or 3. The registration alone does not prove that the interface is external-only; the queue-`0x24` consumer's operation ownership remains open.
+
+The default initializer `0x0069f144` clears `0x420000` bytes, then applies 125 ROM entries from `0x007c8a44` through `0x007c8c34`, ending at sentinel `0x007c8c38`. None names property `0x244` or any of the seven diagnostic guards, so those bytes are zero after that initializer returns. The valid-bank branch of `0x0069f204` does not reset `0x244`. Later full/paged reloads and generic byte stores remain separate writer routes.
+
+Kind-6 completion has a source-bound store: after `0x0069f920` returns, common tail `0x0073b69c` reads its completion word and, if zero, `0x0073b6ac` (`E7863105`, `STR r3,[r6,r5,LSL #2]`) writes 1 to `u32[0x00944458]` before releasing its completion semaphore. The earlier `0x0073b69c` (`E7963105`) is the load, not the store. Its reset/alias owners, visibility and ordering against admission are not closed, so it is not an accepted readiness guard. Startup action `0x0073eba8` sets child-5 state 2 before its asynchronous kind-6 request; that child's readiness callback does not itself establish completion. Nor is reload idempotence proved: valid-bank startup's raw NAND read and `0x006a9ac4`'s logical-map read have not been bound to the same source.
+
+This latch records a returned attempt, not validated bank data. The shared tail derives callback error status from `r8` at `0x0073b6e0-0x0073b6e8`, but kind-6 callee `0x0069f920` ignores its underlying reload return values and returns 0. A nonzero return from that callee has not been established.
+
+Normal startup does not supply a kind-6 callback witness through `0x0073cd4c`: its `(6,0,0)` request has a null callback, and the subsequent `0x0073cce8(3)` is another asynchronous null-callback request, not a barrier. The retained develop-job lists narrow one existing synchronous-wait lead to jobs `0x03/0x0c/0x0d/0x0e/0x0f`; its `0x00e9bd88 → 0x00e54c84` call requires frame field `+0x27cc == 0`, then `0x00e51858() != 3`. Those job identities have not been mapped to the initial preview or admitted S1. They are not a completion witness without that mapping.
+
+The retained design packet is `private-data/analysis/x-m1-1.50/af/s1-design-review-packet.txt`. Its source windows are relative to `private-data/analysis/x-m1-1.50`:
+
+| Evidence | Source window |
+| --- | --- |
+| Normal startup and actor creation | `lz/id4.dis:131933-132017`, `:131573`, `:293629-293632`, `:294717-294742`; startup descriptor `:131734-131752` |
+| Root publication order | `lz/id4.dis:296817-296823` |
+| E7 publication and callback | `af/functions/00ec3740.c:1-12`, `00ec6790.c:1-34`, `0071f550.c:1-33`, `0071fde4.c:1-19`, `00ec591c.c:1-19` |
+| Bank read/default/store contracts | `af/functions/0069f920.c:1-71`, `0069f144.c:1-23`, `0069f204.c:1-31`, `0069fe20.c:1-21`, `0069fc94.c:1-8`, `00dc7564.c:1-61` |
+| Export request selectors | `af/functions/00ec1b5c.c:1-54`, `00ec34a0.c:1-31`, `00ec8eac.c:1-19`, `00ec9314.c:5-9`, `00eca4c0.c:13-36,162-170`, `00ec9b50.c:1-37` |
+| Mechanically extracted ROM cells and pointer vectors | `af/s1-ecc654-ecc66c-registration-extract.txt`, `af/s1-registration-followups.txt`, `af/s1-bank-default-key-extract.txt` |
+
+
+
+### Selected staged implementation
 
 | Option | What it could unblock | Risks and advancement boundary |
 | --- | --- | --- |
-| Repair the SD slot | Ordinary stock AF with a usable card, plus capture/save/playback and the missing card-backed recovery route | Physical connector/board damage and repair quality are separate risks. A repair decision and its physical operation belong to the owner; afterward establish normal card recognition and ordinary behavior before AF comparison. This adds no firmware bypass. |
-| Establish a stock no-card AF route | A pure NO CARD-only still state passes the bound S1 media-error predicate, conditional on other gates | The stock absent branch requires the detect input to read absent/high. Run 3 sampled present despite an empty slot; no unchanged-detect mode/power workaround is established. Restore the electrical absent indication or first confirm the current RAM scanner state. AF success remains unproved; SHOOT WITHOUT LENS does not bypass CARD ERROR, and video additionally rejects NO CARD. |
-| Review a minimal transient AF-only admission override | A narrowly scoped ordinary S1 experiment if the required stock route does not exist | This is a new privileged RAM mechanism, not approval to patch a global media-ready result. Bind the local predicate, all bypassed checks, task/PC safety, S2/capture exclusion, cancellation and bounded completion. Keep storage workers, filesystem results and persistent settings untouched; use the reviewed installer, independent review, scoped authorization, power removal and post-reboot stock-word reads. The broken slot still removes the recovery route. |
+| Deferred slot replacement | Restore ordinary storage, playback and the missing SD recovery route later | The damaged slot remains outside this software mechanism. |
+| Stage 1: still-S1 admission | Stock AF initiation despite CARD ERROR, preserving every other stock inhibition | One entry-word publication through the shared installer; source-bound post-admission storage analysis, emulator admission proof and independent mechanism review are required. Admission is not proof of AF completion or USB-attached optical behavior. |
+| Stage 2: no-save S2 capture | Complete a stock exposure and processing transaction, then discard the frame or provide a separately bounded export lease | Save launch and completion must be replaced as a transaction, while release and preview restoration still run. Metadata/file-number preparation before save, cancellation and all storage side effects need their own closure. |
 
-These are alternatives for the owner's decision, not authorization or a selected implementation. An AF-only admission override would not implement fresh exposure capture-to-RAM, establish buffer ownership, replace storage completion or satisfy capture/save/playback acceptance. The rejected recorder remains unchanged; an admission override and any future necessary observation hook have distinct justification and review scopes.
+Only stage 1 is implemented here. Stage 2 is a design, not an S2 permission or a capture implementation. The rejected recorder remains unchanged; admission, no-save completion and any future indispensable observation hooks have distinct justification and independent-review scopes.
+
+### Stage-1 publication and review brief
+
+`menu/cardless_af.c`, `menu/cardless_af_hooks.S`, `menu/cardless_af_ram.ld` and `menu/cardless_af_allowlist.json` define a stateless target C guard with an assembly ABI veneer in an owned `0x2000` allocation. Content occupies at most the first `0x1000`; the unchanged shared installer source follows at the next 32-byte boundary. ABI 6 has zero setup entries and one activation entry: address `0x00d19324`, old word `0xe92d4800`, new word a range-checked A32 `B` to `cardless_af_admission`. Both continuation branches are range-checked by the linker and mechanically restricted to `0x00d19328` and `0x00d19340`.
+
+The Haskell builder `//host/firmware:build-cardless-af-ram` checks the private image-5 identity, source-bound guard/prologue words, pinned relink tools, allocation/publication nonoverlap, ELF confinement, instruction/call/store allowlist and specialized installer entries. Internal branches must remain in their owning function and target A32-mapped code; only the veneer may call the guard or branch to the two stock continuations. It emits the normal runtime and publication manifest through `build-cardless-af-ram.sh`. Existing installer source/ABI, old payload offsets and review pins are unchanged. New count specialization is a separate reviewed-byte question, not a byte-identity claim.
+
+The observed ABI-6 installer entries, relative to its own start, are install `0x5ac`, rollback `0x7c0` and status `0x7ec`. These are additive registrations for the new payload; the 253-publication and rejected-ring offsets remain unchanged. The one-publication compiler specialization is materially larger than the earlier six-publication diff: it removes loops and changes conditional-return lowering as well as immediates and register allocation.
+
+The complete `llvm-objdump -dr --print-imm-hex` listings of the retained 253 object and the new `ram_push_installer.o`, their unified diff and a 22-section census are retained under `private-data/analysis/x-m1-1.50/cardless-af/installer-*`. Nine text sections differ; the other thirteen have identical instruction and relocation listings. This inventory includes literal-pool/relocation movement inside changed sections, not just source-level count substitutions.
+
+| Changed installer section | Instruction inventory against the 253 object |
+| --- | --- |
+| `validate_old_words` | Replaces the 253-entry loop with one `LDRD r0,r1,[r0]` address/old-word load, one live-word comparison, conditional error return and one validation-counter increment. 21 instructions become 14. |
+| `validate_rollback_words` | Replaces the loop with one `LDRD r2,r3,[r0]`, old/new comparisons, conditional loads/return and one counter increment. 25 instructions become 16. |
+| `peer_park_action` | At `+0x120`, `e3a010fd MOV r1,#253` becomes `e3a01001 MOV r1,#1`. |
+| `synchronize_current_core` | Removes the iteration/back-edge and fixes the publication index at zero; preserves the cache-line operation, DSB, instruction-cache invalidation and ISB. Saved-register selection changes from `r4,r5` to `r4,r10`. 23 instructions become 18. |
+| `read_peer_report` | At `+0x54`, `e25100fd SUBS r0,r1,#253` becomes `e2510001 SUBS r0,r1,#1`. |
+| `execute_operation` | ABI immediate 2 becomes 6; the count/alignment/phase loop becomes one alignment test and phase-equals-one check; publication-count immediate 253 becomes 1. Operation/context registers change from `r8,r10` to `r5,r8`; the early-return block moves, branch destinations and literal loads move, and call relocations follow their new instruction offsets. 105 instructions become 96. |
+| `store_new_words` | Replaces the loop and setup/activation selection with one new-word store and one activation-counter increment. 20 instructions become 11. |
+| `restore_old_words` | Replaces reverse iteration with `LDRD r0,r1,[r0]`, one old-word store and one rollback-counter increment. 16 instructions become 10. |
+| `peer_cache_action` | At `+0x40`, `935700fd CMPLS r7,#253` becomes `93570001 CMPLS r7,#1`. |
+
+The three newly introduced publication-table `LDRD` sites load the first address/old-word pair at entry offset zero. The linker aligns the sole publication to eight bytes and the builder checks its absolute alignment. The other retained doubleword loads are not new count-one lowerings.
+
+The review question is whether these single-publication lowerings preserve validation, all-or-rollback publication, cache synchronization and failure semantics for counts `(setup=0, activation=1)`, including the new paired loads and their alignment. They are not only count/ABI immediate changes, and byte identity with the 253 installer is not claimed.
+
+The live camera CLI explicitly refuses this new unreviewed payload kind. The H0 harness `//emulation:cardless-af-e2e` may allocate, upload and execute the installer in the emulator; its admission cases execute real stock predicate bodies with isolated, explicitly synthetic RAM media status 4 and active warning `0x13`. The optional device-driven `present-init-fails` fixture is a distinct provenance class. Predicate success does not establish the asynchronous AF request's storage safety or a completed optical search.
+
+The native executor admits only the additional non-PC `MRS CPSR` read and register-source flags-only `MSR` needed to preserve entry flags. SPSR, control-field writes, PC operands, immediate MSR, unsupported R5-only features and exclusive dependencies remain refused. The payload itself contains no exclusive access or multiprocessing instruction.
+
+The independent reviewer must answer:
+
+- Do the LR/frame/mode/argument guards bind the intended still-S1 call, and do both tails reproduce the displaced prologue and stock stack/register/flags contract?
+- Does resuming at `0x00d19340` omit only warning `0x13`, with every other warning/lens/battery/mode/readiness inhibition still intact?
+- Does argument `0x100` retain the UI-generated S2 warm-up refusal while argument-zero S1 and `0x110` replay retain their stock remaining checks, with the indistinguishable GPIO-generated `7,0` record and no-external-S2 contract stated explicitly?
+- Does the single-word publication remain safe for suspended PCs at entry, entry+4 and later body locations, without relying on a global exclusive monitor?
+- Does the source-bound post-admission graph exclude every SD-controller, filesystem, file-numbering and NAND-program/erase path, including asynchronous callbacks, while permitting only the stated stock read-only internal firmware/calibration fetches?
+- Do the initial actor/input guards select the proved domain without assuming those fields remain constant, and do the property-bank, diagnostic-flag and capacity-refresh exclusions remain valid where their asynchronous source proofs require them?
+- Does the one-publication ABI-6 installer preserve the shared rendezvous, publication/cache ordering and failure behavior despite its compiler specialization?
+- Do the synthetic/device-driven fixture provenance and bounded admission results support only their stated scope, and does the proposed body session end through power removal plus post-reboot stock-word reads?
+
+Stage-1 body operation is H2 with new mechanism bytes. It requires independent review, the owner's scoped go and a bounded proposal that excludes S2. A new session must verify the hook/context words, retain stock trace before and after its one ordinary S1 attempt, and stop on any unexpected behavior. End by removing battery power, reboot stock and read back `0x00d19324` plus the unchanged continuation/context words; do not invoke unload/free while a hook context may remain suspended.
 
 
 ## G4/G5-gated internal bindings (question three)
