@@ -52,6 +52,12 @@ instance FromJSON RingMetadata where
         '0' : 'x' : digits | not (null digits), length digits <= 8, [(value, "")] <- readHex digits -> pure value
         _ -> fail "metadata address must be a 32-bit 0x-hex address"
 
+data Completion = Completion Bool Bool deriving (Eq)
+
+instance FromJSON Completion where
+  parseJSON = withObject "AF ring completion" $ \fields ->
+    Completion <$> fields .: "unloaded" <*> fields .: "allocation_retained_until_power_off"
+
 data Engine = Retained | FujiMod deriving (Eq)
 
 data Options = Options
@@ -326,12 +332,16 @@ run options = do
         case (decodeAfRing expectedBytes, decodeAfRing actualBytes) of
           (Right expected, Right actual) -> require (expected == actual) ("AF decoder outcomes differ: " ++ phase)
           _ -> ioError (userError ("AF counterpart capture does not decode: " ++ phase))
-    expectedComplete <- B.readFile (retained </> "e2e-complete.json")
-    actualComplete <- B.readFile (receipt </> "e2e-complete.json")
-    require (expectedComplete == actualComplete) "AF mandatory-unload receipts differ"
+    expectedComplete <- readCompletion (retained </> "e2e-complete.json")
+    actualComplete <- readCompletion (receipt </> "e2e-complete.json")
+    require (expectedComplete == Completion True True && expectedComplete == actualComplete)
+      "AF mandatory-unload receipts differ or do not establish unload"
     writeJson (receipt </> "counterpart.json") (object
       ["equal" .= True, "captured_bytes" .= True, "decoder_outcomes" .= True, "mandatory_unload" .= True])
   putStrLn ("AF ring e2e complete: " ++ receipt </> "e2e-result.json")
+
+readCompletion :: FilePath -> IO Completion
+readCompletion path = B.readFile path >>= either (ioError . userError) pure . eitherDecodeStrict'
 
 captureBytes :: FilePath -> IO B.ByteString
 captureBytes directory = do
