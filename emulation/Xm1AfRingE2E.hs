@@ -345,10 +345,10 @@ readCompletion path = B.readFile path >>= either (ioError . userError) pure . ei
 
 captureBytes :: FilePath -> IO B.ByteString
 captureBytes directory = do
-  names <- filter ((== ".bin") . takeExtension) <$> listDirectory directory
+  names <- filter (\name -> "ram-" `isPrefixOf` name && takeExtension name == ".bin") <$> listDirectory directory
   case names of
     [name] -> B.readFile (directory </> name)
-    _ -> ioError (userError ("AF capture directory must contain one binary: " ++ directory))
+    _ -> ioError (userError ("AF capture directory must contain one RAM capture binary: " ++ directory))
 
 main :: IO ()
 main = do
