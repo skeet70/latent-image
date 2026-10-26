@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "TEBcULySFO6AxvTcL2q24qXBHs0V8Tfw/PaFJYDY7ag=",
+        "bzlTransitiveDigest": "jKa1TDErb3CQuyoFalCcUpIiAuhRswoKB8fUdeokSbw=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -463,7 +463,7 @@
                 "--max-jobs",
                 "2",
                 "--cores",
-                "4"
+                "2"
               ],
               "quiet": false,
               "fail_not_supported": true
@@ -516,7 +516,7 @@
                 "--max-jobs",
                 "2",
                 "--cores",
-                "4"
+                "2"
               ],
               "quiet": false,
               "fail_not_supported": true
