@@ -584,7 +584,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
       , (cpu0Exit, "cpu0-window-exit")
       , (cpu1Exit, "cpu1-window-exit")
       , (menuMessageDrawer, menuMessageSite)
-      ] ++ [(d3HookEntry, d3HookSite) | payloadKind selected == RecipeBankD3] ++ fetchSites ++ declaredSites plan
+      ] ++ [(payloadInstallerStart selected base - 0x244, d3HookSite) | payloadKind selected == RecipeBankD3] ++ fetchSites ++ declaredSites plan
     privateDirectory pushDirectory
     (statePath, installMailbox) <- case restoredHost of
       Just host -> do

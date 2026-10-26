@@ -779,6 +779,27 @@ Agent decisions pending owner review (stage 4, 2026-10-19).
 
 A refused bank resume whose ordinary-state rollback also refuses retains base cleanup bound to the opening media identity. The current mode and class remain fixed while cleanup is pending. The residual logical footprint is read back through the stock getter; it must be removed and verified before any subsequent ordinary-base capture or activation.
 
+### 18.11 Classic Chrome bank encoding
+
+**Owner decision (2026-10-25):** Approved format 3 and its rollback policy: "I think yes it's approved either way".
+
+The combined RAM bank reserves conversion row 2, stored code `0xd` and downstream film `0xd` for Classic Chrome. D3 A moves from row 2/code `0xd` to appended row 13/code `0xf`; its downstream base remains PROVIA. D3 B stays at row 4/code `0xe` with its Velvia base. Shooting/Q indices 0-8 remain ordered and Classic Chrome appends at index 9, token 2. D3's tables and hook move into the allocated bank region; Classic Chrome owns the `0x0061c200..0x0061c400` prefix window.
+
+Format 3 retains format 2's 1024-byte layout and changes the header version to distinguish those film meanings. The Classic Chrome reader migrates format-2 D3 A from code `0xd` to `0xf` in the valid base and every populated saved/working payload before admission. Names, selection, auto-update, generation, D3 B and all other payload bits are preserved. A format-2 code `0xf` is invalid, not an already migrated D3 A. Format 1 is not admitted by the Classic Chrome reader.
+
+| Reader | File | Result |
+| --- | --- | --- |
+| Classic Chrome bank | v2, D3 A stored as `0xd` | Load as D3 A stored as `0xf`, never as Classic Chrome. |
+| Classic Chrome bank | v3, Classic Chrome `0xd` or D3 A `0xf` | Load and round-trip with those meanings. |
+| Legacy D3 flash bank | v2, D3 A `0xd` | Existing D3 A behavior. |
+| Legacy D3 flash bank | v3 | Refuse that file by its version. |
+
+For an existing v2 bank, the CC-aware storage path presents the same names and choices, including D3 A. Load does not rewrite the source file. The next successful normal write stores v3 in the nonwinning file and retains the winning v2 generation. A rollback reader may load that older v2 file while refusing the newer v3 file; restoring both backed-up v2 files is the downgrade boundary.
+
+The deployed combined RAM candidate still uses `RB_VOLATILE_BANK`: it starts empty and does not read SD bank files. The compatibility matrix applies to the host codec and the CC-aware storage kernel, not a claim that this RAM deployment gained SD persistence or that a new flash installation was accepted. Text import writes v3; legacy-bank export refuses rather than relabelling D3 A as Classic Chrome.
+
+Behavioral verification `E-CC-BANK-FORMAT-3-150` (emulated) covers the compatibility matrix in the host codec and the native SD kernels. The CC-aware kernel reads v2 D3 A as code `0xf` across all seven saved/working pairs and the valid base, leaves both source files unchanged on load, and writes the migrated v3 image only on a normal mutation. The legacy kernel refuses v3. CC v3 round-trips, preserves auto-update and rejects legacy code `0xf`. These checks do not approve the format decision or enable SD persistence in the volatile deployment.
+
 ## 19. Implemented host tooling, prerequisites and smoke commands
 
 Built in this pass, host-only and offline:

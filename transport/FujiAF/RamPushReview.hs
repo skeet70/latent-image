@@ -276,7 +276,7 @@ parseReviewRecord document = do
     _ -> reject "review record kind mismatch"
   reviews <- list "reviews" (field value "reviews") 256 >>= mapM parseReview
   checks <- list "content_checks" (field value "content_checks") 256 >>= mapM parseCheck
-  pinValues <- list "pins" (field value "pins") 32
+  pinValues <- list "pins" (field value "pins") 64
   pins <- forM pinValues parsePin
   contract <- parseContract (field value "publication_contract")
   let reviewIds = map reviewId reviews

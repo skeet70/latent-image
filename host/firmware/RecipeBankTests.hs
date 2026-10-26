@@ -3,6 +3,7 @@
 module Main where
 
 import Control.Monad (forM_)
+import Data.Bits ((.&.), (.|.))
 import qualified Data.ByteString as B
 import Data.Char (isHexDigit, ord)
 import Data.List (isInfixOf)
@@ -150,12 +151,49 @@ bankFileTests = do
         (v1Slots old == [V1Populated (named "A") (payload savedA), V1Populated (named "PORTRA 400") (payload savedB), V1Unpopulated, V1Unpopulated, V1Unpopulated, V1Unpopulated, V1Populated (named "RECIPE 01 XY") (payload savedG)])
         "v1 populated names, payloads or empty slots changed"
       H.ensure (migrateV1 old == migrated) "v1 migration changed saved settings or initialization policy"
-    DecodedV2 _ -> H.failH "a literal v1 file decoded as v2"
+    _ -> H.failH "a literal v1 file decoded as a later format"
   H.ensure (decodedState oldDecoded == migrated) "v1 reload did not initialize working=saved, NONE, DISABLE and invalid base"
   H.ensure (decodeBankFile newWire == Right (DecodedV2 resident)) "literal v2 state did not reload"
   H.ensure (encodeBankFile resident == Right newWire) "v2 emission differs from the independent literal wire"
   H.ensure (valid oldWire == ValidFile oldDecoded) "safe synthetic v1 was refused"
   H.ensure (valid newWire == ValidFile (DecodedV2 resident)) "safe synthetic v2 was refused"
+  let ccWire = repairChecksum (putByte newWire 4 3)
+      validCc = classifyBankFileFor ClassicChromeFilmEncoding syntheticDomain
+      encodingRejected encoding wire = case classifyBankFileFor encoding syntheticDomain wire of
+        StructurallyInvalid _ -> True
+        _ -> False
+  H.ensure (encodeBankFileFor ClassicChromeFilmEncoding resident == Right ccWire) "Classic Chrome bank emission differs from the independently versioned wire"
+  H.ensure (decodeBankFile ccWire == Right (DecodedV3 resident)) "Classic Chrome state did not reload"
+  H.ensure (validCc ccWire == ValidFile (DecodedV3 resident)) "Classic Chrome bank rejected matching encoding"
+  H.ensure (encodingRejected ClassicChromeFilmEncoding oldWire) "Classic Chrome bank accepted an unsupported v1 encoding"
+  H.ensure (validCc newWire == ValidFile (DecodedV3 resident)) "Classic Chrome bank did not migrate an ordinary v2 bank"
+  H.ensure (encodingRejected D3FilmEncoding ccWire) "D3 bank accepted the Classic Chrome film encoding"
+  forM_ [13,15] $ \film -> do
+    let filmPayload = payload (putByte savedA 0x24 ((B.index savedA 0x24 .&. 0xf0) .|. film))
+        filmState = resident {bankRecords = records [Populated (named "CHROME") filmPayload filmPayload, Unpopulated, Unpopulated, Unpopulated, Unpopulated, Unpopulated, Unpopulated], bankSelection = NothingSelected}
+        filmDomain = syntheticDomain {domainTables = (0xfe,map FieldCode [0,1,3,0xb,13,14,15]) : filter ((/= 0xfe) . fst) (domainTables syntheticDomain)}
+    filmWire <- either H.failH pure (encodeBankFileFor ClassicChromeFilmEncoding filmState)
+    H.ensure (decodeBankFile filmWire == Right (DecodedV3 filmState)) "a four-bit Classic Chrome or relocated D3 film code changed on reload"
+    H.ensure (classifyBankFileFor ClassicChromeFilmEncoding filmDomain filmWire == ValidFile (DecodedV3 filmState)) "the matching film domain rejected a Classic Chrome or relocated D3 recipe"
+  let withFilm bytes film = payload (putByte bytes 0x24 ((B.index bytes 0x24 .&. 0xf0) .|. film))
+      filmDomain = syntheticDomain {domainTables = (0xfe,map FieldCode [0,1,3,0xb,13,14,15]) : filter ((/= 0xfe) . fst) (domainTables syntheticDomain)}
+      d3State code = resident
+        { bankBase = BaseValid P (withFilm basePayload code)
+        , bankRecords = records [Populated (named "D3 A") (withFilm savedA code) (withFilm workingB code), Populated (named "D3 B") (withFilm savedB 14) (withFilm savedB 14), Unpopulated, Unpopulated, Unpopulated, Unpopulated, Unpopulated]
+        }
+      legacyD3 = d3State 13
+      migratedD3 = d3State 15
+  d3Wire <- either H.failH pure (encodeBankFile legacyD3)
+  H.ensure
+    (classifyBankFileFor ClassicChromeFilmEncoding filmDomain d3Wire == ValidFile (DecodedV3 migratedD3))
+    "v2 D3A code 13 did not retain D3A as code 15 in the base, saved and working payloads"
+  migratedWire <- either H.failH pure (encodeBankFileFor ClassicChromeFilmEncoding migratedD3)
+  H.ensure (decodeBankFile migratedWire == Right (DecodedV3 migratedD3)) "migrated D3 settings did not round-trip in v3"
+  H.ensure (encodingRejected D3FilmEncoding migratedWire) "the v2 reader admitted a migrated v3 bank"
+  invalidLegacy <- either H.failH pure (encodeBankFile migratedD3)
+  H.ensure
+    (case classifyBankFileFor ClassicChromeFilmEncoding filmDomain invalidLegacy of UnsafeFile _ _ -> True; _ -> False)
+    "a legacy file with unassigned code 15 became an admitted D3A recipe"
   reloaded <- either H.failH (pure . decodedState) (decodeBankFile newWire)
   case bankRecordAt C2 (bankRecords reloaded) of
     Populated name saved working -> do

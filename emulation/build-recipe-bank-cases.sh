@@ -10,6 +10,13 @@ case "$RB_MODE" in
   *) echo "RB_MODE must be sd or volatile, not '$RB_MODE'" >&2; exit 2 ;;
 esac
 if [ "$RB_MODE" = volatile ]; then MODE_SUFFIX=-volatile; else MODE_SUFFIX=; fi
+RB_FILM_ENCODING="${RB_FILM_ENCODING:-d3}"
+FILM_DEFS=()
+case "$RB_FILM_ENCODING" in
+  d3) ;;
+  classic-chrome) FILM_DEFS=(-DRB_CC_BANK=1); MODE_SUFFIX="$MODE_SUFFIX-cc" ;;
+  *) echo "RB_FILM_ENCODING must be d3 or classic-chrome" >&2; exit 2 ;;
+esac
 RB_BASE="${RB_BASE:-0x00be1f00}"
 RB_NAME_RECORD="${RB_NAME_RECORD:-0x00beb784u}"
 BUILD_DIR="${BUILD_DIR:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/kernel-build$MODE_SUFFIX}"
@@ -17,6 +24,10 @@ OUT_DIR="${OUT_DIR:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013
 KERNEL_DIR="${KERNEL_DIR:-}"
 if [ "$RB_MODE" = volatile ] && [ -n "$KERNEL_DIR" ]; then
   echo "RB_MODE=volatile builds its own kernel; KERNEL_DIR must be unset" >&2
+  exit 2
+fi
+if [ "$RB_FILM_ENCODING" = classic-chrome ] && { [ "$RB_MODE" != sd ] || [ -n "$KERNEL_DIR" ]; }; then
+  echo "Classic Chrome compatibility cases build their own SD kernel" >&2
   exit 2
 fi
 RUNNER="${RUNNER:-bazel-bin/emulation/native-runner}"
@@ -52,7 +63,7 @@ else
     fi
     case "$src" in
       *.c) env $HARDEN clang "${ARM[@]}" "${FREESTANDING[@]}" -Oz -Wall -Wextra \
-        -DRB_NAME_RECORD="$RB_NAME_RECORD" "${volatile_def[@]}" -c "$src" -o "$obj" ;;
+        -DRB_NAME_RECORD="$RB_NAME_RECORD" "${volatile_def[@]}" "${FILM_DEFS[@]}" -c "$src" -o "$obj" ;;
       *.S) env $HARDEN clang "${ARM[@]}" -c "$src" -o "$obj" ;;
     esac
     OBJS+=("$obj")
@@ -103,4 +114,4 @@ if [ -n "${CASE:-}" ]; then CASE_ARGS=(--case "$CASE"); fi
 "$GEN" --runner "$RUNNER" --build "$BUILD_DIR" --out "$OUT_DIR" --jobs "$JOBS" \
   --rb-base "$RB_BASE" --fields "$FIELDS" --id4 "$ID4" --id4-base "$ID4_BASE" \
   --id5 "$ID5" --candidate "$CANDIDATE" --host-fixtures "$HOST_FIXTURES" \
-  --bank-mode "$RB_MODE" "${BOOT_ARGS[@]}" "${CASE_ARGS[@]}"
+  --bank-mode "$RB_MODE" --film-encoding "$RB_FILM_ENCODING" "${BOOT_ARGS[@]}" "${CASE_ARGS[@]}"

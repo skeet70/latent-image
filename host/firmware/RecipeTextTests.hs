@@ -138,6 +138,12 @@ realRecipeChecks = do
   check
     "the second Velvia entry round-trips byte for byte"
     (reimportedPayload testBase (payloadOf testBase second) == payloadOf testBase second)
+  let chrome = fixture (parseRecipeText "chrome" "Film Simulation: Classic Chrome\n")
+      chromePayload = payloadOf testBase chrome
+  check "Classic Chrome parses as a supported film" (fieldFilm (textFields chrome) == Just ClassicChrome)
+  check "Classic Chrome stores code 0xd" (lookup 0xfe (recipePairs (fst (fixture (fillRecipe testBase chrome)))) == Just (StoredCode 0x0d))
+  check "Classic Chrome exports with its canonical film name" (fmap fst (exportRecipeText testBase (textName chrome) chromePayload) == Right "Name: chrome\nFilm Simulation: Classic Chrome\n")
+  check "Classic Chrome round-trips byte for byte" (reimportedPayload testBase chromePayload == chromePayload)
 
 -- | Import, export and import a payload over the declared base.
 reimportedPayload :: B.ByteString -> B.ByteString -> B.ByteString
@@ -185,7 +191,7 @@ rejections =
   , ("Color Chrome", "Color Chrome: WEAK\n", "is unsupported")
   , ("clarity", "Clarity: +1\n", "is unsupported")
   , ("exposure compensation", "ev: -1/3\n", "is unsupported")
-  , ("unsupported film", "Film Simulation: Classic Chrome\n", "is unsupported for Film Simulation")
+  , ("unsupported film", "Film Simulation: Eterna\n", "is unsupported for Film Simulation")
   , ("unsupported white balance", "White Balance: DAYLIGHT\n", "is unsupported for White Balance")
   , ("unsupported ISO preset", "ISO: auto1\n", "is unsupported for ISO")
   , ("unknown white balance", "White Balance: SHADEE\n", "is not a White Balance value")
@@ -264,6 +270,7 @@ safetyChecks = do
     (payloadUnsafeReason testDomain (fixture (safePayload testDomain prepared)) == Nothing)
   let warm = fixture (parseRecipeText "warmstandard" warmStandardText)
       second = fixture (parseRecipeText "secondvelvia" secondVelviaText)
+      chrome = fixture (parseRecipeText "chrome" "Film Simulation: Classic Chrome\n")
       payload recipe =
         fixture
           ( safePayload testDomain
@@ -274,11 +281,21 @@ safetyChecks = do
           ( bankRecordsFromList
               ( [ Populated (textName warm) (payload warm) (payload warm)
                 , Populated (textName second) (payload second) (payload second)
+                , Populated (textName chrome) (payload chrome) (payload chrome)
                 ]
-                  ++ replicate 5 Unpopulated
+                  ++ replicate 4 Unpopulated
               )
           )
-      file = fixture (encodeBankFile (BankState (BankGeneration 1) NothingSelected Disabled BaseInvalid records))
+      file = fixture (encodeBankFileFor ClassicChromeFilmEncoding (BankState (BankGeneration 1) NothingSelected Disabled BaseInvalid records))
   check
-    "every payload of the emitted bank passes the safety rules"
-    (case classifyBankFile testDomain file of ValidFile _ -> True; _ -> False)
+    "every payload of the emitted CC bank passes the safety rules"
+    (case classifyBankFileFor ClassicChromeFilmEncoding testDomain file of ValidFile _ -> True; _ -> False)
+  let decoded = fixture (decodeBankFile file)
+  check "text recipes emit the CC bank encoding" (decodedFilmEncoding decoded == ClassicChromeFilmEncoding)
+  check
+    "a CC text recipe retains its film after a bank round-trip"
+    (case bankRecordAt C3 (bankRecords (decodedState decoded)) of
+      Populated name saved working ->
+        fmap fst (exportRecipeText prepared name (bankPayloadContents saved)) == Right "Name: chrome\nFilm Simulation: Classic Chrome\n"
+          && saved == working
+      Unpopulated -> False)
