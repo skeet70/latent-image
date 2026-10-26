@@ -41,6 +41,7 @@ threeConverters = ["cc-entry-marker", "cc-entry-settings-converter", "cc-entry-s
 fiveConverters :: [T.Text]
 fiveConverters = fourConverters ++ ["cc-entry-settings-converter"]
 
+-- Synthetic pass sequences use the X-M1 Classic Chrome trace-site labels.
 markedPass :: [T.Text]
 markedPass =
   [ "cc-entry-marker", "cc-hook-chroma-2", "cc-entry-settings-converter", "cc-entry-settings-converter" ]
