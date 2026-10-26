@@ -964,6 +964,14 @@ The owner accepted the six changed busy-wait counters as scheduler-phase timing,
 
 The changed `guest_state` is tooling identity, not guest RAM. Both recorded hashes reproduce from their retained staged files and each commit's inclusion rules: 201 files each, 14 changed file contents, one added input and one input removed by the host-only rule. Every changed staged source byte matches a tracked main commit between `cfce0e1` and `529d6da`; the changed native extension maps through its Nix derivations to those exact source trees. No local or stale input differs. Unicorn 2.1.4 (`799c50ea…a6d1bc`) and the embedded Python 3.14.7 environment are identical. The commit message lists the files and source commits; `private-data/analysis/volatile-baseline-2/classification.json` retains all 2,500 field classifications, closure provenance and the original baseline digest.
 
+### Current baseline provenance
+
+The current baselines retain the reviewed volatile #79 payload and the standalone CC/icon approval lineage. The CC, icon and E8 baselines were reconciled from saved successful receipts for current reviewed source identities, symbol type/size metadata, manifest digests and manifest-derived nonces. Removing their previously recorded cold-restart `/card/image` leaves normalizes serialization under the existing run-location exclusion; it changes no comparison predicate, diagnostic, exclusion or expected state. The SD native baseline preserves every prior case and adds the passed `v2-reader-refuses-v3` case for the approved format-3 policy. Original baselines and failed reports remain preserved; saved-receipt reconciliation alone was not fresh qualification.
+
+Fresh qualification compares all 22 routes with zero differences and passes all 12 retained gates. The volatile and SD native suites each exited 0 and matched their baselines before their receipts were supplied to the emulator matrix through `--receipt`. The combined report leaves native execution metadata absent; the separate native report retains both actual exit codes.
+
+The USB-toggle reference and counterpart each retain exit 1 for blocked scenarios under the existing comparison contract. Their zero-difference result is comparison success, not successful execution of those blocked scenarios. FujiMod routes remain non-gating; this qualification does not promote a newer engine pin or establish a gating cutover.
+
 ## Live-RAM calibration
 
 `//emulation:ram-calibration` captures paused low RAM from either existing cardless ff80 bridge and compares it with the owner's Run-3 capture. `capture retained|fujimod DAT NAND PRIVATE_OUTPUT` cold-boots clean firmware with no card, enumerates ff80 and saves `[0,0x05aa0000)` before any RAM allocation or payload. It holds an emulator slot and performs no physical camera or USB I/O.
