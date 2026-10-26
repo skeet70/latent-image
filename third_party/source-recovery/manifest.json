@@ -1,0 +1,3302 @@
+{
+  "schema": "x70view-selected-source-recovery/1",
+  "patch": {
+    "path": "third_party/source-recovery/x70view-selected-source.patch",
+    "sha256": "66d4cdc0b389a65cacd5460350e475773e466f3dbfac26f10eae8647c5de38e0",
+    "bytes": 665994,
+    "direction": "public-retained-to-original"
+  },
+  "public_snapshot": "5d9283cd48515de4d189e157944c5cc76721b5e5",
+  "original_revisions": [
+    {
+      "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+      "root_tree": "91858607f056ba2790b129777b6602b0943970c9"
+    },
+    {
+      "revision": "62876536052549cbcba1e9f6abc1437e773dba2f",
+      "root_tree": "0c2a6de5506c3d008407ab1cb2558f4770ac5cdd"
+    }
+  ],
+  "counts": {
+    "mapped": 220,
+    "adapted": 60,
+    "unchanged": 160,
+    "unmatched_retained": 23
+  },
+  "files": [
+    {
+      "public": {
+        "path": "build-support/exr2-gcc.nix",
+        "blob": "a785eb03676f079a89513f76ccbe3ea640eadf8c",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "62876536052549cbcba1e9f6abc1437e773dba2f",
+        "path": "decomp/toolchain/linux/default.nix",
+        "blob": "3b1614ad018de87ee91f159e0ce97ce37e07ddc9",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "build-support/exr2-gcc/host-qsort.c",
+        "blob": "00228a16938c03020fa21e0fe5488932ab8232d1",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "62876536052549cbcba1e9f6abc1437e773dba2f",
+        "path": "decomp/toolchain/macos/host-qsort.c",
+        "blob": "00228a16938c03020fa21e0fe5488932ab8232d1",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/__init__.py",
+        "blob": "e8cb66c914a6ff25d20dd7a0986a31912bfbe406",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/__init__.py",
+        "blob": "e8cb66c914a6ff25d20dd7a0986a31912bfbe406",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/af_extraction.py",
+        "blob": "61c0c35317447fb410e5f7473b68bbdfe921ffa9",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/af_extraction.py",
+        "blob": "61c0c35317447fb410e5f7473b68bbdfe921ffa9",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_capture_clock.py",
+        "blob": "6ce28c1e428b1dea04e5a491b3902d11a7648277",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_capture_clock.py",
+        "blob": "6ce28c1e428b1dea04e5a491b3902d11a7648277",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_capture_start_clock.py",
+        "blob": "91a18a3a5afb360113ce9ab1917062106f456ef0",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_capture_start_clock.py",
+        "blob": "91a18a3a5afb360113ce9ab1917062106f456ef0",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_capture_stop_clock.py",
+        "blob": "6f72d1bcfaa1f0549f9d1c15c7a9b7c35205b206",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_capture_stop_clock.py",
+        "blob": "6f72d1bcfaa1f0549f9d1c15c7a9b7c35205b206",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_contrast_clock.py",
+        "blob": "542c011bf7dbc8602a402b6e936e3a558e0cc750",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_contrast_clock.py",
+        "blob": "542c011bf7dbc8602a402b6e936e3a558e0cc750",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_focus_data.py",
+        "blob": "3c67132c36e7d8bff44bc4a9566631db8c7af115",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_focus_data.py",
+        "blob": "3c67132c36e7d8bff44bc4a9566631db8c7af115",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_focus_scene.py",
+        "blob": "2e0866c9ad746bd445b8575ac97f4a0933d210fa",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_focus_scene.py",
+        "blob": "2e0866c9ad746bd445b8575ac97f4a0933d210fa",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_frame_source.py",
+        "blob": "1fbc024260612d22cb925e8654019b3b623df7ea",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_frame_source.py",
+        "blob": "1fbc024260612d22cb925e8654019b3b623df7ea",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_measurement_data.py",
+        "blob": "b2537486fd8f7a09429f3e3670cd03f77fb05689",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_measurement_data.py",
+        "blob": "b2537486fd8f7a09429f3e3670cd03f77fb05689",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_preview_return_clock.py",
+        "blob": "15f178946eea500e890d381cf14577d6301b1ce6",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_preview_return_clock.py",
+        "blob": "15f178946eea500e890d381cf14577d6301b1ce6",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_raw_source.py",
+        "blob": "316e40681e0f66e484a5212cf69cfe4d72b42e63",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_raw_source.py",
+        "blob": "316e40681e0f66e484a5212cf69cfe4d72b42e63",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_scene_fixture.py",
+        "blob": "988a1e188c3d031b5bd9b4121dc2dcfc19e571c3",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_scene_fixture.py",
+        "blob": "988a1e188c3d031b5bd9b4121dc2dcfc19e571c3",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_startup_scope.py",
+        "blob": "c0f0032eea01c2b8097be213cc6c7651e42cdedc",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_startup_scope.py",
+        "blob": "c0f0032eea01c2b8097be213cc6c7651e42cdedc",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_statistics_frame.py",
+        "blob": "47cd9cb36f98c6e3b981ff0f0794b54123460b25",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_statistics_frame.py",
+        "blob": "47cd9cb36f98c6e3b981ff0f0794b54123460b25",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_still_cleanup_clock.py",
+        "blob": "7edd99934c1d349fcac4b75c46c29de7f7084a73",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_still_cleanup_clock.py",
+        "blob": "7edd99934c1d349fcac4b75c46c29de7f7084a73",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_still_image.py",
+        "blob": "047d1d214103f182a766c4528d86444cdae799a8",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_still_image.py",
+        "blob": "047d1d214103f182a766c4528d86444cdae799a8",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_still_image_clock.py",
+        "blob": "ef399ad01028fee2a8588ee37ef7b91dc7972a8e",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_still_image_clock.py",
+        "blob": "ef399ad01028fee2a8588ee37ef7b91dc7972a8e",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_still_image_delivery.py",
+        "blob": "6d73844990d30701659122423213901cf82e49ce",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_still_image_delivery.py",
+        "blob": "6d73844990d30701659122423213901cf82e49ce",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_still_initialization_clock.py",
+        "blob": "100362bb4062924945280e06f24c12cac6df1830",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_still_initialization_clock.py",
+        "blob": "100362bb4062924945280e06f24c12cac6df1830",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_still_numeric.py",
+        "blob": "b7bc66eba540c69471e66353ac844be923ac287e",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_still_numeric.py",
+        "blob": "b7bc66eba540c69471e66353ac844be923ac287e",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_still_qualifying_clock.py",
+        "blob": "c23c7e964f2abaa459f081aa45a808de6a6c9c0e",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_still_qualifying_clock.py",
+        "blob": "c23c7e964f2abaa459f081aa45a808de6a6c9c0e",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_still_raw.py",
+        "blob": "8714ff8471560d9b3ee351b7385faf4715603011",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_still_raw.py",
+        "blob": "8714ff8471560d9b3ee351b7385faf4715603011",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_still_readout.py",
+        "blob": "bf4fb8e61ecda0e06066b3f086e145b525708acd",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_still_readout.py",
+        "blob": "bf4fb8e61ecda0e06066b3f086e145b525708acd",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_still_readout_clock.py",
+        "blob": "724c5a03f1081cdfeb5d2ba1b41fa62a46c8b1fe",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_still_readout_clock.py",
+        "blob": "724c5a03f1081cdfeb5d2ba1b41fa62a46c8b1fe",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/afs_still_tail_clock.py",
+        "blob": "6413f133b9f0909a7d76ceeb3eb3b0f26230ef2e",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/afs_still_tail_clock.py",
+        "blob": "6413f133b9f0909a7d76ceeb3eb3b0f26230ef2e",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/audio_devices.py",
+        "blob": "55069dc632aa36b3f1acb9e1128f81e4b423d24e",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/audio_devices.py",
+        "blob": "6d4f9f7d1e723827ca61b220695fe3fb06d3933c",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/board.py",
+        "blob": "948c70380aababa735f48adb85b74c3d0a0f7002",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/board.py",
+        "blob": "bacdfd82745af7249be7f385f3f3f9afd408a60d",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/boards/__init__.py",
+        "blob": "fbabc32f71769dc51b036b50257a3d733127364c",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/boards/__init__.py",
+        "blob": "fbabc32f71769dc51b036b50257a3d733127364c",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/boards/bindings.py",
+        "blob": "1b7e6856bb58c21c2b86abf340d031b26739307c",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/boards/bindings.py",
+        "blob": "7f75576088483ce436d171bdf279edfc4449a8d9",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/boards/bodies/xm1-rec.json",
+        "blob": "501cf2fe973412681589721a8122d408e697231f",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/boards/bodies/xm1-rec.json",
+        "blob": "13562efb53091736a4d7add72b8694968fb5111a",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/boards/control_bus_parameters.py",
+        "blob": "6ce15b037c16a3e56042e8d39d69b9f6ff6932f7",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/boards/control_bus_parameters.py",
+        "blob": "6ce15b037c16a3e56042e8d39d69b9f6ff6932f7",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/boards/cpu_parameters.py",
+        "blob": "96033bfaf8b5ff9dd5bb0ce9eb7a86153b357b7a",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/boards/cpu_parameters.py",
+        "blob": "96033bfaf8b5ff9dd5bb0ce9eb7a86153b357b7a",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/boards/firmware_blobs.py",
+        "blob": "c178807ebecfe0103b3ba1e33d9065ea62810665",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/boards/firmware_blobs.py",
+        "blob": "c178807ebecfe0103b3ba1e33d9065ea62810665",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/boards/firmware_views/control-bus-xm1-150.json",
+        "blob": "1e372c57fbe7846cefc7a44e5629dbf886f49138",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/boards/firmware_views/control-bus-xm1-150.json",
+        "blob": "1e372c57fbe7846cefc7a44e5629dbf886f49138",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/boards/firmwares/xm1-150.json",
+        "blob": "4bb70cf551dc951d0aa42212b4cfbf2da3f7aa14",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/boards/firmwares/xm1-150.json",
+        "blob": "80090a81aacbbb7f468cb12f8bf99848d34c4cce",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/boards/profile.py",
+        "blob": "fac48505fd44fe1ba8757b82e444c7c447ed18df",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/boards/profile.py",
+        "blob": "fac48505fd44fe1ba8757b82e444c7c447ed18df",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/boards/profile_layout.py",
+        "blob": "73d2c171532239b17cea41d986a52a5aa0342d26",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/boards/profile_layout.py",
+        "blob": "73d2c171532239b17cea41d986a52a5aa0342d26",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/boards/service_parameters.py",
+        "blob": "d6d0e4e8dcadfc84ded1421e3525140b4c0a6c49",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/boards/service_parameters.py",
+        "blob": "7898a6e5a2e0f5de5fe633918cd9650836533c3a",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/boards/soc/exr2-service-transports.json",
+        "blob": "546fbbd1c8fd7f17e8647a5d19d3e520f699690e",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/boards/soc/exr2-service-transports.json",
+        "blob": "546fbbd1c8fd7f17e8647a5d19d3e520f699690e",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/boards/soc/exr2.json",
+        "blob": "4216be3e9c534b5faf1815c2c21440b8a2ce5ee8",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/boards/soc/exr2.json",
+        "blob": "4216be3e9c534b5faf1815c2c21440b8a2ce5ee8",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/boards/wiring.py",
+        "blob": "a8c3824542a54600b29ff1878ed6294e4f3b95e8",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/boards/wiring.py",
+        "blob": "a8c3824542a54600b29ff1878ed6294e4f3b95e8",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/boot.py",
+        "blob": "169feba675de464e8930e10277f1a1221e5fff1c",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/boot.py",
+        "blob": "01fce0a50d9461e9d3810896a1a479a28ae6f707",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/boot_devices.py",
+        "blob": "e6a735aa122f29f8891b6adb3b7d36f3e447b8eb",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/boot_devices.py",
+        "blob": "e4e78cb7b22f0ae247d97edb580c66942a992db4",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/captured_mcu_profile.py",
+        "blob": "2adfe2910b05f3431c112540f11e686eba852e84",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/captured_mcu_profile.py",
+        "blob": "2adfe2910b05f3431c112540f11e686eba852e84",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/checkpoint.py",
+        "blob": "49d12aa180a81dbb7d557a5a10e856ae72ca1a51",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/checkpoint.py",
+        "blob": "ba4f307084468bf0bf3d9298c0ee58cd1d7f5e3c",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/control_bus.py",
+        "blob": "9adf494fbbe6539b46d753936cae77e593bacac8",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/control_bus.py",
+        "blob": "db25b837bfe1044c97b3a7a32f16d7d49298c2e7",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/control_bus_contracts.py",
+        "blob": "c118f9c86d4aa38d495794bf3ea60ece7cbfe1df",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/control_bus_contracts.py",
+        "blob": "c118f9c86d4aa38d495794bf3ea60ece7cbfe1df",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/display.py",
+        "blob": "8cb8b9182d1e5f1e29c54d57fa45261c9ef3f55c",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/display.py",
+        "blob": "8cb8b9182d1e5f1e29c54d57fa45261c9ef3f55c",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/display_formatter.py",
+        "blob": "b9ac13548e7ef4f85a02dd59530426bfa955c40b",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/display_formatter.py",
+        "blob": "b9ac13548e7ef4f85a02dd59530426bfa955c40b",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/display_timing.py",
+        "blob": "8a241cfb5fb0b139717be21938a7353b359db187",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/display_timing.py",
+        "blob": "4d4d437fdbb4c926abcc94de09095ac9d565a1e4",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/face_analysis_devices.py",
+        "blob": "3e5be42f74f489e9954000f26746b9f01d01da27",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/face_analysis_devices.py",
+        "blob": "8f7b13b722dba2077d238f76d0fe275bbd66b61d",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/face_still_cancellation.py",
+        "blob": "586a4e581652ef4cdc4b4c4ea39bb24c6ffa999e",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/face_still_cancellation.py",
+        "blob": "586a4e581652ef4cdc4b4c4ea39bb24c6ffa999e",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/face_still_reconfiguration.py",
+        "blob": "63076c6c012f905ca4ad5048403f68470d5f04c4",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/face_still_reconfiguration.py",
+        "blob": "63076c6c012f905ca4ad5048403f68470d5f04c4",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/fe80_contracts.py",
+        "blob": "2634ce3c6355512c172047cc12202896b20874f2",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/fe80_contracts.py",
+        "blob": "2634ce3c6355512c172047cc12202896b20874f2",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/fe80_devices.py",
+        "blob": "1c8b3ce986b9fde8b8ac054e860fbe033265c4ac",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/fe80_devices.py",
+        "blob": "1c8b3ce986b9fde8b8ac054e860fbe033265c4ac",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/fe80_stream.py",
+        "blob": "2da9fb5f330b0724e73b10f9d7cd14d4f797aa2a",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/fe80_stream.py",
+        "blob": "2da9fb5f330b0724e73b10f9d7cd14d4f797aa2a",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/graphics_clear_profile.py",
+        "blob": "58970745d2fdeae5827ac0e8df655f5d65efe19f",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/graphics_clear_profile.py",
+        "blob": "58970745d2fdeae5827ac0e8df655f5d65efe19f",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/graphics_devices.py",
+        "blob": "1f7e5a925e3f30bf4ae39bfb5337653a69212a29",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/graphics_devices.py",
+        "blob": "3194ed852019b530d965cda785dfcce5c76fb0fc",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/hardware.py",
+        "blob": "658b5b64882632ecaa8c9e9737e96d5dced610a8",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/hardware.py",
+        "blob": "658b5b64882632ecaa8c9e9737e96d5dced610a8",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/hdmi_devices.py",
+        "blob": "9d73a4f65466a95e10f23f1cdc9fa6a826635560",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/hdmi_devices.py",
+        "blob": "9d73a4f65466a95e10f23f1cdc9fa6a826635560",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/hdmi_sink.py",
+        "blob": "dc30b1f91e947176d020016eef68aae9d3f1f4ae",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/hdmi_sink.py",
+        "blob": "dc30b1f91e947176d020016eef68aae9d3f1f4ae",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/histogram_devices.py",
+        "blob": "232cc210f6a44947c620360bb537c75180dd8421",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/histogram_devices.py",
+        "blob": "232cc210f6a44947c620360bb537c75180dd8421",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/histogram_protocol.py",
+        "blob": "8e567d4abdab2d54d3f0f0ebb05fa342ff747880",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/histogram_protocol.py",
+        "blob": "8e567d4abdab2d54d3f0f0ebb05fa342ff747880",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/image_parameter_devices.py",
+        "blob": "93a690c18b018920c2547653f2305004110f0dfd",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/image_parameter_devices.py",
+        "blob": "0263c7e5dbe24a6660e07b3ace6e43b1f74ece52",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/image_processing_activation.py",
+        "blob": "11cca87ad228653a16aec83c4ea5730129c9dcf3",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/image_processing_activation.py",
+        "blob": "64130a39aca62b06d1a543420cad961fe777fe9b",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/image_processing_configuration.py",
+        "blob": "d772fff38cc6d21284a5c37d1b99f6d86aac6d63",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/image_processing_configuration.py",
+        "blob": "d772fff38cc6d21284a5c37d1b99f6d86aac6d63",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/image_processing_reset.py",
+        "blob": "095c4497fa0c8527e331c7476b54268e3506742d",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/image_processing_reset.py",
+        "blob": "095c4497fa0c8527e331c7476b54268e3506742d",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/image_still_activation.py",
+        "blob": "92dd3d7c086578f0772e580969133398bba798ce",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/image_still_activation.py",
+        "blob": "92dd3d7c086578f0772e580969133398bba798ce",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/image_still_configuration.py",
+        "blob": "309f2c0fccff123ed8cec164ba8753e4b4650859",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/image_still_configuration.py",
+        "blob": "309f2c0fccff123ed8cec164ba8753e4b4650859",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/image_still_prepare.py",
+        "blob": "e87191bf338d9ed8e7d695e6c9d1565f0a4eb22e",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/image_still_prepare.py",
+        "blob": "e87191bf338d9ed8e7d695e6c9d1565f0a4eb22e",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/image_still_reset.py",
+        "blob": "eb9fe6c4d884fe078bb3e300b05dd7d49c02fb44",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/image_still_reset.py",
+        "blob": "eb9fe6c4d884fe078bb3e300b05dd7d49c02fb44",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/image_stream.py",
+        "blob": "9cdfd134826b9a10f384037a100837f762096a95",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/image_stream.py",
+        "blob": "cd216799148feae4a44aedacc550a3e4db72c8ad",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/image_work_devices.py",
+        "blob": "bab7f9a4e44483157d5a518d99e362a073e93588",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/image_work_devices.py",
+        "blob": "83dd07ddd349489c6a9808df32ba052cc9df0cfc",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/input_auxiliary_devices.py",
+        "blob": "42405501db509260fd5d9fcc98766352f73a3404",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/input_auxiliary_devices.py",
+        "blob": "42405501db509260fd5d9fcc98766352f73a3404",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/input_processing_activation.py",
+        "blob": "d0df7f4eded218b772f00577c7ff5c38706b3907",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/input_processing_activation.py",
+        "blob": "d0df7f4eded218b772f00577c7ff5c38706b3907",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/input_processing_devices.py",
+        "blob": "70940da2c058e324a885f3deb48369ff7b59a9f0",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/input_processing_devices.py",
+        "blob": "60477d6a4768891e10a27bef9f6bd6a37b4f6cb4",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/input_still_return.py",
+        "blob": "0f98956da84ed8f36aab257674ea25fb60fa108d",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/input_still_return.py",
+        "blob": "0f98956da84ed8f36aab257674ea25fb60fa108d",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/interrupts.py",
+        "blob": "d1407398a758fde95871b4cbdea2f68f651dce8a",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/interrupts.py",
+        "blob": "012d642d63b3ed8f0a7f31a7c23b2a923a8faec5",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/jpeg_codec.py",
+        "blob": "da95d3da15fdc2b33d1de824c0628ad8af00a833",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/jpeg_codec.py",
+        "blob": "da95d3da15fdc2b33d1de824c0628ad8af00a833",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/jpeg_declared.py",
+        "blob": "02e53df6610ceef57a3b4859e8260003c7b4f710",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/jpeg_declared.py",
+        "blob": "02e53df6610ceef57a3b4859e8260003c7b4f710",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/jpeg_encode.py",
+        "blob": "273e50754f7dde77eecc9d5bb670c01edb34b105",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/jpeg_encode.py",
+        "blob": "273e50754f7dde77eecc9d5bb670c01edb34b105",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/jpeg_streamed.py",
+        "blob": "d1ad68fd9e06b856627c5d719664a731e9b9d3b8",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/jpeg_streamed.py",
+        "blob": "d1ad68fd9e06b856627c5d719664a731e9b9d3b8",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/jpeg_successor.py",
+        "blob": "cb22c43d37f02a5fd8eb65980e2ce7be620f87ca",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/jpeg_successor.py",
+        "blob": "cb22c43d37f02a5fd8eb65980e2ce7be620f87ca",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/lens_af_motion.py",
+        "blob": "04eca3eb75fdf19ba9470e401440d9ae17d23f30",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/lens_af_motion.py",
+        "blob": "04eca3eb75fdf19ba9470e401440d9ae17d23f30",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/lens_endpoint.py",
+        "blob": "775e17338b32989bdd676f5bf2d944b389db55b1",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/lens_endpoint.py",
+        "blob": "775e17338b32989bdd676f5bf2d944b389db55b1",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/lens_focus_motion.py",
+        "blob": "6b981986931adc5d4c5b7ef79560c81306246b3d",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/lens_focus_motion.py",
+        "blob": "6b981986931adc5d4c5b7ef79560c81306246b3d",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/lens_homing_fixture.py",
+        "blob": "e6eb6c51ac53ca192180d9a1eeae2b796c0ab978",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/lens_homing_fixture.py",
+        "blob": "e6eb6c51ac53ca192180d9a1eeae2b796c0ab978",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/lens_measurement_iris.py",
+        "blob": "7b2683575b7556bea2f6d547ed3a4b1c2559bee0",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/lens_measurement_iris.py",
+        "blob": "7b2683575b7556bea2f6d547ed3a4b1c2559bee0",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/loader_devices.py",
+        "blob": "47eff7747d9bb2aa1da8d7967adadac9a1c8c37e",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/loader_devices.py",
+        "blob": "9ce651d1304a7e2ff90a2b8ecc12f71a70b52737",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/measurement_scene.py",
+        "blob": "70dba3106991cbeba88916fb15e5a9106246df4b",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/measurement_scene.py",
+        "blob": "70dba3106991cbeba88916fb15e5a9106246df4b",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/menu_inputs.py",
+        "blob": "46c0d6de63a35e21ee0b45d6c044598685b0c1ce",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/menu_inputs.py",
+        "blob": "c729692e69fabf6545f52ce5255ba766e7e7c09c",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/nand_image.py",
+        "blob": "8eb4adc6011cad4a88b40f36000e86429873ac71",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/nand_image.py",
+        "blob": "8eb4adc6011cad4a88b40f36000e86429873ac71",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/output_devices.py",
+        "blob": "5b5d7b43f2c1401474c25c660b829627ad7d2f18",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/output_devices.py",
+        "blob": "5b5d7b43f2c1401474c25c660b829627ad7d2f18",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/owner_settings.py",
+        "blob": "01c950c7edb29197ea742f37d42e4ced24cc83d4",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/owner_settings.py",
+        "blob": "01c950c7edb29197ea742f37d42e4ced24cc83d4",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/panel_serial.py",
+        "blob": "d61d18356f46317eeef87eb8bc1d0cd960c97441",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/panel_serial.py",
+        "blob": "d94783f32946c831cb970dfac84897bc57f96922",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/pdaf_stream.py",
+        "blob": "cb5bb12f6c887de446ffea12a2a5bb11f6a49dc2",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/pdaf_stream.py",
+        "blob": "cb5bb12f6c887de446ffea12a2a5bb11f6a49dc2",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/power_devices.py",
+        "blob": "f54697e51cdd209bc272ec79fdd36bcce4ced866",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/power_devices.py",
+        "blob": "2e1baf393fbc86e36e5409f491da99dc21ea6d6b",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/prefilter_active.py",
+        "blob": "fed36c6124c31238bb2067033e0416e9354dffe0",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/prefilter_active.py",
+        "blob": "fed36c6124c31238bb2067033e0416e9354dffe0",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/prefilter_empty.py",
+        "blob": "a9953d1b41b75d100501d241cb07c9d9da54646e",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/prefilter_empty.py",
+        "blob": "a9953d1b41b75d100501d241cb07c9d9da54646e",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/prefilter_initialization.py",
+        "blob": "f96f8ef89934fb4018136e7c086555029c6b5093",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/prefilter_initialization.py",
+        "blob": "f96f8ef89934fb4018136e7c086555029c6b5093",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/prefilter_scene.py",
+        "blob": "75d289b9220dc2384ecdedf896be6dc7912aee40",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/prefilter_scene.py",
+        "blob": "75d289b9220dc2384ecdedf896be6dc7912aee40",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/prefilter_second.py",
+        "blob": "7cd977d78f550e74e4800c43fa4bdc66401c610a",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/prefilter_second.py",
+        "blob": "7cd977d78f550e74e4800c43fa4bdc66401c610a",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/prefilter_third.py",
+        "blob": "f58c8fcb3364644830d742ae69293d23e54969e1",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/prefilter_third.py",
+        "blob": "f58c8fcb3364644830d742ae69293d23e54969e1",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/preview_statistics.py",
+        "blob": "320c82e290d4ef5f15da9b1efcd954ac042cf811",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/preview_statistics.py",
+        "blob": "320c82e290d4ef5f15da9b1efcd954ac042cf811",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/processing_control_configuration.py",
+        "blob": "9733d6790f9aababae13a97fcd839885fea9953a",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/processing_control_configuration.py",
+        "blob": "9733d6790f9aababae13a97fcd839885fea9953a",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/processing_image_delivery.py",
+        "blob": "14d6fa45c41169fbae57a02e6ec1c8e2f853cf93",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/processing_image_delivery.py",
+        "blob": "0f5c02519a4e76e96a0039343450d7a772e0f7dc",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/processing_image_scene.py",
+        "blob": "0b291ea7aeda008aec8bd76925e863da99d4cf58",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/processing_image_scene.py",
+        "blob": "0b291ea7aeda008aec8bd76925e863da99d4cf58",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/processing_passive_configuration.py",
+        "blob": "42d495434111533b842cf77790edd112725fb358",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/processing_passive_configuration.py",
+        "blob": "42d495434111533b842cf77790edd112725fb358",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/processing_pipeline_reset.py",
+        "blob": "6fe9caf28715773c08047a5d8bd0ecd0b295b3b1",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/processing_pipeline_reset.py",
+        "blob": "6fe9caf28715773c08047a5d8bd0ecd0b295b3b1",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/producer_afs_focus.py",
+        "blob": "987277a9fc6983062e673fd7e803c62dc259b205",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/producer_afs_focus.py",
+        "blob": "987277a9fc6983062e673fd7e803c62dc259b205",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/producer_capture_metstats.py",
+        "blob": "afb46085464ec0e3c1b69eb48dcb6b39e08135ee",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/producer_capture_metstats.py",
+        "blob": "afb46085464ec0e3c1b69eb48dcb6b39e08135ee",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/producer_devices.py",
+        "blob": "ebfa13300dc620393b8c7b6dcde53d9c979e0b2b",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/producer_devices.py",
+        "blob": "1aca38728149bb2d6cd891a6c8b7bca8c154c78d",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/producer_measurement.py",
+        "blob": "e905193849bca0c83f4f80b3f49c882f288aac24",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/producer_measurement.py",
+        "blob": "e905193849bca0c83f4f80b3f49c882f288aac24",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/producer_preview.py",
+        "blob": "ff019e6bfecf3df2998dea3b81fbdfdc68599ee3",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/producer_preview.py",
+        "blob": "9c874940defdc87a873aeb9cc0899cb40fbf267e",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/producer_processing_configuration.py",
+        "blob": "05f5dd3c95dbee7b0281e0a1042ba2ee953920d8",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/producer_processing_configuration.py",
+        "blob": "05f5dd3c95dbee7b0281e0a1042ba2ee953920d8",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/producer_processing_reset.py",
+        "blob": "b0f3ba374c149ba72e5240e830fe7c00c3f1985c",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/producer_processing_reset.py",
+        "blob": "b0f3ba374c149ba72e5240e830fe7c00c3f1985c",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/producer_shutdown.py",
+        "blob": "ae17dc3764e59d0cf97b225ed5002f7232895f9b",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/producer_shutdown.py",
+        "blob": "ae17dc3764e59d0cf97b225ed5002f7232895f9b",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/producer_still_capture.py",
+        "blob": "6480f3dfe4e5f2a9b5019b582a937d2afcfffa87",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/producer_still_capture.py",
+        "blob": "6480f3dfe4e5f2a9b5019b582a937d2afcfffa87",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/producer_stream.py",
+        "blob": "b95d819602d620f825de7e6bd0c408cf9ba2a55c",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/producer_stream.py",
+        "blob": "df7200232e80fe85b3153a9f7b13198c16ff5b6a",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/provenance.py",
+        "blob": "8f6f2c849a9f844c6e52886140cd7a840d6dcd18",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/provenance.py",
+        "blob": "fb9d5210dc390a091c3ec97209d769249c11727a",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/provenance_active.py",
+        "blob": "6c09b6bb82ce88cef05bf3d95c9c10e76ffbc3cd",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/provenance_active.py",
+        "blob": "6c09b6bb82ce88cef05bf3d95c9c10e76ffbc3cd",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/pulse_devices.py",
+        "blob": "89532f51d983d3fbfd2bec5435f30df2a3676481",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/pulse_devices.py",
+        "blob": "a091c81f51e70ea7269a117191b87c27f964bae5",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/rec_state.py",
+        "blob": "5b7049f3057ecc88f8ebaa4981ee976685061c4a",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/rec_state.py",
+        "blob": "7b1269490e97f5dd797bcc91a07dfd9f43460aa9",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/recorded_statistics.py",
+        "blob": "826c9c74aeccd3282f6b3c39fc63bb476ffc585b",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/recorded_statistics.py",
+        "blob": "826c9c74aeccd3282f6b3c39fc63bb476ffc585b",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/runtime.py",
+        "blob": "7acd805603bd6f7dcb004cfe9ecd94050c20fe8d",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/runtime.py",
+        "blob": "7acd805603bd6f7dcb004cfe9ecd94050c20fe8d",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/scanout.py",
+        "blob": "c3dd08bc624c7313d7644b3dff1879bca6128bab",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/scanout.py",
+        "blob": "8d259b5cde47a420c2a103f0d8087a4f38f1d5e4",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/sd_card.py",
+        "blob": "69b036c78ac32374d602e37766d5bf998e53fa12",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/sd_card.py",
+        "blob": "d55be6042e0495b1fadf70e4c68466c8c8540cef",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/secondary_control_bus.py",
+        "blob": "adcc814ec051dc4093cdce5ea53a62ba0b34bbb6",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/secondary_control_bus.py",
+        "blob": "adcc814ec051dc4093cdce5ea53a62ba0b34bbb6",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/secondary_control_bus_contracts.py",
+        "blob": "e10be471655a01d754fd0b97450a3b1b76c6a8e8",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/secondary_control_bus_contracts.py",
+        "blob": "e10be471655a01d754fd0b97450a3b1b76c6a8e8",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/server.py",
+        "blob": "16781698d7ee5c1f709a1239550977343a1df04f",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/server.py",
+        "blob": "b4bd0cff3c42abc20b9228adc5909e1c2314f7c4",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/spi2_devices.py",
+        "blob": "05735ffcbb0e239b890e4e0d66c88454537073d4",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/spi2_devices.py",
+        "blob": "05735ffcbb0e239b890e4e0d66c88454537073d4",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/still_f1c_gain.py",
+        "blob": "868779adcfc141ee8cd532fcdcd4104fa61edabe",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/still_f1c_gain.py",
+        "blob": "868779adcfc141ee8cd532fcdcd4104fa61edabe",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/still_f1c_idle.py",
+        "blob": "091258b3c7aaf0c3eb10c1c4db783884ad0567c4",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/still_f1c_idle.py",
+        "blob": "091258b3c7aaf0c3eb10c1c4db783884ad0567c4",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/still_f1c_processing.py",
+        "blob": "0d17589a53b495280f34cc03a21176e909c3d94f",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/still_f1c_processing.py",
+        "blob": "0d17589a53b495280f34cc03a21176e909c3d94f",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/still_f1c_scene.py",
+        "blob": "dfeade7be364f893f3326c3aa6c60b2a0e784287",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/still_f1c_scene.py",
+        "blob": "dfeade7be364f893f3326c3aa6c60b2a0e784287",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/still_processing_devices.py",
+        "blob": "ab3f3fc86a01344a1bad5f25d382b81720c88855",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/still_processing_devices.py",
+        "blob": "ab3f3fc86a01344a1bad5f25d382b81720c88855",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/still_processing_prelude.py",
+        "blob": "21819e4bfbe91a00867759fa36b32d81d9abb9c2",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/still_processing_prelude.py",
+        "blob": "21819e4bfbe91a00867759fa36b32d81d9abb9c2",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/still_processing_scene.py",
+        "blob": "fe5ad374ecfd60a6ab426e802f52bd4e7efffd65",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/still_processing_scene.py",
+        "blob": "fe5ad374ecfd60a6ab426e802f52bd4e7efffd65",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/still_resize_devices.py",
+        "blob": "02a492a596e8d092cf45f6fed6b02c37f8586175",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/still_resize_devices.py",
+        "blob": "02a492a596e8d092cf45f6fed6b02c37f8586175",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/still_resize_jpeg_main_stream.py",
+        "blob": "567c5425bcf103428842384a5f369ecc00105fa6",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/still_resize_jpeg_main_stream.py",
+        "blob": "567c5425bcf103428842384a5f369ecc00105fa6",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/still_resize_jpeg_stream.py",
+        "blob": "da8822afe06b9ae94f488ac604d78ce70102f6e0",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/still_resize_jpeg_stream.py",
+        "blob": "da8822afe06b9ae94f488ac604d78ce70102f6e0",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/still_resize_preview.py",
+        "blob": "093b974842ed0eb829edc5534a0d38c42aa874ea",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/still_resize_preview.py",
+        "blob": "093b974842ed0eb829edc5534a0d38c42aa874ea",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/still_resize_successor.py",
+        "blob": "20f43620935f9507b45c000ec0a3953511586794",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/still_resize_successor.py",
+        "blob": "20f43620935f9507b45c000ec0a3953511586794",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/still_resize_thumbnail.py",
+        "blob": "98c5ed90d374c45b41a7b3ee28b41f0ea0b27803",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/still_resize_thumbnail.py",
+        "blob": "98c5ed90d374c45b41a7b3ee28b41f0ea0b27803",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/storage_profile.py",
+        "blob": "77411d4f6c1ac840ef14dafe99f848b8f75f1e24",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/storage_profile.py",
+        "blob": "77411d4f6c1ac840ef14dafe99f848b8f75f1e24",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/strict_audit.py",
+        "blob": "14b3cb0b665ef4b62f78da81524837a9e8cad926",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/strict_audit.py",
+        "blob": "14b3cb0b665ef4b62f78da81524837a9e8cad926",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/__init__.py",
+        "blob": "d03f8aab856eb79baa29b8673b4ec2c205faa279",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/__init__.py",
+        "blob": "d03f8aab856eb79baa29b8673b4ec2c205faa279",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/af_config.py",
+        "blob": "8c3dc15b5cc8c37dde24b7d7883af84ff1de275d",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/af_config.py",
+        "blob": "8c3dc15b5cc8c37dde24b7d7883af84ff1de275d",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/af_fast.py",
+        "blob": "ec100d8544a86be41bb752939ea91aeac64c1d32",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/af_fast.py",
+        "blob": "ec100d8544a86be41bb752939ea91aeac64c1d32",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/af_graphics.py",
+        "blob": "167d09e647cac208cec99352807940151fbe7645",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/af_graphics.py",
+        "blob": "167d09e647cac208cec99352807940151fbe7645",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/af_mod.py",
+        "blob": "c80cac708e9f1d1af47c59c89550e8ebbef8d4f0",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/af_mod.py",
+        "blob": "c80cac708e9f1d1af47c59c89550e8ebbef8d4f0",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/af_prepared.py",
+        "blob": "f450638fe092cd55a95d6177227e0e1a314714ff",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/af_prepared.py",
+        "blob": "f450638fe092cd55a95d6177227e0e1a314714ff",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/af_state.py",
+        "blob": "e7970bbe36ebaa24a857639fae19836477c7c967",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/af_state.py",
+        "blob": "e7970bbe36ebaa24a857639fae19836477c7c967",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/afbench.py",
+        "blob": "6472d12b28296b505d3a1cbcc004ea664ca5bfb7",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/afbench.py",
+        "blob": "6472d12b28296b505d3a1cbcc004ea664ca5bfb7",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/display.py",
+        "blob": "f540d84cd1042f8e52efa986241789be2358ce43",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/display.py",
+        "blob": "f540d84cd1042f8e52efa986241789be2358ce43",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/events.py",
+        "blob": "df29113e9191990691b0fa9b86c8d2dd31a66c7f",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/events.py",
+        "blob": "df29113e9191990691b0fa9b86c8d2dd31a66c7f",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/inputs.py",
+        "blob": "0f188b4103e46e250e31152fc176e7c9ed2e2e0f",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/inputs.py",
+        "blob": "0f188b4103e46e250e31152fc176e7c9ed2e2e0f",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/lens_trace.py",
+        "blob": "a69693e8c0a0d6c7e226a207892a22d37854fdfe",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/lens_trace.py",
+        "blob": "a69693e8c0a0d6c7e226a207892a22d37854fdfe",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/memory.py",
+        "blob": "a38e6ad19887815c0fb14dccd75292b5c8e94477",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/memory.py",
+        "blob": "a38e6ad19887815c0fb14dccd75292b5c8e94477",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/patch.py",
+        "blob": "3d77c1eb55e4a1ee1afb99db1673292969c17b4e",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/patch.py",
+        "blob": "3d77c1eb55e4a1ee1afb99db1673292969c17b4e",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/predicates.py",
+        "blob": "110a907796a8ec14e3bc85d3d531b5864e23928b",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/predicates.py",
+        "blob": "110a907796a8ec14e3bc85d3d531b5864e23928b",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/radiance_stacks.py",
+        "blob": "3881a5cb7dcd4e2e63ebfd8c401eb3b6d34b5d1a",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/radiance_stacks.py",
+        "blob": "3881a5cb7dcd4e2e63ebfd8c401eb3b6d34b5d1a",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/scene_sources.py",
+        "blob": "37513cf32bdf6da0af5887b5c4d2f652c778b448",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/scene_sources.py",
+        "blob": "37513cf32bdf6da0af5887b5c4d2f652c778b448",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/sensor_model.py",
+        "blob": "4185b209c9886ce26e765c9115b00d19d900f68c",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/sensor_model.py",
+        "blob": "4185b209c9886ce26e765c9115b00d19d900f68c",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/sensor_stream.py",
+        "blob": "c73a398ee0e207b2c0783bc5cb8196a6404a22ab",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/sensor_stream.py",
+        "blob": "c73a398ee0e207b2c0783bc5cb8196a6404a22ab",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/testbed.py",
+        "blob": "eb1965ef98b0d95044e9ecaa19115eeea93b9904",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/testbed.py",
+        "blob": "eb1965ef98b0d95044e9ecaa19115eeea93b9904",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/testbed/timing.py",
+        "blob": "87ffb0b39fb239c31eaf17b6cc4867dfa1a26263",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/testbed/timing.py",
+        "blob": "87ffb0b39fb239c31eaf17b6cc4867dfa1a26263",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/usb_devices.py",
+        "blob": "f7fca279f0111bb305dbc9c3a284029dd976d61b",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/usb_devices.py",
+        "blob": "f45e562b4c7ddd8323c1ca5fa721e2e87ebfd648",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/usb_endpoint.py",
+        "blob": "920b3dfd4d6236ccd66f7851c6b36062436fa775",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/usb_endpoint.py",
+        "blob": "2b09c879dc5a3d39367a7afc3bd0882d81db3d25",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/virtual_source.py",
+        "blob": "ba656d072663bf1f7898a65db3c11abd9c78a468",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/virtual_source.py",
+        "blob": "84ae09b919f0a52ce19e670b9d1f7b08d3f8881a",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/web/boot.html",
+        "blob": "e185f2c3958b28093fad9b5b521869f504158d1a",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/web/boot.html",
+        "blob": "1379690686340a6975b7b581dc4faf9acf0bf64c",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/emulator/wifi_sdio.py",
+        "blob": "ea4e8eb5f3db27614f973e8fe7b6e6f338863c1b",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "emulator/wifi_sdio.py",
+        "blob": "ea4e8eb5f3db27614f973e8fe7b6e6f338863c1b",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/firmware/x-m1/1.50/emulator-rec.json",
+        "blob": "64bff8bef12232237ac7fd8a731f2f4c4b0042f7",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "firmware/x-m1/1.50/emulator-rec.json",
+        "blob": "bc515006d47a147361f58efa00e3fd08ad02e830",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/firmware/x-m1/1.50/firmware.json",
+        "blob": "7e2c9e3a5e9ab08e58fff033c3cf9b0f39c17378",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "firmware/x-m1/1.50/firmware.json",
+        "blob": "2854d2ea9b2402eab5c9b0b3e2cff09a7252d1f6",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/Cargo.lock",
+        "blob": "0dd4c9d4154a4d4a97c13c21eac5c449660b35d6",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/Cargo.lock",
+        "blob": "0dd4c9d4154a4d4a97c13c21eac5c449660b35d6",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/Cargo.toml",
+        "blob": "f2f1d685515620c32b14c19271c8ae356cac7250",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/Cargo.toml",
+        "blob": "f2f1d685515620c32b14c19271c8ae356cac7250",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/build.rs",
+        "blob": "322a0e9e9f39f0fbedfd67b65191f1bc91d4e374",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/build.rs",
+        "blob": "322a0e9e9f39f0fbedfd67b65191f1bc91d4e374",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/python/x70_native/__init__.py",
+        "blob": "b8f9c6fd0a0e3c9eb893cd5c2ea18e09195e765d",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/python/x70_native/__init__.py",
+        "blob": "b8f9c6fd0a0e3c9eb893cd5c2ea18e09195e765d",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/python/x70_native/__main__.py",
+        "blob": "102c1eab386efdb70af88bb2a0dfb5f4ed4488ac",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/python/x70_native/__main__.py",
+        "blob": "102c1eab386efdb70af88bb2a0dfb5f4ed4488ac",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/python/x70_native/_native.pyi",
+        "blob": "85888baa07f5935ae1879f0f664cc137b09d3e38",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/python/x70_native/_native.pyi",
+        "blob": "04106cf6e708f49ab82de9524679cdd655915a81",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/python/x70_native/architecture.py",
+        "blob": "a4a820428dca19efaa260684e9db3d3cf3a2dc8b",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/python/x70_native/architecture.py",
+        "blob": "a4a820428dca19efaa260684e9db3d3cf3a2dc8b",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/python/x70_native/board.py",
+        "blob": "b950389253f8523f34afce76455fe5ab0daa1510",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/python/x70_native/board.py",
+        "blob": "39bf67cdba03e387873998d87aba39bc9148461f",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/python/x70_native/boot.py",
+        "blob": "d3bb0a9b1527ddef342670987d76e97a103c39a4",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/python/x70_native/boot.py",
+        "blob": "d3bb0a9b1527ddef342670987d76e97a103c39a4",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/python/x70_native/checkpoint.py",
+        "blob": "18e2a85d306f172dd46ba5421703d2338a7c77d7",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/python/x70_native/checkpoint.py",
+        "blob": "18e2a85d306f172dd46ba5421703d2338a7c77d7",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/python/x70_native/driver_harness.py",
+        "blob": "b85ff389a964e8bf036a1153d27bade310b5d12b",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/python/x70_native/driver_harness.py",
+        "blob": "c3d77c2cd542633bf28cbe222bc4d29ef15a45bc",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/python/x70_native/portable_checkpoint.py",
+        "blob": "3869e6442d3914c2126aa14e748df6963af5e26b",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/python/x70_native/portable_checkpoint.py",
+        "blob": "573b9a57236da38013dd62e4460aaede69210bdb",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/python/x70_native/profiles.py",
+        "blob": "30a6d1029b9fa825ed227694a92c66b1268ba4e0",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/python/x70_native/profiles.py",
+        "blob": "7e2205db56ec86e05c643a0d5788a6a4de64f931",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/python/x70_native/provenance.py",
+        "blob": "28b5f8dda24078023168b08fec21b2652021beae",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/python/x70_native/provenance.py",
+        "blob": "28b5f8dda24078023168b08fec21b2652021beae",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/python/x70_native/py.typed",
+        "blob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/python/x70_native/py.typed",
+        "blob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/python/x70_native/registers.py",
+        "blob": "886ab29a4a7e7b2c2d9d0a7f20e17e2373850c78",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/python/x70_native/registers.py",
+        "blob": "886ab29a4a7e7b2c2d9d0a7f20e17e2373850c78",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/python/x70_native/state_inspection.py",
+        "blob": "c54ce1c81fef02af98db51de765ea33983669095",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/python/x70_native/state_inspection.py",
+        "blob": "c54ce1c81fef02af98db51de765ea33983669095",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/python/x70_native/warm_boot.py",
+        "blob": "a5b7060e520572155f0415ab926b99e1389fbf49",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/python/x70_native/warm_boot.py",
+        "blob": "a5b7060e520572155f0415ab926b99e1389fbf49",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/access_probe.rs",
+        "blob": "a1a49074a96dc306ee29165721b89c8cc93347fe",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/src/access_probe.rs",
+        "blob": "a1a49074a96dc306ee29165721b89c8cc93347fe",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/audit.rs",
+        "blob": "da1bb1d8165eab6b06ab076b182672d2d35c25fe",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/src/audit.rs",
+        "blob": "da1bb1d8165eab6b06ab076b182672d2d35c25fe",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/engine.rs",
+        "blob": "117037966c0adff1adfc5311b71ea9cb0248ed4c",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/src/engine.rs",
+        "blob": "d9a374683df0aff671d58ce0875073f69891399c",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/fetch_guard.rs",
+        "blob": "703f7d29992d3fd4f1ce83fe6ff708c52fe5ee01",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/src/fetch_guard.rs",
+        "blob": "703f7d29992d3fd4f1ce83fe6ff708c52fe5ee01",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/ffi.rs",
+        "blob": "d9e119fdf9974d90af6529c42feba5c3bd577d5e",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/src/ffi.rs",
+        "blob": "f5bdc3e155a94f85177ff3b32e40614a0973ae64",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/fuji.rs",
+        "blob": "9eda3d08f6b9309b1ec880699007a3ec8d781b37",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/src/fuji.rs",
+        "blob": "9eda3d08f6b9309b1ec880699007a3ec8d781b37",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/hooks.rs",
+        "blob": "8da5bb1983b824ef147032865de78e4235f41d33",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/src/hooks.rs",
+        "blob": "86b0ed039dca7b564b96dae4bad1684f4e823fe2",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/lib.rs",
+        "blob": "09a39d865ac5b7538a59ac301e4a808758b8cf2c",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/src/lib.rs",
+        "blob": "38ab41f2afb91ab53c9447568dcdf21d370c6d66",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/observe.rs",
+        "blob": "82e86dd81bf4e20b15b8b84391f033d688df01d2",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/src/observe.rs",
+        "blob": "82e86dd81bf4e20b15b8b84391f033d688df01d2",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/raster.rs",
+        "blob": "7ef9227e625b3004358ce2a78bbefcc5236892d1",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/src/raster.rs",
+        "blob": "2903bdd28d1fc988d19d4d221885b4e6c5ad987d",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/scene.rs",
+        "blob": "23e046d68a56cba9707f9f3e71429f3a31e1b919",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/src/scene.rs",
+        "blob": "bb815bc79aabffe8df68d3cbc4e9bc9eca5b8160",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/state.rs",
+        "blob": "317398406a7b83af8c213ef2d879817648e8a4e1",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/src/state.rs",
+        "blob": "a7f0d83f26992f81a873923737ee3cf48c539fb4",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/tcm.rs",
+        "blob": "6c8ae6d838dc9a7476f38fe88006784bbfb96aa1",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/src/tcm.rs",
+        "blob": "48f303d171b850aa80773eb4f06dd756e8788599",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/tests/test_portable_checkpoint.py",
+        "blob": "d5e775ca6dbb74731a8ce681fbe6772a4bfab1e7",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/tests/test_portable_checkpoint.py",
+        "blob": "6debce6bbb863ea53554898ce2b27461e7b0fb3d",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/tests/test_portable_profile_option.py",
+        "blob": "754f302e4ee90a54a84af45a022a75c0da30041f",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "native/tests/test_portable_profile_option.py",
+        "blob": "3b7d9509c36bf9af62015cacbb222a8f3e8c0a39",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/tools/afs_load.py",
+        "blob": "1aba47c74edc4cab99f6589a6f71914d48b3f5b0",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "tools/afs_load.py",
+        "blob": "1aba47c74edc4cab99f6589a6f71914d48b3f5b0",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/tools/continue_rec_scanout.py",
+        "blob": "872d44720f69f333175c9097c79f918964b85c64",
+        "mode": "100755"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "tools/continue_rec_scanout.py",
+        "blob": "4c53eaba95cac15bd9f9eb1ffbd42631b1691ae1",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/tools/decode_af_sweep.py",
+        "blob": "fab58b96f66ad43428ed9ba48ce5ec222a6239bd",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "tools/decode_af_sweep.py",
+        "blob": "fab58b96f66ad43428ed9ba48ce5ec222a6239bd",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/tools/firmware_registry.py",
+        "blob": "6bdf9aeb197f208a66fec861407c2247b5599dd5",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "tools/firmware_registry.py",
+        "blob": "af2dacac903025d4e8dca42438c525a290a02d1c",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/tools/menu_render_settle.py",
+        "blob": "7d6dba4f1c513e82681f165f97e5434c4bcdbaf3",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "tools/menu_render_settle.py",
+        "blob": "e55a4dccf42294912ddcca629ce6d69b765a63aa",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/tools/probe_setup_menus.py",
+        "blob": "97e16a0d39e3fbe97f39dbb256bd07ac59c34de5",
+        "mode": "100755"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "tools/probe_setup_menus.py",
+        "blob": "852c0ad0d9a24e2f8cbbb3f3750a00adeb4d60ff",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/tools/start_setup_viewer.py",
+        "blob": "1a1160a428e40bd215bd77ac534fd6a0e0228b44",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "tools/start_setup_viewer.py",
+        "blob": "f5b6f514ec35f6947e93ed6d3e7646bfa45b4cd3",
+        "mode": "100644"
+      },
+      "status": "adapted"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/tools/unpack_ricoh.py",
+        "blob": "8c6fe389de88e365f68066a8d6b2be43f708942a",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "tools/unpack_ricoh.py",
+        "blob": "8c6fe389de88e365f68066a8d6b2be43f708942a",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/tools/unpack_x70.py",
+        "blob": "85c29b99bf516bc8893a599685050f50130d829c",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "tools/unpack_x70.py",
+        "blob": "85c29b99bf516bc8893a599685050f50130d829c",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/tools/x70_buttons.py",
+        "blob": "d2752d50006b58c8f8de4f08dd05e808181ccd29",
+        "mode": "100644"
+      },
+      "original": {
+        "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
+        "path": "tools/x70_buttons.py",
+        "blob": "d2752d50006b58c8f8de4f08dd05e808181ccd29",
+        "mode": "100644"
+      },
+      "status": "unchanged"
+    }
+  ],
+  "unmatched_retained_paths": [
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/fff42.rs",
+        "blob": "144e35a2f891025f77ad2df4f6dfa79f741d4e46",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/fff63.rs",
+        "blob": "10233570511e17e3ea3b4a34fb22b4239dc85b5b",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/gpu_startup.rs",
+        "blob": "c0678226bb0e7d744db41c90ace14a01b70e864b",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/gpu_startup_bridge.rs",
+        "blob": "f57940cf41f1d10b57c4a3129de000d67c4a5fd1",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/gradient.rs",
+        "blob": "b8976646a3cb01b7238bc7bd4d9d8bcf0d3fedbf",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/irq_mask.rs",
+        "blob": "2a448e6d3b5cf84d27f1cc3f9ea58e7a70852faf",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/menu.rs",
+        "blob": "a0b4be31544da91cc1aafbf471e0ae7ce610dca7",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/menu_media.rs",
+        "blob": "bfaa890f1c799abb7133cac016a80e07628b433d",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/mode_devices.rs",
+        "blob": "e5cd2797f3e33ec5ac22efbc7f7aec5bcf983953",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/mode_resize.rs",
+        "blob": "ba81fd34acd7463b6a18de8ecf1bc7a2e8e6a1e0",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/phase_clock.rs",
+        "blob": "1c5ee01267735102fa5d34e5b28c6294a59615fe",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/scene_device.rs",
+        "blob": "fda558062cd4c0e375b4106853d78c68d4a5be83",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/scene_scaler.rs",
+        "blob": "ef71ae90fa7dd853c7c9fc79f6e253360941f08c",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/spi0.rs",
+        "blob": "085e8bec5c036564331a11238c1225cfc919998c",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/task_state.rs",
+        "blob": "9895fba5a638ceeb41cf8104611d1051bb0cab88",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/src/tests.rs",
+        "blob": "d5b7689a6b318b087294f6e7b95db8b58ea0a257",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/tests/test_interrupt_trace.py",
+        "blob": "613cec48a295180ddf148eb71af77854ca03f0df",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/tests/test_ram_push_park.py",
+        "blob": "65cd48623d357f9c55eb2779cb0f24833f2e43e9",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/tests/test_ram_push_ui_entry.py",
+        "blob": "8d16a79210441a71f956855d944ab2d48db87def",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/tests/test_usb_endpoint.py",
+        "blob": "bfc754df2e9c8c6c00c16ea69e7c56794686dd47",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/native/tests/test_usb_presence.py",
+        "blob": "8510dbddcf0da8c2b7547b93faa6f72a7160bb8a",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/tools/scanout_attach.py",
+        "blob": "4895bb59986b3abd26af8c73888523c2faeba034",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    },
+    {
+      "public": {
+        "path": "emulation/xm1-upstream/tools/scanout_commands.py",
+        "blob": "eea0846f87f0eeb8bfcd68b850d8ce717c12a688",
+        "mode": "100644"
+      },
+      "status": "unmatched"
+    }
+  ],
+  "scope": [
+    "Exact selected retained-file bytes only; not an upstream archive, complete checkout or runnable distribution.",
+    "Applying the patch restores the 60 adapted paths to their named original blobs, leaves the 160 unchanged paths byte-identical, and restores the two source scripts continue_rec_scanout.py and probe_setup_menus.py from 100755 to 100644.",
+    "The 23 unmatched retained paths have no recovered original identity and are listed separately; no origin is inferred.",
+    "It stores no firmware or capture payload files and adds no new captured input bytes. Patch context retains only previously public scoped reset-release fixture checks and documented synthetic model constants. The approved sixteen-byte captured_mcu_profile.py fixture is unchanged and is not newly conveyed patch content.",
+    "Runtime inputs, generated reports, images, binaries and third-party dependency implementations are not included; source-byte recovery does not clear combined artifacts.",
+    "Primary credit belongs to jitl (justjake) and x70view, https://github.com/justjake/x70view; the 2026-10-14 permission covers credited redistribution of his work only and supplies no author-provided SPDX, sublicensing or downstream modification terms."
+  ]
+}
