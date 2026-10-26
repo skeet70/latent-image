@@ -16,7 +16,7 @@ The public baseline used for the retained files is `5d9283cd48515de4d189e157944c
 | `x70view-selected-source.patch` | Exact source patch, 665994 bytes, SHA-256 `66d4cdc0b389a65cacd5460350e475773e466f3dbfac26f10eae8647c5de38e0`. Direction: retained public bytes to named original bytes. |
 | `manifest.json` | Per-file integrity mapping for 220 retained paths, plus the 23 unmatched retained paths and both original revision identities. SHA-256 `0b6b9b83c65a5223ad458883bb38482ab942a05de80773afb7e4787d3cffb92f`. |
 
-The 220 mapped files split into 60 adapted paths whose original bytes differ from the retained public bytes, and 160 paths whose retained public bytes equal their original blobs. The patch carries changed bytes for the 60 adapted paths and leaves the 160 unchanged paths byte-identical. The manifest also lists 23 retained paths with no recovered original identity; no origin is inferred for them and the patch does not touch them.
+The 220 mapped files split into 60 adapted paths whose original bytes differ from the retained public bytes, and 160 paths whose retained public bytes equal their original blobs. The patch carries changed bytes for the 60 adapted paths and leaves the 160 unchanged paths byte-identical. The manifest also lists 23 retained paths with no recovered original identity; no origin is inferred for them and the patch does not touch them. Their public introduction lineage is recorded in the [third-party inventory](../README.md#unmatched-retained-path-lineage); that lineage does not establish an original identity at either named pin, so they remain unmatched.
 
 The patch is a non-executed source artifact. It is a unified diff, not a tool or script. Store and transfer it as bytes; do not run it as a program.
 

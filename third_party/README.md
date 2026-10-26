@@ -32,6 +32,36 @@ The retained `native/Cargo.toml`, `native/Cargo.lock` and `native/build.rs` are 
 
 These findings are recorded in `E-X70VIEW-SOURCE-RECOVERY-BOUNDARY`; the stored artifact is recorded in `E-X70VIEW-SOURCE-RECOVERY-ARTIFACT-150`. Public exact-source recovery is limited to the selected 220-file set and does not establish historical build completeness; the remaining archive gap and the 23 unmatched paths stay explicit, not a claim of global impossibility.
 
+### Unmatched retained-path lineage
+
+Twenty-three retained paths have no recovered original identity at the named x70view pins `40406daf52228ace99cb1a3e322f3193f96b0283` or `62876536052549cbcba1e9f6abc1437e773dba2f`. The table records each path's first public appearance and any documented import or restructuring relation. It is a lineage record only. First appearance, import authorship metadata and a failed upstream search do not establish independent authorship, absence of uncommitted upstream copies or a replacement original identity. The existing inherited-x70view credit and terms in [LICENSING.md](../LICENSING.md) are unchanged.
+
+| Retained path | First public appearance | Documented relation |
+| --- | --- | --- |
+| `emulation/xm1-upstream/native/src/fff42.rs` | [c6e4aa7](https://github.com/skeet70/latent-image/commit/c6e4aa74d018c9c0df452a9f79ecf072ff50bbc2) | Public addition; mode-device and input acceptance. |
+| `emulation/xm1-upstream/native/src/fff63.rs` | [b733276](https://github.com/skeet70/latent-image/commit/b733276e140a994b867f02fe7df36683cd1d38d0) | Source-only import from the private research history; FFF63 model recast at import. |
+| `emulation/xm1-upstream/native/src/gpu_startup.rs` | [095cb7b](https://github.com/skeet70/latent-image/commit/095cb7b275e48f37fd7b7d3ffb3625edb5d4122f) | Public addition; source-bound GPU startup model. |
+| `emulation/xm1-upstream/native/src/gpu_startup_bridge.rs` | [095cb7b](https://github.com/skeet70/latent-image/commit/095cb7b275e48f37fd7b7d3ffb3625edb5d4122f) | Public addition; GPU startup bridge. |
+| `emulation/xm1-upstream/native/src/gradient.rs` | [b733276](https://github.com/skeet70/latent-image/commit/b733276e140a994b867f02fe7df36683cd1d38d0) | Source-only import from the private research history; no private branch merged. |
+| `emulation/xm1-upstream/native/src/irq_mask.rs` | [262ff8f](https://github.com/skeet70/latent-image/commit/262ff8ff34144eec555f41bebf62b26419e0d497) | Public addition; IRQ mask-window latch. |
+| `emulation/xm1-upstream/native/src/menu.rs` | [b733276](https://github.com/skeet70/latent-image/commit/b733276e140a994b867f02fe7df36683cd1d38d0) | Source-only import; key-release adaptation at import. |
+| `emulation/xm1-upstream/native/src/menu_media.rs` | [e92d1ce](https://github.com/skeet70/latent-image/commit/e92d1ce897f3d384dba3a8df0c3631f48b517eb0) | Public addition; viewer media controls. |
+| `emulation/xm1-upstream/native/src/mode_devices.rs` | [e92d1ce](https://github.com/skeet70/latent-image/commit/e92d1ce897f3d384dba3a8df0c3631f48b517eb0) | Public addition; declared mode devices. |
+| `emulation/xm1-upstream/native/src/mode_resize.rs` | [c6e4aa7](https://github.com/skeet70/latent-image/commit/c6e4aa74d018c9c0df452a9f79ecf072ff50bbc2) | Public addition; mode resize. |
+| `emulation/xm1-upstream/native/src/phase_clock.rs` | [b733276](https://github.com/skeet70/latent-image/commit/b733276e140a994b867f02fe7df36683cd1d38d0) | Source-only import from the private research history; no private branch merged. |
+| `emulation/xm1-upstream/native/src/scene_device.rs` | [c6e4aa7](https://github.com/skeet70/latent-image/commit/c6e4aa74d018c9c0df452a9f79ecf072ff50bbc2) | Public addition; declared scene device. |
+| `emulation/xm1-upstream/native/src/scene_scaler.rs` | [c6e4aa7](https://github.com/skeet70/latent-image/commit/c6e4aa74d018c9c0df452a9f79ecf072ff50bbc2) | Public addition; declared scene scaler. |
+| `emulation/xm1-upstream/native/src/spi0.rs` | [b733276](https://github.com/skeet70/latent-image/commit/b733276e140a994b867f02fe7df36683cd1d38d0) | Source-only import; recast from the imported FFF63 device model. |
+| `emulation/xm1-upstream/native/src/task_state.rs` | [935056a](https://github.com/skeet70/latent-image/commit/935056acf1b8e812d89dc3af02e582f226611d6a) | Public addition; staged recovery task and scheduler state. |
+| `emulation/xm1-upstream/native/src/tests.rs` | [b733276](https://github.com/skeet70/latent-image/commit/b733276e140a994b867f02fe7df36683cd1d38d0) | Source-only import from the private research history; no private branch merged. |
+| `emulation/xm1-upstream/native/tests/test_interrupt_trace.py` | [c835b33](https://github.com/skeet70/latent-image/commit/c835b3366bb67b4e41a11a98f658d3d2033719ec) | RAM-push source-only import from the private research history. |
+| `emulation/xm1-upstream/native/tests/test_ram_push_park.py` | [c835b33](https://github.com/skeet70/latent-image/commit/c835b3366bb67b4e41a11a98f658d3d2033719ec) | RAM-push source-only import from the private research history. |
+| `emulation/xm1-upstream/native/tests/test_ram_push_ui_entry.py` | [c835b33](https://github.com/skeet70/latent-image/commit/c835b3366bb67b4e41a11a98f658d3d2033719ec) | RAM-push source-only import from the private research history. |
+| `emulation/xm1-upstream/native/tests/test_usb_endpoint.py` | [c835b33](https://github.com/skeet70/latent-image/commit/c835b3366bb67b4e41a11a98f658d3d2033719ec) | RAM-push source-only import from the private research history. |
+| `emulation/xm1-upstream/native/tests/test_usb_presence.py` | [c835b33](https://github.com/skeet70/latent-image/commit/c835b3366bb67b4e41a11a98f658d3d2033719ec) | RAM-push source-only import from the private research history. |
+| `emulation/xm1-upstream/tools/scanout_attach.py` | [df0ecf8](https://github.com/skeet70/latent-image/commit/df0ecf8d86164dc9df5ab484ed21bba86c80fc62) | Public restructuring; split from `continue_rec_scanout.py`. |
+| `emulation/xm1-upstream/tools/scanout_commands.py` | [df0ecf8](https://github.com/skeet70/latent-image/commit/df0ecf8d86164dc9df5ab484ed21bba86c80fc62) | Public restructuring; split from `continue_rec_scanout.py`. |
+
 ### Retained inputs and dependencies
 
 The owner chose on 2026-10-14 to retain the exact sixteen-byte remembered MCU packet in `emulation/xm1-upstream/emulator/captured_mcu_profile.py` publicly as a scoped observed fixture. It is not synthetic data, and this disposition is not permission to redistribute other Fujifilm firmware or captures.
