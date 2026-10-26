@@ -606,7 +606,7 @@ Instrumented X-M1 1.50 first-OK probes on FujiMod `ecdb6cb6` and `dfc1879e`, eac
 | First raw-observation interval (`Timeline.now` ticks) | 300000 | 300000 |
 | Pressed observations before release | 2 | 1 |
 
-The newer run binds Task37 registry 0 to generic timer index 6; the accepted run's generic index is unmeasured. The newer first OK still fails and the newer pin remains unqualified. This demonstrates instruction-pulse timing sensitivity, not a source fault or physical-time calibration. The pre-prefix clock/wait/deadline origin remains unresolved.
+The newer run binds Task37 registry 0 to generic timer index 6; the accepted run's generic index is unmeasured. The newer first OK still fails and the newer pin remains unqualified. This demonstrates instruction-pulse timing sensitivity, not a source fault or physical-time calibration. The origin of the clock/wait/deadline differences before the first OK remains unresolved.
 
 Checkpoint searches bracketed each threshold within 1,953 instructions. The table retains those bounds as phase-specific measurements and the selected fixed holds and release caps. Release bounds come from the Q checkpoint at the selected hold. Busy UI paths change release latency.
 
