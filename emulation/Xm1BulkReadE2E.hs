@@ -13,12 +13,15 @@ import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.Bits (xor)
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (isHexDigit)
 import Data.List (isPrefixOf)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Word (Word32)
+import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, routeKey, routeKeyHex)
+import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
@@ -184,15 +187,25 @@ run options = do
       checkpoints = workspacePath </> "private-data" </> "emulator-checkpoints" </>
         (if optEngine options == FujiMod then "xm1-bulk-read-fujimod" else "xm1-bulk-read")
       fallback = ReplacedRuntime ("emulator-runtimes" </> "xm1-bulk-read-e2e")
-  (destination, executable) <- case optEngine options of
+  (destination, executable, checkpointArguments) <- case optEngine options of
     FujiMod -> do
       (ViewerRuntime.Runtime path, _) <- ViewerRuntime.stageFujiModRuntime root Nothing fallback (Firmware <$> optFirmware options)
-      pure (path, fujimodRamPushBridge)
+      pure (path, fujimodRamPushBridge, [])
     Retained -> do
       staged <- stageViewerRuntime root Nothing fallback (Firmware <$> optFirmware options) StageStockOriginal
       let Python python = stagedPython staged
       callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
-      pure (stagedDirectory staged, python)
+      let destination = stagedDirectory staged
+      guest <- guestState destination (InterpreterExecutable python) (UnicornLibrary (stagedUnicorn staged))
+      installed <- sha256File (destination </> stagedFirmwarePath)
+      adjustment <- sha256File nand
+      cardDigest <- sha256File card
+      let key = routeKey guest CardAttach
+            [ "profile" .= String "firmware/x-m1/1.50/emulator-rec.json", "installed_dat" .= sha256Hex installed
+            , "adjustment_nand" .= sha256Hex adjustment, "menu_sd_image" .= sha256Hex cardDigest
+            , "ui_conversion_profile" .= String "declared-ui-cpu-fallback" ]
+      pure (destination, python,
+        ["--checkpoint-key", routeKeyHex key, "--checkpoint-inputs", C.unpack (BL.toStrict (encode (routeKeyDocument key)))])
   putStrLn ("X-M1 bulk-read runtime: " ++ destination)
   let bridgeArguments = (case optEngine options of
         FujiMod ->
@@ -209,7 +222,7 @@ run options = do
           , "--menus", "--ram-push-server"
           , "--output", receipt </> "bridge", "--ram-push-checkpoints", checkpoints
           , "--ui-conversion-profile", "declared-ui-cpu-fallback" ])
-        ++ ["--fresh-boot" | optFresh options]
+        ++ checkpointArguments ++ ["--fresh-boot" | optFresh options]
       bulkDirectory = receipt </> "read-bulk"
       d1Directory = receipt </> "read-ram"
       aliasDirectory = receipt </> "read-bulk-alias"

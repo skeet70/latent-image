@@ -458,6 +458,8 @@ haskell_binary(
         "-O2",
     ],
     deps = [
+        ":case-sha256",
+        ":checkpoint-key-lib",
         ":emulator-slot-lib",
         ":emulator-usb",
         ":fujimod-paths",
