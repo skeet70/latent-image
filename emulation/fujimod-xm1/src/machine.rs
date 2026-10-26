@@ -53,6 +53,7 @@ enum GpioReleaseKey {
     DialPush,
     DialLeft,
     DialRight,
+    HalfPress,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -191,6 +192,32 @@ impl Machine {
         self.require_running()
     }
 
+    pub fn half_press(&mut self, pulse: KeyPulse) -> Result<(), String> {
+        self.require_running()?;
+        let key = self.document.firmware.half_press(&self.session)?;
+        let released = self.document.firmware.key_table.base.0
+            + key.row * self.document.firmware.key_table.row_bytes
+            + self.document.firmware.key_table.released_offset;
+        self.session.gpio(&self.document.gpio.0, key.port, key.pin, key.pressed_high)?;
+        self.run(pulse.hold);
+        self.session.gpio(&self.document.gpio.0, key.port, key.pin, !key.pressed_high)?;
+        let start = self.instructions();
+        let mut sampled = [0];
+        while self.failure.is_none() {
+            self.session.board.read_physical(released, &mut sampled)?;
+            if sampled[0] == 0 {
+                break;
+            }
+            let spent = self.instructions() - start;
+            if spent >= pulse.release {
+                self.observe_incomplete_release(ReleaseKey::Gpio(GpioReleaseKey::HalfPress), Some(KeyRow(key.row)), pulse.release, start);
+                break;
+            }
+            self.run((pulse.release - spent).min(RELEASE_POLL));
+        }
+        self.require_running()
+    }
+
     pub fn require_running(&self) -> Result<(), String> {
         match &self.failure {
             Some(failure) => Err(format!("the machine stopped: {failure}")),
@@ -206,6 +233,7 @@ impl Machine {
         match press {
             Press::Key(key) => self.key(key, pulse),
             Press::Dial(turn) => self.turn_dial(turn, pulse),
+            Press::HalfPress => self.half_press(pulse),
         }
     }
 

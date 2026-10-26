@@ -19,6 +19,7 @@ module Emulation.ViewerRuntime
   , fixedSceneFrameArguments
   , validateFirmware
   , stageViewerRuntime
+  , stageFujiModRuntime
   , stagedFirmwarePath
   , stagedRomPath
   ) where
@@ -169,6 +170,20 @@ validateFirmware (Firmware path) = do
         filter ((`notElem` variableFields) . U.checkField) (U.stockChecks normalized)
   forM_ results $ \result -> require (U.checkPassed result)
     ("Incompatible DAT: " ++ U.checkField result ++ "; expected " ++ U.checkExpected result)
+
+stageFujiModRuntime :: Workspace -> Maybe Runtime -> DefaultRuntime -> Maybe Firmware -> IO (Runtime, Firmware)
+stageFujiModRuntime root output fallback selected = do
+  let dat = maybe (resolve root "private-data/firmware/x-m1-1.50/FWUP0002.DAT")
+        (\(Firmware path) -> resolve root path) selected
+      rom = resolve root "private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin"
+  validateFirmware (Firmware dat)
+  exists <- doesFileExist rom
+  require exists ("Required viewer input is missing: " ++ rom)
+  runtime@(Runtime destination) <- freshRuntime root output fallback
+  stageFile dat (destination </> stagedFirmwarePath)
+  stageFile rom (destination </> stagedRomPath)
+  setCurrentDirectory destination
+  pure (runtime, Firmware dat)
 
 -- | Stages a fresh runtime and makes it the current directory. Without a
 -- selected DAT the pinned stock 1.50 DAT is staged. The calling executable is

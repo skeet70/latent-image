@@ -56,6 +56,7 @@ impl DialTurn {
 pub enum Press {
     Key(RouteKey),
     Dial(DialTurn),
+    HalfPress,
 }
 
 impl Press {
@@ -63,6 +64,7 @@ impl Press {
         Ok(match name {
             "dial-left" => Press::Dial(DialTurn::Left),
             "dial-right" => Press::Dial(DialTurn::Right),
+            "half-press" => Press::HalfPress,
             _ => Press::Key(RouteKey::parse(name)?),
         })
     }
@@ -374,6 +376,19 @@ impl FirmwareFacts {
     pub fn dial_push_released(&self, session: &Session) -> Result<bool, String> {
         let address = self.key_table.base.0 + self.dial_push.row * self.key_table.row_bytes + self.key_table.released_offset;
         Ok(bytes::<1>(session, address)?[0] == 0)
+    }
+
+    pub fn half_press(&self, session: &Session) -> Result<GpioKey, String> {
+        let key = GpioKey { code: 7, row: 5, port: 0, pin: 2, pressed_high: false };
+        let record = bytes::<28>(session, self.key_table.base.0 + key.row * self.key_table.row_bytes)?;
+        let word = |offset| u32::from_le_bytes([record[offset], record[offset + 1], record[offset + 2], record[offset + 3]]);
+        let halfword = |offset| u16::from_le_bytes([record[offset], record[offset + 1]]);
+        if word(0) != key.code || record[9] != 4 || word(12) != u32::from(key.pin)
+            || halfword(16) != 1 || halfword(18) != 0x1f
+        {
+            return Err("S1 row differs from its source-bound GPIO0.2 binding".into());
+        }
+        Ok(key)
     }
 
     pub fn released(&self, session: &Session, key: RouteKey) -> Result<bool, String> {

@@ -26,7 +26,6 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
-import struct
 import sys
 from time import perf_counter
 from uuid import uuid4
@@ -34,7 +33,7 @@ from uuid import uuid4
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from tools.scanout_attach import (ATTACH_RECORD, FIRST_START_PULSE, INSTALL_RECORD,
+from tools.scanout_attach import (ATTACH_RECORD, INSTALL_RECORD,
                                   MODE_DIAL_SETTLE, _ram_push_attach, _read_ram_push_record,
                                   _save_ram_push_checkpoint, _unique_object, cold_board,
                                   load_profile)
@@ -330,237 +329,6 @@ class WarmScanoutSession:
 
 # A USB-toggle boot checkpoint: saved at the shooting screen with the cable level as the boot left it.
 TOGGLE_RECORD = 'usb-toggle-boot.json'
-def _run_ff80_rehearsal(board, session, output):
-    """Drive the stock ordinary-boot service session through the guest USB stack."""
-    from emulator.power_devices import PowerDevices
-    from emulator.rec_state import Reader, task_state
-    from emulator.usb_devices import USBControl
-    from tools.probe_setup_menus import MenuSession
-    from unicorn.arm_const import UC_ARM_REG_SP
-
-    if not isinstance(session, MenuSession):
-        raise ValueError('ff80 rehearsal requires --menus')
-    power = next(device for device in board.devices if type(device) is PowerDevices)
-    usb = next(device for device in board.devices if type(device) is USBControl)
-    endpoint = usb._endpoint
-    if endpoint is None:
-        raise ValueError('ff80 rehearsal requires the selected endpoint transport')
-    if power.usb_connected:
-        raise ValueError('ff80 rehearsal requires a post-boot cable attach')
-
-    def run_until(label, predicate, budget):
-        end = board.instructions + budget
-        while not predicate():
-            if board.failure is not None or session.execution_error is not None:
-                machine = board.snapshot()
-                cores = [{'pc': core.get('pc'), 'lr': core.get('lr'), 'sp': core.get('sp'),
-                          'recent': core.get('recent_instructions', [])[-12:]}
-                         for core in machine.get('cores', [])]
-                raise RuntimeError(f'{label}: {board.failure or session.execution_error}; cores={cores}')
-            if board.instructions >= end:
-                raise TimeoutError(f'{label}: instruction budget expired; usb={endpoint.snapshot()}')
-            target = min(end, board.instructions + 1_000_000)
-            try:
-                board.run(target - board.instructions + 2 * board.quantum, pause_after=target)
-            except Exception as error:
-                session.execution_error = {'type': type(error).__name__, 'error': str(error)}
-
-    def run_for(count):
-        target = board.instructions + count
-        while board.instructions < target:
-            run_until('bounded continuation', lambda: board.instructions >= target,
-                      target - board.instructions)
-
-    def take_in(endpoint_address, count):
-        chunks = bytearray()
-        while len(chunks) < count:
-            if not endpoint.tx[dict(endpoint.contract.in_endpoints)[endpoint_address]]:
-                endpoint.host_in_token(endpoint_address)
-            port = dict(endpoint.contract.in_endpoints)[endpoint_address]
-            run_until('bulk IN reply', lambda: bool(endpoint.tx[port]), 30_000_000)
-            chunks.extend(endpoint.host_in(endpoint_address, count - len(chunks)))
-            run_for(200_000)
-        return bytes(chunks)
-
-    def control_out(payload):
-        setup = bytes((0x43, 0, 0, 0, 0, 0, len(payload) & 0xff, len(payload) >> 8))
-        endpoint.host_setup(setup)
-        run_for(200_000)
-        endpoint.host_out(0, payload)
-        run_until('control OUT status', lambda: bool(endpoint.tx[0]), 30_000_000)
-        status = endpoint.host_in(0x80, 64)
-        if status:
-            raise RuntimeError('control OUT status packet was not empty')
-        run_for(200_000)
-
-    def control_status(setup):
-        endpoint.host_setup(setup)
-        run_until('control status IN', lambda: bool(endpoint.tx[0]), 30_000_000)
-        status = endpoint.host_in(0x80, 64)
-        if status:
-            raise RuntimeError('control status packet was not empty')
-        run_for(200_000)
-
-    def control_in(setup, count):
-        endpoint.host_setup(setup)
-        run_until('control IN data', lambda: bool(endpoint.tx[0]), 30_000_000)
-        payload = endpoint.host_in(0x80, count)
-        endpoint.host_out(0, b'')
-        run_for(200_000)
-        return payload
-
-    def command(op, frame, reply_bytes, sid):
-        control_out(bytes((op, 0, 0, 0, 0, 0, 0, 0,
-                           len(frame) >> 8, len(frame) & 0xff, sid >> 8, sid & 0xff)))
-        if frame:
-            endpoint.host_out(2, frame)
-            run_until('bulk OUT completion',
-                      lambda: (endpoint.rx_positions[1] == len(endpoint.rx[1])
-                               and endpoint.dma_active is None),
-                      30_000_000)
-            run_for(1_000_000)
-        if reply_bytes is None:
-            return b''
-        opcode = int.from_bytes(frame[:4], 'little') if len(frame) >= 4 else 0
-        if opcode in (0x1a0002, 0x200001):
-            published = 0x124 if opcode == 0x1a0002 else 0x11c
-            run_until('service reply publication',
-                      lambda: int.from_bytes(board.read_memory(0x0146986c, 4), 'little') == published,
-                      30_000_000)
-        else:
-            run_for(1_000_000)
-        control_out(bytes((0xd1, 0, 0, 0, 0, 0, 0, 0,
-                           reply_bytes >> 8, reply_bytes & 0xff, sid >> 8, sid & 0xff)))
-        return take_in(0x81, reply_bytes)
-
-    def words(*values):
-        return b''.join(struct.pack('<I', value) for value in values)
-
-    def debug_frame(function, address, count, payload=b''):
-        return words(0x200001, 0, 0, 0, function, 0, 0, address, count) + payload
-
-    def trace_contexts():
-        _, tasks = task_state(Reader(board))
-        stacks = []
-        for task in tasks:
-            if all(name in task for name in ('stack_base', 'stack_bytes', 'task_id')):
-                base = int(task['stack_base'], 16)
-                stacks.append((task['cpu'], base, base + task['stack_bytes'], task['task_id']))
-        hits = []
-        sites = {0x00d803cc: 'debug-dispatch', 0x00647b78: 'function-3',
-                 0x00dc7874: 'stock-query-callback'}
-        def handler(cpu, core, address):
-            sp = cpu.reg_read(UC_ARM_REG_SP)
-            task = next((task_id for owner, low, high, task_id in stacks
-                         if owner == core and low <= sp < high), None)
-            request = bytes(board.read_memory(0x01469a9c, 0x24))
-            hits.append({'site': sites[address], 'address': hex(address), 'core': core,
-                         'task': task, 'task_hex': None if task is None else hex(task),
-                         'sp': hex(sp), 'instructions': board.instructions,
-                         'request': {'opcode': hex(int.from_bytes(request[0:4], 'little')),
-                                     'function_or_tag': hex(int.from_bytes(request[0x10:0x14], 'little')),
-                                     'address': hex(int.from_bytes(request[0x1c:0x20], 'little')),
-                                     'length': int.from_bytes(request[0x20:0x24], 'little')}})
-        for core in range(2):
-            board._native.set_breakpoints(core, sorted(sites))
-        board.breakpoint_handler = handler
-        return hits
-
-    recovery = session.options.get('recovery', {})
-    nand_path = Path(recovery['media'])
-    with nand_path.open('rb') as source:
-        nand_sha256 = hashlib.file_digest(source, 'sha256').hexdigest()
-    receipt = {'schema': 1, 'scope': 'emulated X-M1 1.50 ordinary-boot ff80 service',
-               'firmware_sha256': board.snapshot().get('firmware_sha256'),
-               'installed_nand': {'sha256': nand_sha256, 'stored_f7': 1},
-               'source': 'stock guest controller, IRQ, USB task and service handlers',
-               'limits': ['Synthetic USB host timing and endpoint register reset values.',
-                          'Shared emulator RAM is not a hardware cache-coherence model.']}
-    run_until('first-start screen', lambda: board.instructions >= 100_000_000, 100_000_000)
-    for key in ['up'] * 12 + ['ok', 'ok']:
-        session.key({'key': key, 'hold_instructions': FIRST_START_PULSE,
-                     'release_instructions': FIRST_START_PULSE})
-    run_for(40_000_000)
-    receipt['pre_attach'] = {'instructions': board.instructions,
-                             'cp14': list(board._native.cp14_identity())}
-    power.set_usb_connected(True)
-    run_until('USB controller activation', lambda: endpoint.regs[0x090] & 6 == 6,
-              140_000_000)
-    endpoint.host_reset()
-    run_for(1_000_000)
-
-    device = control_in(bytes((0x80, 6, 0, 1, 0, 0, 18, 0)), 18)
-    if len(device) != 18 or device[8:12] != bytes((0xcb, 0x04, 0x80, 0xff)):
-        raise RuntimeError(f'unexpected device descriptor {device.hex()}')
-    receipt['device_descriptor'] = {'vid': '0x04cb', 'pid': '0xff80',
-                                    'reply': device.hex()}
-    control_status(bytes((0, 5, 1, 0, 0, 0, 0, 0)))
-    config_head = control_in(bytes((0x80, 6, 0, 2, 0, 0, 9, 0)), 9)
-    config_bytes = int.from_bytes(config_head[2:4], 'little')
-    if len(config_head) != 9 or not 9 <= config_bytes <= 256:
-        raise RuntimeError(f'unexpected configuration descriptor head {config_head.hex()}')
-    configuration = control_in(
-        bytes((0x80, 6, 0, 2, 0, 0, config_bytes & 0xff, config_bytes >> 8)),
-        config_bytes)
-    control_status(bytes((0, 9, configuration[5], 0, 0, 0, 0, 0)))
-    run_for(1_000_000)
-    receipt['configuration_descriptor'] = configuration.hex()
-
-    open_request = bytes((0xc0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0))
-    control_out(open_request)
-    opened = take_in(0x81, 8)
-    sid = int.from_bytes(opened[:2], 'little')
-    if opened[2:] != bytes((0, 0, 0, 0, 1, 0)):
-        raise RuntimeError(f'unexpected C0 reply {opened.hex()}')
-    receipt['c0'] = {'opcode': '0xc0', 'sid': sid, 'reply': opened.hex()}
-    contexts = trace_contexts()
-
-    identity_request = words(0x150000, 0, 0, 0, 4, 0, 0, 0)
-    identity = command(0xd0, identity_request, 128, sid)
-    if identity[:16] != words(0x150000, 0, 0, 0) or identity[16:26] != b'X\x00-\x00M\x001\x00\x00\x00':
-        raise RuntimeError(f'unexpected identity reply {identity.hex()}')
-    receipt['identity'] = {'tag': 4, 'reply': identity.hex()}
-
-    config_request = words(0x1a0002, 0, 0, 0, 2, 1, 0, 0, 256)
-    config = command(0xd0, config_request, 0x124, sid)
-    if config[0x24 + 0xf7] != 1:
-        raise RuntimeError(f'config f7 was {config[0x24 + 0xf7]:#x}')
-    receipt['config'] = {'opcode': '0x1a0002', 'function': 2, 'window': 0, 'bytes': 256,
-                         'reply_sha256': hashlib.sha256(config).hexdigest(),
-                         'f7': config[0x24 + 0xf7]}
-
-    ram_address, ram_count = 0x015c22a0, 32
-    expected = bytes(board.read_memory(ram_address, ram_count))
-    ram = command(0xd0, debug_frame(2, ram_address, ram_count), 0x24 + ram_count, sid)
-    if ram[0x24:] != expected:
-        raise RuntimeError('function-2 reply differs from guest memory')
-    receipt['ram_read'] = {'address': hex(ram_address), 'bytes': ram_count,
-                           'guest_memory_hex': expected.hex(), 'reply_hex': ram[0x24:].hex(),
-                           'sha256': hashlib.sha256(expected).hexdigest()}
-
-    scratch, payload = 0x015c22d0, b'XM1!'
-    before = bytes(board.read_memory(scratch, len(payload)))
-    write_reply = command(0xd0, debug_frame(3, scratch, len(payload), payload), 0x24, sid)
-    readback = command(0xd0, debug_frame(2, scratch, len(payload)), 0x24 + len(payload), sid)
-    if readback[0x24:] != payload or bytes(board.read_memory(scratch, len(payload))) != payload:
-        raise RuntimeError('function-3 scratch write did not read back')
-    receipt['ram_write'] = {'address': hex(scratch), 'before': before.hex(),
-                            'written': payload.hex(), 'reply': write_reply.hex(),
-                            'readback': readback[0x24:].hex()}
-
-    query = command(0xd0, words(0x450006, 0, 0, 0, 0, 0, 0, 0), 32, sid)
-    receipt['query'] = {'tag': 0, 'reply': query.hex()}
-    receipt['contexts'] = contexts
-    receipt['boundary'] = {'instructions': board.instructions,
-                           'failure': board.failure,
-                           'execution_error': session.execution_error,
-                           'service_mode': int.from_bytes(board.read_memory(0x0146a0c0, 4), 'little')}
-    output.mkdir(parents=True, exist_ok=True)
-    target = output / 'ff80-session.json'
-    target.write_text(json.dumps(receipt, indent=2) + '\n')
-    return receipt
-
-
 class TraceSites:
     """Pre-instruction breakpoints on both cores recording r0-r3, sp, lr and the site's memory
     windows; observation never writes. A site given an r0 records only entries with that r0.
@@ -804,8 +572,6 @@ def main():
     parser.add_argument('--save-snapshot', type=Path, help='Save drained machine state to a fresh local directory')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--serve', action='store_true')
-    parser.add_argument('--ff80-rehearsal', action='store_true',
-                        help='Run the closed ordinary-boot ff80 endpoint session and write its receipt')
     parser.add_argument('--menus', action='store_true',
                         help='Enable declared ADC button input and stock menu navigation')
     parser.add_argument('--ram-push-server', action='store_true',
@@ -862,7 +628,7 @@ def main():
     if args.ram_push_server and (
             args.snapshot is not None or args.installed_dat is None
             or args.adjustment_nand is None or args.menu_sd_image is None
-            or not args.menus or args.ff80_rehearsal
+            or not args.menus
             or args.pause_after is not None or args.instructions is not None
             or args.serve or args.save_snapshot is not None):
         parser.error('--ram-push-server requires --profile, --installed-dat, --adjustment-nand, --menu-sd-image and --menus without another run mode')
@@ -874,7 +640,7 @@ def main():
         parser.error('--attach-hold-key belongs to --ram-push-server')
     if args.toggle_server and (
             args.snapshot is not None or args.installed_dat is None or args.adjustment_nand is None
-            or args.menu_sd_image is not None or not args.menus or args.ff80_rehearsal
+            or args.menu_sd_image is not None or not args.menus
             or args.ram_push_server or args.pause_after is not None or args.instructions is not None
             or args.serve or args.save_snapshot is not None):
         parser.error('--toggle-server requires --profile, --installed-dat, --adjustment-nand and --menus without another run mode')
@@ -1014,14 +780,6 @@ def main():
         if probe_range is not None:
             board._native.access_probe_begin([probe_range], limit=100_000)
         _run_toggle_server(board, session, output, toggle_start)
-        return
-    if args.ff80_rehearsal:
-        if (args.snapshot is not None or args.installed_nand is None or not args.menus
-                or args.pause_after is not None or args.instructions is not None
-                or args.serve or args.save_snapshot is not None):
-            parser.error('--ff80-rehearsal requires --profile, --installed-nand and --menus without another run mode')
-        receipt = _run_ff80_rehearsal(board, session, output)
-        print(json.dumps(receipt, separators=(',', ':')), flush=True)
         return
     if args.snapshot is not None and args.serve:
         # The imported snapshot is already a validated drained boundary.

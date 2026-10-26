@@ -19,6 +19,8 @@ devenv shell -- bazel run //emulation:native-case -- --runner bazel-bin/emulatio
 
 These commands perform no camera I/O. The simulation exercises a contrast-search controller against an artificial lens model; the native case checks ARM execution against a synthetic fixture. Neither demonstrates camera behavior. See [build integration](build-support/README.md) for toolchain and offline-cache details, and package READMEs for supported commands.
 
+New full-system emulator development uses the FujiMod Rust runtime fetched at an exact commit by the checked-in Nix build; no sibling checkout is required. The retained Python engine is frozen legacy for surfaces not yet ported and the existing acceptance gates until the qualified cutover. See [emulator development](emulation/README.md#emulator-development-runtime) for supported counterparts, pin updates and the remaining legacy surfaces. Local development does not permit conveying FujiMod-linked binaries under [LICENSING item 7](LICENSING.md#release-decisions).
+
 ## Explore the tools and findings
 
 | Area | Start here |

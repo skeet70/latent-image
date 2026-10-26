@@ -3,6 +3,7 @@ module Main where
 import Control.Exception (IOException, catch, displayException)
 import Control.Monad (when)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
+import Emulation.Ff80Rehearsal (runFujiModRehearsal)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
@@ -77,13 +78,11 @@ usage = unlines
   , "  --output PATH          Fresh runtime directory under workspace/private-data/"
   , "  --firmware PATH        Stock or modified X-M1 1.50-compatible DAT input"
   , "  --sd-card-image PATH   Regular raw virtual-card image beneath private-data/"
-  , "  --ff80-rehearsal       Run the closed stock ordinary-boot service session"
+  , "  --ff80-rehearsal       Run our Haskell service client against pinned FujiMod"
   , "  --ram-push-e2e        Run allocation, relink, install, bank UI and unload in emulation"
   , "  --cardless             --ram-push-e2e: boot the installed DAT and adjustment NAND with no SD"
   , "                         card through the cardless RAM-push bridge"
-  , "  --fujimod              --ram-push-e2e: run the bridge protocol on jitl's FujiMod runtime"
-  , "                         (emulation/fujimod-xm1), card-backed or --cardless; a speed path, not"
-  , "                         payload acceptance"
+  , "  --fujimod              Run RAM-push E2E or the closed ff80 rehearsal on pinned FujiMod"
   , "  --unreviewed-relink    --ram-push-e2e: relink and push without the compiled source-identity"
   , "                         and publication-contract pins; the receipt records the mode"
   , "  --allowlist-override REASON"
@@ -249,8 +248,8 @@ launch options = do
       cardless = cardModeOption options == WithoutCard
   require (not (ff80 && e2e)) "--ff80-rehearsal and --ram-push-e2e are exclusive"
   require (e2e || not cardless) "--cardless belongs to --ram-push-e2e"
-  require (runtimeOption options == RetainedChoice || (e2e && pushModeOption options == RamPush))
-    "--fujimod belongs to the --ram-push-e2e RAM push"
+  require (runtimeOption options == RetainedChoice || ff80 || (e2e && pushModeOption options == RamPush))
+    "--fujimod belongs to --ram-push-e2e or --ff80-rehearsal"
   when ff80 $ do
     require (media == Nothing) "--ff80-rehearsal does not accept an SD-card image"
     require (nand /= Nothing) "--ff80-rehearsal requires --installed-nand"
@@ -290,29 +289,29 @@ launch options = do
   let fallback = if e2e
         then ReplacedRuntime ("emulator-runtimes" </> "xm1-ram-push-e2e")
         else UniqueRuntime "xm1-viewer"
-  staged <- stageViewerRuntime root (outputOption options) fallback (firmwareOption options)
-    (if ff80 || e2e then StageStockOriginal else OmitStockOriginal)
-  let destination = stagedDirectory staged
-      Python python = stagedPython staged
-      Firmware dat = stagedSource staged
+      stageFujiMod = do
+        (Runtime path, source) <- ViewerRuntime.stageFujiModRuntime root (outputOption options) fallback (firmwareOption options)
+        pure (path, source, fujimodRamPushBridge)
+  (destination, Firmware dat, executable) <- case (ff80, runtimeOption options) of
+    (True, _) -> stageFujiMod
+    (False, FujiModChoice) -> stageFujiMod
+    (False, RetainedChoice) -> do
+      staged <- stageViewerRuntime root (outputOption options) fallback (firmwareOption options)
+        (if e2e then StageStockOriginal else OmitStockOriginal)
+      let Python python = stagedPython staged
+      pure (stagedDirectory staged, stagedSource staged, python)
   putStrLn ("X-M1 viewer runtime: " ++ destination)
   hFlush stdout
   if ff80
     then do
-      callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
       let nandPath = case nand of Just (InstalledNand path) -> path; Nothing -> error "validated NAND missing"
           receiptPath = case receipt of Just (ReceiptDirectory path) -> path; Nothing -> error "validated receipt directory missing"
-      executeFile python False
-        [ "tools/continue_rec_scanout.py"
-        , "--profile", "firmware/x-m1/1.50/emulator-rec.json"
-        , "--installed-nand", nandPath
-        , "--menus"
-        , "--ff80-rehearsal"
-        , "--output", receiptPath
-        ] Nothing
+      runFujiModRehearsal destination nandPath
+        (resolve root "private-data/emulator-checkpoints/xm1-ff80-fujimod") receiptPath
     else if e2e
       then do
-        callProcess python ["tools/firmware_registry.py", "unpack", "xm1-150"]
+        when (runtimeOption options == RetainedChoice) $
+          callProcess executable ["tools/firmware_registry.py", "unpack", "xm1-150"]
         cardInput <- case media of
           Just (VirtualSDImage image) -> pure (CardBacked image)
           Nothing | cardless -> pure Cardless
@@ -349,8 +348,8 @@ launch options = do
               (attachHoldOption options)
               (uiConversionProfileOption options) cardInput (fixedSceneFrameOption options) Nothing runtime dat
         if warmCheckpointOption options
-          then warmAttachCheckpoint settings python stagedFirmwarePath nandPath (destination </> "warm-attach")
-          else runRamPushE2E settings python workspacePath (resolve root trajectories) stagedFirmwarePath nandPath receiptPath
+          then warmAttachCheckpoint settings executable stagedFirmwarePath nandPath (destination </> "warm-attach")
+          else runRamPushE2E settings executable workspacePath (resolve root trajectories) stagedFirmwarePath nandPath receiptPath
       else do
         let Port port = portOption options
             mediaArguments = case media of
@@ -359,7 +358,7 @@ launch options = do
             conversionArguments = case uiConversionProfileOption options of
               StrictUiConversion -> []
               DeclaredUiCpuFallback -> ["--ui-conversion-profile", "declared-ui-cpu-fallback"]
-        executeFile python False
+        executeFile executable False
           ([ "tools/start_setup_viewer.py"
            , "--firmware", stagedFirmwarePath
            , "--firmware-name", takeFileName dat
