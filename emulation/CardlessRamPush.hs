@@ -226,7 +226,7 @@ readStart directories = do
 
 withRestored :: PyObject -> PyObject -> Value -> PyObject -> (PyObject -> PyObject -> PyObject -> PyObject -> IO a) -> IO a
 withRestored commands directory record output continuation =
-  callObject commands "_restore_ram_push_checkpoint" [ArgObject directory, ArgJSON record, ArgObject output] (H.obj []) $ \tuple ->
+  callObject commands "_restore_ram_push_checkpoint" [ArgObject directory, ArgJSON record, ArgObject output, ArgJSON Null] (H.obj []) $ \tuple ->
     withItem tuple 0 $ \board ->
       withItem tuple 1 $ \session ->
         withItem tuple 2 $ \bridge ->
