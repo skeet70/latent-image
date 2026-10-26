@@ -8,8 +8,6 @@ Source inspection used a checkout fetched with `nix shell nixpkgs#git -c git clo
 
 This is a source audit, not an execution or performance comparison. Upstream tests cited below were read, not run. Combined downstream behaviors not demonstrated by the inspected code are marked unverified. Nothing was opened upstream, pushed, or run against a camera or USB device. Existing [licensing gates](../LICENSING.md#release-decisions) are unchanged; this audit is not a new grant assessment.
 
-The handoff branch is `agent/FujiModUpstreamMap`, created from `origin/main` at `2211047`. The stopped browser implementation remains recoverable on `agent/FujiModViewer` and its existing worktree, including uncommitted work. None of those implementation commits is an ancestor introduced by this report branch.
-
 ## Summary
 
 | Retained-capability row | Upstream already provides | Contract still requiring work | One recommendation |
@@ -120,7 +118,7 @@ Coverage and differences:
 
 **At main:** the [trait](https://github.com/justjake/FujiMod/blob/d112b636b6afb85379b7f8bc55c271748b400241/crates/emulator-cpu/src/lib.rs#L777-L781), [implementation](https://github.com/justjake/FujiMod/blob/d112b636b6afb85379b7f8bc55c271748b400241/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs#L424-L438) and [pre-effect dispatch](https://github.com/justjake/FujiMod/blob/d112b636b6afb85379b7f8bc55c271748b400241/crates/emulator-cpu-unicorn/src/rprofile/core.rs#L657-L701) remain. Main adds translation/coherence and loop optimizations, but this boundary is not a new main-only feature.
 
-### Exactly what that boundary covers
+### What that boundary covers
 
 - **Newly decoded code:** with a matching instruction observer installed before running, the [pin classifier](https://github.com/justjake/FujiMod/blob/ecdb6cb653ca0fa3372e4a4cf92c88bffa13ae29/crates/emulator-cpu-unicorn/src/rprofile/core.rs#L461-L478) selects `ObserveAndEndBlock` for observed A32 instructions. The callback runs on the first execution, not only a later visit or after the run window. Main's [classifier](https://github.com/justjake/FujiMod/blob/d112b636b6afb85379b7f8bc55c271748b400241/crates/emulator-cpu-unicorn/src/rprofile/core.rs#L482-L509) preserves that selection; instructions handled through `Replace` also use the instruction observer contract. This is per-instruction interception, not an automatic block-wide R4F validator.
 - **Same-size rewritten code:** upstream tracks translated backing bytes, not an address/length decode verdict. Its [write tracking and alias/peer invalidation](https://github.com/justjake/FujiMod/blob/ecdb6cb653ca0fa3372e4a4cf92c88bffa13ae29/crates/emulator-cpu-unicorn/src/rprofile/memory.rs#L651-L830) respond to writes touching translated bytes regardless of replacement length. The same implementation is present at [main](https://github.com/justjake/FujiMod/blob/d112b636b6afb85379b7f8bc55c271748b400241/crates/emulator-cpu-unicorn/src/rprofile/memory.rs#L651-L830). After a coherent write and required synchronization/flush, the observer remains installed and runs before the first execution of the replacement. Decoding fresh bytes there avoids our stale address/length key. This conclusion follows from the inspected paths; the combined local R4F rewrite/interception behavior has not been executed here.
