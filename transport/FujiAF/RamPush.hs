@@ -8,7 +8,7 @@ module FujiAF.RamPush
   , callbackTablePointerAddress, callbackTableAddress, callbackStockWord
   , queryOutputAddress, configGateIndex, mailboxBytes
   , reviewedAllocationSize, installerAbiVersion, publicationCount, setupCount, activationCount
-  , PayloadKind(..), Payload(..), bankD3Payload, classicChromePayload, classicChromeIconPayload, afRingPayload, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
+  , PayloadKind(..), Payload(..), bankD3Payload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
   , readRamPushManifest, parseRamPushManifest, readRamAllocState, readRetainedAllocation, readRamPushState
   , consumedMarkerPath, writeAllocStateFile, writeStateFile
   , ramAllocArguments, ramPushArguments, ramFreeArguments, ramUnloadArguments, ramRelinkArguments
@@ -145,7 +145,7 @@ data ReviewedContract = ReviewedContract
   , reviewedPublicationContractDigest :: String
   }
 
-data PayloadKind = RecipeBankD3 | ClassicChrome | ClassicChromeIcon | AfRing deriving (Eq, Show)
+data PayloadKind = RecipeBankD3 | ClassicChrome | ClassicChromeIcon | UsbToggle | AfRing deriving (Eq, Show)
 
 -- | What a payload kind's relink links, and the allocation, ABI word, counts
 -- and installer start it has. A runtime's allocation size names its kind.
@@ -227,6 +227,22 @@ classicChromeIconPayload = classicChromePayload
       ++ [("RC0_DAT","private-data/analysis/classic-chrome-patch/rc0-regression/FWUP0002.DAT")]
   }
 
+usbTogglePayload :: Payload
+usbTogglePayload = Payload
+  { payloadKind = UsbToggle
+  , payloadAllocationSize = 0xd20
+  , payloadAbiVersion = 6
+  , payloadSetupCount = 22
+  , payloadActivationCount = 1
+  , payloadInstallerStart = \base -> (base + 31) .&. 0xffffffe0
+  , payloadReferenceBases = (0x00c20000, 0x00c21f88)
+  , payloadRelinkScript = "build-usb-toggle-ram.sh"
+  , payloadRelinkBuilder = "build-usb-toggle-ram"
+  , payloadBuildRoot = "private-data/analysis/usb-toggle/ram-push"
+  , payloadRelinkInputs = [("RC0_ID5","private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin")]
+  , payloadLinksBank = False
+  }
+
 afRingPayload :: Payload
 afRingPayload = Payload
   { payloadKind = AfRing
@@ -244,7 +260,7 @@ afRingPayload = Payload
   }
 
 payloads :: [Payload]
-payloads = [bankD3Payload, classicChromePayload, classicChromeIconPayload, afRingPayload]
+payloads = [bankD3Payload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload]
 
 payloadOfSize :: Int -> Maybe Payload
 payloadOfSize size = case filter ((== size) . payloadAllocationSize) payloads of
@@ -263,6 +279,7 @@ payloadEntries payload (Address base) =
   let install = payloadInstallerStart payload base + 0x600
       (rollbackOffset, statusOffset) = case payloadKind payload of
         AfRing -> (0x234, 0x260)
+        UsbToggle -> (0x23c, 0x268)
         _ -> (0x238, 0x264)
   in RamPushEntries (Address install) (Address (install+rollbackOffset)) (Address (install+statusOffset))
 
@@ -1098,7 +1115,12 @@ withRelinkedBuildUsing relinker policy base action = withReviewedBuildDirectory 
         , ("RAM_PUSH_OBJCOPY",toolObjcopy tools)
         , ("RAM_PUSH_NM",toolNm tools)
         , ("RAM_PUSH_OBJDUMP",toolObjdump tools)
-        ] ++ payloadRelinkInputs payload
+        ] ++ payloadRelinkInputs payload ++ case payloadKind payload of
+          UsbToggle ->
+            [ ("USB_TOGGLE_STUB", takeDirectory (relinkerScript relinker) </> "usb-toggle-stub.bin")
+            , ("USB_TOGGLE_STUB_SYMBOLS", takeDirectory (relinkerScript relinker) </> "usb-toggle-stub.sym")
+            ]
+          _ -> []
       command = (proc (toolBash tools) [relinkerScript relinker,hexWord (unAddress base),directory])
         { env = Just environment, cwd = Just root }
   (exitCode,_,errors) <- readCreateProcessWithExitCode command ""

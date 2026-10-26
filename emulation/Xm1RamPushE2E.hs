@@ -39,6 +39,7 @@ import RamPushReviewedPins (reviewedContract)
 import RamPushProcedure (procedureSourcesDigest)
 import RamPushCcReviewedPins (reviewedCcContract)
 import RamPushCcIconReviewedPins (reviewedCcIconContract)
+import RamPushToggleReviewedPins (reviewedToggleContract)
 
 -- | Unreviewed skips the compiled source-identity and publication-contract pins; its policy
 -- decides whether a bank that fails the ELF allowlist is still pushed. Reviewed enforces it.
@@ -174,6 +175,7 @@ payloadText p = case payloadKind p of
   ClassicChrome -> "classic-chrome"
   ClassicChromeIcon -> "classic-chrome-icon"
   AfRing -> "af-ring"
+  UsbToggle -> "usb-toggle"
 
 payloadContract :: Payload -> ReviewedContract
 payloadContract p = case payloadKind p of
@@ -181,6 +183,7 @@ payloadContract p = case payloadKind p of
   ClassicChrome -> reviewedCcContract
   ClassicChromeIcon -> reviewedCcIconContract
   AfRing -> error "AF ring has no live reviewed contract; use //emulation:xm1-af-ring-e2e"
+  UsbToggle -> reviewedToggleContract
 
 -- | Whether the payload carries the Classic Chrome publications.
 carriesClassicChrome :: Payload -> Bool

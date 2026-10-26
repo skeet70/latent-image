@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "kind": "xm1-usb-toggle-ram-push-review-record",
+  "reviews": [],
+  "content_checks": [],
+  "pins": [
+    {"component":"mechanism","identity":"build-usb-toggle-ram","sha256":"e20f5ac79bc760ef436f973099d8fbe7a0993c39c4f0aac8d92dcc105c8406ac","source":"builder","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"host/FujiAF/ClassicChrome.hs","sha256":"b8475b159974cb41c1d5d004ffc355ba653d7f41e67ab4fa1615b06eaf49c286","source":"workspace","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"host/FujiAF/Host.hs","sha256":"99c2b2d9436ff45f8ac308d0675b1a194c3d0c521ba37f05c895df2ca3b83025","source":"workspace","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"host/FujiAF/JSON.hs","sha256":"5adde2ee84d6cd7694a0e4d7cda96436d33fce7c87f8a477d7919564a9749f82","source":"workspace","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"host/FujiAF/UsbToggle.hs","sha256":"151aa437cb4256b0e7765874d34e1f4b44de352bd3ae87cdbf37436c81397546","source":"workspace","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"host/firmware/ArmElf.hs","sha256":"717464817b58c49a25b68b3f7cc81db8c4d5b7d4f62c3ae174131e97be115585","source":"workspace","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"host/firmware/BUILD.bazel","sha256":"a23ab8d3b721b5181949ccc864521600ccbf37aa930607eac69a9a6e633b1282","source":"workspace","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"host/firmware/BuildUsbToggleRam.hs","sha256":"2348bd6d1f8f85e585f58068b9c2942ff2d148751ee3aa1577373db4c11e2777","source":"workspace","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"host/firmware/RamPushLayout.hs","sha256":"d8a750bda0e96ea75cd7d4ae07fb76bf21d0a2b85b0e4f79937be5ec7b0cb3d3","source":"workspace","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"host/firmware/UsbToggleRam.hs","sha256":"d66365071d35af395786be8ac63c0d9a51f9694a1a9444e6c29b050a9be3f1bd","source":"workspace","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"host/firmware/build-usb-toggle-ram.sh","sha256":"42b6fa0390d51c5e1da3ded00ecdc0f991c5b253ffd8bf1ca475d5d992b287bf","source":"workspace","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"host/firmware/classic-chrome-ram-builder-digest.sh","sha256":"5311d6585ba1e93436d74c82c824bcf6ceaaaa5da5eca5bb850003da10cac88f","source":"workspace","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"host/firmware/ram-push-toolchain.sh","sha256":"0681de4cbeea95618727314086c87ec74f4830a851c90a8765c6f80a70918671","source":"workspace","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"host/firmware/usb-toggle-ram.ld","sha256":"9b0e5b7c53bf86a2efb19e4fe1e6340cfc98fd0c6e52bd83f244319cc45574f0","source":"workspace","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"host/firmware/usb-toggle-stub.S","sha256":"252bc692085e2774fd52befb8e49ace2060de59206f6e852f369214b35075d9b","source":"workspace","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"host/firmware/usb-toggle-stub.ld","sha256":"6c2faeea9d4999155efe9251b4cef5696df2a35c43405e7743bb30671efc8ff7","source":"workspace","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"menu/ram_push_abi.h","sha256":"bef8ecdda04eed8ab3dabe2bf2c9dec36540ce76390573a7951a584a8dffbe4f","source":"workspace","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"menu/ram_push_installer.c","sha256":"6b4d965e7be18953871fe910447f4dd2d8fe0880bc4273a2d3049367b51c21d9","source":"workspace","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"ram-push-toolchain","sha256":"589ccd2f7d95aeaaf3d620941021f5214a6597a3080ddf8a4024ef118f0a572a","source":"toolchain","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"rc0_image5","path":"private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin","sha256":"3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a","source":"private","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}},
+    {"component":"mechanism","identity":"usb_toggle_stub","sha256":"35a7e9597f06bdc1dda250d991df4a468d2401e5ae3c24c22e37403318746d62","source":"usb-toggle-stub","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}}
+  ],
+  "publication_contract": {"sha256":"9689704f21b660df2806a52a481cda1909182cac593007e094d569d69764334c","status":{"commit":"2211047b2385a80cf1b149f0c08cd062f1075600","verdict":"unreviewed"}}
+}

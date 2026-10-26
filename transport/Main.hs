@@ -38,6 +38,7 @@ import qualified FujiAF.Broker as P
 import RamPushReviewedPins (reviewedContract)
 import RamPushCcReviewedPins (reviewedCcContract)
 import RamPushCcIconReviewedPins (reviewedCcIconContract)
+import RamPushToggleReviewedPins (reviewedToggleContract)
 
 data RouteSource = RoutesFixed | RoutesDerived FilePath
 data Operation = Identify | ReadConfig FilePath | EndSetting | ProbeRam | ReadLog | ProbeBootRom | ProbeArea2 | ProbeStraps | ProbeCode | ProbeOwnership | ProbeRoutes RouteSource | DumpRam DumpSegment | ReadMedia | ArmAutoAct DeviceStart | CommitF7 CommitDirection FilePath | ReadRam FilePath (Maybe (Int,Int)) | ProbeSdHost (Maybe (Int,Int)) | ReadBulk Int Int | RamAlloc Int | RamRelink FilePath | RamPush FilePath FilePath | RamFree FilePath | RamUnload FilePath
@@ -164,7 +165,7 @@ dispatch Help = putStr $ unlines
   , "read-ram PLAN_JSON [--repeat N --interval-ms M] [OUTDIR] read-only RAM watch on a body with 0xf7 already nonzero, in a jig boot or an ordinary boot's ff80 route: identity, config window 0x000000 refused unless 0xf7 != 0, then one 0x200001 function 2 request per plan window (1..248 bytes) for N passes M ms apart (N 1..600, M 100..10000, N * windows <= 2032), C4; no write is sent, so no supply cut is needed"
   , "probe-sd-host [--repeat N --interval-ms M] [OUTDIR] read-only capture of the SD slot's host-controller registers on a body with 0xf7 already nonzero: identity, config window 0x000000 refused unless 0xf7 != 0, then per pass 0xfff50000 +0x00 (32 B), +0x24 (6 B), +0x2c (16 B) and +0x3e (2 B), never the +0x20 data port, for N passes M ms apart (N 1..508, M 100..10000), C4; no write is sent"
   , "read-bulk ADDRESS LENGTH [OUTDIR] read one DRAM window through the stock ff80 bulk path on a body with 0xf7 already nonzero: identity, config window 0x000000 refused unless 0xf7 != 0, one 0x450006 tag-0x80 query, a function 2 read pinning the published source pointer 0x4b2ece00, then one E1 and one bulk IN per 1 MiB chunk, C4; ADDRESS is 0x-hex and 4-byte aligned, LENGTH 0x-hex and a multiple of 64, the window inside [0x00000000,0x20000000) or [0x40000000,0x60000000) with its physical end at most 0x0b3f6e00; no write is sent"
-  , "ram-alloc SIZE [OUTDIR]       allocate and peer-prepare an X-M1 RAM workspace; SIZE is a payload's fixed bound, 0x1d9f8 (recipe bank and D3), 0x1560 (Classic Chrome) or 0x21fc (Classic Chrome with icon); retain ram-alloc-state.json"
+  , "ram-alloc SIZE [OUTDIR]       allocate and peer-prepare an X-M1 RAM workspace; SIZE is a payload's fixed bound, 0x1d9f8 (recipe bank and D3), 0x1560 (Classic Chrome), 0x21fc (Classic Chrome with icon) or 0xd20 (USB toggle); retain ram-alloc-state.json"
   , "ram-relink STATE OUTDIR        build the reviewed manifest and runtime of the allocation's payload at the retained base with the camera's pinned relinker; no USB"
   , "ram-push STATE MANIFEST [OUTDIR] upload a manifest linked to the retained allocation, install and write ram-push-state.json"
   , "ram-free STATE [OUTDIR]       free a retained allocation that was not installed"
@@ -318,6 +319,8 @@ dispatch (Live operation requested) = case operation of
   RamUnload path -> do
     state <- readRamPushState path
     refuseAfRingLive (stateSize state)
+    when (fmap payloadKind (payloadOfSize (stateSize state)) == Just UsbToggle)
+      (P.reject "ram-unload refused: USB toggle requires full battery removal; a suspended stub frame cannot be rolled back in place")
     withOutput operation requested $ \directory -> do
       outcome <- runRamUnload (contractFor (stateSize state)) state realClock nativeApi directory
       case outcome of
@@ -330,6 +333,7 @@ contractFor :: Int -> ReviewedContract
 contractFor size = case payloadKind <$> payloadOfSize size of
   Just ClassicChrome -> reviewedCcContract
   Just ClassicChromeIcon -> reviewedCcIconContract
+  Just UsbToggle -> reviewedToggleContract
   _ -> reviewedContract
 
 refuseAfRingLive :: Int -> IO ()

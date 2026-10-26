@@ -31,10 +31,12 @@ import EmulatorUsb (BridgeExchange, bridgeUsbApi)
 import qualified FujiAF.Broker as P
 import FujiModPaths (fujimodRun, fujimodToggleBridge)
 import FujiAF.Read (ReadWindow (..), decodeReadReply, readReplyBytes, readRequestBytes, readRequestFrame)
-import FujiAF.Transport (UsbApi (..))
+import FujiAF.Transport (UsbApi (..), realClock)
 import FujiAF.UsbToggle (extentLength, extentStart, hookSite)
+import qualified FujiAF.RamPush as Ram
+import RamPushToggleReviewedPins (reviewedToggleContract)
 import Numeric (showHex)
-import System.Directory (canonicalizePath, createDirectory, doesPathExist)
+import System.Directory (canonicalizePath, createDirectory, doesPathExist, setCurrentDirectory)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitFailure, exitWith)
 import System.FilePath (splitDirectories, takeDirectory, takeFileName, (</>))
@@ -44,7 +46,7 @@ import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), callPr
 
 -- * Inputs
 
-data DatRole = StockDat | CcBaseDat | CcToggleDat | Rc0ToggleDat | CcIconBaseDat | CcIconToggleDat deriving (Eq, Show, Enum, Bounded)
+data DatRole = StockDat | Rc0Dat | CcBaseDat | CcToggleDat | Rc0ToggleDat | CcIconBaseDat | CcIconToggleDat deriving (Eq, Show, Enum, Bounded)
 
 data NandRole = Stored0 | Stored1 | Stored0Pid02b6 deriving (Eq, Show)
 
@@ -52,6 +54,7 @@ newtype Sha256 = Sha256 String deriving (Eq, Show)
 
 datName :: DatRole -> String
 datName StockDat = "stock"
+datName Rc0Dat = "rc0"
 datName CcBaseDat = "cc-base"
 datName CcToggleDat = "cc-toggle"
 datName Rc0ToggleDat = "rc0-toggle"
@@ -60,6 +63,7 @@ datName CcIconToggleDat = "cc-icon-toggle"
 
 datPath :: DatRole -> FilePath
 datPath StockDat = "private-data/firmware/x-m1-1.50/FWUP0002.DAT"
+datPath Rc0Dat = "private-data/analysis/classic-chrome-patch/rc0-regression/FWUP0002.DAT"
 datPath CcBaseDat = "private-data/analysis/classic-chrome-patch/candidate-pinned-dat/FWUP0002.DAT"
 datPath CcToggleDat = "private-data/analysis/usb-toggle/cc-pinned-dat/FWUP0002.DAT"
 datPath Rc0ToggleDat = "private-data/analysis/usb-toggle/rc0-pinned-dat/FWUP0002.DAT"
@@ -68,6 +72,7 @@ datPath CcIconToggleDat = "private-data/analysis/usb-toggle/ccb-pinned-dat/FWUP0
 
 datSha256 :: DatRole -> Sha256
 datSha256 StockDat = Sha256 "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"
+datSha256 Rc0Dat = Sha256 "acb0fbbb9507421f48a6254920cafb5ce20e1fd6bf821bc80c912c1f99c29ca8"
 datSha256 CcBaseDat = Sha256 "16c830ad71b9755d22368ffaeacd6b8b4d78376c9568ac3f9717f45d48292c89"
 datSha256 CcToggleDat = Sha256 "507ecf326119110713c34f15bb07d0f38bd6946127011835980f6e4d39ad0e1e"
 datSha256 Rc0ToggleDat = Sha256 "10feac474eee5ac178ff454397f1b4f1bc1c9a01ae4da8de8f102fa606ca2445"
@@ -625,14 +630,14 @@ holdName HoldQ = "q"
 
 -- * Steps
 
-data Step = Attach Hold | Detach | Enumerate deriving (Eq, Show)
+data Step = Attach Hold | Detach | Enumerate | PushToggle deriving (Eq, Show)
 
 data Ctx = Ctx
   { ctxServer :: Server
   , ctxRecorder :: Recorder
   , ctxModel :: IORef Model
-  , ctxDat :: DatRole
   , ctxHits :: IORef [Hit]
+  , ctxDirectory :: FilePath
   }
 
 runInstructions :: Server -> Int -> [Site] -> IO (Maybe T.Text, Integer)
@@ -719,7 +724,7 @@ attach ctx index hold = do
   equal recorder (named "value handler A tests at 0x00ecf904") [fromIntegral expectedF7 :: Word32] (map hitR0 used)
   equal recorder (named "cache[0xf7]") expectedF7 (cellF7 after)
   equal recorder (named "stub entries per 0x00ecf900 read")
-    (if datHasToggle (ctxDat ctx) then length reads' else 0) (length (sitesOf StubEntry hits))
+    (if modelToggle model then length reads' else 0) (length (sitesOf StubEntry hits))
   case personality of
     Service -> do
       equal recorder (named "queue-7 0x1705 post (r0, r1)") [(7, 0) :: (Word32, Word32)] [(hitR0 h, hitR1 h) | h <- sitesOf Post1705 hits]
@@ -860,6 +865,8 @@ serviceSession ctx named = do
     ramReply <- tx (P.BulkIn 0x81 (36 + ramReadCount))
     guest <- readMemory srv ramReadAddress ramReadCount
     hits <- collect ctx
+    _ <- tx (P.controlTransfer (P.control 0xc4 2 sid))
+    _ <- tx (P.BulkIn 0x81 2)
     pure (sid, model, config, ramReply, guest, hits)
   case outcome of
     Left (problem :: IOException) -> do
@@ -912,6 +919,52 @@ data Scenario = Scenario
   , scBoot :: BootKind
   , scSteps :: [Step]
   }
+
+ramPushScenario :: Scenario
+ramPushScenario = Scenario "ram-push-rc0" "ram-push" Rc0Dat Stored1 RouteBoot
+  [Attach Plain, Enumerate, PushToggle, Detach, Attach HoldQ, Enumerate, Detach, Attach HoldQ, Enumerate, Detach, Attach Plain, Enumerate]
+
+pushToggle :: Ctx -> IO ()
+pushToggle ctx = do
+  let srv = ctxServer ctx
+      directory = ctxDirectory ctx
+      recorder = ctxRecorder ctx
+      api = bridgeUsbApi (exchangeLine srv)
+      allocDirectory = directory </> "allocation"
+      linkedDirectory = directory </> "relinked"
+      pushDirectory = directory </> "push"
+  forM_ [allocDirectory, linkedDirectory, pushDirectory] $ \path -> do
+    createDirectory path
+    setFileMode path 0o700
+  allocation <- Ram.runRamAlloc (Ram.payloadAllocationSize Ram.usbTogglePayload) realClock api allocDirectory
+  allocationPath <- case allocation of
+    Ram.RamAllocated path -> pure path
+    other -> ioError (userError ("toggle allocation failed: " ++ show other))
+  retained <- Ram.readRetainedAllocation allocationPath
+  manifestPath <- Ram.runRamRelink reviewedToggleContract retained linkedDirectory
+  manifest <- Ram.readRamPushManifest manifestPath
+  installed <- Ram.runRamPush reviewedToggleContract retained manifest realClock api pushDirectory
+  case installed of
+    Ram.RamPushInstalled _ -> pure ()
+    other -> ioError (userError ("toggle push failed: " ++ show other))
+  stub <- readMemory srv extentStart (fromIntegral stubBytes)
+  hook <- word32At srv hookSite
+  let publications = Ram.manifestPublications manifest
+      publishedStub = B.pack (concatMap (le32 . Ram.unWordValue . Ram.publicationNew) (take 22 publications))
+  equal recorder "RAM push: installed stub equals the exact manifest publications"
+    (T.pack (hexBytes publishedStub)) (T.pack (hexBytes stub))
+  equal recorder "RAM push: hook word" (0xebf492d3 :: Word32) hook
+  equal recorder "RAM push: publication count" (23 :: Int) (length publications)
+  equal recorder "RAM push: RAM byte remains 1" (1 :: Word8) . cellF7 =<< readCells srv
+  B.writeFile (directory </> "installed-stub.bin") stub
+  setFileMode (directory </> "installed-stub.bin") 0o600
+  step recorder (object
+    [ "step" .= ("ram-push" :: T.Text), "allocation_state" .= allocationPath
+    , "manifest" .= manifestPath, "manifest_sha256" .= Ram.manifestDigest manifest
+    , "runtime_sha256" .= Ram.runtimeDigest manifest
+    , "publication_contract_sha256" .= Ram.publicationContractDigest publications
+    , "installed_state" .= show installed, "stub" .= hexBytes stub, "hook" .= hex32 hook ])
+  modifyIORef' (ctxModel ctx) (\model -> model {modelToggle = True})
 
 scenarios :: [Scenario]
 scenarios =
@@ -974,7 +1027,7 @@ runScenario env receipts scenario = do
                             , "hits" .= map hitValue bootHits ])
       modelRef <- newIORef (Model (datHasToggle (scDat scenario)) (cellF7 cells) (cellSystemMode cells)
         (if route then Nothing else Just Application))
-      let ctx = Ctx srv recorder modelRef (scDat scenario) hitLog
+      let ctx = Ctx srv recorder modelRef hitLog directory
       modifyIORef' hitLog (++ bootHits)
       blocked <- runSteps ctx (zip [1 ..] (scSteps scenario))
       when (scBoot scenario == CableAtReset QFromReset) $ do
@@ -1032,6 +1085,7 @@ runSteps _ [] = pure Nothing
 runSteps ctx ((index, current) : rest) = case current of
   Attach hold -> attach ctx index hold >> runSteps ctx rest
   Enumerate -> enumerate ctx index >> runSteps ctx rest
+  PushToggle -> pushToggle ctx >> runSteps ctx rest
   Detach -> do
     seen <- detach ctx index
     case seen of
@@ -1111,6 +1165,7 @@ data Options = Options
   , optFixedFrame :: Maybe FixedSceneFrame
   , optWarm :: Bool
   , optEngine :: Engine
+  , optRamPush :: Bool
   }
 
 usage :: String
@@ -1129,13 +1184,15 @@ usage = unlines
   , "  --fixed-scene-frame N  pin every scene render to the positive frame index N for the run"
   , "  --fujimod           serve the primitives from jitl's FujiMod runtime (emulation/fujimod-xm1)"
   , "                      instead of the retained Python bridge; refuses --fixed-scene-frame"
+  , "  --ram-push          push the toggle through ff80 on RC0 with stored 1, then attempt both Q attaches"
+  , "                      the known configured-session detach boundary is recorded as hardware-only"
   ]
 
 families :: [String]
 families = ["e2", "e3", "e4e5", "e5u", "e6", "e7", "control"]
 
 parseOptions :: [String] -> IO Options
-parseOptions = go (Options Nothing families [minBound .. maxBound] False Nothing Nothing False RetainedEngine)
+parseOptions = go (Options Nothing families [minBound .. maxBound] False Nothing Nothing False RetainedEngine False)
   where
     go options [] = pure options
     go options ("--receipt-output" : value : rest) = go options {optReceipts = Just value} rest
@@ -1153,6 +1210,7 @@ parseOptions = go (Options Nothing families [minBound .. maxBound] False Nothing
     go options ("--fresh-boot" : rest) = go options {optFresh = True} rest
     go options ("--warm-checkpoints" : rest) = go options {optWarm = True} rest
     go options ("--fujimod" : rest) = go options {optEngine = FujiModEngine} rest
+    go options ("--ram-push" : rest) = go options {optRamPush = True} rest
     go options ("--workspace" : value : rest) = go options {optWorkspace = Just (Workspace value)} rest
     go options ("--fixed-scene-frame" : value : rest) = do
       frame <- either (ioError . userError) pure (parseFixedSceneFrame value)
@@ -1192,6 +1250,9 @@ launch arguments options = do
   policy <- slotPolicyFromEnvironment
   reexecInSlot policy arguments
   Workspace root <- workspace (optWorkspace options)
+  setCurrentDirectory root
+  when (optRamPush options) $
+    require (optEngine options == FujiModEngine) "--ram-push uses the FujiMod endpoint bridge"
   forM_ [minBound .. maxBound :: DatRole] $ \dat -> validateFirmware (Firmware (root </> datPath dat))
   receipts <- freshReceipts root receiptsArgument
   (bridgeLaunch, checkpoints, runtime) <- case optEngine options of
@@ -1208,7 +1269,8 @@ launch arguments options = do
       pure (FujiModLaunch bootRom, "xm1-usb-toggle-fujimod", Nothing)
   replaced <- newIORef []
   let env = Env root bridgeLaunch (root </> "private-data" </> "emulator-checkpoints" </> checkpoints) (optFresh options) replaced (optFixedFrame options)
-      chosen = [s | s <- scenarios, scFamily s `elem` optFamilies options, scDat s `elem` optDats options]
+      chosen = if optRamPush options then [ramPushScenario]
+        else [s | s <- scenarios, scFamily s `elem` optFamilies options, scDat s `elem` optDats options]
   when (optWarm options) $ do
     forM_ (nub [(scDat s, scNand s) | s <- chosen, scBoot s == RouteBoot]) $ \(dat, nand) -> do
       (srv, started) <- startServer env dat nand RouteBoot Nothing (receipts </> ("warm-" ++ datName dat ++ "-" ++ nandName nand))

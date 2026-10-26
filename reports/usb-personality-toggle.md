@@ -14,7 +14,7 @@ Labels: **byte-read** (instruction, table or data read from the pinned images in
 - **Key state from the key driver.** The stub reads Q through `0x006a0d00(0x32)`, the driver's debounced row state, not the UI key bitmap, so a UI that misses a release cannot leave a later attach armed (section 4.2).
 - **RAM only.** The stub writes `cache[0xf7]` through the stock byte setter `0x0069fc94`, the same RAM state the jig tools' gate write leaves until power-off. All 13 stock readers of `0xf7` read that RAM byte (section 2.4), so the debug channel, the `read-ram` gate check and the detach arm follow the toggle without further patching.
 - **No persisted toggle.** The only host-reachable storage route is the 33-unit whole-area commit; a stored toggle would repeat that rewrite on every switch. None is needed (section 3.4).
-- **No RAM-push variant.** The push route needs `ff80` already enumerated and `0xf7` nonzero before it can write anything, and a pushed hook is gone at power-off, so it cannot select the personality of a boot (section 3.5).
+- **RAM-push test variant.** Stored `0xf7 = 1` already provides the initial `ff80` channel. A temporary push can test both Q transitions within that boot without flashing; it cannot select the first USB personality of a later boot. Section 14 owns its publication contract and the [cardless session script](usb-toggle-ram-push-session-script.md) owns the battery-removal ending.
 - **Candidates.** RC0+toggle `10feac47…2445` (on RC0 `acb0fbbb…ca8`) and CC-icon+toggle `c1bfc9aa…ad8f` (on the design-B Classic Chrome flash candidate `98a66780…1606`, which carries RC0, Classic Chrome, its icon and Q tiles), both built by `//host/firmware:build-usb-toggle` and `//extensions:build-extension`, pinned and reproduced. Each decoded image 5 differs from its base only in the stub bytes and the hook word; every other part equals the base (section 10). CC+toggle `507ecf32…0e1e`, on the superseded CC candidate `16c830ad…2c89`, is not a flash target. The owner chose RC0+toggle as the first flash (2026-10-22) and later planned "PRO Neg + toggle and Classic Chrome" once the slot is repaired; CC-icon+toggle carries all of it in one update, so one card trip.
 - **Evidence.** 364 native cases and every full-system run the emulator can deliver pass: both candidates boot to SHOOTING MENU, a plain attach gives PTP, a Q attach gives `ff80` with a working service session, a second Q attach returns PTP in the same boot, stock behaviour is unchanged without Q, the Classic Chrome RAM push runs over a Q attach on RC0+toggle, and the updater install resets stored `0xf7` to 0 (section 9; E-USB-TOGGLE-DESIGN-150, E-USB-TOGGLE-EMU-150, E-USB-TOGGLE-CANDIDATES-150).
 - **Review.** Independent review `toggle-review` approved RC0+toggle `10feac47…2445` on 2026-10-22 after its five must-fix items were closed in `0de0811` (section 11.5, E-USB-TOGGLE-REVIEW-150). Independent review `ToggleCompReview` approved CC-icon+toggle `c1bfc9aa…ad8f` as a composition of reviewed design-B and the reviewed toggle on 2026-10-24, with no must-fix (section 11.5, E-USB-TOGGLE-CCB-REVIEW-150). Gate 1 is closed for both DATs; CC-icon+toggle's open boot-path item needs an owner decision (11.4).
@@ -140,9 +140,9 @@ The attach-time test reads the key driver's debounced state of a key pressed dur
 
 `cache[0xf7]` is already the single gate every reader uses (2.4). Persisting a toggle would need the whole-area commit, the only host-reachable or firmware writer of the byte: `0x0069fea8` (`0x006a9fdc(cache, 0x420000)`), called from `0x00dbc8e4` (service row 26, host `0x80 = 0x22`), `0x00db932c` (update completion) and `0x00d5cf0c` (byte-read). That is a 33-unit rewrite that also stores `0x80 = 0x22` (inherited), the cost the owner asked to avoid.
 
-### 3.5 No RAM-push variant
+### 3.5 RAM-push scope
 
-The push route writes its runtime with debug function 3, which needs `ff80` enumerated and `0xf7` nonzero (`0x00647b90`) before the first byte; the allocation and all publications are RAM state lost at power-off (inherited, transport README). A pushed hook could only change the personality of a boot that already has `ff80`, so it cannot provide the switch.
+The push route writes its runtime with debug function 3, which needs `ff80` enumerated and `0xf7` nonzero (`0x00647b90`) before the first byte; the allocation and all publications are RAM state lost after full power removal (inherited, transport README). It cannot provide a first-attach switch on a stored-0 body. This body already has stored 1, so the section 14 variant can publish the hook over the existing service session, switch to PTP on the next Q attach and return to `ff80` on a second Q attach without a flash. The broken card slot is not used.
 
 ## 4. Key choice
 
@@ -675,3 +675,39 @@ devenv shell -- bazel run //emulation:updater-f7 -- --recovery-ram RESTORE/termi
 ```
 
 `RESTORE` is a `//recovery:build-image restore` output from the candidate DAT followed by the `ram-rescue-engine` raw handoff (emulation/README.md, the updater section).
+
+## 14. RAM-push variant
+
+### 14.1 Placement and lifetime
+
+The stub remains at its reviewed image-5 address `0x00bf4454`, with the exact 88 bytes of section 3.1 and unchanged calls, stack contract and hook encoding. This retains section 5.2's ownership census and the native/full-system behavior evidence. Relinking it into an allocation would change its BL words, entry target and placement argument without changing the toggle behavior. The push overwrites 22 aligned words in `[0x00bf4454,0x00bf44ac)` and the hook word at `0x00ecf900`; the remaining 56 bytes of the reviewed extent stay stock.
+
+The `UsbToggle` payload kind reserves `0xd20` bytes (3360) for the existing shared installer, publication table, rendezvous and mailbox. Its installer starts at `align32(base)` and occupies `0xd00` bytes; even an eight-byte-aligned base requiring 24 bytes of leading padding fits. Count-specialized entries are installer `+0x600` (install), `+0x83c` (rollback) and `+0x868` (status). The payload ABI is 6. Neither the payload allocation nor the publication words survive the approved full-power-removal ending. A switch-only cycle is not the removal proof.
+
+The relinker is `host/firmware/build-usb-toggle-ram.sh`, builder `//host/firmware:build-usb-toggle-ram`. The builder pins stock image 5, the full 144-byte old extent, the old hook word, the linked stub and its stock callees. It emits the shared manifest/runtime format. `ram-alloc`, `ram-relink` and `ram-push` select this payload by allocation size and retain the existing authenticated-rebuild, upload-readback, old-word, CPU identity, callback-slot and mailbox checks. The new pins and their verdicts live only in `transport/ram-push-toggle-review.json`; the camera binary has no raw-write escape.
+
+### 14.2 Masked-window and activation-order argument
+
+Publication is **22 setup words, then one activation hook**, under the existing **CPU1 PARKED/COMMIT acknowledgement plus CPU0 IRQ-masked publication window** of the [transport publication contract](../transport/README.md#ram-push-review-record). Before that window the host uploads and verifies only the retained allocation. The installer synchronizes runtime and publication lines on both cores, parks CPU1 with its IRQs masked, masks CPU0 IRQs, validates all 23 old words, obtains the peer acknowledgement, stores the 22 stub words, then stores aligned hook word `0xebf492d3`, performs instruction/data-cache maintenance and releases the cores. An old-word failure publishes nothing.
+
+Handler A may be suspended on either core at entry to the window. The old hook is a BL to the byte getter, with return `0x00ecf904`, which the new stub preserves. A suspended task before the BL resumes into either the fully stock or the fully published call, never an incomplete stub. One already in the stock getter returns to the same continuation with the stock value; a plain edge's result is unchanged. One after the call consumes its already-read `r0` exactly as before. No existing frame points into the stub extent because the hook was stock and section 5.2 finds no other reference. The allocation remains owned after installation, and no rollback/free runs during the live experiment.
+
+This is not an idle-screen-only argument and does not claim the entire connect handler is quiescent. Idle shooting mode is the operational precondition; the masked publication window, activation-last order, cache maintenance and unchanged call/return ABI are the safety boundary.
+
+### 14.3 Observability and hardware-only boundaries
+
+Installation leaves RAM `0xf7 = 1` and the existing `ff80` session intact. After detach, Q attach flips the RAM byte to 0 and selects PTP `04cb:02b6`. `read-ram` and `ram-alloc` refuse with the byte at 0, and service commands cannot run over PTP. The script therefore uses the OS-cached enumeration descriptor as the observation, does not attempt an intermediate RAM read, and checks the RAM byte and installed words only after a second Q attach restores `ff80` and RAM 1.
+
+The complete requested sequence is push, detach, Q attach to PTP, detach, Q attach to `ff80`, optional plain-attach retention, full power removal and a fresh ordinary-boot read. The emulator's configured-session disconnect boundary of section 8.3 remains hardware-only; an undelivered detach stops a scenario and is never replaced by a guessed controller event. Held-Q UI behavior and reading the key driver from usbcont remain hardware-only checks. Model RAM inspection is not counted as an available host read while the gate is 0.
+
+The [session script](usb-toggle-ram-push-session-script.md) contains stop rules, the exact four-window private read plan and the standard battery-removal ending. The [independent reviewer brief](review/usb-toggle-ram-push.md) covers the new publication mechanism separately from the reviewed stub bytes.
+
+### 14.4 RAM-push emulation evidence
+
+The exact-payload FujiMod run `private-data/analysis/usb-toggle/ram-push/session-4` allocated at `0x00a7e8c8`, uploaded and read back the authenticated runtime, and returned `RamPushInstalled`. Guest readback confirmed all 88 reviewed stub bytes, hook `0xebf492d3`, 23 publication records and unchanged RAM `0xf7 = 1`. Runtime SHA-256 is `b6b86ec6a0409cf4419c2d7c5a0b4ecb3ce301a59b2d652533cf92a9e59257ad`; manifest SHA-256 is `0a37e6aa0a511608f267701730455a87bb2a4adafd2bfa0f58e18d9255024bb1`. The publication-contract digest is `9689704f21b660df2806a52a481cda1909182cac593007e094d569d69764334c`.
+
+The next planned detach did not reach handler A within 80 million instructions. Driver state remained `0x0a`, status `0x11`, matching section 8.3's missing configured-session disconnect event. The receipt is **blocked**, with one failed detach-delivery check; neither Q attach ran in that continuous pushed session. A complete pushed-cycle pass is not claimed.
+
+Native cases consumed the stub read back from that installed payload, rather than a fresh build: `private-data/analysis/usb-toggle/ram-push/native-exact-2`, held inside an emulator slot. All 364 cases passed: 44 stub cases, 160 patched handler-A cases and 160 stock controls, including both Q toggle directions. The 80 plain-edge stock/patched pairs had identical boundary events, `r0`, latch and RAM `0xf7`. Maximum stack depths were 44 bytes patched and 36 bytes stock.
+
+FujiMod component runs in `private-data/analysis/usb-toggle/ram-push/transitions-1` passed `e5u-ff80-rc0-toggle`, `e5u-q-ptp-rc0-toggle`, `e7-rc0-toggle-plain` and `e7-rc0-toggle-q`. They exercise the identical stub and hook installed by the flash-toggle composition, not a continuation of the RAM-pushed session. `e5u-cycle-rc0-toggle` stopped at a PTP detach with driver state `0x08`, status `0x01`; its one failed detach-delivery check is also hardware-only. The requested continuous cycle, both configured detach edges, held-Q UI effect and key-driver read from usbcont remain physical-body acceptance criteria.

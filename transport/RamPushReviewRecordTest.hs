@@ -4,7 +4,7 @@ import Control.Monad (unless)
 import qualified Data.ByteString.Char8 as C
 import Data.Either (isLeft)
 import Data.IORef
-import Data.List (intercalate)
+import Data.List (intercalate, isInfixOf)
 import System.Exit (exitFailure)
 import FujiAF.RamPushReview
 
@@ -48,8 +48,11 @@ contentPin = pin "menu/recipe_bank_storage.c" "workspace" "bank-content"
 builderPin = pin "build-recipe-bank" "builder" "mechanism"
 
 document :: [String] -> [String] -> [String] -> String -> C.ByteString
-document reviews checks pins contract = C.pack $
-  "{\"schema\":1,\"kind\":\"xm1-ram-push-review-record\",\"reviews\":[" ++ intercalate "," reviews
+document = documentOfKind "xm1-ram-push-review-record"
+
+documentOfKind :: String -> [String] -> [String] -> [String] -> String -> C.ByteString
+documentOfKind kind reviews checks pins contract = C.pack $
+  "{\"schema\":1,\"kind\":" ++ quoted kind ++ ",\"reviews\":[" ++ intercalate "," reviews
   ++ "],\"content_checks\":[" ++ intercalate "," checks ++ "],\"pins\":[" ++ intercalate "," pins
   ++ "],\"publication_contract\":{\"sha256\":" ++ quoted (digest 'd') ++ ",\"status\":" ++ contract ++ "}}"
 
@@ -96,6 +99,20 @@ main = do
   expect "an unknown key is refused"
     (isLeft (parsed (document [] [] [init (builderPin unreviewed) ++ ",\"note\":\"x\"}"] unreviewed)))
 
+  let toggleBuilder = pin "build-usb-toggle-ram" "builder" "mechanism" unreviewed
+      toggleStub = pin "usb_toggle_stub" "usb-toggle-stub" "mechanism" unreviewed
+      toggleRecord = documentOfKind "xm1-usb-toggle-ram-push-review-record" [] [] [installerPin unreviewed, toggleBuilder, toggleStub] unreviewed
+  expect "the USB toggle stub source rejects substituted identities"
+    (isLeft (parsed (document [] [] [pin "substituted_stub" "usb-toggle-stub" "mechanism" unreviewed] unreviewed)))
+  case parsed toggleRecord of
+    Left reason -> expect ("the USB toggle record parses: " ++ reason) False
+    Right record -> do
+      expect "USB toggle review records round trip"
+        (recordKind record == UsbToggleRecord && parsed (renderReviewRecord record) == Right record)
+      expect "USB toggle pins and publication contract remain unreviewed"
+        (subjects (verdictFindings record) == [PinSubject (PinIdentity "menu/ram_push_installer.c"), PinSubject (PinIdentity "build-usb-toggle-ram"), PinSubject (PinIdentity "usb_toggle_stub"), ContractSubject])
+      expect "USB toggle generates its camera contract binding"
+        ("module RamPushToggleReviewedPins (reviewedToggleContract) where" `isInfixOf` pinsModuleSource record)
   case parsed approvedRecord of
     Left reason -> expect ("the approved fixture parses: " ++ reason) False
     Right record -> do

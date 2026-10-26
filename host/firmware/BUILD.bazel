@@ -1692,3 +1692,125 @@ filegroup(
         ":build-af-ring-ram",
     ],
 )
+
+haskell_library(
+    name = "usb-toggle-ram-model",
+    srcs = [
+        "RamPushLayout.hs",
+        "UsbToggleRam.hs",
+    ],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:classic-chrome",
+        "//host:cryptohash-sha256",
+        "//host:usb-toggle",
+    ],
+)
+
+filegroup(
+    name = "build-usb-toggle-ram-sources",
+    srcs = [
+        "ArmElf.hs",
+        "BUILD.bazel",
+        "BuildUsbToggleRam.hs",
+        "RamPushLayout.hs",
+        "UsbToggleRam.hs",
+        "build-usb-toggle-ram.sh",
+        "classic-chrome-ram-builder-digest.sh",
+        "ram-push-toolchain.sh",
+        "usb-toggle-ram.ld",
+        "usb-toggle-stub.S",
+        "usb-toggle-stub.ld",
+        "//host:FujiAF/ClassicChrome.hs",
+        "//host:FujiAF/Host.hs",
+        "//host:FujiAF/JSON.hs",
+        "//host:FujiAF/UsbToggle.hs",
+        "//menu:usb-toggle-ram-relink-sources",
+    ],
+)
+
+genrule(
+    name = "usb-toggle-ram-builder-module",
+    srcs = [
+        ":build-usb-toggle-ram-sources",
+        "@lab_bash//:bin/bash",
+        "@lab_coreutils//:bin/sha256sum",
+        "@lab_coreutils//:bin/sort",
+    ],
+    outs = ["UsbToggleRamBuilder.hs"],
+    cmd = "$(location @lab_bash//:bin/bash) $(location classic-chrome-ram-builder-digest.sh) $@ usb-toggle-ram-builder-module UsbToggleRamBuilder usbToggleRamBuilderDigest $(location @lab_coreutils//:bin/sha256sum) $(location @lab_coreutils//:bin/sort) $(locations :build-usb-toggle-ram-sources)",
+    tools = ["classic-chrome-ram-builder-digest.sh"],
+)
+
+haskell_library(
+    name = "usb-toggle-ram-builder",
+    srcs = [":UsbToggleRamBuilder.hs"],
+    ghcopts = ["-Wall", "-Werror", "-XGHC2021"],
+    deps = ["//host:base"],
+)
+
+haskell_binary(
+    name = "build-usb-toggle-ram",
+    srcs = [
+        "ArmElf.hs",
+        "BuildUsbToggleRam.hs",
+    ],
+    data = [
+        ":build-usb-toggle-ram-sources",
+        ":usb-toggle-stub.bin",
+        ":usb-toggle-stub.sym",
+    ],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-threaded"],
+    main_file = "BuildUsbToggleRam.hs",
+    deps = [
+        ":ram-push-toolchain",
+        ":usb-toggle-ram-builder",
+        ":usb-toggle-ram-model",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:classic-chrome",
+        "//host:host-support",
+        "//host:json",
+        "//host:unix",
+    ],
+)
+
+filegroup(
+    name = "usb-toggle-ram-relink-sources",
+    srcs = [":build-usb-toggle-ram-sources"],
+)
+
+filegroup(
+    name = "usb-toggle-ram-relinker",
+    srcs = [
+        "build-usb-toggle-ram.sh",
+        ":build-usb-toggle-ram",
+        ":usb-toggle-ram-relink-sources",
+        ":usb-toggle-stub.bin",
+        ":usb-toggle-stub.sym",
+    ],
+)
+
+haskell_test(
+    name = "usb-toggle-ram-tests",
+    srcs = ["BuildUsbToggleRamTests.hs"],
+    args = [
+        "$(location :usb-toggle-stub.bin)",
+        "$(location :build-usb-toggle-ram)",
+    ],
+    data = [
+        ":build-usb-toggle-ram",
+        ":usb-toggle-stub.bin",
+    ],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021"],
+    deps = [
+        ":usb-toggle-ram-model",
+        "//host:base",
+        "//host:bytestring",
+        "//host:classic-chrome",
+        "//host:process",
+    ],
+)
