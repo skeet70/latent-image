@@ -41,12 +41,10 @@ threeConverters = ["cc-entry-marker", "cc-entry-settings-converter", "cc-entry-s
 fiveConverters :: [T.Text]
 fiveConverters = fourConverters ++ ["cc-entry-settings-converter"]
 
--- | A converter pass whose frame prefix holds a declared non-converter site.
 markedPass :: [T.Text]
 markedPass =
   [ "cc-entry-marker", "cc-hook-chroma-2", "cc-entry-settings-converter", "cc-entry-settings-converter" ]
 
--- | The same pass plus the two converter entries fourConverters holds in one frame.
 markedUnsplit :: [T.Text]
 markedUnsplit = markedPass ++ ["cc-entry-settings-converter", "cc-entry-settings-converter"]
 
