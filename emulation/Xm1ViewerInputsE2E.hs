@@ -76,7 +76,7 @@ terminalState = parseMaybe $ withObject "diagnostic state" $ \state ->
       else fail "not the stock power-off halt")
 
 data InputControl = MainUp | MainDown | HalfPress | FullPress | Movie deriving (Eq, Show)
-data Case = DefaultCases | ControlsCase | ModesCase | FullPressCase deriving (Eq)
+data Case = DefaultCases | ControlsCase | ModesCase | FullPressCase | CheckpointRestoreCase deriving (Eq)
 data Options = Options (Maybe InputPath) (Maybe InputPath) (Maybe ReceiptPath) (Maybe Firmware) Case Bool
 
 data RunCase = ModeRun ModeDial | ControlsRun | FullPressRun
@@ -126,7 +126,7 @@ consumerState control = ConsumerState $ case control of
   Movie -> 0x0d
 
 usage :: String
-usage = "xm1-viewer-inputs-e2e --installed-nand NAND --receipt-output DIR [--sd-card-image CARD --firmware DAT --case controls|modes|s2 --fresh-boot]\nHost-only stock input consumers and isolated mode state. S2 runs only with --case s2, in a fresh run with no card or a private card copy.\n"
+usage = "xm1-viewer-inputs-e2e --installed-nand NAND --receipt-output DIR [--sd-card-image CARD --firmware DAT --case controls|modes|s2|checkpoint-restore --fresh-boot]\nHost-only stock input consumers and isolated mode state. S2 runs only with --case s2, in a fresh run with no card or a private card copy. checkpoint-restore requires an existing cardless attach checkpoint, restores it twice and checks that mode changes do not survive restoration.\n"
 
 parseOptions :: [String] -> IO Options
 parseOptions = go (Options Nothing Nothing Nothing Nothing DefaultCases False)
@@ -142,6 +142,7 @@ parseOptions = go (Options Nothing Nothing Nothing Nothing DefaultCases False)
         "controls" -> pure ControlsCase
         "modes" -> pure ModesCase
         "s2" -> pure FullPressCase
+        "checkpoint-restore" -> pure CheckpointRestoreCase
         _ -> ioError (userError usage)
       go (Options nand card receipt firmware selected fresh) rest
     go _ _ = ioError (userError usage)
@@ -256,6 +257,8 @@ run (Options nandInput cardInput receiptInput firmware selected fresh) = do
   root@(Workspace workspace) <- Runtime.workspace Nothing
   nand <- maybe (ioError (userError "--installed-nand is required")) (privateInput root) nandInput
   card <- traverse (privateInput root) cardInput
+  when (selected == CheckpointRestoreCase) $
+    require (card == Nothing && not fresh) "checkpoint-restore requires cardless checkpoint restoration, without --fresh-boot"
   receipt <- freshReceipt root receiptInput
   staged <- stageViewerRuntime root Nothing (UniqueRuntime "xm1-viewer-inputs-e2e") firmware StageStockOriginal
   let runtime = stagedDirectory staged
@@ -298,11 +301,29 @@ run (Options nandInput cardInput receiptInput firmware selected fresh) = do
             FullPressRun -> do
               result <- checkControl emulator directory FullPress
               pure (CaseReceipt baseline [] [] [result])
+      restoreRun name = do
+        let directory = receipt </> name
+            (bridge, bridgeArgs) = bridgeFor directory
+        ensurePrivateDirectory directory
+        bracket (startEmulator bridge runtime bridgeArgs (\_ -> pure (Nothing, ())))
+          (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, ()) -> do
+            require (bootStart start == RestoredStart) "checkpoint-restore did not restore an existing attach checkpoint"
+            beforeWord <- readWord emulator 0x00956838 4
+            before <- maybe (ioError (userError "checkpoint has an unknown shooting mode")) pure (shootingMode beforeWord)
+            changed <- checkMode emulator directory (if before == ManualState then ModeDialProgram else ModeDialManual)
+            pure (before, CaseReceipt
+              (object ["case" .= name, "start" .= startRecord start, "restored_mode" .= show before])
+              [changed] [] [])
+      restoreCase = do
+        (firstMode, first) <- restoreRun "restore-first"
+        (secondMode, second) <- restoreRun "restore-second"
+        require (firstMode == secondMode) "checkpoint restoration retained the previous run's shooting-mode change"
+        pure [first, second]
       unchanged = forM_ (zip (maybe [] pure card) (maybe [] pure originalCard)) $ \(path, before) -> do
         after <- sha256File path
         writeJson (receipt </> "card-integrity.json") (object ["original_sha256_before" .= sha256Hex before, "original_sha256_after" .= sha256Hex after])
         require (before == after) "The original virtual-card image changed"
-  results <- mapM runOne requested `finally` unchanged
+  results <- (if selected == CheckpointRestoreCase then restoreCase else mapM runOne requested) `finally` unchanged
   writeJson (receipt </> "result.json") (object
     ["schema" .= (2 :: Int), "baselines" .= map baselineRecord results, "modes" .= concatMap modeRecords results,
      "controls" .= concatMap controlRecords results, "s2" .= concatMap s2Records results])
