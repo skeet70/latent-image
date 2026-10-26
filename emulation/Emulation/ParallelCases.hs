@@ -11,8 +11,9 @@ import Control.Monad (forM)
 import GHC.Conc (setNumCapabilities)
 import Text.Read (readMaybe)
 
+-- The per-agent worker budget: 2 concurrent case workers.
 defaultJobs :: Int
-defaultJobs = 8
+defaultJobs = 2
 
 readJobs :: Maybe String -> IO Int
 readJobs raw = case raw of
