@@ -23,6 +23,8 @@ mod mode_resize;
 mod scene_scaler;
 mod scene_device;
 mod fff42;
+mod gpu_startup;
+mod gpu_startup_bridge;
 #[cfg(test)]
 mod tests;
 
@@ -1527,6 +1529,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     scene_device::register(m)?;
     menu::register(m)?;
     m.add_function(wrap_pyfunction!(spi0::spi0_status_acknowledged, m)?)?;
+    m.add("GPU_STARTUP_PROFILE", gpu_startup_bridge::PROFILE)?;
+    m.add_function(wrap_pyfunction!(gpu_startup_bridge::gpu_startup_submit, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_startup_bridge::gpu_startup_ack, m)?)?;
     m.add_class::<irq_mask::IrqRoute>()?;
     m.add_function(wrap_pyfunction!(irq_mask::irq_enable_clear, m)?)?;
     m.add_function(wrap_pyfunction!(irq_mask::irq_enable_set, m)?)?;
