@@ -188,6 +188,36 @@ This is host-only research over the captured ROM and official 1.50 decode. No ca
 
 **Disposition:** there is no fixed mode-7 recovery image to deploy. The software-side content is bounded as a 1 KiB hardware-configuration block followed by a raw payload, but entry, physical endpoint, electrical protocol, framing and producer remain unknown. The existing reviewed SD recovery image targets mode 1 and is not interchangeable with this stream. The next discriminating artifact is an FF4227 register/pinmux description or a factory package/source that names `0xfff56000`/`BOOT_DEV56`; another payload build cannot resolve that hardware contract.
 
+### Mode-7 provenance correction and offline reproduction
+
+`E-MODE7-RECEIVER-PROVENANCE-CORRECTION-150` withdraws the unsupported DAT identity association in `E-MODE7-RECEIVER-BOUND-150`; it does not replace the historical hash. The original record remains unchanged. Its `firmware_sha256`, `43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dc944b91ece0751203c5d`, already conflicted with the manifest in private research commit `f1f88e6edd5b606905f4a83a5b6437f36768b117`, which first committed that record. That contemporaneous manifest identifies the 1.50 DAT as `43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490`, as does the current pin. Neither manifest proves which DAT, if any, the mode-7 analysis actually used. No preserved input or contemporaneous artifact binding was found for the conflicting hash; its origin remains unknown.
+
+The ROM source has an independent, recoverable identity. `E-BOOTROM-MODE4-150` in that same private commit and the [initial public ledger](https://github.com/skeet70/latent-image/blob/75abf4831241128a2280ed7627b6f030434bd760/docs/evidence.jsonl#L100) records the 16 KiB ROM SHA-256 `4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be` and listing SHA-256 `19500aabaa1cf41dd4084c515076d873b807908af7ef50bb9ab6ddfe86ee91ab`. Both retained files match those historical hashes. The ROM also matches the capture's recorded SHA-1 `bed698ed1d91b5c29ce7c5d650156e6100c32cce`; the retained `E-BOOTROM-PROBE-150` journal and first/last windows match their recorded SHA-256 values. This binds the ROM bytes and historical listing, not the conflicting DAT field, a new acquisition or a different camera.
+
+The private research history is retained in `private-data/provenance/fuji-af-retirement/fuji-af-all.bundle`, not in the public Git history. The public snapshot preserves the ROM identities and the conflicting record, but does not distribute the ROM, capture journal, listing or bundle. An independently supplied official DAT can reproduce the [public firmware inspection and extraction procedure](../recovery/README.md#firmware-triage-for-other-failures); it cannot supply the acquired mask ROM. Reproducing the ROM analysis requires an independently supplied ROM matching the identity above. If it differs, treat it as a new input rather than reproducing this finding.
+
+These are current host-only reproduction commands, not a reconstruction of the original invocation. Supply the ROM independently, retain the input hash, and use the public development shell's LLVM tools instead of a historical private `.elf` wrapper:
+
+```sh
+ROM=private-data/independent/bootrom-0x80000000-4000.bin
+OUT=private-data/analysis/mode7-independent
+sha256sum "$ROM"
+stat --format=%s "$ROM"
+mkdir -p "$OUT"
+devenv shell -- llvm-objcopy -I binary -O elf32-littlearm \
+  --rename-section .data=.text,alloc,load,code,contents "$ROM" "$OUT/bootrom.elf"
+devenv shell -- llvm-objdump -d --triple=armv7-none-eabi \
+  --adjust-vma=0x80000000 --start-address=0xac0 --stop-address=0xb50 \
+  "$OUT/bootrom.elf"
+devenv shell -- llvm-objdump -d --triple=armv7-none-eabi \
+  --adjust-vma=0x80000000 --start-address=0x20a8 --stop-address=0x22cc \
+  "$OUT/bootrom.elf"
+```
+
+Require the ROM hash above and a size of 16384 bytes before comparing the handler at `0x80000ac0` and receiver helpers at `0x800020a8`, `0x80002144` and `0x800021d4`. LLVM's range arguments here are file offsets before VMA adjustment. Current LLVM output need not reproduce the historical listing's formatting or hash. The historical listing is recoverable privately by its recorded hash, and `E-BOOTROM-MODE4-150` records its LLVM wrapper recipe. The mode-7 record supplies no invocation or tool revision. S32 supplies no Linux commit identities for its 2026-10-12 `master` reads.
+
+For the external-source comparison, [S32's addendum](../spec/09-sources.md#s32) supplies an immutable `fffw` header and versioned Linux references checked for the same enum/register facts. Those Linux links are current reproduction references, not recovered historical identities. The original private scanner and Ghidra export are not public dependencies for these bounded ROM slices; their broader application/reset-caller search is not reproduced by this procedure. The DAT association, original Linux revisions, endpoint, framing, producer and low-selector control remain unresolved. No recovery acceptance follows from this correction.
+
 ## 4. Every mode assessed as an entry
 
 | Mode | What it offers | What could supply a recovery payload | What the project lacks | Assessment |
