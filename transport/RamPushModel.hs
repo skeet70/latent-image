@@ -30,8 +30,7 @@ mailboxAddress :: Word32
 mailboxAddress = base + 0xa280
 
 publicationOrder :: [Int]
-publicationOrder = [0..35] ++ [55..68] ++ [88] ++ [36..53] ++ [97..252]
-  ++ [75,76,72,73,74,69,70,71,77,78,79,80,81,82,83,89,90,91,92,93,94,95,96,84,85,86,87,54]
+publicationOrder = [1 .. publicationCount - 1] ++ [0]
 
 publications :: [Publication]
 publications =

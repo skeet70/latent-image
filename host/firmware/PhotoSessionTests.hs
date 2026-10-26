@@ -6,6 +6,7 @@ module Main (main) where
 
 import Control.Monad (forM_, unless)
 import Data.Aeson (Value (..), object, (.=))
+import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
@@ -46,6 +47,45 @@ main = do
     ensure (c1 == ExitSuccess) "a JPEG did not decode identical to itself"
     (c2, _) <- run tool ["photo-identical", "--ffmpeg", ffmpeg, "--ffprobe", ffprobe, root </> "provia.jpg", root </> "velvia.jpg"]
     ensure (c2 /= ExitSuccess) "two different JPEGs were reported identical"
+
+    let difference name a b = do
+          let out = root </> name
+          (code, _) <- run tool ["photo-difference", "--ffmpeg", ffmpeg, "--ffprobe", ffprobe, root </> a, root </> b, out]
+          ensure (code == ExitSuccess) "photo-difference failed"
+          B.readFile out >>= either failH pure . decodeStrict
+        plane result key = field (field result "planes") key
+    identical <- difference "identical.json" "provia.jpg" "provia.jpg"
+    forward <- difference "forward.json" "provia.jpg" "velvia.jpg"
+    backward <- difference "backward.json" "velvia.jpg" "provia.jpg"
+    forM_ ["Y", "Cb", "Cr"] $ \key -> do
+      let self = plane identical key
+          f = plane forward key
+          b = plane backward key
+      ensure (num self "samples" == 256 * 64) "photo-difference omitted native samples"
+      ensure (num self "differing" == 0 && numD (field self "maxAbsolute") == 0) "an identical plane has nonzero differences"
+      ensure (field self "histogram" == A.toJSON [object ["difference" .= (0 :: Int), "samples" .= (256 * 64 :: Int)]]) "an identical plane has the wrong histogram"
+      ensure (num f "differing" == num b "differing") "reversing images changed the number of differences"
+      ensure (abs (numD (field f "meanSigned") + numD (field b "meanSigned")) < 1e-12) "reversing images did not reverse signed differences"
+      ensure (field f "rootMeanSquare" == field b "rootMeanSquare") "reversing images changed RMS error"
+    ensure (any (\key -> num (plane forward key) "differing" > 0) ["Y", "Cb", "Cr"]) "photo-difference lost a changed image"
+
+    let wb = object ["green" .= (302 :: Int), "red" .= (342 :: Int), "blue" .= (876 :: Int)]
+        captureManifest = object ["shot" .= ("provia.jpg" :: String), "conversion" .= ("provia.jpg" :: String), "selectedWb" .= wb, "autoWb" .= wb, "blockSize" .= (32 :: Int), "maxLumaSd" .= (1 :: Double)]
+    B.writeFile (root </> "capture.json") (encodeCanonical captureManifest)
+    (captureCode, _) <- run tool ["capture-difference", "--ffmpeg", ffmpeg, "--ffprobe", ffprobe, bundlePath, root </> "capture.json", root </> "capture-result.json"]
+    ensure (captureCode == ExitSuccess) "capture-difference failed"
+    capture <- B.readFile (root </> "capture-result.json") >>= either failH pure . decodeStrict
+    ensure (num capture "invertibleBlocks" > 0) "capture-difference omitted all flat patches"
+    ensure (numD (field (field capture "unchangedShotResidual") "max") == 0) "an identical capture pair has a nonzero observed residual"
+    case field capture "hypotheses" of
+      Array hypotheses -> do
+        let named name = [h | h <- foldr (:) [] hypotheses, field h "name" == A.toJSON (name :: String)]
+        case (named "identity", named "auto-instead-of-selected-wb", named "fitted-diagonal-input-gain") of
+          ([identity], [auto], [fitted]) -> do
+            ensure (field identity "conversionResidual" == field auto "conversionResidual") "equal WB triplets changed the prediction"
+            ensure (field fitted "rgbInputGain" == A.toJSON ([1, 1, 1] :: [Double])) "an identical capture pair has non-unity fitted gain"
+          _ -> failH "capture-difference omitted a gain counterfactual"
+      _ -> failH "capture-difference did not report gain counterfactuals"
 
     -- the chart grid puts the corner patches on the given centres
     (c3, out3) <- run tool ["chart-patches", "100,50", "600,50", "100,350", "600,350", "40"]

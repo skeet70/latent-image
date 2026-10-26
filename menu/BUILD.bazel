@@ -47,6 +47,8 @@ genrule(
 filegroup(
     name = "ram-push-relink-sources",
     srcs = [
+        "classic_chrome_ram.S",
+        "classic_chrome_ram_stock.ld",
         "ram_push_abi.h",
         "ram_push_installer.c",
         "recipe_bank_actions.c",

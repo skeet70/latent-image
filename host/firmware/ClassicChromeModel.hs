@@ -33,7 +33,7 @@ import qualified FujiAF.Host as H
 import FujiAF.JSON (decodeStrict, encodeCanonical)
 import FujiAF.XM1Develop
 import LookReference (LabPair (..), lutLab, parseCube, relativeStats, sector)
-import PhotoSession (Decoder (..), PairGroup (..), Ycc (..), chartPatches, eModel, pairDeltaStats, pairDeltaTables, photoIdentical, relativePairs, yccLab)
+import PhotoSession (Decoder (..), PairGroup (..), Ycc (..), captureDifference, chartPatches, eModel, pairDeltaStats, pairDeltaTables, photoDifference, photoIdentical, relativePairs, yccLab)
 import SiblingTables (runTables)
 
 usage :: String
@@ -58,6 +58,10 @@ usage =
     , "  latent-image.classic-chrome-parameters.v1 file and a residual report"
     , "classic-chrome-model photo-identical [--ffmpeg PATH] [--ffprobe PATH] A.JPG B.JPG"
     , "  exit 0 when the two JPEGs decode to identical Y, Cb and Cr planes"
+    , "classic-chrome-model photo-difference [--ffmpeg PATH] [--ffprobe PATH] A.JPG B.JPG OUT.json"
+    , "  native-plane signed B-minus-A histograms, changed counts, mean absolute and RMS error"
+    , "classic-chrome-model capture-difference [--ffmpeg PATH] [--ffprobe PATH] BUNDLE.json MANIFEST.json OUT.json"
+    , "  flat-block input-gain counterfactuals for a PROVIA shot and its RAW conversion"
     , "classic-chrome-model chart-patches X,Y X,Y X,Y X,Y SIZE"
     , "  ColorChecker Classic patch squares from the centres of dark skin, bluish green,"
     , "  white 9.5 and black 2 (pixels), for an e-model manifest"
@@ -91,6 +95,10 @@ main = do
     ["method", bundle, out] -> runMethod bundle out
     ["fit-cc", bundle, method, candidate, out] -> runFitCc bundle method candidate out
     ["photo-identical", a, b] -> photoIdentical dec a b >>= \same -> unless same exitFailure
+    ["photo-difference", a, b, out] -> photoDifference dec a b >>= writeJson out
+    ["capture-difference", bundle, manifest, out] -> do
+      b <- readBundle bundle
+      captureDifference dec (xm1 b Provia) manifest >>= writeJson out
     ["chart-patches", tl, tr, bl, br, size] | Just corners <- mapM point [tl, tr, bl, br], [(n, "")] <- reads size -> case corners of
       [p0, p1, p2, p3] -> B.putStr (encodeCanonical (chartPatches p0 p1 p2 p3 n) <> "\n")
       _ -> hPutStrLn stderr usage >> exitFailure

@@ -894,3 +894,33 @@ for f in $R/lz/id4.dis $R/lz/id5.dis $R/filmsim/plain.dis; do awk -F'\t' '$2 ~ /
 # fallback adjustment bytes: tone overrides and the preset flag byte
 od -An -tx1 -j $((0xe0048+0xb5)) -N 1 $R/payload.bin; od -An -tx1 -j $((0xe0048+0xcb74)) -N 3 $R/payload.bin; od -An -tx1 -j $((0xe0048+0xaf93)) -N 1 $R/payload.bin
 ```
+
+## 14. Combined recipe-bank RAM mechanism review brief
+
+The bank relinker composes the existing Classic Chrome RAM processing publications with the editable bank, D3, live-view and frames-remaining fragments. CcBankReview approved the combined volatile mechanism at `4a00f46` after confirming all three findings from the first review closed (E-CC-BANK-MECHANISM-REVIEW-150, source-inspected). The combined record binds its changed identities and publication contract to that approval. The standalone Classic Chrome and icon records retain their existing approval provenance for unchanged emitted bytes; current source hashes are retained for the assembly's ELF function metadata and bank-only shared layout changes.
+
+The allocation reserves Classic Chrome's existing prefix data and leaves conversion row 2 and film code `0xd` to CC. D3's tables, expanded film conversion table and hook move after the bank's name records. D3 A uses appended row 13/code `0xf`; D3 B remains row 4/code `0xe`. Existing shooting/Q indices 0-8 are preserved and CC appends at index 9. Bank Edit offers the seven existing editable films plus CC. The owner approved the [format-3 compatibility decision and rollback policy](recipe-design.md#1811-classic-chrome-bank-encoding) on 2026-10-25.
+
+The reference relink passes the ELF allowlist under enforcement. Its ABI is 5, allocation size `0x1dc98`, with 222 publications ordered as 131 setup and 91 activation. The new contract digest is `bca512954d90a2225d19fc3117fe4efcfe1c7d11f446da12c72976f5b1e4fb46`. The source-identity and review-record bounds rise from 32 to 64 entries to carry both processing implementations. The migration helpers, compiler-outlined `rb_seal` and new CC entries have argument/object-specific store declarations covered by the independent review.
+
+Writable generated bank data ends at `names+0x400`, before the relocated D3 bundle. The bundle through `ALIGN(names+0x800,32)` is non-writable to bank code; the installer starts at that aligned address. `RAM_PUSH_BANK_END` and `RAM_PUSH_INSTALLER_START` carry those separate bounds. The checker validates both against the runtime layout and refuses stores into the bundle, linked bank/CC code and installer, while admitting stores into generated bank name data.
+
+Independent mechanism review covered:
+
+- The relocated D3 branch targets and table consumers, CC prefix ownership, allocation bounds and installer placement.
+- The merged setup-before-activation ordering, publication count, overlap exclusion, stock expected words and complete rollback closure.
+- The stored-CC availability/default path and ordinary/C film getters and setters. Unsupported modes use the stock PROVIA fallback without changing the stored CC nibble.
+- Format-2 D3 A migration in every valid-base and populated saved/working payload, refusal of legacy code `0xf`, format-3 admission and legacy-reader refusal.
+- CC selection and metadata/RAW hooks alongside the unchanged meanings of stock films and the two relocated D3 choices.
+
+The combined deployment remains volatile RAM. The standalone legacy D3 flash builders remain separate; this change does not accept a flash candidate, SD persistence, power-cycle retention or camera color output.
+
+### 14.1 Behavioral verification
+
+`E-CC-BANK-FORMAT-3-150` (emulated) records the host codec checks, 21 CC-aware native storage cases, the legacy reader's v3 refusal and 405 standalone CC site cases. The added site cases cover stored-CC fallback across the 22 mode columns and the real ordinary/C film getters and setters. They do not exercise CUSTOM SET persistence.
+
+`E-CC-BANK-RAM-150` (emulated) records the strict combined-package trajectory `bank-cc-save-select-none`. The installed mailbox reports ABI 5, status 0, 222 validated publications, 131 setup and 91 activation. CLASSIC CHROME renders at film-list index 9. Save Current stores film `0xd` in CUSTOM 1's saved and working payloads; after ordinary PROVIA, CUSTOM 1 recalls `0xd`, and NONE restores film 0 while retaining the CC recipe. The resident file is v3, selection moves 0/1/0, and the captured 40-byte C record remains unchanged. The entry follows the existing volatile scenario's M-mode preparation and records the first MENU's `prior-render-pending` skip before the next MENU opens the shooting menu.
+
+`E-CC-BANK-CONFINEMENT-150` (emulated) records the corrected writable-data boundary and regression probes that refuse stores into the D3 hook and bundle, linked bank/CC code and installer while accepting real generated bank data. Both reference ELFs pass the checker, with unchanged runtime bytes and publication contract. Standalone CC and icon runtimes at both reference bases remain identical to the previously approved artifacts, with only source identities differing. Their existing approval provenance is retained. A fresh cold-start combined-bank install and the same CC save/recall/NONE trajectory pass after the correction. Independent confirmation closed the confinement, provenance and README findings.
+
+The approval covers the combined volatile RAM mechanism. It does not decide the format-3 storage change or authorize a camera run. The current volatile deployment does not read or persist SD bank files. Flash installation, camera color, power-cycle retention, CUSTOM SET persistence and unload are outside this trajectory.

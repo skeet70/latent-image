@@ -9,7 +9,7 @@ This is the whole process for any camera operation.
 1. **Model:** implement or adjust the operation in `//transport:camera` with its bytes built internally, pass the host tests and the offline rehearsal, and commit. Clear the gate its class sets in section 3.2.
 2. **Owner:** confirms in chat, with a go for this run or a standing confirmation in section 3.4 that covers it. For H3 the go is per run and names the operation and the image or payload digest.
 3. **Owner:** puts the camera in the mode the operation needs, for example jig mode, and leaves it attached. **Model:** runs the single command, e.g. `devenv shell -- bazel run //transport:camera -- end-setting`. The command picks the one connected `04cb:ff80` device, journals every outgoing byte before sending it, writes its output under `private-data/sessions/` and prints the result, which the model reports in chat.
-4. **Owner:** exits jig mode, power-cycles, takes a shot and plays it back, and tells the model the result in chat, with photos or logs only if something looked wrong.
+4. **Owner:** exits jig mode, power-cycles, takes a shot and plays it back, and tells the model the result in chat, with photos or logs only if something looked wrong. For a payload in owned RAM the power cycle is a battery removal, which also ends the payload (section 3.4).
 5. **Model:** keeps the session record under `private-data/sessions/`. At a milestone or decision it records the result in the relevant report, posts it to the GitHub issue under [issues and comments](../docs/principles.md#issues-and-comments), adds an evidence-ledger entry if it is a durable research claim, and commits.
 
 A failed or stopped run needs no cleanup record. Fix the code, rehearse, commit, and go back to step 2.
@@ -47,6 +47,8 @@ The owner may grant in chat a standing confirmation for a named H1 operation or 
 - `read-ram` refuses windows outside DRAM `[0x00000000,0x20000000)` and its alias `[0x40000000,0x60000000)`; peripheral, ROM and unmapped reads are not covered by the grant.
 - Each run keeps its journal under `private-data/sessions/`. A refused, uncertain or unexpected result, a disconnect or any reported change in camera behaviour stops further reads until the owner is told.
 - The grant lapses when the owner unplugs the camera or withdraws it in chat.
+
+**Session ending.** The owner decided on 2026-10-25 that a session ends by removing the battery and confirming the original bytes with a read after reboot. Software unload and switch-off are optional and no run requires either. An orderly switch-off commits the ordinary settings in area 2 (E-AREA2-WRITERS-150) and a battery pull does not, so a setting a payload changed persists only after a switch-off. The owner reports that battery removal has always restored the pre-RAM-push state fully, and that manual unloads and warm switch-off power cycles work but cost extra work for no value.
 
 ## 4. Collaboration
 

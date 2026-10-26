@@ -6,7 +6,7 @@
 
 Add named film recipes to the X-M1's film-simulation menu, selectable and persistent like the stock simulations. Autofocus ([section 11](05-autofocus.md)) remains the primary mission; the owner's feature priority is compiled D3 rows with Q-menu exposure and a separate seven-slot editable bank (E-RECIPE-OWNER-PRIORITY-150). [GitHub Issues](https://github.com/skeet70/latent-image/issues) owns current scheduling and candidate readiness. Recipes share the firmware map (G2), checksum binding, recovery evidence and the persistent-installation decision (G7) with autofocus, and use none of the AF timing work. Wanting a persistent menu feature does not make flashing a substitute for the temporary execution loop that AF research requires.
 
-A recipe here means a named preset: one base processing mode plus values for the X-M1's existing image parameters. A recipe from another camera that needs features the X-M1 lacks (for example Classic Chrome, grain, Color Chrome or clarity) is rejected or explicitly labelled as an approximation. The tooling never substitutes silently. Classic Chrome as new processing is [section 19.5](#195-classic-chrome-rc2); until it is accepted, recipe tooling keeps rejecting it as a base.
+A recipe here means a named preset: one base processing mode plus values for the X-M1's existing image parameters. A recipe from another camera that needs features the X-M1 lacks (for example grain, Color Chrome or clarity) is rejected or explicitly labelled as an approximation. The tooling never substitutes silently. Classic Chrome as new processing is [section 19.5](#195-classic-chrome-rc2); the text bank format accepts its explicitly documented sibling-derived approximation for the Classic Chrome-aware bank, without claiming camera acceptance.
 
 ### 19.2 Current observations
 
@@ -89,10 +89,10 @@ The design and its host verification are in [the patch report](../reports/classi
 - Body adjustment data is never written. The data block lives in the image-4 decode-prefix window.
 - Metadata `FUN_00eab258` emits FilmMode `0x600`; Saturation follows PROVIA.
 - The label is the stock special id `0x83e`.
-- The Q cell and the FILM 1-3 bracket lists stay stock.
+- The standalone CC payload leaves the Q cell and FILM 1-3 bracket lists stock. The combined bank appends CC to its existing D3 Q film list; its stock and D3 indices are unchanged.
 - Live view previews Classic Chrome (owner requirement, 2026-10-22): a 5-word widening of `FUN_00eee958` lets the MOVDC builders mark their record, so live view and, as a consequence, movie use the hooked stages ([patch report 4.10](../reports/classic-chrome-patch.md#410-live-view-and-movie-live-view-fragment)). The fragment changes no reviewed CC byte and needs its own review. Without it (`16c830ad…2c89`) live view and movie are PROVIA.
-- D3 as designed ([recipe-patch-d3](../reports/recipe-patch-d3.md)) is incompatible: Classic Chrome owns conversion row 2, code `0xd` and 484 of the window's 512 bytes, and D3 must be re-planned around them.
-- Delivery is a flash container built on RC0 through the extension tooling. The container refuses any firmware other than 1.50. The RAM-push route of `//transport:camera` carries the recipe bank and D3's publications; a Classic Chrome RAM variant needs its own publication list, allowlist and review ([patch report 8.2](../reports/classic-chrome-patch.md#82-ram-payload-unbuilt-route-in-transportcamera)) and is not built.
+- The combined RAM recipe bank reserves conversion row 2, stored/downstream code `0xd` and the prefix storage window for Classic Chrome. D3 A moves to row 13/code `0xf`; D3 B remains row 4/code `0xe`. Format 3 distinguishes these meanings and preserves v2 D3 A on migration. The owner approved the [format decision and rollback policy](../reports/recipe-design.md#1811-classic-chrome-bank-encoding) on 2026-10-25. Legacy standalone D3 flash builds retain their old layout and refuse v3 bank files.
+- Delivery remains separately gated for flash installation and RAM acceptance. The combined bank RAM candidate includes CC processing, live-view and frames-remaining publications, with its mechanism approved by the independent review recorded in E-CC-BANK-MECHANISM-REVIEW-150. Standalone Classic Chrome payloads retain their separate review records. No host or emulator result accepts a physical installation or persistence across power cycles.
 
 #### 19.5.6 Verification
 

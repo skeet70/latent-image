@@ -23,6 +23,8 @@
 --   rawreq-*    plain FUN_012546a8 request word 2
 --   offer-*     FUN_00bfa800 list open on the stock, RC0 and patched arrays
 --   label-*     plain FUN_01179b0c; locator-* plain 0x0117dfd8
+--   stored-*    FUN_0063f0a0 stored-film mode fallback
+--   custom-*    stock property getter/setter on ordinary and C records
 --
 -- RAM mode (--ram-set, repeatable): the same families on the RC0 decodes with
 -- a CC RAM-push manifest's publications applied, the runtime's CC code mapped
@@ -88,6 +90,10 @@ le16 v = B.pack [fromIntegral v, fromIntegral (v `shiftR` 8)]
 
 le64 :: Word32 -> B.ByteString
 le64 v = le32 v <> le32 0
+
+replaceAt :: Int -> B.ByteString -> B.ByteString -> B.ByteString
+replaceAt offset fresh original =
+  B.take offset original <> fresh <> B.drop (offset + B.length fresh) original
 
 h32 :: Word32 -> String
 h32 v = let t = showHex v "" in "0x" ++ replicate (8 - length t) '0' ++ t
@@ -1265,6 +1271,89 @@ offerCases sides =
   where
     postStub = Stub 0x00bfa234 [("r0", 0xf), ("r1", 1), ("r2", 0x15), ("r3", 0)] [("r0", 0)]
 
+storedFilmCases :: [Side] -> [Case]
+storedFilmCases sides =
+  [ onRam side [] Case
+      { cId = "stored-" ++ sdTag side ++ "-mode-" ++ inTag mode
+      , cFamily = "6 stored-film fallback"
+      , cProv = "FUN_0063f0a0 applies stored Classic Chrome in mode " ++ hx mode ++ ". The current-value boundary supplies stored code 0xd. At C the existing film cell supplies col2 0xd. Conversion, availability, default selection and the film-cell setter execute image-4 bytes."
+      , cEntry = 0x0063f0a0
+      , cArgs = [("r0", mode)]
+      , cRegs =
+          [ codeReg "code-apply" img 0x0063f0a0 168
+          , codeReg "code-convert" img 0x0061d514 64
+          , codeReg "code-queries" img 0x00631a00 1536
+          , codeReg "code-film-cell" img 0x0063458c 32
+          , dataReg "conv-table" "r" img 0x0077ac30 168
+          , dataReg "conv-pointers" "r" img 0x0081b09c (4 * 0xff)
+          , dataReg "availability" "r" img 0x00792fac 25976
+          , synthReg "state-block" "rw" offerState state "mode and film cells, stored Classic Chrome"
+          , synthReg "conv-flag" "rw" 0x0089edc8 (le32 0) "converter flag"
+          ]
+      , cFns = [(0x0063f0a0,168), (0x0061d514,16), (0x0061d534,16),
+          (0x0061d544,16), (0x00631a00,336), (0x00631b74,484),
+          (0x00631d58,388), (0x0063458c,32)]
+      , cStubs = [current | mode /= 0x2c]
+      , cExpR = []
+      , cClaims = [("state-block", 0, replaceAt 0x80 (le32 expected) state),
+          ("conv-flag", 0, le32 (if not (sdPatched side) && mode /= 0x2c then 1 else 0))]
+      , cEvents = [current | mode /= 0x2c]
+      , cPin = []
+      , cPinFrom = Nothing
+      , cExpect = "the film processing cell holds " ++ hx expected ++ "; the stored-code boundary remains 0xd"
+      , cExcl = ["The current-value read is a boundary stub. Setting persistence and the mode transition caller are outside this invocation."]
+      , cBudget = 100000
+      , cInputs = [imgInput img]
+      }
+  | side <- sides
+  , let img = sdId4 side
+  , mode <- [wd img (0x00792fac + 4 * column) | column <- [0 .. 21]]
+  , let expected = if sdPatched side && mode `elem` [0,0x1f,0x21,0x22,0x23,0x24,0x2c] then 13 else 0
+        state = replaceAt 0x80 (le32 13) (le32 mode <> B.replicate 128 0)
+        current = Stub 0x0061c93c [("r0",0xfe),("r1",0)] [("r0",13)]
+  ]
+
+customFilmCases :: [Side] -> [Case]
+customFilmCases sides =
+  [ onRam side [] Case
+      { cId = "custom-" ++ sdTag side ++ "-" ++ action ++ "-" ++ record ++ "-" ++ inTag film
+      , cFamily = "6 custom film storage"
+      , cProv = "Stock property 0xfe " ++ action ++ " on bank 0, " ++ record ++ " selector " ++ show selector ++ ", code " ++ hx film ++ ". The neighboring settings bits start at 0xa5. Both property functions execute the image-4 dispatcher and film arm."
+      , cEntry = entry
+      , cArgs = if writing
+          then [("r0",0xfe),("r1",film),("r2",0),("r3",selector)]
+          else [("r0",0xfe),("r1",0),("r2",0),("r3",selector)]
+      , cRegs =
+          [ codeReg "code-property" img entry bytes
+          , synthReg "live-settings" "rw" 0x0096cc64 initial "ordinary settings and stock C record"
+          , synthReg "previous-settings" "rw" 0x0089ec00 (B.replicate 0x1c2 0xa5) "stock previous-value mirror"
+          ]
+      , cFns = [(entry,bytes)]
+      , cStubs = []
+      , cExpR = [("r0",if writing then 1 else film)]
+      , cClaims = [("live-settings",0,final)]
+      , cEvents = []
+      , cPin = []
+      , cPinFrom = Nothing
+      , cExpect = if writing then "code survives in its film nibble; every other settings byte and the neighboring nibble are unchanged" else "getter returns the complete four-bit film code"
+      , cExcl = ["The property layer's RAM records are exercised. CUSTOM SET's area-3 persistence and boot reload are outside this invocation."]
+      , cBudget = 10000
+      , cInputs = [imgInput img]
+      }
+  | side <- sides
+  , let img = sdId4 side
+  , (selector,record,offset,shift) <- [(0,"c",0x164,0),(1,"ordinary",0x8a,4)]
+  , film <- [0,13]
+  , action <- ["get","set"]
+  , let writing = action == "set"
+        entry = if writing then 0x00624694 else 0x0061e110
+        bytes = if writing then 49968 else 25832
+        seed = B.replicate 0x1c2 0xa5
+        changed = replaceAt offset (B.singleton ((0xa5 .&. complement (15 `shiftL` shift)) .|. fromIntegral (film `shiftL` shift))) seed
+        initial = if writing then seed else changed
+        final = changed
+  ]
+
 -- ---------------------------------------------------------------------------
 -- 7. Label
 -- ---------------------------------------------------------------------------
@@ -1360,13 +1449,14 @@ main = do
   let env = Env out runner arts finals
       fs = flashSides w
       rs = ramSides w
-      flashCases = convCases w fs ++ validatorCases w ++ devCases fs ++ metaCases fs ++ stubCases w (flashStubHosts w) ++ rawCases fs ++ offerCases (flashOfferSides w) ++ labelCases (flashLabelSources w)
+      flashCases = convCases w fs ++ validatorCases w ++ devCases fs ++ metaCases fs ++ stubCases w (flashStubHosts w) ++ rawCases fs ++ offerCases (flashOfferSides w) ++ storedFilmCases fs ++ customFilmCases fs ++ labelCases (flashLabelSources w)
       ramPairs = zip rs (wRams w)
       ramCases =
         convCases w rs ++ devCases rs ++ metaCases rs
           ++ stubCases w [ramStubHost side rw | (side, rw) <- ramPairs]
           ++ rawCases (take 1 fs ++ rs)
           ++ offerCases [(side, "RAM (RC0 with the CC publications)") | side <- rs]
+          ++ storedFilmCases rs ++ customFilmCases rs
           ++ labelCases [ramLabelSource side rw | (side, rw) <- ramPairs]
       cases = if null (wRams w) then flashCases else ramCases
   outcomes <- forM cases $ \c -> do

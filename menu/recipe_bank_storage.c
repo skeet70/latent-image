@@ -157,7 +157,11 @@
 #define RB_RECORDS_END (RB_RECORDS_AT + RB_BANK_SLOTS * RB_RECORD)
 #define RB_BODY (RB_RECORDS_END - RB_HEADER)
 #define RB_FILE_BYTES 1024u
+#ifdef RB_CC_BANK
+#define RB_FORMAT_VERSION 3u
+#else
 #define RB_FORMAT_VERSION 2u
+#endif
 #define RB_MODE_CODE_M 4u
 #define RB_V1_HEADER 32u
 #define RB_V1_BLOB (RB_BANK_SLOTS * (RB_PAYLOAD + RB_NAME))
@@ -964,15 +968,35 @@ static uint32_t rb_mode_prop(uint32_t table, uint32_t mode)
   return *(const uint32_t *)(uintptr_t)(table + 4u * mode);
 }
 
-static uint32_t rb_codes_ok(const uint8_t *payload)
+enum rb_film_encoding {
+  RB_FILM_CURRENT,
+  RB_FILM_D3_V2
+};
+
+static uint32_t rb_codes_ok_for(const uint8_t *payload,
+                                enum rb_film_encoding encoding)
 {
   uint32_t f;
   for (f = 0u; f < RB_FIELD_COUNT; f++) {
-    if (rb_code_ok(RB_FIELDS[f].prop, rb_extract(payload, &RB_FIELDS[f])) == 0u) {
+    uint32_t code = rb_extract(payload, &RB_FIELDS[f]);
+    if (encoding == RB_FILM_D3_V2 && RB_FIELDS[f].prop == 0xfeu) {
+      if (code == 15u) {
+        return 0u;
+      }
+      if (code == 13u) {
+        code = 15u;
+      }
+    }
+    if (rb_code_ok(RB_FIELDS[f].prop, code) == 0u) {
       return 0u;
     }
   }
   return 1u;
+}
+
+static uint32_t rb_codes_ok(const uint8_t *payload)
+{
+  return rb_codes_ok_for(payload, RB_FILM_CURRENT);
 }
 
 /* the bits no walked row and no bound-but-not-walked row carries, generated
@@ -1004,11 +1028,12 @@ static uint32_t rb_quality_raw_code(uint32_t quality, uint32_t *found);
 /* a payload a stock menu produces: every table-carried code is a row of its
  * table, (0xf6, 0xf9) is an IMAGE SIZE row the IMAGE SIZE list offers, and
  * 0x1d is the RAW code the 0xfa row's commit arm writes */
-static uint32_t rb_payload_safe(const uint8_t *payload)
+static uint32_t rb_payload_safe_for(const uint8_t *payload,
+                                    enum rb_film_encoding encoding)
 {
   uint32_t found;
   uint32_t raw;
-  if (rb_codes_ok(payload) == 0u ||
+  if (rb_codes_ok_for(payload, encoding) == 0u ||
       rb_size_row(rb_extract(payload, rb_walked_field(RB_PROP_SIZE)),
                   rb_extract(payload, rb_walked_field(RB_PROP_ASPECT)),
                   1u) == RB_ROW_NONE) {
@@ -1021,9 +1046,19 @@ static uint32_t rb_payload_safe(const uint8_t *payload)
              : 0u;
 }
 
+static uint32_t rb_payload_safe(const uint8_t *payload)
+{
+  return rb_payload_safe_for(payload, RB_FILM_CURRENT);
+}
+
 static uint32_t rb_header_ok(const uint8_t *file, uint16_t version,
                              uint16_t header, uint32_t body)
 {
+#ifdef RB_CC_BANK
+  if (version != RB_FORMAT_VERSION && version != 2u) {
+    return 0u;
+  }
+#endif
   return (file[0] == 'F' && file[1] == 'J' && file[2] == 'R' && file[3] == 'B' &&
           rb_u16(file + 0x04u) == version && rb_u16(file + 0x06u) == header &&
           rb_u16(file + 0x08u) == RB_FIRMWARE_TAG &&
@@ -1071,7 +1106,15 @@ static uint32_t rb_v2_class(uint8_t *file)
   uint32_t mode = file[RB_BASE_MODE_AT];
   uint32_t unsafe = 0u;
   uint32_t slot;
-  if (rb_header_ok(file, RB_FORMAT_VERSION, RB_HEADER, RB_BODY) == 0u ||
+  uint16_t version = RB_FORMAT_VERSION;
+  enum rb_film_encoding encoding = RB_FILM_CURRENT;
+#ifdef RB_CC_BANK
+  if (rb_u16(file + 0x04u) == 2u) {
+    version = 2u;
+    encoding = RB_FILM_D3_V2;
+  }
+#endif
+  if (rb_header_ok(file, version, RB_HEADER, RB_BODY) == 0u ||
       rb_checksum_file(file, RB_FILE_BYTES) != rb_u32(file + 0x18u) ||
       file[RB_AUTO_AT] > 1u || base_valid > 1u ||
       ((base_valid == 0u) ? (mode != 0u) : (mode == 0u || mode > RB_MODE_CODE_M)) ||
@@ -1088,7 +1131,7 @@ static uint32_t rb_v2_class(uint8_t *file)
     }
   } else if (rb_unbound_ok(file + RB_BASE_AT) == 0u) {
     return RB_CLASS_NONE;
-  } else if (rb_payload_safe(file + RB_BASE_AT) == 0u) {
+  } else if (rb_payload_safe_for(file + RB_BASE_AT, encoding) == 0u) {
     unsafe = 1u;
   }
   for (slot = 0u; slot < RB_BANK_SLOTS; slot++) {
@@ -1105,9 +1148,9 @@ static uint32_t rb_v2_class(uint8_t *file)
         (file[RB_AUTO_AT] != 0u && rb_bytes_equal(saved, working, RB_PAYLOAD) == 0u)) {
       return RB_CLASS_NONE;
     }
-    if (rb_payload_safe(saved) == 0u ||
+    if (rb_payload_safe_for(saved, encoding) == 0u ||
         (rb_bytes_equal(saved, working, RB_PAYLOAD) == 0u &&
-         rb_payload_safe(working) == 0u)) {
+         rb_payload_safe_for(working, encoding) == 0u)) {
       unsafe = 1u;
     }
   }
@@ -1153,6 +1196,33 @@ static void rb_migrate_v1(uint8_t *dst, uint8_t *v1)
   }
   rb_seal(dst, rb_generation(v1), mask);
 }
+
+#ifdef RB_CC_BANK
+static void rb_migrate_v2_payload(uint8_t *payload)
+{
+  const struct rb_field *film = rb_walked_field(0xfeu);
+  if (rb_extract(payload, film) == 13u) {
+    rb_place(payload, film, 15u);
+  }
+}
+
+static void rb_migrate_v2_film(uint8_t *file)
+{
+  uint32_t slot;
+  uint16_t mask = rb_slot_mask(file);
+  uint32_t generation = rb_generation(file);
+  if (file[RB_BASE_VALID_AT] != 0u) {
+    rb_migrate_v2_payload(file + RB_BASE_AT);
+  }
+  for (slot = 0u; slot < RB_BANK_SLOTS; slot++) {
+    if ((mask & (uint16_t)(1u << slot)) != 0u) {
+      rb_migrate_v2_payload(rb_saved_at(file, slot));
+      rb_migrate_v2_payload(rb_payload_at(file, slot));
+    }
+  }
+  rb_seal(file, generation, mask);
+}
+#endif
 
 /* load precedence over the checksum-valid files: the higher generation, a tie
  * goes to A. An unsafe file chosen here blocks the bank; otherwise the write
@@ -1340,6 +1410,11 @@ static uint32_t RB_DISCOVERY_IMPL(rb_load_bound)(RbMediaIdentity identity
     rb_load_outcome = RB_INVALID;
     return RB_INVALID;
   }
+#ifdef RB_CC_BANK
+  if (rb_u16(rb_resident + 0x04u) == 2u) {
+    rb_migrate_v2_film(rb_resident);
+  }
+#endif
   rb_current_gen = rb_generation(rb_resident);
   rb_load_outcome = RB_OK;
   return RB_OK;
@@ -1392,6 +1467,11 @@ static uint32_t RB_DISCOVERY_IMPL(rb_load_bound)(RbMediaIdentity identity
   } else {
     rb_memcpy(rb_resident, winner, RB_FILE_BYTES);
   }
+#ifdef RB_CC_BANK
+  if (rb_u16(winner + 0x04u) == 2u) {
+    rb_migrate_v2_film(rb_resident);
+  }
+#endif
   rb_current_gen = rb_generation(winner);
   rb_loaded = 1u;
   rb_load_outcome = RB_OK;

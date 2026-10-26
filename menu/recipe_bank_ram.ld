@@ -30,8 +30,7 @@ SECTIONS {
   }
   __rb_image_end = .;
 
-  . = RAM_PUSH_BANK_END;
-  . = ALIGN(32);
+  . = RAM_PUSH_INSTALLER_START;
   __ram_push_installer_start = .;
   .ram_push.text : {
     *ram_push_installer.o(.text)
@@ -70,8 +69,10 @@ SECTIONS {
 
 ASSERT(__rb_image_start == RAM_PUSH_BASE + 0x500, "bank executable offset changed")
 ASSERT(__rb_image_end <= RAM_PUSH_BASE + 0xa800, "bank executable overlaps generated data")
-ASSERT(__ram_push_installer_start == ALIGN(RAM_PUSH_BANK_END, 32), "installer does not follow the bank image")
-ASSERT(__ram_push_publications_end - __ram_push_publications_start == 253 * 16, "publication table ABI changed")
+ASSERT(RAM_PUSH_BANK_END <= RAM_PUSH_INSTALLER_START, "generated bank data overlaps the executable bundle")
+ASSERT(__ram_push_installer_start == RAM_PUSH_INSTALLER_START, "installer placement changed")
+ASSERT((RAM_PUSH_INSTALLER_START & 31) == 0, "installer is not 32-byte aligned")
+ASSERT(__ram_push_publications_end - __ram_push_publications_start == 222 * 16, "publication table ABI changed")
 ASSERT(__ram_push_start == RAM_PUSH_BASE, "RAM-push runtime start changed")
 ASSERT(__ram_push_mailbox_end - __ram_push_mailbox_start == 104, "mailbox ABI changed")
 ASSERT(__ram_push_rendezvous_end - __ram_push_rendezvous_start == 128, "rendezvous ABI changed")

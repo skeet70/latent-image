@@ -15,7 +15,7 @@ import FujiAF.RamPush
 import FujiAF.SHA256 (sha256)
 import FujiAF.Rehearsal (rehearseRamAlloc, rehearseRamPush, rehearseRamFree, rehearseRamUnload)
 import FujiAF.Transport
-import RamPushLayout (installerInstallOffset, installerRollbackOffset, installerStatusOffset, runtimeAllocationSize, runtimeBankEnd)
+import RamPushLayout (installerInstallOffset, installerRollbackOffset, installerStatusOffset, runtimeAllocationSize, runtimeInstallerBase)
 import RamPushModel
 
 contract :: ReviewedContract
@@ -41,7 +41,7 @@ main = do
   check "bootstraps are exactly 32 bytes" (all ((==32) . B.length) [bootstrapBytes,peerPrepareBytes,freeBootstrapBytes])
   check "allocator preserves callback output pointer" (B.take 4 (B.drop 4 bootstrapBytes) == B.pack [0x01,0x50,0xa0,0xe1])
   check "peer preparation calls the worker unconditionally" (B.index peerPrepareBytes 19 == 0xeb)
-  check "CLI accepts split flow" (ramAllocArguments ["0x1d9f8"] == Just (reviewedAllocationSize,Nothing)
+  check "CLI accepts split flow" (ramAllocArguments ["0x1dc98"] == Just (reviewedAllocationSize,Nothing)
     && ramAllocArguments ["0x1d9d8"] == Nothing
     && ramPushArguments ["/a","/m"] == Just ("/a","/m",Nothing)
     && ramPushArguments ["/a","/m","/o"] == Just ("/a","/m",Just "/o")
@@ -65,8 +65,8 @@ main = do
           _ -> RamPushEntries (Address (start + installerInstallOffset)) (Address (start + installerRollbackOffset)) (Address (start + installerStatusOffset))
   check "every payload's entries match its compiled installer layout"
     (and [payloadEntries kind (Address at) == layoutEntries kind at | kind <- payloads, at <- alignedBases])
-  check "the bank installer starts at RamPushLayout's bank end"
-    (all (\at -> payloadInstallerStart bankD3Payload at == runtimeBankEnd at) alignedBases)
+  check "the bank installer uses RamPushLayout's separate installer base"
+    (all (\at -> payloadInstallerStart bankD3Payload at == runtimeInstallerBase at) alignedBases)
   check "the bank allocation is RamPushLayout's"
     (payloadAllocationSize bankD3Payload == fromIntegral runtimeAllocationSize)
   check "USB toggle exposes 22 setup publications then one activation"

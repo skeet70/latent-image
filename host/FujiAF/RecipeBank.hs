@@ -105,6 +105,8 @@ module FujiAF.RecipeBank
   , bankFileB
   , BankFileId (..)
   , bankChecksum
+  , BankFilmEncoding (..)
+  , encodeBankFileFor
   , encodeBankFile
   , V1Slot (..)
   , V1Bank
@@ -114,6 +116,7 @@ module FujiAF.RecipeBank
   , DecodedBank (..)
   , decodedGeneration
   , decodedState
+  , decodedFilmEncoding
   , decodeBankFile
     -- * Payload safety
   , FieldCode (..)
@@ -125,6 +128,7 @@ module FujiAF.RecipeBank
   , withImageSizeRow
   , BankFileClass (..)
   , classifyBankFile
+  , classifyBankFileFor
     -- * Choosing the bank
   , BankOutcome (..)
   , chooseBank
@@ -784,6 +788,13 @@ v1Layout, v2Layout :: FileLayout
 v1Layout = FileLayout 1 0x20 (bankCapacity * (payloadBytes + nameBytes))
 v2Layout = FileLayout 2 0x40 (payloadBytes + bankCapacity * recordBytes)
 
+data BankFilmEncoding = D3FilmEncoding | ClassicChromeFilmEncoding
+  deriving (Eq, Show)
+
+encodingLayout :: BankFilmEncoding -> FileLayout
+encodingLayout D3FilmEncoding = v2Layout
+encodingLayout ClassicChromeFilmEncoding = v2Layout {layoutVersion = 3}
+
 -- | One v2 record: name, saved payload, working payload.
 recordBytes :: Int
 recordBytes = nameBytes + 2 * payloadBytes
@@ -812,9 +823,12 @@ bankFileChecksum :: B.ByteString -> Word32
 bankFileChecksum file =
   bankChecksum (B.take 0x18 file `B.append` B.replicate 4 0 `B.append` B.drop 0x1c file)
 
--- | The v2 file of a state; a state 'validateBankState' refuses is refused.
+-- | The legacy D3 bank file.
 encodeBankFile :: BankState -> Either String B.ByteString
-encodeBankFile st = do
+encodeBankFile = encodeBankFileFor D3FilmEncoding
+
+encodeBankFileFor :: BankFilmEncoding -> BankState -> Either String B.ByteString
+encodeBankFileFor encoding st = do
   validateBankState st
   records <- mapM encodeRecord (bankRecordList (bankRecords st))
   let BankGeneration gen = bankGeneration st
@@ -824,7 +838,7 @@ encodeBankFile st = do
       header =
         B.concat
           [ "FJRB"
-          , le16 (fromIntegral (layoutVersion v2Layout))
+          , le16 (fromIntegral (layoutVersion (encodingLayout encoding)))
           , le16 (fromIntegral (layoutHeader v2Layout))
           , le16 (fromIntegral firmwareTag)
           , le16 (fromIntegral bankCapacity)
@@ -880,22 +894,52 @@ migrateV1 v1 =
   migrated V1Unpopulated = Unpopulated
   migrated (V1Populated named payload) = Populated named payload payload
 
-data DecodedBank = DecodedV1 V1Bank | DecodedV2 BankState
+data DecodedBank = DecodedV1 V1Bank | DecodedV2 BankState | DecodedV3 BankState
   deriving (Eq, Show)
 
 decodedGeneration :: DecodedBank -> BankGeneration
 decodedGeneration (DecodedV1 v1) = v1Generation v1
 decodedGeneration (DecodedV2 st) = bankGeneration st
+decodedGeneration (DecodedV3 st) = bankGeneration st
+
+decodedFilmEncoding :: DecodedBank -> BankFilmEncoding
+decodedFilmEncoding DecodedV1 {} = D3FilmEncoding
+decodedFilmEncoding DecodedV2 {} = D3FilmEncoding
+decodedFilmEncoding DecodedV3 {} = ClassicChromeFilmEncoding
 
 -- | The resident state a decoded file loads as; a v1 file migrates.
 decodedState :: DecodedBank -> BankState
 decodedState (DecodedV1 v1) = migrateV1 v1
 decodedState (DecodedV2 st) = st
+decodedState (DecodedV3 st) = st
 
--- | The structural rules of either version; the length selects the version.
+migrateD3Films :: BankState -> Either String BankState
+migrateD3Films state = do
+  film <- fieldForProperty 0xfe
+  let migratePayload payload = do
+        let bytes = bankPayloadContents payload
+            current = B.index bytes (fieldOffset film)
+            code = (current .&. fieldMask film) `shiftR` fieldShift film
+        case code of
+          15 -> Left "legacy D3 bank: film code 0xf is not a legacy row"
+          13 -> bankPayload (replaceAt bytes (fieldOffset film) ((current .&. complement (fieldMask film)) .|. (15 `shiftL` fieldShift film)))
+          _ -> Right payload
+      migrateRecord Unpopulated = Right Unpopulated
+      migrateRecord (Populated name saved working) =
+        Populated name <$> migratePayload saved <*> migratePayload working
+  base <- case bankBase state of
+    BaseInvalid -> Right BaseInvalid
+    BaseValid mode payload -> BaseValid mode <$> migratePayload payload
+  records <- mapM migrateRecord (bankRecordList (bankRecords state))
+  pure state {bankBase = base, bankRecords = BankRecords records}
+
+-- | The structural rules of the version carried by the file.
 decodeBankFile :: B.ByteString -> Either String DecodedBank
 decodeBankFile bytes
-  | B.length bytes == bankFileBytes = DecodedV2 <$> decodeV2 bytes
+  | B.length bytes == bankFileBytes = case le16At bytes 4 of
+      2 -> DecodedV2 <$> decodeStateFile v2Layout bytes
+      3 -> DecodedV3 <$> decodeStateFile (encodingLayout ClassicChromeFilmEncoding) bytes
+      _ -> Left "bank file: format version"
   | B.length bytes == v1FileBytes = DecodedV1 <$> decodeV1 bytes
   | otherwise =
       Left ("bank file: " ++ show (B.length bytes) ++ " bytes, expected " ++ show v1FileBytes ++ " or " ++ show bankFileBytes)
@@ -935,9 +979,9 @@ decodeV1 bytes = do
   nameBlock = layoutHeader v1Layout + bankCapacity * payloadBytes
   slice o n = B.take n (B.drop o bytes)
 
-decodeV2 :: B.ByteString -> Either String BankState
-decodeV2 bytes = do
-  populated <- checkHeader v2Layout bytes
+decodeStateFile :: FileLayout -> B.ByteString -> Either String BankState
+decodeStateFile layout bytes = do
+  populated <- checkHeader layout bytes
   selection <- case B.index bytes 0x20 of
     0 -> pure NothingSelected
     n
@@ -1130,20 +1174,21 @@ withImageSizeRow domain row bytes = case lookup row (zip imageSizeOfferedRows (d
       pure (replaceAt current at ((B.index current at .&. complement mask) .|. placed))
     _ -> Left ("IMAGE SIZE row " ++ show row ++ ": property " ++ show p ++ " is not a one-byte walked field")
 
--- | v1: the populated slot payloads; v2: the valid base and both payloads of
--- every populated record.
+-- | The populated payloads, including a valid base and both saved and working records.
 decodedUnsafeReason :: PayloadDomain -> DecodedBank -> Maybe String
 decodedUnsafeReason domain decoded =
   listToMaybe (catMaybes [(place ++) <$> payloadUnsafeReason domain p | (place, p) <- payloads])
  where
   payloads = case decoded of
     DecodedV1 v1 -> [("slot " ++ show k ++ ": ", p) | (k, V1Populated _ p) <- zip [0 :: Int ..] (v1Slots v1)]
-    DecodedV2 st ->
-      [("base: ", p) | BaseValid _ p <- [bankBase st]]
-        ++ concat
-          [ [(show slot ++ " saved: ", saved), (show slot ++ " working: ", working)]
-          | (slot, Populated _ saved working) <- zip bankSlots (bankRecordList (bankRecords st))
-          ]
+    DecodedV2 st -> statePayloads st
+    DecodedV3 st -> statePayloads st
+  statePayloads st =
+    [("base: ", p) | BaseValid _ p <- [bankBase st]]
+      ++ concat
+        [ [(show slot ++ " saved: ", saved), (show slot ++ " working: ", working)]
+        | (slot, Populated _ saved working) <- zip bankSlots (bankRecordList (bankRecords st))
+        ]
 
 data BankFileClass
   = StructurallyInvalid String
@@ -1152,9 +1197,21 @@ data BankFileClass
   deriving (Eq, Show)
 
 classifyBankFile :: PayloadDomain -> B.ByteString -> BankFileClass
-classifyBankFile domain bytes = case decodeBankFile bytes of
+classifyBankFile = classifyBankFileFor D3FilmEncoding
+
+classifyBankFileFor :: BankFilmEncoding -> PayloadDomain -> B.ByteString -> BankFileClass
+classifyBankFileFor encoding domain bytes = case decodeBankFile bytes of
   Left reason -> StructurallyInvalid reason
-  Right decoded -> maybe (ValidFile decoded) (UnsafeFile decoded) (decodedUnsafeReason domain decoded)
+  Right decoded -> case (encoding, decoded) of
+    (ClassicChromeFilmEncoding, DecodedV2 state) ->
+      case migrateD3Films state of
+        Left reason -> UnsafeFile decoded reason
+        Right migrated -> admit (DecodedV3 migrated)
+    _
+      | decodedFilmEncoding decoded /= encoding -> StructurallyInvalid "bank file: film encoding"
+      | otherwise -> admit decoded
+ where
+  admit decoded = maybe (ValidFile decoded) (UnsafeFile decoded) (decodedUnsafeReason domain decoded)
 
 -- choosing the bank -----------------------------------------------------
 
