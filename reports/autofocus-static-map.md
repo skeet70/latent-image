@@ -61,27 +61,31 @@ The manual target stays outside wildcard target sets. Its default card/absent co
 
 ### Emulator input timebase: saved initial states
 
-Actual metadata-only decoding of two fixed X-M1 1.50 installed checkpoint archives through each pinned FujiMod engine's public `Checkpoint` codec establishes different saved clock, phase, instruction and scheduler initial states before the menu prefix. There is no matched clock start. The inspection constructs or restores no `Machine` or `Session`, executes no CPU and exports no RAM or CPU payload. Archive decoding does not establish receiving-board restoration validity (`E-XM1-KEY-PULSE-TIMEBASE-150`).
+Actual metadata-only decoding of four fixed X-M1 1.50 checkpoint archives, an earlier attach and a later installed save for each pinned FujiMod engine, establishes different saved clock, instruction and scheduler states already at the attach save boundaries. The installed saves also have different timeline phases before the menu prefix. There is no matched clock start. The inspection constructs or restores no `Machine` or `Session`, executes no CPU and exports no RAM or CPU payload. Archive decoding does not establish receiving-board restoration validity (`E-XM1-KEY-PULSE-TIMEBASE-150`).
 
 Separate instrumented first-OK probes restore their respective checkpoints and reproduce their own six-input prefixes and terminal outcomes with the unchanged 4M-instruction hold, 6M release cap and 90M settle cap. These are instrumented respective-checkpoint observations, not unmodified-binary equivalence.
 
-| Measurement | Accepted `ecdb6cb6` | Newer `dfc1879e` |
-| --- | ---: | ---: |
-| Saved `Timeline.now` (whole virtual ticks) | 406095839 | 406104277 |
-| Saved timeline phase | 14 | 22 |
-| Saved instructions-per-tick ratio | 24/1 | 24/1 |
-| Saved instructions, cores 0/1 | 489662006 / 114402888 | 489703639 / 114415167 |
-| Saved total guest instructions | 604064894 | 604118806 |
-| Saved accounted instructions, cores 0/1 | 2722 / 379 | 1805 / 379 |
-| Saved scheduler `slice_left` | 809 | 307 |
-| Saved absolute device deadlines, IDs 2 / 29 / 49 | 406102582 / 406404673 / 406098107 | 406132582 / 406404623 / 406198115 |
-| First-OK integer `Timeline.now` hold advance | 469073 | 351917 |
-| First raw-observation interval (`Timeline.now` ticks) | 300000 | 300000 |
-| Pressed observations before first-OK release | 2 | 1 |
+| Measurement | Accepted attach `ecdb6cb6` | Newer attach `dfc1879e` | Accepted installed `ecdb6cb6` | Newer installed `dfc1879e` |
+| --- | ---: | ---: | ---: | ---: |
+| Saved `Timeline.now` (whole virtual ticks) | 309616166 | 309615043 | 406095839 | 406104277 |
+| Saved timeline phase | 0 | 0 | 14 | 22 |
+| Saved instructions-per-tick ratio | 24/1 | 24/1 | 24/1 | 24/1 |
+| Saved instructions, cores 0/1 | 354392161 / 37863839 | 354381832 / 37850168 | 489662006 / 114402888 | 489703639 / 114415167 |
+| Saved total guest instructions | 392256000 | 392232000 | 604064894 | 604118806 |
+| Saved processor `waiting`, cores 0/1 | false / true | true / false | false / true | false / true |
+| Saved scheduler `code_run` / `next_core` | 0 / 0 | 1 / 1 | 0 / 0 | 0 / 0 |
+| Saved accounted instructions, cores 0/1 | 11295 / 561 | 745 / 254906 | 2722 / 379 | 1805 / 379 |
+| Saved scheduler `slice_left` | 705 | 94 | 809 | 307 |
+| Saved absolute device deadlines, IDs 2 / 29 / 49 | 309622582 / 310003990 / 309698107 | 309622582 / 310003990 / 309698115 | 406102582 / 406404673 / 406098107 | 406132582 / 406404623 / 406198115 |
+| First-OK integer `Timeline.now` hold advance | Not measured | Not measured | 469073 | 351917 |
+| First raw-observation interval (`Timeline.now` ticks) | Not measured | Not measured | 300000 | 300000 |
+| Pressed observations before first-OK release | Not measured | Not measured | 2 | 1 |
 
-Both archives retain processor `waiting = [false, true]`, null processor deadlines and scheduler quantum 1000. These state fields, timeline sequence, generations and queue lengths are not cumulative wait or IRQ-delivery counts. Device IDs in the deadline list are generic identifiers, not scanner bindings; deadlines are absolute coordinates, not remaining time. The newer instrumented run uniquely binds Task37 registry 0 to generic timer index 6; the accepted run's generic index is unmeasured.
+All four archives retain null processor deadlines and scheduler quantum 1000. The saved waiting and accounted fields, timeline sequence, generations and queue lengths are not cumulative wait or IRQ-delivery counts. Device IDs in the deadline list are generic identifiers, not scanner bindings; deadlines are absolute coordinates, not remaining time. At attach, index 49 is the only differing absolute device deadline, by +8 ticks in the newer save; device generation values differ at indices 0 and 19. The newer instrumented run uniquely binds Task37 registry 0 to generic timer index 6; the accepted run's generic index is unmeasured.
 
-The creation receipts record cold startup, USB attachment, allocation and payload installation before saving the installed checkpoint and starting the menu prefix. Both retain pre-attach instruction count 302750000, but no paired clock/phase or scheduler observation at that boundary or at enumeration return. The origin of the clock/wait/deadline differences before the first OK remains unresolved. The saved differences do not establish prefix accrual or causally explain the different hold duration or missed OK. The newer first OK still fails and the newer pin remains unqualified. The evidence establishes instruction-pulse timing sensitivity, not a source fault, physical-time calibration or a stimulus fix. [Historical phase-specific pulse bounds](../emulation/README.md#interactive-x-m1-firmware-viewer) remain unchanged.
+The newer-minus-accepted clock offset is -1123 ticks at attach and +8438 + 8/24 ticks at installed, so it is not constant across these save boundaries. The accepted attach-to-installed interval is 96479673 + 14/24 ticks and 211808894 guest instructions; the newer interval is 96489234 + 22/24 ticks and 211886806 instructions. The newer-minus-accepted interval difference is 9561 + 8/24 ticks and 77912 instructions. These endpoint differences do not locate when the additional differences arose within either interval.
+
+The creation receipts record cold startup, USB attachment, allocation and payload installation before saving the installed checkpoint and starting the menu prefix. Both retain pre-attach instruction count 302750000, but no paired clock/phase or scheduler observation at that counter boundary or at enumeration return. The earlier attach saves establish that differences are already present at those save boundaries, not their first emergence or an allocation/install cause. The origin of the clock/wait/deadline differences before the first OK remains unresolved. The saved differences do not establish prefix accrual or causally explain the different hold duration or missed OK. The newer first OK still fails and the newer pin remains unqualified. The evidence establishes instruction-pulse timing sensitivity, not a source fault, physical-time calibration or a stimulus fix. [Historical phase-specific pulse bounds](../emulation/README.md#interactive-x-m1-firmware-viewer) remain unchanged.
 
 
 ### Minimal X-M1 lens model gap for #102
