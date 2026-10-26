@@ -149,12 +149,13 @@ comparison label expected actual = object
   where differing = if expected == actual then [] else differences expected actual
 
 -- | Sums of the transfer log's instructions and seconds over [from, from + count).
-transferSpan :: V.Vector Value -> Int -> Int -> (Integer, Double)
-transferSpan entries from count = foldr add (0, 0) (V.toList (V.slice from count entries))
+transferSpan :: Engine -> V.Vector Value -> Int -> Int -> (Integer, Double)
+transferSpan engine entries from count = foldr add (0, 0) (V.toList (V.slice from count entries))
   where
     add (Object fields) (instructions, seconds) =
-      (instructions + number "instructions" fields, seconds + realNumber "seconds" fields)
+      (instructions + number "instructions" fields, seconds + realNumber elapsedField fields)
     add _ total = total
+    elapsedField = case engine of Retained -> "seconds"; FujiMod -> "host_seconds"
     number name fields = case KM.lookup (K.fromString name) fields of
       Just (Number n) -> round n
       _ -> 0
@@ -270,8 +271,8 @@ run options = do
       expected = bulkTransfers window + 12 + 4 * d1Count + bulkTransfers aliasWindow
   require (V.length transfers == expected)
     ("the bridge logged " ++ show (V.length transfers) ++ " transfers, not the sessions' " ++ show expected)
-  let (bulkInstructions, bulkSeconds) = transferSpan transfers 18 (2 * chunks)
-      (d1Instructions, d1Seconds) = transferSpan transfers (bulkTransfers window + 10) (4 * d1Count)
+  let (bulkInstructions, bulkSeconds) = transferSpan (optEngine options) transfers 18 (2 * chunks)
+      (d1Instructions, d1Seconds) = transferSpan (optEngine options) transfers (bulkTransfers window + 10) (4 * d1Count)
       equal = and [ e | (_, Object fields) <- comparisons, Just (Bool e) <- [KM.lookup "equal" fields] ]
       referenceValue = case referenceComparison of
         [value] -> value
