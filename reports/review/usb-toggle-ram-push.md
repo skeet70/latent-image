@@ -45,7 +45,7 @@ The publication-contract digest binds addresses, order, phases and old words. Ne
 Use a dedicated worktree/output base with `--jobs=4 --local_resources=memory=6144` and `XM1_EMULATOR_SLOTS=8`. These commands build and emulate only:
 
 ```sh
-devenv shell -- bazel test //host/firmware:usb-toggle-ram-tests //transport:ram-push-tests //transport:ram-push-review-record-tests //transport:ram-push-toggle-review-bytes //transport:ram-push-toggle-camera-pins
+devenv shell -- bazel test //host/firmware:usb-toggle-ram-tests //transport:ram-push-tests //transport:ram-push-review-record-tests //transport:ram-push-toggle-review-verdicts //transport:ram-push-toggle-review-bytes //transport:ram-push-toggle-camera-pins
 devenv shell -- bazel run //transport:ram-push-toggle-reviewed-build-check
 devenv shell -- bazel run //emulation:usb-toggle-emu -- --fujimod --ram-push --receipt-output private-data/analysis/usb-toggle/ram-push/REVIEW_SESSION
 devenv shell -- bazel run //emulation:usb-toggle-emu -- --fujimod --runs e7,e5u --dats rc0-toggle --receipt-output private-data/analysis/usb-toggle/ram-push/REVIEW_TRANSITIONS
@@ -70,6 +70,12 @@ All three builds use builder identity `e20f5ac79bc760ef436f973099d8fbe7a0993c39c
 - `private-data/analysis/usb-toggle/ram-push/native-exact-2`: slot-held native cases use `session-4`'s `installed-stub.bin`; 364/364 pass, both toggle directions covered, 80/80 plain-edge pairs identical to stock. These are native behavior cases, not physical disconnect evidence.
 - `private-data/analysis/usb-toggle/ram-push/transitions-1`: FujiMod `e5u-ff80`, `e5u-q-ptp`, `e7-plain` and `e7-q` pass on the byte-identical flash-toggle composition. The cycle stops at PTP detach (state `0x08`, status `0x01`), one failed edge-delivery check. This is component evidence, not a complete RAM-pushed cycle.
 - `//transport:ram-push-toggle-reviewed-build-check`: both reference builds accepted; substituted compiler, manifest, source identities, runtime, publication contract and entry/state inputs refused before USB where required.
-- `//...` and `//tests:research-contracts`: 101/101 tests passed.
+- Final `//...`, `//tests:research-contracts` and explicit `//transport:ram-push-toggle-review-verdicts`: 102/102 tests passed, including the byte and live-refusal gates.
 
 Hardware-only acceptance is both configured detach edges, the complete pushed cycle, the held-Q UI effect, the key-driver read from usbcont, and the battery-removal/reboot/stock-read result. No body command was run.
+
+## Independent decision
+
+`ToggleMechanismReview` and `ToggleSessionReview`, both `anthropic/claude-opus-5-5`, independently approved their complementary slices on 2026-10-26. The reviewed working-tree source scope is committed as `9b10f289ee5e1e5cfb5d80f08190602eb05ca8e2`. The mechanism reviewer identified the unsafe possibility of in-place live unload with a suspended stub frame; the CLI now refuses this payload before output creation or USB, and the reviewer confirmed closure. No findings remain.
+
+The session reviewer inspected the exact push receipt and private read-plan mode/content. The mechanism reviewer inspected the source, layout, call closure, pins and publication argument; the host test/emulator outcomes in the artifact table are author-executed evidence, not an independently rerun experiment. Review records are in `transport/ram-push-toggle-review.json`, with retained reviewer responses at `private-data/analysis/usb-toggle/ram-push/reviews.json` and the linked reviewer sessions. Approval is for the bounded temporary mechanism and script, not a physical-body result or an unknown actual-base artifact.
