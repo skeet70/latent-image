@@ -291,11 +291,16 @@ def _ram_push_bridge(board, session, *, attached=False):
     return _FF80CommandBridge(board, session, attached=attached)
 
 
-def _restore_ram_push_checkpoint(directory, record, output):
+def _restore_ram_push_checkpoint(directory, record, output, menu_sd_image):
     from x70_native.portable_checkpoint import load
     from tools.probe_setup_menus import MenuSession
     board = load(directory)
-    options = dict(board._portable_factory_options, recovery=record['recovery'])
+    recovery = dict(record['recovery'])
+    if menu_sd_image is not None:
+        from dataclasses import asdict
+        from tools.scanout_attach import restore_private_menu_card
+        recovery['card'] = asdict(restore_private_menu_card(board, menu_sd_image, output))
+    options = dict(board._portable_factory_options, recovery=recovery)
     session = MenuSession(board, output, options=options)
     bridge = _ram_push_bridge(board, session, attached=True)
     attachment = {name: record[name] for name in ('pre_attach', 'device', 'configuration')}

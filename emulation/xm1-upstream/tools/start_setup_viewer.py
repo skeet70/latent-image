@@ -40,8 +40,6 @@ def main():
         parser.error('The X-M1 viewer binds only to127.0.0.1')
     if not 0 <= args.port <= 65535:
         parser.error('Port must be0..65535')
-    if args.snapshot and args.sd_card_image:
-        parser.error('A snapshot already owns its SD media; raw initialization requires a cold boot')
 
     profile, identity = None, None
     if args.firmware:
@@ -78,6 +76,9 @@ def main():
     if args.snapshot:
         from x70_native.portable_checkpoint import load
         board = load(args.snapshot)
+        if args.sd_card_image is not None:
+            from tools.scanout_attach import restore_private_menu_card
+            restore_private_menu_card(board, args.sd_card_image, output)
         options = board._portable_factory_options
         session = MenuSession(board, output, options=options)
         session.save_checkpoint()

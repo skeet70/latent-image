@@ -263,9 +263,9 @@ ramPushSpec extra = ObservationSpec
     , "relinked/runtime.bin", "relinked/ram-push-manifest.json", "relinked/bank-allowlist.json", "relinked/kernel.syms"
     , "alloc/ram-alloc-state.json", "push/ram-push-state.json", "unload/ram-unload-state.json", "screenshots/*.png" ])
   (e2eResult "e2e-result.json" ++ emulatorStart "cold-restart/e2e-cold-restart.json" "/emulator_start" ++ extra ++
+    ramPushCardImageExclusions ++
     [ exclude "e2e-result.json" "/states" RunLocation
-    , exclude "e2e-result.json" "/runtime/manifest" RunLocation
-    , exclude "e2e-result.json" "/card/image" RunLocation ])
+    , exclude "e2e-result.json" "/runtime/manifest" RunLocation ])
 
 flashCandidateSpec :: ObservationSpec
 flashCandidateSpec = ObservationSpec

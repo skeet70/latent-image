@@ -919,7 +919,8 @@ def main():
             started = perf_counter()
             directory = Path(choice['installed'])
             record = _read_ram_push_record(directory, INSTALL_RECORD, key)
-            board, session, bridge, attachment = _restore_ram_push_checkpoint(directory, record, output)
+            board, session, bridge, attachment = _restore_ram_push_checkpoint(
+                directory, record, output, args.menu_sd_image)
             checkpoint.update(start='installed', installed=str(directory),
                               restore_seconds=round(perf_counter() - started, 3))
             _run_ram_push_server(board, session, output, bridge, attachment, checkpoint,
@@ -928,7 +929,8 @@ def main():
         if directory.is_dir() and not args.fresh_boot:
             started = perf_counter()
             record = _read_ram_push_record(directory, ATTACH_RECORD, key)
-            board, session, bridge, attachment = _restore_ram_push_checkpoint(directory, record, output)
+            board, session, bridge, attachment = _restore_ram_push_checkpoint(
+                directory, record, output, args.menu_sd_image)
             checkpoint.update(start='restored', restore_seconds=round(perf_counter() - started, 3))
             _run_ram_push_server(board, session, output, bridge, attachment, checkpoint,
                                  args.ram_push_checkpoints)

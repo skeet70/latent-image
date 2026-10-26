@@ -14,8 +14,6 @@ from dataclasses import dataclass, fields, replace
 from enum import Enum, IntEnum
 
 from .hardware import UnsupportedDevice
-from x70_native._native import (scene_scaler_busy, scene_scaler_read, scene_scaler_write,
-    scene_scaler_next, scene_scaler_tick, scene_scaler_validate, scene_scaler_snapshot)
 
 
 class ImageParameterControl:
@@ -329,6 +327,7 @@ class DeclaredUIConversion:
 
     @property
     def busy(self):
+        from x70_native._native import scene_scaler_busy
         return self.phase is UIConversionPhase.ACTIVE or scene_scaler_busy(self)
 
     def contains(self, address, size):
@@ -355,6 +354,7 @@ class DeclaredUIConversion:
             geometry.width, geometry.height, programming.source_stride.value)
 
     def read(self, core, address, size):
+        from x70_native._native import scene_scaler_read
         value = scene_scaler_read(self, core, address, size)
         if value is not None:
             return value
@@ -365,6 +365,7 @@ class DeclaredUIConversion:
         return UIConversionCompletion.SUCCESS.value
 
     def write(self, core, address, size, value):
+        from x70_native._native import scene_scaler_write
         if scene_scaler_write(self, core, address, size, value):
             return
         register = self._register(address, size)
@@ -437,11 +438,13 @@ class DeclaredUIConversion:
         self.phase = UIConversionPhase.PROGRAMMING
 
     def next_event_tick(self, now):
+        from x70_native._native import scene_scaler_next
         if self.scene_state is not None:
             return scene_scaler_next(self, now)
         return max(now, self.deadline.value) if self.busy and not self.failed else None
 
     def tick(self, board):
+        from x70_native._native import scene_scaler_tick
         if scene_scaler_tick(self, board):
             return
         if not self.busy:
@@ -466,6 +469,7 @@ class DeclaredUIConversion:
 
     def validate_capture_state(self, state):
         from .interrupts import DeclaredUIIRQTarget
+        from x70_native._native import scene_scaler_validate
         if set(state) != set(vars(self)) or state.get('board') is not self.board:
             raise ValueError('UI conversion device field schema differs')
         scene_scaler_validate(self, state)
@@ -499,6 +503,7 @@ class DeclaredUIConversion:
             raise ValueError('Inactive UI conversion retains active metadata')
 
     def snapshot(self):
+        from x70_native._native import scene_scaler_snapshot
         scene = scene_scaler_snapshot(self)
         if scene is not None:
             return scene
