@@ -598,15 +598,7 @@ X-M1 1.50 decoded image 4 binds scanner registration `0x006a02ac` to Task37 regi
 
 The scanner copies the preceding raw `+0x16` to `+0x17`, evaluates the new external level, then calls `0x006a2fa8` for rows without flag `0x100` (`0x006a3478..0x006a34a4`). The ADC navigation rows 14..20 and GPIO dial-push row 22 have debounce threshold `+0x14 = 2`. `0x006a2fa8` resets equal-sample count `+0x18` to 1 on a changed raw level, otherwise increments it, and changes debounced `+0x15` only at the threshold (`0x006a2ff0`). Press and release each require two matching scanner observations, one complete 10-tick scan interval apart, plus the phase to the first observation and dispatch latency. There is no phase-independent shortest guest-instruction hold. Host release polls request 250,000 instructions and pause at ordinary scheduler quantum boundaries. The exercised running rows have repeat initial/reload counters 40/10. The sub-command registration at `0x006a406c` uses period argument 2 and callback `0x006a3b4c`. These are firmware/model bindings, not measured physical scan periods.
 
-Instrumented X-M1 1.50 first-OK probes on FujiMod `ecdb6cb6` and `dfc1879e`, each restored from its respective saved checkpoint, reproduce their own prefix and terminal outcomes under the unchanged 4M-instruction hold (`E-XM1-KEY-PULSE-TIMEBASE-150`).
-
-| Measurement | Accepted `ecdb6cb6` | Newer `dfc1879e` |
-| --- | ---: | ---: |
-| Integer `Timeline.now` hold advance (virtual ticks) | 469073 | 351917 |
-| First raw-observation interval (`Timeline.now` ticks) | 300000 | 300000 |
-| Pressed observations before release | 2 | 1 |
-
-The newer run binds Task37 registry 0 to generic timer index 6; the accepted run's generic index is unmeasured. The newer first OK still fails and the newer pin remains unqualified. This demonstrates instruction-pulse timing sensitivity, not a source fault or physical-time calibration. The origin of the clock/wait/deadline differences before the first OK remains unresolved.
+The [saved input timebase findings](../reports/autofocus-static-map.md#emulator-input-timebase-saved-initial-states) record the instrumented first-OK comparison and actual metadata-only checkpoint decodes (`E-XM1-KEY-PULSE-TIMEBASE-150`). The accepted and newer checkpoints have different saved clock, phase, instruction and scheduler initial states. The newer first OK still fails under the unchanged pulses, and the newer pin remains unqualified.
 
 Checkpoint searches bracketed each threshold within 1,953 instructions. The table retains those bounds as phase-specific measurements and the selected fixed holds and release caps. Release bounds come from the Q checkpoint at the selected hold. Busy UI paths change release latency.
 

@@ -59,6 +59,31 @@ E-SD-PRESENT-INIT-FAILS-150 records the fault e2e's stock S1 refusal after the s
 
 The manual target stays outside wildcard target sets. Its default card/absent comparison deliberately fails until S1 produces a new request; `--sd-profile present-init-fails` instead requires the matching CARD ERROR state and S1 refusal. Its comparison uses complete console-record bytes, not the total count alone, and does not accept the two earlier menu-triggered sends. The original card/absent receipts are under `private-data/analysis/x-m1-1.50/af-ring/half-press-lens-5/`, with paused before/after stores and per-case results. No AF recorder is installed in this test.
 
+### Emulator input timebase: saved initial states
+
+Actual metadata-only decoding of two fixed X-M1 1.50 installed checkpoint archives through each pinned FujiMod engine's public `Checkpoint` codec establishes different saved clock, phase, instruction and scheduler initial states before the menu prefix. There is no matched clock start. The inspection constructs or restores no `Machine` or `Session`, executes no CPU and exports no RAM or CPU payload. Archive decoding does not establish receiving-board restoration validity (`E-XM1-KEY-PULSE-TIMEBASE-150`).
+
+Separate instrumented first-OK probes restore their respective checkpoints and reproduce their own six-input prefixes and terminal outcomes with the unchanged 4M-instruction hold, 6M release cap and 90M settle cap. These are instrumented respective-checkpoint observations, not unmodified-binary equivalence.
+
+| Measurement | Accepted `ecdb6cb6` | Newer `dfc1879e` |
+| --- | ---: | ---: |
+| Saved `Timeline.now` (whole virtual ticks) | 406095839 | 406104277 |
+| Saved timeline phase | 14 | 22 |
+| Saved instructions-per-tick ratio | 24/1 | 24/1 |
+| Saved instructions, cores 0/1 | 489662006 / 114402888 | 489703639 / 114415167 |
+| Saved total guest instructions | 604064894 | 604118806 |
+| Saved accounted instructions, cores 0/1 | 2722 / 379 | 1805 / 379 |
+| Saved scheduler `slice_left` | 809 | 307 |
+| Saved absolute device deadlines, IDs 2 / 29 / 49 | 406102582 / 406404673 / 406098107 | 406132582 / 406404623 / 406198115 |
+| First-OK integer `Timeline.now` hold advance | 469073 | 351917 |
+| First raw-observation interval (`Timeline.now` ticks) | 300000 | 300000 |
+| Pressed observations before first-OK release | 2 | 1 |
+
+Both archives retain processor `waiting = [false, true]`, null processor deadlines and scheduler quantum 1000. These state fields, timeline sequence, generations and queue lengths are not cumulative wait or IRQ-delivery counts. Device IDs in the deadline list are generic identifiers, not scanner bindings; deadlines are absolute coordinates, not remaining time. The newer instrumented run uniquely binds Task37 registry 0 to generic timer index 6; the accepted run's generic index is unmeasured.
+
+The creation receipts record cold startup, USB attachment, allocation and payload installation before saving the installed checkpoint and starting the menu prefix. Both retain pre-attach instruction count 302750000, but no paired clock/phase or scheduler observation at that boundary or at enumeration return. The origin of the clock/wait/deadline differences before the first OK remains unresolved. The saved differences do not establish prefix accrual or causally explain the different hold duration or missed OK. The newer first OK still fails and the newer pin remains unqualified. The evidence establishes instruction-pulse timing sensitivity, not a source fault, physical-time calibration or a stimulus fix. [Historical phase-specific pulse bounds](../emulation/README.md#interactive-x-m1-firmware-viewer) remain unchanged.
+
+
 ### Minimal X-M1 lens model gap for #102
 
 The S1 predicate's literal at `0x00d2529c` is `0x00944580`; its `+0xbf54` and `+0xbf88` lens-state words are therefore `0x009504d4` and `0x00950508`. With SHOOT WITHOUT LENS OFF, both zero cause refusal 2 at `0x00d25150`-`0x00d2517c`, before media admission. The existing Run-3 body capture (`E-BULK-READ-RUN3-150`) contains **1 and 0**, respectively. It also contains descriptor `LY050A` at `0x0093c544`, the descriptor text `AF 28/4.5 XF`, and raw focus position `0x0060` at `0x00942b84`. This is captured Viltrox-mounted state, not a lens initialization transcript or a distance calibration.
