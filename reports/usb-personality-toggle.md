@@ -352,6 +352,16 @@ On commit `32101c9` (clean harness tree), after the 8M key-pulse pins and the em
 
 `usb-toggle-emu` with `--dats stock,rc0-toggle,cc-icon-base,cc-icon-toggle`: 24 scenarios, 20 pass and 4 blocked at the undeliverable detach, 598 checks passed and 4 not reached (`private-data/analysis/usb-toggle/emu/run-5-candidates/summary.json`, `4105ebd4…36ed`). Both restore cards carry the candidate DAT byte for byte (`emu-updater/restore-{rc0,ccb}-3/`).
 
+### 9.6 Local StockClick prototype (unintegrated)
+
+A local unintegrated stock-UI click prototype is not in main `699f59b` and is not part of this documentation change. It is recorded here only so the bounded result is not lost while the source remains unreviewed.
+
+The ADC path matched the source path. The scanner uses a phase-dependent two-sample debounce, so a fixed 3M or 8M hold is not a universal release or latch law. In the one recorded run, one Up click at the FOCUS MODE root moved the offered cursor from 2 to 32, the debounced row reached 1, the release reached 0, and the full 15-field publication predicate drained. The latch phase used 48 runs and 196,164 instructions; the release phase used 92 runs and 13,348,269 instructions.
+
+The four-click Up path then landed 32, 31, 30 and 29 and stopped at the existing 512 timer-normalizer stops before target 24. The first S scenario did not run. The result establishes that single click and no complete path. Legacy instruction parity is unmeasured, and six-scenario or 144-endpoint acceptance is not claimed.
+
+Additional source review defects are being corrected separately. This section does not approve the prototype, its source or a camera action.
+
 ## 10. Changed-byte explanation
 
 ### 10.1 Candidates
