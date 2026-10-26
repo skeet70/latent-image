@@ -32,6 +32,7 @@ const FIRST_START_PULSE: KeyPulse = KeyPulse { hold: 8_000_000, release: 8_000_0
 const LIVE_VIEW_SETTLE: u64 = 40_000_000;
 const MODE_DIAL_SETTLE: u64 = 40_000_000;
 const DIRECTIONAL_PULSE: KeyPulse = KeyPulse { hold: 3_000_000, release: 12_000_000 };
+const HALF_PRESS_PULSE: KeyPulse = KeyPulse { hold: 8_000_000, release: 8_000_000 };
 /// `tools/probe_setup_menus.py` DIAL_PULSE.
 const DIAL_PULSE: KeyPulse = KeyPulse { hold: 4_000_000, release: 1_000_000 };
 const MAX_PHASE: u64 = 15_000_000;
@@ -373,6 +374,7 @@ fn default_pulse(key: Press) -> KeyPulse {
         Press::Key(RouteKey::Up | RouteKey::Down | RouteKey::Left | RouteKey::Right) => DIRECTIONAL_PULSE,
         Press::Key(RouteKey::Ok | RouteKey::Back | RouteKey::Q) => MENU_PULSE,
         Press::Dial(DialTurn::Left | DialTurn::Right) => DIAL_PULSE,
+        Press::HalfPress => HALF_PRESS_PULSE,
     }
 }
 
