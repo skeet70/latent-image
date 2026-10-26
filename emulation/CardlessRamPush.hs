@@ -40,6 +40,16 @@ restoreValue :: RestoredFrom -> Value
 restoreValue InstalledCheckpoint = H.s "installed"
 restoreValue AttachCheckpoint = H.s "restored"
 
+data SdProfile = AbsentCard | PresentInitFails
+
+profilePresent :: SdProfile -> Bool
+profilePresent AbsentCard = False
+profilePresent PresentInitFails = True
+
+profileAttribute :: SdProfile -> String
+profileAttribute AbsentCard = "BLANK_SDHC_PROFILE"
+profileAttribute PresentInitFails = "PRESENT_INIT_FAILS_PROFILE"
+
 data BridgeOptions = BridgeOptions
   { optionProfile :: FilePath
   , optionInstalledDat :: FilePath
@@ -49,10 +59,11 @@ data BridgeOptions = BridgeOptions
   , optionFreshBoot :: Bool
   , optionUiConversion :: UiConversion
   , optionFixedSceneFrame :: Maybe FixedSceneFrame
+  , optionSdProfile :: SdProfile
   }
 
 parseOptions :: [String] -> IO BridgeOptions
-parseOptions = go (BridgeOptions "firmware/x-m1/1.50/emulator-rec.json" "" "" "" "" False StrictConversion Nothing)
+parseOptions = go (BridgeOptions "firmware/x-m1/1.50/emulator-rec.json" "" "" "" "" False StrictConversion Nothing AbsentCard)
   where
     go options [] = do
       forM_
@@ -69,6 +80,10 @@ parseOptions = go (BridgeOptions "firmware/x-m1/1.50/emulator-rec.json" "" "" ""
     go options ("--output" : value : rest) = go options { optionOutput = value } rest
     go options ("--ram-push-checkpoints" : value : rest) = go options { optionCheckpointRoot = value } rest
     go options ("--fresh-boot" : rest) = go options { optionFreshBoot = True } rest
+    go options ("--sd-profile" : value : rest) = case value of
+      "absent" -> go options { optionSdProfile = AbsentCard } rest
+      "present-init-fails" -> go options { optionSdProfile = PresentInitFails } rest
+      _ -> H.failH "--sd-profile must be absent or present-init-fails"
     go options ("--ui-conversion-profile" : value : rest) = case value of
       "strict" -> go options { optionUiConversion = StrictConversion } rest
       "declared-ui-cpu-fallback" -> go options { optionUiConversion = DeclaredCpuFallback } rest
@@ -168,8 +183,9 @@ data ColdBoot = ColdBoot
   , coldCardProfile :: String
   }
 
-cardlessColdBoot :: ColdBoot
-cardlessColdBoot = ColdBoot "rom" False "BLANK_SDHC_PROFILE"
+cardlessColdBoot :: BridgeOptions -> ColdBoot
+cardlessColdBoot options = ColdBoot "rom" (profilePresent profile) (profileAttribute profile)
+  where profile = optionSdProfile options
 
 coldBootValue :: ColdBoot -> Value
 coldBootValue (ColdBoot entry present profile) = H.obj
@@ -188,7 +204,7 @@ checkpointKey runtime options = do
     , ("installed_dat", H.s (sha256Hex installed))
     , ("adjustment_nand", H.s (sha256Hex adjustment))
     , ("ui_conversion_profile", uiConversionValue (optionUiConversion options))
-    , ("cold_boot", coldBootValue cardlessColdBoot) ]
+    , ("cold_boot", coldBootValue (cardlessColdBoot options)) ]
     ++ [ ("fixed_scene_frame", Aeson.toJSON frame) | Just (FixedSceneFrame frame) <- [optionFixedSceneFrame options] ]))
 
 -- The start command and server share CPython's stdin buffer.
@@ -237,10 +253,10 @@ recoveryMetadata options = Aeson.object
   [ "phase" .= ("independent-installed-cold-boot-cardless" :: String)
   , "media" .= optionInstalledDat options
   , "adjustment_nand" .= optionAdjustmentNand options
-  , "card_present" .= False
+  , "card_present" .= profilePresent (optionSdProfile options)
   , "card" .= Aeson.object
-      [ "present" .= False
-      , "binding" .= ("cardless-volatile-ram-bank" :: String) ] ]
+      [ "present" .= profilePresent (optionSdProfile options)
+      , "binding" .= profileAttribute (optionSdProfile options) ] ]
 
 serve :: Double -> RuntimeIdentity -> BridgeOptions -> IO ()
 serve started runtime options =
@@ -296,9 +312,10 @@ serve started runtime options =
                 settings <- callValue loaded "get" [ArgJSON (H.s "settings")] (H.obj [])
                 H.ensure (storage == H.s "erased" && journals == Null && settings /= H.s "owner")
                   "independent installed NAND requires erased fixture selection and no injected owner journals"
-                setKeyJSON loaded "entry" (H.s (coldEntry cardlessColdBoot))
-                setKeyJSON loaded "sd_card_present" (H.b (coldCardPresent cardlessColdBoot))
-                withAttr sd (coldCardProfile cardlessColdBoot) $ \profile ->
+                let cold = cardlessColdBoot options
+                setKeyJSON loaded "entry" (H.s (coldEntry cold))
+                setKeyJSON loaded "sd_card_present" (H.b (coldCardPresent cold))
+                withAttr sd (coldCardProfile cold) $ \profile ->
                   setKeyObject loaded "sd_card_profile" profile
                 case optionUiConversion options of
                   StrictConversion -> pure ()
