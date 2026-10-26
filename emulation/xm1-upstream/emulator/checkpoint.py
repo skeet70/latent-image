@@ -36,7 +36,8 @@ class CheckpointError(RuntimeError):
 
 PAGE_SIZE = 0x10000
 BOARD_IDENTITIES = {"cpus", "devices", "ram", "ram_pointer", "sram",
-                    "rom_storage", "vector_scratch", "memory_layout_token", "memory_layout_origin_token", "_native"}
+                    "rom_storage", "vector_scratch", "memory_layout_token", "memory_layout_origin_token", "_native",
+                    "_s2_private_card"}
 DERIVED_FIELDS = {"_instruction_cache", "_instruction_pages", "_execution_invalidations"}
 BUSY_FIELDS = {"busy", "spi_busy", "adc_busy", "dma_busy", "phase_busy"}
 

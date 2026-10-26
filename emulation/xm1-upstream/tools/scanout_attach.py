@@ -251,6 +251,25 @@ def attach_rom_card(board, card_path, route):
     return {'route': route, 'media': media}
 
 
+def restore_private_menu_card(board, source, output):
+    """Rebind host permission without replacing checkpointed guest sectors."""
+    from dataclasses import replace
+    import hashlib
+    from emulator.sd_card import SDCardController
+    from x70_native._native import copy_menu_card
+    controller = next(device for device in board.devices if isinstance(device, SDCardController))
+    if controller.image is None:
+        raise ValueError('A private card restore requires checkpointed card media')
+    private_card = copy_menu_card(source, output.with_name(output.name + '-private-card'))
+    with Path(private_card.path).open('rb') as image:
+        digest = hashlib.file_digest(image, 'sha256').hexdigest()
+    if digest != controller.image.sha256:
+        raise ValueError('Private card input differs from checkpointed card media')
+    controller.image = replace(controller.image, path=private_card.path)
+    board._s2_private_card = private_card
+    return controller.image
+
+
 def cold_board(args, make_board, fail, output):
     """The board the selected inputs build, and the options it was built with."""
     installed_input = args.installed_media or args.installed_nand or args.installed_dat

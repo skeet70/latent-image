@@ -14,6 +14,7 @@ module Emulation.CandidateBaseline
   , ObservationSpec (..)
   , flashBootSpec
   , instructionTimingExclusions
+  , ramPushCardImageExclusions
   , Segment (..)
   , FieldName (..)
   , Field (..)
@@ -87,6 +88,12 @@ instructionTimingExclusions :: FilePattern -> [Exclusion]
 instructionTimingExclusions file =
   [ Exclusion file (pointerPattern pointer) Timing
   | pointer <- ["/instructions", "/milestones/*/instructions", "/observations/*/trace_hits/*/instructions"]
+  ]
+
+ramPushCardImageExclusions :: [Exclusion]
+ramPushCardImageExclusions =
+  [ Exclusion (filePattern file) (pointerPattern "/card/image") RunLocation
+  | file <- ["e2e-result.json", "cold-restart/e2e-cold-restart.json"]
   ]
 
 flashBootSpec :: ObservationSpec

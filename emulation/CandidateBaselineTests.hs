@@ -2,8 +2,9 @@
 module Main (main) where
 
 import Control.Monad (unless)
-import Data.Aeson (Value (..))
+import Data.Aeson (Value (..), encode, object, (.=))
 import qualified Data.ByteString.Char8 as C
+import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
 import Emulation.CandidateBaseline
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removeDirectoryRecursive, removeFile)
@@ -28,6 +29,15 @@ result :: C.ByteString -> C.ByteString -> C.ByteString -> C.ByteString
 result start seconds cursor = C.concat
   [ "{\"start\":\"", start, "\",\"steps\":[{\"key\":\"ok\",\"seconds\":", seconds
   , ",\"actual\":[1,5,", cursor, "]},{\"key\":\"down\",\"seconds\":0.5,\"actual\":[1,5,3]}]}" ]
+
+writeCardReceipts :: FilePath -> Bool -> Bool -> IO ()
+writeCardReceipts root present coldPresent = do
+  createDirectoryIfMissing True (root </> "cold-restart")
+  writeCard "e2e-result.json" present
+  writeCard ("cold-restart" </> "e2e-cold-restart.json") coldPresent
+  where
+    writeCard file isPresent = BL.writeFile (root </> file) (encode (object
+      [ "card" .= object ["image" .= (root </> "private-card" </> "card.img"), "present" .= isPresent] ]))
 
 check :: String -> Bool -> IO Bool
 check name passed = do
@@ -90,6 +100,23 @@ main = do
   C.writeFile tracePath "{\"observations\":[{\"trace_hits\":[{\"instructions\":10,\"label\":\"release\"},{\"instructions\":20,\"label\":\"press\"}]}]}"
   traceOrderChanged <- observe traceSpec receipt
 
+  let cardSpec = ObservationSpec
+        (map filePattern ["e2e-result.json", "cold-restart/e2e-cold-restart.json"])
+        ramPushCardImageExclusions
+      originalRoot = root </> "original-run"
+      movedRoot = root </> "moved-run"
+  writeCardReceipts originalRoot True True
+  cardBaseline <- observe cardSpec (ReceiptDirectory originalRoot)
+  historicalCardFields <- observe cardSpec {observationExclusions = []} (ReceiptDirectory originalRoot)
+  historicalCardBaseline <- either (\problem -> putStrLn problem >> exitFailure) pure
+    (decodeBaseline (encodeBaseline (Baseline "synthetic-card" "2026-10-24T00:00:00Z" originalRoot historicalCardFields)))
+  writeCardReceipts movedRoot True True
+  cardPathsMoved <- observe cardSpec (ReceiptDirectory movedRoot)
+  writeCardReceipts movedRoot False True
+  cardMetadataChanged <- observe cardSpec (ReceiptDirectory movedRoot)
+  writeCardReceipts movedRoot True False
+  coldCardMetadataChanged <- observe cardSpec (ReceiptDirectory movedRoot)
+
   outcomes <- sequence
     [ check "a stored baseline matches the run it was recorded from" (null (compareObservations (baselineFields stored) recorded))
     , check "unobserved files are not fields" (all ((/= "unobserved.log") . fieldFile . fieldName) recorded)
@@ -121,6 +148,17 @@ main = do
     , check "trace instruction counts alone do not differ from an existing baseline"
         (null (compareObservations (withoutExcluded traceSpec traceBaseline) traceCountsChanged))
     , check "trace event identity and order remain compared"
-        (not (null (compareObservations (withoutExcluded traceSpec traceBaseline) traceOrderChanged))) ]
+        (not (null (compareObservations (withoutExcluded traceSpec traceBaseline) traceOrderChanged)))
+    , check "RAM-push card image paths compare equally across run roots"
+        (null (compareObservations cardBaseline cardPathsMoved))
+    , check "stored card image paths compare under current RAM-push exclusions"
+        (null (compareObservations (withoutExcluded cardSpec (baselineFields historicalCardBaseline)) cardPathsMoved))
+    , check "RAM-push card presence remains compared"
+        (map (renderFieldName . differenceField) (compareObservations cardBaseline cardMetadataChanged)
+          == ["e2e-result.json#/card/present"])
+    , check "cold-restart card presence remains compared against historical fields"
+        (map (renderFieldName . differenceField)
+          (compareObservations (withoutExcluded cardSpec (baselineFields historicalCardBaseline)) coldCardMetadataChanged)
+          == ["cold-restart/e2e-cold-restart.json#/card/present"]) ]
   unless (and outcomes) exitFailure
   putStrLn ("passed " ++ show (length outcomes) ++ " checks")

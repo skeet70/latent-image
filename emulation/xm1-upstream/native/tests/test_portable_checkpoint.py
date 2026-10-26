@@ -109,6 +109,60 @@ class PortableCheckpointTests(unittest.TestCase):
         self.tmp.cleanup()
         gc.collect()
 
+    def test_image_parameter_import_does_not_resolve_firmware(self):
+        child = subprocess.run(
+            [sys.executable, '-c',
+             'from emulator.image_parameter_devices import UIConversionProfile; '
+             'assert UIConversionProfile.parse(None) is None'],
+            env=dict(os.environ, XM1_VIEWER_INITIAL_FIRMWARE='no-such-profile'),
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(child.returncode, 0, child.stderr)
+
+    def test_private_card_checkpoint_restores_guest_media_and_run_owned_s2(self):
+        from emulator.sd_card import BLANK_SDHC_PROFILE, SDCardController, save_raw_image
+        from tools.scanout_attach import restore_private_menu_card
+        from x70_native._native import copy_menu_card, permit_full_press
+        root = Path(self.tmp.name)
+        shared = root / 'shared.img'
+        shared.write_bytes(b'\x51' * 512 + b'\x62' * 512)
+        original_sha256 = hashlib.sha256(shared.read_bytes()).hexdigest()
+        private = copy_menu_card(shared, root / 'cold-private-card')
+        board = ready(sd_card_profile=BLANK_SDHC_PROFILE, sd_card_image=Path(private.path))
+        board._s2_private_card = private
+        permit_full_press(board)
+        controller = next(device for device in board.devices if isinstance(device, SDCardController))
+        controller.card.write(0, b'\xa4' * 512)
+        same_engine = capture(board)
+        same_engine.restore()
+        permit_full_press(board)
+        paused = root / 'paused-private-card'
+        save(board, paused)
+        Path(private.path).unlink()
+        other_input = root / 'different.img'
+        other_input.write_bytes(b'\x73' * 1024)
+        private_paths = []
+        for run in ('first', 'second'):
+            restored = load(paused)
+            with self.assertRaises(ValueError):
+                permit_full_press(restored)
+            with self.assertRaises(ValueError):
+                restore_private_menu_card(restored, other_input, root / run)
+            with self.assertRaises(ValueError):
+                permit_full_press(restored)
+            media = restore_private_menu_card(restored, shared, root / run)
+            permit_full_press(restored)
+            card = next(device.card for device in restored.devices if isinstance(device, SDCardController))
+            self.assertEqual(card.read(0, 2), b'\xa4' * 512 + b'\x62' * 512)
+            target = Path(media.path)
+            private_paths.append(target)
+            target.unlink()
+            save_raw_image(card, target)
+            self.assertEqual(target.read_bytes(), b'\xa4' * 512 + b'\x62' * 512)
+            self.assertEqual(hashlib.sha256(shared.read_bytes()).hexdigest(), original_sha256)
+            del restored
+            gc.collect()
+        self.assertNotEqual(private_paths[0], private_paths[1])
+
     def test_all_stock_devices_fresh_engines_and_fresh_process_match_same_engine_replay(self):
         board = ready()
         path = Path(self.tmp.name) / 'paused'
