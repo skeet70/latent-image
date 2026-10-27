@@ -2,11 +2,11 @@
 -- Host-only recipe data and executable-package emitter.
 -- The three-argument invocation emits a separate pre-bootstrap diagnostic.
 -- --complete consumes linked kernel/boot artifacts and pinned D3 decodes.
--- host/firmware/build-recipe-package.sh composes the resulting DAT.
+-- BuildRecipePackage composes the resulting DAT.
 module Main where
 
 import Control.Monad (foldM, forM, forM_, unless, when)
-import Data.Bits (rotateR, shiftL, shiftR, (.&.), (.|.))
+import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.Aeson (Value (..))
@@ -781,7 +781,11 @@ carveSpecAt placementKind original kernel image2Path = do
           _ -> region | region <- regions]
       newPlacement = replaceFields placement [("mode", H.s "complete"), ("regions", H.arr sizedRegions),
         ("host", replaceFields host hostSymbols), ("menu", replaceFields menu [("edit", edit), ("w28", H.s "0x1")])]
-  pure (replaceFields moved [("placement", newPlacement), ("image2", H.s image2Path)])
+      bootContract = case placementKind of
+        FlashCarve -> replaceFields (H.get moved "boot")
+          [("format", H.n 2), ("store_off", H.s "0x480"), ("store_bytes", H.n 60)]
+        RamCarve {} -> H.get moved "boot"
+  pure (replaceFields moved [("placement", newPlacement), ("image2", H.s image2Path), ("boot", bootContract)])
 
 emitPackage :: Value -> [Source] -> WritePlan -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
 emitPackage spec sources plan kernel boot d3 stockPath out = do
@@ -837,7 +841,7 @@ emitPackage spec sources plan kernel boot d3 stockPath out = do
       address <- linked symbols name
       unless (begin <= address && address < textEnd && address .&. 3 == 0) $
         H.failH ("package: executable symbol outside A32 text: " ++ name)
-  let imageBytes = 0xa120
+  let imageBytes = nameBase - carveBase + fromIntegral (14 * nameRecordBytes)
       runtimeWrites = [w | w <- planWrites plan, carveBase <= writeAddress w && writeAddress w < 0x00befffc]
       publications = [w | w <- planWrites plan, w `notElem` runtimeWrites, writeCurrent w /= writeNew w]
   unless (B.length code <= 0x8300 && length publications < 128) $
@@ -882,25 +886,31 @@ emitPackage spec sources plan kernel boot d3 stockPath out = do
         | address >= 0x01100000 = 0
         | otherwise = 1
       ordered = sortOn (\(address, _) -> (priority address, address)) publicationPairs
-      metadata = B.concat [word32 lo <> word32 spanBytes | (lo, spanBytes) <- allow] <>
-        B.replicate (0x80 - 8 * length allow) 0 <>
-        B.concat [word32 address <> word32 value | (address, value) <- ordered] <>
+      tableBytes = B.concat [word32 address <> word32 value | (address, value) <- ordered] <>
         B.replicate (0x400 - 8 * length ordered) 0
   bootSymbols <- readSymbols (boot ++ "/boot.syms")
   forM_ [("rb_boot_entry", 0x0078319c), ("rb_boot_sum", 0x00782348),
     ("rb_boot_publish", 0x00789e2c), ("rb_boot_check", 0x0078d4f8),
+    ("rb_validate_entry", sourceBaseAddress + 32),
+    ("rb_copy_entry", sourceBaseAddress + 32 + 0x4bc),
     ("rb_store_entry", sourceBaseAddress + 32 + 0x480),
     ("RB_SRC_BASE", sourceBaseAddress), ("RB_SRC_LIMIT", sourceBaseAddress + 32 + imageBytes - 0x01100000),
+    ("RB_IMAGE_BYTES", imageBytes),
     ("rb_plain_load_wait", 0x00724b68), ("rb_plain_load_release", 0x00724c00)] $
       \(name, expected) -> linked bootSymbols name >>= \actual ->
         unless (actual == expected) (H.failH ("package: boot symbol mismatch: " ++ name))
+  validator <- B.readFile (boot ++ "/validate.bin")
+  unless (B.length validator <= 0x80 && not (B.null validator)) $
+    H.failH "package: bounded source validator required before publication table"
+  copier <- B.readFile (boot ++ "/copy.bin")
+  unless (B.length copier == 32) $ H.failH "package: thirty-two-byte checked copy pass required"
   store <- B.readFile (boot ++ "/store.bin")
   unless (B.length store == 60) $ H.failH "package: sixty-byte store/cache pass required"
-  let chunks = [(0, metadata), (0x480, store), (executableBase - carveBase, code)] <>
+  let chunks = [(0, validator), (0x80, tableBytes), (0x480, store), (0x4bc, copier), (executableBase - carveBase, code)] <>
         [(writeAddress w - carveBase, writeNew w) | w <- runtimeWrites]
   image <- assemble imageBytes chunks
-  let hash = foldl' (\acc offset -> rotateR (acc + readWord image 0 offset) 7) 0 [0,4 .. imageBytes - 4]
-      header = B.concat (map word32 [0x42524a46, 1, imageBytes, hash, 0, 0, 0, 0])
+  let BootCrc32 crc = bootCrc32 image
+      header = B.concat (map word32 [0x42524a46, 2, imageBytes, crc, 0, 0, 0, 0])
       package = header <> image
       plainSource = sourceFor sources "plain_sites"
   current <- either H.failH pure (currentBytes plainSource sourceBaseAddress (B.length package))
@@ -945,6 +955,14 @@ emitPackage spec sources plan kernel boot d3 stockPath out = do
      ("runtime_start", H.s (hex32 carveBase)), ("runtime_end", H.s (hex32 (carveBase + imageBytes))),
      ("executable_start", H.s (hex32 begin)), ("executable_end", H.s (hex32 end)),
      ("name_records", H.n 14), ("name_base", H.s (hex32 nameBase)),
+     ("format", H.n 2), ("covered_image_bytes", H.n (fromIntegral imageBytes)),
+     ("checksum", H.s "CRC-32/ISO-HDLC"), ("image_crc32", H.s (hex32 crc)),
+     ("validator_off", H.s "0x00000000"), ("validator_entry", H.s (hex32 (sourceBaseAddress + 32))),
+     ("validator_bytes", H.n (fromIntegral (B.length validator))),
+     ("store_off", H.s "0x00000480"), ("store_entry", H.s (hex32 (sourceBaseAddress + 32 + 0x480))),
+     ("store_bytes", H.n (fromIntegral (B.length store))),
+     ("copy_off", H.s "0x000004bc"), ("copy_entry", H.s (hex32 (sourceBaseAddress + 32 + 0x4bc))),
+     ("copy_bytes", H.n (fromIntegral (B.length copier))),
      ("status_cell", H.s "0x00befffc"), ("publication_count", H.n (fromIntegral (length ordered))),
      ("presenter_entry", H.s "0x00d3d894"), ("presenter_target", H.s (hex32 presenterAddress)),
      ("presenter_displaced_word", H.s "0xe92d4800"), ("presenter_stock_resume", H.s "0x00d3d898"),

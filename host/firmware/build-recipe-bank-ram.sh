@@ -75,8 +75,10 @@ NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${LINK[@]}" -Wl,-T,menu/recipe_bank_
 
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" -c menu/recipe_bank_boot.S -o "$OUT/boot.o"
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${LINK[@]}" -Wl,-T,menu/recipe_bank_boot.ld \
-  -Wl,--defsym=RB_SRC_BASE=0x011ad800 -Wl,--defsym=RB_SRC_END=0x011b7940 \
-  -Wl,--defsym=RB_SRC_LIMIT=0x000b7940 -Wl,--defsym=RB_STORE_ENTRY=0x011adca0 \
+  -Wl,--defsym=RB_SRC_BASE=0x011ad800 \
+  -Wl,--defsym=RB_SRC_LIMIT=0x000b7940 -Wl,--defsym=RB_VALIDATE_ENTRY=0x011ad820 \
+  -Wl,--defsym=RB_COPY_ENTRY=0x011adcdc \
+  -Wl,--defsym=RB_STORE_ENTRY=0x011adca0 \
   "$OUT/boot.o" -o "$OUT/boot.elf"
 "$OBJCOPY" -j .text.rb_boot_store -O binary "$OUT/boot.elf" "$OUT/store.bin"
 

@@ -1,134 +1,27 @@
-@ The recipe bank's boot copy, publication-hardened edition: validate the
-@ carried package, relocate it into the carved heap span, validate the
-@ bank's publication destinations, then hand image 5 its stock entry.
-@ This is the only bank code that runs before the entry and the only bank
-@ code outside the package: it lives in the four stock array runs the
-@ D3/Q retargets free, except the store pass, which is image code.
+@ X-M1 1.50 recipe boot publication. The four stock-array fragments are
+@ trusted loader code. Validation, copy and publication code execute from the
+@ checked source image; instruction fetch must observe the stable CRC input.
 @
-@ Attachment: image 4's entry launcher at 0x0069d2b4 loads image 5's entry
-@ from the stage header word at 0x00bf1a0c and reaches it through the
-@ `blx r3` at 0x0069d2e0 (stock word 0xe12fff33). The container replaces
-@ that one word with `b rb_boot_entry`.
+@ Format 2: 32-byte header {magic, format/flags, image_bytes, crc32, reserved[4]}.
+@ image_bytes is exactly 0xa120. CRC-32/ISO-HDLC covers every image byte.
+@ CRC detects accidental corruption, not maliciously chosen replacements.
+@ Image offsets: validator [0,0x80), table [0x80,0x480), store [0x480,0x4bc),
+@ copy [0x4bc,0x4dc), kernel [0x500,0x8800), data and names through 0xa120.
 @
-@ Entry register contract, identical to the replaced `blx r3` on exit:
-@ r0-r3, r12 and r4-r11 hold their launcher values, LR becomes 0x0069d2e4
-@ (immediate halves 0xd2e4 and 0x0069), and the jump target is r3.
-@
-@ Failure contract: any failed gate or check stores 2 into the status cell
-@ and takes the same stock branch; the failure path does not run the cache
-@ pass. No stock-word publication happens before the hash matches; pass
-@ one checks every destination against the allowlist with no stores.
-@ The store pass runs only after the whole table validated. Success leaves the cell
-@ UNCHANGED (the first budget trade; a warm-boot stale 2 reads as a fresh
-@ refusal and diagnostics corroborate against the bank's presence).
-@
-@ Trust boundary (chosen byte source (a), pending the review's ruling):
-@ the store pass is image content, executed from the source copy of the
-@ hashed image at RB_STORE_ENTRY after the hash has matched. The trusted
-@ stub keeps the gates, the hash and the destination validation; the
-@ executed bytes' integrity is the matched hash, and the stub never writes
-@ the source span, so no D-cache clean is owed for them. The source span
-@ is never fetched as code before this jump. The store pass's own bulk
-@ cache pass covers the carve copy (the bank's runtime, fetched after the
-@ entry) and the patched stock words.
-@
-@ Package layout at RB_SRC_BASE:
-@
-@   header, 32 bytes little-endian:
-@     +0x00 u32 magic        0x42524a46
-@     +0x04 u16 format       1 (the stub reads only the magic word; the
-@                               builder refuses any other format)
-@     +0x06 u16 flags        0
-@     +0x08 u32 image_bytes  >= 0xa120 (fourteen-record name-table end),
-@                              4-aligned, < 0xe600
-@     +0x0c u32 hash         32-bit rotating word hash of the image
-@     +0x10 u32 reserved     0 (unread)
-@     +0x14 u32 reserved     0
-@     +0x18 u32 reserved     0
-@     +0x1c u32 reserved     0
-@   image at +0x20:
-@     image offset 0x000  allowlist: 16 slots of {u32 lo, u32 span}; a
-@                        destination is allowed when lo <= addr < lo+span
-@                        and the sum does not wrap; unused slots {0,0}
-@     image offset 0x080  publication table: 128 slots of {u32 addr, u32
-@                        value}; {0,0} ends the walk; unused slots {0,0}
-@     image offset 0x480  store/cache pass: 15 instructions, 60 B,
-@                        linked at RB_STORE_ENTRY in the source copy
-@     image offset 0x500  executable code, initialized data and zero BSS
-@     image offset 0x9d84 name table: 14 records of 66 bytes (runtime
-@                        0x00beb784), stock ids 0x83c-0x83e, seven slot
-@                        names and four UI labels
-@   The metadata region [0x000, 0x480) and name-table end 0xa120 lie
-@   inside image_bytes.
-@
-@ Validation order: bounded final-extent wait and token restore,
-@ stage-relative high-water gate, magic, covered image length,
-@ copy and hash, hash compare, bounded allowlist pass, store/cache pass,
-@ stock exit. A package shorter than the coverage minimum cannot reach the
-@ table: the walk reads only the carve copy of a copied, hashed image.
-@ Address 0 is never a store target: it ends the table walk and lies in no
-@ window (an unused {0,0} slot has span 0).
-@
-@ Hash: h = 0; for each image word in order, h = ror32(h + word, 7).
-@ Each step is a bijection in the accumulator, so a single-word change
-@ always changes h, and permutation invariance (addition commutes) is
-@ gone: order enters through the rotation. Deterministic compensating
-@ collisions exist: two words a multiple of 32 positions apart whose
-@ value changes sum to zero cancel exactly while the propagation stays
-@ carry-free, because 7 is invertible mod 32 and both contributions
-@ return to the same bit. The reachable case is a zero-filled stretch
-@ (unused slots, zero fill) with two words raised to 0x80000000; outside
-@ carry-free stretches the carries perturb the pair (measured about one
-@ in six random contexts). Residual: that structured class plus the
-@ map's 32-bit collision class (a modeled random corruption passes with
-@ probability 2^-32). The header words sit outside the hash, so the
-@ magic, coverage and length gates stand on their own. The class does
-@ not reopen store-at-zero: address 0 terminates both walks before any
-@ window check or store.
-@
-@ Cache contract: the span is cacheable write-back through MPU region 0.
-@ All copy and store-pass stores complete first; then one bulk pass
-@ cleans and invalidates the D-cache (whole-cache set/way fallback of the
-@ image-4 helper 0x0061c4f4) and invalidates the I-cache (0x0061c4ec),
-@ bracketed by DSB/ISB, so the bank's carve code and the patched stock
-@ words are coherent for the execution that follows. One zero argument
-@ selects the whole-cache fallback: at 0x61c50c..0x61c51c the helper sets
-@ r3 = (r0==0) | (r1==0) and branches when r3 == 1, so zeroing r0
-@ suffices. The two calls are made through absolute symbols
-@ (rb_cache_dclean_inval / rb_cache_iinval) assigned in the .ld. CP15
-@ cache maintenance is core-local: the sequence is coherent for the core
-@ that runs this hook, and the core question is an open prerequisite of
-@ the contract. The source span is not written by the stub; source
-@ coherence (the source's memory content equals the bytes the copy reads)
-@ remains an open prerequisite and is load-bearing for the store pass's
-@ own fetch.
-
+@ No payload RAM store occurs before CRC and the complete table validate.
+@ Destination windows are instruction constants, not carried allowlist data.
+@ Failure writes status 2 and resumes the stock image-5 entry with the launch
+@ registers restored and LR=0x0069d2e4. Success leaves status unchanged.
+@ Physical source lifetime, source fetch coherence, core ownership and carve
+@ ownership remain placement prerequisites.
 .syntax unified
 .arm
 
-@ Stock cache helpers. The two symbols are absolute assignments in
-@ menu/recipe_bank_boot.ld, not here: a numeric `bl` operand and a
-@ same-unit `.set` symbol both assemble as a raw imm24 field and the call
-@ lands at pc+8+operand (verified: both forms link to 0xeb18713d), while a
-@ linker-script absolute symbol makes lld resolve the call pc-relatively
-@ (the delivered link's first call, at 0x00789e94, is 0xebfa4996). A link
-@ without the script fails on the undefined symbols instead of
-@ mis-encoding them.
-
-.equ RB_STATUS_CELL,   0x00befffc   @ top word of the bank span, reserved
-.equ RB_HDR_BYTES,     32
-.equ RB_IMAGE_MIN,     0xa120       @ name table 0x9d84 + 14*66 bytes
-.equ RB_IMAGE_LIMIT,   0xe600       @ first refused length; 4-alignment
-                                    @ makes the effective maximum 0xe5fc
-.equ RB_ALLOW_BYTES,   0x80         @ 16 allowlist slots
-.equ RB_TABLE_OFF,     0x80         @ publication table in the image
-.equ RB_TABLE_SLOTS,   128
-.equ RB_TABLE_END,     0x480
-
-@ ------------------------------------------------- entry, gate 1, header ptr
-@ Runs from the film-values run [0x0078319c, 0x007831cc), 48 B.
-@ The final plain extent uses stock load resource 0x47. The wait consumes
-@ its token and the signal restores it.
+.equ RB_STATUS_CELL, 0x00befffc
+.equ RB_HDR_BYTES, 32
+.equ RB_IMAGE_BYTES, 0xa120
+.equ RB_TABLE_OFF, 0x80
+.equ RB_TABLE_END, 0x480
 
 .section .text.rb_boot_entry,"ax",%progbits
 .global rb_boot_entry
@@ -136,153 +29,172 @@
 rb_boot_entry:
     push    {r0-r12, lr}
     mov     r0, #0x47
-    movw    r1, #1000                   @ finite loader wait, firmware ticks
+    movw    r1, #1000
     bl      rb_plain_load_wait
     cmp     r0, #0
     bne     rb_boot_fail
     mov     r0, #0x47
     bl      rb_plain_load_release
     movw    r4, #:lower16:RB_SRC_BASE
-    movt    r4, #:upper16:RB_SRC_BASE   @ r4 = package header
+    movt    r4, #:upper16:RB_SRC_BASE
     b       rb_boot_check
     nop
 .size rb_boot_entry, .-rb_boot_entry
-
-@ --------------------- validation, covered length, gate 2, carve base
-@ Runs from the film-labels run [0x0078d4f8, 0x0078d558). 24 instructions,
-@ 96 B: the run's full capacity. The coverage gate keeps the metadata
-@ region and the name table inside image_bytes, so the hash covers both
-@ tables and the walk can never read bytes the copy did not write.
 
 .section .text.rb_boot_check,"ax",%progbits
 .global rb_boot_check
 .type rb_boot_check,%function
 rb_boot_check:
-    movw    r0, #:lower16:RB_SRC_LIMIT  @ gate 2: bytes-copied threshold
+    movw    r0, #:lower16:RB_SRC_LIMIT
     movt    r0, #:upper16:RB_SRC_LIMIT
     movw    r1, #0x4834
-    movt    r1, #0x0091                 @ reporter high-water 0x00914834
+    movt    r1, #0x0091
     ldr     r1, [r1]
     cmp     r1, r0
     blo     rb_boot_fail
-    ldr     r0, [r4]                    @ magic
+    ldr     r0, [r4]
     movw    r1, #0x4a46
     movt    r1, #0x4252
     cmp     r0, r1
     bne     rb_boot_fail
-    ldr     r5, [r4, #8]                @ image bytes
-    tst     r5, #3
+    ldr     r0, [r4, #4]
+    cmp     r0, #2
     bne     rb_boot_fail
-    movw    r0, #:lower16:RB_IMAGE_MIN  @ covered length: name-table end
+    ldr     r5, [r4, #8]
+    movw    r0, #RB_IMAGE_BYTES
     cmp     r5, r0
-    blo     rb_boot_fail
-    cmp     r5, #RB_IMAGE_LIMIT
-    bhs     rb_boot_fail
-    mov     r6, #0                      @ hash accumulator
+    bne     rb_boot_fail
+    mvn     r6, #0
     movw    r10, #0x1a00
-    movt    r10, #0x00be                @ carve base 0x00be1a00
+    movt    r10, #0x00be
     b       rb_boot_sum
+    nop
 .size rb_boot_check, .-rb_boot_check
-
-@ -------------------------------------- copy and hash, one pass
-@ Runs from the Q-values run [0x00782348, 0x00782378). 12 instructions,
-@ 48 B: the run's full capacity. r5 counts down from image_bytes
-@ (multiple of 4, >= 0xa120); r9 is the copy cursor so r10 keeps the carve
-@ base for the walk. The hash is complete and compared before the
-@ publication walk begins.
 
 .section .text.rb_boot_sum,"ax",%progbits
 .global rb_boot_sum
 .type rb_boot_sum,%function
 rb_boot_sum:
-    add     r8, r4, #RB_HDR_BYTES       @ image source
-    mov     r9, r10                     @ copy destination cursor
-1:
+    add     r8, r4, #RB_HDR_BYTES
+    movw    r12, #0x8320
+    movt    r12, #0xedb8
+.Lword:
     ldr     r0, [r8], #4
-    add     r6, r6, r0                  @ h += word
-    ror     r6, r6, #7                  @ h = ror32(h, 7)
-    str     r0, [r9], #4
-    subs    r5, r5, #4
-    bne     1b
-    ldr     r0, [r4, #0x0c]             @ header hash
-    cmp     r6, r0
-    bne     rb_boot_fail
+    eor     r6, r6, r0
+    mov     r2, #32
     b       rb_boot_publish
+    nop
+    nop
+    nop
+    nop
+    nop
 .size rb_boot_sum, .-rb_boot_sum
-
-@ ----------- destination validation walk, status, stock exit
-@ Runs from the Q-labels run [0x00789e2c, 0x00789e8c). 24 instructions,
-@ 96 B: the run's full capacity. Pass one bounds the walk and checks every
-@ destination against the allowlist with no stores; when the whole table
-@ has validated it branches to the image-resident store pass. Each store
-@ in that pass therefore follows a validated address.
 
 .section .text.rb_boot_publish,"ax",%progbits
 .global rb_boot_publish
 .type rb_boot_publish,%function
 rb_boot_publish:
-    add     r7, r10, #RB_TABLE_OFF      @ pass-one cursor
-    add     r9, r10, #RB_TABLE_END     @ exclusive publication-table end
-    add     r11, r10, #RB_ALLOW_BYTES   @ allowlist region end
-.Lcheck:
-    cmp     r7, r9
-    bhs     rb_boot_fail                @ no terminator inside the region
-    ldr     r0, [r7], #8                @ addr; skip the value in pass one
-    cmp     r0, #0
-    beq     rb_store_entry              @ table validated: image-resident store pass
-    mov     r8, r10                     @ allowlist cursor
-.Lallow:
-    cmp     r8, r11
-    bhs     rb_boot_fail                @ no window admits the address
-    ldmia   r8!, {r3, r12}              @ window lo, window span
-    sub     r3, r0, r3
-    cmp     r3, r12                     @ lo <= addr < lo + span
-    bhs     .Lallow
-    b       .Lcheck
+.Lbit:
+    lsrs    r6, r6, #1
+    eorcs   r6, r6, r12
+    subs    r2, r2, #1
+    bne     .Lbit
+    subs    r5, r5, #4
+    bne     .Lword
+    mvn     r6, r6
+    ldr     r0, [r4, #12]
+    cmp     r6, r0
+    bne     rb_boot_fail
+    b       rb_validate_entry
 .global rb_boot_fail
 .type rb_boot_fail,%function
 rb_boot_fail:
     movw    r0, #:lower16:RB_STATUS_CELL
     movt    r0, #:upper16:RB_STATUS_CELL
-    mov     r1, #2                      @ RB_ST_REFUSED
+    mov     r1, #2
     str     r1, [r0]
 .global rb_boot_done
 .type rb_boot_done,%function
 rb_boot_done:
     pop     {r0-r12, lr}
     movw    lr, #0xd2e4
-    movt    lr, #0x0069                 @ LR = 0x0069d2e4, the stock return
+    movt    lr, #0x0069
     bx      r3
+    .space 20, 0
 .size rb_boot_publish, .-rb_boot_publish
 
-@ ---------------- store pass and bulk cache pass (image code, hash-covered)
-@ Placed at RB_STORE_ENTRY = RB_SRC_BASE + RB_HDR_BYTES + boot.store_off
-@ so its pc-relative branches and helper calls are encoded for the address
-@ it executes at; the builder emits these bytes into the image at
-@ boot.store_off. 15 instructions, 60 B. Executed only after the hash
-@ matched and pass one validated every destination. Reads the table from
-@ the carve copy (r10), stores to the validated addresses, then runs the
-@ bulk cache pass that covers the carve and the patched stock words.
+.section .text.rb_boot_validate,"ax",%progbits
+.global rb_validate_entry
+.type rb_validate_entry,%function
+rb_validate_entry:
+    add     r7, r4, #(RB_HDR_BYTES + RB_TABLE_OFF)
+    add     r9, r4, #(RB_HDR_BYTES + RB_TABLE_END)
+.Lcheck:
+    cmp     r7, r9
+    bhs     rb_boot_fail
+    ldmia   r7!, {r0, r1}
+    cmp     r0, #0
+    bne     .Ldestination
+    cmp     r1, #0
+    bne     rb_boot_fail
+    b       rb_copy_entry
+.Ldestination:
+    tst     r0, #3
+    bne     rb_boot_fail
+    movw    r3, #0xc400
+    movt    r3, #0x0061
+    sub     r3, r0, r3
+    movw    r12, #0x2800
+    movt    r12, #0x0028
+    cmp     r3, r12
+    blo     .Lcheck
+    movw    r3, #0x1a00
+    movt    r3, #0x00bf
+    sub     r3, r0, r3
+    movw    r12, #0x0020
+    movt    r12, #0x004d
+    cmp     r3, r12
+    blo     .Lcheck
+    sub     r3, r0, #0x01100000
+    cmp     r3, #0x00080000
+    blo     .Lcheck
+    b       rb_boot_fail
+.size rb_validate_entry, .-rb_validate_entry
 
 .section .text.rb_boot_store,"ax",%progbits
 .global rb_store_entry
 .type rb_store_entry,%function
 rb_store_entry:
-    add     r7, r10, #RB_TABLE_OFF      @ pass-two cursor
+    add     r7, r10, #RB_TABLE_OFF
 1:
-    ldr     r0, [r7], #4                @ addr (validated in pass one)
+    ldr     r0, [r7], #4
     cmp     r0, #0
     beq     .Lcache
-    ldr     r1, [r7], #4                @ value
+    ldr     r1, [r7], #4
     str     r1, [r0]
     b       1b
 .Lcache:
     dsb     sy
     mov     r0, #0
-    bl      rb_cache_dclean_inval       @ whole-cache D clean + invalidate
+    bl      rb_cache_dclean_inval
     mov     r0, #0
-    bl      rb_cache_iinval             @ whole-cache I invalidate
+    bl      rb_cache_iinval
     dsb     sy
     isb     sy
     b       rb_boot_done
-.size rb_boot_store, .-rb_boot_store
+.size rb_store_entry, .-rb_store_entry
+
+.section .text.rb_boot_copy,"ax",%progbits
+.global rb_copy_entry
+.type rb_copy_entry,%function
+rb_copy_entry:
+    add     r8, r4, #RB_HDR_BYTES
+    mov     r9, r10
+    movw    r5, #RB_IMAGE_BYTES
+1:
+    ldr     r0, [r8], #4
+    str     r0, [r9], #4
+    subs    r5, r5, #4
+    bne     1b
+    b       rb_store_entry
+.size rb_copy_entry, .-rb_copy_entry

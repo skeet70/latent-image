@@ -105,6 +105,8 @@ module FujiAF.RecipeBank
   , bankFileB
   , BankFileId (..)
   , bankChecksum
+  , BootCrc32 (..)
+  , bootCrc32
   , BankFilmEncoding (..)
   , encodeBankFileFor
   , encodeBankFile
@@ -138,7 +140,7 @@ module FujiAF.RecipeBank
   ) where
 
 import Control.Monad (forM, unless, when)
-import Data.Bits (complement, shiftL, shiftR, testBit, (.&.), (.|.))
+import Data.Bits (complement, shiftL, shiftR, testBit, xor, (.&.), (.|.))
 import qualified Data.ByteString as B
 import Data.Char (ord)
 import Data.List (sort, sortOn)
@@ -817,6 +819,16 @@ bankChecksum :: B.ByteString -> Word32
 bankChecksum bytes = complement (B.foldl' step 0 bytes)
  where
   step acc w = acc + fromIntegral (complement w :: Word8)
+
+newtype BootCrc32 = BootCrc32 Word32 deriving (Eq, Show)
+
+-- | CRC-32/ISO-HDLC over the complete executable image, excluding its header.
+bootCrc32 :: B.ByteString -> BootCrc32
+bootCrc32 = BootCrc32 . complement . B.foldl' byte maxBound
+ where
+  byte acc value = bits (8 :: Int) (acc `xor` fromIntegral value)
+  bits 0 acc = acc
+  bits count acc = bits (count - 1) ((acc `shiftR` 1) `xor` (if testBit acc 0 then 0xedb88320 else 0))
 
 -- | The whole file with the checksum field 0x18..0x1b zeroed.
 bankFileChecksum :: B.ByteString -> Word32

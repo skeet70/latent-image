@@ -124,10 +124,12 @@ build t (OutDir out) stock spec d3Spec (Sha256 stockDigest) = do
 
   cc (arm ++ ["-c", "menu/recipe_bank_boot.S", "-o", boot ++ "/boot.o"])
   cc (arm ++ link t ++ ["-Wl,-T,menu/recipe_bank_boot.ld", "-Wl,--defsym=RB_SRC_BASE=0x011ad800"
-      , "-Wl,--defsym=RB_SRC_END=0x011b7940", "-Wl,--defsym=RB_SRC_LIMIT=0x000b7940"
+      , "-Wl,--defsym=RB_SRC_LIMIT=0x000b7940"
+      , "-Wl,--defsym=RB_VALIDATE_ENTRY=0x011ad820"
+      , "-Wl,--defsym=RB_COPY_ENTRY=0x011adcdc"
       , "-Wl,--defsym=RB_STORE_ENTRY=0x011adca0", boot ++ "/boot.o", "-o", boot ++ "/boot.elf"])
   runTo (boot ++ "/boot.syms") (nm t) ["--defined-only", "--print-size", "--numeric-sort", boot ++ "/boot.elf"]
-  forM_ ["sum", "entry", "publish", "check", "store"] $ \fragment ->
+  forM_ ["sum", "entry", "publish", "check", "validate", "copy", "store"] $ \fragment ->
     run (objcopy t) ["-j", ".text.rb_boot_" ++ fragment, "-O", "binary", boot ++ "/boot.elf", boot ++ "/" ++ fragment ++ ".bin"]
   runTo (boot ++ "/boot.disasm") (objdump t) ["-d", "--triple=armv7-none-eabi", boot ++ "/boot.elf"]
 

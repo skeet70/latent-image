@@ -6,6 +6,7 @@ module Main where
 
 import Control.Monad
 import FujiAF.Host (str)
+import FujiAF.RecipeBank (BootCrc32 (..), bootCrc32)
 import Data.Aeson hiding (encodeFile)
 import Data.Aeson.Types (Parser, parseEither, parseMaybe)
 import qualified Data.ByteString as B
@@ -262,7 +263,7 @@ data Expect = Expect
   , eClaims :: [(String, Int, B.ByteString)]
   }
 
-newtype GuestAddress = GuestAddress Integer deriving (Eq, Ord)
+newtype GuestAddress = GuestAddress Integer deriving (Eq, Ord, Show)
 newtype RegionId = RegionId String deriving (Eq, Ord)
 newtype StockFailureRedraw = StockFailureRedraw B.ByteString
 
@@ -389,7 +390,19 @@ data FilmEncoding = D3Films | ClassicChromeFilms deriving (Eq)
 
 main :: IO ()
 main = do
-  args <- getArgs
+  arguments <- getArgs
+  case arguments of
+    ["--boot-package", package, "--runner", runner, "--out", out] -> do
+      createDirectoryIfMissing True out
+      results <- runBootCases 1 out runner package
+      BL.writeFile (out </> "results.json") (encode (object ["cases" .= results]))
+      unless (all passed results) exitFailure
+    _ -> kernelMain arguments
+ where
+  passed result = parseMaybe (withObject "result" (.: "status")) result == Just ("passed" :: String)
+
+kernelMain :: [String] -> IO ()
+kernelMain args = do
   let opt n = lookup n [(drop 2 a, b) | (a, b) <- pair args]
       pair (a:b:r) = (a, b) : pair r
       pair _ = []
@@ -2508,13 +2521,19 @@ findingsText specs results = unlines (headerLines ++ resultLines)
       ]
     resultLines = ["case " ++ spId sp ++ ": " ++ st | (sp, r) <- zip specs results, let st = fromMaybe "?" (parseMaybe (withObject "r" (\o -> o .: "status" :: Parser String)) r)]
 
-data BootScenario = Publish | ShortImage | CorruptHash | InvalidDestination | SourceNotLoaded | WaitRefused deriving (Eq, Show)
+data BootScenario
+  = Publish | ShortImage | LongImage | WrongFormat | TruncatedPackage
+  | CorruptHash | LegacyCollision | InvalidDestination GuestAddress | PublishBoundary GuestAddress
+  | UnterminatedTable | LastSlotTerminator | NonzeroTerminator | SourceNotLoaded | WaitRefused
+  deriving (Eq, Show)
 
 runBootCases :: Int -> FilePath -> FilePath -> FilePath -> IO [Value]
 runBootCases jobs out runner package = do
   syms <- parseSyms (package </> "boot/boot.syms")
   source <- B.readFile (package </> "image/source-package.bin")
   id5 <- B.readFile (package </> "image/id5-final.bin")
+  validator <- B.readFile (package </> "boot/validate.bin")
+  copier <- B.readFile (package </> "boot/copy.bin")
   fragments <- forM [("entry", "rb_boot_entry"), ("sum", "rb_boot_sum"), ("check", "rb_boot_check"), ("publish", "rb_boot_publish")] $ \(file, sym) ->
     (\bytes -> ("boot-" ++ file, sym, bytes)) <$> B.readFile (package </> "boot" </> (file ++ ".bin"))
   let srcBase = addr syms "RB_SRC_BASE"
@@ -2524,55 +2543,90 @@ runBootCases jobs out runner package = do
       exit = toInteger (readU32 id5 12)
       entries = takeWhile ((/= 0) . fst)
         [(toInteger (readU32 image i), readU32 image (i + 4)) | i <- [0x80, 0x88 .. 0x478]]
-      targetSpans = compact 7 [(a, a + 4) | (a, _) <- sortOn fst entries]
+      targetSpans destinations = compact 7 [(a, a + 4) | (a, _) <- nub (sortOn fst destinations)]
       compact count spans
         | length spans <= count = spans
         | otherwise =
             let gaps = [(b - aEnd, i) | (i, ((_, aEnd), (b, _))) <- zip [0 ..] (zip spans (drop 1 spans)),
+                         (exit + 4 <= aEnd || exit >= b),
                          all (\(_, sym, bytes) -> let lo = addr syms sym; hi = lo + toInteger (B.length bytes) in hi <= aEnd || lo >= b) fragments]
                 (_, at) = minimum gaps
                 merged = (fst (spans !! at), snd (spans !! (at + 1)))
              in compact count (take at spans ++ [merged] ++ drop (at + 2) spans)
       initialFrame = B.concat [u32le (if i == 3 || i == 13 then fromIntegral exit else 0xa0 + fromIntegral i) | i <- [0 .. 13 :: Int]]
-      hash bytes = foldl (\h i -> rotateR (h + readU32 bytes i) 7) 0 [0, 4 .. B.length bytes - 4]
-  unless (B.length source == 32 + fromIntegral (readU32 source 8)) (fail "boot package length mismatch")
+      legacyHash bytes = foldl (\h i -> rotateR (h + readU32 bytes i) 7) 0 [0, 4 .. B.length bytes - 4]
+      replace off bytes original = B.take off original <> bytes <> B.drop (off + B.length bytes) original
+      firstCollisionWord = 0x3a4
+      secondCollisionWord = firstCollisionWord + 128
+      firstChanged = replace firstCollisionWord (u32le 0x80000000) image
+      compensation = legacyHash (B.take secondCollisionWord image)
+        - legacyHash (B.take secondCollisionWord firstChanged)
+      collision = replace secondCollisionWord (u32le compensation) firstChanged
+  unless (B.length source == 32 + 0xa120 && readU32 source 4 == 2 && readU32 source 8 == 0xa120)
+    (fail "boot cases require the exact format-2 package")
+  unless (readU32 image firstCollisionWord == 0 && readU32 image secondCollisionWord == 0 &&
+          collision /= image && legacyHash collision == legacyHash image && bootCrc32 collision /= bootCrc32 image)
+    (fail "legacy rotating-checksum collision fixture does not discriminate CRC")
+  repeatedPublication <- case entries of
+    (address, _) : _ -> pure (u32le (fromIntegral address) <> u32le 0xf00d)
+    [] -> fail "boot package has no publication for bounded-table fixtures"
   mapBounded jobs (\scenario -> do
     let cid = case scenario of
           Publish -> "boot-publication-barrier"
           ShortImage -> "boot-refuse-short-image"
+          LongImage -> "boot-refuse-long-image"
+          WrongFormat -> "boot-refuse-old-format"
+          TruncatedPackage -> "boot-refuse-truncated-package"
           CorruptHash -> "boot-refuse-hash"
-          InvalidDestination -> "boot-refuse-destination"
+          LegacyCollision -> "boot-refuse-legacy-checksum-collision"
+          InvalidDestination (GuestAddress address) -> "boot-refuse-destination-" ++ showHex address ""
+          PublishBoundary (GuestAddress address) -> "boot-publish-boundary-" ++ showHex address ""
+          UnterminatedTable -> "boot-refuse-unterminated-table"
+          LastSlotTerminator -> "boot-publish-last-slot-terminator"
+          NonzeroTerminator -> "boot-refuse-nonzero-terminator"
           SourceNotLoaded -> "boot-refuse-source-highwater"
           WaitRefused -> "boot-refuse-loader-wait"
         dir = out </> cid
-        replace off bytes original = B.take off original <> bytes <> B.drop (off + B.length bytes) original
         apply initial spans = foldl (\bytes (off, value) -> replace off value bytes) initial spans
-        badImage = replace (0x80 + 8 * (length entries - 1)) (u32le 0x009a0000) image
+        withImage bytes = let BootCrc32 crc = bootCrc32 bytes in replace 12 (u32le crc) (B.take 32 source <> bytes)
         carried = case scenario of
           ShortImage -> replace 8 (u32le 0x100) source
+          LongImage -> replace 8 (u32le 0xa124) source
+          WrongFormat -> replace 4 (u32le 1) source
+          TruncatedPackage -> B.take (B.length source - 4) source
           CorruptHash -> replace 12 (u32le (readU32 source 12 `xor` 1)) source
-          InvalidDestination -> replace 12 (u32le (hash badImage)) (B.take 32 source <> badImage)
+          LegacyCollision -> B.take 32 source <> collision
+          InvalidDestination (GuestAddress address) -> withImage (replace (0x80 + 8 * (length entries - 1)) (u32le (fromInteger address)) image)
+          PublishBoundary (GuestAddress address) -> withImage (replace (0x80 + 8 * (length entries - 1)) (u32le (fromInteger address)) image)
+          UnterminatedTable -> withImage (replace 0x80 (B.concat (replicate 128 repeatedPublication)) image)
+          LastSlotTerminator -> withImage (replace 0x80 (B.concat (replicate 127 repeatedPublication) <> B.replicate 8 0) image)
+          NonzeroTerminator -> withImage (replace (0x80 + 8 * length entries + 4) (u32le 1) image)
           _ -> source
-        copied = scenario `elem` [Publish, CorruptHash, InvalidDestination]
-        published = scenario == Publish
-        runtime = if copied then B.drop 32 carried <> B.replicate (0xe600 - B.length image) 0 else B.replicate 0xe600 0
-        expectedRuntime = if published then runtime else replace (fromIntegral (status - carve)) (u32le 2) runtime
+        published = case scenario of Publish -> True; PublishBoundary {} -> True; LastSlotTerminator -> True; _ -> False
+        publishedEntries = takeWhile ((/= 0) . fst)
+          [(toInteger (readU32 carried (32 + i)), readU32 carried (32 + i + 4)) | i <- [0x80, 0x88 .. 0x478]]
+        observedEntries = if published then publishedEntries else entries
+        initialRuntime = B.replicate 0xe600 0xa5
+        expectedRuntime = if published
+          then B.drop 32 carried <> B.drop (B.length image) initialRuntime
+          else replace (fromIntegral (status - carve)) (u32le 2) initialRuntime
         targets =
           [ ("target-" ++ show i, a, B.replicate (fromIntegral (b - a)) 0,
              apply (B.replicate (fromIntegral (b - a)) 0)
-               [(fromIntegral (dest - a), u32le value) | (dest, value) <- entries, published, dest >= a, dest < b])
-          | (i, (a, b)) <- zip [0 :: Int ..] targetSpans]
+               [(fromIntegral (dest - a), u32le value) | (dest, value) <- publishedEntries, published, dest >= a, dest < b])
+          | (i, (a, b)) <- zip [0 :: Int ..] (targetSpans observedEntries)]
         sourcePresent = scenario `notElem` [SourceNotLoaded, WaitRefused]
         imageRegions =
           [("source", srcBase, carried, "rx" :: String) | sourcePresent] ++
-          [ ("runtime", carve, B.replicate 0xe600 0, "rw")
-          , ("reporter", 0x00914834, u32le (fromIntegral (if scenario == SourceNotLoaded then srcBase + toInteger (B.length source) - 0x1100001 else srcBase + toInteger (B.length source) - 0x1100000)), "rw")
+          [ ("runtime", carve, initialRuntime, "rw")
+          , ("reporter", 0x00914834, u32le (fromIntegral (srcBase + toInteger (B.length carried) - 0x1100000 - if scenario == SourceNotLoaded then 1 else 0)), "rw")
           , ("frame", 0x009a0000, B.replicate 8 0 <> initialFrame <> B.replicate 8 0, "rw")
           , ("stock-entry", exit, B.take 4 (B.drop (fromIntegral (exit - 0xbf1a00)) id5), "rx")
           ] ++ [(n, addr syms sym, bytes, "rx") | (n, sym, bytes) <- fragments]
           ++ [(n, a, bytes, "rw") | (n, a, bytes, _) <- targets]
         fnSpans = [(addr syms sym, toInteger (B.length bytes)) | (_, sym, bytes) <- fragments]
-          ++ [(addr syms "rb_store_entry", 60) | sourcePresent]
+          ++ if sourcePresent then [(addr syms "rb_validate_entry", toInteger (B.length validator)),
+              (addr syms "rb_copy_entry", toInteger (B.length copier)), (addr syms "rb_store_entry", 60)] else []
         waitEvent = object ["address" .= ("0x00724b68" :: String), "inputs" .= object ["r0" .= hex 0x47, "r1" .= hex 1000], "outputs" .= object ["r0" .= hex (if scenario == WaitRefused then 1 else 0)]]
         releaseEvent = object ["address" .= ("0x00724c00" :: String), "inputs" .= object ["r0" .= hex 0x47], "outputs" .= object ["r0" .= hex 0]]
         events = waitEvent : [releaseEvent | scenario /= WaitRefused]
@@ -2598,7 +2652,7 @@ runBootCases jobs out runner package = do
               "initial" .= object ["artifact" .= n, "offset" .= (0 :: Int), "length" .= B.length bytes]] | (n, a, bytes, perm) <- imageRegions]
           , "functions" .= [object ["address" .= hex a, "size" .= z] | (a, z) <- fnSpans]
           , "stubs" .= map stub events
-          , "limits" .= object ["instructions" .= (1000000 :: Int), "wall_ms" .= (4000 :: Int)]
+          , "limits" .= object ["instructions" .= (4000000 :: Int), "wall_ms" .= (4000 :: Int)]
           , "expected" .= object ["status" .= (if published then "unsupported_instruction" else "unknown_call" :: String),
               "registers" .= expectedRegisters, "memory" .= (claim ("runtime" :: String) expectedRuntime : [claim n expected | (n, _, _, expected) <- targets]), "events" .= events]
           , "exclusions" .= (["stock semaphore wait/release are register-only ABI substitutions", "success stops at DSB after publication stores; cache, core and source-coherence acceptance require the full-system emulator", "refusals stop at the stock entry transfer, without executing that entry"] :: [String])
@@ -2606,7 +2660,11 @@ runBootCases jobs out runner package = do
     BL.writeFile (dir </> "case.json") (encode c)
     (_, report) <- runCase runner (dir </> "case.json")
     pure (object ["id" .= cid, "status" .= fromMaybe "unknown" (parseMaybe (withObject "report" (.: "status")) report :: Maybe String), "report" .= report]))
-    [Publish, ShortImage, CorruptHash, InvalidDestination, SourceNotLoaded, WaitRefused]
+    ([Publish, ShortImage, LongImage, WrongFormat, TruncatedPackage, CorruptHash, LegacyCollision,
+      UnterminatedTable, LastSlotTerminator, NonzeroTerminator, SourceNotLoaded, WaitRefused] ++
+     map (InvalidDestination . GuestAddress) [0x009a0000, 0x0061c3fc, 0x0089ec00, 0x00bf19fc, 0x010c1a20,
+       0x010ffffc, 0x01180000, 0xfffffffc, 0x0078eab9, 0x0089ebff, 0x010c1a1f, 0x0117ffff] ++
+     map (PublishBoundary . GuestAddress) [0x0061c400, 0x0089ebfc, 0x00bf1a00, 0x010c1a1c, 0x01100000, 0x0117fffc])
 
 data AllocatorScenario = ExactFit | OneByteOverflow deriving (Eq)
 

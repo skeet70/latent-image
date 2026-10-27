@@ -17,6 +17,8 @@ import qualified FujiAF.Host as H
 
 main :: IO ()
 main = do
+  H.ensure (bootCrc32 B.empty == BootCrc32 0) "empty-image CRC disagrees with CRC-32/ISO-HDLC"
+  H.ensure (bootCrc32 "123456789" == BootCrc32 0xcbf43926) "CRC-32/ISO-HDLC check vector failed"
   -- a spec row the pinned table does not carry, and a table that never
   -- terminates, are the two ways a compile could silently name a wrong look
   H.withTemporary "fuji-af-recipe-bank-" $ \root -> do

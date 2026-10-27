@@ -1310,6 +1310,7 @@ haskell_binary(
         "//host:filepath",
         "//host:host-support",
         "//host:json",
+        "//host:recipe-bank",
         "//host:text",
     ],
 )
