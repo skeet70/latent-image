@@ -7,22 +7,31 @@ module Emulation.EmulatorSlot
   , SlotPolicy (..)
   , slotPolicyFromEnvironment
   , reexecInSlot
+  , attachGuard
+  , attachGuardCommand
   ) where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, try)
 import Control.Monad (forM_, unless, when)
+import Data.Bits ((.&.))
 import qualified Data.ByteString as B
-import Data.Char (isDigit)
-import Data.List (isSuffixOf, stripPrefix)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getHomeDirectory, listDirectory, removeFile)
+import qualified Data.ByteString.Char8 as C
+import Data.Char (isDigit, isSpace)
+import Data.List (isPrefixOf, isSuffixOf, stripPrefix)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getHomeDirectory, listDirectory, removeFile)
 import System.Environment (getExecutablePath, lookupEnv, setEnv)
-import System.FilePath ((</>))
+import System.Exit (ExitCode (ExitSuccess))
+import System.FilePath ((</>), takeDirectory, takeFileName)
 import System.IO (Handle, IOMode (ReadMode, WriteMode), SeekMode (AbsoluteSeek), hFlush, hPutStrLn, stderr, withBinaryFile)
 import System.IO.Error (catchIOError, isDoesNotExistError)
-import System.Posix.Files (createSymbolicLink, setFileMode)
+import System.Posix.Files (FileStatus, createSymbolicLink, fileMode, fileOwner, getFileStatus, isRegularFile, ownerExecuteMode, readSymbolicLink, setFileMode)
 import System.Posix.IO (LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setLock)
 import System.Posix.Process (executeFile, getProcessID)
+import System.Posix.Types (ProcessID)
+import System.Posix.User (getEffectiveUserID)
+import System.Process (readProcessWithExitCode)
+import System.Timeout (timeout)
 import Text.Read (readMaybe)
 
 newtype SlotCount = SlotCount Int
@@ -75,6 +84,8 @@ reexecInSlot policy arguments = do
       directory <- slotDirectory
       Slot slot <- acquire directory policy
       setEnv slotVariable (show slot)
+      original <- getExecutablePath
+      _ <- pinGuard directory original
       executable <- pinExecutable directory
       let MemoryMax memory = memoryMax policy
       executeFile "systemd-run" True
@@ -84,6 +95,118 @@ reexecInSlot policy arguments = do
          , "--"
          , executable
          ] ++ arguments) Nothing
+
+-- | Replaces the current launcher with the same program under the pinned
+-- guard. Used by a program that is itself the emulation process.
+attachGuard :: [String] -> IO ()
+attachGuard arguments = do
+  executable <- getExecutablePath
+  attachGuardCommand (executable : arguments)
+
+-- | Replaces the current launcher with the pinned guard running exactly this
+-- command. The command is never recovered from an environment variable.
+attachGuardCommand :: [String] -> IO ()
+attachGuardCommand command = do
+  executable <- getExecutablePath
+  pid <- getProcessID
+  let guard = case stripPrefix "pin-" (takeFileName executable) of
+        Just rest ->
+          let (digits, _) = span isDigit rest
+          in takeDirectory executable </> ("guard-" ++ digits)
+        Nothing -> takeDirectory executable </> ("missing-guard-" ++ show pid)
+  valid <- validGuard guard
+  unless valid $ ioError (userError ("thermal guard is missing or invalid: " ++ guard))
+  parents <- ancestors pid 8
+  matches <- mapM (isGuardProcess guard) parents
+  unless (or matches) $ executeFile guard True (["--"] ++ command) Nothing
+
+validGuard :: FilePath -> IO Bool
+validGuard path = do
+  present <- doesFileExist path
+  if not present then pure False else do
+    result <- try (getFileStatus path) :: IO (Either IOException FileStatus)
+    case result of
+      Left _ -> pure False
+      Right status -> do
+        owner <- getEffectiveUserID
+        pure (isRegularFile status
+          && fileOwner status == owner
+          && fileMode status .&. ownerExecuteMode /= 0)
+
+ancestors :: ProcessID -> Int -> IO [ProcessID]
+ancestors _ 0 = pure []
+ancestors pid remaining = do
+  parent <- try (parentOf pid) :: IO (Either IOException (Maybe ProcessID))
+  case parent of
+    Left _ -> pure []
+    Right Nothing -> pure []
+    Right (Just value)
+      | value == 0 || value == pid -> pure []
+      | otherwise -> (value :) <$> ancestors value (remaining - 1)
+
+parentOf :: ProcessID -> IO (Maybe ProcessID)
+parentOf pid = do
+  bytes <- B.readFile ("/proc" </> show pid </> "status")
+  pure $ case [line | line <- lines (C.unpack bytes), "PPid:" `isPrefixOf` line] of
+    (line : _) -> readMaybe (filter isDigit (drop 5 line))
+    [] -> Nothing
+
+isGuardProcess :: FilePath -> ProcessID -> IO Bool
+isGuardProcess guard pid = do
+  comm <- try (readFile ("/proc" </> show pid </> "comm")) :: IO (Either IOException String)
+  exe <- try (readSymbolicLink ("/proc" </> show pid </> "exe")) :: IO (Either IOException FilePath)
+  case (comm, exe) of
+    (Right name, Right path) -> do
+      canonical <- try (canonicalizePath guard) :: IO (Either IOException FilePath)
+      case canonical of
+        Left _ -> pure False
+        Right guardPath -> do
+          actual <- try (canonicalizePath path) :: IO (Either IOException FilePath)
+          let workerPath = case stripPrefix "guard-" (takeFileName guardPath) of
+                Just suffix ->
+                  let (digits, _) = span isDigit suffix
+                  in takeDirectory guardPath </> ("guard-worker-" ++ digits)
+                Nothing -> takeDirectory guardPath </> "thermal-guard-worker"
+          pure ((takeWhile (/= '\n') name == "thermal-guard"
+              || "guard-" `isPrefixOf` takeWhile (/= '\n') name)
+            && either (const False) (\actualPath -> actualPath == guardPath || actualPath == workerPath) actual)
+    _ -> pure False
+
+-- | Copies the canonical sibling guard and worker into the slot directory. The
+-- sources are the launcher's siblings, never environment-selected paths.
+pinGuard :: FilePath -> FilePath -> IO FilePath
+pinGuard directory original = do
+  let source = takeDirectory original </> "thermal-guard"
+  present <- doesFileExist source
+  unless present $ ioError (userError ("thermal guard is missing: " ++ source))
+  status <- getFileStatus source
+  owner <- getEffectiveUserID
+  unless (isRegularFile status
+    && fileOwner status == owner
+    && fileMode status .&. ownerExecuteMode /= 0)
+    (ioError (userError ("thermal guard is not an owned executable: " ++ source)))
+  pid <- getProcessID
+  let target = directory </> ("guard-" ++ show pid)
+      workerSource = takeDirectory original </> "thermal-guard-worker"
+      workerTarget = directory </> ("guard-worker-" ++ show pid)
+  removeIfPresent target
+  removeIfPresent workerTarget
+  withBinaryFile source ReadMode $ \input ->
+    withBinaryFile target WriteMode $ \output ->
+      copyChunks input output
+  setFileMode target 0o700
+  presentWorker <- doesFileExist workerSource
+  unless presentWorker $ ioError (userError ("thermal guard worker is missing: " ++ workerSource))
+  workerStatus <- getFileStatus workerSource
+  unless (isRegularFile workerStatus
+    && fileOwner workerStatus == owner
+    && fileMode workerStatus .&. ownerExecuteMode /= 0)
+    (ioError (userError ("thermal guard worker is not an owned executable: " ++ workerSource)))
+  withBinaryFile workerSource ReadMode $ \input ->
+    withBinaryFile workerTarget WriteMode $ \output ->
+      copyChunks input output
+  setFileMode workerTarget 0o700
+  pure target
 
 slotDirectory :: IO FilePath
 slotDirectory = do
@@ -165,22 +288,47 @@ onDiskPath path
 deletedSuffix :: String
 deletedSuffix = " (deleted)"
 
--- | Removes pinned copies whose PID is gone. The scope's parent process holds
--- the PID until the run ends, and a run reads its own pinned path throughout,
--- so only that absence makes a copy dead.
+-- | Removes dead pinned copies only while no thermal-guard service is live.
+-- Pruning is suspended while a service is active, activating or deactivating,
+-- or the manager response is unknown.
 sweepPinned :: FilePath -> IO ()
 sweepPinned directory = do
-  entries <- listDirectory directory
-  forM_ entries $ \entry -> case pinnedPid entry of
-    Nothing -> pure ()
-    Just pid -> do
-      alive <- doesDirectoryExist ("/proc" </> show pid)
-      unless alive $ do
-        _ <- try (removeFile (directory </> entry)) :: IO (Either IOException ())
-        pure ()
+  mayBeLive <- guardServiceMayBeLive
+  unless mayBeLive $ do
+    entries <- listDirectory directory
+    forM_ entries $ \entry -> case pinnedPid entry of
+      Nothing -> pure ()
+      Just pid -> do
+        alive <- doesDirectoryExist ("/proc" </> show pid)
+        unless alive $ do
+          _ <- try (removeFile (directory </> entry)) :: IO (Either IOException ())
+          pure ()
+
+-- | Manager query. True means pruning must stop: a guard service is live,
+-- systemctl failed or timed out, or its state is unknown.
+guardServiceMayBeLive :: IO Bool
+guardServiceMayBeLive = do
+  result <- timeout 5_000_000 (try (readProcessWithExitCode "systemctl"
+    [ "--user", "list-units", "--type=service"
+    , "--state=active", "--state=activating", "--state=deactivating"
+    , "--no-legend", "--plain", "--no-pager"
+    , "thermal-guard-*"
+    ] "")) :: IO (Maybe (Either IOException (ExitCode, String, String)))
+  pure $ case result of
+    Nothing -> True
+    Just (Left _) -> True
+    Just (Right (ExitSuccess, stdout, errors)) ->
+      not (null (filter (not . isSpace) errors))
+        || not (null (filter (not . isSpace) stdout))
+    Just (Right (_, _, _)) -> True
 
 pinnedPid :: String -> Maybe Int
-pinnedPid entry = do
-  rest <- stripPrefix "pin-" entry
-  let (digits, suffix) = span isDigit rest
-  if not (null digits) && suffix `elem` ["", ".runfiles"] then readMaybe digits else Nothing
+pinnedPid entry = case stripPrefix "pin-" entry of
+  Just rest -> parse rest
+  Nothing -> case stripPrefix "guard-worker-" entry of
+    Just rest -> parse rest
+    Nothing -> maybe Nothing parse (stripPrefix "guard-" entry)
+  where
+    parse rest = do
+      let (digits, suffix) = span isDigit rest
+      if not (null digits) && suffix `elem` ["", ".runfiles"] then readMaybe digits else Nothing

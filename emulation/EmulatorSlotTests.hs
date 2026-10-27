@@ -33,11 +33,11 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    [source] -> run source >>= \passed -> unless passed exitFailure
-    _ -> ioError (userError "usage: emulator-slot-tests PROBE")
+    [source, guard, worker] -> run source guard worker >>= \passed -> unless passed exitFailure
+    _ -> ioError (userError "usage: emulator-slot-tests PROBE GUARD WORKER")
 
-run :: FilePath -> IO Bool
-run source = do
+run :: FilePath -> FilePath -> FilePath -> IO Bool
+run source guard worker = do
   temporary <- getTemporaryDirectory
   base <- fromMaybe temporary <$> lookupEnv "TEST_TMPDIR"
   pid <- getProcessID
@@ -48,6 +48,12 @@ run source = do
   createDirectoryIfMissing True slots
   copyFile source probe
   setFileMode probe 0o700
+  let guardCopy = root </> "thermal-guard"
+  copyFile guard guardCopy
+  setFileMode guardCopy 0o700
+  let workerCopy = root </> "thermal-guard-worker"
+  copyFile worker workerCopy
+  setFileMode workerCopy 0o700
   held <- openFd (slots </> "slot-1.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
   () <- setLock held (WriteLock, AbsoluteSeek, 0, 0)
   environment <- probeEnvironment home

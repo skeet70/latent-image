@@ -4,7 +4,7 @@
 module Main where
 
 import Control.Exception (IOException, catch, displayException)
-import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
+import Emulation.EmulatorSlot (attachGuardCommand, reexecInSlot, slotPolicyFromEnvironment)
 import System.Directory (setCurrentDirectory)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitFailure)
@@ -22,4 +22,5 @@ main = run `catch` \failure -> hPutStrLn stderr (displayException (failure :: IO
           lookupEnv "BUILD_WORKING_DIRECTORY" >>= mapM_ setCurrentDirectory
           policy <- slotPolicyFromEnvironment
           reexecInSlot policy arguments
+          attachGuardCommand arguments
           executeFile command True rest Nothing
