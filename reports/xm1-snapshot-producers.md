@@ -18,6 +18,8 @@ Run 3 is `private-data/sessions/20261025T050355Z-read-bulk/ram-00000000-05aa0000
 
 The stock continuous producer uses two statistic banks, `0x5ffb0dc0` and `0x5ffb3770`, separated by `0x29b0`. Initializer `0x00edf558` registers both extents with that size. `0x00ee39c4` initializes bank selectors to 1, installs completion callback `0x00edb25c` through `0x00ee0804` and `0x00d9f0b0`, and starts the continuous state. These addresses are not in Run 3. The bank catalogue alone is not evidence that read-bulk can reach them.
 
+Even after clearing alias bits with `address & 0x3fffffff`, these bases become `0x1ffb0dc0` and `0x1ffb3770`, above the supported bulk-read physical end `0x0b3f6e00`. The copied-statistic addresses below likewise exceed that limit. Neither a retained pointer nor the `0x40000000` alias rule establishes that these banks are physically backed, bulk-readable, cache-coherent or held for export. A CPU-copy proposal must first establish its own source accessibility and lifetime; it cannot inherit them from the preview rasters.
+
 `0x00ee074c` builds the nine destination pointers from a bank base; `0x00d9e88c` writes them through the image-4 setters. The layout is:
 
 | Destination register | Bank-relative offset | Bounded window extent |
@@ -72,9 +74,57 @@ The `0x5ffe...` addresses must not be translated by subtracting `0x40000000` and
 
 The stack result is valid for the worker callback's stock lifetime. The persistent caches at `0x016d60d0` and `0x016d6ba8`, the bridge metadata records and accepted AF globals can be rewritten by later stock work. No USB lease or producer pause is established for them. Repeated pointer/header/checksum reads cannot extend that lifetime.
 
+Callback `0x00f3c104` queues only eight bytes containing status and the stack-result pointer; it does not copy the 112-byte result. The producer releases its stack frame after the callback returns. Scheduler handoff and ownership through the later `0x00f44fec` read remain a separate lifetime obligation, not established by the callback-local validity above. The [state-bound drain path](autofocus-static-map.md#lower-cancellation-acknowledgment-and-computation-drain) clears the calculation flag without adopting that late result.
+
+#### Queued-result handoff and immediate stack reuse
+
+The retained X-M1 Run-3 primary kernel provides a conditional priority handoff, not an unconditional queue-consumption barrier. `0x0072503c` copies the eight-byte event payload, including the pointer value, into an allocated queue block. The method selected by vector `0x4004dae0 + 0xac` is `0x00049308`: when a receiver is waiting, it transfers the block pointer to that receiver's saved frame and can dispatch it before the sender returns. Ready-list code `0x00043ca4` only reselects a receiver with a strictly smaller numeric priority; equal priority does not preempt. The constructors request saclac/task `0x2b` priority 5 and calculation/task `0x2c` priority 6, and the two stock priority wrappers preserve the ordering as 4/5 or 5/6. Their task-engine tags at `0x007cae44/48` are both 1.
+
+That mechanism has real preconditions. A nonzero selector cell `0x400545a4` instead selects method `0x00049528` at vector `+0xb0`, which defers local rescheduling. The retained capture has that cell equal to 1, not evidence that a later calculation callback takes the immediate-dispatch branch. The waiting receiver's suspend/state flags, same-engine dispatch and the live dispatch-enable cell also affect the handoff. No invariant establishes all these conditions through the eventual result read. A selected accepting handler such as `0x00f0ced8` clears its in-flight flag and calls `0x00f44fec` immediately; the separate drain handler does not accept the result.
+
+The absence of another calculation request does **not** preserve the queued result bytes. The original instruction frames establish this reuse without a new work item:
+
+| Boundary | Stack positions relative to worker loop SP `S` |
+| --- | --- |
+| Dispatcher `0x00f493c4`, then producer `0x00f49890` | Dispatcher saves 24 bytes; producer saves 12 and allocates 116. The 112-byte result occupies `[S-152,S-41]`. |
+| Producer and dispatcher return; next `0x00725318` receive | Receive saves 32 bytes and allocates eight, leaving SP at `S-40` before its first current-engine call. |
+| Current-engine selector `0x000412bc` | `push {r11,lr}` writes `[S-48,S-41]`, exactly result offsets `0x68..0x6f`, before receive can wait or obtain another request. |
+
+Thus, **if** the worker reaches that next receive before the consumer finishes, the result tail is overwritten. This is an instruction-bound reuse condition, not an observed stock misread or an established overwrite-before-read execution. Completing the stock lifetime proof requires binding receiver wait/state, the live enqueue branch and dispatch state, and progress through the last selected consumer read. Main AF's in-flight marker is not a result-storage lease; another source producer `0x00f25bb0` also uses the calculation worker with its own callback/marker.
+
+For a future observation, the narrow owned copy point remains after `0x00f873cc` returns and before `0x00f49890` invokes its saved callback: copy the defined 112-byte result, not all 116 allocated stack bytes. No hook or implementation is added here. This avoids queued-pointer lifetime for that observation only; it proves neither the stock consumer's complete lifetime nor acquisition freshness. The finite source/byte proof is retained as `E-AF-QUEUED-RESULT-HANDOFF-150`.
+
 ### What Run 3 retains
 
 The input descriptor at `0x016c0f40..0x016c0fb7`, accepted primary result fields at `0x016c1160..0x016c119f`, worker descriptor/current-result region at `0x016d6058..0x016d613f`, and prior result at `0x016d6ba8..0x016d6c17` are zero. Search state `0x016c0fc0` is `0x0d`; in-flight and movement-request words `0x016c2200/04` are zero. This idle capture does not contain a completed ordinary AF evaluation or a calibrated AF sample. It does not show that the hardware statistic producer was inactive.
+
+### Stock sample-index and raw-position association
+
+**Source-inspected and byte-read, E-AF-SAMPLE-POSITION-ASSOCIATION-150:** stock has a software position ledger connecting bridge event processing to the metadata consumed by AF. It is not an acquisition-time position measurement. This distinction changes what the smallest result export must retain.
+
+Request initializer `0x00ff63a0`, called for bridge request `0x3f2e`, resets halfword producer index `0x016f4632` and consumer index `0x016f4634` to zero and limit `0x016f4636` to `0xfa`. In bridge state 6, event `0x3f00` selects `0x00ff44dc`: it reads `0x0076da84 -> 0x0076a270`, the signed cached raw position at `0x00942b84`, stores its halfword at `0x016f463a + 2*producer_index`, attempts movement through `0x00ff97a0`, and only then increments the producer index. Thus this stored position precedes that handler's command attempt. It is neither the predicted target nor a position queried from the lens at exposure.
+
+The dispatcher is `0x00ff563c -> 0x00fe94a4`, vector `0x00ff5b90`. State 6's row `{0x3f00,0x00ff44dc}` is at `0x00ff5908`. State 7 instead selects `0x00ff4e04`, row `0x00ff5be4`: while the producer index is below `0xf9` and the limit, it records sentinel `0x7fff`, increments the index and once submits lensdc `0x4217` through `0x0076f660`, callback `0x00ff3124`. That callback publishes `0x3f11`; state 7's row `0x00ff5c1c` selects `0x00ff3160`, which replaces the preceding ledger entry with the current cached raw position. A ledger entry can therefore be pending or later corrected. Sentinel `0x7fff` is distinct from the lens query-invalid value `-0x8000`; its use here does not establish a reserved physical position throughout the lens protocol.
+
+Bank completion `0x3f07` has different metadata treatment in these same states. State 7's row at `0x00ff5bf4` selects `0x00ff43ec -> 0x00ff42fc -> 0x00ff6958(record,1)`. The constructor copies the current consumer index and its ledger entry into the selected `0x4ec`-byte record, then `0x00ff42fc` advances the consumer index. State 6's row at `0x00ff5918` selects `0x00ff447c -> 0x00ff43fc -> 0x00ff6958(record,0)`, which zeroes the index, position and flag and sets the direction/status word to 2. The selected record is `0x016f30cc` when selector `0x016f2e7c` is 2, otherwise `0x016f35b8`. These software records also rotate through `0x00ff7c54`; they are not retained host observations.
+
+`0x00ff6810` copies the record's tail into bridge metadata; `0x00ff6b4c(kind)` publishes the full `0x5c4`-byte metadata record. The selected-kind-1 intake `0x00f40944` preserves the following connection:
+
+| Record offset | Metadata offset | AF destination | Source meaning |
+| --- | --- | --- | --- |
+| `+0x4b0`, u16 | `+0x588` | `0x016c121c` | Consumer index, reset for each movement request, not a global sensor frame ID |
+| `+0x4b2`, raw halfword | `+0x58a` | `0x016c121e` | Indexed cached-position ledger entry, possibly the `0x7fff` sentinel |
+| `+0x4b4`, word | `+0x58c` | `0x016c1224` | `0x016f462c`, movement direction/status selection from the request path, not measured position |
+| `+0x4b8`, u16 | `+0x590` | `0x016c1228` | Kind-1 copy overwrites this field from `0x016f482e`; it is not an unmodified source-record field |
+| `+0x4ba`, byte | `+0x592` | `0x016c122a` | Constructor's software association flag, not exposure freshness or optical settling |
+
+The original bytes confirm the two index widths, position store before the command attempt, constructor offsets, metadata copies and intake stores. The Run-3 read retains bridge state 4, both indices zero, prior ledger halfword `0x016f4638 = 0x0060`, current raw position `0x00942b84 = 0x0060`, and zero index/position/association flag in kind-1 metadata at `0x016f54b8..0x016f54c3` and AF state `0x016c121c..0x016c122b`. The metadata direction/status word is 2. This is an idle retained value, not a recorded sample-to-move sequence.
+
+The cached-position producer is also source-bound. Query callback `0x0076a148` stores response halfword `0x0095b30c` and response status `0x0095b31c`, then signals task `0x32` bit 2. `0x0076ac60` submits that query through `0x0076a4f8 -> 0x00744388 -> 0x006bd1f8`, waits through `0x0076a734(2)`, and updates `0x00942b84` only for zero response status and a value other than `-0x8000`. The raw-coordinate conversion `0x0076a598` leaves `r0` unchanged; it supplies no millimetre, dioptre or motor-step scale. If the response value is `-0x8000` with zero response status, the helper logs an error, retains the old cache and still returns zero. `0x0076d050` then reports status from that return and passes the cached position. Therefore even this query callback's zero status does not prove a newly measured position. Refresh `0x0076ba24` has another query/update path and can zero the cache under its lens-state flags; initialization/reset helpers also zero it. The cache has neither an acquisition timestamp nor an established maximum age here.
+
+The remaining association proof is specific: bind the producer of each admitted `0x3f00`, its ordering against statistic `0x3f07`, ledger corrections, counter reset and bridge record rotation, and the age of the cached position when sampled. `0x3f00` has several software producers, including timer registration `0x00feb064 -> 0x007411c4(...,0x00fe96a8,...)` and conditional `0x00fe8100 -> 0x00fe96a8`; the message number alone is not an exposure event. No inspected edge supplies physical distance units, optical settling or acquisition-clock synchronization.
+
+The 120-byte worker input at `0x016c0f40..0x016c0fb7` does not include these association fields. A result/descriptor-only export must therefore leave lens association unknown. An experiment that uses this ledger additionally needs an intake-bound copy of the table's five fields, with widths `{2,2,4,2,1}`, and request/bridge identity, associated with the worker request before submission. Those are 11 bound bytes within `0x016c121c..0x016c122b`; the four-byte gap at `0x016c1220..0x016c1223` and trailing byte `0x016c122b` have no association meaning established here. Reading the latest AF globals after calculation would introduce another unproved lifetime. No hook implementation or new memory lease is established.
 
 ## Processed preview buffers
 
@@ -140,7 +190,7 @@ Both rasters are almost black, with small pixel variations and no useful scene d
 
 A candidate minimal copy point is the existing single-word `BL` at `0x00f498ac`, stock word `0xeb00f6c6`, to `0x00f873cc`. A reviewed call wrapper can preserve the original call, then copy its completed `[result,result+0x70)` before the callback uses it or the worker releases its stack. Copy the corresponding 120-byte input descriptor at entry, not after another worker may have changed global scratch. Preserve the cached-result indicator and reject it as a new acquisition. This replaces no AF decision and adds no lens command. The copy point does not resolve hardware bank ownership or acquisition metadata by itself.
 
-Use one fixed-size export slot initially. A bounded versioned descriptor carries session epoch, monotonically increasing export ID, source domain `stock-af-evaluation`, payload lengths, stock format revision, producer completion identity, raw producer/sample/configuration identifiers where bound, processing/region configuration, and validity/reuse/drop flags. Clock IDs, acquisition time, acquisition-time lens command, position and completion remain explicitly unknown until independently bound. Do not substitute the export counter or callback time for a sensor frame ID. The owned payload is the 120-byte input descriptor plus 112-byte result, not the pointed-to external buffers.
+Use one fixed-size export slot initially. A bounded versioned descriptor carries session epoch, monotonically increasing export ID, source domain `stock-af-evaluation`, payload lengths, stock format revision, producer completion identity, raw producer/sample/configuration identifiers where bound, processing/region configuration, and validity/reuse/drop flags. Clock IDs, acquisition time, acquisition-time lens command, position and completion remain explicitly unknown. The [stock software position association](#stock-sample-index-and-raw-position-association) is not included in the 120-byte input descriptor and is not yet acquisition-bound. Do not substitute the export counter or callback time for a sensor frame ID. The owned payload is the 120-byte input descriptor plus 112-byte result, not the pointed-to external buffers.
 
 The lifecycle is `free -> copying -> published -> released/expired -> free`. Writer publication follows payload completion and memory ordering; a retained slot is never overwritten. A busy slot drops the new observation and increments a loss counter, without retrying or waiting in the callback. Release must identify both epoch and export ID. Define a finite session and explicit bounded expiry; expiry cannot race an accepted bulk read. The simplest first session keeps one published slot until explicit release or session shutdown and admits no replacement during extraction. Reconnect/reset invalidates the epoch. New camera-side release/session operations would be closed, reviewed operations, not arbitrary memory forwarding.
 
@@ -165,6 +215,21 @@ The first physical validation remains a visible scene change with paired produce
 ## Reproduction
 
 All commands below are offline and consume owner-supplied private inputs. Run from the repository root in the pinned `devenv` environment. Hash the exact three inputs listed above with `sha256sum`. Inspect captured words using `xxd -g4 -s ADDRESS -l LENGTH CAPTURE`; little-endian word values are not the printed byte-order groups.
+
+The position-association findings additionally use the existing private word reader. These bounded reads reproduce the state-vector/selected rows, original instruction words and retained sample metadata; the source-proof receipt is `private-data/analysis/closure-afgraph49/source-proof.json`.
+
+```sh
+P=private-data/analysis/x-m1-1.50
+"$P/af/words" "$P/lz/id5-00bf1a00.bin" 0xbf1a00 \
+  0xff5b90 11 0xff5908 6 0xff5be4 18
+"$P/af/words" "$P/lz/id5-00bf1a00.bin" 0xbf1a00 \
+  0xff44f4 10 0xff6994 22 0xff5d80 7 0xf40c0c 13
+"$P/af/words" private-data/sessions/20261025T050355Z-read-bulk/ram-00000000-05aa0000.bin 0 \
+  0x16f4624 10 0x16f54b8 4 0x16f6bc8 4 0x942b84 1 0x16c121c 4
+devenv shell -- llvm-objdump -d --triple=armv7a-none-eabi \
+  --adjust-vma=0xbf1a00 --start-address=0x404380 --stop-address=0x40439c \
+  "$P/lz/id5.elf"
+```
 
 ```sh
 S=private-data/sessions/20261025T050355Z-read-bulk/ram-00000000-05aa0000.bin
