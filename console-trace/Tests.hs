@@ -34,7 +34,7 @@ main = do
   args <- getArgs
   case args of
     [ring,census,diff] -> H.withTemporary "console-trace-test" $ \root -> do
-      let header = B.replicate 0x1c 0 <> hexBytes "fc1f0900" <> B.replicate 0x14 0
+      let header = B.replicate 0x1c 0 <> hexBytes "fc1f0a00" <> B.replicate 0x14 0
           records = map hexBytes
             [ "0f253412030722000100070064000000"
             , "0f2578560307220000008700b4000000"
@@ -45,8 +45,9 @@ main = do
             , "712c34122a00000088776655feffffff"
             , "55557856556677881122334409000000"
             , "0f2c9abc0322320078563412f4010000"
+            , "81663412d204000098badcfeefcdab89"
             ]
-          store = B.concat (header:records) <> B.replicate (0x1fff4-0x34-9*16) 0
+          store = B.concat (header:records) <> B.replicate (0x1fff4-0x34-10*16) 0
           direct = root </> "store.bin"
           high = root </> "high.bin"
           windows = root </> "windows"
@@ -60,11 +61,14 @@ main = do
         actualHigh <- run executable ["high-known",high]
         actualWindows <- run executable ["windows",windows]
         H.ensure (expected == actualHigh && expected == actualWindows) "Equivalent console inputs produced different reports"
-        H.ensure ("entries" `isInfixOf` expected) "No console report returned"
-      report <- run census ["store",direct,"2c","44","55"]
+      report <- run census ["store",direct,"2c","44","55","66"]
       H.ensure ("2c:4(x4,t42..900)" `isInfixOf` report) "Known record ticks not grouped correctly"
       H.ensure ("44:1(x1,t7..7)" `isInfixOf` report) "Failure tick decoded from timer delta"
       H.ensure ("55:1(x1,tunknown)" `isInfixOf` report) "Unknown record contributed a tick"
+      H.ensure ("66:1(x1,t1234..1234)" `isInfixOf` report) "Error report tick not decoded at +4"
+      H.ensure ("category 0xfedcba98 error 0x89abcdef" `isInfixOf` report) "Error report payload words not preserved"
+      ringReport <- run ring ["store",direct]
+      H.ensure ("type 81 tick   1234" `isInfixOf` ringReport) "Error report missing from ring tick output"
       H.ensure ("str MARKTEST" `isInfixOf` report) "Marker string missing"
       H.ensure (not ("4294967295" `isInfixOf` report)) "Failure delta interpreted as tick"
       keyReport <- run ring ["--quiet","store",direct]

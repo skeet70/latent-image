@@ -2,6 +2,8 @@
 
 Status: host-only consolidation of already recorded evidence, one full read of the two private decoders and of the private notes that hold the record-layout derivation, plus the decoder correction and delegated synthetic CLI verification in section 1.2. A host-only follow-up binds type `0x71`'s tick at `+4` from its pinned writer `0x0004208c` and aligns both decoders, the synthetic fixture and the smoke expectations with that binding (section 1.2). The [same-boot carry closure](af-observe-instruments-150.md#9-same-boot-carry-closure-over-the-pinned-bytes) adds pinned-byte writer analysis for retained capacity, the first-failure latch and type `0x71` in section 2. No camera or USB device was touched and no capture was moved. Labels: **byte-read** for bytes in the pinned X-M1 1.50 artifacts or in a capture, **static-inference** for conclusions drawn from them, **hardware-observed** for recorded body observations, **reported** for the owner's correspondence, **unproved** where the named fact is unavailable.
 
+The type-`0x81` follow-up closes one previously unmapped format from original X-M1 1.50 writer bytes and producer arguments, and separates its callback and index publication from atomic capture (section 2.2.1, E-CONSOLE-ERROR-RECORD-150). The existing retained jig-A capture has no `0x81` record. Source format, capture agreement and persistence remain separate results.
+
 The X70 emulator's author wants to record autofocus traces on a camera and replay them into his emulator (**reported**, owner's 2026-10-09 correspondence). This project's console trace instrument records the kernel's message traffic, including the AF and lens tasks' sends, which speaks to that goal directly. This report separates what a third party would need to use it on their own body into three parts, gives a verdict on the two decoders, describes the store in a form that can be implemented from, and lists which files to consider publishing and which must stay private. Every firmware-layout value below is scoped to X-M1 1.50 and is loader or image layout rather than silicon fact; a different firmware re-derives them, and a different unit running the same firmware holds the same values. This report carries no unit-specific value, no serial and no capture content.
 
 ## 1. The three parts
@@ -20,7 +22,7 @@ The store geometry, per-type layouts and tick derivation are implemented in [the
 
 The original `RingCheck.hs` and `TraceCensus.hs` analysis helpers are now public as `//console-trace:ring-check` and `//console-trace:trace-census`. They contain no capture data, private identity or body calibration. RingCheck's task IDs and release-bit convention remain X-M1 1.50 annotations. Both use one shared format decoder.
 
-The public decoder selects ticks by type: `0x0f` at `+0xc`, `0x72` at `+4`, `0x09` at `+8`, and `0x71` at `+4`. Unknown types have no decoded tick. Failure deltas and retained-record payload words remain uninterpreted. Counts include all records; tick bounds include only mapped records.
+The public decoder selects ticks by type: `0x0f` at `+0xc`, `0x72` at `+4`, `0x09` at `+8`, `0x71` at `+4`, and `0x81` at `+4`. Unknown types have no decoded tick. Type `0x81` preserves both unsigned 32-bit payloads as error category and code; census prints them separately from the tick. Failure deltas and type-`0x71` payload words remain uninterpreted. Counts include all records; tick bounds include only mapped records.
 
 Run `devenv shell -- bazel run //console-trace:ring-check -- store STORE.bin` or `devenv shell -- bazel run //console-trace:trace-census -- store STORE.bin 2b` for a raw console-store file. Both also accept `high-known FILE` (store at file offset `0x800`) and `windows DIRECTORY` (consecutive 256-byte files named by addresses beginning `400a0800.bin`). Inputs must provide the header and complete record prefix; capacity must be 8188. Census thread selectors are hexadecimal bytes. Window sets and live captures can be non-atomic; slot order is not a proven chronological order after wrap.
 
@@ -44,7 +46,7 @@ The tick cell sits at `0x400c0800`, twelve bytes past the store end, and the twe
 
 ### 2.2 Record layout
 
-Four loader writers supply the captured record types, and the layouts differ after the first two bytes (**byte-read** from the writer code; the original three layouts are in `private-data/analysis/x-m1-1.50/dump/2026-10-08-syslog.md`, and the fourth is bound by `af/functions/0004208c.c` under the same pinned analysis root).
+Four loader writers supply the captured record types, and the layouts differ after the first two bytes (**byte-read** from the writer code; the original three layouts are in `private-data/analysis/x-m1-1.50/dump/2026-10-08-syslog.md`, and the fourth is bound by `af/functions/0004208c.c` under the same pinned analysis root). A fifth writer, `0x000422d8`, supplies the source-bound type `0x81`; its capture agreement remains open (section 2.2.1).
 
 | Type | Record | `+1` | `+2` | `+4` | `+8` | `+0xc` |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -52,10 +54,25 @@ Four loader writers supply the captured record types, and the layouts differ aft
 | `0x72` | marker string | writing task's id | timer delta | tick | at most eight string bytes | |
 | `0x09` | dispatch failure | arg0 | arg1 | task id and arg2 packed | tick | timer delta |
 | `0x71` | two-word record, payload meanings unproved | writing task's id | timer delta | tick | arg0 | arg1 |
+| `0x81` | error report | writing task's id | timer delta | tick | error category | error code |
 
-All fields little-endian and the type byte is at `+0`. For `0x0f`, `0x72` and `0x71` the byte at `+1` is the low byte of the writing task's `TPIDRURW`, with zero used if its sign bit is set (**byte-read**). The `0x72` writer copies at most eight bytes of a NUL-terminated string. The `0x09` writer packs `(TPIDRURW & 0x7fffffff) << 16 | arg2` at `+4` and gates itself per id through a byte table, so a zero table byte suppresses the record (**byte-read**).
+All fields little-endian and the type byte is at `+0`. For `0x0f`, `0x72`, `0x71` and `0x81` the byte at `+1` is the low byte of the writing task's `TPIDRURW`, with zero used if its sign bit is set (**byte-read**). The `0x72` writer copies at most eight bytes of a NUL-terminated string. The `0x09` writer packs `(TPIDRURW & 0x7fffffff) << 16 | arg2` at `+4` and gates itself per id through a byte table, so a zero table byte suppresses the record (**byte-read**).
 
 For type `0x0f` the word at `+4` is `{receiver u8, sender u8, message id u16}` little-endian (**byte-read** from the single writer and its single caller, E-AF-TRACE-MECH-150). The word at `+8` is a code and param pair whose meaning follows the emitter family: for input publications the upper halfword is the input code and the lower halfword the parameter, zero in every capture examined (**byte-read**); for other sends its meaning is **unproved** beyond the filter role of section 2.5. A decoder therefore selects on the type byte, then on the thread byte and the `+4` signature, before reading `+8` (**static-inference**).
+
+#### 2.2.1 Type `0x81`: error payload and insertion publication
+
+**Byte-read/source-inspected, X-M1 1.50, E-CONSOLE-ERROR-RECORD-150.** Original writer `0x000422d8` enters the local IRQ-mask helper `0x00041140` and writes only when the word at `0x4004f25c` equals 1. For the slot selected by the header's unsigned 16-bit next index, it writes type `0x81` at `+0` and task id at `+1` as bytes, the low 16 bits of `[0xFFF91004] - [0xFFF91000]` at `+2`, the 32-bit tick cell `[0x400c0800]` at `+4`, and its original `r0` and `r1` as complete 32-bit words at `+8` and `+0xc`. The register delta is not the tick, and the payload is neither a tick nor a task id.
+
+The writer's direct caller `0x00726c74(category, code)` forwards both arguments unchanged. It separately latches the first nonzero code for category 1 at `0x40a5b660` and category 2 at `0x40a5b664`, storing only while the relevant cell is zero; those latches do not suppress subsequent ring appends. Category 2 is the driver-error level: its downstream reporting helper `0x00726a80` formats `errno_set(ERRLVL_DRIVER,0x####)`. A concrete producer, `0x0064dc9c`, reports `(2,0x2b)` when its state word `0x009552f8` is zero or its ten-entry allocation scan finds no free entry, and `(2,0x2c)` when its subsequent `0x0065722c` call returns nonzero. These codes identify those producer branches, not every possible cause elsewhere in the firmware. Category 1's descriptive name remains unbound.
+
+The observed instruction order is type byte, task byte, delta, tick, both payloads, optional callback, next-index increment/wrap, then four zero-word stores clearing the new next slot. Helper `0x00041568` calls a nonnull pointer at `0x4004f15c` with `(store base, current slot address)` after the payload stores but before index advancement. The unsigned 16-bit index increments and resets to zero when it reaches capacity. After a completed, non-reentrant append with no competing writer, the cleared next slot separates the newest record from the oldest retained slot; this is the existing 8187-record retention rule applied to `0x81`.
+
+Neither nonzero type nor next index is an atomic commit marker: the type precedes the payload stores, and the index changes before the new next slot is cleared. Local IRQ masking does not establish peer-core exclusion, callback non-reentrancy or visibility to a concurrent reader. This source order supplies no coherent-snapshot or runtime wrap proof.
+
+**Existing retained-data observation.** An independent byte census of the complete jig-A store gives 7602 nonzero records: 4 of type `0x09`, 7214 of `0x0f`, 10 of `0x71`, and 374 of `0x72`, followed by 586 zero slots. There is no `0x81` payload to compare with the source binding in that capture. Its next index is 7602, so it supplies no wrapped-ring observation.
+
+**Host-synthetic verification.** `//console-trace:decoder-tests` passed for direct-store, high-known and window inputs with one `0x81` record carrying tick 1234, category 2 and code `0x2b`, alongside the unmapped `0x55` control. Separate real `ring-check` and `trace-census` CLI runs report the same values and the neighbor's unknown tick. The permanent fixture's same `0x81` record is subsequently strengthened to category `0xfedcba98` and code `0x89abcdef` to catch 16-bit payload truncation. A direct run of the already-built, unchanged census binary preserves both high-word values, tick 1234 and the unknown neighbor; compilation/execution of the strengthened permanent test remains pending integration. All exercised commands exit zero under canonical resource/thermal containment. This checks consumer behavior, not agreement with captured `0x81` data.
 
 ### 2.3 Tick source and rate
 
@@ -63,7 +80,7 @@ The tick word of a record is the 32-bit cell at `0x400c0800`, read at record-wri
 
 Rate: 99.88 ticks per second, one tick 10.01 ms, measured against the host clock from three cell samples spanning 149.759 s in one session (**hardware-observed**). The cell is 32-bit and does not wrap inside a plausible session (**static-inference**).
 
-The halfword at entry `+2` of `0x0f` and `0x72` records is `[0xFFF91004] - [0xFFF91000]`, a difference of two registers of the same timer block (**byte-read**). Its span over one fixed interval differs across boots where the tick span does not (**hardware-observed**), so it orders records within a boot only and the tick word is the comparable time.
+The halfword at entry `+2` of `0x0f`, `0x72`, `0x71` and `0x81` records is `[0xFFF91004] - [0xFFF91000]`, a difference of two registers of the same timer block (**byte-read**). Its span over one fixed interval differs across boots where the tick span does not (**hardware-observed**), so it orders records within a boot only and the tick word is the comparable time.
 
 ### 2.4 Clearing behaviour
 
@@ -114,7 +131,7 @@ Section 2 is the authoritative store-format description. Historical private mixe
 
 ## 5. Limits of this report
 
-The original format claims inherit the labels of the ledger rows and notes they cite (E-LOG-STORE-150, E-LOG-TICK-SOURCE-150, E-LOG-PERSIST-150, E-AF-TRACE-MECH-150, E-AF-LENS-TRAFFIC-150, E-PRESS-MAP-150, the dump note and the mapping note). The same-boot carry closure adds host-only byte and source inspection of the pinned writers; it adds no capture. Section 1.2's host-synthetic CLI checks cover the corrected decoder output only. Both decoders now decode type `0x71`'s tick at `+4`; its two payload words remain uninterpreted and no record type outside the four mapped ones contributes a tick. The decoder verdict is a content reading of the two files as they stand and would change if they change. Firmware addresses and geometry are X-M1 1.50 bindings; the tick rate is measured on one body. None is claimed for another firmware, another body or the X70, and the X70 author's trace-and-replay goal is **reported** context rather than an observed property of that project. Host-only throughout: no camera or USB device was touched.
+The original format claims inherit the labels of the ledger rows and notes they cite (E-LOG-STORE-150, E-LOG-TICK-SOURCE-150, E-LOG-PERSIST-150, E-AF-TRACE-MECH-150, E-AF-LENS-TRAFFIC-150, E-PRESS-MAP-150, the dump note and the mapping note). The same-boot carry closure adds host-only byte and source inspection of the pinned writers; it adds no capture. Section 1.2's host-synthetic CLI checks cover the earlier corrected decoder output. Both decoders decode type `0x71`'s tick at `+4`; its two payload words remain uninterpreted. Section 2.2.1 binds type `0x81`'s tick and two payload words from original producer bytes and verifies its consumer against synthetic inputs. No record type outside the five mapped ones contributes a tick. Firmware addresses and geometry are X-M1 1.50 bindings; the tick rate is measured on one body. None is claimed for another firmware, another body or the X70, and the X70 author's trace-and-replay goal is **reported** context rather than an observed property of that project. Source insertion order does not prove runtime wrap, atomic capture, persistence or second-store coverage. Host-only throughout: no camera or USB device was touched.
 
 ## 6. The carry path a third party needs for an ordinary boot
 
