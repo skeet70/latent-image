@@ -28,9 +28,9 @@ The test is the accepted prefix's test: a candidate is rejected if any shipped b
 | Segment record 0, RAM `0x61c040` / media `0x140040` | load `0x40000`, size `0xdae0`; flash `0x80000`/`0x20000` | `[0x40000,0x4dae0)`; `[0x80000,0xa0000)` | No |
 | Segment record 1 | load `0xd0000`, size `0xdaa0`; flash `0xa0000`/`0x20000` | `[0xd0000,0xddaa0)`; `[0xa0000,0xc0000)` | No |
 | Segment record 2 | load `0x130000`, size `0x24bac8`; flash `0xca0000`/`0x260000` | `[0x130000,0x37bac8)`; `[0xca0000,0xf00000)` | No |
-| Segment record 3 | load `0x3bc000`, size `0x7cfd4`; flash `0x1060000`/`0x80000` | `[0x3bc000,0x3c8fd4)`; `[0x1060000,0x10e0000)` | No |
+| Segment record 3 | load `0x3bc000`, size `0x7cfd4`; flash `0x1060000`/`0x80000` | `[0x3bc000,0x438fd4)`; `[0x1060000,0x10e0000)` | No |
 | Segment record 4 | load `0x61c400`, size `0x282828`; bss `0x89ec00`/`0x352e00`; flash `0x160000`/`0x160000` | `[0x61c400,0x89ec28)`; `[0x89ec00,0xbf1a00)`; `[0x160000,0x2c0000)` | No; load begins at the window's end |
-| Segment record 5 | load `0xbf1a00`, size `0x4f1e60`; bss `0x1460000`/`0x2bbe40`; flash `0x2c0000`/`0x2e0000` | `[0xbf1a00,0x10e3860)`; `[0x1460000,0x148be40)`; `[0x2c0000,0x5a0000)` | No |
+| Segment record 5 | load `0xbf1a00`, size `0x4f1e60`; bss `0x1460000`/`0x2bbe40`; flash `0x2c0000`/`0x2e0000` | `[0xbf1a00,0x10e3860)`; `[0x1460000,0x171be40)`; `[0x2c0000,0x5a0000)` | No |
 | Segment record 6 | load/size repeat record 5's (unread by the id-6 loader); flash `0x5a0000`/`0x360000` | as record 5; `[0x5a0000,0x900000)` | No |
 | Segment record 7 | load/size zero; flash `0xb40000`/`0x20000` | empty; `[0xb40000,0xb60000)` | No |
 | Extent descriptor at RAM `0x61c1a4` | `{0x4061c1b0, 0x01100000, 0x00360000}` | pointer `0x61c1b0`; destination `0x01100000`; length `0x360000` -> `[0x1100000,0x1460000)` | No under the consumer-bound reading; the `{0x61c1b0,0x1100000}` base/size reading covers but its second word is a destination the loader reads at `0x6a9890` (consumer-excluded, section 3) |
@@ -128,6 +128,29 @@ Evidence `E-PREFIX-EARLY-LOAD-STOCK-150` and `E-PREFIX-EARLY-LOAD-RC0-150` retai
 
 This completes the measured early-load write audit, not #43's whole-lifetime acceptance criterion. Later runtime-issued CPU/device programs remain a host-code question: carry complete overlap observation into application execution and bind each reachable CPU/device submission path, then establish whether any can overwrite the prefix after decode. A further finite trace alone does not prove absence across all runtime paths. No SD-card operation or camera input is required for that host work.
 
+### 5.6 Finite later-runtime source cuts
+
+**Source-inspected and static-inference.** The per-input segment records and qualified early-load snapshots distinguish the first decoded image from its declared record span:
+
+| Input | First-image load | Declared segment bytes / end | Decoded bytes / end |
+| --- | --- | --- | --- |
+| Stock | `0x0061c400` | `0x282828` / `0x0089ec28` | `0x282800` / `0x0089ec00` |
+| Installed RC0 | `0x0061c340` | `0x2828e8` / `0x0089ec28` | `0x2828c0` / `0x0089ec00` |
+
+RC0 shifts the load down 192 bytes and adds 192 decoded bytes. The `0x28` excess in each declared record is not evidence of an additional decoded payload write.
+
+Both inputs retain the separate plain-media descriptor `P={0x4061c1b0,0x01100000,0x00360000}`. `FUN_006a9844` uses `P[1]` as the destination, giving `[0x01100000,0x01460000)`, not either first-image span. The first plain extent is `[0x01100000,0x011ac5a0)`; the other two begin at `0x011c0000` and `0x011e0000`.
+
+With the three extent entries and terminator retained, the direct `*(entry+0x10)=1` in `FUN_0073bc54` can target only canonical words `0x61c1c0`, `0x61c1d8` and `0x61c1f0`, below the prefix. This excludes that store, not the worker's transitive effects. Its `FUN_0073badc` calls configure MPU ranges through CP15 c6 operations, not RAM movement; `0x4d978`/`0x4da6c` provide division/divmod arithmetic, not checksum verification.
+
+The stock plain bytes supply finite constructor seeds: one target at the first extent, an empty list at the second, and fourteen targets at the third, each zero-terminated. The worker also has 32 completion-callback slots and deferred handlers. Constructor effects, spawned tasks and callback effects remain unresolved; these are not a closed three-writer set.
+
+- **LZ:** the segment-5 loader supplies decoded base `0x40bf1a00` to `FUN_006ae360`; `0x43e40000` is compressed staging. The decoded-destination store is at `0xfff43048`. A running decoded offset is added to the base; a nonnegative unsigned offset does not prove nonwrapping addition. Its actual stream/offset bound and the ordinary submitter set remain unproved.
+- **SD:** the second argument of `FUN_006f3268` reaches the RAM-base store at `0xfff50000` through thin wrappers. The decompiler's zero-argument wrapper does not erase that A32 register flow. The 32-bit store at `0xfff5000c` is command/control submission, not a RAM destination. Native halfword stores at `+8`/`+0xa` and combined 32-bit `+0xc` submission are not qualified by the early ROM model's narrower width grammar. Ordinary caller buffer bounds remain unresolved.
+- **Media and fill:** the modeled media RAM destination is `0xfff528a4`; `0xfff52020`/`0xfff52024` are NAND column/row. The prefix address fits 24 bits and has bit 30 clear, so neither property excludes it. The later-runtime media RAM-destination programming edge and fill destination writer remain unresolved, not absent.
+
+Evidence `E-PREFIX-RUNTIME-SOURCE-CUT-150` retains source identities and independent byte checks. No ordinary reachable post-decode prefix overwrite was established, and #43 remains open. The remaining host task is to bind ordinary CPU/device writer reachability, destination ownership, maximum lengths, nonwrapping arithmetic and initialization/lifecycle state. A source-bound ordinary runtime overwrite after the prefix becomes live would be a valid negative placement result for #17; an arbitrary service RAM write, reinstall or reboot is not substituted for that counterexample. No camera or SD-card input is needed for these source cuts.
+
 ## 6. Combined prefix geometry
 
 **Static-inference** over the accepted contract (FILMSIM-PATCH-01 sections 5.1-5.3). The invariant is unchanged for every size: `load + decoded_size = 0x0089ec00` (stock bss start) and `load + segment_size = 0x0089ec28`; the segment size keeps the stock `0x28`-byte excess over the decoded size; entry 4's bss words, image 5's load, the plain image's extents, the entry point and the preserved 32-byte embedded header do not move.
@@ -189,7 +212,7 @@ devenv shell -- bazel-bin/emulation/load-window-cases bazel-bin/emulation/native
 
 ## 9. Residuals
 
-- The historical software trace observes the request/error path with r0 `0xffffff01`. The successful stock/RC0 device-modelled audits in section 5.5 establish only the measured early-load/close interval. #43 stays open for application-runtime CPU/device submissions after decode, including value-identical writes. The next work is host instrumentation and reachable-writer analysis, not SD-card preparation or a camera session; closure requires evidence covering the prefix's lifetime.
+- The historical software trace observes the request/error path with r0 `0xffffff01`. Section 5.5 establishes only the measured stock/RC0 early-load/close interval; section 5.6 adds finite source cuts, not closed transitive writer effects. #43 stays open until ordinary application CPU/device paths either supply a reachable prefix overwrite or are covered by lifetime evidence, including value-identical writes. The remaining work is host reachability and ownership analysis, not SD-card preparation or a camera session.
 - The extent-list walk terminates on its first word, so no mapped reader of it reads at or past `0x61c1fc`; consumers outside the mapped set are not excluded.
 - The 68 bytes `[0x61c1fc,0x61c240)` are free on this evidence but were never part of any accepted argument; using them is what the corrected floor buys, and the ticket's 444-byte window is accepted without them.
 - The D3 name mechanism is the separate special-id question (E-RECIPE-LABEL-SPARE-150), untouched here.
