@@ -60,6 +60,8 @@ engineRoute route = route
 data Fault = NoFault | TapFault | MarkerFault | MediaFault | RouteFault deriving (Eq, Show)
 data Status = Complete | Unsupported | NativeHalt | Budget | EngineError | RouteMismatch deriving (Eq, Show)
 data Phase = Reset | RomLoad | NativeReset | NativeLoad | Rollback | Close deriving (Eq, Show)
+data WriterOrigin = CpuAttempt | MediaDma | SdDma | Fill | Lz deriving (Eq, Show)
+data LoadStage = BeforeLoad | PreDecode | ImageDecode | AfterLoad deriving (Eq, Ord, Show)
 data Verdict = ModelMatched | UnacceptedTerminal | SnapshotMismatch | UnexpectedNegativeCompletion | InvocationFailure | InvalidReport deriving (Eq, Show)
 data SnapshotName = Staging | Kernel0 | Kernel1 | Id4Before | Id4Bss | Id4After | Segments deriving (Eq, Show)
 data ArtifactName = DatArtifact | Decode4Artifact | Decode5Artifact | RomArtifact | CardArtifact | DecoderArtifact | EngineArtifact | SourceMediaArtifact | ModeledMediaArtifact deriving (Eq, Show)
@@ -78,6 +80,10 @@ phases :: [(String, Phase)]
 phases = [("reset", Reset), ("rom_load", RomLoad), ("native_reset", NativeReset), ("native_load", NativeLoad), ("rollback", Rollback), ("close", Close)]
 profiles :: [(String, ModelProfile)]
 profiles = [("x-m1-primary-v1", XM1PrimaryV1)]
+writerOrigins :: [(String, WriterOrigin)]
+writerOrigins = [("cpu_attempt", CpuAttempt), ("media_dma", MediaDma), ("sd_dma", SdDma), ("fill", Fill), ("lz", Lz)]
+loadStages :: [(String, LoadStage)]
+loadStages = [("before_load", BeforeLoad), ("pre_decode", PreDecode), ("image_decode", ImageDecode), ("after_load", AfterLoad)]
 
 label :: Eq a => [(String, a)] -> a -> String
 label choices value = case [name | (name, item) <- choices, item == value] of
@@ -100,6 +106,10 @@ instance FromJSON Status where parseJSON = parseChoice statuses
 instance FromJSON Phase where parseJSON = parseChoice phases
 instance ToJSON ModelProfile where toJSON = toJSON . label profiles
 instance FromJSON ModelProfile where parseJSON = parseChoice profiles
+instance ToJSON WriterOrigin where toJSON = toJSON . label writerOrigins
+instance FromJSON WriterOrigin where parseJSON = parseChoice writerOrigins
+instance ToJSON LoadStage where toJSON = toJSON . label loadStages
+instance FromJSON LoadStage where parseJSON = parseChoice loadStages
 instance ToJSON Verdict where
   toJSON value = toJSON (case value of
     ModelMatched -> "model_matched"; UnacceptedTerminal -> "unaccepted_terminal"
@@ -186,28 +196,99 @@ instance ToJSON CloseEvidence where
     , "sp_before" .= closeSpBefore evidence, "sp_after" .= closeSpAfter evidence, "return_r0" .= closeReturnR0 evidence
     ]
 
+data PrefixWrite = PrefixWrite
+  { writeOrigin :: WriterOrigin, writePhase :: Phase, writeStage :: LoadStage
+  , writePc :: Address, writeAddress :: Address, writeBytes :: ByteCount
+  , writeOverlapAddress :: Address, writeOverlapBytes :: ByteCount, writeOverlapUnchanged :: Bool
+  } deriving (Eq, Show)
+instance FromJSON PrefixWrite where
+  parseJSON = withObject "prefix write" $ \fields -> do
+    exact fields ["origin", "phase", "stage", "pc", "address", "bytes", "overlap_address", "overlap_bytes", "overlap_unchanged"]
+    event <- PrefixWrite <$> fields .: "origin" <*> fields .: "phase" <*> fields .: "stage" <*> fields .: "pc" <*> fields .: "address" <*> fields .: "bytes" <*> fields .: "overlap_address" <*> fields .: "overlap_bytes" <*> fields .: "overlap_unchanged"
+    let Address address = writeAddress event
+        ByteCount size = writeBytes event
+        base
+          | toInteger address + toInteger size <= 0x03660000 = Just (toInteger address)
+          | address >= 0x40000000 && toInteger address + toInteger size <= 0x43660000 = Just (toInteger address - 0x40000000)
+          | otherwise = Nothing
+        Address overlapAddress = writeOverlapAddress event
+        ByteCount overlapBytes = writeOverlapBytes event
+    case base of
+      Nothing -> fail "prefix write outside mapped RAM"
+      Just start -> do
+        let low = max 0x61c1fc start
+            high = min 0x61c400 (start + toInteger size)
+        unless (size > 0 && high > low && toInteger overlapAddress == low && toInteger overlapBytes == high - low) (fail "prefix write overlap differs from mapped interval")
+    unless (writeOrigin event /= CpuAttempt || size <= 8) (fail "CPU prefix write exceeds hook value")
+    unless (case writeStage event of
+      BeforeLoad -> writePhase event `elem` [Reset, RomLoad, NativeReset]
+      PreDecode -> writePhase event == NativeLoad
+      ImageDecode -> writePhase event == NativeLoad
+      AfterLoad -> writePhase event `elem` [Rollback, Close]) (fail "prefix write stage disagrees with phase")
+    pure event
+instance ToJSON PrefixWrite where
+  toJSON event = object
+    [ "origin" .= writeOrigin event, "phase" .= writePhase event, "stage" .= writeStage event
+    , "pc" .= writePc event, "address" .= writeAddress event, "bytes" .= writeBytes event
+    , "overlap_address" .= writeOverlapAddress event, "overlap_bytes" .= writeOverlapBytes event, "overlap_unchanged" .= writeOverlapUnchanged event
+    ]
+
+data PrefixWrites = PrefixWrites
+  { prefixAddress :: Address, prefixBytes :: ByteCount, prefixComplete :: Bool
+  , prefixLoadEntered :: Bool, prefixDecodeEntered :: Bool, prefixLoadReturned :: Bool
+  , prefixCpuAttempts :: EventCount, prefixDeviceCommits :: EventCount, prefixEvents :: [PrefixWrite]
+  } deriving (Eq, Show)
+instance FromJSON PrefixWrites where
+  parseJSON = withObject "prefix write evidence" $ \fields -> do
+    exact fields ["address", "bytes", "complete", "load_entered", "decode_entered", "load_returned", "cpu_attempts", "device_commits", "events"]
+    audit <- PrefixWrites <$> fields .: "address" <*> fields .: "bytes" <*> fields .: "complete" <*> fields .: "load_entered" <*> fields .: "decode_entered" <*> fields .: "load_returned" <*> fields .: "cpu_attempts" <*> fields .: "device_commits" <*> fields .: "events"
+    let events = prefixEvents audit
+        cpu = length (filter ((== CpuAttempt) . writeOrigin) events)
+        devices = length events - cpu
+        EventCount attempts = prefixCpuAttempts audit
+    unless (prefixAddress audit == Address 0x61c1fc && prefixBytes audit == ByteCount 516 && length events <= 512) (fail "prefix audit extent or event bound differs")
+    unless (prefixDeviceCommits audit == EventCount (fromIntegral devices) &&
+      (if prefixComplete audit then attempts == fromIntegral cpu else attempts >= fromIntegral cpu)) (fail "prefix event counters disagree")
+    unless (and (zipWith (<=) (map writeStage events) (drop 1 (map writeStage events)))) (fail "prefix event stages move backwards")
+    unless ((not (prefixDecodeEntered audit) || prefixLoadEntered audit) &&
+      (not (prefixLoadReturned audit) || prefixDecodeEntered audit)) (fail "prefix load markers disagree")
+    unless (all (\event -> case writeStage event of
+      BeforeLoad -> True
+      PreDecode -> prefixLoadEntered audit
+      ImageDecode -> prefixDecodeEntered audit
+      AfterLoad -> prefixLoadReturned audit) events) (fail "prefix event lacks its load marker")
+    pure audit
+instance ToJSON PrefixWrites where
+  toJSON audit = object
+    [ "address" .= prefixAddress audit, "bytes" .= prefixBytes audit, "complete" .= prefixComplete audit
+    , "load_entered" .= prefixLoadEntered audit, "decode_entered" .= prefixDecodeEntered audit, "load_returned" .= prefixLoadReturned audit
+    , "cpu_attempts" .= prefixCpuAttempts audit, "device_commits" .= prefixDeviceCommits audit, "events" .= prefixEvents audit
+    ]
+
 data Report = Report
   { reportStatus :: Status, reportPhase :: Phase, reportRequestedRoute :: Route, reportSelectedRomMode :: Maybe RomMode, reportFault :: Fault
   , reportPc :: Address, reportInstructions :: InstructionCount, reportAccess :: Maybe Access
   , reportDetail :: String, reportStatistics :: Statistics, reportTap :: TapTransition, reportAssumptions :: [String]
   , reportProfile :: ModelProfile, reportSnapshots :: [Extent], reportBssPoison :: Maybe BssPoison, reportClose :: CloseEvidence
+  , reportPrefixWrites :: PrefixWrites
   } deriving (Eq, Show)
 instance FromJSON Report where
   parseJSON = withObject "engine report" $ \fields -> do
-    exact fields ["schema_version", "status", "phase", "requested_route", "selected_rom_mode", "fault", "pc", "instructions", "access", "detail", "statistics", "tap", "assumptions", "profile", "snapshots", "bss_poison", "close"]
+    exact fields ["schema_version", "status", "phase", "requested_route", "selected_rom_mode", "fault", "pc", "instructions", "access", "detail", "statistics", "tap", "assumptions", "profile", "snapshots", "bss_poison", "close", "prefix_writes"]
     version <- fields .: "schema_version" :: Parser Integer
-    unless (version == 1) (fail "unsupported engine report schema")
-    report <- Report <$> fields .: "status" <*> fields .: "phase" <*> fields .: "requested_route" <*> fields .: "selected_rom_mode" <*> fields .: "fault" <*> fields .: "pc" <*> fields .: "instructions" <*> fields .: "access" <*> fields .: "detail" <*> fields .: "statistics" <*> fields .: "tap" <*> fields .: "assumptions" <*> fields .: "profile" <*> fields .: "snapshots" <*> fields .: "bss_poison" <*> fields .: "close"
+    unless (version == 2) (fail "unsupported engine report schema")
+    report <- Report <$> fields .: "status" <*> fields .: "phase" <*> fields .: "requested_route" <*> fields .: "selected_rom_mode" <*> fields .: "fault" <*> fields .: "pc" <*> fields .: "instructions" <*> fields .: "access" <*> fields .: "detail" <*> fields .: "statistics" <*> fields .: "tap" <*> fields .: "assumptions" <*> fields .: "profile" <*> fields .: "snapshots" <*> fields .: "bss_poison" <*> fields .: "close" <*> fields .: "prefix_writes"
     let names = [name | Extent name _ _ <- reportSnapshots report]
     unless (length names == length [name | name <- [Staging, Kernel0, Kernel1, Id4Before, Id4Bss, Id4After, Segments], name `elem` names]) (fail "duplicate snapshot filename")
     pure report
 instance ToJSON Report where
   toJSON report = object
-    [ "schema_version" .= (1 :: Int), "status" .= reportStatus report, "phase" .= reportPhase report
+    [ "schema_version" .= (2 :: Int), "status" .= reportStatus report, "phase" .= reportPhase report
     , "requested_route" .= reportRequestedRoute report, "selected_rom_mode" .= reportSelectedRomMode report, "fault" .= reportFault report, "pc" .= reportPc report
     , "instructions" .= reportInstructions report, "access" .= reportAccess report, "detail" .= reportDetail report
     , "statistics" .= reportStatistics report, "tap" .= reportTap report, "assumptions" .= reportAssumptions report
     , "profile" .= reportProfile report, "snapshots" .= reportSnapshots report, "bss_poison" .= reportBssPoison report, "close" .= reportClose report
+    , "prefix_writes" .= reportPrefixWrites report
     ]
 
 data Artifact = Artifact ArtifactName InputPath ByteCount Digest
@@ -459,6 +540,27 @@ expectedCloseReturn expected = case [bytes | ExpectedSnapshot Staging _ bytes <-
     pure (MachineWord (U.word32At staging 0x2050 `mod` 256))
   _ -> H.failH "required unique staging source missing"
 
+prefixEvidenceMatches :: Address -> ByteCount -> PrefixWrites -> Bool
+prefixEvidenceMatches (Address loadAddress) (ByteCount decodedSize) audit =
+  prefixComplete audit && prefixLoadEntered audit && prefixDecodeEntered audit && prefixLoadReturned audit
+    && prefixCpuAttempts audit == EventCount 0 && prefixDeviceCommits audit /= EventCount 0
+    && length tableWrites + length decodedWrites == length events
+    && covers 0x61c1fc 0x61c400 tableWrites
+    && covers (max 0x61c1fc (toInteger loadAddress)) (min 0x61c400 (toInteger loadAddress + toInteger decodedSize)) decodedWrites
+  where
+    events = prefixEvents audit
+    tableWrites = filter (\event -> writeStage event == PreDecode && writeOrigin event `elem` [MediaDma, SdDma]) events
+    decodedWrites = filter (\event -> writeStage event == ImageDecode && writeOrigin event == Lz) events
+    covers low high remaining
+      | low >= high = null remaining
+      | otherwise = case remaining of
+          [] -> False
+          event : rest ->
+            let Address start = writeOverlapAddress event
+                ByteCount size = writeOverlapBytes event
+                end = toInteger start + toInteger size
+            in toInteger start == low && end <= high && covers end high rest
+
 completeEvidenceMatches :: ByteCount -> BssPoison -> MachineWord -> Report -> Bool
 completeEvidenceMatches decodedSize poison@(BssPoison _ (ByteCount bssCount) _) returnR0 report =
   reportProfile report == XM1PrimaryV1
@@ -570,6 +672,7 @@ run (Command variant route fault datPath image4Path image5Path romPath cardPath 
                 | not (all comparisonMatches comparisons) = (SnapshotMismatch, "One or more required snapshots are missing, unreadable or differ from selected sources.")
                 | reportTap actual /= expectedTap = (InvalidReport, "Complete report tap transition differs from selected before/after decoded source words.")
                 | not (completeEvidenceMatches decodedSize poison closeReturn actual) = (InvalidReport, "Complete report lacks source-bound BSS poison, close frame/state/return, executed work or explicit model assumptions.")
+                | not (prefixEvidenceMatches (Address (U.segLoad entry4)) decodedSize (reportPrefixWrites actual)) = (InvalidReport, "Prefix write evidence differs from the bounded table-transfer and selected image-decode intervals.")
                 | otherwise = (ModelMatched, "Bounded primary model snapshots and tap transition match selected sources; no hardware recovery or gate advance.")
           finish output provenance process report verdict detail comparisons
 

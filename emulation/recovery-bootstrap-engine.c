@@ -16,13 +16,33 @@
 #define ROM_SIZE 0x4000u
 #define ROM_WINDOW 0xc000u
 #define TAP_ADDRESS 0x0071feb4u
+#define PREFIX_ADDRESS 0x0061c1fcu
+#define PREFIX_END 0x0061c400u
+#define PREFIX_EVENT_CAPACITY 512u
 
 enum Terminal { RUNNING, COMPLETE, UNSUPPORTED, NATIVE_HALT, BUDGET, ENGINE_ERROR, ROUTE_MISMATCH };
 enum Phase { RESET, ROM_LOAD, NATIVE_RESET, NATIVE_LOAD, ROLLBACK, CLOSE };
+static const char *const phase_names[] = {"reset", "rom_load", "native_reset", "native_load", "rollback", "close"};
 enum ModelProfile { X_M1_PRIMARY_V1 };
 enum RomMode { ROM_MODE_0, ROM_MODE_1, ROM_MODE_2, ROM_MODE_3, ROM_MODE_4, ROM_MODE_5, ROM_MODE_6, ROM_MODE_7, ROM_MODE_UNSELECTED };
 enum SnapshotName { STAGING, KERNEL0, KERNEL1, ID4_BEFORE, ID4_BSS, ID4_AFTER, SEGMENTS, SNAPSHOT_COUNT };
 typedef struct { BbAddress address; BbByteCount bytes; bool present; } SnapshotExtent;
+enum WriteOrigin { CPU_ATTEMPT, MEDIA_DMA, SD_DMA, FILL, LZ };
+enum LoadStage { BEFORE_LOAD, PRE_DECODE, IMAGE_DECODE, AFTER_LOAD };
+typedef struct {
+    enum WriteOrigin origin;
+    enum Phase phase;
+    enum LoadStage stage;
+    BbAddress pc, address, overlap_address;
+    BbByteCount bytes, overlap_bytes;
+    bool overlap_unchanged;
+} PrefixWrite;
+typedef struct {
+    PrefixWrite events[PREFIX_EVENT_CAPACITY];
+    size_t count;
+    uint64_t cpu_attempts, device_commits;
+    bool incomplete, load_entered, decode_entered, load_returned;
+} PrefixWrites;
 typedef struct { BbAddress address; BbByteCount bytes; bool applied; } BssPoison;
 typedef struct {
     bool entered, callback_entered, restore_entered, returned, armed, restore_cleared;
@@ -53,6 +73,7 @@ typedef struct {
     SnapshotExtent snapshots[SNAPSHOT_COUNT];
     BssPoison bss_poison;
     CloseEvidence close;
+    PrefixWrites prefix_writes;
     uint32_t previous_pc, previous_opcode, helper_return;
     bool helper_verified, helper_active;
     uint32_t pc, opcode, id4_address, id4_size;
@@ -93,10 +114,20 @@ static bool checked(Engine *e, uc_err error) {
     stop(e, ENGINE_ERROR, uc_strerror(error));
     return false;
 }
-static uint8_t *memory(Engine *e, uint32_t address, size_t length) {
+static bool ram_offset(uint32_t address, size_t length, uint32_t *offset) {
+    if (length > RAM_SIZE) return false;
     uint64_t end = (uint64_t)address + length;
-    if (end <= RAM_SIZE) return e->ram + address;
-    if (address >= 0x40000000u && end <= 0x40000000ull + RAM_SIZE) return e->ram + address - 0x40000000u;
+    if (end <= RAM_SIZE) { *offset = address; return true; }
+    if (address >= 0x40000000u && end <= 0x40000000ull + RAM_SIZE) {
+        *offset = address - 0x40000000u;
+        return true;
+    }
+    return false;
+}
+static uint8_t *memory(Engine *e, uint32_t address, size_t length) {
+    uint32_t offset;
+    if (ram_offset(address, length, &offset)) return e->ram + offset;
+    uint64_t end = (uint64_t)address + length;
     if (address >= 0xfff00000u && end <= 0xfff01000ull) return e->sram + address - 0xfff00000u;
     if (address >= 0x70000000u && end <= 0x70002000ull) return e->tcm + address - 0x70000000u;
     if (address >= 0x3fff0000u && end <= 0x40000000ull) return e->vectors + address - 0x3fff0000u;
@@ -109,10 +140,81 @@ static bool ram_read(void *context, BbAddress address, uint8_t *bytes, BbByteCou
     memcpy(bytes, source, length.value);
     return true;
 }
-static bool ram_write(void *context, BbAddress address, const uint8_t *bytes, BbByteCount length) {
-    uint8_t *destination = memory(context, address.value, length.value);
+static bool prefix_overlap(uint32_t address, size_t length, uint32_t *start, size_t *count) {
+    uint32_t offset;
+    if (!ram_offset(address, length, &offset) || offset >= PREFIX_END ||
+        (uint64_t)offset + length <= PREFIX_ADDRESS) return false;
+    *start = offset < PREFIX_ADDRESS ? PREFIX_ADDRESS : offset;
+    uint64_t end = (uint64_t)offset + length;
+    if (end > PREFIX_END) end = PREFIX_END;
+    *count = end - *start;
+    return true;
+}
+static bool prefix_capacity(Engine *e) {
+    if (e->prefix_writes.count < PREFIX_EVENT_CAPACITY) return true;
+    e->prefix_writes.incomplete = true;
+    stop(e, ENGINE_ERROR, "Prefix write evidence capacity exceeded");
+    return false;
+}
+static void record_prefix_write(Engine *e, enum WriteOrigin origin, uint32_t address,
+                                size_t length, uint32_t start, size_t count, bool overlap_unchanged) {
+    PrefixWrites *audit = &e->prefix_writes;
+    enum LoadStage stage = audit->load_returned ? AFTER_LOAD :
+        audit->decode_entered ? IMAGE_DECODE : audit->load_entered ? PRE_DECODE : BEFORE_LOAD;
+    audit->events[audit->count++] = (PrefixWrite){
+        origin, e->phase, stage, {e->pc}, {address}, {start}, {length}, {count}, overlap_unchanged
+    };
+    if (origin != CPU_ATTEMPT) ++audit->device_commits;
+}
+static void cpu_write(uc_engine *uc, uc_mem_type type, uint64_t address, int width, int64_t value, void *context) {
+    (void)uc;
+    (void)type;
+    Engine *e = context;
+    uint32_t start;
+    size_t count;
+    if (address > UINT32_MAX || width <= 0 ||
+        !prefix_overlap((uint32_t)address, (size_t)width, &start, &count)) return;
+    ++e->prefix_writes.cpu_attempts;
+    if (width > 8) {
+        e->prefix_writes.incomplete = true;
+        stop(e, ENGINE_ERROR, "Prefix CPU write width exceeds hook value");
+        return;
+    }
+    if (!prefix_capacity(e)) return;
+    uint8_t bytes[8];
+    for (int i = 0; i < width; ++i) bytes[i] = (uint8_t)((uint64_t)value >> (i * 8));
+    uint32_t offset;
+    if (!ram_offset((uint32_t)address, (size_t)width, &offset)) return;
+    bool overlap_unchanged = memcmp(e->ram + start, bytes + start - offset, count) == 0;
+    record_prefix_write(e, CPU_ATTEMPT, (uint32_t)address, (size_t)width, start, count, overlap_unchanged);
+}
+static bool ram_write(void *context, enum BbRamWriter writer, BbAddress address, const uint8_t *bytes, BbByteCount length) {
+    Engine *e = context;
+    uint8_t *destination = memory(e, address.value, length.value);
     if (!destination) return false;
+    enum WriteOrigin origin;
+    switch (writer) {
+        case BB_RAM_MEDIA_DMA: origin = MEDIA_DMA; break;
+        case BB_RAM_SD_DMA: origin = SD_DMA; break;
+        case BB_RAM_FILL: origin = FILL; break;
+        case BB_RAM_LZ: origin = LZ; break;
+        default:
+            e->prefix_writes.incomplete = true;
+            stop(e, ENGINE_ERROR, "Unknown device RAM writer");
+            return false;
+    }
+    uint32_t start;
+    size_t count;
+    bool overlaps = prefix_overlap(address.value, length.value, &start, &count);
+    bool overlap_unchanged = false;
+    if (overlaps) {
+        if (!prefix_capacity(e)) return false;
+        uint32_t offset;
+        if (!ram_offset(address.value, length.value, &offset)) return false;
+        overlap_unchanged = memcmp(e->ram + start, bytes + start - offset, count) == 0;
+    }
     memcpy(destination, bytes, length.value);
+    if (overlaps) record_prefix_write(e, origin, address.value, length.value, start, count, overlap_unchanged);
     return true;
 }
 static void failed_access(Engine *e, uint32_t address, unsigned width, bool write, uint32_t value, const char *detail) {
@@ -598,8 +700,17 @@ static void instruction(uc_engine *uc, uint64_t address, uint32_t size, void *co
         if (!snapshot(e, STAGING, 0, 0x40000)) return;
         e->staged = true;
     }
-    if (e->staged && address == 0x1e4c) e->phase = NATIVE_LOAD;
-    if (e->staged && address == 0x2250 && !poison_bss(e)) return;
+    if (e->staged && address == 0x1e4c) {
+        if (e->phase != NATIVE_RESET || !native_word(e, 0x1e4c, 0xe92d4830u)) {
+            stop(e, UNSUPPORTED, "Native load entry violates selected source or phase"); return;
+        }
+        e->phase = NATIVE_LOAD;
+        e->prefix_writes.load_entered = true;
+    }
+    if (e->staged && address == 0x2250) {
+        if (!poison_bss(e)) return;
+        e->prefix_writes.decode_entered = true;
+    }
     if (e->staged && address == 0x1fdc && !e->loaded) {
         uint32_t sp, r0;
         uint32_t call = e->bootstrap ? 0xeb001037u :
@@ -618,6 +729,7 @@ static void instruction(uc_engine *uc, uint64_t address, uint32_t size, void *co
         e->close.expected_sp.value = sp;
         if (!loaded_snapshots(e)) return;
         e->loaded = true;
+        e->prefix_writes.load_returned = true;
         e->phase = e->route == BB_ROUTE_FAT_SD ? ROLLBACK : CLOSE;
     }
     if (!native_close(e)) return;
@@ -629,6 +741,11 @@ static void instruction(uc_engine *uc, uint64_t address, uint32_t size, void *co
             stats.decoded_bytes != e->id4_size || stats.fill_bytes < e->bss_poison.bytes.value ||
             !e->instructions || !stats.transactions || !stats.media_read_bytes || !stats.peer_release_requests) {
             stop(e, UNSUPPORTED, "Endpoint reached without captured native load and close continuation"); return;
+        }
+        const PrefixWrites *audit = &e->prefix_writes;
+        if (audit->incomplete || !audit->load_entered || !audit->decode_entered ||
+            !audit->load_returned || !audit->device_commits) {
+            stop(e, ENGINE_ERROR, "Endpoint lacks complete prefix write evidence"); return;
         }
         if (!snapshot(e, ID4_AFTER, e->id4_address, e->id4_size)) return;
         e->tap_after = word(e->ram + TAP_ADDRESS);
@@ -741,6 +858,27 @@ static void json_observed_word(FILE *file, bool observed, uint32_t value) {
     if (observed) fprintf(file, "%" PRIu32, value);
     else fputs("null", file);
 }
+static void report_prefix_writes(FILE *file, const Engine *e) {
+    static const char *const origins[] = {"cpu_attempt", "media_dma", "sd_dma", "fill", "lz"};
+    static const char *const stages[] = {"before_load", "pre_decode", "image_decode", "after_load"};
+    const PrefixWrites *audit = &e->prefix_writes;
+    fprintf(file, ",\"prefix_writes\":{\"address\":%u,\"bytes\":%u,\"complete\":%s,"
+            "\"load_entered\":%s,\"decode_entered\":%s,\"load_returned\":%s,"
+            "\"cpu_attempts\":%" PRIu64 ",\"device_commits\":%" PRIu64 ",\"events\":[",
+            PREFIX_ADDRESS, PREFIX_END - PREFIX_ADDRESS, audit->incomplete ? "false" : "true",
+            audit->load_entered ? "true" : "false", audit->decode_entered ? "true" : "false",
+            audit->load_returned ? "true" : "false", audit->cpu_attempts, audit->device_commits);
+    for (size_t i = 0; i < audit->count; ++i) {
+        const PrefixWrite *event = &audit->events[i];
+        fprintf(file, "%s{\"origin\":\"%s\",\"phase\":\"%s\",\"stage\":\"%s\","
+                "\"pc\":%" PRIu32 ",\"address\":%" PRIu32 ",\"bytes\":%zu,"
+                "\"overlap_address\":%" PRIu32 ",\"overlap_bytes\":%zu,\"overlap_unchanged\":%s}",
+                i ? "," : "", origins[event->origin], phase_names[event->phase], stages[event->stage],
+                event->pc.value, event->address.value, event->bytes.value, event->overlap_address.value,
+                event->overlap_bytes.value, event->overlap_unchanged ? "true" : "false");
+    }
+    fputs("]}", file);
+}
 static void report_evidence(FILE *file, const Engine *e) {
     static const char *profiles[] = {"x-m1-primary-v1"};
     fputs(",\"profile\":", file);
@@ -773,18 +911,18 @@ static void report_evidence(FILE *file, const Engine *e) {
     fputs(",\"return_r0\":", file);
     json_observed_word(file, close->returned, close->return_r0.value);
     fputc('}', file);
+    report_prefix_writes(file, e);
 }
 static bool report(Engine *e) {
     static const char *statuses[] = {"engine_error", "complete", "unsupported", "native_halt", "budget", "engine_error", "route_mismatch"};
-    static const char *phases[] = {"reset", "rom_load", "native_reset", "native_load", "rollback", "close"};
     static const char *faults[] = {"none", "tap", "marker", "media", "route"};
     char path[4096];
     if (!output_path(e, "report.json", path, sizeof path)) return false;
     FILE *file = fopen(path, "wx");
     if (!file) return false;
     if (e->loaded) e->tap_after = word(e->ram + TAP_ADDRESS);
-    fprintf(file, "{\"schema_version\":1,\"status\":\"%s\",\"phase\":\"%s\",\"requested_route\":\"%s\",\"selected_rom_mode\":",
-            statuses[e->terminal], phases[e->phase], e->route == BB_ROUTE_MEDIA ? "media" : "fat-sd");
+    fprintf(file, "{\"schema_version\":2,\"status\":\"%s\",\"phase\":\"%s\",\"requested_route\":\"%s\",\"selected_rom_mode\":",
+            statuses[e->terminal], phase_names[e->phase], e->route == BB_ROUTE_MEDIA ? "media" : "fat-sd");
     json_observed_word(file, e->selected_rom_mode != ROM_MODE_UNSELECTED, (uint32_t)e->selected_rom_mode);
     fprintf(file, ",\"fault\":\"%s\",\"pc\":%" PRIu32 ",\"instructions\":%" PRIu64 ",\"access\":",
             faults[e->fault], e->pc, e->instructions);
@@ -871,9 +1009,10 @@ int main(int argc, char **argv) {
         checked(&e, uc_mem_map_ptr(e.uc, 0x3fff0000, 0x10000, UC_PROT_ALL, e.vectors));
         checked(&e, uc_mem_map_ptr(e.uc, 0x7fff0000, 0x10000, UC_PROT_ALL, e.vectors));
         checked(&e, uc_mmio_map(e.uc, 0xfff01000, 0xff000, mmio_read, &e, mmio_write, &e));
-        uc_hook code_hook, memory_hook, interrupt_hook;
+        uc_hook code_hook, memory_hook, interrupt_hook, write_hook;
         checked(&e, uc_hook_add(e.uc, &code_hook, UC_HOOK_CODE, (void *)instruction, &e, 1, 0));
         checked(&e, uc_hook_add(e.uc, &memory_hook, UC_HOOK_MEM_INVALID, (void *)invalid_memory, &e, 1, 0));
+        checked(&e, uc_hook_add(e.uc, &write_hook, UC_HOOK_MEM_WRITE, (void *)cpu_write, &e, 1, 0));
         checked(&e, uc_hook_add(e.uc, &interrupt_hook, UC_HOOK_INTR, (void *)interrupt, &e, 1, 0));
         uint32_t flags = 0xd3;
         checked(&e, uc_reg_write(e.uc, UC_ARM_REG_CPSR, &flags));

@@ -15,10 +15,11 @@ enum BbAccess {
     BB_ACCESS_MEDIA_RANGE, BB_ACCESS_MEMORY_RANGE, BB_ACCESS_PERSISTENT_WRITE,
     BB_ACCESS_CODEC, BB_ACCESS_ALLOCATION
 };
+enum BbRamWriter { BB_RAM_MEDIA_DMA, BB_RAM_SD_DMA, BB_RAM_FILL, BB_RAM_LZ };
 typedef struct {
     void *context;
     bool (*read)(void *, BbAddress, uint8_t *, BbByteCount);
-    bool (*write)(void *, BbAddress, const uint8_t *, BbByteCount);
+    bool (*write)(void *, enum BbRamWriter, BbAddress, const uint8_t *, BbByteCount);
 } BbRamIo;
 typedef struct {
     BbInput media, card;

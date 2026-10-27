@@ -935,6 +935,36 @@ cc_binary(
     ],
 )
 
+haskell_test(
+    name = "recovery-bootstrap-audit-tests",
+    size = "small",
+    srcs = ["RecoveryBootstrapAuditTests.hs"],
+    args = [
+        "$(rootpath :recovery-bootstrap-engine)",
+        "$(rootpath :thermal-guard)",
+        "$(rootpath :thermal-guard-worker)",
+    ],
+    data = [
+        ":recovery-bootstrap-engine",
+        ":thermal-guard",
+        ":thermal-guard-worker",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    tags = ["no-sandbox"],
+    deps = [
+        ":emulator-slot-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:process",
+        "//host:unix",
+    ],
+)
+
 haskell_binary(
     name = "recovery-bootstrap",
     srcs = [

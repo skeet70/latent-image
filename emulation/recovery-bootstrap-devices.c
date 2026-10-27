@@ -73,9 +73,9 @@ static bool ram_read(BbDevices *d, uint32_t address, uint8_t *bytes, size_t leng
         d->inputs.ram.read(d->inputs.ram.context, (BbAddress){address}, bytes, (BbByteCount){length});
 }
 
-static bool ram_write(BbDevices *d, uint32_t address, const uint8_t *bytes, size_t length) {
+static bool ram_write(BbDevices *d, enum BbRamWriter writer, uint32_t address, const uint8_t *bytes, size_t length) {
     return (uint64_t)address + length <= UINT64_C(0x100000000) &&
-        d->inputs.ram.write(d->inputs.ram.context, (BbAddress){address}, bytes, (BbByteCount){length});
+        d->inputs.ram.write(d->inputs.ram.context, writer, (BbAddress){address}, bytes, (BbByteCount){length});
 }
 
 static void advance(BbDevices *d) {
@@ -139,13 +139,13 @@ static enum BbAccess media_dma(BbDevices *d, uint32_t offset, uint32_t destinati
     if ((uint64_t)destination + count > UINT64_C(0x100000000))
         return fail(d, BB_ACCESS_MEMORY_RANGE, "media DMA destination wraps address space");
     size_t written = source.length.value;
-    if (written && !ram_write(d, destination, source.bytes, written)) written = 0;
+    if (written && !ram_write(d, BB_RAM_MEDIA_DMA, destination, source.bytes, written)) written = 0;
     else if (written < count) {
         memset(d->feed, 0xff, sizeof d->feed);
         while (written < count) {
             size_t chunk = count - written;
             if (chunk > sizeof d->feed) chunk = sizeof d->feed;
-            if (!ram_write(d, destination + written, d->feed, chunk)) break;
+            if (!ram_write(d, BB_RAM_MEDIA_DMA, destination + written, d->feed, chunk)) break;
             written += chunk;
         }
     }
@@ -229,7 +229,7 @@ static enum BbAccess fill_complete(BbDevices *d) {
     for (uint32_t done = 0; done < count;) {
         uint32_t chunk = count - done;
         if (chunk > 4096) chunk = 4096;
-        if (!ram_write(d, destination + done, d->feed, chunk)) return fail(d, BB_ACCESS_MEMORY_RANGE, "fill destination refused by RAM model");
+        if (!ram_write(d, BB_RAM_FILL, destination + done, d->feed, chunk)) return fail(d, BB_ACCESS_MEMORY_RANGE, "fill destination refused by RAM model");
         done += chunk;
         d->stats.fill_bytes += chunk;
     }
@@ -280,7 +280,7 @@ static enum BbAccess lz_start(BbDevices *d) {
     if (d->fed == d->encoded_size && (fflz_stream_finish(&d->stream) != FFLZ_OK || d->stream.produced != d->decoded_size))
         return fail(d, BB_ACCESS_CODEC, "LZ final token/output extent differs from RAM header");
     size_t produced = d->stream.produced - before;
-    if (!ram_write(d, destination, d->decoded + before, produced)) return fail(d, BB_ACCESS_MEMORY_RANGE, "LZ destination refused by RAM model");
+    if (!ram_write(d, BB_RAM_LZ, destination, d->decoded + before, produced)) return fail(d, BB_ACCESS_MEMORY_RANGE, "LZ destination refused by RAM model");
     r[0x4c / 4] = (uint32_t)produced;
     r[0x88 / 4] = 1;
     d->stats.decoded_bytes += produced;
@@ -352,7 +352,7 @@ static enum BbAccess sd_command(BbDevices *d, uint32_t word) {
         const uint8_t *block = d->inputs.card.bytes + (size_t)offset;
         if (mode == 0x11) {
             if (r[0] < 0x40000000 || r[0] >= 0x80000000 || (r[0] & 3) ||
-                !ram_write(d, r[0], block, 512)) return fail(d, BB_ACCESS_MEMORY_RANGE, "SDMA destination outside RAM alias");
+                !ram_write(d, BB_RAM_SD_DMA, r[0], block, 512)) return fail(d, BB_ACCESS_MEMORY_RANGE, "SDMA destination outside RAM alias");
             r[0] += 512;
             status |= 2;
         } else {

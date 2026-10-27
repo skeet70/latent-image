@@ -10,7 +10,8 @@ static bool read_ram(void *context, BbAddress address, uint8_t *output, BbByteCo
     memcpy(output, ram->bytes + address.value, count.value);
     return true;
 }
-static bool write_ram(void *context, BbAddress address, const uint8_t *input, BbByteCount count) {
+static bool write_ram(void *context, enum BbRamWriter writer, BbAddress address, const uint8_t *input, BbByteCount count) {
+    (void)writer;
     TestRam *ram = context;
     if ((uint64_t)address.value + count.value > sizeof ram->bytes) return false;
     memcpy(ram->bytes + address.value, input, count.value);

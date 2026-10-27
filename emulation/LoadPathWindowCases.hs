@@ -1,32 +1,27 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- LOAD-WINDOW provenance cases (1.50, host-only).
 --
--- The question these cases answer: which writes land in the free window
--- [0x0061c1fc,0x0061c400) while the stock record loads the segment table and
--- hands off to the image decode? The window holds the retained image-4 table
--- content below it (last byte: the extent terminator at 0x61c1f8) and the
--- accepted decode prefix above it; reports/filmsim-prefix-widening.md records
--- that no load-path write trace existed.
+-- These cases observe software stores during storage initialization, the
+-- table-block transfer request and the segment-record walk. They do not execute
+-- media movement or image decode. The free window is [0x0061c1fc,0x0061c400).
+-- reports/filmsim-prefix-widening.md section 5.4 records the historical runs.
 --
--- Four cases, all executing pinned 1.50 bytes in the bounded runner:
+-- Six cases, all executing pinned 1.50 bytes in the bounded runner:
 --
 --   load-init-storage    the stock storage initialization FUN_0000325c, which
 --                        produces the RAM state the copy path reads (geometry
 --                        rows, the ready cell and the buffer pointers).
 --   load-window-copy     the stock table-block copy chain FUN_00001dc4 ->
 --                        FUN_0000218c -> FUN_0000213c -> FUN_000030d8 ->
---                        FUN_000035c4, started from the state load-init-storage
---                        produced, plus the declared device inputs named in the
---                        case notes.
+--                        FUN_000035c4 -> FUN_00002ab8, started from the state
+--                        load-init-storage produced. It returns to the sentinel
+--                        with error-valued r0=0xffffff01.
 --   load-segment-walk-*  the stock segment-record walk FUN_00004174 over the
 --                        installed container's table block, ids 0, 1, 4 and 9.
 --
 -- Declared inputs, named in each case's notes: the device register windows are
 -- ordinary writable memory; the media transfer and the hardware decompressor
--- are not executed; and the runner refuses the transfer core's bfi/bfc
--- descriptor-word assembly at 0x2b5c, where load-window-copy stops. Expected
--- results are derived from the byte-read decode before any run; a mismatch is a
--- case failure, not a result.
+-- are not executed.
 module Main where
 
 import FujiAF.Host
@@ -394,8 +389,8 @@ copyCase carriage =
     , stNotes =
         [ "stage 2: the stock table-block copy chain from the load-init-storage state"
         , "declared device inputs beyond the carried state: an empty media skip list at 0x4310 and the ready read-status word 0xfff52404 = 0x0000ffff"
-        , "the destination range [0x61c000,0x81c000) is declared writable and starts cleared"
-        , "the chain stops at the transfer core's bfi at 0x2b5c, which the admitted instruction set refuses"
+        , "the destination range [0x61c000,0x63c000) is declared writable and starts cleared"
+        , "the transfer core 0x2ab8 executes descriptor assembly and controller request stores; the chain returns to the sentinel with error-valued r0=0xffffff01 and no media payload movement"
         ]
     }
 
@@ -408,17 +403,21 @@ runCopy out runner carriage artifacts = do
   result <- jsonRead (lastLine raw)
   wireHash <- sha256 wire
   emitCase out st artifacts result wireHash
-  expect (ru result "status" == "unsupported_instruction") (stId st ++ ": expected the transfer core's refused instruction, got " ++ ru result "status")
-  expect (rr result "pc" == "0x00002b5c") (stId st ++ ": stop pc " ++ rr result "pc")
+  expect (ru result "status" == "returned") (stId st ++ ": expected returned, got " ++ ru result "status" ++ " at " ++ rr result "pc")
+  expect (rr result "pc" == "0x" ++ hex32 exitAddress) (stId st ++ ": stop pc " ++ rr result "pc")
+  expect (rr result "r0" == "0xffffff01") (stId st ++ ": expected error-valued r0=0xffffff01, got " ++ rr result "r0")
   expect (provenanceTotal result <= 4096) (stId st ++ ": provenance log truncated")
   let windowWrites = writesInRange result windowLo windowHi
       blockWrites = writesInRange result tableBase (tableBase + blockSize)
   expect (null blockWrites) (stId st ++ ": unexpected write inside the table block: " ++ show (length blockWrites))
+  expect (null windowWrites) (stId st ++ ": unexpected write inside [0x61c1fc,0x61c400): " ++ show (length windowWrites))
   expect (writeValueAt result 0x30d8 0x3b0003b4 == Just tableBase) (stId st ++ ": descriptor destination absent")
   expect (writeValueAt result 0x311c 0x3b000398 == Just 1) (stId st ++ ": descriptor unit count absent")
-  expect (writeValueAt result 0x2ab8 0x3b000314 == Just tableBase) (stId st ++ ": transfer-core destination argument absent")
-  expect (writeValueAt result 0x2ab8 0x3b000310 == Just 0x280) (stId st ++ ": transfer-core page offset absent")
-  putStrLn (stId st ++ ": " ++ ru result "status" ++ " at " ++ rr result "pc" ++ ", " ++ ru result "instructions"
+  expect (writeValueAt result 0x2b88 0xfff528a4 == Just tableBase) (stId st ++ ": transfer-core destination store absent")
+  expect (writeValueAt result 0x2ba4 0xfff5201c == Just 0x300100) (stId st ++ ": transfer-core count store absent")
+  expect (writeValueAt result 0x2b9c 0xfff52884 == Just 0x10001) (stId st ++ ": transfer-core start store absent")
+  expect (writeValueAt result 0x2c50 0xfff52884 == Just 0x10000) (stId st ++ ": transfer-core start clear absent")
+  putStrLn (stId st ++ ": " ++ ru result "status" ++ " at " ++ rr result "pc" ++ ", error-valued r0=" ++ rr result "r0" ++ ", " ++ ru result "instructions"
             ++ " instructions, " ++ show (provenanceTotal result) ++ " provenance records, "
             ++ show (length windowWrites) ++ " in [0x61c1fc,0x61c400)")
   pure result

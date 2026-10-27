@@ -24,7 +24,7 @@ The test is the accepted prefix's test: a candidate is rejected if any shipped b
 
 | Descriptor family and source | Fields | Span | Covers `[0x61c1fc,0x61c400)`? |
 | --- | --- | --- | --- |
-| Boot table-block copy, boot record 0 `0x1f5c` -> `0x1dc4` -> `0x218c`: media `0x140000` -> RAM `0x0061c000`, one 128 KiB unit | src `0x140000`, dst `0x61c000`, 1 | `[0x61c000,0x81c000)` | **Yes**, as a writer; the single mapped copy of the block, ordered before the image-4 decode (section 4) |
+| Boot table-block copy, boot record 0 `0x1f5c` -> `0x1dc4` -> `0x218c`: media `0x140000` -> RAM `0x0061c000`, one 128 KiB unit | src `0x140000`, dst `0x61c000`, 1 | `[0x61c000,0x63c000)` | **Yes**, as a writer; the single mapped copy of the block, ordered before the image-4 decode (section 4) |
 | Segment record 0, RAM `0x61c040` / media `0x140040` | load `0x40000`, size `0xdae0`; flash `0x80000`/`0x20000` | `[0x40000,0x4dae0)`; `[0x80000,0xa0000)` | No |
 | Segment record 1 | load `0xd0000`, size `0xdaa0`; flash `0xa0000`/`0x20000` | `[0xd0000,0xddaa0)`; `[0xa0000,0xc0000)` | No |
 | Segment record 2 | load `0x130000`, size `0x24bac8`; flash `0xca0000`/`0x260000` | `[0x130000,0x37bac8)`; `[0xca0000,0xf00000)` | No |
@@ -74,7 +74,7 @@ The third hit is the widening's only new reference finding, and the first two ma
 
 ### 5.1 The one mapped writer
 
-**Byte-read and static-inference.** The boot record at flash `0x40000` copies the table block with a single call chain: `0x1f5c bl 0x1dc4` -> `0x1dcc`/`0x1dd4` form the source `0x140000` and destination `0x0061c000` with one `mov r2,#1` unit -> `0x1de0 bl 0x218c` -> `0x213c`. The boot's block addressing converts an address to a 128 KiB unit with `lsr r0,#17` and advances a multi-unit copy by `#131072` (`0x21b8`-`0x2244`), so the copy covers `[0x61c000,0x81c000)` at minimum one block and writes the whole window.
+**Byte-read and static-inference.** The boot record at flash `0x40000` copies the table block with a single call chain: `0x1f5c bl 0x1dc4` -> `0x1dcc`/`0x1dd4` form the source `0x140000` and destination `0x0061c000` with one `mov r2,#1` unit -> `0x1de0 bl 0x218c` -> `0x213c`. The boot's block addressing converts an address to a 128 KiB unit with `lsr r0,#17` and advances a multi-unit copy by `#131072` (`0x21b8`-`0x2244`), so one requested block covers `[0x61c000,0x63c000)`, including the whole window.
 No other mapped artifact copies into the block: `bl 0x1dc4` appears once in `boot-40048.dis` and nowhere in `boot-50048.dis`, `loader-40000.dis` or `loader-d0000.dis`; the only other formations of `0x0061c000`/`0x0061c400` in the pinned images are reads (boot `0x1f60`-`0x1f78`, `0x1f9c`-`0x1fac`, `0x1dac`, `0x417c`; second boot record `0x1fa4`, `0x357c`; image 4's accessor family rooted at `FUN_006570f4`, which returns `0x0061c000` for the read-only getters `FUN_00657114`/`FUN_006571a0`/`FUN_00657184`/`FUN_006571bc`).
 The kernel-level order is fixed by the boot's own sequence: `0x1f5c` copies the block, `0x1f60`-`0x1f78` publish the skip-list count at `0x61c188`, `0x1f7c` checks the trailer (`0x1cc0` returns 1 only on the halt path, so the good path continues at `0x1fb4`), and `0x1fc8` calls `FUN_00001d08`, whose only image-4 call site is `0x1d5c bl 0x2250`. The copy therefore precedes the image-4 decompression to `0x4061c400` in every path, and the prefix decode writes last inside that order, exactly as the accepted prefix does.
 
@@ -84,28 +84,49 @@ The kernel-level order is fixed by the boot's own sequence: `0x1f5c` copies the 
 
 ### 5.3 The restated falsifier
 
-The accepted window's falsifier extends unchanged to the larger region: a later reload of the table block after decompression, or any runtime writer reaching `[0x61c1fc,0x61c400)`, would overwrite the widened prefix, and would overwrite the accepted arrays with it. No such later reload is mapped in the pinned artifacts (one copy call site, section 5.1), and the observed RAM over the window is zero in three captures, which excludes a *visible* writer but not a value-identical one. What stays **unproved** is the general absence of an indirect or runtime-created writer: the instrumented trace of section 5.4 covers the software half, and the device-side writers stay unexecuted. A newly discovered covering consumer, a parent/index path into the tail, or a target-build change falsifies the placement the same way.
+The accepted window's falsifier extends unchanged to the larger region: a later reload of the table block after decompression, or any runtime writer reaching `[0x61c1fc,0x61c400)`, would overwrite the widened prefix, and would overwrite the accepted arrays with it. No such later reload is mapped in the pinned artifacts (one copy call site, section 5.1), and the observed RAM over the window is zero in three captures. Those observations do not exclude value-identical writes or writes between captures. What stays **unproved** is the general absence of an indirect or runtime-created writer: section 5.4 records a software request/error path, while section 5.5 observes successful stock and RC0 device-modelled early loading through original close. The latter ends before the primary rendezvous store and does not cover application runtime. A newly discovered covering consumer, a parent/index path into the tail, or a target-build change falsifies the placement the same way.
 
-### 5.4 The instrumented load-path write trace
+### 5.4 The historical software request-path trace
 
-**Emulated.** Six cases in `private-data/analysis/x-m1-1.50/native-case/load-window/`, emitted and run by `//emulation:load-window-cases` against `bazel-bin/emulation/native-runner` (SHA-256 `9130df3da0753fb7d463a385d8adc1d9e945966be280a8c3f7f4c117b4f46a89`), all passing expectations derived before the run from the byte-read decode:
+**Emulated, recovered historical observation.** `//emulation:load-window-cases` emits six cases. The 2026-10-09 refused run remains in `private-data/analysis/x-m1-1.50/native-case/load-window/`: `load-window-copy` stopped as `unsupported_instruction` at `bfi r3,r2,#12,#2`, PC `0x2b5c`, after 302 instructions and 142 provenance records (result SHA-256 `ed014a813d7a076dab1b6d5ea84dbcfe3024e092682977549a71cfe6a871169a`). No historical receipt is replaced.
 
-```sh
-devenv shell -- bazel build //emulation:load-window-cases //emulation:native-runner
-devenv shell -- bazel-bin/emulation/load-window-cases bazel-bin/emulation/native-runner \
-  private-data/analysis/x-m1-1.50/native-case/load-window
-```
+The recovered held receipt in `private-data/analysis/x-m1-1.50/native-case/load-window-complete/` records the later sentinel return below. The directory name does not establish copy success. These are retained observations, not runs performed for this correction; the current source expectations now require the observed error-valued return as well as the request stores.
 
 | Case | Executed | Result (emulated) |
 | --- | --- | --- |
-| `load-init-storage` | stock storage initialization `FUN_0000325c` with its closure | `returned`, 223 instructions, 123 provenance records; writes confined to RAM `0x42xx`-`0x4axx` (geometry rows, buffer pointers, `0x4800`, `0x4a08`) and the declared controller windows; none in the table block |
-| `load-window-copy` | the table-block copy chain `0x1dc4` -> `0x218c` -> `0x213c` -> `0x30d8` -> `0x35c4` -> `0x2fc8`/`0x3408` -> `0x3528` -> `0x2ab8`, started from the state `load-init-storage` produced | `unsupported_instruction` at `0x2b5c`, 302 instructions, 142 provenance records; **no provenance write in `[0x61c1fc,0x61c400)`** |
-| `load-segment-walk-0/1/4` | stock segment-record walk `FUN_00004174` over the installed container's table block, read through the `0x4061c000` alias the header pointer uses | `returned` `0x4061c040`, `0x4061c064`, `0x4061c0d0`; stack frame only, no write in the block |
+| `load-init-storage` | stock storage initialization `FUN_0000325c` with its closure | `returned`, 223 instructions, 123 provenance records; writes confined to RAM `0x42xx`-`0x4axx` and the declared controller windows; none in the table block |
+| `load-window-copy` | the table-block request chain `0x1dc4` -> `0x218c` -> `0x213c` -> `0x30d8` -> `0x35c4` -> `0x2fc8`/`0x3408` -> `0x3528` -> `0x2ab8`, started from the state `load-init-storage` produced | `returned` at sentinel `0x3c000000`, **r0 = `0xffffff01` (error-valued)**, exactly 488 instructions, 241 provenance records and 128 writes; none in `[0x61c000,0x61c400)` |
+| `load-segment-walk-0/1/4` | stock segment-record walk `FUN_00004174` over the installed container's table block, read through `0x4061c000` | `returned` `0x4061c040`, `0x4061c064`, `0x4061c0d0`; stack frame only, no write in the block |
 | `load-segment-walk-9` | the same walk for an absent id | `returned` `0`, after the `0xffffffff` terminator at `0x61c160`; no write in the block |
 
-The copy case's declared inputs beyond the carried state are named in its manifest: an empty media skip list at `0x4310` (pointer cell `0x4804`) and the ready read-status word `0xfff52404 = 0x0000ffff`, which selects the transfer branch of `0x35c4`. With them the executed stock path builds the request the static reading predicted, and the provenance carries the stores: destination `0x0061c000` at `0x30d8` (descriptor word `0x3b0003b4`) and at `0x2ab8` (transfer frame `0x3b000314`), one unit at `0x311c` (`0x3b000398` = 1), page offset `0x280` (= block `0xa` x the geometry byte 64) at `0x2ab8` (`0x3b000310`). It then stops at `bfi r3,r2,#12,#2` at `0x2b5c`, the transfer core's first refused instruction.
+The recovered copy result has SHA-256 `3ee65a7a1c0e348b257725dcdfaee708ee5dbafeac08d341672aaa40643cb470`. Both recorded copy wires have SHA-256 `7413090ee46863b194741b5aa56e5ba6aebb923476f4cd9164dea8f756e2bcab`. Equal wire hashes establish equal declared case inputs, not that instruction admission was the runner's sole change.
 
-What the harness could not execute, named rather than papered over: the transfer core `0x2ab8` from its `bfi`/`bfc` descriptor-word assembly onward, and with it the media controller and DMA that move the block; the hardware decompressor `0xfff43000` and the fill engine `0xfff02000` (declared as plain memory, no device semantics); the second record, both loaders, and everything after `FUN_00001d08`'s handoff into the loaded image. The trace therefore covers the record's storage-init and copy-prepare path only, and it closes the software half of the residual there: no ARM store in that path writes any byte of `[0x61c1fc,0x61c400)`. The window's writers inside the traced range are the media transfer the stock code requests -- one 128 KiB unit into `[0x61c000,0x81c000)`, which covers the whole window -- and, later in the order of section 5.1, the decompressor output at the segment's load address. Both are device-side and neither executed here, so the residual's device half stays open. Inputs are pinned as in section 8: the boot record (`c2da900d...`), the installed container's media table slice (`bb96a64e...`, from container `acb0fbbb...` at media `0x140000`).
+The declared inputs beyond carried state are an empty media skip list at `0x4310` (pointer cell `0x4804`) and ready read-status `0xfff52404 = 0x0000ffff`. The 128 writes comprise 20 in RAM globals below `0x4b00`, 84 on stack frames at `0x3b0003xx` and 24 in the media-controller window. The executed request stores include descriptor `0xfff528a0 = 0x00301000` at `0x2b78`, destination `0xfff528a4 = 0x0061c000` at `0x2b88`, count `0xfff5201c = 0x00300100` at `0x2ba4` (256 sectors, 128 KiB), block offset `0xfff52060`/`0xfff52024 = 0x280` at `0x2a90`/`0x2aa8`, and start `0xfff52884 = 0x00010001` at `0x2b9c`, cleared to `0x00010000` at `0x2c50`.
+
+The windows are plain writable memory, not device models. No media payload movement executes. The retained zero ECC words take the firmware error path: `FUN_00003508` treats byte `+4 != 0xff` as failure, `FUN_000035c4` maps transfer result 1 to 3, and `FUN_000030d8` maps that to `0xffffff01`. The void wrappers return to the sentinel; native status `returned` is control flow, not successful media copy. This bounds the zero software-write finding to the observed request/error path. It does not cover the successful copy continuation, hardware decompressor, fill engine, second record, both loaders or execution after the loaded-image handoff. The boot record and media-table slice remain pinned by the case source.
+
+### 5.5 Early-load prefix write audit
+
+**Emulated, 2026-10-27.** The existing `recovery-bootstrap` executed stock/media/none and RC0/media/none with complete prefix write observation, strict decompressor reset/LZ semantics and read-only media. Both controls returned `model_matched`, engine `complete` at `0x1ff8` in 58,387 instructions after original close, with all seven source-bound full snapshot comparisons matching.
+
+The source correction adds engine report `schema_version = 2` with `prefix_writes` for canonical address `0x0061c1fc`, 516 bytes. A CPU event is a **prewrite attempt**, not proof of a committed store; a device event records a **successful committed RAM write**, attributed by the `BbRamWriter` passed through the actual device write callback. Origins distinguish `cpu_attempt`, `media_dma`, `sd_dma`, `fill` and `lz`. Equal old/new bytes within the clipped prefix overlap still produce an event with `overlap_unchanged = true`; this field does not compare the rest of the original write interval.
+
+Only mapped RAM ranges `[0,RAM_SIZE)` and `[0x40000000,0x40000000+RAM_SIZE)` are aliases of shared storage. Overlap is computed with widened interval ends, including writes starting below the prefix and crossing its floor. Each event retains the original address and full write length plus canonical `overlap_address` and `overlap_bytes`, source PC and phase (`reset`, `rom_load`, `native_reset`, `native_load`, `rollback` or `close`). The report distinguishes CPU-attempt and device-commit counts and marks entry to load/decode and successful load return with `load_entered`, `decode_entered` and `load_returned`.
+
+Each event also carries stage `before_load`, `pre_decode`, `image_decode` or `after_load`, derived from the load/decode/return markers. `pre_decode` covers the whole interval from load entry at `0x1e4c` to validated decode entry at `0x2250`, not only table-copy writes. The decode marker follows the existing `poison_bss` source, phase and opcode checks; the load-return marker follows successful ABI and full-snapshot checks at `0x1fdc`. Phase continues to identify the engine execution interval.
+
+Evidence is bounded to 512 intersecting events. Overflow or a relevant unsupported CPU width sets `complete = false` and `engine_error`; incomplete evidence cannot establish write absence. `complete` describes audit capture, not successful loading or lifetime coverage. The existing instruction/wall limits, refusal behavior, strict decoder, BSS checks and full snapshot comparisons remain required.
+
+| Control | Committed prefix-overlapping writes in order | Observed result |
+| --- | --- | --- |
+| Stock 1.50 (`43d67afa...`) | One `media_dma` write at PC `0x2bc8`, destination `0x61c000`, full length 131,072 bytes, stage `pre_decode`; overlap `[0x61c1fc,0x61c400)` is 516 bytes and `overlap_unchanged = true` | Zero CPU attempts; no LZ prefix overlap; 2,631,680 decoded bytes at `0x61c400`; all load markers true; complete evidence |
+| Installed RC0 (`acb0fbbb...`) | The same predecode table transfer, then one `lz` write at PC `0x3cd4`, destination alias `0x4061c340`, full length 315,426 bytes, stage `image_decode`; canonical overlap `[0x61c340,0x61c400)` is 192 bytes and `overlap_unchanged = false` | Zero CPU attempts; 2,631,872 decoded bytes at `0x61c340`; all load markers true; complete evidence |
+
+Both controls cleared and compared the full 3,485,184-byte poisoned BSS. Neither audit contains another overlapping device write through original close. The unchanged table-transfer observation concerns only its 516-byte prefix overlap, not all 131,072 transferred bytes. The seven actual-CLI synthetic boundary cases also pass, including value-identical CPU/fill writes, mapped aliases, interval crossings and capacity failure.
+
+Evidence `E-PREFIX-EARLY-LOAD-STOCK-150` and `E-PREFIX-EARLY-LOAD-RC0-150` retain the qualified receipts and source identities. These are host-model observations under the existing logical-media, timing, cache and primary-only assumptions.
+
+This completes the measured early-load write audit, not #43's whole-lifetime acceptance criterion. Later runtime-issued CPU/device programs remain a host-code question: carry complete overlap observation into application execution and bind each reachable CPU/device submission path, then establish whether any can overwrite the prefix after decode. A further finite trace alone does not prove absence across all runtime paths. No SD-card operation or camera input is required for that host work.
 
 ## 6. Combined prefix geometry
 
@@ -124,8 +145,8 @@ D3's data need is about 100-140 bytes (two arrays grown by 48, two 6-byte parame
 
 ## 7. Verdict
 
-The widened window is **accepted by the same test the 192-byte prefix passed**, with the floor corrected to `0x0061c1fc`. No consumer-bound descriptor covers it, no aligned literal or formed constant names it, no confirmed reference points into it, the only mapped writer of the region is the boot table-block copy that precedes the decode, the only observed runtime writes inside the block stop below the floor, and the region is zero in the shipped container, in the payload export and in three boots of captured RAM. The boundary is the terminator word at `0x61c1f8`: everything below is retained table content, everything above is free to the accepted prefix, and the accepted prefix's own residual (no complete load-path write trace, so absence of a value-identical or indirect later writer is unproved) applies identically to the added bytes.
-This is not installation authorization for the widened window: the 2026-10-09 install used the accepted 192-byte prefix at `0x0061c340` (E-FILMSIM-INSTALL-150), and any use of `[0x0061c1fc,0x0061c400)` beyond it is a separate decision. Its first residual below narrows for the installed prefix only: the arrays are live in an ordinary menu, so nothing effective overwrote them on that boot path, while a value-identical writer stays excluded only by that observation.
+The widened window is **accepted by the same descriptor-aware test the 192-byte prefix passed**, with the floor corrected to `0x0061c1fc`. No consumer-bound descriptor covers it, no aligned literal or formed constant names it, no confirmed reference points into it, the observed application writes inside the block stop below the floor, and the region is zero in the shipped container, in the payload export and in three boots of captured RAM. The boundary is the terminator word at `0x61c1f8`: everything below is retained table content. The successful stock/RC0 early-load audits observe the table transfer before decode and RC0's expected decode-prefix write, including the table transfer's value-identical prefix overlap, with no additional overlapping writer through original close. Absence of an indirect or later runtime-issued writer remains unproved for both the accepted prefix and added bytes.
+This is not installation authorization for the widened window: the 2026-10-09 install used the accepted 192-byte prefix at `0x0061c340` (E-FILMSIM-INSTALL-150), and any use of `[0x0061c1fc,0x0061c400)` beyond it is a separate decision. The arrays being live in an ordinary menu narrows effective-overwrite concerns on that observed boot path only; it does not exclude a value-identical write or a write between observations.
 
 ## 8. Reproduction
 
@@ -160,15 +181,15 @@ WINDOW_COVERAGE_OUTPUT="$R/filmsim/patch-01/widened-window-coverage.txt" /tmp/wi
 awk '$0 ~ /^ +(1dcc|1dd4|1dd8|1ddc|1de0|1f5c|1f60|1f64|1f68|1f78):/' "$R/decode/boot-40048.dis"
 awk '/bl[[:space:]]+0x1dc4/' "$R/decode/boot-40048.dis" "$R/decode/boot-50048.dis" "$R/decode/loader-40000.dis" "$R/decode/loader-d0000.dis"
 
-# the instrumented load-path write trace (section 5.4)
+# the request/error-path cases (section 5.4), using a fresh output directory
 devenv shell -- bazel build //emulation:load-window-cases //emulation:native-runner
 devenv shell -- bazel-bin/emulation/load-window-cases bazel-bin/emulation/native-runner \
-  private-data/analysis/x-m1-1.50/native-case/load-window
+  private-data/analysis/x-m1-1.50/native-case/load-window-correction
 ```
 
 ## 9. Residuals
 
-- The prefix's runtime writer absence stays unproved for the device-side writers: the 2026-10-09 instrumented trace (section 5.4) executes the record's storage-init and copy-prepare path with zero ARM stores into `[0x61c1fc,0x61c400)` and stops at the transfer core's refused `bfi` at `0x2b5c`; the media transfer, the decompressor output, the second record and everything after the handoff stay unexecuted, and three byte-equal captures still cannot exclude a value-identical device write.
+- The historical software trace observes the request/error path with r0 `0xffffff01`. The successful stock/RC0 device-modelled audits in section 5.5 establish only the measured early-load/close interval. #43 stays open for application-runtime CPU/device submissions after decode, including value-identical writes. The next work is host instrumentation and reachable-writer analysis, not SD-card preparation or a camera session; closure requires evidence covering the prefix's lifetime.
 - The extent-list walk terminates on its first word, so no mapped reader of it reads at or past `0x61c1fc`; consumers outside the mapped set are not excluded.
 - The 68 bytes `[0x61c1fc,0x61c240)` are free on this evidence but were never part of any accepted argument; using them is what the corrected floor buys, and the ticket's 444-byte window is accepted without them.
 - The D3 name mechanism is the separate special-id question (E-RECIPE-LABEL-SPARE-150), untouched here.
