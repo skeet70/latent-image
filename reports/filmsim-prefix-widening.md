@@ -146,10 +146,49 @@ With the three extent entries and terminator retained, the direct `*(entry+0x10)
 The stock plain bytes supply finite constructor seeds: one target at the first extent, an empty list at the second, and fourteen targets at the third, each zero-terminated. The worker also has 32 completion-callback slots and deferred handlers. Constructor effects, spawned tasks and callback effects remain unresolved; these are not a closed three-writer set.
 
 - **LZ:** the segment-5 loader supplies decoded base `0x40bf1a00` to `FUN_006ae360`; `0x43e40000` is compressed staging. The decoded-destination store is at `0xfff43048`. A running decoded offset is added to the base; a nonnegative unsigned offset does not prove nonwrapping addition. Its actual stream/offset bound and the ordinary submitter set remain unproved.
-- **SD:** the second argument of `FUN_006f3268` reaches the RAM-base store at `0xfff50000` through thin wrappers. The decompiler's zero-argument wrapper does not erase that A32 register flow. The 32-bit store at `0xfff5000c` is command/control submission, not a RAM destination. Native halfword stores at `+8`/`+0xa` and combined 32-bit `+0xc` submission are not qualified by the early ROM model's narrower width grammar. Ordinary caller buffer bounds remain unresolved.
-- **Media and fill:** the modeled media RAM destination is `0xfff528a4`; `0xfff52020`/`0xfff52024` are NAND column/row. The prefix address fits 24 bits and has bit 30 clear, so neither property excludes it. The later-runtime media RAM-destination programming edge and fill destination writer remain unresolved, not absent.
+- **SD:** the second argument of `FUN_006f3268` reaches the RAM-base store at `0xfff50000` through thin wrappers. The decompiler's zero-argument wrapper does not erase that A32 register flow. The 32-bit store at `0xfff5000c` is command/control submission, not a RAM destination. Native halfword stores at `+8`/`+0xa` and combined 32-bit `+0xc` submission are not qualified by the early ROM model's narrower width grammar. Section 5.7 binds the six direct setup callers and selected scratch origins, but not the generic bulk-buffer capacity or native transfer extent.
+- **Media and fill:** the media RAM destination is `0xfff528a4`; `0xfff52020`/`0xfff52024` are NAND column/row. The prefix address fits 24 bits and has bit 30 clear, so neither property excludes it. Section 5.7 identifies the actual later-runtime media programmer and its selected buffer origins. The fill destination writer remains unresolved.
 
 Evidence `E-PREFIX-RUNTIME-SOURCE-CUT-150` retains source identities and independent byte checks. No ordinary reachable post-decode prefix overwrite was established, and #43 remains open. The remaining host task is to bind ordinary CPU/device writer reachability, destination ownership, maximum lengths, nonwrapping arithmetic and initialization/lifecycle state. A source-bound ordinary runtime overwrite after the prefix becomes live would be a valid negative placement result for #17; an arbitrary service RAM write, reinstall or reboot is not substituted for that counterexample. No camera or SD-card input is needed for these source cuts.
+
+### 5.7 Selected ordinary SD/media destination and payload bounds
+
+**Source-inspected**, stock 1.50 decoded image 4 at `0x61c400`, with selected scratch constructors checked in stock decoded image 5 and the plain image. These are not source cuts of RC0's image 4 at `0x61c340`, and do not establish runtime equivalence. Evidence `E-PREFIX-RUNTIME-DMA-BOUNDS-150` retains the exact source inputs, named caller inventory and A32 word checks.
+
+The ordinary flashloader dispatch supplies fixed destinations through `0x6aa63c`, `0x6aa750` and `0x6aa838`. Initialization selects geometry profile 3: `0x800` bytes per page and `0x40` pages per block, hence `0x20000` payload bytes per block. The unsigned selector guards and actual table counts give these conditional submitted-payload envelopes:
+
+| Request table | Destination | Maximum payload | Exclusive payload end |
+|---|---:|---:|---:|
+| `0x7c8dd4`, 35 entries | `0x39c000` | 1 block | `0x3bc000` |
+| Auxiliary `0x7c907c`, 3 entries selected by `0x7c8ff0` | `0x3bc000` | 11 blocks | `0x51c000` |
+| `0x7c8f9c`, 7 entries | `0x45c000` | 11 blocks | `0x5bc000` |
+| `0x7c8db0`, 3 entries | `0x5bc000` | 3 blocks | `0x61c000` |
+
+These payload additions and their bit-30 aliases do not wrap. The nearest payload end leaves `0x1fc` (508) bytes before `0x61c1fc`. Retaining the initialized geometry and tables is a condition, not a lifetime result. This table bounds payload progression only, not all DMA, spare/OOB, callback or scratch effects.
+
+The actual media programmer is `0x6eeb04`: it stores descriptor words 2 and 3 to `0xfff52824 + (channel << 7)` and the following word. Its only named direct callers are transmit `0x6f0f6c` using channel 0 and receive `0x6f1440` using channel 1. The receive buffer is the actual third argument, so the channel-1 stores are `0xfff528a4`/`0xfff528a8`, not the NAND row/column registers. No RAM range check is imposed by this programmer.
+
+There is a concrete runtime/model boundary: `0x6f1440` submits a **`0x100000`-byte DMA remaining budget**, independently of its at-most-`0x20000` per-block payload progression. For a full profile-3 block, the software sector count is 256, but `0x6f160c` truncates it to a byte before `0x6dde18` programs NAND setup. The resulting setup is `0x00300000`, not `0x00300100`. The early recovery model's positive nine-bit count grammar does not qualify that native zero-count encoding. Start, stop and close calls are present, but the native zero-count meaning and active-DMA stop/reprogram extent remain unqualified. Neither a one-MiB overwrite nor whole-transfer disjointness follows from these source constants.
+
+The explicit CPU auxiliary effects are separate. The selected bad-block/spare call passes fixed `0x96ca54` to `0x6f1aa8`, whose four word stores cover `[0x96ca54,0x96ca64)`. The receive PIO branch copies exactly 512 bytes from the controller aperture to scratch `[0x96ca64,0x96cc64)`, then 512 bytes from that scratch to the current caller buffer. The fixed scratch intervals do not wrap or reach the prefix; the final payload copy retains the caller-buffer obligation. Four alternate page-read callers use initialized scratch `0x940280` or `0x96bfc0`; the other three (`0x6fcaa0`, `0x6fce40`, `0x6fed00`) retain request-descriptor word 2 as their buffer. The fixed scratch callers do not supply a prefix pointer. The generic descriptor owners and total capacity/nonwrap checks are not closed.
+
+The SD setup inventory has exactly six named direct calls to `0x6f3268` in the mapped source:
+
+| Direct caller | Actual submitted buffer | Software request |
+|---|---|---|
+| `0x6f32a4` | Caller argument 4, optionally pre-copied into the bounce buffer | Transmit, 512-byte sectors |
+| `0x6f3494` | Caller argument 4, optionally post-copied from the bounce buffer | Receive, 512-byte sectors |
+| `0x6f3684` | Argument 5 from `0x93b658` | 64 bytes |
+| `0x6f374c` | Argument 3 from `0x93b658` | 64 bytes |
+| `0x6f39ac` | Argument 2 from `0x93b658` | 8 bytes |
+| `0x6f3b3c` | Argument 2 from `0x93b658` | 64 bytes |
+
+The ordinary request template base `0x42163800`, or playback override `0x474b3000`, becomes arena `(base + 0x17493) & ~0x1f`; the SD initializer sets `0x93b658` from that arena and the bounce pointer from arena plus `0x420`. The resulting control bases are `0x4217ac80` and `0x474ca480`, with 512-byte bounce bases `0x4217b0a0` and `0x474ca8a0`. These exact submitted addresses and explicit CPU-copy lengths do not wrap or overlap the prefix addresses; the native hardware extent and unfamiliar alias behavior are not inferred from them. Per-drive save/restore exists, but retention and serialization of those contexts are not proved. The additional IRQ programmer reads and republishes the controller's current `0xfff50000` value without introducing a new software buffer origin.
+
+Bulk receive reaches the sector APIs `0x6f4f04`/`0x6f4fa8` through `0x6fa278` and `0x6f4910`. Its destination remains sector-API argument 4. The software chunk cap is 65,536 sectors (`0x2000000` bytes), not a proof of the caller's allocation capacity or nonwrapping total destination arithmetic; the full-chunk zero count also needs native grammar qualification.
+
+This selected ownership cut is complete at those explicit source boundaries. Remaining prerequisites are native media zero-count and active-DMA stop/reprogram semantics, native SD width/count/progression semantics, generic bulk-buffer capacity/nonwrap, and retained table/profile/scratch lifecycle. No ordinary source-bound post-install prefix overwrite or lifetime exclusion is established. #43 remains open; no SD input, camera operation or new controller implementation is a prerequisite for recording this result.
+
 
 ## 6. Combined prefix geometry
 
@@ -212,7 +251,7 @@ devenv shell -- bazel-bin/emulation/load-window-cases bazel-bin/emulation/native
 
 ## 9. Residuals
 
-- The historical software trace observes the request/error path with r0 `0xffffff01`. Section 5.5 establishes only the measured stock/RC0 early-load/close interval; section 5.6 adds finite source cuts, not closed transitive writer effects. #43 stays open until ordinary application CPU/device paths either supply a reachable prefix overwrite or are covered by lifetime evidence, including value-identical writes. The remaining work is host reachability and ownership analysis, not SD-card preparation or a camera session.
+- The historical software trace observes the request/error path with r0 `0xffffff01`. Section 5.5 establishes only the measured stock/RC0 early-load/close interval; sections 5.6-5.7 add finite stock source cuts, not closed transitive writer effects. #43 stays open until ordinary application CPU/device paths either supply a reachable prefix overwrite or are covered by lifetime evidence, including value-identical writes. The selected runtime cut still needs native count/stop semantics, bulk-buffer capacity/nonwrap and retained initialization/lifecycle, not SD-card preparation or a camera session.
 - The extent-list walk terminates on its first word, so no mapped reader of it reads at or past `0x61c1fc`; consumers outside the mapped set are not excluded.
 - The 68 bytes `[0x61c1fc,0x61c240)` are free on this evidence but were never part of any accepted argument; using them is what the corrected floor buys, and the ticket's 444-byte window is accepted without them.
 - The D3 name mechanism is the separate special-id question (E-RECIPE-LABEL-SPARE-150), untouched here.
