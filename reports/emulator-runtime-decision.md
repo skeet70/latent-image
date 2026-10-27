@@ -110,6 +110,28 @@ The six counterpart checks use `e2e-observation-compare`, not byte equality of c
 - FujiMod trajectory variants may change press timing only. The volatile route uses its existing timing variant. The card-backed Classic Chrome and E8 retained baselines use fixed scene frame 7, whereas FujiMod refuses fixed scenes; current counterpart checks compare their semantic receipts, not identical source pixels.
 - Stock boot is checked against a separate baseline for each engine. Equal baseline verdicts do not mean equal instruction counts, complete framebuffer bytes or boot timelines.
 
+## X70 shared-native frontend output contract
+
+**Emulated, 2026-10-26:** these are bounded X70 frontend results from a local, unpushed checkout. They are not an X-M1 route, not a supported-runtime cutover and not a pin change; the route comparisons above and the capability inventory below are unchanged.
+
+Prepared construction takes the scanout output instance from the boot readiness report (`RecReport.scanout_instance`), clears it before fallible boot or restart work, re-adopts it only after a successful readiness report, and refuses a prepared session without an admitted instance. Frames come from that instance in the native runtime and the browser worker, and the value stays a typed scanout output until the legacy `Session.frame` call. Resolved and session constructions keep the caller's explicit manifest output.
+
+The guarded native and browser checks ran on local frontend checkout `089398719e` and both exited zero. The native prepared boot reported status `rec`, menu inactive and scanout instance 1; after an emulated MENU input the menu report read `running`, menu active and the same instance. The browser check uploaded the firmware through the real page, rendered the live LCD, read the shooting menu by OCR, and wrote its receipt after the page and browser closed.
+
+Source identities stay separate. The 089 checkout is the frontend under test; it is neither the runtime build source nor a later revision. The bound build receipt records clean source `26c196da`, and the native extension receipt records FujiMod `5063fc8e` with modified Unicorn `ba25c46f`, not clean 5063, producing extension `87598036`. Exact asset digests are in the evidence ledger.
+
+A Release-build SIGSEGV in an aligned load of `uc_context.data` at offset 0x28 is fixed by declaring that array `QEMU_ALIGNED(16)`; the same public ARM context test then passes 31 of 31. The finding covers the library-allocated alloc, save and read path; raw caller storage alignment, header initialisation and padding remain unverified, so it is not a general raw-context guarantee. The executed zero-value regression proves the aligned access only. A nonzero public save/read case writing `0x03000000` against sentinel `0xdeadbeef` also passes 31 of 31 in Release on GCC 15.3 and CMake 4.4 from the locked nixpkgs, but the crash build's GCC 16 store paths were unavailable, so this is not an identical-toolchain before/after and the crash was not rerun.
+
+The capture-side scene fix is committed on a local media tree and passes its public consumer checks, including a real `selected_memory_frame` capture and Recorder poster with black and absent-selection rejection. It supplies the already validated buffer to scene qualification for the capture caller only, and adds no placeholder, forced selection, fallback or cap change.
+
+An earlier attempt on the alignment fix stopped at the capture boundary with no recording.
+
+A later guarded hero run with one slot, an 8 GiB memory cap and no swap reached native preparation and guide steps L, M and S, then failed on the `back` press at a distinct recording boundary: `display.py:133` calls `check_scene(boundary='recording')` and `scene.py:64` raises MissingScene; the recording sampler's fresh OSD acquisition returns no selected buffer. The run retained a partial guide, poster, video and three menu screenshots, but no accepted guide, card or frontier recording. The failing frame instance and raw LCD selector word are not retained, so a selector switch and the acquisition cause remain unproved.
+
+Store-backed X70 durable-media state and readback remain unqualified; the isolated camera store was empty with no camera identity, so synthetic fixture retention is not X70 retention. Browser-worker boot, frame delivery and MENU input cover the staged development bundle only, with no production site. The earlier standalone RTP, restart, peer and page-close observations belong to their own source and are not results of this checkout. These findings do not establish X-M1 support, silicon fidelity, snapshot or Prepared acceptance, release reproducibility, or permission to convey a source or binary artifact.
+
+Evidence: `E-X70-NATIVE-FRONTEND-OUTPUT-150` in the [ledger](../docs/evidence.jsonl).
+
 ## Retained capabilities still missing from the supported FujiMod path
 
 This is an integration inventory at main `9b169a3`, not a claim that the upstream Rust runtime cannot implement these features. Estimates are **[INFERENCE] engineering days** for one contributor familiar with this code, including behavioral tests, documentation and matched-input checks. They are ranges, not measured durations or commitments; upstream/legal waiting time is excluded. Several rows share work, so their totals are not a schedule.
