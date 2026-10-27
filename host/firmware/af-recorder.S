@@ -65,32 +65,27 @@
 // argument when the current task is 0x1c or 0, so only the callback-form
 // twins are usable from here.
 //
-// File ownership and lock liveness. The recorder owns the handle tag from the
-// open callback to the close callback and posts the close on every path with a
-// nonzero tag (store complete, trailer complete, write failure); the media
-// side's release worker runs on close completion. A nonzero open status ends
-// the chain with no close: it is either the synchronous ready-gate rejection
-// delivered before any request is posted (0x0071ddf0), or a post-dispatch
-// failure whose worker releases the tag at 0x71f3cc-0x71f3e8 (index free
-// 0x71e9ec, mapping delete 0x71eaac, tag release 0x71eff4). A
-// success with tag 0 addresses no object: no write and no close are posted,
-// the NOHANDLE flag is set, and at most one such orphan can arise per boot
-// because the carry is one-shot; its release is the service's own slot
-// recycling, not proved absent. A synchronous close rejection likewise leaves
-// one allocated tag unreleased for the boot; the recorder does not retry.
-// The recorder adds no lock and never waits: it is callback-driven, posts each
-// request and returns, and the only kernel waits on this path are the stock
-// handle-table semaphore 0x3c in the open allocator 0x0071ef18 (0x00724b68
-// with 0xffffffff) and in the release routine 0x0071eff4, inherited by every
-// stock file client and not bounded from the client side.
+// File ownership. A nonzero open tag is retained through the close callback.
+// Close is posted after the store, trailer or a write failure. The close worker
+// 0x0071f1d4 releases the tag, removes its mapping and closes the file.
+// A synchronous readiness rejection bypasses that worker, as does the outer
+// close handler 0x00711768 when the volume pointer 0x00910204 is zero.
+// The inner open worker 0x0071f2a8 releases a failed open's tag. The outer open
+// handler 0x007115a4 can reject a queued open without entering that worker;
+// its callback returns the initially zero completion tag, not the allocation.
+// The client 0x0071c2b0 also queues opens after zero-tag allocation. A successful
+// zero-tag callback sets NOHANDLE and posts neither a write nor a close.
+// Queue failure is not delivered through these callbacks. The allocator
+// 0x0071ef18 and release routine 0x0071eff4 wait on semaphore 0x3c with
+// 0xffffffff. Callback completion does not establish ownership cleanup or a
+// bounded wait.
 //
 // Error contract: the stock worker 0x0071ed34 forwards the completed count
 // even on a nonzero status (0x006ff000 preserves the count from 0x007069b0
 // when a later cluster step fails, and a full count when the commit 0x00703f28
 // fails), so both the success and failure paths subtract the bounded count
 // from the remaining word before anything else; the first error is kept in a
-// status byte and every failure still posts the close, so the file and its
-// handle tag are released. There is no retry.
+// status byte and every failure still posts the close. There is no retry.
 //
 // Cost. Caught up: one halfword load per invocation. Otherwise at most
 // SCAN_MAX slot reads with a type byte, one word and up to two id compares
@@ -349,7 +344,7 @@ cb_open:
     movw    r2, #:lower16:rec_state
     movt    r2, #:upper16:rec_state
     cmp     r0, #0
-    bne     rec_fin                  // ready-gate rejection: no object exists
+    bne     rec_fin
     cmp     r1, #0
     beq     rec_nohandle             // success with no tag: nothing addressable
     str     r1, [r2, #ST_HANDLE]

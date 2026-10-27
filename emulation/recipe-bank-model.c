@@ -54,7 +54,8 @@ enum RbmCloseFault {
   RBM_CLOSE_NORMAL,
   RBM_CLOSE_NOOP_WRITE,
   RBM_CLOSE_KEEP_VERIFY,
-  RBM_CLOSE_LATE_VERIFY
+  RBM_CLOSE_LATE_VERIFY,
+  RBM_CLOSE_REJECT_VERIFY
 };
 volatile enum RbmOpenFault rbm_open_fault;
 volatile enum RbmCloseFault rbm_close_fault;
@@ -584,6 +585,11 @@ __attribute__((noinline)) static uint32_t rbm_close_shape(rbm_cb cb,
     cb(0u, 0u);
     return 3u;
   }
+  if (rbm_close_fault == RBM_CLOSE_REJECT_VERIFY && verify != 0u) {
+    rbm_close_fault = RBM_CLOSE_NORMAL;
+    cb(5u, 0u);
+    return 3u;
+  }
   return 0u;
 }
 
@@ -960,7 +966,7 @@ uint32_t rbm_seq_read_after_deferred(void)
     rbm_close_noop = 1u;
     uint32_t status = rb_load();
     rbm_close_noop = 0u;
-    if (status != RB_OK) {
+    if (status != RB_IO) {
       return status;
     }
     status = rb_readback(1u, (uint8_t *)0x009a0000u,

@@ -133,13 +133,14 @@ swapBoundaryCell boundary = ("rbm_swap_boundary", case boundary of
   BeforeDestructiveOpen -> 1
   BeforeWrite -> 2)
 
-data CloseFault = NoopWriteClose | KeepVerifyClose | LoseVerifyCallback
+data CloseFault = NoopWriteClose | KeepVerifyClose | LoseVerifyCallback | RejectVerifyClose
 
 closeFaultCell :: CloseFault -> (String, Word32)
 closeFaultCell fault = ("rbm_close_fault", case fault of
   NoopWriteClose -> 1
   KeepVerifyClose -> 2
-  LoseVerifyCallback -> 3)
+  LoseVerifyCallback -> 3
+  RejectVerifyClose -> 4)
 
 extractCodes :: [(Word32, Word32)]
 extractCodes = [(0x104, 1), (0x110, 3), (0x111, 4), (0x10e, 4), (0x10f, 3), (0xef, 2), (0xed, 3), (0x141, 0xb), (0xfe, 5)]
@@ -370,18 +371,25 @@ volWords ops = snd (mapAccumL word 0 (zip [0 ..] ops))
             then error "volatile workload: literal outside the ldr range"
             else (ordinal + 1, 0xe59f0000 .|. (r `shiftL` 12) .|. fromIntegral off)
 
--- | Calls public entries with r0-r3, stores each r0 at 0x009a0200 + 4*k and
--- returns the last status in r0; r4 holds the case buffer, lr the exit address.
+-- | Calls AAPCS public entries and stores each return at 0x009a0200 + 4*k.
 volWorkload :: [(Integer, [Word32])] -> B.ByteString
 volWorkload calls = BL.toStrict (BB.toLazyByteString (foldMap BB.word32LE (volWords ops)))
   where
     ops = concat
       [ [VolFixed 0xe92d4010, VolLoad 4 0x009a0000]
       , concat
-          [ concatMap argument (zip [0, 1, 2, 3] args)
-              ++ [VolLoad 12 target, VolFixed 0xe12fff3c, VolStore (0x200 + 4 * k)]
-          | (k, (target, args)) <- zip [(0 :: Word32) ..] calls ]
+          [ reserve ++ concatMap stackArgument (zip [0 ..] stackArguments)
+              ++ concatMap argument (zip [0, 1, 2, 3] args)
+              ++ [VolLoad 12 target, VolFixed 0xe12fff3c]
+              ++ release ++ [VolStore (0x200 + 4 * k)]
+          | (k, (target, args)) <- zip [(0 :: Word32) ..] calls
+          , let stackArguments = drop 4 args
+                stackBytes = fromIntegral (((length stackArguments + 1) `div` 2) * 8)
+                reserve = [VolFixed (0xe24dd000 .|. stackBytes) | stackBytes /= 0]
+                release = [VolFixed (0xe28dd000 .|. stackBytes) | stackBytes /= 0] ]
       , [VolFixed 0xe8bd8010] ]
+    stackArgument (offset, value) =
+      [VolLoad 12 (toInteger value), VolFixed (0xe58dc000 .|. (offset * 4))]
     argument (r, v) = case armImmediate v of
       Just e -> [VolMove r e]
       Nothing -> [VolLoad r (toInteger v)]
@@ -615,6 +623,13 @@ data RelayClient = RecipeClient | StockClient | SynchronousClient
 
 data RelayRegister = RelayR0 | RelayR2 | RelayR12
 
+data ProducerBoundary = ProducerReadyRejected | ProducerSlotWaitRejected
+  | ProducerTagWaitRejected | ProducerQueueRejected | ProducerForwardRejected
+  | ProducerFrontWaitRejected | ProducerCompletionWaitRejected
+  | ProducerTagsExhausted | ProducerReleasedSlots | ProducerSynchronousFailure
+  | RecipeProducerExhausted | RecipeProducerAccepted
+  deriving (Eq, Enum, Bounded)
+
 -- Queue delivery is synchronous. The front task and media worker execute stock
 -- bytes; the filesystem leaf records each open attempt and returns raw 7.
 relaySpecSet :: Syms -> GuestAddress -> B.ByteString -> [Spec]
@@ -623,10 +638,12 @@ relaySpecSet ks (GuestAddress imageBase) image =
   , fixture RecipeClient False
   , fixture StockClient True
   , fixture SynchronousClient True
-  ]
+  , relayFixture RecipeClient False False
+  ] ++ map producerFixture [minBound .. maxBound]
   where
-    fixture client changed = Spec name
-      "contract: an accepted recipe open refuses changed media before the filesystem open boundary; stock clients and same-card opens retain completion, relay wake and tag cleanup. Stock X-M1 front-task forwarding, callback relay, open worker, open implementation, status mapper, tag release and mapping cleanup execute unchanged. Queue delivery is synchronous, filesystem open returns raw missing-file status, and scheduler/semaphore boundaries are host adapters."
+    fixture client changed = relayFixture client changed True
+    relayFixture client changed volumePresent = Spec name
+      "contract: an accepted recipe open refuses changed media or a missing volume context before the filesystem open boundary; stock clients and same-card opens retain completion, relay wake and tag cleanup. Stock X-M1 front-task forwarding, callback relay, open worker, open implementation, status mapper, tag release and mapping cleanup execute unchanged. Queue delivery is synchronous, filesystem open returns raw missing-file status, and scheduler/semaphore boundaries are host adapters."
       "0x009b0000" [] initial
       (Expect "returned" status
         ([ ("casebuf", 0x100, B.concat (map u32le [status, 0, 1, 1, attempts]))
@@ -634,15 +651,16 @@ relaySpecSet ks (GuestAddress imageBase) image =
         , ("media-state", 0x80, B.replicate 64 0)
         , ("media-state", 0x14c, u32le 0)
         , ("media-state", 0xfed8, u32le 0)
+        , ("card", 0, B.replicate cardBytes 0)
         ] ++ [("casebuf", 0x114, u32le status <> u32le 0) | client == StockClient]))
       (kernelFns ++ rawFns ++ ["0x009b0000/40", "0x009b0200/20"])
       ["relay-folder", "relay-front-ready", "relay-tag-lock"]
       where
         name = "r-media-relay-" ++ case client of
-          RecipeClient -> if changed then "changed" else "same-card"
+          RecipeClient -> if not volumePresent then "null-volume" else if changed then "changed" else "same-card"
           StockClient -> "stock-client"
           SynchronousClient -> "synchronous-client"
-        refused = client == RecipeClient && changed
+        refused = client == RecipeClient && (changed || not volumePresent)
         status = if refused then 2 else 6
         attempts = if refused then 0 else 1
         callback = case client of
@@ -657,7 +675,7 @@ relaySpecSet ks (GuestAddress imageBase) image =
         message = u16le 0x2c17 <> B.pack [0x11, 0x65] <> u32le 80 <> u32le 0x009a0400
         caseBytes = patch 0x500 message (patch 0x400 request (B.replicate 0x600 0))
         state = patch 0x26b30 (u32le 1)
-          (patch 0xc4 (u32le 0x00920000)
+          (patch 0xc4 (u32le (if volumePresent then 0x00920000 else 0))
           (patch 0x80 (u32le 1) (B.replicate 0x42100 0)))
         initial = Model (B.replicate cardBytes 0) (B.replicate 0x1c2 0) M.empty 0 0x24 caseBytes
           [ ("media-state", 0x00910140, state)
@@ -699,6 +717,159 @@ relaySpecSet ks (GuestAddress imageBase) image =
     adapterSpans = [(0x0071fde4, 20), (0x0072503c, 64), (0x00701634, 28),
       (0x00724144, 28), (0x00724c00, 36)]
     rawFns = [hex address ++ "/" ++ show count | (address, count) <- spans ++ adapterSpans]
+    producerFixture boundary = Spec ("r-media-producer-" ++ boundaryName boundary)
+      ("contract: " ++ boundaryClaim boundary ++ " The stock producer, readiness gate, allocation, post wrapper, front forwarding, callback relay, worker and release code execute from the pinned image. The recipe producer BL uses the candidate request-post hook. Queue dispatch is synchronous or explicitly rejected; task identity, semaphore waits, front readiness and wake primitives are adapters. Filesystem open returns raw 7. No queue or scheduler liveness is established.")
+      "0x009b0000" []
+      (Model producerCard (B.replicate 0x1c2 0x5a) M.empty 0 0x24 producerBytes
+        [ ("media-state", 0x00910140, producerState)
+        , ("relay-completion", 0x00910134, B.replicate 12 0)
+        , ("producer-mode", 0x008fc8a4, B.replicate 16 0)
+        , ("producer-drives", 0x00814730, B.pack [0x43, 1, 0] <> B.replicate 21 0)
+        , ("prefix", 0x009b0000, workload <> B.replicate (0x1000 - B.length workload) 0 <> producerCallback) ]
+        (stockCode ++ producerStock ++ producerAdapters boundary
+          ++ [(GuestAddress 0x0071c4d4, postHook) | recipe]))
+      (Expect "returned" (last statuses)
+        ([ ("casebuf", 0x200, words32 statuses)
+         , ("casebuf", 0x114, if callbacks == 0 then B.replicate 8 0xcc else words32 [callbackStatus, 0])
+         , ("casebuf", 0x11c, u32le callbacks)
+         , ("casebuf", 0x110, u32le opens)
+         , ("casebuf", 0x130, u32le frontStatus)
+         , ("casebuf", 0x150, u32le posts)
+         , ("casebuf", 0x154, u32le deliveries)
+         , ("card", 0, producerCard)
+         , ("live-state", 0, B.replicate 0x1c2 0x5a) ]
+          ++ [("casebuf", 0x140, words32 [0x72, 1, 1]) | opens /= 0]))
+      (kernelFns ++ producerKernelFns
+        ++ [hex address ++ "/" ++ show count | (address, count) <- spans ++ producerSpans]
+        ++ [hex address ++ "/" ++ show (B.length bytes) | (GuestAddress address, bytes) <- producerAdapters boundary]
+        ++ ["0x009b0000/" ++ show (B.length workload), "0x009b1000/" ++ show (B.length producerCallback)])
+      ["task", "relay-folder"]
+      where
+        recipe = boundary `elem` [RecipeProducerExhausted, RecipeProducerAccepted]
+        fill = case boundary of
+          ProducerTagsExhausted -> 17
+          ProducerReleasedSlots -> 17
+          RecipeProducerExhausted -> 16
+          RecipeProducerAccepted -> 0
+          _ -> 1
+        synchronous = boundary `elem` [ProducerSlotWaitRejected, ProducerCompletionWaitRejected, ProducerSynchronousFailure]
+        workload = volWorkload
+          (replicate fill (0x0071c2b0, [0x009b1000, 0x009a0400, 0, if synchronous then 1 else 0, 1, 0])
+            ++ [(addr ks "rb_load", []) | recipe])
+        statuses = case boundary of
+          ProducerReadyRejected -> [0]
+          ProducerSlotWaitRejected -> [0]
+          ProducerTagWaitRejected -> [0]
+          ProducerTagsExhausted -> [1 .. 16] ++ [0]
+          ProducerReleasedSlots -> [1 .. 17]
+          ProducerSynchronousFailure -> [0]
+          RecipeProducerExhausted -> [1 .. 16] ++ [4]
+          RecipeProducerAccepted -> [9]
+          _ -> [1]
+        deliveries = case boundary of
+          ProducerTagWaitRejected -> 1
+          ProducerFrontWaitRejected -> 1
+          ProducerReleasedSlots -> 17
+          ProducerSynchronousFailure -> 1
+          RecipeProducerAccepted -> 2
+          _ -> 0
+        opens = deliveries
+        callbacks = case boundary of
+          ProducerReadyRejected -> 1
+          ProducerSlotWaitRejected -> 1
+          RecipeProducerAccepted -> 0
+          _ -> deliveries
+        callbackStatus = case boundary of
+          ProducerReadyRejected -> 5
+          ProducerSlotWaitRejected -> 9
+          _ -> 6
+        posts = case boundary of
+          ProducerReadyRejected -> 0
+          ProducerSlotWaitRejected -> 0
+          RecipeProducerAccepted -> 2
+          _ -> fromIntegral fill
+        frontStatus
+          | boundary `elem` [ProducerForwardRejected, ProducerFrontWaitRejected] = 0xffffff01
+          | deliveries /= 0 = 0
+          | otherwise = 0xdddddddd
+        producerState = patch 0x26b30 (u32le 1)
+          (patch 0xc4 (u32le (if boundary == ProducerReadyRejected then 0 else 0x00920000))
+            (B.replicate 0x42100 0))
+        producerBytes = patch 0x400 "C:\\RECIPEA.BIN\0"
+          (patch 0x130 (u32le 0xdddddddd)
+            (patch 0x114 (B.replicate 8 0xcc) (B.replicate 0x600 0)))
+    boundaryName boundary = case boundary of
+      ProducerReadyRejected -> "not-ready"
+      ProducerSlotWaitRejected -> "completion-slot-wait-rejected"
+      ProducerTagWaitRejected -> "tag-wait-rejected"
+      ProducerQueueRejected -> "queue-rejected"
+      ProducerForwardRejected -> "forward-rejected"
+      ProducerFrontWaitRejected -> "front-wait-rejected"
+      ProducerCompletionWaitRejected -> "completion-wait-rejected"
+      ProducerTagsExhausted -> "tags-exhausted"
+      ProducerReleasedSlots -> "released-slots"
+      ProducerSynchronousFailure -> "synchronous-worker-failure"
+      RecipeProducerExhausted -> "recipe-tags-exhausted"
+      RecipeProducerAccepted -> "recipe-same-card"
+    boundaryClaim boundary = case boundary of
+      ProducerReadyRejected -> "a missing volume context refuses open with callback (5,0), returns zero and posts nothing."
+      ProducerSlotWaitRejected -> "failure acquiring completion semaphore 0x3a refuses open with callback (9,0), returns zero and posts nothing."
+      ProducerTagWaitRejected -> "failure acquiring tag semaphore 0x3c yields tag zero; the stock client still dispatches, receives callback (6,0) and returns zero."
+      ProducerQueueRejected -> "a rejected front-task queue post leaves the allocated tag as the asynchronous return, without callback or filesystem open."
+      ProducerForwardRejected -> "the front task returns -255 when the media queue rejects forwarding; the producer still returns its allocated tag without callback."
+      ProducerFrontWaitRejected -> "front readiness rejection returns -255 after worker completion; the caller still receives callback (6,0) and its asynchronous tag."
+      ProducerCompletionWaitRejected -> "a rejected post followed by failed completion semaphore 0x3b wait leaves the zero completion cell unchanged; the stock producer nevertheless returns its allocated tag without callback."
+      ProducerTagsExhausted -> "sixteen rejected stock posts retain their tags; the seventeenth actual allocation returns zero and still attempts a stock post."
+      ProducerReleasedSlots -> "seventeen asynchronous missing-file opens all return distinct nonzero tags and callback (6,0); stock worker release keeps the sixteen-slot pool reusable."
+      ProducerSynchronousFailure -> "a synchronous missing-file open consumes worker completion and returns zero with callback (6,0)."
+      RecipeProducerExhausted -> "after sixteen rejected stock posts retain all tags, the recipe load returns RB_IO through its real callback consumer and its zero-tag request never reaches either queue or filesystem."
+      RecipeProducerAccepted -> "with the same card and an empty tag pool, the recipe load reaches both filesystem opens and returns RB_NO_BANK for missing files."
+    producerCard = B.replicate cardBytes 0xa5
+    producerCallback = load RelayR2 0x009a0114 <> words32 [0xe5820000, 0xe5821004]
+      <> increment 0x009a011c <> words32 [0xe12fff1e]
+    producerAdapters boundary =
+      [ (GuestAddress 0x0072503c, queueAdapter)
+      , (GuestAddress 0x00724b68, waitAdapter)
+      , (GuestAddress 0x007240c8, returned (if boundary == ProducerFrontWaitRejected then 1 else 0))
+      , (GuestAddress 0x00701634, load RelayR0 0x009a0140
+          <> words32 [0xe5801000, 0xe5802004, 0xe5803008]
+          <> increment 0x009a0110 <> returned 7)
+      , (GuestAddress 0x00724144, increment 0x009a010c <> returned 0)
+      , (GuestAddress 0x00724c00, words32 [0xe350003b, 0x112fff1e]
+          <> increment 0x009a0108 <> returned 0)
+      ]
+      where
+        queueAdapter = words32 [0xe3500065, 0x1a000000 .|. fromIntegral (B.length front `div` 4 - 1)]
+          <> front <> media
+        front = increment 0x009a0150 <>
+          if boundary `elem` [ProducerQueueRejected, ProducerCompletionWaitRejected, ProducerTagsExhausted, RecipeProducerExhausted]
+            then returned 1
+            else words32 [0xe92d4010, 0xe1a00001, 0xe3a01001, 0xe3a02002]
+              <> call 0x0072129c <> load RelayR2 0x009a0130
+              <> words32 [0xe5820000, 0xe8bd8010]
+        media
+          | boundary == ProducerForwardRejected = returned 1
+          | otherwise = increment 0x009a0154 <> words32 [0xe92d4010, 0xe1a00001]
+              <> call (fromIntegral (addr ks "rb_media_guarded_open"))
+              <> words32 [0xe3a00000, 0xe8bd8010]
+        waitAdapter = case boundary of
+          ProducerSlotWaitRejected -> failWait 0x3a
+          ProducerTagWaitRejected -> failWait 0x3c
+          ProducerCompletionWaitRejected -> failWait 0x3b
+          _ -> returned 0
+        failWait semaphore = words32
+          [0xe3500000 .|. semaphore, 0x03a00001, 0x13a00000, 0xe12fff1e]
+        returned status = words32 [0xe3a00000 .|. status, 0xe12fff1e]
+    producerSpans =
+      [ (0x0070e748, 0x34), (0x0070ec08, 0x108), (0x007111c4, 0x1c)
+      , (0x0071bc2c, 0x9c), (0x0071c2b0, 0x254)
+      , (0x0071ddf0, 0xe4), (0x0071ef18, 0xdc), (0x0071f708, 0x10)
+      , (0x0071fb18, 0x3c), (0x0071fde4, 0x48), (0x00722054, 0x124) ]
+    producerStock = [(GuestAddress address, B.take count (B.drop (fromIntegral (address - imageBase)) image)) | (address, count) <- producerSpans]
+    postHook = words32 [0xeb000000 .|. fromIntegral (((addr ks "rb_media_request_post" - 0x0071c4dc) `div` 4) .&. 0xffffff)]
+    producerKernelFns = ["rb_load", "rb_load_bound", "rb_scan_file", "rb_open", "rb_io_begin",
+      "rb_await", "rb_map_completion", "rb_task_ok", "rb_flush_pending", "rb_card_ready",
+      "rb_build_path", "rb_media_sample", "rb_memset"]
 
 -- the compiled-recipe consumer family ---------------------------------------
 
@@ -1017,7 +1188,8 @@ specSet filmEncoding ks ms fields tabs hostBank (StockFailureRedraw failureRedra
       ++ map (\row _ -> imageSizeRecall row) offeredSizeRows ++
       [ \_ -> readOnlySave, \_ -> fullCardSave, \_ -> partialWrite, \_ -> powerLoss
       , \_ -> mediaMoveInScan, \_ -> mediaMoveInOpen, \_ -> mediaMoveInWrite, \_ -> closeDeferred
-      , \_ -> twoDeferredReadback, \_ -> openTagZero, \_ -> writeCloseOwned, \_ -> writeCloseLate ]
+      , \_ -> twoDeferredReadback, \_ -> openTagZero, \_ -> writeCloseOwned
+      , \_ -> writeCloseErrorOwned, \_ -> writeCloseLate ]
     staleMediaOperation operation =
       let (suffix, target) = case operation of
             BankSaveCurrent -> ("save", "rb_save_current")
@@ -1708,12 +1880,12 @@ specSet filmEncoding ks ms fields tabs hostBank (StockFailureRedraw failureRedra
       (Expect "returned" 13 replacementClaims)
       saveFns bankStubs
     closeDeferred = Spec "h-write-close-deferred-flush"
-      "contract: a successful no-op write close leaves the handle for a later close; readback verification still completes the save and the durable generation preserves ALPHA"
+      "contract: a successful no-op write close returns IO without publishing a completed save; the written generation and prior winner remain on card and live settings are unchanged"
       "rb_save_current" [0, 0] ((model (closeFaultCell NoopWriteClose : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
-      (Expect "returned" 0 [("card", 0, cardWith validA saveFile), ("live-state", 0, extractLive)])
+      (Expect "returned" 4 [("card", 0, cardWith validA saveFile), ("live-state", 0, extractLive)])
       saveFns bankStubs
     twoDeferredReadback = Spec "h-load-two-deferred-readback"
-      "contract: repeatedly discovering two bank files while closes are refused, then permitting closes for slot readback, returns the winning slot without exhausting handles or changing either file or live settings"
+      "contract: eight discoveries refused with IO while close retains ownership, each followed by permitted close and public slot readback, recover the winning slot without exhausting handles or changing either file or live settings"
       "rbm_seq_read_after_deferred" []
       ((model (("rbm_close_noop", 1) : fileA [("rbm_b_present", 1), ("rbm_b_size", 512)]))
         { mCard = cardWith validA validB, mLive = extractLive })
@@ -1738,12 +1910,22 @@ specSet filmEncoding ks ms fields tabs hostBank (StockFailureRedraw failureRedra
         ])
       ("rbm_seq_load_twice" : loadFns) bankStubs
     writeCloseOwned = Spec "h-write-close-tag-owned"
-      "contract: a verify close with a successful callback but retained ownership permits the first save; the second save also succeeds and preserves both durable generations"
+      "contract: a verify close with a successful callback but retained ownership refuses the first save with IO; the second save succeeds and preserves both durable generations"
       "rbm_seq_save_twice" [0, 0x009a0000]
       ((model (closeFaultCell KeepVerifyClose : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
       (Expect "returned" 0
         [ ("card", 0, cardWith gen9File saveFile)
-        , ("casebuf", 0, u32le 0)
+        , ("casebuf", 0, u32le 4)
+        , ("live-state", 0, extractLive)
+        ])
+      ("rbm_seq_save_twice" : saveFns) bankStubs
+    writeCloseErrorOwned = Spec "h-write-close-error-tag-owned"
+      "contract: a verify close reporting vendor status 5 without releasing ownership refuses the first save with IO; the next save succeeds with both durable generations and unchanged live settings"
+      "rbm_seq_save_twice" [0, 0x009a0000]
+      ((model (closeFaultCell RejectVerifyClose : fileA [])) { mCard = cardWith validA B.empty, mLive = extractLive })
+      (Expect "returned" 0
+        [ ("card", 0, cardWith gen9File saveFile)
+        , ("casebuf", 0, u32le 4)
         , ("live-state", 0, extractLive)
         ])
       ("rbm_seq_save_twice" : saveFns) bankStubs

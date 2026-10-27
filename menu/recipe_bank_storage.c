@@ -67,7 +67,7 @@
  * payloads. The destructive filesystem calls are guarded in the media worker,
  * which also executes the attach and detach handlers. Stale requests complete
  * without opening, writing or flushing a replacement filesystem context.
- * Post-completion checks prevent publishing across a media transition.
+ * Epoch is rechecked after completion.
  * Close ownership is released in the media task through the stock tag helpers.
  */
 #include <stdint.h>
@@ -309,6 +309,9 @@ bool rb_media_worker_allows(rb_callback callback, RbMediaIdentity identity)
   return callback != rb_io_cb || rb_media_matches(identity);
 }
 
+static void rb_media_complete(rb_callback callback, uint32_t *completion,
+                               bool has_value);
+
 /* The producer frames reserve these payload spans through the stock post call. */
 uint32_t rb_media_request_post(struct rb_media_message *message)
 {
@@ -318,6 +321,11 @@ uint32_t rb_media_request_post(struct rb_media_message *message)
     struct rb_open_request *request = message->payload;
     if (request->callback == rb_io_cb) {
       request->identity = rb_io_request_identity();
+      if (request->tag == 0u) {
+        request->saved_tag = 0u;
+        rb_media_complete(request->callback, request->completion, true);
+        return 0u;
+      }
     }
   } else if (message->id == 0x2c19u && message->length == 28u) {
     struct rb_write_request *request = message->payload;
@@ -370,8 +378,9 @@ uint32_t rb_media_guarded_open(struct rb_media_message *message)
 {
   struct rb_open_request *request = message->payload;
   void (*release)(uint32_t) = (void (*)(uint32_t))0x0071eff4u;
+  const volatile uint32_t *volume = (const volatile uint32_t *)(uintptr_t)0x00910204u;
   if (rb_media_open_is_recipe(message, request->callback) &&
-      !rb_media_matches(request->identity)) {
+      (!rb_media_matches(request->identity) || *volume == 0u)) {
     release(request->tag);
     request->saved_tag = 0u;
     rb_media_complete(request->callback, request->completion, true);
@@ -409,7 +418,7 @@ uint32_t rb_media_guarded_close(struct rb_media_message *message)
 
 /* the callback status is 0x71d450's completion code: 3 prepare (raw 0x20),
  * 0xe commit (raw 0xd), 8 the raw 0x24 class, 6 missing file (raw 7/8) */
-static uint32_t rb_map_completion(uint32_t code)
+static enum rb_bank_status rb_map_completion(uint32_t code)
 {
   if (code == 0u) {
     return RB_OK;
@@ -443,7 +452,7 @@ static uint32_t rb_tag_owned(uint32_t tag)
   return 0u;
 }
 
-static uint32_t rb_close_quiet(uint32_t handle, RbMediaIdentity identity);
+static enum rb_bank_status rb_close_quiet(uint32_t handle, RbMediaIdentity identity);
 
 /* a close that leaves its tag allocated released nothing, and the low-level
  * release would race the media worker's shared open-file counter (0x703f94's
@@ -541,19 +550,15 @@ static uint32_t rb_build_path(uint32_t which)
   return RB_OK;
 }
 
-/* The close worker's release chain runs before its callback, so a completed
- * close whose tag is still allocated released nothing (every pre-dispatch
- * shape, including the state-1 no-op, leaves it); that release is deferred to
- * a re-dispatched close. A close that never completed leaves the tag owned
- * the same way. */
-static uint32_t RB_DISCOVERY_IMPL(rb_close_quiet)(uint32_t handle, RbMediaIdentity identity
-                                                 RB_DISCOVERY_PARAMETER)
+/* The stock close worker calls tag release before the callback. */
+static enum rb_bank_status RB_DISCOVERY_IMPL(rb_close_quiet)(uint32_t handle,
+    RbMediaIdentity identity RB_DISCOVERY_PARAMETER)
 {
   uint32_t (*close_fn)(void *, uint32_t, uint32_t, uint32_t, uint32_t,
                        uint32_t) =
       (uint32_t (*)(void *, uint32_t, uint32_t, uint32_t, uint32_t,
                     uint32_t))RB_BASE_CLOSE;
-  uint32_t mapped;
+  enum rb_bank_status mapped;
   rb_close_deferred_flag = 0u;
   if (rb_task_ok() == 0u) {
     rb_close_deferred_flag = 1u;
@@ -579,11 +584,14 @@ static uint32_t RB_DISCOVERY_IMPL(rb_close_quiet)(uint32_t handle, RbMediaIdenti
   if (!rb_media_matches(identity)) {
     return RB_MEDIA_CHANGED;
   }
+  if (mapped == RB_OK && rb_close_deferred_flag != 0u) {
+    return RB_IO;
+  }
   return (mapped == RB_OK && rb_io_status != 0u) ? RB_IO : mapped;
 }
 
 #ifdef RB_RAM_DIAGNOSTICS
-static uint32_t rb_close_quiet(uint32_t handle, RbMediaIdentity identity)
+static enum rb_bank_status rb_close_quiet(uint32_t handle, RbMediaIdentity identity)
 {
   return rb_close_quiet_observed(handle, identity RB_DISCOVERY_UNOBSERVED);
 }
@@ -641,7 +649,7 @@ static uint32_t RB_DISCOVERY_IMPL(rb_open)(uint32_t which, uint32_t mode,
     /* a nonzero return means the request dispatched and the open worker
      * released the tag on failure (0x71f3cc-0x71f3e8); a zero return means
      * the request was refused before dispatch */
-    uint32_t mapped = rb_map_completion(rb_io_status);
+    enum rb_bank_status mapped = rb_map_completion(rb_io_status);
     return (mapped == RB_OK) ? RB_IO : mapped;
   }
   if (tag == 0u || rb_io_value == 0u) {
@@ -692,7 +700,7 @@ static uint32_t RB_DISCOVERY_IMPL(rb_read_count)(uint32_t handle, uint8_t *buf, 
     return RB_IO;
   }
   if (rb_io_status != 0u) {
-    uint32_t mapped = rb_map_completion(rb_io_status);
+    enum rb_bank_status mapped = rb_map_completion(rb_io_status);
     return (mapped == RB_OK) ? RB_IO : mapped;
   }
   *count_out = rb_io_value;
@@ -723,7 +731,7 @@ static uint32_t rb_write(uint32_t handle, const uint8_t *src, uint32_t len,
     return RB_IO;
   }
   if (rb_io_status != 0u) {
-    uint32_t mapped = rb_map_completion(rb_io_status);
+    enum rb_bank_status mapped = rb_map_completion(rb_io_status);
     return (mapped == RB_OK) ? RB_IO : mapped;
   }
   return (rb_io_value == len) ? RB_OK : RB_FULL;
@@ -1255,7 +1263,7 @@ static uint32_t RB_DISCOVERY_IMPL(rb_scan_file)(uint32_t which, uint32_t epoch, 
       (uint32_t (*)(uint32_t, uint8_t *))RB_FILE_STAT;
   uint32_t handle = 0u;
   uint32_t status;
-  uint32_t close_status;
+  enum rb_bank_status close_status;
   uint32_t count = 0u;
   uint32_t size = 0u;
   uint8_t stat[128];
@@ -1492,8 +1500,8 @@ uint32_t rb_load(void)
 
 /* The staged generation is validated whole before publication. The SD build
  * writes it to the nonwinning file and reads it back before publishing. */
-static uint32_t rb_write_back(uint32_t generation, uint16_t mask,
-                              RbMediaIdentity identity)
+static enum rb_bank_status rb_write_back(uint32_t generation, uint16_t mask,
+                                        RbMediaIdentity identity)
 {
   uint32_t gen_a = 0u;
   uint32_t gen_b = 0u;
@@ -1503,8 +1511,8 @@ static uint32_t rb_write_back(uint32_t generation, uint16_t mask,
   uint32_t current;
   uint32_t target;
   uint32_t handle = 0u;
-  uint32_t close_status;
-  uint32_t status;
+  enum rb_bank_status close_status;
+  enum rb_bank_status status;
 
   if (generation == 0u) {
     return RB_GEN_EXHAUST;
@@ -1561,7 +1569,7 @@ static uint32_t rb_write_back(uint32_t generation, uint16_t mask,
     rb_defer_close(handle, identity);
   }
   if (close_status != RB_OK && status == RB_OK) {
-    status = RB_FULL;
+    status = close_status;
   }
   if (status != RB_OK) {
     return status;

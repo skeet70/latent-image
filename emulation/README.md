@@ -307,6 +307,10 @@ The core SD bank cases seed their executable domain from `kernel.symbols` and `m
 
 Case assertions decode only memory regions named by their output claims; complete runner reports and `NativeCase` validation still apply to every case.
 
+Recipe opens with an exhausted stock tag pool are completed with I/O failure before dispatch. The recipe worker also rejects a null volume context before entering the stock outer open handler, which otherwise returns without releasing the allocated tag. A close callback reporting success is insufficient for publication when its tag remains allocated; that close returns I/O failure, and write-back preserves the close's exact error status.
+
+The stock allocator and tag release wait indefinitely on semaphore `0x3c`. Synchronous file clients also wait indefinitely on `0x3a` and `0x3b`, and their producers ignore queue-post and completion-wait failures. Native case deadlines bound host execution, not these firmware calls. Queue delivery, semaphore failure and scheduler adapters must be distinguished from execution of the stock queue and scheduler.
+
 The ordinary IMAGE SIZE excursion case stops at the FFF63 programming-phase refusal; its bounded sharpness counterpart verifies the intermediate values, the resumed bank and NONE restoring the refreshed durable base.
 
 The v2 bank format is specified in [recipe design section 18.3](../reports/recipe-design.md#183-generation-format-and-migration). Kernel fixtures cover both file lengths and every truncated load/write length; host/native interop uses literal synthetic names and payloads with pinned-default provenance. UI cases need a plan and decoded images composed from the same linked kernel; stale getter/setter patch targets can land inside unrelated functions after a relink. The multi-operation UI cases use a 4,000,000-instruction budget for whole-generation semantic validation, with the 4-second wall deadline and function/memory guards of the other cases.
