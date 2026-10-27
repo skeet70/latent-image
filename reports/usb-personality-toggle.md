@@ -333,6 +333,36 @@ Tally, E1 to E9:
 
 No scenario fails; the four blocked ones stop where the emulated USB controller never reports the cable leaving after a session started, and every step before that passed.
 
+#### Synthetic body-PID input projection
+
+A separate host-only input check constructs the stored-1/body-PID projection needed by the momentary-selection research. It changes only committed data page `0xe040` payload bytes `0x102..0x103` from `80 ff` to `b6 02`, retaining stored `0xf7 = 1`. A fresh stored-0 control first decompressed byte-identically to the existing body-PID stored-0 projection. Reversing only the new stored-1 PID pair restored the complete parent canonical document byte for byte, including spare/OOB, base, overlays and provenance.
+
+Reproduction uses owner-supplied committed NAND inputs and the checked-in devenv's `jq` and `gzip`. Select an original stored-0 template as `INPUT` with `F7=00` for the control first, then the original stored-1 template with `F7=01`. Use a distinct ignored `OUTPUT` for each. Refuse an existing output before writing. The JSON serialization is sorted and compact with no trailing newline; gzip uses level 9 and mtime 0.
+
+Start `devenv shell`; within that shell run:
+
+```sh
+set -o pipefail
+gzip -dc "$INPUT" |
+  jq -cSj --arg f7 "$F7" '
+    if ([.committed_data_pages[] | select(.[0] == 57408)] | length) != 1
+    then error("nonunique adjustment page") else . end |
+    .committed_data_pages |= map(
+      if .[0] == 57408 then
+        if (.[1] | length) != 4096 or .[1][494:496] != $f7 or .[1][516:520] != "80ff"
+        then error("unexpected adjustment payload")
+        else .[1] = (.[1][0:516] + "b602" + .[1][520:]) end
+      else . end)' |
+  gzip -9n |
+  dd of="$OUTPUT" conv=excl status=none
+```
+
+Before producing stored 1, compare the complete decompressed stored-0 control against the pinned body-PID stored-0 input. For stored 1, compare the complete document after reversing only the PID pair against its original parent, and compare the decoded payloads: the only differing byte positions are `0x102` and `0x103`.
+
+Classify gzip framing separately from document changes. The observed GNU-gzip output changes the OS header byte from `ff` to `03`, with mtime still zero. The control retains its CRC and uncompressed size despite different deflate bytes. The stored-1 projection changes the CRC and deflate bytes while retaining uncompressed size. Compressed identity is not required.
+
+This is a synthetic PID projection, not a full body settings/calibration capture or observed hardware USB status. The historical Q-toggle inputs and results above are unchanged. Fixture construction does not qualify a stock-UI trajectory, alter the strict 512-stop accounting, or establish public CLI support for the unintegrated momentary-selection prototype.
+
 ### 9.4 Updater (E9)
 
 `//emulation:updater-f7` (`emulation/UpdaterF7.hs`) runs the ordinary updater through the RAM restore route of E-RECOVERY-RC0-RESTORE-HOST-150: a `//recovery:build-image restore` card from the toggle DAT, the `ram-rescue-engine` raw handoff, then continuation over the stored-1 template NAND with OK, OK, UP, OK, OK as ordinary ADC pulses. It then boots the exported NAND. The observed values are in 8.4. The receipts are `private-data/analysis/usb-toggle/emu-updater/rc0-toggle-updater-2/` and `cc-toggle-updater-2/`, run at commit `5d34bfb`. The exported NANDs are `7da7fb61…9841` (RC0+toggle) and `2814b76f…e465` (CC+toggle), the same as in the earlier runs. The bridge additions are console commands `watch`, `hits`, `read` and `nandstat`, which share the trace class `TraceSites` with the toggle server.
