@@ -128,7 +128,7 @@ The 120-byte worker input at `0x016c0f40..0x016c0fb7` does not include these ass
 
 ### Spacing-refinement replay input boundary
 
-**Source-inspected and byte-read, E-AF-SPACING-REPLAY-INPUT-BOUNDARY-150:** missing-input frontier identified; the integrated factor-125 versus factor-zero comparison and optical keep/reject decision in [#114](https://github.com/skeet70/latent-image/issues/114) remain open. This is not candidate qualification or evidence of improved accuracy or elapsed time.
+**Source-inspected and byte-read, E-AF-SPACING-REPLAY-INPUT-BOUNDARY-150:** the exact missing-producer-input completion alternative in [#114](https://github.com/skeet70/latent-image/issues/114) is satisfied. The integrated factor-125 versus factor-zero comparison and optical keep/reject decision remain in [#109](https://github.com/skeet70/latent-image/issues/109). This is not candidate qualification or evidence of improved accuracy or elapsed time.
 
 Three input boundaries must remain separate:
 
@@ -154,7 +154,7 @@ These separate windows from the existing non-atomic capture do not supply an act
 
 A single stock trajectory cannot supply unobserved statistics or completion events at positions requested only by the changed policy. Reusing its recorded sequence does not establish the changed policy's counterfactual accuracy or elapsed time. That comparison needs additional provenance-bound observations or a separately qualified response model; an invented statistic or completion is not a missing-data remedy.
 
-[#102](https://github.com/skeet70/latent-image/issues/102) owns source-bound lens/statistic replay inputs and response/completion progression. [#107](https://github.com/skeet70/latent-image/issues/107) owns completed, fresh observation storage with source lifetime and visibility; the result/descriptor and lens-association boundaries above remain applicable. [#108](https://github.com/skeet70/latent-image/issues/108) owns repeated focus sweeps, timing and independent optical references. No XF80-only identity restriction, safe live tuning range or camera operation follows from this input boundary. #114 remains open for its unperformed integrated comparison and keep/reject work.
+[#102](https://github.com/skeet70/latent-image/issues/102) owns source-bound lens/statistic replay inputs and response/completion progression. [#107](https://github.com/skeet70/latent-image/issues/107) owns completed, fresh observation storage with source lifetime and visibility; the result/descriptor and lens-association boundaries above remain applicable. [#108](https://github.com/skeet70/latent-image/issues/108) owns repeated focus sweeps, timing and independent optical references. No XF80-only identity restriction, safe live tuning range or camera operation follows from this input boundary.
 
 ## Processed preview buffers
 
