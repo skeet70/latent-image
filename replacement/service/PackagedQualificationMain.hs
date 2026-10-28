@@ -13,33 +13,37 @@ import System.IO (hPutStrLn, stderr)
 data Options = Options
   { optionReceipt :: FilePath
   , optionPackage :: FilePath
+  , optionReference :: FilePath
   , optionReport :: Maybe FilePath
   }
 
 usage :: String
 usage = unlines
-  [ "usage: packaged-qualification --receipt E2E_DIR --package PACKAGE_DIR [--report FILE]"
+  [ "usage: packaged-qualification --receipt E2E_DIR --package PACKAGE_DIR --reference-dat DAT [--report FILE]"
   , ""
   , "Consumes an existing RAM-push E2E receipt, its relinked manifest and kernel.syms,"
-  , "and the host-only recipe package. It exits zero only when the five selected 0x110"
-  , "rows are candidate-qualified with owned entry/trampoline/stock/return traces,"
-  , "page-visit cancellation/reopen, and unload/rollback evidence."
+  , "the host-only recipe package, and the typed boot/install reference DAT. It exits"
+  , "zero only when the five selected 0x110 rows are candidate-qualified with owned"
+  , "entry/trampoline/stock/return traces, page-visit cancellation/reopen, and"
+  , "unload/rollback evidence."
   ]
 
 parseArgs :: [String] -> Either String Options
-parseArgs = go Nothing Nothing Nothing
+parseArgs = go Nothing Nothing Nothing Nothing
   where
-    go receipt package report [] =
-      case (receipt, package) of
-        (Just r, Just p) -> Right (Options r p report)
-        _ -> Left "both --receipt and --package are required"
-    go _ package report ("--receipt" : value : rest) =
-      go (Just value) package report rest
-    go receipt _ report ("--package" : value : rest) =
-      go receipt (Just value) report rest
-    go receipt package _ ("--report" : value : rest) =
-      go receipt package (Just value) rest
-    go _ _ _ (argument : _) = Left ("unknown option or missing value: " ++ argument)
+    go receipt package reference report [] =
+      case (receipt, package, reference) of
+        (Just r, Just p, Just d) -> Right (Options r p d report)
+        _ -> Left "--receipt, --package and --reference-dat are required"
+    go _ package reference report ("--receipt" : value : rest) =
+      go (Just value) package reference report rest
+    go receipt _ reference report ("--package" : value : rest) =
+      go receipt (Just value) reference report rest
+    go receipt package _ report ("--reference-dat" : value : rest) =
+      go receipt package (Just value) report rest
+    go receipt package reference _ ("--report" : value : rest) =
+      go receipt package reference (Just value) rest
+    go _ _ _ _ (argument : _) = Left ("unknown option or missing value: " ++ argument)
 
 main :: IO ()
 main = do
@@ -50,7 +54,7 @@ main = do
 
 run :: Options -> IO ()
 run options = do
-  outcome <- try (qualifyPackaged (PackagedInputs (optionReceipt options) (optionPackage options)))
+  outcome <- try (qualifyPackaged (PackagedInputs (optionReceipt options) (optionPackage options) (optionReference options)))
     :: IO (Either IOException (Either String PackagedReport))
   case outcome of
     Left problem ->

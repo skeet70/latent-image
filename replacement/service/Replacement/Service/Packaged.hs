@@ -335,6 +335,7 @@ instance FromJSON PackageManifest where
 data PackagedInputs = PackagedInputs
   { packagedReceiptDir :: FilePath
   , packagedPackageDir :: FilePath
+  , packagedReferenceDat :: FilePath
   } deriving (Eq, Show)
 
 data PackagedStatus = PackagedQualified | PackagedRefused deriving (Eq, Show)
@@ -366,6 +367,7 @@ data PackagedIdentities = PackagedIdentities
   , packagedFactsSha :: Digest
   , packagedExecutableSha :: Digest
   , packagedInstalledDat :: Digest
+  , packagedReferenceSha :: Digest
   , packagedResultSha :: Digest
   , packagedManifestSha :: Digest
   , packagedSymbolsSha :: Digest
@@ -390,7 +392,7 @@ packagedStatusLabel PackagedQualified = "qualified"
 packagedStatusLabel PackagedRefused = "refused"
 
 qualifyPackaged :: PackagedInputs -> IO (Either String PackagedReport)
-qualifyPackaged (PackagedInputs receipt packageDirectory) = do
+qualifyPackaged (PackagedInputs receipt packageDirectory referenceDat) = do
   control <- doesFileExist (receipt </> "e2e-control.json")
   if control
     then pure (Left "receipt contains e2e-control.json alongside a candidate result")
@@ -415,6 +417,7 @@ qualifyPackaged (PackagedInputs receipt packageDirectory) = do
                       actualKernel <- digestFile (packageDirectory </> "kernel" </> "kernel.bin")
                       actualArchive <- digestFile (packagePath packageDirectory archive)
                       actualFacts <- digestFile (packagePath packageDirectory facts)
+                      actualReference <- digestFile referenceDat
                       resultDigest <- digestFile (receipt </> "e2e-result.json")
                       let table = parseSymbolTable symbolsBytes
                           symbolsDigest = trustedDigest (sha256Hex (sha256 symbolsBytes))
@@ -425,6 +428,7 @@ qualifyPackaged (PackagedInputs receipt packageDirectory) = do
                             , packagedFactsSha = actualFacts
                             , packagedExecutableSha = packageExecutableSha package
                             , packagedInstalledDat = startInstalledDat (e2eStart result)
+                            , packagedReferenceSha = actualReference
                             , packagedResultSha = resultDigest
                             , packagedManifestSha = trustedDigest (manifestDigest manifest)
                             , packagedSymbolsSha = symbolsDigest
@@ -437,7 +441,7 @@ qualifyPackaged (PackagedInputs receipt packageDirectory) = do
                           problems = nub
                             (schemaProblems result
                               ++ modeProblems result
-                              ++ identityProblems package manifest result actualDat actualKernel actualArchive actualFacts symbolsDigest
+                              ++ identityProblems package manifest result actualDat actualKernel actualArchive actualFacts actualReference symbolsDigest
                               ++ validateDeclaredSites table (e2eDeclaredSites result)
                               ++ traceProblems
                               ++ rowProblemsFor rowResults
@@ -493,11 +497,11 @@ sourceIdentityKeyText :: SourceIdentityKey -> String
 sourceIdentityKeyText BankArchiveKey = "rust_object_replacement_bank"
 sourceIdentityKeyText ToolchainFactsKey = "rust_toolchain_replacement_bank"
 
-identityProblems :: PackageManifest -> RamPushManifest -> E2E -> Digest -> Digest -> Digest -> Digest -> Digest -> [String]
-identityProblems package manifest result actualDat actualKernel actualArchive actualFacts symbolsDigest =
+identityProblems :: PackageManifest -> RamPushManifest -> E2E -> Digest -> Digest -> Digest -> Digest -> Digest -> Digest -> [String]
+identityProblems package manifest result actualDat actualKernel actualArchive actualFacts actualReference symbolsDigest =
   [ "package candidate DAT digest differs from recipe-complete.DAT" | actualDat /= packageFirmwareSha package ]
     ++ [ "package kernel digest differs from kernel/kernel.bin" | actualKernel /= packageExecutableSha package ]
-    ++ [ "package stock reference digest differs from the emulator start input" | packageStockSha package /= startInstalledDat (e2eStart result) ]
+    ++ [ "boot/install reference digest differs from the emulator start input" | actualReference /= startInstalledDat (e2eStart result) ]
     ++ [ "emulator start omits card_present" | startCardPresent (e2eStart result) == Nothing ]
     ++ [ "emulator start is not the cardless route" | startCardPresent (e2eStart result) /= Just False ]
     ++ [ "package has no unique bank.a input" | length (inputsNamed "bank.a" package) /= 1 ]
@@ -859,6 +863,7 @@ packagedReportValue report =
       , ("package_facts_sha256", s (digestText (packagedFactsSha identities)))
       , ("package_executable_sha256", s (digestText (packagedExecutableSha identities)))
       , ("installed_dat_sha256", s (digestText (packagedInstalledDat identities)))
+      , ("reference_dat_sha256", s (digestText (packagedReferenceSha identities)))
       , ("e2e_result_sha256", s (digestText (packagedResultSha identities)))
       , ("relinked_manifest_sha256", s (digestText (packagedManifestSha identities)))
       , ("relinked_symbols_sha256", s (digestText (packagedSymbolsSha identities)))

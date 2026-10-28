@@ -30,6 +30,7 @@ data Variant = Variant
   , variantUnrelatedHits :: [Value]
   , variantOmitSymbols :: Bool
   , variantControlFile :: Bool
+  , variantStartDat :: Maybe String
   , variantMutatePackage :: Maybe (FilePath -> IO ())
   }
 
@@ -47,15 +48,18 @@ main = withTemporary "packaged-qualification" $ \root -> do
   refuses root "missing runtime symbol metadata" (baselineVariant { variantOmitSymbols = True })
   refuses root "sibling control result" (baselineVariant { variantControlFile = True })
   refuses root "mutated package DAT" (baselineVariant { variantMutatePackage = Just mutatePackage })
+  refuses root "start DAT differs from typed reference" (baselineVariant { variantStartDat = Just (digest (BC.pack "other-reference")) })
   refuses root "owned entry after service-after-unload" (baselineVariant { variantAfterHits = afterUnloadOwned })
   refuses root "owned entry in a later unrelated phase" (baselineVariant { variantUnrelatedHits = afterUnloadOwned })
   putStrLn "packaged qualification tests: passed"
 
 baselineVariant :: Variant
-baselineVariant = Variant baselineHits reopenHits declaredSites "candidate-qualified" [] [] False False Nothing
+baselineVariant = Variant baselineHits reopenHits declaredSites "candidate-qualified" [] [] False False Nothing Nothing
 
 baselineCheck :: FilePath -> IO ()
 baselineCheck root = do
+  check "fixture has distinct vendor, reference and candidate identities"
+    (stockSha /= referenceSha && referenceSha /= datSha && stockSha /= datSha)
   outcome <- load root baselineVariant
   case outcome of
     Left problem -> fail problem
@@ -85,6 +89,7 @@ load root variant = do
   createDirectoryIfMissing True (package </> "runfiles")
   privateWrite (package </> "runfiles" </> "bank.a") archiveBytes
   privateWrite (package </> "runfiles" </> "build-facts.txt") factsBytes
+  privateWrite (root </> "reference.DAT") referenceBytes
   privateWriteLazy (package </> "recipe-complete.json") (encode packageManifest)
   case variantMutatePackage variant of
     Nothing -> pure ()
@@ -92,7 +97,7 @@ load root variant = do
   privateWriteLazy (receipt </> "e2e-result.json") (encode (e2eResult variant))
   when (variantControlFile variant) $
     privateWriteLazy (receipt </> "e2e-control.json") (encode (object ["outcome" .= ("control-refused" :: String)]))
-  qualifyPackaged (PackagedInputs receipt package)
+  qualifyPackaged (PackagedInputs receipt package (root </> "reference.DAT"))
 
 privateWrite :: FilePath -> B.ByteString -> IO ()
 privateWrite path bytes = B.writeFile path bytes >> setFileMode path 0o600
@@ -222,13 +227,17 @@ archiveBytes = BC.pack "bank-archive"
 factsBytes :: B.ByteString
 factsBytes = BC.pack "build-facts"
 
-datSha, kernelSha, runtimeSha, archiveSha, factsSha, stockSha :: String
+referenceBytes :: B.ByteString
+referenceBytes = BC.pack "boot-install-reference"
+
+datSha, kernelSha, runtimeSha, archiveSha, factsSha, stockSha, referenceSha :: String
 datSha = digest datBytes
 kernelSha = digest kernelBytes
 runtimeSha = digest runtime
 archiveSha = digest archiveBytes
 factsSha = digest factsBytes
 stockSha = digest (BC.pack "stock-reference")
+referenceSha = digest referenceBytes
 
 digest :: B.ByteString -> String
 digest = sha256Hex . sha256
@@ -305,7 +314,7 @@ e2eResult variant =
     , "emulator_start" .= object
         [ "inputs" .= object
             [ "inputs" .= object
-                [ "installed_dat" .= stockSha
+                [ "installed_dat" .= maybe referenceSha id (variantStartDat variant)
                 , "card_present" .= False
                 ]
             ]
