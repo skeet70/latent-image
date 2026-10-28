@@ -59,6 +59,7 @@ xm1_rust_staticlib(
 xm1_rust_elf(
     name = "area3-arm",
     entry = "area3_validate",
+    extra_ldflags = ["-Wl,--gc-sections"],
     link_script = "validator.ld",
     rust_staticlib = ":area3-rust",
 )
@@ -66,6 +67,7 @@ xm1_rust_elf(
 xm1_rust_elf(
     name = "area3-arm-faulty",
     entry = "area3_validate",
+    extra_ldflags = ["-Wl,--gc-sections"],
     link_script = "validator.ld",
     rust_staticlib = ":area3-rust-faulty",
 )
@@ -111,7 +113,7 @@ haskell_binary(
         "contracts/area3-validator-150.json",
         "//emulation:native-runner",
     ],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded", "-rtsopts"],
     deps = [
         ":area3-lib",
         "//host:base",
