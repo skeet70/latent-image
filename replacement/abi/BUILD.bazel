@@ -1,0 +1,87 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "pilot-rust",
+    src = "pilot.rs",
+    crate_name = "xm1_pilot",
+    data = ["pilot_extra.rs"],
+)
+
+xm1_rust_staticlib(
+    name = "pilot-defect-rust",
+    testonly = True,
+    src = "pilot.rs",
+    crate_name = "xm1_pilot",
+    data = ["pilot_extra.rs"],
+    rustc_flags = [
+        "--cfg",
+        "pilot_abi_defect",
+    ],
+)
+
+xm1_rust_elf(
+    name = "pilot-image",
+    asm_srcs = ["pilot-entry.S"],
+    c_srcs = ["pilot-harness.c"],
+    entry = "xm1_abi_probe",
+    link_script = "pilot.ld",
+    rust_staticlib = ":pilot-rust",
+)
+
+xm1_rust_elf(
+    name = "pilot-defect-image",
+    testonly = True,
+    asm_srcs = ["pilot-entry.S"],
+    c_srcs = ["pilot-harness.c"],
+    entry = "xm1_abi_probe",
+    link_script = "pilot.ld",
+    rust_staticlib = ":pilot-defect-rust",
+)
+
+haskell_test(
+    name = "pilot-abi-tests",
+    size = "small",
+    srcs = ["PilotTests.hs"],
+    args = [
+        "$(location :pilot-image.bin)",
+        "$(location :pilot-image.elf)",
+        "$(location :pilot-image.symbols)",
+        "$(location :pilot-image.disasm)",
+        "$(location :pilot-defect-image.bin)",
+        "$(location :pilot-case.json.in)",
+        "$(location //emulation:native-runner)",
+        "$(location @lab_llvm//:bin/llvm-readelf)",
+    ],
+    data = [
+        "pilot-case.json.in",
+        ":pilot-defect-image.bin",
+        ":pilot-image.bin",
+        ":pilot-image.disasm",
+        ":pilot-image.elf",
+        ":pilot-image.symbols",
+        "//emulation:native-runner",
+        "@lab_llvm//:bin/llvm-readelf",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//emulation:native-adapter",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:process",
+        "//host:text",
+    ],
+)

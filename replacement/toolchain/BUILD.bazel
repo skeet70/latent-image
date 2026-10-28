@@ -1,0 +1,15 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "README.md",
+    "rust.bzl",
+    "xm1-rust.nix",
+])
+
+filegroup(
+    name = "toolchain-facts",
+    srcs = [
+        "@lab_xm1_rust//:share/xm1-rust/build-facts.txt",
+        "@lab_xm1_rust//:share/xm1-rust/target-spec.json",
+    ],
+)

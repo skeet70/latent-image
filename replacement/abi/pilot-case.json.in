@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "id": "rust-abi-pilot",
+  "origin": "synthetic",
+  "provenance": "replacement/abi/pilot.rs compiled for armv7r-none-eabi with the pinned //replacement/toolchain build; expected values are the C harness constants and independent arithmetic",
+  "cpu": {
+    "architecture": "arm",
+    "model": "cortex-r5f",
+    "mode": "arm",
+    "endian": "little"
+  },
+  "artifacts": [
+    {"id": "pilot", "path": "pilot.bin", "size": @SIZE@, "sha256": "@SHA@"}
+  ],
+  "entry": "0x00001000",
+  "exit": "0x00001f00",
+  "registers": {
+    "r0": "0x00000000",
+    "r1": "0x00000000",
+    "r2": "0x00000000",
+    "r3": "0x00000000",
+    "r4": "0x00000044",
+    "r5": "0x00000055",
+    "r6": "0x00000066",
+    "r7": "0x00000077",
+    "r8": "0x00000088",
+    "r9": "0x00000099",
+    "r10": "0x000000aa",
+    "r11": "0x000000bb",
+    "r12": "0x00000000",
+    "sp": "0x00003400",
+    "lr": "0x00001f00",
+    "cpsr": "0x00000010"
+  },
+  "regions": [
+    {
+      "id": "code",
+      "address": "0x00001000",
+      "size": @SIZE@,
+      "permissions": "rx",
+      "initial": {"artifact": "pilot", "offset": 0, "length": @SIZE@}
+    },
+    {
+      "id": "exit",
+      "address": "0x00001f00",
+      "size": 4,
+      "permissions": "rx",
+      "initial": {"zero": true}
+    },
+    {
+      "id": "results",
+      "address": "0x00003000",
+      "size": 256,
+      "permissions": "rw",
+      "initial": {"zero": true}
+    },
+    {
+      "id": "stack",
+      "address": "0x00003300",
+      "size": 256,
+      "permissions": "rw",
+      "initial": {"zero": true}
+    }
+  ],
+  "functions": [
+    {"address": "0x00001000", "size": 3840}
+  ],
+  "stubs": [],
+  "limits": {"instructions": 100000, "wall_ms": 2000},
+  "expected": {
+    "status": "returned",
+    "registers": {
+      "r0": "0x00000000",
+      "r4": "0x00000044",
+      "r5": "0x00000055",
+      "r6": "0x00000066",
+      "r7": "0x00000077",
+      "r8": "0x00000088",
+      "r9": "0x00000099",
+      "r10": "0x000000aa",
+      "r11": "0x000000bb",
+      "sp": "0x00003400",
+      "lr": "0x00001f00",
+      "cpsr": "0x00000010",
+      "pc": "0x00001f00"
+    },
+    "memory": [
+      {
+        "region": "results",
+        "offset": 0,
+        "hex": "0000000003000000000000000400000033000000020000000800000033333333292222220600040004000300020001005d78497defbeaddebdf640220000000000000000695a5a5a"
+      }
+    ],
+    "events": []
+  },
+  "exclusions": [
+    "Synthetic Cortex-R5F user-mode ARM/little-endian only; no X-M1 hardware, exception, coprocessor, interrupt, cache, DMA or timing behavior",
+    "Integer and pointer boundaries only: no floating-point argument, result or retained float boundary is exercised",
+    "The stack is zeroed before return, so no call residue enters the exact final-memory check"
+  ]
+}
