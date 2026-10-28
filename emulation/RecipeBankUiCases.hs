@@ -609,6 +609,17 @@ data WorkspaceKind = KernelWorkspace | MediaWorkspace | UiWorkspace | StackWorks
 
 newtype RegionId = RegionId String deriving (Eq)
 
+newtype ByteOffset = ByteOffset Int deriving (Eq)
+
+newtype ByteCount = ByteCount Int deriving (Eq)
+
+data TransientSpan = TransientSpan
+  { transientRegion :: RegionId
+  , transientOffset :: ByteOffset
+  , transientCount :: ByteCount
+  }
+  deriving (Eq)
+
 data AbiWorkspace = AbiWorkspace
   { workspaceKind :: WorkspaceKind
   , workspaceRegion :: RegionId
@@ -666,14 +677,14 @@ stockPaneRecord = 0x015e4800
 
 -- The stock cursor cell and pane-kind cell are scratch writes outside the
 -- writable claim spans.
-stockScratchSpans :: [(String, Int, Int)]
+stockScratchSpans :: [TransientSpan]
 stockScratchSpans =
-  [ ("cells", fromIntegral (0x009571d8 - cellsBase), 4)
-  , ("draw-state", fromIntegral (stockPaneRecord + 8 - 0x015e46c0), 4)
+  [ TransientSpan (RegionId "cells") (ByteOffset (fromIntegral (0x009571d8 - cellsBase))) (ByteCount 4)
+  , TransientSpan (RegionId "draw-state") (ByteOffset (fromIntegral (stockPaneRecord + 8 - 0x015e46c0))) (ByteCount 4)
   ]
 
-stockScratchRegions :: [String]
-stockScratchRegions = [region | (region, _, _) <- stockScratchSpans]
+stockScratchRegions :: [RegionId]
+stockScratchRegions = map transientRegion stockScratchSpans
 
 stockDrawTailEnd :: Word32
 stockDrawTailEnd = 0x011662b4
@@ -2197,7 +2208,7 @@ regionList in' e sp = map setPermission (filter (\(n, _, _, _, _) -> inProfile (
     -- transient scratch span. An expected byte equal to the initial value is an
     -- observation and grants nothing.
     setPermission (n, base, size, permissions, bytes) =
-      (n, base, size, if permissions == 3 && n `notElem` writeRegions && n `notElem` stockScratchRegions then 1 else permissions, bytes)
+      (n, base, size, if permissions == 3 && n `notElem` writeRegions && RegionId n `notElem` stockScratchRegions then 1 else permissions, bytes)
     writeRegions =
       nub
         ( [n | AbiWorkspace _ (RegionId n) _ _ <- caseWorkspaces in' e sp]
@@ -2410,7 +2421,9 @@ allowedSpans in' e sp =
        | claim@(region, offset, value) <- spClaims sp
        , claimChangesInitial (regionList in' e sp) claim
        ]
-    ++ stockScratchSpans
+    ++ [ (regionName region, offset, offset + count)
+       | TransientSpan region (ByteOffset offset) (ByteCount count) <- stockScratchSpans
+       ]
 
 spanCovers :: String -> Int -> Int -> (String, Int, Int) -> Bool
 spanCovers region offset size (n, lo, hi) = region == n && lo <= offset && offset + size <= hi
