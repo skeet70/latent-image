@@ -32,7 +32,7 @@ The panic smoke enters `xm1_panic_loop` directly with a 1,000-instruction budget
 
 The ELF carries `Tag_CPU_name: cortex-r4`, `CPU_arch: ARM v7`, `CPU_arch_profile: Real-time`, `ABI_PCS_R9_use: v6`, `ABI_align_needed: 8-byte`, `ABI_align_preserved: 8-byte data`, and `CPU_unaligned_access: Not Permitted`.
 
-The linked disassembly contains only `mov`, `movw`, `movt`, `ldr`, `ldrb`, `str`, `strd`, `push`, `pop`, `add`, `adds`, `adc`, `sub`, `cmp`, `tst`, `eor`, `orr`, `orrs`, `orrne`, `mul`, `mvn`, `bl`, `b`, `beq`, `bne`, `movne`, `moveq`, `movwne`, `bx` and literal data. There is no A32 SDIV/UDIV, VFP, coprocessor, exclusive, barrier or mode-switch instruction.
+The linked disassembly contains only `mov`, `movw`, `movt`, `ldr`, `ldrb`, `str`, `strd`, `push`, `pop`, `add`, `adds`, `adc`, `sub`, `cmp`, `tst`, `eor`, `orr`, `orrs`, `orrne`, `mul`, `mla`, `mvn`, `bl`, `b`, `beq`, `bne`, `movne`, `moveq`, `movwne`, `bx` and literal data. There is no A32 SDIV/UDIV, VFP, coprocessor, exclusive, barrier or mode-switch instruction.
 
 The native runner's admission is the execution guard: the pilot returns `returned` with no `unsupported_instruction`, `memory_guard`, `fetch_guard` or `unknown_call`. Instructions outside the runner's admitted set fail at the instruction, so an emitted instruction outside the R4F profile is reported as `unsupported_instruction`, not as missing engine support.
 
