@@ -20,6 +20,10 @@ fujimod.passthru.rustPlatform.buildRustPackage {
   inherit src;
   sourceRoot = "fujimod-xm1-workspace/fujimod-xm1";
   cargoLock.lockFile = ../emulation/fujimod-xm1/Cargo.lock;
+  # Nix daemon workers are not descendants of the caller's slot service, so the
+  # build bounds its own cargo and test parallelism inside the derivation.
+  CARGO_BUILD_JOBS = 1;
+  RUST_TEST_THREADS = 1;
   nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config ];
   # nand_image.rs links zlib for retained-identical committed NAND exports.
   buildInputs = [ pkgs.zlib ];
