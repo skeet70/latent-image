@@ -179,44 +179,37 @@ main = do
     , expect "an unknown watch source fails closed" $
         isLeft (parseWatchObservation (limit4) (watchObservation (watchRecord "cpu-write-typo" 4096)))
     , expect "a record outside the expected range is refused" $
-        isLeft (checkWatch (CleanWatch (limit4) [expectedRange]) (WatchAck True [expectedRange])
-          (either (error "parse") id (parseWatchObservation (limit4) (watchObservation (watchRecord "cpu-write" 8192)))))
-    , expect "a write that restores the old value is still refused by a clean watch" $
-        isLeft (checkWatch (CleanWatch (limit4) [expectedRange]) (WatchAck True [expectedRange])
-          (either (error "parse") id (parseWatchObservation (limit4) (watchObservation (watchRecord "cpu-write" 4096)))))
-    , expect "a control watch accepts an actual write" $
-        fmap watchOutcomeWrites (checkWatch (RefusedWatch (limit4) [expectedRange]) (WatchAck True [expectedRange])
-          (either (error "parse") id (parseWatchObservation (limit4) (watchObservation (watchRecord "cpu-write" 4096))))) == Right 1
+        isLeft (gateOf (watchObservation (watchRecord "cpu-write" 8192)))
+    , expect "a single protected write is refused by the shared gate" $
+        let parsed = either (error "parse") id (parseWatchObservation limit4 (watchObservation (watchRecord "cpu-write" 4096)))
+         in isLeft (judgeWatch False (gateOfParsed parsed)) && judgeWatch True (gateOfParsed parsed) == Right ControlRefusedProtectedWrite
+    , expect "a control fails when the gate accepts a clean interval" $
+        isLeft (judgeWatch True (Right WatchAcceptedClean))
     , expect "an accepted SD write fails the media check" $
         isLeft (checkMedia False (mediaObservation 0) (mediaObservation 1))
-    , expect "a read overlapping the range end is allowed by a clean watch" $
-        fmap watchOutcomeWrites (checkWatch (CleanWatch (limit4) [expectedRange]) (WatchAck True [expectedRange])
-          (either (error "parse") id (parseWatchObservation (limit4) (object
+    , expect "a read overlapping the range end is allowed" $
+        fmap (const ()) (judgeWatch False (gateOf (object
             [ "enabled" .= True, "ranges" .= [[4096, 4112 :: Int]], "violation" .= Null
             , "records" .= [object [ "source" .= ("cpu-read" :: String), "address" .= (4110 :: Int), "physical" .= (4110 :: Int)
               , "size" .= (4 :: Int), "value" .= (0 :: Int), "before" .= ([0, 0, 0, 0] :: [Int]), "byte_order" .= ("little" :: String)
-              , "core" .= (0 :: Int), "pc" .= (4660 :: Int), "instructions" .= (10 :: Int), "tick" .= (10 :: Int) ]]] ])))) == Right 0
-    , expect "a write overlapping the range end is refused by a clean watch" $
-        isLeft (checkWatch (CleanWatch (limit4) [expectedRange]) (WatchAck True [expectedRange])
-          (either (error "parse") id (parseWatchObservation (limit4) (watchObservation (watchRecordSized "cpu-write" 4110 4 0 [0,0,0,0] "little" 10)))))
-    , expect "a host write is refused by a clean watch" $
-        isLeft (checkWatch (CleanWatch (limit4) [expectedRange]) (WatchAck True [expectedRange])
-          (either (error "parse") id (parseWatchObservation (limit4) (watchObservation (transferRecord "host-write" 4096)))))
-    , expect "a host read is allowed by a clean watch" $
-        fmap watchOutcomeWrites (checkWatch (CleanWatch (limit4) [expectedRange]) (WatchAck True [expectedRange])
-          (either (error "parse") id (parseWatchObservation (limit4) (watchObservation (transferRecord "host-read" 4096))))) == Right 0
-    , expect "a write-restore pair is refused by clean and counted by a control" $
+              , "core" .= (0 :: Int), "pc" .= (4660 :: Int), "instructions" .= (10 :: Int), "tick" .= (10 :: Int) ]]] ]))) == Right ()
+    , expect "a write overlapping the range end is refused" $
+        isLeft (judgeWatch False (gateOf (watchObservation (watchRecordSized "cpu-write" 4110 4 0 [0,0,0,0] "little" 10))))
+    , expect "a host write is refused and is not a control cpu-write" $
+        let parsed = either (error "parse") id (parseWatchObservation limit4 (watchObservation (transferRecord "host-write" 4096)))
+         in isLeft (judgeWatch False (gateOfParsed parsed)) && isLeft (judgeWatch True (gateOfParsed parsed))
+    , expect "a host read is allowed" $
+        fmap (const ()) (judgeWatch False (gateOf (watchObservation (transferRecord "host-read" 4096)))) == Right ()
+    , expect "a two-record write-restore pair is refused and counts two cpu writes" $
         let records = [watchRecordSized "cpu-write" 4096 4 1 [0,0,0,0] "little" 10
                       ,watchRecordSized "cpu-write" 4096 4 0 [1,0,0,0] "little" 11]
-            observation = object ["enabled" .= True, "ranges" .= [[4096, 4112 :: Int]], "violation" .= Null, "records" .= records]
-            parsed = either (error "parse") id (parseWatchObservation (limit4) observation)
-         in isLeft (checkWatch (CleanWatch (limit4) [expectedRange]) (WatchAck True [expectedRange]) parsed)
-            && checkWatch (RefusedWatch (limit4) [expectedRange]) (WatchAck True [expectedRange]) parsed == Right (WatchControlRefused 2)
+            parsed = either (error "parse") id (parseWatchObservation limit4 (object ["enabled" .= True, "ranges" .= [[4096, 4112 :: Int]], "violation" .= Null, "records" .= records]))
+         in isLeft (judgeWatch False (gateOfParsed parsed))
+            && judgeWatch True (gateOfParsed parsed) == Right ControlRefusedProtectedWrite
     , expect "a regressing instruction count fails closed" $
         let records = [watchRecordSized "cpu-write" 4096 4 1 [0,0,0,0] "little" 11
                       ,watchRecordSized "cpu-write" 4096 4 0 [1,0,0,0] "little" 10]
-            parsed = either (error "parse") id (parseWatchObservation (limit4) (object ["enabled" .= True, "ranges" .= [[4096, 4112 :: Int]], "violation" .= Null, "records" .= records]))
-         in isLeft (checkWatch (CleanWatch (limit4) [expectedRange]) (WatchAck True [expectedRange]) parsed)
+         in isLeft (gateOf (object ["enabled" .= True, "ranges" .= [[4096, 4112 :: Int]], "violation" .= Null, "records" .= records]))
     , expect "a big-endian read value must agree with its before bytes" $
         isLeft (parseWatchObservation limit4 (object ["enabled" .= True, "ranges" .= [[4096, 4112 :: Int]], "violation" .= Null
           , "records" .= [object [ "source" .= ("cpu-read" :: String), "address" .= (4096 :: Int), "physical" .= (4096 :: Int)
@@ -252,9 +245,11 @@ watchObservation record = object
 mediaObservation :: Int -> MediaObservation
 mediaObservation writes = MediaObservation False False 0 0 0 0 0 (AcceptedWrites (fromIntegral writes)) (AcceptedBytes (fromIntegral (writes * 512)))
 
-watchOutcomeWrites :: WatchOutcome -> Int
-watchOutcomeWrites WatchClean = 0
-watchOutcomeWrites (WatchControlRefused writes) = writes
+gateOf :: Value -> Either String WatchGate
+gateOf value = either Left (\observation -> checkWatch limit4 [expectedRange] (WatchAck True [expectedRange]) observation) (parseWatchObservation limit4 value)
+
+gateOfParsed :: WatchObservation -> Either String WatchGate
+gateOfParsed observation = checkWatch limit4 [expectedRange] (WatchAck True [expectedRange]) observation
 
 isLeft :: Either a b -> Bool
 isLeft (Left _) = True

@@ -20,11 +20,16 @@ module Emulation.WatchObservation
   , WatchLimit
   , watchLimit
   , watchLimitValue
-  , WatchPolicy (..)
-  , WatchOutcome (..)
+  , WatchGate (..)
+  , ProtectedCpuWrites (..)
+  , ProtectedHostWrites (..)
+  , ProtectedBusWrites (..)
+  , ProtectedWriteSummary (..)
+  , WatchJudgement (..)
   , parseWatchAck
   , parseWatchObservation
   , checkWatch
+  , judgeWatch
   , AcceptedWrites (..)
   , AcceptedBytes (..)
   , MediaObservation (..)
@@ -117,9 +122,19 @@ watchLimit value
 shiftL :: Int -> Int -> Int
 shiftL value bits = value * (2 ^ bits)
 
-data WatchPolicy = CleanWatch WatchLimit [WatchRange] | RefusedWatch WatchLimit [WatchRange] deriving (Eq, Show)
+newtype ProtectedCpuWrites = ProtectedCpuWrites { protectedCpuWritesValue :: Int } deriving (Eq, Show)
+newtype ProtectedHostWrites = ProtectedHostWrites { protectedHostWritesValue :: Int } deriving (Eq, Show)
+newtype ProtectedBusWrites = ProtectedBusWrites { protectedBusWritesValue :: Int } deriving (Eq, Show)
 
-data WatchOutcome = WatchClean | WatchControlRefused Int deriving (Eq, Show)
+data ProtectedWriteSummary = ProtectedWriteSummary
+  { protectedCpuWrites :: ProtectedCpuWrites
+  , protectedHostWrites :: ProtectedHostWrites
+  , protectedBusWrites :: ProtectedBusWrites
+  } deriving (Eq, Show)
+
+data WatchGate = WatchAcceptedClean | WatchRejectedProtectedWrites ProtectedWriteSummary deriving (Eq, Show)
+
+data WatchJudgement = CandidateQualified | ControlRefusedProtectedWrite deriving (Eq, Show)
 
 field :: String -> Value -> Either String Value
 field name (Object object) = maybe (Left ("missing field " ++ name)) Right (KM.lookup (K.fromString name) object)
@@ -282,11 +297,8 @@ parseWatchObservation limit value = do
   unless (length records <= watchLimitValue limit) (Left "watch records exceed the declared limit")
   pure (WatchObservation enabled ranges records violation)
 
-checkWatch :: WatchPolicy -> WatchAck -> WatchObservation -> Either String WatchOutcome
-checkWatch policy ack observation = do
-  let (limit, expected) = case policy of
-        CleanWatch limit ranges -> (limit, ranges)
-        RefusedWatch limit ranges -> (limit, ranges)
+checkWatch :: WatchLimit -> [WatchRange] -> WatchAck -> WatchObservation -> Either String WatchGate
+checkWatch limit expected ack observation = do
   unless (ackArmed ack) (Left "watch acknowledgement is not armed")
   unless (ackRanges ack == expected) (Left "watch acknowledgement ranges differ")
   unless (watchEnabled observation) (Left "watch observation is not enabled")
@@ -296,22 +308,14 @@ checkWatch policy ack observation = do
   forM_ (watchRecords observation) $ \record ->
     unless (any (\range -> recordOverlaps range record) expected) (Left "watch record does not overlap the expected ranges")
   checkCounters (watchRecords observation)
-  let writes = [record | record <- watchRecords observation, isWrite record]
-  case policy of
-    CleanWatch _ _ -> do
-      when (not (null writes)) (Left "protected range received a write during the clean interval")
-      pure WatchClean
-    RefusedWatch _ _ -> case [record | record@CpuRecord{cpuAccess = CpuWrite} <- watchRecords observation] of
-      [] -> Left "control watch observed no cpu-write"
-      cpuWrites -> pure (WatchControlRefused (length cpuWrites))
+  let summary = summarize (watchRecords observation)
+  if protectedCpuWritesValue (protectedCpuWrites summary) + protectedHostWritesValue (protectedHostWrites summary) + protectedBusWritesValue (protectedBusWrites summary) == 0
+    then pure WatchAcceptedClean
+    else pure (WatchRejectedProtectedWrites summary)
   where
     recordOverlaps range record = case record of
       CpuRecord{cpuPhysical = physical, cpuBytes = bytes} -> overlapsWatchRange range physical bytes
       TransferRecord{transferPhysical = physical, transferBytes = bytes} -> overlapsWatchRange range physical bytes
-    isWrite record = case record of
-      CpuRecord{cpuAccess = CpuWrite} -> True
-      TransferRecord{transferAccess = access} -> access `elem` [HostWrite, ModelBusWrite]
-      _ -> False
     checkCounters records = go Nothing Nothing records
       where
         go _ _ [] = Right ()
@@ -321,6 +325,23 @@ checkWatch policy ack observation = do
             when (maybe False (tick <) previousTick) (Left "watch tick regressed")
             go (Just instructions) (Just tick) rest
           _ -> go previousInstructions previousTick rest
+
+summarize :: [WatchRecord] -> ProtectedWriteSummary
+summarize records = ProtectedWriteSummary
+  (ProtectedCpuWrites (length [() | CpuRecord{cpuAccess = CpuWrite} <- records]))
+  (ProtectedHostWrites (length [() | TransferRecord{transferAccess = HostWrite} <- records]))
+  (ProtectedBusWrites (length [() | TransferRecord{transferAccess = ModelBusWrite} <- records]))
+
+judgeWatch :: Bool -> Either String WatchGate -> Either String WatchJudgement
+judgeWatch expectControl gateResult = do
+  gate <- gateResult
+  case (expectControl, gate) of
+    (False, WatchAcceptedClean) -> Right CandidateQualified
+    (False, WatchRejectedProtectedWrites _) -> Left "clean candidate received a protected write"
+    (True, WatchAcceptedClean) -> Left "control was accepted as a clean interval"
+    (True, WatchRejectedProtectedWrites summary)
+      | protectedCpuWritesValue (protectedCpuWrites summary) >= 1 -> Right ControlRefusedProtectedWrite
+      | otherwise -> Left "control observed no cpu-write"
 
 newtype AcceptedWrites = AcceptedWrites { acceptedWritesValue :: Word64 } deriving (Eq, Ord, Show)
 newtype AcceptedBytes = AcceptedBytes { acceptedBytesValue :: Word64 } deriving (Eq, Ord, Show)
