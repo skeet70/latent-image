@@ -9,7 +9,7 @@ devenv shell -- bazel build //replacement/abi:all
 devenv shell -- bazel test //replacement/abi:pilot-abi-tests --test_output=all
 ```
 
-The Haskell test builds the positive and defect artifacts, runs both through `//emulation:native-case`, reads the positive ELF attributes, scans the linked disassembly for forbidden instructions, and runs the panic loop to the instruction budget. `pilot-case.json.in` carries the native-case contract with `@SIZE@` and `@SHA@` placeholders; the test fills them from the built image.
+The Haskell test consumes the built positive and defect artifacts, runs both through `//emulation:native-case`, reads the positive ELF attributes, scans the linked disassembly for forbidden instructions, and runs the panic loop to the instruction budget. `pilot-case.json.in` carries the native-case contract with `@SIZE@` and `@SHA@` placeholders; the test fills them from the built image.
 
 The test prints the positive status, the defect's changed ABI result, and the panic-loop budget stop. The native-case reports carry the artifact, case, wire and runner identities.
 
