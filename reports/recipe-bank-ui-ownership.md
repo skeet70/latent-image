@@ -79,9 +79,9 @@ Run the control with `--trajectories emulation/recipe-bank-route-ram-push-contro
 
 The #118 fixed workload is the behavior-preserving refactor of these two classifiers. Baseline same-invocation samples are 45.29 s total (1.07 s build, 44.22 s case generation and execution) for the unmodified tree, and 42.58 s (0.98 s, 41.59 s) for the C refactor, under warm Nix/Bazel and page caches, two jobs and sibling load.
 
-The controlled #118 comparison used source `290faba`, the exact reviewed C range-helper patch and Rust wrapping-subtraction patch, the fixed `package-20261024b/image` inputs and fresh isolated output bases and disk caches per variant. Unrefactored setup builds were separate and build-only: C `32.988 s`, Rust `33.282 s`, each including the four targets and `//replacement/bank:bank`.
+The earlier phase-two comparison (limited; see guard scope below) used source `290faba`, the exact reviewed C range-helper patch and Rust wrapping-subtraction patch, the fixed `package-20261024b/image` inputs and fresh isolated output bases and disk caches per variant. Unrefactored setup builds were separate and build-only: C `32.988 s`, Rust `33.282 s`, each including the four targets and `//replacement/bank:bank`.
 
-| Timed same-invocation sample | C | Rust |
+| Earlier limited same-invocation sample | C | Rust |
 | --- | ---: | ---: |
 | Incremental build | 0.276 s | 0.435 s |
 | UI workload, all 55 + 5 controls | 97.963 s | 97.188 s |
@@ -92,7 +92,7 @@ Both variants passed 55/55 with five rejected controls and the plan gate. The ti
 
 The Bazel clients did not start a new server inside the slot. The separate setup builds started the output-base servers outside the slot (`Starting local Bazel server` in both setup logs at 05:19), and the timed builds at 05:23 reused those servers. No server or action cgroup, affinity or pacing was recorded after the fact, and the servers were gone at inspection. The Rust `//replacement/bank:bank` action (`cacheHit: false`, exit 0, 0.104 s) and the Bazel plan/test execution therefore have unverified guard inheritance; the slot memory peaks exclude that server. The C clang invocations were launched by the in-slot UI script, but no per-process cgroup was recorded. Treat build/action guard conditions as unverified, not assumed.
 
-The C compiler log records 12 clang invocations, including the `menu/recipe_bank_*.c` action units; the Rust execution log records the actual `rustc --crate-name=bank` action. The C bank target was cached; the Rust bank target compiled. No separate Nix bank derivation was found, so no forced Nix bank rebuild was used. Status, registers, ABI validity, effects, mismatches and controls are identical; full projections differ only in `kdata` ABI workspace offsets and provenance totals/retained counts from the C/Rust layout and executed instructions. The totals are close and the runs were not a reverse-order repeat; no speedup is claimed. Historical two-job samples remain confounded.
+The C compiler log records 12 clang invocations, including the `menu/recipe_bank_*.c` action units; the Rust execution log records the actual `rustc --crate-name=bank` action. The C bank target was cached; the Rust bank target compiled. No separate Nix bank derivation was found, so no forced Nix bank rebuild was used. Status, registers, ABI validity, effects, mismatches and controls are identical; full projections differ only in `kdata` ABI workspace offsets and provenance totals/retained counts from the C/Rust layout and executed instructions. The totals are close and the runs were not a reverse-order repeat; no speedup is claimed. Historical two-job samples remain confounded. A corrected repeat is prepared but not run: same source and patches, fresh per-variant output bases and empty disk caches, Rust before C, and `--batch` setup, timed build and plan gate inside the verified slot/pacing payload. It will replace these limited measurements with a matched guarded run.
 
 ## Reproduce
 
