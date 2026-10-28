@@ -220,8 +220,9 @@ observeNative :: ExitCode -> [Region] -> Value -> Either ObservationError Native
 observeNative exit regions value = do
   status <- parseStatus value
   when (status == Returned && exit /= ExitSuccess) (Left ReturnedWithNonzeroExit)
-  engineError <- parseEngineError (get value "unicorn_error")
-  when (status == Returned && engineError /= EngineError 0) (Left (ReturnedWithEngineError (engineError engineError)))
+  engineValue <- parseEngineError (get value "unicorn_error")
+  let EngineError errorWord = engineValue
+  when (status == Returned && errorWord /= 0) (Left (ReturnedWithEngineError errorWord))
   instructions <- requireCount "instructions" MissingInstructions MalformedInstructionCount value
   total <- requireCount "memory_provenance_total" MissingProvenanceTotal MalformedProvenanceTotal value
   registers <- parseRegisters (get value "registers")
@@ -234,7 +235,7 @@ observeNative exit regions value = do
       , nativeMemory = memory
       , nativeProvenance = provenance
       , nativeInstructions = InstructionCount instructions
-      , nativeEngineError = engineError
+      , nativeEngineError = engineValue
       }
 
 renderObservationError :: ObservationError -> String
