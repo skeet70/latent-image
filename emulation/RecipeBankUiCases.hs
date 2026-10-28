@@ -2559,9 +2559,9 @@ preservedRegisterProblems caseValue registers =
 
 qualify :: Inputs -> Env -> Spec -> Value -> Value -> Value
 qualify in' e sp caseValue report =
-  case do
+  case (do
     nativeExit <- N.reportRunnerExit report
-    N.observeNative nativeExit nativeRegions (get report "runner") of
+    N.observeNative nativeExit nativeRegions (get report "runner")) of
     Left problem -> malformedOutput problem
     Right observed ->
       let statusText = N.runnerStatusLabel (N.nativeStatus observed)
