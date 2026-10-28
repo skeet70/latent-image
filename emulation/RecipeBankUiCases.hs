@@ -2162,7 +2162,7 @@ overlayFits (ByteCount size) (ByteOffset offset, bytes) =
 
 modelScratchImage :: Inputs -> Spec -> B.ByteString
 modelScratchImage in' sp
-  | any (overlayFits (ByteCount (modelDataSize in'))) overlays = error "model cell outside the linked data image"
+  | not (all (\(offset, bytes) -> overlayFits (ByteCount (modelDataSize in')) (ByteOffset offset, bytes)) overlays) = error "model cell outside the linked data image"
   | otherwise = overlay (B.replicate (modelDataSize in') 0) overlays
   where
     offset name = fromIntegral (addr (inMs in') name - fromIntegral modelScratchBase)
