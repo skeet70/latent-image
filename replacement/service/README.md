@@ -86,5 +86,5 @@ The probe's interrupt state and stack depth under the menu task on the body; sto
 
 - A reviewed publication: the reviewed RAM-push contract is fail-closed against the new bank sources and identities until they are re-pinned.
 - A fresh packaged RAM-push/unload receipt for the final archive after the trampoline frame change.
-- `service-field-reopen`: the corrected run passes page cancellation, then after an OK expects `114 616 2` and observes `114 616 3`; the reopen cursor/selection contract must be reviewed before a qualified run.
+- `service-field-reopen`: the first visit opens Highlight Tone at 2, moves to 3 and commits 3. The reopened list therefore starts at 3; the trajectory's second visit opens at 3 and confirms it. `rb_stage_edit_row` compares the selected code with the stored code, so confirming the same 3 writes nothing and preserves the committed value. The corrected run is not yet made.
 - The eight unexercised edit-field mappings and the stock probe's other mode columns.
