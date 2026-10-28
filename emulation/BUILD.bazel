@@ -1645,6 +1645,7 @@ haskell_binary(
         ":recipe-bank-interop",
         ":updater-f7",
         ":xm1-viewer",
+        "//replacement/bank:bank",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     deps = [

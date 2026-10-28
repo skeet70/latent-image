@@ -223,7 +223,8 @@ routeInvocation context route receipt = case route of
       , "bash", root </> "emulation" </> "build-recipe-bank-cases.sh" ]
       [ ("RB_MODE", mode), ("JOBS", show (contextNativeJobs context))
       , ("BUILD_DIR", run </> "builds" </> routeName route), ("OUT_DIR", receipt)
-      , ("RUNNER", tool "native-runner"), ("GEN", tool "recipe-bank-cases"), ("INTEROP", tool "recipe-bank-interop") ]
+      , ("RUNNER", tool "native-runner"), ("GEN", tool "recipe-bank-cases"), ("INTEROP", tool "recipe-bank-interop")
+      , ("RB_RUST_ARCHIVE", contextRunfiles context </> "_main" </> "replacement" </> "bank" </> "bank.a") ]
     tool name = contextRunfiles context </> "_main" </> "emulation" </> name
 
 exclude :: String -> T.Text -> ExclusionReason -> Exclusion
