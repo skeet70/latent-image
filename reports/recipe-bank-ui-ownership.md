@@ -34,7 +34,7 @@ A source search for the three export names finds exactly their declarations in `
 
 ## Evidence
 
-The Rust module's host tests pass 4 of 4 and call only the exported C ABI: page and slot boundaries including the adjacent field/sub and sub/edit classes, representative verb tokens covering all four verb kinds and the first and last slot, select codes 0, 1 and 7, and the enumerated gap tokens returning zero. No test reads internal `PageRoute`, `BankItem` or `ItemRef` fields.
+The Rust module's host tests are `//replacement/recipe_ui:route-tests`: a checked-in genrule compiles `src/lib.rs` with the pinned `@lab_rustc` and clang under `--test`, and the existing `//emulation:recovery-task-state-tests.sh` wrapper runs the binary. The four cases call only the exported C ABI and cover the page and slot boundaries, all four verb kinds with the first and last slot, select codes 0, 1 and 7, and the enumerated gap tokens returning zero.
 
 The composed `//replacement/bank:bank` archive builds under the #119 toolchain with one panic handler. A bank ELF linked at the `0x00c40000` reference base passes the bank ELF allowlist with 0 violations and 169 declared sites. The same archive linked at `0x00be1f00` ends at `__rb_image_end` `0x00be9c24`; its disassembly contains no UXTAB, UXTAH, SXTAB, SXTAH or Thumb form.
 
@@ -78,7 +78,7 @@ Build the bank archive with the fixed targets, then run the 55-case UI workload 
 ```sh
 devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-issue117-ui-proof" build --jobs=2 //emulation:native-runner //emulation:recipe-bank-ui-cases //replacement/bank:bank
 RB_RUST_ARCHIVE="$PWD/bazel-bin/replacement/bank/bank.a" BUILD_DIR="$PWD/private-data/analysis/x-m1-1.50/recipes/issue117-ui-proof/ui-build" OUT_DIR="$PWD/private-data/analysis/x-m1-1.50/recipes/issue117-ui-proof/ui-cases" JOBS=2 devenv shell -- bash emulation/build-recipe-bank-ui-cases.sh
-devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-issue117-ui-proof" test --jobs=2 --nocache_test_results --test_output=errors //emulation:recipe-bank-ui-plan-tests //emulation:ui-trajectory-tests
+devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-issue117-ui-proof" test --jobs=2 --nocache_test_results --test_output=errors //replacement/recipe_ui:route-tests //emulation:recipe-bank-ui-plan-tests //emulation:ui-trajectory-tests
 ```
 
 The archive target is an added workflow step relative to the #118 baseline, and the UI script now reads it as `RB_RUST_ARCHIVE`. The packaged read-only route runs the pinned FujiMod RAM-push server:
