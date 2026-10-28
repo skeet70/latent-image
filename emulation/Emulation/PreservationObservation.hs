@@ -5,14 +5,7 @@ module Emulation.PreservationObservation
   ( PreservationRanges
   , preservationRanges
   , preservationRangesJson
-  , maxPreservationRanges
-  , IdentityCpuWrites (identityCpuWritesValue)
-  , ChangedCpuWrites (changedCpuWritesValue)
-  , HostWrites (hostWritesValue)
-  , ModelBusWrites (modelBusWritesValue)
-  , PreservationCounters (..)
-  , PreservationBytes (preservationBytesValue)
-  , PreservationCore (preservationCoreValue)
+  , PreservationCounters
   , PreservationViolation
   , PreservationObservation (preservationCounters, preservationFirstViolation)
   , PreservationAck
