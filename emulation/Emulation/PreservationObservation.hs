@@ -35,6 +35,7 @@ import Emulation.WatchObservation
   ( Instructions
   , RunPurpose (..)
   , instructionCount
+  , instructionsValue
   , WatchAddress
   , WatchJudgement (..)
   , WatchRange
