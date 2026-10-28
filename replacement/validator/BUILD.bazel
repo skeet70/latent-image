@@ -88,6 +88,7 @@ haskell_library(
     deps = [
         "//emulation:case-sha256",
         "//emulation:native-adapter",
+        "//emulation:native-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -96,7 +97,6 @@ haskell_library(
         "//host:host-support",
         "//host:json",
         "//host:process",
-        "//host:scientific",
         "//host:text",
     ],
 )

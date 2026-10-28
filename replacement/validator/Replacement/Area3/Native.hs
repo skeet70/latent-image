@@ -15,8 +15,8 @@ module Replacement.Area3.Native
   , writeArmCase
   , RawRun (..)
   , runCaseFile
-  , Observation (..)
-  , observe
+  , observeNative
+  , renderObservationError
   , Expectation (..)
   , expectationFromCase
   , Check (..)
@@ -26,20 +26,32 @@ module Replacement.Area3.Native
   , hexBytes
   , parseWord32
   , unhex
-  , regionInfo
   ) where
 
 import Control.Exception (IOException, try)
-import Control.Monad (forM, when)
 import Data.Aeson (Value (..))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import Data.Char (isHexDigit, toLower)
 import Data.List (find, isInfixOf, nub)
-import Data.Maybe (fromMaybe, isNothing)
-import Data.Scientific (floatingOrInteger)
+import Data.Maybe (fromMaybe)
 import Data.Word (Word32, Word64, Word8)
 import Emulation.NativeCase (Region (..), loadCase)
+import Emulation.NativeObservation
+  ( GuestAddress (..)
+  , NativeObservation (..)
+  , ProvenanceTotal (..)
+  , RegionId (..)
+  , RunnerStatus (..)
+  , Write (..)
+  , WriteBytes (..)
+  , lookupRegister
+  , observeNative
+  , provenanceCount
+  , provenanceWrites
+  , registerFromLabel
+  , renderObservationError
+  )
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host hiding (sha256)
 import FujiAF.JSON (encodeCanonical)
@@ -55,6 +67,11 @@ hexWord32 :: Word32 -> String
 hexWord32 value = "0x" ++ pad 8 (showHex value "")
   where
     pad width text = replicate (width - length text) '0' ++ text
+
+boundedHex :: B.ByteString -> String
+boundedHex bytes =
+  let text = hexBytes bytes
+   in if length text <= 128 then text else take 128 text ++ "..(" ++ show (B.length bytes) ++ " bytes)"
 
 hexBytes :: B.ByteString -> String
 hexBytes = concatMap byte . B.unpack
@@ -107,12 +124,6 @@ initialArtifact region =
   case str (get (get (description region) "initial") "artifact") of
     "" -> Nothing
     ident -> Just ident
-
-regionInfo :: [Region] -> [(String, Word64, Int)]
-regionInfo regions =
-  [ (regionIdent region, fromIntegral (baseAddress region), fromIntegral (regionSize region))
-  | region <- regions
-  ]
 
 regionByName :: [Region] -> String -> Region
 regionByName regions name =
@@ -236,122 +247,6 @@ runCaseFile runner path = do
                   Right (caseValue, regions, RawRun (str (get value "status")) value exit False err)
               | otherwise -> Right (caseValue, regions, RawRun "invalid_output" value exit False err)
 
-data Observation = Observation
-  { observationStatus :: String
-  , observationRegisters :: [(String, Word32)]
-  , observationMemory :: [(String, B.ByteString)]
-  , observationWrites :: Maybe [(Word64, Int)]
-  , observationProvenanceTotal :: Word64
-  , observationInstructions :: Word64
-  , observationEngineError :: Word32
-  }
-
-requiredRegisters :: [String]
-requiredRegisters = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "sp", "lr", "cpsr", "pc"]
-
-observe :: ExitCode -> [(String, Word64, Int)] -> Value -> Either String Observation
-observe exit regions value = do
-  status <- case get value "status" of
-    String _ -> Right (str (get value "status"))
-    _ -> Left "missing runner status"
-  when (null status) (Left "empty runner status")
-  when (status == "returned" && exit /= ExitSuccess) (Left "status returned with nonzero process exit")
-  engineError <- parseEngineError (get value "unicorn_error")
-  when (status == "returned" && engineError /= 0) (Left "status returned with nonzero unicorn_error")
-  instructions <- requireNumber value "instructions"
-  total <- requireNumber value "memory_provenance_total"
-  registers <- parseRegisters (get value "registers")
-  memory <- parseMemory regions (get value "memory")
-  provenance <- case get value "memory_provenance" of
-    Array _ -> Right (list (get value "memory_provenance"))
-    _ -> Left "missing memory provenance"
-  writes <- parseProvenance provenance
-  let truncated = total > 4096
-  if truncated
-    then
-      when (length provenance /= 4096) (Left "provenance retention count mismatch")
-    else when (fromIntegral (length provenance) /= total) (Left "provenance count mismatch")
-  pure
-    Observation
-      { observationStatus = status
-      , observationRegisters = registers
-      , observationMemory = memory
-      , observationWrites = if truncated then Nothing else Just writes
-      , observationProvenanceTotal = total
-      , observationInstructions = instructions
-      , observationEngineError = engineError
-      }
-
-requireNumber :: Value -> String -> Either String Word64
-requireNumber value key =
-  case get value key of
-    String _ -> maybe (Left ("malformed " ++ key)) Right (readDecimal (str (get value key)))
-    _ -> Left ("missing " ++ key)
-
-readDecimal :: String -> Maybe Word64
-readDecimal text = case reads text :: [(Integer, String)] of
-  [(value', "")]
-    | value' >= 0 && value' <= 18446744073709551615 -> Just (fromIntegral value')
-  _ -> Nothing
-
-exactInteger :: Value -> Either String Integer
-exactInteger value = case value of
-  Number number -> case floatingOrInteger number :: Either Double Integer of
-    Right exact -> Right exact
-    Left _ -> Left "fractional numeric field"
-  _ -> Left "numeric field required"
-
-parseEngineError :: Value -> Either String Word32
-parseEngineError value = do
-  number <- exactInteger value
-  if number >= 0 && number <= 4294967295
-    then Right (fromIntegral number)
-    else Left "unicorn_error out of range"
-
-parseRegisters :: Value -> Either String [(String, Word32)]
-parseRegisters value = case value of
-  Object _ -> do
-    pairs <- forM (keys value) $ \name ->
-      case parseWord32 (str (get value name)) of
-        Just word -> Right (name, word)
-        Nothing -> Left ("malformed register " ++ name)
-    let missing = [name | name <- requiredRegisters, isNothing (lookup name pairs)]
-    if null missing then Right pairs else Left ("missing registers " ++ unwords missing)
-  _ -> Left "missing registers"
-
-parseMemory :: [(String, Word64, Int)] -> Value -> Either String [(String, B.ByteString)]
-parseMemory regions value = case value of
-  Array _ -> do
-    let entries = list value
-    when (length entries /= length regions) (Left "memory region count mismatch")
-    forM (zip regions entries) $ \((ident, base, size), entry) -> do
-      address <-
-        case parseWord32 (str (get entry "address")) of
-          Just word -> Right (fromIntegral word)
-          Nothing -> Left ("malformed address for region " ++ ident)
-      when (address /= base) (Left ("memory region " ++ ident ++ " address mismatch"))
-      bytes <- maybe (Left ("malformed bytes for region " ++ ident)) Right (unhex (str (get entry "bytes")))
-      when (B.length bytes /= size) (Left ("memory region " ++ ident ++ " size mismatch"))
-      pure (ident, bytes)
-  _ -> Left "missing memory"
-
-parseProvenance :: [Value] -> Either String [(Word64, Int)]
-parseProvenance entries = do
-  parsed <- forM entries $ \entry -> do
-    kind <- case str (get entry "kind") of
-      "write" -> Right True
-      "read" -> Right False
-      _ -> Left "malformed provenance kind"
-    address <-
-      case parseWord32 (str (get entry "address")) of
-        Just word -> Right (fromIntegral word)
-        Nothing -> Left "malformed provenance address"
-    size <- do
-      exact <- exactInteger (get entry "size")
-      if exact >= 1 && exact <= 8 then Right (fromIntegral exact) else Left "provenance size out of range"
-    pure (kind, address, size)
-  pure [(address, size) | (True, address, size) <- parsed]
-
 data Expectation = Expectation
   { expectationRecordRegion :: String
   , expectationRecordBase :: Word64
@@ -375,61 +270,56 @@ data Check
   | CheckTruncated String
   deriving (Eq, Show)
 
-classifyStatus :: String -> Check
-classifyStatus "returned" = CheckPass
-classifyStatus "unknown_call" = CheckUnsupported "unknown_call"
-classifyStatus "unsupported_instruction" = CheckUnsupported "unsupported_instruction"
-classifyStatus "engine_error" = CheckBlocked "engine_error"
-classifyStatus "memory_guard" = CheckBlocked "memory_guard"
-classifyStatus "fetch_guard" = CheckBlocked "fetch_guard"
-classifyStatus "stub_contract" = CheckBlocked "stub_contract"
-classifyStatus "invalid_case" = CheckBlocked "invalid_case"
-classifyStatus "host_timeout" = CheckBlocked "host_timeout"
-classifyStatus "runner_failure" = CheckBlocked "runner_failure"
-classifyStatus "invalid_output" = CheckBlocked "invalid_output"
-classifyStatus "wall_budget" = CheckBlocked "wall_budget"
-classifyStatus "instruction_budget" = CheckBlocked "instruction_budget"
-classifyStatus other = CheckUnknown other
+classifyStatus :: RunnerStatus -> Check
+classifyStatus Returned = CheckPass
+classifyStatus UnknownCall = CheckUnsupported "unknown_call"
+classifyStatus UnsupportedInstruction = CheckUnsupported "unsupported_instruction"
+classifyStatus InstructionBudget = CheckBlocked "instruction_budget"
+classifyStatus WallBudget = CheckBlocked "wall_budget"
+classifyStatus MemoryGuard = CheckBlocked "memory_guard"
+classifyStatus FetchGuard = CheckBlocked "fetch_guard"
+classifyStatus StubContract = CheckBlocked "stub_contract"
+classifyStatus RunnerEngineError = CheckBlocked "engine_error"
+classifyStatus InvalidCase = CheckBlocked "invalid_case"
+classifyStatus HostTimeout = CheckBlocked "host_timeout"
+classifyStatus RunnerFailure = CheckBlocked "runner_failure"
+classifyStatus InvalidOutput = CheckBlocked "invalid_output"
+classifyStatus (OtherStatus other) = CheckUnknown other
 
-boundedHex :: B.ByteString -> String
-boundedHex bytes =
-  let text = hexBytes bytes
-   in if length text <= 128 then text else take 128 text ++ "..(" ++ show (B.length bytes) ++ " bytes)"
-
-checkCase :: Expectation -> Observation -> Check
+checkCase :: Expectation -> NativeObservation -> Check
 checkCase expectation observation =
-  case classifyStatus (observationStatus observation) of
+  case classifyStatus (nativeStatus observation) of
     CheckPass -> case concat [registers, memory, effects] of
       [] -> CheckPass
       problems -> CheckMismatch problems
     other -> other
   where
-    registersOf = observationRegisters observation
     missingRegisters =
       [ "register " ++ name ++ ": missing from runner output"
       | name <- "r0" : "pc" : map fst (expectationPreserved expectation)
-      , isNothing (lookup name registersOf)
+      , lookupLabel name == Nothing
       ]
+    lookupLabel name = registerFromLabel name >>= \register -> lookupRegister register observation
     expectedResult = Domain.outcomeValue (expectationOutcome expectation)
     registers
       | not (null missingRegisters) = missingRegisters
       | otherwise =
           [ "r0: expected " ++ hexWord32 expectedResult ++ ", observed " ++ hexWord32 result
-          | Just result <- [lookup "r0" registersOf]
+          | Just result <- [lookupLabel "r0"]
           , result /= expectedResult
           ]
           ++ [ "register " ++ name ++ ": expected " ++ hexWord32 expected ++ ", observed " ++ hexWord32 result
              | (name, expected) <- expectationPreserved expectation
-             , Just result <- [lookup name registersOf]
+             , Just result <- [lookupLabel name]
              , result /= expected
              ]
           ++ [ "pc: expected " ++ hexWord32 (expectationExit expectation) ++ ", observed " ++ hexWord32 result
-             | Just result <- [lookup "pc" registersOf]
+             | Just result <- [lookupLabel "pc"]
              , result /= expectationExit expectation
              ]
     memory =
       concat
-        [ case lookup ident (observationMemory observation) of
+        [ case lookup (RegionId ident) (nativeMemory observation) of
             Nothing -> ["region " ++ ident ++ ": missing from runner output"]
             Just actual ->
               let expected =
@@ -446,16 +336,26 @@ checkCase expectation observation =
       | ident == expectationRecordRegion expectation = True
       | ident `elem` expectationScratch expectation = ident `elem` map fst (expectationDeclaredFinal expectation)
       | otherwise = True
-    effects = case observationWrites observation of
-      Nothing -> ["effect evidence truncated at " ++ show (observationProvenanceTotal observation) ++ " writes"]
+    effects = case provenanceWrites (nativeProvenance observation) of
+      Nothing ->
+        [ "effect evidence truncated at "
+            ++ show (provenanceTotal (provenanceCount (nativeProvenance observation)))
+            ++ " writes"
+        ]
       Just writes -> concatMap classifyWrite writes
-    classifyWrite (address, size)
+    classifyWrite write =
+      let address = guestAddress (writeAddress write)
+          size = fromIntegral (writeBytes (writeLength write)) :: Word64
+       in classifyAddress address size
+    classifyAddress address size
       | inRecord address size =
           case expectationOutcome expectation of
             Domain.Corrected site ->
               let offset = Domain.bitIndex site `div` 8
                   start = expectationRecordBase expectation + fromIntegral offset
-               in ["record write outside the corrected byte at " ++ show address | address < start || address + fromIntegral size > start + 1]
+               in [ "record write outside the corrected byte at " ++ show address
+                  | address < start || address + fromIntegral size > start + 1
+                  ]
             _ -> ["record write on a " ++ Domain.outcomeClass (expectationOutcome expectation) ++ " outcome at " ++ show address]
       | otherwise = case regionAt address size of
           Just ident

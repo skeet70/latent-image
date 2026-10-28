@@ -556,8 +556,8 @@ runAnchors contract anchors runner = forM anchors $ \anchor -> do
     Left message -> pure (AnchorResult (loadedId anchor) (CheckBlocked message) [message] Nothing)
     Right (caseValue, regions, raw) -> do
       existing <- checkResult caseValue regions (rawValue raw)
-      pure $ case observe (rawExit raw) (regionInfo regions) (rawValue raw) of
-        Left message -> AnchorResult (loadedId anchor) (CheckBlocked ("invalid_output: " ++ message)) (message : existing) (Just raw)
+      pure $ case observeNative (rawExit raw) regions (rawValue raw) of
+        Left message -> AnchorResult (loadedId anchor) (CheckBlocked ("invalid_output: " ++ renderObservationError message)) (renderObservationError message : existing) (Just raw)
         Right observation ->
           AnchorResult
             (loadedId anchor)
@@ -624,9 +624,9 @@ runStockBatch contract workspace runner options subjects =
                 (subjectClass item)
                 (subjectId item)
                 (either
-                   (\message -> CheckBlocked ("invalid_output: " ++ message))
+                   (\message -> CheckBlocked ("invalid_output: " ++ renderObservationError message))
                    (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions))
-                   (observe (rawExit raw) (regionInfo regions) (rawValue raw))
+                   (observeNative (rawExit raw) regions (rawValue raw))
                 )
             )
     provenance item =
@@ -653,9 +653,9 @@ runArmBatch contract workspace profile runner options subjects =
                 (subjectClass item)
                 (subjectId item)
                 (either
-                   (\message -> CheckBlocked ("invalid_output: " ++ message))
+                   (\message -> CheckBlocked ("invalid_output: " ++ renderObservationError message))
                    (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions))
-                   (observe (rawExit raw) (regionInfo regions) (rawValue raw))
+                   (observeNative (rawExit raw) regions (rawValue raw))
                 )
             )
     provenance item =
@@ -809,7 +809,7 @@ buildCounterexample _contract scratch faultyPath workspace runner base seed = do
                 (\observation -> case checkCase (expectationFromCase scratch caseValue regions) observation of
                    CheckPass -> "rejected"
                    _ -> "mismatch")
-                (observe (rawExit raw) (regionInfo regions) (rawValue raw))
+                (observeNative (rawExit raw) regions (rawValue raw))
       pure
         ( obj
             [ ("record", s (Domain.recordHex witness))
