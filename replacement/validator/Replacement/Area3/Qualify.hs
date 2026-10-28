@@ -697,19 +697,6 @@ outcomeChecks outcomes =
     isUnknown (CheckTruncated _) = True
     isUnknown _ = False
 
--- Force the full diagnostic strings so a stored verdict retains no observation buffer.
-forceCheck :: Check -> Check
-forceCheck check = case check of
-  CheckPass -> check
-  CheckMismatch problems -> forceStrings problems `seq` check
-  CheckBlocked message -> length message `seq` check
-  CheckUnsupported message -> length message `seq` check
-  CheckUnknown message -> length message `seq` check
-  CheckTruncated message -> length message `seq` check
-
-forceStrings :: [String] -> [String]
-forceStrings problems = foldr (\problem rest -> length problem `seq` rest) [] problems
-
 describeCheck :: Check -> String
 describeCheck CheckPass = "passed"
 describeCheck (CheckMismatch problems) = concatMap (++ "; ") problems
