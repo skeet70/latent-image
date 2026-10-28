@@ -3,6 +3,8 @@
 -- | Packaged qualification for the retained row-availability service.
 module Replacement.Service.Packaged
   ( PackagedInputs (..)
+  , ReferenceDat
+  , loadReferenceDat
   , PackagedStatus (..)
   , PackagedReport (..)
   , PackagedRow (..)
@@ -46,6 +48,13 @@ import System.Directory (doesFileExist)
 import System.FilePath (isAbsolute, (</>), takeFileName)
 
 newtype Digest = Digest { digestText :: String } deriving (Eq, Ord, Show)
+
+newtype ReferenceDat = ReferenceDat
+  { referenceDatDigest :: Digest
+  } deriving (Eq, Show)
+
+loadReferenceDat :: FilePath -> IO ReferenceDat
+loadReferenceDat path = ReferenceDat <$> digestFile path
 
 instance FromJSON Digest where
   parseJSON = withText "digest" (either fail pure . parseDigest . T.unpack)
@@ -313,6 +322,7 @@ instance FromJSON PackageInput where
 
 data PackageManifest = PackageManifest
   { packageSchema :: PackageSchema
+  , packageStockSha :: Digest
   , packageFirmwareSha :: Digest
   , packageExecutableSha :: Digest
   , packageExecutableStart :: TraceAddress
@@ -324,6 +334,7 @@ instance FromJSON PackageManifest where
   parseJSON = withObject "package manifest" $ \manifest ->
     PackageManifest
       <$> manifest .: "schema"
+      <*> manifest .: "stock_sha256"
       <*> manifest .: "firmware_sha256"
       <*> manifest .: "executable_sha256"
       <*> (manifest .: "executable_start" >>= parseAddressText)
@@ -333,6 +344,7 @@ instance FromJSON PackageManifest where
 data PackagedInputs = PackagedInputs
   { packagedReceiptDir :: FilePath
   , packagedPackageDir :: FilePath
+  , packagedReferenceDat :: ReferenceDat
   } deriving (Eq, Show)
 
 data PackagedStatus = PackagedQualified | PackagedRefused deriving (Eq, Show)
@@ -359,10 +371,12 @@ data OwnedSequence = OwnedSequence
 
 data PackagedIdentities = PackagedIdentities
   { packagedDatSha :: Digest
+  , packagedStockSha :: Digest
   , packagedArchiveSha :: Digest
   , packagedFactsSha :: Digest
   , packagedExecutableSha :: Digest
   , packagedInstalledDat :: Digest
+  , packagedReferenceSha :: Digest
   , packagedResultSha :: Digest
   , packagedManifestSha :: Digest
   , packagedSymbolsSha :: Digest
@@ -387,7 +401,7 @@ packagedStatusLabel PackagedQualified = "qualified"
 packagedStatusLabel PackagedRefused = "refused"
 
 qualifyPackaged :: PackagedInputs -> IO (Either String PackagedReport)
-qualifyPackaged (PackagedInputs receipt packageDirectory) = do
+qualifyPackaged (PackagedInputs receipt packageDirectory referenceDat) = do
   control <- doesFileExist (receipt </> "e2e-control.json")
   if control
     then pure (Left "receipt contains e2e-control.json alongside a candidate result")
@@ -417,10 +431,12 @@ qualifyPackaged (PackagedInputs receipt packageDirectory) = do
                           symbolsDigest = trustedDigest (sha256Hex (sha256 symbolsBytes))
                           identities = PackagedIdentities
                             { packagedDatSha = actualDat
+                            , packagedStockSha = packageStockSha package
                             , packagedArchiveSha = actualArchive
                             , packagedFactsSha = actualFacts
                             , packagedExecutableSha = packageExecutableSha package
                             , packagedInstalledDat = startInstalledDat (e2eStart result)
+                            , packagedReferenceSha = referenceDatDigest referenceDat
                             , packagedResultSha = resultDigest
                             , packagedManifestSha = trustedDigest (manifestDigest manifest)
                             , packagedSymbolsSha = symbolsDigest
@@ -433,7 +449,7 @@ qualifyPackaged (PackagedInputs receipt packageDirectory) = do
                           problems = nub
                             (schemaProblems result
                               ++ modeProblems result
-                              ++ identityProblems package manifest result actualDat actualKernel actualArchive actualFacts symbolsDigest
+                              ++ identityProblems package manifest result actualDat actualKernel actualArchive actualFacts referenceDat symbolsDigest
                               ++ validateDeclaredSites table (e2eDeclaredSites result)
                               ++ traceProblems
                               ++ rowProblemsFor rowResults
@@ -489,11 +505,11 @@ sourceIdentityKeyText :: SourceIdentityKey -> String
 sourceIdentityKeyText BankArchiveKey = "rust_object_replacement_bank"
 sourceIdentityKeyText ToolchainFactsKey = "rust_toolchain_replacement_bank"
 
-identityProblems :: PackageManifest -> RamPushManifest -> E2E -> Digest -> Digest -> Digest -> Digest -> Digest -> [String]
-identityProblems package manifest result actualDat actualKernel actualArchive actualFacts symbolsDigest =
-  [ "package DAT digest differs from recipe-complete.DAT" | actualDat /= packageFirmwareSha package ]
+identityProblems :: PackageManifest -> RamPushManifest -> E2E -> Digest -> Digest -> Digest -> Digest -> ReferenceDat -> Digest -> [String]
+identityProblems package manifest result actualDat actualKernel actualArchive actualFacts referenceDat symbolsDigest =
+  [ "package candidate DAT digest differs from recipe-complete.DAT" | actualDat /= packageFirmwareSha package ]
     ++ [ "package kernel digest differs from kernel/kernel.bin" | actualKernel /= packageExecutableSha package ]
-    ++ [ "package firmware digest differs from the emulator start input" | packageFirmwareSha package /= startInstalledDat (e2eStart result) ]
+    ++ [ "boot/install reference digest differs from the emulator start input" | referenceDatDigest referenceDat /= startInstalledDat (e2eStart result) ]
     ++ [ "emulator start omits card_present" | startCardPresent (e2eStart result) == Nothing ]
     ++ [ "emulator start is not the cardless route" | startCardPresent (e2eStart result) /= Just False ]
     ++ [ "package has no unique bank.a input" | length (inputsNamed "bank.a" package) /= 1 ]
@@ -850,10 +866,12 @@ packagedReportValue report =
       ]
     identitiesValue identities = obj
       [ ("package_dat_sha256", s (digestText (packagedDatSha identities)))
+      , ("package_stock_sha256", s (digestText (packagedStockSha identities)))
       , ("package_archive_sha256", s (digestText (packagedArchiveSha identities)))
       , ("package_facts_sha256", s (digestText (packagedFactsSha identities)))
       , ("package_executable_sha256", s (digestText (packagedExecutableSha identities)))
       , ("installed_dat_sha256", s (digestText (packagedInstalledDat identities)))
+      , ("reference_dat_sha256", s (digestText (packagedReferenceSha identities)))
       , ("e2e_result_sha256", s (digestText (packagedResultSha identities)))
       , ("relinked_manifest_sha256", s (digestText (packagedManifestSha identities)))
       , ("relinked_symbols_sha256", s (digestText (packagedSymbolsSha identities)))
