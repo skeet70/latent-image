@@ -462,8 +462,8 @@ parseReply line = case words line of
     site <- siteOf row column
     CandidateReply (Domain.Corrected site) <$> finalRecord bytes
   ["rejected", row, column, bytes] -> do
-    syndromeRow <- readHexValue row :: Maybe Word16
-    syndromeColumn <- readHexValue column :: Maybe Word32
+    syndromeRow <- readHexValue 4 row :: Maybe Word16
+    syndromeColumn <- readHexValue 8 column :: Maybe Word32
     CandidateReply (Domain.Rejected (Domain.Syndrome syndromeRow syndromeColumn)) <$> finalRecord bytes
   _ -> Nothing
   where
@@ -471,7 +471,7 @@ parseReply line = case words line of
     siteOf row column = do
       rowValue <- readDecimal row
       columnValue <- readDecimal column
-      if rowValue < Domain.rowCount && columnValue < Domain.columnCount
+      if rowValue >= 0 && rowValue < Domain.rowCount && columnValue >= 0 && columnValue < Domain.columnCount
         then
           Just
             ( Domain.BitSite
@@ -485,10 +485,12 @@ readDecimal text = case reads text of
   [(value, "")] -> Just value
   _ -> Nothing
 
-readHexValue :: Integral a => String -> Maybe a
-readHexValue text
-  | null text = Nothing
-  | otherwise = foldl step (Just 0) text
+readHexValue :: forall a. (Integral a, Bounded a) => Int -> String -> Maybe a
+readHexValue width text
+  | null text || length text > width = Nothing
+  | otherwise = do
+      value <- foldl step (Just (0 :: Integer)) text
+      if value <= fromIntegral (maxBound :: a) then Just (fromIntegral value) else Nothing
   where
     step Nothing _ = Nothing
     step (Just acc) char
@@ -554,7 +556,7 @@ runAnchors contract anchors runner = forM anchors $ \anchor -> do
     Left message -> pure (AnchorResult (loadedId anchor) (CheckBlocked message) [message] Nothing)
     Right (caseValue, regions, raw) -> do
       existing <- checkResult caseValue regions (rawValue raw)
-      pure $ case observe (regionInfo regions) (rawValue raw) of
+      pure $ case observe (rawExit raw) (regionInfo regions) (rawValue raw) of
         Left message -> AnchorResult (loadedId anchor) (CheckBlocked ("invalid_output: " ++ message)) (message : existing) (Just raw)
         Right observation ->
           AnchorResult
@@ -624,7 +626,7 @@ runStockBatch contract workspace runner options subjects =
                 (either
                    (\message -> CheckBlocked ("invalid_output: " ++ message))
                    (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions))
-                   (observe (regionInfo regions) (rawValue raw))
+                   (observe (rawExit raw) (regionInfo regions) (rawValue raw))
                 )
             )
     provenance item =
@@ -653,7 +655,7 @@ runArmBatch contract workspace profile runner options subjects =
                 (either
                    (\message -> CheckBlocked ("invalid_output: " ++ message))
                    (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions))
-                   (observe (regionInfo regions) (rawValue raw))
+                   (observe (rawExit raw) (regionInfo regions) (rawValue raw))
                 )
             )
     provenance item =
@@ -807,7 +809,7 @@ buildCounterexample _contract scratch faultyPath workspace runner base seed = do
                 (\observation -> case checkCase (expectationFromCase scratch caseValue regions) observation of
                    CheckPass -> "rejected"
                    _ -> "mismatch")
-                (observe (regionInfo regions) (rawValue raw))
+                (observe (rawExit raw) (regionInfo regions) (rawValue raw))
       pure
         ( obj
             [ ("record", s (Domain.recordHex witness))
@@ -950,20 +952,31 @@ probeRefusals adapter record = do
                   <> B.drop (offset + 1) bytes
           either (const Nothing) Just (Domain.mkRecord flipped)
       requests =
-        [ ("unsupported_length", "validate " ++ recordHex ++ " 0000002b")
-        , ("row_parity_high_bits", "validate " ++ Domain.recordHex highRecord ++ " 0000002c")
-        , ("bad_record_hex", "validate " ++ take 100 recordHex ++ " 0000002c")
+        [ ("bad_request", "validate " ++ recordHex ++ " 0000002c extra")
         , ("bad_verb", "check " ++ recordHex ++ " 0000002c")
+        , ("bad_record_hex", "validate " ++ take 100 recordHex ++ " 0000002c")
+        , ("bad_length_field", "validate " ++ recordHex ++ " zzzzzzzz")
+        , ("unsupported_length", "validate " ++ recordHex ++ " 0000002b")
+        , ("row_parity_high_bits", "validate " ++ Domain.recordHex highRecord ++ " 0000002c")
         ]
   (timedOut, exit, out, _) <- runBounded 30000000 (1024 * 1024) adapter [] (BC.pack (unlines (map snd requests)))
   if timedOut || exit /= ExitSuccess
     then pure [(token, Nothing) | (token, _) <- requests]
     else do
       let replies = lines (BC.unpack out)
-      pure
-        [ (token, replyToken reply)
-        | ((token, _), reply) <- zip requests replies
-        ]
+      if length replies /= length requests
+        then
+          pure
+            [ ( token
+              , Just ("reply count " ++ show (length replies) ++ " for " ++ show (length requests) ++ " requests")
+              )
+            | (token, _) <- requests
+            ]
+        else
+          pure
+            [ (token, replyToken reply)
+            | ((token, _), reply) <- zip requests replies
+            ]
   where
     replyToken reply = case words reply of
       ["refused", token] -> Just token

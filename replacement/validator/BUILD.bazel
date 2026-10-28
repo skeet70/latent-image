@@ -96,6 +96,7 @@ haskell_library(
         "//host:host-support",
         "//host:json",
         "//host:process",
+        "//host:scientific",
         "//host:text",
     ],
 )
@@ -118,6 +119,26 @@ haskell_binary(
     ],
 )
 
+haskell_binary(
+    name = "fake-runner",
+    testonly = True,
+    srcs = ["FakeRunnerMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = ["//host:base"],
+)
+
+haskell_binary(
+    name = "fake-candidate",
+    testonly = True,
+    srcs = ["FakeCandidateMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
 haskell_test(
     name = "area3-qualify-tests",
     size = "medium",
@@ -126,6 +147,8 @@ haskell_test(
         "$(location :area3-qualify)",
         "$(location :candidate)",
         "$(location :faulty)",
+        "$(location :fake-candidate)",
+        "$(location :fake-runner)",
         "$(location :area3-arm.bin)",
         "$(location :area3-arm.symbols)",
         "$(location //emulation:native-runner)",
@@ -135,6 +158,8 @@ haskell_test(
         ":area3-arm.symbols",
         ":area3-qualify",
         ":candidate",
+        ":fake-candidate",
+        ":fake-runner",
         ":faulty",
         "//emulation:native-runner",
     ],

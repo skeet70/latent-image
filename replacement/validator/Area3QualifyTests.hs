@@ -4,18 +4,18 @@ module Main where
 
 import Control.Monad (forM_)
 import Data.Aeson (Value (..))
-import Data.Bits (xor)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
-import Data.List (isInfixOf)
-import Data.Word (Word32, Word8)
+import Data.List (find)
+import Data.Maybe (fromMaybe)
+import Data.Word (Word32)
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host hiding (sha256)
 import FujiAF.JSON (encodeCanonical)
 import Numeric (showHex)
-import Replacement.Area3.Domain (Record, buildRecord, recordBytes, recordHex)
+import Replacement.Area3.Domain (Record, buildRecord, recordBytes)
 import System.Directory (createDirectory)
-import System.Environment (getArgs)
+import System.Environment (getArgs, setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 
@@ -23,7 +23,7 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    [qualify, candidate, faulty, armImage, armSymbols, runner] ->
+    [qualify, candidate, faulty, fakeCandidate, fakeRunner, armImage, armSymbols, runner] ->
       withTemporary "area3-tests" $ \root -> do
         let anchorDir = root </> "anchors"
         createDirectory anchorDir
@@ -35,41 +35,63 @@ main = do
         ensure (count single "two_bit" "enumerated" == 0) "single selection excludes two-bit"
         ensure (count single "ground" "enumerated" == 56) "ground case count"
         ensure (not (boolOf (field single ["capability"]))) "logic scope is not capability"
-        allMutations <- runCommand qualify (common root anchorDir candidate)
+        forM_ (arrayOf (field single ["refusals", "probes"])) $ \probe ->
+          ensure (stringOf (get probe "observed") == stringOf (get probe "expected")) "refusal probe matched"
+        allMutations <- runCommand qualify (common root anchorDir candidate ++ ["--faulty", faulty])
         ensure (statusOf allMutations == "partial") ("logic all: " ++ showValue allMutations)
         ensure (count allMutations "two_bit" "enumerated" == 61776) "two-bit enumeration"
         ensure (count allMutations "two_bit" "candidate_matched" == 61776) "two-bit candidate coverage"
         ensure (count allMutations "single_bit" "candidate_matched" == 352) "single-bit candidate coverage"
+        ensure (stringOf (field allMutations ["faulty", "status"]) == "detected") "faulty candidate detected"
         blocked <- runCommand qualify (common root anchorDir candidate ++ ["--scope", "capability", "--mutations", "single", "--stock", "none"])
         ensure (statusOf blocked == "blocked") ("capability without runner: " ++ showValue blocked)
-        ensure (stringOf (field blocked ["arm", "status"]) == "passed") "declared ARM candidate ran"
-        ensure (hasInfix "original-binary execution" (field blocked ["blockers"])) "stock coverage blocker"
+        ensure (count blocked "single_bit" "stock_passed" == 0) "stock did not run"
+        ensure (count blocked "single_bit" "arm_passed" == 352) "declared ARM candidate ran"
         partial <- runCommand qualify (["--contract", root </> "contract.json", "--case-dir", anchorDir, "--candidate", candidate, "--runner", runner, "--arm-image", armImage, "--arm-symbols", armSymbols, "--arm-base", "0x00800000", "--scope", "capability", "--mutations", "single", "--stock", "none"])
         ensure (statusOf partial == "blocked") ("partial capability: " ++ showValue partial)
         ensure (not (boolOf (field partial ["capability"]))) "partial invocation is not capability"
-        ensure (hasInfix "complete mutation domain" (field partial ["blockers"])) "partial mutation blocker"
-        ensure (hasInfix "original-binary execution of every selected subject" (field partial ["blockers"])) "partial stock blocker"
+        ensure (not (null (arrayOf (field partial ["coverage_gaps"])))) "partial coverage gaps named"
+        ensure (count partial "single_bit" "stock_passed" == 0) "partial stock not executed"
         arm <- runCommand qualify (common root anchorDir candidate ++ ["--runner", runner, "--arm-image", armImage, "--arm-symbols", armSymbols, "--arm-base", "0x00800000", "--mutations", "single"])
         ensure (statusOf arm == "partial") ("ARM candidate: " ++ showValue arm)
         ensure (stringOf (field arm ["arm", "status"]) == "passed") "ARM candidate status"
         ensure (count arm "single_bit" "arm_passed" == 352) "ARM single-bit coverage"
         ensure (count arm "ground" "arm_passed" == 56) "ARM ground-case coverage"
-        detection <- runCommand qualify (common root anchorDir candidate ++ ["--faulty", faulty])
-        ensure (statusOf detection == "partial") ("faulty control: " ++ showValue detection)
-        ensure (stringOf (field detection ["faulty", "status"]) == "detected") "faulty candidate detected"
-        let counterexample = field detection ["faulty", "counterexample"]
+        let counterexample = field allMutations ["faulty", "counterexample"]
         ensure (countValue counterexample ["final_bits"] == 2) ("reduced witness bits: " ++ showValue counterexample)
         ensure (countValue counterexample ["initial_bits"] > countValue counterexample ["final_bits"]) "reduction shrank the witness"
         forM_ (arrayOf (field counterexample ["differences"])) $ \difference ->
           ensure (num (get difference "byte") < 44) "witness stays inside the protected bytes"
-        ensure (stringOf (field counterexample ["candidate"]) == "accepted") "witness candidate outcome"
-        ensure (stringOf (field counterexample ["oracle"]) /= "") "witness oracle recorded"
+        let witness = stringOf (field counterexample ["record"])
+        candidateToken <- adapterOutcome candidate witness
+        ensure (candidateToken == "rejected") "candidate rejects the reduced witness"
+        faultyToken <- adapterOutcome faulty witness
+        ensure (faultyToken == "accepted") "faulty candidate accepts the reduced witness"
         faultyCandidate <- runCommand qualify (["--contract", root </> "contract.json", "--case-dir", anchorDir, "--candidate", faulty, "--scope", "logic", "--mutations", "single", "--stock", "none"])
         ensure (statusOf faultyCandidate == "failed") ("faulty candidate as candidate: " ++ showValue faultyCandidate)
-        ensure (not (null (arrayOf (get faultyCandidate "failures")))) "faulty candidate failures recorded"
+        ensure (count faultyCandidate "ground" "candidate_matched" < count faultyCandidate "ground" "enumerated") "faulty candidate mismatches ground cases"
         malformed <- runCommand qualify (["--contract", root </> "contract-invalid.json", "--case-dir", anchorDir, "--candidate", candidate, "--scope", "logic", "--stock", "none"])
         ensure (statusOf malformed == "refused") ("invalid contract: " ++ showValue malformed)
-        probeRefusals candidate record
+        omitted <- runCommand qualify (["--contract", root </> "contract.json", "--case-dir", anchorDir, "--candidate", fakeCandidate, "--scope", "logic", "--mutations", "single", "--stock", "none"])
+        ensure (statusOf omitted == "failed") ("omitted refusal reply: " ++ showValue omitted)
+        let badVerb =
+              fromMaybe Null
+                (find (\probe -> stringOf (get probe "expected") == "bad_verb") (arrayOf (field omitted ["refusals", "probes"])))
+        ensure (stringOf (get badVerb "observed") /= "bad_verb") "omitted refusal reply detected"
+        let runFakeRunner mode = do
+              setEnv "FAKE_RUNNER_MODE" mode
+              result <- runCommand qualify (["--contract", root </> "contract.json", "--case-dir", anchorDir, "--candidate", candidate, "--runner", fakeRunner, "--arm-image", armImage, "--arm-symbols", armSymbols, "--arm-base", "0x00800000", "--scope", "logic", "--mutations", "single", "--stock", "none", "--limit", "1"])
+              unsetEnv "FAKE_RUNNER_MODE"
+              pure result
+        nonzeroExit <- runFakeRunner "nonzero-exit-returned"
+        ensure (statusOf nonzeroExit == "blocked" && not (boolOf (field nonzeroExit ["capability"]))) "nonzero exit is not a pass"
+        ensure (countValue nonzeroExit ["arm", "passed"] == 0) "nonzero exit ARM case not passed"
+        nonzeroUnicorn <- runFakeRunner "returned-nonzero-unicorn"
+        ensure (statusOf nonzeroUnicorn == "blocked") "nonzero unicorn is not a pass"
+        negativeCounter <- runFakeRunner "negative-counter"
+        ensure (statusOf negativeCounter == "blocked") "negative counter is not a pass"
+        fractional <- runFakeRunner "fractional-unicorn"
+        ensure (statusOf fractional == "blocked") "fractional numeric is not a pass"
         pure ()
     _ -> failH "usage: area3-qualify-tests QUALIFY CANDIDATE FAULTY"
 
@@ -103,9 +125,6 @@ count report section key = num (get (get (get report "coverage") section) key)
 
 countValue :: Value -> [String] -> Integer
 countValue value path = num (field value path)
-
-hasInfix :: String -> Value -> Bool
-hasInfix needle value = any (needle `isInfixOf`) (map str (list value))
 
 showValue :: Value -> String
 showValue = BC.unpack . encodeCanonical
@@ -294,38 +313,13 @@ runCommand executable arguments = do
       ensure (get value "status" /= Null) ("command exit " ++ show code ++ ": " ++ BC.unpack err)
       pure value
 
-probeRefusals :: FilePath -> Record -> IO ()
-probeRefusals candidate record = do
-  let recordHex' = recordHex record
-      bytes = recordBytes record
-      highByte = B.index bytes 45
-      highRecord = B.take 45 bytes <> B.singleton (highByte `xor` 0x08) <> B.drop 46 bytes
-      input =
-        BC.pack
-          ( unlines
-              [ "validate " ++ recordHex' ++ " 0000002b"
-              , "validate " ++ concatMap hexByte (B.unpack highRecord) ++ " 0000002c"
-              , "validate " ++ take 100 recordHex' ++ " 0000002c"
-              , "check " ++ recordHex' ++ " 0000002c"
-              ]
-          )
-  (timedOut, exit, out, err) <- runBounded 30000000 (1024 * 1024) candidate [] input
-  ensure (not timedOut && exit == ExitSuccess) ("candidate driver failed: " ++ BC.unpack err)
-  let replies = lines (BC.unpack out)
-  ensure
-    ( replies
-        == [ "refused unsupported_length"
-           , "refused row_parity_high_bits"
-           , "refused bad_record_hex"
-           , "refused bad_verb"
-           ]
-    )
-    ("refusal replies: " ++ show replies)
-
-hexByte :: Word8 -> String
-hexByte value =
-  let text = showHex value ""
-   in replicate (2 - length text) '0' ++ text
+adapterOutcome :: FilePath -> String -> IO String
+adapterOutcome adapter hexText = do
+  (timedOut, exit, out, err) <- runBounded 30000000 (1024 * 1024) adapter [] (BC.pack ("validate " ++ hexText ++ " 0000002c\n"))
+  ensure (not timedOut && exit == ExitSuccess) ("adapter failed: " ++ BC.unpack err)
+  case words (BC.unpack out) of
+    (token : _) -> pure token
+    [] -> failH "adapter reply missing"
 
 pad :: Int -> String -> String
 pad width text = replicate (max 0 (width - length text)) '0' ++ text
