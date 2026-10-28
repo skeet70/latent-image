@@ -341,8 +341,8 @@ parseWatchAck :: Value -> Either String WatchAck
 parseWatchAck value = do
   exactKeys ["armed", "ranges"] value
   WatchAck
-  <$> (field "armed" value >>= asBool)
-  <*> (field "ranges" value >>= parseRanges)
+    <$> (field "armed" value >>= asBool)
+    <*> (field "ranges" value >>= parseRanges)
 
 parseWatchObservation :: WatchLimit -> Value -> Either String WatchObservation
 parseWatchObservation limit value = do
