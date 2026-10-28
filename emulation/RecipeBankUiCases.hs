@@ -664,8 +664,8 @@ stockDrawTailCode = u32le 0xe8bd8830
 stockPaneRecord :: Word32
 stockPaneRecord = 0x015e4800
 
--- The stock cursor cell and pane-kind cell are scratch writes outside the case
--- claims.
+-- The stock cursor cell and pane-kind cell are scratch writes outside the
+-- writable claim spans.
 stockScratchSpans :: [(String, Word32, Int)]
 stockScratchSpans =
   [ ("cells", 0x009571d8, 4)
