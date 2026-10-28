@@ -703,6 +703,39 @@ mutantChecks expectation observation =
     refused (CheckMismatch _) = True
     refused _ = False
 
+data CaseOutcome
+  = CasePassed
+  | CaseFailed
+  | CaseBlocked
+  | CaseUnsupported
+  | CaseTruncated
+  | CaseUnknown
+  | CaseMalformed String
+  deriving (Eq, Show)
+
+caseOutcome :: Value -> CaseOutcome
+caseOutcome result =
+  case get result "status" of
+    String _ -> case str (get result "status") of
+      "passed" -> CasePassed
+      "failed" -> CaseFailed
+      "blocked" -> CaseBlocked
+      "unsupported" -> CaseUnsupported
+      "truncated" -> CaseTruncated
+      "unknown" -> CaseUnknown
+      "" -> CaseMalformed "empty status"
+      other -> CaseMalformed ("unknown status " ++ other)
+    _ -> CaseMalformed "missing status"
+
+caseOutcomeLabel :: CaseOutcome -> String
+caseOutcomeLabel CasePassed = "passed"
+caseOutcomeLabel CaseFailed = "failed"
+caseOutcomeLabel CaseBlocked = "blocked"
+caseOutcomeLabel CaseUnsupported = "unsupported"
+caseOutcomeLabel CaseTruncated = "truncated"
+caseOutcomeLabel CaseUnknown = "unknown"
+caseOutcomeLabel (CaseMalformed _) = "malformed"
+
 serviceQualificationReport :: [Value] -> Value
 serviceQualificationReport results =
   obj
@@ -739,7 +772,7 @@ serviceQualificationReport results =
       , isServiceCaseId caseId
       , caseId `notElem` map serviceRowId serviceRows
       ]
-    statusOf result = str (get result "status")
+    outcomeOf result = caseOutcome result
     summary row =
       case matches row of
         [] ->
@@ -756,6 +789,7 @@ serviceQualificationReport results =
             [ ("property", n (fromIntegral (serviceRowProperty row)))
             , ("row", n (fromIntegral (serviceRowToken row)))
             , ("expected", n (fromIntegral (rowStateWord (serviceRowExpected row))))
+            , ("status", s (caseOutcomeLabel (outcomeOf result)))
             ]
         duplicates ->
           obj
@@ -766,10 +800,11 @@ serviceQualificationReport results =
             , ("status", s "duplicate")
             , ("duplicates", n (fromIntegral (length duplicates)))
             ]
-    qualifiedRows = length [() | result <- found, statusOf result == "passed"]
-    failed = [result | result <- found, statusOf result == "failed"]
-    blocked = [result | result <- found, statusOf result `elem` ["blocked", "unsupported", "truncated"]]
-    unknown = [result | result <- found, statusOf result == "unknown"]
+    qualifiedRows = length [() | result <- found, outcomeOf result == CasePassed]
+    failed = [result | result <- found, outcomeOf result == CaseFailed]
+    blocked = [result | result <- found, outcomeOf result `elem` [CaseBlocked, CaseUnsupported, CaseTruncated]]
+    unknown = [result | result <- found, outcomeOf result == CaseUnknown]
+    malformed = [(result, reason) | result <- found, CaseMalformed reason <- [outcomeOf result]]
     mutantProblems result =
       let entries = list (get result "mutants")
           names = map (\entry -> str (get entry "name")) entries
@@ -785,23 +820,28 @@ serviceQualificationReport results =
                , status /= "refused"
                ]
     failures =
-      [ caseId ++ ": " ++ problem
+      [ str (get result "id") ++ ": failed"
       | result <- failed
-      , let caseId = str (get result "id")
-      , problem <- map str (list (get result "mismatches"))
       ]
+        ++ [ str (get result "id") ++ ": " ++ problem
+           | result <- failed
+           , problem <- map str (list (get result "mismatches"))
+           ]
+        ++ [ str (get result "id") ++ ": " ++ reason
+           | (result, reason) <- malformed
+           ]
         ++ [ "duplicate required case id: " ++ rowId | rowId <- duplicateRows ]
         ++ [ "unknown service case id: " ++ rowId | rowId <- unknownRows ]
         ++ [ str (get result "id") ++ ": " ++ problem
            | result <- found
-           , statusOf result == "passed"
+           , outcomeOf result == CasePassed
            , problem <- mutantProblems result
            ]
     blockers =
-      [ str (get result "id") ++ ": " ++ statusOf result
+      [ str (get result "id") ++ ": " ++ caseOutcomeLabel (outcomeOf result)
       | result <- blocked
       ]
-    unknowns = [str (get result "id") ++ ": " ++ statusOf result | result <- unknown]
+    unknowns = [str (get result "id") ++ ": " ++ caseOutcomeLabel (outcomeOf result) | result <- unknown]
     coverageGaps =
       [ "capability requires all " ++ show (length serviceRows) ++ " direct service rows"
       | not (null missingRows)
@@ -811,6 +851,7 @@ serviceQualificationReport results =
       | not (null blockers) = "blocked"
       | not (null unknowns) = "unknown"
       | not (null coverageGaps) = "partial"
+      | qualifiedRows /= length serviceRows = "failed"
       | otherwise = "qualified"
     mutantSummaries =
       [ obj

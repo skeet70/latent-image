@@ -58,12 +58,41 @@ aggregationChecks = do
         ]
       duplicateCase = baseline ++ take 1 baseline
       missingCase = tail baseline
+      missingStatus =
+        [ if str (get result "id") == firstId then set "status" Null result else result
+        | result <- baseline
+        ]
+      unknownStatus =
+        [ if str (get result "id") == firstId then set "status" (s "mystery") result else result
+        | result <- baseline
+        ]
+      emptyStatus =
+        [ if str (get result "id") == firstId then set "status" (s "") result else result
+        | result <- baseline
+        ]
+      failedEmptyDiagnostics =
+        [ if str (get result "id") == firstId
+            then set "status" (s "failed") (set "mismatches" (arr []) result)
+            else result
+        | result <- baseline
+        ]
+      failedMissingDiagnostics =
+        [ if str (get result "id") == firstId
+            then set "status" (s "failed") (set "mismatches" Null result)
+            else result
+        | result <- baseline
+        ]
   check "the complete control domain qualifies" (qualified baselineReport)
   check "a missing control fails closed" (not (qualified (serviceQualificationReport missingControl)))
   check "an unknown control fails closed" (not (qualified (serviceQualificationReport unknownControl)))
   check "a duplicate control fails closed" (not (qualified (serviceQualificationReport duplicateControl)))
   check "a duplicate case id fails closed" (not (qualified (serviceQualificationReport duplicateCase)))
   check "a missing case is partial" (str (get (serviceQualificationReport missingCase) "status") == "partial")
+  check "a missing status fails closed" (not (qualified (serviceQualificationReport missingStatus)))
+  check "an unknown status fails closed" (not (qualified (serviceQualificationReport unknownStatus)))
+  check "an empty status fails closed" (not (qualified (serviceQualificationReport emptyStatus)))
+  check "failed with empty diagnostics fails closed" (not (qualified (serviceQualificationReport failedEmptyDiagnostics)))
+  check "failed with missing diagnostics fails closed" (not (qualified (serviceQualificationReport failedMissingDiagnostics)))
 
 qualified :: Value -> Bool
 qualified report = str (get report "status") == "qualified" && get report "capability" == b True
