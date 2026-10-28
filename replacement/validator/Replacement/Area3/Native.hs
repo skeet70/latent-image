@@ -391,6 +391,11 @@ classifyStatus "wall_budget" = CheckBlocked "wall_budget"
 classifyStatus "instruction_budget" = CheckBlocked "instruction_budget"
 classifyStatus other = CheckUnknown other
 
+boundedHex :: B.ByteString -> String
+boundedHex bytes =
+  let text = hexBytes bytes
+   in if length text <= 128 then text else take 128 text ++ "..(" ++ show (B.length bytes) ++ " bytes)"
+
 checkCase :: Expectation -> Observation -> Check
 checkCase expectation observation =
   case classifyStatus (observationStatus observation) of
@@ -431,7 +436,9 @@ checkCase expectation observation =
                     fromMaybe
                       (fromMaybe B.empty (lookup ident (expectationRegions expectation)))
                       (lookup ident (expectationDeclaredFinal expectation))
-               in ["region " ++ ident ++ ": expected " ++ hexBytes expected ++ ", observed " ++ hexBytes actual | actual /= expected]
+               in [ "region " ++ ident ++ ": expected " ++ boundedHex expected ++ ", observed " ++ boundedHex actual
+                  | actual /= expected
+                  ]
         | (ident, _, _) <- expectationRegionBounds expectation
         , compareRegion ident
         ]
