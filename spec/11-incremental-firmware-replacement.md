@@ -126,7 +126,7 @@ In #118, inventory existing mechanisms and evidence, create the coarse capabilit
 
 ### Native build and retained-service boundary
 
-#119 qualifies the Rust build/ABI contract using the current C/Clang path as a reference. Cover pinned cross-toolchain integration, `core`/builtins, panic behavior, emitted ISA, actual calling convention, stack alignment, preserved state, linking and runtime dependencies. Bounded execution and negative controls establish this contract without waiting for installer publication or a stock service scenario.
+#119 qualifies the Rust build/ABI contract using the current C/Clang path as a reference. Cover pinned cross-toolchain integration, `core`/builtins, panic behavior, emitted ISA, actual calling convention, stack alignment, preserved state, linking and runtime dependencies. Bounded execution and negative controls establish this contract without waiting for installer publication or a stock service scenario. The qualified interface and facts are in [`replacement/toolchain`](../replacement/toolchain/README.md) and [`replacement/abi`](../replacement/abi/README.md).
 
 #123 separately qualifies Rust execution through the existing installer and a grounded retained-service call, including publication, task context, effects and lifecycle. Reuse current probes/features where possible. Extend [#71](https://github.com/skeet70/latent-image/issues/71) infrastructure without claiming its AF-specific gate. #120 depends on #119 only; #123 can proceed alongside #120 after #119, reusing contract conventions as they emerge.
 
