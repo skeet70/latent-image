@@ -5,7 +5,7 @@ import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, try)
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON (..), Value (..), encode, object, withObject, (.:), (.=))
-import Data.Aeson.Types (parseEither)
+import Data.Aeson.Types (parseEither, parseMaybe)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (nub, sort)
 import Data.Maybe (catMaybes, isJust)
@@ -30,6 +30,7 @@ import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey
 import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
 import Emulation.UiTrajectory
+import Emulation.WatchObservation
 import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
 import EmulatorUsb
 import FujiAF.RamPush
@@ -51,6 +52,18 @@ data BootMode = CheckpointedBoot | FreshBoot deriving (Eq, Show)
 -- | FlashCandidate boots a DAT whose own loader publishes the bank and runs the segments
 -- without ram-alloc, ram-push or ram-unload.
 data PushMode = RamPush | FlashCandidate deriving (Eq, Show)
+
+mediaJson :: MediaObservation -> Value
+mediaJson media = object
+  [ "present" .= mediaPresent media
+  , "write_protected" .= mediaWriteProtected media
+  , "dirty_sectors" .= sectorsValue (mediaDirtySectors media)
+  , "started" .= commandsValue (mediaStarted media)
+  , "completed" .= commandsValue (mediaCompleted media)
+  , "irqs" .= irqsValue (mediaIrqs media)
+  , "dma_boundaries" .= boundariesValue (mediaDmaBoundaries media)
+  , "accepted_writes" .= acceptedWritesValue (mediaAcceptedWrites media)
+  , "accepted_write_bytes" .= acceptedBytesValue (mediaAcceptedBytes media) ]
 
 -- | A key held across the attach edge of every boot the e2e starts.
 data AttachHold = NoAttachHold | AttachHoldQ deriving (Eq, Show)
@@ -617,6 +630,15 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     state <- readRamPushState statePath
     runner <- newSegmentRunner emulator e2e (\label action -> timed label action) readAddress (\phase message -> stop phase message) plan
     let segments = runSegments runner
+        protected = trajectoryProtectedWrites plan
+        expect = trajectoryExpect plan
+    let ranges = trajectoryProtectedWrites plan
+        limit = either error id (watchLimit 4096)
+        cardless = emulationCardMode settings == Cardless
+        expectedPresent = not cardless
+        scopeText = if cardless then "cardless" else "card"
+    mediaBefore <- if null protected then pure (Left "no media watch") else emulatorMediaState emulator
+    ack <- if null protected then pure Nothing else Just <$> emulatorWatchBegin emulator ranges limit
     capturedBefore <- segments (planBefore plan)
     unloadMailbox <- if planUnload plan
       then do
@@ -626,6 +648,22 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         Just <$> readMailbox
       else pure Nothing
     capturedAfter <- segments (planAfter plan)
+    mediaAfter <- if null protected then pure (Left "no media watch") else emulatorMediaState emulator
+    observation <- if null protected then pure (Left "no watch observation") else emulatorWatchObservation emulator limit
+    let checked = do
+          ackValue <- maybe (Left "no watch acknowledgement") Right ack
+          observationValue <- observation
+          gate <- checkWatch limit ranges ackValue observationValue
+          before <- mediaBefore
+          after <- mediaAfter
+          checkMedia expectedPresent before after
+          judgement <- judgeWatch (if expect == ExpectRefused then FaultControlRun else CandidateRun) (Right gate)
+          pure (gate, judgement)
+    checkedResult <- if null protected then pure (WatchAcceptedClean, CandidateQualified) else either (stop "protected-writes") pure checked
+    let (gate, judgement) = checkedResult
+        summary = case gate of
+          WatchRejectedProtectedWrites value -> value
+          WatchAcceptedClean -> noProtectedWrites
     observed <- readIORef (runnerObservations runner)
     phaseTimes <- readIORef phases
     let result = object
@@ -653,11 +691,30 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           , "observations" .= (observed :: [Value])
           , "mailbox" .= object ["install" .= installMailbox, "rollback" .= unloadMailbox,
                                  "address" .= hexAddress mailbox]
+          , "outcome" .= judgement
+          , "protected_writes" .= object
+              [ "ranges" .= [ [lo, hi] | range <- protected, let (lo, hi) = watchRangeBounds range ]
+              , "expect" .= T.unpack (expectLabel expect)
+              , "cpu_writes" .= protectedCpuWritesValue (protectedCpuWrites summary)
+              , "host_writes" .= protectedHostWritesValue (protectedHostWrites summary)
+              , "bus_writes" .= protectedBusWritesValue (protectedBusWrites summary)
+              , "enforced" .= not (null protected) ]
+          , "media" .= object
+              [ "scope" .= String scopeText
+              , "card" .= cardRecord (emulationCardMode settings)
+              , "before" .= either (const Null) mediaJson mediaBefore
+              , "after" .= either (const Null) mediaJson mediaAfter ]
           , "unload" .= (if planUnload plan
               then Just (String (T.pack (show (length (manifestPublications manifest)) ++ " old words verified; allocation retained until power-off")))
               else Nothing)
           ]
-    writePrivateBytes (e2e </> "e2e-result.json") (BL.toStrict (encode result) <> "\n")
+    case judgement of
+      CandidateQualified -> writePrivateBytes (e2e </> "e2e-result.json") (BL.toStrict (encode result) <> "\n")
+      ControlRefusedProtectedWrite -> do
+        stale <- doesFileExist (e2e </> "e2e-result.json")
+        when stale (stop "protected-writes" "control output contains a stale e2e-result.json")
+        writePrivateBytes (e2e </> "e2e-control.json") (BL.toStrict (encode result) <> "\n")
+        ioError (userError "control refused as expected")
     pure (manifestPublications manifest)
   when (planUnload plan && carriesClassicChrome selected) $
     timed "cold-restart-read" (coldRestartRead settings python runtime installedMedia adjustmentNand published e2e)

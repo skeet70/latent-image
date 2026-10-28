@@ -10,6 +10,8 @@ module Emulation.UiTrajectory
   , Segment (..)
   , TraceSite (..)
   , Trajectories (..)
+  , TrajectoryExpect (..)
+  , expectLabel
   , phaseNames
   , decodeTrajectories
   , variantMismatches
@@ -24,6 +26,7 @@ import Data.Foldable (toList)
 import Data.List (nub, stripPrefix)
 import qualified Data.Text as T
 import Data.Word (Word32)
+import Emulation.WatchObservation (WatchRange, watchAddress, watchRange)
 import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming, modeDialName)
 import Numeric (readHex)
 
@@ -156,10 +159,18 @@ instance FromJSON TraceSite where
     when (null label || label `elem` reservedLabels) (fail ("trace site label is empty or reserved: " ++ label))
     pure (TraceSite site label)
 
+data TrajectoryExpect = ExpectClean | ExpectRefused deriving (Eq, Show)
+
+expectLabel :: TrajectoryExpect -> T.Text
+expectLabel ExpectClean = "clean"
+expectLabel ExpectRefused = "refused"
+
 data Trajectories = Trajectories
   { beforeUnload :: [Segment]
   , afterUnload :: [Segment]
   , trajectoryTraceSites :: [TraceSite]
+  , trajectoryProtectedWrites :: [WatchRange]
+  , trajectoryExpect :: TrajectoryExpect
   }
 
 instance FromJSON Trajectories where
@@ -169,9 +180,25 @@ instance FromJSON Trajectories where
     sites <- document .:? "trace_sites" .!= []
     unless (distinct (map traceSiteAddress sites) && distinct (map traceSiteLabel sites))
       (fail "trace sites must have distinct addresses and labels")
-    Trajectories <$> document .: "before_unload" <*> document .: "after_unload" <*> pure sites
+    ranges <- mapM range =<< document .:? "protected_writes" .!= []
+    expectText <- document .:? "expect" .!= ("clean" :: T.Text)
+    expect <- case expectText of
+      "clean" -> pure ExpectClean
+      "refused" -> pure ExpectRefused
+      _ -> fail "expect must be clean or refused"
+    when (expect == ExpectRefused && null ranges) (fail "expect refused requires protected_writes")
+    Trajectories <$> document .: "before_unload" <*> document .: "after_unload" <*> pure sites <*> pure ranges <*> pure expect
     where
       distinct items = length (nub items) == length items
+      range pair = case pair of
+        [lo, hi] -> do
+          low <- hexWord lo
+          high <- hexWord hi
+          either fail pure (watchRange low high)
+        _ -> fail "each protected_writes entry is [low, high]"
+      hexWord text = case readHex (T.unpack text) of
+        [(value, "")] | length (T.unpack text) == 8 -> pure (watchAddress value)
+        _ -> fail "protected_writes addresses are eight hex digits without 0x"
 
 phaseNames :: Trajectories -> [T.Text]
 phaseNames trajectories = nub (map segmentPhase (beforeUnload trajectories ++ afterUnload trajectories))
@@ -190,6 +217,8 @@ decodeTrajectories bytes = do
 variantMismatches :: Trajectories -> Trajectories -> [String]
 variantMismatches retained variant =
   [ "trace sites differ" | trajectoryTraceSites retained /= trajectoryTraceSites variant ]
+  ++ [ "protected writes differ" | trajectoryProtectedWrites retained /= trajectoryProtectedWrites variant ]
+  ++ [ "expect differs" | trajectoryExpect retained /= trajectoryExpect variant ]
   ++ segments "before_unload" (beforeUnload retained) (beforeUnload variant)
   ++ segments "after_unload" (afterUnload retained) (afterUnload variant)
   where

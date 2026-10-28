@@ -9,6 +9,8 @@ use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, enc
 use fujimod_xm1::guest::{DialTurn, ModeDialPosition, Press, RouteKey};
 use fujimod_xm1::machine::{KeyPulse, Machine, MENU_PULSE, ReleaseSegment};
 use fujimod_xm1::render::MAX_SETTLE;
+use fujimod_xm1::run;
+use fujimod_emulator::board::observation::MemoryWatch;
 use fujimod_xm1::sd_host::{Backing, MediaImage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -284,6 +286,9 @@ enum Request {
     ReleaseContext { segment: Option<ReleaseSegment> },
     ModeDial { position: ModeDialPosition },
     ReadMemory { address: u64, count: usize },
+    WatchBegin { ranges: Vec<[u64; 2]>, limit: usize },
+    WatchState,
+    MediaState,
     Capture { label: String },
     SaveInstallCheckpoint { base: String, manifest_sha256: String, runtime_sha256: String, host: Value },
     Finish,
@@ -300,6 +305,9 @@ enum RequestKind {
     ReleaseContext,
     ModeDial,
     ReadMemory,
+    WatchBegin,
+    WatchState,
+    MediaState,
     Capture,
     SaveInstallCheckpoint,
     Finish,
@@ -316,6 +324,9 @@ impl Request {
             Request::ReleaseContext { .. } => RequestKind::ReleaseContext,
             Request::ModeDial { .. } => RequestKind::ModeDial,
             Request::ReadMemory { .. } => RequestKind::ReadMemory,
+            Request::WatchBegin { .. } => RequestKind::WatchBegin,
+            Request::WatchState => RequestKind::WatchState,
+            Request::MediaState => RequestKind::MediaState,
             Request::Capture { .. } => RequestKind::Capture,
             Request::SaveInstallCheckpoint { .. } => RequestKind::SaveInstallCheckpoint,
             Request::Finish => RequestKind::Finish,
@@ -358,6 +369,7 @@ struct Server {
     root: PathBuf,
     output: PathBuf,
     screenshots: Vec<Value>,
+    watch: Option<Box<MemoryWatch>>,
     key_log: Vec<Value>,
     requests: RequestProfile,
     rendezvous: RendezvousInputs,
@@ -455,6 +467,27 @@ impl Server {
                 }
                 json!({"bytes": encode_hex(&self.bridge.machine.read(address, count)?)})
             }
+            Request::WatchBegin { ranges, limit } => {
+                if self.watch.is_some() {
+                    return Err("a memory watch is already armed".into());
+                }
+                if ranges.is_empty() || ranges.len() > 8
+                    || !(1..=1 << 20).contains(&limit)
+                    || ranges.iter().any(|range| range[0] >= range[1] || range[1] > u32::MAX as u64)
+                {
+                    return Err("watch-begin requires bounded 32-bit ranges and a positive record limit".into());
+                }
+                let maps = run::memory_maps(&self.bridge.machine.document)?;
+                let watch = self.bridge.machine.session.board.memory_watch_begin(
+                    ranges.iter().map(|range| (range[0], range[1])).collect(), limit, maps)?;
+                self.watch = Some(watch);
+                json!({"armed": true, "ranges": ranges})
+            }
+            Request::WatchState => match &self.watch {
+                Some(watch) => watch.records.borrow().state(),
+                None => return Err("watch-state requires an armed memory watch".into()),
+            },
+            Request::MediaState => self.bridge.machine.card_state()?,
             Request::Capture { label } => {
                 if label.is_empty() || !label.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
                     return Err("screenshot label must be lowercase ASCII".into());
@@ -511,6 +544,7 @@ impl Server {
             "keepalive_inputs": self.bridge.keepalive_inputs,
             "contexts": self.bridge.machine.traces.hits,
             "screenshots": self.screenshots,
+            "memory_watch": self.watch.as_ref().map(|watch| watch.records.borrow().state()).unwrap_or(Value::Null),
             "sd_host": self.bridge.machine.card_state().unwrap_or_else(|error| json!({"error": error})),
             "boundary": {"instructions": self.bridge.machine.instructions(), "failure": self.bridge.machine.failure},
         })
@@ -655,6 +689,7 @@ fn drive() -> Result<(), String> {
         root,
         output: arguments.output,
         screenshots: Vec::new(),
+        watch: None,
         key_log: Vec::new(),
         requests: RequestProfile::default(),
         rendezvous,

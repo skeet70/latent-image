@@ -1,5 +1,7 @@
 {
   "schema": 1,
+  "protected_writes": [["0096cc64", "0096ce26"]],
+  "expect": "clean",
   "entry": "Cardless RAM-push bank with an empty resident slot set. Read-only phase: enter the slot list and SELECT CUSTOM SETTING list, navigate, cancel, repeat entry and hand back to the stock shooting menu. No Save Current, Edit, Reset, dialog OK, field OK or SELECT row OK is pressed; the unset select rows stay on row 0.",
   "before_unload": [
     {"phase": "bank-route-read-only", "capture": "route-slot-list", "reads": [["rb-resident-header", "runtime:rb_resident", 64], ["rb-activation", "runtime:rb_activation", 8], ["rb-current-gen", "runtime:rb_current_gen", 4], ["rb-resident-selection", "runtime:rb_resident+0x20", 4]], "steps": [["menu", 67, 56, 0], ["menu", 1, 5, 2], ["left", 0, 5, 0], ["down", 0, 5, 1], ["down", 0, 5, 2], ["down", 0, 5, 3], ["down", 0, 5, 4], ["right", 1, 5, 30], ["down", 1, 5, 31], ["down", 1, 5, 32], ["down", 1, 5, 33], ["ok", 97, 641, 0]]},
