@@ -236,7 +236,7 @@ The normal owner is task 1, created by `0x00d0a238` with entry `0x00c22f60`. Its
 
 The pending-control publisher `0x00d350c4` publishes A05 through `0x006334dc` before setting `0x00950110 = 1`, then copies the current event. Any persistent pending/latch invariant needs the stock UI-owner serialization. The enqueue alone does not establish that invariant across cores.
 
-The non-latching initial writer has a narrower configured source path. `0x006330d8` can change pending 3 to 5 inside `0x00635280`; `0x00639b1c` then calls `0x00637478` and `0x0063975c`, which consumes and clears pending before returning. The configured coordinator's row-0/state-0 cell `0x00817724 = 0x0102` selects `0x0073e0b0`, whose `0x0073ccb8 → 0x00639b1c` call returns before its root-1 publication. A scan of both pinned images finds aligned immediate callers only along this constructor chain and no aligned pointer to its four inner entries. This narrows that transient writer; it is not computed-reentry, foreign-writer or complete initial-work closure.
+The non-latching initial writer has a narrower configured source path. `0x006330d8` can change pending 3 to 5 inside `0x00635280`; `0x00639b1c` then calls `0x00637478` and `0x0063975c`, which consumes and clears pending before returning. The coordinator's startup row-0/state-0 cell `0x00817724 = 0x0102` selects `0x0073e0b0 -> 0x0073ccb8 -> 0x00639b1c`. Its receive loop first changes marker `0x0095709c` from 0 to 1, so ordinary later root row-1 dispatch directly selects `0x0073e15c/0x0073e138`, not startup `0x0073e0b0`, even at coordinator root 0. Transitive child-action/computed reentry remains unclosed. Under the ordinary type-6 slot, owned configuration/resource descriptors, successful stock services and no outside/reentrant actor-word writer, the intervening helper's bounded fixed copies, bank-0 property writes and hardware tail preserve current actor 1, not eligible actor 3 (E-CARDLESS-NONLATCHING-EPOCH-150). Configuration semaphore `0x25` and resource waits permit kernel dispatch; this is not a no-preemption proof. Synchronous reentry, computed/noncoordinator entry, descriptor aliases and error paths require their actual owner histories.
 
 The separate aligned-reference census binds all 17 immediate caller entries of `0x00c09d24` to literal slots in the UI-root function vector, and the sole aligned `0x00c58c38` pointer to `0x00d01518`. It does not prove that computed pointers or an alternate actor cannot enter these paths.
 
@@ -475,9 +475,9 @@ A passing ring sample would establish observation of named CPU0 entry boundaries
 
 ### Count-specialized installer bytes and review question
 
-The shared source and ABI remain unchanged. They define publication, setup, activation and ABI values as compile-time macros in the same translation unit, without LTO. The AF tuple is `(6,3,3,5)`; the converged bank tuple is `(253,167,86,2)`. AF requires installer-relative entries `0x600`, `0x834`, `0x860`, code extent `0xa80`, and complete installer extent `0xbe0`. Existing payload entries and reviewed pins remain unchanged. The AF builder validates these AF-specific extents and entries.
+The shared source and ABI remain unchanged. They define publication, setup, activation and ABI values as compile-time macros in the same translation unit. The retained source scripts do not request LTO. The AF tuple is `(6,3,3,5)`; the converged bank tuple is `(253,167,86,2)`. AF requires installer-relative entries `0x600`, `0x834`, `0x860`, code extent `0xa80`, and complete installer extent `0xbe0`. Existing payload entries and reviewed pins remain unchanged. The AF builder validates these AF-specific extents and entries.
 
-An isolated comparison compiled the unchanged installer with the bank's exact pinned compiler flags, linked it at the AF comparison address `0x00a82d00` with identical runtime bounds, and extracted `.ram_push.*`. It is a controlled build comparison, not a camera extraction. `cmp installer-253.bin installer-af.bin` returned 1, first difference at byte 57. Both files remain under `private-data/analysis/x-m1-1.50/af-ring/`.
+The retained comparison links the 253-publication installer and the six-publication AF installer at `0x00a82d00`. The compared objects record Clang 21.1.8, ARMv7 real-time target attributes and disabled unaligned access; the retained source scripts use `-Oz`, freestanding compilation, function/data sections and compile-time publication/setup/activation/ABI macros. The retained source scripts do not request LTO. The AF script additionally specifies soft-float and no stack protector. The pinned manifest binds the shared installer/ABI and AF source/build inputs. This is a comparison of retained host-built artifacts, not an otherwise-identical-link, one-variable experiment or a camera extraction. In particular, the linked runtime endpoints differ as detailed below. `cmp installer-253.bin installer-af.bin` returned 1, first difference at byte 57.
 
 | File | Bytes | SHA-256 |
 |---|---:|---|
@@ -499,6 +499,16 @@ The earlier inventory omitted seven count-immediate instructions in six function
 | `store_new_words+0x14` | `e35000fd`, `cmp r0,#253` | `e3500006`, `cmp r0,#6` |
 | `store_new_words+0x20` | `e35000a6`, `cmp r0,#166` | `e3500002`, `cmp r0,#2` |
 | `peer_cache_action+0x40` | `935700fd`, `cmpls r7,#253` | `93570006`, `cmpls r7,#6` |
+
+The changed immediates alter the semantic domain, not just the instruction spelling:
+
+| Changed path | Specialized behavior |
+| --- | --- |
+| Old-word and rollback validation | Check 253 versus 6 publication records and count successful validations. |
+| Current-core cache loop, peer completion report/check and peer-cache upper bound | Iterate, report or admit 253 versus 6 publications. |
+| Layout validation and new-word publication | Validate/store 253 versus 6 entries; the setup split changes from 167/86 to 3/3. The emitted threshold is setup count minus one, 166 versus 2. |
+| Mailbox initialization | Publish ABI 2 versus 5. |
+| Reverse restore | Restore the specialized table in descending order; the distinct instruction/frame lowering is enumerated below. |
 
 In `execute_operation`, every changed same-offset PC-relative load/early branch is listed here. The exit moves from `+0x198` to `+0x194`; the literal pool moves back four bytes. The target roles remain unchanged.
 
@@ -538,7 +548,11 @@ The rendezvous argument setup has these instruction-level changes or moves. Inst
 | `+0x150 e58d1020 str r1,[sp,#32]` | `+0x148 e58d1020 str r1,[sp,#32]` |
 | `+0x154 e58d901c str r9,[sp,#28]` | `+0x14c e58d901c str r9,[sp,#28]` |
 
-Every instruction from 253 `+0x158..+0x1a0` moves to AF `+0x154..+0x19c` with its instruction word unchanged. This includes cache maintenance, DSB, the indirect peer-cache call, `read_peer_report`, the two conditional exits, `run_rendezvous` and the epilogue. The call relocations move `+0x170 -> +0x16c` and `+0x190 -> +0x18c`, retaining their target symbols. The nine literal slots at `+0x1a4..+0x1c4` move to `+0x1a0..+0x1c0`; their values/symbol roles are unchanged. The relocation table has no other target/offset change. Linked branch words and absolute addresses also follow the changed function/table/mailbox layout; they are not new calls or new stock addresses.
+Every instruction from 253 `+0x158..+0x1a0` moves to AF `+0x154..+0x19c` with its instruction word unchanged. This includes cache maintenance, DSB, the indirect peer-cache call, `read_peer_report`, the two conditional exits, `run_rendezvous` and the epilogue. The call relocations move `+0x170 -> +0x16c` and `+0x190 -> +0x18c`, retaining their target symbols. The nine literal slots at `+0x1a4..+0x1c4` move to `+0x1a0..+0x1c0`; their unrelocated bytes and relocation symbol identities are unchanged. Resolved values are not all identical. Linked branch words and table/mailbox addresses follow the changed layout; the runtime-end value also differs and must be accounted for separately.
+
+The retained ELF symbols and binary literals give `__ram_push_start = 0x00a81d00` in both artifacts, but `__ram_push_end = 0x00a88500` in the 253 comparison and `0x00a88140` in AF. The latter is AF's linked content/ring end, `base + 0x6440`, not its allocation end, which remains `base + 0x6800 = 0x00a88500`. The claimed identical runtime bounds are withdrawn. Full byte comparisons bind each extracted installer to its retained ELF; AF's code and non-table installer bytes also match the retained exercised runtime.
+
+`execute_operation` subtracts the linked endpoints and supplies the resulting `0x6800` versus `0x6440` length to `CORE1_RANGE` and the peer cache payload's runtime-length field. Thus the linked cache/runtime coverage is an additional semantic parameter beyond the count/ABI and compiler-lowering changes. The shorter endpoint alone does not establish unsafe cache omission: this comparison identifies no reachable used/written span in the remaining `0x3c0` bytes of allocation padding. Nor does the comparison establish complete cache or mechanism safety.
 
 `restore_old_words` has a different loop, frame and epilogue, not merely a shifted immediate. Its full executable sequence is:
 
@@ -575,7 +589,7 @@ diff -u "$PRIVATE_OUTPUT/installer-253-object.txt" "$PRIVATE_OUTPUT/installer-af
 devenv shell -- llvm-objdump -r "$BANK_OBJECT" "$AF_OBJECT"
 ```
 
-The private `author-installer-{253,af}-object.txt`, `author-installer-object-delta.diff` and independently produced `reviewer-installer-semantic-delta.json` retain the reproduced comparison. `installer-{253,af}.bin` remain unchanged. Corrected reviewer question: do all listed count/ABI changes, argument rescheduling and the distinct reverse-restore lowering preserve their bounded publication/rendezvous effects, with the LDRD alignment and callee-saved invariants stated above? This is broader than the withdrawn immediate-only question. The current hook mechanism remains rejected independently of the installer comparison.
+The retained full object diff and independent linked semantic delta account for the count/ABI changes, argument rescheduling and distinct reverse-restore lowering. The existing reviewer statically found equivalent reverse restoration for the six aligned AF records and checked the respective callee-saved frames; that is an analytical comparison, not an executed safety proof. The same review's linked listings retain the unequal runtime-end literals, so its findings do not establish identical cache/runtime coverage. Its separate synthetic emulator install/capture/unload run establishes only that exercised plumbing, not suspended-context safety or real AF execution. This source-corrected inventory satisfies the installer-comparison item only. The hook mechanism remains rejected, and every other #103 criterion remains open and unchanged.
 
 ### Exercised host and emulator result
 
