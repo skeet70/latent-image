@@ -2163,12 +2163,11 @@ overlayFits (ByteCount size) (ByteOffset offset, bytes) =
 modelScratchImage :: Inputs -> Spec -> B.ByteString
 modelScratchImage in' sp
   | not (all (\(offset, bytes) -> overlayFits (ByteCount (modelDataSize in')) (ByteOffset offset, bytes)) overlays) = error "model cell outside the linked data image"
-  | otherwise = overlay (B.replicate (modelDataSize in') 0) overlays
+  | otherwise = overlay (inMdata in') overlays
   where
     offset name = fromIntegral (addr (inMs in') name - fromIntegral modelScratchBase)
     overlays =
-      (0, inMdata in')
-        : [ (offset n, u32le v) | (n, v) <- spModelCells sp ]
+      [ (offset n, u32le v) | (n, v) <- spModelCells sp ]
         ++ [ (offset "rbm_field_count", u32le (fromIntegral (length (inFields in')))) ]
 
 spanLowImage :: Inputs -> Env -> Spec -> B.ByteString
