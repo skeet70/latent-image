@@ -411,8 +411,10 @@ main = do
   passed result = parseMaybe (withObject "result" (.: "status")) result == Just ("passed" :: String)
 
 kernelMain :: [String] -> IO ()
-kernelMain args = do
-  let opt n = lookup n [(drop 2 a, b) | (a, b) <- pair args]
+kernelMain rawArgs = do
+  let serviceQualification = "--service-qualification" `elem` rawArgs
+      args = filter (/= "--service-qualification") rawArgs
+      opt n = lookup n [(drop 2 a, b) | (a, b) <- pair args]
       pair (a:b:r) = (a, b) : pair r
       pair _ = []
   build <- maybe (fail "--build") pure (opt "build")
@@ -522,7 +524,11 @@ kernelMain args = do
       selects cid = case reverse cid of
         '*' : prefix -> (reverse prefix `isPrefixOf`)
         _ -> (== cid)
-      specs = maybe suite (\cid -> filter (selects cid . spId) suite) (opt "case")
+      specs = case opt "case" of
+        Just cid -> filter (selects cid . spId) suite
+        Nothing
+          | serviceQualification -> filter (S.isServiceCaseId . spId) suite
+          | otherwise -> suite
   when (null specs) (fail "--case did not name a case")
   results <- mapBounded jobs (\sp -> do
     let loop s fuel = do
