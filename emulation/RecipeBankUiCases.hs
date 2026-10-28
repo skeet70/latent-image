@@ -2171,7 +2171,7 @@ regionList in' e sp = filter (\(n, _, _, _, _) -> inProfile (regionProfile e sp)
     -- an expected byte for. The runner fails a write with memory_guard where a
     -- region lacks write permission, so every other data region has a complete
     -- transient write guard.
-    writeRegions = nub ([n | AbiWorkspace (RegionId n) _ _ <- caseWorkspaces in' e sp] ++ [n | (n, _, _) <- spClaims sp])
+    writeRegions = nub ([n | AbiWorkspace (RegionId n) _ _ _ <- caseWorkspaces in' e sp] ++ [n | (n, _, _) <- spClaims sp])
     dataPerm n = if n `elem` writeRegions then 3 else 1
     ktext = inKtext in'
     textLen = B.length ktext
@@ -2843,12 +2843,12 @@ runControls runner out e in' specs = do
   claimCase <- writeCase claimDir in' e claimSpec
   (_, claimReport) <- runCase runner (claimDir </> "case.json")
   BL.writeFile (claimDir </> "native-result.json") (encode claimReport)
-  let claimPass = statusOf (qualify in' e claimSpec claimCase claimReport) == "passed"
+  let claimPass = statusOf (qualify in' e claimSpec claimCase claimReport) == Just "passed"
       claim = head (spClaims claimSpec)
       claimRegions = regionList in' e claimSpec
       claimResult = qualify in' e claimSpec claimCase (corruptClaim claimRegions claim claimReport)
       claimAddress = case claim of
-        (region, offset, _) -> case [hex (fromIntegral (base + offset)) | (n, base, _, _, _) <- claimRegions, n == region] of
+        (region, offset, _) -> case [hex (fromIntegral base + fromIntegral offset) | (n, base, _, _, _) <- claimRegions, n == region] of
           (address : _) -> address
           [] -> ""
       claimNamed = mismatchNamedAddress claimAddress claimResult
@@ -2862,24 +2862,24 @@ runControls runner out e in' specs = do
   (_, storageReport) <- runCase runner (storageDir </> "case.json")
   BL.writeFile (storageDir </> "native-result.json") (encode storageReport)
   let storageResult = qualify in' e storageSpec storageReadOnly storageReport
-      storageRefused = statusOf storageResult == "memory_guard" && maybe False inSpanLow (lastAccessAddress storageReport)
+      storageRefused = statusOf storageResult == Just "memory_guard" && maybe False inSpanLow (lastAccessAddress storageReport)
   pure
     [ object
         [ "name" .= ("public claim" :: String)
         , "passed_before" .= claimPass
         , "observed" .= statusOf claimResult
         , "mismatch_names_claim" .= claimNamed
-        , "ok" .= (claimPass && statusOf claimResult /= "passed" && claimNamed)
+        , "ok" .= (claimPass && statusOf claimResult /= Just "passed" && claimNamed)
         ]
     , object
         [ "name" .= ("missing provenance" :: String)
         , "observed" .= statusOf missingResult
-        , "ok" .= (statusOf missingResult /= "passed")
+        , "ok" .= (statusOf missingResult /= Just "passed")
         ]
     , object
         [ "name" .= ("non-returned diagnostic" :: String)
         , "observed" .= statusOf diagnosticResult
-        , "ok" .= (statusOf diagnosticResult == "instruction_budget")
+        , "ok" .= (statusOf diagnosticResult == Just "instruction_budget")
         ]
     , object
         [ "name" .= ("read-only storage region" :: String)
