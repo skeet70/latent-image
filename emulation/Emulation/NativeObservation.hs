@@ -4,7 +4,8 @@
 --
 -- The parser owns the wire-independent checks shared by every consumer:
 -- status/exit/engine consistency, the register set, region order and sizes,
--- and a complete provenance log. It does not decide what a case means.
+-- and the provenance log's retention state. A @Truncated@ provenance is not a
+-- complete effect proof. It does not decide what a case means.
 module Emulation.NativeObservation
   ( RegionId (..)
   , GuestAddress (..)
@@ -161,6 +162,7 @@ data Provenance
   | Truncated ProvenanceTotal
   deriving (Eq, Show)
 
+-- | Complete writes for a fully retained log; Nothing for a truncated log.
 provenanceWrites :: Provenance -> Maybe [Write]
 provenanceWrites (Complete _ writes) = Just writes
 provenanceWrites (Truncated _) = Nothing

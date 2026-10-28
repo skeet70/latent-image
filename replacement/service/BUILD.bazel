@@ -44,6 +44,7 @@ haskell_library(
         "//host:directory",
         "//host:filepath",
         "//host:host-support",
+        "//host:json",
     ],
 )
 

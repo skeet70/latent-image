@@ -10,8 +10,16 @@ module Replacement.Service.Qualify
   ( RowState (..)
   , rowStateWord
   , ServiceRow (..)
-  , serviceRows
+  , ServiceLifetime (..)
+  , ServiceEffectPolicy (..)
+  , ServiceEndpoints (..)
+  , ServiceMutant (..)
+  , ServiceContract (..)
+  , serviceContract
+  , serviceContractValue
+  , serviceContractBytes
   , serviceContractSha256
+  , serviceRows
   , serviceStackRegion
   , serviceStackBase
   , serviceStackOffset
@@ -27,6 +35,8 @@ module Replacement.Service.Qualify
   , serviceInitialRegisters
   , serviceExpectedRegisters
   , isServiceCaseId
+  , serviceMutantName
+  , serviceMutantNames
   , Expectation (..)
   , expectationFromCase
   , Check (..)
@@ -47,7 +57,7 @@ import Data.Aeson (Value (..))
 import Data.Bits (xor)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
-import Data.List (find, nubBy)
+import Data.List (find, nub, nubBy, sort)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing, listToMaybe)
 import Data.Word (Word32, Word8)
@@ -55,6 +65,7 @@ import Emulation.NativeCase (Region (..), loadCase)
 import qualified Emulation.NativeObservation as N
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host hiding (sha256)
+import FujiAF.JSON (encodeCanonical)
 import Numeric (showHex)
 import System.Directory (canonicalizePath)
 import System.FilePath (takeDirectory, takeFileName)
@@ -78,11 +89,113 @@ data ServiceRow = ServiceRow
   , serviceRowProvenance :: String
   }
 
--- | The packaged lane asks property 0x110 for rows 0..4; the ISO edit list
--- asks 0x141 for the stock list's 21 rows.
-serviceRows :: [ServiceRow]
-serviceRows = map toneRow [0 .. 4] ++ map isoRow isoRows
+-- | The synchronous service lifetime: no host operation, no retained
+-- completion and no post-return callback.
+data ServiceLifetime = ServiceLifetime
+  { lifetimeHostOperation :: Bool
+  , lifetimeRetainedCompletion :: Bool
+  , lifetimePostReturnCallback :: Bool
+  }
+  deriving (Eq, Show)
+
+-- | The result contract's write policy.
+data ServiceEffectPolicy = ServiceEffectPolicy
+  { effectAllowedScratch :: [N.RegionId]
+  , effectTransientRestores :: Bool
+  , effectImmutableExact :: Bool
+  , effectCompleteProvenance :: Bool
+  }
+  deriving (Eq, Show)
+
+data ServiceEndpoints = ServiceEndpoints
+  { endpointEntry :: String
+  , endpointTrampoline :: String
+  , endpointStock :: Word32
+  , endpointStockSize :: Int
+  }
+  deriving (Eq, Show)
+
+-- | The two required consumer controls.
+data ServiceMutant = AbiR7Clobber | EffectImmutableWrite
+  deriving (Bounded, Enum, Eq, Ord, Show)
+
+serviceMutantName :: ServiceMutant -> String
+serviceMutantName AbiR7Clobber = "abi-r7-clobber"
+serviceMutantName EffectImmutableWrite = "effect-immutable-write"
+
+-- | The one service contract consumed by case generation, checking and the
+-- qualification report. The machine-readable value below is derived from it.
+data ServiceContract = ServiceContract
+  { contractSchemaVersion :: Int
+  , contractRows :: [ServiceRow]
+  , contractStateDomain :: [RowState]
+  , contractReturnRegister :: N.Register
+  , contractPreserved :: [N.Register]
+  , contractSeeds :: [(N.Register, Word32)]
+  , contractStackRegion :: N.RegionId
+  , contractStackBase :: Int
+  , contractStackOffset :: Int
+  , contractStackSize :: Int
+  , contractStackTop :: Word32
+  , contractCasebufSize :: Int
+  , contractCasebufFill :: Word8
+  , contractTransientRegion :: N.RegionId
+  , contractTransientOffset :: Int
+  , contractTransientSize :: Int
+  , contractEndpoints :: ServiceEndpoints
+  , contractLifetime :: ServiceLifetime
+  , contractEffects :: ServiceEffectPolicy
+  , contractMutants :: [ServiceMutant]
+  }
+  deriving (Eq, Show)
+
+serviceContract :: ServiceContract
+serviceContract =
+  ServiceContract
+    { contractSchemaVersion = 1
+    , contractRows = rows
+    , contractStateDomain = [Offered, Disabled, Hidden]
+    , contractReturnRegister = N.R0
+    , contractPreserved = [N.R4 .. N.R11] ++ [N.Sp, N.Pc]
+    , contractSeeds =
+        [ (N.R4, 0x4a4a4a4a)
+        , (N.R5, 0x5b5b5b5b)
+        , (N.R6, 0x6c6c6c6c)
+        , (N.R7, 0x7d7d7d7d)
+        , (N.R8, 0x8e8e8e8e)
+        , (N.R9, 0x9f9f9f9f)
+        , (N.R10, 0xa0a0a0a0)
+        , (N.R11, 0xb1b1b1b1)
+        ]
+    , contractStackRegion = N.RegionId "casebuf"
+    , contractStackBase = 0x009a0000
+    , contractStackOffset = 0x1e00
+    , contractStackSize = 0x200
+    , contractStackTop = 0x009a1ff0
+    , contractCasebufSize = 0x2000
+    , contractCasebufFill = 0xa5
+    , contractTransientRegion = N.RegionId "mirror"
+    , contractTransientOffset = 0
+    , contractTransientSize = 0x200
+    , contractEndpoints =
+        ServiceEndpoints
+          { endpointEntry = "rb_service_field_row_state"
+          , endpointTrampoline = "rb_call_stock_probe"
+          , endpointStock = 0x00d52684
+          , endpointStockSize = 25140
+          }
+    , contractLifetime = ServiceLifetime False False False
+    , contractEffects =
+        ServiceEffectPolicy
+          { effectAllowedScratch = [N.RegionId "casebuf", N.RegionId "mirror"]
+          , effectTransientRestores = True
+          , effectImmutableExact = True
+          , effectCompleteProvenance = True
+          }
+    , contractMutants = [AbiR7Clobber, EffectImmutableWrite]
+    }
   where
+    rows = map toneRow [0 .. 4] ++ map isoRow isoRows
     isoRows = [0x1a, 0x19, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11, 0x10,
                0xf, 0xe, 0xd, 0xc, 0xb, 0xa, 9, 8, 7, 0, 0x1b] :: [Word32]
     toneRow row =
@@ -113,40 +226,59 @@ serviceRows = map toneRow [0 .. 4] ++ map isoRow isoRows
       "returns 0 (offered); FUN_00d52684 case 0x141 row " ++ showHex row "" ++
       " takes its default offered arm under the same M fixture."
 
-serviceContractSha256 :: String
-serviceContractSha256 = sha256Hex (sha256 (BC.pack (unlines contractLines)))
-  where
-    contractLines =
-      [ serviceRowId row ++ " " ++ showHex (serviceRowProperty row) "" ++ " "
-          ++ showHex (serviceRowToken row) "" ++ " " ++ show (rowStateWord (serviceRowExpected row))
-      | row <- serviceRows
-      ]
+serviceRows :: [ServiceRow]
+serviceRows = contractRows serviceContract
 
--- The stack is the top of the casebuf region; the checked public output and
--- the immutable body sit below it.
+serviceSeeds :: [(N.Register, Word32)]
+serviceSeeds = contractSeeds serviceContract
+
+serviceReturnRegister :: N.Register
+serviceReturnRegister = contractReturnRegister serviceContract
+
+servicePreservedRegisters :: [N.Register]
+servicePreservedRegisters = contractPreserved serviceContract
+
+serviceEntrySymbol :: String
+serviceEntrySymbol = endpointEntry (contractEndpoints serviceContract)
+
+serviceTrampolineSymbol :: String
+serviceTrampolineSymbol = endpointTrampoline (contractEndpoints serviceContract)
+
+serviceStockTarget :: Word32
+serviceStockTarget = endpointStock (contractEndpoints serviceContract)
+
+serviceStockSize :: Int
+serviceStockSize = endpointStockSize (contractEndpoints serviceContract)
+
+serviceStockSpan :: String
+serviceStockSpan = N.hexWord32 serviceStockTarget ++ "/" ++ show serviceStockSize
+
 serviceStackRegion :: N.RegionId
-serviceStackRegion = N.RegionId "casebuf"
+serviceStackRegion = contractStackRegion serviceContract
 
 serviceStackBase, serviceStackOffset, serviceStackSize :: Int
-serviceStackBase = 0x009a0000
-serviceStackOffset = 0x1e00
-serviceStackSize = 0x200
+serviceStackBase = contractStackBase serviceContract
+serviceStackOffset = contractStackOffset serviceContract
+serviceStackSize = contractStackSize serviceContract
 
 serviceStackTop :: Word32
-serviceStackTop = 0x009a1ff0
+serviceStackTop = contractStackTop serviceContract
 
 serviceTransientRegion :: N.RegionId
-serviceTransientRegion = N.RegionId "mirror"
+serviceTransientRegion = contractTransientRegion serviceContract
 
 serviceTransientOffset, serviceTransientSize :: Int
-serviceTransientOffset = 0
-serviceTransientSize = 0x200
+serviceTransientOffset = contractTransientOffset serviceContract
+serviceTransientSize = contractTransientSize serviceContract
 
 serviceCasebufSize :: Int
-serviceCasebufSize = 0x2000
+serviceCasebufSize = contractCasebufSize serviceContract
 
 serviceCasebufFill :: Word8
-serviceCasebufFill = 0xa5
+serviceCasebufFill = contractCasebufFill serviceContract
+
+serviceMutantNames :: [String]
+serviceMutantNames = map serviceMutantName (contractMutants serviceContract)
 
 serviceCasebufInitial :: B.ByteString
 serviceCasebufInitial =
@@ -154,17 +286,73 @@ serviceCasebufInitial =
     <> B.replicate serviceStackSize serviceCasebufFill
     <> B.replicate (serviceCasebufSize - serviceStackOffset - serviceStackSize) 0
 
-serviceSeeds :: [(N.Register, Word32)]
-serviceSeeds =
-  [ (N.R4, 0x4a4a4a4a)
-  , (N.R5, 0x5b5b5b5b)
-  , (N.R6, 0x6c6c6c6c)
-  , (N.R7, 0x7d7d7d7d)
-  , (N.R8, 0x8e8e8e8e)
-  , (N.R9, 0x9f9f9f9f)
-  , (N.R10, 0xa0a0a0a0)
-  , (N.R11, 0xb1b1b1b1)
-  ]
+serviceContractValue :: Value
+serviceContractValue =
+  obj
+    [ ("schema_version", n (fromIntegral (contractSchemaVersion serviceContract)))
+    , ("rows", arr (map rowValue (contractRows serviceContract)))
+    , ("state_domain", arr [n (fromIntegral (rowStateWord state)) | state <- contractStateDomain serviceContract])
+    , ("return_register", s (N.registerLabel (contractReturnRegister serviceContract)))
+    , ("preserved_registers", arr [s (N.registerLabel register) | register <- contractPreserved serviceContract])
+    , ("seeds", arr [obj [("register", s (N.registerLabel register)), ("value", n (fromIntegral value))] | (register, value) <- contractSeeds serviceContract])
+    , ( "stack"
+      , obj
+          [ ("region", s (N.regionName (contractStackRegion serviceContract)))
+          , ("base", n (fromIntegral (contractStackBase serviceContract)))
+          , ("offset", n (fromIntegral (contractStackOffset serviceContract)))
+          , ("size", n (fromIntegral (contractStackSize serviceContract)))
+          , ("top", n (fromIntegral (contractStackTop serviceContract)))
+          , ("casebuf_size", n (fromIntegral (contractCasebufSize serviceContract)))
+          , ("fill", n (fromIntegral (contractCasebufFill serviceContract)))
+          ]
+      )
+    , ( "transient"
+      , obj
+          [ ("region", s (N.regionName (contractTransientRegion serviceContract)))
+          , ("offset", n (fromIntegral (contractTransientOffset serviceContract)))
+          , ("size", n (fromIntegral (contractTransientSize serviceContract)))
+          ]
+      )
+    , ( "endpoints"
+      , obj
+          [ ("entry", s (endpointEntry (contractEndpoints serviceContract)))
+          , ("trampoline", s (endpointTrampoline (contractEndpoints serviceContract)))
+          , ("stock", s (N.hexWord32 (endpointStock (contractEndpoints serviceContract))))
+          , ("stock_size", n (fromIntegral (endpointStockSize (contractEndpoints serviceContract))))
+          ]
+      )
+    , ( "lifetime"
+      , obj
+          [ ("host_operation", b (lifetimeHostOperation (contractLifetime serviceContract)))
+          , ("retained_completion", b (lifetimeRetainedCompletion (contractLifetime serviceContract)))
+          , ("post_return_callback", b (lifetimePostReturnCallback (contractLifetime serviceContract)))
+          ]
+      )
+    , ( "effects"
+      , obj
+          [ ("allowed_scratch", arr [s (N.regionName region) | region <- effectAllowedScratch (contractEffects serviceContract)])
+          , ("transient_restores", b (effectTransientRestores (contractEffects serviceContract)))
+          , ("immutable_exact", b (effectImmutableExact (contractEffects serviceContract)))
+          , ("complete_provenance", b (effectCompleteProvenance (contractEffects serviceContract)))
+          ]
+      )
+    , ("mutants", arr [s (serviceMutantName mutant) | mutant <- contractMutants serviceContract])
+    ]
+  where
+    rowValue row =
+      obj
+        [ ("id", s (serviceRowId row))
+        , ("property", n (fromIntegral (serviceRowProperty row)))
+        , ("row", n (fromIntegral (serviceRowToken row)))
+        , ("expected", n (fromIntegral (rowStateWord (serviceRowExpected row))))
+        , ("provenance", s (serviceRowProvenance row))
+        ]
+
+serviceContractBytes :: B.ByteString
+serviceContractBytes = encodeCanonical serviceContractValue
+
+serviceContractSha256 :: String
+serviceContractSha256 = sha256Hex (sha256 serviceContractBytes)
 
 serviceInitialRegisters :: Word32 -> Word32 -> Word32 -> Word32 -> [(N.Register, Word32)]
 serviceInitialRegisters property row stackTop exit =
@@ -182,7 +370,12 @@ serviceInitialRegisters property row stackTop exit =
 
 serviceExpectedRegisters :: Word32 -> Word32 -> Word32 -> [(N.Register, Word32)]
 serviceExpectedRegisters expected stackTop exit =
-  (N.R0, expected) : serviceSeeds ++ [(N.Sp, stackTop), (N.Pc, exit)]
+  [ (register, case register of
+        N.Sp -> stackTop
+        N.Pc -> exit
+        _ -> fromMaybe expected (lookup register serviceSeeds))
+  | register <- serviceReturnRegister : servicePreservedRegisters
+  ]
 
 isServiceCaseId :: String -> Bool
 isServiceCaseId = ("svc-" `prefixOf`)
@@ -250,24 +443,27 @@ checkServiceCase expectation observation =
   case classifyStatus (N.nativeStatus observation) of
     CheckPass ->
       case N.nativeProvenance observation of
-        N.Truncated total -> CheckTruncated total
+        N.Truncated total
+          | effectCompleteProvenance policy -> CheckTruncated total
+          | otherwise -> CheckMismatch ["contract requires complete provenance but the log is truncated"]
         N.Complete _ writes ->
           let problems = registers ++ memory ++ concatMap classifyWrite writes
            in if null problems then CheckPass else CheckMismatch problems
     other -> other
   where
+    policy = contractEffects serviceContract
     registersOf = N.nativeRegisters observation
     missingRegisters =
       [ "register " ++ N.registerLabel register ++ ": missing from runner output"
-      | register <- N.R0 : N.Pc : map fst (expectationPreserved expectation)
+      | register <- serviceReturnRegister : servicePreservedRegisters
       , M.notMember register registersOf
       ]
     registers
       | not (null missingRegisters) = missingRegisters
       | otherwise =
-          [ "r0: expected " ++ N.hexWord32 (expectationExpectedR0 expectation)
+          [ N.registerLabel serviceReturnRegister ++ ": expected " ++ N.hexWord32 (expectationExpectedR0 expectation)
               ++ ", observed " ++ N.hexWord32 result
-          | Just result <- [M.lookup N.R0 registersOf]
+          | Just result <- [M.lookup serviceReturnRegister registersOf]
           , result /= expectationExpectedR0 expectation
           ]
             ++ [ "register " ++ N.registerLabel register ++ ": expected " ++ N.hexWord32 expected
@@ -292,11 +488,13 @@ checkServiceCase expectation observation =
                       ]
               | ident == expectationTransientRegion expectation ->
                   [ "transient region " ++ N.regionName ident ++ " did not return to its initial bytes"
-                  | actual /= initial
+                  | effectTransientRestores policy
+                  , actual /= initial
                   ]
               | otherwise ->
                   [ "immutable region " ++ N.regionName ident ++ " changed"
-                  | actual /= initial
+                  | effectImmutableExact policy
+                  , actual /= initial
                   ]
         | (ident, _, _) <- expectationBounds expectation
         ]
@@ -304,6 +502,8 @@ checkServiceCase expectation observation =
       case find (\(ident, base, extent) -> contains base extent address size) (expectationBounds expectation) of
         Nothing -> ["forbidden write outside the declared regions at " ++ show address]
         Just (ident, base, _)
+          | ident `notElem` effectAllowedScratch policy ->
+              ["forbidden write to region " ++ N.regionName ident ++ " at " ++ show address]
           | ident == serviceStackRegion ->
               let low = N.guestAddress (expectationStackBase expectation) + fromIntegral (expectationStackOffset expectation)
                   high = low + fromIntegral (expectationStackSize expectation)
@@ -325,8 +525,8 @@ expectationFromCase :: Value -> [Region] -> Either String Expectation
 expectationFromCase caseValue regions = do
   let expected = get caseValue "expected"
       expectedRegisters = get expected "registers"
-  expectedR0 <- readRegister N.R0 expectedRegisters
-  preserved <- forM (serviceSeedsRegisters ++ [N.Sp, N.Pc]) $ \register ->
+  expectedR0 <- readRegister serviceReturnRegister expectedRegisters
+  preserved <- forM servicePreservedRegisters $ \register ->
     (,) register <$> readRegister register expectedRegisters
   stackTop <- readRegister N.Sp expectedRegisters
   stackRegion <- maybe (Left "service stack region casebuf missing") Right (find ((== serviceStackRegion) . N.regionIdOf) regions)
@@ -349,7 +549,6 @@ expectationFromCase caseValue regions = do
       , expectationTransientSize = serviceTransientSize
       }
   where
-    serviceSeedsRegisters = [N.R4, N.R5, N.R6, N.R7, N.R8, N.R9, N.R10, N.R11]
     readRegister register object =
       case N.parseWord32 (str (get object (N.registerLabel register))) of
         Just value -> Right value
@@ -449,7 +648,7 @@ runServiceCase runner path = do
                                     , ("status", s status)
                                     , ("mismatches", arr (map s problems))
                                     , ("expected_r0", n (fromIntegral (expectationExpectedR0 expectation)))
-                                    , ("observed_r0", maybe Null (n . fromIntegral) (M.lookup N.R0 (N.nativeRegisters observation)))
+                                    , ("observed_r0", maybe Null (n . fromIntegral) (M.lookup serviceReturnRegister (N.nativeRegisters observation)))
                                     , ("runner_status", s (N.runnerStatusLabel (N.nativeStatus observation)))
                                     , ("runner_sha256", s digest)
                                     , ("provenance_total", n (fromIntegral (N.provenanceTotal (N.provenanceCount (N.nativeProvenance observation)))))
@@ -479,11 +678,13 @@ runServiceCase runner path = do
 
 mutantChecks :: Expectation -> N.NativeObservation -> [Value]
 mutantChecks expectation observation =
-  [ mutant "abi-r7-clobber" (mutateRegister observation N.R7 (r7 `xor` 0x01010101))
-  , mutant "effect-immutable-write" (mutateWrite observation (N.GuestAddress (fromIntegral serviceStackBase + 0x100)) 4)
+  [ mutant (serviceMutantName required) (mutate required observation)
+  | required <- contractMutants serviceContract
   ]
   where
     r7 = fromMaybe 0 (M.lookup N.R7 (N.nativeRegisters observation))
+    mutate AbiR7Clobber = mutateRegister observation N.R7 (r7 `xor` 0x01010101)
+    mutate EffectImmutableWrite = mutateWrite observation (N.GuestAddress (fromIntegral serviceStackBase + 0x100)) 4
     mutant name changed =
       let check = checkServiceCase expectation changed
        in obj
@@ -500,6 +701,7 @@ serviceQualificationReport results =
     [ ("schema_version", n 1)
     , ("profile", s "service-native")
     , ("contract_sha256", s serviceContractSha256)
+    , ("contract", serviceContractValue)
     , ("runner_sha256", maybe (s "") (\value -> get value "runner_sha256") (listToMaybe found))
     , ("status", s status)
     , ("capability", b (status == "qualified"))
@@ -515,11 +717,17 @@ serviceQualificationReport results =
     , ("evidence_limits", arr (map s evidenceLimits))
     ]
   where
-    found = [result | row <- serviceRows, Just result <- [find ((== serviceRowId row) . str . flip get "id") results]]
+    matches row = [result | result <- results, str (get result "id") == serviceRowId row]
+    unique row = case matches row of
+      [result] -> Just result
+      _ -> Nothing
+    found = [result | row <- serviceRows, Just result <- [unique row]]
+    duplicateRows = [serviceRowId row | row <- serviceRows, length (matches row) > 1]
+    missingRows = [serviceRowId row | row <- serviceRows, null (matches row)]
     statusOf result = str (get result "status")
     summary row =
-      case find ((== serviceRowId row) . str . flip get "id") results of
-        Nothing ->
+      case matches row of
+        [] ->
           obj
             [ ("id", s (serviceRowId row))
             , ("property", n (fromIntegral (serviceRowProperty row)))
@@ -527,30 +735,51 @@ serviceQualificationReport results =
             , ("expected", n (fromIntegral (rowStateWord (serviceRowExpected row))))
             , ("status", s "missing")
             ]
-        Just result ->
+        [result] ->
           merge
             result
             [ ("property", n (fromIntegral (serviceRowProperty row)))
             , ("row", n (fromIntegral (serviceRowToken row)))
             , ("expected", n (fromIntegral (rowStateWord (serviceRowExpected row))))
             ]
+        duplicates ->
+          obj
+            [ ("id", s (serviceRowId row))
+            , ("property", n (fromIntegral (serviceRowProperty row)))
+            , ("row", n (fromIntegral (serviceRowToken row)))
+            , ("expected", n (fromIntegral (rowStateWord (serviceRowExpected row))))
+            , ("status", s "duplicate")
+            , ("duplicates", n (fromIntegral (length duplicates)))
+            ]
     qualifiedRows = length [() | result <- found, statusOf result == "passed"]
     failed = [result | result <- found, statusOf result == "failed"]
     blocked = [result | result <- found, statusOf result `elem` ["blocked", "unsupported", "truncated"]]
     unknown = [result | result <- found, statusOf result == "unknown"]
-    missing = [row | row <- serviceRows, isNothing (find ((== serviceRowId row) . str . flip get "id") results)]
+    mutantProblems result =
+      let entries = list (get result "mutants")
+          names = map (\entry -> str (get entry "name")) entries
+          statuses = map (\entry -> str (get entry "status")) entries
+          required = serviceMutantNames
+          duplicated = nub [name | name <- names, length (filter (== name) names) > 1]
+       in [ "mutant domain differs: expected " ++ show (sort required) ++ ", observed " ++ show (sort names)
+          | sort names /= sort required
+          ]
+            ++ [ "duplicate mutant control: " ++ name | name <- duplicated ]
+            ++ [ "mutant " ++ name ++ ": " ++ status
+               | (name, status) <- zip names statuses
+               , status /= "refused"
+               ]
     failures =
       [ caseId ++ ": " ++ problem
       | result <- failed
       , let caseId = str (get result "id")
       , problem <- map str (list (get result "mismatches"))
       ]
-        ++ [ caseId ++ ": mutant " ++ name ++ " was not refused"
+        ++ [ "duplicate required case id: " ++ rowId | rowId <- duplicateRows ]
+        ++ [ str (get result "id") ++ ": " ++ problem
            | result <- found
-           , let caseId = str (get result "id")
-           , mutant <- list (get result "mutants")
-           , str (get mutant "status") /= "refused"
-           , let name = str (get mutant "name")
+           , statusOf result == "passed"
+           , problem <- mutantProblems result
            ]
     blockers =
       [ str (get result "id") ++ ": " ++ statusOf result
@@ -559,7 +788,7 @@ serviceQualificationReport results =
     unknowns = [str (get result "id") ++ ": " ++ statusOf result | result <- unknown]
     coverageGaps =
       [ "capability requires all " ++ show (length serviceRows) ++ " direct service rows"
-      | not (null missing)
+      | not (null missingRows)
       ]
     status
       | not (null failures) = "failed"
@@ -582,10 +811,10 @@ serviceQualificationReport results =
       str (get left "id") == str (get right "id")
         && str (get left "sha256") == str (get right "sha256")
     evidenceLimits =
-      [ "The native runner executes the built kernel's rb_service_field_row_state -> rb_call_stock_probe -> FUN_00d52684 path; it does not execute RAM-push publication or camera I/O."
-      , "The fixture fixes shooting mode 0x24 (M); the other mode columns of the stock probe are not covered."
-      , "casebuf[0x1e00,0x2000) is stack scratch and the stock table mirror is transient scratch; every other byte is immutable. Complete provenance is required."
-      , "The ABI and effect mutations are injected into the observed state and refused by the same checked consumer; they are not separate candidate binaries."
+      [ "The contract digest binds rows, state domain, return and preserved registers, seeds, stack and transient spans, endpoints, lifetime, effect policy and mutant domain."
+      , "The per-case mutant entries are checks injected into an observed case state; they are not separate candidate binaries."
+      , "A test-only ARM write/restore mutant is executed by //replacement/service:qualification-tests through runServiceCase and the native runner; that test reports the executed refusal."
+      , "The native direct-row and packaged artifact runs remain pending compute; this report does not claim their results."
       , "r11 is saved by the Rust prologue, so the public entry's preservation is asserted; a stock r11 clobber is not isolated from that save."
       ]
 

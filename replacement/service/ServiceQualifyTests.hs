@@ -29,10 +29,66 @@ main = do
 
 run :: FilePath -> IO ()
 run runner = do
+  aggregationChecks
   consumerChecks
   parserChecks
   armEffectMutant runner
   putStrLn "service qualification tests: passed"
+
+aggregationChecks :: IO ()
+aggregationChecks = do
+  let baseline = map resultFor serviceRows
+      baselineReport = serviceQualificationReport baseline
+      firstId = serviceRowId (head serviceRows)
+      missingControl =
+        [ if str (get result "id") == firstId then set "mutants" (arr []) result else result
+        | result <- baseline
+        ]
+      unknownControl =
+        [ if str (get result "id") == firstId
+            then set "mutants" (arr (mutantsFor result ++ [mutantValue "unknown-control"])) result
+            else result
+        | result <- baseline
+        ]
+      duplicateControl =
+        [ if str (get result "id") == firstId
+            then set "mutants" (arr (mutantsFor result ++ take 1 (mutantsFor result))) result
+            else result
+        | result <- baseline
+        ]
+      duplicateCase = baseline ++ take 1 baseline
+      missingCase = tail baseline
+  check "the complete control domain qualifies" (qualified baselineReport)
+  check "a missing control fails closed" (not (qualified (serviceQualificationReport missingControl)))
+  check "an unknown control fails closed" (not (qualified (serviceQualificationReport unknownControl)))
+  check "a duplicate control fails closed" (not (qualified (serviceQualificationReport duplicateControl)))
+  check "a duplicate case id fails closed" (not (qualified (serviceQualificationReport duplicateCase)))
+  check "a missing case is partial" (str (get (serviceQualificationReport missingCase) "status") == "partial")
+
+qualified :: Value -> Bool
+qualified report = str (get report "status") == "qualified" && get report "capability" == b True
+
+resultFor :: ServiceRow -> Value
+resultFor row =
+  obj
+    [ ("id", s (serviceRowId row))
+    , ("status", s "passed")
+    , ("mismatches", arr [])
+    , ("runner_sha256", s "00")
+    , ("artifacts", arr [])
+    , ("mutants", arr [mutantValue name | name <- serviceMutantNames])
+    ]
+
+mutantsFor :: Value -> [Value]
+mutantsFor result = list (get result "mutants")
+
+mutantValue :: String -> Value
+mutantValue name =
+  obj
+    [ ("name", s name)
+    , ("status", s "refused")
+    , ("mismatches", arr [])
+    ]
 
 check :: String -> Bool -> IO ()
 check name ok =

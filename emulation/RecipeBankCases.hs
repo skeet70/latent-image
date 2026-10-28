@@ -609,6 +609,20 @@ packTables id4 entries = (B.concat (map snd pieces), M.fromList (zip (map fst pi
 -- dispatcher code with the two copy wrappers replaced by one bx lr each, the
 -- conversion tables and pointer block at their stock addresses, the cells
 -- block with the mode cell 0x21 and the settings mirror with the not-found
+-- Native-fixture-only model storage. 0x7f000000 is invented for the bounded
+-- case, not an X-M1 address or a RAM-push reservation.
+modelScratchBase :: Integer
+modelScratchBase = 0x7f000000
+
+modelScratchSize :: Int
+modelScratchSize = 0x1000
+
+fieldTableAddress :: Integer
+fieldTableAddress = 0x970800
+
+liveBaseAddress :: Integer
+liveBaseAddress = 0x96cc64
+
 -- flag set. The menu, mode and availability tables share one region, and the
 -- id5 slice runs on through the render probe FUN_00d52684. The synthetic
 -- getter and setter retire: 0x0061e110 and 0x00624694 are the real code
@@ -1476,9 +1490,9 @@ specSet filmEncoding ks ms fields tabs hostBank (StockFailureRedraw failureRedra
     sizeFile p = encodeFile 7 0x0001 ((name26 "ALPHA", p) : replicate 6 (name26 "ALPHA", payloadReal))
     mModel = (model (fileA [])) { mLive = admittedLive, mShootingMode = 0x24 }
     serviceFns =
-      [ "rb_service_field_row_state"
-      , "rb_call_stock_probe"
-      , "0x00d52684/25140"
+      [ S.serviceEntrySymbol
+      , S.serviceTrampolineSymbol
+      , S.serviceStockSpan
       , "0x0063d060/240"
       , "0x0061d554/16"
       , "0x0061d018/32"
@@ -1487,7 +1501,7 @@ specSet filmEncoding ks ms fields tabs hostBank (StockFailureRedraw failureRedra
       [ Spec
           (S.serviceRowId row)
           (S.serviceRowProvenance row)
-          "rb_service_field_row_state"
+          S.serviceEntrySymbol
           [S.serviceRowProperty row, S.serviceRowToken row]
           mModel
           (Expect "returned" (S.rowStateWord (S.serviceRowExpected row)) [])
@@ -2552,13 +2566,21 @@ runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable g
   let dir = out </> spId sp
   createDirectoryIfMissing True dir
   let modeCell = B.replicate 0x24 0 <> u32le (mMode (spModel sp))
-      mdata = overlay mdataRaw ([ (addr ms n - 0x970000, u32le v) | (n, v) <- M.toList (mCells (spModel sp))]
-        ++ [(addr ms "rbm_field_count" - 0x970000, u32le (fromIntegral (B.length fTable `div` 20)))])
-      mdata' = overlay (mdata <> B.replicate 0x1000 0) [(0x800, fTable)]
+      mdata = overlay mdataRaw ([ (addr ms n - modelScratchBase, u32le v) | (n, v) <- M.toList (mCells (spModel sp))]
+        ++ [(addr ms "rbm_field_count" - modelScratchBase, u32le (fromIntegral (B.length fTable `div` 20)))])
+      mdata' =
+        if B.length mdata > modelScratchSize
+          then error "model data exceeds its native fixture region"
+          else mdata <> B.replicate (modelScratchSize - B.length mdata) 0
       overlay base ps = foldl (\b (o, v) -> B.take (fromIntegral o) b <> v <> B.drop (fromIntegral o + B.length v) b) base ps
       cardImg = mCard (spModel sp)
       cardLength = max cardBytes (B.length cardImg)
       liveImg = mLive (spModel sp)
+      fieldTableOffset = fromIntegral (fieldTableAddress - liveBaseAddress)
+      liveImg' =
+        if B.length liveImg > fieldTableOffset
+          then error "live settings exceed the field-table offset"
+          else liveImg <> B.replicate (fieldTableOffset - B.length liveImg) 0 <> fTable
       direct = S.isServiceCaseId (spId sp)
       directProperty = case spArgs sp of (property : _) -> property; [] -> 0
       directRow = case drop 1 (spArgs sp) of (row : _) -> row; _ -> 0
@@ -2569,7 +2591,7 @@ runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable g
       extrasPatch = [(rid, a, if rid == "media-state" then patchMode b else if rid == "cells" then patchCells b else b) | (rid, a, b) <- extras]
       exitAddress = mediaLo + fromIntegral (B.length mediaImg)
       mediaImg' = overlay mediaImg [(a - mediaLo, bytes) | (GuestAddress a, bytes) <- mForeignCode (spModel sp)] <> u32le 0xe12fff1e
-      arts = [("kernel.bin", kbin), ("media.bin", mediaImg'), ("getter.bin", getter), ("setter.bin", setter), ("model-data.bin", B.take 0x1000 mdata'), ("tables.bin", tabImg), ("card.bin", cardImg), ("live.bin", liveImg)]
+      arts = [("kernel.bin", kbin), ("media.bin", mediaImg'), ("getter.bin", getter), ("setter.bin", setter), ("model-data.bin", mdata'), ("tables.bin", tabImg), ("card.bin", cardImg), ("live.bin", liveImg')]
         ++ (if B.null caseImg then [] else [("case.bin", caseImg)])
         ++ [(rid ++ ".bin", b) | (rid, _, b) <- extrasPatch, not (B.null b)]
   forM_ (arts ++ [("mode.bin", modeCell)]) $ \(n, b) -> B.writeFile (dir </> n) b
@@ -2582,8 +2604,8 @@ runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable g
         [ reg "ktext" kernelBase ktextLen "rx" (Just "kernel.bin") 0 ktextLen
         , reg "kdata" (kernelBase + fromIntegral ktextLen) kdataLen "rw" (Just "kernel.bin") ktextLen kdataLen
         , reg "media" mediaLo (B.length mediaImg') "rx" (Just "media.bin") 0 (B.length mediaImg')
-        , reg "model-data" 0x00970000 0x1000 "rw" (Just "model-data.bin") 0 0x1000
-        , reg "live-state" 0x0096cc64 0x1c2 "rw" (Just "live.bin") 0 0x1c2
+        , reg "model-scratch" modelScratchBase modelScratchSize "rw" (Just "model-data.bin") 0 modelScratchSize
+        , reg "live-state" liveBaseAddress (B.length liveImg') "rw" (Just "live.bin") 0 (B.length liveImg')
         , reg "card" 0x00980000 cardLength "rw" (Just "card.bin") 0 (B.length cardImg)
         , reg "casebuf" 0x009a0000 0x2000 "rw" (if B.null caseImg then Nothing else Just "case.bin") 0 (B.length caseImg) ]
         ++ [reg rid a (max 4 (B.length b)) (extraPerms rid) (if B.null b then Nothing else Just (rid ++ ".bin")) 0 (B.length b) | (rid, a, b) <- extrasPatch]
@@ -2647,7 +2669,7 @@ runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable g
       caseWallMs = if direct then 4000 else if longEntry then 10000 else 4000 :: Int
       addrOfEntry =
         if direct
-          then addr ks "rb_service_field_row_state"
+          then addr ks S.serviceEntrySymbol
           else case spEntry sp of
             e | take 2 e == "0x" -> hexI e
             e -> if e `elem` M.keys (case ks of Syms m -> m) then addr ks e else addr ms e
