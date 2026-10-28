@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import Data.Aeson (Value (..), encode, object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
@@ -21,10 +21,12 @@ import System.FilePath ((</>))
 
 data Variant = Variant
   { variantHits :: [Value]
+  , variantReopenHits :: [Value]
   , variantSites :: [Value]
   , variantOutcome :: String
   , variantAfterHits :: [Value]
   , variantOmitSymbols :: Bool
+  , variantControlFile :: Bool
   , variantMutatePackage :: Maybe (FilePath -> IO ())
   }
 
@@ -39,12 +41,13 @@ main = withTemporary "packaged-qualification" $ \root -> do
   refuses root "wrong symbol binding" (baselineVariant { variantSites = badSites })
   refuses root "control outcome" (baselineVariant { variantOutcome = "control-refused" })
   refuses root "missing runtime symbol metadata" (baselineVariant { variantOmitSymbols = True })
+  refuses root "sibling control result" (baselineVariant { variantControlFile = True })
   refuses root "mutated package DAT" (baselineVariant { variantMutatePackage = Just mutatePackage })
   refuses root "owned entry after service-after-unload" (baselineVariant { variantAfterHits = afterUnloadOwned })
   putStrLn "packaged qualification tests: passed"
 
 baselineVariant :: Variant
-baselineVariant = Variant baselineHits declaredSites "candidate-qualified" [] False Nothing
+baselineVariant = Variant baselineHits reopenHits declaredSites "candidate-qualified" [] False False Nothing
 
 baselineCheck :: FilePath -> IO ()
 baselineCheck root = do
@@ -74,11 +77,16 @@ load root variant = do
   BL.writeFile (receipt </> "relinked" </> "ram-push-manifest.json") (encode relinkManifest)
   B.writeFile (package </> "recipe-complete.DAT") datBytes
   B.writeFile (package </> "kernel" </> "kernel.bin") kernelBytes
+  createDirectoryIfMissing True (package </> "runfiles")
+  B.writeFile (package </> "runfiles" </> "bank.a") archiveBytes
+  B.writeFile (package </> "runfiles" </> "build-facts.txt") factsBytes
   BL.writeFile (package </> "recipe-complete.json") (encode packageManifest)
   case variantMutatePackage variant of
     Nothing -> pure ()
     Just mutation -> mutation package
   BL.writeFile (receipt </> "e2e-result.json") (encode (e2eResult variant))
+  when (variantControlFile variant) $
+    BL.writeFile (receipt </> "e2e-control.json") (encode (object ["outcome" .= ("control-refused" :: String)]))
   qualifyPackaged (PackagedInputs receipt package)
 
 symbols :: B.ByteString
@@ -116,7 +124,10 @@ site :: String -> String -> Value
 site label address = object ["label" .= label, "address" .= address]
 
 baselineHits :: [Value]
-baselineHits = concat [observed row iteration | row <- [0 .. 4], iteration <- [0 .. 1]]
+baselineHits = concat [observed row 0 | row <- [0 .. 4]]
+
+reopenHits :: [Value]
+reopenHits = concat [observed row 1 | row <- [0 .. 4]]
 
 observed :: Int -> Int -> [Value]
 observed row iteration =
@@ -128,7 +139,7 @@ observed row iteration =
   , hit "svc-stock-return" (start + 5) 0 0
   ]
   where
-    start = 1000 + row * 100 + iteration * 10
+    start = 1000 + iteration * 1000 + row * 100
 
 afterUnloadOwned :: [Value]
 afterUnloadOwned =
@@ -194,12 +205,18 @@ datBytes = BC.pack "recipe-complete-dat"
 kernelBytes :: B.ByteString
 kernelBytes = BC.pack "kernel-bin"
 
+archiveBytes :: B.ByteString
+archiveBytes = BC.pack "bank-archive"
+
+factsBytes :: B.ByteString
+factsBytes = BC.pack "build-facts"
+
 datSha, kernelSha, runtimeSha, archiveSha, factsSha :: String
 datSha = digest datBytes
 kernelSha = digest kernelBytes
 runtimeSha = digest runtime
-archiveSha = replicate 64 'a'
-factsSha = replicate 64 'b'
+archiveSha = digest archiveBytes
+factsSha = digest factsBytes
 
 digest :: B.ByteString -> String
 digest = sha256Hex . sha256
@@ -282,6 +299,7 @@ e2eResult variant =
         ]
     , "observations" .=
         [ object ["phase" .= ("service-field-list" :: String), "trace_hits" .= variantHits variant]
+        , object ["phase" .= ("service-field-reopen" :: String), "trace_hits" .= variantReopenHits variant]
         , object ["phase" .= ("service-after-unload" :: String), "trace_hits" .= ([] :: [Value])]
         , object [ "phase" .= ("service-after-unload-stock" :: String)
                  , "trace_hits" .= ([hit "stock-row-probe" 9000 0 0] ++ variantAfterHits variant)

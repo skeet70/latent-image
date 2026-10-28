@@ -17,7 +17,7 @@ import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', withObject, w
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as B
 import Data.Char (isHexDigit)
-import Data.List (find, findIndex, nub)
+import Data.List (find, nub)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -40,7 +40,8 @@ import Replacement.Service.Qualify
   , serviceStockTarget
   , rowStateWord
   )
-import System.FilePath ((</>), takeFileName)
+import System.Directory (doesFileExist)
+import System.FilePath (isAbsolute, (</>), takeFileName)
 
 newtype Digest = Digest { digestText :: String } deriving (Eq, Ord, Show)
 
@@ -55,18 +56,42 @@ parseDigest text
 trustedDigest :: String -> Digest
 trustedDigest = Digest
 
-newtype TraceLabel = TraceLabel { traceLabelText :: String } deriving (Eq, Ord, Show)
+data TraceSiteLabel = SvcRustEntry | SvcStockTrampoline | SvcStockReturn | StockRowProbe
+  deriving (Bounded, Enum, Eq, Ord, Show)
+
+traceSiteLabelText :: TraceSiteLabel -> String
+traceSiteLabelText SvcRustEntry = "svc-rust-entry"
+traceSiteLabelText SvcStockTrampoline = "svc-stock-trampoline"
+traceSiteLabelText SvcStockReturn = "svc-stock-return"
+traceSiteLabelText StockRowProbe = "stock-row-probe"
+
+instance FromJSON TraceSiteLabel where
+  parseJSON = withText "trace label" $ \label -> case T.unpack label of
+    "svc-rust-entry" -> pure SvcRustEntry
+    "svc-stock-trampoline" -> pure SvcStockTrampoline
+    "svc-stock-return" -> pure SvcStockReturn
+    "stock-row-probe" -> pure StockRowProbe
+    other -> fail ("unknown service trace label: " ++ other)
+
+newtype CoreId = CoreId { coreIdValue :: Int } deriving (Eq, Ord, Show)
+
+instance FromJSON CoreId where
+  parseJSON value = do
+    core <- parseJSON value :: Parser Int
+    if core >= 0 then pure (CoreId core) else fail "trace core must be nonnegative"
+
+newtype InstructionCount = InstructionCount { instructionCountValue :: Word64 } deriving (Eq, Ord, Show)
+
+instance FromJSON InstructionCount where
+  parseJSON = fmap InstructionCount . parseJSON
 
 newtype TraceAddress = TraceAddress { traceAddressWord :: Word32 } deriving (Eq, Ord, Show)
-
-instance FromJSON TraceLabel where
-  parseJSON = withText "trace label" (pure . TraceLabel . T.unpack)
 
 instance FromJSON TraceAddress where
   parseJSON = withText "trace address" parseAddress8
 
 data DeclaredTraceSite = DeclaredTraceSite
-  { declaredTraceLabel :: TraceLabel
+  { declaredTraceLabel :: TraceSiteLabel
   , declaredTraceAddress :: TraceAddress
   } deriving (Eq, Show)
 
@@ -77,9 +102,9 @@ instance FromJSON DeclaredTraceSite where
       <*> site .: "address"
 
 data TraceHit = TraceHit
-  { hitSite :: TraceLabel
-  , hitCore :: Int
-  , hitInstructions :: Word64
+  { hitSite :: TraceSiteLabel
+  , hitCore :: CoreId
+  , hitInstructions :: InstructionCount
   , hitR0, hitR1, hitR2, hitR3 :: Word32
   } deriving (Eq, Show)
 
@@ -309,11 +334,13 @@ data PackagedRow = PackagedRow
   , packagedRowEntries :: Int
   , packagedRowReturned :: [Word32]
   , packagedRowNested :: Int
+  , packagedRowPhases :: [SegmentName]
   } deriving (Eq, Show)
 
 data OwnedSequence = OwnedSequence
-  { ownedRow :: Word32
-  , ownedCore :: Int
+  { ownedPhase :: SegmentName
+  , ownedRow :: Word32
+  , ownedCore :: CoreId
   , ownedEntry :: TraceHit
   , ownedTrampoline :: TraceHit
   , ownedStock :: TraceHit
@@ -331,6 +358,7 @@ data PackagedIdentities = PackagedIdentities
   , packagedManifestSha :: Digest
   , packagedSymbolsSha :: Digest
   , packagedRuntimeSha :: Digest
+  , packagedRelinkMode :: RelinkMode
   , packagedOutcome :: WatchJudgement
   } deriving (Eq, Show)
 
@@ -351,64 +379,75 @@ packagedStatusLabel PackagedRefused = "refused"
 
 qualifyPackaged :: PackagedInputs -> IO (Either String PackagedReport)
 qualifyPackaged (PackagedInputs receipt packageDirectory) = do
-  resultEither <- readJson (receipt </> "e2e-result.json")
-  case resultEither of
-    Left problem -> pure (Left problem)
-    Right result -> do
-      manifestEither <- try (readRamPushManifest (receipt </> "relinked" </> "ram-push-manifest.json"))
-        :: IO (Either IOException RamPushManifest)
-      case manifestEither of
-        Left problem -> pure (Left ("relinked manifest: " ++ show problem))
-        Right manifest -> do
-          packageEither <- readJson (packageDirectory </> "recipe-complete.json")
-          case packageEither of
-            Left problem -> pure (Left problem)
-            Right package -> do
-              symbolsBytes <- B.readFile (receipt </> "relinked" </> "kernel.syms")
-              actualDat <- digestFile (packageDirectory </> "recipe-complete.DAT")
-              actualKernel <- digestFile (packageDirectory </> "kernel" </> "kernel.bin")
-              actualRuntime <- digestFile (receipt </> "relinked" </> "runtime.bin")
-              actualManifest <- digestFile (receipt </> "relinked" </> "ram-push-manifest.json")
-              resultDigest <- digestFile (receipt </> "e2e-result.json")
-              let table = parseSymbolTable symbolsBytes
-                  symbolsDigest = trustedDigest (sha256Hex (sha256 symbolsBytes))
-                  identities = PackagedIdentities
-                    { packagedDatSha = actualDat
-                    , packagedArchiveSha = maybe (Digest "") packageInputSha (uniqueInput "bank.a" package)
-                    , packagedFactsSha = maybe (Digest "") packageInputSha (uniqueInput "build-facts.txt" package)
-                    , packagedExecutableSha = packageExecutableSha package
-                    , packagedInstalledDat = startInstalledDat (e2eStart result)
-                    , packagedResultSha = resultDigest
-                    , packagedManifestSha = actualManifest
-                    , packagedSymbolsSha = symbolsDigest
-                    , packagedRuntimeSha = trustedDigest (runtimeDigest manifest)
-                    , packagedOutcome = e2eOutcome result
-                    }
-                  (sequences, retained, traceProblems) = analyzeObservations result
-                  rowResults = rowEvidence sequences
-                  problems = nub
-                    (schemaProblems result
-                      ++ modeProblems result
-                      ++ identityProblems package manifest result actualDat actualKernel actualRuntime actualManifest symbolsDigest
-                      ++ validateDeclaredSites table (e2eDeclaredSites result)
-                      ++ traceProblems
-                      ++ rowProblemsFor rowResults
-                      ++ lifecycleChecks result
-                      ++ crossSequenceProblems sequences)
-              pure (Right PackagedReport
-                { packagedStatus = if null problems then PackagedQualified else PackagedRefused
-                , packagedRows = rowResults
-                , packagedSequences = sequences
-                , packagedRetainedHits = retained
-                , packagedProblems = problems
-                , packagedIdentities = identities
-                , packagedPhases = nub (map observationPhase (e2eObservations result) ++ map trajectoryName (e2eTrajectories result))
-                , packagedUnload = e2eUnload result
-                })
+  control <- doesFileExist (receipt </> "e2e-control.json")
+  if control
+    then pure (Left "receipt contains e2e-control.json alongside a candidate result")
+    else do
+      resultEither <- readJson (receipt </> "e2e-result.json")
+      case resultEither of
+        Left problem -> pure (Left problem)
+        Right result -> do
+          manifestEither <- try (readRamPushManifest (receipt </> "relinked" </> "ram-push-manifest.json"))
+            :: IO (Either IOException RamPushManifest)
+          case manifestEither of
+            Left problem -> pure (Left ("relinked manifest: " ++ show problem))
+            Right manifest -> do
+              packageEither <- readJson (packageDirectory </> "recipe-complete.json")
+              case packageEither of
+                Left problem -> pure (Left problem)
+                Right package ->
+                  case (uniqueInput "bank.a" package, uniqueInput "build-facts.txt" package) of
+                    (Just archive, Just facts) -> do
+                      symbolsBytes <- B.readFile (receipt </> "relinked" </> "kernel.syms")
+                      actualDat <- digestFile (packageDirectory </> "recipe-complete.DAT")
+                      actualKernel <- digestFile (packageDirectory </> "kernel" </> "kernel.bin")
+                      actualArchive <- digestFile (packagePath packageDirectory archive)
+                      actualFacts <- digestFile (packagePath packageDirectory facts)
+                      resultDigest <- digestFile (receipt </> "e2e-result.json")
+                      let table = parseSymbolTable symbolsBytes
+                          symbolsDigest = trustedDigest (sha256Hex (sha256 symbolsBytes))
+                          identities = PackagedIdentities
+                            { packagedDatSha = actualDat
+                            , packagedArchiveSha = actualArchive
+                            , packagedFactsSha = actualFacts
+                            , packagedExecutableSha = packageExecutableSha package
+                            , packagedInstalledDat = startInstalledDat (e2eStart result)
+                            , packagedResultSha = resultDigest
+                            , packagedManifestSha = trustedDigest (manifestDigest manifest)
+                            , packagedSymbolsSha = symbolsDigest
+                            , packagedRuntimeSha = trustedDigest (runtimeDigest manifest)
+                            , packagedRelinkMode = relinkMode (e2eRelink result)
+                            , packagedOutcome = e2eOutcome result
+                            }
+                          (sequences, retained, traceProblems) = analyzeObservations result
+                          rowResults = rowEvidence sequences
+                          problems = nub
+                            (schemaProblems result
+                              ++ modeProblems result
+                              ++ identityProblems package manifest result actualDat actualKernel actualArchive actualFacts symbolsDigest
+                              ++ validateDeclaredSites table (e2eDeclaredSites result)
+                              ++ traceProblems
+                              ++ rowProblemsFor rowResults
+                              ++ lifecycleChecks result
+                              ++ crossSequenceProblems sequences)
+                      pure (Right PackagedReport
+                        { packagedStatus = if null problems then PackagedQualified else PackagedRefused
+                        , packagedRows = rowResults
+                        , packagedSequences = sequences
+                        , packagedRetainedHits = retained
+                        , packagedProblems = problems
+                        , packagedIdentities = identities
+                        , packagedPhases = nub (map observationPhase (e2eObservations result) ++ map trajectoryName (e2eTrajectories result))
+                        , packagedUnload = e2eUnload result
+                        })
+                    _ -> pure (Left "package requires exactly one bank.a and one build-facts.txt input")
   where
     uniqueInput name manifest = case inputsNamed name manifest of
       [input] -> Just input
       _ -> Nothing
+    packagePath packageDir input =
+      let path = packageInputPath input
+       in if isAbsolute path then path else packageDir </> path
 
 readJson :: FromJSON a => FilePath -> IO (Either String a)
 readJson path = do
@@ -434,10 +473,15 @@ schemaProblems result = [ "E2E schema is not 1" | e2eSchema result /= 1 ]
 modeProblems :: E2E -> [String]
 modeProblems result =
   [ "packaged run outcome is not candidate-qualified" | e2eOutcome result /= CandidateQualified ]
-    ++ [ "packaged run is not an unreviewed relink" | relinkMode (e2eRelink result) /= RelinkUnreviewed ]
+
+data SourceIdentityKey = BankArchiveKey | ToolchainFactsKey deriving (Eq, Show)
+
+sourceIdentityKeyText :: SourceIdentityKey -> String
+sourceIdentityKeyText BankArchiveKey = "rust_object_replacement_bank"
+sourceIdentityKeyText ToolchainFactsKey = "rust_toolchain_replacement_bank"
 
 identityProblems :: PackageManifest -> RamPushManifest -> E2E -> Digest -> Digest -> Digest -> Digest -> Digest -> [String]
-identityProblems package manifest result actualDat actualKernel actualRuntime actualManifest symbolsDigest =
+identityProblems package manifest result actualDat actualKernel actualArchive actualFacts symbolsDigest =
   [ "package DAT digest differs from recipe-complete.DAT" | actualDat /= packageFirmwareSha package ]
     ++ [ "package kernel digest differs from kernel/kernel.bin" | actualKernel /= packageExecutableSha package ]
     ++ [ "package firmware digest differs from the emulator start input" | packageFirmwareSha package /= startInstalledDat (e2eStart result) ]
@@ -445,33 +489,48 @@ identityProblems package manifest result actualDat actualKernel actualRuntime ac
     ++ [ "emulator start is not the cardless route" | startCardPresent (e2eStart result) /= Just False ]
     ++ [ "package has no unique bank.a input" | length (inputsNamed "bank.a" package) /= 1 ]
     ++ [ "package has no unique build-facts.txt input" | length (inputsNamed "build-facts.txt" package) /= 1 ]
+    ++ [ "bank.a bytes differ from the package input digest"
+       | Just input <- [uniqueInput "bank.a" package], actualArchive /= packageInputSha input ]
+    ++ [ "build-facts.txt bytes differ from the package input digest"
+       | Just input <- [uniqueInput "build-facts.txt" package], actualFacts /= packageInputSha input ]
     ++ [ "runtime symbols digest differs from relinked/kernel.syms" | runtimeSymbolsSha (e2eRuntime result) /= symbolsDigest ]
     ++ [ "E2E runtime byte count differs from the relink manifest" | runtimeByteSize (e2eRuntime result) /= ByteSize (allocationSize manifest) ]
     ++ [ "E2E runtime publication count differs from the relink manifest" | runtimePublicationCount (e2eRuntime result) /= PublicationCount (length (manifestPublications manifest)) ]
-    ++ [ "relinked runtime digest differs from relinked/runtime.bin" | trustedDigest (runtimeDigest manifest) /= actualRuntime ]
-    ++ [ "relinked manifest digest differs from relinked/ram-push-manifest.json" | trustedDigest (manifestDigest manifest) /= actualManifest ]
+    ++ [ "relinked manifest digest is missing" | null (manifestDigest manifest) ]
+    ++ [ "relinked runtime digest is missing" | null (runtimeDigest manifest) ]
     ++ [ "E2E relink source identity differs from the relink manifest" | relinkSourceIdentity (e2eRelink result) /= manifestIdentity manifest ]
+    ++ [ "relink source identity omits an archive identity" | M.lookup (sourceIdentityKeyText BankArchiveKey) manifestIdentityValue == Nothing ]
+    ++ [ "relink source identity omits a toolchain identity" | M.lookup (sourceIdentityKeyText ToolchainFactsKey) manifestIdentityValue == Nothing ]
+    ++ [ "E2E source identity omits an archive identity" | M.lookup (sourceIdentityKeyText BankArchiveKey) (relinkSourceIdentity (e2eRelink result)) == Nothing ]
+    ++ [ "E2E source identity omits a toolchain identity" | M.lookup (sourceIdentityKeyText ToolchainFactsKey) (relinkSourceIdentity (e2eRelink result)) == Nothing ]
+    ++ [ "relinked archive identity differs from the actual bank.a bytes"
+       | Just value <- [M.lookup (sourceIdentityKeyText BankArchiveKey) manifestIdentityValue]
+       , value /= actualArchive ]
+    ++ [ "relinked toolchain identity differs from the actual build-facts.txt bytes"
+       | Just value <- [M.lookup (sourceIdentityKeyText ToolchainFactsKey) manifestIdentityValue]
+       , value /= actualFacts ]
     ++ [ "relinked archive identity differs from the package archive"
        | Just archive <- [uniqueInput "bank.a" package]
-       , Just value <- [M.lookup "rust_object_replacement_bank" (relinkSourceIdentity (e2eRelink result))]
+       , Just value <- [M.lookup (sourceIdentityKeyText BankArchiveKey) manifestIdentityValue]
        , value /= packageInputSha archive ]
     ++ [ "relinked toolchain identity differs from the package facts"
        | Just facts <- [uniqueInput "build-facts.txt" package]
-       , Just value <- [M.lookup "rust_toolchain_replacement_bank" (relinkSourceIdentity (e2eRelink result))]
+       , Just value <- [M.lookup (sourceIdentityKeyText ToolchainFactsKey) manifestIdentityValue]
        , value /= packageInputSha facts ]
   where
     uniqueInput name value = case inputsNamed name value of
       [input] -> Just input
       _ -> Nothing
+    manifestIdentityValue = manifestIdentity manifest
     manifestIdentity value = M.fromList [(name, trustedDigest digest) | (name, digest) <- sourceIdentity value]
 
 validateDeclaredSites :: SymbolTable -> [DeclaredTraceSite] -> [String]
 validateDeclaredSites table sites =
   let addresses =
-        [ (TraceLabel "svc-rust-entry", symbol "rb_service_field_row_state")
-        , (TraceLabel "svc-stock-trampoline", symbol "rb_call_stock_probe")
-        , (TraceLabel "svc-stock-return", symbolPlus "rb_call_stock_probe" 0x10)
-        , (TraceLabel "stock-row-probe", Right (TraceAddress serviceStockTarget))
+        [ (SvcRustEntry, symbol "rb_service_field_row_state")
+        , (SvcStockTrampoline, symbol "rb_call_stock_probe")
+        , (SvcStockReturn, symbolPlus "rb_call_stock_probe" 0x10)
+        , (StockRowProbe, Right (TraceAddress serviceStockTarget))
         ]
       declared = [(declaredTraceLabel site, declaredTraceAddress site) | site <- sites]
       duplicateLabels = duplicates (map fst declared)
@@ -481,9 +540,9 @@ validateDeclaredSites table sites =
             Left problem -> [problem]
             Right expected ->
               case lookup label declared of
-                Nothing -> ["declared trace site is missing: " ++ traceLabelText label]
+                Nothing -> ["declared trace site is missing: " ++ traceSiteLabelText label]
                 Just actual | actual == expected -> []
-                Just actual -> [ "declared trace address for " ++ traceLabelText label ++ " is "
+                Just actual -> [ "declared trace address for " ++ traceSiteLabelText label ++ " is "
                                    ++ traceAddressText actual ++ ", expected " ++ traceAddressText expected ]
         | (label, resolved) <- addresses
         ]
@@ -509,92 +568,94 @@ data PositionedHit = PositionedHit
 
 analyzeObservations :: E2E -> ([OwnedSequence], [TraceHit], [String])
 analyzeObservations result =
-  let observations = e2eObservations result
-      positions = concat
+  let positions = concat
         [ [PositionedHit (observationPhase observation) hit | hit <- observationHits observation]
-        | observation <- observations
+        | observation <- e2eObservations result
         ]
-      boundary = case findIndex ((== serviceAfterUnloadPhase) . observationPhase) observations of
-        Nothing -> Nothing
-        Just observationIndex -> Just (length (concatMap observationHits (take observationIndex observations)))
-      (sequences, retained, problems) = analyzeHits boundary positions
-   in (sequences, retained, problems)
+      (sequences, retained, problems) = analyzeHits positions
+      orderProblems =
+        [ "trace instruction counts regress across retained or owned events"
+        | not (nondecreasing (map (instructionCountValue . hitInstructions . positionedHit) positions)) ]
+   in (sequences, retained, problems ++ orderProblems)
 
-analyzeHits :: Maybe Int -> [PositionedHit] -> ([OwnedSequence], [TraceHit], [String])
-analyzeHits boundary = go 0 [] []
+analyzeHits :: [PositionedHit] -> ([OwnedSequence], [TraceHit], [String])
+analyzeHits = go [] [] []
   where
-    go _ sequences retained [] = (sequences, retained, [])
-    go index sequences retained (position : rest)
+    go sequences retained problems [] = (reverse sequences, reverse retained, reverse problems)
+    go sequences retained problems (position : rest)
       | hitSite hit == entryLabel =
-          if maybe False (index >=) boundary
-            then (sequences, retained, ["svc-rust-entry occurs after service-after-unload"])
-            else case parseSequence (map positionedHit (position : rest)) of
-              Left problem -> (sequences, retained, [problem])
-              Right (sequence, remaining) ->
-                let consumed = length (position : rest) - length remaining
-                 in go (index + consumed) (sequences ++ [sequence]) retained (drop consumed (position : rest))
-      | hitSite hit == stockLabel = go (index + 1) sequences (retained ++ [hit]) rest
-      | otherwise = (sequences, retained, ["unexpected trace event outside an owned interval: " ++ traceLabelText (hitSite hit)])
+          if afterUnload (positionedPhase position)
+            then (reverse sequences, reverse retained, reverse ("svc-rust-entry occurs after service-after-unload" : problems))
+            else case parseSequence (position : rest) of
+              Left problem -> (reverse sequences, reverse retained, reverse (problem : problems))
+              Right (sequence, remaining) -> go (sequence : sequences) retained problems remaining
+      | hitSite hit == stockLabel = go sequences (hit : retained) problems rest
+      | otherwise = (reverse sequences, reverse retained, reverse (("unexpected trace event outside an owned interval: " ++ traceSiteLabelText (hitSite hit)) : problems))
       where
         hit = positionedHit position
+    afterUnload phase = phase == serviceAfterUnloadPhase || phase == serviceAfterUnloadStockPhase
 
-parseSequence :: [TraceHit] -> Either String (OwnedSequence, [TraceHit])
-parseSequence (entry : rest) =
-  case selectedRow (hitR1 entry) of
-    Just row | hitR0 entry == 0x110 ->
-      case expect trampolineLabel rest of
-        Left problem -> Left problem
-        Right (trampoline, rest1) ->
-          case expect stockLabel rest1 of
+parseSequence :: [PositionedHit] -> Either String (OwnedSequence, [PositionedHit])
+parseSequence (entryPosition : rest) =
+  let entry = positionedHit entryPosition
+   in case selectedRow (hitR1 entry) of
+        Just row | hitR0 entry == 0x110 ->
+          case expect trampolineLabel rest of
             Left problem -> Left problem
-            Right (stock, rest2) ->
-              -- private-data/analysis/x-m1-1.50/filmsim/fn_d52684.c:2539-2547:
-              -- case 0x110 calls FUN_00d52684(5,0x1a); the second call is
-              -- conditional on the first result, so one or two nested entries are grounded.
-              let (nested, rest3) = span isNested rest2
-                  ordered = entry : trampoline : stock : nested
-                  expected = rowStateWord (serviceRowExpected row)
-               in case expect returnLabel rest3 of
-                    Left problem -> Left problem
-                    Right (returned, rest4) ->
-                      let problems =
-                            [ "svc-stock-trampoline arguments differ from svc-rust-entry"
-                            | argumentPair trampoline /= argumentPair entry ]
-                              ++ [ "stock-row-probe outer arguments differ from svc-rust-entry"
-                                 | argumentPair stock /= argumentPair entry ]
-                              ++ [ "0x110 owned call must contain one or two grounded FUN_00d52684(5,0x1a) nested calls"
-                                 | length nested < 1 || length nested > 2 ]
-                              ++ [ "owned service trace crosses cores"
-                                 | length (nub (map hitCore (returned : ordered))) /= 1 ]
-                              ++ [ "owned service trace instruction counts are not strictly increasing"
-                                 | not (strictlyIncreasing (map hitInstructions (ordered ++ [returned]))) ]
-                              ++ [ "svc-stock-return returned " ++ show (hitR0 returned) ++ ", expected " ++ show expected
-                                 | hitR0 returned /= expected ]
-                       in case problems of
-                            [] -> Right
-                              ( OwnedSequence
-                                  { ownedRow = serviceRowToken row
-                                  , ownedCore = hitCore entry
-                                  , ownedEntry = entry
-                                  , ownedTrampoline = trampoline
-                                  , ownedStock = stock
-                                  , ownedNested = nested
-                                  , ownedReturn = returned
-                                  }
-                              , rest4
-                              )
-                            problem : _ -> Left problem
-    _ -> Left "svc-rust-entry arguments are outside the five selected 0x110 rows"
+            Right (trampoline, rest1) ->
+              case expect stockLabel rest1 of
+                Left problem -> Left problem
+                Right (stock, rest2) ->
+                  -- private-data/analysis/x-m1-1.50/filmsim/fn_d52684.c:2539-2547:
+                  -- case 0x110 calls FUN_00d52684(5,0x1a); the second call is conditional.
+                  let (nestedPositions, rest3) = span isNested rest2
+                      nested = map positionedHit nestedPositions
+                      ordered = entry : trampoline : stock : nested
+                      expected = rowStateWord (serviceRowExpected row)
+                   in case expect returnLabel rest3 of
+                        Left problem -> Left problem
+                        Right (returned, rest4) ->
+                          let problems =
+                                [ "svc-stock-trampoline arguments differ from svc-rust-entry"
+                                | argumentPair trampoline /= argumentPair entry ]
+                                  ++ [ "stock-row-probe outer arguments differ from svc-rust-entry"
+                                     | argumentPair stock /= argumentPair entry ]
+                                  ++ [ "0x110 owned call must contain one or two FUN_00d52684(5,0x1a) nested calls"
+                                     | length nested < 1 || length nested > 2 ]
+                                  ++ [ "owned service trace crosses cores"
+                                     | length (nub (map hitCore (returned : ordered))) /= 1 ]
+                                  ++ [ "owned service trace instruction counts are not strictly increasing"
+                                     | not (strictlyIncreasing (map (instructionCountValue . hitInstructions) (ordered ++ [returned]))) ]
+                                  ++ [ "svc-stock-return returned " ++ show (hitR0 returned) ++ ", expected " ++ show expected
+                                     | hitR0 returned /= expected ]
+                           in case problems of
+                                [] -> Right
+                                  ( OwnedSequence
+                                      { ownedPhase = positionedPhase entryPosition
+                                      , ownedRow = serviceRowToken row
+                                      , ownedCore = hitCore entry
+                                      , ownedEntry = entry
+                                      , ownedTrampoline = trampoline
+                                      , ownedStock = stock
+                                      , ownedNested = nested
+                                      , ownedReturn = returned
+                                      }
+                                  , rest4
+                                  )
+                                problem : _ -> Left problem
+        _ -> Left "svc-rust-entry arguments are outside the five selected 0x110 rows"
 parseSequence _ = Left "svc-rust-entry is missing"
 
-expect :: TraceLabel -> [TraceHit] -> Either String (TraceHit, [TraceHit])
-expect label (hit : rest)
-  | hitSite hit == label = Right (hit, rest)
-  | otherwise = Left ("expected " ++ traceLabelText label ++ ", observed " ++ traceLabelText (hitSite hit))
-expect label [] = Left ("missing " ++ traceLabelText label)
+expect :: TraceSiteLabel -> [PositionedHit] -> Either String (TraceHit, [PositionedHit])
+expect label (position : rest)
+  | hitSite (positionedHit position) == label = Right (positionedHit position, rest)
+  | otherwise = Left ("expected " ++ traceSiteLabelText label ++ ", observed " ++ traceSiteLabelText (hitSite (positionedHit position)))
+expect label [] = Left ("missing " ++ traceSiteLabelText label)
 
-isNested :: TraceHit -> Bool
-isNested hit = hitSite hit == stockLabel && argumentPair hit == (5, 0x1a)
+isNested :: PositionedHit -> Bool
+isNested position =
+  let hit = positionedHit position
+   in hitSite hit == stockLabel && argumentPair hit == (5, 0x1a)
 
 argumentPair :: TraceHit -> (Word32, Word32)
 argumentPair hit = (hitR0 hit, hitR1 hit)
@@ -602,19 +663,21 @@ argumentPair hit = (hitR0 hit, hitR1 hit)
 strictlyIncreasing :: [Word64] -> Bool
 strictlyIncreasing values = and (zipWith (<) values (drop 1 values))
 
+nondecreasing :: [Word64] -> Bool
+nondecreasing values = and (zipWith (<=) values (drop 1 values))
+
 crossSequenceProblems :: [OwnedSequence] -> [String]
 crossSequenceProblems sequences =
   [ "owned service traces cross cores" | length (nub (map ownedCore sequences)) > 1 ]
-    ++ [ "owned service trace instruction counts regress across entries"
-       | not (strictlyIncreasing (concatMap sequenceInstructions sequences)) ]
-  where
-    sequenceInstructions sequence =
-      map hitInstructions (ownedEntry sequence : ownedTrampoline sequence : ownedStock sequence : ownedNested sequence ++ [ownedReturn sequence])
 
 rowProblemsFor :: [PackagedRow] -> [String]
 rowProblemsFor rows = concat
   [ [ "selected row " ++ show (packagedRowToken row) ++ " was entered " ++ show (packagedRowEntries row) ++ " times; repeat entry requires at least two"
     | packagedRowEntries row < 2 ]
+    ++ [ "selected row " ++ show (packagedRowToken row) ++ " lacks a service-field-list owned sequence"
+       | serviceFieldListPhase `notElem` packagedRowPhases row ]
+    ++ [ "selected row " ++ show (packagedRowToken row) ++ " lacks a service-field-reopen owned sequence"
+       | serviceFieldReopenPhase `notElem` packagedRowPhases row ]
     ++ [ "selected row " ++ show (packagedRowToken row) ++ " returned "
            ++ show (packagedRowReturned row) ++ ", expected " ++ show (packagedRowExpected row)
        | any (/= packagedRowExpected row) (packagedRowReturned row) ]
@@ -632,6 +695,7 @@ rowEvidence sequences =
       , packagedRowEntries = length owned
       , packagedRowReturned = map (hitR0 . ownedReturn) owned
       , packagedRowNested = sum (map (length . ownedNested) owned)
+      , packagedRowPhases = nub (map ownedPhase owned)
       }
   | row <- selectedRows
   , let owned = [sequence | sequence <- sequences, ownedRow sequence == serviceRowToken row]
@@ -673,13 +737,14 @@ lifecycleChecks result =
              || mailboxRestored rollback /= Just publications
          ]
 
-entryLabel, trampolineLabel, returnLabel, stockLabel :: TraceLabel
-entryLabel = TraceLabel "svc-rust-entry"
-trampolineLabel = TraceLabel "svc-stock-trampoline"
-returnLabel = TraceLabel "svc-stock-return"
-stockLabel = TraceLabel "stock-row-probe"
+entryLabel, trampolineLabel, returnLabel, stockLabel :: TraceSiteLabel
+entryLabel = SvcRustEntry
+trampolineLabel = SvcStockTrampoline
+returnLabel = SvcStockReturn
+stockLabel = StockRowProbe
 
-servicePageCancelPhase, serviceFieldReopenPhase, serviceAfterUnloadPhase, serviceAfterUnloadStockPhase :: SegmentName
+serviceFieldListPhase, servicePageCancelPhase, serviceFieldReopenPhase, serviceAfterUnloadPhase, serviceAfterUnloadStockPhase :: SegmentName
+serviceFieldListPhase = phaseName "service-field-list"
 servicePageCancelPhase = phaseName "service-page-cancel"
 serviceFieldReopenPhase = phaseName "service-field-reopen"
 serviceAfterUnloadPhase = phaseName "service-after-unload"
@@ -739,19 +804,21 @@ packagedReportValue report =
       , ("entries", n (fromIntegral (packagedRowEntries row)))
       , ("returned", arr (map (n . fromIntegral) (packagedRowReturned row)))
       , ("nested_calls", n (fromIntegral (packagedRowNested row)))
+      , ("phases", arr (map (s . T.unpack . segmentNameText) (packagedRowPhases row)))
       ]
     sequenceValue sequence = obj
       [ ("row", n (fromIntegral (ownedRow sequence)))
-      , ("core", n (fromIntegral (ownedCore sequence)))
-      , ("entry_instructions", n (fromIntegral (hitInstructions (ownedEntry sequence))))
-      , ("return_instructions", n (fromIntegral (hitInstructions (ownedReturn sequence))))
+      , ("phase", s (T.unpack (segmentNameText (ownedPhase sequence))))
+      , ("core", n (fromIntegral (coreIdValue (ownedCore sequence))))
+      , ("entry_instructions", n (fromIntegral (instructionCountValue (hitInstructions (ownedEntry sequence)))))
+      , ("return_instructions", n (fromIntegral (instructionCountValue (hitInstructions (ownedReturn sequence)))))
       , ("nested_calls", n (fromIntegral (length (ownedNested sequence))))
       , ("returned", n (fromIntegral (hitR0 (ownedReturn sequence))))
       ]
     hitValue hit = obj
-      [ ("site", s (traceLabelText (hitSite hit)))
-      , ("core", n (fromIntegral (hitCore hit)))
-      , ("instructions", n (fromIntegral (hitInstructions hit)))
+      [ ("site", s (traceSiteLabelText (hitSite hit)))
+      , ("core", n (fromIntegral (coreIdValue (hitCore hit))))
+      , ("instructions", n (fromIntegral (instructionCountValue (hitInstructions hit))))
       , ("r0", s (traceAddressText (TraceAddress (hitR0 hit))))
       , ("r1", s (traceAddressText (TraceAddress (hitR1 hit))))
       ]
@@ -765,6 +832,7 @@ packagedReportValue report =
       , ("relinked_manifest_sha256", s (digestText (packagedManifestSha identities)))
       , ("relinked_symbols_sha256", s (digestText (packagedSymbolsSha identities)))
       , ("runtime_sha256", s (digestText (packagedRuntimeSha identities)))
+      , ("relink_mode", s (relinkModeText (packagedRelinkMode identities)))
       , ("outcome", s (outcomeText (packagedOutcome identities)))
       ]
     evidenceLimits =
@@ -778,3 +846,7 @@ packagedReportValue report =
 outcomeText :: WatchJudgement -> String
 outcomeText CandidateQualified = "candidate-qualified"
 outcomeText ControlRefusedProtectedWrite = "control-refused"
+
+relinkModeText :: RelinkMode -> String
+relinkModeText RelinkReviewed = "reviewed"
+relinkModeText RelinkUnreviewed = "unreviewed"
