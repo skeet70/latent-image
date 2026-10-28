@@ -388,6 +388,7 @@ haskell_library(
     src_strip_prefix = ".",
     deps = [
         ":emulator-usb",
+        ":watch-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

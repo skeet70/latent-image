@@ -26,7 +26,7 @@ import Data.Foldable (toList)
 import Data.List (nub, stripPrefix)
 import qualified Data.Text as T
 import Data.Word (Word32)
-import Emulation.WatchObservation (WatchAddress (..), WatchRange, watchRange)
+import Emulation.WatchObservation (WatchRange, watchAddress, watchRange)
 import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming, modeDialName)
 import Numeric (readHex)
 
@@ -197,7 +197,7 @@ instance FromJSON Trajectories where
           either fail pure (watchRange low high)
         _ -> fail "each protected_writes entry is [low, high]"
       hexWord text = case readHex (T.unpack text) of
-        [(value, "")] | length (T.unpack text) == 8 -> pure (WatchAddress value)
+        [(value, "")] | length (T.unpack text) == 8 -> pure (watchAddress value)
         _ -> fail "protected_writes addresses are eight hex digits without 0x"
 
 phaseNames :: Trajectories -> [T.Text]

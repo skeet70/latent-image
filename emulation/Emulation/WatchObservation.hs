@@ -1,53 +1,81 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | Typed parsing and checking of FujiMod memory-watch rows and SD host state.
--- Ranges are half-open physical byte ranges. Missing, malformed, unknown,
--- overflowing or inconsistent input is an error.
+-- | Ranges are half-open physical byte ranges.
 module Emulation.WatchObservation
-  ( WatchAddress (..)
+  ( WatchAddress
+  , watchAddress
+  , watchAddressValue
   , WatchRange
   , watchRange
   , watchRangeBounds
   , overlapsWatchRange
-  , WatchBytes (..)
-  , coreId
-  , CoreId (..)
-  , ByteOrder (..)
-  , CpuAccess (..)
-  , TransferAccess (..)
-  , WatchRecord (..)
-  , WatchObservation (..)
-  , WatchAck (..)
+  , WatchBytes
+  , watchBytesValue
+  , Instructions
+  , instructionsValue
+  , Tick
+  , tickValue
+  , Sectors
+  , sectorsValue
+  , Commands
+  , commandsValue
+  , Irqs
+  , irqsValue
+  , Boundaries
+  , boundariesValue
   , WatchLimit
   , watchLimit
   , watchLimitValue
   , WatchGate (..)
-  , ProtectedCpuWrites (..)
-  , ProtectedHostWrites (..)
-  , ProtectedBusWrites (..)
   , ProtectedWriteSummary (..)
+  , protectedCpuWritesValue
+  , protectedHostWritesValue
+  , protectedBusWritesValue
+  , noProtectedWrites
+  , RunPurpose (..)
   , WatchJudgement (..)
+  , WatchRecord
+  , WatchObservation
+  , WatchAck
   , parseWatchAck
   , parseWatchObservation
   , checkWatch
   , judgeWatch
-  , AcceptedWrites (..)
-  , AcceptedBytes (..)
-  , MediaObservation (..)
+  , AcceptedWrites
+  , acceptedWrites
+  , acceptedWritesValue
+  , AcceptedBytes
+  , acceptedBytes
+  , acceptedBytesValue
+  , MediaObservation
+  , mediaPresent
+  , mediaWriteProtected
+  , mediaDirtySectors
+  , mediaStarted
+  , mediaCompleted
+  , mediaIrqs
+  , mediaDmaBoundaries
+  , mediaAcceptedWrites
+  , mediaAcceptedBytes
   , parseMediaObservation
   , checkMedia
   ) where
 
 import Control.Monad (forM, forM_, unless, when)
-import Data.Aeson (Value (..))
+import Data.Aeson (ToJSON (..), Value (..))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
-import Data.Scientific (floatingOrInteger)
+import Data.Bits (shiftL)
+import Data.Scientific (toBoundedInteger)
 import qualified Data.Text as T
 import qualified Data.Vector as V
+import Data.List (foldl', sort)
 import Data.Word (Word32, Word64, Word8)
 
 newtype WatchAddress = WatchAddress { watchAddressValue :: Word32 } deriving (Eq, Ord, Show)
+
+watchAddress :: Word32 -> WatchAddress
+watchAddress = WatchAddress
 
 data WatchRange = WatchRange { watchRangeLow :: WatchAddress, watchRangeHigh :: WatchAddress } deriving (Eq, Show)
 
@@ -68,6 +96,14 @@ overlapsWatchRange range (WatchAddress address) (WatchBytes bytes) =
 
 newtype WatchBytes = WatchBytes { watchBytesValue :: Int } deriving (Eq, Ord, Show)
 
+newtype Instructions = Instructions { instructionsValue :: Word64 } deriving (Eq, Ord, Show)
+newtype Tick = Tick { tickValue :: Word64 } deriving (Eq, Ord, Show)
+newtype Sectors = Sectors { sectorsValue :: Word64 } deriving (Eq, Ord, Show)
+newtype Commands = Commands { commandsValue :: Word64 } deriving (Eq, Ord, Show)
+newtype Irqs = Irqs { irqsValue :: Word64 } deriving (Eq, Ord, Show)
+newtype Boundaries = Boundaries { boundariesValue :: Word64 } deriving (Eq, Ord, Show)
+
+-- | The pinned X-M1 document has two cores.
 data CoreId = Core0 | Core1 deriving (Eq, Ord, Show)
 
 coreId :: Int -> Either String CoreId
@@ -119,9 +155,6 @@ watchLimit value
   | value >= 1 && value <= 1 `shiftL` 20 = Right (WatchLimit value)
   | otherwise = Left "watch limit must be 1..2^20"
 
-shiftL :: Int -> Int -> Int
-shiftL value bits = value * (2 ^ bits)
-
 newtype ProtectedCpuWrites = ProtectedCpuWrites { protectedCpuWritesValue :: Int } deriving (Eq, Show)
 newtype ProtectedHostWrites = ProtectedHostWrites { protectedHostWritesValue :: Int } deriving (Eq, Show)
 newtype ProtectedBusWrites = ProtectedBusWrites { protectedBusWritesValue :: Int } deriving (Eq, Show)
@@ -136,9 +169,19 @@ data WatchGate = WatchAcceptedClean | WatchRejectedProtectedWrites ProtectedWrit
 
 data WatchJudgement = CandidateQualified | ControlRefusedProtectedWrite deriving (Eq, Show)
 
+instance ToJSON WatchJudgement where
+  toJSON CandidateQualified = String "candidate-qualified"
+  toJSON ControlRefusedProtectedWrite = String "control-refused"
+
 field :: String -> Value -> Either String Value
 field name (Object object) = maybe (Left ("missing field " ++ name)) Right (KM.lookup (K.fromString name) object)
 field _ _ = Left "watch value is not an object"
+
+exactKeys :: [String] -> Value -> Either String ()
+exactKeys expected (Object object) =
+  let actual = sort (map (T.unpack . K.toString) (KM.keys object))
+   in unless (actual == sort expected) (Left "watch fields differ from the pinned schema")
+exactKeys _ _ = Left "watch value is not an object"
 
 hasField :: String -> Value -> Bool
 hasField name (Object object) = KM.member (K.fromString name) object
@@ -149,9 +192,7 @@ asText (String text) = Right (T.unpack text)
 asText _ = Left "watch field is not text"
 
 asWord64 :: Value -> Either String Word64
-asWord64 (Number number) = case floatingOrInteger number :: Either Double Integer of
-  Right value | value >= 0 && value <= fromIntegral (maxBound :: Word64) -> Right (fromIntegral value)
-  _ -> Left "watch number is out of range"
+asWord64 (Number number) = maybe (Left "watch number is out of range") Right (toBoundedInteger number)
 asWord64 _ = Left "watch number is not an integer"
 
 asWord32 :: Value -> Either String Word32
@@ -204,14 +245,24 @@ parseBefore value = do
     if number <= 255 then Right (fromIntegral number :: Word8) else Left "watch before byte out of range")
 
 numericBefore :: ByteOrder -> B.ByteString -> Word64
-numericBefore order bytes = B.foldl' (\acc byte -> acc * 256 + fromIntegral byte) 0 ordered
-  where
-    ordered = case order of
-      LittleEndian -> B.reverse bytes
-      BigEndian -> bytes
+numericBefore order bytes = case order of
+  LittleEndian -> B.foldr (\byte acc -> acc * 256 + fromIntegral byte) 0 bytes
+  BigEndian -> B.foldl' (\acc byte -> acc * 256 + fromIntegral byte) 0 bytes
+
+cpuKeys :: [String]
+cpuKeys = ["source", "address", "physical", "size", "value", "before", "byte_order", "core", "pc", "instructions", "tick"]
+
+transferKeys :: [String]
+transferKeys = ["source", "physical", "address", "size", "core", "pc", "instructions", "tick"]
+
+checkExtent :: Word32 -> Int -> Either String ()
+checkExtent address size =
+  let start = fromIntegral address :: Word64
+   in unless (start + fromIntegral size <= 1 `shiftL` 32) (Left "watch access exceeds the 32-bit address space")
 
 parseCpuRecord :: CpuAccess -> Value -> Either String WatchRecord
 parseCpuRecord access value = do
+  exactKeys cpuKeys value
   address <- field "address" value >>= asWord32
   physical <- field "physical" value >>= asWord32
   bytes <- field "size" value >>= parseLimitBytes 16
@@ -220,26 +271,30 @@ parseCpuRecord access value = do
   recordValue <- field "value" value >>= parseValue
   core <- field "core" value >>= asInt >>= coreId
   pc <- field "pc" value >>= asWord32
-  instructions <- field "instructions" value >>= asWord64
-  tick <- field "tick" value >>= asWord64
+  instructions <- Instructions <$> (field "instructions" value >>= asWord64)
+  tick <- Tick <$> (field "tick" value >>= asWord64)
   let WatchBytes size = bytes
+  checkExtent address size
+  checkExtent physical size
   case access of
     CpuFetch -> do
       unless (before == Nothing) (Left "cpu-fetch carries before bytes")
       unless (recordValue == Nothing) (Left "cpu-fetch carries a value")
     CpuRead -> do
       previous <- requireBefore before
+      unless (B.length previous == size) (Left "cpu before length differs from size")
       when (size <= 8) $ do
         current <- requireValue recordValue
         unless (current == numericBefore order previous) (Left "cpu-read value disagrees with before bytes")
       when (size > 8) (unless (recordValue == Nothing) (Left "cpu-read wider than 8 carries a value"))
     CpuWrite -> do
-      _ <- requireBefore before
+      previous <- requireBefore before
+      unless (B.length previous == size) (Left "cpu before length differs from size")
       when (size <= 8) (requireValue recordValue >> pure ())
       when (size > 8) (unless (recordValue == Nothing) (Left "cpu-write wider than 8 carries a value"))
       case recordValue of
         Just current | size < 8 ->
-          unless (current < (1 `shiftL64` (size * 8))) (Left "cpu-write value exceeds its width")
+          unless (current < (1 `shiftL` (size * 8) :: Word64)) (Left "cpu-write value exceeds its width")
         _ -> pure ()
   pure (CpuRecord access (WatchAddress address) (WatchAddress physical) bytes recordValue before order core (WatchAddress pc) instructions tick)
   where
@@ -249,7 +304,6 @@ parseCpuRecord access value = do
     requireValue recordValue = case recordValue of
       Just number -> Right number
       Nothing -> Left "cpu read/write lacks its value"
-    shiftL64 value bits = value * (2 ^ bits)
 
 parseValue :: Value -> Either String (Maybe Word64)
 parseValue Null = Right Nothing
@@ -257,9 +311,13 @@ parseValue value = Just <$> asWord64 value
 
 parseTransferRecord :: TransferAccess -> Value -> Either String WatchRecord
 parseTransferRecord access value = do
+  exactKeys transferKeys value
   address <- field "address" value >>= asWord32
   physical <- field "physical" value >>= asWord32
   bytes <- field "size" value >>= parseLimitBytes (fromIntegral (maxBound :: Word32))
+  let WatchBytes size = bytes
+  checkExtent address size
+  checkExtent physical size
   forM_ ["core", "pc", "instructions", "tick"] $ \name ->
     unless (field name value == Right Null) (Left ("transfer record " ++ name ++ " is not null"))
   forM_ ["value", "before", "byte_order"] $ \name ->
@@ -280,12 +338,15 @@ parseRecord value = do
     _ -> Left "unknown watch record source"
 
 parseWatchAck :: Value -> Either String WatchAck
-parseWatchAck value = WatchAck
+parseWatchAck value = do
+  exactKeys ["armed", "ranges"] value
+  WatchAck
   <$> (field "armed" value >>= asBool)
   <*> (field "ranges" value >>= parseRanges)
 
 parseWatchObservation :: WatchLimit -> Value -> Either String WatchObservation
 parseWatchObservation limit value = do
+  exactKeys ["enabled", "ranges", "records", "violation"] value
   enabled <- field "enabled" value >>= asBool
   ranges <- field "ranges" value >>= parseRanges
   records <- field "records" value >>= asArray >>= mapM parseRecord
@@ -321,39 +382,59 @@ checkWatch limit expected ack observation = do
         go _ _ [] = Right ()
         go previousInstructions previousTick (record : rest) = case record of
           CpuRecord{cpuInstructions = instructions, cpuTick = tick} -> do
-            when (maybe False (instructions <) previousInstructions) (Left "watch instruction count regressed")
-            when (maybe False (tick <) previousTick) (Left "watch tick regressed")
-            go (Just instructions) (Just tick) rest
+            when (maybe False ((instructionsValue instructions) <) previousInstructions) (Left "watch instruction count regressed")
+            when (maybe False ((tickValue tick) <) previousTick) (Left "watch tick regressed")
+            go (Just (instructionsValue instructions)) (Just (tickValue tick)) rest
           _ -> go previousInstructions previousTick rest
 
 summarize :: [WatchRecord] -> ProtectedWriteSummary
-summarize records = ProtectedWriteSummary
-  (ProtectedCpuWrites (length [() | CpuRecord{cpuAccess = CpuWrite} <- records]))
-  (ProtectedHostWrites (length [() | TransferRecord{transferAccess = HostWrite} <- records]))
-  (ProtectedBusWrites (length [() | TransferRecord{transferAccess = ModelBusWrite} <- records]))
+summarize records =
+  let (cpu, host, bus) = foldl' step (0 :: Int, 0 :: Int, 0 :: Int) records
+   in ProtectedWriteSummary (ProtectedCpuWrites cpu) (ProtectedHostWrites host) (ProtectedBusWrites bus)
+  where
+    step counts record = case record of
+      CpuRecord{cpuAccess = CpuWrite} -> add 1 counts
+      TransferRecord{transferAccess = HostWrite} -> add 2 counts
+      TransferRecord{transferAccess = ModelBusWrite} -> add 3 counts
+      _ -> counts
+    add 1 (cpu, host, bus) = (cpu + 1, host, bus)
+    add 2 (cpu, host, bus) = (cpu, host + 1, bus)
+    add 3 (cpu, host, bus) = (cpu, host, bus + 1)
+    add _ counts = counts
 
-judgeWatch :: Bool -> Either String WatchGate -> Either String WatchJudgement
-judgeWatch expectControl gateResult = do
+noProtectedWrites :: ProtectedWriteSummary
+noProtectedWrites = ProtectedWriteSummary (ProtectedCpuWrites 0) (ProtectedHostWrites 0) (ProtectedBusWrites 0)
+
+data RunPurpose = CandidateRun | FaultControlRun deriving (Eq, Show)
+
+judgeWatch :: RunPurpose -> Either String WatchGate -> Either String WatchJudgement
+judgeWatch purpose gateResult = do
   gate <- gateResult
-  case (expectControl, gate) of
-    (False, WatchAcceptedClean) -> Right CandidateQualified
-    (False, WatchRejectedProtectedWrites _) -> Left "clean candidate received a protected write"
-    (True, WatchAcceptedClean) -> Left "control was accepted as a clean interval"
-    (True, WatchRejectedProtectedWrites summary)
+  case (purpose, gate) of
+    (CandidateRun, WatchAcceptedClean) -> Right CandidateQualified
+    (CandidateRun, WatchRejectedProtectedWrites _) -> Left "clean candidate received a protected write"
+    (FaultControlRun, WatchAcceptedClean) -> Left "control was accepted as a clean interval"
+    (FaultControlRun, WatchRejectedProtectedWrites summary)
       | protectedCpuWritesValue (protectedCpuWrites summary) >= 1 -> Right ControlRefusedProtectedWrite
       | otherwise -> Left "control observed no cpu-write"
 
 newtype AcceptedWrites = AcceptedWrites { acceptedWritesValue :: Word64 } deriving (Eq, Ord, Show)
+
+acceptedWrites :: Word64 -> AcceptedWrites
+acceptedWrites = AcceptedWrites
 newtype AcceptedBytes = AcceptedBytes { acceptedBytesValue :: Word64 } deriving (Eq, Ord, Show)
+
+acceptedBytes :: Word64 -> AcceptedBytes
+acceptedBytes = AcceptedBytes
 
 data MediaObservation = MediaObservation
   { mediaPresent :: Bool
   , mediaWriteProtected :: Bool
-  , mediaDirtySectors :: Word64
-  , mediaStarted :: Word64
-  , mediaCompleted :: Word64
-  , mediaIrqs :: Word64
-  , mediaDmaBoundaries :: Word64
+  , mediaDirtySectors :: Sectors
+  , mediaStarted :: Commands
+  , mediaCompleted :: Commands
+  , mediaIrqs :: Irqs
+  , mediaDmaBoundaries :: Boundaries
   , mediaAcceptedWrites :: AcceptedWrites
   , mediaAcceptedBytes :: AcceptedBytes
   } deriving (Eq, Show)
@@ -362,11 +443,11 @@ parseMediaObservation :: Value -> Either String MediaObservation
 parseMediaObservation value = MediaObservation
   <$> (field "present" value >>= asBool)
   <*> (field "write_protected" value >>= asBool)
-  <*> (field "dirty_sectors" value >>= asWord64)
-  <*> (field "started" value >>= asWord64)
-  <*> (field "completed" value >>= asWord64)
-  <*> (field "irqs" value >>= asWord64)
-  <*> (field "dma_boundaries" value >>= asWord64)
+  <*> (Sectors <$> (field "dirty_sectors" value >>= asWord64))
+  <*> (Commands <$> (field "started" value >>= asWord64))
+  <*> (Commands <$> (field "completed" value >>= asWord64))
+  <*> (Irqs <$> (field "irqs" value >>= asWord64))
+  <*> (Boundaries <$> (field "dma_boundaries" value >>= asWord64))
   <*> (AcceptedWrites <$> (field "accepted_writes" value >>= asWord64))
   <*> (AcceptedBytes <$> (field "accepted_write_bytes" value >>= asWord64))
 

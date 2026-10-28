@@ -57,11 +57,11 @@ mediaJson :: MediaObservation -> Value
 mediaJson media = object
   [ "present" .= mediaPresent media
   , "write_protected" .= mediaWriteProtected media
-  , "dirty_sectors" .= mediaDirtySectors media
-  , "started" .= mediaStarted media
-  , "completed" .= mediaCompleted media
-  , "irqs" .= mediaIrqs media
-  , "dma_boundaries" .= mediaDmaBoundaries media
+  , "dirty_sectors" .= sectorsValue (mediaDirtySectors media)
+  , "started" .= commandsValue (mediaStarted media)
+  , "completed" .= commandsValue (mediaCompleted media)
+  , "irqs" .= irqsValue (mediaIrqs media)
+  , "dma_boundaries" .= boundariesValue (mediaDmaBoundaries media)
   , "accepted_writes" .= acceptedWritesValue (mediaAcceptedWrites media)
   , "accepted_write_bytes" .= acceptedBytesValue (mediaAcceptedBytes media) ]
 
@@ -657,13 +657,13 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           before <- mediaBefore
           after <- mediaAfter
           checkMedia expectedPresent before after
-          judgement <- judgeWatch (expect == ExpectRefused) (Right gate)
+          judgement <- judgeWatch (if expect == ExpectRefused then FaultControlRun else CandidateRun) (Right gate)
           pure (gate, judgement)
     checkedResult <- if null protected then pure (WatchAcceptedClean, CandidateQualified) else either (stop "protected-writes") pure checked
     let (gate, judgement) = checkedResult
         summary = case gate of
           WatchRejectedProtectedWrites value -> value
-          WatchAcceptedClean -> ProtectedWriteSummary (ProtectedCpuWrites 0) (ProtectedHostWrites 0) (ProtectedBusWrites 0)
+          WatchAcceptedClean -> noProtectedWrites
     observed <- readIORef (runnerObservations runner)
     phaseTimes <- readIORef phases
     let result = object
@@ -691,11 +691,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           , "observations" .= (observed :: [Value])
           , "mailbox" .= object ["install" .= installMailbox, "rollback" .= unloadMailbox,
                                  "address" .= hexAddress mailbox]
-          , "outcome" .= case judgement of
-              CandidateQualified -> "candidate-qualified"
-              ControlRefusedProtectedWrite -> "control-refused"
+          , "outcome" .= judgement
           , "protected_writes" .= object
-              [ "ranges" .= [ [watchAddressValue (watchRangeLow range), watchAddressValue (watchRangeHigh range)] | range <- protected ]
+              [ "ranges" .= [ [lo, hi] | range <- protected, let (lo, hi) = watchRangeBounds range ]
               , "expect" .= T.unpack (expectLabel expect)
               , "cpu_writes" .= protectedCpuWritesValue (protectedCpuWrites summary)
               , "host_writes" .= protectedHostWritesValue (protectedHostWrites summary)
