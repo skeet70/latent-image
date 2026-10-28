@@ -2857,7 +2857,7 @@ runControls runner out e in' specs = do
   (claimExit, claimReport) <- runCase runner (claimDir </> "case.json")
   BL.writeFile (claimDir </> "native-result.json") (encode claimReport)
   let claimPass = statusOf (qualify in' e claimSpec claimExit claimCase claimReport) == Just "passed"
-      claim = fromMaybe (head (spClaims claimSpec)) (find (\(n, _, _) -> n `elem` guardedRegions) (spClaims claimSpec))
+      claim = fromMaybe (fromMaybe ("", 0, B.empty) (listToMaybe (spClaims claimSpec))) (find (\(n, _, _) -> n `elem` guardedRegions) (spClaims claimSpec))
       claimRegions = regionList in' e claimSpec
       claimResult = qualify in' e claimSpec claimExit claimCase (corruptClaim claimRegions claim claimReport)
       baseline = qualify in' e claimSpec claimExit claimCase claimReport
