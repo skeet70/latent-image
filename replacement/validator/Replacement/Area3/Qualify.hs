@@ -557,12 +557,18 @@ runAnchors contract anchors runner = forM anchors $ \anchor -> do
     Right (caseValue, regions, raw) -> do
       existing <- checkResult caseValue regions (rawValue raw)
       pure $ case observeNative (rawExit raw) regions (rawValue raw) of
-        Left message -> AnchorResult (loadedId anchor) (CheckBlocked ("invalid_output: " ++ renderObservationError message)) (renderObservationError message : existing) (Just raw)
+        Left message ->
+          let rendered = renderObservationError message
+           in AnchorResult
+                (loadedId anchor)
+                (forceCheck (CheckBlocked ("invalid_output: " ++ rendered)))
+                (forceStrings (rendered : existing))
+                (Just raw)
         Right observation ->
           AnchorResult
             (loadedId anchor)
-            (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions) observation)
-            existing
+            (forceCheck (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions) observation))
+            (forceStrings existing)
             (Just raw)
 
 anchorReport :: AnchorResult -> Value
@@ -603,6 +609,19 @@ anchorChecks results =
 
 -- Stock and ARM cases ---------------------------------------------------------
 
+-- Force the full diagnostic strings so a stored verdict retains no observation buffer.
+forceCheck :: Check -> Check
+forceCheck check = case check of
+  CheckPass -> check
+  CheckMismatch problems -> forceStrings problems `seq` check
+  CheckBlocked message -> length message `seq` check
+  CheckUnsupported message -> length message `seq` check
+  CheckUnknown message -> length message `seq` check
+  CheckTruncated message -> length message `seq` check
+
+forceStrings :: [String] -> [String]
+forceStrings problems = foldr (\problem rest -> length problem `seq` rest) [] problems
+
 data CaseOutcome = CaseOutcome
   { outcomeClass :: SubjectClass
   , outcomeId :: String
@@ -623,10 +642,12 @@ runStockBatch contract workspace runner options subjects =
             ( CaseOutcome
                 (subjectClass item)
                 (subjectId item)
-                (either
-                   (\message -> CheckBlocked ("invalid_output: " ++ renderObservationError message))
-                   (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions))
-                   (observeNative (rawExit raw) regions (rawValue raw))
+                (forceCheck
+                   (either
+                      (\message -> CheckBlocked ("invalid_output: " ++ renderObservationError message))
+                      (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions))
+                      (observeNative (rawExit raw) regions (rawValue raw))
+                   )
                 )
             )
     provenance item =
@@ -652,10 +673,12 @@ runArmBatch contract workspace profile runner options subjects =
             ( CaseOutcome
                 (subjectClass item)
                 (subjectId item)
-                (either
-                   (\message -> CheckBlocked ("invalid_output: " ++ renderObservationError message))
-                   (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions))
-                   (observeNative (rawExit raw) regions (rawValue raw))
+                (forceCheck
+                   (either
+                      (\message -> CheckBlocked ("invalid_output: " ++ renderObservationError message))
+                      (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions))
+                      (observeNative (rawExit raw) regions (rawValue raw))
+                   )
                 )
             )
     provenance item =
