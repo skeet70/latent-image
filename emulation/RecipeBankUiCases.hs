@@ -7,27 +7,26 @@ module Main where
 import Control.Monad
 import Data.Aeson hiding (encodeFile)
 import Data.Aeson.Types (Parser, parseEither, parseMaybe)
-import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified FujiAF.RecipeBankFields as F
 import Data.Bits
-import Data.Char (isHexDigit)
 import Data.Foldable (toList)
 import Data.List
 import Data.Maybe
 import Data.String (fromString)
 import Data.Word
-import Emulation.NativeCase (runCase)
+import Emulation.NativeCase (Region (..), runCase)
+import qualified Emulation.NativeObservation as N
 import Emulation.ParallelCases (mapBounded, readJobs)
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host (arr, get, list, num, obj, s, set, str)
 import Numeric
 import System.Directory
 import System.Environment
-import System.Exit (exitFailure)
+import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath
 
 hex :: Integer -> String
@@ -2373,108 +2372,6 @@ readOnlyLifecycleIds =
 requiredRegisters :: [String]
 requiredRegisters = ["r" ++ show i | i <- [0 .. 12 :: Int]] ++ ["sp", "lr", "cpsr", "pc"]
 
-parseHexWord :: String -> Maybe Word32
-parseHexWord ('0' : 'x' : digits)
-  | not (null digits) && length digits <= 8 && all isHexDigit digits =
-      case readHex digits of [(value, "")] -> Just value; _ -> Nothing
-parseHexWord _ = Nothing
-
-parseDecimalField :: Value -> Either String Integer
-parseDecimalField value = case value of
-  String text -> case reads (T.unpack text) :: [(Integer, String)] of
-    [(number, "")] -> Right number
-    _ -> Left "malformed decimal field"
-  Number _ -> Right (num value)
-  _ -> Left "missing numeric field"
-
-parseBytesField :: String -> Either String B.ByteString
-parseBytesField text
-  | odd (length text) || not (all isHexDigit text) = Left "malformed byte string"
-  | otherwise = Right (unhex text)
-
-objectKeys :: Value -> [String]
-objectKeys (Object o) = map T.unpack (KM.keys o)
-objectKeys _ = []
-
-parseRegisters :: Value -> Either String [(String, Word32)]
-parseRegisters value = case value of
-  Object _ -> do
-    pairs <- forM (objectKeys value) $ \name ->
-      case parseHexWord (str (get value name)) of
-        Just word -> Right (name, word)
-        Nothing -> Left ("malformed register " ++ name)
-    let missing = [name | name <- requiredRegisters, isNothing (lookup name pairs)]
-    if null missing then Right pairs else Left ("missing registers " ++ unwords missing)
-  _ -> Left "missing registers"
-
-parseMemory :: [(String, Word32, Int)] -> Value -> Either String [(String, B.ByteString)]
-parseMemory regions value = case value of
-  Array _ -> do
-    let entries = list value
-    unless (length entries == length regions) (Left "memory region count mismatch")
-    forM (zip regions entries) $ \((ident, base, size), entry) -> do
-      address <- maybe (Left ("malformed address for region " ++ ident)) Right (parseHexWord (str (get entry "address")))
-      unless (address == base) (Left ("memory region " ++ ident ++ " address mismatch"))
-      bytes <- parseBytesField (str (get entry "bytes"))
-      unless (B.length bytes == size) (Left ("memory region " ++ ident ++ " size mismatch"))
-      pure (ident, bytes)
-  _ -> Left "missing memory"
-
-parseWrites :: [Value] -> Either String [(Word32, Int)]
-parseWrites entries = do
-  parsed <- forM entries $ \entry -> do
-    kind <- case str (get entry "kind") of
-      "write" -> Right True
-      "read" -> Right False
-      _ -> Left "malformed provenance kind"
-    address <- maybe (Left "malformed provenance address") Right (parseHexWord (str (get entry "address")))
-    size <- parseDecimalField (get entry "size")
-    unless (size >= 1 && size <= 8) (Left "provenance size out of range")
-    pure (kind, address, fromIntegral size)
-  pure [(address, size) | (True, address, size) <- parsed]
-
-data Observation = Observation
-  { observationStatus :: String
-  , observationRegisters :: [(String, Word32)]
-  , observationMemory :: [(String, B.ByteString)]
-  , observationWrites :: Maybe [(Word32, Int)]
-  , observationProvenanceTotal :: Integer
-  , observationProvenanceKept :: Int
-  , observationEngineError :: Integer
-  }
-
--- Provenance retains at most 4096 events. A larger total keeps only a prefix, so
--- transient writes are not established by the log alone.
-observeReport :: Value -> [(String, Word32, Int)] -> Either String Observation
-observeReport report regions = do
-  runner <- case get report "runner" of
-    Object _ -> Right (get report "runner")
-    _ -> Left "missing runner output"
-  status <- case get runner "status" of
-    String text | not (T.null text) -> Right (T.unpack text)
-    _ -> Left "missing runner status"
-  engine <- parseDecimalField (get runner "unicorn_error")
-  total <- parseDecimalField (get runner "memory_provenance_total")
-  registers <- parseRegisters (get runner "registers")
-  memory <- parseMemory regions (get runner "memory")
-  provenance <- case get runner "memory_provenance" of
-    Array _ -> Right (list (get runner "memory_provenance"))
-    _ -> Left "missing memory provenance"
-  writes <- parseWrites provenance
-  let kept = length provenance
-  if total > 4096
-    then unless (kept == 4096) (Left "provenance retention count mismatch")
-    else unless (fromIntegral kept == total) (Left "provenance count mismatch")
-  pure Observation
-    { observationStatus = status
-    , observationRegisters = registers
-    , observationMemory = memory
-    , observationWrites = if total > 4096 then Nothing else Just writes
-    , observationProvenanceTotal = total
-    , observationProvenanceKept = kept
-    , observationEngineError = engine
-    }
-
 data EffectClass = PublicClaim | ForbiddenEffect | UnexpectedEffect deriving (Eq)
 
 data FinalDifference = FinalDifference
@@ -2625,67 +2522,78 @@ workspaceJson w =
    in object ["kind" .= show (workspaceKind w), "region" .= region, "offset" .= workspaceStart w, "size" .= (workspaceEnd w - workspaceStart w)]
 
 caseRegisters :: Value -> [(String, Word32)]
-caseRegisters caseValue = [(name, value) | name <- requiredRegisters, Just value <- [parseHexWord (str (get (get caseValue "registers") name))]]
+caseRegisters caseValue = [(name, value) | name <- requiredRegisters, Just value <- [N.parseWord32 (str (get (get caseValue "registers") name))]]
 
-preservedRegisterProblems :: Value -> Observation -> [String]
-preservedRegisterProblems caseValue observation =
+preservedRegisterProblems :: Value -> [(String, Word32)] -> [String]
+preservedRegisterProblems caseValue registers =
   [ "case declares no register " ++ name | name <- ["r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "sp"], isNothing (lookup name (caseRegisters caseValue)) ]
     ++ [ "register " ++ name ++ ": expected " ++ hex (fromIntegral expected) ++ ", observed " ++ hex (fromIntegral actual)
        | name <- ["r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "sp"]
        , Just expected <- [lookup name (caseRegisters caseValue)]
-       , Just actual <- [lookup name (observationRegisters observation)]
+       , Just actual <- [lookup name registers]
        , expected /= actual
        ]
     ++ [ "pc: expected exit " ++ hex (fromIntegral exit) ++ ", observed " ++ hex (fromIntegral actual)
-       | Just exit <- [parseHexWord (str (get caseValue "exit"))]
-       , Just actual <- [lookup "pc" (observationRegisters observation)]
+       | Just exit <- [N.parseWord32 (str (get caseValue "exit"))]
+       , Just actual <- [lookup "pc" registers]
        , actual /= exit
        ]
 
-qualify :: Inputs -> Env -> Spec -> Value -> Value
-qualify in' e sp caseValue report = case observeReport report regions of
-  Left problem ->
-    result "malformed_output" [problem] Nothing False False FinalUnknown GuardNotApplicable TransientMissing EffectsNotEvaluated
-      (observationScope sp) 0 0
-  Right observation ->
-    let registerProblems = preservedRegisterProblems caseValue observation
-        abi = abiProblems in' e sp
-        final = finalDifferences in' e sp (M.fromList (observationMemory observation))
-        (transient, writeProblems) = case observationWrites observation of
-          Nothing -> (TransientTruncated, [])
-          Just writes -> (TransientComplete, transientProblems in' e sp writes)
-        problems = registerProblems ++ abi ++ final ++ writeProblems
-        guard = persistentGuard in' e sp
-        scope = observationScope sp
-        finalState
-          | null (registerProblems ++ abi ++ final) = FinalVerified
-          | otherwise = FinalFailed
-        status
-          | observationStatus observation /= "returned" = observationStatus observation
-          | observationEngineError observation /= 0 = "engine_error"
-          | null problems = "passed"
-          | otherwise = "failed"
-        verdict
-          | observationStatus observation /= "returned" || observationEngineError observation /= 0 = EffectsNotEvaluated
-          | status /= "passed" = EffectsFailed
-          | scope == ReadOnlyScope && guard == GuardEnforced = EffectsGuarded
-          | transient == TransientComplete = EffectsVerified
-          | otherwise = EffectsFinalOnly
-        reportedProblems = if status == "passed" || status == "failed" then problems else []
-     in result status reportedProblems (Just observation) (null registerProblems) (null abi) finalState guard transient verdict scope
-          (observationProvenanceTotal observation) (observationProvenanceKept observation)
+qualify :: Inputs -> Env -> Spec -> Int -> Value -> Value
+qualify in' e sp exitCode caseValue report =
+  case N.observeNative (if exitCode == 0 then ExitSuccess else ExitFailure exitCode) nativeRegions (get report "runner") of
+    Left problem ->
+      result "malformed_output" [N.renderObservationError problem] Nothing False False FinalUnknown GuardNotApplicable TransientMissing EffectsNotEvaluated
+        (observationScope sp) 0 0
+    Right observed ->
+      let statusText = N.runnerStatusLabel (N.nativeStatus observed)
+          registers = [(N.registerLabel register, value) | register <- N.registerLabels, Just value <- [N.lookupRegister register observed]]
+          memory = [(N.regionName ident, bytes) | (ident, bytes) <- N.nativeMemory observed]
+          provenance = N.nativeProvenance observed
+          total = fromIntegral (N.provenanceTotal (N.provenanceCount provenance)) :: Integer
+          kept = N.provenanceRetained provenance
+          engine = N.engineError (N.nativeEngineError observed)
+          registerProblems = preservedRegisterProblems caseValue registers
+          abi = abiProblems in' e sp
+          final = finalDifferences in' e sp (M.fromList memory)
+          (transient, writeProblems) = case N.provenanceWrites provenance of
+            Nothing -> (TransientTruncated, [])
+            Just writes ->
+              ( TransientComplete
+              , transientProblems in' e sp
+                  [(fromIntegral (N.guestAddress (N.writeAddress write)), fromIntegral (N.writeBytes (N.writeLength write))) | write <- writes]
+              )
+          problems = registerProblems ++ abi ++ final ++ writeProblems
+          guard = persistentGuard in' e sp
+          scope = observationScope sp
+          finalState
+            | null (registerProblems ++ abi ++ final) = FinalVerified
+            | otherwise = FinalFailed
+          status
+            | statusText /= "returned" = statusText
+            | engine /= 0 = "engine_error"
+            | null problems = "passed"
+            | otherwise = "failed"
+          verdict
+            | statusText /= "returned" || engine /= 0 = EffectsNotEvaluated
+            | status /= "passed" = EffectsFailed
+            | scope == ReadOnlyScope && guard == GuardEnforced = EffectsGuarded
+            | transient == TransientComplete = EffectsVerified
+            | otherwise = EffectsFinalOnly
+          reportedProblems = if status == "passed" || status == "failed" then problems else []
+       in result status reportedProblems (Just statusText) (null registerProblems) (null abi) finalState guard transient verdict scope total kept
   where
-    regions = [(n, base, size) | (n, base, size, _, _) <- regionList in' e sp]
-    result status problems observation registersOk abiOk finalState guard transient verdict scope total kept =
+    nativeRegions = [Region (obj [("id", s name)]) (fromIntegral base) (fromIntegral size) bytes | (name, base, size, _, bytes) <- regionList in' e sp]
+    result status problems statusText registersOk abiOk finalState guard transient verdict scope total kept =
       object
         [ "id" .= spId sp
         , "status" .= status
         , "mismatches" .= problems
         , "reason" .= reportReason report
-        , "runner_status" .= fromMaybe "" (fmap observationStatus observation)
+        , "runner_status" .= fromMaybe "" statusText
         , "native_case_status" .= runnerStatus report
         , "native_case_mismatches" .= runnerMismatches report
-        , "returned" .= fromMaybe False (fmap ((== "returned") . observationStatus) observation)
+        , "returned" .= (statusText == Just "returned")
         , "registers_preserved" .= registersOk
         , "abi_valid" .= abiOk
         , "provenance" .= object ["total" .= total, "retained" .= kept]
@@ -2931,9 +2839,9 @@ runSpec :: FilePath -> FilePath -> Env -> Inputs -> Spec -> IO Value
 runSpec runner out e in' sp = do
   let dir = out </> spId sp
   caseValue <- writeCase dir in' e sp
-  (_, report) <- runCase runner (dir </> "case.json")
+  (exitCode, report) <- runCase runner (dir </> "case.json")
   BL.writeFile (dir </> "native-result.json") (encode report)
-  pure (qualify in' e sp caseValue report)
+  pure (qualify in' e sp exitCode caseValue report)
 
 -- Each control is expected to be rejected. A control that passes would mean the
 -- consumer accepted evidence it cannot establish.
@@ -2945,20 +2853,20 @@ runControls runner out e in' specs = do
       claimSpec = pick "n-select-unset-refused"
       claimDir = out </> "control-public-claim"
   claimCase <- writeCase claimDir in' e claimSpec
-  (_, claimReport) <- runCase runner (claimDir </> "case.json")
+  (claimExit, claimReport) <- runCase runner (claimDir </> "case.json")
   BL.writeFile (claimDir </> "native-result.json") (encode claimReport)
-  let claimPass = statusOf (qualify in' e claimSpec claimCase claimReport) == Just "passed"
+  let claimPass = statusOf (qualify in' e claimSpec claimExit claimCase claimReport) == Just "passed"
       claim = fromMaybe (head (spClaims claimSpec)) (find (\(n, _, _) -> n `elem` guardedRegions) (spClaims claimSpec))
       claimRegions = regionList in' e claimSpec
-      claimResult = qualify in' e claimSpec claimCase (corruptClaim claimRegions claim claimReport)
-      baseline = qualify in' e claimSpec claimCase claimReport
+      claimResult = qualify in' e claimSpec claimExit claimCase (corruptClaim claimRegions claim claimReport)
+      baseline = qualify in' e claimSpec claimExit claimCase claimReport
       claimAddress = case claim of
         (region, offset, _) -> case [hex (fromIntegral base + fromIntegral offset) | (n, base, _, _, _) <- claimRegions, n == region] of
           (address : _) -> address
           [] -> ""
       claimNamed = mismatchNamedAddress claimAddress claimResult
-      missingResult = qualify in' e claimSpec claimCase (set "runner" (set "memory_provenance" Null (get claimReport "runner")) claimReport)
-      diagnosticResult = qualify in' e claimSpec claimCase (set "runner" (set "status" (s "instruction_budget") (get claimReport "runner")) claimReport)
+      missingResult = qualify in' e claimSpec claimExit claimCase (set "runner" (set "memory_provenance" Null (get claimReport "runner")) claimReport)
+      diagnosticResult = qualify in' e claimSpec claimExit claimCase (set "runner" (set "status" (s "instruction_budget") (get claimReport "runner")) claimReport)
       changedDir = out </> "control-changed-read-only"
       storageSpec = pick "n-save-ok"
       storageDir = out </> "control-read-only-storage"
@@ -2971,9 +2879,9 @@ runControls runner out e in' specs = do
   storageCase <- writeCase storageDir in' e storageSpec
   let storageReadOnly = dropExpectedRegion "span-low" (forceReadOnly "span-low" storageCase)
   BL.writeFile (storageDir </> "case.json") (encode storageReadOnly)
-  (_, storageReport) <- runCase runner (storageDir </> "case.json")
+  (storageExit, storageReport) <- runCase runner (storageDir </> "case.json")
   BL.writeFile (storageDir </> "native-result.json") (encode storageReport)
-  let storageResult = qualify in' e storageSpec storageReadOnly storageReport
+  let storageResult = qualify in' e storageSpec storageExit storageReadOnly storageReport
       storageRefused = statusOf storageResult == Just "memory_guard" && maybe False inSpanLow (lastAccessAddress storageReport)
   pure
     [ object
@@ -3050,7 +2958,7 @@ lastAccessAddress report = case list (get (get report "runner") "accesses") of
   entries -> Just (str (get (last entries) "address"))
 
 inSpanLow :: String -> Bool
-inSpanLow text = case parseHexWord text of
+inSpanLow text = case N.parseWord32 text of
   Just address -> address >= 0x0096cc64 && address < 0x00980c60
   Nothing -> False
 

@@ -2517,14 +2517,17 @@ runSpec :: BankMode -> FilePath -> FilePath -> FilePath -> Syms -> Syms -> B.Byt
 runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable getter setter mediaImg tabImg mediaLo sp = do
   let dir = out </> spId sp
   createDirectoryIfMissing True dir
-  let modeCell = B.replicate 0x24 0 <> u32le (mMode (spModel sp))
-      mdata = overlay mdataRaw ([ (addr ms n - 0x970000, u32le v) | (n, v) <- M.toList (mCells (spModel sp))]
-        ++ [(addr ms "rbm_field_count" - 0x970000, u32le (fromIntegral (B.length fTable `div` 20)))])
-      mdata' = overlay (mdata <> B.replicate 0x1000 0) [(0x800, fTable)]
+  let modelScratchBase = 0x7f000000 :: Integer
+      modelScratchSize = 0x1000 :: Int
+      modeCell = B.replicate 0x24 0 <> u32le (mMode (spModel sp))
+      mdata = overlay mdataRaw ([ (addr ms n - modelScratchBase, u32le v) | (n, v) <- M.toList (mCells (spModel sp))]
+        ++ [(addr ms "rbm_field_count" - modelScratchBase, u32le (fromIntegral (B.length fTable `div` 20)))])
+      mdata' = mdata <> B.replicate modelScratchSize 0
       overlay base ps = foldl (\b (o, v) -> B.take (fromIntegral o) b <> v <> B.drop (fromIntegral o + B.length v) b) base ps
       cardImg = mCard (spModel sp)
       cardLength = max cardBytes (B.length cardImg)
-      liveImg = mLive (spModel sp)
+      liveLength = 0x970800 - 0x96cc64 + B.length fTable
+      liveImg = overlay (mLive (spModel sp) <> B.replicate (liveLength - 0x1c2) 0) [(0x970800 - 0x96cc64, fTable)]
       caseImg = mCase (spModel sp)
       extras = mExtra (spModel sp)
       patchMode b = B.take 0x41424 b <> u32le (mMode (spModel sp)) <> B.drop 0x41428 b
@@ -2532,7 +2535,7 @@ runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable g
       extrasPatch = [(rid, a, if rid == "media-state" then patchMode b else if rid == "cells" then patchCells b else b) | (rid, a, b) <- extras]
       exitAddress = mediaLo + fromIntegral (B.length mediaImg)
       mediaImg' = overlay mediaImg [(a - mediaLo, bytes) | (GuestAddress a, bytes) <- mForeignCode (spModel sp)] <> u32le 0xe12fff1e
-      arts = [("kernel.bin", kbin), ("media.bin", mediaImg'), ("getter.bin", getter), ("setter.bin", setter), ("model-data.bin", B.take 0x1000 mdata'), ("tables.bin", tabImg), ("card.bin", cardImg), ("live.bin", liveImg)]
+      arts = [("kernel.bin", kbin), ("media.bin", mediaImg'), ("getter.bin", getter), ("setter.bin", setter), ("model-data.bin", B.take modelScratchSize mdata'), ("tables.bin", tabImg), ("card.bin", cardImg), ("live.bin", liveImg)]
         ++ (if B.null caseImg then [] else [("case.bin", caseImg)])
         ++ [(rid ++ ".bin", b) | (rid, _, b) <- extrasPatch, not (B.null b)]
   forM_ (arts ++ [("mode.bin", modeCell)]) $ \(n, b) -> B.writeFile (dir </> n) b
@@ -2545,8 +2548,8 @@ runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable g
         [ reg "ktext" kernelBase ktextLen "rx" (Just "kernel.bin") 0 ktextLen
         , reg "kdata" (kernelBase + fromIntegral ktextLen) kdataLen "rw" (Just "kernel.bin") ktextLen kdataLen
         , reg "media" mediaLo (B.length mediaImg') "rx" (Just "media.bin") 0 (B.length mediaImg')
-        , reg "model-data" 0x00970000 0x1000 "rw" (Just "model-data.bin") 0 0x1000
-        , reg "live-state" 0x0096cc64 0x1c2 "rw" (Just "live.bin") 0 0x1c2
+        , reg "model-scratch" modelScratchBase modelScratchSize "rw" (Just "model-data.bin") 0 modelScratchSize
+        , reg "live-state" 0x0096cc64 liveLength "rw" (Just "live.bin") 0 liveLength
         , reg "card" 0x00980000 cardLength "rw" (Just "card.bin") 0 (B.length cardImg)
         , reg "casebuf" 0x009a0000 0x2000 "rw" (if B.null caseImg then Nothing else Just "case.bin") 0 (B.length caseImg) ]
         ++ [reg rid a (max 4 (B.length b)) (extraPerms rid) (if B.null b then Nothing else Just (rid ++ ".bin")) 0 (B.length b) | (rid, a, b) <- extrasPatch]
