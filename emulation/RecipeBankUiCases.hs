@@ -2539,7 +2539,7 @@ preservedRegisterProblems caseValue registers =
        , actual /= exit
        ]
 
-qualify :: Inputs -> Env -> Spec -> Int -> Value -> Value
+qualify :: Inputs -> Env -> Spec -> Int -> Value -> Value -> Value
 qualify in' e sp exitCode caseValue report =
   case N.observeNative (if exitCode == 0 then ExitSuccess else ExitFailure exitCode) nativeRegions (get report "runner") of
     Left problem ->
