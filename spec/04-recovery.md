@@ -2,7 +2,7 @@
 
 The [public recovery kit](../recovery/README.md) documents supported repairs, reusable host card preparation and firmware triage/extraction. It does not turn an unclassified failure or a valid DAT into an accepted persistent recovery operation.
 
-The recorder rev-2 failed-boot incident and recovery-adjacent checks are complete. Exact v5 physical rollback reports successful writer return and complete RC0 readback at unchanged block 14, followed by owner-reported ordinary startup after power removal, photography, normal-card operation/playback and retained film simulations/settings, including C-slot color +2 (E-RECOVERY-FRAGMENTED-V5-STATUS20-150, E-RECOVERY-V5-NORMAL-CARD-PLAYBACK-150, E-RECOVERY-V5-RETENTION-150). [The recovery findings](../reports/sd-boot-card-entry.md) retain the version-specific scope. [Recovery status](../reports/recovery-status.md) records R3 demonstrated 2026-10-13 and R4 formally unclaimed. Preserve the successful card; these results do not authorize another recovery write or firmware reinstall.
+The recorder rev-2 failed-boot incident and recovery-adjacent checks are complete. Exact v5 physical rollback reports successful writer return and complete RC0 readback at unchanged block 14, followed by owner-reported ordinary startup after power removal, photography, normal-card operation/playback and retained film simulations/settings, including C-slot color +2 (E-RECOVERY-FRAGMENTED-V5-STATUS20-150, E-RECOVERY-V5-NORMAL-CARD-PLAYBACK-150, E-RECOVERY-V5-RETENTION-150). [The recovery findings](../reports/sd-boot-card-entry.md) retain the version-specific scope. [Recovery status](../reports/recovery-status.md#historical-recorder-failure-r4-decision-2026-10-27) records R3 demonstrated 2026-10-13 and R4 accepted only for that historical recorder failure, with block-71 residue retained. The physically damaged SD slot makes the route unavailable now; this supplies no present recovery assurance. Preserve the successful card; these results do not authorize another recovery write or firmware reinstall.
 
 ## 10. Recovery work package in detail
 
@@ -18,7 +18,7 @@ The recorder rev-2 failed-boot incident and recovery-adjacent checks are complet
 | R3 | That path reads relevant storage and identifies a valid stock update/restore target; a dry run validates boundaries and prerequisites. | A recovery loader can reach the storage it would need; writes remain unproved. |
 | R4 | A specifically defined failure has been repaired through this route, with verified data restoration and normal operation. | Recovery is demonstrated for that failure class. |
 
-R1 is accepted on 2026-10-08. R2 is demonstrated on 2026-10-12 by exact-card execution of the bounded startup-restored marker on the failed body (E-SDBOOT-BLINK-WARM-OBSERVED-150). These milestones and the completed v5 rollback do not change the formal R4 claim without a recorded gate decision.
+R1 is accepted on 2026-10-08. R2 is demonstrated on 2026-10-12 by exact-card execution of the bounded startup-restored marker on the failed body (E-SDBOOT-BLINK-WARM-OBSERVED-150). The [recorded R4 decision](../reports/recovery-status.md#historical-recorder-failure-r4-decision-2026-10-27) accepts only the historical recorder-v2-v5 block-14 repair on this body (E-RECOVERY-RECORDER-R4-DECISION-150), not arbitrary invalid application firmware, interrupted updates or current rescue availability.
 
 R2 does not imply R4. A recovery path that depends on intact boot configuration or readable calibration cannot be advertised as recovering corruption of those same dependencies.
 

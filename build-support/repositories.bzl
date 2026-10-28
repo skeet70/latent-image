@@ -72,6 +72,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/nand_image.rs",
     "//emulation:fujimod-xm1/src/provenance.rs",
     "//emulation:fujimod-xm1/src/provenance_main.rs",
+    "//emulation:fujimod-xm1/src/queue_boundary.rs",
     "//emulation:fujimod-xm1/src/r4f.rs",
     "//emulation:fujimod-xm1/src/ram_push.rs",
     "//emulation:fujimod-xm1/src/render.rs",
@@ -180,7 +181,7 @@ def _lab_dependencies_impl(_ctx):
         nix_file_deps = _FUJIMOD_NIX_DEPS + _FUJIMOD_XM1_CRATE,
         nixopts = _NIX_BUILD_CAP,
         repository = "@lab_nixpkgs",
-        build_file_content = 'exports_files(["bin/fujimod-xm1", "bin/fujimod-xm1-provenance", "bin/fujimod-xm1-ram-push", "bin/fujimod-xm1-toggle", "bin/fujimod-xm1-updater", "share/fujimod-xm1/store-path", "share/fujimod-xm1/xm1-150.json"], visibility = ["//visibility:public"])',
+        build_file_content = 'exports_files(["bin/fujimod-xm1", "bin/fujimod-xm1-provenance", "bin/fujimod-xm1-queue-boundary", "bin/fujimod-xm1-ram-push", "bin/fujimod-xm1-toggle", "bin/fujimod-xm1-updater", "share/fujimod-xm1/store-path", "share/fujimod-xm1/xm1-150.json"], visibility = ["//visibility:public"])',
     )
 
     # The RAM-push relinker's tools; ram-push-toolchain-paths records their

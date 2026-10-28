@@ -126,6 +126,36 @@ The remaining association proof is specific: bind the producer of each admitted 
 
 The 120-byte worker input at `0x016c0f40..0x016c0fb7` does not include these association fields. A result/descriptor-only export must therefore leave lens association unknown. An experiment that uses this ledger additionally needs an intake-bound copy of the table's five fields, with widths `{2,2,4,2,1}`, and request/bridge identity, associated with the worker request before submission. Those are 11 bound bytes within `0x016c121c..0x016c122b`; the four-byte gap at `0x016c1220..0x016c1223` and trailing byte `0x016c122b` have no association meaning established here. Reading the latest AF globals after calculation would introduce another unproved lifetime. No hook implementation or new memory lease is established.
 
+### Spacing-refinement replay input boundary
+
+**Source-inspected and byte-read, E-AF-SPACING-REPLAY-INPUT-BOUNDARY-150:** the exact missing-producer-input completion alternative in [#114](https://github.com/skeet70/latent-image/issues/114) is satisfied. The integrated factor-125 versus factor-zero comparison and optical keep/reject decision remain in [#109](https://github.com/skeet70/latent-image/issues/109). This is not candidate qualification or evidence of improved accuracy or elapsed time.
+
+Three input boundaries must remain separate:
+
+| Boundary | Required inputs | What it establishes |
+| --- | --- | --- |
+| Selected predicate | Result status `u32`, selected position `s16`, three region/table selector words, resolved `s32` sample-position table and count, enable `u32` and comparison threshold `s16`, all from one selected evaluation | Replays the local spacing decision in firmware coordinate units, not SI units or an optical-defocus scale |
+| Builder and complete search | Actual lens selectors, initialized lens/configuration tables and keys, mode gates, parameter/context blocks, start position and bounds, statistic inputs and command/completion outcomes through refinement, termination and final verification | Permits an integrated mechanism comparison only for the supplied state and response domain |
+| Physical accuracy and elapsed time | Acquisition-bound statistics/configuration, sample/request identities and synchronized clocks, acquisition-time lens command and reported position, completion/post-move validity, coherent images and an independent intended-plane quality reference | Supports measured accuracy or timing only after source freshness, ownership, visibility and lens/optical correspondence are established |
+
+The predicate at `0x00f8b0c0` admits status 0/1 and enable exactly 1, resolves the table through `0x00f8a88c`, selects an interval by signed-position midpoints and compares nearby absolute position differences strictly against the signed-halfword threshold. The count getter is `0x00f8a780`. Builder `0x00f9a6ac`, at `0x00f9c678..0x00f9c6d4`, combines factor byte `0x96ee` and lens-limit byte `0x3e144d` as `u16((factor * limit) / 10)` and uses lens-dependent `0x00749254` conversion when nonzero. Native argument setup retains this intermediate in `r2`; the decompiler omits it from that call. The resulting enable/threshold pair feeds the second predicate at `0x016d726c/0x016d7270`. Paired calls `0x00f95908/0x00f95918`, the added-flag consumer at `0x00f9f35c..0x00f9f3b4` and the budget/range paths in `0x00fa0130` bind separate stages, not a completed search.
+
+Exact archived Run-3 reads retain factor 125 at physical `0x01ad6eee` and lens-limit byte 70 at `0x01eaec4d`. They would produce intermediate 875 if used by the enabled builder path; the capture does not demonstrate that execution. The inspected windows below are zero:
+
+| Captured physical window or field | Missing active input |
+| --- | --- |
+| `0x016d7260..0x016d727f` | Includes second-predicate enable/threshold at `0x016d726c/0x016d7270` |
+| `0x016d73b0..0x016d73b7`, `0x016d74e8..0x016d74ef` | Builder's lens-selector operands |
+| `0x016d6cc0..0x016d6cc7`, `0x016d734c..0x016d738b`, `0x016d7388..0x016d738f` | Sample count and resolver pointer state |
+| `0x016c0f40..0x016c0fb7` | Worker input descriptor |
+| `0x016d6058..0x016d613f`, `0x016d6ba8..0x016d6c17` | Worker descriptor/current-result region and prior result |
+
+These separate windows from the existing non-atomic capture do not supply an active predicate tuple or completed evaluation. They do not show that the lens or hardware statistic producer was unusable. Previously retained 22 synthetic native cases exercise old/new predicates and decision fragments; they were not rerun here and do not supply complete-search or physical evidence.
+
+A single stock trajectory cannot supply unobserved statistics or completion events at positions requested only by the changed policy. Reusing its recorded sequence does not establish the changed policy's counterfactual accuracy or elapsed time. That comparison needs additional provenance-bound observations or a separately qualified response model; an invented statistic or completion is not a missing-data remedy.
+
+[#102](https://github.com/skeet70/latent-image/issues/102) owns source-bound lens/statistic replay inputs and response/completion progression. [#107](https://github.com/skeet70/latent-image/issues/107) owns completed, fresh observation storage with source lifetime and visibility; the result/descriptor and lens-association boundaries above remain applicable. [#108](https://github.com/skeet70/latent-image/issues/108) owns repeated focus sweeps, timing and independent optical references. No XF80-only identity restriction, safe live tuning range or camera operation follows from this input boundary.
+
 ## Processed preview buffers
 
 ### Actual Run-3 image destinations

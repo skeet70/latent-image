@@ -53,7 +53,7 @@ An aligned-word census over the pinned images finds each of the eight array addr
 ```
 
 Each record is 16 bytes, one id in word 0, parallel to the installed values rows `{0,3,1,7,0xc,5,6}` (byte-read stock format at `0x00789e2c`).
-**Byte-read:** the Q id space ends at `n = 0x8c5` and holds no PRO Neg record, so rows 5-6 carry plain string ids; the label drawer `0x011121d4` renders Q vector ids (`0xff000000|n`) and plain string ids (`<= 0x83d`) in the same function, and `0x49a`/`0x496` are the existing `<f202>`/`<f201>` icon strings already used as the shooting list icons (E-FILMSIM-SURFACE-COST-150 names this option). The `w=120` variants are chosen over the `w=440` preview variants `0x49b`/`0x497`; which declared width suits the Q cell is unproved (section 7).
+**Byte-read:** the Q id space ends at `n = 0x8c5` and holds no PRO Neg record, so rows 5-6 carry plain string ids. Both the grid's pixel-coordinate drawer `0x01112380` and the cell-coordinate drawer `0x011121d4` accept Q vector ids (`0xff000000|n`) and plain string ids (`<= 0x83d`). The `0x49a`/`0x496` strings are the existing `<f202>`/`<f201>` shooting-list icons (E-FILMSIM-SURFACE-COST-150). Section 7.1 binds the grid consumer and its string metrics; visual acceptance of the chosen `w=120` variants remains open.
 
 ### 2.2 New bracket labels at `0x0061c2c0` (orders 33-64)
 
@@ -117,7 +117,7 @@ The Q cell's values pointer moves from its own five-row array to the installed s
 
 **Static-inference:** the geometry invariant holds by construction: `load + decoded_size = 0x0061c240 + 0x002829c0 = 0x0089ec00`, the stock bss start, and `load + segment_size = 0x0061c240 + 0x002829e8 = 0x0089ec28`. The load stays 64-byte aligned and `0x44` bytes above the floor. `rebuild-update replace-record4` enforces the same relation from the stock record and passed in the revision-1 build (section 6.3).
 **The RAW list is excluded on capacity.** Its relocation needs 64 bytes of values array plus 128 bytes of labels array; the window has 68 bytes left, a 124-byte shortfall. Reclamation does not close it: this patch's own retargets make the stock Q labels extent `[0x00789e2c, 0x00789e8c)` and the three stock bracket label extents (96 bytes each) unreachable in the constructed output, alongside the values extents (48 bytes each) and the two extents RC0 already freed, and the largest reclaimed contiguous extent is 96 bytes. That holds the 64-byte values array but not the 128-byte labels array, so the surface stays 60 bytes short even with reclamation, and a labels array must be contiguous (byte-read walk format, 16-byte records to a 16-byte terminator).
-A shared-array variant would make all three surfaces fit in 320 bytes: the Q record uses only word 0 and the RAW record only words 1 and 3 (byte-read stock contents), so one array could carry `{Q glyph, icon, 0, name}` per row. It is not taken, because whether each surface's draw path reads only those words is unproved: the stock zeros hide reads of the unused fields, and the variant would change both surfaces' rendering if any path reads a field this way.
+The proposed 320-byte shared-array variant `{Q glyph, RAW icon, 0, RAW name}` is rejected by the Q consumer: `FUN_0116ae00` reads word 1 as well as word 0 and draws each nonzero id (section 7.1). The RAW icon in word 1 would therefore add a second draw to the Q cell. Stock zeros are not evidence of unused fields.
 The allocation order follows the surfaces' enumeration and cost: the Q cell is the owner-visible defect and is covered first, the brackets cost the same 128 bytes with their strings already in the slot, and the RAW list is the most expensive surface at 192 bytes and the last of the three. Pairwise, Q plus the RAW list also fits (320 bytes, 4 left) and would leave the brackets stock.
 
 ## 4. The RAW-conversion list's row-to-code mapping
@@ -139,7 +139,7 @@ The allocation order follows the surfaces' enumeration and cost: the Q cell is t
 
 **Byte-read:** the name column comes from the string-pair sequence in the EN slot, which the stock labels bind row by row (rows 0, 1, 2, 5 and 9 carry pair 0, 1, 2, 5 and 9; the icon field of row 9 carries the `w=120` variant `1199` of `<f06e>` rather than pair 9's `1547`). Rows 3 and 4 then carry pairs 3 and 4, `<f201>`/`PRO Neg. Hi` and `<f202>`/`PRO Neg. Std`.
 **Byte-read and static-inference:** the code column decodes independently in the plain image: `FUN_01118a00` reads the record block's `+0x164` word and switches on `value + 1` to draw `PROVIA` (0), `ASTIA` (3), `Velvia` (5), `PRO Neg. Std` (6) or `PRO Neg. Hi` (7) from the ASCII name table at `0x11205d8`, and on the `-1` marker switches on the block's `+0x134` word minus 6 to draw `MONOCHROME` (6), `MONOCHROME+R` (7), `MONOCHROME+Ye` (8), `MONOCHROME+G` (9) or `SEPIA` (0xa). Every one of the ten rows agrees between the two orders, which binds rows 3 and 4 to PRO Neg. Hi and PRO Neg. Std with codes 7 and 6. The overlap at codes 6 and 7 is a two-field domain, not a collision: colour films reach `+0x164` and the monochrome family and SEPIA reach `+0x134` behind the `-1` marker.
-**Unproved:** the record builder that assigns a selection to one field or the other is not traced, so the family rule for a chosen row (colour for rows 0-4, monochrome for rows 5-9) is bound by the name pairs and the code decode rather than by the consumer. The mapping a patch would need is complete; the downstream family rule is the residual.
+**Byte-read and static-inference:** the selection writer and processing-family selector are now traced (section 7.3). Rows 0-4 write the colour channel; rows 5-9 write the monochrome/sepia channel, which overrides the colour channel in the request builder. In particular, RAW row 3 becomes lower develop value `0xc` and row 4 becomes `0xb`, rather than monochrome values with overlapping numeric codes. The metadata display block's `+0x164`/`+0x134` fields above are a different record layout from the lower develop record's `+0x508`; their offsets must not be interchanged.
 To add the two PRO Neg rows the list would name values rows `3` and `4` (codes `7` and `6`) with label pairs `1535/1536` and `1537/1538` in the RAW format. What blocks that is only the byte budget of section 3.
 
 ## 5. What each surface shows afterwards
@@ -207,17 +207,44 @@ Byte-reading the emitted DAT gives segment entry 4 `{4, 0x0061c240, 0x002829e8, 
 
 ## 7. Residuals
 
-**Unproved:** the Q cell renders a plain string id in a slot built for Q vector glyphs; the drawer renders both classes in one function (byte-read), but the layout of a string id inside the Q cell is not established. The `w=120` icon variants `0x49a`/`0x496` are a choice, and the `w=440` preview variants `0x49b`/`0x497` or the bracket icons `978`/`976` would render in the same slot if the width matters; one hardware look settles it.
-**Unproved:** the bracket label record's field roles are read from stock content (`{icon, name, 0, 0}`), not from the draw path.
-**Unproved:** the RAW record-family rule of section 4.
+**Source-inspected, with static-inference:** the three independent source questions are answered in sections 7.1-7.3 (E-FILMSIM-SELECTOR-CONSUMERS-150). This establishes rendering dispatch, bracket label-field consumers and RAW processing-family selection, not a visually accepted or installed patch.
+**Unproved visual acceptance:** the selected Q strings must be seen in the complete cell, selected and unselected, without overlap or clipping. The source passes each string's own declared dimensions to the renderer; accepting a string id does not prove that `w=120`, `w=440` or the bracket variant looks right.
 **Static-inference:** the apply wrappers and the query's cell arithmetic are byte-read, but the mode argument's provenance chain (`0x639c14` -> `0x6439ac` -> `0x6438ec` -> `0x6434f8`, mode from `FUN_0063b4c8`) is not executed on a patched image, and whether any other path consults these matrices with a different mode class is unproved; the stock rows' own shape is the support for columns 4-7 being the classes that matter. The revision-1 claim that properties `0x100`-`0x102` have no availability descriptor is withdrawn: they are entries 98-100 of the list at `0x0079944c`.
 **Rebuild status:** the revision-2 chain is built and its applier, encoder, round-trip, header and container numbers are measured (section 6.1); what stays absent is any camera-side look at a patched image.
 **Inherited:** the runtime-writer absence for the prefix (filmsim-patch-01 section 5.3) and the Q-cell direct-path variant of FUN_00bf93e0 (E-FILMSIM-Q-SURFACE-150 limits).
 **Static-inference:** an image carrying this patch set and the D3 recipe prefix does not fit the tail; the window forces one combined decision (E-FILMSIM-SURFACE-COST-150).
 
+### 7.1 Q grid: actual consumer and string dispatch
+
+**Byte-read:** the Q root table word at `0x0081bca4` names `0x0078e4a0`; its child list at `0x0077da94` contains the film child pointer at `0x0077dad0`, `0x0078b000`. `FUN_0116ae00` selects root `0x7a`, walks its children with `FUN_00bf8d20`, and, when `FUN_011724c0` returns 0, calls `FUN_00bf93e0(root, property, current_row, field)` for fields 0 and 1. Property `0xfe` has no special case in `FUN_011724c0` and returns 0. The accessor's child-node path reads node `+0x20` to match the value and selects the corresponding 16-byte label at node `+0x24`; no match retains index 0.
+
+**Byte-read:** at `0x0116b334..0x0116b3d0`, field 0 is drawn at pixel `x=(c+1)*20`, `y=r*24`, where `c=8*(visible_index & 3)+1`; nonzero field 1 is drawn at `x=20*c+60` with the same y. Each goes through `FUN_01112e78` and its unbounded-dimension branch to `FUN_01112380`. The stock and proposed Q records have word 1 zero, so they take only the first draw. This is the root/child path, not execution evidence for the accessor's separate direct-node path.
+
+**Byte-read:** `FUN_01112380` handles vector ids through `FUN_0117e048`/`FUN_0117e0a4` with font selector `0x18`, and nonzero plain ids through `0x83d` through `FUN_0117dce0`/`FUN_0117dd48`/`FUN_0117ddb0`. The latter read the id's width, height and font fields at `0x00130000 + 10*id + {4,6,8}` for these ids. Both branches call `FUN_01179da0`. A coordinate of `-20` requests the string's declared position; this grid supplies explicit pixel coordinates. The source does not replace a plain string's width with the vector glyph width or scale it to the Q cell.
+
+### 7.2 FILM 1-3: label fields are consumer-bound
+
+**Byte-read:** root lookup words `0x0081bb40..0x0081bb48` name the three bracket nodes for menu ids `0x21..0x23`. Their property fields are `0x100..0x102`. `FUN_00bf93e0` copies a matched label record's four words and returns the requested field index; the field argument is not a film code or a conversion-table column.
+
+**Byte-read:** the current-value branch of `FUN_01164e1c` asks for field 0 at `0x011654d8..0x011654e8`, constructs a draw record and falls through `FUN_01112e78` when the surface-specific `FUN_0116e264` returns 0. The option-list branch asks for field 1 at `0x011657d0..0x011657dc` and falls through the same renderer at `0x011658b4..0x011658c4` when `FUN_0116f948` returns 0. Neither special dispatcher has a bracket-menu case for `0x21..0x23`. `FUN_011662a0` also uses field 0 for the current value and field 1 for list entries, with the same special-dispatch/fallback split. These consumers bind `{current-value icon, option-list icon/name, 0, 0}` for the bracket records, not merely the appearance of their stock contents.
+
+**Scope:** this proves the roles of the two populated bracket fields, not that words 2 and 3 are universally ignored by all generic layouts. It does not execute the mode-apply wrappers or the 24 new matrix cells. The execution acceptance remains a chosen PRO Neg value surviving the real apply path in each slot and each intended mode column, with the stock per-slot defaults unchanged.
+
+### 7.3 RAW: row writer, family precedence and lower develop value
+
+**Byte-read:** `FUN_00cc453c` passes the selected property and row to `FUN_00d46010`. For property `0x22b`, that writer branches on the original row rather than treating the converted scalar as a unique film identity. Rows `{0,1,2,3,4}` write `{0,5,3,7,6}` at `0x00954d80`, the RAW parameter block's `+8`. They clear `0x00954d94` (`+0x1c`) only when its prior value is 6 through 10. Rows `{5,6,7,8,9}` write `{6,7,8,9,10}` at `+0x1c` and set `+8` to 0. Other row values clear both channels. The related property `0x231` cannot replace a current `+0x1c` value in 6 through 10. `FUN_00d588b8`'s `0x22b` branch reverses these channels to the selected row, checking `+0x1c` first.
+
+**Byte-read and static-inference:** a RAW conversion request such as `FUN_00cc549c` supplies parameter block `0x00954d78` to `FUN_00db3c64`. That packer puts the pointer at request offset `+0xb8`, sets message `0x116` and payload length `0xc4`, and posts through `FUN_00db2ed4`. `FUN_0120b40c` copies a `0x01xx` message's payload to `0x014ea7b4`; the pointer is then at `0x014ea86c`. `FUN_012546a8` reads that pointer and builds the processing parameters at `0x01514218`. This is a static dataflow argument, not an executed queue-history claim.
+
+**Byte-read:** `FUN_012546a8` first maps parameter word 2 (`+8`) `{0,3,5,6,7}` to lower film values `{0,1,3,0xb,0xc}` at `0x01514220`. It then reads word 7 (`+0x1c`): values `{6,7,8,9,10}` override that film value with `{4,8,9,10,5}`. The two switches establish the family precedence even when both channels contain values. For the ten defined rows, the final lower values are therefore `{0,3,1,0xc,0xb,4,8,9,10,5}`. The overlap of RAW codes 6/7 cannot select the wrong family after the row writer has set the channels.
+
+**Byte-read:** `FUN_01254f8c` passes `0x01514218` to `FUN_00ea1838`, which calls `FUN_00ebf880`; the latter copies its parameter word 2 to the lower develop record at `+0x508`. PRO Neg Std/Hi therefore reach the existing lower film domain as `0xb`/`0xc`. This is not an equation between metadata offsets and processing offsets, nor proof of finished pixels. RAW output and the patched Q layout remain execution/visual acceptance work; neither changes revision 2's RAW exclusion or the combined placement decision with [#17](https://github.com/skeet70/latent-image/issues/17).
+
 ## Reproduction
 
 All commands read host files only.
+
+The finite source cut for E-FILMSIM-SELECTOR-CONSUMERS-150 used the existing `af/words` executable without rebuilding it and LLVM 21.1.8 for disassembly. Input identities, source-function references, real-word stdout and A32 cuts are retained privately under `private-data/analysis/film-selector-proof/`; `source-proof.txt` records the command parameters and limitations. No build, compiler, emulator or camera was run for this cut.
 
 ```sh
 # Q node, its arrays, the three bracket nodes and their arrays
