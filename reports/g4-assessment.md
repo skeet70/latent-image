@@ -36,7 +36,7 @@ Missing for AF: the only reviewed AF call set is rejected (E-AF-RING-REVIEW-CORR
 
 ### 5. Recovery level recorded
 
-Met. [Recovery status](recovery-status.md) records R1 accepted, R2 and R3 demonstrated and formal R4 unclaimed (E-STAGED-RECOVERY-SUCCESS-150), with the demonstrated repair scoped to the recorder-v2-v5 rollback. The SD recovery route is unavailable (E-XM1-CARD-SLOT-UNAVAILABLE-150, [#85](https://github.com/skeet70/latent-image/issues/85)), and each go and session script section 2 describes that remaining limitation and the no-card exit exception (E-RAM-PUSH253-NO-CARD-EXIT-150), which satisfies G4's R2-conditional wording.
+Met. [Recovery status](recovery-status.md#historical-recorder-failure-r4-decision-2026-10-27) records R1 accepted, R2 and R3 demonstrated, and R4 accepted only for the historical recorder-v2-v5 block-14 repair with block-71 residue retained. The SD recovery route is unavailable (E-XM1-CARD-SLOT-UNAVAILABLE-150, [#85](https://github.com/skeet70/latent-image/issues/85)), and each go and session script section 2 describes that remaining limitation and the no-card exit exception (E-RAM-PUSH253-NO-CARD-EXIT-150), which satisfies G4's R2-conditional wording. Historical R4 supplies no present rescue assurance or AF execution/cleanup acceptance.
 
 ### 6. No unexplained state changes
 
