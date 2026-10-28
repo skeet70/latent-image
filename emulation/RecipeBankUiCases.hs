@@ -2187,7 +2187,7 @@ regionList in' e sp = map setPermission (filter (\(n, _, _, _, _) -> inProfile (
       (n, base, size, if permissions == 3 && n `notElem` writeRegions then 1 else permissions, bytes)
     writeRegions =
       nub
-        ( [n | AbiWorkspace (RegionId n) _ _ _ <- caseWorkspaces in' e sp]
+        ( [n | AbiWorkspace _ (RegionId n) _ _ <- caseWorkspaces in' e sp]
             ++ [n | claim@(n, _, _) <- spClaims sp, claimChangesInitial baseRegions claim]
         )
     ktext = inKtext in'
@@ -2544,7 +2544,7 @@ qualify in' e sp exitCode caseValue report =
   case N.observeNative (if exitCode == 0 then ExitSuccess else ExitFailure exitCode) nativeRegions (get report "runner") of
     Left problem ->
       result "malformed_output" [N.renderObservationError problem] Nothing False False FinalUnknown GuardNotApplicable TransientMissing EffectsNotEvaluated
-        (observationScope sp) 0 0
+        (observationScope sp) (0 :: Integer) (0 :: Int)
     Right observed ->
       let statusText = N.runnerStatusLabel (N.nativeStatus observed)
           registers = [(N.registerLabel register, value) | register <- N.registerLabels, Just value <- [N.lookupRegister register observed]]
@@ -2584,6 +2584,7 @@ qualify in' e sp exitCode caseValue report =
        in result status reportedProblems (Just statusText) (null registerProblems) (null abi) finalState guard transient verdict scope total kept
   where
     nativeRegions = [Region (obj [("id", s name)]) (fromIntegral base) (fromIntegral size) bytes | (name, base, size, _, bytes) <- regionList in' e sp]
+    result :: String -> [String] -> Maybe String -> Bool -> Bool -> FinalState -> GuardState -> TransientProof -> EffectVerdict -> EffectScope -> Integer -> Int -> Value
     result status problems statusText registersOk abiOk finalState guard transient verdict scope total kept =
       object
         [ "id" .= spId sp
@@ -2856,7 +2857,7 @@ runControls runner out e in' specs = do
   (claimExit, claimReport) <- runCase runner (claimDir </> "case.json")
   BL.writeFile (claimDir </> "native-result.json") (encode claimReport)
   let claimPass = statusOf (qualify in' e claimSpec claimExit claimCase claimReport) == Just "passed"
-      claim = fromMaybe (head (spClaims claimSpec)) (find (\(n, _, _) -> n `elem` guardedRegions) (spClaims claimSpec))
+      claim = fromMaybe (fromMaybe ("", 0, B.empty) (listToMaybe (spClaims claimSpec))) (find (\(n, _, _) -> n `elem` guardedRegions) (spClaims claimSpec))
       claimRegions = regionList in' e claimSpec
       claimResult = qualify in' e claimSpec claimExit claimCase (corruptClaim claimRegions claim claimReport)
       baseline = qualify in' e claimSpec claimExit claimCase claimReport

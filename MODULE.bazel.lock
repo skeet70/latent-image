@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "nI0X41j3rIzlgFS5fK7O719zIM0O6CAfAG2HID6Hu8Y=",
+        "bzlTransitiveDigest": "a5kn3qMxHxLgzW17KeesXtcgTMOabRID87Y20YzhL4k=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -496,6 +496,7 @@
                 "@@//emulation:fujimod-xm1/src/nand_image.rs": "//emulation:fujimod-xm1/src/nand_image.rs",
                 "@@//emulation:fujimod-xm1/src/provenance.rs": "//emulation:fujimod-xm1/src/provenance.rs",
                 "@@//emulation:fujimod-xm1/src/provenance_main.rs": "//emulation:fujimod-xm1/src/provenance_main.rs",
+                "@@//emulation:fujimod-xm1/src/queue_boundary.rs": "//emulation:fujimod-xm1/src/queue_boundary.rs",
                 "@@//emulation:fujimod-xm1/src/r4f.rs": "//emulation:fujimod-xm1/src/r4f.rs",
                 "@@//emulation:fujimod-xm1/src/ram_push.rs": "//emulation:fujimod-xm1/src/ram_push.rs",
                 "@@//emulation:fujimod-xm1/src/render.rs": "//emulation:fujimod-xm1/src/render.rs",
@@ -511,7 +512,7 @@
               "nix_license_path": "",
               "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
               "repositories": {},
-              "build_file_content": "exports_files([\"bin/fujimod-xm1\", \"bin/fujimod-xm1-provenance\", \"bin/fujimod-xm1-ram-push\", \"bin/fujimod-xm1-toggle\", \"bin/fujimod-xm1-updater\", \"share/fujimod-xm1/store-path\", \"share/fujimod-xm1/xm1-150.json\"], visibility = [\"//visibility:public\"])",
+              "build_file_content": "exports_files([\"bin/fujimod-xm1\", \"bin/fujimod-xm1-provenance\", \"bin/fujimod-xm1-queue-boundary\", \"bin/fujimod-xm1-ram-push\", \"bin/fujimod-xm1-toggle\", \"bin/fujimod-xm1-updater\", \"share/fujimod-xm1/store-path\", \"share/fujimod-xm1/xm1-150.json\"], visibility = [\"//visibility:public\"])",
               "nixopts": [
                 "--max-jobs",
                 "2",

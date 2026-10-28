@@ -32,6 +32,13 @@ module Replacement.Service.Qualify
   , serviceCasebufFill
   , serviceCasebufInitial
   , serviceSeeds
+  , serviceReturnRegister
+  , servicePreservedRegisters
+  , serviceEntrySymbol
+  , serviceTrampolineSymbol
+  , serviceStockTarget
+  , serviceStockSize
+  , serviceStockSpan
   , serviceInitialRegisters
   , serviceExpectedRegisters
   , isServiceCaseId
@@ -59,7 +66,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import Data.List (find, nub, nubBy, sort)
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, isNothing, listToMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Word (Word32, Word8)
 import Emulation.NativeCase (Region (..), loadCase)
 import qualified Emulation.NativeObservation as N
@@ -88,6 +95,7 @@ data ServiceRow = ServiceRow
   , serviceRowExpected :: RowState
   , serviceRowProvenance :: String
   }
+  deriving (Eq, Show)
 
 -- | The synchronous service lifetime: no host operation, no retained
 -- completion and no post-return callback.
@@ -507,7 +515,7 @@ checkServiceCase expectation observation =
         | (ident, _, _) <- expectationBounds expectation
         ]
     classifyWrite (N.Write (N.GuestAddress address) (N.WriteBytes size)) =
-      case find (\(ident, base, extent) -> contains base extent address size) (expectationBounds expectation) of
+      case find (\(_, base, extent) -> contains base extent address size) (expectationBounds expectation) of
         Nothing -> ["forbidden write outside the declared regions at " ++ show address]
         Just (ident, base, _)
           | ident `notElem` effectAllowedScratch policy ->
@@ -686,7 +694,7 @@ runServiceCase runner path = do
 
 mutantChecks :: Expectation -> N.NativeObservation -> [Value]
 mutantChecks expectation observation =
-  [ mutant (serviceMutantName required) (mutate required observation)
+  [ mutant (serviceMutantName required) (mutate required)
   | required <- contractMutants serviceContract
   ]
   where
@@ -815,9 +823,9 @@ serviceQualificationReport results =
           | sort names /= sort required
           ]
             ++ [ "duplicate mutant control: " ++ name | name <- duplicated ]
-            ++ [ "mutant " ++ name ++ ": " ++ status
-               | (name, status) <- zip names statuses
-               , status /= "refused"
+            ++ [ "mutant " ++ name ++ ": " ++ resultStatus
+               | (name, resultStatus) <- zip names statuses
+               , resultStatus /= "refused"
                ]
     failures =
       [ str (get result "id") ++ ": failed"

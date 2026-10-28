@@ -3,11 +3,12 @@
 module Main where
 
 import Control.Monad (forM_)
-import Data.Aeson (Value (..), encode)
+import Data.Aeson (Value (..), encode, object, (.=))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (shiftR)
 import qualified Data.Map.Strict as M
+import Data.Maybe (listToMaybe)
 import Data.String (fromString)
 import Data.Word (Word32, Word64)
 import Emulation.NativeCase (Region (..))
@@ -39,7 +40,7 @@ aggregationChecks :: IO ()
 aggregationChecks = do
   let baseline = map resultFor serviceRows
       baselineReport = serviceQualificationReport baseline
-      firstId = serviceRowId (head serviceRows)
+      firstId = maybe "" serviceRowId (listToMaybe serviceRows)
       missingControl =
         [ if str (get result "id") == firstId then set "mutants" (arr []) result else result
         | result <- baseline
@@ -57,7 +58,7 @@ aggregationChecks = do
         | result <- baseline
         ]
       duplicateCase = baseline ++ take 1 baseline
-      missingCase = tail baseline
+      missingCase = drop 1 baseline
       missingStatus =
         [ if str (get result "id") == firstId then set "status" Null result else result
         | result <- baseline
@@ -300,7 +301,7 @@ armEffectMutant runner = do
   exists <- doesDirectoryExist directory
   if exists then removeDirectoryRecursive directory else pure ()
   createDirectoryIfMissing True directory
-  let code = B.pack (concatMap word32LE [0xe3001000, 0xe340109a, 0xe5910100, 0xe2802001, 0xe5812100, 0xe5810100, 0xe12fff1e])
+  let code = B.concat (map word32LE [0xe3001000, 0xe340109a, 0xe5910100, 0xe2802001, 0xe5812100, 0xe5810100, 0xe12fff1e])
       casebuf = B.replicate serviceCasebufSize 0
       mirror = B.replicate serviceTransientSize 0
       exitBytes = word32LE 0xe12fff1e

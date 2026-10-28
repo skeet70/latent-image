@@ -3,6 +3,11 @@ load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "h
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
+exports_files(
+    ["recovery-task-state-tests.sh"],
+    visibility = ["//replacement/recipe_ui:__pkg__"],
+)
+
 # Copies a card image to a new path and writes named files into its FAT
 # partition with mtools, for --sd-card-image inputs.
 haskell_binary(

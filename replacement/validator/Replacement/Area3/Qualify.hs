@@ -12,8 +12,9 @@ module Replacement.Area3.Qualify
   ) where
 
 import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar)
-import Control.DeepSeq (NFData (..), force)
+import Control.DeepSeq (force)
 import Control.Exception (IOException, SomeException, catch, throwIO, try)
+import qualified Control.Exception as Ex
 import Control.Monad (filterM, foldM, forM, (>=>))
 import Data.Aeson (Value (..))
 import Data.Bits (setBit, testBit, xor)
@@ -554,10 +555,10 @@ runAnchors :: Contract -> [LoadedAnchor] -> FilePath -> IO [AnchorResult]
 runAnchors contract anchors runner = forM anchors $ \anchor -> do
   result <- runCaseFile runner (loadedPath anchor)
   case result of
-    Left message -> pure (AnchorResult (loadedId anchor) (force (CheckBlocked message)) (force [message]) Nothing)
+    Left message -> Ex.evaluate (AnchorResult (loadedId anchor) (force (CheckBlocked message)) (force [message]) Nothing)
     Right (caseValue, regions, raw) -> do
       existing <- checkResult caseValue regions (rawValue raw)
-      pure $ case observeNative (rawExit raw) regions (rawValue raw) of
+      Ex.evaluate $ case observeNative (rawExit raw) regions (rawValue raw) of
         Left message ->
           let rendered = renderObservationError message
            in AnchorResult
@@ -568,7 +569,7 @@ runAnchors contract anchors runner = forM anchors $ \anchor -> do
         Right observation ->
           AnchorResult
             (loadedId anchor)
-            (forceCheck (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions) observation))
+            (force (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions) observation))
             (force existing)
             (Just raw)
 
@@ -610,14 +611,6 @@ anchorChecks results =
 
 -- Stock and ARM cases ---------------------------------------------------------
 
-instance NFData Check where
-  rnf CheckPass = ()
-  rnf (CheckMismatch problems) = rnf problems
-  rnf (CheckBlocked message) = rnf message
-  rnf (CheckUnsupported message) = rnf message
-  rnf (CheckUnknown message) = rnf message
-  rnf (CheckTruncated message) = rnf message
-
 data CaseOutcome = CaseOutcome
   { outcomeClass :: SubjectClass
   , outcomeId :: String
@@ -632,9 +625,9 @@ runStockBatch contract workspace runner options subjects =
       path <- writeStockCase workspace (subjectId item) (provenance item) (subjectRecord item) (subjectOracle item)
       result <- runCaseFile runner path
       case result of
-        Left message -> pure (CaseOutcome (subjectClass item) (subjectId item) (force (CheckBlocked message)))
+        Left message -> Ex.evaluate (CaseOutcome (subjectClass item) (subjectId item) (force (CheckBlocked message)))
         Right (caseValue, regions, raw) ->
-          pure
+          Ex.evaluate
             ( CaseOutcome
                 (subjectClass item)
                 (subjectId item)
@@ -663,9 +656,9 @@ runArmBatch contract workspace profile runner options subjects =
       path <- writeArmCase workspace profile ("arm-" ++ subjectId item) (provenance item) (subjectRecord item) (subjectOracle item)
       result <- runCaseFile runner path
       case result of
-        Left message -> pure (CaseOutcome (subjectClass item) (subjectId item) (force (CheckBlocked message)))
+        Left message -> Ex.evaluate (CaseOutcome (subjectClass item) (subjectId item) (force (CheckBlocked message)))
         Right (caseValue, regions, raw) ->
-          pure
+          Ex.evaluate
             ( CaseOutcome
                 (subjectClass item)
                 (subjectId item)

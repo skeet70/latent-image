@@ -5,7 +5,7 @@
 module Main where
 
 import Control.Monad
-import FujiAF.Host (str)
+import FujiAF.Host (get, str)
 import FujiAF.RecipeBank (BootCrc32 (..), bootCrc32)
 import Data.Aeson hiding (encodeFile)
 import Data.Aeson.Types (Parser, parseEither, parseMaybe)
@@ -2677,6 +2677,7 @@ runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable g
           else case spEntry sp of
             e | take 2 e == "0x" -> hexI e
             e -> if e `elem` M.keys (case ks of Syms m -> m) then addr ks e else addr ms e
+      exclusions :: [String]
       exclusions =
         if direct
           then
