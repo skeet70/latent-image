@@ -27,10 +27,10 @@ Limits:
 | --- | --- | --- | --- |
 | Startup and shutdown | Stock 1.50 boots in the retained engine and in FujiMod; the flash-boot route reaches the shooting screen; the decoded images match the installed extents over the declared ranges. RAM payloads inherit stock startup. Orderly power-off persistence and jig-cycle reset origins are mapped. The End Setting candidate was rejected. | E-G2-ACCEPTANCE-150, E-FUJIMOD-XM1-FLASH-BOOT-150, E-XM1-MPU-BOOT-RECORD-150, E-BOOT-LOADPATH, E-END-SETTING-150-REJECTED, E-RESET-ORIGIN-BOOT-150 | Replacement startup is not demonstrated. SD cold entry is timing-dependent and not a reproducible recipe. Internal-flash deployment, replacement shutdown and general startup recovery are unproven. |
 | Menus and controls | The viewer navigates language, shooting menus, SETUP and Q with host keyboard input; twelve calibrated ADC3 positions select stock shooting modes; the input-row table and key sampling path are mapped. Recipe-bank pages, dial handling and selection have bounded UI cases. | E-XM1-VIEWER-MENUS-150, E-XM1-VIEWER-CONTROLS-150, E-XM1-VIEWER-ISOLATED-150, E-INPUT-ROWS-150, E-XM1-MAIN-DIAL-ADC4-SOURCE-150, E-XM1-KEY-SAMPLING-PATH-150, this report section 5 | Full menu coverage, physical key timing and unexercised surfaces are unknown. The bank UI drawer behind the stock tail is modeled, so markers are checked through stock snapshot accessors rather than drawn pixels. |
-| Live view | The viewer produces guest live view at 720x480 from a synthetic scene. The Classic Chrome live-view fragment passes 46/46 site cases and 368 total site executions, and emits the expected develop-record marker in full-system segments. | E-XM1-VIEWER-MENUS-150, E-CC-LIVEVIEW-FRAGMENT-150, E-CC-ICON-B-COMBINED-150 | Physical panel output, sensor-derived live view and colour fidelity are unproved. The post-power-on stored-film timing is not established. RAW conversion playback stops on a known MMIO gap. |
-| Focus | The stock AF orchestration, lens messages, statistics producers and input path are mapped. An owned contrast policy and AF RAM-ring e2e exist. | E-AF-MENU-MAP, E-AF-CORE-MAP, E-AF-LENS-MAP, E-XM1-AF-PRODUCER-SNAPSHOT-150, E-AF-RAM-RING-E2E-150, E-AF-CARDLESS-S1-BLOCKED-150 | No captured stock AF search on hardware exists. The cardless S1 path is blocked by the reported card error. Lens-dependent and physical closed-loop behaviour remains unmeasured. No owned AF capability is qualified. |
+| Live view | The viewer produces guest live view at 720x480 from a synthetic scene. The Classic Chrome live-view fragment passes 46/46 site cases and 368 total site executions, and emits the expected develop-record marker in full-system segments. | E-XM1-VIEWER-MENUS-150, E-CC-LIVEVIEW-FRAGMENT-150, E-CC-ICON-B-COMBINED-150 | Physical panel output, sensor-derived live view and color fidelity are unproved. The post-power-on stored-film timing is not established. RAW conversion playback stops on a known MMIO gap. |
+| Focus | The stock AF orchestration, lens messages, statistics producers and input path are mapped. An owned contrast policy and AF RAM-ring e2e exist. | E-AF-MENU-MAP, E-AF-CORE-MAP, E-AF-LENS-MAP, E-XM1-AF-PRODUCER-SNAPSHOT-150, E-AF-RAM-RING-E2E-150, E-AF-CARDLESS-S1-BLOCKED-150 | No captured stock AF search on hardware exists. The cardless S1 path is blocked by the reported card error. Lens-dependent and physical closed-loop behavior remains unmeasured. No owned AF capability is qualified. |
 | Exposure and capture | Capture and develop descriptors, completion slots and diagnostic selectors are mapped. Owner hardware captures and ordinary still/playback reports exist. | E-CARDLESS-RAM-CAPTURE-MAP-150, E-CARDLESS-PRODUCER-READ-REACH-150, E-CARD-DETECT-LIVE-150, E-AF-CARD-MEDIA-PRODUCER-150 | Sensor-backed capture is not exercised in emulation or by owned code. Shutter and S1/S2 are not driven by the key model. Exposure control is not qualified, and the body's card-detect input reads present with no card. |
-| Development | Film-simulation offers, develop dispatch and Classic Chrome/D3 parameter data are mapped. D3 rows, the Classic Chrome flash candidate, the icon candidate and the RAM payloads build and pass their native/full-system cases. Render repeatability has a hardware reference analysis. | E-FILMSIM-MAP, E-FILMSIM-EMUL-150, E-RECIPE-D3-PATCH-150, E-CC-BANK-RAM-150, E-CC-ICON-B-COMBINED-150, E-FILMSIM-RENDER-REPEAT-ANALYSIS-150, E-XM1-MATCHING-C-PILOT-150 | Emulator develop rendering and RAW conversion are not executed. The Classic Chrome colour model is a sibling-derived approximation, not X-M1 ground truth. Instruction counts are not physical latency. |
+| Development | Film-simulation offers, develop dispatch and Classic Chrome/D3 parameter data are mapped. D3 rows, the Classic Chrome flash candidate, the icon candidate and the RAM payloads build and pass their native/full-system cases. Render repeatability has a hardware reference analysis. | E-FILMSIM-MAP, E-FILMSIM-EMUL-150, E-RECIPE-D3-PATCH-150, E-CC-BANK-RAM-150, E-CC-ICON-B-COMBINED-150, E-FILMSIM-RENDER-REPEAT-ANALYSIS-150, E-XM1-MATCHING-C-PILOT-150 | Emulator develop rendering and RAW conversion are not executed. The Classic Chrome color model is a sibling-derived approximation, not X-M1 ground truth. Instruction counts are not physical latency. |
 | Save and playback | The recipe bank v1/v2 codecs, save, reset, rename, selection and slot reload have bounded kernel/UI cases. Settings persistence through area 2 and the C-slot record is mapped. RAM unload and cold restart restore old words. Playback state and a modal path are mapped. | E-RECIPE-BANK-V2-CODEC-150, E-RECIPE-KERNEL-ACCEPT-150, E-RECIPE-BANK-SELECTION-150, E-CC-BANK-RAM-150, E-PLAYBACK-A4D-DEAD-150, E-SETTINGS-ACTS-150 | Emulator playback and RAW conversion are blocked. Playback rendering, zoom and card-backed save are not covered. Physical save/playback evidence remains owner-reported. |
 | Settings and calibration | The custom-slot record, payload fields, area-2/area-3 maps, adjustment cache, `f7` gate, settings reset cause and calibration capture exist. The ram-calibration driver reaches a known menu state. | E-CUSTOM-SETTING-MAP-150, E-CUSTOM-ISO-150, E-SETTINGS-ACTS-150, E-ADJ-GATE-BYTE-150, E-RESET-ORIGIN-BOOT-150, E-RAM-CALIBRATION-150 | No calibration restore, full backup or 1.00 rollback exists. Some fields and writers remain unbound. Jig-cycle reset and persistent-write hazards bound what a session may claim. |
 | Interfaces | The ff80 USB transport supports identify, read-config, probe, dump, read-bulk, read-media, RAM push and unload. SD host, PTP read-only storage and jig mode are mapped. The bank ELF allowlist and RAM-push review records exist. | E-TRANSPORT, E-NATIVE-USB, E-BULK-READ-E2E-150, E-RAM-PUSH-MECHANISM-CONVERGE-150, E-PTP-STORAGE-READONLY-150, E-USB-TOGGLE-RAM-PUSH-150 | USB toggle detach/re-enumeration blocks remain. PTP has no write path. Jig persistence hazards remain. FujiMod route parity is comparison evidence, not a gating cutover. |
@@ -51,15 +51,15 @@ Limits:
 | Full-system emulator | `bazel run //emulation:xm1-viewer -- --firmware DAT --port 0`, `bazel run //emulation:verify-candidate -- [--routes NAME,...]` | Retained engine gates the full-system routes; FujiMod counterparts are comparison-only until a reviewed cutover. Interactive viewer uses a synthetic scene. | E-VERIFY-CANDIDATE-150, E-FUJIMOD-RUNTIME-DECISION-150 |
 | Flash boot checks | `bazel run //emulation:flash-boot-check`, `bazel run //emulation:fujimod-flash-boot-check` | Cold boot of a candidate to a known screen over the emulated route. Not hardware boot or flash deployment. | E-FUJIMOD-XM1-FLASH-BOOT-150, E-CC-ICON-B-COMBINED-150 |
 | Recovery builders | `bazel run //host/firmware:build-recovery-card`, `//host/firmware:build-staged-recovery-card` and the related card targets | Host-only card construction; physical entry remains separately evidenced. | E-RECOVERY, [recovery status](recovery-status.md) |
-| Matching reference | `bazel test //matching:...` with the pinned GCC 4.4.7/4.6.4 from `build-support/exr2-gcc.nix` | Function-extent byte comparison only. It is not the new-code toolchain and establishes no new behaviour. | E-XM1-MATCHING-C-PILOT-150 |
+| Matching reference | `bazel test //matching:...` with the pinned GCC 4.4.7/4.6.4 from `build-support/exr2-gcc.nix` | Function-extent byte comparison only. It is not the new-code toolchain and establishes no new behavior. | E-XM1-MATCHING-C-PILOT-150 |
 
 The C/Clang recipe-bank path uses `clang --target=armv7r-none-eabi -march=armv7-r -marm -Oz`, LLD and `llvm-objcopy`. The current full-system gate is the retained engine. FujiMod is pinned and runs the comparison routes, but the [runtime decision](emulator-runtime-decision.md) and the incomplete route matrix bound its use.
 
 ## 4. Fixed comparison workload
 
-The comparison workload is fixed before any pilot changes the workflow. It is a behaviour-preserving refactor of the recipe-bank UI token and page decoder in `menu/recipe_bank_ui.h`. The same workload is repeated by [#121](https://github.com/skeet70/latent-image/issues/121) when its increment replaces or moves the decoder.
+The comparison workload is fixed before any pilot changes the workflow. It is a behavior-preserving refactor of the recipe-bank UI token and page decoder in `menu/recipe_bank_ui.h`. The same workload is repeated by [#121](https://github.com/skeet70/latent-image/issues/121) when its increment replaces or moves the decoder.
 
-### 4.1 Public behaviour that must not change
+### 4.1 Public behavior that must not change
 
 `rb_ui_page(cls, slot_out)` returns:
 
@@ -90,7 +90,13 @@ The baseline patch is kept separately so it is not part of the production change
 
 ```diff
 diff --git a/menu/recipe_bank_ui.h b/menu/recipe_bank_ui.h
-@@
+index 0bce6d4..61d277b 100644
+--- a/menu/recipe_bank_ui.h
++++ b/menu/recipe_bank_ui.h
+@@ -251,13 +251,19 @@ typedef enum {
+   RB_PAGE_FIELD
+ } RbBankPage;
+ 
 +static inline __attribute__((always_inline)) bool rb_ui_range_contains(
 +  uint32_t value, uint32_t first, uint32_t count)
 +{
@@ -100,25 +106,47 @@ diff --git a/menu/recipe_bank_ui.h b/menu/recipe_bank_ui.h
  /* Page kind of a frame class; RB_PAGE_SUB also yields the slot. */
  static inline RbBankPage rb_ui_page(uint32_t cls, uint8_t *slot_out)
  {
-@@
+   if (cls == RB_UI_CLASS_SLOT) {
+     return RB_PAGE_SLOT;
+   }
 -  if (cls >= RB_UI_CLASS_SUB0 && cls < RB_UI_CLASS_SUB0 + RB_BANK_SLOTS) {
 +  if (rb_ui_range_contains(cls, RB_UI_CLASS_SUB0, RB_BANK_SLOTS)) {
-@@
+     if (slot_out != 0) {
+       *slot_out = (uint8_t)(cls - RB_UI_CLASS_SUB0);
+     }
+@@ -275,7 +281,8 @@ static inline RbBankPage rb_ui_page(uint32_t cls, uint8_t *slot_out)
+   if (cls == RB_UI_CLASS_DIALOG) {
+     return RB_PAGE_DIALOG;
+   }
 -  if (cls >= RB_UI_CLASS_FIELD0 && cls <= RB_UI_CLASS_FIELD_LAST) {
 +  if (rb_ui_range_contains(cls, RB_UI_CLASS_FIELD0,
 +                            RB_UI_CLASS_FIELD_LAST - RB_UI_CLASS_FIELD0 + 1u)) {
-@@
+     return RB_PAGE_FIELD;
+   }
+   return RB_PAGE_NONE;
+@@ -288,16 +295,15 @@ static inline RbBankItemRef rb_ui_decode(uint32_t token)
+ {
+   RbBankItemRef item = { RB_ITEM_NONE, 0u, 0u, RB_SELECTION_NONE };
+   uint32_t u;
 -  if (token >= RB_UI_TOKEN_VERB_BASE &&
 -      token < RB_UI_TOKEN_VERB_BASE + RB_BANK_SLOTS * RB_UI_VERBS_PER_SLOT) {
 +  if (rb_ui_range_contains(token, RB_UI_TOKEN_VERB_BASE,
 +                            RB_BANK_SLOTS * RB_UI_VERBS_PER_SLOT)) {
-@@
+     u = token - RB_UI_TOKEN_VERB_BASE;
+     item.kind = RB_ITEM_VERB;
+     item.slot = (uint8_t)(u >> 2);
+     item.verb = (uint8_t)(u & 3u);
+     return item;
+   }
 -  if (token >= RB_UI_TOKEN_SELECT_BASE &&
 -      token < RB_UI_TOKEN_SELECT_BASE + RB_UI_SELECT_ROWS) {
 +  if (rb_ui_range_contains(token, RB_UI_TOKEN_SELECT_BASE, RB_UI_SELECT_ROWS)) {
+     item.kind = RB_ITEM_SELECT;
+     item.selection = (RbSelection){(uint8_t)(token - RB_UI_TOKEN_SELECT_BASE)};
+     return item;
 ```
 
-The temporary patch is `local://issue118-baseline-ui-refactor.patch` for the baseline run. It adds 12 lines and deletes 6 in `menu/recipe_bank_ui.h`. It changes no public symbol or function signature.
+The patch above is the complete baseline change, and a session copy is at `local://issue118-baseline-ui-refactor.patch`. It adds 12 lines and deletes 6 in `menu/recipe_bank_ui.h`. It changes no public symbol or function signature.
 
 ### 4.3 Expected result fixed before measurement
 
@@ -128,7 +156,7 @@ The temporary patch is `local://issue118-baseline-ui-refactor.patch` for the bas
 - `//emulation:recipe-bank-ui-plan-tests` passes.
 - The kernel symbol set, symbol addresses and symbol sizes used by the plan and cases do not change. The compiled bytes may differ because the source changed.
 
-`native_case_status` is expected to remain `failed` for every case: the native case compares whole memory and stub-event order, while the UI comparator excludes declared ABI workspaces and incidental stub order. The UI `status` and the public claims are the behaviour assertion. Do not replace this field check with per-run bytes.
+`native_case_status` is expected to remain `failed` for every case: the native case compares whole memory and stub-event order, while the UI comparator excludes declared ABI workspaces and incidental stub order. The UI `status` and the public claims are the behavior assertion. Do not replace this field check with per-run bytes.
 
 ### 4.4 Manual steps and interfaces
 
@@ -175,19 +203,26 @@ Investigation effort, recorded rather than reconstructed:
 - Two source edits produced a buildable patch on the first attempt; no compile or case iteration was needed.
 - The investigation was not separately clocked because it was interleaved with this inventory. The mechanical patch-to-result interval is the measured 43.73 s above.
 
-Behaviour comparison:
+Behavior comparison:
 
 - The kernel binary changed from SHA-256 `18f30d97f30c073a7f4ec09f131bf7a7132bbb306c486752bfe682c4ee57197b` to `31f5fa6491d6da9bb4061ee034daad8133319630c2829e3deb8328f19591cc04`. Both are 31,788 bytes.
 - `kernel.syms` has 194 defined code symbols in both builds, with no added or removed symbol. `rb_ui_page` remains at `0x00be71c0` size 160. `rb_bank_interpose`, `rb_stage_edit_get_arm`, `rb_stage_edit_set_arm`, `rb_select_values` and `rb_select_labels` keep their addresses and sizes.
 - All 55 case result objects compare equal between the unmodified and refactored trees. That includes `status`, `runner_status`, `native_case_status`, `mismatches`, `native_case_mismatches`, public claims, initial state, final state and stub events.
 - 55 of 55 cases are `passed` with `runner_status: returned` in both trees. The underlying `native_case_status` is `failed` for all 55 in both trees for the declared ABI-workspace and stub-order differences; it is not a regression from the refactor.
 
+Private result files from these runs, relative to the repository root:
+
+- Unmodified tree: `private-data/analysis/x-m1-1.50/recipes/issue117-inventory/ui-cases-unmodified/results.json` and `findings.txt`.
+- Refactored baseline: `private-data/analysis/x-m1-1.50/recipes/issue117-inventory/ui-baseline-run-cases/results.json`.
+- Direct refactor rerun: `private-data/analysis/x-m1-1.50/recipes/issue117-inventory/ui-cases-refactor2/results.json`.
+- Build trees: `ui-build` for the unmodified tree and `ui-baseline-run-build` for the refactored baseline.
+
 Unknowns and confounders:
 
 - The cached toolchain, Bazel disk cache and warm page cache make the 1 s build a warm incremental figure, not a cold-machine figure.
 - Case execution uses two jobs; sibling work and CPU frequency can move the 41 s figure. Report the cache state, load and case count with every repeat.
 - The 55 cases cover the modeled UI boundary and the declared stock cells, not physical input, display rendering or full-system scheduling.
-- The refactor's equivalence is argued from the unchanged behaviour table and the identical case results. It does not prove the two instruction sequences are equivalent on unexercised inputs.
+- The refactor's equivalence is argued from the unchanged behavior table and the identical case results. It does not prove the two instruction sequences are equivalent on unexercised inputs.
 
 ## 6. Comparison protocol for #121 and the first-wave checkpoint
 
