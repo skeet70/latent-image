@@ -420,6 +420,7 @@ haskell_library(
     visibility = ["//visibility:public"],
     deps = [
         ":emulator-usb",
+        ":preservation-observation",
         ":watch-observation",
         "//host:aeson",
         "//host:base",
@@ -436,6 +437,7 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":emulator-usb",
+        ":preservation-observation",
         ":ui-trajectory-lib",
         ":watch-observation",
         "//host:aeson",
@@ -530,6 +532,7 @@ haskell_binary(
         ":ff80-rehearsal-lib",
         ":viewer-runtime-lib",
         ":emulator-usb",
+        ":preservation-observation",
         ":watch-observation",
         ":ui-trajectory-lib",
         ":segment-receipt-lib",
@@ -1504,6 +1507,28 @@ haskell_binary(
 )
 
 haskell_library(
+    name = "preservation-observation",
+    srcs = ["Emulation/PreservationObservation.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":watch-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_library(
     name = "watch-observation",
     srcs = ["Emulation/WatchObservation.hs"],
     ghcopts = [
@@ -1538,6 +1563,7 @@ haskell_library(
     visibility = ["//transport:__pkg__"],
     deps = [
         ":key-release-observations",
+        ":preservation-observation",
         ":watch-observation",
         "//broker:core",
         "//host:aeson",

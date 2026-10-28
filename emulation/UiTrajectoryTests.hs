@@ -6,10 +6,12 @@ import Control.Monad (unless)
 import qualified Data.ByteString.Char8 as C
 import Data.Aeson (Value (..), object, (.=))
 import Data.List (isInfixOf, isSuffixOf, sort)
+import Emulation.PreservationObservation
 import Emulation.Symbols
 import Emulation.UiTrajectory
 import Emulation.WatchObservation
 import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming)
+import Numeric (showHex)
 import System.Directory (listDirectory)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
@@ -173,12 +175,30 @@ main = do
         fmap null (mismatchesOf ("[\"menu\",67,56,0],[\"menu\",1,5,2]", "") ("[\"menu\",1,5,2]", "")) == Just False
     , expect "a variant that changes a capture is a mismatch" $
         fmap null (mismatchesOf ("[\"menu\",1,5,2]", "") ("[\"menu\",1,5,2]", ",\"capture\":\"x\"")) == Just False
-    , expect "a trajectory without a watch stays compatible" $
-        fmap trajectoryProtectedWrites (either (const Nothing) Just (decodeTrajectories (C.pack "{\"schema\":1,\"before_unload\":[],\"after_unload\":[]}"))) == Just []
+    , expect "a trajectory without protection declares none" $
+        protectionOf (C.pack "{\"schema\":1,\"before_unload\":[],\"after_unload\":[]}") == Just Unprotected
     , expect "a clean protected watch decodes its typed range" $
-        fmap (\t -> (trajectoryExpect t, trajectoryProtectedWrites t))
+        fmap (\t -> (trajectoryExpect t, trajectoryProtection t))
           (either (const Nothing) Just (decodeTrajectories (C.pack "{\"schema\":1,\"protected_writes\":[[\"0096cc64\",\"0096ce26\"]],\"before_unload\":[],\"after_unload\":[]}")))
-          == Just (ExpectClean, [either (error "range") id (watchRange (watchAddress 0x0096cc64) (watchAddress 0x0096ce26))])
+          == Just (ExpectClean, WatchProtection [either (error "range") id (watchRange (watchAddress 0x0096cc64) (watchAddress 0x0096ce26))])
+    , expect "a preservation declaration decodes to its typed ranges" $
+        fmap (\t -> (trajectoryExpect t, trajectoryProtection t))
+          (either (const Nothing) Just (decodeTrajectories
+            (preservationFile "{\"kind\":\"ram-byte-preservation\",\"ranges\":[[\"00001000\",\"00001010\"]]}")))
+          == Just (ExpectClean, PreservationProtection preservedRange)
+    , expect "a refusal expectation decodes with a preservation declaration" $
+        fmap trajectoryExpect (either (const Nothing) Just (decodeTrajectories
+          (C.pack "{\"schema\":1,\"protected_memory\":{\"kind\":\"ram-byte-preservation\",\"ranges\":[[\"00001000\",\"00001010\"]]},\"expect\":\"refused\",\"before_unload\":[],\"after_unload\":[]}")))
+          == Just ExpectRefused
+    , expect "conflicting watch and preservation declarations are refused" $
+        refused (C.pack "{\"schema\":1,\"protected_writes\":[[\"00001000\",\"00001010\"]],\"protected_memory\":{\"kind\":\"ram-byte-preservation\",\"ranges\":[[\"00001000\",\"00001010\"]]},\"before_unload\":[],\"after_unload\":[]}")
+    , expect "an unknown protection kind is refused" $
+        refused (preservationFile "{\"kind\":\"ram-byte-watch\",\"ranges\":[[\"00001000\",\"00001010\"]]}")
+    , expect "a preservation declaration without ranges is refused" $
+        refused (preservationFile "{\"kind\":\"ram-byte-preservation\",\"ranges\":[]}")
+    , expect "a preservation declaration above eight ranges is refused" $
+        refused (preservationFile ("{\"kind\":\"ram-byte-preservation\",\"ranges\":["
+          ++ concat (replicate 9 "[\"00001000\",\"00001010\"],") ++ "[\"00001000\",\"00001010\"]]}"))
     , expect "a refused watch without ranges is refused" $
         refused (C.pack "{\"schema\":1,\"expect\":\"refused\",\"before_unload\":[],\"after_unload\":[]}")
     , expect "a reversed watch range is refused" $
@@ -237,8 +257,136 @@ main = do
           , "records" .= [object [ "source" .= ("cpu-read" :: String), "address" .= (4096 :: Int), "physical" .= (4096 :: Int)
             , "size" .= (2 :: Int), "value" .= (0x0102 :: Int), "before" .= ([2,1] :: [Int]), "byte_order" .= ("big" :: String)
             , "core" .= (0 :: Int), "pc" .= (4660 :: Int), "instructions" .= (10 :: Int), "tick" .= (10 :: Int) ]]] ))
+    , expect "identity-only preservation writes qualify a candidate" $
+        preservationJudgement CandidateRun (preservationState 7 0 0 0 Null) == Right CandidateQualified
+    , expect "identity-only preservation writes cannot qualify a control" $
+        isLeft (preservationJudgement FaultControlRun (preservationState 7 0 0 0 Null))
+    , expect "a changed protected byte is refused by a candidate and qualifies the control" $
+        let state = preservationState 0 1 0 0 (cpuChange 4096 4096 [0,0,0,0] [1,0,0,0])
+         in isLeft (preservationJudgement CandidateRun state)
+            && preservationJudgement FaultControlRun state == Right ControlRefusedProtectedWrite
+    , expect "a changed protected byte at the range end qualifies the control" $
+        preservationJudgement FaultControlRun (preservationState 0 1 0 0 (cpuChange 4110 4110 [0,0] [1,0])) == Right ControlRefusedProtectedWrite
+    , expect "a cpu-change whose before and after bytes agree is refused" $
+        isLeft (parsePreservationObservation (preservationState 0 1 0 0 (cpuChange 4096 4096 [1,0] [1,0])))
+    , expect "a cpu-change whose hex length differs from its size is refused" $
+        isLeft (parsePreservationObservation (preservationState 0 1 0 0 (object
+          [ "kind" .= ("cpu-change" :: String), "core" .= (0 :: Int), "pc" .= (512 :: Int), "instructions" .= (10 :: Int)
+          , "address" .= (4096 :: Int), "physical" .= (4096 :: Int), "size" .= (2 :: Int)
+          , "before" .= ("00" :: String), "after" .= ("01" :: String) ])))
+    , expect "a cpu-change outside the protected range is refused" $
+        isLeft (preservationGate (preservationState 0 1 0 0 (cpuChange 4096 8192 [0] [1])))
+    , expect "a cpu-change crossing the protected range end is refused" $
+        isLeft (preservationGate (preservationState 0 1 0 0 (cpuChange 4110 4110 [0,0,0,0] [1,0,0,0])))
+    , expect "a host write overlapping the range is refused and is not a control cpu-write" $
+        let state = preservationState 0 0 1 0 (unverifiableWrite "host-write" 4110 4110 4)
+         in isLeft (preservationJudgement CandidateRun state) && isLeft (preservationJudgement FaultControlRun state)
+    , expect "an unverifiable write outside the protected range is refused" $
+        isLeft (preservationGate (preservationState 0 0 1 0 (unverifiableWrite "host-write" 8192 8192 4)))
+    , expect "an unverifiable model-bus write without its counter is inconsistent" $
+        isLeft (preservationGate (preservationState 0 0 0 0 (unverifiableWrite "model-bus-write" 4100 4100 2)))
+    , expect "a clean state carrying a changed-cpu counter is inconsistent" $
+        isLeft (preservationGate (preservationState 0 1 0 0 Null))
+    , expect "a cpu-change without a changed-cpu counter is inconsistent" $
+        isLeft (preservationGate (preservationState 0 0 0 0 (cpuChange 4096 4096 [0] [1])))
+    , expect "an integrity fault is refused" $
+        isLeft (preservationGate (preservationState 3 1 0 0 (integrityFault "counter-overflow")))
+    , expect "an unknown preservation violation is refused" $
+        isLeft (parsePreservationObservation (preservationState 0 1 0 0 (object ["kind" .= ("cpu-write" :: String)])))
+    , expect "an unknown preservation reason is refused" $
+        isLeft (preservationGate (preservationState 0 1 0 0 (integrityFault "vendor-status")))
+    , expect "an unknown preservation field is refused" $
+        isLeft (parsePreservationObservation (object ["enabled" .= True, "ranges" .= [[4096, 4112 :: Int]]
+          , "identity_cpu_writes" .= (0 :: Int), "changed_cpu_writes" .= (0 :: Int), "host_writes" .= (0 :: Int)
+          , "model_bus_writes" .= (0 :: Int), "violation" .= Null, "dropped" .= True]))
+    , expect "a preservation counter beyond u64 is refused" $
+        isLeft (parsePreservationObservation (object ["enabled" .= True, "ranges" .= [[4096, 4112 :: Int]]
+          , "identity_cpu_writes" .= (0 :: Integer), "changed_cpu_writes" .= (18446744073709551616 :: Integer)
+          , "host_writes" .= (0 :: Integer), "model_bus_writes" .= (0 :: Integer), "violation" .= Null]))
+    , expect "a disabled preservation state is parsed and refused" $
+        let disabled = object ["enabled" .= False, "ranges" .= ([] :: [[Int]])
+              , "identity_cpu_writes" .= (0 :: Int), "changed_cpu_writes" .= (0 :: Int), "host_writes" .= (0 :: Int)
+              , "model_bus_writes" .= (0 :: Int), "violation" .= Null]
+            parsed = either (const False) (const True) (parsePreservationObservation disabled)
+         in parsed && isLeft (preservationGate disabled)
+    , expect "a preservation acknowledgement with different ranges is refused" $
+        let ack = parsePreservationAck (object ["armed" .= True, "ranges" .= [[4096, 4113 :: Int]]])
+            result = do
+              accepted <- ack
+              observation <- parsePreservationObservation (preservationState 0 0 0 0 Null)
+              checkPreservation preservedRange accepted observation
+         in isLeft result
+    , expect "an unarmed preservation acknowledgement is refused" $
+        let ack = parsePreservationAck (object ["armed" .= False, "ranges" .= [[4096, 4112 :: Int]]])
+            result = do
+              accepted <- ack
+              observation <- parsePreservationObservation (preservationState 0 0 0 0 Null)
+              checkPreservation preservedRange accepted observation
+         in isLeft result
     ]
   unless (and (checkedIn ++ checkedInVariants ++ results)) exitFailure
+
+preservedRange :: PreservationRanges
+preservedRange = either (error "preservation range") id
+  (preservationRanges [either (error "watch range") id (watchRange (watchAddress 0x1000) (watchAddress 0x1010))])
+
+preservationFile :: String -> C.ByteString
+preservationFile body = C.pack ("{\"schema\":1,\"protected_memory\":" ++ body ++ ",\"before_unload\":[],\"after_unload\":[]}")
+
+protectionOf :: C.ByteString -> Maybe TrajectoryProtection
+protectionOf bytes = either (const Nothing) (Just . trajectoryProtection) (decodeTrajectories bytes)
+
+preservationAcknowledged :: Either String PreservationAck
+preservationAcknowledged = parsePreservationAck (object ["armed" .= True, "ranges" .= [[4096, 4112 :: Int]]])
+
+preservationState :: Integer -> Integer -> Integer -> Integer -> Value -> Value
+preservationState identityCpu changedCpu hostWrites modelBusWrites violation = object
+  [ "enabled" .= True
+  , "ranges" .= [[4096, 4112 :: Int]]
+  , "identity_cpu_writes" .= identityCpu
+  , "changed_cpu_writes" .= changedCpu
+  , "host_writes" .= hostWrites
+  , "model_bus_writes" .= modelBusWrites
+  , "violation" .= violation ]
+
+preservationGate :: Value -> Either String PreservationGate
+preservationGate value = do
+  ack <- preservationAcknowledged
+  observation <- parsePreservationObservation value
+  checkPreservation preservedRange ack observation
+
+preservationJudgement :: RunPurpose -> Value -> Either String WatchJudgement
+preservationJudgement purpose value = judgePreservation purpose (preservationGate value)
+
+cpuChange :: Int -> Int -> [Int] -> [Int] -> Value
+cpuChange address physical before after = object
+  [ "kind" .= ("cpu-change" :: String)
+  , "core" .= (0 :: Int)
+  , "pc" .= (0x200 :: Int)
+  , "instructions" .= (10 :: Int)
+  , "address" .= address
+  , "physical" .= physical
+  , "size" .= length before
+  , "before" .= hexText before
+  , "after" .= hexText after ]
+
+unverifiableWrite :: String -> Int -> Int -> Int -> Value
+unverifiableWrite source address physical size = object
+  [ "kind" .= ("unverifiable-write" :: String)
+  , "source" .= source
+  , "address" .= address
+  , "physical" .= physical
+  , "size" .= size ]
+
+integrityFault :: String -> Value
+integrityFault reason = object ["kind" .= ("integrity-fault" :: String), "reason" .= reason]
+
+hexText :: [Int] -> String
+hexText = concatMap byte
+  where
+    byte value =
+      let digits = showHex value ""
+       in if length digits == 1 then '0' : digits else digits
 
 limit4 :: WatchLimit
 limit4 = either (error "limit") id (watchLimit 4)
