@@ -2,12 +2,14 @@
 module Main (main) where
 
 import Control.Exception (bracket)
-import Control.Monad (unless)
+import Control.Monad (forM_, unless, when)
 import Data.Aeson (FromJSON (..), Value (..), eitherDecode, encode, object, toJSON, withObject, withText, (.:), (.=))
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Text as T
+import Emulation.CandidateBaseline (Baseline (..), Field (..), FieldName (..), Segment (..), decodeBaseline)
+import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import System.Directory (createDirectory, createDirectoryIfMissing, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
+import System.Directory (createDirectory, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
 import System.Environment (getArgs, getEnvironment)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath ((</>))
@@ -24,7 +26,7 @@ routeNames route = case route of
 
 data RecordedExit = MissingExit | NullExit | RecordedExit ExitCode deriving (Show)
 data Qualification = QualifiedOutcome | MissingOutcome | ControlReceipt | UnknownOutcome | RefusedOutcome
-  | SegmentedQualified | SegmentedWithControl | SegmentedFailed | SegmentedMalformed | SegmentedDuplicateName
+  | SegmentedQualified | SegmentedMenuDiffers | SegmentedObservationDiffers | SegmentedWithControl | SegmentedFailed | SegmentedMalformed | SegmentedDuplicateName
   | SegmentedPathName | CounterpartControl | CounterpartFailedCommand
   | PassedWithMessage | FailedWithoutMessage | MissingMessage | NegativeSeconds | OverflowSeconds
   | ExtraKey | UnknownResult | SegmentedMissingChild | EmptySegments | FlatPlusSegmented deriving (Show)
@@ -67,7 +69,7 @@ withWorkspace = bracket setup removeDirectoryRecursive
 jsonFile :: FilePath -> Value -> IO ()
 jsonFile path = BL.writeFile path . encode
 
-qualificationWord :: Qualification -> Maybe String
+qualificationWord :: Qualification -> Maybe T.Text
 qualificationWord qualification = case qualification of
   QualifiedOutcome -> Just "candidate-qualified"
   RefusedOutcome -> Just "control-refused"
@@ -88,22 +90,34 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
         createDirectoryIfMissing True directory
         case route of
           RamPushVolatile -> do
-            let value = case fixtureParity of EqualReceipts -> 1 :: Int; DifferentReceipts -> 2
+            let parityValue = case fixtureParity of EqualReceipts -> 1 :: Int; DifferentReceipts -> 2
+                value = parityValue
+                menuValue = case (fixtureQualification, fixtureParity) of
+                  (SegmentedMenuDiffers, DifferentReceipts) -> 2 :: Int
+                  _ -> 1
+                observationValue = case (fixtureQualification, fixtureParity) of
+                  (SegmentedObservationDiffers, DifferentReceipts) -> 2 :: Int
+                  _ -> 1
                 writeOutcome path word = jsonFile path (object
-                  [ "menu_receipts" .= [object ["menu_id" .= (1 :: Int)]]
+                  [ "menu_receipts" .= [object ["menu_id" .= menuValue]]
                   , "outcome" .= String word])
                 segmentRecord name result message = object
                   [ "segment" .= String name
                   , "seconds" .= (0 :: Double)
                   , "result" .= String result
                   , "message" .= message ]
+                segments :: [String] -> IO ()
                 segments names = do
                   jsonFile (directory </> "e2e-segments.json")
-                    (toJSON (map (\name -> segmentRecord name "passed" Null) names))
+                    (toJSON (map (\name -> segmentRecord (T.pack name) "passed" Null) names))
                   mapM_ (\name -> do
                     let segment = directory </> ("segment-" ++ name)
                     createDirectoryIfMissing True segment
-                    writeOutcome (segment </> "e2e-result.json") "candidate-qualified") names
+                    jsonFile (segment </> "e2e-result.json")
+                      (object [ "menu_receipts" .= [object ["menu_id" .= menuValue]]
+                              , "outcome" .= String "candidate-qualified"])
+                    jsonFile (segment </> "e2e-observation-0.json")
+                      (object ["schema" .= (1 :: Int), "reads" .= [object ["value" .= observationValue]]])) names
             jsonFile (directory </> "e2e-observation-0.json")
               (object ["schema" .= (1 :: Int), "reads" .= [object ["value" .= value]]])
             case fixtureQualification of
@@ -111,6 +125,8 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
               ControlReceipt -> jsonFile (directory </> "e2e-control.json")
                 (object ["outcome" .= String "control-refused"])
               SegmentedQualified -> segments ["service-field-list"]
+              SegmentedMenuDiffers -> segments ["service-field-list"]
+              SegmentedObservationDiffers -> segments ["service-field-list"]
               SegmentedWithControl -> do
                 segments ["service-field-list", "service-save-current"]
                 jsonFile (directory </> "segment-service-save-current/e2e-control.json")
@@ -152,11 +168,6 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
               FlatPlusSegmented -> do
                 segments ["service-field-list"]
                 writeOutcome (directory </> "e2e-result.json") "candidate-qualified"
-              CounterpartControl
-                | side == CounterpartSide -> jsonFile (directory </> "e2e-control.json")
-                    (object ["outcome" .= String "control-refused"])
-                | otherwise -> writeOutcome (directory </> "e2e-result.json") "candidate-qualified"
-              CounterpartFailedCommand -> writeOutcome (directory </> "e2e-result.json") "candidate-qualified"
               _ -> case qualificationWord fixtureQualification of
                 Just word -> writeOutcome (directory </> "e2e-result.json") word
                 Nothing -> pure ()
@@ -175,7 +186,7 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
         CounterpartControl -> if side == CounterpartSide then ControlReceipt else QualifiedOutcome
         CounterpartFailedCommand -> QualifiedOutcome
         _ -> if side == CounterpartSide
-          then case qualification of SegmentedQualified -> SegmentedQualified; _ -> QualifiedOutcome
+          then case qualification of SegmentedQualified -> SegmentedQualified; SegmentedMenuDiffers -> SegmentedQualified; SegmentedObservationDiffers -> SegmentedQualified; _ -> QualifiedOutcome
           else qualification
   seed (receipt counterpart) EqualReceipts (effective CounterpartSide)
   seed (receipt candidate) parity (effective CandidateSide)
@@ -271,6 +282,94 @@ seedRecordReceipt directory qualification = do
     _ -> jsonFile (directory </> "e2e-result.json")
       (object ["menu_receipts" .= [object ["menu_id" .= (1 :: Int)]], "outcome" .= String "candidate-qualified"])
 
+seedRecordSegments :: FilePath -> Int -> Int -> Qualification -> IO ()
+seedRecordSegments directory menuValue observationValue qualification = do
+  stale <- doesDirectoryExist directory
+  when stale (removeDirectoryRecursive directory)
+  createDirectoryIfMissing True directory
+  let names = ["service-field-list"]
+      outcome = case qualification of
+        UnknownOutcome -> "mystery"
+        _ -> "candidate-qualified"
+  jsonFile (directory </> "e2e-segments.json")
+    (toJSON (map (\name -> object [ "segment" .= String (T.pack name), "seconds" .= (0 :: Double)
+                                   , "result" .= String "passed", "message" .= Null ]) names))
+  forM_ names $ \name -> do
+    let segment = directory </> ("segment-" ++ name)
+    createDirectoryIfMissing True segment
+    jsonFile (segment </> "e2e-result.json")
+      (object [ "menu_receipts" .= [object ["menu_id" .= menuValue]], "outcome" .= String outcome ])
+    jsonFile (segment </> "e2e-observation-0.json")
+      (object ["schema" .= (1 :: Int), "reads" .= [object ["value" .= observationValue]]])
+    case qualification of
+      ControlReceipt -> jsonFile (segment </> "e2e-control.json") (object ["outcome" .= String "control-refused"])
+      _ -> pure ()
+
+segmentedBaselineChecks :: FilePath -> IO ()
+segmentedBaselineChecks tool = withWorkspace $ \root -> do
+  let earlier = root </> "private-data/earlier"
+      receipt = earlier </> "receipts/ram-push-volatile"
+      baseline = root </> "private-data/baselines/ram-push-volatile.json"
+      output name = root </> ("private-data/" ++ name)
+      recordedField file pointer expected recordedValue = any (\(Field (FieldName actualName actualPointer) actualValue) ->
+        actualName == file && actualPointer == pointer && actualValue == expected) (baselineFields recordedValue)
+  inherited <- getEnvironment
+  let environment = Just (("BUILD_WORKSPACE_DIRECTORY", root) : filter ((/= "BUILD_WORKSPACE_DIRECTORY") . fst) inherited)
+      report :: Int -> IO ()
+      report exitCode = jsonFile (earlier </> "report.json") (object ["routes" .= [object
+        ["route" .= String "ram-push-volatile", "seconds" .= (0 :: Double), "log" .= (earlier </> "synthetic.log")
+        , "exit_code" .= exitCode]]])
+      run :: String -> Bool -> Int -> IO (ExitCode, String, String)
+      run name record exitCode = do
+        report exitCode
+        readCreateProcessWithExitCode ((proc tool (["--routes", "ram-push-volatile", "--from-run", earlier,
+          "--baselines", root </> "private-data/baselines", "--output", output name]
+          ++ if record then ["--record-baseline"] else []))
+          { cwd = Just root, env = environment }) ""
+      readBaseline = BL.readFile baseline
+  seedRecordSegments receipt 1 1 QualifiedOutcome
+  (recordedExit, _, _) <- run "record" True 0
+  first <- readBaseline
+  firstStrict <- B.readFile baseline
+  let decoded = decodeBaseline firstStrict
+      childReceipt = "segment-service-field-list/e2e-result.json"
+      childObservation = "segment-service-field-list/e2e-observation-0.json"
+  check "a segmented receipt records the declared child menu receipt"
+    (recordedExit == ExitSuccess && case decoded of
+      Right value -> recordedField childReceipt (Just [Key "menu_receipts", Index 0, Key "menu_id"]) (Number 1) value
+      Left _ -> False)
+  check "a segmented receipt records the declared child observation and manifest"
+    (case decoded of
+      Right value -> recordedField childObservation (Just [Key "reads", Index 0, Key "value"]) (Number 1) value
+        && recordedField "e2e-segments.json" (Just [Index 0, Key "segment"]) (String "service-field-list") value
+      Left _ -> False)
+  seedRecordSegments receipt 2 1 QualifiedOutcome
+  (menuExit, _, _) <- run "menu-mutated" False 0
+  menuReport <- either (const Nothing) Just <$> (eitherDecode <$> BL.readFile (output "menu-mutated" </> "report.json"))
+  check "a changed child menu receipt fails against its recorded baseline"
+    (menuExit == ExitFailure 1 && reportResult menuReport == Just (T.pack "fail"))
+  seedRecordSegments receipt 1 2 QualifiedOutcome
+  (observationExit, _, _) <- run "observation-mutated" False 0
+  observationReport <- either (const Nothing) Just <$> (eitherDecode <$> BL.readFile (output "observation-mutated" </> "report.json"))
+  check "a changed child observation fails against its recorded baseline"
+    (observationExit == ExitFailure 1 && reportResult observationReport == Just (T.pack "fail"))
+  second <- readBaseline
+  seedRecordSegments receipt 1 1 ControlReceipt
+  (controlExit, _, _) <- run "control" True 0
+  third <- readBaseline
+  check "a segmented control receipt leaves the baseline unchanged"
+    (controlExit == ExitFailure 1 && first == third)
+  seedRecordSegments receipt 1 1 UnknownOutcome
+  (unknownExit, _, _) <- run "unknown" True 0
+  fourth <- readBaseline
+  check "a segmented unknown outcome leaves the baseline unchanged"
+    (unknownExit == ExitFailure 1 && first == fourth)
+  seedRecordSegments receipt 1 1 QualifiedOutcome
+  (failedExit, _, _) <- run "failed-command" True 1
+  fifth <- readBaseline
+  check "a failed command leaves the segmented baseline unchanged"
+    (failedExit == ExitFailure 1 && first == fifth && second == fifth)
+
 main :: IO ()
 main = do
   [toolArgument] <- getArgs
@@ -290,6 +389,8 @@ main = do
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts UnknownOutcome Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts RefusedOutcome Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedQualified Passed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun DifferentReceipts SegmentedMenuDiffers Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun DifferentReceipts SegmentedObservationDiffers Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts CounterpartControl Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts CounterpartFailedCommand Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedFailed Failed
@@ -324,6 +425,7 @@ main = do
   nullExit <- recordBaseline tool NullExit QualifiedOutcome
   check ("a null command exit does not record a baseline: " ++ show nullExit)
     (case nullExit of (ExitFailure _, Nothing) -> True; _ -> False)
+  segmentedBaselineChecks tool
   (replaceExit, before, after, secondReport) <- recordReplacement tool
   check ("a failed record reports failure and does not replace an existing baseline: " ++ show replaceExit)
     (replaceExit /= ExitSuccess && before == after && reportResult secondReport == Just "fail")

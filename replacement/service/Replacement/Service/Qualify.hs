@@ -600,7 +600,7 @@ runServiceCase runner path = do
           digest <- sha256Hex . sha256 <$> B.readFile executable
           let limits = get caseValue "limits"
               wall = num (get limits "wall_ms")
-              timeout = fromIntegral (wall * 1000000 + 2000000) :: Int
+              timeout = fromIntegral (wall * 1000 + 2000000) :: Int
           (timed, exit, out, err) <- runBounded timeout (8 * 1024 * 1024) executable [] wire
           let baseReport =
                 merge

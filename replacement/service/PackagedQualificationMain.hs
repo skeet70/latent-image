@@ -33,9 +33,9 @@ parseArgs = go Nothing Nothing Nothing
       case (receipt, package) of
         (Just r, Just p) -> Right (Options r p report)
         _ -> Left "both --receipt and --package are required"
-    go receipt package report ("--receipt" : value : rest) =
+    go _ package report ("--receipt" : value : rest) =
       go (Just value) package report rest
-    go receipt package report ("--package" : value : rest) =
+    go receipt _ report ("--package" : value : rest) =
       go receipt (Just value) report rest
     go receipt package _ ("--report" : value : rest) =
       go receipt package (Just value) rest
@@ -60,7 +60,7 @@ run options = do
     Right (Right report) -> do
       case optionReport options of
         Nothing -> pure ()
-        Just path -> BL.writeFile path (encodeCanonical (packagedReportValue report) <> "\n")
+        Just path -> BL.writeFile path (BL.fromStrict (encodeCanonical (packagedReportValue report)) <> "\n")
       putStrLn
         ( "service packaged qualification "
             ++ packagedStatusLabel (packagedStatus report)

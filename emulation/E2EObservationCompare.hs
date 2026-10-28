@@ -14,7 +14,10 @@ import qualified Data.Aeson.KeyMap as KM
 import Data.List (isPrefixOf, isSuffixOf, sort)
 import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
+import Control.Exception (IOException, try)
+import qualified Data.ByteString as B
 import qualified Data.Vector as V
+import Emulation.SegmentReceipt (SegmentName, decodeDeclaredSegments, segmentNameText)
 import Emulation.ObservationCompare (differences, e2eIgnored, normalize, toggleIgnored)
 import System.Directory (doesFileExist, listDirectory)
 import System.Environment (getArgs, lookupEnv)
@@ -30,13 +33,54 @@ member _ _ = Null
 
 compareE2E :: FilePath -> FilePath -> IO (Int, [String])
 compareE2E old new = do
+  beforeSplit <- doesFileExist (old </> "e2e-segments.json")
+  afterSplit <- doesFileExist (new </> "e2e-segments.json")
+  if beforeSplit || afterSplit then compareSegmented old new else compareFlat old new
+
+segmentNamesOf :: FilePath -> IO (Either String [SegmentName])
+segmentNamesOf directory = do
+  loaded <- try (B.readFile (directory </> "e2e-segments.json")) :: IO (Either IOException B.ByteString)
+  pure $ case loaded of
+    Left problem -> Left ("e2e-segments.json: " ++ show problem)
+    Right bytes -> decodeDeclaredSegments bytes
+
+observationFiles :: FilePath -> FilePath -> IO [String]
+observationFiles before after = do
+  names <- sort . filter (\name -> "e2e-observation-" `isPrefixOf` name && ".json" `isSuffixOf` name) <$> listDirectory before
+  concat <$> forM names (\name -> do
+    present <- doesFileExist (after </> name)
+    if present then differences name <$> load e2eIgnored (before </> name) <*> load e2eIgnored (after </> name) else pure [name ++ ": missing"])
+
+compareFlat :: FilePath -> FilePath -> IO (Int, [String])
+compareFlat old new = do
   names <- sort . filter (\name -> "e2e-observation-" `isPrefixOf` name && ".json" `isSuffixOf` name) <$> listDirectory old
-  observed <- forM names $ \name -> do
-    present <- doesFileExist (new </> name)
-    if present then differences name <$> load e2eIgnored (old </> name) <*> load e2eIgnored (new </> name) else pure [name ++ ": missing"]
+  observed <- observationFiles old new
   let result = load e2eIgnored . (</> "e2e-result.json")
   captured <- differences "e2e-result.menu_receipts" <$> (member "menu_receipts" <$> result old) <*> (member "menu_receipts" <$> result new)
-  pure (length names, concat observed ++ captured)
+  pure (length names, observed ++ captured)
+
+compareSegmented :: FilePath -> FilePath -> IO (Int, [String])
+compareSegmented old new = do
+  before <- segmentNamesOf old
+  after <- segmentNamesOf new
+  case (before, after) of
+    (Left problem, _) -> pure (0, ["e2e-segments: " ++ problem])
+    (_, Left problem) -> pure (0, ["e2e-segments: " ++ problem])
+    (Right names, Right afterNames) -> do
+      let listed = differences "e2e-segments" (Array (V.fromList (map String (map segmentNameText names))))
+            (Array (V.fromList (map String (map segmentNameText afterNames))))
+      compared <- forM names $ \name -> do
+        let label = "segment-" ++ T.unpack (segmentNameText name)
+            beforeDirectory = old </> label
+            afterDirectory = new </> label
+        present <- doesFileExist (afterDirectory </> "e2e-result.json")
+        retained <- doesFileExist (beforeDirectory </> "e2e-result.json")
+        if not present then pure (0, [label ++ "/e2e-result.json: missing from the candidate"])
+        else if not retained then pure (0, [label ++ "/e2e-result.json: missing from the retained receipt"])
+        else do
+          (count, found) <- compareFlat beforeDirectory afterDirectory
+          pure (count, map ((label ++ "/") ++) found)
+      pure (sum (map fst compared), listed ++ concatMap snd compared)
 
 compareToggle :: FilePath -> FilePath -> IO (Int, [String])
 compareToggle old new = do
