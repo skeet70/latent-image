@@ -128,8 +128,8 @@ data WatchRecord
       , cpuByteOrder :: ByteOrder
       , cpuCore :: CoreId
       , cpuPc :: WatchAddress
-      , cpuInstructions :: Word64
-      , cpuTick :: Word64
+      , cpuInstructions :: Instructions
+      , cpuTick :: Tick
       }
   | TransferRecord
       { transferAccess :: TransferAccess
@@ -302,7 +302,7 @@ parseCpuRecord access value = do
         Just current | size < 8 ->
           unless (current < (1 `shiftL` (size * 8) :: Word64)) (Left "cpu-write value exceeds its width")
         _ -> pure ()
-  pure (CpuRecord access (WatchAddress address) (WatchAddress physical) bytes recordValue before order core (WatchAddress pc) (instructionsValue instructions) (tickValue tick))
+  pure (CpuRecord access (WatchAddress address) (WatchAddress physical) bytes recordValue before order core (WatchAddress pc) instructions tick)
   where
     requireBefore before = case before of
       Just bytes -> Right bytes

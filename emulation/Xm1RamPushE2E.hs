@@ -350,6 +350,8 @@ data Plan = Plan
   , planUnload :: Bool
   , planFromInstall :: Bool
   , planTraceSites :: [TraceSite]
+  , planProtectedWrites :: [WatchRange]
+  , planExpect :: TrajectoryExpect
   }
 
 
@@ -367,7 +369,8 @@ segmentPlan trajectories name = do
       chosen = close [name] []
       selected = filter ((`elem` chosen) . segmentPhase)
       after = selected (afterUnload trajectories)
-  pure (Plan name (selected (beforeUnload trajectories)) after (not (null after)) True (trajectoryTraceSites trajectories))
+  pure (Plan name (selected (beforeUnload trajectories)) after (not (null after)) True
+    (trajectoryTraceSites trajectories) (trajectoryProtectedWrites trajectories) (trajectoryExpect trajectories))
 
 -- | A relinker build held in memory.
 data Relinked = Relinked
@@ -461,7 +464,8 @@ runRamPushE2E given python workspace trajectoryFile installedMedia adjustmentNan
         (Nothing, FlashCandidate) -> Just (phaseNames trajectories)
         (Nothing, RamPush) -> Nothing
   case selection of
-    Nothing -> session (Plan "all" (beforeUnload trajectories) (afterUnload trajectories) True False (trajectoryTraceSites trajectories)) receipt
+    Nothing -> session (Plan "all" (beforeUnload trajectories) (afterUnload trajectories) True False
+      (trajectoryTraceSites trajectories) (trajectoryProtectedWrites trajectories) (trajectoryExpect trajectories)) receipt
     Just names -> do
       plans <- mapM (segmentPlan trajectories) names
       when (pushMode settings == FlashCandidate) $ forM_ plans $ \plan ->
@@ -581,15 +585,18 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     cpu0Exit <- symbolAddress (relinkDirectory </> "kernel.syms") "ram_push_cpu0_window_exit"
     cpu1Exit <- symbolAddress (relinkDirectory </> "kernel.syms") "ram_push_cpu1_window_exit"
     mailbox <- symbolAddress (relinkDirectory </> "kernel.syms") "ram_push_mailbox"
-    readSymbols <- mapM (\name -> (,) name <$> symbolAddress (relinkDirectory </> "kernel.syms") name)
-      (nub [name | segment <- planBefore plan ++ planAfter plan
-                 , (_, RuntimeSymbol name _, _) <- segmentReads segment])
-    declaredTraceSites <- resolveTraceSites (\name -> symbolAddress (relinkDirectory </> "kernel.syms") name)
-      (planTraceSites plan)
-    symbolsDigest <- sha256File (relinkDirectory </> "kernel.syms")
-    let readAddress (FixedAddress value) = pure value
-        readAddress (RuntimeSymbol name offset) =
-          maybe (ioError (userError ("unresolved runtime symbol: " ++ name))) (pure . (+ offset)) (lookup name readSymbols)
+    let symbolsPath = relinkDirectory </> "kernel.syms"
+    symbolTable <- parseSymbolTable <$> B.readFile symbolsPath
+    let resolveName name = either (ioError . userError) pure (resolveSymbol symbolTable name)
+        resolveAddress (FixedAddress value) = pure value
+        resolveAddress (RuntimeSymbol name offset) = do
+          base <- resolveName name
+          let address = toInteger base + toInteger offset
+          require (address <= 0xffffffff) ("read address overflows 32 bits: " ++ name)
+          pure (fromIntegral address)
+    declaredTraceSites <- resolveTraceSites resolveName (planTraceSites plan)
+    symbolsDigest <- sha256File symbolsPath
+    let readAddress = resolveAddress
     let readMailbox = mailboxReport <$> emulatorReadMemory emulator mailbox 104
         stop phase message = do
           report <- readMailbox
@@ -637,9 +644,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     state <- readRamPushState statePath
     runner <- newSegmentRunner emulator e2e (\label action -> timed label action) readAddress (\phase message -> stop phase message) plan
     let segments = runSegments runner
-        protected = trajectoryProtectedWrites plan
-        expect = trajectoryExpect plan
-    let ranges = trajectoryProtectedWrites plan
+        protected = planProtectedWrites plan
+        expect = planExpect plan
+    let ranges = planProtectedWrites plan
         limit = either error id (watchLimit 4096)
         cardless = emulationCardMode settings == Cardless
         expectedPresent = not cardless
@@ -866,6 +873,8 @@ runfilesCardlessBridge = do
 runFlashSession :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> Plan -> FilePath -> IO ()
 runFlashSession settings python runtime installedMedia adjustmentNand plan e2e = do
   require (emulationCardMode settings /= Cardless) "--cardless belongs to the RAM push, not --flash-candidate"
+  require (null (planProtectedWrites plan)) "a protected-write watch is unsupported on the flash-candidate path"
+  require (planExpect plan == ExpectClean) "a refused-watch control is unsupported on the flash-candidate path"
   phases <- newIORef []
   let timed :: T.Text -> IO a -> IO a
       timed label action = do
@@ -881,16 +890,26 @@ runFlashSession settings python runtime installedMedia adjustmentNand plan e2e =
     putStrLn ("emulator start: " ++ show (bootStart start) ++ "; flash candidate")
     setFileMode e2e 0o700
     ensurePrivateDirectory e2e
-    flashSymbols <- flashCandidateSymbols (firmwareSource settings)
-    let symbolPath = takeDirectory (firmwareSource settings) </> "kernel" </> "kernel.syms"
-        resolveCandidate name = either (ioError . userError) pure (resolveSymbol flashSymbols name)
-    declaredTraceSites <- resolveTraceSites resolveCandidate (planTraceSites plan)
-    symbolsDigest <- sha256File symbolPath
+    let isRuntime (RuntimeSymbol _ _) = True
+        isRuntime _ = False
+        reads = [start | segment <- planBefore plan ++ planAfter plan, (_, start, _) <- segmentReads segment]
+        needsSymbols = any isRuntime reads || any (isRuntime . traceSiteAddress) (planTraceSites plan)
+    symbols <- if needsSymbols then Just <$> flashCandidateSymbols (firmwareSource settings) else pure Nothing
+    let resolveName name = case symbols of
+          Nothing -> ioError (userError ("runtime symbol requested without a symbol table: " ++ name))
+          Just table -> either (ioError . userError) pure (resolveSymbol table name)
+        resolveAddress (FixedAddress value) = pure value
+        resolveAddress (RuntimeSymbol name offset) = do
+          base <- resolveName name
+          let address = toInteger base + toInteger offset
+          require (address <= 0xffffffff) ("read address overflows 32 bits: " ++ name)
+          pure (fromIntegral address)
+    declaredTraceSites <- resolveTraceSites resolveName (planTraceSites plan)
+    symbolsDigest <- case symbols of
+      Nothing -> pure Nothing
+      Just _ -> Just <$> sha256File (takeDirectory (firmwareSource settings) </> "kernel" </> "kernel.syms")
     emulatorTraceSites emulator ([(menuMessageDrawer, menuMessageSite), (d3HookEntry, d3HookSite)] ++ declaredTraceSites)
-    let readAddress (FixedAddress value) = pure value
-        readAddress (RuntimeSymbol name offset) = do
-          symbols <- flashCandidateSymbols (firmwareSource settings)
-          either (ioError . userError) (pure . (+ offset)) (resolveSymbol symbols name)
+    let readAddress = resolveAddress
         stop phase message = do
           writePrivateBytes (e2e </> "e2e-failure.json") (BL.toStrict (encode (object
             [ "phase" .= String phase, "message" .= message ])) <> "\n")
@@ -904,8 +923,9 @@ runFlashSession settings python runtime installedMedia adjustmentNand plan e2e =
       , "scope" .= String "emulated X-M1 flash candidate UI segments"
       , "plan" .= planName plan
       , "emulator_start" .= startRecord start
-      , "runtime" .= object ["symbols_sha256" .= sha256Hex symbolsDigest]
+      , "runtime" .= object ["symbols_sha256" .= fmap sha256Hex symbolsDigest]
       , "declared_trace_sites" .= traceSiteValues declaredTraceSites
+      , "outcome" .= CandidateQualified
       , "phases" .= (phaseTimes :: [Value])
       , "menu_receipts" .= catMaybes captured
       , "trajectories" .= map (\name -> object ["name" .= name, "result" .= String "matched"])
