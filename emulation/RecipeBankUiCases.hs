@@ -604,7 +604,7 @@ data Spec = Spec
   }
 
 data WorkspaceKind = KernelWorkspace | MediaWorkspace | UiWorkspace | StackWorkspace
-  | ModalWorkspace | EditorWorkspace | LabelWorkspace | NavigationWorkspace | StockReloadWorkspace | ConversionWorkspace | StockProcessingWorkspace | ModelScratchWorkspace
+  | ModalWorkspace | EditorWorkspace | LabelWorkspace | NavigationWorkspace | StockReloadWorkspace | ConversionWorkspace | StockProcessingWorkspace
   deriving (Show)
 
 newtype RegionId = RegionId String deriving (Eq)
@@ -754,7 +754,7 @@ inProfile DrawRootProfile name =
   name `notElem` [RegionId "ui-b", RegionId "draw-state", RegionId "stock-draw-calls"]
 -- ui_dispatch reads UI_CELL_BASE in modal-cells.
 inProfile SelectDrawProfile name =
-  name `notElem` [RegionId "draw-state", RegionId "stock-draw-calls", RegionId "model-scratch"]
+  name `notElem` [RegionId "draw-state", RegionId "stock-draw-calls"]
 inProfile PaneDrawProfile name =
   name `notElem` [RegionId "ui-b", RegionId "tables-ptr", RegionId "tables-edit"]
 
@@ -772,7 +772,7 @@ abiWorkspaces :: Inputs -> Env -> [AbiWorkspace]
 abiWorkspaces in' e =
   [ at UiWorkspace 0x00957e00 0x1200
   , at StackWorkspace 0x00959000 0x1000
-  , area MediaWorkspace "media-state" 0 0x200
+  , area MediaWorkspace "media-state" 0 mediaStateSize
   , area ModalWorkspace "modal-state" 2 4
   , area ModalWorkspace "modal-state" 0x15e 0x160
   , at EditorWorkspace 0x00954384 0xf
@@ -788,7 +788,6 @@ abiWorkspaces in' e =
   , at NavigationWorkspace menuSnapshotCopy 0x2c
   , at NavigationWorkspace 0x00941300 0x2c
   , area KernelWorkspace "kdata" 0 (B.length (inKbin in') - B.length (inKtext in'))
-  , area ModelScratchWorkspace "model-scratch" 0 modelScratchSize
   -- FUN_0061d9ec reloads only the ordinary block; the C record starts at +0x140.
   , area StockReloadWorkspace "mirror" 0x10 0x128
   -- The ordinary property-0x1c6 setter saves its previous byte at 0x0062d744.
@@ -2146,17 +2145,18 @@ cellsImage in' e sp =
     , (cellOffset (eFileB e), cardB)
     ]
 
--- Native-fixture-only model storage. The address is invented for the bounded
--- native case, not an X-M1 address or a RAM-push reservation.
 modelScratchBase :: Word32
-modelScratchBase = 0x7f000000
+modelScratchBase = 0x00910340
 
 modelScratchSize :: Int
 modelScratchSize = 0x1000
 
+mediaStateSize :: Int
+mediaStateSize = 0x200 + modelScratchSize
+
 modelScratchImage :: Inputs -> Spec -> B.ByteString
 modelScratchImage in' sp
-  | B.length (inMdata in') > modelScratchSize = error "model data exceeds its native fixture region"
+  | B.length (inMdata in') > modelScratchSize = error "model data exceeds the media-state tail"
   | otherwise =
       overlay (B.replicate modelScratchSize 0) $
         (0, inMdata in')
@@ -2183,8 +2183,7 @@ regionList in' e sp = map setPermission (filter (\(n, _, _, _, _) -> inProfile (
       , ("stock-divide", 0x0004d978, 244, 5, inDivide in')
       , ("stock-draw-tail", guestWord stockDrawTail, B.length stockDrawTailImage, 5, stockDrawTailImage)
       , ("span-low", 0x0096cc64, B.length spanLow, 3, spanLow)
-      , ("model-scratch", modelScratchBase, modelScratchSize, 3, modelScratchImage in' sp)
-      , ("media-state", 0x00910140, 0x200, 3, B.replicate 0x200 0)
+      , ("media-state", 0x00910140, mediaStateSize, 3, B.replicate 0x200 0 <> modelScratchImage in' sp)
       , ("tables-ptr", 0x0081b09c, 0x860, 3, inTab in')
       , ("mirror", 0x0089ec00, 0x200, 3, overlay (B.replicate 0x200 0) [(0x140, validPayload), (0x1c8, u32le 1)])
       , ("tables-edit", 0x00774f48, fromIntegral (tablesEditEnd - 0x774f48), 1,
@@ -2831,8 +2830,7 @@ regionBases in' =
   , ("stock-divide", 0x0004d978, 244)
   , ("stock-draw-tail", guestWord stockDrawTail, B.length stockDrawTailImage)
   , ("span-low", 0x0096cc64, 0x980c60 - 0x96cc64)
-  , ("model-scratch", modelScratchBase, modelScratchSize)
-  , ("media-state", 0x00910140, 0x200)
+  , ("media-state", 0x00910140, mediaStateSize)
   , ("tables-ptr", 0x0081b09c, 0x860)
   , ("mirror", 0x0089ec00, 0x200)
   , ("tables-edit", 0x00774f48, fromIntegral (tablesEditEnd - 0x774f48))
