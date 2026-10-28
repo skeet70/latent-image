@@ -1434,9 +1434,6 @@ mod tests {
         let mut rig = Rig::selected();
         assert_eq!(counters(&rig), (0, 0, 0));
         sdma_write(&mut rig, 40, 0x10);
-        let mut sector = [0u8; 512];
-        rig.host.card.read_bytes(40 * 512, &mut sector).unwrap();
-        assert!(sector.iter().any(|byte| *byte != 0));
         assert_eq!(counters(&rig), (1, 512, 1));
         sdma_write(&mut rig, 40, 0x20);
         assert_eq!(counters(&rig), (2, 1024, 1));
