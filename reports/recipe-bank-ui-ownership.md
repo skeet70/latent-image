@@ -32,7 +32,7 @@ The Rust module's host tests pass 6 of 6: page classes including the adjacent fi
 
 A one-crate smoke with `#![no_std]`, this module included by `#[path]` and one `#[panic_handler]` compiles under the #119 toolchain. The archive exports `rb_ui_route_page`, `rb_ui_route_slot`, `rb_ui_route_item` and one mangled `rust_begin_unwind`; the module owns no handler.
 
-The fixed native UI workload passes 55 of 55 cases with the Rust staticlib linked into the bank kernel. The kernel is 32,024 bytes, `__rb_text_end` is `0x00be8c9c` and `__rb_image_end` is `0x00be9c1c`, below `dataBase` `0x00bea200` and the `0x8300` code cap. A control kernel built from `HEAD` also passes 55 of 55; the negative cases `n-select-unset-refused`, `n-save-write-fail`, `n-edit-write-fail`, `n-reset-write-fail`, `n-rename-fail`, `n-refused-dialog` and the media-refresh case remain passing refusals. `//emulation:recipe-bank-ui-plan-tests` and `//emulation:ui-trajectory-tests` pass.
+The fixed native UI workload passes 55 of 55 cases with the UI Rust staticlib linked into the bank kernel. The combined `//replacement/bank:bank` archive, which also contains the retained-service module and the probe change, has not been run through the 55 cases yet. The kernel is 32,024 bytes, `__rb_text_end` is `0x00be8c9c` and `__rb_image_end` is `0x00be9c1c`, below `dataBase` `0x00bea200` and the `0x8300` code cap. A control kernel built from `HEAD` also passes 55 of 55; the negative cases `n-select-unset-refused`, `n-save-write-fail`, `n-edit-write-fail`, `n-reset-write-fail`, `n-rename-fail`, `n-refused-dialog` and the media-refresh case remain passing refusals. `//emulation:recipe-bank-ui-plan-tests` and `//emulation:ui-trajectory-tests` pass.
 
 The flash candidate `package-20261024b` with `f7-1.nand` and `bank-selection-stage4/fast-ui/card-sel.img` ran `emulation/recipe-bank-route-trajectories.json` from the card attach checkpoint. Six of seven segments passed: slot-list entry, seven-row slot navigation, the slot verb page and BACK, return to the slot list, SELECT list entry and eight-row navigation, and cancel. The final handback segment was not reached before the host thermal guard stopped the run.
 
@@ -46,6 +46,18 @@ The #118 fixed workload is the behavior-preserving refactor of these two classif
 
 The Rust repeat is partial because the single bank crate root and the fixed-command wiring are not merged. With a prebuilt Rust staticlib and a manual `KERNEL_DIR`, the staticlib compiled in 0.24 s and the UI build plus 55 cases took 42.33 s to 43.02 s. That is comparable to the baseline range but is not the fixed command: it omits the Bazel archive target, uses a prebuilt kernel directory and has unknown thermal/load state. It is recorded as a changed condition, not as an improvement. No stock hook, call-site ABI or plan layout had to be rediscovered. The one investigation item was the `UXTAB` admission boundary and the page/slot split.
 
+## Reproduce
+
+Build the bank archive with the fixed targets, then run the 55-case UI workload into fresh directories:
+
+```sh
+devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-issue117-recipe-ui" build --jobs=2 //emulation:native-runner //emulation:recipe-bank-ui-cases //host/firmware:build-recipe-bank //replacement/bank:bank
+SERVICE_ARCHIVE="$PWD/bazel-bin/replacement/bank/bank.a" BUILD_DIR="$PWD/private-data/analysis/x-m1-1.50/recipes/issue117-recipe-ui/ui-repeat-build" OUT_DIR="$PWD/private-data/analysis/x-m1-1.50/recipes/issue117-recipe-ui/ui-repeat-cases" JOBS=2 devenv shell -- bash emulation/build-recipe-bank-ui-cases.sh
+devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-issue117-recipe-ui" test --jobs=2 --nocache_test_results --test_output=errors //emulation:recipe-bank-ui-plan-tests //emulation:ui-trajectory-tests
+```
+
+The archive target is an added workflow step relative to the #118 baseline. The flash candidate route needs a DAT rebuilt with the bank archive; `build-recipe-package` does not currently consume it.
+
 ## Remaining
 
-The final link uses one bank staticlib and one panic handler. `replacement/bank/lib.rs` must include this module as `#[path = "../recipe_ui/src/lib.rs"] mod recipe_ui_route;`; a second UI archive or panic handler is not kept. The bank manifest must bind `replacement/recipe_ui/src/lib.rs`, `RB_UI_BUILD_FACTS`, the object digest and the toolchain facts. The reviewed relink, evidence re-pin, packaged Rust-candidate run, viewer URL and human visual assessment remain open. The two emulator attempts used one slot and stopped at the 85 C thermal guard; no limit was bypassed.
+The final link uses one bank staticlib from `//replacement/bank:bank` and one panic handler. `replacement/bank/lib.rs` includes this module as `#[path = "../recipe_ui/src/lib.rs"] mod recipe_ui_route;`; a second UI archive or panic handler is not kept. The bank manifest binds `replacement/recipe_ui/src/lib.rs`, the bank archive digest under `rust_object_replacement_bank`, `RB_RUST_BUILD_FACTS` under `rust_toolchain_replacement_bank`, and the #119 toolchain facts. The reviewed relink, evidence re-pin, packaged Rust-candidate run, viewer URL and human visual assessment remain open. The two emulator attempts used one slot and stopped at the 85 C thermal guard; no limit was bypassed.
