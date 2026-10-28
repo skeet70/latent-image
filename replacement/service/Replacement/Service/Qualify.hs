@@ -202,7 +202,7 @@ serviceContract =
     , contractEffects =
         ServiceEffectPolicy
           { effectAllowedScratch = [N.RegionId "casebuf", N.RegionId "mirror"]
-          , effectTransientRestores = True
+          , effectTransientRestores = False
           , effectImmutableExact = True
           , effectCompleteProvenance = True
           }
