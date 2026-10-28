@@ -30,6 +30,7 @@ import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey
 import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
 import Emulation.UiTrajectory
+import Emulation.WatchObservation
 import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
 import EmulatorUsb
 import FujiAF.RamPush
@@ -51,6 +52,26 @@ data BootMode = CheckpointedBoot | FreshBoot deriving (Eq, Show)
 -- | FlashCandidate boots a DAT whose own loader publishes the bank and runs the segments
 -- without ram-alloc, ram-push or ram-unload.
 data PushMode = RamPush | FlashCandidate deriving (Eq, Show)
+
+watchOutcomeLabel :: WatchOutcome -> String
+watchOutcomeLabel WatchClean = "clean"
+watchOutcomeLabel (WatchControlRefused _) = "control-refused"
+
+watchOutcomeWrites :: WatchOutcome -> Int
+watchOutcomeWrites WatchClean = 0
+watchOutcomeWrites (WatchControlRefused writes) = writes
+
+mediaJson :: MediaObservation -> Value
+mediaJson media = object
+  [ "present" .= mediaPresent media
+  , "write_protected" .= mediaWriteProtected media
+  , "dirty_sectors" .= mediaDirtySectors media
+  , "started" .= mediaStarted media
+  , "completed" .= mediaCompleted media
+  , "irqs" .= mediaIrqs media
+  , "dma_boundaries" .= mediaDmaBoundaries media
+  , "accepted_writes" .= mediaAcceptedWrites media
+  , "accepted_write_bytes" .= mediaAcceptedBytes media ]
 
 -- | A key held across the attach edge of every boot the e2e starts.
 data AttachHold = NoAttachHold | AttachHoldQ deriving (Eq, Show)
@@ -619,8 +640,16 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     let segments = runSegments runner
         protected = trajectoryProtectedWrites plan
         expect = trajectoryExpect plan
-    mediaBefore <- if null protected then pure Null else emulatorMediaState emulator
-    _ <- if null protected then pure Null else emulatorWatchBegin emulator [(fromIntegral lo, fromIntegral hi) | (lo, hi) <- protected] 4096
+    let limit = WatchLimit 4096
+        ranges = [range | (lo, hi) <- protected, Right range <- [watchRange (WatchAddress (fromIntegral lo)) (WatchAddress (fromIntegral hi))]]
+        policy = case expect of
+          ExpectClean -> CleanWatch limit ranges
+          ExpectRefused -> RefusedWatch limit ranges
+        cardless = emulationCardMode settings == Cardless
+        expectedPresent = not cardless
+        scopeText = if cardless then "cardless" else "card"
+    mediaBefore <- if null protected then pure (Left "no media watch") else emulatorMediaState emulator
+    ack <- if null protected then pure Nothing else Just <$> emulatorWatchBegin emulator ranges limit
     capturedBefore <- segments (planBefore plan)
     unloadMailbox <- if planUnload plan
       then do
@@ -630,21 +659,17 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         Just <$> readMailbox
       else pure Nothing
     capturedAfter <- segments (planAfter plan)
-    mediaAfter <- if null protected then pure Null else emulatorMediaState emulator
-    watch <- if null protected then pure Null else emulatorWatchState emulator
-    let records = maybe [] id (parseMaybe (withObject "watch" (.: "records")) watch)
-        violated = case watch of
-          Null -> False
-          Object watchObject -> case K.lookup "violation" watchObject of
-            Just Null -> False
-            Nothing -> False
-            _ -> True
-          _ -> True
-        actualWrites = [record | record@(Object entry) <- records, K.lookup "source" entry == Just (String "cpu-write")]
-        watchOk = null protected || case expect of
-          ExpectClean -> null actualWrites && not violated
-          ExpectRefused -> not (null actualWrites)
-    unless watchOk (stop "protected-writes" ("memory watch expectation " ++ T.unpack (expectLabel expect) ++ " was not observed"))
+    mediaAfter <- if null protected then pure (Left "no media watch") else emulatorMediaState emulator
+    observation <- if null protected then pure (Left "no watch observation") else emulatorWatchObservation emulator limit
+    let checked = do
+          ackValue <- maybe (Left "no watch acknowledgement") Right ack
+          observationValue <- observation
+          outcome <- checkWatch policy ackValue observationValue
+          before <- mediaBefore
+          after <- mediaAfter
+          checkMedia expectedPresent before after
+          pure outcome
+    outcome <- if null protected then pure WatchClean else either (stop "protected-writes") pure checked
     observed <- readIORef (runnerObservations runner)
     phaseTimes <- readIORef phases
     let result = object
@@ -672,24 +697,31 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           , "observations" .= (observed :: [Value])
           , "mailbox" .= object ["install" .= installMailbox, "rollback" .= unloadMailbox,
                                  "address" .= hexAddress mailbox]
+          , "outcome" .= (if expect == ExpectRefused then "control-refused" else "candidate-qualified")
           , "protected_writes" .= object
               [ "ranges" .= [ [lo, hi] | (lo, hi) <- protected ]
               , "expect" .= T.unpack (expectLabel expect)
-              , "records" .= records
-              , "actual_writes" .= length actualWrites
-              , "violation" .= violated
-              , "ok" .= watchOk
-              , "control" .= (expect == ExpectRefused) ]
+              , "outcome" .= watchOutcomeLabel outcome
+              , "actual_writes" .= watchOutcomeWrites outcome
+              , "enforced" .= not (null protected)
+              , "ok" .= case (expect, outcome) of
+                  (ExpectRefused, WatchControlRefused _) -> True
+                  (ExpectClean, WatchClean) -> True
+                  _ -> False ]
           , "media" .= object
-              [ "scope" .= String "cardless"
+              [ "scope" .= String scopeText
               , "card" .= cardRecord (emulationCardMode settings)
-              , "before" .= mediaBefore
-              , "after" .= mediaAfter ]
+              , "before" .= either (const Null) mediaJson mediaBefore
+              , "after" .= either (const Null) mediaJson mediaAfter ]
           , "unload" .= (if planUnload plan
               then Just (String (T.pack (show (length (manifestPublications manifest)) ++ " old words verified; allocation retained until power-off")))
               else Nothing)
           ]
-    writePrivateBytes (e2e </> "e2e-result.json") (BL.toStrict (encode result) <> "\n")
+    case (expect, outcome) of
+      (ExpectRefused, WatchControlRefused _) -> writePrivateBytes (e2e </> "e2e-control.json") (BL.toStrict (encode result) <> "\n")
+      (ExpectRefused, _) -> stop "protected-writes" "control did not observe a protected write"
+      (ExpectClean, WatchClean) -> writePrivateBytes (e2e </> "e2e-result.json") (BL.toStrict (encode result) <> "\n")
+      (ExpectClean, _) -> stop "protected-writes" "clean expectation produced a refused watch"
     pure (manifestPublications manifest)
   when (planUnload plan && carriesClassicChrome selected) $
     timed "cold-restart-read" (coldRestartRead settings python runtime installedMedia adjustmentNand published e2e)

@@ -404,6 +404,8 @@ haskell_test(
     deps = [
         ":emulator-usb",
         ":ui-trajectory-lib",
+        ":watch-observation",
+        "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:directory",
@@ -493,6 +495,7 @@ haskell_binary(
         ":ff80-rehearsal-lib",
         ":viewer-runtime-lib",
         ":emulator-usb",
+        ":watch-observation",
         ":ui-trajectory-lib",
         ":ram-push-unreviewed",
         ":ram-push-procedure",
@@ -1464,6 +1467,26 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "watch-observation",
+    srcs = ["Emulation/WatchObservation.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
 # The emulator bridge's USB provider; //transport:provider-parity drives it.
 haskell_library(
     name = "emulator-usb",
@@ -1478,6 +1501,7 @@ haskell_library(
     visibility = ["//transport:__pkg__"],
     deps = [
         ":key-release-observations",
+        ":watch-observation",
         "//broker:core",
         "//host:aeson",
         "//host:base",

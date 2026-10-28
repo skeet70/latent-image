@@ -219,6 +219,8 @@ struct Counters {
     completed: u64,
     irqs: u64,
     dma_boundaries: u64,
+    accepted_writes: u64,
+    accepted_write_bytes: u64,
 }
 
 /// Halfword register storage indexed by offset / 2, through `+0x106`.
@@ -683,6 +685,8 @@ impl SdHost {
                 Data::Sectors { write: true, .. } => {
                     cx.ram_read(physical, &mut bytes)?;
                     self.card.write_bytes(offset, &bytes)?;
+                    self.counters.accepted_writes += 1;
+                    self.counters.accepted_write_bytes += bytes.len() as u64;
                 }
                 Data::Sectors { write: false, .. } => {
                     self.card.read_bytes(offset, &mut bytes)?;
@@ -739,6 +743,8 @@ impl SdHost {
         let first = u64::from(request.argument + request.cursor / SECTOR as u32);
         let pio = request.pio.as_mut().ok_or("SD PIO sector without a PIO request")?;
         self.card.write_bytes(first * SECTOR as u64, &pio.buffer)?;
+        self.counters.accepted_writes += 1;
+        self.counters.accepted_write_bytes += pio.buffer.len() as u64;
         pio.buffer.clear();
         request.cursor += SECTOR as u32;
         self.regs.set(6, ((request.quantity - request.cursor) / SECTOR as u32) as u16);
@@ -1023,7 +1029,9 @@ impl Device for SdHost {
             "sectors": self.card.sectors(), "dirty_sectors": self.card.dirty_sectors(), "image": self.image,
             "block_length": self.block_length, "bus_width": self.bus_width, "pending": self.request.is_some(),
             "started": self.counters.started, "completed": self.counters.completed, "irqs": self.counters.irqs,
-            "dma_boundaries": self.counters.dma_boundaries, "history": self.history,
+            "dma_boundaries": self.counters.dma_boundaries,
+            "accepted_writes": self.counters.accepted_writes,
+            "accepted_write_bytes": self.counters.accepted_write_bytes, "history": self.history,
         })
     }
 }

@@ -27,7 +27,7 @@ module EmulatorUsb
   , emulatorCapture
   , emulatorReadMemory
   , emulatorWatchBegin
-  , emulatorWatchState
+  , emulatorWatchObservation
   , emulatorMediaState
   ) where
 
@@ -41,6 +41,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import Emulation.WatchObservation
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (shiftL, (.|.))
 import Data.Word (Word32)
@@ -351,15 +352,24 @@ emulatorModeDial emulator position = Object <$> rpc emulator (object
 emulatorCapture :: Emulator -> String -> IO Value
 emulatorCapture emulator label = Object <$> rpc emulator (object ["command" .= String "capture", "label" .= label])
 
-emulatorWatchBegin :: Emulator -> [(Word32, Word32)] -> Int -> IO Value
-emulatorWatchBegin emulator ranges limit = Object <$> rpc emulator (object
-  ["command" .= String "watch-begin", "ranges" .= [ [lo, hi] | (lo, hi) <- ranges ], "limit" .= limit])
+emulatorWatchBegin :: Emulator -> [WatchRange] -> WatchLimit -> IO WatchAck
+emulatorWatchBegin emulator ranges limit = do
+  fields <- rpc emulator (object
+    [ "command" .= String "watch-begin"
+    , "ranges" .= [ [lo, hi] | range <- ranges, let (lo, hi) = watchRangeBounds range ]
+    , "limit" .= watchLimitRecords limit
+    ])
+  either (ioError . userError) pure (parseWatchAck (Object fields))
 
-emulatorWatchState :: Emulator -> IO Value
-emulatorWatchState emulator = Object <$> rpc emulator (object ["command" .= String "watch-state"])
+emulatorWatchObservation :: Emulator -> WatchLimit -> IO (Either String WatchObservation)
+emulatorWatchObservation emulator limit = do
+  fields <- rpc emulator (object ["command" .= String "watch-state"])
+  pure (parseWatchObservation limit (Object fields))
 
-emulatorMediaState :: Emulator -> IO Value
-emulatorMediaState emulator = Object <$> rpc emulator (object ["command" .= String "media-state"])
+emulatorMediaState :: Emulator -> IO (Either String MediaObservation)
+emulatorMediaState emulator = do
+  fields <- rpc emulator (object ["command" .= String "media-state"])
+  pure (parseMediaObservation (Object fields))
 
 emulatorReadMemory :: Emulator -> Word32 -> Int -> IO B.ByteString
 emulatorReadMemory emulator address count = do

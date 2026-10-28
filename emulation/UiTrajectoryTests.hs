@@ -4,9 +4,11 @@ module Main (main) where
 
 import Control.Monad (unless)
 import qualified Data.ByteString.Char8 as C
+import Data.Aeson (Value (..), object, (.=))
 import Data.List (isInfixOf, isSuffixOf, sort)
 import Emulation.Symbols
 import Emulation.UiTrajectory
+import Emulation.WatchObservation
 import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming)
 import System.Directory (listDirectory)
 import System.Exit (exitFailure)
@@ -170,5 +172,46 @@ main = do
         refused (C.pack "{\"schema\":1,\"expect\":\"refused\",\"before_unload\":[],\"after_unload\":[]}")
     , expect "a reversed watch range is refused" $
         refused (C.pack "{\"schema\":1,\"protected_writes\":[[\"0096ce26\",\"0096cc64\"]],\"before_unload\":[],\"after_unload\":[]}")
+    , expect "a watch without records fails closed" $
+        isLeft (parseWatchObservation (WatchLimit 4) (object ["enabled" .= True, "ranges" .= [[4096, 4112 :: Int]], "violation" .= Null]))
+    , expect "a null watch fails closed" $
+        isLeft (parseWatchObservation (WatchLimit 4) Null)
+    , expect "an unknown watch source fails closed" $
+        isLeft (parseWatchObservation (WatchLimit 4) (watchObservation (watchRecord "cpu-write-typo" 4096)))
+    , expect "a record outside the expected range is refused" $
+        isLeft (checkWatch (CleanWatch (WatchLimit 4) [expectedRange]) (WatchAck True [expectedRange])
+          (either (error "parse") id (parseWatchObservation (WatchLimit 4) (watchObservation (watchRecord "cpu-write" 8192)))))
+    , expect "a write that restores the old value is still refused by a clean watch" $
+        isLeft (checkWatch (CleanWatch (WatchLimit 4) [expectedRange]) (WatchAck True [expectedRange])
+          (either (error "parse") id (parseWatchObservation (WatchLimit 4) (watchObservation (watchRecord "cpu-write" 4096)))))
+    , expect "a control watch accepts an actual write" $
+        fmap watchOutcomeWrites (checkWatch (RefusedWatch (WatchLimit 4) [expectedRange]) (WatchAck True [expectedRange])
+          (either (error "parse") id (parseWatchObservation (WatchLimit 4) (watchObservation (watchRecord "cpu-write" 4096))))) == Right 1
+    , expect "an accepted SD write fails the media check" $
+        isLeft (checkMedia False (mediaObservation 0) (mediaObservation 1))
     ]
   unless (and (checkedIn ++ checkedInVariants ++ results)) exitFailure
+
+expectedRange :: WatchRange
+expectedRange = either (error "range") id (watchRange (WatchAddress 4096) (WatchAddress 4112))
+
+watchRecord :: String -> Int -> Value
+watchRecord source address = object
+  [ "source" .= source, "address" .= address, "physical" .= address, "size" .= (4 :: Int)
+  , "value" .= (0 :: Int), "before" .= ([0, 0, 0, 0] :: [Int]), "core" .= (0 :: Int)
+  , "pc" .= (4660 :: Int), "instructions" .= (10 :: Int), "tick" .= (10 :: Int) ]
+
+watchObservation :: Value -> Value
+watchObservation record = object
+  [ "enabled" .= True, "ranges" .= [[4096, 4112 :: Int]], "records" .= [record], "violation" .= Null ]
+
+mediaObservation :: Int -> MediaObservation
+mediaObservation writes = MediaObservation False False 0 0 0 0 0 (fromIntegral writes) (fromIntegral (writes * 512))
+
+watchOutcomeWrites :: WatchOutcome -> Int
+watchOutcomeWrites WatchClean = 0
+watchOutcomeWrites (WatchControlRefused writes) = writes
+
+isLeft :: Either a b -> Bool
+isLeft (Left _) = True
+isLeft (Right _) = False
