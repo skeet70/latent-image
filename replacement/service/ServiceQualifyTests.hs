@@ -32,7 +32,7 @@ run runner = do
   aggregationChecks
   consumerChecks
   parserChecks
-  armEffectMutant runner
+  armEffectChecks runner
   putStrLn "service qualification tests: passed"
 
 aggregationChecks :: IO ()
@@ -293,9 +293,72 @@ hexWord64 value = "0x" ++ replicate (8 - length text) '0' ++ text
     digitsAt 0 = []
     digitsAt number = digits !! fromIntegral (number `mod` 16) : digitsAt (number `div` 16)
 
-armEffectMutant :: FilePath -> IO ()
-armEffectMutant runner = withTemporary "service-effect-mutant" $ \directory -> do
-  let code = B.concat (map word32LE [0xe3001000, 0xe340109a, 0xe5910100, 0xe2802001, 0xe5812100, 0xe5810100, 0xe12fff1e])
+data ArmEffect = StoreThenRestore | NoStores
+  deriving (Eq, Show)
+
+armEffectChecks :: FilePath -> IO ()
+armEffectChecks runner = do
+  (mutantReport, mutantResult) <- armEffectCase runner StoreThenRestore
+  check "the ARM effect mutant returns with the expected ABI" $
+    returnedWithExpectedAbi mutantReport
+  check "the ARM effect mutant leaves casebuf and mirror unchanged" $
+    unchangedCasebufAndMirror mutantReport
+  check "the ARM effect mutant supplies complete provenance" $
+    completeProvenance mutantReport
+  check "the ARM effect mutant records both writes at casebuf+0x100" $
+    length (writesAt mutantReport 0x009a0100) == 2
+  check "the ARM effect mutant fails qualification" $
+    str (get mutantResult "status") == "failed"
+  (controlReport, controlResult) <- armEffectCase runner NoStores
+  check "the ARM effect no-write control returns with the expected ABI" $
+    returnedWithExpectedAbi controlReport
+  check "the ARM effect no-write control leaves casebuf and mirror unchanged" $
+    unchangedCasebufAndMirror controlReport
+  check "the ARM effect no-write control supplies complete provenance" $
+    completeProvenance controlReport
+  check "the ARM effect no-write control writes nothing at casebuf+0x100" $
+    null (writesAt controlReport 0x009a0100)
+  check "the ARM effect no-write control qualifies" $
+    str (get controlResult "status") == "passed"
+
+returnedWithExpectedAbi :: Value -> Bool
+returnedWithExpectedAbi report =
+  let runner = get report "runner"
+      registers = get runner "registers"
+      expected = (N.R0, 0) : serviceSeeds ++ [(N.Sp, serviceStackTop), (N.Pc, 0x00801000)]
+   in str (get runner "status") == "returned"
+        && all (\(register, value) -> str (get registers (fromString (N.registerLabel register))) == N.hexWord32 value) expected
+
+unchangedCasebufAndMirror :: Value -> Bool
+unchangedCasebufAndMirror report = zerosAt report 0x009a0000 serviceCasebufSize && zerosAt report 0x0089ec00 serviceTransientSize
+  where
+    zerosAt runner address size = case memoryAt runner address of
+      Just entry -> str (get entry "bytes") == replicate (2 * size) '0'
+      Nothing -> False
+
+completeProvenance :: Value -> Bool
+completeProvenance report =
+  let runner = get report "runner"
+      entries = list (get runner "memory_provenance")
+   in num (get runner "memory_provenance_total") == fromIntegral (length entries)
+
+writesAt :: Value -> Word32 -> [Value]
+writesAt report address =
+  [ entry
+  | entry <- list (get (get report "runner") "memory_provenance")
+  , str (get entry "kind") == "write"
+  , str (get entry "address") == N.hexWord32 address
+  , get entry "size" == n 4
+  ]
+
+memoryAt :: Value -> Word32 -> Maybe Value
+memoryAt report address = case [entry | entry <- list (get (get report "runner") "memory"), str (get entry "address") == N.hexWord32 address] of
+  [entry] -> Just entry
+  _ -> Nothing
+
+armEffectCase :: FilePath -> ArmEffect -> IO (Value, Value)
+armEffectCase runner effect = withTemporary "service-effect-mutant" $ \directory -> do
+  let code = B.concat (map word32LE (effectCode effect))
       casebuf = B.replicate serviceCasebufSize 0
       mirror = B.replicate serviceTransientSize 0
       exitBytes = word32LE 0xe12fff1e
@@ -319,9 +382,9 @@ armEffectMutant runner = withTemporary "service-effect-mutant" $ \directory -> d
       caseValue =
         obj
           [ ("schema_version", n 1)
-          , ("id", s "service-effect-mutant")
+          , ("id", s (effectId effect))
           , ("origin", s "synthetic")
-          , ("provenance", s "test-only ARM effect mutant: writes casebuf+0x100 and restores it")
+          , ("provenance", s (effectDescription effect))
           , ("cpu", obj [("architecture", s "arm"), ("model", s "cortex-r5f"), ("mode", s "arm"), ("endian", s "little")])
           , ("artifacts", arr [artifact artifactId path bytes | (artifactId, path, bytes) <- artifacts])
           , ("entry", s "0x00800000")
@@ -346,12 +409,22 @@ armEffectMutant runner = withTemporary "service-effect-mutant" $ \directory -> d
                 , ("events", arr [])
                 ]
             )
-          , ("exclusions", arr [s "test-only ARM effect mutant"])
+          , ("exclusions", arr [s (effectDescription effect)])
           ]
   BL.writeFile (directory </> "case.json") (encode caseValue)
-  (_, result) <- runServiceCase runner (directory </> "case.json")
-  check "a real ARM effect mutant is refused" $
-    str (get result "status") == "failed"
+  runServiceCase runner (directory </> "case.json")
+
+effectCode :: ArmEffect -> [Word32]
+effectCode StoreThenRestore = [0xe3001000, 0xe340109a, 0xe5910100, 0xe2802001, 0xe5812100, 0xe5810100, 0xe12fff1e]
+effectCode NoStores = [0xe3001000, 0xe340109a, 0xe5910100, 0xe2802001, 0xe1a00000, 0xe1a00000, 0xe12fff1e]
+
+effectId :: ArmEffect -> String
+effectId StoreThenRestore = "service-effect-mutant"
+effectId NoStores = "service-effect-no-write"
+
+effectDescription :: ArmEffect -> String
+effectDescription StoreThenRestore = "test-only ARM effect mutant: writes casebuf+0x100 and restores it"
+effectDescription NoStores = "test-only ARM effect control: writes nothing"
 
 artifact :: String -> String -> B.ByteString -> Value
 artifact artifactId path bytes =
