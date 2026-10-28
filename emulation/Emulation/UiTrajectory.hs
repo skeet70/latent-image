@@ -18,7 +18,7 @@ module Emulation.UiTrajectory
   ) where
 
 import Control.Monad (unless, when)
-import Data.Aeson (FromJSON (..), eitherDecodeStrict', withArray, withObject, (.!=), (.:?))
+import Data.Aeson (FromJSON (..), eitherDecodeStrict', withArray, withObject, (.!=), (.:?), (.:))
 import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (Object, Parser)
 import qualified Data.ByteString as B

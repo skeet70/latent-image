@@ -315,9 +315,11 @@ segmentedBaselineChecks tool = withWorkspace $ \root -> do
         actualName == file && actualPointer == pointer && actualValue == expected) (baselineFields recordedValue)
   inherited <- getEnvironment
   let environment = Just (("BUILD_WORKSPACE_DIRECTORY", root) : filter ((/= "BUILD_WORKSPACE_DIRECTORY") . fst) inherited)
+      report :: Int -> IO ()
       report exitCode = jsonFile (earlier </> "report.json") (object ["routes" .= [object
         ["route" .= String "ram-push-volatile", "seconds" .= (0 :: Double), "log" .= (earlier </> "synthetic.log")
         , "exit_code" .= exitCode]]])
+      run :: String -> Bool -> Int -> IO (ExitCode, String, String)
       run name record exitCode = do
         report exitCode
         readCreateProcessWithExitCode ((proc tool (["--routes", "ram-push-volatile", "--from-run", earlier,

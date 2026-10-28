@@ -11,7 +11,7 @@ import Control.Monad (forM, unless)
 import Data.Aeson (Value (..), eitherDecodeFileStrict')
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import Data.List (isPrefixOf, isSuffixOf, nub, sort)
+import Data.List (isPrefixOf, isSuffixOf, sort)
 import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import Control.Exception (IOException, try)
@@ -44,6 +44,21 @@ segmentNamesOf directory = do
     Left problem -> Left ("e2e-segments.json: " ++ show problem)
     Right bytes -> decodeDeclaredSegments bytes
 
+observationFiles :: FilePath -> FilePath -> IO [String]
+observationFiles before after = do
+  names <- sort . filter (\name -> "e2e-observation-" `isPrefixOf` name && ".json" `isSuffixOf` name) <$> listDirectory before
+  concat <$> forM names (\name -> do
+    present <- doesFileExist (after </> name)
+    if present then differences name <$> load e2eIgnored (before </> name) <*> load e2eIgnored (after </> name) else pure [name ++ ": missing"])
+
+compareFlat :: FilePath -> FilePath -> IO (Int, [String])
+compareFlat old new = do
+  names <- sort . filter (\name -> "e2e-observation-" `isPrefixOf` name && ".json" `isSuffixOf` name) <$> listDirectory old
+  observed <- observationFiles old new
+  let result = load e2eIgnored . (</> "e2e-result.json")
+  captured <- differences "e2e-result.menu_receipts" <$> (member "menu_receipts" <$> result old) <*> (member "menu_receipts" <$> result new)
+  pure (length names, observed ++ captured)
+
 compareSegmented :: FilePath -> FilePath -> IO (Int, [String])
 compareSegmented old new = do
   before <- segmentNamesOf old
@@ -66,14 +81,6 @@ compareSegmented old new = do
           (count, found) <- compareFlat beforeDirectory afterDirectory
           pure (count, map ((label ++ "/") ++) found)
       pure (sum (map fst compared), listed ++ concatMap snd compared)
-
-compareFlat :: FilePath -> FilePath -> IO (Int, [String])
-compareFlat old new = do
-  names <- sort . filter (\name -> "e2e-observation-" `isPrefixOf` name && ".json" `isSuffixOf` name) <$> listDirectory old
-  observed <- observationFiles old new
-  let result = load e2eIgnored . (</> "e2e-result.json")
-  captured <- differences "e2e-result.menu_receipts" <$> (member "menu_receipts" <$> result old) <*> (member "menu_receipts" <$> result new)
-  pure (length names, observed ++ captured)
 
 compareToggle :: FilePath -> FilePath -> IO (Int, [String])
 compareToggle old new = do
