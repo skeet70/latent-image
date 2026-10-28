@@ -13,7 +13,8 @@ module Replacement.Area3.Qualify
 
 import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar)
 import Control.DeepSeq (force)
-import Control.Exception (IOException, SomeException, catch, evaluate, throwIO, try)
+import Control.Exception (IOException, SomeException, catch, throwIO, try)
+import qualified Control.Exception as Ex
 import Control.Monad (filterM, foldM, forM, (>=>))
 import Data.Aeson (Value (..))
 import Data.Bits (setBit, testBit, xor)
@@ -554,10 +555,10 @@ runAnchors :: Contract -> [LoadedAnchor] -> FilePath -> IO [AnchorResult]
 runAnchors contract anchors runner = forM anchors $ \anchor -> do
   result <- runCaseFile runner (loadedPath anchor)
   case result of
-    Left message -> evaluate (AnchorResult (loadedId anchor) (force (CheckBlocked message)) (force [message]) Nothing)
+    Left message -> Ex.evaluate (AnchorResult (loadedId anchor) (force (CheckBlocked message)) (force [message]) Nothing)
     Right (caseValue, regions, raw) -> do
       existing <- checkResult caseValue regions (rawValue raw)
-      evaluate $ case observeNative (rawExit raw) regions (rawValue raw) of
+      Ex.evaluate $ case observeNative (rawExit raw) regions (rawValue raw) of
         Left message ->
           let rendered = renderObservationError message
            in AnchorResult
@@ -624,9 +625,9 @@ runStockBatch contract workspace runner options subjects =
       path <- writeStockCase workspace (subjectId item) (provenance item) (subjectRecord item) (subjectOracle item)
       result <- runCaseFile runner path
       case result of
-        Left message -> evaluate (CaseOutcome (subjectClass item) (subjectId item) (force (CheckBlocked message)))
+        Left message -> Ex.evaluate (CaseOutcome (subjectClass item) (subjectId item) (force (CheckBlocked message)))
         Right (caseValue, regions, raw) ->
-          evaluate
+          Ex.evaluate
             ( CaseOutcome
                 (subjectClass item)
                 (subjectId item)
@@ -655,9 +656,9 @@ runArmBatch contract workspace profile runner options subjects =
       path <- writeArmCase workspace profile ("arm-" ++ subjectId item) (provenance item) (subjectRecord item) (subjectOracle item)
       result <- runCaseFile runner path
       case result of
-        Left message -> evaluate (CaseOutcome (subjectClass item) (subjectId item) (force (CheckBlocked message)))
+        Left message -> Ex.evaluate (CaseOutcome (subjectClass item) (subjectId item) (force (CheckBlocked message)))
         Right (caseValue, regions, raw) ->
-          evaluate
+          Ex.evaluate
             ( CaseOutcome
                 (subjectClass item)
                 (subjectId item)
