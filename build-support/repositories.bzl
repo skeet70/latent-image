@@ -86,9 +86,6 @@ _FUJIMOD_XM1_CRATE = [
 ]
 
 _NIX_BUILD_CAP = ["--max-jobs", "2", "--cores", "2"]
-
-# The Rust engine builds do not share the two-job cap: one Nix job and one core
-# per invocation, independent of the caller's process tree.
 _RUST_NIX_BUILD_CAP = ["--max-jobs", "1", "--cores", "1"]
 
 def _lab_dependencies_impl(_ctx):

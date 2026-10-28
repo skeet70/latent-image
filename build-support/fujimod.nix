@@ -34,10 +34,17 @@ rustPlatform.buildRustPackage {
   cargoHash = "sha256-5xQkfvock/4MC7VwU2TPUI26ZK1SYL1dKWRF1GqPMm8=";
   cargoBuildFlags = [ "-p" "fujimod-emulator-cli" "--bin" "fujimod-emulator" ];
   cargoTestFlags = [ "-p" "fujimod-emulator-cpu-unicorn" ];
-  # Nix daemon workers are not descendants of the caller's slot service, so the
-  # build bounds its own cargo and test parallelism inside the derivation.
   CARGO_BUILD_JOBS = 1;
   RUST_TEST_THREADS = 1;
+  preBuild = ''
+    cpulimitBin=$(mktemp -d)
+    cat > "$cpulimitBin/cargo" <<EOF
+#!${pkgs.runtimeShell}
+exec ${pkgs.cpulimit}/bin/cpulimit -l 75 -- ${toolchain}/bin/cargo "\$@"
+EOF
+    chmod +x "$cpulimitBin/cargo"
+    export PATH="$cpulimitBin:$PATH"
+  '';
   nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config ];
   # The JIT execution-gate tests run their emitted Wasm under Node.
   nativeCheckInputs = [ pkgs.nodejs ];
