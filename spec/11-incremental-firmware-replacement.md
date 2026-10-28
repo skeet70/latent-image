@@ -122,11 +122,11 @@ Persistent deployment retains the existing flash-boot gate and boot-path prerequ
 
 ### Qualification contract and capability inventory
 
-In #118, inventory existing mechanisms and evidence, create the coarse capability outline, and capture the iteration baseline described below. Use existing records; unknowns are valid inventory entries. Pilot issues own their exact target selection. No new runner, schema or whole-camera recovery is required to complete #118.
+In #118, inventory existing mechanisms and evidence, create the coarse capability outline, and capture the iteration baseline described below. Use existing records; unknowns are valid inventory entries. Pilot issues own their exact target selection. No new runner, schema or whole-camera recovery is required to complete #118. [The replacement inventory and iteration baseline](../reports/replacement-inventory-baseline.md) owns the recorded outline, entry points, fixed workload and comparison protocol.
 
 ### Native build and retained-service boundary
 
-#119 qualifies the Rust build/ABI contract using the current C/Clang path as a reference. Cover pinned cross-toolchain integration, `core`/builtins, panic behavior, emitted ISA, actual calling convention, stack alignment, preserved state, linking and runtime dependencies. Bounded execution and negative controls establish this contract without waiting for installer publication or a stock service scenario.
+#119 qualifies the Rust build/ABI contract using the current C/Clang path as a reference. Cover pinned cross-toolchain integration, `core`/builtins, panic behavior, emitted ISA, actual calling convention, stack alignment, preserved state, linking and runtime dependencies. Bounded execution and negative controls establish this contract without waiting for installer publication or a stock service scenario. The qualified interface and facts are in [`replacement/toolchain`](../replacement/toolchain/README.md) and [`replacement/abi`](../replacement/abi/README.md).
 
 #123 separately qualifies Rust execution through the existing installer and a grounded retained-service call, including publication, task context, effects and lifecycle. Reuse current probes/features where possible. Extend [#71](https://github.com/skeet70/latent-image/issues/71) infrastructure without claiming its AF-specific gate. #120 depends on #119 only; #123 can proceed alongside #120 after #119, reusing contract conventions as they emerge.
 
@@ -150,7 +150,7 @@ Final qualification depends on #120's demonstrated runner and #123's integrated 
 
 #118 establishes a baseline before pilot implementation changes the measured workflow. Recipe-bank and Classic Chrome records supply historical build/verification paths, retained interfaces and examples of firmware-specific investigation. Record effort or timing only where measurements exist; missing history remains unknown.
 
-Choose one bounded existing feature change or behavior-preserving refactor as the comparison workload, with expected behavior and reproduction steps fixed before measurement. Measure source-change-to-emulator-result time, manual steps, firmware-specific edits and interfaces/artifacts that must be understood. Separate build time, execution time and investigation effort, and record cache state, toolchain, machine and engine identity. The baseline run is host/emulator work and does not require repeating historical camera experiments.
+Choose one bounded existing feature change or behavior-preserving refactor as the comparison workload, with expected behavior and reproduction steps fixed before measurement. Measure source-change-to-emulator-result time, manual steps, firmware-specific edits and interfaces/artifacts that must be understood. Separate build time, execution time and investigation effort, and record cache state, toolchain, machine and engine identity. The baseline run is host/emulator work and does not require repeating historical camera experiments. The [recorded baseline](../reports/replacement-inventory-baseline.md#5-baseline-measurement) and [repeat protocol](../reports/replacement-inventory-baseline.md#6-comparison-protocol-for-121-and-the-first-wave-checkpoint) own the selected workload, measured numbers and comparison rules.
 
 Repeat a comparable workload after the first wave. Report confounding differences instead of presenting cold-versus-warm caches or changed hardware as development gains. Assess whether the refactor required rediscovering hooks or changing integration contracts, not merely whether it passed.
 
