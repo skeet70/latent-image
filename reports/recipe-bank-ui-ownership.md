@@ -79,20 +79,16 @@ Run the control with `--trajectories emulation/recipe-bank-route-ram-push-contro
 
 The #118 fixed workload is the behavior-preserving refactor of these two classifiers. Baseline same-invocation samples are 45.29 s total (1.07 s build, 44.22 s case generation and execution) for the unmodified tree, and 42.58 s (0.98 s, 41.59 s) for the C refactor, under warm Nix/Bazel and page caches, two jobs and sibling load.
 
-The earlier phase-two comparison (limited; see guard scope below) used source `290faba`, the exact reviewed C range-helper patch and Rust wrapping-subtraction patch, the fixed `package-20261024b/image` inputs and fresh isolated output bases and disk caches per variant. Unrefactored setup builds were separate and build-only: C `32.988 s`, Rust `33.282 s`, each including the four targets and `//replacement/bank:bank`.
+The guarded repeat used source `290faba`, the exact reviewed C range-helper patch and Rust wrapping-subtraction patch, the fixed `package-20261024b/image` inputs and fresh `RepeatRust`/`RepeatC` output bases and empty disk caches. Rust ran before C. Unrefactored setup was separate and build-only: Rust build log `58.266 s` (`59.900 s` outer), C build log `60.676 s` (`62.644 s` outer), each including the four targets and `//replacement/bank:bank`.
 
-| Earlier limited same-invocation sample | C | Rust |
+| Guarded same-invocation sample | C | Rust |
 | --- | ---: | ---: |
-| Incremental build | 0.276 s | 0.435 s |
-| UI workload, all 55 + 5 controls | 97.963 s | 97.188 s |
-| Plan gate | 0.306 s | 0.328 s |
-| Total | 98.552 s | 97.956 s |
+| Incremental build, `--batch` | 12.669 s | 12.778 s |
+| UI workload, all 55 + 5 controls | 95.413 s | 97.417 s |
+| Plan gate, `--batch` | 14.135 s | 12.824 s |
+| Total | 122.224 s | 123.024 s |
 
-Both variants passed 55/55 with five rejected controls and the plan gate. The timed wrapper and its native/UI child ran in `thermal-guard-slot-1.service` with `MemoryMax=8G` and `MemorySwapMax=0`; `taskset -c 0,1` and `cpulimit --include-children --limit=75` ran inside that payload. The slot cgroup peaked at 4,381,192,192 bytes with Tctl 50.4 to 69.1 C for C and 4,358,836,224 bytes with Tctl 50.6 to 68.9 C for Rust; both had zero swap.
-
-The Bazel clients did not start a new server inside the slot. The separate setup builds started the output-base servers outside the slot (`Starting local Bazel server` in both setup logs at 05:19), and the timed builds at 05:23 reused those servers. No server or action cgroup, affinity or pacing was recorded after the fact, and the servers were gone at inspection. The Rust `//replacement/bank:bank` action (`cacheHit: false`, exit 0, 0.104 s) and the Bazel plan/test execution therefore have unverified guard inheritance; the slot memory peaks exclude that server. The C clang invocations were launched by the in-slot UI script, but no per-process cgroup was recorded. Treat build/action guard conditions as unverified, not assumed.
-
-The C compiler log records 12 clang invocations, including the `menu/recipe_bank_*.c` action units; the Rust execution log records the actual `rustc --crate-name=bank` action. The C bank target was cached; the Rust bank target compiled. No separate Nix bank derivation was found, so no forced Nix bank rebuild was used. Status, registers, ABI validity, effects, mismatches and controls are identical; full projections differ only in `kdata` ABI workspace offsets and provenance totals/retained counts from the C/Rust layout and executed instructions. The totals are close and the runs were not a reverse-order repeat; no speedup is claimed. Historical two-job samples remain confounded. A corrected repeat is prepared but not run: same source and patches, fresh per-variant output bases and empty disk caches, Rust before C, and `--batch` setup, timed build and plan gate inside the verified slot/pacing payload. It will replace these limited measurements with a matched guarded run.
+Both variants passed 55/55 with five rejected controls and the plan gate. Setup, timed build and plan gate all used Bazel `--batch` inside `thermal-guard-slot-1.service`; no persistent server existed between them. The timed payload recorded the slot cgroup and affinity `0,1`. C peaked at 3,251,122,176 bytes with Tctl 53.5 to 63.6 C; Rust peaked at 4,148,891,648 bytes with Tctl 52.2 to 62.2 C; both had zero swap. The C compiler log has 12 clang invocations including the `menu/recipe_bank_*.c` action units. The Rust execution log records the actual `rustc --crate-name=bank` action with `cacheHit: false`, exit 0 and 0.094 s; the C bank target was cached. No separate Nix bank derivation was found, so no forced Nix bank rebuild was used. Status, registers, ABI validity, effects, mismatches and controls are identical; full projections differ only in `kdata` ABI workspace offsets and provenance totals/retained counts (C 12,571,972/207,059, Rust 12,577,308/207,119). The earlier `98.552 s` C and `97.956 s` Rust samples remain limited measurements, not a matched speedup; the repeat totals are close and no speedup is claimed. Historical two-job samples remain confounded.
 
 ## Reproduce
 
