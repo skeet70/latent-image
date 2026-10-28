@@ -1,7 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | The bounded RAM-byte-preservation guard. A guarded interval preserves every protected
--- byte at the instant of every CPU store; an accepted interval may still carry identity
--- CPU writes, which the counters report.
+-- | The bounded RAM-byte-preservation guard. An accepted interval preserves every protected
+-- byte at each CPU store; identity CPU writes remain visible in the counters.
 module Emulation.PreservationObservation
   ( PreservationRanges
   , preservationRanges
@@ -15,8 +14,8 @@ module Emulation.PreservationObservation
   , PreservationBytes (preservationBytesValue)
   , PreservationCore (preservationCoreValue)
   , PreservationViolation
-  , PreservationObservation (..)
-  , PreservationAck (..)
+  , PreservationObservation (preservationCounters, preservationFirstViolation)
+  , PreservationAck
   , PreservationGate
   , parsePreservationAck
   , parsePreservationObservation
@@ -118,8 +117,7 @@ data PreservationAck = PreservationAck
   , preservationAckRanges :: PreservationRanges
   } deriving (Eq, Show)
 
--- | The checks a complete preservation interval must satisfy. An integrity fault is a refusal,
--- not an accepted clear state.
+-- | An accepted interval, or its first violation with the counters so far.
 data PreservationGate
   = PreservationAccepted PreservationCounters
   | PreservationRejected PreservationViolation PreservationCounters
@@ -166,14 +164,27 @@ parseRange entry = do
       watchRange (watchAddress lowAddress) (watchAddress highAddress)
     _ -> Left "preservation range must be a low/high pair"
 
+checkRangeCount :: [Value] -> Either String ()
+checkRangeCount entries
+  | null entries = Left "preservation requires at least one range"
+  | length entries > maxPreservationRanges = Left "preservation takes at most eight ranges"
+  | otherwise = Right ()
+
 parseRanges :: Value -> Either String PreservationRanges
-parseRanges value = asArray value >>= mapM parseRange >>= preservationRanges
+parseRanges value = do
+  entries <- asArray value
+  checkRangeCount entries
+  preservationRanges =<< mapM parseRange entries
 
 -- | A disabled state carries an empty range list.
 parseObservedRanges :: Value -> Either String (Maybe PreservationRanges)
 parseObservedRanges value = do
   entries <- asArray value
-  if null entries then Right Nothing else Just <$> (mapM parseRange entries >>= preservationRanges)
+  if null entries
+    then Right Nothing
+    else do
+      checkRangeCount entries
+      Just <$> (preservationRanges =<< mapM parseRange entries)
 
 checkExtent :: WatchAddress -> Word64 -> Either String ()
 checkExtent address size =
@@ -195,9 +206,18 @@ parseHex size (String text) =
   let digits = T.unpack text
    in if length digits /= fromIntegral (2 * size)
         then Left "preservation hex length differs from size"
-        else B.pack <$> mapM nibble digits
+        else B.pack <$> pairs digits
   where
-    nibble character = case character of
+    pairs [] = Right []
+    pairs (high : low : rest) = do
+      byte <- nibble high low
+      (byte :) <$> pairs rest
+    pairs _ = Left "preservation hex has an odd digit count"
+    nibble high low = do
+      upper <- digit high
+      lower <- digit low
+      Right (upper * 16 + lower)
+    digit character = case character of
       '0' -> Right 0
       '1' -> Right 1
       '2' -> Right 2
@@ -291,10 +311,19 @@ parsePreservationObservation value = do
     <*> (HostWrites <$> (field "host_writes" value >>= asWord64))
     <*> (ModelBusWrites <$> (field "model_bus_writes" value >>= asWord64))
   violation <- field "violation" value >>= parseViolationValue
+  let zeroCounters = identityCpuWritesValue (preservationIdentityCpuWrites counters) == 0
+        && changedCpuWritesValue (preservationChangedCpuWrites counters) == 0
+        && hostWritesValue (preservationHostWrites counters) == 0
+        && modelBusWritesValue (preservationModelBusWrites counters) == 0
+  case (enabled, ranges) of
+    (True, Just _) -> pure ()
+    (False, Nothing) ->
+      unless (zeroCounters && violation == Nothing)
+        (Left "disabled preservation state carries counters or a violation")
+    _ -> Left "preservation enabled flag and ranges disagree"
   pure (PreservationObservation enabled ranges counters violation)
 
--- | Ranges are the declared physical protection; a violation reports the protected extent of
--- the first store that changed it.
+-- | The declared physical protection; a violation extent is the protected intersection of its store.
 checkPreservation :: PreservationRanges -> PreservationAck -> PreservationObservation -> Either String PreservationGate
 checkPreservation expected ack observation = do
   unless (preservationArmed ack) (Left "preservation acknowledgement is not armed")

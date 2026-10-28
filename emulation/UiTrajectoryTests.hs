@@ -303,12 +303,24 @@ main = do
         isLeft (parsePreservationObservation (object ["enabled" .= True, "ranges" .= [[4096, 4112 :: Int]]
           , "identity_cpu_writes" .= (0 :: Integer), "changed_cpu_writes" .= (18446744073709551616 :: Integer)
           , "host_writes" .= (0 :: Integer), "model_bus_writes" .= (0 :: Integer), "violation" .= Null]))
+    , expect "a preservation violation re-emits its exact before and after bytes" $
+        let parsed = either (error "parse") id (parsePreservationObservation
+              (preservationState 0 1 0 0 (cpuChange 4096 4096 [0x12,0x34] [0x12,0xab])))
+            violation = maybe (error "violation") id (preservationFirstViolation parsed)
+         in preservationViolationJson violation == object
+              [ "kind" .= ("cpu-change" :: String), "core" .= (0 :: Int), "pc" .= (0x200 :: Int)
+              , "instructions" .= (10 :: Int), "address" .= (4096 :: Int), "physical" .= (4096 :: Int)
+              , "size" .= (2 :: Int), "before" .= ("1234" :: String), "after" .= ("12ab" :: String) ]
     , expect "a disabled preservation state is parsed and refused" $
-        let disabled = object ["enabled" .= False, "ranges" .= ([] :: [[Int]])
-              , "identity_cpu_writes" .= (0 :: Int), "changed_cpu_writes" .= (0 :: Int), "host_writes" .= (0 :: Int)
-              , "model_bus_writes" .= (0 :: Int), "violation" .= Null]
+        let disabled = preservationStateWith False [] 0 0 0 0 Null
             parsed = either (const False) (const True) (parsePreservationObservation disabled)
          in parsed && isLeft (preservationGate disabled)
+    , expect "an enabled preservation state without ranges is refused" $
+        isLeft (parsePreservationObservation (preservationStateWith True [] 0 0 0 0 Null))
+    , expect "a disabled preservation state with ranges is refused" $
+        isLeft (parsePreservationObservation (preservationStateWith False [[4096, 4112 :: Int]] 0 0 0 0 Null))
+    , expect "a disabled preservation state with counters is refused" $
+        isLeft (parsePreservationObservation (preservationStateWith False [] 0 1 0 0 Null))
     , expect "a preservation acknowledgement with different ranges is refused" $
         let ack = parsePreservationAck (object ["armed" .= True, "ranges" .= [[4096, 4113 :: Int]]])
             result = do
@@ -339,15 +351,18 @@ protectionOf bytes = either (const Nothing) (Just . trajectoryProtection) (decod
 preservationAcknowledged :: Either String PreservationAck
 preservationAcknowledged = parsePreservationAck (object ["armed" .= True, "ranges" .= [[4096, 4112 :: Int]]])
 
-preservationState :: Integer -> Integer -> Integer -> Integer -> Value -> Value
-preservationState identityCpu changedCpu hostWrites modelBusWrites violation = object
-  [ "enabled" .= True
-  , "ranges" .= [[4096, 4112 :: Int]]
+preservationStateWith :: Bool -> [[Int]] -> Integer -> Integer -> Integer -> Integer -> Value -> Value
+preservationStateWith enabled ranges identityCpu changedCpu hostWrites modelBusWrites violation = object
+  [ "enabled" .= enabled
+  , "ranges" .= ranges
   , "identity_cpu_writes" .= identityCpu
   , "changed_cpu_writes" .= changedCpu
   , "host_writes" .= hostWrites
   , "model_bus_writes" .= modelBusWrites
   , "violation" .= violation ]
+
+preservationState :: Integer -> Integer -> Integer -> Integer -> Value -> Value
+preservationState = preservationStateWith True [[4096, 4112]]
 
 preservationGate :: Value -> Either String PreservationGate
 preservationGate value = do
