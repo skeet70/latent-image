@@ -723,6 +723,13 @@ serviceQualificationReport results =
     found = [result | row <- serviceRows, Just result <- [unique row]]
     duplicateRows = [serviceRowId row | row <- serviceRows, length (matches row) > 1]
     missingRows = [serviceRowId row | row <- serviceRows, null (matches row)]
+    unknownRows =
+      [ caseId
+      | result <- results
+      , let caseId = str (get result "id")
+      , isServiceCaseId caseId
+      , caseId `notElem` map serviceRowId serviceRows
+      ]
     statusOf result = str (get result "status")
     summary row =
       case matches row of
@@ -775,6 +782,7 @@ serviceQualificationReport results =
       , problem <- map str (list (get result "mismatches"))
       ]
         ++ [ "duplicate required case id: " ++ rowId | rowId <- duplicateRows ]
+        ++ [ "unknown service case id: " ++ rowId | rowId <- unknownRows ]
         ++ [ str (get result "id") ++ ": " ++ problem
            | result <- found
            , statusOf result == "passed"
