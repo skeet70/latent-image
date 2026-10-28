@@ -2584,6 +2584,7 @@ qualify in' e sp exitCode caseValue report =
        in result status reportedProblems (Just statusText) (null registerProblems) (null abi) finalState guard transient verdict scope total kept
   where
     nativeRegions = [Region (obj [("id", s name)]) (fromIntegral base) (fromIntegral size) bytes | (name, base, size, _, bytes) <- regionList in' e sp]
+    result :: String -> [String] -> Maybe String -> Bool -> Bool -> FinalState -> GuardState -> TransientProof -> EffectVerdict -> EffectScope -> Integer -> Int -> Value
     result status problems statusText registersOk abiOk finalState guard transient verdict scope total kept =
       object
         [ "id" .= spId sp
