@@ -13,7 +13,7 @@ module Emulation.EmulatorSlot
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, try)
-import Control.Monad (forM_, unless, when)
+import Control.Monad (forM, forM_, unless, when)
 import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
@@ -79,7 +79,7 @@ reexecInSlot :: SlotPolicy -> [String] -> IO ()
 reexecInSlot policy arguments = do
   inside <- lookupEnv slotVariable
   case inside of
-    Just _ -> pure ()
+    Just _ -> pinInherited arguments
     Nothing -> do
       directory <- slotDirectory
       Slot slot <- acquire directory policy
@@ -95,6 +95,28 @@ reexecInSlot policy arguments = do
          , "--"
          , executable
          ] ++ arguments) Nothing
+
+pinInherited :: [String] -> IO ()
+pinInherited arguments = do
+  executable <- getExecutablePath
+  directory <- slotDirectory
+  pid <- getProcessID
+  case pinIdentity (takeFileName (onDiskPath executable)) of
+    Just (SlotPin _) -> pure ()
+    Just (InheritedPin guardPid _) -> do
+      parents <- ancestors pid 8
+      verified <- verifiedGuardAncestorFor parents (directory </> ("guard-" ++ show guardPid))
+      unless verified (ioError (userError ("inherited pin has no verified guard ancestor: " ++ executable)))
+    Nothing -> do
+      parents <- ancestors pid 8
+      guard <- verifiedGuardAncestor parents
+      case guard of
+        Nothing -> ioError (userError "inherited slot has no verified thermal guard ancestor")
+        Just guardPath -> case guardNumber (takeFileName guardPath) of
+          Nothing -> ioError (userError ("verified guard has no guard number: " ++ guardPath))
+          Just guardPid -> do
+            pinned <- pinExecutableAs directory (InheritedPin guardPid pid)
+            executeFile pinned True arguments Nothing
 
 -- | Replaces the current launcher with the same program under the pinned
 -- guard. Used by a program that is itself the emulation process.
@@ -162,15 +184,83 @@ isGuardProcess guard pid = do
         Left _ -> pure False
         Right guardPath -> do
           actual <- try (canonicalizePath path) :: IO (Either IOException FilePath)
-          let workerPath = case stripPrefix "guard-" (takeFileName guardPath) of
-                Just suffix ->
-                  let (digits, _) = span isDigit suffix
-                  in takeDirectory guardPath </> ("guard-worker-" ++ digits)
-                Nothing -> takeDirectory guardPath </> "thermal-guard-worker"
+          let workerPath = guardWorkerPath guardPath
           pure ((takeWhile (/= '\n') name == "thermal-guard"
               || "guard-" `isPrefixOf` takeWhile (/= '\n') name)
             && either (const False) (\actualPath -> actualPath == guardPath || actualPath == workerPath) actual)
     _ -> pure False
+
+guardWorkerPath :: FilePath -> FilePath
+guardWorkerPath guard = case stripPrefix "guard-" (takeFileName guard) of
+  Just suffix ->
+    let (digits, _) = span isDigit suffix
+    in takeDirectory guard </> ("guard-worker-" ++ digits)
+  Nothing -> takeDirectory guard </> "thermal-guard-worker"
+
+-- | @pin-<owner>@ or @pin-<guard>-<owner>@; cleanup uses the owner, guard attachment the guard.
+data PinIdentity
+  = SlotPin ProcessID
+  | InheritedPin ProcessID ProcessID
+  deriving (Eq, Show)
+
+pinName :: PinIdentity -> String
+pinName (SlotPin owner) = "pin-" ++ show owner
+pinName (InheritedPin guard owner) = "pin-" ++ show guard ++ "-" ++ show owner
+
+pinIdentity :: String -> Maybe PinIdentity
+pinIdentity entry = do
+  let base = maybe entry id (stripNameSuffix ".runfiles" entry)
+  rest <- stripPrefix "pin-" base
+  let (guardDigits, suffix) = span isDigit rest
+  guardPid <- positivePid guardDigits
+  case suffix of
+    "" -> Just (SlotPin guardPid)
+    '-' : ownerRest -> do
+      let (ownerDigits, trailing) = span isDigit ownerRest
+      ownerPid <- positivePid ownerDigits
+      if null trailing then Just (InheritedPin guardPid ownerPid) else Nothing
+    _ -> Nothing
+
+pinOwner :: PinIdentity -> ProcessID
+pinOwner (SlotPin owner) = owner
+pinOwner (InheritedPin _ owner) = owner
+
+positivePid :: String -> Maybe ProcessID
+positivePid text
+  | null text || not (all isDigit text) = Nothing
+  | otherwise = case readMaybe text :: Maybe Integer of
+      Just value | value > 0 && value <= toInteger (maxBound :: ProcessID) -> Just (fromInteger value)
+      _ -> Nothing
+
+stripNameSuffix :: String -> String -> Maybe String
+stripNameSuffix suffix text
+  | suffix `isSuffixOf` text = Just (take (length text - length suffix) text)
+  | otherwise = Nothing
+
+guardNumber :: FilePath -> Maybe ProcessID
+guardNumber name = do
+  rest <- stripPrefix "guard-" name
+  positivePid rest
+
+verifiedGuardAncestorFor :: [ProcessID] -> FilePath -> IO Bool
+verifiedGuardAncestorFor parents guard = do
+  valid <- validGuard guard
+  worker <- validGuard (guardWorkerPath guard)
+  if not (valid && worker) then pure False else do
+    matches <- mapM (isGuardProcess guard) parents
+    pure (or matches)
+
+verifiedGuardAncestor :: [ProcessID] -> IO (Maybe FilePath)
+verifiedGuardAncestor parents = do
+  directory <- slotDirectory
+  entries <- listDirectory directory
+  let guards = [directory </> entry | entry <- entries, Just _ <- [guardNumber entry]]
+  matches <- concat <$> forM guards (\guard -> do
+    verified <- verifiedGuardAncestorFor parents guard
+    pure [guard | verified])
+  pure $ case matches of
+    [guard] -> Just guard
+    _ -> Nothing
 
 -- | Copies the canonical sibling guard and worker into the slot directory. The
 -- sources are the launcher's siblings, never environment-selected paths.
@@ -245,10 +335,14 @@ firstFree directory (slot : rest) = do
 -- changes them.
 pinExecutable :: FilePath -> IO FilePath
 pinExecutable directory = do
-  sweepPinned directory
   pid <- getProcessID
+  pinExecutableAs directory (SlotPin pid)
+
+pinExecutableAs :: FilePath -> PinIdentity -> IO FilePath
+pinExecutableAs directory identity = do
+  sweepPinned directory
   executable <- getExecutablePath
-  let pinned = directory </> ("pin-" ++ show pid)
+  let pinned = directory </> pinName identity
   -- A crashed run with a reused PID can leave either path behind.
   removeIfPresent pinned
   removeIfPresent (pinned ++ ".runfiles")
@@ -322,13 +416,11 @@ guardServiceMayBeLive = do
         || not (null (filter (not . isSpace) stdout))
     Just (Right (_, _, _)) -> True
 
-pinnedPid :: String -> Maybe Int
-pinnedPid entry = case stripPrefix "pin-" entry of
-  Just rest -> parse rest
+pinnedPid :: String -> Maybe ProcessID
+pinnedPid entry = case pinIdentity entry of
+  Just identity -> Just (pinOwner identity)
   Nothing -> case stripPrefix "guard-worker-" entry of
-    Just rest -> parse rest
-    Nothing -> maybe Nothing parse (stripPrefix "guard-" entry)
+    Just rest -> parseGuard rest
+    Nothing -> maybe Nothing parseGuard (stripPrefix "guard-" entry)
   where
-    parse rest = do
-      let (digits, suffix) = span isDigit rest
-      if not (null digits) && suffix `elem` ["", ".runfiles"] then readMaybe digits else Nothing
+    parseGuard text = positivePid (maybe text id (stripNameSuffix ".runfiles" text))

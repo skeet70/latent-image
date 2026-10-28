@@ -20,14 +20,36 @@ fujimod.passthru.rustPlatform.buildRustPackage {
   inherit src;
   sourceRoot = "fujimod-xm1-workspace/fujimod-xm1";
   cargoLock.lockFile = ../emulation/fujimod-xm1/Cargo.lock;
-  nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config ];
+  CARGO_BUILD_JOBS = 1;
+  RUST_TEST_THREADS = 1;
+  preBuild = ''
+    cpulimitBin=$(mktemp -d)
+    cat > "$cpulimitBin/cargo" <<EOF
+#!${pkgs.runtimeShell}
+exec ${pkgs.cpulimit}/bin/cpulimit -i -l 75 -- ${fujimod.toolchain}/bin/cargo "\$@"
+EOF
+    chmod +x "$cpulimitBin/cargo"
+    export PATH="$cpulimitBin:$PATH"
+  '';
+  nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config pkgs.jq ];
   # nand_image.rs links zlib for retained-identical committed NAND exports.
   buildInputs = [ pkgs.zlib ];
   dontUseCmakeConfigure = true;
+  preCheck = ''
+    cargo test --no-run --message-format=json -j "$NIX_BUILD_CORES" --profile release \
+      --target ${pkgs.stdenv.targetPlatform.rust.rustcTargetSpec} --offline > test-artifacts.json
+  '';
   # store-path holds $out, so Bazel actions keyed on it change with the store path.
   postInstall = ''
     mkdir -p $out/share/fujimod-xm1
     cp data/xm1-150.json $out/share/fujimod-xm1/
     printf '%s\n' "$out" > $out/share/fujimod-xm1/store-path
+    mkdir -p $out/libexec/fujimod-xm1-tests
+    ${pkgs.jq}/bin/jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null) | .executable' test-artifacts.json \
+      | while read -r executable; do
+          cp "$executable" "$out/libexec/fujimod-xm1-tests/"
+          basename "$executable" >> "$out/libexec/fujimod-xm1-tests/manifest"
+        done
+    test -s $out/libexec/fujimod-xm1-tests/manifest
   '';
 }

@@ -1,0 +1,150 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+filegroup(
+    name = "module",
+    srcs = ["lib.rs"],
+    visibility = ["//replacement/bank:__pkg__"],
+)
+
+filegroup(
+    name = "relink-sources",
+    srcs = [
+        "lib.rs",
+        "rb_service.h",
+        "rb_service_stock.S",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//menu:__pkg__",
+        "//replacement/bank:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
+
+haskell_library(
+    name = "qualification",
+    srcs = ["Replacement/Service/Qualify.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+haskell_library(
+    name = "packaged",
+    srcs = ["Replacement/Service/Packaged.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":qualification",
+        "//emulation:case-sha256",
+        "//emulation:segment-receipt-lib",
+        "//emulation:ui-trajectory-lib",
+        "//emulation:watch-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:text",
+        "//transport:camera-core",
+    ],
+)
+
+haskell_binary(
+    name = "packaged-qualification",
+    srcs = ["PackagedQualificationMain.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":packaged",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:json",
+    ],
+)
+
+haskell_test(
+    name = "packaged-qualification-tests",
+    size = "small",
+    srcs = ["PackagedQualificationTests.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    deps = [
+        ":packaged",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:text",
+        "//transport:camera-core",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "qualification-tests",
+    size = "small",
+    srcs = ["ServiceQualifyTests.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-threaded",
+    ],
+    args = ["$(rootpath //emulation:native-runner)"],
+    data = ["//emulation:native-runner"],
+    deps = [
+        ":qualification",
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)

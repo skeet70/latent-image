@@ -28,8 +28,10 @@ import System.Posix.Files (setFileMode)
 import System.Posix.Temp (mkdtemp)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, hostProcedure, procedureHex, routeKey, routeKeyHex)
 import Emulation.Sha256 (sha256File, sha256Hex)
+import Emulation.SegmentReceipt (SegmentReceipt (..), SegmentResult (..), elapsedSeconds, segmentName, segmentNameText)
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
 import Emulation.UiTrajectory
+import Emulation.WatchObservation
 import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
 import EmulatorUsb
 import FujiAF.RamPush
@@ -51,6 +53,18 @@ data BootMode = CheckpointedBoot | FreshBoot deriving (Eq, Show)
 -- | FlashCandidate boots a DAT whose own loader publishes the bank and runs the segments
 -- without ram-alloc, ram-push or ram-unload.
 data PushMode = RamPush | FlashCandidate deriving (Eq, Show)
+
+mediaJson :: MediaObservation -> Value
+mediaJson media = object
+  [ "present" .= mediaPresent media
+  , "write_protected" .= mediaWriteProtected media
+  , "dirty_sectors" .= sectorsValue (mediaDirtySectors media)
+  , "started" .= commandsValue (mediaStarted media)
+  , "completed" .= commandsValue (mediaCompleted media)
+  , "irqs" .= irqsValue (mediaIrqs media)
+  , "dma_boundaries" .= boundariesValue (mediaDmaBoundaries media)
+  , "accepted_writes" .= acceptedWritesValue (mediaAcceptedWrites media)
+  , "accepted_write_bytes" .= acceptedBytesValue (mediaAcceptedBytes media) ]
 
 -- | A key held across the attach edge of every boot the e2e starts.
 data AttachHold = NoAttachHold | AttachHoldQ deriving (Eq, Show)
@@ -335,6 +349,8 @@ data Plan = Plan
   , planUnload :: Bool
   , planFromInstall :: Bool
   , planTraceSites :: [TraceSite]
+  , planProtectedWrites :: [WatchRange]
+  , planExpect :: TrajectoryExpect
   }
 
 
@@ -352,7 +368,8 @@ segmentPlan trajectories name = do
       chosen = close [name] []
       selected = filter ((`elem` chosen) . segmentPhase)
       after = selected (afterUnload trajectories)
-  pure (Plan name (selected (beforeUnload trajectories)) after (not (null after)) True (trajectoryTraceSites trajectories))
+  pure (Plan name (selected (beforeUnload trajectories)) after (not (null after)) True
+    (trajectoryTraceSites trajectories) (trajectoryProtectedWrites trajectories) (trajectoryExpect trajectories))
 
 -- | A relinker build held in memory.
 data Relinked = Relinked
@@ -446,21 +463,24 @@ runRamPushE2E given python workspace trajectoryFile installedMedia adjustmentNan
         (Nothing, FlashCandidate) -> Just (phaseNames trajectories)
         (Nothing, RamPush) -> Nothing
   case selection of
-    Nothing -> session (Plan "all" (beforeUnload trajectories) (afterUnload trajectories) True False (trajectoryTraceSites trajectories)) receipt
+    Nothing -> session (Plan "all" (beforeUnload trajectories) (afterUnload trajectories) True False
+      (trajectoryTraceSites trajectories) (trajectoryProtectedWrites trajectories) (trajectoryExpect trajectories)) receipt
     Just names -> do
       plans <- mapM (segmentPlan trajectories) names
       when (pushMode settings == FlashCandidate) $ forM_ plans $ \plan ->
         require (not (planUnload plan)) ("segment " ++ T.unpack (planName plan) ++ " follows ram-unload, which a flash candidate does not run")
       privateDirectory receipt
       outcomes <- forM plans $ \plan -> do
+        name <- either (ioError . userError) pure (segmentName (planName plan))
         started <- getMonotonicTime
-        outcome <- try (session plan (receipt </> ("segment-" ++ T.unpack (planName plan))))
+        outcome <- try (session plan (receipt </> ("segment-" ++ T.unpack (segmentNameText name))))
         ended <- getMonotonicTime
-        let failure = either (\(problem :: SomeException) -> Just (displayException problem)) (const Nothing) outcome
-        putStrLn ("segment " ++ T.unpack (planName plan) ++ ": " ++ maybe "passed" ("failed: " ++) failure
+        elapsed <- either (ioError . userError) pure (elapsedSeconds (ended - started))
+        let failure = either (\(exception :: SomeException) -> Just (T.pack (displayException exception))) (const Nothing) outcome
+            problem = either Just (const Nothing) outcome :: Maybe SomeException
+        putStrLn ("segment " ++ T.unpack (planName plan) ++ ": " ++ maybe "passed" (("failed: " ++) . T.unpack) failure
           ++ " in " ++ seconds (ended - started))
-        pure (object [ "segment" .= planName plan, "seconds" .= (ended - started)
-                     , "result" .= String (maybe "passed" (const "failed") failure), "message" .= failure ], failure)
+        pure (SegmentReceipt name elapsed (maybe SegmentPassed SegmentFailed failure), problem)
       writePrivateBytes (receipt </> "e2e-segments.json") (BL.toStrict (encode (map fst outcomes)) <> "\n")
       require (all (null . snd) outcomes) "one or more trajectory segments failed"
 
@@ -564,12 +584,18 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     cpu0Exit <- symbolAddress (relinkDirectory </> "kernel.syms") "ram_push_cpu0_window_exit"
     cpu1Exit <- symbolAddress (relinkDirectory </> "kernel.syms") "ram_push_cpu1_window_exit"
     mailbox <- symbolAddress (relinkDirectory </> "kernel.syms") "ram_push_mailbox"
-    readSymbols <- mapM (\name -> (,) name <$> symbolAddress (relinkDirectory </> "kernel.syms") name)
-      (nub [name | segment <- planBefore plan ++ planAfter plan
-                 , (_, RuntimeSymbol name _, _) <- segmentReads segment])
-    let readAddress (FixedAddress value) = pure value
-        readAddress (RuntimeSymbol name offset) =
-          maybe (ioError (userError ("unresolved runtime symbol: " ++ name))) (pure . (+ offset)) (lookup name readSymbols)
+    let symbolsPath = relinkDirectory </> "kernel.syms"
+    symbolTable <- parseSymbolTable <$> B.readFile symbolsPath
+    let resolveName name = either (ioError . userError) pure (resolveSymbol symbolTable name)
+        resolveAddress (FixedAddress value) = pure value
+        resolveAddress (RuntimeSymbol name offset) = do
+          symbolBase <- resolveName name
+          let address = toInteger symbolBase + toInteger offset
+          require (address <= 0xffffffff) ("read address overflows 32 bits: " ++ name)
+          pure (fromIntegral address)
+    declaredTraceSites <- resolveTraceSites resolveName (planTraceSites plan)
+    symbolsDigest <- sha256File symbolsPath
+    let readAddress = resolveAddress
     let readMailbox = mailboxReport <$> emulatorReadMemory emulator mailbox 104
         stop phase message = do
           report <- readMailbox
@@ -587,7 +613,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
       , (cpu0Exit, "cpu0-window-exit")
       , (cpu1Exit, "cpu1-window-exit")
       , (menuMessageDrawer, menuMessageSite)
-      ] ++ [(payloadInstallerStart selected base - 0x244, d3HookSite) | payloadKind selected == RecipeBankD3] ++ fetchSites ++ declaredSites plan
+      ] ++ [(payloadInstallerStart selected base - 0x244, d3HookSite) | payloadKind selected == RecipeBankD3] ++ fetchSites ++ declaredTraceSites
     privateDirectory pushDirectory
     (statePath, installMailbox) <- case restoredHost of
       Just host -> do
@@ -617,6 +643,15 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     state <- readRamPushState statePath
     runner <- newSegmentRunner emulator e2e (\label action -> timed label action) readAddress (\phase message -> stop phase message) plan
     let segments = runSegments runner
+        protected = planProtectedWrites plan
+        expect = planExpect plan
+    let ranges = planProtectedWrites plan
+        limit = either error id (watchLimit 4096)
+        cardless = emulationCardMode settings == Cardless
+        expectedPresent = not cardless
+        scopeText = if cardless then "cardless" else "card"
+    mediaBefore <- if null protected then pure (Left "no media watch") else emulatorMediaState emulator
+    ack <- if null protected then pure Nothing else Just <$> emulatorWatchBegin emulator ranges limit
     capturedBefore <- segments (planBefore plan)
     unloadMailbox <- if planUnload plan
       then do
@@ -626,6 +661,22 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         Just <$> readMailbox
       else pure Nothing
     capturedAfter <- segments (planAfter plan)
+    mediaAfter <- if null protected then pure (Left "no media watch") else emulatorMediaState emulator
+    observation <- if null protected then pure (Left "no watch observation") else emulatorWatchObservation emulator limit
+    let checked = do
+          ackValue <- maybe (Left "no watch acknowledgement") Right ack
+          observationValue <- observation
+          gate <- checkWatch limit ranges ackValue observationValue
+          before <- mediaBefore
+          after <- mediaAfter
+          checkMedia expectedPresent before after
+          judgement <- judgeWatch (if expect == ExpectRefused then FaultControlRun else CandidateRun) (Right gate)
+          pure (gate, judgement)
+    checkedResult <- if null protected then pure (WatchAcceptedClean, CandidateQualified) else either (stop "protected-writes") pure checked
+    let (gate, judgement) = checkedResult
+        summary = case gate of
+          WatchRejectedProtectedWrites value -> value
+          WatchAcceptedClean -> noProtectedWrites
     observed <- readIORef (runnerObservations runner)
     phaseTimes <- readIORef phases
     let result = object
@@ -644,7 +695,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
                                      "heap_break_before" .= breakBefore, "heap_break_after" .= breakAfter]
           , "runtime" .= object ["bytes" .= allocationSize manifest,
                                   "publications" .= length (manifestPublications manifest),
-                                  "manifest" .= manifestPath manifest]
+                                  "manifest" .= manifestPath manifest,
+                                  "symbols_sha256" .= sha256Hex symbolsDigest]
+          , "declared_trace_sites" .= traceSiteValues declaredTraceSites
           , "states" .= object ["allocation" .= allocationPath, "installed" .= statePath]
           , "card" .= cardRecord (emulationCardMode settings)
           , "menu_receipts" .= catMaybes (capturedBefore ++ capturedAfter)
@@ -653,11 +706,30 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           , "observations" .= (observed :: [Value])
           , "mailbox" .= object ["install" .= installMailbox, "rollback" .= unloadMailbox,
                                  "address" .= hexAddress mailbox]
+          , "outcome" .= judgement
+          , "protected_writes" .= object
+              [ "ranges" .= [ [lo, hi] | range <- protected, let (lo, hi) = watchRangeBounds range ]
+              , "expect" .= T.unpack (expectLabel expect)
+              , "cpu_writes" .= protectedCpuWritesValue (protectedCpuWrites summary)
+              , "host_writes" .= protectedHostWritesValue (protectedHostWrites summary)
+              , "bus_writes" .= protectedBusWritesValue (protectedBusWrites summary)
+              , "enforced" .= not (null protected) ]
+          , "media" .= object
+              [ "scope" .= String scopeText
+              , "card" .= cardRecord (emulationCardMode settings)
+              , "before" .= either (const Null) mediaJson mediaBefore
+              , "after" .= either (const Null) mediaJson mediaAfter ]
           , "unload" .= (if planUnload plan
               then Just (String (T.pack (show (length (manifestPublications manifest)) ++ " old words verified; allocation retained until power-off")))
               else Nothing)
           ]
-    writePrivateBytes (e2e </> "e2e-result.json") (BL.toStrict (encode result) <> "\n")
+    case judgement of
+      CandidateQualified -> writePrivateBytes (e2e </> "e2e-result.json") (BL.toStrict (encode result) <> "\n")
+      ControlRefusedProtectedWrite -> do
+        stale <- doesFileExist (e2e </> "e2e-result.json")
+        when stale (stop "protected-writes" "control output contains a stale e2e-result.json")
+        writePrivateBytes (e2e </> "e2e-control.json") (BL.toStrict (encode result) <> "\n")
+        ioError (userError "control refused as expected")
     pure (manifestPublications manifest)
   when (planUnload plan && carriesClassicChrome selected) $
     timed "cold-restart-read" (coldRestartRead settings python runtime installedMedia adjustmentNand published e2e)
@@ -703,8 +775,25 @@ newSegmentRunner emulator receipt timedAction readAddress stopAction plan = do
     <$> newIORef recorded <*> newIORef []
 
 -- | The plan's trajectory-declared sites in the bridge's form.
-declaredSites :: Plan -> [(Word32, String)]
-declaredSites plan = [(traceSiteAddress site, traceSiteLabel site) | site <- planTraceSites plan]
+resolveTraceSites :: (String -> IO Word32) -> [TraceSite] -> IO [(Word32, String)]
+resolveTraceSites resolve sites = do
+  resolved <- forM sites $ \site -> case traceSiteAddress site of
+    FixedAddress address -> pure (address, traceSiteLabel site)
+    RuntimeSymbol name offset -> do
+      symbolBase <- resolve name
+      let address = toInteger symbolBase + toInteger offset
+      require (address <= 0xffffffff) ("trace site overflows 32 bits: " ++ traceSiteLabel site)
+      pure (fromIntegral address, traceSiteLabel site)
+  mapM_ (\(address, label) -> require (address `mod` 4 == 0) ("trace site is not word aligned: " ++ label)) resolved
+  let addresses = map fst resolved
+  require (length addresses == length (nub addresses)) "trace site addresses are not distinct"
+  pure resolved
+
+eightHex :: Word32 -> String
+eightHex = drop 2 . hexAddress
+
+traceSiteValues :: [(Word32, String)] -> [Value]
+traceSiteValues sites = [object ["label" .= label, "address" .= eightHex address] | (address, label) <- sites]
 
 traceHitValue :: TraceHit -> Value
 traceHitValue hit = object
@@ -783,6 +872,8 @@ runfilesCardlessBridge = do
 runFlashSession :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> Plan -> FilePath -> IO ()
 runFlashSession settings python runtime installedMedia adjustmentNand plan e2e = do
   require (emulationCardMode settings /= Cardless) "--cardless belongs to the RAM push, not --flash-candidate"
+  require (null (planProtectedWrites plan)) "a protected-write watch is unsupported on the flash-candidate path"
+  require (planExpect plan == ExpectClean) "a refused-watch control is unsupported on the flash-candidate path"
   phases <- newIORef []
   let timed :: T.Text -> IO a -> IO a
       timed label action = do
@@ -798,11 +889,26 @@ runFlashSession settings python runtime installedMedia adjustmentNand plan e2e =
     putStrLn ("emulator start: " ++ show (bootStart start) ++ "; flash candidate")
     setFileMode e2e 0o700
     ensurePrivateDirectory e2e
-    emulatorTraceSites emulator ([(menuMessageDrawer, menuMessageSite), (d3HookEntry, d3HookSite)] ++ declaredSites plan)
-    let readAddress (FixedAddress value) = pure value
-        readAddress (RuntimeSymbol name offset) = do
-          symbols <- flashCandidateSymbols (firmwareSource settings)
-          either (ioError . userError) (pure . (+ offset)) (resolveSymbol symbols name)
+    let isRuntime (RuntimeSymbol _ _) = True
+        isRuntime _ = False
+        readStarts = [readStart | segment <- planBefore plan ++ planAfter plan, (_, readStart, _) <- segmentReads segment]
+        needsSymbols = any isRuntime readStarts || any (isRuntime . traceSiteAddress) (planTraceSites plan)
+    symbols <- if needsSymbols then Just <$> flashCandidateSymbols (firmwareSource settings) else pure Nothing
+    let resolveName name = case symbols of
+          Nothing -> ioError (userError ("runtime symbol requested without a symbol table: " ++ name))
+          Just table -> either (ioError . userError) pure (resolveSymbol table name)
+        resolveAddress (FixedAddress value) = pure value
+        resolveAddress (RuntimeSymbol name offset) = do
+          symbolBase <- resolveName name
+          let address = toInteger symbolBase + toInteger offset
+          require (address <= 0xffffffff) ("read address overflows 32 bits: " ++ name)
+          pure (fromIntegral address)
+    declaredTraceSites <- resolveTraceSites resolveName (planTraceSites plan)
+    symbolsDigest <- case symbols of
+      Nothing -> pure Nothing
+      Just _ -> Just <$> sha256File (takeDirectory (firmwareSource settings) </> "kernel" </> "kernel.syms")
+    emulatorTraceSites emulator ([(menuMessageDrawer, menuMessageSite), (d3HookEntry, d3HookSite)] ++ declaredTraceSites)
+    let readAddress = resolveAddress
         stop phase message = do
           writePrivateBytes (e2e </> "e2e-failure.json") (BL.toStrict (encode (object
             [ "phase" .= String phase, "message" .= message ])) <> "\n")
@@ -816,6 +922,9 @@ runFlashSession settings python runtime installedMedia adjustmentNand plan e2e =
       , "scope" .= String "emulated X-M1 flash candidate UI segments"
       , "plan" .= planName plan
       , "emulator_start" .= startRecord start
+      , "runtime" .= object ["symbols_sha256" .= fmap sha256Hex symbolsDigest]
+      , "declared_trace_sites" .= traceSiteValues declaredTraceSites
+      , "outcome" .= CandidateQualified
       , "phases" .= (phaseTimes :: [Value])
       , "menu_receipts" .= catMaybes captured
       , "trajectories" .= map (\name -> object ["name" .= name, "result" .= String "matched"])

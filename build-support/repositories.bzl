@@ -86,6 +86,7 @@ _FUJIMOD_XM1_CRATE = [
 ]
 
 _NIX_BUILD_CAP = ["--max-jobs", "2", "--cores", "2"]
+_RUST_NIX_BUILD_CAP = ["--max-jobs", "1", "--cores", "1"]
 
 def _lab_dependencies_impl(_ctx):
     nixpkgs_local_repository(
@@ -171,7 +172,7 @@ def _lab_dependencies_impl(_ctx):
         name = "lab_fujimod",
         nix_file = "//build-support:fujimod.nix",
         nix_file_deps = _FUJIMOD_NIX_DEPS,
-        nixopts = _NIX_BUILD_CAP,
+        nixopts = _RUST_NIX_BUILD_CAP,
         repository = "@lab_nixpkgs",
         build_file_content = 'exports_files(["bin/fujimod-emulator"], visibility = ["//visibility:public"])',
     )
@@ -179,9 +180,9 @@ def _lab_dependencies_impl(_ctx):
         name = "lab_fujimod_xm1",
         nix_file = "//build-support:fujimod-xm1.nix",
         nix_file_deps = _FUJIMOD_NIX_DEPS + _FUJIMOD_XM1_CRATE,
-        nixopts = _NIX_BUILD_CAP,
+        nixopts = _RUST_NIX_BUILD_CAP,
         repository = "@lab_nixpkgs",
-        build_file_content = 'exports_files(["bin/fujimod-xm1", "bin/fujimod-xm1-provenance", "bin/fujimod-xm1-queue-boundary", "bin/fujimod-xm1-ram-push", "bin/fujimod-xm1-toggle", "bin/fujimod-xm1-updater", "share/fujimod-xm1/store-path", "share/fujimod-xm1/xm1-150.json"], visibility = ["//visibility:public"])',
+        build_file_content = 'exports_files(["bin/fujimod-xm1", "bin/fujimod-xm1-provenance", "bin/fujimod-xm1-queue-boundary", "bin/fujimod-xm1-ram-push", "bin/fujimod-xm1-toggle", "bin/fujimod-xm1-updater", "share/fujimod-xm1/store-path", "share/fujimod-xm1/xm1-150.json"], visibility = ["//visibility:public"])\nfilegroup(name = "test-harnesses", srcs = glob(["libexec/fujimod-xm1-tests/*"]), visibility = ["//visibility:public"])\nfilegroup(name = "test-manifest", srcs = ["libexec/fujimod-xm1-tests/manifest"], visibility = ["//visibility:public"])',
     )
 
     # The RAM-push relinker's tools; ram-push-toolchain-paths records their

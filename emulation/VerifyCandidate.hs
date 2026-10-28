@@ -15,11 +15,14 @@ import Data.Aeson.Types (Pair, parseEither)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.List (intercalate, isPrefixOf)
+
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, fromMaybe, isJust)
 import qualified Data.Text as T
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
+import Emulation.SegmentReceipt (SegmentReceipt (..), SegmentResult (..), decodeDeclaredReceipts, segmentNameText)
+import Emulation.WatchObservation (WatchJudgement (..))
 import Emulation.CandidateBaseline
 import Emulation.EmulatorSlot (SlotCount (..), SlotPolicy (..), slotPolicyFromEnvironment)
 import Emulation.KeyReleaseObservation (KeyReleaseObservation, readReleaseObservationLog, readReleaseObservationReceipt, writeReleaseObservationReceipt)
@@ -89,6 +92,80 @@ routeGating :: Route -> Bool
 routeGating route = route `elem`
   [ FlashBootCheck, RamPushVolatile, RamPushClassicChrome, RamPushClassicChromeIcon, FlashCandidateIcon
   , FlashCandidateQTile, FlashCandidateRefresh, UsbToggleE8, UpdaterRc0Toggle, UpdaterCcToggle, NativeVolatile, NativeSd ]
+
+data ReceiptRequirement = NoE2EQualification | RequireE2ECandidateQualification deriving (Eq, Show)
+
+routeReceiptRequirement :: Route -> ReceiptRequirement
+routeReceiptRequirement route = case route of
+  RamPushVolatile -> RequireE2ECandidateQualification
+  RamPushClassicChrome -> RequireE2ECandidateQualification
+  RamPushClassicChromeIcon -> RequireE2ECandidateQualification
+  FlashCandidateIcon -> RequireE2ECandidateQualification
+  FlashCandidateQTile -> RequireE2ECandidateQualification
+  FlashCandidateRefresh -> RequireE2ECandidateQualification
+  RamPushCcCardless -> RequireE2ECandidateQualification
+  RamPushCcIconCardless -> RequireE2ECandidateQualification
+  FujiModRamPushVolatile -> RequireE2ECandidateQualification
+  FujiModRamPushCcCardless -> RequireE2ECandidateQualification
+  FujiModRamPushCcIconCardless -> RequireE2ECandidateQualification
+  FujiModRamPushCc -> RequireE2ECandidateQualification
+  FlashBootCheck -> NoE2EQualification
+  UsbToggleE8 -> NoE2EQualification
+  UpdaterRc0Toggle -> NoE2EQualification
+  UpdaterCcToggle -> NoE2EQualification
+  NativeVolatile -> NoE2EQualification
+  NativeSd -> NoE2EQualification
+  FujiModFlashBootCheck -> NoE2EQualification
+  UsbToggleEmu -> NoE2EQualification
+  FujiModUsbToggleE8 -> NoE2EQualification
+  FujiModUsbToggleEmu -> NoE2EQualification
+
+candidateQualification :: FilePath -> IO (Maybe String)
+candidateQualification receipt = do
+  rootControl <- doesFileExist (receipt </> "e2e-control.json")
+  if rootControl then pure (Just "control receipt cannot qualify a candidate") else do
+    split <- doesFileExist (receipt </> "e2e-segments.json")
+    flat <- doesFileExist (receipt </> "e2e-result.json")
+    if split then
+      if flat then pure (Just "flat and segmented receipts cannot both qualify a candidate")
+      else do
+        parsed <- decodeDeclaredReceipts <$> B.readFile (receipt </> "e2e-segments.json")
+        case parsed of
+          Left problem -> pure (Just ("unreadable e2e-segments.json: " ++ problem))
+          Right receipts -> case [(entry, segmentReceiptName entry) | entry <- receipts, SegmentFailed _ <- [segmentReceiptResult entry]] of
+            (entry, name) : _ -> case segmentReceiptResult entry of
+              SegmentFailed text -> pure (Just ("failed segment cannot qualify a candidate: "
+                ++ T.unpack (segmentNameText name) ++ ": " ++ T.unpack text))
+              SegmentPassed -> pure (Just "failed segment cannot qualify a candidate")
+            [] -> do
+              problems <- mapM segment (map segmentReceiptName receipts)
+              pure (firstProblem problems)
+    else if not flat then pure (Just "no e2e qualification record") else single (receipt </> "e2e-result.json")
+  where
+    segment name = do
+      let directory = receipt </> ("segment-" ++ T.unpack (segmentNameText name))
+      control <- doesFileExist (directory </> "e2e-control.json")
+      if control then pure (Just ("control receipt in segment-" ++ T.unpack (segmentNameText name) ++ " cannot qualify a candidate")) else do
+        present <- doesFileExist (directory </> "e2e-result.json")
+        if not present then pure (Just ("segment-" ++ T.unpack (segmentNameText name) ++ " has no e2e result")) else single (directory </> "e2e-result.json")
+    single path = do
+      parsed <- eitherDecodeStrict' <$> B.readFile path
+      pure $ case parsed of
+        Left problem -> Just ("unreadable e2e result: " ++ problem)
+        Right value -> case parseEither (withObject "e2e result" (.: "outcome")) value of
+          Left problem -> Just problem
+          Right CandidateQualified -> Nothing
+          Right ControlRefusedProtectedWrite -> Just "control-refused outcome cannot qualify a candidate"
+
+firstProblem :: [Maybe String] -> Maybe String
+firstProblem problems = case [problem | Just problem <- problems] of
+  [] -> Nothing
+  problem : _ -> Just problem
+
+commandSucceeded :: ExecutionEvidence -> Bool
+commandSucceeded execution = case execution of
+  ExecutionKnown result -> executionExit result == ExitSuccess
+  ExecutionUnknown -> False
 
 -- | How a route's outcome is judged.
 data Check
@@ -223,7 +300,8 @@ routeInvocation context route receipt = case route of
       , "bash", root </> "emulation" </> "build-recipe-bank-cases.sh" ]
       [ ("RB_MODE", mode), ("JOBS", show (contextNativeJobs context))
       , ("BUILD_DIR", run </> "builds" </> routeName route), ("OUT_DIR", receipt)
-      , ("RUNNER", tool "native-runner"), ("GEN", tool "recipe-bank-cases"), ("INTEROP", tool "recipe-bank-interop") ]
+      , ("RUNNER", tool "native-runner"), ("GEN", tool "recipe-bank-cases"), ("INTEROP", tool "recipe-bank-interop")
+      , ("RB_RUST_ARCHIVE", contextRunfiles context </> "_main" </> "replacement" </> "bank" </> "bank.a") ]
     tool name = contextRunfiles context </> "_main" </> "emulation" </> name
 
 exclude :: String -> T.Text -> ExclusionReason -> Exclusion
@@ -254,29 +332,44 @@ e2eResult file = emulatorStart file "/emulator_start" ++ instructionTimingExclus
 -- | Recurring live-view develop markers differed between runs of one tree on the same restored checkpoint.
 iconRunLength :: [Exclusion]
 iconRunLength =
-  [ exclude "e2e-result.json" "/observations/*/classic_chrome_site_entries" Scheduling ]
+  [ exclude "e2e-result.json" "/observations/*/classic_chrome_site_entries" Scheduling
+  , exclude "segment-*/e2e-result.json" "/observations/*/classic_chrome_site_entries" Scheduling ]
 
 ramPushSpec :: [Exclusion] -> ObservationSpec
 ramPushSpec extra = ObservationSpec
   (map filePattern
     [ "e2e-result.json", "e2e-fetch-watch.json", "cold-restart/e2e-cold-restart.json"
     , "relinked/runtime.bin", "relinked/ram-push-manifest.json", "relinked/bank-allowlist.json", "relinked/kernel.syms"
-    , "alloc/ram-alloc-state.json", "push/ram-push-state.json", "unload/ram-unload-state.json", "screenshots/*.png" ])
-  (e2eResult "e2e-result.json" ++ emulatorStart "cold-restart/e2e-cold-restart.json" "/emulator_start" ++ extra ++
+    , "alloc/ram-alloc-state.json", "push/ram-push-state.json", "unload/ram-unload-state.json", "screenshots/*.png"
+    , "e2e-segments.json" ])
+  (e2eResult "e2e-result.json" ++ e2eResult "segment-*/e2e-result.json"
+    ++ emulatorStart "cold-restart/e2e-cold-restart.json" "/emulator_start"
+    ++ emulatorStart "segment-*/cold-restart/e2e-cold-restart.json" "/emulator_start" ++ extra ++
     ramPushCardImageExclusions ++
     [ exclude "e2e-result.json" "/states" RunLocation
-    , exclude "e2e-result.json" "/runtime/manifest" RunLocation ])
+    , exclude "e2e-result.json" "/runtime/manifest" RunLocation
+    , exclude "segment-*/e2e-result.json" "/states" RunLocation
+    , exclude "segment-*/e2e-result.json" "/runtime/manifest" RunLocation
+    , exclude "e2e-segments.json" "/*/seconds" Timing
+    , exclude "segment-*/e2e-observation-*.json" "/steps/*/seconds" Timing
+    , exclude "segment-*/e2e-observation-*.json" "/trace_hits/*/instructions" Timing ])
+  (map filePattern
+    [ "e2e-result.json", "e2e-fetch-watch.json", "e2e-observation-*.json", "cold-restart/e2e-cold-restart.json"
+    , "relinked/runtime.bin", "relinked/ram-push-manifest.json", "relinked/bank-allowlist.json", "relinked/kernel.syms"
+    , "alloc/ram-alloc-state.json", "push/ram-push-state.json", "unload/ram-unload-state.json", "screenshots/*.png" ])
 
 flashCandidateSpec :: ObservationSpec
 flashCandidateSpec = ObservationSpec
-  (map filePattern ["e2e-segments.json", "segment-*/e2e-result.json", "segment-*/screenshots/*.png"])
+  [filePattern "e2e-segments.json"]
   (exclude "e2e-segments.json" "/*/seconds" Timing : e2eResult "segment-*/e2e-result.json")
+  (map filePattern ["e2e-result.json", "screenshots/*.png"])
 
 updaterSpec :: ObservationSpec
 updaterSpec = ObservationSpec
   [filePattern "receipt.json"]
   [ exclude "receipt.json" "/exported_nand/path" RunLocation
   , exclude "receipt.json" "/inputs/*/path" RunLocation ]
+  []
 
 
 fujimodFlashBootSpec :: ObservationSpec
@@ -286,9 +379,10 @@ fujimodFlashBootSpec = ObservationSpec
   , exclude "fujimod-flash-boot-receipt.json" "/emulator_source" CandidateIdentity
   , exclude "fujimod-flash-boot-receipt.json" "/firmware/path" RunLocation
   , exclude "fujimod-flash-boot-receipt.json" "/frame_png" RunLocation ]
+  []
 
 nativeSpec :: ObservationSpec
-nativeSpec = ObservationSpec (map filePattern ["results.json", "findings.txt"]) []
+nativeSpec = ObservationSpec (map filePattern ["results.json", "findings.txt"]) [] []
 
 routeCheck :: Route -> Check
 routeCheck route = case route of
@@ -558,6 +652,7 @@ data Judging = Judging
   , judgingCompare :: FilePath
   , judgingReceipt :: Route -> FilePath
   , judgingOutput :: FilePath
+  , judgingExecution :: Route -> ExecutionEvidence
   }
 
 judge :: Judging -> Route -> ExecutionEvidence -> IO Outcome
@@ -567,54 +662,71 @@ judge judging route execution = do
         ExecutionKnown result | ExitFailure code <- executionExit result -> Just ("route exited " ++ show code)
         _ -> Nothing
   present <- doesDirectoryExist receipt
-  case routeCheck route of
-    _ | not present -> pure (Outcome route receipt execution "fail" (Just "receipt directory is missing") [] Nothing Nothing [])
-    Reference -> pure (Outcome route receipt execution "reference" failedRun [] Nothing Nothing [])
-    AgainstCounterpart counterpart requireExit -> do
-      let reference = judgingReceipt judging counterpart
-          outcome result problem = Outcome route receipt execution result problem [] Nothing (Just (counterpart, reference)) []
-      referencePresent <- doesDirectoryExist reference
-      if not referencePresent then pure (outcome "fail" (Just ("counterpart " ++ routeName counterpart ++ " has no receipt"))) else do
-        (code, out, err) <- readProcessWithExitCode (judgingCompare judging) [reference, receipt] ""
-        createDirectoryIfMissing True (judgingOutput judging </> "differences")
-        writeFile (judgingOutput judging </> "differences" </> (routeName route ++ ".compare.txt")) (out ++ err)
-        let reported = [drop (length prefix) line | line <- lines out, prefix `isPrefixOf` line]
-            prefix = "e2e-observation-compare: "
-            exitProblem
-              | not requireExit = Nothing
-              | ExecutionUnknown <- execution = Just "route exit status is unknown"
-              | otherwise = failedRun
-        pure $ case (code, exitProblem) of
-          (ExitSuccess, Nothing) -> outcome "pass" Nothing
-          (ExitSuccess, Just problem) -> outcome "fail" (Just problem)
-          (ExitFailure _, _) -> outcome "fail" (Just (intercalate "; " (maybe [] pure exitProblem
-            ++ [case reported of first : _ : _ -> last reported ++ ", first " ++ first; _ -> unwords (lines (out ++ err))])))
-    AgainstBaseline spec -> do
-      let baselinePath = judgingBaselines judging </> (routeName route ++ ".json")
-          outcome result problem differences = Outcome route receipt execution result problem differences (Just baselinePath) Nothing []
-      observed <- observe spec (ReceiptDirectory receipt)
-      if judgingRecord judging
-        then case failedRun of
-          Just problem -> pure (outcome "fail" (Just (problem ++ "; baseline not recorded")) [])
-          Nothing | null observed -> pure (outcome "fail" (Just "no observed files; baseline not recorded") [])
-                  | otherwise -> do
-            now <- formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" <$> getCurrentTime
-            let baselines = judgingBaselines judging
-            createDirectoryIfMissing True baselines
-            setFileMode baselines 0o700
-            B.writeFile baselinePath (encodeBaseline (Baseline (T.pack (routeName route)) (T.pack now) receipt observed))
-            setFileMode baselinePath 0o600
-            pure (outcome "recorded" Nothing [])
-        else do
-          exists <- doesFileExist baselinePath
-          if not exists then pure (outcome "fail" (Just "no baseline") []) else do
-            parsed <- decodeBaseline <$> B.readFile baselinePath
-            case parsed of
-              Left problem -> pure (outcome "fail" (Just ("unreadable baseline: " ++ problem)) [])
-              Right baseline -> do
-                let differences = compareObservations (withoutExcluded spec (baselineFields baseline)) observed
-                    passed = null differences && not (isJust failedRun)
-                pure (outcome (if passed then "pass" else "fail") failedRun differences)
+  qualified <- case routeReceiptRequirement route of
+    NoE2EQualification -> pure Nothing
+    RequireE2ECandidateQualification
+      | not (commandSucceeded execution) -> pure (Just "route command did not succeed; no candidate qualification")
+      | not present -> pure (Just "receipt directory is missing")
+      | otherwise -> candidateQualification receipt
+  case qualified of
+    Just problem -> pure (Outcome route receipt execution "fail" (Just problem) [] Nothing Nothing [])
+    Nothing ->     case routeCheck route of
+        _ | not present -> pure (Outcome route receipt execution "fail" (Just "receipt directory is missing") [] Nothing Nothing [])
+        Reference -> pure (Outcome route receipt execution "reference" failedRun [] Nothing Nothing [])
+        AgainstCounterpart counterpart requireExit -> do
+          let reference = judgingReceipt judging counterpart
+              outcome result problem = Outcome route receipt execution result problem [] Nothing (Just (counterpart, reference)) []
+          referencePresent <- doesDirectoryExist reference
+          referenceQualification <- case routeReceiptRequirement counterpart of
+            RequireE2ECandidateQualification
+              | referencePresent, not (commandSucceeded (judgingExecution judging counterpart)) ->
+                  pure (Just "counterpart command did not succeed")
+              | referencePresent -> candidateQualification reference
+            _ -> pure Nothing
+          if not referencePresent then pure (outcome "fail" (Just ("counterpart " ++ routeName counterpart ++ " has no receipt")))
+          else case referenceQualification of
+            Just problem -> pure (outcome "fail" (Just ("counterpart " ++ routeName counterpart ++ ": " ++ problem)))
+            Nothing -> do
+              (code, out, err) <- readProcessWithExitCode (judgingCompare judging) [reference, receipt] ""
+              createDirectoryIfMissing True (judgingOutput judging </> "differences")
+              writeFile (judgingOutput judging </> "differences" </> (routeName route ++ ".compare.txt")) (out ++ err)
+              let reported = [drop (length prefix) line | line <- lines out, prefix `isPrefixOf` line]
+                  prefix = "e2e-observation-compare: "
+                  exitProblem
+                    | not requireExit = Nothing
+                    | ExecutionUnknown <- execution = Just "route exit status is unknown"
+                    | otherwise = failedRun
+              pure $ case (code, exitProblem) of
+                (ExitSuccess, Nothing) -> outcome "pass" Nothing
+                (ExitSuccess, Just problem) -> outcome "fail" (Just problem)
+                (ExitFailure _, _) -> outcome "fail" (Just (intercalate "; " (maybe [] pure exitProblem
+                  ++ [case reported of first : _ : _ -> last reported ++ ", first " ++ first; _ -> unwords (lines (out ++ err))])))
+        AgainstBaseline spec -> do
+          let baselinePath = judgingBaselines judging </> (routeName route ++ ".json")
+              outcome result problem differences = Outcome route receipt execution result problem differences (Just baselinePath) Nothing []
+          observed <- observe spec (ReceiptDirectory receipt)
+          if judgingRecord judging
+            then case failedRun of
+              Just problem -> pure (outcome "fail" (Just (problem ++ "; baseline not recorded")) [])
+              Nothing | null observed -> pure (outcome "fail" (Just "no observed files; baseline not recorded") [])
+                      | otherwise -> do
+                now <- formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" <$> getCurrentTime
+                let baselines = judgingBaselines judging
+                createDirectoryIfMissing True baselines
+                setFileMode baselines 0o700
+                B.writeFile baselinePath (encodeBaseline (Baseline (T.pack (routeName route)) (T.pack now) receipt observed))
+                setFileMode baselinePath 0o600
+                pure (outcome "recorded" Nothing [])
+            else do
+              exists <- doesFileExist baselinePath
+              if not exists then pure (outcome "fail" (Just "no baseline") []) else do
+                parsed <- decodeBaseline <$> B.readFile baselinePath
+                case parsed of
+                  Left problem -> pure (outcome "fail" (Just ("unreadable baseline: " ++ problem)) [])
+                  Right baseline -> do
+                    let differences = compareObservations (withoutExcluded spec (baselineFields baseline)) observed
+                        passed = null differences && not (isJust failedRun)
+                    pure (outcome (if passed then "pass" else "fail") failedRun differences)
 
 -- | Removes what a passing route staged beside its observed files: its viewer
 -- runtime, native build directory, native case directories and updater
@@ -674,7 +786,7 @@ main = do
         | isJust (lookup route receipts) = ExecutionUnknown
         | otherwise = maybe ExecutionUnknown ExecutionKnown
             (maybe (Map.lookup route earlier) Just (Map.lookup route executions))
-      judging = Judging (optionRecord options) baselines (runfiles </> "_main" </> "emulation" </> "e2e-observation-compare") receiptOf run
+      judging = Judging (optionRecord options) baselines (runfiles </> "_main" </> "emulation" </> "e2e-observation-compare") receiptOf run executionOf
   outcomes <- forM selected $ \route -> do
     outcome <- judge judging route (executionOf route)
     let receipt = receiptOf route </> "key-release-observations.json"

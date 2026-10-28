@@ -27,7 +27,7 @@ SECTIONS {
   .text.tagrelease : { *(.text.rbm_tag_release) }
   . = 0x00730000;
   .text.helpers : { *(.text*) }
-  . = 0x00970000;
+  . = 0x00910340;
   .data : { *(.data*) *(.bss*) *(COMMON) *(.rodata*) }
   /DISCARD/ : { *(.ARM.attributes) *(.comment) *(.note*) *(.ARM.exidx*) }
 }
@@ -43,3 +43,4 @@ ASSERT(rbm_index_free == 0x0071e9ec, "index free at stock address")
 ASSERT(rbm_mapping_delete == 0x0071eaac, "mapping delete at stock address")
 ASSERT(rbm_resolve == 0x0071eb28, "resolve at stock address")
 ASSERT(rbm_tag_release == 0x0071eff4, "tag release at stock address")
+ASSERT(ADDR(.data) + SIZEOF(.data) <= 0x00910424, "model data fits its exact media-state tail")

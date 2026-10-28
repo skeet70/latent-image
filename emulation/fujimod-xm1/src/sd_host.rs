@@ -213,12 +213,20 @@ struct Finished {
     quantity: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+struct AcceptedWrites(u64);
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+struct AcceptedBytes(u64);
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct Counters {
     started: u64,
     completed: u64,
     irqs: u64,
     dma_boundaries: u64,
+    accepted_writes: AcceptedWrites,
+    accepted_write_bytes: AcceptedBytes,
 }
 
 /// Halfword register storage indexed by offset / 2, through `+0x106`.
@@ -682,7 +690,13 @@ impl SdHost {
             match &request.data {
                 Data::Sectors { write: true, .. } => {
                     cx.ram_read(physical, &mut bytes)?;
+                    let writes = self.counters.accepted_writes.0.checked_add(1)
+                        .ok_or("SD accepted-write count overflow")?;
+                    let accepted = self.counters.accepted_write_bytes.0.checked_add(bytes.len() as u64)
+                        .ok_or("SD accepted-byte count overflow")?;
                     self.card.write_bytes(offset, &bytes)?;
+                    self.counters.accepted_writes = AcceptedWrites(writes);
+                    self.counters.accepted_write_bytes = AcceptedBytes(accepted);
                 }
                 Data::Sectors { write: false, .. } => {
                     self.card.read_bytes(offset, &mut bytes)?;
@@ -738,7 +752,13 @@ impl SdHost {
     fn pio_write_sector(&mut self, cx: &mut Cx<'_>, mut request: Request) -> Result<(), String> {
         let first = u64::from(request.argument + request.cursor / SECTOR as u32);
         let pio = request.pio.as_mut().ok_or("SD PIO sector without a PIO request")?;
+        let accepted = self.counters.accepted_write_bytes.0.checked_add(pio.buffer.len() as u64)
+            .ok_or("SD accepted-byte count overflow")?;
+        let writes = self.counters.accepted_writes.0.checked_add(1)
+            .ok_or("SD accepted-write count overflow")?;
         self.card.write_bytes(first * SECTOR as u64, &pio.buffer)?;
+        self.counters.accepted_writes = AcceptedWrites(writes);
+        self.counters.accepted_write_bytes = AcceptedBytes(accepted);
         pio.buffer.clear();
         request.cursor += SECTOR as u32;
         self.regs.set(6, ((request.quantity - request.cursor) / SECTOR as u32) as u16);
@@ -1023,7 +1043,9 @@ impl Device for SdHost {
             "sectors": self.card.sectors(), "dirty_sectors": self.card.dirty_sectors(), "image": self.image,
             "block_length": self.block_length, "bus_width": self.bus_width, "pending": self.request.is_some(),
             "started": self.counters.started, "completed": self.counters.completed, "irqs": self.counters.irqs,
-            "dma_boundaries": self.counters.dma_boundaries, "history": self.history,
+            "dma_boundaries": self.counters.dma_boundaries,
+            "accepted_writes": self.counters.accepted_writes.0,
+            "accepted_write_bytes": self.counters.accepted_write_bytes.0, "history": self.history,
         })
     }
 }
@@ -1349,6 +1371,83 @@ mod tests {
         rig.levels.set(PROTECT, true);
         rig.write(12, 2, 0x26).unwrap();
         assert!(rig.write(14, 2, 0x193a).is_err());
+    }
+
+    fn counters(rig: &Rig) -> (u64, u64, u64) {
+        let state = fujimod_emulator_devices::Device::save(&rig.host);
+        (
+            state["accepted_writes"].as_u64().expect("accepted write count"),
+            state["accepted_write_bytes"].as_u64().expect("accepted write bytes"),
+            state["dirty_sectors"].as_u64().expect("dirty sectors"),
+        )
+    }
+
+    fn pio_write(rig: &mut Rig, lba: u32, seed: u32) {
+        rig.write(4, 2, 512).unwrap();
+        rig.write(6, 2, 1).unwrap();
+        rig.write(8, 2, u64::from(lba & 0xffff)).unwrap();
+        rig.write(10, 2, u64::from(lba >> 16)).unwrap();
+        rig.write(12, 4, 0x193a_0026).unwrap();
+        rig.elapse();
+        rig.write(0x30, 2, 0x11).unwrap();
+        for index in 0..128u64 {
+            rig.write(0x20, 4, u64::from(seed) | index).unwrap();
+        }
+        rig.elapse();
+        rig.write(0x30, 2, 0xffff).unwrap();
+    }
+
+    fn sdma_write(rig: &mut Rig, lba: u32, seed: u8) {
+        for (index, byte) in rig.board.ram[0xe00..0x1000].iter_mut().enumerate() {
+            *byte = seed.wrapping_add((index % 251) as u8) | 1;
+        }
+        rig.write(0, 4, 0x4000_0e00).unwrap();
+        rig.write(4, 2, 512).unwrap();
+        rig.write(6, 2, 1).unwrap();
+        rig.write(8, 2, u64::from(lba & 0xffff)).unwrap();
+        rig.write(10, 2, u64::from(lba >> 16)).unwrap();
+        rig.write(12, 4, 0x193a_0027).unwrap();
+        rig.elapse();
+        rig.write(0x30, 2, 0xffff).unwrap();
+    }
+
+    #[test]
+    fn pio_rewrite_and_restore_of_one_sector_counts_each_accepted_write() {
+        let mut rig = Rig::selected();
+        assert_eq!(counters(&rig), (0, 0, 0));
+        pio_write(&mut rig, 9, 0x1111_1111);
+        assert_eq!(counters(&rig), (1, 512, 1));
+        pio_write(&mut rig, 9, 0x2222_2222);
+        assert_eq!(counters(&rig), (2, 1024, 1));
+        pio_write(&mut rig, 9, 0x1111_1111);
+        assert_eq!(counters(&rig), (3, 1536, 1));
+        let before = counters(&rig);
+        rig.write(4, 2, 512).unwrap();
+        rig.write(6, 2, 1).unwrap();
+        rig.write(8, 2, 0xffff).unwrap();
+        rig.write(10, 2, 0xffff).unwrap();
+        assert!(rig.write(12, 4, 0x193a_0026).is_err());
+        assert_eq!(counters(&rig), before);
+    }
+
+    #[test]
+    fn sdma_rewrite_and_restore_of_one_sector_counts_each_accepted_write() {
+        let mut rig = Rig::selected();
+        assert_eq!(counters(&rig), (0, 0, 0));
+        sdma_write(&mut rig, 40, 0x10);
+        assert_eq!(counters(&rig), (1, 512, 1));
+        sdma_write(&mut rig, 40, 0x20);
+        assert_eq!(counters(&rig), (2, 1024, 1));
+        sdma_write(&mut rig, 40, 0x10);
+        assert_eq!(counters(&rig), (3, 1536, 1));
+        let before = counters(&rig);
+        rig.write(0, 4, 0x4000_0e00).unwrap();
+        rig.write(4, 2, 512).unwrap();
+        rig.write(6, 2, 1).unwrap();
+        rig.write(8, 2, 0xffff).unwrap();
+        rig.write(10, 2, 0xffff).unwrap();
+        assert!(rig.write(12, 4, 0x193a_0027).is_err());
+        assert_eq!(counters(&rig), before);
     }
 
     #[test]

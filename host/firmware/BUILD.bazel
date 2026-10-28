@@ -366,6 +366,8 @@ haskell_binary(
         "$(rootpath @lab_llvm//:bin/llvm-objcopy)",
         "$(rootpath @lab_llvm//:bin/llvm-nm)",
         "$(rootpath @lab_llvm//:bin/llvm-objdump)",
+        "$(rootpath //replacement/bank:bank)",
+        "$(rootpath //replacement/bank:build-facts)",
     ],
     data = [
         ":apply-patch-set",
@@ -374,6 +376,8 @@ haskell_binary(
         ":rebuild-update",
         "//lz:fflzd",
         "//lz:lz-encode",
+        "//replacement/bank:bank",
+        "//replacement/bank:build-facts",
         "@lab_clang//:bin/clang",
         "@lab_lld//:bin/ld.lld",
         "@lab_llvm//:bin/llvm-nm",
@@ -1393,6 +1397,8 @@ filegroup(
     srcs = [
         "build-recipe-bank-ram.sh",
         ":build-recipe-bank",
+        "//replacement/bank:bank",
+        "//replacement/bank:build-facts",
     ],
 )
 
@@ -1436,6 +1442,8 @@ genrule(
     srcs = [
         "build-recipe-bank-ram.sh",
         "//menu:ram-push-relink-sources",
+        "//replacement/bank:bank",
+        "//replacement/bank:relink-sources",
     ],
     outs = ["bank-elf-" + base + ".elf"],
     cmd = " && ".join([
@@ -1444,6 +1452,7 @@ genrule(
         "out=private-data/analysis/x-m1-1.50/ram-push/bank-elf",
         "mkdir -p $$root/$$out",
         "for source in $(locations //menu:ram-push-relink-sources); do mkdir -p $$root/$$(dirname $$source) && ln -s $$here/$$source $$root/$$source; done",
+        "for source in $(locations //replacement/bank:relink-sources); do mkdir -p $$root/$$(dirname $$source) && ln -s $$here/$$source $$root/$$source; done",
         "cd $$root",
         " ".join([
             "RAM_PUSH_BUILDER=true",
@@ -1453,6 +1462,7 @@ genrule(
             "RAM_PUSH_NM=$$here/$(location @lab_llvm//:bin/llvm-nm)",
             "RAM_PUSH_OBJDUMP=$$here/$(location @lab_llvm//:bin/llvm-objdump)",
             "SPEC=unused RC0_ID4=unused RC0_ID5=unused RC0_PLAIN=unused",
+            "RB_RUST_ARCHIVE=$$here/$(location //replacement/bank:bank)",
             "$$here/$(location @lab_bash//:bin/bash) $$here/$(location build-recipe-bank-ram.sh) 0x" + base + " $$out > /dev/null",
         ]),
         "cp $$out/kernel.elf $$here/$@",

@@ -165,6 +165,47 @@ contractLimitRegressions runner=withTemporary "fuji-contract-limit-tests"$ \root
      provenance bytes=set "provenance"(s(replicate bytes 'x'))stripped
  boundary "case JSON bytes" (provenance(caseBytes-fixed)) (provenance(caseBytes-fixed+1))
 
+-- A read-only region admits an expected byte that equals its initial value, refuses an
+-- expected change, and stops a store as memory_guard.
+readOnlyRegressions :: FilePath -> IO ()
+readOnlyRegressions runner=withTemporary "fuji-read-only-tests"$ \root->do
+ base<-B.readFile "emulation/fixtures/arithmetic.json" >>= jsonRead
+ copyFile "emulation/fixtures/arithmetic.bin"(root </> "arithmetic.bin")
+ let hex value=s("0x"++replicate(8-length text)'0'++text) where text=showHex(value::Word32)""
+     roRegion=obj[("id",s "ro"),("address",hex 0x7000),("size",n 4),("permissions",s "r"),("initial",obj[("zero",b True)])]
+     withRo=merge base[("regions",arr(list(get base "regions")++[roRegion]))]
+     observed value=merge withRo[("expected",set "memory"(arr(list(get(get withRo "expected")"memory")++[obj[("region",s "ro"),("offset",n 0),("hex",s value)]]))(get withRo "expected"))]
+     path=root </> "read-only.json"
+ forM_[(observed "00000000",0,"passed"),(observed "01000000",1,"invalid_case")]$ \(fixture,expected,status)->do
+  B.writeFile path(encodeCanonical fixture)
+  (code,report)<-runCase runner path
+  ensure(code==expected && get report "status"==s status)("read-only expectation "++status++": "++show report)
+ let words'=[0xe3a00001,0xe5810000,0xe12fff1e]::[Word32]
+     bytes=B.pack[fromIntegral(word `shiftR` offset)|word<-words',offset<-[0,8,16,24]]
+ B.writeFile(root </> "write-ro.bin")bytes
+ digest<-sha256 bytes
+ let codeSize=fromIntegral(B.length bytes)::Integer
+     artifact=obj[("id",s "write-ro"),("path",s "write-ro.bin"),("size",n codeSize),("sha256",s digest)]
+     codeRegion=obj[("id",s "code"),("address",hex 0x8000),("size",n codeSize),("permissions",s "rx"),("initial",obj[("artifact",s "write-ro"),("offset",n 0),("length",n codeSize)])]
+     roWriteRegion=obj[("id",s "ro"),("address",hex 0x9000),("size",n 4),("permissions",s "r"),("initial",obj[("zero",b True)])]
+     exitRegion=obj[("id",s "exit"),("address",hex 0xa000),("size",n 4),("permissions",s "rx"),("initial",obj[("zero",b True)])]
+     stackRegion=obj[("id",s "stack"),("address",hex 0xb000),("size",n 32),("permissions",s "rw"),("initial",obj[("zero",b True)])]
+     registers=merge(obj([("r"++show i,hex 0)|i<-[0 .. 12 :: Int]]++[("sp",hex 0xb010),("lr",hex 0xa000),("cpsr",hex 0x10)]))[("r1",hex 0x9000)]
+     fixture=obj
+       [("schema_version",n 1),("id",s "read-only-write"),("origin",s "synthetic")
+       ,("provenance",s "NativeTests.hs: store r0 into a read-only region")
+       ,("cpu",get base "cpu"),("artifacts",arr[artifact])
+       ,("entry",hex 0x8000),("exit",hex 0xa000),("registers",registers)
+       ,("regions",arr[codeRegion,roWriteRegion,exitRegion,stackRegion])
+       ,("functions",arr[obj[("address",hex 0x8000),("size",n codeSize)]])
+       ,("stubs",arr[])
+       ,("limits",obj[("instructions",n 1000),("wall_ms",n 1000)])
+       ,("expected",obj[("status",s "memory_guard"),("registers",obj[("r0",hex 1)]),("memory",arr[]),("events",arr[])])
+       ,("exclusions",arr[s "read-only write guard"])]
+ B.writeFile path(encodeCanonical fixture)
+ (code,report)<-runCase runner path
+ ensure(code==0 && get report "status"==s "passed" && get(get report "runner")"status"==s "memory_guard")("store to a read-only region: "++show report)
+
 -- The schema carries the same bounds as the adapter; drift fails here.
 schemaContract :: IO ()
 schemaContract=do
@@ -249,6 +290,7 @@ main=do
  instructionLimitRegressions runner
  recordingLimitRegressions runner
  contractLimitRegressions runner
+ readOnlyRegressions runner
  schemaContract
  withTemporary "fuji-native-tests"$ \root->do
   artifacts<-filter((==".bin").takeExtension) <$> listDirectory "emulation/fixtures"

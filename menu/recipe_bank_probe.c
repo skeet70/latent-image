@@ -44,10 +44,10 @@
 #include "recipe_bank_ui.h"
 #include "recipe_bank_edit.h"
 #include "recipe_bank_diagnostic.h"
+#include "replacement/service/rb_service.h"
 
 #define RB_MSG_GATE 0x01139e94u
 #define RB_MSG_EMIT 0x011392e0u
-#define RB_STOCK_PROBE 0x00d52684u
 
 typedef enum {
     RB_MSG_NO_CARD = 0x7e1u,
@@ -159,9 +159,7 @@ enum rb_row_state rb_probe_state(uint32_t property, uint32_t row)
     uint32_t epoch = rb_media_epoch_value;
     uint32_t field = rb_stage_edit_field_prop(property);
     if (field != 0u) {
-        uint32_t (*stock)(uint32_t, uint32_t) =
-            (uint32_t (*)(uint32_t, uint32_t))RB_STOCK_PROBE;
-        return (enum rb_row_state)stock(field, row);
+        return (enum rb_row_state)rb_service_field_row_state(field, row);
     }
     if (epoch != rb_probe_epoch) {
         rb_probe_epoch = epoch;

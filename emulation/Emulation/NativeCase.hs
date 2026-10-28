@@ -153,11 +153,14 @@ loadCase input = do
  void$foldM(\occupied item->do
    fields item "region offset hex" "expected memory"
    r<-maybe(failH "unknown expected region")pure(find(\r->get(description r)"id"==get item "region")regions)
-   ensure('w' `elem` str(get(description r)"permissions")) "expected difference must be writable"
    offset<-integer(get item "offset")0(fromIntegral sizeBytes) "expected offset"
    bytes<-byteString(get item "hex")
    let end=offset+fromIntegral(B.length bytes); ident=get item "region"
+       writable='w' `elem` str(get(description r)"permissions")
+       initialSlice=B.take(B.length bytes)(B.drop(fromInteger offset)(regionBytes r))
    ensure(not(B.null bytes) && end<=regionSize r) "expected memory bounds"
+   -- An expected byte in a read-only region observes the initial value; it never authorizes a write.
+   ensure(writable || initialSlice==bytes) "expected memory in a read-only region must equal its initial bytes"
    ensure(all(\(name,lo,hi)->name/=ident || hi<=offset || end<=lo)occupied) "expected memory overlaps"
    pure((ident,offset,end):occupied)) [] differences
  events<-arrayCheck(get expected "events")0 eventCount "event limit"
@@ -203,12 +206,13 @@ runCase runner path = do
     (timed,exit,out,err)<-runBounded(fromInteger(num(get(get c "limits")"wall_ms")*1000+2000000))(8*1024*1024) executable [] wire
     let report'=set "runner_sha256" (s hash) report
     if timed then pure(1,merge report'[("status",s "host_timeout"),("stdout",s(BC.unpack out)),("stderr",s(BC.unpack err))]) else do
-     let failed=merge report'[("status",s "runner_failure"),("runner_exit",n(case exit of ExitSuccess->0;ExitFailure i->fromIntegral i)),("runner_stdout",s(BC.unpack out)),("stderr",s(BC.unpack err))]
+     let runnerExit=n(case exit of ExitSuccess->0;ExitFailure i->fromIntegral i)
+         failed=merge report'[("status",s "runner_failure"),("runner_exit",runnerExit),("runner_stdout",s(BC.unpack out)),("stderr",s(BC.unpack err))]
      parsed<-try$do
       value<-jsonRead out
       ensure(case value of Object _->get value "wire_version"==n 1;_->False) "invalid runner output"
       problems<-checkResult c regions value
       ensure(exit==(if get value "status"==s "returned" then ExitSuccess else ExitFailure 1)) "runner status/exit mismatch"
-      pure(if null problems then 0 else 1,merge report'[("status",s(if null problems then "passed" else "failed")),("runner",value),("mismatches",arr(map s problems)),("stderr",s(BC.unpack err))])
+      pure(if null problems then 0 else 1,merge report'[("status",s(if null problems then "passed" else "failed")),("runner",value),("runner_exit",runnerExit),("mismatches",arr(map s problems)),("stderr",s(BC.unpack err))])
      case parsed of Left(e::IOException)->pure(1,set "reason" (s(show e)) failed);Right value->pure value
    case result of Left(e::IOException)->pure(1,merge report[("status",s "invalid_case"),("reason",s(show e))]);Right value->pure value

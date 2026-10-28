@@ -3,6 +3,11 @@ load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "h
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
+exports_files(
+    ["recovery-task-state-tests.sh"],
+    visibility = ["//replacement/recipe_ui:__pkg__"],
+)
+
 # Copies a card image to a new path and writes named files into its FAT
 # partition with mtools, for --sd-card-image inputs.
 haskell_binary(
@@ -356,6 +361,23 @@ sh_binary(
     visibility = ["//visibility:public"],
 )
 
+haskell_test(
+    name = "fujimod-xm1-tests",
+    size = "small",
+    srcs = ["FujimodXm1Tests.hs"],
+    args = ["$(rootpath @lab_fujimod_xm1//:test-manifest)"],
+    data = [
+        "@lab_fujimod_xm1//:test-manifest",
+        "@lab_fujimod_xm1//:test-harnesses",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base",
+        "//host:filepath",
+        "//host:process",
+    ],
+)
+
 haskell_binary(
     name = "fujimod-ram-push-check",
     srcs = ["FujiModRamPushCheck.hs"],
@@ -377,12 +399,28 @@ haskell_binary(
 )
 
 haskell_library(
+    name = "segment-receipt-lib",
+    srcs = ["Emulation/SegmentReceipt.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+    ],
+)
+
+haskell_library(
     name = "ui-trajectory-lib",
     srcs = ["Emulation/Symbols.hs", "Emulation/UiTrajectory.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
     deps = [
         ":emulator-usb",
+        ":watch-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -399,6 +437,8 @@ haskell_test(
     deps = [
         ":emulator-usb",
         ":ui-trajectory-lib",
+        ":watch-observation",
+        "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:directory",
@@ -456,8 +496,10 @@ haskell_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":observation-compare-lib",
+        ":segment-receipt-lib",
         "//host:aeson",
         "//host:base",
+        "//host:bytestring",
         "//host:directory",
         "//host:filepath",
         "//host:text",
@@ -488,7 +530,9 @@ haskell_binary(
         ":ff80-rehearsal-lib",
         ":viewer-runtime-lib",
         ":emulator-usb",
+        ":watch-observation",
         ":ui-trajectory-lib",
+        ":segment-receipt-lib",
         ":ram-push-unreviewed",
         ":ram-push-procedure",
         "//host:base",
@@ -1034,6 +1078,10 @@ haskell_library(
     name = "case-sha256",
     srcs = ["Emulation/Sha256.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = [
+        "//emulation:__pkg__",
+        "//replacement:__subpackages__",
+    ],
     deps = [
         "//host:base",
         "//host:bytestring",
@@ -1108,6 +1156,28 @@ haskell_library(
         "//host:filepath",
         "//host:host-support",
         "//host:json",
+    ],
+)
+
+haskell_library(
+    name = "native-observation",
+    srcs = ["Emulation/NativeObservation.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":native-adapter",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:host-support",
+        "//host:scientific",
     ],
 )
 
@@ -1279,6 +1349,7 @@ haskell_binary(
     deps = [
         ":case-sha256",
         ":native-adapter",
+        ":native-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -1318,6 +1389,7 @@ haskell_binary(
     deps = [
         ":case-sha256",
         ":native-adapter",
+        ":native-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -1328,6 +1400,7 @@ haskell_binary(
         "//host:json",
         "//host:recipe-bank",
         "//host:text",
+        "//replacement/service:qualification",
     ],
 )
 
@@ -1430,6 +1503,27 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "watch-observation",
+    srcs = ["Emulation/WatchObservation.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
 # The emulator bridge's USB provider; //transport:provider-parity drives it.
 haskell_library(
     name = "emulator-usb",
@@ -1444,6 +1538,7 @@ haskell_library(
     visibility = ["//transport:__pkg__"],
     deps = [
         ":key-release-observations",
+        ":watch-observation",
         "//broker:core",
         "//host:aeson",
         "//host:base",
@@ -1575,6 +1670,7 @@ haskell_library(
     src_strip_prefix = ".",
     deps = [
         ":case-sha256",
+        ":segment-receipt-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -1616,12 +1712,16 @@ haskell_binary(
         ":recipe-bank-interop",
         ":updater-f7",
         ":xm1-viewer",
+        "//replacement/bank:bank",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     deps = [
         ":candidate-baseline-lib",
         ":emulator-slot-lib",
         ":key-release-observations",
+        ":watch-observation",
+        ":ui-trajectory-lib",
+        ":segment-receipt-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -1643,12 +1743,14 @@ haskell_test(
     data = [":verify-candidate"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
+        ":candidate-baseline-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
         "//host:process",
+        "//host:text",
         "//host:unix",
     ],
 )

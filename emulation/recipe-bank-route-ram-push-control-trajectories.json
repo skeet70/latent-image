@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "protected_writes": [
+    [
+      "0096cc64",
+      "0096ce26"
+    ]
+  ],
+  "expect": "refused",
+  "entry": "Fault control for the cardless RAM-push UI watch: the step sequence commits a film-simulation row, which writes the protected live settings record. The run must be refused by the memory watch with actual cpu-write records. This file is a control and never qualifies the primary run.",
+  "before_unload": [
+    {
+      "phase": "control-live-setting-write",
+      "capture": "control-live-setting-write",
+      "steps": [
+        [
+          "menu",
+          1,
+          5,
+          2
+        ],
+        [
+          "down",
+          1,
+          5,
+          3
+        ],
+        [
+          "down",
+          1,
+          5,
+          4
+        ],
+        [
+          "down",
+          1,
+          5,
+          5
+        ],
+        [
+          "down",
+          1,
+          5,
+          6
+        ],
+        [
+          "ok",
+          1,
+          254,
+          0
+        ],
+        [
+          "down",
+          1,
+          254,
+          1
+        ],
+        [
+          "ok",
+          1,
+          5,
+          6
+        ]
+      ]
+    }
+  ],
+  "after_unload": []
+}

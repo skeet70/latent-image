@@ -22,6 +22,8 @@ haskell_toolchain_library(
     ],
 )
 
+haskell_toolchain_library(name = "deepseq")
+
 haskell_toolchain_library(name = "directory")
 
 haskell_toolchain_library(name = "filepath")

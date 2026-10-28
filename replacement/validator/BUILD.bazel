@@ -1,0 +1,182 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+_RUSTC = "@lab_rustc//:bin/rustc"
+_CC = "@lab_clang//:bin/clang"
+
+genrule(
+    name = "candidate-rlib",
+    srcs = ["validator.rs"],
+    outs = ["libarea3_validator.rlib"],
+    cmd = "$(location %s) --edition=2021 --crate-name area3_validator --crate-type rlib -C opt-level=2 $(location validator.rs) -o $@" % _RUSTC,
+    tools = [_RUSTC],
+)
+
+genrule(
+    name = "faulty-rlib",
+    srcs = ["faulty.rs"],
+    outs = ["libarea3_faulty.rlib"],
+    cmd = "$(location %s) --edition=2021 --crate-name area3_validator --crate-type rlib -C opt-level=2 $(location faulty.rs) -o $@" % _RUSTC,
+    tools = [_RUSTC],
+)
+
+genrule(
+    name = "candidate",
+    srcs = ["adapter.rs", ":candidate-rlib"],
+    outs = ["area3-candidate"],
+    cmd = "$(location %s) --edition=2021 -C opt-level=2 -C linker=$(location %s) --extern area3_validator=$(location :candidate-rlib) $(location adapter.rs) -o $@" % (_RUSTC, _CC),
+    executable = True,
+    tools = [_RUSTC, _CC],
+)
+
+genrule(
+    name = "faulty",
+    srcs = ["adapter.rs", ":faulty-rlib"],
+    outs = ["area3-faulty"],
+    cmd = "$(location %s) --edition=2021 -C opt-level=2 -C linker=$(location %s) --extern area3_validator=$(location :faulty-rlib) $(location adapter.rs) -o $@" % (_RUSTC, _CC),
+    executable = True,
+    tools = [_RUSTC, _CC],
+)
+
+xm1_rust_staticlib(
+    name = "area3-rust",
+    src = "validator.rs",
+    crate_name = "area3_validator",
+    opt_level = "z",
+    rustc_flags = ["--cfg", "xm1_freestanding"],
+)
+
+xm1_rust_staticlib(
+    name = "area3-rust-faulty",
+    src = "faulty.rs",
+    crate_name = "area3_validator",
+    opt_level = "z",
+    rustc_flags = ["--cfg", "xm1_freestanding"],
+)
+
+xm1_rust_elf(
+    name = "area3-arm",
+    entry = "area3_validate",
+    extra_ldflags = ["-Wl,--gc-sections"],
+    link_script = "validator.ld",
+    rust_staticlib = ":area3-rust",
+)
+
+xm1_rust_elf(
+    name = "area3-arm-faulty",
+    entry = "area3_validate",
+    extra_ldflags = ["-Wl,--gc-sections"],
+    link_script = "validator.ld",
+    rust_staticlib = ":area3-rust-faulty",
+)
+
+haskell_library(
+    name = "area3-lib",
+    srcs = [
+        "Replacement/Area3/Contract.hs",
+        "Replacement/Area3/Domain.hs",
+        "Replacement/Area3/Native.hs",
+        "Replacement/Area3/Qualify.hs",
+    ],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:deepseq",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:process",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "area3-qualify",
+    srcs = ["Area3QualifyMain.hs"],
+    data = [
+        ":area3-arm.bin",
+        ":area3-arm.symbols",
+        ":candidate",
+        "contracts/area3-validator-150.json",
+        "//emulation:native-runner",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded", "-rtsopts"],
+    deps = [
+        ":area3-lib",
+        "//host:base",
+        "//host:host-support",
+    ],
+)
+
+haskell_binary(
+    name = "fake-runner",
+    testonly = True,
+    srcs = ["FakeRunnerMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = ["//host:base"],
+)
+
+haskell_binary(
+    name = "fake-candidate",
+    testonly = True,
+    srcs = ["FakeCandidateMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "area3-qualify-tests",
+    size = "medium",
+    srcs = ["Area3QualifyTests.hs"],
+    args = [
+        "$(location :area3-qualify)",
+        "$(location :candidate)",
+        "$(location :faulty)",
+        "$(location :fake-candidate)",
+        "$(location :fake-runner)",
+        "$(location :area3-arm.bin)",
+        "$(location :area3-arm.symbols)",
+        "$(location //emulation:native-runner)",
+    ],
+    data = [
+        ":area3-arm.bin",
+        ":area3-arm.symbols",
+        ":area3-qualify",
+        ":candidate",
+        ":fake-candidate",
+        ":fake-runner",
+        ":faulty",
+        "//emulation:native-runner",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [
+        ":area3-lib",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:deepseq",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)

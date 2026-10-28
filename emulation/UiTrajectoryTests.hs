@@ -4,9 +4,11 @@ module Main (main) where
 
 import Control.Monad (unless)
 import qualified Data.ByteString.Char8 as C
+import Data.Aeson (Value (..), object, (.=))
 import Data.List (isInfixOf, isSuffixOf, sort)
 import Emulation.Symbols
 import Emulation.UiTrajectory
+import Emulation.WatchObservation
 import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming)
 import System.Directory (listDirectory)
 import System.Exit (exitFailure)
@@ -85,7 +87,7 @@ main = do
     [ expect "the checked-in trajectory files are present" (not (null files))
     , expect "a trace site decodes to its address and label" $
         sitesOf (document "[[\"0114b6c4\",\"film-icon\"]]" "[\"a\"]")
-          == Just [TraceSite 0x0114b6c4 "film-icon"]
+          == Just [TraceSite (FixedAddress 0x0114b6c4) "film-icon"]
     , expect "a file without trace sites declares none" $
         sitesOf (C.pack "{\"schema\":1,\"before_unload\":[],\"after_unload\":[]}") == Just []
     , expect "an unaligned trace site is refused" $
@@ -96,6 +98,17 @@ main = do
         refused (document "[[\"0114b6c4\",\"menu-message\"]]" "[]")
     , expect "a repeated trace label is refused" $
         refused (document "[[\"0114b6c4\",\"x\"],[\"01146cf0\",\"x\"]]" "[]")
+    , expect "a runtime trace site decodes to its symbol, offset and label" $
+        sitesOf (document "[[\"runtime:rb_call_stock_probe+0x10\",\"svc-stock-return\"]]" "[]")
+          == Just [TraceSite (RuntimeSymbol "rb_call_stock_probe" 0x10) "svc-stock-return"]
+    , expect "a runtime trace site without an offset is refused when unaligned" $
+        refused (document "[[\"runtime:rb_call_stock_probe+0x6\",\"svc-stock-return\"]]" "[]")
+    , expect "a runtime trace site needs a symbol" $
+        refused (document "[[\"runtime:+0x10\",\"svc-stock-return\"]]" "[]")
+    , expect "the same resolved trace site twice is refused" $
+        refused (document "[[\"runtime:rb_call_stock_probe+0x10\",\"a\"],[\"runtime:rb_call_stock_probe+0x10\",\"b\"]]" "[]")
+    , expect "a fixed trace site shorter than eight digits is refused" $
+        refused (document "[[\"114b6c4\",\"x\"]]" "[]")
     , expect "a repeated trace address is refused" $
         refused (document "[[\"0114b6c4\",\"x\"],[\"0114b6c4\",\"y\"]]" "[]")
     , expect "a requirement naming no segment is refused" $
@@ -160,5 +173,113 @@ main = do
         fmap null (mismatchesOf ("[\"menu\",67,56,0],[\"menu\",1,5,2]", "") ("[\"menu\",1,5,2]", "")) == Just False
     , expect "a variant that changes a capture is a mismatch" $
         fmap null (mismatchesOf ("[\"menu\",1,5,2]", "") ("[\"menu\",1,5,2]", ",\"capture\":\"x\"")) == Just False
+    , expect "a trajectory without a watch stays compatible" $
+        fmap trajectoryProtectedWrites (either (const Nothing) Just (decodeTrajectories (C.pack "{\"schema\":1,\"before_unload\":[],\"after_unload\":[]}"))) == Just []
+    , expect "a clean protected watch decodes its typed range" $
+        fmap (\t -> (trajectoryExpect t, trajectoryProtectedWrites t))
+          (either (const Nothing) Just (decodeTrajectories (C.pack "{\"schema\":1,\"protected_writes\":[[\"0096cc64\",\"0096ce26\"]],\"before_unload\":[],\"after_unload\":[]}")))
+          == Just (ExpectClean, [either (error "range") id (watchRange (watchAddress 0x0096cc64) (watchAddress 0x0096ce26))])
+    , expect "a refused watch without ranges is refused" $
+        refused (C.pack "{\"schema\":1,\"expect\":\"refused\",\"before_unload\":[],\"after_unload\":[]}")
+    , expect "a reversed watch range is refused" $
+        refused (C.pack "{\"schema\":1,\"protected_writes\":[[\"0096ce26\",\"0096cc64\"]],\"before_unload\":[],\"after_unload\":[]}")
+    , expect "a watch without records fails closed" $
+        isLeft (parseWatchObservation (limit4) (object ["enabled" .= True, "ranges" .= [[4096, 4112 :: Int]], "violation" .= Null]))
+    , expect "a null watch fails closed" $
+        isLeft (parseWatchObservation (limit4) Null)
+    , expect "an unknown watch source fails closed" $
+        isLeft (parseWatchObservation (limit4) (watchObservation (watchRecord "cpu-write-typo" 4096)))
+    , expect "a record outside the expected range is refused" $
+        isLeft (gateOf (watchObservation (watchRecord "cpu-write" 8192)))
+    , expect "a single protected write is refused by the shared gate" $
+        let parsed = either (error "parse") id (parseWatchObservation limit4 (watchObservation (watchRecord "cpu-write" 4096)))
+         in isLeft (judgeWatch CandidateRun (gateOfParsed parsed)) && judgeWatch FaultControlRun (gateOfParsed parsed) == Right ControlRefusedProtectedWrite
+    , expect "a control fails when the gate accepts a clean interval" $
+        isLeft (judgeWatch FaultControlRun (Right WatchAcceptedClean))
+    , expect "an accepted SD write fails the media check" $
+        isLeft (checkMedia False (mediaObservation 0) (mediaObservation 1))
+    , expect "a read overlapping the range end is allowed" $
+        fmap (const ()) (judgeWatch CandidateRun (gateOf (object
+            [ "enabled" .= True, "ranges" .= [[4096, 4112 :: Int]], "violation" .= Null
+            , "records" .= [object [ "source" .= ("cpu-read" :: String), "address" .= (4110 :: Int), "physical" .= (4110 :: Int)
+              , "size" .= (4 :: Int), "value" .= (0 :: Int), "before" .= ([0, 0, 0, 0] :: [Int]), "byte_order" .= ("little" :: String)
+              , "core" .= (0 :: Int), "pc" .= (4660 :: Int), "instructions" .= (10 :: Int), "tick" .= (10 :: Int) ]]] ))) == Right ()
+    , expect "a write overlapping the range end is refused" $
+        isLeft (judgeWatch CandidateRun (gateOf (watchObservation (watchRecordSized "cpu-write" 4110 4 0 [0,0,0,0] "little" 10))))
+    , expect "a host write is refused and is not a control cpu-write" $
+        let parsed = either (error "parse") id (parseWatchObservation limit4 (watchObservation (transferRecord "host-write" 4096)))
+         in isLeft (judgeWatch CandidateRun (gateOfParsed parsed)) && isLeft (judgeWatch FaultControlRun (gateOfParsed parsed))
+    , expect "a host read is allowed" $
+        fmap (const ()) (judgeWatch CandidateRun (gateOf (watchObservation (transferRecord "host-read" 4096)))) == Right ()
+    , expect "a two-record write-restore pair is refused and counts two cpu writes" $
+        let records = [watchRecordSized "cpu-write" 4096 4 1 [0,0,0,0] "little" 10
+                      ,watchRecordSized "cpu-write" 4096 4 0 [1,0,0,0] "little" 11]
+            parsed = either (error "parse") id (parseWatchObservation limit4 (object ["enabled" .= True, "ranges" .= [[4096, 4112 :: Int]], "violation" .= Null, "records" .= records]))
+         in isLeft (judgeWatch CandidateRun (gateOfParsed parsed))
+            && judgeWatch FaultControlRun (gateOfParsed parsed) == Right ControlRefusedProtectedWrite
+    , expect "a regressing instruction count fails closed" $
+        let records = [watchRecordSized "cpu-write" 4096 4 1 [0,0,0,0] "little" 11
+                      ,watchRecordSized "cpu-write" 4096 4 0 [1,0,0,0] "little" 10]
+         in isLeft (gateOf (object ["enabled" .= True, "ranges" .= [[4096, 4112 :: Int]], "violation" .= Null, "records" .= records]))
+    , expect "a CPU before length differing from size fails" $
+        isLeft (parseWatchObservation limit4 (watchObservation (watchRecordSized "cpu-write" 4096 4 0 [0,0,0] "little" 10)))
+    , expect "a CPU access exceeding 32 bits fails" $
+        isLeft (parseWatchObservation limit4 (watchObservation (watchRecordSized "cpu-write" 0xffffffff 4 0 [0,0,0,0] "little" 10)))
+    , expect "a transfer access exceeding 32 bits fails" $
+        isLeft (parseWatchObservation limit4 (watchObservation (transferRecord "host-read" 0xffffffff)))
+    , expect "an unknown row field fails closed" $
+        isLeft (parseWatchObservation limit4 (watchObservation (object
+          [ "source" .= ("cpu-write" :: String), "address" .= (4096 :: Int), "physical" .= (4096 :: Int), "size" .= (4 :: Int)
+          , "value" .= (0 :: Int), "before" .= ([0,0,0,0] :: [Int]), "byte_order" .= ("little" :: String), "core" .= (0 :: Int)
+          , "pc" .= (4660 :: Int), "instructions" .= (10 :: Int), "tick" .= (10 :: Int), "truncated" .= True ])))
+    , expect "a big-endian read value must agree with its before bytes" $
+        isLeft (parseWatchObservation limit4 (object ["enabled" .= True, "ranges" .= [[4096, 4112 :: Int]], "violation" .= Null
+          , "records" .= [object [ "source" .= ("cpu-read" :: String), "address" .= (4096 :: Int), "physical" .= (4096 :: Int)
+            , "size" .= (2 :: Int), "value" .= (0x0102 :: Int), "before" .= ([2,1] :: [Int]), "byte_order" .= ("big" :: String)
+            , "core" .= (0 :: Int), "pc" .= (4660 :: Int), "instructions" .= (10 :: Int), "tick" .= (10 :: Int) ]]] ))
     ]
   unless (and (checkedIn ++ checkedInVariants ++ results)) exitFailure
+
+limit4 :: WatchLimit
+limit4 = either (error "limit") id (watchLimit 4)
+
+guardAck :: WatchAck
+guardAck = either (error "ack") id (parseWatchAck (object ["armed" .= True, "ranges" .= [[4096, 4112 :: Int]]]))
+
+expectedRange :: WatchRange
+expectedRange = either (error "range") id (watchRange (watchAddress 4096) (watchAddress 4112))
+
+watchRecord :: String -> Int -> Value
+watchRecord source address = watchRecordSized source address 4 0 [0, 0, 0, 0] "little" 10
+
+watchRecordSized :: String -> Int -> Int -> Int -> [Int] -> String -> Int -> Value
+watchRecordSized source address size value before byteOrder instructions = object
+  [ "source" .= source, "address" .= address, "physical" .= address, "size" .= size
+  , "value" .= value, "before" .= before, "byte_order" .= byteOrder, "core" .= (0 :: Int)
+  , "pc" .= (4660 :: Int), "instructions" .= instructions, "tick" .= instructions ]
+
+transferRecord :: String -> Int -> Value
+transferRecord source address = object
+  [ "source" .= source, "address" .= address, "physical" .= address, "size" .= (64 :: Int)
+  , "core" .= Null, "pc" .= Null, "instructions" .= Null, "tick" .= Null ]
+
+watchObservation :: Value -> Value
+watchObservation record = object
+  [ "enabled" .= True, "ranges" .= [[4096, 4112 :: Int]], "records" .= [record], "violation" .= Null ]
+
+mediaObservation :: Int -> MediaObservation
+mediaObservation writes = either (error "media") id (parseMediaObservation (object
+  [ "present" .= False, "write_protected" .= False, "dirty_sectors" .= (0 :: Int)
+  , "started" .= (0 :: Int), "completed" .= (0 :: Int), "irqs" .= (0 :: Int)
+  , "dma_boundaries" .= (0 :: Int), "accepted_writes" .= writes
+  , "accepted_write_bytes" .= (writes * 512) ]))
+
+gateOf :: Value -> Either String WatchGate
+gateOf value = either Left (\observation -> checkWatch limit4 [expectedRange] (guardAck) observation) (parseWatchObservation limit4 value)
+
+gateOfParsed :: WatchObservation -> Either String WatchGate
+gateOfParsed observation = checkWatch limit4 [expectedRange] (guardAck) observation
+
+isLeft :: Either a b -> Bool
+isLeft (Left _) = True
+isLeft (Right _) = False

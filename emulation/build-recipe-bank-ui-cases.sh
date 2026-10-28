@@ -11,12 +11,15 @@ KERNEL_DIR="${KERNEL_DIR:-}"
 RUNNER="${RUNNER:-bazel-bin/emulation/native-runner}"
 GEN="${GEN:-bazel-bin/emulation/recipe-bank-ui-cases}"
 JOBS="${JOBS:-2}"
+RB_RUST_ARCHIVE="${RB_RUST_ARCHIVE:-bazel-bin/replacement/bank/bank.a}"
 CANDIDATE="${CANDIDATE:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/package-20261024b/image}"
 ID4="${ID4:-$CANDIDATE/id4-final.bin}"
 ID4_BASE="${ID4_BASE:-0x0061c1fc}"
 ID5="${ID5:-$CANDIDATE/id5-final.bin}"
 PLAN="${PLAN:-$CANDIDATE/bank-plan.json}"
 FIELDS="${FIELDS:-reports/custom-settings.fields.json}"
+
+[[ -f "$RB_RUST_ARCHIVE" ]] || { printf 'RB_RUST_ARCHIVE is not a regular file: %s\n' "$RB_RUST_ARCHIVE" >&2; exit 1; }
 
 mkdir -p "$BUILD_DIR" "$BUILD_DIR/out" "$OUT_DIR"
 ARM=(--target=armv7r-none-eabi -march=armv7-r -marm)
@@ -30,15 +33,17 @@ if [ -n "$KERNEL_DIR" ]; then
 else
   OBJS=()
   for src in menu/recipe_bank_arm.S menu/recipe_bank_probe.c menu/recipe_bank_hook.c \
-    menu/recipe_bank_storage.c menu/recipe_bank_actions.c menu/recipe_bank_edit.c; do
+    menu/recipe_bank_storage.c menu/recipe_bank_actions.c menu/recipe_bank_edit.c \
+    replacement/service/rb_service_stock.S; do
     obj="$BUILD_DIR/$(basename "${src%.*}").o"
     case "$src" in
-      *.c) env $HARDEN clang "${ARM[@]}" "${FREESTANDING[@]}" -Oz -Wall -Wextra \
+      *.c) env $HARDEN clang "${ARM[@]}" "${FREESTANDING[@]}" -Oz -Wall -Wextra -I. \
         -DRB_NAME_RECORD="$RB_NAME_RECORD" -c "$src" -o "$obj" ;;
       *.S) env $HARDEN clang "${ARM[@]}" -c "$src" -o "$obj" ;;
     esac
     OBJS+=("$obj")
   done
+  OBJS+=("$RB_RUST_ARCHIVE")
   env $HARDEN clang "${ARM[@]}" -nostdlib -static -fuse-ld=lld \
     -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,menu/recipe_bank.ld \
     -Wl,--defsym=RB_BASE="$RB_BASE" "${OBJS[@]}" -o "$BUILD_DIR/kernel.elf"
