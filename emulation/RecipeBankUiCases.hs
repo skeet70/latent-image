@@ -773,7 +773,7 @@ abiWorkspaces in' e =
   [ at UiWorkspace 0x00957e00 0x1200
   , at StackWorkspace 0x00959000 0x1000
   , area MediaWorkspace "media-state" 0 0x200
-  , area ModelDataWorkspace "media-state" 0x200 (modelDataSize in')
+  , area ModelDataWorkspace "media-state" 0x200 (0x200 + modelDataSize in')
   , area ModalWorkspace "modal-state" 2 4
   , area ModalWorkspace "modal-state" 0x15e 0x160
   , at EditorWorkspace 0x00954384 0xf
