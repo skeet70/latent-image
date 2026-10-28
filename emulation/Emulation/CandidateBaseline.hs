@@ -39,7 +39,7 @@ import Data.Aeson.Types (Parser, parseEither, withArray, withObject, (.:))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
-import Data.List (isSuffixOf, sort, sortOn)
+import Data.List (isSuffixOf, sort, sortOn, stripPrefix)
 import Data.Scientific (toBoundedInteger)
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -171,16 +171,15 @@ observe :: ObservationSpec -> ReceiptDirectory -> IO Observation
 observe spec (ReceiptDirectory root) = do
   present <- doesDirectoryExist root
   files <- if present then receiptFiles root else pure []
-  let selected = filter (\path -> any (`matchesFile` path) (observedFiles spec)) files
   segments <- if null (observedSegmentFiles spec) then pure [] else declaredSegments root
-  segmentFiles <- if present then concat <$> forM segments (\name -> do
-    let segment = "segment-" <> T.unpack (segmentNameText name)
-    child <- receiptFiles (root </> segment)
-    pure [ segment </> path
-         | path <- child
-         , any (`matchesFile` path) (observedSegmentFiles spec) ])
-    else pure []
-  fields <- concat <$> forM (selected ++ segmentFiles) (\path -> do
+  let prefixes = ["segment-" <> T.unpack (segmentNameText name) | name <- segments]
+      inChild path = any (\prefix -> case stripPrefix (prefix ++ "/") path of
+        Just relative -> any (`matchesFile` relative) (observedSegmentFiles spec)
+        Nothing -> False) prefixes
+      selected = [ path
+                 | path <- files
+                 , any (`matchesFile` path) (observedFiles spec) || inChild path ]
+  fields <- concat <$> forM selected (\path -> do
     bytes <- B.readFile (root </> path)
     if ".json" `isSuffixOf` path
       then case eitherDecodeStrict' bytes of
