@@ -3,7 +3,7 @@ module Main (main) where
 
 import Control.Exception (bracket)
 import Control.Monad (unless)
-import Data.Aeson (FromJSON (..), Value (..), eitherDecode, encode, object, withObject, withText, (.:), (.=))
+import Data.Aeson (FromJSON (..), Value (..), eitherDecode, encode, object, toJSON, withObject, withText, (.:), (.=))
 import qualified Data.ByteString.Lazy as BL
 import System.Directory (createDirectory, createDirectoryIfMissing, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
 import System.Environment (getArgs, getEnvironment)
@@ -22,7 +22,8 @@ routeNames route = case route of
 
 data RecordedExit = MissingExit | NullExit | RecordedExit ExitCode deriving (Show)
 data Qualification = QualifiedOutcome | MissingOutcome | ControlReceipt | UnknownOutcome | RefusedOutcome
-  | SegmentedQualified | SegmentedWithControl | CounterpartControl deriving (Show)
+  | SegmentedQualified | SegmentedWithControl | SegmentedFailed | SegmentedMalformed | SegmentedDuplicateName
+  | SegmentedPathName | CounterpartControl | CounterpartFailedCommand deriving (Show)
 data Side = CandidateSide | CounterpartSide deriving (Eq, Show)
 data ReceiptSource = EarlierRun | ReceiptOverride deriving (Show)
 data ReceiptParity = EqualReceipts | DifferentReceipts deriving (Show)
@@ -87,9 +88,14 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
                 writeOutcome path word = jsonFile path (object
                   [ "menu_receipts" .= [object ["menu_id" .= (1 :: Int)]]
                   , "outcome" .= String word])
+                segmentRecord name result message = object
+                  [ "segment" .= String name
+                  , "seconds" .= (0 :: Double)
+                  , "result" .= String result
+                  , "message" .= message ]
                 segments names = do
                   jsonFile (directory </> "e2e-segments.json")
-                    (object ["schema" .= (1 :: Int), "segments" .= [object ["segment" .= name] | name <- names]])
+                    (toJSON (map (\name -> segmentRecord name "passed" Null) names))
                   mapM_ (\name -> do
                     let segment = directory </> ("segment-" ++ name)
                     createDirectoryIfMissing True segment
@@ -105,10 +111,24 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
                 segments ["service-field-list", "service-save-current"]
                 jsonFile (directory </> "segment-service-save-current/e2e-control.json")
                   (object ["outcome" .= String "control-refused"])
+              SegmentedFailed -> do
+                segments ["service-field-list"]
+                jsonFile (directory </> "e2e-segments.json")
+                  (toJSON [ segmentRecord "service-field-list" "failed" (String "segment failed") ])
+              SegmentedMalformed -> jsonFile (directory </> "e2e-segments.json")
+                (toJSON [object ["segment" .= String "service-field-list", "result" .= String "passed"]])
+              SegmentedDuplicateName -> do
+                segments ["service-field-list"]
+                jsonFile (directory </> "e2e-segments.json")
+                  (toJSON [ segmentRecord "service-field-list" "passed" Null
+                          , segmentRecord "service-field-list" "passed" Null ])
+              SegmentedPathName -> jsonFile (directory </> "e2e-segments.json")
+                (toJSON [ segmentRecord "../escape" "passed" Null ])
               CounterpartControl
                 | side == CounterpartSide -> jsonFile (directory </> "e2e-control.json")
                     (object ["outcome" .= String "control-refused"])
                 | otherwise -> writeOutcome (directory </> "e2e-result.json") "candidate-qualified"
+              CounterpartFailedCommand -> writeOutcome (directory </> "e2e-result.json") "candidate-qualified"
               _ -> case qualificationWord qualification of
                 Just word -> writeOutcome (directory </> "e2e-result.json") word
                 Nothing -> pure ()
@@ -125,8 +145,12 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
                 , "boundary" .= boundary, "checks" .= ([] :: [Value])])
   seed (receipt counterpart) EqualReceipts CounterpartSide
   seed (receipt candidate) parity CandidateSide
-  jsonFile (earlier </> "report.json") (object ["routes" .= [object
-    (["route" .= candidate, "seconds" .= (0 :: Double), "log" .= (earlier </> "synthetic.log")] ++ exitFields)]])
+  let counterpartExit = case qualification of
+        CounterpartFailedCommand -> ["exit_code" .= (1 :: Int)]
+        _ -> ["exit_code" .= (0 :: Int)]
+  jsonFile (earlier </> "report.json") (object ["routes" .=
+    [ object (["route" .= candidate, "seconds" .= (0 :: Double), "log" .= (earlier </> "synthetic.log")] ++ exitFields)
+    , object (["route" .= counterpart, "seconds" .= (0 :: Double), "log" .= (earlier </> "synthetic.log")] ++ counterpartExit) ]])
   inherited <- getEnvironment
   let overrides = case source of
         EarlierRun -> []
@@ -163,6 +187,11 @@ main = do
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts RefusedOutcome Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedQualified Passed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts CounterpartControl Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts CounterpartFailedCommand Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedFailed Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedMalformed Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedDuplicateName Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedPathName Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedWithControl Failed
   expect UsbToggle MissingExit EarlierRun EqualReceipts qualified Passed
   expect UsbToggle (RecordedExit (ExitFailure 1)) EarlierRun EqualReceipts qualified Passed

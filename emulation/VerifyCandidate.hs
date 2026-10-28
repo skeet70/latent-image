@@ -14,15 +14,14 @@ import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, withObject, 
 import Data.Aeson.Types (Pair, parseEither)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import Data.Char (isAlphaNum)
 import Data.List (intercalate, isPrefixOf, nub)
-import qualified Data.Aeson.Key as K
-import qualified Data.Aeson.KeyMap as KM
+
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, fromMaybe, isJust)
 import qualified Data.Text as T
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
+import Emulation.UiTrajectory (SegmentName (..), SegmentReceipt (..), SegmentResult (..), decodeSegmentReceipts)
 import Emulation.WatchObservation (WatchJudgement (..))
 import Emulation.CandidateBaseline
 import Emulation.EmulatorSlot (SlotCount (..), SlotPolicy (..), slotPolicyFromEnvironment)
@@ -121,33 +120,6 @@ routeReceiptRequirement route = case route of
   FujiModUsbToggleE8 -> NoE2EQualification
   FujiModUsbToggleEmu -> NoE2EQualification
 
-newtype JudgedSegment = JudgedSegment String deriving (Eq, Show)
-
-instance FromJSON JudgedSegment where
-  parseJSON = withObject "judged segment" $ \value -> do
-    unless (KM.keys value == [K.fromString "segment"]) (fail "a judged segment takes only the segment field")
-    name <- value .: "segment"
-    JudgedSegment <$> either fail pure (segmentName name)
-
-newtype JudgedSegments = JudgedSegments [String] deriving (Eq, Show)
-
-instance FromJSON JudgedSegments where
-  parseJSON = withObject "e2e segments" $ \value -> do
-    schema <- value .: "schema"
-    unless (schema == (1 :: Int)) (fail "e2e-segments: schema 1 required")
-    entries <- value .: "segments"
-    parsed <- mapM parseJSON entries
-    let names = [name | JudgedSegment name <- parsed]
-    if null names then fail "e2e-segments: no judged segments"
-      else if length names /= length (nub names) then fail "e2e-segments: duplicate segment names"
-      else pure (JudgedSegments names)
-
-segmentName :: String -> Either String String
-segmentName name
-  | null name = Left "a judged segment is unnamed"
-  | not (all (\c -> isAlphaNum c || c == '-' || c == '_') name) = Left "a judged segment name is not a judgeable token"
-  | otherwise = Right name
-
 candidateQualification :: FilePath -> IO (Maybe String)
 candidateQualification receipt = do
   rootControl <- doesFileExist (receipt </> "e2e-control.json")
@@ -155,14 +127,20 @@ candidateQualification receipt = do
     split <- doesFileExist (receipt </> "e2e-segments.json")
     flat <- doesFileExist (receipt </> "e2e-result.json")
     if split then
-      if flat then pure (Just "flat and segmented qualification records cannot both qualify a candidate")
+      if flat then pure (Just "flat and segmented receipts cannot both qualify a candidate")
       else do
-        parsed <- eitherDecodeStrict' <$> B.readFile (receipt </> "e2e-segments.json")
+        parsed <- decodeSegmentReceipts <$> B.readFile (receipt </> "e2e-segments.json")
         case parsed of
           Left problem -> pure (Just ("unreadable e2e-segments.json: " ++ problem))
-          Right (JudgedSegments names) -> do
-            problems <- mapM segment names
-            pure (firstProblem problems)
+          Right [] -> pure (Just "only judged segments can qualify a candidate")
+          Right receipts -> do
+            let names = [T.unpack (segmentNameText (segmentReceiptName entry)) | entry <- receipts]
+            if length names /= length (nub names) then pure (Just "duplicate segment names cannot qualify a candidate")
+            else case [name | (entry, name) <- zip receipts names, segmentReceiptResult entry == SegmentFailed] of
+              failed : _ -> pure (Just ("failed segment cannot qualify a candidate: " ++ failed))
+              [] -> do
+                problems <- mapM segment names
+                pure (firstProblem problems)
     else if not flat then pure (Just "no e2e qualification record") else single (receipt </> "e2e-result.json")
   where
     segment name = do
@@ -659,6 +637,7 @@ data Judging = Judging
   , judgingCompare :: FilePath
   , judgingReceipt :: Route -> FilePath
   , judgingOutput :: FilePath
+  , judgingExecution :: Route -> ExecutionEvidence
   }
 
 judge :: Judging -> Route -> ExecutionEvidence -> IO Outcome
@@ -684,7 +663,9 @@ judge judging route execution = do
               outcome result problem = Outcome route receipt execution result problem [] Nothing (Just (counterpart, reference)) []
           referencePresent <- doesDirectoryExist reference
           referenceQualification <- case routeReceiptRequirement counterpart of
-            RequireE2ECandidateQualification | referencePresent -> candidateQualification reference
+            RequireE2ECandidateQualification | referencePresent
+              | not (commandSucceeded (judgingExecution judging counterpart)) -> pure (Just "counterpart command did not succeed")
+              | otherwise -> candidateQualification reference
             _ -> pure Nothing
           if not referencePresent then pure (outcome "fail" (Just ("counterpart " ++ routeName counterpart ++ " has no receipt")))
           else if Just problem <- referenceQualification
@@ -789,7 +770,7 @@ main = do
         | isJust (lookup route receipts) = ExecutionUnknown
         | otherwise = maybe ExecutionUnknown ExecutionKnown
             (maybe (Map.lookup route earlier) Just (Map.lookup route executions))
-      judging = Judging (optionRecord options) baselines (runfiles </> "_main" </> "emulation" </> "e2e-observation-compare") receiptOf run
+      judging = Judging (optionRecord options) baselines (runfiles </> "_main" </> "emulation" </> "e2e-observation-compare") receiptOf run executionOf
   outcomes <- forM selected $ \route -> do
     outcome <- judge judging route (executionOf route)
     let receipt = receiptOf route </> "key-release-observations.json"

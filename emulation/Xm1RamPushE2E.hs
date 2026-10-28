@@ -33,6 +33,7 @@ import Emulation.UiTrajectory
 import Emulation.WatchObservation
 import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
 import EmulatorUsb
+import Emulation.UiTrajectory (SegmentName (..), SegmentReceipt (..), SegmentResult (..))
 import FujiAF.RamPush
 import FujiAF.Transport (ensurePrivateDirectory, realClock, writePrivateBytes)
 import Xm1UnreviewedRelink (runUnreviewedRamPush, runUnreviewedRamUnload, withUnreviewedBuild)
@@ -472,8 +473,11 @@ runRamPushE2E given python workspace trajectoryFile installedMedia adjustmentNan
         let failure = either (\(problem :: SomeException) -> Just (displayException problem)) (const Nothing) outcome
         putStrLn ("segment " ++ T.unpack (planName plan) ++ ": " ++ maybe "passed" ("failed: " ++) failure
           ++ " in " ++ seconds (ended - started))
-        pure (object [ "segment" .= planName plan, "seconds" .= (ended - started)
-                     , "result" .= String (maybe "passed" (const "failed") failure), "message" .= failure ], failure)
+        pure (SegmentReceipt
+          (SegmentName planName)
+          (ended - started)
+          (maybe SegmentPassed (const SegmentFailed) failure)
+          (T.pack <$> failure), failure)
       writePrivateBytes (receipt </> "e2e-segments.json") (BL.toStrict (encode (map fst outcomes)) <> "\n")
       require (all (null . snd) outcomes) "one or more trajectory segments failed"
 

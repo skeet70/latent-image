@@ -1683,6 +1683,7 @@ haskell_binary(
         ":emulator-slot-lib",
         ":key-release-observations",
         ":watch-observation",
+        ":ui-trajectory-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

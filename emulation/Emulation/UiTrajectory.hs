@@ -12,16 +12,21 @@ module Emulation.UiTrajectory
   , Trajectories (..)
   , TrajectoryExpect (..)
   , expectLabel
+  , SegmentName (..)
+  , SegmentResult (..)
+  , SegmentReceipt (..)
+  , decodeSegmentReceipts
   , phaseNames
   , decodeTrajectories
   , variantMismatches
   ) where
 
 import Control.Monad (unless, when)
-import Data.Aeson (FromJSON (..), eitherDecodeStrict', withArray, withObject, (.!=), (.:), (.:?))
+import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), eitherDecodeStrict', object, withArray, withObject, (.!=), (.:), (.:?), (.=))
 import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (Object, Parser)
 import qualified Data.ByteString as B
+import Data.Char (isAlphaNum)
 import Data.Foldable (toList)
 import Data.List (nub, stripPrefix)
 import qualified Data.Text as T
@@ -164,6 +169,53 @@ data TrajectoryExpect = ExpectClean | ExpectRefused deriving (Eq, Show)
 expectLabel :: TrajectoryExpect -> T.Text
 expectLabel ExpectClean = "clean"
 expectLabel ExpectRefused = "refused"
+
+newtype SegmentName = SegmentName { segmentNameText :: T.Text } deriving (Eq, Show)
+
+instance ToJSON SegmentName where
+  toJSON = String . segmentNameText
+
+instance FromJSON SegmentName where
+  parseJSON = withText "segment name" $ \text ->
+    if not (T.null text) && T.all (\c -> isAlphaNum c || c == '-' || c == '_') text
+      then pure (SegmentName text)
+      else fail "segment name is not a judgeable token"
+
+data SegmentResult = SegmentPassed | SegmentFailed deriving (Eq, Show)
+
+instance ToJSON SegmentResult where
+  toJSON SegmentPassed = String "passed"
+  toJSON SegmentFailed = String "failed"
+
+instance FromJSON SegmentResult where
+  parseJSON = withText "segment result" $ \text -> case text of
+    "passed" -> pure SegmentPassed
+    "failed" -> pure SegmentFailed
+    other -> fail ("unknown segment result: " ++ T.unpack other)
+
+data SegmentReceipt = SegmentReceipt
+  { segmentReceiptName :: SegmentName
+  , segmentReceiptSeconds :: Double
+  , segmentReceiptResult :: SegmentResult
+  , segmentReceiptMessage :: Maybe T.Text
+  } deriving (Eq, Show)
+
+instance ToJSON SegmentReceipt where
+  toJSON receipt = object
+    [ "segment" .= segmentReceiptName receipt
+    , "seconds" .= segmentReceiptSeconds receipt
+    , "result" .= segmentReceiptResult receipt
+    , "message" .= segmentReceiptMessage receipt ]
+
+instance FromJSON SegmentReceipt where
+  parseJSON = withObject "segment receipt" $ \value -> SegmentReceipt
+    <$> value .: "segment"
+    <*> value .: "seconds"
+    <*> value .: "result"
+    <*> value .: "message"
+
+decodeSegmentReceipts :: B.ByteString -> Either String [SegmentReceipt]
+decodeSegmentReceipts = eitherDecodeStrict'
 
 data Trajectories = Trajectories
   { beforeUnload :: [Segment]
