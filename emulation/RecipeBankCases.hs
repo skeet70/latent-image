@@ -2655,11 +2655,10 @@ runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable g
             , "Foreign media completion is synchronous; stock queue, scheduler and physical SD controller are not executed"
             ]
   BL.writeFile (dir </> "case.json") (encode caseObj)
-  if direct
+  result <- if direct
     then do
       (serviceReport, result) <- S.runServiceCase runner (dir </> "case.json")
       BL.writeFile (dir </> "runner-report.json") (encode serviceReport)
-      BL.writeFile (dir </> "behavioral-result.json") (encode result)
       pure result
     else do
       (_, report) <- runCase runner (dir </> "case.json")
@@ -2688,8 +2687,9 @@ runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable g
             (["id" .= spId sp, "status" .= status, "mismatches" .= mismatches,
               "runner_status" .= runnerStatus]
               ++ maybe [] (\n -> ["missing_fn" .= n]) missing)
-    BL.writeFile (dir </> "behavioral-result.json") (encode result)
-    pure result
+      pure result
+  BL.writeFile (dir </> "behavioral-result.json") (encode result)
+  pure result
 
 -- the undeclared call target of an unknown_call failure, mapped back to its
 -- symbol from the pinned kernel/model maps
