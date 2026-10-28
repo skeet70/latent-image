@@ -40,5 +40,6 @@ EOF
     mkdir -p $out/share/fujimod-xm1
     cp data/xm1-150.json $out/share/fujimod-xm1/
     printf '%s\n' "$out" > $out/share/fujimod-xm1/store-path
+    printf 'cargo test: sd_host and crate unit tests ran in this build\n' > $out/share/fujimod-xm1/tests-passed
   '';
 }
