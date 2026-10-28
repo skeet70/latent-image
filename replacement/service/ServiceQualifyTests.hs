@@ -8,6 +8,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (shiftR)
 import qualified Data.Map.Strict as M
+import Data.Maybe (listToMaybe)
 import Data.String (fromString)
 import Data.Word (Word32, Word64)
 import Emulation.NativeCase (Region (..))
@@ -39,7 +40,7 @@ aggregationChecks :: IO ()
 aggregationChecks = do
   let baseline = map resultFor serviceRows
       baselineReport = serviceQualificationReport baseline
-      firstId = serviceRowId (head serviceRows)
+      firstId = maybe "" serviceRowId (listToMaybe serviceRows)
       missingControl =
         [ if str (get result "id") == firstId then set "mutants" (arr []) result else result
         | result <- baseline
@@ -57,7 +58,7 @@ aggregationChecks = do
         | result <- baseline
         ]
       duplicateCase = baseline ++ take 1 baseline
-      missingCase = tail baseline
+      missingCase = drop 1 baseline
       missingStatus =
         [ if str (get result "id") == firstId then set "status" Null result else result
         | result <- baseline
