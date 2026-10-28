@@ -39,10 +39,11 @@ import Data.Aeson.Types (Parser, parseEither, withArray, withObject, (.:))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
-import Data.List (isSuffixOf, sort, sortOn)
+import Data.List (isSuffixOf, nub, sort, sortOn)
 import Data.Scientific (toBoundedInteger)
 import qualified Data.Text as T
 import qualified Data.Vector as V
+import Emulation.SegmentReceipt (SegmentName, SegmentReceipt (..), decodeSegmentReceipts, segmentNameText)
 import Emulation.Sha256 (sha256, sha256Hex)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (splitDirectories, (</>))
@@ -81,6 +82,7 @@ data Exclusion = Exclusion
 data ObservationSpec = ObservationSpec
   { observedFiles :: [FilePattern]
   , observationExclusions :: [Exclusion]
+  , observedSegmentFiles :: [FilePattern]
   }
 
 -- Absolute, milestone and trace-hit instruction counters measure execution timing.
@@ -93,8 +95,7 @@ instructionTimingExclusions file =
 ramPushCardImageExclusions :: [Exclusion]
 ramPushCardImageExclusions =
   [ Exclusion (filePattern file) (pointerPattern "/card/image") RunLocation
-  | file <- ["e2e-result.json", "cold-restart/e2e-cold-restart.json"]
-  ]
+  | file <- ["e2e-result.json", "cold-restart/e2e-cold-restart.json", "segment-*/e2e-result.json"] ]
 
 flashBootSpec :: ObservationSpec
 flashBootSpec = ObservationSpec
@@ -103,6 +104,7 @@ flashBootSpec = ObservationSpec
    , omit "/firmware/path" RunLocation
    , omit "/frame_png" RunLocation
    ] ++ instructionTimingExclusions (filePattern "flash-boot-receipt.json"))
+  []
   where
     omit pointer = Exclusion (filePattern "flash-boot-receipt.json") (pointerPattern pointer)
 
@@ -170,7 +172,15 @@ observe spec (ReceiptDirectory root) = do
   present <- doesDirectoryExist root
   files <- if present then receiptFiles root else pure []
   let selected = filter (\path -> any (`matchesFile` path) (observedFiles spec)) files
-  fields <- concat <$> forM selected (\path -> do
+  segments <- if null (observedSegmentFiles spec) then pure [] else declaredSegments root
+  segmentFiles <- if present then concat <$> forM segments (\name -> do
+    let segment = "segment-" <> T.unpack (segmentNameText name)
+    child <- receiptFiles (root </> segment)
+    pure [ segment </> path
+         | path <- child
+         , any (`matchesFile` path) (observedSegmentFiles spec) ])
+    else pure []
+  fields <- concat <$> forM (selected ++ segmentFiles) (\path -> do
     bytes <- B.readFile (root </> path)
     if ".json" `isSuffixOf` path
       then case eitherDecodeStrict' bytes of
@@ -178,6 +188,22 @@ observe spec (ReceiptDirectory root) = do
         Left problem -> pure [Field (FieldName path Nothing) (String (T.pack ("unparseable JSON: " ++ problem)))]
       else pure [Field (FieldName path Nothing) (String (T.pack ("sha256:" ++ sha256Hex (sha256 bytes))))])
   pure (withoutExcluded spec fields)
+
+-- | The typed declared segment list; a manifest that cannot declare one is a refusal.
+declaredSegments :: FilePath -> IO [SegmentName]
+declaredSegments root = do
+  let path = root </> "e2e-segments.json"
+  present <- doesFileExist path
+  if not present then pure [] else do
+    bytes <- B.readFile path
+    case decodeSegmentReceipts bytes of
+      Left problem -> ioError (userError (path ++ ": " ++ problem))
+      Right [] -> ioError (userError (path ++ ": declares no segments"))
+      Right receipts -> do
+        let names = map segmentReceiptName receipts
+        if length names /= length (nub names)
+          then ioError (userError (path ++ ": repeats a segment name"))
+          else pure names
 
 -- | The fields the spec does not exclude, in 'FieldName' order. Applied to a
 -- stored baseline, it compares under the current exclusions.

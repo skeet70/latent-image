@@ -336,7 +336,8 @@ e2eResult file = emulatorStart file "/emulator_start" ++ instructionTimingExclus
 -- | Recurring live-view develop markers differed between runs of one tree on the same restored checkpoint.
 iconRunLength :: [Exclusion]
 iconRunLength =
-  [ exclude "e2e-result.json" "/observations/*/classic_chrome_site_entries" Scheduling ]
+  [ exclude "e2e-result.json" "/observations/*/classic_chrome_site_entries" Scheduling
+  , exclude "segment-*/e2e-result.json" "/observations/*/classic_chrome_site_entries" Scheduling ]
 
 ramPushSpec :: [Exclusion] -> ObservationSpec
 ramPushSpec extra = ObservationSpec
@@ -344,22 +345,35 @@ ramPushSpec extra = ObservationSpec
     [ "e2e-result.json", "e2e-fetch-watch.json", "cold-restart/e2e-cold-restart.json"
     , "relinked/runtime.bin", "relinked/ram-push-manifest.json", "relinked/bank-allowlist.json", "relinked/kernel.syms"
     , "alloc/ram-alloc-state.json", "push/ram-push-state.json", "unload/ram-unload-state.json", "screenshots/*.png"
-    , "segment-*/e2e-result.json", "segment-*/screenshots/*.png" ])
-  (e2eResult "e2e-result.json" ++ e2eResult "segment-*/e2e-result.json" ++ emulatorStart "cold-restart/e2e-cold-restart.json" "/emulator_start" ++ extra ++
+    , "e2e-segments.json" ])
+  (e2eResult "e2e-result.json" ++ e2eResult "segment-*/e2e-result.json"
+    ++ emulatorStart "cold-restart/e2e-cold-restart.json" "/emulator_start"
+    ++ emulatorStart "segment-*/cold-restart/e2e-cold-restart.json" "/emulator_start" ++ extra ++
     ramPushCardImageExclusions ++
     [ exclude "e2e-result.json" "/states" RunLocation
-    , exclude "e2e-result.json" "/runtime/manifest" RunLocation ])
+    , exclude "e2e-result.json" "/runtime/manifest" RunLocation
+    , exclude "segment-*/e2e-result.json" "/states" RunLocation
+    , exclude "segment-*/e2e-result.json" "/runtime/manifest" RunLocation
+    , exclude "e2e-segments.json" "/*/seconds" Timing
+    , exclude "segment-*/e2e-observation-*.json" "/steps/*/seconds" Timing
+    , exclude "segment-*/e2e-observation-*.json" "/trace_hits/*/instructions" Timing ])
+  (map filePattern
+    [ "e2e-result.json", "e2e-fetch-watch.json", "e2e-observation-*.json", "cold-restart/e2e-cold-restart.json"
+    , "relinked/runtime.bin", "relinked/ram-push-manifest.json", "relinked/bank-allowlist.json", "relinked/kernel.syms"
+    , "alloc/ram-alloc-state.json", "push/ram-push-state.json", "unload/ram-unload-state.json", "screenshots/*.png" ])
 
 flashCandidateSpec :: ObservationSpec
 flashCandidateSpec = ObservationSpec
-  (map filePattern ["e2e-segments.json", "segment-*/e2e-result.json", "segment-*/screenshots/*.png"])
+  [filePattern "e2e-segments.json"]
   (exclude "e2e-segments.json" "/*/seconds" Timing : e2eResult "segment-*/e2e-result.json")
+  (map filePattern ["e2e-result.json", "screenshots/*.png"])
 
 updaterSpec :: ObservationSpec
 updaterSpec = ObservationSpec
   [filePattern "receipt.json"]
   [ exclude "receipt.json" "/exported_nand/path" RunLocation
   , exclude "receipt.json" "/inputs/*/path" RunLocation ]
+  []
 
 
 fujimodFlashBootSpec :: ObservationSpec
@@ -369,9 +383,10 @@ fujimodFlashBootSpec = ObservationSpec
   , exclude "fujimod-flash-boot-receipt.json" "/emulator_source" CandidateIdentity
   , exclude "fujimod-flash-boot-receipt.json" "/firmware/path" RunLocation
   , exclude "fujimod-flash-boot-receipt.json" "/frame_png" RunLocation ]
+  []
 
 nativeSpec :: ObservationSpec
-nativeSpec = ObservationSpec (map filePattern ["results.json", "findings.txt"]) []
+nativeSpec = ObservationSpec (map filePattern ["results.json", "findings.txt"]) [] []
 
 routeCheck :: Route -> Check
 routeCheck route = case route of
