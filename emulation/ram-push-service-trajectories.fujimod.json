@@ -3,6 +3,18 @@
   "entry": "Retained-service pilot: the packaged bank's field-row probe calls stock FUN_00d52684 through the Rust entry. Host-only, cardless RAM push; the receipt records the probe's field and row at each entry and the row states the list received.",
   "trace_sites": [
     [
+      "runtime:rb_service_field_row_state",
+      "svc-rust-entry"
+    ],
+    [
+      "runtime:rb_call_stock_probe",
+      "svc-stock-trampoline"
+    ],
+    [
+      "runtime:rb_call_stock_probe+0x10",
+      "svc-stock-return"
+    ],
+    [
       "00d52684",
       "stock-row-probe"
     ]
@@ -200,6 +212,118 @@
           6
         ]
       ]
+    },
+    {
+      "phase": "service-page-cancel",
+      "requires": [
+        "service-field-list"
+      ],
+      "steps": [
+        [
+          "back",
+          114,
+          631,
+          6
+        ],
+        [
+          "back",
+          97,
+          624,
+          2
+        ],
+        [
+          "back",
+          97,
+          641,
+          0
+        ]
+      ]
+    },
+    {
+      "phase": "service-field-reopen",
+      "requires": [
+        "service-page-cancel"
+      ],
+      "steps": [
+        [
+          "ok",
+          97,
+          624,
+          0
+        ],
+        [
+          "down",
+          97,
+          624,
+          1
+        ],
+        [
+          "down",
+          97,
+          624,
+          2
+        ],
+        [
+          "ok",
+          114,
+          631,
+          0
+        ],
+        [
+          "down",
+          114,
+          631,
+          1
+        ],
+        [
+          "down",
+          114,
+          631,
+          2
+        ],
+        [
+          "down",
+          114,
+          631,
+          3
+        ],
+        [
+          "down",
+          114,
+          631,
+          4
+        ],
+        [
+          "down",
+          114,
+          631,
+          5
+        ],
+        [
+          "down",
+          114,
+          631,
+          6
+        ],
+        [
+          "ok",
+          114,
+          616,
+          2
+        ],
+        [
+          "down",
+          114,
+          616,
+          3
+        ],
+        [
+          "ok",
+          114,
+          631,
+          6
+        ]
+      ]
     }
   ],
   "after_unload": [
@@ -207,6 +331,33 @@
       "phase": "service-after-unload",
       "observe": true,
       "steps": []
+    },
+    {
+      "phase": "service-after-unload-stock",
+      "observe": true,
+      "requires": [
+        "service-after-unload"
+      ],
+      "steps": [
+        [
+          "menu",
+          1,
+          5,
+          11
+        ],
+        [
+          "menu",
+          1,
+          5,
+          11
+        ],
+        [
+          "ok",
+          1,
+          272,
+          2
+        ]
+      ]
     }
   ]
 }
