@@ -1301,6 +1301,7 @@ haskell_binary(
     deps = [
         ":case-sha256",
         ":native-adapter",
+        ":native-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

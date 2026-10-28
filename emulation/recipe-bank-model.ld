@@ -27,7 +27,9 @@ SECTIONS {
   .text.tagrelease : { *(.text.rbm_tag_release) }
   . = 0x00730000;
   .text.helpers : { *(.text*) }
-  . = 0x00970000;
+  /* Native-fixture-only model storage. 0x7f000000 is an invented native-case
+   * address, not an X-M1 address, payload reservation or hardware claim. */
+  . = 0x7f000000;
   .data : { *(.data*) *(.bss*) *(COMMON) *(.rodata*) }
   /DISCARD/ : { *(.ARM.attributes) *(.comment) *(.note*) *(.ARM.exidx*) }
 }
@@ -43,3 +45,4 @@ ASSERT(rbm_index_free == 0x0071e9ec, "index free at stock address")
 ASSERT(rbm_mapping_delete == 0x0071eaac, "mapping delete at stock address")
 ASSERT(rbm_resolve == 0x0071eb28, "resolve at stock address")
 ASSERT(rbm_tag_release == 0x0071eff4, "tag release at stock address")
+ASSERT(ADDR(.data) + SIZEOF(.data) <= 0x7f001000, "model data fits its native fixture region")
