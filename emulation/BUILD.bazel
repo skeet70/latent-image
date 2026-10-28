@@ -1711,6 +1711,7 @@ haskell_test(
         "//host:directory",
         "//host:filepath",
         "//host:process",
+        "//host:text",
         "//host:unix",
     ],
 )

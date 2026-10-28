@@ -27,7 +27,7 @@ module Emulation.UiTrajectory
   ) where
 
 import Control.Monad (unless, when)
-import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), eitherDecodeStrict', object, withArray, withObject, withScientific, withText, (.!=), (.:), (.:?), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), eitherDecodeStrict', object, withArray, withObject, withText, (.!=), (.:), (.:?), (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (Object, Parser)
@@ -36,7 +36,6 @@ import Data.Char (isAlphaNum)
 import Data.Foldable (toList)
 import Data.List (nub, sort, stripPrefix)
 import qualified Data.Text as T
-import Data.Scientific (toRealFloat)
 import Data.Word (Word32)
 import Emulation.WatchObservation (WatchRange, watchAddress, watchRange)
 import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming, modeDialName)
@@ -209,7 +208,9 @@ instance ToJSON ElapsedSeconds where
   toJSON = toJSON . elapsedSecondsValue
 
 instance FromJSON ElapsedSeconds where
-  parseJSON = withScientific "elapsed seconds" (either fail pure . elapsedSeconds . toRealFloat)
+  parseJSON value = do
+    seconds <- parseJSON value
+    either fail pure (elapsedSeconds seconds)
 
 data SegmentResult = SegmentPassed | SegmentFailed T.Text deriving (Eq, Show)
 
