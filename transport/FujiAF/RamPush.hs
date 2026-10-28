@@ -1049,7 +1049,7 @@ runfilesRelinker payload = do
 rustServiceObject :: IO FilePath
 rustServiceObject = do
   executable <- getExecutablePath
-  let path = (executable ++ ".runfiles") </> "_main" </> "replacement" </> "service" </> "rb_service.a"
+  let path = (executable ++ ".runfiles") </> "_main" </> "replacement" </> "bank" </> "bank.a"
   present <- doesFileExist path
   require present ("the bank's Rust service object is missing from this binary's runfiles: " ++ path)
   pure path
@@ -1058,7 +1058,7 @@ rustServiceObject = do
 rustServiceFacts :: IO FilePath
 rustServiceFacts = do
   executable <- getExecutablePath
-  let path = (executable ++ ".runfiles") </> "_main" </> "replacement" </> "service" </> "build-facts.txt"
+  let path = (executable ++ ".runfiles") </> "_main" </> "replacement" </> "bank" </> "build-facts.txt"
   present <- doesFileExist path
   require present ("the Rust cross-toolchain's build facts are missing from this binary's runfiles: " ++ path)
   pure path
@@ -1143,7 +1143,7 @@ withRelinkedBuildUsing relinker policy base action = withReviewedBuildDirectory 
         , ("RAM_PUSH_OBJCOPY",toolObjcopy tools)
         , ("RAM_PUSH_NM",toolNm tools)
         , ("RAM_PUSH_OBJDUMP",toolObjdump tools)
-        ] ++ payloadRelinkInputs payload ++ [("RB_SERVICE_ARCHIVE", path) | Just path <- [rustObject]] ++ [("RB_SERVICE_BUILD_FACTS", path) | Just path <- [rustFacts]] ++ case payloadKind payload of
+        ] ++ payloadRelinkInputs payload ++ [("RB_RUST_ARCHIVE", path) | Just path <- [rustObject]] ++ [("RB_RUST_BUILD_FACTS", path) | Just path <- [rustFacts]] ++ case payloadKind payload of
           UsbToggle ->
             [ ("USB_TOGGLE_STUB", takeDirectory (relinkerScript relinker) </> "usb-toggle-stub.bin")
             , ("USB_TOGGLE_STUB_SYMBOLS", takeDirectory (relinkerScript relinker) </> "usb-toggle-stub.sym")

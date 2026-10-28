@@ -1,5 +1,3 @@
-#![no_std]
-
 //! The packaged bank's retained row-availability service call.
 //!
 //! `FUN_00d52684` answers, for a stock filter-list property and a row token,
@@ -53,7 +51,3 @@ pub unsafe extern "C" fn rb_service_field_row_state(field: u32, row: u32) -> u32
     RowAnswer::parse(word).word()
 }
 
-#[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
-}

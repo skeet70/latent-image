@@ -1,0 +1,40 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_staticlib")
+
+xm1_rust_staticlib(
+    name = "bank",
+    src = "lib.rs",
+    crate_name = "bank",
+    data = [
+        "//replacement/recipe_ui:module",
+        "//replacement/service:module",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
+genrule(
+    name = "build-facts",
+    srcs = ["@lab_xm1_rust//:share/xm1-rust/build-facts.txt"],
+    outs = ["build-facts.txt"],
+    cmd = "cp $(location @lab_xm1_rust//:share/xm1-rust/build-facts.txt) $@",
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
+filegroup(
+    name = "relink-sources",
+    srcs = [
+        "lib.rs",
+        "//replacement/recipe_ui:module",
+        "//replacement/service:relink-sources",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//menu:__pkg__",
+        "//transport:__pkg__",
+    ],
+)

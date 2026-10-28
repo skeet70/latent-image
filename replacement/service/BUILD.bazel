@@ -1,24 +1,7 @@
-load("//replacement/toolchain:rust.bzl", "xm1_rust_staticlib")
-
-xm1_rust_staticlib(
-    name = "rb_service",
-    src = "lib.rs",
-    crate_name = "rb_service",
-    visibility = [
-        "//host/firmware:__pkg__",
-        "//transport:__pkg__",
-    ],
-)
-
-genrule(
-    name = "build-facts",
-    srcs = ["@lab_xm1_rust//:share/xm1-rust/build-facts.txt"],
-    outs = ["build-facts.txt"],
-    cmd = "cp $(location @lab_xm1_rust//:share/xm1-rust/build-facts.txt) $@",
-    visibility = [
-        "//host/firmware:__pkg__",
-        "//transport:__pkg__",
-    ],
+filegroup(
+    name = "module",
+    srcs = ["lib.rs"],
+    visibility = ["//replacement/bank:__pkg__"],
 )
 
 filegroup(
@@ -31,6 +14,7 @@ filegroup(
     visibility = [
         "//host/firmware:__pkg__",
         "//menu:__pkg__",
+        "//replacement/bank:__pkg__",
         "//transport:__pkg__",
     ],
 )
