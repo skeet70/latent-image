@@ -28,8 +28,8 @@ import Data.Foldable (toList)
 import Data.List (nub, sort, stripPrefix)
 import qualified Data.Text as T
 import Data.Word (Word32)
-import Emulation.PreservationObservation (PreservationRanges, preservationRanges)
-import Emulation.WatchObservation (WatchRange, watchAddress, watchRange)
+import Emulation.PreservationObservation (PreservationRanges, checkPreservationRangeCount, preservationRanges)
+import Emulation.WatchObservation (WatchAddress, WatchRange, watchAddress, watchRange)
 import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming, modeDialName)
 import Numeric (readHex)
 
@@ -225,6 +225,7 @@ protectedMemory = withObject "protected_memory" $ \memory -> do
   kind <- memory .: "kind"
   unless (kind == ("ram-byte-preservation" :: T.Text)) (fail "protected_memory kind is not ram-byte-preservation")
   entries <- memory .: "ranges"
+  either fail pure (checkPreservationRangeCount (length entries))
   ranges <- mapM hexRange entries
   either fail pure (preservationRanges ranges)
 

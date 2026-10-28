@@ -5,6 +5,7 @@ module Emulation.PreservationObservation
   ( PreservationRanges
   , preservationRanges
   , preservationRangesJson
+  , checkPreservationRangeCount
   , PreservationCounters
   , PreservationViolation
   , PreservationObservation (preservationCounters, preservationFirstViolation)
@@ -157,11 +158,14 @@ parseRange entry = do
       watchRange (watchAddress lowAddress) (watchAddress highAddress)
     _ -> Left "preservation range must be a low/high pair"
 
-checkRangeCount :: [Value] -> Either String ()
-checkRangeCount entries
-  | null entries = Left "preservation requires at least one range"
-  | length entries > maxPreservationRanges = Left "preservation takes at most eight ranges"
+checkPreservationRangeCount :: Int -> Either String ()
+checkPreservationRangeCount count
+  | count < 1 = Left "preservation requires at least one range"
+  | count > maxPreservationRanges = Left "preservation takes at most eight ranges"
   | otherwise = Right ()
+
+checkRangeCount :: [Value] -> Either String ()
+checkRangeCount entries = checkPreservationRangeCount (length entries)
 
 parseRanges :: Value -> Either String PreservationRanges
 parseRanges value = do
@@ -350,16 +354,27 @@ checkPreservation expected ack observation = do
       pure (PreservationRejected violation counters)
   where
     extent violation = (violationPhysical violation, preservationBytesValue (violationBytes violation))
-    contains violation range =
-      let (low, high) = watchRangeBounds range
-          (address, size) = extent violation
+    contains violation ranges =
+      let (address, size) = extent violation
           start = fromIntegral (watchAddressValue address) :: Word64
-       in low <= start && start + size <= high
+       in rangeCovered start (start + size) ranges
     overlaps violation range =
       let (low, high) = watchRangeBounds range
           (address, size) = extent violation
           start = fromIntegral (watchAddressValue address) :: Word64
        in start < high && low < start + size
+
+rangeCovered :: Word64 -> Word64 -> [WatchRange] -> Bool
+rangeCovered start end ranges =
+  any (\(low, high) -> low <= start && end <= high) (mergedRanges ranges)
+
+mergedRanges :: [WatchRange] -> [(Word64, Word64)]
+mergedRanges = reverse . foldl step [] . sort . map watchRangeBounds
+  where
+    step [] interval = [interval]
+    step acc@((low, high) : rest) (low', high')
+      | low' <= high = (low, max high high') : rest
+      | otherwise = (low', high') : acc
 
 integrityReasonLabel :: IntegrityReason -> String
 integrityReasonLabel reason = case reason of

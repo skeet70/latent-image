@@ -267,6 +267,21 @@ main = do
             && preservationJudgement FaultControlRun state == Right ControlRefusedProtectedWrite
     , expect "a changed protected byte at the range end qualifies the control" $
         preservationJudgement FaultControlRun (preservationState 0 1 0 0 (cpuChange 4110 4110 [0,0] [1,0])) == Right ControlRefusedProtectedWrite
+    , expect "a changed store spanning adjacent protected ranges qualifies the control" $
+        let ranges = rangesOf [(4096, 4100), (4100, 4104)]
+            state = preservationStateWith True [[4096, 4100], [4100, 4104]] 0 1 0 0
+              (cpuChange 4098 4098 [0,0,0,0] [1,0,0,0])
+         in preservationJudgementFor FaultControlRun ranges state == Right ControlRefusedProtectedWrite
+    , expect "a changed store spanning overlapping protected ranges qualifies the control" $
+        let ranges = rangesOf [(4096, 4100), (4098, 4104)]
+            state = preservationStateWith True [[4096, 4100], [4098, 4104]] 0 1 0 0
+              (cpuChange 4097 4097 [0,0,0,0,0,0] [1,0,0,0,0,0])
+         in preservationJudgementFor FaultControlRun ranges state == Right ControlRefusedProtectedWrite
+    , expect "a changed store crossing a protected gap is refused" $
+        let ranges = rangesOf [(4096, 4100), (4104, 4108)]
+            state = preservationStateWith True [[4096, 4100], [4104, 4108]] 0 1 0 0
+              (cpuChange 4098 4098 [0,0,0,0] [1,0,0,0])
+         in isLeft (preservationGateFor ranges state)
     , expect "a cpu-change whose before and after bytes agree is refused" $
         isLeft (parsePreservationObservation (preservationState 0 1 0 0 (cpuChange 4096 4096 [1,0] [1,0])))
     , expect "a cpu-change whose hex length differs from its size is refused" $
@@ -338,18 +353,20 @@ main = do
     ]
   unless (and (checkedIn ++ checkedInVariants ++ results)) exitFailure
 
+rangesOf :: [(Int, Int)] -> PreservationRanges
+rangesOf bounds = either (error "preservation ranges") id
+  (preservationRanges
+    [ either (error "watch range") id (watchRange (watchAddress (fromIntegral low)) (watchAddress (fromIntegral high)))
+    | (low, high) <- bounds ])
+
 preservedRange :: PreservationRanges
-preservedRange = either (error "preservation range") id
-  (preservationRanges [either (error "watch range") id (watchRange (watchAddress 0x1000) (watchAddress 0x1010))])
+preservedRange = rangesOf [(0x1000, 0x1010)]
 
 preservationFile :: String -> C.ByteString
 preservationFile body = C.pack ("{\"schema\":1,\"protected_memory\":" ++ body ++ ",\"before_unload\":[],\"after_unload\":[]}")
 
 protectionOf :: C.ByteString -> Maybe TrajectoryProtection
 protectionOf bytes = either (const Nothing) (Just . trajectoryProtection) (decodeTrajectories bytes)
-
-preservationAcknowledged :: Either String PreservationAck
-preservationAcknowledged = parsePreservationAck (object ["armed" .= True, "ranges" .= [[4096, 4112 :: Int]]])
 
 preservationStateWith :: Bool -> [[Int]] -> Integer -> Integer -> Integer -> Integer -> Value -> Value
 preservationStateWith enabled ranges identityCpu changedCpu hostWrites modelBusWrites violation = object
@@ -364,14 +381,20 @@ preservationStateWith enabled ranges identityCpu changedCpu hostWrites modelBusW
 preservationState :: Integer -> Integer -> Integer -> Integer -> Value -> Value
 preservationState = preservationStateWith True [[4096, 4112]]
 
-preservationGate :: Value -> Either String PreservationGate
-preservationGate value = do
-  ack <- preservationAcknowledged
+preservationGateFor :: PreservationRanges -> Value -> Either String PreservationGate
+preservationGateFor ranges value = do
+  ack <- parsePreservationAck (object ["armed" .= True, "ranges" .= preservationRangesJson ranges])
   observation <- parsePreservationObservation value
-  checkPreservation preservedRange ack observation
+  checkPreservation ranges ack observation
+
+preservationGate :: Value -> Either String PreservationGate
+preservationGate = preservationGateFor preservedRange
+
+preservationJudgementFor :: RunPurpose -> PreservationRanges -> Value -> Either String WatchJudgement
+preservationJudgementFor purpose ranges value = judgePreservation purpose (preservationGateFor ranges value)
 
 preservationJudgement :: RunPurpose -> Value -> Either String WatchJudgement
-preservationJudgement purpose value = judgePreservation purpose (preservationGate value)
+preservationJudgement purpose = preservationJudgementFor purpose preservedRange
 
 cpuChange :: Int -> Int -> [Int] -> [Int] -> Value
 cpuChange address physical before after = object
