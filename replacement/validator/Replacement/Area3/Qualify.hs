@@ -12,6 +12,7 @@ module Replacement.Area3.Qualify
   ) where
 
 import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar)
+import Control.DeepSeq (NFData (..), force)
 import Control.Exception (IOException, SomeException, catch, throwIO, try)
 import Control.Monad (filterM, foldM, forM, (>=>))
 import Data.Aeson (Value (..))
@@ -545,7 +546,7 @@ candidateReport digest summary =
 data AnchorResult = AnchorResult
   { resultCase :: CaseId
   , resultCheck :: !Check
-  , resultProblems :: [String]
+  , resultProblems :: ![String]
   , resultRaw :: Maybe RawRun
   }
 
@@ -553,7 +554,7 @@ runAnchors :: Contract -> [LoadedAnchor] -> FilePath -> IO [AnchorResult]
 runAnchors contract anchors runner = forM anchors $ \anchor -> do
   result <- runCaseFile runner (loadedPath anchor)
   case result of
-    Left message -> pure (AnchorResult (loadedId anchor) (CheckBlocked message) [message] Nothing)
+    Left message -> pure (AnchorResult (loadedId anchor) (force (CheckBlocked message)) (force [message]) Nothing)
     Right (caseValue, regions, raw) -> do
       existing <- checkResult caseValue regions (rawValue raw)
       pure $ case observeNative (rawExit raw) regions (rawValue raw) of
@@ -561,14 +562,14 @@ runAnchors contract anchors runner = forM anchors $ \anchor -> do
           let rendered = renderObservationError message
            in AnchorResult
                 (loadedId anchor)
-                (forceCheck (CheckBlocked ("invalid_output: " ++ rendered)))
-                (forceStrings (rendered : existing))
+                (force (CheckBlocked ("invalid_output: " ++ rendered)))
+                (force (rendered : existing))
                 (Just raw)
         Right observation ->
           AnchorResult
             (loadedId anchor)
             (forceCheck (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions) observation))
-            (forceStrings existing)
+            (force existing)
             (Just raw)
 
 anchorReport :: AnchorResult -> Value
@@ -609,18 +610,13 @@ anchorChecks results =
 
 -- Stock and ARM cases ---------------------------------------------------------
 
--- Force the full diagnostic strings so a stored verdict retains no observation buffer.
-forceCheck :: Check -> Check
-forceCheck check = case check of
-  CheckPass -> check
-  CheckMismatch problems -> forceStrings problems `seq` check
-  CheckBlocked message -> length message `seq` check
-  CheckUnsupported message -> length message `seq` check
-  CheckUnknown message -> length message `seq` check
-  CheckTruncated message -> length message `seq` check
-
-forceStrings :: [String] -> [String]
-forceStrings problems = foldr (\problem rest -> length problem `seq` rest) [] problems
+instance NFData Check where
+  rnf CheckPass = ()
+  rnf (CheckMismatch problems) = rnf problems
+  rnf (CheckBlocked message) = rnf message
+  rnf (CheckUnsupported message) = rnf message
+  rnf (CheckUnknown message) = rnf message
+  rnf (CheckTruncated message) = rnf message
 
 data CaseOutcome = CaseOutcome
   { outcomeClass :: SubjectClass
@@ -636,13 +632,13 @@ runStockBatch contract workspace runner options subjects =
       path <- writeStockCase workspace (subjectId item) (provenance item) (subjectRecord item) (subjectOracle item)
       result <- runCaseFile runner path
       case result of
-        Left message -> pure (CaseOutcome (subjectClass item) (subjectId item) (CheckBlocked message))
+        Left message -> pure (CaseOutcome (subjectClass item) (subjectId item) (force (CheckBlocked message)))
         Right (caseValue, regions, raw) ->
           pure
             ( CaseOutcome
                 (subjectClass item)
                 (subjectId item)
-                (forceCheck
+                (force
                    (either
                       (\message -> CheckBlocked ("invalid_output: " ++ renderObservationError message))
                       (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions))
@@ -667,13 +663,13 @@ runArmBatch contract workspace profile runner options subjects =
       path <- writeArmCase workspace profile ("arm-" ++ subjectId item) (provenance item) (subjectRecord item) (subjectOracle item)
       result <- runCaseFile runner path
       case result of
-        Left message -> pure (CaseOutcome (subjectClass item) (subjectId item) (CheckBlocked message))
+        Left message -> pure (CaseOutcome (subjectClass item) (subjectId item) (force (CheckBlocked message)))
         Right (caseValue, regions, raw) ->
           pure
             ( CaseOutcome
                 (subjectClass item)
                 (subjectId item)
-                (forceCheck
+                (force
                    (either
                       (\message -> CheckBlocked ("invalid_output: " ++ renderObservationError message))
                       (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions))

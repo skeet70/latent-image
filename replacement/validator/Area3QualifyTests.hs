@@ -92,6 +92,11 @@ main = do
         ensure (statusOf negativeCounter == "blocked") "negative counter is not a pass"
         fractional <- runFakeRunner "fractional-unicorn"
         ensure (statusOf fractional == "blocked") "fractional numeric is not a pass"
+        setEnv "FAKE_RUNNER_MODE" "anchor-mismatch"
+        anchorMismatch <- runCommand qualify (["--contract", root </> "contract.json", "--case-dir", anchorDir, "--candidate", candidate, "--runner", fakeRunner, "--arm-image", armImage, "--arm-symbols", armSymbols, "--arm-base", "0x00800000", "--scope", "capability", "--mutations", "single", "--stock", "all", "--limit", "1"])
+        unsetEnv "FAKE_RUNNER_MODE"
+        ensure (statusOf anchorMismatch == "failed") "anchored mismatch fails"
+        ensure (any (\anchor -> not (null (arrayOf (get anchor "problems")))) (arrayOf (field anchorMismatch ["anchors"]))) "anchor diagnostic retained"
         pure ()
     _ -> failH "usage: area3-qualify-tests QUALIFY CANDIDATE FAULTY"
 
