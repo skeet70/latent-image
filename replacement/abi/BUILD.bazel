@@ -1,0 +1,71 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "pilot-rust",
+    src = "pilot.rs",
+    crate_name = "xm1_pilot",
+)
+
+xm1_rust_staticlib(
+    name = "pilot-defect-rust",
+    testonly = True,
+    src = "pilot.rs",
+    crate_name = "xm1_pilot",
+    rustc_flags = [
+        "--cfg",
+        "pilot_abi_defect",
+    ],
+)
+
+xm1_rust_elf(
+    name = "pilot-image",
+    asm_srcs = ["pilot-entry.S"],
+    c_srcs = ["pilot-harness.c"],
+    entry = "xm1_abi_probe",
+    link_script = "pilot.ld",
+    rust_staticlib = ":pilot-rust",
+)
+
+xm1_rust_elf(
+    name = "pilot-defect-image",
+    testonly = True,
+    asm_srcs = ["pilot-entry.S"],
+    c_srcs = ["pilot-harness.c"],
+    entry = "xm1_abi_probe",
+    link_script = "pilot.ld",
+    rust_staticlib = ":pilot-defect-rust",
+)
+
+sh_test(
+    name = "pilot-abi-tests",
+    size = "small",
+    srcs = ["pilot-tests.sh"],
+    args = [
+        "$(location //emulation:native-case)",
+        "$(location //emulation:native-runner)",
+        "$(location :pilot-image.bin)",
+        "$(location :pilot-image.elf)",
+        "$(location :pilot-image.symbols)",
+        "$(location :pilot-image.disasm)",
+        "$(location :pilot-defect-image.bin)",
+        "$(location :pilot-case.json.in)",
+        "$(location @lab_jq//:bin/jq)",
+        "$(location @lab_llvm//:bin/llvm-readelf)",
+        "$(location @lab_coreutils//:bin/sha256sum)",
+    ],
+    data = [
+        "pilot-case.json.in",
+        ":pilot-defect-image.bin",
+        ":pilot-image.bin",
+        ":pilot-image.disasm",
+        ":pilot-image.elf",
+        ":pilot-image.symbols",
+        "//emulation:native-case",
+        "//emulation:native-runner",
+        "@lab_coreutils//:bin/sha256sum",
+        "@lab_jq//:bin/jq",
+        "@lab_llvm//:bin/llvm-readelf",
+    ],
+)

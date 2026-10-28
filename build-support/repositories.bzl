@@ -144,6 +144,7 @@ def _lab_dependencies_impl(_ctx):
             repository = "@lab_nixpkgs",
             build_file_content = 'exports_files(["bin/%s"], visibility = ["//visibility:public"])' % binary,
         )
+
     # //af-session reads external session recordings on the host.
     nixpkgs_package(
         name = "lab_ffmpeg",
@@ -151,6 +152,7 @@ def _lab_dependencies_impl(_ctx):
         repository = "@lab_nixpkgs",
         build_file_content = 'exports_files(["bin/ffmpeg", "bin/ffprobe"], visibility = ["//visibility:public"])',
     )
+
     # //emulation:card-with-files writes files into a card image's FAT partition.
     nixpkgs_package(
         name = "lab_mtools",
@@ -187,7 +189,7 @@ def _lab_dependencies_impl(_ctx):
         ("lab_bash", "bash", ["bin/bash"]),
         ("lab_clang", "clang", ["bin/clang"]),
         ("lab_lld", "lld", ["bin/ld.lld"]),
-        ("lab_llvm", "llvm", ["bin/llvm-objcopy", "bin/llvm-nm", "bin/llvm-objdump"]),
+        ("lab_llvm", "llvm", ["bin/llvm-objcopy", "bin/llvm-nm", "bin/llvm-objdump", "bin/llvm-readelf"]),
         ("lab_coreutils", "coreutils", ["bin/sha256sum", "bin/sort"]),
     ]:
         nixpkgs_package(
@@ -196,6 +198,16 @@ def _lab_dependencies_impl(_ctx):
             repository = "@lab_nixpkgs",
             build_file_content = "exports_files(%r, visibility = [\"//visibility:public\"])" % binaries,
         )
+
+    # //replacement/toolchain:rust.bzl cross-compiles no_std ARM modules with
+    # this pinned rustc, its matching core and compiler_builtins.
+    nixpkgs_package(
+        name = "lab_xm1_rust",
+        nix_file = "//replacement/toolchain:xm1-rust.nix",
+        nix_file_deps = ["//build-support:nixpkgs.nix", "//:devenv.lock"],
+        repository = "@lab_nixpkgs",
+        build_file_content = 'exports_files(["bin/rustc", "share/xm1-rust/build-facts.txt", "share/xm1-rust/target-spec.json"], visibility = ["//visibility:public"])',
+    )
 
     # //host/firmware:ram-push-toolchain-module bakes these store paths into
     # RamPushToolchain.hs.
