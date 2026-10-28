@@ -20,7 +20,7 @@ main = do
       putStrLn "{\"wire_version\":1,\"status\":\"returned\",\"unicorn_error\":1}"
     "fractional-unicorn" ->
       putStrLn "{\"wire_version\":1,\"status\":\"returned\",\"unicorn_error\":0.5}"
-    "anchor-mismatch" -> case parseWire wire of
+    "anchor-event-mismatch" -> case parseWire wire of
       Just (registers, exit, regions) -> putStrLn (mismatchJson registers exit regions)
       Nothing -> putStrLn "{\"wire_version\":1,\"status\":\"returned\",\"unicorn_error\":0}"
     "negative-counter" ->
@@ -40,12 +40,10 @@ parseWire text = case lines text of
 
 mismatchJson :: [String] -> String -> [[String]] -> String
 mismatchJson registers exit regions =
-  "{\"wire_version\":1,\"status\":\"returned\",\"unicorn_error\":0,\"instructions\":\"1\",\"memory_provenance_total\":\"0\",\"memory_provenance\":[],\"registers\":{" ++ registerJson ++ "},\"memory\":[" ++ memoryJson ++ "]}"
+  "{\"wire_version\":1,\"status\":\"returned\",\"unicorn_error\":0,\"instructions\":\"1\",\"memory_provenance_total\":\"0\",\"memory_provenance\":[],\"registers\":{" ++ registerJson ++ "},\"memory\":[" ++ memoryJson ++ "],\"events\":[{\"address\":\"0x00005000\",\"inputs\":{},\"outputs\":{\"r0\":\"0x00000000\"}}]}"
   where
     labels = ["r0","r1","r2","r3","r4","r5","r6","r7","r8","r9","r10","r11","r12","sp","lr","cpsr"]
-    overridden = case registers of
-      (_ : rest) -> "0x00000001" : rest
-      [] -> []
+    overridden = registers
     registerJson =
       intercalate ","
         (["\"" ++ label ++ "\":\"" ++ value ++ "\"" | (label, value) <- zip labels overridden] ++ ["\"pc\":\"" ++ exit ++ "\""])
