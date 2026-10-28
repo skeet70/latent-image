@@ -130,7 +130,6 @@ haskell_test(
         "-Werror",
         "-O2",
     ],
-    tags = ["no-sandbox"],
     args = ["$(rootpath //emulation:native-runner)"],
     data = ["//emulation:native-runner"],
     deps = [
