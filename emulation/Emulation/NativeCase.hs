@@ -153,11 +153,14 @@ loadCase input = do
  void$foldM(\occupied item->do
    fields item "region offset hex" "expected memory"
    r<-maybe(failH "unknown expected region")pure(find(\r->get(description r)"id"==get item "region")regions)
-   ensure('w' `elem` str(get(description r)"permissions")) "expected difference must be writable"
    offset<-integer(get item "offset")0(fromIntegral sizeBytes) "expected offset"
    bytes<-byteString(get item "hex")
    let end=offset+fromIntegral(B.length bytes); ident=get item "region"
+       writable='w' `elem` str(get(description r)"permissions")
+       initialSlice=B.take(B.length bytes)(B.drop(fromInteger offset)(regionBytes r))
    ensure(not(B.null bytes) && end<=regionSize r) "expected memory bounds"
+   -- An expected byte in a read-only region observes the initial value; it never authorizes a write.
+   ensure(writable || initialSlice==bytes) "expected memory in a read-only region must equal its initial bytes"
    ensure(all(\(name,lo,hi)->name/=ident || hi<=offset || end<=lo)occupied) "expected memory overlaps"
    pure((ident,offset,end):occupied)) [] differences
  events<-arrayCheck(get expected "events")0 eventCount "event limit"
