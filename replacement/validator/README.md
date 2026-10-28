@@ -56,6 +56,20 @@ Coverage excludes other records, parity-byte mutations inside the 352/61,776 enu
 
 `status: qualified` and `capability: true` require the complete declared domain in one run: all three grounded anchors, the 352 single-bit and 61,776 two-bit mutations, all 56 independently constructed record/parity cases, original-binary execution of every one of them, and the ARM candidate executed in the native harness on every one of them, each returned with matching observations, preserved ABI state and permitted effects. `--mutations single|two`, `--stock none|COUNT` and `--limit` narrow the run; the report names the gaps in `coverage_gaps` and the status stays `partial` or `blocked`. A sampled run cannot qualify.
 
+## Qualified run
+
+The complete capability run passed on 2026-10-28 under the fixed containment. Outside the slot: `XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=8G`. Inside the canonical emulator-slot payload: `taskset -c 0,1 cpulimit -i -l75 -- env 'GHCRTS=-N1 -M4G -A16m' area3-qualify ... --jobs 1`. `-i` includes the native runner children, and the RTS limits apply only to the real command. The unchanged 85 C guard and the 8 GiB swap-free cap apply to the whole slot.
+
+- Anchors 3/3; original closure 62,184/62,184; ARM candidate 62,184/62,184; refusal probes 6/6.
+- 352 single-bit, 61,776 two-bit and 56 record/parity subjects all returned and matched under both executions, with preserved ABI state and permitted effects.
+- The host faulty candidate was detected on 5,488 subjects. Its reduced witness is four flips in one protected word reduced to two (byte 0, bits 0 and 1), and the original binary rejects it.
+- The cross-compiled faulty ARM artifact was run as a bounded control on that exact witness: the ARM case returned with r0 expected 1 and observed 0, the original binary rejected the witness, and the anchors and the area3 ABI and effect checks stayed satisfied.
+- 41 min 34 s service runtime, 1.6 GiB peak, exit 0, `status: qualified`, `capability: true`.
+
+## Artifact identities
+
+The frozen run's raw report is `full-20261028.json` under `private-data/analysis/x-m1-1.50/area3-qualification/`, SHA-256 `18eced51de1b98cfd59e3500f797d466d5ea5ab81592977bd28c2b313f1369dc`. The same directory holds `identities-20261028.json` with the post-run digests of the contract, native runner, host candidate and both ARM images and symbol tables. Each generated case binds the ARM image digest and the case loader verifies every artifact digest at execution.
+
 ## Qualification outcomes
 
 | Runner diagnostic | Qualification |
