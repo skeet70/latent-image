@@ -32,8 +32,9 @@ import qualified Data.Vector as V
 import Data.Word (Word32, Word64)
 import Numeric (showHex)
 import Emulation.WatchObservation
-  ( Instructions (..)
+  ( Instructions
   , RunPurpose (..)
+  , instructionCount
   , WatchAddress
   , WatchJudgement (..)
   , WatchRange
@@ -239,7 +240,7 @@ parseCpuChange value = do
   exactKeys ["kind", "core", "pc", "instructions", "address", "physical", "size", "before", "after"] value
   core <- field "core" value >>= parseCore
   pc <- field "pc" value >>= asWord32
-  instructions <- Instructions <$> (field "instructions" value >>= asWord64)
+  instructions <- instructionCount <$> (field "instructions" value >>= asWord64)
   address <- field "address" value >>= asWord32
   physical <- field "physical" value >>= asWord32
   bytes <- field "size" value >>= parseSize 1 8
