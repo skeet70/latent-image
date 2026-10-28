@@ -26,6 +26,9 @@ module EmulatorUsb
   , emulatorModeDial
   , emulatorCapture
   , emulatorReadMemory
+  , emulatorWatchBegin
+  , emulatorWatchState
+  , emulatorMediaState
   ) where
 
 import Control.Concurrent.MVar
@@ -347,6 +350,16 @@ emulatorModeDial emulator position = Object <$> rpc emulator (object
 
 emulatorCapture :: Emulator -> String -> IO Value
 emulatorCapture emulator label = Object <$> rpc emulator (object ["command" .= String "capture", "label" .= label])
+
+emulatorWatchBegin :: Emulator -> [(Word32, Word32)] -> Int -> IO Value
+emulatorWatchBegin emulator ranges limit = Object <$> rpc emulator (object
+  ["command" .= String "watch-begin", "ranges" .= [ [lo, hi] | (lo, hi) <- ranges ], "limit" .= limit])
+
+emulatorWatchState :: Emulator -> IO Value
+emulatorWatchState emulator = Object <$> rpc emulator (object ["command" .= String "watch-state"])
+
+emulatorMediaState :: Emulator -> IO Value
+emulatorMediaState emulator = Object <$> rpc emulator (object ["command" .= String "media-state"])
 
 emulatorReadMemory :: Emulator -> Word32 -> Int -> IO B.ByteString
 emulatorReadMemory emulator address count = do

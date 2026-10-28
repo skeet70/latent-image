@@ -5,7 +5,7 @@ import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, try)
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON (..), Value (..), encode, object, withObject, (.:), (.=))
-import Data.Aeson.Types (parseEither)
+import Data.Aeson.Types (parseEither, parseMaybe)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (nub, sort)
 import Data.Maybe (catMaybes, isJust)
@@ -617,6 +617,10 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     state <- readRamPushState statePath
     runner <- newSegmentRunner emulator e2e (\label action -> timed label action) readAddress (\phase message -> stop phase message) plan
     let segments = runSegments runner
+        protected = trajectoryProtectedWrites plan
+        expect = trajectoryExpect plan
+    mediaBefore <- if null protected then pure Null else emulatorMediaState emulator
+    _ <- if null protected then pure Null else emulatorWatchBegin emulator [(fromIntegral lo, fromIntegral hi) | (lo, hi) <- protected] 4096
     capturedBefore <- segments (planBefore plan)
     unloadMailbox <- if planUnload plan
       then do
@@ -626,6 +630,21 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         Just <$> readMailbox
       else pure Nothing
     capturedAfter <- segments (planAfter plan)
+    mediaAfter <- if null protected then pure Null else emulatorMediaState emulator
+    watch <- if null protected then pure Null else emulatorWatchState emulator
+    let records = maybe [] id (parseMaybe (withObject "watch" (.: "records")) watch)
+        violated = case watch of
+          Null -> False
+          Object watchObject -> case K.lookup "violation" watchObject of
+            Just Null -> False
+            Nothing -> False
+            _ -> True
+          _ -> True
+        actualWrites = [record | record@(Object entry) <- records, K.lookup "source" entry == Just (String "cpu-write")]
+        watchOk = null protected || case expect of
+          ExpectClean -> null actualWrites && not violated
+          ExpectRefused -> not (null actualWrites)
+    unless watchOk (stop "protected-writes" ("memory watch expectation " ++ T.unpack (expectLabel expect) ++ " was not observed"))
     observed <- readIORef (runnerObservations runner)
     phaseTimes <- readIORef phases
     let result = object
@@ -653,6 +672,19 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           , "observations" .= (observed :: [Value])
           , "mailbox" .= object ["install" .= installMailbox, "rollback" .= unloadMailbox,
                                  "address" .= hexAddress mailbox]
+          , "protected_writes" .= object
+              [ "ranges" .= [ [lo, hi] | (lo, hi) <- protected ]
+              , "expect" .= T.unpack (expectLabel expect)
+              , "records" .= records
+              , "actual_writes" .= length actualWrites
+              , "violation" .= violated
+              , "ok" .= watchOk
+              , "control" .= (expect == ExpectRefused) ]
+          , "media" .= object
+              [ "scope" .= String "cardless"
+              , "card" .= cardRecord (emulationCardMode settings)
+              , "before" .= mediaBefore
+              , "after" .= mediaAfter ]
           , "unload" .= (if planUnload plan
               then Just (String (T.pack (show (length (manifestPublications manifest)) ++ " old words verified; allocation retained until power-off")))
               else Nothing)

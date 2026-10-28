@@ -160,5 +160,15 @@ main = do
         fmap null (mismatchesOf ("[\"menu\",67,56,0],[\"menu\",1,5,2]", "") ("[\"menu\",1,5,2]", "")) == Just False
     , expect "a variant that changes a capture is a mismatch" $
         fmap null (mismatchesOf ("[\"menu\",1,5,2]", "") ("[\"menu\",1,5,2]", ",\"capture\":\"x\"")) == Just False
+    , expect "a trajectory without a watch stays compatible" $
+        fmap trajectoryProtectedWrites (either (const Nothing) Just (decodeTrajectories (C.pack "{\"schema\":1,\"before_unload\":[],\"after_unload\":[]}"))) == Just []
+    , expect "a clean protected watch decodes its typed range" $
+        fmap (\t -> (trajectoryExpect t, trajectoryProtectedWrites t))
+          (either (const Nothing) Just (decodeTrajectories (C.pack "{\"schema\":1,\"protected_writes\":[[\"0096cc64\",\"0096ce26\"]],\"before_unload\":[],\"after_unload\":[]}")))
+          == Just (ExpectClean, [(0x0096cc64, 0x0096ce26)])
+    , expect "a refused watch without ranges is refused" $
+        refused (C.pack "{\"schema\":1,\"expect\":\"refused\",\"before_unload\":[],\"after_unload\":[]}")
+    , expect "a reversed watch range is refused" $
+        refused (C.pack "{\"schema\":1,\"protected_writes\":[[\"0096ce26\",\"0096cc64\"]],\"before_unload\":[],\"after_unload\":[]}")
     ]
   unless (and (checkedIn ++ checkedInVariants ++ results)) exitFailure
