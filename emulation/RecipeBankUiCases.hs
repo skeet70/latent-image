@@ -2156,9 +2156,13 @@ modelDataSize in' = B.length (inMdata in')
 mediaStateSize :: Inputs -> Int
 mediaStateSize in' = 0x200 + modelDataSize in'
 
+overlayFits :: ByteCount -> (ByteOffset, B.ByteString) -> Bool
+overlayFits (ByteCount size) (ByteOffset offset, bytes) =
+  offset >= 0 && B.length bytes <= size && offset <= size - B.length bytes
+
 modelScratchImage :: Inputs -> Spec -> B.ByteString
 modelScratchImage in' sp
-  | any (\(offset, _) -> offset + 4 > modelDataSize in') overlays = error "model cell outside the linked data image"
+  | any (overlayFits (ByteCount (modelDataSize in'))) overlays = error "model cell outside the linked data image"
   | otherwise = overlay (B.replicate (modelDataSize in') 0) overlays
   where
     offset name = fromIntegral (addr (inMs in') name - fromIntegral modelScratchBase)
