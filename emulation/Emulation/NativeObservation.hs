@@ -225,13 +225,14 @@ lookupRegister register observation = M.lookup register (nativeRegisters observa
 -- The process exit the adapter validated against the runner payload.
 reportRunnerExit :: Value -> Either ObservationError ExitCode
 reportRunnerExit value = case get value "runner_exit" of
+  Null -> Left MissingRunnerExit
   Number number -> case floatingOrInteger number :: Either Double Integer of
     Right exact
       | exact == 0 -> Right ExitSuccess
       | exact > 0 && exact <= 255 -> Right (ExitFailure (fromIntegral exact))
       | otherwise -> Left RunnerExitOutOfRange
     Left _ -> Left MalformedRunnerExit
-  _ -> Left MissingRunnerExit
+  _ -> Left MalformedRunnerExit
 
 observeNative :: ExitCode -> [Region] -> Value -> Either ObservationError NativeObservation
 observeNative exit regions value = do

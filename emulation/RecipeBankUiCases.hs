@@ -666,11 +666,14 @@ stockPaneRecord = 0x015e4800
 
 -- The stock cursor cell and pane-kind cell are scratch writes outside the
 -- writable claim spans.
-stockScratchSpans :: [(String, Word32, Int)]
+stockScratchSpans :: [(String, Int, Int)]
 stockScratchSpans =
-  [ ("cells", 0x009571d8, 4)
-  , ("draw-state", stockPaneRecord + 8, 4)
+  [ ("cells", fromIntegral (0x009571d8 - cellsBase), 4)
+  , ("draw-state", fromIntegral (stockPaneRecord + 8 - 0x015e46c0), 4)
   ]
+
+stockScratchRegions :: [String]
+stockScratchRegions = [region | (region, _, _) <- stockScratchSpans]
 
 stockDrawTailEnd :: Word32
 stockDrawTailEnd = 0x011662b4
@@ -738,8 +741,7 @@ inProfile ProcessingProfile name =
   name `notElem` [RegionId "stock-draw-tail", RegionId "draw-state", RegionId "stock-draw-calls"]
 inProfile DrawRootProfile name =
   name `notElem` [RegionId "ui-b", RegionId "draw-state", RegionId "stock-draw-calls"]
--- ui_dispatch reads UI_CELL_BASE in modal-cells; the select-draw profile drops
--- model-scratch instead of that dispatch table.
+-- ui_dispatch reads UI_CELL_BASE in modal-cells.
 inProfile SelectDrawProfile name =
   name `notElem` [RegionId "draw-state", RegionId "stock-draw-calls", RegionId "model-scratch"]
 inProfile PaneDrawProfile name =
@@ -2190,11 +2192,12 @@ regionList in' e sp = map setPermission (filter (\(n, _, _, _, _) -> inProfile (
           overlay (B.replicate (0xd52684 - 0xd38d98) 0)
             [(0, inUiC in'), (0xd4d604 - 0xd38d98, B.take 20608 (B.drop (0xd4d604 - 0xbf1a00) (inId5 in')))])
       ]
-    -- A data region is writable when this case declares a workspace in it or an
-    -- expected byte that differs from its initial value. An expected byte equal
-    -- to the initial value is an observation and grants nothing.
+    -- A data region is writable when this case declares a workspace in it, an
+    -- expected byte that differs from its initial value, or a declared
+    -- transient scratch span. An expected byte equal to the initial value is an
+    -- observation and grants nothing.
     setPermission (n, base, size, permissions, bytes) =
-      (n, base, size, if permissions == 3 && n `notElem` writeRegions then 1 else permissions, bytes)
+      (n, base, size, if permissions == 3 && n `notElem` writeRegions && n `notElem` stockScratchRegions then 1 else permissions, bytes)
     writeRegions =
       nub
         ( [n | AbiWorkspace _ (RegionId n) _ _ <- caseWorkspaces in' e sp]
@@ -2407,14 +2410,7 @@ allowedSpans in' e sp =
        | claim@(region, offset, value) <- spClaims sp
        , claimChangesInitial (regionList in' e sp) claim
        ]
-    ++ [ (n, offset, offset + size)
-       | (n, address, size) <- stockScratchSpans
-       , (n', base, extent, _, _) <- regionList in' e sp
-       , n' == n
-       , address >= base
-       , let offset = fromIntegral (address - base)
-       , offset + size <= extent
-       ]
+    ++ stockScratchSpans
 
 spanCovers :: String -> Int -> Int -> (String, Int, Int) -> Bool
 spanCovers region offset size (n, lo, hi) = region == n && lo <= offset && offset + size <= hi
