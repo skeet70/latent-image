@@ -437,6 +437,10 @@ kernelMain rawArgs = do
   ks <- parseSyms (build </> "kernel.syms")
   unless (addr ks "__rb_image_start" == kernelBase) (fail "--rb-base differs from linked __rb_image_start")
   ms <- parseSyms (build </> "model.syms")
+  let fieldCountAddress = addr ms "rbm_field_count"
+  unless (fieldCountAddress >= modelScratchBase
+          && fieldCountAddress < modelScratchBase + fromIntegral modelScratchSize)
+    (fail "model symbols are outside the native fixture region; rebuild with the relocated model storage")
   kbin <- B.readFile (build </> "kernel.bin")
   ktext <- B.readFile (build </> "kernel-text.bin")
   mdataRaw <- B.readFile (build </> "model-data.bin")
