@@ -155,7 +155,7 @@ The patch above is the complete baseline change. It adds 12 lines and deletes 6 
 - `emulation/build-recipe-bank-ui-cases.sh` generates the same 55 case IDs and every case reports `status: passed` and `runner_status: returned`.
 - Negative scenarios such as `n-refused-push`, `n-save-write-fail` and `n-select-unset-refused` keep `passed`; they are expected refusals inside a passing case, not failing cases.
 - `//emulation:recipe-bank-ui-plan-tests` passes.
-- The kernel symbol set, symbol addresses and symbol sizes used by the plan and cases do not change. The compiled bytes may differ because the source changed.
+- The public caller interface used by the plan and cases keeps its names and behavior. Code layout may change; record any symbol address, size or ordering change rather than treating it as a failure.
 
 `native_case_status` is expected to remain `failed` for every case: the native case compares whole memory and stub-event order, while the UI comparator excludes declared ABI workspaces and incidental stub order. The UI `status` and the public claims are the behavior assertion. Do not replace this field check with per-run bytes.
 
@@ -183,19 +183,26 @@ Measured 2026-10-27 local (2026-10-28 UTC) on the host, before any pilot workflo
 | Inputs | pinned `package-20261024b/image` image 4 and image 5, `reports/custom-settings.fields.json`, `RB_BASE=0x00be1f00`, `RB_NAME_RECORD=0x00beb784` |
 | JOBS | 2 for the bank build and case execution |
 
-| Measurement | Wall time |
+| Measurement, same script invocation | Wall time |
+| --- | ---: |
+| Unmodified tree, total | 45.29 s |
+| Unmodified tree, build phase (outer start to case start) | 1.07 s |
+| Unmodified tree, case generation and native execution (case start to case end) | 44.22 s |
+| Refactored tree, total | 42.58 s |
+| Refactored tree, build phase | 0.98 s |
+| Refactored tree, case generation and native execution | 41.59 s |
+
+| Other samples, whole run unless stated | Wall time |
 | --- | ---: |
 | Three-target tooling build (`native-runner`, `recipe-bank-ui-cases`, `build-recipe-bank`) | 4.56 s (250 actions, 54 disk cache hits) |
-| Unmodified tree, full UI script | 42.22 s |
-| Unmodified tree, build phase only | 1.07 s |
-| Unmodified tree, case generation and execution only | 41.54 s |
-| Refactored tree, full UI script, direct run | 42.07 s |
-| Refactored tree, build phase only | 0.98 s |
-| Refactored tree, case generation and execution only | 41.13 s |
+| Unmodified tree, earlier whole-run sample | 42.22 s |
+| Refactored tree, earlier whole-run sample | 42.07 s |
 | Refactored tree, `git apply` patch to all 55 results | 43.73 s |
 | UI plan test, Bazel wall including sandbox | 0.24 s to 0.49 s; test itself 0.0 s |
 
-The 43.73 s run includes patch application and was taken while sibling work was active; the 42.07 s direct run and the unmodified 42.22 s run are the comparable loop numbers. Case execution dominates: 41.1 to 41.5 s of the roughly 42 s total. Build is about 1 s. The source-change-to-result path is therefore about 42 s, with build and execution separated as above. The one-time Nix toolchain acquisition and the initial Bazel analysis are not counted as iteration cost.
+The phase rows for each tree come from one invocation. The build phase is the outer start to the first case-generator call; the execution phase is that call to the generator's end. They add to the total within 0.001 s. They are not an additive decomposition across runs: earlier build-only samples (1.07 s unmodified, 0.98 s refactored) and case-only samples (41.54 s, 41.13 s) were independent invocations, and their sums exceed the matching whole-run totals by 0.39 s and 0.04 s. Use the same-run rows when the separation matters.
+
+The unmodified instrumented sample is 3.07 s above its own earlier whole-run sample and 2.72 s above the refactored instrumented sample; the two earlier whole-run samples differ by 0.15 s. Treat that instrumented difference as load variation, not a refactor effect. The 43.73 s patch-to-result sample also ran under sibling load. Case execution dominates, and the one-time Nix toolchain acquisition and initial Bazel analysis are not counted as iteration cost. The source-change-to-result path is about 42.6 s in the refactored same-run sample, or 43.7 s including patch application in the separate whole-run sample.
 
 Investigation effort, recorded rather than reconstructed:
 
@@ -207,14 +214,14 @@ Investigation effort, recorded rather than reconstructed:
 Behavior comparison:
 
 - The kernel binary changed bytes but kept the same 31,788-byte size.
-- `kernel.syms` has 194 defined code symbols in both builds, with no added or removed symbol. `rb_ui_page` remains at `0x00be71c0` size 160. `rb_bank_interpose`, `rb_stage_edit_get_arm`, `rb_stage_edit_set_arm`, `rb_select_values` and `rb_select_labels` keep their addresses and sizes.
+- `kernel.syms` has 194 defined code symbols in both builds, with no added or removed symbol. `rb_ui_page` remains at `0x00be71c0` size 160. `rb_bank_interpose`, `rb_stage_edit_get_arm`, `rb_stage_edit_set_arm`, `rb_select_values` and `rb_select_labels` keep their addresses and sizes. This is a recorded observation for this C refactor, not a qualification requirement; a Rust replacement may change internal layout and only records the delta.
 - All 55 case result objects compare equal between the unmodified and refactored trees. That includes `status`, `runner_status`, `native_case_status`, `mismatches`, `native_case_mismatches`, public claims, initial state, final state and stub events.
 - 55 of 55 cases are `passed` with `runner_status: returned` in both trees. The underlying `native_case_status` is `failed` for all 55 in both trees for the declared ABI-workspace and stub-order differences; it is not a regression from the refactor.
 
 Unknowns and confounders:
 
 - The cached toolchain, Bazel disk cache and warm page cache make the 1 s build a warm incremental figure, not a cold-machine figure.
-- Case execution uses two jobs; sibling work and CPU frequency can move the 41 s figure. Report the cache state, load and case count with every repeat.
+- Case execution uses two jobs; sibling work and CPU frequency moved the same-run execution phase from 41.59 s to 44.22 s across the two instrumented samples. Report the cache state, load and case count with every repeat.
 - The 55 cases cover the modeled UI boundary and the declared stock cells, not physical input, display rendering or full-system scheduling.
 - The refactor's equivalence is argued from the unchanged behavior table and the identical case results. It does not prove the two instruction sequences are equivalent on unexercised inputs.
 
@@ -229,7 +236,7 @@ Use the same fixed workload, inputs, machine and engine. Change only the decoder
    devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-issue117-inventory" build --jobs=2 //emulation:native-runner //emulation:recipe-bank-ui-cases //host/firmware:build-recipe-bank
    ```
 
-3. Run the fixed workload into fresh output directories and record build time separately from case execution. The build phase can be timed with a generator wrapper that skips only the final case run; the full command is:
+3. Run the fixed workload into fresh output directories and record build and execution within the same invocation. Use a generator wrapper that logs the timestamp of its first case call and the timestamp when it returns; build is the outer start to that first call, execution is that call to its end, and the two add to the total. Do not add separate build-only and case-only invocations as an additive decomposition. The full command is:
 
    ```sh
    BUILD_DIR="$PWD/private-data/analysis/x-m1-1.50/recipes/issue117-inventory/ui-repeat-build" \
@@ -253,6 +260,6 @@ Use the same fixed workload, inputs, machine and engine. Change only the decoder
 7. Report measured changes only against the same cache, machine, toolchain, engine, case count and input state. If any of those changed, label the run as a changed condition and do not present the difference as an improvement.
 8. Keep emulator packaging, device-driven input and full-system acceptance separate from this host/native loop. #121's emulator evidence is additional evidence, not part of the build/execution baseline.
 
-Expected repeat result at this fixed workload: the same 55 case IDs, every case `passed` with `runner_status: returned`, the plan test passing, and the same public symbol interface. A Rust implementation behind the existing C ABI must preserve these outcomes. If it adds cases, report the added cases separately rather than mixing them into the 55-case timing.
+Expected repeat result at this fixed workload: the same 55 case IDs, every case `passed` with `runner_status: returned`, the plan test passing, and the public caller interface preserved. A Rust implementation behind the existing C ABI may change internal layout; record address, size and ordering changes as observations and do not fail the workload on layout alone. If it adds cases, report the added cases separately rather than mixing them into the 55-case timing.
 
 The first-wave checkpoint applies the same rule to the measured cost. A lower time is an improvement only when the workload, machine, toolchain, engine, input state and cache state are the same. Otherwise the checkpoint records the changed condition and does not credit the difference to the replacement work.
