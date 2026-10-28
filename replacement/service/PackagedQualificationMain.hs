@@ -54,25 +54,32 @@ main = do
 
 run :: Options -> IO ()
 run options = do
-  outcome <- try (qualifyPackaged (PackagedInputs (optionReceipt options) (optionPackage options) (optionReference options)))
-    :: IO (Either IOException (Either String PackagedReport))
-  case outcome of
+  referenceOutcome <- loadReferenceDat (optionReference options)
+  case referenceOutcome of
     Left problem ->
-      hPutStrLn stderr ("packaged qualification read failed: " ++ displayException problem) >> exitFailure
-    Right (Left problem) ->
-      hPutStrLn stderr ("packaged qualification invalid receipt: " ++ problem) >> exitFailure
-    Right (Right report) -> do
-      case optionReport options of
-        Nothing -> pure ()
-        Just path -> BL.writeFile path (BL.fromStrict (encodeCanonical (packagedReportValue report)) <> "\n")
-      putStrLn
-        ( "service packaged qualification "
-            ++ packagedStatusLabel (packagedStatus report)
-            ++ ": "
-            ++ show (qualifiedRowCount (packagedRows report))
-            ++ "/5 selected rows"
-        )
-      case packagedProblems report of
-        [] -> pure ()
-        problems -> mapM_ (hPutStrLn stderr . ("refused: " ++)) problems
-      if packagedStatus report == PackagedQualified then pure () else exitFailure
+      hPutStrLn stderr ("packaged qualification invalid reference: " ++ problem) >> exitFailure
+    Right reference -> do
+      outcome <- try
+        (qualifyPackaged
+          (PackagedInputs (optionReceipt options) (optionPackage options) reference))
+        :: IO (Either IOException (Either String PackagedReport))
+      case outcome of
+        Left problem ->
+          hPutStrLn stderr ("packaged qualification read failed: " ++ displayException problem) >> exitFailure
+        Right (Left problem) ->
+          hPutStrLn stderr ("packaged qualification invalid receipt: " ++ problem) >> exitFailure
+        Right (Right report) -> do
+          case optionReport options of
+            Nothing -> pure ()
+            Just path -> BL.writeFile path (BL.fromStrict (encodeCanonical (packagedReportValue report)) <> "\n")
+          putStrLn
+            ( "service packaged qualification "
+                ++ packagedStatusLabel (packagedStatus report)
+                ++ ": "
+                ++ show (qualifiedRowCount (packagedRows report))
+                ++ "/5 selected rows"
+            )
+          case packagedProblems report of
+            [] -> pure ()
+            problems -> mapM_ (hPutStrLn stderr . ("refused: " ++)) problems
+          if packagedStatus report == PackagedQualified then pure () else exitFailure

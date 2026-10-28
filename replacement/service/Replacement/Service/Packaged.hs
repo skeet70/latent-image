@@ -3,6 +3,8 @@
 -- | Packaged qualification for the retained row-availability service.
 module Replacement.Service.Packaged
   ( PackagedInputs (..)
+  , ReferenceDat
+  , loadReferenceDat
   , PackagedStatus (..)
   , PackagedReport (..)
   , PackagedRow (..)
@@ -14,7 +16,7 @@ module Replacement.Service.Packaged
   , packagedReportValue
   ) where
 
-import Control.Exception (IOException, try)
+import Control.Exception (IOException, displayException, try)
 import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', withObject, withText, (.:), (.:?), (.!=))
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as B
@@ -46,6 +48,17 @@ import System.Directory (doesFileExist)
 import System.FilePath (isAbsolute, (</>), takeFileName)
 
 newtype Digest = Digest { digestText :: String } deriving (Eq, Ord, Show)
+
+newtype ReferenceDat = ReferenceDat
+  { referenceDatDigest :: Digest
+  } deriving (Eq, Show)
+
+loadReferenceDat :: FilePath -> IO (Either String ReferenceDat)
+loadReferenceDat path = do
+  outcome <- try (digestFile path) :: IO (Either IOException Digest)
+  pure (case outcome of
+    Left problem -> Left ("boot/install reference: " ++ displayException problem)
+    Right digest -> Right (ReferenceDat digest))
 
 instance FromJSON Digest where
   parseJSON = withText "digest" (either fail pure . parseDigest . T.unpack)
@@ -335,7 +348,7 @@ instance FromJSON PackageManifest where
 data PackagedInputs = PackagedInputs
   { packagedReceiptDir :: FilePath
   , packagedPackageDir :: FilePath
-  , packagedReferenceDat :: FilePath
+  , packagedReferenceDat :: ReferenceDat
   } deriving (Eq, Show)
 
 data PackagedStatus = PackagedQualified | PackagedRefused deriving (Eq, Show)
@@ -417,7 +430,6 @@ qualifyPackaged (PackagedInputs receipt packageDirectory referenceDat) = do
                       actualKernel <- digestFile (packageDirectory </> "kernel" </> "kernel.bin")
                       actualArchive <- digestFile (packagePath packageDirectory archive)
                       actualFacts <- digestFile (packagePath packageDirectory facts)
-                      actualReference <- digestFile referenceDat
                       resultDigest <- digestFile (receipt </> "e2e-result.json")
                       let table = parseSymbolTable symbolsBytes
                           symbolsDigest = trustedDigest (sha256Hex (sha256 symbolsBytes))
@@ -428,7 +440,7 @@ qualifyPackaged (PackagedInputs receipt packageDirectory referenceDat) = do
                             , packagedFactsSha = actualFacts
                             , packagedExecutableSha = packageExecutableSha package
                             , packagedInstalledDat = startInstalledDat (e2eStart result)
-                            , packagedReferenceSha = actualReference
+                            , packagedReferenceSha = referenceDatDigest referenceDat
                             , packagedResultSha = resultDigest
                             , packagedManifestSha = trustedDigest (manifestDigest manifest)
                             , packagedSymbolsSha = symbolsDigest
@@ -441,7 +453,7 @@ qualifyPackaged (PackagedInputs receipt packageDirectory referenceDat) = do
                           problems = nub
                             (schemaProblems result
                               ++ modeProblems result
-                              ++ identityProblems package manifest result actualDat actualKernel actualArchive actualFacts actualReference symbolsDigest
+                              ++ identityProblems package manifest result actualDat actualKernel actualArchive actualFacts referenceDat symbolsDigest
                               ++ validateDeclaredSites table (e2eDeclaredSites result)
                               ++ traceProblems
                               ++ rowProblemsFor rowResults
@@ -497,11 +509,11 @@ sourceIdentityKeyText :: SourceIdentityKey -> String
 sourceIdentityKeyText BankArchiveKey = "rust_object_replacement_bank"
 sourceIdentityKeyText ToolchainFactsKey = "rust_toolchain_replacement_bank"
 
-identityProblems :: PackageManifest -> RamPushManifest -> E2E -> Digest -> Digest -> Digest -> Digest -> Digest -> Digest -> [String]
-identityProblems package manifest result actualDat actualKernel actualArchive actualFacts actualReference symbolsDigest =
+identityProblems :: PackageManifest -> RamPushManifest -> E2E -> Digest -> Digest -> Digest -> Digest -> ReferenceDat -> Digest -> [String]
+identityProblems package manifest result actualDat actualKernel actualArchive actualFacts referenceDat symbolsDigest =
   [ "package candidate DAT digest differs from recipe-complete.DAT" | actualDat /= packageFirmwareSha package ]
     ++ [ "package kernel digest differs from kernel/kernel.bin" | actualKernel /= packageExecutableSha package ]
-    ++ [ "boot/install reference digest differs from the emulator start input" | actualReference /= startInstalledDat (e2eStart result) ]
+    ++ [ "boot/install reference digest differs from the emulator start input" | referenceDatDigest referenceDat /= startInstalledDat (e2eStart result) ]
     ++ [ "emulator start omits card_present" | startCardPresent (e2eStart result) == Nothing ]
     ++ [ "emulator start is not the cardless route" | startCardPresent (e2eStart result) /= Just False ]
     ++ [ "package has no unique bank.a input" | length (inputsNamed "bank.a" package) /= 1 ]

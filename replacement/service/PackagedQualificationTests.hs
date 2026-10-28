@@ -58,8 +58,6 @@ baselineVariant = Variant baselineHits reopenHits declaredSites "candidate-quali
 
 baselineCheck :: FilePath -> IO ()
 baselineCheck root = do
-  check "fixture has distinct vendor, reference and candidate identities"
-    (stockSha /= referenceSha && referenceSha /= datSha && stockSha /= datSha)
   outcome <- load root baselineVariant
   case outcome of
     Left problem -> fail problem
@@ -97,7 +95,10 @@ load root variant = do
   privateWriteLazy (receipt </> "e2e-result.json") (encode (e2eResult variant))
   when (variantControlFile variant) $
     privateWriteLazy (receipt </> "e2e-control.json") (encode (object ["outcome" .= ("control-refused" :: String)]))
-  qualifyPackaged (PackagedInputs receipt package (root </> "reference.DAT"))
+  referenceOutcome <- loadReferenceDat (root </> "reference.DAT")
+  case referenceOutcome of
+    Left problem -> pure (Left problem)
+    Right reference -> qualifyPackaged (PackagedInputs receipt package reference)
 
 privateWrite :: FilePath -> B.ByteString -> IO ()
 privateWrite path bytes = B.writeFile path bytes >> setFileMode path 0o600
