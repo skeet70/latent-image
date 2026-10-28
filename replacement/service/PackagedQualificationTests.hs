@@ -6,78 +6,100 @@ import Control.Monad (unless)
 import Data.Aeson (Value (..), encode, object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
+import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
-import Data.List (intercalate)
 import qualified Data.Text as T
 import Emulation.Sha256 (sha256, sha256Hex)
+import FujiAF.Host (withTemporary)
+import FujiAF.RamPush (Address (..), RamPushEntries (..), afRingPayload, payloadAllocationSize, payloadEntries)
 import Replacement.Service.Packaged
-import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
+import Numeric (showHex)
+import System.Directory (createDirectoryIfMissing)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
 
+data Variant = Variant
+  { variantHits :: [Value]
+  , variantSites :: [Value]
+  , variantOutcome :: String
+  , variantAfterHits :: [Value]
+  , variantOmitSymbols :: Bool
+  , variantMutatePackage :: Maybe (FilePath -> IO ())
+  }
+
 main :: IO ()
-main = do
-  root <- (</> "latent-image-packaged-qualification-tests") <$> getTemporaryDirectory
-  createDirectoryIfMissing True root
-  removePathForcibly root
-  createDirectoryIfMissing True root
-  baseline root
-  refuses root "missing Rust entry" (baselineHits, declaredSites, "candidate-qualified")
-    (dropFirstEntry)
-  refuses root "wrong order" (baselineHits, declaredSites, "candidate-qualified")
-    (swapFirstTwo)
-  refuses root "wrong entry arguments" (baselineHits, declaredSites, "candidate-qualified")
-    (wrongArguments)
-  refuses root "missing return" (baselineHits, declaredSites, "candidate-qualified")
-    removeFirstReturn
-  refuses root "wrong symbol binding" (baselineHits, badSites, "candidate-qualified")
-    id
-  refuses root "control outcome" (baselineHits, declaredSites, "control-refused")
-    id
-  removePathForcibly root
+main = withTemporary "packaged-qualification" $ \root -> do
+  baselineCheck root
+  refuses root "missing Rust entry" (baselineVariant { variantHits = dropFirstEntry baselineHits })
+  refuses root "wrong order" (baselineVariant { variantHits = swapFirstTwo baselineHits })
+  refuses root "wrong entry arguments" (baselineVariant { variantHits = wrongArguments baselineHits })
+  refuses root "missing return" (baselineVariant { variantHits = removeFirstReturn baselineHits })
+  refuses root "valid rows with an orphan owned event" (baselineVariant { variantHits = appendOrphan baselineHits })
+  refuses root "wrong symbol binding" (baselineVariant { variantSites = badSites })
+  refuses root "control outcome" (baselineVariant { variantOutcome = "control-refused" })
+  refuses root "missing runtime symbol metadata" (baselineVariant { variantOmitSymbols = True })
+  refuses root "mutated package DAT" (baselineVariant { variantMutatePackage = Just mutatePackage })
+  refuses root "owned entry after service-after-unload" (baselineVariant { variantAfterHits = afterUnloadOwned })
   putStrLn "packaged qualification tests: passed"
 
-baseline :: FilePath -> IO ()
-baseline root = do
-  report <- run root baselineHits declaredSites "candidate-qualified"
-  check "a conforming wire fixture qualifies" (packagedStatus report == PackagedQualified)
+baselineVariant :: Variant
+baselineVariant = Variant baselineHits declaredSites "candidate-qualified" [] False Nothing
 
-refuses :: FilePath -> String -> ([Value], [Value], String) -> ([Value] -> [Value]) -> IO ()
-refuses root label (hits, sites, outcome) change = do
-  report <- run root (change hits) sites outcome
-  check (label ++ " is refused") (packagedStatus report == PackagedRefused)
+baselineCheck :: FilePath -> IO ()
+baselineCheck root = do
+  outcome <- load root baselineVariant
+  case outcome of
+    Left problem -> fail problem
+    Right report -> check "a conforming independent wire fixture qualifies" (packagedStatus report == PackagedQualified)
+
+refuses :: FilePath -> String -> Variant -> IO ()
+refuses root label variant = do
+  outcome <- load root variant
+  case outcome of
+    Left _ -> putStrLn ("ok " ++ label ++ " is refused")
+    Right report -> check (label ++ " is refused") (packagedStatus report == PackagedRefused)
 
 check :: String -> Bool -> IO ()
 check label ok = unless ok (putStrLn ("FAIL " ++ label) >> exitFailure) >> putStrLn ("ok " ++ label)
 
-run :: FilePath -> [Value] -> [Value] -> String -> IO PackagedReport
-run root hits sites outcome = do
-  let directory = root </> outcome
-      receipt = directory </> "receipt"
-      package = directory </> "package"
-  removePathForcibly directory
+load :: FilePath -> Variant -> IO (Either String PackagedReport)
+load root variant = do
+  let receipt = root </> "receipt"
+      package = root </> "package"
   createDirectoryIfMissing True (receipt </> "relinked")
-  createDirectoryIfMissing True package
-  writeFile (receipt </> "relinked" </> "kernel.syms") symbols
+  createDirectoryIfMissing True (package </> "kernel")
+  B.writeFile (receipt </> "relinked" </> "kernel.syms") symbols
+  B.writeFile (receipt </> "relinked" </> "runtime.bin") runtime
   BL.writeFile (receipt </> "relinked" </> "ram-push-manifest.json") (encode relinkManifest)
-  BL.writeFile (receipt </> "e2e-result.json") (encode (e2eResult hits sites outcome))
+  B.writeFile (package </> "recipe-complete.DAT") datBytes
+  B.writeFile (package </> "kernel" </> "kernel.bin") kernelBytes
   BL.writeFile (package </> "recipe-complete.json") (encode packageManifest)
-  outcomeResult <- qualifyPackaged (PackagedInputs receipt package)
-  case outcomeResult of
-    Left problem -> fail problem
-    Right report -> pure report
+  case variantMutatePackage variant of
+    Nothing -> pure ()
+    Just mutation -> mutation package
+  BL.writeFile (receipt </> "e2e-result.json") (encode (e2eResult variant))
+  qualifyPackaged (PackagedInputs receipt package)
 
-symbols :: String
-symbols = intercalate "\n"
-  [ "00a86878 00000010 T rb_service_field_row_state"
-  , "00a867a0 00000014 T rb_call_stock_probe"
-  , "00d52684 00006234 T FUN_00d52684"
-  , ""
+symbols :: B.ByteString
+symbols = B.intercalate (BC.pack "\n")
+  [ BC.pack "00a86878 00000010 T rb_service_field_row_state"
+  , BC.pack "00a867a0 00000014 T rb_call_stock_probe"
+  , BC.pack "00d52684 00006234 T FUN_00d52684"
+  , BC.pack ""
   ]
 
-symbolsSha :: String
-symbolsSha = sha256Hex (sha256 (BC.pack symbols))
+runtime :: B.ByteString
+runtime = B.replicate size 0
+
+size :: Int
+size = payloadAllocationSize afRingPayload
+
+base :: Word32
+base = 0x00a85000
+
+entries :: RamPushEntries
+entries = payloadEntries afRingPayload (Address base)
 
 declaredSites :: [Value]
 declaredSites =
@@ -98,15 +120,24 @@ baselineHits = concat [observed row iteration | row <- [0 .. 4], iteration <- [0
 
 observed :: Int -> Int -> [Value]
 observed row iteration =
-  [ hit "svc-rust-entry" (base + 0) 0x110 row
-  , hit "svc-stock-trampoline" (base + 1) 0x110 row
-  , hit "stock-row-probe" (base + 2) 0x110 row
-  , hit "stock-row-probe" (base + 3) 5 0x1a
-  , hit "stock-row-probe" (base + 4) 5 0x1a
-  , hit "svc-stock-return" (base + 5) 0 0
+  [ hit "svc-rust-entry" (start + 0) 0x110 row
+  , hit "svc-stock-trampoline" (start + 1) 0x110 row
+  , hit "stock-row-probe" (start + 2) 0x110 row
+  , hit "stock-row-probe" (start + 3) 5 0x1a
+  , hit "stock-row-probe" (start + 4) 5 0x1a
+  , hit "svc-stock-return" (start + 5) 0 0
   ]
   where
-    base = 1000 + row * 100 + iteration * 10
+    start = 1000 + row * 100 + iteration * 10
+
+afterUnloadOwned :: [Value]
+afterUnloadOwned =
+  [ hit "svc-rust-entry" 9500 0x110 0
+  , hit "svc-stock-trampoline" 9501 0x110 0
+  , hit "stock-row-probe" 9502 0x110 0
+  , hit "stock-row-probe" 9503 5 0x1a
+  , hit "svc-stock-return" 9504 0 0
+  ]
 
 hit :: String -> Int -> Int -> Int -> Value
 hit label instructions r0 r1 =
@@ -122,13 +153,7 @@ hit label instructions r0 r1 =
 
 hex :: Int -> String
 hex value = "0x" ++ replicate (8 - length digits) '0' ++ digits
-  where digits = showHex value
-
-showHex :: Int -> String
-showHex value
-  | value < 16 = [digits !! value]
-  | otherwise = showHex (value `div` 16) ++ [digits !! (value `mod` 16)]
-  where digits = "0123456789abcdef"
+  where digits = showHex value ""
 
 dropFirstEntry :: [Value] -> [Value]
 dropFirstEntry = removeFirst "svc-rust-entry"
@@ -143,14 +168,16 @@ swapFirstTwo values = values
 wrongArguments :: [Value] -> [Value]
 wrongArguments (value : rest) =
   case value of
-    Object objectValue ->
-      Object (KM.insert (K.fromString "r1") (String (T.pack "0x00000009")) objectValue) : rest
+    Object objectValue -> Object (KM.insert (K.fromString "r1") (String (T.pack "0x00000009")) objectValue) : rest
     _ -> value : rest
 wrongArguments [] = []
 
+appendOrphan :: [Value] -> [Value]
+appendOrphan hits = hits ++ [hit "svc-stock-trampoline" 9001 0x110 0]
+
 removeFirst :: String -> [Value] -> [Value]
 removeFirst label (value : rest)
-  | field value "site" == Just (String (text label)) = rest
+  | field value "site" == Just (String (T.pack label)) = rest
   | otherwise = value : removeFirst label rest
 removeFirst _ [] = []
 
@@ -158,20 +185,86 @@ field :: Value -> String -> Maybe Value
 field (Object objectValue) name = KM.lookup (K.fromString name) objectValue
 field _ _ = Nothing
 
-text :: String -> T.Text
-text = T.pack
+mutatePackage :: FilePath -> IO ()
+mutatePackage package = B.writeFile (package </> "recipe-complete.DAT") (datBytes <> BC.pack "!")
 
-e2eResult :: [Value] -> [Value] -> String -> Value
-e2eResult hits sites outcome =
+datBytes :: B.ByteString
+datBytes = BC.pack "recipe-complete-dat"
+
+kernelBytes :: B.ByteString
+kernelBytes = BC.pack "kernel-bin"
+
+datSha, kernelSha, runtimeSha, archiveSha, factsSha :: String
+datSha = digest datBytes
+kernelSha = digest kernelBytes
+runtimeSha = digest runtime
+archiveSha = replicate 64 'a'
+factsSha = replicate 64 'b'
+
+digest :: B.ByteString -> String
+digest = sha256Hex . sha256
+
+relinkManifest :: Value
+relinkManifest =
   object
     [ "schema" .= (1 :: Int)
-    , "outcome" .= outcome
-    , "runtime" .= object
-        [ "bytes" .= (100 :: Int)
-        , "publications" .= (1 :: Int)
-        , "symbols_sha256" .= symbolsSha
-        , "manifest" .= "relinked/ram-push-manifest.json"
+    , "base" .= hex (fromIntegral base)
+    , "size" .= size
+    , "runtime_sha256" .= runtimeSha
+    , "entry" .= object
+        [ "install" .= hexWord (installEntry entries)
+        , "rollback" .= hexWord (rollbackEntry entries)
+        , "status" .= hexWord (statusEntry entries)
         ]
+    , "publications" .= [publication index | index <- [0 .. publicationTotal - 1]]
+    , "source_identity" .= object
+        [ "rust_object_replacement_bank" .= archiveSha
+        , "rust_toolchain_replacement_bank" .= factsSha
+        ]
+    ]
+
+publicationTotal :: Int
+publicationTotal = 6
+
+publication :: Int -> Value
+publication index =
+  object
+    [ "index" .= index
+    , "phase" .= (if index < 3 then "setup" else "activation" :: String)
+    , "address" .= hex (0x011122c0 + 4 * index)
+    , "old" .= ("0x00000000" :: String)
+    , "new" .= ("0x00000000" :: String)
+    , "core" .= ("cpu0" :: String)
+    ]
+
+hexWord :: Address -> String
+hexWord (Address value) = hex (fromIntegral value)
+
+packageManifest :: Value
+packageManifest =
+  object
+    [ "schema" .= ("recipe-executable-package-1" :: String)
+    , "firmware_sha256" .= datSha
+    , "executable_sha256" .= kernelSha
+    , "executable_start" .= ("0x00be1f00" :: String)
+    , "installable" .= False
+    , "inputs" .=
+        [ object ["path" .= ("runfiles/bank.a" :: String), "sha256" .= archiveSha]
+        , object ["path" .= ("runfiles/build-facts.txt" :: String), "sha256" .= factsSha]
+        ]
+    ]
+
+e2eResult :: Variant -> Value
+e2eResult variant =
+  object
+    [ "schema" .= (1 :: Int)
+    , "outcome" .= variantOutcome variant
+    , "runtime" .=
+        object
+          ([ "bytes" .= size
+           , "publications" .= publicationTotal
+           , "manifest" .= ("relinked/ram-push-manifest.json" :: String)
+           ] ++ [ "symbols_sha256" .= digest symbols | not (variantOmitSymbols variant) ])
     , "relink" .= object
         [ "mode" .= ("unreviewed" :: String)
         , "source_identity" .= object
@@ -188,70 +281,30 @@ e2eResult hits sites outcome =
             ]
         ]
     , "observations" .=
-        [ object ["phase" .= ("service-field-list" :: String), "trace_hits" .= hits]
+        [ object ["phase" .= ("service-field-list" :: String), "trace_hits" .= variantHits variant]
         , object ["phase" .= ("service-after-unload" :: String), "trace_hits" .= ([] :: [Value])]
         , object [ "phase" .= ("service-after-unload-stock" :: String)
-                 , "trace_hits" .= [hit "stock-row-probe" 9000 0 0]
+                 , "trace_hits" .= ([hit "stock-row-probe" 9000 0 0] ++ variantAfterHits variant)
                  ]
         ]
     , "trajectories" .=
         [ object ["name" .= ("service-page-cancel" :: String), "result" .= ("matched" :: String)]
         , object ["name" .= ("service-field-reopen" :: String), "result" .= ("matched" :: String)]
         ]
-    , "unload" .= ("1 old words verified; allocation retained until power-off" :: String)
+    , "unload" .= ("publication rollback observed" :: String)
     , "mailbox" .= object
-        [ "install" .= operation 1 1
-        , "rollback" .= operation 2 1
+        [ "install" .= operation 1
+        , "rollback" .= operation 2
         ]
-    , "declared_trace_sites" .= sites
+    , "declared_trace_sites" .= variantSites variant
     ]
 
-operation :: Int -> Int -> Value
-operation op count =
+operation :: Int -> Value
+operation op =
   object
     [ "operation" .= op
     , "status" .= (0 :: Int)
     , "peer_status" .= (0 :: Int)
-    , "validated" .= count
-    , "restored" .= count
+    , "validated" .= publicationTotal
+    , "restored" .= publicationTotal
     ]
-
-relinkManifest :: Value
-relinkManifest =
-  object
-    [ "base" .= ("0x00a85000" :: String)
-    , "runtime_sha256" .= runtimeSha
-    , "source_identity" .= object
-        [ "rust_object_replacement_bank" .= archiveSha
-        , "rust_toolchain_replacement_bank" .= factsSha
-        ]
-    , "publications" .=
-        [ object
-            [ "address" .= ("0x011122c0" :: String)
-            , "old" .= ("0xe300383d" :: String)
-            , "new" .= ("0xe3003849" :: String)
-            , "phase" .= ("setup" :: String)
-            ]
-        ]
-    , "size" .= (100 :: Int)
-    ]
-
-packageManifest :: Value
-packageManifest =
-  object
-    [ "firmware_sha256" .= datSha
-    , "executable_sha256" .= executableSha
-    , "executable_start" .= ("0x00be1f00" :: String)
-    , "installable" .= False
-    , "inputs" .=
-        [ object ["path" .= ("runfiles/bank.a" :: String), "sha256" .= archiveSha]
-        , object ["path" .= ("runfiles/build-facts.txt" :: String), "sha256" .= factsSha]
-        ]
-    ]
-
-archiveSha, factsSha, datSha, executableSha, runtimeSha :: String
-archiveSha = replicate 64 'a'
-factsSha = replicate 64 'b'
-datSha = replicate 64 'c'
-executableSha = replicate 64 'd'
-runtimeSha = replicate 64 'e'

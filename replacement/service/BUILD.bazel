@@ -63,6 +63,7 @@ haskell_library(
         ":qualification",
         "//emulation:case-sha256",
         "//emulation:ui-trajectory-lib",
+        "//emulation:watch-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -70,6 +71,7 @@ haskell_library(
         "//host:filepath",
         "//host:host-support",
         "//host:text",
+        "//transport:camera-core",
     ],
 )
 
@@ -110,7 +112,9 @@ haskell_test(
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
+        "//host:host-support",
         "//host:text",
+        "//transport:camera-core",
     ],
 )
 
