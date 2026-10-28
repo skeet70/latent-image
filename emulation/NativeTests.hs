@@ -190,7 +190,7 @@ readOnlyRegressions runner=withTemporary "fuji-read-only-tests"$ \root->do
      roWriteRegion=obj[("id",s "ro"),("address",hex 0x9000),("size",n 4),("permissions",s "r"),("initial",obj[("zero",b True)])]
      exitRegion=obj[("id",s "exit"),("address",hex 0xa000),("size",n 4),("permissions",s "rx"),("initial",obj[("zero",b True)])]
      stackRegion=obj[("id",s "stack"),("address",hex 0xb000),("size",n 32),("permissions",s "rw"),("initial",obj[("zero",b True)])]
-     registers=merge(obj([("r"++show i,hex 0)|i<-[0::Int..12]]++[("sp",hex 0xb010),("lr",hex 0xa000),("cpsr",hex 0x10)]))[("r1",hex 0x9000)]
+     registers=merge(obj([("r"++show i,hex 0)|i<-[0 .. 12 :: Int]]++[("sp",hex 0xb010),("lr",hex 0xa000),("cpsr",hex 0x10)]))[("r1",hex 0x9000)]
      fixture=obj
        [("schema_version",n 1),("id",s "read-only-write"),("origin",s "synthetic")
        ,("provenance",s "NativeTests.hs: store r0 into a read-only region")
