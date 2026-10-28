@@ -30,6 +30,7 @@ import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey
 import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.SegmentReceipt (SegmentReceipt (..), SegmentResult (..), elapsedSeconds, segmentName, segmentNameText)
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
+import Emulation.PreservationObservation
 import Emulation.UiTrajectory
 import Emulation.WatchObservation
 import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
@@ -53,6 +54,18 @@ data BootMode = CheckpointedBoot | FreshBoot deriving (Eq, Show)
 -- | FlashCandidate boots a DAT whose own loader publishes the bank and runs the segments
 -- without ram-alloc, ram-push or ram-unload.
 data PushMode = RamPush | FlashCandidate deriving (Eq, Show)
+
+preservationReceipt :: PreservationRanges -> PreservationObservation -> WatchJudgement -> Value
+preservationReceipt ranges observation judgement = object
+  [ "enforcement" .= ("ram-byte-preservation" :: T.Text)
+  , "ranges" .= preservationRangesJson ranges
+  , "counters" .= preservationCountersJson (preservationCounters observation)
+  , "first_violation" .= maybe Null preservationViolationJson (preservationFirstViolation observation)
+  , "verdict" .= verdict ]
+  where
+    verdict = case judgement of
+      CandidateQualified -> "preserved" :: T.Text
+      ControlRefusedProtectedWrite -> "refused"
 
 mediaJson :: MediaObservation -> Value
 mediaJson media = object
@@ -349,7 +362,7 @@ data Plan = Plan
   , planUnload :: Bool
   , planFromInstall :: Bool
   , planTraceSites :: [TraceSite]
-  , planProtectedWrites :: [WatchRange]
+  , planProtection :: TrajectoryProtection
   , planExpect :: TrajectoryExpect
   }
 
@@ -369,7 +382,7 @@ segmentPlan trajectories name = do
       selected = filter ((`elem` chosen) . segmentPhase)
       after = selected (afterUnload trajectories)
   pure (Plan name (selected (beforeUnload trajectories)) after (not (null after)) True
-    (trajectoryTraceSites trajectories) (trajectoryProtectedWrites trajectories) (trajectoryExpect trajectories))
+    (trajectoryTraceSites trajectories) (trajectoryProtection trajectories) (trajectoryExpect trajectories))
 
 -- | A relinker build held in memory.
 data Relinked = Relinked
@@ -464,7 +477,7 @@ runRamPushE2E given python workspace trajectoryFile installedMedia adjustmentNan
         (Nothing, RamPush) -> Nothing
   case selection of
     Nothing -> session (Plan "all" (beforeUnload trajectories) (afterUnload trajectories) True False
-      (trajectoryTraceSites trajectories) (trajectoryProtectedWrites trajectories) (trajectoryExpect trajectories)) receipt
+      (trajectoryTraceSites trajectories) (trajectoryProtection trajectories) (trajectoryExpect trajectories)) receipt
     Just names -> do
       plans <- mapM (segmentPlan trajectories) names
       when (pushMode settings == FlashCandidate) $ forM_ plans $ \plan ->
@@ -490,6 +503,11 @@ seconds value = showFFloat (Just 1) value " s"
 runSession :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> Plan -> FilePath -> IO ()
 runSession settings python runtime installedMedia adjustmentNand plan e2e = do
   phases <- newIORef []
+  case (planProtection plan, emulationRuntime settings) of
+    (PreservationProtection _, FujiModRuntime _) -> pure ()
+    (PreservationProtection _, RetainedRuntime) ->
+      ioError (userError "the RAM-byte-preservation guard requires the FujiMod bridge")
+    _ -> pure ()
   procedure <- case emulationRuntime settings of
     RetainedRuntime -> Just . procedureHex <$> hostProcedure runtime procedureSourcesDigest
     FujiModRuntime _ -> pure Nothing
@@ -643,15 +661,22 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     state <- readRamPushState statePath
     runner <- newSegmentRunner emulator e2e (\label action -> timed label action) readAddress (\phase message -> stop phase message) plan
     let segments = runSegments runner
-        protected = planProtectedWrites plan
+        protection = planProtection plan
         expect = planExpect plan
-    let ranges = planProtectedWrites plan
         limit = either error id (watchLimit 4096)
         cardless = emulationCardMode settings == Cardless
         expectedPresent = not cardless
         scopeText = if cardless then "cardless" else "card"
-    mediaBefore <- if null protected then pure (Left "no media watch") else emulatorMediaState emulator
-    ack <- if null protected then pure Nothing else Just <$> emulatorWatchBegin emulator ranges limit
+        purpose = if expect == ExpectRefused then FaultControlRun else CandidateRun
+    mediaBefore <- case protection of
+      Unprotected -> pure (Left "no media watch")
+      _ -> emulatorMediaState emulator
+    watchAck <- case protection of
+      WatchProtection ranges -> Just <$> emulatorWatchBegin emulator ranges limit
+      _ -> pure Nothing
+    preservationAck <- case protection of
+      PreservationProtection ranges -> Just <$> emulatorPreservationBegin emulator ranges
+      _ -> pure Nothing
     capturedBefore <- segments (planBefore plan)
     unloadMailbox <- if planUnload plan
       then do
@@ -661,22 +686,62 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         Just <$> readMailbox
       else pure Nothing
     capturedAfter <- segments (planAfter plan)
-    mediaAfter <- if null protected then pure (Left "no media watch") else emulatorMediaState emulator
-    observation <- if null protected then pure (Left "no watch observation") else emulatorWatchObservation emulator limit
-    let checked = do
-          ackValue <- maybe (Left "no watch acknowledgement") Right ack
-          observationValue <- observation
-          gate <- checkWatch limit ranges ackValue observationValue
-          before <- mediaBefore
-          after <- mediaAfter
-          checkMedia expectedPresent before after
-          judgement <- judgeWatch (if expect == ExpectRefused then FaultControlRun else CandidateRun) (Right gate)
-          pure (gate, judgement)
-    checkedResult <- if null protected then pure (WatchAcceptedClean, CandidateQualified) else either (stop "protected-writes") pure checked
-    let (gate, judgement) = checkedResult
-        summary = case gate of
-          WatchRejectedProtectedWrites value -> value
-          WatchAcceptedClean -> noProtectedWrites
+    (judgement, protectionFields, mediaAfter) <- case protection of
+      Unprotected -> pure (CandidateQualified, [], Left "no media watch")
+      WatchProtection ranges -> do
+        mediaAfterValue <- emulatorMediaState emulator
+        observation <- emulatorWatchObservation emulator limit
+        let checked = do
+              ackValue <- maybe (Left "no watch acknowledgement") Right watchAck
+              observationValue <- observation
+              gate <- checkWatch limit ranges ackValue observationValue
+              before <- mediaBefore
+              after <- mediaAfterValue
+              checkMedia expectedPresent before after
+              judgement <- judgeWatch purpose (Right gate)
+              pure (gate, judgement)
+        (gate, judgement) <- either (stop "protected-writes") pure checked
+        let summary = case gate of
+              WatchRejectedProtectedWrites value -> value
+              WatchAcceptedClean -> noProtectedWrites
+        pure (judgement,
+          [ "protected_writes" .= object
+              [ "ranges" .= [ [lo, hi] | range <- ranges, let (lo, hi) = watchRangeBounds range ]
+              , "expect" .= T.unpack (expectLabel expect)
+              , "cpu_writes" .= protectedCpuWritesValue (protectedCpuWrites summary)
+              , "host_writes" .= protectedHostWritesValue (protectedHostWrites summary)
+              , "bus_writes" .= protectedBusWritesValue (protectedBusWrites summary)
+              , "enforced" .= True ] ],
+          mediaAfterValue)
+      PreservationProtection ranges -> do
+        mediaAfterValue <- emulatorMediaState emulator
+        observationResult <- emulatorPreservationState emulator
+        let ackValue = maybe (Left "no preservation acknowledgement") Right preservationAck
+            checked = do
+              ack <- ackValue
+              observation <- observationResult
+              judgement <- judgePreservation purpose (checkPreservation ranges ack observation)
+              before <- mediaBefore
+              after <- mediaAfterValue
+              checkMedia expectedPresent before after
+              pure (observation, judgement)
+            verdict :: String
+            verdict = case checked of
+              Left _ -> "failed"
+              Right (_, CandidateQualified) -> "preserved"
+              Right (_, ControlRefusedProtectedWrite) -> "refused"
+            evidence = object
+              [ "enforcement" .= ("ram-byte-preservation" :: T.Text)
+              , "ranges" .= preservationRangesJson ranges
+              , "counters" .= either (const Null) (preservationCountersJson . preservationCounters) observationResult
+              , "first_violation" .= either (const Null) (maybe Null preservationViolationJson . preservationFirstViolation) observationResult
+              , "verdict" .= verdict
+              , "problem" .= either Just (const Nothing) checked ]
+        writePrivateBytes (e2e </> "e2e-preservation.json") (BL.toStrict (encode evidence) <> "\n")
+        (observation, judgement) <- either (stop "ram-byte-preservation") pure checked
+        pure (judgement,
+          ["ram_preservation" .= preservationReceipt ranges observation judgement],
+          mediaAfterValue)
     observed <- readIORef (runnerObservations runner)
     phaseTimes <- readIORef phases
     let result = object
@@ -707,13 +772,6 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           , "mailbox" .= object ["install" .= installMailbox, "rollback" .= unloadMailbox,
                                  "address" .= hexAddress mailbox]
           , "outcome" .= judgement
-          , "protected_writes" .= object
-              [ "ranges" .= [ [lo, hi] | range <- protected, let (lo, hi) = watchRangeBounds range ]
-              , "expect" .= T.unpack (expectLabel expect)
-              , "cpu_writes" .= protectedCpuWritesValue (protectedCpuWrites summary)
-              , "host_writes" .= protectedHostWritesValue (protectedHostWrites summary)
-              , "bus_writes" .= protectedBusWritesValue (protectedBusWrites summary)
-              , "enforced" .= not (null protected) ]
           , "media" .= object
               [ "scope" .= String scopeText
               , "card" .= cardRecord (emulationCardMode settings)
@@ -722,7 +780,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           , "unload" .= (if planUnload plan
               then Just (String (T.pack (show (length (manifestPublications manifest)) ++ " old words verified; allocation retained until power-off")))
               else Nothing)
-          ]
+          ] ++ protectionFields
     case judgement of
       CandidateQualified -> writePrivateBytes (e2e </> "e2e-result.json") (BL.toStrict (encode result) <> "\n")
       ControlRefusedProtectedWrite -> do
@@ -872,7 +930,7 @@ runfilesCardlessBridge = do
 runFlashSession :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> Plan -> FilePath -> IO ()
 runFlashSession settings python runtime installedMedia adjustmentNand plan e2e = do
   require (emulationCardMode settings /= Cardless) "--cardless belongs to the RAM push, not --flash-candidate"
-  require (null (planProtectedWrites plan)) "a protected-write watch is unsupported on the flash-candidate path"
+  require (planProtection plan == Unprotected) "a protected-memory watch is unsupported on the flash-candidate path"
   require (planExpect plan == ExpectClean) "a refused-watch control is unsupported on the flash-candidate path"
   phases <- newIORef []
   let timed :: T.Text -> IO a -> IO a

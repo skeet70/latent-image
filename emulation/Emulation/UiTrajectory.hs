@@ -10,6 +10,7 @@ module Emulation.UiTrajectory
   , Segment (..)
   , TraceSite (..)
   , Trajectories (..)
+  , TrajectoryProtection (..)
   , TrajectoryExpect (..)
   , expectLabel
   , phaseNames
@@ -18,15 +19,17 @@ module Emulation.UiTrajectory
   ) where
 
 import Control.Monad (unless, when)
-import Data.Aeson (FromJSON (..), eitherDecodeStrict', withArray, withObject, (.!=), (.:?), (.:))
+import Data.Aeson (FromJSON (..), Value, eitherDecodeStrict', withArray, withObject, (.!=), (.:?), (.:))
+import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (Object, Parser)
 import qualified Data.ByteString as B
 import Data.Foldable (toList)
-import Data.List (nub, stripPrefix)
+import Data.List (nub, sort, stripPrefix)
 import qualified Data.Text as T
 import Data.Word (Word32)
-import Emulation.WatchObservation (WatchRange, watchAddress, watchRange)
+import Emulation.PreservationObservation (PreservationRanges, checkPreservationRangeCount, preservationRanges)
+import Emulation.WatchObservation (WatchAddress, WatchRange, watchAddress, watchRange)
 import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming, modeDialName)
 import Numeric (readHex)
 
@@ -167,6 +170,13 @@ instance FromJSON TraceSite where
     when (null label || label `elem` reservedLabels) (fail ("trace site label is empty or reserved: " ++ label))
     pure (TraceSite site label)
 
+-- | The declared protected state. A route declares at most one protection form.
+data TrajectoryProtection
+  = Unprotected
+  | WatchProtection [WatchRange]
+  | PreservationProtection PreservationRanges
+  deriving (Eq, Show)
+
 data TrajectoryExpect = ExpectClean | ExpectRefused deriving (Eq, Show)
 
 expectLabel :: TrajectoryExpect -> T.Text
@@ -177,7 +187,7 @@ data Trajectories = Trajectories
   { beforeUnload :: [Segment]
   , afterUnload :: [Segment]
   , trajectoryTraceSites :: [TraceSite]
-  , trajectoryProtectedWrites :: [WatchRange]
+  , trajectoryProtection :: TrajectoryProtection
   , trajectoryExpect :: TrajectoryExpect
   }
 
@@ -188,25 +198,49 @@ instance FromJSON Trajectories where
     sites <- document .:? "trace_sites" .!= []
     unless (distinct (map traceSiteAddress sites) && distinct (map traceSiteLabel sites))
       (fail "trace sites must have distinct addresses and labels")
-    ranges <- mapM range =<< document .:? "protected_writes" .!= []
+    watch <- document .:? "protected_writes" :: Parser (Maybe [[T.Text]])
+    preservation <- document .:? "protected_memory" :: Parser (Maybe Value)
+    protection <- case (watch, preservation) of
+      (Just _, Just _) -> fail "protected_writes and protected_memory are conflicting declarations"
+      (Just entries, Nothing) -> do
+        ranges <- mapM hexRange entries
+        pure (if null ranges then Unprotected else WatchProtection ranges)
+      (Nothing, Just value) -> PreservationProtection <$> protectedMemory value
+      (Nothing, Nothing) -> pure Unprotected
     expectText <- document .:? "expect" .!= ("clean" :: T.Text)
     expect <- case expectText of
       "clean" -> pure ExpectClean
       "refused" -> pure ExpectRefused
       _ -> fail "expect must be clean or refused"
-    when (expect == ExpectRefused && null ranges) (fail "expect refused requires protected_writes")
-    Trajectories <$> document .: "before_unload" <*> document .: "after_unload" <*> pure sites <*> pure ranges <*> pure expect
+    when (expect == ExpectRefused && protection == Unprotected)
+      (fail "expect refused requires protected_writes or protected_memory")
+    Trajectories <$> document .: "before_unload" <*> document .: "after_unload" <*> pure sites <*> pure protection <*> pure expect
     where
       distinct items = length (nub items) == length items
-      range pair = case pair of
-        [lo, hi] -> do
-          low <- hexWord lo
-          high <- hexWord hi
-          either fail pure (watchRange low high)
-        _ -> fail "each protected_writes entry is [low, high]"
-      hexWord text = case readHex (T.unpack text) of
-        [(value, "")] | length (T.unpack text) == 8 -> pure (watchAddress value)
-        _ -> fail "protected_writes addresses are eight hex digits without 0x"
+
+protectedMemory :: Value -> Parser PreservationRanges
+protectedMemory = withObject "protected_memory" $ \memory -> do
+  unless (sort (map (T.unpack . K.toText) (KM.keys memory)) == ["kind", "ranges"])
+    (fail "protected_memory takes exactly kind and ranges")
+  kind <- memory .: "kind"
+  unless (kind == ("ram-byte-preservation" :: T.Text)) (fail "protected_memory kind is not ram-byte-preservation")
+  entries <- memory .: "ranges"
+  either fail pure (checkPreservationRangeCount (length entries))
+  ranges <- mapM hexRange entries
+  either fail pure (preservationRanges ranges)
+
+hexRange :: [T.Text] -> Parser WatchRange
+hexRange pair = case pair of
+  [lo, hi] -> do
+    low <- hexWord lo
+    high <- hexWord hi
+    either fail pure (watchRange low high)
+  _ -> fail "each protection range is [low, high]"
+
+hexWord :: T.Text -> Parser WatchAddress
+hexWord text = case readHex (T.unpack text) of
+  [(value, "")] | length (T.unpack text) == 8 -> pure (watchAddress value)
+  _ -> fail "protection addresses are eight hex digits without 0x"
 
 phaseNames :: Trajectories -> [T.Text]
 phaseNames trajectories = nub (map segmentPhase (beforeUnload trajectories ++ afterUnload trajectories))
@@ -225,7 +259,7 @@ decodeTrajectories bytes = do
 variantMismatches :: Trajectories -> Trajectories -> [String]
 variantMismatches retained variant =
   [ "trace sites differ" | trajectoryTraceSites retained /= trajectoryTraceSites variant ]
-  ++ [ "protected writes differ" | trajectoryProtectedWrites retained /= trajectoryProtectedWrites variant ]
+  ++ [ "protection differs" | trajectoryProtection retained /= trajectoryProtection variant ]
   ++ [ "expect differs" | trajectoryExpect retained /= trajectoryExpect variant ]
   ++ segments "before_unload" (beforeUnload retained) (beforeUnload variant)
   ++ segments "after_unload" (afterUnload retained) (afterUnload variant)

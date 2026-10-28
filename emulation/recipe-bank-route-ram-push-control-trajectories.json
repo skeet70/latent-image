@@ -1,13 +1,16 @@
 {
   "schema": 1,
-  "protected_writes": [
-    [
-      "0096cc64",
-      "0096ce26"
+  "protected_memory": {
+    "kind": "ram-byte-preservation",
+    "ranges": [
+      [
+        "0096cc64",
+        "0096ce26"
+      ]
     ]
-  ],
+  },
   "expect": "refused",
-  "entry": "Fault control for the cardless RAM-push UI watch: the step sequence commits a film-simulation row, which writes the protected live settings record. The run must be refused by the memory watch with actual cpu-write records. This file is a control and never qualifies the primary run.",
+  "entry": "Fault control for the cardless RAM-push UI preservation guard: the step sequence commits a film-simulation row, which changes the protected live settings record. The run must be refused by the preservation guard with an actual changed cpu-write. This file is a control and never qualifies the primary run.",
   "before_unload": [
     {
       "phase": "control-live-setting-write",

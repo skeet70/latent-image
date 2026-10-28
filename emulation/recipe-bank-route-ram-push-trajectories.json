@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "protected_writes": [["0096cc64", "0096ce26"]],
+  "protected_memory": {"kind": "ram-byte-preservation", "ranges": [["0096cc64", "0096ce26"]]},
   "expect": "clean",
   "entry": "Cardless RAM-push bank with an empty resident slot set. Read-only phase: enter the slot list and SELECT CUSTOM SETTING list, navigate, cancel, repeat entry and hand back to the stock shooting menu. No Save Current, Edit, Reset, dialog OK, field OK or SELECT row OK is pressed; the unset select rows stay on row 0.",
   "before_unload": [

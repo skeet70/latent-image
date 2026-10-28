@@ -28,6 +28,8 @@ module EmulatorUsb
   , emulatorReadMemory
   , emulatorWatchBegin
   , emulatorWatchObservation
+  , emulatorPreservationBegin
+  , emulatorPreservationState
   , emulatorMediaState
   ) where
 
@@ -41,6 +43,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import Emulation.PreservationObservation
 import Emulation.WatchObservation
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (shiftL, (.|.))
@@ -365,6 +368,19 @@ emulatorWatchObservation :: Emulator -> WatchLimit -> IO (Either String WatchObs
 emulatorWatchObservation emulator limit = do
   fields <- rpc emulator (object ["command" .= String "watch-state"])
   pure (parseWatchObservation limit (Object fields))
+
+emulatorPreservationBegin :: Emulator -> PreservationRanges -> IO PreservationAck
+emulatorPreservationBegin emulator ranges = do
+  fields <- rpc emulator (object
+    [ "command" .= String "preservation-begin"
+    , "ranges" .= preservationRangesJson ranges
+    ])
+  either (ioError . userError) pure (parsePreservationAck (Object fields))
+
+emulatorPreservationState :: Emulator -> IO (Either String PreservationObservation)
+emulatorPreservationState emulator = do
+  fields <- rpc emulator (object ["command" .= String "preservation-state"])
+  pure (parsePreservationObservation (Object fields))
 
 emulatorMediaState :: Emulator -> IO (Either String MediaObservation)
 emulatorMediaState emulator = do
