@@ -117,7 +117,7 @@ bridgeRpc exchange request = do
   fields <- case value of Object result -> pure result; _ -> ioError (userError "emulator response must be an object")
   ok <- objectField "ok" fields
   case ok of
-    Bool True -> pure fields
+    Bool True -> pure (M.delete "ok" fields)
     Bool False -> do
       message <- objectField "message" fields
       ioError (userError ("emulator bridge: " ++ case message of String text -> T.unpack text; _ -> show message))
