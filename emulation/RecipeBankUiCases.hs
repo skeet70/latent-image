@@ -2187,7 +2187,7 @@ regionList in' e sp = map setPermission (filter (\(n, _, _, _, _) -> inProfile (
       (n, base, size, if permissions == 3 && n `notElem` writeRegions then 1 else permissions, bytes)
     writeRegions =
       nub
-        ( [n | AbiWorkspace (RegionId n) _ _ _ <- caseWorkspaces in' e sp]
+        ( [n | AbiWorkspace _ (RegionId n) _ _ <- caseWorkspaces in' e sp]
             ++ [n | claim@(n, _, _) <- spClaims sp, claimChangesInitial baseRegions claim]
         )
     ktext = inKtext in'
