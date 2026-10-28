@@ -65,6 +65,16 @@ A complete read-only transient guard uses one declared native-fixture region, no
 
 The `effects` object separates the final-state match from the effect proof. `final_state` is `verified` when the returned diagnostic, registers, ABI workspaces, public claims and every non-workspace byte match; it says nothing about writes that were overwritten. With a complete provenance log every write is classified and a clean run is `verified`. With a truncated log a read-only case can still be `guarded` because `span-low` has no write permission, while a mutating case is `final-only`: its expected final bytes are verified and no complete transient proof is claimed. The verdicts are the closed `EffectVerdict` values `guarded`, `verified`, `final-only`, `failed` and `not evaluated`; guard, transient proof, scope and final state are likewise closed types, not string flags. A required effect is therefore complete or enforced by a guard, never inferred from expected final bytes alone.
 
+The packaged route carries a protected-write watch, not a final-snapshot claim. The FujiMod RAM-push driver arms the pinned upstream `MemoryWatch` (`crates/emulator/src/board/observation.rs`, `Board::memory_watch_begin`) over `0x0096cc64..0x0096ce26`, the live settings record, before the first UI segment and reads it after the last. Every overlapping access returns its source, address, size, value, before bytes and pc, so a write that restores the original value is still recorded; a record overflow is a violation. The tracked `recipe-bank-route-ram-push-trajectories.json` declares the range and `expect: clean`; any `cpu-write` record or violation refuses qualification. `recipe-bank-route-ram-push-control-trajectories.json` declares `expect: refused` and commits a film row; the same checker must observe actual writes and the run is identified as a control, so it cannot qualify the primary. Media state is read before and after the interval with explicit cardless scope; the synthetic native card address `0x00980000` is never watched or claimed as live media. Existing trajectories without a watch keep their behavior.
+
+### Packaged watch command
+
+```sh
+XM1_EMULATOR_SLOTS=1 devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-issue117-ui-proof" run //emulation:xm1-viewer -- --ram-push-e2e --cardless --fujimod --unreviewed-relink --firmware private-data/analysis/x-m1-1.50/update/prefix/FWUP0002-prefix.DAT --installed-nand private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand --trajectories emulation/recipe-bank-route-ram-push-trajectories.json --receipt-output <fresh private path> --output <fresh private runtime path>
+```
+
+Run the control with `--trajectories emulation/recipe-bank-route-ram-push-control-trajectories.json` into a separate fresh receipt; its `protected_writes.ok` requires actual writes and `control: true`. The guest PNG capture and the repeated entry, navigation, cancel, handback and resource-failure segments remain in the tracked primary trajectory.
+
 ## Measurement
 
 The #118 fixed workload is the behavior-preserving refactor of these two classifiers. Baseline same-invocation samples are 45.29 s total (1.07 s build, 44.22 s case generation and execution) for the unmodified tree, and 42.58 s (0.98 s, 41.59 s) for the C refactor, under warm Nix/Bazel and page caches, two jobs and sibling load.
