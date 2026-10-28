@@ -2544,7 +2544,7 @@ qualify in' e sp exitCode caseValue report =
   case N.observeNative (if exitCode == 0 then ExitSuccess else ExitFailure exitCode) nativeRegions (get report "runner") of
     Left problem ->
       result "malformed_output" [N.renderObservationError problem] Nothing False False FinalUnknown GuardNotApplicable TransientMissing EffectsNotEvaluated
-        (observationScope sp) 0 0
+        (observationScope sp) (0 :: Integer) (0 :: Int)
     Right observed ->
       let statusText = N.runnerStatusLabel (N.nativeStatus observed)
           registers = [(N.registerLabel register, value) | register <- N.registerLabels, Just value <- [N.lookupRegister register observed]]
