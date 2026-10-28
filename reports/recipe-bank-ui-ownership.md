@@ -83,11 +83,26 @@ The candidate native 55-case run passed, but the candidate fixed-command timing 
 
 ## Reproduce
 
-Build the bank archive with the fixed targets, then run the 55-case UI workload into fresh directories:
+Build the fixed targets first. This is build-only and runs no guest:
 
 ```sh
-devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-issue117-ui-proof" build --jobs=1 //emulation:native-runner //emulation:recipe-bank-ui-cases //replacement/bank:bank
-RB_RUST_ARCHIVE="$PWD/bazel-bin/replacement/bank/bank.a" BUILD_DIR="$PWD/private-data/analysis/x-m1-1.50/recipes/issue117-ui-proof/ui-build" OUT_DIR="$PWD/private-data/analysis/x-m1-1.50/recipes/issue117-ui-proof/ui-cases" JOBS=1 devenv shell -- bash emulation/build-recipe-bank-ui-cases.sh
+devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-issue117-ui-proof" build --jobs=1 //emulation:native-runner //emulation:recipe-bank-ui-cases //emulation:emulator-slot //replacement/bank:bank
+```
+
+Run the 55-case UI workload into fresh directories through the existing emulator-slot wrapper. `build-recipe-bank-ui-cases.sh` invokes the generator and native runner directly, so it must not be run bare:
+
+```sh
+XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=8G \
+  bazel-bin/emulation/emulator-slot \
+  taskset -c 0,1 \
+  nix shell nixpkgs#cpulimit -c cpulimit --include-children --limit=75 -- \
+  env RB_RUST_ARCHIVE="$PWD/bazel-bin/replacement/bank/bank.a" BUILD_DIR="$PWD/private-data/analysis/x-m1-1.50/recipes/issue117-ui-proof/ui-build" OUT_DIR="$PWD/private-data/analysis/x-m1-1.50/recipes/issue117-ui-proof/ui-cases" JOBS=1 \
+  devenv shell -- bash emulation/build-recipe-bank-ui-cases.sh
+```
+
+The plan gate is separate from guest execution:
+
+```sh
 devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-issue117-ui-proof" test --jobs=1 --nocache_test_results --test_output=errors //replacement/recipe_ui:route-tests //emulation:recipe-bank-ui-plan-tests //emulation:ui-trajectory-tests
 ```
 
