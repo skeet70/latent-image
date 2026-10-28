@@ -30,6 +30,8 @@ The page and slot are separate exports on purpose. A packed page and slot made c
 
 The Rust module's host tests pass 6 of 6: page classes including the adjacent field/sub and sub/edit boundaries, every slot, every verb token, every select token, token gaps and the packed C ABI encoding.
 
+A one-crate smoke with `#![no_std]`, this module included by `#[path]` and one `#[panic_handler]` compiles under the #119 toolchain. The archive exports `rb_ui_route_page`, `rb_ui_route_slot`, `rb_ui_route_item` and one mangled `rust_begin_unwind`; the module owns no handler.
+
 The fixed native UI workload passes 55 of 55 cases with the Rust staticlib linked into the bank kernel. The kernel is 32,024 bytes, `__rb_text_end` is `0x00be8c9c` and `__rb_image_end` is `0x00be9c1c`, below `dataBase` `0x00bea200` and the `0x8300` code cap. A control kernel built from `HEAD` also passes 55 of 55; the negative cases `n-select-unset-refused`, `n-save-write-fail`, `n-edit-write-fail`, `n-reset-write-fail`, `n-rename-fail`, `n-refused-dialog` and the media-refresh case remain passing refusals. `//emulation:recipe-bank-ui-plan-tests` and `//emulation:ui-trajectory-tests` pass.
 
 The flash candidate `package-20261024b` with `f7-1.nand` and `bank-selection-stage4/fast-ui/card-sel.img` ran `emulation/recipe-bank-route-trajectories.json` from the card attach checkpoint. Six of seven segments passed: slot-list entry, seven-row slot navigation, the slot verb page and BACK, return to the slot list, SELECT list entry and eight-row navigation, and cancel. The final handback segment was not reached before the host thermal guard stopped the run.
