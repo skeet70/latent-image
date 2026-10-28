@@ -141,12 +141,6 @@ pub extern "C" fn rb_ui_route_item(token: u32) -> u32 {
         | ((item.selection as u32) << 24)
 }
 
-#[cfg(not(test))]
-#[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
