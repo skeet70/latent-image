@@ -12,7 +12,7 @@ module Replacement.Area3.Qualify
   ) where
 
 import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar)
-import Control.DeepSeq (NFData (..), force)
+import Control.DeepSeq (force)
 import Control.Exception (IOException, SomeException, catch, throwIO, try)
 import Control.Monad (filterM, foldM, forM, (>=>))
 import Data.Aeson (Value (..))
@@ -609,14 +609,6 @@ anchorChecks results =
   )
 
 -- Stock and ARM cases ---------------------------------------------------------
-
-instance NFData Check where
-  rnf CheckPass = ()
-  rnf (CheckMismatch problems) = rnf problems
-  rnf (CheckBlocked message) = rnf message
-  rnf (CheckUnsupported message) = rnf message
-  rnf (CheckUnknown message) = rnf message
-  rnf (CheckTruncated message) = rnf message
 
 data CaseOutcome = CaseOutcome
   { outcomeClass :: SubjectClass

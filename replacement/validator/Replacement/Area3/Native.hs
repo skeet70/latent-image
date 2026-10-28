@@ -28,6 +28,7 @@ module Replacement.Area3.Native
   , unhex
   ) where
 
+import Control.DeepSeq (NFData (..))
 import Control.Exception (IOException, try)
 import Data.Aeson (Value (..))
 import qualified Data.ByteString as B
@@ -269,6 +270,14 @@ data Check
   | CheckUnknown String
   | CheckTruncated String
   deriving (Eq, Show)
+
+instance NFData Check where
+  rnf CheckPass = ()
+  rnf (CheckMismatch problems) = rnf problems
+  rnf (CheckBlocked message) = rnf message
+  rnf (CheckUnsupported message) = rnf message
+  rnf (CheckUnknown message) = rnf message
+  rnf (CheckTruncated message) = rnf message
 
 classifyStatus :: RunnerStatus -> Check
 classifyStatus Returned = CheckPass
