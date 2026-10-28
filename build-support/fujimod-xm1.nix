@@ -26,7 +26,7 @@ fujimod.passthru.rustPlatform.buildRustPackage {
     cpulimitBin=$(mktemp -d)
     cat > "$cpulimitBin/cargo" <<EOF
 #!${pkgs.runtimeShell}
-exec ${pkgs.cpulimit}/bin/cpulimit -l 75 -- ${toolchain}/bin/cargo "\$@"
+exec ${pkgs.cpulimit}/bin/cpulimit -i -l 75 -- ${fujimod.passthru.rustPlatform.cargo}/bin/cargo "\$@"
 EOF
     chmod +x "$cpulimitBin/cargo"
     export PATH="$cpulimitBin:$PATH"
