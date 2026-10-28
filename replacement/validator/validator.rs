@@ -1,6 +1,12 @@
 #![no_std]
 //! Area-3 record validator replacement.
 
+#[cfg(xm1_freestanding)]
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    loop {}
+}
+
 pub const RECORD_BYTES: usize = 52;
 pub const PROTECTED_BYTES: usize = 44;
 pub const ROWS: usize = PROTECTED_BYTES / 4;
@@ -13,15 +19,60 @@ pub const ACCEPT: u32 = 0;
 pub const REJECT: u32 = 1;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct RowParity(pub u16);
+pub struct RowParity(u16);
+
+impl RowParity {
+    pub fn bits(self) -> u16 {
+        self.0
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct ColumnParity(pub u32);
+pub struct ColumnParity(u32);
+
+impl ColumnParity {
+    pub fn bits(self) -> u32 {
+        self.0
+    }
+}
+
+fn single_bit_position(value: u32) -> u32 {
+    let mut index = 0;
+    let mut probe = value;
+    while probe & 1 == 0 {
+        probe >>= 1;
+        index += 1;
+    }
+    index
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SingleBit {
-    pub row: u8,
-    pub column: u8,
+    row: u8,
+    column: u8,
+}
+
+impl SingleBit {
+    fn from_syndrome(row: u16, column: u32) -> Option<SingleBit> {
+        let row = single_bit_position(row as u32);
+        let column = single_bit_position(column);
+        if (row as usize) < ROWS && column < COLUMNS {
+            Some(SingleBit {
+                row: row as u8,
+                column: column as u8,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn row(self) -> u8 {
+        self.row
+    }
+
+    pub fn column(self) -> u8 {
+        self.column
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -97,9 +148,9 @@ pub fn validate(record: &mut [u8; RECORD_BYTES]) -> Outcome {
         return Outcome::Accepted;
     }
     if syndrome.row.0.count_ones() == 1 && syndrome.column.0.count_ones() == 1 {
-        let site = SingleBit {
-            row: syndrome.row.0.trailing_zeros() as u8,
-            column: syndrome.column.0.trailing_zeros() as u8,
+        let site = match SingleBit::from_syndrome(syndrome.row.0, syndrome.column.0) {
+            Some(site) => site,
+            None => return Outcome::Rejected(syndrome),
         };
         flip(record, site);
         return Outcome::Corrected(site);
@@ -109,6 +160,10 @@ pub fn validate(record: &mut [u8; RECORD_BYTES]) -> Outcome {
 
 /// Stock ABI: r0 = record buffer, r1 = pointer to the protected-length word.
 /// A length other than 0x2c is outside the contract.
+///
+/// # Safety
+/// `record` must point to 52 writable bytes with unique access for the call,
+/// and `protected_length` must point to an aligned readable `u32`.
 #[no_mangle]
 pub unsafe extern "C" fn area3_validate(record: *mut u8, protected_length: *const u32) -> u32 {
     if record.is_null() || protected_length.is_null() {

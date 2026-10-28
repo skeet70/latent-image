@@ -26,15 +26,17 @@ module Replacement.Area3.Native
   , hexBytes
   , parseWord32
   , unhex
+  , regionInfo
   ) where
 
 import Control.Exception (IOException, try)
+import Control.Monad (forM, when)
 import Data.Aeson (Value (..))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import Data.Char (isHexDigit, toLower)
 import Data.List (find, nub)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Word (Word32, Word64, Word8)
 import Emulation.NativeCase (Region (..), loadCase)
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -62,6 +64,11 @@ hexBytes = concatMap byte . B.unpack
 
 parseWord32 :: String -> Maybe Word32
 parseWord32 ('0' : 'x' : digits)
+  | not (null digits) && length digits <= 8 && all isHexDigit digits =
+      case readHex digits :: [(Word32, String)] of
+        [(value, "")] -> Just value
+        _ -> Nothing
+parseWord32 digits
   | not (null digits) && length digits <= 8 && all isHexDigit digits =
       case readHex digits :: [(Word32, String)] of
         [(value, "")] -> Just value
@@ -99,6 +106,12 @@ initialArtifact region =
   case str (get (get (description region) "initial") "artifact") of
     "" -> Nothing
     ident -> Just ident
+
+regionInfo :: [Region] -> [(String, Word64, Int)]
+regionInfo regions =
+  [ (regionIdent region, fromIntegral (baseAddress region), fromIntegral (regionSize region))
+  | region <- regions
+  ]
 
 regionByName :: [Region] -> String -> Region
 regionByName regions name =
@@ -143,14 +156,25 @@ data CandidateProfile = CandidateProfile
 loadArmImage :: FilePath -> FilePath -> Word32 -> IO (Either String ArmImage)
 loadArmImage imagePath symbolsPath base = do
   loaded <- try $ do
-    bytes <- readRegular (2 * 1024 * 1024) imagePath
-    symbolsText <- readRegular (1024 * 1024) symbolsPath
+    canonicalImage <- canonicalizePath imagePath
+    canonicalSymbols <- canonicalizePath symbolsPath
+    bytes <- readRegular (2 * 1024 * 1024) canonicalImage
+    symbolsText <- readRegular (1024 * 1024) canonicalSymbols
     symbols <- either failH pure (parseSymbols (BC.unpack symbolsText))
     let padded = padToWord bytes
     ensure (not (B.null padded)) "arm image empty"
     ensure ("area3_validate" `elem` map (\(name, _, _) -> name) symbols) "arm symbols: area3_validate missing"
+    let baseWide = fromIntegral base :: Word64
+        endWide = baseWide + fromIntegral (B.length padded)
     ensure
-      (all (\(_, address, size) -> address >= base && address + size <= base + fromIntegral (B.length padded)) symbols)
+      ( all
+          (\(_, address, size) ->
+             let start = fromIntegral address :: Word64
+                 extent = fromIntegral size :: Word64
+              in start >= baseWide && start + extent <= endWide
+          )
+          symbols
+      )
       "arm symbols: extent outside the image"
     pure
       ArmImage
@@ -221,36 +245,102 @@ data Observation = Observation
   , observationEngineError :: Word32
   }
 
-observe :: [String] -> Value -> Observation
-observe regionIds value =
-  Observation
-    { observationStatus = str (get value "status")
-    , observationRegisters =
-        [ (name, fromMaybe 0 (parseWord32 (str (get (get value "registers") name))))
-        | name <- keys (get value "registers")
-        ]
-    , observationMemory =
-        [ (ident, fromMaybe B.empty (unhex (str (get entry "bytes"))))
-        | (ident, entry) <- zip regionIds (list (get value "memory"))
-        ]
-    , observationWrites = if truncated then Nothing else Just writes
-    , observationProvenanceTotal = total
-    , observationInstructions = number (get value "instructions")
-    , observationEngineError = fromMaybe 0 (parseWord32 (str (get value "unicorn_error")))
-    }
-  where
-    total = number (get value "memory_provenance_total")
-    truncated = total > 4096
-    writes =
-      [ (address, fromIntegral (num (get entry "size")))
-      | entry <- list (get value "memory_provenance")
-      , str (get entry "kind") == "write"
-      , let address = number (get entry "address")
-      ]
-    number text = fromMaybe 0 (readDecimal (str text))
-    readDecimal text = case reads text of
-      [(value', "")] -> Just (value' :: Word64)
-      _ -> Nothing
+requiredRegisters :: [String]
+requiredRegisters = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "sp", "lr", "cpsr", "pc"]
+
+observe :: [(String, Word64, Int)] -> Value -> Either String Observation
+observe regions value = do
+  status <- case get value "status" of
+    String _ -> Right (str (get value "status"))
+    _ -> Left "missing runner status"
+  when (null status) (Left "empty runner status")
+  registers <- parseRegisters (get value "registers")
+  memory <- parseMemory regions (get value "memory")
+  total <- requireNumber value "memory_provenance_total"
+  provenance <- case get value "memory_provenance" of
+    Array _ -> Right (list (get value "memory_provenance"))
+    _ -> Left "missing memory provenance"
+  writes <- parseProvenance provenance
+  instructions <- requireNumber value "instructions"
+  engineError <- parseEngineError (get value "unicorn_error")
+  let truncated = total > 4096
+  if truncated
+    then
+      when (length provenance /= 4096) (Left "provenance retention count mismatch")
+    else when (fromIntegral (length provenance) /= total) (Left "provenance count mismatch")
+  pure
+    Observation
+      { observationStatus = status
+      , observationRegisters = registers
+      , observationMemory = memory
+      , observationWrites = if truncated then Nothing else Just writes
+      , observationProvenanceTotal = total
+      , observationInstructions = instructions
+      , observationEngineError = engineError
+      }
+
+requireNumber :: Value -> String -> Either String Word64
+requireNumber value key =
+  case get value key of
+    String _ -> maybe (Left ("malformed " ++ key)) Right (readDecimal (str (get value key)))
+    _ -> Left ("missing " ++ key)
+
+readDecimal :: String -> Maybe Word64
+readDecimal text = case reads text of
+  [(value', "")] -> Just value'
+  _ -> Nothing
+
+parseEngineError :: Value -> Either String Word32
+parseEngineError value = case value of
+  Number _ -> let number = num value in if number >= 0 && number <= 4294967295 then Right (fromIntegral number) else Left "malformed unicorn_error"
+  _ -> Left "missing unicorn_error"
+
+parseRegisters :: Value -> Either String [(String, Word32)]
+parseRegisters value = case value of
+  Object _ -> do
+    pairs <- forM (keys value) $ \name ->
+      case parseWord32 (str (get value name)) of
+        Just word -> Right (name, word)
+        Nothing -> Left ("malformed register " ++ name)
+    let missing = [name | name <- requiredRegisters, isNothing (lookup name pairs)]
+    if null missing then Right pairs else Left ("missing registers " ++ unwords missing)
+  _ -> Left "missing registers"
+
+parseMemory :: [(String, Word64, Int)] -> Value -> Either String [(String, B.ByteString)]
+parseMemory regions value = case value of
+  Array _ -> do
+    let entries = list value
+    when (length entries /= length regions) (Left "memory region count mismatch")
+    forM (zip regions entries) $ \((ident, base, size), entry) -> do
+      address <-
+        case parseWord32 (str (get entry "address")) of
+          Just word -> Right (fromIntegral word)
+          Nothing -> Left ("malformed address for region " ++ ident)
+      when (address /= base) (Left ("memory region " ++ ident ++ " address mismatch"))
+      bytes <- maybe (Left ("malformed bytes for region " ++ ident)) Right (unhex (str (get entry "bytes")))
+      when (B.length bytes /= size) (Left ("memory region " ++ ident ++ " size mismatch"))
+      pure (ident, bytes)
+  _ -> Left "missing memory"
+
+parseProvenance :: [Value] -> Either String [(Word64, Int)]
+parseProvenance entries = do
+  parsed <- forM entries $ \entry -> do
+    kind <- case str (get entry "kind") of
+      "write" -> Right True
+      "read" -> Right False
+      _ -> Left "malformed provenance kind"
+    address <-
+      case parseWord32 (str (get entry "address")) of
+        Just word -> Right (fromIntegral word)
+        Nothing -> Left "malformed provenance address"
+    size <-
+      case get entry "size" of
+        Number _ -> case num (get entry "size") of
+          value | value >= 1 && value <= 8 -> Right (fromIntegral value)
+          _ -> Left "malformed provenance size"
+        _ -> Left "missing provenance size"
+    pure (kind, address, size)
+  pure [(address, size) | (True, address, size) <- parsed]
 
 data Expectation = Expectation
   { expectationRecordRegion :: String
@@ -299,19 +389,28 @@ checkCase expectation observation =
       problems -> CheckMismatch problems
     other -> other
   where
-    result = fromMaybe 0 (lookup "r0" (observationRegisters observation))
+    registersOf = observationRegisters observation
+    missingRegisters =
+      [ "register " ++ name ++ ": missing from runner output"
+      | name <- "r0" : "pc" : map fst (expectationPreserved expectation)
+      , isNothing (lookup name registersOf)
+      ]
     expectedResult = Domain.outcomeValue (expectationOutcome expectation)
     registers
-      | result /= expectedResult =
-          ["r0: expected " ++ hexWord32 expectedResult ++ ", observed " ++ hexWord32 result]
+      | not (null missingRegisters) = missingRegisters
       | otherwise =
-          [ "register " ++ name ++ ": expected " ++ hexWord32 expected
-              ++ ", observed " ++ hexWord32 (fromMaybe 0 (lookup name (observationRegisters observation)))
-          | (name, expected) <- expectationPreserved expectation
-          , fromMaybe 0 (lookup name (observationRegisters observation)) /= expected
+          [ "r0: expected " ++ hexWord32 expectedResult ++ ", observed " ++ hexWord32 result
+          | Just result <- [lookup "r0" registersOf]
+          , result /= expectedResult
           ]
-          ++ [ "pc: expected " ++ hexWord32 (expectationExit expectation)
-             | fromMaybe 0 (lookup "pc" (observationRegisters observation)) /= expectationExit expectation
+          ++ [ "register " ++ name ++ ": expected " ++ hexWord32 expected ++ ", observed " ++ hexWord32 result
+             | (name, expected) <- expectationPreserved expectation
+             , Just result <- [lookup name registersOf]
+             , result /= expected
+             ]
+          ++ [ "pc: expected " ++ hexWord32 (expectationExit expectation) ++ ", observed " ++ hexWord32 result
+             | Just result <- [lookup "pc" registersOf]
+             , result /= expectationExit expectation
              ]
     memory =
       concat
@@ -323,7 +422,7 @@ checkCase expectation observation =
                       (fromMaybe B.empty (lookup ident (expectationRegions expectation)))
                       (lookup ident (expectationDeclaredFinal expectation))
                in ["region " ++ ident ++ ": expected " ++ hexBytes expected ++ ", observed " ++ hexBytes actual | actual /= expected]
-        | (ident, _) <- observationMemory observation
+        | (ident, _, _) <- expectationRegionBounds expectation
         , compareRegion ident
         ]
     compareRegion ident
@@ -427,10 +526,10 @@ replaceRecordRegion oldIdent region
   | otherwise = region
 
 expectedObject :: Value -> Domain.Oracle -> Value
-expectedObject template expected =
+expectedObject templateRegisters expected =
   obj
     [ ("status", s "returned")
-    , ("registers", set "r0" (s (hexWord32 (Domain.outcomeValue (Domain.oracleOutcome expected)))) (get template "registers"))
+    , ("registers", set "r0" (s (hexWord32 (Domain.outcomeValue (Domain.oracleOutcome expected)))) templateRegisters)
     , ("memory", arr memory)
     , ("events", arr [])
     ]

@@ -23,29 +23,39 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    [qualify, candidate, faulty] ->
+    [qualify, candidate, faulty, armImage, armSymbols, runner] ->
       withTemporary "area3-tests" $ \root -> do
         let anchorDir = root </> "anchors"
         createDirectory anchorDir
         record <- writeFixture anchorDir
         writeContract root record
         single <- runCommand qualify (common root anchorDir candidate ++ ["--mutations", "single"])
-        ensure (statusOf single == "qualified") ("logic single: " ++ showValue single)
+        ensure (statusOf single == "partial") ("logic single: " ++ showValue single)
         ensure (count single "single_bit" "enumerated" == 352) "single-bit enumeration"
         ensure (count single "two_bit" "enumerated" == 0) "single selection excludes two-bit"
         ensure (count single "ground" "enumerated" == 56) "ground case count"
         ensure (not (boolOf (field single ["capability"]))) "logic scope is not capability"
         allMutations <- runCommand qualify (common root anchorDir candidate)
-        ensure (statusOf allMutations == "qualified") ("logic all: " ++ showValue allMutations)
+        ensure (statusOf allMutations == "partial") ("logic all: " ++ showValue allMutations)
         ensure (count allMutations "two_bit" "enumerated" == 61776) "two-bit enumeration"
         ensure (count allMutations "two_bit" "candidate_matched" == 61776) "two-bit candidate coverage"
         ensure (count allMutations "single_bit" "candidate_matched" == 352) "single-bit candidate coverage"
         blocked <- runCommand qualify (common root anchorDir candidate ++ ["--scope", "capability", "--mutations", "single", "--stock", "none"])
         ensure (statusOf blocked == "blocked") ("capability without runner: " ++ showValue blocked)
-        ensure (hasInfix "ARM candidate artifact not supplied" (field blocked ["blockers"])) "ARM blocker"
-        ensure (hasInfix "native runner not supplied" (field blocked ["blockers"])) "runner blocker"
+        ensure (stringOf (field blocked ["arm", "status"]) == "passed") "declared ARM candidate ran"
+        ensure (hasInfix "original-binary execution" (field blocked ["blockers"])) "stock coverage blocker"
+        partial <- runCommand qualify (["--contract", root </> "contract.json", "--case-dir", anchorDir, "--candidate", candidate, "--runner", runner, "--arm-image", armImage, "--arm-symbols", armSymbols, "--arm-base", "0x00800000", "--scope", "capability", "--mutations", "single", "--stock", "none"])
+        ensure (statusOf partial == "blocked") ("partial capability: " ++ showValue partial)
+        ensure (not (boolOf (field partial ["capability"]))) "partial invocation is not capability"
+        ensure (hasInfix "complete mutation domain" (field partial ["blockers"])) "partial mutation blocker"
+        ensure (hasInfix "original-binary execution of every selected subject" (field partial ["blockers"])) "partial stock blocker"
+        arm <- runCommand qualify (common root anchorDir candidate ++ ["--runner", runner, "--arm-image", armImage, "--arm-symbols", armSymbols, "--arm-base", "0x00800000", "--mutations", "single"])
+        ensure (statusOf arm == "partial") ("ARM candidate: " ++ showValue arm)
+        ensure (stringOf (field arm ["arm", "status"]) == "passed") "ARM candidate status"
+        ensure (count arm "single_bit" "arm_passed" == 352) "ARM single-bit coverage"
+        ensure (count arm "ground" "arm_passed" == 56) "ARM ground-case coverage"
         detection <- runCommand qualify (common root anchorDir candidate ++ ["--faulty", faulty])
-        ensure (statusOf detection == "qualified") ("faulty control: " ++ showValue detection)
+        ensure (statusOf detection == "partial") ("faulty control: " ++ showValue detection)
         ensure (stringOf (field detection ["faulty", "status"]) == "detected") "faulty candidate detected"
         let counterexample = field detection ["faulty", "counterexample"]
         ensure (countValue counterexample ["final_bits"] == 2) ("reduced witness bits: " ++ showValue counterexample)

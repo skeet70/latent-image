@@ -13,7 +13,7 @@ module Replacement.Area3.Qualify
 
 import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (IOException, SomeException, catch, throwIO, try)
-import Control.Monad (foldM, forM, (>=>))
+import Control.Monad (filterM, foldM, forM, (>=>))
 import Data.Aeson (Value (..))
 import Data.Bits (setBit, testBit, xor)
 import qualified Data.ByteString as B
@@ -22,10 +22,13 @@ import Data.Char (isDigit)
 import Data.List (sortOn, subsequences, (\\))
 import Data.Maybe (fromMaybe)
 import Data.Word (Word16, Word32, Word8)
-import Emulation.NativeCase (Region (..), checkResult)
+import Emulation.NativeCase (checkResult)
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host hiding (sha256)
+import System.Directory (canonicalizePath, doesFileExist)
+import System.Environment (getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (..))
+import System.FilePath ((</>), takeDirectory, takeFileName)
 
 import Replacement.Area3.Contract
 import qualified Replacement.Area3.Domain as Domain
@@ -55,6 +58,7 @@ data Options = Options
   , optionMutations :: MutationSelection
   , optionStock :: StockSelection
   , optionJobs :: Int
+  , optionLimit :: Maybe Int
   , optionCounterexample :: Bool
   }
 
@@ -74,7 +78,8 @@ defaultOptions =
     , optionScope = ScopeCapability
     , optionMutations = MutationsAll
     , optionStock = StockAll
-    , optionJobs = 4
+    , optionJobs = 1
+    , optionLimit = Nothing
     , optionCounterexample = True
     }
 
@@ -116,6 +121,9 @@ parseOptions = go defaultOptions
     go options ("--jobs" : value : rest) = case reads value of
       [(jobs :: Int, "")] | jobs > 0 && jobs <= 32 -> go options {optionJobs = jobs} rest
       _ -> Left ("--jobs: 1..32 required: " ++ value)
+    go options ("--limit" : value : rest) = case reads value of
+      [(limit :: Int, "")] | limit > 0 && limit <= 1000000 -> go options {optionLimit = Just limit} rest
+      _ -> Left ("--limit: positive count required: " ++ value)
     go options ("--no-counterexample" : rest) = go options {optionCounterexample = False} rest
     go _ (argument : _) = Left ("unknown argument: " ++ argument)
 
@@ -143,6 +151,29 @@ data Subject = Subject
   , subjectOracle :: Domain.Oracle
   }
 
+resolveArmArtifacts :: Options -> IO (Maybe FilePath, Maybe FilePath)
+resolveArmArtifacts options = case (optionArmImage options, optionArmSymbols options) of
+  (Nothing, Nothing)
+    | optionScope options == ScopeLogic -> pure (Nothing, Nothing)
+  _ -> do
+    image <- maybe (runfile "replacement/validator/area3-arm.bin") (pure . Just) (optionArmImage options)
+    symbols <- maybe (runfile "replacement/validator/area3-arm.symbols") (pure . Just) (optionArmSymbols options)
+    pure (image, symbols)
+
+runfile :: FilePath -> IO (Maybe FilePath)
+runfile relative = do
+  executable <- getExecutablePath
+  environment <- lookupEnv "RUNFILES_DIR"
+  let roots =
+        maybe [] (\root -> [root </> "_main", root]) environment
+          ++ [ takeDirectory executable </> (takeFileName executable ++ ".runfiles") </> "_main"
+             , takeDirectory executable </> (takeFileName executable ++ ".runfiles")
+             ]
+  found <- filterM doesFileExist [root </> relative | root <- roots]
+  case found of
+    (path : _) -> Just <$> canonicalizePath path
+    [] -> pure Nothing
+
 data CandidateReply = CandidateReply
   { replyOutcome :: Domain.Outcome
   , replyFinal :: Domain.Record
@@ -151,6 +182,44 @@ data CandidateReply = CandidateReply
 -- | The command's result is the exit code and the canonical report.
 runQualification :: Options -> IO (Int, Value)
 runQualification options = do
+  defaults <- resolveDefaults options
+  case defaults of
+    Left message -> pure (refusedReport message)
+    Right resolved -> runResolved resolved
+
+resolveDefaults :: Options -> IO (Either String Options)
+resolveDefaults options = do
+  contract <- resolvePath (optionContract options) "replacement/validator/contracts/area3-validator-150.json" "contract not supplied"
+  candidate <- resolvePath (optionCandidate options) "replacement/validator/area3-candidate" "candidate not supplied"
+  runner <- case optionRunner options of
+    Just path -> pure (Just path)
+    Nothing
+      | optionScope options == ScopeCapability -> runfile "emulation/native-runner"
+      | otherwise -> pure Nothing
+  (image, symbols) <- resolveArmArtifacts options
+  pure $
+    case (contract, candidate) of
+      (Left message, _) -> Left message
+      (_, Left message) -> Left message
+      (Right contractPath, Right candidatePath) ->
+        Right
+          options
+            { optionContract = contractPath
+            , optionCandidate = candidatePath
+            , optionRunner = runner
+            , optionArmImage = image
+            , optionArmSymbols = symbols
+            }
+
+resolvePath :: FilePath -> FilePath -> String -> IO (Either String FilePath)
+resolvePath explicit relative message = do
+  path <- if not (null explicit) then pure (Just explicit) else runfile relative
+  case path of
+    Nothing -> pure (Left message)
+    Just found -> Right <$> canonicalizePath found
+
+runResolved :: Options -> IO (Int, Value)
+runResolved options = do
   contractAttempt <- try (loadContract (optionContract options))
   case contractAttempt of
     Left (message :: IOException) -> pure (refusedReport (show message))
@@ -168,7 +237,8 @@ runQualification options = do
                 withTemporary "area3-qualify" $ \temporary -> do
                   workspace <-
                     prepareWorkspace temporary (loadedValue accepted) (loadedRegions accepted) (loadedArtifacts accepted)
-                  candidateAttempt <- try (readRegular (8 * 1024 * 1024) (optionCandidate options))
+                  candidatePath <- canonicalizePath (optionCandidate options)
+                  candidateAttempt <- try (readRegular (8 * 1024 * 1024) candidatePath)
                   case candidateAttempt of
                     Left (message :: IOException) -> pure (refusedReport (show message))
                     Right candidateBytes -> do
@@ -179,20 +249,19 @@ runQualification options = do
                       case grounds of
                         Left message -> pure (refusedReport message)
                         Right groundList -> do
-                          let subjects = selectSubjects options (loadedRecord accepted) groundList
+                          let selected = selectSubjects options (loadedRecord accepted) groundList
+                              subjects = maybe selected (\limit -> take limit selected) (optionLimit options)
                               scratch = effectScratchRegions (contractEffects contract)
-                          host <- evaluateCandidate (optionCandidate options) subjects
+                          host <- evaluateCandidate candidatePath subjects
                           faultyRun <- case optionFaulty options of
                             Nothing -> pure Nothing
                             Just path -> fmap Just (evaluateCandidate path subjects)
                           (anchorResults, stockResults) <- case optionRunner options of
-                            Nothing -> pure ([], [])
-                            Just runner -> do
+                            Just runner | optionStock options /= StockNone -> do
                               anchorResults' <- runAnchors contract anchors runner
-                              stockChecks <- case optionStock options of
-                                StockNone -> pure []
-                                _ -> runStockBatch contract workspace runner options (selectStock options subjects)
+                              stockChecks <- runStockBatch contract workspace runner options (selectStock options subjects)
                               pure (anchorResults', stockChecks)
+                            _ -> pure ([], [])
                           armResult <- case (optionArmImage options, optionArmSymbols options, optionRunner options) of
                             (Nothing, _, _) | optionScope options == ScopeLogic -> pure Nothing
                             (Just imagePath, Just symbolsPath, Just runner) -> do
@@ -210,7 +279,7 @@ runQualification options = do
                                   Just . Right <$> runArmBatch contract workspace profile runner options subjects
                             (_, _, Nothing) -> pure (Just (Left "ARM execution requires the native runner"))
                             _ -> pure (Just (Left "cross-compiled ARM candidate artifact not supplied"))
-                          refusals <- probeRefusals (optionCandidate options) (loadedRecord accepted)
+                          refusals <- probeRefusals candidatePath (loadedRecord accepted)
                           counterexample <- case (optionFaulty options, faultyRun) of
                             (Just faultyPath, Just (Right replies))
                               | optionCounterexample options
@@ -233,6 +302,28 @@ runQualification options = do
                                   | null (failingFaulty replies) -> ["faulty candidate was not detected"]
                                   | otherwise -> []
                               probeFailures = refusalFailures refusals
+                              armCount = case armResult of
+                                Just (Right outcomes) -> length outcomes
+                                _ -> 0
+                              coverageGaps =
+                                [ "capability requires the complete mutation domain (352 single-bit and 61,776 two-bit flips)"
+                                | optionMutations options /= MutationsAll
+                                ]
+                                  ++ [ "capability requires original-binary execution of every selected subject"
+                                     | optionStock options /= StockAll
+                                     ]
+                                  ++ [ "capability requires the complete enumerated domain; --limit narrows it"
+                                     | optionLimit options /= Nothing
+                                     ]
+                                  ++ [ "capability requires all contract anchors to execute"
+                                     | length anchorResults /= length (contractAnchors contract)
+                                     ]
+                                  ++ [ "original-binary execution covered " ++ show (length stockResults) ++ " of " ++ show (length subjects)
+                                     | length stockResults /= length subjects
+                                     ]
+                                  ++ [ "ARM candidate execution covered " ++ show armCount ++ " of " ++ show (length subjects)
+                                     | armCount /= length subjects
+                                     ]
                               prerequisites =
                                 [ "native runner not supplied"
                                 | optionScope options == ScopeCapability
@@ -240,8 +331,9 @@ runQualification options = do
                                 ]
                                   ++ [ "ARM candidate artifact not supplied"
                                      | optionScope options == ScopeCapability
-                                     , not (hasArm options)
+                                     , (optionArmImage options, optionArmSymbols options) == (Nothing, Nothing)
                                      ]
+                                  ++ [gap | optionScope options == ScopeCapability, gap <- coverageGaps]
                               failures =
                                 hostMismatches hostSummary
                                   ++ anchorFailures
@@ -260,8 +352,12 @@ runQualification options = do
                                 | not (null failures) = "failed"
                                 | not (null blockers) = "blocked"
                                 | not (null unknowns) = "unknown"
+                                | not (null coverageGaps) = "partial"
                                 | otherwise = "qualified"
-                              capability = status == "qualified" && optionScope options == ScopeCapability
+                              capability =
+                                status == "qualified"
+                                  && optionScope options == ScopeCapability
+                                  && null coverageGaps
                               report =
                                 obj
                                   [ ("schema_version", n 1)
@@ -279,6 +375,7 @@ runQualification options = do
                                   , ("failures", arr (map s (take 20 failures)))
                                   , ("blockers", arr (map s (take 20 blockers)))
                                   , ("unknowns", arr (map s (take 20 unknowns)))
+                                  , ("coverage_gaps", arr (map s coverageGaps))
                                   , ("evidence_limits", arr (map s (evidenceLimits contract options subjects stockResults)))
                                   ]
                           pure (exitCodeFor status, report)
@@ -298,16 +395,12 @@ exitCodeFor :: String -> Int
 exitCodeFor "qualified" = 0
 exitCodeFor "failed" = 1
 exitCodeFor "refused" = 2
+exitCodeFor "partial" = 3
 exitCodeFor _ = 3
 
 scopeName :: Scope -> String
 scopeName ScopeCapability = "capability"
 scopeName ScopeLogic = "logic"
-
-hasArm :: Options -> Bool
-hasArm options = case (optionArmImage options, optionArmSymbols options) of
-  (Just _, Just _) -> True
-  _ -> False
 
 selectSubjects :: Options -> Domain.Record -> [Domain.GroundCase] -> [Subject]
 selectSubjects options record groundList = single ++ two ++ ground
@@ -454,12 +547,14 @@ runAnchors contract anchors runner = forM anchors $ \anchor -> do
     Left message -> pure (AnchorResult (loadedId anchor) (CheckBlocked message) [message] Nothing)
     Right (caseValue, regions, raw) -> do
       existing <- checkResult caseValue regions (rawValue raw)
-      let observation = observe (map regionName regions) (rawValue raw)
-          check = checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions) observation
-      pure (AnchorResult (loadedId anchor) check existing (Just raw))
-
-regionName :: Region -> String
-regionName region = str (get (description region) "id")
+      pure $ case observe (regionInfo regions) (rawValue raw) of
+        Left message -> AnchorResult (loadedId anchor) (CheckBlocked ("invalid_output: " ++ message)) (message : existing) (Just raw)
+        Right observation ->
+          AnchorResult
+            (loadedId anchor)
+            (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions) observation)
+            existing
+            (Just raw)
 
 anchorReport :: AnchorResult -> Value
 anchorReport result =
@@ -514,13 +609,16 @@ runStockBatch contract workspace runner options subjects =
       result <- runCaseFile runner path
       case result of
         Left message -> pure (CaseOutcome (subjectClass item) (subjectId item) (CheckBlocked message))
-        Right (caseValue, regions, raw) -> do
-          let observation = observe (map regionName regions) (rawValue raw)
+        Right (caseValue, regions, raw) ->
           pure
             ( CaseOutcome
                 (subjectClass item)
                 (subjectId item)
-                (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions) observation)
+                (either
+                   (\message -> CheckBlocked ("invalid_output: " ++ message))
+                   (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions))
+                   (observe (regionInfo regions) (rawValue raw))
+                )
             )
     provenance item =
       "Generated from the grounded record-accept input: " ++ classText (subjectClass item) ++ " " ++ subjectId item
@@ -540,13 +638,16 @@ runArmBatch contract workspace profile runner options subjects =
       result <- runCaseFile runner path
       case result of
         Left message -> pure (CaseOutcome (subjectClass item) (subjectId item) (CheckBlocked message))
-        Right (caseValue, regions, raw) -> do
-          let observation = observe (map regionName regions) (rawValue raw)
+        Right (caseValue, regions, raw) ->
           pure
             ( CaseOutcome
                 (subjectClass item)
                 (subjectId item)
-                (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions) observation)
+                (either
+                   (\message -> CheckBlocked ("invalid_output: " ++ message))
+                   (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions))
+                   (observe (regionInfo regions) (rawValue raw))
+                )
             )
     provenance item =
       "Replacement ARM candidate executed from the declared artifact identity: " ++ subjectId item
@@ -672,9 +773,12 @@ buildCounterexample _contract scratch faultyPath workspace runner base seed = do
           pure $ case result of
             Left _ -> "unchecked"
             Right (caseValue, regions, raw) ->
-              case checkCase (expectationFromCase scratch caseValue regions) (observe (map regionName regions) (rawValue raw)) of
-                CheckPass -> "rejected"
-                _ -> "mismatch"
+              either
+                (const "unchecked")
+                (\observation -> case checkCase (expectationFromCase scratch caseValue regions) observation of
+                   CheckPass -> "rejected"
+                   _ -> "mismatch")
+                (observe (regionInfo regions) (rawValue raw))
       pure
         ( obj
             [ ("record", s (Domain.recordHex witness))

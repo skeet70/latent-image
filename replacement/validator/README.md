@@ -29,22 +29,18 @@ The contract binds the permitted change set: one record byte on a corrected outc
 ## Running
 
 ```sh
-bazel build --jobs=2 //replacement/validator:area3-qualify
-
+bazel build --jobs=1 //replacement/validator:area3-qualify
 bazel-bin/replacement/validator/area3-qualify \
-  --contract replacement/validator/contracts/area3-validator-150.json \
-  --case-dir private-data/analysis/x-m1-1.50/native-case/area3-validator \
-  --runner bazel-bin/emulation/native-runner \
-  --candidate bazel-bin/replacement/validator/area3-candidate \
-  --arm-image <candidate.bin> --arm-symbols <candidate.symbols> --arm-base <link-base> \
-  --scope capability
+  --case-dir private-data/analysis/x-m1-1.50/native-case/area3-validator
 ```
 
-`--scope capability` (the default) requires the retained native cases, the native runner and the cross-compiled ARM candidate. Without them the command fails closed with `status: blocked`; the host candidate is supplementary evidence and never establishes capability. `--scope logic` compares the host candidate with the contract oracle only and reports `capability: false`.
+The contract, host candidate, native runner, ARM image and ARM symbols resolve from the binary's declared Bazel data; only the owner-supplied case directory is passed. An explicit `--contract/--candidate/--runner/--arm-image/--arm-symbols/--arm-base` overrides the declared artifact.
 
-`--mutations all|single|two` selects the mutation domain, `--stock all|none|COUNT` bounds original-binary execution for a partial run, and `--jobs` bounds the workers used for native cases. `--faulty PATH` adds the negative control and its reduced counterexample. No result is cached: a run always re-reads the contract, cases and candidate, so the evidence identity is the invocation itself.
+`--scope capability` (the default) requires the retained native cases, the native runner and the cross-compiled ARM candidate. `--scope logic` confines the run to the host adapter and the contract oracle; it never reports capability. In either scope, `status: partial` means the declared domain was not fully executed.
 
-Exit codes: 0 qualified, 1 behavioral failure, 2 refused input, 3 blocked or unknown.
+`--mutations all|single|two` selects the mutation domain, `--stock all|none|COUNT` bounds original-binary execution, `--limit` bounds the selected subjects, and `--jobs` bounds the parallel native cases (default 1). `--faulty PATH` adds the negative control and its reduced counterexample. No result is cached: a run always re-reads the contract, cases and candidate, so the evidence identity is the invocation itself.
+
+Exit codes: 0 qualified, 1 behavioral failure, 2 refused input, 3 partial, blocked or unknown.
 
 ## Coverage
 
@@ -55,6 +51,10 @@ The selected record is `record-accept` (52 bytes, SHA-256 pinned in the contract
 - 56 independently constructed record/parity cases: additionally constructed valid records with recomputed parity, single-bit errors on those records, single row-parity-bit and column-parity-bit corruptions, and row+column parity pairs.
 
 Coverage excludes other records, parity-byte mutations inside the 352/61,776 enumeration, stored row-parity bits 11..31, storage reads, ECC visibility, timing, writeback and camera actions. The stock writer `0x006a8484` is not used: constructed records come from the documented parity construction and their expectations are confirmed by original-binary execution, not by the writer or the replacement.
+
+## Coverage prerequisite
+
+`status: qualified` and `capability: true` require the complete declared domain in one run: all three grounded anchors, the 352 single-bit and 61,776 two-bit mutations, all 56 independently constructed record/parity cases, original-binary execution of every one of them, and the ARM candidate executed in the native harness on every one of them, each returned with matching observations, preserved ABI state and permitted effects. `--mutations single|two`, `--stock none|COUNT` and `--limit` narrow the run; the report names the gaps in `coverage_gaps` and the status stays `partial` or `blocked`. A sampled run cannot qualify.
 
 ## Qualification outcomes
 

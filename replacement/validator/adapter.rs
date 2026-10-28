@@ -75,14 +75,14 @@ fn reply(record_text: &str, length_text: &str) -> String {
         Outcome::Accepted => format!("accepted {}", encode_record(&record)),
         Outcome::Corrected(site) => format!(
             "corrected {} {} {}",
-            site.row,
-            site.column,
+            site.row(),
+            site.column(),
             encode_record(&record)
         ),
         Outcome::Rejected(syndrome) => format!(
             "rejected {:04x} {:08x} {}",
-            syndrome.row.0,
-            syndrome.column.0,
+            syndrome.row.bits(),
+            syndrome.column.bits(),
             encode_record(&record)
         ),
     }

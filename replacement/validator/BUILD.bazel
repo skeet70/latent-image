@@ -1,4 +1,5 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -39,6 +40,36 @@ genrule(
     tools = [_RUSTC, _CC],
 )
 
+xm1_rust_staticlib(
+    name = "area3-rust",
+    src = "validator.rs",
+    crate_name = "area3_validator",
+    opt_level = "z",
+    rustc_flags = ["--cfg", "xm1_freestanding"],
+)
+
+xm1_rust_staticlib(
+    name = "area3-rust-faulty",
+    src = "faulty.rs",
+    crate_name = "area3_validator",
+    opt_level = "z",
+    rustc_flags = ["--cfg", "xm1_freestanding"],
+)
+
+xm1_rust_elf(
+    name = "area3-arm",
+    entry = "area3_validate",
+    link_script = "validator.ld",
+    rust_staticlib = ":area3-rust",
+)
+
+xm1_rust_elf(
+    name = "area3-arm-faulty",
+    entry = "area3_validate",
+    link_script = "validator.ld",
+    rust_staticlib = ":area3-rust-faulty",
+)
+
 haskell_library(
     name = "area3-lib",
     srcs = [
@@ -72,7 +103,13 @@ haskell_library(
 haskell_binary(
     name = "area3-qualify",
     srcs = ["Area3QualifyMain.hs"],
-    data = [":candidate"],
+    data = [
+        ":area3-arm.bin",
+        ":area3-arm.symbols",
+        ":candidate",
+        "contracts/area3-validator-150.json",
+        "//emulation:native-runner",
+    ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     deps = [
         ":area3-lib",
@@ -86,14 +123,20 @@ haskell_test(
     size = "medium",
     srcs = ["Area3QualifyTests.hs"],
     args = [
-        "$(rootpath :area3-qualify)",
-        "$(rootpath :candidate)",
-        "$(rootpath :faulty)",
+        "$(location :area3-qualify)",
+        "$(location :candidate)",
+        "$(location :faulty)",
+        "$(location :area3-arm.bin)",
+        "$(location :area3-arm.symbols)",
+        "$(location //emulation:native-runner)",
     ],
     data = [
+        ":area3-arm.bin",
+        ":area3-arm.symbols",
         ":area3-qualify",
         ":candidate",
         ":faulty",
+        "//emulation:native-runner",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     deps = [
