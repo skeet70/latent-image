@@ -11,7 +11,7 @@ import qualified Data.Map.Strict as M
 import Data.Maybe (listToMaybe)
 import Data.String (fromString)
 import Data.Word (Word32, Word64)
-import Emulation.NativeCase (Region (..))
+import Emulation.NativeCase (Region (..), loadCase)
 import qualified Emulation.NativeObservation as N
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host hiding (sha256)
@@ -32,7 +32,7 @@ run runner = do
   aggregationChecks
   consumerChecks
   parserChecks
-  armEffectMutant runner
+  armEffectChecks runner
   putStrLn "service qualification tests: passed"
 
 aggregationChecks :: IO ()
@@ -293,9 +293,58 @@ hexWord64 value = "0x" ++ replicate (8 - length text) '0' ++ text
     digitsAt 0 = []
     digitsAt number = digits !! fromIntegral (number `mod` 16) : digitsAt (number `div` 16)
 
-armEffectMutant :: FilePath -> IO ()
-armEffectMutant runner = withTemporary "service-effect-mutant" $ \directory -> do
-  let code = B.concat (map word32LE [0xe3001000, 0xe340109a, 0xe5910100, 0xe2802001, 0xe5812100, 0xe5810100, 0xe12fff1e])
+data ArmEffect = StoreThenRestore | NoStores
+  deriving (Eq, Show)
+
+armEffectChecks :: FilePath -> IO ()
+armEffectChecks runner = do
+  (mutantResult, mutantObservation) <- armEffectCase runner StoreThenRestore
+  check "the ARM effect mutant returns with the expected ABI" $
+    requiredAbi mutantObservation
+  check "the ARM effect mutant leaves casebuf and mirror unchanged" $
+    unchangedCasebufAndMirror mutantObservation
+  check "the ARM effect mutant supplies complete provenance" $
+    completeProvenance mutantObservation
+  check "the ARM effect mutant records both writes at casebuf+0x100" $
+    effectWrites mutantObservation == Just (replicate 2 (N.Write (N.GuestAddress 0x009a0100) (N.WriteBytes 4)))
+  check "the ARM effect mutant fails qualification" $
+    str (get mutantResult "status") == "failed"
+  (controlResult, controlObservation) <- armEffectCase runner NoStores
+  check "the ARM effect no-write control returns with the expected ABI" $
+    requiredAbi controlObservation
+  check "the ARM effect no-write control leaves casebuf and mirror unchanged" $
+    unchangedCasebufAndMirror controlObservation
+  check "the ARM effect no-write control supplies complete provenance" $
+    completeProvenance controlObservation
+  check "the ARM effect no-write control writes nothing at casebuf+0x100" $
+    effectWrites controlObservation == Just []
+  check "the ARM effect no-write control qualifies" $
+    str (get controlResult "status") == "passed"
+
+requiredAbi :: N.NativeObservation -> Bool
+requiredAbi observation =
+  N.nativeStatus observation == N.Returned
+    && all (\(register, value) -> M.lookup register (N.nativeRegisters observation) == Just value) expectedEffectRegisters
+
+unchangedCasebufAndMirror :: N.NativeObservation -> Bool
+unchangedCasebufAndMirror observation =
+  lookup (N.RegionId "casebuf") (N.nativeMemory observation) == Just (B.replicate serviceCasebufSize 0)
+    && lookup (N.RegionId "mirror") (N.nativeMemory observation) == Just (B.replicate serviceTransientSize 0)
+
+completeProvenance :: N.NativeObservation -> Bool
+completeProvenance observation = case N.nativeProvenance observation of
+  N.Complete _ _ -> True
+  N.Truncated _ -> False
+
+effectWrites :: N.NativeObservation -> Maybe [N.Write]
+effectWrites = N.provenanceWrites . N.nativeProvenance
+
+expectedEffectRegisters :: [(N.Register, Word32)]
+expectedEffectRegisters = (N.R0, 0) : serviceSeeds ++ [(N.Sp, serviceStackTop), (N.Pc, 0x00801000)]
+
+armEffectCase :: FilePath -> ArmEffect -> IO (Value, N.NativeObservation)
+armEffectCase runner effect = withTemporary "service-effect-mutant" $ \directory -> do
+  let code = B.concat (map word32LE (effectCode effect))
       casebuf = B.replicate serviceCasebufSize 0
       mirror = B.replicate serviceTransientSize 0
       exitBytes = word32LE 0xe12fff1e
@@ -314,14 +363,12 @@ armEffectMutant runner = withTemporary "service-effect-mutant" $ \directory -> d
              , (N.Lr, 0x00801000)
              , (N.Cpsr, 0x10)
              ]
-      expectedRegisters =
-        (N.R0, 0) : serviceSeeds ++ [(N.Sp, serviceStackTop), (N.Pc, 0x00801000)]
       caseValue =
         obj
           [ ("schema_version", n 1)
-          , ("id", s "service-effect-mutant")
+          , ("id", s (effectId effect))
           , ("origin", s "synthetic")
-          , ("provenance", s "test-only ARM effect mutant: writes casebuf+0x100 and restores it")
+          , ("provenance", s (effectDescription effect))
           , ("cpu", obj [("architecture", s "arm"), ("model", s "cortex-r5f"), ("mode", s "arm"), ("endian", s "little")])
           , ("artifacts", arr [artifact artifactId path bytes | (artifactId, path, bytes) <- artifacts])
           , ("entry", s "0x00800000")
@@ -341,17 +388,31 @@ armEffectMutant runner = withTemporary "service-effect-mutant" $ \directory -> d
           , ( "expected"
             , obj
                 [ ("status", s "returned")
-                , ("registers", registerObject expectedRegisters)
+                , ("registers", registerObject expectedEffectRegisters)
                 , ("memory", arr [])
                 , ("events", arr [])
                 ]
             )
-          , ("exclusions", arr [s "test-only ARM effect mutant"])
+          , ("exclusions", arr [s (effectDescription effect)])
           ]
-  BL.writeFile (directory </> "case.json") (encode caseValue)
-  (_, result) <- runServiceCase runner (directory </> "case.json")
-  check "a real ARM effect mutant is refused" $
-    str (get result "status") == "failed"
+  let path = directory </> "case.json"
+  BL.writeFile path (encode caseValue)
+  (_, regions, _, _) <- loadCase path
+  (report, result) <- runServiceCase runner path
+  observation <- either (ioError . userError . N.renderObservationError) pure (N.observeNative ExitSuccess regions (get report "runner"))
+  pure (result, observation)
+
+effectCode :: ArmEffect -> [Word32]
+effectCode StoreThenRestore = [0xe3001000, 0xe340109a, 0xe5910100, 0xe2802001, 0xe5812100, 0xe5810100, 0xe12fff1e]
+effectCode NoStores = [0xe3001000, 0xe340109a, 0xe5910100, 0xe2802001, 0xe1a00000, 0xe1a00000, 0xe12fff1e]
+
+effectId :: ArmEffect -> String
+effectId StoreThenRestore = "service-effect-mutant"
+effectId NoStores = "service-effect-no-write"
+
+effectDescription :: ArmEffect -> String
+effectDescription StoreThenRestore = "test-only ARM effect mutant: writes casebuf+0x100 and restores it"
+effectDescription NoStores = "test-only ARM effect control: writes nothing"
 
 artifact :: String -> String -> B.ByteString -> Value
 artifact artifactId path bytes =
