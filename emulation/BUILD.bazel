@@ -1018,6 +1018,10 @@ haskell_library(
     name = "case-sha256",
     srcs = ["Emulation/Sha256.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = [
+        "//emulation:__pkg__",
+        "//replacement:__subpackages__",
+    ],
     deps = [
         "//host:base",
         "//host:bytestring",

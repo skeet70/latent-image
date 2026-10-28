@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "id": "area3-record-validator-150",
+  "target": {
+    "body": "X-M1",
+    "firmware": "1.50",
+    "image": 4,
+    "entry": "0x006a84d4",
+    "size": 392,
+    "mode": "compatibility"
+  },
+  "abi": {
+    "convention": "aapcs32",
+    "record": "r0",
+    "protected_length": "r1",
+    "result": "r0",
+    "accept": "0x00000000",
+    "reject": "0x00000001",
+    "return": "lr",
+    "preserved": ["r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "sp"]
+  },
+  "input": {
+    "record_size": 52,
+    "protected_size": 44,
+    "protected_length": "0x0000002c",
+    "row_count": 11,
+    "column_count": 32,
+    "row_parity_offset": 44,
+    "column_parity_offset": 48,
+    "row_parity_bits": 11,
+    "row_parity_high_bits": "zero"
+  },
+  "outputs": {
+    "accept": "0x00000000",
+    "reject": "0x00000001",
+    "classes": ["accepted", "corrected", "rejected"],
+    "refusals": [
+      "bad_request",
+      "bad_verb",
+      "bad_record_hex",
+      "bad_length_field",
+      "unsupported_length",
+      "row_parity_high_bits"
+    ]
+  },
+  "effects": {
+    "record_write": "corrected bit only",
+    "max_record_write_bytes": 1,
+    "scratch_regions": ["stack"],
+    "forbidden_regions": ["code-validator", "code-runtime", "spec", "exit"],
+    "persistent_changes": "none"
+  },
+  "engine": {
+    "cpu": "cortex-r5f",
+    "mode": "arm",
+    "endian": "little"
+  },
+  "dependencies": [
+    {
+      "id": "code-validator",
+      "size": 624,
+      "sha256": "e5d9b80f603ec2bcafaedf7a147185e6be944a7cfa7da6fe9872ce6ccccef246"
+    },
+    {
+      "id": "code-runtime",
+      "size": 580,
+      "sha256": "714e2ee4d6feeb2b77ee47e4d7b6e11edfa3d0cbcea8e26c42ba8f89a5fb6d6e"
+    },
+    {
+      "id": "spec",
+      "size": 4,
+      "sha256": "32434dc5b0f72c9b863c24daa5d4e79b9c43bd73b38c469fb65fd13d996b7b32"
+    },
+    {
+      "id": "record-accept",
+      "size": 52,
+      "sha256": "87b1e44d39a7ad591ccae07e953f6c8e11b2eb3e0e118eabac44bc2c0976f34b"
+    }
+  ],
+  "functions": [
+    { "address": "0x006a84d4", "size": 392 },
+    { "address": "0x006a83f4", "size": 144 },
+    { "address": "0x007221a0", "size": 40 },
+    { "address": "0x007221c8", "size": 80 },
+    { "address": "0x0072232c", "size": 184 }
+  ],
+  "budgets": {
+    "instructions": 20000,
+    "wall_ms": 2000
+  },
+  "anchors": [
+    { "case": "area3-validate", "expected": "accepted" },
+    { "case": "area3-validate-bitflip", "expected": "corrected" },
+    { "case": "area3-validate-byteflip", "expected": "rejected" }
+  ],
+  "coverage": {
+    "record_artifact": "record-accept",
+    "protected_bits": 352,
+    "single_bit": 352,
+    "two_bit": 61776
+  },
+  "exclusions": [
+    "The mutation coverage is the selected captured record only; other records and parity-byte mutations are outside the 352/61,776 enumeration",
+    "Stored row-parity bits 11..31 are required zero; their behavior is unmodeled",
+    "No storage read, device behavior, ECC visibility, timing or writeback is modeled",
+    "The correspondence of the executed function bytes to image 4 is the existing single-boot E-DUMP-RAM-150 comparison; no fresh-boot re-read has run",
+    "The R5F engine stands for an inferred R4F-class core only inside the admitted instruction set",
+    "Compiler and ABI qualification of the Rust candidate is owned by the shared build contract; the ARM artifact must be produced by that build"
+  ]
+}
