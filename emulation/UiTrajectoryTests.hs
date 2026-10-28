@@ -87,7 +87,7 @@ main = do
     [ expect "the checked-in trajectory files are present" (not (null files))
     , expect "a trace site decodes to its address and label" $
         sitesOf (document "[[\"0114b6c4\",\"film-icon\"]]" "[\"a\"]")
-          == Just [TraceSite 0x0114b6c4 "film-icon"]
+          == Just [TraceSite (FixedAddress 0x0114b6c4) "film-icon"]
     , expect "a file without trace sites declares none" $
         sitesOf (C.pack "{\"schema\":1,\"before_unload\":[],\"after_unload\":[]}") == Just []
     , expect "an unaligned trace site is refused" $
@@ -98,6 +98,17 @@ main = do
         refused (document "[[\"0114b6c4\",\"menu-message\"]]" "[]")
     , expect "a repeated trace label is refused" $
         refused (document "[[\"0114b6c4\",\"x\"],[\"01146cf0\",\"x\"]]" "[]")
+    , expect "a runtime trace site decodes to its symbol, offset and label" $
+        sitesOf (document "[[\"runtime:rb_call_stock_probe+0x10\",\"svc-stock-return\"]]" "[]")
+          == Just [TraceSite (RuntimeSymbol "rb_call_stock_probe" 0x10) "svc-stock-return"]
+    , expect "a runtime trace site without an offset is refused when unaligned" $
+        refused (document "[[\"runtime:rb_call_stock_probe+0x6\",\"svc-stock-return\"]]" "[]")
+    , expect "a runtime trace site needs a symbol" $
+        refused (document "[[\"runtime:+0x10\",\"svc-stock-return\"]]" "[]")
+    , expect "the same resolved trace site twice is refused" $
+        refused (document "[[\"runtime:rb_call_stock_probe+0x10\",\"a\"],[\"runtime:rb_call_stock_probe+0x10\",\"b\"]]" "[]")
+    , expect "a fixed trace site shorter than eight digits is refused" $
+        refused (document "[[\"114b6c4\",\"x\"]]" "[]")
     , expect "a repeated trace address is refused" $
         refused (document "[[\"0114b6c4\",\"x\"],[\"0114b6c4\",\"y\"]]" "[]")
     , expect "a requirement naming no segment is refused" $
