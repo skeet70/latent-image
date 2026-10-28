@@ -56,6 +56,15 @@ Coverage excludes other records, parity-byte mutations inside the 352/61,776 enu
 
 `status: qualified` and `capability: true` require the complete declared domain in one run: all three grounded anchors, the 352 single-bit and 61,776 two-bit mutations, all 56 independently constructed record/parity cases, original-binary execution of every one of them, and the ARM candidate executed in the native harness on every one of them, each returned with matching observations, preserved ABI state and permitted effects. `--mutations single|two`, `--stock none|COUNT` and `--limit` narrow the run; the report names the gaps in `coverage_gaps` and the status stays `partial` or `blocked`. A sampled run cannot qualify.
 
+## Qualified run
+
+The complete capability run passed on 2026-10-28 under the fixed containment: one emulator-slot reservation, `taskset -c 0,1`, `cpulimit --limit=75`, `GHCRTS=-N1 -M4G -A16m` on the real command only, the unchanged 85 C guard and `--jobs 1`.
+
+- Anchors 3/3; original closure 62,184/62,184; ARM candidate 62,184/62,184; refusal probes 6/6.
+- 352 single-bit, 61,776 two-bit and 56 record/parity subjects all returned and matched under both executions, with preserved ABI state and permitted effects.
+- Faulty control detected on 5,488 subjects. The reduced witness is four flips in one protected word reduced to two (byte 0, bits 0 and 1), and the original binary rejects it.
+- 41 min 34 s service runtime, 1.6 GiB peak, exit 0, `status: qualified`, `capability: true`.
+
 ## Qualification outcomes
 
 | Runner diagnostic | Qualification |
