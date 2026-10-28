@@ -130,6 +130,9 @@ data ServiceContract = ServiceContract
   , contractRows :: [ServiceRow]
   , contractStateDomain :: [RowState]
   , contractReturnRegister :: N.Register
+  , contractArgumentRegisters :: [N.Register]
+  , contractScratchRegisters :: [N.Register]
+  , contractCpsr :: Word32
   , contractPreserved :: [N.Register]
   , contractSeeds :: [(N.Register, Word32)]
   , contractStackRegion :: N.RegionId
@@ -156,6 +159,9 @@ serviceContract =
     , contractRows = rows
     , contractStateDomain = [Offered, Disabled, Hidden]
     , contractReturnRegister = N.R0
+    , contractArgumentRegisters = [N.R0, N.R1]
+    , contractScratchRegisters = [N.R2, N.R3, N.R12]
+    , contractCpsr = 0x10
     , contractPreserved = [N.R4 .. N.R11] ++ [N.Sp, N.Pc]
     , contractSeeds =
         [ (N.R4, 0x4a4a4a4a)
@@ -293,6 +299,9 @@ serviceContractValue =
     , ("rows", arr (map rowValue (contractRows serviceContract)))
     , ("state_domain", arr [n (fromIntegral (rowStateWord state)) | state <- contractStateDomain serviceContract])
     , ("return_register", s (N.registerLabel (contractReturnRegister serviceContract)))
+    , ("argument_registers", arr [s (N.registerLabel register) | register <- contractArgumentRegisters serviceContract])
+    , ("scratch_registers", arr [s (N.registerLabel register) | register <- contractScratchRegisters serviceContract])
+    , ("cpsr", s (N.hexWord32 (contractCpsr serviceContract)))
     , ("preserved_registers", arr [s (N.registerLabel register) | register <- contractPreserved serviceContract])
     , ("seeds", arr [obj [("register", s (N.registerLabel register)), ("value", n (fromIntegral value))] | (register, value) <- contractSeeds serviceContract])
     , ( "stack"
@@ -355,16 +364,16 @@ serviceContractSha256 = sha256Hex (sha256 serviceContractBytes)
 
 serviceInitialRegisters :: Word32 -> Word32 -> Word32 -> Word32 -> [(N.Register, Word32)]
 serviceInitialRegisters property row stackTop exit =
-  [ (N.R0, property)
-  , (N.R1, row)
-  , (N.R2, 0)
-  , (N.R3, 0)
+  [ (register, case register of
+        N.R0 -> property
+        N.R1 -> row
+        _ -> 0)
+  | register <- contractArgumentRegisters serviceContract ++ contractScratchRegisters serviceContract
   ]
     ++ serviceSeeds
-    ++ [ (N.R12, 0)
-       , (N.Sp, stackTop)
+    ++ [ (N.Sp, stackTop)
        , (N.Lr, exit)
-       , (N.Cpsr, 0x10)
+       , (N.Cpsr, contractCpsr serviceContract)
        ]
 
 serviceExpectedRegisters :: Word32 -> Word32 -> Word32 -> [(N.Register, Word32)]
