@@ -361,12 +361,17 @@ sh_binary(
     visibility = ["//visibility:public"],
 )
 
-sh_test(
+haskell_test(
     name = "fujimod-xm1-tests",
     size = "small",
-    srcs = ["fujimod-xm1-tests.sh"],
-    args = ["$(rootpaths @lab_fujimod_xm1//:test-harnesses)"],
+    srcs = ["FujimodXm1Tests.hs"],
+    args = ["$(locations @lab_fujimod_xm1//:test-harnesses)"],
     data = ["@lab_fujimod_xm1//:test-harnesses"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base",
+        "//host:process",
+    ],
 )
 
 haskell_binary(

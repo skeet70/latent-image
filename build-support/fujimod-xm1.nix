@@ -36,7 +36,8 @@ EOF
   buildInputs = [ pkgs.zlib ];
   dontUseCmakeConfigure = true;
   preCheck = ''
-    cargo test --no-run --message-format=json > test-artifacts.json
+    cargo test --no-run --message-format=json -j "$NIX_BUILD_CORES" --profile release \
+      --target ${pkgs.stdenv.targetPlatform.rust.rustcTargetSpec} --offline > test-artifacts.json
   '';
   # store-path holds $out, so Bazel actions keyed on it change with the store path.
   postInstall = ''
