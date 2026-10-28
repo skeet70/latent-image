@@ -16,8 +16,10 @@ import FujiAF.RamPush (Address (..), RamPushEntries (..), afRingPayload, payload
 import Replacement.Service.Packaged
 import Numeric (showHex)
 import System.Directory (createDirectoryIfMissing)
+import System.Posix.Files (setFileMode)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
+import Data.Word (Word32)
 
 data Variant = Variant
   { variantHits :: [Value]
@@ -75,22 +77,28 @@ load root variant = do
       package = root </> "package"
   createDirectoryIfMissing True (receipt </> "relinked")
   createDirectoryIfMissing True (package </> "kernel")
-  B.writeFile (receipt </> "relinked" </> "kernel.syms") symbols
-  B.writeFile (receipt </> "relinked" </> "runtime.bin") runtime
-  BL.writeFile (receipt </> "relinked" </> "ram-push-manifest.json") (encode relinkManifest)
-  B.writeFile (package </> "recipe-complete.DAT") datBytes
-  B.writeFile (package </> "kernel" </> "kernel.bin") kernelBytes
+  privateWrite (receipt </> "relinked" </> "kernel.syms") symbols
+  privateWrite (receipt </> "relinked" </> "runtime.bin") runtime
+  privateWriteLazy (receipt </> "relinked" </> "ram-push-manifest.json") (encode relinkManifest)
+  privateWrite (package </> "recipe-complete.DAT") datBytes
+  privateWrite (package </> "kernel" </> "kernel.bin") kernelBytes
   createDirectoryIfMissing True (package </> "runfiles")
-  B.writeFile (package </> "runfiles" </> "bank.a") archiveBytes
-  B.writeFile (package </> "runfiles" </> "build-facts.txt") factsBytes
-  BL.writeFile (package </> "recipe-complete.json") (encode packageManifest)
+  privateWrite (package </> "runfiles" </> "bank.a") archiveBytes
+  privateWrite (package </> "runfiles" </> "build-facts.txt") factsBytes
+  privateWriteLazy (package </> "recipe-complete.json") (encode packageManifest)
   case variantMutatePackage variant of
     Nothing -> pure ()
     Just mutation -> mutation package
-  BL.writeFile (receipt </> "e2e-result.json") (encode (e2eResult variant))
+  privateWriteLazy (receipt </> "e2e-result.json") (encode (e2eResult variant))
   when (variantControlFile variant) $
-    BL.writeFile (receipt </> "e2e-control.json") (encode (object ["outcome" .= ("control-refused" :: String)]))
+    privateWriteLazy (receipt </> "e2e-control.json") (encode (object ["outcome" .= ("control-refused" :: String)]))
   qualifyPackaged (PackagedInputs receipt package)
+
+privateWrite :: FilePath -> B.ByteString -> IO ()
+privateWrite path bytes = B.writeFile path bytes >> setFileMode path 0o600
+
+privateWriteLazy :: FilePath -> BL.ByteString -> IO ()
+privateWriteLazy path bytes = BL.writeFile path bytes >> setFileMode path 0o600
 
 symbols :: B.ByteString
 symbols = B.intercalate (BC.pack "\n")

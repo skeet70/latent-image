@@ -366,7 +366,10 @@ haskell_test(
     size = "small",
     srcs = ["FujimodXm1Tests.hs"],
     args = ["$(rootpath @lab_fujimod_xm1//:test-manifest)"],
-    data = ["@lab_fujimod_xm1//:test-harnesses"],
+    data = [
+        "@lab_fujimod_xm1//:test-manifest",
+        "@lab_fujimod_xm1//:test-harnesses",
+    ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         "//host:base",
@@ -400,6 +403,7 @@ haskell_library(
     srcs = ["Emulation/Symbols.hs", "Emulation/UiTrajectory.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
     deps = [
         ":emulator-usb",
         ":watch-observation",
@@ -1492,6 +1496,7 @@ haskell_library(
         "-O2",
     ],
     src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
     deps = [
         "//host:aeson",
         "//host:base",

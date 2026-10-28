@@ -672,23 +672,23 @@ judge judging route execution = do
               | referencePresent -> candidateQualification reference
             _ -> pure Nothing
           if not referencePresent then pure (outcome "fail" (Just ("counterpart " ++ routeName counterpart ++ " has no receipt")))
-          else if Just problem <- referenceQualification
-            then pure (outcome "fail" (Just ("counterpart " ++ routeName counterpart ++ ": " ++ problem)))
-          else do
-            (code, out, err) <- readProcessWithExitCode (judgingCompare judging) [reference, receipt] ""
-            createDirectoryIfMissing True (judgingOutput judging </> "differences")
-            writeFile (judgingOutput judging </> "differences" </> (routeName route ++ ".compare.txt")) (out ++ err)
-            let reported = [drop (length prefix) line | line <- lines out, prefix `isPrefixOf` line]
-                prefix = "e2e-observation-compare: "
-                exitProblem
-                  | not requireExit = Nothing
-                  | ExecutionUnknown <- execution = Just "route exit status is unknown"
-                  | otherwise = failedRun
-            pure $ case (code, exitProblem) of
-              (ExitSuccess, Nothing) -> outcome "pass" Nothing
-              (ExitSuccess, Just problem) -> outcome "fail" (Just problem)
-              (ExitFailure _, _) -> outcome "fail" (Just (intercalate "; " (maybe [] pure exitProblem
-                ++ [case reported of first : _ : _ -> last reported ++ ", first " ++ first; _ -> unwords (lines (out ++ err))])))
+          else case referenceQualification of
+            Just problem -> pure (outcome "fail" (Just ("counterpart " ++ routeName counterpart ++ ": " ++ problem)))
+            Nothing -> do
+              (code, out, err) <- readProcessWithExitCode (judgingCompare judging) [reference, receipt] ""
+              createDirectoryIfMissing True (judgingOutput judging </> "differences")
+              writeFile (judgingOutput judging </> "differences" </> (routeName route ++ ".compare.txt")) (out ++ err)
+              let reported = [drop (length prefix) line | line <- lines out, prefix `isPrefixOf` line]
+                  prefix = "e2e-observation-compare: "
+                  exitProblem
+                    | not requireExit = Nothing
+                    | ExecutionUnknown <- execution = Just "route exit status is unknown"
+                    | otherwise = failedRun
+              pure $ case (code, exitProblem) of
+                (ExitSuccess, Nothing) -> outcome "pass" Nothing
+                (ExitSuccess, Just problem) -> outcome "fail" (Just problem)
+                (ExitFailure _, _) -> outcome "fail" (Just (intercalate "; " (maybe [] pure exitProblem
+                  ++ [case reported of first : _ : _ -> last reported ++ ", first " ++ first; _ -> unwords (lines (out ++ err))])))
         AgainstBaseline spec -> do
           let baselinePath = judgingBaselines judging </> (routeName route ++ ".json")
               outcome result problem differences = Outcome route receipt execution result problem differences (Just baselinePath) Nothing []

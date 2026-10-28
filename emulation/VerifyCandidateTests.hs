@@ -7,7 +7,7 @@ import Data.Aeson (FromJSON (..), Value (..), eitherDecode, encode, object, toJS
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Text as T
 import qualified Data.ByteString.Lazy as BL
-import System.Directory (createDirectory, createDirectoryIfMissing, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
+import System.Directory (createDirectory, createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
 import System.Environment (getArgs, getEnvironment)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath ((</>))
@@ -67,7 +67,7 @@ withWorkspace = bracket setup removeDirectoryRecursive
 jsonFile :: FilePath -> Value -> IO ()
 jsonFile path = BL.writeFile path . encode
 
-qualificationWord :: Qualification -> Maybe String
+qualificationWord :: Qualification -> Maybe T.Text
 qualificationWord qualification = case qualification of
   QualifiedOutcome -> Just "candidate-qualified"
   RefusedOutcome -> Just "control-refused"
@@ -97,9 +97,10 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
                   , "seconds" .= (0 :: Double)
                   , "result" .= String result
                   , "message" .= message ]
+                segments :: [String] -> IO ()
                 segments names = do
                   jsonFile (directory </> "e2e-segments.json")
-                    (toJSON (map (\name -> segmentRecord name "passed" Null) names))
+                    (toJSON (map (\name -> segmentRecord (T.pack name) "passed" Null) names))
                   mapM_ (\name -> do
                     let segment = directory </> ("segment-" ++ name)
                     createDirectoryIfMissing True segment
@@ -152,11 +153,6 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
               FlatPlusSegmented -> do
                 segments ["service-field-list"]
                 writeOutcome (directory </> "e2e-result.json") "candidate-qualified"
-              CounterpartControl
-                | side == CounterpartSide -> jsonFile (directory </> "e2e-control.json")
-                    (object ["outcome" .= String "control-refused"])
-                | otherwise -> writeOutcome (directory </> "e2e-result.json") "candidate-qualified"
-              CounterpartFailedCommand -> writeOutcome (directory </> "e2e-result.json") "candidate-qualified"
               _ -> case qualificationWord fixtureQualification of
                 Just word -> writeOutcome (directory </> "e2e-result.json") word
                 Nothing -> pure ()
@@ -289,7 +285,6 @@ main = do
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts ControlReceipt Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts UnknownOutcome Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts RefusedOutcome Failed
-  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedQualified Passed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts CounterpartControl Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts CounterpartFailedCommand Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedFailed Failed

@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_library", "haskell_test")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 
 filegroup(
     name = "module",
@@ -68,6 +68,7 @@ haskell_library(
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host:directory",
         "//host:filepath",
         "//host:host-support",
         "//host:text",
@@ -115,6 +116,7 @@ haskell_test(
         "//host:host-support",
         "//host:text",
         "//transport:camera-core",
+        "//host:unix",
     ],
 )
 
@@ -128,6 +130,7 @@ haskell_test(
         "-Werror",
         "-O2",
     ],
+    tags = ["no-sandbox"],
     args = ["$(rootpath //emulation:native-runner)"],
     data = ["//emulation:native-runner"],
     deps = [
