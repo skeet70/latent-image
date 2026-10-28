@@ -26,7 +26,7 @@ import FujiAF.Host (arr, get, list, num, obj, s, set, str)
 import Numeric
 import System.Directory
 import System.Environment
-import System.Exit (ExitCode (..), exitFailure)
+import System.Exit (exitFailure)
 import System.FilePath
 
 hex :: Integer -> String
@@ -664,6 +664,14 @@ stockDrawTailCode = u32le 0xe8bd8830
 stockPaneRecord :: Word32
 stockPaneRecord = 0x015e4800
 
+-- The stock cursor cell and pane-kind cell are scratch writes outside the case
+-- claims.
+stockScratchSpans :: [(String, Word32, Int)]
+stockScratchSpans =
+  [ ("cells", 0x009571d8, 4)
+  , ("draw-state", stockPaneRecord + 8, 4)
+  ]
+
 stockDrawTailEnd :: Word32
 stockDrawTailEnd = 0x011662b4
 
@@ -730,8 +738,10 @@ inProfile ProcessingProfile name =
   name `notElem` [RegionId "stock-draw-tail", RegionId "draw-state", RegionId "stock-draw-calls"]
 inProfile DrawRootProfile name =
   name `notElem` [RegionId "ui-b", RegionId "draw-state", RegionId "stock-draw-calls"]
+-- ui_dispatch reads UI_CELL_BASE in modal-cells; the select-draw profile drops
+-- model-scratch instead of that dispatch table.
 inProfile SelectDrawProfile name =
-  name `notElem` [RegionId "draw-state", RegionId "stock-draw-calls", RegionId "modal-cells"]
+  name `notElem` [RegionId "draw-state", RegionId "stock-draw-calls", RegionId "model-scratch"]
 inProfile PaneDrawProfile name =
   name `notElem` [RegionId "ui-b", RegionId "tables-ptr", RegionId "tables-edit"]
 
@@ -2184,7 +2194,7 @@ regionList in' e sp = map setPermission (filter (\(n, _, _, _, _) -> inProfile (
     -- expected byte that differs from its initial value. An expected byte equal
     -- to the initial value is an observation and grants nothing.
     setPermission (n, base, size, permissions, bytes) =
-      (n, base, size, if permissions == 3 && n `elem` guardedRegions && n `notElem` writeRegions then 1 else permissions, bytes)
+      (n, base, size, if permissions == 3 && n `notElem` writeRegions then 1 else permissions, bytes)
     writeRegions =
       nub
         ( [n | AbiWorkspace _ (RegionId n) _ _ <- caseWorkspaces in' e sp]
@@ -2397,6 +2407,14 @@ allowedSpans in' e sp =
        | claim@(region, offset, value) <- spClaims sp
        , claimChangesInitial (regionList in' e sp) claim
        ]
+    ++ [ (n, offset, offset + size)
+       | (n, address, size) <- stockScratchSpans
+       , (n', base, extent, _, _) <- regionList in' e sp
+       , n' == n
+       , address >= base
+       , let offset = fromIntegral (address - base)
+       , offset + size <= extent
+       ]
 
 spanCovers :: String -> Int -> Int -> (String, Int, Int) -> Bool
 spanCovers region offset size (n, lo, hi) = region == n && lo <= offset && offset + size <= hi
@@ -2455,7 +2473,6 @@ transientProblems in' e sp writes = [problem | (address, size) <- writes, Just p
     classify address size =
       case [(n, fromIntegral (address - base)) | (n, base, extent, _, _) <- regs, address >= base, fromIntegral (address - base) + size <= extent] of
         [(n, offset)]
-          | not (n `elem` persistentRegions) -> Nothing
           | any (spanCovers n offset size) allowed -> Nothing
           | otherwise -> Just ("transient write outside allowed scratch in " ++ n ++ " at " ++ hex (fromIntegral address))
         [] -> Just ("transient write outside the declared regions at " ++ hex (fromIntegral address))
@@ -2542,12 +2559,10 @@ preservedRegisterProblems caseValue registers =
 
 qualify :: Inputs -> Env -> Spec -> Value -> Value -> Value
 qualify in' e sp caseValue report =
-  let runnerStatusText = fromMaybe "" (parseMaybe (withObject "rep" (\o -> o .: "runner" >>= withObject "rn" (.: "status"))) report) :: String
-      nativeExit = if runnerStatusText == "returned" then ExitSuccess else ExitFailure 1
-   in case N.observeNative nativeExit nativeRegions (get report "runner") of
-    Left problem ->
-      result "malformed_output" [N.renderObservationError problem] Nothing False False FinalUnknown GuardNotApplicable TransientMissing EffectsNotEvaluated
-        (observationScope sp) (0 :: Integer) (0 :: Int)
+  case do
+    nativeExit <- N.reportRunnerExit report
+    N.observeNative nativeExit nativeRegions (get report "runner") of
+    Left problem -> malformedOutput problem
     Right observed ->
       let statusText = N.runnerStatusLabel (N.nativeStatus observed)
           registers = [(N.registerLabel register, value) | register <- N.registerLabels, Just value <- [N.lookupRegister register observed]]
@@ -2586,6 +2601,9 @@ qualify in' e sp caseValue report =
           reportedProblems = if status == "passed" || status == "failed" then problems else []
        in result status reportedProblems (Just statusText) (null registerProblems) (null abi) finalState guard transient verdict scope total kept
   where
+    malformedOutput problem =
+      result "malformed_output" [N.renderObservationError problem] Nothing False False FinalUnknown GuardNotApplicable TransientMissing EffectsNotEvaluated
+        (observationScope sp) (0 :: Integer) (0 :: Int)
     nativeRegions = [Region (obj [("id", s name)]) (fromIntegral base) (fromIntegral size) bytes | (name, base, size, _, bytes) <- regionList in' e sp]
     result :: String -> [String] -> Maybe String -> Bool -> Bool -> FinalState -> GuardState -> TransientProof -> EffectVerdict -> EffectScope -> Integer -> Int -> Value
     result status problems statusText registersOk abiOk finalState guard transient verdict scope total kept =

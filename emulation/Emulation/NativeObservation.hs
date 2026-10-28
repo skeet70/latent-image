@@ -29,6 +29,7 @@ module Emulation.NativeObservation
   , lookupRegister
   , ObservationError (..)
   , observeNative
+  , reportRunnerExit
   , renderObservationError
   , regionIdOf
   , regionBounds
@@ -188,6 +189,9 @@ data NativeObservation = NativeObservation
 data ObservationError
   = MissingStatus
   | EmptyStatus
+  | MissingRunnerExit
+  | MalformedRunnerExit
+  | RunnerExitOutOfRange
   | ReturnedWithNonzeroExit
   | MissingEngineError
   | MalformedEngineError
@@ -218,6 +222,17 @@ data ObservationError
 lookupRegister :: Register -> NativeObservation -> Maybe Word32
 lookupRegister register observation = M.lookup register (nativeRegisters observation)
 
+-- The process exit the adapter validated against the runner payload.
+reportRunnerExit :: Value -> Either ObservationError ExitCode
+reportRunnerExit value = case get value "runner_exit" of
+  Number number -> case floatingOrInteger number :: Either Double Integer of
+    Right exact
+      | exact == 0 -> Right ExitSuccess
+      | exact > 0 && exact <= 255 -> Right (ExitFailure (fromIntegral exact))
+      | otherwise -> Left RunnerExitOutOfRange
+    Left _ -> Left MalformedRunnerExit
+  _ -> Left MissingRunnerExit
+
 observeNative :: ExitCode -> [Region] -> Value -> Either ObservationError NativeObservation
 observeNative exit regions value = do
   status <- parseStatus value
@@ -244,6 +259,9 @@ renderObservationError :: ObservationError -> String
 renderObservationError errorValue = case errorValue of
   MissingStatus -> "missing runner status"
   EmptyStatus -> "empty runner status"
+  MissingRunnerExit -> "missing runner_exit"
+  MalformedRunnerExit -> "malformed runner_exit"
+  RunnerExitOutOfRange -> "runner_exit out of range"
   ReturnedWithNonzeroExit -> "status returned with nonzero process exit"
   MissingEngineError -> "missing unicorn_error"
   MalformedEngineError -> "malformed unicorn_error"
