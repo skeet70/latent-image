@@ -9,11 +9,11 @@ module Emulation.SegmentReceipt
   , elapsedSecondsValue
   , SegmentResult (..)
   , SegmentReceipt (..)
-  , decodeSegmentReceipts
   , decodeDeclaredReceipts
   , decodeDeclaredSegments
   ) where
 
+import Control.Monad (unless)
 import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), eitherDecodeStrict', object, withText, (.:), (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
@@ -98,12 +98,9 @@ instance FromJSON SegmentReceipt where
       (other, _) -> fail ("unknown segment result: " ++ T.unpack other)
     pure (SegmentReceipt name seconds result)
 
-decodeSegmentReceipts :: B.ByteString -> Either String [SegmentReceipt]
-decodeSegmentReceipts = eitherDecodeStrict'
-
 decodeDeclaredReceipts :: B.ByteString -> Either String [SegmentReceipt]
 decodeDeclaredReceipts bytes = do
-  receipts <- decodeSegmentReceipts bytes
+  receipts <- eitherDecodeStrict' bytes
   let names = map segmentReceiptName receipts
   case names of
     [] -> Left "no segments are declared"
