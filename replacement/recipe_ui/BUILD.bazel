@@ -10,7 +10,7 @@ filegroup(
 )
 
 genrule(
-    name = "route-tests-bin",
+    name = "route-tests-build",
     srcs = ["src/lib.rs"],
     outs = ["route-tests-bin"],
     cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
@@ -22,6 +22,6 @@ sh_test(
     name = "route-tests",
     size = "small",
     srcs = ["//emulation:recovery-task-state-tests.sh"],
-    args = ["$(location :route-tests-bin)"],
-    data = [":route-tests-bin"],
+    args = ["$(location :route-tests-build)"],
+    data = [":route-tests-build"],
 )
