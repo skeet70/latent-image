@@ -605,7 +605,7 @@ data Spec = Spec
   }
 
 data WorkspaceKind = KernelWorkspace | MediaWorkspace | UiWorkspace | StackWorkspace
-  | ModalWorkspace | EditorWorkspace | LabelWorkspace | NavigationWorkspace | StockReloadWorkspace | ConversionWorkspace | StockProcessingWorkspace
+  | ModalWorkspace | EditorWorkspace | LabelWorkspace | NavigationWorkspace | StockReloadWorkspace | ConversionWorkspace | StockProcessingWorkspace | ModelScratchWorkspace
   deriving (Show)
 
 newtype RegionId = RegionId String deriving (Eq)
@@ -732,7 +732,7 @@ inProfile ProcessingProfile name =
 inProfile DrawRootProfile name =
   name `notElem` [RegionId "ui-b", RegionId "draw-state", RegionId "stock-draw-calls"]
 inProfile SelectDrawProfile name =
-  name `notElem` [RegionId "draw-state", RegionId "stock-draw-calls"]
+  name `notElem` [RegionId "draw-state", RegionId "stock-draw-calls", RegionId "modal-cells"]
 inProfile PaneDrawProfile name =
   name `notElem` [RegionId "ui-b", RegionId "tables-ptr", RegionId "tables-edit"]
 
@@ -766,7 +766,7 @@ abiWorkspaces in' e =
   , at NavigationWorkspace menuSnapshotCopy 0x2c
   , at NavigationWorkspace 0x00941300 0x2c
   , area KernelWorkspace "kdata" 0 (B.length (inKbin in') - B.length (inKtext in'))
-  , area MediaWorkspace "span-low" (0x970000 - 0x96cc64) (0x970800 - 0x96cc64)
+  , area ModelScratchWorkspace "model-scratch" 0 modelScratchSize
   -- FUN_0061d9ec reloads only the ordinary block; the C record starts at +0x140.
   , area StockReloadWorkspace "mirror" 0x10 0x128
   -- The ordinary property-0x1c6 setter saves its previous byte at 0x0062d744.
@@ -2124,20 +2124,32 @@ cellsImage in' e sp =
     , (cellOffset (eFileB e), cardB)
     ]
 
+-- Native-fixture-only model storage. The address is invented for the bounded
+-- native case, not an X-M1 address or a RAM-push reservation.
+modelScratchBase :: Word32
+modelScratchBase = 0x7f000000
+
+modelScratchSize :: Int
+modelScratchSize = 0x1000
+
+modelScratchImage :: Inputs -> Spec -> B.ByteString
+modelScratchImage in' sp
+  | B.length (inMdata in') > modelScratchSize = error "model data exceeds its native fixture region"
+  | otherwise =
+      overlay (B.replicate modelScratchSize 0) $
+        (0, inMdata in')
+          : [ (fromIntegral (addr (inMs in') n - fromIntegral modelScratchBase), u32le v) | (n, v) <- spModelCells sp ]
+          ++ [ (fromIntegral (addr (inMs in') "rbm_field_count" - fromIntegral modelScratchBase), u32le (fromIntegral (length (inFields in')))) ]
+
 spanLowImage :: Inputs -> Env -> Spec -> B.ByteString
 spanLowImage in' e sp =
   overlay (B.replicate (0x980c60 - 0x96cc64) 0) $
     [ (0, spLive sp)
-    , (0x970000 - 0x96cc64, inMdata in')
     , (0x970800 - 0x96cc64, fieldTable)
-    , (fromIntegral (fieldCountAddr - 0x96cc64), u32le (fromIntegral fieldCount))
     , (0x980000 - 0x96cc64, spCard sp)
     ]
-      ++ [ (fromIntegral (addr (inMs in') n - 0x96cc64), u32le v) | (n, v) <- spModelCells sp ]
   where
-    fieldCount = length (inFields in')
     fieldTable = B.concat [B.concat [u32le (fProp f), u32le (fromIntegral (fOff f)), u32le (fromIntegral (fShift f)), u32le (fromIntegral (fBytes f)), u32le (fMask f)] | f <- inFields in']
-    fieldCountAddr = fromIntegral (addr (inMs in') "rbm_field_count")
 
 regionList :: Inputs -> Env -> Spec -> [(String, Word32, Int, Int, B.ByteString)]
 regionList in' e sp = map setPermission (filter (\(n, _, _, _, _) -> inProfile (regionProfile e sp) (RegionId n)) baseRegions)
@@ -2149,6 +2161,7 @@ regionList in' e sp = map setPermission (filter (\(n, _, _, _, _) -> inProfile (
       , ("stock-divide", 0x0004d978, 244, 5, inDivide in')
       , ("stock-draw-tail", guestWord stockDrawTail, B.length stockDrawTailImage, 5, stockDrawTailImage)
       , ("span-low", 0x0096cc64, B.length spanLow, 3, spanLow)
+      , ("model-scratch", modelScratchBase, modelScratchSize, 3, modelScratchImage in' sp)
       , ("media-state", 0x00910140, 0x200, 3, B.replicate 0x200 0)
       , ("tables-ptr", 0x0081b09c, 0x860, 3, inTab in')
       , ("mirror", 0x0089ec00, 0x200, 3, overlay (B.replicate 0x200 0) [(0x140, validPayload), (0x1c8, u32le 1)])
@@ -2561,11 +2574,49 @@ abiProblems in' e sp =
 
 -- A permitted region that carries no write permission makes `returned` proof that
 -- the case did not write it.
-persistentGuard :: Inputs -> Env -> Spec -> String
+data GuardState = GuardEnforced | GuardPartial [String] | GuardNotApplicable deriving (Eq, Show)
+
+data TransientProof = TransientComplete | TransientTruncated | TransientMissing deriving (Eq, Show)
+
+data EffectScope = ReadOnlyScope | MutatingScope deriving (Eq, Show)
+
+data FinalState = FinalVerified | FinalFailed | FinalUnknown deriving (Eq, Show)
+
+data EffectVerdict = EffectsGuarded | EffectsVerified | EffectsFinalOnly | EffectsFailed | EffectsNotEvaluated deriving (Eq, Show)
+
+guardLabel :: GuardState -> String
+guardLabel GuardEnforced = "enforced"
+guardLabel (GuardPartial regions) = "partial: " ++ unwords regions
+guardLabel GuardNotApplicable = "not applicable"
+
+transientLabel :: TransientProof -> String
+transientLabel TransientComplete = "complete"
+transientLabel TransientTruncated = "truncated"
+transientLabel TransientMissing = "missing"
+
+scopeLabel :: EffectScope -> String
+scopeLabel ReadOnlyScope = "read-only"
+scopeLabel MutatingScope = "mutating"
+
+finalStateLabel :: FinalState -> String
+finalStateLabel FinalVerified = "verified"
+finalStateLabel FinalFailed = "failed"
+finalStateLabel FinalUnknown = "unknown"
+
+effectVerdictLabel :: EffectVerdict -> String
+effectVerdictLabel EffectsGuarded = "guarded"
+effectVerdictLabel EffectsVerified = "verified"
+effectVerdictLabel EffectsFinalOnly = "final-only"
+effectVerdictLabel EffectsFailed = "failed"
+effectVerdictLabel EffectsNotEvaluated = "not evaluated"
+
+persistentGuard :: Inputs -> Env -> Spec -> GuardState
 persistentGuard in' e sp
-  | null unguarded = "enforced"
-  | otherwise = "partial: " ++ unwords unguarded
+  | null present = GuardNotApplicable
+  | null unguarded = GuardEnforced
+  | otherwise = GuardPartial unguarded
   where
+    present = [n | (n, _, _, _, _) <- regionList in' e sp, n `elem` guardedRegions]
     unguarded = [n | (n, _, _, permissions, _) <- regionList in' e sp, n `elem` guardedRegions, permissions == 3]
 
 workspaceJson :: AbiWorkspace -> Value
@@ -2593,35 +2644,39 @@ preservedRegisterProblems caseValue observation =
 
 qualify :: Inputs -> Env -> Spec -> Value -> Value
 qualify in' e sp caseValue report = case observeReport report regions of
-  Left problem -> result "malformed_output" [problem] Nothing False False "unknown" "missing" "failed" "failed" 0 0
+  Left problem ->
+    result "malformed_output" [problem] Nothing False False FinalUnknown GuardNotApplicable TransientMissing EffectsNotEvaluated
+      (observationScope sp) 0 0
   Right observation ->
     let registerProblems = preservedRegisterProblems caseValue observation
         abi = abiProblems in' e sp
         final = finalDifferences in' e sp (M.fromList (observationMemory observation))
-        (transientState, writeProblems) = case observationWrites observation of
-          Nothing -> ("truncated", [])
-          Just writes -> ("complete", transientProblems in' e sp writes)
+        (transient, writeProblems) = case observationWrites observation of
+          Nothing -> (TransientTruncated, [])
+          Just writes -> (TransientComplete, transientProblems in' e sp writes)
         problems = registerProblems ++ abi ++ final ++ writeProblems
         guard = persistentGuard in' e sp
-        scope = if spId sp `elem` readOnlyLifecycleIds then "read-only" else "mutating"
+        scope = observationScope sp
+        finalState
+          | null (registerProblems ++ abi ++ final) = FinalVerified
+          | otherwise = FinalFailed
         status
           | observationStatus observation /= "returned" = observationStatus observation
           | observationEngineError observation /= 0 = "engine_error"
           | null problems = "passed"
           | otherwise = "failed"
-        effectVerdict
-          | observationStatus observation /= "returned" || observationEngineError observation /= 0 = "not evaluated"
-          | status /= "passed" = "failed"
-          | scope == "read-only" && guard == "enforced" = "guarded"
-          | transientState == "complete" = "verified"
-          | scope == "mutating" = "verified"
-          | otherwise = "partial"
+        verdict
+          | observationStatus observation /= "returned" || observationEngineError observation /= 0 = EffectsNotEvaluated
+          | status /= "passed" = EffectsFailed
+          | scope == ReadOnlyScope && guard == GuardEnforced = EffectsGuarded
+          | transient == TransientComplete = EffectsVerified
+          | otherwise = EffectsFinalOnly
         reportedProblems = if status == "passed" || status == "failed" then problems else []
-     in result status reportedProblems (Just observation) (null registerProblems) (null abi) guard transientState effectVerdict scope
+     in result status reportedProblems (Just observation) (null registerProblems) (null abi) finalState guard transient verdict scope
           (observationProvenanceTotal observation) (observationProvenanceKept observation)
   where
     regions = [(n, base, size) | (n, base, size, _, _) <- regionList in' e sp]
-    result status problems observation registersOk abiOk guard transientState effectVerdict scope total kept =
+    result status problems observation registersOk abiOk finalState guard transient verdict scope total kept =
       object
         [ "id" .= spId sp
         , "status" .= status
@@ -2636,15 +2691,19 @@ qualify in' e sp caseValue report = case observeReport report regions of
         , "provenance" .= object ["total" .= total, "retained" .= kept]
         , "effects" .=
             object
-              [ "scope" .= scope
+              [ "scope" .= scopeLabel scope
               , "protected_region" .= ("span-low" :: String)
-              , "persistent_guard" .= guard
-              , "transient_writes" .= transientState
-              , "verdict" .= effectVerdict
+              , "persistent_guard" .= guardLabel guard
+              , "transient_writes" .= transientLabel transient
+              , "final_state" .= finalStateLabel finalState
+              , "verdict" .= effectVerdictLabel verdict
               ]
         , "abi_workspaces" .= map workspaceJson (caseWorkspaces in' e sp)
-        , "comparison" .= ("Diagnostics, preserved r4-r11 and sp, the exit pc, every declared region, the ABI workspaces and the public claims are checked independently. A read-only case gives span-low no write permission, so the runner traps a write to the live settings record or the card files; a mutating case is qualified by its final expected bytes." :: String)
+        , "comparison" .= ("Diagnostics, preserved r4-r11 and sp, the exit pc, every declared region, the ABI workspaces and the public claims are checked independently. A read-only case gives span-low no write permission, so the runner traps a protected write; a mutating case with a truncated log is qualified only for its final expected bytes." :: String)
         ]
+
+observationScope :: Spec -> EffectScope
+observationScope sp = if spId sp `elem` readOnlyLifecycleIds then ReadOnlyScope else MutatingScope
 
 parseHexV :: Value -> Maybe Integer
 parseHexV v = case str v of
@@ -2833,6 +2892,7 @@ regionBases in' =
   , ("stock-divide", 0x0004d978, 244)
   , ("stock-draw-tail", guestWord stockDrawTail, B.length stockDrawTailImage)
   , ("span-low", 0x0096cc64, 0x980c60 - 0x96cc64)
+  , ("model-scratch", modelScratchBase, modelScratchSize)
   , ("media-state", 0x00910140, 0x200)
   , ("tables-ptr", 0x0081b09c, 0x860)
   , ("mirror", 0x0089ec00, 0x200)
