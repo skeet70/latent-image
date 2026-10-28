@@ -7,12 +7,14 @@ module Main where
 import Control.Monad
 import Data.Aeson hiding (encodeFile)
 import Data.Aeson.Types (Parser, parseEither, parseMaybe)
+import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified FujiAF.RecipeBankFields as F
 import Data.Bits
+import Data.Char (isHexDigit)
 import Data.Foldable (toList)
 import Data.List
 import Data.Maybe
@@ -21,7 +23,7 @@ import Data.Word
 import Emulation.NativeCase (runCase)
 import Emulation.ParallelCases (mapBounded, readJobs)
 import Emulation.Sha256 (sha256, sha256Hex)
-import FujiAF.Host (str)
+import FujiAF.Host (arr, get, list, num, obj, s, set, str)
 import Numeric
 import System.Directory
 import System.Environment
@@ -2140,23 +2142,23 @@ spanLowImage in' e sp =
 regionList :: Inputs -> Env -> Spec -> [(String, Word32, Int, Int, B.ByteString)]
 regionList in' e sp = filter (\(n, _, _, _, _) -> inProfile (regionProfile e sp) (RegionId n)) $
   [ ("ktext", inKernelBase in', B.length ktext, 5, ktext)
-  , ("kdata", dataBase, B.length dataMenu, 3, dataMenu)
+  , ("kdata", dataBase, B.length dataMenu, dataPerm "kdata", dataMenu)
   , ("lowcode", lowBase, B.length lowImage, 5, lowImage)
   , ("stock-divide", 0x0004d978, 244, 5, inDivide in')
   , ("stock-draw-tail", guestWord stockDrawTail, B.length stockDrawTailImage, 5, stockDrawTailImage)
-  , ("span-low", 0x0096cc64, B.length spanLow, 3, spanLow)
-  , ("media-state", 0x00910140, 0x200, 3, B.replicate 0x200 0)
-  , ("tables-ptr", 0x0081b09c, 0x860, 3, inTab in')
-  , ("mirror", 0x0089ec00, 0x200, 3, overlay (B.replicate 0x200 0) [(0x140, validPayload), (0x1c8, u32le 1)])
+  , ("span-low", 0x0096cc64, B.length spanLow, dataPerm "span-low", spanLow)
+  , ("media-state", 0x00910140, 0x200, dataPerm "media-state", B.replicate 0x200 0)
+  , ("tables-ptr", 0x0081b09c, 0x860, dataPerm "tables-ptr", inTab in')
+  , ("mirror", 0x0089ec00, 0x200, dataPerm "mirror", overlay (B.replicate 0x200 0) [(0x140, validPayload), (0x1c8, u32le 1)])
   , ("tables-edit", 0x00774f48, fromIntegral (tablesEditEnd - 0x774f48), 1,
       overlay (B.take (fromIntegral (tablesEditEnd - 0x774f48)) (B.drop (0x774f48 - 0x61c400) (inId4 in')))
         [(fromIntegral (pwAddress w - 0x774f48), pwNew w) | w <- inPlan in',
          pwRegion w == "id4_code", pwAddress w >= 0x774f48,
          toInteger (pwAddress w) + toInteger (B.length (pwNew w)) <= toInteger tablesEditEnd])
-  , ("cells", cellsBase, B.length cells, 3, cells)
-  , ("modal-cells", 0x00cd1ae4, 0xa00, 3, overlay (B.replicate 0xa00 0) [(fromIntegral (a - 0xcd1ae4), b) | (a, b) <- inPlanCellBytes in'])
-  , ("modal-state", 0x0146761c, 0x162, 3, B.replicate 0x162 0)
-  , ("draw-state", 0x015e46c0, 0x200, 3, B.replicate 0x200 0)
+  , ("cells", cellsBase, B.length cells, dataPerm "cells", cells)
+  , ("modal-cells", 0x00cd1ae4, 0xa00, dataPerm "modal-cells", overlay (B.replicate 0xa00 0) [(fromIntegral (a - 0xcd1ae4), b) | (a, b) <- inPlanCellBytes in'])
+  , ("modal-state", 0x0146761c, 0x162, dataPerm "modal-state", B.replicate 0x162 0)
+  , ("draw-state", 0x015e46c0, 0x200, dataPerm "draw-state", B.replicate 0x200 0)
   , ("stock-draw-calls", 0x01112b2c, fromIntegral (stockDrawCallsEnd - 0x01112b2c), 5, stockDrawCallsImage)
   , ("ui-a", 0xc12aac, B.length (inUiA in'), 5, inUiA in')
   , ("ui-b", 0xc72e10, B.length (inUiB in'), 5, inUiB in')
@@ -2165,6 +2167,12 @@ regionList in' e sp = filter (\(n, _, _, _, _) -> inProfile (regionProfile e sp)
         [(0, inUiC in'), (0xd4d604 - 0xd38d98, B.take 20608 (B.drop (0xd4d604 - 0xbf1a00) (inId5 in')))])
   ]
   where
+    -- Writable data regions are the ones this case declares a workspace in or
+    -- an expected byte for. The runner fails a write with memory_guard where a
+    -- region lacks write permission, so every other data region has a complete
+    -- transient write guard.
+    writeRegions = nub ([n | AbiWorkspace (RegionId n) _ _ <- caseWorkspaces in' e sp] ++ [n | (n, _, _) <- spClaims sp])
+    dataPerm n = if n `elem` writeRegions then 3 else 1
     ktext = inKtext in'
     textLen = B.length ktext
     dataLen = B.length (inKbin in') - textLen
@@ -2302,24 +2310,11 @@ permName 3 = "rw"
 permName 5 = "rx"
 permName _ = error "bad permission"
 
--- Public claims and effects outside the declared ABI workspaces are compared independently.
-memMap :: Env -> Value -> M.Map String B.ByteString
-memMap e r = M.fromList (fromMaybe [] (parseMaybe p =<< parseMaybe (withObject "rep" (\o -> o .: "runner" >>= withObject "rn" (\rn -> rn .: "memory"))) r))
-  where
-    p = withArray "mem" $ \a -> pure [(nameOf k, unhex v) | x <- toList a, Just (k, v) <- [row x]]
-    row x = parseMaybe (withObject "r" $ \o -> (,) <$> (o .: "address" :: Parser String) <*> o .: "bytes") x
-    nameOf a = case [n | (n, b, _) <- eRegions e, fromIntegral b == hexI a] of
-      (n : _) -> n
-      [] -> a
-
 runnerStatus :: Value -> String
 runnerStatus r = fromMaybe "??" (parseMaybe (withObject "r" (.: "status")) r)
 
 reportReason :: Value -> String
 reportReason r = fromMaybe "" (parseMaybe (withObject "r" (.: "reason")) r)
-
-reportRunnerStatus :: Value -> String
-reportRunnerStatus r = fromMaybe "" (parseMaybe (withObject "rep" (\o -> o .: "runner" >>= withObject "rn" (.: "status"))) r)
 
 runnerMismatches :: Value -> [String]
 runnerMismatches r = fromMaybe [] (parseMaybe (withArray "m" (pure . mapMaybe strV . toList)) =<< parseMaybe (withObject "r" (.: "mismatches")) r)
@@ -2327,16 +2322,142 @@ runnerMismatches r = fromMaybe [] (parseMaybe (withArray "m" (pure . mapMaybe st
     strV (String t) = Just (T.unpack t)
     strV _ = Nothing
 
-data DifferenceKind = PublicClaimDifference | NonWorkspaceDifference deriving (Eq)
+-- Strict qualification -----------------------------------------------------------------
 
-data MemoryDifference = MemoryDifference
-  { differenceStart :: Int
-  , differenceEnd :: Int
-  , differenceKind :: DifferenceKind
+-- Regions holding persisted settings, storage or capture state. A case that
+-- declares no workspace and no expected byte in one of the first three gives it
+-- no write permission, so the runner traps any write there as memory_guard.
+persistentRegions :: [String]
+persistentRegions = ["span-low", "mirror", "media-state", "cells"]
+
+guardedRegions :: [String]
+guardedRegions = ["span-low", "mirror", "media-state"]
+
+requiredRegisters :: [String]
+requiredRegisters = ["r" ++ show i | i <- [0 .. 12 :: Int]] ++ ["sp", "lr", "cpsr", "pc"]
+
+parseHexWord :: String -> Maybe Word32
+parseHexWord ('0' : 'x' : digits)
+  | not (null digits) && length digits <= 8 && all isHexDigit digits =
+      case readHex digits of [(value, "")] -> Just value; _ -> Nothing
+parseHexWord _ = Nothing
+
+parseDecimalField :: Value -> Either String Integer
+parseDecimalField value = case value of
+  String text -> case reads (T.unpack text) :: [(Integer, String)] of
+    [(number, "")] -> Right number
+    _ -> Left "malformed decimal field"
+  Number _ -> Right (num value)
+  _ -> Left "missing numeric field"
+
+parseBytesField :: String -> Either String B.ByteString
+parseBytesField text
+  | odd (length text) || not (all isHexDigit text) = Left "malformed byte string"
+  | otherwise = Right (unhex text)
+
+objectKeys :: Value -> [String]
+objectKeys (Object o) = map T.unpack (KM.keys o)
+objectKeys _ = []
+
+parseRegisters :: Value -> Either String [(String, Word32)]
+parseRegisters value = case value of
+  Object _ -> do
+    pairs <- forM (objectKeys value) $ \name ->
+      case parseHexWord (str (get value name)) of
+        Just word -> Right (name, word)
+        Nothing -> Left ("malformed register " ++ name)
+    let missing = [name | name <- requiredRegisters, isNothing (lookup name pairs)]
+    if null missing then Right pairs else Left ("missing registers " ++ unwords missing)
+  _ -> Left "missing registers"
+
+parseMemory :: [(String, Word32, Int)] -> Value -> Either String [(String, B.ByteString)]
+parseMemory regions value = case value of
+  Array _ -> do
+    let entries = list value
+    unless (length entries == length regions) (Left "memory region count mismatch")
+    forM (zip regions entries) $ \((ident, base, size), entry) -> do
+      address <- maybe (Left ("malformed address for region " ++ ident)) Right (parseHexWord (str (get entry "address")))
+      unless (address == base) (Left ("memory region " ++ ident ++ " address mismatch"))
+      bytes <- parseBytesField (str (get entry "bytes"))
+      unless (B.length bytes == size) (Left ("memory region " ++ ident ++ " size mismatch"))
+      pure (ident, bytes)
+  _ -> Left "missing memory"
+
+parseWrites :: [Value] -> Either String [(Word32, Int)]
+parseWrites entries = do
+  parsed <- forM entries $ \entry -> do
+    kind <- case str (get entry "kind") of
+      "write" -> Right True
+      "read" -> Right False
+      _ -> Left "malformed provenance kind"
+    address <- maybe (Left "malformed provenance address") Right (parseHexWord (str (get entry "address")))
+    size <- parseDecimalField (get entry "size")
+    unless (size >= 1 && size <= 8) (Left "provenance size out of range")
+    pure (kind, address, fromIntegral size)
+  pure [(address, size) | (True, address, size) <- parsed]
+
+data Observation = Observation
+  { observationStatus :: String
+  , observationRegisters :: [(String, Word32)]
+  , observationMemory :: [(String, B.ByteString)]
+  , observationWrites :: Maybe [(Word32, Int)]
+  , observationProvenanceTotal :: Integer
+  , observationProvenanceKept :: Int
+  , observationEngineError :: Integer
   }
 
-memoryProblems :: Inputs -> Env -> Spec -> M.Map String B.ByteString -> [String]
-memoryProblems in' e sp observed =
+-- Provenance retains at most 4096 events. A larger total keeps only a prefix, so
+-- transient writes are not established by the log alone.
+observeReport :: Value -> [(String, Word32, Int)] -> Either String Observation
+observeReport report regions = do
+  runner <- case get report "runner" of
+    Object _ -> Right (get report "runner")
+    _ -> Left "missing runner output"
+  status <- case get runner "status" of
+    String text | not (T.null text) -> Right (T.unpack text)
+    _ -> Left "missing runner status"
+  engine <- parseDecimalField (get runner "unicorn_error")
+  total <- parseDecimalField (get runner "memory_provenance_total")
+  registers <- parseRegisters (get runner "registers")
+  memory <- parseMemory regions (get runner "memory")
+  provenance <- case get runner "memory_provenance" of
+    Array _ -> Right (list (get runner "memory_provenance"))
+    _ -> Left "missing memory provenance"
+  writes <- parseWrites provenance
+  let kept = length provenance
+  if total > 4096
+    then unless (kept == 4096) (Left "provenance retention count mismatch")
+    else unless (fromIntegral kept == total) (Left "provenance count mismatch")
+  pure Observation
+    { observationStatus = status
+    , observationRegisters = registers
+    , observationMemory = memory
+    , observationWrites = if total > 4096 then Nothing else Just writes
+    , observationProvenanceTotal = total
+    , observationProvenanceKept = kept
+    , observationEngineError = engine
+    }
+
+data EffectClass = PublicClaim | ForbiddenEffect | UnexpectedEffect deriving (Eq)
+
+data FinalDifference = FinalDifference
+  { finalDifferenceStart :: Int
+  , finalDifferenceEnd :: Int
+  , finalDifferenceClass :: EffectClass
+  }
+
+-- The byte ranges a case may write: its declared ABI workspaces and the expected
+-- bytes it asserts.
+allowedSpans :: Inputs -> Env -> Spec -> [(String, Int, Int)]
+allowedSpans in' e sp =
+  [(region, workspaceStart w, workspaceEnd w) | w <- caseWorkspaces in' e sp, let RegionId region = workspaceRegion w]
+    ++ [(region, offset, offset + B.length bytes) | (region, offset, bytes) <- spClaims sp]
+
+spanCovers :: String -> Int -> Int -> (String, Int, Int) -> Bool
+spanCovers region offset size (n, lo, hi) = region == n && lo <= offset && offset + size <= hi
+
+finalDifferences :: Inputs -> Env -> Spec -> M.Map String B.ByteString -> [String]
+finalDifferences in' e sp observed =
   ["runner memory inventory differs" | sort (M.keys observed) /= sort [n | (n, _, _, _, _) <- regs]]
   ++ ["stock conversion flag is not Boolean" | Just mirror <- [M.lookup "mirror" observed], B.length mirror == 0x200, readU32 mirror 0x1c8 > 1]
   ++ ["stock processing gate is not Boolean" | Just cells <- [M.lookup "cells" observed], B.length cells == cellsSize, readU32 cells (cellOffset 0x00956858) > 1]
@@ -2345,39 +2466,141 @@ memoryProblems in' e sp observed =
   ++ concatMap compareRegion regs
   where
     regs = regionList in' e sp
-    workspaces = caseWorkspaces in' e sp
+    workspaceRanges n = [(workspaceStart w, workspaceEnd w) | w <- caseWorkspaces in' e sp, let RegionId region = workspaceRegion w, region == n]
     claimed n i = any (\(n', o, b) -> n == n' && o <= i && i < o + B.length b) (spClaims sp)
-    checkedSpans n size = outside 0 (sortOn fst [(workspaceStart w, workspaceEnd w) | w <- workspaces, let RegionId region = workspaceRegion w, region == n])
+    checkedSpans n size = outside 0 (sortOn fst (workspaceRanges n))
       ++ [(o, o + B.length b) | (n', o, b) <- spClaims sp, n == n']
       where
         outside cur [] = [(cur, size) | cur < size]
         outside cur ((lo, hi) : rest) = [(cur, lo) | cur < lo] ++ outside (max cur hi) rest
+    kindAt n o
+      | claimed n o = PublicClaim
+      | n `elem` persistentRegions = ForbiddenEffect
+      | otherwise = UnexpectedEffect
     compareRegion (n, base, size, _, initial) = case M.lookup n observed of
       Nothing -> ["runner omitted region " ++ n]
       Just actual
         | B.length actual /= size -> ["runner returned wrong size for region " ++ n]
         | otherwise ->
-            [ n ++ " [" ++ hex (fromIntegral base + fromIntegral (differenceStart delta))
-                ++ "," ++ hex (fromIntegral base + fromIntegral (differenceEnd delta)) ++ "): "
-                ++ (case differenceKind delta of PublicClaimDifference -> "public claim differs"; NonWorkspaceDifference -> "unexpected non-workspace effect")
-            | delta <- differences n
-                [word | word : _ <- group (sort
-                  [lo + offset | (lo, hi) <- checkedSpans n size
-                    , let wanted = B.take (hi - lo) (B.drop lo expected)
-                    , let got = B.take (hi - lo) (B.drop lo actual)
-                    , wanted /= got
-                    , (offset, (before, after)) <- zip [0 ..] (B.zip wanted got), before /= after])]
+            [ n ++ " [" ++ hex (fromIntegral base + fromIntegral (finalDifferenceStart delta))
+                ++ "," ++ hex (fromIntegral base + fromIntegral (finalDifferenceEnd delta)) ++ "): "
+                ++ case finalDifferenceClass delta of
+                     PublicClaim -> "public claim differs"
+                     ForbiddenEffect -> "forbidden setting/storage effect"
+                     UnexpectedEffect -> "unexpected non-workspace effect"
+            | delta <- differences n (if B.null initial then B.replicate size 0 else initial) actual
             ]
-        where
-          start = if B.null initial then B.replicate size 0 else initial
-          expected = overlay start [(o, b) | (n', o, b) <- spClaims sp, n == n']
-    differences n = foldr mergeDifference []
+    differences n start actual =
+      merge (nub [offset | (lo, hi) <- checkedSpans n (B.length actual), offset <- [lo .. hi - 1], B.index expected offset /= B.index actual offset])
       where
-        kind i = if claimed n i then PublicClaimDifference else NonWorkspaceDifference
-        mergeDifference i (delta : rest)
-          | differenceStart delta == i + 1 && differenceKind delta == kind i =
-              delta {differenceStart = i} : rest
-        mergeDifference i rest = MemoryDifference i (i + 1) (kind i) : rest
+        expected = foldl (\bytes (offset, value) -> B.take offset bytes <> value <> B.drop (offset + B.length value) bytes) start
+          [(offset, value) | (n', offset, value) <- spClaims sp, n == n']
+        merge [] = []
+        merge (offset : rest) = go offset (offset + 1) rest
+          where
+            go lo hi (next : remaining)
+              | next == hi && kindAt n next == kindAt n lo = go lo (hi + 1) remaining
+            go lo hi remaining = FinalDifference lo hi (kindAt n lo) : merge remaining
+
+transientProblems :: Inputs -> Env -> Spec -> [(Word32, Int)] -> [String]
+transientProblems in' e sp writes = [problem | (address, size) <- writes, Just problem <- [classify address size]]
+  where
+    regs = regionList in' e sp
+    allowed = allowedSpans in' e sp
+    classify address size =
+      case [(n, fromIntegral (address - base)) | (n, base, extent, _, _) <- regs, address >= base, fromIntegral (address - base) + size <= extent] of
+        [(n, offset)]
+          | any (spanCovers n offset size) allowed -> Nothing
+          | otherwise -> Just ("transient write outside allowed scratch in " ++ n ++ " at " ++ hex (fromIntegral address))
+        [] -> Just ("transient write outside the declared regions at " ++ hex (fromIntegral address))
+        _ -> Just ("transient write spans several declared regions at " ++ hex (fromIntegral address))
+
+abiProblems :: Inputs -> Env -> Spec -> [String]
+abiProblems in' e sp =
+  [ "workspace " ++ show (workspaceKind w) ++ " is not inside its writable region " ++ region
+  | w <- caseWorkspaces in' e sp
+  , let RegionId region = workspaceRegion w
+  , not (any (\(n, size, permissions) -> n == region && permissions == 3 && workspaceStart w >= 0 && workspaceEnd w <= size && workspaceStart w < workspaceEnd w)
+             [(n, size, permissions) | (n, _, size, permissions, _) <- regionList in' e sp])
+  ]
+
+-- A permitted region that carries no write permission makes `returned` proof that
+-- the case did not write it.
+persistentGuard :: Inputs -> Env -> Spec -> String
+persistentGuard in' e sp
+  | null unguarded = "enforced"
+  | otherwise = "partial: " ++ unwords unguarded
+  where
+    unguarded = [n | (n, _, _, permissions, _) <- regionList in' e sp, n `elem` guardedRegions, permissions == 3]
+
+workspaceJson :: AbiWorkspace -> Value
+workspaceJson w =
+  let RegionId region = workspaceRegion w
+   in object ["kind" .= show (workspaceKind w), "region" .= region, "offset" .= workspaceStart w, "size" .= (workspaceEnd w - workspaceStart w)]
+
+caseRegisters :: Value -> [(String, Word32)]
+caseRegisters caseValue = [(name, value) | name <- requiredRegisters, Just value <- [parseHexWord (str (get (get caseValue "registers") name))]]
+
+preservedRegisterProblems :: Value -> Observation -> [String]
+preservedRegisterProblems caseValue observation =
+  [ "case declares no register " ++ name | name <- ["r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "sp"], isNothing (lookup name (caseRegisters caseValue)) ]
+    ++ [ "register " ++ name ++ ": expected " ++ hex (fromIntegral expected) ++ ", observed " ++ hex (fromIntegral actual)
+       | name <- ["r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "sp"]
+       , Just expected <- [lookup name (caseRegisters caseValue)]
+       , Just actual <- [lookup name (observationRegisters observation)]
+       , expected /= actual
+       ]
+    ++ [ "pc: expected exit " ++ hex (fromIntegral exit) ++ ", observed " ++ hex (fromIntegral actual)
+       | Just exit <- [parseHexWord (str (get caseValue "exit"))]
+       , Just actual <- [lookup "pc" (observationRegisters observation)]
+       , actual /= exit
+       ]
+
+qualify :: Inputs -> Env -> Spec -> Value -> Value
+qualify in' e sp caseValue report = case observeReport report regions of
+  Left problem -> result "malformed_output" [problem] Nothing False False "unknown" "missing" "failed" 0 0
+  Right observation ->
+    let registerProblems = preservedRegisterProblems caseValue observation
+        abi = abiProblems in' e sp
+        final = finalDifferences in' e sp (M.fromList (observationMemory observation))
+        (transientState, writeProblems) = case observationWrites observation of
+          Nothing -> ("truncated", [])
+          Just writes -> ("complete", transientProblems in' e sp writes)
+        problems = registerProblems ++ abi ++ final ++ writeProblems
+        guard = persistentGuard in' e sp
+        status
+          | observationStatus observation /= "returned" = observationStatus observation
+          | observationEngineError observation /= 0 = "engine_error"
+          | null problems = "passed"
+          | otherwise = "failed"
+        effectVerdict
+          | observationStatus observation /= "returned" || observationEngineError observation /= 0 = "not evaluated"
+          | status /= "passed" = "failed"
+          | guard == "enforced" = "verified"
+          | transientState == "complete" = "verified"
+          | otherwise = "partial"
+        reportedProblems = if status == "passed" || status == "failed" then problems else []
+     in result status reportedProblems (Just observation) (null registerProblems) (null abi) guard transientState effectVerdict
+          (observationProvenanceTotal observation) (observationProvenanceKept observation)
+  where
+    regions = [(n, base, size) | (n, base, size, _, _) <- regionList in' e sp]
+    result status problems observation registersOk abiOk guard transientState effectVerdict total kept =
+      object
+        [ "id" .= spId sp
+        , "status" .= status
+        , "mismatches" .= problems
+        , "reason" .= reportReason report
+        , "runner_status" .= fromMaybe "" (fmap observationStatus observation)
+        , "native_case_status" .= runnerStatus report
+        , "native_case_mismatches" .= runnerMismatches report
+        , "returned" .= fromMaybe False (fmap ((== "returned") . observationStatus) observation)
+        , "registers_preserved" .= registersOk
+        , "abi_valid" .= abiOk
+        , "provenance" .= object ["total" .= total, "retained" .= kept, "transient_writes" .= transientState]
+        , "effects" .= object ["persistent_guard" .= guard, "verdict" .= effectVerdict]
+        , "abi_workspaces" .= map workspaceJson (caseWorkspaces in' e sp)
+        , "comparison" .= ("Diagnostics, preserved r4-r11 and sp, the exit pc, every declared region, the ABI workspaces and the public claims are checked independently. Writes outside declared workspaces and expected bytes are checked when provenance is complete; otherwise the read-only region permissions are the transient guard." :: String)
+        ]
 
 parseHexV :: Value -> Maybe Integer
 parseHexV v = case str v of
@@ -2583,10 +2806,9 @@ regionBases in' =
     textLen = B.length (inKtext in')
     dataLen = B.length (inKbin in') - textLen
 
-runSpec :: FilePath -> FilePath -> Env -> Inputs -> Spec -> IO Value
-runSpec runner out e in' sp = do
-  let dir = out </> spId sp
-      regs = regionList in' e sp
+writeCase :: FilePath -> Inputs -> Env -> Spec -> IO Value
+writeCase dir in' e sp = do
+  let regs = regionList in' e sp
       workspaces = caseWorkspaces in' e sp
   createDirectoryIfMissing True dir
   unless (map (\(n, a, _, _, _) -> (n, a)) regs == [(n, a) | (n, a, _) <- eRegions e, inProfile (regionProfile e sp) (RegionId n)]) $
@@ -2596,34 +2818,112 @@ runSpec runner out e in' sp = do
     unless (any (\(n, _, size, permissions, _) -> n == region && permissions == 3 && workspaceStart w >= 0 && workspaceStart w < workspaceEnd w && workspaceEnd w <= size) regs) $
       error ("invalid ABI workspace in " ++ spId sp)
   let arts = [(n, b) | (n, _, _, _, b) <- regs, not (B.null b)]
+      value = caseJson in' e sp [(n, sha256Hex (sha256 b)) | (n, b) <- arts]
   forM_ arts $ \(n, b) -> B.writeFile (dir </> (n ++ ".bin")) b
-  let digests = [(n, sha256Hex (sha256 b)) | (n, b) <- arts]
-  BL.writeFile (dir </> "case.json") (encode (caseJson in' e sp digests))
+  BL.writeFile (dir </> "case.json") (encode value)
+  pure value
+
+runSpec :: FilePath -> FilePath -> Env -> Inputs -> Spec -> IO Value
+runSpec runner out e in' sp = do
+  let dir = out </> spId sp
+  caseValue <- writeCase dir in' e sp
   (_, report) <- runCase runner (dir </> "case.json")
   BL.writeFile (dir </> "native-result.json") (encode report)
-  let nativeStatus = runnerStatus report
-      rstat = reportRunnerStatus report
-      nativeProblems = runnerMismatches report
-      classified problem = problem == "stub events differ" || any (\(n, _, _, _, _) -> problem == "memory " ++ n ++ ": differs from exact allowed final bytes") regs
-      publicProblems = memoryProblems in' e sp (memMap e report)
-      problems = filter (not . classified) nativeProblems ++ publicProblems
-      status
-        | nativeStatus `notElem` ["passed", "failed"] = nativeStatus
-        | rstat /= "returned" || not (null problems) = "failed"
-        | otherwise = "passed"
-      workspaceJson w = let RegionId region = workspaceRegion w in object
-        ["kind" .= show (workspaceKind w), "region" .= region, "offset" .= workspaceStart w, "size" .= (workspaceEnd w - workspaceStart w)]
-  pure (object
-    [ "id" .= spId sp
-    , "status" .= status
-    , "mismatches" .= problems
-    , "reason" .= reportReason report
-    , "runner_status" .= rstat
-    , "native_case_status" .= nativeStatus
-    , "native_case_mismatches" .= nativeProblems
-    , "comparison" .= ("One validated execution; public claims and every non-workspace byte are checked. NativeCase whole-memory differences within declared ABI workspaces and incidental stub event order are not behavior assertions." :: String)
-    , "abi_workspaces" .= map workspaceJson workspaces
-    ])
+  pure (qualify in' e sp caseValue report)
+
+-- Each control is expected to be rejected. A control that passes would mean the
+-- consumer accepted evidence it cannot establish.
+runControls :: FilePath -> FilePath -> Env -> Inputs -> [Spec] -> IO [Value]
+runControls runner out e in' specs = do
+  let pick pid = fromMaybe (error ("control case missing: " ++ pid)) (find ((== pid) . spId) specs)
+      statusOf result = resultStatus result
+      mismatchNamedAddress address result = any (isInfixOf address) [str entry | entry <- list (get result "mismatches")]
+      claimSpec = pick "n-select-unset-refused"
+      claimDir = out </> "control-public-claim"
+  claimCase <- writeCase claimDir in' e claimSpec
+  (_, claimReport) <- runCase runner (claimDir </> "case.json")
+  BL.writeFile (claimDir </> "native-result.json") (encode claimReport)
+  let claimPass = statusOf (qualify in' e claimSpec claimCase claimReport) == "passed"
+      claim = head (spClaims claimSpec)
+      claimRegions = regionList in' e claimSpec
+      claimResult = qualify in' e claimSpec claimCase (corruptClaim claimRegions claim claimReport)
+      claimAddress = case claim of
+        (region, offset, _) -> case [hex (fromIntegral (base + offset)) | (n, base, _, _, _) <- claimRegions, n == region] of
+          (address : _) -> address
+          [] -> ""
+      claimNamed = mismatchNamedAddress claimAddress claimResult
+      missingResult = qualify in' e claimSpec claimCase (set "runner" (set "memory_provenance" Null (get claimReport "runner")) claimReport)
+      diagnosticResult = qualify in' e claimSpec claimCase (set "runner" (set "status" (s "instruction_budget") (get claimReport "runner")) claimReport)
+      storageSpec = pick "n-save-ok"
+      storageDir = out </> "control-read-only-storage"
+  storageCase <- writeCase storageDir in' e storageSpec
+  let storageReadOnly = dropExpectedRegion "span-low" (forceReadOnly "span-low" storageCase)
+  BL.writeFile (storageDir </> "case.json") (encode storageReadOnly)
+  (_, storageReport) <- runCase runner (storageDir </> "case.json")
+  BL.writeFile (storageDir </> "native-result.json") (encode storageReport)
+  let storageResult = qualify in' e storageSpec storageReadOnly storageReport
+      storageRefused = statusOf storageResult == "memory_guard" && maybe False inSpanLow (lastAccessAddress storageReport)
+  pure
+    [ object
+        [ "name" .= ("public claim" :: String)
+        , "passed_before" .= claimPass
+        , "observed" .= statusOf claimResult
+        , "mismatch_names_claim" .= claimNamed
+        , "ok" .= (claimPass && statusOf claimResult /= "passed" && claimNamed)
+        ]
+    , object
+        [ "name" .= ("missing provenance" :: String)
+        , "observed" .= statusOf missingResult
+        , "ok" .= (statusOf missingResult /= "passed")
+        ]
+    , object
+        [ "name" .= ("non-returned diagnostic" :: String)
+        , "observed" .= statusOf diagnosticResult
+        , "ok" .= (statusOf diagnosticResult == "instruction_budget")
+        ]
+    , object
+        [ "name" .= ("read-only storage region" :: String)
+        , "observed" .= statusOf storageResult
+        , "last_access" .= fromMaybe "" (lastAccessAddress storageReport)
+        , "ok" .= storageRefused
+        ]
+    ]
+
+corruptClaim :: [(String, Word32, Int, Int, B.ByteString)] -> (String, Int, B.ByteString) -> Value -> Value
+corruptClaim regs (region, offset, _) report =
+  let base = fromMaybe (error ("corrupt claim region missing: " ++ region)) (listToMaybe [address | (n, address, _, _, _) <- regs, n == region])
+      runner = get report "runner"
+      memory =
+        [ if str (get entry "address") == hex (fromIntegral base)
+            then
+              let bytes = unhex (str (get entry "bytes"))
+                  flipped = B.take offset bytes <> B.singleton (B.index bytes offset `xor` 0xff) <> B.drop (offset + 1) bytes
+               in set "bytes" (s (hexB flipped)) entry
+            else entry
+        | entry <- list (get runner "memory")
+        ]
+   in set "runner" (set "memory" (arr memory) runner) report
+
+forceReadOnly :: String -> Value -> Value
+forceReadOnly region caseValue =
+  set "regions" (arr [if str (get entry "id") == region then set "permissions" (s "r") entry else entry | entry <- list (get caseValue "regions")]) caseValue
+
+dropExpectedRegion :: String -> Value -> Value
+dropExpectedRegion region caseValue =
+  set "expected" (set "memory" (arr [entry | entry <- list (get (get caseValue "expected") "memory"), str (get entry "region") /= region]) (get caseValue "expected")) caseValue
+
+lastAccessAddress :: Value -> Maybe String
+lastAccessAddress report = case list (get (get report "runner") "accesses") of
+  [] -> Nothing
+  entries -> Just (str (get (last entries) "address"))
+
+inSpanLow :: String -> Bool
+inSpanLow text = case parseHexWord text of
+  Just address -> address >= 0x0096cc64 && address < 0x00980c60
+  Nothing -> False
+
+resultStatus :: Value -> Maybe String
+resultStatus result = parseMaybe (withObject "r" (.: "status")) result
 
 findingsText :: [Spec] -> [Value] -> String
 findingsText specs results =
@@ -2642,18 +2942,28 @@ findingsText specs results =
       , "which those cases never enter; a fetch there faults. The one draw-root case"
       , "that selects through SELECT CUSTOM SETTING maps both."
       , ""
-      , "Case status:"
+      , "Case status, preserved registers, effect verdict and transient-write evidence:"
       ]
-        ++ [ "  " ++ spId sp ++ ": " ++ fromMaybe "?" (parseMaybe (withObject "r" (.: "status")) r)
+        ++ [ "  " ++ spId sp ++ ": " ++ fromMaybe "?" (resultStatus r)
+               ++ " registers=" ++ boolText (get r "registers_preserved")
+               ++ " abi=" ++ boolText (get r "abi_valid")
+               ++ " effects=" ++ str (get (get r "effects") "verdict")
+               ++ " guard=" ++ str (get (get r "effects") "persistent_guard")
+               ++ " transient=" ++ str (get (get r "provenance") "transient_writes")
            | (sp, r) <- zip specs results
            ]
         ++ [ ""
            , "Each case executes once with a closed function inventory and enforced stub contracts."
-           , "Explicit public claims and every byte outside the declared ABI workspaces are checked."
-           , "No private final-memory bytes or incidental stub-event sequence are pinned from execution."
-           , "Text entry is modeled; the name write and the subsequent selection use public menu actions."
+           , "The runner's returned diagnostic, r4-r11, sp and exit pc are checked independently."
+           , "Public claims and every byte outside the declared ABI workspaces are checked."
+           , "Provenance is capped at 4096 events, so a truncated log never establishes transient"
+           , "writes; for the settings, storage and media regions the read-only region permission is"
+           , "the transient guard. The control cases require a corrupted claim, a missing provenance"
+           , "log and a write to a read-only storage region to be rejected."
            ]
     )
+  where
+    boolText value = case value of Bool True -> "yes"; Bool False -> "no"; _ -> "?"
 
 main :: IO ()
 main = do
@@ -2687,7 +2997,11 @@ runCases args = do
   let e = envFrom in'
       specs = specSet e (inEpochBump in')
   results <- mapBounded jobs (\sp -> runSpec runner out e in' sp) specs
+  controls <- runControls runner out e in' specs
   BL.writeFile (out </> "results.json") (encode (object ["cases" .= results]))
+  BL.writeFile (out </> "control.json") (encode (object ["controls" .= controls]))
   writeFile (out </> "findings.txt") (findingsText specs results)
-  putStrLn ("ran " ++ show (length specs) ++ " cases")
-  unless (all ((== Just ("passed" :: String)) . parseMaybe (withObject "r" (.: "status"))) results) exitFailure
+  let passed = length [() | r <- results, resultStatus r == Just "passed"]
+      controlsOk = all (\c -> parseMaybe (withObject "c" (.: "ok")) c == Just True) controls
+  putStrLn ("ran " ++ show (length specs) ++ " cases: " ++ show passed ++ " passed; controls " ++ (if controlsOk then "rejected as required" else "FAILED"))
+  unless (passed == length specs && controlsOk) exitFailure
