@@ -11,10 +11,13 @@ import Control.Monad (forM, unless)
 import Data.Aeson (Value (..), eitherDecodeFileStrict')
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import Data.List (isPrefixOf, isSuffixOf, sort)
+import Data.List (isPrefixOf, isSuffixOf, nub, sort)
 import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
+import Control.Exception (IOException, try)
+import qualified Data.ByteString as B
 import qualified Data.Vector as V
+import Emulation.UiTrajectory (SegmentReceipt (..), decodeSegmentReceipts, segmentNameText)
 import Emulation.ObservationCompare (differences, e2eIgnored, normalize, toggleIgnored)
 import System.Directory (doesFileExist, listDirectory)
 import System.Environment (getArgs, lookupEnv)
@@ -30,32 +33,42 @@ member _ _ = Null
 
 compareE2E :: FilePath -> FilePath -> IO (Int, [String])
 compareE2E old new = do
-  split <- doesFileExist (old </> "e2e-segments.json")
-  if split then compareSegmented old new else compareFlat old new
+  beforeSplit <- doesFileExist (old </> "e2e-segments.json")
+  afterSplit <- doesFileExist (new </> "e2e-segments.json")
+  if beforeSplit || afterSplit then compareSegmented old new else compareFlat old new
 
-segmentNamesOf :: FilePath -> IO [String]
+segmentNamesOf :: FilePath -> IO (Either String [String])
 segmentNamesOf directory = do
-  parsed <- load [] (directory </> "e2e-segments.json")
-  pure [ T.unpack name
-       | Object entry <- V.toList (case member "segments" parsed of Array items -> items; _ -> V.empty)
-       , String name <- [fromMaybe Null (KM.lookup "segment" entry)] ]
+  loaded <- try (B.readFile (directory </> "e2e-segments.json")) :: IO (Either IOException B.ByteString)
+  pure $ case loaded of
+    Left problem -> Left ("e2e-segments.json: " ++ show problem)
+    Right bytes -> case decodeSegmentReceipts bytes of
+      Left problem -> Left ("e2e-segments.json: " ++ problem)
+      Right [] -> Left "e2e-segments.json declares no segments"
+      Right receipts ->
+        let names = [T.unpack (segmentNameText (segmentReceiptName receipt)) | receipt <- receipts]
+         in if length names /= length (nub names) then Left "e2e-segments.json repeats a segment name" else Right names
 
 compareSegmented :: FilePath -> FilePath -> IO (Int, [String])
 compareSegmented old new = do
-  names <- segmentNamesOf old
-  afterNames <- segmentNamesOf new
-  let listed = differences "e2e-segments" (Array (V.fromList (map (String . T.pack) names))) (Array (V.fromList (map (String . T.pack) afterNames)))
-  compared <- forM names $ \name -> do
-    let before = old </> ("segment-" ++ name)
-        after = new </> ("segment-" ++ name)
-    present <- doesFileExist (after </> "e2e-result.json")
-    if not present then pure [ "segment-" ++ name ++ ": missing" ] else do
-      observed <- observationFiles before after
-      captured <- differences ("segment-" ++ name ++ ".e2e-result.menu_receipts")
-        <$> (member "menu_receipts" <$> load e2eIgnored (before </> "e2e-result.json"))
-        <*> (member "menu_receipts" <$> load e2eIgnored (after </> "e2e-result.json"))
-      pure (observed ++ captured)
-  pure (length names, listed ++ concat compared)
+  before <- segmentNamesOf old
+  after <- segmentNamesOf new
+  case (before, after) of
+    (Left problem, _) -> pure (0, ["e2e-segments: " ++ problem])
+    (_, Left problem) -> pure (1, ["e2e-segments: " ++ problem])
+    (Right names, Right afterNames) -> do
+      let listed = differences "e2e-segments" (Array (V.fromList (map (String . T.pack) names))) (Array (V.fromList (map (String . T.pack) afterNames)))
+      compared <- forM names $ \name -> do
+        let beforeDirectory = old </> ("segment-" ++ name)
+            afterDirectory = new </> ("segment-" ++ name)
+        present <- doesFileExist (afterDirectory </> "e2e-result.json")
+        if not present then pure [ "segment-" ++ name ++ ": missing" ] else do
+          observed <- observationFiles beforeDirectory afterDirectory
+          captured <- differences ("segment-" ++ name ++ ".e2e-result.menu_receipts")
+            <$> (member "menu_receipts" <$> load e2eIgnored (beforeDirectory </> "e2e-result.json"))
+            <*> (member "menu_receipts" <$> load e2eIgnored (afterDirectory </> "e2e-result.json"))
+          pure (observed ++ captured)
+      pure (length names, listed ++ concat compared)
 
 observationFiles :: FilePath -> FilePath -> IO [String]
 observationFiles before after = do

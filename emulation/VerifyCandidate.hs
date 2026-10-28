@@ -343,8 +343,9 @@ ramPushSpec extra = ObservationSpec
   (map filePattern
     [ "e2e-result.json", "e2e-fetch-watch.json", "cold-restart/e2e-cold-restart.json"
     , "relinked/runtime.bin", "relinked/ram-push-manifest.json", "relinked/bank-allowlist.json", "relinked/kernel.syms"
-    , "alloc/ram-alloc-state.json", "push/ram-push-state.json", "unload/ram-unload-state.json", "screenshots/*.png" ])
-  (e2eResult "e2e-result.json" ++ emulatorStart "cold-restart/e2e-cold-restart.json" "/emulator_start" ++ extra ++
+    , "alloc/ram-alloc-state.json", "push/ram-push-state.json", "unload/ram-unload-state.json", "screenshots/*.png"
+    , "segment-*/e2e-result.json", "segment-*/screenshots/*.png" ])
+  (e2eResult "e2e-result.json" ++ e2eResult "segment-*/e2e-result.json" ++ emulatorStart "cold-restart/e2e-cold-restart.json" "/emulator_start" ++ extra ++
     ramPushCardImageExclusions ++
     [ exclude "e2e-result.json" "/states" RunLocation
     , exclude "e2e-result.json" "/runtime/manifest" RunLocation ])
