@@ -34,7 +34,8 @@ RUNNER="${RUNNER:-bazel-bin/emulation/native-runner}"
 GEN="${GEN:-bazel-bin/emulation/recipe-bank-cases}"
 INTEROP="${INTEROP:-bazel-bin/emulation/recipe-bank-interop}"
 JOBS="${JOBS:-2}"
-SERVICE_ARCHIVE="${SERVICE_ARCHIVE:-bazel-bin/replacement/bank/bank.a}"
+RB_RUST_ARCHIVE="${RB_RUST_ARCHIVE:-bazel-bin/replacement/bank/bank.a}"
+[[ -f "$RB_RUST_ARCHIVE" ]] || { printf 'RB_RUST_ARCHIVE is not a regular file: %s\n' "$RB_RUST_ARCHIVE" >&2; exit 1; }
 CANDIDATE="${CANDIDATE:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/package-20261024b/image}"
 ID4="${ID4:-$CANDIDATE/id4-final.bin}"
 ID4_BASE="${ID4_BASE:-0x0061c1fc}"
@@ -70,7 +71,7 @@ else
     esac
     OBJS+=("$obj")
   done
-  OBJS+=("$SERVICE_ARCHIVE")
+  OBJS+=("$RB_RUST_ARCHIVE")
   env $HARDEN clang "${ARM[@]}" -nostdlib -static -fuse-ld=lld \
     -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-T,menu/recipe_bank.ld \
     -Wl,--defsym=RB_BASE="$RB_BASE" "${OBJS[@]}" -o "$BUILD_DIR/kernel.elf"
