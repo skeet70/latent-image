@@ -11,6 +11,7 @@ module Emulation.WatchObservation
   , WatchBytes
   , watchBytesValue
   , Instructions
+  , instructionCount
   , instructionsValue
   , Tick
   , tickValue
@@ -97,6 +98,9 @@ overlapsWatchRange range (WatchAddress address) (WatchBytes bytes) =
 newtype WatchBytes = WatchBytes { watchBytesValue :: Int } deriving (Eq, Ord, Show)
 
 newtype Instructions = Instructions { instructionsValue :: Word64 } deriving (Eq, Ord, Show)
+
+instructionCount :: Word64 -> Instructions
+instructionCount = Instructions
 newtype Tick = Tick { tickValue :: Word64 } deriving (Eq, Ord, Show)
 newtype Sectors = Sectors { sectorsValue :: Word64 } deriving (Eq, Ord, Show)
 newtype Commands = Commands { commandsValue :: Word64 } deriving (Eq, Ord, Show)

@@ -32,8 +32,10 @@ import qualified Data.Vector as V
 import Data.Word (Word32, Word64)
 import Numeric (showHex)
 import Emulation.WatchObservation
-  ( Instructions (..)
+  ( Instructions
   , RunPurpose (..)
+  , instructionCount
+  , instructionsValue
   , WatchAddress
   , WatchJudgement (..)
   , WatchRange
@@ -239,7 +241,7 @@ parseCpuChange value = do
   exactKeys ["kind", "core", "pc", "instructions", "address", "physical", "size", "before", "after"] value
   core <- field "core" value >>= parseCore
   pc <- field "pc" value >>= asWord32
-  instructions <- Instructions <$> (field "instructions" value >>= asWord64)
+  instructions <- instructionCount <$> (field "instructions" value >>= asWord64)
   address <- field "address" value >>= asWord32
   physical <- field "physical" value >>= asWord32
   bytes <- field "size" value >>= parseSize 1 8
@@ -340,7 +342,7 @@ checkPreservation expected ack observation = do
     Just (IntegrityFault reason) -> Left ("preservation integrity fault: " ++ integrityReasonLabel reason)
     Just violation@CpuChange{} -> do
       unless (changed > 0) (Left "preservation cpu-change has no changed cpu-write")
-      unless (any (contains violation) ranges) (Left "preservation cpu-change lies outside the protected ranges")
+      unless (contains violation ranges) (Left "preservation cpu-change lies outside the protected ranges")
       pure (PreservationRejected violation counters)
     Just violation@UnverifiableWrite{} -> do
       let observed = case violationSource violation of
