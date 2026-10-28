@@ -26,6 +26,7 @@ import Data.Foldable (toList)
 import Data.List (nub, stripPrefix)
 import qualified Data.Text as T
 import Data.Word (Word32)
+import Emulation.WatchObservation (WatchAddress (..), WatchRange, watchRange)
 import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming, modeDialName)
 import Numeric (readHex)
 
@@ -168,7 +169,7 @@ data Trajectories = Trajectories
   { beforeUnload :: [Segment]
   , afterUnload :: [Segment]
   , trajectoryTraceSites :: [TraceSite]
-  , trajectoryProtectedWrites :: [(Word64, Word64)]
+  , trajectoryProtectedWrites :: [WatchRange]
   , trajectoryExpect :: TrajectoryExpect
   }
 
@@ -193,10 +194,10 @@ instance FromJSON Trajectories where
         [lo, hi] -> do
           low <- hexWord lo
           high <- hexWord hi
-          if low < high then pure (low, high) else fail "protected_writes range must be increasing"
+          either fail pure (watchRange low high)
         _ -> fail "each protected_writes entry is [low, high]"
       hexWord text = case readHex (T.unpack text) of
-        [(value, "")] | length (T.unpack text) == 8 -> pure value
+        [(value, "")] | length (T.unpack text) == 8 -> pure (WatchAddress value)
         _ -> fail "protected_writes addresses are eight hex digits without 0x"
 
 phaseNames :: Trajectories -> [T.Text]

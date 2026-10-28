@@ -70,8 +70,8 @@ mediaJson media = object
   , "completed" .= mediaCompleted media
   , "irqs" .= mediaIrqs media
   , "dma_boundaries" .= mediaDmaBoundaries media
-  , "accepted_writes" .= mediaAcceptedWrites media
-  , "accepted_write_bytes" .= mediaAcceptedBytes media ]
+  , "accepted_writes" .= acceptedWritesValue (mediaAcceptedWrites media)
+  , "accepted_write_bytes" .= acceptedBytesValue (mediaAcceptedBytes media) ]
 
 -- | A key held across the attach edge of every boot the e2e starts.
 data AttachHold = NoAttachHold | AttachHoldQ deriving (Eq, Show)
@@ -640,8 +640,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     let segments = runSegments runner
         protected = trajectoryProtectedWrites plan
         expect = trajectoryExpect plan
-    let limit = WatchLimit 4096
-        ranges = [range | (lo, hi) <- protected, Right range <- [watchRange (WatchAddress (fromIntegral lo)) (WatchAddress (fromIntegral hi))]]
+    let ranges = trajectoryProtectedWrites plan
+        limit = either error id (watchLimit 4096)
         policy = case expect of
           ExpectClean -> CleanWatch limit ranges
           ExpectRefused -> RefusedWatch limit ranges
@@ -699,7 +699,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
                                  "address" .= hexAddress mailbox]
           , "outcome" .= (if expect == ExpectRefused then "control-refused" else "candidate-qualified")
           , "protected_writes" .= object
-              [ "ranges" .= [ [lo, hi] | (lo, hi) <- protected ]
+              [ "ranges" .= [ [watchAddressValue (watchRangeLow range), watchAddressValue (watchRangeHigh range)] | range <- protected ]
               , "expect" .= T.unpack (expectLabel expect)
               , "outcome" .= watchOutcomeLabel outcome
               , "actual_writes" .= watchOutcomeWrites outcome

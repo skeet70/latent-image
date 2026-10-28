@@ -213,14 +213,20 @@ struct Finished {
     quantity: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+struct AcceptedWrites(u64);
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+struct AcceptedBytes(u64);
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct Counters {
     started: u64,
     completed: u64,
     irqs: u64,
     dma_boundaries: u64,
-    accepted_writes: u64,
-    accepted_write_bytes: u64,
+    accepted_writes: AcceptedWrites,
+    accepted_write_bytes: AcceptedBytes,
 }
 
 /// Halfword register storage indexed by offset / 2, through `+0x106`.
@@ -684,9 +690,13 @@ impl SdHost {
             match &request.data {
                 Data::Sectors { write: true, .. } => {
                     cx.ram_read(physical, &mut bytes)?;
+                    let writes = self.counters.accepted_writes.0.checked_add(1)
+                        .ok_or("SD accepted-write count overflow")?;
+                    let accepted = self.counters.accepted_write_bytes.0.checked_add(bytes.len() as u64)
+                        .ok_or("SD accepted-byte count overflow")?;
                     self.card.write_bytes(offset, &bytes)?;
-                    self.counters.accepted_writes += 1;
-                    self.counters.accepted_write_bytes += bytes.len() as u64;
+                    self.counters.accepted_writes = AcceptedWrites(writes);
+                    self.counters.accepted_write_bytes = AcceptedBytes(accepted);
                 }
                 Data::Sectors { write: false, .. } => {
                     self.card.read_bytes(offset, &mut bytes)?;
@@ -742,9 +752,13 @@ impl SdHost {
     fn pio_write_sector(&mut self, cx: &mut Cx<'_>, mut request: Request) -> Result<(), String> {
         let first = u64::from(request.argument + request.cursor / SECTOR as u32);
         let pio = request.pio.as_mut().ok_or("SD PIO sector without a PIO request")?;
+        let accepted = self.counters.accepted_write_bytes.0.checked_add(pio.buffer.len() as u64)
+            .ok_or("SD accepted-byte count overflow")?;
+        let writes = self.counters.accepted_writes.0.checked_add(1)
+            .ok_or("SD accepted-write count overflow")?;
         self.card.write_bytes(first * SECTOR as u64, &pio.buffer)?;
-        self.counters.accepted_writes += 1;
-        self.counters.accepted_write_bytes += pio.buffer.len() as u64;
+        self.counters.accepted_writes = AcceptedWrites(writes);
+        self.counters.accepted_write_bytes = AcceptedBytes(accepted);
         pio.buffer.clear();
         request.cursor += SECTOR as u32;
         self.regs.set(6, ((request.quantity - request.cursor) / SECTOR as u32) as u16);
@@ -1030,8 +1044,8 @@ impl Device for SdHost {
             "block_length": self.block_length, "bus_width": self.bus_width, "pending": self.request.is_some(),
             "started": self.counters.started, "completed": self.counters.completed, "irqs": self.counters.irqs,
             "dma_boundaries": self.counters.dma_boundaries,
-            "accepted_writes": self.counters.accepted_writes,
-            "accepted_write_bytes": self.counters.accepted_write_bytes, "history": self.history,
+            "accepted_writes": self.counters.accepted_writes.0,
+            "accepted_write_bytes": self.counters.accepted_write_bytes.0, "history": self.history,
         })
     }
 }

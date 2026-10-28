@@ -357,7 +357,7 @@ emulatorWatchBegin emulator ranges limit = do
   fields <- rpc emulator (object
     [ "command" .= String "watch-begin"
     , "ranges" .= [ [lo, hi] | range <- ranges, let (lo, hi) = watchRangeBounds range ]
-    , "limit" .= watchLimitRecords limit
+    , "limit" .= watchLimitValue limit
     ])
   either (ioError . userError) pure (parseWatchAck (Object fields))
 
