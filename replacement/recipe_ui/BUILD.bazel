@@ -6,3 +6,20 @@ filegroup(
         "//host/firmware:__pkg__",
     ],
 )
+
+genrule(
+    name = "route-tests-bin",
+    srcs = ["src/lib.rs"],
+    outs = ["route-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
+)
+
+sh_test(
+    name = "route-tests",
+    size = "small",
+    srcs = ["//emulation:recovery-task-state-tests.sh"],
+    args = ["$(location :route-tests-bin)"],
+    data = [":route-tests-bin"],
+)
