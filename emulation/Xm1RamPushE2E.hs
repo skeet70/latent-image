@@ -669,8 +669,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         scopeText = if cardless then "cardless" else "card"
         purpose = if expect == ExpectRefused then FaultControlRun else CandidateRun
     mediaBefore <- case protection of
-      WatchProtection _ -> emulatorMediaState emulator
-      _ -> pure (Left "no media watch")
+      Unprotected -> pure (Left "no media watch")
+      _ -> emulatorMediaState emulator
     watchAck <- case protection of
       WatchProtection ranges -> Just <$> emulatorWatchBegin emulator ranges limit
       _ -> pure Nothing
@@ -714,12 +714,16 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
               , "enforced" .= True ] ],
           mediaAfterValue)
       PreservationProtection ranges -> do
+        mediaAfterValue <- emulatorMediaState emulator
         observationResult <- emulatorPreservationState emulator
         let ackValue = maybe (Left "no preservation acknowledgement") Right preservationAck
             checked = do
               ack <- ackValue
               observation <- observationResult
               judgement <- judgePreservation purpose (checkPreservation ranges ack observation)
+              before <- mediaBefore
+              after <- mediaAfterValue
+              checkMedia expectedPresent before after
               pure (observation, judgement)
             verdict :: String
             verdict = case checked of
@@ -737,7 +741,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         (observation, judgement) <- either (stop "ram-byte-preservation") pure checked
         pure (judgement,
           ["ram_preservation" .= preservationReceipt ranges observation judgement],
-          Left "no media watch")
+          mediaAfterValue)
     observed <- readIORef (runnerObservations runner)
     phaseTimes <- readIORef phases
     let result = object
