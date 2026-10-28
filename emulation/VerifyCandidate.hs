@@ -15,7 +15,8 @@ import Data.Aeson (eitherDecodeStrict')
 import Data.Aeson.Types (Pair, parseEither, withObject, (.:))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import Data.List (intercalate, isPrefixOf)
+import Data.Char (isAlphaNum)
+import Data.List (intercalate, isPrefixOf, nub)
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, fromMaybe, isJust)
@@ -125,33 +126,48 @@ routeReceiptRequirement route = case route of
 -- | Nothing when every e2e result in the receipt records CandidateQualified.
 candidateQualification :: FilePath -> IO (Maybe String)
 candidateQualification receipt = do
-  control <- doesFileExist (receipt </> "e2e-control.json")
-  if control
-    then pure (Just "control receipt cannot qualify a candidate")
-    else do
-      flat <- doesFileExist (receipt </> "e2e-result.json")
-      if flat then single (receipt </> "e2e-result.json") else do
-        split <- doesFileExist (receipt </> "e2e-segments.json")
-        if not split then pure (Just "no e2e qualification record") else do
-          parsed <- eitherDecodeStrict' <$> B.readFile (receipt </> "e2e-segments.json")
-          case parsed of
-            Left problem -> pure (Just ("unreadable e2e-segments.json: " ++ problem))
-            Right (Value segments) -> do
-              let names = [T.unpack name | Object entry <- segments, Just (String name) <- [KM.lookup "segment" entry]]
-              if null names then pure (Just "no judged segments") else do
-                problems <- mapM (single . (receipt </>) . ("segment-" ++) . (</> "e2e-result.json")) names
-                pure (case [problem | Just problem <- problems] of [] -> Nothing; problem : _ -> Just problem)
+  segments <- segmentNames receipt
+  case segments of
+    Left problem -> pure (Just problem)
+    Right names -> do
+      let directories = receipt : [receipt </> ("segment-" ++ name) | name <- names]
+      control <- or <$> mapM (\directory -> doesFileExist (directory </> "e2e-control.json")) directories
+      if control
+        then pure (Just "control receipt cannot qualify a candidate")
+        else do
+          records <- mapM (\directory -> (,) directory <$> doesFileExist (directory </> "e2e-result.json")) directories
+          let present = [directory </> "e2e-result.json" | (directory, True) <- records]
+          if null present
+            then pure (Just "no e2e qualification record")
+            else do
+              problems <- mapM single present
+              pure (case [problem | Just problem <- problems] of [] -> Nothing; problem : _ -> Just problem)
   where
     single path = do
-      exists <- doesFileExist path
-      if not exists then pure (Just "missing e2e qualification record") else do
-        parsed <- eitherDecodeStrict' <$> B.readFile path
-        pure $ case parsed of
-          Left problem -> Just ("unreadable e2e result: " ++ problem)
-          Right value -> case parseEither (withObject "e2e result" (.: "outcome")) value of
-            Left problem -> Just problem
-            Right CandidateQualified -> Nothing
-            Right ControlRefusedProtectedWrite -> Just "control-refused outcome cannot qualify a candidate"
+      parsed <- eitherDecodeStrict' <$> B.readFile path
+      pure $ case parsed of
+        Left problem -> Just ("unreadable e2e result: " ++ problem)
+        Right value -> case parseEither (withObject "e2e result" (.: "outcome")) value of
+          Left problem -> Just problem
+          Right CandidateQualified -> Nothing
+          Right ControlRefusedProtectedWrite -> Just "control-refused outcome cannot qualify a candidate"
+
+-- | The judged segment names, validated so a recorded name cannot select another path.
+segmentNames :: FilePath -> IO (Either String [String])
+segmentNames receipt = do
+  split <- doesFileExist (receipt </> "e2e-segments.json")
+  if not split then pure (Right []) else do
+    parsed <- eitherDecodeStrict' <$> B.readFile (receipt </> "e2e-segments.json")
+    pure $ case parsed of
+      Left problem -> Left ("unreadable e2e-segments.json: " ++ problem)
+      Right (Value segments) ->
+        let names = [T.unpack name | Object entry <- segments, Just (String name) <- [KM.lookup "segment" entry]]
+         in if null names then Left "only judged segments can qualify a candidate"
+            else if length names /= length (nub names) then Left "duplicate segment names cannot qualify a candidate"
+            else if not (all validSegmentName names) then Left "a segment name is not a judgeable token"
+            else Right names
+  where
+    validSegmentName name = not (null name) && all (\c -> isAlphaNum c || c == '-' || c == '_') name
 
 commandSucceeded :: ExecutionEvidence -> Bool
 commandSucceeded execution = case execution of

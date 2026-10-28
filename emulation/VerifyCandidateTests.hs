@@ -21,6 +21,8 @@ routeNames route = case route of
   UsbToggle -> ("fujimod-usb-toggle-emu", "usb-toggle-emu")
 
 data RecordedExit = MissingExit | NullExit | RecordedExit ExitCode deriving (Show)
+data Qualification = QualifiedOutcome | MissingOutcome | ControlReceipt | UnknownOutcome | RefusedOutcome
+  | SegmentedQualified | SegmentedWithControl deriving (Show)
 data ReceiptSource = EarlierRun | ReceiptOverride deriving (Show)
 data ReceiptParity = EqualReceipts | DifferentReceipts deriving (Show)
 data Result = Passed | Failed deriving (Eq, Show)
@@ -59,8 +61,15 @@ withWorkspace = bracket setup removeDirectoryRecursive
 jsonFile :: FilePath -> Value -> IO ()
 jsonFile path = BL.writeFile path . encode
 
-verify :: FilePath -> Route -> RecordedExit -> ReceiptSource -> ReceiptParity -> IO Result
-verify tool route evidence source parity = withWorkspace $ \root -> do
+qualificationWord :: Qualification -> Maybe String
+qualificationWord qualification = case qualification of
+  QualifiedOutcome -> Just "candidate-qualified"
+  RefusedOutcome -> Just "control-refused"
+  UnknownOutcome -> Just "mystery"
+  _ -> Nothing
+
+verify :: FilePath -> Route -> RecordedExit -> ReceiptSource -> ReceiptParity -> Qualification -> IO Result
+verify tool route evidence source parity qualification = withWorkspace $ \root -> do
   let (candidate, counterpart) = routeNames route
       earlier = root </> "private-data/earlier"
       receipt name = earlier </> "receipts" </> name
@@ -74,10 +83,30 @@ verify tool route evidence source parity = withWorkspace $ \root -> do
         case route of
           RamPushVolatile -> do
             let value = case fixtureParity of EqualReceipts -> 1 :: Int; DifferentReceipts -> 2
+                writeOutcome path word = jsonFile path (object
+                  [ "menu_receipts" .= [object ["menu_id" .= (1 :: Int)]]
+                  , "outcome" .= String word])
+                segments names = do
+                  jsonFile (directory </> "e2e-segments.json")
+                    (object ["schema" .= (1 :: Int), "segments" .= [object ["segment" .= name] | name <- names]])
+                  mapM_ (\name -> do
+                    let segment = directory </> ("segment-" ++ name)
+                    createDirectoryIfMissing True segment
+                    writeOutcome (segment </> "e2e-result.json") "candidate-qualified") names
             jsonFile (directory </> "e2e-observation-0.json")
               (object ["schema" .= (1 :: Int), "reads" .= [object ["value" .= value]]])
-            jsonFile (directory </> "e2e-result.json")
-              (object ["menu_receipts" .= [object ["menu_id" .= (1 :: Int)]]])
+            case qualification of
+              MissingOutcome -> pure ()
+              ControlReceipt -> jsonFile (directory </> "e2e-control.json")
+                (object ["outcome" .= String "control-refused"])
+              SegmentedQualified -> segments ["segment-a"]
+              SegmentedWithControl -> do
+                segments ["segment-a", "segment-b"]
+                jsonFile (directory </> "segment-b/e2e-control.json")
+                  (object ["outcome" .= String "control-refused"])
+              _ -> case qualificationWord qualification of
+                Just word -> writeOutcome (directory </> "e2e-result.json") word
+                Nothing -> pure ()
           UsbToggle -> do
             let (scenarioResult, boundary) = case fixtureParity of
                   EqualReceipts -> (String "blocked", object ["message" .= String "synthetic block", "boundary" .= object []])
@@ -113,15 +142,22 @@ main :: IO ()
 main = do
   [toolArgument] <- getArgs
   tool <- makeAbsolute toolArgument
-  let expect route evidence source parity expected = do
-        result <- verify tool route evidence source parity
-        check (show (route, evidence, source, parity) ++ " reports " ++ show expected) (result == expected)
-  expect RamPushVolatile MissingExit EarlierRun EqualReceipts Failed
-  expect RamPushVolatile NullExit EarlierRun EqualReceipts Failed
-  expect RamPushVolatile (RecordedExit ExitSuccess) ReceiptOverride EqualReceipts Failed
-  expect RamPushVolatile (RecordedExit (ExitFailure 1)) EarlierRun EqualReceipts Failed
-  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts Passed
-  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun DifferentReceipts Failed
-  expect UsbToggle MissingExit EarlierRun EqualReceipts Passed
-  expect UsbToggle (RecordedExit (ExitFailure 1)) EarlierRun EqualReceipts Passed
-  expect UsbToggle (RecordedExit (ExitFailure 1)) EarlierRun DifferentReceipts Failed
+  let expect route evidence source parity qualification expected = do
+        result <- verify tool route evidence source parity qualification
+        check (show (route, evidence, source, parity, qualification) ++ " reports " ++ show expected) (result == expected)
+      qualified = QualifiedOutcome
+  expect RamPushVolatile MissingExit EarlierRun EqualReceipts qualified Failed
+  expect RamPushVolatile NullExit EarlierRun EqualReceipts qualified Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) ReceiptOverride EqualReceipts qualified Failed
+  expect RamPushVolatile (RecordedExit (ExitFailure 1)) EarlierRun EqualReceipts qualified Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts qualified Passed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun DifferentReceipts qualified Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts MissingOutcome Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts ControlReceipt Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts UnknownOutcome Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts RefusedOutcome Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedQualified Passed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedWithControl Failed
+  expect UsbToggle MissingExit EarlierRun EqualReceipts qualified Passed
+  expect UsbToggle (RecordedExit (ExitFailure 1)) EarlierRun EqualReceipts qualified Passed
+  expect UsbToggle (RecordedExit (ExitFailure 1)) DifferentReceipts EqualReceipts qualified Failed
