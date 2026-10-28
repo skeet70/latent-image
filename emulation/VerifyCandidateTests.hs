@@ -104,7 +104,9 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
                   mapM_ (\name -> do
                     let segment = directory </> ("segment-" ++ name)
                     createDirectoryIfMissing True segment
-                    writeOutcome (segment </> "e2e-result.json") "candidate-qualified") names
+                    writeOutcome (segment </> "e2e-result.json") "candidate-qualified"
+                    jsonFile (segment </> "e2e-observation-0.json")
+                      (object ["schema" .= (1 :: Int), "reads" .= [object ["value" .= value]]])) names
             jsonFile (directory </> "e2e-observation-0.json")
               (object ["schema" .= (1 :: Int), "reads" .= [object ["value" .= value]]])
             case fixtureQualification of
@@ -285,6 +287,7 @@ main = do
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts ControlReceipt Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts UnknownOutcome Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts RefusedOutcome Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedQualified Passed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts CounterpartControl Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts CounterpartFailedCommand Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedFailed Failed
