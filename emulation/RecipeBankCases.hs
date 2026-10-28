@@ -24,6 +24,8 @@ import Data.Word
 import Emulation.NativeCase (functionCount, runCase)
 import Emulation.Sha256 (sha256, sha256Hex)
 import Emulation.ParallelCases (mapBounded, readJobs)
+import qualified Emulation.NativeObservation as N
+import qualified Replacement.Service.Qualify as S
 import Numeric
 import System.Directory
 import System.Environment
@@ -410,8 +412,10 @@ main = do
   passed result = parseMaybe (withObject "result" (.: "status")) result == Just ("passed" :: String)
 
 kernelMain :: [String] -> IO ()
-kernelMain args = do
-  let opt n = lookup n [(drop 2 a, b) | (a, b) <- pair args]
+kernelMain rawArgs = do
+  let serviceQualification = "--service-qualification" `elem` rawArgs
+      args = filter (/= "--service-qualification") rawArgs
+      opt n = lookup n [(drop 2 a, b) | (a, b) <- pair args]
       pair (a:b:r) = (a, b) : pair r
       pair _ = []
   build <- maybe (fail "--build") pure (opt "build")
@@ -433,6 +437,10 @@ kernelMain args = do
   ks <- parseSyms (build </> "kernel.syms")
   unless (addr ks "__rb_image_start" == kernelBase) (fail "--rb-base differs from linked __rb_image_start")
   ms <- parseSyms (build </> "model.syms")
+  let fieldCountAddress = addr ms "rbm_field_count"
+  unless (fieldCountAddress >= modelScratchBase
+          && fieldCountAddress < modelScratchBase + fromIntegral modelScratchSize)
+    (fail "model symbols are outside the native fixture region; rebuild with the relocated model storage")
   kbin <- B.readFile (build </> "kernel.bin")
   ktext <- B.readFile (build </> "kernel-text.bin")
   mdataRaw <- B.readFile (build </> "model-data.bin")
@@ -521,7 +529,11 @@ kernelMain args = do
       selects cid = case reverse cid of
         '*' : prefix -> (reverse prefix `isPrefixOf`)
         _ -> (== cid)
-      specs = maybe suite (\cid -> filter (selects cid . spId) suite) (opt "case")
+      specs = case opt "case" of
+        Just cid -> filter (selects cid . spId) suite
+        Nothing
+          | serviceQualification -> filter (S.isServiceCaseId . spId) suite
+          | otherwise -> suite
   when (null specs) (fail "--case did not name a case")
   results <- mapBounded jobs (\sp -> do
     let loop s fuel = do
@@ -537,9 +549,15 @@ kernelMain args = do
   let allResults = results ++ bootResults
   BL.writeFile (out </> "results.json") (encode (object ["cases" .= allResults, "bank_mode" .= bankModeText bankMode, "compiled_recipe_candidate" .= object ["dir" .= candidateDir, "id4_final_sha256" .= d3Id4, "id5_final_sha256" .= d3Id5]]))
   writeFile (out </> "findings.txt") (findingsText specs results ++ if null bootResults then "" else "\nBoot cases use register-only stock semaphore ABI boundaries and stop at DSB after publication stores. Cache/core/source-coherence acceptance is not claimed. Allocator cases execute the packaged stock backing allocator at its new capacity boundary.\n")
+  let serviceResults = filter (\result -> S.isServiceCaseId (str (get result "id"))) allResults
+      serviceReport = S.serviceQualificationReport allResults
+  unless (null serviceResults) $ do
+    BL.writeFile (out </> "service-qualification.json") (encode serviceReport)
+    putStrLn ("service qualification " ++ str (get serviceReport "status") ++ ": " ++ show (length serviceResults) ++ " direct rows")
   putStrLn ("bank mode " ++ bankModeText bankMode ++ ": " ++ show (length specs) ++ " cases")
   putStrLn ("ran " ++ show (length allResults) ++ " cases")
-  unless (all ((== Just ("passed" :: String)) . parseMaybe (withObject "result" (.: "status"))) allResults) exitFailure
+  unless (all ((== Just ("passed" :: String)) . parseMaybe (withObject "result" (.: "status"))) allResults
+          && (null serviceResults || S.reportQualified serviceReport)) exitFailure
 
 parseFields :: B.ByteString -> [Field]
 parseFields raw = either (error . ("invalid field map: " ++)) id (eitherDecodeStrict' raw >>= parseEither p)
@@ -595,6 +613,20 @@ packTables id4 entries = (B.concat (map snd pieces), M.fromList (zip (map fst pi
 -- dispatcher code with the two copy wrappers replaced by one bx lr each, the
 -- conversion tables and pointer block at their stock addresses, the cells
 -- block with the mode cell 0x21 and the settings mirror with the not-found
+-- Native-fixture-only model storage. 0x7f000000 is invented for the bounded
+-- case, not an X-M1 address or a RAM-push reservation.
+modelScratchBase :: Integer
+modelScratchBase = 0x7f000000
+
+modelScratchSize :: Int
+modelScratchSize = 0x1000
+
+fieldTableAddress :: Integer
+fieldTableAddress = 0x970800
+
+liveBaseAddress :: Integer
+liveBaseAddress = 0x96cc64
+
 -- flag set. The menu, mode and availability tables share one region, and the
 -- id5 slice runs on through the render probe FUN_00d52684. The synthetic
 -- getter and setter retire: 0x0061e110 and 0x00624694 are the real code
@@ -1016,9 +1048,9 @@ specSet :: FilmEncoding -> Syms -> Syms -> [Field] -> M.Map Word32 [[Word32]] ->
 specSet filmEncoding ks ms fields tabs hostBank (StockFailureRedraw failureRedraw) real =
   (sdBuilders, volatileBuilders)
   where
-    sdBuilders = case filmEncoding of
+    sdBuilders = (case filmEncoding of
       D3Films -> legacyV3Refused : map ($ ()) builders
-      ClassicChromeFilms -> ccCompatibility
+      ClassicChromeFilms -> ccCompatibility) ++ serviceSpecs
     -- contract-derived fixture: every field carries a distinct valid code
     liveFixture :: B.ByteString
     liveFixture = foldl lay (B.replicate 0x1c2 0) [(f, i) | (f, i) <- zip fields [1 ..]]
@@ -1461,6 +1493,26 @@ specSet filmEncoding ks ms fields tabs hostBank (StockFailureRedraw failureRedra
     sizePayload size aspect = placePayload (placePayload realRecallPayload (fieldOf 0xf6) size) (fieldOf 0xf9) aspect
     sizeFile p = encodeFile 7 0x0001 ((name26 "ALPHA", p) : replicate 6 (name26 "ALPHA", payloadReal))
     mModel = (model (fileA [])) { mLive = admittedLive, mShootingMode = 0x24 }
+    serviceFns =
+      [ S.serviceEntrySymbol
+      , S.serviceTrampolineSymbol
+      , S.serviceStockSpan
+      , "0x0063d060/240"
+      , "0x0061d554/16"
+      , "0x0061d018/32"
+      ] ++ loadFns ++ realStockFns
+    serviceSpecs =
+      [ Spec
+          (S.serviceRowId row)
+          (S.serviceRowProvenance row)
+          S.serviceEntrySymbol
+          [S.serviceRowProperty row, S.serviceRowToken row]
+          mModel
+          (Expect "returned" (S.rowStateWord (S.serviceRowExpected row)) [])
+          serviceFns
+          realStubs
+      | row <- S.serviceRows
+      ]
     sizeRefusal cid what size aspect = Spec cid
       ("contract: in M (mode cell 0x24) a v1 bank whose populated slot has " ++ what ++ " cannot migrate: the pair (0xf6, 0xf9) = (" ++ show size ++ ", " ++ show aspect ++ ") is no row the IMAGE SIZE list offers, so the load refuses the bank before admission; the kernel answers 15 (unsafe bank), every live byte and both files are unchanged, and rb_select_trace records count 1, status 0x0f, selection 1, property 0, mode 0x24 and no refused, unrestored or skipped field")
       "rb_select" [1] (mModel { mCard = cardWith (sizeFile (sizePayload size aspect)) B.empty })
@@ -2517,25 +2569,33 @@ runSpec :: BankMode -> FilePath -> FilePath -> FilePath -> Syms -> Syms -> B.Byt
 runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable getter setter mediaImg tabImg mediaLo sp = do
   let dir = out </> spId sp
   createDirectoryIfMissing True dir
-  let modelScratchBase = 0x7f000000 :: Integer
-      modelScratchSize = 0x1000 :: Int
-      modeCell = B.replicate 0x24 0 <> u32le (mMode (spModel sp))
+  let modeCell = B.replicate 0x24 0 <> u32le (mMode (spModel sp))
       mdata = overlay mdataRaw ([ (addr ms n - modelScratchBase, u32le v) | (n, v) <- M.toList (mCells (spModel sp))]
         ++ [(addr ms "rbm_field_count" - modelScratchBase, u32le (fromIntegral (B.length fTable `div` 20)))])
-      mdata' = mdata <> B.replicate modelScratchSize 0
+      mdata' =
+        if B.length mdata > modelScratchSize
+          then error "model data exceeds its native fixture region"
+          else mdata <> B.replicate (modelScratchSize - B.length mdata) 0
       overlay base ps = foldl (\b (o, v) -> B.take (fromIntegral o) b <> v <> B.drop (fromIntegral o + B.length v) b) base ps
       cardImg = mCard (spModel sp)
       cardLength = max cardBytes (B.length cardImg)
-      liveLength = 0x970800 - 0x96cc64 + B.length fTable
-      liveImg = overlay (mLive (spModel sp) <> B.replicate (liveLength - 0x1c2) 0) [(0x970800 - 0x96cc64, fTable)]
-      caseImg = mCase (spModel sp)
+      liveImg = mLive (spModel sp)
+      fieldTableOffset = fromIntegral (fieldTableAddress - liveBaseAddress)
+      liveImg' =
+        if B.length liveImg > fieldTableOffset
+          then error "live settings exceed the field-table offset"
+          else liveImg <> B.replicate (fieldTableOffset - B.length liveImg) 0 <> fTable
+      direct = S.isServiceCaseId (spId sp)
+      directProperty = case spArgs sp of (property : _) -> property; [] -> 0
+      directRow = case drop 1 (spArgs sp) of (row : _) -> row; _ -> 0
+      caseImg = if direct then S.serviceCasebufInitial else mCase (spModel sp)
       extras = mExtra (spModel sp)
       patchMode b = B.take 0x41424 b <> u32le (mMode (spModel sp)) <> B.drop 0x41428 b
       patchCells b = u32le (mShootingMode (spModel sp)) <> B.drop 4 b
       extrasPatch = [(rid, a, if rid == "media-state" then patchMode b else if rid == "cells" then patchCells b else b) | (rid, a, b) <- extras]
       exitAddress = mediaLo + fromIntegral (B.length mediaImg)
       mediaImg' = overlay mediaImg [(a - mediaLo, bytes) | (GuestAddress a, bytes) <- mForeignCode (spModel sp)] <> u32le 0xe12fff1e
-      arts = [("kernel.bin", kbin), ("media.bin", mediaImg'), ("getter.bin", getter), ("setter.bin", setter), ("model-data.bin", B.take modelScratchSize mdata'), ("tables.bin", tabImg), ("card.bin", cardImg), ("live.bin", liveImg)]
+      arts = [("kernel.bin", kbin), ("media.bin", mediaImg'), ("getter.bin", getter), ("setter.bin", setter), ("model-data.bin", mdata'), ("tables.bin", tabImg), ("card.bin", cardImg), ("live.bin", liveImg')]
         ++ (if B.null caseImg then [] else [("case.bin", caseImg)])
         ++ [(rid ++ ".bin", b) | (rid, _, b) <- extrasPatch, not (B.null b)]
   forM_ (arts ++ [("mode.bin", modeCell)]) $ \(n, b) -> B.writeFile (dir </> n) b
@@ -2549,7 +2609,7 @@ runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable g
         , reg "kdata" (kernelBase + fromIntegral ktextLen) kdataLen "rw" (Just "kernel.bin") ktextLen kdataLen
         , reg "media" mediaLo (B.length mediaImg') "rx" (Just "media.bin") 0 (B.length mediaImg')
         , reg "model-scratch" modelScratchBase modelScratchSize "rw" (Just "model-data.bin") 0 modelScratchSize
-        , reg "live-state" 0x0096cc64 liveLength "rw" (Just "live.bin") 0 liveLength
+        , reg "live-state" liveBaseAddress (B.length liveImg') "rw" (Just "live.bin") 0 (B.length liveImg')
         , reg "card" 0x00980000 cardLength "rw" (Just "card.bin") 0 (B.length cardImg)
         , reg "casebuf" 0x009a0000 0x2000 "rw" (if B.null caseImg then Nothing else Just "case.bin") 0 (B.length caseImg) ]
         ++ [reg rid a (max 4 (B.length b)) (extraPerms rid) (if B.null b then Nothing else Just (rid ++ ".bin")) 0 (B.length b) | (rid, a, b) <- extrasPatch]
@@ -2574,13 +2634,23 @@ runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable g
         "task" -> [("task", 3)]; "card" -> [("card", 0)]; "vol" -> [("vol", 0x43)]
         "live" -> [("live", 1)]; "store" -> [("store", 0)]; _ -> []
       bindObj bs = object [fromString k .= hex (toInteger v) | (k, v) <- bs]
-      regs = object (["lr" .= hex exitAddress, "sp" .= hex 0x009a1ff0, "cpsr" .= hex 0x10]
-        ++ [fromString ("r" ++ show i) .= hex (toInteger v) | (i, v) <- take 13 (zip [0 :: Int ..] (spArgs sp ++ repeat 0))])
-      expected = object
-        [ "status" .= eStatus (spExpect sp)
-        , "registers" .= object ["r0" .= hex (fromIntegral (eR0 (spExpect sp)))]
-        , "memory" .= claimsJson
-        , "events" .= ([] :: [Value]) ]
+      regs =
+        if direct
+          then object [fromString (N.registerLabel k) .= hex (toInteger v) | (k, v) <- S.serviceInitialRegisters directProperty directRow S.serviceStackTop (fromIntegral exitAddress)]
+          else object (["lr" .= hex exitAddress, "sp" .= hex (toInteger S.serviceStackTop), "cpsr" .= hex 0x10]
+            ++ [fromString ("r" ++ show i) .= hex (toInteger v) | (i, v) <- take 13 (zip [0 :: Int ..] (spArgs sp ++ repeat 0))])
+      expected =
+        if direct
+          then object
+            [ "status" .= eStatus (spExpect sp)
+            , "registers" .= object [fromString (N.registerLabel k) .= hex (toInteger v) | (k, v) <- S.serviceExpectedRegisters (eR0 (spExpect sp)) S.serviceStackTop (fromIntegral exitAddress)]
+            , "memory" .= ([] :: [Value])
+            , "events" .= ([] :: [Value]) ]
+          else object
+            [ "status" .= eStatus (spExpect sp)
+            , "registers" .= object ["r0" .= hex (fromIntegral (eR0 (spExpect sp)))]
+            , "memory" .= claimsJson
+            , "events" .= ([] :: [Value]) ]
       claimsJson = [object ["region" .= rid, "offset" .= (toInteger off :: Integer), "hex" .= hexB bs] | (rid, off, bs) <- eClaims (spExpect sp)]
       caseObj = object
         [ "schema_version" .= (1 :: Int), "id" .= spId sp, "origin" .= ("synthetic" :: String)
@@ -2593,44 +2663,64 @@ runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable g
         , "functions" .= fns, "stubs" .= stubs
         , "limits" .= object ["instructions" .= caseInstructions, "wall_ms" .= caseWallMs]
         , "expected" .= expected
-        , "exclusions" .= (["Kernel behavior is evaluated over declared public output spans, not whole-region private residue or incidental stub event order", "Foreign media completion is synchronous; stock queue, scheduler and physical SD controller are not executed"] :: [String]) ]
+        , "exclusions" .= exclusions ]
       -- a selection runs the getter walk, up to two applies with their asserts
       -- and two verified generations per call; 4000000 instructions and
       -- 10000 ms are the runner's maxima
       selectionEntry = "select" `isInfixOf` spEntry sp
       longEntry = selectionEntry || bankMode == VolatileBank || spEntry sp == "rbm_seq_load_all_readback"
-      caseInstructions = if longEntry then 4000000 else 1000000 :: Int
-      caseWallMs = if longEntry then 10000 else 4000 :: Int
-      addrOfEntry = case spEntry sp of
-        e | take 2 e == "0x" -> hexI e
-        e -> if e `elem` M.keys (case ks of Syms m -> m) then addr ks e else addr ms e
+      caseInstructions = if direct then 100000 else if longEntry then 4000000 else 1000000 :: Int
+      caseWallMs = if direct then 4000 else if longEntry then 10000 else 4000 :: Int
+      addrOfEntry =
+        if direct
+          then addr ks S.serviceEntrySymbol
+          else case spEntry sp of
+            e | take 2 e == "0x" -> hexI e
+            e -> if e `elem` M.keys (case ks of Syms m -> m) then addr ks e else addr ms e
+      exclusions =
+        if direct
+          then
+            [ "casebuf[0x1e00,0x2000) is stack scratch and the stock table mirror is transient scratch; every other byte is immutable"
+            , "The fixture fixes shooting mode 0x24 (M); other mode columns are outside this case"
+            ]
+          else
+            [ "Kernel behavior is evaluated over declared public output spans, not whole-region private residue or incidental stub event order"
+            , "Foreign media completion is synchronous; stock queue, scheduler and physical SD controller are not executed"
+            ]
   BL.writeFile (dir </> "case.json") (encode caseObj)
-  (_, report) <- runCase runner (dir </> "case.json")
-  BL.writeFile (dir </> "runner-report.json") (encode report)
-  let claimedRegions = [RegionId rid | (rid, _, _) <- eClaims (spExpect sp)]
-      regionIds = M.fromList
-        [(GuestAddress (hexI (str (getRegionField region "address"))), rid)
-        | region <- regions, let rid = RegionId (str (getRegionField region "id")), rid `elem` claimedRegions]
-      getRegionField value key = fromMaybe Null (parseMaybe (withObject "region" (.: key)) value)
-      observed = memMap regionIds report
-      runnerResult = parseMaybe (withObject "report" (.: "runner")) report
-      runnerStatus = fromMaybe "" (runnerResult >>= parseMaybe (withObject "runner" (.: "status")) :: Maybe String)
-      observedR0 = runnerResult >>= parseMaybe (withObject "runner" (\o -> o .: "registers" >>= withObject "registers" (.: "r0"))) >>= parseHexV
-      mismatches =
-        ["status differs" | runnerStatus /= eStatus (spExpect sp)]
-        ++ ["register r0: differs" | observedR0 /= Just (toInteger (eR0 (spExpect sp)))]
-        ++ ["memory " ++ rid ++ " at " ++ hex (toInteger off) ++ ": differs" |
-              (rid, off, bytes) <- eClaims (spExpect sp),
-              maybe True (\actual -> B.take (B.length bytes) (B.drop off actual) /= bytes)
-                (M.lookup (RegionId rid) observed)]
-      status = if isNothing runnerResult
-        then fromMaybe "invalid_case" (parseMaybe (withObject "report" (.: "status")) report :: Maybe String)
-        else if null mismatches then "passed" else "failed"
-      missing = if runnerStatus == "unknown_call" then missingSym ks ms report else Nothing
-      result = object
-        (["id" .= spId sp, "status" .= status, "mismatches" .= mismatches,
-          "runner_status" .= runnerStatus]
-          ++ maybe [] (\n -> ["missing_fn" .= n]) missing)
+  result <- if direct
+    then do
+      (serviceReport, result) <- S.runServiceCase runner (dir </> "case.json")
+      BL.writeFile (dir </> "runner-report.json") (encode serviceReport)
+      pure result
+    else do
+      (_, report) <- runCase runner (dir </> "case.json")
+      BL.writeFile (dir </> "runner-report.json") (encode report)
+      let claimedRegions = [RegionId rid | (rid, _, _) <- eClaims (spExpect sp)]
+          regionIds = M.fromList
+            [(GuestAddress (hexI (str (getRegionField region "address"))), rid)
+            | region <- regions, let rid = RegionId (str (getRegionField region "id")), rid `elem` claimedRegions]
+          getRegionField value key = fromMaybe Null (parseMaybe (withObject "region" (.: key)) value)
+          observed = memMap regionIds report
+          runnerResult = parseMaybe (withObject "report" (.: "runner")) report
+          runnerStatus = fromMaybe "" (runnerResult >>= parseMaybe (withObject "runner" (.: "status")) :: Maybe String)
+          observedR0 = runnerResult >>= parseMaybe (withObject "runner" (\o -> o .: "registers" >>= withObject "registers" (.: "r0"))) >>= parseHexV
+          mismatches =
+            ["status differs" | runnerStatus /= eStatus (spExpect sp)]
+            ++ ["register r0: differs" | observedR0 /= Just (toInteger (eR0 (spExpect sp)))]
+            ++ ["memory " ++ rid ++ " at " ++ hex (toInteger off) ++ ": differs" |
+                  (rid, off, bytes) <- eClaims (spExpect sp),
+                  maybe True (\actual -> B.take (B.length bytes) (B.drop off actual) /= bytes)
+                    (M.lookup (RegionId rid) observed)]
+          status = if isNothing runnerResult
+            then fromMaybe "invalid_case" (parseMaybe (withObject "report" (.: "status")) report :: Maybe String)
+            else if null mismatches then "passed" else "failed"
+          missing = if runnerStatus == "unknown_call" then missingSym ks ms report else Nothing
+          result = object
+            (["id" .= spId sp, "status" .= status, "mismatches" .= mismatches,
+              "runner_status" .= runnerStatus]
+              ++ maybe [] (\n -> ["missing_fn" .= n]) missing)
+      pure result
   BL.writeFile (dir </> "behavioral-result.json") (encode result)
   pure result
 
@@ -2693,6 +2783,7 @@ findingsText specs results = unlines (headerLines ++ resultLines)
       , "Each case directory records its input artifacts, native runner report and behavioral result."
       , "Behavioral checks cover public returns, explicit readback buffers, live settings and durable card bytes."
       , "Private kernel/model state, stack residue and incidental stub event order are not expectations."
+      , "Direct service rows execute the built Rust entry, asm trampoline and stock probe and check the returned state, r4-r11/SP, complete write confinement and immutable regions."
       , "Native region/function bounds, instruction limits and stub input contracts remain enforced."
       , ""
       , "The stock getter, setter, conversion tables, commit dispatcher and consumers execute from the candidate image."

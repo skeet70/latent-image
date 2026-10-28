@@ -23,10 +23,13 @@ report selected store = do
   printf "next-index %d entries %d\n" (nextIndex store) (length es)
   printf "-- per-thread summary: %s\n" (unwords (map summary (M.toAscList groups)))
   forM_ interesting $ \e ->
-    printf "  slot %4d type %02x thr %02x arg 0x%08x code 0x%04x param 0x%04x tick %6s raw %s%s\n"
+    let payload = case enErrorPayload e of
+          Just (ErrorPayload category code) -> printf " category 0x%08x error 0x%08x" category code
+          Nothing -> ""
+    in printf "  slot %4d type %02x thr %02x arg 0x%08x code 0x%04x param 0x%04x tick %6s raw %s%s%s\n"
       (enSlot e) (typeByte (enType e)) (enThread e) (enArg e) (enCode e) (enParam e)
       (maybe "unknown" (printf "%d") (enTick e)) (hexRun (B.take 10 (enRaw e)))
-      (if enType e == Marker then " str " ++ ascii (B.take 8 (B.drop 8 (enRaw e))) else "")
+      (if enType e == Marker then " str " ++ ascii (B.take 8 (B.drop 8 (enRaw e))) else "") payload
 
 main :: IO ()
 main = do

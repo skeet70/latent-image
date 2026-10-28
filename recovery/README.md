@@ -167,7 +167,7 @@ Native startup executes before the repair. The one-block repair bound is not a g
 
 **Observed on one body:** exact v5 rollback reported status 20 and mapping fields 1/1. Ordinary startup after power removal, photography, normal-card operation/playback and retained film simulations/settings, including C-slot color +2, were subsequently owner-reported working. Detailed lens/AF and new recipe acceptance remain separate feature work. The [durable result](../reports/sd-boot-card-entry.md#260-physical-rollback-readback-status-20) retains the evidence scope. Preserve an already successful recovery card; the working camera does not need another recovery run.
 
-This closes the recorder rev-2 incident and the reported recovery-adjacent checks. It does not claim formal R4 acceptance, universal recovery, or detailed lens/AF and new-recipe acceptance; [current principles](../docs/principles.md#scope-and-evidence) and [recovery status](../reports/recovery-status.md) own those distinctions.
+This closes the recorder rev-2 incident and the reported recovery-adjacent checks. [R4 is accepted only for that historical failure and block-14 repair](../reports/recovery-status.md#historical-recorder-failure-r4-decision-2026-10-27), with block-71 residue retained. The damaged SD slot leaves the route unavailable now. This is not universal recovery, present rescue assurance, detailed lens/AF or new-recipe acceptance, or authorization for another camera operation.
 
 ### Generate the image
 

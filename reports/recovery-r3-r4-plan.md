@@ -1,6 +1,6 @@
 # What R3 and R4 require on this body, and how recovery can be tested
 
-This report defines general recovery-loader requirements and limits under [spec 10.1](../spec/04-recovery.md#101-evidence-levels) and [failure classification](../spec/04-recovery.md#103-required-failure-classification). It retains the X-M1 1.50 storage addresses, target checks, dry-run contract and non-destructive test alternatives. R2 and scoped R3 are demonstrated; the exact v5 rollback and reported ordinary operation repair the recorder failure, while formal R4 acceptance remains unclaimed. [Recovery status](recovery-status.md) owns present coverage and gate distinctions; [GitHub Issues](https://github.com/skeet70/latent-image/issues) owns open work.
+This report defines general recovery-loader requirements and limits under [spec 10.1](../spec/04-recovery.md#101-evidence-levels) and [failure classification](../spec/04-recovery.md#103-required-failure-classification). It retains the X-M1 1.50 storage addresses, target checks, dry-run contract and non-destructive test alternatives. R2 and scoped R3 are demonstrated; [R4 is accepted only for the historical recorder-v2-v5 block-14 repair](recovery-status.md#historical-recorder-failure-r4-decision-2026-10-27), with block-71 residue retained and the SD route currently unavailable. [Recovery status](recovery-status.md) owns present coverage and gate distinctions; [GitHub Issues](https://github.com/skeet70/latent-image/issues) owns open work.
 
 ## The central question, answered first
 
@@ -123,4 +123,4 @@ The unavailable factory ZJ02217 package is not an input dependency for project-a
 
 ## Attainability
 
-R2 and scoped R3 are demonstrated. V5 physical rollback/readback and owner-reported ordinary operation close the recorder incident and recovery-adjacent checks. Controlled route/timing selection, complete persistent backup/restore coverage and additional failure-class repairs remain distinct requirements. Formal R4 acceptance remains unclaimed, and these findings authorize no new camera run.
+R2 and scoped R3 are demonstrated. V5 physical rollback/readback and owner-reported ordinary operation close the recorder incident and recovery-adjacent checks. R4 acceptance is limited to that historical failure and block-14 repair, with block-71 residue retained. Controlled route/timing selection, complete persistent backup/restore coverage and additional failure-class repairs remain distinct requirements. The damaged SD slot leaves the route unavailable now; this decision provides no present recovery assurance or new camera authorization.

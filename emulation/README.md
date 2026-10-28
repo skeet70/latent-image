@@ -10,6 +10,51 @@ The owner accepted USB-toggle comparison exclusions for `sid` and `cells_after_s
 
 Local FujiMod development does not authorize binary distribution. Our software remains AGPL-3.0-only; [LICENSING item 7](../LICENSING.md#release-decisions) retains the no-conveyed-FujiMod-binaries restriction until an upstream licence file lands and is reviewed, alongside the separate Unicorn obligations.
 
+# Bounded selected-queue experiment
+
+`//emulation:queue-boundary` runs the original stock `0x0072503c` caller from entry, including allocation, through the existing pinned FujiMod `Machine` API. It does not extend the native-case profile, change either runtime's CPU admission guard, qualify a runtime cutover or prove boot acceptance.
+
+The input identities are closed: the captured RAM is `private-data/sessions/20261025T050355Z-read-bulk/ram-00000000-05aa0000.bin` (SHA256 `fa933fcf723ff46d435161cfecf48edc4a29cc4dc4c0ff5232fd0c70e7a6fee2`), and the stock image is `private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin` (SHA256 `f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16`). The worker rejects other bytes. Proprietary inputs and detailed receipts remain private.
+
+Set `EMULATOR_SLOT` to the absolute path of the existing verified `emulator-slot` binary ([guard contract](../build-support/README.md)). Use one slot, payload CPUs 0-3, 8 GiB memory and zero swap. From the repository root, use an exclusive compiler lease for this normal Bazel target command. `--script_path` builds and writes the upstream launcher without executing the target; both the launcher path and output directory must be fresh.
+
+```sh
+env XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=8G \
+  "$EMULATOR_SLOT" taskset -c 0-3 devenv shell -- \
+  bazel --batch --output_base="$HOME/.cache/bazel/latent-image-queue-boundary" run \
+    --script_path="$PWD/private-data/analysis/issue16-closure/queue-boundary-launcher.sh" \
+    //emulation:queue-boundary --jobs=2 --local_resources=cpu=4 --local_resources=memory=8192 -- \
+    "$PWD/private-data/sessions/20261025T050355Z-read-bulk/ram-00000000-05aa0000.bin" \
+    "$PWD/private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin" \
+    "$PWD/private-data/analysis/issue16-closure/queue-boundary-new"
+```
+
+After the build lease ends, require no compiler or Bazel server and a fresh actual Tctl below 70°C before acquiring the exclusive guest lease. Execute the generated normal launcher without another Bazel invocation:
+
+```sh
+env XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=8G \
+  "$EMULATOR_SLOT" taskset -c 0-3 \
+  "$PWD/private-data/analysis/issue16-closure/queue-boundary-launcher.sh"
+```
+
+The Haskell host first requires independent memory/state refusal and control fixtures, then checks four queue cases by caller return, delivered pointers and subsequent allocation through the original allocator. Original nonblocking receive `0x0004a2f0` supplies explicit empty results after drain and after allocation; it takes queue ID/output pointer, not a timeout. The host preserves JSON receipts and bounded stdout/stderr. Every original caller starts with its own one-block pool and synthetic capacity-two queue; full cases begin with two existing pointers, and the one-free control begins with one. These are not observations of actual stock occupancy or pool availability.
+
+The `cpu0_instructions` receipt field counts CPU0 execution across the whole case, including the caller and queries. The per-invocation cap uses aggregate machine instructions; neither count measures latency.
+
+The initial contexts are `unmasked-svc-selector-clear` (CPSR `0x13`, selector `0`), `masked-svc-selector-clear` (CPSR `0x93`, selector `0`) and `masked-svc-selector-set` (CPSR `0x93`, selector `1`). All are ARM SVC, not IRQ mode. The receipt records initial and caller-exit CPSR/selector values before the probes normalize to CPSR `0x13` and selector `0`; it records that separate query context too. The selected vector and engine routines are original bytes; locks start uncontended, sender/receiver wait lists are empty, logging is disabled and no errno-table entry matches.
+
+The caller selects its enqueue through original `0x0004cbd8`, the vector word at `0x4004dc28` (`+0x148`): it returns selector `0x400545a4` nonzero, so a zero selector calls `+0xac` (`0x00049308`) and a nonzero selector calls `+0xb0` (`0x00049528`). `0x0004cc00` at `+0x14c` reads CPSR.I and is not called. `masked-svc-selector-clear` therefore enters the selector-zero enqueue, and full occupancy returns `-50` from the refused ring insert as in `unmasked-svc-selector-clear`; no selected context returns `-25` from the caller. In the two masked contexts the caller exits with I set, so the failed-enqueue release `0x0004bab8` refuses before touching the pool and the next allocation is `-50`.
+
+The observed four-case matrix is in the [file-worker boundary report](../reports/named-recipe-reach.md#68-file-worker-failure-boundary), recorded as [`E-XM1-QUEUE-CALLER-BOUNDARY-150`](../docs/evidence.jsonl).
+
+All four cases return `-50` from the original nonblocking consumer both after draining and after the allocator probe, in the separate query context CPSR `0x13` / selector `0`. No extra release of drained blocks precedes that allocator probe. All 21 memory/state fixtures complete: nine execution controls and twelve refusals, with the recorded pre/post state unchanged for each refusal. These finite observations do not establish stock occupancy, a waiting-receiver handoff or future delivery exclusion.
+
+Every original span the selected closure reaches is declared before execution, including `0x0004cbd8`. That closure is the empty wait lists, uncontended locks, disabled logging with no errno match, and a consistent pool item; the wait-list, notification and logging-ring callees reached only outside those fixture cells are undeclared, so the worker refuses them before execution rather than substituting a result.
+
+CP14 identity `0x4003` is an explicit unmeasured fixture input: executed `MRC p14` at `0x000427b8` compares it with `0x4003` to select engine zero. The fixture supplies no silicon identity evidence. CPU1 is fixed at a masked-SVC ROM `B .` loop and checked before and after every aggregate instruction. No interrupt delivery, peripheral behavior or competing writer is modeled.
+
+Before every aggregate single-instruction `Machine::run(1)`, the worker validates CPU0's instruction, direct/computed targets and all admitted memory effects against closed executable/read-write domains. It refuses unknown forms and peripherals before execution. The existing R4F guard remains armed after all code writes. Each call is capped at 100,000 aggregate instructions or two seconds, and each native child at twenty seconds; stock spinlocks and wait paths remain unbounded code. The finite drained-pointer result cannot establish scheduler progress, all-context ownership or delivery absence under other writers. Issues #16 and #49 retain those acceptance requirements.
+
 # Bounded C native-function harness
 
 The runner uses Unicorn's C API and a closed Cortex-R5F ARM/little-endian profile for synthetic and admitted stock cases. Unicorn has no Cortex-R4; R5F is its closest model to the ARMv7-R, PMSAv7, VFPv3-D16 core inferred for the X-M1 in [E-CPU-PROFILE](../reports/firmware-extraction.md#cpu-profile). Nothing may depend on R5F-only behavior ([rule](../docs/principles.md#scope-and-evidence)); the runner rejects A32 SDIV/UDIV, and coprocessor exclusion keeps R5F ID, MPU and TCM/cache registers out of reach. Synthetic fixtures supply no X-M1 behavior or ABI evidence. No camera is enumerated or opened. `unicorn-info.c` remains the smaller engine-initialization check. Follow [phase 3](../spec/03-phases-and-gates.md#3b-native-function-harness) and the [runtime contract](../spec/08-artifact-and-runtime-contracts.md). The implemented C engine boundary and retained host C models do not establish a general C policy; [current principles](../docs/principles.md#implementation-and-build) govern new implementation and migration.
