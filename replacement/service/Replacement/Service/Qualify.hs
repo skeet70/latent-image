@@ -55,12 +55,14 @@ import qualified Data.ByteString.Char8 as BC
 import Data.Char (isHexDigit)
 import Data.List (find, nubBy)
 import Data.Maybe (fromMaybe, isNothing)
+import Data.Scientific (floatingOrInteger)
 import Data.Word (Word32, Word64, Word8)
 import Emulation.NativeCase (Region (..), loadCase)
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host hiding (sha256)
 import Numeric (readHex, showHex)
 import System.Directory (canonicalizePath)
+import System.Exit (ExitCode (..))
 
 -- | The states the stock probe defines.
 data RowState = Offered | Disabled | Hidden
@@ -238,21 +240,23 @@ requiredRegisters =
   ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10",
    "r11", "r12", "sp", "lr", "cpsr", "pc"]
 
-observe :: [(String, Word64, Int)] -> Value -> Either String Observation
-observe regions value = do
+observe :: ExitCode -> [(String, Word64, Int)] -> Value -> Either String Observation
+observe exit regions value = do
   status <- case get value "status" of
     String _ -> Right (str (get value "status"))
     _ -> Left "missing runner status"
   when (null status) (Left "empty runner status")
+  when (status == "returned" && exit /= ExitSuccess) (Left "status returned with nonzero process exit")
+  engineError <- parseEngineError (get value "unicorn_error")
+  when (status == "returned" && engineError /= 0) (Left "status returned with nonzero unicorn_error")
+  instructions <- requireNumber value "instructions"
+  total <- requireNumber value "memory_provenance_total"
   registers <- parseRegisters (get value "registers")
   memory <- parseMemory regions (get value "memory")
-  total <- requireNumber value "memory_provenance_total"
   provenance <- case get value "memory_provenance" of
     Array _ -> Right (list (get value "memory_provenance"))
     _ -> Left "missing memory provenance"
   writes <- parseProvenance provenance
-  instructions <- requireNumber value "instructions"
-  engineError <- parseEngineError (get value "unicorn_error")
   let truncated = total > 4096
   if truncated
     then when (length provenance /= 4096) (Left "provenance retention count mismatch")
@@ -272,26 +276,27 @@ requireNumber :: Value -> String -> Either String Word64
 requireNumber value key =
   case get value key of
     String _ -> maybe (Left ("malformed " ++ key)) Right (readDecimal (str (get value key)))
-    Number _ ->
-      let number = num (get value key)
-       in if number >= 0 && number <= fromIntegral (maxBound :: Word64)
-            then Right (fromIntegral number)
-            else Left ("malformed " ++ key)
     _ -> Left ("missing " ++ key)
 
 readDecimal :: String -> Maybe Word64
-readDecimal text = case reads text of
-  [(value, "")] -> Just value
+readDecimal text = case reads text :: [(Integer, String)] of
+  [(value, "")]
+    | value >= 0 && value <= 18446744073709551615 -> Just (fromIntegral value)
   _ -> Nothing
 
+exactInteger :: Value -> Either String Integer
+exactInteger value = case value of
+  Number number -> case floatingOrInteger number :: Either Double Integer of
+    Right exact -> Right exact
+    Left _ -> Left "fractional numeric field"
+  _ -> Left "numeric field required"
+
 parseEngineError :: Value -> Either String Word32
-parseEngineError value = case value of
-  Number _ ->
-    let number = num value
-     in if number >= 0 && number <= 4294967295
-          then Right (fromIntegral number)
-          else Left "malformed unicorn_error"
-  _ -> Left "missing unicorn_error"
+parseEngineError value = do
+  number <- exactInteger value
+  if number >= 0 && number <= 4294967295
+    then Right (fromIntegral number)
+    else Left "unicorn_error out of range"
 
 parseRegisters :: Value -> Either String [(String, Word32)]
 parseRegisters value = case value of
@@ -329,11 +334,9 @@ parseProvenance entries = do
     address <- case parseWord32 (str (get entry "address")) of
       Just word -> Right (fromIntegral word :: Word64)
       Nothing -> Left "malformed provenance address"
-    size <- case get entry "size" of
-      Number _ -> case num (get entry "size") of
-        value | value >= 1 && value <= 8 -> Right (fromIntegral value)
-        _ -> Left "malformed provenance size"
-      _ -> Left "missing provenance size"
+    size <- do
+      exact <- exactInteger (get entry "size")
+      if exact >= 1 && exact <= 8 then Right (fromIntegral exact) else Left "provenance size out of range"
     pure (kind, address, size)
   pure [(address, size) | (True, address, size) <- parsed]
 
@@ -549,7 +552,7 @@ runServiceCase runner path = do
           let limits = get caseValue "limits"
               wall = num (get limits "wall_ms")
               timeout = fromIntegral (wall * 1000000 + 2000000) :: Int
-          (timed, _exit, out, err) <- runBounded timeout (8 * 1024 * 1024) executable [] wire
+          (timed, exit, out, err) <- runBounded timeout (8 * 1024 * 1024) executable [] wire
           let baseReport =
                 merge
                   (obj
@@ -590,7 +593,7 @@ runServiceCase runner path = do
                         , merge (invalidResult "wire_version is not 1") [("id", get caseValue "id"), ("status", s "blocked")]
                         )
                   | otherwise ->
-                      case observe (regionInfo regions) value of
+                      case observe exit (regionInfo regions) value of
                         Left message ->
                           pure
                             ( merge baseReport

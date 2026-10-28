@@ -41,6 +41,7 @@ haskell_library(
         "//host:bytestring",
         "//host:directory",
         "//host:host-support",
+        "//host:scientific",
     ],
 )
 

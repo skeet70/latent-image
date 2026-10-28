@@ -11,7 +11,7 @@ import Data.String (fromString)
 import Data.Word (Word32, Word64)
 import FujiAF.Host
 import Replacement.Service.Qualify
-import System.Exit (exitFailure)
+import System.Exit (ExitCode (..), exitFailure)
 
 main :: IO ()
 main = do
@@ -127,22 +127,31 @@ parser :: IO ()
 parser = do
   let regions = [("casebuf", 0x009a0000, 4)]
       valid = runnerValue
-  check "valid output parses" (case observe regions valid of
+  check "valid output parses" (case observe ExitSuccess regions valid of
     Right observation -> observationStatus observation == "returned" && lookup "r7" (observationRegisters observation) == Just 0x7d7d7d7d
     Left _ -> False)
-  check "missing status is refused" (case observe regions (without "status") of
+  check "missing status is refused" (case observe ExitSuccess regions (without "status") of
     Left message -> "missing runner status" `isInfix` message
     Right _ -> False)
-  check "missing register is refused" (case observe regions (withRegisters (filter ((/= "r7") . fst) allRegisters)) of
+  check "returned with a nonzero exit is refused" (case observe (ExitFailure 1) regions valid of
+    Left message -> "nonzero process exit" `isInfix` message
+    Right _ -> False)
+  check "returned with a nonzero engine error is refused" (case observe ExitSuccess regions (set "unicorn_error" (n 1) runnerValue) of
+    Left message -> "nonzero unicorn_error" `isInfix` message
+    Right _ -> False)
+  check "a numeric provenance total is refused" (case observe ExitSuccess regions (set "memory_provenance_total" (n 1) runnerValue) of
+    Left message -> "missing memory_provenance_total" `isInfix` message
+    Right _ -> False)
+  check "missing register is refused" (case observe ExitSuccess regions (withRegisters (filter ((/= "r7") . fst) allRegisters)) of
     Left message -> "missing registers" `isInfix` message
     Right _ -> False)
-  check "malformed memory is refused" (case observe regions (withMemory [("0x009a0000", "zz")]) of
+  check "malformed memory is refused" (case observe ExitSuccess regions (withMemory [("0x009a0000", "zz")]) of
     Left message -> "malformed bytes" `isInfix` message
     Right _ -> False)
-  check "provenance count mismatch is refused" (case observe regions (setProvenance "2" (provenanceEntry 0x009a0000)) of
+  check "provenance count mismatch is refused" (case observe ExitSuccess regions (setProvenance "2" (provenanceEntry 0x009a0000)) of
     Left message -> "provenance count mismatch" `isInfix` message
     Right _ -> False)
-  check "truncated provenance is not complete" (case observe regions (setProvenance "4097" (arr (replicate 4096 (provenanceEntry 0x009a0000)))) of
+  check "truncated provenance is not complete" (case observe ExitSuccess regions (setProvenance "4097" (arr (replicate 4096 (provenanceEntry 0x009a0000)))) of
     Right observation -> observationWrites observation == Nothing && observationProvenanceTotal observation == 4097
     Left _ -> False)
 
