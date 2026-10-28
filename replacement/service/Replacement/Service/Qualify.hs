@@ -154,7 +154,10 @@ serviceCasebufFill :: Word8
 serviceCasebufFill = 0xa5
 
 serviceCasebufInitial :: B.ByteString
-serviceCasebufInitial = B.replicate serviceCasebufSize serviceCasebufFill
+serviceCasebufInitial =
+  B.replicate serviceStackOffset 0
+    <> B.replicate serviceStackSize serviceCasebufFill
+    <> B.replicate (serviceCasebufSize - serviceStackOffset - serviceStackSize) 0
 
 serviceSeeds :: [(String, Word32)]
 serviceSeeds =
