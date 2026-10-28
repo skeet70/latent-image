@@ -4,6 +4,7 @@ module FujiAF.ConsoleStore
   ( Entry(..), Store(..), Input(..), RecordType(..), ThreadId(..), MessageCode(..)
   , Slot(..), SlotCount(..), Tick(..), Argument(..), Parameter(..), parseInput, parseThread
   , loadStore, hexRun, ascii, typeByte, word16le
+  , ErrorPayload(..), ErrorCategory(..), ErrorCode(..)
   ) where
 
 import Control.Monad (forM, unless)
@@ -25,8 +26,11 @@ newtype MessageCode = MessageCode Word16 deriving (Eq, Ord, Show, Num, Bits, Pri
 newtype Parameter = Parameter Word16 deriving (Eq, Ord, Show, PrintfArg)
 newtype Tick = Tick Word32 deriving (Eq, Ord, Show, Num, Enum, PrintfArg)
 newtype Argument = Argument Word32 deriving (Eq, Ord, Show, PrintfArg)
+newtype ErrorCategory = ErrorCategory Word32 deriving (Eq, Ord, Show, PrintfArg)
+newtype ErrorCode = ErrorCode Word32 deriving (Eq, Ord, Show, PrintfArg)
+data ErrorPayload = ErrorPayload !ErrorCategory !ErrorCode deriving (Eq, Show)
 
-data RecordType = Message | Marker | Failure | Retained | Unknown Word8 deriving (Eq, Ord, Show)
+data RecordType = Message | Marker | Failure | Retained | ErrorReport | Unknown Word8 deriving (Eq, Ord, Show)
 data Input = StoreFile FilePath | HighKnownFile FilePath | WindowDirectory FilePath
 
 data Entry = Entry
@@ -37,6 +41,7 @@ data Entry = Entry
   , enCode :: !MessageCode
   , enParam :: !Parameter
   , enTick :: !(Maybe Tick)
+  , enErrorPayload :: !(Maybe ErrorPayload)
   , enRaw :: !B.ByteString
   }
 data Store = Store { capacity :: !SlotCount, nextIndex :: !Slot, entries :: [Entry] }
@@ -62,6 +67,7 @@ typeByte Message = 0x0f
 typeByte Marker = 0x72
 typeByte Failure = 0x09
 typeByte Retained = 0x71
+typeByte ErrorReport = 0x81
 typeByte (Unknown value) = value
 
 recordType :: Word8 -> RecordType
@@ -69,6 +75,7 @@ recordType 0x0f = Message
 recordType 0x72 = Marker
 recordType 0x09 = Failure
 recordType 0x71 = Retained
+recordType 0x81 = ErrorReport
 recordType value = Unknown value
 
 hexRun :: B.ByteString -> String
@@ -105,10 +112,14 @@ loadStore source = do
               Marker -> Just (word32le raw 4)
               Failure -> Just (word32le raw 8)
               Retained -> Just (word32le raw 4)
+              ErrorReport -> Just (word32le raw 4)
               Unknown _ -> Nothing
         in Entry (Slot slot) kind (ThreadId (B.index raw 1)) (Argument (word32le raw 4))
              (MessageCode (if kind == Message then fromIntegral (packed `shiftR` 16) else 0))
              (Parameter (if kind == Message then fromIntegral (packed .&. 0xffff) else 0))
-             (Tick <$> tick) raw
+             (Tick <$> tick)
+             (if kind == ErrorReport
+                then Just (ErrorPayload (ErrorCategory (word32le raw 8)) (ErrorCode (word32le raw 12)))
+                else Nothing) raw
       occupied = [decode slot | slot <- [0..complete-1], B.index bytes (0x34+slot*16) /= 0]
   pure (Store (SlotCount cap) (Slot index) occupied)

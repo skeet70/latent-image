@@ -75,7 +75,7 @@ Same gate enable, readback and restore sequence as `probe-ownership` (the `0xf7`
 | 0 | `0x0096bd20` | 256 | 2 | the class descriptor table and adjacent objects: the descriptor pair at idx 0/1 and 62 words of the four other classes (see the Window-0 binding section) |
 | 1 | `0x00a0f86c` | 4 | 1 | the allocation-search cursor cell (also sampled in phase 2) |
 
-Phase 2 windows: the cursor cell `0x00a0f86c`, 4 B (1 request), plus per distinct class descriptor word `p`: `p+0x60`, 32 B (covers `+0x64` check and `+0x7c` wait) and `p+0x140`, 40 B (covers `+0x148` release and `+0x164` create), one request each.
+Phase 2 windows: the cursor cell `0x00a0f86c`, 4 B (1 request), plus per distinct class descriptor word `p`: `p+0x60`, 32 B (covers `+0x64` check and `+0x7c` wait) and `p+0x140`, 40 B (covers `+0x148` and `+0x164` create), one request each.
 
 ## Offline rehearse
 

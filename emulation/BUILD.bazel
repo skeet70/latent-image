@@ -57,6 +57,22 @@ haskell_test(
     ],
 )
 
+haskell_binary(
+    name = "queue-boundary",
+    srcs = ["QueueBoundary.hs"],
+    args = ["$(rlocationpath @lab_fujimod_xm1//:bin/fujimod-xm1-queue-boundary)"],
+    data = ["@lab_fujimod_xm1//:bin/fujimod-xm1-queue-boundary"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base",
+        "//host:aeson",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)
+
 filegroup(
     name = "xm1-upstream",
     srcs = glob(["xm1-upstream/**"]),
