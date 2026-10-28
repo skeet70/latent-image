@@ -88,6 +88,7 @@ data ServiceRow = ServiceRow
   , serviceRowExpected :: RowState
   , serviceRowProvenance :: String
   }
+  deriving (Eq, Show)
 
 -- | The synchronous service lifetime: no host operation, no retained
 -- completion and no post-return callback.
