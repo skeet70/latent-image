@@ -134,21 +134,24 @@ candidateQualification receipt = do
           Left problem -> pure (Just ("unreadable e2e-segments.json: " ++ problem))
           Right [] -> pure (Just "only judged segments can qualify a candidate")
           Right receipts -> do
-            let names = [T.unpack (segmentNameText (segmentReceiptName entry)) | entry <- receipts]
+            let names = map segmentReceiptName receipts
             if length names /= length (nub names) then pure (Just "duplicate segment names cannot qualify a candidate")
-            else case [name | (entry, name) <- zip receipts names, SegmentFailed _ <- [segmentReceiptResult entry]] of
-              failed : _ -> pure (Just ("failed segment cannot qualify a candidate: " ++ failed))
+            else case [(entry, segmentReceiptName entry) | entry <- receipts, SegmentFailed _ <- [segmentReceiptResult entry]] of
+              (entry, name) : _ -> case segmentReceiptResult entry of
+                SegmentFailed text -> pure (Just ("failed segment cannot qualify a candidate: "
+                  ++ T.unpack (segmentNameText name) ++ ": " ++ T.unpack text))
+                SegmentPassed -> pure (Just "failed segment cannot qualify a candidate")
               [] -> do
                 problems <- mapM segment names
                 pure (firstProblem problems)
     else if not flat then pure (Just "no e2e qualification record") else single (receipt </> "e2e-result.json")
   where
     segment name = do
-      let directory = receipt </> ("segment-" ++ name)
+      let directory = receipt </> ("segment-" ++ T.unpack (segmentNameText name))
       control <- doesFileExist (directory </> "e2e-control.json")
-      if control then pure (Just ("control receipt in segment-" ++ name ++ " cannot qualify a candidate")) else do
+      if control then pure (Just ("control receipt in segment-" ++ T.unpack (segmentNameText name) ++ " cannot qualify a candidate")) else do
         present <- doesFileExist (directory </> "e2e-result.json")
-        if not present then pure (Just ("segment-" ++ name ++ " has no e2e result")) else single (directory </> "e2e-result.json")
+        if not present then pure (Just ("segment-" ++ T.unpack (segmentNameText name) ++ " has no e2e result")) else single (directory </> "e2e-result.json")
     single path = do
       parsed <- eitherDecodeStrict' <$> B.readFile path
       pure $ case parsed of

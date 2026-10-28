@@ -206,7 +206,7 @@ elapsedSecondsValue :: ElapsedSeconds -> Double
 elapsedSecondsValue (ElapsedSeconds value) = value
 
 instance ToJSON ElapsedSeconds where
-  toJSON = Number . toRealFloat . toRational . elapsedSecondsValue
+  toJSON = toJSON . elapsedSecondsValue
 
 instance FromJSON ElapsedSeconds where
   parseJSON = withScientific "elapsed seconds" (either fail pure . elapsedSeconds . toRealFloat)
