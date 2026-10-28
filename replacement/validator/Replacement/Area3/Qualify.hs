@@ -568,7 +568,7 @@ runAnchors contract anchors runner = forM anchors $ \anchor -> do
         Right observation ->
           AnchorResult
             (loadedId anchor)
-            (forceCheck (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions) observation))
+            (force (checkCase (expectationFromCase (effectScratchRegions (contractEffects contract)) caseValue regions) observation))
             (force existing)
             (Just raw)
 
