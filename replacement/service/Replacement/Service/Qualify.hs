@@ -63,6 +63,7 @@ import FujiAF.Host hiding (sha256)
 import Numeric (readHex, showHex)
 import System.Directory (canonicalizePath)
 import System.Exit (ExitCode (..))
+import System.FilePath (takeDirectory, takeFileName)
 
 -- | The states the stock probe defines.
 data RowState = Offered | Disabled | Hidden
@@ -543,12 +544,13 @@ mutateWrite observation address size =
 
 runServiceCase :: FilePath -> FilePath -> IO (Value, Value)
 runServiceCase runner path = do
+  let caseId = takeFileName (takeDirectory path)
   loaded <- try (loadCase path)
   case loaded of
-    Left (message :: IOException) -> pure (invalidCase (show message), invalidResult (show message))
+    Left (message :: IOException) -> pure (invalidCase caseId (show message), invalidResult caseId (show message))
     Right (caseValue, regions, wire, identity) ->
       case expectationFromCase caseValue regions of
-        Left message -> pure (invalidCase message, invalidResult message)
+        Left message -> pure (invalidCase caseId message, invalidResult caseId message)
         Right expectation -> do
           executable <- canonicalizePath runner
           digest <- sha256Hex . sha256 <$> B.readFile executable
@@ -571,7 +573,7 @@ runServiceCase runner path = do
                   [ ("status", s "host_timeout")
                   , ("runner_stdout", s (BC.unpack out))
                   ]
-              , merge (invalidResult "host timeout") [("id", get caseValue "id"), ("status", s "blocked")]
+              , invalidResult caseId "host timeout"
               )
             else do
               parsed <- try (jsonRead out)
@@ -583,7 +585,7 @@ runServiceCase runner path = do
                         , ("reason", s (show message))
                         , ("runner_stdout", s (BC.unpack out))
                         ]
-                    , merge (invalidResult (show message)) [("id", get caseValue "id"), ("status", s "blocked")]
+                    , invalidResult caseId (show message)
                     )
                 Right value
                   | get value "wire_version" /= n 1 ->
@@ -593,7 +595,7 @@ runServiceCase runner path = do
                             , ("reason", s "wire_version is not 1")
                             , ("runner", value)
                             ]
-                        , merge (invalidResult "wire_version is not 1") [("id", get caseValue "id"), ("status", s "blocked")]
+                        , invalidResult caseId "wire_version is not 1"
                         )
                   | otherwise ->
                       case observe exit (regionInfo regions) value of
@@ -604,7 +606,7 @@ runServiceCase runner path = do
                                 , ("reason", s message)
                                 , ("runner", value)
                                 ]
-                            , merge (invalidResult message) [("id", get caseValue "id"), ("status", s "blocked")]
+                            , invalidResult caseId message
                             )
                         Right observation -> do
                           let check = checkServiceCase expectation observation
@@ -641,10 +643,10 @@ runServiceCase runner path = do
   where
     isJustWrites (Just _) = True
     isJustWrites Nothing = False
-    invalidCase message =
-      obj [("schema_version", n 1), ("status", s "invalid_case"), ("reason", s message)]
-    invalidResult message =
-      obj [("status", s "blocked"), ("mismatches", arr [s message])]
+    invalidCase caseId message =
+      obj [("schema_version", n 1), ("case_id", s caseId), ("status", s "invalid_case"), ("reason", s message)]
+    invalidResult caseId message =
+      obj [("id", s caseId), ("status", s "blocked"), ("mismatches", arr [s message])]
 
 mutantChecks :: Expectation -> Observation -> [Value]
 mutantChecks expectation observation =
