@@ -365,11 +365,13 @@ haskell_test(
     name = "fujimod-xm1-tests",
     size = "small",
     srcs = ["FujimodXm1Tests.hs"],
-    args = ["$(locations @lab_fujimod_xm1//:test-harnesses)"],
+    args = ["$(rootpath @lab_fujimod_xm1//:test-manifest)"],
     data = ["@lab_fujimod_xm1//:test-harnesses"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         "//host:base",
+        "//host:directory",
+        "//host:filepath",
         "//host:process",
     ],
 )

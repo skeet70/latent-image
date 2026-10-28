@@ -1,15 +1,22 @@
 module Main (main) where
 
-import Control.Monad (unless)
+import Control.Monad (filterM, forM, unless)
+import Data.List (sort)
+import System.Directory (doesFileExist, listDirectory)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitFailure)
+import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.Process (CreateProcess (..), createProcess, proc, waitForProcess)
 
 main :: IO ()
 main = do
-  harnesses <- getArgs
+  [manifest] <- getArgs
+  let directory = takeDirectory manifest
+  entries <- listDirectory directory
+  harnesses <- filterM (doesFileExist . (directory </>)) =<< pure (sort (filter (/= takeFileName manifest) entries))
   unless (not (null harnesses)) (fail "no compiled X-M1 test harnesses were supplied")
-  codes <- mapM run harnesses
+  codes <- forM harnesses (
+ame -> run (directory </> name))
   unless (all (== ExitSuccess) codes) exitFailure
   where
     run harness = do

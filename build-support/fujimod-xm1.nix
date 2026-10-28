@@ -46,7 +46,10 @@ EOF
     printf '%s\n' "$out" > $out/share/fujimod-xm1/store-path
     mkdir -p $out/libexec/fujimod-xm1-tests
     ${pkgs.jq}/bin/jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null) | .executable' test-artifacts.json \
-      | while read -r executable; do cp "$executable" "$out/libexec/fujimod-xm1-tests/"; done
-    test -n "$(ls -A $out/libexec/fujimod-xm1-tests)"
+      | while read -r executable; do
+          cp "$executable" "$out/libexec/fujimod-xm1-tests/"
+          basename "$executable" >> "$out/libexec/fujimod-xm1-tests/manifest"
+        done
+    test -s $out/libexec/fujimod-xm1-tests/manifest
   '';
 }
