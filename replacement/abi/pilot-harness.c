@@ -15,6 +15,7 @@ extern uint32_t xm1_pilot_pair_sum(Pair);
 extern Pair xm1_pilot_pair_swap(Pair);
 extern uint32_t xm1_pilot_checksum(const uint8_t *, uint32_t);
 extern void xm1_pilot_store(uint32_t *, uint32_t);
+extern uint32_t xm1_pilot_extra(uint32_t, uint32_t);
 extern uint32_t xm1_pilot_preserve_pressure(uint32_t, uint32_t, uint32_t);
 
 static volatile uint32_t *const results = (volatile uint32_t *)0x3000u;
@@ -64,6 +65,10 @@ __attribute__((noinline, used)) uint32_t pilot_run(void)
 
     xm1_pilot_store((uint32_t *)(results + 13), 0xdeadbeefu);
     status |= results[13] != 0xdeadbeefu;
+
+    value32 = xm1_pilot_extra(3u, 5u);
+    results[17] = value32;
+    status |= value32 != 0x5a5a5a69u;
 
     value32 = xm1_pilot_preserve_pressure(0x12345678u, 0x9abcdef0u, 0x0f0f0f0fu);
     results[14] = value32;

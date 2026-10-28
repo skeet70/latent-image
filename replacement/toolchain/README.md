@@ -17,7 +17,7 @@ The `devenv.lock` revision fixes rustc; the facts file fixes the core and compil
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 ```
 
-`xm1_rust_staticlib(name, src, crate_name, edition, opt_level, rustc_flags)` compiles one crate root with:
+`xm1_rust_staticlib(name, src, crate_name, edition, opt_level, rustc_flags, data)` compiles one crate root with:
 
 ```sh
 rustc --target=armv7r-none-eabi --crate-type=staticlib \
@@ -36,7 +36,9 @@ The linker script owns all load addresses; the link recipe adds `-nostdlib -stat
 
 ## Crates
 
-Each crate supplies its own `#[panic_handler]`; the macros do not inject one. The pilot uses a `loop {}` handler and `panic = "abort"`, so no unwinding runtime is linked. A crate that needs a memory intrinsic gets it from the staticlib's `compiler_builtins` members.
+`data` stages additional module files at their package paths; `mod` names in the crate root resolve against them. The pilot's `pilot_extra.rs` module exercises that path.
+
+Each crate supplies its own `#[panic_handler]`; the macros do not inject one. The pilot handler calls an assembly halt loop, with `panic = "abort"`, so no unwinding runtime is linked. A final linked artifact must contain exactly one Rust staticlib: two staticlibs each define `rust_begin_unwind`, and LLD rejects the duplicate. Compose modules into one crate root instead. A crate that needs a memory intrinsic gets it from the staticlib's `compiler_builtins` members.
 
 ## Verification
 

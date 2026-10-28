@@ -56,9 +56,14 @@ def xm1_rust_staticlib(
         edition = "2021",
         opt_level = "z",
         rustc_flags = [],
+        data = [],
         testonly = False,
         visibility = None):
-    """Compiles one no_std crate root to a staticlib for armv7r-none-eabi."""
+    """Compiles one no_std crate root to a staticlib for armv7r-none-eabi.
+
+    `data` stages additional module files at their package paths; `mod` names in
+    the crate root resolve against them.
+    """
     if crate_name == None:
         crate_name = name.replace("-", "_")
     cmd = " ".join(
@@ -77,7 +82,7 @@ def xm1_rust_staticlib(
     )
     native.genrule(
         name = name,
-        srcs = [src],
+        srcs = [src] + data,
         outs = [name + ".a"],
         cmd = cmd,
         message = "Cross-compiling %s for armv7r-none-eabi" % crate_name,

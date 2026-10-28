@@ -76,3 +76,10 @@ xm1_abi_probe:
     bx lr
     .ltorg
     .size xm1_abi_probe, .-xm1_abi_probe
+
+    .section .text.xm1_panic_loop,"ax",%progbits
+    .global xm1_panic_loop
+    .type xm1_panic_loop,%function
+xm1_panic_loop:
+    b xm1_panic_loop
+    .size xm1_panic_loop, .-xm1_panic_loop

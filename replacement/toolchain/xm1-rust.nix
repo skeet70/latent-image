@@ -1,4 +1,4 @@
-{ pkgs ? import <nixpkgs> { config = { }; overlays = [ ]; } }:
+{ pkgs ? import ../../build-support/nixpkgs.nix { config = { }; overlays = [ ]; } }:
 # The pinned rustc ships no armv7r-none-eabi core; core and compiler_builtins
 # are built from its matching rustLibSrc and installed beside the host std.
 let

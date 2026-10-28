@@ -3,7 +3,11 @@
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
+    unsafe { xm1_panic_loop() }
+}
+
+extern "C" {
+    fn xm1_panic_loop() -> !;
 }
 
 #[repr(C)]
@@ -69,8 +73,10 @@ pub extern "C" fn xm1_pilot_pair_swap(p: Pair) -> Pair {
     }
 }
 
+/// # Safety
+/// `bytes` must be readable for `len` bytes.
 #[no_mangle]
-pub extern "C" fn xm1_pilot_checksum(bytes: *const u8, len: u32) -> u32 {
+pub unsafe extern "C" fn xm1_pilot_checksum(bytes: *const u8, len: u32) -> u32 {
     let mut hash = 0x811c_9dc5u32;
     let mut index = 0u32;
     while index < len {
@@ -81,10 +87,14 @@ pub extern "C" fn xm1_pilot_checksum(bytes: *const u8, len: u32) -> u32 {
     hash
 }
 
+/// # Safety
+/// `out` must be writable for one `u32`.
 #[no_mangle]
-pub extern "C" fn xm1_pilot_store(out: *mut u32, value: u32) {
+pub unsafe extern "C" fn xm1_pilot_store(out: *mut u32, value: u32) {
     unsafe { core::ptr::write_volatile(out, value) }
 }
+
+mod pilot_extra;
 
 #[inline(never)]
 fn mix(value: u32) -> u32 {
