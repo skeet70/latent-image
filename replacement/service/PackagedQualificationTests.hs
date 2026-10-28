@@ -222,12 +222,13 @@ archiveBytes = BC.pack "bank-archive"
 factsBytes :: B.ByteString
 factsBytes = BC.pack "build-facts"
 
-datSha, kernelSha, runtimeSha, archiveSha, factsSha :: String
+datSha, kernelSha, runtimeSha, archiveSha, factsSha, stockSha :: String
 datSha = digest datBytes
 kernelSha = digest kernelBytes
 runtimeSha = digest runtime
 archiveSha = digest archiveBytes
 factsSha = digest factsBytes
+stockSha = digest (BC.pack "stock-reference")
 
 digest :: B.ByteString -> String
 digest = sha256Hex . sha256
@@ -272,6 +273,7 @@ packageManifest :: Value
 packageManifest =
   object
     [ "schema" .= ("recipe-executable-package-1" :: String)
+    , "stock_sha256" .= stockSha
     , "firmware_sha256" .= datSha
     , "executable_sha256" .= kernelSha
     , "executable_start" .= ("0x00be1f00" :: String)
@@ -303,7 +305,7 @@ e2eResult variant =
     , "emulator_start" .= object
         [ "inputs" .= object
             [ "inputs" .= object
-                [ "installed_dat" .= datSha
+                [ "installed_dat" .= stockSha
                 , "card_present" .= False
                 ]
             ]

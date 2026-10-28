@@ -313,6 +313,7 @@ instance FromJSON PackageInput where
 
 data PackageManifest = PackageManifest
   { packageSchema :: PackageSchema
+  , packageStockSha :: Digest
   , packageFirmwareSha :: Digest
   , packageExecutableSha :: Digest
   , packageExecutableStart :: TraceAddress
@@ -324,6 +325,7 @@ instance FromJSON PackageManifest where
   parseJSON = withObject "package manifest" $ \manifest ->
     PackageManifest
       <$> manifest .: "schema"
+      <*> manifest .: "stock_sha256"
       <*> manifest .: "firmware_sha256"
       <*> manifest .: "executable_sha256"
       <*> (manifest .: "executable_start" >>= parseAddressText)
@@ -359,6 +361,7 @@ data OwnedSequence = OwnedSequence
 
 data PackagedIdentities = PackagedIdentities
   { packagedDatSha :: Digest
+  , packagedStockSha :: Digest
   , packagedArchiveSha :: Digest
   , packagedFactsSha :: Digest
   , packagedExecutableSha :: Digest
@@ -417,6 +420,7 @@ qualifyPackaged (PackagedInputs receipt packageDirectory) = do
                           symbolsDigest = trustedDigest (sha256Hex (sha256 symbolsBytes))
                           identities = PackagedIdentities
                             { packagedDatSha = actualDat
+                            , packagedStockSha = packageStockSha package
                             , packagedArchiveSha = actualArchive
                             , packagedFactsSha = actualFacts
                             , packagedExecutableSha = packageExecutableSha package
@@ -491,9 +495,9 @@ sourceIdentityKeyText ToolchainFactsKey = "rust_toolchain_replacement_bank"
 
 identityProblems :: PackageManifest -> RamPushManifest -> E2E -> Digest -> Digest -> Digest -> Digest -> Digest -> [String]
 identityProblems package manifest result actualDat actualKernel actualArchive actualFacts symbolsDigest =
-  [ "package DAT digest differs from recipe-complete.DAT" | actualDat /= packageFirmwareSha package ]
+  [ "package candidate DAT digest differs from recipe-complete.DAT" | actualDat /= packageFirmwareSha package ]
     ++ [ "package kernel digest differs from kernel/kernel.bin" | actualKernel /= packageExecutableSha package ]
-    ++ [ "package firmware digest differs from the emulator start input" | packageFirmwareSha package /= startInstalledDat (e2eStart result) ]
+    ++ [ "package stock reference digest differs from the emulator start input" | packageStockSha package /= startInstalledDat (e2eStart result) ]
     ++ [ "emulator start omits card_present" | startCardPresent (e2eStart result) == Nothing ]
     ++ [ "emulator start is not the cardless route" | startCardPresent (e2eStart result) /= Just False ]
     ++ [ "package has no unique bank.a input" | length (inputsNamed "bank.a" package) /= 1 ]
@@ -850,6 +854,7 @@ packagedReportValue report =
       ]
     identitiesValue identities = obj
       [ ("package_dat_sha256", s (digestText (packagedDatSha identities)))
+      , ("package_stock_sha256", s (digestText (packagedStockSha identities)))
       , ("package_archive_sha256", s (digestText (packagedArchiveSha identities)))
       , ("package_facts_sha256", s (digestText (packagedFactsSha identities)))
       , ("package_executable_sha256", s (digestText (packagedExecutableSha identities)))
