@@ -370,7 +370,6 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         "//host:base",
-        "//host:directory",
         "//host:filepath",
         "//host:process",
     ],
