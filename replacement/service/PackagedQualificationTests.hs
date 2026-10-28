@@ -95,10 +95,8 @@ load root variant = do
   privateWriteLazy (receipt </> "e2e-result.json") (encode (e2eResult variant))
   when (variantControlFile variant) $
     privateWriteLazy (receipt </> "e2e-control.json") (encode (object ["outcome" .= ("control-refused" :: String)]))
-  referenceOutcome <- loadReferenceDat (root </> "reference.DAT")
-  case referenceOutcome of
-    Left problem -> pure (Left problem)
-    Right reference -> qualifyPackaged (PackagedInputs receipt package reference)
+  reference <- loadReferenceDat (root </> "reference.DAT")
+  qualifyPackaged (PackagedInputs receipt package reference)
 
 privateWrite :: FilePath -> B.ByteString -> IO ()
 privateWrite path bytes = B.writeFile path bytes >> setFileMode path 0o600

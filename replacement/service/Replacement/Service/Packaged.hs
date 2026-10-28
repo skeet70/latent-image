@@ -16,7 +16,7 @@ module Replacement.Service.Packaged
   , packagedReportValue
   ) where
 
-import Control.Exception (IOException, displayException, try)
+import Control.Exception (IOException, try)
 import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', withObject, withText, (.:), (.:?), (.!=))
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as B
@@ -53,12 +53,8 @@ newtype ReferenceDat = ReferenceDat
   { referenceDatDigest :: Digest
   } deriving (Eq, Show)
 
-loadReferenceDat :: FilePath -> IO (Either String ReferenceDat)
-loadReferenceDat path = do
-  outcome <- try (digestFile path) :: IO (Either IOException Digest)
-  pure (case outcome of
-    Left problem -> Left ("boot/install reference: " ++ displayException problem)
-    Right digest -> Right (ReferenceDat digest))
+loadReferenceDat :: FilePath -> IO ReferenceDat
+loadReferenceDat path = ReferenceDat <$> digestFile path
 
 instance FromJSON Digest where
   parseJSON = withText "digest" (either fail pure . parseDigest . T.unpack)
