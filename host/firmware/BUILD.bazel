@@ -366,6 +366,8 @@ haskell_binary(
         "$(rootpath @lab_llvm//:bin/llvm-objcopy)",
         "$(rootpath @lab_llvm//:bin/llvm-nm)",
         "$(rootpath @lab_llvm//:bin/llvm-objdump)",
+        "$(rootpath //replacement/bank:bank)",
+        "$(rootpath //replacement/bank:build-facts)",
     ],
     data = [
         ":apply-patch-set",
@@ -374,6 +376,8 @@ haskell_binary(
         ":rebuild-update",
         "//lz:fflzd",
         "//lz:lz-encode",
+        "//replacement/bank:bank",
+        "//replacement/bank:build-facts",
         "@lab_clang//:bin/clang",
         "@lab_lld//:bin/ld.lld",
         "@lab_llvm//:bin/llvm-nm",

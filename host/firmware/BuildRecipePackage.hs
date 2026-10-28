@@ -3,6 +3,8 @@
 -- the container chain, and writes recipe-complete.DAT with its manifests.
 --
 -- usage: build-recipe-package TOOL... OUT_DIR
+-- The tools include the bank's pinned Rust archive and the cross toolchain's
+-- build facts, both supplied by the Bazel target's runfiles.
 -- The leading tool paths come from the Bazel target's args; run it as
 -- `bazel run //host/firmware:build-recipe-package -- OUT_DIR`. STOCK, SPEC and
 -- D3_SPEC override the default inputs.
@@ -31,7 +33,7 @@ import System.Process (CreateProcess (..), StdStream (UseHandle), createProcess,
 
 data Tools = Tools
   { recipeBank, compiledRecipes, applyPatchSet, rebuildUpdate, lzEncode, fflzd :: FilePath
-  , clang, ldLld, objcopy, nm, objdump :: FilePath
+  , clang, ldLld, objcopy, nm, objdump, rustArchive, rustFacts :: FilePath
   }
 
 -- | An output directory under the host-only RC completion directory.
@@ -48,10 +50,10 @@ refuse message = hPutStrLn stderr message >> exitWith (ExitFailure 1)
 main :: IO ()
 main = do
   args <- getArgs
-  let (toolArgs, rest) = splitAt 11 args
+  let (toolArgs, rest) = splitAt 13 args
   tools <- mapM makeAbsolute toolArgs >>= \paths -> case paths of
-    [a, b, c, d, e, f, g, h, i, j, k] -> pure (Tools a b c d e f g h i j k)
-    _ -> refuse "build-recipe-package: the Bazel target supplies eleven tool paths"
+    [a, b, c, d, e, f, g, h, i, j, k, l, m] -> pure (Tools a b c d e f g h i j k l m)
+    _ -> refuse "build-recipe-package: the Bazel target supplies thirteen tool paths"
   out <- case rest of
     [dir] | not (null dir) -> pure dir
     _ -> refuse usage
@@ -61,7 +63,8 @@ main = do
   stock <- inputPath "STOCK" "private-data/firmware/x-m1-1.50/FWUP0002.DAT"
   spec <- inputPath "SPEC" "private-data/analysis/x-m1-1.50/recipes/bank-spec.json"
   d3Spec <- inputPath "D3_SPEC" "private-data/analysis/x-m1-1.50/recipes/d3-compiled.json"
-  forM_ ([stock, spec, d3Spec, id4, id5, id2] ++ kernelSources ++ fixedSources) $ \path -> do
+  forM_ ([stock, spec, d3Spec, id4, id5, id2, rustArchive tools, rustFacts tools]
+          ++ kernelSources ++ fixedSources) $ \path -> do
     present <- doesFileExist path
     unless present (refuse ("missing input: " ++ path))
   stockBytes <- B.readFile stock
@@ -84,7 +87,8 @@ id2 = "private-data/analysis/x-m1-1.50/filmsim/id2-00130000.bin"
 kernelSources :: [FilePath]
 kernelSources =
   [ "menu/recipe_bank_arm.S", "menu/recipe_bank_probe.c", "menu/recipe_bank_hook.c"
-  , "menu/recipe_bank_storage.c", "menu/recipe_bank_actions.c", "menu/recipe_bank_edit.c" ]
+  , "menu/recipe_bank_storage.c", "menu/recipe_bank_actions.c", "menu/recipe_bank_edit.c"
+  , "replacement/service/rb_service_stock.S" ]
 
 fixedSources :: [FilePath]
 fixedSources =
@@ -99,7 +103,10 @@ manifestSources =
   , "menu/recipe_bank_boot.ld", "menu/recipe_bank_arm.S", "menu/recipe_bank_probe.c"
   , "menu/recipe_bank_hook.c", "menu/recipe_bank_storage.c", "menu/recipe_bank_actions.c"
   , "menu/recipe_bank_edit.c", "menu/recipe_bank_fields.inc", "menu/recipe_bank_ui.h"
-  , "menu/recipe_bank_edit.h", "menu/recipe_bank_diagnostic.h" ]
+  , "menu/recipe_bank_edit.h", "menu/recipe_bank_diagnostic.h"
+  , "replacement/bank/lib.rs", "replacement/service/lib.rs"
+  , "replacement/service/rb_service_stock.S", "replacement/service/rb_service.h"
+  , "replacement/recipe_ui/src/lib.rs" ]
 
 build :: Tools -> OutDir -> FilePath -> FilePath -> FilePath -> Sha256 -> IO ()
 build t (OutDir out) stock spec d3Spec (Sha256 stockDigest) = do
@@ -112,11 +119,11 @@ build t (OutDir out) stock spec d3Spec (Sha256 stockDigest) = do
   objects <- forM kernelSources $ \src -> do
     let obj = kernel ++ "/" ++ takeBaseName src ++ ".o"
     if takeExtension src == ".c"
-      then cc (arm ++ free ++ ["-Oz", "-Wall", "-Wextra", "-DRB_NAME_RECORD=0x00beb784u", "-c", src, "-o", obj])
+      then cc (arm ++ free ++ ["-Oz", "-Wall", "-Wextra", "-I.", "-DRB_NAME_RECORD=0x00beb784u", "-c", src, "-o", obj])
       else cc (arm ++ ["-c", src, "-o", obj])
     pure obj
   cc (arm ++ link t ++ ["-Wl,-T,menu/recipe_bank.ld", "-Wl,--defsym=RB_BASE=0x00be1f00", "-Wl,--defsym=RB_CAPACITY=0x8300"]
-      ++ objects ++ ["-o", kernel ++ "/kernel.elf"])
+      ++ objects ++ [rustArchive t] ++ ["-o", kernel ++ "/kernel.elf"])
   run (objcopy t) ["-O", "binary", kernel ++ "/kernel.elf", kernel ++ "/kernel.bin"]
   run (objcopy t) ["-j", ".text", "-O", "binary", kernel ++ "/kernel.elf", kernel ++ "/kernel-text.bin"]
   runTo (kernel ++ "/kernel.syms") (nm t) ["--defined-only", "--print-size", "--numeric-sort", kernel ++ "/kernel.elf"]
@@ -155,7 +162,7 @@ build t (OutDir out) stock spec d3Spec (Sha256 stockDigest) = do
     , image ++ "/d3-boot.DAT", image ++ "/source-package.bin", firmware]
   Sha256 datDigest <- sha256 <$> B.readFile firmware
 
-  let pinned = [spec, d3Spec] ++ manifestSources
+  let pinned = [spec, d3Spec, rustArchive t, rustFacts t] ++ manifestSources
         ++ [ kernel ++ "/kernel.elf", boot ++ "/boot.elf", image ++ "/id4-final.bin"
            , image ++ "/id5-final.bin", image ++ "/source-package.bin" ]
   inputs <- forM pinned $ \path -> do
