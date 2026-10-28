@@ -98,7 +98,7 @@ data ServiceLifetime = ServiceLifetime
   }
   deriving (Eq, Show)
 
--- | The result contract's write policy.
+-- | Scratch spans and the final-byte proof the checker applies.
 data ServiceEffectPolicy = ServiceEffectPolicy
   { effectAllowedScratch :: [N.RegionId]
   , effectTransientRestores :: Bool
@@ -345,7 +345,6 @@ serviceContractValue =
         , ("property", n (fromIntegral (serviceRowProperty row)))
         , ("row", n (fromIntegral (serviceRowToken row)))
         , ("expected", n (fromIntegral (rowStateWord (serviceRowExpected row))))
-        , ("provenance", s (serviceRowProvenance row))
         ]
 
 serviceContractBytes :: B.ByteString
