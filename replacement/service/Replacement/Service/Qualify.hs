@@ -879,7 +879,7 @@ serviceQualificationReport results =
       [ "The contract digest binds rows, state domain, return and preserved registers, seeds, stack and transient spans, endpoints, lifetime, effect policy and mutant domain."
       , "The per-case mutant entries are checks injected into an observed case state; they are not separate candidate binaries."
       , "A test-only ARM write/restore mutant is executed by //replacement/service:qualification-tests through runServiceCase and the native runner; that test reports the executed refusal."
-      , "The native direct-row and packaged artifact runs remain pending compute; this report does not claim their results."
+      , "The direct-row results are this report's case data; packaged publication and teardown evidence is bound by its own receipt and is not claimed here."
       , "r11 is saved by the Rust prologue, so the public entry's preservation is asserted; a stock r11 clobber is not isolated from that save."
       ]
 
