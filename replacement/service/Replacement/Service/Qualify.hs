@@ -3,11 +3,9 @@
 -- | Native qualification for the retained row-availability service.
 --
 -- The direct cases enter the built ARM @rb_service_field_row_state@, the
--- assembly trampoline and the original stock @FUN_00d52684@. The consumer
--- separates the public result from the stack workspace: @casebuf[0x1e00..0x2000)@
--- is stack scratch, the stock table mirror is transient scratch, and every
--- other byte is immutable. Write provenance must be complete and confined to
--- those spans.
+-- assembly trampoline and the original stock @FUN_00d52684@. The shared
+-- observation parser separates the public result from the stack workspace;
+-- this module owns the service contract over it.
 module Replacement.Service.Qualify
   ( RowState (..)
   , rowStateWord
@@ -29,8 +27,6 @@ module Replacement.Service.Qualify
   , serviceInitialRegisters
   , serviceExpectedRegisters
   , isServiceCaseId
-  , Observation (..)
-  , observe
   , Expectation (..)
   , expectationFromCase
   , Check (..)
@@ -38,7 +34,6 @@ module Replacement.Service.Qualify
   , checkServiceCase
   , checkStatus
   , checkProblems
-  , hexWord32
   , mutateRegister
   , mutateWrite
   , runServiceCase
@@ -47,22 +42,21 @@ module Replacement.Service.Qualify
   ) where
 
 import Control.Exception (IOException, try)
-import Control.Monad (forM, unless, when)
+import Control.Monad (forM, unless)
 import Data.Aeson (Value (..))
 import Data.Bits (xor)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
-import Data.Char (isHexDigit)
 import Data.List (find, nubBy)
+import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing, listToMaybe)
-import Data.Scientific (floatingOrInteger)
-import Data.Word (Word32, Word64, Word8)
+import Data.Word (Word32, Word8)
 import Emulation.NativeCase (Region (..), loadCase)
+import qualified Emulation.NativeObservation as N
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host hiding (sha256)
-import Numeric (readHex, showHex)
+import Numeric (showHex)
 import System.Directory (canonicalizePath)
-import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, takeFileName)
 
 -- | The states the stock probe defines.
@@ -130,8 +124,8 @@ serviceContractSha256 = sha256Hex (sha256 (BC.pack (unlines contractLines)))
 
 -- The stack is the top of the casebuf region; the checked public output and
 -- the immutable body sit below it.
-serviceStackRegion :: String
-serviceStackRegion = "casebuf"
+serviceStackRegion :: N.RegionId
+serviceStackRegion = N.RegionId "casebuf"
 
 serviceStackBase, serviceStackOffset, serviceStackSize :: Int
 serviceStackBase = 0x009a0000
@@ -141,8 +135,8 @@ serviceStackSize = 0x200
 serviceStackTop :: Word32
 serviceStackTop = 0x009a1ff0
 
-serviceTransientRegion :: String
-serviceTransientRegion = "mirror"
+serviceTransientRegion :: N.RegionId
+serviceTransientRegion = N.RegionId "mirror"
 
 serviceTransientOffset, serviceTransientSize :: Int
 serviceTransientOffset = 0
@@ -160,200 +154,51 @@ serviceCasebufInitial =
     <> B.replicate serviceStackSize serviceCasebufFill
     <> B.replicate (serviceCasebufSize - serviceStackOffset - serviceStackSize) 0
 
-serviceSeeds :: [(String, Word32)]
+serviceSeeds :: [(N.Register, Word32)]
 serviceSeeds =
-  [ ("r4", 0x4a4a4a4a)
-  , ("r5", 0x5b5b5b5b)
-  , ("r6", 0x6c6c6c6c)
-  , ("r7", 0x7d7d7d7d)
-  , ("r8", 0x8e8e8e8e)
-  , ("r9", 0x9f9f9f9f)
-  , ("r10", 0xa0a0a0a0)
-  , ("r11", 0xb1b1b1b1)
+  [ (N.R4, 0x4a4a4a4a)
+  , (N.R5, 0x5b5b5b5b)
+  , (N.R6, 0x6c6c6c6c)
+  , (N.R7, 0x7d7d7d7d)
+  , (N.R8, 0x8e8e8e8e)
+  , (N.R9, 0x9f9f9f9f)
+  , (N.R10, 0xa0a0a0a0)
+  , (N.R11, 0xb1b1b1b1)
   ]
 
-serviceInitialRegisters :: Word32 -> Word32 -> Word32 -> Word32 -> [(String, Word32)]
+serviceInitialRegisters :: Word32 -> Word32 -> Word32 -> Word32 -> [(N.Register, Word32)]
 serviceInitialRegisters property row stackTop exit =
-  [ ("r0", property)
-  , ("r1", row)
-  , ("r2", 0)
-  , ("r3", 0)
+  [ (N.R0, property)
+  , (N.R1, row)
+  , (N.R2, 0)
+  , (N.R3, 0)
   ]
     ++ serviceSeeds
-    ++ [ ("r12", 0)
-       , ("sp", stackTop)
-       , ("lr", exit)
-       , ("cpsr", 0x10)
+    ++ [ (N.R12, 0)
+       , (N.Sp, stackTop)
+       , (N.Lr, exit)
+       , (N.Cpsr, 0x10)
        ]
 
-serviceExpectedRegisters :: Word32 -> Word32 -> Word32 -> [(String, Word32)]
+serviceExpectedRegisters :: Word32 -> Word32 -> Word32 -> [(N.Register, Word32)]
 serviceExpectedRegisters expected stackTop exit =
-  ("r0", expected) : serviceSeeds ++ [("sp", stackTop), ("pc", exit)]
+  (N.R0, expected) : serviceSeeds ++ [(N.Sp, stackTop), (N.Pc, exit)]
 
 isServiceCaseId :: String -> Bool
 isServiceCaseId = ("svc-" `prefixOf`)
   where
     prefixOf prefix text = take (length prefix) text == prefix
 
-hexWord32 :: Word32 -> String
-hexWord32 value = "0x" ++ replicate (8 - length text) '0' ++ text
-  where
-    text = showHex value ""
-
-parseWord32 :: String -> Maybe Word32
-parseWord32 ('0' : 'x' : digits) = parseDigits digits
-parseWord32 digits = parseDigits digits
-
-parseDigits :: String -> Maybe Word32
-parseDigits digits
-  | null digits || length digits > 8 || not (all isHexDigit digits) = Nothing
-  | otherwise =
-      case readHex digits :: [(Word32, String)] of
-        [(value, "")] -> Just value
-        _ -> Nothing
-
-unhex :: String -> Maybe B.ByteString
-unhex text
-  | odd (length text) = Nothing
-  | otherwise = B.pack <$> go text
-  where
-    go [] = Just []
-    go (highChar : lowChar : rest) = do
-      high <- digit highChar
-      low <- digit lowChar
-      ((high * 16 + low) :) <$> go rest
-    go _ = Nothing
-    digit char
-      | char >= '0' && char <= '9' = Just (fromIntegral (fromEnum char - fromEnum '0'))
-      | char >= 'a' && char <= 'f' = Just (fromIntegral (fromEnum char - fromEnum 'a' + 10))
-      | otherwise = Nothing
-
-data Observation = Observation
-  { observationStatus :: String
-  , observationRegisters :: [(String, Word32)]
-  , observationMemory :: [(String, B.ByteString)]
-  , observationWrites :: Maybe [(Word64, Int)]
-  , observationProvenanceTotal :: Word64
-  , observationInstructions :: Word64
-  , observationEngineError :: Word32
-  }
-  deriving (Eq, Show)
-
-requiredRegisters :: [String]
-requiredRegisters =
-  ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10",
-   "r11", "r12", "sp", "lr", "cpsr", "pc"]
-
-observe :: ExitCode -> [(String, Word64, Int)] -> Value -> Either String Observation
-observe exit regions value = do
-  status <- case get value "status" of
-    String _ -> Right (str (get value "status"))
-    _ -> Left "missing runner status"
-  when (null status) (Left "empty runner status")
-  when (status == "returned" && exit /= ExitSuccess) (Left "status returned with nonzero process exit")
-  engineError <- parseEngineError (get value "unicorn_error")
-  when (status == "returned" && engineError /= 0) (Left "status returned with nonzero unicorn_error")
-  instructions <- requireNumber value "instructions"
-  total <- requireNumber value "memory_provenance_total"
-  registers <- parseRegisters (get value "registers")
-  memory <- parseMemory regions (get value "memory")
-  provenance <- case get value "memory_provenance" of
-    Array _ -> Right (list (get value "memory_provenance"))
-    _ -> Left "missing memory provenance"
-  writes <- parseProvenance provenance
-  let truncated = total > 4096
-  if truncated
-    then when (length provenance /= 4096) (Left "provenance retention count mismatch")
-    else when (fromIntegral (length provenance) /= total) (Left "provenance count mismatch")
-  pure
-    Observation
-      { observationStatus = status
-      , observationRegisters = registers
-      , observationMemory = memory
-      , observationWrites = if truncated then Nothing else Just writes
-      , observationProvenanceTotal = total
-      , observationInstructions = instructions
-      , observationEngineError = engineError
-      }
-
-requireNumber :: Value -> String -> Either String Word64
-requireNumber value key =
-  case get value key of
-    String _ -> maybe (Left ("malformed " ++ key)) Right (readDecimal (str (get value key)))
-    _ -> Left ("missing " ++ key)
-
-readDecimal :: String -> Maybe Word64
-readDecimal text = case reads text :: [(Integer, String)] of
-  [(value, "")]
-    | value >= 0 && value <= 18446744073709551615 -> Just (fromIntegral value)
-  _ -> Nothing
-
-exactInteger :: Value -> Either String Integer
-exactInteger value = case value of
-  Number number -> case floatingOrInteger number :: Either Double Integer of
-    Right exact -> Right exact
-    Left _ -> Left "fractional numeric field"
-  _ -> Left "numeric field required"
-
-parseEngineError :: Value -> Either String Word32
-parseEngineError value = do
-  number <- exactInteger value
-  if number >= 0 && number <= 4294967295
-    then Right (fromIntegral number)
-    else Left "unicorn_error out of range"
-
-parseRegisters :: Value -> Either String [(String, Word32)]
-parseRegisters value = case value of
-  Object _ -> do
-    pairs <- forM (keys value) $ \name ->
-      case parseWord32 (str (get value name)) of
-        Just word -> Right (name, word)
-        Nothing -> Left ("malformed register " ++ name)
-    let missing = [name | name <- requiredRegisters, isNothing (lookup name pairs)]
-    if null missing then Right pairs else Left ("missing registers " ++ unwords missing)
-  _ -> Left "missing registers"
-
-parseMemory :: [(String, Word64, Int)] -> Value -> Either String [(String, B.ByteString)]
-parseMemory regions value = case value of
-  Array _ -> do
-    let entries = list value
-    when (length entries /= length regions) (Left "memory region count mismatch")
-    forM (zip regions entries) $ \((ident, base, size), entry) -> do
-      address <- case parseWord32 (str (get entry "address")) of
-        Just word -> Right (fromIntegral word :: Word64)
-        Nothing -> Left ("malformed address for region " ++ ident)
-      when (address /= base) (Left ("memory region " ++ ident ++ " address mismatch"))
-      bytes <- maybe (Left ("malformed bytes for region " ++ ident)) Right (unhex (str (get entry "bytes")))
-      when (B.length bytes /= size) (Left ("memory region " ++ ident ++ " size mismatch"))
-      pure (ident, bytes)
-  _ -> Left "missing memory"
-
-parseProvenance :: [Value] -> Either String [(Word64, Int)]
-parseProvenance entries = do
-  parsed <- forM entries $ \entry -> do
-    kind <- case str (get entry "kind") of
-      "write" -> Right True
-      "read" -> Right False
-      _ -> Left "malformed provenance kind"
-    address <- case parseWord32 (str (get entry "address")) of
-      Just word -> Right (fromIntegral word :: Word64)
-      Nothing -> Left "malformed provenance address"
-    size <- do
-      exact <- exactInteger (get entry "size")
-      if exact >= 1 && exact <= 8 then Right (fromIntegral exact) else Left "provenance size out of range"
-    pure (kind, address, size)
-  pure [(address, size) | (True, address, size) <- parsed]
-
 data Expectation = Expectation
   { expectationExpectedR0 :: Word32
-  , expectationPreserved :: [(String, Word32)]
-  , expectationInitialMemory :: [(String, B.ByteString)]
-  , expectationBounds :: [(String, Word64, Int)]
-  , expectationStackBase :: Word64
+  , expectationPreserved :: [(N.Register, Word32)]
+  , expectationInitialMemory :: [(N.RegionId, B.ByteString)]
+  , expectationBounds :: [(N.RegionId, N.GuestAddress, Int)]
+  , expectationStackBase :: N.GuestAddress
   , expectationStackOffset :: Int
   , expectationStackSize :: Int
-  , expectationStackTop :: Word64
-  , expectationTransientRegion :: String
+  , expectationStackTop :: N.GuestAddress
+  , expectationTransientRegion :: N.RegionId
   , expectationTransientOffset :: Int
   , expectationTransientSize :: Int
   }
@@ -362,27 +207,27 @@ data Expectation = Expectation
 data Check
   = CheckPass
   | CheckMismatch [String]
-  | CheckBlocked String
-  | CheckUnsupported String
-  | CheckUnknown String
-  | CheckTruncated String
+  | CheckBlocked N.RunnerStatus
+  | CheckUnsupported N.RunnerStatus
+  | CheckUnknown N.RunnerStatus
+  | CheckTruncated N.ProvenanceTotal
   deriving (Eq, Show)
 
-classifyStatus :: String -> Check
-classifyStatus "returned" = CheckPass
-classifyStatus "unknown_call" = CheckUnsupported "unknown_call"
-classifyStatus "unsupported_instruction" = CheckUnsupported "unsupported_instruction"
-classifyStatus "engine_error" = CheckBlocked "engine_error"
-classifyStatus "memory_guard" = CheckBlocked "memory_guard"
-classifyStatus "fetch_guard" = CheckBlocked "fetch_guard"
-classifyStatus "stub_contract" = CheckBlocked "stub_contract"
-classifyStatus "invalid_case" = CheckBlocked "invalid_case"
-classifyStatus "host_timeout" = CheckBlocked "host_timeout"
-classifyStatus "runner_failure" = CheckBlocked "runner_failure"
-classifyStatus "invalid_output" = CheckBlocked "invalid_output"
-classifyStatus "wall_budget" = CheckBlocked "wall_budget"
-classifyStatus "instruction_budget" = CheckBlocked "instruction_budget"
-classifyStatus other = CheckUnknown other
+classifyStatus :: N.RunnerStatus -> Check
+classifyStatus N.Returned = CheckPass
+classifyStatus status@N.UnknownCall = CheckUnsupported status
+classifyStatus status@N.UnsupportedInstruction = CheckUnsupported status
+classifyStatus status@N.InstructionBudget = CheckBlocked status
+classifyStatus status@N.WallBudget = CheckBlocked status
+classifyStatus status@N.MemoryGuard = CheckBlocked status
+classifyStatus status@N.FetchGuard = CheckBlocked status
+classifyStatus status@N.StubContract = CheckBlocked status
+classifyStatus status@N.RunnerEngineError = CheckBlocked status
+classifyStatus status@N.InvalidCase = CheckBlocked status
+classifyStatus status@N.HostTimeout = CheckBlocked status
+classifyStatus status@N.RunnerFailure = CheckBlocked status
+classifyStatus status@N.InvalidOutput = CheckBlocked status
+classifyStatus status@(N.OtherStatus _) = CheckUnknown status
 
 checkStatus :: Check -> String
 checkStatus CheckPass = "passed"
@@ -394,45 +239,48 @@ checkStatus (CheckTruncated _) = "truncated"
 
 checkProblems :: Check -> [String]
 checkProblems (CheckMismatch problems) = problems
-checkProblems (CheckBlocked reason) = [reason]
-checkProblems (CheckUnsupported reason) = [reason]
-checkProblems (CheckUnknown reason) = [reason]
-checkProblems (CheckTruncated reason) = [reason]
+checkProblems (CheckBlocked status) = [N.runnerStatusLabel status]
+checkProblems (CheckUnsupported status) = [N.runnerStatusLabel status]
+checkProblems (CheckUnknown status) = [N.runnerStatusLabel status]
+checkProblems (CheckTruncated total) = ["effect evidence truncated at " ++ show (N.provenanceTotal total)]
 checkProblems CheckPass = []
 
-checkServiceCase :: Expectation -> Observation -> Check
+checkServiceCase :: Expectation -> N.NativeObservation -> Check
 checkServiceCase expectation observation =
-  case classifyStatus (observationStatus observation) of
+  case classifyStatus (N.nativeStatus observation) of
     CheckPass ->
-      let problems = registers ++ memory ++ effects
-       in if null problems then CheckPass else CheckMismatch problems
+      case N.nativeProvenance observation of
+        N.Truncated total -> CheckTruncated total
+        N.Complete _ writes ->
+          let problems = registers ++ memory ++ concatMap classifyWrite writes
+           in if null problems then CheckPass else CheckMismatch problems
     other -> other
   where
-    registersOf = observationRegisters observation
+    registersOf = N.nativeRegisters observation
     missingRegisters =
-      [ "register " ++ name ++ ": missing from runner output"
-      | name <- "r0" : "pc" : map fst (expectationPreserved expectation)
-      , isNothing (lookup name registersOf)
+      [ "register " ++ N.registerLabel register ++ ": missing from runner output"
+      | register <- N.R0 : N.Pc : map fst (expectationPreserved expectation)
+      , M.notMember register registersOf
       ]
     registers
       | not (null missingRegisters) = missingRegisters
       | otherwise =
-          [ "r0: expected " ++ hexWord32 (expectationExpectedR0 expectation)
-              ++ ", observed " ++ hexWord32 result
-          | Just result <- [lookup "r0" registersOf]
+          [ "r0: expected " ++ N.hexWord32 (expectationExpectedR0 expectation)
+              ++ ", observed " ++ N.hexWord32 result
+          | Just result <- [M.lookup N.R0 registersOf]
           , result /= expectationExpectedR0 expectation
           ]
-            ++ [ "register " ++ name ++ ": expected " ++ hexWord32 expected
-                   ++ ", observed " ++ hexWord32 result
-               | (name, expected) <- expectationPreserved expectation
-               , Just result <- [lookup name registersOf]
+            ++ [ "register " ++ N.registerLabel register ++ ": expected " ++ N.hexWord32 expected
+                   ++ ", observed " ++ N.hexWord32 result
+               | (register, expected) <- expectationPreserved expectation
+               , Just result <- [M.lookup register registersOf]
                , result /= expected
                ]
     memory =
       concat
-        [ case (lookup ident (observationMemory observation), lookup ident (expectationInitialMemory expectation)) of
-            (Nothing, _) -> ["region " ++ ident ++ ": missing from runner output"]
-            (_, Nothing) -> ["region " ++ ident ++ ": missing initial bytes"]
+        [ case (lookup ident (N.nativeMemory observation), lookup ident (expectationInitialMemory expectation)) of
+            (Nothing, _) -> ["region " ++ N.regionName ident ++ ": missing from runner output"]
+            (_, Nothing) -> ["region " ++ N.regionName ident ++ ": missing initial bytes"]
             (Just actual, Just initial)
               | ident == serviceStackRegion ->
                   let low = expectationStackOffset expectation
@@ -443,104 +291,85 @@ checkServiceCase expectation observation =
                       | outside /= outsideInitial
                       ]
               | ident == expectationTransientRegion expectation ->
-                  [ "transient region " ++ ident ++ " did not return to its initial bytes"
+                  [ "transient region " ++ N.regionName ident ++ " did not return to its initial bytes"
                   | actual /= initial
                   ]
               | otherwise ->
-                  [ "immutable region " ++ ident ++ " changed"
+                  [ "immutable region " ++ N.regionName ident ++ " changed"
                   | actual /= initial
                   ]
         | (ident, _, _) <- expectationBounds expectation
         ]
-    effects = case observationWrites observation of
-      Nothing -> ["effect evidence truncated at " ++ show (observationProvenanceTotal observation) ++ " writes"]
-      Just writes -> concatMap classifyWrite writes
-    stackSpan =
-      ( expectationStackBase expectation + fromIntegral (expectationStackOffset expectation)
-      , fromIntegral (expectationStackSize expectation)
-      )
-    classifyWrite (address, size) =
+    classifyWrite (N.Write (N.GuestAddress address) (N.WriteBytes size)) =
       case find (\(ident, base, extent) -> contains base extent address size) (expectationBounds expectation) of
         Nothing -> ["forbidden write outside the declared regions at " ++ show address]
-        Just (ident, base, extent)
+        Just (ident, base, _)
           | ident == serviceStackRegion ->
-              let (low, spanSize) = stackSpan
-                  high = low + fromIntegral spanSize
+              let low = N.guestAddress (expectationStackBase expectation) + fromIntegral (expectationStackOffset expectation)
+                  high = low + fromIntegral (expectationStackSize expectation)
                in [ "stack write outside the scratch span at " ++ show address
                   | address < low || address + fromIntegral size > high
-                      || address + fromIntegral size > expectationStackTop expectation
+                      || N.GuestAddress (address + fromIntegral size) > expectationStackTop expectation
                   ]
           | ident == expectationTransientRegion expectation ->
-              let low = base + fromIntegral (expectationTransientOffset expectation)
+              let low = N.guestAddress base + fromIntegral (expectationTransientOffset expectation)
                   high = low + fromIntegral (expectationTransientSize expectation)
-               in [ "transient write outside " ++ ident ++ " at " ++ show address
+               in [ "transient write outside " ++ N.regionName ident ++ " at " ++ show address
                   | address < low || address + fromIntegral size > high
                   ]
-          | otherwise -> ["forbidden write to immutable region " ++ ident ++ " at " ++ show address]
-    contains base extent address size =
+          | otherwise -> ["forbidden write to immutable region " ++ N.regionName ident ++ " at " ++ show address]
+    contains (N.GuestAddress base) extent address size =
       address >= base && address + fromIntegral size <= base + fromIntegral extent
 
 expectationFromCase :: Value -> [Region] -> Either String Expectation
 expectationFromCase caseValue regions = do
   let expected = get caseValue "expected"
       expectedRegisters = get expected "registers"
-      initialRegisters = get caseValue "registers"
-  expectedR0 <- readRegister "r0" expectedRegisters
-  preserved <- forM ["r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "sp", "pc"] $ \name ->
-    (,) name <$> readRegister name expectedRegisters
-  stackTop <- readRegister "sp" expectedRegisters
-  stackRegion <- maybe (Left "service stack region casebuf missing") Right (find ((== serviceStackRegion) . regionIdent) regions)
-  let stackBase = fromIntegral (baseAddress stackRegion) :: Word64
-  unless (stackBase == fromIntegral serviceStackBase) (Left "service stack region has an unexpected base")
+  expectedR0 <- readRegister N.R0 expectedRegisters
+  preserved <- forM (serviceSeedsRegisters ++ [N.Sp, N.Pc]) $ \register ->
+    (,) register <$> readRegister register expectedRegisters
+  stackTop <- readRegister N.Sp expectedRegisters
+  stackRegion <- maybe (Left "service stack region casebuf missing") Right (find ((== serviceStackRegion) . N.regionIdOf) regions)
+  let stackBase = N.GuestAddress (fromIntegral (baseAddress stackRegion))
+  unless (stackBase == N.GuestAddress (fromIntegral serviceStackBase)) (Left "service stack region has an unexpected base")
   unless (fromIntegral (regionSize stackRegion) >= serviceStackOffset + serviceStackSize) (Left "service stack region is too small")
-  unless (maybe False (\region -> fromIntegral (regionSize region) >= serviceTransientSize) (find ((== serviceTransientRegion) . regionIdent) regions)) (Left "service transient region mirror missing")
+  unless (maybe False (\region -> fromIntegral (regionSize region) >= serviceTransientSize) (find ((== serviceTransientRegion) . N.regionIdOf) regions)) (Left "service transient region mirror missing")
   pure
     Expectation
       { expectationExpectedR0 = expectedR0
       , expectationPreserved = preserved
-      , expectationInitialMemory = [(regionIdent region, regionBytes region) | region <- regions]
-      , expectationBounds =
-          [ (regionIdent region, fromIntegral (baseAddress region), fromIntegral (regionSize region))
-          | region <- regions
-          ]
+      , expectationInitialMemory = N.regionInitialBytes regions
+      , expectationBounds = N.regionBounds regions
       , expectationStackBase = stackBase
       , expectationStackOffset = serviceStackOffset
       , expectationStackSize = serviceStackSize
-      , expectationStackTop = fromIntegral stackTop
+      , expectationStackTop = N.GuestAddress (fromIntegral stackTop)
       , expectationTransientRegion = serviceTransientRegion
       , expectationTransientOffset = serviceTransientOffset
       , expectationTransientSize = serviceTransientSize
       }
   where
-    readRegister name object =
-      case parseWord32 (str (get object name)) of
+    serviceSeedsRegisters = [N.R4, N.R5, N.R6, N.R7, N.R8, N.R9, N.R10, N.R11]
+    readRegister register object =
+      case N.parseWord32 (str (get object (N.registerLabel register))) of
         Just value -> Right value
-        Nothing -> Left ("expected register missing or malformed: " ++ name)
+        Nothing -> Left ("expected register missing or malformed: " ++ N.registerLabel register)
 
-regionIdent :: Region -> String
-regionIdent region = str (get (description region) "id")
+mutateRegister :: N.NativeObservation -> N.Register -> Word32 -> N.NativeObservation
+mutateRegister observation register value =
+  observation {N.nativeRegisters = M.insert register value (N.nativeRegisters observation)}
 
-regionInfo :: [Region] -> [(String, Word64, Int)]
-regionInfo regions =
-  [ (regionIdent region, fromIntegral (baseAddress region), fromIntegral (regionSize region))
-  | region <- regions
-  ]
-
-mutateRegister :: Observation -> String -> Word32 -> Observation
-mutateRegister observation name value =
-  observation
-    { observationRegisters =
-        [ if key == name then (key, value) else (key, old)
-        | (key, old) <- observationRegisters observation
-        ]
-    }
-
-mutateWrite :: Observation -> Word64 -> Int -> Observation
+mutateWrite :: N.NativeObservation -> N.GuestAddress -> Word8 -> N.NativeObservation
 mutateWrite observation address size =
-  observation
-    { observationWrites = fmap (++ [(address, size)]) (observationWrites observation)
-    , observationProvenanceTotal = observationProvenanceTotal observation + 1
-    }
+  case N.nativeProvenance observation of
+    N.Complete (N.ProvenanceTotal total) writes ->
+      observation
+        { N.nativeProvenance =
+            N.Complete
+              (N.ProvenanceTotal (total + 1))
+              (writes ++ [N.Write address (N.WriteBytes size)])
+        }
+    N.Truncated _ -> observation
 
 runServiceCase :: FilePath -> FilePath -> IO (Value, Value)
 runServiceCase runner path = do
@@ -598,15 +427,15 @@ runServiceCase runner path = do
                         , invalidResult caseId "wire_version is not 1"
                         )
                   | otherwise ->
-                      case observe exit (regionInfo regions) value of
+                      case N.observeNative exit regions value of
                         Left message ->
                           pure
                             ( merge baseReport
                                 [ ("status", s "invalid_output")
-                                , ("reason", s message)
+                                , ("reason", s (N.renderObservationError message))
                                 , ("runner", value)
                                 ]
-                            , invalidResult caseId message
+                            , invalidResult caseId (N.renderObservationError message)
                             )
                         Right observation -> do
                           let check = checkServiceCase expectation observation
@@ -620,12 +449,12 @@ runServiceCase runner path = do
                                     , ("status", s status)
                                     , ("mismatches", arr (map s problems))
                                     , ("expected_r0", n (fromIntegral (expectationExpectedR0 expectation)))
-                                    , ("observed_r0", maybe Null (n . fromIntegral) (lookup "r0" (observationRegisters observation)))
-                                    , ("runner_status", s (observationStatus observation))
+                                    , ("observed_r0", maybe Null (n . fromIntegral) (M.lookup N.R0 (N.nativeRegisters observation)))
+                                    , ("runner_status", s (N.runnerStatusLabel (N.nativeStatus observation)))
                                     , ("runner_sha256", s digest)
-                                    , ("provenance_total", n (fromIntegral (observationProvenanceTotal observation)))
-                                    , ("provenance_complete", b (isJustWrites (observationWrites observation)))
-                                    , ("instructions", n (fromIntegral (observationInstructions observation)))
+                                    , ("provenance_total", n (fromIntegral (N.provenanceTotal (N.provenanceCount (N.nativeProvenance observation)))))
+                                    , ("provenance_complete", b (not (isTruncated (N.nativeProvenance observation))))
+                                    , ("instructions", n (fromIntegral (N.instructionCount (N.nativeInstructions observation))))
                                     , ("mutants", arr mutants)
                                     ])
                                   identity
@@ -633,28 +462,28 @@ runServiceCase runner path = do
                                 merge
                                   baseReport
                                   [ ("status", s status)
-                                  , ("runner_status", s (observationStatus observation))
+                                  , ("runner_status", s (N.runnerStatusLabel (N.nativeStatus observation)))
                                   , ("check", s status)
                                   , ("mismatches", arr (map s problems))
-                                  , ("provenance_total", n (fromIntegral (observationProvenanceTotal observation)))
+                                  , ("provenance_total", n (fromIntegral (N.provenanceTotal (N.provenanceCount (N.nativeProvenance observation)))))
                                   , ("runner", value)
                                   ]
                           pure (report, result)
   where
-    isJustWrites (Just _) = True
-    isJustWrites Nothing = False
+    isTruncated (N.Truncated _) = True
+    isTruncated (N.Complete _ _) = False
     invalidCase caseId message =
       obj [("schema_version", n 1), ("case_id", s caseId), ("status", s "invalid_case"), ("reason", s message)]
     invalidResult caseId message =
       obj [("id", s caseId), ("status", s "blocked"), ("mismatches", arr [s message])]
 
-mutantChecks :: Expectation -> Observation -> [Value]
+mutantChecks :: Expectation -> N.NativeObservation -> [Value]
 mutantChecks expectation observation =
-  [ mutant "abi-r7-clobber" (mutateRegister observation "r7" (r7 `xor` 0x01010101))
-  , mutant "effect-immutable-write" (mutateWrite observation (fromIntegral serviceStackBase + 0x100) 4)
+  [ mutant "abi-r7-clobber" (mutateRegister observation N.R7 (r7 `xor` 0x01010101))
+  , mutant "effect-immutable-write" (mutateWrite observation (N.GuestAddress (fromIntegral serviceStackBase + 0x100)) 4)
   ]
   where
-    r7 = fromMaybe 0 (lookup "r7" (observationRegisters observation))
+    r7 = fromMaybe 0 (M.lookup N.R7 (N.nativeRegisters observation))
     mutant name changed =
       let check = checkServiceCase expectation changed
        in obj

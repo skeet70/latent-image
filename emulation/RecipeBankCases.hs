@@ -24,6 +24,7 @@ import Data.Word
 import Emulation.NativeCase (functionCount, runCase)
 import Emulation.Sha256 (sha256, sha256Hex)
 import Emulation.ParallelCases (mapBounded, readJobs)
+import qualified Emulation.NativeObservation as N
 import qualified Replacement.Service.Qualify as S
 import Numeric
 import System.Directory
@@ -2609,14 +2610,14 @@ runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable g
       bindObj bs = object [fromString k .= hex (toInteger v) | (k, v) <- bs]
       regs =
         if direct
-          then object [fromString k .= hex (toInteger v) | (k, v) <- S.serviceInitialRegisters directProperty directRow S.serviceStackTop (fromIntegral exitAddress)]
+          then object [fromString (N.registerLabel k) .= hex (toInteger v) | (k, v) <- S.serviceInitialRegisters directProperty directRow S.serviceStackTop (fromIntegral exitAddress)]
           else object (["lr" .= hex exitAddress, "sp" .= hex (toInteger S.serviceStackTop), "cpsr" .= hex 0x10]
             ++ [fromString ("r" ++ show i) .= hex (toInteger v) | (i, v) <- take 13 (zip [0 :: Int ..] (spArgs sp ++ repeat 0))])
       expected =
         if direct
           then object
             [ "status" .= eStatus (spExpect sp)
-            , "registers" .= object [fromString k .= hex (toInteger v) | (k, v) <- S.serviceExpectedRegisters (eR0 (spExpect sp)) S.serviceStackTop (fromIntegral exitAddress)]
+            , "registers" .= object [fromString (N.registerLabel k) .= hex (toInteger v) | (k, v) <- S.serviceExpectedRegisters (eR0 (spExpect sp)) S.serviceStackTop (fromIntegral exitAddress)]
             , "memory" .= ([] :: [Value])
             , "events" .= ([] :: [Value]) ]
           else object

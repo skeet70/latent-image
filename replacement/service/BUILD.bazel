@@ -36,12 +36,14 @@ haskell_library(
     deps = [
         "//emulation:case-sha256",
         "//emulation:native-adapter",
+        "//emulation:native-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:containers",
         "//host:directory",
+        "//host:filepath",
         "//host:host-support",
-        "//host:scientific",
     ],
 )
 
@@ -55,11 +57,19 @@ haskell_test(
         "-Werror",
         "-O2",
     ],
+    args = ["$(rootpath //emulation:native-runner)"],
+    data = ["//emulation:native-runner"],
     deps = [
         ":qualification",
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
         "//host:host-support",
     ],
 )

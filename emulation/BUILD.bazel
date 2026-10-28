@@ -1095,6 +1095,28 @@ haskell_library(
     ],
 )
 
+haskell_library(
+    name = "native-observation",
+    srcs = ["Emulation/NativeObservation.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":native-adapter",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:host-support",
+        "//host:scientific",
+    ],
+)
+
 haskell_binary(
     name = "native-case",
     srcs = ["NativeCaseMain.hs"],
@@ -1302,6 +1324,7 @@ haskell_binary(
     deps = [
         ":case-sha256",
         ":native-adapter",
+        ":native-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
