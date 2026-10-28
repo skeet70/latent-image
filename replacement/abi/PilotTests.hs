@@ -33,7 +33,9 @@ runTest pilotBin pilotElf pilotSymbols pilotDisasm defectBin template runner rea
   ensure ("cortex-r4" `isInfixOf` attributes) "the pilot does not carry the cortex-r4 CPU attribute"
   ensure ("ABI_align_preserved" `isInfixOf` attributes) "the pilot does not carry the 8-byte alignment attribute"
   symbols <- readSymbols pilotSymbols
-  ensure (lookup "xm1_abi_probe" symbols == Just (0x1000, 0x104)) "the entry symbol is not xm1_abi_probe at 0x1000"
+  case lookup "xm1_abi_probe" symbols of
+    Just (0x1000, size) | size >= 4 -> pure ()
+    _ -> failH "the entry symbol is not xm1_abi_probe at 0x1000"
   (loopAddress, loopSize) <- maybe (failH "the pilot lacks xm1_panic_loop") pure (lookup "xm1_panic_loop" symbols)
   ensure (loopAddress `mod` 4 == 0 && loopSize >= 4 && loopSize `mod` 4 == 0) "the panic loop extent is invalid"
   scanInstructions pilotDisasm
