@@ -365,14 +365,8 @@ sh_test(
     name = "fujimod-xm1-tests",
     size = "small",
     srcs = ["fujimod-xm1-tests.sh"],
-    args = [
-        "$(rootpath @lab_fujimod_xm1//:share/fujimod-xm1/tests-passed)",
-        "$(rootpath @lab_fujimod_xm1//:bin/fujimod-xm1)",
-    ],
-    data = [
-        "@lab_fujimod_xm1//:bin/fujimod-xm1",
-        "@lab_fujimod_xm1//:share/fujimod-xm1/tests-passed",
-    ],
+    args = ["$(rootpaths @lab_fujimod_xm1//:test-harnesses)"],
+    data = ["@lab_fujimod_xm1//:test-harnesses"],
 )
 
 haskell_binary(

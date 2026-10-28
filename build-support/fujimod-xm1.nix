@@ -31,15 +31,21 @@ EOF
     chmod +x "$cpulimitBin/cargo"
     export PATH="$cpulimitBin:$PATH"
   '';
-  nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config ];
+  nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config pkgs.jq ];
   # nand_image.rs links zlib for retained-identical committed NAND exports.
   buildInputs = [ pkgs.zlib ];
   dontUseCmakeConfigure = true;
+  preCheck = ''
+    cargo test --no-run --message-format=json > test-artifacts.json
+  '';
   # store-path holds $out, so Bazel actions keyed on it change with the store path.
   postInstall = ''
     mkdir -p $out/share/fujimod-xm1
     cp data/xm1-150.json $out/share/fujimod-xm1/
     printf '%s\n' "$out" > $out/share/fujimod-xm1/store-path
-    printf 'cargo test: sd_host and crate unit tests ran in this build\n' > $out/share/fujimod-xm1/tests-passed
+    mkdir -p $out/libexec/fujimod-xm1-tests
+    ${pkgs.jq}/bin/jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null) | .executable' test-artifacts.json \
+      | while read -r executable; do cp "$executable" "$out/libexec/fujimod-xm1-tests/"; done
+    test -n "$(ls -A $out/libexec/fujimod-xm1-tests)"
   '';
 }
