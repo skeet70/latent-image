@@ -62,8 +62,13 @@ The complete capability run passed on 2026-10-28 under the fixed containment: on
 
 - Anchors 3/3; original closure 62,184/62,184; ARM candidate 62,184/62,184; refusal probes 6/6.
 - 352 single-bit, 61,776 two-bit and 56 record/parity subjects all returned and matched under both executions, with preserved ABI state and permitted effects.
-- Faulty control detected on 5,488 subjects. The reduced witness is four flips in one protected word reduced to two (byte 0, bits 0 and 1), and the original binary rejects it.
+- The host faulty candidate was detected on 5,488 subjects. Its reduced witness is four flips in one protected word reduced to two (byte 0, bits 0 and 1), and the original binary rejects it.
+- The cross-compiled faulty ARM artifact was run as a bounded control on that exact witness: the ARM case returned with r0 expected 1 and observed 0, the original binary rejected the witness, and the anchors and the area3 ABI and effect checks stayed satisfied.
 - 41 min 34 s service runtime, 1.6 GiB peak, exit 0, `status: qualified`, `capability: true`.
+
+## Artifact identities
+
+The frozen run's raw report is `full-20261028.json` under `private-data/analysis/x-m1-1.50/area3-qualification/`, SHA-256 `18eced51de1b98cfd59e3500f797d466d5ea5ab81592977bd28c2b313f1369dc`. The same directory holds `identities-20261028.json` with the post-run digests of the contract, native runner, host candidate and both ARM images and symbol tables. Each generated case binds the ARM image digest and the case loader verifies every artifact digest at execution.
 
 ## Qualification outcomes
 
