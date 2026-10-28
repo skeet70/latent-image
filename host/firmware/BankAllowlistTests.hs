@@ -37,6 +37,18 @@ main = do
     check (path ++ " passes the allowlist; violations: " ++ show (map renderFinding (violations report))) (null (violations report))
 
   cleanElf <- either fail pure (parseElf clean)
+  let openCompletion d =
+        declarationFunction d == "rb_media_request_post"
+          && declarationAccess d == StoreAccess
+          && declarationThrough d == Deref (Deref (Argument (Reg 0)))
+      withoutDeclaration = allowlist {declarations = filter (not . openCompletion) (declarations allowlist)}
+      shallower = allowlist {declarations =
+        [if openCompletion d then d {declarationThrough = Deref (Argument (Reg 0))} else d | d <- declarations allowlist]}
+  forM_ [("without the open completion declaration", withoutDeclaration),
+         ("with a shallower completion declaration", shallower)] $ \(label, edited) -> do
+    report <- run edited clean
+    check (label ++ ": expected the open completion store to be refused, got " ++ show (map renderFinding (violations report)))
+      (map findingReason (violations report) == [Unproven StoreAccess (Deref (Deref (Argument (Reg 0))))])
   let symbol name = maybe (error ("no symbol " ++ name)) symbolValue (find ((== name) . symbolName) (elfSymbols cleanElf))
       function name =
         case find (\s -> symbolName s == name && symbolKind s == FunctionSymbol) (elfSymbols cleanElf) of
