@@ -5,6 +5,7 @@ import Control.Exception (bracket)
 import Control.Monad (unless)
 import Data.Aeson (FromJSON (..), Value (..), eitherDecode, encode, object, toJSON, withObject, withText, (.:), (.=))
 import qualified Data.Aeson.KeyMap as KM
+import qualified Data.Text as T
 import qualified Data.ByteString.Lazy as BL
 import System.Directory (createDirectory, createDirectoryIfMissing, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
 import System.Environment (getArgs, getEnvironment)
@@ -83,7 +84,7 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
         MissingExit -> []
         NullExit -> ["exit_code" .= (Nothing :: Maybe Int)]
         RecordedExit code -> ["exit_code" .= case code of ExitSuccess -> 0 :: Int; ExitFailure n -> n]
-      seed directory fixtureParity side = do
+      seed directory fixtureParity fixtureQualification = do
         createDirectoryIfMissing True directory
         case route of
           RamPushVolatile -> do
@@ -105,7 +106,7 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
                     writeOutcome (segment </> "e2e-result.json") "candidate-qualified") names
             jsonFile (directory </> "e2e-observation-0.json")
               (object ["schema" .= (1 :: Int), "reads" .= [object ["value" .= value]]])
-            case qualification of
+            case fixtureQualification of
               MissingOutcome -> pure ()
               ControlReceipt -> jsonFile (directory </> "e2e-control.json")
                 (object ["outcome" .= String "control-refused"])
@@ -156,7 +157,7 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
                     (object ["outcome" .= String "control-refused"])
                 | otherwise -> writeOutcome (directory </> "e2e-result.json") "candidate-qualified"
               CounterpartFailedCommand -> writeOutcome (directory </> "e2e-result.json") "candidate-qualified"
-              _ -> case qualificationWord qualification of
+              _ -> case qualificationWord fixtureQualification of
                 Just word -> writeOutcome (directory </> "e2e-result.json") word
                 Nothing -> pure ()
           UsbToggle -> do
@@ -200,11 +201,17 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
     [RouteOutcome result] -> pure result
     _ -> ioError (userError "expected one reported route")
 
-routeOf :: Value -> Maybe String
+routeOf :: Value -> Maybe T.Text
 routeOf (Object value) = case KM.lookup "route" value of
   Just (String route) -> Just route
   _ -> Nothing
 routeOf _ = Nothing
+
+reportResult :: Maybe Value -> Maybe T.Text
+reportResult (Just (Object value)) = case KM.lookup "result" value of
+  Just (String result) -> Just result
+  _ -> Nothing
+reportResult _ = Nothing
 
 recordBaseline :: FilePath -> RecordedExit -> Qualification -> IO (ExitCode, Maybe Value)
 recordBaseline tool evidence qualification = withWorkspace $ \root -> do
@@ -213,8 +220,9 @@ recordBaseline tool evidence qualification = withWorkspace $ \root -> do
       baseline = root </> "private-data/baselines/ram-push-volatile.json"
       output = root </> "private-data/result"
       exitFields = case evidence of
-        RecordedExit (ExitFailure code) -> ["exit_code" .= code]
-        _ -> ["exit_code" .= (0 :: Int)]
+        MissingExit -> []
+        NullExit -> ["exit_code" .= (Nothing :: Maybe Int)]
+        RecordedExit code -> ["exit_code" .= case code of ExitSuccess -> 0 :: Int; ExitFailure n -> n]
   seedRecordReceipt receipt qualification
   jsonFile (earlier </> "report.json") (object ["routes" .= [object
     (["route" .= String "ram-push-volatile", "seconds" .= (0 :: Double), "log" .= (earlier </> "synthetic.log")] ++ exitFields)]])
@@ -228,27 +236,29 @@ recordBaseline tool evidence qualification = withWorkspace $ \root -> do
   value <- if present then eitherDecode <$> BL.readFile baseline else pure (Left "absent")
   pure (code, either (const Nothing) Just value)
 
-recordReplacement :: FilePath -> IO (ExitCode, Maybe BL.ByteString, Maybe BL.ByteString)
+recordReplacement :: FilePath -> IO (ExitCode, Maybe BL.ByteString, Maybe BL.ByteString, Maybe Value)
 recordReplacement tool = withWorkspace $ \root -> do
   let earlier = root </> "private-data/earlier"
       receipt = earlier </> "receipts/ram-push-volatile"
       baseline = root </> "private-data/baselines/ram-push-volatile.json"
-      output = root </> "private-data/result"
+      firstOutput = root </> "private-data/result-1"
+      secondOutput = root </> "private-data/result-2"
   seedRecordReceipt receipt QualifiedOutcome
   jsonFile (earlier </> "report.json") (object ["routes" .= [object
     ["route" .= String "ram-push-volatile", "seconds" .= (0 :: Double), "log" .= (earlier </> "synthetic.log"), "exit_code" .= (0 :: Int)]]])
   inherited <- getEnvironment
-  let runRecord = readCreateProcessWithExitCode ((proc tool ["--routes", "ram-push-volatile", "--from-run", earlier
+  let runRecord output = readCreateProcessWithExitCode ((proc tool ["--routes", "ram-push-volatile", "--from-run", earlier
         , "--record-baseline", "--baselines", root </> "private-data/baselines", "--output", output])
         { cwd = Just root
         , env = Just (("BUILD_WORKSPACE_DIRECTORY", root) : filter ((/= "BUILD_WORKSPACE_DIRECTORY") . fst) inherited) }) ""
-  (firstCode, _, _) <- runRecord
+  (firstCode, _, _) <- runRecord firstOutput
   before <- if firstCode == ExitSuccess then Just <$> BL.readFile baseline else pure Nothing
   seedRecordReceipt receipt ControlReceipt
-  (secondCode, _, _) <- runRecord
+  (secondCode, _, _) <- runRecord secondOutput
   present <- doesFileExist baseline
   after <- if present then Just <$> BL.readFile baseline else pure Nothing
-  pure (secondCode, before, after)
+  report <- either (const Nothing) Just <$> (eitherDecode <$> BL.readFile (secondOutput </> "report.json"))
+  pure (secondCode, before, after, report)
 
 seedRecordReceipt :: FilePath -> Qualification -> IO ()
 seedRecordReceipt directory qualification = do
@@ -298,7 +308,7 @@ main = do
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts FlatPlusSegmented Failed
   recorded <- recordBaseline tool (RecordedExit ExitSuccess) QualifiedOutcome
   check ("a known-success receipt records the baseline: " ++ show recorded)
-    (case recorded of (ExitSuccess, Just value) -> routeOf value == Just "ram-push-volatile"; _ -> False)
+    (case recorded of (ExitSuccess, Just value) -> routeOf value == Just (T.pack "ram-push-volatile"); _ -> False)
   controlled <- recordBaseline tool (RecordedExit ExitSuccess) ControlReceipt
   check ("a control receipt does not record a baseline: " ++ show controlled)
     (case controlled of (ExitFailure _, Nothing) -> True; _ -> False)
@@ -308,9 +318,15 @@ main = do
   failedRecord <- recordBaseline tool (RecordedExit (ExitFailure 1)) QualifiedOutcome
   check ("a failed command does not record a baseline: " ++ show failedRecord)
     (case failedRecord of (ExitFailure _, Nothing) -> True; _ -> False)
-  (replaceExit, before, after) <- recordReplacement tool
-  check ("a failed record does not replace an existing baseline: " ++ show replaceExit)
-    (replaceExit /= ExitSuccess && before == after)
+  unknownExit <- recordBaseline tool MissingExit QualifiedOutcome
+  check ("an unknown command exit does not record a baseline: " ++ show unknownExit)
+    (case unknownExit of (ExitFailure _, Nothing) -> True; _ -> False)
+  nullExit <- recordBaseline tool NullExit QualifiedOutcome
+  check ("a null command exit does not record a baseline: " ++ show nullExit)
+    (case nullExit of (ExitFailure _, Nothing) -> True; _ -> False)
+  (replaceExit, before, after, secondReport) <- recordReplacement tool
+  check ("a failed record reports failure and does not replace an existing baseline: " ++ show replaceExit)
+    (replaceExit /= ExitSuccess && before == after && reportResult secondReport == Just "fail")
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedWithControl Failed
   expect UsbToggle MissingExit EarlierRun EqualReceipts qualified Passed
   expect UsbToggle (RecordedExit (ExitFailure 1)) EarlierRun EqualReceipts qualified Passed
