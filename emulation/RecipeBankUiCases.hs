@@ -2421,8 +2421,8 @@ allowedSpans in' e sp =
        | claim@(region, offset, value) <- spClaims sp
        , claimChangesInitial (regionList in' e sp) claim
        ]
-    ++ [ (regionName region, offset, offset + count)
-       | TransientSpan region (ByteOffset offset) (ByteCount count) <- stockScratchSpans
+    ++ [ (region, offset, offset + count)
+       | TransientSpan (RegionId region) (ByteOffset offset) (ByteCount count) <- stockScratchSpans
        ]
 
 spanCovers :: String -> Int -> Int -> (String, Int, Int) -> Bool
