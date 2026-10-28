@@ -49,5 +49,5 @@ EOF
   # The JIT execution-gate tests run their emitted Wasm under Node.
   nativeCheckInputs = [ pkgs.nodejs ];
   dontUseCmakeConfigure = true;
-  passthru = { inherit rev src rustPlatform; };
+  passthru = { inherit rev src rustPlatform toolchain; };
 }
