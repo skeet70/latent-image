@@ -687,7 +687,7 @@ runServiceCase runner path = do
 
 mutantChecks :: Expectation -> N.NativeObservation -> [Value]
 mutantChecks expectation observation =
-  [ mutant (serviceMutantName required) (mutate required observation)
+  [ mutant (serviceMutantName required) (mutate required)
   | required <- contractMutants serviceContract
   ]
   where
