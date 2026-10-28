@@ -2,13 +2,13 @@
 module Main (main) where
 
 import Control.Exception (bracket)
-import Control.Monad (forM_, unless)
+import Control.Monad (forM_, unless, when)
 import Data.Aeson (FromJSON (..), Value (..), eitherDecode, encode, object, toJSON, withObject, withText, (.:), (.=))
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Text as T
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BLC
-import System.Directory (createDirectory, createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
+import System.Directory (createDirectory, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
 import System.Environment (getArgs, getEnvironment)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath ((</>))
@@ -275,6 +275,8 @@ seedRecordReceipt directory qualification = do
 
 seedRecordSegments :: FilePath -> Int -> Qualification -> IO ()
 seedRecordSegments directory value qualification = do
+  stale <- doesDirectoryExist directory
+  when stale (removeDirectoryRecursive directory)
   createDirectoryIfMissing True directory
   let names = ["service-field-list"]
       outcome = case qualification of
