@@ -2,8 +2,6 @@
 //!
 //! No service calls and no stores.
 
-#![cfg_attr(not(test), no_std)]
-
 pub const VERBS_PER_SLOT: u32 = 4;
 pub const BANK_SLOTS: u32 = 7;
 pub const SELECT_ROWS: u32 = 8;
