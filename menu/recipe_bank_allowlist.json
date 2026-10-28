@@ -211,7 +211,7 @@
     {
       "address": "0x00d52684",
       "name": "RB_STOCK_PROBE",
-      "source": "menu/recipe_bank_probe.c #define RB_STOCK_PROBE"
+      "source": "replacement/service/rb_service_stock.S rb_call_stock_probe"
     },
     {
       "address": "0x00d5868c",

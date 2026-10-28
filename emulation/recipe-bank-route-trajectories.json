@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "entry": "Live view at the flash candidate's card attach checkpoint. One read-only phase enters the bank's slot list and SELECT CUSTOM SETTING list, navigates both, cancels out, and repeats entry and handback to the stock shooting menu. No Save Current, Edit, Reset, dialog OK, field OK or SELECT row OK is pressed; no media is inserted or removed.",
+  "before_unload": [
+    {"phase": "bank-route-read-only", "capture": "route-slot-list", "reads": [["c-record", "0096cda4", 40], ["live-cells-ht-st", "00956b40", 8], ["ordinary-block", "0096cc64", 248], ["rb-resident-header", "runtime:rb_resident", 64], ["rb-activation", "runtime:rb_activation", 8], ["rb-current-gen", "runtime:rb_current_gen", 4], ["rb-resident-selection", "runtime:rb_resident+0x20", 4]], "steps": [["menu", 1, 5, 2], ["left", 0, 5, 0], ["down", 0, 5, 1], ["down", 0, 5, 2], ["down", 0, 5, 3], ["down", 0, 5, 4], ["right", 1, 5, 30], ["down", 1, 5, 31], ["down", 1, 5, 32], ["down", 1, 5, 33], ["ok", 97, 641, 0]]},
+    {"phase": "bank-route-read-only", "capture": "route-slot-navigated", "steps": [["down", 97, 641, 1], ["down", 97, 641, 2], ["down", 97, 641, 3], ["down", 97, 641, 4], ["down", 97, 641, 5], ["down", 97, 641, 6], ["up", 97, 641, 5], ["up", 97, 641, 4], ["up", 97, 641, 3], ["up", 97, 641, 2], ["up", 97, 641, 1], ["up", 97, 641, 0]]},
+    {"phase": "bank-route-read-only", "capture": "route-verb-page", "steps": [["ok", 97, 624, 0], ["down", 97, 624, 1], ["down", 97, 624, 2], ["down", 97, 624, 3], ["up", 97, 624, 2], ["up", 97, 624, 1], ["up", 97, 624, 0]]},
+    {"phase": "bank-route-read-only", "capture": "route-slot-list-returned", "steps": [["back", 97, 641, 0], ["back", 1, 5, 33]]},
+    {"phase": "bank-route-read-only", "capture": "route-select-list", "steps": [["down", 1, 5, 34], ["ok", 1, 645, 0], ["down", 1, 645, 1], ["down", 1, 645, 2], ["down", 1, 645, 3], ["down", 1, 645, 4], ["down", 1, 645, 5], ["down", 1, 645, 6], ["down", 1, 645, 7], ["up", 1, 645, 6], ["up", 1, 645, 5], ["up", 1, 645, 4], ["up", 1, 645, 3], ["up", 1, 645, 2], ["up", 1, 645, 1], ["up", 1, 645, 0]]},
+    {"phase": "bank-route-read-only", "capture": "route-select-cancel", "steps": [["back", 1, 5, 34]]},
+    {"phase": "bank-route-read-only", "capture": "route-handback", "reads": [["c-record", "0096cda4", 40], ["live-cells-ht-st", "00956b40", 8], ["ordinary-block", "0096cc64", 248], ["rb-resident-header", "runtime:rb_resident", 64], ["rb-activation", "runtime:rb_activation", 8], ["rb-current-gen", "runtime:rb_current_gen", 4], ["rb-resident-selection", "runtime:rb_resident+0x20", 4]], "steps": [["up", 1, 5, 33], ["ok", 97, 641, 0], ["down", 97, 641, 1], ["up", 97, 641, 0], ["back", 1, 5, 33], ["down", 1, 5, 34]]}
+  ],
+  "after_unload": []
+}
