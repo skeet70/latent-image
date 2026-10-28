@@ -5,7 +5,7 @@
 module Main where
 
 import Control.Monad
-import FujiAF.Host (str)
+import FujiAF.Host (get, str)
 import FujiAF.RecipeBank (BootCrc32 (..), bootCrc32)
 import Data.Aeson hiding (encodeFile)
 import Data.Aeson.Types (Parser, parseEither, parseMaybe)
