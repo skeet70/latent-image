@@ -361,6 +361,20 @@ sh_binary(
     visibility = ["//visibility:public"],
 )
 
+haskell_test(
+    name = "fujimod-xm1-tests",
+    size = "small",
+    srcs = ["FujimodXm1Tests.hs"],
+    args = ["$(rootpath @lab_fujimod_xm1//:test-manifest)"],
+    data = ["@lab_fujimod_xm1//:test-harnesses"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base",
+        "//host:filepath",
+        "//host:process",
+    ],
+)
+
 haskell_binary(
     name = "fujimod-ram-push-check",
     srcs = ["FujiModRamPushCheck.hs"],
