@@ -42,6 +42,12 @@ The failed handback expectation was corrected from observation, not fitted to th
 
 An earlier empty-slot run showed SELECT navigation staying on row 0 when the card's slots were unset. That is an observation of the stock list's disabled-row handling, not yet a pinned resource-absence trajectory. Storage failure and refusal paths are covered by the passing host cases; the packaged run has no new resource acquisition of its own.
 
+## Route choice
+
+The device-driven packaged route is the existing cardless RAM push, not a new flash DAT. `emulation/recipe-bank-route-ram-push-trajectories.json` starts from the e2e's focus-area overlay, enters both bank lists, and asserts the empty resident bank's disabled SELECT rows stay on row 0 before cancelling and repeating entry. That is the resource-absence behavior, not a substitute for a populated bank. The flash-candidate trajectory with `card-sel.img` remains baseline evidence for populated slot and select navigation; it is not the packaged Rust route. No flash DAT wiring is added for the automated route.
+
+Human visual assessment needs an interactive surface. The RAM-push e2e terminates after its trajectories and exposes no viewer URL; the existing interactive bank surface is a flash DAT. The smallest same-payload packaging change is to have `build-recipe-package` link the same `//replacement/bank:bank` archive into its kernel, reusing the existing container chain. That is a packaging prerequisite for visual evidence, not a second build system or a hardware publication.
+
 ## Qualification status
 
 | Field | Value |
@@ -70,7 +76,13 @@ SERVICE_ARCHIVE="$PWD/bazel-bin/replacement/bank/bank.a" BUILD_DIR="$PWD/private
 devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-issue117-recipe-ui" test --jobs=2 --nocache_test_results --test_output=errors //emulation:recipe-bank-ui-plan-tests //emulation:ui-trajectory-tests
 ```
 
-The archive target is an added workflow step relative to the #118 baseline. The flash candidate route needs a DAT rebuilt with the bank archive; `build-recipe-package` does not currently consume it.
+The archive target is an added workflow step relative to the #118 baseline. The packaged read-only route is:
+
+```sh
+XM1_EMULATOR_SLOTS=1 devenv shell -- bazel run //emulation:xm1-viewer -- --ram-push-e2e --cardless --unreviewed-relink --firmware private-data/analysis/x-m1-1.50/update/prefix/FWUP0002-prefix.DAT --installed-nand private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand --trajectories emulation/recipe-bank-route-ram-push-trajectories.json --receipt-output <fresh private path> --output <fresh private runtime path>
+```
+
+The flash candidate route needs a DAT rebuilt with the bank archive; `build-recipe-package` does not currently consume it.
 
 ## Remaining
 
