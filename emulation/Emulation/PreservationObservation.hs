@@ -340,7 +340,7 @@ checkPreservation expected ack observation = do
     Just (IntegrityFault reason) -> Left ("preservation integrity fault: " ++ integrityReasonLabel reason)
     Just violation@CpuChange{} -> do
       unless (changed > 0) (Left "preservation cpu-change has no changed cpu-write")
-      unless (any (contains violation) ranges) (Left "preservation cpu-change lies outside the protected ranges")
+      unless (contains violation ranges) (Left "preservation cpu-change lies outside the protected ranges")
       pure (PreservationRejected violation counters)
     Just violation@UnverifiableWrite{} -> do
       let observed = case violationSource violation of
