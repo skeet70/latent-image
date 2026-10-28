@@ -14,14 +14,14 @@ import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, withObject, 
 import Data.Aeson.Types (Pair, parseEither)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import Data.List (intercalate, isPrefixOf, nub)
+import Data.List (intercalate, isPrefixOf)
 
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, fromMaybe, isJust)
 import qualified Data.Text as T
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
-import Emulation.UiTrajectory (SegmentReceipt (..), SegmentResult (..), decodeSegmentReceipts, segmentNameText)
+import Emulation.SegmentReceipt (SegmentReceipt (..), SegmentResult (..), decodeDeclaredReceipts, segmentNameText)
 import Emulation.WatchObservation (WatchJudgement (..))
 import Emulation.CandidateBaseline
 import Emulation.EmulatorSlot (SlotCount (..), SlotPolicy (..), slotPolicyFromEnvironment)
@@ -129,21 +129,17 @@ candidateQualification receipt = do
     if split then
       if flat then pure (Just "flat and segmented receipts cannot both qualify a candidate")
       else do
-        parsed <- decodeSegmentReceipts <$> B.readFile (receipt </> "e2e-segments.json")
+        parsed <- decodeDeclaredReceipts <$> B.readFile (receipt </> "e2e-segments.json")
         case parsed of
           Left problem -> pure (Just ("unreadable e2e-segments.json: " ++ problem))
-          Right [] -> pure (Just "only judged segments can qualify a candidate")
-          Right receipts -> do
-            let names = map segmentReceiptName receipts
-            if length names /= length (nub names) then pure (Just "duplicate segment names cannot qualify a candidate")
-            else case [(entry, segmentReceiptName entry) | entry <- receipts, SegmentFailed _ <- [segmentReceiptResult entry]] of
-              (entry, name) : _ -> case segmentReceiptResult entry of
-                SegmentFailed text -> pure (Just ("failed segment cannot qualify a candidate: "
-                  ++ T.unpack (segmentNameText name) ++ ": " ++ T.unpack text))
-                SegmentPassed -> pure (Just "failed segment cannot qualify a candidate")
-              [] -> do
-                problems <- mapM segment names
-                pure (firstProblem problems)
+          Right receipts -> case [(entry, segmentReceiptName entry) | entry <- receipts, SegmentFailed _ <- [segmentReceiptResult entry]] of
+            (entry, name) : _ -> case segmentReceiptResult entry of
+              SegmentFailed text -> pure (Just ("failed segment cannot qualify a candidate: "
+                ++ T.unpack (segmentNameText name) ++ ": " ++ T.unpack text))
+              SegmentPassed -> pure (Just "failed segment cannot qualify a candidate")
+            [] -> do
+              problems <- mapM segment (map segmentReceiptName receipts)
+              pure (firstProblem problems)
     else if not flat then pure (Just "no e2e qualification record") else single (receipt </> "e2e-result.json")
   where
     segment name = do
@@ -336,29 +332,44 @@ e2eResult file = emulatorStart file "/emulator_start" ++ instructionTimingExclus
 -- | Recurring live-view develop markers differed between runs of one tree on the same restored checkpoint.
 iconRunLength :: [Exclusion]
 iconRunLength =
-  [ exclude "e2e-result.json" "/observations/*/classic_chrome_site_entries" Scheduling ]
+  [ exclude "e2e-result.json" "/observations/*/classic_chrome_site_entries" Scheduling
+  , exclude "segment-*/e2e-result.json" "/observations/*/classic_chrome_site_entries" Scheduling ]
 
 ramPushSpec :: [Exclusion] -> ObservationSpec
 ramPushSpec extra = ObservationSpec
   (map filePattern
     [ "e2e-result.json", "e2e-fetch-watch.json", "cold-restart/e2e-cold-restart.json"
     , "relinked/runtime.bin", "relinked/ram-push-manifest.json", "relinked/bank-allowlist.json", "relinked/kernel.syms"
-    , "alloc/ram-alloc-state.json", "push/ram-push-state.json", "unload/ram-unload-state.json", "screenshots/*.png" ])
-  (e2eResult "e2e-result.json" ++ emulatorStart "cold-restart/e2e-cold-restart.json" "/emulator_start" ++ extra ++
+    , "alloc/ram-alloc-state.json", "push/ram-push-state.json", "unload/ram-unload-state.json", "screenshots/*.png"
+    , "e2e-segments.json" ])
+  (e2eResult "e2e-result.json" ++ e2eResult "segment-*/e2e-result.json"
+    ++ emulatorStart "cold-restart/e2e-cold-restart.json" "/emulator_start"
+    ++ emulatorStart "segment-*/cold-restart/e2e-cold-restart.json" "/emulator_start" ++ extra ++
     ramPushCardImageExclusions ++
     [ exclude "e2e-result.json" "/states" RunLocation
-    , exclude "e2e-result.json" "/runtime/manifest" RunLocation ])
+    , exclude "e2e-result.json" "/runtime/manifest" RunLocation
+    , exclude "segment-*/e2e-result.json" "/states" RunLocation
+    , exclude "segment-*/e2e-result.json" "/runtime/manifest" RunLocation
+    , exclude "e2e-segments.json" "/*/seconds" Timing
+    , exclude "segment-*/e2e-observation-*.json" "/steps/*/seconds" Timing
+    , exclude "segment-*/e2e-observation-*.json" "/trace_hits/*/instructions" Timing ])
+  (map filePattern
+    [ "e2e-result.json", "e2e-fetch-watch.json", "e2e-observation-*.json", "cold-restart/e2e-cold-restart.json"
+    , "relinked/runtime.bin", "relinked/ram-push-manifest.json", "relinked/bank-allowlist.json", "relinked/kernel.syms"
+    , "alloc/ram-alloc-state.json", "push/ram-push-state.json", "unload/ram-unload-state.json", "screenshots/*.png" ])
 
 flashCandidateSpec :: ObservationSpec
 flashCandidateSpec = ObservationSpec
-  (map filePattern ["e2e-segments.json", "segment-*/e2e-result.json", "segment-*/screenshots/*.png"])
+  [filePattern "e2e-segments.json"]
   (exclude "e2e-segments.json" "/*/seconds" Timing : e2eResult "segment-*/e2e-result.json")
+  (map filePattern ["e2e-result.json", "screenshots/*.png"])
 
 updaterSpec :: ObservationSpec
 updaterSpec = ObservationSpec
   [filePattern "receipt.json"]
   [ exclude "receipt.json" "/exported_nand/path" RunLocation
   , exclude "receipt.json" "/inputs/*/path" RunLocation ]
+  []
 
 
 fujimodFlashBootSpec :: ObservationSpec
@@ -368,9 +379,10 @@ fujimodFlashBootSpec = ObservationSpec
   , exclude "fujimod-flash-boot-receipt.json" "/emulator_source" CandidateIdentity
   , exclude "fujimod-flash-boot-receipt.json" "/firmware/path" RunLocation
   , exclude "fujimod-flash-boot-receipt.json" "/frame_png" RunLocation ]
+  []
 
 nativeSpec :: ObservationSpec
-nativeSpec = ObservationSpec (map filePattern ["results.json", "findings.txt"]) []
+nativeSpec = ObservationSpec (map filePattern ["results.json", "findings.txt"]) [] []
 
 routeCheck :: Route -> Check
 routeCheck route = case route of
@@ -672,23 +684,23 @@ judge judging route execution = do
               | referencePresent -> candidateQualification reference
             _ -> pure Nothing
           if not referencePresent then pure (outcome "fail" (Just ("counterpart " ++ routeName counterpart ++ " has no receipt")))
-          else if Just problem <- referenceQualification
-            then pure (outcome "fail" (Just ("counterpart " ++ routeName counterpart ++ ": " ++ problem)))
-          else do
-            (code, out, err) <- readProcessWithExitCode (judgingCompare judging) [reference, receipt] ""
-            createDirectoryIfMissing True (judgingOutput judging </> "differences")
-            writeFile (judgingOutput judging </> "differences" </> (routeName route ++ ".compare.txt")) (out ++ err)
-            let reported = [drop (length prefix) line | line <- lines out, prefix `isPrefixOf` line]
-                prefix = "e2e-observation-compare: "
-                exitProblem
-                  | not requireExit = Nothing
-                  | ExecutionUnknown <- execution = Just "route exit status is unknown"
-                  | otherwise = failedRun
-            pure $ case (code, exitProblem) of
-              (ExitSuccess, Nothing) -> outcome "pass" Nothing
-              (ExitSuccess, Just problem) -> outcome "fail" (Just problem)
-              (ExitFailure _, _) -> outcome "fail" (Just (intercalate "; " (maybe [] pure exitProblem
-                ++ [case reported of first : _ : _ -> last reported ++ ", first " ++ first; _ -> unwords (lines (out ++ err))])))
+          else case referenceQualification of
+            Just problem -> pure (outcome "fail" (Just ("counterpart " ++ routeName counterpart ++ ": " ++ problem)))
+            Nothing -> do
+              (code, out, err) <- readProcessWithExitCode (judgingCompare judging) [reference, receipt] ""
+              createDirectoryIfMissing True (judgingOutput judging </> "differences")
+              writeFile (judgingOutput judging </> "differences" </> (routeName route ++ ".compare.txt")) (out ++ err)
+              let reported = [drop (length prefix) line | line <- lines out, prefix `isPrefixOf` line]
+                  prefix = "e2e-observation-compare: "
+                  exitProblem
+                    | not requireExit = Nothing
+                    | ExecutionUnknown <- execution = Just "route exit status is unknown"
+                    | otherwise = failedRun
+              pure $ case (code, exitProblem) of
+                (ExitSuccess, Nothing) -> outcome "pass" Nothing
+                (ExitSuccess, Just problem) -> outcome "fail" (Just problem)
+                (ExitFailure _, _) -> outcome "fail" (Just (intercalate "; " (maybe [] pure exitProblem
+                  ++ [case reported of first : _ : _ -> last reported ++ ", first " ++ first; _ -> unwords (lines (out ++ err))])))
         AgainstBaseline spec -> do
           let baselinePath = judgingBaselines judging </> (routeName route ++ ".json")
               outcome result problem differences = Outcome route receipt execution result problem differences (Just baselinePath) Nothing []

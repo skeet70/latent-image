@@ -28,7 +28,7 @@ main = do
   removeFile root
   createDirectory root
   inherited <- getEnvironment
-  let tools = replicate 11 (root </> "absent-tool")
+  let tools = replicate 13 (root </> "absent-tool")
       cleanEnv = filter ((`notElem` ["BUILD_WORKSPACE_DIRECTORY", "STOCK", "SPEC", "D3_SPEC"]) . fst) inherited
       runIn extra arguments =
         readCreateProcessWithExitCode (proc binary (tools ++ arguments)) {cwd = Just root, env = Just (extra ++ cleanEnv)} ""

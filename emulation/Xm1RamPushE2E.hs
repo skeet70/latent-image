@@ -5,7 +5,7 @@ import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, try)
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON (..), Value (..), encode, object, withObject, (.:), (.=))
-import Data.Aeson.Types (parseEither, parseMaybe)
+import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (nub, sort)
 import Data.Maybe (catMaybes, isJust)
@@ -18,7 +18,6 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (shiftL, shiftR, (.|.))
 import Data.Int (Int32)
-import Data.List (nub)
 import Data.Word (Word32)
 import Numeric (showFFloat, showHex)
 import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectory, removeDirectoryRecursive, setCurrentDirectory)
@@ -29,12 +28,12 @@ import System.Posix.Files (setFileMode)
 import System.Posix.Temp (mkdtemp)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, hostProcedure, procedureHex, routeKey, routeKeyHex)
 import Emulation.Sha256 (sha256File, sha256Hex)
+import Emulation.SegmentReceipt (SegmentReceipt (..), SegmentResult (..), elapsedSeconds, segmentName, segmentNameText)
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
 import Emulation.UiTrajectory
 import Emulation.WatchObservation
 import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
 import EmulatorUsb
-import Emulation.UiTrajectory (SegmentReceipt (..), SegmentResult (..), elapsedSeconds, segmentName, segmentNameText)
 import FujiAF.RamPush
 import FujiAF.Transport (ensurePrivateDirectory, realClock, writePrivateBytes)
 import Xm1UnreviewedRelink (runUnreviewedRamPush, runUnreviewedRamUnload, withUnreviewedBuild)
@@ -477,7 +476,7 @@ runRamPushE2E given python workspace trajectoryFile installedMedia adjustmentNan
         outcome <- try (session plan (receipt </> ("segment-" ++ T.unpack (segmentNameText name))))
         ended <- getMonotonicTime
         elapsed <- either (ioError . userError) pure (elapsedSeconds (ended - started))
-        let failure = either (\(problem :: SomeException) -> Just (T.pack (displayException problem))) (const Nothing) outcome
+        let failure = either (\(exception :: SomeException) -> Just (T.pack (displayException exception))) (const Nothing) outcome
             problem = either Just (const Nothing) outcome :: Maybe SomeException
         putStrLn ("segment " ++ T.unpack (planName plan) ++ ": " ++ maybe "passed" (("failed: " ++) . T.unpack) failure
           ++ " in " ++ seconds (ended - started))
@@ -590,8 +589,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     let resolveName name = either (ioError . userError) pure (resolveSymbol symbolTable name)
         resolveAddress (FixedAddress value) = pure value
         resolveAddress (RuntimeSymbol name offset) = do
-          base <- resolveName name
-          let address = toInteger base + toInteger offset
+          symbolBase <- resolveName name
+          let address = toInteger symbolBase + toInteger offset
           require (address <= 0xffffffff) ("read address overflows 32 bits: " ++ name)
           pure (fromIntegral address)
     declaredTraceSites <- resolveTraceSites resolveName (planTraceSites plan)
@@ -781,8 +780,8 @@ resolveTraceSites resolve sites = do
   resolved <- forM sites $ \site -> case traceSiteAddress site of
     FixedAddress address -> pure (address, traceSiteLabel site)
     RuntimeSymbol name offset -> do
-      base <- resolve name
-      let address = toInteger base + toInteger offset
+      symbolBase <- resolve name
+      let address = toInteger symbolBase + toInteger offset
       require (address <= 0xffffffff) ("trace site overflows 32 bits: " ++ traceSiteLabel site)
       pure (fromIntegral address, traceSiteLabel site)
   mapM_ (\(address, label) -> require (address `mod` 4 == 0) ("trace site is not word aligned: " ++ label)) resolved
@@ -892,16 +891,16 @@ runFlashSession settings python runtime installedMedia adjustmentNand plan e2e =
     ensurePrivateDirectory e2e
     let isRuntime (RuntimeSymbol _ _) = True
         isRuntime _ = False
-        reads = [start | segment <- planBefore plan ++ planAfter plan, (_, start, _) <- segmentReads segment]
-        needsSymbols = any isRuntime reads || any (isRuntime . traceSiteAddress) (planTraceSites plan)
+        readStarts = [readStart | segment <- planBefore plan ++ planAfter plan, (_, readStart, _) <- segmentReads segment]
+        needsSymbols = any isRuntime readStarts || any (isRuntime . traceSiteAddress) (planTraceSites plan)
     symbols <- if needsSymbols then Just <$> flashCandidateSymbols (firmwareSource settings) else pure Nothing
     let resolveName name = case symbols of
           Nothing -> ioError (userError ("runtime symbol requested without a symbol table: " ++ name))
           Just table -> either (ioError . userError) pure (resolveSymbol table name)
         resolveAddress (FixedAddress value) = pure value
         resolveAddress (RuntimeSymbol name offset) = do
-          base <- resolveName name
-          let address = toInteger base + toInteger offset
+          symbolBase <- resolveName name
+          let address = toInteger symbolBase + toInteger offset
           require (address <= 0xffffffff) ("read address overflows 32 bits: " ++ name)
           pure (fromIntegral address)
     declaredTraceSites <- resolveTraceSites resolveName (planTraceSites plan)

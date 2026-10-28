@@ -17,6 +17,7 @@ spec = ObservationSpec
   (map filePattern ["result.json", "shots/*.png"])
   [ Exclusion (filePattern "result.json") (pointerPattern "/steps/*/seconds") Timing
   , Exclusion (filePattern "result.json") (pointerPattern "/start") CheckpointState ]
+  []
 
 writeReceipt :: FilePath -> C.ByteString -> C.ByteString -> IO ()
 writeReceipt root document png = do
@@ -91,7 +92,7 @@ main = do
   C.writeFile flashPath (flashReceipt "[{\"phase\":\"language\",\"instructions\":10,\"frame_sha256\":\"language-a\"},{\"phase\":\"shooting-menu\",\"instructions\":20,\"frame_sha256\":\"menu-b\"}]" "30")
   flashHashesChanged <- observe flashBootSpec receipt
 
-  let traceSpec = ObservationSpec [filePattern "result.json"] (instructionTimingExclusions (filePattern "result.json"))
+  let traceSpec = ObservationSpec [filePattern "result.json"] (instructionTimingExclusions (filePattern "result.json")) []
       tracePath = root </> "result.json"
   C.writeFile tracePath "{\"observations\":[{\"trace_hits\":[{\"instructions\":100,\"label\":\"press\"},{\"instructions\":200,\"label\":\"release\"}]}]}"
   traceBaseline <- observe traceSpec {observationExclusions = []} receipt
@@ -103,6 +104,7 @@ main = do
   let cardSpec = ObservationSpec
         (map filePattern ["e2e-result.json", "cold-restart/e2e-cold-restart.json"])
         ramPushCardImageExclusions
+        []
       originalRoot = root </> "original-run"
       movedRoot = root </> "moved-run"
   writeCardReceipts originalRoot True True

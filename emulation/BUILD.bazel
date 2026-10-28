@@ -366,7 +366,10 @@ haskell_test(
     size = "small",
     srcs = ["FujimodXm1Tests.hs"],
     args = ["$(rootpath @lab_fujimod_xm1//:test-manifest)"],
-    data = ["@lab_fujimod_xm1//:test-harnesses"],
+    data = [
+        "@lab_fujimod_xm1//:test-manifest",
+        "@lab_fujimod_xm1//:test-harnesses",
+    ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         "//host:base",
@@ -396,10 +399,25 @@ haskell_binary(
 )
 
 haskell_library(
+    name = "segment-receipt-lib",
+    srcs = ["Emulation/SegmentReceipt.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+    ],
+)
+
+haskell_library(
     name = "ui-trajectory-lib",
     srcs = ["Emulation/Symbols.hs", "Emulation/UiTrajectory.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
     deps = [
         ":emulator-usb",
         ":watch-observation",
@@ -478,8 +496,10 @@ haskell_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":observation-compare-lib",
+        ":segment-receipt-lib",
         "//host:aeson",
         "//host:base",
+        "//host:bytestring",
         "//host:directory",
         "//host:filepath",
         "//host:text",
@@ -512,6 +532,7 @@ haskell_binary(
         ":emulator-usb",
         ":watch-observation",
         ":ui-trajectory-lib",
+        ":segment-receipt-lib",
         ":ram-push-unreviewed",
         ":ram-push-procedure",
         "//host:base",
@@ -1492,6 +1513,7 @@ haskell_library(
         "-O2",
     ],
     src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
     deps = [
         "//host:aeson",
         "//host:base",
@@ -1648,6 +1670,7 @@ haskell_library(
     src_strip_prefix = ".",
     deps = [
         ":case-sha256",
+        ":segment-receipt-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -1698,6 +1721,7 @@ haskell_binary(
         ":key-release-observations",
         ":watch-observation",
         ":ui-trajectory-lib",
+        ":segment-receipt-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -1719,6 +1743,7 @@ haskell_test(
     data = [":verify-candidate"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
+        ":candidate-baseline-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

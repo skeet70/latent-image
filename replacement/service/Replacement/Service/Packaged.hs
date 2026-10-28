@@ -26,7 +26,7 @@ import qualified Data.Text as T
 import Data.Word (Word32, Word64)
 import Emulation.Sha256 (sha256, sha256File, sha256Hex)
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
-import Emulation.UiTrajectory (SegmentName, segmentName, segmentNameText)
+import Emulation.SegmentReceipt (SegmentName, segmentName, segmentNameText)
 import Emulation.WatchObservation (WatchJudgement (..))
 import FujiAF.Host (arr, b, n, obj, s)
 import FujiAF.RamPush (RamPushManifest (..), readRamPushManifest)
@@ -48,11 +48,11 @@ import System.FilePath (isAbsolute, (</>), takeFileName)
 newtype Digest = Digest { digestText :: String } deriving (Eq, Ord, Show)
 
 instance FromJSON Digest where
-  parseJSON = withText "digest" (either fail pure . parseDigest)
+  parseJSON = withText "digest" (either fail pure . parseDigest . T.unpack)
 
 parseDigest :: String -> Either String Digest
 parseDigest text
-  | length text == 64 && all (`elem` "0123456789abcdef") text = Right (Digest text)
+  | length text == 64 && all (`elem` ("0123456789abcdef" :: String)) text = Right (Digest text)
   | otherwise = Left "digest must be 64 lowercase hex digits"
 
 trustedDigest :: String -> Digest
@@ -601,7 +601,7 @@ analyzeHits boundary = go [] [] []
             then (reverse sequences, reverse retained, reverse ("svc-rust-entry occurs after service-after-unload" : problems))
             else case parseSequence (position : rest) of
               Left problem -> (reverse sequences, reverse retained, reverse (problem : problems))
-              Right (sequence, remaining) -> go (sequence : sequences) retained problems remaining
+              Right (ownedSequence, remaining) -> go (ownedSequence : sequences) retained problems remaining
       | hitSite hit == stockLabel = go sequences (hit : retained) problems rest
       | otherwise = (reverse sequences, reverse retained, reverse (("unexpected trace event outside an owned interval: " ++ traceSiteLabelText (hitSite hit)) : problems))
       where
@@ -720,7 +720,7 @@ rowEvidence sequences =
       , packagedRowPhases = nub (map ownedPhase owned)
       }
   | row <- selectedRows
-  , let owned = [sequence | sequence <- sequences, ownedRow sequence == serviceRowToken row]
+  , let owned = [ownedSequence | ownedSequence <- sequences, ownedRow ownedSequence == serviceRowToken row]
   ]
 
 lifecycleChecks :: E2E -> [String]
@@ -773,7 +773,7 @@ serviceAfterUnloadPhase = phaseName "service-after-unload"
 serviceAfterUnloadStockPhase = phaseName "service-after-unload-stock"
 
 phaseName :: Text -> SegmentName
-phaseName text = either (error . ("invalid service phase: " ++ T.unpack text)) id (segmentName text)
+phaseName text = either (\problem -> error ("invalid service phase: " ++ T.unpack text ++ ": " ++ problem)) id (segmentName text)
 
 parseAddress8 :: Text -> Parser TraceAddress
 parseAddress8 text
@@ -785,12 +785,16 @@ parseAddress8 text
 parseAddressText :: Text -> Parser TraceAddress
 parseAddressText text = case T.stripPrefix "0x" text of
   Just digits
-    | not (null digits), all isHexDigit (T.unpack digits), length (T.unpack digits) <= 8
+    | not (T.null digits), all isHexDigit (T.unpack digits), length (T.unpack digits) <= 8
     , [(value, "")] <- readHex (T.unpack digits) -> pure (TraceAddress value)
   _ -> fail ("hex address requires 0x: " ++ T.unpack text)
 
 parseRegister :: Value -> Parser Word32
-parseRegister (String text) = parseAddressText text
+parseRegister (String text) = do
+  address <- case T.stripPrefix "0x" text of
+    Just _ -> parseAddressText text
+    Nothing -> parseAddress8 text
+  pure (traceAddressWord address)
 parseRegister _ = fail "register value must be a hex string"
 
 traceAddressText :: TraceAddress -> String
@@ -828,14 +832,14 @@ packagedReportValue report =
       , ("nested_calls", n (fromIntegral (packagedRowNested row)))
       , ("phases", arr (map (s . T.unpack . segmentNameText) (packagedRowPhases row)))
       ]
-    sequenceValue sequence = obj
-      [ ("row", n (fromIntegral (ownedRow sequence)))
-      , ("phase", s (T.unpack (segmentNameText (ownedPhase sequence))))
-      , ("core", n (fromIntegral (coreIdValue (ownedCore sequence))))
-      , ("entry_instructions", n (fromIntegral (instructionCountValue (hitInstructions (ownedEntry sequence)))))
-      , ("return_instructions", n (fromIntegral (instructionCountValue (hitInstructions (ownedReturn sequence)))))
-      , ("nested_calls", n (fromIntegral (length (ownedNested sequence))))
-      , ("returned", n (fromIntegral (hitR0 (ownedReturn sequence))))
+    sequenceValue ownedSequence = obj
+      [ ("row", n (fromIntegral (ownedRow ownedSequence)))
+      , ("phase", s (T.unpack (segmentNameText (ownedPhase ownedSequence))))
+      , ("core", n (fromIntegral (coreIdValue (ownedCore ownedSequence))))
+      , ("entry_instructions", n (fromIntegral (instructionCountValue (hitInstructions (ownedEntry ownedSequence)))))
+      , ("return_instructions", n (fromIntegral (instructionCountValue (hitInstructions (ownedReturn ownedSequence)))))
+      , ("nested_calls", n (fromIntegral (length (ownedNested ownedSequence))))
+      , ("returned", n (fromIntegral (hitR0 (ownedReturn ownedSequence))))
       ]
     hitValue hit = obj
       [ ("site", s (traceSiteLabelText (hitSite hit)))
