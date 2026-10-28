@@ -12,7 +12,6 @@ module Emulation.UiTrajectory
   , Trajectories (..)
   , TrajectoryExpect (..)
   , expectLabel
-  , module Emulation.SegmentReceipt
   , phaseNames
   , decodeTrajectories
   , variantMismatches
@@ -27,7 +26,6 @@ import Data.Foldable (toList)
 import Data.List (nub, stripPrefix)
 import qualified Data.Text as T
 import Data.Word (Word32)
-import Emulation.SegmentReceipt
 import Emulation.WatchObservation (WatchRange, watchAddress, watchRange)
 import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming, modeDialName)
 import Numeric (readHex)

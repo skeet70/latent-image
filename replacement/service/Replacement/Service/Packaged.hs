@@ -26,7 +26,7 @@ import qualified Data.Text as T
 import Data.Word (Word32, Word64)
 import Emulation.Sha256 (sha256, sha256File, sha256Hex)
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
-import Emulation.UiTrajectory (SegmentName, segmentName, segmentNameText)
+import Emulation.SegmentReceipt (SegmentName, segmentName, segmentNameText)
 import Emulation.WatchObservation (WatchJudgement (..))
 import FujiAF.Host (arr, b, n, obj, s)
 import FujiAF.RamPush (RamPushManifest (..), readRamPushManifest)

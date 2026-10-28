@@ -39,11 +39,11 @@ import Data.Aeson.Types (Parser, parseEither, withArray, withObject, (.:))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
-import Data.List (isSuffixOf, nub, sort, sortOn)
+import Data.List (isSuffixOf, sort, sortOn)
 import Data.Scientific (toBoundedInteger)
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Emulation.SegmentReceipt (SegmentName, SegmentReceipt (..), decodeSegmentReceipts, segmentNameText)
+import Emulation.SegmentReceipt (SegmentName, decodeDeclaredSegments, segmentNameText)
 import Emulation.Sha256 (sha256, sha256Hex)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (splitDirectories, (</>))
@@ -189,21 +189,13 @@ observe spec (ReceiptDirectory root) = do
       else pure [Field (FieldName path Nothing) (String (T.pack ("sha256:" ++ sha256Hex (sha256 bytes))))])
   pure (withoutExcluded spec fields)
 
--- | The typed declared segment list; a manifest that cannot declare one is a refusal.
 declaredSegments :: FilePath -> IO [SegmentName]
 declaredSegments root = do
   let path = root </> "e2e-segments.json"
   present <- doesFileExist path
   if not present then pure [] else do
     bytes <- B.readFile path
-    case decodeSegmentReceipts bytes of
-      Left problem -> ioError (userError (path ++ ": " ++ problem))
-      Right [] -> ioError (userError (path ++ ": declares no segments"))
-      Right receipts -> do
-        let names = map segmentReceiptName receipts
-        if length names /= length (nub names)
-          then ioError (userError (path ++ ": repeats a segment name"))
-          else pure names
+    either (ioError . userError . ((path ++ ": ") ++)) pure (decodeDeclaredSegments bytes)
 
 -- | The fields the spec does not exclude, in 'FieldName' order. Applied to a
 -- stored baseline, it compares under the current exclusions.

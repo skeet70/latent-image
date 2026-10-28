@@ -62,7 +62,7 @@ haskell_library(
     deps = [
         ":qualification",
         "//emulation:case-sha256",
-        "//emulation:ui-trajectory-lib",
+        "//emulation:segment-receipt-lib",
         "//emulation:watch-observation",
         "//host:aeson",
         "//host:base",

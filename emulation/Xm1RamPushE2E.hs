@@ -28,6 +28,7 @@ import System.Posix.Files (setFileMode)
 import System.Posix.Temp (mkdtemp)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, hostProcedure, procedureHex, routeKey, routeKeyHex)
 import Emulation.Sha256 (sha256File, sha256Hex)
+import Emulation.SegmentReceipt (SegmentName, SegmentReceipt (..), SegmentResult (..), elapsedSeconds, segmentName, segmentNameText)
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
 import Emulation.UiTrajectory
 import Emulation.WatchObservation

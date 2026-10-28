@@ -420,7 +420,6 @@ haskell_library(
     visibility = ["//visibility:public"],
     deps = [
         ":emulator-usb",
-        ":segment-receipt-lib",
         ":watch-observation",
         "//host:aeson",
         "//host:base",
@@ -533,6 +532,7 @@ haskell_binary(
         ":emulator-usb",
         ":watch-observation",
         ":ui-trajectory-lib",
+        ":segment-receipt-lib",
         ":ram-push-unreviewed",
         ":ram-push-procedure",
         "//host:base",
@@ -1721,6 +1721,7 @@ haskell_binary(
         ":key-release-observations",
         ":watch-observation",
         ":ui-trajectory-lib",
+        ":segment-receipt-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

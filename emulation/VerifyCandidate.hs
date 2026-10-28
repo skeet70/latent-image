@@ -14,14 +14,14 @@ import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, withObject, 
 import Data.Aeson.Types (Pair, parseEither)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import Data.List (intercalate, isPrefixOf, nub)
+import Data.List (intercalate, isPrefixOf)
 
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, fromMaybe, isJust)
 import qualified Data.Text as T
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
-import Emulation.UiTrajectory (SegmentReceipt (..), SegmentResult (..), decodeSegmentReceipts, segmentNameText)
+import Emulation.SegmentReceipt (SegmentReceipt (..), SegmentResult (..), decodeDeclaredReceipts, segmentNameText)
 import Emulation.WatchObservation (WatchJudgement (..))
 import Emulation.CandidateBaseline
 import Emulation.EmulatorSlot (SlotCount (..), SlotPolicy (..), slotPolicyFromEnvironment)
@@ -129,21 +129,17 @@ candidateQualification receipt = do
     if split then
       if flat then pure (Just "flat and segmented receipts cannot both qualify a candidate")
       else do
-        parsed <- decodeSegmentReceipts <$> B.readFile (receipt </> "e2e-segments.json")
+        parsed <- decodeDeclaredReceipts <$> B.readFile (receipt </> "e2e-segments.json")
         case parsed of
           Left problem -> pure (Just ("unreadable e2e-segments.json: " ++ problem))
-          Right [] -> pure (Just "only judged segments can qualify a candidate")
-          Right receipts -> do
-            let names = map segmentReceiptName receipts
-            if length names /= length (nub names) then pure (Just "duplicate segment names cannot qualify a candidate")
-            else case [(entry, segmentReceiptName entry) | entry <- receipts, SegmentFailed _ <- [segmentReceiptResult entry]] of
-              (entry, name) : _ -> case segmentReceiptResult entry of
-                SegmentFailed text -> pure (Just ("failed segment cannot qualify a candidate: "
-                  ++ T.unpack (segmentNameText name) ++ ": " ++ T.unpack text))
-                SegmentPassed -> pure (Just "failed segment cannot qualify a candidate")
-              [] -> do
-                problems <- mapM segment names
-                pure (firstProblem problems)
+          Right receipts -> case [(entry, segmentReceiptName entry) | entry <- receipts, SegmentFailed _ <- [segmentReceiptResult entry]] of
+            (entry, name) : _ -> case segmentReceiptResult entry of
+              SegmentFailed text -> pure (Just ("failed segment cannot qualify a candidate: "
+                ++ T.unpack (segmentNameText name) ++ ": " ++ T.unpack text))
+              SegmentPassed -> pure (Just "failed segment cannot qualify a candidate")
+            [] -> do
+              problems <- mapM segment (map segmentReceiptName receipts)
+              pure (firstProblem problems)
     else if not flat then pure (Just "no e2e qualification record") else single (receipt </> "e2e-result.json")
   where
     segment name = do

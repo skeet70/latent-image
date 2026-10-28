@@ -10,6 +10,8 @@ module Emulation.SegmentReceipt
   , SegmentResult (..)
   , SegmentReceipt (..)
   , decodeSegmentReceipts
+  , decodeDeclaredReceipts
+  , decodeDeclaredSegments
   ) where
 
 import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), eitherDecodeStrict', object, withText, (.:), (.=))
@@ -18,7 +20,7 @@ import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (withObject)
 import qualified Data.ByteString as B
 import Data.Char (isAlphaNum)
-import Data.List (sort)
+import Data.List (nub, sort)
 import qualified Data.Text as T
 
 newtype SegmentName = SegmentName T.Text deriving (Eq, Show)
@@ -98,3 +100,15 @@ instance FromJSON SegmentReceipt where
 
 decodeSegmentReceipts :: B.ByteString -> Either String [SegmentReceipt]
 decodeSegmentReceipts = eitherDecodeStrict'
+
+decodeDeclaredReceipts :: B.ByteString -> Either String [SegmentReceipt]
+decodeDeclaredReceipts bytes = do
+  receipts <- decodeSegmentReceipts bytes
+  let names = map segmentReceiptName receipts
+  case names of
+    [] -> Left "no segments are declared"
+    _ | length names /= length (nub names) -> Left "a segment name is repeated"
+      | otherwise -> Right receipts
+
+decodeDeclaredSegments :: B.ByteString -> Either String [SegmentName]
+decodeDeclaredSegments = fmap (map segmentReceiptName) . decodeDeclaredReceipts
