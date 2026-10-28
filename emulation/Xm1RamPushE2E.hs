@@ -18,6 +18,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (shiftL, shiftR, (.|.))
 import Data.Int (Int32)
+import Data.List (nub)
 import Data.Word (Word32)
 import Numeric (showFFloat, showHex)
 import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectory, removeDirectoryRecursive, setCurrentDirectory)
@@ -583,6 +584,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     readSymbols <- mapM (\name -> (,) name <$> symbolAddress (relinkDirectory </> "kernel.syms") name)
       (nub [name | segment <- planBefore plan ++ planAfter plan
                  , (_, RuntimeSymbol name _, _) <- segmentReads segment])
+    declaredTraceSites <- resolveTraceSites (\name -> symbolAddress (relinkDirectory </> "kernel.syms") name)
+      (planTraceSites plan)
+    symbolsDigest <- sha256File (relinkDirectory </> "kernel.syms")
     let readAddress (FixedAddress value) = pure value
         readAddress (RuntimeSymbol name offset) =
           maybe (ioError (userError ("unresolved runtime symbol: " ++ name))) (pure . (+ offset)) (lookup name readSymbols)
@@ -603,7 +607,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
       , (cpu0Exit, "cpu0-window-exit")
       , (cpu1Exit, "cpu1-window-exit")
       , (menuMessageDrawer, menuMessageSite)
-      ] ++ [(payloadInstallerStart selected base - 0x244, d3HookSite) | payloadKind selected == RecipeBankD3] ++ fetchSites ++ declaredSites plan
+      ] ++ [(payloadInstallerStart selected base - 0x244, d3HookSite) | payloadKind selected == RecipeBankD3] ++ fetchSites ++ declaredTraceSites
     privateDirectory pushDirectory
     (statePath, installMailbox) <- case restoredHost of
       Just host -> do
@@ -685,7 +689,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
                                      "heap_break_before" .= breakBefore, "heap_break_after" .= breakAfter]
           , "runtime" .= object ["bytes" .= allocationSize manifest,
                                   "publications" .= length (manifestPublications manifest),
-                                  "manifest" .= manifestPath manifest]
+                                  "manifest" .= manifestPath manifest,
+                                  "symbols_sha256" .= sha256Hex symbolsDigest]
+          , "declared_trace_sites" .= traceSiteValues declaredTraceSites
           , "states" .= object ["allocation" .= allocationPath, "installed" .= statePath]
           , "card" .= cardRecord (emulationCardMode settings)
           , "menu_receipts" .= catMaybes (capturedBefore ++ capturedAfter)
@@ -763,8 +769,25 @@ newSegmentRunner emulator receipt timedAction readAddress stopAction plan = do
     <$> newIORef recorded <*> newIORef []
 
 -- | The plan's trajectory-declared sites in the bridge's form.
-declaredSites :: Plan -> [(Word32, String)]
-declaredSites plan = [(traceSiteAddress site, traceSiteLabel site) | site <- planTraceSites plan]
+resolveTraceSites :: (String -> IO Word32) -> [TraceSite] -> IO [(Word32, String)]
+resolveTraceSites resolve sites = do
+  resolved <- forM sites $ \site -> case traceSiteAddress site of
+    FixedAddress address -> pure (address, traceSiteLabel site)
+    RuntimeSymbol name offset -> do
+      base <- resolve name
+      let address = toInteger base + toInteger offset
+      require (address <= 0xffffffff) ("trace site overflows 32 bits: " ++ traceSiteLabel site)
+      pure (fromIntegral address, traceSiteLabel site)
+  mapM_ (\(address, label) -> require (address `mod` 4 == 0) ("trace site is not word aligned: " ++ label)) resolved
+  let addresses = map fst resolved
+  require (length addresses == length (nub addresses)) "trace site addresses are not distinct"
+  pure resolved
+
+eightHex :: Word32 -> String
+eightHex = drop 2 . hexAddress
+
+traceSiteValues :: [(Word32, String)] -> [Value]
+traceSiteValues sites = [object ["label" .= label, "address" .= eightHex address] | (address, label) <- sites]
 
 traceHitValue :: TraceHit -> Value
 traceHitValue hit = object
@@ -858,7 +881,12 @@ runFlashSession settings python runtime installedMedia adjustmentNand plan e2e =
     putStrLn ("emulator start: " ++ show (bootStart start) ++ "; flash candidate")
     setFileMode e2e 0o700
     ensurePrivateDirectory e2e
-    emulatorTraceSites emulator ([(menuMessageDrawer, menuMessageSite), (d3HookEntry, d3HookSite)] ++ declaredSites plan)
+    flashSymbols <- flashCandidateSymbols (firmwareSource settings)
+    let symbolPath = takeDirectory (firmwareSource settings) </> "kernel" </> "kernel.syms"
+        resolveCandidate name = either (ioError . userError) pure (resolveSymbol flashSymbols name)
+    declaredTraceSites <- resolveTraceSites resolveCandidate (planTraceSites plan)
+    symbolsDigest <- sha256File symbolPath
+    emulatorTraceSites emulator ([(menuMessageDrawer, menuMessageSite), (d3HookEntry, d3HookSite)] ++ declaredTraceSites)
     let readAddress (FixedAddress value) = pure value
         readAddress (RuntimeSymbol name offset) = do
           symbols <- flashCandidateSymbols (firmwareSource settings)
@@ -876,6 +904,8 @@ runFlashSession settings python runtime installedMedia adjustmentNand plan e2e =
       , "scope" .= String "emulated X-M1 flash candidate UI segments"
       , "plan" .= planName plan
       , "emulator_start" .= startRecord start
+      , "runtime" .= object ["symbols_sha256" .= sha256Hex symbolsDigest]
+      , "declared_trace_sites" .= traceSiteValues declaredTraceSites
       , "phases" .= (phaseTimes :: [Value])
       , "menu_receipts" .= catMaybes captured
       , "trajectories" .= map (\name -> object ["name" .= name, "result" .= String "matched"])

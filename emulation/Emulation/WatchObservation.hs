@@ -69,7 +69,7 @@ import Data.Bits (shiftL)
 import Data.Scientific (toBoundedInteger)
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Data.List (foldl', sort)
+import Data.List (sort)
 import Data.Word (Word32, Word64, Word8)
 
 newtype WatchAddress = WatchAddress { watchAddressValue :: Word32 } deriving (Eq, Ord, Show)
@@ -185,7 +185,7 @@ field _ _ = Left "watch value is not an object"
 
 exactKeys :: [String] -> Value -> Either String ()
 exactKeys expected (Object object) =
-  let actual = sort (map (T.unpack . K.toString) (KM.keys object))
+  let actual = sort (map (T.unpack . K.toText) (KM.keys object))
    in unless (actual == sort expected) (Left "watch fields differ from the pinned schema")
 exactKeys _ _ = Left "watch value is not an object"
 
@@ -302,7 +302,7 @@ parseCpuRecord access value = do
         Just current | size < 8 ->
           unless (current < (1 `shiftL` (size * 8) :: Word64)) (Left "cpu-write value exceeds its width")
         _ -> pure ()
-  pure (CpuRecord access (WatchAddress address) (WatchAddress physical) bytes recordValue before order core (WatchAddress pc) instructions tick)
+  pure (CpuRecord access (WatchAddress address) (WatchAddress physical) bytes recordValue before order core (WatchAddress pc) (instructionsValue instructions) (tickValue tick))
   where
     requireBefore before = case before of
       Just bytes -> Right bytes
@@ -388,9 +388,9 @@ checkWatch limit expected ack observation = do
         go _ _ [] = Right ()
         go previousInstructions previousTick (record : rest) = case record of
           CpuRecord{cpuInstructions = instructions, cpuTick = tick} -> do
-            when (maybe False ((instructionsValue instructions) <) previousInstructions) (Left "watch instruction count regressed")
-            when (maybe False ((tickValue tick) <) previousTick) (Left "watch tick regressed")
-            go (Just (instructionsValue instructions)) (Just (tickValue tick)) rest
+            when (maybe False (instructions <) previousInstructions) (Left "watch instruction count regressed")
+            when (maybe False (tick <) previousTick) (Left "watch tick regressed")
+            go (Just instructions) (Just tick) rest
           _ -> go previousInstructions previousTick rest
 
 summarize :: [WatchRecord] -> ProtectedWriteSummary
@@ -403,10 +403,12 @@ summarize records =
       TransferRecord{transferAccess = HostWrite} -> add 2 counts
       TransferRecord{transferAccess = ModelBusWrite} -> add 3 counts
       _ -> counts
-    add 1 (cpu, host, bus) = (cpu + 1, host, bus)
-    add 2 (cpu, host, bus) = (cpu, host + 1, bus)
-    add 3 (cpu, host, bus) = (cpu, host, bus + 1)
-    add _ counts = counts
+    add :: Int -> (Int, Int, Int) -> (Int, Int, Int)
+    add kind (cpu, host, bus) = case kind of
+      1 -> (cpu + 1, host, bus)
+      2 -> (cpu, host + 1, bus)
+      3 -> (cpu, host, bus + 1)
+      _ -> (cpu, host, bus)
 
 noProtectedWrites :: ProtectedWriteSummary
 noProtectedWrites = ProtectedWriteSummary (ProtectedCpuWrites 0) (ProtectedHostWrites 0) (ProtectedBusWrites 0)

@@ -27,7 +27,7 @@ module Emulation.UiTrajectory
   ) where
 
 import Control.Monad (unless, when)
-import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), eitherDecodeStrict', object, withArray, withObject, withScientific, withText, (.!=), (.:), (.:?), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), eitherDecodeStrict', object, withArray, withObject, withText, (.!=), (.:), (.:?), (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (Object, Parser)
@@ -36,7 +36,6 @@ import Data.Char (isAlphaNum)
 import Data.Foldable (toList)
 import Data.List (nub, sort, stripPrefix)
 import qualified Data.Text as T
-import Data.Scientific (toRealFloat)
 import Data.Word (Word32)
 import Emulation.WatchObservation (WatchRange, watchAddress, watchRange)
 import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming, modeDialName)
@@ -133,20 +132,26 @@ instance FromJSON Segment where
       modeDial position = case lookup (T.unpack position) [(modeDialName p, p) | p <- [minBound .. maxBound]] of
         Just p -> pure p
         Nothing -> fail ("unsupported mode-dial position: " ++ T.unpack position)
-      window (label, address, len) = case T.unpack address of
-        text | Just rest <- stripPrefix "runtime:" text, not (null rest) -> do
-                 let (name, suffix) = break (== '+') rest
-                     digits = dropWhile (== '+') suffix
-                 when (null name) (fail ("read address names no runtime symbol: " ++ text))
-                 offset <- case digits of
-                   "" -> pure 0
-                   _ -> maybe (fail ("read address offset is not hex: " ++ text)) pure (hexValue digits)
-                 pure (label, RuntimeSymbol name offset, len)
-             | Just value <- hexValue text -> pure (label, FixedAddress value, len)
-             | otherwise -> fail ("read address must be hex without 0x or runtime:SYMBOL+0xOFFSET: " ++ text)
-      hexValue digits = case readHex (case stripPrefix "0x" digits of Just rest -> rest; Nothing -> digits) of
-        [(value, "")] -> Just value
-        _ -> Nothing
+      window (label, address, len) = do
+        start <- either fail pure (readAddress address)
+        pure (label, start, len)
+
+readAddress :: T.Text -> Either String ReadAddress
+readAddress address = case T.unpack address of
+  text | Just rest <- stripPrefix "runtime:" text, not (null rest) -> do
+           let (name, suffix) = break (== '+') rest
+               digits = dropWhile (== '+') suffix
+           when (null name) (Left ("read address names no runtime symbol: " ++ text))
+           offset <- case digits of
+             "" -> Right 0
+             _ -> maybe (Left ("read address offset is not hex: " ++ text)) Right (hexValue digits)
+           Right (RuntimeSymbol name offset)
+       | Just value <- hexValue text -> Right (FixedAddress value)
+       | otherwise -> Left ("read address must be hex without 0x or runtime:SYMBOL+0xOFFSET: " ++ text)
+ where
+  hexValue digits = case readHex (case stripPrefix "0x" digits of Just rest -> rest; Nothing -> digits) of
+    [(value, "")] -> Just value
+    _ -> Nothing
 
 keyPulse :: Object -> Parser KeyPulse
 keyPulse budget = do
@@ -155,7 +160,7 @@ keyPulse budget = do
   pure pulse
 
 -- | An A32 instruction address whose every entry the bridge records with r0-r3, under a label.
-data TraceSite = TraceSite { traceSiteAddress :: Word32, traceSiteLabel :: String } deriving (Eq, Show)
+data TraceSite = TraceSite { traceSiteAddress :: ReadAddress, traceSiteLabel :: String } deriving (Eq, Show)
 
 -- | Labels the e2e arms itself.
 reservedLabels :: [String]
@@ -164,10 +169,12 @@ reservedLabels = ["menu-message", "d3-hook"]
 instance FromJSON TraceSite where
   parseJSON value = do
     (address, label) <- parseJSON value
-    site <- case readHex (T.unpack address) of
-      [(word, "")] | T.length address == 8 -> pure word
-      _ -> fail ("trace site address must be eight hex digits without 0x: " ++ T.unpack address)
-    when (site `mod` 4 /= 0) (fail ("trace site address must be word aligned: " ++ T.unpack address))
+    site <- either fail pure (readAddress address)
+    case site of
+      FixedAddress word -> do
+        unless (T.length address == 8) (fail ("trace site address must be eight hex digits without 0x: " ++ T.unpack address))
+        when (word `mod` 4 /= 0) (fail ("trace site address must be word aligned: " ++ T.unpack address))
+      RuntimeSymbol _ offset -> when (offset `mod` 4 /= 0) (fail ("trace site offset must be word aligned: " ++ T.unpack address))
     when (null label || label `elem` reservedLabels) (fail ("trace site label is empty or reserved: " ++ label))
     pure (TraceSite site label)
 
@@ -209,7 +216,9 @@ instance ToJSON ElapsedSeconds where
   toJSON = toJSON . elapsedSecondsValue
 
 instance FromJSON ElapsedSeconds where
-  parseJSON = withScientific "elapsed seconds" (either fail pure . elapsedSeconds . toRealFloat)
+  parseJSON value = do
+    seconds <- parseJSON value
+    either fail pure (elapsedSeconds seconds)
 
 data SegmentResult = SegmentPassed | SegmentFailed T.Text deriving (Eq, Show)
 
