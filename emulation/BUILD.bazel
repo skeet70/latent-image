@@ -1682,6 +1682,7 @@ haskell_binary(
         ":candidate-baseline-lib",
         ":emulator-slot-lib",
         ":key-release-observations",
+        ":watch-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
