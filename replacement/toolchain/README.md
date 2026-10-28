@@ -38,7 +38,7 @@ The linker script owns all load addresses; the link recipe adds `-nostdlib -stat
 
 `data` stages additional module files at their package paths; `mod` names in the crate root resolve against them. The pilot's `pilot_extra.rs` module exercises that path.
 
-Each crate supplies its own `#[panic_handler]`; the macros do not inject one. The pilot handler calls an assembly halt loop, with `panic = "abort"`, so no unwinding runtime is linked. A final linked artifact must contain exactly one Rust staticlib: two staticlibs each define `rust_begin_unwind`, and LLD rejects the duplicate. Compose modules into one crate root instead. A crate that needs a memory intrinsic gets it from the staticlib's `compiler_builtins` members.
+Each crate supplies its own `#[panic_handler]`; the macros do not inject one. The pilot handler calls an assembly halt loop, with `panic = "abort"`, so no unwinding runtime is linked. A single Rust staticlib per linked artifact makes the live handler deterministic. Two staticlibs can link when the second handler object is not pulled, as observed on the real bank link, but that depends on CGU partitioning; a two-archive link needs a final check that exactly one `rust_begin_unwind` is defined, and any future panic path in the second crate can turn the omission into a duplicate-symbol link failure. A crate that needs a memory intrinsic gets it from the staticlib's `compiler_builtins` members.
 
 ## Verification
 

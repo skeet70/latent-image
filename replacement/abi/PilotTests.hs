@@ -49,7 +49,7 @@ runTest pilotBin pilotElf pilotSymbols pilotDisasm defectBin template runner rea
     ensure (get positiveRunner "status" == s "returned") ("positive runner status: " ++ show positiveReport)
     ensure (null (list (get positiveReport "mismatches"))) ("positive mismatches: " ++ show positiveReport)
     ensure (get (get positiveRunner "registers") "r0" == s "0x00000000") "positive r0 is not zero"
-    putStrLn "positive: status=passed runner=returned"
+    putStrLn ("positive: status=passed runner=returned instructions=" ++ str (get positiveRunner "instructions"))
 
     defect <- runStaged (root </> "defect") template defectBin
     (defectCode, defectReport) <- runCase runner defect

@@ -59,7 +59,7 @@ The defect build compiles the same crate with `--cfg pilot_abi_defect`, which gi
 
 - #120 can use `xm1_rust_staticlib` plus `xm1_rust_elf`; the ELF, flat image, `<address> <size> <type> <name>` symbol list and disassembly are declared outputs. The linker script supplies the stock link address.
 - #123 and the recipe-bank UI can link the `.a` into their existing C/assembly payload with LLD; the archive has no runtime dependency beyond its own `core` and `compiler_builtins` members. A crate root declares module files through the macro's `data` attribute.
-- One linked artifact owns one Rust staticlib. Two staticlibs each carry a `#[panic_handler]`, and LLD rejects the duplicate `rust_begin_unwind`; compose the service and UI as modules of one crate root instead of linking two archives.
+- One live Rust panic handler per linked artifact. A single staticlib makes that deterministic. Two staticlibs can link when the second handler object is not pulled, as the bank link observed, but that depends on CGU partitioning; a two-archive link needs a final check for exactly one `rust_begin_unwind`, and a future panic path can turn the omission into a duplicate-symbol link failure.
 - `xm1_pilot_checksum` and `xm1_pilot_store` are `unsafe extern "C"` with their pointer preconditions documented in the source.
 - Panic traps by looping in the pilot; a consumer that needs a different halt supplies its own handler and halt symbol. The cross-build fixes `panic=abort`.
 - `@lab_xm1_rust//:share/xm1-rust/build-facts.txt` is the toolchain identity for RAM-push manifests.
