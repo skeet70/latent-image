@@ -35,7 +35,7 @@ import Data.Aeson (Value (..))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import Data.Char (isHexDigit, toLower)
-import Data.List (find, nub)
+import Data.List (find, isInfixOf, nub)
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Scientific (floatingOrInteger)
 import Data.Word (Word32, Word64, Word8)
@@ -629,7 +629,8 @@ writeArmCase workspace profile caseId provenance record expected = do
       regions = [codeRegion, specRegion, replaceRecordRegion oldRecordIdent recordRegion, stackRegion, exitRegion]
       functions =
         [ obj [("address", s (hexWord32 address)), ("size", n (fromIntegral size))]
-        | (_, address, size) <- armImageSymbols image
+        | (name, address, size) <- armImageSymbols image
+        , name == "area3_validate" || "area3_validator" `isInfixOf` name
         ]
       entryAddress =
         fromMaybe

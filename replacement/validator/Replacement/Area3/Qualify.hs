@@ -544,7 +544,7 @@ candidateReport digest summary =
 
 data AnchorResult = AnchorResult
   { resultCase :: CaseId
-  , resultCheck :: Check
+  , resultCheck :: !Check
   , resultProblems :: [String]
   , resultRaw :: Maybe RawRun
   }
@@ -606,7 +606,7 @@ anchorChecks results =
 data CaseOutcome = CaseOutcome
   { outcomeClass :: SubjectClass
   , outcomeId :: String
-  , outcomeCheck :: Check
+  , outcomeCheck :: !Check
   }
 
 runStockBatch :: Contract -> Workspace -> FilePath -> Options -> [Subject] -> IO [CaseOutcome]
