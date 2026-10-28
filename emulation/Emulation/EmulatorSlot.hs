@@ -102,7 +102,11 @@ pinInherited arguments = do
   directory <- slotDirectory
   pid <- getProcessID
   case pinIdentity (takeFileName (onDiskPath executable)) of
-    Just _ -> pure ()
+    Just (SlotPin _) -> pure ()
+    Just (InheritedPin guardPid _) -> do
+      parents <- ancestors pid 8
+      verified <- verifiedGuardAncestorFor parents (directory </> ("guard-" ++ show guardPid))
+      unless verified (ioError (userError ("inherited pin has no verified guard ancestor: " ++ executable)))
     Nothing -> do
       parents <- ancestors pid 8
       guard <- verifiedGuardAncestor parents
