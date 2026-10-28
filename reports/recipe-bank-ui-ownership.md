@@ -42,6 +42,18 @@ The failed handback expectation was corrected from observation, not fitted to th
 
 An earlier empty-slot run showed SELECT navigation staying on row 0 when the card's slots were unset. That is an observation of the stock list's disabled-row handling, not yet a pinned resource-absence trajectory. Storage failure and refusal paths are covered by the passing host cases; the packaged run has no new resource acquisition of its own.
 
+## Qualification status
+
+| Field | Value |
+| --- | --- |
+| `status` | partial |
+| `capability` | false |
+| `scope` | Recipe-bank page/slot/token classification behind the unchanged C ABI, bounded native UI cases and one packaged trajectory; no full read-only lifecycle claim |
+| `preserved diagnostics` | `returned` for every passing case; one earlier `unsupported_instruction` stop at the `UXTAB` site, retained and fixed; no diagnostic reclassified as success |
+| `coverage_gaps` | combined `//replacement/bank:bank` archive not run through the 55 cases; typed seam not rerun through the 55 cases; no packaged Rust-candidate completion; final handback/repeat segment unvalidated; resource failure covered at the native boundary only |
+
+The observation projection follows the native UI harness rather than the area-3 solver: `status` must be `returned` and every public claim must match; declared effect regions are confined to the case's ABI workspaces and public claims; `r4` through `r11` and `sp` must be preserved with `pc` at the exit; memory provenance must be present and complete. The harness's `native_case_status: failed` from declared workspace differences is a projection detail, not a pass. Precedence for a mixed result is failed over blocked over unknown over qualified, and a partial domain never sets `capability`.
+
 ## Measurement
 
 The #118 fixed workload is the behavior-preserving refactor of these two classifiers. Baseline same-invocation samples are 45.29 s total (1.07 s build, 44.22 s case generation and execution) for the unmodified tree, and 42.58 s (0.98 s, 41.59 s) for the C refactor, under warm Nix/Bazel and page caches, two jobs and sibling load.
