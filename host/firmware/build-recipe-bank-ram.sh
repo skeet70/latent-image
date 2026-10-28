@@ -15,12 +15,14 @@ SPEC="${SPEC:?}"
 RC0_ID4="${RC0_ID4:?}"
 RC0_ID5="${RC0_ID5:?}"
 RC0_PLAIN="${RC0_PLAIN:?}"
+RB_SERVICE_ARCHIVE="${RB_SERVICE_ARCHIVE:?}"
 
 case "$OUT" in
   private-data/analysis/x-m1-1.50/ram-push/*) ;;
   *) printf 'output must stay under the host-only RAM-push directory\n' >&2; exit 1 ;;
 esac
 [[ -d "$OUT" && ! -L "$OUT" ]] || { printf 'output directory must exist\n' >&2; exit 1; }
+[[ -f "$RB_SERVICE_ARCHIVE" ]] || { printf 'service archive must be a regular file\n' >&2; exit 1; }
 
 base_value=$((BASE))
 (( base_value >= 0 && base_value <= 0xffffffff - 0x1dc98 )) || {
@@ -46,16 +48,17 @@ LINK=(-nostdlib -static -fuse-ld=lld "--ld-path=$LD_LLD" -Wl,--no-dynamic-linker
 objects=()
 for src in menu/recipe_bank_arm.S menu/recipe_bank_probe.c menu/recipe_bank_hook.c \
   menu/recipe_bank_storage.c menu/recipe_bank_actions.c menu/recipe_bank_edit.c \
-  menu/recipe_bank_diagnostic.c; do
+  menu/recipe_bank_diagnostic.c replacement/service/rb_service_stock.S; do
   name="${src##*/}"
   obj="$OUT/${name%.*}.o"
   case "$src" in
-    *.c) NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${FREE[@]}" -Oz -Wall -Wextra \
+    *.c) NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${FREE[@]}" -Oz -Wall -Wextra -I. \
       -DRB_VOLATILE_BANK=1 -DRB_CC_BANK=1 -DRB_NAME_RECORD="$rb_name_record" -c "$src" -o "$obj" ;;
     *.S) NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" -c "$src" -o "$obj" ;;
   esac
   objects+=("$obj")
 done
+objects+=("$RB_SERVICE_ARCHIVE")
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${FREE[@]}" -Oz -Wall -Wextra \
   -DRAM_PUSH_PUBLICATION_COUNT=222u -DRAM_PUSH_SETUP_COUNT=131u \
   -DRAM_PUSH_ACTIVATION_COUNT=91u -DRAM_PUSH_ABI_VERSION=5u \

@@ -1,0 +1,210 @@
+{
+  "schema": 1,
+  "entry": "Retained-service pilot: the packaged bank's field-row probe calls stock FUN_00d52684 through the Rust entry. Host-only, cardless RAM push; the receipt records the probe's field and row at each entry and the row states the list received.",
+  "trace_sites": [
+    [
+      "00d52684",
+      "stock-row-probe"
+    ]
+  ],
+  "before_unload": [
+    {
+      "phase": "service-bank-navigation",
+      "steps": [
+        [
+          "menu",
+          67,
+          56,
+          0
+        ],
+        [
+          "menu",
+          1,
+          5,
+          2
+        ],
+        [
+          "left",
+          0,
+          5,
+          0
+        ],
+        [
+          "down",
+          0,
+          5,
+          1
+        ],
+        [
+          "down",
+          0,
+          5,
+          2
+        ],
+        [
+          "down",
+          0,
+          5,
+          3
+        ],
+        [
+          "cursor:down:4:8",
+          0,
+          5,
+          4
+        ],
+        [
+          "right",
+          1,
+          5,
+          30
+        ],
+        [
+          "down",
+          1,
+          5,
+          31
+        ],
+        [
+          "down",
+          1,
+          5,
+          32
+        ],
+        [
+          "down",
+          1,
+          5,
+          33
+        ]
+      ]
+    },
+    {
+      "phase": "service-bank-navigation",
+      "capture": "service-slot-list",
+      "steps": [
+        [
+          "ok",
+          97,
+          641,
+          0
+        ]
+      ]
+    },
+    {
+      "phase": "service-save-current",
+      "requires": [
+        "service-bank-navigation"
+      ],
+      "steps": [
+        [
+          "ok",
+          97,
+          624,
+          0
+        ],
+        [
+          "ok",
+          97,
+          641,
+          0
+        ]
+      ]
+    },
+    {
+      "phase": "service-field-list",
+      "requires": [
+        "service-save-current"
+      ],
+      "capture": "service-field-list",
+      "steps": [
+        [
+          "ok",
+          97,
+          624,
+          0
+        ],
+        [
+          "down",
+          97,
+          624,
+          1
+        ],
+        [
+          "down",
+          97,
+          624,
+          2
+        ],
+        [
+          "ok",
+          114,
+          631,
+          0
+        ],
+        [
+          "down",
+          114,
+          631,
+          1
+        ],
+        [
+          "down",
+          114,
+          631,
+          2
+        ],
+        [
+          "down",
+          114,
+          631,
+          3
+        ],
+        [
+          "down",
+          114,
+          631,
+          4
+        ],
+        [
+          "down",
+          114,
+          631,
+          5
+        ],
+        [
+          "down",
+          114,
+          631,
+          6
+        ],
+        [
+          "ok",
+          114,
+          616,
+          2
+        ],
+        [
+          "down",
+          114,
+          616,
+          3
+        ],
+        [
+          "ok",
+          114,
+          631,
+          6
+        ]
+      ],
+      "reads": [
+        [
+          "row-states",
+          "009571f0",
+          32
+        ]
+      ]
+    }
+  ],
+  "after_unload": []
+}
