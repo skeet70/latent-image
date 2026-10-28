@@ -11,6 +11,7 @@ use fujimod_xm1::machine::{KeyPulse, Machine, MENU_PULSE, ReleaseSegment};
 use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::run;
 use fujimod_emulator::board::observation::MemoryWatch;
+use fujimod_emulator::board::preservation::{Preservation, PreservationState};
 use fujimod_xm1::sd_host::{Backing, MediaImage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -288,6 +289,8 @@ enum Request {
     ReadMemory { address: u64, count: usize },
     WatchBegin { ranges: Vec<[u64; 2]>, limit: usize },
     WatchState,
+    PreservationBegin { ranges: Vec<[u64; 2]> },
+    PreservationState,
     MediaState,
     Capture { label: String },
     SaveInstallCheckpoint { base: String, manifest_sha256: String, runtime_sha256: String, host: Value },
@@ -307,6 +310,8 @@ enum RequestKind {
     ReadMemory,
     WatchBegin,
     WatchState,
+    PreservationBegin,
+    PreservationState,
     MediaState,
     Capture,
     SaveInstallCheckpoint,
@@ -326,6 +331,8 @@ impl Request {
             Request::ReadMemory { .. } => RequestKind::ReadMemory,
             Request::WatchBegin { .. } => RequestKind::WatchBegin,
             Request::WatchState => RequestKind::WatchState,
+            Request::PreservationBegin { .. } => RequestKind::PreservationBegin,
+            Request::PreservationState => RequestKind::PreservationState,
             Request::MediaState => RequestKind::MediaState,
             Request::Capture { .. } => RequestKind::Capture,
             Request::SaveInstallCheckpoint { .. } => RequestKind::SaveInstallCheckpoint,
@@ -370,6 +377,7 @@ struct Server {
     output: PathBuf,
     screenshots: Vec<Value>,
     watch: Option<Box<MemoryWatch>>,
+    preservation: Option<Box<Preservation>>,
     key_log: Vec<Value>,
     requests: RequestProfile,
     rendezvous: RendezvousInputs,
@@ -471,6 +479,9 @@ impl Server {
                 if self.watch.is_some() {
                     return Err("a memory watch is already armed".into());
                 }
+                if self.preservation.is_some() {
+                    return Err("a preservation observation conflicts with memory watch".into());
+                }
                 if ranges.is_empty() || ranges.len() > 8
                     || !(1..=1 << 20).contains(&limit)
                     || ranges.iter().any(|range| range[0] >= range[1] || range[1] > u32::MAX as u64)
@@ -486,6 +497,29 @@ impl Server {
             Request::WatchState => match &self.watch {
                 Some(watch) => watch.records.borrow().state(),
                 None => return Err("watch-state requires an armed memory watch".into()),
+            },
+            Request::PreservationBegin { ranges } => {
+                if self.preservation.is_some() {
+                    return Err("a preservation observation is already armed".into());
+                }
+                if self.watch.is_some() {
+                    return Err("a memory watch conflicts with preservation observation".into());
+                }
+                if ranges.is_empty() || ranges.len() > 8
+                    || ranges.iter().any(|range| range[0] >= range[1] || range[1] > u32::MAX as u64)
+                {
+                    return Err("preservation-begin requires 1..8 bounded 32-bit ranges".into());
+                }
+                let preservation = self.bridge.machine.session.board.preservation_begin(
+                    ranges.iter().map(|range| (range[0], range[1])).collect())?;
+                self.preservation = Some(preservation);
+                json!({"armed": true, "ranges": ranges})
+            }
+            Request::PreservationState => match &self.preservation {
+                Some(preservation) => serde_json::to_value(preservation.state())
+                    .map_err(|error| format!("preservation-state: {error}"))?,
+                None => serde_json::to_value(PreservationState::disabled())
+                    .map_err(|error| format!("preservation-state: {error}"))?,
             },
             Request::MediaState => self.bridge.machine.card_state()?,
             Request::Capture { label } => {
@@ -522,12 +556,17 @@ impl Server {
         }))
     }
 
-    fn receipt(&self, error: Option<&str>) -> Value {
+    fn receipt(&self, error: Option<&str>) -> Result<Value, String> {
         let card = match self.rendezvous {
             RendezvousInputs::MenuUpAndWriteProtect => "card-backed",
             RendezvousInputs::MenuUp => "cardless",
         };
-        json!({
+        let preservation = match &self.preservation {
+            Some(preservation) => serde_json::to_value(preservation.state())
+                .map_err(|error| format!("preservation receipt: {error}"))?,
+            None => Value::Null,
+        };
+        Ok(json!({
             "schema": 1,
             "scope": format!("emulated X-M1 ordinary-boot {card} RAM push on FujiMod's EXR II runtime"),
             "inputs": self.key.inputs,
@@ -545,6 +584,7 @@ impl Server {
             "contexts": self.bridge.machine.traces.hits,
             "screenshots": self.screenshots,
             "memory_watch": self.watch.as_ref().map(|watch| watch.records.borrow().state()).unwrap_or(Value::Null),
+            "preservation": preservation,
             "sd_host": self.bridge.machine.card_state().unwrap_or_else(|error| json!({"error": error})),
             "boundary": {"instructions": self.bridge.machine.instructions(), "failure": self.bridge.machine.failure},
         })
@@ -588,7 +628,7 @@ impl Server {
             }
         }
         std::fs::create_dir_all(&self.output).map_err(|e| e.to_string())?;
-        let receipt = self.receipt(error.as_deref());
+        let receipt = self.receipt(error.as_deref())?;
         write(&self.output.join("emulator-session.json"), format!("{receipt:#}\n").as_bytes())
     }
 }
@@ -690,6 +730,7 @@ fn drive() -> Result<(), String> {
         output: arguments.output,
         screenshots: Vec::new(),
         watch: None,
+        preservation: None,
         key_log: Vec::new(),
         requests: RequestProfile::default(),
         rendezvous,

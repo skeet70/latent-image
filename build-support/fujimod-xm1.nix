@@ -38,6 +38,10 @@ EOF
   preCheck = ''
     cargo test --no-run --message-format=json -j "$NIX_BUILD_CORES" --profile release \
       --target ${pkgs.stdenv.targetPlatform.rust.rustcTargetSpec} --offline > test-artifacts.json
+    cargo test --manifest-path ../fujimod/crates/emulator/Cargo.toml \
+      -p fujimod-emulator --locked -j "$NIX_BUILD_CORES" --profile release \
+      --target ${pkgs.stdenv.targetPlatform.rust.rustcTargetSpec} \
+      --target-dir target --offline preservation_tests
   '';
   # store-path holds $out, so Bazel actions keyed on it change with the store path.
   postInstall = ''
