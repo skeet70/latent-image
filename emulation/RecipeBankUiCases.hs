@@ -604,7 +604,7 @@ data Spec = Spec
   }
 
 data WorkspaceKind = KernelWorkspace | MediaWorkspace | UiWorkspace | StackWorkspace
-  | ModalWorkspace | EditorWorkspace | LabelWorkspace | NavigationWorkspace | StockReloadWorkspace | ConversionWorkspace | StockProcessingWorkspace
+  | ModalWorkspace | EditorWorkspace | LabelWorkspace | NavigationWorkspace | StockReloadWorkspace | ConversionWorkspace | StockProcessingWorkspace | ModelDataWorkspace
   deriving (Show)
 
 newtype RegionId = RegionId String deriving (Eq)
@@ -772,7 +772,8 @@ abiWorkspaces :: Inputs -> Env -> [AbiWorkspace]
 abiWorkspaces in' e =
   [ at UiWorkspace 0x00957e00 0x1200
   , at StackWorkspace 0x00959000 0x1000
-  , area MediaWorkspace "media-state" 0 mediaStateSize
+  , area MediaWorkspace "media-state" 0 0x200
+  , area ModelDataWorkspace "media-state" 0x200 (modelDataSize in')
   , area ModalWorkspace "modal-state" 2 4
   , area ModalWorkspace "modal-state" 0x15e 0x160
   , at EditorWorkspace 0x00954384 0xf
@@ -2145,23 +2146,26 @@ cellsImage in' e sp =
     , (cellOffset (eFileB e), cardB)
     ]
 
+-- Model data begins at the first byte after the original media-state window; this synthetic native-case mapping is not a camera reservation.
 modelScratchBase :: Word32
 modelScratchBase = 0x00910340
 
-modelScratchSize :: Int
-modelScratchSize = 0x1000
+modelDataSize :: Inputs -> Int
+modelDataSize in' = B.length (inMdata in')
 
-mediaStateSize :: Int
-mediaStateSize = 0x200 + modelScratchSize
+mediaStateSize :: Inputs -> Int
+mediaStateSize in' = 0x200 + modelDataSize in'
 
 modelScratchImage :: Inputs -> Spec -> B.ByteString
 modelScratchImage in' sp
-  | B.length (inMdata in') > modelScratchSize = error "model data exceeds the media-state tail"
-  | otherwise =
-      overlay (B.replicate modelScratchSize 0) $
-        (0, inMdata in')
-          : [ (fromIntegral (addr (inMs in') n - fromIntegral modelScratchBase), u32le v) | (n, v) <- spModelCells sp ]
-          ++ [ (fromIntegral (addr (inMs in') "rbm_field_count" - fromIntegral modelScratchBase), u32le (fromIntegral (length (inFields in')))) ]
+  | any (\(offset, _) -> offset + 4 > modelDataSize in') overlays = error "model cell outside the linked data image"
+  | otherwise = overlay (B.replicate (modelDataSize in') 0) overlays
+  where
+    offset name = fromIntegral (addr (inMs in') name - fromIntegral modelScratchBase)
+    overlays =
+      (0, inMdata in')
+        : [ (offset n, u32le v) | (n, v) <- spModelCells sp ]
+        ++ [ (offset "rbm_field_count", u32le (fromIntegral (length (inFields in')))) ]
 
 spanLowImage :: Inputs -> Env -> Spec -> B.ByteString
 spanLowImage in' e sp =
@@ -2183,7 +2187,7 @@ regionList in' e sp = map setPermission (filter (\(n, _, _, _, _) -> inProfile (
       , ("stock-divide", 0x0004d978, 244, 5, inDivide in')
       , ("stock-draw-tail", guestWord stockDrawTail, B.length stockDrawTailImage, 5, stockDrawTailImage)
       , ("span-low", 0x0096cc64, B.length spanLow, 3, spanLow)
-      , ("media-state", 0x00910140, mediaStateSize, 3, B.replicate 0x200 0 <> modelScratchImage in' sp)
+      , ("media-state", 0x00910140, mediaStateSize in', 3, B.replicate 0x200 0 <> modelScratchImage in' sp)
       , ("tables-ptr", 0x0081b09c, 0x860, 3, inTab in')
       , ("mirror", 0x0089ec00, 0x200, 3, overlay (B.replicate 0x200 0) [(0x140, validPayload), (0x1c8, u32le 1)])
       , ("tables-edit", 0x00774f48, fromIntegral (tablesEditEnd - 0x774f48), 1,
@@ -2830,7 +2834,7 @@ regionBases in' =
   , ("stock-divide", 0x0004d978, 244)
   , ("stock-draw-tail", guestWord stockDrawTail, B.length stockDrawTailImage)
   , ("span-low", 0x0096cc64, 0x980c60 - 0x96cc64)
-  , ("media-state", 0x00910140, mediaStateSize)
+  , ("media-state", 0x00910140, mediaStateSize in')
   , ("tables-ptr", 0x0081b09c, 0x860)
   , ("mirror", 0x0089ec00, 0x200)
   , ("tables-edit", 0x00774f48, fromIntegral (tablesEditEnd - 0x774f48))
