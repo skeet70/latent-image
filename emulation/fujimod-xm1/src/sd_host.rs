@@ -1044,7 +1044,7 @@ impl Device for SdHost {
             "block_length": self.block_length, "bus_width": self.bus_width, "pending": self.request.is_some(),
             "started": self.counters.started, "completed": self.counters.completed, "irqs": self.counters.irqs,
             "dma_boundaries": self.counters.dma_boundaries,
-            "accepted_write_count": self.counters.accepted_writes.0,
+            "accepted_writes": self.counters.accepted_writes.0,
             "accepted_write_bytes": self.counters.accepted_write_bytes.0, "history": self.history,
         })
     }
@@ -1376,7 +1376,7 @@ mod tests {
     fn counters(rig: &Rig) -> (u64, u64, u64) {
         let state = fujimod_emulator_devices::Device::save(&rig.host);
         (
-            state["accepted_write_count"].as_u64().expect("accepted write count"),
+            state["accepted_writes"].as_u64().expect("accepted write count"),
             state["accepted_write_bytes"].as_u64().expect("accepted write bytes"),
             state["dirty_sectors"].as_u64().expect("dirty sectors"),
         )
