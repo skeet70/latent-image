@@ -367,6 +367,7 @@ runResolved options = do
                                   , ("capability", b capability)
                                   , ("candidate", candidateReport digest hostSummary)
                                   , ("coverage", coverageReport subjects host stockResults armResult)
+                                  , ("ground_cases", groundReport groundList)
                                   , ("anchors", arr anchorOutput)
                                   , ("stock", stockReport stockResults)
                                   , ("arm", armReport armResult)
@@ -526,7 +527,13 @@ candidateReport digest summary =
     [ ("kind", s "host")
     , ("sha256", s digest)
     , ("evaluated", n (fromIntegral (hostEvaluated summary)))
-    , ("matched", n (fromIntegral (hostEvaluated summary - length (hostMismatches summary))))
+    , ( "matched"
+      , n
+          ( if null (hostErrors summary)
+              then fromIntegral (hostEvaluated summary - length (hostMismatches summary))
+              else 0
+          )
+      )
     , ("mismatches", arr (map s (take 10 (hostMismatches summary))))
     , ("errors", arr (map s (hostErrors summary)))
     ]
@@ -676,6 +683,28 @@ describeCheck (CheckBlocked message) = "blocked: " ++ message
 describeCheck (CheckUnsupported message) = "unsupported: " ++ message
 describeCheck (CheckUnknown message) = "unknown: " ++ message
 describeCheck (CheckTruncated message) = "truncated evidence: " ++ message
+
+groundReport :: [Domain.GroundCase] -> Value
+groundReport cases =
+  obj
+    [ ("valid_record", n (fromIntegral (count kindIsValid)))
+    , ("single_bit_constructed", n (fromIntegral (count kindIsSingle)))
+    , ("row_parity_bit", n (fromIntegral (count kindIsRow)))
+    , ("column_parity_bit", n (fromIntegral (count kindIsColumn)))
+    , ("parity_pair", n (fromIntegral (count kindIsPair)))
+    ]
+  where
+    count predicate = length [() | item <- cases, predicate (Domain.groundKind item)]
+    kindIsValid (Domain.ValidRecord _) = True
+    kindIsValid _ = False
+    kindIsSingle (Domain.SingleBitRecord _ _) = True
+    kindIsSingle _ = False
+    kindIsRow (Domain.RowParityBit _) = True
+    kindIsRow _ = False
+    kindIsColumn (Domain.ColumnParityBit _) = True
+    kindIsColumn _ = False
+    kindIsPair (Domain.ParityPair _ _) = True
+    kindIsPair _ = False
 
 stockReport :: [CaseOutcome] -> Value
 stockReport outcomes =
