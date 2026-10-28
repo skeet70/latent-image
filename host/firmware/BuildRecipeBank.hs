@@ -1249,6 +1249,11 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
         , "menu/recipe_bank_ui.h"
         , "menu/recipe_bank_edit.h"
         , "menu/recipe_bank_fields.inc"
+        , "replacement/bank/lib.rs"
+        , "replacement/service/lib.rs"
+        , "replacement/service/rb_service_stock.S"
+        , "replacement/service/rb_service.h"
+        , "replacement/recipe_ui/src/lib.rs"
         , "menu/ram_push_installer.c"
         , "menu/ram_push_abi.h"
         , "menu/recipe_bank_ram.ld"
@@ -1277,6 +1282,14 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
     \(label, path) -> do
       digest <- H.sha256 =<< B.readFile path
       pure (label, H.s digest)
+  rustObjectPath <- maybe (H.failH "ram-push: RB_RUST_ARCHIVE is unset") pure =<< lookupEnv "RB_RUST_ARCHIVE"
+  rustObjectDigest <- H.sha256 =<< B.readFile rustObjectPath
+  rustFactsPath <- maybe (H.failH "ram-push: RB_RUST_BUILD_FACTS is unset") pure =<< lookupEnv "RB_RUST_BUILD_FACTS"
+  rustFactsDigest <- H.sha256 =<< B.readFile rustFactsPath
+  let rustIdentity =
+        [ ("rust_object_replacement_bank", H.s rustObjectDigest)
+        , ("rust_toolchain_replacement_bank", H.s rustFactsDigest)
+        ]
   let toolIdentity =
         [ ("build-recipe-bank", H.s recipeBankBuilderDigest)
         , ("ram-push-toolchain", H.s ramPushToolchainDigest)
@@ -1288,7 +1301,7 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
   setFileMode (out ++ "/runtime.bin") 0o600
   B.writeFile (out ++ "/ram-push-manifest.json") (encodeCanonical (H.obj
     [ ("schema", H.n 1)
-    , ("source_identity", H.obj (sourceIdentity <> rc0Identity <> toolIdentity))
+    , ("source_identity", H.obj (sourceIdentity <> rc0Identity <> rustIdentity <> toolIdentity))
     , ("base", H.s (hex32 base))
     , ("size", H.n (fromIntegral size))
     , ("runtime_sha256", H.s runtimeHash)

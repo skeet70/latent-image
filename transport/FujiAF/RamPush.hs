@@ -1045,6 +1045,24 @@ runfilesRelinker payload = do
     require present ("RAM-push relinker is missing from this binary's runfiles: "++path)
   pure relinker
 
+-- | The bank's compiled Rust service object, from this binary's runfiles.
+rustServiceObject :: IO FilePath
+rustServiceObject = do
+  executable <- getExecutablePath
+  let path = (executable ++ ".runfiles") </> "_main" </> "replacement" </> "bank" </> "bank.a"
+  present <- doesFileExist path
+  require present ("the bank's Rust service object is missing from this binary's runfiles: " ++ path)
+  pure path
+
+-- | The pinned cross-toolchain's build facts, from this binary's runfiles.
+rustServiceFacts :: IO FilePath
+rustServiceFacts = do
+  executable <- getExecutablePath
+  let path = (executable ++ ".runfiles") </> "_main" </> "replacement" </> "bank" </> "build-facts.txt"
+  present <- doesFileExist path
+  require present ("the Rust cross-toolchain's build facts are missing from this binary's runfiles: " ++ path)
+  pure path
+
 -- | A pinned build's outputs; `pinnedDirectory` is removed when the action returns.
 data PinnedBuild = PinnedBuild
   { pinnedManifest :: RamPushManifest
@@ -1111,7 +1129,13 @@ withPinnedReviewedBuildUsing contract relinker base action = withRelinkedBuildUs
 withRelinkedBuildUsing :: RamPushRelinker -> AllowlistPolicy -> Address -> (PinnedBuild -> IO a) -> IO a
 withRelinkedBuildUsing relinker policy base action = withReviewedBuildDirectory payload $ \root directory -> do
   let tools = relinkerToolchain relinker
-      environment =
+  rustObject <- case payloadKind payload of
+    RecipeBankD3 -> Just <$> rustServiceObject
+    _ -> pure Nothing
+  rustFacts <- case payloadKind payload of
+    RecipeBankD3 -> Just <$> rustServiceFacts
+    _ -> pure Nothing
+  let environment =
         [ ("PATH",toolCoreutilsBin tools)
         , ("RAM_PUSH_BUILDER",relinkerBuilder relinker)
         , ("RAM_PUSH_CLANG",toolClang tools)
@@ -1119,7 +1143,7 @@ withRelinkedBuildUsing relinker policy base action = withReviewedBuildDirectory 
         , ("RAM_PUSH_OBJCOPY",toolObjcopy tools)
         , ("RAM_PUSH_NM",toolNm tools)
         , ("RAM_PUSH_OBJDUMP",toolObjdump tools)
-        ] ++ payloadRelinkInputs payload ++ case payloadKind payload of
+        ] ++ payloadRelinkInputs payload ++ [("RB_RUST_ARCHIVE", path) | Just path <- [rustObject]] ++ [("RB_RUST_BUILD_FACTS", path) | Just path <- [rustFacts]] ++ case payloadKind payload of
           UsbToggle ->
             [ ("USB_TOGGLE_STUB", takeDirectory (relinkerScript relinker) </> "usb-toggle-stub.bin")
             , ("USB_TOGGLE_STUB_SYMBOLS", takeDirectory (relinkerScript relinker) </> "usb-toggle-stub.sym")

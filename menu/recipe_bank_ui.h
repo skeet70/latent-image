@@ -251,34 +251,18 @@ typedef enum {
   RB_PAGE_FIELD
 } RbBankPage;
 
+extern uint32_t rb_ui_route_page(uint32_t cls);
+extern uint32_t rb_ui_route_slot(uint32_t cls);
+extern uint32_t rb_ui_route_item(uint32_t token);
+
 /* Page kind of a frame class; RB_PAGE_SUB also yields the slot. */
 static inline RbBankPage rb_ui_page(uint32_t cls, uint8_t *slot_out)
 {
-  if (cls == RB_UI_CLASS_SLOT) {
-    return RB_PAGE_SLOT;
+  RbBankPage page = (RbBankPage)rb_ui_route_page(cls);
+  if (page == RB_PAGE_SUB && slot_out != 0) {
+    *slot_out = (uint8_t)rb_ui_route_slot(cls);
   }
-  if (cls >= RB_UI_CLASS_SUB0 && cls < RB_UI_CLASS_SUB0 + RB_BANK_SLOTS) {
-    if (slot_out != 0) {
-      *slot_out = (uint8_t)(cls - RB_UI_CLASS_SUB0);
-    }
-    return RB_PAGE_SUB;
-  }
-  if (cls == RB_UI_CLASS_SELECT) {
-    return RB_PAGE_SELECT;
-  }
-  if (cls == RB_UI_EDITOR_CLASS) {
-    return RB_PAGE_EDITOR;
-  }
-  if (cls == RB_UI_CLASS_EDIT) {
-    return RB_PAGE_EDIT;
-  }
-  if (cls == RB_UI_CLASS_DIALOG) {
-    return RB_PAGE_DIALOG;
-  }
-  if (cls >= RB_UI_CLASS_FIELD0 && cls <= RB_UI_CLASS_FIELD_LAST) {
-    return RB_PAGE_FIELD;
-  }
-  return RB_PAGE_NONE;
+  return page;
 }
 
 /* Token only: the caller has already established the page class. Ranges that
@@ -286,22 +270,12 @@ static inline RbBankPage rb_ui_page(uint32_t cls, uint8_t *slot_out)
  * the edit/save page. */
 static inline RbBankItemRef rb_ui_decode(uint32_t token)
 {
+  uint32_t packed = rb_ui_route_item(token);
   RbBankItemRef item = { RB_ITEM_NONE, 0u, 0u, RB_SELECTION_NONE };
-  uint32_t u;
-  if (token >= RB_UI_TOKEN_VERB_BASE &&
-      token < RB_UI_TOKEN_VERB_BASE + RB_BANK_SLOTS * RB_UI_VERBS_PER_SLOT) {
-    u = token - RB_UI_TOKEN_VERB_BASE;
-    item.kind = RB_ITEM_VERB;
-    item.slot = (uint8_t)(u >> 2);
-    item.verb = (uint8_t)(u & 3u);
-    return item;
-  }
-  if (token >= RB_UI_TOKEN_SELECT_BASE &&
-      token < RB_UI_TOKEN_SELECT_BASE + RB_UI_SELECT_ROWS) {
-    item.kind = RB_ITEM_SELECT;
-    item.selection = (RbSelection){(uint8_t)(token - RB_UI_TOKEN_SELECT_BASE)};
-    return item;
-  }
+  item.kind = (RbBankItemKind)(packed & 0xffu);
+  item.slot = (uint8_t)(packed >> 8);
+  item.verb = (uint8_t)(packed >> 16);
+  item.selection = (RbSelection){(uint8_t)(packed >> 24)};
   return item;
 }
 
