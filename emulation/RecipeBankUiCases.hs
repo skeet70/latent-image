@@ -2184,7 +2184,7 @@ regionList in' e sp = map setPermission (filter (\(n, _, _, _, _) -> inProfile (
     -- expected byte that differs from its initial value. An expected byte equal
     -- to the initial value is an observation and grants nothing.
     setPermission (n, base, size, permissions, bytes) =
-      (n, base, size, if permissions == 3 && n `notElem` writeRegions then 1 else permissions, bytes)
+      (n, base, size, if permissions == 3 && n `elem` guardedRegions && n `notElem` writeRegions then 1 else permissions, bytes)
     writeRegions =
       nub
         ( [n | AbiWorkspace _ (RegionId n) _ _ <- caseWorkspaces in' e sp]
@@ -2455,6 +2455,7 @@ transientProblems in' e sp writes = [problem | (address, size) <- writes, Just p
     classify address size =
       case [(n, fromIntegral (address - base)) | (n, base, extent, _, _) <- regs, address >= base, fromIntegral (address - base) + size <= extent] of
         [(n, offset)]
+          | not (n `elem` persistentRegions) -> Nothing
           | any (spanCovers n offset size) allowed -> Nothing
           | otherwise -> Just ("transient write outside allowed scratch in " ++ n ++ " at " ++ hex (fromIntegral address))
         [] -> Just ("transient write outside the declared regions at " ++ hex (fromIntegral address))
@@ -2539,9 +2540,11 @@ preservedRegisterProblems caseValue registers =
        , actual /= exit
        ]
 
-qualify :: Inputs -> Env -> Spec -> Int -> Value -> Value -> Value
-qualify in' e sp exitCode caseValue report =
-  case N.observeNative (if exitCode == 0 then ExitSuccess else ExitFailure exitCode) nativeRegions (get report "runner") of
+qualify :: Inputs -> Env -> Spec -> Value -> Value -> Value
+qualify in' e sp caseValue report =
+  let runnerStatusText = fromMaybe "" (parseMaybe (withObject "rep" (\o -> o .: "runner" >>= withObject "rn" (.: "status"))) report) :: String
+      nativeExit = if runnerStatusText == "returned" then ExitSuccess else ExitFailure 1
+   in case N.observeNative nativeExit nativeRegions (get report "runner") of
     Left problem ->
       result "malformed_output" [N.renderObservationError problem] Nothing False False FinalUnknown GuardNotApplicable TransientMissing EffectsNotEvaluated
         (observationScope sp) (0 :: Integer) (0 :: Int)
@@ -2840,9 +2843,9 @@ runSpec :: FilePath -> FilePath -> Env -> Inputs -> Spec -> IO Value
 runSpec runner out e in' sp = do
   let dir = out </> spId sp
   caseValue <- writeCase dir in' e sp
-  (exitCode, report) <- runCase runner (dir </> "case.json")
+  (_, report) <- runCase runner (dir </> "case.json")
   BL.writeFile (dir </> "native-result.json") (encode report)
-  pure (qualify in' e sp exitCode caseValue report)
+  pure (qualify in' e sp caseValue report)
 
 -- Each control is expected to be rejected. A control that passes would mean the
 -- consumer accepted evidence it cannot establish.
@@ -2854,20 +2857,20 @@ runControls runner out e in' specs = do
       claimSpec = pick "n-select-unset-refused"
       claimDir = out </> "control-public-claim"
   claimCase <- writeCase claimDir in' e claimSpec
-  (claimExit, claimReport) <- runCase runner (claimDir </> "case.json")
+  (_, claimReport) <- runCase runner (claimDir </> "case.json")
   BL.writeFile (claimDir </> "native-result.json") (encode claimReport)
-  let claimPass = statusOf (qualify in' e claimSpec claimExit claimCase claimReport) == Just "passed"
+  let claimPass = statusOf (qualify in' e claimSpec claimCase claimReport) == Just "passed"
       claim = fromMaybe (fromMaybe ("", 0, B.empty) (listToMaybe (spClaims claimSpec))) (find (\(n, _, _) -> n `elem` guardedRegions) (spClaims claimSpec))
       claimRegions = regionList in' e claimSpec
-      claimResult = qualify in' e claimSpec claimExit claimCase (corruptClaim claimRegions claim claimReport)
-      baseline = qualify in' e claimSpec claimExit claimCase claimReport
+      claimResult = qualify in' e claimSpec claimCase (corruptClaim claimRegions claim claimReport)
+      baseline = qualify in' e claimSpec claimCase claimReport
       claimAddress = case claim of
         (region, offset, _) -> case [hex (fromIntegral base + fromIntegral offset) | (n, base, _, _, _) <- claimRegions, n == region] of
           (address : _) -> address
           [] -> ""
       claimNamed = mismatchNamedAddress claimAddress claimResult
-      missingResult = qualify in' e claimSpec claimExit claimCase (set "runner" (set "memory_provenance" Null (get claimReport "runner")) claimReport)
-      diagnosticResult = qualify in' e claimSpec claimExit claimCase (set "runner" (set "status" (s "instruction_budget") (get claimReport "runner")) claimReport)
+      missingResult = qualify in' e claimSpec claimCase (set "runner" (set "memory_provenance" Null (get claimReport "runner")) claimReport)
+      diagnosticResult = qualify in' e claimSpec claimCase (set "runner" (set "status" (s "instruction_budget") (get claimReport "runner")) claimReport)
       changedDir = out </> "control-changed-read-only"
       storageSpec = pick "n-save-ok"
       storageDir = out </> "control-read-only-storage"
@@ -2880,9 +2883,9 @@ runControls runner out e in' specs = do
   storageCase <- writeCase storageDir in' e storageSpec
   let storageReadOnly = dropExpectedRegion "span-low" (forceReadOnly "span-low" storageCase)
   BL.writeFile (storageDir </> "case.json") (encode storageReadOnly)
-  (storageExit, storageReport) <- runCase runner (storageDir </> "case.json")
+  (_, storageReport) <- runCase runner (storageDir </> "case.json")
   BL.writeFile (storageDir </> "native-result.json") (encode storageReport)
-  let storageResult = qualify in' e storageSpec storageExit storageReadOnly storageReport
+  let storageResult = qualify in' e storageSpec storageReadOnly storageReport
       storageRefused = statusOf storageResult == Just "memory_guard" && maybe False inSpanLow (lastAccessAddress storageReport)
   pure
     [ object
