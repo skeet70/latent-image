@@ -61,7 +61,7 @@ module Emulation.WatchObservation
   ) where
 
 import Control.Monad (forM, forM_, unless, when)
-import Data.Aeson (ToJSON (..), Value (..))
+import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), withText)
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
@@ -172,6 +172,12 @@ data WatchJudgement = CandidateQualified | ControlRefusedProtectedWrite deriving
 instance ToJSON WatchJudgement where
   toJSON CandidateQualified = String "candidate-qualified"
   toJSON ControlRefusedProtectedWrite = String "control-refused"
+
+instance FromJSON WatchJudgement where
+  parseJSON = withText "WatchJudgement" $ \text -> case text of
+    "candidate-qualified" -> pure CandidateQualified
+    "control-refused" -> pure ControlRefusedProtectedWrite
+    other -> fail ("unknown watch judgement: " ++ T.unpack other)
 
 field :: String -> Value -> Either String Value
 field name (Object object) = maybe (Left ("missing field " ++ name)) Right (KM.lookup (K.fromString name) object)

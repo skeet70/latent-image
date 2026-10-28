@@ -12,19 +12,31 @@ module Emulation.UiTrajectory
   , Trajectories (..)
   , TrajectoryExpect (..)
   , expectLabel
+  , SegmentName
+  , segmentName
+  , segmentNameText
+  , ElapsedSeconds
+  , elapsedSeconds
+  , elapsedSecondsValue
+  , SegmentResult (..)
+  , SegmentReceipt (..)
+  , decodeSegmentReceipts
   , phaseNames
   , decodeTrajectories
   , variantMismatches
   ) where
 
 import Control.Monad (unless, when)
-import Data.Aeson (FromJSON (..), eitherDecodeStrict', withArray, withObject, (.!=), (.:), (.:?))
+import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), eitherDecodeStrict', object, withArray, withObject, withScientific, withText, (.!=), (.:), (.:?), (.=))
+import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (Object, Parser)
 import qualified Data.ByteString as B
+import Data.Char (isAlphaNum)
 import Data.Foldable (toList)
-import Data.List (nub, stripPrefix)
+import Data.List (nub, sort, stripPrefix)
 import qualified Data.Text as T
+import Data.Scientific (toRealFloat)
 import Data.Word (Word32)
 import Emulation.WatchObservation (WatchRange, watchAddress, watchRange)
 import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming, modeDialName)
@@ -164,6 +176,82 @@ data TrajectoryExpect = ExpectClean | ExpectRefused deriving (Eq, Show)
 expectLabel :: TrajectoryExpect -> T.Text
 expectLabel ExpectClean = "clean"
 expectLabel ExpectRefused = "refused"
+
+newtype SegmentName = SegmentName T.Text deriving (Eq, Show)
+
+segmentName :: T.Text -> Either String SegmentName
+segmentName text
+  | T.null text = Left "segment name is empty"
+  | not (T.all (\c -> isAlphaNum c || c == '-' || c == '_') text) = Left "segment name is not a judgeable token"
+  | otherwise = Right (SegmentName text)
+
+segmentNameText :: SegmentName -> T.Text
+segmentNameText (SegmentName text) = text
+
+instance ToJSON SegmentName where
+  toJSON = String . segmentNameText
+
+instance FromJSON SegmentName where
+  parseJSON = withText "segment name" (either fail pure . segmentName)
+
+newtype ElapsedSeconds = ElapsedSeconds Double deriving (Eq, Show)
+
+elapsedSeconds :: Double -> Either String ElapsedSeconds
+elapsedSeconds value
+  | isNaN value || isInfinite value = Left "elapsed seconds must be finite"
+  | value < 0 = Left "elapsed seconds must not be negative"
+  | otherwise = Right (ElapsedSeconds value)
+
+elapsedSecondsValue :: ElapsedSeconds -> Double
+elapsedSecondsValue (ElapsedSeconds value) = value
+
+instance ToJSON ElapsedSeconds where
+  toJSON = toJSON . elapsedSecondsValue
+
+instance FromJSON ElapsedSeconds where
+  parseJSON = withScientific "elapsed seconds" (either fail pure . elapsedSeconds . toRealFloat)
+
+data SegmentResult = SegmentPassed | SegmentFailed T.Text deriving (Eq, Show)
+
+resultWord :: SegmentResult -> T.Text
+resultWord SegmentPassed = "passed"
+resultWord (SegmentFailed _) = "failed"
+
+resultMessage :: SegmentResult -> Maybe T.Text
+resultMessage SegmentPassed = Nothing
+resultMessage (SegmentFailed text) = Just text
+
+data SegmentReceipt = SegmentReceipt
+  { segmentReceiptName :: SegmentName
+  , segmentReceiptSeconds :: ElapsedSeconds
+  , segmentReceiptResult :: SegmentResult
+  } deriving (Eq, Show)
+
+instance ToJSON SegmentReceipt where
+  toJSON receipt = object
+    [ "segment" .= segmentReceiptName receipt
+    , "seconds" .= segmentReceiptSeconds receipt
+    , "result" .= resultWord (segmentReceiptResult receipt)
+    , "message" .= resultMessage (segmentReceiptResult receipt) ]
+
+instance FromJSON SegmentReceipt where
+  parseJSON = withObject "segment receipt" $ \value -> do
+    unless (sort (KM.keys value) == sort (map K.fromString ["segment", "seconds", "result", "message"]))
+      (fail "a segment receipt takes exactly segment, seconds, result and message")
+    name <- value .: "segment"
+    seconds <- value .: "seconds"
+    word <- value .: "result"
+    message <- value .: "message"
+    result <- case (word, message) of
+      ("passed", Nothing) -> pure SegmentPassed
+      ("passed", Just _) -> fail "a passed segment carries no message"
+      ("failed", Just text) -> pure (SegmentFailed text)
+      ("failed", Nothing) -> fail "a failed segment carries a message"
+      (other, _) -> fail ("unknown segment result: " ++ T.unpack other)
+    pure (SegmentReceipt name seconds result)
+
+decodeSegmentReceipts :: B.ByteString -> Either String [SegmentReceipt]
+decodeSegmentReceipts = eitherDecodeStrict'
 
 data Trajectories = Trajectories
   { beforeUnload :: [Segment]
