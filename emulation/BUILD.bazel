@@ -1312,6 +1312,7 @@ haskell_binary(
         "//host:json",
         "//host:recipe-bank",
         "//host:text",
+        "//replacement/service:qualification",
     ],
 )
 

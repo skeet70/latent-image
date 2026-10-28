@@ -1,3 +1,5 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_library", "haskell_test")
+
 filegroup(
     name = "module",
     srcs = ["lib.rs"],
@@ -16,5 +18,47 @@ filegroup(
         "//menu:__pkg__",
         "//replacement/bank:__pkg__",
         "//transport:__pkg__",
+    ],
+)
+
+
+haskell_library(
+    name = "qualification",
+    srcs = ["Replacement/Service/Qualify.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "qualification-tests",
+    size = "small",
+    srcs = ["ServiceQualifyTests.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    deps = [
+        ":qualification",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
     ],
 )

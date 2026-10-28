@@ -19,8 +19,9 @@ The packaged recipe-bank payload's field-row lane calls the X-M1 1.50 stock rend
 | `menu/recipe_bank_edit.c` `rb_stage_edit_field_prop` | retained C | maps an edit-field host `0x267..0x26f` to the stock property it edits |
 | `menu/recipe_bank_probe.c` `rb_probe_state` | retained C | answers every other property and forwards the field-row lane |
 | `replacement/service/lib.rs` | owned Rust | closed `RowState` set, caller conversion for an out-of-domain word, the forward call |
-| `replacement/service/rb_service_stock.S` | owned assembly | the AAPCS branch to `0x00d52684`; keeps `sp` 8-byte aligned and touches only `r12` and `lr` |
+| `replacement/service/rb_service_stock.S` | owned assembly | the AAPCS branch to `0x00d52684`; its 8-byte frame holds `r12` and `lr`, keeps `sp` aligned, and saves no callee-saved register |
 | `replacement/bank/lib.rs` | owned Rust | the crate root: both modules, one panic handler |
+| `replacement/service/Replacement/Service/Qualify.hs` | owned Haskell | the direct-case contract, checked observation parser, write confinement and qualification report |
 | `FUN_00d52684` and its callees/tables | retained stock | the row state |
 
 ## Owned capability and non-goals
@@ -31,7 +32,7 @@ Owned: the typed binding of the field-row lane. `rb_probe_state` maps the host a
 
 - Call: `u32 rb_service_field_row_state(u32 field, u32 row)`, ARM AAPCS. `field` is the stock property from `RB_EDIT_FIELD`, `row` is the row token the menu walk passes.
 - Retained call: `FUN_00d52684(field, row)`, result in `r0`. States are `0` offered, `2` disabled, `3` hidden (`menu/recipe_bank_ui.h`).
-- Preserved: `r4-r11` and `sp`; the trampoline keeps `sp` 8-byte aligned across the call and touches only `r12` and `lr`.
+- Preserved: `r4-r11` and `sp`; the trampoline keeps `sp` 8-byte aligned across the call and touches only `r12` and `lr`. Its frame does not save `r4-r11`, so a stock clobber of those registers reaches the caller.
 - Callers: `rb_probe_state`, reached from the bank's probe entry published over the stock probe's default branch. No callbacks or indirect references originate in this lane.
 - Unknown results: a word outside the state set is returned to the caller unchanged, which is what the previous direct cast did. It is not a qualification success: the trace records the probe's arguments, and a word outside the set fails the declared domain rather than becoming a state.
 
@@ -41,18 +42,19 @@ Owned: the typed binding of the field-row lane. `rb_probe_state` maps the host a
 - Repeated entry: once per rendered row, and the same field and row across page entries.
 - Cancellation: nothing inside the call can be cancelled; leaving the page cancels the visit and the next visit calls again. No handback state exists.
 - Teardown: `ram-unload` restores every publication word and frees the allocation at power-off. Observed: 222 old words verified, rollback mailbox `operation 2`, `restored 222`, `status 0`, `peer_status 0`.
-- Host loss: the call has no host dependency, so a pushed payload keeps answering the camera's own menu walk after the host stops. The bridge exposes no host-detach-without-teardown operation, so host loss is stated, not exercised; that is a scoped prerequisite.
+- Host loss: the call has no host operation, pending completion, allocation transfer, retained host pointer or post-return callback. Host loss inside the synchronous interval therefore has nothing to detach; the whole-payload detached session is not claimed, and no detach API is added for this case.
 
 ## Effects
 
 The adapter returns one word and writes nothing: the Rust entry holds no state, the trampoline writes only its own 8-byte frame, and the bank ELF allowlist proves the replacement's stores reach only bank data and the entry stack and that its only external branch is the declared `0x00d52684`.
 
-The retained probe's own effects are not fully established. The `e-iso-edit-list-rows` native case executes the recovered region `0x00d52684/25140` with real stock callees (`realStockFns`) and stubs only the task, notify, journal, display and mode-state helpers; its expected spans bound the final state of the executed region, so they exclude permanent writes outside the declared set but do not rule out transient writes. The full-system run records the probe's arguments, the menu states the list produced and the publication/unload effects; it does not measure stock memory deltas. The probe's transient effect set stays an obligation for closure or hardware evidence.
+The direct qualification cases split every row, so each execution's write provenance is complete (the native log retains 4096 events; the combined 21-row diagnostic exceeded that at 17711). The checked consumer declares `casebuf[0x1e00,0x2000)` as stack scratch and the stock table mirror as transient scratch. Every write must stay inside those spans, the mirror must return to its initial bytes, and every other byte in every declared region must equal its initial value. The stack is filled with a non-zero pattern so an unwritten frame byte is not mistaken for zero. This bounds the adapter and the executed stock closure together; it is not a claim that the probe has no other effects on the body.
 
 ## Verification
 
-- Native case `e-iso-edit-list-rows` (`emulation/RecipeBankCases.hs`): ISO edit list host `0x26e`, stock property `0x141`: row `0` hidden, the other twenty offered, AUTO row `0x1b` among them. It executes the stock probe region, so it also exercises the Rust entry's ABI under the bounded runner.
-- Packaged route: `//emulation:xm1-viewer -- --ram-push-e2e --cardless --fujimod --unreviewed-relink` with the cardless inputs and `emulation/ram-push-service-trajectories.fujimod.json`. Observed: allowlist pass with zero violations; manifest carries the crate sources, the archive digest and the toolchain-facts digest; `ram-push` publishes; the edit value list for host `0x268` asks stock property `0x110` for rows `0..4` 35 times across re-renders (`r0=0x110`, `r1=0..4` at `0x00d52684`); the list's cursor moves through those rows and the trajectory's menu states match; `ram-unload` verifies the 222 old words.
+- Direct native rows, `CASE='svc-*' JOBS=1 ... devenv shell -- bash emulation/build-recipe-bank-cases.sh`: 26 bounded cases enter the built `rb_service_field_row_state`, the assembly trampoline and `FUN_00d52684`. Property `0x110` rows `0..4` each return `0` (offered); the 21 stock ISO-list rows of property `0x141` return `3` for row `0` and `0` for the rest in the M fixture. Each case checks `r4-r11` against non-zero distinct seeds, `sp` against its initial value, `r0` against the independent expectation, complete write confinement, mirror restoration and immutable non-scratch bytes. The same consumer refuses an injected `r7` clobber and an injected immutable write; the report is `service-qualification.json`.
+- Diagnostic native case `e-iso-edit-list-rows`: the 21-row ISO edit list through host `0x26e` still checks the exact public 168 bytes. Its stack residue is not an expectation; the direct rows above own the stack/ABI contract.
+- Packaged route: `//emulation:xm1-viewer -- --ram-push-e2e --cardless --fujimod --unreviewed-relink` with the cardless inputs and `emulation/ram-push-service-trajectories.fujimod.json`. Receipt 7 observed allowlist pass with zero violations; manifest carries the crate sources, the archive digest and the toolchain-facts digest; `ram-push` publishes; the edit value list for host `0x268` asks stock property `0x110` for rows `0..4` 35 times across re-renders (`r0=0x110`, `r1=0..4` at `0x00d52684`); the list's cursor moves through those rows and the trajectory's menu states match; `ram-unload` verifies the 222 old words. That receipt binds the pre-frame-change archive; the final archive needs a fresh packaged run because the trampoline bytes changed.
 - Negative controls: a bank object that stores to an undeclared address fails the allowlist before USB; a manifest that differs from the relinked runtime or its contract fails authentication before USB; and the allowlist refuses `rb_media_request_post`'s open-completion store when its declaration is removed or narrowed.
 
 ## Retained dependencies
@@ -66,5 +68,5 @@ The probe's interrupt state and stack depth under the menu task on the body; sto
 ## Open prerequisites
 
 - A reviewed publication: the reviewed RAM-push contract is fail-closed against the new bank sources and identities until they are re-pinned.
-- Host-detach evidence, which the bridge cannot currently produce without a new session operation.
-- The eight unexercised edit-field mappings.
+- A fresh packaged RAM-push/unload receipt for the final archive after the trampoline frame change.
+- The eight unexercised edit-field mappings and the stock probe's other mode columns.
