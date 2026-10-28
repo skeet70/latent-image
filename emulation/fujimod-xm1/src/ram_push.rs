@@ -587,7 +587,7 @@ impl Server {
             "preservation": preservation,
             "sd_host": self.bridge.machine.card_state().unwrap_or_else(|error| json!({"error": error})),
             "boundary": {"instructions": self.bridge.machine.instructions(), "failure": self.bridge.machine.failure},
-        })
+        }))
     }
 
     fn serve(&mut self) -> Result<(), String> {
