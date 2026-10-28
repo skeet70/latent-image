@@ -1394,6 +1394,7 @@ mod tests {
             rig.write(0x20, 4, u64::from(seed) | index).unwrap();
         }
         rig.elapse();
+        rig.write(0x30, 2, 0xffff).unwrap();
     }
 
     fn sdma_write(rig: &mut Rig, lba: u32, seed: u8) {

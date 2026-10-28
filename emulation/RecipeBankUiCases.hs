@@ -26,7 +26,7 @@ import FujiAF.Host (arr, get, list, num, obj, s, set, str)
 import Numeric
 import System.Directory
 import System.Environment
-import System.Exit (ExitCode (..), exitFailure)
+import System.Exit (exitFailure)
 import System.FilePath
 
 hex :: Integer -> String
@@ -609,6 +609,17 @@ data WorkspaceKind = KernelWorkspace | MediaWorkspace | UiWorkspace | StackWorks
 
 newtype RegionId = RegionId String deriving (Eq)
 
+newtype ByteOffset = ByteOffset Int deriving (Eq)
+
+newtype ByteCount = ByteCount Int deriving (Eq)
+
+data TransientSpan = TransientSpan
+  { transientRegion :: RegionId
+  , transientOffset :: ByteOffset
+  , transientCount :: ByteCount
+  }
+  deriving (Eq)
+
 data AbiWorkspace = AbiWorkspace
   { workspaceKind :: WorkspaceKind
   , workspaceRegion :: RegionId
@@ -663,6 +674,17 @@ stockDrawTailCode = u32le 0xe8bd8830
 -- FUN_011662a0(root, kind) at +4 and +8.
 stockPaneRecord :: Word32
 stockPaneRecord = 0x015e4800
+
+-- The stock cursor cell and pane-kind cell are scratch writes outside the
+-- writable claim spans.
+stockScratchSpans :: [TransientSpan]
+stockScratchSpans =
+  [ TransientSpan (RegionId "cells") (ByteOffset (fromIntegral (0x009571d8 - cellsBase))) (ByteCount 4)
+  , TransientSpan (RegionId "draw-state") (ByteOffset (fromIntegral (stockPaneRecord + 8 - 0x015e46c0))) (ByteCount 4)
+  ]
+
+stockScratchRegions :: [RegionId]
+stockScratchRegions = map transientRegion stockScratchSpans
 
 stockDrawTailEnd :: Word32
 stockDrawTailEnd = 0x011662b4
@@ -730,8 +752,9 @@ inProfile ProcessingProfile name =
   name `notElem` [RegionId "stock-draw-tail", RegionId "draw-state", RegionId "stock-draw-calls"]
 inProfile DrawRootProfile name =
   name `notElem` [RegionId "ui-b", RegionId "draw-state", RegionId "stock-draw-calls"]
+-- ui_dispatch reads UI_CELL_BASE in modal-cells.
 inProfile SelectDrawProfile name =
-  name `notElem` [RegionId "draw-state", RegionId "stock-draw-calls", RegionId "modal-cells"]
+  name `notElem` [RegionId "draw-state", RegionId "stock-draw-calls", RegionId "model-scratch"]
 inProfile PaneDrawProfile name =
   name `notElem` [RegionId "ui-b", RegionId "tables-ptr", RegionId "tables-edit"]
 
@@ -2180,11 +2203,12 @@ regionList in' e sp = map setPermission (filter (\(n, _, _, _, _) -> inProfile (
           overlay (B.replicate (0xd52684 - 0xd38d98) 0)
             [(0, inUiC in'), (0xd4d604 - 0xd38d98, B.take 20608 (B.drop (0xd4d604 - 0xbf1a00) (inId5 in')))])
       ]
-    -- A data region is writable when this case declares a workspace in it or an
-    -- expected byte that differs from its initial value. An expected byte equal
-    -- to the initial value is an observation and grants nothing.
+    -- A data region is writable when this case declares a workspace in it, an
+    -- expected byte that differs from its initial value, or a declared
+    -- transient scratch span. An expected byte equal to the initial value is an
+    -- observation and grants nothing.
     setPermission (n, base, size, permissions, bytes) =
-      (n, base, size, if permissions == 3 && n `notElem` writeRegions then 1 else permissions, bytes)
+      (n, base, size, if permissions == 3 && n `notElem` writeRegions && RegionId n `notElem` stockScratchRegions then 1 else permissions, bytes)
     writeRegions =
       nub
         ( [n | AbiWorkspace _ (RegionId n) _ _ <- caseWorkspaces in' e sp]
@@ -2397,6 +2421,9 @@ allowedSpans in' e sp =
        | claim@(region, offset, value) <- spClaims sp
        , claimChangesInitial (regionList in' e sp) claim
        ]
+    ++ [ (region, offset, offset + count)
+       | TransientSpan (RegionId region) (ByteOffset offset) (ByteCount count) <- stockScratchSpans
+       ]
 
 spanCovers :: String -> Int -> Int -> (String, Int, Int) -> Bool
 spanCovers region offset size (n, lo, hi) = region == n && lo <= offset && offset + size <= hi
@@ -2539,12 +2566,12 @@ preservedRegisterProblems caseValue registers =
        , actual /= exit
        ]
 
-qualify :: Inputs -> Env -> Spec -> Int -> Value -> Value -> Value
-qualify in' e sp exitCode caseValue report =
-  case N.observeNative (if exitCode == 0 then ExitSuccess else ExitFailure exitCode) nativeRegions (get report "runner") of
-    Left problem ->
-      result "malformed_output" [N.renderObservationError problem] Nothing False False FinalUnknown GuardNotApplicable TransientMissing EffectsNotEvaluated
-        (observationScope sp) (0 :: Integer) (0 :: Int)
+qualify :: Inputs -> Env -> Spec -> Value -> Value -> Value
+qualify in' e sp caseValue report =
+  case (do
+    nativeExit <- N.reportRunnerExit report
+    N.observeNative nativeExit nativeRegions (get report "runner")) of
+    Left problem -> malformedOutput problem
     Right observed ->
       let statusText = N.runnerStatusLabel (N.nativeStatus observed)
           registers = [(N.registerLabel register, value) | register <- N.registerLabels, Just value <- [N.lookupRegister register observed]]
@@ -2583,6 +2610,9 @@ qualify in' e sp exitCode caseValue report =
           reportedProblems = if status == "passed" || status == "failed" then problems else []
        in result status reportedProblems (Just statusText) (null registerProblems) (null abi) finalState guard transient verdict scope total kept
   where
+    malformedOutput problem =
+      result "malformed_output" [N.renderObservationError problem] Nothing False False FinalUnknown GuardNotApplicable TransientMissing EffectsNotEvaluated
+        (observationScope sp) (0 :: Integer) (0 :: Int)
     nativeRegions = [Region (obj [("id", s name)]) (fromIntegral base) (fromIntegral size) bytes | (name, base, size, _, bytes) <- regionList in' e sp]
     result :: String -> [String] -> Maybe String -> Bool -> Bool -> FinalState -> GuardState -> TransientProof -> EffectVerdict -> EffectScope -> Integer -> Int -> Value
     result status problems statusText registersOk abiOk finalState guard transient verdict scope total kept =
@@ -2840,9 +2870,9 @@ runSpec :: FilePath -> FilePath -> Env -> Inputs -> Spec -> IO Value
 runSpec runner out e in' sp = do
   let dir = out </> spId sp
   caseValue <- writeCase dir in' e sp
-  (exitCode, report) <- runCase runner (dir </> "case.json")
+  (_, report) <- runCase runner (dir </> "case.json")
   BL.writeFile (dir </> "native-result.json") (encode report)
-  pure (qualify in' e sp exitCode caseValue report)
+  pure (qualify in' e sp caseValue report)
 
 -- Each control is expected to be rejected. A control that passes would mean the
 -- consumer accepted evidence it cannot establish.
@@ -2854,20 +2884,20 @@ runControls runner out e in' specs = do
       claimSpec = pick "n-select-unset-refused"
       claimDir = out </> "control-public-claim"
   claimCase <- writeCase claimDir in' e claimSpec
-  (claimExit, claimReport) <- runCase runner (claimDir </> "case.json")
+  (_, claimReport) <- runCase runner (claimDir </> "case.json")
   BL.writeFile (claimDir </> "native-result.json") (encode claimReport)
-  let claimPass = statusOf (qualify in' e claimSpec claimExit claimCase claimReport) == Just "passed"
+  let claimPass = statusOf (qualify in' e claimSpec claimCase claimReport) == Just "passed"
       claim = fromMaybe (fromMaybe ("", 0, B.empty) (listToMaybe (spClaims claimSpec))) (find (\(n, _, _) -> n `elem` guardedRegions) (spClaims claimSpec))
       claimRegions = regionList in' e claimSpec
-      claimResult = qualify in' e claimSpec claimExit claimCase (corruptClaim claimRegions claim claimReport)
-      baseline = qualify in' e claimSpec claimExit claimCase claimReport
+      claimResult = qualify in' e claimSpec claimCase (corruptClaim claimRegions claim claimReport)
+      baseline = qualify in' e claimSpec claimCase claimReport
       claimAddress = case claim of
         (region, offset, _) -> case [hex (fromIntegral base + fromIntegral offset) | (n, base, _, _, _) <- claimRegions, n == region] of
           (address : _) -> address
           [] -> ""
       claimNamed = mismatchNamedAddress claimAddress claimResult
-      missingResult = qualify in' e claimSpec claimExit claimCase (set "runner" (set "memory_provenance" Null (get claimReport "runner")) claimReport)
-      diagnosticResult = qualify in' e claimSpec claimExit claimCase (set "runner" (set "status" (s "instruction_budget") (get claimReport "runner")) claimReport)
+      missingResult = qualify in' e claimSpec claimCase (set "runner" (set "memory_provenance" Null (get claimReport "runner")) claimReport)
+      diagnosticResult = qualify in' e claimSpec claimCase (set "runner" (set "status" (s "instruction_budget") (get claimReport "runner")) claimReport)
       changedDir = out </> "control-changed-read-only"
       storageSpec = pick "n-save-ok"
       storageDir = out </> "control-read-only-storage"
@@ -2880,9 +2910,9 @@ runControls runner out e in' specs = do
   storageCase <- writeCase storageDir in' e storageSpec
   let storageReadOnly = dropExpectedRegion "span-low" (forceReadOnly "span-low" storageCase)
   BL.writeFile (storageDir </> "case.json") (encode storageReadOnly)
-  (storageExit, storageReport) <- runCase runner (storageDir </> "case.json")
+  (_, storageReport) <- runCase runner (storageDir </> "case.json")
   BL.writeFile (storageDir </> "native-result.json") (encode storageReport)
-  let storageResult = qualify in' e storageSpec storageExit storageReadOnly storageReport
+  let storageResult = qualify in' e storageSpec storageReadOnly storageReport
       storageRefused = statusOf storageResult == Just "memory_guard" && maybe False inSpanLow (lastAccessAddress storageReport)
   pure
     [ object
