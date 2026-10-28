@@ -4,7 +4,7 @@ This report retains X-M1 1.50 ROM selector, SD loading, bootstrap, storage-map a
 
 Artifacts: boot ROM `private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin` (16384 bytes, SHA-1 `bed698ed1d91b5c29ce7c5d650156e6100c32cce`) and its listing `bootrom/bootrom.dis`; boot record 1 `decode/boot-40048.bin`; image 4 `lz/id4-0061c400.bin`; the built card `bootrom/diagnostic-card-image/ffsys.bin`, `ffboot.bin` and `diagnostic-sd.img`; the owner's captures cited per item. The sibling checkout `../x70view` is cited by path only and supplies no X-M1 fact.
 
-**Current result:** the [exact v5 physical rollback](#260-physical-rollback-readback-status-20) reports complete RC0 readback; the owner reports ordinary startup, photography, normal-card operation/playback and retained film simulations/settings. [Recovery status](recovery-status.md) owns current coverage and [the recovery kit](../recovery/README.md) owns supported reproduction. Earlier candidate/session sections retain technical evidence, not reusable camera authorization or current instructions. Preserve the successful card; no repeat write or reinstall is justified.
+**Current result:** the [exact v5 physical rollback](#260-physical-rollback-readback-status-20) reports complete RC0 readback; the owner reports ordinary startup, photography, normal-card operation/playback and retained film simulations/settings. [Recovery status](recovery-status.md#historical-recorder-failure-r4-decision-2026-10-27) accepts R4 only for that historical recorder-v2-v5 block-14 repair, with block-71 residue retained and no current rescue assurance from the damaged SD slot. [The recovery kit](../recovery/README.md) owns supported reproduction. Earlier candidate/session sections retain technical evidence, not reusable camera authorization or current instructions. Preserve the successful card; no repeat write or reinstall is justified.
 
 Reading paths: sections 1–2.5 bind the ROM selector and pad inputs; sections 2.37–2.60 trace installed-storage reachability, physical target selection and the successful bounded repair; section 4 binds dual-route configuration hazards. Exact input bytes remain owner-supplied and private.
 
@@ -1276,7 +1276,7 @@ The raw overlay sets target `+0xe0` bit 18 and `+0xe4` bit 27. At target `+0x11c
 
 ### 4.7 Status
 
-The startup-restored marker establishes application-independent execution through a ROM SD route (E-SDBOOT-BLINK-WARM-OBSERVED-150). FAT/raw selection, low selector, successful switch edge and controlled entry remain unbound. The marker alone establishes neither internal-media reachability nor repair. Later bootstrap/UI and v5 writer/readback findings establish scoped R3 and a defined physical repair; formal R4 acceptance remains unclaimed. [Recovery status](recovery-status.md) owns the current scope.
+The startup-restored marker establishes application-independent execution through a ROM SD route (E-SDBOOT-BLINK-WARM-OBSERVED-150). FAT/raw selection, low selector, successful switch edge and controlled entry remain unbound. The marker alone establishes neither internal-media reachability nor repair. Later bootstrap/UI and v5 writer/readback findings establish scoped R3 and the defined physical repair. [R4 acceptance](recovery-status.md#historical-recorder-failure-r4-decision-2026-10-27) is limited to that historical recorder-v2-v5 block-14 repair with retained block-71 residue; the damaged SD slot leaves the route unavailable now.
 
 ### 4.8 Route decision and discriminating follow-up
 

@@ -43,7 +43,7 @@ The procedure binds exactly one candidate record produced by the build of the ex
 | Boot publication | [#13](https://github.com/skeet70/latent-image/issues/13) integrated for this candidate: exact covered length, bounded termination, destination validation, and the truncated, unterminated, out-of-range and checksum-preserving corrupt packages exercised |
 | Emulator | `//emulation:flash-boot-check` boots this image to the stock menus, the full-system visual and behavioral checks are recorded, and no boot-path prerequisite is open |
 | Owner go | A per-run H3 go naming the operation and this DAT digest, under [the camera-run procedure](../spec/07-governance-and-handoff.md#3-camera-runs) |
-| Recovery | R4 unclaimed; the owner's accepted residual for an unrecoverable interruption is restated for this image and digest |
+| Recovery | No R4 acceptance for this recipe image or interrupted-update class; historical recorder-only R4 supplies no current rescue path through the damaged SD slot. Restate the owner's accepted residual for an unrecoverable interruption for this image and digest |
 
 A candidate that shows the requested menu rows but does not carry all of the above is not installable under this procedure, whatever it renders in an emulator.
 
@@ -159,7 +159,7 @@ The last abort with a working camera is before the final accepted upgrade confir
 
 The first persistent write is S1, the erase of raw trailer block `0x125` holding the boot marker at media `0x24a0000` with halfword `0xaaaa` at `+0x1e`. After that erase lands, the old application cannot boot again, and no mapped operator cancel exists. S2 erases the optional span, S3 programs blocks `0` to `0x125`, S4 refreshes and restores the configuration area, and S5 rewrites the directory-journal pair. An interruption between S1 and the end of S3 leaves a body that does not boot; an interruption in S4 or S5 leaves the residues in [the install procedure](install-procedure.md#8-interruption-residues-and-which-are-recoverable-by-repeating-the-update).
 
-Recovery is not a guarantee for this image. R3 is demonstrated and R4 is unclaimed ([recovery research](../spec/04-recovery.md#101-evidence-levels)); the standing recovery capability is diagnostic rather than restorative. The owner's 2026-10-09 acceptance of an unrecoverable interruption covered the RC0 prefix container, not this image, so section 2 requires the residual to be restated for this digest. A successful install earns no recovery credit.
+Recovery is not a guarantee for this image. [R4 is accepted only for the historical recorder-v2-v5 block-14 repair](recovery-status.md#historical-recorder-failure-r4-decision-2026-10-27), with block-71 residue retained, not this recipe image or interrupted updates. The damaged SD slot makes that route unavailable now. The owner's 2026-10-09 acceptance of an unrecoverable interruption covered the RC0 prefix container, not this image, so section 2 requires the residual to be restated for this digest. A successful install earns no recovery credit.
 
 After any aborted prewrite attempt, make a real power cut after shutdown before any newly scoped attempt. The one-time cached checksum-success byte `0x15c1e58` is not cleared by a menu exit, card swap or second confirmation. After processing begins, do not cut power, retry, attach USB or attempt a rescue through a stock reflash, SD-BOOT, S-record or AUTO_ACT. Preserve the last display, the interruption point, the card and the supply state, and stop camera operations.
 
@@ -243,7 +243,7 @@ The procedure is complete for a candidate that passes section 2. It is not execu
 - **Boot publication.** [#13](https://github.com/skeet70/latent-image/issues/13): the builder integration, store fields and `RB_STORE_ENTRY`, the covered length, bounded termination, destination validation and the corruption cases still need the listed checks.
 - **Update image.** [#37](https://github.com/skeet70/latent-image/issues/37): each candidate needs its input manifest, carried ranges and restore list, checksum and layout results, and readback accepted against its exact inputs.
 - **Review and go.** No independent final-byte review of a complete recipe-only image exists, and no H3 go names one. The owner's earlier RC0 interruption acceptance is not this image's acceptance.
-- **Recovery.** R4 remains unclaimed. No result in this procedure demonstrates a repair or a recovery guarantee.
+- **Recovery.** No R4 acceptance covers this recipe image or interrupted updates. Historical recorder-only R4 supplies no present rescue assurance through the damaged SD slot. No result in this procedure demonstrates a repair or a recovery guarantee.
 
 The current package builder emits its record with `installable: false` and no admission classification. That is a stop and a #11 prerequisite, not a waiver. `camera behavior` is postinstall acceptance under section 2.1; the source-ownership, nonallocator writer, heap, fetch, core and independent-review items are preinstall admission. No candidate is admitted until the reviewed builder or candidate classification exists, the preinstall items are cleared and the flag is true.
 
