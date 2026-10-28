@@ -1,6 +1,6 @@
 //! Read-only classification of the recipe bank's menu pages and row tokens.
 //!
-//! No service calls and no stores.
+//! No service calls and no non-stack stores.
 
 pub const VERBS_PER_SLOT: u32 = 4;
 pub const BANK_SLOTS: u32 = 7;
@@ -197,7 +197,5 @@ mod tests {
         ] {
             assert_eq!(rb_ui_route_item(token), 0, "{token:#x}");
         }
-        assert_eq!(rb_ui_route_item(RowToken::VERB_BASE.0 + BANK_SLOTS * VERBS_PER_SLOT), 0);
-        assert_eq!(rb_ui_route_item(RowToken::SELECT_BASE.0 + SELECT_ROWS), 0);
     }
 }

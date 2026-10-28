@@ -26,21 +26,17 @@ The page and slot are separate exports on purpose. A packed page and slot made c
 
 The exported seam wraps the raw `u32` class in `MenuClass` and the raw token in `RowToken`; inward results carry `BankPage`, `Slot`, `Selection`, `BankVerb` and the closed `BankItem` enum. Raw ids and the packed word appear only at the three C exports. Unknown classes and tokens still return `NONE`/`0`.
 
-`menu/recipe_bank_ui.h` keeps `rb_ui_page` and `rb_ui_decode` as `static inline` wrappers around the exports. `rb_ui_decode` retains its zero-initialized `RbBankItemRef`, so field and padding behavior of the by-value return is unchanged. Rust makes no calls, stores, allocations or mutable-global accesses.
+`menu/recipe_bank_ui.h` keeps `rb_ui_page` and `rb_ui_decode` as `static inline` wrappers around the exports. `rb_ui_decode` retains its zero-initialized `RbBankItemRef`, so field and padding behavior of the by-value return is unchanged. Rust makes no calls, no non-stack stores, no allocations and no mutable-global accesses.
 
 ## Evidence
 
-The Rust module's host tests pass 4 of 4 and call only the exported C ABI: page and slot boundaries including the adjacent field/sub and sub/edit classes, every verb slot and verb, every select code, and unknown or gap tokens returning zero. No test reads internal `PageRoute`, `BankItem` or `ItemRef` fields.
+The Rust module's host tests pass 4 of 4 and call only the exported C ABI: page and slot boundaries including the adjacent field/sub and sub/edit classes, representative verb tokens covering all four verb kinds and the first and last slot, select codes 0, 1 and 7, and the enumerated gap tokens returning zero. No test reads internal `PageRoute`, `BankItem` or `ItemRef` fields.
 
-A one-crate smoke with `#![no_std]`, this module included by `#[path]` and one `#[panic_handler]` compiles under the #119 toolchain. The archive exports `rb_ui_route_page`, `rb_ui_route_slot`, `rb_ui_route_item` and one mangled `rust_begin_unwind`; the module owns no handler. Re-linking the typed module into the bank kernel leaves `__rb_image_end` at `0x00be9c0c`, and the disassembly contains no UXTAB, UXTAH, SXTAB or SXTAH. The composed bank crate with the retained-service module and one handler compiles and links against the bank C objects with the service trampoline: `__rb_text_end` is `0x00be8ca4`, `__rb_image_end` is `0x00be9c24`, and the disassembly contains no extend-add or Thumb form. That is a link and ISA check, not a case run.
+The composed `//replacement/bank:bank` archive builds under the #119 toolchain with one panic handler. A bank ELF linked at the `0x00c40000` reference base passes the bank ELF allowlist with 0 violations and 169 declared sites. The same archive linked at `0x00be1f00` ends at `__rb_image_end` `0x00be9c24`; its disassembly contains no UXTAB, UXTAH, SXTAB, SXTAH or Thumb form.
 
-The fixed native UI workload passes 55 of 55 cases with the UI Rust staticlib linked into the bank kernel. Those cases are the modeled native boundary, not the full read-only lifecycle. Final qualification consumes [#120](https://github.com/skeet70/latent-image/issues/120)'s consumed contract and runner convention and [#123](https://github.com/skeet70/latent-image/issues/123)'s shared packaged service qualification; neither is established by the 55 synthetic cases or by this report. The combined `//replacement/bank:bank` archive, which also contains the retained-service module and the probe change, has not been run through the 55 cases yet. The kernel is 32,024 bytes, `__rb_text_end` is `0x00be8c9c` and `__rb_image_end` is `0x00be9c1c`, below `dataBase` `0x00bea200` and the `0x8300` code cap. A control kernel built from `HEAD` also passes 55 of 55; the negative cases `n-select-unset-refused`, `n-save-write-fail`, `n-edit-write-fail`, `n-reset-write-fail`, `n-rename-fail`, `n-refused-dialog` and the media-refresh case remain passing refusals. `//emulation:recipe-bank-ui-plan-tests` and `//emulation:ui-trajectory-tests` pass. The 55-case result predates the typed seam commit `a2786b9`; that commit is covered by the exported-ABI host tests and the kernel link/disassembly check, not by a repeated 55-case run.
+The candidate 55-case UI run with the composed archive has not executed; no pass is claimed for it. Earlier UI-staticlib samples are not candidate evidence and are not reported here. `//emulation:recipe-bank-ui-plan-tests` and `//emulation:ui-trajectory-tests` pass. Final qualification consumes [#120](https://github.com/skeet70/latent-image/issues/120)'s consumed contract and runner convention and [#123](https://github.com/skeet70/latent-image/issues/123)'s shared packaged service qualification; neither is established by this report.
 
-The flash candidate `package-20261024b` with `f7-1.nand` and `bank-selection-stage4/fast-ui/card-sel.img` ran `emulation/recipe-bank-route-trajectories.json` from the card attach checkpoint. Six of seven segments passed: slot-list entry, seven-row slot navigation, the slot verb page and BACK, return to the slot list, SELECT list entry and eight-row navigation, and cancel. The final handback segment was not reached before the host thermal guard stopped the run.
-
-The failed handback expectation was corrected from observation, not fitted to the failure. After the SELECT list cancels, the stock transition returns to shooting menu row 34 `(1,5,34)`, the stock shooting menu row that owns the bank entry. MENU on that row re-enters the bank row, which produced `(1,645,0)`; the trajectory now repeats entry with UP and asserts the shooting-menu handback rather than a live-view state. The final segment remains unvalidated until a compute turn is granted.
-
-An earlier empty-slot run showed SELECT navigation staying on row 0 when the card's slots were unset. That is an observation of the stock list's disabled-row handling, not yet a pinned resource-absence trajectory. Storage failure and refusal paths are covered by the passing host cases; the packaged run has no new resource acquisition of its own.
+The only device-driven sample so far is a baseline flash-candidate run on the old bank: six of seven segments reached slot-list entry, slot navigation, verb-page BACK, select-list navigation and cancel before the thermal stop. It established the stock handback state `(1,5,34)` and the empty-slot disabled-row behavior used by the RAM-push trajectory; it is not Rust-candidate evidence. Storage failure and refusal paths remain covered at the native boundary; the packaged route has no new resource acquisition of its own.
 
 ## Route choice
 
@@ -56,7 +52,7 @@ Human visual assessment needs an interactive surface. The RAM-push e2e terminate
 | `capability` | false |
 | `scope` | Recipe-bank page/slot/token classification behind the unchanged C ABI, bounded native UI cases and one packaged trajectory; no full read-only lifecycle claim |
 | `preserved diagnostics` | `returned` for every passing case; one earlier `unsupported_instruction` stop at the `UXTAB` site, retained and fixed; no diagnostic reclassified as success |
-| `coverage_gaps` | combined `//replacement/bank:bank` archive not run through the 55 cases; typed seam not rerun through the 55 cases; no packaged Rust-candidate completion; final handback/repeat segment unvalidated; resource failure covered at the native boundary only |
+| `coverage_gaps` | candidate 55-case run with the composed `//replacement/bank:bank` archive not executed; no packaged Rust-candidate completion; final handback/repeat segment unvalidated; resource failure covered at the native boundary only |
 
 The observation projection follows the native UI harness rather than the area-3 solver: `status` must be `returned` and every public claim must match; declared effect regions are confined to the case's ABI workspaces and public claims; `r4` through `r11` and `sp` must be preserved with `pc` at the exit; memory provenance must be present and complete. The harness's `native_case_status: failed` from declared workspace differences is a projection detail, not a pass. Precedence for a mixed result is failed over blocked over unknown over qualified, and a partial domain never sets `capability`.
 
@@ -64,7 +60,7 @@ The observation projection follows the native UI harness rather than the area-3 
 
 The #118 fixed workload is the behavior-preserving refactor of these two classifiers. Baseline same-invocation samples are 45.29 s total (1.07 s build, 44.22 s case generation and execution) for the unmodified tree, and 42.58 s (0.98 s, 41.59 s) for the C refactor, under warm Nix/Bazel and page caches, two jobs and sibling load.
 
-The Rust repeat is partial because the single bank crate root and the fixed-command wiring are not merged. With a prebuilt Rust staticlib and a manual `KERNEL_DIR`, the staticlib compiled in 0.24 s and the UI build plus 55 cases took 42.33 s to 43.02 s. That is comparable to the baseline range but is not the fixed command: it omits the Bazel archive target, uses a prebuilt kernel directory and has unknown thermal/load state. It is recorded as a changed condition, not as an improvement. No stock hook, call-site ABI or plan layout had to be rediscovered. The one investigation item was the `UXTAB` admission boundary and the page/slot split.
+The candidate repeat is not measured. The composed bank archive is integrated, but the 55-case run and the fixed-command timing are pending the compute turn; no improvement is claimed. No stock hook, call-site ABI or plan layout had to be rediscovered. The one investigation item was the `UXTAB` admission boundary and the page/slot split.
 
 ## Reproduce
 
@@ -72,11 +68,11 @@ Build the bank archive with the fixed targets, then run the 55-case UI workload 
 
 ```sh
 devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-issue117-recipe-ui" build --jobs=2 //emulation:native-runner //emulation:recipe-bank-ui-cases //host/firmware:build-recipe-bank //replacement/bank:bank
-SERVICE_ARCHIVE="$PWD/bazel-bin/replacement/bank/bank.a" BUILD_DIR="$PWD/private-data/analysis/x-m1-1.50/recipes/issue117-recipe-ui/ui-repeat-build" OUT_DIR="$PWD/private-data/analysis/x-m1-1.50/recipes/issue117-recipe-ui/ui-repeat-cases" JOBS=2 devenv shell -- bash emulation/build-recipe-bank-ui-cases.sh
+RB_RUST_ARCHIVE="$PWD/bazel-bin/replacement/bank/bank.a" RB_RUST_BUILD_FACTS="$PWD/bazel-bin/replacement/bank/build-facts.txt" BUILD_DIR="$PWD/private-data/analysis/x-m1-1.50/recipes/issue117-recipe-ui/ui-repeat-build" OUT_DIR="$PWD/private-data/analysis/x-m1-1.50/recipes/issue117-recipe-ui/ui-repeat-cases" JOBS=2 devenv shell -- bash emulation/build-recipe-bank-ui-cases.sh
 devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-issue117-recipe-ui" test --jobs=2 --nocache_test_results --test_output=errors //emulation:recipe-bank-ui-plan-tests //emulation:ui-trajectory-tests
 ```
 
-The archive target is an added workflow step relative to the #118 baseline. The packaged read-only route is:
+The archive target is an added workflow step relative to the #118 baseline. The merged UI script currently reads the archive as `SERVICE_ARCHIVE`; the packaging owner's final name is `RB_RUST_ARCHIVE` with `RB_RUST_BUILD_FACTS`, which are the names above. The packaged read-only route is:
 
 ```sh
 XM1_EMULATOR_SLOTS=1 devenv shell -- bazel run //emulation:xm1-viewer -- --ram-push-e2e --cardless --unreviewed-relink --firmware private-data/analysis/x-m1-1.50/update/prefix/FWUP0002-prefix.DAT --installed-nand private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand --trajectories emulation/recipe-bank-route-ram-push-trajectories.json --receipt-output <fresh private path> --output <fresh private runtime path>
