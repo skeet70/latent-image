@@ -11,12 +11,12 @@ import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newEmptyMVar, new
 import Control.Exception (SomeException, finally, try)
 import Control.Monad (filterM, forM, forM_, replicateM, unless, when)
 import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, withObject, (.:), (.:?), (.=))
-import Data.Aeson (eitherDecodeStrict')
-import Data.Aeson.Types (Pair, parseEither, withObject, (.:))
+import Data.Aeson.Types (Pair, parseEither)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (isAlphaNum)
 import Data.List (intercalate, isPrefixOf, nub)
+import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, fromMaybe, isJust)
@@ -94,10 +94,8 @@ routeGating route = route `elem`
   [ FlashBootCheck, RamPushVolatile, RamPushClassicChrome, RamPushClassicChromeIcon, FlashCandidateIcon
   , FlashCandidateQTile, FlashCandidateRefresh, UsbToggleE8, UpdaterRc0Toggle, UpdaterCcToggle, NativeVolatile, NativeSd ]
 
--- | The qualification record a route's producer must have left.
 data ReceiptRequirement = NoE2EQualification | RequireE2ECandidateQualification deriving (Eq, Show)
 
--- | Routes produced by Xm1RamPushE2E; the producer writes the qualification record.
 routeReceiptRequirement :: Route -> ReceiptRequirement
 routeReceiptRequirement route = case route of
   RamPushVolatile -> RequireE2ECandidateQualification
@@ -123,26 +121,56 @@ routeReceiptRequirement route = case route of
   FujiModUsbToggleE8 -> NoE2EQualification
   FujiModUsbToggleEmu -> NoE2EQualification
 
--- | Nothing when every e2e result in the receipt records CandidateQualified.
+newtype JudgedSegment = JudgedSegment String deriving (Eq, Show)
+
+instance FromJSON JudgedSegment where
+  parseJSON = withObject "judged segment" $ \value -> do
+    unless (KM.keys value == [K.fromString "segment"]) (fail "a judged segment takes only the segment field")
+    name <- value .: "segment"
+    JudgedSegment <$> either fail pure (segmentName name)
+
+newtype JudgedSegments = JudgedSegments [String] deriving (Eq, Show)
+
+instance FromJSON JudgedSegments where
+  parseJSON = withObject "e2e segments" $ \value -> do
+    schema <- value .: "schema"
+    unless (schema == (1 :: Int)) (fail "e2e-segments: schema 1 required")
+    entries <- value .: "segments"
+    parsed <- mapM parseJSON entries
+    let names = [name | JudgedSegment name <- parsed]
+    if null names then fail "e2e-segments: no judged segments"
+      else if length names /= length (nub names) then fail "e2e-segments: duplicate segment names"
+      else pure (JudgedSegments names)
+
+segmentName :: String -> Either String String
+segmentName name
+  | null name = Left "a judged segment is unnamed"
+  | not (all (\c -> isAlphaNum c || c == '-' || c == '_') name) = Left "a judged segment name is not a judgeable token"
+  | otherwise = Right name
+
 candidateQualification :: FilePath -> IO (Maybe String)
 candidateQualification receipt = do
-  segments <- segmentNames receipt
-  case segments of
-    Left problem -> pure (Just problem)
-    Right names -> do
-      let directories = receipt : [receipt </> ("segment-" ++ name) | name <- names]
-      control <- or <$> mapM (\directory -> doesFileExist (directory </> "e2e-control.json")) directories
-      if control
-        then pure (Just "control receipt cannot qualify a candidate")
-        else do
-          records <- mapM (\directory -> (,) directory <$> doesFileExist (directory </> "e2e-result.json")) directories
-          let present = [directory </> "e2e-result.json" | (directory, True) <- records]
-          if null present
-            then pure (Just "no e2e qualification record")
-            else do
-              problems <- mapM single present
-              pure (case [problem | Just problem <- problems] of [] -> Nothing; problem : _ -> Just problem)
+  rootControl <- doesFileExist (receipt </> "e2e-control.json")
+  if rootControl then pure (Just "control receipt cannot qualify a candidate") else do
+    split <- doesFileExist (receipt </> "e2e-segments.json")
+    flat <- doesFileExist (receipt </> "e2e-result.json")
+    if split then
+      if flat then pure (Just "flat and segmented qualification records cannot both qualify a candidate")
+      else do
+        parsed <- eitherDecodeStrict' <$> B.readFile (receipt </> "e2e-segments.json")
+        case parsed of
+          Left problem -> pure (Just ("unreadable e2e-segments.json: " ++ problem))
+          Right (JudgedSegments names) -> do
+            problems <- mapM segment names
+            pure (firstProblem problems)
+    else if not flat then pure (Just "no e2e qualification record") else single (receipt </> "e2e-result.json")
   where
+    segment name = do
+      let directory = receipt </> ("segment-" ++ name)
+      control <- doesFileExist (directory </> "e2e-control.json")
+      if control then pure (Just ("control receipt in segment-" ++ name ++ " cannot qualify a candidate")) else do
+        present <- doesFileExist (directory </> "e2e-result.json")
+        if not present then pure (Just ("segment-" ++ name ++ " has no e2e result")) else single (directory </> "e2e-result.json")
     single path = do
       parsed <- eitherDecodeStrict' <$> B.readFile path
       pure $ case parsed of
@@ -152,22 +180,10 @@ candidateQualification receipt = do
           Right CandidateQualified -> Nothing
           Right ControlRefusedProtectedWrite -> Just "control-refused outcome cannot qualify a candidate"
 
--- | The judged segment names, validated so a recorded name cannot select another path.
-segmentNames :: FilePath -> IO (Either String [String])
-segmentNames receipt = do
-  split <- doesFileExist (receipt </> "e2e-segments.json")
-  if not split then pure (Right []) else do
-    parsed <- eitherDecodeStrict' <$> B.readFile (receipt </> "e2e-segments.json")
-    pure $ case parsed of
-      Left problem -> Left ("unreadable e2e-segments.json: " ++ problem)
-      Right (Value segments) ->
-        let names = [T.unpack name | Object entry <- segments, Just (String name) <- [KM.lookup "segment" entry]]
-         in if null names then Left "only judged segments can qualify a candidate"
-            else if length names /= length (nub names) then Left "duplicate segment names cannot qualify a candidate"
-            else if not (all validSegmentName names) then Left "a segment name is not a judgeable token"
-            else Right names
-  where
-    validSegmentName name = not (null name) && all (\c -> isAlphaNum c || c == '-' || c == '_') name
+firstProblem :: [Maybe String] -> Maybe String
+firstProblem problems = case [problem | Just problem <- problems] of
+  [] -> Nothing
+  problem : _ -> Just problem
 
 commandSucceeded :: ExecutionEvidence -> Bool
 commandSucceeded execution = case execution of
@@ -667,7 +683,13 @@ judge judging route execution = do
           let reference = judgingReceipt judging counterpart
               outcome result problem = Outcome route receipt execution result problem [] Nothing (Just (counterpart, reference)) []
           referencePresent <- doesDirectoryExist reference
-          if not referencePresent then pure (outcome "fail" (Just ("counterpart " ++ routeName counterpart ++ " has no receipt"))) else do
+          referenceQualification <- case routeReceiptRequirement counterpart of
+            RequireE2ECandidateQualification | referencePresent -> candidateQualification reference
+            _ -> pure Nothing
+          if not referencePresent then pure (outcome "fail" (Just ("counterpart " ++ routeName counterpart ++ " has no receipt")))
+          else if Just problem <- referenceQualification
+            then pure (outcome "fail" (Just ("counterpart " ++ routeName counterpart ++ ": " ++ problem)))
+          else do
             (code, out, err) <- readProcessWithExitCode (judgingCompare judging) [reference, receipt] ""
             createDirectoryIfMissing True (judgingOutput judging </> "differences")
             writeFile (judgingOutput judging </> "differences" </> (routeName route ++ ".compare.txt")) (out ++ err)

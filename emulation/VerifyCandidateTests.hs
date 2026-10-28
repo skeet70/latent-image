@@ -22,7 +22,8 @@ routeNames route = case route of
 
 data RecordedExit = MissingExit | NullExit | RecordedExit ExitCode deriving (Show)
 data Qualification = QualifiedOutcome | MissingOutcome | ControlReceipt | UnknownOutcome | RefusedOutcome
-  | SegmentedQualified | SegmentedWithControl deriving (Show)
+  | SegmentedQualified | SegmentedWithControl | CounterpartControl deriving (Show)
+data Side = CandidateSide | CounterpartSide deriving (Eq, Show)
 data ReceiptSource = EarlierRun | ReceiptOverride deriving (Show)
 data ReceiptParity = EqualReceipts | DifferentReceipts deriving (Show)
 data Result = Passed | Failed deriving (Eq, Show)
@@ -78,7 +79,7 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
         MissingExit -> []
         NullExit -> ["exit_code" .= (Nothing :: Maybe Int)]
         RecordedExit code -> ["exit_code" .= case code of ExitSuccess -> 0 :: Int; ExitFailure n -> n]
-      seed directory fixtureParity = do
+      seed directory fixtureParity side = do
         createDirectoryIfMissing True directory
         case route of
           RamPushVolatile -> do
@@ -99,11 +100,15 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
               MissingOutcome -> pure ()
               ControlReceipt -> jsonFile (directory </> "e2e-control.json")
                 (object ["outcome" .= String "control-refused"])
-              SegmentedQualified -> segments ["segment-a"]
+              SegmentedQualified -> segments ["service-field-list"]
               SegmentedWithControl -> do
-                segments ["segment-a", "segment-b"]
-                jsonFile (directory </> "segment-b/e2e-control.json")
+                segments ["service-field-list", "service-save-current"]
+                jsonFile (directory </> "segment-service-save-current/e2e-control.json")
                   (object ["outcome" .= String "control-refused"])
+              CounterpartControl
+                | side == CounterpartSide -> jsonFile (directory </> "e2e-control.json")
+                    (object ["outcome" .= String "control-refused"])
+                | otherwise -> writeOutcome (directory </> "e2e-result.json") "candidate-qualified"
               _ -> case qualificationWord qualification of
                 Just word -> writeOutcome (directory </> "e2e-result.json") word
                 Nothing -> pure ()
@@ -118,8 +123,8 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
             jsonFile (directory </> "synthetic/receipt.json")
               (object ["schema" .= (1 :: Int), "scenario" .= String "synthetic", "result" .= scenarioResult
                 , "boundary" .= boundary, "checks" .= ([] :: [Value])])
-  seed (receipt counterpart) EqualReceipts
-  seed (receipt candidate) parity
+  seed (receipt counterpart) EqualReceipts CounterpartSide
+  seed (receipt candidate) parity CandidateSide
   jsonFile (earlier </> "report.json") (object ["routes" .= [object
     (["route" .= candidate, "seconds" .= (0 :: Double), "log" .= (earlier </> "synthetic.log")] ++ exitFields)]])
   inherited <- getEnvironment
@@ -157,7 +162,8 @@ main = do
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts UnknownOutcome Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts RefusedOutcome Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedQualified Passed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts CounterpartControl Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedWithControl Failed
   expect UsbToggle MissingExit EarlierRun EqualReceipts qualified Passed
   expect UsbToggle (RecordedExit (ExitFailure 1)) EarlierRun EqualReceipts qualified Passed
-  expect UsbToggle (RecordedExit (ExitFailure 1)) DifferentReceipts EqualReceipts qualified Failed
+  expect UsbToggle (RecordedExit (ExitFailure 1)) EarlierRun DifferentReceipts qualified Failed
