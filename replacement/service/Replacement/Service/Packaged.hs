@@ -7,6 +7,8 @@ module Replacement.Service.Packaged
   , PackagedReport (..)
   , PackagedRow (..)
   , OwnedSequence (..)
+  , rowQualified
+  , qualifiedRowCount
   , qualifyPackaged
   , packagedStatusLabel
   , packagedReportValue
@@ -17,7 +19,7 @@ import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', withObject, w
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as B
 import Data.Char (isHexDigit)
-import Data.List (find, nub)
+import Data.List (find, findIndex, nub)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -73,12 +75,19 @@ instance FromJSON TraceSiteLabel where
     "stock-row-probe" -> pure StockRowProbe
     other -> fail ("unknown service trace label: " ++ other)
 
-newtype CoreId = CoreId { coreIdValue :: Int } deriving (Eq, Ord, Show)
+data CoreId = Core0 | Core1 deriving (Eq, Ord, Show)
+
+coreIdValue :: CoreId -> Int
+coreIdValue Core0 = 0
+coreIdValue Core1 = 1
 
 instance FromJSON CoreId where
   parseJSON value = do
     core <- parseJSON value :: Parser Int
-    if core >= 0 then pure (CoreId core) else fail "trace core must be nonnegative"
+    case core of
+      0 -> pure Core0
+      1 -> pure Core1
+      _ -> fail "trace core must be 0 or 1"
 
 newtype InstructionCount = InstructionCount { instructionCountValue :: Word64 } deriving (Eq, Ord, Show)
 
@@ -562,29 +571,33 @@ validateDeclaredSites table sites =
     duplicates values = [ value | value <- nub values, length (filter (== value) values) > 1 ]
 
 data PositionedHit = PositionedHit
-  { positionedPhase :: SegmentName
+  { positionedObservation :: Int
+  , positionedPhase :: SegmentName
   , positionedHit :: TraceHit
   }
 
 analyzeObservations :: E2E -> ([OwnedSequence], [TraceHit], [String])
 analyzeObservations result =
-  let positions = concat
-        [ [PositionedHit (observationPhase observation) hit | hit <- observationHits observation]
-        | observation <- e2eObservations result
+  let observations = e2eObservations result
+      boundary = findIndex ((== serviceAfterUnloadPhase) . observationPhase) observations
+      positions = concat
+        [ [PositionedHit observationIndex (observationPhase observation) hit
+          | hit <- observationHits observation]
+        | (observationIndex, observation) <- zip [0 :: Int ..] observations
         ]
-      (sequences, retained, problems) = analyzeHits positions
+      (sequences, retained, problems) = analyzeHits boundary positions
       orderProblems =
         [ "trace instruction counts regress across retained or owned events"
         | not (nondecreasing (map (instructionCountValue . hitInstructions . positionedHit) positions)) ]
    in (sequences, retained, problems ++ orderProblems)
 
-analyzeHits :: [PositionedHit] -> ([OwnedSequence], [TraceHit], [String])
-analyzeHits = go [] [] []
+analyzeHits :: Maybe Int -> [PositionedHit] -> ([OwnedSequence], [TraceHit], [String])
+analyzeHits boundary = go [] [] []
   where
     go sequences retained problems [] = (reverse sequences, reverse retained, reverse problems)
     go sequences retained problems (position : rest)
       | hitSite hit == entryLabel =
-          if afterUnload (positionedPhase position)
+          if maybe False (positionedObservation position >=) boundary
             then (reverse sequences, reverse retained, reverse ("svc-rust-entry occurs after service-after-unload" : problems))
             else case parseSequence (position : rest) of
               Left problem -> (reverse sequences, reverse retained, reverse (problem : problems))
@@ -593,7 +606,6 @@ analyzeHits = go [] [] []
       | otherwise = (reverse sequences, reverse retained, reverse (("unexpected trace event outside an owned interval: " ++ traceSiteLabelText (hitSite hit)) : problems))
       where
         hit = positionedHit position
-    afterUnload phase = phase == serviceAfterUnloadPhase || phase == serviceAfterUnloadStockPhase
 
 parseSequence :: [PositionedHit] -> Either String (OwnedSequence, [PositionedHit])
 parseSequence (entryPosition : rest) =
@@ -669,6 +681,16 @@ nondecreasing values = and (zipWith (<=) values (drop 1 values))
 crossSequenceProblems :: [OwnedSequence] -> [String]
 crossSequenceProblems sequences =
   [ "owned service traces cross cores" | length (nub (map ownedCore sequences)) > 1 ]
+
+rowQualified :: PackagedRow -> Bool
+rowQualified row =
+  packagedRowEntries row >= 2
+    && serviceFieldListPhase `elem` packagedRowPhases row
+    && serviceFieldReopenPhase `elem` packagedRowPhases row
+    && all (== packagedRowExpected row) (packagedRowReturned row)
+
+qualifiedRowCount :: [PackagedRow] -> Int
+qualifiedRowCount = length . filter rowQualified
 
 rowProblemsFor :: [PackagedRow] -> [String]
 rowProblemsFor rows = concat
@@ -786,7 +808,7 @@ packagedReportValue report =
     , ("status", s (packagedStatusLabel (packagedStatus report)))
     , ("capability", b (packagedStatus report == PackagedQualified))
     , ("required_rows", n (fromIntegral (length selectedRows)))
-    , ("qualified_rows", n (fromIntegral (length [ row | row <- packagedRows report, packagedRowEntries row >= 2, all (== packagedRowExpected row) (packagedRowReturned row) ])))
+    , ("qualified_rows", n (fromIntegral (qualifiedRowCount (packagedRows report))))
     , ("rows", arr (map rowValue (packagedRows report)))
     , ("sequences", arr (map sequenceValue (packagedSequences report)))
     , ("retained_stock_hits", arr (map hitValue (packagedRetainedHits report)))

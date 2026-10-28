@@ -65,7 +65,7 @@ run options = do
         ( "service packaged qualification "
             ++ packagedStatusLabel (packagedStatus report)
             ++ ": "
-            ++ show (length [ row | row <- packagedRows report, packagedRowEntries row >= 2 ])
+            ++ show (qualifiedRowCount (packagedRows report))
             ++ "/5 selected rows"
         )
       case packagedProblems report of

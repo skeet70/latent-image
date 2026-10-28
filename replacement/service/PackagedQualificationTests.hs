@@ -25,6 +25,7 @@ data Variant = Variant
   , variantSites :: [Value]
   , variantOutcome :: String
   , variantAfterHits :: [Value]
+  , variantUnrelatedHits :: [Value]
   , variantOmitSymbols :: Bool
   , variantControlFile :: Bool
   , variantMutatePackage :: Maybe (FilePath -> IO ())
@@ -37,6 +38,7 @@ main = withTemporary "packaged-qualification" $ \root -> do
   refuses root "wrong order" (baselineVariant { variantHits = swapFirstTwo baselineHits })
   refuses root "wrong entry arguments" (baselineVariant { variantHits = wrongArguments baselineHits })
   refuses root "missing return" (baselineVariant { variantHits = removeFirstReturn baselineHits })
+  refuses root "missing reopen row entry" (baselineVariant { variantReopenHits = dropFirstEntry reopenHits })
   refuses root "valid rows with an orphan owned event" (baselineVariant { variantHits = appendOrphan baselineHits })
   refuses root "wrong symbol binding" (baselineVariant { variantSites = badSites })
   refuses root "control outcome" (baselineVariant { variantOutcome = "control-refused" })
@@ -44,10 +46,11 @@ main = withTemporary "packaged-qualification" $ \root -> do
   refuses root "sibling control result" (baselineVariant { variantControlFile = True })
   refuses root "mutated package DAT" (baselineVariant { variantMutatePackage = Just mutatePackage })
   refuses root "owned entry after service-after-unload" (baselineVariant { variantAfterHits = afterUnloadOwned })
+  refuses root "owned entry in a later unrelated phase" (baselineVariant { variantUnrelatedHits = afterUnloadOwned })
   putStrLn "packaged qualification tests: passed"
 
 baselineVariant :: Variant
-baselineVariant = Variant baselineHits reopenHits declaredSites "candidate-qualified" [] False False Nothing
+baselineVariant = Variant baselineHits reopenHits declaredSites "candidate-qualified" [] [] False False Nothing
 
 baselineCheck :: FilePath -> IO ()
 baselineCheck root = do
@@ -303,6 +306,9 @@ e2eResult variant =
         , object ["phase" .= ("service-after-unload" :: String), "trace_hits" .= ([] :: [Value])]
         , object [ "phase" .= ("service-after-unload-stock" :: String)
                  , "trace_hits" .= ([hit "stock-row-probe" 9000 0 0] ++ variantAfterHits variant)
+                 ]
+        , object [ "phase" .= ("service-unrelated-after-unload" :: String)
+                 , "trace_hits" .= variantUnrelatedHits variant
                  ]
         ]
     , "trajectories" .=
