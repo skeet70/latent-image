@@ -23,7 +23,9 @@ routeNames route = case route of
 data RecordedExit = MissingExit | NullExit | RecordedExit ExitCode deriving (Show)
 data Qualification = QualifiedOutcome | MissingOutcome | ControlReceipt | UnknownOutcome | RefusedOutcome
   | SegmentedQualified | SegmentedWithControl | SegmentedFailed | SegmentedMalformed | SegmentedDuplicateName
-  | SegmentedPathName | CounterpartControl | CounterpartFailedCommand deriving (Show)
+  | SegmentedPathName | CounterpartControl | CounterpartFailedCommand
+  | PassedWithMessage | FailedWithoutMessage | MissingMessage | NegativeSeconds | OverflowSeconds
+  | ExtraKey | UnknownResult deriving (Show)
 data Side = CandidateSide | CounterpartSide deriving (Eq, Show)
 data ReceiptSource = EarlierRun | ReceiptOverride deriving (Show)
 data ReceiptParity = EqualReceipts | DifferentReceipts deriving (Show)
@@ -124,6 +126,20 @@ verify tool route evidence source parity qualification = withWorkspace $ \root -
                           , segmentRecord "service-field-list" "passed" Null ])
               SegmentedPathName -> jsonFile (directory </> "e2e-segments.json")
                 (toJSON [ segmentRecord "../escape" "passed" Null ])
+              PassedWithMessage -> jsonFile (directory </> "e2e-segments.json")
+                (toJSON [ segmentRecord "service-field-list" "passed" (String "unexpected") ])
+              FailedWithoutMessage -> jsonFile (directory </> "e2e-segments.json")
+                (toJSON [ segmentRecord "service-field-list" "failed" Null ])
+              MissingMessage -> jsonFile (directory </> "e2e-segments.json")
+                (toJSON [ object ["segment" .= String "service-field-list", "seconds" .= (0 :: Double), "result" .= String "passed" ] ])
+              NegativeSeconds -> jsonFile (directory </> "e2e-segments.json")
+                (toJSON [ object ["segment" .= String "service-field-list", "seconds" .= (-1 :: Double), "result" .= String "passed", "message" .= Null] ])
+              OverflowSeconds -> BL.writeFile (directory </> "e2e-segments.json")
+                "[{\"segment\":\"service-field-list\",\"seconds\":1e400,\"result\":\"passed\",\"message\":null}]"
+              ExtraKey -> jsonFile (directory </> "e2e-segments.json")
+                (toJSON [ object ["segment" .= String "service-field-list", "seconds" .= (0 :: Double), "result" .= String "passed", "message" .= Null, "extra" .= True] ])
+              UnknownResult -> jsonFile (directory </> "e2e-segments.json")
+                (toJSON [ segmentRecord "service-field-list" "mystery" Null ])
               CounterpartControl
                 | side == CounterpartSide -> jsonFile (directory </> "e2e-control.json")
                     (object ["outcome" .= String "control-refused"])
@@ -192,6 +208,13 @@ main = do
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedMalformed Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedDuplicateName Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedPathName Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts PassedWithMessage Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts FailedWithoutMessage Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts MissingMessage Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts NegativeSeconds Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts OverflowSeconds Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts ExtraKey Failed
+  expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts UnknownResult Failed
   expect RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts SegmentedWithControl Failed
   expect UsbToggle MissingExit EarlierRun EqualReceipts qualified Passed
   expect UsbToggle (RecordedExit (ExitFailure 1)) EarlierRun EqualReceipts qualified Passed

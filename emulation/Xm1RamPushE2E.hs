@@ -33,7 +33,7 @@ import Emulation.UiTrajectory
 import Emulation.WatchObservation
 import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
 import EmulatorUsb
-import Emulation.UiTrajectory (SegmentName (..), SegmentReceipt (..), SegmentResult (..))
+import Emulation.UiTrajectory (SegmentReceipt (..), SegmentResult (..), elapsedSeconds, segmentName, segmentNameText)
 import FujiAF.RamPush
 import FujiAF.Transport (ensurePrivateDirectory, realClock, writePrivateBytes)
 import Xm1UnreviewedRelink (runUnreviewedRamPush, runUnreviewedRamUnload, withUnreviewedBuild)
@@ -467,17 +467,16 @@ runRamPushE2E given python workspace trajectoryFile installedMedia adjustmentNan
         require (not (planUnload plan)) ("segment " ++ T.unpack (planName plan) ++ " follows ram-unload, which a flash candidate does not run")
       privateDirectory receipt
       outcomes <- forM plans $ \plan -> do
+        name <- either (ioError . userError) pure (segmentName (planName plan))
         started <- getMonotonicTime
-        outcome <- try (session plan (receipt </> ("segment-" ++ T.unpack (planName plan))))
+        outcome <- try (session plan (receipt </> ("segment-" ++ T.unpack (segmentNameText name))))
         ended <- getMonotonicTime
-        let failure = either (\(problem :: SomeException) -> Just (displayException problem)) (const Nothing) outcome
-        putStrLn ("segment " ++ T.unpack (planName plan) ++ ": " ++ maybe "passed" ("failed: " ++) failure
+        elapsed <- either (ioError . userError) pure (elapsedSeconds (ended - started))
+        let failure = either (\(problem :: SomeException) -> Just (T.pack (displayException problem))) (const Nothing) outcome
+            problem = either Just (const Nothing) outcome :: Maybe SomeException
+        putStrLn ("segment " ++ T.unpack (planName plan) ++ ": " ++ maybe "passed" (("failed: " ++) . T.unpack) failure
           ++ " in " ++ seconds (ended - started))
-        pure (SegmentReceipt
-          (SegmentName planName)
-          (ended - started)
-          (maybe SegmentPassed (const SegmentFailed) failure)
-          (T.pack <$> failure), failure)
+        pure (SegmentReceipt name elapsed (maybe SegmentPassed SegmentFailed failure), problem)
       writePrivateBytes (receipt </> "e2e-segments.json") (BL.toStrict (encode (map fst outcomes)) <> "\n")
       require (all (null . snd) outcomes) "one or more trajectory segments failed"
 

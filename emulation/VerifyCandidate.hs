@@ -21,7 +21,7 @@ import Data.Maybe (catMaybes, fromMaybe, isJust)
 import qualified Data.Text as T
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
-import Emulation.UiTrajectory (SegmentName (..), SegmentReceipt (..), SegmentResult (..), decodeSegmentReceipts)
+import Emulation.UiTrajectory (SegmentReceipt (..), SegmentResult (..), decodeSegmentReceipts, segmentNameText)
 import Emulation.WatchObservation (WatchJudgement (..))
 import Emulation.CandidateBaseline
 import Emulation.EmulatorSlot (SlotCount (..), SlotPolicy (..), slotPolicyFromEnvironment)
@@ -136,7 +136,7 @@ candidateQualification receipt = do
           Right receipts -> do
             let names = [T.unpack (segmentNameText (segmentReceiptName entry)) | entry <- receipts]
             if length names /= length (nub names) then pure (Just "duplicate segment names cannot qualify a candidate")
-            else case [name | (entry, name) <- zip receipts names, segmentReceiptResult entry == SegmentFailed] of
+            else case [name | (entry, name) <- zip receipts names, SegmentFailed _ <- [segmentReceiptResult entry]] of
               failed : _ -> pure (Just ("failed segment cannot qualify a candidate: " ++ failed))
               [] -> do
                 problems <- mapM segment names
@@ -663,9 +663,10 @@ judge judging route execution = do
               outcome result problem = Outcome route receipt execution result problem [] Nothing (Just (counterpart, reference)) []
           referencePresent <- doesDirectoryExist reference
           referenceQualification <- case routeReceiptRequirement counterpart of
-            RequireE2ECandidateQualification | referencePresent
-              | not (commandSucceeded (judgingExecution judging counterpart)) -> pure (Just "counterpart command did not succeed")
-              | otherwise -> candidateQualification reference
+            RequireE2ECandidateQualification
+              | referencePresent, not (commandSucceeded (judgingExecution judging counterpart)) ->
+                  pure (Just "counterpart command did not succeed")
+              | referencePresent -> candidateQualification reference
             _ -> pure Nothing
           if not referencePresent then pure (outcome "fail" (Just ("counterpart " ++ routeName counterpart ++ " has no receipt")))
           else if Just problem <- referenceQualification
