@@ -20,6 +20,17 @@ fujimod.passthru.rustPlatform.buildRustPackage {
   inherit src;
   sourceRoot = "fujimod-xm1-workspace/fujimod-xm1";
   cargoLock.lockFile = ../emulation/fujimod-xm1/Cargo.lock;
+  CARGO_BUILD_JOBS = 1;
+  RUST_TEST_THREADS = 1;
+  preBuild = ''
+    cpulimitBin=$(mktemp -d)
+    cat > "$cpulimitBin/cargo" <<EOF
+#!${pkgs.runtimeShell}
+exec ${pkgs.cpulimit}/bin/cpulimit -i -l 75 -- ${fujimod.toolchain}/bin/cargo "\$@"
+EOF
+    chmod +x "$cpulimitBin/cargo"
+    export PATH="$cpulimitBin:$PATH"
+  '';
   nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config ];
   # nand_image.rs links zlib for retained-identical committed NAND exports.
   buildInputs = [ pkgs.zlib ];
