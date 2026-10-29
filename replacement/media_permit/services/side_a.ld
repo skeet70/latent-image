@@ -23,4 +23,4 @@ SECTIONS
   }
 }
 
-ASSERT(ADDR(.text.rb_mp_handback) == 0x00e87404, "handback model address")
+ASSERT(ADDR(.text) == 0x00e87404, "handback model address")

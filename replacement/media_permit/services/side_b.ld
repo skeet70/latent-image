@@ -23,4 +23,4 @@ SECTIONS
   }
 }
 
-ASSERT(ADDR(.text.rb_mp_fatal) == 0x00e881e8, "fatal model address")
+ASSERT(ADDR(.text) == 0x00e881e8, "fatal model address")

@@ -23,4 +23,4 @@ SECTIONS
   }
 }
 
-ASSERT(ADDR(.text.rb_mp_cancel) == 0x00e6e368, "cancel model address")
+ASSERT(ADDR(.text) == 0x00e6e368, "cancel model address")

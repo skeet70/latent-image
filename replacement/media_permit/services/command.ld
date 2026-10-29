@@ -23,4 +23,4 @@ SECTIONS
   }
 }
 
-ASSERT(ADDR(.text.rb_mp_command) == 0x00e8d82c, "command model address")
+ASSERT(ADDR(.text) == 0x00e8d82c, "command model address")

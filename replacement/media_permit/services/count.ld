@@ -23,4 +23,4 @@ SECTIONS
   }
 }
 
-ASSERT(ADDR(.text.rb_mp_subframe_count) == 0x00e74c68, "count model address")
+ASSERT(ADDR(.text) == 0x00e74c68, "count model address")

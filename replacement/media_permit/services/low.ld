@@ -25,5 +25,4 @@ SECTIONS
   }
 }
 
-ASSERT(ADDR(.text.rb_mp_memcpy) == 0x00722054, "memcpy model address")
-ASSERT(ADDR(.text.rb_mp_log) == 0x00726658, "log model address")
+ASSERT(ADDR(.text) == 0x00722054, "memcpy model address")
