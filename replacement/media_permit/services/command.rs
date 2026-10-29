@@ -9,6 +9,7 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 }
 
 #[no_mangle]
+#[link_section = ".text.rb_mp_command"]
 pub extern "C" fn rb_mp_command(slot: u32, command: u32) {
     model::record(model::TRACE_COMMANDS, model::TRACE_COMMANDS + 4, slot, command);
 }

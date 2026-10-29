@@ -9,6 +9,7 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 }
 
 #[no_mangle]
+#[link_section = ".text.rb_mp_cancel"]
 pub extern "C" fn rb_mp_cancel(slot: u32, event: u32) {
     model::record(model::TRACE_CANCELS, model::TRACE_CANCELS + 4, slot, event);
 }

@@ -9,6 +9,7 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 }
 
 #[no_mangle]
+#[link_section = ".text.rb_mp_memcpy"]
 pub unsafe extern "C" fn rb_mp_memcpy(dst: *mut u8, src: *const u8, len: usize) {
     let mut index = 0;
     while index < len {
@@ -18,6 +19,7 @@ pub unsafe extern "C" fn rb_mp_memcpy(dst: *mut u8, src: *const u8, len: usize) 
 }
 
 #[no_mangle]
+#[link_section = ".text.rb_mp_log"]
 pub extern "C" fn rb_mp_log(_task: u32, _name: *const u8) {
     model::bump(model::TRACE_LOGS);
 }

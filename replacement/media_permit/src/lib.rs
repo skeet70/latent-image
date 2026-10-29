@@ -361,6 +361,7 @@ fn apply_kind_broadcast(
 }
 
 /// `FUN_00e7e95c`: apply the mirrored permit to the frame named by word 1.
+/// Entered by thunks `0x00e6a74c` and `0x00e6bb88`.
 pub fn apply_mirrored_permit(runtime: &mut impl PermitRuntime) -> PermitStatus {
     let mirrored = runtime.mirror();
     let slot = match resolve(runtime, runtime.layout(), mirrored.word1) {

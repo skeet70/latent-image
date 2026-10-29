@@ -32,7 +32,6 @@ xm1_rust_staticlib(
         "src/lib.rs",
         "src/stock.rs",
     ],
-    rustc_flags = ["-C", "function-sections=yes"],
 )
 
 xm1_rust_elf(
@@ -56,8 +55,6 @@ xm1_rust_staticlib(
     rustc_flags = [
         "--cfg",
         "media_permit_defect",
-        "-C",
-        "function-sections=yes",
     ],
 )
 

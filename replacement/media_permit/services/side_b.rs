@@ -9,6 +9,7 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 }
 
 #[no_mangle]
+#[link_section = ".text.rb_mp_fatal"]
 pub extern "C" fn rb_mp_fatal() {
     model::bump(model::TRACE_FAULTS);
 }

@@ -25,6 +25,7 @@ fn event_class(message_id: u16) -> u32 {
 }
 
 #[no_mangle]
+#[link_section = ".text.rb_mp_handback"]
 pub extern "C" fn rb_mp_handback(_class: u32) {
     let class = event_class(model::read_u16(model::MIRROR));
     model::write_u32(model::TRACE_HANDBACK_CLASS, class);

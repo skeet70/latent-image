@@ -7,6 +7,7 @@ mod media_permit;
 mod media_permit_stock;
 
 #[no_mangle]
+#[link_section = ".text.rb_media_permit_case"]
 pub extern "C" fn rb_media_permit_case(mode: u32, arg0: u32, arg1: u32) -> i32 {
     match mode {
         0 => media_permit_stock::resolve_key(arg0),

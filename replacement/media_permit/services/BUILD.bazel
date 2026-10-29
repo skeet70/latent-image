@@ -7,7 +7,6 @@ xm1_rust_staticlib(
     src = "low.rs",
     crate_name = "media_permit_low",
     data = ["src/model.rs"],
-    rustc_flags = ["-C", "function-sections=yes"],
 )
 
 xm1_rust_elf(
@@ -22,7 +21,6 @@ xm1_rust_staticlib(
     src = "side_a.rs",
     crate_name = "media_permit_side_a",
     data = ["src/model.rs"],
-    rustc_flags = ["-C", "function-sections=yes"],
 )
 
 xm1_rust_elf(
@@ -37,7 +35,6 @@ xm1_rust_staticlib(
     src = "fatal2.rs",
     crate_name = "media_permit_fatal2",
     data = ["src/model.rs"],
-    rustc_flags = ["-C", "function-sections=yes"],
 )
 
 xm1_rust_elf(
@@ -52,7 +49,6 @@ xm1_rust_staticlib(
     src = "side_b.rs",
     crate_name = "media_permit_side_b",
     data = ["src/model.rs"],
-    rustc_flags = ["-C", "function-sections=yes"],
 )
 
 xm1_rust_elf(
@@ -67,7 +63,6 @@ xm1_rust_staticlib(
     src = "command.rs",
     crate_name = "media_permit_command",
     data = ["src/model.rs"],
-    rustc_flags = ["-C", "function-sections=yes"],
 )
 
 xm1_rust_elf(
@@ -82,7 +77,6 @@ xm1_rust_staticlib(
     src = "cancel.rs",
     crate_name = "media_permit_cancel",
     data = ["src/model.rs"],
-    rustc_flags = ["-C", "function-sections=yes"],
 )
 
 xm1_rust_elf(
