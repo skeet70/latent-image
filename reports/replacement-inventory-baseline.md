@@ -268,14 +268,14 @@ The first-wave checkpoint applies the same rule to the measured cost. A lower ti
 
 Decision: continue with owned controller, lifecycle and startup boundaries. Do not spend the next wave only on detached leaf ports or blanket C rewrites.
 
-The matched C/Rust workload in section 5 does not show a runtime speedup. Its table is a same-workload measurement, not evidence of an improvement. Credit the exercised source-level migration, ABI reuse and consumed contracts, and leave runtime improvement unclaimed. Firmware investigation time remains unknown where it was not separately measured.
+The matched C/Rust table in [the ownership report](recipe-bank-ui-ownership.md#measurement) does not demonstrate an end-to-end verification speedup. Its comparison values stay in that table. Credit the exercised source-level migration, ABI reuse and consumed contracts, and leave verification-time improvement unclaimed. Firmware investigation time remains unknown where it was not separately measured.
 
-The first wave qualifies bounded toolchain, validator, service and UI paths. It does not qualify camera-equivalent application/runtime behavior or startup. Full milestones remain open. #85 remains hardware blocked and persistence is unpursued.
+The first wave qualifies bounded toolchain, validator, service and UI paths. It does not qualify camera-equivalent application/runtime behavior or startup. #121 is the bounded pilot and is qualified; #117 full application/runtime/startup milestones remain open. #85 remains hardware blocked and persistence is unpursued.
 
 Exposed dependencies:
 
 - preservation observation separates identity CPU stores from changed stores;
-- the direct `Cpu.write_memory` host-write hole was fixed at the SDK boundary;
+- the direct `Cpu::write_memory` host-write hole was fixed at the SDK boundary;
 - natural mode and overlay-entry assumptions remain explicit;
 - retained modal, render, storage, scheduler, init and resource behavior still requires contracted retirement.
 
