@@ -619,6 +619,16 @@ fn unpredictable_transfer_and_multiply_forms_are_refused_before_they_execute() {
 }
 
 #[test]
+fn pc_destinations_outside_the_call_contract_are_refused() {
+    // mov pc, r1; movw pc, #0; uxtb pc, r1; ubfx pc, r1, #4, #12; smulbb pc, r1, r2; clz pc, r1
+    for word in [0xe1a0_f001, 0xe300_f000, 0xe6ef_f071, 0xe7eb_f251, 0xe16f_0281, 0xe16f_ff11] {
+        let observed = Case::new(&[word, BX_LR]).register(1, CODE + 4).register(2, 1).run();
+        observed.assert_stopped(Status::UnsupportedInstruction, CODE);
+        assert_eq!(observed.instructions(), 1, "{word:#010x}");
+    }
+}
+
+#[test]
 fn malformed_and_out_of_contract_wires_are_invalid_cases() {
     let valid = Case::new(&[PUSH_LR, branch(0x1004, STUB, true), ADD_R0_1, POP_PC]).stub(STUB, &[(0, 5)], &[(0, 0x40)]);
     let text = valid.wire();

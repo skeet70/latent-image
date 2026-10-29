@@ -1486,7 +1486,22 @@ fn control(word: u32) -> Control {
     let doubleword_into_pc = top == 0 && word & 0xf0 == 0xd0 && !load && destination == 14;
     // MRS, CLZ and QADD/QSUB/QDADD/QDSUB with Rd = PC.
     let misc_into_pc = word & 0x0fbf_ffff == 0x010f_f000 || word & 0x0fff_fff0 == 0x016f_ff10 || word & 0x0f90_f0f0 == 0x0100_f050;
-    if pc_write || doubleword_into_pc || misc_into_pc { Control::UntrackedPcWrite } else { Control::None }
+    // SMULxy/SMLAxy/SMULWy/SMLAWy write Rd at bits 19-16; SMLALxy also writes RdLo.
+    let halfword_multiply_into_pc = word & 0x0f90_0090 == 0x0100_0080
+        && (word >> 16 & 15 == 15 || (word & 0x0060_0000 == 0x0040_0000 && destination == 15));
+    // Media signed multiplies and USAD8/USADA8 write Rd at bits 19-16; the rest at bits 15-12.
+    let media_into_pc = top == 3
+        && word & 0x10 != 0
+        && if word & 0x0f80_0000 == 0x0700_0000 || word & 0x0ff0_00f0 == 0x0780_0010 {
+            word >> 16 & 15 == 15
+        } else {
+            destination == 15
+        };
+    if pc_write || doubleword_into_pc || misc_into_pc || halfword_multiply_into_pc || media_into_pc {
+        Control::UntrackedPcWrite
+    } else {
+        Control::None
+    }
 }
 
 /// Words refused regardless of condition: Cortex-R4F exclusions, ARMv7
