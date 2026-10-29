@@ -19,6 +19,13 @@ pub struct Hit {
     pub cpsr: u32,
 }
 
+#[derive(Clone, Copy, Default)]
+enum CoreSelection {
+    #[default]
+    All,
+    Primary,
+}
+
 #[derive(Default)]
 pub struct TraceSites {
     pub sites: BTreeMap<u32, String>,
@@ -26,6 +33,7 @@ pub struct TraceSites {
     pub stop_labels: BTreeSet<String>,
     pub hits: Vec<Hit>,
     points: Vec<(usize, Box<InstructionPoints>)>,
+    cores: CoreSelection,
 }
 
 fn register(session: &Session, core: usize, register: arm::Register) -> Result<u32, String> {
@@ -40,8 +48,22 @@ impl TraceSites {
 
     /// Replaces the armed sites on every core.
     pub fn arm(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
+        self.arm_selection(session, sites, CoreSelection::All)
+    }
+
+    pub fn arm_primary(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
+        self.arm_selection(session, sites, CoreSelection::Primary)
+    }
+
+    fn arm_selection(
+        &mut self,
+        session: &Session,
+        sites: BTreeMap<u32, String>,
+        cores: CoreSelection,
+    ) -> Result<(), String> {
         self.disarm(session)?;
         self.sites = sites;
+        self.cores = cores;
         self.rearm(session)
     }
 
@@ -61,6 +83,13 @@ impl TraceSites {
         }
         let addresses: Vec<u64> = self.sites.keys().map(|&address| u64::from(address)).collect();
         for core in 0..session.board.instruction_counts().len() {
+            let selected = match self.cores {
+                CoreSelection::All => true,
+                CoreSelection::Primary => core == 0,
+            };
+            if !selected {
+                continue;
+            }
             let points = session.board.instruction_points_begin(core, addresses.clone())?;
             self.points.push((core, points));
         }

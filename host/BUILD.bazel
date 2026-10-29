@@ -78,6 +78,23 @@ haskell_library(
 )
 
 haskell_library(
+    name = "first-stage",
+    srcs = ["FujiAF/FirstStage.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":base",
+        ":bytestring",
+        ":update-container",
+    ],
+)
+
+haskell_library(
     name = "label-record",
     srcs = ["FujiAF/LabelRecord.hs"],
     ghcopts = [
