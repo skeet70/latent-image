@@ -149,7 +149,7 @@ main = do
   image <- H.readRegular firstRecordSlotLength (optImage options)
   symbols <- H.readRegular 0x10000 (optSymbols options)
   symbolRows <- either H.failH pure (parseSymbols symbols)
-  entrySymbol <- lookupSymbol symbolRows "xm1_first_stage_entry"
+  entrySymbol <- either H.failH pure (lookupSymbol symbolRows "xm1_first_stage_entry")
   H.ensure
     (symbolAddress entrySymbol == armEntryAddress entry)
     "entry symbol address differs from --entry"
@@ -157,8 +157,8 @@ main = do
     (armEntryAddress entry == fromIntegral (slotOffsetBytes loadOffset))
     "entry is not the candidate image start"
   H.ensure (symbolSize entrySymbol > 0) "entry symbol has zero size"
-  handoffSymbol <- lookupSymbol symbolRows "xm1_first_stage_handoff"
-  handoffVectorSymbol <- lookupSymbol symbolRows "xm1_first_stage_handoff_vector"
+  handoffSymbol <- either H.failH pure (lookupSymbol symbolRows "xm1_first_stage_handoff")
+  handoffVectorSymbol <- either H.failH pure (lookupSymbol symbolRows "xm1_first_stage_handoff_vector")
   let load = slotOffsetBytes loadOffset
       codeEnd = load + B.length image
       withinCandidate symbol = fromIntegral (symbolAddress symbol) >= load && fromIntegral (symbolAddress symbol) < codeEnd

@@ -341,8 +341,8 @@ parseReceipt bytes = do
   failureText <- optionalTextField object "machine_failure"
   instructions <- jsonField object "instructions" :: Either String Word64
   stops <- jsonField object "stops" >>= mapM parseHit
-  reads <- jsonField object "reads" >>= mapM parseRead
-  pure (Receipt result errorText failureText instructions stops reads)
+  readRows <- jsonField object "reads" >>= mapM parseRead
+  pure (Receipt result errorText failureText instructions stops readRows)
 
 validateReceipt :: Expected -> Receipt -> Either String ()
 validateReceipt expected receipt = do

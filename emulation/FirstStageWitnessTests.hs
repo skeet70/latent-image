@@ -4,6 +4,7 @@ module Main where
 
 import Control.Monad (unless)
 import Data.Aeson (Value (..), encode, object, (.=))
+import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
@@ -53,18 +54,18 @@ stopValue core instructions r0 r1 r2 r3 cpsr =
     ]
   where
     (label, address, sp) = case instructions of
-      10 -> ("owned-first-stage-entry", 0x6000 :: Word32, 0xfff00f00)
+      10 -> ("owned-first-stage-entry" :: String, 0x6000 :: Word32, 0xfff00f00 :: Word32)
       20 -> ("retained-storage-init", 0x2034, 0)
       30 -> ("retained-trailer-gate", 0x1cc0, 0)
       40 -> ("retained-stage-images", 0x1d08, 0)
       50 -> ("owned-handoff-vector", 0x6100, 0)
       _ -> ("", 0, 0)
 
-readValue :: String -> Word32 -> B.ByteString -> Value
+readValue :: String -> GuestAddress -> B.ByteString -> Value
 readValue label address content =
   object
     [ "label" .= label
-    , "address" .= address
+    , "address" .= (fromIntegral (guestAddress address) :: Word32)
     , "length" .= B.length content
     , "sha256" .= sha256Hex content
     , "hex" .= Null
@@ -98,7 +99,7 @@ replaceStops :: ([Value] -> [Value]) -> Value -> Value
 replaceStops change (Object root) =
   Object (KeyMap.insert "stops" (Array (V.fromList (change (stops root)))) root)
   where
-    stops object = case KeyMap.lookup "stops" object of
+    stops mapObject = case KeyMap.lookup "stops" mapObject of
       Just (Array values) -> V.toList values
       _ -> mempty
 replaceStops _ value = value
@@ -107,7 +108,7 @@ firstStopField :: String -> Value -> Value -> Value
 firstStopField field replacement (Object root) =
   Object (KeyMap.insert "stops" (Array (V.fromList (replace (stops root)))) root)
   where
-    stops object = case KeyMap.lookup "stops" object of
+    stops mapObject = case KeyMap.lookup "stops" mapObject of
       Just (Array values) -> V.toList values
       _ -> mempty
     replace [] = []
@@ -119,14 +120,14 @@ firstRegister :: String -> Value -> Value -> Value
 firstRegister field replacement (Object root) =
   Object (KeyMap.insert "stops" (Array (V.fromList (replace (stops root)))) root)
   where
-    stops object = case KeyMap.lookup "stops" object of
+    stops mapObject = case KeyMap.lookup "stops" mapObject of
       Just (Array values) -> V.toList values
       _ -> mempty
     replace [] = []
     replace (Object stop : rest) =
       case KeyMap.lookup "registers" stop of
         Just (Object registers) ->
-          Object (KeyMap.insert "registers" (Object (KeyMap.insert field replacement registers)) stop) : rest
+          Object (KeyMap.insert "registers" (Object (KeyMap.insert (Key.fromString field) replacement registers)) stop) : rest
         _ -> Object stop : rest
     replace (value : rest) = value : replace rest
 firstRegister _ _ value = value
@@ -135,20 +136,20 @@ firstStopDelete :: String -> Value -> Value
 firstStopDelete field (Object root) =
   Object (KeyMap.insert "stops" (Array (V.fromList (replace (stops root)))) root)
   where
-    stops object = case KeyMap.lookup "stops" object of
+    stops mapObject = case KeyMap.lookup "stops" mapObject of
       Just (Array values) -> V.toList values
       _ -> mempty
     replace [] = []
-    replace (Object stop : rest) = Object (KeyMap.delete field stop) : rest
+    replace (Object stop : rest) = Object (KeyMap.delete (Key.fromString field) stop) : rest
     replace (value : rest) = value : replace rest
 firstStopDelete _ value = value
 
 setField :: String -> Value -> KeyMap.KeyMap Value -> KeyMap.KeyMap Value
-setField field replacement object =
+setField field replacement fields =
   case field of
-    "sp" -> KeyMap.insert "sp" replacement object
-    "core" -> KeyMap.insert "core" replacement object
-    _ -> object
+    "sp" -> KeyMap.insert "sp" replacement fields
+    "core" -> KeyMap.insert "core" replacement fields
+    _ -> fields
 
 expectLeft :: String -> Either String a -> IO ()
 expectLeft label result = case result of

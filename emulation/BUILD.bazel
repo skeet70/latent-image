@@ -348,6 +348,7 @@ haskell_library(
         "//host:cryptohash-sha256",
         "//host:first-stage",
         "//host:json",
+        "//host:text",
     ],
 )
 
