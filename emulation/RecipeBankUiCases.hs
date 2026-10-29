@@ -2674,6 +2674,8 @@ loadInputs build planPath id4Path id4Base id5Path fieldsPath nameRecordArg kerne
   ks <- parseSyms (build </> "kernel.syms")
   unless (addr ks "__rb_image_start" == kernelBase) (fail "--rb-base differs from linked __rb_image_start")
   ms <- parseSyms (build </> "model.syms")
+  unless (addr ms "rbm_data_base" == fromIntegral modelScratchBase) $
+    fail "model data is not linked at the media-state tail 0x00910340"
   us <- parseSyms (build </> "ui-model.syms")
   unless (hasSym us "ui_run") (error "ui-model.syms has no ui_run: build the UI model first")
   unless (hasSym us "ui_exit_boundary" && sizeOf us "ui_exit_boundary" == 0) $
