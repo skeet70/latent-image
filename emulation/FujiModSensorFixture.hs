@@ -1,14 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | fujimod-xm1-sensor-fixture: derives a separately identified X-M1 FujiMod
--- run document whose image_input node carries a declared synthetic RAW16
--- frame source, from a sensor-null base run document and a fixture
--- declaration.
---
---   fujimod-xm1-sensor-fixture write --run BASE.json --fixture FIXTURE.json --output NEW.json
---   fujimod-xm1-sensor-fixture verify --run BASE.json --fixture FIXTURE.json --document DERIVED.json
---
--- Both print the derived document's identity record. verify fails unless
--- DERIVED.json is byte-identical to the derivation.
+-- | Derives a separately identified X-M1 FujiMod run document whose
+-- image_input carries a declared synthetic RAW16 frame source. verify fails
+-- unless the document is byte-identical to the derivation.
 module Main (main) where
 
 import Control.Monad (unless, when)
@@ -48,9 +41,9 @@ newtype AssetId = AssetId T.Text
 newtype Ticks = Ticks Word64
   deriving (Eq)
 
+-- | Its RAW16 asset is at most 'maxAssetBytes'.
 data Raster = Raster {rasterWidth :: Int, rasterHeight :: Int}
 
--- | RAW16 frame content.
 data Scene
   = -- | Sample @i@ of the row-major raster holds @i mod 4096@.
     IndexRamp12
@@ -125,8 +118,8 @@ parseFixture value = do
       if name == sceneName IndexRamp12 then Right IndexRamp12 else Left ("unknown fixture scene " ++ T.unpack name)
   let bytes = assetBytes raster
       patternBytes = length (scenePattern scene)
-  when (bytes > maxAssetBytes || bytes `mod` patternBytes /= 0) $
-    Left ("the raster's RAW16 asset of " ++ show bytes ++ " bytes is not a whole number of " ++ show patternBytes ++ "-byte patterns within 64 MiB")
+  when (bytes `mod` patternBytes /= 0) $
+    Left ("the raster's RAW16 asset of " ++ show bytes ++ " bytes is not a whole number of " ++ show patternBytes ++ "-byte patterns")
   period <- Ticks <$> (field "fixture" "sensor_period_ticks" o >>= asBounded "fixture sensor_period_ticks")
   when (period == Ticks 0) (Left "fixture sensor_period_ticks must be positive")
   response <- field "fixture" "response" o >>= parseResponse
@@ -139,6 +132,7 @@ parseRaster value = do
   width <- field "raster" "width" o >>= asBounded "raster width"
   height <- field "raster" "height" o >>= asBounded "raster height"
   when (width <= 0 || height <= 0 || odd width) (Left "raster needs a positive even width and a positive height")
+  when (width > (maxAssetBytes `div` 2) `div` height) (Left "the raster's RAW16 asset exceeds 64 MiB")
   pure (Raster width height)
 
 parseResponse :: Value -> Parse Response
