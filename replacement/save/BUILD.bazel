@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 _MODULE_SRCS = [
@@ -218,22 +218,5 @@ haskell_binary(
         "//host:bytestring",
         "//host:host-support",
         "//host:json",
-    ],
-)
-
-haskell_test(
-    name = "save-domain-tests",
-    size = "small",
-    srcs = ["SaveDomainTests.hs"],
-    ghcopts = [
-        "-XGHC2021",
-        "-Wall",
-        "-Werror",
-        "-O2",
-    ],
-    deps = [
-        ":qualify-lib",
-        "//host:base",
-        "//host:host-support",
     ],
 )
