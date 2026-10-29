@@ -312,7 +312,7 @@ pub mod frame {
     }
 
     /// # Safety
-    /// `dest` is null or writable for 0x2c bytes.
+    /// `dest` is null, or 4-byte aligned and writable for 0x2c bytes.
     #[inline(always)]
     unsafe fn write_snapshot(dest: *mut MenuFrameSnapshot) -> SnapshotResult {
         if dest.is_null() {
@@ -369,7 +369,7 @@ pub mod frame {
     /// FUN_0061cd14.
     ///
     /// # Safety
-    /// `dest` is null or writable for 0x2c bytes.
+    /// `dest` is null, or 4-byte aligned and writable for 0x2c bytes.
     #[no_mangle]
     #[inline(never)]
     pub unsafe extern "C" fn rb_menu_frame_snapshot(dest: *mut MenuFrameSnapshot) -> SnapshotResult {
@@ -380,8 +380,6 @@ pub mod frame {
         table.wrapping_add((root.0 as usize).wrapping_mul(0x2c)) as *mut MenuFrameSnapshot
     }
 
-    /// Separate per slot table, so the bank allowlist sees one indexed base per
-    /// call and the depth-0 stores at their constant addresses.
     #[no_mangle]
     #[inline(never)]
     extern "C" fn rb_menu_frame_store_root_depth() -> SnapshotResult {
