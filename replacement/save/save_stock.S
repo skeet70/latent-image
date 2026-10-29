@@ -1,4 +1,4 @@
-@ Call trampolines from the owned save facade to the retained image-5 services.
+@ Tail veneers from the owned save facade to the retained image-5 services.
 
 .syntax unified
 .arm
@@ -8,12 +8,9 @@
 .global \name
 .type \name,%function
 \name:
-    push    {r4, lr}
     movw    r12, #\lo
     movt    r12, #\hi
-    blx     r12
-    pop     {r4, lr}
-    bx      lr
+    bx      r12
 .size \name, .-\name
 .endm
 
