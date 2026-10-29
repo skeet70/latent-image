@@ -32,6 +32,27 @@ The exported seam wraps the raw `u32` class in `MenuClass` and the raw token in 
 
 A source search for the three export names finds exactly their declarations in `menu/recipe_bank_ui.h` and their definitions and host tests in `replacement/recipe_ui/src/lib.rs`. A search for `rb_ui_page(` finds six call sites, all in `menu/recipe_bank_actions.c` and `menu/recipe_bank_probe.c`, and `rb_ui_decode(` has its single call site in `rb_bank_action`. The retired C if-chains survive only as the historical diff in `reports/replacement-inventory-baseline.md`; no build input references them.
 
+## Retained modal contract
+
+The four retargeted modal-75 cells are global state/event registrations, not per-page registrations. The current bank interposer delegates unclaimed pages to the original handlers:
+
+| State, event | Cell | Original action | Original handler |
+| --- | --- | --- | --- |
+| `0, 8` | `0x00cd20a4` | `0x5a` | `FUN_00c72e10` |
+| `0x1e, 8` | `0x00cd211c` | `0x73` | `FUN_00c75ed4` |
+| `0, 13` | `0x00cd243c` | `0x81` | `FUN_00c76650` |
+| `0x1e, 13` | `0x00cd24b4` | `0x98` | `FUN_00c77794` |
+
+The stock dispatcher `FUN_00bfb028` indexes the cell table by `event * width + state`; modal 75 has width 46. A cell's low halfword selects the action. After that action returns, the signed high halfword selects a transition callback when positive, or a direct state write of its negation otherwise. The action's return value is preserved. The 299-entry function-pointer table at `0x00d04080` is separate from this cell table. The four original handler bindings were checked in the decoded image, including action `0x98` at `0x00d042e0`. The dispatcher instructions are in `private-data/analysis/x-m1-1.50/filmsim/id5.dis` at `0x00bfb028..0x00bfb11c`.
+
+The claimed-page SET path still depends on stock activation and mode gates before the generic exit in `FUN_00c72e10`. In `FUN_00d4d7a4` case 1, tokens `0x63..0x70` and `0x73..0x79` set `0x009544f8`; the default taken by bank parent tokens `0x7d`/`0x7e` clears `0x009544fc` and `0x00954500`, not `0x009544f8`. A page class alone therefore does not prove that gate clear. The other SET gates read `0x00950474`, `0x00950478` and `0x00954500`. No device-input scenario establishing a carried set gate is qualified here.
+
+After transition, the SET notification tests use the new live frame: `FUN_0061d1f4` and `FUN_0061d244` refill their local snapshot through `FUN_0061cd14`. Reusing a pre-transition class or row token would change the suppression for class 5/token `0x35` and class `0xe8`. The claimed bank LEAVE path already has its own stage/notification behavior; replacing the controller must preserve that behavior, not silently substitute the generic stock leave path.
+
+The C binding also distinguishes frame-pointer identity `0x0078ea98` from the node id at offset zero. Its row input is absent, stale or present: a null values pointer and an invalid cursor must be handled before reading a token or child class. Physical left/right entry and the registered cell are separate facts from the mutable event and state halfwords.
+
+The existing `card-sel.img` and `emulation/ui-trajectories.json` provide a populated-bank selection baseline. They are not the cardless Rust route or qualification of an owned SET exit. A complete selection/apply/exit cutover needs a matching card-backed FujiMod run, the existing mode-dependent exits and explicit scoped forbidden-execution evidence. Moving more C classification policy alone does not retire these proprietary handlers.
+
 ## Evidence
 
 The Rust module's host tests are `//replacement/recipe_ui:route-tests`: a checked-in genrule compiles `src/lib.rs` with the pinned `@lab_rustc` and clang under `--test`, and the existing `//emulation:recovery-task-state-tests.sh` wrapper runs the binary. The four cases call only the exported C ABI and cover the page and slot boundaries, all four verb kinds with the first and last slot, select codes 0, 1 and 7, and the enumerated gap tokens returning zero.
@@ -67,7 +88,7 @@ The original `media-state` region ended at `0x00910340`. The media model's `.dat
 
 The `effects` object separates the final-state match from the effect proof. `final_state` is `verified` when the returned diagnostic, registers, ABI workspaces, public claims and every non-workspace byte match; it says nothing about writes that were overwritten. With a complete provenance log every write is classified and a clean run is `verified`. With a truncated log a read-only case can still be `guarded` because `span-low` has no write permission, while a mutating case is `final-only`: its expected final bytes are verified and no complete transient proof is claimed. The verdicts are the closed `EffectVerdict` values `guarded`, `verified`, `final-only`, `failed` and `not evaluated`; guard, transient proof, scope and final state are likewise closed types, not string flags. A required effect is therefore complete or enforced by a guard, never inferred from expected final bytes alone.
 
-The current packaged route uses the pinned upstream `MemoryWatch` over `0x0096cc64..0x0096ce26`, the live property cache, from before the first UI segment through unload. CPU records contain value, before bytes and PC; host/model-bus records do not. Overflow ends complete observation and refuses qualification. The observed stock cache reloads and property stores preserve their bytes, but a complete route result is still missing. A complete RAM-byte-preservation guard is the remaining prerequisite: account for identity stores, reject every transient protected-byte change and unverifiable write, and require a changed CPU write for the control. Native no-store checks remain unchanged. No writer-PC exemption or final-snapshot substitute is accepted.
+The current source implements an aggregate RAM-byte-preservation guard over `0x0096cc64..0x0096ce26`, the live property cache, from before the first UI segment through unload. It counts identity CPU stores, rejects a changed protected byte at the store rather than only at the final snapshot, and refuses unverifiable host/model-bus writes or incomplete observation. SDK compilation and complete-route qualification remain pending. The failed all-access `MemoryWatch` evidence is retained separately. Native no-store checks remain unchanged; no writer-PC exemption or final-snapshot substitute is accepted.
 
 ### Packaged watch command
 
@@ -75,7 +96,7 @@ The current packaged route uses the pinned upstream `MemoryWatch` over `0x0096cc
 XM1_EMULATOR_SLOTS=1 devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-issue117-ui-proof" run //emulation:xm1-viewer -- --ram-push-e2e --cardless --fujimod --unreviewed-relink --firmware private-data/analysis/x-m1-1.50/update/prefix/FWUP0002-prefix.DAT --installed-nand private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand --trajectories emulation/recipe-bank-route-ram-push-trajectories.json --receipt-output <fresh private path> --output <fresh private runtime path>
 ```
 
-Run the control with `--trajectories emulation/recipe-bank-route-ram-push-control-trajectories.json` into a separate fresh receipt; its `protected_writes.ok` requires actual writes and `control: true`. The guest PNG capture and the repeated entry, navigation, cancel, handback and resource-failure segments remain in the tracked primary trajectory.
+Run the control with `--trajectories emulation/recipe-bank-route-ram-push-control-trajectories.json` into a separate fresh receipt. Its `ram_preservation` evidence must contain an actual changed protected CPU intersection and a positive changed-write counter; identity stores, an integrity fault or a generic failure do not qualify it. The guest PNG capture and repeated entry, navigation, cancel, handback and resource-failure segments remain in the tracked primary trajectory.
 
 ## Measurement
 
