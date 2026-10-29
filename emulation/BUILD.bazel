@@ -335,6 +335,27 @@ haskell_binary(
     ],
 )
 
+haskell_binary(
+    name = "first-stage-witness",
+    srcs = ["FirstStageWitness.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":emulator-slot-lib",
+        ":fujimod-paths",
+        ":viewer-runtime-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host:process",
+    ],
+)
+
 # The updater-f7 route on FujiMod; see README "updater-f7 on FujiMod".
 sh_binary(
     name = "fujimod-updater-f7",

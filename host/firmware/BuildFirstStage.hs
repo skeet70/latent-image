@@ -25,8 +25,9 @@ data Options = Options
   , optImage :: FilePath
   , optSymbols :: FilePath
   , optOutput :: FilePath
-  , optPlan :: FirstStagePlan
-  , optExpectedSlotSha256 :: String
+  , optEntry :: Maybe ArmEntry
+  , optLoadOffset :: Maybe SlotOffset
+  , optExpectedSlotSha256 :: Maybe Sha256
   }
 
 data Symbol = Symbol
@@ -38,27 +39,18 @@ data Symbol = Symbol
 usage :: String
 usage =
   "usage: build-first-stage STOCK_DAT CANDIDATE_BIN CANDIDATE_SYMBOLS OUT_DAT "
-    ++ "--load-offset HEX --entry HEX --retained START:END ... --expect-slot-sha256 HEX"
+    ++ "--load-offset HEX --entry HEX --expect-slot-sha256 HEX"
 
 parseNumber :: String -> Maybe Word32
 parseNumber text =
   case readHex (dropPrefix text) of
-    [(value, "")] -> Just value
+    [(value, "")]
+      | value >= 0 && value <= 0xffffffff -> Just (fromIntegral (value :: Integer))
     _ -> Nothing
   where
     dropPrefix value
       | take 2 value `elem` ["0x", "0X"] = drop 2 value
       | otherwise = value
-
-parseRange :: String -> Maybe (Int, Int)
-parseRange text = do
-  let (startText, rest) = break (== ':') text
-  case rest of
-    ':' : endText -> do
-      start <- parseNumber startText
-      end <- parseNumber endText
-      pure (fromIntegral start, fromIntegral end)
-    _ -> Nothing
 
 parseOptions :: [String] -> Either String Options
 parseOptions (stock : image : symbols : output : rest) =
@@ -68,43 +60,36 @@ parseOptions (stock : image : symbols : output : rest) =
         , optImage = image
         , optSymbols = symbols
         , optOutput = output
-        , optPlan = FirstStagePlan 0 0 (U.MediaImage B.empty) []
-        , optExpectedSlotSha256 = ""
+        , optEntry = Nothing
+        , optLoadOffset = Nothing
+        , optExpectedSlotSha256 = Nothing
         }
     )
     rest
   where
     go options ("--load-offset" : value : more) =
-      case parseNumber value of
-        Just offset -> go (options {optPlan = (optPlan options) {planLoadOffset = fromIntegral offset}}) more
-        Nothing -> Left ("--load-offset is not a number: " ++ value)
+      case parseNumber value >>= eitherToMaybe . slotOffset . fromIntegral of
+        Just offset -> go (options {optLoadOffset = Just offset}) more
+        Nothing -> Left ("--load-offset is not a slot offset: " ++ value)
     go options ("--entry" : value : more) =
-      case parseNumber value of
-        Just entry -> go (options {optPlan = (optPlan options) {planEntry = entry}}) more
-        Nothing -> Left ("--entry is not a number: " ++ value)
-    go options ("--retained" : value : more) =
-      case parseRange value of
-        Just extent ->
-          let plan = optPlan options
-           in go (options {optPlan = plan {planRetainedExtents = planRetainedExtents plan ++ [extent]}}) more
-        Nothing -> Left ("--retained is not START:END: " ++ value)
+      case parseNumber value >>= eitherToMaybe . armEntry of
+        Just entry -> go (options {optEntry = Just entry}) more
+        Nothing -> Left ("--entry is not a word-aligned address: " ++ value)
     go options ("--expect-slot-sha256" : value : more) =
-      go (options {optExpectedSlotSha256 = map toLower value}) more
+      case parseSha256 (map toLower value) of
+        Right digest -> go (options {optExpectedSlotSha256 = Just digest}) more
+        Left message -> Left message
     go options [] =
-      if length (optExpectedSlotSha256 options) /= 64
-        then Left "--expect-slot-sha256 must be 64 hexadecimal characters"
-        else
-          if planLoadOffset (optPlan options) <= 0
-            then Left "--load-offset is required"
-            else
-              if planEntry (optPlan options) == 0
-                then Left "--entry is required"
-                else
-                  if null (planRetainedExtents (optPlan options))
-                    then Left "at least one --retained extent is required"
-                    else Right options
+      case (optEntry options, optLoadOffset options, optExpectedSlotSha256 options) of
+        (Just _, Just _, Just _) -> Right options
+        (Nothing, _, _) -> Left "--entry is required"
+        (_, Nothing, _) -> Left "--load-offset is required"
+        (_, _, Nothing) -> Left "--expect-slot-sha256 is required"
     go _ (unexpected : _) = Left ("unexpected argument: " ++ unexpected)
 parseOptions _ = Left usage
+
+eitherToMaybe :: Either String a -> Maybe a
+eitherToMaybe = either (const Nothing) Just
 
 parseSymbols :: B.ByteString -> Either String [Symbol]
 parseSymbols bytes = mapM parseLine (filter (not . C.null) (C.lines bytes))
@@ -117,6 +102,47 @@ parseSymbols bytes = mapM parseLine (filter (not . C.null) (C.lines bytes))
               Right (Symbol addressValue sizeValue (C.unpack name))
             _ -> Left ("symbol row is not numeric: " ++ C.unpack line)
         _ -> Left ("symbol row has no expected shape: " ++ C.unpack line)
+
+lookupSymbol :: [Symbol] -> String -> Either String Symbol
+lookupSymbol symbols name =
+  case filter ((== name) . symbolName) symbols of
+    [symbol] -> Right symbol
+    [] -> Left ("candidate symbols lack " ++ name)
+    _ -> Left ("candidate symbols repeat " ++ name)
+
+symbolSlotOffset :: [Symbol] -> String -> Either String SlotOffset
+symbolSlotOffset symbols name = do
+  symbol <- lookupSymbol symbols name
+  slotOffset (fromIntegral (symbolAddress symbol))
+
+retainedContract :: [Symbol] -> Either String [RetainedExtent]
+retainedContract symbols = do
+  vectorStart <- symbolSlotOffset symbols "xm1_vector_table_start"
+  vectorEnd <- symbolSlotOffset symbols "xm1_vector_table_end"
+  bodyStart <- symbolSlotOffset symbols "xm1_retained_body_start"
+  bodyEnd <- symbolSlotOffset symbols "xm1_retained_body_end"
+  dataStart <- symbolSlotOffset symbols "xm1_retained_data_start"
+  dataEnd <- symbolSlotOffset symbols "xm1_retained_data_end"
+  bodyExtent <- retainedExtent bodyStart bodyEnd
+  dataExtent <- retainedExtent dataStart dataEnd
+  vectorExtent <- retainedExtent vectorStart vectorEnd
+  let bodyRange = (slotOffsetBytes bodyStart, slotOffsetBytes bodyEnd)
+  forM_
+    [ "xm1_retained_core_init"
+    , "xm1_retained_storage_init"
+    , "xm1_retained_skip_scan"
+    , "xm1_retained_segment_table"
+    , "xm1_retained_trailer_check"
+    , "xm1_retained_stage_images"
+    , "xm1_retained_storage_fini"
+    ]
+    $ \name -> do
+      symbol <- lookupSymbol symbols name
+      let address = fromIntegral (symbolAddress symbol)
+      if address < fst bodyRange || address >= snd bodyRange
+        then Left (name ++ " is outside the retained body extent")
+        else pure ()
+  pure [vectorExtent, bodyExtent, dataExtent]
 
 runChecks :: String -> [U.Check] -> IO ()
 runChecks title results = do
@@ -136,25 +162,39 @@ main :: IO ()
 main = do
   arguments <- getArgs
   options <- either H.failH pure (parseOptions arguments)
+  entry <- maybe (H.failH "--entry is required") pure (optEntry options)
+  loadOffset <- maybe (H.failH "--load-offset is required") pure (optLoadOffset options)
   stock <- H.readRegular maxContainer (optStock options)
   parsed <- either H.failH pure (U.parseContainer stock)
   verifySource parsed
   let parts = U.parsedParts parsed
   slot <- either H.failH pure (firstRecordSlotBytes parts)
   digest <- H.sha256 slot
+  slotDigest <- either H.failH pure (parseSha256 digest)
+  expectedDigest <- maybe (H.failH "--expect-slot-sha256 is required") pure (optExpectedSlotSha256 options)
   H.ensure
-    (map toLower digest == optExpectedSlotSha256 options)
-    ("reviewed first-record digest mismatch: source slot is " ++ digest)
+    (slotDigest == expectedDigest)
+    ("reviewed first-record digest mismatch: source slot is " ++ sha256Hex slotDigest)
   image <- H.readRegular firstRecordSlotLength (optImage options)
   symbols <- H.readRegular 0x10000 (optSymbols options)
   symbolRows <- either H.failH pure (parseSymbols symbols)
-  entrySymbol <-
-    case find ((== "xm1_first_stage_entry") . symbolName) symbolRows of
-      Nothing -> H.failH "candidate symbols lack xm1_first_stage_entry"
-      Just symbol -> pure symbol
-  H.ensure (symbolAddress entrySymbol == planEntry (optPlan options)) "entry symbol address differs from --entry"
+  entrySymbol <- lookupSymbol symbolRows "xm1_first_stage_entry"
+  H.ensure
+    (symbolAddress entrySymbol == armEntryAddress entry)
+    "entry symbol address differs from --entry"
+  H.ensure
+    (armEntryAddress entry == fromIntegral (slotOffsetBytes loadOffset))
+    "entry is not the candidate image start"
   H.ensure (symbolSize entrySymbol > 0) "entry symbol has zero size"
-  let plan = (optPlan options) {planImage = U.MediaImage image}
+  handoffSymbol <- lookupSymbol symbolRows "xm1_first_stage_handoff"
+  handoffVectorSymbol <- lookupSymbol symbolRows "xm1_first_stage_handoff_vector"
+  let load = slotOffsetBytes loadOffset
+      codeEnd = load + B.length image
+      withinCandidate symbol = fromIntegral (symbolAddress symbol) >= load && fromIntegral (symbolAddress symbol) < codeEnd
+  H.ensure (withinCandidate handoffSymbol) "handoff symbol is outside the candidate image"
+  H.ensure (withinCandidate handoffVectorSymbol) "handoff vector symbol is outside the candidate image"
+  retained <- either H.failH pure (retainedContract symbolRows)
+  plan <- either H.failH pure (firstStagePlan entry loadOffset (U.MediaImage image) retained)
   patched <- either H.failH pure (replaceFirstRecordSlot plan parts)
   rebuilt <- either H.failH pure (U.rebuildContainer parsed patched)
   reparsed <- either H.failH pure (U.parseContainer rebuilt)
@@ -175,7 +215,7 @@ main = do
       (U.diffChangedBytes difference /= 0 && U.diffPart difference /= "main pre-table")
       (H.failH ("unexpected changed part: " ++ U.diffPart difference))
   let stagedSlot = B.take firstRecordSlotLength (B.drop slotStart rebuiltPre)
-      imageOffset = planLoadOffset plan
+      imageOffset = load
   patches <- either H.failH pure (planPatches plan)
   forM_ [0 .. firstRecordSlotLength - 1] $ \index ->
     when
@@ -184,7 +224,7 @@ main = do
       )
       (H.failH ("first-record byte changed outside the declared patches: " ++ show index))
   H.ensure
-    (U.mediaWordAt stagedSlot resetVectorWordOffset == planEntry plan)
+    (U.mediaWordAt stagedSlot resetVectorWordOffset == armEntryAddress entry)
     "staged reset vector does not name the candidate entry"
   H.ensure
     (B.map complement (B.take (B.length image) (B.drop imageOffset stagedSlot)) == image)
@@ -197,7 +237,9 @@ main = do
         ++ " bytes at slot +"
         ++ U.showHexWord (fromIntegral imageOffset)
         ++ ", entry "
-        ++ U.showHexWord (planEntry plan)
+        ++ U.showHexWord (armEntryAddress entry)
+        ++ ", retained "
+        ++ show (map retainedExtentRange retained)
         ++ ", output "
         ++ optOutput options
         ++ ", sha256 "

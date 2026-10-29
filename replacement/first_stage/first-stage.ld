@@ -20,6 +20,12 @@ SECTIONS
   }
 }
 
+xm1_vector_table_start = 0x0;
+xm1_vector_table_end = 0x40;
+xm1_retained_body_start = 0x1800;
+xm1_retained_body_end = 0x4300;
+xm1_retained_data_start = 0x4300;
+xm1_retained_data_end = 0x5280;
 xm1_retained_core_init = 0x25d4;
 xm1_retained_storage_init = 0x2034;
 xm1_retained_skip_scan = 0x2058;

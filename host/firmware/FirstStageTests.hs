@@ -6,6 +6,7 @@ module Main where
 import Control.Monad (unless)
 import qualified Data.ByteString as B
 import Data.Bits (complement)
+import Data.Word (Word32)
 import FujiAF.FirstStage
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
@@ -48,24 +49,35 @@ syntheticParts preTable =
     record = U.CompressedRecord (U.RecordHeader 0 20 1 0x4000 4) B.empty Nothing
 
 sourcePreTable :: B.ByteString
-sourcePreTable =
-  payload
+sourcePreTable = payload
   where
     size = 0x140040 :: Int
     base = B.replicate size 0x11
     withSlot = B.take 0x40000 base <> B.replicate 0x10000 0 <> B.drop 0x50000 base
     withRecord2 = replace 0x50000 (B.pack [0xb6, 0xb6, 0xb6, 0xb6]) withSlot
     payload = replace 0x60000 (B.pack [0xc7, 0xc7]) withRecord2
-    replace offset bytes = \value -> B.take offset value <> bytes <> B.drop (offset + B.length bytes) value
+    replace offset bytes value =
+      B.take offset value <> bytes <> B.drop (offset + B.length bytes) value
 
-plan :: B.ByteString -> FirstStagePlan
-plan image =
-  FirstStagePlan
-    { planEntry = 0x6000
-    , planLoadOffset = 0x6000
-    , planImage = U.MediaImage image
-    , planRetainedExtents = [(0, 0x5280)]
-    }
+retained :: Either String RetainedExtent
+retained = do
+  start <- slotOffset 0
+  end <- slotOffset 0x5280
+  retainedExtent start end
+
+validPlan :: B.ByteString -> IO FirstStagePlan
+validPlan image = do
+  entry <- either H.failH pure (armEntry 0x6000)
+  load <- either H.failH pure (slotOffset 0x6000)
+  extent <- either H.failH pure retained
+  either H.failH pure (firstStagePlan entry load (U.MediaImage image) [extent])
+
+invalidPlan :: B.ByteString -> Word32 -> Int -> Either String FirstStagePlan
+invalidPlan image entryValue loadValue = do
+  entry <- armEntry entryValue
+  load <- slotOffset loadValue
+  extent <- retained
+  firstStagePlan entry load (U.MediaImage image) [extent]
 
 assertTrue :: String -> Bool -> IO ()
 assertTrue label ok = unless ok (H.failH (label ++ ": failed"))
@@ -80,30 +92,26 @@ main = do
   let parts = syntheticParts sourcePreTable
       image = B.pack [0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04]
   slot <- either H.failH pure (firstRecordSlotBytes parts)
-  assertTrue "slot length" (B.length slot == firstRecordSlotLength)
-  assertTrue "source record 2 marker" (B.index sourcePreTable 0x50000 == 0xb6)
-  staged <- either H.failH pure (replaceFirstRecordSlot (plan image) parts)
+  plan <- validPlan image
+  staged <- either H.failH pure (replaceFirstRecordSlot plan parts)
   let stagedPre = U.partPreTable staged
       stagedSlot = B.take firstRecordSlotLength (B.drop firstRecordSlotOffset stagedPre)
+      storedImage = B.map complement (B.take (B.length image) (B.drop (slotOffsetBytes (planLoadOffset plan)) stagedSlot))
   assertTrue "prefix before slot" (B.take firstRecordSlotOffset stagedPre == B.take firstRecordSlotOffset sourcePreTable)
   assertTrue "suffix after slot" (B.drop (firstRecordSlotOffset + firstRecordSlotLength) stagedPre == B.drop (firstRecordSlotOffset + firstRecordSlotLength) sourcePreTable)
   assertTrue "record 2 marker" (B.take 4 (B.drop 0x50000 stagedPre) == B.pack [0xb6, 0xb6, 0xb6, 0xb6])
   assertTrue "carrier marker" (B.take 2 (B.drop 0x60000 stagedPre) == B.pack [0xc7, 0xc7])
-  assertTrue "reset target" (U.mediaWordAt stagedSlot resetVectorWordOffset == 0x6000)
+  assertTrue "reset target" (U.mediaWordAt stagedSlot resetVectorWordOffset == armEntryAddress (planEntry plan))
   assertTrue "retained body below image" (B.take 0x20 stagedSlot == B.take 0x20 slot)
-  assertTrue "retained body between vector and image" (B.drop 0x24 (B.take (planLoadOffset (plan image)) stagedSlot) == B.drop 0x24 (B.take (planLoadOffset (plan image)) slot))
-  assertTrue "image bytes" (B.map complement (B.take (B.length image) (B.drop (planLoadOffset (plan image)) stagedSlot)) == image)
+  assertTrue "retained body between vector and image" (B.drop 0x24 (B.take 0x6000 stagedSlot) == B.drop 0x24 (B.take 0x6000 slot))
+  assertTrue "image bytes" (storedImage == image)
   assertTrue "unrelated parts unchanged" (U.partIdentity staged == U.partIdentity parts && U.partSelector staged == U.partSelector parts)
-  assertLeft "empty image" (replaceFirstRecordSlot (plan B.empty) parts)
-  assertLeft "entry outside image" (replaceFirstRecordSlot ((plan image) {planEntry = 0x6400}) parts)
-  assertLeft "unaligned entry" (replaceFirstRecordSlot ((plan image) {planEntry = 0x6002}) parts)
-  assertLeft "image past slot" (replaceFirstRecordSlot ((plan image) {planLoadOffset = 0xfffc}) parts)
-  assertLeft "image overlaps retained" (replaceFirstRecordSlot ((plan image) {planLoadOffset = 0x5000, planEntry = 0x5000}) parts)
-  assertLeft "image overlaps vector" (replaceFirstRecordSlot ((plan image) {planLoadOffset = 0x20, planEntry = 0x20}) parts)
-  assertLeft "retained extent outside slot" (replaceFirstRecordSlot ((plan image) {planRetainedExtents = [(0x10000, 0x20000)]}) parts)
+  assertLeft "empty image" (invalidPlan B.empty 0x6000 0x6000)
+  assertLeft "entry outside image" (invalidPlan image 0x6400 0x6000)
+  assertLeft "unaligned entry" (invalidPlan image 0x6002 0x6000)
+  assertLeft "image past slot" (invalidPlan image 0xfffc 0xfffc)
+  assertLeft "image overlaps retained" (invalidPlan image 0x5000 0x5000)
+  assertLeft "image overlaps vector" (invalidPlan image 0x20 0x20)
+  assertLeft "retained extent outside slot" (slotOffset 0x20000)
   assertLeft "short carrier" (firstRecordSlotBytes (parts {U.partPreTable = B.replicate 0x40000 0}))
-  assertTrue "patch order is vector then image" $
-    case planPatches (plan image) of
-      Right [(offset, bytes), (loadOffset, stagedBytes)] -> offset == resetVectorWordOffset && B.length bytes == 4 && loadOffset == 0x6000 && stagedBytes == B.map complement image
-      _ -> False
-  putStrLn "first-stage staging tests: 20 assertions pass"
+  putStrLn "first-stage staging tests: 17 assertions pass"

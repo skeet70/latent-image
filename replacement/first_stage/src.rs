@@ -20,8 +20,42 @@ const TIMER_COUNTER: *const u32 = 0xfff9_1000 as *const u32;
 
 const DATA_SKIP_POINTER: *const u32 = 0x0000_4804 as *const u32;
 const SEGMENT_TABLE_PUBLICATION: *const u32 = 0x0061_c00c as *const u32;
-const HANDOFF_TARGET: *const u32 = 0x0000_4300 as *const u32;
-const HANDOFF_ARGUMENT: *const u32 = 0x0000_4304 as *const u32;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Core {
+    Zero,
+    One,
+}
+
+impl Core {
+    fn from_discriminator(value: u32) -> Self {
+        if value == 0x4003 {
+            Core::Zero
+        } else {
+            Core::One
+        }
+    }
+
+    fn c_abi(self) -> i32 {
+        match self {
+            Core::Zero => 0,
+            Core::One => 1,
+        }
+    }
+
+    fn log_channel(self) -> LogChannel {
+        match self {
+            Core::Zero => LogChannel::Zero,
+            Core::One => LogChannel::One,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum LogChannel {
+    Zero,
+    One,
+}
 
 extern "C" {
     /// Stock record 1 core-0 peripheral and pin-table init (`0x25d4`).
@@ -38,6 +72,8 @@ extern "C" {
     fn xm1_retained_stage_images(skip: i32, core: i32) -> i32;
     /// Stock record 1 storage teardown (`0x2044`).
     fn xm1_retained_storage_fini() -> i32;
+    /// Labelled assembly handoff at the final `mov pc`.
+    fn xm1_first_stage_handoff() -> !;
 }
 
 #[panic_handler]
@@ -61,15 +97,14 @@ unsafe fn read(address: *const u32) -> u32 {
     read_volatile(address)
 }
 
-unsafe fn log_event(value: u32, channel: u32) {
+unsafe fn log_event(value: u32, channel: LogChannel) {
     let pointer = read(LOG_POINTER);
     if pointer == 0x3333_3333 {
         return;
     }
-    let (index, limit) = if channel == 0 {
-        (LOG_INDEX_0, 0x10)
-    } else {
-        (LOG_INDEX_1, 0x20)
+    let (index, limit) = match channel {
+        LogChannel::Zero => (LOG_INDEX_0, 0x10),
+        LogChannel::One => (LOG_INDEX_1, 0x20),
     };
     let slot = read(index);
     if slot >= limit {
@@ -82,22 +117,10 @@ unsafe fn log_event(value: u32, channel: u32) {
     write(base.add(slot as usize + 2), LOG_END);
 }
 
-unsafe fn supervisor_mode() {
-    let cpsr: u32;
-    asm!("mrs {0}, cpsr", out(reg) cpsr);
-    let value = (cpsr & !0x1f) | 0x13;
-    asm!("msr cpsr_c, {0}", in(reg) value);
-}
-
-/// ARM debug register discriminator: 0 on the core whose DBGDSAR is 0x4003.
-unsafe fn core_discriminator() -> i32 {
+unsafe fn core_discriminator() -> Core {
     let value: u32;
     asm!("mrc p14, 0, {0}, c2, c0, 0", out(reg) value);
-    if value == 0x4003 {
-        0
-    } else {
-        1
-    }
+    Core::from_discriminator(value)
 }
 
 unsafe fn mpu_region(region: u32, base: u32, size: u32, access: u32) {
@@ -114,12 +137,12 @@ unsafe fn mpu_region(region: u32, base: u32, size: u32, access: u32) {
 }
 
 /// Stock record MPU regions 0-4 at 0x19e4-0x1a9c.
-unsafe fn configure_mpu(core: i32) {
+unsafe fn configure_mpu(core: Core) {
     mpu_region(0, 0x0000_0000, 0x303, 0x3b);
     mpu_region(1, 0x4000_0000, 0x30c, 0x3b);
     mpu_region(2, 0x8000_0000, 0x305, 0x3d);
     mpu_region(3, 0xfff0_0000, 0x30c, 0x17);
-    if core != 0 {
+    if core != Core::Zero {
         mpu_region(4, 0xffff_0000, 0x303, 0x1f);
     }
     let control: u32;
@@ -155,8 +178,8 @@ unsafe fn release_peer() {
     write(0xfffb_40ec as *mut u32, 0x0100_0000);
 }
 
-unsafe fn core0_clock(core: i32) {
-    if core == 0 && read(0xfff8_9314 as *const u32) & 0x80 == 0 {
+unsafe fn core0_clock(core: Core) {
+    if core == Core::Zero && read(0xfff8_9314 as *const u32) & 0x80 == 0 {
         let value = read(0xfff8_8028 as *const u32) & !0x000f_0000;
         write(0xfff8_8028 as *mut u32, value);
         let value = read(0xfff8_8030 as *const u32) | 0x200;
@@ -164,18 +187,18 @@ unsafe fn core0_clock(core: i32) {
     }
 }
 
-unsafe fn peer_rendezvous(core: i32) {
+unsafe fn peer_rendezvous(core: Core) {
     write(CELL_PEER0, PEER_READY);
     write(CELL_PEER1, PEER_READY);
     write(LOG_POINTER, LOG_STORE);
-    log_event(0x0100_0000, core as u32);
+    log_event(0x0100_0000, core.log_channel());
     copy_peer_vectors();
     release_peer();
 }
 
 /// Stock record 1's init-body control sequence (0x1e4c); media and
 /// decompression are retained.
-unsafe fn stage_retained_next(core: i32) {
+unsafe fn stage_retained_next(core: Core) {
     core0_clock(core);
 
     if xm1_retained_storage_init() != 0 {
@@ -183,10 +206,10 @@ unsafe fn stage_retained_next(core: i32) {
     }
 
     let mut status = 0i32;
-    if core == 0 {
-        log_event(0x0100_0100, 0);
+    if core == Core::Zero {
+        log_event(0x0100_0100, LogChannel::Zero);
         let scan = xm1_retained_skip_scan();
-        log_event(0x1100_0100, 0);
+        log_event(0x1100_0100, LogChannel::Zero);
         if scan != 0 {
             halt();
         }
@@ -202,42 +225,28 @@ unsafe fn stage_retained_next(core: i32) {
         write(DATA_SKIP_POINTER as *mut u32, read(publication.add(1)));
     }
 
-    log_event(0x1100_0000, core as u32);
-    if xm1_retained_stage_images(status, core) != 0 {
+    log_event(0x1100_0000, core.log_channel());
+    if xm1_retained_stage_images(status, core.c_abi()) != 0 {
         halt();
     }
     let _ = xm1_retained_storage_fini();
 
     write(0x400a_00c4 as *mut u32, 0);
     write(CELL_PEER0, 0);
-    asm!("dsb sy", options(nomem, nostack));
+    asm!("dsb sy");
     while read(CELL_PEER1) == PEER_READY {
         core::hint::spin_loop();
     }
 }
 
-/// Stock 0x183c: SVC mode, then the loader-published target with its argument.
-unsafe fn handoff() -> ! {
-    supervisor_mode();
-    let target = read(HANDOFF_TARGET);
-    let argument = read(HANDOFF_ARGUMENT);
-    asm!(
-        "mov r0, {argument}",
-        "mov pc, {target}",
-        argument = in(reg) argument,
-        target = in(reg) target,
-        options(noreturn)
-    );
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn xm1_first_stage_main() -> ! {
     let core = core_discriminator();
-    if core == 0 {
+    if core == Core::Zero {
         xm1_retained_core_init();
     }
     configure_mpu(core);
     peer_rendezvous(core);
     stage_retained_next(core);
-    handoff()
+    xm1_first_stage_handoff()
 }

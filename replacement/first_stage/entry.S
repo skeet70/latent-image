@@ -1,12 +1,12 @@
-@ Owned reset entry for the staged first record. The CPU arrives in SVC with
-@ SP=0xfff00f00; the container patch points the reset vector here.
+@ Owned reset entry for the staged first record (ROM handoff SVC, SP=0xfff00f00).
+@ Stock 0x1800 also clobbers r0/r1; the core flag comes from DBGDSAR in Rust.
     .syntax unified
     .arm
     .section .text.entry, "ax", %progbits
     .global xm1_first_stage_entry
     .type xm1_first_stage_entry, %function
 xm1_first_stage_entry:
-    @ Current flags and IF, SVC on return, for every exception mode.
+    @ Current flags and IF, System on return, for every exception mode.
     mrs r0, cpsr
     orr r0, r0, #0xc0
     bic r0, r0, #0x1f
@@ -82,5 +82,25 @@ xm1_first_stage_entry:
 
     b xm1_first_stage_main
     .size xm1_first_stage_entry, . - xm1_first_stage_entry
+
+    @ Stock 0x183c handoff: SVC, target at 0x4300, argument at 0x4304.
+    .global xm1_first_stage_handoff
+    .type xm1_first_stage_handoff, %function
+xm1_first_stage_handoff:
+    cps #0x13
+    ldr r3, =0x4300
+    ldr r2, [r3]
+    ldr r0, [r3, #4]
+    .global xm1_first_stage_handoff_vector
+xm1_first_stage_handoff_vector:
+    mov pc, r2
+    .size xm1_first_stage_handoff, . - xm1_first_stage_handoff
+
+    .section .rodata
+    .global xm1_first_stage_contract
+xm1_first_stage_contract:
+    .word xm1_vector_table_start, xm1_vector_table_end
+    .word xm1_retained_body_start, xm1_retained_body_end
+    .word xm1_retained_data_start, xm1_retained_data_end
 
     .section .note.GNU-stack, "", %progbits
