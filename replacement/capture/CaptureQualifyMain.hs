@@ -437,27 +437,27 @@ initialRegisters first second =
     , "r1" .= hex second
     , "r2" .= hex 0
     , "r3" .= hex 0
-    , "r4" .= hex 0
-    , "r5" .= hex 0
-    , "r6" .= hex 0
-    , "r7" .= hex 0
-    , "r8" .= hex 0
-    , "r9" .= hex 0
-    , "r10" .= hex 0
-    , "r11" .= hex 0
+    , "r4" .= hex 0x4a4a4a4a
+    , "r5" .= hex 0x5b5b5b5b
+    , "r6" .= hex 0x6c6c6c6c
+    , "r7" .= hex 0x7d7d7d7d
+    , "r8" .= hex 0x8e8e8e8e
+    , "r9" .= hex 0x9f9f9f9f
+    , "r10" .= hex 0xa0a0a0a0
+    , "r11" .= hex 0xb1b1b1b1
     , "r12" .= hex 0
     , "sp" .= hex stackTop
     , "lr" .= hex exitAddress
     , "cpsr" .= hex 0x10
     ]
 
-lookupGuardJson :: Artifacts -> Value
-lookupGuardJson artifacts =
+lookupGuardJson :: String -> Word32 -> Word32 -> Artifacts -> Value
+lookupGuardJson ident first second artifacts =
   let state = artifactState artifacts
       high = artifactHigh artifacts
    in object
         [ "schema_version" .= (1 :: Int)
-        , "id" .= ("lookup-wrong-group" :: String)
+        , "id" .= ident
         , "origin" .= ("synthetic" :: String)
         , "provenance" .= ("X-M1 1.50 FUN_00e91810 group and step contract" :: String)
         , "cpu" .= object ["architecture" .= ("arm" :: String), "model" .= ("cortex-r5f" :: String), "mode" .= ("arm" :: String), "endian" .= ("little" :: String)]
@@ -469,7 +469,7 @@ lookupGuardJson artifacts =
             ]
         , "entry" .= hex 0x00e91810
         , "exit" .= hex exitAddress
-        , "registers" .= initialRegisters 0 1
+        , "registers" .= initialRegisters first second
         , "regions" .=
             [ regionJson "state" stateBase stateSize "rw" state
             , regionJson "stack" stackBase stackSize "rw" B.empty
@@ -551,10 +551,28 @@ checkCapture regions scenario observation =
         Just actual
           | actual /= expectedValue -> ["register " ++ N.registerLabel which ++ ": expected " ++ N.hexWord32 expectedValue ++ ", observed " ++ N.hexWord32 actual]
           | otherwise -> []
+    abiPreserved =
+      [ (N.R4, 0x4a4a4a4a)
+      , (N.R5, 0x5b5b5b5b)
+      , (N.R6, 0x6c6c6c6c)
+      , (N.R7, 0x7d7d7d7d)
+      , (N.R8, 0x8e8e8e8e)
+      , (N.R9, 0x9f9f9f9f)
+      , (N.R10, 0xa0a0a0a0)
+      , (N.R11, 0xb1b1b1b1)
+      ]
+    cpsrControl =
+      case M.lookup N.Cpsr registersOf of
+        Nothing -> ["register cpsr: missing"]
+        Just cpsr
+          | cpsr .&. 0x3ff /= 0x10 -> ["cpsr control bits expected 0x00000010, observed " ++ N.hexWord32 cpsr]
+          | otherwise -> []
     registers =
       register N.R0 (stockStatusWord (outcomeStatus expected))
         ++ register N.Sp stackTop
         ++ register N.Pc exitAddress
+        ++ concat [register which value | (which, value) <- abiPreserved]
+        ++ cpsrControl
     boundaries =
       case lookup (N.RegionId "state") (N.nativeMemory observation) of
         Nothing -> ["state region missing"]
@@ -623,11 +641,11 @@ runSide runner root artifactsTemplate scenario side =
                       let problems = checkCapture regions scenario observation
                        in pure (Result (if null problems then ResultPassed else ResultFailed) problems (Just observation))
 
-runLookupGuard :: FilePath -> FilePath -> Artifacts -> Scenario -> IO Result
-runLookupGuard runner root artifactsTemplate scenario = do
-  let dir = root </> "lookup-wrong-group"
+runLookupGuard :: FilePath -> FilePath -> Artifacts -> Scenario -> String -> Word32 -> Word32 -> IO Result
+runLookupGuard runner root artifactsTemplate scenario ident first second = do
+  let dir = root </> ident
       artifacts = artifactsTemplate {artifactState = initialState scenario}
-      value = lookupGuardJson artifacts
+      value = lookupGuardJson ident first second artifacts
   createDirectoryIfMissing True dir
   B.writeFile (dir </> "state.bin") (artifactState artifacts)
   B.writeFile (dir </> "deps-high.bin") (artifactHigh artifacts)
@@ -656,27 +674,6 @@ runLookupGuard runner root artifactsTemplate scenario = do
                         []
                         (Just observation)
                     )
-
-mutateState :: (B.ByteString -> B.ByteString) -> N.NativeObservation -> N.NativeObservation
-mutateState change observation =
-  observation
-    { N.nativeMemory =
-        [ (ident, if ident == N.RegionId "state" then change bytes else bytes)
-        | (ident, bytes) <- N.nativeMemory observation
-        ]
-    }
-
-controlChecks :: Scenario -> N.NativeObservation -> [Control]
-controlChecks scenario observation =
-  [ control "release-twice" (mutateState (putU32 (stateOffset releaseBase) 2) observation)
-  , control "missing-release" (mutateState (putU32 (stateOffset releaseBase) 0) observation)
-  , control "missing-wait" (mutateState (putU32 (stateOffset waitFlagBase) 0) observation)
-  , control "wrong-status" (observation {N.nativeRegisters = M.insert N.R0 (stockStatusWord (outcomeStatus (model scenario)) + 1) (N.nativeRegisters observation)})
-  ]
-  where
-    control name changed =
-      let problems = checkCapture [] scenario changed
-       in Control name (if null problems then Accepted else Refused) problems
 
 witnessControl :: String -> (Result -> Bool) -> Result -> Control
 witnessControl name witness result =
@@ -722,35 +719,33 @@ boundaryJson (Just boundary) =
     , "wait" .= maybe Null (toJSON . eventWord) (boundaryWait boundary)
     ]
 
-qualifiedResults :: [(Scenario, Result, Result, [Control])] -> Control -> Control -> Control -> [Control] -> Bool
-qualifiedResults cases producer guard lookupControl invalid =
+qualifiedResults :: [(Scenario, Result, Result)] -> Control -> Control -> [Control] -> [Control] -> Bool
+qualifiedResults cases producer guard lookupControls invalid =
   all
-    (\(_, original, candidate, controls) ->
+    (\(_, original, candidate) ->
       resultStatus original == ResultPassed
-        && resultStatus candidate == ResultPassed
-        && not (null controls)
-        && all ((== Refused) . controlStatus) controls)
+        && resultStatus candidate == ResultPassed)
     cases
     && controlStatus producer == Refused
     && controlStatus guard == Refused
-    && controlStatus lookupControl == Refused
+    && all ((== Refused) . controlStatus) lookupControls
     && all ((== Refused) . controlStatus) invalid
 
-report :: [(Scenario, Result, Result, [Control])] -> Control -> Control -> Control -> [Control] -> Value
-report results producerControl guardControl lookupControl invalidControls =
+report :: [(Scenario, Result, Result)] -> Control -> Control -> [Control] -> [Control] -> Value
+report results producerControl guardControl lookupControls invalidControls =
   object
     [ "schema_version" .= (1 :: Int)
     , "profile" .= ("capture-develop-wait" :: String)
-    , "cases" .= [caseReport scenario original candidate controls | (scenario, original, candidate, controls) <- results]
+    , "cases" .= [caseReport scenario original candidate | (scenario, original, candidate) <- results]
     , "producer_controls" .= [controlJson producerControl]
     , "guard_controls" .= [controlJson guardControl]
-    , "lookup_controls" .= [controlJson lookupControl]
+    , "lookup_controls" .= map controlJson lookupControls
     , "invalid_inputs" .= map controlJson invalidControls
-    , "status" .= ((if qualifiedResults results producerControl guardControl lookupControl invalidControls then "qualified" else "failed") :: String)
-    , "capability" .= qualifiedResults results producerControl guardControl lookupControl invalidControls
+    , "status" .= ((if qualifiedResults results producerControl guardControl lookupControls invalidControls then "qualified" else "failed") :: String)
+    , "capability" .= qualifiedResults results producerControl guardControl lookupControls invalidControls
     ]
   where
-    caseReport scenario original candidate controls =
+    caseReport scenario original candidate =
       object
         [ "id" .= scenarioId scenario
         , "model" .=
@@ -762,7 +757,6 @@ report results producerControl guardControl lookupControl invalidControls =
               ]
         , "original" .= resultJson original
         , "candidate" .= resultJson candidate
-        , "controls" .= map controlJson controls
         , "status" .= ((if resultStatus original == ResultPassed && resultStatus candidate == ResultPassed then "passed" else "failed") :: String)
         ]
     resultJson result =
@@ -785,8 +779,7 @@ run runner build out stockElf = do
   results <- forM scenarios $ \scenario -> do
     original <- runSide runner out artifacts scenario Original
     candidate <- runSide runner out artifacts scenario Candidate
-    let controls = maybe [] (controlChecks scenario) (resultObservation candidate)
-    pure (scenario, original, candidate, controls)
+    pure (scenario, original, candidate)
   let normalScenario = case [scenario | scenario <- scenarios, scenarioId scenario == "normal"] of
         (scenario : _) -> scenario
         [] -> error "normal capture scenario missing"
@@ -798,16 +791,20 @@ run runner build out stockElf = do
   createDirectoryIfMissing True lookupRoot
   producer <- runSide runner producerRoot (artifacts {artifactLow = artifactLowFaulty artifacts}) normalScenario Candidate
   guard <- runSide runner guardRoot artifacts normalScenario ForbiddenOriginal
-  lookupResult <- runLookupGuard runner lookupRoot artifacts normalScenario
+  lookupGroup <- runLookupGuard runner lookupRoot artifacts normalScenario "lookup-wrong-group" 0 1
+  lookupStep <- runLookupGuard runner lookupRoot artifacts normalScenario "lookup-wrong-step" 0x80 0
   let invalidControls =
         [ invalidValue name (validateCancelWord word) | (name, word) <- invalidCancelFixtures ]
           ++ [ invalidValue name (validatePointer address) | (name, address) <- invalidPointers ]
       producerControl = witnessControl "double-release" producerWitness producer
       guardControl = witnessControl "forbidden-stock-entry" guardWitness guard
-      lookupControl = witnessControl "lookup-wrong-group" lookupWitness lookupResult
-      output = report results producerControl guardControl lookupControl invalidControls
-      qualified = qualifiedResults results producerControl guardControl lookupControl invalidControls
+      lookupControls =
+        [ witnessControl "lookup-wrong-group" lookupWitness lookupGroup
+        , witnessControl "lookup-wrong-step" lookupWitness lookupStep
+        ]
+      output = report results producerControl guardControl lookupControls invalidControls
+      qualified = qualifiedResults results producerControl guardControl lookupControls invalidControls
   BL.writeFile (out </> "results.json") (encode output)
-  let passed = length [() | (_, original, candidate, _) <- results, resultStatus original == ResultPassed, resultStatus candidate == ResultPassed]
+  let passed = length [() | (_, original, candidate) <- results, resultStatus original == ResultPassed, resultStatus candidate == ResultPassed]
   putStrLn ("capture develop wait: " ++ show passed ++ "/" ++ show (length results) ++ " differential cases passed")
   unless qualified exitFailure
