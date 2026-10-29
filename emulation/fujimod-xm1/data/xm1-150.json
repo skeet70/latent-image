@@ -2749,24 +2749,30 @@
     "play": {
       "code": "play",
       "row": 12,
-      "port": 2,
-      "pin": 9,
+      "pad": {
+        "port": 2,
+        "pin": 9
+      },
       "pressed_high": false
     },
     "shutter": {
       "half": {
         "code": "s1",
         "row": 5,
-        "port": 0,
-        "pin": 2,
+        "pad": {
+          "port": 0,
+          "pin": 2
+        },
         "pressed_high": false,
         "interrupt_index": 31
       },
       "full": {
         "code": "s2",
         "row": 6,
-        "port": 0,
-        "pin": 3,
+        "pad": {
+          "port": 0,
+          "pin": 3
+        },
         "pressed_high": false,
         "interrupt_index": 33
       }

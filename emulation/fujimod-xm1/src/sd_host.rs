@@ -365,6 +365,9 @@ impl SdHost {
         if !self.present()? {
             return Err("media read requires an inserted card".into());
         }
+        if u64::from(first.0) + u64::from(count.get()) > u64::from(self.card.sectors()) {
+            return Err("media read end exceeds the current card capacity".into());
+        }
         let mut bytes = vec![0; count.get() as usize * SECTOR];
         self.card.read_bytes(u64::from(first.0) * SECTOR as u64, &mut bytes)?;
         Ok(MediaRead { first, count, bytes })
@@ -1594,7 +1597,11 @@ mod tests {
         let capacity = rig.host.card().sectors();
         assert!(rig.host.read_sectors(SectorAddress(capacity), SectorCount::try_from(1).unwrap()).is_err());
         assert!(rig.host.read_sectors(SectorAddress(capacity - 1), SectorCount::try_from(2).unwrap()).is_err());
-        assert!(rig.host.read_sectors(SectorAddress(capacity - 2), SectorCount::try_from(2).unwrap()).is_ok());
+        let read = rig.host.read_sectors(SectorAddress(capacity - 2), SectorCount::try_from(2).unwrap()).unwrap();
+        assert_eq!(read.first, SectorAddress(capacity - 2));
+        assert_eq!(read.count.get(), 2);
+        assert_eq!(read.bytes.len(), 2 * SECTOR);
+        assert!(read.bytes.iter().all(|byte| *byte == 0));
     }
 
     #[test]

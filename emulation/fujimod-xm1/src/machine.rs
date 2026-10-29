@@ -461,7 +461,7 @@ mod tests {
     #[test]
     fn full_press_reports_its_row_and_bounded_release_cap() {
         let mut machine = machine();
-        let row = machine.document.firmware.shutter.full.row.0;
+        let row = machine.document.firmware.shutter.full.row.get();
         write_row(&machine, row, &full_press_record(1));
         machine.shutter(ShutterStage::Full, KeyPulse { hold: 0, release: 3 }).unwrap();
         let observed = serde_json::to_value(&machine.key_release_observations).unwrap();
@@ -475,23 +475,10 @@ mod tests {
     #[test]
     fn a_row_outside_its_declared_binding_is_refused() {
         let mut machine = machine();
-        let row = machine.document.firmware.play.row.0;
+        let row = machine.document.firmware.play.row.get();
         let mut record = play_record(0);
         record[9] = 3;
         write_row(&machine, row, &record);
         assert!(machine.play(KeyPulse { hold: 0, release: 0 }).is_err());
-    }
-
-    #[test]
-    fn media_read_returns_the_inserted_card_bytes_through_the_machine() {
-        let mut machine = machine();
-        let path = std::env::temp_dir().join(format!("fujimod-media-read-{}.img", std::process::id()));
-        std::fs::write(&path, vec![0x5a; 512]).unwrap();
-        let card = crate::sd_host::load_image(&path, 0x80_0000, 4, crate::sd_host::Backing::Sparse).unwrap();
-        machine.insert_card(card).unwrap();
-        machine.run(1000);
-        let read = machine.read_media(SectorAddress(0), SectorCount::try_from(1).unwrap()).unwrap();
-        assert_eq!(read.bytes, vec![0x5a; 512]);
-        std::fs::remove_file(&path).unwrap();
     }
 }

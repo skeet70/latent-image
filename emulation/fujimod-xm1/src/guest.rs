@@ -3,6 +3,7 @@
 
 use crate::run::{Address, NodeName};
 use fujimod_emulator::session::Session;
+use fujimod_emulator_devices::parts::pins::Pin;
 use serde::Deserialize;
 
 #[derive(Clone, Copy, Debug, Deserialize, serde::Serialize, PartialEq, Eq)]
@@ -152,9 +153,15 @@ pub struct GpioKey {
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(try_from = "u64")]
-pub struct TableRow(pub u64);
+pub struct TableRow(u64);
 
 const KEY_ROWS: u64 = 36;
+
+impl TableRow {
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
 
 impl TryFrom<u64> for TableRow {
     type Error = String;
@@ -188,38 +195,6 @@ impl GpioCode {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(try_from = "u8")]
-pub struct Port(u8);
-
-impl TryFrom<u8> for Port {
-    type Error = String;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        if value < 16 {
-            Ok(Self(value))
-        } else {
-            Err(format!("GPIO port {value} is outside 0..15"))
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(try_from = "u8")]
-pub struct Pin(u8);
-
-impl TryFrom<u8> for Pin {
-    type Error = String;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        if value < 16 {
-            Ok(Self(value))
-        } else {
-            Err(format!("GPIO pin {value} is outside 0..15"))
-        }
-    }
-}
-
 /// A class-4 row's upper halfword.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(transparent)]
@@ -230,20 +205,20 @@ pub struct InterruptIndex(u16);
 pub struct GpioBinding {
     pub code: GpioCode,
     pub row: TableRow,
-    pub port: Port,
-    pub pin: Pin,
+    pub pad: Pin,
     pub pressed_high: bool,
 }
 
 impl GpioBinding {
-    fn pad(&self) -> GpioKey {
-        GpioKey {
+    fn gpio(&self) -> Result<GpioKey, String> {
+        self.pad.validate()?;
+        Ok(GpioKey {
             code: self.code.value(),
-            row: self.row.0,
-            port: self.port.0,
-            pin: self.pin.0,
+            row: self.row.get(),
+            port: self.pad.port,
+            pin: self.pad.pin,
             pressed_high: self.pressed_high,
-        }
+        })
     }
 }
 
@@ -252,21 +227,21 @@ impl GpioBinding {
 pub struct ShutterBinding {
     pub code: GpioCode,
     pub row: TableRow,
-    pub port: Port,
-    pub pin: Pin,
+    pub pad: Pin,
     pub pressed_high: bool,
     pub interrupt_index: InterruptIndex,
 }
 
 impl ShutterBinding {
-    fn pad(&self) -> GpioKey {
-        GpioKey {
+    fn gpio(&self) -> Result<GpioKey, String> {
+        self.pad.validate()?;
+        Ok(GpioKey {
             code: self.code.value(),
-            row: self.row.0,
-            port: self.port.0,
-            pin: self.pin.0,
+            row: self.row.get(),
+            port: self.pad.port,
+            pin: self.pad.pin,
             pressed_high: self.pressed_high,
-        }
+        })
     }
 }
 
@@ -520,7 +495,7 @@ impl FirmwareFacts {
     }
 
     pub fn play(&self, session: &Session) -> Result<GpioKey, String> {
-        self.play.pad().checked(session, &self.key_table)
+        self.play.gpio()?.checked(session, &self.key_table)
     }
 
     pub fn shutter(&self, session: &Session, stage: ShutterStage) -> Result<GpioKey, String> {
@@ -528,15 +503,16 @@ impl FirmwareFacts {
             ShutterStage::Half => &self.shutter.half,
             ShutterStage::Full => &self.shutter.full,
         };
-        let record = bytes::<28>(session, self.key_table.base.0 + key.row.0 * self.key_table.row_bytes)?;
+        let pad = key.gpio()?;
+        let record = bytes::<28>(session, self.key_table.base.0 + key.row.get() * self.key_table.row_bytes)?;
         let word = |offset| u32::from_le_bytes([record[offset], record[offset + 1], record[offset + 2], record[offset + 3]]);
         let halfword = |offset| u16::from_le_bytes([record[offset], record[offset + 1]]);
-        if word(0) != key.code.value() || record[9] != 4 || word(12) != u32::from(key.pin.0)
+        if word(0) != key.code.value() || record[9] != 4 || word(12) != u32::from(pad.pin)
             || halfword(16) != SHUTTER_RECORD_LOWER || halfword(18) != key.interrupt_index.0
         {
             return Err(format!("{stage:?} shutter row differs from its declared binding"));
         }
-        Ok(key.pad())
+        Ok(pad)
     }
 
     pub fn released(&self, session: &Session, key: RouteKey) -> Result<bool, String> {
