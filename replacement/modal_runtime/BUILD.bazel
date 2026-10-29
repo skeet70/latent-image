@@ -70,8 +70,8 @@ haskell_binary(
 )
 
 haskell_library(
-    name = "targets",
-    srcs = ["Replacement/ModalRuntime/Targets.hs"],
+    name = "closure",
+    srcs = ["Replacement/ModalRuntime/Closure.hs"],
     ghcopts = [
         "-XGHC2021",
         "-Wall",
@@ -81,14 +81,17 @@ haskell_library(
     src_strip_prefix = ".",
     visibility = ["//visibility:public"],
     deps = [
+        "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:containers",
+        "//host/firmware:bank-allowlist",
     ],
 )
 
 haskell_binary(
-    name = "modal-targets",
-    srcs = ["ModalTargetsMain.hs"],
+    name = "modal-closure",
+    srcs = ["ModalClosureMain.hs"],
     ghcopts = [
         "-XGHC2021",
         "-Wall",
@@ -98,12 +101,15 @@ haskell_binary(
     ],
     visibility = ["//visibility:public"],
     deps = [
-        ":targets",
+        ":closure",
         "//emulation:case-sha256",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:directory",
         "//host:json",
+        "//host:text",
+        "//host:vector",
+        "//host/firmware:bank-allowlist",
     ],
 )

@@ -87,10 +87,10 @@ fixtureRamBase = 0x00970000
 actionTableBase = fixtureRamBase + 0x1000
 transitionTableBase = fixtureRamBase + 0x2000
 
-bogusTransitionBase, bogusCellBase, logBase, prehookLogBase :: Word32
+bogusTransitionBase, bogusCellBase, callbackLogBase, prehookLogBase :: Word32
 bogusTransitionBase = fixtureRamBase + 0x2400
 bogusCellBase = fixtureRamBase + 0x0800
-logBase = fixtureRamBase + 0x3000
+callbackLogBase = fixtureRamBase + 0x3000
 prehookLogBase = fixtureRamBase + 0x3040
 
 fixtureCodeBase, actionFunctionAddr, transitionFunctionAddr :: Word32
@@ -229,6 +229,7 @@ data Scenario = Scenario
   , scenarioDecoyTransition :: Bool
   , scenarioProbePrehook :: Bool
   , scenarioFault :: Fault
+  , scenarioExpectedState :: Word16
   }
 
 cellAddress :: Scenario -> Word32
@@ -296,7 +297,7 @@ expectedOf scenario =
     Nothing ->
       Expected
         { expectedReturn = 0
-        , expectedState = scenarioState scenario
+        , expectedState = scenarioExpectedState scenario
         , expectedShadow = replicate 3 shadowSentinel
         , expectedActionLog = replicate 4 logSentinel
         , expectedTransitionLog = replicate 4 logSentinel
@@ -326,10 +327,7 @@ expectedOf scenario =
                 case scenarioAction scenario of
                   NoAction -> 0
                   ActionCall result _ _ -> result
-            , expectedState =
-                if high <= 0
-                  then fromIntegral ((negate (fromIntegral high :: Integer)) `mod` 65536)
-                  else scenarioState scenario
+            , expectedState = scenarioExpectedState scenario
             , expectedShadow = [fromIntegral controllerId, scenarioState scenario, scenarioEvent scenario]
             , expectedActionLog = actionLog
             , expectedTransitionLog = transitionLog
@@ -364,7 +362,7 @@ actionFunction scenario =
               FaultHigh high -> Just (withHigh mutation high)
               _ -> mutation
        in concat
-            [ movImm 12 logBase
+            [ movImm 12 callbackLogBase
             , [strImmediate 0 0, strImmediate 1 4, strImmediate 2 8, strImmediate 3 12]
             , mutationWords scenario mutated
             , movImm 0 returned
@@ -403,7 +401,7 @@ mutationWords scenario (Just mutation) =
 transitionFunction :: Scenario -> [Word32]
 transitionFunction scenario =
   concat
-    [ movImm 12 (logBase + 16)
+    [ movImm 12 (callbackLogBase + 16)
     , [strImmediate 0 0, strImmediate 1 4, strImmediate 2 8, strImmediate 3 12]
     , movImm 0 (scenarioTransitionReturn scenario)
     , [bxLr]
@@ -520,7 +518,7 @@ caseValue spec =
     , "origin" .= ("synthetic" :: String)
     , "provenance" .= ("owned modal dispatcher differential: X-M1 1.50 FUN_00bfb028 stock body against rb_modal_dispatch with the same retained prehook, tables and generated callbacks" :: String)
     , "cpu" .= object ["architecture" .= ("arm" :: String), "model" .= ("cortex-r5f" :: String), "mode" .= ("arm" :: String), "endian" .= ("little" :: String)]
-    , "artifacts" .= [artifactJson region | CaseRegion region _ <- caseSpecRegions spec, not (B.all (== 0) (regionBytes region))]
+    , "artifacts" .= [artifactJson caseRegion | caseRegion@(CaseRegion region _) <- caseSpecRegions spec, not (B.all (== 0) (regionBytes region))]
     , "entry" .= hex (caseSpecEntry spec)
     , "exit" .= hex exitAddr
     , "registers" .= object [fromString (registerLabel register) .= hex value | (register, value) <- initialRegisters]
@@ -535,7 +533,7 @@ caseValue spec =
           , "memory" .= ([] :: [Value])
           , "events" .= ([] :: [Value])
           ]
-    , "exclusions" .= ["single dispatcher call; retained prehook, tables and generated action/transition callbacks; no scheduler, interrupt, frame or device path"]
+    , "exclusions" .= (["single dispatcher call; retained prehook, tables and generated action/transition callbacks; no scheduler, interrupt, frame or device path"] :: [String])
     ]
 
 regionJson :: CaseRegion -> Value
@@ -627,8 +625,7 @@ requiredSymbols =
   [ "__rb_image_start"
   , "rb_modal_dispatch"
   , "rb_modal_call_prehook"
-  , "rb_modal_call_action"
-  , "rb_modal_call_transition"
+  , "rb_modal_call"
   ]
 
 parseSymbols :: [String] -> String -> M.Map String Symbol
@@ -708,8 +705,7 @@ buildCase context variant scenario =
             , caseSpecFunctions =
                 [ symbolFunction context "rb_modal_dispatch"
                 , symbolFunction context "rb_modal_call_prehook"
-                , symbolFunction context "rb_modal_call_action"
-                , symbolFunction context "rb_modal_call_transition"
+                , symbolFunction context "rb_modal_call"
                 , (prehookAddr, fromIntegral prehookSize)
                 , (noopAddr, fromIntegral noopSize)
                 ]
@@ -730,7 +726,7 @@ loadObserved runner path = do
   value <- jsonRead out
   ensure (get value "wire_version" == Number 1) "invalid runner output"
   observation <- either (error . renderObservationError) pure (observeNative exit regions value)
-  when (nativeStatus observation /= Returned && exit == ExitSuccess) $
+  when (nativeStatus observation /= Returned && exit /= ExitFailure 1) $
     error "contradictory runner status and process exit"
   B.writeFile (directory </> "runner-observation.json") (encodeCanonical value)
   pure observation
@@ -868,12 +864,12 @@ allowedWriteIntervals scenario =
       Nothing -> []
       Just _ -> [(cellAddress scenario + 2, 2)]
   actionLogIntervals =
-    [ (logBase + 4 * fromIntegral offset, 4)
+    [ (callbackLogBase + 4 * fromIntegral offset, 4)
     | actionPresent scenario
     , offset <- [0 .. 3 :: Int]
     ]
   transitionLogIntervals =
-    [ (logBase + 16 + 4 * fromIntegral offset, 4)
+    [ (callbackLogBase + 16 + 4 * fromIntegral offset, 4)
     | transitionCalled scenario
     , offset <- [0 .. 3 :: Int]
     ]
@@ -892,6 +888,7 @@ data Diff
   | CpsrDiff
   | MemoryDiff RegionId
   | ProvenanceDiff
+  deriving (Eq)
 
 renderDiff :: Diff -> String
 renderDiff StatusDiff = "status"
@@ -933,7 +930,6 @@ data Outcome = Outcome
   , outcomeOk :: Bool
   , outcomeMismatches :: [String]
   , outcomeStock :: Maybe NativeObservation
-  , outcomeOwned :: Maybe NativeObservation
   }
 
 runScenario :: Context -> Scenario -> IO Outcome
@@ -941,11 +937,11 @@ runScenario context scenario = do
   result <- try (runScenario' context scenario)
   pure $ case result of
     Left (exception :: SomeException) ->
-      Outcome (scenarioId scenario) False ["exception: " ++ show exception] Nothing Nothing
-    Right (stock, owned, problems) ->
-      Outcome (scenarioId scenario) (null problems) problems (Just stock) (Just owned)
+      Outcome (scenarioId scenario) False ["exception: " ++ show exception] Nothing
+    Right (stock, problems) ->
+      Outcome (scenarioId scenario) (null problems) problems (Just stock)
 
-runScenario' :: Context -> Scenario -> IO (NativeObservation, NativeObservation, [String])
+runScenario' :: Context -> Scenario -> IO (NativeObservation, [String])
 runScenario' context scenario = do
   let expected = expectedOf scenario
       stockSpec = buildCase context StockVariant scenario
@@ -960,7 +956,7 @@ runScenario' context scenario = do
         map ("stock: " ++) (checkExpected scenario expected stock)
           ++ map ("owned: " ++) (checkExpected scenario expected owned)
           ++ map ("differential: " ++) (map renderDiff (compareObservations stock owned))
-  pure (stock, owned, problems)
+  pure (stock, problems)
 
 runOwnedControl :: Context -> Scenario -> NativeObservation -> [Diff] -> IO (Bool, String)
 runOwnedControl context scenario oracle expectedDiffs = do
@@ -1062,7 +1058,7 @@ runQualification options = do
       noop = sliceAt id5 (optionId5Base options) noopAddr noopSize
       context = Context (optionRunner options) (optionOutput options) symbols kernelText stock prehook noop
       imageStart = symbolAddress context "__rb_image_start"
-  forM_ ["rb_modal_dispatch", "rb_modal_call_prehook", "rb_modal_call_action", "rb_modal_call_transition"] $ \name -> do
+  forM_ ["rb_modal_dispatch", "rb_modal_call_prehook", "rb_modal_call"] $ \name -> do
     let (address, size) = symbolFunction context name
     unless (imageStart <= address && address + size <= imageStart + fromIntegral (B.length kernelText)) $
       error ("owned symbol outside kernel-text.bin: " ++ name)
@@ -1103,16 +1099,16 @@ runQualification options = do
                   qualified = all (\(_, ok, _) -> ok) controls
                   report = renderedReport completed controls
               writeReport context completed controls
-              unless qualified $ retainFailures (optionOutput context) completed controls report
+              unless qualified $ retainFailures (contextOutput context) completed controls report
               pure qualified
  where
   writeFailed context completed controls = do
     let outcomes = completed
         report = renderedReport outcomes controls
     writeReport context outcomes controls
-    retainFailures (optionOutput context) outcomes controls report
+    retainFailures (contextOutput context) outcomes controls report
   writeReport context outcomes controls =
-    B.writeFile (optionOutput context </> "modal-runtime-results.json") (encodeCanonical (renderedReport outcomes controls))
+    B.writeFile (contextOutput context </> "modal-runtime-results.json") (encodeCanonical (renderedReport outcomes controls))
 
 runCases :: Context -> [Scenario] -> [Outcome] -> IO (Either Outcome [Outcome])
 runCases _ [] completed = pure (Right (reverse completed))
@@ -1139,20 +1135,20 @@ findScenario ident = case [scenario | scenario <- scenarios, scenarioId scenario
 
 scenarios :: [Scenario]
 scenarios =
-  [ Scenario "mr-null-cell" 0x1234 0x0002 0x0005 Nothing 0 5 1 NoAction False 0 False False NoFault
-  , Scenario "mr-null-action-zero" 3 4 5 (Just fixtureRamBase) 17 5 0 NoAction False 0 False False NoFault
-  , Scenario "mr-null-action-negative" 1 1 0 (Just fixtureRamBase) 1 5 (-1) NoAction False 0 False False NoFault
-  , Scenario "mr-null-action-minimum" 1 1 0 (Just fixtureRamBase) 1 5 (-32768) NoAction False 0 False False NoFault
-  , Scenario "mr-null-action-positive-null" 1 1 0 (Just fixtureRamBase) 1 5 1 NoAction False 0 False False NoFault
-  , Scenario "mr-null-action-positive-transition" 1 1 0 (Just fixtureRamBase) 1 5 2 NoAction True 0xdeadbeef False False NoFault
-  , Scenario "mr-action-nonpositive" 3 4 5 (Just fixtureRamBase) 17 5 (-2) (ActionCall 0x11223344 0x55667788 Nothing) False 0 False False NoFault
-  , Scenario "mr-action-zero" 3 4 5 (Just fixtureRamBase) 17 5 0 (ActionCall 0x01020304 0x05060708 Nothing) False 0 False False NoFault
-  , Scenario "mr-action-positive-null" 3 4 5 (Just fixtureRamBase) 17 5 1 (ActionCall 0x0a0b0c0d 0x0e0f1011 Nothing) False 0 False False NoFault
-  , Scenario "mr-action-positive-transition" 3 4 5 (Just fixtureRamBase) 17 5 1 (ActionCall 0x12131415 0x16171819 Nothing) True 0xffffffff False False NoFault
-  , Scenario "mr-index-wrap" 0x0100 0x0100 7 (Just fixtureRamBase) 7 5 (-1) (ActionCall 0x20212223 0x24252627 Nothing) False 0 False False NoFault
-  , Scenario "mr-mutate-to-negative" 3 4 5 (Just fixtureRamBase) 17 5 1 (ActionCall 0x30313233 0x34353637 (Just (Mutation (Just (-2)) Nothing Nothing Nothing))) False 0 True False NoFault
-  , Scenario "mr-mutate-to-positive" 3 4 5 (Just fixtureRamBase) 17 5 0 (ActionCall 0x40414243 0x44454647 (Just (Mutation (Just 2) Nothing Nothing Nothing))) True 0x55565758 False False NoFault
-  , Scenario "mr-capture-pointers" 3 4 5 (Just fixtureRamBase) 17 5 1 (ActionCall 0x50515253 0x54555657 (Just (Mutation (Just 2) (Just bogusCellBase) (Just 0) (Just bogusTransitionBase)))) False 0 True False NoFault
-  , Scenario "mr-negative-event-abi" 0xffff 0x0000 0x0000 (Just fixtureRamBase) 0 5 (-1) (ActionCall 0x60616263 0x64656667 Nothing) False 0 False True NoFault
-  , Scenario "mr-negative-state-abi" 0x0000 0x0000 0x8000 (Just fixtureRamBase) 0 5 (-1) (ActionCall 0x70717273 0x74757677 Nothing) False 0 False True NoFault
+  [ Scenario "mr-null-cell" 0x1234 0x0002 0x0005 Nothing 0 5 1 NoAction False 0 False False NoFault 5
+  , Scenario "mr-null-action-zero" 3 4 5 (Just fixtureRamBase) 17 5 0 NoAction False 0 False False NoFault 0
+  , Scenario "mr-null-action-negative" 1 1 0 (Just fixtureRamBase) 1 5 (-1) NoAction False 0 False False NoFault 1
+  , Scenario "mr-null-action-minimum" 1 1 0 (Just fixtureRamBase) 1 5 (-32768) NoAction False 0 False False NoFault 0x8000
+  , Scenario "mr-null-action-positive-null" 1 1 0 (Just fixtureRamBase) 1 5 1 NoAction False 0 False False NoFault 0
+  , Scenario "mr-null-action-positive-transition" 1 1 0 (Just fixtureRamBase) 1 5 2 NoAction True 0xdeadbeef False False NoFault 0
+  , Scenario "mr-action-nonpositive" 3 4 5 (Just fixtureRamBase) 17 5 (-2) (ActionCall 0x11223344 0x55667788 Nothing) False 0 False False NoFault 2
+  , Scenario "mr-action-zero" 3 4 5 (Just fixtureRamBase) 17 5 0 (ActionCall 0x01020304 0x05060708 Nothing) False 0 False False NoFault 0
+  , Scenario "mr-action-positive-null" 3 4 5 (Just fixtureRamBase) 17 5 1 (ActionCall 0x0a0b0c0d 0x0e0f1011 Nothing) False 0 False False NoFault 5
+  , Scenario "mr-action-positive-transition" 3 4 5 (Just fixtureRamBase) 17 5 1 (ActionCall 0x12131415 0x16171819 Nothing) True 0xffffffff False False NoFault 5
+  , Scenario "mr-index-wrap" 0x0100 0x0100 7 (Just fixtureRamBase) 7 5 (-1) (ActionCall 0x20212223 0x24252627 Nothing) False 0 False False NoFault 1
+  , Scenario "mr-mutate-to-negative" 3 4 5 (Just fixtureRamBase) 17 5 1 (ActionCall 0x30313233 0x34353637 (Just (Mutation (Just (-2)) Nothing Nothing Nothing))) False 0 True False NoFault 2
+  , Scenario "mr-mutate-to-positive" 3 4 5 (Just fixtureRamBase) 17 5 0 (ActionCall 0x40414243 0x44454647 (Just (Mutation (Just 2) Nothing Nothing Nothing))) True 0x55565758 False False NoFault 5
+  , Scenario "mr-capture-pointers" 3 4 5 (Just fixtureRamBase) 17 5 1 (ActionCall 0x50515253 0x54555657 (Just (Mutation (Just 2) (Just bogusCellBase) (Just 0) (Just bogusTransitionBase)))) False 0 True False NoFault 5
+  , Scenario "mr-negative-event-abi" 0xffff 0x0000 0x0000 (Just fixtureRamBase) 0 5 (-1) (ActionCall 0x60616263 0x64656667 Nothing) False 0 False True NoFault 1
+  , Scenario "mr-negative-state-abi" 0x0000 0x0000 0x8000 (Just fixtureRamBase) 0 5 (-1) (ActionCall 0x70717273 0x74757677 Nothing) False 0 False True NoFault 1
   ]

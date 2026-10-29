@@ -3,8 +3,7 @@
 //!
 //! Retained stock services: prehook `0x00d0cc68`; pointer tables `0x00cf58b8`,
 //! `0x00cfe2a8`, `0x00d0013c`; event/width/state cells `0x014676e4`,
-//! `0x00cd5e78`, `0x01467588`; prehook shadow `0x0095037e`. The wrappers carry
-//! r0-r3 across the callback boundary; r4-r11 and sp survive this entry.
+//! `0x00cd5e78`, `0x01467588`; prehook shadow `0x0095037e`.
 
 #[cfg(target_arch = "arm")]
 core::arch::global_asm!(include_str!("dispatch.S"));
@@ -246,15 +245,13 @@ fn residue(packed: u64) -> Residue {
 
 unsafe extern "C" {
     fn rb_modal_call_prehook(controller: u32, state: u32, event: u32, doubled: u32) -> u64;
-    fn rb_modal_call_action(target: u32, first: u32, second: u32, third: u32) -> u64;
-    fn rb_modal_call_transition(target: u32, first: u32, second: u32, table: u32) -> u64;
+    fn rb_modal_call(target: u32, first: u32, second: u32, third: u32) -> u64;
 }
 
 /// # Safety
 ///
-/// The captured controller tables, prehook and every admitted table entry must
-/// be callable at the addresses this boundary reads. Admitted entries include
-/// the bank-owned interposition target, not only stock functions.
+/// Every action and transition entry the captured tables can select must be
+/// an admitted target of the `//replacement/modal_runtime:modal-closure` proof.
 #[no_mangle]
 pub unsafe extern "C" fn rb_modal_dispatch(controller: u32) -> u32 {
     let controller = ControllerId::new(controller);
@@ -263,7 +260,8 @@ pub unsafe extern "C" fn rb_modal_dispatch(controller: u32) -> u32 {
         return 0;
     };
 
-    // 0x00bfb074/0x00bfb080/0x00bfb08c are LDRH (e19270b3/e19280b3/e19240b3).
+    // The stock event, width and state loads at 0x00bfb06c/0x00bfb078/0x00bfb084
+    // are LDRH (e19270b3/e19280b3/e19240b3).
     let prehook = residue(unsafe {
         rb_modal_call_prehook(
             controller.word(),
@@ -279,8 +277,9 @@ pub unsafe extern "C" fn rb_modal_dispatch(controller: u32) -> u32 {
 
     let (carried_first, carried_second, result) = match action {
         Some(target) => {
+            // The retained prehook returns with r2 still holding the event.
             let action_residue = residue(unsafe {
-                rb_modal_call_action(
+                rb_modal_call(
                     target.word(),
                     prehook.first,
                     prehook.second,
@@ -296,7 +295,7 @@ pub unsafe extern "C" fn rb_modal_dispatch(controller: u32) -> u32 {
     if let Some(index) = high.positive_index() {
         if let Some(target) = captured.transition.entry(index) {
             let _ = unsafe {
-                rb_modal_call_transition(
+                rb_modal_call(
                     target.word(),
                     carried_first,
                     carried_second,
