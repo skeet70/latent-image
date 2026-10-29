@@ -263,3 +263,20 @@ Use the same fixed workload, inputs, machine and engine. Change only the decoder
 Expected repeat result at this fixed workload: the same 55 case IDs, every case `passed` with `runner_status: returned`, the plan test passing, and the public caller interface preserved. A Rust implementation behind the existing C ABI may change internal layout; record address, size and ordering changes as observations and do not fail the workload on layout alone. If it adds cases, report the added cases separately rather than mixing them into the 55-case timing.
 
 The first-wave checkpoint applies the same rule to the measured cost. A lower time is an improvement only when the workload, machine, toolchain, engine, input state and cache state are the same. Otherwise the checkpoint records the changed condition and does not credit the difference to the replacement work.
+
+## 7. First-wave checkpoint
+
+Decision: continue with owned controller, lifecycle and startup boundaries. Do not spend the next wave only on detached leaf ports or blanket C rewrites.
+
+The matched C/Rust table in [the ownership report](recipe-bank-ui-ownership.md#measurement) does not demonstrate an end-to-end verification speedup. Its comparison values stay in that table. Credit the exercised source-level migration, ABI reuse and consumed contracts, and leave verification-time improvement unclaimed. Firmware investigation time remains unknown where it was not separately measured.
+
+The first wave qualifies bounded toolchain, validator, service and UI paths. It does not qualify camera-equivalent application/runtime behavior or startup. #121 is the bounded pilot and is qualified; #117 full application/runtime/startup milestones remain open. #85 remains hardware blocked and persistence is unpursued.
+
+Exposed dependencies:
+
+- preservation observation separates identity CPU stores from changed stores;
+- the direct `Cpu::write_memory` host-write hole was fixed at the SDK boundary;
+- natural mode and overlay-entry assumptions remain explicit;
+- retained modal, render, storage, scheduler, init and resource behavior still requires contracted retirement.
+
+Canonical SDK evidence and native C runner evidence remain separate; neither substitutes for the other.
