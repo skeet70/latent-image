@@ -191,8 +191,10 @@ data Scenario = Scenario
   , scExpect :: Effects
   }
 
-slotCount, inspectedSlots :: Int
+slotCount :: Int
 slotCount = 8
+
+inspectedSlots :: [Int]
 inspectedSlots = [0 .. slotCount - 1]
 
 ctxAddress :: Int -> Word32
@@ -289,11 +291,11 @@ defaultEffects scenario =
 setBit :: Int -> Effects -> Effects
 setBit slot effects = effects {eBitmap = replace slot 0x40000000 (eBitmap effects)}
 
-setCapture :: Int -> Word32 -> Effects -> Effects
-setCapture slot value effects = effects {eCapture = replace slot value (eCapture effects)}
+setCapture :: Int -> Word32 -> [Word32] -> [Word32]
+setCapture slot value values = replace slot value values
 
-setPermit :: Int -> Word32 -> Effects -> Effects
-setPermit slot value effects = effects {ePermit = replace slot value (ePermit effects)}
+setPermit :: Int -> Word32 -> [Word32] -> [Word32]
+setPermit slot value values = replace slot value values
 
 replace :: Int -> a -> [a] -> [a]
 replace index value values = take index values ++ [value] ++ drop (index + 1) values
@@ -644,8 +646,9 @@ caseJsonAt inputs scenario side entry regions =
     , "registers" .= initialRegisters scenario side
     , "regions" .= [regionJson ident base size bytes | (ident, base, size, bytes) <- regions]
     , "functions" .=
-        [object ["address" .= hex address, "size" .= size] | (address, size) <- stockFunctions]
-          ++ [object ["address" .= hex address, "size" .= size] | (address, size) <- candidateSpans inputs side]
+        ( [object ["address" .= hex address, "size" .= size] | (address, size) <- stockFunctions]
+            ++ [object ["address" .= hex address, "size" .= size] | (address, size) <- candidateSpans inputs side]
+        )
     , "stubs" .= ([] :: [Value])
     , "limits" .= object ["instructions" .= (4000000 :: Int), "wall_ms" .= (8000 :: Int)]
     , "expected" .=
@@ -742,8 +745,8 @@ checkWrites observation =
     N.Truncated _ -> ["provenance truncated"]
     N.Complete _ entries ->
       concat
-        [ if contains (N.GuestAddress stackBase) (fromIntegral stackSize) address (fromIntegral size)
-            || any (\(base, extent) -> contains (N.GuestAddress base) extent address (fromIntegral size)) allowedStores
+        [ if contains (N.GuestAddress (fromIntegral stackBase)) (fromIntegral stackSize) address (fromIntegral size)
+            || any (\(base, extent) -> contains (N.GuestAddress (fromIntegral base)) extent address (fromIntegral size)) allowedStores
             then []
             else ["write outside declared stores at " ++ show (N.guestAddress address)]
         | N.Write address (N.WriteBytes size) <- entries

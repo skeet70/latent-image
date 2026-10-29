@@ -7,12 +7,10 @@ use core::cmp::Ordering;
 /// `FUN_00e77168`'s slot bound: slots `0..=200`.
 pub const SLOT_BOUND: u32 = 0xc9;
 
-pub const MEDIA_WRITE_EVENT: EventBit = EventBit(0xbe);
-
 #[cfg(media_permit_defect)]
 const APPLIED_EVENT: EventBit = EventBit(0xbf);
 #[cfg(not(media_permit_defect))]
-const APPLIED_EVENT: EventBit = MEDIA_WRITE_EVENT;
+const APPLIED_EVENT: EventBit = EventBit(0xbe);
 
 /// The cancel-wait event signalled for kind 2 and 3 frames.
 pub const CANCEL_WAIT_EVENT: EventId = EventId(5);
@@ -27,7 +25,6 @@ pub struct SlotIndex(u8);
 
 impl SlotIndex {
     pub const FIRST: Self = SlotIndex(0);
-    pub const LAST: Self = SlotIndex((SLOT_BOUND - 1) as u8);
 
     pub const fn from_word(word: u32) -> Option<Self> {
         if word < SLOT_BOUND {
@@ -138,8 +135,6 @@ pub struct FrameContext(pub(crate) usize);
 pub struct PermitWord(pub u32);
 
 impl PermitWord {
-    pub const ZERO: Self = PermitWord(0);
-
     pub const fn is_zero(self) -> bool {
         self.0 == 0
     }
