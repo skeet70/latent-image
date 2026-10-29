@@ -208,7 +208,7 @@ initialState :: Scenario -> B.ByteString
 initialState scenario =
   putWords (stateOffset planBase) (planWords (scenarioPlan scenario))
     (putWords (stateOffset checkStatusBase) (map stockStatusWord (scenarioChecks scenario))
-      (putU32 (stateOffset admittedStepBase) 1
+      (putU32 (stateOffset admittedStepBase) 2
         (putU32 (stateOffset waitSignalBase) (maybe 0 requestedWord (scenarioWaitSignal scenario))
           (putU32 (stateOffset (contextBase + 0x4c)) (requestedWord (scenarioSignals scenario)) (B.replicate stateSize 0)))))
 
@@ -401,7 +401,7 @@ caseJson scenario side artifacts =
             ]
         , "entry" .= hex entry
         , "exit" .= hex exitAddress
-        , "registers" .= initialRegisters contextBase 1
+        , "registers" .= initialRegisters contextBase 2
         , "regions" .=
             [ regionJson "state" stateBase stateSize "rw" state
             , regionJson "stack" stackBase stackSize "rw" B.empty
@@ -791,7 +791,7 @@ run runner build out stockElf = do
   createDirectoryIfMissing True lookupRoot
   producer <- runSide runner producerRoot (artifacts {artifactLow = artifactLowFaulty artifacts}) normalScenario Candidate
   guard <- runSide runner guardRoot artifacts normalScenario ForbiddenOriginal
-  lookupGroup <- runLookupGuard runner lookupRoot artifacts normalScenario "lookup-wrong-group" 0 1
+  lookupGroup <- runLookupGuard runner lookupRoot artifacts normalScenario "lookup-wrong-group" 0 2
   lookupStep <- runLookupGuard runner lookupRoot artifacts normalScenario "lookup-wrong-step" 0x80 0
   let invalidControls =
         [ invalidValue name (validateCancelWord word) | (name, word) <- invalidCancelFixtures ]
