@@ -297,7 +297,7 @@ fn apply_kind_one(
         && word0.0.cmp(&count.0) == Ordering::Greater
         && word0.0 < minimum.0
     {
-        runtime.set_minimum(word0);
+        runtime.set_minimum(MinimumWord(word0.0));
     }
 
     index = 0;
@@ -346,7 +346,7 @@ fn apply_kind_broadcast(
 /// Entered by thunks `0x00e6a74c` and `0x00e6bb88`.
 pub fn apply_mirrored_permit(runtime: &mut impl PermitRuntime) -> PermitStatus {
     let mirrored = runtime.mirror();
-    let slot = match resolve(runtime, runtime.layout(), mirrored.word1) {
+    let slot = match resolve(runtime, runtime.layout(), FrameKey(mirrored.word1.0)) {
         Ok(slot) => slot,
         Err(ResolveError::UnknownKey) => {
             runtime.report_unresolved_key();
