@@ -12,6 +12,7 @@ xm1_rust_staticlib(
 xm1_rust_elf(
     name = "low",
     entry = "rb_mp_memcpy",
+    extra_ldflags = ["-Wl,-u,rb_mp_memcpy"],
     link_script = "low.ld",
     rust_staticlib = ":low-lib",
 )
@@ -26,6 +27,7 @@ xm1_rust_staticlib(
 xm1_rust_elf(
     name = "side-a",
     entry = "rb_mp_handback",
+    extra_ldflags = ["-Wl,-u,rb_mp_handback"],
     link_script = "side_a.ld",
     rust_staticlib = ":side-a-lib",
 )
@@ -40,6 +42,7 @@ xm1_rust_staticlib(
 xm1_rust_elf(
     name = "fatal2",
     entry = "rb_mp_fatal2",
+    extra_ldflags = ["-Wl,-u,rb_mp_fatal2"],
     link_script = "fatal2.ld",
     rust_staticlib = ":fatal2-lib",
 )
@@ -54,6 +57,7 @@ xm1_rust_staticlib(
 xm1_rust_elf(
     name = "side-b",
     entry = "rb_mp_fatal",
+    extra_ldflags = ["-Wl,-u,rb_mp_fatal"],
     link_script = "side_b.ld",
     rust_staticlib = ":side-b-lib",
 )
@@ -68,6 +72,7 @@ xm1_rust_staticlib(
 xm1_rust_elf(
     name = "command",
     entry = "rb_mp_command",
+    extra_ldflags = ["-Wl,-u,rb_mp_command"],
     link_script = "command.ld",
     rust_staticlib = ":command-lib",
 )
@@ -82,6 +87,7 @@ xm1_rust_staticlib(
 xm1_rust_elf(
     name = "cancel",
     entry = "rb_mp_cancel",
+    extra_ldflags = ["-Wl,-u,rb_mp_cancel"],
     link_script = "cancel.ld",
     rust_staticlib = ":cancel-lib",
 )
@@ -96,6 +102,7 @@ xm1_rust_staticlib(
 xm1_rust_elf(
     name = "count",
     entry = "rb_mp_subframe_count",
+    extra_ldflags = ["-Wl,-u,rb_mp_subframe_count"],
     link_script = "count.ld",
     rust_staticlib = ":count-lib",
 )
