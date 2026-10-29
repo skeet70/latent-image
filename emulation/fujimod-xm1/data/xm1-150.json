@@ -2747,7 +2747,7 @@
       "pressed_high": false
     },
     "play": {
-      "code": 11,
+      "code": "play",
       "row": 12,
       "port": 2,
       "pin": 9,
@@ -2755,7 +2755,7 @@
     },
     "shutter": {
       "half": {
-        "code": 7,
+        "code": "s1",
         "row": 5,
         "port": 0,
         "pin": 2,
@@ -2763,7 +2763,7 @@
         "interrupt_index": 31
       },
       "full": {
-        "code": 8,
+        "code": "s2",
         "row": 6,
         "port": 0,
         "pin": 3,

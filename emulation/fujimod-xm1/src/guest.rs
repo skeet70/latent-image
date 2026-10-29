@@ -51,7 +51,7 @@ impl DialTurn {
     }
 }
 
-/// One stage of the two-stage shutter button.
+/// A full press drives S2 without holding S1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShutterStage {
     Half,
@@ -133,7 +133,7 @@ pub struct FirmwareFacts {
     pub keys: Vec<AdcKey>,
     pub mode_dial: ModeDial,
     pub dial_push: GpioKey,
-    pub play: GpioKey,
+    pub play: GpioBinding,
     pub shutter: Shutter,
     pub subcommand: Subcommand,
     pub render: crate::render::RenderFacts,
@@ -150,25 +150,121 @@ pub struct GpioKey {
     pub pressed_high: bool,
 }
 
-/// Control-table kind 4.
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ShutterKey {
-    pub code: u32,
-    pub row: u64,
-    pub port: u8,
-    pub pin: u8,
-    pub pressed_high: bool,
-    pub interrupt_index: u16,
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(try_from = "u64")]
+pub struct TableRow(pub u64);
+
+const KEY_ROWS: u64 = 36;
+
+impl TryFrom<u64> for TableRow {
+    type Error = String;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        if value < KEY_ROWS {
+            Ok(Self(value))
+        } else {
+            Err(format!("control-table row {value} is outside 0..{KEY_ROWS}"))
+        }
+    }
 }
 
-impl ShutterKey {
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+pub enum GpioCode {
+    #[serde(rename = "s1")]
+    S1,
+    #[serde(rename = "s2")]
+    S2,
+    #[serde(rename = "play")]
+    Play,
+}
+
+impl GpioCode {
+    fn value(self) -> u32 {
+        match self {
+            Self::S1 => 7,
+            Self::S2 => 8,
+            Self::Play => 11,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(try_from = "u8")]
+pub struct Port(u8);
+
+impl TryFrom<u8> for Port {
+    type Error = String;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if value < 16 {
+            Ok(Self(value))
+        } else {
+            Err(format!("GPIO port {value} is outside 0..15"))
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(try_from = "u8")]
+pub struct Pin(u8);
+
+impl TryFrom<u8> for Pin {
+    type Error = String;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if value < 16 {
+            Ok(Self(value))
+        } else {
+            Err(format!("GPIO pin {value} is outside 0..15"))
+        }
+    }
+}
+
+/// A class-4 row's upper halfword.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct InterruptIndex(u16);
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GpioBinding {
+    pub code: GpioCode,
+    pub row: TableRow,
+    pub port: Port,
+    pub pin: Pin,
+    pub pressed_high: bool,
+}
+
+impl GpioBinding {
     fn pad(&self) -> GpioKey {
         GpioKey {
-            code: self.code,
-            row: self.row,
-            port: self.port,
-            pin: self.pin,
+            code: self.code.value(),
+            row: self.row.0,
+            port: self.port.0,
+            pin: self.pin.0,
+            pressed_high: self.pressed_high,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShutterBinding {
+    pub code: GpioCode,
+    pub row: TableRow,
+    pub port: Port,
+    pub pin: Pin,
+    pub pressed_high: bool,
+    pub interrupt_index: InterruptIndex,
+}
+
+impl ShutterBinding {
+    fn pad(&self) -> GpioKey {
+        GpioKey {
+            code: self.code.value(),
+            row: self.row.0,
+            port: self.port.0,
+            pin: self.pin.0,
             pressed_high: self.pressed_high,
         }
     }
@@ -177,8 +273,8 @@ impl ShutterKey {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Shutter {
-    pub half: ShutterKey,
-    pub full: ShutterKey,
+    pub half: ShutterBinding,
+    pub full: ShutterBinding,
 }
 
 /// Class-4 lower halfword of both shutter rows.
@@ -424,19 +520,19 @@ impl FirmwareFacts {
     }
 
     pub fn play(&self, session: &Session) -> Result<GpioKey, String> {
-        self.play.checked(session, &self.key_table)
+        self.play.pad().checked(session, &self.key_table)
     }
 
     pub fn shutter(&self, session: &Session, stage: ShutterStage) -> Result<GpioKey, String> {
         let key = match stage {
-            ShutterStage::Half => self.shutter.half,
-            ShutterStage::Full => self.shutter.full,
+            ShutterStage::Half => &self.shutter.half,
+            ShutterStage::Full => &self.shutter.full,
         };
-        let record = bytes::<28>(session, self.key_table.base.0 + key.row * self.key_table.row_bytes)?;
+        let record = bytes::<28>(session, self.key_table.base.0 + key.row.0 * self.key_table.row_bytes)?;
         let word = |offset| u32::from_le_bytes([record[offset], record[offset + 1], record[offset + 2], record[offset + 3]]);
         let halfword = |offset| u16::from_le_bytes([record[offset], record[offset + 1]]);
-        if word(0) != key.code || record[9] != 4 || word(12) != u32::from(key.pin)
-            || halfword(16) != SHUTTER_RECORD_LOWER || halfword(18) != key.interrupt_index
+        if word(0) != key.code.value() || record[9] != 4 || word(12) != u32::from(key.pin.0)
+            || halfword(16) != SHUTTER_RECORD_LOWER || halfword(18) != key.interrupt_index.0
         {
             return Err(format!("{stage:?} shutter row differs from its declared binding"));
         }
