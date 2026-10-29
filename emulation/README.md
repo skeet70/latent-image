@@ -852,6 +852,8 @@ The FujiMod routes ran one after another and the two retained routes ran togethe
 
 Observed 2026-10-29 (emulated, E-FUJIMOD-XM1-PLAY-JPEG-150): with a 4 GiB FAT32 card holding one X-M1 JPEG, one PLAY input from the shooting screen moves UI mode `0x009500ec` from 3 to 4. The stock file client reads the whole file through SD CMD18, and the `0xfff63000` engine reaches FujiMod's decode-completion interrupt twice. The displayed frame is that photograph under the playback overlay. The card receives no write, and `media-read` returns the file unchanged. The decode requester is bound only statically, as `0x01220294` → `0x00d9882c` → `0x00d99714`, and the programmed decode source and output are unobserved. Pixel fidelity is unproved.
 
+Observed 2026-10-29 (emulated, E-FUJIMOD-XM1-S2-CONTACT-BOUNDARY-150): with the same card, P mode and SHOOT WITHOUT LENS ON, one S2 contact is admitted and drives shooting modal `0x4a` from state 6 to state 8. Request `0x206` leaves recorder machine `0x4e` in state 9, waiting for a completion message. No codec, save or SD write activity follows within the next 40,000,000 instructions. The image-input node declares no sensor or frame period, so its channel-2/3 raw DMA and interrupt lines 36/37 never run. Whether the firmware waits on those lines is unobserved.
+
 ### Trajectory variants on FujiMod
 
 Render and key timing differ between the engines, so a recorded trajectory can need different press timing on FujiMod. A FujiMod variant of `NAME.json` is a separate file, `NAME.fujimod.json`, next to it. It may differ from the retained file only in press timing:
