@@ -5,8 +5,7 @@ pub const CLEAR_COUNT: usize = 0x009a1200;
 pub const CLEAR_TRACE: usize = 0x009a1204;
 pub const ADVANCE_COUNT: usize = 0x009a1300;
 pub const ADVANCE_TRACE: usize = 0x009a1304;
-pub const WAIT_COUNT: usize = 0x009a1320;
-pub const WAIT_TRACE: usize = 0x009a1324;
+pub const CURRENT_STATE: usize = 0x009a1340;
 
 #[inline(always)]
 pub fn read(address: usize) -> u32 {

@@ -1,7 +1,7 @@
 #[path = "common.rs"]
 mod common;
 
-use common::{ADVANCE_COUNT, ADVANCE_TRACE, CHECK_COUNT, CHECK_STATUS, CLEAR_COUNT, CLEAR_TRACE, PLAN, read, record, write};
+use common::{ADVANCE_COUNT, ADVANCE_TRACE, CHECK_COUNT, CHECK_STATUS, CLEAR_COUNT, CLEAR_TRACE, CURRENT_STATE, PLAN, read, record, write};
 
 #[no_mangle]
 pub extern "C" fn capture_plan_lookup(_first: u32, _step: u32) -> *const u32 {
@@ -29,6 +29,7 @@ pub extern "C" fn capture_clear(_context: u32, event: u32) {
 
 #[no_mangle]
 pub extern "C" fn capture_advance(_context: u32, state: u32) {
+    write(CURRENT_STATE, state);
     record(ADVANCE_COUNT, ADVANCE_TRACE, state)
 }
 

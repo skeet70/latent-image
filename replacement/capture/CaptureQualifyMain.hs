@@ -6,13 +6,13 @@ module Main where
 
 import Control.Exception (IOException, try)
 import Control.Monad (forM, when)
-import Data.Aeson (Value, encode, object, (.=))
+import Data.Aeson (Value (Null), encode, object, toJSON, (.=))
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
 import Data.Either (isLeft)
-import Data.List (sort)
+import Data.List (isPrefixOf)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import Emulation.NativeCase (Region, loadCase)
@@ -24,8 +24,9 @@ import System.Directory (canonicalizePath, createDirectoryIfMissing)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
+import System.IO.Error (userError)
 
-stateBase, stackBase, planBase, checkStatusBase, clearCountBase, clearTraceBase, advanceCountBase, advanceTraceBase, waitCountBase, waitTraceBase, waitSignalBase, releaseBase, candidateBase, depsHighBase, depsLowBase, exitAddress, stackTop, contextBase :: Word32
+stateBase, stackBase, planBase, checkStatusBase, clearCountBase, clearTraceBase, advanceCountBase, advanceTraceBase, waitFlagBase, waitStateBase, waitClearCountBase, waitClearTraceBase, waitEventBase, waitAdvanceCountBase, waitAdvanceTraceBase, finalFlagBase, finalStateBase, finalClearCountBase, finalClearTraceBase, finalAdvanceCountBase, finalAdvanceTraceBase, waitSignalBase, releaseBase, candidateBase, depsHighBase, depsLowBase, exitAddress, stackTop, contextBase :: Word32
 stateBase = 0x009a0000
 stackBase = 0x009a2000
 planBase = 0x009a1000
@@ -34,8 +35,19 @@ clearCountBase = 0x009a1200
 clearTraceBase = 0x009a1204
 advanceCountBase = 0x009a1300
 advanceTraceBase = 0x009a1304
-waitCountBase = 0x009a1320
-waitTraceBase = 0x009a1324
+waitFlagBase = 0x009a1344
+waitStateBase = 0x009a1348
+waitClearCountBase = 0x009a134c
+waitClearTraceBase = 0x009a1350
+waitEventBase = 0x009a1370
+waitAdvanceCountBase = 0x009a13a0
+waitAdvanceTraceBase = 0x009a13a4
+finalFlagBase = 0x009a1374
+finalStateBase = 0x009a1378
+finalClearCountBase = 0x009a137c
+finalClearTraceBase = 0x009a1380
+finalAdvanceCountBase = 0x009a13c8
+finalAdvanceTraceBase = 0x009a13cc
 waitSignalBase = 0x009a1400
 releaseBase = 0x009a1600
 candidateBase = 0x009c0000
@@ -45,13 +57,15 @@ exitAddress = 0x009c7ff0
 stackTop = 0x009a2ff0
 contextBase = 0x009a0000
 
-stateSize, stackSize, candidateSize, depsHighSize, depsLowSize, stockWaitOffset :: Int
+stateSize, stackSize, candidateSize, depsHighSize, depsLowSize, stockWaitOffset, stockWaitElfOffset, stockWaitSize :: Int
 stateSize = 0x2000
 stackSize = 0x1000
 candidateSize = 0x8000
 depsHighSize = 0x20000
 depsLowSize = 0x4000
 stockWaitOffset = fromIntegral (0x00e9e038 - depsHighBase)
+stockWaitElfOffset = 0x2ac720
+stockWaitSize = 0x11c
 
 hex :: Word32 -> String
 hex value = "0x" ++ replicate (8 - length digits) '0' ++ digits where digits = showHex value ""
@@ -66,13 +80,16 @@ putWords :: Int -> [Word32] -> B.ByteString -> B.ByteString
 putWords offset values bytes =
   foldl (\current (index, value) -> putU32 (offset + index * 4) value current) bytes (zip [0 :: Int ..] values)
 
-readU32 :: B.ByteString -> Int -> Word32
-readU32 bytes offset =
-  byte 0 .|. (byte 1 `shiftL` 8) .|. (byte 2 `shiftL` 16) .|. (byte 3 `shiftL` 24)
-  where
-    byte index =
-      fromIntegral
-        (if offset + index < B.length bytes then B.index bytes (offset + index) else 0) :: Word32
+readU32 :: B.ByteString -> Int -> Either String Word32
+readU32 bytes offset
+  | offset < 0 || offset + 4 > B.length bytes = Left ("read outside state at " ++ show offset)
+  | otherwise =
+      Right
+        ( fromIntegral (B.index bytes offset)
+            .|. (fromIntegral (B.index bytes (offset + 1)) `shiftL` 8)
+            .|. (fromIntegral (B.index bytes (offset + 2)) `shiftL` 16)
+            .|. (fromIntegral (B.index bytes (offset + 3)) `shiftL` 24)
+        )
 
 stateOffset :: Word32 -> Int
 stateOffset address = fromIntegral (address - stateBase)
@@ -95,11 +112,18 @@ data Scenario = Scenario
   , scenarioWaitSignal :: Word32
   }
 
+data Boundary = Boundary
+  { boundaryState :: Word32
+  , boundaryCleared :: [Word32]
+  , boundaryAdvanced :: [Word32]
+  , boundaryWait :: Maybe Word32
+  }
+  deriving (Eq, Show)
+
 data Outcome = Outcome
   { outcomeStatus :: Word32
-  , outcomeCleared :: [Word32]
-  , outcomeAdvanced :: [Word32]
-  , outcomeWaits :: [Word32]
+  , outcomeWait :: Maybe Boundary
+  , outcomeFinal :: Maybe Boundary
   , outcomeRelease :: Word32
   }
 
@@ -131,24 +155,30 @@ nextCheck (value : rest) = (value, rest)
 
 model :: Scenario -> Outcome
 model scenario
-  | entryStatus /= 0 = Outcome entryStatus [] [] [] 0
-  | cancelRequested plan (scenarioSignals scenario) = Outcome finalStatus [entryClear, cancelClear] [cancelState] [] 1
-  | advanceStatus /= 0 = Outcome advanceStatus [entryClear] [normalState] [] 1
-  | otherwise = Outcome finalStatus cleared advanced waited 1
+  | entryStatus /= 0 = Outcome entryStatus Nothing Nothing 0
+  | cancelRequested plan (scenarioSignals scenario) =
+      let (cancelStatus, _) = nextCheck afterEntry
+          final = Boundary cancelState [entryClear, cancelClear] [cancelState] Nothing
+       in Outcome cancelStatus Nothing (Just final) 1
+  | advanceStatus /= 0 =
+      Outcome advanceStatus Nothing (Just (Boundary normalState [entryClear] [normalState] Nothing)) 1
+  | otherwise =
+      let (finalStatus, _) = nextCheck afterAdvance
+          waitBoundary = Boundary normalState [entryClear] [normalState] (Just waitEvent)
+          final
+            | cancelRequested plan afterWait = Boundary cancelState [entryClear, cancelClear] [normalState, cancelState] Nothing
+            | otherwise = Boundary normalState [entryClear] [normalState] Nothing
+       in Outcome finalStatus (Just waitBoundary) (Just final) 1
   where
     plan = scenarioPlan scenario
     entryClear = planEntryClear plan
     cancelClear = planCancelClear plan
     normalState = planNormalState plan
     cancelState = planCancelState plan
+    waitEvent = planWaitEvent plan
     (entryStatus, afterEntry) = nextCheck (scenarioChecks scenario)
     (advanceStatus, afterAdvance) = nextCheck afterEntry
-    (finalStatus, _) = nextCheck afterAdvance
     afterWait = if scenarioWaitSignal scenario /= 0 then scenarioWaitSignal scenario else scenarioSignals scenario
-    waited = [planWaitEvent plan]
-    cancelledAfterWait = cancelRequested plan afterWait
-    cleared = if cancelledAfterWait then [entryClear, cancelClear] else [entryClear]
-    advanced = if cancelledAfterWait then [normalState, cancelState] else [normalState]
 
 initialState :: Scenario -> B.ByteString
 initialState scenario =
@@ -161,6 +191,7 @@ scenarios :: [Scenario]
 scenarios =
   [ Scenario "normal" base 0 [0, 0, 0] 0
   , Scenario "cancel-before" base 1 [0, 0] 0
+  , Scenario "cancel-before-final-error" base 1 [0, 7] 0
   , Scenario "cancel-wait" base 0 [0, 0, 0] 1
   , Scenario "entry-error" base 0 [5] 0
   , Scenario "advance-error" base 0 [0, 6, 0] 0
@@ -214,15 +245,21 @@ data Artifacts = Artifacts
   , artifactCandidateLength :: Int
   }
 
-loadArtifacts :: FilePath -> Int -> IO Artifacts
-loadArtifacts build candidateLength = do
-  high <- B.readFile (build </> "capture-deps-high.bin")
-  low <- B.readFile (build </> "capture-deps-low.bin")
-  faulty <- B.readFile (build </> "capture-deps-low-faulty.bin")
-  candidate <- B.readFile (build </> "capture-candidate.bin")
-  stock <- B.readFile (build </> "stock-wait.bin")
+loadArtifacts :: FilePath -> FilePath -> IO Artifacts
+loadArtifacts build stockElf = do
+  candidate <- B.readFile (build </> "replacement/capture/capture-candidate.bin")
+  high <- B.readFile (build </> "replacement/capture/capture-deps-high.bin")
+  low <- B.readFile (build </> "replacement/capture/capture-deps-low.bin")
+  faulty <- B.readFile (build </> "replacement/capture/capture-deps-low-faulty.bin")
+  elf <- B.readFile stockElf
+  when (B.length elf < stockWaitElfOffset + stockWaitSize) $
+    ioError (userError "stock ELF is too short for the wait entry")
+  let stock = B.take stockWaitSize (B.drop stockWaitElfOffset elf)
+  case readU32 stock 0 of
+    Right 0xe92d4870 -> pure ()
+    other -> ioError (userError ("stock wait entry differs: " ++ either id hex other))
   let highStock = overlay stockWaitOffset stock (ensure (stockWaitOffset + B.length stock) high)
-      guard = B.concat (replicate ((0x11c + 3) `div` 4) (u32le 0xe7f000f0))
+      guard = B.concat (replicate ((stockWaitSize + 3) `div` 4) (u32le 0xe7f000f0))
       highGuard = overlay stockWaitOffset guard (ensure (stockWaitOffset + B.length guard) high)
   pure
     Artifacts
@@ -232,15 +269,12 @@ loadArtifacts build candidateLength = do
       , artifactLow = pad depsLowSize low
       , artifactLowFaulty = pad depsLowSize faulty
       , artifactCandidate = pad candidateSize candidate
-      , artifactCandidateLength = candidateLength
+      , artifactCandidateLength = B.length candidate
       }
   where
     overlay offset bytes base = B.take offset base <> bytes <> B.drop (offset + B.length bytes) base
     ensure size bytes = if B.length bytes >= size then bytes else bytes <> B.replicate (size - B.length bytes) 0
     pad size bytes = B.take size (bytes <> B.replicate size 0)
-
-candidateLengthFrom :: FilePath -> IO Int
-candidateLengthFrom build = read <$> readFile (build </> "capture-candidate.length")
 
 syntheticSpans :: [(Word32, Int)]
 syntheticSpans =
@@ -276,10 +310,22 @@ artifactJson ident bytes =
     , "sha256" .= sha256Hex (sha256 bytes)
     ]
 
+data Side = Original | Candidate | ForbiddenOriginal deriving (Eq, Show)
+
+sideLabel :: Side -> String
+sideLabel Original = "original"
+sideLabel Candidate = "candidate"
+sideLabel ForbiddenOriginal = "forbidden-original"
+
+sideHigh :: Artifacts -> Side -> B.ByteString
+sideHigh artifacts Original = artifactHigh artifacts
+sideHigh artifacts Candidate = artifactHighForbidden artifacts
+sideHigh artifacts ForbiddenOriginal = artifactHighForbidden artifacts
+
 caseJson :: Scenario -> Side -> Artifacts -> Value
 caseJson scenario side artifacts =
   let state = artifactState artifacts
-      high = if side == Original then artifactHigh artifacts else artifactHighForbidden artifacts
+      high = sideHigh artifacts side
       entry = if side == Candidate then candidateBase else 0x00e9e038
       candidateSpan = ((artifactCandidateLength artifacts + 3) `div` 4) * 4
       spans = syntheticSpans ++ [(entry, if side == Candidate then candidateSpan else 0x11c)]
@@ -340,32 +386,61 @@ caseJson scenario side artifacts =
               , "events" .= ([] :: [Value])
               ]
         , "exclusions" .=
-            [ "Dependency effects are compared as sets; clear, advance and wait order and diagnostic log order are not asserted."
+            [ "Wait and release boundaries compare the current state, clear sequence and advance sequence; diagnostic log and check counts are not asserted."
             , "The stack region is execution scratch and is not compared."
             ]
         ]
-
-data Side = Original | Candidate | ForbiddenOriginal deriving (Eq, Show)
-
-sideLabel :: Side -> String
-sideLabel Original = "original"
-sideLabel Candidate = "candidate"
-sideLabel ForbiddenOriginal = "forbidden-original"
 
 contains :: N.GuestAddress -> Int -> N.GuestAddress -> Int -> Bool
 contains (N.GuestAddress base) extent (N.GuestAddress address) size =
   address >= base && address + fromIntegral size <= base + fromIntegral extent
 
-stateWords :: B.ByteString -> Word32 -> Word32 -> [Word32]
-stateWords bytes countBase traceBase =
-  [ readU32 bytes (stateOffset traceBase + index * 4)
-  | index <- [0 .. fromIntegral (min 8 (readU32 bytes (stateOffset countBase))) - 1]
-  ]
+readValues :: B.ByteString -> Word32 -> Word32 -> Either String [Word32]
+readValues bytes countBase traceBase = do
+  count <- readU32 bytes (stateOffset countBase)
+  if count > 8
+    then Left ("trace count exceeds the case capacity: " ++ show count)
+    else mapM (\index -> readU32 bytes (stateOffset traceBase + index * 4)) [0 .. fromIntegral count - 1]
+
+readWaitBoundary :: B.ByteString -> Either String (Maybe Boundary)
+readWaitBoundary bytes = do
+  flag <- readU32 bytes (stateOffset waitFlagBase)
+  case flag of
+    0 -> Right Nothing
+    1 -> do
+      state <- readU32 bytes (stateOffset waitStateBase)
+      cleared <- readValues bytes waitClearCountBase waitClearTraceBase
+      advanced <- readValues bytes waitAdvanceCountBase waitAdvanceTraceBase
+      event <- readU32 bytes (stateOffset waitEventBase)
+      Right (Just (Boundary state cleared advanced (Just event)))
+    other -> Left ("invalid wait boundary flag: " ++ show other)
+
+readFinalBoundary :: B.ByteString -> Either String (Maybe Boundary)
+readFinalBoundary bytes = do
+  flag <- readU32 bytes (stateOffset finalFlagBase)
+  case flag of
+    0 -> Right Nothing
+    1 -> do
+      state <- readU32 bytes (stateOffset finalStateBase)
+      cleared <- readValues bytes finalClearCountBase finalClearTraceBase
+      advanced <- readValues bytes finalAdvanceCountBase finalAdvanceTraceBase
+      Right (Just (Boundary state cleared advanced Nothing))
+    other -> Left ("invalid final boundary flag: " ++ show other)
+
+compareBoundary :: String -> Maybe Boundary -> Maybe Boundary -> [String]
+compareBoundary label expected actual =
+  case (expected, actual) of
+    (Nothing, Nothing) -> []
+    (Just _, Nothing) -> [label ++ " boundary missing"]
+    (Nothing, Just observed) -> [label ++ " boundary unexpected: " ++ show observed]
+    (Just expectedBoundary, Just observed)
+      | expectedBoundary == observed -> []
+      | otherwise -> [label ++ " boundary differs: expected " ++ show expectedBoundary ++ ", observed " ++ show observed]
 
 checkCapture :: [Region] -> Scenario -> N.NativeObservation -> [String]
 checkCapture regions scenario observation =
   case N.nativeStatus observation of
-    N.Returned -> registers ++ effects ++ writes
+    N.Returned -> registers ++ boundaries ++ writes
     status -> ["runner status " ++ N.runnerStatusLabel status]
   where
     expected = model scenario
@@ -380,26 +455,23 @@ checkCapture regions scenario observation =
       register N.R0 (outcomeStatus expected)
         ++ register N.Sp stackTop
         ++ register N.Pc exitAddress
-    effects =
+    boundaries =
       case lookup (N.RegionId "state") (N.nativeMemory observation) of
         Nothing -> ["state region missing"]
         Just bytes ->
-          let cleared = sort (stateWords bytes clearCountBase clearTraceBase)
-              advanced = sort (stateWords bytes advanceCountBase advanceTraceBase)
-              waits = sort (stateWords bytes waitCountBase waitTraceBase)
-              release = readU32 bytes (stateOffset releaseBase)
-           in [ "cleared effects differ: expected " ++ show (sort (outcomeCleared expected)) ++ ", observed " ++ show cleared
-              | cleared /= sort (outcomeCleared expected)
-              ]
-                ++ [ "advance effects differ: expected " ++ show (sort (outcomeAdvanced expected)) ++ ", observed " ++ show advanced
-                   | advanced /= sort (outcomeAdvanced expected)
-                   ]
-                ++ [ "wait effects differ: expected " ++ show (sort (outcomeWaits expected)) ++ ", observed " ++ show waits
-                   | waits /= sort (outcomeWaits expected)
-                   ]
-                ++ [ "release count expected " ++ show (outcomeRelease expected) ++ ", observed " ++ show release
-                   | release /= outcomeRelease expected
-                   ]
+          let observed = do
+                wait <- readWaitBoundary bytes
+                final <- readFinalBoundary bytes
+                release <- readU32 bytes (stateOffset releaseBase)
+                pure (wait, final, release)
+           in case observed of
+                Left problem -> [problem]
+                Right (wait, final, release) ->
+                  compareBoundary "wait" (outcomeWait expected) wait
+                    ++ compareBoundary "final" (outcomeFinal expected) final
+                    ++ [ "release count expected " ++ show (outcomeRelease expected) ++ ", observed " ++ show release
+                       | release /= outcomeRelease expected
+                       ]
     writes =
       case N.nativeProvenance observation of
         N.Truncated _ -> ["provenance truncated"]
@@ -428,7 +500,7 @@ runSide runner root artifactsTemplate scenario side =
           value = caseJson scenario side artifacts
       createDirectoryIfMissing True dir
       B.writeFile (dir </> "state.bin") (artifactState artifacts)
-      B.writeFile (dir </> "deps-high.bin") (artifactHigh artifacts)
+      B.writeFile (dir </> "deps-high.bin") (sideHigh artifacts side)
       B.writeFile (dir </> "deps-low.bin") (artifactLow artifacts)
       B.writeFile (dir </> "candidate.bin") (artifactCandidate artifacts)
       BL.writeFile (dir </> "case.json") (encode value)
@@ -460,43 +532,72 @@ mutateState change observation =
         ]
     }
 
-controlChecks :: Scenario -> N.NativeObservation -> [Value]
+data ControlStatus = Refused | Accepted deriving (Eq, Show)
+
+data Control = Control
+  { controlName :: String
+  , controlStatus :: ControlStatus
+  , controlProblems :: [String]
+  }
+
+controlJson :: Control -> Value
+controlJson control =
+  object
+    [ "name" .= controlName control
+    , "status" .= (if controlStatus control == Refused then "refused" else "accepted")
+    , "problems" .= controlProblems control
+    ]
+
+controlChecks :: Scenario -> N.NativeObservation -> [Control]
 controlChecks scenario observation =
   [ control "release-twice" (mutateState (putU32 (stateOffset releaseBase) 2) observation)
   , control "missing-release" (mutateState (putU32 (stateOffset releaseBase) 0) observation)
-  , control "missing-wait" (mutateState (putU32 (stateOffset waitCountBase) 0) observation)
+  , control "missing-wait" (mutateState (putU32 (stateOffset waitFlagBase) 0) observation)
   , control "wrong-status" (observation {N.nativeRegisters = M.insert N.R0 (outcomeStatus (model scenario) + 1) (N.nativeRegisters observation)})
   ]
   where
     control name changed =
       let problems = checkCapture [] scenario changed
-       in object ["name" .= name, "status" .= (if null problems then "accepted" else "refused"), "problems" .= problems]
+       in Control name (if null problems then Accepted else Refused) problems
 
-controlValue :: String -> Result -> Value
-controlValue name result =
-  object
-    [ "name" .= name
-    , "status" .= (if resultStatus result == "failed" && not (null (resultProblems result)) then "refused" else "accepted")
-    , "problems" .= resultProblems result
-    ]
+witnessControl :: String -> (Result -> Bool) -> Result -> Control
+witnessControl name witness result =
+  Control name (if witness result then Refused else Accepted) (resultProblems result)
 
-invalidValue :: String -> Either String () -> Value
+producerWitness :: Result -> Bool
+producerWitness result =
+  resultStatus result == "failed"
+    && maybe False ((== N.Returned) . N.nativeStatus) (resultObservation result)
+    && any ("release count expected" `isPrefixOf`) (resultProblems result)
+
+guardWitness :: Result -> Bool
+guardWitness result =
+  resultStatus result == "failed"
+    && "runner status unsupported_instruction" `elem` resultProblems result
+
+invalidValue :: String -> Either String () -> Control
 invalidValue name result =
+  Control name (if isLeft result then Refused else Accepted) [either id (const "") result]
+
+boundaryJson :: Maybe Boundary -> Value
+boundaryJson Nothing = Null
+boundaryJson (Just boundary) =
   object
-    [ "name" .= name
-    , "status" .= (if isLeft result then "refused" else "accepted")
-    , "reason" .= either id (const "") result
+    [ "state" .= boundaryState boundary
+    , "cleared" .= boundaryCleared boundary
+    , "advanced" .= boundaryAdvanced boundary
+    , "wait" .= maybe Null (toJSON :: Word32 -> Value) (boundaryWait boundary)
     ]
 
-report :: [(Scenario, Result, Result, [Value])] -> Value -> Value -> [Value] -> Value
+report :: [(Scenario, Result, Result, [Control])] -> Control -> Control -> [Control] -> Value
 report results producerControl guardControl invalidControls =
   object
     [ "schema_version" .= (1 :: Int)
     , "profile" .= ("capture-develop-wait" :: String)
     , "cases" .= [caseReport scenario original candidate controls | (scenario, original, candidate, controls) <- results]
-    , "producer_controls" .= [producerControl]
-    , "guard_controls" .= [guardControl]
-    , "invalid_inputs" .= invalidControls
+    , "producer_controls" .= [controlJson producerControl]
+    , "guard_controls" .= [controlJson guardControl]
+    , "invalid_inputs" .= map controlJson invalidControls
     , "status" .= (if capability results producerControl guardControl invalidControls then "qualified" else "failed")
     , "capability" .= capability results producerControl guardControl invalidControls
     ]
@@ -507,14 +608,13 @@ report results producerControl guardControl invalidControls =
         , "model" .=
             object
               [ "status" .= outcomeStatus (model scenario)
-              , "cleared" .= sort (outcomeCleared (model scenario))
-              , "advanced" .= sort (outcomeAdvanced (model scenario))
-              , "waits" .= sort (outcomeWaits (model scenario))
+              , "wait_boundary" .= boundaryJson (outcomeWait (model scenario))
+              , "final_boundary" .= boundaryJson (outcomeFinal (model scenario))
               , "release" .= outcomeRelease (model scenario)
               ]
         , "original" .= resultJson original
         , "candidate" .= resultJson candidate
-        , "controls" .= controls
+        , "controls" .= map controlJson controls
         , "status" .= (if resultStatus original == "passed" && resultStatus candidate == "passed" then "passed" else "failed")
         ]
     resultJson result =
@@ -525,25 +625,25 @@ report results producerControl guardControl invalidControls =
           resultStatus original == "passed"
             && resultStatus candidate == "passed"
             && not (null controls)
-            && all (\control -> str (get control "status") == "refused") controls)
+            && all ((== Refused) . controlStatus) controls)
         cases
-        && str (get producer "status") == "refused"
-        && str (get guard "status") == "refused"
-        && all (\control -> str (get control "status") == "refused") invalid
+        && controlStatus producer == Refused
+        && controlStatus guard == Refused
+        && all ((== Refused) . controlStatus) invalid
 
 main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    [runner, build, out] -> run runner build out
-    _ -> putStrLn "usage: capture-qualification RUNNER BUILD_DIR OUT_DIR" >> exitFailure
+    [runner, build, out, stockElf] -> run runner build out stockElf
+    _ -> putStrLn "usage: capture-qualification RUNNER BAZEL_BIN OUT_DIR STOCK_ELF" >> exitFailure
 
-run :: FilePath -> FilePath -> FilePath -> IO ()
-run runner build out = do
-  candidateLength <- candidateLengthFrom build
+run :: FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+run runner build out stockElf = do
+  artifacts <- loadArtifacts build stockElf
+  let candidateLength = artifactCandidateLength artifacts
   when (candidateLength <= 0 || candidateLength >= fromIntegral (exitAddress - candidateBase)) $
     error "candidate text reaches the case exit"
-  artifacts <- loadArtifacts build candidateLength
   createDirectoryIfMissing True out
   results <- forM scenarios $ \scenario -> do
     original <- runSide runner out artifacts scenario Original
@@ -560,6 +660,8 @@ run runner build out = do
   let invalidControls =
         [ invalidValue (scenarioId scenario) (validateScenario scenario) | scenario <- invalidScenarios ]
           ++ [ invalidValue name (validatePointer address) | (name, address) <- invalidPointers ]
-  BL.writeFile (out </> "results.json") (encode (report results (controlValue "double-release" producer) (controlValue "forbidden-stock-entry" guard) invalidControls))
+      producerControl = witnessControl "double-release" producerWitness producer
+      guardControl = witnessControl "forbidden-stock-entry" guardWitness guard
+  BL.writeFile (out </> "results.json") (encode (report results producerControl guardControl invalidControls))
   let passed = length [() | (_, original, candidate, _) <- results, resultStatus original == "passed", resultStatus candidate == "passed"]
   putStrLn ("capture develop wait: " ++ show passed ++ "/" ++ show (length results) ++ " differential cases passed")

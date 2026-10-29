@@ -65,6 +65,12 @@ rb_capture_stock_wait:
     .word 0x007243a8
 .size rb_capture_stock_wait, .-rb_capture_stock_wait
 
+.global rb_capture_invalid_descriptor
+.type rb_capture_invalid_descriptor, %function
+rb_capture_invalid_descriptor:
+    udf #0
+.size rb_capture_invalid_descriptor, .-rb_capture_invalid_descriptor
+
 RB_CAPTURE_TRAMPOLINE rb_capture_stock_step_plan, 0x00e91810
 RB_CAPTURE_TRAMPOLINE rb_capture_stock_check, 0x00e93bdc
 RB_CAPTURE_TRAMPOLINE rb_capture_stock_advance, 0x00e9390c

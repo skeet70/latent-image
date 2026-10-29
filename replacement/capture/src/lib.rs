@@ -64,56 +64,37 @@ pub struct StepPlan {
 }
 
 impl StepPlan {
-    fn event(&self) -> EventId {
-        EventId(self.words[0])
+    unsafe fn word(plan: *const StepPlan, index: usize) -> u32 {
+        let words = core::ptr::addr_of!((*plan).words) as *const u32;
+        unsafe { core::ptr::read_volatile(words.add(index)) }
     }
 
-    fn entry_clear(&self) -> EventId {
-        EventId(self.words[1])
+    unsafe fn event(plan: *const StepPlan) -> EventId {
+        EventId(unsafe { Self::word(plan, 0) })
     }
 
-    fn cancel_clear(&self) -> EventId {
-        EventId(self.words[2])
+    unsafe fn entry_clear(plan: *const StepPlan) -> EventId {
+        EventId(unsafe { Self::word(plan, 1) })
     }
 
-    fn normal_state(&self) -> StepState {
-        StepState(self.words[3])
+    unsafe fn cancel_clear(plan: *const StepPlan) -> EventId {
+        EventId(unsafe { Self::word(plan, 2) })
     }
 
-    fn cancel_state(&self) -> StepState {
-        StepState(self.words[4])
+    unsafe fn normal_state(plan: *const StepPlan) -> StepState {
+        StepState(unsafe { Self::word(plan, 3) })
     }
 
-    fn wait_event(&self) -> EventId {
-        EventId(self.words[8])
+    unsafe fn cancel_state(plan: *const StepPlan) -> StepState {
+        StepState(unsafe { Self::word(plan, 4) })
     }
 
-    fn cancel_selector(&self) -> Option<CancelSelector> {
-        CancelSelector::from_word(self.words[9])
+    unsafe fn wait_event(plan: *const StepPlan) -> EventId {
+        EventId(unsafe { Self::word(plan, 8) })
     }
-}
 
-struct StepSnapshot {
-    event: EventId,
-    entry_clear: EventId,
-    cancel_clear: EventId,
-    normal_state: StepState,
-    cancel_state: StepState,
-    wait_event: EventId,
-    cancel_selector: CancelSelector,
-}
-
-impl StepSnapshot {
-    fn from_plan(plan: &StepPlan) -> Option<Self> {
-        Some(StepSnapshot {
-            event: plan.event(),
-            entry_clear: plan.entry_clear(),
-            cancel_clear: plan.cancel_clear(),
-            normal_state: plan.normal_state(),
-            cancel_state: plan.cancel_state(),
-            wait_event: plan.wait_event(),
-            cancel_selector: plan.cancel_selector()?,
-        })
+    unsafe fn cancel_selector(plan: *const StepPlan) -> Option<CancelSelector> {
+        CancelSelector::from_word(unsafe { Self::word(plan, 9) })
     }
 }
 
@@ -134,25 +115,28 @@ impl StepStatus {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ContextHandle(*mut u8);
+
 struct StockExecutor {
-    context: *mut u8,
+    context: ContextHandle,
 }
 
 impl StockExecutor {
     fn check(&mut self, event: EventId) -> StepStatus {
-        StepStatus::from_word(unsafe { rb_capture_stock_check(self.context, event.0) })
+        StepStatus::from_word(unsafe { rb_capture_stock_check(self.context.0, event.0) })
     }
 
     fn clear(&mut self, event: EventId) {
-        unsafe { rb_capture_stock_clear(self.context, event.0) }
+        unsafe { rb_capture_stock_clear(self.context.0, event.0) }
     }
 
     fn advance(&mut self, state: StepState) {
-        unsafe { rb_capture_stock_advance(self.context, state.0) }
+        unsafe { rb_capture_stock_advance(self.context.0, state.0) }
     }
 
     fn requested_events(&mut self) -> RequestedEvents {
-        RequestedEvents(unsafe { rb_capture_stock_cancel_signals(self.context) })
+        RequestedEvents(unsafe { rb_capture_stock_cancel_signals(self.context.0) })
     }
 
     fn wait(&mut self, event: EventId) {
@@ -164,42 +148,45 @@ impl StockExecutor {
     }
 
     fn log(&mut self, phase: LogPhase) {
-        unsafe { rb_capture_stock_log(self.context, phase as u32) }
+        unsafe { rb_capture_stock_log(self.context.0, phase as u32) }
     }
 }
 
-fn run_step(snapshot: StepSnapshot, executor: &mut StockExecutor) -> StepStatus {
-    let cancel = CancelMask::from_selector(snapshot.cancel_selector);
+unsafe fn run_step(plan: *const StepPlan, executor: &mut StockExecutor) -> StepStatus {
+    let cancel = match unsafe { StepPlan::cancel_selector(plan) } {
+        Some(selector) => CancelMask::from_selector(selector),
+        None => unsafe { rb_capture_invalid_descriptor() },
+    };
 
-    let status = executor.check(snapshot.event);
+    let status = executor.check(unsafe { StepPlan::event(plan) });
     if !status.succeeded() {
         return status;
     }
 
-    executor.clear(snapshot.entry_clear);
+    executor.clear(unsafe { StepPlan::entry_clear(plan) });
 
     if !cancel.requests_cancel(executor.requested_events()) {
-        executor.advance(snapshot.normal_state);
-        let status = executor.check(snapshot.event);
+        executor.advance(unsafe { StepPlan::normal_state(plan) });
+        let status = executor.check(unsafe { StepPlan::event(plan) });
         if !status.succeeded() {
             executor.release();
             return status;
         }
 
         executor.log(LogPhase::Waiting);
-        executor.wait(snapshot.wait_event);
+        executor.wait(unsafe { StepPlan::wait_event(plan) });
         executor.log(LogPhase::CancelCheck);
 
         if !cancel.requests_cancel(executor.requested_events()) {
-            let status = executor.check(snapshot.event);
+            let status = executor.check(unsafe { StepPlan::event(plan) });
             executor.release();
             return status;
         }
     }
 
-    executor.advance(snapshot.cancel_state);
-    executor.clear(snapshot.cancel_clear);
-    let status = executor.check(snapshot.event);
+    executor.advance(unsafe { StepPlan::cancel_state(plan) });
+    executor.clear(unsafe { StepPlan::cancel_clear(plan) });
+    let status = executor.check(unsafe { StepPlan::event(plan) });
     executor.release();
     status
 }
@@ -212,22 +199,20 @@ unsafe extern "C" {
     fn rb_capture_stock_wait(event: u32);
     fn rb_capture_stock_release();
     fn rb_capture_stock_log(context: *mut u8, phase: u32);
+    fn rb_capture_invalid_descriptor() -> !;
 }
 
 /// The caller owns the descriptor lookup.
 ///
 /// # Safety
 /// `context` is non-null, aligned, and points to the stock develop context.
-/// `plan` is non-null, aligned, points to a stock step descriptor, and its
-/// fields are not modified during the call. Descriptor `[9]` is `0xc` or in
-/// `0..=31`.
+/// `plan` is non-null, aligned, and points to a stock step descriptor. The
+/// descriptor fields are read with volatile reads at the stock use points;
+/// descriptor `[9]` is `0xc` or in `0..=31`.
 #[no_mangle]
 pub unsafe extern "C" fn rb_capture_step_wait(context: *mut u8, plan: *const StepPlan) -> i32 {
-    let plan = unsafe { &*plan };
-    let snapshot = match StepSnapshot::from_plan(plan) {
-        Some(snapshot) => snapshot,
-        None => unsafe { core::hint::unreachable_unchecked() },
+    let mut executor = StockExecutor {
+        context: ContextHandle(context),
     };
-    let mut executor = StockExecutor { context };
-    run_step(snapshot, &mut executor).word()
+    unsafe { run_step(plan, &mut executor) }.word()
 }
