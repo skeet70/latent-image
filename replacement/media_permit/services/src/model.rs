@@ -7,6 +7,8 @@ pub const TRACE_FAULTS: usize = 0x015b_8200;
 pub const TRACE_HANDBACK_CLASS: usize = 0x015b_8204;
 pub const TRACE_HANDBACK_COUNT: usize = 0x015b_8208;
 pub const TRACE_LOGS: usize = 0x015b_820c;
+pub const COUNT_CELL: usize = 0x015b_8300;
+pub const COUNT_ARMED: usize = 0x015b_8304;
 pub const TRACE_CAPACITY: u32 = 16;
 
 #[inline(always)]

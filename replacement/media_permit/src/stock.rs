@@ -2,10 +2,9 @@
 //! message, frame-table, bitmap and command services.
 
 use crate::media_permit::{
-    apply_mirrored_permit, receive_permit, FrameCommand, FrameContext, FrameCount, FrameIndex,
-    FrameKey, FrameKind, KeyField, KeyLayout, MessageClass, MessageId, MirroredMessage, MinimumWord,
-    PermitMessage, PermitRuntime, PermitStatus, PermitWord, ReceiveStatus, SlotIndex, SlotSource,
-    SubframeCount, SubframeIndex, MEDIA_WRITE_MESSAGE,
+    apply_mirrored_permit, FrameCommand, FrameContext, FrameCount, FrameIndex, FrameKey, FrameKind,
+    KeyField, KeyLayout, MirroredMessage, MinimumWord, PermitRuntime, PermitStatus, PermitWord,
+    SlotIndex, SlotSource, SubframeCount, SubframeIndex,
 };
 
 const LAYOUT_PRIMARY: usize = 0x0157_dd34;
@@ -24,22 +23,9 @@ const MINIMA: usize = 0x0158_1f60;
 const MIRROR_BYTES: usize = 0x10c;
 const MIRROR_WORD0: usize = 0x0c;
 const MIRROR_WORD1: usize = 0x10;
-const PAYLOAD_BYTES: u32 = 8;
-
-#[repr(C)]
-struct MessageWire {
-    message_id: u16,
-    source_a: u8,
-    source_b: u8,
-    length: u32,
-    payload: *const PermitMessage,
-}
 
 unsafe extern "C" {
-    fn rb_mp_stock_mirror_write(message: *const MessageWire);
     fn rb_mp_stock_mirror_read(source: u32, out: *mut u8);
-    fn rb_mp_stock_task_byte() -> u32;
-    fn rb_mp_stock_log(task: u32, name: *const u8);
     fn rb_mp_stock_frame_kind(slot: u32) -> u32;
     fn rb_mp_stock_bit_set(base: usize, bit: u32);
     fn rb_mp_stock_context(slot: u32) -> usize;
@@ -50,7 +36,6 @@ unsafe extern "C" {
     fn rb_mp_stock_frame_of_kind(index: u32, kind: u32) -> i32;
     fn rb_mp_stock_command(slot: u32, command: u32);
     fn rb_mp_stock_cancel(slot: u32, event: u32);
-    fn rb_mp_stock_hand_back(class: u32);
     fn rb_mp_stock_fatal();
 }
 
@@ -120,30 +105,11 @@ impl SlotSource for StockRuntime {
 }
 
 impl PermitRuntime for StockRuntime {
-    fn write_mirror(&mut self, message: &PermitMessage) {
-        let payload = *message;
-        let source = unsafe { rb_mp_stock_task_byte() } as u8;
-        let wire = MessageWire {
-            message_id: MEDIA_WRITE_MESSAGE.0,
-            source_a: source,
-            source_b: source,
-            length: PAYLOAD_BYTES,
-            payload: &payload,
-        };
-        unsafe { rb_mp_stock_mirror_write(&wire) };
-    }
-
-    fn log_message(&mut self) {
-        let task = unsafe { rb_mp_stock_task_byte() };
-        unsafe { rb_mp_stock_log(task, core::ptr::null()) };
-    }
-
     fn mirror(&self) -> MirroredMessage {
         let mut storage = core::mem::MaybeUninit::<[u8; MIRROR_BYTES]>::uninit();
         unsafe { rb_mp_stock_mirror_read(0, storage.as_mut_ptr() as *mut u8) };
         let bytes = unsafe { storage.assume_init_ref() };
         MirroredMessage {
-            message_id: MessageId(u16::from_le_bytes([bytes[0], bytes[1]])),
             word0: PermitWord(u32::from_le_bytes([
                 bytes[MIRROR_WORD0],
                 bytes[MIRROR_WORD0 + 1],
@@ -241,16 +207,6 @@ impl PermitRuntime for StockRuntime {
         write_u32(ACTIVE_SLOT, slot.word());
     }
 
-    fn publish_resolution(&mut self, slot: Option<SlotIndex>) {
-        write_u32(ACTIVE_SLOT, match slot {
-            Some(slot) => slot.word(),
-            None => u32::MAX,
-        });
-    }
-
-    fn hand_back(&mut self, class: MessageClass) {
-        unsafe { rb_mp_stock_hand_back(class.0) };
-    }
 }
 
 pub(crate) fn resolve_key(key: u32) -> i32 {
@@ -275,20 +231,14 @@ pub(crate) fn apply_mirror() -> u32 {
     }
 }
 
-pub(crate) fn send_words(word0: u32, word1: u32) -> u32 {
-    let mut runtime = StockRuntime;
-    let message = PermitMessage::new(PermitWord(word0), PermitWord(word1));
-    match send_permit(&mut runtime, &message) {
-        ReceiveStatus::Handled { .. } => 0,
-    }
-}
-
 #[no_mangle]
+#[link_section = ".text.rb_media_permit_resolve"]
 pub extern "C" fn rb_media_permit_resolve(key: u32) -> i32 {
     resolve_key(key)
 }
 
 #[no_mangle]
+#[link_section = ".text.rb_media_permit_apply"]
 pub extern "C" fn rb_media_permit_apply() -> u32 {
     apply_mirror()
 }

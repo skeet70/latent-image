@@ -68,9 +68,16 @@ commandSize = 0x1000
 cancelBase = 0x00e6d000
 cancelSize = 0x2000
 
-lowBase, lowSize :: Word32
+lowBase, lowSize, resolveEntry, applyEntry, entrySpan :: Word32
 lowBase = 0x00720000
 lowSize = 0x7000
+resolveEntry = 0x00900400
+applyEntry = 0x00900800
+entrySpan = 0x400
+
+countCell, countArmed :: Word32
+countCell = 0x015b8300
+countArmed = 0x015b8304
 
 mirrorBase, mirrorWord0, mirrorWord1, bitmapBase, minimaBase, activeBase :: Word32
 mirrorBase = 0x015ad430
@@ -181,6 +188,7 @@ data Scenario = Scenario
   , scWord1 :: Word32
   , scMin0 :: Word32
   , scResolve :: Maybe Word32
+  , scCountModel :: Bool
   , scExpect :: Effects
   }
 
@@ -225,6 +233,8 @@ initialGlobals scenario = putU16 (fromIntegral (mirrorBase - globalsBase)) 0x136
       , (minimaBase + 4, scMin0 scenario)
       , (minimaBase + 8, scMin0 scenario)
       , (activeBase, 0xffffffff)
+      , (countCell, if scCountModel scenario then 3 else 0)
+      , (countArmed, if scCountModel scenario then 1 else 0)
       ]
         ++ [ (listAddress slot, 0x5000 + fromIntegral slot) | (slot, _) <- scKinds scenario ]
         ++ [ (listAddress slot + 4, kindWord kind) | (slot, kind) <- scKinds scenario ]
@@ -294,18 +304,18 @@ resolverCase :: String -> Layout -> Word32 -> Int -> [(Int, Kind)] -> Maybe Word
 resolverCase ident layout key target extra expected =
   let missing = expected == Just 0xffffffff
       keys = if missing then [] else [target]
-      scenario = Scenario ident Resolver layout key extra [] keys 0 key 0x1000 expected emptyEffects
+      scenario = Scenario ident Resolver layout key extra [] keys 0 key 0x1000 expected False emptyEffects
       faults = if missing then 1 else 0
    in scenario {scExpect = (defaultEffects scenario) {eFaults = faults}}
 
 handlerCase :: String -> Word32 -> Word32 -> [(Int, Kind)] -> [(Int, Word32)] -> (Effects -> Effects) -> Scenario
 handlerCase ident word0 key kinds groups modify =
-  let scenario = Scenario ident Handler KindLayout key kinds groups [0] word0 key 0x1000 Nothing emptyEffects
+  let scenario = Scenario ident Handler KindLayout key kinds groups [0] word0 key 0x1000 Nothing (ident == "kind1-count-drop") emptyEffects
    in scenario {scExpect = modify (defaultEffects scenario)}
 
 messageCase :: String -> Layout -> Word32 -> Word32 -> [(Int, Kind)] -> [(Int, Word32)] -> [Int] -> (Effects -> Effects) -> Scenario
 messageCase ident layout word0 key kinds groups keys modify =
-  let scenario = Scenario ident Message layout key kinds groups keys word0 key 0x1000 Nothing emptyEffects
+  let scenario = Scenario ident Message layout key kinds groups keys word0 key 0x1000 Nothing False emptyEffects
    in scenario {scExpect = modify (defaultEffects scenario)}
 
 scenarios :: [Scenario]
@@ -328,6 +338,8 @@ scenarios =
       (\e -> (setBit 0 (setBit 1 (setBit 2 e))) {eCommands = [(2, 0), (1, 0), (0, 0)], eActive = 0, ePermit = setPermit 0 1 (setPermit 1 1 (setPermit 2 1 (ePermit e)))})
   , handlerCase "kind1-count-one" 2 0x79 [(0, K1), (1, K1)] [(0, 0x700), (1, 0x701)]
       (\e -> (setBit 0 e) {eCommands = [(0, 0)], eActive = 0, ePermit = setPermit 0 2 (ePermit e), eMinima = (2, 2, 2)})
+  , handlerCase "kind1-count-drop" 4 0x7a [(0, K1), (1, K1), (2, K1)] [(0, 0x700), (1, 0x700), (2, 0x700)]
+      (\e -> (setBit 0 (setBit 1 (setBit 2 e))) {eCommands = [(2, 0)], eActive = 2, ePermit = setPermit 0 4 (setPermit 1 4 (setPermit 2 4 (ePermit e))), eMinima = (4, 4, 4)})
   , handlerCase "kind2-broadcast" 0 0x75 [(0, K2), (1, K0), (2, K2)] []
       (\e -> (setBit 0 (setBit 2 e)) {eCancels = [(0, 5), (2, 5)], eCapture = setCapture 0 0 (setCapture 2 0 (eCapture e))})
   , handlerCase "kind3-broadcast" 9 0x76 [(0, K3)] []
@@ -387,6 +399,7 @@ data Inputs = Inputs
   , inSideB :: B.ByteString
   , inCommand :: B.ByteString
   , inCancel :: B.ByteString
+  , inCount :: B.ByteString
   , inStock :: B.ByteString
   }
 
@@ -400,6 +413,7 @@ loadInputs build stockElf = do
   sideB <- B.readFile (build </> "replacement/media_permit/services/side-b.bin")
   command <- B.readFile (build </> "replacement/media_permit/services/command.bin")
   cancel <- B.readFile (build </> "replacement/media_permit/services/cancel.bin")
+  count <- B.readFile (build </> "replacement/media_permit/services/count.bin")
   stock <- B.readFile stockElf
   when (B.null candidate || B.length candidate `mod` 4 /= 0 || B.length candidate > fromIntegral candidateSize) $
     ioError (userError "candidate bin is empty, unaligned or exceeds its region")
@@ -411,8 +425,10 @@ loadInputs build stockElf = do
     ioError (userError "defect text reaches the case exit")
   when (B.length low > fromIntegral lowSize) $
     ioError (userError "low model exceeds its declared region")
-  when (any B.null [sideA, fatal2, sideB, command, cancel]) $
+  when (any B.null [sideA, fatal2, sideB, command, cancel, count]) $
     ioError (userError "service model bin is empty")
+  when (B.length count > 0x80) $
+    ioError (userError "count model exceeds the stock subframe-count span")
   when (any (\(address, expected) -> stockWord stock address /= expected) stockEntries) $
     ioError (userError "stock ELF does not carry the admitted entry words")
   pure
@@ -425,6 +441,7 @@ loadInputs build stockElf = do
       , inSideB = sideB
       , inCommand = command
       , inCancel = cancel
+      , inCount = count
       , inStock = stock
       }
 
@@ -452,11 +469,45 @@ stockWord stock address =
     Right value -> value
     Left problem -> error ("stock entry " ++ hex address ++ " unreadable: " ++ problem)
 
+armBranch :: Word32 -> Word32 -> Word32
+armBranch from target =
+  let displacement = (fromIntegral target :: Int) - (fromIntegral from + 8)
+      immediate = (displacement `div` 4) .&. 0xffffff
+   in 0xea000000 .|. fromIntegral immediate
+
+patchRegion :: Word32 -> B.ByteString -> Word32 -> B.ByteString -> Either String B.ByteString
+patchRegion base bytes at piece
+  | at < base || at + fromIntegral (B.length piece) > base + fromIntegral (B.length bytes) =
+      Left ("patch outside region at " ++ hex at)
+  | otherwise =
+      Right (B.take offset bytes <> piece <> B.drop (offset + B.length piece) bytes)
+  where
+    offset = fromIntegral (at - base)
+
 overlay :: Word32 -> Word32 -> B.ByteString -> Word32 -> Either String B.ByteString
 overlay base size bytes at
   | at < base || at + fromIntegral (B.length bytes) > base + size = Left "model exceeds its region"
   | otherwise =
       Right (pad (fromIntegral size) (B.replicate (fromIntegral (at - base)) 0 <> bytes))
+
+frameBytes :: Inputs -> Side -> Scenario -> Either String B.ByteString
+frameBytes inputs side scenario
+  | side /= Original && scFamily scenario == Message = do
+      let stock = stockRegion inputs frameBase frameSize
+          branch = armBranch 0xe77168 resolveEntry
+          offset = fromIntegral (0xe77168 - frameBase)
+      case readU32 stock offset of
+        Right 0xe92d48f0 -> pure ()
+        Right word -> Left ("stock resolver entry differs: " ++ hex word)
+        Left problem -> Left problem
+      patched <- patchRegion frameBase stock 0xe77168 (u32le branch)
+      case readU32 patched offset of
+        Right word | word == branch -> pure patched
+        Right word -> Left ("candidate resolver entry is " ++ hex word)
+        Left problem -> Left problem
+  | scCountModel scenario =
+      patchRegion frameBase (stockRegion inputs frameBase frameSize) 0xe74c68 (inCount inputs)
+  | otherwise = Right (stockRegion inputs frameBase frameSize)
 
 regionBytes :: Inputs -> Side -> Scenario -> Either String [(String, Word32, Word32, B.ByteString)]
 regionBytes inputs side scenario = do
@@ -466,6 +517,7 @@ regionBytes inputs side scenario = do
   command <- overlay commandBase commandSize (inCommand inputs) 0x00e8d82c
   cancel <- overlay cancelBase cancelSize (inCancel inputs) 0x00e6e368
   low <- overlay lowBase lowSize (inLow inputs) 0x00722054
+  frame <- frameBytes inputs side scenario
   let candidate = pad (fromIntegral candidateSize) (case side of
         Original -> B.empty
         Candidate -> inCandidate inputs
@@ -475,7 +527,7 @@ regionBytes inputs side scenario = do
     , ("frames", framesBase, framesSize, initialFrames scenario)
     , ("stack", stackBase, stackSize, B.empty)
     , ("sender", senderBase, senderSize, stockRegion inputs senderBase senderSize)
-    , ("frame", frameBase, frameSize, stockRegion inputs frameBase frameSize)
+    , ("frame", frameBase, frameSize, frame)
     , ("mid", midBase, midSize, stockRegion inputs midBase midSize)
     , ("side-a", sideABase, sideASize, sideA)
     , ("fatal2", fatalTwoBase, fatalTwoSize, fatal2)
@@ -512,12 +564,10 @@ regionJson ident base size initial =
     ]
 
 entryFor :: Family -> Side -> Word32
-entryFor family side
-  | side /= Original = candidateBase
-  | otherwise = case family of
-      Resolver -> 0x00e77168
-      Handler -> 0x00e7e95c
-      Message -> 0x00e67750
+entryFor family side = case family of
+  Resolver -> if side == Original then 0x00e77168 else candidateBase
+  Handler -> if side == Original then 0x00e7e95c else candidateBase
+  Message -> 0x00e67750
 
 modeFor :: Family -> Word32
 modeFor Resolver = 0
@@ -551,7 +601,7 @@ initialRegisters scenario side =
       (Original, Message) -> (scWord0 scenario, scWord1 scenario, 0)
       (_, Resolver) -> (modeFor Resolver, scKey scenario, 0)
       (_, Handler) -> (modeFor Handler, 0, 0)
-      (_, Message) -> (modeFor Message, scWord0 scenario, scWord1 scenario)
+      (_, Message) -> (scWord0 scenario, scWord1 scenario, 0)
 
 candidateSpan :: Inputs -> Side -> Word32
 candidateSpan inputs side =
@@ -560,6 +610,18 @@ candidateSpan inputs side =
         Candidate -> inCandidate inputs
         DefectCandidate -> inDefect inputs
    in fromIntegral (((B.length bytes + 3) `div` 4) * 4)
+
+candidateSpans :: Inputs -> Side -> [(Word32, Int)]
+candidateSpans inputs side
+  | side == Original = []
+  | otherwise =
+      let span = fromIntegral (candidateSpan inputs side) :: Int
+          block = fromIntegral entrySpan :: Int
+       in [ (candidateBase, block)
+          , (resolveEntry, block)
+          , (applyEntry, block)
+          , (applyEntry + entrySpan, span - 3 * block)
+          ]
 
 caseJson :: Inputs -> Scenario -> Side -> [(String, Word32, Word32, B.ByteString)] -> Value
 caseJson inputs scenario side regions =
@@ -576,7 +638,7 @@ caseJson inputs scenario side regions =
     , "regions" .= [regionJson ident base size bytes | (ident, base, size, bytes) <- regions]
     , "functions" .=
         [object ["address" .= hex address, "size" .= size] | (address, size) <- stockFunctions]
-          ++ (if side == Original then [] else [object ["address" .= hex candidateBase, "size" .= candidateSpan inputs side]])
+          ++ [object ["address" .= hex address, "size" .= size] | (address, size) <- candidateSpans inputs side]
     , "stubs" .= ([] :: [Value])
     , "limits" .= object ["instructions" .= (4000000 :: Int), "wall_ms" .= (8000 :: Int)]
     , "expected" .=

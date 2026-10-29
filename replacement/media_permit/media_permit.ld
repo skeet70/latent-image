@@ -6,6 +6,10 @@ SECTIONS
   .text :
   {
     KEEP(*(.text.rb_media_permit_case))
+    . = 0x00900400;
+    KEEP(*(.text.rb_media_permit_resolve))
+    . = 0x00900800;
+    KEEP(*(.text.rb_media_permit_apply))
     *(.text*)
     *(.rodata*)
     . = 0x00907f00;
@@ -26,4 +30,6 @@ SECTIONS
 
 ASSERT(ADDR(.text) == 0x00900000, "candidate text base")
 ASSERT(ADDR(.text.rb_media_permit_case) == 0x00900000, "candidate entry")
+ASSERT(ADDR(.text.rb_media_permit_resolve) == 0x00900400, "candidate resolver")
+ASSERT(ADDR(.text.rb_media_permit_apply) == 0x00900800, "candidate handler")
 ASSERT(SIZEOF(.text) == 0x7f00, "candidate text does not fill the declared span")

@@ -1,10 +1,7 @@
 {
   "schema": 1,
   "stock_calls": [
-    {"address": "0x00e88ed0", "name": "mirror message writer", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e88ed0.c"},
     {"address": "0x00e88e1c", "name": "mirror message reader", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e88e1c.c"},
-    {"address": "0x00e86d30", "name": "current task byte", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e86d30.c"},
-    {"address": "0x00726658", "name": "message name log", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e67750.c"},
     {"address": "0x00e75490", "name": "frame kind", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e75490.c"},
     {"address": "0x00eb0ea0", "name": "event bit set", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00eb0ea0.c"},
     {"address": "0x00e87ad4", "name": "frame slot context", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e87ad4.c"},
@@ -15,7 +12,6 @@
     {"address": "0x00e88804", "name": "frame slot by kind", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e88804.c"},
     {"address": "0x00e8d82c", "name": "frame command", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e8d82c.c"},
     {"address": "0x00e6e368", "name": "frame cancel signal", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e6e368.c"},
-    {"address": "0x00e87404", "name": "message event-class handback", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e87404.c"},
     {"address": "0x00e881e8", "name": "unresolved key recorder", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e77168.c"}
   ],
   "stock_stores": [

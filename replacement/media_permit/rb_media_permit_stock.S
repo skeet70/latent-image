@@ -14,10 +14,7 @@
 .size \name, .-\name
 .endm
 
-RB_MP_TRAMPOLINE rb_mp_stock_mirror_write, 0x00e88ed0
 RB_MP_TRAMPOLINE rb_mp_stock_mirror_read, 0x00e88e1c
-RB_MP_TRAMPOLINE rb_mp_stock_task_byte, 0x00e86d30
-RB_MP_TRAMPOLINE rb_mp_stock_log, 0x00726658
 RB_MP_TRAMPOLINE rb_mp_stock_frame_kind, 0x00e75490
 RB_MP_TRAMPOLINE rb_mp_stock_bit_set, 0x00eb0ea0
 RB_MP_TRAMPOLINE rb_mp_stock_context, 0x00e87ad4
@@ -28,5 +25,4 @@ RB_MP_TRAMPOLINE rb_mp_stock_count_kind, 0x00e87114
 RB_MP_TRAMPOLINE rb_mp_stock_frame_of_kind, 0x00e88804
 RB_MP_TRAMPOLINE rb_mp_stock_command, 0x00e8d82c
 RB_MP_TRAMPOLINE rb_mp_stock_cancel, 0x00e6e368
-RB_MP_TRAMPOLINE rb_mp_stock_hand_back, 0x00e87404
 RB_MP_TRAMPOLINE rb_mp_stock_fatal, 0x00e881e8

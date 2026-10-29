@@ -17,12 +17,6 @@ const APPLIED_EVENT: EventBit = MEDIA_WRITE_EVENT;
 /// The cancel-wait event signalled for kind 2 and 3 frames.
 pub const CANCEL_WAIT_EVENT: EventId = EventId(5);
 
-/// Message id posted by `FUN_00e67750`.
-pub const MEDIA_WRITE_MESSAGE: MessageId = MessageId(0x1367);
-
-/// `FUN_00e67e38`'s default class for an unlisted message id.
-pub const PERMIT_MESSAGE_CLASS: MessageClass = MessageClass(10);
-
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FrameKey(pub u32);
@@ -134,19 +128,10 @@ impl FrameCommand {
     pub const ZERO: Self = FrameCommand(0);
 }
 
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct MessageId(pub u16);
-
-/// An event class handed to `FUN_00e8d1ec`.
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct MessageClass(pub u32);
-
 /// The retained 0xe87ad4 result, captured at the stock use point.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct FrameContext(pub usize);
+pub struct FrameContext(pub(crate) usize);
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -160,23 +145,9 @@ impl PermitWord {
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct PermitMessage {
-    pub word0: PermitWord,
-    pub word1: PermitWord,
-}
-
-impl PermitMessage {
-    pub const fn new(word0: PermitWord, word1: PermitWord) -> Self {
-        PermitMessage { word0, word1 }
-    }
-}
-
 /// The mirrored message as the handler reads it (`FUN_00e88e1c(0, ..)`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct MirroredMessage {
-    pub message_id: MessageId,
     pub word0: PermitWord,
     pub word1: PermitWord,
 }
@@ -227,11 +198,6 @@ pub enum PermitStatus {
     Refused,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ReceiveStatus {
-    Handled { slot: Option<SlotIndex> },
-}
-
 /// The retained frame table and layout selectors.
 pub trait SlotSource {
     fn layout(&self) -> KeyLayout;
@@ -239,10 +205,8 @@ pub trait SlotSource {
     fn frame_kind(&self, slot: SlotIndex) -> Option<FrameKind>;
 }
 
-/// The retained message, bitmap, frame and command services.
+/// The retained mirror, bitmap, frame and command services.
 pub trait PermitRuntime: SlotSource {
-    fn write_mirror(&mut self, message: &PermitMessage);
-    fn log_message(&mut self);
     fn mirror(&self) -> MirroredMessage;
     fn report_unresolved_key(&mut self);
     fn set_event_bit(&mut self, slot: SlotIndex, bit: EventBit);
@@ -260,8 +224,6 @@ pub trait PermitRuntime: SlotSource {
     fn minimum(&self) -> MinimumWord;
     fn set_minimum(&mut self, word: MinimumWord);
     fn set_active_slot(&mut self, slot: SlotIndex);
-    fn publish_resolution(&mut self, slot: Option<SlotIndex>);
-    fn hand_back(&mut self, class: MessageClass);
 }
 
 /// The bounded key scan shared by all three layouts.
@@ -427,36 +389,4 @@ pub fn apply_mirrored_permit(runtime: &mut impl PermitRuntime) -> PermitStatus {
     }
 }
 
-/// `FUN_00e8659c` row 0x1367.
-pub fn receive_permit(
-    runtime: &mut impl PermitRuntime,
-    message: &PermitMessage,
-) -> ReceiveStatus {
-    runtime.write_mirror(message);
-    runtime.log_message();
-    let mirrored = runtime.mirror();
-    let slot = match resolve(runtime, runtime.layout(), mirrored.word1) {
-        Ok(slot) => Ok(slot),
-        Err(ResolveError::UnknownKey) => {
-            runtime.report_unresolved_key();
-            Err(())
-        }
-        Err(ResolveError::UnknownKind) => Err(()),
-    };
-    runtime.publish_resolution(slot.ok());
-    let slot = match slot {
-        Ok(slot) => {
-            runtime.set_event_bit(slot, APPLIED_EVENT);
-            Some(slot)
-        }
-        Err(()) => None,
-    };
-    runtime.hand_back(PERMIT_MESSAGE_CLASS);
-    ReceiveStatus::Handled { slot }
-}
 
-/// `FUN_00e67750`: post the 8-byte permit message and dispatch it.
-pub fn send_permit(runtime: &mut impl PermitRuntime, message: &PermitMessage) -> ReceiveStatus {
-    runtime.log_message();
-    receive_permit(runtime, message)
-}

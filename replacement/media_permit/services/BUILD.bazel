@@ -85,3 +85,17 @@ xm1_rust_elf(
     link_script = "cancel.ld",
     rust_staticlib = ":cancel-lib",
 )
+
+xm1_rust_staticlib(
+    name = "count-lib",
+    src = "count.rs",
+    crate_name = "media_permit_count",
+    data = ["src/model.rs"],
+)
+
+xm1_rust_elf(
+    name = "count",
+    entry = "rb_mp_subframe_count",
+    link_script = "count.ld",
+    rust_staticlib = ":count-lib",
+)
