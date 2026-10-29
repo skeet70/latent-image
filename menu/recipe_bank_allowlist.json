@@ -399,12 +399,6 @@
       "source": "menu/recipe_bank_ui.h #define RB_UI_STATE_CELL; replacement/owned_menu/src/lib.rs ModalState::AfterCancel"
     },
     {
-      "address": "0x0146761e",
-      "bytes": 2,
-      "name": "owned editor-cancel state write",
-      "source": "replacement/owned_menu/src/lib.rs ModalState::AfterCancel"
-    },
-    {
       "address": "0x01467a08",
       "bytes": 4,
       "name": "stock redraw word cleared after a page redraw",
