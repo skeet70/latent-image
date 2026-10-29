@@ -370,28 +370,26 @@ mediaExact address word regs
   mask = if msb >= lsb then (bit (msb - lsb + 1) - 1) `shiftL` lsb else 0 :: Word32
 
 -- | Targets of `ldrls pc, [pc, rX, lsl #2]` and `addls pc, pc, rX, lsl #2`
--- bounded by the nearest preceding `cmp rX, #n`.
-switchTargets :: Memory -> Word32 -> Word32 -> Maybe [Word32]
-switchTargets memory address word
+-- when the word before it is `cmp rX, #n` and no branch or data word enters
+-- the switch itself.
+switchTargets :: Analysis -> Word32 -> Word32 -> Maybe [Word32]
+switchTargets analysis address word
   | bitsOf 31 28 word /= 9 = Nothing
-  | word .&. 0x0ffffff0 == 0x079ff100 = bound 1 >>= \n -> mapM (\i -> memoryWord memory (address + 8 + 4 * i)) [0 .. n]
-  | word .&. 0x0ffffff0 == 0x008ff100 = bound 1 >>= \n -> Just [address + 8 + 4 * i | i <- [0 .. n]]
+  | M.member address (analysisPredecessors analysis) || M.member address (analysisDataEntries analysis) = Nothing
+  | word .&. 0x0ffffff0 == 0x079ff100 = bound >>= \n -> mapM (\i -> memoryWord memory (address + 8 + 4 * i)) [0 .. n]
+  | word .&. 0x0ffffff0 == 0x008ff100 = bound >>= \n -> Just [address + 8 + 4 * i | i <- [0 .. n]]
   | otherwise = Nothing
  where
+  memory = analysisMemory analysis
   index = bitsOf 3 0 word
-  bound :: Word32 -> Maybe Word32
-  bound k
-    | k > 8 = Nothing
-    | otherwise = do
-        previous <- memoryWord memory (address - 4 * k)
-        if previous .&. 0x0ff0f000 == 0x03500000 && bitsOf 19 16 previous == index && bitsOf 31 28 previous == 14
-          then Just (rotateR (previous .&. 0xff) (2 * fromIntegral (bitsOf 11 8 previous)))
-          else case useDef (address - 4 * k) previous of
-            Just (_, writes, _) | fromIntegral index `notElem` writes -> bound (k + 1)
-            _ -> Nothing
+  bound = do
+    previous <- memoryWord memory (address - 4)
+    if previous .&. 0x0ff0f000 == 0x03500000 && bitsOf 19 16 previous == index && index /= 15 && bitsOf 31 28 previous == 14
+      then Just (rotateR (previous .&. 0xff) (2 * fromIntegral (bitsOf 11 8 previous)))
+      else Nothing
 
-execute :: Memory -> Word32 -> Word32 -> Instruction -> Regs -> Effect
-execute memory address word instruction regs = case instruction of
+execute :: Analysis -> Word32 -> Word32 -> Instruction -> Regs -> Effect
+execute analysis address word instruction regs = case instruction of
   DataProcessing _ op setsFlags rd rn operand ->
     let operandVal = operandValue address regs operand
         firstVal = readReg address regs rn
@@ -412,7 +410,7 @@ execute memory address word instruction regs = case instruction of
           | Known value <- operandVal, not (isKnown firstVal) = Just (rn, value)
           | Known value <- firstVal, ShiftedImmediate rm LSL 0 <- operand, rm /= pc, not (isKnown operandVal) = Just (rm, value)
           | otherwise = Nothing
-        programCounterFlow = case switchTargets memory address word of
+        programCounterFlow = case switchTargets analysis address word of
           Just targets -> Switch targets
           Nothing -> case operand of
             ShiftedImmediate source LSL 0 | op == MOV && source == lr -> Return
@@ -448,7 +446,7 @@ execute memory address word instruction regs = case instruction of
         flow
           | rt /= pc = Continue
           | rn == sp && indexing == PostIndexed = Return
-          | Just targets <- switchTargets memory address word = Switch targets
+          | Just targets <- switchTargets analysis address word = Switch targets
           | otherwise = JumpIndirect
      in (plain (setRegs (loaded ++ writeback) regs)) {effectAccesses = [Access False effective (widthBytes width) [] base], effectFlow = flow}
   Store _ width rt rn offset indexing ->
@@ -475,10 +473,10 @@ execute memory address word instruction regs = case instruction of
     let (after, accesses) = blockAccesses True address regs rn mode list
      in (plain (setRegs [(rn, after) | writeback] regs)) {effectAccesses = accesses}
   Branch _ link target
-    | link -> (plain (setRegs callClobber regs)) {effectFlow = Call (Just target)}
+    | link -> (plain (setRegs callClobber regs)) {effectSetsFlags = True, effectFlow = Call (Just target)}
     | otherwise -> (plain regs) {effectFlow = Jump target}
   BranchExchange _ link rm
-    | link -> (plain (setRegs callClobber regs)) {effectFlow = Call Nothing}
+    | link -> (plain (setRegs callClobber regs)) {effectSetsFlags = True, effectFlow = Call Nothing}
     | rm == lr -> (plain regs) {effectFlow = Return}
     | otherwise -> (plain regs) {effectFlow = JumpIndirect}
   Hint _ -> plain regs
@@ -512,12 +510,12 @@ rejectedEffect address word reason regs = case reason of
         if testBit word 20 then plain (setRegs [(registerAt 12, Unknown), (registerAt 16, Unknown)] regs) else plain regs
     | bitsOf 27 25 word == 6 -> coprocessorTransfer
     | otherwise -> plain regs
-  SupervisorCall -> (plain (setRegs [(Reg n, Unknown) | n <- [0 .. 3]] regs)) {effectFlow = Call Nothing}
+  SupervisorCall -> (plain (setRegs [(Reg n, Unknown) | n <- [0 .. 3]] regs)) {effectSetsFlags = True, effectFlow = Call Nothing}
   SystemRegister
     | word .&. 0x0fbf0fff == 0x010f0000 -> plain (setReg (registerAt 12) Unknown regs)
     | otherwise -> (plain regs) {effectSetsFlags = testBit word 19}
   Divide -> plain (setReg (registerAt 16) Unknown regs)
-  ThumbBranch -> (plain (setRegs callClobber regs)) {effectFlow = Call Nothing}
+  ThumbBranch -> (plain (setRegs callClobber regs)) {effectSetsFlags = True, effectFlow = Call Nothing}
   Barrier -> plain regs
   WaitForEvent -> plain regs
   InterruptMask -> plain regs
@@ -645,14 +643,15 @@ argumentRegisters :: S.Set Int
 argumentRegisters = S.fromList [0 .. 3]
 
 -- | Argument registers a callee may read before writing them.
-liveIn :: Memory -> LiveMemo -> Word32 -> Int -> (S.Set Int, LiveMemo)
-liveIn memory memo entry depth
+liveIn :: Analysis -> LiveMemo -> Word32 -> Int -> (S.Set Int, LiveMemo)
+liveIn analysis memo entry depth
   | Just cached <- M.lookup (entry, depth) memo = (cached, memo)
   | depth == 0 || not (isJust (memoryWord memory entry)) = (argumentRegisters, memo)
   | otherwise =
       let (result, memo') = explore [(entry, S.empty)] S.empty (0 :: Int) S.empty (M.insert (entry, depth) argumentRegisters memo)
        in (result, M.insert (entry, depth) result memo')
  where
+  memory = analysisMemory analysis
   explore [] _ _ result m = (result, m)
   explore ((address, written) : rest) seen steps result m = walk address written rest seen steps result m
   walk address written rest seen steps result m
@@ -667,12 +666,12 @@ liveIn memory memo entry depth
               Just (word, (sources, writes, kind)) ->
                 let always = bitsOf 31 28 word == 14
                     read' = result `S.union` (S.fromList (filter (< 4) sources) `S.difference` written)
-                 in case (kind, switchTargets memory address word) of
+                 in case (kind, switchTargets analysis address word) of
                       (UseProgramCounter, Just targets) ->
                         walk (address + 4) written ([(target, written) | target <- targets] ++ rest) seen' steps' read' m
                       _ ->
                         let (calleeLive, m') = case kind of
-                              UseCall target -> liveIn memory m target (depth - 1)
+                              UseCall target -> liveIn analysis m target (depth - 1)
                               _ -> (S.empty, m)
                             extra = case kind of
                               UseCall _ -> calleeLive `S.difference` written
@@ -683,8 +682,8 @@ liveIn memory memo entry depth
                               _ -> S.empty
                             result' = read' `S.union` extra
                             written' = case kind of
-                              UseCall _ -> written `S.union` argumentRegisters
-                              UseCallIndirect -> written `S.union` argumentRegisters
+                              UseCall _ | always -> written `S.union` argumentRegisters
+                              UseCallIndirect | always -> written `S.union` argumentRegisters
                               _ | always -> written `S.union` S.fromList (filter (< 4) writes)
                                 | otherwise -> written
                             pushed = case kind of
@@ -763,7 +762,7 @@ runWindow analysis address end worlds
             advance (regs, flags)
               | not (condPass cond flags) = [(regs, flags)]
               | otherwise =
-                  let effect = execute (analysisMemory analysis) address word instruction regs
+                  let effect = execute analysis address word instruction regs
                    in case effectFlow effect of
                         Continue -> nextWorlds effect flags
                         Call _ -> nextWorlds effect flags
@@ -896,7 +895,6 @@ stepLimit = 50000
 forward :: Analysis -> Tracking -> Word32 -> Walk
 forward analysis tracking site = drive [(site, initial, True)] (Walk S.empty M.empty M.empty [] [] partial 0)
  where
-  memory = analysisMemory analysis
   local = runWindow analysis (windowStart analysis site) site unknownWorlds
   incomplete worlds = case fetch analysis site of
     Just (_, MoveTop cond rd _) -> any (\(regs, flags) -> condPass cond flags && not (isKnown (regAt regs rd))) (S.toList worlds)
@@ -966,7 +964,7 @@ forward analysis tracking site = drive [(site, initial, True)] (Walk S.empty M.e
   stepOne address word instruction cond (regs, flags)
     | not (condPass cond flags) = Stepped [(regs, flags)] [] [] [] False
     | otherwise =
-        let effect = execute memory address word instruction regs
+        let effect = execute analysis address word instruction regs
             after = effectRegs effect
             facts = mapMaybe (factOf address word) (effectAccesses effect)
             stored =
@@ -1083,13 +1081,13 @@ limitObligation limit = case limit of
   LeavesMemory site -> AnalysisLimit site "control leaves the analysed regions with a tracked pointer live"
   PartialConstant site -> AnalysisLimit site "constant upper half reached with an unknown lower half"
 
-escapeObligations :: Memory -> [Escape] -> [Obligation]
-escapeObligations memory = go M.empty
+escapeObligations :: Analysis -> [Escape] -> [Obligation]
+escapeObligations analysis = go M.empty
  where
   go _ [] = []
   go memo (escape : rest) = case escape of
     EscapeArgument site (Just target) n ->
-      let (live, memo') = liveIn memory memo target 8
+      let (live, memo') = liveIn analysis memo target 8
        in [PointerEscape site ("argument r" ++ show n ++ " to " ++ hex target) | S.member n live] ++ go memo' rest
     EscapeArgument site Nothing n -> PointerEscape site ("argument r" ++ show n ++ " to an indirect call") : go memo rest
     EscapeStored site -> PointerEscape site "stored to memory" : go memo rest
@@ -1598,10 +1596,10 @@ buildProof inputs =
     dispatcherReferences memory insideDispatcher entries
       ++ callerObligations
       ++ [o | Left o <- arrayOutcomes]
-      ++ escapeObligations memory (S.toList (censusEscapes arrayCensus))
+      ++ escapeObligations analysis (S.toList (censusEscapes arrayCensus))
       ++ map limitObligation (S.toList (censusLimits arrayCensus))
       ++ tableObligations
-      ++ escapeObligations memory (S.toList (censusEscapes tableCensus))
+      ++ escapeObligations analysis (S.toList (censusEscapes tableCensus))
       ++ map limitObligation (S.toList (censusLimits tableCensus))
       ++ dataWords
       ++ concatMap controllerIssues closures
