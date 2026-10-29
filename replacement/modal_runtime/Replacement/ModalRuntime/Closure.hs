@@ -964,8 +964,28 @@ forward analysis tracking site = drive [(site, initial, True)] (Walk S.empty M.e
   stepOne address word instruction cond (regs, flags)
     | not (condPass cond flags) = Stepped [(regs, flags)] [] [] [] False
     | otherwise =
-        let effect = execute analysis address word instruction regs
+        let effect0 = execute analysis address word instruction regs
+            effect = effect0 {effectRegs = lineage (effectRegs effect0)}
             after = effectRegs effect
+            -- A register computed from a tracked pointer whose value is lost
+            -- becomes Derived; registers loaded from memory hold data.
+            lineage regsAfter = case useDef address word of
+              Just (sources, writes, _)
+                | any (\s -> s /= 15 && pointer tracking (regAt regs (Reg s))) sources ->
+                    setRegs
+                      [ (Reg w, Derived)
+                      | w <- writes
+                      , w < 15
+                      , w `notElem` loaded
+                      , regAt regsAfter (Reg w) == Unknown
+                      ]
+                      regsAfter
+              _ -> regsAfter
+            loaded = case instruction of
+              Load _ Dual _ (Reg n) _ _ _ -> [n, n + 1]
+              Load _ _ _ (Reg n) _ _ _ -> [n]
+              LoadMultiple _ _ _ _ list -> [n | Reg n <- list]
+              _ -> []
             facts = mapMaybe (factOf address word) (effectAccesses effect)
             stored =
               [ EscapeStored address
@@ -1059,6 +1079,7 @@ data Obligation
   | TargetWithoutEntryEvidence Word32 Word32
   | TargetInRetiredBody Word32 Word32
   | InitialArrayContents
+  | UncoveredConstantForms
 
 data Refusal
   = PublicationOldDiffers Word32 Word32 Word32
@@ -1604,7 +1625,7 @@ buildProof inputs =
       ++ dataWords
       ++ concatMap controllerIssues closures
       ++ [o | Left o <- classified]
-      ++ [InitialArrayContents]
+      ++ [InitialArrayContents, UncoveredConstantForms]
 
 -- | The two stock function openings: a push that saves lr, or a single
 -- register stored to the pre-decremented sp.
@@ -1679,6 +1700,11 @@ obligationValue obligation = case obligation of
     object ["kind" .= ("target-without-entry-evidence" :: String), "controller" .= controller, "target" .= hex target]
   TargetInRetiredBody controller target ->
     object ["kind" .= ("target-in-retired-body" :: String), "controller" .= controller, "target" .= hex target]
+  UncoveredConstantForms ->
+    object
+      [ "kind" .= ("uncovered-constant-forms" :: String)
+      , "detail" .= ("pointers into the arrays or tables are traced only from MOVT and PC-relative literal constants and aligned image words; MOV/MVN/ORR or rotated immediates, arithmetic construction and pointers loaded from RAM are not traced" :: String)
+      ]
   InitialArrayContents ->
     object
       [ "kind" .= ("initial-array-contents" :: String)
