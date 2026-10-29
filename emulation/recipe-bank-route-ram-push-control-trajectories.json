@@ -15,6 +15,7 @@
     {
       "phase": "control-live-setting-write",
       "capture": "control-live-setting-write",
+      "mode_dial": "M",
       "steps": [
         [
           "menu",
