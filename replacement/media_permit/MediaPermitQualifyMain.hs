@@ -104,10 +104,14 @@ u16le :: Word32 -> B.ByteString
 u16le value = B.pack [fromIntegral value, fromIntegral (value `shiftR` 8)]
 
 putU32 :: Int -> Word32 -> B.ByteString -> B.ByteString
-putU32 offset value bytes = B.take offset bytes <> u32le value <> B.drop (offset + 4) bytes
+putU32 offset value bytes
+  | offset < 0 || offset + 4 > B.length bytes = error ("word write outside region at " ++ show offset)
+  | otherwise = B.take offset bytes <> u32le value <> B.drop (offset + 4) bytes
 
 putU16 :: Int -> Word32 -> B.ByteString -> B.ByteString
-putU16 offset value bytes = B.take offset bytes <> u16le value <> B.drop (offset + 2) bytes
+putU16 offset value bytes
+  | offset < 0 || offset + 2 > B.length bytes = error ("halfword write outside region at " ++ show offset)
+  | otherwise = B.take offset bytes <> u16le value <> B.drop (offset + 2) bytes
 
 readU32 :: B.ByteString -> Int -> Either String Word32
 readU32 bytes offset
@@ -133,7 +137,9 @@ frameWord bytes address =
     Left problem -> error problem
 
 pad :: Int -> B.ByteString -> B.ByteString
-pad size bytes = B.take size (bytes <> B.replicate size 0)
+pad size bytes
+  | B.length bytes > size = error ("region bytes exceed declared size: " ++ show (B.length bytes) ++ " > " ++ show size)
+  | otherwise = bytes <> B.replicate (size - B.length bytes) 0
 
 data Kind = K0 | K1 | K2 | K3 | K4 deriving (Eq, Show)
 
@@ -320,6 +326,8 @@ scenarios =
       (\e -> (setBit 0 (setBit 1 e)) {eCommands = [(1, 0), (0, 0)], eActive = 0, ePermit = setPermit 0 0x2000 (setPermit 1 0x2000 (ePermit e))})
   , handlerCase "kind1-count-guard" 1 0x74 [(0, K1), (1, K1), (2, K1)] [(0, 0x700), (1, 0x700), (2, 0x700)]
       (\e -> (setBit 0 (setBit 1 (setBit 2 e))) {eCommands = [(2, 0), (1, 0), (0, 0)], eActive = 0, ePermit = setPermit 0 1 (setPermit 1 1 (setPermit 2 1 (ePermit e)))})
+  , handlerCase "kind1-count-one" 2 0x79 [(0, K1), (1, K1)] [(0, 0x700), (1, 0x701)]
+      (\e -> (setBit 0 e) {eCommands = [(0, 0)], eActive = 0, ePermit = setPermit 0 2 (ePermit e), eMinima = (2, 2, 2)})
   , handlerCase "kind2-broadcast" 0 0x75 [(0, K2), (1, K0), (2, K2)] []
       (\e -> (setBit 0 (setBit 2 e)) {eCancels = [(0, 5), (2, 5)], eCapture = setCapture 0 0 (setCapture 2 0 (eCapture e))})
   , handlerCase "kind3-broadcast" 9 0x76 [(0, K3)] []
@@ -393,12 +401,20 @@ loadInputs build stockElf = do
   command <- B.readFile (build </> "replacement/media_permit/services/command.bin")
   cancel <- B.readFile (build </> "replacement/media_permit/services/cancel.bin")
   stock <- B.readFile stockElf
-  when (B.length candidate > fromIntegral candidateSize) $
-    ioError (userError "candidate exceeds its declared region")
-  when (B.length defect > fromIntegral candidateSize) $
-    ioError (userError "defect candidate exceeds its declared region")
+  when (B.null candidate || B.length candidate `mod` 4 /= 0 || B.length candidate > fromIntegral candidateSize) $
+    ioError (userError "candidate bin is empty, unaligned or exceeds its region")
+  when (B.null defect || B.length defect `mod` 4 /= 0 || B.length defect > fromIntegral candidateSize) $
+    ioError (userError "defect candidate bin is empty, unaligned or exceeds its region")
+  when (B.length candidate > fromIntegral (exitAddress - candidateBase)) $
+    ioError (userError "candidate text reaches the case exit")
+  when (B.length defect > fromIntegral (exitAddress - candidateBase)) $
+    ioError (userError "defect text reaches the case exit")
   when (B.length low > fromIntegral lowSize) $
     ioError (userError "low model exceeds its declared region")
+  when (any B.null [sideA, fatal2, sideB, command, cancel]) $
+    ioError (userError "service model bin is empty")
+  when (any (\(address, expected) -> stockWord stock address /= expected) stockEntries) $
+    ioError (userError "stock ELF does not carry the admitted entry words")
   pure
     Inputs
       { inCandidate = candidate
@@ -412,12 +428,29 @@ loadInputs build stockElf = do
       , inStock = stock
       }
 
+stockEntries :: [(Word32, Word32)]
+stockEntries =
+  [ (0x00e77168, 0xe92d48f0)
+  , (0x00e7e95c, 0xe92d4df0)
+  , (0x00e67750, 0xe92d4830)
+  ]
+
 elfOffset :: Word32 -> Int
 elfOffset address = fromIntegral (address - 0x00bf1a00 + 0xe8)
 
 stockRegion :: Inputs -> Word32 -> Word32 -> B.ByteString
-stockRegion inputs base size =
-  pad (fromIntegral size) (B.take (fromIntegral size) (B.drop (elfOffset base) (inStock inputs)))
+stockRegion inputs base size
+  | offset + fromIntegral size > B.length (inStock inputs) =
+      error ("stock ELF is too short for region " ++ hex base ++ " size " ++ show size)
+  | otherwise = pad (fromIntegral size) (B.take (fromIntegral size) (B.drop offset (inStock inputs)))
+  where
+    offset = elfOffset base
+
+stockWord :: B.ByteString -> Word32 -> Word32
+stockWord stock address =
+  case readU32 stock (elfOffset address) of
+    Right value -> value
+    Left problem -> error ("stock entry " ++ hex address ++ " unreadable: " ++ problem)
 
 overlay :: Word32 -> Word32 -> B.ByteString -> Word32 -> Either String B.ByteString
 overlay base size bytes at

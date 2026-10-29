@@ -25,6 +25,6 @@
     {"address": "0x01581f68", "bytes": 4, "name": "third aggregate minimum", "source": "replacement/media_permit/src/stock.rs; 00e7e95c.c"}
   ],
   "unproven": [
-    {"access": "store", "function": "rb_media_permit_apply", "reason": "frame context +0x27c8 and +0x2fb0 at *(0x0157dd3c)+slot*0x326c for slots 0..200", "through": {"index": "0x0157dd3c"}}
+    {"access": "store", "function": "rb_media_permit_apply", "reason": "frame context +0x27c8 and +0x2fb0 at the retained 0xe87ad4 result for slots 0..200", "through": {"result": "0x00e87ad4"}}
   ]
 }

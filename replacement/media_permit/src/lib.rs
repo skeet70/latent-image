@@ -143,6 +143,11 @@ pub struct MessageId(pub u16);
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct MessageClass(pub u32);
 
+/// The retained 0xe87ad4 result, captured at the stock use point.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct FrameContext(pub usize);
+
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PermitWord(pub u32);
@@ -210,6 +215,7 @@ pub struct MinimumWord(pub u32);
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ResolveError {
     UnknownKey,
+    /// e75490's source output is 0..4; another word is outside that domain.
     UnknownKind,
 }
 
@@ -217,6 +223,7 @@ pub enum ResolveError {
 pub enum PermitStatus {
     Applied(SlotIndex),
     UnresolvedKey,
+    /// A retained service returned outside its admitted domain.
     Refused,
 }
 
@@ -239,9 +246,10 @@ pub trait PermitRuntime: SlotSource {
     fn mirror(&self) -> MirroredMessage;
     fn report_unresolved_key(&mut self);
     fn set_event_bit(&mut self, slot: SlotIndex, bit: EventBit);
-    fn clear_capture_word(&mut self, slot: SlotIndex);
-    fn store_capture_word(&mut self, slot: SlotIndex, word: PermitWord);
-    fn capture_word_is_one(&self, slot: SlotIndex) -> bool;
+    fn frame_context(&self, slot: SlotIndex) -> Option<FrameContext>;
+    fn clear_capture_word(&mut self, context: FrameContext);
+    fn store_capture_word(&mut self, context: FrameContext, word: PermitWord);
+    fn capture_word_is_one(&self, context: FrameContext) -> bool;
     fn subframe_count(&self, slot: SlotIndex) -> SubframeCount;
     fn subframe(&self, slot: SlotIndex) -> Option<SlotIndex>;
     fn mapped_subframe(&self, slot: SlotIndex, index: SubframeIndex) -> Option<SlotIndex>;
@@ -281,10 +289,14 @@ pub fn resolve(
     }
 }
 
-fn apply_kind_one(runtime: &mut impl PermitRuntime, slot: SlotIndex, word0: PermitWord) -> bool {
-    let count = runtime.subframe_count(slot);
+fn apply_kind_one(
+    runtime: &mut impl PermitRuntime,
+    slot: SlotIndex,
+    initial: FrameContext,
+    word0: PermitWord,
+) -> bool {
     let mut index = 0u32;
-    while index < count.0 {
+    while index < runtime.subframe_count(slot).0 {
         let sub = match runtime.subframe(slot) {
             Some(sub) => sub,
             None => return false,
@@ -297,9 +309,9 @@ fn apply_kind_one(runtime: &mut impl PermitRuntime, slot: SlotIndex, word0: Perm
         index += 1;
     }
 
-    let mut last = slot;
+    let mut last = initial;
     index = 0;
-    while index < count.0 {
+    while index < runtime.subframe_count(slot).0 {
         let sub = match runtime.subframe(slot) {
             Some(sub) => sub,
             None => return false,
@@ -308,11 +320,16 @@ fn apply_kind_one(runtime: &mut impl PermitRuntime, slot: SlotIndex, word0: Perm
             Some(mapped) => mapped,
             None => return false,
         };
-        runtime.store_capture_word(mapped, word0);
-        last = mapped;
+        let context = match runtime.frame_context(mapped) {
+            Some(context) => context,
+            None => return false,
+        };
+        runtime.store_capture_word(context, word0);
+        last = context;
         index += 1;
     }
 
+    let count = runtime.subframe_count(slot);
     let minimum = runtime.minimum();
     if runtime.capture_word_is_one(last)
         && word0.0.cmp(&count.0) == Ordering::Greater
@@ -322,7 +339,7 @@ fn apply_kind_one(runtime: &mut impl PermitRuntime, slot: SlotIndex, word0: Perm
     }
 
     index = 0;
-    while index < count.0 {
+    while index < runtime.subframe_count(slot).0 {
         let sub = match runtime.subframe(slot) {
             Some(sub) => sub,
             None => return false,
@@ -343,17 +360,20 @@ fn apply_kind_broadcast(
     kind: FrameKind,
     word0: PermitWord,
 ) -> bool {
-    let count = runtime.frames_of_kind(kind);
     let mut index = 0u32;
-    while index < count.0 {
+    while index < runtime.frames_of_kind(kind).0 {
         let frame = match runtime.frame_of_kind(FrameIndex(index), kind) {
             Some(frame) => frame,
             None => return false,
         };
         runtime.signal_cancel(frame, CANCEL_WAIT_EVENT);
         runtime.set_event_bit(frame, APPLIED_EVENT);
+        let context = match runtime.frame_context(frame) {
+            Some(context) => context,
+            None => return false,
+        };
         if word0.is_zero() {
-            runtime.clear_capture_word(frame);
+            runtime.clear_capture_word(context);
         }
         index += 1;
     }
@@ -373,6 +393,11 @@ pub fn apply_mirrored_permit(runtime: &mut impl PermitRuntime) -> PermitStatus {
         Err(ResolveError::UnknownKind) => return PermitStatus::Refused,
     };
 
+    let context = match runtime.frame_context(slot) {
+        Some(context) => context,
+        None => return PermitStatus::Refused,
+    };
+
     let kind = match runtime.frame_kind(slot) {
         Some(kind) => kind,
         None => return PermitStatus::Refused,
@@ -383,12 +408,12 @@ pub fn apply_mirrored_permit(runtime: &mut impl PermitRuntime) -> PermitStatus {
             runtime.set_active_slot(slot);
             runtime.set_event_bit(slot, APPLIED_EVENT);
             if mirrored.word0.is_zero() {
-                runtime.clear_capture_word(slot);
+                runtime.clear_capture_word(context);
             }
             runtime.send_command(slot, FrameCommand::ZERO);
             true
         }
-        FrameKind::One => apply_kind_one(runtime, slot, mirrored.word0),
+        FrameKind::One => apply_kind_one(runtime, slot, context, mirrored.word0),
         FrameKind::Two | FrameKind::Three => {
             apply_kind_broadcast(runtime, kind, mirrored.word0)
         }

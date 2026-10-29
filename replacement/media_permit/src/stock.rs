@@ -2,20 +2,18 @@
 //! message, frame-table, bitmap and command services.
 
 use crate::media_permit::{
-    apply_mirrored_permit, receive_permit, FrameCommand, FrameCount, FrameIndex, FrameKey,
-    FrameKind, KeyField, KeyLayout, MessageClass, MessageId, MirroredMessage, MinimumWord,
+    apply_mirrored_permit, receive_permit, FrameCommand, FrameContext, FrameCount, FrameIndex,
+    FrameKey, FrameKind, KeyField, KeyLayout, MessageClass, MessageId, MirroredMessage, MinimumWord,
     PermitMessage, PermitRuntime, PermitStatus, PermitWord, ReceiveStatus, SlotIndex, SlotSource,
     SubframeCount, SubframeIndex, MEDIA_WRITE_MESSAGE,
 };
 
 const LAYOUT_PRIMARY: usize = 0x0157_dd34;
 const LAYOUT_SECONDARY: usize = 0x0157_dd35;
-const CONTEXT_BASE: usize = 0x0157_dd3c;
 const SLOT_KEY_PRIMARY: usize = 0x0159_6800;
 const SLOT_KEY_SECONDARY: usize = 0x0159_67fc;
 const SLOT_KEY_KIND: usize = 0x0159_6804;
 const SLOT_KEY_STRIDE: isize = 0x1d0;
-const CONTEXT_STRIDE: usize = 0x326c;
 const CAPTURE_WORD: usize = 0x27c8;
 const PERMIT_WORD: usize = 0x2fb0;
 const KIND_FLAG: usize = 0x4a8;
@@ -68,12 +66,13 @@ fn write_u32(address: usize, value: u32) {
     unsafe { core::ptr::write_volatile(address as *mut u32, value) }
 }
 
-fn context(slot: SlotIndex) -> Option<usize> {
-    let base = read_u32(CONTEXT_BASE) as usize;
-    if base == 0 {
-        return None;
+fn live_context(slot: SlotIndex) -> Option<usize> {
+    let address = unsafe { rb_mp_stock_context(slot.word()) };
+    if address == 0 {
+        None
+    } else {
+        Some(address)
     }
-    Some(base + slot.word() as usize * CONTEXT_STRIDE)
 }
 
 struct StockSlots;
@@ -99,6 +98,7 @@ impl SlotSource for StockSlots {
     }
 
     fn frame_kind(&self, slot: SlotIndex) -> Option<FrameKind> {
+        // 0xe7e95c passes the slot in r0; 0xe75490 forwards it to 0xe87ad4.
         FrameKind::from_word(unsafe { rb_mp_stock_frame_kind(slot.word()) })
     }
 }
@@ -168,23 +168,20 @@ impl PermitRuntime for StockRuntime {
         unsafe { rb_mp_stock_bit_set(base, bit.0 as u32) };
     }
 
-    fn clear_capture_word(&mut self, slot: SlotIndex) {
-        if let Some(context) = context(slot) {
-            write_u32(context + CAPTURE_WORD, 0);
-        }
+    fn frame_context(&self, slot: SlotIndex) -> Option<FrameContext> {
+        live_context(slot).map(FrameContext)
     }
 
-    fn store_capture_word(&mut self, slot: SlotIndex, word: PermitWord) {
-        if let Some(context) = context(slot) {
-            write_u32(context + PERMIT_WORD, word.0);
-        }
+    fn clear_capture_word(&mut self, context: FrameContext) {
+        write_u32(context.0 + CAPTURE_WORD, 0);
     }
 
-    fn capture_word_is_one(&self, slot: SlotIndex) -> bool {
-        match context(slot) {
-            Some(context) => read_u32(context + KIND_FLAG) == 1,
-            None => false,
-        }
+    fn store_capture_word(&mut self, context: FrameContext, word: PermitWord) {
+        write_u32(context.0 + PERMIT_WORD, word.0);
+    }
+
+    fn capture_word_is_one(&self, context: FrameContext) -> bool {
+        read_u32(context.0 + KIND_FLAG) == 1
     }
 
     fn subframe_count(&self, slot: SlotIndex) -> SubframeCount {
@@ -296,7 +293,4 @@ pub extern "C" fn rb_media_permit_apply() -> u32 {
     apply_mirror()
 }
 
-#[no_mangle]
-pub extern "C" fn rb_media_permit_send(word0: u32, word1: u32) -> u32 {
-    send_words(word0, word1)
-}
+
