@@ -1432,6 +1432,31 @@ sh_test(
     data = [":recipe-bank-ui-cases"],
 )
 
+haskell_library(
+    name = "owned-case",
+    srcs = ["Emulation/OwnedCase.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":case-sha256",
+        ":native-adapter",
+        ":native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
 haskell_binary(
     name = "owned-menu-cases",
     srcs = ["OwnedMenuCases.hs"],
@@ -1444,16 +1469,37 @@ haskell_binary(
     main_file = "OwnedMenuCases.hs",
     visibility = ["//visibility:public"],
     deps = [
-        ":case-sha256",
-        ":native-adapter",
         ":native-observation",
+        ":owned-case",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:containers",
-        "//host:directory",
         "//host:filepath",
-        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+# Original-versus-owned menu-frame snapshot cases (replacement/owned_menu).
+haskell_binary(
+    name = "menu-frame-cases",
+    srcs = ["MenuFrameCases.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-O2",
+        "-threaded",
+    ],
+    main_file = "MenuFrameCases.hs",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":native-observation",
+        ":owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
         "//host:json",
     ],
 )

@@ -61,6 +61,54 @@ The C binding also distinguishes frame-pointer identity `0x0078ea98` from the no
 
 The existing `card-sel.img` and `emulation/ui-trajectories.json` provide a populated-bank selection baseline. They are not the cardless Rust route or qualification of an owned SET exit. A complete selection/apply/exit cutover needs a matching card-backed FujiMod run, the existing mode-dependent exits and explicit scoped forbidden-execution evidence. Moving more C classification policy alone does not retire these proprietary handlers.
 
+### Owned menu-frame snapshot service
+
+Issue: [#132](https://github.com/skeet70/latent-image/issues/132). `replacement/owned_menu/src/lib.rs` module `frame` implements the X-M1 1.50 menu-frame snapshot service from the image-4 bytes: classifier `FUN_0061ca2c` (744 bytes), snapshot `FUN_0061cd14` (264), store `FUN_0061ceac` (104) and the eight 80-byte accessors. Expectations come from those bytes and the image-4 node data, not from the x70view C.
+
+| Word | Source | Accessor |
+| --- | --- | --- |
+| 0 depth | `FUN_0061ca2c`: no frame 1; frame id 0 gives 0; otherwise 1 or 2 by the class rule below | `0x0061d0e4` |
+| 1 node id | frame `+0x00` | `0x0061d154` |
+| 2 node type | frame `+0x04` | `0x0061d1a4` |
+| 3 class | frame `+0x08` | `0x0061d1f4` |
+| 4 cursor token | `values[*0x009571d8].token`, only when frame `+0x20` is nonzero | `0x0061d244` |
+| 5 current-value token | `values[*0x0095732c].token`, values reloaded, same condition | `0x0061d294` |
+| 6 raw cursor | `*0x009571d8` | none |
+| 7 visible ordinal | `*0x009571dc` | none |
+| 8 scroll state | `*0x009571e0` | none |
+| 9 page | loader `FUN_0004d978((rows + word7), rows)`, rows at frame `+0x0c` | `0x0061d2e4` |
+| 10 navigation word | `*0x009571e4` | `0x0061d334` |
+
+The writer first stores the detached defaults `{1, 0x86, 0xc, 0, ...}` and returns 1 when `*0x009571d0` is null; a null destination returns 0 with no store. The class rule gives 1 for classes `5`, `0x47`, `0xd0`, `0xdf`, `0xe0`, `0x185`, `0x1b9`, `0x1bb`, `0x220`, `0x240`, `0x245`, `0x246`, `0x247`, class 7 on token 1 and class `0x166` on token 0; 2 for `0x2d`, `0x43`, `0xad`, `0xdc`, `0xe6`, `0xfc`, `0x100`..`0x102`, class `0xed` on token 3, `0xe5` on token 0, `0x141` on token `0x1b` and `0x27` on token 0. Any other case follows the parent at `+0x1c`: none or a class-5 parent with another id reads the cursor row's child word, a parent with the same id gives 2, and a parent of another class gives 1. Values indexes have no bound. A zero row count reaches the loader's divide-by-zero `SVC 0x1010` after word 8 is stored. The store writes depth 0 to `0x00944414`, depth 1 to `0x0093eb74 + root * 0x2c` and depth 2 to `0x009412d4 + root * 0x2c`, with 32-bit wrap; a slot address of 0 returns 0 without a store. Every service result is 0 or 1.
+
+The owned exports are `rb_menu_frame_classify`, `rb_menu_frame_snapshot`, `rb_menu_frame_store` and `rb_menu_frame_{depth,node,node_type,class,cursor_token,current_token,page,navigation}`, with the same AAPCS signatures. Every frame, values and cell read is a volatile load in the stock order, so a slot or destination is written exactly as the stock body writes it. The module has no static, allocation or copy beyond the caller's snapshot destination and its own stack frames. The divide stays the retained loader routine through the `rb_call_loader_uidiv` trampoline, which keeps the zero-divisor fatal path.
+
+Bank cutover: `rb_ui_child_enter` refreshes SELECT's saved snapshot through `rb_menu_frame_store`. The `rb_call_snapshot_store` trampoline and its `0x0061ceac` allowlist entry are removed; the allowlist adds stock call `0x0004d978`, the 44-byte depth-0 slot as a stock store and argument/index declarations for the snapshot writer and the per-table store helpers.
+
+Static caller closure, X-M1 1.50 stock and package `id4-final`/`id5-final` bytes, scanning every aligned ARM word as `B`/`BL`/`BLX`, every aligned and unaligned word as data and every `movw`/`movt` pair and PC-relative `add`/`sub`:
+
+| Entry | Image 4 | Image 5 | Plain image 6 |
+| --- | --- | --- | --- |
+| `FUN_0061ca2c` | `FUN_0061cd14`, `FUN_0061ceac` only | 0 | 0 |
+| `FUN_0061cd14` | `FUN_0061ceac` (3), the eight accessors | 0 | 16 |
+| `FUN_0061ceac` | 0 | `0x00bf95e8`, `0x00bfa204`, `0x00bfacfc` | 0 |
+| `0x0061d0e4` | 0 | 2 | 0 |
+| `0x0061d154` | 4 | 574 | 1 |
+| `0x0061d1a4` | 0 | 1 | 0 |
+| `0x0061d1f4` | 3 | 1,361 | 0 |
+| `0x0061d244` | 0 | 1,057 | 0 |
+| `0x0061d294` | 0 | 2 | 0 |
+| `0x0061d2e4` | 0 | 1 | 0 |
+| `0x0061d334` | 0 | 2 | 0 |
+
+Every reference is a direct `BL` to an entry. No data word, formed address or branch reaches an interior address; the only matches inside the bodies are unaligned byte coincidences inside instructions. Loaders A and B, the `0x40048` boot block, image 2 and the `0x50048` boot block (data words only, its base being unsettled) have none. Thumb code and register-computed transfers without a data word are outside the scan. The saved-snapshot reader `FUN_0061ce1c` (10 image-6 callers) and the three slot tables stay stock.
+
+`//emulation:menu-frame-cases` runs the original bodies and the owned exports once each over 30 scenarios: 19 on real image-4 menu nodes (`id4-final` of `package-20261024b`; its snapshot code is byte-identical to stock and the chosen nodes give the same words on stock image 4) and 11 on synthetic frames for classes and boundaries absent from the node data. Each scenario's eleven words, return value and slot address are literals in the generator. Completing scenarios run the classifier, snapshot, store and all eight accessors; the boundaries add a null destination, a store root whose depth-2 slot wraps to 0, a zero row count and a cursor past the values array. Each run checks status, `r0`, `r4`-`r11`, `sp`, exit `pc` and `cpsr` control bits, the full destination region with guard bytes, the full slot-table region and the caller frame above `sp`. The owned layout maps the stock bodies without execute permission.
+
+On the legacy native runner, all 307 pairs match their literal expectations and each other: 301 return, the 3 zero-row operations both stop at the loader's `SVC` as `unsupported_instruction` after writing words 0 to 8, and the 3 unmapped-cursor operations both stop as `memory_guard` after writing words 0 to 3. Owned stack use is at most 96 bytes below the entry `sp` against the stock bodies' 84. A guest writing the expected words is accepted; a wrong cursor token, a twelfth word, a cleared `r4`, a store to the caller frame and a transfer to `0x0061cd14` in the owned layout are refused. Results are in `private-data/analysis/x-m1-1.50/recipes/issue117-menu-frame/menu-frame-cases/menu-frame-results.json`. The SVC continuation, interrupts and concurrent frame changes are outside these cases.
+
+Global retirement stays open. The 3,027 stock call sites still enter the stock bodies; retiring them needs reviewed entry publications at the eleven stock entries, a forbidden-fetch guard on the retired bodies in a packaged menu route, which the packaged FujiMod route does not yet provide, and a device-driven packaged run with that guard.
+
 ## Evidence
 
 The Rust module's host tests are `//replacement/recipe_ui:route-tests`: a checked-in genrule compiles `src/lib.rs` with the pinned `@lab_rustc` and clang under `--test`, and the existing `//emulation:recovery-task-state-tests.sh` wrapper runs the binary. The four cases call only the exported C ABI and cover the page and slot boundaries, all four verb kinds with the first and last slot, select codes 0, 1 and 7, and the enumerated gap tokens returning zero.

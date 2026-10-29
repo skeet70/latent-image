@@ -224,7 +224,7 @@ rb_call_draw_action_list:
 
 RB_TRAMPOLINE rb_call_stage_open,  0x00d3d858
 RB_TRAMPOLINE rb_call_transition,  0x00c12aac
-RB_TRAMPOLINE rb_call_snapshot_store, 0x0061ceac
+RB_TRAMPOLINE rb_call_loader_uidiv, 0x0004d978
 RB_TRAMPOLINE rb_call_redraw,      0x00d38d98
 RB_TRAMPOLINE rb_call_stock_redraw_dispatch, 0x00d38e1c
 RB_TRAMPOLINE rb_call_set_dispatch, 0x00c72e10

@@ -504,7 +504,7 @@ uint32_t rb_ui_child_enter(void)
   }
   if (cls == RB_UI_CLASS_SELECT) {
     /* The stock push saved its snapshot before the entry cursor adjustment. */
-    rb_call_snapshot_store((RbMenuRoot){rb_ui_word(child + RB_NODE_ID)});
+    (void)rb_menu_frame_store((RbMenuRoot){rb_ui_word(child + RB_NODE_ID)});
   }
 #ifdef RB_RAM_DIAGNOSTICS
   rb_select_diag_publish();
