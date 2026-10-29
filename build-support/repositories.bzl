@@ -82,6 +82,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/trace.rs",
     "//emulation:fujimod-xm1/src/ui_conversion.rs",
     "//emulation:fujimod-xm1/src/updater.rs",
+    "//emulation:fujimod-xm1/src/witness.rs",
     "//emulation:fujimod-xm1/tests/r4f_guard.rs",
 ]
 
