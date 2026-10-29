@@ -4,7 +4,7 @@
 use crate::guest::{DialTurn, GpioKey, MenuState, ModeDialPosition, ModeDialWindow, Press, RouteKey, ShutterStage, set_adc};
 use crate::r4f::Guard;
 use crate::run::RunDocument;
-use crate::sd_host::{Contacts, RetainedCard, SdHost};
+use crate::sd_host::{Contacts, MediaRead, RetainedCard, SectorAddress, SectorCount, SdHost};
 use crate::trace::TraceSites;
 use fujimod_emulator::session::Session;
 use serde::{Deserialize, Serialize};
@@ -405,6 +405,11 @@ impl Machine {
     pub fn card_state(&self) -> Result<serde_json::Value, String> {
         self.session.board.device_save(self.session.node(&self.document.sd.0)?)
     }
+
+    pub fn read_media(&self, first: SectorAddress, count: SectorCount) -> Result<MediaRead, String> {
+        let node = self.session.node(&self.document.sd.0)?;
+        self.session.board.inspect_device::<SdHost, _>(node, |host| host.read_sectors(first, count))
+    }
 }
 
 #[cfg(test)]
@@ -475,5 +480,18 @@ mod tests {
         record[9] = 3;
         write_row(&machine, row, &record);
         assert!(machine.play(KeyPulse { hold: 0, release: 0 }).is_err());
+    }
+
+    #[test]
+    fn media_read_returns_the_inserted_card_bytes_through_the_machine() {
+        let mut machine = machine();
+        let path = std::env::temp_dir().join(format!("fujimod-media-read-{}.img", std::process::id()));
+        std::fs::write(&path, vec![0x5a; 512]).unwrap();
+        let card = crate::sd_host::load_image(&path, 0x80_0000, 4, crate::sd_host::Backing::Sparse).unwrap();
+        machine.insert_card(card).unwrap();
+        machine.run(1000);
+        let read = machine.read_media(SectorAddress(0), SectorCount::try_from(1).unwrap()).unwrap();
+        assert_eq!(read.bytes, vec![0x5a; 512]);
+        std::fs::remove_file(&path).unwrap();
     }
 }

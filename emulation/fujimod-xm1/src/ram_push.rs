@@ -14,7 +14,7 @@ use fujimod_emulator::board::observation::MemoryWatch;
 use fujimod_emulator::board::preservation::{
     PhysicalRange, Preservation, PreservationState, ProtectedRanges,
 };
-use fujimod_xm1::sd_host::{Backing, MediaImage};
+use fujimod_xm1::sd_host::{Backing, MediaImage, SectorAddress, SectorCount};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -289,6 +289,7 @@ enum Request {
     ReleaseContext { segment: Option<ReleaseSegment> },
     ModeDial { position: ModeDialPosition },
     ReadMemory { address: u64, count: usize },
+    MediaRead { first: SectorAddress, count: SectorCount },
     WatchBegin { ranges: Vec<[u64; 2]>, limit: usize },
     WatchState,
     PreservationBegin { ranges: Vec<[u64; 2]> },
@@ -310,6 +311,7 @@ enum RequestKind {
     ReleaseContext,
     ModeDial,
     ReadMemory,
+    MediaRead,
     WatchBegin,
     WatchState,
     PreservationBegin,
@@ -331,6 +333,7 @@ impl Request {
             Request::ReleaseContext { .. } => RequestKind::ReleaseContext,
             Request::ModeDial { .. } => RequestKind::ModeDial,
             Request::ReadMemory { .. } => RequestKind::ReadMemory,
+            Request::MediaRead { .. } => RequestKind::MediaRead,
             Request::WatchBegin { .. } => RequestKind::WatchBegin,
             Request::WatchState => RequestKind::WatchState,
             Request::PreservationBegin { .. } => RequestKind::PreservationBegin,
@@ -476,6 +479,10 @@ impl Server {
                     return Err("read-memory requires an address and 1..4096 bytes".into());
                 }
                 json!({"bytes": encode_hex(&self.bridge.machine.read(address, count)?)})
+            }
+            Request::MediaRead { first, count } => {
+                let read = self.bridge.machine.read_media(first, count)?;
+                json!({"first": read.first.0, "count": read.count.get(), "bytes": encode_hex(&read.bytes)})
             }
             Request::WatchBegin { ranges, limit } => {
                 if self.watch.is_some() {
