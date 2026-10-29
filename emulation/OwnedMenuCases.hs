@@ -91,8 +91,18 @@ assemble = B.concat . map word32le
 
 data Symbol = Symbol Word32 Word32
 
-parseSymbols :: FilePath -> IO (M.Map String Symbol)
-parseSymbols path = do
+requiredSymbols :: [String]
+requiredSymbols =
+  [ "__rb_image_start"
+  , "rb_ui_editor_cancel"
+  , "rb_call_modal_query"
+  , "rb_open_editor_cancel_stage"
+  , "rb_call_stage_open"
+  , "rb_call_transition"
+  ]
+
+parseSymbols :: [String] -> FilePath -> IO (M.Map String Symbol)
+parseSymbols required path = do
   rows <- zip [1 :: Int ..] . lines <$> readFile path
   foldM add M.empty rows
   where
@@ -100,12 +110,14 @@ parseSymbols path = do
       [a, z, _, name] -> insert symbols lineNumber name a z
       [a, _, name] -> insert symbols lineNumber name a "0"
       _ -> pure symbols
-    insert symbols lineNumber name a z =
-      case (parseWord32 a, parseWord32 z) of
-        (Just address, Just size)
-          | M.member name symbols -> error ("duplicate symbol " ++ name ++ " at line " ++ show lineNumber)
-          | otherwise -> pure (M.insert name (Symbol address size) symbols)
-        _ -> error ("invalid symbol line " ++ show lineNumber)
+    insert symbols lineNumber name a z
+      | name `notElem` required = pure symbols
+      | otherwise =
+          case (parseWord32 a, parseWord32 z) of
+            (Just address, Just size)
+              | M.member name symbols -> error ("duplicate symbol " ++ name ++ " at line " ++ show lineNumber)
+              | otherwise -> pure (M.insert name (Symbol address size) symbols)
+            _ -> error ("invalid symbol line " ++ show lineNumber)
 
 symbolAddress :: M.Map String Symbol -> String -> GuestAddress
 symbolAddress symbols name = case lookupSymbol symbols name of Symbol address _ -> GuestAddress (fromIntegral address)
@@ -497,7 +509,7 @@ main = do
   id5Path <- required arguments "--id5"
   id5BaseArgument <- required arguments "--id5-base"
   id5Base <- pure (parseAddress "--id5-base" id5BaseArgument)
-  symbols <- parseSymbols (build </> "kernel.syms")
+  symbols <- parseSymbols requiredSymbols (build </> "kernel.syms")
   kernelText <- B.readFile (build </> "kernel-text.bin")
   unless (not (B.null kernelText)) (error "kernel-text.bin is empty")
   id5 <- B.readFile id5Path
