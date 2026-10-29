@@ -818,6 +818,7 @@ dependencies = [
  "fujimod-catalog",
  "fujimod-emulator",
  "fujimod-emulator-cpu",
+ "fujimod-emulator-cpu-unicorn",
  "fujimod-emulator-devices",
  "fujimod-emulator-exr2-board",
  "fujimod-emulator-exr2-plan",

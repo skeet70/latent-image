@@ -588,6 +588,37 @@ fn hints_status_writes_and_synchronization_primitives_are_refused_before_they_ex
 }
 
 #[test]
+fn mrs_reads_the_declared_user_status_and_refuses_a_pc_destination() {
+    // mrs r0, cpsr
+    let read = Case::new(&[0xe10f_0000, BX_LR]).register(15, 0x6000_0010).run();
+    read.assert_returned();
+    assert_eq!(read.register("r0"), 0x6000_0010);
+    // mrs pc, cpsr
+    let into_pc = Case::new(&[0xe10f_f000, BX_LR]).run();
+    into_pc.assert_stopped(Status::UnsupportedInstruction, CODE);
+}
+
+#[test]
+fn unpredictable_transfer_and_multiply_forms_are_refused_before_they_execute() {
+    // ldr r2, [r2, r3]!; strh r2, [r2, #2]!; ldrd r4, r5, [r4, #8]!; ldrd r4, r5, [r2, r4];
+    // smull r1, r1, r2, r3; ldrb r0, [r2, pc]; strb pc, [r2, r3]; stmdb sp!, {r0, sp}
+    for word in [0xe7b2_2003, 0xe1e2_20b2, 0xe1e4_40d8, 0xe182_40d4, 0xe0c1_1392, 0xe7d2_000f, 0xe7c2_f003, 0xe92d_2001] {
+        let observed = Case::new(&[word, BX_LR])
+            .region(0x4000, READ_WRITE, &[0; 16])
+            .register(0, 9)
+            .register(1, 7)
+            .register(2, 0x4000)
+            .register(3, 4)
+            .register(4, 0x4000)
+            .run();
+        observed.assert_stopped(Status::UnsupportedInstruction, CODE);
+        assert_eq!(observed.register("r1"), 7, "{word:#010x}");
+        assert_eq!(observed.register("r2"), 0x4000, "{word:#010x}");
+        assert_eq!(observed.bytes(0x4000), "00000000000000000000000000000000", "{word:#010x}");
+    }
+}
+
+#[test]
 fn malformed_and_out_of_contract_wires_are_invalid_cases() {
     let valid = Case::new(&[PUSH_LR, branch(0x1004, STUB, true), ADD_R0_1, POP_PC]).stub(STUB, &[(0, 5)], &[(0, 0x40)]);
     let text = valid.wire();

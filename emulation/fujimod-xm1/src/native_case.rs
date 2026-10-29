@@ -12,9 +12,11 @@
 //!
 //! The case's call contract is tracked from the decoded control-flow words
 //! (B, BL, BX, BLX, LDM with PC and the two LDR-to-PC dispatch forms). All
-//! other instruction semantics belong to the backend. The user-ARM case
-//! profile refuses coprocessor, supervisor-call, unconditional-space,
-//! status-register write, hint and synchronization-primitive words.
+//! other instruction semantics belong to the backend, which executes the
+//! Cortex-R5F instruction set. The user-ARM case profile refuses coprocessor,
+//! supervisor-call, unconditional-space, status-register write, hint and
+//! synchronization-primitive words, and ARMv7 UNPREDICTABLE transfer and
+//! multiply forms.
 
 use crate::r4f;
 use fujimod_emulator_cpu::{
@@ -1487,10 +1489,13 @@ fn control(word: u32) -> Control {
             || ((top == 2 || top == 3) && load)
             || (top == 0 && word & 0x90 == 0x90 && word & 0x60 != 0 && load));
     let doubleword_into_pc = top == 0 && word & 0xf0 == 0xd0 && !load && destination == 14;
-    if pc_write || doubleword_into_pc { Control::UntrackedPcWrite } else { Control::None }
+    // MRS, CLZ and QADD/QSUB/QDADD/QDSUB with Rd = PC.
+    let misc_into_pc = word & 0x0fbf_ffff == 0x010f_f000 || word & 0x0fff_fff0 == 0x016f_ff10 || word & 0x0f90_f0f0 == 0x0100_f050;
+    if pc_write || doubleword_into_pc || misc_into_pc { Control::UntrackedPcWrite } else { Control::None }
 }
 
-/// Words refused regardless of condition: Cortex-R4F exclusions and the user-ARM case profile.
+/// Words refused regardless of condition: Cortex-R4F exclusions, ARMv7
+/// UNPREDICTABLE transfer and multiply forms, and the user-ARM case profile.
 fn excluded(word: u32) -> bool {
     let unconditional = word >> 28 == 15;
     let coprocessor_or_supervisor = word >> 25 & 7 >= 6;
@@ -1501,7 +1506,45 @@ fn excluded(word: u32) -> bool {
         || coprocessor_or_supervisor
         || status_write_or_hint
         || synchronization
+        || unpredictable(word)
         || r4f::classify_a32(word).0.is_some()
+}
+
+/// ARMv7 UNPREDICTABLE or UNKNOWN-result encodings of the transfer and multiply forms.
+fn unpredictable(word: u32) -> bool {
+    let top = word >> 25 & 7;
+    let (rn, rt, rs, rm) = (word >> 16 & 15, word >> 12 & 15, word >> 8 & 15, word & 15);
+    let load = word & 1 << 20 != 0;
+    let writeback = word & 1 << 24 == 0 || word & 1 << 21 != 0;
+    let writeback_conflict = |transferred: &[u32]| writeback && (rn == 15 || transferred.contains(&rn));
+    match top {
+        2 | 3 if top == 2 || word & 0x10 == 0 => {
+            let byte = word & 1 << 22 != 0;
+            writeback_conflict(&[rt]) || (top == 3 && rm == 15) || (byte && rt == 15)
+        }
+        0 if word & 0x90 == 0x90 && word & 0x60 != 0 => {
+            let register = word & 1 << 22 == 0;
+            if !load && word & 0x40 != 0 {
+                let load_dual = word & 0x20 == 0;
+                rt == 14
+                    || writeback_conflict(&[rt, rt + 1])
+                    || (register && (rm == 15 || (load_dual && (rm == rt || rm == rt + 1))))
+            } else {
+                rt == 15 || writeback_conflict(&[rt]) || (register && rm == 15)
+            }
+        }
+        0 if word & 0x0f00_00f0 == 0x0000_0090 => {
+            let accumulates = word & 0x00e0_0000 != 0;
+            let pair = word & 0x0080_0000 != 0 || word & 0x00f0_0000 == 0x0040_0000;
+            [rn, rs, rm].contains(&15) || (accumulates && rt == 15) || (pair && rn == rt)
+        }
+        4 => {
+            let list = word & 0xffff;
+            let base_listed = word & 1 << 21 != 0 && list & 1 << rn != 0;
+            list == 0 || rn == 15 || (base_listed && (load || list & list.wrapping_neg() != 1 << rn))
+        }
+        _ => false,
+    }
 }
 
 fn branch_target(pc: u32, word: u32) -> Result<u32, Step> {

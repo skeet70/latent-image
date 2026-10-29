@@ -33,11 +33,16 @@ path = "src/updater.rs"
 name = "fujimod-xm1-queue-boundary"
 path = "src/queue_boundary.rs"
 
+[[bin]]
+name = "fujimod-xm1-native-case"
+path = "src/native_case_main.rs"
+
 # build-support/fujimod-xm1.nix places FujiMod's source at ../fujimod.
 [dependencies]
 fujimod-catalog = { path = "../fujimod/crates/catalog" }
 fujimod-emulator = { path = "../fujimod/crates/emulator" }
 fujimod-emulator-cpu = { path = "../fujimod/crates/emulator-cpu" }
+fujimod-emulator-cpu-unicorn = { path = "../fujimod/crates/emulator-cpu-unicorn" }
 fujimod-emulator-devices = { path = "../fujimod/crates/emulator-devices" }
 fujimod-emulator-ip = { path = "../fujimod/crates/emulator-ip" }
 fujimod-emulator-exr2-system = { path = "../fujimod/crates/emulator-exr2-system" }
