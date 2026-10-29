@@ -1,0 +1,100 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+filegroup(
+    name = "module",
+    srcs = ["src/lib.rs"],
+    visibility = ["//replacement/bank:__pkg__"],
+)
+
+filegroup(
+    name = "relink-sources",
+    srcs = [
+        "capture.ld",
+        "rb_capture_stock.S",
+        "src/lib.rs",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//replacement/bank:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
+xm1_rust_staticlib(
+    name = "capture",
+    src = "standalone.rs",
+    crate_name = "capture",
+    data = ["src/lib.rs"],
+    rustc_flags = ["-C", "function-sections=yes"],
+)
+
+xm1_rust_elf(
+    name = "capture-candidate",
+    rust_staticlib = ":capture",
+    asm_srcs = ["rb_capture_stock.S"],
+    link_script = "capture.ld",
+    entry = "rb_capture_develop_wait",
+    visibility = ["//visibility:public"],
+)
+
+xm1_rust_staticlib(
+    name = "capture-deps-high-lib",
+    src = "deps/high.rs",
+    crate_name = "capture_deps_high",
+    data = [
+        "deps/src/common.rs",
+        "deps/src/high.rs",
+    ],
+    rustc_flags = ["-C", "function-sections=yes"],
+)
+
+xm1_rust_elf(
+    name = "capture-deps-high",
+    rust_staticlib = ":capture-deps-high-lib",
+    link_script = "deps/high.ld",
+    entry = "capture_plan_lookup",
+    visibility = ["//visibility:public"],
+)
+
+xm1_rust_staticlib(
+    name = "capture-deps-low-lib",
+    src = "deps/low.rs",
+    crate_name = "capture_deps_low",
+    data = ["deps/src/low.rs"],
+    rustc_flags = ["-C", "function-sections=yes"],
+)
+
+xm1_rust_elf(
+    name = "capture-deps-low",
+    rust_staticlib = ":capture-deps-low-lib",
+    link_script = "deps/low.ld",
+    entry = "capture_wait",
+    visibility = ["//visibility:public"],
+)
+
+haskell_binary(
+    name = "capture-qualification",
+    srcs = ["CaptureQualifyMain.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:text",
+    ],
+)
