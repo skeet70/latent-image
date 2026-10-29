@@ -1,11 +1,11 @@
 //! Where each guest address of the run document comes from: an X-M1 1.50
 //! word or A32 instruction that forms it, or FujiMod's EXR II catalog.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, fmt, path::Path};
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(transparent)]
 pub struct Guest(pub u32);
 

@@ -4,6 +4,7 @@
 use fujimod_xm1::guest::RouteKey;
 use fujimod_xm1::machine::{KeyPulse, Machine};
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
+use fujimod_xm1::witness;
 use sha2::{Digest, Sha256};
 use std::{
     io::{BufRead, Write},
@@ -11,7 +12,7 @@ use std::{
     process::ExitCode,
 };
 
-const USAGE: &str = "Usage: fujimod-xm1 --run RUN.json --update DAT --boot-rom ROM --output DIR\n\
+const USAGE: &str = "Usage: fujimod-xm1 --run RUN.json --update DAT --boot-rom ROM --output DIR [--witness CONTRACT.json]\n\
 The caller validates DAT as X-M1 1.50-compatible. Commands on stdin:\n\
   key NAME HOLD RELEASE | run COUNT | quit\n";
 
@@ -23,6 +24,7 @@ struct Arguments {
     update: PathBuf,
     boot_rom: PathBuf,
     output: PathBuf,
+    witness: Option<PathBuf>,
 }
 
 fn arguments() -> Result<Arguments, String> {
@@ -30,6 +32,7 @@ fn arguments() -> Result<Arguments, String> {
     let mut update = None;
     let mut boot_rom = None;
     let mut output = None;
+    let mut witness = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(flag) = args.next() {
         let value = args.next().map(PathBuf::from).ok_or_else(|| USAGE.to_owned())?;
@@ -38,11 +41,14 @@ fn arguments() -> Result<Arguments, String> {
             Some("--update") => update = Some(value),
             Some("--boot-rom") => boot_rom = Some(value),
             Some("--output") => output = Some(value),
+            Some("--witness") => witness = Some(value),
             _ => return Err(USAGE.into()),
         }
     }
     match (run, update, boot_rom, output) {
-        (Some(run), Some(update), Some(boot_rom), Some(output)) => Ok(Arguments { run, update, boot_rom, output }),
+        (Some(run), Some(update), Some(boot_rom), Some(output)) => {
+            Ok(Arguments { run, update, boot_rom, output, witness })
+        }
         _ => Err(USAGE.into()),
     }
 }
@@ -132,7 +138,13 @@ fn drive() -> Result<(), String> {
     let mut session = run::open(&document, &update, &boot_rom)?;
     session.board.set_execution_policy(document.execution_policy.into())?;
     let boot = document.boot_instructions;
-    let mut driver = Driver { machine: Machine::new(document, session)?, output: arguments.output, frames: 0 };
+    let machine = Machine::new(document, session)?;
+    let output = arguments.output;
+    if let Some(contract_path) = &arguments.witness {
+        let contract = witness::WitnessContract::parse(&read(contract_path)?)?;
+        return witness::run(machine, contract, &output);
+    }
+    let mut driver = Driver { machine, output, frames: 0 };
     driver.machine.run(boot);
     let stdout = std::io::stdout();
     let mut out = stdout.lock();

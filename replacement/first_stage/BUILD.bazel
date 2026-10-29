@@ -1,0 +1,34 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "first-stage-rust",
+    src = "src.rs",
+    crate_name = "xm1_first_stage",
+)
+
+xm1_rust_elf(
+    name = "first-stage-image",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_first_stage_entry",
+    link_script = "first-stage.ld",
+    rust_staticlib = ":first-stage-rust",
+)
+
+xm1_rust_staticlib(
+    name = "first-stage-fault-rust",
+    testonly = True,
+    src = "src.rs",
+    crate_name = "xm1_first_stage",
+    rustc_flags = ["--cfg", "first_stage_fault"],
+)
+
+xm1_rust_elf(
+    name = "first-stage-fault-image",
+    testonly = True,
+    asm_srcs = ["entry.S"],
+    entry = "xm1_first_stage_entry",
+    link_script = "first-stage.ld",
+    rust_staticlib = ":first-stage-fault-rust",
+)
