@@ -10,19 +10,13 @@
     ]
   },
   "expect": "refused",
-  "entry": "Fault control for the cardless RAM-push UI preservation guard: the step sequence commits a film-simulation row, which changes the protected live settings record. The run must be refused by the preservation guard with an actual changed cpu-write. This file is a control and never qualifies the primary run.",
+  "entry": "Fault control for the cardless RAM-push UI preservation guard: from the natural M mode, the step sequence opens the film-simulation list and selects film row 1. The run must be refused by the preservation guard with an actual changed cpu-write; it does not assert which input produced the store. This file is a control and never qualifies the primary run.",
   "before_unload": [
     {
       "phase": "control-live-setting-write",
       "capture": "control-live-setting-write",
       "mode_dial": "M",
       "steps": [
-        [
-          "menu",
-          67,
-          56,
-          0
-        ],
         [
           "menu",
           1,
