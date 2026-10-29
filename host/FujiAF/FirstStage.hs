@@ -5,6 +5,13 @@ module FujiAF.FirstStage
   , SlotOffset
   , RetainedExtent
   , FirstStagePlan
+  , Symbol
+  , symbolAddress
+  , symbolSize
+  , symbolName
+  , parseSymbols
+  , lookupSymbol
+  , symbolSlotOffset
   , firstRecordSlotOffset
   , firstRecordSlotLength
   , resetVectorWordOffset
@@ -29,10 +36,12 @@ module FujiAF.FirstStage
 
 import Control.Monad (forM_)
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as C
 import Data.Bits (complement, (.&.))
 import Data.List (sortOn)
 import Data.Word (Word32)
 import FujiAF.UpdateContainer (MediaImage (..), Parts (..), putMediaWord)
+import Numeric (readHex)
 
 newtype ArmEntry = ArmEntry Word32
   deriving (Eq, Show)
@@ -43,13 +52,66 @@ newtype SlotOffset = SlotOffset Int
 data RetainedExtent = RetainedExtent SlotOffset SlotOffset
   deriving (Eq, Show)
 
-data FirstStagePlan = FirstStagePlan
-  { planEntry :: ArmEntry
-  , planLoadOffset :: SlotOffset
-  , planImage :: MediaImage
-  , planRetainedExtents :: [RetainedExtent]
-  }
+data FirstStagePlan = FirstStagePlan ArmEntry SlotOffset MediaImage [RetainedExtent]
   deriving (Eq, Show)
+
+planEntry :: FirstStagePlan -> ArmEntry
+planEntry (FirstStagePlan entry _ _ _) = entry
+
+planLoadOffset :: FirstStagePlan -> SlotOffset
+planLoadOffset (FirstStagePlan _ load _ _) = load
+
+planImage :: FirstStagePlan -> MediaImage
+planImage (FirstStagePlan _ _ image _) = image
+
+planRetainedExtents :: FirstStagePlan -> [RetainedExtent]
+planRetainedExtents (FirstStagePlan _ _ _ retained) = retained
+
+data Symbol = Symbol Word32 Word32 String
+  deriving (Eq, Show)
+
+symbolAddress :: Symbol -> Word32
+symbolAddress (Symbol address _ _) = address
+
+symbolSize :: Symbol -> Word32
+symbolSize (Symbol _ size _) = size
+
+symbolName :: Symbol -> String
+symbolName (Symbol _ _ name) = name
+
+parseSymbols :: B.ByteString -> Either String [Symbol]
+parseSymbols bytes = mapM parseLine (filter (not . C.null) (C.lines bytes))
+  where
+    parseLine line =
+      case C.words line of
+        [address, size, _kind, name] -> do
+          addressValue <- parseWord32 (C.unpack address)
+          sizeValue <- parseWord32 (C.unpack size)
+          pure (Symbol addressValue sizeValue (C.unpack name))
+        _ -> Left ("symbol row has no four-column llvm-nm shape: " ++ C.unpack line)
+
+parseWord32 :: String -> Either String Word32
+parseWord32 text =
+  case readHex (dropPrefix text) of
+    [(value, "")]
+      | value >= 0 && value <= 0xffffffff -> Right (fromIntegral (value :: Integer))
+    _ -> Left ("value is not a 32-bit hexadecimal number: " ++ text)
+  where
+    dropPrefix value
+      | take 2 value `elem` ["0x", "0X"] = drop 2 value
+      | otherwise = value
+
+lookupSymbol :: [Symbol] -> String -> Either String Symbol
+lookupSymbol symbols name =
+  case filter ((== name) . symbolName) symbols of
+    [symbol] -> Right symbol
+    [] -> Left ("candidate symbols lack " ++ name)
+    _ -> Left ("candidate symbols repeat " ++ name)
+
+symbolSlotOffset :: [Symbol] -> String -> Either String SlotOffset
+symbolSlotOffset symbols name = do
+  symbol <- lookupSymbol symbols name
+  slotOffset (fromIntegral (symbolAddress symbol))
 
 -- Media slot [0x40000,0x50000) inside the container's main pre-table.
 firstRecordSlotOffset :: Int

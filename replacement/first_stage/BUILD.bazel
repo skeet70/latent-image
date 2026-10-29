@@ -15,3 +15,20 @@ xm1_rust_elf(
     link_script = "first-stage.ld",
     rust_staticlib = ":first-stage-rust",
 )
+
+xm1_rust_staticlib(
+    name = "first-stage-fault-rust",
+    testonly = True,
+    src = "src.rs",
+    crate_name = "xm1_first_stage",
+    rustc_flags = ["--cfg", "first_stage_fault"],
+)
+
+xm1_rust_elf(
+    name = "first-stage-fault-image",
+    testonly = True,
+    asm_srcs = ["entry.S"],
+    entry = "xm1_first_stage_entry",
+    link_script = "first-stage.ld",
+    rust_staticlib = ":first-stage-fault-rust",
+)

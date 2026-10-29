@@ -99,7 +99,8 @@ xm1_first_stage_handoff_vector:
     .section .rodata
     .global xm1_first_stage_contract
 xm1_first_stage_contract:
-    .word xm1_vector_table_start, xm1_vector_table_end
+    .word xm1_vector_table_start, xm1_vector_before_reset_end
+    .word xm1_vector_after_reset_start, xm1_vector_table_end
     .word xm1_retained_body_start, xm1_retained_body_end
     .word xm1_retained_data_start, xm1_retained_data_end
 

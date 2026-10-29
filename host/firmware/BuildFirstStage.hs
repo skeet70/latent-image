@@ -4,10 +4,8 @@ module Main where
 
 import Control.Monad (forM_, unless, when)
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Char8 as C
 import Data.Bits (complement)
 import Data.Char (toLower)
-import Data.List (find)
 import Data.Word (Word32)
 import FujiAF.FirstStage
 import qualified FujiAF.Host as H
@@ -28,12 +26,6 @@ data Options = Options
   , optEntry :: Maybe ArmEntry
   , optLoadOffset :: Maybe SlotOffset
   , optExpectedSlotSha256 :: Maybe Sha256
-  }
-
-data Symbol = Symbol
-  { symbolAddress :: Word32
-  , symbolSize :: Word32
-  , symbolName :: String
   }
 
 usage :: String
@@ -91,41 +83,20 @@ parseOptions _ = Left usage
 eitherToMaybe :: Either String a -> Maybe a
 eitherToMaybe = either (const Nothing) Just
 
-parseSymbols :: B.ByteString -> Either String [Symbol]
-parseSymbols bytes = mapM parseLine (filter (not . C.null) (C.lines bytes))
-  where
-    parseLine line =
-      case C.words line of
-        [address, size, _kind, name] ->
-          case (parseNumber (C.unpack address), parseNumber (C.unpack size)) of
-            (Just addressValue, Just sizeValue) ->
-              Right (Symbol addressValue sizeValue (C.unpack name))
-            _ -> Left ("symbol row is not numeric: " ++ C.unpack line)
-        _ -> Left ("symbol row has no expected shape: " ++ C.unpack line)
-
-lookupSymbol :: [Symbol] -> String -> Either String Symbol
-lookupSymbol symbols name =
-  case filter ((== name) . symbolName) symbols of
-    [symbol] -> Right symbol
-    [] -> Left ("candidate symbols lack " ++ name)
-    _ -> Left ("candidate symbols repeat " ++ name)
-
-symbolSlotOffset :: [Symbol] -> String -> Either String SlotOffset
-symbolSlotOffset symbols name = do
-  symbol <- lookupSymbol symbols name
-  slotOffset (fromIntegral (symbolAddress symbol))
-
 retainedContract :: [Symbol] -> Either String [RetainedExtent]
 retainedContract symbols = do
   vectorStart <- symbolSlotOffset symbols "xm1_vector_table_start"
+  beforeReset <- symbolSlotOffset symbols "xm1_vector_before_reset_end"
+  afterReset <- symbolSlotOffset symbols "xm1_vector_after_reset_start"
   vectorEnd <- symbolSlotOffset symbols "xm1_vector_table_end"
   bodyStart <- symbolSlotOffset symbols "xm1_retained_body_start"
   bodyEnd <- symbolSlotOffset symbols "xm1_retained_body_end"
   dataStart <- symbolSlotOffset symbols "xm1_retained_data_start"
   dataEnd <- symbolSlotOffset symbols "xm1_retained_data_end"
+  beforeExtent <- retainedExtent vectorStart beforeReset
+  afterExtent <- retainedExtent afterReset vectorEnd
   bodyExtent <- retainedExtent bodyStart bodyEnd
   dataExtent <- retainedExtent dataStart dataEnd
-  vectorExtent <- retainedExtent vectorStart vectorEnd
   let bodyRange = (slotOffsetBytes bodyStart, slotOffsetBytes bodyEnd)
   forM_
     [ "xm1_retained_core_init"
@@ -142,7 +113,7 @@ retainedContract symbols = do
       if address < fst bodyRange || address >= snd bodyRange
         then Left (name ++ " is outside the retained body extent")
         else pure ()
-  pure [vectorExtent, bodyExtent, dataExtent]
+  pure [beforeExtent, afterExtent, bodyExtent, dataExtent]
 
 runChecks :: String -> [U.Check] -> IO ()
 runChecks title results = do

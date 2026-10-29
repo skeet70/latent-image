@@ -21,6 +21,8 @@ SECTIONS
 }
 
 xm1_vector_table_start = 0x0;
+xm1_vector_before_reset_end = 0x20;
+xm1_vector_after_reset_start = 0x24;
 xm1_vector_table_end = 0x40;
 xm1_retained_body_start = 0x1800;
 xm1_retained_body_end = 0x4300;

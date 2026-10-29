@@ -248,5 +248,14 @@ pub unsafe extern "C" fn xm1_first_stage_main() -> ! {
     configure_mpu(core);
     peer_rendezvous(core);
     stage_retained_next(core);
+    inject_fault();
     xm1_first_stage_handoff()
 }
+
+#[cfg(first_stage_fault)]
+unsafe fn inject_fault() {
+    write(0x4300 as *mut u32, 0xdead_be00);
+}
+
+#[cfg(not(first_stage_fault))]
+unsafe fn inject_fault() {}

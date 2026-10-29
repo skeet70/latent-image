@@ -114,4 +114,12 @@ main = do
   assertLeft "image overlaps vector" (invalidPlan image 0x20 0x20)
   assertLeft "retained extent outside slot" (slotOffset 0x20000)
   assertLeft "short carrier" (firstRecordSlotBytes (parts {U.partPreTable = B.replicate 0x40000 0}))
-  putStrLn "first-stage staging tests: 17 assertions pass"
+  assertTrue "ABS symbol rows" $
+    case parseSymbols "00000000 00000000 A xm1_vector_table_start\n00000020 00000004 A xm1_vector_before_reset_end\n" of
+      Right [first, second] ->
+        symbolAddress first == 0
+          && symbolAddress second == 0x20
+          && symbolSize second == 4
+      _ -> False
+  assertLeft "three-column symbol row" (parseSymbols "00000000 A xm1_vector_table_start")
+  putStrLn "first-stage staging tests: 19 assertions pass"

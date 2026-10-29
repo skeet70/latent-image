@@ -335,14 +335,49 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "first-stage-witness-lib",
+    srcs = ["Emulation/FirstStageWitness.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:cryptohash-sha256",
+        "//host:first-stage",
+        "//host:json",
+    ],
+)
+
+haskell_test(
+    name = "first-stage-witness-tests",
+    size = "small",
+    srcs = ["FirstStageWitnessTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:vector",
+    ],
+)
+
 haskell_binary(
     name = "first-stage-witness",
     srcs = ["FirstStageWitness.hs"],
+    args = ["--fflzd", "$(location //lz:fflzd)"],
+    data = ["//lz:fflzd"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     visibility = ["//visibility:public"],
     deps = [
         ":emulator-slot-lib",
+        ":first-stage-witness-lib",
         ":fujimod-paths",
+        ":native-observation",
         ":viewer-runtime-lib",
         "//host:aeson",
         "//host:base",
@@ -353,6 +388,7 @@ haskell_binary(
         "//host:first-stage",
         "//host:host-support",
         "//host:process",
+        "//host:update-container",
     ],
 )
 
