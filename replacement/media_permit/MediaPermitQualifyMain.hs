@@ -668,9 +668,10 @@ caseJsonAt inputs scenario side entry regions =
           , "events" .= ([] :: [Value])
           ]
     , "exclusions" .=
-        [ "Frame records and slot tables are synthetic fixtures; the stack is execution scratch."
-        , "Only the contract effects at the named globals and frame words are compared."
-        ]
+        ( [ "Frame records and slot tables are synthetic fixtures; the stack is execution scratch."
+          , "Only the contract effects at the named globals and frame words are compared."
+          ] :: [String]
+        )
     ]
 
 data ResultStatus = ResultPassed | ResultFailed | ResultInvalidCase | ResultInvalidOutput | ResultHostTimeout
@@ -922,7 +923,7 @@ report results faultScenario fault forbidden =
             , "model" .= show (scExpect scenario)
             , "original" .= resultJson original
             , "candidate" .= resultJson candidate
-            , "status" .= (if resultStatus original == ResultPassed && resultStatus candidate == ResultPassed then "passed" else "failed")
+            , "status" .= ((if resultStatus original == ResultPassed && resultStatus candidate == ResultPassed then "passed" else "failed") :: String)
             ]
         | (scenario, original, candidate) <- results
         ]
@@ -930,7 +931,7 @@ report results faultScenario fault forbidden =
         [ controlJson (Control "defect-candidate" (if faultWitness faultScenario fault then "refused" else "accepted") (resultProblems fault))
         , controlJson (Control "forbidden-body" (if forbiddenWitness forbidden then "refused" else "accepted") (resultProblems forbidden))
         ]
-    , "status" .= (if qualified then "qualified" else "failed")
+    , "status" .= ((if qualified then "qualified" else "failed") :: String)
     ]
   where
     qualified =
