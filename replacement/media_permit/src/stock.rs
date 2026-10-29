@@ -12,12 +12,20 @@ const LAYOUT_SECONDARY: usize = 0x0157_dd35;
 const SLOT_KEY_PRIMARY: usize = 0x0159_6800;
 const SLOT_KEY_SECONDARY: usize = 0x0159_67fc;
 const SLOT_KEY_KIND: usize = 0x0159_6804;
-const SLOT_KEY_STRIDE: isize = 0x1d0;
 const CAPTURE_WORD: usize = 0x27c8;
 const PERMIT_WORD: usize = 0x2fb0;
 const KIND_FLAG: usize = 0x4a8;
 const BITMAP_BASE: usize = 0x0159_6918;
-const BITMAP_STRIDE: usize = 0x1d0;
+
+const SLOT_OFFSETS: [u32; 201] = {
+    let mut offsets = [0u32; 201];
+    let mut index = 0;
+    while index < 201 {
+        offsets[index] = (index as u32) * 0x1d0;
+        index += 1;
+    }
+    offsets
+};
 const ACTIVE_SLOT: usize = 0x015a_d53c;
 const MINIMA: usize = 0x0158_1f60;
 const MIRROR_BYTES: usize = 0x10c;
@@ -78,7 +86,7 @@ impl SlotSource for StockSlots {
             KeyField::Word2 => 8,
             KeyField::WordMinus1 => -4,
         };
-        let address = base + slot.word() as isize * SLOT_KEY_STRIDE + field_offset;
+        let address = base + SLOT_OFFSETS[slot.word() as usize] as isize + field_offset;
         FrameKey(read_u32(address as usize))
     }
 
@@ -130,7 +138,7 @@ impl PermitRuntime for StockRuntime {
     }
 
     fn set_event_bit(&mut self, slot: SlotIndex, bit: crate::media_permit::EventBit) {
-        let base = BITMAP_BASE + slot.word() as usize * BITMAP_STRIDE;
+        let base = BITMAP_BASE + SLOT_OFFSETS[slot.word() as usize] as usize;
         unsafe { rb_mp_stock_bit_set(base, bit.0 as u32) };
     }
 
