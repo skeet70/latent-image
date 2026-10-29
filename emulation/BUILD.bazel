@@ -1381,6 +1381,7 @@ haskell_binary(
         "-XGHC2021",
         "-Wall",
         "-O2",
+        "-threaded",
     ],
     main_file = "OwnedMenuCases.hs",
     visibility = ["//visibility:public"],
