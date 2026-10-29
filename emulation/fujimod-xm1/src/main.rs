@@ -1,7 +1,7 @@
 //! Cold-boots X-M1 1.50 on FujiMod's EXR II runtime and answers the
 //! interactive protocol of `tools/probe_setup_menus.py`, so
 //! `Emulation.FlashBootRoute.judgeProbeOutput` judges its transcript.
-use fujimod_xm1::guest::RouteKey;
+use fujimod_xm1::guest::Press;
 use fujimod_xm1::machine::{KeyPulse, Machine};
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
 use fujimod_xm1::witness;
@@ -119,8 +119,8 @@ fn command(driver: &mut Driver, line: &str) -> Result<bool, String> {
             Ok(true)
         }
         ["key", name, hold, release] => {
-            let key = RouteKey::parse(name)?;
-            driver.machine.key(key, KeyPulse { hold: count(hold)?, release: count(release)? })?;
+            let key = Press::parse(name)?;
+            driver.machine.press_once(key, KeyPulse { hold: count(hold)?, release: count(release)? })?;
             Ok(true)
         }
         _ => Err(format!("unknown command: {line}")),

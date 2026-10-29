@@ -14,7 +14,7 @@ use fujimod_emulator::board::observation::MemoryWatch;
 use fujimod_emulator::board::preservation::{
     PhysicalRange, Preservation, PreservationState, ProtectedRanges,
 };
-use fujimod_xm1::sd_host::{Backing, MediaImage};
+use fujimod_xm1::sd_host::{Backing, MediaImage, SectorAddress, SectorCount};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -37,7 +37,7 @@ const FIRST_START_PULSE: KeyPulse = KeyPulse { hold: 8_000_000, release: 8_000_0
 const LIVE_VIEW_SETTLE: u64 = 40_000_000;
 const MODE_DIAL_SETTLE: u64 = 40_000_000;
 const DIRECTIONAL_PULSE: KeyPulse = KeyPulse { hold: 3_000_000, release: 12_000_000 };
-const HALF_PRESS_PULSE: KeyPulse = KeyPulse { hold: 8_000_000, release: 8_000_000 };
+const GPIO_PULSE: KeyPulse = KeyPulse { hold: 8_000_000, release: 8_000_000 };
 /// `tools/probe_setup_menus.py` DIAL_PULSE.
 const DIAL_PULSE: KeyPulse = KeyPulse { hold: 4_000_000, release: 1_000_000 };
 const MAX_PHASE: u64 = 15_000_000;
@@ -289,6 +289,7 @@ enum Request {
     ReleaseContext { segment: Option<ReleaseSegment> },
     ModeDial { position: ModeDialPosition },
     ReadMemory { address: u64, count: usize },
+    MediaRead { first: SectorAddress, count: SectorCount },
     WatchBegin { ranges: Vec<[u64; 2]>, limit: usize },
     WatchState,
     PreservationBegin { ranges: Vec<[u64; 2]> },
@@ -310,6 +311,7 @@ enum RequestKind {
     ReleaseContext,
     ModeDial,
     ReadMemory,
+    MediaRead,
     WatchBegin,
     WatchState,
     PreservationBegin,
@@ -331,6 +333,7 @@ impl Request {
             Request::ReleaseContext { .. } => RequestKind::ReleaseContext,
             Request::ModeDial { .. } => RequestKind::ModeDial,
             Request::ReadMemory { .. } => RequestKind::ReadMemory,
+            Request::MediaRead { .. } => RequestKind::MediaRead,
             Request::WatchBegin { .. } => RequestKind::WatchBegin,
             Request::WatchState => RequestKind::WatchState,
             Request::PreservationBegin { .. } => RequestKind::PreservationBegin,
@@ -396,7 +399,7 @@ fn default_pulse(key: Press) -> KeyPulse {
         Press::Key(RouteKey::Up | RouteKey::Down | RouteKey::Left | RouteKey::Right) => DIRECTIONAL_PULSE,
         Press::Key(RouteKey::Ok | RouteKey::Back | RouteKey::Q) => MENU_PULSE,
         Press::Dial(DialTurn::Left | DialTurn::Right) => DIAL_PULSE,
-        Press::HalfPress => HALF_PRESS_PULSE,
+        Press::Shutter(_) | Press::Play => GPIO_PULSE,
     }
 }
 
@@ -476,6 +479,10 @@ impl Server {
                     return Err("read-memory requires an address and 1..4096 bytes".into());
                 }
                 json!({"bytes": encode_hex(&self.bridge.machine.read(address, count)?)})
+            }
+            Request::MediaRead { first, count } => {
+                let read = self.bridge.machine.read_media(first, count)?;
+                json!({"first": read.first.0, "count": read.count.get(), "bytes": encode_hex(&read.bytes)})
             }
             Request::WatchBegin { ranges, limit } => {
                 if self.watch.is_some() {

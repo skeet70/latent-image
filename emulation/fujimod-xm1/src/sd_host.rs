@@ -114,6 +114,41 @@ pub struct MediaImage {
     pub nonzero_sectors: u64,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct SectorAddress(pub u32);
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(try_from = "u32")]
+pub struct SectorCount(u32);
+
+const MAX_MEDIA_READ_SECTORS: u32 = 512;
+
+impl TryFrom<u32> for SectorCount {
+    type Error = String;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        if (1..=MAX_MEDIA_READ_SECTORS).contains(&value) {
+            Ok(Self(value))
+        } else {
+            Err(format!("media read count must be 1..{MAX_MEDIA_READ_SECTORS} sectors"))
+        }
+    }
+}
+
+impl SectorCount {
+    pub fn get(self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct MediaRead {
+    pub first: SectorAddress,
+    pub count: SectorCount,
+    pub bytes: Vec<u8>,
+}
+
 #[derive(Clone)]
 pub struct RetainedCard {
     pub card: Card,
@@ -324,6 +359,18 @@ impl SdHost {
 
     pub fn card(&self) -> &Card {
         &self.card
+    }
+
+    pub fn read_sectors(&self, first: SectorAddress, count: SectorCount) -> Result<MediaRead, String> {
+        if !self.present()? {
+            return Err("media read requires an inserted card".into());
+        }
+        if u64::from(first.0) + u64::from(count.get()) > u64::from(self.card.sectors()) {
+            return Err("media read end exceeds the current card capacity".into());
+        }
+        let mut bytes = vec![0; count.get() as usize * SECTOR];
+        self.card.read_bytes(u64::from(first.0) * SECTOR as u64, &mut bytes)?;
+        Ok(MediaRead { first, count, bytes })
     }
 
     pub fn present(&self) -> Result<bool, String> {
@@ -1513,5 +1560,60 @@ mod tests {
         file.set_len(COMPLETE_BACKING_BYTES + SECTOR as u64).unwrap();
         assert!(load_image(&path, 0x40_0000, 4, Backing::Complete).is_err());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn media_read_count_is_nonempty_and_bounded() {
+        assert!(SectorCount::try_from(0).is_err());
+        assert!(SectorCount::try_from(513).is_err());
+        assert_eq!(SectorCount::try_from(1).unwrap().get(), 1);
+        assert_eq!(SectorCount::try_from(512).unwrap().get(), 512);
+    }
+
+    #[test]
+    fn media_read_returns_inserted_card_bytes_and_its_unwritten_zero() {
+        let path = std::env::temp_dir().join(format!("sd-host-media-read-{}.img", std::process::id()));
+        let image: Vec<u8> = (0..2 * SECTOR).map(|i| (i / SECTOR + 1) as u8).collect();
+        std::fs::write(&path, &image).unwrap();
+        let mut rig = Rig::new();
+        rig.host.insert(load_image(&path, 0x80_0000, 4, Backing::Sparse).unwrap()).unwrap();
+        let read = rig.host.read_sectors(SectorAddress(0), SectorCount::try_from(3).unwrap()).unwrap();
+        assert_eq!(read.count.get(), 3);
+        assert_eq!(&read.bytes[..2 * SECTOR], &image[..]);
+        assert!(read.bytes[2 * SECTOR..].iter().all(|byte| *byte == 0));
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn media_read_refuses_without_an_inserted_card() {
+        let mut rig = Rig::new();
+        rig.levels.set(DETECT, true);
+        assert!(rig.host.read_sectors(SectorAddress(0), SectorCount::try_from(1).unwrap()).is_err());
+    }
+
+    #[test]
+    fn media_read_end_is_checked_against_the_inserted_card() {
+        let rig = Rig::new();
+        let capacity = rig.host.card().sectors();
+        assert!(rig.host.read_sectors(SectorAddress(capacity), SectorCount::try_from(1).unwrap()).is_err());
+        assert!(rig.host.read_sectors(SectorAddress(capacity - 1), SectorCount::try_from(2).unwrap()).is_err());
+        let read = rig.host.read_sectors(SectorAddress(capacity - 2), SectorCount::try_from(2).unwrap()).unwrap();
+        assert_eq!(read.first, SectorAddress(capacity - 2));
+        assert_eq!(read.count.get(), 2);
+        assert_eq!(read.bytes.len(), 2 * SECTOR);
+        assert!(read.bytes.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn media_read_observes_a_guest_written_sector_without_touching_state_or_counters() {
+        let mut rig = Rig::selected();
+        pio_write(&mut rig, 9, 0x1111_1111);
+        let before = counters(&rig);
+        let state = fujimod_emulator_devices::Device::save(&rig.host);
+        let read = rig.host.read_sectors(SectorAddress(9), SectorCount::try_from(2).unwrap()).unwrap();
+        assert_eq!(&read.bytes[..4], &0x1111_1111u32.to_le_bytes());
+        assert!(read.bytes[SECTOR..].iter().all(|byte| *byte == 0));
+        assert_eq!(counters(&rig), before);
+        assert_eq!(fujimod_emulator_devices::Device::save(&rig.host), state);
     }
 }
