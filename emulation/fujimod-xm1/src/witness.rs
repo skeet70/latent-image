@@ -258,7 +258,7 @@ pub fn run(mut machine: Machine, contract: WitnessContract, output: &Path) -> Re
 fn execute(machine: &mut Machine, contract: &WitnessContract) -> Result<Vec<WitnessRead>, String> {
     let sites: BTreeMap<u32, String> =
         contract.stops.iter().map(|stop| (stop.address.0, stop.label.as_str().to_owned())).collect();
-    machine.traces.arm(&machine.session, sites)?;
+    machine.traces.arm_cores(&machine.session, sites, &[0])?;
     let expected: BTreeSet<StopLabel> = contract.stops.iter().map(|stop| stop.label).collect();
     let mut observed = BTreeSet::new();
     let start = machine.instructions();

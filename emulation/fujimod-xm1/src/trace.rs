@@ -26,6 +26,7 @@ pub struct TraceSites {
     pub stop_labels: BTreeSet<String>,
     pub hits: Vec<Hit>,
     points: Vec<(usize, Box<InstructionPoints>)>,
+    cores: Vec<usize>,
 }
 
 fn register(session: &Session, core: usize, register: arm::Register) -> Result<u32, String> {
@@ -40,8 +41,20 @@ impl TraceSites {
 
     /// Replaces the armed sites on every core.
     pub fn arm(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
+        let cores: Vec<usize> = (0..session.board.instruction_counts().len()).collect();
+        self.arm_cores(session, sites, &cores)
+    }
+
+    /// Replaces the armed sites on the named cores only.
+    pub fn arm_cores(
+        &mut self,
+        session: &Session,
+        sites: BTreeMap<u32, String>,
+        cores: &[usize],
+    ) -> Result<(), String> {
         self.disarm(session)?;
         self.sites = sites;
+        self.cores = cores.to_vec();
         self.rearm(session)
     }
 
@@ -60,7 +73,7 @@ impl TraceSites {
             return Ok(());
         }
         let addresses: Vec<u64> = self.sites.keys().map(|&address| u64::from(address)).collect();
-        for core in 0..session.board.instruction_counts().len() {
+        for &core in &self.cores {
             let points = session.board.instruction_points_begin(core, addresses.clone())?;
             self.points.push((core, points));
         }
