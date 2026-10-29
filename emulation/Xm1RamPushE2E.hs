@@ -744,7 +744,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           mediaAfterValue)
     observed <- readIORef (runnerObservations runner)
     phaseTimes <- readIORef phases
-    let result = object
+    let result = object $
           [ "schema" .= (1 :: Int)
           , "scope" .= String "emulated X-M1 RC0 ordinary-boot RAM push"
           , "plan" .= planName plan
