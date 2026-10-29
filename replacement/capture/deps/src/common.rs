@@ -1,6 +1,7 @@
 pub const PLAN: usize = 0x009a1000;
 pub const CHECK_COUNT: usize = 0x009a1100;
 pub const CHECK_STATUS: usize = 0x009a1104;
+pub const ADMITTED_STEP: usize = 0x009a1180;
 pub const CLEAR_COUNT: usize = 0x009a1200;
 pub const CLEAR_TRACE: usize = 0x009a1204;
 pub const ADVANCE_COUNT: usize = 0x009a1300;

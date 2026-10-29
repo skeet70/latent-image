@@ -5,7 +5,7 @@
 module Main where
 
 import Control.Exception (IOException, try)
-import Control.Monad (forM, when)
+import Control.Monad (forM, unless, when)
 import Data.Aeson (Value (Null), encode, object, toJSON, (.=))
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
@@ -26,11 +26,12 @@ import System.Exit (exitFailure)
 import System.FilePath ((</>))
 import System.IO.Error (userError)
 
-stateBase, stackBase, planBase, checkStatusBase, clearCountBase, clearTraceBase, advanceCountBase, advanceTraceBase, waitFlagBase, waitStateBase, waitClearCountBase, waitClearTraceBase, waitEventBase, waitAdvanceCountBase, waitAdvanceTraceBase, finalFlagBase, finalStateBase, finalClearCountBase, finalClearTraceBase, finalAdvanceCountBase, finalAdvanceTraceBase, waitSignalBase, releaseBase, candidateBase, depsHighBase, depsLowBase, exitAddress, stackTop, contextBase :: Word32
+stateBase, stackBase, planBase, checkStatusBase, admittedStepBase, clearCountBase, clearTraceBase, advanceCountBase, advanceTraceBase, waitFlagBase, waitStateBase, waitClearCountBase, waitClearTraceBase, waitEventBase, waitAdvanceCountBase, waitAdvanceTraceBase, finalFlagBase, finalStateBase, finalClearCountBase, finalClearTraceBase, finalAdvanceCountBase, finalAdvanceTraceBase, waitSignalBase, releaseBase, candidateBase, depsHighBase, depsLowBase, exitAddress, stackTop, contextBase :: Word32
 stateBase = 0x009a0000
 stackBase = 0x009a2000
 planBase = 0x009a1000
 checkStatusBase = 0x009a1104
+admittedStepBase = 0x009a1180
 clearCountBase = 0x009a1200
 clearTraceBase = 0x009a1204
 advanceCountBase = 0x009a1300
@@ -94,34 +95,57 @@ readU32 bytes offset
 stateOffset :: Word32 -> Int
 stateOffset address = fromIntegral (address - stateBase)
 
+newtype EventId = EventId Word32 deriving (Eq, Show)
+newtype StepState = StepState Word32 deriving (Eq, Show)
+newtype RequestedEvents = RequestedEvents Word32 deriving (Eq, Show)
+newtype StockStatus = StockStatus Word32 deriving (Eq, Show)
+
+data CancelSelector = AllEvents | CancelBit Word8 deriving (Eq, Show)
+
+eventWord :: EventId -> Word32
+eventWord (EventId value) = value
+
+stateWord :: StepState -> Word32
+stateWord (StepState value) = value
+
+requestedWord :: RequestedEvents -> Word32
+requestedWord (RequestedEvents value) = value
+
+stockStatusWord :: StockStatus -> Word32
+stockStatusWord (StockStatus value) = value
+
+cancelWord :: CancelSelector -> Word32
+cancelWord AllEvents = 0xc
+cancelWord (CancelBit bit) = fromIntegral bit
+
 data Plan = Plan
-  { planEvent :: Word32
-  , planEntryClear :: Word32
-  , planCancelClear :: Word32
-  , planNormalState :: Word32
-  , planCancelState :: Word32
-  , planWaitEvent :: Word32
-  , planCancelBit :: Word32
+  { planEvent :: EventId
+  , planEntryClear :: EventId
+  , planCancelClear :: EventId
+  , planNormalState :: StepState
+  , planCancelState :: StepState
+  , planWaitEvent :: EventId
+  , planCancelSelector :: CancelSelector
   }
 
 data Scenario = Scenario
   { scenarioId :: String
   , scenarioPlan :: Plan
-  , scenarioSignals :: Word32
-  , scenarioChecks :: [Word32]
-  , scenarioWaitSignal :: Word32
+  , scenarioSignals :: RequestedEvents
+  , scenarioChecks :: [StockStatus]
+  , scenarioWaitSignal :: Maybe RequestedEvents
   }
 
 data Boundary = Boundary
-  { boundaryState :: Word32
-  , boundaryCleared :: [Word32]
-  , boundaryAdvanced :: [Word32]
-  , boundaryWait :: Maybe Word32
+  { boundaryState :: StepState
+  , boundaryCleared :: [EventId]
+  , boundaryAdvanced :: [StepState]
+  , boundaryWait :: Maybe EventId
   }
   deriving (Eq, Show)
 
 data Outcome = Outcome
-  { outcomeStatus :: Word32
+  { outcomeStatus :: StockStatus
   , outcomeWait :: Maybe Boundary
   , outcomeFinal :: Maybe Boundary
   , outcomeRelease :: Word32
@@ -129,38 +153,39 @@ data Outcome = Outcome
 
 planWords :: Plan -> [Word32]
 planWords plan =
-  [ planEvent plan
-  , planEntryClear plan
-  , planCancelClear plan
-  , planNormalState plan
-  , planCancelState plan
+  [ eventWord (planEvent plan)
+  , eventWord (planEntryClear plan)
+  , eventWord (planCancelClear plan)
+  , stateWord (planNormalState plan)
+  , stateWord (planCancelState plan)
   , 1
   , 0
   , 0xd
-  , planWaitEvent plan
-  , planCancelBit plan
+  , eventWord (planWaitEvent plan)
+  , cancelWord (planCancelSelector plan)
   , 0
   , 0
   , 0
   ]
 
-cancelRequested :: Plan -> Word32 -> Bool
-cancelRequested plan signals
-  | planCancelBit plan == 0xc = signals /= 0
-  | otherwise = signals .&. ((1 :: Word32) `shiftL` fromIntegral (planCancelBit plan)) /= 0
+cancelRequested :: Plan -> RequestedEvents -> Bool
+cancelRequested plan signals =
+  case planCancelSelector plan of
+    AllEvents -> signals /= RequestedEvents 0
+    CancelBit bit -> requestedWord signals .&. ((1 :: Word32) `shiftL` fromIntegral bit) /= 0
 
-nextCheck :: [Word32] -> (Word32, [Word32])
-nextCheck [] = (0, [])
+nextCheck :: [StockStatus] -> (StockStatus, [StockStatus])
+nextCheck [] = (StockStatus 0, [])
 nextCheck (value : rest) = (value, rest)
 
 model :: Scenario -> Outcome
 model scenario
-  | entryStatus /= 0 = Outcome entryStatus Nothing Nothing 0
+  | entryStatus /= StockStatus 0 = Outcome entryStatus Nothing Nothing 0
   | cancelRequested plan (scenarioSignals scenario) =
       let (cancelStatus, _) = nextCheck afterEntry
           final = Boundary cancelState [entryClear, cancelClear] [cancelState] Nothing
        in Outcome cancelStatus Nothing (Just final) 1
-  | advanceStatus /= 0 =
+  | advanceStatus /= StockStatus 0 =
       Outcome advanceStatus Nothing (Just (Boundary normalState [entryClear] [normalState] Nothing)) 1
   | otherwise =
       let (finalStatus, _) = nextCheck afterAdvance
@@ -178,40 +203,39 @@ model scenario
     waitEvent = planWaitEvent plan
     (entryStatus, afterEntry) = nextCheck (scenarioChecks scenario)
     (advanceStatus, afterAdvance) = nextCheck afterEntry
-    afterWait = if scenarioWaitSignal scenario /= 0 then scenarioWaitSignal scenario else scenarioSignals scenario
+    afterWait = maybe (scenarioSignals scenario) id (scenarioWaitSignal scenario)
 
 initialState :: Scenario -> B.ByteString
 initialState scenario =
   putWords (stateOffset planBase) (planWords (scenarioPlan scenario))
-    (putWords (stateOffset checkStatusBase) (scenarioChecks scenario)
-      (putU32 (stateOffset waitSignalBase) (scenarioWaitSignal scenario)
-        (putU32 (stateOffset (contextBase + 0x4c)) (scenarioSignals scenario) (B.replicate stateSize 0))))
+    (putWords (stateOffset checkStatusBase) (map stockStatusWord (scenarioChecks scenario))
+      (putU32 (stateOffset admittedStepBase) 1
+        (putU32 (stateOffset waitSignalBase) (maybe 0 requestedWord (scenarioWaitSignal scenario))
+          (putU32 (stateOffset (contextBase + 0x4c)) (requestedWord (scenarioSignals scenario)) (B.replicate stateSize 0)))))
 
 scenarios :: [Scenario]
 scenarios =
-  [ Scenario "normal" base 0 [0, 0, 0] 0
-  , Scenario "cancel-before" base 1 [0, 0] 0
-  , Scenario "cancel-before-final-error" base 1 [0, 7] 0
-  , Scenario "cancel-wait" base 0 [0, 0, 0] 1
-  , Scenario "entry-error" base 0 [5] 0
-  , Scenario "advance-error" base 0 [0, 6, 0] 0
-  , Scenario "final-error" base 0 [0, 0, 5] 0
-  , Scenario "bit3-cancel" base {planCancelBit = 3} 0x8 [0, 0] 0
-  , Scenario "bit3-other" base {planCancelBit = 3} 0x4 [0, 0, 0] 0
-  , Scenario "all-bit-other" base 0x4 [0, 0] 0
-  , Scenario "wait-mask-20" base {planWaitEvent = 0x20} 0 [0, 0, 0] 0
-  , Scenario "cancel-bit-zero" base {planCancelBit = 0} 1 [0, 0, 0] 0
+  [ Scenario "normal" base (RequestedEvents 0) [StockStatus 0, StockStatus 0, StockStatus 0] Nothing
+  , Scenario "cancel-before" base (RequestedEvents 1) [StockStatus 0, StockStatus 0] Nothing
+  , Scenario "cancel-before-final-error" base (RequestedEvents 1) [StockStatus 0, StockStatus 7] Nothing
+  , Scenario "cancel-wait" base (RequestedEvents 0) [StockStatus 0, StockStatus 0, StockStatus 0] (Just (RequestedEvents 1))
+  , Scenario "entry-error" base (RequestedEvents 0) [StockStatus 5] Nothing
+  , Scenario "advance-error" base (RequestedEvents 0) [StockStatus 0, StockStatus 6, StockStatus 0] Nothing
+  , Scenario "final-error" base (RequestedEvents 0) [StockStatus 0, StockStatus 0, StockStatus 5] Nothing
+  , Scenario "bit3-cancel" base {planCancelSelector = CancelBit 3} (RequestedEvents 0x8) [StockStatus 0, StockStatus 0] Nothing
+  , Scenario "bit3-other" base {planCancelSelector = CancelBit 3} (RequestedEvents 0x4) [StockStatus 0, StockStatus 0, StockStatus 0] Nothing
+  , Scenario "all-bit-other" base (RequestedEvents 0x4) [StockStatus 0, StockStatus 0] Nothing
+  , Scenario "wait-mask-20" base {planWaitEvent = EventId 0x20} (RequestedEvents 0) [StockStatus 0, StockStatus 0, StockStatus 0] Nothing
+  , Scenario "cancel-bit-zero" base {planCancelSelector = CancelBit 0} (RequestedEvents 1) [StockStatus 0, StockStatus 0, StockStatus 0] Nothing
   ]
   where
-    base = Plan 0 2 3 4 5 0x30 0xc
+    base = Plan (EventId 0) (EventId 2) (EventId 3) (StepState 4) (StepState 5) (EventId 0x30) AllEvents
 
-invalidScenarios :: [Scenario]
-invalidScenarios =
-  [ Scenario "invalid-cancel-bit-32" base {planCancelBit = 32} 0 [0, 0, 0] 0
-  , Scenario "invalid-cancel-bit-64" base {planCancelBit = 64} 0 [0, 0, 0] 0
+invalidCancelFixtures :: [(String, Word32)]
+invalidCancelFixtures =
+  [ ("invalid-cancel-bit-32", 32)
+  , ("invalid-cancel-bit-64", 64)
   ]
-  where
-    base = Plan 0 2 3 4 5 0x30 0xc
 
 invalidPointers :: [(String, Word32)]
 invalidPointers =
@@ -227,13 +251,40 @@ validatePointer address
   | address .&. 3 /= 0 = Left "pointer is not word aligned"
   | otherwise = Right ()
 
+validateCancelWord :: Word32 -> Either String ()
+validateCancelWord word
+  | word == 0xc || word <= 31 = Right ()
+  | otherwise = Left "descriptor cancel bit is outside 0xc or 0..=31"
+
 validateScenario :: Scenario -> Either String ()
 validateScenario scenario
-  | cancel /= 0xc && cancel > 31 = Left "descriptor cancel bit is outside 0xc or 0..=31"
   | length (scenarioChecks scenario) > 8 = Left "check script exceeds the case status array"
   | otherwise = validatePointer contextBase >> validatePointer planBase
-  where
-    cancel = planCancelBit (scenarioPlan scenario)
+
+data ResultStatus = ResultPassed | ResultFailed | ResultInvalidCase | ResultInvalidOutput | ResultHostTimeout deriving (Eq, Show)
+
+resultStatusLabel :: ResultStatus -> String
+resultStatusLabel ResultPassed = "passed"
+resultStatusLabel ResultFailed = "failed"
+resultStatusLabel ResultInvalidCase = "invalid_case"
+resultStatusLabel ResultInvalidOutput = "invalid_output"
+resultStatusLabel ResultHostTimeout = "host_timeout"
+
+data ControlStatus = Refused | Accepted deriving (Eq, Show)
+
+data Control = Control
+  { controlName :: String
+  , controlStatus :: ControlStatus
+  , controlProblems :: [String]
+  }
+
+controlJson :: Control -> Value
+controlJson control =
+  object
+    [ "name" .= controlName control
+    , "status" .= (if controlStatus control == Refused then "refused" else "accepted")
+    , "problems" .= controlProblems control
+    ]
 
 data Artifacts = Artifacts
   { artifactState :: B.ByteString
@@ -254,6 +305,8 @@ loadArtifacts build stockElf = do
   elf <- B.readFile stockElf
   when (B.length elf < stockWaitElfOffset + stockWaitSize) $
     ioError (userError "stock ELF is too short for the wait entry")
+  when (B.length high > depsHighSize || B.length low > depsLowSize || B.length faulty > depsLowSize || B.length candidate > candidateSize) $
+    ioError (userError "artifact exceeds its declared region")
   let stock = B.take stockWaitSize (B.drop stockWaitElfOffset elf)
   case readU32 stock 0 of
     Right 0xe92d4870 -> pure ()
@@ -261,6 +314,11 @@ loadArtifacts build stockElf = do
   let highStock = overlay stockWaitOffset stock (ensure (stockWaitOffset + B.length stock) high)
       guard = B.concat (replicate ((stockWaitSize + 3) `div` 4) (u32le 0xe7f000f0))
       highGuard = overlay stockWaitOffset guard (ensure (stockWaitOffset + B.length guard) high)
+  when (B.length highStock > depsHighSize || B.length highGuard > depsHighSize) $
+    ioError (userError "high dependency artifact exceeds its declared region")
+  case readU32 highGuard stockWaitOffset of
+    Right 0xe7f000f0 -> pure ()
+    other -> ioError (userError ("guard opcode differs: " ++ either id hex other))
   pure
     Artifacts
       { artifactState = B.empty
@@ -274,7 +332,7 @@ loadArtifacts build stockElf = do
   where
     overlay offset bytes base = B.take offset base <> bytes <> B.drop (offset + B.length bytes) base
     ensure size bytes = if B.length bytes >= size then bytes else bytes <> B.replicate (size - B.length bytes) 0
-    pad size bytes = B.take size (bytes <> B.replicate size 0)
+    pad size bytes = bytes <> B.replicate (size - B.length bytes) 0
 
 syntheticSpans :: [(Word32, Int)]
 syntheticSpans =
@@ -344,25 +402,7 @@ caseJson scenario side artifacts =
             ]
         , "entry" .= hex entry
         , "exit" .= hex exitAddress
-        , "registers" .=
-            object
-              [ "r0" .= hex contextBase
-              , "r1" .= hex 1
-              , "r2" .= hex 0
-              , "r3" .= hex 0
-              , "r4" .= hex 0
-              , "r5" .= hex 0
-              , "r6" .= hex 0
-              , "r7" .= hex 0
-              , "r8" .= hex 0
-              , "r9" .= hex 0
-              , "r10" .= hex 0
-              , "r11" .= hex 0
-              , "r12" .= hex 0
-              , "sp" .= hex stackTop
-              , "lr" .= hex exitAddress
-              , "cpsr" .= hex 0x10
-              ]
+        , "registers" .= initialRegisters contextBase 1
         , "regions" .=
             [ regionJson "state" stateBase stateSize "rw" state
             , regionJson "stack" stackBase stackSize "rw" B.empty
@@ -378,7 +418,7 @@ caseJson scenario side artifacts =
               [ "status" .= ("returned" :: String)
               , "registers" .=
                   object
-                    [ "r0" .= hex (outcomeStatus (model scenario))
+                    [ "r0" .= hex (stockStatusWord (outcomeStatus (model scenario)))
                     , "sp" .= hex stackTop
                     , "pc" .= hex exitAddress
                     ]
@@ -389,6 +429,67 @@ caseJson scenario side artifacts =
             [ "Wait and release boundaries compare the current state, clear sequence and advance sequence; diagnostic log and check counts are not asserted."
             , "The stack region is execution scratch and is not compared."
             ]
+        ]
+
+initialRegisters :: Word32 -> Word32 -> Value
+initialRegisters first second =
+  object
+    [ "r0" .= hex first
+    , "r1" .= hex second
+    , "r2" .= hex 0
+    , "r3" .= hex 0
+    , "r4" .= hex 0
+    , "r5" .= hex 0
+    , "r6" .= hex 0
+    , "r7" .= hex 0
+    , "r8" .= hex 0
+    , "r9" .= hex 0
+    , "r10" .= hex 0
+    , "r11" .= hex 0
+    , "r12" .= hex 0
+    , "sp" .= hex stackTop
+    , "lr" .= hex exitAddress
+    , "cpsr" .= hex 0x10
+    ]
+
+lookupGuardJson :: Artifacts -> Value
+lookupGuardJson artifacts =
+  let state = artifactState artifacts
+      high = artifactHigh artifacts
+   in object
+        [ "schema_version" .= (1 :: Int)
+        , "id" .= ("lookup-wrong-group" :: String)
+        , "origin" .= ("synthetic" :: String)
+        , "provenance" .= ("X-M1 1.50 FUN_00e91810 group and step contract" :: String)
+        , "cpu" .= object ["architecture" .= ("arm" :: String), "model" .= ("cortex-r5f" :: String), "mode" .= ("arm" :: String), "endian" .= ("little" :: String)]
+        , "artifacts" .=
+            [ artifactJson "state" state
+            , artifactJson "deps-high" high
+            , artifactJson "deps-low" (artifactLow artifacts)
+            , artifactJson "candidate" (artifactCandidate artifacts)
+            ]
+        , "entry" .= hex 0x00e91810
+        , "exit" .= hex exitAddress
+        , "registers" .= initialRegisters 0 1
+        , "regions" .=
+            [ regionJson "state" stateBase stateSize "rw" state
+            , regionJson "stack" stackBase stackSize "rw" B.empty
+            , regionJson "deps-high" depsHighBase depsHighSize "rx" high
+            , regionJson "deps-low" depsLowBase depsLowSize "rx" (artifactLow artifacts)
+            , regionJson "candidate" candidateBase candidateSize "rx" (artifactCandidate artifacts)
+            ]
+        , "functions" .= [object ["address" .= hex address, "size" .= size] | (address, size) <- syntheticSpans]
+        , "stubs" .= ([] :: [Value])
+        , "limits" .= object ["instructions" .= (4000000 :: Int), "wall_ms" .= (4000 :: Int)]
+        , "expected" .=
+            object
+              [ "status" .= ("returned" :: String)
+              , "registers" .= object ["r0" .= hex 0, "sp" .= hex stackTop, "pc" .= hex exitAddress]
+              , "memory" .= ([] :: [Value])
+              , "events" .= ([] :: [Value])
+              ]
+        , "exclusions" .=
+            [ "The lookup guard must fault when the group is not 0x80." ]
         ]
 
 contains :: N.GuestAddress -> Int -> N.GuestAddress -> Int -> Bool
@@ -408,10 +509,10 @@ readWaitBoundary bytes = do
   case flag of
     0 -> Right Nothing
     1 -> do
-      state <- readU32 bytes (stateOffset waitStateBase)
-      cleared <- readValues bytes waitClearCountBase waitClearTraceBase
-      advanced <- readValues bytes waitAdvanceCountBase waitAdvanceTraceBase
-      event <- readU32 bytes (stateOffset waitEventBase)
+      state <- StepState <$> readU32 bytes (stateOffset waitStateBase)
+      cleared <- map EventId <$> readValues bytes waitClearCountBase waitClearTraceBase
+      advanced <- map StepState <$> readValues bytes waitAdvanceCountBase waitAdvanceTraceBase
+      event <- EventId <$> readU32 bytes (stateOffset waitEventBase)
       Right (Just (Boundary state cleared advanced (Just event)))
     other -> Left ("invalid wait boundary flag: " ++ show other)
 
@@ -421,9 +522,9 @@ readFinalBoundary bytes = do
   case flag of
     0 -> Right Nothing
     1 -> do
-      state <- readU32 bytes (stateOffset finalStateBase)
-      cleared <- readValues bytes finalClearCountBase finalClearTraceBase
-      advanced <- readValues bytes finalAdvanceCountBase finalAdvanceTraceBase
+      state <- StepState <$> readU32 bytes (stateOffset finalStateBase)
+      cleared <- map EventId <$> readValues bytes finalClearCountBase finalClearTraceBase
+      advanced <- map StepState <$> readValues bytes finalAdvanceCountBase finalAdvanceTraceBase
       Right (Just (Boundary state cleared advanced Nothing))
     other -> Left ("invalid final boundary flag: " ++ show other)
 
@@ -452,7 +553,7 @@ checkCapture regions scenario observation =
           | actual /= expectedValue -> ["register " ++ N.registerLabel which ++ ": expected " ++ N.hexWord32 expectedValue ++ ", observed " ++ N.hexWord32 actual]
           | otherwise -> []
     registers =
-      register N.R0 (outcomeStatus expected)
+      register N.R0 (stockStatusWord (outcomeStatus expected))
         ++ register N.Sp stackTop
         ++ register N.Pc exitAddress
     boundaries =
@@ -485,7 +586,7 @@ checkCapture regions scenario observation =
             ]
 
 data Result = Result
-  { resultStatus :: String
+  { resultStatus :: ResultStatus
   , resultProblems :: [String]
   , resultObservation :: Maybe N.NativeObservation
   }
@@ -493,7 +594,7 @@ data Result = Result
 runSide :: FilePath -> FilePath -> Artifacts -> Scenario -> Side -> IO Result
 runSide runner root artifactsTemplate scenario side =
   case validateScenario scenario of
-    Left reason -> pure (Result "invalid_case" [reason] Nothing)
+    Left reason -> pure (Result ResultInvalidCase [reason] Nothing)
     Right () -> do
       let dir = root </> (scenarioId scenario ++ "-" ++ sideLabel side)
           artifacts = artifactsTemplate {artifactState = initialState scenario}
@@ -506,22 +607,56 @@ runSide runner root artifactsTemplate scenario side =
       BL.writeFile (dir </> "case.json") (encode value)
       loaded <- try (loadCase (dir </> "case.json"))
       case loaded of
-        Left (message :: IOException) -> pure (Result "invalid_case" [show message] Nothing)
+        Left (message :: IOException) -> pure (Result ResultInvalidCase [show message] Nothing)
         Right (_, regions, wire, _) -> do
           executable <- canonicalizePath runner
           (timed, exit, out, err) <- runBounded 8000000 (8 * 1024 * 1024) executable [] wire
           if timed
-            then pure (Result "host_timeout" [BC.unpack err] Nothing)
+            then pure (Result ResultHostTimeout [BC.unpack err] Nothing)
             else do
               parsed <- try (jsonRead out)
               case parsed of
-                Left (message :: IOException) -> pure (Result "invalid_output" [show message, BC.unpack err] Nothing)
+                Left (message :: IOException) -> pure (Result ResultInvalidOutput [show message, BC.unpack err] Nothing)
                 Right runnerValue ->
                   case N.observeNative exit regions runnerValue of
-                    Left problem -> pure (Result "invalid_output" [N.renderObservationError problem, BC.unpack err] Nothing)
+                    Left problem -> pure (Result ResultInvalidOutput [N.renderObservationError problem, BC.unpack err] Nothing)
                     Right observation ->
                       let problems = checkCapture regions scenario observation
-                       in pure (Result (if null problems then "passed" else "failed") problems (Just observation))
+                       in pure (Result (if null problems then ResultPassed else ResultFailed) problems (Just observation))
+
+runLookupGuard :: FilePath -> FilePath -> Artifacts -> Scenario -> IO Result
+runLookupGuard runner root artifactsTemplate scenario = do
+  let dir = root </> "lookup-wrong-group"
+      artifacts = artifactsTemplate {artifactState = initialState scenario}
+      value = lookupGuardJson artifacts
+  createDirectoryIfMissing True dir
+  B.writeFile (dir </> "state.bin") (artifactState artifacts)
+  B.writeFile (dir </> "deps-high.bin") (artifactHigh artifacts)
+  B.writeFile (dir </> "deps-low.bin") (artifactLow artifacts)
+  B.writeFile (dir </> "candidate.bin") (artifactCandidate artifacts)
+  BL.writeFile (dir </> "case.json") (encode value)
+  loaded <- try (loadCase (dir </> "case.json"))
+  case loaded of
+    Left (message :: IOException) -> pure (Result ResultInvalidCase [show message] Nothing)
+    Right (_, regions, wire, _) -> do
+      executable <- canonicalizePath runner
+      (timed, exit, out, err) <- runBounded 8000000 (8 * 1024 * 1024) executable [] wire
+      if timed
+        then pure (Result ResultHostTimeout [BC.unpack err] Nothing)
+        else do
+          parsed <- try (jsonRead out)
+          case parsed of
+            Left (message :: IOException) -> pure (Result ResultInvalidOutput [show message, BC.unpack err] Nothing)
+            Right runnerValue ->
+              case N.observeNative exit regions runnerValue of
+                Left problem -> pure (Result ResultInvalidOutput [N.renderObservationError problem, BC.unpack err] Nothing)
+                Right observation ->
+                  pure
+                    ( Result
+                        (if N.nativeStatus observation == N.Returned then ResultPassed else ResultFailed)
+                        []
+                        (Just observation)
+                    )
 
 mutateState :: (B.ByteString -> B.ByteString) -> N.NativeObservation -> N.NativeObservation
 mutateState change observation =
@@ -532,28 +667,12 @@ mutateState change observation =
         ]
     }
 
-data ControlStatus = Refused | Accepted deriving (Eq, Show)
-
-data Control = Control
-  { controlName :: String
-  , controlStatus :: ControlStatus
-  , controlProblems :: [String]
-  }
-
-controlJson :: Control -> Value
-controlJson control =
-  object
-    [ "name" .= controlName control
-    , "status" .= (if controlStatus control == Refused then "refused" else "accepted")
-    , "problems" .= controlProblems control
-    ]
-
 controlChecks :: Scenario -> N.NativeObservation -> [Control]
 controlChecks scenario observation =
   [ control "release-twice" (mutateState (putU32 (stateOffset releaseBase) 2) observation)
   , control "missing-release" (mutateState (putU32 (stateOffset releaseBase) 0) observation)
   , control "missing-wait" (mutateState (putU32 (stateOffset waitFlagBase) 0) observation)
-  , control "wrong-status" (observation {N.nativeRegisters = M.insert N.R0 (outcomeStatus (model scenario) + 1) (N.nativeRegisters observation)})
+  , control "wrong-status" (observation {N.nativeRegisters = M.insert N.R0 (stockStatusWord (outcomeStatus (model scenario)) + 1) (N.nativeRegisters observation)})
   ]
   where
     control name changed =
@@ -566,14 +685,29 @@ witnessControl name witness result =
 
 producerWitness :: Result -> Bool
 producerWitness result =
-  resultStatus result == "failed"
+  resultStatus result == ResultFailed
     && maybe False ((== N.Returned) . N.nativeStatus) (resultObservation result)
     && any ("release count expected" `isPrefixOf`) (resultProblems result)
 
 guardWitness :: Result -> Bool
 guardWitness result =
-  resultStatus result == "failed"
-    && "runner status unsupported_instruction" `elem` resultProblems result
+  resultStatus result == ResultFailed
+    && maybe
+      False
+      (\observation ->
+        N.nativeStatus observation == N.UnsupportedInstruction
+          && M.lookup N.Pc (N.nativeRegisters observation) == Just 0x00e9e038)
+      (resultObservation result)
+
+lookupWitness :: Result -> Bool
+lookupWitness result =
+  resultStatus result == ResultFailed
+    && maybe
+      False
+      (\observation ->
+        N.nativeStatus observation == N.UnsupportedInstruction
+          && maybe False (\pc -> pc >= 0x00e91810 && pc < 0x00e91910) (M.lookup N.Pc (N.nativeRegisters observation)))
+      (resultObservation result)
 
 invalidValue :: String -> Either String () -> Control
 invalidValue name result =
@@ -583,23 +717,38 @@ boundaryJson :: Maybe Boundary -> Value
 boundaryJson Nothing = Null
 boundaryJson (Just boundary) =
   object
-    [ "state" .= boundaryState boundary
-    , "cleared" .= boundaryCleared boundary
-    , "advanced" .= boundaryAdvanced boundary
-    , "wait" .= maybe Null (toJSON :: Word32 -> Value) (boundaryWait boundary)
+    [ "state" .= stateWord (boundaryState boundary)
+    , "cleared" .= map eventWord (boundaryCleared boundary)
+    , "advanced" .= map stateWord (boundaryAdvanced boundary)
+    , "wait" .= maybe Null (toJSON . eventWord) (boundaryWait boundary)
     ]
 
-report :: [(Scenario, Result, Result, [Control])] -> Control -> Control -> [Control] -> Value
-report results producerControl guardControl invalidControls =
+qualifiedResults :: [(Scenario, Result, Result, [Control])] -> Control -> Control -> Control -> [Control] -> Bool
+qualifiedResults cases producer guard lookupControl invalid =
+  all
+    (\(_, original, candidate, controls) ->
+      resultStatus original == ResultPassed
+        && resultStatus candidate == ResultPassed
+        && not (null controls)
+        && all ((== Refused) . controlStatus) controls)
+    cases
+    && controlStatus producer == Refused
+    && controlStatus guard == Refused
+    && controlStatus lookupControl == Refused
+    && all ((== Refused) . controlStatus) invalid
+
+report :: [(Scenario, Result, Result, [Control])] -> Control -> Control -> Control -> [Control] -> Value
+report results producerControl guardControl lookupControl invalidControls =
   object
     [ "schema_version" .= (1 :: Int)
     , "profile" .= ("capture-develop-wait" :: String)
     , "cases" .= [caseReport scenario original candidate controls | (scenario, original, candidate, controls) <- results]
     , "producer_controls" .= [controlJson producerControl]
     , "guard_controls" .= [controlJson guardControl]
+    , "lookup_controls" .= [controlJson lookupControl]
     , "invalid_inputs" .= map controlJson invalidControls
-    , "status" .= (if capability results producerControl guardControl invalidControls then "qualified" else "failed")
-    , "capability" .= capability results producerControl guardControl invalidControls
+    , "status" .= (if qualifiedResults results producerControl guardControl lookupControl invalidControls then "qualified" else "failed")
+    , "capability" .= qualifiedResults results producerControl guardControl lookupControl invalidControls
     ]
   where
     caseReport scenario original candidate controls =
@@ -607,7 +756,7 @@ report results producerControl guardControl invalidControls =
         [ "id" .= scenarioId scenario
         , "model" .=
             object
-              [ "status" .= outcomeStatus (model scenario)
+              [ "status" .= stockStatusWord (outcomeStatus (model scenario))
               , "wait_boundary" .= boundaryJson (outcomeWait (model scenario))
               , "final_boundary" .= boundaryJson (outcomeFinal (model scenario))
               , "release" .= outcomeRelease (model scenario)
@@ -615,21 +764,10 @@ report results producerControl guardControl invalidControls =
         , "original" .= resultJson original
         , "candidate" .= resultJson candidate
         , "controls" .= map controlJson controls
-        , "status" .= (if resultStatus original == "passed" && resultStatus candidate == "passed" then "passed" else "failed")
+        , "status" .= (if resultStatus original == ResultPassed && resultStatus candidate == ResultPassed then "passed" else "failed")
         ]
     resultJson result =
-      object ["status" .= resultStatus result, "problems" .= resultProblems result]
-    capability cases producer guard invalid =
-      all
-        (\(_, original, candidate, controls) ->
-          resultStatus original == "passed"
-            && resultStatus candidate == "passed"
-            && not (null controls)
-            && all ((== Refused) . controlStatus) controls)
-        cases
-        && controlStatus producer == Refused
-        && controlStatus guard == Refused
-        && all ((== Refused) . controlStatus) invalid
+      object ["status" .= resultStatusLabel (resultStatus result), "problems" .= resultProblems result]
 
 main :: IO ()
 main = do
@@ -653,15 +791,22 @@ run runner build out stockElf = do
   let normalScenario = head [scenario | scenario <- scenarios, scenarioId scenario == "normal"]
       producerRoot = out </> "producer"
       guardRoot = out </> "guard"
+      lookupRoot = out </> "lookup"
   createDirectoryIfMissing True producerRoot
   createDirectoryIfMissing True guardRoot
+  createDirectoryIfMissing True lookupRoot
   producer <- runSide runner producerRoot (artifacts {artifactLow = artifactLowFaulty artifacts}) normalScenario Candidate
   guard <- runSide runner guardRoot artifacts normalScenario ForbiddenOriginal
+  lookupResult <- runLookupGuard runner lookupRoot artifacts normalScenario
   let invalidControls =
-        [ invalidValue (scenarioId scenario) (validateScenario scenario) | scenario <- invalidScenarios ]
+        [ invalidValue name (validateCancelWord word) | (name, word) <- invalidCancelFixtures ]
           ++ [ invalidValue name (validatePointer address) | (name, address) <- invalidPointers ]
       producerControl = witnessControl "double-release" producerWitness producer
       guardControl = witnessControl "forbidden-stock-entry" guardWitness guard
-  BL.writeFile (out </> "results.json") (encode (report results producerControl guardControl invalidControls))
-  let passed = length [() | (_, original, candidate, _) <- results, resultStatus original == "passed", resultStatus candidate == "passed"]
+      lookupControl = witnessControl "lookup-wrong-group" lookupWitness lookupResult
+      output = report results producerControl guardControl lookupControl invalidControls
+      qualified = qualifiedResults results producerControl guardControl lookupControl invalidControls
+  BL.writeFile (out </> "results.json") (encode output)
+  let passed = length [() | (_, original, candidate, _) <- results, resultStatus original == ResultPassed, resultStatus candidate == ResultPassed]
   putStrLn ("capture develop wait: " ++ show passed ++ "/" ++ show (length results) ++ " differential cases passed")
+  unless qualified exitFailure

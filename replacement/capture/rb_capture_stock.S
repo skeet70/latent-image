@@ -71,7 +71,17 @@ rb_capture_invalid_descriptor:
     udf #0
 .size rb_capture_invalid_descriptor, .-rb_capture_invalid_descriptor
 
-RB_CAPTURE_TRAMPOLINE rb_capture_stock_step_plan, 0x00e91810
+@ FUN_00e91810(0x80, step): preserve the step in r1 and set the group.
+.global rb_capture_stock_step_plan
+.type rb_capture_stock_step_plan, %function
+rb_capture_stock_step_plan:
+    mov r1, r0
+    mov r0, #0x80
+    movw r12, #0x1810
+    movt r12, #0x00e9
+    bx r12
+.size rb_capture_stock_step_plan, .-rb_capture_stock_step_plan
+
 RB_CAPTURE_TRAMPOLINE rb_capture_stock_check, 0x00e93bdc
 RB_CAPTURE_TRAMPOLINE rb_capture_stock_advance, 0x00e9390c
 RB_CAPTURE_TRAMPOLINE rb_capture_stock_release, 0x00724638
