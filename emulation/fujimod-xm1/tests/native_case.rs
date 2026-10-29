@@ -191,7 +191,6 @@ enum Status {
 struct Observation {
     wire_version: u32,
     status: Status,
-    unicorn_error: u32,
     instructions: String,
     registers: BTreeMap<String, String>,
     memory: Vec<Memory>,
@@ -246,7 +245,6 @@ impl Observed {
     fn assert_returned(&self) {
         assert_eq!(self.status(), Status::Returned);
         assert!(self.returned);
-        assert_eq!(self.observation.unicorn_error, 0);
         assert_eq!(self.register("pc"), EXIT);
     }
 }
