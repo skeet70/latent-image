@@ -80,7 +80,7 @@ validReceipt =
     , "instructions" .= (60 :: Word64)
     , "machine_failure" .= Null
     , "stops"
-        .= [ stopValue 0 10 0 2 0 0 0xd3
+        .= [ stopValue 0 10 0 0xffff 0x80000000 1 0x1d3
            , stopValue 0 20 0 0 0 0 0x13
            , stopValue 0 30 0 0 0 0 0x13
            , stopValue 0 40 0 0 0 0 0x13

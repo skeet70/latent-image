@@ -364,8 +364,9 @@ validateReceipt expected receipt = do
   unless (cpsrMode (hitCpsr entry) == 0x13) (Left "owned entry was not in SVC")
   unless (cpsrHasIf (hitCpsr entry)) (Left "owned entry did not see IF set")
   unless (cpsrIsA32Little (hitCpsr entry)) (Left "owned entry was not A32 little-endian")
+  -- The ROM handoff (0x800022a4..0x800022c0) jumps through r0 = 0 and leaves its
+  -- 0xffff APSR mask in r1; the owned entry overwrites r0 and r1 unread.
   unless (register entry R0 == Just 0) (Left "owned entry r0 is not the ROM handoff 0")
-  unless (register entry R1 == Just 2) (Left "owned entry r1 is not the ROM handoff 2")
   stage <- findStop StageImages stops
   unless (register stage R0 == Just 0) (Left "stage entry did not receive status 0")
   unless (register stage R1 == Just 0) (Left "stage entry did not receive core 0")
