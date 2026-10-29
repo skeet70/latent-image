@@ -89,11 +89,11 @@ contractValue expected =
     [ "schema" .= (1 :: Int)
     , "budget" .= (20000000 :: Int)
     , "stops"
-        .= [ object ["label" .= stopName label, "address" .= fromIntegral (guestAddress address)]
+        .= [ object ["label" .= stopName label, "address" .= guestAddress address]
            | (label, address) <- expectedStops expected
            ]
     , "reads"
-        .= [ object ["label" .= readName label, "address" .= fromIntegral (guestAddress address), "length" .= B.length content]
+        .= [ object ["label" .= readName label, "address" .= guestAddress address, "length" .= B.length content]
            | ExpectedRead label address content <- expectedReads expected
            ]
     ]
