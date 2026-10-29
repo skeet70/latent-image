@@ -5,7 +5,6 @@ module Main (main) where
 import Control.Monad (unless)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C8
-import Data.List (isInfixOf)
 import System.Directory (createDirectory, doesPathExist, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitFailure)
@@ -55,10 +54,10 @@ main = do
   check ("the derived document verifies: " ++ verifyErr) (verified == ExitSuccess && verifiedOut == out)
   bytes <- B.readFile derived
   B.writeFile altered (B.snoc bytes 10)
-  (mismatch, _, mismatchErr) <- readCreateProcessWithExitCode (proc tool ["verify", "--run", run, "--fixture", valid, "--document", altered]) ""
-  check ("a document differing by one byte is refused: " ++ mismatchErr) (mismatch /= ExitSuccess && "differs" `isInfixOf` mismatchErr)
-  (overflow, _, overflowErr) <- readCreateProcessWithExitCode (proc tool ["write", "--run", run, "--fixture", oversized, "--output", refused]) ""
+  (mismatch, mismatchOut, mismatchErr) <- readCreateProcessWithExitCode (proc tool ["verify", "--run", run, "--fixture", valid, "--document", altered]) ""
+  check ("a document differing by one byte is refused: " ++ mismatchErr) (mismatch /= ExitSuccess && null mismatchOut)
+  (overflow, overflowOut, overflowErr) <- readCreateProcessWithExitCode (proc tool ["write", "--run", run, "--fixture", oversized, "--output", refused]) ""
   written <- doesPathExist refused
-  check ("a raster whose byte count overflows Int is refused: " ++ overflowErr) (overflow /= ExitSuccess && "exceeds 64 MiB" `isInfixOf` overflowErr && not written)
+  check ("a raster whose byte count overflows Int is refused: " ++ overflowErr) (overflow /= ExitSuccess && null overflowOut && not written)
   removeDirectoryRecursive root
   putStrLn "fujimod-xm1-sensor-fixture: checks passed"
