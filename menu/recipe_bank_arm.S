@@ -250,6 +250,15 @@ RB_TRAMPOLINE rb_call_name_footer, 0x0112e7fc
 RB_TRAMPOLINE rb_call_name_label_position, 0x0111299c
 RB_TRAMPOLINE rb_call_backdrop_suppressed, 0x01135db0
 
+@ The owned editor-cancel action's fixed stage open, 0xf/0x1a.
+.global rb_open_editor_cancel_stage
+.type rb_open_editor_cancel_stage,%function
+rb_open_editor_cancel_stage:
+    mov     r0, #15
+    mov     r1, #26
+    b       rb_call_stage_open
+.size rb_open_editor_cancel_stage, .-rb_open_editor_cancel_stage
+
 @ The render probe's interposed entry: entered with r5 = property, r6 = row
 @ token, returns through the stock probe epilogue 0x00d5868c with the state in
 @ r4. The final transfer is a direct branch at a link-time constant target

@@ -5,6 +5,8 @@ xm1_rust_staticlib(
     src = "lib.rs",
     crate_name = "bank",
     data = [
+        "//replacement/capture:module",
+        "//replacement/owned_menu:module",
         "//replacement/recipe_ui:module",
         "//replacement/service:module",
     ],
@@ -30,6 +32,8 @@ filegroup(
     name = "relink-sources",
     srcs = [
         "lib.rs",
+        "//replacement/capture:relink-sources",
+        "//replacement/owned_menu:module",
         "//replacement/recipe_ui:module",
         "//replacement/service:relink-sources",
     ],

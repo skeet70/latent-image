@@ -58,7 +58,7 @@ else
   OBJS=()
   for src in menu/recipe_bank_arm.S menu/recipe_bank_probe.c menu/recipe_bank_hook.c \
     menu/recipe_bank_storage.c menu/recipe_bank_actions.c menu/recipe_bank_edit.c \
-    replacement/service/rb_service_stock.S; do
+    replacement/service/rb_service_stock.S replacement/capture/rb_capture_stock.S; do
     obj="$BUILD_DIR/$(basename "${src%.*}").o"
     volatile_def=()
     if [ "$RB_MODE" = volatile ] && [ "$src" = menu/recipe_bank_storage.c ]; then

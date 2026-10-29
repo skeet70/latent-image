@@ -48,7 +48,8 @@ LINK=(-nostdlib -static -fuse-ld=lld "--ld-path=$LD_LLD" -Wl,--no-dynamic-linker
 objects=()
 for src in menu/recipe_bank_arm.S menu/recipe_bank_probe.c menu/recipe_bank_hook.c \
   menu/recipe_bank_storage.c menu/recipe_bank_actions.c menu/recipe_bank_edit.c \
-  menu/recipe_bank_diagnostic.c replacement/service/rb_service_stock.S; do
+  menu/recipe_bank_diagnostic.c replacement/service/rb_service_stock.S \
+  replacement/capture/rb_capture_stock.S; do
   name="${src##*/}"
   obj="$OUT/${name%.*}.o"
   case "$src" in

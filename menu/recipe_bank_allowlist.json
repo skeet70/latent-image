@@ -317,6 +317,41 @@
       "address": "0x0116768c",
       "name": "stock action-list drawer",
       "source": "menu/recipe_bank_arm.S rb_call_draw_action_list (movw/movt)"
+    },
+    {
+      "address": "0x007243a8",
+      "name": "rb_capture_stock_wait",
+      "source": "replacement/capture/rb_capture_stock.S rb_capture_stock_wait"
+    },
+    {
+      "address": "0x00724638",
+      "name": "rb_capture_stock_release",
+      "source": "replacement/capture/rb_capture_stock.S rb_capture_stock_release"
+    },
+    {
+      "address": "0x00e91810",
+      "name": "rb_capture_stock_step_plan",
+      "source": "replacement/capture/rb_capture_stock.S rb_capture_stock_step_plan"
+    },
+    {
+      "address": "0x00e93664",
+      "name": "rb_capture_stock_clear",
+      "source": "replacement/capture/rb_capture_stock.S rb_capture_stock_clear"
+    },
+    {
+      "address": "0x00e9390c",
+      "name": "rb_capture_stock_advance",
+      "source": "replacement/capture/rb_capture_stock.S rb_capture_stock_advance"
+    },
+    {
+      "address": "0x00e93bdc",
+      "name": "rb_capture_stock_check",
+      "source": "replacement/capture/rb_capture_stock.S rb_capture_stock_check"
+    },
+    {
+      "address": "0x00e9db80",
+      "name": "rb_capture_stock_log",
+      "source": "replacement/capture/rb_capture_stock.S rb_capture_stock_log"
     }
   ],
   "stock_stores": [
@@ -360,8 +395,14 @@
     {
       "address": "0x0146761e",
       "bytes": 2,
-      "name": "RB_UI_STATE_CELL (RB_EDIT_MODE)",
-      "source": "menu/recipe_bank_ui.h #define RB_UI_STATE_CELL"
+      "name": "RB_UI_STATE_CELL (RB_EDIT_MODE, owned editor-cancel)",
+      "source": "menu/recipe_bank_ui.h #define RB_UI_STATE_CELL; replacement/owned_menu/src/lib.rs ModalState::AfterCancel"
+    },
+    {
+      "address": "0x0146761e",
+      "bytes": 2,
+      "name": "owned editor-cancel state write",
+      "source": "replacement/owned_menu/src/lib.rs ModalState::AfterCancel"
     },
     {
       "address": "0x01467a08",
