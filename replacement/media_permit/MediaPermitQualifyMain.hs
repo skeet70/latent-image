@@ -5,7 +5,7 @@
 module Main where
 
 import Control.Exception (IOException, try)
-import Control.Monad (forM, forM_, unless, when)
+import Control.Monad (forM_, unless, when)
 import Data.Aeson (Value, encode, object, (.=))
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
@@ -18,7 +18,7 @@ import qualified Emulation.NativeObservation as N
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host hiding (sha256)
 import Numeric (showHex)
-import System.Directory (canonicalizePath, createDirectoryIfMissing)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, listDirectory)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
@@ -707,8 +707,9 @@ checkEffects scenario observation =
               Just expected ->
                 case M.lookup N.R0 (N.nativeRegisters observation) of
                   Just actual
-                    | actual /= expected -> ["r0 expected " ++ hex expected ++ ", observed " ++ hex actual]
-                  _ -> ["r0 missing"]
+                    | actual == expected -> []
+                    | otherwise -> ["r0 expected " ++ hex expected ++ ", observed " ++ hex actual]
+                  Nothing -> ["r0 missing"]
        in (if observed == scExpect scenario then [] else ["effects differ: expected " ++ show (scExpect scenario) ++ ", observed " ++ show observed])
             ++ resolveProblems
     _ -> ["globals or frames region missing"]
@@ -822,13 +823,16 @@ runSide runner root inputs scenario side =
         Right (_, loadedRegions, wire, _) -> do
           executable <- canonicalizePath runner
           (timed, exit, out, err) <- runBounded 8000000 (8 * 1024 * 1024) executable [] wire
+          B.writeFile (dir </> "runner.stdout") out
+          B.writeFile (dir </> "runner.stderr") err
           if timed
             then pure (Result ResultHostTimeout [BC.unpack err] Nothing Nothing)
             else do
               parsed <- try (jsonRead out)
               case parsed of
                 Left (message :: IOException) -> pure (Result ResultInvalidOutput [show message, BC.unpack err] Nothing Nothing)
-                Right runnerValue ->
+                Right runnerValue -> do
+                  BL.writeFile (dir </> "observation.json") (encode runnerValue)
                   case N.observeNative exit loadedRegions runnerValue of
                     Left problem -> pure (Result ResultInvalidOutput [N.renderObservationError problem, BC.unpack err] Nothing Nothing)
                     Right observation ->
@@ -860,13 +864,16 @@ runForbiddenBody runner root inputs scenario =
         Right (_, loadedRegions, wire, _) -> do
           executable <- canonicalizePath runner
           (timed, exit, out, err) <- runBounded 8000000 (8 * 1024 * 1024) executable [] wire
+          B.writeFile (dir </> "runner.stdout") out
+          B.writeFile (dir </> "runner.stderr") err
           if timed
             then pure (Result ResultHostTimeout [BC.unpack err] Nothing Nothing)
             else do
               parsed <- try (jsonRead out)
               case parsed of
                 Left (message :: IOException) -> pure (Result ResultInvalidOutput [show message, BC.unpack err] Nothing Nothing)
-                Right runnerValue ->
+                Right runnerValue -> do
+                  BL.writeFile (dir </> "observation.json") (encode runnerValue)
                   case N.observeNative exit loadedRegions runnerValue of
                     Left problem -> pure (Result ResultInvalidOutput [N.renderObservationError problem, BC.unpack err] Nothing Nothing)
                     Right observation ->
@@ -952,14 +959,23 @@ main = do
     [runner, build, out, stockElf] -> run runner build out stockElf
     _ -> putStrLn "usage: media-permit-qualification RUNNER BAZEL_BIN OUT_DIR STOCK_ELF" >> exitFailure
 
+runCases :: FilePath -> FilePath -> Inputs -> [Scenario] -> [(Scenario, Result, Result)] -> IO [(Scenario, Result, Result)]
+runCases _ _ _ [] done = pure (reverse done)
+runCases runner out inputs (scenario : rest) done = do
+  original <- runSide runner out inputs scenario Original
+  candidate <- runSide runner out inputs scenario Candidate
+  let entry = (scenario, original, candidate)
+      passed = resultStatus original == ResultPassed && resultStatus candidate == ResultPassed
+  if passed then runCases runner out inputs rest (entry : done) else pure (reverse (entry : done))
+
 run :: FilePath -> FilePath -> FilePath -> FilePath -> IO ()
 run runner build out stockElf = do
   inputs <- loadInputs build stockElf
+  present <- doesDirectoryExist out
+  stale <- if present then listDirectory out else pure []
+  unless (null stale) (ioError (userError "output directory must be fresh"))
   createDirectoryIfMissing True out
-  results <- forM scenarios $ \scenario -> do
-    original <- runSide runner out inputs scenario Original
-    candidate <- runSide runner out inputs scenario Candidate
-    pure (scenario, original, candidate)
+  results <- runCases runner out inputs scenarios []
   let faultScenario = scenarioById "kind0-zero"
       forbiddenScenario = scenarioById "message-known"
       faultRoot = out </> "defect"
@@ -968,7 +984,8 @@ run runner build out stockElf = do
   forbidden <- runForbiddenBody runner out inputs forbiddenScenario
   let output = report results faultScenario fault forbidden
       qualified =
-        all (\(_, original, candidate) -> resultStatus original == ResultPassed && resultStatus candidate == ResultPassed) results
+        length results == length scenarios
+          && all (\(_, original, candidate) -> resultStatus original == ResultPassed && resultStatus candidate == ResultPassed) results
           && faultWitness faultScenario fault
           && forbiddenWitness forbidden
   BL.writeFile (out </> "results.json") (encode output)
