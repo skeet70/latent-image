@@ -22,7 +22,6 @@ import System.Directory (canonicalizePath, createDirectoryIfMissing)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
-import System.IO.Error (userError)
 
 globalsBase, globalsSize, framesBase, framesSize, stackBase, stackSize, stackTop :: Word32
 globalsBase = 0x01500000
@@ -225,7 +224,7 @@ kindAt scenario slot = maybe K0 id (lookup slot (scKinds scenario))
 initialGlobals :: Scenario -> B.ByteString
 initialGlobals scenario = putU16 (fromIntegral (mirrorBase - globalsBase)) 0x1367 (writes values)
   where
-    writes values = foldl (\bytes (address, value) -> putU32 (fromIntegral (address - globalsBase)) value bytes) (B.replicate (fromIntegral globalsSize) 0) values
+    writes entries = foldl (\bytes (address, value) -> putU32 (fromIntegral (address - globalsBase)) value bytes) (B.replicate (fromIntegral globalsSize) 0) entries
     values =
       [ (0x0157dd34, if scLayout scenario == Primary then 1 else 0)
       , (0x0157dd35, if scLayout scenario == Secondary then 1 else 0)
@@ -303,8 +302,8 @@ replace index value values = take index values ++ [value] ++ drop (index + 1) va
 resolverCase :: String -> Layout -> Word32 -> Int -> [(Int, Kind)] -> Maybe Word32 -> Scenario
 resolverCase ident layout key target extra expected =
   let missing = expected == Just 0xffffffff
-      keys = if missing then [] else [target]
-      scenario = Scenario ident Resolver layout key extra [] keys 0 key 0x1000 expected False emptyEffects
+      keySlots = if missing then [] else [target]
+      scenario = Scenario ident Resolver layout key extra [] keySlots 0 key 0x1000 expected False emptyEffects
       faults = if missing then 1 else 0
    in scenario {scExpect = (defaultEffects scenario) {eFaults = faults}}
 
@@ -314,9 +313,15 @@ handlerCase ident word0 key kinds groups modify =
    in scenario {scExpect = modify (defaultEffects scenario)}
 
 messageCase :: String -> Layout -> Word32 -> Word32 -> [(Int, Kind)] -> [(Int, Word32)] -> [Int] -> (Effects -> Effects) -> Scenario
-messageCase ident layout word0 key kinds groups keys modify =
-  let scenario = Scenario ident Message layout key kinds groups keys word0 key 0x1000 Nothing False emptyEffects
+messageCase ident layout word0 key kinds groups keySlots modify =
+  let scenario = Scenario ident Message layout key kinds groups keySlots word0 key 0x1000 Nothing False emptyEffects
    in scenario {scExpect = modify (defaultEffects scenario)}
+
+scenarioById :: String -> Scenario
+scenarioById ident =
+  case [scenario | scenario <- scenarios, scId scenario == ident] of
+    (scenario : _) -> scenario
+    [] -> error ("missing scenario " ++ ident)
 
 scenarios :: [Scenario]
 scenarios =
@@ -499,16 +504,16 @@ frameBytes inputs side scenario
           traps = B.concat (replicate ((0x1a0 - 4) `div` 4) (u32le 0xe7f000f0))
       case readU32 stock offset of
         Right 0xe92d48f0 -> pure ()
-        Right word -> Left ("stock resolver entry differs: " ++ hex word)
+        Right actual -> Left ("stock resolver entry differs: " ++ hex actual)
         Left problem -> Left problem
       patched <- patchRegion frameBase stock 0xe77168 (u32le branch <> traps)
       case readU32 patched offset of
-        Right word
-          | word == branch
+        Right actual
+          | actual == branch
           , Right trap <- readU32 patched (offset + 4)
           , trap == 0xe7f000f0 ->
               pure patched
-        Right word -> Left ("candidate resolver entry or body guard is " ++ hex word)
+        Right actual -> Left ("candidate resolver entry or body guard is " ++ hex actual)
         Left problem -> Left problem
   | scCountModel scenario =
       patchRegion frameBase (stockRegion inputs frameBase frameSize) 0xe74c68 (inCount inputs)
@@ -620,12 +625,12 @@ candidateSpans :: Inputs -> Side -> [(Word32, Int)]
 candidateSpans inputs side
   | side == Original = []
   | otherwise =
-      let span = fromIntegral (candidateSpan inputs side) :: Int
+      let total = fromIntegral (candidateSpan inputs side) :: Int
           block = fromIntegral entrySpan :: Int
        in [ (candidateBase, block)
           , (resolveEntry, block)
           , (applyEntry, block)
-          , (applyEntry + entrySpan, span - 3 * block)
+          , (applyEntry + entrySpan, total - 3 * block)
           ]
 
 caseJson :: Inputs -> Scenario -> Side -> [(String, Word32, Word32, B.ByteString)] -> Value
@@ -955,8 +960,8 @@ run runner build out stockElf = do
     original <- runSide runner out inputs scenario Original
     candidate <- runSide runner out inputs scenario Candidate
     pure (scenario, original, candidate)
-  let faultScenario = head [scenario | scenario <- scenarios, scId scenario == "kind0-zero"]
-      forbiddenScenario = head [scenario | scenario <- scenarios, scId scenario == "message-known"]
+  let faultScenario = scenarioById "kind0-zero"
+      forbiddenScenario = scenarioById "message-known"
       faultRoot = out </> "defect"
   createDirectoryIfMissing True faultRoot
   fault <- runSide runner faultRoot inputs faultScenario DefectCandidate
