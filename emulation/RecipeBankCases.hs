@@ -431,7 +431,7 @@ kernelMain rawArgs = do
     "classic-chrome" -> pure ClassicChromeFilms
     _ -> fail "--film-encoding must be d3 or classic-chrome"
   let candidateDir = fromMaybe "private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/package-20261024b/image" (opt "candidate")
-      kernelBase = hexI (fromMaybe "0x00be1f00" (opt "rb-base"))
+      kernelBase = hexI (fromMaybe "0x00be0000" (opt "rb-base"))
       id4Base = hexI (fromMaybe "0x0061c400" (opt "id4-base"))
   createDirectoryIfMissing True out
   ks <- parseSyms (build </> "kernel.syms")
