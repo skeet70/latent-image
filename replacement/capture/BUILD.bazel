@@ -26,7 +26,7 @@ xm1_rust_staticlib(
     src = "standalone.rs",
     crate_name = "capture",
     data = ["src/lib.rs"],
-    rustc_flags = ["-C", "function-sections=yes"],
+    rustc_flags = ["-Z", "function-sections=yes"],
 )
 
 xm1_rust_elf(
@@ -46,7 +46,7 @@ xm1_rust_staticlib(
         "deps/src/common.rs",
         "deps/src/high.rs",
     ],
-    rustc_flags = ["-C", "function-sections=yes"],
+    rustc_flags = ["-Z", "function-sections=yes"],
 )
 
 xm1_rust_elf(
@@ -54,6 +54,7 @@ xm1_rust_elf(
     rust_staticlib = ":capture-deps-high-lib",
     link_script = "deps/high.ld",
     entry = "capture_plan_lookup",
+    extra_ldflags = ["-Wl,--undefined=capture_plan_lookup"],
     visibility = ["//visibility:public"],
 )
 
@@ -62,7 +63,7 @@ xm1_rust_staticlib(
     src = "deps/low.rs",
     crate_name = "capture_deps_low",
     data = ["deps/src/low.rs"],
-    rustc_flags = ["-C", "function-sections=yes"],
+    rustc_flags = ["-Z", "function-sections=yes"],
 )
 
 xm1_rust_elf(
@@ -70,6 +71,7 @@ xm1_rust_elf(
     rust_staticlib = ":capture-deps-low-lib",
     link_script = "deps/low.ld",
     entry = "capture_wait",
+    extra_ldflags = ["-Wl,--undefined=capture_wait"],
     visibility = ["//visibility:public"],
 )
 
@@ -78,7 +80,7 @@ xm1_rust_staticlib(
     src = "deps/faulty_low.rs",
     crate_name = "capture_deps_low_faulty",
     data = ["deps/src/faulty_low.rs"],
-    rustc_flags = ["-C", "function-sections=yes"],
+    rustc_flags = ["-Z", "function-sections=yes"],
 )
 
 xm1_rust_elf(
@@ -86,6 +88,7 @@ xm1_rust_elf(
     rust_staticlib = ":capture-deps-low-faulty-lib",
     link_script = "deps/low.ld",
     entry = "capture_wait",
+    extra_ldflags = ["-Wl,--undefined=capture_wait"],
     visibility = ["//visibility:public"],
 )
 

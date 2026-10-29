@@ -29,8 +29,7 @@ module RamPushLayout
 import Control.Monad (when)
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
-import Data.List (isInfixOf, isSuffixOf, sort)
-import qualified Data.Map.Strict as M
+import Data.List (elemIndex, isInfixOf, isSuffixOf, sort)
 import Data.Word (Word32)
 
 -- * Installer
@@ -169,23 +168,18 @@ safePublicationOrderFor :: [PublicationAddress] -> Either String [PublicationInd
 safePublicationOrderFor addresses = do
   when (length addresses /= publicationCount) $
     Left ("publication count " ++ show (length addresses) ++ ", not " ++ show publicationCount)
-  let indexByAddress = M.fromList [(address, PublicationIndex index) | (index, address) <- zip [0 ..] addresses]
-  when (M.size indexByAddress /= length addresses) $
+  let sortedAddresses = sort addresses
+  when (or (zipWith (==) sortedAddresses (drop 1 sortedAddresses))) $
     Left "duplicate logical publication address"
-  let oldAddresses = filter (/= captureHookAddress) addresses
-      indexByOldIndex = M.fromList [(PublicationIndex index, address) | (index, address) <- zip [0 ..] oldAddresses]
-  when (length oldAddresses /= legacyPublicationCount) $
-    Left "capture hook is not the one added publication"
-  captureIndex <- maybe (Left "capture hook publication missing") Right (M.lookup captureHookAddress indexByAddress)
-  let resolve oldIndex = case M.lookup oldIndex indexByOldIndex of
-        Nothing -> Left ("reviewed publication index missing: " ++ show (publicationIndex oldIndex))
-        Just address -> maybe
-          (Left ("logical publication address missing: " ++ show (publicationAddress address)))
-          Right
-          (M.lookup address indexByAddress)
-  mappedSetup <- mapM resolve (take legacyPublicationSetupCount legacySafePublicationOrder)
-  mappedActivation <- mapM resolve (drop legacyPublicationSetupCount legacySafePublicationOrder)
-  let order = mappedSetup ++ [captureIndex] ++ mappedActivation
+  captureIndex <- maybe
+    (Left "capture hook publication missing")
+    (Right . PublicationIndex)
+    (elemIndex captureHookAddress addresses)
+  let adjust (PublicationIndex oldIndex) =
+        PublicationIndex (if oldIndex < publicationIndex captureIndex then oldIndex else oldIndex + 1)
+      mappedSetup = map adjust (take legacyPublicationSetupCount legacySafePublicationOrder)
+      mappedActivation = map adjust (drop legacyPublicationSetupCount legacySafePublicationOrder)
+      order = mappedSetup ++ [captureIndex] ++ mappedActivation
   when (sort (map publicationIndex order) /= [0 .. publicationCount - 1]) $
     Left "derived publication order is not a permutation"
   pure order

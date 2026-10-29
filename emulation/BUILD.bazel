@@ -1387,9 +1387,11 @@ haskell_binary(
     deps = [
         ":case-sha256",
         ":native-adapter",
+        ":native-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:containers",
         "//host:directory",
         "//host:filepath",
         "//host:host-support",

@@ -42,6 +42,7 @@ impl CancelSelector {
     }
 }
 
+#[derive(Clone, Copy)]
 struct CancelMask(u32);
 
 impl CancelMask {

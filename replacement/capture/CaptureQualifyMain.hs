@@ -14,7 +14,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Either (isLeft)
 import Data.List (isPrefixOf)
 import qualified Data.Map.Strict as M
-import Data.Word (Word32)
+import Data.Word (Word8, Word32)
 import Emulation.NativeCase (Region, loadCase)
 import qualified Emulation.NativeObservation as N
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -24,7 +24,6 @@ import System.Directory (canonicalizePath, createDirectoryIfMissing)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
-import System.IO.Error (userError)
 
 stateBase, stackBase, planBase, checkStatusBase, admittedStepBase, clearCountBase, clearTraceBase, advanceCountBase, advanceTraceBase, waitFlagBase, waitStateBase, waitClearCountBase, waitClearTraceBase, waitEventBase, waitAdvanceCountBase, waitAdvanceTraceBase, finalFlagBase, finalStateBase, finalClearCountBase, finalClearTraceBase, finalAdvanceCountBase, finalAdvanceTraceBase, waitSignalBase, releaseBase, candidateBase, depsHighBase, depsLowBase, exitAddress, stackTop, contextBase :: Word32
 stateBase = 0x009a0000
@@ -282,7 +281,7 @@ controlJson :: Control -> Value
 controlJson control =
   object
     [ "name" .= controlName control
-    , "status" .= (if controlStatus control == Refused then "refused" else "accepted")
+    , "status" .= ((if controlStatus control == Refused then "refused" else "accepted") :: String)
     , "problems" .= controlProblems control
     ]
 
@@ -311,9 +310,9 @@ loadArtifacts build stockElf = do
   case readU32 stock 0 of
     Right 0xe92d4870 -> pure ()
     other -> ioError (userError ("stock wait entry differs: " ++ either id hex other))
-  let highStock = overlay stockWaitOffset stock (ensure (stockWaitOffset + B.length stock) high)
+  let highStock = overlay stockWaitOffset stock (ensureLength (stockWaitOffset + B.length stock) high)
       guard = B.concat (replicate ((stockWaitSize + 3) `div` 4) (u32le 0xe7f000f0))
-      highGuard = overlay stockWaitOffset guard (ensure (stockWaitOffset + B.length guard) high)
+      highGuard = overlay stockWaitOffset guard (ensureLength (stockWaitOffset + B.length guard) high)
   when (B.length highStock > depsHighSize || B.length highGuard > depsHighSize) $
     ioError (userError "high dependency artifact exceeds its declared region")
   case readU32 highGuard stockWaitOffset of
@@ -331,7 +330,7 @@ loadArtifacts build stockElf = do
       }
   where
     overlay offset bytes base = B.take offset base <> bytes <> B.drop (offset + B.length bytes) base
-    ensure size bytes = if B.length bytes >= size then bytes else bytes <> B.replicate (size - B.length bytes) 0
+    ensureLength size bytes = if B.length bytes >= size then bytes else bytes <> B.replicate (size - B.length bytes) 0
     pad size bytes = bytes <> B.replicate (size - B.length bytes) 0
 
 syntheticSpans :: [(Word32, Int)]
@@ -387,12 +386,12 @@ caseJson scenario side artifacts =
       entry = if side == Candidate then candidateBase else 0x00e9e038
       candidateSpan = ((artifactCandidateLength artifacts + 3) `div` 4) * 4
       spans = syntheticSpans ++ [(entry, if side == Candidate then candidateSpan else 0x11c)]
-      origin = if side == Original then "stock" else "synthetic"
+      origin = (if side == Original then "stock" else "synthetic") :: String
    in object
         [ "schema_version" .= (1 :: Int)
         , "id" .= (scenarioId scenario ++ "-" ++ sideLabel side)
         , "origin" .= origin
-        , "provenance" .= ("X-M1 1.50 image 5 FUN_00e9e038 develop step wait; recording dependencies at the stock call addresses")
+        , "provenance" .= ("X-M1 1.50 image 5 FUN_00e9e038 develop step wait; recording dependencies at the stock call addresses" :: String)
         , "cpu" .= object ["architecture" .= ("arm" :: String), "model" .= ("cortex-r5f" :: String), "mode" .= ("arm" :: String), "endian" .= ("little" :: String)]
         , "artifacts" .=
             [ artifactJson "state" state
@@ -426,9 +425,9 @@ caseJson scenario side artifacts =
               , "events" .= ([] :: [Value])
               ]
         , "exclusions" .=
-            [ "Wait and release boundaries compare the current state, clear sequence and advance sequence; diagnostic log and check counts are not asserted."
-            , "The stack region is execution scratch and is not compared."
-            ]
+            ( [ "Wait and release boundaries compare the current state, clear sequence and advance sequence; diagnostic log and check counts are not asserted."
+              , "The stack region is execution scratch and is not compared."
+              ] :: [String] )
         ]
 
 initialRegisters :: Word32 -> Word32 -> Value
@@ -489,7 +488,7 @@ lookupGuardJson artifacts =
               , "events" .= ([] :: [Value])
               ]
         , "exclusions" .=
-            [ "The lookup guard must fault when the group is not 0x80." ]
+            ( [ "The lookup guard must fault when the group is not 0x80." ] :: [String] )
         ]
 
 contains :: N.GuestAddress -> Int -> N.GuestAddress -> Int -> Bool
@@ -747,7 +746,7 @@ report results producerControl guardControl lookupControl invalidControls =
     , "guard_controls" .= [controlJson guardControl]
     , "lookup_controls" .= [controlJson lookupControl]
     , "invalid_inputs" .= map controlJson invalidControls
-    , "status" .= (if qualifiedResults results producerControl guardControl lookupControl invalidControls then "qualified" else "failed")
+    , "status" .= ((if qualifiedResults results producerControl guardControl lookupControl invalidControls then "qualified" else "failed") :: String)
     , "capability" .= qualifiedResults results producerControl guardControl lookupControl invalidControls
     ]
   where
@@ -764,7 +763,7 @@ report results producerControl guardControl lookupControl invalidControls =
         , "original" .= resultJson original
         , "candidate" .= resultJson candidate
         , "controls" .= map controlJson controls
-        , "status" .= (if resultStatus original == ResultPassed && resultStatus candidate == ResultPassed then "passed" else "failed")
+        , "status" .= ((if resultStatus original == ResultPassed && resultStatus candidate == ResultPassed then "passed" else "failed") :: String)
         ]
     resultJson result =
       object ["status" .= resultStatusLabel (resultStatus result), "problems" .= resultProblems result]
@@ -788,7 +787,9 @@ run runner build out stockElf = do
     candidate <- runSide runner out artifacts scenario Candidate
     let controls = maybe [] (controlChecks scenario) (resultObservation candidate)
     pure (scenario, original, candidate, controls)
-  let normalScenario = head [scenario | scenario <- scenarios, scenarioId scenario == "normal"]
+  let normalScenario = case [scenario | scenario <- scenarios, scenarioId scenario == "normal"] of
+        (scenario : _) -> scenario
+        [] -> error "normal capture scenario missing"
       producerRoot = out </> "producer"
       guardRoot = out </> "guard"
       lookupRoot = out </> "lookup"

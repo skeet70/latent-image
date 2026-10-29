@@ -1185,7 +1185,7 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
   ccData <- linked symbols "cc_ram_data"
   captureTarget <- linked symbols "rb_capture_develop_wait"
   captureWord <- either H.failH pure (armTailBranchWord 0x00e9e038 captureTarget)
-  unless (readWord image5 image5Base 0x00e9e038 == 0xe92d4870) $
+  unless (readWord rc0Id5 0x00bf1a00 0x00e9e038 == 0xe92d4870) $
     H.failH "ram-push: stock develop wait entry differs at 0x00e9e038"
   let capturePublication = RamPublication 0x00e9e038 0xe92d4870 captureWord
       reserved = map ramAddress (legacyOrdered ++ d3Activation)
@@ -1202,7 +1202,7 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
   unless
     ( length logical == publicationCount
         && length safeOrder == publicationCount
-        && sortOn publicationIndex safeOrder == [0 .. publicationCount - 1]
+        && sortOn publicationIndex safeOrder == map PublicationIndex [0 .. publicationCount - 1]
         && length ccSetup == publicationSetupCount - 69
         && length (nub (map ramAddress logical)) == publicationCount
         && all (\p -> toInteger (ramAddress p) + 4 <= toInteger base || toInteger (ramAddress p) >= allocationEnd) logical
