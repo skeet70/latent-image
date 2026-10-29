@@ -34,7 +34,7 @@ A source search for the three export names finds exactly their declarations in `
 
 ## Retained modal contract
 
-The four retargeted modal-75 cells are global state/event registrations, not per-page registrations. The current bank interposer delegates unclaimed pages to the original handlers:
+The four retargeted modal-75 cells are global state/event registrations, not per-page registrations. The bank interposer owns the LEAVE action of cell `(0x1e, 13)` and delegates the other three cells to their original handlers:
 
 | State, event | Cell | Original action | Original handler |
 | --- | --- | --- | --- |
@@ -44,6 +44,14 @@ The four retargeted modal-75 cells are global state/event registrations, not per
 | `0x1e, 13` | `0x00cd24b4` | `0x98` | `FUN_00c77794` |
 
 The stock dispatcher `FUN_00bfb028` indexes the cell table by `event * width + state`; modal 75 has width 46. A cell's low halfword selects the action. After that action returns, the signed high halfword selects a transition callback when positive, or a direct state write of its negation otherwise. The action's return value is preserved. The 299-entry function-pointer table at `0x00d04080` is separate from this cell table. The four original handler bindings were checked in the decoded image, including action `0x98` at `0x00d042e0`. The dispatcher instructions are in `private-data/analysis/x-m1-1.50/filmsim/id5.dis` at `0x00bfb028..0x00bfb11c`.
+
+### Owned editor-cancel increment
+
+`replacement/owned_menu/src/lib.rs` now exports `rb_ui_editor_cancel()` for action `0x98` of cell `(0x1e, 13)`. The bank interposer calls it for the LEAVE path in `menu/recipe_bank_actions.c`; the former `rb_call_editor_cancel` trampoline and its `0x00c77794` allowlist entry are removed. The original body remains the oracle in `emulation/OwnedMenuCases.hs`, not a bank fallback.
+
+The export takes no arguments and returns the action word. It calls retained `FUN_0063a0f8` with query `0x53`, reads the retained session cell `0x00954d08`, and tail-calls the retained stage open `0x00d3d858` with kind `0xf` and id `0x1a` before retained `FUN_00c12aac`. A nonzero query with a session value other than `1` returns `0` and performs no stage or transition. Otherwise it returns the transition result; when that result is `-1` or `2`, it writes halfword `0x1d` to the modal state cell `0x0146761e`. The dispatcher's post-action transition, live-frame refill and redraw remain stock and are not owned by this increment.
+
+`//emulation:owned-menu-cases` defines ten differential cases over query values `0`, `1` and `2`, session values `0`, `1` and `2`, transition results `-1`, `2` and `0x5d`, and one read-only session region. It compares every preserved register, `cpsr` control state and the state, session and log regions against the stock oracle. Its negative controls are a changed `r4`, a changed state halfword and a fetch-guarded transfer to the unexecutable stock entry. No natural device route currently enters cell `(0x1e, 13)` and reaches this export in a packaged runtime; the native cases model the retained services at their stock entries and are not device evidence.
 
 The claimed-page SET path still depends on stock activation and mode gates before the generic exit in `FUN_00c72e10`. In `FUN_00d4d7a4` case 1, tokens `0x63..0x70` and `0x73..0x79` set `0x009544f8`; the default taken by bank parent tokens `0x7d`/`0x7e` clears `0x009544fc` and `0x00954500`, not `0x009544f8`. A page class alone therefore does not prove that gate clear. The other SET gates read `0x00950474`, `0x00950478` and `0x00954500`. No device-input scenario establishing a carried set gate is qualified here.
 

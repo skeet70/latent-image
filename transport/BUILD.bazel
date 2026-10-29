@@ -584,6 +584,7 @@ filegroup(
         "//host:FujiAF/ClassicChrome.hs",
         "//host:FujiAF/ClassicChromeRam.hs",
         "//menu:ram-push-relink-sources",
+        "//replacement/bank:relink-sources",
     ],
 )
 

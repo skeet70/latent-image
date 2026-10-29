@@ -16,15 +16,20 @@ module RamPushLayout
   , runtimeInstallerBase
   , runtimeInstallerExtent
   , runtimeAllocationSize
-  , safePublicationOrder
+  , safePublicationOrderFor
+  , captureHookAddress
+  , PublicationAddress (..)
+  , PublicationIndex (..)
   , publicationSetupCount
+  , publicationActivationCount
   , publicationCount
   , staleFixedReferences
   ) where
 
+import Control.Monad (when)
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
-import Data.List (isInfixOf, isSuffixOf)
+import Data.List (elemIndex, isInfixOf, isSuffixOf, sort)
 import Data.Word (Word32)
 
 -- * Installer
@@ -124,19 +129,60 @@ runtimeInstallerExtent = installerExtent publicationCount
 runtimeAllocationSize :: Word32
 runtimeAllocationSize = 0x1dc98
 
--- | Bank setup, Classic Chrome setup and activation, relocated D3 activation,
--- then bank activation with root discovery last.
-safePublicationOrder :: [Int]
-safePublicationOrder =
-  [0 .. 35] <> [55 .. 68] <> [88] <> [36 .. 53]
-    <> [97 .. 221]
-    <> [75,76,72,73,74,69,70,71,77,78,79,80,81,82,83,89,90,91,92,93,94,95,96,84,85,86,87,54]
+newtype PublicationAddress = PublicationAddress { publicationAddress :: Word32 }
+  deriving (Eq, Ord, Show)
+
+newtype PublicationIndex = PublicationIndex { publicationIndex :: Int }
+  deriving (Eq, Ord, Show)
+
+-- | The capture entry hook appended after every existing logical publication.
+captureHookAddress :: PublicationAddress
+captureHookAddress = PublicationAddress 0x00e9e038
+
+-- | The reviewed bank, Classic Chrome and D3 order before the capture hook.
+legacySafePublicationOrder :: [PublicationIndex]
+legacySafePublicationOrder =
+  map PublicationIndex $
+    [0 .. 35] <> [55 .. 68] <> [88] <> [36 .. 53]
+      <> [97 .. 221]
+      <> [75,76,72,73,74,69,70,71,77,78,79,80,81,82,83,89,90,91,92,93,94,95,96,84,85,86,87,54]
+
+legacyPublicationSetupCount :: Int
+legacyPublicationSetupCount = 131
+
+legacyPublicationCount :: Int
+legacyPublicationCount = 222
 
 publicationSetupCount :: Int
-publicationSetupCount = 131
+publicationSetupCount = legacyPublicationSetupCount
+
+publicationActivationCount :: Int
+publicationActivationCount = legacyPublicationCount + 1 - legacyPublicationSetupCount
 
 publicationCount :: Int
-publicationCount = 222
+publicationCount = legacyPublicationCount + 1
+
+-- | Map the reviewed order onto the actual logical addresses and insert the
+-- capture hook after the ready setup records, before prior activations.
+safePublicationOrderFor :: [PublicationAddress] -> Either String [PublicationIndex]
+safePublicationOrderFor addresses = do
+  when (length addresses /= publicationCount) $
+    Left ("publication count " ++ show (length addresses) ++ ", not " ++ show publicationCount)
+  let sortedAddresses = sort addresses
+  when (or (zipWith (==) sortedAddresses (drop 1 sortedAddresses))) $
+    Left "duplicate logical publication address"
+  captureIndex <- maybe
+    (Left "capture hook publication missing")
+    (Right . PublicationIndex)
+    (elemIndex captureHookAddress addresses)
+  let adjust (PublicationIndex oldIndex) =
+        PublicationIndex (if oldIndex < publicationIndex captureIndex then oldIndex else oldIndex + 1)
+      mappedSetup = map adjust (take legacyPublicationSetupCount legacySafePublicationOrder)
+      mappedActivation = map adjust (drop legacyPublicationSetupCount legacySafePublicationOrder)
+      order = mappedSetup ++ [captureIndex] ++ mappedActivation
+  when (sort (map publicationIndex order) /= [0 .. publicationCount - 1]) $
+    Left "derived publication order is not a permutation"
+  pure order
 
 staleFixedReferences :: Word32 -> Word32 -> B.ByteString -> [(Int, Word32)]
 staleFixedReferences low high bytes = direct <> movPairs

@@ -234,7 +234,7 @@ RB_TRAMPOLINE rb_call_leave_edge, 0x00c76650
 RB_TRAMPOLINE rb_call_draw_root_prepare, 0x01166200
 RB_TRAMPOLINE rb_call_stock_key_right, 0x00c70528
 RB_TRAMPOLINE rb_call_stock_key_left, 0x00c6f14c
-RB_TRAMPOLINE rb_call_editor_cancel, 0x00c77794
+RB_TRAMPOLINE rb_call_modal_query, 0x0063a0f8
 RB_TRAMPOLINE rb_call_name_style, 0x01130e68
 RB_TRAMPOLINE rb_call_draw_mode, 0x01112b2c
 RB_TRAMPOLINE rb_call_name_background, 0x0112db04
@@ -249,6 +249,15 @@ RB_TRAMPOLINE rb_call_name_ascii, 0x011301ac
 RB_TRAMPOLINE rb_call_name_footer, 0x0112e7fc
 RB_TRAMPOLINE rb_call_name_label_position, 0x0111299c
 RB_TRAMPOLINE rb_call_backdrop_suppressed, 0x01135db0
+
+@ The owned editor-cancel action's fixed stage open, 0xf/0x1a.
+.global rb_open_editor_cancel_stage
+.type rb_open_editor_cancel_stage,%function
+rb_open_editor_cancel_stage:
+    mov     r0, #15
+    mov     r1, #26
+    b       rb_call_stage_open
+.size rb_open_editor_cancel_stage, .-rb_open_editor_cancel_stage
 
 @ The render probe's interposed entry: entered with r5 = property, r6 = row
 @ token, returns through the stock probe epilogue 0x00d5868c with the state in

@@ -1374,6 +1374,32 @@ sh_test(
     data = [":recipe-bank-ui-cases"],
 )
 
+haskell_binary(
+    name = "owned-menu-cases",
+    srcs = ["OwnedMenuCases.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-O2",
+        "-threaded",
+    ],
+    main_file = "OwnedMenuCases.hs",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":native-adapter",
+        ":native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
 # Recipe-bank kernel behavior cases: builds each case from the pinned blob and
 # model, runs it through the bounded runner and writes results plus findings.
 haskell_binary(
