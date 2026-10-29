@@ -1137,7 +1137,6 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
         | ramAddress publication >= 0x01100000 = 0
         | otherwise = 1
       legacyOrdered = sortOn (\publication -> (legacyPriority publication, ramAddress publication)) publicationPairs
-      safeOrder = safePublicationOrder
       publicationCore index
         | index >= 97 = "unknown"
         | index <= 35 || index >= 54 && index <= 71 || index >= 75 = "cpu0"
