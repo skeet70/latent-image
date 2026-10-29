@@ -1,12 +1,12 @@
 pub const PLAN: usize = 0x009a1000;
 pub const CHECK_COUNT: usize = 0x009a1100;
 pub const CHECK_STATUS: usize = 0x009a1104;
-pub const TRACE: usize = 0x009a1200;
-pub const TRACE_COUNT: usize = 0x009a1300;
-
-pub const CLEAR: u32 = 0x0100_0000;
-pub const ADVANCE: u32 = 0x0200_0000;
-pub const LOG: u32 = 0x0300_0000;
+pub const CLEAR_COUNT: usize = 0x009a1200;
+pub const CLEAR_TRACE: usize = 0x009a1204;
+pub const ADVANCE_COUNT: usize = 0x009a1300;
+pub const ADVANCE_TRACE: usize = 0x009a1304;
+pub const WAIT_COUNT: usize = 0x009a1320;
+pub const WAIT_TRACE: usize = 0x009a1324;
 
 #[inline(always)]
 pub fn read(address: usize) -> u32 {
@@ -19,8 +19,8 @@ pub fn write(address: usize, value: u32) {
 }
 
 #[inline(always)]
-pub fn record(entry: u32) {
-    let index = read(TRACE_COUNT) as usize;
-    write(TRACE + index * 4, entry);
-    write(TRACE_COUNT, index as u32 + 1);
+pub fn record(count: usize, trace: usize, value: u32) {
+    let index = read(count) as usize;
+    write(trace + index * 4, value);
+    write(count, index as u32 + 1);
 }

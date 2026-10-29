@@ -73,6 +73,22 @@ xm1_rust_elf(
     visibility = ["//visibility:public"],
 )
 
+xm1_rust_staticlib(
+    name = "capture-deps-low-faulty-lib",
+    src = "deps/faulty_low.rs",
+    crate_name = "capture_deps_low_faulty",
+    data = ["deps/src/faulty_low.rs"],
+    rustc_flags = ["-C", "function-sections=yes"],
+)
+
+xm1_rust_elf(
+    name = "capture-deps-low-faulty",
+    rust_staticlib = ":capture-deps-low-faulty-lib",
+    link_script = "deps/low.ld",
+    entry = "capture_wait",
+    visibility = ["//visibility:public"],
+)
+
 haskell_binary(
     name = "capture-qualification",
     srcs = ["CaptureQualifyMain.hs"],

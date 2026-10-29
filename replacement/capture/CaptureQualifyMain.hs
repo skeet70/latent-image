@@ -7,10 +7,12 @@ module Main where
 import Control.Exception (IOException, try)
 import Control.Monad (forM, when)
 import Data.Aeson (Value, encode, object, (.=))
+import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
-import Data.Bits (shiftL, shiftR, (.&.), (.|.))
+import Data.Either (isLeft)
+import Data.List (sort)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import Emulation.NativeCase (Region, loadCase)
@@ -23,14 +25,17 @@ import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
 
-stateBase, stackBase, planBase, checkCountBase, checkStatusBase, traceBase, traceCountBase, waitSignalBase, releaseBase, candidateBase, depsHighBase, depsLowBase, exitAddress, stackTop, contextBase :: Word32
+stateBase, stackBase, planBase, checkStatusBase, clearCountBase, clearTraceBase, advanceCountBase, advanceTraceBase, waitCountBase, waitTraceBase, waitSignalBase, releaseBase, candidateBase, depsHighBase, depsLowBase, exitAddress, stackTop, contextBase :: Word32
 stateBase = 0x009a0000
 stackBase = 0x009a2000
 planBase = 0x009a1000
-checkCountBase = 0x009a1100
 checkStatusBase = 0x009a1104
-traceBase = 0x009a1200
-traceCountBase = 0x009a1300
+clearCountBase = 0x009a1200
+clearTraceBase = 0x009a1204
+advanceCountBase = 0x009a1300
+advanceTraceBase = 0x009a1304
+waitCountBase = 0x009a1320
+waitTraceBase = 0x009a1324
 waitSignalBase = 0x009a1400
 releaseBase = 0x009a1600
 candidateBase = 0x009c0000
@@ -61,6 +66,14 @@ putWords :: Int -> [Word32] -> B.ByteString -> B.ByteString
 putWords offset values bytes =
   foldl (\current (index, value) -> putU32 (offset + index * 4) value current) bytes (zip [0 :: Int ..] values)
 
+readU32 :: B.ByteString -> Int -> Word32
+readU32 bytes offset =
+  byte 0 .|. (byte 1 `shiftL` 8) .|. (byte 2 `shiftL` 16) .|. (byte 3 `shiftL` 24)
+  where
+    byte index =
+      fromIntegral
+        (if offset + index < B.length bytes then B.index bytes (offset + index) else 0) :: Word32
+
 stateOffset :: Word32 -> Int
 stateOffset address = fromIntegral (address - stateBase)
 
@@ -84,17 +97,11 @@ data Scenario = Scenario
 
 data Outcome = Outcome
   { outcomeStatus :: Word32
-  , outcomeTrace :: [Word32]
-  , outcomeChecks :: Int
+  , outcomeCleared :: [Word32]
+  , outcomeAdvanced :: [Word32]
+  , outcomeWaits :: [Word32]
   , outcomeRelease :: Word32
-  , outcomeSignals :: Word32
   }
-
-clearEntry, advanceEntry, logEntry, waitEntry :: Word32
-clearEntry = 0x0100_0000
-advanceEntry = 0x0200_0000
-logEntry = 0x0300_0000
-waitEntry = 0x0400_0000
 
 planWords :: Plan -> [Word32]
 planWords plan =
@@ -116,7 +123,7 @@ planWords plan =
 cancelRequested :: Plan -> Word32 -> Bool
 cancelRequested plan signals
   | planCancelBit plan == 0xc = signals /= 0
-  | otherwise = signals .&. ((1 :: Word32) `shiftL` fromIntegral (planCancelBit plan .&. 31)) /= 0
+  | otherwise = signals .&. ((1 :: Word32) `shiftL` fromIntegral (planCancelBit plan)) /= 0
 
 nextCheck :: [Word32] -> (Word32, [Word32])
 nextCheck [] = (0, [])
@@ -124,22 +131,24 @@ nextCheck (value : rest) = (value, rest)
 
 model :: Scenario -> Outcome
 model scenario
-  | entryStatus /= 0 = Outcome entryStatus [] 1 0 (scenarioSignals scenario)
-  | cancelRequested plan (scenarioSignals scenario) = cancelPath [clearEntry .|. planEntryClear plan] afterEntry 2 (scenarioSignals scenario)
-  | advanceStatus /= 0 = Outcome advanceStatus trace1 2 1 (scenarioSignals scenario)
-  | cancelRequested plan afterWait = cancelPath trace2 afterAdvance 3 afterWait
-  | otherwise = Outcome finalStatus trace2 3 1 afterWait
+  | entryStatus /= 0 = Outcome entryStatus [] [] [] 0
+  | cancelRequested plan (scenarioSignals scenario) = Outcome finalStatus [entryClear, cancelClear] [cancelState] [] 1
+  | advanceStatus /= 0 = Outcome advanceStatus [entryClear] [normalState] [] 1
+  | otherwise = Outcome finalStatus cleared advanced waited 1
   where
     plan = scenarioPlan scenario
+    entryClear = planEntryClear plan
+    cancelClear = planCancelClear plan
+    normalState = planNormalState plan
+    cancelState = planCancelState plan
     (entryStatus, afterEntry) = nextCheck (scenarioChecks scenario)
     (advanceStatus, afterAdvance) = nextCheck afterEntry
     (finalStatus, _) = nextCheck afterAdvance
-    trace1 = [clearEntry .|. planEntryClear plan, advanceEntry .|. planNormalState plan]
     afterWait = if scenarioWaitSignal scenario /= 0 then scenarioWaitSignal scenario else scenarioSignals scenario
-    trace2 = trace1 ++ [logEntry .|. 5, waitEntry .|. planWaitEvent plan, logEntry .|. 6]
-    cancelPath trace rest count signals =
-      let (status, _) = nextCheck rest
-       in Outcome status (trace ++ [advanceEntry .|. planCancelState plan, clearEntry .|. planCancelClear plan]) count 1 signals
+    waited = [planWaitEvent plan]
+    cancelledAfterWait = cancelRequested plan afterWait
+    cleared = if cancelledAfterWait then [entryClear, cancelClear] else [entryClear]
+    advanced = if cancelledAfterWait then [normalState, cancelState] else [normalState]
 
 initialState :: Scenario -> B.ByteString
 initialState scenario =
@@ -147,16 +156,6 @@ initialState scenario =
     (putWords (stateOffset checkStatusBase) (scenarioChecks scenario)
       (putU32 (stateOffset waitSignalBase) (scenarioWaitSignal scenario)
         (putU32 (stateOffset (contextBase + 0x4c)) (scenarioSignals scenario) (B.replicate stateSize 0))))
-
-expectedState :: Scenario -> B.ByteString
-expectedState scenario =
-  putWords (stateOffset traceBase) (outcomeTrace outcome)
-    (putU32 (stateOffset traceCountBase) (fromIntegral (length (outcomeTrace outcome)))
-      (putU32 (stateOffset releaseBase) (outcomeRelease outcome)
-        (putU32 (stateOffset checkCountBase) (fromIntegral (outcomeChecks outcome))
-          (putU32 (stateOffset (contextBase + 0x4c)) (outcomeSignals outcome) (initialState scenario)))))
-  where
-    outcome = model scenario
 
 scenarios :: [Scenario]
 scenarios =
@@ -175,10 +174,42 @@ scenarios =
   where
     base = Plan 0 2 3 4 5 0x30 0xc
 
+invalidScenarios :: [Scenario]
+invalidScenarios =
+  [ Scenario "invalid-cancel-bit-32" base {planCancelBit = 32} 0 [0, 0, 0] 0
+  , Scenario "invalid-cancel-bit-64" base {planCancelBit = 64} 0 [0, 0, 0] 0
+  ]
+  where
+    base = Plan 0 2 3 4 5 0x30 0xc
+
+invalidPointers :: [(String, Word32)]
+invalidPointers =
+  [ ("invalid-plan-null", 0)
+  , ("invalid-plan-misaligned", planBase + 2)
+  , ("invalid-context-null", 0)
+  , ("invalid-context-misaligned", contextBase + 2)
+  ]
+
+validatePointer :: Word32 -> Either String ()
+validatePointer address
+  | address == 0 = Left "pointer is null"
+  | address .&. 3 /= 0 = Left "pointer is not word aligned"
+  | otherwise = Right ()
+
+validateScenario :: Scenario -> Either String ()
+validateScenario scenario
+  | cancel /= 0xc && cancel > 31 = Left "descriptor cancel bit is outside 0xc or 0..=31"
+  | length (scenarioChecks scenario) > 8 = Left "check script exceeds the case status array"
+  | otherwise = validatePointer contextBase >> validatePointer planBase
+  where
+    cancel = planCancelBit (scenarioPlan scenario)
+
 data Artifacts = Artifacts
   { artifactState :: B.ByteString
   , artifactHigh :: B.ByteString
+  , artifactHighForbidden :: B.ByteString
   , artifactLow :: B.ByteString
+  , artifactLowFaulty :: B.ByteString
   , artifactCandidate :: B.ByteString
   , artifactCandidateLength :: Int
   }
@@ -187,14 +218,19 @@ loadArtifacts :: FilePath -> Int -> IO Artifacts
 loadArtifacts build candidateLength = do
   high <- B.readFile (build </> "capture-deps-high.bin")
   low <- B.readFile (build </> "capture-deps-low.bin")
+  faulty <- B.readFile (build </> "capture-deps-low-faulty.bin")
   candidate <- B.readFile (build </> "capture-candidate.bin")
   stock <- B.readFile (build </> "stock-wait.bin")
   let highStock = overlay stockWaitOffset stock (ensure (stockWaitOffset + B.length stock) high)
+      guard = B.concat (replicate ((0x11c + 3) `div` 4) (u32le 0xe7f000f0))
+      highGuard = overlay stockWaitOffset guard (ensure (stockWaitOffset + B.length guard) high)
   pure
     Artifacts
       { artifactState = B.empty
       , artifactHigh = pad depsHighSize highStock
+      , artifactHighForbidden = pad depsHighSize highGuard
       , artifactLow = pad depsLowSize low
+      , artifactLowFaulty = pad depsLowSize faulty
       , artifactCandidate = pad candidateSize candidate
       , artifactCandidateLength = candidateLength
       }
@@ -243,10 +279,10 @@ artifactJson ident bytes =
 caseJson :: Scenario -> Side -> Artifacts -> Value
 caseJson scenario side artifacts =
   let state = artifactState artifacts
-      entry = if side == Original then 0x00e9e038 else candidateBase
-      argument = 1
+      high = if side == Original then artifactHigh artifacts else artifactHighForbidden artifacts
+      entry = if side == Candidate then candidateBase else 0x00e9e038
       candidateSpan = ((artifactCandidateLength artifacts + 3) `div` 4) * 4
-      spans = syntheticSpans ++ [(entry, if side == Original then 0x11c else candidateSpan)]
+      spans = syntheticSpans ++ [(entry, if side == Candidate then candidateSpan else 0x11c)]
       origin = if side == Original then "stock" else "synthetic"
    in object
         [ "schema_version" .= (1 :: Int)
@@ -256,7 +292,7 @@ caseJson scenario side artifacts =
         , "cpu" .= object ["architecture" .= ("arm" :: String), "model" .= ("cortex-r5f" :: String), "mode" .= ("arm" :: String), "endian" .= ("little" :: String)]
         , "artifacts" .=
             [ artifactJson "state" state
-            , artifactJson "deps-high" (artifactHigh artifacts)
+            , artifactJson "deps-high" high
             , artifactJson "deps-low" (artifactLow artifacts)
             , artifactJson "candidate" (artifactCandidate artifacts)
             ]
@@ -265,7 +301,7 @@ caseJson scenario side artifacts =
         , "registers" .=
             object
               [ "r0" .= hex contextBase
-              , "r1" .= hex argument
+              , "r1" .= hex 1
               , "r2" .= hex 0
               , "r3" .= hex 0
               , "r4" .= hex 0
@@ -284,7 +320,7 @@ caseJson scenario side artifacts =
         , "regions" .=
             [ regionJson "state" stateBase stateSize "rw" state
             , regionJson "stack" stackBase stackSize "rw" B.empty
-            , regionJson "deps-high" depsHighBase depsHighSize "rx" (artifactHigh artifacts)
+            , regionJson "deps-high" depsHighBase depsHighSize "rx" high
             , regionJson "deps-low" depsLowBase depsLowSize "rx" (artifactLow artifacts)
             , regionJson "candidate" candidateBase candidateSize "rx" (artifactCandidate artifacts)
             ]
@@ -304,26 +340,32 @@ caseJson scenario side artifacts =
               , "events" .= ([] :: [Value])
               ]
         , "exclusions" .=
-            [ "The dependency functions record through fixed RAM cells; they model the stock scheduler and state operations, not their full implementations."
-            , "No stock table lookup is executed; the plan is supplied at its case address."
+            [ "Dependency effects are compared as sets; clear, advance and wait order and diagnostic log order are not asserted."
             , "The stack region is execution scratch and is not compared."
             ]
         ]
 
-data Side = Original | Candidate deriving (Eq, Show)
+data Side = Original | Candidate | ForbiddenOriginal deriving (Eq, Show)
 
 sideLabel :: Side -> String
 sideLabel Original = "original"
 sideLabel Candidate = "candidate"
+sideLabel ForbiddenOriginal = "forbidden-original"
 
 contains :: N.GuestAddress -> Int -> N.GuestAddress -> Int -> Bool
 contains (N.GuestAddress base) extent (N.GuestAddress address) size =
   address >= base && address + fromIntegral size <= base + fromIntegral extent
 
+stateWords :: B.ByteString -> Word32 -> Word32 -> [Word32]
+stateWords bytes countBase traceBase =
+  [ readU32 bytes (stateOffset traceBase + index * 4)
+  | index <- [0 .. fromIntegral (min 8 (readU32 bytes (stateOffset countBase))) - 1]
+  ]
+
 checkCapture :: [Region] -> Scenario -> N.NativeObservation -> [String]
 checkCapture regions scenario observation =
   case N.nativeStatus observation of
-    N.Returned -> registers ++ state ++ writes
+    N.Returned -> registers ++ effects ++ writes
     status -> ["runner status " ++ N.runnerStatusLabel status]
   where
     expected = model scenario
@@ -338,12 +380,26 @@ checkCapture regions scenario observation =
       register N.R0 (outcomeStatus expected)
         ++ register N.Sp stackTop
         ++ register N.Pc exitAddress
-    state =
+    effects =
       case lookup (N.RegionId "state") (N.nativeMemory observation) of
         Nothing -> ["state region missing"]
-        Just actual
-          | actual /= expectedState scenario -> ["state differs from the source model"]
-          | otherwise -> []
+        Just bytes ->
+          let cleared = sort (stateWords bytes clearCountBase clearTraceBase)
+              advanced = sort (stateWords bytes advanceCountBase advanceTraceBase)
+              waits = sort (stateWords bytes waitCountBase waitTraceBase)
+              release = readU32 bytes (stateOffset releaseBase)
+           in [ "cleared effects differ: expected " ++ show (sort (outcomeCleared expected)) ++ ", observed " ++ show cleared
+              | cleared /= sort (outcomeCleared expected)
+              ]
+                ++ [ "advance effects differ: expected " ++ show (sort (outcomeAdvanced expected)) ++ ", observed " ++ show advanced
+                   | advanced /= sort (outcomeAdvanced expected)
+                   ]
+                ++ [ "wait effects differ: expected " ++ show (sort (outcomeWaits expected)) ++ ", observed " ++ show waits
+                   | waits /= sort (outcomeWaits expected)
+                   ]
+                ++ [ "release count expected " ++ show (outcomeRelease expected) ++ ", observed " ++ show release
+                   | release /= outcomeRelease expected
+                   ]
     writes =
       case N.nativeProvenance observation of
         N.Truncated _ -> ["provenance truncated"]
@@ -363,34 +419,37 @@ data Result = Result
   }
 
 runSide :: FilePath -> FilePath -> Artifacts -> Scenario -> Side -> IO Result
-runSide runner root artifactsTemplate scenario side = do
-  let dir = root </> (scenarioId scenario ++ "-" ++ sideLabel side)
-      artifacts = artifactsTemplate {artifactState = initialState scenario}
-      value = caseJson scenario side artifacts
-  createDirectoryIfMissing True dir
-  B.writeFile (dir </> "state.bin") (artifactState artifacts)
-  B.writeFile (dir </> "deps-high.bin") (artifactHigh artifacts)
-  B.writeFile (dir </> "deps-low.bin") (artifactLow artifacts)
-  B.writeFile (dir </> "candidate.bin") (artifactCandidate artifacts)
-  BL.writeFile (dir </> "case.json") (encode value)
-  loaded <- try (loadCase (dir </> "case.json"))
-  case loaded of
-    Left (message :: IOException) -> pure (Result "invalid_case" [show message] Nothing)
-    Right (_, regions, wire, _) -> do
-      executable <- canonicalizePath runner
-      (timed, exit, out, err) <- runBounded 8000000 (8 * 1024 * 1024) executable [] wire
-      if timed
-        then pure (Result "host_timeout" [BC.unpack err] Nothing)
-        else do
-          parsed <- try (jsonRead out)
-          case parsed of
-            Left (message :: IOException) -> pure (Result "invalid_output" [show message, BC.unpack err] Nothing)
-            Right runnerValue ->
-              case N.observeNative exit regions runnerValue of
-                Left problem -> pure (Result "invalid_output" [N.renderObservationError problem, BC.unpack err] Nothing)
-                Right observation ->
-                  let problems = checkCapture regions scenario observation
-                   in pure (Result (if null problems then "passed" else "failed") problems (Just observation))
+runSide runner root artifactsTemplate scenario side =
+  case validateScenario scenario of
+    Left reason -> pure (Result "invalid_case" [reason] Nothing)
+    Right () -> do
+      let dir = root </> (scenarioId scenario ++ "-" ++ sideLabel side)
+          artifacts = artifactsTemplate {artifactState = initialState scenario}
+          value = caseJson scenario side artifacts
+      createDirectoryIfMissing True dir
+      B.writeFile (dir </> "state.bin") (artifactState artifacts)
+      B.writeFile (dir </> "deps-high.bin") (artifactHigh artifacts)
+      B.writeFile (dir </> "deps-low.bin") (artifactLow artifacts)
+      B.writeFile (dir </> "candidate.bin") (artifactCandidate artifacts)
+      BL.writeFile (dir </> "case.json") (encode value)
+      loaded <- try (loadCase (dir </> "case.json"))
+      case loaded of
+        Left (message :: IOException) -> pure (Result "invalid_case" [show message] Nothing)
+        Right (_, regions, wire, _) -> do
+          executable <- canonicalizePath runner
+          (timed, exit, out, err) <- runBounded 8000000 (8 * 1024 * 1024) executable [] wire
+          if timed
+            then pure (Result "host_timeout" [BC.unpack err] Nothing)
+            else do
+              parsed <- try (jsonRead out)
+              case parsed of
+                Left (message :: IOException) -> pure (Result "invalid_output" [show message, BC.unpack err] Nothing)
+                Right runnerValue ->
+                  case N.observeNative exit regions runnerValue of
+                    Left problem -> pure (Result "invalid_output" [N.renderObservationError problem, BC.unpack err] Nothing)
+                    Right observation ->
+                      let problems = checkCapture regions scenario observation
+                       in pure (Result (if null problems then "passed" else "failed") problems (Just observation))
 
 mutateState :: (B.ByteString -> B.ByteString) -> N.NativeObservation -> N.NativeObservation
 mutateState change observation =
@@ -405,26 +464,41 @@ controlChecks :: Scenario -> N.NativeObservation -> [Value]
 controlChecks scenario observation =
   [ control "release-twice" (mutateState (putU32 (stateOffset releaseBase) 2) observation)
   , control "missing-release" (mutateState (putU32 (stateOffset releaseBase) 0) observation)
-  , control "extra-trace" (mutateState addTrace observation)
+  , control "missing-wait" (mutateState (putU32 (stateOffset waitCountBase) 0) observation)
   , control "wrong-status" (observation {N.nativeRegisters = M.insert N.R0 (outcomeStatus (model scenario) + 1) (N.nativeRegisters observation)})
   ]
   where
-    trace = outcomeTrace (model scenario)
-    addTrace bytes =
-      putU32 (stateOffset traceCountBase) (fromIntegral (length trace) + 1)
-        (putU32 (stateOffset traceBase + length trace * 4) 0x9 bytes)
     control name changed =
       let problems = checkCapture [] scenario changed
        in object ["name" .= name, "status" .= (if null problems then "accepted" else "refused"), "problems" .= problems]
 
-report :: [(Scenario, Result, Result, [Value])] -> Value
-report results =
+controlValue :: String -> Result -> Value
+controlValue name result =
+  object
+    [ "name" .= name
+    , "status" .= (if resultStatus result == "failed" && not (null (resultProblems result)) then "refused" else "accepted")
+    , "problems" .= resultProblems result
+    ]
+
+invalidValue :: String -> Either String () -> Value
+invalidValue name result =
+  object
+    [ "name" .= name
+    , "status" .= (if isLeft result then "refused" else "accepted")
+    , "reason" .= either id (const "") result
+    ]
+
+report :: [(Scenario, Result, Result, [Value])] -> Value -> Value -> [Value] -> Value
+report results producerControl guardControl invalidControls =
   object
     [ "schema_version" .= (1 :: Int)
     , "profile" .= ("capture-develop-wait" :: String)
     , "cases" .= [caseReport scenario original candidate controls | (scenario, original, candidate, controls) <- results]
-    , "status" .= (if capability results then "qualified" else "failed")
-    , "capability" .= capability results
+    , "producer_controls" .= [producerControl]
+    , "guard_controls" .= [guardControl]
+    , "invalid_inputs" .= invalidControls
+    , "status" .= (if capability results producerControl guardControl invalidControls then "qualified" else "failed")
+    , "capability" .= capability results producerControl guardControl invalidControls
     ]
   where
     caseReport scenario original candidate controls =
@@ -433,8 +507,9 @@ report results =
         , "model" .=
             object
               [ "status" .= outcomeStatus (model scenario)
-              , "trace" .= outcomeTrace (model scenario)
-              , "checks" .= outcomeChecks (model scenario)
+              , "cleared" .= sort (outcomeCleared (model scenario))
+              , "advanced" .= sort (outcomeAdvanced (model scenario))
+              , "waits" .= sort (outcomeWaits (model scenario))
               , "release" .= outcomeRelease (model scenario)
               ]
         , "original" .= resultJson original
@@ -444,13 +519,17 @@ report results =
         ]
     resultJson result =
       object ["status" .= resultStatus result, "problems" .= resultProblems result]
-    capability =
-      all (\(_, original, candidate, controls) ->
-        resultStatus original == "passed"
-          && resultStatus candidate == "passed"
-          && not (null controls)
-          && all (\control -> str (get control "status") == "refused") controls)
-      results
+    capability cases producer guard invalid =
+      all
+        (\(_, original, candidate, controls) ->
+          resultStatus original == "passed"
+            && resultStatus candidate == "passed"
+            && not (null controls)
+            && all (\control -> str (get control "status") == "refused") controls)
+        cases
+        && str (get producer "status") == "refused"
+        && str (get guard "status") == "refused"
+        && all (\control -> str (get control "status") == "refused") invalid
 
 main :: IO ()
 main = do
@@ -471,6 +550,16 @@ run runner build out = do
     candidate <- runSide runner out artifacts scenario Candidate
     let controls = maybe [] (controlChecks scenario) (resultObservation candidate)
     pure (scenario, original, candidate, controls)
-  BL.writeFile (out </> "results.json") (encode (report results))
+  let normalScenario = head [scenario | scenario <- scenarios, scenarioId scenario == "normal"]
+      producerRoot = out </> "producer"
+      guardRoot = out </> "guard"
+  createDirectoryIfMissing True producerRoot
+  createDirectoryIfMissing True guardRoot
+  producer <- runSide runner producerRoot (artifacts {artifactLow = artifactLowFaulty artifacts}) normalScenario Candidate
+  guard <- runSide runner guardRoot artifacts normalScenario ForbiddenOriginal
+  let invalidControls =
+        [ invalidValue (scenarioId scenario) (validateScenario scenario) | scenario <- invalidScenarios ]
+          ++ [ invalidValue name (validatePointer address) | (name, address) <- invalidPointers ]
+  BL.writeFile (out </> "results.json") (encode (report results (controlValue "double-release" producer) (controlValue "forbidden-stock-entry" guard) invalidControls))
   let passed = length [() | (_, original, candidate, _) <- results, resultStatus original == "passed", resultStatus candidate == "passed"]
   putStrLn ("capture develop wait: " ++ show passed ++ "/" ++ show (length results) ++ " differential cases passed")

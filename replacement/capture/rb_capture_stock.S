@@ -1,9 +1,19 @@
-@ X-M1 1.50 image 5 develop-step boundary calls.
-@ AAPCS; each wrapper preserves the Rust caller's r4-r11 and sp.
+@ X-M1 1.50 image 5 develop-step boundary calls. Tail trampolines follow the
+@ bank's RB_TRAMPOLINE form; the nested wait loads its target and uses BLX.
 
 .syntax unified
 .arm
-.text
+.section .text,"ax",%progbits
+
+.macro RB_CAPTURE_TRAMPOLINE name, addr
+.global \name
+.type \name,%function
+\name:
+    movw r12, #(\addr & 0xffff)
+    movt r12, #((\addr >> 16) & 0xffff)
+    bx r12
+.size \name, .-\name
+.endm
 
 @ FUN_00e9e038(context, step): resolve the plan and run the owned wait.
 .global rb_capture_develop_wait
@@ -19,37 +29,16 @@ rb_capture_develop_wait:
     pop {r4, pc}
 .size rb_capture_develop_wait, .-rb_capture_develop_wait
 
-@ FUN_00e91810(0x80, step): the stock descriptor lookup.
-.global rb_capture_stock_step_plan
-.type rb_capture_stock_step_plan, %function
-rb_capture_stock_step_plan:
-    mov r1, r0
-    mov r0, #0x80
-    b 0x00e91810
-.size rb_capture_stock_step_plan, .-rb_capture_stock_step_plan
-
-@ FUN_00e93bdc(context, event).
-.global rb_capture_stock_check
-.type rb_capture_stock_check, %function
-rb_capture_stock_check:
-    b 0x00e93bdc
-.size rb_capture_stock_check, .-rb_capture_stock_check
-
 @ FUN_00e93664(context, event, 0, 0).
 .global rb_capture_stock_clear
 .type rb_capture_stock_clear, %function
 rb_capture_stock_clear:
     mov r2, #0
     mov r3, #0
-    b 0x00e93664
+    movw r12, #0x3664
+    movt r12, #0x00e9
+    bx r12
 .size rb_capture_stock_clear, .-rb_capture_stock_clear
-
-@ FUN_00e9390c(context, state).
-.global rb_capture_stock_advance
-.type rb_capture_stock_advance, %function
-rb_capture_stock_advance:
-    b 0x00e9390c
-.size rb_capture_stock_advance, .-rb_capture_stock_advance
 
 @ The develop context's requested-event word at +0x4c.
 .global rb_capture_stock_cancel_signals
@@ -67,21 +56,17 @@ rb_capture_stock_wait:
     sub sp, sp, #8
     mov r1, sp
     mvn r2, #0
-    bl 0x007243a8
+    ldr r12, .Lrb_capture_wait_target
+    blx r12
     add sp, sp, #8
     pop {r4, pc}
+.align 2
+.Lrb_capture_wait_target:
+    .word 0x007243a8
 .size rb_capture_stock_wait, .-rb_capture_stock_wait
 
-@ FUN_00724638().
-.global rb_capture_stock_release
-.type rb_capture_stock_release, %function
-rb_capture_stock_release:
-    b 0x00724638
-.size rb_capture_stock_release, .-rb_capture_stock_release
-
-@ FUN_00e9db80(context, phase).
-.global rb_capture_stock_log
-.type rb_capture_stock_log, %function
-rb_capture_stock_log:
-    b 0x00e9db80
-.size rb_capture_stock_log, .-rb_capture_stock_log
+RB_CAPTURE_TRAMPOLINE rb_capture_stock_step_plan, 0x00e91810
+RB_CAPTURE_TRAMPOLINE rb_capture_stock_check, 0x00e93bdc
+RB_CAPTURE_TRAMPOLINE rb_capture_stock_advance, 0x00e9390c
+RB_CAPTURE_TRAMPOLINE rb_capture_stock_release, 0x00724638
+RB_CAPTURE_TRAMPOLINE rb_capture_stock_log, 0x00e9db80

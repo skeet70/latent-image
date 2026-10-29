@@ -17,12 +17,14 @@ mkdir -p "$BUILD_DIR" "$OUT_DIR"
 cp bazel-bin/replacement/capture/capture-candidate.bin "$BUILD_DIR/capture-candidate.bin"
 cp bazel-bin/replacement/capture/capture-deps-high.bin "$BUILD_DIR/capture-deps-high.bin"
 cp bazel-bin/replacement/capture/capture-deps-low.bin "$BUILD_DIR/capture-deps-low.bin"
+cp bazel-bin/replacement/capture/capture-deps-low-faulty.bin "$BUILD_DIR/capture-deps-low-faulty.bin"
 
 candidate_bytes=$(wc -c < "$BUILD_DIR/capture-candidate.bin")
 printf '%s\n' "$candidate_bytes" > "$BUILD_DIR/capture-candidate.length"
 truncate -s 32768 "$BUILD_DIR/capture-candidate.bin"
 truncate -s 131072 "$BUILD_DIR/capture-deps-high.bin"
 truncate -s 16384 "$BUILD_DIR/capture-deps-low.bin"
+truncate -s 16384 "$BUILD_DIR/capture-deps-low-faulty.bin"
 
 dd if="$ID5_ELF" of="$BUILD_DIR/stock-wait.bin" bs=1 skip=$((0x2ac720)) count=$((0x11c)) status=none
 entry=$(od -An -tx4 -N4 "$BUILD_DIR/stock-wait.bin" | tr -d ' \n')
