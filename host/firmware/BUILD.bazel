@@ -161,6 +161,44 @@ haskell_test(
     ],
 )
 
+haskell_binary(
+    name = "build-first-stage",
+    srcs = ["BuildFirstStage.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
+haskell_test(
+    name = "first-stage-tests",
+    srcs = ["FirstStageTests.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
 # The special label records 0x83c..0x83e in image 2: the load-relative
 # geometry, the 0x83d name write with its layout carry, the id-parameterised
 # record write with its current-bytes check, and read-back. The media image is
