@@ -125,7 +125,8 @@ impl FrameCommand {
     pub const ZERO: Self = FrameCommand(0);
 }
 
-/// The retained 0xe87ad4 result, captured at the stock use point.
+/// The retained `FUN_00e87ad4(slot)` result, `word[0x0157dd3c] + slot * 0x326c`,
+/// captured at the stock use point.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct FrameContext(pub(crate) usize);
@@ -207,8 +208,8 @@ pub trait PermitRuntime: SlotSource {
     fn set_event_bit(&mut self, slot: SlotIndex, bit: EventBit);
     fn frame_context(&self, slot: SlotIndex) -> Option<FrameContext>;
     fn clear_capture_word(&mut self, context: FrameContext);
-    fn store_capture_word(&mut self, context: FrameContext, word: PermitWord);
-    fn capture_word_is_one(&self, context: FrameContext) -> bool;
+    fn store_permit_word(&mut self, context: FrameContext, word: PermitWord);
+    fn kind_flag_is_one(&self, context: FrameContext) -> bool;
     fn subframe_count(&self, slot: SlotIndex) -> SubframeCount;
     fn subframe(&self, slot: SlotIndex) -> Option<SlotIndex>;
     fn mapped_subframe(&self, slot: SlotIndex, index: SubframeIndex) -> Option<SlotIndex>;
@@ -281,14 +282,14 @@ fn apply_kind_one(
             Some(context) => context,
             None => return false,
         };
-        runtime.store_capture_word(context, word0);
+        runtime.store_permit_word(context, word0);
         last = context;
         index += 1;
     }
 
     let count = runtime.subframe_count(slot);
     let minimum = runtime.minimum();
-    if runtime.capture_word_is_one(last)
+    if runtime.kind_flag_is_one(last)
         && word0.0.cmp(&count.0) == Ordering::Greater
         && word0.0 < minimum.0
     {
@@ -338,7 +339,9 @@ fn apply_kind_broadcast(
 }
 
 /// `FUN_00e7e95c`: apply the mirrored permit to the frame named by word 1.
-/// Entered by thunks `0x00e6a74c` and `0x00e6bb88`.
+/// Entered only by thunks `0x00e6a74c` (machine 5 action 10, class 5 in
+/// states 1 and 2) and `0x00e6bb88` (machine 6 action 22, class 14 in
+/// state 1); message 0x1367 is the only message mapped to either class.
 pub fn apply_mirrored_permit(runtime: &mut impl PermitRuntime) -> PermitStatus {
     let mirrored = runtime.mirror();
     let slot = match resolve(runtime, runtime.layout(), FrameKey(mirrored.word1.0)) {

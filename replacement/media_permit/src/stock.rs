@@ -142,11 +142,11 @@ impl PermitRuntime for StockRuntime {
         write_u32(context.0 + CAPTURE_WORD, 0);
     }
 
-    fn store_capture_word(&mut self, context: FrameContext, word: PermitWord) {
+    fn store_permit_word(&mut self, context: FrameContext, word: PermitWord) {
         write_u32(context.0 + PERMIT_WORD, word.0);
     }
 
-    fn capture_word_is_one(&self, context: FrameContext) -> bool {
+    fn kind_flag_is_one(&self, context: FrameContext) -> bool {
         read_u32(context.0 + KIND_FLAG) == 1
     }
 

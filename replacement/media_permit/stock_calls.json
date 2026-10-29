@@ -15,12 +15,12 @@
     {"address": "0x00e881e8", "name": "unresolved key recorder", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e77168.c"}
   ],
   "stock_stores": [
-    {"address": "0x015ad53c", "bytes": 4, "name": "active frame slot", "source": "replacement/media_permit/src/stock.rs; 00e7f324.c"},
+    {"address": "0x015ad53c", "bytes": 4, "name": "active frame slot", "source": "replacement/media_permit/src/stock.rs; 00e7e95c.c"},
     {"address": "0x01581f60", "bytes": 4, "name": "first aggregate minimum", "source": "replacement/media_permit/src/stock.rs; 00e7e95c.c"},
     {"address": "0x01581f64", "bytes": 4, "name": "second aggregate minimum", "source": "replacement/media_permit/src/stock.rs; 00e7e95c.c"},
     {"address": "0x01581f68", "bytes": 4, "name": "third aggregate minimum", "source": "replacement/media_permit/src/stock.rs; 00e7e95c.c"}
   ],
   "unproven": [
-    {"access": "store", "function": "rb_media_permit_apply", "reason": "frame context +0x27c8 and +0x2fb0 at the retained 0xe87ad4 result for slots 0..200", "through": {"result": "0x00e87ad4"}}
+    {"access": "store", "function": "rb_media_permit_apply", "reason": "stores zero at +0x27c8 and the permit word at +0x2fb0 of 0xe87ad4(s) = word[0x0157dd3c] + s * 0x326c for SlotIndex s 0..200, 402 words per base; word[0x0157dd3c] is written only by 0xe86e7c from the +8 word of a 0xe8a338 descriptor, base 0x04988600, 0x1f9dbb60, 0x44988600, 0x49c4f480 or 0x5f9fb7e0, and is set before 0x1367 reaches 0xe7e95c because machine 0 leaves state 0 only through action 2, which runs 0xe880dc; unproven: s below the active descriptor's frame count (1, 0x57 or 0x60), which 0xe88d88 does not bound when it allocates slots up to 200", "through": {"result": "0x00e87ad4"}}
   ]
 }
