@@ -99,11 +99,12 @@ while read -r sym; do
   if [ -z "$addr" ]; then echo "kernel symbol missing: $sym" >&2; exit 1; fi
   DEFSYMS+=("-Wl,--defsym=$sym=$addr")
 done < <(llvm-nm --undefined-only "$BUILD_DIR/model.o" | awk '{print $2}')
+# The full model's data span 0x7f000000..0x7f001000 is an invented native-case region, not an X-M1 address or RAM-push reservation.
 env $HARDEN clang "${ARM[@]}" -nostdlib -static -fuse-ld=lld \
   -Wl,--no-dynamic-linker -Wl,--build-id=none \
+  -Wl,--defsym=rbm_data_base=0x7f000000 -Wl,--defsym=rbm_data_limit=0x7f001000 \
   -Wl,-T,emulation/recipe-bank-model.ld "${DEFSYMS[@]}" "$BUILD_DIR/model.o" \
   -o "$BUILD_DIR/model.elf"
-llvm-objcopy -O binary "$BUILD_DIR/model.elf" "$BUILD_DIR/model.bin"
 llvm-nm --print-size --numeric-sort "$BUILD_DIR/model.elf" > "$BUILD_DIR/model.syms"
 llvm-readelf --symbols --wide "$BUILD_DIR/model.elf" > "$BUILD_DIR/model.symbols"
 for pair in getter:getter setter:setter lowclose:rbm_low_close read:rbm_read \
@@ -116,7 +117,7 @@ done
 llvm-objcopy -j .data -O binary "$BUILD_DIR/model.elf" "$BUILD_DIR/model-data.bin"
 read -r HADDR HSIZE <<< "$(llvm-readelf -S "$BUILD_DIR/model.elf" | awk '/\.text\.helpers/ {for (i = 1; i <= NF; i++) if ($i == "PROGBITS") {print $(i + 1), $(i + 3); exit}}')"
 printf '%s %s T helpers\n' "$HADDR" "$HSIZE" >> "$BUILD_DIR/model.syms"
-sha256sum "$BUILD_DIR/model.bin"
+sha256sum "$BUILD_DIR/model.elf" "$BUILD_DIR/model-data.bin"
 
 BOOT_ARGS=()
 if [ -n "${BOOT_PACKAGE:-}" ]; then BOOT_ARGS=(--boot-package "$BOOT_PACKAGE"); fi
