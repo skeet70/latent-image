@@ -16,7 +16,6 @@ filegroup(
 filegroup(
     name = "relink-sources",
     srcs = [
-        "media_permit.ld",
         "rb_media_permit_stock.S",
         "src/lib.rs",
         "src/stock.rs",
@@ -36,7 +35,10 @@ xm1_rust_staticlib(
 
 xm1_rust_elf(
     name = "media-permit-candidate",
-    asm_srcs = ["rb_media_permit_stock.S"],
+    asm_srcs = [
+        "rb_media_permit_probe.S",
+        "rb_media_permit_stock.S",
+    ],
     entry = "rb_media_permit_case",
     link_script = "media_permit.ld",
     rust_staticlib = ":media-permit-lib",
@@ -61,7 +63,10 @@ xm1_rust_staticlib(
 xm1_rust_elf(
     name = "media-permit-defect",
     testonly = True,
-    asm_srcs = ["rb_media_permit_stock.S"],
+    asm_srcs = [
+        "rb_media_permit_probe.S",
+        "rb_media_permit_stock.S",
+    ],
     entry = "rb_media_permit_case",
     link_script = "media_permit.ld",
     rust_staticlib = ":media-permit-defect-lib",
