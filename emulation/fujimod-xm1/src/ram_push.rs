@@ -513,14 +513,15 @@ impl Server {
                     .collect::<Result<Vec<_>, _>>()?;
                 let ranges = ProtectedRanges::new(ranges)
                     .map_err(|error| format!("preservation-begin: {error}"))?;
+                let acknowledgement = json!({"armed": true, "ranges": &ranges});
                 let preservation = self
                     .bridge
                     .machine
                     .session
                     .board
-                    .preservation_begin(ranges.clone())?;
+                    .preservation_begin(ranges)?;
                 self.preservation = Some(preservation);
-                json!({"armed": true, "ranges": ranges})
+                acknowledgement
             }
             Request::PreservationState => match &self.preservation {
                 Some(preservation) => serde_json::to_value(preservation.state())

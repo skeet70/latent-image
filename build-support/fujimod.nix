@@ -2,14 +2,14 @@
 # jitl (justjake)'s FujiMod, unlicensed (LICENSING.md); statically links its
 # vendored Unicorn submodule, justjake/unicorn 0c0e055c.
 let
-  rev = "92ad56842b0dc5a034b88a2300e6625a5b21f85f";
+  rev = "27f8c41cd8066a96aceaad600231d54bcb9e26ee";
   src = pkgs.applyPatches {
     name = "fujimod-${builtins.substring 0 8 rev}";
     src = pkgs.fetchgit {
       url = "https://github.com/justjake/FujiMod";
       inherit rev;
       fetchSubmodules = true;
-      hash = "sha256-RiRY0ciqh6nZlmYRK/fC1/nzI5T6CmZGM2TXNJZCOWg=";
+      hash = "sha256-DGwWpKEIrjzqtqyffcGCYazP5mTnfyEoidIbcPtK9DY=";
     };
     # uc_context's data starts 8 bytes past a 16-byte boundary, and the
     # optimized Unicorn build reads the CPUARMState copy there with movdqa.
