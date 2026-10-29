@@ -13,7 +13,7 @@ import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
-import Emulation.NativeCase (Region, loadCase)
+import Emulation.NativeCase (loadCase)
 import qualified Emulation.NativeObservation as N
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host hiding (sha256)
@@ -162,7 +162,7 @@ data Family = Resolver | Handler | Message deriving (Eq, Show)
 data Layout = Primary | Secondary | KindLayout deriving (Eq, Show)
 
 data Effects = Effects
-  { eBits :: [Bool]
+  { eBitmap :: [Word32]
   , eCapture :: [Word32]
   , ePermit :: [Word32]
   , eMinima :: (Word32, Word32, Word32)
@@ -171,7 +171,6 @@ data Effects = Effects
   , eCancels :: [(Word32, Word32)]
   , eHandback :: (Word32, Word32)
   , eFaults :: Word32
-  , eLogs :: Word32
   , eMirror :: (Word32, Word32, Word32)
   }
   deriving (Eq, Show)
@@ -268,7 +267,7 @@ initialFrames scenario = writes (slots ++ kinds)
 emptyEffects :: Effects
 emptyEffects =
   Effects
-    { eBits = replicate slotCount False
+    { eBitmap = replicate slotCount 0
     , eCapture = replicate slotCount 0xdead
     , ePermit = replicate slotCount 0xbeef
     , eMinima = (0, 0, 0)
@@ -277,7 +276,6 @@ emptyEffects =
     , eCancels = []
     , eHandback = (0, 0)
     , eFaults = 0
-    , eLogs = 0
     , eMirror = (0, 0, 0)
     }
 
@@ -289,7 +287,7 @@ defaultEffects scenario =
     }
 
 setBit :: Int -> Effects -> Effects
-setBit slot effects = effects {eBits = replace slot True (eBits effects)}
+setBit slot effects = effects {eBitmap = replace slot 0x40000000 (eBitmap effects)}
 
 setCapture :: Int -> Word32 -> Effects -> Effects
 setCapture slot value effects = effects {eCapture = replace slot value (eCapture effects)}
@@ -346,9 +344,9 @@ scenarios =
       (\e -> (setBit 0 e) {eCancels = [(0, 5)]})
   , handlerCase "kind4-no-effect" 5 0x77 [(0, K4)] [] id
   , messageCase "message-known" KindLayout 0 0x78 [(0, K0)] [] [0]
-      (\e -> (setBit 0 e) {eHandback = (10, 1), eLogs = 2, eActive = 0})
+      (\e -> (setBit 0 e) {eHandback = (10, 1), eActive = 0})
   , messageCase "message-unknown" Primary 0 0x7ff [] [] []
-      (\e -> e {eHandback = (10, 1), eLogs = 2, eFaults = 1})
+      (\e -> e {eHandback = (10, 1), eFaults = 1})
   ]
 
 stockFunctions :: [(Word32, Int)]
@@ -496,14 +494,19 @@ frameBytes inputs side scenario
       let stock = stockRegion inputs frameBase frameSize
           branch = armBranch 0xe77168 resolveEntry
           offset = fromIntegral (0xe77168 - frameBase)
+          traps = B.concat (replicate ((0x1a0 - 4) `div` 4) (u32le 0xe7f000f0))
       case readU32 stock offset of
         Right 0xe92d48f0 -> pure ()
         Right word -> Left ("stock resolver entry differs: " ++ hex word)
         Left problem -> Left problem
-      patched <- patchRegion frameBase stock 0xe77168 (u32le branch)
+      patched <- patchRegion frameBase stock 0xe77168 (u32le branch <> traps)
       case readU32 patched offset of
-        Right word | word == branch -> pure patched
-        Right word -> Left ("candidate resolver entry is " ++ hex word)
+        Right word
+          | word == branch
+          , Right trap <- readU32 patched (offset + 4)
+          , trap == 0xe7f000f0 ->
+              pure patched
+        Right word -> Left ("candidate resolver entry or body guard is " ++ hex word)
         Left problem -> Left problem
   | scCountModel scenario =
       patchRegion frameBase (stockRegion inputs frameBase frameSize) 0xe74c68 (inCount inputs)
@@ -625,6 +628,10 @@ candidateSpans inputs side
 
 caseJson :: Inputs -> Scenario -> Side -> [(String, Word32, Word32, B.ByteString)] -> Value
 caseJson inputs scenario side regions =
+  caseJsonAt inputs scenario side (entryFor (scFamily scenario) side) regions
+
+caseJsonAt :: Inputs -> Scenario -> Side -> Word32 -> [(String, Word32, Word32, B.ByteString)] -> Value
+caseJsonAt inputs scenario side entry regions =
   object
     [ "schema_version" .= (1 :: Int)
     , "id" .= (scId scenario ++ "-" ++ sideLabel side)
@@ -632,7 +639,7 @@ caseJson inputs scenario side regions =
     , "provenance" .= ("X-M1 1.50 image 5 Reccf_SvPermitMediaWrite contract; retained services at their stock call addresses" :: String)
     , "cpu" .= object ["architecture" .= ("arm" :: String), "model" .= ("cortex-r5f" :: String), "mode" .= ("arm" :: String), "endian" .= ("little" :: String)]
     , "artifacts" .= [artifactJson ident bytes | (ident, _, _, bytes) <- regions, not (B.null bytes)]
-    , "entry" .= hex (entryFor (scFamily scenario) side)
+    , "entry" .= hex entry
     , "exit" .= hex exitAddress
     , "registers" .= initialRegisters scenario side
     , "regions" .= [regionJson ident base size bytes | (ident, base, size, bytes) <- regions]
@@ -677,6 +684,7 @@ data Result = Result
   { resultStatus :: ResultStatus
   , resultProblems :: [String]
   , resultObservation :: Maybe N.NativeObservation
+  , resultEffects :: Maybe Effects
   }
 
 checkEffects :: Scenario -> N.NativeObservation -> [String]
@@ -699,7 +707,7 @@ checkEffects scenario observation =
 observeEffects :: B.ByteString -> B.ByteString -> M.Map N.Register Word32 -> Effects
 observeEffects globals frames _ =
   Effects
-    { eBits = [word globals (bitmapBase + fromIntegral slot * 0x1d0 + 0x14) `shiftR` 30 .&. 1 == 1 | slot <- inspectedSlots]
+    { eBitmap = [word globals (bitmapBase + fromIntegral slot * 0x1d0 + 0x14) | slot <- inspectedSlots]
     , eCapture = [frameWord frames (ctxAddress slot + 0x27c8) | slot <- inspectedSlots]
     , ePermit = [frameWord frames (ctxAddress slot + 0x2fb0) | slot <- inspectedSlots]
     , eMinima = (word globals minimaBase, word globals (minimaBase + 4), word globals (minimaBase + 8))
@@ -708,7 +716,6 @@ observeEffects globals frames _ =
     , eCancels = pairs traceCancels
     , eHandback = (word globals traceHandbackClass, word globals traceHandbackCount)
     , eFaults = word globals traceFaults
-    , eLogs = word globals traceLogs
     , eMirror =
         ( word globals mirrorBase .&. 0xffff
         , word globals mirrorWord0
@@ -729,18 +736,36 @@ contains :: N.GuestAddress -> Int -> N.GuestAddress -> Int -> Bool
 contains (N.GuestAddress base) extent (N.GuestAddress address) size =
   address >= base && address + fromIntegral size <= base + fromIntegral extent
 
-checkWrites :: [Region] -> N.NativeObservation -> [String]
-checkWrites regions observation =
+checkWrites :: N.NativeObservation -> [String]
+checkWrites observation =
   case N.nativeProvenance observation of
     N.Truncated _ -> ["provenance truncated"]
     N.Complete _ entries ->
       concat
-        [ case [ident | (ident, base, extent) <- N.regionBounds regions, contains base extent address (fromIntegral size)] of
-            [] -> ["write outside every declared region at " ++ show (N.guestAddress address)]
-            (ident : _) | ident `elem` map N.RegionId ["globals", "frames", "stack"] -> []
-            (ident : _) -> ["write to " ++ N.regionName ident ++ " at " ++ show (N.guestAddress address)]
+        [ if contains (N.GuestAddress stackBase) (fromIntegral stackSize) address (fromIntegral size)
+            || any (\(base, extent) -> contains (N.GuestAddress base) extent address (fromIntegral size)) allowedStores
+            then []
+            else ["write outside declared stores at " ++ show (N.guestAddress address)]
         | N.Write address (N.WriteBytes size) <- entries
         ]
+
+allowedStores :: [(Word32, Int)]
+allowedStores =
+  [ (activeBase, 4)
+  , (minimaBase, 4)
+  , (minimaBase + 4, 4)
+  , (minimaBase + 8, 4)
+  , (mirrorBase, 8)
+  , (mirrorWord0, 8)
+  , (traceCommands, 4 + 16 * 8)
+  , (traceCancels, 4 + 16 * 8)
+  , (traceFaults, 4)
+  , (traceHandbackClass, 8)
+  , (traceLogs, 4)
+  , (countCell, 8)
+  ]
+    ++ [ (bitmapBase + fromIntegral slot * 0x1d0 + 0x14, 4) | slot <- inspectedSlots ]
+    ++ [ (ctxAddress slot + offset, 4) | slot <- inspectedSlots, offset <- [0x27c8, 0x2fb0] ]
 
 checkAbi :: N.NativeObservation -> [String]
 checkAbi observation =
@@ -774,7 +799,7 @@ checkAbi observation =
 runSide :: FilePath -> FilePath -> Inputs -> Scenario -> Side -> IO Result
 runSide runner root inputs scenario side =
   case regionBytes inputs side scenario of
-    Left problem -> pure (Result ResultInvalidCase [problem] Nothing)
+    Left problem -> pure (Result ResultInvalidCase [problem] Nothing Nothing)
     Right regions -> do
       let dir = root </> (scId scenario ++ "-" ++ sideLabel side)
           value = caseJson inputs scenario side regions
@@ -784,26 +809,73 @@ runSide runner root inputs scenario side =
       BL.writeFile (dir </> "case.json") (encode value)
       loaded <- try (loadCase (dir </> "case.json"))
       case loaded of
-        Left (message :: IOException) -> pure (Result ResultInvalidCase [show message] Nothing)
+        Left (message :: IOException) -> pure (Result ResultInvalidCase [show message] Nothing Nothing)
         Right (_, loadedRegions, wire, _) -> do
           executable <- canonicalizePath runner
           (timed, exit, out, err) <- runBounded 8000000 (8 * 1024 * 1024) executable [] wire
           if timed
-            then pure (Result ResultHostTimeout [BC.unpack err] Nothing)
+            then pure (Result ResultHostTimeout [BC.unpack err] Nothing Nothing)
             else do
               parsed <- try (jsonRead out)
               case parsed of
-                Left (message :: IOException) -> pure (Result ResultInvalidOutput [show message, BC.unpack err] Nothing)
+                Left (message :: IOException) -> pure (Result ResultInvalidOutput [show message, BC.unpack err] Nothing Nothing)
                 Right runnerValue ->
                   case N.observeNative exit loadedRegions runnerValue of
-                    Left problem -> pure (Result ResultInvalidOutput [N.renderObservationError problem, BC.unpack err] Nothing)
+                    Left problem -> pure (Result ResultInvalidOutput [N.renderObservationError problem, BC.unpack err] Nothing Nothing)
                     Right observation ->
                       let problems =
                             (if N.nativeStatus observation == N.Returned then [] else ["runner status " ++ N.runnerStatusLabel (N.nativeStatus observation)])
                               ++ checkAbi observation
                               ++ checkEffects scenario observation
-                              ++ checkWrites loadedRegions observation
-                       in pure (Result (if null problems then ResultPassed else ResultFailed) problems (Just observation))
+                              ++ checkWrites observation
+                          effects =
+                            case (lookup (N.RegionId "globals") (N.nativeMemory observation), lookup (N.RegionId "frames") (N.nativeMemory observation)) of
+                              (Just globals, Just frames) -> Just (observeEffects globals frames (N.nativeRegisters observation))
+                              _ -> Nothing
+                       in pure (Result (if null problems then ResultPassed else ResultFailed) problems (Just observation) effects)
+
+runForbiddenBody :: FilePath -> FilePath -> Inputs -> Scenario -> IO Result
+runForbiddenBody runner root inputs scenario =
+  case regionBytes inputs Candidate control of
+    Left problem -> pure (Result ResultInvalidCase [problem] Nothing Nothing)
+    Right regions -> do
+      let dir = root </> "forbidden-body"
+          value = caseJsonAt inputs control Candidate 0x00900c00 regions
+      createDirectoryIfMissing True dir
+      forM_ regions $ \(ident, _, _, bytes) ->
+        unless (B.null bytes) (B.writeFile (dir </> (ident ++ ".bin")) bytes)
+      BL.writeFile (dir </> "case.json") (encode value)
+      loaded <- try (loadCase (dir </> "case.json"))
+      case loaded of
+        Left (message :: IOException) -> pure (Result ResultInvalidCase [show message] Nothing Nothing)
+        Right (_, loadedRegions, wire, _) -> do
+          executable <- canonicalizePath runner
+          (timed, exit, out, err) <- runBounded 8000000 (8 * 1024 * 1024) executable [] wire
+          if timed
+            then pure (Result ResultHostTimeout [BC.unpack err] Nothing Nothing)
+            else do
+              parsed <- try (jsonRead out)
+              case parsed of
+                Left (message :: IOException) -> pure (Result ResultInvalidOutput [show message, BC.unpack err] Nothing Nothing)
+                Right runnerValue ->
+                  case N.observeNative exit loadedRegions runnerValue of
+                    Left problem -> pure (Result ResultInvalidOutput [N.renderObservationError problem, BC.unpack err] Nothing Nothing)
+                    Right observation ->
+                      let pc = M.lookup N.Pc (N.nativeRegisters observation)
+                          refused = N.nativeStatus observation /= N.Returned && pc == Just 0x00e7716c
+                       in pure
+                            ( Result
+                                (if refused then ResultPassed else ResultFailed)
+                                [ "forbidden-body status " ++ N.runnerStatusLabel (N.nativeStatus observation) ++ " at " ++ maybe "missing pc" hex pc
+                                ]
+                                (Just observation)
+                                Nothing
+                            )
+  where
+    control = scenario {scId = "forbidden-body"}
+
+forbiddenWitness :: Result -> Bool
+forbiddenWitness result = resultStatus result == ResultPassed
 
 data Control = Control
   { controlName :: String
@@ -819,13 +891,23 @@ controlJson control =
     , "problems" .= controlProblems control
     ]
 
-faultWitness :: Result -> Bool
-faultWitness result =
-  resultStatus result == ResultFailed
-    && maybe False ((== N.Returned) . N.nativeStatus) (resultObservation result)
+expectedDefect :: Scenario -> Effects
+expectedDefect scenario =
+  let expected = scExpect scenario
+   in expected {eBitmap = replace 0 0x80000000 (eBitmap expected)}
 
-report :: [(Scenario, Result, Result)] -> Result -> Value
-report results fault =
+faultWitness :: Scenario -> Result -> Bool
+faultWitness scenario result =
+  resultStatus result == ResultFailed
+    && case (resultObservation result, resultEffects result) of
+      (Just observation, Just effects) ->
+        N.nativeStatus observation == N.Returned
+          && null (checkAbi observation)
+          && effects == expectedDefect scenario
+      _ -> False
+
+report :: [(Scenario, Result, Result)] -> Scenario -> Result -> Result -> Value
+report results faultScenario fault forbidden =
   object
     [ "schema_version" .= (1 :: Int)
     , "profile" .= ("media-permit" :: String)
@@ -839,11 +921,17 @@ report results fault =
             ]
         | (scenario, original, candidate) <- results
         ]
-    , "controls" .= [controlJson (Control "defect-candidate" (if faultWitness fault then "refused" else "accepted") (resultProblems fault))]
+    , "controls" .=
+        [ controlJson (Control "defect-candidate" (if faultWitness faultScenario fault then "refused" else "accepted") (resultProblems fault))
+        , controlJson (Control "forbidden-body" (if forbiddenWitness forbidden then "refused" else "accepted") (resultProblems forbidden))
+        ]
     , "status" .= (if qualified then "qualified" else "failed")
     ]
   where
-    qualified = all (\(_, original, candidate) -> resultStatus original == ResultPassed && resultStatus candidate == ResultPassed) results && faultWitness fault
+    qualified =
+      all (\(_, original, candidate) -> resultStatus original == ResultPassed && resultStatus candidate == ResultPassed) results
+        && faultWitness faultScenario fault
+        && forbiddenWitness forbidden
     resultJson result = object ["status" .= resultStatusLabel (resultStatus result), "problems" .= resultProblems result]
 
 main :: IO ()
@@ -862,11 +950,16 @@ run runner build out stockElf = do
     candidate <- runSide runner out inputs scenario Candidate
     pure (scenario, original, candidate)
   let faultScenario = head [scenario | scenario <- scenarios, scId scenario == "kind0-zero"]
+      forbiddenScenario = head [scenario | scenario <- scenarios, scId scenario == "message-known"]
       faultRoot = out </> "defect"
   createDirectoryIfMissing True faultRoot
   fault <- runSide runner faultRoot inputs faultScenario DefectCandidate
-  let output = report results fault
-      qualified = all (\(_, original, candidate) -> resultStatus original == ResultPassed && resultStatus candidate == ResultPassed) results && faultWitness fault
+  forbidden <- runForbiddenBody runner out inputs forbiddenScenario
+  let output = report results faultScenario fault forbidden
+      qualified =
+        all (\(_, original, candidate) -> resultStatus original == ResultPassed && resultStatus candidate == ResultPassed) results
+          && faultWitness faultScenario fault
+          && forbiddenWitness forbidden
   BL.writeFile (out </> "results.json") (encode output)
   let passed = length [() | (_, original, candidate) <- results, resultStatus original == ResultPassed, resultStatus candidate == ResultPassed]
   putStrLn ("media permit: " ++ show passed ++ "/" ++ show (length results) ++ " differential cases passed")

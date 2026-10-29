@@ -26,3 +26,12 @@ RB_MP_TRAMPOLINE rb_mp_stock_frame_of_kind, 0x00e88804
 RB_MP_TRAMPOLINE rb_mp_stock_command, 0x00e8d82c
 RB_MP_TRAMPOLINE rb_mp_stock_cancel, 0x00e6e368
 RB_MP_TRAMPOLINE rb_mp_stock_fatal, 0x00e881e8
+
+.section .text.rb_mp_forbidden_body_probe,"ax",%progbits
+.global rb_mp_forbidden_body_probe
+.type rb_mp_forbidden_body_probe,%function
+rb_mp_forbidden_body_probe:
+    movw r12, #0x716c
+    movt r12, #0x00e7
+    bx r12
+.size rb_mp_forbidden_body_probe, .-rb_mp_forbidden_body_probe
