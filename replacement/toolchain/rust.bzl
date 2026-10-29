@@ -66,7 +66,7 @@ def xm1_rust_staticlib(
     """
     if crate_name == None:
         crate_name = name.replace("-", "_")
-    cmd = "RUSTC_BOOTSTRAP=1 " + " ".join(
+    cmd = " ".join(
         [
             "$(location %s)" % _RUSTC,
             "--crate-name=%s" % crate_name,

@@ -3,6 +3,7 @@ mod common;
 
 use common::{ADMITTED_STEP, ADVANCE_COUNT, ADVANCE_TRACE, CHECK_COUNT, CHECK_STATUS, CLEAR_COUNT, CLEAR_TRACE, CURRENT_STATE, PLAN, read, record, write};
 
+#[link_section = ".text.capture_plan_lookup"]
 #[no_mangle]
 pub extern "C" fn capture_plan_lookup(first: u32, step: u32) -> *const u32 {
     if first != 0x80 || step != read(ADMITTED_STEP) {
@@ -11,6 +12,7 @@ pub extern "C" fn capture_plan_lookup(first: u32, step: u32) -> *const u32 {
     PLAN as *const u32
 }
 
+#[link_section = ".text.capture_cancel_mask"]
 #[no_mangle]
 pub extern "C" fn capture_cancel_mask(out: *mut u32, bit: u32) {
     let word = unsafe { out.add((bit >> 5) as usize) };
@@ -18,6 +20,7 @@ pub extern "C" fn capture_cancel_mask(out: *mut u32, bit: u32) {
     unsafe { core::ptr::write_volatile(word, value) }
 }
 
+#[link_section = ".text.capture_check"]
 #[no_mangle]
 pub extern "C" fn capture_check(_context: u32, _event: u32) -> i32 {
     let index = read(CHECK_COUNT);
@@ -25,16 +28,19 @@ pub extern "C" fn capture_check(_context: u32, _event: u32) -> i32 {
     read(CHECK_STATUS + index as usize * 4) as i32
 }
 
+#[link_section = ".text.capture_clear"]
 #[no_mangle]
 pub extern "C" fn capture_clear(_context: u32, event: u32) {
     record(CLEAR_COUNT, CLEAR_TRACE, event)
 }
 
+#[link_section = ".text.capture_advance"]
 #[no_mangle]
 pub extern "C" fn capture_advance(_context: u32, state: u32) {
     write(CURRENT_STATE, state);
     record(ADVANCE_COUNT, ADVANCE_TRACE, state)
 }
 
+#[link_section = ".text.capture_log"]
 #[no_mangle]
 pub extern "C" fn capture_log(_context: u32, _phase: u32) {}

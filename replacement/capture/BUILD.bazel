@@ -26,7 +26,6 @@ xm1_rust_staticlib(
     src = "standalone.rs",
     crate_name = "capture",
     data = ["src/lib.rs"],
-    rustc_flags = ["-Z", "function-sections=yes"],
 )
 
 xm1_rust_elf(
@@ -46,7 +45,6 @@ xm1_rust_staticlib(
         "deps/src/common.rs",
         "deps/src/high.rs",
     ],
-    rustc_flags = ["-Z", "function-sections=yes"],
 )
 
 xm1_rust_elf(
@@ -63,7 +61,6 @@ xm1_rust_staticlib(
     src = "deps/low.rs",
     crate_name = "capture_deps_low",
     data = ["deps/src/low.rs"],
-    rustc_flags = ["-Z", "function-sections=yes"],
 )
 
 xm1_rust_elf(
@@ -80,7 +77,6 @@ xm1_rust_staticlib(
     src = "deps/faulty_low.rs",
     crate_name = "capture_deps_low_faulty",
     data = ["deps/src/faulty_low.rs"],
-    rustc_flags = ["-Z", "function-sections=yes"],
 )
 
 xm1_rust_elf(

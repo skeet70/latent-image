@@ -53,6 +53,7 @@ fn copy_advanced(count: usize, trace: usize) {
     }
 }
 
+#[link_section = ".text.capture_wait"]
 #[no_mangle]
 pub extern "C" fn capture_wait(event: u32) {
     write(WAIT_FLAG, 1);
@@ -66,6 +67,7 @@ pub extern "C" fn capture_wait(event: u32) {
     }
 }
 
+#[link_section = ".text.capture_release"]
 #[no_mangle]
 pub extern "C" fn capture_release() {
     write(FINAL_FLAG, 1);
