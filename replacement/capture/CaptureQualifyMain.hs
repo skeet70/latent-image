@@ -387,6 +387,7 @@ caseJson scenario side artifacts =
       candidateSpan = ((artifactCandidateLength artifacts + 3) `div` 4) * 4
       spans = syntheticSpans ++ [(entry, if side == Candidate then candidateSpan else 0x11c)]
       origin = (if side == Original then "stock" else "synthetic") :: String
+      instructionLimit = (if side == ForbiddenOriginal then 512 else 4000000) :: Int
    in object
         [ "schema_version" .= (1 :: Int)
         , "id" .= (scenarioId scenario ++ "-" ++ sideLabel side)
@@ -411,7 +412,7 @@ caseJson scenario side artifacts =
             ]
         , "functions" .= [object ["address" .= hex address, "size" .= size] | (address, size) <- spans]
         , "stubs" .= ([] :: [Value])
-        , "limits" .= object ["instructions" .= (4000000 :: Int), "wall_ms" .= (4000 :: Int)]
+        , "limits" .= object ["instructions" .= instructionLimit, "wall_ms" .= (4000 :: Int)]
         , "expected" .=
             object
               [ "status" .= ("returned" :: String)
@@ -479,7 +480,7 @@ lookupGuardJson ident first second artifacts =
             ]
         , "functions" .= [object ["address" .= hex address, "size" .= size] | (address, size) <- syntheticSpans]
         , "stubs" .= ([] :: [Value])
-        , "limits" .= object ["instructions" .= (4000000 :: Int), "wall_ms" .= (4000 :: Int)]
+        , "limits" .= object ["instructions" .= (512 :: Int), "wall_ms" .= (4000 :: Int)]
         , "expected" .=
             object
               [ "status" .= ("returned" :: String)
