@@ -17,7 +17,9 @@ case "$RB_FILM_ENCODING" in
   classic-chrome) FILM_DEFS=(-DRB_CC_BANK=1); MODE_SUFFIX="$MODE_SUFFIX-cc" ;;
   *) echo "RB_FILM_ENCODING must be d3 or classic-chrome" >&2; exit 2 ;;
 esac
-RB_BASE="${RB_BASE:-0x00be1f00}"
+# The bank image [RB_BASE, __rb_image_end) must end at or below the package
+# plan's name record RB_NAME_RECORD.
+RB_BASE="${RB_BASE:-0x00be0000}"
 RB_NAME_RECORD="${RB_NAME_RECORD:-0x00beb784u}"
 BUILD_DIR="${BUILD_DIR:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/kernel-build$MODE_SUFFIX}"
 OUT_DIR="${OUT_DIR:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/kernel-cases$MODE_SUFFIX}"
@@ -78,6 +80,11 @@ else
   llvm-objcopy -O binary "$BUILD_DIR/kernel.elf" "$BUILD_DIR/kernel.bin"
   llvm-objcopy -j .text -O binary "$BUILD_DIR/kernel.elf" "$BUILD_DIR/kernel-text.bin"
   llvm-nm --print-size --numeric-sort "$BUILD_DIR/kernel.elf" > "$BUILD_DIR/kernel.syms"
+fi
+RB_IMAGE_END="$(llvm-nm "$BUILD_DIR/kernel.elf" | awk '$3 == "__rb_image_end" {print $1}')"
+if (( 16#$RB_IMAGE_END > ${RB_NAME_RECORD%u} )); then
+  printf 'kernel image [%s, 0x%s) overlaps RB_NAME_RECORD %s\n' "$RB_BASE" "$RB_IMAGE_END" "${RB_NAME_RECORD%u}" >&2
+  exit 1
 fi
 llvm-readelf --symbols --wide "$BUILD_DIR/kernel.elf" > "$BUILD_DIR/kernel.symbols"
 sha256sum "$BUILD_DIR/kernel.bin"

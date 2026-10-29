@@ -14,6 +14,11 @@
     {"address":"0x00d60cc4","name":"cc_stock_chroma_read","source":"menu/classic_chrome_ram_stock.ld"},
     {"address":"0x00690924","name":"cc_stock_tone_read","source":"menu/classic_chrome_ram_stock.ld"},
     {
+      "address": "0x0004d978",
+      "name": "rb_call_loader_uidiv",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_loader_uidiv; X-M1 1.50 loader unsigned divide FUN_0004d978, the page-word divide of the owned menu-frame snapshot in replacement/owned_menu/src/lib.rs"
+    },
+    {
       "address": "0x0061c91c",
       "name": "RB_WRITE",
       "source": "menu/recipe_bank_storage.c #define RB_WRITE"
@@ -22,11 +27,6 @@
       "address": "0x0061c93c",
       "name": "RB_CURRENT",
       "source": "menu/recipe_bank_storage.c #define RB_CURRENT"
-    },
-    {
-      "address": "0x0061ceac",
-      "name": "rb_call_snapshot_store",
-      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_snapshot_store; X-M1 1.50 FUN_0061ceac stores FUN_0061cd14's 0x2c-byte frame snapshot by root and depth (reports/recipe-design.md section 17.13)"
     },
     {
       "address": "0x0061d514",
@@ -387,6 +387,12 @@
       "source": "menu/recipe_bank_ui.h #define RB_UI_VISIBLE_CURSOR_CELL"
     },
     {
+      "address": "0x00944414",
+      "bytes": 44,
+      "name": "depth-0 menu-frame snapshot slot",
+      "source": "replacement/owned_menu/src/lib.rs frame::ROOT_SNAPSHOT; X-M1 1.50 FUN_0061ceac depth-0 destination"
+    },
+    {
       "address": "0x0095732c",
       "bytes": 4,
       "name": "RB_UI_CURRENT_ROW_CELL",
@@ -413,6 +419,9 @@
     {"function":"cc_ram_copy","access":"store","through":{"argument":"r0"},"reason":"writes zero-extended halfwords to the stage destination"},
     {"function":"cc_ram_tone","access":"store","through":{"argument":"r1"},"reason":"writes the nine-byte tone head"},
     {"function":"cc_ram_tone","access":"store","through":{"argument":"r2"},"reason":"writes the 28-halfword tone curve"},
+    {"function":"rb_menu_frame_snapshot","access":"store","through":{"argument":"r0"},"reason":"writes the eleven-word FUN_0061cd14 snapshot to the caller's destination"},
+    {"function":"rb_menu_frame_store_first_depth","access":"store","through":{"index":"0x0093eb74"},"reason":"passes the depth-1 snapshot slot 0x0093eb74 + root * 0x2c, unbounded as in FUN_0061ceac, to rb_menu_frame_snapshot"},
+    {"function":"rb_menu_frame_store_second_depth","access":"store","through":{"index":"0x009412d4"},"reason":"passes the depth-2 snapshot slot 0x009412d4 + root * 0x2c, unbounded as in FUN_0061ceac, to rb_menu_frame_snapshot"},
     {
       "function": "rb_activation_now",
       "access": "store",

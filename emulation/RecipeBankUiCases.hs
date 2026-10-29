@@ -3066,7 +3066,7 @@ runCases args = do
   id4Path <- maybe (fail "--id4") pure (opt "id4")
   id5Path <- maybe (fail "--id5") pure (opt "id5")
   let id4Base = hexI (fromMaybe "0x0061c400" (opt "id4-base"))
-      kernelBase = hexI (fromMaybe "0x00be1f00" (opt "rb-base"))
+      kernelBase = hexI (fromMaybe "0x00be0000" (opt "rb-base"))
   fieldsPath <- maybe (fail "--fields") pure (opt "fields")
   nameRecordArg <- maybe (fail "--name-record") pure (opt "name-record")
   jobs <- readJobs (opt "jobs")

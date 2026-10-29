@@ -33,12 +33,17 @@ newtype PinIdentity = PinIdentity { unPinIdentity :: String } deriving (Eq, Ord,
 
 -- | Where a pin's digest comes from. A workspace or private-data path pin's
 -- identity is its path; the private RC0 and spec inputs carry a label.
+-- 'RustArchive' and 'RustToolchainFacts' are the bytes of
+-- `//replacement/bank:bank` and `//replacement/bank:build-facts`, which the
+-- bank relinker receives as RB_RUST_ARCHIVE and RB_RUST_BUILD_FACTS.
 data PinSource
   = WorkspaceFile FilePath
   | PrivateFile FilePath
   | BuilderSources
   | Toolchain
   | UsbToggleStub
+  | RustArchive
+  | RustToolchainFacts
   deriving (Eq, Show)
 
 data Component = Mechanism | BankContent deriving (Eq, Show)
@@ -249,7 +254,15 @@ parsePin value = do
       keys []
       require (identity == "usb_toggle_stub") (what++": USB toggle stub identity must be usb_toggle_stub")
       pure UsbToggleStub
-    _ -> reject (what++": source must be workspace, private, builder, toolchain or usb-toggle-stub")
+    String "rust-archive" -> do
+      keys []
+      require (identity == "rust_object_replacement_bank") (what++": Rust archive identity must be rust_object_replacement_bank")
+      pure RustArchive
+    String "rust-toolchain-facts" -> do
+      keys []
+      require (identity == "rust_toolchain_replacement_bank") (what++": Rust toolchain facts identity must be rust_toolchain_replacement_bank")
+      pure RustToolchainFacts
+    _ -> reject (what++": source must be workspace, private, builder, toolchain, usb-toggle-stub, rust-archive or rust-toolchain-facts")
   component <- case field value "component" of
     String "mechanism" -> pure Mechanism
     String "bank-content" -> pure BankContent
@@ -393,6 +406,8 @@ renderReviewRecord record = C.pack (unlines (
       BuilderSources -> [("source", str "builder")]
       Toolchain -> [("source", str "toolchain")]
       UsbToggleStub -> [("source", str "usb-toggle-stub")]
+      RustArchive -> [("source", str "rust-archive")]
+      RustToolchainFacts -> [("source", str "rust-toolchain-facts")]
     pinValue pin = object (
       [ ("identity", str (unPinIdentity (pinIdentity pin)))
       , ("component", str (case pinComponent pin of Mechanism -> "mechanism"; BankContent -> "bank-content"))
