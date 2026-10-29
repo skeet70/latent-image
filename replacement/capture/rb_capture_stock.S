@@ -65,10 +65,11 @@ rb_capture_stock_wait:
     .word 0x007243a8
 .size rb_capture_stock_wait, .-rb_capture_stock_wait
 
+@ Admitted self-loop trap; the bank allowlist refuses permanently undefined words.
 .global rb_capture_invalid_descriptor
 .type rb_capture_invalid_descriptor, %function
 rb_capture_invalid_descriptor:
-    udf #0
+    b rb_capture_invalid_descriptor
 .size rb_capture_invalid_descriptor, .-rb_capture_invalid_descriptor
 
 @ FUN_00e91810(0x80, step): preserve the step in r1 and set the group.

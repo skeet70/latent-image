@@ -311,12 +311,12 @@ loadArtifacts build stockElf = do
     Right 0xe92d4870 -> pure ()
     other -> ioError (userError ("stock wait entry differs: " ++ either id hex other))
   let highStock = overlay stockWaitOffset stock (ensureLength (stockWaitOffset + B.length stock) high)
-      guard = B.concat (replicate ((stockWaitSize + 3) `div` 4) (u32le 0xe7f000f0))
+      guard = B.concat (replicate ((stockWaitSize + 3) `div` 4) (u32le 0xeafffffe))
       highGuard = overlay stockWaitOffset guard (ensureLength (stockWaitOffset + B.length guard) high)
   when (B.length highStock > depsHighSize || B.length highGuard > depsHighSize) $
     ioError (userError "high dependency artifact exceeds its declared region")
   case readU32 highGuard stockWaitOffset of
-    Right 0xe7f000f0 -> pure ()
+    Right 0xeafffffe -> pure ()
     other -> ioError (userError ("guard opcode differs: " ++ either id hex other))
   pure
     Artifacts
@@ -691,7 +691,7 @@ guardWitness result =
     && maybe
       False
       (\observation ->
-        N.nativeStatus observation == N.UnsupportedInstruction
+        N.nativeStatus observation == N.InstructionBudget
           && M.lookup N.Pc (N.nativeRegisters observation) == Just 0x00e9e038)
       (resultObservation result)
 
@@ -701,7 +701,7 @@ lookupWitness result =
     && maybe
       False
       (\observation ->
-        N.nativeStatus observation == N.UnsupportedInstruction
+        N.nativeStatus observation == N.InstructionBudget
           && maybe False (\pc -> pc >= 0x00e91810 && pc < 0x00e91910) (M.lookup N.Pc (N.nativeRegisters observation)))
       (resultObservation result)
 

@@ -6,7 +6,7 @@ use common::{ADMITTED_STEP, ADVANCE_COUNT, ADVANCE_TRACE, CHECK_COUNT, CHECK_STA
 #[no_mangle]
 pub extern "C" fn capture_plan_lookup(first: u32, step: u32) -> *const u32 {
     if first != 0x80 || step != read(ADMITTED_STEP) {
-        unsafe { core::arch::asm!("udf #0", options(noreturn)) }
+        loop {}
     }
     PLAN as *const u32
 }
