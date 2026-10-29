@@ -815,6 +815,7 @@ The bridge speaks the cardless bridge's events and commands (`start-options`, `s
 - The adjustment NAND's blocks 0x381..0x3a1 are programmed into the NAND medium before boot.
 - `shutter-sequence` drives physical positions Half, Full, Half, Released for 8M, 8M, 4M and 4M instructions. Full holds both S1 and S2; `key full-press` remains the explicitly S2-only contact diagnostic. Pad polarity and IRQ bindings come from the checked X-M1 shutter descriptors. The phase budgets reuse the existing GPIO pulse budgets, not measured mechanical timing. The reply records each phase's start and finish instruction counts.
 - `image-input-fingerprint` takes a typed node name and returns the existing image-input model fingerprint through the stopped-board read-only device accessor. It neither reads MMIO nor advances guest time. The fingerprint includes device registers, DMA state and capture acknowledgement/IRQ flags.
+- `capture-observation-window` advances one fixed 40M-instruction window and returns its final instruction count. It changes no input pad or ADC sample and requests no menu or display observation. Strict-stop errors propagate from the existing advance operation.
 
 The run document replaces FujiMod's FFF47000 packed422 scaler with an adapter device that ports the retained declared UI conversion (YYCbCr to ABGR, IRQ 67), so the mode guides render.
 

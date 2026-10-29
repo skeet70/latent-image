@@ -290,6 +290,7 @@ enum Request {
     Key { key: String, hold_instructions: Option<u64>, release_instructions: Option<u64>, settle_instructions: Option<u64> },
     ShutterSequence,
     ImageInputFingerprint { node: NodeName },
+    CaptureObservationWindow,
     ReleaseContext { segment: Option<ReleaseSegment> },
     ModeDial { position: ModeDialPosition },
     ReadMemory { address: u64, count: usize },
@@ -314,6 +315,7 @@ enum RequestKind {
     Key,
     ShutterSequence,
     ImageInputFingerprint,
+    CaptureObservationWindow,
     ReleaseContext,
     ModeDial,
     ReadMemory,
@@ -338,6 +340,7 @@ impl Request {
             Request::Key { .. } => RequestKind::Key,
             Request::ShutterSequence => RequestKind::ShutterSequence,
             Request::ImageInputFingerprint { .. } => RequestKind::ImageInputFingerprint,
+            Request::CaptureObservationWindow => RequestKind::CaptureObservationWindow,
             Request::ReleaseContext { .. } => RequestKind::ReleaseContext,
             Request::ModeDial { .. } => RequestKind::ModeDial,
             Request::ReadMemory { .. } => RequestKind::ReadMemory,
@@ -414,6 +417,8 @@ fn default_pulse(key: Press) -> KeyPulse {
 #[derive(Clone, Copy, Serialize)]
 #[serde(transparent)]
 struct GuestInstructions(u64);
+
+const CAPTURE_OBSERVATION_WINDOW: GuestInstructions = GuestInstructions(MODE_DIAL_SETTLE);
 
 #[derive(Serialize)]
 struct ShutterPhaseObservation {
@@ -519,6 +524,10 @@ impl Server {
                     |device| device.fingerprint(),
                 )?;
                 json!({"instructions": machine.instructions(), "fingerprint": fingerprint})
+            }
+            Request::CaptureObservationWindow => {
+                self.bridge.advance(CAPTURE_OBSERVATION_WINDOW.0)?;
+                json!({"instructions": GuestInstructions(self.bridge.machine.instructions())})
             }
             Request::ModeDial { position } => {
                 let window = self.bridge.machine.set_mode_dial(position)?;
