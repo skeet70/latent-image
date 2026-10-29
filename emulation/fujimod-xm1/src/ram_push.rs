@@ -507,6 +507,14 @@ impl Server {
                 if self.watch.is_some() {
                     return Err("a memory watch conflicts with preservation observation".into());
                 }
+                if ranges.is_empty()
+                    || ranges.len() > 8
+                    || ranges
+                        .iter()
+                        .any(|range| range[0] >= range[1] || range[1] > u32::MAX as u64)
+                {
+                    return Err("preservation-begin requires 1..8 bounded 32-bit ranges".into());
+                }
                 let ranges = ranges
                     .iter()
                     .map(|range| PhysicalRange::new(range[0], range[1]))

@@ -2,14 +2,14 @@
 # jitl (justjake)'s FujiMod, unlicensed (LICENSING.md); statically links its
 # vendored Unicorn submodule, justjake/unicorn 0c0e055c.
 let
-  rev = "27f8c41cd8066a96aceaad600231d54bcb9e26ee";
+  rev = "9bb8bd90964fd4906a7d126b78a91ed30bb44e17";
   src = pkgs.applyPatches {
     name = "fujimod-${builtins.substring 0 8 rev}";
     src = pkgs.fetchgit {
       url = "https://github.com/justjake/FujiMod";
       inherit rev;
       fetchSubmodules = true;
-      hash = "sha256-DGwWpKEIrjzqtqyffcGCYazP5mTnfyEoidIbcPtK9DY=";
+      hash = "sha256-HTuxRbPCsQNCKgySTq5ly0Bl8xjVJsbn4hpFS8kA3Rw=";
     };
     # uc_context's data starts 8 bytes past a 16-byte boundary, and the
     # optimized Unicorn build reads the CPUARMState copy there with movdqa.
@@ -39,7 +39,7 @@ rustPlatform.buildRustPackage {
   preCheck = ''
     cargo test -p fujimod-emulator --locked -j "$NIX_BUILD_CORES" --profile release \
       --target ${pkgs.stdenv.targetPlatform.rust.rustcTargetSpec} \
-      --offline preservation_tests
+      --offline --lib
   '';
   preBuild = ''
     cpulimitBin=$(mktemp -d)
