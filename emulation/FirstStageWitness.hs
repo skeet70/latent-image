@@ -40,20 +40,31 @@ usage :: String
 usage =
   "usage: first-stage-witness --firmware DAT --symbols SYMBOLS --candidate-image BIN --fflzd FFLZD [--output DIR]"
 
+data Partial = Partial
+  { pFirmware :: Maybe FilePath
+  , pSymbols :: Maybe FilePath
+  , pImage :: Maybe FilePath
+  , pFflzd :: Maybe FilePath
+  , pOutput :: Maybe FilePath
+  }
+
 parseOptions :: [String] -> Either String Options
-parseOptions = go Nothing Nothing Nothing Nothing Nothing
+parseOptions = go (Partial Nothing Nothing Nothing Nothing Nothing)
   where
-    go firmware symbols image fflzd output ("--firmware" : value : rest) = go (Just value) symbols image fflzd output rest
-    go firmware symbols image fflzd output ("--symbols" : value : rest) = go firmware (Just value) image fflzd output rest
-    go firmware symbols image fflzd output ("--candidate-image" : value : rest) = go firmware symbols (Just value) fflzd output rest
-    go firmware symbols image fflzd output ("--fflzd" : value : rest) = go firmware symbols image (Just value) output rest
-    go firmware symbols image fflzd output ("--output" : value : rest) = go firmware symbols image fflzd (Just value) rest
-    go (Just firmware) (Just symbols) (Just image) (Just fflzd) output [] = Right (Options firmware symbols image fflzd output)
-    go Nothing _ _ _ _ [] = Left ("--firmware is required\n" ++ usage)
-    go _ Nothing _ _ _ [] = Left ("--symbols is required\n" ++ usage)
-    go _ _ Nothing _ _ [] = Left ("--candidate-image is required\n" ++ usage)
-    go _ _ _ Nothing _ [] = Left ("--fflzd is required\n" ++ usage)
-    go _ _ _ _ _ (unexpected : _) = Left ("unexpected argument: " ++ unexpected ++ "\n" ++ usage)
+    go partial ("--firmware" : value : rest) = go partial {pFirmware = Just value} rest
+    go partial ("--symbols" : value : rest) = go partial {pSymbols = Just value} rest
+    go partial ("--candidate-image" : value : rest) = go partial {pImage = Just value} rest
+    go partial ("--fflzd" : value : rest) = go partial {pFflzd = Just value} rest
+    go partial ("--output" : value : rest) = go partial {pOutput = Just value} rest
+    go partial [] =
+      Options
+        <$> need "--firmware" (pFirmware partial)
+        <*> need "--symbols" (pSymbols partial)
+        <*> need "--candidate-image" (pImage partial)
+        <*> need "--fflzd" (pFflzd partial)
+        <*> pure (pOutput partial)
+    go _ (unexpected : _) = Left ("unexpected argument: " ++ unexpected ++ "\n" ++ usage)
+    need flag = maybe (Left (flag ++ " is required\n" ++ usage)) Right
 
 segmentById :: U.Parts -> Word32 -> IO U.SegmentEntry
 segmentById parts wanted =
