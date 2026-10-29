@@ -19,6 +19,13 @@ pub struct Hit {
     pub cpsr: u32,
 }
 
+#[derive(Clone, Copy, Default)]
+enum CoreSelection {
+    #[default]
+    All,
+    Primary,
+}
+
 #[derive(Default)]
 pub struct TraceSites {
     pub sites: BTreeMap<u32, String>,
@@ -26,7 +33,7 @@ pub struct TraceSites {
     pub stop_labels: BTreeSet<String>,
     pub hits: Vec<Hit>,
     points: Vec<(usize, Box<InstructionPoints>)>,
-    cores: Vec<usize>,
+    cores: CoreSelection,
 }
 
 fn register(session: &Session, core: usize, register: arm::Register) -> Result<u32, String> {
@@ -41,20 +48,22 @@ impl TraceSites {
 
     /// Replaces the armed sites on every core.
     pub fn arm(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
-        let cores: Vec<usize> = (0..session.board.instruction_counts().len()).collect();
-        self.arm_cores(session, sites, &cores)
+        self.arm_selection(session, sites, CoreSelection::All)
     }
 
-    /// Replaces the armed sites on the named cores only.
-    pub fn arm_cores(
+    pub fn arm_primary(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
+        self.arm_selection(session, sites, CoreSelection::Primary)
+    }
+
+    fn arm_selection(
         &mut self,
         session: &Session,
         sites: BTreeMap<u32, String>,
-        cores: &[usize],
+        cores: CoreSelection,
     ) -> Result<(), String> {
         self.disarm(session)?;
         self.sites = sites;
-        self.cores = cores.to_vec();
+        self.cores = cores;
         self.rearm(session)
     }
 
@@ -73,7 +82,14 @@ impl TraceSites {
             return Ok(());
         }
         let addresses: Vec<u64> = self.sites.keys().map(|&address| u64::from(address)).collect();
-        for &core in &self.cores {
+        for core in 0..session.board.instruction_counts().len() {
+            let selected = match self.cores {
+                CoreSelection::All => true,
+                CoreSelection::Primary => core == 0,
+            };
+            if !selected {
+                continue;
+            }
             let points = session.board.instruction_points_begin(core, addresses.clone())?;
             self.points.push((core, points));
         }
