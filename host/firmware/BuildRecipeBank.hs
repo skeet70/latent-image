@@ -1196,8 +1196,8 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
       ccSetup = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Setup]
       ccActivation = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Activation]
       logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra <> [capturePublication]
-      safeOrder = either (error . ("ram-push: " ++)) id (safePublicationOrderFor (map ramAddress logical))
-      ordered = [logical !! index | index <- safeOrder]
+  safeOrder <- either H.failH pure (safePublicationOrderFor (map ramAddress logical))
+  let ordered = [logical !! index | index <- safeOrder]
       allocationEnd = toInteger base + toInteger runtimeAllocationSize
   unless
     ( length logical == publicationCount
