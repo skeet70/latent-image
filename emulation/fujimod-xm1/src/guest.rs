@@ -51,12 +51,19 @@ impl DialTurn {
     }
 }
 
-/// A bridge key: an analog key row or a sub-command dial step.
+/// One stage of the two-stage shutter button.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShutterStage {
+    Half,
+    Full,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Press {
     Key(RouteKey),
     Dial(DialTurn),
-    HalfPress,
+    Shutter(ShutterStage),
+    Play,
 }
 
 impl Press {
@@ -64,7 +71,9 @@ impl Press {
         Ok(match name {
             "dial-left" => Press::Dial(DialTurn::Left),
             "dial-right" => Press::Dial(DialTurn::Right),
-            "half-press" => Press::HalfPress,
+            "half-press" => Press::Shutter(ShutterStage::Half),
+            "full-press" => Press::Shutter(ShutterStage::Full),
+            "play" => Press::Play,
             _ => Press::Key(RouteKey::parse(name)?),
         })
     }
@@ -124,12 +133,14 @@ pub struct FirmwareFacts {
     pub keys: Vec<AdcKey>,
     pub mode_dial: ModeDial,
     pub dial_push: GpioKey,
+    pub play: GpioKey,
+    pub shutter: Shutter,
     pub subcommand: Subcommand,
     pub render: crate::render::RenderFacts,
 }
 
-/// A GPIO key row of the control table (class 2): the pad it samples and its pressed level.
-#[derive(Deserialize)]
+/// Control-table kind 2.
+#[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GpioKey {
     pub code: u32,
@@ -137,6 +148,56 @@ pub struct GpioKey {
     pub port: u8,
     pub pin: u8,
     pub pressed_high: bool,
+}
+
+/// Control-table kind 4.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShutterKey {
+    pub code: u32,
+    pub row: u64,
+    pub port: u8,
+    pub pin: u8,
+    pub pressed_high: bool,
+    pub interrupt_index: u16,
+}
+
+impl ShutterKey {
+    fn pad(&self) -> GpioKey {
+        GpioKey {
+            code: self.code,
+            row: self.row,
+            port: self.port,
+            pin: self.pin,
+            pressed_high: self.pressed_high,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Shutter {
+    pub half: ShutterKey,
+    pub full: ShutterKey,
+}
+
+/// Class-4 lower halfword of both shutter rows.
+const SHUTTER_RECORD_LOWER: u16 = 1;
+
+impl GpioKey {
+    fn checked(&self, session: &Session, table: &KeyTable) -> Result<GpioKey, String> {
+        let record = bytes::<28>(session, table.base.0 + self.row * table.row_bytes)?;
+        let word = |offset| u32::from_le_bytes([record[offset], record[offset + 1], record[offset + 2], record[offset + 3]]);
+        let halfword = |offset| u16::from_le_bytes([record[offset], record[offset + 1]]);
+        if word(0) != self.code
+            || record[9] != 2
+            || word(12) != u32::from(self.port) << 16 | u32::from(self.pin)
+            || halfword(0x12) != u16::from(self.pressed_high)
+        {
+            return Err(format!("GPIO key row {} differs from its declared binding", self.row));
+        }
+        Ok(*self)
+    }
 }
 
 /// Mode-dial detents in the bridge protocol's names.
@@ -358,37 +419,28 @@ impl FirmwareFacts {
     }
 
     /// The dial-push row, checked against its declared pad and level.
-    pub fn dial_push(&self, session: &Session) -> Result<&GpioKey, String> {
-        let key = &self.dial_push;
-        let record = bytes::<28>(session, self.key_table.base.0 + key.row * self.key_table.row_bytes)?;
-        let target = u32::from_le_bytes([record[12], record[13], record[14], record[15]]);
-        let pressed = u16::from_le_bytes([record[0x12], record[0x13]]);
-        if u32::from_le_bytes([record[0], record[1], record[2], record[3]]) != key.code
-            || record[9] != 2
-            || target != u32::from(key.port) << 16 | u32::from(key.pin)
-            || pressed != u16::from(key.pressed_high)
-        {
-            return Err(format!("GPIO key row {} differs from its declared binding", key.row));
-        }
-        Ok(key)
+    pub fn dial_push(&self, session: &Session) -> Result<GpioKey, String> {
+        self.dial_push.checked(session, &self.key_table)
     }
 
-    pub fn dial_push_released(&self, session: &Session) -> Result<bool, String> {
-        let address = self.key_table.base.0 + self.dial_push.row * self.key_table.row_bytes + self.key_table.released_offset;
-        Ok(bytes::<1>(session, address)?[0] == 0)
+    pub fn play(&self, session: &Session) -> Result<GpioKey, String> {
+        self.play.checked(session, &self.key_table)
     }
 
-    pub fn half_press(&self, session: &Session) -> Result<GpioKey, String> {
-        let key = GpioKey { code: 7, row: 5, port: 0, pin: 2, pressed_high: false };
+    pub fn shutter(&self, session: &Session, stage: ShutterStage) -> Result<GpioKey, String> {
+        let key = match stage {
+            ShutterStage::Half => self.shutter.half,
+            ShutterStage::Full => self.shutter.full,
+        };
         let record = bytes::<28>(session, self.key_table.base.0 + key.row * self.key_table.row_bytes)?;
         let word = |offset| u32::from_le_bytes([record[offset], record[offset + 1], record[offset + 2], record[offset + 3]]);
         let halfword = |offset| u16::from_le_bytes([record[offset], record[offset + 1]]);
         if word(0) != key.code || record[9] != 4 || word(12) != u32::from(key.pin)
-            || halfword(16) != 1 || halfword(18) != 0x1f
+            || halfword(16) != SHUTTER_RECORD_LOWER || halfword(18) != key.interrupt_index
         {
-            return Err("S1 row differs from its source-bound GPIO0.2 binding".into());
+            return Err(format!("{stage:?} shutter row differs from its declared binding"));
         }
-        Ok(key)
+        Ok(key.pad())
     }
 
     pub fn released(&self, session: &Session, key: RouteKey) -> Result<bool, String> {
@@ -430,4 +482,21 @@ pub fn set_adc(session: &mut Session, adc: &NodeName, channel: usize, sample: u1
     let mut samples = session.adc_samples(&adc.0)?;
     *samples.get_mut(channel).ok_or("ADC channel is absent")? = sample;
     session.set_adc_samples(&adc.0, &samples)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_map_to_typed_inputs_and_unknown_ones_refuse() {
+        assert_eq!(Press::parse("play").unwrap(), Press::Play);
+        assert_eq!(Press::parse("full-press").unwrap(), Press::Shutter(ShutterStage::Full));
+        assert_eq!(Press::parse("half-press").unwrap(), Press::Shutter(ShutterStage::Half));
+        assert_eq!(Press::parse("menu").unwrap(), Press::Key(RouteKey::Ok));
+        assert_eq!(Press::parse("disp").unwrap(), Press::Key(RouteKey::Back));
+        assert!(Press::parse("power").is_err());
+        assert!(Press::parse("playback").is_err());
+        assert!(Press::parse("full_press").is_err());
+    }
 }
