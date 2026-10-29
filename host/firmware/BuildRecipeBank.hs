@@ -1196,14 +1196,14 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
       ccSetup = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Setup]
       ccActivation = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Activation]
       logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra <> [capturePublication]
-  safeOrder <- either H.failH pure (safePublicationOrderFor (map ramAddress logical))
-  let ordered = [logical !! index | index <- safeOrder]
+  safeOrder <- either H.failH pure (safePublicationOrderFor (map (PublicationAddress . ramAddress) logical))
+  let ordered = [logical !! publicationIndex index | index <- safeOrder]
       allocationEnd = toInteger base + toInteger runtimeAllocationSize
   unless
     ( length logical == publicationCount
         && length safeOrder == publicationCount
-        && sortOn id safeOrder == [0 .. publicationCount - 1]
-        && length ccSetup == publicationSetupCount - 70
+        && sortOn publicationIndex safeOrder == [0 .. publicationCount - 1]
+        && length ccSetup == publicationSetupCount - 69
         && length (nub (map ramAddress logical)) == publicationCount
         && all (\p -> toInteger (ramAddress p) + 4 <= toInteger base || toInteger (ramAddress p) >= allocationEnd) logical
     ) $
@@ -1321,12 +1321,12 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
         ])
     , ("publications", H.arr
         [ H.obj
-            [ ("index", H.n (fromIntegral logicalIndex))
+            [ ("index", H.n (fromIntegral (publicationIndex logicalIndex)))
             , ("phase", H.s (if position < publicationSetupCount then "setup" else "activation"))
             , ("address", H.s (hex32 (ramAddress publication)))
             , ("old", H.s (hex32 (ramOld publication)))
             , ("new", H.s (hex32 (ramNew publication)))
-            , ("core", H.s (publicationCore logicalIndex))
+            , ("core", H.s (publicationCore (publicationIndex logicalIndex)))
             ]
         | (position, logicalIndex, publication) <- zip3 [0 :: Int ..] safeOrder ordered
         ])

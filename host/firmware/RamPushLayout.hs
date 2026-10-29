@@ -18,7 +18,10 @@ module RamPushLayout
   , runtimeAllocationSize
   , safePublicationOrderFor
   , captureHookAddress
+  , PublicationAddress (..)
+  , PublicationIndex (..)
   , publicationSetupCount
+  , publicationActivationCount
   , publicationCount
   , staleFixedReferences
   ) where
@@ -26,7 +29,8 @@ module RamPushLayout
 import Control.Monad (when)
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
-import Data.List (elemIndex, isInfixOf, isSuffixOf, sort)
+import Data.List (isInfixOf, isSuffixOf, sort)
+import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 
 -- * Installer
@@ -126,16 +130,23 @@ runtimeInstallerExtent = installerExtent publicationCount
 runtimeAllocationSize :: Word32
 runtimeAllocationSize = 0x1dc98
 
+newtype PublicationAddress = PublicationAddress { publicationAddress :: Word32 }
+  deriving (Eq, Ord, Show)
+
+newtype PublicationIndex = PublicationIndex { publicationIndex :: Int }
+  deriving (Eq, Ord, Show)
+
 -- | The capture entry hook appended after every existing logical publication.
-captureHookAddress :: Word32
-captureHookAddress = 0x00e9e038
+captureHookAddress :: PublicationAddress
+captureHookAddress = PublicationAddress 0x00e9e038
 
 -- | The reviewed bank, Classic Chrome and D3 order before the capture hook.
-legacySafePublicationOrder :: [Int]
+legacySafePublicationOrder :: [PublicationIndex]
 legacySafePublicationOrder =
-  [0 .. 35] <> [55 .. 68] <> [88] <> [36 .. 53]
-    <> [97 .. 221]
-    <> [75,76,72,73,74,69,70,71,77,78,79,80,81,82,83,89,90,91,92,93,94,95,96,84,85,86,87,54]
+  map PublicationIndex $
+    [0 .. 35] <> [55 .. 68] <> [88] <> [36 .. 53]
+      <> [97 .. 221]
+      <> [75,76,72,73,74,69,70,71,77,78,79,80,81,82,83,89,90,91,92,93,94,95,96,84,85,86,87,54]
 
 legacyPublicationSetupCount :: Int
 legacyPublicationSetupCount = 131
@@ -144,29 +155,38 @@ legacyPublicationCount :: Int
 legacyPublicationCount = 222
 
 publicationSetupCount :: Int
-publicationSetupCount = legacyPublicationSetupCount + 1
+publicationSetupCount = legacyPublicationSetupCount
+
+publicationActivationCount :: Int
+publicationActivationCount = legacyPublicationCount + 1 - legacyPublicationSetupCount
 
 publicationCount :: Int
 publicationCount = legacyPublicationCount + 1
 
 -- | Map the reviewed order onto the actual logical addresses and insert the
--- capture hook at the setup/activation boundary.
-safePublicationOrderFor :: [Word32] -> Either String [Int]
+-- capture hook after the ready setup records, before prior activations.
+safePublicationOrderFor :: [PublicationAddress] -> Either String [PublicationIndex]
 safePublicationOrderFor addresses = do
   when (length addresses /= publicationCount) $
     Left ("publication count " ++ show (length addresses) ++ ", not " ++ show publicationCount)
-  captureIndex <- maybe (Left "capture hook publication missing") Right (elemIndex captureHookAddress addresses)
+  let indexByAddress = M.fromList [(address, PublicationIndex index) | (index, address) <- zip [0 ..] addresses]
+  when (M.size indexByAddress /= length addresses) $
+    Left "duplicate logical publication address"
   let oldAddresses = filter (/= captureHookAddress) addresses
+      indexByOldIndex = M.fromList [(PublicationIndex index, address) | (index, address) <- zip [0 ..] oldAddresses]
   when (length oldAddresses /= legacyPublicationCount) $
     Left "capture hook is not the one added publication"
-  newIndex address = maybe
-    (Left ("publication address missing: " ++ show address))
-    Right
-    (elemIndex address addresses)
-  mappedSetup <- mapM newIndex (take legacyPublicationSetupCount legacySafePublicationOrder)
-  mappedActivation <- mapM newIndex (drop legacyPublicationSetupCount legacySafePublicationOrder)
+  captureIndex <- maybe (Left "capture hook publication missing") Right (M.lookup captureHookAddress indexByAddress)
+  let resolve oldIndex = case M.lookup oldIndex indexByOldIndex of
+        Nothing -> Left ("reviewed publication index missing: " ++ show (publicationIndex oldIndex))
+        Just address -> maybe
+          (Left ("logical publication address missing: " ++ show (publicationAddress address)))
+          Right
+          (M.lookup address indexByAddress)
+  mappedSetup <- mapM resolve (take legacyPublicationSetupCount legacySafePublicationOrder)
+  mappedActivation <- mapM resolve (drop legacyPublicationSetupCount legacySafePublicationOrder)
   let order = mappedSetup ++ [captureIndex] ++ mappedActivation
-  when (sort order /= [0 .. publicationCount - 1]) $
+  when (sort (map publicationIndex order) /= [0 .. publicationCount - 1]) $
     Left "derived publication order is not a permutation"
   pure order
 

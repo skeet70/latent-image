@@ -61,8 +61,8 @@ for src in menu/recipe_bank_arm.S menu/recipe_bank_probe.c menu/recipe_bank_hook
 done
 objects+=("$RB_RUST_ARCHIVE")
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${FREE[@]}" -Oz -Wall -Wextra \
-  -DRAM_PUSH_PUBLICATION_COUNT=223u -DRAM_PUSH_SETUP_COUNT=132u \
-  -DRAM_PUSH_ACTIVATION_COUNT=91u -DRAM_PUSH_ABI_VERSION=5u \
+  -DRAM_PUSH_PUBLICATION_COUNT=223u -DRAM_PUSH_SETUP_COUNT=131u \
+  -DRAM_PUSH_ACTIVATION_COUNT=92u -DRAM_PUSH_ABI_VERSION=5u \
   -ffunction-sections -fdata-sections -c menu/ram_push_installer.c \
   -o "$OUT/ram_push_installer.o"
 objects+=("$OUT/ram_push_installer.o")
