@@ -11,7 +11,9 @@ use fujimod_xm1::machine::{KeyPulse, Machine, MENU_PULSE, ReleaseSegment};
 use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::run;
 use fujimod_emulator::board::observation::MemoryWatch;
-use fujimod_emulator::board::preservation::{Preservation, PreservationState};
+use fujimod_emulator::board::preservation::{
+    PhysicalRange, Preservation, PreservationState, ProtectedRanges,
+};
 use fujimod_xm1::sd_host::{Backing, MediaImage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -505,13 +507,18 @@ impl Server {
                 if self.watch.is_some() {
                     return Err("a memory watch conflicts with preservation observation".into());
                 }
-                if ranges.is_empty() || ranges.len() > 8
-                    || ranges.iter().any(|range| range[0] >= range[1] || range[1] > u32::MAX as u64)
-                {
-                    return Err("preservation-begin requires 1..8 bounded 32-bit ranges".into());
-                }
-                let preservation = self.bridge.machine.session.board.preservation_begin(
-                    ranges.iter().map(|range| (range[0], range[1])).collect())?;
+                let ranges = ranges
+                    .iter()
+                    .map(|range| PhysicalRange::new(range[0], range[1]))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let ranges = ProtectedRanges::new(ranges)
+                    .map_err(|error| format!("preservation-begin: {error}"))?;
+                let preservation = self
+                    .bridge
+                    .machine
+                    .session
+                    .board
+                    .preservation_begin(ranges.clone())?;
                 self.preservation = Some(preservation);
                 json!({"armed": true, "ranges": ranges})
             }
