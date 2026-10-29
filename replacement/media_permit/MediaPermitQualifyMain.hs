@@ -862,7 +862,9 @@ runForbiddenBody runner root inputs scenario =
                     Left problem -> pure (Result ResultInvalidOutput [N.renderObservationError problem, BC.unpack err] Nothing Nothing)
                     Right observation ->
                       let pc = M.lookup N.Pc (N.nativeRegisters observation)
-                          refused = N.nativeStatus observation /= N.Returned && pc == Just 0x00e7716c
+                          refused =
+                            N.nativeStatus observation `elem` [N.UnsupportedInstruction, N.FetchGuard]
+                              && pc == Just 0x00e7716c
                        in pure
                             ( Result
                                 (if refused then ResultPassed else ResultFailed)
