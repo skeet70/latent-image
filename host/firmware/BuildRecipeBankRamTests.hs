@@ -26,16 +26,18 @@ main = do
     (all (<= runtimeAllocationSize) allocationExtents)
   check "allocation includes aligned installer and relocated recipe tables"
     (all (\base -> runtimeInstallerBase base - base + runtimeInstallerExtent <= runtimeAllocationSize) alignedBases)
+  let logicalAddresses = [0 .. 221] <> [captureHookAddress]
+      order = either error id (safePublicationOrderFor logicalAddresses)
   check "the order is a permutation of every logical publication"
-    (length safePublicationOrder == publicationCount
-      && all (`elem` safePublicationOrder) [0 .. publicationCount - 1])
+    (length order == publicationCount
+      && all (`elem` order) [0 .. publicationCount - 1])
   check "bank setup publications use dependency-closed order"
-    (take 69 safePublicationOrder == [0 .. 35] <> [55 .. 68] <> [88] <> [36 .. 53])
-  check "Classic Chrome setup precedes all activation"
-    (drop 69 (take publicationSetupCount safePublicationOrder) == [97 .. 158])
+    (take 69 order == [0 .. 35] <> [55 .. 68] <> [88] <> [36 .. 53])
+  check "Classic Chrome setup and the capture hook precede all activation"
+    (drop 69 (take publicationSetupCount order) == [97 .. 158] <> [222])
   check "root discovery follows processing and compiled-recipe activation"
-    (last safePublicationOrder == 54
-      && all (\index -> index `elem` take (publicationCount - 1) safePublicationOrder) [97 .. 221])
+    (last order == 54
+      && all (\index -> index `elem` take (publicationCount - 1) order) [97 .. 221])
   let completeInstaller = unlines
         [ "00000000 <ram_push_install>:"
         , "  bl 0x10 <execute_operation>"

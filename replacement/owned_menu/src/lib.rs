@@ -23,6 +23,9 @@ enum ModalState {
     AfterCancel = 0x1d,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TransitionResult(u32);
+
 impl QueryAnswer {
     fn parse(word: u32) -> Self {
         if word == 0 { Self::Inactive } else { Self::Active }
@@ -41,8 +44,14 @@ impl ModalState {
     }
 }
 
-fn ends_editor(word: u32) -> bool {
-    matches!(word, 0xffff_ffff | 2)
+impl TransitionResult {
+    fn cancelled(self) -> bool {
+        matches!(self.0, 0xffff_ffff | 2)
+    }
+
+    fn word(self) -> u32 {
+        self.0
+    }
 }
 
 unsafe extern "C" {
@@ -64,11 +73,11 @@ pub unsafe extern "C" fn rb_ui_editor_cancel() -> u32 {
         return 0;
     }
     unsafe { rb_open_editor_cancel_stage() };
-    let result = unsafe { rb_call_transition() };
-    if ends_editor(result) {
+    let result = TransitionResult(unsafe { rb_call_transition() });
+    if result.cancelled() {
         unsafe {
             core::ptr::write_volatile(MODAL_STATE_CELL as *mut u16, EDITOR_CANCEL_STATE.word())
         }
     }
-    result
+    result.word()
 }

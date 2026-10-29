@@ -837,7 +837,8 @@ emitPackage spec sources plan kernel boot d3 stockPath out = do
     "rb_bank_current_value_label",
     "rb_media_request_post", "rb_media_open_guard_entry",
     "rb_media_write_guard_entry", "rb_media_close_guard_entry",
-    "rb_media_epoch_entry_a", "rb_media_epoch_entry_b", "rb_stage_edit_get_arm", "rb_stage_edit_set_arm"] $ \name -> do
+    "rb_media_epoch_entry_a", "rb_media_epoch_entry_b", "rb_stage_edit_get_arm", "rb_stage_edit_set_arm",
+    "rb_capture_develop_wait"] $ \name -> do
       address <- linked symbols name
       unless (begin <= address && address < textEnd && address .&. 3 == 0) $
         H.failH ("package: executable symbol outside A32 text: " ++ name)
@@ -1183,21 +1184,27 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
   parameterPath <- maybe "private-data/analysis/classic-chrome/candidate.json" id <$> lookupEnv "CC_PARAMETERS"
   parameters <- either H.failH pure . CC.parseParameters =<< B.readFile parameterPath
   ccData <- linked symbols "cc_ram_data"
-  let reserved = map ramAddress (legacyOrdered ++ d3Activation)
+  captureTarget <- linked symbols "rb_capture_develop_wait"
+  captureWord <- either H.failH pure (armTailBranchWord 0x00e9e038 captureTarget)
+  unless (readWord image5 image5Base 0x00e9e038 == 0xe92d4870) $
+    H.failH "ram-push: stock develop wait entry differs at 0x00e9e038"
+  let capturePublication = RamPublication 0x00e9e038 0xe92d4870 captureWord
+      reserved = map ramAddress (legacyOrdered ++ d3Activation)
       ccKept = [p | p <- ccPublications, let CC.Address address = CC.publicationAddress p,
         address `notElem` reserved]
       convert p = let CC.Address address = CC.publicationAddress p
                    in RamPublication address (CC.publicationOld p) (CC.publicationNew p)
       ccSetup = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Setup]
       ccActivation = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Activation]
-      logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra
+      logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra <> [capturePublication]
+      safeOrder = either (error . ("ram-push: " ++)) id (safePublicationOrderFor (map ramAddress logical))
       ordered = [logical !! index | index <- safeOrder]
       allocationEnd = toInteger base + toInteger runtimeAllocationSize
   unless
     ( length logical == publicationCount
         && length safeOrder == publicationCount
         && sortOn id safeOrder == [0 .. publicationCount - 1]
-        && length ccSetup == publicationSetupCount - 69
+        && length ccSetup == publicationSetupCount - 70
         && length (nub (map ramAddress logical)) == publicationCount
         && all (\p -> toInteger (ramAddress p) + 4 <= toInteger base || toInteger (ramAddress p) >= allocationEnd) logical
     ) $

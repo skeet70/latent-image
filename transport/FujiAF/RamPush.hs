@@ -297,8 +297,8 @@ installerAbiVersion = 5
 
 -- | Bank, relocated compiled recipes and Classic Chrome publications.
 publicationCount, setupCount, activationCount :: Int
-publicationCount = 222
-setupCount = 131
+publicationCount = 223
+setupCount = 132
 activationCount = 91
 
 rendezvousSpinBound :: Word32
