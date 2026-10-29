@@ -158,7 +158,9 @@ main = do
       expectedReads =
         [ ExpectedRead OwnedImage (GuestAddress (fromIntegral entryAddress)) candidateImage
         , ExpectedRead HandoffWords (GuestAddress 0x4300) (encodeLeWord target <> encodeLeWord argument)
-        , ExpectedRead SkipList (GuestAddress 0x4310) (B.replicate 0x4f0 0)
+          -- Stock skip scan (0x2058, 0x3464): a count word and at most 0x13a block
+          -- entries. 0x47fc after it is a storage-init global.
+        , ExpectedRead SkipList (GuestAddress 0x4310) (B.replicate (4 + 4 * 0x13a) 0)
         , ExpectedRead LoaderA (GuestAddress (fromIntegral (U.segLoad entry0))) loaderA
         , ExpectedRead LoaderB (GuestAddress (fromIntegral (U.segLoad entry1))) loaderB
         , ExpectedRead SegmentTable (GuestAddress 0x61c000) segmentTable
