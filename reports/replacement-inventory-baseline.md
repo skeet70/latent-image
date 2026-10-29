@@ -1,6 +1,6 @@
 # Replacement inventory and iteration baseline
 
-Status: host-only inventory and measured baseline for [epic #117](https://github.com/skeet70/latent-image/issues/117) and [#118](https://github.com/skeet70/latent-image/issues/118). No camera or USB device was opened, no firmware was installed, and no live operation was run. The inventory reuses existing records; it does not select a pilot target, add a runner or define a replacement schema.
+Status: host-only inventory and measured baseline for [epic #117](https://github.com/skeet70/latent-image/issues/117) and [#118](https://github.com/skeet70/latent-image/issues/118). No camera or USB device was opened, no firmware was installed, and no live operation was run. The inventory reuses existing records; it does not select a pilot target, add a runner or define a replacement schema. [Section 8](#8-current-ownership-and-retirement-view) is the current ownership and retirement view maintained for [#127](https://github.com/skeet70/latent-image/issues/127); sections 1 to 7 are the #118 baseline and first-wave record.
 
 Evidence labels follow [the principles](../docs/principles.md): **byte-read**, **static-inference**, **emulated**, **hardware-observed**, **reported** and **independently-reproduced** are inherited from the named ledger entries and reports. A statement without one of those labels is a repository or command fact observed in this pass.
 
@@ -280,3 +280,77 @@ Exposed dependencies:
 - retained modal, render, storage, scheduler, init and resource behavior still requires contracted retirement.
 
 Canonical SDK evidence and native C runner evidence remain separate; neither substitutes for the other.
+
+## 8. Current ownership and retirement view
+
+This view is maintained for [#127](https://github.com/skeet70/latent-image/issues/127) and uses the capability categories it accepts. Retirement criteria are in the accepted design's [ownership stages](../spec/11-incremental-firmware-replacement.md#ownership-stages); acceptance and dependencies of open work are in the linked issues. An unknown entry is an open obligation. This view does not complete #127 or any #117 milestone.
+
+Terms: **owned, qualified** is owned code with a published qualification record. **Retained executable** is stock code that an owned path calls, or that runs because nothing replaces it. **Shared data** is stock cells, tables and records that owned code reads or writes. **Initialization and resources** are setup inherited from stock and resources the payload holds. Source increments under an open issue are named by issue only and are not qualified.
+
+### 8.1 Qualified owned increments
+
+| Increment | Owned | Retained | Runtime position |
+| --- | --- | --- | --- |
+| [#119](https://github.com/skeet70/latent-image/issues/119) Rust build and ABI | Pinned `no_std` cross-build; AAPCS facts for integer, pointer and in-memory composite boundaries ([record](../replacement/abi/README.md), E-XM1-RUST-ABI-150) | No stock boundary. Float, variadic and retained-service ABIs are not qualified by it. | Build and bounded native case |
+| [#120](https://github.com/skeet70/latent-image/issues/120) area-3 validator | Rust replacement of `0x006a84d4`, equivalent on the selected record's complete single- and two-bit domain and 56 constructed cases ([record](../replacement/validator/README.md), E-AREA3-VALIDATOR-REPLACEMENT-150) | In firmware: the stock validator, write callback `0x006a8484`, parity builder `0x006a83f4` and the area-3 log registration at `0x006a8abc` ([custom settings](custom-settings.md)) | Native harness only; installed in no route. Save-path integration needs persistent-storage acceptance. |
+| [#123](https://github.com/skeet70/latent-image/issues/123) field-row lane | Typed field-row binding in `replacement/service` ([record](../replacement/service/README.md), E-SERVICE-PACKAGED-RETAINED-150) | `FUN_00d52684` (`0x6038` bytes) with its callees, tables and epilogue; the installer and publication mechanism | Packaged FujiMod route; the stock probe executes for every row |
+| [#121](https://github.com/skeet70/latent-image/issues/121) recipe-bank classifiers | Page, slot and token classification behind the unchanged C ABI ([record](recipe-bank-ui-ownership.md), E-RECIPE-UI-PRIMARY-PRESERVATION-150, E-RECIPE-UI-VISUAL-150) | Dispatcher `FUN_00bfb028`; modal-75 actions `FUN_00c72e10`, `FUN_00c75ed4`, `FUN_00c76650`, `FUN_00c77794`; transition `FUN_00c12aac`; redraw, draw, storage and probe paths (E-RECIPE-MODAL-CONTRACT-150) | Packaged FujiMod primary over a 450-byte preserved range |
+
+The published qualified increments retired only project C, the inline classifier if-chains; none retires a stock executable body. Each runs with its stock dependencies in the packaged route or is not integrated into one.
+
+### 8.2 Payload dependency surface
+
+The [bank ELF allowlist](../transport/README.md#bank-elf-allowlist) machine-checks the owned payload's direct stock surface. For the qualified #121 packaged artifact at the first-wave checkpoint, `menu/recipe_bank_allowlist.json` declared 73 stock call targets, 12 of them Classic Chrome, and 9 stock store ranges, 1 of them Classic Chrome. Call targets include instruction-built `movw`/`movt` addresses, and pointer stores the checker cannot prove are declared under `unproven`. That qualified route published 222 old words at install and restored them at unload; the 122,008-byte allocation stays held until power-off. RAM payloads run in stock task context after stock initialization. These counts describe that artifact, not later source.
+
+The allowlist bounds what the payload calls and stores. It does not cover stock callers into a retained body, callbacks registered with stock services or computed references to them. No published qualified increment establishes that closure or a forbidden-fetch guard for a retained body.
+
+### 8.3 Capability view
+
+Section 2 holds the evidence behind each category. Gaps that no open child issue covers belong to #127.
+
+| Capability | Owned, qualified | Retained executable and shared data | Open issue for the next action | Not covered by an open child issue (#127) |
+| --- | --- | --- | --- | --- |
+| Startup and shutdown | None | Boot ROM (declared retained), loader, image records and every stock initialization duty; payloads start only after it | [#126](https://github.com/skeet70/latent-image/issues/126) owned first-stage entry from natural reset; hardware route [#85](https://github.com/skeet70/latent-image/issues/85), [#60](https://github.com/skeet70/latent-image/issues/60) | Startup stages after the first-stage handoff, replacement shutdown, power-off persistence |
+| Controls and menus | #121 classifiers; #123 field-row binding | `FUN_00bfb028` for every controller; modal-75 actions in 8.1; snapshot `FUN_0061cd14`; key handlers `FUN_00c6f14c`, `FUN_00c70528`; render probe `FUN_00d52684`. Data: cell table `0x00cd1ae4`, action table `0x00d04080` with word 1 interposed at install, SET gates `0x009544f8`, `0x00950474`, `0x00950478`, `0x00954500`, cursor cells `0x009571d8`/`0x009571dc`, current row `0x0095732c` | [#128](https://github.com/skeet70/latent-image/issues/128) dispatcher and editor cancellation; [#124](https://github.com/skeet70/latent-image/issues/124) PLAY and S2 inputs | Modal-75 SET, confirm and leave actions; other controllers behind the global dispatcher; other menus; physical key timing |
+| Live view | None | Sensor, processing and display pipeline; the Classic Chrome fragment is a project patch over it | None | Whole category |
+| Autofocus and manual focus | None; the contrast policy and AF RAM ring are unqualified | AF orchestration, lens messages, statistics producers | None; [#109](https://github.com/skeet70/latent-image/issues/109) and [#113](https://github.com/skeet70/latent-image/issues/113) keep their own acceptance | AF ownership; manual focus is not inventoried |
+| Exposure and capture | None | S2 admission through `0x00c58fc4`, `0x00d0da4c`, `0x00d126f0` and `FUN_00c12aac` ([cardless capture](cardless-capture-feasibility.md)); capture descriptors, JPEG encoder and DMA, sensor services | #124 full-press input, JPEG cursor and DMA, media inspection; [#129](https://github.com/skeet70/latent-image/issues/129) consumes it | Exposure control and capture paths outside #129's selection |
+| Image development | None | Develop dispatch and processing services; D3 and Classic Chrome data are project data over them | #129 development-step lifecycle | Other develop paths, RAW conversion |
+| Save and playback | None of stock; the recipe-bank storage lane is project C over stock media workers | Ordinary save chain `0x00ea0934` → `0x00e99d4c` → `0x00e518c0`; media open, write, close and completion `0x007115a8`, `0x007116e8`, `0x0071176c`, `0x0071c634`; playback | #129 save facade, phase completion and media permission; #124 PLAY entry and card-sector inspection | Playback rendering, zoom, deletion |
+| Persistent settings | #120 validator, native only | Area-3 log with both callbacks; stock getter `0x0061e110` and commit `0x00d4fc74` used by the bank; live settings record `0x0096cc64` | None | Validator integration and the area-3 writer, both gated on a persistence decision; unbound fields and writers |
+| Calibration consumption | None | Adjustment cache, `f7` gate and their consumers; calibration data is declared retained resource data | None | Consumer code is not inventoried |
+| External interfaces | Packaged emulator RAM-push publication and rollback (#121, #123); the host transport is project code | Firmware USB, PTP, SD host and jig handlers; the installer's CPU1 job channel | #124 read-only card inspection and [#125](https://github.com/skeet70/latent-image/issues/125) native backend are emulator tooling, not firmware ownership | Firmware-side interface handlers |
+| Failure recovery | None | Stock recovery, recorder and boot-entry paths; R1 to R3 are stock-firmware evidence | Hardware route #85, #60 | R4 and replacement recovery |
+| Runtime services, across categories | None | Scheduler, tasks, queues and mailboxes, interrupts, allocator, render and display, storage drivers | #129 names its retained sensor, processing, storage, scheduler and driver services | Contracted retirement of each service |
+
+### 8.4 Milestone blockers
+
+| #117 milestone | Prevented by | Owner |
+| --- | --- | --- |
+| Own accepted application behaviors | Published qualified ownership covers only bounded decisions and one service lane. The modal controller, capture and save lifecycle and the remaining state machines run stock code. | #128, #129, #124; remaining categories #127 |
+| Retire proprietary application/runtime implementations | No published qualified increment retires a stock body or establishes its caller, callback and computed-reference closure or a forbidden-fetch guard. Native qualification of tail-call veneers and the media-permission path needs a backend that executes them. | #125, #128, #129; remaining bodies #127 |
+| Replacement startup in emulation | Qualified owned code runs only after stock initialization. | #126 |
+| Replacement startup on hardware | No qualified physical route. | #85, #60 |
+| Persistent deployment | Not pursued. | None |
+
+### 8.5 Candidate next boundaries
+
+These are inputs for selection under #127, not selections.
+
+**A. Menu-frame snapshot service: `FUN_0061cd14` with its store `FUN_0061ceac` and word accessors.**
+
+- Behavior: fills eleven words (depth, root, node type, class, cursor token, current-value token, raw cursor, visible ordinal, scroll state, page calculation, navigation word) from the current frame, its values array and the stock navigation cells. It writes only the destination snapshot and call frames ([review](review/select-blink-83.md)).
+- Existing evidence: 264 bytes in image 4; x70view C links exact, as do the accessors at `0x0061d154`, `0x0061d1a4`, `0x0061d244` and `0x0061d294` ([firmware extraction](firmware-extraction.md), E-XM1-MATCHING-C-RECIPE-CENSUS-150). The real-byte kernel cases in `emulation/RecipeBankCases.hs`, such as `c-select-real-bytes`, already declare the original body and `0x0061d154` as executable stock code for the legacy native runner.
+- Consumers: the bank through `rb_call_snapshot_store`; `FUN_00c72e10` through `FUN_0061d154`; the post-transition SET notification tests `FUN_0061d1f4` and `FUN_0061d244`; image-6 drawing code including `FUN_01165aa0`. These roles are not a caller closure.
+- Value: a read-only service under both the #128 controller path and the bank, with existing original-binary case inputs.
+- Prerequisites: the complete stock caller and computed-reference closure, because stock menus call it directly and a replacement is global unless every caller is retargeted; expectations independent of the x70view C; a forbidden-fetch guard on the original body in a packaged menu route; a reviewed publication of the replaced entry.
+- Risk: a wrong word moves cursor, marker or scroll state across every menu.
+
+**B. Modal-75 SET, confirm and leave actions: `FUN_00c72e10`, `FUN_00c75ed4`, `FUN_00c76650`.**
+
+- Evidence: E-RECIPE-MODAL-CONTRACT-150 binds actions `0x5a`, `0x73` and `0x81` to them. The [ownership report](recipe-bank-ui-ownership.md#retained-modal-contract) records the SET gates and the post-transition frame reads. [Recipe design](recipe-design.md) section 17.8 records `FUN_00c72e10`'s special-case classes and generic leaf tail. The bank reaches all three through `menu/recipe_bank_arm.S` trampolines and returns them for unclaimed pages.
+- Value: #128 is planned to own the dispatcher and `FUN_00c77794` and routes the remaining delegates to #127. If #128 qualifies, these three remain the stock actions on the bank's cells, and owning them would complete the bank's entry, SET, confirm and leave lifecycle over an owned dispatcher.
+- Prerequisites: the #128 dispatcher contract and #125. The 55 native UI cases execute the synthetic `emulation/recipe-bank-ui-model.c` at these addresses, so original-binary comparison cases do not exist. Other modal-75 pages use the same actions, so `FUN_00c72e10`'s stock special cases (classes 5, `0x184`, `0x141`, `0xf5`, `0x167`, `0x26`, `0x19`, `0xed`, `0xee`, node id `0x5b`) are in scope. Candidate A is an input to its notification reads.
+- Risk: global use by modal 75 and the gate cells' unqualified device-input states.
+
+The area-3 write callback `0x006a8484` is not ranked. It would reuse #120's contract and runner, but its runtime caller is the area-3 append path `FUN_006ad3f4`, so integration needs persistent-storage acceptance.
