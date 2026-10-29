@@ -1,3 +1,6 @@
+const PLAN: usize = 0x009a1000;
+const STACK_LOW: usize = 0x009a2000;
+const STACK_HIGH: usize = 0x009a3000;
 const CLEAR_COUNT: usize = 0x009a1200;
 const CLEAR_TRACE: usize = 0x009a1204;
 const ADVANCE_COUNT: usize = 0x009a1300;
@@ -20,15 +23,32 @@ const WAIT_SIGNAL: usize = 0x009a1400;
 const RELEASE_COUNT: usize = 0x009a1600;
 const CONTEXT: usize = 0x009a0000;
 const REQUESTED_EVENTS: usize = 0x4c;
+const TIMEOUT: u32 = 0xffffffff;
 
 #[inline(always)]
 fn read(address: usize) -> u32 {
-    unsafe { core::ptr::read_volatile(address as *const u32) }
+    let value: u32;
+    unsafe {
+        core::arch::asm!(
+            "ldr {value}, [{address}]",
+            value = out(reg) value,
+            address = in(reg) address,
+            options(readonly, nostack, preserves_flags)
+        );
+    }
+    value
 }
 
 #[inline(always)]
 fn write(address: usize, value: u32) {
-    unsafe { core::ptr::write_volatile(address as *mut u32, value) }
+    unsafe {
+        core::arch::asm!(
+            "str {value}, [{address}]",
+            value = in(reg) value,
+            address = in(reg) address,
+            options(nostack, preserves_flags)
+        );
+    }
 }
 
 #[inline(always)]
@@ -55,7 +75,16 @@ fn copy_advanced(count: usize, trace: usize) {
 
 #[link_section = ".text.capture_wait"]
 #[no_mangle]
-pub extern "C" fn capture_wait(event: u32) {
+pub extern "C" fn capture_wait(event: u32, out: *mut u32, timeout: u32) {
+    let out_address = out as usize;
+    if event != read(PLAN + 8 * 4)
+        || timeout != TIMEOUT
+        || out_address < STACK_LOW
+        || out_address > STACK_HIGH - 4
+        || out_address & 3 != 0
+    {
+        loop {}
+    }
     write(WAIT_FLAG, 1);
     write(WAIT_STATE, read(CURRENT_STATE));
     copy_cleared(WAIT_CLEAR_COUNT, WAIT_CLEAR_TRACE);

@@ -228,7 +228,7 @@ scenarios =
   , Scenario "cancel-bit-zero" base {planCancelSelector = CancelBit 0} (RequestedEvents 1) [StockStatus 0, StockStatus 0, StockStatus 0] Nothing
   ]
   where
-    base = Plan (EventId 0) (EventId 2) (EventId 3) (StepState 4) (StepState 5) (EventId 0x30) AllEvents
+    base = Plan (EventId 2) (EventId 4) (EventId 5) (StepState 4) (StepState 5) (EventId 0xffffffff) AllEvents
 
 invalidCancelFixtures :: [(String, Word32)]
 invalidCancelFixtures =
@@ -341,7 +341,7 @@ syntheticSpans =
   , (0x00e93bdc, 0x100)
   , (0x00e9db80, 0x2b8)
   , (0x00eb0ea0, 0x100)
-  , (0x007243a8, 0x100)
+  , (0x007243a8, 0x280)
   , (0x00724638, 0x100)
   ]
 
