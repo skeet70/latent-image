@@ -1,18 +1,20 @@
-//! Bounded native cases on the pinned FujiMod Cortex-R5F core. Input is the
+//! Bounded native cases on the pinned FujiMod Cortex-R5F core with the
+//! Cortex-R4F exclusions of `r4f::classify_a32`. Input is the
 //! `FUJI_NATIVE_V1` wire written by `Emulation.NativeCase`; output is the
 //! runner observation read by `Emulation.NativeObservation`.
 //!
-//! Engine pages carry the union of the permissions of the regions they touch,
-//! so the memory hook decides every data access against exact logical regions.
-//! A refused access stops the run and undoes its whole instruction: stores the
-//! instruction already committed are restored from a per-instruction journal,
-//! and registers return to their values at instruction entry.
+//! Engine pages carry the union of the permissions of the regions they touch.
+//! The memory hook admits each access against exact logical regions and
+//! alignment, and refuses any other through `Cpu::refuse_access` before the
+//! access happens. At the first access of an LDM/STM or an immediate
+//! pre-indexed LDRD/STRD it admits the instruction's whole transfer, so a
+//! refused transfer has no effect. Unmapped accesses fault and are refused.
 //!
 //! The case's call contract is tracked from the decoded control-flow words
 //! (B, BL, BX, BLX, LDM with PC and the two LDR-to-PC dispatch forms). All
-//! other instruction semantics belong to the backend. The Cortex-R4F
-//! exclusions are `r4f::classify_a32` plus coprocessor, supervisor-call,
-//! unconditional-space, banked-register LDM/STM and wait/event-hint words.
+//! other instruction semantics belong to the backend. The user-ARM case
+//! profile refuses coprocessor, supervisor-call, unconditional-space,
+//! status-register write, hint and synchronization-primitive words.
 
 use crate::r4f;
 use fujimod_emulator_cpu::{
@@ -42,8 +44,6 @@ const MAX_RECORDED_EVENTS: usize = 512;
 const MAX_DEPTH: usize = 32;
 const LOG_SIZE: usize = 64;
 const PROVENANCE_SIZE: usize = 4096;
-/// One A32 instruction stores at most 16 words.
-const JOURNAL_SIZE: usize = 32;
 const PAGE: u64 = 4096;
 const TRANSLATION_CACHE_BYTES: u32 = 4 * 1024 * 1024;
 /// The PMSAv7 default map is execute-never from 0x80000000.
@@ -51,8 +51,6 @@ const EXECUTABLE_END: u64 = 0x7fff_fffc;
 const USER_MODE: u32 = 0x10;
 const CPSR_MODE: u32 = 0x1f;
 const CPSR_THUMB: u32 = 1 << 5;
-/// `unicorn_error` for a backend failure that carries no Unicorn error.
-const UNCLASSIFIED_ENGINE_ERROR: u32 = u32::MAX;
 
 /// Page permission bits as taken by `Cpu::map_zeroed`.
 const PAGE_READ: u32 = 1;
@@ -770,7 +768,8 @@ fn unicorn_error(error: &ExecutionError) -> u32 {
             Fault::ReadProtected => 13,
             Fault::FetchProtected => 14,
         },
-        ExecutionError::Backend(_) => UNCLASSIFIED_ENGINE_ERROR,
+        ExecutionError::AccessRefused { .. } => 23,
+        ExecutionError::Backend(_) => u32::MAX,
     }
 }
 
@@ -788,6 +787,9 @@ fn execute(case: &Case) -> Observation<'_> {
         Ok(cpu) => cpu,
         Err(error) => return refused(format!("pinned CPU unavailable: {error}")),
     };
+    if !cpu.features().access_refusal {
+        return refused("pinned CPU lacks native access refusal".to_owned());
+    }
     if let Err(error) = prepare(&cpu, case) {
         return refused(format!("case setup failed: {error}"));
     }
@@ -821,11 +823,6 @@ fn execute(case: &Case) -> Observation<'_> {
     state.conclude(case, result, elapsed);
     if let Err(error) = removal {
         state.host_failure(format!("hook removal failed: {error}"));
-    }
-    if state.undo {
-        if let Err(error) = state.undo_instruction(&cpu) {
-            state.host_failure(format!("refused instruction could not be undone: {error}"));
-        }
     }
     state.observe(&cpu, case, elapsed, entry_registers)
 }
@@ -919,11 +916,13 @@ unsafe fn memory_entry(access: Access, address: u64, size: i32, value: i64, data
     context.dispatch(|state, cpu, case| state.on_access(cpu, case, access, address, size, value));
 }
 
-/// Every fault is a refusal.
 unsafe fn fault_entry(fault: Fault, address: u64, size: i32, value: i64, data: *mut c_void) -> bool {
     // SAFETY: as for `instruction_entry`.
     let context = unsafe { &*data.cast::<Context<'_>>() };
-    context.dispatch(|state, cpu, _| state.on_fault(cpu, fault, address, size, value));
+    context.dispatch(|state, _, _| {
+        state.on_fault(fault, address, size, value);
+        Ok(())
+    });
     false
 }
 
@@ -944,46 +943,40 @@ impl From<String> for Step {
     }
 }
 
+/// Refuses the access whose memory hook is running.
+fn refuse(cpu: &dyn Cpu) -> Result<(), Step> {
+    cpu.refuse_access().map_err(|error| Step::Host(format!("access refusal failed: {error}")))
+}
+
 #[derive(Clone, Copy, Default)]
 struct Frame {
     return_address: u32,
     caller: usize,
 }
 
-/// Bytes one store of the current instruction overwrote.
-#[derive(Clone, Copy, Default)]
-struct Overwritten {
-    address: u32,
-    length: u8,
-    bytes: [u8; 8],
+/// The whole span of an LDM/STM or immediate pre-indexed LDRD/STRD, admitted
+/// at its lowest address, which the engine accesses first.
+#[derive(Clone, Copy)]
+struct Transfer {
+    bytes: u64,
+    need: Need,
 }
 
-/// The instruction in progress, for undoing it when one of its accesses is refused.
+impl Transfer {
+    fn of(word: u32) -> Option<Self> {
+        let load = |bit: bool| if bit { Need::Read } else { Need::Write };
+        if word >> 25 & 7 == 4 {
+            return Some(Self { bytes: 4 * u64::from((word & 0xffff).count_ones()), need: load(word & 1 << 20 != 0) });
+        }
+        (word & 0x0f50_00d0 == 0x0140_00d0).then(|| Self { bytes: 8, need: load(word & 0x20 == 0) })
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Instruction {
     pc: u32,
     word: u32,
-    cpsr: u32,
-    entry_core: Option<[u32; 15]>,
-    journal: [Overwritten; JOURNAL_SIZE],
-    journaled: usize,
-    provenance_retained: usize,
-    provenance_total: u64,
-}
-
-impl Instruction {
-    fn new() -> Self {
-        Self {
-            pc: 0,
-            word: 0,
-            cpsr: 0,
-            entry_core: None,
-            journal: [Overwritten::default(); JOURNAL_SIZE],
-            journaled: 0,
-            provenance_retained: 0,
-            provenance_total: 0,
-        }
-    }
+    transfer: Option<Transfer>,
 }
 
 struct State {
@@ -1003,7 +996,6 @@ struct State {
     provenance: Vec<ProvenanceEntry>,
     provenance_total: u64,
     instruction: Instruction,
-    undo: bool,
 }
 
 impl State {
@@ -1024,8 +1016,7 @@ impl State {
             access_total: 0,
             provenance: Vec::with_capacity(PROVENANCE_SIZE),
             provenance_total: 0,
-            instruction: Instruction::new(),
-            undo: false,
+            instruction: Instruction { pc: 0, word: 0, transfer: None },
         }
     }
 
@@ -1085,19 +1076,14 @@ impl State {
         let word = read_word(cpu, address)?;
         self.trace[(self.entered % LOG_SIZE as u64) as usize] = TraceEntry { pc: Word(pc), instruction: Word(word) };
         self.entered += 1;
-        self.instruction.pc = pc;
-        self.instruction.word = word;
-        self.instruction.cpsr = cpsr;
-        self.instruction.entry_core = None;
-        self.instruction.journaled = 0;
-        self.instruction.provenance_retained = self.provenance.len();
-        self.instruction.provenance_total = self.provenance_total;
+        self.instruction = Instruction { pc, word, transfer: None };
         if excluded(word) {
             return Err(Step::Stop(Status::UnsupportedInstruction));
         }
         if !arm::condition_passes(word >> 28, cpsr) {
             return Ok(());
         }
+        self.instruction.transfer = Transfer::of(word);
         self.track(cpu, case, pc, word)
     }
 
@@ -1265,22 +1251,22 @@ impl State {
         let (kind, need) = match access {
             Access::Read => (AccessType::Read, Need::Read),
             Access::Write => (AccessType::Write, Need::Write),
-            Access::Fetch => return Err(Step::Host("memory hook reported a fetch".to_owned())),
+            Access::Fetch => {
+                self.host_failure("memory hook reported a fetch".to_owned());
+                return refuse(cpu);
+            }
         };
         self.log(kind, address, size, value);
-        if !(1..=8).contains(&size) {
-            return Err(Step::Host(format!("memory access of {size} bytes")));
-        }
-        self.capture_entry_registers(cpu)?;
-        if need == Need::Write {
-            self.journal(cpu, address, size as usize)?;
-        }
-        if self.status.is_some() {
-            return Ok(());
-        }
-        if !case.admits(address, size as u64, need) {
-            self.undo = true;
-            return Err(Step::Stop(Status::MemoryGuard));
+        match self.admit(case, need, address, size) {
+            Ok(true) => {}
+            Ok(false) => {
+                self.status.get_or_insert(Status::MemoryGuard);
+                return refuse(cpu);
+            }
+            Err(message) => {
+                self.host_failure(message);
+                return refuse(cpu);
+            }
         }
         if self.entered == 0 {
             return Ok(());
@@ -1306,64 +1292,33 @@ impl State {
         Ok(())
     }
 
-    fn capture_entry_registers(&mut self, cpu: &dyn Cpu) -> Result<(), String> {
-        if self.instruction.entry_core.is_none() {
-            let mut core = [0u32; 15];
-            for (index, value) in core.iter_mut().enumerate() {
-                *value = read(cpu, arm::CORE[index])?;
+    /// Every access after the run's outcome is decided is refused.
+    fn admit(&mut self, case: &Case, need: Need, address: u64, size: i32) -> Result<bool, String> {
+        let size = u64::try_from(size)
+            .ok()
+            .filter(|size| (1..=8).contains(size))
+            .ok_or_else(|| format!("memory access of {size} bytes"))?;
+        let transfer = match self.instruction.transfer.take() {
+            Some(transfer) if transfer.need != need => {
+                return Err("the first access of a transfer has the wrong direction".to_owned());
             }
-            self.instruction.entry_core = Some(core);
-        }
-        Ok(())
-    }
-
-    /// Records the bytes a store may overwrite; unmapped bytes are skipped.
-    fn journal(&mut self, cpu: &dyn Cpu, address: u64, size: usize) -> Result<(), String> {
-        let mut bytes = [0u8; 8];
-        if cpu.read_memory(address, &mut bytes[..size]).is_ok() {
-            return self.push_journal(address, &bytes[..size]);
-        }
-        for offset in 0..size as u64 {
-            let mut byte = [0u8; 1];
-            if cpu.read_memory(address + offset, &mut byte).is_ok() {
-                self.push_journal(address + offset, &byte)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn push_journal(&mut self, address: u64, bytes: &[u8]) -> Result<(), String> {
-        let instruction = &mut self.instruction;
-        let slot = instruction
-            .journal
-            .get_mut(instruction.journaled)
-            .ok_or("one instruction stored more than the journal holds")?;
-        slot.address = address as u32;
-        slot.length = bytes.len() as u8;
-        slot.bytes[..bytes.len()].copy_from_slice(bytes);
-        instruction.journaled += 1;
-        Ok(())
-    }
-
-    fn on_fault(&mut self, cpu: &dyn Cpu, fault: Fault, address: u64, size: i32, value: i64) -> Result<(), Step> {
-        self.log(fault.into(), address, size, value);
-        let status = match fault {
-            Fault::FetchUnmapped | Fault::FetchProtected => Status::FetchGuard,
-            Fault::ReadUnmapped | Fault::ReadProtected | Fault::WriteUnmapped | Fault::WriteProtected => {
-                self.capture_entry_registers(cpu)?;
-                self.undo = true;
-                Status::MemoryGuard
-            }
+            Some(transfer) => case.covers(address, transfer.bytes, need),
+            None => true,
         };
-        Err(Step::Stop(status))
+        Ok(self.status.is_none() && transfer && case.admits(address, size, need))
+    }
+
+    fn on_fault(&mut self, fault: Fault, address: u64, size: i32, value: i64) {
+        self.log(fault.into(), address, size, value);
+        self.status.get_or_insert(match fault {
+            Fault::FetchUnmapped | Fault::FetchProtected => Status::FetchGuard,
+            Fault::ReadUnmapped | Fault::ReadProtected | Fault::WriteUnmapped | Fault::WriteProtected => Status::MemoryGuard,
+        });
     }
 
     fn on_exception(&mut self, exception: arm::Exception) -> Result<(), Step> {
         let status = match exception {
-            arm::Exception::DataAbort => {
-                self.undo = true;
-                Status::MemoryGuard
-            }
+            arm::Exception::DataAbort => Status::MemoryGuard,
             arm::Exception::PrefetchAbort => Status::FetchGuard,
             arm::Exception::UndefinedInstruction
             | arm::Exception::SupervisorCall
@@ -1405,23 +1360,6 @@ impl State {
                 }
             }
         }
-    }
-
-    fn undo_instruction(&mut self, cpu: &dyn Cpu) -> Result<(), String> {
-        let instruction = &self.instruction;
-        for overwritten in instruction.journal[..instruction.journaled].iter().rev() {
-            cpu.write_memory(u64::from(overwritten.address), &overwritten.bytes[..usize::from(overwritten.length)])?;
-        }
-        write(cpu, arm::CPSR, instruction.cpsr)?;
-        if let Some(core) = instruction.entry_core {
-            for (index, &value) in core.iter().enumerate() {
-                write(cpu, arm::CORE[index], value)?;
-            }
-        }
-        write(cpu, arm::PC, instruction.pc)?;
-        self.provenance.truncate(instruction.provenance_retained);
-        self.provenance_total = instruction.provenance_total;
-        Ok(())
     }
 
     fn observe<'a>(&mut self, cpu: &dyn Cpu, case: &'a Case, elapsed: Duration, entry: FinalRegisters) -> Observation<'a> {
@@ -1552,15 +1490,18 @@ fn control(word: u32) -> Control {
     if pc_write || doubleword_into_pc { Control::UntrackedPcWrite } else { Control::None }
 }
 
-/// Words refused regardless of condition: Cortex-R4F exclusions and the user ARM profile.
+/// Words refused regardless of condition: Cortex-R4F exclusions and the user-ARM case profile.
 fn excluded(word: u32) -> bool {
-    let top = word >> 25 & 7;
-    let hint = word & 0x0fff_ff00 == 0x0320_f000;
-    word >> 28 == 15
+    let unconditional = word >> 28 == 15;
+    let coprocessor_or_supervisor = word >> 25 & 7 >= 6;
+    // MSR immediate with an empty mask is the hint space (NOP, YIELD, WFE, WFI, SEV, DBG).
+    let status_write_or_hint = word & 0x0fb0_f000 == 0x0320_f000 || word & 0x0fb0_fff0 == 0x0120_f000;
+    let synchronization = word & 0x0f00_00f0 == 0x0100_0090;
+    unconditional
+        || coprocessor_or_supervisor
+        || status_write_or_hint
+        || synchronization
         || r4f::classify_a32(word).0.is_some()
-        || top >= 6
-        || (top == 4 && word & 1 << 22 != 0)
-        || (hint && matches!(word & 0xff, 2..=4))
 }
 
 fn branch_target(pc: u32, word: u32) -> Result<u32, Step> {

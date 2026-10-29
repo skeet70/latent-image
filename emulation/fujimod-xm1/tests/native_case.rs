@@ -392,6 +392,30 @@ fn stores_to_read_only_and_unmapped_pages_are_refused_without_effects() {
     }
 }
 
+#[test]
+fn a_doubleword_store_reaching_a_read_only_subrange_has_no_effect() {
+    // strd r0, r1, [r2]
+    let observed = Case::new(&[0xe1c2_00f0, BX_LR])
+        .shared_page()
+        .register(0, 0x1111_1111)
+        .register(1, 0x2222_2222)
+        .register(2, 0x4004)
+        .run();
+    observed.assert_stopped(Status::MemoryGuard, CODE);
+    assert_eq!(observed.bytes(0x4004), "00000000");
+    assert_eq!(observed.bytes(0x4008), "ddccbbaa");
+    assert_eq!(observed.observation.memory_provenance_total, "0");
+}
+
+#[test]
+fn a_load_from_an_unmapped_page_leaves_its_destination_and_base() {
+    // ldr r0, [r1], #4
+    let observed = Case::new(&[0xe491_0004, BX_LR]).register(0, 0x77).register(1, 0x5000).run();
+    observed.assert_stopped(Status::MemoryGuard, CODE);
+    assert_eq!(observed.register("r0"), 0x77);
+    assert_eq!(observed.register("r1"), 0x5000);
+}
+
 fn stub_call(r0: u32) -> Observed {
     Case::new(&[PUSH_LR, branch(0x1004, STUB, true), ADD_R0_1, POP_PC])
         .stub(STUB, &[(0, 5)], &[(0, 0x40), (1, 7)])
@@ -544,6 +568,23 @@ fn an_undefined_instruction_is_unsupported() {
     let observed = Case::new(&[0xe7f0_00f0, BX_LR]).register(0, 9).run();
     observed.assert_stopped(Status::UnsupportedInstruction, CODE);
     assert_eq!(observed.register("r0"), 9);
+}
+
+#[test]
+fn hints_status_writes_and_synchronization_primitives_are_refused_before_they_execute() {
+    // nop; yield; wfi; msr cpsr_f, #0xf0000000; msr cpsr_fc, r0; swp r0, r1, [r2]; ldrex r0, [r2]; strex r0, r1, [r2]
+    for word in [0xe320_f000, 0xe320_f001, 0xe320_f003, 0xe328_f20f, 0xe129_f000, 0xe102_0091, 0xe192_0f9f, 0xe182_0f91] {
+        let observed = Case::new(&[word, BX_LR])
+            .region(0x4000, READ_WRITE, &[0x44, 0x33, 0x22, 0x11])
+            .register(0, 9)
+            .register(1, 3)
+            .register(2, 0x4000)
+            .run();
+        observed.assert_stopped(Status::UnsupportedInstruction, CODE);
+        assert_eq!(observed.register("r0"), 9, "{word:#010x}");
+        assert_eq!(observed.bytes(0x4000), "44332211", "{word:#010x}");
+        assert_eq!(observed.instructions(), 1);
+    }
 }
 
 #[test]
