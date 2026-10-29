@@ -850,6 +850,8 @@ Observed 2026-10-24 (emulated, E-FUJIMOD-XM1-SD-HOST-150), `--fresh-boot`, Class
 
 The FujiMod routes ran one after another and the two retained routes ran together, each on a workstation shared with other agents.
 
+Observed 2026-10-29 (emulated, E-FUJIMOD-XM1-PLAY-JPEG-150): with a 4 GiB FAT32 card holding one X-M1 JPEG, one PLAY input from the shooting screen moves UI mode `0x009500ec` from 3 to 4. The stock file client reads the whole file through SD CMD18, and the `0xfff63000` engine reaches FujiMod's decode-completion interrupt twice. The displayed frame is that photograph under the playback overlay. The card receives no write, and `media-read` returns the file unchanged. The decode requester is bound only statically, as `0x01220294` → `0x00d9882c` → `0x00d99714`, and the programmed decode source and output are unobserved. Pixel fidelity is unproved.
+
 ### Trajectory variants on FujiMod
 
 Render and key timing differ between the engines, so a recorded trajectory can need different press timing on FujiMod. A FujiMod variant of `NAME.json` is a separate file, `NAME.fujimod.json`, next to it. It may differ from the retained file only in press timing:
