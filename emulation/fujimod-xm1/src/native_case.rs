@@ -956,11 +956,11 @@ struct Frame {
     caller: usize,
 }
 
-/// The whole span of an LDM/STM or immediate pre-indexed LDRD/STRD, admitted
-/// at its lowest address, which the engine accesses first.
+/// The words of an LDM/STM or immediate pre-indexed LDRD/STRD, admitted
+/// together at the first address, which the engine accesses first.
 #[derive(Clone, Copy)]
 struct Transfer {
-    bytes: u64,
+    words: u32,
     need: Need,
 }
 
@@ -968,9 +968,13 @@ impl Transfer {
     fn of(word: u32) -> Option<Self> {
         let load = |bit: bool| if bit { Need::Read } else { Need::Write };
         if word >> 25 & 7 == 4 {
-            return Some(Self { bytes: 4 * u64::from((word & 0xffff).count_ones()), need: load(word & 1 << 20 != 0) });
+            return Some(Self { words: (word & 0xffff).count_ones(), need: load(word & 1 << 20 != 0) });
         }
-        (word & 0x0f50_00d0 == 0x0140_00d0).then(|| Self { bytes: 8, need: load(word & 0x20 == 0) })
+        (word & 0x0f50_00d0 == 0x0140_00d0).then(|| Self { words: 2, need: load(word & 0x20 == 0) })
+    }
+
+    fn admitted(self, case: &Case, first: u64) -> bool {
+        (0..self.words).all(|index| case.admits((first + 4 * u64::from(index)) & 0xffff_ffff, 4, self.need))
     }
 }
 
@@ -1093,8 +1097,8 @@ impl State {
     fn track(&mut self, cpu: &dyn Cpu, case: &Case, pc: u32, word: u32) -> Result<(), Step> {
         let next = pc.wrapping_add(4);
         match control(word) {
-            Control::BranchLink => self.call(cpu, case, branch_target(pc, word)?, next),
-            Control::Branch => self.tail(cpu, case, branch_target(pc, word)?),
+            Control::BranchLink => self.call(cpu, case, branch_target(pc, word), next),
+            Control::Branch => self.tail(cpu, case, branch_target(pc, word)),
             Control::BranchLinkRegister(register) => {
                 let target = arm_target(cpu, register)?;
                 self.call(cpu, case, target, next)
@@ -1192,10 +1196,11 @@ impl State {
         Ok(())
     }
 
+    /// An inadmissible table entry is left to the refusal of the load itself.
     fn dispatch(&mut self, cpu: &dyn Cpu, case: &Case, pc: u32, word: u32, table: Table) -> Result<(), Step> {
         let index = read(cpu, arm::CORE[(word & 15) as usize])?;
         let entry = match table {
-            Table::PcRelative => u64::from(pc + 8) + (u64::from(index) << 2),
+            Table::PcRelative => pc.wrapping_add(8).wrapping_add(index << 2),
             Table::Register => {
                 let base = read(cpu, arm::CORE[(word >> 16 & 15) as usize])?;
                 let amount = word >> 7 & 31;
@@ -1206,16 +1211,12 @@ impl State {
                     _ if amount == 0 => ((index as i32) >> 31) as u32,
                     _ => ((index as i32) >> amount) as u32,
                 };
-                if word & 1 << 23 != 0 {
-                    u64::from(base) + u64::from(offset)
-                } else {
-                    u64::from(base.wrapping_sub(offset))
-                }
+                if word & 1 << 23 != 0 { base.wrapping_add(offset) } else { base.wrapping_sub(offset) }
             }
         };
+        let entry = u64::from(entry);
         if !case.admits(entry, 4, Need::Read) {
-            self.log(AccessType::Read, entry, 4, 0);
-            return Err(Step::Stop(Status::MemoryGuard));
+            return Ok(());
         }
         let target = read_word(cpu, entry)?;
         if target & 3 != 0 {
@@ -1224,28 +1225,22 @@ impl State {
         self.tail(cpu, case, target)
     }
 
-    /// LDM with PC: the loaded PC must be the tracked return address.
+    /// LDM with PC: the loaded PC must be the tracked return address. An
+    /// inadmissible transfer is left to the refusal of its first access.
     fn load_multiple_return(&mut self, cpu: &dyn Cpu, case: &Case, word: u32) -> Result<(), Step> {
-        let base_register = word >> 16 & 15;
         let list = word & 0xffff;
-        if base_register == 15 || (word & 1 << 21 != 0 && list & 1 << base_register != 0) {
-            return Err(Step::Stop(Status::UnsupportedInstruction));
+        let base = read(cpu, arm::CORE[(word >> 16 & 15) as usize])?;
+        let words = list.count_ones();
+        let first = match (word & 1 << 23 != 0, word & 1 << 24 != 0) {
+            (true, false) => base,
+            (true, true) => base.wrapping_add(4),
+            (false, false) => base.wrapping_sub(4 * words - 4),
+            (false, true) => base.wrapping_sub(4 * words),
+        };
+        if !(Transfer { words, need: Need::Read }).admitted(case, u64::from(first)) {
+            return Ok(());
         }
-        let base = u64::from(read(cpu, arm::CORE[base_register as usize])?);
-        let words = u64::from(list.count_ones());
-        let before = u64::from((list & 0x7fff).count_ones());
-        let increment = word & 1 << 23 != 0;
-        let before_transfer = word & 1 << 24 != 0;
-        let first = if increment {
-            base.checked_add(if before_transfer { 4 } else { 0 })
-        } else {
-            base.checked_sub(4 * words - if before_transfer { 0 } else { 4 })
-        };
-        let Some(first) = first.filter(|&first| first % 4 == 0 && case.covers(first, 4 * words, Need::Read)) else {
-            self.log(AccessType::Read, first.unwrap_or(base), (4 * words) as i32, 0);
-            return Err(Step::Stop(Status::MemoryGuard));
-        };
-        let loaded = read_word(cpu, first + 4 * before)?;
+        let loaded = read_word(cpu, u64::from(first.wrapping_add(4 * (list & 0x7fff).count_ones())))?;
         self.return_to(case, loaded)
     }
 
@@ -1304,7 +1299,7 @@ impl State {
             Some(transfer) if transfer.need != need => {
                 return Err("the first access of a transfer has the wrong direction".to_owned());
             }
-            Some(transfer) => case.covers(address, transfer.bytes, need),
+            Some(transfer) => transfer.admitted(case, address),
             None => true,
         };
         Ok(self.status.is_none() && transfer && case.admits(address, size, need))
@@ -1547,9 +1542,8 @@ fn unpredictable(word: u32) -> bool {
     }
 }
 
-fn branch_target(pc: u32, word: u32) -> Result<u32, Step> {
-    let offset = i64::from(((word << 8) as i32) >> 6);
-    u32::try_from(i64::from(pc) + 8 + offset).map_err(|_| Step::Stop(Status::UnknownCall))
+fn branch_target(pc: u32, word: u32) -> u32 {
+    pc.wrapping_add(8).wrapping_add((((word << 8) as i32) >> 6) as u32)
 }
 
 /// The ARM-state target of BX/BLX Rm.
