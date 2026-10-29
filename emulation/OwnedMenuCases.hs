@@ -1,11 +1,11 @@
 {-# LANGUAGE GHC2021 #-}
+{-# LANGUAGE OverloadedStrings #-}
 -- | Original-versus-owned modal-75 editor-cancel differential cases.
 module Main where
 
 import Control.Monad (foldM, forM, forM_, unless, when)
 import Data.Aeson (Value, object, (.=))
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Lazy as BL
 import Data.Bits (shiftR, (.&.))
 import Data.List (find)
 import qualified Data.Map.Strict as M
@@ -48,11 +48,11 @@ transitionAddr = GuestAddress 0x00c12aac
 stockBytesCount :: Int
 stockBytesCount = 0x68
 
-stateBase, sessionBase, dataBase, logBase, stackBase, guardBase, faultyBase :: GuestAddress
+stateBase, sessionBase, dataBase, logRegionBase, stackBase, guardBase, faultyBase :: GuestAddress
 stateBase = GuestAddress 0x0146761c
 sessionBase = GuestAddress 0x00954d04
 dataBase = GuestAddress 0x00956000
-logBase = GuestAddress 0x00957000
+logRegionBase = GuestAddress 0x00957000
 stackBase = GuestAddress 0x00959000
 guardBase = GuestAddress 0x00958000
 faultyBase = GuestAddress 0x00958400
@@ -62,9 +62,9 @@ stackSize = 0x1000
 guardSize = 12
 
 queryFunction, stageFunction, transitionFunction, guardFunction, faultyAbiFunction, faultyStateFunction :: [Word32]
-queryFunction = [0xe59fc008, 0xe58c0000, 0xe59f0004, 0xe12fff1e, guestWord logBase, guestWord dataBase]
-stageFunction = [0xe59fc008, 0xe58c0004, 0xe58c1008, 0xe12fff1e, guestWord logBase]
-transitionFunction = [0xe59fc010, 0xe59c200c, 0xe2822001, 0xe58c200c, 0xe59c0010, 0xe12fff1e, guestWord logBase]
+queryFunction = [0xe59fc00c, 0xe58c0000, 0xe59f0008, 0xe5900000, 0xe12fff1e, guestWord logRegionBase, guestWord dataBase]
+stageFunction = [0xe59fc008, 0xe58c0004, 0xe58c1008, 0xe12fff1e, guestWord logRegionBase]
+transitionFunction = [0xe59fc010, 0xe59c200c, 0xe2822001, 0xe58c200c, 0xe59c0010, 0xe12fff1e, guestWord logRegionBase]
 guardFunction = [0xe59fc000, 0xe12fff1c, guestWord stockEntry]
 faultyAbiFunction = [0xe3a04000, 0xe12fff1e]
 faultyStateFunction = [0xe3a0001c, 0xe59fc004, 0xe1cc00b0, 0xe12fff1e, guestWord stateBase + 2]
@@ -164,9 +164,6 @@ data CaseSpec = CaseSpec
 exclusion :: String
 exclusion = "single modal-75 action; the retained query, stage-open and transition services are modeled at their stock entries; no scheduler, interrupt, frame or device path"
 
-regionName :: RegionId -> String
-regionName (RegionId name) = name
-
 regionJson :: CaseRegion -> Value
 regionJson (CaseRegion region permission) =
   object
@@ -233,7 +230,7 @@ writeCase directory spec = do
     when (not (B.all (== 0) (regionBytes region))) $
       B.writeFile (directory </> (regionName (regionIdOf region) ++ ".bin")) (regionBytes region)
   let path = directory </> "case.json"
-  BL.writeFile path (encodeCanonical (caseValue spec))
+  B.writeFile path (encodeCanonical (caseValue spec))
   pure path
 
 loadObserved :: FilePath -> FilePath -> IO NativeObservation
@@ -245,7 +242,7 @@ loadObserved runner path = do
 
 registerValue :: NativeObservation -> Register -> Word32
 registerValue observation register =
-  fromMaybe (error ("missing register " ++ registerLabel register)) (lookupRegister register (nativeRegisters observation))
+  fromMaybe (error ("missing register " ++ registerLabel register)) (lookupRegister register observation)
 
 regionBytesOf :: NativeObservation -> RegionId -> B.ByteString
 regionBytesOf observation ident =
@@ -259,6 +256,57 @@ preservedRegisters = [R0, R4, R5, R6, R7, R8, R9, R10, R11, Sp, Pc]
 
 memoryRegions :: [RegionId]
 memoryRegions = [RegionId "state", RegionId "session", RegionId "log"]
+
+readWordAt :: B.ByteString -> Int -> Word32
+readWordAt bytes offset =
+  fromIntegral (B.index bytes offset)
+    + fromIntegral (B.index bytes (offset + 1)) * 0x100
+    + fromIntegral (B.index bytes (offset + 2)) * 0x10000
+    + fromIntegral (B.index bytes (offset + 3)) * 0x1000000
+
+readHalfwordAt :: B.ByteString -> Int -> Word32
+readHalfwordAt bytes offset =
+  fromIntegral (B.index bytes offset) + fromIntegral (B.index bytes (offset + 1)) * 0x100
+
+semanticProblems :: Word32 -> Word32 -> Word32 -> NativeObservation -> [String]
+semanticProblems queryResult sessionValue transitionResult observation =
+  [ "query argument " ++ hexWord32 queryArgument ++ ", not " ++ hexWord32 0x53
+  | queryArgument /= 0x53
+  ]
+    ++ [ "return " ++ hexWord32 actualReturn ++ ", not " ++ hexWord32 expectedReturn
+       | actualReturn /= expectedReturn
+       ]
+    ++ [ "stage kind " ++ hexWord32 stageKind ++ ", not " ++ hexWord32 expectedStageKind
+       | stageKind /= expectedStageKind
+       ]
+    ++ [ "stage id " ++ hexWord32 stageId ++ ", not " ++ hexWord32 expectedStageId
+       | stageId /= expectedStageId
+       ]
+    ++ [ "transition count " ++ show transitionCount ++ ", not " ++ show expectedTransitionCount
+       | transitionCount /= expectedTransitionCount
+       ]
+    ++ [ "transition word " ++ hexWord32 transitionWord ++ ", not " ++ hexWord32 transitionResult
+       | transitionWord /= transitionResult
+       ]
+    ++ [ "state " ++ hexWord32 stateWord ++ ", not " ++ hexWord32 expectedState
+       | stateWord /= expectedState
+       ]
+  where
+    denied = queryResult /= 0 && sessionValue /= 1
+    expectedReturn = if denied then 0 else transitionResult
+    expectedStageKind = if denied then 0 else 0x0f
+    expectedStageId = if denied then 0 else 0x1a
+    expectedTransitionCount = if denied then 0 else 1
+    expectedState = if denied then 0 else if transitionResult `elem` [0xffffffff, 2] then 0x1d else 0
+    logBytes = regionBytesOf observation (RegionId "log")
+    stateBytes = regionBytesOf observation (RegionId "state")
+    queryArgument = readWordAt logBytes 0
+    stageKind = readWordAt logBytes 4
+    stageId = readWordAt logBytes 8
+    transitionCount = readWordAt logBytes 12
+    transitionWord = readWordAt logBytes 16
+    stateWord = readHalfwordAt stateBytes 2
+    actualReturn = registerValue observation R0
 
 compareObservation :: NativeObservation -> NativeObservation -> [String]
 compareObservation oracle candidate =
@@ -303,7 +351,7 @@ scenarioRegions queryResult sessionValue transitionResult sessionPermission =
   [ mkRegion (RegionId "state") stateBase 8 ReadWrite (B.replicate 8 0)
   , mkRegion (RegionId "session") sessionBase 8 sessionPermission (B.replicate 4 0 <> word32le sessionValue)
   , mkRegion (RegionId "data") dataBase 4 ReadOnly (word32le queryResult)
-  , mkRegion (RegionId "log") logBase 20 ReadWrite (B.replicate 16 0 <> word32le transitionResult)
+  , mkRegion (RegionId "log") logRegionBase 20 ReadWrite (B.replicate 16 0 <> word32le transitionResult)
   , mkRegion (RegionId "query-service") queryAddr 32 ReadExecute (assemble queryFunction)
   , mkRegion (RegionId "stage-service") stageAddr 32 ReadExecute (assemble stageFunction)
   , mkRegion (RegionId "transition-service") transitionAddr 32 ReadExecute (assemble transitionFunction)
@@ -324,7 +372,7 @@ scenario context identifier queryResult sessionValue transitionResult sessionRea
   where
     provenanceText = "differential case " ++ identifier ++ ": X-M1 1.50 FUN_00c77794 executes as the oracle; retained services are modeled at 0x0063a0f8, 0x00d3d858 and 0x00c12aac"
     baseRegions = scenarioRegions queryResult sessionValue transitionResult (if sessionReadOnly then ReadOnly else ReadWrite)
-    serviceFunctions = [(queryAddr, 24), (stageAddr, 20), (transitionAddr, 28)]
+    serviceFunctions = [(queryAddr, 28), (stageAddr, 20), (transitionAddr, 28)]
     stock = CaseSpec
       { caseId = identifier ++ "-stock"
       , caseProvenance = provenanceText
@@ -382,6 +430,8 @@ runScenario context identifier queryResult sessionValue transitionResult session
   probe <- loadObserved (contextRunner context) probePath
   when (nativeStatus probe /= Returned) $
     error (identifier ++ ": oracle did not return: " ++ runnerStatusLabel (nativeStatus probe))
+  unless (null (semanticProblems queryResult sessionValue transitionResult probe)) $
+    error (identifier ++ ": original fixture semantics: " ++ show (semanticProblems queryResult sessionValue transitionResult probe))
   let oracleRegisters = [(register, registerValue probe register) | register <- preservedRegisters]
       oracleMemory = [(ident, regionBytesOf probe ident) | ident <- memoryRegions]
       stockVerified = withExpected stockSpec oracleRegisters oracleMemory
@@ -459,6 +509,8 @@ main = do
   let context = Context runner output symbols kernelText stockBytes
       scenarios =
         [ ("om-q0-s0-tminus1", 0, 0, 0xffffffff, False)
+        , ("om-q0-s1-tminus1", 0, 1, 0xffffffff, False)
+        , ("om-q0-s2-t5d", 0, 2, 0x5d, False)
         , ("om-q1-s0-tminus1", 1, 0, 0xffffffff, False)
         , ("om-q1-s1-tminus1", 1, 1, 0xffffffff, False)
         , ("om-q1-s2-tminus1", 1, 2, 0xffffffff, False)
@@ -484,6 +536,7 @@ main = do
   guardPath <- writeCase (output </> "om-guard-fetch") (guardCase context)
   guard <- loadObserved runner guardPath
   let guardOk = nativeStatus guard == FetchGuard
+      controls :: [(String, Bool)]
       controls =
         [ ("faulty-abi", faultyAbiCaught)
         , ("faulty-state", faultyStateCaught)
@@ -491,7 +544,7 @@ main = do
         ]
       failed = [outcome | outcome <- outcomes, not (null (outcomeMismatches outcome))]
       controlsOk = all snd controls
-  BL.writeFile (output </> "owned-menu-results.json") (encodeCanonical (object
+  B.writeFile (output </> "owned-menu-results.json") (encodeCanonical (object
     [ "cases" .= [object
         [ "id" .= outcomeId outcome
         , "stock_status" .= runnerStatusLabel (outcomeStockStatus outcome)
