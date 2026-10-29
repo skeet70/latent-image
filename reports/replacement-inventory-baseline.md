@@ -296,13 +296,13 @@ Terms: **owned, qualified** is owned code with a published qualification record.
 | [#123](https://github.com/skeet70/latent-image/issues/123) field-row lane | Typed field-row binding in `replacement/service` ([record](../replacement/service/README.md), E-SERVICE-PACKAGED-RETAINED-150) | `FUN_00d52684` (`0x6038` bytes) with its callees, tables and epilogue; the installer and publication mechanism | Packaged FujiMod route; the stock probe executes for every row |
 | [#121](https://github.com/skeet70/latent-image/issues/121) recipe-bank classifiers | Page, slot and token classification behind the unchanged C ABI ([record](recipe-bank-ui-ownership.md), E-RECIPE-UI-PRIMARY-PRESERVATION-150, E-RECIPE-UI-VISUAL-150) | Dispatcher `FUN_00bfb028`; modal-75 actions `FUN_00c72e10`, `FUN_00c75ed4`, `FUN_00c76650`, `FUN_00c77794`; transition `FUN_00c12aac`; redraw, draw, storage and probe paths (E-RECIPE-MODAL-CONTRACT-150) | Packaged FujiMod primary over a 450-byte preserved range |
 
-The first wave retired only project C, the inline classifier if-chains; it retired no stock executable body. Each qualified increment either runs with its stock dependencies in the packaged route or is not integrated into one.
+The published qualified increments retired only project C, the inline classifier if-chains; none retires a stock executable body. Each runs with its stock dependencies in the packaged route or is not integrated into one.
 
 ### 8.2 Payload dependency surface
 
-The [bank ELF allowlist](../transport/README.md#bank-elf-allowlist) machine-checks the owned payload's direct stock surface. `menu/recipe_bank_allowlist.json` declares 73 stock call targets, 12 of them Classic Chrome, and 9 stock store ranges, 1 of them Classic Chrome. Call targets include instruction-built `movw`/`movt` addresses, and pointer stores the checker cannot prove are declared under `unproven`. The packaged route publishes 222 old words at install and restores them at unload; the 122,008-byte allocation stays held until power-off. RAM payloads run in stock task context after stock initialization.
+The [bank ELF allowlist](../transport/README.md#bank-elf-allowlist) machine-checks the owned payload's direct stock surface. For the qualified #121 packaged artifact at the first-wave checkpoint, `menu/recipe_bank_allowlist.json` declared 73 stock call targets, 12 of them Classic Chrome, and 9 stock store ranges, 1 of them Classic Chrome. Call targets include instruction-built `movw`/`movt` addresses, and pointer stores the checker cannot prove are declared under `unproven`. That qualified route published 222 old words at install and restored them at unload; the 122,008-byte allocation stays held until power-off. RAM payloads run in stock task context after stock initialization. These counts describe that artifact, not later source.
 
-That surface bounds what the payload calls and stores. It does not cover stock callers into a retained body, callbacks registered with stock services or computed references to them. No retained body has that closure or a forbidden-fetch guard in a capability scenario.
+The allowlist bounds what the payload calls and stores. It does not cover stock callers into a retained body, callbacks registered with stock services or computed references to them. No published qualified increment establishes that closure or a forbidden-fetch guard for a retained body.
 
 ### 8.3 Capability view
 
@@ -327,9 +327,9 @@ Section 2 holds the evidence behind each category. Gaps that no open child issue
 
 | #117 milestone | Prevented by | Owner |
 | --- | --- | --- |
-| Own accepted application behaviors | Only bounded decisions and one service lane are owned. The modal controller, capture and save lifecycle and the remaining state machines are stock. | #128, #129, #124; remaining categories #127 |
-| Retire proprietary application/runtime implementations | No stock body is retired. No retained body has caller, callback and computed-reference closure or a forbidden-fetch guard. Native qualification of tail-call veneers and the media-permission path needs a backend that executes them. | #125, #128, #129; remaining bodies #127 |
-| Replacement startup in emulation | Owned code runs only after stock initialization. | #126 |
+| Own accepted application behaviors | Published qualified ownership covers only bounded decisions and one service lane. The modal controller, capture and save lifecycle and the remaining state machines run stock code. | #128, #129, #124; remaining categories #127 |
+| Retire proprietary application/runtime implementations | No published qualified increment retires a stock body or establishes its caller, callback and computed-reference closure or a forbidden-fetch guard. Native qualification of tail-call veneers and the media-permission path needs a backend that executes them. | #125, #128, #129; remaining bodies #127 |
+| Replacement startup in emulation | Qualified owned code runs only after stock initialization. | #126 |
 | Replacement startup on hardware | No qualified physical route. | #85, #60 |
 | Persistent deployment | Not pursued. | None |
 
@@ -341,7 +341,7 @@ These are inputs for selection under #127, not selections.
 
 - Behavior: fills eleven words (depth, root, node type, class, cursor token, current-value token, raw cursor, visible ordinal, scroll state, page calculation, navigation word) from the current frame, its values array and the stock navigation cells. It writes only the destination snapshot and call frames ([review](review/select-blink-83.md)).
 - Existing evidence: 264 bytes in image 4; x70view C links exact, as do the accessors at `0x0061d154`, `0x0061d1a4`, `0x0061d244` and `0x0061d294` ([firmware extraction](firmware-extraction.md), E-XM1-MATCHING-C-RECIPE-CENSUS-150). The real-byte kernel cases in `emulation/RecipeBankCases.hs`, such as `c-select-real-bytes`, already declare the original body and `0x0061d154` as executable stock code for the legacy native runner.
-- Consumers: the bank through `rb_call_snapshot_store`; `FUN_00c72e10` through `FUN_0061d154`; the post-transition SET notification tests `FUN_0061d1f4` and `FUN_0061d244`; image-6 drawing code including `FUN_01165aa0`. **byte-read**, direct `bl` sites only and not a closure: one in each of the eight accessors from `0x0061d0e4` to `0x0061d334`, three at `0x0061cedc`, `0x0061cef4` and `0x0061cf0c`, and image-6 sites including `0x0111f20c`, `0x0111f6f8` and `0x011242f4`.
+- Consumers: the bank through `rb_call_snapshot_store`; `FUN_00c72e10` through `FUN_0061d154`; the post-transition SET notification tests `FUN_0061d1f4` and `FUN_0061d244`; image-6 drawing code including `FUN_01165aa0`. These roles are not a caller closure.
 - Value: a read-only service under both the #128 controller path and the bank, with existing original-binary case inputs.
 - Prerequisites: the complete stock caller and computed-reference closure, because stock menus call it directly and a replacement is global unless every caller is retargeted; expectations independent of the x70view C; a forbidden-fetch guard on the original body in a packaged menu route; a reviewed publication of the replaced entry.
 - Risk: a wrong word moves cursor, marker or scroll state across every menu.
@@ -349,7 +349,7 @@ These are inputs for selection under #127, not selections.
 **B. Modal-75 SET, confirm and leave actions: `FUN_00c72e10`, `FUN_00c75ed4`, `FUN_00c76650`.**
 
 - Evidence: E-RECIPE-MODAL-CONTRACT-150 binds actions `0x5a`, `0x73` and `0x81` to them. The [ownership report](recipe-bank-ui-ownership.md#retained-modal-contract) records the SET gates and the post-transition frame reads. [Recipe design](recipe-design.md) section 17.8 records `FUN_00c72e10`'s special-case classes and generic leaf tail. The bank reaches all three through `menu/recipe_bank_arm.S` trampolines and returns them for unclaimed pages.
-- Value: #128 owns the dispatcher and `FUN_00c77794` and routes the remaining delegates here. These three are the remaining stock actions on the bank's cells, so owning them completes the bank's entry, SET, confirm and leave lifecycle over the owned dispatcher.
+- Value: #128 is planned to own the dispatcher and `FUN_00c77794` and routes the remaining delegates to #127. If #128 qualifies, these three remain the stock actions on the bank's cells, and owning them would complete the bank's entry, SET, confirm and leave lifecycle over an owned dispatcher.
 - Prerequisites: the #128 dispatcher contract and #125. The 55 native UI cases execute the synthetic `emulation/recipe-bank-ui-model.c` at these addresses, so original-binary comparison cases do not exist. Other modal-75 pages use the same actions, so `FUN_00c72e10`'s stock special cases (classes 5, `0x184`, `0x141`, `0xf5`, `0x167`, `0x26`, `0x19`, `0xed`, `0xee`, node id `0x5b`) are in scope. Candidate A is an input to its notification reads.
 - Risk: global use by modal 75 and the gate cells' unqualified device-input states.
 
