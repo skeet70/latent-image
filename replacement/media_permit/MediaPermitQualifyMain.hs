@@ -236,7 +236,7 @@ initialGlobals scenario = putU16 (fromIntegral (mirrorBase - globalsBase)) 0x136
       , (countCell, if scCountModel scenario then 3 else 0)
       , (countArmed, if scCountModel scenario then 1 else 0)
       ]
-        ++ [ (listAddress slot, 0x5000 + fromIntegral slot) | (slot, _) <- scKinds scenario ]
+        ++ [ (listAddress slot, fromIntegral slot) | (slot, _) <- scKinds scenario ]
         ++ [ (listAddress slot + 4, kindWord kind) | (slot, kind) <- scKinds scenario ]
         ++ [ (listAddress terminator, 0xffffffff), (listAddress terminator + 4, 0) ]
         ++ [ (keyAddress (scLayout scenario) (kindAt scenario slot) slot, scKey scenario) | slot <- scKeySlots scenario ]
