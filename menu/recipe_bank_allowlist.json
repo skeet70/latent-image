@@ -169,9 +169,9 @@
       "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_leave_edge"
     },
     {
-      "address": "0x00c77794",
-      "name": "rb_call_editor_cancel",
-      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_editor_cancel"
+      "address": "0x0063a0f8",
+      "name": "rb_call_modal_query",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_modal_query"
     },
     {
       "address": "0x00d1a7d8",

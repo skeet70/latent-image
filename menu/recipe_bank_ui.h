@@ -394,7 +394,8 @@ extern void rb_call_name_label_position(uint32_t label, int8_t *x, int8_t *y);
 extern uint32_t rb_call_backdrop_suppressed(void);
 extern uint32_t rb_call_stock_key_right(void);
 extern uint32_t rb_call_stock_key_left(void);
-extern uint32_t rb_call_editor_cancel(void);
+/* Owned modal-75 editor-cancel action replacing FUN_00c77794. */
+extern uint32_t rb_ui_editor_cancel(void);
 extern uint32_t rb_name_edit_cancel(void);
 void rb_bank_draw_root(uint32_t root);
 /* Points RB_UI_CURRENT_ROW_CELL at the open field list's staged row. */

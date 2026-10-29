@@ -234,7 +234,7 @@ RB_TRAMPOLINE rb_call_leave_edge, 0x00c76650
 RB_TRAMPOLINE rb_call_draw_root_prepare, 0x01166200
 RB_TRAMPOLINE rb_call_stock_key_right, 0x00c70528
 RB_TRAMPOLINE rb_call_stock_key_left, 0x00c6f14c
-RB_TRAMPOLINE rb_call_editor_cancel, 0x00c77794
+RB_TRAMPOLINE rb_call_modal_query, 0x0063a0f8
 RB_TRAMPOLINE rb_call_name_style, 0x01130e68
 RB_TRAMPOLINE rb_call_draw_mode, 0x01112b2c
 RB_TRAMPOLINE rb_call_name_background, 0x0112db04
