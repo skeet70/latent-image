@@ -6,8 +6,8 @@
 //! Engine pages carry the union of the permissions of the regions they touch.
 //! The memory hook admits each access against exact logical regions and
 //! alignment, and refuses any other through `Cpu::refuse_access` before the
-//! access happens. At the first access of an LDM/STM or an immediate
-//! pre-indexed LDRD/STRD it admits the instruction's whole transfer, so a
+//! access happens. At the first access of an LDM/STM or a pre-indexed
+//! LDRD/STRD it admits the instruction's whole transfer, so a
 //! refused transfer has no effect. Unmapped accesses fault and are refused.
 //!
 //! The case's call contract is tracked from the decoded control-flow words
@@ -956,7 +956,7 @@ struct Frame {
     caller: usize,
 }
 
-/// The words of an LDM/STM or immediate pre-indexed LDRD/STRD, admitted
+/// The words of an LDM/STM or pre-indexed LDRD/STRD, admitted
 /// together at the first address, which the engine accesses first.
 #[derive(Clone, Copy)]
 struct Transfer {
@@ -970,7 +970,7 @@ impl Transfer {
         if word >> 25 & 7 == 4 {
             return Some(Self { words: (word & 0xffff).count_ones(), need: load(word & 1 << 20 != 0) });
         }
-        (word & 0x0f50_00d0 == 0x0140_00d0).then(|| Self { words: 2, need: load(word & 0x20 == 0) })
+        (word & 0x0f10_00d0 == 0x0100_00d0).then(|| Self { words: 2, need: load(word & 0x20 == 0) })
     }
 
     fn admitted(self, case: &Case, first: u64) -> bool {

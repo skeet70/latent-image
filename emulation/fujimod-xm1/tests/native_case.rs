@@ -406,6 +406,65 @@ fn a_doubleword_store_reaching_a_read_only_subrange_has_no_effect() {
 }
 
 #[test]
+fn register_offset_doublewords_admit_four_byte_aligned_transfers() {
+    // ldrd r0, r1, [r2, r3]; strd r0, r1, [r2, r3]
+    let loaded = Case::new(&[0xe182_00d3, BX_LR])
+        .region(0x4004, READ, &[0x44, 0x33, 0x22, 0x11, 0xdd, 0xcc, 0xbb, 0xaa])
+        .register(2, 0x4000)
+        .register(3, 4)
+        .run();
+    loaded.assert_returned();
+    assert_eq!(loaded.register("r0"), 0x1122_3344);
+    assert_eq!(loaded.register("r1"), 0xaabb_ccdd);
+    assert_eq!(loaded.register("r2"), 0x4000);
+    assert_eq!(loaded.register("r3"), 4);
+
+    let stored = Case::new(&[0xe182_00f3, BX_LR])
+        .region(0x4004, READ_WRITE, &[0; 8])
+        .register(0, 0x1122_3344)
+        .register(1, 0xaabb_ccdd)
+        .register(2, 0x4000)
+        .register(3, 4)
+        .run();
+    stored.assert_returned();
+    assert_eq!(stored.bytes(0x4004), "44332211ddccbbaa");
+    assert_eq!(stored.register("r2"), 0x4000);
+    assert_eq!(stored.register("r3"), 4);
+}
+
+#[test]
+fn a_register_doubleword_store_reaching_read_only_memory_has_no_first_store() {
+    let observed = Case::new(&[0xe182_00f3, BX_LR])
+        .shared_page()
+        .register(0, 0x1122_3344)
+        .register(1, 0xaabb_ccdd)
+        .register(2, 0x4000)
+        .register(3, 4)
+        .run();
+    observed.assert_stopped(Status::MemoryGuard, CODE);
+    assert_eq!(observed.bytes(0x4004), "00000000");
+    assert_eq!(observed.bytes(0x4008), "ddccbbaa");
+    assert_eq!(observed.register("r2"), 0x4000);
+    assert_eq!(observed.observation.memory_provenance_total, "0");
+}
+
+#[test]
+fn a_register_doubleword_load_reaching_a_gap_leaves_both_destinations() {
+    let observed = Case::new(&[0xe182_00d3, BX_LR])
+        .region(0x4004, READ, &[0x44, 0x33, 0x22, 0x11])
+        .register(0, 0x77)
+        .register(1, 0x88)
+        .register(2, 0x4000)
+        .register(3, 4)
+        .run();
+    observed.assert_stopped(Status::MemoryGuard, CODE);
+    assert_eq!(observed.register("r0"), 0x77);
+    assert_eq!(observed.register("r1"), 0x88);
+    assert_eq!(observed.register("r2"), 0x4000);
+    assert_eq!(observed.observation.memory_provenance_total, "0");
+}
+
+#[test]
 fn a_load_from_an_unmapped_page_leaves_its_destination_and_base() {
     // ldr r0, [r1], #4
     let observed = Case::new(&[0xe491_0004, BX_LR]).register(0, 0x77).register(1, 0x5000).run();
