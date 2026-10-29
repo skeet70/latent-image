@@ -6,7 +6,7 @@
   "asset": "xm1-150.sensor-raw16-ramp12",
   "raster": {
     "width": 5120,
-    "height": 3300
+    "height": 3348
   },
   "scene": "raw16-index-ramp12",
   "sensor_period_ticks": 400000,
