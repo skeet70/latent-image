@@ -419,6 +419,42 @@ sh_binary(
     visibility = ["//visibility:public"],
 )
 
+# Derives the X-M1 run document with a declared synthetic RAW16 sensor source; see
+# README "Synthetic sensor source on FujiMod".
+haskell_binary(
+    name = "fujimod-xm1-sensor-fixture",
+    srcs = ["FujiModSensorFixture.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:json",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_test(
+    name = "fujimod-xm1-sensor-fixture-tests",
+    size = "small",
+    srcs = ["FujiModSensorFixtureTests.hs"],
+    args = ["$(rootpath :fujimod-xm1-sensor-fixture)"],
+    data = [":fujimod-xm1-sensor-fixture"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+    ],
+)
+
 haskell_test(
     name = "fujimod-xm1-tests",
     size = "small",

@@ -880,6 +880,33 @@ Wall time of `bazel run //emulation:xm1-viewer -- --ram-push-e2e --cardless [--f
 
 On FujiMod `ram-alloc` and `ram-push` took 6.0 and 60.6 s (volatile), 1.6 and 11.0 s (Classic Chrome) and 1.9 and 10.8 s (icon). On the retained engine they took 57.3 and 303.4 s, 8.2 and 35.4 s, and 10.6 and 59.4 s. Every pair's `e2e-observation-compare` reports 0 differences.
 
+### Synthetic sensor source on FujiMod
+
+`//emulation:fujimod-xm1-sensor-fixture` derives a separate run document whose `image_input` node has a declared synthetic frame source ([#131](https://github.com/skeet70/latent-image/issues/131)). The base `xm1-150.json` keeps `sensor`, `frame_period` and `sensor_period_ticks` null and is not changed. The generator refuses a base whose `image_input` already has a sensor, frame period or sensor period, whose RAW interrupt is not core 0 line 36, or whose periodic input clock period differs from the fixture's sensor period.
+
+```sh
+bazel run //emulation:fujimod-xm1-sensor-fixture -- write --run emulation/fujimod-xm1/data/xm1-150.json \
+  --fixture fixtures/fujimod-sensor/xm1-150-raw16-ramp12.json --output private-data/NEW/xm1-150-raw16-ramp12.json
+bazel run //emulation:fujimod-xm1-sensor-fixture -- verify --run BASE.json --fixture FIXTURE.json --document DERIVED.json
+```
+
+Both print the identity record: fixture id and SHA-256, base and derived run-document SHA-256, and the sensor's frames name, raster, scene, asset and period. `verify` fails unless the document is byte-identical to the derivation. A run uses the derived document as the bridge's `--run`.
+
+Attachment contract (source-inspected, FujiMod `9bb8bd90`): the image-input model takes an optional `sensor` of `frames`, `options` and `controls` (`crates/emulator-exr2-isp-input/src/construct.rs`), whose frames come from a scene `sensors` entry of width, height, `raw16` or `rgb24` pixels and a generated asset (`crates/emulator/src/session/preparation.rs`). `options.sensor_period_ticks` runs a sensor clock beside the periodic phase clock. At each sensor period `frame()` (`input.rs`) latches the frame and arms RAW channel 2 when bit 0 of `0x004` and bit 0 of `0x35c` are set, no channel-2 completion is pending and no transfer is active; channel 3 arms the same way on `0x378`. Channel 2 needs format `0x354` bits 20-22 of 3 or 4 and bit 1 of `0x004` clear; bit 16 of `0x004` selects Packed12, otherwise U16. The window is left `0x014` bits 16-29, top `0x018` bits 16-29, height `0x018` bits 0-13 plus 1 and width `0x024` bits 0-13, even and at most `0x014` bits 0-12 plus 1, and must lie inside the sensor raster. The transfer writes the window's rows to `0x358` over `raw_dma_ticks` (153,600) with pitch `row_bytes(width rounded up to (4 if Packed12 else 1) << (format + 3) samples) + 0x360`. Completion raises core 0 line 36 when `0x354` bit 28 is set, and line 37 for channel 3 with `0x370` bit 28; bit 0 of the guest's `0x350`/`0x36c` ACK rearms the channel. The fixture attaches no sensor controls, so every readout is valid, sensor commands and timing are ignored and no exposure, aperture or projection applies.
+
+X-M1 window programming (static inference over the decompiled 1.50 images; values unobserved): `0x0065f51c` writes `0xfff10014` and `0xfff10018` from a `{x, w, y, h}` rectangle with `w` at most `0x2000` and `h` at most `0x4000`. Its only caller `0x00d9fd54` passes the rectangle at `0x016996b8` when bit 0 of `u32[0x01699698]` is set. `0x0065f8bc` writes `0xfff10024`, at most `0x3000`.
+
+Fixture choices in `fixtures/fujimod-sensor/xm1-150-raw16-ramp12.json` are declared emulator inputs, not sensor measurements:
+- Raster 5120 × 3300, the smallest raster containing two X-M1 RAW extents in project evidence: the 5120 × 3288 full raw size of an owner X-M1 1.50 RAF and the 4992 × 3300 U16 still-RAW readout of the retained engine (`xm1-upstream/emulator/input_processing_activation.py`). The firmware's window origin is unobserved.
+- Frames `raw16-index-ramp12`: sample `i` of the row-major raster holds `i mod 4096`, so the channel-2 sample at window row `r`, column `c` is `((top + r) × 5120 + left + c) mod 4096` in both packings. It represents no scene, exposure or radiometry.
+- CFA: the base `image_input` 6×6 layout. RAW16 readout ignores it; FujiMod's RAW readback uses it.
+- Sensor period 400,000 ticks, the base periodic input clock's declared unmeasured period. The phase clock stays periodic.
+- Black 0, full scale 4095 and reference white 4095 per channel: required by the FujiMod sensor part and bypassed by RAW16 frames; not X-M1 calibration.
+
+Checkpoint identity: the RAM-push and USB-toggle bridges key checkpoints on the run document's SHA-256 (`ram_push.rs` `boot_key`, `toggle.rs` `route_key`), so a derived document never selects a base-document checkpoint. FujiMod refuses to restore a sensor-null snapshot into an attached session: the image input's checkpoint child count differs (`input.rs` `validate_checkpoint`), as do the resource sensor-frame keys (`emulator-exr2-plan/src/resources/checkpoint.rs`). The sensor checkpoint carries its raster, CFA, black level and response, and each snapshot carries the 33,792,000-byte frame.
+
+A window outside 5120 × 3300 stops the run with `RAW channel2 requires a bounded input window`; the observed rectangle then sets the raster. If the firmware arms channel 2 or 3 during live view, frames are delivered there as well. A delivered frame establishes no recorder state, JPEG, file or image quality.
+
 ## Stock native cases: USB toggle (N1, N2)
 
 `//emulation:usb-toggle-cases` generates and runs the native cases of [the USB toggle verification plan](../reports/usb-personality-toggle.md#81-native-harness) into `private-data/analysis/x-m1-1.50/native-case/usb-toggle/` (`--out` overrides), with `results.md` and `results.json` beside the cases and reports. It pins the stock image-4 and image-5 decodes and the linked stub `//host/firmware:usb-toggle-stub` (SHA-256 `35a7e9597f06bdc1dda250d991df4a468d2401e5ae3c24c22e37403318746d62`), builds the patched image 5 from the stock decode with the `FujiAF.UsbToggle` writes, and refuses to run unless the stub blob and hook word equal those of the pinned CC and RC0 image-5 patch sets under `private-data/analysis/usb-toggle/`. It exits nonzero unless every case passes and all 80 Q = 0 stock/patched pairs match.

@@ -5,3 +5,5 @@ Keep synthetic or explicitly redistributable cases here with origin, license, ha
 Cases for the [native harness](../emulation/README.md#case-contract-and-execution-authority) must declare CPU/mode, memory permissions, registers, stubs, expected outputs, and finite budgets. Engine initialization alone is not a stock fixture and does not satisfy G3.
 
 The current hand-encoded synthetic cases live in [`emulation/fixtures/`](../emulation/fixtures/PROVENANCE.md) alongside their provenance and independent expected arithmetic/state. They establish the bounded runner's behavior on a declared synthetic CPU; they contain no firmware-derived bytes and do not satisfy the stock milestone or G3.
+
+[`fujimod-sensor/`](fujimod-sensor/) declares synthetic FujiMod sensor sources. Their geometry, frames, clock and response choices, derivation command and limits are in [the emulation README](../emulation/README.md#synthetic-sensor-source-on-fujimod).
