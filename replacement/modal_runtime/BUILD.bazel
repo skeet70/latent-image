@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 
 filegroup(
     name = "module",
@@ -111,5 +111,23 @@ haskell_binary(
         "//host:text",
         "//host:vector",
         "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_test(
+    name = "closure-soundness-tests",
+    srcs = ["ClosureSoundnessTests.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+    ],
+    deps = [
+        ":closure",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+        "//host:vector",
     ],
 )

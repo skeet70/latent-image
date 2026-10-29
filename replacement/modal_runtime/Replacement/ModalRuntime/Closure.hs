@@ -437,7 +437,7 @@ execute analysis address word instruction regs = case instruction of
         updated = combine (+) base (offsetValue address regs offset)
         effective = knownValue (if indexing == PostIndexed then base else updated)
         literal
-          | rn == pc, indexing == OffsetOnly, width == Word, Just target <- effective = maybe Unknown Known (memoryWord memory target)
+          | rn == pc, indexing == OffsetOnly, width == Word, Just target <- effective = maybe Unknown Known (memoryWord (analysisMemory analysis) target)
           | otherwise = Unknown
         loaded = case width of
           Dual -> [(rt, Unknown), (nextReg rt, Unknown)]
