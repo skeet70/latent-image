@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "xm1-150-raw16-ramp12",
+  "image_input": "image_input",
+  "frames": "synthetic_raw16",
+  "asset": "xm1-150.sensor-raw16-ramp12",
+  "raster": {
+    "width": 5120,
+    "height": 3300
+  },
+  "scene": "raw16-index-ramp12",
+  "sensor_period_ticks": 400000,
+  "response": {
+    "black": 0,
+    "full_scale": 4095,
+    "reference_white": [4095, 4095, 4095]
+  }
+}
