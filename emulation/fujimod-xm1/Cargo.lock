@@ -820,6 +820,7 @@ dependencies = [
  "fujimod-emulator-cpu",
  "fujimod-emulator-devices",
  "fujimod-emulator-exr2-board",
+ "fujimod-emulator-exr2-isp-input",
  "fujimod-emulator-exr2-plan",
  "fujimod-emulator-exr2-system",
  "fujimod-emulator-ip",

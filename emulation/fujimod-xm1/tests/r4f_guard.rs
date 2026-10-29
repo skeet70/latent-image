@@ -60,3 +60,46 @@ fn an_enabled_mpu_region_above_eleven_stops_the_run() {
     // mov r0, #11; mcr p15,0,r0,c6,c2,0; mov r1, #0x3f; mcr p15,0,r1,c6,c1,2
     assert_eq!(stop(&[0xe3a0_000b, 0xee06_0f12, 0xe3a0_103f, 0xee06_1f51]), None);
 }
+
+fn shutter_machine() -> Machine {
+    let machine = machine(&[]);
+    let table = &machine.document.firmware.key_table;
+    for (code, row, pin, interrupt) in [(7u32, 7, 2u32, 10u16), (8, 6, 3, 11)] {
+        let mut descriptor = [0u8; 28];
+        descriptor[..4].copy_from_slice(&code.to_le_bytes());
+        descriptor[9] = 4;
+        descriptor[12..16].copy_from_slice(&pin.to_le_bytes());
+        descriptor[16..18].copy_from_slice(&1u16.to_le_bytes());
+        descriptor[18..20].copy_from_slice(&interrupt.to_le_bytes());
+        machine.session.board.write_physical(table.base.0 + row * table.row_bytes, &descriptor).unwrap();
+    }
+    machine
+}
+
+#[test]
+fn physical_full_shutter_holds_both_contacts_without_changing_firmware_ram() {
+    use fujimod_xm1::guest::PhysicalShutterPosition::{Full, Half, Released};
+
+    let mut machine = shutter_machine();
+    let base = machine.document.firmware.key_table.base.0;
+    let before = machine.read(base, 8 * 28).unwrap();
+    for (position, expected) in [(Released, 0xc), (Half, 0x8), (Full, 0), (Half, 0x8), (Released, 0xc)] {
+        machine.set_shutter_position(position).unwrap();
+        machine.run(1_000);
+        machine.require_running().unwrap();
+        let pads = machine.read(0xfff89014, 4).unwrap();
+        assert_eq!(u32::from_le_bytes(pads.try_into().unwrap()) & 0xc, expected);
+        assert_eq!(machine.read(base, 8 * 28).unwrap(), before);
+    }
+}
+
+#[test]
+fn a_stopped_machine_refuses_a_physical_shutter_transition() {
+    use fujimod_xm1::guest::PhysicalShutterPosition::Full;
+
+    let mut machine = shutter_machine();
+    let before = machine.read(0xfff89014, 4).unwrap();
+    machine.failure = Some("synthetic strict stop".into());
+    assert!(machine.set_shutter_position(Full).is_err());
+    assert_eq!(machine.read(0xfff89014, 4).unwrap(), before);
+}

@@ -1,7 +1,7 @@
 //! A strict X-M1 session and its run document; runs record armed instruction
 //! points and stop at the R4F guard's refusals.
 
-use crate::guest::{DialTurn, GpioKey, MenuState, ModeDialPosition, ModeDialWindow, Press, RouteKey, ShutterStage, set_adc};
+use crate::guest::{DialTurn, GpioKey, MenuState, ModeDialPosition, ModeDialWindow, PhysicalShutterPosition, Press, RouteKey, ShutterStage, set_adc};
 use crate::r4f::Guard;
 use crate::run::RunDocument;
 use crate::sd_host::{Contacts, MediaRead, RetainedCard, SectorAddress, SectorCount, SdHost};
@@ -194,6 +194,30 @@ impl Machine {
             ShutterStage::Full => GpioReleaseKey::FullPress,
         };
         self.gpio_press(key, release, pulse)
+    }
+
+    pub fn set_shutter_position(&mut self, position: PhysicalShutterPosition) -> Result<(), String> {
+        self.require_running()?;
+        let half = self.document.firmware.shutter(&self.session, ShutterStage::Half)?;
+        let full = self.document.firmware.shutter(&self.session, ShutterStage::Full)?;
+        let gpio = &self.document.gpio.0;
+        let mut drive = |key: GpioKey, pressed| {
+            self.session.gpio(gpio, key.port, key.pin, if pressed { key.pressed_high } else { !key.pressed_high })
+        };
+        match position {
+            PhysicalShutterPosition::Released => {
+                drive(full, false)?;
+                drive(half, false)
+            }
+            PhysicalShutterPosition::Half => {
+                drive(full, false)?;
+                drive(half, true)
+            }
+            PhysicalShutterPosition::Full => {
+                drive(half, true)?;
+                drive(full, true)
+            }
+        }
     }
 
     /// Releases the pad after the hold and waits for the row's debounced release byte.
