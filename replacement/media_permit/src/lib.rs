@@ -190,7 +190,8 @@ pub enum ResolveError {
 pub enum PermitStatus {
     Applied(SlotIndex),
     UnresolvedKey,
-    /// A retained service returned outside its admitted domain.
+    /// A retained service returned outside its admitted domain. Stock
+    /// `0xe7e95c` continues there with the 0 context of `0xe87ad4(-1)`.
     Refused,
 }
 
@@ -339,9 +340,9 @@ fn apply_kind_broadcast(
 }
 
 /// `FUN_00e7e95c`: apply the mirrored permit to the frame named by word 1.
-/// Entered only by thunks `0x00e6a74c` (machine 5 action 10, class 5 in
-/// states 1 and 2) and `0x00e6bb88` (machine 6 action 22, class 14 in
-/// state 1); message 0x1367 is the only message mapped to either class.
+/// Entered by thunks `0x00e6a74c` (machine 5 action 10, class 5 in states 1
+/// and 2) and `0x00e6bb88` (machine 6 action 22, class 14 in state 1); the
+/// machine 5 and 6 chains map only message 0x1367 to those classes.
 pub fn apply_mirrored_permit(runtime: &mut impl PermitRuntime) -> PermitStatus {
     let mirrored = runtime.mirror();
     let slot = match resolve(runtime, runtime.layout(), FrameKey(mirrored.word1.0)) {
