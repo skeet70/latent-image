@@ -6,14 +6,17 @@ const CONTEXT: usize = 0x009a0000;
 const REQUESTED_EVENTS: usize = 0x4c;
 const WAIT: u32 = 0x0400_0000;
 
+#[inline(always)]
 fn read(address: usize) -> u32 {
     unsafe { core::ptr::read_volatile(address as *const u32) }
 }
 
+#[inline(always)]
 fn write(address: usize, value: u32) {
     unsafe { core::ptr::write_volatile(address as *mut u32, value) }
 }
 
+#[inline(always)]
 fn record(entry: u32) {
     let index = read(TRACE_COUNT) as usize;
     write(TRACE + index * 4, entry);
