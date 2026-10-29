@@ -96,6 +96,7 @@ haskell_binary(
         "-Wall",
         "-Werror",
         "-O2",
+        "-threaded",
     ],
     visibility = ["//visibility:public"],
     deps = [
