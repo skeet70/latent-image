@@ -1,0 +1,98 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+filegroup(
+    name = "module",
+    srcs = ["src/lib.rs"],
+    visibility = ["//replacement/bank:__pkg__"],
+)
+
+filegroup(
+    name = "adapter",
+    srcs = ["src/stock.rs"],
+    visibility = ["//replacement/bank:__pkg__"],
+)
+
+filegroup(
+    name = "relink-sources",
+    srcs = [
+        "media_permit.ld",
+        "rb_media_permit_stock.S",
+        "src/lib.rs",
+        "src/stock.rs",
+    ],
+    visibility = ["//replacement/bank:__pkg__"],
+)
+
+xm1_rust_staticlib(
+    name = "media-permit-lib",
+    src = "standalone.rs",
+    crate_name = "media_permit_candidate",
+    data = [
+        "src/lib.rs",
+        "src/stock.rs",
+    ],
+    rustc_flags = ["-C", "function-sections=yes"],
+)
+
+xm1_rust_elf(
+    name = "media-permit-candidate",
+    asm_srcs = ["rb_media_permit_stock.S"],
+    entry = "rb_media_permit_case",
+    link_script = "media_permit.ld",
+    rust_staticlib = ":media-permit-lib",
+    visibility = ["//visibility:public"],
+)
+
+xm1_rust_staticlib(
+    name = "media-permit-defect-lib",
+    testonly = True,
+    src = "standalone.rs",
+    crate_name = "media_permit_defect",
+    data = [
+        "src/lib.rs",
+        "src/stock.rs",
+    ],
+    rustc_flags = [
+        "--cfg",
+        "media_permit_defect",
+        "-C",
+        "function-sections=yes",
+    ],
+)
+
+xm1_rust_elf(
+    name = "media-permit-defect",
+    testonly = True,
+    asm_srcs = ["rb_media_permit_stock.S"],
+    entry = "rb_media_permit_case",
+    link_script = "media_permit.ld",
+    rust_staticlib = ":media-permit-defect-lib",
+    visibility = ["//visibility:public"],
+)
+
+haskell_binary(
+    name = "media-permit-qualification",
+    srcs = ["MediaPermitQualifyMain.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:text",
+    ],
+)

@@ -1,0 +1,93 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "low-lib",
+    src = "low.rs",
+    crate_name = "media_permit_low",
+    data = ["src/model.rs"],
+    rustc_flags = ["-C", "function-sections=yes"],
+)
+
+xm1_rust_elf(
+    name = "low",
+    entry = "rb_mp_memcpy",
+    link_script = "low.ld",
+    rust_staticlib = ":low-lib",
+)
+
+xm1_rust_staticlib(
+    name = "side-a-lib",
+    src = "side_a.rs",
+    crate_name = "media_permit_side_a",
+    data = ["src/model.rs"],
+    rustc_flags = ["-C", "function-sections=yes"],
+)
+
+xm1_rust_elf(
+    name = "side-a",
+    entry = "rb_mp_handback",
+    link_script = "side_a.ld",
+    rust_staticlib = ":side-a-lib",
+)
+
+xm1_rust_staticlib(
+    name = "fatal2-lib",
+    src = "fatal2.rs",
+    crate_name = "media_permit_fatal2",
+    data = ["src/model.rs"],
+    rustc_flags = ["-C", "function-sections=yes"],
+)
+
+xm1_rust_elf(
+    name = "fatal2",
+    entry = "rb_mp_fatal2",
+    link_script = "fatal2.ld",
+    rust_staticlib = ":fatal2-lib",
+)
+
+xm1_rust_staticlib(
+    name = "side-b-lib",
+    src = "side_b.rs",
+    crate_name = "media_permit_side_b",
+    data = ["src/model.rs"],
+    rustc_flags = ["-C", "function-sections=yes"],
+)
+
+xm1_rust_elf(
+    name = "side-b",
+    entry = "rb_mp_fatal",
+    link_script = "side_b.ld",
+    rust_staticlib = ":side-b-lib",
+)
+
+xm1_rust_staticlib(
+    name = "command-lib",
+    src = "command.rs",
+    crate_name = "media_permit_command",
+    data = ["src/model.rs"],
+    rustc_flags = ["-C", "function-sections=yes"],
+)
+
+xm1_rust_elf(
+    name = "command",
+    entry = "rb_mp_command",
+    link_script = "command.ld",
+    rust_staticlib = ":command-lib",
+)
+
+xm1_rust_staticlib(
+    name = "cancel-lib",
+    src = "cancel.rs",
+    crate_name = "media_permit_cancel",
+    data = ["src/model.rs"],
+    rustc_flags = ["-C", "function-sections=yes"],
+)
+
+xm1_rust_elf(
+    name = "cancel",
+    entry = "rb_mp_cancel",
+    link_script = "cancel.ld",
+    rust_staticlib = ":cancel-lib",
+)
