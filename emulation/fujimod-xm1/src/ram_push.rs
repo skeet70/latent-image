@@ -510,7 +510,7 @@ impl Server {
                     shutter_phase(&mut self.bridge, PhysicalShutterPosition::Released, GuestInstructions(GPIO_PULSE.release / 2))?,
                 ];
                 self.key_log.push(json!({"physical_shutter_sequence": phases}));
-                json!({"phases": phases, "menu": menu_value(self.bridge.machine.menu()?)})
+                json!({"phases": phases})
             }
             Request::ImageInputFingerprint { node } => {
                 let machine = &self.bridge.machine;
