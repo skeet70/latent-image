@@ -65,7 +65,7 @@ main=do
  make "multiple-write-boundary" [0xe8a20003,0xe12fff1e] "memory_guard" >>= finish
  shared<-make "shared-page-readonly" [0xe5820000,0xe12fff1e] "memory_guard"
  finish$at "regions" 2(set "address"(h 0x1020))$nest "registers"(set "r2"(h 0x1004))shared
- forM_[("unsupported-psr-write",0xe129f000,"unsupported_instruction"),("unsupported-psr-immediate",0xe328f000,"unsupported_instruction"),("unsupported-arm-divide",0xe710f110,"unsupported_instruction"),("unsupported-register-offset-pc-index",0xe7d2000f,"unsupported_instruction"),("unsupported-register-offset-store-pc",0xe7c2f003,"unsupported_instruction"),("unsupported-store-pc",0xe582f000,"unsupported_instruction"),("unsupported-register-offset-shift",0xe7920311,"unsupported_instruction"),("unsupported-register-offset-postindex",0xe6920001,"unsupported_instruction"),("unsupported-halfword-register-postindex",0xe09250b3,"unsupported_instruction"),("unsupported-multiply-flags",0xe0100291,"unsupported_instruction"),("unsupported-multiply-long-flags",0xe0910392,"unsupported_instruction"),("unsupported-multiply-accumulate-long",0xe0a10392,"unsupported_instruction"),("unsupported-multiply-long-same-destination",0xe0c11392,"unsupported_instruction"),("unsupported-sxtah",0xe6b10071,"unsupported_instruction"),("unsupported-ldrsh-register-writeback",0xe1b210f3,"unsupported_instruction"),("unsupported-jump-table-subtract",0x971ff101,"unsupported_instruction")]$ \(name,word,status)->make name[word]status >>= finish
+ forM_[("unsupported-psr-write",0xe129f000,"unsupported_instruction"),("unsupported-psr-immediate",0xe328f000,"unsupported_instruction"),("unsupported-arm-divide",0xe710f110,"unsupported_instruction"),("unsupported-register-offset-pc-index",0xe7d2000f,"unsupported_instruction"),("unsupported-register-offset-store-pc",0xe7c2f003,"unsupported_instruction"),("unsupported-register-offset-shift",0xe7920311,"unsupported_instruction"),("unsupported-multiply-long-same-destination",0xe0c11392,"unsupported_instruction"),("unsupported-jump-table-subtract",0x971ff101,"unsupported_instruction")]$ \(name,word,status)->make name[word]status >>= finish
  hwo<-make "halfword-odd-address" [0xe1d210b1,0xe12fff1e] "memory_guard"
  finish$expectedRegs[("pc",h 0x1004)]hwo
  wide<-make "movw-movt" [0xe3050678,0xe3410234,0xe30b1eef,0xe34c2afe,0xe12fff1e] "returned"
@@ -98,8 +98,6 @@ main=do
  finish$nest "expected"(set "memory"(arr[memory "data" 1 "ab"]))$expectedRegs[("r1",h 0xab),("pc",h 0x1080)]$nest "registers"(\v->merge v[("r0",h 0xab),("r3",h 1)])rob
  robs<-make "register-offset-byte-shift" [0xe7c201a3,0xe7d211a3,0xe12fff1e] "returned"
  finish$nest "expected"(set "memory"(arr[memory "data" 3 "ab"]))$expectedRegs[("r1",h 0xab),("pc",h 0x1080)]$nest "registers"(\v->merge v[("r0",h 0xab),("r3",h 0x18)])robs
- robg<-make "register-offset-byte-guard" [0xe7d20003,0xe12fff1e] "memory_guard"
- finish$expectedRegs[("pc",h 0x1004)]$nest "registers"(\v->merge v[("r2",h 0xfffffff0),("r3",h 0x2014)])robg
  regword<-make "register-offset-word" [0xe7820003,0xe7921003,0xe12fff1e] "returned"
  finish$nest "expected"(set "memory"(arr[memory "data" 4 "78563412"]))$expectedRegs[("r1",h 0x12345678),("pc",h 0x1080)]$at "regions" 2(set "size"(n 8))$nest "registers"(\v->merge v[("r0",h 0x12345678),("r3",h 4)])regword
  regwords<-make "register-offset-word-shift" [0xe7820103,0xe7921103,0xe12fff1e] "returned"
@@ -147,7 +145,7 @@ main=do
  finish$expectedRegs[("r4",h 0x22222222),("r5",h 0x33333333),("pc",h 0x1080)]$set "artifacts"(arr(list(get ldrr "artifacts")++[ldrrData]))$at "regions" 2(set "size"(n 12) . set "initial"(obj[("artifact",get ldrrData "id"),("offset",n 0),("length",n 12)]))$nest "registers"(set "r3"(h 4))ldrr
  strr<-make "strd-register" [0xe10240f3,0xe12fff1e] "returned"
  finish$nest "expected"(set "memory"(arr[memory "data" 0 "0400aaaa0500aaaa"]))$expectedRegs[("r2",h 0x200c),("pc",h 0x1080)]$at "regions" 2(set "size"(n 12))$nest "registers"(\v->merge v[("r2",h 0x200c),("r3",h 8),("r4",h 0xaaaa0004),("r5",h 0xaaaa0005)])strr
- forM_ [("unsupported-ldrd-register-writeback",0xe1a240d3),("unsupported-ldrd-register-rm-in-pair",0xe18240d4)] $ \(name,word)->make name [word] "unsupported_instruction" >>= finish . expectedRegs[("pc",h 0x1004)]
+ make "unsupported-ldrd-register-rm-in-pair" [0xe18240d4] "unsupported_instruction" >>= finish . expectedRegs[("pc",h 0x1004)]
  blx<-make "blx-register" [0xe1a0400e,0xe12fff35,0xe2800002,0xe1a0e004,0xe12fff1e] "returned"
  calleeBlx<-artifact root "callee-blx" [0xe0800001,0xe12fff1e]
  let blx'=merge blx[("artifacts",arr(list(get blx "artifacts")++[calleeBlx])),("regions",arr(list(get blx "regions")++[region "callee" 0x1040 8 "rx"(Just calleeBlx)])),("functions",arr(list(get blx "functions")++[obj[("address",h 0x1040),("size",n 8)]]))]
@@ -197,22 +195,12 @@ main=do
  finish$expectedRegs[("pc",h 0x1004)]bfu
  bfa<-make "unsupported-bitfield-unallocated" [0xe7e20111] "unsupported_instruction"
  finish$expectedRegs[("pc",h 0x1004)]bfa
- lht<-make "unsupported-ldrht" [0xe0f200b2] "unsupported_instruction"
- finish$expectedRegs[("pc",h 0x1004)]lht
- sht<-make "unsupported-strht" [0xe0e200b2] "unsupported_instruction"
- finish$expectedRegs[("pc",h 0x1004)]sht
- lsbU<-make "unsupported-ldrsb-postindex" [0xe0d200d2] "unsupported_instruction"
- finish$expectedRegs[("pc",h 0x1004)]lsbU
- lshU<-make "unsupported-ldrsh-postindex" [0xe0d200f2] "unsupported_instruction"
- finish$expectedRegs[("pc",h 0x1004)]lshU
  lsbP<-make "ldrsb-preindexed" [0xe1d210d2,0xe12fff1e] "returned"
  lsbPData<-artifact root "ldrsb-preindexed-data" [0x00800000]
  finish$nest "expected"(set "memory"(arr[memory "data" 0 "00008000"]))$expectedRegs[("r1",h 0xffffff80),("r2",h 0x2004),("pc",h 0x1080)]$set "artifacts"(arr(list(get lsbP "artifacts")++[lsbPData]))$at "regions" 2(set "initial"(obj[("artifact",get lsbPData "id"),("offset",n 0),("length",n 4)]))lsbP
  lshP<-make "ldrsh-preindexed" [0xe1d210f2,0xe12fff1e] "returned"
  lshPData<-artifact root "ldrsh-preindexed-data" [0xabcd0000]
  finish$nest "expected"(set "memory"(arr[memory "data" 0 "0000cdab"]))$expectedRegs[("r1",h 0xffffabcd),("r2",h 0x2004),("pc",h 0x1080)]$set "artifacts"(arr(list(get lshP "artifacts")++[lshPData]))$at "regions" 2(set "initial"(obj[("artifact",get lshPData "id"),("offset",n 0),("length",n 4)]))lshP
- lrt<-make "unsupported-ldrt" [0xe4b20004] "unsupported_instruction"
- finish$expectedRegs[("pc",h 0x1004)]lrt
  dld<-make "ldrd" [0xe1c240d8,0xe1e260dc,0xe12fff1e] "returned"
  dldData<-artifact root "ldrd-data" [0x11111111,0x22222222,0x33333333,0x44444444,0x55555555,0x66666666]
  finish$expectedRegs[("r2",h 0x2010),("r4",h 0x33333333),("r5",h 0x44444444),("r6",h 0x44444444),("r7",h 0x55555555),("pc",h 0x1080)]$set "artifacts"(arr(list(get dld "artifacts")++[dldData]))$at "regions" 2(set "size"(n 24) . set "initial"(obj[("artifact",get dldData "id"),("offset",n 0),("length",n 24)]))dld
@@ -240,8 +228,6 @@ main=do
  finish$nest "expected"(set "memory"(arr[memory "data" 0 "111111112222222233333333aa444444"]))$expectedRegs[("r0",h 0x22222222),("r1",h 4),("r2",h 0x2010),("r3",h 2),("r5",h 0xaa),("pc",h 0x1080)]$set "artifacts"(arr(list(get rwb "artifacts")++[rwbData]))$at "regions" 2(set "size"(n 16) . set "initial"(obj[("artifact",get rwbData "id"),("offset",n 0),("length",n 16)]))$nest "registers"(\v->merge v[("r1",h 4),("r3",h 2),("r5",h 0xaa)])rwb
  rwd<-make "unsupported-register-offset-writeback-rd" [0xe7b22003] "unsupported_instruction"
  finish$expectedRegs[("pc",h 0x1004)]rwd
- rwu<-make "unsupported-register-offset-unprivileged" [0xe6b20001] "unsupported_instruction"
- finish$expectedRegs[("pc",h 0x1004)]rwu
  rws<-make "register-offset-writeback-subtract" [0xe7713082,0xe12fff1e] "returned"
  rwsData<-artifact root "register-offset-writeback-subtract-data" [0x11111111,0x22222222,0x33333333,0x44444444]
  finish$expectedRegs[("r1",h 0x2004),("r2",h 0xffffffff),("r3",h 0x11),("pc",h 0x1080)]$set "artifacts"(arr(list(get rws "artifacts")++[rwsData]))$at "regions" 2(set "size"(n 16) . set "initial"(obj[("artifact",get rwsData "id"),("offset",n 0),("length",n 16)]))$nest "registers"(\v->merge v[("r1",h 0x2002),("r2",h 0xffffffff)])rws

@@ -847,17 +847,11 @@ cc_binary(
     deps = ["@lab_unicorn//:unicorn"],
 )
 
-cc_binary(
+# The bounded native-case runner: FUJI_NATIVE_V1 on stdin, one observation on stdout.
+sh_binary(
     name = "native-runner",
-    srcs = ["native-runner.c"],
-    copts = [
-        "-std=c11",
-        "-Wall",
-        "-Wextra",
-        "-Werror",
-    ],
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-native-case"],
     visibility = ["//visibility:public"],
-    deps = ["@lab_unicorn//:unicorn"],
 )
 
 cc_binary(
