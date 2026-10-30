@@ -16,6 +16,9 @@ const WATCH_LIMIT: usize = 16_384;
 const MAX_RECEIPT: usize = 16 << 20;
 const WATCH_RANGES: [(u64, u64); 3] = [(0x14c80, 0x14c88), (0x20000, 0x20008), (0xa00c4, 0xa00c8)];
 
+#[path = "peer_witness_wait.rs"]
+mod wait;
+
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(transparent)]
 struct Instructions(u64);
@@ -24,7 +27,7 @@ struct Instructions(u64);
 #[serde(transparent)]
 struct Identity(u32);
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(transparent)]
 struct Word(u32);
 
@@ -34,18 +37,38 @@ struct Address(u64);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PeerContract {
+struct NaturalContract {
     schema: u32,
     budget: Instructions,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ContractWire {
+    Natural(NaturalContract),
+    Control(wait::ControlContract),
+}
+
+pub struct PeerContract {
+    budget: Instructions,
+    control: Option<wait::Control>,
+}
+
 impl PeerContract {
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
-        let contract: Self = serde_json::from_slice(bytes).map_err(|error| format!("peer contract: {error}"))?;
-        if contract.schema != 1 || !(1..=MAX_BUDGET).contains(&contract.budget.0) {
-            return Err("peer contract requires schema 1 and budget 1..50000000".into());
+        let contract: ContractWire = serde_json::from_slice(bytes).map_err(|error| format!("peer contract: {error}"))?;
+        match contract {
+            ContractWire::Natural(contract) => {
+                if contract.schema != 1 || !(1..=MAX_BUDGET).contains(&contract.budget.0) {
+                    return Err("peer contract requires schema 1 and budget 1..50000000".into());
+                }
+                Ok(Self { budget: contract.budget, control: None })
+            }
+            ContractWire::Control(contract) => {
+                contract.validate()?;
+                Ok(Self { budget: contract.budget, control: Some(contract.control) })
+            }
         }
-        Ok(contract)
     }
 }
 
@@ -93,8 +116,8 @@ struct PeerState {
 }
 
 #[derive(Serialize)]
-struct PeerHit {
-    label: PeerStop,
+struct PeerHit<L = PeerStop> {
+    label: L,
     address: Guest,
     core: WitnessCore,
     instructions: Instructions,
@@ -280,11 +303,22 @@ fn word(machine: &Machine, physical: u64) -> Result<Word, String> {
 }
 
 fn snapshot(machine: &Machine, label: PeerStop, hit: &Hit) -> Result<PeerHit, String> {
+    snapshot_at(machine, label, hit.core == 1 && label == PeerStop::Record2RendezvousTail, hit)
+}
+
+fn state(machine: &Machine) -> Result<PeerState, String> {
+    Ok(PeerState {
+        cell0: word(machine, 0x20000)?, cell1: word(machine, 0x20004)?,
+        completion: word(machine, 0xa00c4)?, target: word(machine, 0x14c80)?, argument: word(machine, 0x14c84)?,
+    })
+}
+
+fn snapshot_at<L>(machine: &Machine, label: L, saved_frame: bool, hit: &Hit) -> Result<PeerHit<L>, String> {
     let mut registers = [Word(0); 13];
     for (index, value) in registers.iter_mut().enumerate() {
         *value = register(machine, hit.core, arm::Register::R(index as u8))?;
     }
-    let frame = if hit.core == 1 && label == PeerStop::Record2RendezvousTail {
+    let frame = if saved_frame {
         let mut bytes = [0; 24];
         let address = registers[11].0.checked_sub(20).ok_or("peer saved frame address underflow")?;
         machine.session.board.read_memory(hit.core, u64::from(address), &mut bytes)?;
@@ -301,10 +335,7 @@ fn snapshot(machine: &Machine, label: PeerStop, hit: &Hit) -> Result<PeerHit, St
         sp: register(machine, hit.core, arm::Register::R(13))?,
         lr: register(machine, hit.core, arm::Register::R(14))?,
         cpsr: Word(hit.cpsr),
-        state: PeerState {
-            cell0: word(machine, 0x20000)?, cell1: word(machine, 0x20004)?,
-            completion: word(machine, 0xa00c4)?, target: word(machine, 0x14c80)?, argument: word(machine, 0x14c84)?,
-        },
+        state: state(machine)?,
         frame,
     })
 }
@@ -343,6 +374,9 @@ fn execute(machine: &mut Machine, contract: &PeerContract, stops: &mut Vec<PeerH
 }
 
 pub fn run(mut machine: Machine, contract: PeerContract, output: &Path) -> Result<(), String> {
+    if let Some(control) = contract.control {
+        return wait::run(machine, control, output);
+    }
     if machine.instructions() != 0 || machine.traces.armed() || !machine.traces.hits.is_empty() {
         return Err("peer witness must arm before either core executes".into());
     }
