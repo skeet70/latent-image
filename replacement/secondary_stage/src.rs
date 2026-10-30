@@ -133,17 +133,21 @@ unsafe fn log_event(event: LogEvent, core: Core) {
     write(index, slot + 2);
 }
 
-/// Stock `0x1386c`: 1 only for validity 1, flags 1 and record class 7.
-unsafe fn companion_selected(flags: u32, record: *const u8, validity: u32) -> u32 {
-    let selected = validity == 1
-        && flags == 1
-        && read_volatile(record.add(CONFIG_RECORD_CLASS)) & 0xf == 7;
-    u32::from(selected)
+/// Stock `0x1386c`.
+unsafe fn companion_selection(flags: CompanionFlags, validity: ConfigValidity) -> Selection {
+    if validity == ConfigValidity::Valid
+        && flags == COMPANION_FLAGS_SELECTABLE
+        && read_volatile(CONFIG_RECORD.add(CONFIG_RECORD_CLASS)) & 0xf == CONFIG_CLASS_SELECTABLE
+    {
+        Selection::Selected
+    } else {
+        Selection::NotSelected
+    }
 }
 
-unsafe fn companion_eligible(sample: u32) -> bool {
+unsafe fn companion_eligible(sample: CompanionSample) -> bool {
     (read(PERIPHERAL_F55104) as i32) >= 0
-        && sample & 0x90 == 0x10
+        && sample.bits(0x90) == 0x10
         && read(PERIPHERAL_F89014) & 0x10 == 0
 }
 
@@ -187,7 +191,7 @@ unsafe fn companion_power() {
     write(PERIPHERAL_F89344, 0x0004_0004);
     write(PERIPHERAL_F8934C, 0x0c00_0400);
     write(PERIPHERAL_F89344, 0x0020_0000);
-    write(COMPANION_POWERED, 1);
+    write_volatile(COMPANION_POWER, CompanionPower::On);
 }
 
 /// Stock `0x11cc0` through the rendezvous tail `0x11f40`. The empty stock
@@ -195,24 +199,22 @@ unsafe fn companion_power() {
 unsafe fn companion_startup(core: Core) {
     log_init();
     log_event(LogEvent::StartupBegin, core);
-    let word = |index: usize| read(COMPANION_DESCRIPTOR.add(index));
-    let mut descriptor: [u32; COMPANION_DESCRIPTOR_WORDS] =
-        [word(0), word(1), word(2), word(3), word(4), word(5), word(6), word(7), word(8)];
-    write(COMPANION_SAMPLE, xm1_retained_companion_transfer(&mut descriptor, COMPANION_COMMAND));
-    let _ = xm1_retained_config_record();
+    let descriptor = read_volatile(COMPANION_DESCRIPTOR);
+    write_volatile(COMPANION_SAMPLE, xm1_retained_companion_transfer(&descriptor, COMPANION_READ_REGISTER_60));
+    xm1_retained_config_record();
     xm1_retained_conversion(CONVERSION);
-    let flags = xm1_retained_companion_flags(read(COMPANION_SAMPLE), CONVERSION);
-    let selected = companion_selected(flags, CONFIG_RECORD, read(CONFIG_VALID));
-    let sample = read(COMPANION_SAMPLE);
-    write(COMPANION_POWERED, 0);
+    let flags = xm1_retained_companion_flags(read_volatile(COMPANION_SAMPLE), CONVERSION);
+    let selection = companion_selection(flags, ConfigValidity::from_word(read(CONFIG_VALID)));
+    let sample = read_volatile(COMPANION_SAMPLE);
+    write_volatile(COMPANION_POWER, CompanionPower::Off);
     if companion_eligible(sample) {
         companion_power();
     }
     log_event(LogEvent::CompanionPowerDecided, core);
-    write(STRUCTURE_STATUS, xm1_retained_structure_init(selected, STRUCTURE, STRUCTURE_LENGTH));
+    write_volatile(STRUCTURE_STATUS, xm1_retained_structure_init(selection, STRUCTURE, STRUCTURE_LENGTH));
     log_event(LogEvent::StructureReady, core);
     log_event(LogEvent::StartupEnd, core);
-    let _ = xm1_retained_peripheral_final();
+    xm1_retained_peripheral_final();
 }
 
 #[no_mangle]
@@ -231,17 +233,14 @@ pub unsafe extern "C" fn xm1_secondary_rendezvous() {
     }
 }
 
-/// Publishes the loader-B entry and the image-4 argument. Stock `0x11f90`
-/// dereferences a missing segment; this path halts before publishing.
+/// Publishes id 1's header word `+0xc` and the image-4 argument. As stock
+/// `0x11f90`, a zero lookup result is dereferenced unchecked.
 #[no_mangle]
 #[inline(never)]
 pub unsafe extern "C" fn xm1_secondary_publish() {
-    let record = xm1_retained_segment_lookup(LOADER_B_SEGMENT_ID);
-    if record.is_null() {
-        halt();
-    }
-    let header = read_volatile(addr_of_mut!((*(record as *mut SegmentRecord)).load));
-    write(addr_of_mut!(xm1_publication_target), read_volatile(addr_of_mut!((*(header as *mut SegmentHeader)).entry)));
+    let record = xm1_retained_segment_lookup(LOADER_B_SEGMENT);
+    let header = GuestAddress::from_word(load_guest_word(record.offset(SEGMENT_RECORD_HEADER)));
+    write(addr_of_mut!(xm1_publication_target), load_guest_word(header.offset(SEGMENT_HEADER_ENTRY)));
     write(addr_of_mut!(xm1_publication_argument), read(IMAGE4_ENTRY));
     inject_fault();
 }
@@ -261,10 +260,10 @@ pub unsafe extern "C" fn xm1_secondary_main() {
     xm1_secondary_publish();
 }
 
-#[cfg(secondary_stage_fault)]
+#[cfg(secondary_stage_publication_fault)]
 unsafe fn inject_fault() {
     write(addr_of_mut!(xm1_publication_target), 0xdead_be00);
 }
 
-#[cfg(not(secondary_stage_fault))]
+#[cfg(not(secondary_stage_publication_fault))]
 unsafe fn inject_fault() {}

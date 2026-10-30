@@ -47,22 +47,25 @@ xm1_retained_segment_lookup = 0x13574;
 xm1_retained_companion_flags = 0x137a8;
 xm1_retained_structure_init = 0x13b80;
 
-/* Stock bytes the owned path replaces; they stay in place unexecuted. */
-xm1_retired_entry_start = 0x11800;
-xm1_retired_entry_end = 0x11854;
-xm1_retired_mpu_discriminator_start = 0x119e4;
-xm1_retired_mpu_discriminator_end = 0x11abc;
-xm1_retired_entry_pool_start = 0x11ac4;
-xm1_retired_entry_pool_end = 0x11acc;
-xm1_retired_handoff_pool_start = 0x11ad4;
-xm1_retired_handoff_pool_end = 0x11ae8;
-xm1_retired_main_start = 0x11cc0;
-xm1_retired_main_end = 0x11fec;
-xm1_retired_stub_a_start = 0x12960;
-xm1_retired_stub_a_end = 0x12974;
-xm1_retired_stub_b_start = 0x12abc;
-xm1_retired_stub_b_end = 0x12ad0;
-xm1_retired_log_start = 0x13490;
-xm1_retired_log_end = 0x13574;
-xm1_retired_selection_start = 0x1386c;
-xm1_retired_selection_end = 0x138ac;
+/* Candidate forbidden ranges: stock code the owned path replaces (fetch) and
+   literal pools only that code reads (read). No runtime guard enforces them. */
+xm1_forbid_fetch_entry_start = 0x11800;
+xm1_forbid_fetch_entry_end = 0x11854;
+xm1_forbid_fetch_mpu_discriminator_start = 0x119e4;
+xm1_forbid_fetch_mpu_discriminator_end = 0x11abc;
+xm1_forbid_fetch_main_start = 0x11cc0;
+xm1_forbid_fetch_main_end = 0x11fe4;
+xm1_forbid_fetch_stub_a_start = 0x12960;
+xm1_forbid_fetch_stub_a_end = 0x12974;
+xm1_forbid_fetch_stub_b_start = 0x12abc;
+xm1_forbid_fetch_stub_b_end = 0x12ad0;
+xm1_forbid_fetch_log_start = 0x13490;
+xm1_forbid_fetch_log_end = 0x13574;
+xm1_forbid_fetch_selection_start = 0x1386c;
+xm1_forbid_fetch_selection_end = 0x138ac;
+xm1_forbid_read_entry_pool_start = 0x11ac4;
+xm1_forbid_read_entry_pool_end = 0x11acc;
+xm1_forbid_read_handoff_pool_start = 0x11ad4;
+xm1_forbid_read_handoff_pool_end = 0x11ae8;
+xm1_forbid_read_main_pool_start = 0x11fe4;
+xm1_forbid_read_main_pool_end = 0x11fec;

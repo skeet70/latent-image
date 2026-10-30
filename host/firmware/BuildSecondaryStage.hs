@@ -2,6 +2,7 @@
 module Main where
 
 import Control.Monad (forM, forM_, unless, when)
+import Data.List (sortOn)
 import FujiAF.FirstStage
 import qualified FujiAF.UpdateContainer as U
 import StageBuild
@@ -21,17 +22,24 @@ retainedServices =
   , "xm1_retained_structure_init"
   ]
 
-retiredExtents :: [String]
-retiredExtents =
-  [ "entry"
-  , "mpu_discriminator"
-  , "entry_pool"
-  , "handoff_pool"
-  , "main"
-  , "stub_a"
-  , "stub_b"
-  , "log"
-  , "selection"
+data Forbidden = ForbidFetch | ForbidRead
+
+forbiddenName :: Forbidden -> String
+forbiddenName ForbidFetch = "fetch"
+forbiddenName ForbidRead = "read"
+
+forbiddenExtents :: [(Forbidden, String)]
+forbiddenExtents =
+  [ (ForbidFetch, "entry")
+  , (ForbidFetch, "mpu_discriminator")
+  , (ForbidRead, "entry_pool")
+  , (ForbidRead, "handoff_pool")
+  , (ForbidFetch, "main")
+  , (ForbidRead, "main_pool")
+  , (ForbidFetch, "stub_a")
+  , (ForbidFetch, "stub_b")
+  , (ForbidFetch, "log")
+  , (ForbidFetch, "selection")
   ]
 
 within :: (Int, Int) -> Int -> Bool
@@ -50,28 +58,32 @@ declarations symbols = do
   retainedData <- extent "xm1_retained_data_start" "xm1_retained_data_end"
   let bodyRange = retainedExtentRange body
       (_, dataEnd) = retainedExtentRange retainedData
-  retired <- forM retiredExtents $ \name -> do
-    range <- retainedExtentRange <$> extent ("xm1_retired_" ++ name ++ "_start") ("xm1_retired_" ++ name ++ "_end")
+  forbidden <- forM forbiddenExtents $ \(kind, name) -> do
+    let prefix = "xm1_forbid_" ++ forbiddenName kind ++ "_" ++ name
+    range <- retainedExtentRange <$> extent (prefix ++ "_start") (prefix ++ "_end")
     unless (fst range >= fst bodyRange && snd range <= snd bodyRange)
-      (Left ("retired " ++ name ++ " is outside the retained body extent"))
-    pure (name, range)
+      (Left (prefix ++ " is outside the retained body extent"))
+    pure (kind, name, range)
   services <- forM retainedServices $ \name -> do
     service <- offset name
     let address = slotOffsetBytes service
     unless (within bodyRange address) (Left (name ++ " is outside the retained body extent"))
-    when (any (\(_, range) -> within range address) retired) (Left (name ++ " is inside a retired extent"))
+    when (any (\(_, _, range) -> within range address) forbidden) (Left (name ++ " is inside a forbidden extent"))
     pure (name, address)
   publications <- forM ["xm1_publication_target", "xm1_publication_argument"] $ \name -> do
     cell <- offset name
     unless (slotOffsetBytes cell >= dataEnd) (Left (name ++ " is inside the retained record bytes"))
     pure (name, slotOffsetBytes cell)
   let guest value = U.showHexWord (fromIntegral (value + recordGuestBase SecondRecord))
+      ordered = sortOn (\(_, _, range) -> range) forbidden
       summary =
         ["retained service " ++ name ++ " " ++ guest address | (name, address) <- services]
-          ++ ["retired " ++ name ++ " [" ++ guest start ++ "," ++ guest end ++ ")" | (name, (start, end)) <- retired]
+          ++ [ "candidate forbidden " ++ forbiddenName kind ++ " " ++ name ++ " [" ++ guest start ++ "," ++ guest end ++ ")"
+             | (kind, name, (start, end)) <- forbidden
+             ]
           ++ ["publication " ++ name ++ " " ++ guest address | (name, address) <- publications]
-  forM_ (zip retired (drop 1 retired)) $ \((name, (_, end)), (next, (start, _))) ->
-    when (end > start) (Left ("retired " ++ name ++ " overlaps " ++ next))
+  forM_ (zip ordered (drop 1 ordered)) $ \((_, name, (_, end)), (_, next, (start, _))) ->
+    when (end > start) (Left ("forbidden " ++ name ++ " overlaps " ++ next))
   pure (StageDeclarations [before, after, body, retainedData] summary)
 
 main :: IO ()

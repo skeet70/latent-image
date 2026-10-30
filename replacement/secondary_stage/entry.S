@@ -20,6 +20,9 @@ xm1_secondary_handoff:
     ldr r3, [r3]
     ldr r0, =xm1_publication_argument
     ldr r0, [r0]
+#ifdef XM1_SECONDARY_STACK_FAULT
+    sub sp, sp, #8
+#endif
     .global xm1_secondary_handoff_vector
 xm1_secondary_handoff_vector:
     mov pc, r3

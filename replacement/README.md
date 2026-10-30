@@ -15,14 +15,15 @@ Record 2's retained services, vectors and data, the loaders, application images 
 devenv shell -- bazel test //replacement/abi:pilot-abi-tests --test_output=all
 ```
 
-Stage the owned record-2 candidate and its wrong-publication control (target `0xdeadbe00`) from the original DAT. The expected digest is the stored record-2 slot `[0x50000,0x60000)` of the main pre-table; the builder refuses any other source slot, a misplaced entry, an image overlapping a retained extent, a retained service inside a retired extent and any changed byte outside the reset literal and the image:
+Stage the owned record-2 candidate and its two controls from the original DAT: a wrong publication (target `0xdeadbe00`) and a handoff SP 8 bytes low. The expected digest is the stored record-2 slot `[0x50000,0x60000)` of the main pre-table; the builder refuses any other source slot, a misplaced entry, an image overlapping a retained extent, a retained service inside a forbidden range and any changed byte outside the reset literal and the image:
 
 ```sh
 devenv shell -- bazel --batch build --jobs=2 \
   //replacement/secondary_stage:secondary-stage-image \
-  //replacement/secondary_stage:secondary-stage-fault-image \
+  //replacement/secondary_stage:secondary-stage-publication-fault-image \
+  //replacement/secondary_stage:secondary-stage-stack-fault-image \
   //host/firmware:build-secondary-stage
-for image in secondary-stage-image secondary-stage-fault-image; do
+for image in secondary-stage-image secondary-stage-publication-fault-image secondary-stage-stack-fault-image; do
   bazel-bin/host/firmware/build-secondary-stage private-data/firmware/x-m1-1.50/FWUP0002.DAT \
     "bazel-bin/replacement/secondary_stage/$image.bin" \
     "bazel-bin/replacement/secondary_stage/$image.symbols" "PRIVATE_OUTPUT/$image.DAT" \
