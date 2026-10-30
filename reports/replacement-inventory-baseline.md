@@ -323,8 +323,6 @@ Section 2 holds the evidence behind each category. Gaps that no open child issue
 | Failure recovery | None | Stock recovery, recorder and boot-entry paths; R1 to R3 are stock-firmware evidence | Hardware route #85, #60 | R4 and replacement recovery |
 | Runtime services, across categories | None | Scheduler, tasks, queues and mailboxes, interrupts, allocator, render and display, storage drivers | #129 names its retained sensor, processing, storage, scheduler and driver services | Contracted retirement of each service |
 
-The unqualified [#129](https://github.com/skeet70/latent-image/issues/129) save source in [`replacement/save`](../replacement/save/BUILD.bazel) implements the complete selected request facade, completion callbacks and phase-two wait. Its ABI adapter parses frame state, subframe command, extent layout, extent preset and the dispatch configuration byte before calling the typed facade. Guest and storage-producer negative controls use the production observation validator and require the specific structured return-register or descriptor mismatch; missing required registers or expected memory are mismatches. Host compilation and a typed-facade smoke establish source integration only (E-SAVE-FACADE-REVIEW-SOURCE-150). Native original-versus-owned execution, negative-control refusal, retained-service timing, device-driven lifecycle and runtime retirement remain unproved. The provider-authentication blocker still prevents native consumer, F01 and wire qualification; this source does not complete #129 or #117.
-
 ### 8.4 Milestone blockers
 
 | #117 milestone | Prevented by | Owner |
