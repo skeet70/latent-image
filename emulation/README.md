@@ -10,6 +10,71 @@ The owner accepted USB-toggle comparison exclusions for `sid` and `cells_after_s
 
 Local FujiMod development does not authorize binary distribution. Our software remains AGPL-3.0-only; [LICENSING item 7](../LICENSING.md#release-decisions) retains the no-conveyed-FujiMod-binaries restriction until an upstream licence file lands and is reviewed, alongside the separate Unicorn obligations.
 
+## Secondary-core peer witness: pre-execution plan
+
+[#134](https://github.com/skeet70/latent-image/issues/134) adds a distinct observation of retained record-2 startup. It does not replace the existing core-0 first-stage witness or retire record 2. **No peer-witness runtime, SDK build or acceptance run has been performed for this increment.** Source findings are `E-PEER-ENTRY-FRAME-HANDOFF-SOURCE-150` and `E-PEER-MODEL-OBSERVATION-SOURCE-150`; the [startup inventory](../reports/replacement-inventory-baseline.md#86-retained-secondary-core-startup-boundary) owns the exact frame, banking, publication and unresolved-vector facts.
+
+### Frozen baseline
+
+The baseline is one natural reset, no checkpoint or owned candidate, using the original X-M1 1.50 DAT SHA-256 `43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490` and captured 16 KiB ROM SHA-256 `4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be`. It uses FujiMod pin `3d90035d7d8d651e126f89f94f30765506e6f53f` plus the checked-in context-alignment patch and the X-M1 run document. Freeze the adapter/consumer revision, run-document bytes, contract and expected-input identities before the future run. Keep failed receipts and diagnostics. Do not repeat an unchanged failure.
+
+Preparation validates the DAT and record-2 hash `2f1bf3f0e483b892d2890599679c1b515cfc1be8b8c27cbb06d4d913e428abb4`, extracts/decodes original image 4 with the existing `fflzd` convention and derives its word `+0xc` (`0x0069cdf8` for these bytes). It also checks segment id 1's load `0xd0000` and header entry `0xd0020`. The target and argument are independent fields. No SDK execution is necessary to prepare this contract or to consume a saved receipt.
+
+Before the first guest instruction, validate the configured processor identities, held/released core states and static/decoder memory-map assumptions; arm instruction points on **both** cores and the alias-aware memory watch. Configured CP14 identities `0x4003`/`0x5003`, Cortex-R5F proxies with the R4F guard, initial held PC `0x3fff0000`, vector SRAM aliases and software-interrupt-driven release are model laws, not measured physical facts. Do not set either core's PC, seed a rendezvous cell or force release from the host.
+
+The planned SDK interface is `--peer-witness CONTRACT.json`, mutually exclusive with `--witness`; its closed schema-1 contract is `{"schema":1,"budget":20000000}`. The baseline aggregate instruction cap is 20,000,000, within a hard maximum of 50,000,000. It ends at the pre-instruction loader-B entry, not a later application or menu milestone.
+
+| Ordered stop, always core 1 | Required observation |
+| --- | --- |
+| `record-2-entry`, `0x11800` | r0–r12, SP, LR, CPSR and shared state before initialization; no fixed entry-register or frame assumption |
+| `record-2-rendezvous-tail`, `0x11f40` | Current r6 = 1, `r11=sp+60`; 24 saved bytes at `r11-20`, saved LR `0x1183c` |
+| `record-2-handoff`, `0x11850` | Masked A32 little-endian SVC; r3/target = `0xd0020`, r0/argument = original image-4 `+0xc`; restored SP = tail SP + 64 |
+| `loader-b-entry`, `0xd0020` | Same handoff argument and restored SP; independent shared-state readback |
+
+Each stop retains aggregate instructions and must be strictly later than the preceding stop. Matching an address on core 0 is a refusal, not a peer observation. Stop snapshots expose only the active register bank. Neither incoming banked state nor all SPSRs become known by sampling current SP/LR/CPSR.
+
+The watch covers physical rendezvous `[0x20000,0x20008)`, completion `[0xa00c4,0xa00c8)` and publications `[0x14c80,0x14c88)`, including guest `0x40000000` aliases and decoder views. Require core-0 `0x22b` write attempts at PC `0x1e64`/`0x1e68`, core-0 clear at `0x1ff8`, core-1 clear of guest `0x40020004` at `0x11f4c` and core-1 target/argument stores at `0x11f98`/`0x11fb0`. Retain guest/physical address, width, value, before bytes, byte order, core, PC, aggregate instructions and tick for CPU attempts. A pre-store callback is not a committed-store receipt: require both cells zero and the expected target/argument in the later handoff and loader-entry snapshots. Record completion without requiring it to remain zero while core 0 executes concurrently.
+
+Device-origin transfer rows retain their vendor source and null CPU identity/counters; they cannot satisfy a CPU-writer requirement. CPU reads and fetches remain typed separately from writes. The watch includes polling reads and has a 16,384-row cap; overflow or any watch violation fails with retained evidence. The complete `peer-witness.json`, including failure output, is bounded to 16 MiB.
+
+Future execution uses one emulator slot (`XM1_EMULATOR_SLOTS=1`), the normal Nix daemon without sudo or a containment workaround, and a separate Bazel output base with `--batch --jobs=2`. Preparation, build/host verification and guest execution remain separate review steps. Source inspection does not authorize or establish any of those unrun checks.
+
+### Host preparation and future launch interface
+
+`//emulation:peer-stage-witness` is the SDK-independent host target. It has receipt-only and preparation modes; neither starts a guest. Set `PEER_STAGE_WITNESS` to its reviewed built launcher, `FFLZD` to the existing decoder, and `DAT` to the original validated input. Preparation requires a fresh directory and writes `peer-witness-contract.json` and `peer-witness-expected.json`:
+
+```sh
+"$PEER_STAGE_WITNESS" --firmware "$DAT" --fflzd "$FFLZD" --output "$PREPARATION"
+```
+
+The expected-input file records the firmware path/hash, record-2/loader-B/image-4 hashes, decoded argument/source address, loader load/entry, CP14 identities, stop labels and row limit. Receipt-only validation needs no firmware or SDK dependency:
+
+```sh
+"$PEER_STAGE_WITNESS" --receipt "$RECEIPT" --argument 0x0069cdf8
+```
+
+The following is the **unrun future launch command**, exposed for review, not a completed experiment. `SDK_DRIVER`, `RUN_DOCUMENT` and `BOOT_ROM` must name the reviewed driver, frozen run document and captured ROM; `PEER_RUN` must be fresh and distinct from the preparation directory. All three explicit launch inputs are required:
+
+```sh
+env XM1_EMULATOR_SLOTS=1 "$PEER_STAGE_WITNESS" \
+  --firmware "$DAT" --fflzd "$FFLZD" --output "$PEER_RUN" \
+  --launch --driver "$SDK_DRIVER" --run "$RUN_DOCUMENT" --boot-rom "$BOOT_ROM"
+```
+
+The launched child command is exactly `DRIVER --run RUN_JSON --update DAT --boot-rom ROM --output DIR --peer-witness DIR/peer-witness-contract.json`. It does not use an implicit SDK resolver, candidate image or symbol file. Host-consumer verification belongs to `//emulation:peer-stage-witness-tests`; naming that target does not claim it has run.
+
+`--launch` acquires `Emulation.EmulatorSlot` internally; do not double-wrap it. The frozen host plan requires `FujiAF.Host.runBounded` for both decoder and driver: 120 seconds per child, 1 MiB per stdout/stderr stream, process-group cleanup on failure and preserved process logs. Instruction/watch/receipt caps do not replace these host bounds. The command above and its limits are unrun; no runtime clearance or successful termination is claimed.
+
+### Guest-side wait controls remain prerequisites
+
+The frozen baseline alone cannot qualify wait behavior. Held-sentinel and delayed-release cases require separately reviewed, hash-bound **guest-side control artifacts**, with a narrower wait/stop policy than the four-stop baseline. They are not implemented by host memory writes, reset manipulation or a synthetic receipt.
+
+- Held sentinel: let the guest establish the original `0x22b` value, hold the guest writer before its clear, and observe core 1 repeatedly taking the original equality wait. Bound the wait, require unchanged sentinel readback and no handoff, and stop before later startup.
+- Delayed release: after observing that hold, let the guest control permit the original core-0 clear. Require its core/PC-qualified attempt and committed readback before core 1 exits the wait and reaches the original handoff with the original target/argument.
+- Wrong-core and wrong-handoff receipt mutations exercise host-consumer rejection only. They are not executed guest controls and supply no evidence of natural release, wait duration, loader-B completion or application entry.
+
+No reviewed guest-control artifact or runtime receipt exists for these cases in this increment. The exception targets `0x3fff00xx` remain unresolved physical aliases/handlers even if the configured model reaches the planned prefix.
+
 # Bounded selected-queue experiment
 
 `//emulation:queue-boundary` runs the original stock `0x0072503c` caller from entry, including allocation, through the existing pinned FujiMod `Machine` API. It does not extend the native-case profile, change either runtime's CPU admission guard, qualify a runtime cutover or prove boot acceptance.
