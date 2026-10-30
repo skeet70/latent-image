@@ -36,7 +36,8 @@ dispatchRegressions runner=withTemporary "fuji-dispatch-tests"$ \root->do
      fn address size=obj[("address",hex address),("size",n size)]
      region name address size permissions initial=obj[("id",s name),("address",hex address),("size",n size),("permissions",s permissions),("initial",initial)]
      controls=[DeclaredTarget,InteriorTarget,LocalTarget,ConditionFalse,ThumbTarget,UnalignedTarget,UnknownTarget,ShortFunction,UnreadableTable,OverflowTable]
- forM_[(form,control)|form<-[PcTable,RegisterTable],control<-controls]$ \(form,control)->do
+ -- A PC-relative index shift wraps modulo 2^32 inside the table, so only the register base overflows.
+ forM_[(form,control)|form<-[PcTable,RegisterTable],control<-controls,(form,control)/=(PcTable,OverflowTable)]$ \(form,control)->do
   let name=map toLower(show form++"-"++show control)
       target=case control of
        InteriorTarget->0x1044
@@ -359,5 +360,5 @@ main=do
  forM_ bad$ \input->do
   (timed,code,out,_)<-runBounded 3000000 (8*1024*1024) runner[](BC.pack input)
   result<-jsonRead out
-  ensure(not timed && code==ExitFailure 1 && get result "status"==s "invalid_case")"independent C wire rejection failed"
- putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, "++show(length bad)++" independent C rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries and schema agreement passed")
+  ensure(not timed && code==ExitFailure 1 && get result "status"==s "invalid_case")"independent wire rejection failed"
+ putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, "++show(length bad)++" independent wire rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries and schema agreement passed")

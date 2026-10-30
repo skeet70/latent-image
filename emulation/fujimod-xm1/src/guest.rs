@@ -4,7 +4,7 @@
 use crate::run::{Address, NodeName};
 use fujimod_emulator::session::Session;
 use fujimod_emulator_devices::parts::pins::Pin;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -55,6 +55,14 @@ impl DialTurn {
 /// A full press drives S2 without holding S1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShutterStage {
+    Half,
+    Full,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PhysicalShutterPosition {
+    Released,
     Half,
     Full,
 }

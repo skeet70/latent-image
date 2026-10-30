@@ -6,16 +6,18 @@
 use fujimod_xm1::adjustment::AdjustmentNand;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, load_card, menu_value, read, restore, sha256, write};
 use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, encode_hex};
-use fujimod_xm1::guest::{DialTurn, ModeDialPosition, Press, RouteKey};
+use fujimod_xm1::guest::{DialTurn, ModeDialPosition, PhysicalShutterPosition, Press, RouteKey};
 use fujimod_xm1::machine::{KeyPulse, Machine, MENU_PULSE, ReleaseSegment};
 use fujimod_xm1::render::MAX_SETTLE;
-use fujimod_xm1::run;
+use fujimod_xm1::run::{self, NodeName};
 use fujimod_emulator::board::observation::MemoryWatch;
 use fujimod_emulator::board::preservation::{
     PhysicalRange, Preservation, PreservationState, ProtectedRanges,
 };
 use fujimod_xm1::sd_host::{Backing, MediaImage, SectorAddress, SectorCount};
 use serde::{Deserialize, Serialize};
+use fujimod_emulator_devices::Device;
+use fujimod_emulator_exr2_isp_input::ImageInput;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -286,6 +288,9 @@ enum Request {
     TraceSites { sites: BTreeMap<String, String> },
     TraceHits { from: usize },
     Key { key: String, hold_instructions: Option<u64>, release_instructions: Option<u64>, settle_instructions: Option<u64> },
+    ShutterSequence,
+    ImageInputFingerprint { node: NodeName },
+    CaptureObservationWindow,
     ReleaseContext { segment: Option<ReleaseSegment> },
     ModeDial { position: ModeDialPosition },
     ReadMemory { address: u64, count: usize },
@@ -308,6 +313,9 @@ enum RequestKind {
     TraceSites,
     TraceHits,
     Key,
+    ShutterSequence,
+    ImageInputFingerprint,
+    CaptureObservationWindow,
     ReleaseContext,
     ModeDial,
     ReadMemory,
@@ -330,6 +338,9 @@ impl Request {
             Request::TraceSites { .. } => RequestKind::TraceSites,
             Request::TraceHits { .. } => RequestKind::TraceHits,
             Request::Key { .. } => RequestKind::Key,
+            Request::ShutterSequence => RequestKind::ShutterSequence,
+            Request::ImageInputFingerprint { .. } => RequestKind::ImageInputFingerprint,
+            Request::CaptureObservationWindow => RequestKind::CaptureObservationWindow,
             Request::ReleaseContext { .. } => RequestKind::ReleaseContext,
             Request::ModeDial { .. } => RequestKind::ModeDial,
             Request::ReadMemory { .. } => RequestKind::ReadMemory,
@@ -403,6 +414,34 @@ fn default_pulse(key: Press) -> KeyPulse {
     }
 }
 
+#[derive(Clone, Copy, Serialize)]
+#[serde(transparent)]
+struct GuestInstructions(u64);
+
+const CAPTURE_OBSERVATION_WINDOW: GuestInstructions = GuestInstructions(MODE_DIAL_SETTLE);
+
+#[derive(Serialize)]
+struct ShutterPhaseObservation {
+    position: PhysicalShutterPosition,
+    started: GuestInstructions,
+    finished: GuestInstructions,
+}
+
+fn shutter_phase(
+    bridge: &mut Ff80,
+    position: PhysicalShutterPosition,
+    duration: GuestInstructions,
+) -> Result<ShutterPhaseObservation, String> {
+    let started = GuestInstructions(bridge.machine.instructions());
+    bridge.machine.set_shutter_position(position)?;
+    bridge.advance(duration.0)?;
+    Ok(ShutterPhaseObservation {
+        position,
+        started,
+        finished: GuestInstructions(bridge.machine.instructions()),
+    })
+}
+
 impl Server {
     fn arm(&mut self, requested: &BTreeMap<String, String>) -> Result<usize, String> {
         let mut sites: BTreeMap<u32, String> =
@@ -467,6 +506,28 @@ impl Server {
                 self.key_log.push(json!({"key": key, "seconds": started.elapsed().as_secs_f64(),
                     "instructions": self.bridge.machine.instructions() - before, "settle": settle}));
                 json!({"menu": menu_value(self.bridge.machine.menu()?), "settle": settle})
+            }
+            Request::ShutterSequence => {
+                let phases = [
+                    shutter_phase(&mut self.bridge, PhysicalShutterPosition::Half, GuestInstructions(GPIO_PULSE.hold))?,
+                    shutter_phase(&mut self.bridge, PhysicalShutterPosition::Full, GuestInstructions(GPIO_PULSE.hold))?,
+                    shutter_phase(&mut self.bridge, PhysicalShutterPosition::Half, GuestInstructions(GPIO_PULSE.release / 2))?,
+                    shutter_phase(&mut self.bridge, PhysicalShutterPosition::Released, GuestInstructions(GPIO_PULSE.release / 2))?,
+                ];
+                self.key_log.push(json!({"physical_shutter_sequence": phases}));
+                json!({"phases": phases})
+            }
+            Request::ImageInputFingerprint { node } => {
+                let machine = &self.bridge.machine;
+                let fingerprint = machine.session.board.inspect_device::<ImageInput, _>(
+                    machine.session.node(&node.0)?,
+                    |device| device.fingerprint(),
+                )?;
+                json!({"instructions": machine.instructions(), "fingerprint": fingerprint})
+            }
+            Request::CaptureObservationWindow => {
+                self.bridge.advance(CAPTURE_OBSERVATION_WINDOW.0)?;
+                json!({"instructions": GuestInstructions(self.bridge.machine.instructions())})
             }
             Request::ModeDial { position } => {
                 let window = self.bridge.machine.set_mode_dial(position)?;

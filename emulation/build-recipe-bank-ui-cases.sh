@@ -72,8 +72,10 @@ while read -r sym; do
   if [ -z "$addr" ]; then echo "kernel symbol missing: $sym" >&2; exit 1; fi
   DEFSYMS+=("-Wl,--defsym=$sym=$addr")
 done < <(llvm-nm --undefined-only "$BUILD_DIR/model.o" | awk '{print $2}')
+# The media-only model's data span is the 0xe4 bytes after the original 0x200 media-state window at 0x00910140, a native-case mapping, not a camera reservation.
 env $HARDEN clang "${ARM[@]}" -nostdlib -static -fuse-ld=lld \
   -Wl,--no-dynamic-linker -Wl,--build-id=none \
+  -Wl,--defsym=rbm_data_base=0x00910340 -Wl,--defsym=rbm_data_limit=0x00910424 \
   -Wl,-T,emulation/recipe-bank-model.ld "${DEFSYMS[@]}" "$BUILD_DIR/model.o" \
   -o "$BUILD_DIR/model.elf"
 llvm-nm --defined-only --print-size --numeric-sort "$BUILD_DIR/model.elf" > "$BUILD_DIR/model.syms"

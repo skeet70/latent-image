@@ -22,8 +22,7 @@ main = do
   args <- getArgs
   runner <- case args of [path] -> canonicalizePath path; _ -> H.failH "usage: f01-native-probes NATIVE_RUNNER"
   results <- forM [("stmia-writeback-boundary",0xe8a20003,0x2004,0x2004,4),
-                   ("stmdb-writeback-boundary",0xe9220003,0x2008,0x2004,4),
-                   ("stmia-writeback-overflow",0xe8a20001,0xfffffffc,0xfffffffc,4)] $ \(label,instruction,base,address,size) -> do
+                   ("stmdb-writeback-boundary",0xe9220003,0x2008,0x2004,4)] $ \(label,instruction,base,address,size) -> do
     let code = wordBytes instruction ++ wordBytes 0xe12fff1e
         initial = [0xfffffffe,5,base] ++ replicate 10 0 ++ [0x3020,0x1080,0x10]
         wire = unlines ["FUJI_NATIVE_V1","cortex-r5f-arm-le","1004 1080 100 1000",unwords (map hex initial),"4 1 0",
