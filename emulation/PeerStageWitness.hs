@@ -47,9 +47,9 @@ usage = unlines
   , "       peer-stage-witness --firmware DAT --fflzd FFLZD --output DIR"
   , "       peer-stage-witness --firmware DAT --fflzd FFLZD --output DIR --launch --driver DRIVER --run RUN_JSON --boot-rom ROM"
   , "       peer-stage-witness --firmware DAT --fflzd FFLZD --output DIR --control held-sentinel|delayed-release [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
-  , "Preparation writes peer-witness-contract.json and peer-witness-expected.json without starting an emulator."
+  , "Natural preparation writes peer-witness-contract.json and peer-witness-expected.json without starting an emulator."
   , "Launch requires an explicit driver, run description and captured 16 KiB ROM."
-  , "Control preparation preserves the original input and writes a source-bound peer-control.DAT and manifest."
+  , "Control preparation preserves the input and writes peer-witness-contract.json, peer-control.DAT and peer-control-manifest.json instead of the natural expected-policy file."
   ]
 
 data Flag = ReceiptFile | ArgumentWord | ControlReceiptFile | ControlManifestFile | ControlMode | FirmwareFile | FflzdFile | OutputDirectory | DriverFile | RunFile | RomFile
@@ -253,11 +253,14 @@ main = do
           argumentWord <- either H.failH pure (leWordAt image4 0xc)
           let expected = Argument argumentWord
           input <- prepareInput source (Firmware datPath) output expected
-          binding <- expectedValue datPath dat record2 loader image4 expected
           let contract = output </> "peer-witness-contract.json"
               receipt = output </> "peer-witness.json"
           BL.writeFile contract (encode (inputContract input))
-          BL.writeFile (output </> "peer-witness-expected.json") (encode binding)
+          case input of
+            NaturalInput _ -> do
+              binding <- expectedValue datPath dat record2 loader image4 expected
+              BL.writeFile (output </> "peer-witness-expected.json") (encode binding)
+            ControlledInput _ _ -> pure ()
           case execution of
             PrepareOnly -> do
               putStrLn ("peer-stage preparation: " ++ output)

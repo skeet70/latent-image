@@ -53,7 +53,7 @@ The expected-input file records the firmware path/hash, record-2/loader-B/image-
 "$PEER_STAGE_WITNESS" --receipt "$RECEIPT" --argument 0x0069cdf8
 ```
 
-The explicit launch interface below requires a separately reviewed runtime grant. `SDK_DRIVER`, `RUN_DOCUMENT` and `BOOT_ROM` name the reviewed driver, frozen run document and captured ROM; `PEER_RUN` must be fresh and distinct from the preparation directory. The exercised baseline used the immutable SDK through a reviewed resource-only launcher, with its exact command and identities retained in `E-PEER-NATURAL-RESET-BASELINE-150`. All three launch inputs are required:
+The explicit launch interface below starts a full-system run; it is not preparation. `SDK_DRIVER`, `RUN_DOCUMENT` and `BOOT_ROM` name the selected driver, frozen run document and captured ROM; `PEER_RUN` must be fresh and distinct from the preparation directory. The exercised baseline used the immutable SDK through a resource-only launcher, with its exact command and identities retained in `E-PEER-NATURAL-RESET-BASELINE-150`. All three launch inputs are required:
 
 ```sh
 env XM1_EMULATOR_SLOTS=1 "$PEER_STAGE_WITNESS" \
@@ -81,7 +81,7 @@ Gate acceptance requires core-0 SP `0x700007f0`, masked A32 little-endian SVC, t
 
 All schema-2 instruction counts are aggregate **entered** counts, including attempted-access counters. Each clear microstep records both per-core counters and requires aggregate delta exactly one; any other delta fails closed. Delta alone is not instruction-execution or retirement evidence. Original-clear completion additionally requires core 0 before PC `0x1ff8`, original STR bytes `00 20 83 e5`, after PC `0x1ffc`, unchanged CPSR, no machine failure, matching core-0/PC attempted metadata and immediate physical zero readback before another CPU entry. The final attempt and readback entered counts are equal. The SDK scheduler retains `next_core` and remaining quantum across pauses (`board/mod.rs:779-795,894-904`, `board/schedule.rs:9-29`); the observer neither selects a core nor resets its quantum.
 
-An instruction-point stop excludes its unconsumed next entry. A completed original LDR's attempted-read count may equal the following `0x11f78` stop count. Acceptance permits that equality only with the exact core/PC/alias/value/preimage, loaded registers, independent state and watch-cursor interval. All four held-load stops must still precede the original clear. New public-SDK fixtures cover load/stop equality and rejected site removal during active capture observation; they remain unrun pending the separate SDK build grant.
+An instruction-point stop excludes its unconsumed next entry. A completed original LDR's attempted-read count may equal the following `0x11f78` stop count. Acceptance permits that equality only with the exact core/PC/alias/value/preimage, loaded registers, independent state and watch-cursor interval. All four held-load stops must still precede the original clear. New public-SDK fixtures cover load/stop equality and rejected site removal during active capture observation; they remain unrun.
 
 The fixed control limits are 10,000,000 aggregate entered instructions; 4,000,000 through the primary gate; gate-to-four-loads 4,000,000 for held sentinel; gate-to-clear 5,100,000 for delayed release; 2,048 one-entry clear windows; committed-clear-to-loader 20,000; exactly four recorded held loads, at most 128 actual peer equality reads and 8,192 veneer polls. Successful receipts permit at most 12,288 watch rows under the existing 16,384-row collector and 16 MiB receipt limits. The existing 120-second child and 1 MiB per-stream host bounds remain active.
 
@@ -92,9 +92,9 @@ Host-only control preparation and saved-receipt consumption use:
 "$PEER_STAGE_WITNESS" --control-receipt "$CONTROL_RECEIPT" --control-manifest "$CONTROL_PREPARATION/peer-control-manifest.json"
 ```
 
-Preparation additionally writes `peer-control.DAT` and `peer-control-manifest.json`; a later separately granted explicit launch passes this candidate DAT through the existing `--update` argument. `//host/firmware:peer-wait-control-tests` and `//emulation:peer-wait-witness-tests` exercise artifact/receipt consumers. Serialized wrong-core, wrong-handoff, wrong-alias and attempted-without-readback cases are consumer controls, not guest fault evidence.
+Control preparation writes `peer-control.DAT`, `peer-control-manifest.json` and `peer-witness-contract.json`; the manifest replaces the natural-only `peer-witness-expected.json` policy file. Explicit control launch passes the candidate DAT through the existing `--update` argument. `//host/firmware:peer-wait-control-tests` and `//emulation:peer-wait-witness-tests` exercise artifact/receipt consumers. Serialized wrong-core, wrong-handoff, wrong-alias and attempted-without-readback cases are consumer controls, not guest fault evidence.
 
-Held-sentinel and delayed-release guest receipts remain absent. Their new SDK source has not been built or granted execution. Primary gate SP/CPSR/active aliases still require runtime observation; padding inspection does not resolve every indirect later access. The exception targets `0x3fff00xx` remain unresolved physical aliases/handlers. No loader-B wait completion, application entry, owned record-2 tail or physical qualification follows.
+Held-sentinel and delayed-release guest receipts remain absent; their new SDK source remains unbuilt and runtime unqualified. Primary gate SP/CPSR/active aliases still require runtime observation; padding inspection does not resolve every indirect later access. The exception targets `0x3fff00xx` remain unresolved physical aliases/handlers. No loader-B wait completion, application entry, owned record-2 tail or physical qualification follows.
 
 # Bounded selected-queue experiment
 
