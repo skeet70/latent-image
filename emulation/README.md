@@ -945,9 +945,7 @@ State can be requested at the pre-sequence and post-window stops without another
 
 While bounded observation is active, each `shutter-sequence` phase additionally returns `before` and `after` objects with the same `snapshot` and `timing` fields. `before` is captured before changing the physical shutter position; `after` is captured after that phase's existing advance. These expanded phase observations are returned only in the immediate reply and are not appended to `key_log` or retained in SDK logs.
 
-`E-XM1-CAPTURE-OBSERVER-SDK-HARNESS-150` binds combined source `87f7925aa3cb74c2103b4e1784ada0904048f0b5` to an SDK package built through the canonical Nix expression with its normal check and install hooks. All 71 tests pass: 37 library tests, including the bounded-observer lifecycle test, 30 bounded native-case harness tests, two peer-contract tests and two physical-shutter tests. Seven binary unit harnesses and the doc-test harness contain zero tests. The package installs 11 harness binaries. Only the workspace and SDK derivations build; the qualified public model is reused unchanged.
-
-The exact private collector source also compiles with `ghc -O1 -Wall -j1` in devenv. These are host package and collector qualifications only. No firmware guest advances, capture-continuation observation, controller-state/event join, queue callback, receipt `0x137e`, RAW integrity, codec/save, new-file behavior or silicon behavior is qualified. The bounded native-case harness tests are not NativeCutover consumer, F01 or wire qualification. The separately frozen runtime launcher remains unexecuted and requires parent review and a new grant.
+`E-XM1-CAPTURE-OBSERVER-SDK-HARNESS-150` records package harness and private collector compilation qualification against the unchanged qualified public model. Package harnesses and host compilation do not qualify firmware capture continuation or the integrated native consumer. Runtime observation remains pending.
 
 The run document replaces FujiMod's FFF47000 packed422 scaler with an adapter device that ports the retained declared UI conversion (YYCbCr to ABGR, IRQ 67), so the mode guides render.
 
