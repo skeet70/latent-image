@@ -31,6 +31,47 @@ data Expect
     ConsumerAt Word32 String (Maybe String)
   | -- | No declared-object consumer at this site is discharged.
     UndischargedAt Word32
+  | -- | A return-conditional consumer at this site whose premise has this
+    -- kind, whose continuation witness has this outcome, and whose witness
+    -- reports each site in its role.
+    WitnessAt Word32 String String [(Role, Word32)]
+
+data Role = Caller | Overwrite | ReadBeforeWrite | Unresolved | NonCallEntry
+
+-- | A function that calls +0x20 from +0x04 and continues with
+-- `continuationWords`, which fill +0x08 to +0x1f.
+caller :: [Word32] -> [Word32]
+caller continuationWords =
+  [ 0xe92d4800 -- push {r11, lr}
+  , 0xeb000005 -- bl +0x20
+  ]
+    ++ continuationWords
+
+-- | A framed callee whose compare-only bound stays in r3 at its return on
+-- the not-higher path; the bound's MOVT is at +0x0c.
+framedBound :: [Word32]
+framedBound =
+  [ 0xe92d4800 -- push {r11, lr}
+  , 0xe5902000 -- ldr r2, [r0]
+  , 0xe3a03a07 -- mov r3, #0x7000
+  , 0xe340307b -- movt r3, #0x7b
+  , 0xe1520003 -- cmp r2, r3
+  , 0x83a00000 -- movhi r0, #0
+  , 0xe8bd8800 -- pop {r11, pc}
+  ]
+
+-- | The only caller tests r0 and writes r3 on both successors.
+overwritingCaller :: [Word32]
+overwritingCaller =
+  caller
+    [ 0xe3500000 -- cmp r0, #0
+    , 0x0a000001 -- beq +0x18
+    , 0xe3003000 -- movw r3, #0
+    , 0xe8bd8800 -- pop {r11, pc}
+    , 0xe3013234 -- +0x18: movw r3, #0x1234
+    , 0xe8bd8800 -- pop {r11, pc}
+    ]
+    ++ framedBound
 
 -- | Materializes 0x007b7000, inside register-write stream B, in r3 and
 -- compares the word at r0 against it; `rest` runs on the not-higher path.
@@ -182,7 +223,7 @@ fixtures =
       ]
       (ConsumerAt 0x00230004 "discharged" Nothing)
   , Fixture
-      "a bound returned in r3 to a caller that loads through it is not discharged"
+      "a bound returned in r3 to a caller that loads through it reports the read and is not discharged"
       0x00200000
       [ 0xe92d4000 -- push {lr}
       , 0xeb000001 -- bl +0x10
@@ -193,9 +234,9 @@ fixtures =
       , 0xe1520003 -- cmp r2, r3
       , 0xe12fff1e -- bx lr
       ]
-      (ConsumerAt 0x00200014 "return-conditional" Nothing)
+      (WitnessAt 0x00200014 "return-continuation-does-not-read" "continuation-reads" [(Caller, 0x00200004), (ReadBeforeWrite, 0x00200008)])
   , Fixture
-      "a bound returned in r3 to a caller that branches through it is not discharged"
+      "a bound returned in r3 to a caller that branches through it reports the read and is not discharged"
       0x00210000
       [ 0xe92d4000 -- push {lr}
       , 0xeb000001 -- bl +0x10
@@ -206,7 +247,62 @@ fixtures =
       , 0xe1520003 -- cmp r2, r3
       , 0xe12fff1e -- bx lr
       ]
-      (ConsumerAt 0x00210014 "return-conditional" Nothing)
+      (WitnessAt 0x00210014 "return-continuation-does-not-read" "continuation-reads" [(Caller, 0x00210004), (ReadBeforeWrite, 0x00210008)])
+  , Fixture
+      "a bound returned in r3 to a sole caller that overwrites r3 on both successors narrows the premise and stays return-conditional"
+      0x00300000
+      overwritingCaller
+      (WitnessAt 0x0030002c "direct-continuations-overwrite" "direct-continuations-overwrite" [(Caller, 0x00300004), (Overwrite, 0x00300010), (Overwrite, 0x00300018)])
+  , Fixture
+      "an aligned word naming the callee keeps the premise unnarrowed though its caller overwrites r3"
+      0x00310000
+      (overwritingCaller ++ [0x00310020]) -- data word naming the callee
+      (WitnessAt 0x0031002c "return-continuation-does-not-read" "not-narrowed" [(Caller, 0x00310004), (Overwrite, 0x00310010), (NonCallEntry, 0x0031003c)])
+  , Fixture
+      "a callee reached only by a tail-call branch keeps the premise unnarrowed"
+      0x00320000
+      ( framedBound
+          ++ [ 0xeafffff7 -- +0x1c: b +0x00
+             , 0xe92d4800 -- push {r11, lr}
+             , 0xebfffffc -- bl +0x1c
+             , 0xe3003000 -- movw r3, #0
+             , 0xe8bd8800 -- pop {r11, pc}
+             ]
+      )
+      (WitnessAt 0x0032000c "return-continuation-does-not-read" "not-narrowed" [(NonCallEntry, 0x0032001c)])
+  , Fixture
+      "a caller continuation that calls or jumps indirectly with r3 live stays unresolved"
+      0x00330000
+      ( caller
+          [ 0xe3500000 -- cmp r0, #0
+          , 0x0a000001 -- beq +0x18
+          , 0xeb000009 -- bl +0x3c
+          , 0xe8bd8800 -- pop {r11, pc}
+          , 0xe12fff11 -- +0x18: bx r1
+          , 0xe12fff1e -- bx lr
+          ]
+          ++ framedBound
+          ++ [0xe12fff1e] -- +0x3c: bx lr
+      )
+      (WitnessAt 0x0033002c "return-continuation-does-not-read" "not-narrowed" [(Caller, 0x00330004), (Unresolved, 0x00330010), (Unresolved, 0x00330018)])
+  , Fixture
+      "a return through lr after a call in the callee keeps the premise unnarrowed though its caller overwrites r3"
+      0x00340000
+      [ 0xe92d4800 -- push {r11, lr}
+      , 0xeb000003 -- bl +0x18
+      , 0xe3003000 -- movw r3, #0
+      , 0xe8bd8800 -- pop {r11, pc}
+      , 0xe12fff1e -- +0x10: bx lr
+      , 0xe12fff1e -- bx lr
+      , 0xe92d4000 -- +0x18: push {lr}
+      , 0xebfffffb -- bl +0x10
+      , 0xe5902000 -- ldr r2, [r0]
+      , 0xe3a03a07 -- mov r3, #0x7000
+      , 0xe340307b -- movt r3, #0x7b
+      , 0xe1520003 -- cmp r2, r3
+      , 0xe12fff1e -- bx lr
+      ]
+      (WitnessAt 0x00340028 "return-continuation-does-not-read" "not-narrowed" [(Caller, 0x00340004), (Overwrite, 0x00340008), (Unresolved, 0x0034001c)])
   , Fixture
       "the bound used as a load address stays open"
       0x00150000
@@ -351,11 +447,33 @@ main = do
             consumers
         UndischargedAt site ->
           not (any (\c -> field "site" c == Just (text (hex site)) && field "status" c == Just (text "discharged")) consumers)
+        WitnessAt site premise outcome roles ->
+          any
+            ( \c ->
+                field "site" c == Just (text (hex site))
+                  && field "status" c == Just (text "return-conditional")
+                  && (field "kind" =<< field "premise" c) == Just (text premise)
+                  && (field "outcome" =<< field "continuation_witness" c) == Just (text outcome)
+                  && all (\(role, at) -> text (hex at) `elem` roleSites role (maybe Null id (field "continuation_witness" c))) roles
+            )
+            consumers
   results <- forM fixtures $ \f -> do
     let ok = satisfied (fixtureExpect f)
     putStrLn ((if ok then "pass: " else "FAIL: ") ++ fixtureName f)
     pure ok
   unless (and results) exitFailure
+
+-- | The sites a continuation witness reports in `role`.
+roleSites :: Role -> Value -> [Value]
+roleSites role witness = case role of
+  Caller -> concatMap (sitesAt "site") continuations
+  Overwrite -> concatMap (array "overwritten") continuations
+  ReadBeforeWrite -> concatMap (array "read") continuations
+  Unresolved -> concatMap (sitesAt "at") (concatMap (array "unresolved") continuations ++ array "limits" witness)
+  NonCallEntry -> concatMap (\entry -> sitesAt "site" entry ++ sitesAt "at" entry) (array "non_call_entries" witness)
+ where
+  continuations = array "callers" witness
+  sitesAt key value = maybe [] pure (field key value)
 
 field :: T.Text -> Value -> Maybe Value
 field key (Object fields) = KM.lookup (K.fromText key) fields
