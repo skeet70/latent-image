@@ -299,8 +299,9 @@ data Effect = Effect
 plain :: Regs -> Effect
 plain regs = Effect regs False Nothing [] Continue True
 
+-- | An unmodeled callee may write any register other than pc.
 callClobber :: [(Reg, Val)]
-callClobber = [(Reg n, Unknown) | n <- [0, 1, 2, 3, 12, 14]]
+callClobber = [(Reg n, Unknown) | n <- [0 .. 14]]
 
 readReg :: Word32 -> Regs -> Reg -> Val
 readReg address regs register
@@ -511,7 +512,7 @@ rejectedEffect address word reason regs = case reason of
         if testBit word 20 then plain (setRegs [(registerAt 12, Unknown), (registerAt 16, Unknown)] regs) else plain regs
     | bitsOf 27 25 word == 6 -> coprocessorTransfer
     | otherwise -> plain regs
-  SupervisorCall -> (plain (setRegs [(Reg n, Unknown) | n <- [0 .. 3]] regs)) {effectSetsFlags = True, effectFlow = Call Nothing}
+  SupervisorCall -> (plain (setRegs callClobber regs)) {effectSetsFlags = True, effectFlow = Call Nothing}
   SystemRegister
     | word .&. 0x0fbf0fff == 0x010f0000 -> plain (setReg (registerAt 12) Unknown regs)
     | otherwise -> (plain regs) {effectSetsFlags = testBit word 19}
@@ -640,33 +641,33 @@ useDef address word
 
 type LiveMemo = M.Map (Word32, Int) (S.Set Int)
 
-argumentRegisters :: S.Set Int
-argumentRegisters = S.fromList [0 .. 3]
+inputRegisters :: S.Set Int
+inputRegisters = S.fromList [0 .. 12]
 
--- | Argument registers a callee may read before writing them.
+-- | Registers r0-r12 a callee may read before writing them.
 liveIn :: Analysis -> LiveMemo -> Word32 -> Int -> (S.Set Int, LiveMemo)
 liveIn analysis memo entry depth
   | Just cached <- M.lookup (entry, depth) memo = (cached, memo)
-  | depth == 0 || not (isJust (memoryWord memory entry)) = (argumentRegisters, memo)
+  | depth == 0 || not (isJust (memoryWord memory entry)) = (inputRegisters, memo)
   | otherwise =
-      let (result, memo') = explore [(entry, S.empty)] S.empty (0 :: Int) S.empty (M.insert (entry, depth) argumentRegisters memo)
+      let (result, memo') = explore [(entry, S.empty)] S.empty (0 :: Int) S.empty (M.insert (entry, depth) inputRegisters memo)
        in (result, M.insert (entry, depth) result memo')
  where
   memory = analysisMemory analysis
   explore [] _ _ result m = (result, m)
   explore ((address, written) : rest) seen steps result m = walk address written rest seen steps result m
   walk address written rest seen steps result m
-    | steps >= 20000 = (argumentRegisters, m)
+    | steps >= 20000 = (inputRegisters, m)
     | S.member (address, written) seen = explore rest seen (steps + 1) result m
     | otherwise =
         let seen' = S.insert (address, written) seen
             steps' = steps + 1
-            open = argumentRegisters `S.difference` written
+            open = inputRegisters `S.difference` written
          in case memoryWord memory address >>= \word -> fmap (\use -> (word, use)) (useDef address word) of
               Nothing -> explore rest seen' steps' (result `S.union` open) m
               Just (word, (sources, writes, kind)) ->
                 let always = bitsOf 31 28 word == 14
-                    read' = result `S.union` (S.fromList (filter (< 4) sources) `S.difference` written)
+                    read' = result `S.union` (S.fromList (filter (< 13) sources) `S.difference` written)
                  in case (kind, switchTargets analysis address word) of
                       (UseProgramCounter, Just targets) ->
                         walk (address + 4) written ([(target, written) | target <- targets] ++ rest) seen' steps' read' m
@@ -683,9 +684,10 @@ liveIn analysis memo entry depth
                               _ -> S.empty
                             result' = read' `S.union` extra
                             written' = case kind of
-                              UseCall _ | always -> written `S.union` argumentRegisters
-                              UseCallIndirect | always -> written `S.union` argumentRegisters
-                              _ | always -> written `S.union` S.fromList (filter (< 4) writes)
+                              UseCall _ -> written
+                              UseCallIndirect -> written
+                              UseSupervisor -> written
+                              _ | always -> written `S.union` S.fromList (filter (< 13) writes)
                                 | otherwise -> written
                             pushed = case kind of
                               UseJump target -> [(target, written')]
@@ -862,7 +864,7 @@ data Fact = Fact
 data Escape
   = EscapeArgument Word32 (Maybe Word32) Int
   | EscapeStored Word32
-  | EscapeReturned Word32
+  | EscapeReturned Word32 Int
   | EscapeIndirect Word32
   deriving (Eq, Ord)
 
@@ -966,7 +968,11 @@ forward analysis tracking site = drive [(site, initial, True)] (Walk S.empty M.e
     | not (condPass cond flags) = Stepped [(regs, flags)] [] [] [] False
     | otherwise =
         let effect0 = execute analysis address word instruction regs
-            effect = effect0 {effectRegs = lineage (effectRegs effect0)}
+            effect = effect0 {effectRegs = acrossCall (lineage (effectRegs effect0))}
+            -- A tracked value an unmodeled callee may have kept stays tracked.
+            acrossCall regsAfter = case effectFlow effect0 of
+              Call _ -> setRegs [(Reg n, Derived) | n <- [0 .. 14], tracked tracking (regAt regs (Reg n))] regsAfter
+              _ -> regsAfter
             after = effectRegs effect
             -- A register computed from a tracked pointer whose value is lost
             -- becomes Derived; registers loaded from memory hold data.
@@ -996,8 +1002,8 @@ forward analysis tracking site = drive [(site, initial, True)] (Walk S.empty M.e
               , any (pointer tracking) (accessValues access)
               ]
             flowEscapes = case effectFlow effect of
-              Call target -> [EscapeArgument address target n | n <- [0 .. 3], pointer tracking (regAt regs (Reg n))]
-              Return -> [EscapeReturned address | pointer tracking (regAt regs (Reg 0))]
+              Call target -> [EscapeArgument address target n | n <- [0 .. 12], pointer tracking (regAt regs (Reg n))]
+              Return -> [EscapeReturned address n | n <- [0 .. 12], pointer tracking (regAt regs (Reg n))]
               JumpIndirect -> [EscapeIndirect address | any (pointer tracking) (take 13 (regValues after))]
               _ -> []
             unmodeled = not (effectModeled effect) && any (pointer tracking) (regValues regs)
@@ -1057,7 +1063,7 @@ escapeSite :: Escape -> Word32
 escapeSite escape = case escape of
   EscapeArgument site _ _ -> site
   EscapeStored site -> site
-  EscapeReturned site -> site
+  EscapeReturned site _ -> site
   EscapeIndirect site -> site
 
 -- * Obligations and refusals
@@ -1113,7 +1119,7 @@ escapeObligations analysis = go M.empty
        in [PointerEscape site ("argument r" ++ show n ++ " to " ++ hex target) | S.member n live] ++ go memo' rest
     EscapeArgument site Nothing n -> PointerEscape site ("argument r" ++ show n ++ " to an indirect call") : go memo rest
     EscapeStored site -> PointerEscape site "stored to memory" : go memo rest
-    EscapeReturned site -> PointerEscape site "returned in r0" : go memo rest
+    EscapeReturned site n -> PointerEscape site ("live in r" ++ show n ++ " at a return") : go memo rest
     EscapeIndirect site -> PointerEscape site "live across an indirect jump" : go memo rest
 
 -- * Declared objects and scalar consumers

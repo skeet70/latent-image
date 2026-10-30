@@ -97,6 +97,43 @@ fixtures =
       ]
       (ObligationAt "computed-index-store" 0x0013000c)
   , Fixture
+      "a callee that changes r4 leaves a controller id held in r4 unresolved"
+      0x00bf0000
+      [ 0xe3a04003 -- mov r4, #3
+      , 0xeb000002 -- bl +0x14
+      , 0xe1a00004 -- mov r0, r4
+      , 0xeb002c05 -- bl 0x00bfb028
+      , 0xe12fff1e -- bx lr
+      , 0xe3a040c8 -- +0x14: mov r4, #200
+      , 0xe12fff1e -- bx lr
+      ]
+      (ObligationAt "caller-controller-unresolved" 0x00bf000c)
+  , Fixture
+      "a callee that changes r4 leaves a state value held in r4 unresolved"
+      0x00240000
+      [ 0xe3a04001 -- mov r4, #1
+      , 0xeb000003 -- bl +0x18
+      , 0xe3075588 -- movw r5, #0x7588
+      , 0xe3405146 -- movt r5, #0x0146
+      , 0xe1c540b0 -- strh r4, [r5]
+      , 0xe12fff1e -- bx lr
+      , 0xe3a04009 -- +0x18: mov r4, #9
+      , 0xe12fff1e -- bx lr
+      ]
+      (ObligationAt "store-value-unresolved" 0x00240010)
+  , Fixture
+      "an array pointer held across a call is still reported when stored through"
+      0x00250000
+      [ 0xe3075588 -- movw r5, #0x7588
+      , 0xe3405146 -- movt r5, #0x0146
+      , 0xeb000002 -- bl +0x18
+      , 0xe3a04002 -- mov r4, #2
+      , 0xe1c540b0 -- strh r4, [r5]
+      , 0xe12fff1e -- bx lr
+      , 0xe12fff1e -- +0x18: bx lr
+      ]
+      (ObligationAt "computed-index-store" 0x00250010)
+  , Fixture
       "a compare-only bound that reaches a return in r3 is only return-conditional"
       0x00140000
       (bound [0xe3a03000, 0xe12fff1e]) -- mov r3, #0; bx lr
