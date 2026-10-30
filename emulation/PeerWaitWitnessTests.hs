@@ -148,10 +148,10 @@ fixtureWithReads selected earlyGate extraReads = object
       (set "microsteps" (values [microstep [75 + delta `div` 2,75 + delta `div` 2] [75 + delta `div` 2,76 + delta `div` 2] 0x22b
         ,microstep [75 + delta `div` 2,76 + delta `div` 2] [76 + delta `div` 2,76 + delta `div` 2] 0]) (readback (length committedRows)))
     (rows,snapshots,committed) = if selected == HeldSentinel then (heldRows,heldStops,Null) else (delayedRows,delayedStops,clearObservation)
-    assemble accumulated snapshots [] = (accumulated,snapshots)
-    assemble accumulated snapshots ((stop,attempts):remaining) =
+    assemble accumulated observedStops [] = (accumulated,observedStops)
+    assemble accumulated observedStops ((stop,attempts):remaining) =
       let next = accumulated ++ attempts ++ observationReads
-      in assemble next (snapshots ++ [set "watch_records" (number (fromIntegral (length next))) stop]) remaining
+      in assemble next (observedStops ++ [set "watch_records" (number (fromIntegral (length next))) stop]) remaining
 
 parse :: Value -> Either String ControlReceipt
 parse = parseControlReceipt . BL.toStrict . encode
