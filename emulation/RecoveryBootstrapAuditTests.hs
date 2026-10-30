@@ -7,7 +7,7 @@ import Data.Aeson (FromJSON (..), withObject, (.:))
 import Data.Aeson.Types (parseEither)
 import Data.Bits ((.|.), shiftL, shiftR)
 import qualified Data.ByteString as B
-import Data.List (isPrefixOf, isSuffixOf, mapAccumL)
+import Data.List (mapAccumL)
 import Data.Unique (hashUnique, newUnique)
 import Data.Word (Word32)
 import Emulation.EmulatorSlot (attachGuard, reexecInSlot, slotPolicyFromEnvironment)
@@ -15,13 +15,13 @@ import qualified FujiAF.Host as H
 import qualified FujiAF.JSON as J
 import Numeric.Natural (Natural)
 import System.Directory (canonicalizePath, copyFile, createDirectory, getTemporaryDirectory, removeDirectoryRecursive)
-import System.Environment (getArgs, getEnvironment, getExecutablePath, lookupEnv, setEnv, unsetEnv)
+import System.Environment (getArgs, getExecutablePath, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath ((</>))
 import System.Posix.Files (setFileMode)
 import System.Posix.Process (getProcessID)
 import System.Posix.User (getEffectiveUserID)
-import System.Process (CreateProcess (..), createProcess, proc, waitForProcess)
+import System.Process (createProcess, proc, waitForProcess)
 
 newtype Address = Address Word32 deriving (Eq, Show, FromJSON)
 newtype ByteCount = ByteCount Natural deriving (Eq, Show, FromJSON)
@@ -179,9 +179,7 @@ main = do
       forM_ [(executable, launcher), (guard, root </> "thermal-guard"), (worker, root </> "thermal-guard-worker")] $ \(source, destination) -> do
         copyFile source destination
         setFileMode destination 0o700
-      environment <- getEnvironment
-      let supported (name, _) = not ("BASH_FUNC_" `isPrefixOf` name && "%%" `isSuffixOf` name)
-      (_, _, _, process) <- createProcess (proc launcher ["--admit", enginePath, root]) {env = Just (filter supported environment)}
+      (_, _, _, process) <- createProcess (proc launcher ["--admit", enginePath, root])
       waitForProcess process >>= exitWith
     _ -> ioError (userError "usage: recovery-bootstrap-audit-tests ENGINE GUARD WORKER")
 

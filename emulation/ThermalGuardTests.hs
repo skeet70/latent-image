@@ -20,7 +20,7 @@ import System.Directory
   , removeDirectoryRecursive
   , removeFile
   )
-import System.Environment (getArgs, lookupEnv, setEnv)
+import System.Environment (getArgs, getEnvironment, lookupEnv, setEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath ((</>))
 import System.IO (IOMode (ReadMode), hGetContents, withFile)
@@ -28,7 +28,7 @@ import System.Posix.Files (setFileMode)
 import System.Posix.Process (getProcessID)
 import System.Posix.Signals (Signal, signalProcess, sigKILL, sigTERM)
 import System.Posix.User (getEffectiveUserID)
-import System.Process (createProcess, proc, readProcessWithExitCode, waitForProcess)
+import System.Process (CreateProcess (..), createProcess, proc, readProcessWithExitCode, waitForProcess)
 import Text.Read (readMaybe)
 import Emulation.ThermalGuard
   ( SysfsRoot (..)
@@ -124,9 +124,9 @@ run worker fixture guard productionWorker = do
   ignoreMissing (removeFile pidFile)
   killed <- interruptThenCheck workerPath fixturePath sysfs pidFile sigKILL
   killedOk <- expect "guardian SIGKILL cleans other-group child and leaves caller alive" killed
-  affinityOk <- publicAffinity root guard productionWorker fixturePath
+  launcherOk <- publicLauncher root guard productionWorker fixturePath
   ignoreMissing (removeDirectoryRecursive root)
-  pure (and [discoveryOk, changedName, changedLabel, missingInput, coolOk, hotOk, hotAfterOk, hotCleanup, missingAfterOk, missingCleanup, normalOk, normalCleanup, identityOk, identityCleanup, boundaryHotOk, boundaryCoolOk, limitsOk, limitsMatch, interruptedOk, killedOk, affinityOk])
+  pure (and [discoveryOk, changedName, changedLabel, missingInput, coolOk, hotOk, hotAfterOk, hotCleanup, missingAfterOk, missingCleanup, normalOk, normalCleanup, identityOk, identityCleanup, boundaryHotOk, boundaryCoolOk, limitsOk, limitsMatch, interruptedOk, killedOk, launcherOk])
 
 newtype Cpu = Cpu Int
   deriving (Eq)
@@ -137,8 +137,8 @@ newtype ObservedPid = ObservedPid Int
 newtype ObservedUnit = ObservedUnit String
   deriving (Eq)
 
-publicAffinity :: FilePath -> FilePath -> FilePath -> FilePath -> IO Bool
-publicAffinity root guardSource workerSource fixture = do
+publicLauncher :: FilePath -> FilePath -> FilePath -> FilePath -> IO Bool
+publicLauncher root guardSource workerSource fixture = do
   let directory = root </> "public"
       guard = directory </> "thermal-guard"
       worker = directory </> "thermal-guard-worker"
@@ -147,12 +147,40 @@ publicAffinity root guardSource workerSource fixture = do
   copyFile workerSource worker
   setFileMode guard 0o700
   setFileMode worker 0o700
+  environmentOk <- publicEnvironment directory guard fixture
   available <- statusCpuList "/proc/self/status"
-  case available of
+  affinityOk <- case available of
     first : _second : third : fourth : _ ->
       and <$> mapM (publicAffinityCase directory guard fixture)
         [take 4 available, [first], [first, third, fourth]]
     _ -> ioError (userError "public affinity tests require four available caller CPUs")
+  pure (environmentOk && affinityOk)
+
+publicEnvironment :: FilePath -> FilePath -> FilePath -> IO Bool
+publicEnvironment directory guard fixture = do
+  inherited <- getEnvironment
+  let output = directory </> "environment"
+      supplied =
+        [ ("THERMAL_GUARD_KEPT", "kept value")
+        , ("BASH_FUNC_thermal_guard_probe%%", "() {  :\n}")
+        , ("1THERMAL_GUARD", "digit first")
+        ]
+      names = map fst supplied
+      arguments =
+        [ "--user", "--scope", "--quiet"
+        , "--", guard, "--", fixture, "environment", output
+        ] ++ names
+  (_, _, _, process) <- createProcess (proc "systemd-run" arguments)
+    { env = Just (supplied ++ filter ((`notElem` names) . fst) inherited) }
+  code <- waitForProcess process
+  written <- doesFileExist output
+  observed <- if written then readFile output else pure ""
+  expect "public guard passes representable variables and omits unrepresentable names"
+    (code == ExitSuccess && observed == unlines
+      [ "THERMAL_GUARD_KEPT=kept value"
+      , "BASH_FUNC_thermal_guard_probe%% unset"
+      , "1THERMAL_GUARD unset"
+      ])
 
 publicAffinityCase :: FilePath -> FilePath -> FilePath -> [Cpu] -> IO Bool
 publicAffinityCase directory guard fixture cpus = do
