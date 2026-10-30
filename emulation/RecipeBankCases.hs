@@ -605,17 +605,22 @@ packTables id4 entries = (B.concat (map snd pieces), M.fromList (zip (map fst pi
     base = 0x61c400 :: Integer
     pieces = [(pr, B.take (fromIntegral (12 * n)) (B.drop (fromIntegral (t - base)) id4)) | (pr, t) <- entries, let n = length (take 64 (takeWhile (\i -> readU32 id4 (fromIntegral (t - base) + 12 * i) /= 0xffff) [0 :: Int ..]))]
 
--- | The model data span [rbm_data_base, rbm_data_limit) linked by
--- recipe-bank-model.ld.
-data ModelDataSpan = ModelDataSpan { dataSpanBase :: Integer, dataSpanSize :: Int }
+newtype ModelDataBytes = ModelDataBytes Int
+data ModelDataSpan = MediaStateTail | NativeFixtureScratch
 
 modelDataSpan :: Syms -> Either String ModelDataSpan
-modelDataSpan ms
-  | limit <= base = Left "model data span is empty"
-  | otherwise = Right (ModelDataSpan base (fromIntegral (limit - base)))
-  where
-    base = addr ms "rbm_data_base"
-    limit = addr ms "rbm_data_limit"
+modelDataSpan ms = case (addr ms "rbm_data_base", addr ms "rbm_data_limit") of
+  (0x00910340, 0x00910424) -> Right MediaStateTail
+  (0x7f000000, 0x7f001000) -> Right NativeFixtureScratch
+  _ -> Left "model data span is not a declared native-case span"
+
+dataSpanBase :: ModelDataSpan -> GuestAddress
+dataSpanBase MediaStateTail = GuestAddress 0x00910340
+dataSpanBase NativeFixtureScratch = GuestAddress 0x7f000000
+
+dataSpanSize :: ModelDataSpan -> ModelDataBytes
+dataSpanSize MediaStateTail = ModelDataBytes 0xe4
+dataSpanSize NativeFixtureScratch = ModelDataBytes 0x1000
 
 fieldTableAddress :: Integer
 fieldTableAddress = 0x970800
@@ -2571,8 +2576,8 @@ runSpec bankMode build out runner ks ms dataSpan kbin ktextLen kdataLen mdataRaw
   let dir = out </> spId sp
   createDirectoryIfMissing True dir
   let modeCell = B.replicate 0x24 0 <> u32le (mMode (spModel sp))
-      dataBase = dataSpanBase dataSpan
-      dataSize = dataSpanSize dataSpan
+      GuestAddress dataBase = dataSpanBase dataSpan
+      ModelDataBytes dataSize = dataSpanSize dataSpan
       mdata = overlay mdataRaw ([ (addr ms n - dataBase, u32le v) | (n, v) <- M.toList (mCells (spModel sp))]
         ++ [(addr ms "rbm_field_count" - dataBase, u32le (fromIntegral (B.length fTable `div` 20)))])
       mdata' =
