@@ -97,10 +97,47 @@ fixtures =
       ]
       (ObligationAt "computed-index-store" 0x0013000c)
   , Fixture
-      "a stream bound read only by a compare and dead on both paths is discharged"
+      "a compare-only bound that reaches a return in r3 is only return-conditional"
       0x00140000
       (bound [0xe3a03000, 0xe12fff1e]) -- mov r3, #0; bx lr
-      (ConsumerAt 0x00140008 "discharged" Nothing)
+      (ConsumerAt 0x00140008 "return-conditional" Nothing)
+  , Fixture
+      "a compare-only bound overwritten on every path is discharged"
+      0x00230000
+      [ 0xe3a03a07 -- mov r3, #0x7000
+      , 0xe340307b -- movt r3, #0x7b
+      , 0xe1520003 -- cmp r2, r3
+      , 0x83a00000 -- movhi r0, #0
+      , 0xe3a03000 -- mov r3, #0
+      , 0xe12fff1e -- bx lr
+      ]
+      (ConsumerAt 0x00230004 "discharged" Nothing)
+  , Fixture
+      "a bound returned in r3 to a caller that loads through it is not discharged"
+      0x00200000
+      [ 0xe92d4000 -- push {lr}
+      , 0xeb000001 -- bl +0x10
+      , 0xe5930000 -- ldr r0, [r3]
+      , 0xe8bd8000 -- pop {pc}
+      , 0xe3a03a07 -- +0x10: mov r3, #0x7000
+      , 0xe340307b -- movt r3, #0x7b
+      , 0xe1520003 -- cmp r2, r3
+      , 0xe12fff1e -- bx lr
+      ]
+      (ConsumerAt 0x00200014 "return-conditional" Nothing)
+  , Fixture
+      "a bound returned in r3 to a caller that branches through it is not discharged"
+      0x00210000
+      [ 0xe92d4000 -- push {lr}
+      , 0xeb000001 -- bl +0x10
+      , 0xe12fff13 -- bx r3
+      , 0xe8bd8000 -- pop {pc}
+      , 0xe3a03a07 -- +0x10: mov r3, #0x7000
+      , 0xe340307b -- movt r3, #0x7b
+      , 0xe1520003 -- cmp r2, r3
+      , 0xe12fff1e -- bx lr
+      ]
+      (ConsumerAt 0x00210014 "return-conditional" Nothing)
   , Fixture
       "the bound used as a load address stays open"
       0x00150000
@@ -142,13 +179,14 @@ fixtures =
       ]
       (ConsumerAt 0x001b0008 "open" (Just "live-at-return"))
   , Fixture
-      "a compare loop that keeps the bound live is discharged"
+      "a compare loop that keeps the bound live until it is overwritten is discharged"
       0x001c0000
       [ 0xe3a03a07 -- mov r3, #0x7000
       , 0xe340307b -- movt r3, #0x7b
       , 0xe4902004 -- ldr r2, [r0], #4
       , 0xe1520003 -- cmp r2, r3
       , 0x9afffffc -- bls -0x08
+      , 0xe3a03000 -- mov r3, #0
       , 0xe12fff1e -- bx lr
       ]
       (ConsumerAt 0x001c0004 "discharged" Nothing)

@@ -1169,20 +1169,30 @@ data Consumer = Consumer
   { consumerSite :: Word32
   , consumerForm :: ConsumerForm
   , consumerValues :: Maybe [Word32]
-  , consumerVerdict :: Either Unproven ScalarProof
+  , consumerVerdict :: Verdict
   }
 
 -- | Every path from the materialization reads the value only as a TST, TEQ,
--- CMP or CMN operand until it is overwritten or dead at a return.
+-- CMP or CMN operand until it is overwritten or reaches a return in r2, r3
+-- or r12.
 data ScalarProof = ScalarProof
   { scalarCompares :: S.Set Word32
-  , scalarDeaths :: S.Set Death
+  , scalarOverwrites :: S.Set Word32
+  , scalarReturns :: S.Set (Word32, Reg)
   , scalarStates :: Int
   }
 
--- | `DeadAtReturn` holds r2, r3 or r12, which AAPCS neither preserves nor
--- returns.
-data Death = Overwritten Word32 | DeadAtReturn Word32 Reg deriving (Eq, Ord)
+-- | `ReturnConditional` holds only if no continuation of those returns reads
+-- the register before writing it; AAPCS callers do not, but no caller is
+-- checked.
+data Verdict = Discharged ScalarProof | ReturnConditional ScalarProof | Open Unproven
+
+verdict :: Either Unproven ScalarProof -> Verdict
+verdict result = case result of
+  Left reason -> Open reason
+  Right proof
+    | S.null (scalarReturns proof) -> Discharged proof
+    | otherwise -> ReturnConditional proof
 
 data Unproven
   = AddressUse Word32
@@ -1264,7 +1274,7 @@ nonScalarRead address instruction held = case instruction of
 -- | Follows the value `held` holds at `start` along every successor,
 -- treating each conditional instruction as both executed and skipped.
 scalarOnly :: Analysis -> Word32 -> Reg -> Either Unproven ScalarProof
-scalarOnly analysis start register = go [(start, register)] S.empty (ScalarProof S.empty S.empty 0)
+scalarOnly analysis start register = go [(start, register)] S.empty (ScalarProof S.empty S.empty S.empty 0)
  where
   go [] _ proof = Right proof
   go ((address, held) : rest) seen proof
@@ -1284,9 +1294,9 @@ scalarOnly analysis start register = go [(start, register)] S.empty (ScalarProof
     let skipped = [(address + 4, held) | instructionCond instruction /= Cond 14]
         killed = held `elem` instructionWrites instruction
         proof1 = if compared then proof {scalarCompares = S.insert address (scalarCompares proof)} else proof
-        dies death = Right (skipped, proof1 {scalarDeaths = S.insert death (scalarDeaths proof1)})
+        overwritten = Right (skipped, proof1 {scalarOverwrites = S.insert address (scalarOverwrites proof1)})
         continueAt targets
-          | killed = dies (Overwritten address)
+          | killed = overwritten
           | otherwise = Right (skipped ++ [(target, held) | target <- targets], proof1)
     case effectFlow (execute analysis address word instruction unknownRegs) of
       Continue -> continueAt [address + 4]
@@ -1294,11 +1304,11 @@ scalarOnly analysis start register = go [(start, register)] S.empty (ScalarProof
       Switch targets -> continueAt targets
       Call _ -> Left (LiveAcrossCall address)
       Return
-        | killed -> dies (Overwritten address)
-        | held `elem` [Reg 2, Reg 3, Reg 12] -> dies (DeadAtReturn address held)
+        | killed -> overwritten
+        | held `elem` [Reg 2, Reg 3, Reg 12] -> Right (skipped, proof1 {scalarReturns = S.insert (address, held) (scalarReturns proof1)})
         | otherwise -> Left (LiveAtReturn address held)
       JumpIndirect
-        | killed -> dies (Overwritten address)
+        | killed -> overwritten
         | otherwise -> Left (LiveAtIndirectJump address)
 
 -- | Values `rd` holds after the MOVT at `site` executes, through up to three
@@ -1322,8 +1332,8 @@ objectConsumers analysis literals declared =
   lowUpper = objectStart declared `shiftR` 16
   highUpper = (objectEnd declared - 1) `shiftR` 16
   proveFrom site rd
-    | rd == pc = Left (ControlUse site)
-    | otherwise = scalarOnly analysis (site + 4) rd
+    | rd == pc = Open (ControlUse site)
+    | otherwise = verdict (scalarOnly analysis (site + 4) rd)
   consumersAt site word = case decode site word of
     MoveTop cond rd upper
       | lowUpper <= upper .&. 0x3fff && upper .&. 0x3fff <= highUpper ->
@@ -1336,7 +1346,7 @@ objectConsumers analysis literals declared =
       , objectNames declared value ->
           [Consumer site (LiteralLoad literal) (Just [value]) (proveFrom site rt)]
     _
-      | objectNames declared word, not (S.member site literals) -> [Consumer site AlignedWord (Just [word]) (Left HeldByObject)]
+      | objectNames declared word, not (S.member site literals) -> [Consumer site AlignedWord (Just [word]) (Open HeldByObject)]
       | otherwise -> []
 
 -- * Callers
@@ -1724,7 +1734,7 @@ buildProof inputs =
         , "declared_objects"
             .= object
               [ "rule"
-                  .= ( "a consumer is discharged when every path from its materialization reads the value only as a TST, TEQ, CMP or CMN operand until it is overwritten or held in r2, r3 or r12 at a return (AAPCS); any other read, a call, an indirect jump, an unmodeled instruction or leaving the images while it is live, and every aligned word naming the object, stays open. Consumers that index a base into the extent and constants the census does not trace are not enumerated" ::
+                  .= ( "a consumer is discharged when every path from its materialization reads the value only as a TST, TEQ, CMP or CMN operand until it is overwritten. It is return-conditional when some path instead reaches a return with the value in r2, r3 or r12: that holds only if no continuation reads the register first, which AAPCS callers satisfy but the checker does not verify, so it is not a discharge. Any other read, a call, an indirect jump, an unmodeled instruction or leaving the images while the value is live, and every aligned word naming the object, stays open. Consumers that index a base into the extent and constants the census does not trace are not enumerated" ::
                         String
                      )
               , "objects" .= [objectValue memory declared (objectConsumers analysis literals declared) | declared <- declaredObjects]
@@ -1991,8 +2001,9 @@ objectValue memory declared consumers =
         RoleHolds -> object ["status" .= ("holds" :: String)]
         RoleFails address -> object ["status" .= ("fails" :: String), "at" .= hex address]
         RoleUnread address -> object ["status" .= ("unread" :: String), "at" .= hex address]
-    , "discharged_consumers" .= length [() | Consumer {consumerVerdict = Right _} <- consumers]
-    , "open_consumers" .= length [() | Consumer {consumerVerdict = Left _} <- consumers]
+    , "discharged_consumers" .= length [() | Consumer {consumerVerdict = Discharged _} <- consumers]
+    , "return_conditional_consumers" .= length [() | Consumer {consumerVerdict = ReturnConditional _} <- consumers]
+    , "open_consumers" .= length [() | Consumer {consumerVerdict = Open _} <- consumers]
     , "consumers" .= map consumerValue consumers
     ]
 
@@ -2008,23 +2019,26 @@ consumerValue consumer =
       ]
         ++ ["literal" .= hex literal | LiteralLoad literal <- [consumerForm consumer]]
         ++ case consumerVerdict consumer of
-          Right proof ->
-            [ "status" .= ("discharged" :: String)
-            , "proof"
+          Discharged proof -> ["status" .= ("discharged" :: String), "proof" .= proofValueOf proof]
+          ReturnConditional proof ->
+            [ "status" .= ("return-conditional" :: String)
+            , "premise"
                 .= object
-                  [ "use" .= ("scalar-compare" :: String)
-                  , "compares" .= map hex (S.toList (scalarCompares proof))
-                  , "deaths" .= map deathValue (S.toList (scalarDeaths proof))
-                  , "states" .= scalarStates proof
+                  [ "kind" .= ("caller-ignores-scratch-register" :: String)
+                  , "returns" .= [object ["at" .= hex site, "register" .= regName register] | (site, register) <- S.toList (scalarReturns proof)]
                   ]
+            , "proof" .= proofValueOf proof
             ]
-          Left reason -> ["status" .= ("open" :: String), "reason" .= unprovenValue reason]
+          Open reason -> ["status" .= ("open" :: String), "reason" .= unprovenValue reason]
     )
-
-deathValue :: Death -> Value
-deathValue death = case death of
-  Overwritten site -> object ["overwritten" .= hex site]
-  DeadAtReturn site register -> object ["dead_at_return" .= hex site, "register" .= regName register]
+ where
+  proofValueOf proof =
+    object
+      [ "use" .= ("scalar-compare" :: String)
+      , "compares" .= map hex (S.toList (scalarCompares proof))
+      , "overwritten" .= map hex (S.toList (scalarOverwrites proof))
+      , "states" .= scalarStates proof
+      ]
 
 unprovenValue :: Unproven -> Value
 unprovenValue reason = case reason of
