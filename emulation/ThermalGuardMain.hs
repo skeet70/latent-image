@@ -5,7 +5,7 @@
 module Main (main) where
 
 import Control.Exception (IOException, SomeException, catch, onException, try)
-import Data.Char (isDigit)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.List (stripPrefix)
 import Data.Unique (hashUnique, newUnique)
 import Emulation.ThermalGuard (callerCpuProperties, callerMemoryProperties)
@@ -47,7 +47,11 @@ startService command rest = do
       Nothing -> do
         unique <- hashUnique <$> newUnique
         pure ("thermal-guard-" ++ show pid ++ "-" ++ show unique ++ ".service")
-    let environmentArgs = [ "--setenv=" ++ key | (key, _) <- environment ]
+    let environmentArgs =
+          [ "--setenv=" ++ variable
+          | (key, _) <- environment
+          , Just (EnvironmentName variable) <- [parseEnvironmentName key]
+          ]
         arguments =
           [ "--user", "--wait", "--pipe", "--collect"
           , "--unit=" ++ unit
@@ -73,3 +77,14 @@ failClosed :: String -> IO a
 failClosed reason = do
   hPutStrLn stderr ("thermal-guard: " ++ reason)
   exitWith (ExitFailure 75)
+
+-- | A name in systemd's environment-name grammar: ASCII letters, digits and
+-- @_@, not starting with a digit. systemd-run rejects any other @--setenv@ name.
+newtype EnvironmentName = EnvironmentName String
+
+parseEnvironmentName :: String -> Maybe EnvironmentName
+parseEnvironmentName name = case name of
+  first : _ | not (isDigit first) && all allowed name -> Just (EnvironmentName name)
+  _ -> Nothing
+  where
+    allowed character = isAsciiUpper character || isAsciiLower character || isDigit character || character == '_'
