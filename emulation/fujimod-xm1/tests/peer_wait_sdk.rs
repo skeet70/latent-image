@@ -122,6 +122,36 @@ fn one_entry_store_has_attempt_metadata_and_independent_physical_readback() {
 }
 
 #[test]
+fn classified_watch_records_only_the_kinds_each_range_lists() {
+    use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
+    let mut machine = machine(&[0xe5912000, 0xe5810004, 0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[0], 0x22b).unwrap();
+    machine.session.board.write_register(0, arm::CORE[1], 0x3000).unwrap();
+    let classes = vec![
+        WatchRange { start: 0x1000, end: 0x100c, kinds: WatchKinds::CPU_FETCH },
+        WatchRange { start: 0x3000, end: 0x3004, kinds: WatchKinds::CPU_WRITE },
+        WatchRange { start: 0x3004, end: 0x3008, kinds: WatchKinds::WRITES },
+    ];
+    let maps = machine.session.board.mappings().to_vec();
+    let mut watch = machine.session.board.memory_watch_begin_classified(classes, 32, maps, ViewPolicy::Fixed).unwrap();
+    machine.run(3);
+    machine.session.board.write_physical(0x3004, &[1, 2, 3, 4]).unwrap();
+    let mut readback = [0; 4];
+    machine.session.board.read_physical(0x3004, &mut readback).unwrap();
+    let observed: Watch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(observed.violation.is_none());
+    assert!(observed.records.iter().all(|row| row.source != Source::CpuRead && row.source != Source::HostRead));
+    let writes: Vec<_> = observed.records.iter().filter(|row| row.source == Source::CpuWrite).collect();
+    assert_eq!(writes.len(), 1);
+    assert_eq!((writes[0].core, writes[0].pc, writes[0].physical, writes[0].value), (Some(0), Some(0x1004), 0x3004, Some(0x22b)));
+    let fetches: Vec<_> = observed.records.iter().filter(|row| row.source == Source::CpuFetch).collect();
+    assert!(!fetches.is_empty() && fetches.iter().all(|row| row.core == Some(0) && (0x1000..0x100c).contains(&row.physical)));
+    assert_eq!(observed.records.iter().filter(|row| row.source == Source::HostWrite && row.physical == 0x3004).count(), 1);
+    assert!(machine.failure.is_none());
+}
+
+#[test]
 fn completed_load_and_its_next_unconsumed_point_share_an_entered_count() {
     let mut machine = machine(&[0xe5912000, 0xe3520000, 0xeafffffe]);
     machine.session.board.write_register(0, arm::CORE[1], 0x3000).unwrap();

@@ -18,6 +18,8 @@ const WATCH_RANGES: [(u64, u64); 3] = [(0x14c80, 0x14c88), (0x20000, 0x20008), (
 
 #[path = "peer_witness_wait.rs"]
 mod wait;
+#[path = "peer_witness_startup.rs"]
+mod startup;
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(transparent)]
@@ -47,11 +49,13 @@ struct NaturalContract {
 enum ContractWire {
     Natural(NaturalContract),
     Control(wait::ControlContract),
+    Startup(startup::StartupWire),
 }
 
 pub struct PeerContract {
     budget: Instructions,
     control: Option<wait::Control>,
+    startup: Option<startup::StartupContract>,
 }
 
 impl PeerContract {
@@ -62,11 +66,15 @@ impl PeerContract {
                 if contract.schema != 1 || !(1..=MAX_BUDGET).contains(&contract.budget.0) {
                     return Err("peer contract requires schema 1 and budget 1..50000000".into());
                 }
-                Ok(Self { budget: contract.budget, control: None })
+                Ok(Self { budget: contract.budget, control: None, startup: None })
             }
             ContractWire::Control(contract) => {
                 contract.validate()?;
-                Ok(Self { budget: contract.budget, control: Some(contract.control) })
+                Ok(Self { budget: contract.budget, control: Some(contract.control), startup: None })
+            }
+            ContractWire::Startup(wire) => {
+                let contract = wire.validate()?;
+                Ok(Self { budget: contract.budget(), control: None, startup: Some(contract) })
             }
         }
     }
@@ -374,6 +382,9 @@ fn execute(machine: &mut Machine, contract: &PeerContract, stops: &mut Vec<PeerH
 }
 
 pub fn run(mut machine: Machine, contract: PeerContract, output: &Path) -> Result<(), String> {
+    if let Some(startup) = &contract.startup {
+        return startup::run(machine, startup, output);
+    }
     if let Some(control) = contract.control {
         return wait::run(machine, control, output);
     }

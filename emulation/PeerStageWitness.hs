@@ -11,7 +11,8 @@ import Emulation.EmulatorSlot (attachGuard, reexecInSlot, slotPolicyFromEnvironm
 import Emulation.FirstStageWitness (leWordAt, sha256Hex)
 import Emulation.PeerStageWitness
 import qualified Emulation.PeerWaitWitness as W
-import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Runtime (..), freshRuntime, resolve, validateFirmware, workspace)
+import qualified Emulation.PeerStartupWitness as S
+import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Runtime (..), Workspace, freshRuntime, resolve, validateFirmware, workspace)
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.Host as H
 import qualified FujiAF.PeerWaitControl as C
@@ -35,10 +36,16 @@ data PeerInput = NaturalInput Firmware | ControlledInput Firmware C.ControlManif
 
 data SourceInput = StockSource U.Parsed | ControlledSource C.ControlArtifact
 
+-- | Candidate image, candidate symbols and source DAT for an owned program.
+data StartupProgram = RetainedStartup | OwnedStartup FilePath FilePath FilePath
+
 data Options
   = Consume FilePath Argument
   | ConsumeControl FilePath FilePath
   | Prepare FilePath FilePath FilePath Observation Launch
+  | ConsumeStartup FilePath FilePath
+  | CompareStartup FilePath FilePath
+  | PrepareStartup FilePath FilePath FilePath S.Scenario StartupProgram Launch
 
 usage :: String
 usage = unlines
@@ -47,12 +54,20 @@ usage = unlines
   , "       peer-stage-witness --firmware DAT --fflzd FFLZD --output DIR"
   , "       peer-stage-witness --firmware DAT --fflzd FFLZD --output DIR --launch --driver DRIVER --run RUN_JSON --boot-rom ROM"
   , "       peer-stage-witness --firmware DAT --fflzd FFLZD --output DIR --control held-sentinel|delayed-release [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
+  , "       peer-stage-witness --startup retained|owned --scenario natural|held-sentinel|delayed-release [--endpoint handoff|loader-entry] --firmware DAT --fflzd FFLZD --output DIR [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT] [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
+  , "       peer-stage-witness --startup-receipt FILE --startup-contract FILE"
+  , "       peer-stage-witness --compare RETAINED_RECEIPT OWNED_RECEIPT"
   , "Natural preparation writes peer-witness-contract.json and peer-witness-expected.json without starting an emulator."
   , "Launch requires an explicit driver, run description and captured 16 KiB ROM."
   , "Control preparation preserves the input and writes peer-witness-contract.json, peer-control.DAT and peer-control-manifest.json instead of the natural expected-policy file."
+  , "Startup preparation writes a schema-3 peer-witness-contract.json and peer-startup-expected.json; --endpoint is required for natural and delayed-release and refused for held-sentinel."
+  , "Owned startup requires --firmware to be the owned-staged DAT (staged on the control DAT for controls) and the candidate image, symbols and original DAT it was staged from."
   ]
 
-data Flag = ReceiptFile | ArgumentWord | ControlReceiptFile | ControlManifestFile | ControlMode | FirmwareFile | FflzdFile | OutputDirectory | DriverFile | RunFile | RomFile
+data Flag
+  = ReceiptFile | ArgumentWord | ControlReceiptFile | ControlManifestFile | ControlMode | FirmwareFile | FflzdFile | OutputDirectory | DriverFile | RunFile | RomFile
+  | StartupMode | ScenarioKind | EndpointName | CandidateImageFile | CandidateSymbolsFile | SourceFirmwareFile
+  | StartupReceiptFile | StartupContractFile | CompareRetainedFile | CompareOwnedFile
   deriving (Eq)
 
 parseOptions :: [String] -> Either String Options
@@ -61,32 +76,63 @@ parseOptions arguments = do
   let value flag = lookup flag values
       need name flag = maybe (Left (name ++ " is required\n" ++ usage)) Right (value flag)
       only allowed = unless (all ((`elem` allowed) . fst) values) (Left ("incompatible options\n" ++ usage))
-  case (value ReceiptFile, value ControlReceiptFile) of
-    (Just path, Nothing) -> do
-      only [ReceiptFile,ArgumentWord]
-      when launch (Left "receipt mode cannot launch")
-      Consume path <$> (need "--argument" ArgumentWord >>= parseArgument)
-    (Nothing, Just path) -> do
-      only [ControlReceiptFile,ControlManifestFile]
-      when launch (Left "receipt mode cannot launch")
-      ConsumeControl path <$> need "--control-manifest" ControlManifestFile
-    (Just _, Just _) -> Left "natural and control receipt modes are mutually exclusive"
-    (Nothing, Nothing) -> do
-      only [FirmwareFile,FflzdFile,OutputDirectory,DriverFile,RunFile,RomFile,ControlMode]
-      firmware <- need "--firmware" FirmwareFile
-      fflzd <- need "--fflzd" FflzdFile
-      output <- need "--output" OutputDirectory
-      observation <- maybe (Right NaturalBaseline) (fmap WaitControl . C.parseControlName) (value ControlMode)
-      execution <- if launch
+      launchMode = if launch
         then Launch <$> (Driver <$> need "--driver" DriverFile) <*> (RunDescription <$> need "--run" RunFile) <*> (BootRom <$> need "--boot-rom" RomFile)
         else do
           unless (all ((`notElem` [DriverFile,RunFile,RomFile]) . fst) values) (Left "driver/run/ROM require --launch")
           pure PrepareOnly
-      pure (Prepare firmware fflzd output observation execution)
+      candidateFlags = [CandidateImageFile,CandidateSymbolsFile,SourceFirmwareFile]
+  case (value StartupReceiptFile, value CompareRetainedFile, value StartupMode) of
+    (Nothing, Nothing, Nothing) -> case (value ReceiptFile, value ControlReceiptFile) of
+      (Just path, Nothing) -> do
+        only [ReceiptFile,ArgumentWord]
+        when launch (Left "receipt mode cannot launch")
+        Consume path <$> (need "--argument" ArgumentWord >>= parseArgument)
+      (Nothing, Just path) -> do
+        only [ControlReceiptFile,ControlManifestFile]
+        when launch (Left "receipt mode cannot launch")
+        ConsumeControl path <$> need "--control-manifest" ControlManifestFile
+      (Just _, Just _) -> Left "natural and control receipt modes are mutually exclusive"
+      (Nothing, Nothing) -> do
+        only [FirmwareFile,FflzdFile,OutputDirectory,DriverFile,RunFile,RomFile,ControlMode]
+        firmware <- need "--firmware" FirmwareFile
+        fflzd <- need "--fflzd" FflzdFile
+        output <- need "--output" OutputDirectory
+        observation <- maybe (Right NaturalBaseline) (fmap WaitControl . C.parseControlName) (value ControlMode)
+        execution <- launchMode
+        pure (Prepare firmware fflzd output observation execution)
+    (Just path, Nothing, Nothing) -> do
+      only [StartupReceiptFile,StartupContractFile]
+      when launch (Left "receipt mode cannot launch")
+      ConsumeStartup path <$> need "--startup-contract" StartupContractFile
+    (Nothing, Just retained, Nothing) -> do
+      only [CompareRetainedFile,CompareOwnedFile]
+      when launch (Left "comparison mode cannot launch")
+      CompareStartup retained <$> need "--compare" CompareOwnedFile
+    (Nothing, Nothing, Just mode) -> do
+      only ([FirmwareFile,FflzdFile,OutputDirectory,DriverFile,RunFile,RomFile,StartupMode,ScenarioKind,EndpointName] ++ candidateFlags)
+      scenario <- need "--scenario" ScenarioKind >>= \kind -> startupScenario kind (value EndpointName)
+      program <- case mode of
+        "retained" -> do
+          unless (all ((`notElem` candidateFlags) . fst) values) (Left "retained startup refuses --candidate-image, --candidate-symbols and --source-firmware")
+          pure RetainedStartup
+        "owned" -> OwnedStartup <$> need "--candidate-image" CandidateImageFile <*> need "--candidate-symbols" CandidateSymbolsFile
+          <*> need "--source-firmware" SourceFirmwareFile
+        _ -> Left "--startup must be retained or owned"
+      firmware <- need "--firmware" FirmwareFile
+      fflzd <- need "--fflzd" FflzdFile
+      output <- need "--output" OutputDirectory
+      PrepareStartup firmware fflzd output scenario program <$> launchMode
+    _ -> Left "startup receipt, comparison and startup preparation modes are mutually exclusive"
   where
     collect values launch [] = Right (values,launch)
     collect values False ("--launch":rest) = collect values True rest
     collect _ True ("--launch":_) = Left "duplicate --launch"
+    collect values launch ("--compare":retained:owned:rest) = do
+      when (any (\entry -> null entry || take 2 entry == "--") [retained,owned]) (Left "--compare requires RETAINED_RECEIPT OWNED_RECEIPT")
+      when (CompareRetainedFile `elem` map fst values) (Left "duplicate option: --compare")
+      collect ((CompareOwnedFile,owned):(CompareRetainedFile,retained):values) launch rest
+    collect _ _ ("--compare":_) = Left ("--compare requires RETAINED_RECEIPT OWNED_RECEIPT\n" ++ usage)
     collect values launch (name:entry:rest) = do
       flag <- case name of
         "--receipt" -> Right ReceiptFile
@@ -100,11 +146,39 @@ parseOptions arguments = do
         "--driver" -> Right DriverFile
         "--run" -> Right RunFile
         "--boot-rom" -> Right RomFile
+        "--startup" -> Right StartupMode
+        "--scenario" -> Right ScenarioKind
+        "--endpoint" -> Right EndpointName
+        "--candidate-image" -> Right CandidateImageFile
+        "--candidate-symbols" -> Right CandidateSymbolsFile
+        "--source-firmware" -> Right SourceFirmwareFile
+        "--startup-receipt" -> Right StartupReceiptFile
+        "--startup-contract" -> Right StartupContractFile
         _ -> Left ("unknown option: " ++ name ++ "\n" ++ usage)
       when (null entry || take 2 entry == "--") (Left ("missing value for " ++ name))
       when (flag `elem` map fst values) (Left ("duplicate option: " ++ name))
       collect ((flag,entry):values) launch rest
     collect _ _ [name] = Left ("missing value for " ++ name ++ "\n" ++ usage)
+
+startupScenario :: String -> Maybe String -> Either String S.Scenario
+startupScenario kind endpoint = case (kind, endpoint) of
+  ("held-sentinel", Nothing) -> Right S.HeldSentinel
+  ("held-sentinel", Just _) -> Left "--endpoint is refused for held-sentinel"
+  ("natural", Just name) -> S.Natural <$> endpointOf name
+  ("delayed-release", Just name) -> S.DelayedRelease <$> endpointOf name
+  ("natural", Nothing) -> Left "--endpoint is required for natural"
+  ("delayed-release", Nothing) -> Left "--endpoint is required for delayed-release"
+  _ -> Left "--scenario must be natural, held-sentinel or delayed-release"
+  where
+    endpointOf name = case name of
+      "handoff" -> Right S.Handoff
+      "loader-entry" -> Right S.LoaderEntry
+      _ -> Left "--endpoint must be handoff or loader-entry"
+
+scenarioControl :: S.Scenario -> Maybe C.PeerControl
+scenarioControl (S.Natural _) = Nothing
+scenarioControl S.HeldSentinel = Just C.HeldSentinel
+scenarioControl (S.DelayedRelease _) = Just C.DelayedRelease
 
 maxContainer, maxImage :: Int
 maxContainer = 64 * 1024 * 1024
@@ -209,6 +283,125 @@ consumeInput :: PeerInput -> FilePath -> Argument -> IO ()
 consumeInput (NaturalInput _) path expected = consume path expected
 consumeInput (ControlledInput _ manifest) path _ = consumeControl path manifest
 
+consumeStartup :: FilePath -> S.Scenario -> S.Program -> IO S.StartupReceipt
+consumeStartup path scenario program = do
+  bytes <- H.readRegular S.maxStartupReceiptBytes path
+  receipt <- either H.failH pure (S.parseStartupReceipt bytes)
+  either H.failH pure (S.validateStartupReceipt scenario program receipt)
+  putStrLn ("peer-startup receipt accepted: " ++ path)
+  pure receipt
+
+compareStartup :: FilePath -> FilePath -> IO ()
+compareStartup retainedPath ownedPath = do
+  retained <- H.readRegular S.maxStartupReceiptBytes retainedPath >>= either H.failH pure . S.parseStartupReceipt
+  owned <- H.readRegular S.maxStartupReceiptBytes ownedPath >>= either H.failH pure . S.parseStartupReceipt
+  either H.failH pure (S.compareStartupReceipts retained owned)
+  putStrLn ("peer-startup comparison accepted: " ++ retainedPath ++ " " ++ ownedPath)
+
+enterSlot :: [String] -> Launch -> IO ()
+enterSlot _ PrepareOnly = pure ()
+enterSlot args Launch {} = do
+  policy <- slotPolicyFromEnvironment
+  reexecInSlot policy args
+  attachGuard args
+
+-- | Checks the X-M1 1.50 loader-B and image-4 bindings; returns loader B.
+qualifyBindings :: B.ByteString -> U.Parsed -> IO B.ByteString
+qualifyBindings dat parsed = do
+  let parts = U.parsedParts parsed
+      mainStart = U.stagingLength + fromIntegral (U.hMainOffset (U.parsedHeader parsed))
+  H.ensure (U.partVersionMajor parts == 1 && U.partVersionMinor parts == 0x50) "requires X-M1 1.50"
+  segment1 <- segmentById parts 1
+  segment4 <- segmentById parts 4
+  H.ensure (U.segLoad segment1 == 0xd0000 && U.segSize segment1 >= 0x24 && U.segSize segment1 <= 0x20000) "segment1 loader extent differs"
+  H.ensure (U.segLoad segment4 == 0x61c400) "image4 load address differs from original binding"
+  loader <- mediaSlice dat mainStart (fromIntegral (U.segFlash segment1)) (fromIntegral (U.segSize segment1))
+  entry <- either H.failH pure (leWordAt loader 0xc)
+  load <- either H.failH pure (leWordAt loader 4)
+  H.ensure (entry == 0xd0020 && load == U.segLoad segment1) "loaderB header entry or load differs"
+  pure loader
+
+launchDriver :: Workspace -> FilePath -> FilePath -> FilePath -> Firmware -> Driver -> RunDescription -> BootRom -> IO () -> IO ()
+launchDriver root output contract receipt (Firmware update) (Driver driverPath) (RunDescription runPath) (BootRom romPath) consumeReceipt = do
+  driver <- canonicalizePath (resolve root driverPath)
+  run <- canonicalizePath (resolve root runPath)
+  rom <- canonicalizePath (resolve root romPath)
+  romBytes <- H.readRegular 0x4000 rom
+  H.ensure (B.length romBytes == 0x4000) "captured boot ROM must be exactly 16 KiB"
+  let launchArgs = ["--run",run,"--update",update,"--boot-rom",rom,"--output",output,"--peer-witness",contract]
+  putStrLn (showCommandForUser driver launchArgs)
+  (bounded,code,out,err) <- H.runBounded 120000000 (1024 * 1024) driver launchArgs B.empty
+  B.writeFile (output </> "driver.stdout.log") out
+  B.writeFile (output </> "driver.stderr.log") err
+  B.putStr out
+  B.hPut stderr err
+  hasReceipt <- doesFileExist receipt
+  when hasReceipt consumeReceipt
+  H.ensure (not bounded) "peer driver exceeded wall/output bounds"
+  H.ensure (code == ExitSuccess) "peer driver exited nonzero"
+  H.ensure hasReceipt "peer driver did not write peer-witness.json"
+
+maxCandidateImage, maxCandidateSymbols :: Int
+maxCandidateImage = 64 * 1024
+maxCandidateSymbols = 1024 * 1024
+
+prepareStartup :: Workspace -> FilePath -> FilePath -> FilePath -> S.Scenario -> StartupProgram -> Launch -> IO ()
+prepareStartup root firmwarePath fflzdPath outputPath scenario choice execution = do
+  datPath <- canonicalizePath (resolve root firmwarePath)
+  let fflzd = resolve root fflzdPath
+      control = scenarioControl scenario
+  dat <- H.readRegular maxContainer datPath
+  (parsed, program, retainedSource) <- case choice of
+    RetainedStartup -> do
+      source <- qualifySource (maybe NaturalBaseline WaitControl control) (Firmware datPath) dat
+      let parsed = sourceParsed source
+          mainStart = U.stagingLength + fromIntegral (U.hMainOffset (U.parsedHeader parsed))
+      record2 <- mediaSlice dat mainStart 0x50000 0x4c80
+      H.ensure (sha256Hex record2 == pinnedRecord2) "record2 is not the original peer boot record"
+      pure (parsed, S.Retained, Just source)
+    OwnedStartup imagePath symbolsPath originalPath -> do
+      originalCanonical <- canonicalizePath (resolve root originalPath)
+      original <- H.readRegular maxContainer originalCanonical
+      _ <- qualifySource NaturalBaseline (Firmware originalCanonical) original
+      bin <- H.readRegular maxCandidateImage (resolve root imagePath)
+      symbols <- H.readRegular maxCandidateSymbols (resolve root symbolsPath)
+      entry <- either H.failH pure (S.candidateEntry symbols)
+      staged <- either H.failH pure (S.verifyStagedOwned original dat bin entry control)
+      facts <- either H.failH pure (S.deriveOwnedFacts bin symbols staged)
+      parsed <- either H.failH pure (U.parseContainer dat)
+      pure (parsed, S.Owned facts, Nothing)
+  _ <- qualifyBindings dat parsed
+  Runtime output <- freshRuntime root (Just (Runtime outputPath)) (UniqueRuntime "peer-stage-witness")
+  image4 <- decodeImage4 fflzd output (U.parsedParts parsed)
+  argumentWord <- either H.failH pure (leWordAt image4 0xc)
+  let expected = Argument argumentWord
+  launched <- case retainedSource of
+    Just source -> inputFirmware <$> prepareInput source (Firmware datPath) output expected
+    Nothing -> pure (Firmware datPath)
+  let Firmware launchedPath = launched
+      contract = output </> "peer-witness-contract.json"
+      receipt = output </> "peer-witness.json"
+  launchedBytes <- if launchedPath == datPath then pure dat else H.readRegular maxContainer launchedPath
+  BL.writeFile contract (encode (S.contractValue scenario program))
+  BL.writeFile (output </> "peer-startup-expected.json") (encode (object
+    [ "schema" .= (3 :: Int), "scenario" .= S.scenarioValue scenario, "program" .= S.programName program
+    , "firmware" .= launchedPath, "firmware_sha256" .= sha256Hex launchedBytes
+    , "record_sha256" .= S.programRecordHex program, "argument" .= argumentWord
+    , "loader_b_entry" .= (0xd0020 :: Word32)
+    ]))
+  case execution of
+    PrepareOnly -> do
+      putStrLn ("peer-startup preparation: " ++ output)
+      putStrLn ("receipt consumer: " ++ showCommandForUser "peer-stage-witness" ["--startup-receipt",receipt,"--startup-contract",contract])
+      putStrLn "launch requires a separate explicit --launch invocation with --driver, --run and --boot-rom"
+    Launch driver run rom -> launchDriver root output contract receipt launched driver run rom $ do
+      accepted <- consumeStartup receipt scenario program
+      case scenario of
+        S.HeldSentinel -> pure ()
+        _ -> do
+          observed <- either H.failH pure (S.startupArgument accepted)
+          H.ensure (observed == expected) "handoff argument differs from the decoded image-4 argument"
+
 main :: IO ()
 main = do
   args <- getArgs
@@ -224,12 +417,7 @@ main = do
           manifest <- either H.failH pure (C.parseManifest manifestBytes)
           consumeControl (resolve root path) manifest
         Prepare firmwarePath fflzdPath outputPath observation execution -> do
-          case execution of
-            PrepareOnly -> pure ()
-            Launch {} -> do
-              policy <- slotPolicyFromEnvironment
-              reexecInSlot policy args
-              attachGuard args
+          enterSlot args execution
           datPath <- canonicalizePath (resolve root firmwarePath)
           let fflzd = resolve root fflzdPath
           dat <- H.readRegular maxContainer datPath
@@ -240,14 +428,7 @@ main = do
           H.ensure (U.partVersionMajor parts == 1 && U.partVersionMinor parts == 0x50) "requires X-M1 1.50"
           record2 <- mediaSlice dat mainStart 0x50000 0x4c80
           H.ensure (sha256Hex record2 == pinnedRecord2) "record2 is not the original peer boot record"
-          segment1 <- segmentById parts 1
-          segment4 <- segmentById parts 4
-          H.ensure (U.segLoad segment1 == 0xd0000 && U.segSize segment1 >= 0x24 && U.segSize segment1 <= 0x20000) "segment1 loader extent differs"
-          H.ensure (U.segLoad segment4 == 0x61c400) "image4 load address differs from original binding"
-          loader <- mediaSlice dat mainStart (fromIntegral (U.segFlash segment1)) (fromIntegral (U.segSize segment1))
-          entry <- either H.failH pure (leWordAt loader 0xc)
-          load <- either H.failH pure (leWordAt loader 4)
-          H.ensure (entry == 0xd0020 && load == U.segLoad segment1) "loaderB header entry or load differs"
+          loader <- qualifyBindings dat parsed
           Runtime output <- freshRuntime root (Just (Runtime outputPath)) (UniqueRuntime "peer-stage-witness")
           image4 <- decodeImage4 fflzd output parts
           argumentWord <- either H.failH pure (leWordAt image4 0xc)
@@ -269,22 +450,14 @@ main = do
                     ControlledInput _ _ -> ["--control-receipt",receipt,"--control-manifest",output </> "peer-control-manifest.json"]
               putStrLn ("receipt consumer: " ++ showCommandForUser "peer-stage-witness" consumerArgs)
               putStrLn "launch requires a separate explicit --launch invocation with --driver, --run and --boot-rom"
-            Launch (Driver driverPath) (RunDescription runPath) (BootRom romPath) -> do
-              driver <- canonicalizePath (resolve root driverPath)
-              run <- canonicalizePath (resolve root runPath)
-              rom <- canonicalizePath (resolve root romPath)
-              romBytes <- H.readRegular 0x4000 rom
-              H.ensure (B.length romBytes == 0x4000) "captured boot ROM must be exactly 16 KiB"
-              let Firmware update = inputFirmware input
-                  launchArgs = ["--run",run,"--update",update,"--boot-rom",rom,"--output",output,"--peer-witness",contract]
-              putStrLn (showCommandForUser driver launchArgs)
-              (bounded,code,out,err) <- H.runBounded 120000000 (1024 * 1024) driver launchArgs B.empty
-              B.writeFile (output </> "driver.stdout.log") out
-              B.writeFile (output </> "driver.stderr.log") err
-              B.putStr out
-              B.hPut stderr err
-              hasReceipt <- doesFileExist receipt
-              when hasReceipt (consumeInput input receipt expected)
-              H.ensure (not bounded) "peer driver exceeded wall/output bounds"
-              H.ensure (code == ExitSuccess) "peer driver exited nonzero"
-              H.ensure hasReceipt "peer driver did not write peer-witness.json"
+            Launch driver run rom ->
+              launchDriver root output contract receipt (inputFirmware input) driver run rom (consumeInput input receipt expected)
+        ConsumeStartup path contractPath -> do
+          contractBytes <- H.readRegular (1024 * 1024) (resolve root contractPath)
+          (scenario, program) <- either H.failH pure (S.parseStartupContract contractBytes)
+          _ <- consumeStartup (resolve root path) scenario program
+          pure ()
+        CompareStartup retainedPath ownedPath -> compareStartup (resolve root retainedPath) (resolve root ownedPath)
+        PrepareStartup firmwarePath fflzdPath outputPath scenario program execution -> do
+          enterSlot args execution
+          prepareStartup root firmwarePath fflzdPath outputPath scenario program execution
