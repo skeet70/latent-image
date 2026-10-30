@@ -422,6 +422,38 @@ haskell_test(
     ],
 )
 
+haskell_library(
+    name = "peer-wait-witness-lib",
+    srcs = ["Emulation/PeerWaitWitness.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":peer-stage-witness-lib",
+        ":watch-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:json",
+        "//host:peer-wait-control",
+    ],
+)
+
+haskell_test(
+    name = "peer-wait-witness-tests",
+    size = "small",
+    srcs = ["PeerWaitWitnessTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":peer-stage-witness-lib",
+        ":peer-wait-witness-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:peer-wait-control",
+        "//host:vector",
+    ],
+)
+
 haskell_binary(
     name = "peer-stage-witness",
     srcs = ["PeerStageWitness.hs"],
@@ -432,6 +464,7 @@ haskell_binary(
         ":emulator-slot-lib",
         ":first-stage-witness-lib",
         ":peer-stage-witness-lib",
+        ":peer-wait-witness-lib",
         ":viewer-runtime-lib",
         "//host:aeson",
         "//host:base",
@@ -440,6 +473,7 @@ haskell_binary(
         "//host:filepath",
         "//host:first-stage",
         "//host:host-support",
+        "//host:peer-wait-control",
         "//host:process",
         "//host:update-container",
     ],

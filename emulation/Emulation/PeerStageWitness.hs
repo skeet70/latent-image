@@ -7,6 +7,7 @@ module Emulation.PeerStageWitness
   , Core (..), Cpsr (..), GuestAddress (..), WitnessResult (..)
   , parseArgument, parseReceipt, receiptValue, validateReceipt, contractValue
   , maxReceiptBytes, stopName
+  , parseRegisters, parseState, parseFrame, registerWords, frameWords, stateValue, recordValue
   ) where
 
 import Control.Monad (forM_, unless)

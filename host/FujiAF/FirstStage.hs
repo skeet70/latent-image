@@ -32,6 +32,9 @@ module FujiAF.FirstStage
   , firstRecordSlotBytes
   , planPatches
   , replaceFirstRecordSlot
+  , ExpectedMediaPatch
+  , expectedMediaPatch
+  , replaceExpectedFirstRecord
   ) where
 
 import Control.Monad (forM_)
@@ -54,6 +57,32 @@ data RetainedExtent = RetainedExtent SlotOffset SlotOffset
 
 data FirstStagePlan = FirstStagePlan ArmEntry SlotOffset MediaImage [RetainedExtent]
   deriving (Eq, Show)
+
+data ExpectedMediaPatch = ExpectedMediaPatch SlotOffset MediaImage MediaImage
+  deriving (Eq, Show)
+
+expectedMediaPatch :: SlotOffset -> MediaImage -> MediaImage -> Either String ExpectedMediaPatch
+expectedMediaPatch offset expected replacement
+  | start .&. 3 /= 0 || size .&. 3 /= 0 = Left "expected-media patch is not word aligned"
+  | size == 0 = Left "expected-media patch is empty"
+  | size /= B.length (mediaImageBytes replacement) = Left "expected-media patch lengths differ"
+  | size > firstRecordSlotLength - start = Left "expected-media patch extends past the slot"
+  | otherwise = Right (ExpectedMediaPatch offset expected replacement)
+  where
+    start = slotOffsetBytes offset
+    size = B.length (mediaImageBytes expected)
+
+replaceExpectedFirstRecord :: [ExpectedMediaPatch] -> Parts -> Either String Parts
+replaceExpectedFirstRecord patches parts = do
+  slot <- firstRecordSlotBytes parts
+  forM_ patches $ \(ExpectedMediaPatch offset expected _) ->
+    if B.map complement (B.take (B.length (mediaImageBytes expected)) (B.drop (slotOffsetBytes offset) slot))
+        == mediaImageBytes expected
+      then pure ()
+      else Left "first-record expected media bytes differ"
+  replaceSlotPatches
+    [(slotOffsetBytes offset, B.map complement (mediaImageBytes replacement))
+    | ExpectedMediaPatch offset _ replacement <- patches] parts
 
 planEntry :: FirstStagePlan -> ArmEntry
 planEntry (FirstStagePlan entry _ _ _) = entry
@@ -207,8 +236,12 @@ overlaps (leftStart, leftEnd) (rightStart, rightEnd) =
 
 replaceFirstRecordSlot :: FirstStagePlan -> Parts -> Either String Parts
 replaceFirstRecordSlot plan parts = do
-  slot <- firstRecordSlotBytes parts
   patches <- planPatches plan
+  replaceSlotPatches patches parts
+
+replaceSlotPatches :: [(Int, B.ByteString)] -> Parts -> Either String Parts
+replaceSlotPatches patches parts = do
+  slot <- firstRecordSlotBytes parts
   patched <- applyPatches slot patches
   let pre = partPreTable parts
       rebuilt =

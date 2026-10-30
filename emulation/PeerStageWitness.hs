@@ -10,9 +10,11 @@ import Data.Word (Word32)
 import Emulation.EmulatorSlot (attachGuard, reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.FirstStageWitness (leWordAt, sha256Hex)
 import Emulation.PeerStageWitness
+import qualified Emulation.PeerWaitWitness as W
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Runtime (..), freshRuntime, resolve, validateFirmware, workspace)
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.Host as H
+import qualified FujiAF.PeerWaitControl as C
 import qualified FujiAF.UpdateContainer as U
 import System.Directory (canonicalizePath, doesFileExist)
 import System.Environment (getArgs)
@@ -27,20 +29,30 @@ newtype BootRom = BootRom FilePath
 
 data Launch = PrepareOnly | Launch Driver RunDescription BootRom
 
+data Observation = NaturalBaseline | WaitControl C.PeerControl
+
+data PeerInput = NaturalInput Firmware | ControlledInput Firmware C.ControlManifest
+
+data SourceInput = StockSource U.Parsed | ControlledSource C.ControlArtifact
+
 data Options
   = Consume FilePath Argument
-  | Prepare FilePath FilePath FilePath Launch
+  | ConsumeControl FilePath FilePath
+  | Prepare FilePath FilePath FilePath Observation Launch
 
 usage :: String
 usage = unlines
   [ "usage: peer-stage-witness --receipt FILE --argument WORD"
+  , "       peer-stage-witness --control-receipt FILE --control-manifest FILE"
   , "       peer-stage-witness --firmware DAT --fflzd FFLZD --output DIR"
   , "       peer-stage-witness --firmware DAT --fflzd FFLZD --output DIR --launch --driver DRIVER --run RUN_JSON --boot-rom ROM"
-  , "Preparation writes peer-witness-contract.json and peer-witness-expected.json without starting an emulator."
+  , "       peer-stage-witness --firmware DAT --fflzd FFLZD --output DIR --control held-sentinel|delayed-release [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
+  , "Natural preparation writes peer-witness-contract.json and peer-witness-expected.json without starting an emulator."
   , "Launch requires an explicit driver, run description and captured 16 KiB ROM."
+  , "Control preparation preserves the input and writes peer-witness-contract.json, peer-control.DAT and peer-control-manifest.json instead of the natural expected-policy file."
   ]
 
-data Flag = ReceiptFile | ArgumentWord | FirmwareFile | FflzdFile | OutputDirectory | DriverFile | RunFile | RomFile
+data Flag = ReceiptFile | ArgumentWord | ControlReceiptFile | ControlManifestFile | ControlMode | FirmwareFile | FflzdFile | OutputDirectory | DriverFile | RunFile | RomFile
   deriving (Eq)
 
 parseOptions :: [String] -> Either String Options
@@ -49,22 +61,28 @@ parseOptions arguments = do
   let value flag = lookup flag values
       need name flag = maybe (Left (name ++ " is required\n" ++ usage)) Right (value flag)
       only allowed = unless (all ((`elem` allowed) . fst) values) (Left ("incompatible options\n" ++ usage))
-  case value ReceiptFile of
-    Just path -> do
+  case (value ReceiptFile, value ControlReceiptFile) of
+    (Just path, Nothing) -> do
       only [ReceiptFile,ArgumentWord]
       when launch (Left "receipt mode cannot launch")
       Consume path <$> (need "--argument" ArgumentWord >>= parseArgument)
-    Nothing -> do
-      only [FirmwareFile,FflzdFile,OutputDirectory,DriverFile,RunFile,RomFile]
+    (Nothing, Just path) -> do
+      only [ControlReceiptFile,ControlManifestFile]
+      when launch (Left "receipt mode cannot launch")
+      ConsumeControl path <$> need "--control-manifest" ControlManifestFile
+    (Just _, Just _) -> Left "natural and control receipt modes are mutually exclusive"
+    (Nothing, Nothing) -> do
+      only [FirmwareFile,FflzdFile,OutputDirectory,DriverFile,RunFile,RomFile,ControlMode]
       firmware <- need "--firmware" FirmwareFile
       fflzd <- need "--fflzd" FflzdFile
       output <- need "--output" OutputDirectory
+      observation <- maybe (Right NaturalBaseline) (fmap WaitControl . C.parseControlName) (value ControlMode)
       execution <- if launch
         then Launch <$> (Driver <$> need "--driver" DriverFile) <*> (RunDescription <$> need "--run" RunFile) <*> (BootRom <$> need "--boot-rom" RomFile)
         else do
           unless (all ((`notElem` [DriverFile,RunFile,RomFile]) . fst) values) (Left "driver/run/ROM require --launch")
           pure PrepareOnly
-      pure (Prepare firmware fflzd output execution)
+      pure (Prepare firmware fflzd output observation execution)
   where
     collect values launch [] = Right (values,launch)
     collect values False ("--launch":rest) = collect values True rest
@@ -73,6 +91,9 @@ parseOptions arguments = do
       flag <- case name of
         "--receipt" -> Right ReceiptFile
         "--argument" -> Right ArgumentWord
+        "--control-receipt" -> Right ControlReceiptFile
+        "--control-manifest" -> Right ControlManifestFile
+        "--control" -> Right ControlMode
         "--firmware" -> Right FirmwareFile
         "--fflzd" -> Right FflzdFile
         "--output" -> Right OutputDirectory
@@ -144,6 +165,50 @@ consume path expected = do
   either H.failH pure (validateReceipt expected receipt)
   putStrLn ("peer-stage receipt accepted: " ++ path)
 
+consumeControl :: FilePath -> C.ControlManifest -> IO ()
+consumeControl path manifest = do
+  bytes <- H.readRegular maxReceiptBytes path
+  receipt <- either H.failH pure (W.parseControlReceipt bytes)
+  let expected = Argument (C.argumentWord (C.manifestArgument manifest))
+  either H.failH pure (W.validateControlReceipt (C.manifestControl manifest) expected receipt)
+  putStrLn ("peer-control receipt accepted: " ++ path)
+
+qualifySource :: Observation -> Firmware -> B.ByteString -> IO SourceInput
+qualifySource NaturalBaseline firmware dat = do
+  validateFirmware firmware
+  parsed <- either H.failH pure (U.parseContainer dat)
+  forM_ (U.checks parsed ++ U.carriedChecks parsed ++ U.stockChecks parsed) $ \check ->
+    H.ensure (U.checkPassed check) ("container contract: " ++ U.checkField check)
+  pure (StockSource parsed)
+qualifySource (WaitControl control) _ dat =
+  ControlledSource <$> either H.failH pure (C.buildControl control dat)
+
+sourceParsed :: SourceInput -> U.Parsed
+sourceParsed (StockSource parsed) = parsed
+sourceParsed (ControlledSource artifact) = C.controlSource artifact
+
+prepareInput :: SourceInput -> Firmware -> FilePath -> Argument -> IO PeerInput
+prepareInput (StockSource _) firmware _ _ = pure (NaturalInput firmware)
+prepareInput (ControlledSource artifact) _ output (Argument expected) = do
+  let manifest = C.controlManifest artifact
+      path = output </> "peer-control.DAT"
+  H.ensure (C.argumentWord (C.manifestArgument manifest) == expected) "decoded image4 argument differs from the control source binding"
+  B.writeFile path (C.controlDat artifact)
+  BL.writeFile (output </> "peer-control-manifest.json") (encode (C.manifestValue manifest))
+  pure (ControlledInput (Firmware path) manifest)
+
+inputFirmware :: PeerInput -> Firmware
+inputFirmware (NaturalInput firmware) = firmware
+inputFirmware (ControlledInput firmware _) = firmware
+
+inputContract :: PeerInput -> Value
+inputContract (NaturalInput _) = contractValue
+inputContract (ControlledInput _ manifest) = W.controlContractValue (C.manifestControl manifest)
+
+consumeInput :: PeerInput -> FilePath -> Argument -> IO ()
+consumeInput (NaturalInput _) path expected = consume path expected
+consumeInput (ControlledInput _ manifest) path _ = consumeControl path manifest
+
 main :: IO ()
 main = do
   args <- getArgs
@@ -154,7 +219,11 @@ main = do
       root <- workspace Nothing
       case options of
         Consume path expected -> consume (resolve root path) expected
-        Prepare firmwarePath fflzdPath outputPath execution -> do
+        ConsumeControl path manifestPath -> do
+          manifestBytes <- H.readRegular (256 * 1024) (resolve root manifestPath)
+          manifest <- either H.failH pure (C.parseManifest manifestBytes)
+          consumeControl (resolve root path) manifest
+        Prepare firmwarePath fflzdPath outputPath observation execution -> do
           case execution of
             PrepareOnly -> pure ()
             Launch {} -> do
@@ -163,11 +232,9 @@ main = do
               attachGuard args
           datPath <- canonicalizePath (resolve root firmwarePath)
           let fflzd = resolve root fflzdPath
-          validateFirmware (Firmware datPath)
           dat <- H.readRegular maxContainer datPath
-          parsed <- either H.failH pure (U.parseContainer dat)
-          forM_ (U.checks parsed ++ U.carriedChecks parsed ++ U.stockChecks parsed) $ \check ->
-            H.ensure (U.checkPassed check) ("container contract: " ++ U.checkField check)
+          source <- qualifySource observation (Firmware datPath) dat
+          let parsed = sourceParsed source
           let parts = U.parsedParts parsed
               mainStart = U.stagingLength + fromIntegral (U.hMainOffset (U.parsedHeader parsed))
           H.ensure (U.partVersionMajor parts == 1 && U.partVersionMinor parts == 0x50) "requires X-M1 1.50"
@@ -185,15 +252,22 @@ main = do
           image4 <- decodeImage4 fflzd output parts
           argumentWord <- either H.failH pure (leWordAt image4 0xc)
           let expected = Argument argumentWord
-          binding <- expectedValue datPath dat record2 loader image4 expected
+          input <- prepareInput source (Firmware datPath) output expected
           let contract = output </> "peer-witness-contract.json"
               receipt = output </> "peer-witness.json"
-          BL.writeFile contract (encode contractValue)
-          BL.writeFile (output </> "peer-witness-expected.json") (encode binding)
+          BL.writeFile contract (encode (inputContract input))
+          case input of
+            NaturalInput _ -> do
+              binding <- expectedValue datPath dat record2 loader image4 expected
+              BL.writeFile (output </> "peer-witness-expected.json") (encode binding)
+            ControlledInput _ _ -> pure ()
           case execution of
             PrepareOnly -> do
               putStrLn ("peer-stage preparation: " ++ output)
-              putStrLn ("receipt consumer: " ++ showCommandForUser "peer-stage-witness" ["--receipt",receipt,"--argument",show argumentWord])
+              let consumerArgs = case input of
+                    NaturalInput _ -> ["--receipt",receipt,"--argument",show argumentWord]
+                    ControlledInput _ _ -> ["--control-receipt",receipt,"--control-manifest",output </> "peer-control-manifest.json"]
+              putStrLn ("receipt consumer: " ++ showCommandForUser "peer-stage-witness" consumerArgs)
               putStrLn "launch requires a separate explicit --launch invocation with --driver, --run and --boot-rom"
             Launch (Driver driverPath) (RunDescription runPath) (BootRom romPath) -> do
               driver <- canonicalizePath (resolve root driverPath)
@@ -201,7 +275,8 @@ main = do
               rom <- canonicalizePath (resolve root romPath)
               romBytes <- H.readRegular 0x4000 rom
               H.ensure (B.length romBytes == 0x4000) "captured boot ROM must be exactly 16 KiB"
-              let launchArgs = ["--run",run,"--update",datPath,"--boot-rom",rom,"--output",output,"--peer-witness",contract]
+              let Firmware update = inputFirmware input
+                  launchArgs = ["--run",run,"--update",update,"--boot-rom",rom,"--output",output,"--peer-witness",contract]
               putStrLn (showCommandForUser driver launchArgs)
               (bounded,code,out,err) <- H.runBounded 120000000 (1024 * 1024) driver launchArgs B.empty
               B.writeFile (output </> "driver.stdout.log") out
@@ -209,7 +284,7 @@ main = do
               B.putStr out
               B.hPut stderr err
               hasReceipt <- doesFileExist receipt
-              when hasReceipt (consume receipt expected)
+              when hasReceipt (consumeInput input receipt expected)
               H.ensure (not bounded) "peer driver exceeded wall/output bounds"
               H.ensure (code == ExitSuccess) "peer driver exited nonzero"
               H.ensure hasReceipt "peer driver did not write peer-witness.json"

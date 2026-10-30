@@ -1,5 +1,6 @@
 //! Labelled instruction points on every core and the entries recorded at them.
 
+use crate::provenance::Guest;
 use fujimod_emulator::board::observation::InstructionPoints;
 use fujimod_emulator::session::Session;
 use fujimod_emulator_cpu::{Register, arm};
@@ -406,6 +407,12 @@ enum CoreSelection {
     Primary,
 }
 
+struct EnteredInstructions(u64);
+struct ResumeMarker {
+    pc: Guest,
+    entered: EnteredInstructions,
+}
+
 #[derive(Default)]
 pub struct TraceSites {
     pub sites: BTreeMap<u32, String>,
@@ -414,6 +421,7 @@ pub struct TraceSites {
     pub hits: Vec<Hit>,
     points: Vec<(usize, Box<InstructionPoints>)>,
     cores: CoreSelection,
+    resumed: BTreeMap<usize, ResumeMarker>,
     capture_observation: Option<CaptureObservation>,
 }
 
@@ -511,12 +519,38 @@ impl TraceSites {
         self.disarm(session)?;
         self.sites = sites;
         self.cores = cores;
+        self.resumed.clear();
         self.rearm(session)
     }
 
     pub fn disarm(&mut self, session: &Session) -> Result<(), String> {
         for (core, mut points) in self.points.drain(..) {
             session.board.instruction_points_end(core, &mut points)?;
+        }
+        Ok(())
+    }
+
+    pub fn remove_site(&mut self, session: &Session, address: Guest) -> Result<(), String> {
+        if self.capture_observation_active() {
+            return Err("capture observation sites are frozen until the session ends".into());
+        }
+        if !self.sites.contains_key(&address.0) {
+            return Err("trace site is not armed".into());
+        }
+        self.disarm(session)?;
+        let label = self.sites.remove(&address.0).ok_or("trace site disappeared")?;
+        if !self.sites.values().any(|other| other == &label) {
+            self.stop_labels.remove(&label);
+        }
+        self.rearm(session)?;
+        let counts = session.board.instruction_counts();
+        for (core, points) in &self.points {
+            if let Some(marker) = self.resumed.get(core) {
+                let current = session.board.read_register(*core, Register::Pc)?;
+                if current == u64::from(marker.pc.0) && counts[*core] == marker.entered.0 {
+                    points.resume(current, u64::from(marker.pc.0));
+                }
+            }
         }
         Ok(())
     }
@@ -589,7 +623,8 @@ impl TraceSites {
                 points.resume(current, pc);
                 continue;
             }
-            let instructions = session.board.instruction_counts().iter().sum();
+            let counts = session.board.instruction_counts();
+            let instructions = counts.iter().sum();
             let site = site.clone();
             let registers = (0..4u8)
                 .map(|index| {
@@ -609,6 +644,11 @@ impl TraceSites {
             });
             let current = session.board.read_register(*core, Register::Pc)?;
             points.resume(current, pc);
+            if current == pc {
+                self.resumed.insert(*core, ResumeMarker { pc: Guest(address), entered: EnteredInstructions(counts[*core]) });
+            } else {
+                self.resumed.remove(core);
+            }
         }
         Ok(stop)
     }
