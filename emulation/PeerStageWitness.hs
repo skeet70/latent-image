@@ -7,7 +7,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (complement)
 import Data.Word (Word32)
-import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
+import Emulation.EmulatorSlot (attachGuard, reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.FirstStageWitness (leWordAt, sha256Hex)
 import Emulation.PeerStageWitness
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Runtime (..), freshRuntime, resolve, validateFirmware, workspace)
@@ -157,7 +157,10 @@ main = do
         Prepare firmwarePath fflzdPath outputPath execution -> do
           case execution of
             PrepareOnly -> pure ()
-            Launch {} -> slotPolicyFromEnvironment >>= \policy -> reexecInSlot policy args
+            Launch {} -> do
+              policy <- slotPolicyFromEnvironment
+              reexecInSlot policy args
+              attachGuard args
           datPath <- canonicalizePath (resolve root firmwarePath)
           let fflzd = resolve root fflzdPath
           validateFirmware (Firmware datPath)
