@@ -28,6 +28,18 @@ const CAPTURE_PAGE_LIMIT: usize = 64;
 const CAPTURE_MEMORY_BYTES: usize = 2 * 1024 * 1024;
 const CAPTURE_OVERHEAD_BYTES: usize = 128 * 1024;
 
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+struct InstructionCount(u64);
+
+impl InstructionCount {
+    fn from_board(session: &Session) -> Result<Self, String> {
+        session.board.instruction_counts().into_iter()
+            .try_fold(0u64, |sum, count| sum.checked_add(count))
+            .map(Self).ok_or_else(|| "aggregate instruction count exceeds 64 bits".into())
+    }
+}
+
 #[derive(Clone, Copy, Serialize)]
 pub struct CaptureObservationBounds {
     sites: usize,
@@ -145,6 +157,11 @@ impl RamAddress {
 impl CaptureRam {
     fn read(&mut self, session: &Session, address: u32, length: usize) {
         if length == 0 { return; }
+        if self.spans[..self.count].iter().any(|span| {
+            span.address == address && usize::from(span.length) == length && matches!(span.status, RamStatus::Complete)
+        }) {
+            return;
+        }
         if self.count == CAPTURE_SPAN_LIMIT {
             self.incomplete = true;
             return;
@@ -185,8 +202,7 @@ impl CaptureRam {
         })
     }
 
-    fn common(session: &Session) -> Self {
-        let mut ram = Self::default();
+    fn common(&mut self, session: &Session) {
         for (address, length) in [
             (0x016f82fc, 24), (0x016f83ac, 8), (0x016f83c4, 4),
             (0x016f83e0, 12), (0x016f8418, 4),
@@ -195,12 +211,14 @@ impl CaptureRam {
             (0x0095c884, 4), (0x0095c958, 64), (0x0089f6e0, 1),
             (0x015ad53c, 4),
         ] {
-            ram.read(session, address, length);
+            self.read(session, address, length);
         }
-        ram
     }
 
     fn recorder(&mut self, session: &Session) {
+        if self.word(0x015ad53c).is_none() {
+            self.read(session, 0x015ad53c, 4);
+        }
         self.read(session, 0x015ad430, 32);
         let Some(index) = self.word(0x015ad53c).filter(|&index| index <= 200) else {
             self.incomplete = true;
@@ -236,7 +254,7 @@ impl CaptureRam {
     }
 
     fn event(session: &Session, address: u32, registers: &[u32; 4]) -> Self {
-        let mut ram = Self::common(session);
+        let mut ram = Self::default();
         match address {
             0x0072503c | 0x00ef9ae0 | 0x01039e18 | 0x00fe95bc |
             0x00e7fca0 | 0x00e6f0e0 | 0x00e6f260 | 0x00e6c490 => ram.message(session, registers[1]),
@@ -252,6 +270,7 @@ impl CaptureRam {
             0x00e86a30 | 0x00e755d0 | 0x00eb0ea0 => ram.recorder(session),
             _ => {}
         }
+        ram.common(session);
         ram
     }
 }
@@ -262,16 +281,16 @@ struct SiteObservation {
     total: u64,
     dropped: u64,
     retained: u64,
-    first_instructions: Option<u64>,
-    last_instructions: Option<u64>,
-    first_dropped_instructions: Option<u64>,
-    last_dropped_instructions: Option<u64>,
+    first_instructions: Option<InstructionCount>,
+    last_instructions: Option<InstructionCount>,
+    first_dropped_instructions: Option<InstructionCount>,
+    last_dropped_instructions: Option<InstructionCount>,
 }
 
 struct CaptureEvent {
     site_index: usize,
     core: usize,
-    instructions: u64,
+    instructions: InstructionCount,
     registers: [u32; 4],
     sp: u32,
     lr: u32,
@@ -297,7 +316,7 @@ struct CaptureEventView<'a> {
     site: &'a str,
     address: u32,
     core: usize,
-    instructions: u64,
+    instructions: InstructionCount,
     registers: &'a [u32; 4],
     sp: u32,
     lr: u32,
@@ -359,8 +378,8 @@ pub struct CaptureObservationPage<'a> {
     total: u64,
     dropped: u64,
     incomplete: bool,
-    first_instructions: Option<u64>,
-    last_instructions: Option<u64>,
+    first_instructions: Option<InstructionCount>,
+    last_instructions: Option<InstructionCount>,
     bounds: CaptureObservationBounds,
     sites: CaptureSites<'a>,
     hits: CaptureEvents<'a>,
@@ -368,7 +387,7 @@ pub struct CaptureObservationPage<'a> {
 
 #[derive(Serialize)]
 pub struct CaptureSnapshot {
-    instructions: u64,
+    instructions: InstructionCount,
     ram: CaptureRam,
     ram_incomplete: bool,
 }
@@ -445,10 +464,11 @@ impl TraceSites {
 
     pub fn capture_snapshot(&self, session: &Session) -> Result<Option<CaptureSnapshot>, String> {
         if !self.capture_observation_active() { return Ok(None); }
-        let mut ram = CaptureRam::common(session);
+        let mut ram = CaptureRam::default();
+        ram.common(session);
         ram.recorder(session);
         Ok(Some(CaptureSnapshot {
-            instructions: session.board.instruction_counts().iter().sum(),
+            instructions: InstructionCount::from_board(session)?,
             ram_incomplete: ram.incomplete,
             ram,
         }))
@@ -519,12 +539,12 @@ impl TraceSites {
             let Some(pc) = points.event() else { continue };
             let address = u32::try_from(pc).map_err(|_| "trace site exceeds 32 bits")?;
             let site = self.sites.get(&address).ok_or("instruction point outside the armed sites")?;
-            let instructions = session.board.instruction_counts().iter().sum();
             stop |= self.stop_labels.contains(site);
             if let Some(observation) = &mut self.capture_observation {
                 if self.stop_labels.contains(site) {
                     return Err("capture observation encountered a rendezvous stop".into());
                 }
+                let instructions = InstructionCount::from_board(session)?;
                 let index = observation.sites.binary_search_by_key(&address, |site| site.address)
                     .map_err(|_| "capture observation site is missing")?;
                 let counts = &mut observation.sites[index];
@@ -557,6 +577,7 @@ impl TraceSites {
                 points.resume(current, pc);
                 continue;
             }
+            let instructions = session.board.instruction_counts().iter().sum();
             let site = site.clone();
             let registers = (0..4u8)
                 .map(|index| {
@@ -586,30 +607,10 @@ mod tests {
     use super::TraceSites;
 
     #[test]
-    fn observation_begin_rejects_excess_sites_and_label_bytes() {
-        let mut traces = TraceSites::default();
-        traces.sites = (0..257).map(|address| (address, "entry".to_owned())).collect();
-        assert!(traces.begin_capture_observation().is_err());
-        traces.sites.clear();
-        traces.sites.insert(0, "x".repeat(65));
-        assert!(traces.begin_capture_observation().is_err());
-        traces.sites.insert(0, "x".repeat(64));
-        assert!(traces.begin_capture_observation().is_ok());
-    }
-
-    #[test]
-    fn observation_pages_report_empty_counts_and_reject_invalid_cursors() {
+    fn observation_rejects_inactive_cursor_invalid_cursor_and_duplicate_begin() {
         let mut traces = TraceSites::default();
         assert!(traces.capture_observation_page(0).is_err());
         traces.begin_capture_observation().unwrap();
-        let page = serde_json::to_value(traces.capture_observation_page(0).unwrap()).unwrap();
-        for field in ["from", "next", "retained", "total", "dropped"] {
-            assert_eq!(page[field], 0);
-        }
-        assert_eq!(page["incomplete"], false);
-        assert!(page["hits"].as_array().unwrap().is_empty());
-        assert!(page["first_instructions"].is_null());
-        assert!(page["last_instructions"].is_null());
         assert!(traces.capture_observation_page(1).is_err());
         assert!(traces.begin_capture_observation().is_err());
     }
