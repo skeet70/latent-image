@@ -94,6 +94,8 @@ Host-only control preparation and saved-receipt consumption use:
 
 Control preparation writes `peer-control.DAT`, `peer-control-manifest.json` and `peer-witness-contract.json`; the manifest replaces the natural-only `peer-witness-expected.json` policy file. Explicit control launch passes the candidate DAT through the existing `--update` argument. `//host/firmware:peer-wait-control-tests` and `//emulation:peer-wait-witness-tests` exercise artifact/receipt consumers. Serialized wrong-core, wrong-handoff, wrong-alias and attempted-without-readback cases are consumer controls, not guest fault evidence.
 
+All six host suites pass: first-stage/peer-stage/peer-wait receipt consumers, first-stage/control artifacts and research schemas. Original-DAT artifact checks verify both frozen control outputs and outside-extent equality. CLI smoke preserves natural preparation, emits mode-specific control files, accepts serialized positive controls and the saved natural receipt, and rejects wrong-core/wrong-handoff consumer controls. These checks execute no firmware guest.
+
 Held-sentinel and delayed-release guest receipts remain absent; their new SDK source remains unbuilt and runtime unqualified. Primary gate SP/CPSR/active aliases still require runtime observation; padding inspection does not resolve every indirect later access. The exception targets `0x3fff00xx` remain unresolved physical aliases/handlers. No loader-B wait completion, application entry, owned record-2 tail or physical qualification follows.
 
 # Bounded selected-queue experiment
