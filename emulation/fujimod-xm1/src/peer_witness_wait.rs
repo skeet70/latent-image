@@ -212,7 +212,7 @@ fn verify_image(machine: &Machine, image: OriginalImage) -> Result<(), String> {
             0x8f,0xb0,0xc3,0x22,0xa2,0x24,0x43,0xa3,0x78,0x3c,0xda,0xb9,0x07,0x1d,0xb1,0x72,
             0x12,0xa5,0x62,0x9f,0x63,0x75,0x64,0x62,0x18,0xac,0x1e,0x04,0x3d,0xc6,0x72,0xec]),
     };
-    for bank in 0..2 {
+    for bank in [TcmBank::Btcm, TcmBank::Atcm] {
         let register = tcm(machine, WitnessCore::Core1, bank)?.0;
         let base = u64::from(register & 0xfffff000);
         let size = 512u64 << ((register >> 2) & 31);
@@ -225,10 +225,13 @@ fn verify_image(machine: &Machine, image: OriginalImage) -> Result<(), String> {
     require(virtual_bytes == physical && Sha256::digest(&physical)[..] == expected[..],
         "control original guest image digest or active alias differs")
 }
-fn tcm(machine: &Machine, core: WitnessCore, bank: u8) -> Result<Word, String> {
+enum TcmBank { Btcm, Atcm }
+fn tcm(machine: &Machine, core: WitnessCore, bank: TcmBank) -> Result<Word, String> {
     let core = match core { WitnessCore::Core0 => 0, WitnessCore::Core1 => 1 };
     u32::try_from(machine.session.board.cpu(core)?.coprocessor(arm::Coprocessor {
-        cp: 15, opc1: 0, crn: 9, crm: 1, opc2: u32::from(bank), secure: 0, wide: false,
+        cp: 15, opc1: 0, crn: 9, crm: 1,
+        opc2: match bank { TcmBank::Btcm => 0, TcmBank::Atcm => 1 },
+        secure: 0, wide: false,
     }, None)?).map(Word).map_err(|_| "control TCM register exceeds a word".into())
 }
 #[derive(Deserialize)]
@@ -247,8 +250,8 @@ fn gate_bindings(machine: &Machine, control: Control) -> Result<GateBindings, St
         .ok_or("control active low-memory mapping absent")?;
     require(low.physical == 0 && low.size == 0x4000 && low.permissions == 7,
         "control active low-memory mapping differs")?;
-    let atcm = tcm(machine, WitnessCore::Core0, 1)?;
-    let btcm = tcm(machine, WitnessCore::Core0, 0)?;
+    let atcm = tcm(machine, WitnessCore::Core0, TcmBank::Atcm)?;
+    let btcm = tcm(machine, WitnessCore::Core0, TcmBank::Btcm)?;
     require(atcm.0 == 0x70000011 && btcm.0 == 0, "control private TCM stack binding differs")?;
     let padding = if control == Control::HeldSentinel { vec![0xff; 104] }
         else { VENEER.iter().flat_map(|word| word.to_le_bytes()).collect() };
