@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "MbVbn+p6SxAcb6kRFsCCiqHWja00hLBsbz59FUYgPqI=",
+        "bzlTransitiveDigest": "msl57/T3rZ/UOKaq+1alg+3ycd1QvsQtxXPohK83Wlo=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -450,6 +450,7 @@
               "nix_file": "@@//build-support:fujimod.nix",
               "nix_file_deps": {
                 "@@//:devenv.lock": "//:devenv.lock",
+                "@@//build-support:fujimod-classified-watch.patch": "//build-support:fujimod-classified-watch.patch",
                 "@@//build-support:fujimod-unicorn-context-align.patch": "//build-support:fujimod-unicorn-context-align.patch",
                 "@@//build-support:fujimod.nix": "//build-support:fujimod.nix",
                 "@@//build-support:nixpkgs.nix": "//build-support:nixpkgs.nix"
@@ -478,6 +479,7 @@
               "nix_file": "@@//build-support:fujimod-xm1.nix",
               "nix_file_deps": {
                 "@@//:devenv.lock": "//:devenv.lock",
+                "@@//build-support:fujimod-classified-watch.patch": "//build-support:fujimod-classified-watch.patch",
                 "@@//build-support:fujimod-unicorn-context-align.patch": "//build-support:fujimod-unicorn-context-align.patch",
                 "@@//build-support:fujimod.nix": "//build-support:fujimod.nix",
                 "@@//build-support:nixpkgs.nix": "//build-support:nixpkgs.nix",
@@ -497,6 +499,7 @@
                 "@@//emulation:fujimod-xm1/src/native_case.rs": "//emulation:fujimod-xm1/src/native_case.rs",
                 "@@//emulation:fujimod-xm1/src/native_case_main.rs": "//emulation:fujimod-xm1/src/native_case_main.rs",
                 "@@//emulation:fujimod-xm1/src/peer_witness.rs": "//emulation:fujimod-xm1/src/peer_witness.rs",
+                "@@//emulation:fujimod-xm1/src/peer_witness_startup.rs": "//emulation:fujimod-xm1/src/peer_witness_startup.rs",
                 "@@//emulation:fujimod-xm1/src/peer_witness_wait.rs": "//emulation:fujimod-xm1/src/peer_witness_wait.rs",
                 "@@//emulation:fujimod-xm1/src/provenance.rs": "//emulation:fujimod-xm1/src/provenance.rs",
                 "@@//emulation:fujimod-xm1/src/provenance_main.rs": "//emulation:fujimod-xm1/src/provenance_main.rs",

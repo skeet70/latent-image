@@ -392,7 +392,8 @@ pollFixture forbidLines comparison = Candidate (B.concat (map encodeLeWord codeW
     symbolLines = [C.pack (showHex8 location ++ " " ++ showHex8 size ++ " T " ++ name) | (location, size, name) <-
       [ (entry, 0x10, "xm1_secondary_entry"), (mainAt, 4, "xm1_secondary_main"), (cell, 0x10, "xm1_secondary_peer_cell")
       , (rendezvous, 0x18, "xm1_secondary_rendezvous"), (publish, 0xc, "xm1_secondary_publish"), (handoff, 0x14, "xm1_secondary_handoff")
-      , (handoff + 16, 4, "xm1_secondary_handoff_vector") ]]
+      , (handoff + 16, 4, "xm1_secondary_handoff_vector") ] :: [(Word32, Word32, String)]]
+    showHex8 :: Word32 -> String
     showHex8 value = let digits = showHex value "" in replicate (8 - length digits) '0' ++ digits
 
 -- | Applies the same CPSR to every endpoint stop.
