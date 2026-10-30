@@ -543,6 +543,24 @@ impl TraceSites {
             self.stop_labels.remove(&label);
         }
         self.rearm(session)?;
+        self.restore_resume(session)
+    }
+
+    /// Arms more sites, keeping a core stopped at an armed site resumable.
+    pub fn add_sites(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
+        if self.capture_observation_active() {
+            return Err("capture observation sites are frozen until the session ends".into());
+        }
+        if sites.keys().any(|address| self.sites.contains_key(address)) {
+            return Err("trace site is already armed".into());
+        }
+        self.disarm(session)?;
+        self.sites.extend(sites);
+        self.rearm(session)?;
+        self.restore_resume(session)
+    }
+
+    fn restore_resume(&self, session: &Session) -> Result<(), String> {
         let counts = session.board.instruction_counts();
         for (core, points) in &self.points {
             if let Some(marker) = self.resumed.get(core) {

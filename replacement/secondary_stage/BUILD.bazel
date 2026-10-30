@@ -1,0 +1,49 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "secondary-stage-rust",
+    src = "src.rs",
+    crate_name = "xm1_secondary_stage",
+    data = ["adapter.rs"],
+)
+
+xm1_rust_elf(
+    name = "secondary-stage-image",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_secondary_entry",
+    link_script = "secondary-stage.ld",
+    rust_staticlib = ":secondary-stage-rust",
+)
+
+xm1_rust_staticlib(
+    name = "secondary-stage-publication-fault-rust",
+    testonly = True,
+    src = "src.rs",
+    crate_name = "xm1_secondary_stage",
+    data = ["adapter.rs"],
+    rustc_flags = [
+        "--cfg",
+        "secondary_stage_publication_fault",
+    ],
+)
+
+xm1_rust_elf(
+    name = "secondary-stage-publication-fault-image",
+    testonly = True,
+    asm_srcs = ["entry.S"],
+    entry = "xm1_secondary_entry",
+    link_script = "secondary-stage.ld",
+    rust_staticlib = ":secondary-stage-publication-fault-rust",
+)
+
+xm1_rust_elf(
+    name = "secondary-stage-stack-fault-image",
+    testonly = True,
+    asm_defines = ["XM1_SECONDARY_STACK_FAULT"],
+    asm_srcs = ["entry.S"],
+    entry = "xm1_secondary_entry",
+    link_script = "secondary-stage.ld",
+    rust_staticlib = ":secondary-stage-rust",
+)

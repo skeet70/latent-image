@@ -13,7 +13,12 @@ let
     };
     # uc_context's data starts 8 bytes past a 16-byte boundary, and the
     # optimized Unicorn build reads the CPUARMState copy there with movdqa.
-    patches = [ ./fujimod-unicorn-context-align.patch ] ++ extraPatches;
+    # The classified memory watch adds per-range access kinds and a
+    # fixed-view policy.
+    patches = [
+      ./fujimod-unicorn-context-align.patch
+      ./fujimod-classified-watch.patch
+    ] ++ extraPatches;
   };
   # Upstream's mise.toml pins Rust 1.99.1; cargo 1.98 rejects the workspace's
   # `default-features = false` overrides of inherited dependencies.

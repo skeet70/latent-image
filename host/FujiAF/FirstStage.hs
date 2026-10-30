@@ -1,10 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
--- Bounded first-record replacement in the opaque pre-table container part.
+-- Bounded boot-record replacement in the opaque pre-table container part.
 module FujiAF.FirstStage
   ( ArmEntry
   , SlotOffset
   , RetainedExtent
-  , FirstStagePlan
+  , BootRecord (..)
+  , StagePlan
   , Symbol
   , symbolAddress
   , symbolSize
@@ -12,6 +13,8 @@ module FujiAF.FirstStage
   , parseSymbols
   , lookupSymbol
   , symbolSlotOffset
+  , recordSlotOffset
+  , recordGuestBase
   , firstRecordSlotOffset
   , firstRecordSlotLength
   , resetVectorWordOffset
@@ -24,26 +27,30 @@ module FujiAF.FirstStage
   , slotOffsetBytes
   , retainedExtent
   , retainedExtentRange
-  , firstStagePlan
+  , stagePlan
+  , planRecord
   , planEntry
   , planLoadOffset
   , planImage
   , planRetainedExtents
+  , recordSlotBytes
   , firstRecordSlotBytes
   , planPatches
-  , replaceFirstRecordSlot
+  , replaceRecordSlot
+  , verifyStagedRecord
   , ExpectedMediaPatch
   , expectedMediaPatch
   , replaceExpectedFirstRecord
   ) where
 
-import Control.Monad (forM_)
+import Control.Monad (forM_, unless, when)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.Bits (complement, (.&.))
 import Data.List (sortOn)
 import Data.Word (Word32)
 import FujiAF.UpdateContainer (MediaImage (..), Parts (..), putMediaWord)
+import qualified FujiAF.UpdateContainer as U
 import Numeric (readHex)
 
 newtype ArmEntry = ArmEntry Word32
@@ -55,7 +62,11 @@ newtype SlotOffset = SlotOffset Int
 data RetainedExtent = RetainedExtent SlotOffset SlotOffset
   deriving (Eq, Show)
 
-data FirstStagePlan = FirstStagePlan ArmEntry SlotOffset MediaImage [RetainedExtent]
+-- | The two boot records the ROM stages from pre-table [0x40000,0x60000).
+data BootRecord = FirstRecord | SecondRecord
+  deriving (Eq, Show)
+
+data StagePlan = StagePlan BootRecord ArmEntry SlotOffset MediaImage [RetainedExtent]
   deriving (Eq, Show)
 
 data ExpectedMediaPatch = ExpectedMediaPatch SlotOffset MediaImage MediaImage
@@ -81,20 +92,24 @@ replaceExpectedFirstRecord patches parts = do
       then pure ()
       else Left "first-record expected media bytes differ"
   replaceSlotPatches
+    FirstRecord
     [(slotOffsetBytes offset, B.map complement (mediaImageBytes replacement))
     | ExpectedMediaPatch offset _ replacement <- patches] parts
 
-planEntry :: FirstStagePlan -> ArmEntry
-planEntry (FirstStagePlan entry _ _ _) = entry
+planRecord :: StagePlan -> BootRecord
+planRecord (StagePlan record _ _ _ _) = record
 
-planLoadOffset :: FirstStagePlan -> SlotOffset
-planLoadOffset (FirstStagePlan _ load _ _) = load
+planEntry :: StagePlan -> ArmEntry
+planEntry (StagePlan _ entry _ _ _) = entry
 
-planImage :: FirstStagePlan -> MediaImage
-planImage (FirstStagePlan _ _ image _) = image
+planLoadOffset :: StagePlan -> SlotOffset
+planLoadOffset (StagePlan _ _ load _ _) = load
 
-planRetainedExtents :: FirstStagePlan -> [RetainedExtent]
-planRetainedExtents (FirstStagePlan _ _ _ retained) = retained
+planImage :: StagePlan -> MediaImage
+planImage (StagePlan _ _ _ image _) = image
+
+planRetainedExtents :: StagePlan -> [RetainedExtent]
+planRetainedExtents (StagePlan _ _ _ _ retained) = retained
 
 data Symbol = Symbol Word32 Word32 String
   deriving (Eq, Show)
@@ -137,14 +152,25 @@ lookupSymbol symbols name =
     [] -> Left ("candidate symbols lack " ++ name)
     _ -> Left ("candidate symbols repeat " ++ name)
 
-symbolSlotOffset :: [Symbol] -> String -> Either String SlotOffset
-symbolSlotOffset symbols name = do
+symbolSlotOffset :: BootRecord -> [Symbol] -> String -> Either String SlotOffset
+symbolSlotOffset record symbols name = do
   symbol <- lookupSymbol symbols name
-  slotOffset (fromIntegral (symbolAddress symbol))
+  let address = fromIntegral (symbolAddress symbol) - recordGuestBase record
+  if address < 0
+    then Left (name ++ " is below the record's load address")
+    else slotOffset address
 
--- Media slot [0x40000,0x50000) inside the container's main pre-table.
+recordSlotOffset :: BootRecord -> Int
+recordSlotOffset FirstRecord = 0x40000
+recordSlotOffset SecondRecord = 0x50000
+
+-- | Guest address of slot offset 0 after the ROM stages the record.
+recordGuestBase :: BootRecord -> Int
+recordGuestBase FirstRecord = 0
+recordGuestBase SecondRecord = 0x10000
+
 firstRecordSlotOffset :: Int
-firstRecordSlotOffset = 0x40000
+firstRecordSlotOffset = recordSlotOffset FirstRecord
 
 firstRecordSlotLength :: Int
 firstRecordSlotLength = 0x10000
@@ -174,7 +200,7 @@ armEntryAddress (ArmEntry value) = value
 slotOffset :: Int -> Either String SlotOffset
 slotOffset value
   | value < 0 = Left "slot offset is negative"
-  | value > firstRecordSlotLength = Left "slot offset is past the first-record slot"
+  | value > firstRecordSlotLength = Left "slot offset is past the record slot"
   | otherwise = Right (SlotOffset value)
 
 slotOffsetBytes :: SlotOffset -> Int
@@ -188,26 +214,31 @@ retainedExtent start end
 retainedExtentRange :: RetainedExtent -> (Int, Int)
 retainedExtentRange (RetainedExtent start end) = (slotOffsetBytes start, slotOffsetBytes end)
 
-firstStagePlan :: ArmEntry -> SlotOffset -> MediaImage -> [RetainedExtent] -> Either String FirstStagePlan
-firstStagePlan entry load image retained = do
-  let plan = FirstStagePlan entry load image retained
+stagePlan :: BootRecord -> ArmEntry -> SlotOffset -> MediaImage -> [RetainedExtent] -> Either String StagePlan
+stagePlan record entry load image retained = do
+  let plan = StagePlan record entry load image retained
   _ <- planPatches plan
   pure plan
 
-firstRecordSlotBytes :: Parts -> Either String B.ByteString
-firstRecordSlotBytes parts
-  | B.length (partPreTable parts) < firstRecordSlotOffset + firstRecordSlotLength =
-      Left "carrier pre-table does not cover the first-record slot"
+recordSlotBytes :: BootRecord -> Parts -> Either String B.ByteString
+recordSlotBytes record parts
+  | B.length (partPreTable parts) < start + firstRecordSlotLength =
+      Left "carrier pre-table does not cover the record slot"
   | otherwise =
-      Right (B.take firstRecordSlotLength (B.drop firstRecordSlotOffset (partPreTable parts)))
+      Right (B.take firstRecordSlotLength (B.drop start (partPreTable parts)))
+  where
+    start = recordSlotOffset record
 
-planPatches :: FirstStagePlan -> Either String [(Int, B.ByteString)]
+firstRecordSlotBytes :: Parts -> Either String B.ByteString
+firstRecordSlotBytes = recordSlotBytes FirstRecord
+
+planPatches :: StagePlan -> Either String [(Int, B.ByteString)]
 planPatches plan
   | B.null image = Left "first-stage image is empty"
   | load < 0 = Left "first-stage load offset is negative"
   | load .&. 3 /= 0 = Left "first-stage load offset is not word aligned"
   | load + B.length image > firstRecordSlotLength =
-      Left "first-stage image extends past the first-record slot"
+      Left "first-stage image extends past the record slot"
   | load < resetVectorWordOffset + 4 =
       Left "first-stage image overlaps the reset vector word"
   | entry < load || entry >= load + B.length image =
@@ -215,7 +246,7 @@ planPatches plan
   | otherwise = do
       forM_ retained $ \(start, end) ->
         if start < 0 || end > firstRecordSlotLength || start >= end
-          then Left "retained extent is outside the first-record slot"
+          then Left "retained extent is outside the record slot"
           else pure ()
       if any (overlaps (load, load + B.length image)) retained
         then Left "first-stage image overlaps a retained extent"
@@ -227,28 +258,61 @@ planPatches plan
   where
     image = mediaImageBytes (planImage plan)
     load = slotOffsetBytes (planLoadOffset plan)
-    entry = fromIntegral (armEntryAddress (planEntry plan)) :: Int
+    entry = fromIntegral (armEntryAddress (planEntry plan)) - recordGuestBase (planRecord plan)
     retained = map retainedExtentRange (planRetainedExtents plan)
 
 overlaps :: (Int, Int) -> (Int, Int) -> Bool
 overlaps (leftStart, leftEnd) (rightStart, rightEnd) =
   leftStart < rightEnd && rightStart < leftEnd
 
-replaceFirstRecordSlot :: FirstStagePlan -> Parts -> Either String Parts
-replaceFirstRecordSlot plan parts = do
+replaceRecordSlot :: StagePlan -> Parts -> Either String Parts
+replaceRecordSlot plan parts = do
   patches <- planPatches plan
-  replaceSlotPatches patches parts
+  replaceSlotPatches (planRecord plan) patches parts
 
-replaceSlotPatches :: [(Int, B.ByteString)] -> Parts -> Either String Parts
-replaceSlotPatches patches parts = do
-  slot <- firstRecordSlotBytes parts
+-- | Checks a rebuilt container against its source: the main pre-table changes
+-- only inside the plan's record slot and only at its patches, no other part
+-- changes, the reset vector names the entry and the staged bytes are the image.
+verifyStagedRecord :: StagePlan -> U.Parsed -> U.Parsed -> Either String ()
+verifyStagedRecord plan source rebuilt = do
+  let record = planRecord plan
+      sourcePre = partPreTable (U.parsedParts source)
+      rebuiltPre = partPreTable (U.parsedParts rebuilt)
+      slotStart = recordSlotOffset record
+      slotEnd = slotStart + firstRecordSlotLength
+  unless (B.length sourcePre == B.length rebuiltPre) (Left "main pre-table length changed")
+  unless (B.take slotStart sourcePre == B.take slotStart rebuiltPre)
+    (Left "carrier before the record slot changed")
+  unless (B.drop slotEnd sourcePre == B.drop slotEnd rebuiltPre)
+    (Left "carrier after the record slot changed")
+  forM_ (U.diffParts source rebuilt) $ \difference ->
+    when (U.diffChangedBytes difference /= 0 && U.diffPart difference /= "main pre-table")
+      (Left ("unexpected changed part: " ++ U.diffPart difference))
+  sourceSlot <- recordSlotBytes record (U.parsedParts source)
+  stagedSlot <- recordSlotBytes record (U.parsedParts rebuilt)
+  patches <- planPatches plan
+  let patched index = any (\(offset, bytes) -> index >= offset && index < offset + B.length bytes) patches
+      outside = [index | (index, before, after) <- zip3 [0 ..] (B.unpack sourceSlot) (B.unpack stagedSlot), before /= after, not (patched index)]
+  forM_ (take 1 outside) $ \index ->
+    Left ("record byte changed outside the declared patches: " ++ show (index :: Int))
+  unless (U.mediaWordAt stagedSlot resetVectorWordOffset == armEntryAddress (planEntry plan))
+    (Left "staged reset vector does not name the candidate entry")
+  let image = mediaImageBytes (planImage plan)
+      load = slotOffsetBytes (planLoadOffset plan)
+  unless (B.map complement (B.take (B.length image) (B.drop load stagedSlot)) == image)
+    (Left "staged bytes differ from the candidate image")
+
+replaceSlotPatches :: BootRecord -> [(Int, B.ByteString)] -> Parts -> Either String Parts
+replaceSlotPatches record patches parts = do
+  slot <- recordSlotBytes record parts
   patched <- applyPatches slot patches
   let pre = partPreTable parts
+      start = recordSlotOffset record
       rebuilt =
         B.concat
-          [ B.take firstRecordSlotOffset pre
+          [ B.take start pre
           , patched
-          , B.drop (firstRecordSlotOffset + firstRecordSlotLength) pre
+          , B.drop (start + firstRecordSlotLength) pre
           ]
   pure parts {partPreTable = rebuilt}
 

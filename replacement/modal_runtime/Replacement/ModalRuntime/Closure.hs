@@ -36,6 +36,7 @@ import A32
 import Data.Aeson (Value, object, (.=))
 import Data.Bits (bit, complement, rotateR, shiftL, shiftR, testBit, xor, (.&.), (.|.))
 import qualified Data.ByteString as B
+import Data.Graph (SCC (..), stronglyConnComp)
 import Data.Int (Int16, Int32)
 import Data.List (sortOn, transpose)
 import qualified Data.Map.Strict as M
@@ -1170,9 +1171,16 @@ declaredObjects =
   , DeclaredObject "register-write-stream-c" 0x0081c630 0x00820f10 RegisterWriteStream
   ]
 
--- | Membership under the `address & 0x3fffffff` alias classes.
+aliasMask :: Word32
+aliasMask = 0x3fffffff
+
+-- | The `address & 0x3fffffff` alias class.
+aliasClass :: Word32 -> Word32
+aliasClass value = value .&. aliasMask
+
+-- | Membership under the alias classes.
 objectNames :: DeclaredObject -> Word32 -> Bool
-objectNames declared value = let address = value .&. 0x3fffffff in objectStart declared <= address && address < objectEnd declared
+objectNames declared value = let address = aliasClass value in objectStart declared <= address && address < objectEnd declared
 
 objectHolding :: Word32 -> Maybe DeclaredObject
 objectHolding address = case [o | o <- declaredObjects, objectStart o <= address, address < objectEnd o] of
@@ -1212,19 +1220,21 @@ data ScalarProof = ScalarProof
   { scalarCompares :: S.Set Word32
   , scalarOverwrites :: S.Set Word32
   , scalarReturns :: S.Set (Word32, Reg)
+  , scalarLinkWrites :: S.Set Word32
   , scalarStates :: Int
   }
 
 -- | `ReturnConditional` holds only if no continuation of those returns reads
--- the register before writing it; no continuation is checked.
-data Verdict = Discharged ScalarProof | ReturnConditional ScalarProof | Open Unproven
+-- the register before writing it. The witness checks the continuations of
+-- enumerated direct callers; no outcome of it makes the verdict a discharge.
+data Verdict = Discharged ScalarProof | ReturnConditional ScalarProof ReturnWitness | Open Unproven
 
-verdict :: Either Unproven ScalarProof -> Verdict
-verdict result = case result of
+verdict :: Analysis -> Word32 -> Either Unproven ScalarProof -> Verdict
+verdict analysis site result = case result of
   Left reason -> Open reason
   Right proof
     | S.null (scalarReturns proof) -> Discharged proof
-    | otherwise -> ReturnConditional proof
+    | otherwise -> ReturnConditional proof (returnWitness analysis site proof)
 
 data Unproven
   = AddressUse Word32
@@ -1306,7 +1316,7 @@ nonScalarRead address instruction held = case instruction of
 -- | Follows the value `held` holds at `start` along every successor,
 -- treating each conditional instruction as both executed and skipped.
 scalarOnly :: Analysis -> Word32 -> Reg -> Either Unproven ScalarProof
-scalarOnly analysis start register = go [(start, register)] S.empty (ScalarProof S.empty S.empty S.empty 0)
+scalarOnly analysis start register = go [(start, register)] S.empty (ScalarProof S.empty S.empty S.empty S.empty 0)
  where
   go [] _ proof = Right proof
   go ((address, held) : rest) seen proof
@@ -1325,7 +1335,8 @@ scalarOnly analysis start register = go [(start, register)] S.empty (ScalarProof
         else Right False
     let skipped = [(address + 4, held) | instructionCond instruction /= Cond 14]
         killed = held `elem` instructionWrites instruction
-        proof1 = if compared then proof {scalarCompares = S.insert address (scalarCompares proof)} else proof
+        proof0 = if writesLink instruction then proof {scalarLinkWrites = S.insert address (scalarLinkWrites proof)} else proof
+        proof1 = if compared then proof0 {scalarCompares = S.insert address (scalarCompares proof0)} else proof0
         overwritten = Right (skipped, proof1 {scalarOverwrites = S.insert address (scalarOverwrites proof1)})
         continueAt targets
           | killed = overwritten
@@ -1419,7 +1430,7 @@ objectConsumers analysis literals constructed declared =
   highUpper = (objectEnd declared - 1) `shiftR` 16
   proveFrom site rd
     | rd == pc = Open (ControlUse site)
-    | otherwise = verdict (scalarOnly analysis (site + 4) rd)
+    | otherwise = verdict analysis site (scalarOnly analysis (site + 4) rd)
   consumersAt site word = case decode site word of
     instruction@(MoveTop _ rd upper)
       | lowUpper <= upper .&. 0x3fff && upper .&. 0x3fff <= highUpper ->
@@ -1442,34 +1453,50 @@ objectConsumers analysis literals constructed declared =
 
 -- * Callers
 
--- | Every reference to a dispatcher entry, or into the stock body after its
--- first word, from outside both dispatcher bodies.
-dispatcherReferences :: Memory -> (Word32 -> Bool) -> [Word32] -> [Obligation]
-dispatcherReferences memory inside entries =
-  [DispatcherReference site (form "data word" word) | (site, word) <- outsideWords, named word]
-    ++ [DispatcherReference site (form "movw/movt pair" value) | (site, value) <- widePairs, not (inside site), named value]
-    ++ [ DispatcherReference site (form "pc-relative arithmetic" value)
-       | (site, word) <- outsideWords
+-- | How an image word names an address.
+data ReferenceForm = DataWordForm | WidePairForm | PcRelativeForm | BranchForm | ThumbCallForm
+  deriving (Eq, Enum, Bounded)
+
+data Reference = Reference
+  { referenceSite :: Word32
+  , referenceForm :: ReferenceForm
+  , referenceValue :: Word32
+  }
+
+-- | Every aligned word, MOVW/MOVT pair, PC-relative ADD/SUB, A32 B/BL and
+-- Thumb BL/BLX pair whose named value `wanted` accepts, grouped by form in
+-- that order.
+references :: Memory -> (Word32 -> Bool) -> [Reference]
+references memory wanted =
+  [Reference site DataWordForm word | (site, word) <- everyWord, wanted word]
+    ++ [Reference site WidePairForm value | (site, value) <- widePairs, wanted value]
+    ++ [ Reference site PcRelativeForm value
+       | (site, word) <- everyWord
        , DataProcessing _ op _ _ rn (Immediate offset) <- [decode site word]
        , rn == pc
        , op == ADD || op == SUB
        , let value = if op == ADD then site + 8 + offset else site + 8 - offset
-       , named value
+       , wanted value
        ]
-    ++ [ DispatcherReference site (form "branch" target)
-       | (site, word) <- outsideWords
+    ++ [ Reference site BranchForm target
+       | (site, word) <- everyWord
        , bitsOf 27 25 word == 5
        , bitsOf 31 28 word /= 15
        , Branch _ _ target <- [decode site word]
-       , interior target
+       , wanted target
        ]
-    ++ [DispatcherReference site "thumb call" | site <- thumbCallers]
+    ++ [ Reference address ThumbCallForm target
+       | region <- M.elems (memoryRegions memory)
+       , offset <- [0, 2 .. B.length (regionBytes region) - 4]
+       , let address = regionBase region + fromIntegral offset
+       , Just firstHalf <- [memoryHalf memory address]
+       , firstHalf `shiftR` 11 == 0x1e
+       , Just secondHalf <- [memoryHalf memory (address + 2)]
+       , Just target <- [thumbCallTarget address firstHalf secondHalf]
+       , wanted target
+       ]
  where
   everyWord = memoryWords memory
-  outsideWords = [(site, word) | (site, word) <- everyWord, not (inside site)]
-  interior value = dispatcherEntry < value && value < dispatcherEnd
-  named value = (value .&. complement 1) `elem` entries || interior (value .&. complement 1)
-  form label value = label ++ (if interior (value .&. complement 1) then " into the retired body" else " to an entry")
   instructions = M.fromList [(site, decode site word) | (site, word) <- everyWord, isWide word]
   isWide word = word .&. 0x0ff00000 == 0x03000000 || word .&. 0x0ff00000 == 0x03400000
   widePairs =
@@ -1481,18 +1508,27 @@ dispatcherReferences memory inside entries =
     case [upper | k <- [1 .. 24], Just (MoveTop _ rd' upper) <- [M.lookup (site + 4 * k) instructions], rd' == rd] of
       upper : _ -> Just upper
       [] -> Nothing
-  thumbCallers =
-    [ address
-    | region <- M.elems (memoryRegions memory)
-    , offset <- [0, 2 .. B.length (regionBytes region) - 4]
-    , let address = regionBase region + fromIntegral offset
-    , Just firstHalf <- [memoryHalf memory address]
-    , firstHalf `shiftR` 11 == 0x1e
-    , Just secondHalf <- [memoryHalf memory (address + 2)]
-    , Just target <- [thumbCallTarget address firstHalf secondHalf]
-    , not (inside address)
-    , named target
-    ]
+
+-- | Every reference to a dispatcher entry, or into the stock body after its
+-- first word, from outside both dispatcher bodies.
+dispatcherReferences :: Memory -> (Word32 -> Bool) -> [Word32] -> [Obligation]
+dispatcherReferences memory inside entries =
+  [ DispatcherReference (referenceSite reference) (describe reference)
+  | reference <- references memory named
+  , not (inside (referenceSite reference))
+  , referenceForm reference /= BranchForm || interior (referenceValue reference)
+  ]
+ where
+  interior value = dispatcherEntry < value && value < dispatcherEnd
+  named value = (value .&. complement 1) `elem` entries || interior (value .&. complement 1)
+  describe reference = case referenceForm reference of
+    DataWordForm -> located "data word"
+    WidePairForm -> located "movw/movt pair"
+    PcRelativeForm -> located "pc-relative arithmetic"
+    BranchForm -> located "branch"
+    ThumbCallForm -> "thumb call"
+   where
+    located label = label ++ (if interior (referenceValue reference .&. complement 1) then " into the retired body" else " to an entry")
 
 thumbCallTarget :: Word32 -> Word16 -> Word16 -> Maybe Word32
 thumbCallTarget address firstHalf secondHalf
@@ -1510,6 +1546,166 @@ thumbCallTarget address firstHalf secondHalf
       .|. (fromIntegral (firstHalf .&. 0x3ff) `shiftL` 12)
       .|. (fromIntegral (secondHalf .&. 0x7ff) `shiftL` 1) :: Word32
   offset = if s then raw .|. 0xfe000000 else raw
+
+-- * Return continuations
+
+-- | Words searched at and below a materialization for the frame prologue
+-- that bounds its scope.
+scopeWords :: Int
+scopeWords = 1024
+
+-- | How control may reach the scope other than by an A32 BL.
+data ScopeEntry
+  = ReferenceEntry Reference
+  | -- | A B from outside [start, materialization], and its target.
+    OutsideBranch Word32 Word32
+  | -- | A scope address with no fallthrough, branch or reference into it.
+    UnreferencedStart Word32
+  | FallthroughStart Word32
+
+data ScopeLimit = NoFramePrologue | LinkWritten Word32
+
+data ContinuationStop
+  = StopCall Word32
+  | StopReturn Word32
+  | StopIndirect Word32
+  | StopUnmodeled Word32
+  | StopLeaves Word32
+  | StopLimit Word32
+  | -- | The lowest address of a cycle the register stays live around.
+    StopCycle Word32
+  deriving (Eq, Ord)
+
+-- | The sites where paths from a direct caller's return address first write
+-- or read the returned register, or stop with it live.
+data Continuation = Continuation
+  { continuationCaller :: Word32
+  , continuationRegister :: Reg
+  , continuationOverwrites :: S.Set Word32
+  , continuationReads :: S.Set Word32
+  , continuationStops :: S.Set ContinuationStop
+  }
+
+-- | The scope reaching a return-conditional materialization, the ways into
+-- it, and the continuations of its direct callers.
+data ReturnWitness = ReturnWitness
+  { witnessMaterialization :: Word32
+  , witnessStart :: Maybe Word32
+  , witnessScope :: S.Set Word32
+  , witnessEntries :: [ScopeEntry]
+  , witnessLimits :: [ScopeLimit]
+  , witnessContinuations :: [Continuation]
+  }
+
+data WitnessOutcome = ContinuationsOverwrite | ContinuationReads | NotNarrowed
+
+-- | What a `ContinuationsOverwrite` witness still rests on.
+data ResidualPremise = NoUnenumeratedEntry | SavedReturnSlotIntegrity | NoAsynchronousWrite | CodeIntegrity
+  deriving (Enum, Bounded)
+
+witnessOutcome :: ReturnWitness -> WitnessOutcome
+witnessOutcome witness
+  | any (not . S.null . continuationReads) continuations = ContinuationReads
+  | null (witnessEntries witness)
+  , null (witnessLimits witness)
+  , not (null continuations)
+  , all (S.null . continuationStops) continuations
+  , all (not . S.null . continuationOverwrites) continuations =
+      ContinuationsOverwrite
+  | otherwise = NotNarrowed
+ where
+  continuations = witnessContinuations witness
+
+writesLink :: Instruction -> Bool
+writesLink instruction = case instruction of
+  Branch _ link _ -> link
+  BranchExchange _ link _ -> link
+  Compute _ destinations -> lr `elem` destinations
+  Rejected _ -> True
+  other -> lr `elem` instructionWrites other
+
+-- | The scope is every address from which fallthrough and B edges whose
+-- sites lie in [start, materialization] reach the materialization; start is
+-- the nearest frame prologue at or below it. Its callers are the BLs to any
+-- scope address. A32 branches whose exact target is in the scope are its
+-- predecessors; one matching only through the alias class is an entry. A
+-- return through lr is checked for lr writes in the scope and on the scalar
+-- paths.
+returnWitness :: Analysis -> Word32 -> ScalarProof -> ReturnWitness
+returnWitness analysis site proof = case prologue site scopeWords of
+  Nothing -> ReturnWitness site Nothing S.empty [] [NoFramePrologue] []
+  Just start ->
+    let inside s = start <= s && s <= site
+        scope = closure inside start [site] S.empty
+        named =
+          [ r
+          | r <- references memory (\value -> S.member (aliasClass value .&. complement 1) scope)
+          , referenceForm r /= BranchForm || not (S.member (referenceValue r) scope)
+          ]
+        referenced = S.fromList [aliasClass (referenceValue r) .&. complement 1 | r <- named]
+        callers = S.toList (S.fromList [s | a <- S.toList scope, (s, Branch _ True _) <- predecessorsOf a])
+        entries =
+          [OutsideBranch s a | a <- S.toList scope, (s, Branch _ False _) <- predecessorsOf a, not (inside s)]
+            ++ map ReferenceEntry named
+            ++ [FallthroughStart start | S.member start scope, fallsInto start]
+            ++ [UnreferencedStart a | a <- S.toList scope, not (fallsInto a), null (predecessorsOf a), not (S.member a referenced)]
+        linkReturn = any (\(r, _) -> maybe False (readsLink . snd) (fetch analysis r)) (S.toList (scalarReturns proof))
+        linkWrites = S.fromList [a | a <- S.toList scope, maybe True (writesLink . snd) (fetch analysis a)] `S.union` scalarLinkWrites proof
+        limits = [LinkWritten a | linkReturn, a <- S.toList linkWrites]
+        registers = S.toList (S.fromList [register | (_, register) <- S.toList (scalarReturns proof)])
+     in ReturnWitness site (Just start) scope entries limits [continuation analysis caller register | caller <- callers, register <- registers]
+ where
+  memory = analysisMemory analysis
+  predecessorsOf a = M.findWithDefault [] a (analysisPredecessors analysis)
+  fallsInto a = maybe False (not . unconditionalTransfer . snd) (fetch analysis (a - 4))
+  readsLink instruction = maybe False (lr `elem`) (instructionReads instruction)
+  prologue address remaining
+    | remaining == 0 = Nothing
+    | otherwise = case fetch analysis address of
+        Just (_, instruction)
+          | framePrologue instruction -> Just address
+          | otherwise -> prologue (address - 4) (remaining - 1)
+        Nothing -> Nothing
+  closure inside start pending seen = case pending of
+    [] -> seen
+    a : rest
+      | S.member a seen -> closure inside start rest seen
+      | otherwise ->
+          let below = [a - 4 | a > start, fallsInto a]
+              branched = [s | (s, Branch _ False _) <- predecessorsOf a, inside s]
+           in closure inside start (below ++ branched ++ rest) (S.insert a seen)
+
+-- | Follows every path from the instruction after `caller`, each
+-- conditional instruction taken both ways, to its first read or write of
+-- `register`. A call, return, indirect jump, unmodeled instruction, leaving
+-- the images or a cycle before either leaves the path unresolved.
+continuation :: Analysis -> Word32 -> Reg -> Continuation
+continuation analysis caller register = cycles (go [caller + 4] M.empty (Continuation caller register S.empty S.empty S.empty))
+ where
+  go [] live result = (live, result)
+  go (address : rest) live result
+    | M.member address live = go rest live result
+    | M.size live >= scalarStepLimit = (live, stop (StopLimit address) result)
+    | otherwise = case fetch analysis address of
+        Nothing -> next [] (stop (StopLeaves address) result)
+        Just (word, instruction) ->
+          let skipped = [address + 4 | instructionCond instruction /= Cond 14]
+              ended outcome = next skipped (outcome result)
+           in case (instructionReads instruction, effectFlow (execute analysis address word instruction unknownRegs)) of
+                (Just regs, _) | register `elem` regs -> ended (\r -> r {continuationReads = S.insert address (continuationReads r)})
+                (_, Call _) -> ended (stop (StopCall address))
+                (Nothing, _) -> ended (stop (StopUnmodeled address))
+                _ | register `elem` instructionWrites instruction -> ended (\r -> r {continuationOverwrites = S.insert address (continuationOverwrites r)})
+                (_, Continue) -> next [address + 4] result
+                (_, Jump target) -> next (skipped ++ [target]) result
+                (_, Switch targets) -> next (skipped ++ targets) result
+                (_, Return) -> ended (stop (StopReturn address))
+                (_, JumpIndirect) -> ended (stop (StopIndirect address))
+   where
+    next successors = go (successors ++ rest) (M.insert address successors live)
+  cycles (live, result) =
+    foldr (stop . StopCycle . minimum) result [nodes | CyclicSCC nodes <- stronglyConnComp [(a, a, successors) | (a, successors) <- M.toList live]]
+  stop reason r = r {continuationStops = S.insert reason (continuationStops r)}
 
 -- * Controller closure
 
@@ -1826,7 +2022,7 @@ buildProof inputs =
         , "declared_objects"
             .= object
               [ "rule"
-                  .= ( "a consumer is discharged when every path from its materialization reads the value only as a TST, TEQ, CMP or CMN operand until it is overwritten. It is return-conditional when some path instead reaches a return with the value in r2, r3 or r12: it then rests on the unverified premise that no continuation of those returns reads the register before writing it, and is not a discharge. Any other read, a call, an indirect jump, an unmodeled instruction or leaving the images while the value is live, a return with it in any other register, and every aligned word naming the object, stays open. Materializations are MOVTs, PC-relative literal loads, aligned words, and registers an instruction other than a MOVT or a load computes (MOV, MVN, ORR, other data processing including PC-relative arithmetic, MOVW, extends, multiplies, bitfield operations and base writeback) that take a value naming the object on some path of the scan: along fallthrough, and restarted with unknown registers and flags at every branch target and data-word entry. A call or SVC leaves every register and the flags unknown; above 64 carried states only the register values all states agree on are kept. Values reaching an instruction only through a branch, a call, a load other than a PC-relative literal word or an unknown index register, and bases indexed into the extent, are not enumerated" ::
+                  .= ( "a consumer is discharged when every path from its materialization reads the value only as a TST, TEQ, CMP or CMN operand until it is overwritten. It is return-conditional when some path instead reaches a return with the value in r2, r3 or r12: it then rests on the premise that no continuation of those returns reads the register before writing it, and is not a discharge. Its continuation witness takes as scope every address from which fallthrough, and B edges whose sites lie between the nearest frame prologue at or below the materialization and the materialization, reach it. It enumerates A32 B and BL, aligned-word, MOVW/MOVT-pair, PC-relative ADD/SUB and Thumb BL/BLX references to scope addresses under the 0x3fffffff alias classes; a branch matching only through an alias class is an entry, not a caller. It follows each BL caller's continuation, every conditional instruction taken both ways, to its first read or write of each returned register; a call, SVC, return, indirect jump, unmodeled instruction, leaving the images or a cycle with the register live first leaves that path unresolved. The premise narrows to direct-continuations-overwrite only when there is a BL caller, every continuation path writes the register first and none is unresolved, no other reference, B from outside the scope, unreferenced scope start or fallthrough into the start exists, and no return through lr follows an lr write in the scope or on the value's paths. The narrowed premise still rests on no-unenumerated-entry (control enters the scope only through the enumerated references), saved-return-slot-integrity (each return transfers to the address its BL passed), no-asynchronous-write (no exception or other agent changes registers, the stack or memory) and code-integrity (executed words equal the analysed images). A continuation path that reads the register first is reported as continuation-reads. The status stays return-conditional in every case. Any other read, a call, an indirect jump, an unmodeled instruction or leaving the images while the value is live, a return with it in any other register, and every aligned word naming the object, stays open. Materializations are MOVTs, PC-relative literal loads, aligned words, and registers an instruction other than a MOVT or a load computes (MOV, MVN, ORR, other data processing including PC-relative arithmetic, MOVW, extends, multiplies, bitfield operations and base writeback) that take a value naming the object on some path of the scan: along fallthrough, and restarted with unknown registers and flags at every branch target and data-word entry. A call or SVC leaves every register and the flags unknown; above 64 carried states only the register values all states agree on are kept. Values reaching an instruction only through a branch, a call, a load other than a PC-relative literal word or an unknown index register, and bases indexed into the extent, are not enumerated" ::
                         String
                      )
               , "objects" .= [objectValue memory declared (objectConsumers analysis literals constructed declared) | declared <- declaredObjects]
@@ -2095,7 +2291,7 @@ objectValue memory declared consumers =
         RoleFails address -> object ["status" .= ("fails" :: String), "at" .= hex address]
         RoleUnread address -> object ["status" .= ("unread" :: String), "at" .= hex address]
     , "discharged_consumers" .= length [() | Consumer {consumerVerdict = Discharged _} <- consumers]
-    , "return_conditional_consumers" .= length [() | Consumer {consumerVerdict = ReturnConditional _} <- consumers]
+    , "return_conditional_consumers" .= length [() | Consumer {consumerVerdict = ReturnConditional {}} <- consumers]
     , "open_consumers" .= length [() | Consumer {consumerVerdict = Open _} <- consumers]
     , "consumers" .= map consumerValue consumers
     ]
@@ -2115,13 +2311,20 @@ consumerValue consumer =
         ++ ["register" .= regName register | Constructed register <- [consumerForm consumer]]
         ++ case consumerVerdict consumer of
           Discharged proof -> ["status" .= ("discharged" :: String), "proof" .= proofValueOf proof]
-          ReturnConditional proof ->
+          ReturnConditional proof witness ->
             [ "status" .= ("return-conditional" :: String)
             , "premise"
                 .= object
-                  [ "kind" .= ("return-continuation-does-not-read" :: String)
-                  , "returns" .= [object ["at" .= hex site, "register" .= regName register] | (site, register) <- S.toList (scalarReturns proof)]
-                  ]
+                  ( [ "kind" .= case witnessOutcome witness of
+                        ContinuationsOverwrite -> ("direct-continuations-overwrite" :: String)
+                        _ -> "return-continuation-does-not-read"
+                    , "returns" .= [object ["at" .= hex site, "register" .= regName register] | (site, register) <- S.toList (scalarReturns proof)]
+                    ]
+                      ++ case witnessOutcome witness of
+                        ContinuationsOverwrite -> ["residual" .= map residualName [minBound .. maxBound]]
+                        _ -> []
+                  )
+            , "continuation_witness" .= witnessValue witness
             , "proof" .= proofValueOf proof
             ]
           Open reason -> ["status" .= ("open" :: String), "reason" .= unprovenValue reason]
@@ -2150,6 +2353,81 @@ unprovenValue reason = case reason of
   HeldByObject -> object ["kind" .= ("held-by-object" :: String)]
  where
   at kind site = object ["kind" .= (kind :: String), "at" .= hex site]
+
+witnessValue :: ReturnWitness -> Value
+witnessValue witness =
+  object
+    [ "outcome" .= case witnessOutcome witness of
+        ContinuationsOverwrite -> ("direct-continuations-overwrite" :: String)
+        ContinuationReads -> "continuation-reads"
+        NotNarrowed -> "not-narrowed"
+    , "scope"
+        .= object
+          [ "materialization" .= hex (witnessMaterialization witness)
+          , "start" .= fmap hex (witnessStart witness)
+          , "start_evidence" .= ("nearest-frame-prologue" :: String)
+          , "searched_words" .= scopeWords
+          , "ranges" .= [object ["first" .= hex first, "last" .= hex final] | (first, final) <- runs (S.toList (witnessScope witness))]
+          , "reference_forms" .= map formName [minBound .. maxBound]
+          , "alias_mask" .= hex aliasMask
+          ]
+    , "callers" .= map continuationValue (witnessContinuations witness)
+    , "non_call_entries" .= map scopeEntryValue (witnessEntries witness)
+    , "limits" .= map scopeLimitValue (witnessLimits witness)
+    ]
+ where
+  runs = foldr extend []
+  extend address ((first, final) : rest) | address + 4 == first = (address, final) : rest
+  extend address acc = (address, address) : acc
+
+continuationValue :: Continuation -> Value
+continuationValue c =
+  object
+    [ "site" .= hex (continuationCaller c)
+    , "continuation" .= hex (continuationCaller c + 4)
+    , "register" .= regName (continuationRegister c)
+    , "overwritten" .= map hex (S.toList (continuationOverwrites c))
+    , "read" .= map hex (S.toList (continuationReads c))
+    , "unresolved" .= map stopValue (S.toList (continuationStops c))
+    ]
+ where
+  stopValue stop = case stop of
+    StopCall site -> at "call" site
+    StopReturn site -> at "return" site
+    StopIndirect site -> at "indirect-jump" site
+    StopUnmodeled site -> at "unmodeled-instruction" site
+    StopLeaves site -> at "leaves-images" site
+    StopLimit site -> at "step-limit" site
+    StopCycle site -> at "live-cycle" site
+  at kind site = object ["kind" .= (kind :: String), "at" .= hex site]
+
+scopeEntryValue :: ScopeEntry -> Value
+scopeEntryValue entry = case entry of
+  ReferenceEntry reference ->
+    object ["kind" .= formName (referenceForm reference), "site" .= hex (referenceSite reference), "value" .= hex (referenceValue reference)]
+  OutsideBranch site target -> object ["kind" .= ("branch-from-outside-scope" :: String), "site" .= hex site, "target" .= hex target]
+  UnreferencedStart address -> object ["kind" .= ("unreferenced-start" :: String), "at" .= hex address]
+  FallthroughStart address -> object ["kind" .= ("fallthrough-into-start" :: String), "at" .= hex address]
+
+scopeLimitValue :: ScopeLimit -> Value
+scopeLimitValue limit = case limit of
+  NoFramePrologue -> object ["kind" .= ("no-frame-prologue" :: String)]
+  LinkWritten site -> object ["kind" .= ("link-written-before-return-through-lr" :: String), "at" .= hex site]
+
+formName :: ReferenceForm -> String
+formName form = case form of
+  DataWordForm -> "aligned-word"
+  WidePairForm -> "movw-movt-pair"
+  PcRelativeForm -> "pc-relative-add-sub"
+  BranchForm -> "a32-b-bl"
+  ThumbCallForm -> "thumb-bl-blx"
+
+residualName :: ResidualPremise -> String
+residualName premise = case premise of
+  NoUnenumeratedEntry -> "no-unenumerated-entry"
+  SavedReturnSlotIntegrity -> "saved-return-slot-integrity"
+  NoAsynchronousWrite -> "no-asynchronous-write"
+  CodeIntegrity -> "code-integrity"
 
 hex :: Word32 -> String
 hex value = let digits = showHex value "" in "0x" ++ replicate (8 - length digits) '0' ++ digits

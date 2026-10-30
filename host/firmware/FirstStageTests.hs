@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
--- Behavioural tests for first-record staging in the opaque pre-table part;
+-- Behavioural tests for boot-record staging in the opaque pre-table part;
 -- fixtures are synthetic Parts values and no private container is read.
 module Main where
 
@@ -65,19 +65,28 @@ retained = do
   end <- slotOffset 0x5280
   retainedExtent start end
 
-validPlan :: B.ByteString -> IO FirstStagePlan
+validPlan :: B.ByteString -> IO StagePlan
 validPlan image = do
   entry <- either H.failH pure (armEntry 0x6000)
   load <- either H.failH pure (slotOffset 0x6000)
   extent <- either H.failH pure retained
-  either H.failH pure (firstStagePlan entry load (U.MediaImage image) [extent])
+  either H.failH pure (stagePlan FirstRecord entry load (U.MediaImage image) [extent])
 
-invalidPlan :: B.ByteString -> Word32 -> Int -> Either String FirstStagePlan
+invalidPlan :: B.ByteString -> Word32 -> Int -> Either String StagePlan
 invalidPlan image entryValue loadValue = do
   entry <- armEntry entryValue
   load <- slotOffset loadValue
   extent <- retained
-  firstStagePlan entry load (U.MediaImage image) [extent]
+  stagePlan FirstRecord entry load (U.MediaImage image) [extent]
+
+secondRecordPlan :: B.ByteString -> Word32 -> Int -> Either String StagePlan
+secondRecordPlan image entryValue loadValue = do
+  entry <- armEntry entryValue
+  load <- slotOffset loadValue
+  bodyStart <- slotOffset 0x1800
+  bodyEnd <- slotOffset 0x4c80
+  body <- retainedExtent bodyStart bodyEnd
+  stagePlan SecondRecord entry load (U.MediaImage image) [body]
 
 assertTrue :: String -> Bool -> IO ()
 assertTrue label ok = unless ok (H.failH (label ++ ": failed"))
@@ -93,7 +102,7 @@ main = do
       image = B.pack [0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04]
   slot <- either H.failH pure (firstRecordSlotBytes parts)
   plan <- validPlan image
-  staged <- either H.failH pure (replaceFirstRecordSlot plan parts)
+  staged <- either H.failH pure (replaceRecordSlot plan parts)
   let stagedPre = U.partPreTable staged
       stagedSlot = B.take firstRecordSlotLength (B.drop firstRecordSlotOffset stagedPre)
       storedImage = B.map complement (B.take (B.length image) (B.drop (slotOffsetBytes (planLoadOffset plan)) stagedSlot))
@@ -114,6 +123,24 @@ main = do
   assertLeft "image overlaps vector" (invalidPlan image 0x20 0x20)
   assertLeft "retained extent outside slot" (slotOffset 0x20000)
   assertLeft "short carrier" (firstRecordSlotBytes (parts {U.partPreTable = B.replicate 0x40000 0}))
+  secondPlan <- either H.failH pure (secondRecordPlan image 0x10400 0x400)
+  secondStaged <- either H.failH pure (replaceRecordSlot secondPlan parts)
+  secondSlot <- either H.failH pure (recordSlotBytes SecondRecord secondStaged)
+  let secondPre = U.partPreTable secondStaged
+  assertTrue "second record leaves the first slot and carrier" $
+    B.take 0x50000 secondPre == B.take 0x50000 sourcePreTable
+      && B.drop 0x60000 secondPre == B.drop 0x60000 sourcePreTable
+  assertTrue "second record reset target is the guest entry" (U.mediaWordAt secondSlot resetVectorWordOffset == 0x10400)
+  assertTrue "second record image at its slot offset" (B.map complement (B.take (B.length image) (B.drop 0x400 secondSlot)) == image)
+  assertTrue "second record marker before the vector word" (B.take 4 secondSlot == B.pack [0xb6, 0xb6, 0xb6, 0xb6])
+  assertLeft "second record entry named by slot offset" (secondRecordPlan image 0x400 0x400)
+  assertLeft "second record image overlaps its body" (secondRecordPlan image 0x11800 0x1800)
+  assertTrue "second record symbol offsets are guest-relative" $
+    case parseSymbols "00011800 00000000 A xm1_retained_body_start\n" of
+      Right rows -> fmap slotOffsetBytes (symbolSlotOffset SecondRecord rows "xm1_retained_body_start") == Right 0x1800
+      Left _ -> False
+  assertLeft "second record symbol below its load address" $
+    parseSymbols "00000800 00000000 A xm1_retained_body_start\n" >>= \rows -> symbolSlotOffset SecondRecord rows "xm1_retained_body_start"
   assertTrue "ABS symbol rows" $
     case parseSymbols "00000000 00000000 A xm1_vector_table_start\n00000020 00000004 A xm1_vector_before_reset_end\n" of
       Right [first, second] ->

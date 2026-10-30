@@ -465,6 +465,58 @@ haskell_test(
     ],
 )
 
+haskell_library(
+    name = "peer-startup-witness-lib",
+    srcs = ["Emulation/PeerStartupWitness.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":peer-stage-witness-lib",
+        ":watch-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:json",
+        "//host:peer-wait-control",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_test(
+    name = "peer-startup-witness-tests",
+    size = "small",
+    srcs = ["PeerStartupWitnessTests.hs"],
+    args = [
+        "$(location //replacement/secondary_stage:secondary-stage-image.bin)",
+        "$(location //replacement/secondary_stage:secondary-stage-image.symbols)",
+        "$(location //replacement/secondary_stage:secondary-stage-publication-fault-image.bin)",
+        "$(location //replacement/secondary_stage:secondary-stage-publication-fault-image.symbols)",
+        "$(location //replacement/secondary_stage:secondary-stage-stack-fault-image.bin)",
+        "$(location //replacement/secondary_stage:secondary-stage-stack-fault-image.symbols)",
+    ],
+    data = [
+        "//replacement/secondary_stage:secondary-stage-image.bin",
+        "//replacement/secondary_stage:secondary-stage-image.symbols",
+        "//replacement/secondary_stage:secondary-stage-publication-fault-image.bin",
+        "//replacement/secondary_stage:secondary-stage-publication-fault-image.symbols",
+        "//replacement/secondary_stage:secondary-stage-stack-fault-image.bin",
+        "//replacement/secondary_stage:secondary-stage-stack-fault-image.symbols",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":peer-startup-witness-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:vector",
+    ],
+)
+
 haskell_binary(
     name = "peer-stage-witness",
     srcs = ["PeerStageWitness.hs"],
@@ -475,6 +527,7 @@ haskell_binary(
         ":emulator-slot-lib",
         ":first-stage-witness-lib",
         ":peer-stage-witness-lib",
+        ":peer-startup-witness-lib",
         ":peer-wait-witness-lib",
         ":viewer-runtime-lib",
         "//host:aeson",

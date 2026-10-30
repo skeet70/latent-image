@@ -2,11 +2,11 @@ use super::*;
 use fujimod_catalog::configuration::RunEngine;
 use sha2::{Digest, Sha256};
 
-const BUDGET: u64 = 10_000_000;
-const PREFIX: u64 = 4_000_000;
-const HELD: u64 = 4_000_000;
-const DELAYED: u64 = 5_100_000;
-const RELEASE: u64 = 20_000;
+pub(super) const BUDGET: u64 = 10_000_000;
+pub(super) const PREFIX: u64 = 4_000_000;
+pub(super) const HELD: u64 = 4_000_000;
+pub(super) const DELAYED: u64 = 5_100_000;
+pub(super) const RELEASE: u64 = 20_000;
 const MICROSTEPS: usize = 2048;
 const ROWS: usize = 12_288;
 const WAIT_READS: usize = 128;
@@ -78,14 +78,15 @@ impl Stop {
             _ => WitnessCore::Core1,
         }
     }
-    fn enabled(self, control: Control) -> bool {
-        control == Control::DelayedRelease || !matches!(self, Self::PeerAcknowledged | Self::ControlFailure)
+    fn enabled(self, control: Control, phase: &Phase) -> bool {
+        !matches!(self, Self::PeerAcknowledged | Self::ControlFailure)
+            || (control == Control::DelayedRelease && phase.gate.is_some())
     }
 }
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(transparent)]
-struct WatchCursor(usize);
+pub(super) struct WatchCursor(pub(super) usize);
 #[derive(Serialize)]
 struct Boundary {
     #[serde(flatten)]
@@ -94,26 +95,26 @@ struct Boundary {
 }
 #[derive(Clone, Copy, Serialize)]
 #[serde(transparent)]
-struct CoreCounts([u64; 2]);
+pub(super) struct CoreCounts(pub(super) [u64; 2]);
 #[derive(Serialize)]
-struct Microstep { before: CoreCounts, after: CoreCounts, cell0: Word }
+pub(super) struct Microstep { before: CoreCounts, after: CoreCounts, cell0: Word }
 #[derive(Serialize)]
-struct ClearReadback {
-    instructions: Instructions,
-    primary_address: Guest,
-    primary_cpsr: Word,
-    primary_instruction: [u8; 4],
-    state: PeerState,
-    watch_records: WatchCursor,
-    microsteps: Vec<Microstep>,
+pub(super) struct ClearReadback {
+    pub(super) instructions: Instructions,
+    pub(super) primary_address: Guest,
+    pub(super) primary_cpsr: Word,
+    pub(super) primary_instruction: [u8; 4],
+    pub(super) state: PeerState,
+    pub(super) watch_records: WatchCursor,
+    pub(super) microsteps: Vec<Microstep>,
 }
 #[derive(Serialize)]
-struct Primary {
-    address: Guest,
+pub(super) struct Primary {
+    pub(super) address: Guest,
     registers: [Word; 13],
     sp: Word,
     lr: Word,
-    cpsr: Word,
+    pub(super) cpsr: Word,
     instructions: Instructions,
 }
 #[derive(Serialize)]
@@ -121,7 +122,7 @@ struct CodeBinding { address: Address, r#virtual: Vec<u8>, physical: Vec<u8> }
 #[derive(Serialize)]
 struct LowRam { address: Address, physical: Address, size: usize, permissions: u32 }
 #[derive(Serialize)]
-struct GateBindings {
+pub(super) struct GateBindings {
     core: WitnessCore,
     instructions: Instructions,
     decoder_choices: Vec<usize>,
@@ -171,14 +172,14 @@ struct Phase {
     handoff: bool,
 }
 
-fn require(condition: bool, problem: &str) -> Result<(), String> {
+pub(super) fn require(condition: bool, problem: &str) -> Result<(), String> {
     if condition { Ok(()) } else { Err(problem.into()) }
 }
-fn pending(state: &PeerState) -> bool {
+pub(super) fn pending(state: &PeerState) -> bool {
     state.cell0.0 == 0x22b && state.cell1.0 == 0 && state.completion.0 == 0
         && state.target.0 == 0 && state.argument.0 == 0
 }
-fn primary(machine: &Machine) -> Result<Primary, String> {
+pub(super) fn primary(machine: &Machine) -> Result<Primary, String> {
     let mut registers = [Word(0); 13];
     for (index, value) in registers.iter_mut().enumerate() {
         *value = register(machine, 0, arm::Register::R(index as u8))?;
@@ -189,21 +190,21 @@ fn primary(machine: &Machine) -> Result<Primary, String> {
         cpsr: register(machine, 0, arm::Register::Cpsr)?, instructions: Instructions(machine.instructions()),
     })
 }
-fn same_context(observed: &Primary, gate: &PeerHit<Stop>, clear: bool) -> bool {
+pub(super) fn same_context(observed: &Primary, registers: &[Word; 13], sp: Word, lr: Word, cpsr: Word, clear: bool) -> bool {
     observed.registers.iter().enumerate().all(|(index, word)| {
-        word.0 == if clear && index == 3 { 0x40020000 } else { gate.registers[index].0 }
-    }) && observed.sp == gate.sp && observed.lr == gate.lr && observed.cpsr == gate.cpsr
+        word.0 == if clear && index == 3 { 0x40020000 } else { registers[index].0 }
+    }) && observed.sp == sp && observed.lr == lr && observed.cpsr == cpsr
 }
-fn counts(machine: &Machine) -> Result<CoreCounts, String> {
+pub(super) fn counts(machine: &Machine) -> Result<CoreCounts, String> {
     machine.session.board.instruction_counts().try_into().map(CoreCounts).map_err(|_| "control requires two instruction counters".into())
 }
-fn bytes(machine: &Machine, core: usize, address: u64, length: usize) -> Result<Vec<u8>, String> {
+pub(super) fn bytes(machine: &Machine, core: usize, address: u64, length: usize) -> Result<Vec<u8>, String> {
     let mut result = vec![0; length];
     machine.session.board.read_memory(core, address, &mut result)?;
     Ok(result)
 }
-enum OriginalImage { Record2, LoaderB }
-fn verify_image(machine: &Machine, image: OriginalImage) -> Result<(), String> {
+pub(super) enum OriginalImage { Record2, LoaderB }
+pub(super) fn verify_image(machine: &Machine, image: OriginalImage) -> Result<(), String> {
     let (address, length, expected): (u64, usize, [u8; 32]) = match image {
         OriginalImage::Record2 => (0x10000, 0x4c80, [
             0x2f,0x1b,0xf3,0xf0,0xe4,0x83,0xb8,0x92,0xd2,0x89,0x05,0x99,0x67,0x9c,0x1b,0x51,
@@ -225,8 +226,8 @@ fn verify_image(machine: &Machine, image: OriginalImage) -> Result<(), String> {
     require(virtual_bytes == physical && Sha256::digest(&physical)[..] == expected[..],
         "control original guest image digest or active alias differs")
 }
-enum TcmBank { Btcm, Atcm }
-fn tcm(machine: &Machine, core: WitnessCore, bank: TcmBank) -> Result<Word, String> {
+pub(super) enum TcmBank { Btcm, Atcm }
+pub(super) fn tcm(machine: &Machine, core: WitnessCore, bank: TcmBank) -> Result<Word, String> {
     let core = match core { WitnessCore::Core0 => 0, WitnessCore::Core1 => 1 };
     u32::try_from(machine.session.board.cpu(core)?.coprocessor(arm::Coprocessor {
         cp: 15, opc1: 0, crn: 9, crm: 1,
@@ -235,11 +236,11 @@ fn tcm(machine: &Machine, core: WitnessCore, bank: TcmBank) -> Result<Word, Stri
     }, None)?).map(Word).map_err(|_| "control TCM register exceeds a word".into())
 }
 #[derive(Deserialize)]
-struct DecoderState { choices: Vec<usize>, pending: Vec<Option<usize>>, failure: Option<String> }
+pub(super) struct DecoderState { pub(super) choices: Vec<usize>, pub(super) pending: Vec<Option<usize>>, pub(super) failure: Option<String> }
 #[derive(Deserialize)]
-struct BoardState { memory_decoders: DecoderState }
+pub(super) struct BoardState { pub(super) memory_decoders: DecoderState }
 
-fn gate_bindings(machine: &Machine, control: Control) -> Result<GateBindings, String> {
+pub(super) fn gate_bindings(machine: &Machine, control: Control) -> Result<GateBindings, String> {
     let (_, graph) = run::graph(&machine.document)?;
     let observed: BoardState = serde_json::from_value(machine.session.board.state()).map_err(|e| e.to_string())?;
     let decoder = observed.memory_decoders;
@@ -405,7 +406,24 @@ fn handoff(hit: &PeerHit<Stop>, tail: &PeerHit<Stop>) -> Result<(), String> {
     }
     Ok(())
 }
-fn clear(machine: &mut Machine, watch: &MemoryWatch, preclear: &Boundary, readback: &mut Option<ClearReadback>) -> Result<(), String> {
+/// Core 0's original `0x1ff8` clear, committed one entered instruction at a time.
+pub(super) struct CommittedClear {
+    pub(super) single_core0_step: bool,
+    pub(super) before_pc: Word,
+    pub(super) before_cpsr: Word,
+    pub(super) current: Primary,
+    pub(super) cell0: Word,
+    pub(super) state: PeerState,
+    pub(super) original: [u8; 4],
+    pub(super) microsteps: Vec<Microstep>,
+}
+impl CommittedClear {
+    pub(super) fn cleared(&self) -> bool {
+        self.state.cell0.0 == 0 && self.state.cell1.0 == 0 && self.state.completion.0 == 0
+            && self.state.target.0 == 0 && self.state.argument.0 == 0
+    }
+}
+pub(super) fn commit_clear(machine: &mut Machine) -> Result<CommittedClear, String> {
     let mut original = [0; 4];
     machine.session.board.read_memory(0, 0x1ff8, &mut original)?;
     let mut physical = [0; 4];
@@ -426,32 +444,36 @@ fn clear(machine: &mut Machine, watch: &MemoryWatch, preclear: &Boundary, readba
         machine.require_running()?;
         require(machine.traces.hits.len() == hits, "control boundary occurred before committed clear readback")?;
         if cell0.0 == 0x22b { continue; }
-        let current = primary(machine)?;
-        let state = state(machine)?;
-        let cleared = state.cell0.0 == 0 && state.cell1.0 == 0 && state.completion.0 == 0
-            && state.target.0 == 0 && state.argument.0 == 0;
-        let observed = watch_state(watch)?;
-        let cursor = WatchCursor(observed.records.len());
-        *readback = Some(ClearReadback {
-            instructions: Instructions(machine.instructions()), primary_address: current.address, primary_cpsr: current.cpsr,
-            primary_instruction: original, state, watch_records: cursor, microsteps,
+        return Ok(CommittedClear {
+            single_core0_step: delta == [Some(1), Some(0)], before_pc, before_cpsr,
+            current: primary(machine)?, cell0, state: state(machine)?, original, microsteps,
         });
-        check_watch(&observed)?;
-        let (index, attempt) = writer(&observed, WitnessCore::Core0, 0x1ff8, 0x20000, 0)?;
-        require(delta == [Some(1), Some(0)] && before_pc.0 == 0x1ff8 && current.address.0 == 0x1ffc
-            && before_cpsr == preclear.hit.cpsr && current.cpsr == before_cpsr && cell0.0 == 0 && cleared
-            && index >= preclear.watch_records.0 && index < cursor.0 && attempt.instructions.0 == machine.instructions()
-            && attempt.before.as_deref() == Some(&[0x2b, 2, 0, 0][..]), "control attempted clear lacks original instruction completion and immediate zero readback")?;
-        return Ok(());
     }
     Err("control original clear not committed within 2048 one-entry windows".into())
 }
+fn clear(machine: &mut Machine, watch: &MemoryWatch, preclear: &Boundary, readback: &mut Option<ClearReadback>) -> Result<(), String> {
+    let committed = commit_clear(machine)?;
+    let cleared = committed.cleared();
+    let CommittedClear { single_core0_step, before_pc, before_cpsr, current, cell0, state, original, microsteps } = committed;
+    let observed = watch_state(watch)?;
+    let cursor = WatchCursor(observed.records.len());
+    *readback = Some(ClearReadback {
+        instructions: Instructions(machine.instructions()), primary_address: current.address, primary_cpsr: current.cpsr,
+        primary_instruction: original, state, watch_records: cursor, microsteps,
+    });
+    check_watch(&observed)?;
+    let (index, attempt) = writer(&observed, WitnessCore::Core0, 0x1ff8, 0x20000, 0)?;
+    require(single_core0_step && before_pc.0 == 0x1ff8 && current.address.0 == 0x1ffc
+        && before_cpsr == preclear.hit.cpsr && current.cpsr == before_cpsr && cell0.0 == 0 && cleared
+        && index >= preclear.watch_records.0 && index < cursor.0 && attempt.instructions.0 == machine.instructions()
+        && attempt.before.as_deref() == Some(&[0x2b, 2, 0, 0][..]), "control attempted clear lacks original instruction completion and immediate zero readback")
+}
 
 fn execute(machine: &mut Machine, control: Control, watch: &MemoryWatch, observed: &mut Observations) -> Result<(), String> {
-    let sites = Stop::ALL.into_iter().filter(|stop| stop.enabled(control)).map(|stop| (stop.address(), stop.name().into())).collect();
-    machine.traces.arm(&machine.session, sites)?;
-    machine.traces.stop_labels = Stop::ALL.into_iter().filter(|stop| stop.enabled(control)).map(|stop| stop.name().into()).collect();
     let mut phase = Phase::default();
+    let sites = Stop::ALL.into_iter().filter(|stop| stop.enabled(control, &phase)).map(|stop| (stop.address(), stop.name().into())).collect();
+    machine.traces.arm(&machine.session, sites)?;
+    machine.traces.stop_labels = Stop::ALL.into_iter().filter(|stop| stop.enabled(control, &phase)).map(|stop| stop.name().into()).collect();
     let mut last_wait = WatchCursor(0);
     loop {
         let phase_end = if let Some(clear) = &observed.clear_readback { clear.instructions.0.saturating_add(RELEASE) }
@@ -501,6 +523,11 @@ fn execute(machine: &mut Machine, control: Control, watch: &MemoryWatch, observe
                     "control primary gate context differs")?;
                 observed.bindings = Some(gate_bindings(machine, control)?);
                 phase.gate = Some(index);
+                for stop in [Stop::PeerAcknowledged, Stop::ControlFailure].into_iter().filter(|stop| stop.enabled(control, &phase)) {
+                    machine.traces.sites.insert(stop.address(), stop.name().into());
+                    machine.traces.stop_labels.insert(stop.name().into());
+                }
+                // remove_site rearms the updated set and preserves pending-entry resume markers.
                 machine.traces.remove_site(&machine.session, Guest(label.address()))?;
             }
             Stop::PeerWaitLoaded => {
@@ -514,7 +541,8 @@ fn execute(machine: &mut Machine, control: Control, watch: &MemoryWatch, observe
                         observed.final_primary = Some(final_primary);
                         let gate = &observed.stops[phase.gate.ok_or("held control lacks primary gate")?].hit;
                         let final_primary = observed.final_primary.as_ref().ok_or("held primary snapshot absent")?;
-                        require(final_primary.address.0 == 0x1ff4 && same_context(final_primary, gate, false), "held primary context changed")?;
+                        require(final_primary.address.0 == 0x1ff4
+                            && same_context(final_primary, &gate.registers, gate.sp, gate.lr, gate.cpsr, false), "held primary context changed")?;
                         return acceptance(control, observed, &boundary_watch);
                     }
                     machine.traces.remove_site(&machine.session, Guest(label.address()))?;
@@ -529,7 +557,7 @@ fn execute(machine: &mut Machine, control: Control, watch: &MemoryWatch, observe
                 require(control == Control::DelayedRelease && phase.ack && phase.waits == 4 && !phase.clear && pending(&hit.state),
                     "control original clear occurred before required wait observations")?;
                 let gate = &observed.stops[phase.gate.ok_or("control primary gate absent")?].hit;
-                require(same_context(&primary(machine)?, gate, true), "control veneer did not restore primary context")?;
+                require(same_context(&primary(machine)?, &gate.registers, gate.sp, gate.lr, gate.cpsr, true), "control veneer did not restore primary context")?;
                 machine.traces.remove_site(&machine.session, Guest(label.address()))?;
                 clear(machine, watch, boundary, &mut observed.clear_readback)?;
                 phase.clear = true;
