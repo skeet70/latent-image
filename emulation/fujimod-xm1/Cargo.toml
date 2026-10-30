@@ -46,6 +46,7 @@ fujimod-emulator-cpu-unicorn = { path = "../fujimod/crates/emulator-cpu-unicorn"
 fujimod-emulator-devices = { path = "../fujimod/crates/emulator-devices" }
 fujimod-emulator-ip = { path = "../fujimod/crates/emulator-ip" }
 fujimod-emulator-exr2-system = { path = "../fujimod/crates/emulator-exr2-system" }
+fujimod-emulator-exr2-isp-input = { path = "../fujimod/crates/emulator-exr2-isp-input" }
 fujimod-emulator-exr2-board = { path = "../fujimod/crates/emulator-exr2-board" }
 fujimod-emulator-exr2-plan = { path = "../fujimod/crates/emulator-exr2-plan" }
 fujimod-emulator-models = { path = "../fujimod/crates/emulator-models" }
