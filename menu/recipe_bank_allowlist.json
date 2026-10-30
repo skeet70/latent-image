@@ -669,18 +669,6 @@
       "reason": "stamps the request identity into the stock message's payload"
     },
     {
-      "function": "rb_media_request_post",
-      "access": "store",
-      "through": {
-        "deref": {
-          "deref": {
-            "argument": "r0"
-          }
-        }
-      },
-      "reason": "completes a refused open through the stock request's completion words"
-    },
-    {
       "function": "rb_media_write_guard_entry",
       "access": "branch",
       "through": {
