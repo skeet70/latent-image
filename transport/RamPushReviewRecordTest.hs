@@ -121,13 +121,15 @@ main = do
       rustFacts = pin "rust_toolchain_replacement_bank" "rust-toolchain-facts" "mechanism" unreviewed
   expect "the Rust archive source rejects substituted identities"
     (isLeft (parsed (document [] [] [pin "rust_toolchain_replacement_bank" "rust-archive" "bank-content" unreviewed] unreviewed)))
-  expect "the Rust toolchain facts source rejects substituted identities"
+  expect "the Rust build facts source rejects substituted identities"
     (isLeft (parsed (document [] [] [pin "rust_object_replacement_bank" "rust-toolchain-facts" "mechanism" unreviewed] unreviewed)))
-  case parsed (document [] [] [rustArchive, rustFacts] unreviewed) of
-    Left reason -> expect ("the Rust artifact pins parse: " ++ reason) False
+  case parsed (document [] [] [installerPin unreviewed, rustArchive, rustFacts] unreviewed) of
+    Left reason -> expect ("the bank record with Rust artifact pins parses: " ++ reason) False
     Right record -> do
-      expect "Rust artifact pins round trip" (parsed (renderReviewRecord record) == Right record)
-      expect "Rust artifact pins keep their typed sources" (map pinSource (recordPins record) == [RustArchive, RustToolchainFacts])
+      expect "Rust artifact pins round trip"
+        (parsed (renderReviewRecord record) == Right record)
+      expect "Rust artifact pins remain unreviewed"
+        (subjects (verdictFindings record) == [PinSubject (PinIdentity "menu/ram_push_installer.c"), PinSubject (PinIdentity "rust_object_replacement_bank"), PinSubject (PinIdentity "rust_toolchain_replacement_bank"), ContractSubject])
   case parsed approvedRecord of
     Left reason -> expect ("the approved fixture parses: " ++ reason) False
     Right record -> do

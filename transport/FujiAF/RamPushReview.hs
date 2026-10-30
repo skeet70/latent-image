@@ -32,10 +32,8 @@ newtype IsoDate = IsoDate { unIsoDate :: String } deriving (Eq, Show)
 newtype PinIdentity = PinIdentity { unPinIdentity :: String } deriving (Eq, Ord, Show)
 
 -- | Where a pin's digest comes from. A workspace or private-data path pin's
--- identity is its path; the private RC0 and spec inputs carry a label.
--- 'RustArchive' and 'RustToolchainFacts' are the bytes of
--- `//replacement/bank:bank` and `//replacement/bank:build-facts`, which the
--- bank relinker receives as RB_RUST_ARCHIVE and RB_RUST_BUILD_FACTS.
+-- identity is its path; the private RC0 and spec inputs carry a label. The
+-- built artifacts each have one fixed identity.
 data PinSource
   = WorkspaceFile FilePath
   | PrivateFile FilePath
@@ -231,12 +229,27 @@ relativePath path = not (null path) && not ("/" `isPrefixOf` path) && ".." `notE
   where segments = splitOn '/' path
         splitOn c s = case break (== c) s of (a, []) -> [a]; (a, _:rest) -> a : splitOn c rest
 
+-- | The record's `source` value.
+sourceName :: PinSource -> String
+sourceName source = case source of
+  WorkspaceFile _ -> "workspace"
+  PrivateFile _ -> "private"
+  BuilderSources -> "builder"
+  Toolchain -> "toolchain"
+  UsbToggleStub -> "usb-toggle-stub"
+  RustArchive -> "rust-archive"
+  RustToolchainFacts -> "rust-toolchain-facts"
+
 parsePin :: Value -> Parse Pin
 parsePin value = do
   identity <- text "pin identity" (field value "identity")
   require (length identity <= 256) "pin identity longer than 256 characters"
   let what = "pin "++identity
       keys extra = closed what value (["component","identity","sha256","source","status"] ++ extra)
+      builtArtifact expected source = do
+        keys []
+        require (identity == expected) (what++": "++sourceName source++" identity must be "++expected)
+        pure source
   source <- case field value "source" of
     String "workspace" -> do
       keys []
@@ -250,18 +263,9 @@ parsePin value = do
       pure (PrivateFile path)
     String "builder" -> keys [] >> pure BuilderSources
     String "toolchain" -> keys [] >> pure Toolchain
-    String "usb-toggle-stub" -> do
-      keys []
-      require (identity == "usb_toggle_stub") (what++": USB toggle stub identity must be usb_toggle_stub")
-      pure UsbToggleStub
-    String "rust-archive" -> do
-      keys []
-      require (identity == "rust_object_replacement_bank") (what++": Rust archive identity must be rust_object_replacement_bank")
-      pure RustArchive
-    String "rust-toolchain-facts" -> do
-      keys []
-      require (identity == "rust_toolchain_replacement_bank") (what++": Rust toolchain facts identity must be rust_toolchain_replacement_bank")
-      pure RustToolchainFacts
+    String "usb-toggle-stub" -> builtArtifact "usb_toggle_stub" UsbToggleStub
+    String "rust-archive" -> builtArtifact "rust_object_replacement_bank" RustArchive
+    String "rust-toolchain-facts" -> builtArtifact "rust_toolchain_replacement_bank" RustToolchainFacts
     _ -> reject (what++": source must be workspace, private, builder, toolchain, usb-toggle-stub, rust-archive or rust-toolchain-facts")
   component <- case field value "component" of
     String "mechanism" -> pure Mechanism
@@ -400,14 +404,9 @@ renderReviewRecord record = C.pack (unlines (
       Approved identifier commit -> [("verdict", str "approved"), ("review", str (unReviewId identifier)), ("commit", str (unCommitId commit))]
       ContentChecked identifier -> [("verdict", str "content-checked"), ("check", str (unCheckId identifier))]
       Unreviewed commit -> [("verdict", str "unreviewed"), ("commit", str (unCommitId commit))]
-    sourceFields source = case source of
-      WorkspaceFile _ -> [("source", str "workspace")]
-      PrivateFile path -> [("source", str "private"), ("path", str path)]
-      BuilderSources -> [("source", str "builder")]
-      Toolchain -> [("source", str "toolchain")]
-      UsbToggleStub -> [("source", str "usb-toggle-stub")]
-      RustArchive -> [("source", str "rust-archive")]
-      RustToolchainFacts -> [("source", str "rust-toolchain-facts")]
+    sourceFields source = ("source", str (sourceName source)) : case source of
+      PrivateFile path -> [("path", str path)]
+      _ -> []
     pinValue pin = object (
       [ ("identity", str (unPinIdentity (pinIdentity pin)))
       , ("component", str (case pinComponent pin of Mechanism -> "mechanism"; BankContent -> "bank-content"))

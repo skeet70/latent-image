@@ -188,6 +188,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         "//host:base",
+        "//host:directory",
         "//host:process",
         "//host:unix",
     ],
@@ -207,8 +208,18 @@ haskell_test(
     name = "thermal-guard-tests",
     size = "small",
     srcs = ["ThermalGuardTests.hs"],
-    args = ["$(rootpath :thermal-guard-test-worker)", "$(rootpath :thermal-guard-fixture)"],
-    data = [":thermal-guard-test-worker", ":thermal-guard-fixture"],
+    args = [
+        "$(rootpath :thermal-guard-test-worker)",
+        "$(rootpath :thermal-guard-fixture)",
+        "$(rootpath :thermal-guard)",
+        "$(rootpath :thermal-guard-worker)",
+    ],
+    data = [
+        ":thermal-guard-test-worker",
+        ":thermal-guard-fixture",
+        ":thermal-guard",
+        ":thermal-guard-worker",
+    ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     tags = ["no-sandbox"],
     deps = [

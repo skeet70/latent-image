@@ -1,10 +1,10 @@
 -- The RAM-push pre-go gate over a payload's review record.
 --   verdicts RECORD: every pin and the publication contract is approved by an
 --     approving review, or content-checked (bank-content pins only).
---   bytes RECORD: every workspace pin's file, the USB toggle stub, the bank's
---     Rust archive and toolchain facts, and the builder and toolchain
---     identities equal the recorded digests. Private-data pins are compared by
---     the relink inside the camera binary and //transport:ram-push-reviewed-build-check.
+--   bytes RECORD: every workspace pin's file, every built-artifact pin's file
+--     and the builder and toolchain identities equal the recorded digests.
+--     Private-data pins are compared by the relink inside the camera binary
+--     and //transport:ram-push-reviewed-build-check.
 module Main where
 
 import Control.Exception (IOException, try)

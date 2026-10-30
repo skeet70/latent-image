@@ -17,6 +17,7 @@ module Emulation.ThermalGuard
   , runGuarded
   , validateWorkerService
   , callerMemoryProperties
+  , callerCpuProperties
   ) where
 
 import Control.Concurrent (forkIO, killThread, myThreadId, threadDelay)
@@ -33,7 +34,8 @@ import Control.Exception
   )
 import Control.Monad (forM, void)
 import Data.Char (isDigit, isSpace)
-import Data.List (dropWhileEnd, isPrefixOf, isSuffixOf)
+import Data.List (dropWhileEnd, intercalate, isPrefixOf, isSuffixOf)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (catMaybes)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.Exit (ExitCode (..))
@@ -73,6 +75,12 @@ data ThermalState
   deriving (Eq, Show)
 
 data LimitValue = LimitBytes Integer | LimitUnlimited
+
+newtype CpuIndex = CpuIndex Int
+
+data CpuRange = CpuRange CpuIndex CpuIndex
+
+newtype CpuSet = CpuSet (NonEmpty CpuRange)
 
 productionThermalPolicy :: ThermalPolicy
 productionThermalPolicy = ThermalPolicy
@@ -263,6 +271,53 @@ callerMemoryProperties = do
     [ "--property=MemoryMax=" ++ renderLimit memory
     , "--property=MemorySwapMax=" ++ renderLimit swap
     ]
+
+callerCpuProperties :: IO [String]
+callerCpuProperties = do
+  cpus <- readCallerCpuSet
+  pure ["--property=CPUAffinity=" ++ renderCpuSet cpus]
+
+readCallerCpuSet :: IO CpuSet
+readCallerCpuSet = do
+  status <- readStrict "/proc/thread-self/status"
+  case [trim value | line <- lines status, Just value <- [stripPrefix "Cpus_allowed_list:" line]] of
+    [value] -> either (ioError . userError) pure (parseCpuSet value)
+    _ -> ioError (userError "caller CPU affinity field is missing or ambiguous")
+
+parseCpuSet :: String -> Either String CpuSet
+parseCpuSet text = do
+  ranges <- traverse parseRange (splitCommas text)
+  case ranges of
+    first : rest
+      | and (zipWith separated ranges rest) -> Right (CpuSet (first :| rest))
+    _ -> Left "caller CPU affinity is empty, overlapping or unordered"
+  where
+    splitCommas value = case break (== ',') value of
+      (part, []) -> [part]
+      (part, _ : rest) -> part : splitCommas rest
+    parseRange value = case break (== '-') value of
+      (lower, []) -> do
+        index <- parseIndex lower
+        pure (CpuRange index index)
+      (lower, _ : upper) -> do
+        first@(CpuIndex start) <- parseIndex lower
+        lastIndex@(CpuIndex end) <- parseIndex upper
+        if start <= end then Right (CpuRange first lastIndex)
+          else Left "caller CPU affinity has a reversed range"
+    parseIndex digits
+      | not (null digits) && all (\character -> character >= '0' && character <= '9') digits
+      , Just value <- readMaybe digits :: Maybe Integer
+      -- systemd's CPU-set parser supports indices below 8192.
+      , value >= 0 && value < 8192 = Right (CpuIndex (fromInteger value))
+      | otherwise = Left "caller CPU affinity has an unsupported CPU index"
+    separated (CpuRange _ (CpuIndex upper)) (CpuRange (CpuIndex lower) _) = upper < lower
+
+renderCpuSet :: CpuSet -> String
+renderCpuSet (CpuSet (first :| rest)) = intercalate " " (map renderRange (first : rest))
+  where
+    renderRange (CpuRange (CpuIndex lower) (CpuIndex upper))
+      | lower == upper = show lower
+      | otherwise = show lower ++ "-" ++ show upper
 
 readOwnScope :: IO FilePath
 readOwnScope = do
