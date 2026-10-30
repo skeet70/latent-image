@@ -78,8 +78,9 @@ impl Stop {
             _ => WitnessCore::Core1,
         }
     }
-    fn enabled(self, control: Control) -> bool {
-        control == Control::DelayedRelease || !matches!(self, Self::PeerAcknowledged | Self::ControlFailure)
+    fn enabled(self, control: Control, phase: &Phase) -> bool {
+        !matches!(self, Self::PeerAcknowledged | Self::ControlFailure)
+            || (control == Control::DelayedRelease && phase.gate.is_some())
     }
 }
 
@@ -448,10 +449,10 @@ fn clear(machine: &mut Machine, watch: &MemoryWatch, preclear: &Boundary, readba
 }
 
 fn execute(machine: &mut Machine, control: Control, watch: &MemoryWatch, observed: &mut Observations) -> Result<(), String> {
-    let sites = Stop::ALL.into_iter().filter(|stop| stop.enabled(control)).map(|stop| (stop.address(), stop.name().into())).collect();
-    machine.traces.arm(&machine.session, sites)?;
-    machine.traces.stop_labels = Stop::ALL.into_iter().filter(|stop| stop.enabled(control)).map(|stop| stop.name().into()).collect();
     let mut phase = Phase::default();
+    let sites = Stop::ALL.into_iter().filter(|stop| stop.enabled(control, &phase)).map(|stop| (stop.address(), stop.name().into())).collect();
+    machine.traces.arm(&machine.session, sites)?;
+    machine.traces.stop_labels = Stop::ALL.into_iter().filter(|stop| stop.enabled(control, &phase)).map(|stop| stop.name().into()).collect();
     let mut last_wait = WatchCursor(0);
     loop {
         let phase_end = if let Some(clear) = &observed.clear_readback { clear.instructions.0.saturating_add(RELEASE) }
@@ -501,6 +502,11 @@ fn execute(machine: &mut Machine, control: Control, watch: &MemoryWatch, observe
                     "control primary gate context differs")?;
                 observed.bindings = Some(gate_bindings(machine, control)?);
                 phase.gate = Some(index);
+                for stop in [Stop::PeerAcknowledged, Stop::ControlFailure].into_iter().filter(|stop| stop.enabled(control, &phase)) {
+                    machine.traces.sites.insert(stop.address(), stop.name().into());
+                    machine.traces.stop_labels.insert(stop.name().into());
+                }
+                // remove_site rearms the updated set and preserves pending-entry resume markers.
                 machine.traces.remove_site(&machine.session, Guest(label.address()))?;
             }
             Stop::PeerWaitLoaded => {
