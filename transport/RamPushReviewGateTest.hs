@@ -23,8 +23,8 @@ factsDigest = "c758fe871befbba5fed0a0e5756cfd8d36fde35bb8f01b9f0e8798ba20a722be"
 record :: String
 record = concat
   [ "{\"schema\":1,\"kind\":\"xm1-ram-push-review-record\",\"reviews\":[],\"content_checks\":[],\"pins\":["
-  , pin "rust_object_replacement_bank" "rust-bank-archive" "bank-content" archiveDigest, ","
-  , pin "rust_toolchain_replacement_bank" "rust-bank-build-facts" "mechanism" factsDigest
+  , pin "rust_object_replacement_bank" "rust-archive" "bank-content" archiveDigest, ","
+  , pin "rust_toolchain_replacement_bank" "rust-toolchain-facts" "mechanism" factsDigest
   , "],\"publication_contract\":{\"sha256\":\"", replicate 64 'd', "\",\"status\":", unreviewed, "}}" ]
   where
     unreviewed = "{\"verdict\":\"unreviewed\",\"commit\":\"" ++ replicate 40 'b' ++ "\"}"

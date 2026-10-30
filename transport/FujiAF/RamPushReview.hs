@@ -40,8 +40,8 @@ data PinSource
   | BuilderSources
   | Toolchain
   | UsbToggleStub
-  | RustBankArchive
-  | RustBankBuildFacts
+  | RustArchive
+  | RustToolchainFacts
   deriving (Eq, Show)
 
 data Component = Mechanism | BankContent deriving (Eq, Show)
@@ -237,8 +237,8 @@ sourceName source = case source of
   BuilderSources -> "builder"
   Toolchain -> "toolchain"
   UsbToggleStub -> "usb-toggle-stub"
-  RustBankArchive -> "rust-bank-archive"
-  RustBankBuildFacts -> "rust-bank-build-facts"
+  RustArchive -> "rust-archive"
+  RustToolchainFacts -> "rust-toolchain-facts"
 
 parsePin :: Value -> Parse Pin
 parsePin value = do
@@ -264,9 +264,9 @@ parsePin value = do
     String "builder" -> keys [] >> pure BuilderSources
     String "toolchain" -> keys [] >> pure Toolchain
     String "usb-toggle-stub" -> builtArtifact "usb_toggle_stub" UsbToggleStub
-    String "rust-bank-archive" -> builtArtifact "rust_object_replacement_bank" RustBankArchive
-    String "rust-bank-build-facts" -> builtArtifact "rust_toolchain_replacement_bank" RustBankBuildFacts
-    _ -> reject (what++": source must be workspace, private, builder, toolchain, usb-toggle-stub, rust-bank-archive or rust-bank-build-facts")
+    String "rust-archive" -> builtArtifact "rust_object_replacement_bank" RustArchive
+    String "rust-toolchain-facts" -> builtArtifact "rust_toolchain_replacement_bank" RustToolchainFacts
+    _ -> reject (what++": source must be workspace, private, builder, toolchain, usb-toggle-stub, rust-archive or rust-toolchain-facts")
   component <- case field value "component" of
     String "mechanism" -> pure Mechanism
     String "bank-content" -> pure BankContent

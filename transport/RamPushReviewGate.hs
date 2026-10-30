@@ -33,8 +33,8 @@ currentDigest kind pin = case pinSource pin of
   Toolchain -> pure (compareTo ramPushToolchainDigest)
   PrivateFile _ -> pure Nothing
   UsbToggleStub -> fileDigest "host/firmware/usb-toggle-stub.bin"
-  RustBankArchive -> fileDigest "replacement/bank/bank.a"
-  RustBankBuildFacts -> fileDigest "replacement/bank/build-facts.txt"
+  RustArchive -> fileDigest "replacement/bank/bank.a"
+  RustToolchainFacts -> fileDigest "replacement/bank/build-facts.txt"
   where
     fileDigest path = do
       bytes <- try (B.readFile path)
