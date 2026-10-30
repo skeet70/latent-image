@@ -90,7 +90,7 @@ _FUJIMOD_XM1_CRATE = [
 ]
 
 _NIX_BUILD_CAP = ["--max-jobs", "2", "--cores", "2"]
-_RUST_NIX_BUILD_CAP = ["--max-jobs", "1", "--cores", "1"]
+_RUST_NIX_BUILD_CAP = ["--max-jobs", "1", "--cores", "2"]
 
 def _lab_dependencies_impl(_ctx):
     nixpkgs_local_repository(
