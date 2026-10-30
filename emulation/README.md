@@ -109,9 +109,9 @@ Natural execution qualifies the four core-1 pre-execution boundaries and separat
 The historical SDK97 delayed failure remains a failed pre-gate ROM collision, not delayed-release qualification (`E-PEER-COMBINED-DELAYED-RELEASE-REJECTION-150`); its bounded requirements are subsequently met by SDK374. Exact historical control/resource facts remain in their ledger rows and Git. These observations do not resolve `0x3fff00xx` aliases, execute loader B, own record 2, establish full startup or qualify physical behavior.
 
 
-### Owned record-2 startup witness (schema 3, source only)
+### Owned record-2 startup witness (schema 3, host-built, not executed)
 
-[#135](https://github.com/skeet70/latent-image/issues/135) adds a third `--peer-witness` contract for the retained record 2 or an owned record-2 candidate. Schemas 1 and 2 are unchanged. It is written and not yet compiled or run; no receipt exists.
+[#135](https://github.com/skeet70/latent-image/issues/135) adds a third `--peer-witness` contract for the retained record 2 or an owned record-2 candidate. Schemas 1 and 2 are unchanged. The model patch, SDK witness and host consumer are built and their host tests pass, and the staged DATs and twelve preparations of `E-SECONDARY-STAGE-SCHEMA3-HOST-150` exist; no guest has run it and no receipt exists.
 
 The closed contract names a scenario (`natural` or `delayed-release` with endpoint `handoff` or `loader-entry`, or `held-sentinel`) and a program (`retained`, or `owned` with the staged record-2 digest, image extent, ten sites, loaded register, poll period and the exact seven fetch and three read candidate forbidden intervals). The host derives every owned fact from the candidate's linked `.bin` and `.symbols`, and the SDK refuses a site that is not the expected instruction shape in the digest-pinned record. Natural runs keep the 20,000,000 budget and controls the schema-2 budget and phase caps.
 
@@ -120,6 +120,20 @@ Observation uses the classified memory watch of `build-support/fujimod-classifie
 Each `peer-loaded` stop pairs one completed core-1 peer-cell load with the loaded register at the following comparison; that proves the value reached the comparison, not that it was consumed. Waiting pairs must be one poll period apart in core-1 entered instructions. The `startup-main` stop after the retained state and stack services allows only the source-bound core-1 ATCM change to `0x70000011`; TCM registers are stable afterwards and every enabled TCM window must miss every guarded static view. Handoff and loader-entry stops check CPSR, r0, r3, SP and r6-r11 against the post-initialization stop and the published segment entry before their watch rows, and record the globals `[0x14c60,0x14ca0)` and companion `[0xa0000,0xa0548)` for a retained-versus-owned comparison. Those two host reads are recorded as whole-extent transfers; a published-epoch host read of exactly one of those extents, at most once per extent per endpoint stop, is the only row allowed to extend beyond a protocol range. The comparison ignores only CPSR NZCV, following the loader-B first-overwrite proof `private-data/analysis/x-m1-1.50/issue135/loaderb-first-overwrite.txt`. A fetch at a forbidden interval start stops and fails at once.
 
 Coverage between stops: each epoch hooks the static maps and every decoder choice's processor views, host and model-bus writes are recorded by physical address, and under fixed views any committed decoding change, including one later restored, or a hooked CPU access with no physical resolution is a watch violation. A TCM overlay changes only its own core's view, and its bytes are private, so it cannot write guarded DRAM. Core 1's code from entry to loader-B entry is the owned image and the retained service closures; the only TCM register write in it is `0x118c4` (ATCM `0x70000011`), checked at `startup-main`. That holds under no exception: IRQ and FIQ stay masked, and an abort or undefined-instruction vector through the unresolved secondary-SRAM aliases at `0x3fff0000`/`0xffff0000` is outside the claim. Core-0 TCM changes between stops are not observed; they can hide core-0 accesses from the watch but not alter guarded DRAM.
+
+Owned control DATs stage the owned image into the schema-2 control DAT, against which the consumer checks the staged record. Preparation writes the contract and expected file without starting an emulator:
+
+```sh
+bazel-bin/emulation/peer-stage-witness --firmware ORIGINAL.DAT --fflzd bazel-bin/lz/fflzd --output CONTROL_DIR --control held-sentinel|delayed-release
+bazel-bin/host/firmware/build-secondary-stage CONTROL_DIR/peer-control.DAT bazel-bin/replacement/secondary_stage/secondary-stage-image.bin \
+  bazel-bin/replacement/secondary_stage/secondary-stage-image.symbols OWNED_CONTROL.DAT --load-offset 0x400 --entry 0x10400 \
+  --expect-slot-sha256 909db53de40a0319541a30314bd942cb119eca3de1147e2b856eecf71c1a4809
+bazel-bin/emulation/peer-stage-witness --startup retained --scenario SCENARIO [--endpoint handoff|loader-entry] --firmware ORIGINAL.DAT --fflzd bazel-bin/lz/fflzd --output DIR
+bazel-bin/emulation/peer-stage-witness --startup owned --scenario SCENARIO [--endpoint handoff|loader-entry] --firmware STAGED.DAT --fflzd bazel-bin/lz/fflzd --output DIR \
+  --candidate-image IMAGE.bin --candidate-symbols IMAGE.symbols --source-firmware ORIGINAL.DAT
+bazel-bin/emulation/peer-stage-witness --startup-receipt DIR/peer-witness.json --startup-contract DIR/peer-witness-contract.json
+bazel-bin/emulation/peer-stage-witness --compare RETAINED_RECEIPT RETAINED_CONTRACT OWNED_RECEIPT OWNED_CONTRACT
+```
 
 # Bounded selected-queue experiment
 

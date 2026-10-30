@@ -416,3 +416,37 @@ Veneer stops are phase-scoped. At reset the low 16 KiB maps captured ROM; its `0
 
 CPU watch rows are attempts; committed readback is separate. Model-bus transfers and host snapshots do not identify CPU or physical-device writers. Original `0x3fff00xx` vector aliases/handlers, loader-B continuation and later application startup remain unresolved or retained. Neither this observation nor its guest controls own or retire record 2, establish full startup, or qualify physical behavior. The next owned secondary-stage boundary is [#135](https://github.com/skeet70/latent-image/issues/135).
 
+#### Owned record-2 source increment (#135, unqualified)
+
+[#135](https://github.com/skeet70/latent-image/issues/135) has a source and host-artifact increment in [`replacement/secondary_stage`](../replacement/README.md). `E-SECONDARY-STAGE-SOURCE-150` records the first 1376-byte build; `E-SECONDARY-STAGE-SCHEMA3-HOST-150` records the current 1280-byte build that passes the companion descriptor by address, its staged DATs, and the built and host-tested schema-3 witness ([emulation README](../emulation/README.md#owned-record-2-startup-witness-schema-3-host-built-not-executed)). It is not a qualified ownership increment: no guest has executed it and no forbidden range has a runtime guard.
+
+| Category | Entries |
+| --- | --- |
+| Owned (Rust) | Publication-global clear `[0x14c80,0x14ca0)`; one CP14 read and the `0x4003` discriminator; the `0x4003`-path call of `0x12204`; MPU regions 0–3, region 4 off that path, SCTLR OR `0x1005` with cache invalidation; the `0x11cc0` sequence: log init/events `0x01000300`, `0x01000400`, `0x11000400`, `0x11000300`, the `0x12ad0` call on descriptor `0x146a8` by address, the `0x13244`/`0x13124`/`0x137a8` calls, the `0x1386c` selection predicate with its conditional record-class read, the `0xfff55104`/sample/`0xfff89014` eligibility test, the companion power sequence and its refusal, `0x13b80` and `0x130c8`; own-cell clear, DSB and the exact-`0x22b` wait with a 100-iteration delay; id-1 lookup and the unchecked record `+4` → header `+0xc` loads, target and argument publication |
+| Owned (assembly) | Entry calling `0x11854` and `0x118b8` before Rust; SVC selection, published-word loads and `mov pc,r3` |
+| Retained executable | The services below; vector handlers `[0x10040,0x100f0)`; loader B |
+| Shared data | Vector store `[0x10000,0x103e8)` with reset literal `0x10400`; `0x118b8` literals `0x11acc`/`0x11ad0`; `0x12204` table `0x11af0`; descriptors `0x146a8`, `0x14710`; id table `[0x14804,0x14bf4)`; log state `0x40014c60`–`0x40014c68`; globals `0x14c80`–`0x14ca0`; companion region `0x400a0000`–`0x400a0548`; peer cells; segment table `*(0x61c000)`; image-4 word `0x61c40c` |
+| Candidate forbidden fetch | `[0x11800,0x11854)`, `[0x119e4,0x11abc)`, `[0x11cc0,0x11fe4)`, `[0x12960,0x12974)`, `[0x12abc,0x12ad0)`, `[0x13490,0x13574)`, `[0x1386c,0x138ac)` |
+| Candidate forbidden read | `[0x11ac4,0x11acc)`, `[0x11ad4,0x11ae8)`, `[0x11fe4,0x11fec)` |
+
+Retained-service ABI, from an all-path walk of each body in the decoded record. Every AAPCS service restores its saved registers, SP (through its `r11` frame) and the return address on each return path; none writes an unsaved r4–r11. The deepest nested frame is 68 bytes below the owned frame (32 bytes for `xm1_secondary_main` in the current build, 72 in the first), inside the 2 KiB SVC stack `0x118b8` requests.
+
+| Service | Arguments → result | Saved | Calls | Effects and waits |
+| --- | --- | --- | --- | --- |
+| `0x11854` | none; not AAPCS | none | none | SVC, IRQ/FIQ masked, A clear, little endian; SPSRs of UND, ABT, FIQ, IRQ, SVC; clobbers r0–r2; returns through the SVC LR, so entry in SVC is a premise shared with stock |
+| `0x118b8` | none; not AAPCS | none | none | ATCM register `0x70000011`, zero `[0x70000000,0x70002000)`, banked SPs and SPSRs; leaves r0=`0x70002000`, r1=0, r2=`0x1f`, r4 = masked CPSR, r5 = r4\|`0x13`, r6=0, r7=`0x70000000`, r8–r11=0 |
+| `0x12204` (`0x4003` only) | none | r11, lr | `0x11fec`(0), `0x11fec`(1) | Interrupt banks and pins from table `0x11af0`, 16 words to `0x400a0000`–`0x400a003c`, `0x400a00c8` = 0 |
+| `0x1270c` | units → unread | r4, r5, r11, lr | `0x135d8` | Timer channel `0xfff91010 + 16n`; no-op above `0xaec33e` units; unbounded counter wait |
+| `0x12ad0` | descriptor, command → response halfword | r4, r5, r11 | none | Reads descriptor words `+0`–`+0x1c` before returning and stores no pointer to it; engine `0xfff84040`, pins `0xfff89300` for `0x146a8`/`0x14710`; unbounded status wait; clobbers r12 |
+| `0x13244` | none → 0 or `0xffffff01`, unread | r4, r5, r11, lr | `0x12ad0` ×16 | Stack copy of `0x14710`; bytes `0x400a00d0`–`0x400a00df`; `0x400a00cc` = 1 or 0 |
+| `0x13124` | table → 0, unread | r4–r8, r11, lr | `0x127b4`, `0x130ec` | Conversion registers at `0xfff8a000`; unbounded wait; ten table words when the table is nonzero |
+| `0x137a8` | sample, table → flags `0x20`/`4`/`2`/`1` | r3–r6, r11, lr | `0x1366c` | Stores the sample at `0x14c90`; `0x1366c` reads table `0x14804`, pins and table words, and calls row word `+0xc` for kind-5 rows: of the queried ids 9, 11, 6, 13, `0x206`, `0x205` only id 6 does, reaching leaf `0x13628` (reads `0x14c90` bit 0) |
+| `0x13b80` | (unread), base, length → 0 | r4, r5, r11, lr | `0x13b10`, `0x13b60` | Zero `[base, base+length)`, then header words `+0`–`+0x10` and `+0x228` for length ≥ 956; nothing for base 0 |
+| `0x130c8` | none → 0, unread | r11 | none | `0xfff8a000` = `0x8004` |
+| `0x13574` | id → record or 0 | r11 | none | Reads `*(0x61c000)` and 36-byte records to the matching id or a `-1` terminator; no stores |
+
+The owned image's direct transfers are BL to these eleven entries and the handoff; it holds no literal naming a forbidden range. The only other reference into a forbidden range in records 1/2 and loaders A/B is the replaced reset literal, and no retained service's static closure enters one. The `0x1366c` indirect call depends on the unchanged id table. Other computed references and the vector handlers' targets through the words at `0x3fff0040`–`0x3fff0048` are unresolved.
+
+The owned handoff differs from the original only in registers loader B overwrites first. Both leave masked A32 little-endian SVC, r0 = image-4 word `+0xc`, r3 = target = id-1 header `+0xc`, SP = `0x70000800` and r6–r11 as `0x118b8` leaves them. Stock `0x119e4` leaves r4 = `0x1f` and r5 = `0x11834`; r1, r2, r12, LR and the flags also differ. An interprocedural all-path walk from `0xd0020` through loader B's callees finds each of them overwritten before any read: r5 at `0xd0020`, LR at `0xd0024`, r1 at `0xd27b8`, r2 at `0xd27bc`, flags at `0xd27c4`, r4 at `0xd0038` and r12 at `0xd0914`, before any indirect transfer. The walk assumes callees return to their callers and models no exception.
+
+Staging the original DAT (stored record-2 slot SHA-256 `909db53de40a0319541a30314bd942cb119eca3de1147e2b856eecf71c1a4809`) changes only the main checksum, the reset literal and the image bytes; the record-1 slot, other parts and record-2 bytes outside `[0x20,0x24)` and the image are unchanged, as an independent `dd`/byte-complement re-extraction confirms. The image sits in record-2 padding no source word references; that record 1 or loader A leave it intact while core 1 executes is a runtime premise. The owned wait polls every 512 core-1 entries, against 304 for stock; the wait, guest controls and all runtime behavior remain unqualified.
