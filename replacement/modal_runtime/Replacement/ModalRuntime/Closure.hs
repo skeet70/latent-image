@@ -30,6 +30,7 @@ import A32
   , decode
   , lr
   , pc
+  , regName
   , sp
   )
 import Data.Aeson (Value, object, (.=))
@@ -298,8 +299,9 @@ data Effect = Effect
 plain :: Regs -> Effect
 plain regs = Effect regs False Nothing [] Continue True
 
+-- | An unmodeled callee may write any register other than pc.
 callClobber :: [(Reg, Val)]
-callClobber = [(Reg n, Unknown) | n <- [0, 1, 2, 3, 12, 14]]
+callClobber = [(Reg n, Unknown) | n <- [0 .. 14]]
 
 readReg :: Word32 -> Regs -> Reg -> Val
 readReg address regs register
@@ -510,7 +512,7 @@ rejectedEffect address word reason regs = case reason of
         if testBit word 20 then plain (setRegs [(registerAt 12, Unknown), (registerAt 16, Unknown)] regs) else plain regs
     | bitsOf 27 25 word == 6 -> coprocessorTransfer
     | otherwise -> plain regs
-  SupervisorCall -> (plain (setRegs [(Reg n, Unknown) | n <- [0 .. 3]] regs)) {effectSetsFlags = True, effectFlow = Call Nothing}
+  SupervisorCall -> (plain (setRegs callClobber regs)) {effectSetsFlags = True, effectFlow = Call Nothing}
   SystemRegister
     | word .&. 0x0fbf0fff == 0x010f0000 -> plain (setReg (registerAt 12) Unknown regs)
     | otherwise -> (plain regs) {effectSetsFlags = testBit word 19}
@@ -639,33 +641,33 @@ useDef address word
 
 type LiveMemo = M.Map (Word32, Int) (S.Set Int)
 
-argumentRegisters :: S.Set Int
-argumentRegisters = S.fromList [0 .. 3]
+inputRegisters :: S.Set Int
+inputRegisters = S.fromList [0 .. 14]
 
--- | Argument registers a callee may read before writing them.
+-- | Registers r0-r14 the function at `entry` may read before writing them.
 liveIn :: Analysis -> LiveMemo -> Word32 -> Int -> (S.Set Int, LiveMemo)
 liveIn analysis memo entry depth
   | Just cached <- M.lookup (entry, depth) memo = (cached, memo)
-  | depth == 0 || not (isJust (memoryWord memory entry)) = (argumentRegisters, memo)
+  | depth == 0 || not (isJust (memoryWord memory entry)) = (inputRegisters, memo)
   | otherwise =
-      let (result, memo') = explore [(entry, S.empty)] S.empty (0 :: Int) S.empty (M.insert (entry, depth) argumentRegisters memo)
+      let (result, memo') = explore [(entry, S.empty)] S.empty (0 :: Int) S.empty (M.insert (entry, depth) inputRegisters memo)
        in (result, M.insert (entry, depth) result memo')
  where
   memory = analysisMemory analysis
   explore [] _ _ result m = (result, m)
   explore ((address, written) : rest) seen steps result m = walk address written rest seen steps result m
   walk address written rest seen steps result m
-    | steps >= 20000 = (argumentRegisters, m)
+    | steps >= 20000 = (inputRegisters, m)
     | S.member (address, written) seen = explore rest seen (steps + 1) result m
     | otherwise =
         let seen' = S.insert (address, written) seen
             steps' = steps + 1
-            open = argumentRegisters `S.difference` written
+            open = inputRegisters `S.difference` written
          in case memoryWord memory address >>= \word -> fmap (\use -> (word, use)) (useDef address word) of
               Nothing -> explore rest seen' steps' (result `S.union` open) m
               Just (word, (sources, writes, kind)) ->
                 let always = bitsOf 31 28 word == 14
-                    read' = result `S.union` (S.fromList (filter (< 4) sources) `S.difference` written)
+                    read' = result `S.union` (S.fromList (filter (< 15) sources) `S.difference` written)
                  in case (kind, switchTargets analysis address word) of
                       (UseProgramCounter, Just targets) ->
                         walk (address + 4) written ([(target, written) | target <- targets] ++ rest) seen' steps' read' m
@@ -674,17 +676,20 @@ liveIn analysis memo entry depth
                               UseCall target -> liveIn analysis m target (depth - 1)
                               _ -> (S.empty, m)
                             extra = case kind of
-                              UseCall _ -> calleeLive `S.difference` written
-                              UseCallIndirect -> open
+                              UseCall _ -> calleeLive `S.difference` S.insert 14 written
+                              UseCallIndirect -> S.delete 14 open
                               UseIndirect -> open
                               UseSupervisor -> open
                               UseProgramCounter -> open
                               _ -> S.empty
                             result' = read' `S.union` extra
                             written' = case kind of
-                              UseCall _ | always -> written `S.union` argumentRegisters
-                              UseCallIndirect | always -> written `S.union` argumentRegisters
-                              _ | always -> written `S.union` S.fromList (filter (< 4) writes)
+                              UseCall _ | always -> S.insert 14 written
+                              UseCallIndirect | always -> S.insert 14 written
+                              UseCall _ -> written
+                              UseCallIndirect -> written
+                              UseSupervisor -> written
+                              _ | always -> written `S.union` S.fromList (filter (< 15) writes)
                                 | otherwise -> written
                             pushed = case kind of
                               UseJump target -> [(target, written')]
@@ -861,8 +866,9 @@ data Fact = Fact
 data Escape
   = EscapeArgument Word32 (Maybe Word32) Int
   | EscapeStored Word32
-  | EscapeReturned Word32
+  | EscapeReturned Word32 Int
   | EscapeIndirect Word32
+  | EscapeCallTarget Word32
   deriving (Eq, Ord)
 
 data Limit = StepLimit Word32 | WorldLimit Word32 | Unmodeled Word32 | LeavesMemory Word32 | PartialConstant Word32
@@ -965,7 +971,11 @@ forward analysis tracking site = drive [(site, initial, True)] (Walk S.empty M.e
     | not (condPass cond flags) = Stepped [(regs, flags)] [] [] [] False
     | otherwise =
         let effect0 = execute analysis address word instruction regs
-            effect = effect0 {effectRegs = lineage (effectRegs effect0)}
+            effect = effect0 {effectRegs = acrossCall (lineage (effectRegs effect0))}
+            -- A tracked value an unmodeled callee may have kept stays tracked.
+            acrossCall regsAfter = case effectFlow effect0 of
+              Call _ -> setRegs [(Reg n, Derived) | n <- [0 .. 14], tracked tracking (regAt regs (Reg n))] regsAfter
+              _ -> regsAfter
             after = effectRegs effect
             -- A register computed from a tracked pointer whose value is lost
             -- becomes Derived; registers loaded from memory hold data.
@@ -994,10 +1004,24 @@ forward analysis tracking site = drive [(site, initial, True)] (Walk S.empty M.e
               , accessSize access >= 4
               , any (pointer tracking) (accessValues access)
               ]
+            -- Only linked branches discard the incoming lr before the callee runs.
+            linked = case instruction of
+              Branch _ True _ -> True
+              BranchExchange _ True _ -> True
+              Rejected ThumbBranch -> True
+              _ -> False
+            throughLr = case instruction of
+              BranchExchange _ False rm -> rm == lr
+              DataProcessing _ MOV _ _ _ (ShiftedImmediate rm LSL 0) -> rm == lr
+              _ -> False
             flowEscapes = case effectFlow effect of
-              Call target -> [EscapeArgument address target n | n <- [0 .. 3], pointer tracking (regAt regs (Reg n))]
-              Return -> [EscapeReturned address | pointer tracking (regAt regs (Reg 0))]
-              JumpIndirect -> [EscapeIndirect address | any (pointer tracking) (take 13 (regValues after))]
+              Call target ->
+                [EscapeCallTarget address | BranchExchange _ True rm <- [instruction], pointer tracking (regAt regs rm)]
+                  ++ [EscapeArgument address target n | n <- [0 .. 14], not (linked && n == 14), pointer tracking (regAt regs (Reg n))]
+              Return ->
+                [EscapeIndirect address | throughLr, pointer tracking (regAt regs lr)]
+                  ++ [EscapeReturned address n | n <- [0 .. 14], not (throughLr && n == 14), pointer tracking (regAt regs (Reg n))]
+              JumpIndirect -> [EscapeIndirect address | any (pointer tracking) (take 15 (regValues after))]
               _ -> []
             unmodeled = not (effectModeled effect) && any (pointer tracking) (regValues regs)
             (next, jumps) = case effectFlow effect of
@@ -1056,8 +1080,9 @@ escapeSite :: Escape -> Word32
 escapeSite escape = case escape of
   EscapeArgument site _ _ -> site
   EscapeStored site -> site
-  EscapeReturned site -> site
+  EscapeReturned site _ -> site
   EscapeIndirect site -> site
+  EscapeCallTarget site -> site
 
 -- * Obligations and refusals
 
@@ -1112,8 +1137,241 @@ escapeObligations analysis = go M.empty
        in [PointerEscape site ("argument r" ++ show n ++ " to " ++ hex target) | S.member n live] ++ go memo' rest
     EscapeArgument site Nothing n -> PointerEscape site ("argument r" ++ show n ++ " to an indirect call") : go memo rest
     EscapeStored site -> PointerEscape site "stored to memory" : go memo rest
-    EscapeReturned site -> PointerEscape site "returned in r0" : go memo rest
+    EscapeReturned site n -> PointerEscape site ("live in r" ++ show n ++ " at a return") : go memo rest
     EscapeIndirect site -> PointerEscape site "live across an indirect jump" : go memo rest
+    EscapeCallTarget site -> PointerEscape site "target of a register call" : go memo rest
+
+-- * Declared objects and scalar consumers
+
+-- | A data extent whose words source entry or table-name edges. Extent and
+-- role are static-finding premises; the role predicate is checked against
+-- the bytes.
+data DeclaredObject = DeclaredObject
+  { objectName :: String
+  , objectStart :: Word32
+  , objectEnd :: Word32
+  , objectRole :: ObjectRole
+  }
+
+-- | (value, register) word pairs whose register words are 0xf0xxxxxx.
+data ObjectRole = RegisterWriteStream
+
+-- | The image-4 streams of E-MODAL-ENTRY-SOURCES-150.
+declaredObjects :: [DeclaredObject]
+declaredObjects =
+  [ DeclaredObject "register-write-stream-a" 0x007a2430 0x007b0838 RegisterWriteStream
+  , DeclaredObject "register-write-stream-b" 0x007b0840 0x007c2d18 RegisterWriteStream
+  , DeclaredObject "register-write-stream-c" 0x0081c630 0x00820f10 RegisterWriteStream
+  ]
+
+-- | Membership under the `address & 0x3fffffff` alias classes.
+objectNames :: DeclaredObject -> Word32 -> Bool
+objectNames declared value = let address = value .&. 0x3fffffff in objectStart declared <= address && address < objectEnd declared
+
+objectHolding :: Word32 -> Maybe DeclaredObject
+objectHolding address = case [o | o <- declaredObjects, objectStart o <= address, address < objectEnd o] of
+  declared : _ -> Just declared
+  [] -> Nothing
+
+data RoleCheck = RoleHolds | RoleFails Word32 | RoleUnread Word32
+
+roleCheck :: Memory -> DeclaredObject -> RoleCheck
+roleCheck memory declared = case objectRole declared of
+  RegisterWriteStream
+    | (objectEnd declared - objectStart declared) .&. 7 /= 0 || objectStart declared .&. 7 /= 0 -> RoleFails (objectStart declared)
+    | otherwise -> foldr check RoleHolds [objectStart declared + 4, objectStart declared + 12 .. objectEnd declared - 4]
+ where
+  check address rest = case memoryWord memory address of
+    Nothing -> RoleUnread address
+    Just word
+      | word `shiftR` 24 /= 0xf0 -> RoleFails address
+      | otherwise -> rest
+
+data ConsumerForm = WideConstant | LiteralLoad Word32 | AlignedWord
+
+-- | A materialization of an address the object may hold, and its verdict.
+data Consumer = Consumer
+  { consumerSite :: Word32
+  , consumerForm :: ConsumerForm
+  , consumerValues :: Maybe [Word32]
+  , consumerVerdict :: Verdict
+  }
+
+-- | Every path from the materialization reads the value only as a TST, TEQ,
+-- CMP or CMN operand until it is overwritten or reaches a return in r2, r3
+-- or r12.
+data ScalarProof = ScalarProof
+  { scalarCompares :: S.Set Word32
+  , scalarOverwrites :: S.Set Word32
+  , scalarReturns :: S.Set (Word32, Reg)
+  , scalarStates :: Int
+  }
+
+-- | `ReturnConditional` holds only if no continuation of those returns reads
+-- the register before writing it; no continuation is checked.
+data Verdict = Discharged ScalarProof | ReturnConditional ScalarProof | Open Unproven
+
+verdict :: Either Unproven ScalarProof -> Verdict
+verdict result = case result of
+  Left reason -> Open reason
+  Right proof
+    | S.null (scalarReturns proof) -> Discharged proof
+    | otherwise -> ReturnConditional proof
+
+data Unproven
+  = AddressUse Word32
+  | StoredUse Word32
+  | ControlUse Word32
+  | DerivedUse Word32
+  | LiveAcrossCall Word32
+  | LiveAtIndirectJump Word32
+  | LiveAtReturn Word32 Reg
+  | UnmodeledUse Word32
+  | LeavesImages Word32
+  | ScalarStepLimit Word32
+  | HeldByObject
+
+scalarStepLimit :: Int
+scalarStepLimit = 50000
+
+operandRegs :: Operand -> [Reg]
+operandRegs operand = case operand of
+  Immediate _ -> []
+  ShiftedImmediate rm _ _ -> [rm]
+  ShiftedRegister rm _ rs -> [rm, rs]
+
+offsetRegs :: Offset -> [Reg]
+offsetRegs offset = case offset of
+  OffsetImmediate _ -> []
+  OffsetRegister _ rm _ _ -> [rm]
+
+-- | Registers an executed instruction reads; Nothing when the decoder does
+-- not expose them.
+instructionReads :: Instruction -> Maybe [Reg]
+instructionReads instruction = case instruction of
+  DataProcessing _ op _ _ rn operand -> Just ([rn | op `notElem` [MOV, MVN]] ++ operandRegs operand)
+  MoveWide {} -> Just []
+  MoveTop _ rd _ -> Just [rd]
+  ZeroExtend _ _ rm _ _ -> Just [rm]
+  Multiply _ _ rm rs accumulator -> Just ([rm, rs] ++ maybe [] pure accumulator)
+  Load _ _ _ _ rn offset _ -> Just (rn : offsetRegs offset)
+  Store _ width rt rn offset _ -> Just ([rt] ++ [nextReg rt | width == Dual] ++ rn : offsetRegs offset)
+  LoadMultiple _ rn _ _ _ -> Just [rn]
+  StoreMultiple _ rn _ _ list -> Just (rn : list)
+  Branch {} -> Just []
+  BranchExchange _ _ rm -> Just [rm]
+  Hint _ -> Just []
+  Compute _ _ -> Nothing
+  Rejected _ -> Nothing
+
+instructionWrites :: Instruction -> [Reg]
+instructionWrites instruction = case instruction of
+  DataProcessing _ op _ rd _ _ -> [rd | op `notElem` [TST, TEQ, CMP, CMN]]
+  MoveWide _ rd _ -> [rd]
+  MoveTop _ rd _ -> [rd]
+  ZeroExtend _ rd _ _ _ -> [rd]
+  Multiply _ rd _ _ _ -> [rd]
+  Load _ width _ rt rn _ indexing -> [rt] ++ [nextReg rt | width == Dual] ++ [rn | indexing /= OffsetOnly]
+  Store _ _ _ rn _ indexing -> [rn | indexing /= OffsetOnly]
+  LoadMultiple _ rn _ writeback list -> list ++ [rn | writeback]
+  StoreMultiple _ rn _ writeback _ -> [rn | writeback]
+  _ -> []
+
+-- | Why an executed instruction that reads `held` is not a scalar use.
+nonScalarRead :: Word32 -> Instruction -> Reg -> Maybe Unproven
+nonScalarRead address instruction held = case instruction of
+  DataProcessing _ op _ rd _ _
+    | op `elem` [TST, TEQ, CMP, CMN] -> Nothing
+    | rd == pc -> Just (ControlUse address)
+    | otherwise -> Just (DerivedUse address)
+  Load {} -> Just (AddressUse address)
+  LoadMultiple {} -> Just (AddressUse address)
+  Store _ _ _ rn offset _
+    | held `elem` (rn : offsetRegs offset) -> Just (AddressUse address)
+    | otherwise -> Just (StoredUse address)
+  StoreMultiple _ rn _ _ _
+    | held == rn -> Just (AddressUse address)
+    | otherwise -> Just (StoredUse address)
+  BranchExchange {} -> Just (ControlUse address)
+  _ -> Just (DerivedUse address)
+
+-- | Follows the value `held` holds at `start` along every successor,
+-- treating each conditional instruction as both executed and skipped.
+scalarOnly :: Analysis -> Word32 -> Reg -> Either Unproven ScalarProof
+scalarOnly analysis start register = go [(start, register)] S.empty (ScalarProof S.empty S.empty S.empty 0)
+ where
+  go [] _ proof = Right proof
+  go ((address, held) : rest) seen proof
+    | S.member (address, held) seen = go rest seen proof
+    | scalarStates proof >= scalarStepLimit = Left (ScalarStepLimit address)
+    | otherwise = case fetch analysis address of
+        Nothing -> Left (LeavesImages address)
+        Just (word, instruction) -> do
+          (next, proof') <- step address word instruction held proof
+          go (next ++ rest) (S.insert (address, held) seen) proof' {scalarStates = scalarStates proof' + 1}
+  step address word instruction held proof = do
+    readRegs <- maybe (Left (UnmodeledUse address)) Right (instructionReads instruction)
+    compared <-
+      if held `elem` readRegs
+        then maybe (Right True) Left (nonScalarRead address instruction held)
+        else Right False
+    let skipped = [(address + 4, held) | instructionCond instruction /= Cond 14]
+        killed = held `elem` instructionWrites instruction
+        proof1 = if compared then proof {scalarCompares = S.insert address (scalarCompares proof)} else proof
+        overwritten = Right (skipped, proof1 {scalarOverwrites = S.insert address (scalarOverwrites proof1)})
+        continueAt targets
+          | killed = overwritten
+          | otherwise = Right (skipped ++ [(target, held) | target <- targets], proof1)
+    case effectFlow (execute analysis address word instruction unknownRegs) of
+      Continue -> continueAt [address + 4]
+      Jump target -> continueAt [target]
+      Switch targets -> continueAt targets
+      Call _ -> Left (LiveAcrossCall address)
+      Return
+        | killed -> overwritten
+        | held `elem` [Reg 2, Reg 3, Reg 12] -> Right (skipped, proof1 {scalarReturns = S.insert (address, held) (scalarReturns proof1)})
+        | otherwise -> Left (LiveAtReturn address held)
+      JumpIndirect
+        | killed -> overwritten
+        | otherwise -> Left (LiveAtIndirectJump address)
+
+-- | Values `rd` holds after the MOVT at `site` executes, through up to three
+-- predecessor joins; Nothing when a lower half stays unknown.
+wideValues :: Analysis -> Word32 -> Cond -> Reg -> Word32 -> Maybe [Word32]
+wideValues analysis site cond rd upper = case attempt (runWindow analysis (windowStart analysis site) site unknownWorlds) of
+  Just values -> Just values
+  Nothing -> attempt (fst (worldsAt analysis site 3))
+ where
+  attempt worlds =
+    let values = [mapKnown (\old -> (upper `shiftL` 16) .|. (old .&. 0xffff)) (regAt regs rd) | (regs, flags) <- S.toList worlds, condPass cond flags]
+     in if not (null values) && all isKnown values then Just (S.toList (S.fromList (mapMaybe knownValue values))) else Nothing
+
+-- | MOVT and PC-relative literal materializations that may name the object,
+-- each with its scalar verdict, and the other aligned words naming it.
+objectConsumers :: Analysis -> S.Set Word32 -> DeclaredObject -> [Consumer]
+objectConsumers analysis literals declared =
+  [consumer | (site, word) <- memoryWords memory, consumer <- consumersAt site word]
+ where
+  memory = analysisMemory analysis
+  lowUpper = objectStart declared `shiftR` 16
+  highUpper = (objectEnd declared - 1) `shiftR` 16
+  proveFrom site rd
+    | rd == pc = Open (ControlUse site)
+    | otherwise = verdict (scalarOnly analysis (site + 4) rd)
+  consumersAt site word = case decode site word of
+    MoveTop cond rd upper
+      | lowUpper <= upper .&. 0x3fff && upper .&. 0x3fff <= highUpper ->
+          let values = wideValues analysis site cond rd upper
+           in [Consumer site WideConstant values (proveFrom site rd) | maybe True (any (objectNames declared)) values]
+    Load _ Word _ rt rn (OffsetImmediate n) OffsetOnly
+      | rn == pc
+      , let literal = site + 8 + fromIntegral n
+      , Just value <- memoryWord memory literal
+      , objectNames declared value ->
+          [Consumer site (LiteralLoad literal) (Just [value]) (proveFrom site rt)]
+    _
+      | objectNames declared word, not (S.member site literals) -> [Consumer site AlignedWord (Just [word]) (Open HeldByObject)]
+      | otherwise -> []
 
 -- * Callers
 
@@ -1471,6 +1729,7 @@ buildProof inputs =
               , "state_writes" .= length [() | w <- writes, arrayWriteKind w == StateArray]
               , "event_writes" .= length [() | w <- writes, arrayWriteKind w == EventArray]
               , "writer_sites" .= S.size (S.fromList (map arrayWriteSite writes))
+              , "writer_site_addresses" .= map hex (S.toList (S.fromList (map arrayWriteSite writes)))
               ]
         , "controllers" .= map controllerValue closures
         , "admitted_targets"
@@ -1497,6 +1756,14 @@ buildProof inputs =
                      ]
               ]
         , "interpositions" .= [object ["site" .= hex site, "old" .= hex old, "new" .= hex new] | (site, old, new) <- overlayInterpositions published]
+        , "declared_objects"
+            .= object
+              [ "rule"
+                  .= ( "a consumer is discharged when every path from its materialization reads the value only as a TST, TEQ, CMP or CMN operand until it is overwritten. It is return-conditional when some path instead reaches a return with the value in r2, r3 or r12: it then rests on the unverified premise that no continuation of those returns reads the register before writing it, and is not a discharge. Any other read, a call, an indirect jump, an unmodeled instruction or leaving the images while the value is live, a return with it in any other register, and every aligned word naming the object, stays open. Consumers that index a base into the extent and constants the census does not trace are not enumerated" ::
+                        String
+                     )
+              , "objects" .= [objectValue memory declared (objectConsumers analysis literals declared) | declared <- declaredObjects]
+              ]
         , "obligations" .= map obligationValue obligations
         , "refusals" .= map refusalValue refusals
         ]
@@ -1653,7 +1920,12 @@ controllerValue controller =
 
 entryValue :: Entry -> Value
 entryValue entry = case entry of
-  DataWordEntry address origins -> object ["data_word_entry" .= hex address, "origins" .= map hex origins]
+  DataWordEntry address origins ->
+    object
+      [ "data_word_entry" .= hex address
+      , "origins" .= map hex origins
+      , "declared_objects" .= S.toList (S.fromList [objectName o | Just o <- map objectHolding origins])
+      ]
   CallEntry address site -> object ["call_entry" .= hex address, "site" .= hex site]
   DepthLimit address -> object ["depth_limit" .= hex address]
   WindowLimit address -> object ["window_limit" .= hex address]
@@ -1691,7 +1963,10 @@ obligationValue obligation = case obligation of
   TableStore site address ->
     object ["kind" .= ("table-store" :: String), "site" .= hex site, "address" .= hex address]
   DataWordNames site word label ->
-    object ["kind" .= ("data-word-reference" :: String), "location" .= hex site, "value" .= hex word, "names" .= label]
+    object
+      ( ["kind" .= ("data-word-reference" :: String), "location" .= hex site, "value" .= hex word, "names" .= label]
+          ++ ["declared_object" .= objectName o | Just o <- [objectHolding site]]
+      )
   TableReadOutside controller address ->
     object ["kind" .= ("table-read-outside-images" :: String), "controller" .= controller, "address" .= hex address]
   TargetOutsideCode controller target ->
@@ -1737,6 +2012,74 @@ refusalValue refusal = case refusal of
     object ["kind" .= ("region-overlap" :: String), "first" .= first, "second" .= second]
   OwnedDispatcherMissing ->
     object ["kind" .= ("owned-dispatcher-missing" :: String), "symbol" .= ownedDispatcherName]
+
+objectValue :: Memory -> DeclaredObject -> [Consumer] -> Value
+objectValue memory declared consumers =
+  object
+    [ "name" .= objectName declared
+    , "start" .= hex (objectStart declared)
+    , "end" .= hex (objectEnd declared)
+    , "evidence" .= ("conditional" :: String)
+    , "role" .= case objectRole declared of
+        RegisterWriteStream -> ("register-write-stream" :: String)
+    , "role_check" .= case roleCheck memory declared of
+        RoleHolds -> object ["status" .= ("holds" :: String)]
+        RoleFails address -> object ["status" .= ("fails" :: String), "at" .= hex address]
+        RoleUnread address -> object ["status" .= ("unread" :: String), "at" .= hex address]
+    , "discharged_consumers" .= length [() | Consumer {consumerVerdict = Discharged _} <- consumers]
+    , "return_conditional_consumers" .= length [() | Consumer {consumerVerdict = ReturnConditional _} <- consumers]
+    , "open_consumers" .= length [() | Consumer {consumerVerdict = Open _} <- consumers]
+    , "consumers" .= map consumerValue consumers
+    ]
+
+consumerValue :: Consumer -> Value
+consumerValue consumer =
+  object
+    ( [ "site" .= hex (consumerSite consumer)
+      , "form" .= case consumerForm consumer of
+          WideConstant -> ("movt" :: String)
+          LiteralLoad _ -> "literal-load"
+          AlignedWord -> "aligned-word"
+      , "values" .= maybe ["unresolved" :: String] (map hex) (consumerValues consumer)
+      ]
+        ++ ["literal" .= hex literal | LiteralLoad literal <- [consumerForm consumer]]
+        ++ case consumerVerdict consumer of
+          Discharged proof -> ["status" .= ("discharged" :: String), "proof" .= proofValueOf proof]
+          ReturnConditional proof ->
+            [ "status" .= ("return-conditional" :: String)
+            , "premise"
+                .= object
+                  [ "kind" .= ("return-continuation-does-not-read" :: String)
+                  , "returns" .= [object ["at" .= hex site, "register" .= regName register] | (site, register) <- S.toList (scalarReturns proof)]
+                  ]
+            , "proof" .= proofValueOf proof
+            ]
+          Open reason -> ["status" .= ("open" :: String), "reason" .= unprovenValue reason]
+    )
+ where
+  proofValueOf proof =
+    object
+      [ "use" .= ("scalar-compare" :: String)
+      , "compares" .= map hex (S.toList (scalarCompares proof))
+      , "overwritten" .= map hex (S.toList (scalarOverwrites proof))
+      , "states" .= scalarStates proof
+      ]
+
+unprovenValue :: Unproven -> Value
+unprovenValue reason = case reason of
+  AddressUse site -> at "address-use" site
+  StoredUse site -> at "stored-use" site
+  ControlUse site -> at "control-use" site
+  DerivedUse site -> at "derived-use" site
+  LiveAcrossCall site -> at "live-across-call" site
+  LiveAtIndirectJump site -> at "live-at-indirect-jump" site
+  LiveAtReturn site register -> object ["kind" .= ("live-at-return" :: String), "at" .= hex site, "register" .= regName register]
+  UnmodeledUse site -> at "unmodeled-instruction" site
+  LeavesImages site -> at "leaves-images" site
+  ScalarStepLimit site -> at "step-limit" site
+  HeldByObject -> object ["kind" .= ("held-by-object" :: String)]
+ where
+  at kind site = object ["kind" .= (kind :: String), "at" .= hex site]
 
 hex :: Word32 -> String
 hex value = let digits = showHex value "" in "0x" ++ replicate (8 - length digits) '0' ++ digits

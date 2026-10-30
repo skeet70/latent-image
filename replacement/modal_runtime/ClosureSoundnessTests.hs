@@ -4,6 +4,7 @@ module Main where
 
 import Control.Monad (forM, unless)
 import Data.Aeson (Value (..))
+import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.Bits (shiftR)
 import qualified Data.ByteString as B
@@ -14,14 +15,33 @@ import Numeric (showHex)
 import Replacement.ModalRuntime.Closure
 import System.Exit (exitFailure)
 
--- | A hand-encoded A32 fragment and the obligation it must produce.
+-- | A hand-encoded A32 fragment and what the proof must report for it.
 data Fixture = Fixture
   { fixtureName :: String
   , fixtureBase :: Word32
   , fixtureWords :: [Word32]
-  , fixtureKind :: String
-  , fixtureSite :: Word32
+  , fixtureExpect :: Expect
   }
+
+data Expect
+  = -- | An obligation of this kind at this site.
+    ObligationAt String Word32
+  | -- | A declared-object consumer at this site with this status and, when
+    -- open, this reason.
+    ConsumerAt Word32 String (Maybe String)
+
+-- | Materializes 0x007b7000, inside register-write stream B, in r3 and
+-- compares the word at r0 against it; `rest` runs on the not-higher path.
+bound :: [Word32] -> [Word32]
+bound rest =
+  [ 0xe5902000 -- ldr r2, [r0]
+  , 0xe3a03a07 -- mov r3, #0x7000
+  , 0xe340307b -- movt r3, #0x7b
+  , 0xe1520003 -- cmp r2, r3
+  , 0x83a00000 -- movhi r0, #0
+  , 0x812fff1e -- bxhi lr
+  ]
+    ++ rest
 
 fixtures :: [Fixture]
 fixtures =
@@ -36,8 +56,7 @@ fixtures =
       , 0xe12fff1e -- bx lr
       , 0xe12fff1e -- +0x18: bx lr
       ]
-      "store-value-unresolved"
-      0x00100010
+      (ObligationAt "store-value-unresolved" 0x00100010)
   , Fixture
       "a predicated call leaves its arguments live on the skipped path"
       0x00110000
@@ -51,8 +70,7 @@ fixtures =
       , 0xe12fff1e -- bx lr
       , 0xe12fff1e -- +0x20: bx lr
       ]
-      "pointer-escape"
-      0x00110008
+      (ObligationAt "pointer-escape" 0x00110008)
   , Fixture
       "a switch whose bound compare is separated by a flag write is unbounded"
       0x00120000
@@ -67,8 +85,7 @@ fixtures =
       , 0xe12fff1e -- +0x20: bx lr
       , 0xe12fff1e -- +0x24: bx lr
       ]
-      "pointer-escape"
-      0x00120010
+      (ObligationAt "pointer-escape" 0x00120010)
   , Fixture
       "an array pointer plus an unknown index stays a pointer"
       0x00130000
@@ -78,30 +95,232 @@ fixtures =
       , 0xe1c200b0 -- strh r0, [r2]
       , 0xe12fff1e -- bx lr
       ]
-      "computed-index-store"
-      0x0013000c
+      (ObligationAt "computed-index-store" 0x0013000c)
+  , Fixture
+      "a callee that changes r4 leaves a controller id held in r4 unresolved"
+      0x00bf0000
+      [ 0xe3a04003 -- mov r4, #3
+      , 0xeb000002 -- bl +0x14
+      , 0xe1a00004 -- mov r0, r4
+      , 0xeb002c05 -- bl 0x00bfb028
+      , 0xe12fff1e -- bx lr
+      , 0xe3a040c8 -- +0x14: mov r4, #200
+      , 0xe12fff1e -- bx lr
+      ]
+      (ObligationAt "caller-controller-unresolved" 0x00bf000c)
+  , Fixture
+      "a callee that changes r4 leaves a state value held in r4 unresolved"
+      0x00240000
+      [ 0xe3a04001 -- mov r4, #1
+      , 0xeb000003 -- bl +0x18
+      , 0xe3075588 -- movw r5, #0x7588
+      , 0xe3405146 -- movt r5, #0x0146
+      , 0xe1c540b0 -- strh r4, [r5]
+      , 0xe12fff1e -- bx lr
+      , 0xe3a04009 -- +0x18: mov r4, #9
+      , 0xe12fff1e -- bx lr
+      ]
+      (ObligationAt "store-value-unresolved" 0x00240010)
+  , Fixture
+      "an array pointer held across a call is still reported when stored through"
+      0x00250000
+      [ 0xe3075588 -- movw r5, #0x7588
+      , 0xe3405146 -- movt r5, #0x0146
+      , 0xeb000002 -- bl +0x18
+      , 0xe3a04002 -- mov r4, #2
+      , 0xe1c540b0 -- strh r4, [r5]
+      , 0xe12fff1e -- bx lr
+      , 0xe12fff1e -- +0x18: bx lr
+      ]
+      (ObligationAt "computed-index-store" 0x00250010)
+  , Fixture
+      "an array pointer in sp is passed to a helper that stores through sp"
+      0x00260000
+      [ 0xe307d588 -- movw sp, #0x7588
+      , 0xe340d146 -- movt sp, #0x0146
+      , 0xeb000001 -- bl +0x14
+      , 0xe3a0d000 -- mov sp, #0
+      , 0xe12fff1e -- bx lr
+      , 0xe1cd00b0 -- +0x14: strh r0, [sp]
+      , 0xe12fff1e -- bx lr
+      ]
+      (ObligationAt "pointer-escape" 0x00260008)
+  , Fixture
+      "an array pointer in lr is a transfer target, not a return"
+      0x00270000
+      [ 0xe307e588 -- movw lr, #0x7588
+      , 0xe340e146 -- movt lr, #0x0146
+      , 0xe12fff1e -- bx lr
+      ]
+      (ObligationAt "pointer-escape" 0x00270008)
+  , Fixture
+      "an array pointer in lr used as a blx target escapes though lr is then overwritten"
+      0x00280000
+      [ 0xe307e588 -- movw lr, #0x7588
+      , 0xe340e146 -- movt lr, #0x0146
+      , 0xe12fff3e -- blx lr
+      , 0xe3a0e000 -- mov lr, #0
+      , 0xe12fff1e -- bx lr
+      ]
+      (ObligationAt "pointer-escape" 0x00280008)
+  , Fixture
+      "a compare-only bound that reaches a return in r3 is only return-conditional"
+      0x00140000
+      (bound [0xe3a03000, 0xe12fff1e]) -- mov r3, #0; bx lr
+      (ConsumerAt 0x00140008 "return-conditional" Nothing)
+  , Fixture
+      "a compare-only bound overwritten on every path is discharged"
+      0x00230000
+      [ 0xe3a03a07 -- mov r3, #0x7000
+      , 0xe340307b -- movt r3, #0x7b
+      , 0xe1520003 -- cmp r2, r3
+      , 0x83a00000 -- movhi r0, #0
+      , 0xe3a03000 -- mov r3, #0
+      , 0xe12fff1e -- bx lr
+      ]
+      (ConsumerAt 0x00230004 "discharged" Nothing)
+  , Fixture
+      "a bound returned in r3 to a caller that loads through it is not discharged"
+      0x00200000
+      [ 0xe92d4000 -- push {lr}
+      , 0xeb000001 -- bl +0x10
+      , 0xe5930000 -- ldr r0, [r3]
+      , 0xe8bd8000 -- pop {pc}
+      , 0xe3a03a07 -- +0x10: mov r3, #0x7000
+      , 0xe340307b -- movt r3, #0x7b
+      , 0xe1520003 -- cmp r2, r3
+      , 0xe12fff1e -- bx lr
+      ]
+      (ConsumerAt 0x00200014 "return-conditional" Nothing)
+  , Fixture
+      "a bound returned in r3 to a caller that branches through it is not discharged"
+      0x00210000
+      [ 0xe92d4000 -- push {lr}
+      , 0xeb000001 -- bl +0x10
+      , 0xe12fff13 -- bx r3
+      , 0xe8bd8000 -- pop {pc}
+      , 0xe3a03a07 -- +0x10: mov r3, #0x7000
+      , 0xe340307b -- movt r3, #0x7b
+      , 0xe1520003 -- cmp r2, r3
+      , 0xe12fff1e -- bx lr
+      ]
+      (ConsumerAt 0x00210014 "return-conditional" Nothing)
+  , Fixture
+      "the bound used as a load address stays open"
+      0x00150000
+      (bound [0xe5931000, 0xe12fff1e]) -- ldr r1, [r3]; bx lr
+      (ConsumerAt 0x00150008 "open" (Just "address-use"))
+  , Fixture
+      "the bound used as an indirect transfer target stays open"
+      0x00160000
+      (bound [0xe12fff13]) -- bx r3
+      (ConsumerAt 0x00160008 "open" (Just "control-use"))
+  , Fixture
+      "the bound stored to memory stays open"
+      0x00170000
+      (bound [0xe52d3004, 0xe12fff1e]) -- str r3, [sp, #-4]!; bx lr
+      (ConsumerAt 0x00170008 "open" (Just "stored-use"))
+  , Fixture
+      "the bound copied to another register stays open"
+      0x00180000
+      (bound [0xe1a00003, 0xe12fff1e]) -- mov r0, r3; bx lr
+      (ConsumerAt 0x00180008 "open" (Just "derived-use"))
+  , Fixture
+      "the bound live across a call stays open"
+      0x00190000
+      (bound [0xeb000000, 0xe12fff1e, 0xe12fff1e]) -- bl +0x20; bx lr; +0x20: bx lr
+      (ConsumerAt 0x00190008 "open" (Just "live-across-call"))
+  , Fixture
+      "the bound live at an indirect jump stays open"
+      0x001a0000
+      (bound [0xe12fff11]) -- bx r1
+      (ConsumerAt 0x001a0008 "open" (Just "live-at-indirect-jump"))
+  , Fixture
+      "a bound returned in r0 stays open"
+      0x001b0000
+      [ 0xe5902000 -- ldr r2, [r0]
+      , 0xe3a00a07 -- mov r0, #0x7000
+      , 0xe340007b -- movt r0, #0x7b
+      , 0xe1520000 -- cmp r2, r0
+      , 0xe12fff1e -- bx lr
+      ]
+      (ConsumerAt 0x001b0008 "open" (Just "live-at-return"))
+  , Fixture
+      "a compare loop that keeps the bound live until it is overwritten is discharged"
+      0x001c0000
+      [ 0xe3a03a07 -- mov r3, #0x7000
+      , 0xe340307b -- movt r3, #0x7b
+      , 0xe4902004 -- ldr r2, [r0], #4
+      , 0xe1520003 -- cmp r2, r3
+      , 0x9afffffc -- bls -0x08
+      , 0xe3a03000 -- mov r3, #0
+      , 0xe12fff1e -- bx lr
+      ]
+      (ConsumerAt 0x001c0004 "discharged" Nothing)
+  , Fixture
+      "control leaving the images with the bound live stays open"
+      0x001d0000
+      [ 0xe3a03a07 -- mov r3, #0x7000
+      , 0xe340307b -- movt r3, #0x7b
+      , 0xe1520003 -- cmp r2, r3
+      ]
+      (ConsumerAt 0x001d0004 "open" (Just "leaves-images"))
+  , Fixture
+      "a literal-pool bound used as a load address stays open"
+      0x001e0000
+      [ 0xe59f3004 -- ldr r3, [pc, #4]
+      , 0xe5931000 -- ldr r1, [r3]
+      , 0xe12fff1e -- bx lr
+      , 0x007b7000 -- literal
+      ]
+      (ConsumerAt 0x001e0000 "open" (Just "address-use"))
+  , Fixture
+      "an aligned word naming the stream stays open"
+      0x001f0000
+      [ 0xe12fff1e -- bx lr
+      , 0x007b7000 -- data word
+      ]
+      (ConsumerAt 0x001f0004 "open" (Just "held-by-object"))
   ]
 
 main :: IO ()
 main = do
   let regions = [Region (fixtureName f) StockImage (fixtureBase f) (littleEndian (fixtureWords f)) | f <- fixtures]
-      obligations = case proofValue (buildProof (Inputs regions [] [])) of
-        Object fields | Just (Array items) <- KM.lookup "obligations" fields -> V.toList items
-        _ -> []
-      reported kind site =
-        any
-          ( \value -> case value of
-              Object fields ->
-                KM.lookup "kind" fields == Just (String (T.pack kind))
-                  && KM.lookup "site" fields == Just (String (T.pack (hex site)))
-              _ -> False
-          )
-          obligations
+      proof = proofValue (buildProof (Inputs regions [] []))
+      obligations = array "obligations" proof
+      consumers =
+        [ consumer
+        | declared <- maybe [] (array "objects") (field "declared_objects" proof)
+        , consumer <- array "consumers" declared
+        ]
+      satisfied expect = case expect of
+        ObligationAt kind site ->
+          any (\o -> field "kind" o == Just (text kind) && field "site" o == Just (text (hex site))) obligations
+        ConsumerAt site status reason ->
+          any
+            ( \c ->
+                field "site" c == Just (text (hex site))
+                  && field "status" c == Just (text status)
+                  && (field "kind" =<< field "reason" c) == fmap text reason
+            )
+            consumers
   results <- forM fixtures $ \f -> do
-    let ok = reported (fixtureKind f) (fixtureSite f)
-    putStrLn ((if ok then "pass: " else "FAIL: ") ++ fixtureName f ++ " (" ++ fixtureKind f ++ " at " ++ hex (fixtureSite f) ++ ")")
+    let ok = satisfied (fixtureExpect f)
+    putStrLn ((if ok then "pass: " else "FAIL: ") ++ fixtureName f)
     pure ok
   unless (and results) exitFailure
+
+field :: T.Text -> Value -> Maybe Value
+field key (Object fields) = KM.lookup (K.fromText key) fields
+field _ _ = Nothing
+
+array :: T.Text -> Value -> [Value]
+array key value = case field key value of
+  Just (Array items) -> V.toList items
+  _ -> []
+
+text :: String -> Value
+text = String . T.pack
 
 littleEndian :: [Word32] -> B.ByteString
 littleEndian = B.pack . concatMap (\w -> [fromIntegral (w `shiftR` s) | s <- [0, 8, 16, 24]])
