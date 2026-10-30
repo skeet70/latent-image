@@ -30,6 +30,7 @@ import A32
   , decode
   , lr
   , pc
+  , regName
   , sp
   )
 import Data.Aeson (Value, object, (.=))
@@ -1115,6 +1116,229 @@ escapeObligations analysis = go M.empty
     EscapeReturned site -> PointerEscape site "returned in r0" : go memo rest
     EscapeIndirect site -> PointerEscape site "live across an indirect jump" : go memo rest
 
+-- * Declared objects and scalar consumers
+
+-- | A data extent whose words source entry or table-name edges. Extent and
+-- role are static-finding premises; the role predicate is checked against
+-- the bytes.
+data DeclaredObject = DeclaredObject
+  { objectName :: String
+  , objectStart :: Word32
+  , objectEnd :: Word32
+  , objectRole :: ObjectRole
+  }
+
+-- | (value, register) word pairs whose register words are 0xf0xxxxxx.
+data ObjectRole = RegisterWriteStream
+
+-- | The image-4 streams of E-MODAL-ENTRY-SOURCES-150.
+declaredObjects :: [DeclaredObject]
+declaredObjects =
+  [ DeclaredObject "register-write-stream-a" 0x007a2430 0x007b0838 RegisterWriteStream
+  , DeclaredObject "register-write-stream-b" 0x007b0840 0x007c2d18 RegisterWriteStream
+  , DeclaredObject "register-write-stream-c" 0x0081c630 0x00820f10 RegisterWriteStream
+  ]
+
+-- | Membership under the `address & 0x3fffffff` alias classes.
+objectNames :: DeclaredObject -> Word32 -> Bool
+objectNames declared value = let address = value .&. 0x3fffffff in objectStart declared <= address && address < objectEnd declared
+
+objectHolding :: Word32 -> Maybe DeclaredObject
+objectHolding address = case [o | o <- declaredObjects, objectStart o <= address, address < objectEnd o] of
+  declared : _ -> Just declared
+  [] -> Nothing
+
+data RoleCheck = RoleHolds | RoleFails Word32 | RoleUnread Word32
+
+roleCheck :: Memory -> DeclaredObject -> RoleCheck
+roleCheck memory declared = case objectRole declared of
+  RegisterWriteStream
+    | (objectEnd declared - objectStart declared) .&. 7 /= 0 || objectStart declared .&. 7 /= 0 -> RoleFails (objectStart declared)
+    | otherwise -> foldr check RoleHolds [objectStart declared + 4, objectStart declared + 12 .. objectEnd declared - 4]
+ where
+  check address rest = case memoryWord memory address of
+    Nothing -> RoleUnread address
+    Just word
+      | word `shiftR` 24 /= 0xf0 -> RoleFails address
+      | otherwise -> rest
+
+data ConsumerForm = WideConstant | LiteralLoad Word32 | AlignedWord
+
+-- | A materialization of an address the object may hold, and its verdict.
+data Consumer = Consumer
+  { consumerSite :: Word32
+  , consumerForm :: ConsumerForm
+  , consumerValues :: Maybe [Word32]
+  , consumerVerdict :: Either Unproven ScalarProof
+  }
+
+-- | Every path from the materialization reads the value only as a TST, TEQ,
+-- CMP or CMN operand until it is overwritten or dead at a return.
+data ScalarProof = ScalarProof
+  { scalarCompares :: S.Set Word32
+  , scalarDeaths :: S.Set Death
+  , scalarStates :: Int
+  }
+
+-- | `DeadAtReturn` holds r2, r3 or r12, which AAPCS neither preserves nor
+-- returns.
+data Death = Overwritten Word32 | DeadAtReturn Word32 Reg deriving (Eq, Ord)
+
+data Unproven
+  = AddressUse Word32
+  | StoredUse Word32
+  | ControlUse Word32
+  | DerivedUse Word32
+  | LiveAcrossCall Word32
+  | LiveAtIndirectJump Word32
+  | LiveAtReturn Word32 Reg
+  | UnmodeledUse Word32
+  | LeavesImages Word32
+  | ScalarStepLimit Word32
+  | HeldByObject
+
+scalarStepLimit :: Int
+scalarStepLimit = 50000
+
+operandRegs :: Operand -> [Reg]
+operandRegs operand = case operand of
+  Immediate _ -> []
+  ShiftedImmediate rm _ _ -> [rm]
+  ShiftedRegister rm _ rs -> [rm, rs]
+
+offsetRegs :: Offset -> [Reg]
+offsetRegs offset = case offset of
+  OffsetImmediate _ -> []
+  OffsetRegister _ rm _ _ -> [rm]
+
+-- | Registers an executed instruction reads; Nothing when the decoder does
+-- not expose them.
+instructionReads :: Instruction -> Maybe [Reg]
+instructionReads instruction = case instruction of
+  DataProcessing _ op _ _ rn operand -> Just ([rn | op `notElem` [MOV, MVN]] ++ operandRegs operand)
+  MoveWide {} -> Just []
+  MoveTop _ rd _ -> Just [rd]
+  ZeroExtend _ _ rm _ _ -> Just [rm]
+  Multiply _ _ rm rs accumulator -> Just ([rm, rs] ++ maybe [] pure accumulator)
+  Load _ _ _ _ rn offset _ -> Just (rn : offsetRegs offset)
+  Store _ width rt rn offset _ -> Just ([rt] ++ [nextReg rt | width == Dual] ++ rn : offsetRegs offset)
+  LoadMultiple _ rn _ _ _ -> Just [rn]
+  StoreMultiple _ rn _ _ list -> Just (rn : list)
+  Branch {} -> Just []
+  BranchExchange _ _ rm -> Just [rm]
+  Hint _ -> Just []
+  Compute _ _ -> Nothing
+  Rejected _ -> Nothing
+
+instructionWrites :: Instruction -> [Reg]
+instructionWrites instruction = case instruction of
+  DataProcessing _ op _ rd _ _ -> [rd | op `notElem` [TST, TEQ, CMP, CMN]]
+  MoveWide _ rd _ -> [rd]
+  MoveTop _ rd _ -> [rd]
+  ZeroExtend _ rd _ _ _ -> [rd]
+  Multiply _ rd _ _ _ -> [rd]
+  Load _ width _ rt rn _ indexing -> [rt] ++ [nextReg rt | width == Dual] ++ [rn | indexing /= OffsetOnly]
+  Store _ _ _ rn _ indexing -> [rn | indexing /= OffsetOnly]
+  LoadMultiple _ rn _ writeback list -> list ++ [rn | writeback]
+  StoreMultiple _ rn _ writeback _ -> [rn | writeback]
+  _ -> []
+
+-- | Why an executed instruction that reads `held` is not a scalar use.
+nonScalarRead :: Word32 -> Instruction -> Reg -> Maybe Unproven
+nonScalarRead address instruction held = case instruction of
+  DataProcessing _ op _ rd _ _
+    | op `elem` [TST, TEQ, CMP, CMN] -> Nothing
+    | rd == pc -> Just (ControlUse address)
+    | otherwise -> Just (DerivedUse address)
+  Load {} -> Just (AddressUse address)
+  LoadMultiple {} -> Just (AddressUse address)
+  Store _ _ _ rn offset _
+    | held `elem` (rn : offsetRegs offset) -> Just (AddressUse address)
+    | otherwise -> Just (StoredUse address)
+  StoreMultiple _ rn _ _ _
+    | held == rn -> Just (AddressUse address)
+    | otherwise -> Just (StoredUse address)
+  BranchExchange {} -> Just (ControlUse address)
+  _ -> Just (DerivedUse address)
+
+-- | Follows the value `held` holds at `start` along every successor,
+-- treating each conditional instruction as both executed and skipped.
+scalarOnly :: Analysis -> Word32 -> Reg -> Either Unproven ScalarProof
+scalarOnly analysis start register = go [(start, register)] S.empty (ScalarProof S.empty S.empty 0)
+ where
+  go [] _ proof = Right proof
+  go ((address, held) : rest) seen proof
+    | S.member (address, held) seen = go rest seen proof
+    | scalarStates proof >= scalarStepLimit = Left (ScalarStepLimit address)
+    | otherwise = case fetch analysis address of
+        Nothing -> Left (LeavesImages address)
+        Just (word, instruction) -> do
+          (next, proof') <- step address word instruction held proof
+          go (next ++ rest) (S.insert (address, held) seen) proof' {scalarStates = scalarStates proof' + 1}
+  step address word instruction held proof = do
+    readRegs <- maybe (Left (UnmodeledUse address)) Right (instructionReads instruction)
+    compared <-
+      if held `elem` readRegs
+        then maybe (Right True) Left (nonScalarRead address instruction held)
+        else Right False
+    let skipped = [(address + 4, held) | instructionCond instruction /= Cond 14]
+        killed = held `elem` instructionWrites instruction
+        proof1 = if compared then proof {scalarCompares = S.insert address (scalarCompares proof)} else proof
+        dies death = Right (skipped, proof1 {scalarDeaths = S.insert death (scalarDeaths proof1)})
+        continueAt targets
+          | killed = dies (Overwritten address)
+          | otherwise = Right (skipped ++ [(target, held) | target <- targets], proof1)
+    case effectFlow (execute analysis address word instruction unknownRegs) of
+      Continue -> continueAt [address + 4]
+      Jump target -> continueAt [target]
+      Switch targets -> continueAt targets
+      Call _ -> Left (LiveAcrossCall address)
+      Return
+        | killed -> dies (Overwritten address)
+        | held `elem` [Reg 2, Reg 3, Reg 12] -> dies (DeadAtReturn address held)
+        | otherwise -> Left (LiveAtReturn address held)
+      JumpIndirect
+        | killed -> dies (Overwritten address)
+        | otherwise -> Left (LiveAtIndirectJump address)
+
+-- | Values `rd` holds after the MOVT at `site` executes, through up to three
+-- predecessor joins; Nothing when a lower half stays unknown.
+wideValues :: Analysis -> Word32 -> Cond -> Reg -> Word32 -> Maybe [Word32]
+wideValues analysis site cond rd upper = case attempt (runWindow analysis (windowStart analysis site) site unknownWorlds) of
+  Just values -> Just values
+  Nothing -> attempt (fst (worldsAt analysis site 3))
+ where
+  attempt worlds =
+    let values = [mapKnown (\old -> (upper `shiftL` 16) .|. (old .&. 0xffff)) (regAt regs rd) | (regs, flags) <- S.toList worlds, condPass cond flags]
+     in if not (null values) && all isKnown values then Just (S.toList (S.fromList (mapMaybe knownValue values))) else Nothing
+
+-- | MOVT and PC-relative literal materializations that may name the object,
+-- each with its scalar verdict, and the other aligned words naming it.
+objectConsumers :: Analysis -> S.Set Word32 -> DeclaredObject -> [Consumer]
+objectConsumers analysis literals declared =
+  [consumer | (site, word) <- memoryWords memory, consumer <- consumersAt site word]
+ where
+  memory = analysisMemory analysis
+  lowUpper = objectStart declared `shiftR` 16
+  highUpper = (objectEnd declared - 1) `shiftR` 16
+  proveFrom site rd
+    | rd == pc = Left (ControlUse site)
+    | otherwise = scalarOnly analysis (site + 4) rd
+  consumersAt site word = case decode site word of
+    MoveTop cond rd upper
+      | lowUpper <= upper .&. 0x3fff && upper .&. 0x3fff <= highUpper ->
+          let values = wideValues analysis site cond rd upper
+           in [Consumer site WideConstant values (proveFrom site rd) | maybe True (any (objectNames declared)) values]
+    Load _ Word _ rt rn (OffsetImmediate n) OffsetOnly
+      | rn == pc
+      , let literal = site + 8 + fromIntegral n
+      , Just value <- memoryWord memory literal
+      , objectNames declared value ->
+          [Consumer site (LiteralLoad literal) (Just [value]) (proveFrom site rt)]
+    _
+      | objectNames declared word, not (S.member site literals) -> [Consumer site AlignedWord (Just [word]) (Left HeldByObject)]
+      | otherwise -> []
+
 -- * Callers
 
 -- | Every reference to a dispatcher entry, or into the stock body after its
@@ -1497,6 +1721,14 @@ buildProof inputs =
                      ]
               ]
         , "interpositions" .= [object ["site" .= hex site, "old" .= hex old, "new" .= hex new] | (site, old, new) <- overlayInterpositions published]
+        , "declared_objects"
+            .= object
+              [ "rule"
+                  .= ( "a consumer is discharged when every path from its materialization reads the value only as a TST, TEQ, CMP or CMN operand until it is overwritten or held in r2, r3 or r12 at a return (AAPCS); any other read, a call, an indirect jump, an unmodeled instruction or leaving the images while it is live, and every aligned word naming the object, stays open. Consumers that index a base into the extent and constants the census does not trace are not enumerated" ::
+                        String
+                     )
+              , "objects" .= [objectValue memory declared (objectConsumers analysis literals declared) | declared <- declaredObjects]
+              ]
         , "obligations" .= map obligationValue obligations
         , "refusals" .= map refusalValue refusals
         ]
@@ -1653,7 +1885,12 @@ controllerValue controller =
 
 entryValue :: Entry -> Value
 entryValue entry = case entry of
-  DataWordEntry address origins -> object ["data_word_entry" .= hex address, "origins" .= map hex origins]
+  DataWordEntry address origins ->
+    object
+      [ "data_word_entry" .= hex address
+      , "origins" .= map hex origins
+      , "declared_objects" .= S.toList (S.fromList [objectName o | Just o <- map objectHolding origins])
+      ]
   CallEntry address site -> object ["call_entry" .= hex address, "site" .= hex site]
   DepthLimit address -> object ["depth_limit" .= hex address]
   WindowLimit address -> object ["window_limit" .= hex address]
@@ -1691,7 +1928,10 @@ obligationValue obligation = case obligation of
   TableStore site address ->
     object ["kind" .= ("table-store" :: String), "site" .= hex site, "address" .= hex address]
   DataWordNames site word label ->
-    object ["kind" .= ("data-word-reference" :: String), "location" .= hex site, "value" .= hex word, "names" .= label]
+    object
+      ( ["kind" .= ("data-word-reference" :: String), "location" .= hex site, "value" .= hex word, "names" .= label]
+          ++ ["declared_object" .= objectName o | Just o <- [objectHolding site]]
+      )
   TableReadOutside controller address ->
     object ["kind" .= ("table-read-outside-images" :: String), "controller" .= controller, "address" .= hex address]
   TargetOutsideCode controller target ->
@@ -1737,6 +1977,70 @@ refusalValue refusal = case refusal of
     object ["kind" .= ("region-overlap" :: String), "first" .= first, "second" .= second]
   OwnedDispatcherMissing ->
     object ["kind" .= ("owned-dispatcher-missing" :: String), "symbol" .= ownedDispatcherName]
+
+objectValue :: Memory -> DeclaredObject -> [Consumer] -> Value
+objectValue memory declared consumers =
+  object
+    [ "name" .= objectName declared
+    , "start" .= hex (objectStart declared)
+    , "end" .= hex (objectEnd declared)
+    , "evidence" .= ("conditional" :: String)
+    , "role" .= case objectRole declared of
+        RegisterWriteStream -> ("register-write-stream" :: String)
+    , "role_check" .= case roleCheck memory declared of
+        RoleHolds -> object ["status" .= ("holds" :: String)]
+        RoleFails address -> object ["status" .= ("fails" :: String), "at" .= hex address]
+        RoleUnread address -> object ["status" .= ("unread" :: String), "at" .= hex address]
+    , "discharged_consumers" .= length [() | Consumer {consumerVerdict = Right _} <- consumers]
+    , "open_consumers" .= length [() | Consumer {consumerVerdict = Left _} <- consumers]
+    , "consumers" .= map consumerValue consumers
+    ]
+
+consumerValue :: Consumer -> Value
+consumerValue consumer =
+  object
+    ( [ "site" .= hex (consumerSite consumer)
+      , "form" .= case consumerForm consumer of
+          WideConstant -> ("movt" :: String)
+          LiteralLoad _ -> "literal-load"
+          AlignedWord -> "aligned-word"
+      , "values" .= maybe ["unresolved" :: String] (map hex) (consumerValues consumer)
+      ]
+        ++ ["literal" .= hex literal | LiteralLoad literal <- [consumerForm consumer]]
+        ++ case consumerVerdict consumer of
+          Right proof ->
+            [ "status" .= ("discharged" :: String)
+            , "proof"
+                .= object
+                  [ "use" .= ("scalar-compare" :: String)
+                  , "compares" .= map hex (S.toList (scalarCompares proof))
+                  , "deaths" .= map deathValue (S.toList (scalarDeaths proof))
+                  , "states" .= scalarStates proof
+                  ]
+            ]
+          Left reason -> ["status" .= ("open" :: String), "reason" .= unprovenValue reason]
+    )
+
+deathValue :: Death -> Value
+deathValue death = case death of
+  Overwritten site -> object ["overwritten" .= hex site]
+  DeadAtReturn site register -> object ["dead_at_return" .= hex site, "register" .= regName register]
+
+unprovenValue :: Unproven -> Value
+unprovenValue reason = case reason of
+  AddressUse site -> at "address-use" site
+  StoredUse site -> at "stored-use" site
+  ControlUse site -> at "control-use" site
+  DerivedUse site -> at "derived-use" site
+  LiveAcrossCall site -> at "live-across-call" site
+  LiveAtIndirectJump site -> at "live-at-indirect-jump" site
+  LiveAtReturn site register -> object ["kind" .= ("live-at-return" :: String), "at" .= hex site, "register" .= regName register]
+  UnmodeledUse site -> at "unmodeled-instruction" site
+  LeavesImages site -> at "leaves-images" site
+  ScalarStepLimit site -> at "step-limit" site
+  HeldByObject -> object ["kind" .= ("held-by-object" :: String)]
+ where
+  at kind site = object ["kind" .= (kind :: String), "at" .= hex site]
 
 hex :: Word32 -> String
 hex value = let digits = showHex value "" in "0x" ++ replicate (8 - length digits) '0' ++ digits
