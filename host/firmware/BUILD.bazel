@@ -161,6 +161,24 @@ haskell_test(
     ],
 )
 
+haskell_library(
+    name = "stage-build",
+    srcs = ["StageBuild.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
 haskell_binary(
     name = "build-first-stage",
     srcs = ["BuildFirstStage.hs"],
@@ -172,10 +190,26 @@ haskell_binary(
         "-threaded",
     ],
     deps = [
+        ":stage-build",
         "//host:base",
-        "//host:bytestring",
         "//host:first-stage",
-        "//host:host-support",
+    ],
+)
+
+haskell_binary(
+    name = "build-secondary-stage",
+    srcs = ["BuildSecondaryStage.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        ":stage-build",
+        "//host:base",
+        "//host:first-stage",
         "//host:update-container",
     ],
 )

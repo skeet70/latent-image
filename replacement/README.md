@@ -9,8 +9,24 @@ Owned X-M1 replacement code is built through the existing Bazel/Nix graph. Each 
 
 The first-stage witness checks the guest handoff target against loader A's entry word and the staged owned bytes against the supplied candidate. A producer receipt with `result: passed` records completed observation, not consumer acceptance. The negative controls reach the handoff and collect all twelve reads without a model failure: the faulty candidate exposes target `0xdeadbe00` instead of `0x40020`, while the mismatched-image control runs the correct DAT against the faulty candidate's expected image digest. Both return nonzero from the witness consumer. The correct DAT also boots from natural reset through the fresh-settings English/date route to a rendered SHOOTING MENU page 1; visual acceptance remains the owner's check.
 
-Record 2, the loaders, application images and retained record-1 helpers remain proprietary execution dependencies. Core 1's startup path is untraced. These results do not establish application/runtime retirement, full replacement startup, hardware behavior, silicon timing or persistence.
+Record 2's retained services, vectors and data, the loaders, application images and retained record-1 helpers remain proprietary execution dependencies. These results do not establish application/runtime retirement, full replacement startup, hardware behavior, silicon timing or persistence.
 
 ```sh
 devenv shell -- bazel test //replacement/abi:pilot-abi-tests --test_output=all
+```
+
+Stage the owned record-2 candidate and its wrong-publication control (target `0xdeadbe00`) from the original DAT. The expected digest is the stored record-2 slot `[0x50000,0x60000)` of the main pre-table; the builder refuses any other source slot, a misplaced entry, an image overlapping a retained extent, a retained service inside a retired extent and any changed byte outside the reset literal and the image:
+
+```sh
+devenv shell -- bazel --batch build --jobs=2 \
+  //replacement/secondary_stage:secondary-stage-image \
+  //replacement/secondary_stage:secondary-stage-fault-image \
+  //host/firmware:build-secondary-stage
+for image in secondary-stage-image secondary-stage-fault-image; do
+  bazel-bin/host/firmware/build-secondary-stage private-data/firmware/x-m1-1.50/FWUP0002.DAT \
+    "bazel-bin/replacement/secondary_stage/$image.bin" \
+    "bazel-bin/replacement/secondary_stage/$image.symbols" "PRIVATE_OUTPUT/$image.DAT" \
+    --load-offset 0x400 --entry 0x10400 \
+    --expect-slot-sha256 909db53de40a0319541a30314bd942cb119eca3de1147e2b856eecf71c1a4809
+done
 ```
