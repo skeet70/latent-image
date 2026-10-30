@@ -915,6 +915,34 @@ The bridge speaks the cardless bridge's events and commands (`start-options`, `s
 - `image-input-fingerprint` takes a typed node name and returns the existing image-input model fingerprint through the stopped-board read-only device accessor. It neither reads MMIO nor advances guest time. The fingerprint includes device registers, DMA state and capture acknowledgement/IRQ flags.
 - `capture-observation-window` advances one fixed 40M-instruction window and returns its final instruction count. It changes no input pad or ADC sample and requests no menu or display observation. Strict-stop errors propagate from the existing advance operation.
 
+**Opt-in bounded capture continuation observations**
+
+The JSON-lines RAM-push server accepts these read-only observation requests. They add no guest execution; `shutter-sequence` still advances exactly 8M/8M/4M/4M instructions, and `capture-observation-window` remains one 40M-instruction advance. Without opt-in, legacy trace responses and shutter phase replies remain unchanged.
+
+| Request | Response fields, in addition to `ok` |
+| --- | --- |
+| `{"command":"capture-observation-begin"}` | `active: true` and `bounds` |
+| `{"command":"capture-observation-hits","from":0}` | A serialized page with `bounds`, `from`, `next`, `retained`, `total`, `dropped`, `incomplete`, `first_instructions`, `last_instructions`, `sites` and `hits` |
+| `{"command":"capture-observation-state"}` | `snapshot` and typed `timing` inspection of the `image_input` node |
+
+Begin rejects an active rendezvous or unconsumed legacy hits. It discards legacy trace storage and freezes the armed site set for the remaining session. A rendezvous stop during bounded observation is an error. The declared `bounds` are `sites: 256`, `label_bytes: 64`, `details_per_site: 64`, `details_total: 2048`, `ram_bytes_per_event: 512`, `page_details: 64` and `retained_memory_bytes: 2097152`. `charged_storage_bytes` reports the fixed record arena, 256 per-site statistics, collector header and 128 KiB reserved overhead; a compile-time assertion keeps their sum within 2 MiB. Allocation occurs only after validating the site and label bounds. Events with no remaining detail capacity are counted without copying registers or RAM.
+
+`total` counts every observed hit since begin, including hits without retained detail. `retained` counts stored details; `dropped` counts hits missing detail. Each `sites` entry reports `address`, `site`, `total`, `dropped`, `retained`, `first_instructions`, `last_instructions`, `first_dropped_instructions` and `last_dropped_instructions`. Top-level and per-site first/last instruction counts cover all observed hits, not just retained details. `incomplete` is cumulative since begin and stays true after any dropped detail or incomplete RAM capture. It is not a property of only the returned page.
+
+`from` and `next` index retained details, not total hits. Each page contains at most 64 `hits`; request `next` for the following page. A hit has `site`, `address`, `core`, `instructions`, `registers` (four numeric r0-r3 values), `sp`, `lr`, `cpsr`, `ram` and `ram_incomplete`. Each RAM entry contains `address`, `requested`, `status` and hexadecimal `bytes`. Status is `complete`, `outside-ram`, `read-failed` or `byte-limit`; failed spans retain no bytes. At most 24 span descriptors and 512 copied bytes are stored per event. Only physical RAM below `0x20000000` and its `0x40000000` alias are admitted; aliases are reported as physical addresses. The queue descriptor and its declared payload size are retained at source-bound send/receive points, subject to that byte limit. Pagination does not consume or reset cumulative counters. A page is bounded by 64 fixed-size detail views and 256 counter views, with less than 1 MiB of JSON output; it is not retained by the collector.
+
+Detailed events prioritize the event's message descriptor/payload, callback storage and queue-specific state before the common controller/frontend/subscriber windows. Common spans that no longer fit remain present with `status: "byte-limit"` and empty `bytes`, and set `ram_incomplete`; they are not silently omitted. Phase-boundary snapshots instead collect the complete common windows and recorder bitsets, requiring 362 RAM bytes for a valid selected context.
+
+The source-level queue-`0x30` admission calculation for a declared `0x104`-byte payload is `12 + 260 + 12 + 4 + 4 + 4 + 4 = 300` priority bytes: descriptor, payload, stored arguments, callback slot, queue state and two predicate words. The common request is 246 bytes. At its 64-byte subscriber block `0x0095c958`, 477 bytes have already been admitted, so that span is `byte-limit`; the subsequent gate byte and four-byte recorder selector fit. Total retained RAM is 482 bytes across 21 descriptors, and `ram_incomplete` is true. All other spans are `complete` if their direct RAM reads succeed. This is a deterministic byte-admission calculation, not a guest observation. The `0x4007` sender's decoded argument length remains 12 bytes; its separate receiver copy length is `0x104`.
+
+New observer instruction positions use a transparent instruction-count unit constructed from the board's per-core counts with checked aggregation. Their JSON representation remains an unsigned integer; legacy `Hit` responses are unchanged.
+
+State can be requested at the pre-sequence and post-window stops without another guest advance. `snapshot` is the direct `CaptureSnapshot` (`instructions`, `ram`, `ram_incomplete`), or `null` while bounded observation is inactive. Controller, frontend, subscriber and recorder RAM comes from direct physical RAM reads. The request performs no acknowledgement-capable MMIO reads.
+
+`timing` is `{"status":"available","state":{...}}`, `{"status":"absent"}` or `{"status":"unsupported","reason":"..."}`. It uses `board.inspect_device::<ImageInput, _>` and the existing fingerprint from pinned FujiMod `9bb8bd90964fd4906a7d126b78a91ed30bb44e17`, without a model change. The named state fields are `phase_due` (two nullable device-tick deadlines), `phase_pending` (two flag words), `phase_period` (device ticks), `sensor_due` (nullable device-tick deadline), `r` (the 256-word register bank), `capture_ack` and `capture_irq_sent` (booleans). Each field is wrapped as `{"status":"present","value":...}`, `{"status":"absent"}` or `{"status":"unsupported"}`. A present nullable deadline may be `null`; a missing or unsupported field is never replaced with a guessed deadline, zero register or acknowledgement state.
+
+While bounded observation is active, each `shutter-sequence` phase additionally returns `before` and `after` objects with the same `snapshot` and `timing` fields. `before` is captured before changing the physical shutter position; `after` is captured after that phase's existing advance. These expanded phase observations are returned only in the immediate reply and are not appended to `key_log` or retained in SDK logs.
+
 The run document replaces FujiMod's FFF47000 packed422 scaler with an adapter device that ports the retained declared UI conversion (YYCbCr to ABGR, IRQ 67), so the mode guides render.
 
 `//emulation:fujimod-ram-push-check -- --installed-nand NAND [--firmware DAT] [--output DIR]` cold-boots a DAT (default stock 1.50) on the bridge and drives it through `EmulatorUsb.hs`:
@@ -995,6 +1023,16 @@ E-XM1-CAPTURE-FRONTEND-TIMING-SOURCE-150 binds the following conditional path to
 | Controller entry | `0x00fe8bc0` can route `0x3f49` through `0x00fe8ac4` after `0x00ff2990` returns 1. `0x00fe8ac4` calls `0x0100297c`, whose table `0x01002bf4` selects `0x01002860` for state 0/event `0x3f49`, or `0x01002280` for state 8/event `0x3f49`. `0x01000860` copies the parameters to `0x016f8314`, installs callbacks at `0x016f82fc`-`0x016f8310` and resets counters `0x016f83e0`, `0x016f83e8` and byte `0x016f8419`. |
 
 The direct API `0x00efbf58`, called by `0x00dc16d4`, constructs its own parameters and calls `0x00feac00` without the operation-7 frontend. It supplies callbacks `0x00efbda4`/`0x00efbd24` rather than `0x00f2d8b0`'s `0x00f2c9c4` and optional callback selections. Both paths post `0x3f49`; neither establishes execution of the other. The latter controller callback `0x00f2c9c4` posts operation `0x5e`, not recorder receipt `0x137e`.
+
+##### Queue-`0x30` callback source binding
+
+E-XM1-CAPTURE-QUEUE30-CALLBACK-SOURCE-150 narrows the static `0x4007` continuation. The receive call at `0x01028b48` fills the message header at `0x016fea2c`; the current queue-`0x30` state at `0x016fec4c` selects through table `0x0102c088`, and the selected action is invoked through `r3` at `0x01028bc4`. Inspected `0x4007` rows select `0x01028c4c` in states 1/2/3/4/6/8/11/14 and no-op `0x010296e4` in states 5/7/9/10/12/13/15; the inspected state-0 terminator has a null action.
+
+Action `0x01028c4c` first calls `0x01028bdc`, whose call at `0x01028bf4` copies `0x104` bytes from `0x016fea2c` to `0x016feb30`. It reads the three `0x4007` arguments at `0x016feb3c`, `0x016feb40` and `0x016feb44`; the callback load at `0x01028c38` and store at `0x01028c3c` bind the third argument to slot `0x016fe9d4`. Source producers `0x00f29160`/`0x01039dd4` supply `0x00f2907c` in that argument.
+
+The byte-bound indirect calls at `0x0102957c`, `0x0102fd20`, `0x010300a4`, `0x01030284` and `0x01030310` read that callback slot and invoke a non-null pointer in `r3` with `r0=0`. Their helper/state/property predicates still apply, including checks involving `0x01703194` and `0x0170389c`; these are not a single unconditional `0x4007` completion event. Nearby calls at `0x0102fcec` and `0x01030228` instead use alternate slot `0x016fea24`. The original operation-7 request callback is separately invoked through `r3` at `0x00efae7c`, distinct from the controller callback call at `0x01002708` and selector-1 subscriber call at `0x00740f64`.
+
+This closes the decoded payload-to-storage-to-possible-invocation join. It does not establish a successful enqueue, a selected receiver state/action, invocation of `0x00f2907c`, or the intervening helper predicates in physical-1. The bounded observer distinguishes sender calls from immediate returns, receiver dispatch from enqueue success, and the actual callback pointer from the operation name.
 
 ##### Timing IRQ admission and progression
 
