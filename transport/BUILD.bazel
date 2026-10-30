@@ -655,8 +655,6 @@ haskell_test(
     data = [
         ":ram-push-pinned-workspace-files",
         "ram-push-review.json",
-        "//replacement/bank:bank",
-        "//replacement/bank:build-facts",
     ],
     ghcopts = _GHCOPTS,
     deps = _GATE_DEPS,
