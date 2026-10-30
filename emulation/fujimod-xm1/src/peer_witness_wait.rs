@@ -228,7 +228,7 @@ fn verify_image(machine: &Machine, image: OriginalImage) -> Result<(), String> {
 fn tcm(machine: &Machine, core: WitnessCore, bank: u8) -> Result<Word, String> {
     let core = match core { WitnessCore::Core0 => 0, WitnessCore::Core1 => 1 };
     u32::try_from(machine.session.board.cpu(core)?.coprocessor(arm::Coprocessor {
-        cp: 15, opc1: 0, crn: 9, crm: 1, opc2: bank, secure: 0, wide: false,
+        cp: 15, opc1: 0, crn: 9, crm: 1, opc2: u32::from(bank), secure: 0, wide: false,
     }, None)?).map(Word).map_err(|_| "control TCM register exceeds a word".into())
 }
 #[derive(Deserialize)]
