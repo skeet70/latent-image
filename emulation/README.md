@@ -817,6 +817,28 @@ The bridge speaks the cardless bridge's events and commands (`start-options`, `s
 - `image-input-fingerprint` takes a typed node name and returns the existing image-input model fingerprint through the stopped-board read-only device accessor. It neither reads MMIO nor advances guest time. The fingerprint includes device registers, DMA state and capture acknowledgement/IRQ flags.
 - `capture-observation-window` advances one fixed 40M-instruction window and returns its final instruction count. It changes no input pad or ADC sample and requests no menu or display observation. Strict-stop errors propagate from the existing advance operation.
 
+**Opt-in bounded capture continuation observations**
+
+The JSON-lines RAM-push server accepts these read-only observation requests. They add no guest execution; `shutter-sequence` still advances exactly 8M/8M/4M/4M instructions, and `capture-observation-window` remains one 40M-instruction advance. Without opt-in, legacy trace responses and shutter phase replies remain unchanged.
+
+| Request | Response fields, in addition to `ok` |
+| --- | --- |
+| `{"command":"capture-observation-begin"}` | `active: true` and `bounds` |
+| `{"command":"capture-observation-hits","from":0}` | A serialized page with `bounds`, `from`, `next`, `retained`, `total`, `dropped`, `incomplete`, `first_instructions`, `last_instructions`, `sites` and `hits` |
+| `{"command":"capture-observation-state"}` | `snapshot` and typed `timing` inspection of the `image_input` node |
+
+Begin requires a completed rendezvous and consumed legacy hits. It discards legacy trace storage and routes subsequent instruction-point events into bounded compact storage. The declared `bounds` are `sites: 256`, `label_bytes: 64`, `details_per_site: 64`, `details_total: 2048`, `ram_bytes_per_event: 512`, `page_details: 64` and `retained_memory_bytes: 2097152`. Fixed records, per-site statistics and reserved overhead are charged within the 2 MiB retained-storage limit before buffering. Events with no remaining detail capacity are counted without copying registers or RAM.
+
+`total` counts every observed hit since begin, including hits without retained detail. `retained` counts stored details; `dropped` counts hits missing detail. Each `sites` entry reports `address`, `site`, `total`, `dropped`, `retained`, `first_instructions` and `last_instructions`. Top-level and per-site first/last instruction counts cover all observed hits, not just retained details. `incomplete` is cumulative since begin and stays true after any dropped detail or incomplete RAM capture. It is not a property of only the returned page.
+
+`from` and `next` index retained details, not total hits. Each page contains at most 64 `hits`; request `next` for the following page. A hit has `site`, `address`, `core`, `instructions`, `registers` (r0-r3), `sp`, `lr`, `cpsr`, `ram` and `ram_incomplete`. RAM entries contain an `address` and hexadecimal `bytes`, with request/status metadata when available. Pagination does not consume or reset cumulative counters.
+
+State can be requested at the pre-sequence and post-window stops without another guest advance. `snapshot` is the direct `CaptureSnapshot` (`instructions`, `ram`, `ram_incomplete`), or `null` while bounded observation is inactive. Controller, frontend, subscriber and recorder RAM comes from direct physical RAM reads. The request performs no acknowledgement-capable MMIO reads.
+
+`timing` is `{"status":"available","state":{...}}`, `{"status":"absent"}` or `{"status":"unsupported","reason":"..."}`. It uses `board.inspect_device::<ImageInput, _>` and the existing fingerprint from pinned FujiMod `9bb8bd90964fd4906a7d126b78a91ed30bb44e17`, without a model change. The named state fields are `phase_due` (two nullable device-tick deadlines), `phase_pending` (two flag words), `phase_period` (device ticks), `sensor_due` (nullable device-tick deadline), `r` (the 256-word register bank), `capture_ack` and `capture_irq_sent` (booleans). Each field is wrapped as `{"status":"present","value":...}`, `{"status":"absent"}` or `{"status":"unsupported"}`. A present nullable deadline may be `null`; a missing or unsupported field is never replaced with a guessed deadline, zero register or acknowledgement state.
+
+While bounded observation is active, each `shutter-sequence` phase additionally returns `before` and `after` objects with the same `snapshot` and `timing` fields. `before` is captured before changing the physical shutter position; `after` is captured after that phase's existing advance. These expanded phase observations are returned only in the immediate reply and are not appended to `key_log` or retained in SDK logs.
+
 The run document replaces FujiMod's FFF47000 packed422 scaler with an adapter device that ports the retained declared UI conversion (YYCbCr to ABGR, IRQ 67), so the mode guides render.
 
 `//emulation:fujimod-ram-push-check -- --installed-nand NAND [--firmware DAT] [--output DIR]` cold-boots a DAT (default stock 1.50) on the bridge and drives it through `EmulatorUsb.hs`:

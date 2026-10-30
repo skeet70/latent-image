@@ -15,6 +15,7 @@ use fujimod_emulator::board::preservation::{
     PhysicalRange, Preservation, PreservationState, ProtectedRanges,
 };
 use fujimod_xm1::sd_host::{Backing, MediaImage, SectorAddress, SectorCount};
+use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureSnapshot};
 use serde::{Deserialize, Serialize};
 use fujimod_emulator_devices::Device;
 use fujimod_emulator_exr2_isp_input::ImageInput;
@@ -287,6 +288,9 @@ enum Request {
     Transfer(Transfer),
     TraceSites { sites: BTreeMap<String, String> },
     TraceHits { from: usize },
+    CaptureObservationBegin,
+    CaptureObservationHits { from: usize },
+    CaptureObservationState,
     Key { key: String, hold_instructions: Option<u64>, release_instructions: Option<u64>, settle_instructions: Option<u64> },
     ShutterSequence,
     ImageInputFingerprint { node: NodeName },
@@ -312,6 +316,9 @@ enum RequestKind {
     Transfer,
     TraceSites,
     TraceHits,
+    CaptureObservationBegin,
+    CaptureObservationHits,
+    CaptureObservationState,
     Key,
     ShutterSequence,
     ImageInputFingerprint,
@@ -337,6 +344,9 @@ impl Request {
             Request::Transfer(_) => RequestKind::Transfer,
             Request::TraceSites { .. } => RequestKind::TraceSites,
             Request::TraceHits { .. } => RequestKind::TraceHits,
+            Request::CaptureObservationBegin => RequestKind::CaptureObservationBegin,
+            Request::CaptureObservationHits { .. } => RequestKind::CaptureObservationHits,
+            Request::CaptureObservationState => RequestKind::CaptureObservationState,
             Request::Key { .. } => RequestKind::Key,
             Request::ShutterSequence => RequestKind::ShutterSequence,
             Request::ImageInputFingerprint { .. } => RequestKind::ImageInputFingerprint,
@@ -420,11 +430,132 @@ struct GuestInstructions(u64);
 
 const CAPTURE_OBSERVATION_WINDOW: GuestInstructions = GuestInstructions(MODE_DIAL_SETTLE);
 
+#[derive(Deserialize, Serialize)]
+#[serde(transparent)]
+struct DeviceTicks(u64);
+
+#[derive(Deserialize, Serialize)]
+#[serde(transparent)]
+struct PendingPhaseFlags(u32);
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(transparent)]
+struct ImageInputRegister(u32);
+
+struct ImageInputRegisters([ImageInputRegister; 256]);
+
+impl Serialize for ImageInputRegisters {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.as_slice().serialize(serializer)
+    }
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status", content = "value", rename_all = "kebab-case")]
+enum InspectedField<T> {
+    Present(T),
+    Absent,
+    Unsupported,
+}
+
+fn inspected_field<T: serde::de::DeserializeOwned>(state: &Value, name: &str) -> InspectedField<T> {
+    match state.get(name) {
+        None => InspectedField::Absent,
+        Some(value) => match T::deserialize(value) {
+            Ok(value) => InspectedField::Present(value),
+            Err(_) => InspectedField::Unsupported,
+        },
+    }
+}
+
+fn inspected_registers(state: &Value) -> InspectedField<ImageInputRegisters> {
+    let Some(value) = state.get("r") else {
+        return InspectedField::Absent;
+    };
+    let Some(words) = value.as_array().filter(|words| words.len() == 256) else {
+        return InspectedField::Unsupported;
+    };
+    let mut registers = [ImageInputRegister(0); 256];
+    for (register, word) in registers.iter_mut().zip(words) {
+        let Ok(value) = ImageInputRegister::deserialize(word) else {
+            return InspectedField::Unsupported;
+        };
+        *register = value;
+    }
+    InspectedField::Present(ImageInputRegisters(registers))
+}
+
+#[derive(Serialize)]
+struct ImageInputTimingState {
+    phase_due: InspectedField<[Option<DeviceTicks>; 2]>,
+    phase_pending: InspectedField<[PendingPhaseFlags; 2]>,
+    phase_period: InspectedField<DeviceTicks>,
+    sensor_due: InspectedField<Option<DeviceTicks>>,
+    r: InspectedField<ImageInputRegisters>,
+    capture_ack: InspectedField<bool>,
+    capture_irq_sent: InspectedField<bool>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+enum ImageInputTiming {
+    Available { state: ImageInputTimingState },
+    Absent,
+    Unsupported { reason: String },
+}
+
+fn image_input_timing(machine: &Machine) -> ImageInputTiming {
+    let Ok(node) = machine.session.node("image_input") else {
+        return ImageInputTiming::Absent;
+    };
+    let fingerprint = match machine.session.board.inspect_device::<ImageInput, _>(
+        node,
+        |device| device.fingerprint(),
+    ) {
+        Ok(fingerprint) => fingerprint,
+        Err(reason) => return ImageInputTiming::Unsupported { reason },
+    };
+    let Some(state) = fingerprint.get("state") else {
+        return ImageInputTiming::Absent;
+    };
+    if !state.is_object() {
+        return ImageInputTiming::Unsupported { reason: "image-input fingerprint state is not an object".into() };
+    }
+    ImageInputTiming::Available {
+        state: ImageInputTimingState {
+            phase_due: inspected_field(state, "phase_due"),
+            phase_pending: inspected_field(state, "phase_pending"),
+            phase_period: inspected_field(state, "phase_period"),
+            sensor_due: inspected_field(state, "sensor_due"),
+            r: inspected_registers(state),
+            capture_ack: inspected_field(state, "capture_ack"),
+            capture_irq_sent: inspected_field(state, "capture_irq_sent"),
+        },
+    }
+}
+
+#[derive(Serialize)]
+struct CaptureObservationState {
+    snapshot: Option<CaptureSnapshot>,
+    timing: ImageInputTiming,
+}
+
+fn capture_observation_state(machine: &Machine) -> Result<CaptureObservationState, String> {
+    Ok(CaptureObservationState {
+        snapshot: machine.traces.capture_snapshot(&machine.session)?,
+        timing: image_input_timing(machine),
+    })
+}
+
 #[derive(Serialize)]
 struct ShutterPhaseObservation {
     position: PhysicalShutterPosition,
     started: GuestInstructions,
     finished: GuestInstructions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before: Option<CaptureObservationState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after: Option<CaptureObservationState>,
 }
 
 fn shutter_phase(
@@ -433,12 +564,16 @@ fn shutter_phase(
     duration: GuestInstructions,
 ) -> Result<ShutterPhaseObservation, String> {
     let started = GuestInstructions(bridge.machine.instructions());
+    let observing = bridge.machine.traces.capture_observation_active();
+    let before = observing.then(|| capture_observation_state(&bridge.machine)).transpose()?;
     bridge.machine.set_shutter_position(position)?;
     bridge.advance(duration.0)?;
     Ok(ShutterPhaseObservation {
         position,
         started,
         finished: GuestInstructions(bridge.machine.instructions()),
+        before,
+        after: observing.then(|| capture_observation_state(&bridge.machine)).transpose()?,
     })
 }
 
@@ -481,6 +616,18 @@ impl Server {
                 }
                 json!({"count": hits.len(), "hits": &hits[from..]})
             }
+            Request::CaptureObservationBegin => {
+                self.bridge.begin_capture_observation()?;
+                json!({"active": true, "bounds": CAPTURE_OBSERVATION_BOUNDS})
+            }
+            Request::CaptureObservationHits { from } => {
+                serde_json::to_value(self.bridge.machine.traces.capture_observation_page(from)?)
+                    .map_err(|error| format!("capture-observation-hits: {error}"))?
+            }
+            Request::CaptureObservationState => {
+                serde_json::to_value(capture_observation_state(&self.bridge.machine)?)
+                    .map_err(|error| format!("capture-observation-state: {error}"))?
+            }
             Request::ReleaseContext { segment } => {
                 self.bridge.machine.set_release_context(segment);
                 json!({})
@@ -514,7 +661,9 @@ impl Server {
                     shutter_phase(&mut self.bridge, PhysicalShutterPosition::Half, GuestInstructions(GPIO_PULSE.release / 2))?,
                     shutter_phase(&mut self.bridge, PhysicalShutterPosition::Released, GuestInstructions(GPIO_PULSE.release / 2))?,
                 ];
-                self.key_log.push(json!({"physical_shutter_sequence": phases}));
+                if !self.bridge.machine.traces.capture_observation_active() {
+                    self.key_log.push(json!({"physical_shutter_sequence": phases}));
+                }
                 json!({"phases": phases})
             }
             Request::ImageInputFingerprint { node } => {
