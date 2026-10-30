@@ -20,24 +20,16 @@ fujimod.passthru.rustPlatform.buildRustPackage {
   inherit src;
   sourceRoot = "fujimod-xm1-workspace/fujimod-xm1";
   cargoLock.lockFile = ../emulation/fujimod-xm1/Cargo.lock;
-  CARGO_BUILD_JOBS = 1;
+  CARGO_BUILD_JOBS = 2;
   RUST_TEST_THREADS = 1;
-  preBuild = ''
-    cpulimitBin=$(mktemp -d)
-    cat > "$cpulimitBin/cargo" <<EOF
-#!${pkgs.runtimeShell}
-exec ${pkgs.cpulimit}/bin/cpulimit -i -l 75 -- ${fujimod.toolchain}/bin/cargo "\$@"
-EOF
-    chmod +x "$cpulimitBin/cargo"
-    export PATH="$cpulimitBin:$PATH"
-  '';
+  dontUseCargoParallelTests = true;
   nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config pkgs.jq ];
   nativeCheckInputs = [ fujimod ];
   # nand_image.rs links zlib for retained-identical committed NAND exports.
   buildInputs = [ pkgs.zlib ];
   dontUseCmakeConfigure = true;
   preCheck = ''
-    cargo test --no-run --message-format=json -j "$NIX_BUILD_CORES" --profile release \
+    cargo test --no-run --message-format=json -j "$CARGO_BUILD_JOBS" --profile release \
       --target ${pkgs.stdenv.targetPlatform.rust.rustcTargetSpec} --offline > test-artifacts.json
   '';
   # store-path holds $out, so Bazel actions keyed on it change with the store path.

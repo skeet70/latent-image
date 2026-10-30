@@ -100,8 +100,8 @@
     },
     {
       "id": "fujimod",
-      "url": "https://github.com/justjake/FujiMod",
-      "revision": "9bb8bd90964fd4906a7d126b78a91ed30bb44e17",
+      "url": "https://github.com/skeet70/fujimod.git",
+      "revision": "3d90035d7d8d651e126f89f94f30765506e6f53f",
       "status": "reference",
       "evidence_ids": [
         "E-FUJIMOD-XM1-CATALOG-150"
