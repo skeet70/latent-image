@@ -323,6 +323,8 @@ Section 2 holds the evidence behind each category. Gaps that no open child issue
 | Failure recovery | None | Stock recovery, recorder and boot-entry paths; R1 to R3 are stock-firmware evidence | Hardware route #85, #60 | R4 and replacement recovery |
 | Runtime services, across categories | None | Scheduler, tasks, queues and mailboxes, interrupts, allocator, render and display, storage drivers | #129 names its retained sensor, processing, storage, scheduler and driver services | Contracted retirement of each service |
 
+The unqualified #129 source in `replacement/save` implements the selected save facade, callbacks and phase completion. Its retained ABI converts flags to typed values, and its guest fault controls use the production validator with exact return-register or memory mismatches. Host compilation and typed-value smoke checks passed. Original-versus-owned execution, guest-control outcomes and lifecycle integration remain pending; no timing, device behavior or runtime retirement is qualified.
+
 ### 8.4 Milestone blockers
 
 | #117 milestone | Prevented by | Owner |
@@ -349,7 +351,7 @@ Selected boundaries retain their qualification and retirement gates.
 
 - Evidence: E-RECIPE-MODAL-CONTRACT-150 binds actions `0x5a`, `0x73` and `0x81` to them. The [ownership report](recipe-bank-ui-ownership.md#retained-modal-contract) records the SET gates and the post-transition frame reads. [Recipe design](recipe-design.md) section 17.8 records `FUN_00c72e10`'s special-case classes and generic leaf tail. The bank reaches all three through `menu/recipe_bank_arm.S` trampolines and returns them for unclaimed pages.
 - Value: #128 is planned to own the dispatcher and `FUN_00c77794` and routes the remaining delegates to #127. If #128 qualifies, these three remain the stock actions on the bank's cells, and owning them would complete the bank's entry, SET, confirm and leave lifecycle over an owned dispatcher.
-- Source increment (#133, unqualified): `replacement/owned_menu/src/lifecycle.rs` implements all three source-bound action bodies, including the other modal-75 pages' special classes 5, `0x184`, `0x141`, `0xf5`, `0x167`, `0x26`, `0x19`, `0xed`, `0xee` and node `0x5b`. A final host smoke built and linked the source and emitted 85 original-versus-owned pairs from `//emulation:controller-lifecycle-cases` without execution (E-MODAL75-LIFECYCLE-SOURCE-150). Candidate A remains a retained input to its frame reads.
+- Source increment (#133, unqualified): `replacement/owned_menu/src/lifecycle.rs` implements all three source-bound action bodies, including the other modal-75 pages' special classes 5, `0x184`, `0x141`, `0xf5`, `0x167`, `0x26`, `0x19`, `0xed`, `0xee` and node `0x5b`. The host build and emitter validated 85 original-versus-owned pairs, one real reference and six guest controls through the unchanged case loader, 177 cases without execution (E-MODAL75-LIFECYCLE-SOURCE-150, E-MODAL75-CONTROLS-SOURCE-150). Candidate A remains a retained input to its frame reads.
 - Remaining prerequisites: qualify the original-binary comparisons and refusal controls through #125, then migrate the bank's three stock calls and affected UI cases to the real owned controllers, and qualify an integrated lifecycle with the #128 dispatcher and forbidden original-action execution. The unchanged historical 55 UI cases use synthetic functions at these addresses and do not qualify #133. No global ownership or retirement is established.
 - Risk: global use by modal 75 and the gate cells' unqualified device-input states.
 
