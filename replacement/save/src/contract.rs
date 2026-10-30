@@ -205,17 +205,14 @@ pub enum SaveTaskSlot {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum SaveDispatch {
-    Enabled,
-    Unrecognized(u8),
-}
+#[repr(transparent)]
+pub struct SaveDispatch(u8);
 
 impl SaveDispatch {
+    pub const ENABLED: Self = Self(1);
+
     pub const fn from_byte(byte: u8) -> Self {
-        match byte {
-            1 => Self::Enabled,
-            other => Self::Unrecognized(other),
-        }
+        Self(byte)
     }
 }
 
@@ -274,49 +271,39 @@ impl MetadataPass {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum FrameState {
-    Zero,
-    One,
-    Unrecognized(u32),
-}
+#[repr(transparent)]
+pub struct FrameState(u32);
 
 impl FrameState {
+    pub const ZERO: Self = Self(0);
+    pub const ONE: Self = Self(1);
+
     pub const fn from_word(word: u32) -> Self {
-        match word {
-            0 => Self::Zero,
-            1 => Self::One,
-            other => Self::Unrecognized(other),
-        }
+        Self(word)
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum SubframeCommand {
-    Zero,
-    Unrecognized(u32),
-}
+#[repr(transparent)]
+pub struct SubframeCommand(u32);
 
 impl SubframeCommand {
+    pub const ZERO: Self = Self(0);
+
     pub const fn from_word(word: u32) -> Self {
-        match word {
-            0 => Self::Zero,
-            other => Self::Unrecognized(other),
-        }
+        Self(word)
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ExtentLayout {
-    Two,
-    Unrecognized(u32),
-}
+#[repr(transparent)]
+pub struct ExtentLayout(u32);
 
 impl ExtentLayout {
+    pub const TWO: Self = Self(2);
+
     pub const fn from_word(word: u32) -> Self {
-        match word {
-            2 => Self::Two,
-            other => Self::Unrecognized(other),
-        }
+        Self(word)
     }
 }
 

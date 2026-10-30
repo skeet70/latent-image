@@ -26,7 +26,7 @@ fn override_mode<S: SelectorService>(services: &mut S) -> Override {
 }
 
 fn dispatch_profile_shortcut<S: SelectorService>(services: &mut S) -> bool {
-    if services.save_dispatch() != SaveDispatch::Enabled {
+    if services.save_dispatch() != SaveDispatch::ENABLED {
         return false;
     }
     if services.profile().is_a2() {
@@ -87,7 +87,7 @@ pub fn run<S: SaveServices>(
     }
 
     let bank = kind.bank();
-    let metadata = if kind == SaveKind::Kind0 && services.frame_state() == FrameState::One {
+    let metadata = if kind == SaveKind::Kind0 && services.frame_state() == FrameState::ONE {
         MetadataPass::Selected
     } else {
         MetadataPass::Alternate
@@ -96,16 +96,16 @@ pub fn run<S: SaveServices>(
     services.write_save_mode(bank, kind.save_mode());
     services.clear_descriptor_word(bank);
 
-    if services.subframe_command() == SubframeCommand::Zero {
+    if services.subframe_command() == SubframeCommand::ZERO {
         let preset = services.extent_preset();
         services.set_extent_preset(preset);
     }
 
     let names_extent = match kind {
-        SaveKind::Kind0 => services.extent_layout() == ExtentLayout::Two,
+        SaveKind::Kind0 => services.extent_layout() == ExtentLayout::TWO,
         SaveKind::Kind1 => {
-            services.frame_state() == FrameState::Zero
-                && services.extent_layout() == ExtentLayout::Two
+            services.frame_state() == FrameState::ZERO
+                && services.extent_layout() == ExtentLayout::TWO
         }
         _ => false,
     };
@@ -125,7 +125,7 @@ pub fn run<S: SaveServices>(
 
     if kind != SaveKind::Kind3
         && bank == DescriptorBank::BANK2
-        && services.extent_layout() == ExtentLayout::Two
+        && services.extent_layout() == ExtentLayout::TWO
     {
         services.copy_extent_name(bank);
     }
