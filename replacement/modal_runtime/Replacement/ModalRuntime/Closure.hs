@@ -1183,8 +1183,7 @@ data ScalarProof = ScalarProof
   }
 
 -- | `ReturnConditional` holds only if no continuation of those returns reads
--- the register before writing it; AAPCS callers do not, but no caller is
--- checked.
+-- the register before writing it; no continuation is checked.
 data Verdict = Discharged ScalarProof | ReturnConditional ScalarProof | Open Unproven
 
 verdict :: Either Unproven ScalarProof -> Verdict
@@ -1734,7 +1733,7 @@ buildProof inputs =
         , "declared_objects"
             .= object
               [ "rule"
-                  .= ( "a consumer is discharged when every path from its materialization reads the value only as a TST, TEQ, CMP or CMN operand until it is overwritten. It is return-conditional when some path instead reaches a return with the value in r2, r3 or r12: that holds only if no continuation reads the register first, which AAPCS callers satisfy but the checker does not verify, so it is not a discharge. Any other read, a call, an indirect jump, an unmodeled instruction or leaving the images while the value is live, and every aligned word naming the object, stays open. Consumers that index a base into the extent and constants the census does not trace are not enumerated" ::
+                  .= ( "a consumer is discharged when every path from its materialization reads the value only as a TST, TEQ, CMP or CMN operand until it is overwritten. It is return-conditional when some path instead reaches a return with the value in r2, r3 or r12: it then rests on the unverified premise that no continuation of those returns reads the register before writing it, and is not a discharge. Any other read, a call, an indirect jump, an unmodeled instruction or leaving the images while the value is live, a return with it in any other register, and every aligned word naming the object, stays open. Consumers that index a base into the extent and constants the census does not trace are not enumerated" ::
                         String
                      )
               , "objects" .= [objectValue memory declared (objectConsumers analysis literals declared) | declared <- declaredObjects]
@@ -2024,7 +2023,7 @@ consumerValue consumer =
             [ "status" .= ("return-conditional" :: String)
             , "premise"
                 .= object
-                  [ "kind" .= ("caller-ignores-scratch-register" :: String)
+                  [ "kind" .= ("return-continuation-does-not-read" :: String)
                   , "returns" .= [object ["at" .= hex site, "register" .= regName register] | (site, register) <- S.toList (scalarReturns proof)]
                   ]
             , "proof" .= proofValueOf proof
