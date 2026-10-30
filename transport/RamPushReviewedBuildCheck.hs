@@ -11,6 +11,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.Bits (shiftR, xor)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.Char (isDigit)
 import Data.List (isInfixOf)
 import Numeric (showHex)
 import System.Directory (createDirectory, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, setCurrentDirectory)
@@ -139,6 +140,24 @@ main = do
   substitutedBuild <- try (withPinnedReviewedBuildUsing contract relinker { relinkerToolchain = tools { toolClang = wrapper } } base (pure . pinnedManifest))
   expect "pinned build with a substituted clang" "RAM_PUSH_CLANG is not the compiled toolchain path"
     (case substitutedBuild of Left (failure::SomeException) -> Left (displayException failure); Right _ -> Right "accepted")
+
+  forM_ (relinkerRust relinker) $ \rust -> do
+    changed <- privateDirectory (root </> "changed-rust")
+    archive <- B.readFile (rustBankArchive rust)
+    facts <- B.readFile (rustBankBuildFacts rust)
+    -- Byte 24 is the first archive member's mtime field, which the linker does not read.
+    unless (C.take 8 archive == C.pack "!<arch>\n" && C.length archive > 24 && isDigit (C.index archive 24)) $ do
+      putStrLn "the bank's Rust archive has no ar member header"
+      exitFailure
+    let changedArchive = changed </> "bank.a"
+        changedFacts = changed </> "build-facts.txt"
+    writePrivateBytes changedArchive (B.take 24 archive <> C.singleton (if C.index archive 24 == '0' then '1' else '0') <> B.drop 25 archive)
+    writePrivateBytes changedFacts (facts <> C.pack "changed\n")
+    forM_ [ ("pinned build with one Rust archive byte changed", rust { rustBankArchive = changedArchive })
+          , ("pinned build with changed Rust build facts", rust { rustBankBuildFacts = changedFacts }) ] $ \(caseLabel, inputs) -> do
+      outcome <- try (withPinnedReviewedBuildUsing contract relinker { relinkerRust = Just inputs } base (pure . pinnedManifest))
+      expect caseLabel "manifest source identity differs from the compiled reviewed contract"
+        (case outcome of Left (failure::SomeException) -> Left (displayException failure); Right _ -> Right "accepted")
 
   allocDir <- privateDirectory (root </> "alloc")
   allocPath <- writeAllocStateFile allocDir

@@ -117,6 +117,19 @@ main = do
         (subjects (verdictFindings record) == [PinSubject (PinIdentity "menu/ram_push_installer.c"), PinSubject (PinIdentity "build-usb-toggle-ram"), PinSubject (PinIdentity "usb_toggle_stub"), ContractSubject])
       expect "USB toggle generates its camera contract binding"
         ("module RamPushToggleReviewedPins (reviewedToggleContract) where" `isInfixOf` pinsModuleSource record)
+  let rustArchive = pin "rust_object_replacement_bank" "rust-bank-archive" "bank-content" unreviewed
+      rustFacts = pin "rust_toolchain_replacement_bank" "rust-bank-build-facts" "mechanism" unreviewed
+  expect "the Rust archive source rejects substituted identities"
+    (isLeft (parsed (document [] [] [pin "rust_toolchain_replacement_bank" "rust-bank-archive" "bank-content" unreviewed] unreviewed)))
+  expect "the Rust build facts source rejects substituted identities"
+    (isLeft (parsed (document [] [] [pin "rust_object_replacement_bank" "rust-bank-build-facts" "mechanism" unreviewed] unreviewed)))
+  case parsed (document [] [] [installerPin unreviewed, rustArchive, rustFacts] unreviewed) of
+    Left reason -> expect ("the bank record with Rust artifact pins parses: " ++ reason) False
+    Right record -> do
+      expect "Rust artifact pins round trip"
+        (parsed (renderReviewRecord record) == Right record)
+      expect "Rust artifact pins remain unreviewed"
+        (subjects (verdictFindings record) == [PinSubject (PinIdentity "menu/ram_push_installer.c"), PinSubject (PinIdentity "rust_object_replacement_bank"), PinSubject (PinIdentity "rust_toolchain_replacement_bank"), ContractSubject])
   case parsed approvedRecord of
     Left reason -> expect ("the approved fixture parses: " ++ reason) False
     Right record -> do
