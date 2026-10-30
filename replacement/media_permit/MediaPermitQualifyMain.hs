@@ -847,6 +847,7 @@ runSide runner root inputs scenario side =
                               _ -> Nothing
                        in pure (Result (if null problems then ResultPassed else ResultFailed) problems (Just observation) effects)
 
+-- The control traps at the poisoned word after the stock entry veneer.
 runForbiddenBody :: FilePath -> FilePath -> Inputs -> Scenario -> IO Result
 runForbiddenBody runner root inputs scenario =
   case regionBytes inputs Candidate control of
@@ -921,6 +922,7 @@ faultWitness scenario result =
       (Just observation, Just effects) ->
         N.nativeStatus observation == N.Returned
           && null (checkAbi observation)
+          && null (checkWrites observation)
           && effects == expectedDefect scenario
       _ -> False
 
