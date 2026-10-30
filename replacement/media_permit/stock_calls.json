@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "stock_calls": [
+    {"address": "0x00e88e1c", "name": "mirror message reader", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e88e1c.c"},
+    {"address": "0x00e75490", "name": "frame kind", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e75490.c"},
+    {"address": "0x00eb0ea0", "name": "event bit set", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00eb0ea0.c"},
+    {"address": "0x00e87ad4", "name": "frame slot context", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e87ad4.c"},
+    {"address": "0x00e74c68", "name": "subframe count", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e74c68.c"},
+    {"address": "0x00e748c8", "name": "subframe slot", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e748c8.c"},
+    {"address": "0x00e886ec", "name": "subframe map", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e886ec.c"},
+    {"address": "0x00e87114", "name": "frame count by kind", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e87114.c"},
+    {"address": "0x00e88804", "name": "frame slot by kind", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e88804.c"},
+    {"address": "0x00e8d82c", "name": "frame command", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e8d82c.c"},
+    {"address": "0x00e6e368", "name": "frame cancel signal", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e6e368.c"},
+    {"address": "0x00e881e8", "name": "unresolved key recorder", "source": "replacement/media_permit/rb_media_permit_stock.S; private-data/analysis/x-m1-1.50/af/functions/00e77168.c"}
+  ],
+  "stock_stores": [
+    {"address": "0x015ad53c", "bytes": 4, "name": "active frame slot", "source": "replacement/media_permit/src/stock.rs; 00e7e95c.c"},
+    {"address": "0x01581f60", "bytes": 4, "name": "first aggregate minimum", "source": "replacement/media_permit/src/stock.rs; 00e7e95c.c"},
+    {"address": "0x01581f64", "bytes": 4, "name": "second aggregate minimum", "source": "replacement/media_permit/src/stock.rs; 00e7e95c.c"},
+    {"address": "0x01581f68", "bytes": 4, "name": "third aggregate minimum", "source": "replacement/media_permit/src/stock.rs; 00e7e95c.c"}
+  ],
+  "unproven": [
+    {"access": "store", "function": "rb_media_permit_apply", "reason": "stores zero at +0x27c8 and the permit word at +0x2fb0 of 0xe87ad4(s) = word[0x0157dd3c] + s * 0x326c for SlotIndex s 0..200; in an A32 scan of images 4, 5 and 6 (immediate branches, literal words, movw/movt and straight-line constant propagation, not Thumb or loaded-pointer addressing) the only store to 0x0157dd3c is 0xe86ea0, the +8 word of a 0xe8a338 descriptor with base 0x04988600, 0x1f9dbb60, 0x44988600, 0x49c4f480 or 0x5f9fb7e0 and frame count 1, 0x57 or 0x60; machine 0 first writes it through 0xe880dc at class 0 state 0, its only exit from the reset state; the count is read only by 0xe86e7c and 0xe6e288, slots come from 0xe88d88 (lowest free of 0..200) and the 0xe77168 key scan checks no liveness, so s below the active count is unproven", "through": {"result": "0x00e87ad4"}}
+  ]
+}

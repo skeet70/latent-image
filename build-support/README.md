@@ -61,6 +61,21 @@ The X-M1 viewer's locked `xm1-native.nix` build runs Rust unit checks before ins
 
 The pinned Cargo check hook derives `RUST_TEST_THREADS` from `NIX_BUILD_CORES`. Both packages set `dontUseCargoParallelTests`, which makes that hook use one test thread.
 
+### Prebuilt FujiMod repository overrides
+
+Bazel 7 bzlmod requires canonical repository names for these `--override_repository` flags: `_main~lab_dependencies~lab_fujimod` and `_main~lab_dependencies~lab_fujimod_xm1`. The apparent names `lab_fujimod` and `lab_fujimod_xm1` leave the generated Nix repositories active and can trigger an unintended SDK build. Each override directory must expose the corresponding Bazel repository, not only an SDK store output.
+
+```sh
+devenv shell -- bazel --batch --output_base="$HOME/.cache/bazel/latent-image-$AGENT" \
+  build --jobs=2 \
+  --override_repository=_main~lab_dependencies~lab_fujimod="$MODEL_REPOSITORY" \
+  --override_repository=_main~lab_dependencies~lab_fujimod_xm1="$SDK_REPOSITORY" \
+  //emulation:first-stage-witness //emulation:fujimod-flash-boot-check
+```
+
+Before executing either launcher, check that generated `bazel-bin/emulation/FujiModPaths.hs` names the intended immutable SDK for its driver, bridges and run document. Bind the launcher, SDK binaries, run document and firmware inputs to the retained run provenance. The [startup replay commands](../emulation/README.md#owned-first-stage-witness) name the reviewed public repository adapters. A compiled launcher binding does not qualify its runtime scenarios.
+
+
 ## Extending the graph
 
 Add dependencies through pinned module/Nix inputs and explicit target declarations. Update `.bazelversion` and the devenv Bazel package together; regenerate the module lock, format with buildifier, and validate all targets. Record both lockfile hashes and effective build flags with experiment artifacts. Host checks do not verify firmware architecture, target ABI, or camera behavior.

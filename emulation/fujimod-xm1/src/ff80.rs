@@ -223,6 +223,18 @@ impl Ff80 {
         save.endpoints.ok_or_else(|| "USB endpoints are not connected".into())
     }
 
+    pub fn begin_capture_observation(&mut self) -> Result<(), String> {
+        if self.rendezvous_complete || self.rendezvous.last().is_some_and(|event| event.released_instructions.is_none()) {
+            return Err("capture observation cannot replace an active rendezvous trace".into());
+        }
+        if self.hits_seen != self.machine.traces.hits.len() {
+            return Err("capture observation requires consumed rendezvous trace hits".into());
+        }
+        self.machine.traces.begin_capture_observation()?;
+        self.hits_seen = 0;
+        Ok(())
+    }
+
     /// Applies the rendezvous protocol to entries recorded since the last call.
     fn observe(&mut self) -> Result<(), String> {
         while self.hits_seen < self.machine.traces.hits.len() {

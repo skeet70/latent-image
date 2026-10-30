@@ -152,6 +152,25 @@ fn completed_load_and_its_next_unconsumed_point_share_an_entered_count() {
     assert!(machine.failure.is_none());
 }
 
+#[derive(Deserialize)]
+struct CaptureTotals { total: u64 }
+
+#[test]
+fn rejected_site_removal_preserves_active_capture_observations() {
+    let mut machine = machine(&[0xe2800001, 0xeafffffd]);
+    machine.traces.arm(&machine.session, BTreeMap::from([(0x1000, "loop".into())])).unwrap();
+    machine.traces.begin_capture_observation().unwrap();
+    assert!(machine.traces.remove_site(&machine.session, Guest(0x1000)).is_err());
+    machine.run(3);
+    machine.require_running().unwrap();
+    let page = machine.traces.capture_observation_page(0).unwrap();
+    let totals: CaptureTotals = serde_json::from_value(serde_json::to_value(page).unwrap()).unwrap();
+    assert_eq!(totals.total, 2);
+    assert_eq!(machine.instructions(), 3);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 2);
+    assert!(machine.traces.capture_observation_active());
+}
+
 #[derive(Deserialize, PartialEq, Eq, Debug)]
 #[serde(rename_all = "kebab-case")]
 enum Control { HeldSentinel, DelayedRelease }

@@ -1,0 +1,222 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+_MODULE_SRCS = [
+    "src/abi.rs",
+    "src/contract.rs",
+    "src/facade.rs",
+    "src/lib.rs",
+    "src/ports.rs",
+]
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "module",
+    srcs = _MODULE_SRCS,
+    visibility = [
+        "//replacement/bank:__pkg__",
+        "//menu:__pkg__",
+    ],
+)
+
+filegroup(
+    name = "relink-sources",
+    srcs = _MODULE_SRCS + [
+        "save_abi.h",
+        "save_stock.S",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//menu:__pkg__",
+        "//replacement/bank:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
+xm1_rust_staticlib(
+    name = "save-rust-qualify",
+    testonly = True,
+    src = "src/qualify.rs",
+    crate_name = "xm1_save",
+    data = [
+        "src/abi.rs",
+        "src/contract.rs",
+        "src/facade.rs",
+        "src/lib.rs",
+        "src/ports.rs",
+    ],
+    rustc_flags = ["--cfg", "xm1_freestanding"],
+)
+
+xm1_rust_staticlib(
+    name = "save-rust-faulty",
+    testonly = True,
+    src = "src/qualify.rs",
+    crate_name = "xm1_save",
+    data = [
+        "src/abi.rs",
+        "src/contract.rs",
+        "src/facade.rs",
+        "src/lib.rs",
+        "src/ports.rs",
+    ],
+    rustc_flags = [
+        "--cfg",
+        "xm1_freestanding",
+        "--cfg",
+        "xm1_save_faulty",
+    ],
+)
+
+xm1_rust_staticlib(
+    name = "model-rust",
+    testonly = True,
+    src = "model/model.rs",
+    crate_name = "xm1_save_model",
+    rustc_flags = ["--cfg", "xm1_freestanding"],
+)
+
+xm1_rust_staticlib(
+    name = "model-rust-faulty",
+    testonly = True,
+    src = "model/model.rs",
+    crate_name = "xm1_save_model",
+    rustc_flags = [
+        "--cfg",
+        "xm1_freestanding",
+        "--cfg",
+        "xm1_storage_model_faulty",
+    ],
+)
+
+xm1_rust_elf(
+    name = "save-owned",
+    testonly = True,
+    asm_srcs = [
+        "save_entry.S",
+        "save_stock.S",
+    ],
+    entry = "xm1_save_probe",
+    extra_ldflags = ["-Wl,--gc-sections"],
+    link_script = "save.ld",
+    rust_staticlib = ":save-rust-qualify",
+)
+
+xm1_rust_elf(
+    name = "save-faulty",
+    testonly = True,
+    asm_srcs = [
+        "save_entry.S",
+        "save_stock.S",
+    ],
+    entry = "xm1_save_probe",
+    extra_ldflags = ["-Wl,--gc-sections"],
+    link_script = "save.ld",
+    rust_staticlib = ":save-rust-faulty",
+)
+
+xm1_rust_elf(
+    name = "save-model-storage",
+    testonly = True,
+    entry = "svc_5600",
+    extra_ldflags = ["-Wl,--gc-sections"],
+    link_script = "model/storage.ld",
+    rust_staticlib = ":model-rust",
+)
+
+xm1_rust_elf(
+    name = "save-model-storage-faulty",
+    testonly = True,
+    entry = "svc_5600",
+    extra_ldflags = ["-Wl,--gc-sections"],
+    link_script = "model/storage.ld",
+    rust_staticlib = ":model-rust-faulty",
+)
+
+xm1_rust_elf(
+    name = "save-model-wait",
+    testonly = True,
+    entry = "svc_wait",
+    extra_ldflags = ["-Wl,--gc-sections"],
+    link_script = "model/wait.ld",
+    rust_staticlib = ":model-rust",
+)
+
+xm1_rust_elf(
+    name = "save-model-stage",
+    testonly = True,
+    entry = "svc_stage",
+    extra_ldflags = ["-Wl,--gc-sections"],
+    link_script = "model/stage.ld",
+    rust_staticlib = ":model-rust",
+)
+
+haskell_library(
+    name = "qualify-lib",
+    srcs = [
+        "Replacement/Save/Domain.hs",
+        "Replacement/Save/Qualify.hs",
+    ],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "save-qualify",
+    srcs = ["SaveQualifyMain.hs"],
+    args = [
+        "$(location contracts/save-facade-150.json)",
+        "$(location :save-owned.bin)",
+        "$(location :save-faulty.bin)",
+        "$(location :save-model-storage.bin)",
+        "$(location :save-model-storage-faulty.bin)",
+        "$(location :save-model-wait.bin)",
+        "$(location :save-model-stage.bin)",
+        "$(location //emulation:native-runner)",
+    ],
+    data = [
+        "contracts/save-facade-150.json",
+        ":save-faulty.bin",
+        ":save-model-stage.bin",
+        ":save-model-storage-faulty.bin",
+        ":save-model-storage.bin",
+        ":save-model-wait.bin",
+        ":save-owned.bin",
+        "//emulation:native-runner",
+    ],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-threaded",
+        "-rtsopts",
+    ],
+    deps = [
+        ":qualify-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
