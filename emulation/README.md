@@ -795,7 +795,7 @@ Observed 2026-10-24 (emulated, E-FUJIMOD-XM1-FLASH-BOOT-150): stock 1.50 shows S
 
 `//emulation:first-stage-witness` starts from the captured ROM reset with the packaged DAT. It arms five core-0 instruction stops before execution and reads twelve memory extents at the owned handoff vector. Its 20,000,000-instruction budget is separate from the cold-menu route. It does not import a stock-initialization checkpoint or force an execution frame.
 
-Build `//replacement/first_stage:first-stage-image`, `//replacement/first_stage:first-stage-fault-image`, `//host/firmware:build-first-stage`, `//emulation:first-stage-witness`, `//emulation:fujimod-flash-boot-check`, `//emulation:emulator-slot` and `//lz:fflzd` through the pinned build. For a prebuilt SDK override under Bazel 7 bzlmod, use canonical repository names `_main~lab_dependencies~lab_fujimod` and `_main~lab_dependencies~lab_fujimod_xm1`; the apparent `lab_fujimod` and `lab_fujimod_xm1` override names leave the generated SDK repository active. The generated `bazel-bin/emulation/FujiModPaths.hs` must name the intended immutable SDK before any run.
+Build the targets below through the pinned build and the [prebuilt repository override contract](../build-support/README.md#prebuilt-fujimod-repository-overrides). The generated `bazel-bin/emulation/FujiModPaths.hs` must name the intended immutable SDK before any run. The existing handoff, controls and cold-menu evidence qualifies the reviewed private YIELD-corrected runtime only; replay on the public pin remains pending.
 
 ```sh
 devenv shell -- bazel --batch build --jobs=2 \
