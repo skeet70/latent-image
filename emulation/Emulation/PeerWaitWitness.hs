@@ -11,6 +11,7 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import Data.Bits ((.&.))
 import Data.List (sort)
+import qualified Data.List.NonEmpty as NE
 import Data.Word (Word32, Word64, Word8)
 import Emulation.FirstStageWitness (encodeLeWord)
 import Emulation.PeerStageWitness (Argument (..), Core (..), Cpsr (..), GuestAddress (..), Instructions (..), PeerState (..), Registers (..), SavedFrame (..), WitnessResult (..))
@@ -306,7 +307,8 @@ validateControlReceipt selected expected receipt = do
   require (cell0 (state gate) == 0x22b && cell1 (state gate) `elem` [0,0x22b] && completion (state gate) == 0 && target (state gate) == GuestAddress 0 && argument (state gate) == Argument 0) "gate state differs"
   forM_ waits $ \stop -> require (quiet 0x22b (state stop) && r1 (registers stop) == 0x40020000 && r2 (registers stop) == 0x22b && r3 (registers stop) == 0x22b) "loaded wait evidence differs"
   validateWatch receipt
-  validateAttempts selected expected entry tailStop gate waits receipt
+  loadedWaits <- maybe (Left "control held loads missing") Right (NE.nonEmpty waits)
+  validateAttempts selected expected entry tailStop gate loadedWaits receipt
   case selected of
     HeldSentinel -> do
       require (clearReadback receipt == Nothing) "held control has clear readback"
@@ -374,9 +376,10 @@ validateCursor rows time (WatchCursor offset) = do
   require (all (\row -> case row of W.CpuRecord {} -> W.cpuInstructions row <= time; _ -> True) (take offset rows)) "cursor includes future CPU attempt"
   require (all (\row -> case row of W.CpuRecord {} -> W.cpuInstructions row > time; _ -> True) (drop offset rows)) "cursor omits earlier CPU attempt"
 
-validateAttempts :: PeerControl -> Argument -> ControlStop -> ControlStop -> ControlStop -> [ControlStop] -> ControlReceipt -> Either String ()
-validateAttempts selected (Argument expected) entry tailStop gate waits receipt = do
-  let rows = W.watchRecords (memoryWatch receipt)
+validateAttempts :: PeerControl -> Argument -> ControlStop -> ControlStop -> ControlStop -> NE.NonEmpty ControlStop -> ControlReceipt -> Either String ()
+validateAttempts selected (Argument expected) entry tailStop gate loadedWaits@(firstWait NE.:| _) receipt = do
+  let waits = NE.toList loadedWaits
+      rows = W.watchRecords (memoryWatch receipt)
       indexed = zip [0..] rows
       writers = [(index,row) | (index,row@W.CpuRecord {W.cpuAccess = W.CpuWrite}) <- indexed]
       specifications = [(W.Core0,0x1e64,0x20000,0x22b),(W.Core0,0x1e68,0x20004,0x22b),(W.Core1,0x11818,0x14c80,0),(W.Core1,0x11818,0x14c84,0),(W.Core0,0x1fec,0xa00c4,0),(W.Core1,0x11f4c,0x20004,0)]
@@ -398,7 +401,7 @@ validateAttempts selected (Argument expected) entry tailStop gate waits receipt 
   require (W.cpuInstructions sentinel0 < W.cpuInstructions sentinel1 && W.cpuInstructions sentinel1 < count entry && W.cpuInstructions completionWrite < count gate && count tailStop < W.cpuInstructions peerClear) "sentinel/release/peer-clear order differs"
   forM_ [row | (_,row) <- writers, W.cpuPc row == W.watchAddress 0x11818] $ \row ->
     require (count entry < W.cpuInstructions row && W.cpuInstructions row < count tailStop) "publication initialization outside peer entry/tail interval"
-  require (sentinelIndex < peerIndex && peerIndex < cursorWord (cursor (head waits))) "peer clear not observed before held loads"
+  require (sentinelIndex < peerIndex && peerIndex < cursorWord (cursor firstWait)) "peer clear not observed before held loads"
   forM_ (drop sentinelIndex rows) $ \row -> case row of
     W.TransferRecord {W.transferAccess = W.ModelBusWrite} -> Left "unexplained model-bus write after sentinel stage"
     _ -> pure ()
