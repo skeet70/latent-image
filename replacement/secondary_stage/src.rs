@@ -199,8 +199,10 @@ unsafe fn companion_power() {
 unsafe fn companion_startup(core: Core) {
     log_init();
     log_event(LogEvent::StartupBegin, core);
-    let descriptor = read_volatile(COMPANION_DESCRIPTOR);
-    write_volatile(COMPANION_SAMPLE, xm1_retained_companion_transfer(&descriptor, COMPANION_READ_REGISTER_60));
+    write_volatile(
+        COMPANION_SAMPLE,
+        xm1_retained_companion_transfer(CompanionDescriptor::Startup, COMPANION_READ_REGISTER_60),
+    );
     xm1_retained_config_record();
     xm1_retained_conversion(CONVERSION);
     let flags = xm1_retained_companion_flags(read_volatile(COMPANION_SAMPLE), CONVERSION);

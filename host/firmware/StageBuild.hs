@@ -29,7 +29,6 @@ data StageContract = StageContract
   , contractDeclarations :: [Symbol] -> Either String StageDeclarations
   }
 
--- | Owned-image symbol roles the builder requires inside the candidate image.
 data OwnedSymbol
   = OwnedEntry
   | OwnedMain

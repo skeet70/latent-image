@@ -25,7 +25,6 @@ pub(crate) const LOG_DISABLED: u32 = 0x3333_3333;
 pub(crate) const LOG_END: u32 = 0x5354_4544;
 pub(crate) const TIMER_COUNTER: *const u32 = 0xfff9_1000 as *const u32;
 
-pub(crate) const COMPANION_DESCRIPTOR: *const CompanionDescriptor = 0x0001_46a8 as *const CompanionDescriptor;
 pub(crate) const COMPANION_SAMPLE: *mut CompanionSample = 0x400a_00c0 as *mut CompanionSample;
 pub(crate) const CONFIG_VALID: *const u32 = 0x400a_00cc as *const u32;
 pub(crate) const CONFIG_RECORD: *const u8 = 0x400a_00d0 as *const u8;
@@ -109,10 +108,13 @@ pub(crate) unsafe fn load_guest_word(address: GuestAddress) -> u32 {
     value
 }
 
-/// Nine-word companion transfer descriptor; `0x12ad0` reads it only during the call.
-#[repr(transparent)]
+/// Retained descriptor addresses `0x12ad0` reads fields from. Stock passes a
+/// stack copy; passing the address relies on its words being unchanged during the call.
+#[repr(u32)]
 #[derive(Clone, Copy)]
-pub(crate) struct CompanionDescriptor(pub(crate) [u32; 9]);
+pub(crate) enum CompanionDescriptor {
+    Startup = 0x0001_46a8,
+}
 
 #[repr(transparent)]
 #[derive(Clone, Copy)]
@@ -205,7 +207,7 @@ extern "C" {
     pub(crate) fn xm1_retained_peripheral_init();
     /// `0x12ad0`.
     pub(crate) fn xm1_retained_companion_transfer(
-        descriptor: &CompanionDescriptor,
+        descriptor: CompanionDescriptor,
         command: CompanionCommand,
     ) -> CompanionSample;
     /// `0x13244`: reads and checks the 16-byte record at `0x400a00d0`, setting `0x400a00cc`.
