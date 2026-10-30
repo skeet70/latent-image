@@ -134,6 +134,26 @@ fixtures =
       ]
       (ObligationAt "computed-index-store" 0x00250010)
   , Fixture
+      "an array pointer in sp is passed to a helper that stores through sp"
+      0x00260000
+      [ 0xe307d588 -- movw sp, #0x7588
+      , 0xe340d146 -- movt sp, #0x0146
+      , 0xeb000001 -- bl +0x14
+      , 0xe3a0d000 -- mov sp, #0
+      , 0xe12fff1e -- bx lr
+      , 0xe1cd00b0 -- +0x14: strh r0, [sp]
+      , 0xe12fff1e -- bx lr
+      ]
+      (ObligationAt "pointer-escape" 0x00260008)
+  , Fixture
+      "an array pointer in lr is a transfer target, not a return"
+      0x00270000
+      [ 0xe307e588 -- movw lr, #0x7588
+      , 0xe340e146 -- movt lr, #0x0146
+      , 0xe12fff1e -- bx lr
+      ]
+      (ObligationAt "pointer-escape" 0x00270008)
+  , Fixture
       "a compare-only bound that reaches a return in r3 is only return-conditional"
       0x00140000
       (bound [0xe3a03000, 0xe12fff1e]) -- mov r3, #0; bx lr

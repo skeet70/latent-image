@@ -642,9 +642,9 @@ useDef address word
 type LiveMemo = M.Map (Word32, Int) (S.Set Int)
 
 inputRegisters :: S.Set Int
-inputRegisters = S.fromList [0 .. 12]
+inputRegisters = S.fromList [0 .. 14]
 
--- | Registers r0-r12 a callee may read before writing them.
+-- | Registers r0-r14 the function at `entry` may read before writing them.
 liveIn :: Analysis -> LiveMemo -> Word32 -> Int -> (S.Set Int, LiveMemo)
 liveIn analysis memo entry depth
   | Just cached <- M.lookup (entry, depth) memo = (cached, memo)
@@ -667,7 +667,7 @@ liveIn analysis memo entry depth
               Nothing -> explore rest seen' steps' (result `S.union` open) m
               Just (word, (sources, writes, kind)) ->
                 let always = bitsOf 31 28 word == 14
-                    read' = result `S.union` (S.fromList (filter (< 13) sources) `S.difference` written)
+                    read' = result `S.union` (S.fromList (filter (< 15) sources) `S.difference` written)
                  in case (kind, switchTargets analysis address word) of
                       (UseProgramCounter, Just targets) ->
                         walk (address + 4) written ([(target, written) | target <- targets] ++ rest) seen' steps' read' m
@@ -676,18 +676,20 @@ liveIn analysis memo entry depth
                               UseCall target -> liveIn analysis m target (depth - 1)
                               _ -> (S.empty, m)
                             extra = case kind of
-                              UseCall _ -> calleeLive `S.difference` written
-                              UseCallIndirect -> open
+                              UseCall _ -> calleeLive `S.difference` S.insert 14 written
+                              UseCallIndirect -> S.delete 14 open
                               UseIndirect -> open
                               UseSupervisor -> open
                               UseProgramCounter -> open
                               _ -> S.empty
                             result' = read' `S.union` extra
                             written' = case kind of
+                              UseCall _ | always -> S.insert 14 written
+                              UseCallIndirect | always -> S.insert 14 written
                               UseCall _ -> written
                               UseCallIndirect -> written
                               UseSupervisor -> written
-                              _ | always -> written `S.union` S.fromList (filter (< 13) writes)
+                              _ | always -> written `S.union` S.fromList (filter (< 15) writes)
                                 | otherwise -> written
                             pushed = case kind of
                               UseJump target -> [(target, written')]
@@ -1001,10 +1003,22 @@ forward analysis tracking site = drive [(site, initial, True)] (Walk S.empty M.e
               , accessSize access >= 4
               , any (pointer tracking) (accessValues access)
               ]
+            -- BL and BLX write lr before the callee runs; SVC does not.
+            linked = case instruction of
+              Branch _ True _ -> True
+              BranchExchange _ True _ -> True
+              Rejected ThumbBranch -> True
+              _ -> False
+            throughLr = case instruction of
+              BranchExchange _ False rm -> rm == lr
+              DataProcessing _ MOV _ _ _ (ShiftedImmediate rm LSL 0) -> rm == lr
+              _ -> False
             flowEscapes = case effectFlow effect of
-              Call target -> [EscapeArgument address target n | n <- [0 .. 12], pointer tracking (regAt regs (Reg n))]
-              Return -> [EscapeReturned address n | n <- [0 .. 12], pointer tracking (regAt regs (Reg n))]
-              JumpIndirect -> [EscapeIndirect address | any (pointer tracking) (take 13 (regValues after))]
+              Call target -> [EscapeArgument address target n | n <- [0 .. 14], not (linked && n == 14), pointer tracking (regAt regs (Reg n))]
+              Return ->
+                [EscapeIndirect address | throughLr, pointer tracking (regAt regs lr)]
+                  ++ [EscapeReturned address n | n <- [0 .. 14], not (throughLr && n == 14), pointer tracking (regAt regs (Reg n))]
+              JumpIndirect -> [EscapeIndirect address | any (pointer tracking) (take 15 (regValues after))]
               _ -> []
             unmodeled = not (effectModeled effect) && any (pointer tracking) (regValues regs)
             (next, jumps) = case effectFlow effect of
@@ -1710,6 +1724,7 @@ buildProof inputs =
               , "state_writes" .= length [() | w <- writes, arrayWriteKind w == StateArray]
               , "event_writes" .= length [() | w <- writes, arrayWriteKind w == EventArray]
               , "writer_sites" .= S.size (S.fromList (map arrayWriteSite writes))
+              , "writer_site_addresses" .= map hex (S.toList (S.fromList (map arrayWriteSite writes)))
               ]
         , "controllers" .= map controllerValue closures
         , "admitted_targets"
