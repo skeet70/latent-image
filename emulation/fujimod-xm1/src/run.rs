@@ -134,7 +134,7 @@ impl RunDocument {
 /// 1.50-compatible; its identity is not compared with a catalog entry.
 pub struct ValidatedUpdate(pub Vec<u8>);
 
-fn graph(document: &RunDocument) -> Result<(ResolvedConfiguration, factory::Graph), String> {
+pub(crate) fn graph(document: &RunDocument) -> Result<(ResolvedConfiguration, factory::Graph), String> {
     let resolved = ResolvedConfiguration::with_overlays(&document.catalog_configuration.0, &[])?;
     let graph = fujimod_emulator::boot::graph::assemble_with_starts(
         &resolved.reference,

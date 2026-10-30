@@ -8,6 +8,7 @@ pub mod handoff;
 pub mod machine;
 pub mod nand_image;
 pub mod native_case;
+pub mod peer_witness;
 pub mod provenance;
 pub mod r4f;
 pub mod render;
