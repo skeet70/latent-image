@@ -154,6 +154,16 @@ fixtures =
       ]
       (ObligationAt "pointer-escape" 0x00270008)
   , Fixture
+      "an array pointer in lr used as a blx target escapes though lr is then overwritten"
+      0x00280000
+      [ 0xe307e588 -- movw lr, #0x7588
+      , 0xe340e146 -- movt lr, #0x0146
+      , 0xe12fff3e -- blx lr
+      , 0xe3a0e000 -- mov lr, #0
+      , 0xe12fff1e -- bx lr
+      ]
+      (ObligationAt "pointer-escape" 0x00280008)
+  , Fixture
       "a compare-only bound that reaches a return in r3 is only return-conditional"
       0x00140000
       (bound [0xe3a03000, 0xe12fff1e]) -- mov r3, #0; bx lr

@@ -868,6 +868,7 @@ data Escape
   | EscapeStored Word32
   | EscapeReturned Word32 Int
   | EscapeIndirect Word32
+  | EscapeCallTarget Word32
   deriving (Eq, Ord)
 
 data Limit = StepLimit Word32 | WorldLimit Word32 | Unmodeled Word32 | LeavesMemory Word32 | PartialConstant Word32
@@ -1003,7 +1004,7 @@ forward analysis tracking site = drive [(site, initial, True)] (Walk S.empty M.e
               , accessSize access >= 4
               , any (pointer tracking) (accessValues access)
               ]
-            -- BL and BLX write lr before the callee runs; SVC does not.
+            -- Only linked branches discard the incoming lr before the callee runs.
             linked = case instruction of
               Branch _ True _ -> True
               BranchExchange _ True _ -> True
@@ -1014,7 +1015,9 @@ forward analysis tracking site = drive [(site, initial, True)] (Walk S.empty M.e
               DataProcessing _ MOV _ _ _ (ShiftedImmediate rm LSL 0) -> rm == lr
               _ -> False
             flowEscapes = case effectFlow effect of
-              Call target -> [EscapeArgument address target n | n <- [0 .. 14], not (linked && n == 14), pointer tracking (regAt regs (Reg n))]
+              Call target ->
+                [EscapeCallTarget address | BranchExchange _ True rm <- [instruction], pointer tracking (regAt regs rm)]
+                  ++ [EscapeArgument address target n | n <- [0 .. 14], not (linked && n == 14), pointer tracking (regAt regs (Reg n))]
               Return ->
                 [EscapeIndirect address | throughLr, pointer tracking (regAt regs lr)]
                   ++ [EscapeReturned address n | n <- [0 .. 14], not (throughLr && n == 14), pointer tracking (regAt regs (Reg n))]
@@ -1079,6 +1082,7 @@ escapeSite escape = case escape of
   EscapeStored site -> site
   EscapeReturned site _ -> site
   EscapeIndirect site -> site
+  EscapeCallTarget site -> site
 
 -- * Obligations and refusals
 
@@ -1135,6 +1139,7 @@ escapeObligations analysis = go M.empty
     EscapeStored site -> PointerEscape site "stored to memory" : go memo rest
     EscapeReturned site n -> PointerEscape site ("live in r" ++ show n ++ " at a return") : go memo rest
     EscapeIndirect site -> PointerEscape site "live across an indirect jump" : go memo rest
+    EscapeCallTarget site -> PointerEscape site "target of a register call" : go memo rest
 
 -- * Declared objects and scalar consumers
 
