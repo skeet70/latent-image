@@ -795,7 +795,7 @@ Observed 2026-10-24 (emulated, E-FUJIMOD-XM1-FLASH-BOOT-150): stock 1.50 shows S
 
 `//emulation:first-stage-witness` starts from the captured ROM reset with the packaged DAT. It arms five core-0 instruction stops before execution and reads twelve memory extents at the owned handoff vector. Its 20,000,000-instruction budget is separate from the cold-menu route. It does not import a stock-initialization checkpoint or force an execution frame.
 
-Build the targets below through the pinned build and the [prebuilt repository override contract](../build-support/README.md#prebuilt-fujimod-repository-overrides). The generated `bazel-bin/emulation/FujiModPaths.hs` must name the intended immutable SDK before any run. The existing handoff, controls and cold-menu evidence qualifies the reviewed private YIELD-corrected runtime only; replay on the public pin remains pending.
+Build the targets below through the pinned build and the [prebuilt repository override contract](../build-support/README.md#prebuilt-fujimod-repository-overrides). The generated `bazel-bin/emulation/FujiModPaths.hs` must name the intended immutable SDK before any run. E-FIRST-STAGE-PUBLIC-HANDOFF-150 records the correct candidate's five-stop, twelve-read witness passing on public FujiMod `3d90035d` with the unchanged source-derived contract. Faulty-handoff, mismatched-image and cold-menu replay remain pending on that public runtime; their existing evidence is limited to the reviewed private YIELD-corrected runtime.
 
 ```sh
 devenv shell -- bazel --batch build --jobs=2 \
