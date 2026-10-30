@@ -10,11 +10,9 @@ module Emulation.WatchObservation
   , overlapsWatchRange
   , WatchBytes
   , watchBytesValue
-  , Instructions
+  , Instructions (..)
   , instructionCount
-  , instructionsValue
-  , Tick
-  , tickValue
+  , Tick (..)
   , Sectors
   , sectorsValue
   , Commands
@@ -34,8 +32,12 @@ module Emulation.WatchObservation
   , noProtectedWrites
   , RunPurpose (..)
   , WatchJudgement (..)
-  , WatchRecord
-  , WatchObservation
+  , CoreId (..)
+  , ByteOrder (..)
+  , CpuAccess (..)
+  , TransferAccess (..)
+  , WatchRecord (..)
+  , WatchObservation (..)
   , WatchAck
   , parseWatchAck
   , parseWatchObservation
@@ -121,6 +123,7 @@ data CpuAccess = CpuWrite | CpuRead | CpuFetch deriving (Eq, Show)
 
 data TransferAccess = HostRead | HostWrite | ModelBusRead | ModelBusWrite deriving (Eq, Show)
 
+-- CPU records describe attempts, not committed readback.
 data WatchRecord
   = CpuRecord
       { cpuAccess :: CpuAccess
