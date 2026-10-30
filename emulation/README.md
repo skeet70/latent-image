@@ -83,6 +83,8 @@ All schema-2 instruction counts are aggregate **entered** counts, including atte
 
 An instruction-point stop excludes its unconsumed next entry. A completed original LDR's attempted-read count may equal the following `0x11f78` stop count. Acceptance permits that equality only with the exact core/PC/alias/value/preimage, loaded registers, independent state and watch-cursor interval. All four held-load stops must still precede the original clear. New public-SDK fixtures cover load/stop equality and rejected site removal during active capture observation; they remain unrun.
 
+The original record-2 word `0x0afffff8` at `0x11f7c` branches to `0x11f64`. The first equality load bypasses the delay; subsequent loads are 304 core-1 entries apart: MOV, 100 NOP/SUBS/BNE iterations, LDR/CMP/BEQ. The veneer release loop uses 8,192 core-0 entries, plus its setup and restoration. The scheduler preserves partial 1,000-entry slices across observation stops. TCM selectors are BTCM 0 and ATCM 1 in the pinned model.
+
 The fixed control limits are 10,000,000 aggregate entered instructions; 4,000,000 through the primary gate; gate-to-four-loads 4,000,000 for held sentinel; gate-to-clear 5,100,000 for delayed release; 2,048 one-entry clear windows; committed-clear-to-loader 20,000; exactly four recorded held loads, at most 128 actual peer equality reads and 8,192 veneer polls. Successful receipts permit at most 12,288 watch rows under the existing 16,384-row collector and 16 MiB receipt limits. The existing 120-second child and 1 MiB per-stream host bounds remain active.
 
 Host-only control preparation and saved-receipt consumption use:
