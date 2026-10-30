@@ -1516,6 +1516,25 @@ haskell_binary(
     ],
 )
 
+haskell_binary(
+    name = "controller-lifecycle-cases",
+    srcs = ["ControllerLifecycleCases.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-O2", "-threaded"],
+    main_file = "ControllerLifecycleCases.hs",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":native-observation",
+        ":owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//host:json",
+    ],
+)
+
 # Original-versus-owned menu-frame snapshot cases (replacement/owned_menu).
 haskell_binary(
     name = "menu-frame-cases",

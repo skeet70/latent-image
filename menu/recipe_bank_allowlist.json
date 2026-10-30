@@ -1,6 +1,36 @@
 {
   "schema": 1,
   "stock_calls": [
+    {"address":"0x00c72e10","name":"rb_call_set_dispatch","source":"menu/recipe_bank_arm.S; retained pending #133 differential qualification and bank cutover"},
+    {"address":"0x00c75ed4","name":"rb_call_editor_confirm","source":"menu/recipe_bank_arm.S; retained pending #133 differential qualification and bank cutover"},
+    {"address":"0x00c76650","name":"rb_call_leave_edge","source":"menu/recipe_bank_arm.S; retained pending #133 differential qualification and bank cutover"},
+    {"address":"0x0061d154","name":"rb_lifecycle_node","source":"menu/recipe_bank_arm.S; retained frame accessor"},
+    {"address":"0x0061d1f4","name":"rb_lifecycle_class","source":"menu/recipe_bank_arm.S; retained frame accessor"},
+    {"address":"0x0061d244","name":"rb_lifecycle_token","source":"menu/recipe_bank_arm.S; retained frame accessor"},
+    {"address":"0x006394d0","name":"rb_lifecycle_mode_d0","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x006394e8","name":"rb_lifecycle_mode_e8","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d4ad38","name":"rb_lifecycle_confirm","source":"menu/recipe_bank_arm.S; retained editor operation"},
+    {"address":"0x00635b60","name":"rb_lifecycle_reset","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d19cfc","name":"rb_lifecycle_prepare","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d3c9d8","name":"rb_lifecycle_refresh","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00637894","name":"rb_lifecycle_enable","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00639438","name":"rb_lifecycle_mode_refresh_a","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00639468","name":"rb_lifecycle_mode_refresh_b","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d350c4","name":"rb_lifecycle_mode_apply","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x006357dc","name":"rb_lifecycle_mode_flag_a","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00635800","name":"rb_lifecycle_mode_flag_b","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00635824","name":"rb_lifecycle_mode_flag_c","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d425cc","name":"rb_lifecycle_select_29","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d42450","name":"rb_lifecycle_select_30","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d3bc34","name":"rb_lifecycle_prepare_2a","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d45ce4","name":"rb_lifecycle_edit_prepare","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d45cf8","name":"rb_lifecycle_edit_open","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00722a50","name":"rb_lifecycle_buffer_copy","source":"menu/recipe_bank_arm.S; retained bounded editor buffer operation"},
+    {"address":"0x00722178","name":"rb_lifecycle_buffer_clear","source":"menu/recipe_bank_arm.S; retained bounded editor buffer operation"},
+    {"address":"0x007221c8","name":"rb_lifecycle_words_clear","source":"menu/recipe_bank_arm.S; retained editor word clear"},
+    {"address":"0x006378dc","name":"rb_lifecycle_mode_set","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x0064257c","name":"rb_lifecycle_wb_ready","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00638010","name":"rb_lifecycle_wb_enable","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
     {"address":"0x00eab350","name":"cc_stock_filmmode_return","source":"menu/classic_chrome_ram_stock.ld"},
     {"address":"0x00eab314","name":"cc_stock_filmmode_zero","source":"menu/classic_chrome_ram_stock.ld"},
     {"address":"0x00eaacc8","name":"cc_stock_saturation_mode_arm","source":"menu/classic_chrome_ram_stock.ld"},
@@ -152,21 +182,6 @@
       "address": "0x00c70528",
       "name": "rb_call_stock_key_right",
       "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_stock_key_right"
-    },
-    {
-      "address": "0x00c72e10",
-      "name": "rb_call_set_dispatch",
-      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_set_dispatch"
-    },
-    {
-      "address": "0x00c75ed4",
-      "name": "rb_call_editor_confirm",
-      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_editor_confirm"
-    },
-    {
-      "address": "0x00c76650",
-      "name": "rb_call_leave_edge",
-      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_leave_edge"
     },
     {
       "address": "0x0063a0f8",
@@ -355,6 +370,12 @@
     }
   ],
   "stock_stores": [
+    {"address":"0x00954cf4","bytes":4,"name":"modal editor choice","source":"replacement/owned_menu/src/lifecycle.rs"},
+    {"address":"0x0095047c","bytes":4,"name":"modal selection word","source":"replacement/owned_menu/src/lifecycle.rs; class 5 paths write one byte"},
+    {"address":"0x009503c0","bytes":4,"name":"modal dialog word","source":"replacement/owned_menu/src/lifecycle.rs"},
+    {"address":"0x0095201c","bytes":4,"name":"modal mode request","source":"replacement/owned_menu/src/lifecycle.rs"},
+    {"address":"0x00950104","bytes":8,"name":"modal mode flags","source":"replacement/owned_menu/src/lifecycle.rs"},
+    {"address":"0x009537f8","bytes":4,"name":"modal mode latch","source":"replacement/owned_menu/src/lifecycle.rs"},
     {"address":"0x01514220","bytes":4,"name":"CC RAW request film","source":"menu/classic_chrome_ram.S cc_ram_raw_request"},
     {
       "address": "0x0089edc8",

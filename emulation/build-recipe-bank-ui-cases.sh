@@ -60,6 +60,9 @@ if (( 16#$RB_IMAGE_END > ${RB_NAME_RECORD%u} )); then
 fi
 llvm-readelf --symbols --wide "$BUILD_DIR/kernel.elf" > "$BUILD_DIR/kernel.symbols"
 sha256sum "$BUILD_DIR/kernel.bin"
+if [[ "${BUILD_ONLY:-0}" == 1 ]]; then
+  exit 0
+fi
 
 # Undefined references are read from the freshly compiled ABI model.
 env $HARDEN clang "${ARM[@]}" "${FREESTANDING[@]}" -Oz -Wall -Wextra \
