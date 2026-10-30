@@ -4,6 +4,7 @@ module Main where
 
 import Control.Monad (forM, unless, when)
 import Data.Aeson (object, (.=))
+import Data.Bits (xor)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
@@ -303,27 +304,59 @@ caseSpec symbols kernel stock stockBase s owned = CaseSpec
     serviceFunctions = [(GuestAddress (fromIntegral a),fromIntegral (length code*4)) | (_,a,code) <- services]
     ownedFunctions = [functionSymbol symbols name | name <- M.keys symbols, name /= "__rb_image_start"]
 
-problems :: CaseSpec -> NativeObservation -> [String]
-problems spec observation =
-  ["status" | nativeStatus observation /= Returned]
-  ++ [registerLabel r | (r,v) <- caseExpectedRegisters spec, registerValue observation r /= v]
-  ++ [regionName region | (region,bytes) <- caseExpectedMemory spec, regionBytesOf observation region /= bytes]
-  ++ ["cpsr-control" | cpsrControl (registerValue observation Cpsr) /= 0x10]
+data Mismatch
+  = StatusMismatch
+  | RegisterMismatch Register
+  | RegionMismatch RegionId
+  | CpsrControlMismatch
+  deriving (Eq)
 
-controlSpecs :: CaseSpec -> [(CaseSpec, Bool)]
-controlSpecs reference =
-  [ (fault "return" [0xe3a00000,0xe12fff1e],False)
-  , (fault "abi" [0xe3a04000,0xe3e00000,0xe12fff1e],False)
-  , (fault "state" [0xe3a00001,0xe59fc008,0xe1cc00b0,0xe3e00000,0xe12fff1e,0x0146761e],False)
-  ] ++ [(fault ("fetch-" ++ show address) [0xe59fc000,0xe12fff1c,address],True) | address <- [0xc72e10,0xc75ed4,0xc76650]]
+mismatchLabel :: Mismatch -> String
+mismatchLabel StatusMismatch = "status"
+mismatchLabel (RegisterMismatch register) = registerLabel register
+mismatchLabel (RegionMismatch region) = regionName region
+mismatchLabel CpsrControlMismatch = "cpsr-control"
+
+problems :: CaseSpec -> NativeObservation -> [Mismatch]
+problems spec observation =
+  [StatusMismatch | nativeStatus observation /= Returned]
+  ++ [RegisterMismatch r | (r,v) <- caseExpectedRegisters spec, registerValue observation r /= v]
+  ++ [RegionMismatch region | (region,bytes) <- caseExpectedMemory spec, regionBytesOf observation region /= bytes]
+  ++ [CpsrControlMismatch | cpsrControl (registerValue observation Cpsr) /= 0x10]
+
+data ObservationFault = ReturnFault | AbiFault | StateFault
+
+mutateObservation :: ObservationFault -> NativeObservation -> NativeObservation
+mutateObservation fault observation = case fault of
+  ReturnFault -> registerFault R0
+  AbiFault -> registerFault R4
+  StateFault -> observation { nativeMemory = map stateFault (nativeMemory observation) }
   where
-    fault name code = reference
-      { caseId = "control-" ++ name
-      , caseProvenance = "negative control for return, preserved-register, state or forbidden original-action fetch observation"
+    registerFault register = observation
+      { nativeRegisters = M.adjust (`xor` 1) register (nativeRegisters observation) }
+    stateFault (region,bytes)
+      | region == RegionId "state" = (region,patch bytes [(0x1e,B.singleton (B.index bytes 0x1e `xor` 1))])
+      | otherwise = (region,bytes)
+
+observationFaults :: [(String, ObservationFault, Mismatch)]
+observationFaults =
+  [ ("control-return", ReturnFault, RegisterMismatch R0)
+  , ("control-abi", AbiFault, RegisterMismatch R4)
+  , ("control-state", StateFault, RegionMismatch (RegionId "state"))
+  ]
+
+fetchControlSpecs :: CaseSpec -> [(CaseSpec, GuestAddress)]
+fetchControlSpecs reference =
+  [(fault address,GuestAddress (fromIntegral address)) | address <- [0xc72e10,0xc75ed4,0xc76650]]
+  where
+    fault address = reference
+      { caseId = "control-fetch-" ++ show address
+      , caseProvenance = "negative control for forbidden original-action fetch observation"
       , caseEntry = GuestAddress 0x00963000
       , caseRegions = caseRegions reference
-          ++ [mkRegion (RegionId "fault") (GuestAddress 0x00963000) (length code*4) ReadExecute (assemble code)]
-      , caseFunctions = (GuestAddress 0x00963000,fromIntegral (length code*4)) : caseFunctions reference
+          ++ [mkRegion (RegionId "fault") (GuestAddress 0x00963000) 12 ReadExecute
+                (assemble [0xe59fc000,0xe12fff1c,address])]
+      , caseFunctions = (GuestAddress 0x00963000,12) : caseFunctions reference
       }
 
 main :: IO ()
@@ -345,19 +378,31 @@ main = do
     let spec = caseSpec symbols kernel stock id5Base s owned
     path <- writeCase (out </> caseId spec) spec
     pure (spec,path)
+  let referenceScenario = (base "controls" Set (FrameClass 0x267) (RowToken 2))
+        { expectedCells = blink, expectedEffects = [Open Exit Accept, Notify (Notification 0x930)] }
+      reference = caseSpec symbols kernel stock id5Base referenceScenario True
+  referencePath <- writeCase (out </> caseId reference) reference
+  fetchPaths <- forM (fetchControlSpecs reference) $ \(spec,target) -> do
+    path <- writeCase (out </> caseId spec) spec
+    pure (spec,path,target)
   if "--execute" `elem` args then do
     runner <- required args "--runner"
+    referenceObservation <- loadObserved runner referencePath
+    let referenceFailures = problems reference referenceObservation
+        observationControls =
+          [(name,null referenceFailures && problems reference (mutateObservation fault referenceObservation) == [expected])
+          | (name,fault,expected) <- observationFaults]
     results <- forM paths $ \pair -> forM pair $ \(spec,path) -> do
       observation <- loadObserved runner path
       pure (caseId spec,problems spec observation)
-    let flat = concat results
-        reference = caseSpec symbols kernel stock id5Base (base "controls" Set (FrameClass 0x267) (RowToken 2)) True
-    controls <- forM (controlSpecs reference) $ \(spec,fetch) -> do
-      path <- writeCase (out </> caseId spec) spec
+    fetchControls <- forM fetchPaths $ \(spec,path,target) -> do
       observation <- loadObserved runner path
-      pure (caseId spec,if fetch then nativeStatus observation == FetchGuard else nativeStatus observation == Returned && not (null (problems spec observation)))
+      pure (caseId spec,nativeStatus observation == FetchGuard && registerValue observation Pc == guestWord target)
+    let flat = concat results
+        controls = observationControls ++ fetchControls
     B.writeFile (out </> "controller-lifecycle-results.json") (encodeCanonical (object
-      ["cases" .= [object ["id" .= name,"mismatches" .= failures] | (name,failures) <- flat],
+      ["cases" .= [object ["id" .= name,"mismatches" .= map mismatchLabel failures] | (name,failures) <- flat],
+       "reference_mismatches" .= map mismatchLabel referenceFailures,
        "controls" .= [object ["id" .= name,"rejected" .= rejected] | (name,rejected) <- controls]]))
-    when (any (not . null . snd) flat || any (not . snd) controls) exitFailure
-  else putStrLn ("emitted " ++ show (length scenarios) ++ " original/owned pairs; no execution")
+    when (not (null referenceFailures) || any (not . null . snd) flat || any (not . snd) controls) exitFailure
+  else putStrLn ("emitted " ++ show (length scenarios) ++ " original/owned pairs, one owned reference and three fetch controls; no execution")
