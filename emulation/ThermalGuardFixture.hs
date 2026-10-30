@@ -4,6 +4,7 @@ module Main (main) where
 
 import Control.Concurrent (threadDelay)
 import Data.Char (isDigit)
+import System.Directory (doesFileExist)
 import System.Environment (getArgs, getExecutablePath)
 import System.Exit (ExitCode (..), exitWith)
 import System.Posix.Process (getProcessID)
@@ -26,6 +27,7 @@ main = do
     ["descendant", pidFile] -> descendant pidFile
     ["orphan", pidFile] -> orphan pidFile
     ["limits", path] -> limits path
+    ["affinity", pidFile, releaseFile] -> affinity pidFile releaseFile
     ["sleep"] -> threadDelay 30_000_000
     _ -> exitWith (ExitFailure 2)
 
@@ -39,6 +41,17 @@ limits path = do
       swap <- readFile (directory ++ "/memory.swap.max")
       writeFile path (memory ++ swap)
     _ -> exitWith (ExitFailure 2)
+
+affinity :: FilePath -> FilePath -> IO ()
+affinity pidFile releaseFile = do
+  _ <- spawnDescendant pidFile
+  waitForRelease (200 :: Int)
+  where
+    waitForRelease 0 = exitWith (ExitFailure 2)
+    waitForRelease attempts = do
+      released <- doesFileExist releaseFile
+      if released then exitWith (ExitFailure 7)
+        else threadDelay 50_000 >> waitForRelease (attempts - 1)
 
 descendant :: FilePath -> IO ()
 descendant pidFile = do

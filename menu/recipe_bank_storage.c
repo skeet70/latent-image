@@ -321,11 +321,13 @@ uint32_t rb_media_request_post(struct rb_media_message *message)
     struct rb_open_request *request = message->payload;
     if (request->callback == rb_io_cb) {
       request->identity = rb_io_request_identity();
+#if !defined(RB_VOLATILE_BANK) || !RB_VOLATILE_BANK
       if (request->tag == 0u) {
         request->saved_tag = 0u;
         rb_media_complete(request->callback, request->completion, true);
         return 0u;
       }
+#endif
     }
   } else if (message->id == 0x2c19u && message->length == 28u) {
     struct rb_write_request *request = message->payload;

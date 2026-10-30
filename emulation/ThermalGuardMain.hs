@@ -4,11 +4,11 @@
 -- worker. Canonical callers reach this entry through the pinned guard.
 module Main (main) where
 
-import Control.Exception (SomeException, onException, try)
+import Control.Exception (IOException, SomeException, catch, onException, try)
 import Data.Char (isDigit)
 import Data.List (stripPrefix)
 import Data.Unique (hashUnique, newUnique)
-import Emulation.ThermalGuard (callerMemoryProperties)
+import Emulation.ThermalGuard (callerCpuProperties, callerMemoryProperties)
 import System.Directory (canonicalizePath, doesFileExist, getCurrentDirectory)
 import System.Environment (getArgs, getEnvironment, getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure, exitWith)
@@ -37,6 +37,7 @@ startService command rest = do
   present <- doesFileExist worker
   if not present then failClosed ("internal worker is missing: " ++ worker) else do
     memory <- callerMemoryProperties
+    cpus <- callerCpuProperties `catch` \failure -> failClosed (show (failure :: IOException))
     environment <- getEnvironment
     working <- getCurrentDirectory
     pid <- getProcessID
@@ -53,7 +54,7 @@ startService command rest = do
           , "--property=KillMode=control-group"
           , "--property=TimeoutStopSec=10s"
           , "--property=WorkingDirectory=" ++ working
-          ] ++ memory
+          ] ++ memory ++ cpus
           ++ environmentArgs
           ++ ["--", worker, "--", command] ++ rest
         cleanup = do
