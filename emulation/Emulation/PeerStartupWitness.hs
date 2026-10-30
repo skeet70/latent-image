@@ -1578,14 +1578,13 @@ validateMicrosteps preclear readback = do
 -- * Comparison
 
 -- | A receipt accepted by 'validateStartupReceipt' against its own contract.
-data ValidatedStartupReceipt = ValidatedStartupReceipt Scenario ProgramKind StartupReceipt
+newtype ValidatedStartupReceipt = ValidatedStartupReceipt StartupReceipt
 
 validateStartupReceipt :: Scenario -> Program -> StartupReceipt -> Either String ValidatedStartupReceipt
-validateStartupReceipt scenario program receipt =
-  ValidatedStartupReceipt scenario (programKind program) receipt <$ checkStartupReceipt scenario program receipt
+validateStartupReceipt scenario program receipt = ValidatedStartupReceipt receipt <$ checkStartupReceipt scenario program receipt
 
 startupArgument :: ValidatedStartupReceipt -> Either String Argument
-startupArgument (ValidatedStartupReceipt _ _ receipt) = case filter ((== StartupHandoff) . stopLabel) (receiptStops receipt) of
+startupArgument (ValidatedStartupReceipt receipt) = case filter ((== StartupHandoff) . stopLabel) (receiptStops receipt) of
   [stop] -> Right (argument (stopState stop))
   _ -> Left "receipt lacks exactly one startup-handoff stop"
 
@@ -1600,10 +1599,10 @@ comparedCpsr :: Cpsr -> Word32
 comparedCpsr (Cpsr value) = value .&. 0x0fffffff
 
 compareStartupReceipts :: ValidatedStartupReceipt -> ValidatedStartupReceipt -> Either String ()
-compareStartupReceipts (ValidatedStartupReceipt retainedScenario retainedProgram retained) (ValidatedStartupReceipt ownedScenario ownedProgram owned) = do
-  require (retainedScenario == ownedScenario) "compared receipts differ in scenario"
-  require (retainedProgram == RetainedKind && ownedProgram == OwnedKind) "compared receipts are not retained then owned"
-  labels <- case endpointLabels retainedScenario of
+compareStartupReceipts (ValidatedStartupReceipt retained) (ValidatedStartupReceipt owned) = do
+  require (receiptScenario retained == receiptScenario owned) "compared receipts differ in scenario"
+  require (receiptProgram retained == RetainedKind && receiptProgram owned == OwnedKind) "compared receipts are not retained then owned"
+  labels <- case endpointLabels (receiptScenario retained) of
     [] -> Left "held receipts have no endpoint stops to compare"
     found -> Right found
   forM_ labels $ \item -> do
