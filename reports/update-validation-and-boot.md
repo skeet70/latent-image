@@ -179,6 +179,8 @@ The exact complemented payload slice `[0x50048,0x54cc8)` is `0x4c80` bytes, SHA-
 
 Reset at `0x11800` configures execution state/MPU, zeroes those globals and conditionally calls peripheral initialization `0x12204`, using the debug-register discriminator `0x11aa0`. The main call at `0x11838` enters `0x11cc0`. On return, `0x11840`–`0x11850` loads the target from `0x14c80`, the argument from `0x14c84`, and branches with `mov pc,r3`.
 
+Independent direct-word inspection of that exact decode confirms the peer frame/handoff contract (`E-PEER-ENTRY-FRAME-HANDOFF-SOURCE-150`): `0x11cc0` saves six words `{r4,r5,r6,r7,r11,lr}`, so the frame is 24 bytes at `r11-20`, with saved LR `0x1183c`. At rendezvous-tail entry `0x11f40`, `r11=sp+60`; the epilogue restores SP to tail SP + 64, not to any assumed incoming SP at reset entry. Initial entry and unobserved banked-register state remain distinct from this post-initialization frame. The [replacement inventory](replacement-inventory-baseline.md#86-retained-secondary-core-startup-boundary) records the exact bank-setup requests, publication stores, unresolved physical vector aliases and configured-model distinctions; its peer-witness experiment is not run.
+
 | Checked edge in second boot record | Decision and continuation | Scope |
 | --- | --- | --- |
 | `0x11d24` → `0x13244` | Reads 16 bytes through MMIO transfer helper `0x12ad0` into `0x400a00d0`–`0x400a00df`. Byte 14 must be `0xaa`; byte 15 must equal minus the first 15-byte sum modulo 256. Failure at `0x13304` clears validity `0x400a00cc` and returns `0xffffff01`; success sets validity to 1. | This checks a small peripheral/configuration record, not the DAT or application. The caller does not branch on the returned status; validity affects `0x1386c`'s flag. |

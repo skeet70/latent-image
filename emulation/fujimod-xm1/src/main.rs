@@ -4,7 +4,7 @@
 use fujimod_xm1::guest::Press;
 use fujimod_xm1::machine::{KeyPulse, Machine};
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
-use fujimod_xm1::witness;
+use fujimod_xm1::{peer_witness, witness};
 use sha2::{Digest, Sha256};
 use std::{
     io::{BufRead, Write},
@@ -12,7 +12,7 @@ use std::{
     process::ExitCode,
 };
 
-const USAGE: &str = "Usage: fujimod-xm1 --run RUN.json --update DAT --boot-rom ROM --output DIR [--witness CONTRACT.json]\n\
+const USAGE: &str = "Usage: fujimod-xm1 --run RUN.json --update DAT --boot-rom ROM --output DIR [--witness CONTRACT.json | --peer-witness CONTRACT.json]\n\
 The caller validates DAT as X-M1 1.50-compatible. Commands on stdin:\n\
   key NAME HOLD RELEASE | run COUNT | quit\n";
 
@@ -25,6 +25,7 @@ struct Arguments {
     boot_rom: PathBuf,
     output: PathBuf,
     witness: Option<PathBuf>,
+    peer_witness: Option<PathBuf>,
 }
 
 fn arguments() -> Result<Arguments, String> {
@@ -33,6 +34,7 @@ fn arguments() -> Result<Arguments, String> {
     let mut boot_rom = None;
     let mut output = None;
     let mut witness = None;
+    let mut peer_witness = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(flag) = args.next() {
         let value = args.next().map(PathBuf::from).ok_or_else(|| USAGE.to_owned())?;
@@ -42,12 +44,16 @@ fn arguments() -> Result<Arguments, String> {
             Some("--boot-rom") => boot_rom = Some(value),
             Some("--output") => output = Some(value),
             Some("--witness") => witness = Some(value),
+            Some("--peer-witness") => peer_witness = Some(value),
             _ => return Err(USAGE.into()),
         }
     }
+    if witness.is_some() && peer_witness.is_some() {
+        return Err("first-stage and peer witnesses are mutually exclusive".into());
+    }
     match (run, update, boot_rom, output) {
         (Some(run), Some(update), Some(boot_rom), Some(output)) => {
-            Ok(Arguments { run, update, boot_rom, output, witness })
+            Ok(Arguments { run, update, boot_rom, output, witness, peer_witness })
         }
         _ => Err(USAGE.into()),
     }
@@ -143,6 +149,10 @@ fn drive() -> Result<(), String> {
     if let Some(contract_path) = &arguments.witness {
         let contract = witness::WitnessContract::parse(&read(contract_path)?)?;
         return witness::run(machine, contract, &output);
+    }
+    if let Some(contract_path) = &arguments.peer_witness {
+        let contract = peer_witness::PeerContract::parse(&read(contract_path)?)?;
+        return peer_witness::run(machine, contract, &output);
     }
     let mut driver = Driver { machine, output, frames: 0 };
     driver.machine.run(boot);

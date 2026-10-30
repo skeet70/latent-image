@@ -393,6 +393,58 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "peer-stage-witness-lib",
+    srcs = ["Emulation/PeerStageWitness.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":watch-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:json",
+    ],
+)
+
+haskell_test(
+    name = "peer-stage-witness-tests",
+    size = "small",
+    srcs = ["PeerStageWitnessTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":peer-stage-witness-lib",
+        ":watch-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:vector",
+    ],
+)
+
+haskell_binary(
+    name = "peer-stage-witness",
+    srcs = ["PeerStageWitness.hs"],
+    data = [":thermal-guard"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":emulator-slot-lib",
+        ":first-stage-witness-lib",
+        ":peer-stage-witness-lib",
+        ":viewer-runtime-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host:process",
+        "//host:update-container",
+    ],
+)
+
 # The updater-f7 route on FujiMod; see README "updater-f7 on FujiMod".
 sh_binary(
     name = "fujimod-updater-f7",

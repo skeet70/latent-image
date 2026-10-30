@@ -91,7 +91,7 @@ pub enum WitnessCore {
 }
 
 impl WitnessCore {
-    fn from_index(index: usize) -> Result<Self, String> {
+    pub(crate) fn from_index(index: usize) -> Result<Self, String> {
         match index {
             0 => Ok(WitnessCore::Core0),
             1 => Ok(WitnessCore::Core1),
@@ -303,11 +303,11 @@ fn execute(machine: &mut Machine, contract: &WitnessContract) -> Result<Vec<Witn
     Ok(reads)
 }
 
-fn hit_address(hit: &Hit) -> Result<u32, String> {
+pub(crate) fn hit_address(hit: &Hit) -> Result<u32, String> {
     parse_hex(&hit.address)
 }
 
-fn parse_hex(text: &str) -> Result<u32, String> {
+pub(crate) fn parse_hex(text: &str) -> Result<u32, String> {
     u32::from_str_radix(text.strip_prefix("0x").ok_or_else(|| format!("address is not hex: {text}"))?, 16)
         .map_err(|_| format!("address is not a 32-bit hex value: {text}"))
 }
