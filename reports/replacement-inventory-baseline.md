@@ -358,6 +358,8 @@ The area-3 write callback `0x006a8484` is not ranked. It would reuse #120's cont
 
 [#134](https://github.com/skeet70/latent-image/issues/134) observes a retained boundary, not an owned startup increment or stock-code retirement. The existing first-stage witness observes core 0 only; zero rendezvous cells do not identify their writers. No peer-witness runtime has been executed for this increment. The source contract below is supported by `E-PEER-ENTRY-FRAME-HANDOFF-SOURCE-150`; configured engine laws and observation semantics are supported separately by `E-PEER-MODEL-OBSERVATION-SOURCE-150`.
 
+The frozen observer SDK builds against the unchanged qualified public model and passes 70 package harness tests (`E-PEER-OBSERVER-SDK-HARNESS-150`). Serialized wrong-core/wrong-handoff controls exercise the host consumer. Neither result establishes the natural-reset peer prefix or retires retained code.
+
 #### Exact X-M1 1.50 source contract
 
 The original DAT has SHA-256 `43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490`. The retained record-2 decode and existing re-extraction both hash to `2f1bf3f0e483b892d2890599679c1b515cfc1be8b8c27cbb06d4d913e428abb4`, length `0x4c80`, loaded at `0x10000`. Direct word reads independently agree with the existing listing at record offsets `0x1800`–`0x19a4`, `0x1cc0`–`0x1ccc` and `0x1f40`–`0x1fb8`. These are byte/source findings, not observed execution.

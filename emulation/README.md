@@ -12,7 +12,7 @@ Local FujiMod development does not authorize binary distribution. Our software r
 
 ## Secondary-core peer witness: pre-execution plan
 
-[#134](https://github.com/skeet70/latent-image/issues/134) adds a distinct observation of retained record-2 startup. It does not replace the existing core-0 first-stage witness or retire record 2. **No guest peer-witness run or SDK build has been performed for this increment.** Source findings are `E-PEER-ENTRY-FRAME-HANDOFF-SOURCE-150` and `E-PEER-MODEL-OBSERVATION-SOURCE-150`; the [startup inventory](../reports/replacement-inventory-baseline.md#86-retained-secondary-core-startup-boundary) owns the exact frame, banking, publication and unresolved-vector facts.
+[#134](https://github.com/skeet70/latent-image/issues/134) adds a distinct observation of retained record-2 startup. It does not replace the existing core-0 first-stage witness or retire record 2. The frozen observer SDK builds and passes its 70 package harness tests (`E-PEER-OBSERVER-SDK-HARNESS-150`); no guest peer-witness run is established by those checks. Source findings are `E-PEER-ENTRY-FRAME-HANDOFF-SOURCE-150` and `E-PEER-MODEL-OBSERVATION-SOURCE-150`; the [startup inventory](../reports/replacement-inventory-baseline.md#86-retained-secondary-core-startup-boundary) owns the exact frame, banking, publication and unresolved-vector facts.
 
 ### Frozen baseline
 
@@ -63,7 +63,7 @@ env XM1_EMULATOR_SLOTS=1 "$PEER_STAGE_WITNESS" \
 
 The launched child command is exactly `DRIVER --run RUN_JSON --update DAT --boot-rom ROM --output DIR --peer-witness DIR/peer-witness-contract.json`. It does not use an implicit SDK resolver, candidate image or symbol file. Host-consumer verification belongs to `//emulation:peer-stage-witness-tests`.
 
-`--launch` acquires `Emulation.EmulatorSlot` internally; do not double-wrap it. The frozen host plan requires `FujiAF.Host.runBounded` for both decoder and driver: 120 seconds per child, 1 MiB per stdout/stderr stream, process-group cleanup on failure and preserved process logs. Instruction/watch/receipt caps do not replace these host bounds. The command above and its limits are unrun; no runtime clearance or successful termination is claimed.
+`--launch` acquires `Emulation.EmulatorSlot` internally and attaches the shared thermal guard before preparation or guest execution; do not double-wrap it. `FujiAF.Host.runBounded` limits both decoder and driver to 120 seconds per child and 1 MiB per stdout/stderr stream, with process-group cleanup and preserved process logs. Instruction/watch/receipt caps do not replace these host bounds. The baseline command remains unrun; package and consumer checks do not establish its successful termination.
 
 ### Guest-side wait controls remain prerequisites
 
