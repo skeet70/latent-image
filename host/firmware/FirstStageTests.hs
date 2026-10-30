@@ -122,4 +122,33 @@ main = do
           && symbolSize second == 4
       _ -> False
   assertLeft "three-column symbol row" (parseSymbols "00000000 A xm1_vector_table_start")
-  putStrLn "first-stage staging tests: 19 assertions pass"
+  patchOffset <- either H.failH pure (slotOffset 0x100)
+  gateOffset <- either H.failH pure (slotOffset 0x1ff4)
+  let expected = U.MediaImage (B.replicate 8 0xff)
+      replacement = U.MediaImage image
+      makePatch offset before after = expectedMediaPatch offset (U.MediaImage before) (U.MediaImage after)
+  patch <- either H.failH pure (expectedMediaPatch patchOffset expected replacement)
+  gate <- either H.failH pure (makePatch gateOffset (B.replicate 4 0xff) (U.putWord32 0xeafffffe))
+  controlled <- either H.failH pure (replaceExpectedFirstRecord [gate,patch] parts)
+  controlledSlot <- either H.failH pure (firstRecordSlotBytes controlled)
+  assertTrue "expected-media replacement" (B.take 8 (B.drop 0x100 controlledSlot) == B.map complement image)
+  assertTrue "expected-media outside extents" $
+    B.take 0x100 slot == B.take 0x100 controlledSlot
+      && B.take (0x1ff4 - 0x108) (B.drop 0x108 slot) == B.take (0x1ff4 - 0x108) (B.drop 0x108 controlledSlot)
+      && B.drop 0x1ff8 slot == B.drop 0x1ff8 controlledSlot
+      && B.drop 0x50000 (U.partPreTable parts) == B.drop 0x50000 (U.partPreTable controlled)
+  wrongPreimage <- either H.failH pure (makePatch patchOffset (B.replicate 8 0) image)
+  assertLeft "wrong expected media" (replaceExpectedFirstRecord [wrongPreimage] parts)
+  assertLeft "repeated patch extent" (replaceExpectedFirstRecord [patch,patch] parts)
+  overlapOffset <- either H.failH pure (slotOffset 0x104)
+  overlapping <- either H.failH pure (expectedMediaPatch overlapOffset expected replacement)
+  assertLeft "overlapping expected patches" (replaceExpectedFirstRecord [patch,overlapping] parts)
+  assertLeft "empty expected patch" (makePatch patchOffset B.empty B.empty)
+  assertLeft "unequal expected replacement lengths" (makePatch patchOffset (B.replicate 4 0xff) image)
+  unaligned <- either H.failH pure (slotOffset 0x102)
+  assertLeft "unaligned expected extent" (makePatch unaligned (B.replicate 8 0xff) image)
+  assertLeft "partial media word" (makePatch patchOffset (B.replicate 3 0xff) (B.replicate 3 0))
+  pastEnd <- either H.failH pure (slotOffset 0xfffc)
+  assertLeft "expected extent past slot" (expectedMediaPatch pastEnd expected replacement)
+  assertLeft "expected patch short carrier" (replaceExpectedFirstRecord [patch] (parts {U.partPreTable = B.empty}))
+  putStrLn "first-stage staging tests pass"

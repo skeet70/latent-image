@@ -1,0 +1,17 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "peer-wait-control-rust",
+    src = "src.rs",
+    crate_name = "xm1_peer_wait_control",
+)
+
+xm1_rust_elf(
+    name = "peer-wait-control-image",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_peer_wait_control_entry",
+    link_script = "peer-wait-control.ld",
+    rust_staticlib = ":peer-wait-control-rust",
+)

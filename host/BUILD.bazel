@@ -94,6 +94,41 @@ haskell_library(
     ],
 )
 
+genrule(
+    name = "peer-wait-control-linked-image",
+    srcs = [
+        "//replacement/peer_wait_control:peer-wait-control-image.bin",
+        "//replacement/peer_wait_control:peer-wait-control-image.symbols",
+    ],
+    outs = ["FujiAF/PeerWaitControlImage.hs"],
+    cmd = "{ printf 'module FujiAF.PeerWaitControlImage (veneerBytes, veneerSymbols) where\\nimport qualified Data.ByteString as B\\nveneerBytes, veneerSymbols :: B.ByteString\\nveneerBytes = B.pack [' && od -An -v -tu1 $(location //replacement/peer_wait_control:peer-wait-control-image.bin) | awk '{ for (i = 1; i <= NF; i++) printf \"%s%s\", (n++ ? \",\" : \"\"), $$i }' && printf ']\\nveneerSymbols = B.pack [' && od -An -v -tu1 $(location //replacement/peer_wait_control:peer-wait-control-image.symbols) | awk '{ for (i = 1; i <= NF; i++) printf \"%s%s\", (n++ ? \",\" : \"\"), $$i }' && printf ']\\n'; } > $@",
+)
+
+haskell_library(
+    name = "peer-wait-control",
+    srcs = [
+        "FujiAF/PeerWaitControl.hs",
+        ":peer-wait-control-linked-image",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":aeson",
+        ":base",
+        ":bytestring",
+        ":cryptohash-sha256",
+        ":first-stage",
+        ":json",
+        ":text",
+        ":update-container",
+    ],
+)
+
 haskell_library(
     name = "label-record",
     srcs = ["FujiAF/LabelRecord.hs"],

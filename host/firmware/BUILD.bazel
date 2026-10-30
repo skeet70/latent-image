@@ -199,6 +199,56 @@ haskell_test(
     ],
 )
 
+haskell_test(
+    name = "peer-wait-control-tests",
+    srcs = ["PeerWaitControlTests.hs"],
+    args = [
+        "$(location //replacement/peer_wait_control:peer-wait-control-image.bin)",
+        "$(location //replacement/peer_wait_control:peer-wait-control-image.symbols)",
+    ],
+    data = [
+        "//replacement/peer_wait_control:peer-wait-control-image.bin",
+        "//replacement/peer_wait_control:peer-wait-control-image.symbols",
+    ],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:first-stage",
+        "//host:json",
+        "//host:peer-wait-control",
+        "//host:update-container",
+        "//host:vector",
+    ],
+)
+
+haskell_binary(
+    name = "peer-wait-control-artifact-tests",
+    srcs = ["PeerWaitControlTests.hs"],
+    args = [
+        "$(location //replacement/peer_wait_control:peer-wait-control-image.bin)",
+        "$(location //replacement/peer_wait_control:peer-wait-control-image.symbols)",
+    ],
+    data = [
+        "//replacement/peer_wait_control:peer-wait-control-image.bin",
+        "//replacement/peer_wait_control:peer-wait-control-image.symbols",
+    ],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:first-stage",
+        "//host:json",
+        "//host:peer-wait-control",
+        "//host:update-container",
+        "//host:vector",
+    ],
+)
+
 # The special label records 0x83c..0x83e in image 2: the load-relative
 # geometry, the 0x83d name write with its layout carry, the id-parameterised
 # record write with its current-bytes check, and read-back. The media image is
