@@ -37,7 +37,7 @@ import Data.Aeson (Value, object, (.=))
 import Data.Bits (bit, complement, rotateR, shiftL, shiftR, testBit, xor, (.&.), (.|.))
 import qualified Data.ByteString as B
 import Data.Int (Int16, Int32)
-import Data.List (sortOn)
+import Data.List (sortOn, transpose)
 import qualified Data.Map.Strict as M
 import Data.Maybe (isJust, mapMaybe)
 import qualified Data.Set as S
@@ -762,17 +762,23 @@ runWindow analysis address end worlds
   | S.size worlds > 8192 = unknownWorlds
   | otherwise = case fetch analysis address of
       Nothing -> unknownWorlds
-      Just (word, instruction) ->
-        let cond = instructionCond instruction
-            advance (regs, flags)
-              | not (condPass cond flags) = [(regs, flags)]
-              | otherwise =
-                  let effect = execute analysis address word instruction regs
-                   in case effectFlow effect of
-                        Continue -> nextWorlds effect flags
-                        Call _ -> nextWorlds effect flags
-                        _ -> []
-         in runWindow analysis (address + 4) end (S.fromList (concatMap advance (S.toList worlds)))
+      Just (word, instruction) -> runWindow analysis (address + 4) end (snd (stepWorlds analysis address word instruction worlds))
+
+-- | The registers the instruction leaves in each world where it executes
+-- without a call or transfer, and every world after it.
+stepWorlds :: Analysis -> Word32 -> Word32 -> Instruction -> S.Set World -> ([Regs], S.Set World)
+stepWorlds analysis address word instruction worlds = (concatMap fst outcomes, S.fromList (concatMap snd outcomes))
+ where
+  cond = instructionCond instruction
+  outcomes = map advance (S.toList worlds)
+  advance (regs, flags)
+    | not (condPass cond flags) = ([], [(regs, flags)])
+    | otherwise =
+        let effect = execute analysis address word instruction regs
+         in case effectFlow effect of
+              Continue -> ([effectRegs effect], nextWorlds effect flags)
+              Call _ -> ([], nextWorlds effect flags)
+              _ -> ([], [])
 
 -- | Why an entry state is not fully known.
 data Entry
@@ -1187,7 +1193,9 @@ roleCheck memory declared = case objectRole declared of
       | word `shiftR` 24 /= 0xf0 -> RoleFails address
       | otherwise -> rest
 
-data ConsumerForm = WideConstant | LiteralLoad Word32 | AlignedWord
+-- | `Constructed` is a register an instruction computes from registers and
+-- immediates.
+data ConsumerForm = WideConstant | LiteralLoad Word32 | AlignedWord | Constructed Reg
 
 -- | A materialization of an address the object may hold, and its verdict.
 data Consumer = Consumer
@@ -1335,22 +1343,76 @@ scalarOnly analysis start register = go [(start, register)] S.empty (ScalarProof
         | killed -> overwritten
         | otherwise -> Left (LiveAtIndirectJump address)
 
--- | Values `rd` holds after the MOVT at `site` executes, through up to three
--- predecessor joins; Nothing when a lower half stays unknown.
-wideValues :: Analysis -> Word32 -> Cond -> Reg -> Word32 -> Maybe [Word32]
-wideValues analysis site cond rd upper = case attempt (runWindow analysis (windowStart analysis site) site unknownWorlds) of
+-- | Values `rd` holds after the instruction at `site` executes and control
+-- continues, through up to three predecessor joins; Nothing when one stays
+-- unknown.
+producedValues :: Analysis -> Word32 -> Word32 -> Instruction -> Reg -> Maybe [Word32]
+producedValues analysis site word instruction rd = case attempt (runWindow analysis (windowStart analysis site) site unknownWorlds) of
   Just values -> Just values
   Nothing -> attempt (fst (worldsAt analysis site 3))
  where
   attempt worlds =
-    let values = [mapKnown (\old -> (upper `shiftL` 16) .|. (old .&. 0xffff)) (regAt regs rd) | (regs, flags) <- S.toList worlds, condPass cond flags]
+    let values = map (`regAt` rd) (fst (stepWorlds analysis site word instruction worlds))
      in if not (null values) && all isKnown values then Just (S.toList (S.fromList (mapMaybe knownValue values))) else Nothing
 
--- | MOVT and PC-relative literal materializations that may name the object,
--- each with its scalar verdict, and the other aligned words naming it.
-objectConsumers :: Analysis -> S.Set Word32 -> DeclaredObject -> [Consumer]
-objectConsumers analysis literals declared =
-  [consumer | (site, word) <- memoryWords memory, consumer <- consumersAt site word]
+-- | Registers other than pc the instruction computes, excluding a MOVT
+-- destination and loaded values.
+computedRegs :: Instruction -> [Reg]
+computedRegs instruction = filter (/= pc) $ case instruction of
+  MoveTop {} -> []
+  Load _ _ _ _ rn _ indexing -> [rn | indexing /= OffsetOnly]
+  LoadMultiple _ rn _ writeback _ -> [rn | writeback]
+  Compute _ destinations -> destinations
+  other -> instructionWrites other
+
+-- | Above this many carried worlds the construction scan keeps only the
+-- register values every world agrees on.
+constructionWorlds :: Int
+constructionWorlds = 64
+
+-- | Sites where a `computedRegs` register takes a known value `names`
+-- accepts, with those values. Two world sets are carried through each
+-- region's words: one along fallthrough only, one restarted with unknown
+-- registers and flags at every branch target and data-word entry. Either
+-- restarts unknown where no path falls in.
+constructions :: Analysis -> (Word32 -> Bool) -> [(Word32, Reg, [Word32])]
+constructions analysis names = go Nothing S.empty S.empty (memoryWords (analysisMemory analysis))
+ where
+  go _ _ _ [] = []
+  go previous through0 entered0 ((address, word) : rest) =
+    let contiguous = previous == Just (address - 4)
+        through = carry (if contiguous then through0 else S.empty)
+        entered = if contiguous && not (isBoundary analysis address) then carry entered0 else unknownWorlds
+        instruction = decode address word
+        (fromThrough, throughAfter) = stepWorlds analysis address word instruction through
+        (fromEntered, enteredAfter)
+          | entered == through = ([], throughAfter)
+          | otherwise = stepWorlds analysis address word instruction entered
+        produced = fromThrough ++ fromEntered
+        found =
+          [ (address, rd, knowns)
+          | rd <- computedRegs instruction
+          , let knowns = S.toList (S.fromList (filter names (mapMaybe (knownValue . (`regAt` rd)) produced)))
+          , not (null knowns)
+          ]
+     in found ++ go (Just address) throughAfter enteredAfter rest
+  carry worlds
+    | S.null worlds = unknownWorlds
+    | S.size worlds > constructionWorlds = agreed worlds
+    | otherwise = worlds
+  agreed worlds =
+    let columns = transpose [values | (Regs values, _) <- S.toList worlds]
+        common column = case column of
+          value : others | all (== value) others -> value
+          _ -> Unknown
+     in S.fromList [(Regs (map common columns), Flags f) | f <- [0 .. 15]]
+
+-- | MOVT, PC-relative literal and constructed materializations that may name
+-- the object, each with its scalar verdict, and the other aligned words
+-- naming it.
+objectConsumers :: Analysis -> S.Set Word32 -> [(Word32, Reg, [Word32])] -> DeclaredObject -> [Consumer]
+objectConsumers analysis literals constructed declared =
+  [consumer | (site, word) <- memoryWords memory, consumer <- consumersAt site word ++ constructedAt site word]
  where
   memory = analysisMemory analysis
   lowUpper = objectStart declared `shiftR` 16
@@ -1359,9 +1421,9 @@ objectConsumers analysis literals declared =
     | rd == pc = Open (ControlUse site)
     | otherwise = verdict (scalarOnly analysis (site + 4) rd)
   consumersAt site word = case decode site word of
-    MoveTop cond rd upper
+    instruction@(MoveTop _ rd upper)
       | lowUpper <= upper .&. 0x3fff && upper .&. 0x3fff <= highUpper ->
-          let values = wideValues analysis site cond rd upper
+          let values = producedValues analysis site word instruction rd
            in [Consumer site WideConstant values (proveFrom site rd) | maybe True (any (objectNames declared)) values]
     Load _ Word _ rt rn (OffsetImmediate n) OffsetOnly
       | rn == pc
@@ -1372,6 +1434,11 @@ objectConsumers analysis literals declared =
     _
       | objectNames declared word, not (S.member site literals) -> [Consumer site AlignedWord (Just [word]) (Open HeldByObject)]
       | otherwise -> []
+  naming = M.fromListWith (flip (++)) [(site, [rd]) | (site, rd, knowns) <- constructed, any (objectNames declared) knowns]
+  constructedAt site word =
+    [ Consumer site (Constructed rd) (producedValues analysis site word (decode site word) rd) (proveFrom site rd)
+    | rd <- M.findWithDefault [] site naming
+    ]
 
 -- * Callers
 
@@ -1759,10 +1826,10 @@ buildProof inputs =
         , "declared_objects"
             .= object
               [ "rule"
-                  .= ( "a consumer is discharged when every path from its materialization reads the value only as a TST, TEQ, CMP or CMN operand until it is overwritten. It is return-conditional when some path instead reaches a return with the value in r2, r3 or r12: it then rests on the unverified premise that no continuation of those returns reads the register before writing it, and is not a discharge. Any other read, a call, an indirect jump, an unmodeled instruction or leaving the images while the value is live, a return with it in any other register, and every aligned word naming the object, stays open. Consumers that index a base into the extent and constants the census does not trace are not enumerated" ::
+                  .= ( "a consumer is discharged when every path from its materialization reads the value only as a TST, TEQ, CMP or CMN operand until it is overwritten. It is return-conditional when some path instead reaches a return with the value in r2, r3 or r12: it then rests on the unverified premise that no continuation of those returns reads the register before writing it, and is not a discharge. Any other read, a call, an indirect jump, an unmodeled instruction or leaving the images while the value is live, a return with it in any other register, and every aligned word naming the object, stays open. Materializations are MOVTs, PC-relative literal loads, aligned words, and registers an instruction other than a MOVT or a load computes (MOV, MVN, ORR, other data processing including PC-relative arithmetic, MOVW, extends, multiplies, bitfield operations and base writeback) that take a value naming the object on some path of the scan: along fallthrough, and restarted with unknown registers and flags at every branch target and data-word entry. A call or SVC leaves every register and the flags unknown; above 64 carried states only the register values all states agree on are kept. Values reaching an instruction only through a branch, a call, a load other than a PC-relative literal word or an unknown index register, and bases indexed into the extent, are not enumerated" ::
                         String
                      )
-              , "objects" .= [objectValue memory declared (objectConsumers analysis literals declared) | declared <- declaredObjects]
+              , "objects" .= [objectValue memory declared (objectConsumers analysis literals constructed declared) | declared <- declaredObjects]
               ]
         , "obligations" .= map obligationValue obligations
         , "refusals" .= map refusalValue refusals
@@ -1834,6 +1901,7 @@ buildProof inputs =
   tableSites = materializations analysis tableLow tableHigh
   tableCensus = census analysis tableTracking insideDispatcher tableSites
   literals = literalSources memory
+  constructed = constructions analysis (\value -> any (`objectNames` value) declaredObjects)
   pointerTableWord site =
     any (\table -> table <= site && site < table + 4 * controllerCount) [cellPointers, actionPointers, transitionPointers]
   dataWords =
@@ -2040,9 +2108,11 @@ consumerValue consumer =
           WideConstant -> ("movt" :: String)
           LiteralLoad _ -> "literal-load"
           AlignedWord -> "aligned-word"
+          Constructed _ -> "constructed"
       , "values" .= maybe ["unresolved" :: String] (map hex) (consumerValues consumer)
       ]
         ++ ["literal" .= hex literal | LiteralLoad literal <- [consumerForm consumer]]
+        ++ ["register" .= regName register | Constructed register <- [consumerForm consumer]]
         ++ case consumerVerdict consumer of
           Discharged proof -> ["status" .= ("discharged" :: String), "proof" .= proofValueOf proof]
           ReturnConditional proof ->
