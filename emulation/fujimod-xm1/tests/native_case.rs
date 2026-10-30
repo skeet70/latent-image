@@ -687,7 +687,7 @@ fn pc_destinations_outside_the_call_contract_are_refused() {
 
 #[test]
 fn malformed_and_out_of_contract_wires_are_invalid_cases() {
-    let valid = Case::new(&[PUSH_LR, branch(0x1004, STUB, true), ADD_R0_1, POP_PC]).stub(STUB, &[(0, 5)], &[(0, 0x40)]);
+    let valid = Case::new(&[PUSH_LR, branch(0x1004, STUB, true), ADD_R0_1, POP_PC]).register(0, 5).stub(STUB, &[(0, 5)], &[(0, 0x40)]);
     let text = valid.wire();
     let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
     let nine_digit_entry = {
@@ -725,5 +725,7 @@ fn malformed_and_out_of_contract_wires_are_invalid_cases() {
     }
     let mut largest = valid.clone();
     largest.instructions = 4_000_000;
-    largest.run().assert_returned();
+    let observed = largest.run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r0"), 0x41);
 }
