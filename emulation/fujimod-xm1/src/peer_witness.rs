@@ -143,25 +143,18 @@ struct CpuAttempt {
 }
 
 #[derive(Deserialize, Serialize)]
-#[serde(try_from = "String")]
-struct DeviceSource(String);
-
-impl TryFrom<String> for DeviceSource {
-    type Error = String;
-
-    fn try_from(source: String) -> Result<Self, Self::Error> {
-        if source.is_empty() || source.starts_with("cpu-") {
-            Err("device transfer has an invalid origin".into())
-        } else {
-            Ok(Self(source))
-        }
-    }
+#[serde(rename_all = "kebab-case")]
+enum TransferAccess {
+    HostRead,
+    HostWrite,
+    ModelBusRead,
+    ModelBusWrite,
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct DeviceTransfer {
-    source: DeviceSource,
+struct ObservedTransfer {
+    source: TransferAccess,
     address: Address,
     physical: Address,
     size: u64,
@@ -175,7 +168,7 @@ struct DeviceTransfer {
 #[serde(untagged)]
 enum MemoryEvent {
     Cpu(CpuAttempt),
-    Device(DeviceTransfer),
+    Transfer(ObservedTransfer),
 }
 
 #[derive(Deserialize, Serialize)]

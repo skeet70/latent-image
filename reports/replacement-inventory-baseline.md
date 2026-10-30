@@ -381,7 +381,7 @@ Core 1 is configured held at PC `0x3fff0000`. Record 1 copies `0x3e8` bytes from
 
 The model initially aliases low 16 KiB to captured ROM and exposes a decoder choice for low DRAM; guest `0x40000000` aliases DRAM physical zero on both cores. A watch must include current/static maps and decoder choices before either core runs. Relevant physical spans are rendezvous `[0x20000,0x20008)`, completion `[0xa00c4,0xa00c8)` and target/argument `[0x14c80,0x14c88)`. CPU records carry core, PC, guest/physical address, width, value, before bytes, byte order, aggregate instructions and tick. They are **attempted accesses**, not proof a store committed. Handoff/loader-entry readback must independently show both cells zero and the expected target/argument. Completion is observed, not required to remain zero while core 0 runs concurrently.
 
-Device-origin transfer records retain their vendor source string and null core/PC/instruction/tick fields; they have no CPU value/before/byte-order metadata. They cannot prove a guest CPU writer. The watch also collects CPU reads/fetches: polling can exhaust its bound and must retain a violation rather than truncate into a passing receipt.
+Transfer records distinguish `model-bus-read`/`model-bus-write` from `host-read`/`host-write`, with null core/PC/instruction/tick fields and no CPU value/before/byte-order metadata. Snapshot physical readback itself adds `host-read` rows. These records cannot prove a guest CPU writer. The watch also collects CPU reads/fetches: polling can exhaust its bound and must retain a violation rather than truncate into a passing receipt.
 
 #### Frozen experiment and control prerequisites
 
