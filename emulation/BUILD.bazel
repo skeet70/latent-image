@@ -1524,6 +1524,7 @@ haskell_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":case-sha256",
+        ":native-adapter",
         ":native-observation",
         ":owned-case",
         "//host:aeson",

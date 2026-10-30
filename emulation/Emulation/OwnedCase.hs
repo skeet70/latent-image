@@ -55,7 +55,7 @@ import FujiAF.Host (get)
 import FujiAF.JSON (encodeCanonical)
 import Numeric (showHex)
 import System.Directory (createDirectoryIfMissing)
-import System.FilePath ((</>))
+import System.FilePath ((</>), takeDirectory)
 
 guestWord :: GuestAddress -> Word32
 guestWord = fromIntegral . guestAddress
@@ -234,6 +234,7 @@ loadObserved :: FilePath -> FilePath -> IO NativeObservation
 loadObserved runner path = do
   (_, regions, _, _) <- loadCase path
   (_, report) <- runCase runner path
+  B.writeFile (takeDirectory path </> "native-result.json") (encodeCanonical report)
   exit <- either (error . renderObservationError) pure (reportRunnerExit report)
   either (error . renderObservationError) pure (observeNative exit regions (get report "runner"))
 
