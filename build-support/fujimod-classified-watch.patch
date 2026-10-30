@@ -11,7 +11,7 @@ index 8ad1db6..9bf1bfd 100644
          Ok(())
      }
 diff --git a/crates/emulator/src/board/decoder_tests.rs b/crates/emulator/src/board/decoder_tests.rs
-index 9ecf155..27eaced 100644
+index 9ecf155..83f7d9b 100644
 --- a/crates/emulator/src/board/decoder_tests.rs
 +++ b/crates/emulator/src/board/decoder_tests.rs
 @@ -346,3 +346,96 @@ fn decoder_choices_require_existing_unique_windows_and_valid_backing() {
@@ -69,11 +69,11 @@ index 9ecf155..27eaced 100644
 +        .memory_watch_begin_classified(classes, 64, b.mappings().to_vec(), ViewPolicy::Observe)
 +        .unwrap();
 +    b.run_until(10, 1).unwrap();
-+    b.write_physical(0x10000, &[0; 4]).unwrap();
-+    b.write_physical(0x10008, &[0; 4]).unwrap();
++    b.write_physical(0x40000000, &[0; 4]).unwrap();
++    b.write_physical(0x40000008, &[0; 4]).unwrap();
 +    let mut bytes = [0; 4];
-+    b.read_physical(0x10004, &mut bytes).unwrap();
-+    b.read_physical(0x10020, &mut bytes).unwrap();
++    b.read_physical(0x40000004, &mut bytes).unwrap();
++    b.read_physical(0x40000020, &mut bytes).unwrap();
 +    let state = watch.records.borrow().state();
 +    b.memory_watch_end(&mut watch).unwrap();
 +    assert!(state["violation"].is_null());
@@ -101,13 +101,13 @@ index 9ecf155..27eaced 100644
 +        let mut watch = b
 +            .memory_watch_begin_classified(valid, 64, b.mappings().to_vec(), ViewPolicy::Fixed)
 +            .unwrap();
-+        b.write_physical(0x10000, &[1, 2, 3, 4]).unwrap();
++        b.write_physical(0x40000000, &[1, 2, 3, 4]).unwrap();
 +        let state = watch.records.borrow().state();
 +        b.memory_watch_end(&mut watch).unwrap();
 +        assert!(state["violation"].is_null());
 +        assert_eq!(sources(&state), [("host-write".into(), 0x10000)]);
 +        let mut bytes = [0; 4];
-+        b.read_physical(0x10000, &mut bytes).unwrap();
++        b.read_physical(0x40000000, &mut bytes).unwrap();
 +        assert_eq!(bytes, [1, 2, 3, 4]);
 +    }
 +}
