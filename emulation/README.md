@@ -12,7 +12,7 @@ Local FujiMod development does not authorize binary distribution. Our software r
 
 ## Secondary-core peer witness: pre-execution plan
 
-[#134](https://github.com/skeet70/latent-image/issues/134) adds a distinct observation of retained record-2 startup. It does not replace the existing core-0 first-stage witness or retire record 2. The frozen observer SDK builds and passes its 70 package harness tests (`E-PEER-OBSERVER-SDK-HARNESS-150`); no guest peer-witness run is established by those checks. Source findings are `E-PEER-ENTRY-FRAME-HANDOFF-SOURCE-150` and `E-PEER-MODEL-OBSERVATION-SOURCE-150`; the [startup inventory](../reports/replacement-inventory-baseline.md#86-retained-secondary-core-startup-boundary) owns the exact frame, banking, publication and unresolved-vector facts.
+[#134](https://github.com/skeet70/latent-image/issues/134) adds a distinct observation of retained record-2 startup. It does not replace the existing core-0 first-stage witness or retire record 2. The frozen observer SDK passes its 70 package harness tests (`E-PEER-OBSERVER-SDK-HARNESS-150`). One separately reviewed natural-reset baseline reaches all four core-1 stops and passes the production receipt consumer (`E-PEER-NATURAL-RESET-BASELINE-150`); held-sentinel and delayed-release guest controls remain unrun. Source findings are `E-PEER-ENTRY-FRAME-HANDOFF-SOURCE-150` and `E-PEER-MODEL-OBSERVATION-SOURCE-150`; the [startup inventory](../reports/replacement-inventory-baseline.md#86-retained-secondary-core-startup-boundary) owns the exact frame, banking, publication and unresolved-vector facts.
 
 ### Frozen baseline
 
@@ -39,7 +39,7 @@ Model-bus transfers and host reads/writes retain distinct sources and null CPU i
 
 Future execution uses one emulator slot (`XM1_EMULATOR_SLOTS=1`), the normal Nix daemon without sudo or a containment workaround, and a separate Bazel output base with `--batch --jobs=2`. Preparation, host verification and guest execution remain separate steps. Source inspection and receipt-consumer controls do not establish guest runtime acceptance.
 
-### Host preparation and future launch interface
+### Host preparation and explicit launch interface
 
 `//emulation:peer-stage-witness` is the SDK-independent host target. It has receipt-only and preparation modes; neither starts a guest. Set `PEER_STAGE_WITNESS` to its reviewed built launcher, `FFLZD` to the existing decoder, and `DAT` to the original validated input. Preparation requires a fresh directory and writes `peer-witness-contract.json` and `peer-witness-expected.json`:
 
@@ -53,7 +53,7 @@ The expected-input file records the firmware path/hash, record-2/loader-B/image-
 "$PEER_STAGE_WITNESS" --receipt "$RECEIPT" --argument 0x0069cdf8
 ```
 
-The following is the **unrun future launch command**, exposed for review, not a completed experiment. `SDK_DRIVER`, `RUN_DOCUMENT` and `BOOT_ROM` must name the reviewed driver, frozen run document and captured ROM; `PEER_RUN` must be fresh and distinct from the preparation directory. All three explicit launch inputs are required:
+The explicit launch interface below requires a separately reviewed runtime grant. `SDK_DRIVER`, `RUN_DOCUMENT` and `BOOT_ROM` name the reviewed driver, frozen run document and captured ROM; `PEER_RUN` must be fresh and distinct from the preparation directory. The exercised baseline used the immutable SDK through a reviewed resource-only launcher, with its exact command and identities retained in `E-PEER-NATURAL-RESET-BASELINE-150`. All three launch inputs are required:
 
 ```sh
 env XM1_EMULATOR_SLOTS=1 "$PEER_STAGE_WITNESS" \
@@ -63,7 +63,7 @@ env XM1_EMULATOR_SLOTS=1 "$PEER_STAGE_WITNESS" \
 
 The launched child command is exactly `DRIVER --run RUN_JSON --update DAT --boot-rom ROM --output DIR --peer-witness DIR/peer-witness-contract.json`. It does not use an implicit SDK resolver, candidate image or symbol file. Host-consumer verification belongs to `//emulation:peer-stage-witness-tests`.
 
-`--launch` acquires `Emulation.EmulatorSlot` internally and attaches the shared thermal guard before preparation or guest execution; do not double-wrap it. `FujiAF.Host.runBounded` limits both decoder and driver to 120 seconds per child and 1 MiB per stdout/stderr stream, with process-group cleanup and preserved process logs. Instruction/watch/receipt caps do not replace these host bounds. The baseline command remains unrun; package and consumer checks do not establish its successful termination.
+`--launch` acquires `Emulation.EmulatorSlot` internally and attaches the shared thermal guard before preparation or guest execution; do not double-wrap it. `FujiAF.Host.runBounded` limits both decoder and driver to 120 seconds per child and 1 MiB per stdout/stderr stream, with process-group cleanup and preserved process logs. Instruction/watch/receipt caps do not replace these host bounds. The single baseline exited successfully after 5,845,535 aggregate instructions with 5,063 watch rows and no watch violation; it stopped before executing loader-B entry. Its resource-only launcher verified 4 GiB memory, zero swap, 25% CPU quota and CPUs 4,5 inside the existing guard service, then admitted its sole start sample at 55.125°C.
 
 ### Guest-side wait controls remain prerequisites
 
