@@ -12,7 +12,7 @@ Local FujiMod development does not authorize binary distribution. Our software r
 
 ## Secondary-core peer witness: pre-execution plan
 
-[#134](https://github.com/skeet70/latent-image/issues/134) adds a distinct observation of retained record-2 startup. It does not replace the existing core-0 first-stage witness or retire record 2. **No peer-witness runtime, SDK build or acceptance run has been performed for this increment.** Source findings are `E-PEER-ENTRY-FRAME-HANDOFF-SOURCE-150` and `E-PEER-MODEL-OBSERVATION-SOURCE-150`; the [startup inventory](../reports/replacement-inventory-baseline.md#86-retained-secondary-core-startup-boundary) owns the exact frame, banking, publication and unresolved-vector facts.
+[#134](https://github.com/skeet70/latent-image/issues/134) adds a distinct observation of retained record-2 startup. It does not replace the existing core-0 first-stage witness or retire record 2. **No guest peer-witness run or SDK build has been performed for this increment.** Source findings are `E-PEER-ENTRY-FRAME-HANDOFF-SOURCE-150` and `E-PEER-MODEL-OBSERVATION-SOURCE-150`; the [startup inventory](../reports/replacement-inventory-baseline.md#86-retained-secondary-core-startup-boundary) owns the exact frame, banking, publication and unresolved-vector facts.
 
 ### Frozen baseline
 
@@ -37,7 +37,7 @@ The watch covers physical rendezvous `[0x20000,0x20008)`, completion `[0xa00c4,0
 
 Model-bus transfers and host reads/writes retain distinct sources and null CPU identity/counters; they cannot satisfy a CPU-writer requirement. Snapshot readback itself produces `host-read` rows. CPU reads and fetches remain typed separately from writes. The watch includes polling reads and has a 16,384-row cap; overflow or any watch violation fails with retained evidence. The complete `peer-witness.json`, including failure output, is bounded to 16 MiB.
 
-Future execution uses one emulator slot (`XM1_EMULATOR_SLOTS=1`), the normal Nix daemon without sudo or a containment workaround, and a separate Bazel output base with `--batch --jobs=2`. Preparation, build/host verification and guest execution remain separate review steps. Source inspection does not authorize or establish any of those unrun checks.
+Future execution uses one emulator slot (`XM1_EMULATOR_SLOTS=1`), the normal Nix daemon without sudo or a containment workaround, and a separate Bazel output base with `--batch --jobs=2`. Preparation, host verification and guest execution remain separate steps. Source inspection and receipt-consumer controls do not establish guest runtime acceptance.
 
 ### Host preparation and future launch interface
 
@@ -61,7 +61,7 @@ env XM1_EMULATOR_SLOTS=1 "$PEER_STAGE_WITNESS" \
   --launch --driver "$SDK_DRIVER" --run "$RUN_DOCUMENT" --boot-rom "$BOOT_ROM"
 ```
 
-The launched child command is exactly `DRIVER --run RUN_JSON --update DAT --boot-rom ROM --output DIR --peer-witness DIR/peer-witness-contract.json`. It does not use an implicit SDK resolver, candidate image or symbol file. Host-consumer verification belongs to `//emulation:peer-stage-witness-tests`; naming that target does not claim it has run.
+The launched child command is exactly `DRIVER --run RUN_JSON --update DAT --boot-rom ROM --output DIR --peer-witness DIR/peer-witness-contract.json`. It does not use an implicit SDK resolver, candidate image or symbol file. Host-consumer verification belongs to `//emulation:peer-stage-witness-tests`.
 
 `--launch` acquires `Emulation.EmulatorSlot` internally; do not double-wrap it. The frozen host plan requires `FujiAF.Host.runBounded` for both decoder and driver: 120 seconds per child, 1 MiB per stdout/stderr stream, process-group cleanup on failure and preserved process logs. Instruction/watch/receipt caps do not replace these host bounds. The command above and its limits are unrun; no runtime clearance or successful termination is claimed.
 
