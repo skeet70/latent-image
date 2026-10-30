@@ -1164,7 +1164,7 @@ pub(super) fn run(mut machine: Machine, contract: &StartupContract, output: &Pat
             "startup witness must arm before either core executes")?;
         let (maps, configured) = bindings(&machine.document)?;
         identities = configured;
-        require(machine.document.execution.quantum == QUANTUM && matches!(machine.document.execution.engine, RunEngine::Unicorn)
+        require(u64::try_from(machine.document.execution.quantum) == Ok(QUANTUM) && matches!(machine.document.execution.engine, RunEngine::Unicorn)
             && machine.document.execution.instructions_per_tick.numerator == 24
             && machine.document.execution.instructions_per_tick.denominator == 1, "startup scheduling configuration differs")?;
         for (core, expected) in identities.iter().enumerate() {
