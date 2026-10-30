@@ -230,6 +230,7 @@ impl CaptureRam {
         }
     }
 
+    // Queue API descriptors contain a packed header, byte length and payload pointer.
     fn message(&mut self, session: &Session, address: u32) {
         let Some(physical) = RamAddress::parse(address, 12).map(|address| address.0) else {
             self.read(session, address, 12);
@@ -261,12 +262,18 @@ impl CaptureRam {
             0x00ef9a94 | 0x00fe9580 => ram.read(session, registers[1], registers[2] as usize),
             0x00f01c40 => ram.message(session, 0x0169d374),
             0x00fe8ac4 | 0x0100297c => ram.message(session, 0x016f0aa8),
-            0x01028bc4 | 0x01028bdc | 0x01028c00 | 0x0102957c |
+            0x01028b4c | 0x01028bc4 | 0x01028bdc | 0x01028c00 | 0x0102957c |
             0x0102fd20 | 0x010300a4 | 0x01030284 | 0x01030310 => ram.queue30(session),
             0x0064e918 => ram.read(session, registers[0], 32),
             0x007411c4 => ram.read(session, registers[3], 4),
+            0x00e8659c => {
+                if registers[0] != 0 {
+                    ram.message(session, registers[0]);
+                }
+                ram.recorder(session);
+            }
             0x00e6c444 | 0x00e6efd4 | 0x00e6f100 | 0x00e7f9ec |
-            0x00e8659c | 0x00e869b8 | 0x00e869cc | 0x00e86a1c |
+            0x00e869b8 | 0x00e869cc | 0x00e86a1c |
             0x00e86a30 | 0x00e755d0 | 0x00eb0ea0 => ram.recorder(session),
             _ => {}
         }
@@ -428,7 +435,12 @@ impl TraceSites {
             return Err("capture observation exceeds the site or label bound".into());
         }
         for label in self.sites.values_mut() {
-            label.shrink_to_fit();
+            if label.capacity() > 64 {
+                label.shrink_to_fit();
+                if label.capacity() > 64 {
+                    return Err("capture observation label capacity exceeds its retained bound".into());
+                }
+            }
         }
         let mut sites = Vec::with_capacity(CAPTURE_SITE_LIMIT);
         sites.extend(self.sites.keys().map(|&address| SiteObservation { address, ..Default::default() }));
