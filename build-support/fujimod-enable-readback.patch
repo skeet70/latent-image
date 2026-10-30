@@ -1,0 +1,210 @@
+diff --git a/crates/emulator-exr2-isp-input/src/input/registers.rs b/crates/emulator-exr2-isp-input/src/input/registers.rs
+index a2a0454..403421f 100644
+--- a/crates/emulator-exr2-isp-input/src/input/registers.rs
++++ b/crates/emulator-exr2-isp-input/src/input/registers.rs
+@@ -118,8 +118,11 @@ pub fn mask(o: usize) -> Option<u32> {
+         _ => return None,
+     })
+ }
++pub fn within_mask(o: usize, v: u32) -> bool {
++    mask(o).is_some_and(|m| v & !m == 0)
++}
+ pub fn valid(o: usize, v: u32) -> bool {
+-    if mask(o).is_none_or(|m| v & !m != 0) {
++    if !within_mask(o, v) {
+         return false;
+     }
+     match o {
+diff --git a/crates/emulator-exr2-isp-input/src/input.rs b/crates/emulator-exr2-isp-input/src/input.rs
+index d44b667..ce9b437 100644
+--- a/crates/emulator-exr2-isp-input/src/input.rs
++++ b/crates/emulator-exr2-isp-input/src/input.rs
+@@ -10,7 +10,7 @@ use fujimod_emulator_parts_sensor::sensor::Sensor;
+ use fujimod_emulator_imaging::scene::FrameEdge;
+ use fujimod_emulator_devices::{Cx, Device};
+ use serde::{Deserialize, Serialize};
+-use fujimod_emulator_imaging::exr2_isp::options::input::{Options, Command, PhaseAck, ClockMode, ClockSource};
++use fujimod_emulator_imaging::exr2_isp::options::input::{Options, Command, PhaseAck, ClockMode, ClockSource, EnableReadback};
+ 
+ pub struct Wiring {
+     pub frame_period: Option<fujimod_emulator_imaging::timing::FramePeriod>,
+@@ -183,6 +183,15 @@ impl ImageInput {
+             ],
+         }
+     }
++    fn enable_readback(&self) -> u32 {
++        let mask = self.state.r[0x38c / 4];
++        match self.options.enable_readback {
++            EnableReadback::Identity => mask,
++            EnableReadback::ExchangedSourceBits => {
++                (mask & !0x202) | ((mask & 2) << 8) | ((mask & 0x200) >> 8)
++            }
++        }
++    }
+     fn sync_clocks(&mut self, now: u64) -> Result<(), String> {
+         let gates = self.clock_gates();
+         let period = self.phase_period()?;
+@@ -565,6 +574,11 @@ impl ImageInput {
+                     self.state.r[0x384 / 4] &= !self.state.phase_pending[source];
+                     self.state.phase_pending[source] = 0;
+                 }
++                0x38c if self.options.enable_readback == EnableReadback::ExchangedSourceBits => {
++                    if !registers::within_mask(o, v) {
++                        return Err("input word exceeds its mask/domain".into());
++                    }
++                }
+                 _ => {
+                     if !registers::valid(o, v) {
+                         return Err("input word exceeds its mask/domain".into());
+@@ -978,6 +992,9 @@ impl Device for ImageInput {
+             cx.fail("active command DMA status is unmodeled");
+             return 0;
+         }
++        if o == 0x38c {
++            return u64::from(self.enable_readback());
++        }
+         self.state.r[o / 4] as u64
+     }
+     fn write(&mut self, cx: &mut Cx<'_>, a: u64, s: u8, v: u64) {
+diff --git a/crates/emulator-exr2-isp-input/src/tests/input.rs b/crates/emulator-exr2-isp-input/src/tests/input.rs
+index f09c3b1..641d823 100644
+--- a/crates/emulator-exr2-isp-input/src/tests/input.rs
++++ b/crates/emulator-exr2-isp-input/src/tests/input.rs
+@@ -62,6 +62,7 @@ fn input_options() -> fujimod_emulator_imaging::exr2_isp::options::input::Option
+         raw_dma_ticks: 5,
+         readback_ticks: 7,
+         cfa: Some(cfa()),
++        enable_readback: fujimod_emulator_imaging::exr2_isp::options::input::EnableReadback::Identity,
+     }
+ }
+ fn input_wiring() -> input::Wiring {
+@@ -1396,3 +1397,99 @@ fn raw_window_crops_sensor_coordinates_and_preserves_aligned_row_padding() {
+         assert!(h.effects.is_empty());
+     }
+ }
++fn input_enable_plan(enable_readback: Option<&str>) -> serde_json::Value {
++    let mut options = serde_json::json!({
++        "reset_ticks": 2, "command_ticks": 3, "phase_ticks": 2, "command": null, "command_controls": [0],
++        "phase_ack": "enabled",
++        "clock": {"mode": "input_enable", "source": {"kind": "periodic", "period_ticks": 10, "first_delay_ticks": null},
++            "secondary": true, "companion_secondary": true},
++        "sensor_period_ticks": null, "raw_dma_ticks": 5, "readback_ticks": 7, "cfa": null
++    });
++    if let Some(law) = enable_readback {
++        options["enable_readback"] = serde_json::json!(law);
++    }
++    options
++}
++fn input_enable_device(enable_readback: Option<&str>) -> ImageInput {
++    let options = serde_json::from_value(input_enable_plan(enable_readback)).unwrap();
++    ImageInput::new(options, input_wiring()).unwrap()
++}
++#[test]
++fn exchanged_readback_keeps_source1_running_across_selector0_registration_and_removal() {
++    let mut h = TestHost::new();
++    let mut d = input_enable_device(Some("exchanged_source_bits"));
++    for (o, v) in [(0x48, 1), (0x38c, 0x10002)] {
++        write(&mut d, &mut h, 0xfff10000 + o, v);
++    }
++    advance(&mut d, &mut h, 10);
++    assert_eq!(h.irqs, [(1, 41)]);
++    write(&mut d, &mut h, 0xfff10388, 0);
++    assert_eq!(read(&mut d, &mut h, 0xfff1038c), 0x10200);
++    // The X-M1 1.50 0x0074100c(0, 1) store after that read.
++    write(&mut d, &mut h, 0xfff1038c, 0x10003);
++    advance(&mut d, &mut h, 20);
++    assert_eq!(h.irqs, [(1, 41), (0, 39), (1, 41)]);
++    for ack in [1, 0] {
++        write(&mut d, &mut h, 0xfff10388, ack);
++    }
++    assert_eq!(read(&mut d, &mut h, 0xfff1038c), 0x10201);
++    // 0x0074100c(0, 0) after that read.
++    write(&mut d, &mut h, 0xfff1038c, 0x10002);
++    advance(&mut d, &mut h, 30);
++    assert_eq!(h.irqs[3..], [(1, 41)]);
++}
++#[test]
++fn exchanged_readback_stops_source1_after_its_last_subscriber_is_removed() {
++    let mut h = TestHost::new();
++    let mut d = input_enable_device(Some("exchanged_source_bits"));
++    for (o, v) in [(0x48, 1), (0x38c, 0x10003)] {
++        write(&mut d, &mut h, 0xfff10000 + o, v);
++    }
++    advance(&mut d, &mut h, 10);
++    assert_eq!(h.irqs, [(0, 39), (1, 41)]);
++    for ack in [1, 0] {
++        write(&mut d, &mut h, 0xfff10388, ack);
++    }
++    assert_eq!(read(&mut d, &mut h, 0xfff1038c), 0x10201);
++    // 0x0074100c(1, 0) after that read.
++    write(&mut d, &mut h, 0xfff1038c, 0x10001);
++    assert_eq!(read(&mut d, &mut h, 0xfff1038c), 0x10001);
++    advance(&mut d, &mut h, 20);
++    assert_eq!(h.irqs[2..], [(0, 39)]);
++}
++#[test]
++fn exchanged_readback_leaves_the_source1_gate_on_the_stored_word() {
++    let mut h = TestHost::new();
++    let mut d = input_enable_device(Some("exchanged_source_bits"));
++    for (o, v) in [(0x48, 1), (0x38c, 0x10200)] {
++        write(&mut d, &mut h, 0xfff10000 + o, v);
++    }
++    assert_eq!(read(&mut d, &mut h, 0xfff1038c), 0x10002);
++    assert_eq!(d.next_deadline(0), None);
++    advance(&mut d, &mut h, 10);
++    assert!(h.irqs.is_empty());
++}
++#[test]
++fn plan_without_enable_readback_reads_the_stored_mask_and_refuses_an_unselected_enable() {
++    let mut h = TestHost::new();
++    let mut d = input_enable_device(None);
++    for (o, v) in [(0x48, 1), (0x38c, 0x10002)] {
++        write(&mut d, &mut h, 0xfff10000 + o, v);
++    }
++    advance(&mut d, &mut h, 10);
++    assert_eq!(h.irqs, [(1, 41)]);
++    write(&mut d, &mut h, 0xfff10388, 0);
++    assert_eq!(read(&mut d, &mut h, 0xfff1038c), 0x10002);
++    // 0x0074100c(0, 1) after that read.
++    write(&mut d, &mut h, 0xfff1038c, 0x10201);
++    advance(&mut d, &mut h, 20);
++    assert_eq!(h.irqs[1..], [(0, 39)]);
++    let mut cx = h.cx();
++    d.write(&mut cx, 0xfff1038c, 4, 0x10001);
++    assert!(cx.refusal().is_some());
++}
++#[test]
++fn plan_refuses_an_unknown_enable_readback() {
++    let plan = input_enable_plan(Some("exchanged_all_bits"));
++    assert!(serde_json::from_value::<options::input::Options>(plan).is_err());
++}
+diff --git a/crates/emulator-imaging/src/exr2_isp/options/input.rs b/crates/emulator-imaging/src/exr2_isp/options/input.rs
+index e4a0dba..89e0d65 100644
+--- a/crates/emulator-imaging/src/exr2_isp/options/input.rs
++++ b/crates/emulator-imaging/src/exr2_isp/options/input.rs
+@@ -44,6 +44,18 @@ pub struct Clock {
+     pub companion_secondary: bool,
+ }
+ 
++/// Guest reads of the input-enable mask `0x38c`. Stores and the clock gates
++/// use the stored word under either law.
++#[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
++#[serde(rename_all = "snake_case")]
++pub enum EnableReadback {
++    #[default]
++    Identity,
++    /// Reads exchange bits 1 and 9, and a store with bit 16 set needs neither.
++    /// X-M1 1.50 emulation hypothesis, unobserved on hardware.
++    ExchangedSourceBits,
++}
++
+ #[derive(Clone, Deserialize)]
+ #[serde(deny_unknown_fields)]
+ pub struct Options {
+@@ -58,4 +70,6 @@ pub struct Options {
+     pub raw_dma_ticks: u64,
+     pub readback_ticks: u64,
+     pub cfa: Option<Vec<u8>>,
++    #[serde(default)]
++    pub enable_readback: EnableReadback,
+ }
