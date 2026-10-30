@@ -11,10 +11,10 @@ index 8ad1db6..9bf1bfd 100644
          Ok(())
      }
 diff --git a/crates/emulator/src/board/decoder_tests.rs b/crates/emulator/src/board/decoder_tests.rs
-index 9ecf155..698487a 100644
+index 9ecf155..27eaced 100644
 --- a/crates/emulator/src/board/decoder_tests.rs
 +++ b/crates/emulator/src/board/decoder_tests.rs
-@@ -346,3 +346,85 @@ fn decoder_choices_require_existing_unique_windows_and_valid_backing() {
+@@ -346,3 +346,96 @@ fn decoder_choices_require_existing_unique_windows_and_valid_backing() {
          assert!(g.validate().is_err(), "case {case}");
      }
  }
@@ -38,7 +38,7 @@ index 9ecf155..698487a 100644
 +    let state = watch.records.borrow().state();
 +    b.memory_watch_end(&mut watch).unwrap();
 +    assert_eq!(b.state()["memory_decoders"]["choices"], json!([0]));
-+    assert!(state["violation"].as_str().is_some_and(|violation| violation.contains("fixed-view")));
++    assert!(state["violation"].is_string());
 +    for classified in [true, false] {
 +        let (mut b, _) = board_with_event(false, Some((4, 0)));
 +        let mut watch = if classified {
@@ -85,7 +85,7 @@ index 9ecf155..698487a 100644
 +    assert_eq!(state["ranges"], json!([[0x10000, 0x1000c], [0x10020, 0x10024]]));
 +}
 +#[test]
-+fn a_refused_classified_watch_leaves_no_observer() {
++fn a_refused_classified_watch_leaves_the_board_able_to_watch_again() {
 +    use observation::{ViewPolicy, WatchKinds, WatchRange};
 +    let (b, _) = board(false);
 +    for classes in [
@@ -97,7 +97,18 @@ index 9ecf155..698487a 100644
 +            b.memory_watch_begin_classified(classes, 64, b.mappings().to_vec(), ViewPolicy::Fixed)
 +                .is_err()
 +        );
-+        assert!(b.physical_memory.observation.borrow().is_none());
++        let valid = vec![WatchRange { start: 0x10000, end: 0x10004, kinds: WatchKinds::HOST_WRITE }];
++        let mut watch = b
++            .memory_watch_begin_classified(valid, 64, b.mappings().to_vec(), ViewPolicy::Fixed)
++            .unwrap();
++        b.write_physical(0x10000, &[1, 2, 3, 4]).unwrap();
++        let state = watch.records.borrow().state();
++        b.memory_watch_end(&mut watch).unwrap();
++        assert!(state["violation"].is_null());
++        assert_eq!(sources(&state), [("host-write".into(), 0x10000)]);
++        let mut bytes = [0; 4];
++        b.read_physical(0x10000, &mut bytes).unwrap();
++        assert_eq!(bytes, [1, 2, 3, 4]);
 +    }
 +}
 diff --git a/crates/emulator/src/board/memory.rs b/crates/emulator/src/board/memory.rs

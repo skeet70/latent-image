@@ -44,7 +44,7 @@ data Options
   | ConsumeControl FilePath FilePath
   | Prepare FilePath FilePath FilePath Observation Launch
   | ConsumeStartup FilePath FilePath
-  | CompareStartup FilePath FilePath
+  | CompareStartup FilePath FilePath FilePath FilePath
   | PrepareStartup FilePath FilePath FilePath S.Scenario StartupProgram Launch
 
 usage :: String
@@ -56,7 +56,7 @@ usage = unlines
   , "       peer-stage-witness --firmware DAT --fflzd FFLZD --output DIR --control held-sentinel|delayed-release [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
   , "       peer-stage-witness --startup retained|owned --scenario natural|held-sentinel|delayed-release [--endpoint handoff|loader-entry] --firmware DAT --fflzd FFLZD --output DIR [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT] [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
   , "       peer-stage-witness --startup-receipt FILE --startup-contract FILE"
-  , "       peer-stage-witness --compare RETAINED_RECEIPT OWNED_RECEIPT"
+  , "       peer-stage-witness --compare RETAINED_RECEIPT RETAINED_CONTRACT OWNED_RECEIPT OWNED_CONTRACT"
   , "Natural preparation writes peer-witness-contract.json and peer-witness-expected.json without starting an emulator."
   , "Launch requires an explicit driver, run description and captured 16 KiB ROM."
   , "Control preparation preserves the input and writes peer-witness-contract.json, peer-control.DAT and peer-control-manifest.json instead of the natural expected-policy file."
@@ -67,7 +67,7 @@ usage = unlines
 data Flag
   = ReceiptFile | ArgumentWord | ControlReceiptFile | ControlManifestFile | ControlMode | FirmwareFile | FflzdFile | OutputDirectory | DriverFile | RunFile | RomFile
   | StartupMode | ScenarioKind | EndpointName | CandidateImageFile | CandidateSymbolsFile | SourceFirmwareFile
-  | StartupReceiptFile | StartupContractFile | CompareRetainedFile | CompareOwnedFile
+  | StartupReceiptFile | StartupContractFile | CompareRetainedFile | CompareRetainedContract | CompareOwnedFile | CompareOwnedContract
   deriving (Eq)
 
 parseOptions :: [String] -> Either String Options
@@ -106,9 +106,9 @@ parseOptions arguments = do
       when launch (Left "receipt mode cannot launch")
       ConsumeStartup path <$> need "--startup-contract" StartupContractFile
     (Nothing, Just retained, Nothing) -> do
-      only [CompareRetainedFile,CompareOwnedFile]
+      only [CompareRetainedFile,CompareRetainedContract,CompareOwnedFile,CompareOwnedContract]
       when launch (Left "comparison mode cannot launch")
-      CompareStartup retained <$> need "--compare" CompareOwnedFile
+      CompareStartup retained <$> need "--compare" CompareRetainedContract <*> need "--compare" CompareOwnedFile <*> need "--compare" CompareOwnedContract
     (Nothing, Nothing, Just mode) -> do
       only ([FirmwareFile,FflzdFile,OutputDirectory,DriverFile,RunFile,RomFile,StartupMode,ScenarioKind,EndpointName] ++ candidateFlags)
       scenario <- need "--scenario" ScenarioKind >>= \kind -> startupScenario kind (value EndpointName)
@@ -128,11 +128,11 @@ parseOptions arguments = do
     collect values launch [] = Right (values,launch)
     collect values False ("--launch":rest) = collect values True rest
     collect _ True ("--launch":_) = Left "duplicate --launch"
-    collect values launch ("--compare":retained:owned:rest) = do
-      when (any (\entry -> null entry || take 2 entry == "--") [retained,owned]) (Left "--compare requires RETAINED_RECEIPT OWNED_RECEIPT")
+    collect values launch ("--compare":retained:retainedContract:owned:ownedContract:rest) = do
+      when (any (\entry -> null entry || take 2 entry == "--") [retained,retainedContract,owned,ownedContract]) (Left ("--compare requires " ++ compareOperands))
       when (CompareRetainedFile `elem` map fst values) (Left "duplicate option: --compare")
-      collect ((CompareOwnedFile,owned):(CompareRetainedFile,retained):values) launch rest
-    collect _ _ ("--compare":_) = Left ("--compare requires RETAINED_RECEIPT OWNED_RECEIPT\n" ++ usage)
+      collect ((CompareOwnedContract,ownedContract):(CompareOwnedFile,owned):(CompareRetainedContract,retainedContract):(CompareRetainedFile,retained):values) launch rest
+    collect _ _ ("--compare":_) = Left ("--compare requires " ++ compareOperands ++ "\n" ++ usage)
     collect values launch (name:entry:rest) = do
       flag <- case name of
         "--receipt" -> Right ReceiptFile
@@ -159,6 +159,7 @@ parseOptions arguments = do
       when (flag `elem` map fst values) (Left ("duplicate option: " ++ name))
       collect ((flag,entry):values) launch rest
     collect _ _ [name] = Left ("missing value for " ++ name ++ "\n" ++ usage)
+    compareOperands = "RETAINED_RECEIPT RETAINED_CONTRACT OWNED_RECEIPT OWNED_CONTRACT"
 
 startupScenario :: String -> Maybe String -> Either String S.Scenario
 startupScenario kind endpoint = case (kind, endpoint) of
@@ -283,18 +284,26 @@ consumeInput :: PeerInput -> FilePath -> Argument -> IO ()
 consumeInput (NaturalInput _) path expected = consume path expected
 consumeInput (ControlledInput _ manifest) path _ = consumeControl path manifest
 
-consumeStartup :: FilePath -> S.Scenario -> S.Program -> IO S.StartupReceipt
+consumeStartup :: FilePath -> S.Scenario -> S.Program -> IO S.ValidatedStartupReceipt
 consumeStartup path scenario program = do
   bytes <- H.readRegular S.maxStartupReceiptBytes path
   receipt <- either H.failH pure (S.parseStartupReceipt bytes)
-  either H.failH pure (S.validateStartupReceipt scenario program receipt)
+  accepted <- either H.failH pure (S.validateStartupReceipt scenario program receipt)
   putStrLn ("peer-startup receipt accepted: " ++ path)
-  pure receipt
+  pure accepted
 
-compareStartup :: FilePath -> FilePath -> IO ()
-compareStartup retainedPath ownedPath = do
-  retained <- H.readRegular S.maxStartupReceiptBytes retainedPath >>= either H.failH pure . S.parseStartupReceipt
-  owned <- H.readRegular S.maxStartupReceiptBytes ownedPath >>= either H.failH pure . S.parseStartupReceipt
+readStartupContract :: FilePath -> IO (S.Scenario, S.Program)
+readStartupContract path = H.readRegular (1024 * 1024) path >>= either H.failH pure . S.parseStartupContract
+
+compareStartup :: FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+compareStartup retainedPath retainedContractPath ownedPath ownedContractPath = do
+  (retainedScenario, retainedProgram) <- readStartupContract retainedContractPath
+  (ownedScenario, ownedProgram) <- readStartupContract ownedContractPath
+  H.ensure (retainedProgram == S.Retained) "retained contract does not name the retained program"
+  H.ensure (ownedProgram /= S.Retained) "owned contract does not name an owned program"
+  H.ensure (retainedScenario == ownedScenario) "retained and owned contracts differ in scenario"
+  retained <- consumeStartup retainedPath retainedScenario retainedProgram
+  owned <- consumeStartup ownedPath ownedScenario ownedProgram
   either H.failH pure (S.compareStartupReceipts retained owned)
   putStrLn ("peer-startup comparison accepted: " ++ retainedPath ++ " " ++ ownedPath)
 
@@ -453,11 +462,11 @@ main = do
             Launch driver run rom ->
               launchDriver root output contract receipt (inputFirmware input) driver run rom (consumeInput input receipt expected)
         ConsumeStartup path contractPath -> do
-          contractBytes <- H.readRegular (1024 * 1024) (resolve root contractPath)
-          (scenario, program) <- either H.failH pure (S.parseStartupContract contractBytes)
+          (scenario, program) <- readStartupContract (resolve root contractPath)
           _ <- consumeStartup (resolve root path) scenario program
           pure ()
-        CompareStartup retainedPath ownedPath -> compareStartup (resolve root retainedPath) (resolve root ownedPath)
+        CompareStartup retainedPath retainedContractPath ownedPath ownedContractPath ->
+          compareStartup (resolve root retainedPath) (resolve root retainedContractPath) (resolve root ownedPath) (resolve root ownedContractPath)
         PrepareStartup firmwarePath fflzdPath outputPath scenario program execution -> do
           enterSlot args execution
           prepareStartup root firmwarePath fflzdPath outputPath scenario program execution

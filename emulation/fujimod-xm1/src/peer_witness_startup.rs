@@ -4,6 +4,7 @@ use super::*;
 use super::wait::{self, BoardState, ClearReadback, Control, CoreCounts, GateBindings, Primary, TcmBank, WatchCursor, require};
 use fujimod_catalog::configuration::RunEngine;
 use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
+use crate::witness::encode_hex;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
@@ -256,10 +257,13 @@ impl Label {
 enum Epoch { Reset, Released, Published }
 
 #[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum WatchSource { CpuRead, CpuWrite, CpuFetch, HostRead, HostWrite, ModelBusRead, ModelBusWrite }
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ClassState {
     range: (Address, Address),
-    kinds: Vec<String>,
+    kinds: Vec<WatchSource>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -380,10 +384,6 @@ struct Phase {
     release_tcm: Option<TcmWords>,
     main_tcm: Option<TcmWords>,
     published: Vec<(u64, u64)>,
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn word_at(bytes: &[u8], address: u32) -> Result<Word, String> {
@@ -538,7 +538,7 @@ impl<'a> Runner<'a> {
         Ok(())
     }
 
-    fn snapshot(&self, machine: &Machine, label: Label, hit: &Hit) -> Result<StartupStop, String> {
+    fn snapshot(&self, machine: &Machine, label: Label, hit: &Hit) -> Result<(StartupStop, ClassifiedWatch), String> {
         let mut registers = [Word(0); 13];
         for (index, value) in registers.iter_mut().enumerate() {
             *value = register(machine, hit.core, arm::Register::R(index as u8))?;
@@ -546,13 +546,14 @@ impl<'a> Runner<'a> {
         let state = state(machine)?;
         let program_state = if matches!(label, Label::StartupHandoff | Label::LoaderBEntry) {
             Some(ProgramState {
-                globals: hex(&machine.read(GLOBALS.0, (GLOBALS.1 - GLOBALS.0) as usize)?),
-                companion: hex(&machine.read(COMPANION.0, (COMPANION.1 - COMPANION.0) as usize)?),
+                globals: encode_hex(&machine.read(GLOBALS.0, (GLOBALS.1 - GLOBALS.0) as usize)?),
+                companion: encode_hex(&machine.read(COMPANION.0, (COMPANION.1 - COMPANION.0) as usize)?),
             })
         } else {
             None
         };
-        Ok(StartupStop {
+        let current = self.watch_now()?;
+        Ok((StartupStop {
             label,
             address: Guest(hit_address(hit)?),
             core: WitnessCore::from_index(hit.core)?,
@@ -565,9 +566,9 @@ impl<'a> Runner<'a> {
             state,
             tcm: tcm_words(machine)?,
             epoch: self.epoch,
-            watch_records: self.watch_now()?.records.len(),
+            watch_records: current.records.len(),
             program_state,
-        })
+        }, current))
     }
 
     fn phase_end(&self) -> u64 {
@@ -626,18 +627,15 @@ impl<'a> Runner<'a> {
             .ok_or_else(|| format!("startup address {guest:#x} has no core-1 static mapping"))
     }
 
-    fn rows(&self) -> Result<Vec<(Epoch, MemoryEvent)>, String> {
+    fn rows<'w>(&'w self, current: &'w ClassifiedWatch) -> Result<Vec<(Epoch, &'w MemoryEvent)>, String> {
         let mut rows = Vec::new();
         for record in &self.epochs {
-            if let WatchEvidence::Observed(state) = &record.memory_watch {
-                let replay: ClassifiedWatch = serde_json::from_value(serde_json::to_value(state).map_err(|error| error.to_string())?)
-                    .map_err(|error| error.to_string())?;
-                rows.extend(replay.records.into_iter().map(|row| (record.epoch, row)));
-            } else {
-                return Err("startup epoch watch evidence was rejected".into());
+            match &record.memory_watch {
+                WatchEvidence::Observed(state) => rows.extend(state.records.iter().map(|row| (record.epoch, row))),
+                WatchEvidence::Rejected(_) => return Err("startup epoch watch evidence was rejected".into()),
             }
         }
-        rows.extend(self.watch_now()?.records.into_iter().map(|row| (self.epoch, row)));
+        rows.extend(current.records.iter().map(|row| (self.epoch, row)));
         Ok(rows)
     }
 
@@ -678,13 +676,11 @@ impl<'a> Runner<'a> {
         }
     }
 
-    fn check_rows(&self) -> Result<(), String> {
-        let current = self.watch_now()?;
+    fn check_rows(&self, current: &ClassifiedWatch, rows: &[(Epoch, &MemoryEvent)]) -> Result<(), String> {
         if let Some(violation) = &current.violation {
             return Err(format!("startup memory watch violation: {violation}"));
         }
         require(current.enabled, "startup memory watch disabled")?;
-        let rows = self.rows()?;
         require(rows.len() <= ROWS, "startup watch exceeded its successful row bound")?;
         let program = self.program();
         let sites = &program.sites;
@@ -697,11 +693,20 @@ impl<'a> Runner<'a> {
         let segment_entry = self.segment.as_ref().map(|segment| u64::from(segment.entry.0));
         let argument = self.segment.as_ref().map(|segment| u64::from(segment.argument.0));
         let (mut pairs, mut polls, mut previous) = (0, 0, (0, 0));
+        let endpoints = self.stops.iter().filter(|stop| matches!(stop.label, Label::StartupHandoff | Label::LoaderBEntry)).count();
+        let mut snapshot_reads = [0; 2];
         for (index, (epoch, row)) in rows.iter().enumerate() {
             let extent = row_extent(row);
             let protocol = WATCH_RANGES.iter().any(|&span| overlaps(extent, span));
             if !protocol {
                 return Err(self.describe(extent).into());
+            }
+            let snapshot = [GLOBALS, COMPANION].iter().position(|&span| extent == span).filter(|_| *epoch == Epoch::Published
+                && matches!(row, MemoryEvent::Transfer(transfer) if matches!(transfer.source, TransferAccess::HostRead)));
+            if let Some(which) = snapshot {
+                snapshot_reads[which] += 1;
+                require(snapshot_reads[which] <= endpoints, "startup endpoint snapshot reads exceed the endpoint stops")?;
+                continue;
             }
             require(WATCH_RANGES.iter().any(|&(lo, hi)| extent.0 >= lo && extent.1 <= hi), "startup row straddles a protocol range")?;
             match row {
@@ -765,18 +770,16 @@ impl<'a> Runner<'a> {
         require(pairs <= PAIRS && polls <= VENEER_POLLS && (!held || polls == 0), "startup peer-read or veneer-poll bound exceeded")
     }
 
-    fn unique<'r>(&self, rows: &'r [(Epoch, MemoryEvent)], core: WitnessCore, pc: u32, physical: u64)
+    fn unique<'r>(&self, rows: &[(Epoch, &'r MemoryEvent)], core: WitnessCore, pc: u32, physical: u64)
         -> Result<(usize, &'r CpuAttempt), String> {
         let mut found = rows.iter().enumerate()
-            .filter_map(|(index, (_, row))| cpu_row(row, core, pc, physical, CpuAccess::CpuWrite).map(|cpu| (index, cpu)));
+            .filter_map(|(index, &(_, row))| cpu_row(row, core, pc, physical, CpuAccess::CpuWrite).map(|cpu| (index, cpu)));
         let first = found.next().ok_or_else(|| format!("startup required write attempt at {pc:#x} to {physical:#x} absent"))?;
         require(found.next().is_none(), "startup required write attempt repeated")?;
         Ok(first)
     }
 
-    fn accept(&self) -> Result<(), String> {
-        self.check_rows()?;
-        let rows = self.rows()?;
+    fn accept(&self, rows: &[(Epoch, &MemoryEvent)]) -> Result<(), String> {
         let program = self.program();
         let sites = &program.sites;
         let stop = |label: Label| self.stops.iter().find(|stop| stop.label == label)
@@ -849,7 +852,7 @@ impl<'a> Runner<'a> {
         let stores = [site(sites.clear_store.0)?, site(sites.target_store.0)?, site(sites.argument_store.0)?];
         let loads = [site(sites.target_load.0)?, site(sites.argument_load.0)?];
         let handoff = site(sites.handoff.0)?;
-        self.record = Some(RecordCheck { sha256: hex(&observed), site_words: checked });
+        self.record = Some(RecordCheck { sha256: encode_hex(&observed), site_words: checked });
         require(guest == physical && observed[..] == program.record[..],
             "startup record-2 bytes or the active core-1 view differ from the contract digest")?;
         require(bl_target(first, entry) == Some(0x11854) && bl_target(second, entry + 4) == Some(0x118b8)
@@ -891,7 +894,7 @@ impl<'a> Runner<'a> {
         let loader_entry = word(machine, LOADER_B.0 + 0xc)?;
         self.segment = Some(Segment {
             root, index, record: Word(record), header, entry, argument,
-            loader_sha256: hex(&Sha256::digest(&loader)), loader_entry,
+            loader_sha256: encode_hex(&Sha256::digest(&loader)), loader_entry,
         });
         require(entry.0 == LOADER_ENTRY && loader_entry.0 == LOADER_ENTRY, "startup segment id 1 entry differs from the loader-B header entry")?;
         let root_physical = self.physical_of(root.0, 4)?;
@@ -922,10 +925,11 @@ impl<'a> Runner<'a> {
         let address = hit_address(hit)?;
         let label = *self.sites.get(&address).ok_or("startup trace contains an unexpected address")?;
         require(hit.site == label.name(), "startup trace label differs from its armed site")?;
-        let snapshot = self.snapshot(machine, label, hit)?;
+        let (snapshot, mut current) = self.snapshot(machine, label, hit)?;
         let core = snapshot.core;
         let tcm = snapshot.tcm;
         self.stops.push(snapshot);
+        let mut stale = false;
         let index = self.stops.len() - 1;
         if label == Label::ForbiddenFetch {
             return Err(format!("startup forbidden fetch of retired stock code at {address:#x} on core {}", hit.core));
@@ -956,11 +960,13 @@ impl<'a> Runner<'a> {
                 let mut add = vec![(sites.entry.0, Label::StartupEntry)];
                 add.extend(program.forbid_fetch.iter().map(|&(start, _)| (start, Label::ForbiddenFetch)));
                 self.add(machine, &add)?;
+                stale = true;
             }
             Label::StartupEntry => {
                 require(self.phase.release && !self.phase.entry, "startup entry out of phase")?;
                 self.tcm_stable(&tcm)?;
                 self.verify_record(machine)?;
+                stale = true;
                 self.phase.entry = true;
                 self.remove(machine, sites.entry.0)?;
                 self.add(machine, &[(sites.main.0, Label::StartupMain)])?;
@@ -983,9 +989,8 @@ impl<'a> Runner<'a> {
             Label::PeerLoaded => {
                 require(self.phase.main.is_some() && !self.phase.exit, "startup peer pair out of phase")?;
                 self.tcm_stable(&tcm)?;
-                let watch = self.watch_now()?;
                 let stop = &self.stops[index];
-                let interval = watch.records.get(self.phase.last_pair..stop.watch_records).ok_or("startup pair cursor interval differs")?;
+                let interval = current.records.get(self.phase.last_pair..stop.watch_records).ok_or("startup pair cursor interval differs")?;
                 let reads: Vec<&CpuAttempt> = interval.iter()
                     .filter_map(|row| cpu_row(row, WitnessCore::Core1, sites.peer_load.0, 0x20000, CpuAccess::CpuRead)).collect();
                 let skipped = if self.phase.rejoin { reads.len().saturating_sub(1) } else { 0 };
@@ -1030,6 +1035,7 @@ impl<'a> Runner<'a> {
                     self.phase.exit = true;
                     self.publish(machine)?;
                     self.begin_epoch(machine, Epoch::Published)?;
+                    stale = true;
                     self.remove(machine, sites.peer_loaded.0)?;
                     if scenario.endpoint() == Some(Endpoint::LoaderEntry) {
                         self.add(machine, &[(LOADER_ENTRY, Label::LoaderBEntry)])?;
@@ -1046,6 +1052,7 @@ impl<'a> Runner<'a> {
                     && stop.state.target.0 == 0 && stop.state.argument.0 == 0, "startup primary gate context differs")?;
                 let control = scenario.control().ok_or("startup gate outside a control scenario")?;
                 self.gate = Some(wait::gate_bindings(machine, control)?);
+                stale = true;
                 self.phase.gate = Some(index);
                 self.remove(machine, GATE)?;
                 if control == Control::DelayedRelease {
@@ -1075,17 +1082,17 @@ impl<'a> Runner<'a> {
                 self.remove(machine, sites.peer_loaded.0)?;
                 let committed = wait::commit_clear(machine)?;
                 let cleared = committed.cleared();
-                let wait::CommittedClear { single_core0_step, before_pc, before_cpsr, current, cell0, state, original, microsteps } = committed;
-                let cursor = self.watch_now()?.records.len();
+                let wait::CommittedClear { single_core0_step, before_pc, before_cpsr, current: current_primary, cell0, state, original, microsteps } = committed;
+                current = self.watch_now()?;
+                let cursor = current.records.len();
                 self.clear_readback = Some(ClearReadback {
-                    instructions: Instructions(machine.instructions()), primary_address: current.address, primary_cpsr: current.cpsr,
+                    instructions: Instructions(machine.instructions()), primary_address: current_primary.address, primary_cpsr: current_primary.cpsr,
                     primary_instruction: original, state, watch_records: WatchCursor(cursor), microsteps,
                 });
-                self.check_rows()?;
-                let rows = self.rows()?;
+                let rows = self.rows(&current)?;
                 let (row_index, attempt) = self.unique(&rows, WitnessCore::Core0, CLEAR, 0x20000)?;
-                require(single_core0_step && before_pc.0 == CLEAR && current.address.0 == CLEAR + 4
-                    && before_cpsr == preclear_cpsr && current.cpsr == before_cpsr && cell0.0 == 0 && cleared
+                require(single_core0_step && before_pc.0 == CLEAR && current_primary.address.0 == CLEAR + 4
+                    && before_cpsr == preclear_cpsr && current_primary.cpsr == before_cpsr && cell0.0 == 0 && cleared
                     && row_index >= preclear_cursor && row_index < self.epoch_offset(self.epoch)? + cursor
                     && attempt.instructions.0 == machine.instructions() && attempt.before.as_deref() == Some(&[0x2b, 2, 0, 0][..]),
                     "startup attempted clear lacks original instruction completion and immediate zero readback")?;
@@ -1115,13 +1122,16 @@ impl<'a> Runner<'a> {
                 self.tcm_stable(&tcm)?;
                 self.handoff(&self.stops[index])?;
                 wait::verify_image(machine, wait::OriginalImage::LoaderB)?;
+                stale = true;
                 accepted = true;
             }
             Label::ForbiddenFetch => unreachable!(),
         }
-        self.check_rows()?;
+        let current = if stale { self.watch_now()? } else { current };
+        let rows = self.rows(&current)?;
+        self.check_rows(&current, &rows)?;
         if accepted {
-            self.accept()?;
+            self.accept(&rows)?;
         }
         Ok(accepted)
     }

@@ -5,7 +5,9 @@ import Control.Monad (forM_, unless)
 import Data.Aeson (Value (..), encode, object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
+import Data.Bits ((.&.), (.|.), shiftR)
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import Data.List (sortOn)
 import qualified Data.Vector as V
@@ -109,10 +111,14 @@ data Knobs = Knobs
   { knobSkew :: Word64
   , knobExtraRows :: [(Word64, Value)]
   , knobCompanion :: B.ByteString
+  -- | (threshold, delta): every stop and row at or after the threshold moves
+  -- later by delta core-0 instructions.
+  , knobShifts :: [(Word64, Word64)]
+  , knobPollValue :: Word32
   }
 
 plain :: Knobs
-plain = Knobs 0 [] (B.replicate 0x548 0x5a)
+plain = Knobs 0 [] (B.replicate 0x548 0x5a) [] 0
 
 hexText :: B.ByteString -> String
 hexText = concatMap (\byte -> let digits = showHex byte "" in replicate (2 - length digits) '0' ++ digits) . B.unpack
@@ -127,8 +133,11 @@ cpuRow source cpu pc guest physical value before time = object
   , "instructions" .= time, "tick" .= time ]
 
 transferRow :: String -> Word32 -> Value
-transferRow source physical = object
-  [ "source" .= source, "address" .= physical, "physical" .= physical, "size" .= (4 :: Int)
+transferRow source physical = sizedTransferRow source physical 4
+
+sizedTransferRow :: String -> Word32 -> Word32 -> Value
+sizedTransferRow source physical size = object
+  [ "source" .= source, "address" .= physical, "physical" .= physical, "size" .= size
   , "core" .= Null, "pc" .= Null, "instructions" .= Null, "tick" .= Null ]
 
 peerState :: Word32 -> Word32 -> Word32 -> Word32 -> Value
@@ -157,24 +166,73 @@ ownedSiteWords bin facts = mapM (\location -> (,) location <$> leWordAt bin (fro
     site select = addressOf (select sites)
     entry = site siteEntry
 
-heldGateWords :: [Word32]
+heldGateWords, delayedGateWords, veneerWords :: [Word32]
 heldGateWords = [0xe3003000, 0xe344300a, 0xe3a02000, 0xe58320c4, 0xe3003000, 0xeafffffe, 0xe5832000, 0xf57ff04f]
+delayedGateWords = [0xe3003000, 0xe344300a, 0xe3a02000, 0xe58320c4, 0xe3003000, 0xeafff841, 0xe5832000, 0xf57ff04f]
+veneerWords =
+  [ 3912060943, 3775856640, 3808563200, 3812896770, 3808477739, 3851624452, 3813801984, 167772170
+  , 3780247564, 436207621, 3818922084, 3810586624, 3797032961, 452984828, 3796963329, 452984820
+  , 3777556480, 3904720911, 3942645758, 3808497664, 3796963329, 452984829, 3777556480, 3904720911
+  , 3812896770, 3925870499 ]
+
+-- ** Synthetic timeline, in aggregate instructions (core-0 count + core-1 count)
+
+-- | Counts at the stop, value read at the stop, times of earlier waiting reads without a stop.
+data Load = Load (Word64, Word64) Word32 [Word64]
+
+countsTime :: (Word64, Word64) -> Word64
+countsTime (first, second) = first + second
+
+gateCounts, ackCounts :: (Word64, Word64)
+gateCounts = (1050, 20)
+ackCounts = (1105, 100)
+
+gateTime :: Word64
+gateTime = countsTime gateCounts
+
+uniformCounts :: Word64 -> Word64 -> Int -> (Word64, Word64)
+uniformCounts period skew index = (1100 + 100 * fromIntegral index, 100 + fromIntegral index * period + (if index >= 1 then skew else 0))
+
+-- | After the fourth waiting stop; core 0 runs 3 * period further so the scheduler bound holds for any period.
+preclearCounts :: Word64 -> (Word64, Word64)
+preclearCounts period = (1450 + 3 * period, 110 + 3 * period)
+
+preclearTime, readbackTime :: Word64 -> Word64
+preclearTime period = countsTime (preclearCounts period)
+readbackTime period = preclearTime period + 2
+
+loadsFor :: Scenario -> Word64 -> Word64 -> [Load]
+loadsFor scenario period skew = case scenario of
+  HeldSentinel -> [Load (uniformCounts period skew index) 0x22b [] | index <- [0 .. 3]]
+  DelayedRelease _ -> [Load (uniformCounts period skew index) 0x22b [] | index <- [0 .. 3]]
+    ++ [Load (1500 + 3 * period, 100 + 4 * period) 0 [preclearTime period - 20]]
+  Natural _ -> [Load (uniformCounts period skew index) (if index == 2 then 0 else 0x22b) [] | index <- [0 .. 2]]
+
+exitCountsFor :: Scenario -> Word64 -> (Word64, Word64)
+exitCountsFor scenario period = foldl (\_ (Load counts _ _) -> counts) (0, 0) (loadsFor scenario period 0)
+
+heldFinalTime :: Word64 -> Word64
+heldFinalTime period = countsTime (exitCountsFor HeldSentinel period)
+
+-- | The last stop of a non-held run.
+endpointTime :: Scenario -> Word64 -> Word64
+endpointTime scenario period = countsTime (exitCountsFor scenario period) + 2 * (if scenario `elem` [Natural LoaderEntry, DelayedRelease LoaderEntry] then 60 else 50)
 
 receiptFor :: Scenario -> Program -> [(Word32, Word32)] -> Knobs -> Value
 receiptFor scenario program siteWords knobs = object
   [ "schema" .= (3 :: Int), "scenario" .= scenarioValue scenario, "program" .= programName program
   , "result" .= ("passed" :: String), "error" .= Null, "machine_failure" .= Null
   , "instructions" .= total, "cp14_identities" .= ([0x4003, 0x5003] :: [Word32])
-  , "epochs" .= ([epochValue "reset" 0 resetClasses "observe", epochValue "released" 1000 releasedClasses "fixed"]
-      ++ [epochValue "published" exitTime publishedClasses "fixed" | not held])
+  , "epochs" .= ([epochValue "reset" 0 resetClasses "observe", epochValue "released" releasedStart releasedClasses "fixed"]
+      ++ [epochValue "published" publishedStart publishedClasses "fixed" | not held])
   , "stops" .= map finishStop stops
   , "bindings" .= object
       [ "decoder_choices" .= ([1] :: [Int])
       , "maps" .= [object ["core" .= (1 :: Int), "address" .= guest, "physical" .= physical, "size" .= size]
                   | (guest, physical, size) <- [(0x10000, 0x10000, 0x4ca0), (0x40020000, 0x20000, 8), (0xd0000, 0xd0000, 0xdaa0), (0x61c000, 0x61c000, 4), (0x61c40c, 0x61c40c, 4)] :: [(Word32, Word32, Word32)]]
       , "tcm" .= heldTcm ]
-  , "gate" .= (if held then gateValue else Null)
-  , "clear_readback" .= Null
+  , "gate" .= (if control then gateValue else Null)
+  , "clear_readback" .= (if delayed then readbackValue else Null)
   , "final_primary" .= (if held then object
       [ "address" .= (0x1ff4 :: Word32), "registers" .= gateRegisters, "sp" .= (0x700007f0 :: Word32)
       , "lr" .= (0x1234 :: Word32), "cpsr" .= (0xd3 :: Word32), "instructions" .= total ] else Null)
@@ -186,70 +244,103 @@ receiptFor scenario program siteWords knobs = object
   where
     loaderDigest = "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec" :: String
     held = scenario == HeldSentinel
+    delayed = case scenario of
+      DelayedRelease _ -> True
+      _ -> False
+    control = held || delayed
     loaderEndpoint = scenario `elem` [Natural LoaderEntry, DelayedRelease LoaderEntry]
     (sites, register, period, initPc, fetchSet, readSet) = case program of
       Retained -> (retainedSites, 3, 304, 0x11818, [], [])
       Owned facts -> let PollPeriod value = ownedPollPeriod facts in
         (ownedSites facts, registerIndexValue (ownedLoadedRegister facts), value, addressOf (siteMain (ownedSites facts)), ownedForbidFetch facts, ownedForbidRead facts)
     site select = addressOf (select sites)
-    loadCount = if held then 4 else 3 :: Int
-    skewAt index = if index >= 1 then knobSkew knobs else 0
-    loadCounts index = (1100 + 100 * fromIntegral index, 100 + fromIntegral index * period + skewAt index) :: (Word64, Word64)
-    loadTime index = let (first, second) = loadCounts index in first + second
-    loadValue index = if not held && index == loadCount - 1 then 0 else 0x22b :: Word32
-    exitCounts = loadCounts (loadCount - 1)
-    exitTime = loadTime (loadCount - 1)
+    loads = loadsFor scenario period (knobSkew knobs)
+    exitCounts = foldl (\_ (Load counts _ _) -> counts) (0, 0) loads
+    exitTime = countsTime exitCounts
+    shift time = sum [delta | (threshold, delta) <- knobShifts knobs, time >= threshold]
+    bump time = time + shift time
+    bumpCounts counts@(first, second) = (first + shift (countsTime counts), second)
+    releasedStart = bump 1000
+    publishedStart = bump exitTime
     zeros = replicate 13 (0 :: Word32)
     mainRegisters = [0, 0, 0, 0, 0, 0, 6, 7, 8, 9, 10, 11, 0] :: [Word32]
     endpointRegisters = [argumentWord, 0, 0, 0xd0020, 0, 0, 6, 7, 8, 9, 10, 11, 0] :: [Word32]
     gateRegisters = 0x1234 : replicate 12 (0 :: Word32)
-    loadRegisters index = [if slot == register then loadValue index else 0 | slot <- [0 .. 12]]
+    preclearRegisters = [0x1234, 0, 0, 0x40020000] ++ replicate 9 (0 :: Word32)
+    loadRegisters value = [if slot == register then value else 0 | slot <- [0 .. 12]]
     heldTcm = [[0x70000011, 0], [0, 0]] :: [[Word32]]
     mainTcm = [[0x70000011, 0], [0x70000011, 0]] :: [[Word32]]
     globals = hexText (B.replicate 0x40 0x11)
     endpointState = Just (object ["globals" .= globals, "companion" .= hexText (knobCompanion knobs)])
-    rows = sortOn fst (
-      [ (10, transferRow "model-bus-write" 0xa00c4)
-      , (20, cpuRow "cpu-write" 0 0x1e64 0x40020000 0x20000 0x22b 0x22b 20)
-      , (21, cpuRow "cpu-write" 0 0x1e68 0x40020004 0x20004 0x22b 0x22b 21)
-      , (30, cpuRow "cpu-write" 0 0x1fec 0x400a00c4 0xa00c4 0 0 30)
-      , (40, transferRow "host-read" 0x20000)
-      , (1030, cpuRow "cpu-write" 1 initPc 0x14c80 0x14c80 0 0xffffffff 1030)
-      , (1031, cpuRow "cpu-write" 1 initPc 0x14c84 0x14c84 0 0xffffffff 1031)
-      , (1040, cpuRow "cpu-write" 1 (site siteClearStore) 0x40020004 0x20004 0 0x22b 1040) ]
-      ++ [ (loadTime index - 5, cpuRow "cpu-read" 1 (site sitePeerLoad) 0x40020000 0x20000 (loadValue index) (loadValue index) (loadTime index - 5))
-         | index <- [0 .. loadCount - 1] ]
+    peerRead value = cpuRow "cpu-read" 1 (site sitePeerLoad) 0x40020000 0x20000 value value
+    primaryClearTime
+      | delayed = readbackTime period
+      | otherwise = countsTime (uniformCounts period (knobSkew knobs) 1) + 10
+    poll = knobPollValue knobs
+    rawRows =
+      [ (10, const (transferRow "model-bus-write" 0xa00c4))
+      , (20, cpuRow "cpu-write" 0 0x1e64 0x40020000 0x20000 0x22b 0x22b)
+      , (21, cpuRow "cpu-write" 0 0x1e68 0x40020004 0x20004 0x22b 0x22b)
+      , (30, cpuRow "cpu-write" 0 0x1fec 0x400a00c4 0xa00c4 0 0)
+      , (40, const (transferRow "host-read" 0x20000))
+      , (1030, cpuRow "cpu-write" 1 initPc 0x14c80 0x14c80 0 0xffffffff)
+      , (1031, cpuRow "cpu-write" 1 initPc 0x14c84 0x14c84 0 0xffffffff)
+      , (1040, cpuRow "cpu-write" 1 (site siteClearStore) 0x40020004 0x20004 0 0x22b) ]
+      ++ concat [(countsTime counts - 5, peerRead value) : [(time, peerRead 0x22b) | time <- earlier] | Load counts value earlier <- loads]
+      ++ [(primaryClearTime, cpuRow "cpu-write" 0 0x1ff8 0x40020000 0x20000 0 0x22b) | not held]
+      ++ (if delayed then
+           [(1100, cpuRow "cpu-read" 0 0x114 0x40020004 0x20004 poll poll)]
+           ++ [(preclearTime period + 1, const (transferRow "host-read" physical)) | physical <- [0x20000, 0x20000, 0x20000, 0x20004, 0xa00c4, 0x14c80, 0x14c84]]
+           ++ [(readbackTime period + 10, cpuRow "cpu-read" 0 0x2020 0x40020004 0x20004 0 0)]
+         else [])
       ++ (if held then [] else
-         [ (loadTime 1 + 10, cpuRow "cpu-write" 0 0x1ff8 0x40020000 0x20000 0 0x22b (loadTime 1 + 10))
-         , (exitTime + 10, cpuRow "cpu-write" 1 (site siteTargetStore) 0x14c80 0x14c80 0xd0020 0 (exitTime + 10))
-         , (exitTime + 20, cpuRow "cpu-write" 1 (site siteArgumentStore) 0x14c84 0x14c84 argumentWord 0 (exitTime + 20))
-         , (exitTime + 30, cpuRow "cpu-read" 1 (site siteTargetLoad) 0x14c80 0x14c80 0xd0020 0xd0020 (exitTime + 30))
-         , (exitTime + 40, cpuRow "cpu-read" 1 (site siteArgumentLoad) 0x14c84 0x14c84 argumentWord argumentWord (exitTime + 40)) ])
-      ++ knobExtraRows knobs)
+           [ (exitTime + 10, cpuRow "cpu-write" 1 (site siteTargetStore) 0x14c80 0x14c80 0xd0020 0)
+           , (exitTime + 20, cpuRow "cpu-write" 1 (site siteArgumentStore) 0x14c84 0x14c84 argumentWord 0)
+           , (exitTime + 30, cpuRow "cpu-read" 1 (site siteTargetLoad) 0x14c80 0x14c80 0xd0020 0xd0020)
+           , (exitTime + 40, cpuRow "cpu-read" 1 (site siteArgumentLoad) 0x14c84 0x14c84 argumentWord argumentWord) ]
+           ++ concat [ [(time, const (sizedTransferRow "host-read" 0x14c60 0x40)), (time, const (sizedTransferRow "host-read" 0xa0000 0x548))]
+                     | time <- exitTime + 100 : [exitTime + 120 | loaderEndpoint] ])
+      ++ [(time, const value) | (time, value) <- knobExtraRows knobs]
+    rows = [(bump time, build (bump time)) | (time, build) <- sortOn fst rawRows]
     epochOf time
-      | time <= 1000 = "reset"
-      | held || time <= exitTime = "released"
+      | time <= releasedStart = "reset"
+      | held || time <= publishedStart = "released"
       | otherwise = "published" :: String
-    stop name location cpu (first, second) regs stackPointer state tcm programState =
-      (first + second, object
-        [ "label" .= (name :: String), "address" .= (location :: Word32), "core" .= (cpu :: Int), "instructions" .= (first + second)
-        , "counts" .= [first, second], "registers" .= (regs :: [Word32]), "sp" .= (stackPointer :: Word32), "lr" .= (0x1234 :: Word32)
-        , "cpsr" .= (0xd3 :: Word32), "state" .= state, "tcm" .= (tcm :: [[Word32]]), "program_state" .= (programState :: Maybe Value) ])
+    releasedCursor time = length [() | (rowTime, _) <- rows, epochOf rowTime == "released", rowTime <= time]
+    stop name location cpu counts regs stackPointer state tcm programState =
+      let (first, second) = bumpCounts counts
+       in (first + second, object
+            [ "label" .= (name :: String), "address" .= (location :: Word32), "core" .= (cpu :: Int), "instructions" .= (first + second)
+            , "counts" .= [first, second], "registers" .= (regs :: [Word32]), "sp" .= (stackPointer :: Word32), "lr" .= (0x1234 :: Word32)
+            , "cpsr" .= (0xd3 :: Word32), "state" .= state, "tcm" .= (tcm :: [[Word32]]), "program_state" .= (programState :: Maybe Value) ])
     idle = peerState 0x22b 0x22b 0 0
-    stops =
+    endpointCounts offset = (fst exitCounts + offset, snd exitCounts + offset)
+    stops = sortOn fst (
       [ stop "held-release" 0x3fff0000 1 (1000, 0) zeros 0x70000800 idle heldTcm Nothing
       , stop "startup-entry" (site siteEntry) 1 (1004, 2) zeros 0x70000800 idle heldTcm Nothing
       , stop "startup-main" (site siteMain) 1 (1010, 10) mainRegisters 0x70000800 idle mainTcm Nothing ]
-      ++ [stop "primary-gate" 0x1ff4 0 (1050, 20) gateRegisters 0x700007f0 idle mainTcm Nothing | held]
-      ++ [stop "peer-loaded" (site sitePeerLoaded) 1 (loadCounts index) (loadRegisters index) 0x70000800 idle mainTcm Nothing | index <- [0 .. loadCount - 1]]
+      ++ [stop "primary-gate" 0x1ff4 0 gateCounts gateRegisters 0x700007f0 idle mainTcm Nothing | control]
+      ++ (if delayed then
+           [ stop "peer-acknowledged" 0x14c 0 ackCounts gateRegisters 0x700007f0 idle mainTcm Nothing
+           , stop "primary-clear" 0x1ff8 0 (preclearCounts period) preclearRegisters 0x700007f0 idle mainTcm Nothing ]
+         else [])
+      ++ [stop "peer-loaded" (site sitePeerLoaded) 1 counts (loadRegisters value) 0x70000800 idle mainTcm Nothing | Load counts value _ <- loads]
       ++ (if held then [] else
-         [ stop "startup-handoff" (site siteHandoff) 1 (fst exitCounts + 50, snd exitCounts + 50) endpointRegisters 0x70000800 (peerState 0 0 0xd0020 argumentWord) mainTcm endpointState ]
-         ++ [ stop "loader-b-entry" 0xd0020 1 (fst exitCounts + 60, snd exitCounts + 60) endpointRegisters 0x70000800 (peerState 0 0 0xd0020 argumentWord) mainTcm endpointState | loaderEndpoint ])
+           [ stop "startup-handoff" (site siteHandoff) 1 (endpointCounts 50) endpointRegisters 0x70000800 (peerState 0 0 0xd0020 argumentWord) mainTcm endpointState ]
+           ++ [ stop "loader-b-entry" 0xd0020 1 (endpointCounts 60) endpointRegisters 0x70000800 (peerState 0 0 0xd0020 argumentWord) mainTcm endpointState | loaderEndpoint ]))
     total = maybe 0 fst (foldl (\_ item -> Just item) Nothing stops)
     finishStop (time, value) =
       let epoch = epochOf time
           cursor = length [() | (rowTime, _) <- rows, epochOf rowTime == epoch, rowTime <= time]
        in set "epoch" (String (K.toText (K.fromString epoch))) (set "watch_records" (number (fromIntegral cursor)) value)
+    (precleared0, precleared1) = preclearCounts period
+    microsteps = [((precleared0, precleared1), (precleared0, precleared1 + 1), 0x22b), ((precleared0, precleared1 + 1), (precleared0 + 1, precleared1 + 1), 0 :: Word32)]
+    countsValue counts = let (first, second) = bumpCounts counts in [first, second]
+    readbackValue = object
+      [ "instructions" .= bump (readbackTime period), "primary_address" .= (0x1ffc :: Word32), "primary_cpsr" .= (0xd3 :: Word32)
+      , "primary_instruction" .= ([0, 32, 131, 229] :: [Word8]), "state" .= peerState 0 0 0 0
+      , "watch_records" .= releasedCursor (bump (readbackTime period))
+      , "microsteps" .= [object ["before" .= countsValue before, "after" .= countsValue after, "cell0" .= scalar] | (before, after, scalar) <- microsteps] ]
     allKinds = ["cpu-read", "cpu-write", "cpu-fetch", "host-read", "host-write", "model-bus-read", "model-bus-write"] :: [String]
     writes = ["cpu-write", "host-write", "model-bus-write"] :: [String]
     resetClasses = [(extent, allKinds) | extent <- [(0x14c80, 0x14c88), (0x20000, 0x20008), (0xa00c4, 0xa00c8)]]
@@ -266,19 +357,53 @@ receiptFor scenario program siteWords knobs = object
           , "ranges" .= [[low, high] | (low, high) <- mergeRanges (map fst classes)]
           , "records" .= [row | (time, row) <- rows, epochOf time == name]
           , "classes" .= [object ["range" .= [low, high], "kinds" .= kinds] | ((low, high), kinds) <- classes] ] ]
+    (veneer, gateWords) = if held then (replicate 104 0xff, heldGateWords) else (concatMap leBytes veneerWords, delayedGateWords)
     gateValue = object
-      [ "core" .= (0 :: Int), "instructions" .= (1070 :: Word64), "decoder_choices" .= ([1] :: [Int])
+      [ "core" .= (0 :: Int), "instructions" .= bump gateTime, "decoder_choices" .= ([1] :: [Int])
       , "low_ram" .= object ["address" .= (0 :: Int), "physical" .= (0 :: Int), "size" .= (16384 :: Int), "permissions" .= (7 :: Int)]
       , "atcm" .= (0x70000011 :: Word32), "btcm" .= (0 :: Int), "stack_address" .= (0x700007d8 :: Word32)
       , "stack" .= replicate 40 (0 :: Word8)
-      , "code" .= [ object ["address" .= (0x100 :: Word32), "virtual" .= replicate 104 (0xff :: Word8), "physical" .= replicate 104 (0xff :: Word8)]
-                  , let bytes = concatMap leBytes heldGateWords in object ["address" .= (0x1fe0 :: Word32), "virtual" .= bytes, "physical" .= bytes] ] ]
+      , "code" .= [ object ["address" .= (0x100 :: Word32), "virtual" .= (veneer :: [Word8]), "physical" .= veneer]
+                  , let bytes = concatMap leBytes gateWords in object ["address" .= (0x1fe0 :: Word32), "virtual" .= bytes, "physical" .= bytes] ] ]
 
-startup :: Scenario -> Program -> Value -> Either String ()
+startup :: Scenario -> Program -> Value -> Either String ValidatedStartupReceipt
 startup scenario program value = parseStartupReceipt (BL.toStrict (encode value)) >>= validateStartupReceipt scenario program
 
-parseValue :: Value -> Either String StartupReceipt
-parseValue = parseStartupReceipt . BL.toStrict . encode
+-- * Poll-period fixtures
+
+blFrom :: Word32 -> Word32 -> Word32
+blFrom location target = 0xeb000000 .|. (((target - location - 8) `shiftR` 2) .&. 0xffffff)
+
+beqFrom :: Word32 -> Word32 -> Word32
+beqFrom location target = 0x0a000000 .|. (((target - location - 8) `shiftR` 2) .&. 0xffffff)
+
+-- | A rendezvous loop polling the peer cell through @cmp@; the fixture's period is 8 entered instructions.
+pollFixture :: [C.ByteString] -> Word32 -> Candidate
+pollFixture forbidLines comparison = Candidate (B.concat (map encodeLeWord codeWords)) (C.unlines (symbolLines ++ forbidLines))
+  where
+    (entry, mainAt, cell, rendezvous, publish, handoff) = (0x10400, 0x10410, 0x10414, 0x10424, 0x1043c, 0x10448) :: (Word32, Word32, Word32, Word32, Word32, Word32)
+    codeWords =
+      [ blFrom entry 0x11854, blFrom (entry + 4) 0x118b8, blFrom (entry + 8) mainAt, 0xeafffffe
+      , 0xeafffffe
+      , 0xe3001000, 0xe3441002, 0xe5910000, 0xe12fff1e
+      , blFrom rendezvous cell, 0xe300222b, comparison, beqFrom (rendezvous + 12) rendezvous, 0xe5810004, 0xe12fff1e
+      , 0xe5810000, 0xe5810004, 0xe12fff1e
+      , 0xe59f300c, 0xe5933000, 0xe59f0008, 0xe5900000, 0xe1a0f003, 0x14c80, 0x14c84 ]
+    symbolLines = [C.pack (showHex8 location ++ " " ++ showHex8 size ++ " T " ++ name) | (location, size, name) <-
+      [ (entry, 0x10, "xm1_secondary_entry"), (mainAt, 4, "xm1_secondary_main"), (cell, 0x10, "xm1_secondary_peer_cell")
+      , (rendezvous, 0x18, "xm1_secondary_rendezvous"), (publish, 0xc, "xm1_secondary_publish"), (handoff, 0x14, "xm1_secondary_handoff")
+      , (handoff + 16, 4, "xm1_secondary_handoff_vector") ]]
+    showHex8 value = let digits = showHex value "" in replicate (8 - length digits) '0' ++ digits
+
+-- | Applies the same CPSR to every endpoint stop.
+endpointCpsr :: Word32 -> Value -> Value
+endpointCpsr value = labelled "startup-handoff" 0 (set "cpsr" (number (fromIntegral value))) . labelled "loader-b-entry" 0 (set "cpsr" (number (fromIntegral value)))
+
+increment, decrement :: Value -> Value
+increment (Number value) = Number (value + 1)
+increment value = value
+decrement (Number value) = Number (value - 1)
+decrement value = value
 
 main :: IO ()
 main = do
@@ -298,9 +423,9 @@ main = do
   let sites = ownedSites facts
       entry = addressOf (siteEntry sites)
       handoff = addressOf (siteHandoff sites)
+      PollPeriod period = ownedPollPeriod facts
   unless (entry == 0x10400) (error "entry differs from 0x10400")
   unless (addressOf (siteMain sites) == mainSymbol) (error "main differs from xm1_secondary_main")
-  unless (ownedPollPeriod facts == PollPeriod 512) (error ("poll period differs: " ++ show (ownedPollPeriod facts)))
   unless (registerIndexValue (ownedLoadedRegister facts) == 0) (error "loaded register differs from r0")
   unless (ownedImage facts == Interval 0x10400 (0x10400 + fromIntegral (B.length correctBin))) (error "image extent differs")
   unless (leWordAt correctBin (fromIntegral (handoff - entry)) == Right 0xe1a0f003) (error "handoff site word is not MOV PC, R3")
@@ -308,11 +433,18 @@ main = do
   assertLeft "corrupted handoff word" (derive (Candidate (replaceWord (fromIntegral (handoff - entry)) 0xe1a0f004 correctBin) correctSymbols))
   forM_ [("publication fault", publicationFault), ("stack fault", stackFault)] $ \(label, candidate) -> do
     controlFacts <- assertRight ("derive " ++ label) (derive candidate)
-    unless (ownedPollPeriod controlFacts == PollPeriod 512) (error (label ++ " poll period differs"))
+    unless (ownedPollPeriod controlFacts == ownedPollPeriod facts) (error (label ++ " poll period differs from the correct image"))
   let Candidate stackBin stackSymbols = stackFault
   stackFacts <- assertRight "derive stack fault" (derive (Candidate stackBin stackSymbols))
   stackVector <- symbolAddress stackSymbols "xm1_secondary_handoff_vector"
   unless (addressOf (siteHandoff (ownedSites stackFacts)) == stackVector) (error "stack-fault handoff differs from its vector symbol")
+
+  -- Poll-period derivation on synthetic loops.
+  let forbidLines = filter ("xm1_forbid_" `B.isInfixOf`) (C.lines correctSymbols)
+  fixtureFacts <- assertRight "deterministic synthetic poll loop" (derive (pollFixture forbidLines 0xe1500002))
+  unless (ownedPollPeriod fixtureFacts == PollPeriod 8) (error ("synthetic poll period differs: " ++ show (ownedPollPeriod fixtureFacts)))
+  assertLeft "poll comparison against an incoming register" (derive (pollFixture forbidLines 0xe1500005))
+  assertLeft "poll branch on incoming flags" (derive (pollFixture forbidLines 0xe1a02002))
 
   -- Contract round trip and refusals.
   let owned = Owned facts
@@ -332,29 +464,38 @@ main = do
 
   -- Synthetic passing receipts.
   ownedWords <- assertRight "owned site words" (ownedSiteWords correctBin facts)
-  let retainedNatural = receiptFor (Natural LoaderEntry) Retained retainedSiteWords plain
-      ownedNatural = receiptFor (Natural LoaderEntry) owned ownedWords plain
-      ownedHeld = receiptFor HeldSentinel owned ownedWords plain
-  _ <- assertRight "retained natural loader-entry" (startup (Natural LoaderEntry) Retained retainedNatural)
-  _ <- assertRight "owned natural loader-entry" (startup (Natural LoaderEntry) owned ownedNatural)
-  _ <- assertRight "owned held sentinel" (startup HeldSentinel owned ownedHeld)
-  _ <- assertRight "owned natural handoff" (startup (Natural Handoff) owned (receiptFor (Natural Handoff) owned ownedWords plain))
+  let receipt scenario program knobs = receiptFor scenario program (if program == Retained then retainedSiteWords else ownedWords) knobs
+      retainedNatural = receipt (Natural LoaderEntry) Retained plain
+      ownedNatural = receipt (Natural LoaderEntry) owned plain
+      ownedHandoff = receipt (Natural Handoff) owned plain
+      ownedHeld = receipt HeldSentinel owned plain
+      delayed endpoint = receipt (DelayedRelease endpoint) owned
+  forM_ scenarios $ \scenario -> forM_ [Retained, owned] $ \program ->
+    assertRight ("synthetic " ++ show scenario ++ " " ++ programName program) (startup scenario program (receipt scenario program plain))
   assertLeft "owned receipt against the retained contract" (startup (Natural LoaderEntry) Retained ownedNatural)
   assertLeft "loader-entry receipt against the handoff contract" (startup (Natural Handoff) owned ownedNatural)
+  assertLeft "delayed receipt against the natural contract" (startup (Natural Handoff) owned (delayed Handoff plain))
 
   let register = registerIndexValue (ownedLoadedRegister facts)
+      exitTime scenario = let (first, second) = exitCountsFor scenario period in first + second
       forbiddenFetch = set "label" (String "forbidden-fetch") (set "address" (number 0x11800) (lastStop ownedNatural))
       outsideProtocol = cpuRow "cpu-write" 1 (addressOf (siteMain sites)) 0x10000 0x10000 0 0 1050
       allHeldTcm = change "stops" (each (set "tcm" (Array (V.fromList [Array (V.fromList [number 0x70000011, number 0]), Array (V.fromList [number 0, number 0])]))))
       hostWrite = change "epochs" (at 1 (change "memory_watch" (change "records" (vector (`V.snoc` transferRow "host-write" 0x14c80)))))
+      globalsRead = sizedTransferRow "host-read" 0x14c60 0x40
       refusals =
         [ ("wrong core on startup-entry", labelled "startup-entry" 0 (set "core" (number 0)) ownedNatural)
         , ("forbidden-fetch stop", change "stops" (insertBeforeLast forbiddenFetch) ownedNatural)
         , ("r3 0xdeadbe00 at handoff", labelled "startup-handoff" 0 (change "registers" (at 3 (const (number 0xdeadbe00)))) ownedNatural)
         , ("SP 0x700007f8 at handoff", labelled "startup-handoff" 0 (set "sp" (number 0x700007f8)) ownedNatural)
+        , ("Jazelle bit at handoff", labelled "startup-handoff" 0 (set "cpsr" (number 0x010000d3)) ownedNatural)
         , ("pair register differs from the read value", labelled "peer-loaded" 0 (change "registers" (at register (const (number 0x22c)))) ownedNatural)
-        , ("waiting-period mismatch", receiptFor (Natural LoaderEntry) owned ownedWords plain {knobSkew = 1})
-        , ("row outside P in released", receiptFor (Natural LoaderEntry) owned ownedWords plain {knobExtraRows = [(1050, outsideProtocol)]})
+        , ("waiting-period mismatch", receipt (Natural LoaderEntry) owned plain {knobSkew = 1})
+        , ("row outside P in released", receipt (Natural LoaderEntry) owned plain {knobExtraRows = [(1050, outsideProtocol)]})
+        , ("globals snapshot read in released", receipt (Natural LoaderEntry) owned plain {knobExtraRows = [(1050, globalsRead)]})
+        , ("straddling host read in published", receipt (Natural LoaderEntry) owned plain
+            {knobExtraRows = [(exitTime (Natural LoaderEntry) + 50, sizedTransferRow "host-read" 0x14c7c 8)]})
+        , ("per-core counts that wrap to the stop total", labelled "startup-main" 0 (set "counts" (Array (V.fromList [number (maxBound - 999), number 2020]))) ownedNatural)
         , ("host write", hostWrite ownedNatural)
         , ("missing startup-main TCM transition", allHeldTcm ownedNatural)
         , ("record digest differs", change "record" (set "sha256" (String "2f1bf3f0e483b892d2890599679c1b515cfc1be8b8c27cbb06d4d913e428abb4")) ownedNatural)
@@ -363,18 +504,56 @@ main = do
         , ("unknown receipt field", set "extra" Null ownedNatural)
         ]
   forM_ refusals $ \(label, value) -> assertLeft label (startup (Natural LoaderEntry) owned value)
+  assertLeft "snapshot reads beyond the endpoint stops" (startup (Natural Handoff) owned
+    (receipt (Natural Handoff) owned plain {knobExtraRows = [(exitTime (Natural Handoff) + 50, globalsRead)]}))
   assertLeft "held gate binding count differs" (startup HeldSentinel owned (change "gate" (set "instructions" (number 1071)) ownedHeld))
 
-  -- Retained versus owned comparison.
-  retainedReceipt <- assertRight "parse retained receipt" (parseValue retainedNatural)
-  let timerDiffers = receiptFor (Natural LoaderEntry) owned ownedWords plain {knobCompanion = replaceWord 0x40 0x12345678 (knobCompanion plain)}
-      eventDiffers = receiptFor (Natural LoaderEntry) owned ownedWords plain {knobCompanion = replaceWord 0x44 0x12345678 (knobCompanion plain)}
-  ownedTimer <- assertRight "parse owned receipt with differing timer" (parseValue timerDiffers)
-  _ <- assertRight "owned timer receipt still passes" (startup (Natural LoaderEntry) owned timerDiffers)
-  _ <- assertRight "comparison ignores timer words" (compareStartupReceipts retainedReceipt ownedTimer)
-  ownedEvent <- assertRight "parse owned receipt with differing companion" (parseValue eventDiffers)
-  assertLeft "comparison refuses a differing companion word" (compareStartupReceipts retainedReceipt ownedEvent)
-  assertLeft "comparison refuses swapped programs" (compareStartupReceipts ownedTimer retainedReceipt)
-  heldReceipt <- assertRight "parse held receipt" (parseValue ownedHeld)
-  assertLeft "comparison refuses differing scenarios" (compareStartupReceipts retainedReceipt heldReceipt)
+  -- Phase bounds: accepted at each bound, refused one instruction past it.
+  let heldGap = heldFinalTime period - gateTime
+      clearGap = readbackTime period - gateTime
+      releaseGap endpoint = endpointTime (DelayedRelease endpoint) period - readbackTime period
+      boundary label scenario threshold room = do
+        _ <- assertRight (label ++ " at its bound") (startup scenario owned (receipt scenario owned plain {knobShifts = [(threshold, room)]}))
+        assertLeft (label ++ " past its bound") (startup scenario owned (receipt scenario owned plain {knobShifts = [(threshold, room + 1)]}))
+  boundary "held prefix-to-gate" HeldSentinel gateTime (4000000 - gateTime)
+  boundary "delayed prefix-to-gate" (DelayedRelease Handoff) gateTime (4000000 - gateTime)
+  boundary "held gate-to-fourth-load" HeldSentinel (heldFinalTime period) (4000000 - heldGap)
+  boundary "delayed gate-to-committed-clear" (DelayedRelease Handoff) (preclearTime period) (5100000 - clearGap)
+  forM_ [Handoff, LoaderEntry] $ \endpoint ->
+    boundary ("committed-clear-to-" ++ show endpoint) (DelayedRelease endpoint) (endpointTime (DelayedRelease endpoint) period) (20000 - releaseGap endpoint)
+
+  -- Delayed clear evidence.
+  let delayedRefusals =
+        [ ("microstep skips an instruction", change "clear_readback" (change "microsteps" (at 0 (change "after" (at 1 increment)))) (delayed Handoff plain))
+        , ("readback cell not cleared", change "clear_readback" (set "state" (peerState 0x22b 0 0 0)) (delayed Handoff plain))
+        , ("readback address is the store itself", change "clear_readback" (set "primary_address" (number 0x1ff8)) (delayed Handoff plain))
+        , ("readback cursor precedes the original clear", change "clear_readback" (change "watch_records" decrement) (delayed Handoff plain))
+        , ("repeated physical readback", delayed Handoff plain {knobExtraRows = [(preclearTime period + 1, transferRow "host-read" 0x20004)]})
+        , ("no zero veneer poll before the acknowledgement", delayed Handoff plain {knobPollValue = 0x22b})
+        , ("acknowledgement before the peer clear", labelled "peer-acknowledged" 0 (set "instructions" (number 1030) . set "counts" (Array (V.fromList [number 1010, number 20]))) (delayed Handoff plain))
+        ]
+  forM_ delayedRefusals $ \(label, value) -> assertLeft label (startup (DelayedRelease Handoff) owned value)
+
+  -- Retained versus owned comparison of validated receipts.
+  let compared scenario retainedValue ownedValue = do
+        retained <- startup scenario Retained retainedValue
+        ownedReceipt <- startup scenario owned ownedValue
+        compareStartupReceipts retained ownedReceipt
+      companionWord offset = plain {knobCompanion = replaceWord offset 0x12345678 (knobCompanion plain)}
+      guardless = change "epochs" (at 1 (change "memory_watch" (set "classes" (Array V.empty))))
+  assertRight "comparison ignores timer words" (compared (Natural LoaderEntry) retainedNatural (receipt (Natural LoaderEntry) owned (companionWord 0x40)))
+  assertLeft "comparison refuses a differing companion word" (compared (Natural LoaderEntry) retainedNatural (receipt (Natural LoaderEntry) owned (companionWord 0x44)))
+  forM_ [Handoff, LoaderEntry] $ \endpoint ->
+    assertRight ("delayed " ++ show endpoint ++ " comparison") (compared (DelayedRelease endpoint) (receipt (DelayedRelease endpoint) Retained plain) (delayed endpoint plain))
+  assertRight "comparison ignores NZCV" (compared (Natural LoaderEntry) retainedNatural (endpointCpsr 0xf00000d3 ownedNatural))
+  forM_ [("Q", 0x080000d3), ("GE", 0x000f00d3), ("A", 0x000001d3), ("E", 0x000002d3), ("I", 0x00000053), ("mode", 0x000000df)] $ \(bit, value) ->
+    assertLeft ("comparison refuses a CPSR " ++ bit ++ " difference") (compared (Natural LoaderEntry) retainedNatural (endpointCpsr value ownedNatural))
+  assertLeft "comparison refuses identical receipts without guard evidence" (compared (Natural LoaderEntry) (guardless retainedNatural) (guardless ownedNatural))
+  assertLeft "comparison refuses an owned receipt as the retained one" (compared (Natural LoaderEntry) ownedNatural ownedNatural)
+  retainedValidated <- assertRight "validated retained" (startup (Natural LoaderEntry) Retained retainedNatural)
+  ownedValidated <- assertRight "validated owned" (startup (Natural LoaderEntry) owned ownedNatural)
+  heldValidated <- assertRight "validated held" (startup HeldSentinel owned ownedHeld)
+  assertLeft "comparison refuses swapped programs" (compareStartupReceipts ownedValidated retainedValidated)
+  assertLeft "comparison refuses differing scenarios" (compareStartupReceipts retainedValidated heldValidated)
+  _ <- assertRight "owned handoff receipt" (startup (Natural Handoff) owned ownedHandoff)
   putStrLn "peer-startup witness tests: pass"

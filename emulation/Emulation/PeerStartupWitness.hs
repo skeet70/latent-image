@@ -9,7 +9,7 @@ module Emulation.PeerStartupWitness
   , forbidFetchIntervals, forbidReadIntervals, retainedSites
   , contractValue, parseStartupContract
   , candidateEntry, deriveOwnedFacts, verifyStagedOwned
-  , StartupReceipt, parseStartupReceipt, validateStartupReceipt, compareStartupReceipts, startupArgument
+  , StartupReceipt, ValidatedStartupReceipt, parseStartupReceipt, validateStartupReceipt, compareStartupReceipts, startupArgument
   , maxStartupReceiptBytes
   ) where
 
@@ -262,7 +262,7 @@ checkOwnedFacts facts = do
     "owned image lies outside [0x103e8,0x11800) or is not word aligned"
   require (all (\(GuestAddress site) -> site >= low && site < high && site .&. 3 == 0) sites) "owned site lies outside the image or is not word aligned"
   require (length (nub sites) == length sites) "owned sites are not distinct"
-  require (period > 0) "owned poll period is zero"
+  require (period > 0 && period <= 100000) "owned poll period lies outside 1..100000"
   require (sort (ownedForbidFetch facts) == sort forbidFetchIntervals) "forbid_fetch differs from the fixed intervals"
   require (sort (ownedForbidRead facts) == sort forbidReadIntervals) "forbid_read differs from the fixed intervals"
 
@@ -392,12 +392,15 @@ forbidSet rows prefix = do
 
 -- ** Poll-period interpreter
 
-data Flags = Flags {flagN :: Bool, flagZ :: Bool, flagC :: Bool, flagV :: Bool}
+-- | 'Nothing' is an incoming flag or one computed from an unknown value.
+data Flags = Flags {flagN :: Maybe Bool, flagZ :: Maybe Bool, flagC :: Maybe Bool, flagV :: Maybe Bool}
 
+-- | An absent register, or a 'Nothing' stack word, holds an incoming or derived unknown value.
 data Machine = Machine
-  { machineRegisters :: M.Map Int Word32
+  { machinePc :: Word32
+  , machineRegisters :: M.Map Int Word32
   , machineFlags :: Flags
-  , machineStack :: M.Map Word32 Word32
+  , machineStack :: M.Map Word32 (Maybe Word32)
   }
 
 maxPollSteps :: Int
@@ -412,9 +415,9 @@ peerCellWaiting = 0x22b
 pollPeriod :: CodeImage -> Word32 -> Word32 -> Either String PollPeriod
 pollPeriod code start loaded = go 0 Nothing initial
   where
-    initial = Machine (M.fromList [(13, stackTop), (14, 0), (15, start)]) (Flags False False False False) M.empty
+    initial = Machine start (M.singleton 13 stackTop) (Flags Nothing Nothing Nothing Nothing) M.empty
     go steps counted machine = do
-      let here = slot machine 15
+      let here = machinePc machine
       case counted of
         Just total | here == loaded -> Right (PollPeriod total)
         _ -> do
@@ -426,17 +429,20 @@ pollPeriod code start loaded = go 0 Nothing initial
                 Nothing -> Nothing
           go (steps + 1 :: Int) counting next
 
-slot :: Machine -> Int -> Word32
-slot machine number = M.findWithDefault 0 number (machineRegisters machine)
+slot :: Machine -> Int -> Maybe Word32
+slot machine number = M.lookup number (machineRegisters machine)
 
-setSlot :: Int -> Word32 -> Machine -> Machine
-setSlot number value machine = machine {machineRegisters = M.insert number value (machineRegisters machine)}
+setSlot :: Int -> Maybe Word32 -> Machine -> Machine
+setSlot number value machine = machine {machineRegisters = M.alter (const value) number (machineRegisters machine)}
 
 regNumber :: Reg -> Int
 regNumber (Reg number) = number
 
 unsupportedAt :: Word32 -> Either String a
 unsupportedAt location = Left ("poll-period interpreter does not support the instruction at " ++ hex location)
+
+known :: Word32 -> Maybe a -> Either String a
+known location = maybe (Left ("poll-period control flow or address depends on an unknown incoming value at " ++ hex location)) Right
 
 conditionOf :: Instruction -> Maybe Cond
 conditionOf instruction = case instruction of
@@ -452,43 +458,52 @@ conditionOf instruction = case instruction of
   Hint condition -> Just condition
   _ -> Nothing
 
-holds :: Flags -> Cond -> Bool
+holds :: Flags -> Cond -> Maybe Bool
 holds flags (Cond condition) = case condition of
-  0 -> flagZ flags
-  1 -> not (flagZ flags)
-  2 -> flagC flags
-  3 -> not (flagC flags)
-  4 -> flagN flags
-  5 -> not (flagN flags)
-  6 -> flagV flags
-  7 -> not (flagV flags)
-  8 -> flagC flags && not (flagZ flags)
-  9 -> not (flagC flags) || flagZ flags
-  10 -> flagN flags == flagV flags
-  11 -> flagN flags /= flagV flags
-  12 -> not (flagZ flags) && flagN flags == flagV flags
-  13 -> flagZ flags || flagN flags /= flagV flags
-  _ -> condition == 14
+  0 -> z
+  1 -> not <$> z
+  2 -> c
+  3 -> not <$> c
+  4 -> n
+  5 -> not <$> n
+  6 -> v
+  7 -> not <$> v
+  8 -> (&&) <$> c <*> (not <$> z)
+  9 -> (||) <$> (not <$> c) <*> z
+  10 -> (==) <$> n <*> v
+  11 -> (/=) <$> n <*> v
+  12 -> (&&) <$> (not <$> z) <*> ((==) <$> n <*> v)
+  13 -> (||) <$> z <*> ((/=) <$> n <*> v)
+  _ -> Just (condition == 14)
+  where
+    n = flagN flags
+    z = flagZ flags
+    c = flagC flags
+    v = flagV flags
 
 execute :: CodeImage -> Machine -> Either String Machine
 execute code machine = do
-  let here = slot machine 15
+  let here = machinePc machine
   word <- maybe (Left ("poll-period fetch outside the candidate image at " ++ hex here)) Right (imageWord code here)
   let instruction = A32.decode here word
-      advance = setSlot 15 (here + 4)
-      readReg r = if r == A32.pc then here + 8 else slot machine (regNumber r)
+      advance state = state {machinePc = here + 4}
+      readReg r = if r == A32.pc then Just (here + 8) else slot machine (regNumber r)
       carry = flagC (machineFlags machine)
+      linked link = if link then setSlot 14 (Just (here + 4)) machine else machine
       branchTo destination state
         | destination .&. 3 /= 0 = unsupportedAt here
-        | otherwise = Right (setSlot 15 destination state)
-      offsetValue offset = case offset of
-        OffsetImmediate displacement -> Right (fromIntegral displacement)
-        OffsetRegister up rm kind amount
-          | rm == A32.pc -> unsupportedAt here
-          | otherwise -> let (shifted, _) = shiftByImmediate kind amount (readReg rm) carry in Right (if up then shifted else negate shifted)
-      blockAddresses rn mode list =
-        let base = readReg rn
-            size = 4 * fromIntegral (length list)
+        | otherwise = Right state {machinePc = destination}
+      transferAddress rn offset indexing = do
+        displacement <- case offset of
+          OffsetImmediate value -> Right (fromIntegral value)
+          OffsetRegister up rm kind amount
+            | rm == A32.pc -> unsupportedAt here
+            | otherwise -> (\shifted -> if up then shifted else negate shifted) <$> known here (fst (shiftImmediateKnown kind amount (readReg rm) carry))
+        base <- known here (readReg rn)
+        let effective = base + displacement
+        pure (if indexing == PostIndexed then base else effective, effective)
+      blockAddresses base mode list =
+        let size = 4 * fromIntegral (length list)
             lowest = case mode of
               IncrementAfter -> base
               IncrementBefore -> base + 4
@@ -500,105 +515,121 @@ execute code machine = do
     Nothing -> case instruction of
       Rejected Barrier -> Right (advance machine)
       _ -> unsupportedAt here
-    Just condition | not (holds (machineFlags machine) condition) -> Right (advance machine)
-    Just _ -> case instruction of
-      DataProcessing _ op setFlags rd rn shifter -> do
-        (operand2, shifterCarry) <- case shifter of
-          Immediate value -> Right (value, if (word `shiftR` 8) .&. 0xf == 0 then carry else testBit value 31)
-          ShiftedImmediate rm kind amount -> Right (shiftByImmediate kind amount (readReg rm) carry)
-          ShiftedRegister rm kind rs
-            | rm == A32.pc || rs == A32.pc -> unsupportedAt here
-            | otherwise -> Right (shiftByRegister kind (fromIntegral (readReg rs .&. 0xff)) (readReg rm) carry)
-        let (result, flags) = alu op (readReg rn) operand2 shifterCarry (machineFlags machine)
-            writes = op `notElem` [TST, TEQ, CMP, CMN]
-        when (writes && rd == A32.pc) (unsupportedAt here)
-        let written = if writes then setSlot (regNumber rd) result machine else machine
-        Right (advance (if setFlags then written {machineFlags = flags} else written))
-      MoveWide _ rd value
-        | rd == A32.pc -> unsupportedAt here
-        | otherwise -> Right (advance (setSlot (regNumber rd) value machine))
-      MoveTop _ rd value
-        | rd == A32.pc -> unsupportedAt here
-        | otherwise -> Right (advance (setSlot (regNumber rd) ((readReg rd .&. 0xffff) .|. (value `shiftL` 16)) machine))
-      Load _ Word False rt rn offset indexing -> do
-        displacement <- offsetValue offset
-        let base = readReg rn
-            effective = base + displacement
-            location = if indexing == PostIndexed then base else effective
-            writeback = indexing /= OffsetOnly
-        when (writeback && (rn == A32.pc || rn == rt)) (unsupportedAt here)
-        loaded <- loadWord code machine (rn == A32.pc) location here
-        let based = if writeback then setSlot (regNumber rn) effective machine else machine
-        if rt == A32.pc then branchTo loaded based else Right (advance (setSlot (regNumber rt) loaded based))
-      Store _ Word rt rn offset indexing -> do
-        displacement <- offsetValue offset
-        let base = readReg rn
-            effective = base + displacement
-            location = if indexing == PostIndexed then base else effective
-            writeback = indexing /= OffsetOnly
-        when (rt == A32.pc || (writeback && (rn == A32.pc || rn == rt))) (unsupportedAt here)
-        stored <- storeWord here location (readReg rt) machine
-        Right (advance (if writeback then setSlot (regNumber rn) effective stored else stored))
-      LoadMultiple _ rn mode writeback list -> do
-        when (null list || rn == A32.pc || (writeback && rn `elem` list)) (unsupportedAt here)
-        let (locations, final) = blockAddresses rn mode list
-        values <- mapM (\location -> loadWord code machine False location here) locations
-        let pairs = zip list values
-            loadedState = foldl (\state (r, value) -> if r == A32.pc then state else setSlot (regNumber r) value state) machine pairs
-            based = if writeback then setSlot (regNumber rn) final loadedState else loadedState
-        maybe (Right (advance based)) (`branchTo` based) (lookup A32.pc pairs)
-      StoreMultiple _ rn mode writeback list -> do
-        when (null list || rn == A32.pc || A32.pc `elem` list || (writeback && rn `elem` list)) (unsupportedAt here)
-        let (locations, final) = blockAddresses rn mode list
-        stored <- foldM (\state (location, r) -> storeWord here location (readReg r) state) machine (zip locations list)
-        Right (advance (if writeback then setSlot (regNumber rn) final stored else stored))
-      Branch _ link destination -> branchTo destination (if link then setSlot 14 (here + 4) machine else machine)
-      BranchExchange _ link rm
-        | rm == A32.pc -> unsupportedAt here
-        | otherwise -> branchTo (readReg rm) (if link then setSlot 14 (here + 4) machine else machine)
-      Hint _ -> Right (advance machine)
-      _ -> unsupportedAt here
+    Just condition -> do
+      taken <- known here (holds (machineFlags machine) condition)
+      if not taken then Right (advance machine) else case instruction of
+        DataProcessing _ op setFlags rd rn shifter -> do
+          (operand2, shifterCarry) <- case shifter of
+            Immediate value -> Right (Just value, if (word `shiftR` 8) .&. 0xf == 0 then carry else Just (testBit value 31))
+            ShiftedImmediate rm kind amount -> Right (shiftImmediateKnown kind amount (readReg rm) carry)
+            ShiftedRegister rm kind rs
+              | rm == A32.pc || rs == A32.pc -> unsupportedAt here
+              | otherwise -> Right (shiftRegisterKnown kind (readReg rs) (readReg rm) carry)
+          let (result, flags) = alu op (readReg rn) operand2 shifterCarry (machineFlags machine)
+              writes = op `notElem` [TST, TEQ, CMP, CMN]
+          when (writes && rd == A32.pc) (unsupportedAt here)
+          let written = if writes then setSlot (regNumber rd) result machine else machine
+          Right (advance (if setFlags then written {machineFlags = flags} else written))
+        MoveWide _ rd value
+          | rd == A32.pc -> unsupportedAt here
+          | otherwise -> Right (advance (setSlot (regNumber rd) (Just value) machine))
+        MoveTop _ rd value
+          | rd == A32.pc -> unsupportedAt here
+          | otherwise -> Right (advance (setSlot (regNumber rd) ((\old -> (old .&. 0xffff) .|. (value `shiftL` 16)) <$> readReg rd) machine))
+        Load _ Word False rt rn offset indexing -> do
+          let writeback = indexing /= OffsetOnly
+          when (writeback && (rn == A32.pc || rn == rt)) (unsupportedAt here)
+          (location, effective) <- transferAddress rn offset indexing
+          loaded <- loadWord code machine (rn == A32.pc) location here
+          let based = if writeback then setSlot (regNumber rn) (Just effective) machine else machine
+          if rt == A32.pc then known here loaded >>= (`branchTo` based) else Right (advance (setSlot (regNumber rt) loaded based))
+        Store _ Word rt rn offset indexing -> do
+          let writeback = indexing /= OffsetOnly
+          when (rt == A32.pc || (writeback && (rn == A32.pc || rn == rt))) (unsupportedAt here)
+          (location, effective) <- transferAddress rn offset indexing
+          stored <- storeWord here location (readReg rt) machine
+          Right (advance (if writeback then setSlot (regNumber rn) (Just effective) stored else stored))
+        LoadMultiple _ rn mode writeback list -> do
+          when (null list || rn == A32.pc || (writeback && rn `elem` list)) (unsupportedAt here)
+          base <- known here (readReg rn)
+          let (locations, final) = blockAddresses base mode list
+          values <- mapM (\location -> loadWord code machine False location here) locations
+          let pairs = zip list values
+              loadedState = foldl (\state (r, value) -> if r == A32.pc then state else setSlot (regNumber r) value state) machine pairs
+              based = if writeback then setSlot (regNumber rn) (Just final) loadedState else loadedState
+          case lookup A32.pc pairs of
+            Just destination -> known here destination >>= (`branchTo` based)
+            Nothing -> Right (advance based)
+        StoreMultiple _ rn mode writeback list -> do
+          when (null list || rn == A32.pc || A32.pc `elem` list || (writeback && rn `elem` list)) (unsupportedAt here)
+          base <- known here (readReg rn)
+          let (locations, final) = blockAddresses base mode list
+          stored <- foldM (\state (location, r) -> storeWord here location (readReg r) state) machine (zip locations list)
+          Right (advance (if writeback then setSlot (regNumber rn) (Just final) stored else stored))
+        Branch _ link destination -> branchTo destination (linked link)
+        BranchExchange _ link rm
+          | rm == A32.pc -> unsupportedAt here
+          | otherwise -> known here (readReg rm) >>= (`branchTo` linked link)
+        Hint _ -> Right (advance machine)
+        _ -> unsupportedAt here
 
 insideStack :: Word32 -> Bool
 insideStack location = location >= stackFloor && location < stackTop
 
-loadWord :: CodeImage -> Machine -> Bool -> Word32 -> Word32 -> Either String Word32
+loadWord :: CodeImage -> Machine -> Bool -> Word32 -> Word32 -> Either String (Maybe Word32)
 loadWord code machine literal location here
   | location .&. 3 /= 0 = unsupportedAt here
-  | location == peerCellAddress = Right peerCellWaiting
+  | location == peerCellAddress = Right (Just peerCellWaiting)
   | insideStack location = maybe (Left ("poll-period interpreter reads an unwritten stack word at " ++ hex here)) Right (M.lookup location (machineStack machine))
-  | literal, Just value <- imageWord code location = Right value
+  | literal, Just value <- imageWord code location = Right (Just value)
   | otherwise = Left ("poll-period interpreter load outside the modelled memory at " ++ hex here)
 
-storeWord :: Word32 -> Word32 -> Word32 -> Machine -> Either String Machine
+storeWord :: Word32 -> Word32 -> Maybe Word32 -> Machine -> Either String Machine
 storeWord here location value machine
   | location .&. 3 /= 0 = unsupportedAt here
   | insideStack location = Right machine {machineStack = M.insert location value (machineStack machine)}
   | otherwise = Right machine
 
-alu :: DataOp -> Word32 -> Word32 -> Bool -> Flags -> (Word32, Flags)
-alu op left right shifterCarry flags = case op of
-  AND -> logical (left .&. right)
-  EOR -> logical (left `xor` right)
-  SUB -> arithmetic left (complement right) True
-  RSB -> arithmetic (complement left) right True
-  ADD -> arithmetic left right False
-  ADC -> arithmetic left right (flagC flags)
-  SBC -> arithmetic left (complement right) (flagC flags)
-  RSC -> arithmetic (complement left) right (flagC flags)
-  TST -> logical (left .&. right)
-  TEQ -> logical (left `xor` right)
-  CMP -> arithmetic left (complement right) True
-  CMN -> arithmetic left right False
-  ORR -> logical (left .|. right)
-  MOV -> logical right
-  BIC -> logical (left .&. complement right)
-  MVN -> logical (complement right)
+shiftImmediateKnown :: Shift -> Int -> Maybe Word32 -> Maybe Bool -> (Maybe Word32, Maybe Bool)
+shiftImmediateKnown kind amount value carry
+  | kind == LSL && amount == 0 = (value, carry)
+  | kind == ROR && amount == 0 = split (shiftByImmediate kind amount <$> value <*> carry)
+  | otherwise = split ((\word -> shiftByImmediate kind amount word False) <$> value)
   where
-    logical result = (result, flags {flagN = testBit result 31, flagZ = result == 0, flagC = shifterCarry})
+    split shifted = (fst <$> shifted, snd <$> shifted)
+
+shiftRegisterKnown :: Shift -> Maybe Word32 -> Maybe Word32 -> Maybe Bool -> (Maybe Word32, Maybe Bool)
+shiftRegisterKnown kind amountRegister value carry = case (.&. 0xff) <$> amountRegister of
+  Nothing -> (Nothing, Nothing)
+  Just 0 -> (value, carry)
+  Just amount ->
+    let shifted = (\word -> shiftByRegister kind (fromIntegral amount) word False) <$> value
+     in (fst <$> shifted, snd <$> shifted)
+
+alu :: DataOp -> Maybe Word32 -> Maybe Word32 -> Maybe Bool -> Flags -> (Maybe Word32, Flags)
+alu op left right shifterCarry flags = case op of
+  AND -> logical ((.&.) <$> left <*> right)
+  EOR -> logical (xor <$> left <*> right)
+  SUB -> arithmetic left (complement <$> right) (Just True)
+  RSB -> arithmetic (complement <$> left) right (Just True)
+  ADD -> arithmetic left right (Just False)
+  ADC -> arithmetic left right (flagC flags)
+  SBC -> arithmetic left (complement <$> right) (flagC flags)
+  RSC -> arithmetic (complement <$> left) right (flagC flags)
+  TST -> logical ((.&.) <$> left <*> right)
+  TEQ -> logical (xor <$> left <*> right)
+  CMP -> arithmetic left (complement <$> right) (Just True)
+  CMN -> arithmetic left right (Just False)
+  ORR -> logical ((.|.) <$> left <*> right)
+  MOV -> logical right
+  BIC -> logical ((\a b -> a .&. complement b) <$> left <*> right)
+  MVN -> logical (complement <$> right)
+  where
+    logical result = (result, flags {flagN = (`testBit` 31) <$> result, flagZ = (== 0) <$> result, flagC = shifterCarry})
     arithmetic a b carryIn =
-      let (result, carryOut, overflow) = addWithCarry a b carryIn
-       in (result, Flags (testBit result 31) (result == 0) carryOut overflow)
+      let outcome = addWithCarry <$> a <*> b <*> carryIn
+          result = (\(value, _, _) -> value) <$> outcome
+       in (result, Flags ((`testBit` 31) <$> result) ((== 0) <$> result) ((\(_, carryOut, _) -> carryOut) <$> outcome) ((\(_, _, overflow) -> overflow) <$> outcome))
 
 addWithCarry :: Word32 -> Word32 -> Bool -> (Word32, Bool, Bool)
 addWithCarry a b carryIn =
@@ -765,7 +796,7 @@ maxStartupReceiptBytes :: Int
 maxStartupReceiptBytes = 16 * 1024 * 1024
 
 maxWatchRows, maxStops, maxPairs :: Int
-maxWatchRows = 16384
+maxWatchRows = 12288
 maxStops = 160
 maxPairs = 128
 
@@ -1122,10 +1153,15 @@ lastOf :: [a] -> Maybe a
 lastOf = foldl (\_ item -> Just item) Nothing
 
 cpsrMasked :: Cpsr -> Bool
-cpsrMasked (Cpsr value) = value .&. 0x2ff == 0xd3
+cpsrMasked (Cpsr value) = value .&. 0x010002ff == 0xd3
 
-validateEpoch :: [WatchClass] -> Instructions -> Epoch -> Either String ()
-validateEpoch expected end epoch = do
+-- | Extents of the host reads the SDK takes at each endpoint stop.
+endpointSnapshots :: [Interval]
+endpointSnapshots = [Interval 0x14c60 0x14ca0, Interval 0xa0000 0xa0548]
+
+-- | @snapshots@ bounds the endpoint snapshot reads of each extent in the epoch.
+validateEpoch :: [WatchClass] -> Instructions -> Int -> Epoch -> Either String ()
+validateEpoch expected end snapshots epoch = do
   let watch = epochWatch epoch
       rows = W.watchRecords watch
       cpus = [row | row@W.CpuRecord {} <- rows]
@@ -1133,6 +1169,8 @@ validateEpoch expected end epoch = do
       name = epochText (epochName epoch)
       fixed = epochName epoch /= ResetEpoch
       afterStart row = not fixed || W.cpuInstructions row > epochStart epoch
+      snapshot row = epochName epoch == PublishedEpoch && rowKind row == KindHostRead && rowExtent row `elem` endpointSnapshots
+      contained (Interval low high) = any (\(Interval rangeLow rangeHigh) -> rangeLow <= low && high <= rangeHigh) protocolRanges
   require (W.watchEnabled watch && isNothing (W.watchViolation watch)) (name ++ " watch is disabled or violated")
   require (sort (epochClasses epoch) == sort expected) (name ++ " watch classes differ")
   require (epochViews epoch == (if fixed then FixedViews else ObserveViews)) (name ++ " watch view policy differs")
@@ -1140,12 +1178,14 @@ validateEpoch expected end epoch = do
     && mergeIntervals ranges == mergeIntervals [extent | WatchClass extent _ <- expected]) (name ++ " watch ranges differ from the class union")
   require (nondecreasing (map W.cpuInstructions cpus) && nondecreasing (map W.cpuTick cpus)) (name ++ " CPU attempt chronology differs")
   require (all (\row -> afterStart row && W.cpuInstructions row <= end) cpus) (name ++ " CPU attempt lies outside its epoch")
+  require (all (\extent -> length [() | row <- rows, snapshot row, rowExtent row == extent] <= snapshots) endpointSnapshots)
+    (name ++ " endpoint snapshot reads exceed the endpoint stops")
   forM_ rows $ \row -> do
     let extent = rowExtent row
         kind = rowKind row
     require (any (\(WatchClass classExtent kinds) -> overlaps classExtent extent && kind `elem` kinds) expected) (name ++ " row is not watched by an overlapping class")
     require (kind /= KindHostWrite) "host write in startup receipt"
-    when fixed (require (any (overlaps extent) protocolRanges) (name ++ " row lies outside the protocol ranges"))
+    require (snapshot row || contained extent) (name ++ " row lies outside a single protocol range")
 
 validateCursor :: [W.WatchRecord] -> Instructions -> WatchCursor -> Either String ()
 validateCursor rows time (WatchCursor offset) = do
@@ -1211,8 +1251,8 @@ classifyRow facts publication row = case row of
       , (CellInit 0x14c84, initialises 0x14c84)
       ]
 
-validateStartupReceipt :: Scenario -> Program -> StartupReceipt -> Either String ()
-validateStartupReceipt scenario program receipt = do
+checkStartupReceipt :: Scenario -> Program -> StartupReceipt -> Either String ()
+checkStartupReceipt scenario program receipt = do
   let facts = programFacts program
       sites = factSites facts
       held = scenario == HeldSentinel
@@ -1233,7 +1273,7 @@ validateStartupReceipt scenario program receipt = do
     require (stopCore stop == labelCore (stopLabel stop)) ("stop on the wrong core: " ++ labelText (stopLabel stop))
     require (Just (stopAddress stop) == labelSite facts (stopLabel stop)) ("stop address differs: " ++ labelText (stopLabel stop))
     let CoreCounts first0 first1 = stopCounts stop
-    require (first0 + first1 == countOf stop) "stop per-core counts do not sum to its instructions"
+    require (toInteger first0 + toInteger first1 == toInteger (countOf stop)) "stop per-core counts do not sum to its instructions"
   require (nondecreasing (map stopCount stops) && fmap stopCount (lastOf stops) == Just total) "stop chronology or final stop count differs"
   require (nondecreasing [value | CoreCounts value _ <- map stopCounts stops] && nondecreasing (map (core1Of . stopCounts) stops)) "per-core stop counts regress"
   require (map stopLabel (filter ((== Core0) . stopCore) stops) == core0Labels scenario) "core-0 stops differ from the scenario"
@@ -1270,8 +1310,10 @@ validateStartupReceipt scenario program receipt = do
       pure (Just found)
     _ -> Left "segment binding presence differs from the scenario"
   classesByEpoch <- forM epochs $ \epoch -> (,) epoch <$> expectedClasses facts segment (epochName epoch)
+  require (sum [length (W.watchRecords (epochWatch epoch)) | epoch <- epochs] <= maxWatchRows) "startup watch rows exceed the aggregate bound"
+  let endpointStops name = length [() | stop <- stops, stopEpoch stop == name, stopLabel stop `elem` [StartupHandoff, LoaderBEntry]]
   forM_ (zip classesByEpoch (map epochStart (drop 1 epochs) ++ [total])) $ \((epoch, expected), end) ->
-    validateEpoch expected end epoch
+    validateEpoch expected end (endpointStops (epochName epoch)) epoch
   forM_ stops $ \stop -> do
     require (stopEpoch stop `elem` epochsFor stop) ("stop epoch differs: " ++ labelText (stopLabel stop))
     validateCursor (rowsOf (stopEpoch stop)) (stopCount stop) (stopCursor stop)
@@ -1426,9 +1468,11 @@ validateStartupReceipt scenario program receipt = do
       uniqueStop item = case filter ((== item) . stopLabel) stops of
         [found] -> Right found
         _ -> Left ("missing or repeated stop: " ++ labelText item)
-      gateBound gate = case receiptGate receipt of
-        Just (GateBindings time) -> require (time == stopCount gate) "gate binding count differs from the gate stop"
-        Nothing -> Left "gate bindings missing"
+      gateBound gate = do
+        case receiptGate receipt of
+          Just (GateBindings time) -> require (time == stopCount gate) "gate binding count differs from the gate stop"
+          Nothing -> Left "gate bindings missing"
+        require (within (Instructions 0) (stopCount gate) prefixBound) "prefix-to-gate bound exceeded"
   case scenario of
     Natural _ ->
       require (isNothing (receiptGate receipt) && isNothing (receiptReadback receipt) && isNothing (receiptFinalPrimary receipt)) "natural receipt carries control evidence"
@@ -1439,6 +1483,8 @@ validateStartupReceipt scenario program receipt = do
       require (isNothing (receiptReadback receipt)) "held control carries clear readback"
       require (receiptFinalPrimary receipt == Just (PrimaryContext (GuestAddress 0x1ff4) (stopRegisters gate) (stopSp gate) (stopLr gate) (stopCpsr gate) total))
         "held primary context changed"
+      final <- maybe (Left "held control lacks peer-loaded stops") Right (lastOf loads)
+      require (within (stopCount gate) (stopCount final) heldBound) "gate-to-final peer-loaded bound exceeded"
     DelayedRelease _ -> do
       gate <- uniqueStop PrimaryGate
       ack <- uniqueStop PeerAcknowledged
@@ -1449,9 +1495,13 @@ validateStartupReceipt scenario program receipt = do
       require (isNothing (receiptFinalPrimary receipt)) "delayed control carries a held final context"
       require (stopRegisters preclear == (stopRegisters gate) {r3 = 0x40020000} && stopSp preclear == stopSp gate
         && stopLr preclear == stopLr gate && stopCpsr preclear == stopCpsr gate) "primary live context was not restored"
+      require (length [() | earlier <- loads, stopCount earlier < stopCount preclear] >= 4) "delayed clear precedes four waiting peer-loaded stops"
       readback <- maybe (Left "committed clear readback missing") Right (receiptReadback receipt)
       CoreCounts final0 final1 <- validateMicrosteps preclear readback
       require (stopCount preclear < readbackCount readback && readbackCount readback < stopCount exit) "committed clear lies outside primary-clear..exit pair"
+      endpoint <- maybe (Left "delayed control lacks its endpoint stop") Right (lastOf endpoints)
+      require (within (stopCount gate) (readbackCount readback) delayedBound) "gate-to-committed-clear bound exceeded"
+      require (within (readbackCount readback) (stopCount endpoint) releaseBound) "committed-clear-to-endpoint bound exceeded"
       require (readbackState readback == PeerState 0 0 0 (GuestAddress 0) (Argument 0) && readbackAddress readback == GuestAddress 0x1ffc
         && readbackCpsr readback == stopCpsr preclear) "committed original-store readback differs"
       require (stopEpoch preclear == ReleasedEpoch && stopCursor preclear < readbackCursor readback && readbackCursor readback <= stopCursor exit)
@@ -1480,8 +1530,19 @@ validateStartupReceipt scenario program receipt = do
       let delta0 = final0 - ack0
           delta1 = final1 - ack1
           pairsAfterAck = length [() | pair <- having PeerPair, locatedTime pair > stopCount ack, locatedTime pair < readbackCount readback]
-      require (delta1 <= 1000 * ((delta0 + 999) `div` 1000 + 1)) "core-1 progress since acknowledgment exceeds its bound"
+      require (toInteger delta1 <= 1000 * ((toInteger delta0 + 999) `div` 1000 + 1)) "core-1 progress since acknowledgment exceeds its bound"
       require (fromIntegral pairsAfterAck <= delta1 `div` period + 1) "peer pairs since acknowledgment exceed the poll bound"
+
+-- | Aggregate-instruction phase bounds shared with the SDK's schema-2 controls.
+prefixBound, heldBound, delayedBound, releaseBound :: Word64
+prefixBound = 4000000
+heldBound = 4000000
+delayedBound = 5100000
+releaseBound = 20000
+
+-- | The later count follows the earlier by at most the bound.
+within :: Instructions -> Instructions -> Word64 -> Bool
+within (Instructions earlier) (Instructions later) bound = earlier <= later && later - earlier <= bound
 
 requiredMaps :: [MemoryMap]
 requiredMaps =
@@ -1516,8 +1577,15 @@ validateMicrosteps preclear readback = do
 
 -- * Comparison
 
-startupArgument :: StartupReceipt -> Either String Argument
-startupArgument receipt = case filter ((== StartupHandoff) . stopLabel) (receiptStops receipt) of
+-- | A receipt accepted by 'validateStartupReceipt' against its own contract.
+data ValidatedStartupReceipt = ValidatedStartupReceipt Scenario ProgramKind StartupReceipt
+
+validateStartupReceipt :: Scenario -> Program -> StartupReceipt -> Either String ValidatedStartupReceipt
+validateStartupReceipt scenario program receipt =
+  ValidatedStartupReceipt scenario (programKind program) receipt <$ checkStartupReceipt scenario program receipt
+
+startupArgument :: ValidatedStartupReceipt -> Either String Argument
+startupArgument (ValidatedStartupReceipt _ _ receipt) = case filter ((== StartupHandoff) . stopLabel) (receiptStops receipt) of
   [stop] -> Right (argument (stopState stop))
   _ -> Left "receipt lacks exactly one startup-handoff stop"
 
@@ -1527,13 +1595,15 @@ maskTimers bytes = B.pack [if timer index then 0 else byte | (index, byte) <- zi
   where
     timer index = index >= 0x40 && index < 0xc0 && (index - 0x40) `mod` 8 < 4
 
-compareStartupReceipts :: StartupReceipt -> StartupReceipt -> Either String ()
-compareStartupReceipts retained owned = do
-  forM_ [retained, owned] $ \receipt ->
-    require (receiptResult receipt == Passed && isNothing (receiptError receipt) && isNothing (receiptMachineFailure receipt)) "compared receipt did not pass"
-  require (receiptScenario retained == receiptScenario owned) "compared receipts differ in scenario"
-  require (receiptProgram retained == RetainedKind && receiptProgram owned == OwnedKind) "compared receipts are not retained then owned"
-  labels <- case endpointLabels (receiptScenario retained) of
+-- | NZCV cleared; private-data/analysis/x-m1-1.50/issue135/loaderb-first-overwrite.txt.
+comparedCpsr :: Cpsr -> Word32
+comparedCpsr (Cpsr value) = value .&. 0x0fffffff
+
+compareStartupReceipts :: ValidatedStartupReceipt -> ValidatedStartupReceipt -> Either String ()
+compareStartupReceipts (ValidatedStartupReceipt retainedScenario retainedProgram retained) (ValidatedStartupReceipt ownedScenario ownedProgram owned) = do
+  require (retainedScenario == ownedScenario) "compared receipts differ in scenario"
+  require (retainedProgram == RetainedKind && ownedProgram == OwnedKind) "compared receipts are not retained then owned"
+  labels <- case endpointLabels retainedScenario of
     [] -> Left "held receipts have no endpoint stops to compare"
     found -> Right found
   forM_ labels $ \item -> do
@@ -1545,7 +1615,7 @@ compareStartupReceipts retained owned = do
     right <- pick owned
     let leftRegs = stopRegisters left
         rightRegs = stopRegisters right
-    require (stopCpsr left == stopCpsr right) ("CPSR differs" ++ context)
+    require (comparedCpsr (stopCpsr left) == comparedCpsr (stopCpsr right)) ("CPSR differs outside NZCV" ++ context)
     require (map ($ leftRegs) [r0, r3, r6, r7, r8, r9, r10, r11] == map ($ rightRegs) [r0, r3, r6, r7, r8, r9, r10, r11]) ("r0, r3 or r6-r11 differ" ++ context)
     require (stopSp left == stopSp right) ("SP differs" ++ context)
     require (stopState left == stopState right) ("peer state differs" ++ context)
