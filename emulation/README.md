@@ -856,6 +856,37 @@ Of the 78 windows, 66 are bound by code and 6 by words. 63 of those are bound at
 
 Observed 2026-10-24 (emulated, E-FUJIMOD-XM1-FLASH-BOOT-150): stock 1.50 shows START MENU (69, 52, 12) at 80,000,000 instructions. The language phase ends at 234,250,000 on the date page (67, 56, 0), the date phase at 242,500,000 and live view at 282,500,000. MENU makes (1, 5, 2) current at 292,000,000, and the check passes at 382,000,000 with the rendered SHOOTING MENU page 1. Two runs gave identical counts and frames, in 4.4 s of driver time and 5.0 s for the whole `bazel run`, against 29.7 s for `//emulation:flash-boot-check` on the same host and DAT. The UDF control stops at 6,136,307 instructions on an invalid instruction at PC `0x0069cdf8` and fails as `model-stopped` in the language phase. FujiMod's counts are a new baseline, not comparable with the retained engine's.
 
+### Owned first-stage witness
+
+`//emulation:first-stage-witness` starts from the captured ROM reset with the packaged DAT. It arms five core-0 instruction stops before execution and reads twelve memory extents at the owned handoff vector. Its 20,000,000-instruction budget is separate from the cold-menu route. It does not import a stock-initialization checkpoint or force an execution frame.
+
+Build the targets below through the pinned build and the [prebuilt repository override contract](../build-support/README.md#prebuilt-fujimod-repository-overrides). The generated `bazel-bin/emulation/FujiModPaths.hs` must name the intended immutable SDK before any run. E-FIRST-STAGE-PUBLIC-HANDOFF-150 records the correct candidate's five-stop, twelve-read witness passing on public FujiMod `3d90035d` with the unchanged source-derived contract. Faulty-handoff, mismatched-image and cold-menu replay remain pending on that public runtime; their existing evidence is limited to the reviewed private YIELD-corrected runtime.
+
+```sh
+devenv shell -- bazel --batch build --jobs=2 \
+  --override_repository=_main~lab_dependencies~lab_fujimod=/nix/store/s3d22r1g39j523hf6p3c506cdfj3rl4b-issue117-fujimod-bazel-repository \
+  --override_repository=_main~lab_dependencies~lab_fujimod_xm1=/nix/store/k2lzilypnqb2syy4r15pv5llypjh5nrg-issue117-fujimod-xm1-bazel-repository \
+  //replacement/first_stage:first-stage-image \
+  //replacement/first_stage:first-stage-fault-image \
+  //host/firmware:build-first-stage //emulation:first-stage-witness \
+  //emulation:fujimod-flash-boot-check //emulation:emulator-slot //lz:fflzd
+stock=private-data/firmware/x-m1-1.50/FWUP0002.DAT
+payload=private-data/scratch/first-stage/staged
+mkdir -p "$payload"
+for image in first-stage-image first-stage-fault-image; do
+  bazel-bin/host/firmware/build-first-stage "$stock" \
+    "bazel-bin/replacement/first_stage/$image.bin" \
+    "bazel-bin/replacement/first_stage/$image.symbols" "$payload/$image.DAT" \
+    --load-offset 0x6000 --entry 0x6000 \
+    --expect-slot-sha256 b943e4e7e666bc5c17a87e1aab76ca0811171ed00de5b4d7350857f9aa832dce
+done
+```
+
+Run the witness with `--fflzd bazel-bin/lz/fflzd --firmware STAGED_DAT --symbols SYMBOLS --candidate-image IMAGE --output FRESH_PRIVATE_DIR`. The correct case supplies the correct DAT, symbols and image; the faulty-handoff case supplies all three faulty artifacts; the mismatched-image case supplies the correct DAT and symbols but the faulty expected image. Use `//emulation:fujimod-flash-boot-check -- --firmware STAGED_DAT --output FRESH_PRIVATE_DIR` separately for the correct DAT's cold-menu continuation. Each invocation holds one emulator slot.
+
+Producer `result: passed` means that observation completed. Only the witness consumer decides whether registers and memory match the source-derived contract. A completed producer receipt and nonzero consumer exit are expected for the two negative controls. The [boot ownership boundary](../reports/bootrom-window.md#91-first-stage-ownership-boundary) scopes the retained dependencies and qualification.
+
+
 ### RAM-push bridge on FujiMod
 
 `//emulation:xm1-viewer -- --ram-push-e2e [--cardless] --fujimod ...` runs `Xm1RamPushE2E.hs` and `EmulatorUsb.hs` against `fujimod-xm1-ram-push` (crate `emulation/fujimod-xm1`, built by `@lab_fujimod_xm1`) in place of `continue_rec_scanout.py --ram-push-server` or `cardless-ram-push-bridge`. It takes the same `--firmware`, `--installed-nand`, `--sd-card-image`, `--attach-hold-q`, `--trajectories`, `--fresh-boot`, `--output` and `--receipt-output` options; `--flash-candidate` and `--fixed-scene-frame` are refused, `--attach-hold-q` needs a card as on the retained engine, and the UI conversion profile is not forwarded. Checkpoints live under `private-data/emulator-checkpoints/xm1-ram-push-fujimod/` (card-backed) or `xm1-ram-push-fujimod-cardless/` as FujiMod session snapshots, keyed by the DAT, adjustment NAND, run document, boot ROM, bridge binary, the card image's SHA-256 and the held key. The bridge writes `emulator-session.json` into the receipt directory on `finish`, including the SD host's counters and last 32 commands.
