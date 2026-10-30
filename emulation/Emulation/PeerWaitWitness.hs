@@ -20,6 +20,7 @@ import FujiAF.JSON (decodeStrictIntegers)
 import FujiAF.PeerWaitControl (PeerControl (..), controlName, parseControlName)
 
 newtype WatchCursor = WatchCursor Int deriving (Eq, Ord, Show)
+newtype Cp14Identity = Cp14Identity Word32 deriving (Eq, Show)
 data Label = Entry | Tail | WaitLoaded | Gate | Acknowledged | Clear | Failure | Handoff | Loader
   deriving (Eq, Show, Enum, Bounded)
 data ControlStop = ControlStop
@@ -39,7 +40,7 @@ data ClearReadback = ClearReadback
   } deriving (Eq, Show)
 data ControlReceipt = ControlReceipt
   { control :: PeerControl, result :: WitnessResult, problem :: Maybe String, machineFailure :: Maybe String
-  , instructions :: Instructions, identities :: (Word32, Word32), stops :: [ControlStop]
+  , instructions :: Instructions, identities :: (Cp14Identity, Cp14Identity), stops :: [ControlStop]
   , clearReadback :: Maybe ClearReadback, memoryWatch :: W.WatchObservation, bindings :: Maybe GateBindings
   , finalPrimary :: Maybe PrimaryContext
   } deriving (Eq, Show)
@@ -140,9 +141,9 @@ parseControlReceipt bytes = do
     "passed" -> Right Passed
     "failed" -> Right Failed
     _ -> Left "unknown control result"
-  identityWords <- get row "cp14_identities" :: Either String [Word32]
-  pair <- case identityWords of
-    [first,second] -> Right (first,second)
+  observedIdentities <- get row "cp14_identities" :: Either String [Word32]
+  pair <- case observedIdentities of
+    [first,second] -> Right (Cp14Identity first,Cp14Identity second)
     _ -> Left "control requires two CP14 identities"
   snapshots <- field row "stops" >>= json >>= mapM parseStop
   unless (length snapshots <= 12) (Left "control stop limit exceeded")
@@ -237,7 +238,7 @@ readbackValue observation = object
   , "primary_instruction" .= (case primaryInstruction observation of OriginalClearInstruction -> [0,32,131,229] :: [Word8])
   ]
 controlReceiptValue :: ControlReceipt -> Value
-controlReceiptValue receipt = let watch = memoryWatch receipt; (first,second) = identities receipt in object
+controlReceiptValue receipt = let watch = memoryWatch receipt; (first,second) = identityWords (identities receipt) in object
   [ "schema" .= (2 :: Int), "control" .= controlName (control receipt)
   , "result" .= (if result receipt == Passed then "passed" else "failed" :: String)
   , "error" .= problem receipt, "machine_failure" .= machineFailure receipt, "instructions" .= countWord (instructions receipt)
@@ -277,7 +278,7 @@ validateControlReceipt selected expected receipt = do
   require (control receipt == selected) "control selection differs"
   require (expected == Argument 0x69cdf8) "control argument differs from pinned source"
   require (result receipt == Passed && problem receipt == Nothing && machineFailure receipt == Nothing) "control witness failed"
-  require (identities receipt == (0x4003,0x5003)) "control CP14 identities differ"
+  require (identities receipt == (Cp14Identity 0x4003,Cp14Identity 0x5003)) "control CP14 identities differ"
   require (instructions receipt > Instructions 0 && instructions receipt <= Instructions 10000000) "control aggregate budget exceeded"
   let snapshots = stops receipt
       waits = filter ((== WaitLoaded) . label) snapshots
@@ -325,12 +326,15 @@ validateControlReceipt selected expected receipt = do
       require (count preclear <= plus (count gate) 5100000) "gate-to-clear bound exceeded"
       observation <- maybe (Left "committed clear readback missing") Right (clearReadback receipt)
       validateReadback preclear handoff loader observation receipt
-      P.validateReceipt expected (P.Receipt Passed Nothing Nothing (instructions receipt) (identities receipt)
+      P.validateReceipt expected (P.Receipt Passed Nothing Nothing (instructions receipt) (identityWords (identities receipt))
         (map natural [entry,tailStop,handoff,loader]) (memoryWatch receipt))
   where
     plus (Instructions value) delta = Instructions (value + delta)
     natural stop = P.Stop (case label stop of Entry -> P.Record2Entry; Tail -> P.RendezvousTail; Handoff -> P.Record2Handoff; _ -> P.LoaderBEntry)
       (site stop) (cpu stop) (count stop) (registers stop) (sp stop) (lr stop) (cpsr stop) (state stop) (frame stop)
+
+identityWords :: (Cp14Identity,Cp14Identity) -> (Word32,Word32)
+identityWords (Cp14Identity first,Cp14Identity second) = (first,second)
 
 expectedRanges :: [(Word64,Word64)]
 expectedRanges = [(0x20000,0x20008),(0xa00c4,0xa00c8),(0x14c80,0x14c88)]
@@ -418,7 +422,7 @@ validateAttempts selected (Argument expected) entry tailStop gate waits receipt 
     require valid "unexplained CPU read source, alias, word or phase"
   let intervals = zip (cursor tailStop : map cursor waits) waits
   forM_ intervals $ \(previous,stop) -> do
-    let candidates = [row | (index,row) <- waitReads, index >= cursorWord previous && index < cursorWord (cursor stop), W.cpuInstructions row < count stop]
+    let candidates = [row | (index,row) <- waitReads, index >= cursorWord previous && index < cursorWord (cursor stop), W.cpuInstructions row <= count stop]
     case candidates of
       [row] -> require (W.cpuAddress row == W.watchAddress 0x40020000 && W.cpuPhysical row == W.watchAddress 0x20000 && W.watchBytesValue (W.cpuBytes row) == 4 && W.cpuValue row == Just 0x22b && W.cpuBefore row == Just (encodeLeWord 0x22b) && W.cpuByteOrder row == W.LittleEndian) "wait load lacks source/alias/word evidence"
       _ -> Left "held observation lacks exactly one distinct original wait load"

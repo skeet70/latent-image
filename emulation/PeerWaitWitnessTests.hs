@@ -133,9 +133,9 @@ fixtureWithReads selected earlyGate extraReads = object
     prefix = [(entry,[write 0 0x1e64 0x20000 0x22b 0x22b 10,write 0 0x1e68 0x20004 0x22b 0x22b 11])]
     initialization = [write 1 0x11818 0x14c80 0 0xffffffff 40,write 1 0x11818 0x14c84 0 0xffffffff 41,write 0 0x1fec 0xa00c4 0 0 45]
     beforeWaits = if earlyGate then [(set "instructions" (number 50) gate,initialization),(tailStop,[])] else [(tailStop,initialization),(gate,[])]
-    waitSegments = [(firstWait,[write 1 0x11f4c 0x20004 0 0x22b 80,waitRead 99])]
+    waitSegments = [(firstWait,[write 1 0x11f4c 0x20004 0 0x22b 80,waitRead 100])]
       ++ (if selected == DelayedRelease then [(ack,[cpu "cpu-read" 0 0x114 0x40020004 0x20004 0 0 104])] else [])
-      ++ [(secondWait,[waitRead 109]),(thirdWait,[waitRead 119]),(fourthWait,[waitRead 129])]
+      ++ [(secondWait,[waitRead 110]),(thirdWait,[waitRead 120]),(fourthWait,[waitRead 130])]
     segments = prefix ++ beforeWaits ++ waitSegments
     (heldRows,heldStops) = assemble [] [] segments
     (preclearRows,preclearStops) = assemble heldRows heldStops
@@ -200,6 +200,8 @@ consumerControls = do
       _ <- assertRight "partial order consumer control" (validateControlReceipt selected expected receipt)
       roundtrip <- assertRight "serialized control roundtrip" (parse (controlReceiptValue receipt))
       unless (receipt == roundtrip) (error "control receipt roundtrip changed observations")
+      let earlier = recorded 0x11f74 "cpu-read" (change "instructions" (\value -> case value of Number time -> Number (time - 1); other -> other)) (fixture selected early)
+      assertRight "load count before stop consumer control" (accept selected earlier)
     _ <- assertRight "closed contract roundtrip" (parseControlContract (BL.toStrict (encode (controlContractValue selected))))
     let valid = fixture selected False
         controls =
@@ -222,6 +224,7 @@ consumerControls = do
           , ("wrong wait before bytes",recorded 0x11f74 "cpu-read" (set "before" (values (replicate 4 (number 0)))))
           , ("coherent wrong loaded word",recorded 0x11f74 "cpu-read" (set "value" (number 0) . set "before" (values (replicate 4 (number 0)))))
           , ("unexplained read site",recorded 0x11f74 "cpu-read" (set "pc" (number 0x11f70)))
+          , ("load count after stop",recorded 0x11f74 "cpu-read" (change "instructions" (\value -> case value of Number time -> Number (time + 1); other -> other)))
           , ("unexpected early handoff",stopped "peer-wait-loaded" (set "label" (String "record-2-handoff")))
           , ("wrong wait source core",recorded 0x11f74 "cpu-read" (set "core" (number 0)))
           , ("wrong sentinel writer",recorded 0x1e64 "cpu-write" (set "core" (number 1)))

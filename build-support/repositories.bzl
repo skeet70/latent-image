@@ -73,6 +73,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/native_case.rs",
     "//emulation:fujimod-xm1/src/native_case_main.rs",
     "//emulation:fujimod-xm1/src/peer_witness.rs",
+    "//emulation:fujimod-xm1/src/peer_witness_wait.rs",
     "//emulation:fujimod-xm1/src/provenance.rs",
     "//emulation:fujimod-xm1/src/provenance_main.rs",
     "//emulation:fujimod-xm1/src/queue_boundary.rs",
@@ -87,6 +88,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/updater.rs",
     "//emulation:fujimod-xm1/src/witness.rs",
     "//emulation:fujimod-xm1/tests/native_case.rs",
+    "//emulation:fujimod-xm1/tests/peer_wait_sdk.rs",
     "//emulation:fujimod-xm1/tests/peer_witness.rs",
     "//emulation:fujimod-xm1/tests/r4f_guard.rs",
 ]

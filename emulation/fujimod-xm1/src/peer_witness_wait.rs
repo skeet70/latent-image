@@ -379,7 +379,7 @@ fn loaded(watch: &WatchState, previous: WatchCursor, current: &Boundary) -> Resu
     });
     let read = reads.next().ok_or("control equality stop lacks an original completed sentinel load")?;
     require(reads.next().is_none() && read.address.0 == 0x40020000
-        && read.before.as_deref() == Some(&[0x2b, 2, 0, 0][..]) && read.instructions.0 < current.hit.instructions.0,
+        && read.before.as_deref() == Some(&[0x2b, 2, 0, 0][..]) && read.instructions.0 <= current.hit.instructions.0,
         "control equality load attribution or interval differs")?;
     require(pending(&current.hit.state) && current.hit.registers[1].0 == 0x40020000
         && current.hit.registers[2].0 == 0x22b && current.hit.registers[3].0 == 0x22b,

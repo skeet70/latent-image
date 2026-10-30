@@ -185,6 +185,7 @@ parseManifest bytes = do
 
 buildControl :: PeerControl -> B.ByteString -> Either String ControlArtifact
 buildControl control source = do
+  require (B.length source == 38405148) "control requires the original X-M1 1.50 DAT length"
   require (digest source == sourceDatDigest) "control requires the original X-M1 1.50 DAT digest"
   parsed <- U.parseContainer source
   checkAll (U.checks parsed ++ U.carriedChecks parsed ++ U.stockChecks parsed)

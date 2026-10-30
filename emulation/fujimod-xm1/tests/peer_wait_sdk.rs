@@ -121,6 +121,37 @@ fn one_entry_store_has_attempt_metadata_and_independent_physical_readback() {
     assert!(machine.failure.is_none());
 }
 
+#[test]
+fn completed_load_and_its_next_unconsumed_point_share_an_entered_count() {
+    let mut machine = machine(&[0xe5912000, 0xe3520000, 0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[1], 0x3000).unwrap();
+    machine.session.board.write_physical(0x3000, &0x22bu32.to_le_bytes()).unwrap();
+    let mut watch = machine.session.board.memory_watch_begin(vec![(0x3000, 0x3004)], 32, machine.session.board.mappings().to_vec()).unwrap();
+    machine.traces.arm(&machine.session, BTreeMap::from([(0x1004, "after-load".into())])).unwrap();
+    machine.traces.stop_labels.insert("after-load".into());
+    machine.run(10);
+    machine.require_running().unwrap();
+    let mut committed = [0; 4];
+    machine.session.board.read_physical(0x3000, &mut committed).unwrap();
+    let observed: Watch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    let reads: Vec<_> = observed.records.iter().filter(|row| row.source == Source::CpuRead).collect();
+    assert_eq!(reads.len(), 1);
+    assert_eq!(reads[0].core, Some(0));
+    assert_eq!(reads[0].pc, Some(0x1000));
+    assert_eq!(reads[0].instructions, Some(machine.instructions()));
+    assert_eq!(reads[0].physical, 0x3000);
+    assert_eq!(reads[0].value, Some(0x22b));
+    assert_eq!(reads[0].before.as_deref(), Some(&[0x2b, 2, 0, 0][..]));
+    assert_eq!(machine.session.board.instruction_counts(), [1, 0]);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[2]).unwrap(), 0x22b);
+    assert_eq!(machine.session.board.read_register(0, Register::Pc).unwrap(), 0x1004);
+    assert_eq!(machine.session.board.read_register(0, Register::Pstate).unwrap(), 0xd3);
+    assert_eq!(committed, [0x2b, 2, 0, 0]);
+    assert!(observed.violation.is_none());
+    assert!(machine.failure.is_none());
+}
+
 #[derive(Deserialize, PartialEq, Eq, Debug)]
 #[serde(rename_all = "kebab-case")]
 enum Control { HeldSentinel, DelayedRelease }
