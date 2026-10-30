@@ -391,7 +391,19 @@ The first record's media slot is `[0x40000,0x50000)`; the observed stock body oc
 
 The existing opaque pre-table container part covers this slot. A bounded first-record extract/replace API can preserve that representation and the existing container checksum emitter; splitting the part or requiring the stock reset/vector shape is not necessary. The candidate entry and executable extents belong to its build facts and witness, not a hard-coded `0x1800` container validator.
 
-New full-system qualification targets the pinned FujiMod Rust/Haskell path. Its current flash-boot driver reports the menu/frame after the initial boot budget; that is not an entry-state or staged-image witness. `emulation/fujimod-xm1/src/handoff.rs` validates an imported updater handoff, not a naturally observed ROM handoff. The first-stage witness needs an instruction-point stop armed before boot, the resulting registers and staged bytes, and the remap evidence. The ROM's raw selector write of 2 and the model's decoder choice of 1 are different observations; neither a forced PC nor an imported frame supplies this witness.
+The owned candidate at slot offset `0x6000` preserves vector bytes `[0,0x20)` and `[0x24,0x40)`, retained helper code `[0x1800,0x4300)` and helper data `[0x4300,0x5280)`. `//host/firmware:build-first-stage` changes the reset entry word, stages the linked image and checks that record 2 and the container outside the declared first-record changes remain unchanged. It preserves the container checksums and carried-part contracts.
+
+| Responsibility | Owner or retained dependency |
+| --- | --- |
+| Exception modes, banked stacks, ATCM clearing and initial helper-data clearing | Owned `replacement/first_stage/entry.S` |
+| MPU setup, core-0 clock control, peer vector copy/release, event publication, staging order and handoff control | Owned `replacement/first_stage/src.rs` and assembly handoff |
+| Core-0 peripheral/pin-table initialization | Retained `0x25d4` |
+| Storage init, bad-block scan, segment-table read and trailer check | Retained `0x2034`, `0x2058`, `0x1dc4`, `0x1cc0` |
+| Loader copy, image-4 decompression, bss fill and storage teardown | Retained `0x1d08`, `0x2044` and their helper closure |
+| Companion-core startup from RAM `0x10000` | Stock record 2, untraced by this witness |
+| Handoff target, argument and downstream execution | Stock loader A entry word, image-4 argument, loader B and application images |
+
+`//emulation:first-stage-witness` arms five core-0 instruction stops before natural reset, then collects twelve memory reads at the owned handoff vector. It checks the observed registers, stacks/modes, staged candidate, loaders, image 4 and its bss, publication words and rendezvous cells against the DAT and linked candidate. This is distinct from `emulation/fujimod-xm1/src/handoff.rs`, which validates an imported updater handoff, and from the separate cold-menu check. [Reproduction commands](../emulation/README.md#owned-first-stage-witness) include the exact-image mismatch and faulty-target controls. The ROM's raw selector write of 2 and the model's decoder choice of 1 are different observations; neither a forced PC nor an imported frame supplies a natural-reset witness.
 
 A natural boot through an owned first record that still executes record 2, the loaders and images 4/5 qualifies only that named loader increment. It does not establish application/runtime retirement or the emulated replacement-startup milestone of [the replacement plan](../spec/11-incremental-firmware-replacement.md). Hardware startup and persistent startup remain separate; the damaged SD route and current recovery limitations in section 10 are unchanged.
 
