@@ -1,6 +1,6 @@
 filegroup(
     name = "module",
-    srcs = ["src/lib.rs"],
+    srcs = ["src/lib.rs", "src/lifecycle.rs"],
     visibility = [
         "//replacement/bank:__pkg__",
         "//host/firmware:__pkg__",

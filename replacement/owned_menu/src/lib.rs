@@ -1,6 +1,6 @@
-//! Owned menu services: the modal-75 editor-cancel action, replacing
-//! FUN_00c77794, and the menu-frame snapshot service, replacing FUN_0061ca2c,
-//! FUN_0061cd14, FUN_0061ceac and the eight snapshot word accessors.
+//! Owned modal-75 lifecycle actions and menu-frame snapshot services.
+
+mod lifecycle;
 
 const EDITOR_QUERY: u32 = 0x53;
 const EDITOR_SESSION_CELL: usize = 0x0095_4d08;
