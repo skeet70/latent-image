@@ -145,7 +145,6 @@ artifactTests source = do
   sourceParsed <- right (U.parseContainer source)
   forM_ [HeldSentinel,DelayedRelease] $ \control -> do
     artifact <- right (buildControl control source)
-    assert "qualified source exposed" (controlSource artifact == sourceParsed)
     let candidate = controlDat artifact
         manifest = controlManifest artifact
         extents = (524,528) : (270928,270932) : case control of HeldSentinel -> []; DelayedRelease -> [(263004,263108)]

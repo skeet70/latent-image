@@ -22,7 +22,7 @@ Preparation validates the DAT and record-2 hash `2f1bf3f0e483b892d2890599679c1b5
 
 Before the first guest instruction, validate the configured processor identities, held/released core states and static/decoder memory-map assumptions; arm instruction points on **both** cores and the alias-aware memory watch. Configured CP14 identities `0x4003`/`0x5003`, Cortex-R5F proxies with the R4F guard, initial held PC `0x3fff0000`, vector SRAM aliases and software-interrupt-driven release are model laws, not measured physical facts. Do not set either core's PC, seed a rendezvous cell or force release from the host.
 
-The planned SDK interface is `--peer-witness CONTRACT.json`, mutually exclusive with `--witness`; its closed schema-1 contract is `{"schema":1,"budget":20000000}`. The baseline aggregate instruction cap is 20,000,000, within a hard maximum of 50,000,000. It ends at the pre-instruction loader-B entry, not a later application or menu milestone.
+The SDK interface is `--peer-witness CONTRACT.json`, mutually exclusive with `--witness`; its closed schema-1 contract is `{"schema":1,"budget":20000000}`. The baseline aggregate entered-instruction cap is 20,000,000, within a hard maximum of 50,000,000. It ends at the pre-instruction loader-B entry, not a later application or menu milestone.
 
 | Ordered stop, always core 1 | Required observation |
 | --- | --- |
@@ -31,7 +31,7 @@ The planned SDK interface is `--peer-witness CONTRACT.json`, mutually exclusive 
 | `record-2-handoff`, `0x11850` | Masked A32 little-endian SVC; r3/target = `0xd0020`, r0/argument = original image-4 `+0xc`; restored SP = tail SP + 64 |
 | `loader-b-entry`, `0xd0020` | Same handoff argument and restored SP; independent shared-state readback |
 
-Each stop retains aggregate instructions and must be strictly later than the preceding stop. Matching an address on core 0 is a refusal, not a peer observation. Stop snapshots expose only the active register bank. Neither incoming banked state nor all SPSRs become known by sampling current SP/LR/CPSR.
+Each stop retains aggregate entered-instruction counts and must be strictly later than the preceding stop. Matching an address on core 0 is a refusal, not a peer observation. Stop snapshots expose only the active register bank. Neither incoming banked state nor all SPSRs become known by sampling current SP/LR/CPSR.
 
 The watch covers physical rendezvous `[0x20000,0x20008)`, completion `[0xa00c4,0xa00c8)` and publications `[0x14c80,0x14c88)`, including guest `0x40000000` aliases and decoder views. Require core-0 `0x22b` write attempts at PC `0x1e64`/`0x1e68`, core-0 clear at `0x1ff8`, core-1 clear of guest `0x40020004` at `0x11f4c` and core-1 target/argument stores at `0x11f98`/`0x11fb0`. Retain guest/physical address, width, value, before bytes, byte order, core, PC, aggregate instructions and tick for CPU attempts. A pre-store callback is not a committed-store receipt: require both cells zero and the expected target/argument in the later handoff and loader-entry snapshots. Record completion without requiring it to remain zero while core 0 executes concurrently.
 
@@ -61,19 +61,40 @@ env XM1_EMULATOR_SLOTS=1 "$PEER_STAGE_WITNESS" \
   --launch --driver "$SDK_DRIVER" --run "$RUN_DOCUMENT" --boot-rom "$BOOT_ROM"
 ```
 
-The launched child command is exactly `DRIVER --run RUN_JSON --update DAT --boot-rom ROM --output DIR --peer-witness DIR/peer-witness-contract.json`. It does not use an implicit SDK resolver, candidate image or symbol file. Host-consumer verification belongs to `//emulation:peer-stage-witness-tests`.
+The natural-baseline child command is exactly `DRIVER --run RUN_JSON --update DAT --boot-rom ROM --output DIR --peer-witness DIR/peer-witness-contract.json`. It does not use an implicit SDK resolver, candidate image or symbol file. Host-consumer verification belongs to `//emulation:peer-stage-witness-tests`.
 
 `--launch` acquires `Emulation.EmulatorSlot` internally and attaches the shared thermal guard before preparation or guest execution; do not double-wrap it. `FujiAF.Host.runBounded` limits both decoder and driver to 120 seconds per child and 1 MiB per stdout/stderr stream, with process-group cleanup and preserved process logs. Instruction/watch/receipt caps do not replace these host bounds. The single baseline exited successfully after 5,845,535 aggregate instructions with 5,063 watch rows and no watch violation; it stopped before executing loader-B entry. Its resource-only launcher verified 4 GiB memory, zero swap, 25% CPU quota and CPUs 4,5 inside the existing guard service, then admitted its sole start sample at 55.125°C.
 
-### Guest-side wait controls remain prerequisites
+### Source-bound guest-side wait controls
 
-The frozen baseline alone cannot qualify wait behavior. Held-sentinel and delayed-release cases require separately reviewed, hash-bound **guest-side control artifacts**, with a narrower wait/stop policy than the four-stop baseline. They are not implemented by host memory writes, reset manipulation or a synthetic receipt.
+`//host:peer-wait-control` prepares two fixed guest-side controls from the original validated DAT. `//replacement/peer_wait_control:peer-wait-control-image` supplies the exact linked delayed-release veneer; the builder checks its bytes, symbols and branch destinations before either control can be accepted. `ControlManifest` binds the original and candidate DAT/record-1 identities, unchanged record-2 and loader-B identities, expected/replacement words, file/slot/guest coordinates, checksum change and all other DAT bytes remaining equal. Control DATs and manifests belong only under ignored `private-data/`. These source interfaces do not qualify an executed guest control.
 
 - Held sentinel: let the guest establish the original `0x22b` value, hold the guest writer before its clear, and observe core 1 repeatedly taking the original equality wait. Bound the wait, require unchanged sentinel readback and no handoff, and stop before later startup.
 - Delayed release: after observing that hold, let the guest control permit the original core-0 clear. Require its core/PC-qualified attempt and committed readback before core 1 exits the wait and reaches the original handoff with the original target/argument.
 - Wrong-core and wrong-handoff receipt mutations exercise host-consumer rejection only. They are not executed guest controls and supply no evidence of natural release, wait duration, loader-B completion or application entry.
 
-No reviewed guest-control artifact or runtime receipt exists for these cases in this increment. The exception targets `0x3fff00xx` remain unresolved physical aliases/handlers even if the configured model reaches the planned prefix.
+Both controls change only the original core-0 gate at `0x1ff4`; delayed release additionally uses the 104-byte padding interval `[0x100,0x168)`. The original STR at `0x1ff8`, DSB at `0x1ffc`, record 2 and loader B remain unchanged. The delayed veneer saves r0-r3/r12/LR and NZCVQ, polls the peer cell with a bounded backoff, waits after acknowledgment, restores the gate context and branches to the original clear. Its stack requirement is a checked runtime precondition, not a previously observed fact.
+
+The existing SDK option accepts the closed control contract `{"schema":2,"control":"held-sentinel","budget":10000000}`, or `delayed-release`. Schema 1 remains the natural baseline. Schema 2 adds core-1 `peer-wait-loaded` at `0x11f78` and core-0 gate/acknowledgment/clear/failure stops at `0x1ff4/0x14c/0x1ff8/0x148`. All applicable sites are prearmed on both cores; matching the wrong core fails. Gate/peer/acknowledgment ordering is partial. The fourth held-load observation ends held sentinel; delayed release keeps handoff/loader guards active after removing only completed control sites.
+
+Gate acceptance requires core-0 SP `0x700007f0`, masked A32 little-endian SVC, the source register context, committed low-RAM decoder choice 1 with mapping `0 -> physical 0`, size `0x4000`, permissions 7, actual ATCM/BTCM registers `0x70000011/0`, and exact virtual/physical code bytes at `[0x100,0x168)` and `[0x1fe0,0x2000)`. Forty stack bytes at `[0x700007d8,0x70000800)` are read through core 0. This TCM has private CPU backing; it is not claimed equal to Board physical RAM. Failed receipts may retain a gate stop with null bindings when binding observation fails; passing receipts require complete bindings.
+
+All schema-2 instruction counts are aggregate **entered** counts, including attempted-access counters. Each clear microstep records both per-core counters and requires aggregate delta exactly one; any other delta fails closed. Delta alone is not instruction-execution or retirement evidence. Original-clear completion additionally requires core 0 before PC `0x1ff8`, original STR bytes `00 20 83 e5`, after PC `0x1ffc`, unchanged CPSR, no machine failure, matching core-0/PC attempted metadata and immediate physical zero readback before another CPU entry. The final attempt and readback entered counts are equal. The SDK scheduler retains `next_core` and remaining quantum across pauses (`board/mod.rs:779-795,894-904`, `board/schedule.rs:9-29`); the observer neither selects a core nor resets its quantum.
+
+An instruction-point stop excludes its unconsumed next entry. A completed original LDR's attempted-read count may equal the following `0x11f78` stop count. Acceptance permits that equality only with the exact core/PC/alias/value/preimage, loaded registers, independent state and watch-cursor interval. All four held-load stops must still precede the original clear. New public-SDK fixtures cover load/stop equality and rejected site removal during active capture observation; they remain unrun pending the separate SDK build grant.
+
+The fixed control limits are 10,000,000 aggregate entered instructions; 4,000,000 through the primary gate; gate-to-four-loads 4,000,000 for held sentinel; gate-to-clear 5,100,000 for delayed release; 2,048 one-entry clear windows; committed-clear-to-loader 20,000; exactly four recorded held loads, at most 128 actual peer equality reads and 8,192 veneer polls. Successful receipts permit at most 12,288 watch rows under the existing 16,384-row collector and 16 MiB receipt limits. The existing 120-second child and 1 MiB per-stream host bounds remain active.
+
+Host-only control preparation and saved-receipt consumption use:
+
+```sh
+"$PEER_STAGE_WITNESS" --control held-sentinel --firmware "$DAT" --fflzd "$FFLZD" --output "$CONTROL_PREPARATION"
+"$PEER_STAGE_WITNESS" --control-receipt "$CONTROL_RECEIPT" --control-manifest "$CONTROL_PREPARATION/peer-control-manifest.json"
+```
+
+Preparation additionally writes `peer-control.DAT` and `peer-control-manifest.json`; a later separately granted explicit launch passes this candidate DAT through the existing `--update` argument. `//host/firmware:peer-wait-control-tests` and `//emulation:peer-wait-witness-tests` exercise artifact/receipt consumers. Serialized wrong-core, wrong-handoff, wrong-alias and attempted-without-readback cases are consumer controls, not guest fault evidence.
+
+Held-sentinel and delayed-release guest receipts remain absent. Their new SDK source has not been built or granted execution. Primary gate SP/CPSR/active aliases still require runtime observation; padding inspection does not resolve every indirect later access. The exception targets `0x3fff00xx` remain unresolved physical aliases/handlers. No loader-B wait completion, application entry, owned record-2 tail or physical qualification follows.
 
 # Bounded selected-queue experiment
 
