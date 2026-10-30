@@ -304,6 +304,42 @@ fixtures =
       ]
       (WitnessAt 0x00340028 "return-continuation-does-not-read" "not-narrowed" [(Caller, 0x00340004), (Overwrite, 0x00340008), (Unresolved, 0x0034001c)])
   , Fixture
+      "a caller continuation that can loop with r3 live stays unresolved though its exit overwrites r3"
+      0x00350000
+      ( caller
+          [ 0xe3500000 -- cmp r0, #0
+          , 0x1afffffe -- +0x0c: bne +0x0c
+          , 0xe3003000 -- movw r3, #0
+          , 0xe8bd8800 -- pop {r11, pc}
+          , 0xe12fff1e -- bx lr
+          , 0xe12fff1e -- bx lr
+          ]
+          ++ framedBound
+      )
+      (WitnessAt 0x0035002c "return-continuation-does-not-read" "not-narrowed" [(Caller, 0x00350004), (Overwrite, 0x00350010), (Unresolved, 0x0035000c)])
+  , Fixture
+      "caller paths that rejoin with r3 live and then overwrite it narrow the premise"
+      0x00360000
+      ( [ 0xe92d4800 -- push {r11, lr}
+        , 0xeb000007 -- bl +0x28
+        , 0xe3500000 -- cmp r0, #0
+        , 0x0a000001 -- beq +0x18
+        , 0xe3a01001 -- mov r1, #1
+        , 0xea000000 -- b +0x1c
+        , 0xe3a01002 -- +0x18: mov r1, #2
+        , 0xe3003000 -- +0x1c: movw r3, #0
+        , 0xe8bd8800 -- pop {r11, pc}
+        , 0xe12fff1e -- bx lr
+        ]
+          ++ framedBound -- +0x28
+      )
+      (WitnessAt 0x00360034 "direct-continuations-overwrite" "direct-continuations-overwrite" [(Caller, 0x00360004), (Overwrite, 0x0036001c)])
+  , Fixture
+      "a branch to an alias of the callee keeps the premise unnarrowed though its caller overwrites r3"
+      0x00370000
+      overwritingCaller
+      (WitnessAt 0x0037002c "return-continuation-does-not-read" "not-narrowed" [(Caller, 0x00370004), (Overwrite, 0x00370010), (NonCallEntry, 0x40370100)])
+  , Fixture
       "the bound used as a load address stays open"
       0x00150000
       (bound [0xe5931000, 0xe12fff1e]) -- ldr r1, [r3]; bx lr
@@ -424,9 +460,16 @@ fixtures =
       (ConsumerAt 0x002d0004 "open" (Just "control-use"))
   ]
 
+-- | Words a fixture relies on that lie outside its own region.
+detached :: [(String, Word32, [Word32])]
+detached =
+  [("alias branch into the 0x00370000 callee", 0x40370100, [0xeaffffc6])] -- b 0x40370020
+
 main :: IO ()
 main = do
-  let regions = [Region (fixtureName f) StockImage (fixtureBase f) (littleEndian (fixtureWords f)) | f <- fixtures]
+  let regions =
+        [Region (fixtureName f) StockImage (fixtureBase f) (littleEndian (fixtureWords f)) | f <- fixtures]
+          ++ [Region name StockImage base (littleEndian ws) | (name, base, ws) <- detached]
       proof = proofValue (buildProof (Inputs regions [] []))
       obligations = array "obligations" proof
       consumers =

@@ -36,6 +36,7 @@ import A32
 import Data.Aeson (Value, object, (.=))
 import Data.Bits (bit, complement, rotateR, shiftL, shiftR, testBit, xor, (.&.), (.|.))
 import qualified Data.ByteString as B
+import Data.Graph (SCC (..), stronglyConnComp)
 import Data.Int (Int16, Int32)
 import Data.List (sortOn, transpose)
 import qualified Data.Map.Strict as M
@@ -1571,6 +1572,8 @@ data ContinuationStop
   | StopUnmodeled Word32
   | StopLeaves Word32
   | StopLimit Word32
+  | -- | The lowest address of a cycle the register stays live around.
+    StopCycle Word32
   deriving (Eq, Ord)
 
 -- | The sites where paths from a direct caller's return address first write
@@ -1606,7 +1609,8 @@ witnessOutcome witness
   | null (witnessEntries witness)
   , null (witnessLimits witness)
   , not (null continuations)
-  , all (S.null . continuationStops) continuations =
+  , all (S.null . continuationStops) continuations
+  , all (not . S.null . continuationOverwrites) continuations =
       ContinuationsOverwrite
   | otherwise = NotNarrowed
  where
@@ -1623,15 +1627,21 @@ writesLink instruction = case instruction of
 -- | The scope is every address from which fallthrough and B edges whose
 -- sites lie in [start, materialization] reach the materialization; start is
 -- the nearest frame prologue at or below it. Its callers are the BLs to any
--- scope address. A return through lr is checked for lr writes in the scope
--- and on the scalar paths.
+-- scope address. A32 branches whose exact target is in the scope are its
+-- predecessors; one matching only through the alias class is an entry. A
+-- return through lr is checked for lr writes in the scope and on the scalar
+-- paths.
 returnWitness :: Analysis -> Word32 -> ScalarProof -> ReturnWitness
 returnWitness analysis site proof = case prologue site scopeWords of
   Nothing -> ReturnWitness site Nothing S.empty [] [NoFramePrologue] []
   Just start ->
     let inside s = start <= s && s <= site
         scope = closure inside start [site] S.empty
-        named = [r | r <- references memory (\value -> S.member (aliasClass value .&. complement 1) scope), referenceForm r /= BranchForm]
+        named =
+          [ r
+          | r <- references memory (\value -> S.member (aliasClass value .&. complement 1) scope)
+          , referenceForm r /= BranchForm || not (S.member (referenceValue r) scope)
+          ]
         referenced = S.fromList [aliasClass (referenceValue r) .&. complement 1 | r <- named]
         callers = S.toList (S.fromList [s | a <- S.toList scope, (s, Branch _ True _) <- predecessorsOf a])
         entries =
@@ -1667,32 +1677,34 @@ returnWitness analysis site proof = case prologue site scopeWords of
 
 -- | Follows every path from the instruction after `caller`, each
 -- conditional instruction taken both ways, to its first read or write of
--- `register`. A call, return, indirect jump, unmodeled instruction or
--- leaving the images before either stops the path unresolved.
+-- `register`. A call, return, indirect jump, unmodeled instruction, leaving
+-- the images or a cycle before either leaves the path unresolved.
 continuation :: Analysis -> Word32 -> Reg -> Continuation
-continuation analysis caller register = go [caller + 4] S.empty (Continuation caller register S.empty S.empty S.empty)
+continuation analysis caller register = cycles (go [caller + 4] M.empty (Continuation caller register S.empty S.empty S.empty))
  where
-  go [] _ result = result
-  go (address : rest) seen result
-    | S.member address seen = go rest seen result
-    | S.size seen >= scalarStepLimit = stop (StopLimit address) result
+  go [] live result = (live, result)
+  go (address : rest) live result
+    | M.member address live = go rest live result
+    | M.size live >= scalarStepLimit = (live, stop (StopLimit address) result)
     | otherwise = case fetch analysis address of
-        Nothing -> go rest seen' (stop (StopLeaves address) result)
+        Nothing -> next [] (stop (StopLeaves address) result)
         Just (word, instruction) ->
           let skipped = [address + 4 | instructionCond instruction /= Cond 14]
-              ended outcome = go (skipped ++ rest) seen' (outcome result)
+              ended outcome = next skipped (outcome result)
            in case (instructionReads instruction, effectFlow (execute analysis address word instruction unknownRegs)) of
                 (Just regs, _) | register `elem` regs -> ended (\r -> r {continuationReads = S.insert address (continuationReads r)})
                 (_, Call _) -> ended (stop (StopCall address))
                 (Nothing, _) -> ended (stop (StopUnmodeled address))
                 _ | register `elem` instructionWrites instruction -> ended (\r -> r {continuationOverwrites = S.insert address (continuationOverwrites r)})
-                (_, Continue) -> go (address + 4 : rest) seen' result
-                (_, Jump target) -> go (skipped ++ target : rest) seen' result
-                (_, Switch targets) -> go (skipped ++ targets ++ rest) seen' result
+                (_, Continue) -> next [address + 4] result
+                (_, Jump target) -> next (skipped ++ [target]) result
+                (_, Switch targets) -> next (skipped ++ targets) result
                 (_, Return) -> ended (stop (StopReturn address))
                 (_, JumpIndirect) -> ended (stop (StopIndirect address))
    where
-    seen' = S.insert address seen
+    next successors = go (successors ++ rest) (M.insert address successors live)
+  cycles (live, result) =
+    foldr (stop . StopCycle . minimum) result [nodes | CyclicSCC nodes <- stronglyConnComp [(a, a, successors) | (a, successors) <- M.toList live]]
   stop reason r = r {continuationStops = S.insert reason (continuationStops r)}
 
 -- * Controller closure
@@ -2010,7 +2022,7 @@ buildProof inputs =
         , "declared_objects"
             .= object
               [ "rule"
-                  .= ( "a consumer is discharged when every path from its materialization reads the value only as a TST, TEQ, CMP or CMN operand until it is overwritten. It is return-conditional when some path instead reaches a return with the value in r2, r3 or r12: it then rests on the premise that no continuation of those returns reads the register before writing it, and is not a discharge. Its continuation witness takes as scope every address from which fallthrough, and B edges whose sites lie between the nearest frame prologue at or below the materialization and the materialization, reach it. It enumerates A32 B and BL, aligned-word, MOVW/MOVT-pair, PC-relative ADD/SUB and Thumb BL/BLX references to scope addresses, matching aligned words and pairs under the 0x3fffffff alias classes, and follows each BL caller's continuation, every conditional instruction taken both ways, to its first read or write of each returned register; a call, SVC, return, indirect jump, unmodeled instruction or leaving the images first leaves that path unresolved. The premise narrows to direct-continuations-overwrite only when there is a BL caller, every continuation path writes the register first, no other reference, B from outside the scope, unreferenced scope start or fallthrough into the start exists, and no return through lr follows an lr write in the scope or on the value's paths. The narrowed premise still rests on no-unenumerated-entry (control enters the scope only through the enumerated references), saved-return-slot-integrity (each return transfers to the address its BL passed), no-asynchronous-write (no exception or other agent changes registers, the stack or memory) and code-integrity (executed words equal the analysed images). A continuation path that reads the register first is reported as continuation-reads. The status stays return-conditional in every case. Any other read, a call, an indirect jump, an unmodeled instruction or leaving the images while the value is live, a return with it in any other register, and every aligned word naming the object, stays open. Materializations are MOVTs, PC-relative literal loads, aligned words, and registers an instruction other than a MOVT or a load computes (MOV, MVN, ORR, other data processing including PC-relative arithmetic, MOVW, extends, multiplies, bitfield operations and base writeback) that take a value naming the object on some path of the scan: along fallthrough, and restarted with unknown registers and flags at every branch target and data-word entry. A call or SVC leaves every register and the flags unknown; above 64 carried states only the register values all states agree on are kept. Values reaching an instruction only through a branch, a call, a load other than a PC-relative literal word or an unknown index register, and bases indexed into the extent, are not enumerated" ::
+                  .= ( "a consumer is discharged when every path from its materialization reads the value only as a TST, TEQ, CMP or CMN operand until it is overwritten. It is return-conditional when some path instead reaches a return with the value in r2, r3 or r12: it then rests on the premise that no continuation of those returns reads the register before writing it, and is not a discharge. Its continuation witness takes as scope every address from which fallthrough, and B edges whose sites lie between the nearest frame prologue at or below the materialization and the materialization, reach it. It enumerates A32 B and BL, aligned-word, MOVW/MOVT-pair, PC-relative ADD/SUB and Thumb BL/BLX references to scope addresses under the 0x3fffffff alias classes; a branch matching only through an alias class is an entry, not a caller. It follows each BL caller's continuation, every conditional instruction taken both ways, to its first read or write of each returned register; a call, SVC, return, indirect jump, unmodeled instruction, leaving the images or a cycle with the register live first leaves that path unresolved. The premise narrows to direct-continuations-overwrite only when there is a BL caller, every continuation path writes the register first and none is unresolved, no other reference, B from outside the scope, unreferenced scope start or fallthrough into the start exists, and no return through lr follows an lr write in the scope or on the value's paths. The narrowed premise still rests on no-unenumerated-entry (control enters the scope only through the enumerated references), saved-return-slot-integrity (each return transfers to the address its BL passed), no-asynchronous-write (no exception or other agent changes registers, the stack or memory) and code-integrity (executed words equal the analysed images). A continuation path that reads the register first is reported as continuation-reads. The status stays return-conditional in every case. Any other read, a call, an indirect jump, an unmodeled instruction or leaving the images while the value is live, a return with it in any other register, and every aligned word naming the object, stays open. Materializations are MOVTs, PC-relative literal loads, aligned words, and registers an instruction other than a MOVT or a load computes (MOV, MVN, ORR, other data processing including PC-relative arithmetic, MOVW, extends, multiplies, bitfield operations and base writeback) that take a value naming the object on some path of the scan: along fallthrough, and restarted with unknown registers and flags at every branch target and data-word entry. A call or SVC leaves every register and the flags unknown; above 64 carried states only the register values all states agree on are kept. Values reaching an instruction only through a branch, a call, a load other than a PC-relative literal word or an unknown index register, and bases indexed into the extent, are not enumerated" ::
                         String
                      )
               , "objects" .= [objectValue memory declared (objectConsumers analysis literals constructed declared) | declared <- declaredObjects]
@@ -2386,6 +2398,7 @@ continuationValue c =
     StopUnmodeled site -> at "unmodeled-instruction" site
     StopLeaves site -> at "leaves-images" site
     StopLimit site -> at "step-limit" site
+    StopCycle site -> at "live-cycle" site
   at kind site = object ["kind" .= (kind :: String), "at" .= hex site]
 
 scopeEntryValue :: ScopeEntry -> Value
