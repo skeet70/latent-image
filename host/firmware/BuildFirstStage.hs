@@ -36,7 +36,7 @@ retainedContract symbols = do
       if address < fst bodyRange || address >= snd bodyRange
         then Left (name ++ " is outside the retained body extent")
         else pure ()
-  pure (StageDeclarations [beforeExtent, afterExtent, bodyExtent, dataExtent] [])
+  pure (StageDeclarations [beforeExtent, afterExtent, bodyExtent, dataExtent] [] [])
 
 main :: IO ()
 main = runStage (StageContract FirstRecord retainedContract)

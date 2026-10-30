@@ -196,6 +196,23 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "secondary-stage-contract",
+    srcs = ["SecondaryStageContract.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    deps = [
+        ":stage-build",
+        "//host:base",
+        "//host:first-stage",
+        "//host:update-container",
+    ],
+)
+
 haskell_binary(
     name = "build-secondary-stage",
     srcs = ["BuildSecondaryStage.hs"],
@@ -207,9 +224,47 @@ haskell_binary(
         "-threaded",
     ],
     deps = [
+        ":secondary-stage-contract",
         ":stage-build",
         "//host:base",
         "//host:first-stage",
+    ],
+)
+
+haskell_binary(
+    name = "build-loader-prefix",
+    srcs = ["BuildLoaderPrefix.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        ":secondary-stage-contract",
+        ":stage-build",
+        "//host:base",
+        "//host:first-stage",
+        "//host:update-container",
+    ],
+)
+
+haskell_binary(
+    name = "build-completion-control",
+    srcs = ["BuildCompletionControl.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:host-support",
         "//host:update-container",
     ],
 )

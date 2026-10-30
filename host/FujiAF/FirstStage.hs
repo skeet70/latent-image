@@ -38,16 +38,27 @@ module FujiAF.FirstStage
   , planPatches
   , replaceRecordSlot
   , verifyStagedRecord
+  , LoaderId (..)
+  , LoaderWordPatch
+  , loaderPatchId
+  , loaderPatchAddress
+  , loaderPatchExpected
+  , loaderPatchReplacement
+  , loaderWordPatch
+  , loaderEntryPublication
+  , loaderWordPatchOffset
+  , applyLoaderWordPatches
+  , verifyLoaderWordPatches
   , ExpectedMediaPatch
   , expectedMediaPatch
   , replaceExpectedFirstRecord
   ) where
 
-import Control.Monad (forM_, unless, when)
+import Control.Monad (forM, forM_, unless, when)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.Bits (complement, (.&.))
-import Data.List (sortOn)
+import Data.List (findIndex, sortOn)
 import Data.Word (Word32)
 import FujiAF.UpdateContainer (MediaImage (..), Parts (..), putMediaWord)
 import qualified FujiAF.UpdateContainer as U
@@ -71,6 +82,61 @@ data StagePlan = StagePlan BootRecord ArmEntry SlotOffset MediaImage [RetainedEx
 
 data ExpectedMediaPatch = ExpectedMediaPatch SlotOffset MediaImage MediaImage
   deriving (Eq, Show)
+
+-- | A segment-table id the boot loads as a raw image whose first bytes are its
+-- header (ids 0 and 1).
+newtype LoaderId = LoaderId Word32
+  deriving (Eq, Show)
+
+-- | One word of a loaded segment image, named by its guest address after the
+-- load, replaced only over its expected preimage.
+data LoaderWordPatch = LoaderWordPatch
+  { loaderPatchId :: LoaderId
+  , loaderPatchAddress :: Word32
+  , loaderPatchExpected :: Word32
+  , loaderPatchReplacement :: Word32
+  }
+  deriving (Eq, Show)
+
+loaderWordPatch :: LoaderId -> Word32 -> Word32 -> Word32 -> Either String LoaderWordPatch
+loaderWordPatch loader address expected replacement
+  | address .&. 3 /= 0 = Left "loader word patch is not word aligned"
+  | expected == replacement = Left "loader word patch replaces a word with itself"
+  | otherwise = Right (LoaderWordPatch loader address expected replacement)
+
+-- | Header word `+0xc` of the image loaded at `load`: the entry record 1
+-- (`0x1d8c`, id 1 on the non-`0x4003` path) and record 2 (`0x11f90`) publish.
+loaderEntryPublication :: LoaderId -> Word32 -> ArmEntry -> ArmEntry -> Either String LoaderWordPatch
+loaderEntryPublication loader load stock entry =
+  loaderWordPatch loader (load + 0xc) (armEntryAddress stock) (armEntryAddress entry)
+
+-- | The patch word's offset in the main pre-table, which holds the image from
+-- its segment's flash offset.
+loaderWordPatchOffset :: Parts -> LoaderWordPatch -> Either String Int
+loaderWordPatchOffset parts patch = do
+  let LoaderId wanted = loaderPatchId patch
+      address = toInteger (loaderPatchAddress patch)
+  segment <- case filter ((== wanted) . U.segId) (partSegments parts) of
+    [segment] -> Right segment
+    _ -> Left ("segment table lacks a unique loader id " ++ show wanted)
+  let load = toInteger (U.segLoad segment)
+      size = toInteger (U.segSize segment)
+      offset = toInteger (U.segFlash segment) + address - load
+  unless (address >= load && address + 4 <= load + size)
+    (Left ("loader word " ++ U.showHexWord (loaderPatchAddress patch) ++ " is outside loader id " ++ show wanted))
+  unless (offset + 4 <= toInteger (B.length (partPreTable parts)))
+    (Left "loader word is outside the main pre-table")
+  pure (fromInteger offset)
+
+applyLoaderWordPatches :: [LoaderWordPatch] -> Parts -> Either String Parts
+applyLoaderWordPatches patches parts = do
+  located <- forM patches $ \patch -> do
+    offset <- loaderWordPatchOffset parts patch
+    unless (U.mediaWordAt (partPreTable parts) offset == loaderPatchExpected patch)
+      (Left ("loader word " ++ U.showHexWord (loaderPatchAddress patch) ++ " differs from its expected preimage"))
+    pure (offset, putMediaWord (loaderPatchReplacement patch))
+  rebuilt <- applyPatches (partPreTable parts) located
+  pure parts {partPreTable = rebuilt}
 
 expectedMediaPatch :: SlotOffset -> MediaImage -> MediaImage -> Either String ExpectedMediaPatch
 expectedMediaPatch offset expected replacement
@@ -271,36 +337,59 @@ replaceRecordSlot plan parts = do
   replaceSlotPatches (planRecord plan) patches parts
 
 -- | Checks a rebuilt container against its source: the main pre-table changes
--- only inside the plan's record slot and only at its patches, no other part
--- changes, the reset vector names the entry and the staged bytes are the image.
-verifyStagedRecord :: StagePlan -> U.Parsed -> U.Parsed -> Either String ()
-verifyStagedRecord plan source rebuilt = do
+-- only at the plan's record-slot patches and the loader words, no other part
+-- changes, the reset vector names the entry, the staged bytes are the image
+-- and each loader word holds its replacement.
+verifyStagedRecord :: StagePlan -> [LoaderWordPatch] -> U.Parsed -> U.Parsed -> Either String ()
+verifyStagedRecord plan loaderPatches source rebuilt = do
   let record = planRecord plan
-      sourcePre = partPreTable (U.parsedParts source)
-      rebuiltPre = partPreTable (U.parsedParts rebuilt)
       slotStart = recordSlotOffset record
-      slotEnd = slotStart + firstRecordSlotLength
-  unless (B.length sourcePre == B.length rebuiltPre) (Left "main pre-table length changed")
-  unless (B.take slotStart sourcePre == B.take slotStart rebuiltPre)
-    (Left "carrier before the record slot changed")
-  unless (B.drop slotEnd sourcePre == B.drop slotEnd rebuiltPre)
-    (Left "carrier after the record slot changed")
-  forM_ (U.diffParts source rebuilt) $ \difference ->
-    when (U.diffChangedBytes difference /= 0 && U.diffPart difference /= "main pre-table")
-      (Left ("unexpected changed part: " ++ U.diffPart difference))
-  sourceSlot <- recordSlotBytes record (U.parsedParts source)
-  stagedSlot <- recordSlotBytes record (U.parsedParts rebuilt)
   patches <- planPatches plan
-  let patched index = any (\(offset, bytes) -> index >= offset && index < offset + B.length bytes) patches
-      outside = [index | (index, before, after) <- zip3 [0 ..] (B.unpack sourceSlot) (B.unpack stagedSlot), before /= after, not (patched index)]
-  forM_ (take 1 outside) $ \index ->
-    Left ("record byte changed outside the declared patches: " ++ show (index :: Int))
+  verifyPreTablePatches [(slotStart + offset, B.length bytes) | (offset, bytes) <- patches] loaderPatches source rebuilt
+  stagedSlot <- recordSlotBytes record (U.parsedParts rebuilt)
   unless (U.mediaWordAt stagedSlot resetVectorWordOffset == armEntryAddress (planEntry plan))
     (Left "staged reset vector does not name the candidate entry")
   let image = mediaImageBytes (planImage plan)
       load = slotOffsetBytes (planLoadOffset plan)
   unless (B.map complement (B.take (B.length image) (B.drop load stagedSlot)) == image)
     (Left "staged bytes differ from the candidate image")
+
+-- | Checks a rebuilt container against its source: only the loader words
+-- change, each to its replacement.
+verifyLoaderWordPatches :: [LoaderWordPatch] -> U.Parsed -> U.Parsed -> Either String ()
+verifyLoaderWordPatches = verifyPreTablePatches []
+
+verifyPreTablePatches :: [(Int, Int)] -> [LoaderWordPatch] -> U.Parsed -> U.Parsed -> Either String ()
+verifyPreTablePatches extents loaderPatches source rebuilt = do
+  let sourceParts = U.parsedParts source
+      sourcePre = partPreTable sourceParts
+      rebuiltPre = partPreTable (U.parsedParts rebuilt)
+  unless (B.length sourcePre == B.length rebuiltPre) (Left "main pre-table length changed")
+  forM_ (U.diffParts source rebuilt) $ \difference ->
+    when (U.diffChangedBytes difference /= 0 && U.diffPart difference /= "main pre-table")
+      (Left ("unexpected changed part: " ++ U.diffPart difference))
+  loaderOffsets <- mapM (loaderWordPatchOffset sourceParts) loaderPatches
+  let declared = sortOn fst (extents ++ [(offset, 4) | offset <- loaderOffsets])
+  forM_ (zip declared (drop 1 declared)) $ \((start, size), (next, _)) ->
+    when (start + size > next) (Left "declared pre-table patches overlap")
+  forM_ (changedOutside declared sourcePre rebuiltPre) $ \index ->
+    Left ("main pre-table byte changed outside the declared patches: " ++ show index)
+  forM_ (zip loaderPatches loaderOffsets) $ \(patch, offset) ->
+    unless (U.mediaWordAt rebuiltPre offset == loaderPatchReplacement patch)
+      (Left ("staged loader word " ++ U.showHexWord (loaderPatchAddress patch) ++ " differs from its replacement"))
+
+-- | The first index where the two strings differ outside the sorted extents.
+changedOutside :: [(Int, Int)] -> B.ByteString -> B.ByteString -> Maybe Int
+changedOutside extents before after = go 0 extents
+  where
+    go cursor [] = firstDifference cursor (B.length before)
+    go cursor ((start, size) : rest) =
+      maybe (go (max cursor (start + size)) rest) Just (firstDifference cursor start)
+    firstDifference from to
+      | from >= to || window before == window after = Nothing
+      | otherwise = (from +) <$> findIndex id (B.zipWith (/=) (window before) (window after))
+      where
+        window = B.take (to - from) . B.drop from
 
 replaceSlotPatches :: BootRecord -> [(Int, B.ByteString)] -> Parts -> Either String Parts
 replaceSlotPatches record patches parts = do

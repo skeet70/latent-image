@@ -1,0 +1,87 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+_CRATE_DATA = [
+    "adapter.rs",
+    "//replacement/secondary_stage:adapter.rs",
+    "//replacement/secondary_stage:src.rs",
+]
+
+_ASM = [
+    "//replacement/secondary_stage:entry.S",
+    "entry.S",
+]
+
+_LINK_INCLUDES = ["//replacement/secondary_stage:secondary-stage.ld"]
+
+xm1_rust_staticlib(
+    name = "loader-prefix-rust",
+    src = "src.rs",
+    crate_name = "xm1_loader_prefix",
+    data = _CRATE_DATA,
+)
+
+xm1_rust_elf(
+    name = "loader-prefix-image",
+    asm_srcs = _ASM,
+    entry = "xm1_secondary_entry",
+    link_includes = _LINK_INCLUDES,
+    link_script = "loader-prefix.ld",
+    rust_staticlib = ":loader-prefix-rust",
+)
+
+# Controls: a Rust cfg or an assembly define per fault.
+_RUST_FAULTS = {
+    "core-refusal": "loader_prefix_core_refusal",
+    "fill-fault": "loader_prefix_fill_fault",
+    "predicate-fault": "loader_prefix_predicate_fault",
+    "vector-fault": "loader_prefix_vector_fault",
+}
+
+_ASM_FAULTS = {
+    "frame-fault": "XM1_LOADER_PREFIX_FRAME_FAULT",
+    "stack-fault": "XM1_LOADER_PREFIX_STACK_FAULT",
+}
+
+[
+    xm1_rust_staticlib(
+        name = "loader-prefix-%s-rust" % fault,
+        testonly = True,
+        src = "src.rs",
+        crate_name = "xm1_loader_prefix",
+        data = _CRATE_DATA,
+        rustc_flags = [
+            "--cfg",
+            cfg,
+        ],
+    )
+    for fault, cfg in _RUST_FAULTS.items()
+]
+
+[
+    xm1_rust_elf(
+        name = "loader-prefix-%s-image" % fault,
+        testonly = True,
+        asm_srcs = _ASM,
+        entry = "xm1_secondary_entry",
+        link_includes = _LINK_INCLUDES,
+        link_script = "loader-prefix.ld",
+        rust_staticlib = ":loader-prefix-%s-rust" % fault,
+    )
+    for fault in _RUST_FAULTS
+]
+
+[
+    xm1_rust_elf(
+        name = "loader-prefix-%s-image" % fault,
+        testonly = True,
+        asm_defines = [define],
+        asm_srcs = _ASM,
+        entry = "xm1_secondary_entry",
+        link_includes = _LINK_INCLUDES,
+        link_script = "loader-prefix.ld",
+        rust_staticlib = ":loader-prefix-rust",
+    )
+    for fault, define in _ASM_FAULTS.items()
+]

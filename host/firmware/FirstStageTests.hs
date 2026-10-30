@@ -96,6 +96,55 @@ assertLeft label result = case result of
   Left _ -> pure ()
   Right value -> H.failH (label ++ ": expected refusal, got " ++ show value)
 
+syntheticParsed :: U.Parts -> U.Parsed
+syntheticParsed = U.Parsed 0 (U.Header 0 0 0 0 0 0 0 0 0 0)
+
+-- | Loader B as segment id 1: loaded at 0xd0000 from media 0xa0000, header
+-- entry word 0xd0020.
+withLoaderB :: U.Parts -> U.Parts
+withLoaderB parts =
+  parts
+    { U.partSegments = map place (U.partSegments parts)
+    , U.partPreTable = B.take 0xa000c pre <> U.putMediaWord 0xd0020 <> B.drop 0xa0010 pre
+    }
+  where
+    pre = U.partPreTable parts
+    place segment
+      | U.segId segment == 1 = segment {U.segLoad = 0xd0000, U.segSize = 0x100, U.segFlash = 0xa0000}
+      | otherwise = segment
+
+publication :: Word32 -> Word32 -> Either String LoaderWordPatch
+publication stockValue entryValue = do
+  stock <- armEntry stockValue
+  entry <- armEntry entryValue
+  loaderEntryPublication (LoaderId 1) 0xd0000 stock entry
+
+loaderPatchTests :: B.ByteString -> IO ()
+loaderPatchTests image = do
+  let source = withLoaderB (syntheticParts sourcePreTable)
+      sourcePre = U.partPreTable source
+  published <- either H.failH pure (publication 0xd0020 0x10600)
+  patched <- either H.failH pure (applyLoaderWordPatches [published] source)
+  let patchedPre = U.partPreTable patched
+  assertTrue "published loader entry word" (U.mediaWordAt patchedPre 0xa000c == 0x10600)
+  assertTrue "only the loader entry word changes" $
+    B.take 0xa000c patchedPre == B.take 0xa000c sourcePre && B.drop 0xa0010 patchedPre == B.drop 0xa0010 sourcePre
+  assertTrue "published container verifies" (verifyLoaderWordPatches [published] (syntheticParsed source) (syntheticParsed patched) == Right ())
+  let tampered = patched {U.partPreTable = B.take 0xa0010 patchedPre <> B.singleton 0 <> B.drop 0xa0011 patchedPre}
+  assertLeft "undeclared loader byte change" (verifyLoaderWordPatches [published] (syntheticParsed source) (syntheticParsed tampered))
+  assertLeft "declared loader word left unpublished" (verifyLoaderWordPatches [published] (syntheticParsed source) (syntheticParsed source))
+  assertLeft "publication over a different stock entry" (publication 0xd0024 0x10600 >>= \patch -> applyLoaderWordPatches [patch] source)
+  assertLeft "loader word past the loader image" (loaderWordPatch (LoaderId 1) 0xd0100 0 1 >>= \patch -> applyLoaderWordPatches [patch] source)
+  assertLeft "absent loader id" (loaderWordPatch (LoaderId 9) 0xd000c 0xd0020 0x10600 >>= \patch -> applyLoaderWordPatches [patch] source)
+  assertLeft "unaligned loader word" (loaderWordPatch (LoaderId 1) 0xd000e 0xd0020 0x10600)
+  assertLeft "loader word replaced by itself" (publication 0xd0020 0xd0020)
+  plan <- either H.failH pure (secondRecordPlan image 0x10400 0x400)
+  slotted <- either H.failH pure (replaceRecordSlot plan source)
+  staged <- either H.failH pure (applyLoaderWordPatches [published] slotted)
+  assertTrue "record 2 staged with its publication verifies" $
+    verifyStagedRecord plan [published] (syntheticParsed source) (syntheticParsed staged) == Right ()
+  assertLeft "record 2 publication undeclared" (verifyStagedRecord plan [] (syntheticParsed source) (syntheticParsed staged))
+
 main :: IO ()
 main = do
   let parts = syntheticParts sourcePreTable
@@ -178,4 +227,5 @@ main = do
   pastEnd <- either H.failH pure (slotOffset 0xfffc)
   assertLeft "expected extent past slot" (expectedMediaPatch pastEnd expected replacement)
   assertLeft "expected patch short carrier" (replaceExpectedFirstRecord [patch] (parts {U.partPreTable = B.empty}))
+  loaderPatchTests image
   putStrLn "first-stage staging tests pass"

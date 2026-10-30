@@ -21,6 +21,7 @@ import System.IO (hPutStrLn, stderr)
 
 data StageDeclarations = StageDeclarations
   { declaredRetained :: [RetainedExtent]
+  , declaredLoaderPatches :: [LoaderWordPatch]
   , declaredSummary :: [String]
   }
 
@@ -183,17 +184,28 @@ runStage contract = do
     H.ensure (withinCandidate symbol) (name ++ " is outside the candidate image")
   declarations <- either H.failH pure (contractDeclarations contract symbolRows)
   let retained = declaredRetained declarations
+      loaderPatches = declaredLoaderPatches declarations
   plan <- either H.failH pure (stagePlan record entry loadOffset (U.MediaImage image) retained)
-  patched <- either H.failH pure (replaceRecordSlot plan (U.parsedParts parsed))
+  slotted <- either H.failH pure (replaceRecordSlot plan (U.parsedParts parsed))
+  patched <- either H.failH pure (applyLoaderWordPatches loaderPatches slotted)
   rebuilt <- either H.failH pure (U.rebuildContainer parsed patched)
   reparsed <- either H.failH pure (U.parseContainer rebuilt)
   verifySource reparsed
-  either H.failH pure (verifyStagedRecord plan parsed reparsed)
+  either H.failH pure (verifyStagedRecord plan loaderPatches parsed reparsed)
   stagedSlot <- either H.failH pure (recordSlotBytes record (U.parsedParts reparsed))
   stagedDigest <- H.sha256 stagedSlot
   digestOut <- H.sha256 rebuilt
   B.writeFile (optOutput options) rebuilt
   mapM_ putStrLn (declaredSummary declarations)
+  forM_ loaderPatches $ \patch ->
+    putStrLn
+      ( "loader word "
+          ++ U.showHexWord (loaderPatchAddress patch)
+          ++ ": "
+          ++ U.showHexWord (loaderPatchExpected patch)
+          ++ " -> "
+          ++ U.showHexWord (loaderPatchReplacement patch)
+      )
   putStrLn
     ( "staged "
         ++ stageTitle record
