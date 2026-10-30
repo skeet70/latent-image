@@ -204,16 +204,17 @@ pub enum SaveTaskSlot {
     PhaseTwo,
 }
 
-/// The selector byte read by the admission test.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ConfigByte {
-    SaveDispatch,
+pub enum SaveDispatch {
+    Enabled,
+    Unrecognized(u8),
 }
 
-impl ConfigByte {
-    pub const fn index(self) -> u32 {
-        match self {
-            Self::SaveDispatch => 0xc3,
+impl SaveDispatch {
+    pub const fn from_byte(byte: u8) -> Self {
+        match byte {
+            1 => Self::Enabled,
+            other => Self::Unrecognized(other),
         }
     }
 }
@@ -272,17 +273,51 @@ impl MetadataPass {
     }
 }
 
-/// Frame words the facade reads. The adapter owns their addresses.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum FrameField {
-    /// `+0x275c`
-    FrameState,
-    /// `+0x604`
-    SubframeCommand,
-    /// `+0x5f0`, compared with `1`
-    ExtentPresetSource,
-    /// `+0x578`, compared with `2`
-    ExtentLayout,
+pub enum FrameState {
+    Zero,
+    One,
+    Unrecognized(u32),
+}
+
+impl FrameState {
+    pub const fn from_word(word: u32) -> Self {
+        match word {
+            0 => Self::Zero,
+            1 => Self::One,
+            other => Self::Unrecognized(other),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SubframeCommand {
+    Zero,
+    Unrecognized(u32),
+}
+
+impl SubframeCommand {
+    pub const fn from_word(word: u32) -> Self {
+        match word {
+            0 => Self::Zero,
+            other => Self::Unrecognized(other),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ExtentLayout {
+    Two,
+    Unrecognized(u32),
+}
+
+impl ExtentLayout {
+    pub const fn from_word(word: u32) -> Self {
+        match word {
+            2 => Self::Two,
+            other => Self::Unrecognized(other),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

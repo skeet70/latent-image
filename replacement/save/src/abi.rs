@@ -66,14 +66,20 @@ impl AbiServices {
 }
 
 impl FrameAccess for AbiServices {
-    fn frame_word(&mut self, field: FrameField) -> u32 {
-        let offset = match field {
-            FrameField::FrameState => FRAME_STATE,
-            FrameField::SubframeCommand => FRAME_SUBFRAME_COMMAND,
-            FrameField::ExtentPresetSource => FRAME_EXTENT_PRESET_SOURCE,
-            FrameField::ExtentLayout => FRAME_EXTENT_LAYOUT,
-        };
-        unsafe { read_word(self.frame + offset) }
+    fn frame_state(&mut self) -> FrameState {
+        FrameState::from_word(unsafe { read_word(self.frame + FRAME_STATE) })
+    }
+
+    fn subframe_command(&mut self) -> SubframeCommand {
+        SubframeCommand::from_word(unsafe { read_word(self.frame + FRAME_SUBFRAME_COMMAND) })
+    }
+
+    fn extent_preset(&mut self) -> ExtentPreset {
+        ExtentPreset::from_source(unsafe { read_word(self.frame + FRAME_EXTENT_PRESET_SOURCE) })
+    }
+
+    fn extent_layout(&mut self) -> ExtentLayout {
+        ExtentLayout::from_word(unsafe { read_word(self.frame + FRAME_EXTENT_LAYOUT) })
     }
 
     fn write_save_mode(&mut self, bank: DescriptorBank, mode: SaveMode) {
@@ -92,8 +98,8 @@ impl SelectorService for AbiServices {
         unsafe { rb_save_service_present() != 0 }
     }
 
-    fn configuration_byte(&mut self, index: ConfigByte) -> u8 {
-        unsafe { rb_save_service_byte(index.index()) as u8 }
+    fn save_dispatch(&mut self) -> SaveDispatch {
+        SaveDispatch::from_byte(unsafe { rb_save_service_byte(0xc3) as u8 })
     }
 
     fn profile(&mut self) -> ServiceProfile {

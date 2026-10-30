@@ -4,7 +4,10 @@
 use super::contract::*;
 
 pub trait FrameAccess {
-    fn frame_word(&mut self, field: FrameField) -> u32;
+    fn frame_state(&mut self) -> FrameState;
+    fn subframe_command(&mut self) -> SubframeCommand;
+    fn extent_preset(&mut self) -> ExtentPreset;
+    fn extent_layout(&mut self) -> ExtentLayout;
     fn write_save_mode(&mut self, bank: DescriptorBank, mode: SaveMode);
     fn clear_descriptor_word(&mut self, bank: DescriptorBank);
 }
@@ -12,7 +15,7 @@ pub trait FrameAccess {
 /// `0x0073abec`, `0x0073ac60` and `0x0069f8fc`.
 pub trait SelectorService {
     fn present(&mut self) -> bool;
-    fn configuration_byte(&mut self, index: ConfigByte) -> u8;
+    fn save_dispatch(&mut self) -> SaveDispatch;
     fn profile(&mut self) -> ServiceProfile;
 }
 

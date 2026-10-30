@@ -68,11 +68,49 @@ caseStatusLabel Passed = "passed"
 caseStatusLabel Failed = "failed"
 caseStatusLabel Blocked = "blocked"
 
+data CaseProblem
+  = ExecutionBlocked String
+  | RunnerMismatch RunnerStatus
+  | RegisterMismatch Register Word32 (Maybe Word32)
+  | CpsrMismatch (Maybe Word32)
+  | MemoryMismatch RegionId Int B.ByteString (Maybe B.ByteString)
+  | EventsMismatch
+  | ProviderAbiFault
+  | ShortcutStage
+  | StageStartMismatch Word32
+  | StageEndMismatch Word32
+  | UnexpectedStage
+  | MissingMailbox
+  | EffectsTruncated ProvenanceTotal
+  | UndeclaredWrite GuestAddress
+  | ForbiddenWrite RegionId GuestAddress
+  deriving (Eq, Show)
+
+renderProblem :: CaseProblem -> String
+renderProblem problem = case problem of
+  ExecutionBlocked message -> message
+  RunnerMismatch status -> "runner status " ++ runnerStatusLabel status
+  RegisterMismatch register wanted actual ->
+    show register ++ ": expected " ++ hexWord32 wanted ++ ", observed " ++ maybe "missing" hexWord32 actual
+  CpsrMismatch actual -> "cpsr control bits: observed " ++ maybe "missing" hexWord32 actual
+  MemoryMismatch (RegionId ident) offset wanted actual ->
+    "region " ++ ident ++ " offset " ++ show offset ++ ": expected " ++ hexBytes wanted ++ ", observed " ++ maybe "missing" hexBytes actual
+  EventsMismatch -> "stub events differ"
+  ProviderAbiFault -> "provider ABI fault"
+  ShortcutStage -> "stage call on the admission shortcut"
+  StageStartMismatch actual -> "stage start differs: " ++ hexWord32 actual
+  StageEndMismatch actual -> "stage end differs: " ++ hexWord32 actual
+  UnexpectedStage -> "unexpected stage point"
+  MissingMailbox -> "mailbox region missing"
+  EffectsTruncated count -> "effect evidence truncated at " ++ show (provenanceTotal count)
+  UndeclaredWrite (GuestAddress address) -> "write outside declared regions at " ++ show address
+  ForbiddenWrite ident (GuestAddress address) -> "write to " ++ show ident ++ " at " ++ show address ++ " outside its declared effect"
+
 data CaseResult = CaseResult
   { caseSubject :: Subject
   , caseName :: String
   , caseStatus :: CaseStatus
-  , caseProblems :: [String]
+  , caseProblems :: [CaseProblem]
   }
 
 newtype Digest = Digest B.ByteString
@@ -238,65 +276,23 @@ controlScenario identValue =
 controlGuest :: Env -> FilePath -> IO Bool
 controlGuest env root = do
   let scenario = controlScenario "s-kind-k2-code0-interrupt-st0"
-      expected = expectation scenario
-  outcome <- runRaw env root FaultyGuest scenario
-  pure $ case outcome of
-    Left _ -> False
-    Right (observation, _, _) ->
-      null (abiProblems observation)
-        && lookupRegister R0 observation == Just 1
-        && expectedReturn expected == 0
-        && memoryWord observation "status" 0 == Just (expectedStatus expected)
-        && memoryWord observation "result" 0 == Just (expectedHandback expected)
-        && memoryWord observation "slots" 0 == Just 0
-        && memoryWord observation "slots" 4 == Just 0
-        && memoryWord observation "mailbox" 56 == Just 0
+  result <- runScenario env root FaultyGuest scenario
+  pure
+    ( caseStatus result == Failed
+        && caseProblems result == [RegisterMismatch R0 (expectedReturn (expectation scenario)) (Just 1)]
+    )
 
 controlProducer :: Env -> FilePath -> IO Bool
 controlProducer env root = do
   let scenario = controlScenario "s-kind-k3-code0-st0"
       expected = expectation scenario
       descriptorField = frameOffset (0x27d0 + kindBank (scenarioKind scenario) * 0x150 + 0x14c)
-  outcome <- runRaw env root FaultyProducer scenario
-  pure $ case outcome of
-    Left _ -> False
-    Right (observation, _, _) ->
-      null (abiProblems observation)
-        && lookupRegister R0 observation == Just (expectedReturn expected)
-        && memoryWord observation "status" 0 == Just (expectedStatus expected)
-        && memoryWord observation "result" 0 == Just (expectedHandback expected)
-        && memoryWord observation "slots" 0 == Just 0
-        && memoryWord observation "slots" 4 == Just 0
-        && memoryWord observation "mailbox" 56 == Just 0
-        && expectedVariant expected == Just 1
-        && memoryWord observation "frame" descriptorField == Just 0
-
-abiProblems :: NativeObservation -> [String]
-abiProblems observation =
-  [ "runner status " ++ runnerStatusLabel (nativeStatus observation)
-  | nativeStatus observation /= Returned
-  ]
-    ++ concat
-      [ [ "preserved register differs"
-        | Just actual <- [lookupRegister register observation]
-        , actual /= wanted
-        ]
-      | (register, wanted) <-
-          [ (R4, 0x44), (R5, 0x55), (R6, 0x66), (R7, 0x77)
-          , (R8, 0x88), (R9, 0x99), (R10, 0xaa), (R11, 0xbb)
-          , (Sp, stackTop), (Pc, exitBase)
-          ]
-      ]
-    ++ [ "cpsr control bits differ"
-       | Just actual <- [lookupRegister Cpsr observation]
-       , actual .&. cpsrControlMask /= 0x10
-       ]
-
-memoryWord :: NativeObservation -> String -> Int -> Maybe Word32
-memoryWord observation ident offset =
-  case lookup (RegionId ident) (nativeMemory observation) of
-    Just bytes | offset + 4 <= B.length bytes -> Just (wordAt offset bytes)
-    _ -> Nothing
+  result <- runScenario env root FaultyProducer scenario
+  pure
+    ( caseStatus result == Failed
+        && caseProblems result
+          == [MemoryMismatch (RegionId "frame") descriptorField (wordBytes (fromMaybe 0 (expectedVariant expected))) (Just (wordBytes 0))]
+    )
 
 runRaw :: Env -> FilePath -> Subject -> Scenario -> IO (Either String (NativeObservation, Value, [Region]))
 runRaw env root subject scenario = do
@@ -308,7 +304,7 @@ runScenario :: Env -> FilePath -> Subject -> Scenario -> IO CaseResult
 runScenario env root subject scenario = do
   outcome <- runRaw env root subject scenario
   case outcome of
-    Left message -> pure (CaseResult subject (scenarioId scenario) Blocked [message])
+    Left message -> pure (CaseResult subject (scenarioId scenario) Blocked [ExecutionBlocked message])
     Right (observation, report, regions) -> do
       let problems = checkCase scenario observation report regions
           status = if null problems then Passed else Failed
@@ -322,7 +318,7 @@ runScenario env root subject scenario = do
                     [ ("kind", s "check")
                     , ("subject", s (subjectTag subject))
                     , ("case", s (scenarioId scenario))
-                    , ("problems", arr (map s problems))
+                    , ("problems", arr (map (s . renderProblem) problems))
                     , ("runner", report)
                     ]
                 )
@@ -345,7 +341,7 @@ failureObject result =
     [ ("subject", s (subjectTag (caseSubject result)))
     , ("case", s (caseName result))
     , ("status", s (caseStatusLabel (caseStatus result)))
-    , ("problems", arr (map s (caseProblems result)))
+    , ("problems", arr (map (s . renderProblem) (caseProblems result)))
     ]
 
 caseDirectory :: FilePath -> Subject -> Scenario -> FilePath
@@ -818,43 +814,36 @@ writeFailure directory kind message detail =
     (directory </> "failure.json")
     (encodeCanonical (obj [("kind", s kind), ("message", s message), ("detail", detail)]))
 
-checkCase :: Scenario -> NativeObservation -> Value -> [Region] -> [String]
+checkCase :: Scenario -> NativeObservation -> Value -> [Region] -> [CaseProblem]
 checkCase scenario observation report regions =
   statusProblems ++ registerProblems ++ memoryProblems ++ eventProblems ++ stageProblems ++ effectProblems
   where
     expected = expectation scenario
     statusProblems =
-      [ "runner status " ++ runnerStatusLabel (nativeStatus observation)
+      [ RunnerMismatch (nativeStatus observation)
       | nativeStatus observation /= Returned
       ]
     registerProblems =
-      [ "r0: expected " ++ hexWord32 (expectedReturn expected) ++ ", observed " ++ hexWord32 actual
-      | Just actual <- [lookupRegister R0 observation]
-      , actual /= expectedReturn expected
-      ]
-        ++ concat
-          [ [ "preserved register differs: expected " ++ hexWord32 wanted ++ ", observed " ++ hexWord32 actual
-            | Just actual <- [lookupRegister register observation]
-            , actual /= wanted
-            ]
-          | (register, wanted) <-
-              [ (R4, 0x44), (R5, 0x55), (R6, 0x66), (R7, 0x77)
-              , (R8, 0x88), (R9, 0x99), (R10, 0xaa), (R11, 0xbb)
-              , (Sp, stackTop), (Pc, exitBase)
-              ]
+      [ RegisterMismatch register wanted actual
+      | (register, wanted) <-
+          [ (R0, expectedReturn expected)
+          , (R4, 0x44), (R5, 0x55), (R6, 0x66), (R7, 0x77)
+          , (R8, 0x88), (R9, 0x99), (R10, 0xaa), (R11, 0xbb)
+          , (Sp, stackTop), (Pc, exitBase)
           ]
-        ++ [ "cpsr control bits: observed " ++ hexWord32 actual
-           | Just actual <- [lookupRegister Cpsr observation]
-           , actual .&. cpsrControlMask /= 0x10
+      , let actual = lookupRegister register observation
+      , actual /= Just wanted
+      ]
+        ++ [ CpsrMismatch actual
+           | let actual = lookupRegister Cpsr observation
+           , fmap (.&. cpsrControlMask) actual /= Just 0x10
            ]
     memoryProblems =
-      concat
-        [ [ "region " ++ ident ++ " offset " ++ show offset ++ ": expected " ++ hexBytes bytes ++ ", observed " ++ hexBytes actual
-          | Just actual <- [memoryAt ident offset (B.length bytes)]
-          , actual /= bytes
-          ]
-        | (ident, offset, bytes) <- expectedBytes
-        ]
+      [ MemoryMismatch (RegionId ident) offset bytes actual
+      | (ident, offset, bytes) <- expectedBytes
+      , let actual = memoryAt ident offset (B.length bytes)
+      , actual /= Just bytes
+      ]
     expectedBytes =
       [ ("status", 0, wordBytes (expectedStatus expected))
       , ("result", 0, wordBytes (expectedHandback expected))
@@ -875,7 +864,7 @@ checkCase scenario observation report regions =
             ]
     kind = scenarioKind scenario
     eventProblems =
-      [ "stub events differ"
+      [ EventsMismatch
       | get report "events" /= arr (map eventJson (expectedEvents expected))
       ]
     stageProblems =
@@ -885,14 +874,14 @@ checkCase scenario observation report regions =
               end = wordAt 40 mailbox
               faulted = wordAt 56 mailbox
               unexpected = wordAt 60 mailbox
-           in ["provider ABI fault" | faulted /= 0]
+           in [ProviderAbiFault | faulted /= 0]
                 ++ if expectedShortcut expected
-                  then ["stage call on the admission shortcut" | start /= 0 || end /= 0 || unexpected /= 0]
+                  then [ShortcutStage | start /= 0 || end /= 0 || unexpected /= 0]
                   else
-                    [ "stage start differs: " ++ hexWord32 start | start /= 0x0108 ]
-                      ++ [ "stage end differs: " ++ hexWord32 end | end /= 0x010A ]
-                      ++ [ "unexpected stage point" | unexpected /= 0 ]
-        _ -> ["mailbox region missing"]
+                    [ StageStartMismatch start | start /= 0x0108 ]
+                      ++ [ StageEndMismatch end | end /= 0x010A ]
+                      ++ [ UnexpectedStage | unexpected /= 0 ]
+        _ -> [MissingMailbox]
     effectProblems = checkEffects scenario expected observation regions
     memoryAt ident offset lengthValue =
       case lookup (RegionId ident) (nativeMemory observation) of
@@ -907,11 +896,11 @@ wordAt offset bytes =
     0
     [0 .. 3]
 
-checkEffects :: Scenario -> Expectation -> NativeObservation -> [Region] -> [String]
+checkEffects :: Scenario -> Expectation -> NativeObservation -> [Region] -> [CaseProblem]
 checkEffects scenario expected observation regions =
   case provenanceWrites (nativeProvenance observation) of
     Nothing ->
-      [ "effect evidence truncated at " ++ show (provenanceTotal (provenanceCount (nativeProvenance observation)))
+      [ EffectsTruncated (provenanceCount (nativeProvenance observation))
       ]
     Just writes -> concatMap classify writes
   where
@@ -921,7 +910,7 @@ checkEffects scenario expected observation regions =
       let GuestAddress address = writeAddress write
           WriteBytes size = writeLength write
        in case regionAt bounds address (fromIntegral size) of
-            Nothing -> ["write outside declared regions at " ++ show address]
+            Nothing -> [UndeclaredWrite (writeAddress write)]
             Just (ident, base, _) ->
               if ident `elem` map RegionId ["stack", "mailbox"]
                 then []
@@ -933,7 +922,7 @@ checkEffects scenario expected observation regions =
                         && address + fromIntegral size <= base + fromIntegral offset + fromIntegral lengthValue)
                     spans
                     then []
-                    else ["write to " ++ show ident ++ " at " ++ show address ++ " outside its declared effect"]
+                    else [ForbiddenWrite ident (writeAddress write)]
 
 expectedSpans :: Scenario -> Expectation -> [(RegionId, Int, Int)]
 expectedSpans scenario expected =

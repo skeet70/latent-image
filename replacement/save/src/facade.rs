@@ -26,7 +26,7 @@ fn override_mode<S: SelectorService>(services: &mut S) -> Override {
 }
 
 fn dispatch_profile_shortcut<S: SelectorService>(services: &mut S) -> bool {
-    if services.configuration_byte(ConfigByte::SaveDispatch) != 1 {
+    if services.save_dispatch() != SaveDispatch::Enabled {
         return false;
     }
     if services.profile().is_a2() {
@@ -52,14 +52,6 @@ pub fn admission_shortcut<S: SaveServices>(services: &mut S) -> bool {
         return true;
     }
     services.profile().is_a8()
-}
-
-fn metadata_pass(kind: SaveKind, frame_state: u32) -> MetadataPass {
-    if kind == SaveKind::Kind0 && frame_state == 1 {
-        MetadataPass::Selected
-    } else {
-        MetadataPass::Alternate
-    }
 }
 
 fn phase_two<S: SaveServices>(services: &mut S, status_out: Option<StatusOut>) {
@@ -95,25 +87,25 @@ pub fn run<S: SaveServices>(
     }
 
     let bank = kind.bank();
-    let metadata_state = if kind == SaveKind::Kind0 {
-        services.frame_word(FrameField::FrameState)
+    let metadata = if kind == SaveKind::Kind0 && services.frame_state() == FrameState::One {
+        MetadataPass::Selected
     } else {
-        0
+        MetadataPass::Alternate
     };
-    services.prepare_metadata(metadata_pass(kind, metadata_state));
+    services.prepare_metadata(metadata);
     services.write_save_mode(bank, kind.save_mode());
     services.clear_descriptor_word(bank);
 
-    if services.frame_word(FrameField::SubframeCommand) == 0 {
-        let source = services.frame_word(FrameField::ExtentPresetSource);
-        services.set_extent_preset(ExtentPreset::from_source(source));
+    if services.subframe_command() == SubframeCommand::Zero {
+        let preset = services.extent_preset();
+        services.set_extent_preset(preset);
     }
 
     let names_extent = match kind {
-        SaveKind::Kind0 => services.frame_word(FrameField::ExtentLayout) == 2,
+        SaveKind::Kind0 => services.extent_layout() == ExtentLayout::Two,
         SaveKind::Kind1 => {
-            services.frame_word(FrameField::FrameState) == 0
-                && services.frame_word(FrameField::ExtentLayout) == 2
+            services.frame_state() == FrameState::Zero
+                && services.extent_layout() == ExtentLayout::Two
         }
         _ => false,
     };
@@ -133,7 +125,7 @@ pub fn run<S: SaveServices>(
 
     if kind != SaveKind::Kind3
         && bank == DescriptorBank::BANK2
-        && services.frame_word(FrameField::ExtentLayout) == 2
+        && services.extent_layout() == ExtentLayout::Two
     {
         services.copy_extent_name(bank);
     }
