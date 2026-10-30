@@ -87,20 +87,4 @@ declarations symbols = do
   pure (StageDeclarations [before, after, body, retainedData] summary)
 
 main :: IO ()
-main =
-  runStage
-    StageContract
-      { contractRecord = SecondRecord
-      , contractTitle = "secondary stage"
-      , contractProgram = "build-secondary-stage"
-      , contractEntrySymbol = "xm1_secondary_entry"
-      , contractCandidateSymbols =
-          [ "xm1_secondary_main"
-          , "xm1_secondary_rendezvous"
-          , "xm1_secondary_peer_cell"
-          , "xm1_secondary_publish"
-          , "xm1_secondary_handoff"
-          , "xm1_secondary_handoff_vector"
-          ]
-      , contractDeclarations = declarations
-      }
+main = runStage (StageContract SecondRecord declarations)

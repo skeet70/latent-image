@@ -39,13 +39,4 @@ retainedContract symbols = do
   pure (StageDeclarations [beforeExtent, afterExtent, bodyExtent, dataExtent] [])
 
 main :: IO ()
-main =
-  runStage
-    StageContract
-      { contractRecord = FirstRecord
-      , contractTitle = "first stage"
-      , contractProgram = "build-first-stage"
-      , contractEntrySymbol = "xm1_first_stage_entry"
-      , contractCandidateSymbols = ["xm1_first_stage_handoff", "xm1_first_stage_handoff_vector"]
-      , contractDeclarations = retainedContract
-      }
+main = runStage (StageContract FirstRecord retainedContract)

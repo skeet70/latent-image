@@ -26,12 +26,44 @@ data StageDeclarations = StageDeclarations
 
 data StageContract = StageContract
   { contractRecord :: BootRecord
-  , contractTitle :: String
-  , contractProgram :: String
-  , contractEntrySymbol :: String
-  , contractCandidateSymbols :: [String]
   , contractDeclarations :: [Symbol] -> Either String StageDeclarations
   }
+
+-- | Owned-image symbol roles the builder requires inside the candidate image.
+data OwnedSymbol
+  = OwnedEntry
+  | OwnedMain
+  | OwnedRendezvous
+  | OwnedPeerCell
+  | OwnedPublish
+  | OwnedHandoff
+  | OwnedHandoffVector
+
+candidateSymbols :: BootRecord -> [OwnedSymbol]
+candidateSymbols FirstRecord = [OwnedHandoff, OwnedHandoffVector]
+candidateSymbols SecondRecord =
+  [OwnedMain, OwnedRendezvous, OwnedPeerCell, OwnedPublish, OwnedHandoff, OwnedHandoffVector]
+
+symbolText :: BootRecord -> OwnedSymbol -> String
+symbolText record symbol = prefix record ++ suffix symbol
+  where
+    prefix FirstRecord = "xm1_first_stage_"
+    prefix SecondRecord = "xm1_secondary_"
+    suffix OwnedEntry = "entry"
+    suffix OwnedMain = "main"
+    suffix OwnedRendezvous = "rendezvous"
+    suffix OwnedPeerCell = "peer_cell"
+    suffix OwnedPublish = "publish"
+    suffix OwnedHandoff = "handoff"
+    suffix OwnedHandoffVector = "handoff_vector"
+
+stageTitle :: BootRecord -> String
+stageTitle FirstRecord = "first stage"
+stageTitle SecondRecord = "secondary stage"
+
+programName :: BootRecord -> String
+programName FirstRecord = "build-first-stage"
+programName SecondRecord = "build-secondary-stage"
 
 maxContainer :: Int
 maxContainer = 64 * 1024 * 1024
@@ -46,9 +78,9 @@ data Options = Options
   , optExpectedSlotSha256 :: Maybe Sha256
   }
 
-usage :: StageContract -> String
-usage contract =
-  "usage: " ++ contractProgram contract ++ " STOCK_DAT CANDIDATE_BIN CANDIDATE_SYMBOLS OUT_DAT "
+usage :: BootRecord -> String
+usage record =
+  "usage: " ++ programName record ++ " STOCK_DAT CANDIDATE_BIN CANDIDATE_SYMBOLS OUT_DAT "
     ++ "--load-offset HEX --entry HEX --expect-slot-sha256 HEX"
 
 parseNumber :: String -> Maybe Word32
@@ -62,7 +94,7 @@ parseNumber text =
       | take 2 value `elem` ["0x", "0X"] = drop 2 value
       | otherwise = value
 
-parseOptions :: StageContract -> [String] -> Either String Options
+parseOptions :: BootRecord -> [String] -> Either String Options
 parseOptions _ (stock : image : symbols : output : rest) =
   go
     ( Options
@@ -96,7 +128,7 @@ parseOptions _ (stock : image : symbols : output : rest) =
         (_, Nothing, _) -> Left "--load-offset is required"
         (_, _, Nothing) -> Left "--expect-slot-sha256 is required"
     go _ (unexpected : _) = Left ("unexpected argument: " ++ unexpected)
-parseOptions contract _ = Left (usage contract)
+parseOptions record _ = Left (usage record)
 
 eitherToMaybe :: Either String a -> Maybe a
 eitherToMaybe = either (const Nothing) Just
@@ -118,10 +150,11 @@ verifySource parsed = do
 runStage :: StageContract -> IO ()
 runStage contract = do
   arguments <- getArgs
-  options <- either H.failH pure (parseOptions contract arguments)
+  let record = contractRecord contract
+      owned = symbolText record
+  options <- either H.failH pure (parseOptions record arguments)
   entry <- maybe (H.failH "--entry is required") pure (optEntry options)
   loadOffset <- maybe (H.failH "--load-offset is required") pure (optLoadOffset options)
-  let record = contractRecord contract
   stock <- H.readRegular maxContainer (optStock options)
   parsed <- either H.failH pure (U.parseContainer stock)
   verifySource parsed
@@ -135,7 +168,7 @@ runStage contract = do
   image <- H.readRegular firstRecordSlotLength (optImage options)
   symbols <- H.readRegular 0x10000 (optSymbols options)
   symbolRows <- either H.failH pure (parseSymbols symbols)
-  entrySymbol <- either H.failH pure (lookupSymbol symbolRows (contractEntrySymbol contract))
+  entrySymbol <- either H.failH pure (lookupSymbol symbolRows (owned OwnedEntry))
   let load = recordGuestBase record + slotOffsetBytes loadOffset
       codeEnd = load + B.length image
       withinCandidate symbol = fromIntegral (symbolAddress symbol) >= load && fromIntegral (symbolAddress symbol) < codeEnd
@@ -146,7 +179,7 @@ runStage contract = do
     (fromIntegral (armEntryAddress entry) == load)
     "entry is not the candidate image start"
   H.ensure (symbolSize entrySymbol > 0) "entry symbol has zero size"
-  forM_ (contractCandidateSymbols contract) $ \name -> do
+  forM_ (map owned (candidateSymbols record)) $ \name -> do
     symbol <- either H.failH pure (lookupSymbol symbolRows name)
     H.ensure (withinCandidate symbol) (name ++ " is outside the candidate image")
   declarations <- either H.failH pure (contractDeclarations contract symbolRows)
@@ -164,7 +197,7 @@ runStage contract = do
   mapM_ putStrLn (declaredSummary declarations)
   putStrLn
     ( "staged "
-        ++ contractTitle contract
+        ++ stageTitle record
         ++ ": "
         ++ show (B.length image)
         ++ " bytes at slot +"
