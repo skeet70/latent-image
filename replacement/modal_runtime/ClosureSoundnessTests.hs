@@ -29,6 +29,8 @@ data Expect
   | -- | A declared-object consumer at this site with this status and, when
     -- open, this reason.
     ConsumerAt Word32 String (Maybe String)
+  | -- | No declared-object consumer at this site is discharged.
+    UndischargedAt Word32
 
 -- | Materializes 0x007b7000, inside register-write stream B, in r3 and
 -- compares the word at r0 against it; `rest` runs on the not-higher path.
@@ -281,6 +283,49 @@ fixtures =
       , 0x007b7000 -- data word
       ]
       (ConsumerAt 0x001f0004 "open" (Just "held-by-object"))
+  , Fixture
+      "an ORR completing a stream address after a data-word entry stays enumerated and open"
+      0x002a0000
+      [ 0xe3a0387b -- mov r3, #0x7b0000
+      , 0xe3833a07 -- orr r3, r3, #0x7000
+      , 0xe5931000 -- ldr r1, [r3]
+      , 0xe12fff1e -- bx lr
+      , 0x002a0004 -- data word naming the orr
+      ]
+      (ConsumerAt 0x002a0004 "open" (Just "address-use"))
+  , Fixture
+      "an ORR after a call does not combine the constant built before it"
+      0x002b0000
+      [ 0xe3a0387b -- mov r3, #0x7b0000
+      , 0xeb000003 -- bl +0x18
+      , 0xe3833a07 -- orr r3, r3, #0x7000
+      , 0xe1520003 -- cmp r2, r3
+      , 0xe3a03000 -- mov r3, #0
+      , 0xe12fff1e -- bx lr
+      , 0xe12fff1e -- +0x18: bx lr
+      ]
+      (UndischargedAt 0x002b0008)
+  , Fixture
+      "a construction naming the stream on one conditional path is enumerated and open"
+      0x002c0000
+      [ 0xe3520000 -- cmp r2, #0
+      , 0x13a0387b -- movne r3, #0x7b0000
+      , 0xe3833a07 -- orr r3, r3, #0x7000
+      , 0xe5931000 -- ldr r1, [r3]
+      , 0xe12fff1e -- bx lr
+      ]
+      (ConsumerAt 0x002c0008 "open" (Just "address-use"))
+  , Fixture
+      "an MVN/SUB-built bound used as a branch target stays open"
+      0x002d0000
+      [ 0xe3e034ff -- mvn r3, #0xff000000
+      , 0xe2433884 -- sub r3, r3, #0x840000
+      , 0xe1520003 -- cmp r2, r3
+      , 0x812fff13 -- bxhi r3
+      , 0xe3a03000 -- mov r3, #0
+      , 0xe12fff1e -- bx lr
+      ]
+      (ConsumerAt 0x002d0004 "open" (Just "control-use"))
   ]
 
 main :: IO ()
@@ -304,6 +349,8 @@ main = do
                   && (field "kind" =<< field "reason" c) == fmap text reason
             )
             consumers
+        UndischargedAt site ->
+          not (any (\c -> field "site" c == Just (text (hex site)) && field "status" c == Just (text "discharged")) consumers)
   results <- forM fixtures $ \f -> do
     let ok = satisfied (fixtureExpect f)
     putStrLn ((if ok then "pass: " else "FAIL: ") ++ fixtureName f)
