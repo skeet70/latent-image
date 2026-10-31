@@ -1,6 +1,6 @@
 -- | Fail-closed host thermal guard for one private transient service.
 --
--- The service MainPID re-discovers k10temp/Tctl on every poll and starts the
+-- The service MainPID re-discovers the CPU sensor on every poll and starts the
 -- target as its direct child. Systemd stops the whole service when this process
 -- exits or is killed.
 module Emulation.ThermalGuard
@@ -91,6 +91,11 @@ productionThermalPolicy = ThermalPolicy
 thermalFailureExit :: ExitCode
 thermalFailureExit = ExitFailure 75
 
+-- | The CPU package temperature: AMD k10temp `Tctl`, else Intel coretemp
+-- `Package id 0`.
+sensorKinds :: [(String, String)]
+sensorKinds = [("k10temp", "Tctl"), ("coretemp", "Package id 0")]
+
 discoverThermalSensor :: SysfsRoot -> IO (Either String ThermalSensor)
 discoverThermalSensor (SysfsRoot root) = do
   let hwmon = root </> "class" </> "hwmon"
@@ -99,18 +104,20 @@ discoverThermalSensor (SysfsRoot root) = do
     entries <- try (listDirectory hwmon) :: IO (Either IOException [String])
     case entries of
       Left failure -> pure (Left ("cannot list hwmon: " ++ show failure))
-      Right names -> do
-        found <- fmap concat $ forM (filter isHwmon names) (discoverEntry . (hwmon </>))
-        pure $ case found of
-          [sensor] -> Right sensor
-          [] -> Left "no k10temp Tctl sensor"
-          _ -> Left ("ambiguous k10temp Tctl sensors: " ++ show (length found))
+      Right names -> firstKind [hwmon </> name | name <- names, isHwmon name] sensorKinds
   where
     isHwmon name = "hwmon" `isPrefixOf` name && all isDigit (drop 5 name)
-    discoverEntry directory = do
+    firstKind _ [] = pure (Left ("no " ++ intercalate " or " [driver ++ " " ++ label | (driver, label) <- sensorKinds] ++ " sensor"))
+    firstKind directories ((driver, label) : rest) = do
+      found <- concat <$> forM directories (discoverEntry driver label)
+      case found of
+        [sensor] -> pure (Right sensor)
+        [] -> firstKind directories rest
+        _ -> pure (Left ("ambiguous " ++ driver ++ " " ++ label ++ " sensors: " ++ show (length found)))
+    discoverEntry driver wanted directory = do
       name <- readText (directory </> "name")
       case name of
-        Just value | trim value == "k10temp" -> do
+        Just value | trim value == driver -> do
           entries <- try (listDirectory directory) :: IO (Either IOException [String])
           case entries of
             Left _ -> pure []
@@ -121,7 +128,7 @@ discoverThermalSensor (SysfsRoot root) = do
                 Just index -> do
                   label <- readText (directory </> ("temp" ++ show index ++ "_label"))
                   case label of
-                    Just text | trim text == "Tctl" -> do
+                    Just text | trim text == wanted -> do
                       let input = directory </> ("temp" ++ show index ++ "_input")
                       exists <- doesFileExist input
                       pure (if exists then Just (ThermalSensor input) else Nothing)

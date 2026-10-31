@@ -4,11 +4,11 @@
 
 You write a feature as an **experiment**: a small Rust or C program in `experiments/<name>/`, plus a `hooks.json` naming the stock firmware functions it should run in front of. The tools link it into 32 KiB of camera RAM and redirect those functions through it. You try it in the emulator, then push it to your camera over USB. Nothing is written to the camera's flash, and taking the battery out removes it.
 
-You combine the project's code with Fujifilm's official firmware, which you download yourself. Run every command from your checkout inside `devenv shell`. Everything you generate goes under the ignored `private-data/`; keep it out of issues and pull requests.
+You combine the project's code with Fujifilm's official firmware, which you download yourself. Work in a fork and run every command from your checkout inside `devenv shell`. Firmware decodes, camera captures and run output land in the ignored `private-data/`. Pull requests with your experiments and fixes are welcome; [the principles](principles.md#publication-and-asset-boundaries) say what belongs in the repository and what stays private.
 
 ## 1. Set up once
 
-You need Linux x86_64 with [Nix and devenv](../README.md#try-it-on-your-host), an X-M1 on firmware 1.50, a USB micro-B cable, and a battery or dummy-battery supply you can pull with the camera on.
+You need Linux x86_64 with [Nix and devenv](../README.md#try-it-on-your-host), an X-M1 on firmware 1.50, a USB micro-B cable, and a battery or dummy-battery supply you can pull with the camera on. The emulator runs under a systemd user session and stops if it can't read the CPU temperature, so it needs an AMD (`k10temp`) or Intel (`coretemp`) sensor in `/sys/class/hwmon`; most virtual machines and WSL have neither.
 
 Download the official 1.50 `FWUP0002.DAT` from [Fujifilm](https://www.fujifilm-x.com/global/support/download/firmware/cameras/x-m1/) (SHA-256 `43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490`) to `private-data/firmware/x-m1-1.50/FWUP0002.DAT`, then decode the three firmware images experiments hook into:
 

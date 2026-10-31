@@ -76,6 +76,17 @@ run worker fixture guard productionWorker = do
     result <- discoverThermalSensor (SysfsRoot sysfs)
     writeFile sensorFile "50000\n"
     pure (either (const True) (const False) result)
+  intelDiscovery <- do
+    let intel = root </> "intel-sys"
+        intelHwmon = intel </> "class" </> "hwmon" </> "hwmon3"
+    createDirectoryIfMissing True intelHwmon
+    writeFile (intelHwmon </> "name") "coretemp\n"
+    writeFile (intelHwmon </> "temp1_label") "Package id 0\n"
+    writeFile (intelHwmon </> "temp1_input") "50000\n"
+    writeFile (intelHwmon </> "temp2_label") "Core 0\n"
+    writeFile (intelHwmon </> "temp2_input") "50000\n"
+    result <- discoverThermalSensor (SysfsRoot intel)
+    expect "discovers coretemp Package id 0" (either (const False) (const True) result)
   let service mode file = runService workerPath fixturePath sysfs mode file
   cool <- service "exit7" ""
   coolOk <- expect "cool service child propagates exit 7" (cool == ExitFailure 7)
@@ -126,7 +137,7 @@ run worker fixture guard productionWorker = do
   killedOk <- expect "guardian SIGKILL cleans other-group child and leaves caller alive" killed
   launcherOk <- publicLauncher root guard productionWorker fixturePath
   ignoreMissing (removeDirectoryRecursive root)
-  pure (and [discoveryOk, changedName, changedLabel, missingInput, coolOk, hotOk, hotAfterOk, hotCleanup, missingAfterOk, missingCleanup, normalOk, normalCleanup, identityOk, identityCleanup, boundaryHotOk, boundaryCoolOk, limitsOk, limitsMatch, interruptedOk, killedOk, launcherOk])
+  pure (and [discoveryOk, changedName, changedLabel, missingInput, intelDiscovery, coolOk, hotOk, hotAfterOk, hotCleanup, missingAfterOk, missingCleanup, normalOk, normalCleanup, identityOk, identityCleanup, boundaryHotOk, boundaryCoolOk, limitsOk, limitsMatch, interruptedOk, killedOk, launcherOk])
 
 newtype Cpu = Cpu Int
   deriving (Eq)
