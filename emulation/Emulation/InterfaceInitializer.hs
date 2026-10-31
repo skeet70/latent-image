@@ -467,8 +467,8 @@ instance FromJSON Rule where
   parseJSON = withObject "initializer confinement rule" $ \row ->
     Rule <$> row .: "cores" <*> row .: "kind" <*> row .: "mode" <*> row .: "spans" <*> row .: "tcm"
 
-data Watch = Watch Bool (Maybe String) [Event] [Rule] [WatchClass] FixedViews NoFault [TcmSnapshot] deriving (Eq)
-instance FromJSON Watch where
+data Watch event = Watch Bool (Maybe String) [event] [Rule] [WatchClass] FixedViews NoFault [TcmSnapshot] deriving (Eq)
+instance FromJSON event => FromJSON (Watch event) where
   parseJSON = withObject "initializer scoped watch" $ \row ->
     Watch <$> row .: "enabled" <*> row .: "violation" <*> row .: "records" <*> row .: "confinement"
       <*> row .: "classes" <*> row .: "views" <*> row .: "fault" <*> row .: "tcm"
@@ -483,7 +483,7 @@ data Decoder = Decoder [Int] [Maybe Int] deriving (Eq)
 instance FromJSON Decoder where
   parseJSON = withObject "initializer decoder" $ \row -> Decoder <$> row .: "choices" <*> row .: "pending"
 
-data Observation = Observation Identity Context Context Context Views Views Views Views Views Views Views Views Decoder [Alias] [Publication] Watch
+data Observation = Observation Identity Context Context Context Views Views Views Views Views Views Views Views Decoder [Alias] [Publication] (Watch Event)
 instance FromJSON Observation where
   parseJSON = withObject "initializer observation" $ \row ->
     Observation <$> row .: "contract" <*> row .: "before" <*> row .: "entered" <*> row .: "after"

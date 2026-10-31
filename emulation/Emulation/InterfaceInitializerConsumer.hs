@@ -5,7 +5,7 @@ module Emulation.InterfaceInitializerConsumer
   ) where
 
 import Control.Monad (forM_, unless)
-import Data.Aeson (FromJSON (..), Value, object, withObject, withText, (.:), (.=))
+import Data.Aeson (FromJSON (..), Value, object, withObject, withText, (.:), (.:?), (.=))
 import qualified Data.Aeson as J
 import Data.Bits ((.&.), (.|.))
 import qualified Data.ByteString as B
@@ -123,7 +123,40 @@ instance FromJSON EmptyEvidence where
   parseJSON = J.withArray "empty consumer evidence" $ \items ->
     if null items then pure EmptyEvidence else fail "unsupported consumer watch counters or coverage"
 
-data ConsumerWatch = ConsumerWatch Watch [(Word64,Word64)] EmptyEvidence EmptyEvidence deriving (Eq)
+newtype AccessBytes = AccessBytes B.ByteString deriving (Eq)
+instance FromJSON AccessBytes where
+  parseJSON value = do
+    bytes <- parseJSON value
+    if length bytes == 4 then pure (AccessBytes (B.pack bytes)) else fail "consumer access preimage width differs"
+
+newtype WatchTick = WatchTick Word64 deriving (Eq, Ord)
+instance FromJSON WatchTick where
+  parseJSON value = WatchTick <$> parseJSON value
+
+data TcmBank = Atcm | Btcm deriving (Eq)
+instance FromJSON TcmBank where
+  parseJSON = withText "consumer event TCM bank" $ \bank -> case bank of
+    "atcm" -> pure Atcm
+    "btcm" -> pure Btcm
+    _ -> fail "unsupported consumer event TCM bank"
+
+newtype BankOffset = BankOffset Word64 deriving (Eq)
+instance FromJSON BankOffset where
+  parseJSON value = BankOffset <$> parseJSON value
+
+data TcmLocation = TcmLocation TcmBank BankOffset deriving (Eq)
+instance FromJSON TcmLocation where
+  parseJSON = withObject "consumer event TCM location" $ \row -> TcmLocation <$> row .: "bank" <*> row .: "offset"
+
+data ConsumerEvent = ConsumerEvent Event (Maybe AccessBytes) WatchTick (Maybe TcmLocation) deriving (Eq)
+instance FromJSON ConsumerEvent where
+  parseJSON value = withObject "complete consumer event" (\row ->
+    ConsumerEvent <$> parseJSON value <*> row .: "before" <*> row .: "tick" <*> row .:? "tcm") value
+
+eventTick :: ConsumerEvent -> WatchTick
+eventTick (ConsumerEvent _ _ tick _) = tick
+
+data ConsumerWatch = ConsumerWatch (Watch ConsumerEvent) [(Word64,Word64)] EmptyEvidence EmptyEvidence deriving (Eq)
 instance FromJSON ConsumerWatch where
   parseJSON value = withObject "complete consumer watch" (\row ->
     ConsumerWatch <$> parseJSON value <*> row .: "ranges" <*> row .: "counters" <*> row .: "coverage") value
@@ -180,13 +213,28 @@ normalizeClass (WatchClass range kinds) = WatchClass range (sort kinds)
 normalizeRule :: Rule -> Rule
 normalizeRule (Rule cores kind mode spans tcm) = Rule (sort cores) kind mode (sort spans) (sort tcm)
 
-validateWatch :: [TcmSnapshot] -> [WatchClass] -> [Rule] -> ConsumerWatch -> Either String [Event]
+validateWatch :: [TcmSnapshot] -> [WatchClass] -> [Rule] -> ConsumerWatch -> Either String [ConsumerEvent]
 validateWatch expectedTcm expectedClasses expectedRules (ConsumerWatch (Watch enabled violation events rules classes FixedViews NoFault tcm) ranges EmptyEvidence EmptyEvidence) = do
   require (enabled && violation == Nothing && sort tcm == sort expectedTcm) "consumer continuous watch or raw TCM scope differs"
   require (sort (map normalizeClass classes) == sort (map normalizeClass expectedClasses)) "consumer watch classes differ"
   require (map normalizeRule rules == map normalizeRule expectedRules) "consumer confinement rules differ"
   require (sort ranges == sort [range | WatchClass (Window range) _ <- expectedClasses]) "consumer watch ranges differ"
+  forM_ events validateEventMetadata
+  let ticks = map eventTick events
+  require (and (zipWith (<=) ticks (drop 1 ticks))) "consumer event ticks decreased"
   pure events
+
+validateEventMetadata :: ConsumerEvent -> Either String ()
+validateEventMetadata (ConsumerEvent (Event source _ _ _ width value _ _ _) before _ tcm) = do
+  require (tcm == Nothing && width == 4) "consumer event is not a physical RAM word access"
+  case source of
+    CpuFetch -> require (before == Nothing && value == Nothing) "consumer fetch contains a data preimage or value"
+    CpuRead -> case before of
+      Nothing -> Left "consumer read preimage is absent"
+      Just (AccessBytes bytes) ->
+        require (fmap fromIntegral (leWordAt bytes 0) == maybe (Left "consumer read value is absent") Right value) "consumer read preimage differs from its little-endian value"
+    CpuWrite -> require (before /= Nothing) "consumer write preimage is absent"
+    _ -> Left "consumer event has an unsupported non-CPU source"
 
 validateReceipt :: Contract -> B.ByteString -> Either String ()
 validateReceipt contract bytes = validateEvidence contract bytes >> pure ()
@@ -276,21 +324,25 @@ validateConsumer initializer validated (ConsumerReceipt InterruptMask start disp
   preludeEvents <- validateWatch expectedTcm preludeClasses preludeRules prelude
   validatePrelude start dispatch beforeTable preludeEvents
   events <- validateWatch expectedTcm consumerClasses consumerRules watch
-  validateEvents dispatch entered returned after incoming events
+  validateEvents dispatch entered returned after incoming beforeFrame events
+  case (reverse preludeEvents,events) of
+    (lastPrelude:_,firstConsumer:_) ->
+      require (eventTick lastPrelude <= eventTick firstConsumer) "consumer event ticks decreased across watch windows"
+    _ -> Left "consumer watch event coverage is incomplete"
 
-validatePrelude :: Context -> Context -> B.ByteString -> [Event] -> Either String ()
+validatePrelude :: Context -> Context -> B.ByteString -> [ConsumerEvent] -> Either String ()
 validatePrelude start dispatch table events = do
   let lower = sum (contextCounts start)
       upper = sum (contextCounts dispatch)
-      clocks = [clock | Event _ _ _ _ _ _ _ (Just clock) _ <- events]
-      fetched = [pc | Event CpuFetch (Just 1) _ _ _ _ (Just pc) _ _ <- events]
+      clocks = [clock | ConsumerEvent (Event _ _ _ _ _ _ _ (Just clock) _) _ _ _ <- events]
+      fetched = [pc | ConsumerEvent (Event CpuFetch (Just 1) _ _ _ _ (Just pc) _ _) _ _ _ <- events]
       expectedFetches = [0xd0ab0,0xd0ab4 .. 0xd0aec]
         ++ [0x69cdf8,0x69cdfc .. 0x69ce08]
         ++ [0x69ce44,0x69ce48,0x69ce90,0x69ce94,0x69ce98,0x69ce9c,0x69cea0,0x69cea4]
         ++ [0x69ceec,0x69cef0 .. 0x69cf34]
         ++ [0x725dd8,0x725ddc .. 0x725dfc]
         ++ [0x7235d8,0x7235dc .. 0x723600]
-      core1Reads = [(address,value,pc) | Event CpuRead (Just 1) address _ _ (Just value) (Just pc) _ _ <- events]
+      core1Reads = [(address,value,pc) | ConsumerEvent (Event CpuRead (Just 1) address _ _ (Just value) (Just pc) _ _) _ _ _ <- events]
       roots = [(address,value,pc) | (address,value,pc) <- core1Reads,address >= 0x96bd20 && address < 0x96bd28]
       selector = [(address,value,pc) | (address,value,pc) <- core1Reads,address == 0x7caf34]
       magic = [(value,pc) | (address,value,pc) <- core1Reads,address == 0x400c080c]
@@ -301,7 +353,7 @@ validatePrelude start dispatch table events = do
     && all (\(_,pc) -> pc `elem` [0xd38b8,0xd38cc,0xd391c]) magic) "consumer prelude lacks the natural peer magic wait completion"
   require (length clocks == length events && all (>= lower) clocks
     && and (zipWith (<=) clocks (drop 1 clocks))) "consumer prelude event clocks differ"
-  forM_ events $ \(Event source core address physicalAddress width value pc clock order) -> do
+  forM_ events $ \(ConsumerEvent (Event source core address physicalAddress width value pc clock order) _ _ _) -> do
     require (core == Just 0 || core == Just 1) "consumer prelude event has no supported CPU attribution"
     require (width == 4 && order == Just LittleEndian) "consumer prelude access width or byte order differs"
     let targetFetch = source == CpuFetch && pc == Just 0x723600
@@ -325,17 +377,19 @@ validatePrelude start dispatch table events = do
         require (not isTable || fmap fromIntegral (leWordAt table (fromIntegral (translated - 0xddaa0))) == maybe (Left "consumer table read value is absent") Right value) "consumer prelude peer table read differs"
       _ -> Left "consumer prelude changed a protected resource"
 
-validateEvents :: Context -> Context -> Context -> Context -> [Word32] -> [Event] -> Either String ()
-validateEvents dispatch entered returned after incoming events = case events of
+validateEvents :: Context -> Context -> Context -> Context -> [Word32] -> B.ByteString -> [ConsumerEvent] -> Either String ()
+validateEvents dispatch entered returned after incoming frame events = case events of
   [slot,saved,restored] -> do
     check slot CpuRead 0x400ddc04 0xddc04 0xd1140 0x723600 (sum (contextCounts dispatch)) (sum (contextCounts entered))
     check saved CpuWrite 0x400f3384 0xf3384 (incoming !! 11) 0xd1140 (sum (contextCounts entered)) (sum (contextCounts returned))
     check restored CpuRead 0x400f3384 0xf3384 (incoming !! 11) 0xd115c (sum (contextCounts entered)) (sum (contextCounts returned))
-    let clocks = [clock | Event _ _ _ _ _ _ _ (Just clock) _ <- events]
+    let ConsumerEvent _ savedBefore _ _ = saved
+    require (savedBefore == Just (AccessBytes (B.take 4 frame))) "consumer saved-r11 write preimage differs from the actual caller-frame snapshot"
+    let clocks = [clock | ConsumerEvent (Event _ _ _ _ _ _ _ (Just clock) _) _ _ _ <- events]
     require (length clocks == 3 && and (zipWith (<) clocks (drop 1 clocks)) && sum (contextCounts returned) < sum (contextCounts after)) "consumer event instruction clocks differ"
   _ -> Left "consumer CPU data events are not exactly slot-read, saved-r11 write and saved-r11 read"
   where
-    check (Event source core address physicalAddress width value pc clock order) expectedSource guest physicalAddress' expectedValue expectedPc lower upper =
+    check (ConsumerEvent (Event source core address physicalAddress width value pc clock order) _ _ _) expectedSource guest physicalAddress' expectedValue expectedPc lower upper =
       require (source == expectedSource && core == Just 1 && address == guest && physicalAddress == Just physicalAddress' && width == 4
         && value == Just (fromIntegral expectedValue) && pc == Just expectedPc && order == Just LittleEndian && maybe False (\n -> n >= lower && n < upper) clock) "consumer CPU data event attribution or value differs"
 
@@ -362,7 +416,7 @@ validateAliases snapshots roots slotBefore slotAfter frameBefore frameAfter tabl
         pure (base,fromIntegral (B.length bytes),digest)) resources
       pure [Alias core (base + alias) base size digest | core <- [0,1],(base,size,digest) <- digests,alias <- [0,0x40000000]]
 
-data ConsumerSemantics = ConsumerSemantics Context Context Context Context Views Views Views Views Views Views Views [CodeViews] Decoder [Alias] [ServiceAlias] [Event] deriving (Eq)
+data ConsumerSemantics = ConsumerSemantics Context Context Context Context Views Views Views Views Views Views Views [CodeViews] Decoder [Alias] [ServiceAlias] [ConsumerEvent] deriving (Eq)
 
 compareReceipts :: (Contract,B.ByteString) -> (Contract,B.ByteString) -> Either String ()
 compareReceipts (retained@(Contract first _ _ _),retainedBytes) (owned@(Contract second _ _ _),ownedBytes) = do
@@ -374,6 +428,9 @@ compareReceipts (retained@(Contract first _ _ _),retainedBytes) (owned@(Contract
     semantic (ConsumerReceipt InterruptMask _ dispatch entered returned after roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code decoder aliases serviceAliases _ (ConsumerWatch (Watch _ _ events _ _ _ _ _) _ _ _)) =
       let origin = contextCounts dispatch
           relative = relativeContext origin
-       in ConsumerSemantics (relative dispatch) (relative entered) (relative returned) (relative after) roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code decoder aliases serviceAliases (map (relativeEvent (sum origin)) events)
+       in ConsumerSemantics (relative dispatch) (relative entered) (relative returned) (relative after) roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code decoder aliases serviceAliases (relativeEvents (sum origin) events)
     relativeContext origin (Context pc registers sp lr cpsr counts tcm) = Context pc registers sp lr cpsr (zipWith (-) counts origin) tcm
-    relativeEvent origin (Event source core address physicalAddress size value pc clock order) = Event source core address physicalAddress size value pc (subtract origin <$> clock) order
+    relativeEvents _ [] = []
+    relativeEvents origin events@(ConsumerEvent _ _ tickOrigin _ : _) = map (relativeEvent origin tickOrigin) events
+    relativeEvent origin (WatchTick tickOrigin) (ConsumerEvent (Event source core address physicalAddress size value pc clock order) before (WatchTick tick) tcm) =
+      ConsumerEvent (Event source core address physicalAddress size value pc (subtract origin <$> clock) order) before (WatchTick (tick - tickOrigin)) tcm
