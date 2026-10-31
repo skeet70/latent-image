@@ -374,7 +374,7 @@ struct GuardEvent {
     physical: Option<Address>,
     size: u64,
     address: Option<Address>,
-    #[serde(deserialize_with = "optional_core")]
+    #[serde(default, deserialize_with = "optional_core")]
     core: Option<WitnessCore>,
     pc: Option<Guest>,
     instructions: Option<Instructions>,
