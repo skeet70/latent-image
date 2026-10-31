@@ -944,12 +944,12 @@ expectedConfinement kind selected slots window = sort $
       RetainedProgram -> []
       OwnedProgram ->
         [ Confinement [1] CpuFetch Forbid (sort (map PhysicalSpan replacedCode ++ fetches))
-        , Confinement [1] CpuRead Forbid (sort (PhysicalSpan entryPool : reads)) ]
-        ++ [rule | isJust selected, rule <- [Confinement [0] CpuFetch Forbid fetches, Confinement [0] CpuRead Forbid reads]]
+        , Confinement [1] CpuRead Forbid (sort (PhysicalSpan entryPool : readSpans)) ]
+        ++ [rule | isJust selected, rule <- [Confinement [0] CpuFetch Forbid fetches, Confinement [0] CpuRead Forbid readSpans]]
   where
     immutable = [PhysicalSpan span' | Just startup <- [selected], span' <- [startupImage startup, Span 0 0x40]]
     fetches = [PhysicalSpan span' | isJust selected, span' <- Span 0x1800 0x1804 : secondaryFetch]
-    reads = [PhysicalSpan span' | isJust selected, span' <- secondaryRead]
+    readSpans = [PhysicalSpan span' | isJust selected, span' <- secondaryRead]
 
 -- | A physical CPU write's core, PC, physical address and preimage.
 cpuWrite :: Row -> Maybe (Core, Word32, Word64, B.ByteString)

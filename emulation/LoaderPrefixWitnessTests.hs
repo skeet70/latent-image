@@ -155,6 +155,7 @@ receiptDocument startup scenario kind facts knob = document
           else [stop "secondary-entry" secondarySite 1 (500, 20) base 0xfff00f00 0 cpsr Nothing Nothing])
       ++ [ stop "record-2-handoff" handoffSite 1 (800, 200) base 0x70000800 0 cpsr Nothing Nothing
          , stop "prefix-entry" entrySite 1 (810, knobEntryCore1 knob) base 0x70000800 0 cpsr (fst (knobEntryObservation knob)) (snd (knobEntryObservation knob)) ]
+      ++ waitingPosts
       ++ (if held
             then stop "held-gate" C.heldGate 0 (9000, 300 + 5 * period) base 0x700007d0 0 cpsr (Just (5, 5, 0)) (Just 0) : heldPosts
             else (if delayed then delayStops else [])
