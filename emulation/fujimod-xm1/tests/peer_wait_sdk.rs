@@ -634,7 +634,14 @@ mod composed_interleaving {
         let mut graph = fujimod_emulator::boot::graph::assemble_with_starts(
             &resolved.reference, document.execution.instructions_per_tick, None, &[],
         ).unwrap();
-        graph.decoders[0].initial = 1;
+        let decoder = &mut graph.decoders[0];
+        let initial = &decoder.choices[decoder.initial];
+        let ram = &decoder.choices[1];
+        graph.mappings.retain(|map| !initial.processors.contains(map));
+        graph.mappings.extend(ram.processors.iter().cloned());
+        graph.dma_mappings.retain(|map| !initial.dma.contains(map));
+        graph.dma_mappings.extend(ram.dma.iter().copied());
+        decoder.initial = 1;
         for (core, processor) in graph.processors.iter_mut().enumerate() {
             processor.released = true;
             processor.registers = vec![
