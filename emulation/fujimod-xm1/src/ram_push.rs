@@ -1384,7 +1384,7 @@ mod tests {
     }
 
     const DRAIN_FIRST_PAUSE: &str = concat!(
-        "{\"command\":\"trace-sites\",\"sites\":{\"0xffff0004\":\"loop\"}}\n",
+        "{\"command\":\"trace-sites\",\"sites\":{\"0x00000004\":\"loop\"}}\n",
         "{\"command\":\"capture-observation-begin\"}\n",
         "{\"command\":\"shutter-sequence\"}\n",
         "{\"command\":\"capture-observation-resume\"}\n",
@@ -1445,7 +1445,7 @@ mod tests {
             if malformed_input { input.extend_from_slice(b"\xff\n"); }
             let (responses, receipt) = exchange_bytes(&mut server, &input);
             assert!(receipt.bridge_error.is_some());
-            assert_eq!(responses.last().unwrap().message, receipt.bridge_error);
+            assert!(responses.iter().any(|response| !response.ok && response.message == receipt.bridge_error));
             assert_eq!(receipt.boundary.failure, server.bridge.machine.failure);
             assert_eq!(receipt.capture_evidence_error.is_some(), malformed_input);
             assert!(responses.iter().all(|response| response.finished.is_none()));
@@ -1498,7 +1498,7 @@ mod tests {
             (0xc4, 0),
             (0xe4, 128),
         ] {
-            machine.session.board.write_register(0, fujimod_emulator_cpu::Register::Pc, 0xffff0000).unwrap();
+            machine.session.board.write_register(0, fujimod_emulator_cpu::Register::Pc, 0).unwrap();
             machine.session.board.write_register(0, fujimod_emulator_cpu::arm::CORE[0], value).unwrap();
             machine.session.board.write_register(0, fujimod_emulator_cpu::arm::CORE[1], 0xfff6b000 + offset).unwrap();
             machine.run(1);
@@ -1541,8 +1541,8 @@ mod tests {
     fn repeated_terminal_collection_failure_keeps_retained_pages_acknowledgements_and_state_available() {
         let mut server = server(&[0xe3a00000, 0xe2800001, 0xe3500041, 0x9afffffc, 0xeafffffe]);
         let prefix = DRAIN_FIRST_PAUSE.replacen(
-            "\"0xffff0004\":\"loop\"",
-            &format!("\"0xffff0004\":\"loop\",\"0xffff0010\":\"{RENDEZVOUS_LOCKED}\""),
+            "\"0x00000004\":\"loop\"",
+            &format!("\"0x00000004\":\"loop\",\"0x00000010\":\"{RENDEZVOUS_LOCKED}\""),
             1,
         );
         let input = format!("{prefix}{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
