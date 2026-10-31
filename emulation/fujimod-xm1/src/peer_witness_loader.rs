@@ -19,6 +19,9 @@ mod initializer;
 pub(super) use initializer::InitializerWire;
 pub(super) use initializer::interrupt_mask::ConsumerWire;
 
+#[path = "peer_witness_vectors.rs"]
+mod vectors;
+
 const BUDGET: u64 = 50_000_000;
 const QUANTUM: u64 = 1_000;
 const ARGUMENT: u32 = 0x69cdf8;
@@ -147,6 +150,8 @@ struct ComposedStartup {
     secondary_image_sha256: Sha256Digest,
     secondary_symbols_sha256: Sha256Digest,
     secondary_source_sha256: Sha256Digest,
+    completion_zero: vectors::CompletionZero,
+    kernel_vector_install: vectors::Facts,
 }
 
 #[derive(Deserialize)]
@@ -175,6 +180,8 @@ impl ComposedWire {
         require(contract.image.is_some_and(|(start, _)| start == Guest(SECOND_ENTRY))
             && startup.source_sha256 == startup.secondary_source_sha256,
             "composed startup secondary origin or source identities differ")?;
+        startup.completion_zero.validate(startup.image)?;
+        startup.kernel_vector_install.validate(&startup)?;
         contract.startup = Some(startup);
         Ok(contract)
     }
@@ -216,11 +223,13 @@ impl LoaderContract {
         ]);
         classes.extend(SECOND_REPLACED.into_iter().map(|span| class(span, WatchKinds::CPU_FETCH)));
         classes.extend(SECOND_POOLS.into_iter().map(|span| class(span, WatchKinds::CPU_READ)));
+        classes.extend(startup.kernel_vector_install.code.iter().map(|code|
+            class((u64::from(code.span.0 .0), u64::from(code.span.1 .0)), WatchKinds::WRITES)));
     }
 
     fn composed_event_forbidden(&self, event: &GuardEvent) -> bool {
         if self.initializer.as_ref().is_some_and(initializer::Contract::owns_body)
-            && event.core == Some(1) && event.physical.is_some_and(|Address(address)|
+            && event.core == Some(WitnessCore::Core1) && event.physical.is_some_and(|Address(address)|
                 address < initializer::BODY.1 && initializer::BODY.0 < address.saturating_add(event.size))
             && matches!(event.source, GuardSource::CpuFetch | GuardSource::CpuRead) {
             return true;
@@ -230,7 +239,7 @@ impl LoaderContract {
         let overlaps = |(start, end)| physical < end && start < physical.saturating_add(event.size);
         match event.source {
             GuardSource::CpuWrite | GuardSource::HostWrite | GuardSource::ModelBusWrite =>
-                [FIRST_VECTORS, (u64::from(startup.image.0 .0), u64::from(startup.image.1 .0))].into_iter().any(overlaps),
+                [vectors::permanent_vectors(), (u64::from(startup.image.0 .0), u64::from(startup.image.1 .0))].into_iter().any(overlaps),
             GuardSource::CpuFetch => std::iter::once(FIRST_REPLACED).chain(SECOND_REPLACED).any(overlaps),
             GuardSource::CpuRead => SECOND_POOLS.into_iter().any(overlaps),
             GuardSource::HostRead | GuardSource::ModelBusRead => false,
@@ -285,6 +294,7 @@ enum Label {
     #[serde(rename = "record-1-entry")]
     Record1Entry,
     FirstStageHandoff,
+    KernelVectorsInstalled,
     SecondaryEntry,
     #[serde(rename = "record-2-handoff")]
     Record2Handoff,
@@ -302,6 +312,7 @@ impl Label {
         match self {
             Self::Record1Entry => "record-1-entry",
             Self::FirstStageHandoff => "first-stage-handoff",
+            Self::KernelVectorsInstalled => "kernel-vectors-installed",
             Self::SecondaryEntry => "secondary-entry",
             Self::Record2Handoff => "record-2-handoff",
             Self::PrefixEntry => "prefix-entry",
@@ -316,7 +327,7 @@ impl Label {
     }
     fn core(self) -> WitnessCore {
         match self {
-            Self::Record1Entry | Self::FirstStageHandoff | Self::HeldGate | Self::DelayEntry | Self::DelayRelease | Self::CompletionStore => WitnessCore::Core0,
+            Self::Record1Entry | Self::FirstStageHandoff | Self::KernelVectorsInstalled | Self::HeldGate | Self::DelayEntry | Self::DelayRelease | Self::CompletionStore => WitnessCore::Core0,
             _ => WitnessCore::Core1,
         }
     }
@@ -325,16 +336,40 @@ impl Label {
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 struct Totals { count: u64, zero_count: u64, nonzero_count: u64 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 enum GuardSource { CpuRead, CpuWrite, CpuFetch, HostRead, HostWrite, ModelBusRead, ModelBusWrite }
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum GuardOrder { Little, Big }
+
+#[derive(Deserialize)]
+#[serde(try_from = "Vec<u8>")]
+struct GuardBytes(Vec<u8>);
+impl TryFrom<Vec<u8>> for GuardBytes {
+    type Error = String;
+    fn try_from(bytes: Vec<u8>) -> Result<Self, String> {
+        require(bytes.len() <= 16, "guard preimage exceeds sixteen bytes")?;
+        Ok(Self(bytes))
+    }
+}
+impl std::ops::Deref for GuardBytes {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target { &self.0 }
+}
 
 #[derive(Deserialize)]
 struct GuardEvent {
     source: GuardSource,
     physical: Option<Address>,
     size: u64,
-    core: Option<usize>,
+    address: Option<Address>,
+    core: Option<WitnessCore>,
+    pc: Option<Guest>,
+    instructions: Option<Instructions>,
+    value: Option<u64>,
+    before: Option<GuardBytes>,
+    byte_order: Option<GuardOrder>,
 }
 
 /// The scoped state fields read at stops.
@@ -421,6 +456,13 @@ struct Endpoint {
 }
 
 #[derive(Serialize)]
+struct ComposedReceipt<'a> {
+    startup: &'a ComposedStartup,
+    firststage_zero: &'a Option<vectors::HistoryRef>,
+    kernel_vector_install: vectors::Proof<'a>,
+}
+
+#[derive(Serialize)]
 struct Receipt<'a> {
     schema: u32,
     scenario: ScenarioWire,
@@ -441,9 +483,9 @@ struct Receipt<'a> {
     handoff_record_immutable_sha256: &'a Option<Sha256Digest>,
     final_primary: &'a Option<wait::Primary>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    startup: &'a Option<ComposedStartup>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     initializer: &'a Option<initializer::Receipt>,
+    #[serde(flatten)]
+    composed: Option<ComposedReceipt<'a>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -451,7 +493,6 @@ enum Epoch { Boot, Loaded, Scoped }
 
 #[derive(Default)]
 struct Phase {
-    firststage_handoff: bool,
     entry: bool,
     posts: usize,
     gate: bool,
@@ -491,6 +532,7 @@ struct Runner<'a> {
     handoff_record_immutable_sha256: Option<Sha256Digest>,
     final_primary: Option<wait::Primary>,
     phase: Phase,
+    vectors: vectors::History,
 }
 
 impl<'a> Runner<'a> {
@@ -500,6 +542,7 @@ impl<'a> Runner<'a> {
             boot_watch: Value::Null, loaded_watch: Value::Null, scoped_watch: None, stops: Vec::new(), bindings: None,
             completion: None, endpoint: None, final_primary: None, phase: Phase::default(),
             initial_record_sha256: None, handoff_record_immutable_sha256: None,
+            vectors: vectors::History::default(),
         }
     }
 
@@ -638,7 +681,9 @@ impl<'a> Runner<'a> {
         require(Sha256Digest::of(&record.physical[startup.image.0 .0 as usize..startup.image.1 .0 as usize]) == startup.image_sha256,
             "composed first-stage image bytes differ from their selected identity")?;
         require(word(machine, u64::from(startup.handoff.0))?.0 == 0xe1a0_f002,
-            "composed first-stage handoff is not MOV PC,R2")
+            "composed first-stage handoff is not MOV PC,R2")?;
+        startup.completion_zero.bind(startup.image.0,
+            &record.physical[startup.image.0 .0 as usize..startup.image.1 .0 as usize])
     }
 
     fn bind_secondary(&mut self, machine: &Machine) -> Result<(), String> {
@@ -668,16 +713,17 @@ impl<'a> Runner<'a> {
             spans.extend([FIRST_VECTORS, (u64::from(startup.image.0 .0), u64::from(startup.image.1 .0)), FIRST_REPLACED]);
             spans.extend(SECOND_REPLACED);
             spans.extend(SECOND_POOLS);
+            spans.extend(startup.kernel_vector_install.code.iter().map(|code|
+                (u64::from(code.span.0 .0), u64::from(code.span.1 .0))));
         }
         spans
     }
 
-    fn snapshot(&self, machine: &Machine, label: Label, hit: &Hit) -> Result<LoaderStop, String> {
+    fn snapshot(&self, machine: &Machine, label: Label, hit: &Hit, view: Option<&ScopedView>) -> Result<LoaderStop, String> {
         let mut registers = [Word(0); 13];
         for (index, value) in registers.iter_mut().enumerate() {
             *value = register(machine, hit.core, arm::Register::R(index as u8))?;
         }
-        let view = self.scoped_view()?;
         Ok(LoaderStop {
             label,
             address: Guest(hit_address(hit)?),
@@ -691,7 +737,8 @@ impl<'a> Runner<'a> {
             completion: word(machine, CELL)?,
             tcm: tcm_words(machine)?,
             counter: view.as_ref().map(|view| view.counters.first().copied().ok_or("loader-prefix counter absent")).transpose()?,
-            watch_records: view.map(|view| view.records.len()),
+            watch_records: view.map(|view| view.records.len()).or_else(||
+                (self.contract.startup.is_some() && self.epoch == Epoch::Loaded).then_some(self.vectors.loaded_cursor)),
         })
     }
 
@@ -741,7 +788,7 @@ impl<'a> Runner<'a> {
         let composed = self.contract.startup.as_ref();
         let mut core0_writes = vec![physical(ZERO)?];
         if let Some(startup) = composed {
-            core0_writes.extend([FIRST_VECTORS, (u64::from(startup.image.0 .0), u64::from(startup.image.1 .0))]
+            core0_writes.extend([vectors::permanent_vectors(), (u64::from(startup.image.0 .0), u64::from(startup.image.1 .0))]
                 .into_iter().map(physical).collect::<Result<Vec<_>, _>>()?);
         }
         let mut confinement = vec![
@@ -782,7 +829,7 @@ impl<'a> Runner<'a> {
 
     /// Steps until loader A's original store commits; core 0 must commit it in
     /// one entered instruction while core 1's count stays unchanged.
-    fn commit(&self, machine: &mut Machine, stop_cpsr: Word) -> Result<CommittedStore, String> {
+    fn commit(&mut self, machine: &mut Machine, stop_cpsr: Word) -> Result<CommittedStore, String> {
         let expected = if self.contract.scenario == Scenario::NonOne { (0xe583_30c4, 0x400a_0000) } else { (0xe583_50c4, 1) };
         let instruction = WordViews {
             r#virtual: Word(u32::from_le_bytes(wait::bytes(machine, 0, u64::from(STORE), 4)?.try_into().map_err(|_| "store word width")?)),
@@ -797,6 +844,7 @@ impl<'a> Runner<'a> {
             let before_cpsr = register(machine, 0, arm::Register::Cpsr)?;
             machine.run(1);
             machine.require_running()?;
+            let observation = self.refresh_vectors()?;
             require(machine.traces.hits.len() == hits, "loader-prefix boundary occurred before the committed store")?;
             let after = wait::counts(machine)?;
             let cell = word(machine, CELL)?;
@@ -804,7 +852,7 @@ impl<'a> Runner<'a> {
             if cell.0 == 0 {
                 continue;
             }
-            let view = self.scoped_view()?.ok_or("loader-prefix scoped watch absent at commit")?;
+            let view = observation.ok_or("loader-prefix scoped watch absent at commit")?;
             let mut readback = [0; 4];
             machine.session.board.read_memory(0, CELL_GUEST, &mut readback)?;
             let committed = CommittedStore {
@@ -863,7 +911,8 @@ impl<'a> Runner<'a> {
         let address = hit_address(hit)?;
         let label = *self.sites.get(&address).ok_or("loader-prefix trace contains an unexpected address")?;
         require(hit.site == label.name(), "loader-prefix trace label differs from its armed site")?;
-        let snapshot = self.snapshot(machine, label, hit)?;
+        let observation = self.refresh_vectors()?;
+        let snapshot = self.snapshot(machine, label, hit, observation.as_ref())?;
         require(snapshot.core == label.core(), "loader-prefix stop has the wrong core")?;
         if self.contract.startup.is_some() {
             for (core, expected) in [(0, 0x4003), (1, 0x5003)] {
@@ -880,7 +929,7 @@ impl<'a> Runner<'a> {
         let scenario = contract.scenario;
         let mut accepted = false;
         if contract.startup.is_some() && matches!(label, Label::HeldGate | Label::DelayEntry | Label::CompletionStore) {
-            require(self.phase.firststage_handoff, "composed core-0 continuation precedes the observed first-stage handoff")?;
+            require(self.vectors.installed(), "composed core-0 continuation precedes installed kernel vectors")?;
         }
         match label {
             Label::Record1Entry => {
@@ -890,12 +939,13 @@ impl<'a> Runner<'a> {
                 self.remove(machine, contract.record1_entry())?;
                 if let Some(startup) = &contract.startup {
                     self.bind_firststage(machine, &self.stops[index], startup)?;
-                    self.add(machine, &[(startup.handoff.0, Label::FirstStageHandoff)])?;
+                    self.add(machine, &[(startup.handoff.0, Label::FirstStageHandoff),
+                        (startup.kernel_vector_install.installed.0, Label::KernelVectorsInstalled)])?;
                 }
                 self.add(machine, &[(contract.secondary_entry().0, Label::SecondaryEntry), (contract.handoff.0, Label::Record2Handoff)])?;
             }
             Label::FirstStageHandoff => {
-                require(self.epoch != Epoch::Boot && !self.phase.firststage_handoff, "first-stage handoff out of phase")?;
+                require(self.epoch != Epoch::Boot && !self.vectors.handed_off(), "first-stage handoff out of phase")?;
                 let startup = contract.startup.as_ref().ok_or("standalone contract reached composed handoff")?;
                 let stop = &self.stops[index];
                 require(stop.registers[2].0 == startup.handoff_target.0 && stop.registers[0] == startup.handoff_argument
@@ -903,8 +953,12 @@ impl<'a> Runner<'a> {
                     && word(machine, 0x4304)? == startup.handoff_argument
                     && word(machine, 0x4000c)?.0 == startup.handoff_target.0 && word(machine, 0x61c40c)? == startup.handoff_argument,
                     "composed first-stage handoff context or staged header differs")?;
-                self.phase.firststage_handoff = true;
+                self.bind_kernel(machine, index)?;
                 self.remove(machine, startup.handoff.0)?;
+            }
+            Label::KernelVectorsInstalled => {
+                self.installed_kernel(machine, index)?;
+                self.remove(machine, address)?;
             }
             Label::SecondaryEntry => {
                 require(self.epoch == Epoch::Loaded, "secondary entry out of phase")?;
@@ -931,6 +985,7 @@ impl<'a> Runner<'a> {
                 tcm_disjoint_views(&self.committed, &self.stops[index].tcm, &self.guarded())?;
                 let slots = bindings.vector_slots.physical();
                 self.bindings = Some(bindings);
+                self.snapshot_record2_vectors(machine)?;
                 self.loaded_watch = self.end_classified(machine)?;
                 self.scoped = Some(machine.session.board.memory_watch_begin_scoped(self.scoped_rules(window, slots)?, self.maps.clone())?);
                 self.epoch = Epoch::Scoped;
@@ -950,7 +1005,8 @@ impl<'a> Runner<'a> {
                 require(!self.phase.entry && stop.registers[0].0 == ARGUMENT && stop.sp == handoff.sp && stop.cpsr == handoff.cpsr
                     && stop.registers[6..12] == handoff.registers[6..12], "prefix entry differs from the handoff context")?;
                 require(stop.counts.0[1] == handoff.counts.0[1] + 1, "prefix entry is not the core-1 instruction after the handoff")?;
-                require(stop.counter == Some(Totals { count: 0, zero_count: 0, nonzero_count: 0 }) && stop.watch_records == Some(0),
+                require(stop.counter == Some(Totals { count: 0, zero_count: 0, nonzero_count: 0 })
+                    && (contract.startup.is_some() || stop.watch_records == Some(0)),
                     "scoped watch was not active and empty at the prefix entry")?;
                 self.phase.entry = true;
                 self.remove(machine, contract.entry.0)?;
@@ -1036,8 +1092,9 @@ impl<'a> Runner<'a> {
             require(self.stops[index].tcm == tcm || label == Label::Record2Handoff, "TCM registers changed after the handoff")?;
         }
         if accepted {
-            require(contract.startup.is_none() || self.phase.firststage_handoff,
+            require(contract.startup.is_none() || self.vectors.installed(),
                 "composed endpoint lacks the observed first-stage handoff")?;
+            self.terminal_vectors(machine)?;
             self.end_scoped(machine)?;
         }
         Ok(accepted)
@@ -1060,6 +1117,9 @@ impl<'a> Runner<'a> {
     }
 
     fn finish(&mut self, machine: &mut Machine, mut outcome: Result<(), String>) -> Result<(), String> {
+        if self.classified.is_some() || self.scoped.is_some() {
+            outcome = outcome.and(self.refresh_vectors().map(|_| ()));
+        }
         if let Some(mut watch) = self.classified.take() {
             let state = watch.records.borrow().state();
             outcome = outcome.and(machine.session.board.memory_watch_end(&mut watch));
@@ -1124,6 +1184,10 @@ pub(super) fn run(mut machine: Machine, contract: &LoaderContract, output: &Path
             (None, _) => Ok(()),
         }
     } else { Err(outcome.as_ref().err().cloned().unwrap_or_default()) };
+
+    let composed = contract.startup.as_ref().map(|startup| ComposedReceipt {
+        startup, firststage_zero: &runner.vectors.zero, kernel_vector_install: runner.vectors.proof(),
+    });
     let receipt = Receipt {
         schema: if contract.initializer.is_some() { 6 } else if contract.startup.is_some() { 5 } else { 4 },
         scenario: ScenarioWire { kind: contract.scenario }, program: contract.kind,
@@ -1132,7 +1196,7 @@ pub(super) fn run(mut machine: Machine, contract: &LoaderContract, output: &Path
         instructions: initializer_instructions, cp14_identities: identities,
         boot_watch: &runner.boot_watch, loaded_watch: &runner.loaded_watch, scoped_watch: &runner.scoped_watch,
         stops: &runner.stops, bindings: &runner.bindings, completion: &runner.completion, endpoint: &runner.endpoint,
-        final_primary: &runner.final_primary, startup: &contract.startup,
+        final_primary: &runner.final_primary, composed,
         initial_record_sha256: &runner.initial_record_sha256, handoff_record_immutable_sha256: &runner.handoff_record_immutable_sha256,
         initializer: &initializer_receipt,
     };

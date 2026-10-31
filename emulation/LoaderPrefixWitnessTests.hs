@@ -9,10 +9,11 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (xor, (.|.))
+import Data.List (sortOn)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Word (Word32, Word64)
 import qualified Data.Vector as V
-import Emulation.FirstStageWitness (encodeLeWord)
+import Emulation.FirstStageWitness (encodeLeWord, sha256Hex)
 import Emulation.LoaderPrefixWitness
 import Emulation.PollPeriod (PollPeriod (..))
 import qualified Emulation.PeerStartupWitness as S
@@ -88,11 +89,13 @@ data Knobs = Knobs
   -- | Core-1 ATCM moved at the last waiting post-load stop.
   , knobTcmMoved :: Bool
   , knobFirstStageOrder :: FirstStageOrder
+  , knobInstallPrefix :: Int
+  , knobStagingAfterBinding :: Bool
   }
 
 knobs :: Knobs
 knobs = Knobs False 0x5660 0xd00c0 0x200001d3 False False False False 8 4 Nothing False (Just (0, 0, 0), Just 0) 201 0
-  [[0x70000011, 0], [0x70000011, 0]] False BeforeSecondary
+  [[0x70000011, 0], [0x70000011, 0]] False BeforeSecondary 7 False
 
 writes :: [String]
 writes = ["cpu-write", "host-write", "model-bus-write"]
@@ -107,7 +110,7 @@ receiptFor :: Maybe Value -> Scenario -> ProgramKind -> ProgramFacts -> Knobs ->
 receiptFor startup scenario kind facts knob = BL.toStrict (encode (receiptDocument startup scenario kind facts knob))
 
 receiptDocument :: Maybe Value -> Scenario -> ProgramKind -> ProgramFacts -> Knobs -> Value
-receiptDocument startup scenario kind facts knob = document
+receiptDocument startup scenario kind facts knob = maybe document (\selected -> installDocument selected knob document) startup
   where
     composed = isJust startup
     Guest handoffSite = factHandoff facts
@@ -291,7 +294,141 @@ startupFixture = object
   , "handoff_target" .= (0x40020 :: Word32), "handoff_argument" .= argument, "secondary_entry" .= (0x10400 :: Word32)
   , "secondary_image_sha256" .= replicate 64 '5', "secondary_symbols_sha256" .= replicate 64 '6'
   , "secondary_source_sha256" .= replicate 64 '4'
+  , "completion_zero" .= object ["site" .= (0x6080 :: Word32), "instruction" .= (0xe5805000 :: Word32), "literal" .= (0x6180 :: Word32)]
+  , "kernel_vector_install" .= object
+      [ "entry" .= (0x40020 :: Word32), "installed" .= (0x40088 :: Word32), "bootstrap" .= bootstrapWords
+      , "code" .= [object ["span" .= spanOf low high, "sha256" .= sha256Hex bytes] | ((low, high), bytes) <- kernelCodeBytes]
+      , "steps" .= [object ["site" .= site, "slot" .= slot, "before" .= before, "value" .= value]
+                   | (site, slot, before, value) <- installSteps] ]
   ]
+
+bootstrapWords :: [Word32]
+bootstrapWords = replicate 8 0xe59ff018 ++ [0x6000, 76, 100, 80, 88, 96, 192, 144]
+
+installSteps :: [(Word32, Word32, Word32, Word32)]
+installSteps = zipWith3 (\site slot (before, value) -> (site, slot, before, value))
+  [0x4003c, 0x40048, 0x40054, 0x40060, 0x4006c, 0x40078, 0x40084] [0x24, 0x28 .. 0x3c]
+  [(76, 0x40100), (100, 0x401b4), (80, 0x40128), (88, 0x40148), (96, 0x40168), (192, 0x40204), (144, 0x40184)]
+
+kernelCodeBytes :: [((Word64, Word64), B.ByteString)]
+kernelCodeBytes =
+  [ ((0x40020, 0x40100), B.concat [encodeLeWord (fromMaybe 0xe1a00000 (lookup site prologue)) | site <- [0x40020, 0x40024 .. 0x400fc]])
+  , ((0x427b8, 0x427d4), B.concat (map encodeLeWord [0xee121e10, 0xe3a02901, 0xe2822003, 0xe1510002, 0x03a00000, 0x13a00001, 0xe12fff1e])) ]
+  where
+    prologue = zip [0x40020, 0x40024 ..] [0xe1a05000, 0xeb0009e3, 0xe3500000, 0x03a06000, 0x159f60a4, 0xe3a03024]
+      ++ [(0x40088, 0xe1a00005), (0x400dc, 0xffff0000)]
+      ++ concat [[(site - 8, 0xe3a03000 + slot), (site - 4, 0xe59f4000 + pool - site - 4), (site, 0xe7834006), (pool, value)]
+                | ((site, slot, _, value), pool) <- zip installSteps [0x400e0, 0x400e4 ..]]
+
+valueField :: String -> Value -> Value
+valueField name (Object fields) = fromMaybe Null (KM.lookup (K.fromString name) fields)
+valueField _ _ = Null
+
+arrayValues :: Value -> [Value]
+arrayValues (Array values) = V.toList values
+arrayValues _ = []
+
+wordValue :: Value -> Word64
+wordValue (Number number) = fromInteger (round number)
+wordValue _ = 0
+
+dmaRow :: Word64 -> Word64 -> Value
+dmaRow physical size = object
+  [ "source" .= ("model-bus-write" :: String), "address" .= physical, "physical" .= physical, "size" .= size
+  , "core" .= Null, "pc" .= Null, "instructions" .= Null, "tick" .= Null ]
+
+installDocument :: Value -> Knobs -> Value -> Value
+installDocument _ knob document =
+  changeField "loaded_watch" (setField "records" (toJSON loadedRows))
+  . changeField "scoped_watch" (setField "records" (toJSON scopedRows))
+  . changeField "loaded_watch" addCodeClasses
+  . changeField "scoped_watch" (addCodeClasses . changeField "confinement" (toJSON . map fixConfinement . arrayValues))
+  . changeField "completion" (setField "watch_records" (toJSON (if knobStoreOutsideCommit knob then commitCursor else commitCursor + 1)))
+  . setField "firststage_zero" (historyRef zeroTime)
+  . setField "kernel_vector_install" proof
+  . setField "stops" (toJSON observedStops)
+  $ document
+  where
+    originalStops = arrayValues (valueField "stops" document)
+    selected label = head [stop | stop <- originalStops, hasField "label" (String label) stop]
+    counts stop = map wordValue (arrayValues (valueField "counts" stop))
+    time stop = sum (counts stop)
+    first = selected "first-stage-handoff"
+    handoff = selected "record-2-handoff"
+    firstTime = time first
+    handoffTime = time handoff
+    prefix = if firstTime < handoffTime then knobInstallPrefix knob else 0
+    afterHandoff = if firstTime < handoffTime then handoffTime else max firstTime (time (selected "prefix-entry"))
+    eventTimes = [firstTime + fromIntegral i + 1 | i <- [0 .. prefix - 1]]
+      ++ [afterHandoff + fromIntegral i + 1 | i <- [0 .. 6 - prefix]]
+    zeroTime = firstTime - 1
+    stagingTime = if knobStagingAfterBinding knob then installedTime + 1 else firstTime - 2
+    installedTime = last eventTimes + 1
+    installedCore1 = maximum [last (counts stop) | stop <- originalStops, time stop <= installedTime]
+    installedCounts = [installedTime - installedCore1, installedCore1]
+    installed = setField "label" (String "kernel-vectors-installed")
+      . setField "address" (toJSON (0x40088 :: Word32)) . setField "counts" (toJSON installedCounts)
+      . changeField "registers" (\registers -> case registers of
+          Array values -> Array (values V.// [(5, Number 0x69cdf8), (6, Number 0)])
+          _ -> registers)
+      . setField "instructions" (toJSON installedTime) $ first
+    stops = sortOn time (installed : originalStops)
+    row pc physical before value instructions = object
+      [ "source" .= ("cpu-write" :: String), "address" .= physical, "physical" .= physical, "size" .= (4 :: Int)
+      , "core" .= (0 :: Int), "pc" .= (pc :: Word32), "instructions" .= (instructions :: Word64), "tick" .= instructions
+      , "before" .= B.unpack (encodeLeWord before), "value" .= (value :: Word32), "byte_order" .= ("little" :: String) ]
+    zero = row 0x6080 0xa00c4 0 0 zeroTime
+    staging = dmaRow 0x40020 0xe0
+    vectorRows = zipWith (\(site, slot, before, value) instructions -> row site slot before value instructions) installSteps eventTimes
+    protocolRows = sortOn fst ((zeroTime, zero) : (stagingTime, staging) : zip eventTimes vectorRows)
+    loadedProtocol = filter ((<= handoffTime) . fst) protocolRows
+    scopedProtocol = filter ((> handoffTime) . fst) protocolRows
+    loadedRows = map snd loadedProtocol
+    commitCursor = length scopedProtocol
+    storeStop = [stop | stop <- originalStops, hasField "label" (String "completion-store") stop]
+    writerTime = case storeStop of
+      stop : _ -> time stop + 1
+      _ -> 0
+    writer = map (setField "instructions" (toJSON writerTime) . setField "tick" (toJSON writerTime))
+      (arrayValues (valueField "records" (valueField "scoped_watch" document)))
+    scopedHistory = sortOn fst (scopedProtocol ++ [(writerTime, entry) | entry <- writer])
+    scopedRows = map snd scopedHistory
+    cursor history stop = length (takeWhile ((<= time stop) . fst) history)
+    observe stop
+      | time stop > handoffTime =
+          let observed = setField "watch_records" (toJSON (cursor scopedHistory stop)) stop
+              prior = [valueField "counter" earlier | earlier <- originalStops, time earlier <= time stop, valueField "counter" earlier /= Null]
+              counter = case reverse prior of
+                value : _ -> value
+                [] -> object ["count" .= (0 :: Int), "zero_count" .= (0 :: Int), "nonzero_count" .= (0 :: Int)]
+          in if hasField "label" (String "kernel-vectors-installed") stop then setField "counter" counter observed else observed
+      | hasField "label" (String "record-1-entry") stop = setField "counter" Null . setField "watch_records" Null $ stop
+      | otherwise = setField "counter" Null . setField "watch_records" (toJSON (cursor loadedProtocol stop)) $ stop
+    observedStops = map observe stops
+    historyRef instructions =
+      let epochRows = if instructions <= handoffTime then loadedProtocol else scopedHistory
+          index = length (takeWhile ((/= instructions) . fst) epochRows)
+      in object ["epoch" .= (if instructions <= handoffTime then "loaded" else "scoped" :: String), "index" .= index]
+    snapshot matched = object
+      [ "matched" .= (matched :: Int), "vectors" .= views (B.concat (map encodeLeWord vectorWords))
+      , "decoder" .= object ["choices" .= [1 :: Int], "pending" .= [Null], "failure" .= Null], "tcm" .= knobTcm knob ]
+      where
+        vectorWords = take 9 bootstrapWords ++ [if index < matched then value else before
+          | ((_, _, before, value), index) <- zip installSteps [0 ..]]
+    views bytes = object ["virtual" .= B.unpack bytes, "physical" .= B.unpack bytes]
+    kernelSnapshot matched = setField "code" (toJSON [object ["span" .= spanOf low high, "bytes" .= views bytes]
+                                                    | ((low, high), bytes) <- kernelCodeBytes]) (snapshot matched)
+    proof = object
+      [ "state" .= ("installed" :: String), "binding" .= kernelSnapshot 0, "events" .= map historyRef eventTimes
+      , "record2_handoff" .= snapshot prefix, "installed_stop" .= length (takeWhile (not . hasField "label" (String "kernel-vectors-installed")) stops)
+      , "installed_readback" .= kernelSnapshot 7, "terminal_readback" .= kernelSnapshot 7 ]
+    addCodeClasses = changeField "classes" (\classes -> toJSON (arrayValues classes ++
+      [object ["range" .= spanOf low high, "kinds" .= writes] | ((low, high), _) <- kernelCodeBytes]))
+    fixConfinement rule
+      | hasField "cores" (toJSON [0 :: Int]) rule && hasField "kind" (String "cpu-write") rule =
+          changeField "spans" (toJSON . map (\span' -> if valueField "physical" span' == toJSON (spanOf 0 0x40)
+            then object ["physical" .= spanOf 0 0x24] else span') . arrayValues) rule
+      | otherwise = rule
 
 setField :: String -> Value -> Value -> Value
 setField name value (Object fields) = Object (KM.insert (K.fromString name) value fields)
@@ -379,6 +516,65 @@ checkRecordProjection bin symbols prefix facts composed = do
         (setField "initial_record_sha256" (toJSON (F.sha256Hex (factRecord changed))))
       ) routes
     ) locations
+
+checkDmaStaging :: Contract -> ProgramFacts -> IO ()
+checkDmaStaging contract facts = do
+  let changeDma change = changeField "loaded_watch" (changeField "records" rows)
+        . changeField "scoped_watch" (changeField "records" rows)
+        where rows = toJSON . map (\row -> if hasField "source" (String "model-bus-write") row then change row else row) . arrayValues
+      replaceDma address size = changeDma (const (dmaRow address size))
+      consume document change = validate contract (BL.toStrict (encode (change document)))
+      firstTime document = sum . map wordValue . arrayValues . valueField "counts" . head $
+        [stop | stop <- arrayValues (valueField "stops" document), hasField "label" (String "first-stage-handoff") stop]
+      cpuStaging document core size = changeDma (\_ -> object
+        [ "source" .= ("cpu-write" :: String), "address" .= (0x40020 :: Word32), "physical" .= (0x40020 :: Word32), "size" .= (size :: Int)
+        , "core" .= (core :: Int), "pc" .= (0x1d08 :: Word32), "instructions" .= (firstTime document - 2)
+        , "tick" .= (firstTime document - 2), "byte_order" .= ("little" :: String), "before" .= [0, 0, 0, 0 :: Int]
+        , "value" .= (0xe1a05000 :: Word32) ])
+  mapM_ (\order -> do
+    let document = receiptDocument (Just startupFixture) Natural OwnedProgram facts knobs {knobFirstStageOrder = order}
+        refuses label change = expect (label ++ " " ++ show order) (not (accepted (consume document change)))
+        postbound = receiptDocument (Just startupFixture) Natural OwnedProgram facts
+          knobs {knobFirstStageOrder = order, knobStagingAfterBinding = True}
+    expect ("wide unattributed prebinding DMA is accepted " ++ show order) (accepted (consume document id))
+    expect ("the identical DMA after binding is refused " ++ show order) (not (accepted (consume postbound id)))
+    expect ("retained-helper CPU0 code staging is accepted " ++ show order) (accepted (consume document (cpuStaging document 0 4)))
+    refuses "foreign-core code staging is refused" (cpuStaging document 1 4)
+    refuses "host code staging is refused" (changeDma (setField "source" (String "host-write")))
+    refuses "model DMA cannot invent CPU attribution" (changeDma (setField "instructions" (toJSON (108 :: Word64))))
+    refuses "empty DMA spans are refused" (replaceDma 0x40020 0)
+    refuses "DMA spans crossing 4 GiB are refused" (replaceDma 0xfffffff0 0x40)
+    refuses "DMA spans cannot overflow Word64" (replaceDma (maxBound :: Word64) 2)
+    refuses "CPU staging retains the 16-byte width bound"
+      (cpuStaging document 0 224)
+    mapM_ (\(address, size) -> refuses "DMA code overlap cannot excuse another protected overlap" (replaceDma address size))
+      [(0x24, 0x400dc), (0x6000, 0x3a100), (0x11800, 0x2e900), (0x40020, 0xb3400)]
+    refuses "a firststage binding cursor is required" (changeStop "first-stage-handoff" (setField "watch_records" Null))
+    refuses "a firststage binding cursor cannot leave its history"
+      (changeStop "first-stage-handoff" (setField "watch_records" (toJSON (16385 :: Int))))
+    ) [BeforeSecondary, AfterPrefix]
+  let loaded = receiptDocument (Just startupFixture) Natural OwnedProgram facts knobs
+      scoped = receiptDocument (Just startupFixture) Natural OwnedProgram facts knobs {knobFirstStageOrder = AfterPrefix}
+      refuses document label change = expect label (not (accepted (consume document change)))
+      fullLoader = replaceDma 0x40000 0xdae0
+  expect "Loaded DMA may stage the complete kernel-A image" (accepted (consume loaded fullLoader))
+  refuses scoped "Scoped DMA cannot stage over completion-code guards" fullLoader
+  mapM_ (\label -> refuses loaded ("Loaded " ++ label ++ " requires its actual cursor")
+    (changeStop label (setField "watch_records" Null))) ["secondary-entry", "record-2-handoff", "kernel-vectors-installed"]
+  refuses loaded "Boot retains a null cursor" (changeStop "record-1-entry" (setField "watch_records" (toJSON (0 :: Int))))
+  refuses loaded "Loaded cursors cannot borrow a scoped count"
+    (changeStop "secondary-entry" (setField "watch_records" (toJSON (1 :: Int))))
+  refuses loaded "Scoped cursors cannot borrow the Loaded count"
+    (changeStop "prefix-entry" (setField "watch_records" (toJSON (9 :: Int))))
+  refuses loaded "completion-zero references cannot borrow another epoch"
+    (changeField "firststage_zero" (setField "epoch" (String "scoped")))
+  refuses loaded "vector references cannot borrow another epoch"
+    (changeField "kernel_vector_install" (changeField "events" (toJSON . map (setField "epoch" (String "scoped")) . arrayValues)))
+  let standalone = receiptDocument Nothing Natural OwnedProgram facts knobs
+      standaloneContract = Contract Natural (Program OwnedProgram facts)
+      wideStandalone = changeField "loaded_watch" (changeField "records" (\rows -> toJSON (dmaRow 0x40020 0xe0 : arrayValues rows))) standalone
+  expect "schema4 standalone receipts keep their existing admission" (accepted (validate standaloneContract (BL.toStrict (encode standalone))))
+  expect "schema4 does not gain wide transfer parsing" (not (accepted (parseReceipt (BL.toStrict (encode wideStandalone)))))
 
 main :: IO ()
 main = do
@@ -473,6 +669,7 @@ main = do
   checkIdentityAdmission (owned Natural) OwnedProgram facts Nothing
   checkIdentityAdmission composed OwnedProgram facts (Just startupFixture)
   checkRecordProjection bin symbols prefixEntry facts composed
+  checkDmaStaging composed facts
   let composedBytes scenario knob = receiptFor (Just startupFixture) scenario OwnedProgram facts knob
       altered change = BL.toStrict (encode (change (receiptDocument (Just startupFixture) Natural OwnedProgram facts knobs)))
       removeClass span' = changeField "classes" (filterArray (not . hasField "range" span'))
@@ -489,7 +686,25 @@ main = do
       addImageWrite value = value
       setTarget (Array registers) = Array (registers V.// [(2, Number 0x40024)])
       setTarget value = value
+      mapDocumentArray change = toJSON . map change . arrayValues
+      offsetCount value = case value of
+        Number count -> Number (count + fromInteger (2 ^ (63 :: Int)))
+        _ -> error "fixture instruction counts must be numeric"
+      offsetCounts = toJSON . map offsetCount . arrayValues
+      offsetTimeline = changeField "stops" (mapDocumentArray (changeField "counts" offsetCounts))
+        . changeField "completion" (changeField "microsteps" (mapDocumentArray
+            (changeField "before" offsetCounts . changeField "after" offsetCounts)))
+      nextInstruction value = case value of
+        Number count -> Number (count + 1)
+        _ -> error "fixture instructions must be numeric"
   expect "composed contract round trip" (parseContract (BL.toStrict (encode (contractValue composed))) == Right composed)
+  refuses "composed core-count sums cannot wrap their original wire instruction coordinates" offsetTimeline
+  refuses "composed stop instructions must equal the checked sum of both core counts"
+    (changeStop "first-stage-handoff" (changeField "instructions" nextInstruction))
+  refuses "composed global instructions cannot exceed the contract budget"
+    (setField "instructions" (toJSON (budget + 1)))
+  refuses "composed stop progress cannot exceed the final instruction coordinate"
+    (setField "instructions" (toJSON (0 :: Word64)))
   mapM_ (\scenario -> do
     selected <- either fail pure (composedContract scenario facts startupFixture)
     expect ("composed " ++ scenarioName scenario ++ " accepted") (accepted (validate selected (composedBytes scenario knobs)))) [Natural, Held, Delayed, NonOne]
@@ -498,6 +713,88 @@ main = do
     mapM_ (\order -> expect ("composed " ++ scenarioName scenario ++ " handoff " ++ show order ++ " accepted")
       (accepted (validate selected (composedBytes scenario knobs {knobFirstStageOrder = order}))))
       [BeforeRecord2, BeforePrefix, AfterPrefix, AfterWaiting]) [Natural, Held, Delayed, NonOne]
+  mapM_ (\scenario -> do
+    selected <- either fail pure (composedContract scenario facts startupFixture)
+    mapM_ (\matched -> do
+      let partial = receiptDocument (Just startupFixture) scenario OwnedProgram facts knobs {knobInstallPrefix = matched}
+          consume change = validate selected (BL.toStrict (encode (change partial)))
+          refusesPartial label change = expect (label ++ " at prefix " ++ show matched) (not (accepted (consume change)))
+          proofField name change = changeField "kernel_vector_install" (changeField name change)
+          changeByte (Array bytes) = Array (bytes V.// [(36, Number 0xff)])
+          changeByte value = value
+          corruptViews = changeField "vectors" (changeField "physical" changeByte)
+          mutateVector = mutateAt 0x4003c
+          mutateAt pc change = changeField "loaded_watch" (changeField "records" (mapValues (\row ->
+            if hasField "pc" (toJSON (pc :: Word32)) row then change row else row)))
+            . changeField "scoped_watch" (changeField "records" (mapValues (\row ->
+              if hasField "pc" (toJSON pc) row then change row else row)))
+          mapValues change = toJSON . map change . arrayValues
+          corruptCode = changeField "code" (mapValues (changeField "bytes" (changeField "physical" (\bytes ->
+            case bytes of Array values -> Array (values V.// [(0, Number 0xff)]); other -> other))))
+          extraTailRow = case arrayValues (valueField "records" (valueField "loaded_watch" partial))
+              ++ arrayValues (valueField "records" (valueField "scoped_watch" partial)) of
+            rows -> head [row | row <- rows, hasField "pc" (toJSON (0x4003c :: Word32)) row]
+          stopTime stop = case valueField "instructions" stop of
+            Number count -> count
+            _ -> error "fixture stop instructions must be numeric"
+          lateTime = stopTime (last (arrayValues (valueField "stops" partial)))
+          appendLate row = changeField "scoped_watch" (changeField "records" (\rows -> toJSON
+            (arrayValues rows ++ [setField "instructions" (Number lateTime) . setField "tick" (Number lateTime) $ row])))
+            . changeField "stops" (mapValues (\stop -> if stopTime stop >= lateTime
+                then changeField "watch_records" (\cursor -> case cursor of
+                  Number count -> Number (count + 1)
+                  _ -> error "fixture scoped stop must carry a cursor") stop
+                else stop))
+          appendTail = appendLate (setField "before" (toJSON (B.unpack (encodeLeWord 0x40100))) extraTailRow)
+          appendCode = appendLate (setField "pc" (toJSON (0x1d08 :: Word32))
+            . setField "physical" (toJSON (0x40020 :: Word32)) . setField "address" (toJSON (0x40020 :: Word32))
+            . setField "before" (toJSON (B.unpack (encodeLeWord 0xe1a05000)))
+            . setField "value" (toJSON (0xe1a05000 :: Word32)) $ extraTailRow)
+          bindingTcm tcm = proofField "binding" (setField "tcm" tcm)
+            . changeStop "first-stage-handoff" (setField "tcm" tcm)
+      expect ("composed " ++ scenarioName scenario ++ " partial installation " ++ show matched ++ " accepted") (accepted (consume id))
+      refusesPartial "partial vector corruption is refused" (proofField "record2_handoff" corruptViews)
+      refusesPartial "wrong matched prefix is refused" (proofField "record2_handoff" (setField "matched" (toJSON ((matched + 1) `mod` 8))))
+      refusesPartial "terminal vector corruption is refused" (proofField "terminal_readback" corruptViews)
+      refusesPartial "required installation proof cannot be omitted" (deleteField "kernel_vector_install")
+      refusesPartial "required completion-zero proof cannot be omitted" (deleteField "firststage_zero")
+      refusesPartial "zero proof cannot be null" (setField "firststage_zero" Null)
+      refusesPartial "installed stop cannot be omitted" (missingStop "kernel-vectors-installed")
+      mapM_ (\(index, value) -> refusesPartial "installed register context is source-bound"
+        (changeStop "kernel-vectors-installed" (changeField "registers" (\registers -> case registers of
+          Array values -> Array (values V.// [(index, Number value)])
+          _ -> registers)))) [(5, 0), (6, 1)]
+      mapM_ (\name -> refusesPartial ("installation field " ++ name ++ " is required")
+        (changeField "kernel_vector_install" (deleteField name)))
+        ["state", "binding", "events", "record2_handoff", "installed_stop", "installed_readback", "terminal_readback"]
+      refusesPartial "a zero reference outside its history is refused"
+        (changeField "firststage_zero" (setField "index" (toJSON (16384 :: Int))))
+      refusesPartial "a TCM window covering kernel code is refused"
+        (bindingTcm (toJSON [[0x00040011, 0], [0x70000011, 0] :: [Word32]]))
+      mapM_ (\btcm -> refusesPartial "a binding TCM window covering the retired entry or alias is refused"
+        (bindingTcm (toJSON [[0x70000011, btcm], [0x70000011, 0] :: [Word32]]))) [0x0000100d, 0x4000100d]
+      refusesPartial "a short vector store is refused"
+        (mutateVector (setField "size" (toJSON (2 :: Int)) . setField "before" (toJSON [76, 0 :: Int])))
+      refusesPartial "a vector write before firststage handoff is refused"
+        (mutateVector (setField "instructions" (toJSON (100 :: Word64))))
+      refusesPartial "a big-endian completion-zero row is refused"
+        (mutateAt 0x6080 (setField "byte_order" (String "big")))
+      refusesPartial "a big-endian vector row is refused"
+        (mutateVector (setField "byte_order" (String "big")))
+      mapM_ (\(name, value) -> refusesPartial ("vector " ++ name ++ " corruption is refused")
+        (mutateVector (setField name value)))
+        [ ("core", toJSON (1 :: Int)), ("pc", toJSON (0x40040 :: Word32)), ("address", toJSON (0x40000024 :: Word32))
+        , ("physical", toJSON (0x28 :: Word32)), ("size", toJSON (2 :: Int)), ("before", toJSON [0, 0, 0, 0 :: Int])
+        , ("value", toJSON (0x40104 :: Word32)) ]
+      refusesPartial "an omitted vector event is refused" (proofField "events" (toJSON . drop 1 . arrayValues))
+      refusesPartial "reordered vector events are refused" (proofField "events" (toJSON . reverse . arrayValues))
+      refusesPartial "code view corruption at binding is refused" (proofField "binding" corruptCode)
+      refusesPartial "code view corruption at installed stop is refused" (proofField "installed_readback" corruptCode)
+      refusesPartial "code view corruption at terminal is refused" (proofField "terminal_readback" corruptCode)
+      refusesPartial "a pending decoder is refused" (proofField "record2_handoff" (changeField "decoder" (setField "pending" (toJSON [1 :: Int]))))
+      refusesPartial "an extra terminal tail write is refused" appendTail
+      refusesPartial "restored code bytes do not excuse a post-binding code write" appendCode
+      ) [0 .. 7]) [Natural, Held, Delayed, NonOne]
   mapM_ (\scenario -> do
     selected <- either fail pure (composedContract scenario facts startupFixture)
     expect ("composed " ++ scenarioName scenario ++ " firststage handoff after core-0 continuation refused")
@@ -511,6 +808,9 @@ main = do
   refusesScoped "scoped firststage handoff still binds its target" (changeStop "first-stage-handoff" (changeField "registers" setTarget))
   refusesScoped "scoped firststage handoff still binds its source site" (changeStop "first-stage-handoff" (setField "address" (Number 0x6104)))
   refusesScoped "a scoped firststage handoff does not excuse an image write" (changeField "scoped_watch" (changeField "records" addImageWrite))
+  refusesScoped "a scoped big-endian completion-zero row is refused"
+    (changeField "scoped_watch" (changeField "records" (toJSON . map (\row ->
+      if hasField "pc" (toJSON (0x6080 :: Word32)) row then setField "byte_order" (String "big") row else row) . arrayValues)))
   expect "standalone receipt cannot establish composed startup" (not (accepted (validate composed (ownedReceipt Natural knobs))))
   expect "composed receipt cannot establish standalone startup" (not (accepted (validate (owned Natural) (composedBytes Natural knobs))))
   expectRefused "retained roles are refused under schema5"
@@ -521,6 +821,28 @@ main = do
   refusesStartup "composed admission refuses a firststage image outside record 1" (setField "image" (toJSONSpan 0x6000 0x10004))
   refusesStartup "composed admission refuses different original DAT identities"
     (setField "secondary_source_sha256" (String (K.toText (K.fromString (replicate 64 '7')))))
+  refusesStartup "completion-zero source facts are required" (deleteField "completion_zero")
+  refusesStartup "kernel installation source facts are required" (deleteField "kernel_vector_install")
+  mapM_ (\instruction -> refusesStartup "completion-zero facts require an AL zero-offset general-register STR"
+    (changeField "completion_zero" (setField "instruction" (toJSON (instruction :: Word32)))))
+    [0xe5805004, 0xe580f000, 0xe58d5000, 0x15805000, 0xe5a05000, 0xe5c05000]
+  mapM_ (\(region, offset) -> do
+    let changedCode = [((low, high), if index == region
+          then B.take offset bytes <> B.singleton (B.index bytes offset `xor` 1) <> B.drop (offset + 1) bytes
+          else bytes) | (index, ((low, high), bytes)) <- zip [0 :: Int ..] kernelCodeBytes]
+        changedStartup = changeField "kernel_vector_install" (setField "code" (toJSON
+          [object ["span" .= spanOf low high, "sha256" .= sha256Hex bytes] | ((low, high), bytes) <- changedCode])) startupFixture
+        changedSnapshot = setField "code" (toJSON
+          [object ["span" .= spanOf low high, "bytes" .= object ["virtual" .= B.unpack bytes, "physical" .= B.unpack bytes]]
+          | ((low, high), bytes) <- changedCode])
+        changedReceipt = setField "startup" changedStartup
+          . changeField "kernel_vector_install" (changeField "binding" changedSnapshot
+            . changeField "installed_readback" changedSnapshot . changeField "terminal_readback" changedSnapshot)
+          $ receiptDocument (Just startupFixture) Natural OwnedProgram facts knobs
+    changedContract <- either fail pure (composedContract Natural facts changedStartup)
+    expect ("matching digests cannot substitute noncanonical kernel code at " ++ show (region, offset))
+      (not (accepted (validate changedContract (BL.toStrict (encode changedReceipt)))))
+    ) [(0, 0), (0, 0x68), (0, 0xbc), (1, 0)]
   refuses "composed receipt binds the firststage symbols"
     (changeField "startup" (setField "symbols_sha256" (String (K.toText (K.fromString (replicate 64 '7'))))))
   refuses "endpoint identity does not replace the firststage interval guard" (changeField "loaded_watch" withoutImageGuard)

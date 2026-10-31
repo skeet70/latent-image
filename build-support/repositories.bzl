@@ -75,7 +75,9 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/native_case.rs",
     "//emulation:fujimod-xm1/src/native_case_main.rs",
     "//emulation:fujimod-xm1/src/peer_witness.rs",
+    "//emulation:fujimod-xm1/src/peer_witness_loader.rs",
     "//emulation:fujimod-xm1/src/peer_witness_startup.rs",
+    "//emulation:fujimod-xm1/src/peer_witness_vectors.rs",
     "//emulation:fujimod-xm1/src/peer_witness_wait.rs",
     "//emulation:fujimod-xm1/src/provenance.rs",
     "//emulation:fujimod-xm1/src/provenance_main.rs",
@@ -94,6 +96,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/tests/peer_wait_sdk.rs",
     "//emulation:fujimod-xm1/tests/peer_witness.rs",
     "//emulation:fujimod-xm1/tests/r4f_guard.rs",
+    "//emulation:fujimod-xm1/tests/support/composed_nand_fixture.rs",
 ]
 
 _NIX_BUILD_CAP = ["--max-jobs", "2", "--cores", "2"]
