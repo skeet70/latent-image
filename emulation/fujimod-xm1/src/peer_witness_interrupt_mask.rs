@@ -61,7 +61,7 @@ impl ConsumerWire {
         let mut contract = self.initializer.validate()?;
         let consumer = self.consumer;
         require(consumer.source_sha256 == Sha256Digest::parse(SOURCE)?
-            && consumer.loader_b_sha256 == Sha256Digest::parse(LOADER_B_SHA256)?
+            && consumer.loader_b_sha256 == LOADER_B_SHA256
             && consumer.image4_sha256 == Sha256Digest::parse(IMAGE_SHA)?, "consumer source identities differ")?;
         require(consumer.code.len() == CODE.len() && consumer.code.iter().zip(CODE).all(|(code, (start, words))|
             code.start == Guest(start) && code.words.len() == words.len()
