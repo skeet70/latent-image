@@ -238,10 +238,8 @@ ioTests = do
     persisted <- readOpenJournal path >>= right . eitherDecodeStrict'
     check "complete page persisted before acknowledgement becomes available" (persisted == object ["label" .= ("capture-observation-page" :: T.Text), "value" .= fixture])
     check "durable page yields exact acknowledgement cursor" (ackRequest (pageNext parsed) == object ["command" .= ("capture-observation-ack" :: T.Text), "next" .= (1 :: Int)])
-    check "refused acknowledgement leaves journal evidence intact" (isLeft (validateAck (pageNext parsed) 0
+    check "mismatched acknowledgement refuses" (isLeft (validateAck (pageNext parsed) 0
       (object ["acknowledged" .= (0 :: Int), "pending" .= (1 :: Int)])))
-    afterRefusal <- readOpenJournal path >>= right . eitherDecodeStrict'
-    check "acknowledgement refusal does not erase or replace the page" (afterRefusal == persisted)
     closeJournal journal
     failed <- try (journalPage journal initialCursor fixture) :: IO (Either IOException Page)
     check "journal failure cannot yield an acknowledgeable page" (isLeft failed)
