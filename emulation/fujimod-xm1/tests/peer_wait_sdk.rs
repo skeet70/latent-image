@@ -241,7 +241,24 @@ struct ComposedFailure {
     schema: u32,
     result: ResultStatus,
     instructions: u64,
+    initial_record_sha256: ObservedDigest,
+    handoff_record_immutable_sha256: ObservedDigest,
     startup: ComposedBinding,
+}
+
+#[cfg(feature = "scoped-watch")]
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ObservedDigest { Present(String), Absent(()) }
+
+#[cfg(feature = "scoped-watch")]
+impl ObservedDigest {
+    fn assert_unobserved(self) {
+        match self {
+            Self::Absent(()) => (),
+            Self::Present(digest) => panic!("configuration refusal unexpectedly observed identity {digest}"),
+        }
+    }
 }
 
 #[cfg(feature = "scoped-watch")]
@@ -265,7 +282,7 @@ fn composed_configuration_refusal_keeps_its_schema_and_selected_startup_identity
     machine.document.execution.quantum = 999;
     let digest = "ab".repeat(32);
     let contract = format!(r#"{{"schema":5,"budget":50000000,"scenario":{{"kind":"natural"}},
-        "program":{{"kind":"owned","record_sha256":"{digest}","loader_sha256":"{digest}",
+        "program":{{"kind":"owned","record_sha256":"{digest}","record_immutable_sha256":"{digest}","loader_sha256":"{digest}",
         "handoff":66592,"entry":66604,"load":66700,"post_load":66704,"loaded_register":0,"poll_period":256,
         "image":[66560,68096],"refusal":null,"forbid_fetch":[[852000,852168],[854444,854480],[854596,854628]],
         "forbid_read":[[852168,852220]]}},
@@ -282,8 +299,44 @@ fn composed_configuration_refusal_keeps_its_schema_and_selected_startup_identity
     assert_eq!(receipt.schema, 5);
     assert_eq!(receipt.result, ResultStatus::Failed);
     assert_eq!(receipt.instructions, 0);
+    receipt.initial_record_sha256.assert_unobserved();
+    receipt.handoff_record_immutable_sha256.assert_unobserved();
     assert_eq!(receipt.startup.kind, ComposedKind::Composed);
     assert_eq!(receipt.startup.entry, 0x6000);
     assert_eq!(receipt.startup.secondary_entry, 0x10400);
     assert_eq!(receipt.startup.record1_sha256, digest);
+}
+
+#[cfg(feature = "scoped-watch")]
+#[derive(Deserialize)]
+struct LoaderIdentityFailure {
+    schema: u32,
+    result: ResultStatus,
+    instructions: u64,
+    initial_record_sha256: ObservedDigest,
+    handoff_record_immutable_sha256: ObservedDigest,
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn standalone_configuration_refusal_keeps_initial_and_handoff_identity_unobserved() {
+    let mut machine = machine(&[0xeafffffe]);
+    machine.document.execution.quantum = 999;
+    let digest = "ab".repeat(32);
+    let contract = format!(r#"{{"schema":4,"budget":50000000,"scenario":{{"kind":"natural"}},
+        "program":{{"kind":"owned","record_sha256":"{digest}","record_immutable_sha256":"{digest}","loader_sha256":"{digest}",
+        "handoff":66592,"entry":66604,"load":66700,"post_load":66704,"loaded_register":0,"poll_period":256,
+        "image":[66560,68096],"refusal":null,"forbid_fetch":[[852000,852168],[854444,854480],[854596,854628]],
+        "forbid_read":[[852168,852220]]}}}}"#);
+    let output = std::env::temp_dir().join(format!("peer-loader-identity-{}-{}", std::process::id(), OUTPUT.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir(&output).unwrap();
+    let result = peer_witness::run(machine, PeerContract::parse(contract.as_bytes()).unwrap(), &output);
+    let receipt: LoaderIdentityFailure = serde_json::from_slice(&std::fs::read(output.join("peer-witness.json")).unwrap()).unwrap();
+    std::fs::remove_dir_all(&output).unwrap();
+    assert!(result.is_err());
+    assert_eq!(receipt.schema, 4);
+    assert_eq!(receipt.result, ResultStatus::Failed);
+    assert_eq!(receipt.instructions, 0);
+    receipt.initial_record_sha256.assert_unobserved();
+    receipt.handoff_record_immutable_sha256.assert_unobserved();
 }

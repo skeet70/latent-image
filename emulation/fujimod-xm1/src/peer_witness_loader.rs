@@ -55,6 +55,18 @@ const SECOND_REPLACED: [(u64, u64); 7] = [
     (0x12abc, 0x12ad0), (0x13490, 0x13574), (0x1386c, 0x138ac),
 ];
 const SECOND_POOLS: [(u64, u64); 3] = [(0x11ac4, 0x11acc), (0x11ad4, 0x11ae8), (0x11fe4, 0x11fec)];
+const RECORD_BYTES: usize = 0x4c80;
+const RECORD_IMMUTABLE_SHA256: Sha256Digest = Sha256Digest([
+    0x0c,0x10,0xe1,0x26,0x4b,0xcc,0xdd,0x36,0xfe,0x16,0x7c,0xd4,0xc2,0x2a,0x3d,0xf4,
+    0x81,0x34,0x94,0x5a,0x71,0x0f,0x25,0x54,0x81,0x7f,0x9c,0xaf,0xd7,0x6b,0x83,0xd0,
+]);
+
+fn record_immutable_sha256(record: &[u8; RECORD_BYTES]) -> Sha256Digest {
+    let mut hash = Sha256::new();
+    hash.update(&record[..0x4c60]);
+    hash.update(&record[0x4c6c..]);
+    Sha256Digest(hash.finalize().into())
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -85,6 +97,7 @@ impl TryFrom<u8> for RegisterIndex {
 struct ProgramWire {
     kind: ProgramKind,
     record_sha256: String,
+    record_immutable_sha256: Sha256Digest,
     loader_sha256: String,
     handoff: Guest,
     entry: Guest,
@@ -165,6 +178,7 @@ pub(super) struct LoaderContract {
     scenario: Scenario,
     kind: ProgramKind,
     record: Sha256Digest,
+    record_immutable: Sha256Digest,
     loader: Sha256Digest,
     handoff: Guest,
     entry: Guest,
@@ -180,6 +194,9 @@ impl LoaderContract {
     }
     fn record1_entry(&self) -> u32 {
         self.startup.as_ref().map_or(RECORD1_ENTRY, |startup| startup.entry.0)
+    }
+    fn secondary_entry(&self) -> Guest {
+        Guest(match self.kind { ProgramKind::Retained => 0x11800, ProgramKind::Owned => SECOND_ENTRY })
     }
     fn append_composed_classes(&self, classes: &mut Vec<WatchRange>) {
         let Some(startup) = &self.startup else { return };
@@ -219,19 +236,20 @@ impl LoaderWire {
         let record = Sha256Digest::parse(&program.record_sha256)?;
         let loader = Sha256Digest::parse(&program.loader_sha256)?;
         match program.kind {
-            ProgramKind::Retained => require(record == RECORD2_SHA256 && loader == LOADER_B_SHA256
+            ProgramKind::Retained => require(record == RECORD2_SHA256 && program.record_immutable_sha256 == RECORD_IMMUTABLE_SHA256
+                && loader == LOADER_B_SHA256
                 && program.handoff == Guest(0x11850) && program.entry == Guest(0xd0020) && program.load == Guest(0xd0a44)
                 && program.post_load == Guest(0xd0a48) && program.loaded_register.0 == 3 && program.image.is_none()
                 && program.refusal.is_none() && program.forbid_fetch.is_empty() && program.forbid_read.is_empty(),
                 "retained loader-prefix program differs from the stock sites")?,
             ProgramKind::Owned => {
                 let (start, end) = program.image.map(|(start, end)| (start.0, end.0)).ok_or("owned loader prefix lacks its image")?;
-                require(start < end && start % 4 == 0 && end % 4 == 0 && start >= 0x103e8 && end <= 0x11800,
-                    "owned loader-prefix image lies outside record-2 padding")?;
+                require(start < end && start % 4 == 0 && end % 4 == 0 && start >= 0x103e8 && end <= 0x11800
+                    && (start..end).contains(&SECOND_ENTRY), "owned loader-prefix image lacks the linked secondary entry or leaves record-2 padding")?;
                 let sites: Vec<u32> = [program.handoff, program.entry, program.load, program.post_load].into_iter()
                     .chain(program.refusal).map(|site| site.0).collect();
-                require(sites.iter().all(|site| site % 4 == 0 && (start..end).contains(site))
-                    && sites.iter().collect::<BTreeSet<_>>().len() == sites.len(), "owned loader-prefix sites must be distinct aligned image addresses")?;
+                require(sites.iter().all(|site| *site != SECOND_ENTRY && site % 4 == 0 && (start..end).contains(site))
+                    && sites.iter().collect::<BTreeSet<_>>().len() == sites.len(), "owned loader-prefix sites must be distinct aligned image addresses other than the secondary entry")?;
                 require(program.loaded_register.0 == 0 && program.forbid_fetch.len() == REPLACED.len()
                     && spans(&program.forbid_fetch) == BTreeSet::from(REPLACED)
                     && program.forbid_read.len() == 1 && spans(&program.forbid_read) == BTreeSet::from([ENTRY_POOL]),
@@ -239,7 +257,7 @@ impl LoaderWire {
             }
         }
         Ok(LoaderContract {
-            scenario: self.scenario.kind, kind: program.kind, record, loader,
+            scenario: self.scenario.kind, kind: program.kind, record, record_immutable: program.record_immutable_sha256, loader,
             handoff: program.handoff, entry: program.entry, post_load: program.post_load,
             loaded: program.loaded_register, refusal: program.refusal,
             image: program.image, startup: None,
@@ -383,7 +401,7 @@ struct Endpoint {
     frame: Views,
     vectors: Views,
     zero: ZeroReadback,
-    record_sha256: Sha256Digest,
+    record_immutable_sha256: Sha256Digest,
     loader_sha256: Sha256Digest,
 }
 
@@ -404,6 +422,8 @@ struct Receipt<'a> {
     bindings: &'a Option<Bindings>,
     completion: &'a Option<CommittedStore>,
     endpoint: &'a Option<Endpoint>,
+    initial_record_sha256: &'a Option<Sha256Digest>,
+    handoff_record_immutable_sha256: &'a Option<Sha256Digest>,
     final_primary: &'a Option<wait::Primary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     startup: &'a Option<ComposedStartup>,
@@ -448,6 +468,8 @@ struct Runner<'a> {
     bindings: Option<Bindings>,
     completion: Option<CommittedStore>,
     endpoint: Option<Endpoint>,
+    initial_record_sha256: Option<Sha256Digest>,
+    handoff_record_immutable_sha256: Option<Sha256Digest>,
     final_primary: Option<wait::Primary>,
     phase: Phase,
 }
@@ -458,6 +480,7 @@ impl<'a> Runner<'a> {
             contract, maps: Vec::new(), committed: Vec::new(), sites: BTreeMap::new(), epoch: Epoch::Boot, classified: None, scoped: None,
             boot_watch: Value::Null, loaded_watch: Value::Null, scoped_watch: None, stops: Vec::new(), bindings: None,
             completion: None, endpoint: None, final_primary: None, phase: Phase::default(),
+            initial_record_sha256: None, handoff_record_immutable_sha256: None,
         }
     }
 
@@ -568,9 +591,9 @@ impl<'a> Runner<'a> {
         for core in 0..2 {
             for guest in [start, ZERO_GUEST + start] {
                 require(self.physical_of(core, guest, views.physical.len() as u64)? == start,
-                    "composed record identity or alias mapping differs")?;
+                    "record identity or alias mapping differs")?;
                 machine.session.board.read_memory(core, guest, &mut views.r#virtual)?;
-                require(views.r#virtual == views.physical, "composed record virtual or alias bytes differ from physical memory")?;
+                require(views.r#virtual == views.physical, "record virtual or alias bytes differ from physical memory")?;
             }
         }
         Ok(())
@@ -590,24 +613,29 @@ impl<'a> Runner<'a> {
         tcm_disjoint_views(&self.committed, &stop.tcm, &[FIRST_RECORD, RECORD])?;
         let mut record = self.views(machine, 0, FIRST_RECORD.0, FIRST_RECORD.1 as usize)?;
         self.bind_composed_views(machine, FIRST_RECORD.0, &mut record)?;
-        require(Sha256Digest::of(&record.physical) == startup.record1_sha256
-            && word(machine, 0x20)?.0 == startup.entry.0, "composed record-1 bytes or reset entry differ")?;
+        require(Sha256Digest::of(&record.physical) == startup.record1_sha256, "composed full record-1 identity differs from the staged contract")?;
+        require(word(machine, 0x20)?.0 == startup.entry.0, "composed record-1 reset literal differs from the selected entry")?;
         require(Sha256Digest::of(&record.physical[startup.image.0 .0 as usize..startup.image.1 .0 as usize]) == startup.image_sha256,
             "composed first-stage image bytes differ from their selected identity")?;
         require(word(machine, u64::from(startup.handoff.0))?.0 == 0xe1a0_f002,
             "composed first-stage handoff is not MOV PC,R2")
     }
 
-    fn bind_secondary(&self, machine: &Machine, startup: &ComposedStartup) -> Result<(), String> {
-        let mut record = self.views(machine, 1, RECORD.0, (RECORD.1 - RECORD.0) as usize)?;
+    fn bind_secondary(&mut self, machine: &Machine) -> Result<(), String> {
+        let mut record = self.views(machine, 1, RECORD.0, RECORD_BYTES)?;
+        let initial = Sha256Digest::of(&record.physical);
+        self.initial_record_sha256 = Some(initial);
         self.bind_composed_views(machine, RECORD.0, &mut record)?;
-        require(Sha256Digest::of(&record.physical) == self.contract.record
-            && word(machine, 0x10020)?.0 == startup.secondary_entry.0, "composed record-2 bytes or reset entry differ")?;
-        let (start, end) = self.contract.image.ok_or("composed secondary image absent")?;
-        require(Sha256Digest::of(&record.physical[(u64::from(start.0) - RECORD.0) as usize..(u64::from(end.0) - RECORD.0) as usize])
-            == startup.secondary_image_sha256, "composed secondary image bytes differ from their selected identity")?;
-        require(word(machine, u64::from(self.contract.handoff.0))?.0 == 0xe1a0_f003,
-            "composed secondary handoff is not MOV PC,R3")
+        require(initial == self.contract.record, "secondary-entry full record-2 identity differs from the staged contract")?;
+        require(word(machine, 0x10020)?.0 == self.contract.secondary_entry().0, "record-2 reset literal differs from the secondary entry")?;
+        if let Some(startup) = &self.contract.startup {
+            let (start, end) = self.contract.image.ok_or("composed secondary image absent")?;
+            require(Sha256Digest::of(&record.physical[(u64::from(start.0) - RECORD.0) as usize..(u64::from(end.0) - RECORD.0) as usize])
+                == startup.secondary_image_sha256, "composed secondary image bytes differ from their selected identity")?;
+            require(word(machine, u64::from(self.contract.handoff.0))?.0 == 0xe1a0_f003,
+                "composed secondary handoff is not MOV PC,R3")?;
+        }
+        Ok(())
     }
 
     /// Physical spans no enabled TCM window may overlay in any committed view.
@@ -777,6 +805,14 @@ impl<'a> Runner<'a> {
     fn endpoint(&self, machine: &Machine) -> Result<Endpoint, String> {
         let zero = machine.read(ZERO.0, (ZERO_CLAIM_END - ZERO.0) as usize)?;
         let slots = self.bindings.as_ref().ok_or("loader-prefix bindings absent")?.vector_slots.physical();
+        let record = self.views(machine, 1, RECORD.0, RECORD_BYTES)?;
+        require(record.r#virtual == record.physical, "endpoint record-2 core-1 view differs from physical memory")?;
+        let loader = self.views(machine, 1, LOADER_B.0, (LOADER_B.1 - LOADER_B.0) as usize)?;
+        require(loader.r#virtual == loader.physical, "endpoint loader-B core-1 view differs from physical memory")?;
+        let immutable = record_immutable_sha256(record.physical.as_slice().try_into().map_err(|_| "endpoint record-2 extent differs")?);
+        require(immutable == self.contract.record_immutable, "endpoint immutable record-2 identity differs from the staged contract")?;
+        let loader_digest = Sha256Digest::of(&loader.physical);
+        require(loader_digest == self.contract.loader, "endpoint loader-B identity differs from the staged contract")?;
         Ok(Endpoint {
             frame: self.views(machine, 1, FRAME, 16)?,
             vectors: Views { r#virtual: wait::bytes(machine, 1, VECTOR_SLOTS, VECTOR_BYTES)?, physical: machine.read(slots, VECTOR_BYTES)? },
@@ -784,8 +820,8 @@ impl<'a> Runner<'a> {
                 range: (Address(ZERO.0), Address(ZERO_CLAIM_END)),
                 first_nonzero: zero.iter().position(|&byte| byte != 0).map(|offset| Address(ZERO.0 + offset as u64)),
             },
-            record_sha256: Sha256Digest::of(&machine.read(RECORD.0, (RECORD.1 - RECORD.0) as usize)?),
-            loader_sha256: Sha256Digest::of(&machine.read(LOADER_B.0, (LOADER_B.1 - LOADER_B.0) as usize)?),
+            record_immutable_sha256: immutable,
+            loader_sha256: loader_digest,
         })
     }
 
@@ -827,9 +863,9 @@ impl<'a> Runner<'a> {
                 self.remove(machine, contract.record1_entry())?;
                 if let Some(startup) = &contract.startup {
                     self.bind_firststage(machine, &self.stops[index], startup)?;
-                    self.add(machine, &[(startup.handoff.0, Label::FirstStageHandoff), (startup.secondary_entry.0, Label::SecondaryEntry)])?;
+                    self.add(machine, &[(startup.handoff.0, Label::FirstStageHandoff)])?;
                 }
-                self.add(machine, &[(contract.handoff.0, Label::Record2Handoff)])?;
+                self.add(machine, &[(contract.secondary_entry().0, Label::SecondaryEntry), (contract.handoff.0, Label::Record2Handoff)])?;
             }
             Label::FirstStageHandoff => {
                 require(self.epoch == Epoch::Loaded, "first-stage handoff out of phase")?;
@@ -844,13 +880,14 @@ impl<'a> Runner<'a> {
             }
             Label::SecondaryEntry => {
                 require(self.epoch == Epoch::Loaded, "secondary entry out of phase")?;
-                let startup = contract.startup.as_ref().ok_or("standalone contract reached composed secondary entry")?;
                 tcm_disjoint_views(&self.committed, &self.stops[index].tcm, &self.guarded())?;
-                self.bind_secondary(machine, startup)?;
-                self.remove(machine, startup.secondary_entry.0)?;
+                self.bind_secondary(machine)?;
+                self.remove(machine, contract.secondary_entry().0)?;
             }
             Label::Record2Handoff => {
                 require(self.epoch == Epoch::Loaded, "record-2 handoff out of phase")?;
+                require(self.stops.iter().filter(|stop| stop.label == Label::SecondaryEntry).count() == 1
+                    && self.initial_record_sha256.is_some(), "record-2 handoff precedes the full secondary-entry identity binding")?;
                 if contract.startup.is_some() {
                     require([Label::FirstStageHandoff, Label::SecondaryEntry].into_iter()
                         .all(|label| self.stops.iter().filter(|stop| stop.label == label).count() == 1),
@@ -861,9 +898,12 @@ impl<'a> Runner<'a> {
                     && stop.cpsr.0 & 0x0100_02ff == 0xd3, "record-2 handoff target, argument, cell or mode differs")?;
                 let record = machine.read(RECORD.0, (RECORD.1 - RECORD.0) as usize)?;
                 let loader = machine.read(LOADER_B.0, (LOADER_B.1 - LOADER_B.0) as usize)?;
-                require(wait::bytes(machine, 1, RECORD.0, record.len())? == record && wait::bytes(machine, 1, LOADER_B.0, loader.len())? == loader
-                    && Sha256Digest::of(&record) == contract.record && Sha256Digest::of(&loader) == contract.loader,
-                    "record-2 or loader-B bytes or their core-1 views differ from the contract")?;
+                let immutable = record_immutable_sha256(record.as_slice().try_into().map_err(|_| "handoff record-2 extent differs")?);
+                self.handoff_record_immutable_sha256 = Some(immutable);
+                require(wait::bytes(machine, 1, RECORD.0, record.len())? == record, "handoff record-2 core-1 view differs from physical memory")?;
+                require(wait::bytes(machine, 1, LOADER_B.0, loader.len())? == loader, "handoff loader-B core-1 view differs from physical memory")?;
+                require(immutable == contract.record_immutable, "handoff immutable record-2 identity differs from the staged contract")?;
+                require(Sha256Digest::of(&loader) == contract.loader, "handoff loader-B identity differs from the staged contract")?;
                 let (window, bindings) = self.handoff_bindings(machine, &self.stops[index])?;
                 tcm_disjoint_views(&self.committed, &self.stops[index].tcm, &self.guarded())?;
                 let slots = bindings.vector_slots.physical();
@@ -1051,6 +1091,7 @@ pub(super) fn run(mut machine: Machine, contract: &LoaderContract, output: &Path
         boot_watch: &runner.boot_watch, loaded_watch: &runner.loaded_watch, scoped_watch: &runner.scoped_watch,
         stops: &runner.stops, bindings: &runner.bindings, completion: &runner.completion, endpoint: &runner.endpoint,
         final_primary: &runner.final_primary, startup: &contract.startup,
+        initial_record_sha256: &runner.initial_record_sha256, handoff_record_immutable_sha256: &runner.handoff_record_immutable_sha256,
     };
     let bytes = serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?;
     require(bytes.len() <= MAX_RECEIPT, "loader-prefix receipt exceeds 16 MiB")?;

@@ -94,7 +94,7 @@ fn rejects_retargeted_or_reduced_startup_guards() {
 }
 
 fn loader_program() -> String {
-    format!(r#""program":{{"kind":"owned","record_sha256":"{digest}","loader_sha256":"{digest}",
+    format!(r#""program":{{"kind":"owned","record_sha256":"{digest}","record_immutable_sha256":"{digest}","loader_sha256":"{digest}",
         "handoff":66592,"entry":66604,"load":66700,"post_load":66704,"loaded_register":0,"poll_period":256,
         "image":[66560,68096],"refusal":null,
         "forbid_fetch":[[852000,852168],[854444,854480],[854596,854628]],"forbid_read":[[852168,852220]]}}"#,
@@ -161,4 +161,49 @@ fn composed_startup_rejects_role_identity_extent_and_guard_changes() {
     }
     let standalone = format!(r#"{{"schema":5,"budget":50000000,"scenario":{{"kind":"natural"}},{}}}"#, loader_program());
     assert!(PeerContract::parse(standalone.as_bytes()).is_err());
+}
+
+#[cfg(feature = "scoped-watch")]
+fn retained_loader() -> String {
+    r#"{"schema":4,"budget":50000000,"scenario":{"kind":"natural"},"program":{"kind":"retained",
+        "record_sha256":"2f1bf3f0e483b892d2890599679c1b515cfc1be8b8c27cbb06d4d913e428abb4",
+        "record_immutable_sha256":"0c10e1264bccdd36fe167cd4c22a3df48134945a710f2554817f9cafd76b83d0",
+        "loader_sha256":"8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+        "handoff":71760,"entry":852000,"load":854596,"post_load":854600,
+        "loaded_register":3,"poll_period":256,"image":null,"refusal":null,"forbid_fetch":[],"forbid_read":[]}}"#.into()
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn retained_loader_admission_binds_both_full_and_immutable_record_identity() {
+    let valid = retained_loader();
+    assert!(PeerContract::parse(valid.as_bytes()).is_ok());
+    for invalid in [
+        valid.replace("\"record_sha256\":\"2f1b", "\"record_sha256\":\"3f1b"),
+        valid.replace("\"record_immutable_sha256\":\"0c10", "\"record_immutable_sha256\":\"1c10"),
+        valid.replace("\"record_immutable_sha256\":\"0c10", "\"record_immutable_sha256\":\"0C10"),
+    ] {
+        assert!(PeerContract::parse(invalid.as_bytes()).is_err());
+    }
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn schema_four_and_five_require_explicit_well_formed_immutable_identity() {
+    let digest = "ab".repeat(32);
+    let field = format!(r#""record_immutable_sha256":"{digest}","#);
+    let standalone = format!(r#"{{"schema":4,"budget":50000000,"scenario":{{"kind":"natural"}},{}}}"#, loader_program());
+    for valid in [standalone, composed("natural")] {
+        for invalid in [
+            valid.replace(field.as_str(), ""),
+            valid.replace(field.as_str(), r#""record_immutable_sha256":null,"#),
+            valid.replace(field.as_str(), r#""record_immutable_sha256":"ab","#),
+            valid.replace(field.as_str(), &format!(r#""record_immutable_sha256":"{}","#, "AB".repeat(32))),
+            valid.replace(field.as_str(), &(field.clone() + &field)),
+            valid.replace("\"image\":[66560,68096]", "\"image\":[66564,68096]"),
+            valid.replace("\"handoff\":66592", "\"handoff\":66560"),
+        ] {
+            assert!(PeerContract::parse(invalid.as_bytes()).is_err(), "{invalid}");
+        }
+    }
 }
