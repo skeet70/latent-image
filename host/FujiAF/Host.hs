@@ -98,12 +98,15 @@ readRegularWith between noLinks limit path = do
 readRegular :: Int -> FilePath -> IO B.ByteString
 readRegular = readRegularWith (pure ()) True
 
+newtype ProcessTimeoutMicros = ProcessTimeoutMicros Int
+newtype OutputCapBytes = OutputCapBytes Int
+
 -- Readers always drain concurrently, retain a finite prefix, and request process
 -- termination at the cap. The timeout kills and reaps the child, preserving bytes.
 runBounded :: Int -> Int -> FilePath -> [String] -> B.ByteString -> IO (Bool,ExitCode,B.ByteString,B.ByteString)
-runBounded micros cap executable arguments = runBoundedProcess micros cap (proc executable arguments)
-runBoundedProcess :: Int -> Int -> CreateProcess -> B.ByteString -> IO (Bool,ExitCode,B.ByteString,B.ByteString)
-runBoundedProcess micros cap process input = mask $ \restore -> do
+runBounded micros cap executable arguments = runBoundedProcess (ProcessTimeoutMicros micros) (OutputCapBytes cap) (proc executable arguments)
+runBoundedProcess :: ProcessTimeoutMicros -> OutputCapBytes -> CreateProcess -> B.ByteString -> IO (Bool,ExitCode,B.ByteString,B.ByteString)
+runBoundedProcess (ProcessTimeoutMicros micros) (OutputCapBytes cap) process input = mask $ \restore -> do
   (Just hin,Just hout,Just herr,ph) <- createProcess process{std_in=CreatePipe,std_out=CreatePipe,std_err=CreatePipe,create_group=True}
   hSetBuffering hin NoBuffering
   processPid <- getPid ph
