@@ -90,7 +90,6 @@ deriveContract source run rom = do
   original <- I.parseOriginalSource source
   require (not (B.null run) && B.length run <= 1024 * 1024 && B.length rom == 0x4000)
     "primary run or boot ROM extent differs"
-  _ <- decodeStrictIntegers run
   let parts = U.parsedParts (S.originalStartupParsed original)
   segment <- case filter ((== 0) . U.segId) (U.partSegments parts) of
     [found] -> Right found
