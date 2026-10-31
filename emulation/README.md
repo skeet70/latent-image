@@ -135,6 +135,16 @@ bazel-bin/emulation/peer-stage-witness --startup-receipt DIR/peer-witness.json -
 bazel-bin/emulation/peer-stage-witness --compare RETAINED_RECEIPT RETAINED_CONTRACT OWNED_RECEIPT OWNED_CONTRACT
 ```
 
+### Loader-B prefix witness (schema 4)
+
+[#136](https://github.com/skeet70/latent-image/issues/136) adds the separately typed `--loader-prefix retained|owned` prepare/consume/compare route. It requires the opt-in `build-support/fujimod-xm1-scoped-watch.nix` SDK; the default SDK refuses schema4. Natural, held, delayed and non-one completion are distinct scenarios. The actual core0 store and committed readback precede core1 completion exit; delayed control preserves that store and derives its delay from the linked veneer.
+
+The scoped observer enforces immutable bytes, forbidden stock-prefix fetches and core1 write confinement over its declared interval, with explicit static-map, decoder and both-core TCM refusals. It binds entry to one instruction after record2 handoff, an empty scoped watch/counter history, linked polling sites and the downstream vector, cleared-memory, frame and live-state boundary. It does not claim global exception/caller closure, invisible alias behavior or hardware identity.
+
+`E-LOADER-B-PREFIX-HOST-SCOPED-SDK-150` records host tests, actual control/candidate staging and independent preservation proofs, the same83 package checks in each default/scoped SDK, and a non-executing schema4 admission/refusal. The eight retained/owned runtime cases and discriminating fault controls remain unqualified. The smoke document intentionally uses quantum1; real observations require the packaged quantum1000 and24:1 timing.
+
+The combined secondary-plus-prefix image is one crate and link in record2. Schema4 retains stock record1 entry `0x1800`; [#137](https://github.com/skeet70/latent-image/issues/137) tracks the distinct composed route with an owned record1 image. Neither standalone receipts nor image concatenation establish composed startup.
+
 # Bounded selected-queue experiment
 
 `//emulation:queue-boundary` runs the original stock `0x0072503c` caller from entry, including allocation, through the existing pinned FujiMod `Machine` API. It does not extend the native-case profile, change either runtime's CPU admission guard, qualify a runtime cutover or prove boot acceptance.
@@ -1169,7 +1179,9 @@ Physical-1 retained none of these words; its post-window cell snapshot covers th
 
 Exchanged `0x38c` readback is the candidate law that aligns IRQ41 with selector-1 registration under the source's write and read: guest reads of `0x38c` exchange bits 1 and 9. The mask then equals `0x10002` while selector 1 is registered, plus bit 0 for selector 0. The source's constructor (`0x00664ea8`-`0x00665074`) builds the word from configuration: it sets bit 16 only for words 0/1, otherwise places words 2/3 at bits 1/9, and sets bit 0 from word 4. Selector 0 edits word 4 only; an isolated registration stores `0x1`. The retained `0x202` gate is not a repair: it can deliver IRQ41 after the last selector-1 removal while its handler is unregistered.
 
-The opt-in readback model and matching SDK pass their package checks. Their fresh card-backed checkpoint passes input/key verification. Preserved route observations then store `0x1`, `0x0`, `0x1`; the existing InputEnable bit-16 term clears both deadlines inside the first store (`E-CAPTURE-EXCHANGED-PRIMARY-GATE-LIMIT-150`). The frontend and RAW programming do not start. The identity cohort also has a both-off interval that firmware later leaves, so the clock stop alone is not a causal explanation. Source-0 bit-16 gating has no X-M1 binding. The next separately opt-in hypothesis removes that term for source 0 only, retaining the common and source-1 gates. Neither hypothesis qualifies silicon behavior or capture; the default runtime remains unchanged.
+The readback-only opt-in model and matching SDK pass their package checks. Their fresh card-backed checkpoint passes input/key verification. Preserved route observations then store `0x1`, `0x0`, `0x1`; the existing InputEnable bit-16 term clears both deadlines inside the first store (`E-CAPTURE-EXCHANGED-PRIMARY-GATE-LIMIT-150`). The frontend and RAW programming do not start. The identity cohort also has a both-off interval that firmware later leaves, so the clock stop alone is not a causal explanation. Source-0 bit-16 gating has no X-M1 binding. 
+
+The separately opt-in `SourceBit0` hypothesis removes that term for source 0 only, retaining the common and source-1 gates. Its model passes 427 distinct checks and matching SDK 83 package checks; the actual sensor producer verifies all three schemas, preserving schema1/2 bytes while schema3 adds only `clock.primary_gate=source_bit0` (`E-CAPTURE-PRIMARY-BIT0-HOST-150`). Default and readback-only SDKs refuse the new profile; the new SDK admits it before a deliberately missing-input refusal. A newly keyed checkpoint and bounded firmware route remain required. Neither hypothesis qualifies silicon behavior or capture; the default runtime remains unchanged.
 
 ##### Open joins and bounded read-only observation design
 
