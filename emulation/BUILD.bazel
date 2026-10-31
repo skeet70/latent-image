@@ -574,6 +574,11 @@ sh_binary(
 haskell_binary(
     name = "fujimod-xm1-sensor-fixture",
     srcs = ["FujiModSensorFixture.hs"],
+    data = [
+        "//fixtures/fujimod-sensor:xm1-150-raw16-ramp12.json",
+        "//fixtures/fujimod-sensor:xm1-150-raw16-ramp12-exchanged-readback.json",
+        "//fixtures/fujimod-sensor:xm1-150-raw16-ramp12-exchanged-readback-primary-bit0.json",
+    ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     visibility = ["//visibility:public"],
     deps = [

@@ -1,0 +1,8 @@
+exports_files(
+    [
+        "xm1-150-raw16-ramp12.json",
+        "xm1-150-raw16-ramp12-exchanged-readback.json",
+        "xm1-150-raw16-ramp12-exchanged-readback-primary-bit0.json",
+    ],
+    visibility = ["//visibility:public"],
+)

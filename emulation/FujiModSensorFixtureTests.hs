@@ -28,21 +28,23 @@ decodedObject label bytes = require (label ++ " decodes as a JSON object") $ cas
   _ -> Nothing
 
 -- | A base run document whose input clock has the given mode; the extra
--- options text, if any, ends with a comma.
-runDocument :: B.ByteString -> B.ByteString -> B.ByteString
-runDocument clockMode extraOptions =
+-- options and clock texts, if any, end with a comma.
+runDocument :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString
+runDocument clockMode extraOptions extraClock =
   "{\"devices\":{\"nodes\":[{\"name\":\"image_input\",\"model\":{\"kind\":\"image-input\",\"sensor\":null,\
   \\"frame_period\":null,\"raw_irq\":{\"core\":0,\"line\":36},\"options\":{"
     <> extraOptions
     <> "\"sensor_period_ticks\":null,\
-       \\"clock\":{\"mode\":\""
+       \\"clock\":{"
+    <> extraClock
+    <> "\"mode\":\""
     <> clockMode
     <> "\",\"source\":{\"kind\":\"periodic\",\"period_ticks\":400000}},\
        \\"cfa\":[0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2]}}}]},\
        \\"scene\":{},\"generated_assets\":[]}"
 
 base :: B.ByteString
-base = runDocument "input_enable" ""
+base = runDocument "input_enable" "" ""
 
 fixtureDeclaring :: B.ByteString -> Int -> Int -> B.ByteString
 fixtureDeclaring schema width height =
@@ -137,11 +139,45 @@ main = do
       sourceMask = root </> "source-mask-base.json"
   B.writeFile unknownLaw (readbackFixture "exchanged_all_bits")
   B.writeFile missingLaw (fixtureDeclaring "\"schema\":2" 4096 2)
-  B.writeFile heldKey (runDocument "input_enable" "\"enable_readback\":\"identity\",")
-  B.writeFile sourceMask (runDocument "source_mask" "")
+  B.writeFile heldKey (runDocument "input_enable" "\"enable_readback\":\"identity\"," "")
+  B.writeFile sourceMask (runDocument "source_mask" "" "")
   refuses "an unknown enable_readback law is refused" run unknownLaw
   refuses "a schema-2 fixture without enable_readback is refused" run missingLaw
   refuses "a base whose options already hold enable_readback is refused" heldKey exchanged
   refuses "a base whose input clock is not input_enable is refused" sourceMask exchanged
+
+  let gateFixture fields = fixtureDeclaring ("\"schema\":3," <> fields) 4096 2
+      primaryBit0 = root </> "primary-bit0.json"
+      primaryBit0Document = root </> "derived-primary-bit0.json"
+  B.writeFile primaryBit0 (gateFixture "\"enable_readback\":\"exchanged_source_bits\",\"primary_gate\":\"source_bit0\"")
+  (gateCode, _, gateErr) <- write run primaryBit0 primaryBit0Document
+  check ("a schema-3 source_bit0 fixture derives: " ++ gateErr) (gateCode == ExitSuccess)
+  let unknownGate = root </> "unknown-gate.json"
+      missingGate = root </> "missing-gate.json"
+      missingGateLaw = root </> "missing-gate-law.json"
+      schema2Gate = root </> "schema-2-gate.json"
+      heldGate = root </> "held-gate-base.json"
+      nullGate = root </> "null-gate.json"
+      unknownGateLaw = root </> "unknown-gate-law.json"
+      sharedGate = root </> "shared-gate.json"
+      sharedGateDocument = root </> "derived-shared-gate.json"
+  B.writeFile unknownGate (gateFixture "\"enable_readback\":\"exchanged_source_bits\",\"primary_gate\":\"source_bit16\"")
+  B.writeFile missingGate (gateFixture "\"enable_readback\":\"exchanged_source_bits\"")
+  B.writeFile missingGateLaw (gateFixture "\"primary_gate\":\"source_bit0\"")
+  B.writeFile schema2Gate (fixtureDeclaring "\"schema\":2,\"enable_readback\":\"exchanged_source_bits\",\"primary_gate\":\"source_bit0\"" 4096 2)
+  B.writeFile heldGate (runDocument "input_enable" "" "\"primary_gate\":\"shared_bit16\",")
+  B.writeFile nullGate (gateFixture "\"enable_readback\":\"exchanged_source_bits\",\"primary_gate\":null")
+  B.writeFile unknownGateLaw (gateFixture "\"enable_readback\":\"exchanged_all_bits\",\"primary_gate\":\"source_bit0\"")
+  B.writeFile sharedGate (gateFixture "\"enable_readback\":\"identity\",\"primary_gate\":\"shared_bit16\"")
+  (sharedCode, _, sharedErr) <- write run sharedGate sharedGateDocument
+  check ("a schema-3 explicit shared_bit16 fixture derives: " ++ sharedErr) (sharedCode == ExitSuccess)
+  refuses "an unknown primary_gate is refused" run unknownGate
+  refuses "a null primary_gate is refused without a default" run nullGate
+  refuses "a schema-3 unknown enable_readback law is refused" run unknownGateLaw
+  refuses "a schema-3 fixture without primary_gate is refused" run missingGate
+  refuses "a schema-3 fixture without enable_readback is refused" run missingGateLaw
+  refuses "a schema-2 fixture declaring primary_gate is refused" run schema2Gate
+  refuses "a base whose input clock already holds primary_gate is refused" heldGate primaryBit0
+  refuses "a schema-3 fixture over a base whose input clock is not input_enable is refused" sourceMask primaryBit0
   removeDirectoryRecursive root
   putStrLn "fujimod-xm1-sensor-fixture: checks passed"
