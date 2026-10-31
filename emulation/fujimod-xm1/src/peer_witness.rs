@@ -92,6 +92,8 @@ enum ContractWire {
     Initializer(loader::InitializerWire),
     #[cfg(feature = "scoped-watch")]
     InitializerConsumer(loader::ConsumerWire),
+    #[cfg(feature = "scoped-watch")]
+    PrimaryInitializer(loader::PrimaryWire),
 }
 
 pub struct PeerContract {
@@ -100,6 +102,8 @@ pub struct PeerContract {
     startup: Option<startup::StartupContract>,
     #[cfg(feature = "scoped-watch")]
     loader: Option<loader::LoaderContract>,
+    #[cfg(feature = "scoped-watch")]
+    primary: Option<loader::PrimaryContract>,
 }
 
 impl PeerContract {
@@ -110,37 +114,54 @@ impl PeerContract {
                 if contract.schema != 1 || !(1..=MAX_BUDGET).contains(&contract.budget.0) {
                     return Err("peer contract requires schema 1 and budget 1..50000000".into());
                 }
-                Ok(Self { budget: contract.budget, control: None, startup: None, #[cfg(feature = "scoped-watch")] loader: None })
+                Ok(Self { budget: contract.budget, control: None, startup: None, #[cfg(feature = "scoped-watch")] loader: None,
+                    #[cfg(feature = "scoped-watch")] primary: None })
             }
             ContractWire::Control(contract) => {
                 contract.validate()?;
-                Ok(Self { budget: contract.budget, control: Some(contract.control), startup: None, #[cfg(feature = "scoped-watch")] loader: None })
+                Ok(Self { budget: contract.budget, control: Some(contract.control), startup: None, #[cfg(feature = "scoped-watch")] loader: None,
+                    #[cfg(feature = "scoped-watch")] primary: None })
             }
             ContractWire::Startup(wire) => {
                 let contract = wire.validate()?;
-                Ok(Self { budget: contract.budget(), control: None, startup: Some(contract), #[cfg(feature = "scoped-watch")] loader: None })
+                Ok(Self { budget: contract.budget(), control: None, startup: Some(contract), #[cfg(feature = "scoped-watch")] loader: None,
+                    #[cfg(feature = "scoped-watch")] primary: None })
             }
             #[cfg(feature = "scoped-watch")]
             ContractWire::Loader(wire) => {
                 let contract = wire.validate()?;
-                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract) })
+                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract), primary: None })
             }
             #[cfg(feature = "scoped-watch")]
             ContractWire::Composed(wire) => {
                 let contract = wire.validate()?;
-                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract) })
+                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract), primary: None })
             }
             #[cfg(feature = "scoped-watch")]
             ContractWire::Initializer(wire) => {
                 let contract = wire.validate()?;
-                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract) })
+                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract), primary: None })
             }
             #[cfg(feature = "scoped-watch")]
             ContractWire::InitializerConsumer(wire) => {
                 let contract = wire.validate()?;
-                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract) })
+                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract), primary: None })
+            }
+            #[cfg(feature = "scoped-watch")]
+            ContractWire::PrimaryInitializer(wire) => {
+                let contract = wire.validate()?;
+                Ok(Self { budget: Instructions(MAX_BUDGET), control: None, startup: None, loader: None, primary: Some(contract) })
             }
         }
+    }
+
+    pub fn validate_inputs(&mut self, run: &[u8], update: &[u8], boot_rom: &[u8]) -> Result<(), String> {
+        #[cfg(feature = "scoped-watch")]
+        if let Some(primary) = &mut self.primary {
+            return primary.validate_inputs(run, update, boot_rom);
+        }
+        let _ = (run, update, boot_rom);
+        Ok(())
     }
 }
 
@@ -446,6 +467,10 @@ fn execute(machine: &mut Machine, contract: &PeerContract, stops: &mut Vec<PeerH
 }
 
 pub fn run(mut machine: Machine, contract: PeerContract, output: &Path) -> Result<(), String> {
+    #[cfg(feature = "scoped-watch")]
+    if let Some(primary) = &contract.primary {
+        return loader::run_primary(machine, primary, output);
+    }
     #[cfg(feature = "scoped-watch")]
     if let Some(loader) = &contract.loader {
         return loader::run(machine, loader, output);
