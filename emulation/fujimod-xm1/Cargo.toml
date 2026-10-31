@@ -37,6 +37,11 @@ path = "src/queue_boundary.rs"
 name = "fujimod-xm1-native-case"
 path = "src/native_case_main.rs"
 
+# Compiles the schema-4 loader-prefix observer against an engine carrying
+# build-support/fujimod-scoped-watch.patch.
+[features]
+scoped-watch = []
+
 # build-support/fujimod-xm1.nix places FujiMod's source at ../fujimod.
 [dependencies]
 fujimod-catalog = { path = "../fujimod/crates/catalog" }
