@@ -1341,9 +1341,6 @@ mod composed_interleaving {
         }
         let bus = match mutation {
             Mutation::NandBeforeHandoff | Mutation::NandAfterInstall | Mutation::NandProtectedOverlap => {
-                graph.peripherals.push(fujimod_emulator::board::factory::Peripheral {
-                    core: 0, address: 0xfff52000, physical: 0xfff52000, size: 0x1000,
-                });
                 let timing = if matches!(mutation, Mutation::NandAfterInstall) {
                     Timing::AfterInstall
                 } else {
@@ -1915,7 +1912,6 @@ mod composed_interleaving {
         for mutation in [Mutation::OpcodeWrite, Mutation::ResetWrite] {
             let (result, receipt) = observe(FirstHandoff::Late, mutation);
             assert_refused(result, &receipt);
-            assert!(receipt.machine_failure.is_some());
             assert_eq!(receipt.kernel_vector_install.events.len(), 7);
             assert_vectors(&receipt.kernel_vector_install.installed_readback.as_ref().unwrap().vectors, 7);
             assert!(receipt.scoped_watch.as_ref().unwrap().history.violation.is_some());

@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "5LCd3QisWcH9aSKRKY9jc7Dlk9TJIDTgt/87bt5oFtE=",
+        "bzlTransitiveDigest": "Rjvdb0h0tM9bzSHywHbpbsYCj6eNwS7JLTo70c9NRr0=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -500,7 +500,12 @@
                 "@@//emulation:fujimod-xm1/src/native_case.rs": "//emulation:fujimod-xm1/src/native_case.rs",
                 "@@//emulation:fujimod-xm1/src/native_case_main.rs": "//emulation:fujimod-xm1/src/native_case_main.rs",
                 "@@//emulation:fujimod-xm1/src/peer_witness.rs": "//emulation:fujimod-xm1/src/peer_witness.rs",
+                "@@//emulation:fujimod-xm1/src/peer_witness_initializer.rs": "//emulation:fujimod-xm1/src/peer_witness_initializer.rs",
+                "@@//emulation:fujimod-xm1/src/peer_witness_interrupt_mask.rs": "//emulation:fujimod-xm1/src/peer_witness_interrupt_mask.rs",
+                "@@//emulation:fujimod-xm1/src/peer_witness_loader.rs": "//emulation:fujimod-xm1/src/peer_witness_loader.rs",
+                "@@//emulation:fujimod-xm1/src/peer_witness_primary_initializer.rs": "//emulation:fujimod-xm1/src/peer_witness_primary_initializer.rs",
                 "@@//emulation:fujimod-xm1/src/peer_witness_startup.rs": "//emulation:fujimod-xm1/src/peer_witness_startup.rs",
+                "@@//emulation:fujimod-xm1/src/peer_witness_vectors.rs": "//emulation:fujimod-xm1/src/peer_witness_vectors.rs",
                 "@@//emulation:fujimod-xm1/src/peer_witness_wait.rs": "//emulation:fujimod-xm1/src/peer_witness_wait.rs",
                 "@@//emulation:fujimod-xm1/src/provenance.rs": "//emulation:fujimod-xm1/src/provenance.rs",
                 "@@//emulation:fujimod-xm1/src/provenance_main.rs": "//emulation:fujimod-xm1/src/provenance_main.rs",
@@ -518,7 +523,8 @@
                 "@@//emulation:fujimod-xm1/tests/native_case.rs": "//emulation:fujimod-xm1/tests/native_case.rs",
                 "@@//emulation:fujimod-xm1/tests/peer_wait_sdk.rs": "//emulation:fujimod-xm1/tests/peer_wait_sdk.rs",
                 "@@//emulation:fujimod-xm1/tests/peer_witness.rs": "//emulation:fujimod-xm1/tests/peer_witness.rs",
-                "@@//emulation:fujimod-xm1/tests/r4f_guard.rs": "//emulation:fujimod-xm1/tests/r4f_guard.rs"
+                "@@//emulation:fujimod-xm1/tests/r4f_guard.rs": "//emulation:fujimod-xm1/tests/r4f_guard.rs",
+                "@@//emulation:fujimod-xm1/tests/support/composed_nand_fixture.rs": "//emulation:fujimod-xm1/tests/support/composed_nand_fixture.rs"
               },
               "nix_file_content": "",
               "nix_license_path": "",

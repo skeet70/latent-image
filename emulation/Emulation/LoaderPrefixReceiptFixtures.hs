@@ -363,7 +363,9 @@ installDocument _ knob document =
   $ document
   where
     originalStops = arrayValues (valueField "stops" document)
-    selected label = head [stop | stop <- originalStops, hasField "label" (String label) stop]
+    selected label = case [stop | stop <- originalStops, hasField "label" (String label) stop] of
+      found : _ -> found
+      [] -> error "fixture required stop is absent"
     counts stop = map wordValue (arrayValues (valueField "counts" stop))
     time stop = sum (counts stop)
     first = selected "first-stage-handoff"
@@ -390,7 +392,7 @@ installDocument _ knob document =
       [ "source" .= ("cpu-write" :: String), "address" .= physical, "physical" .= physical, "size" .= (4 :: Int)
       , "core" .= (0 :: Int), "pc" .= (pc :: Word32), "instructions" .= (instructions :: Word64), "tick" .= instructions
       , "before" .= B.unpack (encodeLeWord before), "value" .= (value :: Word32), "byte_order" .= ("little" :: String) ]
-    zero = row 0x6080 0xa00c4 0 0 zeroTime
+    zero = row 0x6080 (0xa00c4 :: Word32) 0 0 zeroTime
     staging = dmaRow 0x40020 0xe0
     vectorRows = zipWith (\(site, slot, before, value) instructions -> row site slot before value instructions) installSteps eventTimes
     protocolRows = sortOn fst ((zeroTime, zero) : (stagingTime, staging) : zip eventTimes vectorRows)
@@ -527,8 +529,10 @@ checkDmaStaging contract facts = do
         where rows = toJSON . map (\row -> if hasField "source" (String "model-bus-write") row then change row else row) . arrayValues
       replaceDma address size = changeDma (const (dmaRow address size))
       consume document change = validate contract (BL.toStrict (encode (change document)))
-      firstTime document = sum . map wordValue . arrayValues . valueField "counts" . head $
-        [stop | stop <- arrayValues (valueField "stops" document), hasField "label" (String "first-stage-handoff") stop]
+      firstTime document = case
+        [stop | stop <- arrayValues (valueField "stops" document), hasField "label" (String "first-stage-handoff") stop] of
+          found : _ -> sum (map wordValue (arrayValues (valueField "counts" found)))
+          [] -> error "fixture firststage handoff is absent"
       cpuStaging document core size = changeDma (\_ -> object
         [ "source" .= ("cpu-write" :: String), "address" .= (0x40020 :: Word32), "physical" .= (0x40020 :: Word32), "size" .= (size :: Int)
         , "core" .= (core :: Int), "pc" .= (0x1d08 :: Word32), "instructions" .= (firstTime document - 2)
@@ -579,6 +583,52 @@ checkDmaStaging contract facts = do
   expect "schema4 standalone receipts keep their existing admission" (accepted (validate standaloneContract (BL.toStrict (encode standalone))))
   expect "schema4 does not gain wide transfer parsing" (not (accepted (parseReceipt PrefixBoundary (BL.toStrict (encode wideStandalone)))))
 
+newtype CompletionLoads = CompletionLoads Word64
+
+checkCompletionProgress :: ProgramFacts -> IO ()
+checkCompletionProgress facts = do
+  selected <- either fail pure (composedContract Delayed facts startupFixture)
+  let document = receiptDocument (Just startupFixture) Delayed OwnedProgram facts knobs {knobDelayLoads = 4}
+      consume = validate selected . BL.toStrict . encode
+      inflate (CompletionLoads completed) =
+        let before = object ["count" .= completed, "zero_count" .= completed, "nonzero_count" .= (0 :: Word64)]
+            after = object ["count" .= (completed + 1), "zero_count" .= completed, "nonzero_count" .= (1 :: Word64)]
+            finalCounter = setField "count" (toJSON (completed + 1))
+              . setField "zero_count" (toJSON completed)
+              . setField "nonzero_count" (toJSON (1 :: Word64))
+              . setField "first_nonzero_index" (toJSON completed)
+        in changeStop "completion-store" (setField "counter" before)
+          . changeField "completion" (setField "counter" before)
+          . changeStop "prefix-exit" (setField "counter" after)
+          . changeField "scoped_watch" (changeField "counters" (toJSON . map finalCounter . arrayValues))
+      cases =
+        [ ("composed completion load count cannot exceed the instruction budget", CompletionLoads 50000000)
+        , ("composed completion load count within budget cannot exceed core1 progress", CompletionLoads 2000)
+        ]
+  expect "composed delayed completion-progress baseline accepted" (accepted (consume document))
+  let failures = [label | (label,completed) <- cases, accepted (consume (inflate completed document))]
+  mapM_ (putStrLn . ("FAIL " ++)) failures
+  expect "composed completion counters follow bounded core1 progress" (null failures)
+  let parseMutation change = parseReceipt PrefixBoundary (BL.toStrict (encode (change document)))
+      scopedCounter change = changeField "scoped_watch" (changeField "counters" (toJSON . map change . arrayValues))
+      committed = object ["count" .= (2000 :: Word64), "zero_count" .= (2000 :: Word64), "nonzero_count" .= (0 :: Word64)]
+      refusesParsed label change = expect label (not (accepted (parseMutation change)))
+  refusesParsed "composed counter addition cannot wrap" $
+    scopedCounter (setField "zero_count" (toJSON (maxBound :: Word64)) . setField "nonzero_count" (toJSON (10 :: Word64)))
+  refusesParsed "composed first nonzero index stays inside its bounded counter" $
+    scopedCounter (setField "first_nonzero_index" (toJSON (50000000 :: Word64)))
+  refusesParsed "parsed stop counter cannot exceed that stop core1 progress" $
+    changeStop "completion-store" (setField "counter" committed)
+  refusesParsed "parsed committed counter cannot exceed after-core1 progress" $
+    changeField "completion" (setField "counter" committed)
+  heldContract <- either fail pure (composedContract Held facts startupFixture)
+  let heldDocument = receiptDocument (Just startupFixture) Held OwnedProgram facts knobs
+      inflatedHeld = scopedCounter (setField "count" (toJSON (4000 :: Word64))
+        . setField "zero_count" (toJSON (4000 :: Word64))) heldDocument
+  expect "composed held completion-progress baseline accepted" (accepted (validate heldContract (BL.toStrict (encode heldDocument))))
+  expect "held final counter cannot exceed terminal core1 progress"
+    (not (accepted (validate heldContract (BL.toStrict (encode inflatedHeld)))))
+
 runReceiptCases :: ProgramFacts -> IO ()
 runReceiptCases facts = do
   let owned scenario = Contract scenario (Program OwnedProgram facts)
@@ -625,8 +675,33 @@ runReceiptCases facts = do
   expect "natural retained receipt accepted" (accepted (validate retained (retainedReceipt knobs)))
   expect "schema4 prefix evidence cannot qualify the initializer boundary"
     (not (accepted (parseReceipt InitializerBoundary (retainedReceipt knobs) >>= validateReceipt retained)))
-  let initializerDocument = setField "schema" (Number 6) . setField "initializer" Null $
-        receiptDocument Nothing Natural RetainedProgram retainedProgramFacts knobs
+  let initializerBase = receiptDocument Nothing Natural RetainedProgram retainedProgramFacts knobs
+      initializerCommittedAt = case arrayValues (valueField "microsteps" (valueField "completion" initializerBase)) of
+        [] -> error "initializer-prefix fixture has no committed step"
+        steps -> sum (map wordValue (arrayValues (valueField "after" (last steps))))
+      normalizeWriter row = if hasField "pc" (toJSON (0x40a08 :: Word32)) row
+        then setField "instructions" (toJSON initializerCommittedAt) . setField "tick" (toJSON initializerCommittedAt) $ row
+        else row
+      initializerDocument = setField "schema" (Number 6) . setField "initializer" Null
+        . changeField "scoped_watch" (changeField "records" (toJSON . map normalizeWriter . arrayValues)) $ initializerBase
+      consumeInitializer value = parseReceipt InitializerBoundary (BL.toStrict (encode value)) >>= validateReceipt retained
+      parseInitializer change = parseReceipt InitializerBoundary (BL.toStrict (encode (change initializerDocument)))
+      refusesInitializer label change = expect label (not (accepted (parseInitializer change)))
+  expect "initializer-prefix-only baseline accepted" (accepted (consumeInitializer initializerDocument))
+  refusesInitializer "initializer-prefix budget is bounded" $
+    setField "instructions" (toJSON (budget + 1))
+  refusesInitializer "initializer-prefix core counts cannot wrap" $
+    changeStop "prefix-exit" (setField "counts" (toJSON [maxBound, 1 :: Word64]) . setField "instructions" (toJSON (0 :: Word64)))
+  refusesInitializer "initializer-prefix microstep counts cannot exceed the budget" $
+    changeField "completion" (changeField "microsteps" (toJSON . map (setField "after" (toJSON [maxBound, 1 :: Word64])) . arrayValues))
+  let shiftedCommit = changeField "completion" (changeField "microsteps" (toJSON . map
+        (setField "before" (toJSON [5000, 1824 :: Word64]) . setField "after" (toJSON [5001, 1824 :: Word64])) . arrayValues))
+        . changeField "scoped_watch" (changeField "records" (toJSON . map (\row ->
+            if hasField "pc" (toJSON (0x40a08 :: Word32)) row then
+              setField "instructions" (toJSON (initializerCommittedAt - 1)) . setField "tick" (toJSON (initializerCommittedAt - 1)) $ row
+            else row) . arrayValues))
+  expect "initializer-prefix commit must continue its captured stop"
+    (not (accepted (consumeInitializer (shiftedCommit initializerDocument))))
   expect "schema6 cannot broaden the old accepted prefix endpoint"
     (not (accepted (parseReceipt PrefixBoundary (BL.toStrict (encode initializerDocument)))))
   expect "initializer prefix evidence still requires the authentic prefix entry"
@@ -686,6 +761,7 @@ runReceiptCases facts = do
   mapM_ (\scenario -> do
     selected <- either fail pure (composedContract scenario facts startupFixture)
     expect ("composed " ++ scenarioName scenario ++ " accepted") (accepted (validate selected (composedBytes scenario knobs)))) [Natural, Held, Delayed, NonOne]
+  checkCompletionProgress facts
   mapM_ (\scenario -> do
     selected <- either fail pure (composedContract scenario facts startupFixture)
     mapM_ (\order -> expect ("composed " ++ scenarioName scenario ++ " handoff " ++ show order ++ " accepted")
@@ -711,7 +787,9 @@ runReceiptCases facts = do
             case bytes of Array values -> Array (values V.// [(0, Number 0xff)]); other -> other))))
           extraTailRow = case arrayValues (valueField "records" (valueField "loaded_watch" partial))
               ++ arrayValues (valueField "records" (valueField "scoped_watch" partial)) of
-            rows -> head [row | row <- rows, hasField "pc" (toJSON (0x4003c :: Word32)) row]
+            rows -> case [row | row <- rows, hasField "pc" (toJSON (0x4003c :: Word32)) row] of
+              found : _ -> found
+              [] -> error "fixture vector store is absent"
           stopTime stop = case valueField "instructions" stop of
             Number count -> count
             _ -> error "fixture stop instructions must be numeric"

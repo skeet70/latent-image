@@ -253,8 +253,8 @@ parseCompletionZero value = do
   row <- fields ["site", "instruction", "literal"] value
   fact <- CompletionZero <$> guestField row "site" <*> get row "instruction" <*> guestField row "literal"
   require (case A32.decode (guestWord (zeroSite fact)) (zeroInstruction fact) of
-    Store (Cond 14) Word (Reg value) (Reg base) (OffsetImmediate 0) OffsetOnly ->
-      value >= 0 && value <= 12 && base >= 0 && base <= 12
+    Store (Cond 14) Word (Reg stored) (Reg base) (OffsetImmediate 0) OffsetOnly ->
+      stored >= 0 && stored <= 12 && base >= 0 && base <= 12
     _ -> False) "completion-zero instruction is not an unconditional address-forming word store"
   pure fact
 
@@ -889,12 +889,12 @@ maxReceiptBytes = 16 * 1024 * 1024
 maxStops :: Int
 maxStops = 64
 
-data Timeline = StandaloneTimeline | ComposedTimeline P.Instructions
+data Timeline = StandaloneTimeline | BoundedTimeline P.Instructions
 
 checkedProgress :: P.Instructions -> P.Instructions -> P.Instructions -> Either String P.Instructions
 checkedProgress (P.Instructions final) (P.Instructions core0) (P.Instructions core1) = do
   let total = toInteger core0 + toInteger core1
-  require (total <= toInteger budget && total <= toInteger final) "composed instruction progress exceeds its receipt or budget"
+  require (total <= toInteger budget && total <= toInteger final) "bounded instruction progress exceeds its receipt or budget"
   pure (P.Instructions (fromInteger total))
 
 parseReceipt :: ReceiptScope -> B.ByteString -> Either String Receipt
@@ -918,14 +918,14 @@ parseReceipt scope bytes = do
     _ -> Left "unknown receipt result"
   identities <- get row "cp14_identities" >>= twoOf "cp14_identities"
   instructions@(P.Instructions final) <- P.Instructions <$> get row "instructions"
-  when (schema == 5) $ require (final <= budget) "composed receipt exceeds its instruction budget"
-  let timeline = if schema == 5 then ComposedTimeline instructions else StandaloneTimeline
+  when (schema /= 4) $ require (final <= budget) "bounded receipt exceeds its instruction budget"
+  let timeline = if schema == 4 then StandaloneTimeline else BoundedTimeline instructions
   stops <- field row "stops" >>= json >>= mapM (parseStop timeline)
   require (length stops <= maxStops) "loader-prefix stop bound exceeded"
   let transferPolicy = if schema == 5 then WideStagingTransfers else CpuSizedTransfers
   Receipt scenario program result <$> get row "error" <*> get row "machine_failure" <*> pure identities
     <*> (field row "boot_watch" >>= parseClassified transferPolicy) <*> (field row "loaded_watch" >>= parseClassified transferPolicy)
-    <*> (field row "scoped_watch" >>= nullable (parseScoped transferPolicy)) <*> pure stops
+    <*> (field row "scoped_watch" >>= nullable (parseScoped timeline transferPolicy)) <*> pure stops
     <*> (field row "bindings" >>= nullable parseBindings) <*> (field row "completion" >>= nullable (parseStore timeline))
     <*> (field row "endpoint" >>= nullable parseEndpoint) <*> (field row "final_primary" >>= nullable parsePrimary)
     <*> (if schema == 5 then Just <$> (field row "startup" >>= parseStartup) else pure Nothing)
@@ -1094,10 +1094,16 @@ parseScopeSpan value = do
       TcmSpan <$> (get inner "bank" >>= closed bankName "TCM bank") <*> (field inner "offsets" >>= parseSpan)
     _ -> Left "scope span names neither physical nor TCM"
 
-parseTotals :: Object -> Either String CounterTotals
-parseTotals row = do
+parseTotals :: Timeline -> Object -> Either String CounterTotals
+parseTotals timeline row = do
   totals <- CounterTotals <$> get row "count" <*> get row "zero_count" <*> get row "nonzero_count"
-  require (totalZero totals + totalNonzero totals == totalCount totals) "counter zero and nonzero counts do not sum to the count"
+  case timeline of
+    StandaloneTimeline ->
+      require (totalZero totals + totalNonzero totals == totalCount totals) "counter zero and nonzero counts do not sum to the count"
+    BoundedTimeline _ -> do
+      require (toInteger (totalZero totals) + toInteger (totalNonzero totals) == toInteger (totalCount totals))
+        "counter zero and nonzero counts do not sum to the count"
+      require (totalCount totals <= budget) "completion counter exceeds the instruction budget"
   pure totals
 
 parseSnapshot :: Value -> Either String TcmSnapshot
@@ -1106,8 +1112,8 @@ parseSnapshot value = do
   let register name = field row name >>= fields ["register", "window"] >>= \bank -> get bank "register"
   TcmSnapshot <$> get row "core" <*> register "atcm" <*> register "btcm"
 
-parseScoped :: TransferPolicy -> Value -> Either String ScopedWatch
-parseScoped transferPolicy value = do
+parseScoped :: Timeline -> TransferPolicy -> Value -> Either String ScopedWatch
+parseScoped timeline transferPolicy value = do
   row <- fields ["enabled", "ranges", "records", "violation", "classes", "views", "fault", "tcm", "confinement", "counters", "coverage"] value
   noViolation row
   fault <- field row "fault"
@@ -1134,8 +1140,13 @@ parseScoped transferPolicy value = do
           (Just sample, Just at) -> Right (Just (sample, at))
           (Nothing, Nothing) -> Right Nothing
           _ -> Left "counter first nonzero sample and index disagree"
+        totals <- parseTotals timeline inner
+        case timeline of
+          StandaloneTimeline -> pure ()
+          BoundedTimeline _ -> forM_ paired $ \(_, at) ->
+            require (at < totalCount totals) "completion counter index leaves its bounded count"
         CounterState <$> (sort <$> get inner "cores") <*> (field inner "cell" >>= parseSpan) <*> get inner "head_bound"
-          <*> get inner "tail_bound" <*> parseTotals inner <*> pure paired
+          <*> get inner "tail_bound" <*> pure totals <*> pure paired
           <*> (field inner "head" >>= json >>= mapM parseRow) <*> (field inner "tail" >>= json >>= mapM parseRow)
       parseCoverage entry = do
         inner <- fields ["cores", "range", "covered_words", "first_uncovered"] entry
@@ -1159,13 +1170,18 @@ parseStop timeline value = do
   instructions <- P.Instructions <$> get row "instructions"
   case timeline of
     StandaloneTimeline -> pure ()
-    ComposedTimeline final -> do
+    BoundedTimeline final -> do
       let (core0, core1) = counts
       total <- checkedProgress final (P.Instructions core0) (P.Instructions core1)
-      require (instructions == total) "composed stop instructions differ from its checked core counts"
+      require (instructions == total) "bounded stop instructions differ from its checked core counts"
+  counter <- field row "counter" >>= nullable (\entry -> fields ["count", "zero_count", "nonzero_count"] entry >>= parseTotals timeline)
+  case timeline of
+    StandaloneTimeline -> pure ()
+    BoundedTimeline _ -> forM_ counter $ \totals ->
+      require (totalCount totals <= snd counts) "completion counter exceeds its stop core1 progress"
   Stop label <$> guestField row "address" <*> pure core <*> pure counts <*> (field row "registers" >>= P.parseRegisters)
     <*> get row "sp" <*> get row "lr" <*> (Cpsr <$> get row "cpsr") <*> get row "completion" <*> pure tcm
-    <*> (field row "counter" >>= nullable (\entry -> fields ["count", "zero_count", "nonzero_count"] entry >>= parseTotals))
+    <*> pure counter
     <*> get row "watch_records" <*> pure instructions
 
 bytesField :: Object -> String -> Int -> Either String B.ByteString
@@ -1206,10 +1222,16 @@ parseStore timeline value = do
   readback <- field row "readback" >>= fields ["virtual", "physical"]
   steps <- get row "microsteps" >>= mapM parseStep
   require (not (null steps) && length steps <= 2048) "committed store microstep bound exceeded"
+  counter <- field row "counter" >>= fields ["count", "zero_count", "nonzero_count"] >>= parseTotals timeline
+  case timeline of
+    StandaloneTimeline -> pure ()
+    BoundedTimeline _ -> do
+      let Microstep _ (_, core1) _ = last steps
+      require (totalCount counter <= core1) "committed counter exceeds its after-core1 progress"
   CommittedStore <$> ((,) <$> get instruction "virtual" <*> get instruction "physical") <*> get row "before_pc" <*> get row "after_pc"
     <*> ((,) <$> (Cpsr <$> get row "before_cpsr") <*> (Cpsr <$> get row "after_cpsr")) <*> pure steps
     <*> ((,) <$> get readback "virtual" <*> get readback "physical")
-    <*> (field row "counter" >>= fields ["count", "zero_count", "nonzero_count"] >>= parseTotals) <*> get row "watch_records"
+    <*> pure counter <*> get row "watch_records"
   where
     parseStep entry = do
       step <- fields ["before", "after", "cell"] entry
@@ -1217,7 +1239,7 @@ parseStore timeline value = do
       after <- get step "after" >>= twoOf "microstep counts"
       case timeline of
         StandaloneTimeline -> pure ()
-        ComposedTimeline final -> forM_ [before, after] $ \(core0, core1) ->
+        BoundedTimeline final -> forM_ [before, after] $ \(core0, core1) ->
           checkedProgress final (P.Instructions core0) (P.Instructions core1) >> pure ()
       Microstep before after <$> get step "cell"
 
@@ -1462,6 +1484,12 @@ validateReceipt contract receipt = do
   let totals = counterTotals counter
       expected = fromIntegral (C.completionValue (scenarioControl scenario)) :: Word64
       PollPeriod period = factPeriod facts
+  when (scope == InitializerBoundary || isJust selected) $ do
+    terminal <- if scenario == Held then Right (last stops) else uniqueStop stops PrefixExit
+    let core1 = snd (stopCounts terminal)
+    require (totalCount totals <= core1) "final completion counter exceeds terminal core1 progress"
+    forM_ (counterFirstNonzero counter) $ \(_, index) ->
+      require (index < core1) "first nonzero completion index exceeds terminal core1 progress"
   forM_ (counterHead counter ++ counterTail counter) $ \row -> do
     Attribution core pc _ _ <- attribution row
     require (rowAccess row == CpuRead && core == Core1 && pc == guestWord (factLoad facts) && rowLocation row == PhysicalSpan cellSpan)
@@ -1513,6 +1541,9 @@ validateKernelInstall scenario startup receipt scoped = do
   first <- uniqueStop stops FirstStageHandoff
   record2Stop <- uniqueStop stops Record2Handoff
   installed <- uniqueStop stops KernelVectorsInstalled
+  firstStop <- case stops of
+    found : _ -> Right found
+    [] -> Left "stop labels differ from the scenario"
   let facts = startupKernelInstall startup
       ClassifiedWatch _ loadedClasses loaded = receiptLoaded receipt
       histories = [(HistoryRef epoch (RowCursor index), row) | (epoch, rows) <- [(LoadedHistory, loaded), (ScopedHistory, scopedRows scoped)]
@@ -1542,7 +1573,7 @@ validateKernelInstall scenario startup receipt scoped = do
           (ModelBusWrite, Nothing) -> True
           _ -> False
   require (length loaded <= 16384 && length (scopedRows scoped) <= 16384) "active history exceeds the watch row bound"
-  require (isNothing (stopCursor (head stops))) "boot stop carries a history cursor"
+  require (isNothing (stopCursor firstStop)) "boot stop carries a history cursor"
   boundaries <- forM (drop 1 stops) $ \stop -> do
     ref <- boundary stop
     when (epochOf stop == LoadedHistory) $
@@ -1588,7 +1619,7 @@ validateKernelInstall scenario startup receipt scoped = do
   require (and (zipWith (<) times (drop 1 times))) "kernel vector events do not advance in order"
   forM_ histories $ \(ref@(HistoryRef epoch _), row) -> do
     forM_ (rowAttribution row) $ \(Attribution _ _ instructions _) -> do
-      require (instructions > stopInstructions (head stops)
+      require (instructions > stopInstructions firstStop
         && (case epoch of LoadedHistory -> instructions <= stopInstructions record2Stop; ScopedHistory -> instructions > stopInstructions record2Stop))
         "CPU history row lies outside its observer epoch"
       forM_ boundaries $ \(stop, limit@(HistoryRef current _)) -> when (current == epoch) $
@@ -1669,6 +1700,9 @@ acceptCompletion scenario facts expected scoped counter stops receipt handoff = 
   require (storeInstruction committed == (instruction, instruction) && storeBeforePc committed == 0x40a08 && storeAfterPc committed == 0x40a0c
     && storeCpsr committed == (stopCpsr store, stopCpsr store) && storeReadback committed == (value, value))
     "original store lacks its instruction, completion PC or immediate readback"
+  initialStep <- case storeSteps committed of
+    found : _ -> Right found
+    [] -> Left "committed store microstep bound exceeded"
   -- Core 1 stays paused across the committing step: its count is unchanged
   -- and no nonzero load precedes the post-commit snapshot.
   let steps = storeSteps committed
@@ -1683,13 +1717,13 @@ acceptCompletion scenario facts expected scoped counter stops receipt handoff = 
     && storeCursor' >= 0 && storeCursor' < length rawRows && storeCursor committed == storeCursor' + 1
     && [rawRows !! storeCursor'] == scopedRows scoped)
     "the original store row or a nonzero load lies outside the commit window"
-  when (isJust (receiptStartup receipt)) $ do
-    let Microstep initial _ _ = head steps
+  when (receiptScope receipt == InitializerBoundary || isJust (receiptStartup receipt)) $ do
+    let Microstep initial _ _ = initialStep
         chain (Microstep _ earlier _) (Microstep later _ _) = earlier == later
     require (initial == stopCounts store && and (zipWith chain steps (drop 1 steps)))
       "completion microsteps do not continue the captured stop"
     committedAt <- rowInstructions (rawRows !! storeCursor')
-    require (committedAt == after0 + after1) "completion row is not the committing instruction"
+    require (toInteger committedAt == toInteger after0 + toInteger after1) "completion row is not the committing instruction"
   (first, index) <- maybe (Left "no nonzero completion load") Right (counterFirstNonzero counter)
   Attribution firstCore firstPc _ _ <- attribution first
   require (totalNonzero totals == 1 && index == totalCount totals - 1 && index >= totalCount after)

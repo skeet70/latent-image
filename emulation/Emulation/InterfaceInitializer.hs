@@ -705,9 +705,12 @@ validateReceiptEvidence (Contract role prefix (P.Guest entry) (P.Span rustStart 
     && observedScratch == scratch && observedSource == source && observedImage == imageDigest && observedSymbols == symbolsDigest && body == expectedBody)
     "initializer receipt differs from its source-bound contract"
   require (length incoming == 13 && length outgoing == 13 && incomingPc == 0xd0aac && sp == expectedSp && incoming !! 11 == expectedFrame
-    && incoming !! 4 == 0x69cdf8 && cpsr .&. 0x010002ff == 0xd3) "initializer incoming frame or mode differs"
+    && incoming !! 4 == 0x69cdf8 && cpsr .&. 0x07f0feff == 0xd3) "initializer incoming frame or mode differs"
   require (enteringPc == entry && entering == incoming && enteringSp == sp && enteringLr == 0xd0ab0 && enteringCpsr == cpsr && enteringTcm == tcm)
     "initializer BL changed registers, SP, CPSR or TCM"
+  forM_ [counts,enteringCounts,outgoingCounts] $ \stageCounts ->
+    require (length stageCounts == 2 && all (<= 50000000) stageCounts && sum stageCounts <= 50000000)
+      "initializer global instruction budget or counter bounds differ"
   case (counts, enteringCounts, outgoingCounts) of
     ([c0,c1],[e0,e1],[a0,a1]) -> require (e0 >= c0 && e1 == c1 + 1 && a0 >= e0 && a1 > e1) "initializer core counts differ"
     _ -> Left "initializer core count width differs"
