@@ -7,10 +7,10 @@ module Main where
 
 import A32 (decode)
 import ExperimentHook (positionIndependent)
-import ArmElf (Elf (..), Symbol (..), parseElf)
+import ArmElf (Elf (..), Section (..), Symbol (..), SymbolKind (..), parseElf)
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (Value (..))
-import Data.Bits ((.&.))
+import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.Char (isAlphaNum, isHexDigit)
@@ -54,6 +54,7 @@ main = do
     ["--trampolines", experiment, id4, id5, plain, output] -> do
       images <- loadImages id4 id5 plain
       hooks <- readHooks experiment images
+      refuseBranchesIntoSecondWord images hooks
       B.writeFile output (C.pack (trampolineSource hooks))
       putStrLn ("experiment: " ++ show (length hooks) ++ " hooks")
     [baseText, linked, out, experiment, id4, id5, plain] -> do
@@ -120,6 +121,25 @@ readHooks experiment images = do
     String t -> pure (T.unpack t)
     _ -> H.failH ("hooks.json: every hook needs a string \"" ++ key ++ "\"")
 
+-- | Refuses a hook whose second word is a stock B or BL target: after setup
+-- that word holds the trampoline address.
+refuseBranchesIntoSecondWord :: [Image] -> [Hook] -> IO ()
+refuseBranchesIntoSecondWord images hooks =
+  case [ (address, target)
+       | image <- images, offset <- [0, 4 .. B.length (imageBytes image) - 4]
+       , let word = wordAt (imageBytes image) offset
+       , word `shiftR` 28 /= 0xf, (word `shiftR` 25) .&. 7 == 5
+       , let address = imageBase image + fromIntegral offset
+             target = address + 8 + (signExtend24 (word .&. 0xffffff) `shiftL` 2)
+       , target `elem` seconds ] of
+    (address, target) : _ -> H.failH ("hook at " ++ hex (target - 4) ++ ": the stock branch at " ++ hex address
+      ++ " jumps to its second instruction, which the hook replaces with data; hook a different address")
+    [] -> pure ()
+ where
+  seconds = [hookSite hook + 4 | hook <- hooks]
+  signExtend24 value = if value .&. 0x800000 /= 0 then value .|. 0xff000000 else value
+  wordAt bytes offset = foldr (\k acc -> acc `shiftL` 8 .|. fromIntegral (B.index bytes (offset + k))) 0 [0 .. 3]
+
 -- | One trampoline per hook: save the caller's registers and flags, call the
 -- handler with a pointer to the saved r0-r12 and lr, restore, run the two
 -- displaced instructions and continue at the site's third word.
@@ -150,6 +170,10 @@ build base linked out experiment images hooks = do
     unless (actual == Just expected) (H.failH ("experiment relink tool differs: " ++ name))
   H.ensure (base .&. 7 == 0 && toInteger base + toInteger allocationBytes <= 0x0b3f6e00) "experiment allocation must be 8-byte aligned inside populated DRAM"
   elf <- B.readFile (linked </> "kernel.elf") >>= either H.failH pure . parseElf
+  forM_ (elfSections elf) $ \section ->
+    when (sectionFlags section .&. 2 /= 0 && sectionSize section > 0) $
+      H.ensure (base <= sectionAddress section && toInteger (sectionAddress section) + toInteger (sectionSize section) <= toInteger base + toInteger allocationBytes)
+        ("section " ++ sectionName section ++ " lies outside the experiment's allocation; keep code and data in the standard .text, .rodata, .data and .bss sections")
   let symbol name = case [symbolValue s | s <- elfSymbols elf, symbolName s == name] of
         [value] -> pure value
         _ -> H.failH ("unique link symbol required: " ++ name)
@@ -171,6 +195,9 @@ build base linked out experiment images hooks = do
     target <- symbol ("__experiment_hook_" ++ show (hookIndex hook))
     H.ensure (base <= target && target < base + codeWindowBytes) "trampoline escapes the code window"
     pure target
+  forM_ hooks $ \hook -> case [s | s <- elfSymbols elf, symbolName s == hookHandler hook] of
+    [s] | symbolKind s == FunctionSymbol, base <= symbolValue s, symbolValue s < codeEnd, symbolValue s `notElem` trampolines -> pure ()
+    _ -> H.failH ("hook at " ++ hex (hookSite hook) ++ ": handler " ++ hookHandler hook ++ " must be a function in the experiment's own code")
   let used = concat [[hookSite hook, hookSite hook + 4] | hook <- hooks]
       spare = filter (`notElem` used) paddingCandidates
       padCount = fromIntegral hookCapacity - length hooks

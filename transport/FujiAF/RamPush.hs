@@ -1185,7 +1185,11 @@ withRelinkedBuildUsing relinker policy base action = withReviewedBuildDirectory 
       command = (proc (toolBash tools) [relinkerScript relinker,hexWord (unAddress base),directory])
         { env = Just environment, cwd = Just root }
   (exitCode,_,errors) <- readCreateProcessWithExitCode command ""
-  let diagnostics = unlines (filter (not . isPrefixOf "Warning: supplying the --target") (lines errors))
+  let diagnostics = unlines (dropBacktraces (filter (not . isPrefixOf "Warning: supplying the --target") (lines errors)))
+      dropBacktraces stderrLines = case stderrLines of
+        "HasCallStack backtrace:" : rest -> dropBacktraces (dropWhile (isPrefixOf "  ") rest)
+        line : rest -> line : dropBacktraces rest
+        [] -> []
   require (exitCode == ExitSuccess) ("pinned RAM-push builder failed before USB: "++drop (length diagnostics - 4096) diagnostics)
   let output = root </> directory
   let reviewedManifestPath = output </> "ram-push-manifest.json"

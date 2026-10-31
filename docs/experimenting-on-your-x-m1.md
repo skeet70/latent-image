@@ -25,7 +25,42 @@ bazel-bin/host/firmware/rebuild-update extract-plain "$D" "$R/lz/plain-01100000.
 
 These are image 4 at `0x0061c400`, image 5 at `0x00bf1a00` and the plain image at `0x01100000`, the addresses they run at. The build checks their hashes every time.
 
-EMULATOR_SETUP
+Make the emulator's stand-in for the camera's adjustment storage, with the debug flag already set:
+
+```sh
+bazel run //emulation:experiment-nand -- "$D" private-data/f7-1.json
+gzip -n private-data/f7-1.json
+```
+
+### One jig session with your camera
+
+The emulator also needs your camera's boot ROM, which isn't in the firmware download, and your camera needs the debug flag: adjustment byte `0xf7`, which turns on the USB service mode RAM pushes use. With it set, every USB attach in a normal boot starts the service device `04cb:ff80` instead of the usual file-transfer mode. Both take one session in jig mode:
+
+1. With the camera off and USB attached, hold the shutter fully down and the Up key, switch on, and keep both held until the screen is blank and the green LED is lit. `lsusb -d 04cb:` lists `04cb:ff80`.
+2. Back up the adjustment area, your body's calibration, and copy the session directory it prints somewhere safe:
+
+   ```sh
+   bazel run //transport:camera -- debug-flag backup
+   ```
+
+3. Read the boot ROM and assemble it where the emulator looks:
+
+   ```sh
+   bazel run //transport:camera -- probe-bootrom "$PWD/private-data/sessions/bootrom"
+   mkdir -p "$R/bootrom"
+   (umask 077 && for i in $(seq 0 63); do cat "private-data/sessions/bootrom/windows/$(printf '%08x' $((0x80000000 + i * 0x100))).bin"; done > "$R/bootrom/bootrom-0x80000000-4000.bin")
+   ```
+
+   The file is 16,384 bytes; on the maintainer's body its SHA-256 is `4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be`.
+4. Set the debug flag; this ends with `commit-f7-enable: committed`:
+
+   ```sh
+   bazel run //transport:camera -- debug-flag enable
+   ```
+
+5. Pull the battery, then unplug USB. Don't use the POWER switch: ending a jig session that way resets date, time and language.
+
+`debug-flag status` shows the flag; `debug-flag disable`, in a jig boot, clears it.
 
 ## 2. Write an experiment
 
@@ -68,27 +103,24 @@ Limits:
 
 - Code and data together fit in 20 KiB. There is no heap and no standard library.
 - A handler runs on the caller's stack, on whichever core called the function, with interrupts as the caller had them. Keep it short and don't block.
-- A hooked function's first two instructions are moved into your experiment, so they must not use the PC or branch. The build checks this and names the instruction if it fails; hook a different function or one a few instructions in.
+- A hooked function's first two instructions are moved into your experiment, so they must not use the PC or branch, and no stock branch may jump to the second one. The build checks both against the firmware and names the instruction if a check fails; hook a different function.
 - To read data over USB later, store it through the non-cacheable alias (address `| 0x40000000`), as `hello` does; `EXPERIMENT_UNCACHED` does it in C.
 
 ## 3. Try it in the emulator
 
-EMULATOR_RUN
+```sh
+mkdir -p private-data/emulator
+bazel run //emulation:xm1-viewer -- --ram-push-e2e --experiment my-feature \
+  --firmware "$D" --installed-nand private-data/f7-1.json.gz \
+  --output private-data/emulator/my-feature-1 --receipt-output private-data/emulator/my-feature-1-receipt \
+  --read HELLO:24
+```
+
+The emulator boots the stock firmware with no card (the first run boots from scratch and saves a checkpoint; later runs start from it), allocates the RAM, links and installs your experiment exactly as the camera does, opens MENU and presses a few keys, reads the symbols you name with `--read SYMBOL[:LENGTH]`, then removes the experiment again. It ends with `PASS (install, trajectory, unload)` or `FAIL` and the receipt directory, which holds `e2e-result.json` and screenshots. For `hello`, the `HELLO` dump starts `48454c4f` (`HELO`) followed by a nonzero call count. Put your own key sequence in `experiments/my-feature/trajectory.json` in the shape of [the e2e trajectories](../emulation/ram-push-e2e-trajectories.json). Use a new `--output` and `--receipt-output` directory for each run.
 
 ## 4. Put it on your camera
 
-### Once: set the debug flag
-
-The camera takes RAM pushes over its USB service mode, which adjustment byte `0xf7`, the debug flag, turns on. With it set, every USB attach in a normal boot starts the service device `04cb:ff80` instead of the usual file-transfer mode. Setting it rewrites the camera's adjustment area, so take a backup first:
-
-1. Enter jig mode: camera off, USB attached, hold the shutter fully down and the Up key, switch on, and keep both held until the screen is blank and the green LED is lit. `lsusb -d 04cb:` lists `04cb:ff80`.
-2. `bazel run //transport:camera -- debug-flag backup` saves the whole adjustment area, your body's calibration, under `private-data/sessions/`. Copy that directory somewhere safe.
-3. `bazel run //transport:camera -- debug-flag enable` ends with `commit-f7-enable: committed`.
-4. Pull the battery (not the POWER switch, which resets date, time and language after a jig session), then unplug USB.
-
-`debug-flag status` shows the flag; `debug-flag disable`, in a jig boot, clears it again.
-
-### Each time: push
+### Push
 
 Boot normally, attach USB and leave the camera at the shooting screen with no menu open. Then:
 
@@ -115,14 +147,14 @@ Pull the battery for ten seconds. A switch-off alone may leave the experiment ru
 
 ## What the tools check, and what they don't
 
-Before anything reaches the camera, the build checks that each hooked function's first two words are what Fujifilm's 1.50 firmware holds there and can be moved, that your code fits, and that nothing else is written. On the camera, the installer checks every word it replaces against the same values and refuses if any differs, so an experiment can't install over a different firmware version or another payload.
+Before anything reaches the camera, the build checks that each hooked function's first two words are what Fujifilm's 1.50 firmware holds there and can be moved, that each handler is a function in your experiment, that your code and data stay inside the allocation, and that nothing else is written. On the camera, the installer checks every word it replaces against the same values and refuses if any differs, so an experiment can't install over a different firmware version or another payload.
 
 Nothing checks what your code does. Things that can go wrong:
 
 - **A crash or hang.** Pull the battery; the camera starts on its own firmware.
 - **Settings.** Stock functions you call can change camera settings, and a normal switch-off stores them. Settings can be reset from the camera's menus.
 - **Persistent storage.** Calling stock code that writes flash, the adjustment area or firmware can make changes that survive a battery pull, up to a camera that no longer starts. Don't call storage, update or calibration functions unless you know exactly what they write; [the recovery kit](../recovery/README.md) covers what the project can repair.
-- **Push timing.** A function that is running at the instant its hook goes in can crash. Push with the camera idle, as above.
+- **Push timing.** A function that is running at the instant its hook goes in can crash, and so can a task that was paused between its first two instructions. Push with the camera idle, as above, and prefer functions that run in short bursts over ones a task sits inside.
 
 ## The project's own payloads
 
