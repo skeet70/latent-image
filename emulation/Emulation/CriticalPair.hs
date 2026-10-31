@@ -338,6 +338,7 @@ transferPlan pc frame base offset indexing = do
   delta <- case offset of
     A.OffsetImmediate value -> pure (knownWord (fromIntegral value))
     A.OffsetRegister positive register shift amount -> do
+      require (register /= A.pc) "critical-pair Rust transfer uses PC as a register index"
       value <- operandWord pc frame (A.ShiftedImmediate register shift amount)
       if positive then pure value else scalarUnary negate value
   let original = readRegister pc frame base
@@ -404,10 +405,14 @@ applyWriteback :: A.Reg -> Maybe AbstractWord -> Frame -> Either String Frame
 applyWriteback _ Nothing frame = pure frame
 applyWriteback base (Just value) frame = writeRegister base value frame
 
-transferRegisters :: A.Width -> A.Reg -> Either String [A.Reg]
-transferRegisters A.Word register = pure [register]
-transferRegisters A.Dual (A.Reg register) | even register && register < 12 = pure [A.Reg register,A.Reg (register+1)]
-transferRegisters _ _ = Left "critical-pair Rust transfer width is outside its provenance proof"
+transferRegisters :: Word32 -> A.Width -> A.Reg -> Either String [A.Reg]
+transferRegisters _ A.Word register = pure [register]
+transferRegisters word A.Dual (A.Reg register) | even register && register < 12 = do
+  -- Decoded extra-transfer register offsets do not retain bits 11..8.
+  require (word .&. 0x00400000 /= 0 || word .&. 0x00000f00 == 0)
+    "critical-pair Rust dual register transfer has nonzero reserved high-offset bits"
+  pure [A.Reg register,A.Reg (register+1)]
+transferRegisters _ _ _ = Left "critical-pair Rust transfer width is outside its provenance proof"
 
 bridgeSummary :: Frame -> Either String Frame
 bridgeSummary frame = do
@@ -520,6 +525,7 @@ frameExtent image symbols body = do
                   Nothing -> next condition restored
               storeRegisters condition base writeback registers addresses = do
                 require (not (null registers) && A.pc `notElem` registers) "critical-pair Rust stores an unbound PC"
+                require (writeback == Nothing || base `notElem` registers) "critical-pair Rust store writeback overlaps its source"
                 let values = map readReg registers
                 updated <- applyWriteback base writeback frame
                 oldSp <- stackOffset frame
@@ -553,20 +559,25 @@ frameExtent image symbols body = do
               value <- maybe (pure product') (\register -> addWords product' (readReg register)) accumulator
               assign condition destination value
             A.Load condition width False destination base offset indexing -> do
-              registers <- transferRegisters width destination
+              registers <- transferRegisters word width destination
+              case (width,offset) of
+                (A.Dual,A.OffsetRegister _ register _ _) ->
+                  require (register `notElem` registers) "critical-pair Rust dual-load index overlaps its destination"
+                _ -> pure ()
               TransferPlan address writeback <- transferPlan pc frame base offset indexing
               addresses <- mapM (addWords address . knownWord . fromIntegral) [0,4..4*length registers-4]
               loadRegisters condition base writeback registers addresses
             A.Store condition width source base offset indexing -> do
-              registers <- transferRegisters width source
+              registers <- transferRegisters word width source
               TransferPlan address writeback <- transferPlan pc frame base offset indexing
               addresses <- mapM (addWords address . knownWord . fromIntegral) [0,4..4*length registers-4]
               storeRegisters condition base writeback registers addresses
             A.StoreMultiple condition base mode writeback registers -> do
-              require (not writeback || base `notElem` registers) "critical-pair Rust block-store writeback overlaps its source"
+              require (base /= A.pc) "critical-pair Rust block transfer uses PC as its base"
               (addresses,updated) <- blockPlan mode (length registers) (readReg base)
               storeRegisters condition base (if writeback then Just updated else Nothing) registers addresses
             A.LoadMultiple condition base mode writeback registers -> do
+              require (base /= A.pc) "critical-pair Rust block transfer uses PC as its base"
               (addresses,updated) <- blockPlan mode (length registers) (readReg base)
               loadRegisters condition base (if writeback then Just updated else Nothing) registers addresses
             A.Hint _ -> do
