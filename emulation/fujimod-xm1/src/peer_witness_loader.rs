@@ -363,12 +363,18 @@ impl std::ops::Deref for GuardBytes {
     fn deref(&self) -> &Self::Target { &self.0 }
 }
 
+fn optional_core<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<WitnessCore>, D::Error> {
+    Option::<usize>::deserialize(deserializer)?.map(WitnessCore::from_index).transpose()
+        .map_err(serde::de::Error::custom)
+}
+
 #[derive(Deserialize)]
 struct GuardEvent {
     source: GuardSource,
     physical: Option<Address>,
     size: u64,
     address: Option<Address>,
+    #[serde(deserialize_with = "optional_core")]
     core: Option<WitnessCore>,
     pc: Option<Guest>,
     instructions: Option<Instructions>,
