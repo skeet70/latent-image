@@ -446,7 +446,7 @@ diff --git a/crates/emulator-exr2-isp-input/src/tests/input.rs b/crates/emulator
 diff --git a/crates/emulator-imaging/src/exr2_isp/options/input.rs b/crates/emulator-imaging/src/exr2_isp/options/input.rs
 --- a/crates/emulator-imaging/src/exr2_isp/options/input.rs
 +++ b/crates/emulator-imaging/src/exr2_isp/options/input.rs
-@@ -18,11 +18,29 @@
+@@ -18,11 +18,28 @@
  }
  
  #[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -462,13 +462,12 @@ diff --git a/crates/emulator-imaging/src/exr2_isp/options/input.rs b/crates/emul
      SourceMask,
 +}
 +
-+/// Opt-in primary clock hypothesis; not a silicon fidelity claim.
++/// X-M1 source-0 bit-16 gating is unobserved on hardware.
 +#[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 +#[serde(rename_all = "snake_case")]
 +pub enum InputEnablePrimaryGate {
 +    #[default]
 +    SharedBit16,
-+    /// Source 0 ignores bit 16; source 1 retains the shared gate.
 +    SourceBit0,
 +}
 +impl InputEnablePrimaryGate {
@@ -478,7 +477,7 @@ diff --git a/crates/emulator-imaging/src/exr2_isp/options/input.rs b/crates/emul
  }
  
  #[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-@@ -35,13 +53,61 @@
+@@ -35,13 +52,61 @@
      Sensor {},
  }
  
@@ -542,7 +541,7 @@ diff --git a/crates/emulator-imaging/src/exr2_isp/options/input.rs b/crates/emul
  }
  
  #[derive(Clone, Deserialize)]
-@@ -58,4 +124,6 @@
+@@ -58,4 +123,6 @@
      pub raw_dma_ticks: u64,
      pub readback_ticks: u64,
      pub cfa: Option<Vec<u8>>,
