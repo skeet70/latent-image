@@ -1,8 +1,9 @@
-{ pkgs ? import ./nixpkgs.nix { config = { }; overlays = [ ]; } }:
-# emulation/fujimod-xm1 built against the FujiMod source of fujimod.nix,
-# which the crate's path dependencies expect at ../fujimod.
+{ pkgs ? import ./nixpkgs.nix { config = { }; overlays = [ ]; }
+, fujimod ? import ./fujimod.nix { inherit pkgs; }
+}:
+# emulation/fujimod-xm1 built against the source of `fujimod`, which the
+# crate's path dependencies expect at ../fujimod.
 let
-  fujimod = import ./fujimod.nix { inherit pkgs; };
   crate = builtins.path {
     path = ../emulation/fujimod-xm1;
     name = "fujimod-xm1-source";
