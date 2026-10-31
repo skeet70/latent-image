@@ -1,5 +1,6 @@
 { pkgs ? import ./nixpkgs.nix { config = { }; overlays = [ ]; }
 , fujimod ? import ./fujimod.nix { inherit pkgs; }
+, features ? [ ]
 }:
 # emulation/fujimod-xm1 built against the source of `fujimod`, which the
 # crate's path dependencies expect at ../fujimod.
@@ -14,8 +15,9 @@ let
     ln -s ${fujimod.src} $out/fujimod
     cp -r ${crate} $out/fujimod-xm1
   '';
+  featureFlag = pkgs.lib.optionalString (features != [ ]) " --features ${pkgs.lib.concatStringsSep "," features}";
 in
-fujimod.passthru.rustPlatform.buildRustPackage {
+fujimod.passthru.rustPlatform.buildRustPackage ({
   pname = "fujimod-xm1";
   version = "0.1.0";
   inherit src;
@@ -31,7 +33,7 @@ fujimod.passthru.rustPlatform.buildRustPackage {
   dontUseCmakeConfigure = true;
   preCheck = ''
     cargo test --no-run --message-format=json -j "$CARGO_BUILD_JOBS" --profile release \
-      --target ${pkgs.stdenv.targetPlatform.rust.rustcTargetSpec} --offline > test-artifacts.json
+      --target ${pkgs.stdenv.targetPlatform.rust.rustcTargetSpec} --offline${featureFlag} > test-artifacts.json
   '';
   # store-path holds $out, so Bazel actions keyed on it change with the store path.
   postInstall = ''
@@ -46,4 +48,7 @@ fujimod.passthru.rustPlatform.buildRustPackage {
         done
     test -s $out/libexec/fujimod-xm1-tests/manifest
   '';
-}
+} // pkgs.lib.optionalAttrs (features != [ ]) {
+  buildFeatures = features;
+  checkFeatures = features;
+})
