@@ -106,6 +106,28 @@ pub struct PeerContract {
     primary: Option<loader::PrimaryContract>,
 }
 
+#[cfg(feature = "scoped-watch")]
+struct InputIdentities {
+    run: Sha256Digest,
+    update: Sha256Digest,
+    boot_rom: Sha256Digest,
+}
+
+#[cfg(feature = "scoped-watch")]
+enum InputBinding { Unbound, Bound(InputIdentities) }
+
+pub struct WitnessMachine {
+    machine: Machine,
+    #[cfg(feature = "scoped-watch")]
+    inputs: InputBinding,
+}
+
+impl WitnessMachine {
+    pub fn from_unbound(machine: Machine) -> Self {
+        Self { machine, #[cfg(feature = "scoped-watch")] inputs: InputBinding::Unbound }
+    }
+}
+
 impl PeerContract {
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
         let contract: ContractWire = serde_json::from_slice(bytes).map_err(|error| format!("peer contract: {error}"))?;
@@ -155,17 +177,22 @@ impl PeerContract {
         }
     }
 
-    pub fn open_machine(&self, run_bytes: &[u8], update: &run::ValidatedUpdate, boot_rom: &[u8]) -> Result<Machine, String> {
-        #[cfg(feature = "scoped-watch")]
-        if let Some(primary) = &self.primary {
-            let machine = Machine::open(run_bytes, update, boot_rom)?;
-            primary.admit(&machine)?;
-            return Ok(machine);
-        }
+    pub fn open_machine(&self, run_bytes: &[u8], update: &run::ValidatedUpdate, boot_rom: &[u8]) -> Result<WitnessMachine, String> {
         let document = RunDocument::parse(run_bytes)?;
         let mut session = run::open(&document, update, boot_rom)?;
         session.board.set_execution_policy(document.execution_policy.into())?;
-        Machine::new(document, session)
+        let machine = Machine::new(document, session)?;
+        #[cfg(feature = "scoped-watch")]
+        let inputs = if let Some(primary) = &self.primary {
+            let identities = InputIdentities {
+                run: Sha256Digest::of(run_bytes), update: Sha256Digest::of(&update.0), boot_rom: Sha256Digest::of(boot_rom),
+            };
+            primary.admit(&identities)?;
+            InputBinding::Bound(identities)
+        } else {
+            InputBinding::Unbound
+        };
+        Ok(WitnessMachine { machine, #[cfg(feature = "scoped-watch")] inputs })
     }
 }
 
@@ -470,9 +497,16 @@ fn execute(machine: &mut Machine, contract: &PeerContract, stops: &mut Vec<PeerH
     Ok(())
 }
 
-pub fn run(mut machine: Machine, contract: PeerContract, output: &Path) -> Result<(), String> {
+pub fn run(prepared: WitnessMachine, contract: PeerContract, output: &Path) -> Result<(), String> {
+    #[cfg(feature = "scoped-watch")]
+    let inputs = prepared.inputs;
+    let mut machine = prepared.machine;
     #[cfg(feature = "scoped-watch")]
     if let Some(primary) = &contract.primary {
+        let InputBinding::Bound(identities) = inputs else {
+            return Err("primary witness machine lacks whole-input provenance".into());
+        };
+        primary.admit(&identities)?;
         return loader::run_primary(machine, primary, output);
     }
     #[cfg(feature = "scoped-watch")]

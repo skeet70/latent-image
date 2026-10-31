@@ -3,14 +3,12 @@
 
 use crate::guest::{DialTurn, GpioKey, MenuState, ModeDialPosition, ModeDialWindow, PhysicalShutterPosition, Press, RouteKey, ShutterStage, set_adc};
 use crate::r4f::Guard;
-use crate::run::{RunDocument, ValidatedUpdate};
+use crate::run::RunDocument;
 use crate::sd_host::{Contacts, MediaRead, RetainedCard, SectorAddress, SectorCount, SdHost};
 use crate::trace::{CaptureMemory, CollectionOutcome, InstructionCount, TraceSites};
 use fujimod_emulator::session::Session;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::io::Write;
-use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 
 const RELEASE_POLL: u64 = 250_000;
@@ -86,49 +84,9 @@ pub struct KeyReleaseObservation {
     instructions: GuestInstructions,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) struct InputSha256(pub(crate) [u8; 32]);
-impl InputSha256 {
-    fn of(bytes: &[u8]) -> Self {
-        Self(Sha256::digest(bytes).into())
-    }
-}
-
-pub(crate) struct SessionInputs {
-    pub(crate) run: InputSha256,
-    pub(crate) update: InputSha256,
-    pub(crate) boot_rom: InputSha256,
-}
-
-pub struct MachineSession {
-    session: Session,
-    inputs: Option<SessionInputs>,
-}
-
-impl MachineSession {
-    pub(crate) fn source_inputs(&self) -> Option<&SessionInputs> {
-        self.inputs.as_ref()
-    }
-}
-
-impl Deref for MachineSession {
-    type Target = Session;
-
-    fn deref(&self) -> &Self::Target {
-        &self.session
-    }
-}
-
-impl DerefMut for MachineSession {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.inputs = None;
-        &mut self.session
-    }
-}
-
 pub struct Machine {
     pub document: RunDocument,
-    pub session: MachineSession,
+    pub session: Session,
     /// The first strict stop; no input is admitted after it.
     pub failure: Option<String>,
     pub traces: TraceSites,
@@ -143,23 +101,12 @@ pub fn instructions(session: &Session) -> u64 {
 }
 
 impl Machine {
-    pub fn open(run_bytes: &[u8], update: &ValidatedUpdate, boot_rom: &[u8]) -> Result<Self, String> {
-        let document = RunDocument::parse(run_bytes)?;
-        let mut session = crate::run::open(&document, update, boot_rom)?;
-        session.board.set_execution_policy(document.execution_policy.into())?;
-        let mut machine = Self::new(document, session)?;
-        machine.session.inputs = Some(SessionInputs {
-            run: InputSha256::of(run_bytes), update: InputSha256::of(&update.0), boot_rom: InputSha256::of(boot_rom),
-        });
-        Ok(machine)
-    }
-
-    /// Arms the R4F guard on a session without whole-input provenance.
+    /// A machine with the R4F guard armed.
     pub fn new(document: RunDocument, session: Session) -> Result<Self, String> {
         let mut guard = Guard::default();
         guard.arm(&session.board)?;
         Ok(Self {
-            document, session: MachineSession { session, inputs: None }, failure: None, traces: TraceSites::default(), guard,
+            document, session, failure: None, traces: TraceSites::default(), guard,
             key_release_observations: Vec::new(),
             release_context: ReleaseContext {
                 route: std::env::var("XM1_KEY_RELEASE_ROUTE").ok().map(ReleaseRoute),

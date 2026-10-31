@@ -27,10 +27,9 @@ pub(in crate::peer_witness) struct PrimaryContract {
 }
 
 impl PrimaryContract {
-    pub(in crate::peer_witness) fn admit(&self, machine: &Machine) -> Result<(), String> {
-        let inputs = machine.session.source_inputs().ok_or("primary session lacks whole-input provenance")?;
-        require(inputs.update.0 == self.source_sha256.0 && inputs.run.0 == self.run_sha256.0
-            && inputs.boot_rom.0 == self.boot_rom_sha256.0, "primary session whole input identities differ")
+    pub(in crate::peer_witness) fn admit(&self, inputs: &InputIdentities) -> Result<(), String> {
+        require(inputs.update == self.source_sha256 && inputs.run == self.run_sha256
+            && inputs.boot_rom == self.boot_rom_sha256, "primary witness machine whole input identities differ")
     }
 
     fn identity(&self) -> ContractIdentityPrimary {
@@ -291,7 +290,6 @@ pub(in crate::peer_witness) fn run(mut machine: Machine, contract: &PrimaryContr
     let mut identities = [Identity(0); 2];
     let mut boundaries = Vec::with_capacity(4);
     let outcome = (|| {
-        contract.admit(&machine)?;
         require(wait::counts(&machine)?.0 == [0, 0] && !machine.traces.armed() && machine.traces.hits.is_empty(),
             "primary observation must arm before either core executes")?;
         let (maps, configured) = bindings(&machine.document)?;
