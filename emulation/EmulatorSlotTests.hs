@@ -33,11 +33,11 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    [source, guard, worker] -> run source guard worker >>= \passed -> unless passed exitFailure
-    _ -> ioError (userError "usage: emulator-slot-tests PROBE GUARD WORKER")
+    [source] -> run source >>= \passed -> unless passed exitFailure
+    _ -> ioError (userError "usage: emulator-slot-tests PROBE")
 
-run :: FilePath -> FilePath -> FilePath -> IO Bool
-run source guard worker = do
+run :: FilePath -> IO Bool
+run source = do
   temporary <- getTemporaryDirectory
   base <- fromMaybe temporary <$> lookupEnv "TEST_TMPDIR"
   pid <- getProcessID
@@ -48,12 +48,6 @@ run source guard worker = do
   createDirectoryIfMissing True slots
   copyFile source probe
   setFileMode probe 0o700
-  let guardCopy = root </> "thermal-guard"
-  copyFile guard guardCopy
-  setFileMode guardCopy 0o700
-  let workerCopy = root </> "thermal-guard-worker"
-  copyFile worker workerCopy
-  setFileMode workerCopy 0o700
   held <- openFd (slots </> "slot-1.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
   () <- setLock held (WriteLock, AbsoluteSeek, 0, 0)
   environment <- probeEnvironment home
@@ -72,9 +66,26 @@ run source guard worker = do
   codeOk <- expect "the re-exec exits successfully" (code == ExitSuccess)
   slotOk <- expect "the re-exec runs the probe's in-slot code" ("probe-in-slot" `isInfixOf` output)
   originalOk <- expect "the re-exec runs the original program, not the replacement" (not ("replacement-ran" `isInfixOf` output))
-  let outcomes = [startedOk, waitedOk, codeOk, slotOk, originalOk]
-  unless (and outcomes) (putStrLn ("probe output: " ++ show output))
+  let sessionless = root </> "probe-sessionless"
+  copyFile source sessionless
+  setFileMode sessionless 0o700
+  (sessionOut, sessionProcess) <- spawnProbe sessionless (sessionlessEnvironment root environment)
+  sessionCode <- waitForProcess sessionProcess
+  sessionOutput <- hGetContents sessionOut
+  sessionlessOk <- expect "without a user session the probe still runs in its slot"
+    (sessionCode == ExitSuccess && "probe-in-slot" `isInfixOf` sessionOutput)
+  let outcomes = [startedOk, waitedOk, codeOk, slotOk, originalOk, sessionlessOk]
+  unless (and outcomes) (putStrLn ("probe output: " ++ show output ++ "; sessionless output: " ++ show sessionOutput))
   pure (and outcomes)
+
+-- | The probe environment with the user bus pointed at a directory that does
+-- not exist, so @systemctl --user@ cannot reach a manager.
+sessionlessEnvironment :: FilePath -> [(String, String)] -> [(String, String)]
+sessionlessEnvironment root environment =
+  ("XDG_RUNTIME_DIR", missing) : ("DBUS_SESSION_BUS_ADDRESS", "unix:path=" ++ missing ++ "/bus")
+    : filter ((`notElem` ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"]) . fst) environment
+  where
+    missing = root </> "no-session"
 
 spawnProbe :: FilePath -> [(String, String)] -> IO (Handle, ProcessHandle)
 spawnProbe probe environment = do

@@ -2,7 +2,7 @@ module Main where
 
 import Control.Exception (IOException, catch, displayException)
 import Control.Monad (when)
-import Emulation.EmulatorSlot (attachGuard, reexecInSlot, slotPolicyFromEnvironment)
+import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.Ff80Rehearsal (runFujiModRehearsal)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
@@ -252,7 +252,6 @@ launch options = do
   arguments <- getArgs
   policy <- slotPolicyFromEnvironment
   reexecInSlot policy arguments
-  attachGuard arguments
   root <- ViewerRuntime.workspace (workspaceOption options)
   media <- traverse (validateVirtualSDImage root) (virtualSDImageOption options)
   nand <- traverse (validateInstalledNand root) (installedNandOption options)

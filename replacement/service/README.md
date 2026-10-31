@@ -43,7 +43,7 @@ Owned: the typed binding of the field-row lane. `rb_probe_state` maps the host a
 - Repeated entry: once per rendered row, and the same field and row across page entries.
 - Cancellation: nothing inside the call can be cancelled; leaving the page cancels the visit and the next visit calls again. No handback state exists.
 - Teardown: `ram-unload` restores every publication word and leaves the 122,008-byte camera allocation retained and owned until power-off; unload does not free or reclaim it. Page visits reuse that allocation. Observed: 222 old words verified, rollback mailbox `operation 2`, `restored 222`, `status 0`, `peer_status 0`.
-- Host bounds: one emulator slot, `MemoryMax=8G`, no swap, and the thermal guard stops the slot at `Tctl` 85 C (`build-support/README.md`).
+- Host bounds: one emulator slot, `MemoryMax=8G` and no swap (`build-support/README.md`).
 - Host loss: the call has no host operation, pending completion, allocation transfer, retained host pointer or post-return callback. Host loss inside the synchronous interval therefore has nothing to detach; the whole-payload detached session is not claimed, and no detach API is added for this case.
 
 ## Effects

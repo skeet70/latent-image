@@ -101,7 +101,6 @@ haskell_library(
 haskell_binary(
     name = "emulator-slot",
     srcs = ["EmulatorSlotRun.hs"],
-    data = [":thermal-guard"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     visibility = ["//visibility:public"],
     deps = [
@@ -115,7 +114,6 @@ haskell_binary(
 haskell_binary(
     name = "emulator-slot-probe",
     srcs = ["EmulatorSlotProbe.hs"],
-    data = [":thermal-guard"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":emulator-slot-lib",
@@ -129,101 +127,11 @@ haskell_test(
     name = "emulator-slot-tests",
     size = "small",
     srcs = ["EmulatorSlotTests.hs"],
-    args = ["$(rootpath :emulator-slot-probe)", "$(rootpath :thermal-guard)", "$(rootpath :thermal-guard-worker)"],
-    data = [":emulator-slot-probe", ":thermal-guard", ":thermal-guard-worker"],
+    args = ["$(rootpath :emulator-slot-probe)"],
+    data = [":emulator-slot-probe"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     tags = ["no-sandbox"],
     deps = [
-        "//host:base",
-        "//host:directory",
-        "//host:filepath",
-        "//host:process",
-        "//host:unix",
-    ],
-)
-
-haskell_library(
-    name = "thermal-guard-lib",
-    srcs = ["Emulation/ThermalGuard.hs"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    src_strip_prefix = ".",
-    deps = [
-        "//host:base",
-        "//host:directory",
-        "//host:filepath",
-        "//host:process",
-        "//host:unix",
-    ],
-)
-
-haskell_binary(
-    name = "thermal-guard",
-    srcs = ["ThermalGuardMain.hs"],
-    data = [":thermal-guard-worker"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":thermal-guard-lib",
-        "//host:base",
-        "//host:directory",
-        "//host:filepath",
-        "//host:process",
-        "//host:unix",
-    ],
-)
-
-haskell_binary(
-    name = "thermal-guard-worker",
-    srcs = ["ThermalGuardWorker.hs"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
-    deps = [
-        ":thermal-guard-lib",
-        "//host:base",
-    ],
-)
-
-haskell_binary(
-    name = "thermal-guard-fixture",
-    srcs = ["ThermalGuardFixture.hs"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    deps = [
-        "//host:base",
-        "//host:directory",
-        "//host:process",
-        "//host:unix",
-    ],
-)
-
-haskell_binary(
-    name = "thermal-guard-test-worker",
-    srcs = ["ThermalGuardTestWorker.hs"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
-    deps = [
-        ":thermal-guard-lib",
-        "//host:base",
-    ],
-)
-
-haskell_test(
-    name = "thermal-guard-tests",
-    size = "small",
-    srcs = ["ThermalGuardTests.hs"],
-    args = [
-        "$(rootpath :thermal-guard-test-worker)",
-        "$(rootpath :thermal-guard-fixture)",
-        "$(rootpath :thermal-guard)",
-        "$(rootpath :thermal-guard-worker)",
-    ],
-    data = [
-        ":thermal-guard-test-worker",
-        ":thermal-guard-fixture",
-        ":thermal-guard",
-        ":thermal-guard-worker",
-    ],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
-    tags = ["no-sandbox"],
-    deps = [
-        ":thermal-guard-lib",
         "//host:base",
         "//host:directory",
         "//host:filepath",
@@ -595,7 +503,6 @@ haskell_test(
 haskell_binary(
     name = "peer-stage-witness",
     srcs = ["PeerStageWitness.hs"],
-    data = [":thermal-guard"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     visibility = ["//visibility:public"],
     deps = [
@@ -863,7 +770,7 @@ haskell_binary(
         "Xm1RamPushE2E.hs",
         "Xm1Viewer.hs",
     ],
-    data = [":xm1-upstream", ":cardless-ram-push-bridge", ":thermal-guard", "//host/firmware:experiment-ram-relinker"],
+    data = [":xm1-upstream", ":cardless-ram-push-bridge", "//host/firmware:experiment-ram-relinker"],
     main_file = "Xm1Viewer.hs",
     ghcopts = [
         "-XGHC2021",
@@ -1344,16 +1251,8 @@ haskell_test(
     name = "recovery-bootstrap-audit-tests",
     size = "small",
     srcs = ["RecoveryBootstrapAuditTests.hs"],
-    args = [
-        "$(rootpath :recovery-bootstrap-engine)",
-        "$(rootpath :thermal-guard)",
-        "$(rootpath :thermal-guard-worker)",
-    ],
-    data = [
-        ":recovery-bootstrap-engine",
-        ":thermal-guard",
-        ":thermal-guard-worker",
-    ],
+    args = ["$(rootpath :recovery-bootstrap-engine)"],
+    data = [":recovery-bootstrap-engine"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     tags = ["no-sandbox"],
     deps = [

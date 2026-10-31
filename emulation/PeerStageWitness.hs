@@ -7,7 +7,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (complement)
 import Data.Word (Word32)
-import Emulation.EmulatorSlot (attachGuard, reexecInSlot, slotPolicyFromEnvironment)
+import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.FirstStageWitness (leWordAt, sha256Hex)
 import Emulation.PeerStageWitness
 import qualified Emulation.PeerWaitWitness as W
@@ -410,7 +410,6 @@ enterSlot _ PrepareOnly = pure ()
 enterSlot args Launch {} = do
   policy <- slotPolicyFromEnvironment
   reexecInSlot policy args
-  attachGuard args
 
 -- | Checks the X-M1 1.50 loader-B and image-4 bindings; returns loader B.
 qualifyBindings :: B.ByteString -> U.Parsed -> IO B.ByteString
