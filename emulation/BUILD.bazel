@@ -2361,3 +2361,65 @@ haskell_test(
         "//host:unix",
     ],
 )
+
+haskell_library(
+    name = "image4-staging-lib",
+    srcs = ["Emulation/Image4Staging.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":first-stage-witness-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:process",
+        "//host:update-container",
+    ],
+)
+
+haskell_library(
+    name = "critical-pair-lib",
+    srcs = ["Emulation/CriticalPair.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":interface-initializer-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+        "//host/firmware:stage-build",
+        "//host/firmware:startup-stage-contract",
+    ],
+)
+
+haskell_binary(
+    name = "build-critical-pair",
+    srcs = ["BuildCriticalPair.hs"],
+    args = [
+        "$(location //lz:lz-encode)",
+        "$(location //host/firmware:rebuild-update)",
+        "$(location //lz:fflzd)",
+    ],
+    data = [
+        "//lz:lz-encode",
+        "//host/firmware:rebuild-update",
+        "//lz:fflzd",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":critical-pair-lib",
+        ":image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
