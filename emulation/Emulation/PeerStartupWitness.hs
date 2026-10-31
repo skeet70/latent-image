@@ -1505,7 +1505,7 @@ checkStartupReceipt scenario program receipt = do
       argumentLoad <- unique ArgumentLoad
       require (locatedTime completionWrite < locatedTime primaryClear && locatedTime primaryClear < stopCount exit) "primary clear order differs"
       require (all ((> stopCount exit) . locatedTime) [targetStore, argumentStore]) "publication precedes the exit pair"
-      -- A completed load records the entered count of the instruction after it, so the argument load before the handoff shares the handoff stop's count.
+      -- A completed load and its next pre-execution stop can share an entered count.
       require (locatedTime targetStore < locatedTime targetLoad && locatedTime argumentStore < locatedTime argumentLoad
         && all ((<= stopCount handoffStop) . locatedTime) [targetLoad, argumentLoad]) "publication loads are out of order"
       bound@(Segment _ segmentIndex _ segmentHeader _ _ _ _ _) <- maybe (Left "non-held scenario lacks the segment binding") Right segment
