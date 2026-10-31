@@ -105,13 +105,20 @@ validateDelayVeneer bytes symbols = do
     "completion delay veneer extent differs"
   pure bytes
 
-data ControlArtifact = ControlArtifact
-  { controlBytes :: B.ByteString
-  , controlParsed :: U.Parsed
-  , controlLoaderPatches :: [LoaderWordPatch]
-  -- | Record-1 slot offset and length of the veneer, if any.
-  , controlVeneerExtent :: Maybe (Int, Int)
-  }
+data ControlArtifact = ControlArtifact B.ByteString U.Parsed [LoaderWordPatch] (Maybe (Int, Int))
+
+controlBytes :: ControlArtifact -> B.ByteString
+controlBytes (ControlArtifact bytes _ _ _) = bytes
+
+controlParsed :: ControlArtifact -> U.Parsed
+controlParsed (ControlArtifact _ parsed _ _) = parsed
+
+controlLoaderPatches :: ControlArtifact -> [LoaderWordPatch]
+controlLoaderPatches (ControlArtifact _ _ patches _) = patches
+
+-- | Record-1 slot offset and length of the veneer, if any.
+controlVeneerExtent :: ControlArtifact -> Maybe (Int, Int)
+controlVeneerExtent (ControlArtifact _ _ _ extent) = extent
 
 loaderPatch :: CompletionControl -> Either String LoaderWordPatch
 loaderPatch HeldCompletion = loaderWordPatch loaderA heldGate originalMove selfBranch

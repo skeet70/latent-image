@@ -187,15 +187,21 @@ firstStageDeclarations symbols = do
         else pure ()
   pure (StageDeclarations [beforeExtent, afterExtent, bodyExtent, dataExtent] [] [])
 
-data OriginalStartupDat = OriginalStartupDat
-  { originalStartupParsed :: U.Parsed
-  , originalStartupDigest :: Sha256
-  }
+data OriginalStartupDat = OriginalStartupDat U.Parsed Sha256
 
-data StagedStartupDat = StagedStartupDat
-  { stagedStartupParsed :: U.Parsed
-  , stagedStartupDigest :: Sha256
-  }
+originalStartupParsed :: OriginalStartupDat -> U.Parsed
+originalStartupParsed (OriginalStartupDat parsed _) = parsed
+
+originalStartupDigest :: OriginalStartupDat -> Sha256
+originalStartupDigest (OriginalStartupDat _ value) = value
+
+data StagedStartupDat = StagedStartupDat U.Parsed Sha256
+
+stagedStartupParsed :: StagedStartupDat -> U.Parsed
+stagedStartupParsed (StagedStartupDat parsed _) = parsed
+
+stagedStartupDigest :: StagedStartupDat -> Sha256
+stagedStartupDigest (StagedStartupDat _ value) = value
 
 parseOriginalStartupDat :: B.ByteString -> Either String OriginalStartupDat
 parseOriginalStartupDat bytes = OriginalStartupDat <$> parseStartupDat bytes <*> digest bytes
@@ -217,20 +223,36 @@ digest = parseSha256 . concatMap hexByte . B.unpack . SHA256.hash
       [digit] -> ['0', digit]
       digits -> digits
 
-data FirstStageArtifact = FirstStageArtifact
-  { firstStageArtifactPlan :: StagePlan
-  , firstStageArtifactSymbols :: [Symbol]
-  , firstStageArtifactImageDigest :: Sha256
-  , firstStageArtifactSymbolsDigest :: Sha256
-  }
+data FirstStageArtifact = FirstStageArtifact StagePlan [Symbol] Sha256 Sha256
 
-data SecondaryPrefixArtifact = SecondaryPrefixArtifact
-  { secondaryPrefixArtifactPlan :: StagePlan
-  , secondaryPrefixArtifactSymbols :: [Symbol]
-  , secondaryPrefixArtifactImageDigest :: Sha256
-  , secondaryPrefixArtifactSymbolsDigest :: Sha256
-  , secondaryPrefixPublication :: LoaderWordPatch
-  }
+firstStageArtifactPlan :: FirstStageArtifact -> StagePlan
+firstStageArtifactPlan (FirstStageArtifact plan _ _ _) = plan
+
+firstStageArtifactSymbols :: FirstStageArtifact -> [Symbol]
+firstStageArtifactSymbols (FirstStageArtifact _ symbols _ _) = symbols
+
+firstStageArtifactImageDigest :: FirstStageArtifact -> Sha256
+firstStageArtifactImageDigest (FirstStageArtifact _ _ value _) = value
+
+firstStageArtifactSymbolsDigest :: FirstStageArtifact -> Sha256
+firstStageArtifactSymbolsDigest (FirstStageArtifact _ _ _ value) = value
+
+data SecondaryPrefixArtifact = SecondaryPrefixArtifact StagePlan [Symbol] Sha256 Sha256 LoaderWordPatch
+
+secondaryPrefixArtifactPlan :: SecondaryPrefixArtifact -> StagePlan
+secondaryPrefixArtifactPlan (SecondaryPrefixArtifact plan _ _ _ _) = plan
+
+secondaryPrefixArtifactSymbols :: SecondaryPrefixArtifact -> [Symbol]
+secondaryPrefixArtifactSymbols (SecondaryPrefixArtifact _ symbols _ _ _) = symbols
+
+secondaryPrefixArtifactImageDigest :: SecondaryPrefixArtifact -> Sha256
+secondaryPrefixArtifactImageDigest (SecondaryPrefixArtifact _ _ value _ _) = value
+
+secondaryPrefixArtifactSymbolsDigest :: SecondaryPrefixArtifact -> Sha256
+secondaryPrefixArtifactSymbolsDigest (SecondaryPrefixArtifact _ _ _ value _) = value
+
+secondaryPrefixPublication :: SecondaryPrefixArtifact -> LoaderWordPatch
+secondaryPrefixPublication (SecondaryPrefixArtifact _ _ _ _ publication) = publication
 
 parseFirstStageArtifact :: U.MediaImage -> B.ByteString -> Either String FirstStageArtifact
 parseFirstStageArtifact image symbolBytes = do
