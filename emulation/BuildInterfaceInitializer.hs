@@ -3,7 +3,7 @@ module Main where
 import qualified Data.Aeson as J
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import Emulation.InterfaceInitializer (Role (..), contractValue, declarations, deriveContract)
+import Emulation.InterfaceInitializer (Role (..), contractValue, declarations, deriveContract, parseOriginalSource)
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
@@ -26,7 +26,7 @@ main = do
 stage :: Role -> FilePath -> B.ByteString -> B.ByteString -> FilePath -> FilePath -> IO ()
 stage role sourcePath image symbolBytes outputPath contractPath = do
   source <- H.readRegular (64 * 1024 * 1024) sourcePath
-  original <- either H.failH pure (S.parseOriginalStartupDat source)
+  original <- either H.failH pure (parseOriginalSource source)
   staged <- either H.failH pure $ case role of
     Retained -> Right source
     Owned -> do

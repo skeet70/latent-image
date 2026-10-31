@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.InterfaceInitializer
-  ( Role (..), Contract, deriveContract, contractValue, declarations, validateReceipt
+  ( Role (..), Contract, parseOriginalSource, deriveContract, contractValue, declarations, validateReceipt
   ) where
 
 import qualified A32 as A
@@ -15,6 +15,7 @@ import Data.Word (Word8, Word32, Word64)
 import qualified Emulation.LoaderPrefixWitness as P
 import Emulation.FirstStageWitness (Cpsr (..), leWordAt, sha256Hex)
 import qualified Emulation.PeerStageWitness as W
+import FujiAF.ClassicChrome (stockFirmwareSha256)
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
 import FujiAF.JSON (decodeStrictIntegers)
@@ -64,12 +65,23 @@ adapterExtent image symbols = do
         , 0xe30b0e6c, 0xe344000e, 0xe30d1120, 0xe344100e, 0xe30128f0, 0xe344200f
         , 0xe30e3f40, 0xe344300d, 0xe3a0c078, 0xe12fff1e
         ]
-  observed <- mapM (leWordAt image . (\\offset -> fromIntegral start - fromIntegral origin + offset)) [0, 4 .. 64]
+  observed <- mapM (leWordAt image . (\offset -> fromIntegral start - fromIntegral origin + offset)) [0, 4 .. 64]
   require (F.symbolSize adapter == 68 && observed == expected) "initializer adapter does not implement its admitted eight-byte frame and exact return ABI"
   pure 8
 
 -- Stack offsets are relative to the Rust function's incoming SP.
+-- Unmodeled stack-alias propagation refuses staging.
 type StackState = M.Map A.Reg Integer
+
+operandRegisters :: A.Operand -> [A.Reg]
+operandRegisters operand = case operand of
+  A.Immediate _ -> []
+  A.ShiftedImmediate register _ _ -> [register]
+  A.ShiftedRegister register _ shift -> [register,shift]
+
+offsetRegisters :: A.Offset -> [A.Reg]
+offsetRegisters (A.OffsetImmediate _) = []
+offsetRegisters (A.OffsetRegister _ register _ _) = [register]
 
 stackExtent :: B.ByteString -> [F.Symbol] -> Either String Word32
 stackExtent image symbols = do
@@ -98,8 +110,10 @@ stackExtent image symbols = do
                 returning updated = do
                   require (M.lookup A.sp updated == Just 0) "initializer compiler return does not restore SP"
                   pure ([], updated, 0, True)
-                regular registers = do
+                regular condition registers = do
                   require (A.sp `notElem` registers && A.pc `notElem` registers) "unadmitted compiler SP or PC write"
+                  require (condition == A.Cond 14 || all (`M.notMember` state) registers)
+                    "conditional compiler write leaves an unresolved stack alias"
                   let updated = forget registers
                   pure (next updated, updated, 0, False)
                 frameAddress base offset bytes = case M.lookup base state of
@@ -111,6 +125,7 @@ stackExtent image symbols = do
             (successors, updated, used, returned) <- case instruction of
               A.StoreMultiple (A.Cond 14) base A.DecrementBefore True registers | base == A.sp -> do
                 require (A.sp `notElem` registers && A.pc `notElem` registers) "initializer compiler push contains SP or PC"
+                require (all (`M.notMember` state) registers) "initializer compiler push spills a stack alias"
                 let updated = M.insert A.sp (sp - 4 * toInteger (length registers)) state
                 pure (next updated, updated, 0, False)
               A.LoadMultiple (A.Cond 14) base A.IncrementAfter True registers | base == A.sp -> do
@@ -118,37 +133,53 @@ stackExtent image symbols = do
                 let updated = M.insert A.sp (sp + 4 * toInteger (length registers)) (forget registers)
                 require (M.lookup A.sp updated <= Just 0) "initializer compiler pop enters the caller frame"
                 if A.pc `elem` registers then returning updated else pure (next updated, updated, 0, False)
-              A.DataProcessing condition operation flags destination source operand
+              A.DataProcessing condition operation _ destination source operand
                 | operation `elem` [A.CMP, A.CMN, A.TST, A.TEQ] -> pure (next state, state, 0, False)
-                | condition == A.Cond 14 && not flags -> do
-                    let value = case (operation, operand) of
+                | condition == A.Cond 14 -> do
+                    let inputs = operandRegisters operand ++ [source | operation `notElem` [A.MOV, A.MVN]]
+                        value = case (operation, operand) of
                           (A.MOV, A.ShiftedImmediate register A.LSL 0) -> M.lookup register state
                           (A.ADD, A.Immediate amount) -> (+ toInteger amount) <$> M.lookup source state
                           (A.SUB, A.Immediate amount) -> subtract (toInteger amount) <$> M.lookup source state
                           _ -> Nothing
-                        updated = maybe (M.delete destination state) (\offset -> M.insert destination offset state) value
+                    require (all (`M.notMember` state) inputs || maybe False (const True) value)
+                      "unadmitted compiler stack-derived computation"
+                    let updated = maybe (M.delete destination state) (\offset -> M.insert destination offset state) value
                     require (destination /= A.pc && (destination /= A.sp || maybe False (<= 0) value)) "unadmitted compiler SP or PC computation"
                     pure (next updated, updated, 0, False)
-                | otherwise -> regular [destination]
-              A.MoveWide _ register _ -> regular [register]
-              A.MoveTop _ register _ -> regular [register]
-              A.ZeroExtend _ register _ _ _ -> regular [register]
-              A.Multiply _ register _ _ _ -> regular [register]
-              A.Compute _ registers -> regular registers
-              A.Load _ width _ destination base (A.OffsetImmediate offset) A.OffsetOnly -> do
+                | otherwise -> do
+                    let inputs = operandRegisters operand ++ [source | operation `notElem` [A.MOV, A.MVN]]
+                    require (all (`M.notMember` state) inputs) "conditional compiler computation propagates a stack alias"
+                    regular condition [destination]
+              A.MoveWide condition register _ -> regular condition [register]
+              A.MoveTop condition register _ -> do
+                require (M.notMember register state) "initializer compiler MOVT transforms a stack alias"
+                regular condition [register]
+              A.ZeroExtend condition register source _ _ -> do
+                require (M.notMember source state) "initializer compiler extension transforms a stack alias"
+                regular condition [register]
+              A.Multiply condition register left right accumulator -> do
+                require (all (`M.notMember` state) ([left,right] ++ maybe [] pure accumulator))
+                  "initializer compiler multiply transforms a stack alias"
+                regular condition [register]
+              A.Load condition width _ destination base (A.OffsetImmediate offset) A.OffsetOnly -> do
                 let bytes = case width of A.Byte -> 1; A.Half -> 2; A.Word -> 4; A.Dual -> 8
                     registers = case (width, destination) of (A.Dual, A.Reg index) -> [destination,A.Reg (index + 1)]; _ -> [destination]
                 used <- frameAddress base offset bytes
-                (successors, updated, _, returned) <- regular registers
+                (successors, updated, _, returned) <- regular condition registers
                 pure (successors, updated, used, returned)
-              A.Store _ A.Word _ base (A.OffsetImmediate offset) A.OffsetOnly -> do
+              A.Store _ A.Word source base (A.OffsetImmediate offset) A.OffsetOnly -> do
+                require (M.notMember source state) "initializer compiler store spills a stack alias"
                 used <- frameAddress base offset 4
                 pure (next state, state, used, False)
-              A.Load _ width _ destination base _ indexing -> do
-                require (M.notMember base state && indexing == A.OffsetOnly) "unadmitted indexed compiler frame load"
-                regular (case (width, destination) of (A.Dual, A.Reg index) -> [destination,A.Reg (index + 1)]; _ -> [destination])
-              A.Store _ A.Word _ base _ indexing -> do
-                require (M.notMember base state && indexing == A.OffsetOnly) "unadmitted indexed compiler frame store"
+              A.Load condition width _ destination base offset indexing -> do
+                require (all (`M.notMember` state) (base : offsetRegisters offset) && indexing == A.OffsetOnly)
+                  "unadmitted indexed compiler frame load"
+                regular condition (case (width, destination) of (A.Dual, A.Reg index) -> [destination,A.Reg (index + 1)]; _ -> [destination])
+              A.Store _ A.Word source base offset indexing -> do
+                require (M.notMember source state) "initializer compiler store spills a stack alias"
+                require (all (`M.notMember` state) (base : offsetRegisters offset) && indexing == A.OffsetOnly)
+                  "unadmitted indexed compiler frame store"
                 pure (next state, state, 0, False)
               A.Branch condition False target -> pure
                 ((target, state) : [(pc + 4, state) | condition /= A.Cond 14], state, 0, False)
@@ -160,9 +191,16 @@ stackExtent image symbols = do
   require (F.symbolSize symbol > 0 && end <= toInteger origin + toInteger (B.length image)) "initializer Rust symbol leaves the image"
   walk [(start, initial)] M.empty 0 0
 
+parseOriginalSource :: B.ByteString -> Either String S.OriginalStartupDat
+parseOriginalSource bytes = do
+  expected <- F.parseSha256 stockFirmwareSha256
+  observed <- F.parseSha256 (sha256Hex bytes)
+  require (observed == expected) "initializer requires the canonical original X-M1 1.50 DAT identity"
+  S.parseOriginalStartupDat bytes
+
 deriveContract :: Role -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either String Contract
 deriveContract role reference staged image symbolBytes = do
-  original <- S.parseOriginalStartupDat reference
+  original <- parseOriginalSource reference
   parsed <- U.parseContainer staged
   let source = S.originalStartupParsed original
   images <- P.stagedImages staged
@@ -261,7 +299,7 @@ instance FromJSON Publication where
   parseJSON = withObject "initializer publication" $ \row ->
     Publication <$> row .: "guest" <*> row .: "physical" <*> row .: "value" <*> row .: "pc" <*> row .: "instructions"
 
-data Source = CpuWrite | CpuRead | CpuFetch | HostWrite | HostRead | ModelBusWrite | ModelBusRead deriving (Eq)
+data Source = CpuWrite | CpuRead | CpuFetch | HostWrite | HostRead | ModelBusWrite | ModelBusRead deriving (Eq, Ord)
 instance FromJSON Source where
   parseJSON = withText "initializer event source" $ \value -> case value of
     "cpu-write" -> pure CpuWrite
@@ -297,15 +335,54 @@ newtype PhysicalSpan = PhysicalSpan [Word64] deriving (Eq, Ord)
 instance FromJSON PhysicalSpan where
   parseJSON = withObject "initializer physical span" $ \row -> PhysicalSpan <$> row .: "physical"
 
-data Rule = Rule [Int] Source Mode [PhysicalSpan] deriving (Eq)
+newtype Window = Window (Word64, Word64) deriving (Eq, Ord)
+instance FromJSON Window where
+  parseJSON value = Window <$> parseJSON value
+
+data BankSnapshot = BankSnapshot Word32 (Maybe Window) deriving (Eq, Ord)
+instance FromJSON BankSnapshot where
+  parseJSON = withObject "initializer TCM bank snapshot" $ \row ->
+    BankSnapshot <$> row .: "register" <*> row .: "window"
+
+data TcmSnapshot = TcmSnapshot Int BankSnapshot BankSnapshot deriving (Eq, Ord)
+instance FromJSON TcmSnapshot where
+  parseJSON = withObject "initializer TCM snapshot" $ \row ->
+    TcmSnapshot <$> row .: "core" <*> row .: "atcm" <*> row .: "btcm"
+
+bankSnapshot :: Word32 -> Either String BankSnapshot
+bankSnapshot register
+  | register .&. 1 == 0 = Right (BankSnapshot register Nothing)
+  | otherwise = do
+      let size = (512 :: Word64) `shiftL` fromIntegral ((register `shiftR` 2) .&. 31)
+          base = fromIntegral (register .&. 0xfffff000)
+      require (size >= 0x1000 && size <= 0x800000 && base `mod` size == 0)
+        "initializer TCM bank size or alignment is unsupported"
+      pure (BankSnapshot register (Just (Window (base,base + size))))
+
+data WatchClass = WatchClass Window [Source] deriving (Eq, Ord)
+instance FromJSON WatchClass where
+  parseJSON = withObject "initializer watch class" $ \row -> WatchClass <$> row .: "range" <*> row .: "kinds"
+
+data FixedViews = FixedViews
+instance FromJSON FixedViews where
+  parseJSON = withText "initializer watch views" $ \value ->
+    if value == "fixed" then pure FixedViews else fail "initializer watch views are not fixed"
+
+data NoFault = NoFault
+instance FromJSON NoFault where
+  parseJSON J.Null = pure NoFault
+  parseJSON _ = fail "initializer watch recorded a fault"
+
+data Rule = Rule [Int] Source Mode [PhysicalSpan] [TcmSnapshot] deriving (Eq)
 instance FromJSON Rule where
   parseJSON = withObject "initializer confinement rule" $ \row ->
-    Rule <$> row .: "cores" <*> row .: "kind" <*> row .: "mode" <*> row .: "spans"
+    Rule <$> row .: "cores" <*> row .: "kind" <*> row .: "mode" <*> row .: "spans" <*> row .: "tcm"
 
-data Watch = Watch Bool (Maybe String) [Event] [Rule]
+data Watch = Watch Bool (Maybe String) [Event] [Rule] [WatchClass] FixedViews NoFault [TcmSnapshot]
 instance FromJSON Watch where
   parseJSON = withObject "initializer scoped watch" $ \row ->
     Watch <$> row .: "enabled" <*> row .: "violation" <*> row .: "records" <*> row .: "confinement"
+      <*> row .: "classes" <*> row .: "views" <*> row .: "fault" <*> row .: "tcm"
 
 data Alias = Alias Int Word64 Word64 Word64 F.Sha256
 instance FromJSON Alias where
@@ -352,7 +429,7 @@ validateReceipt (Contract role prefix (P.Guest entry) (P.Span rustStart rustEnd)
     "initializer SDK receipt did not pass its distinct schema-6 role"
   let Observation (Identity observedRole observedEntry rust observedScratch observedSource observedImage observedSymbols body)
         before entered after frameBefore frameAfter tableBefore tableAfter tailBefore tailAfter poolsBefore poolsAfter
-        (Decoder choices pending) aliases publications (Watch enabled violation events rules) = observation
+        (Decoder choices pending) aliases publications (Watch enabled violation events rules classes FixedViews NoFault snapshots) = observation
       Context incomingPc incoming sp _ cpsr counts tcm = before
       Context enteringPc entering enteringSp enteringLr enteringCpsr enteringCounts enteringTcm = entered
       Context outgoingPc outgoing outgoingSp outgoingLr outgoingCpsr outgoingCounts outgoingTcm = after
@@ -389,15 +466,32 @@ validateReceipt (Contract role prefix (P.Guest entry) (P.Span rustStart rustEnd)
   forM_ [tailBefore,tailAfter,poolsBefore,poolsAfter] $ \value -> views value >> pure ()
   require (tailBefore == tailAfter && poolsBefore == poolsAfter) "initializer guard or retained pool changed"
   require (choices == [1] && pending == [Nothing] && enabled && violation == Nothing) "initializer continuous guard or decoder differs"
+  expectedTcm <- sequence
+    [ TcmSnapshot 0 <$> bankSnapshot prefixAtcm0 <*> bankSnapshot prefixBtcm0
+    , TcmSnapshot 1 <$> bankSnapshot prefixAtcm1 <*> bankSnapshot prefixBtcm1
+    ]
+  require (sort snapshots == sort expectedTcm) "initializer watch TCM scope differs from the validated prefix context"
   let physical low high = PhysicalSpan [low,high]
+      writes = [CpuWrite,HostWrite,ModelBusWrite]
+      expectedClasses =
+        [ WatchClass (Window (0xddaa0,0xdf0cc)) writes
+        , WatchClass (Window (0xddaa0,0xf3420)) [HostWrite,ModelBusWrite]
+        , WatchClass (Window (0x10000,0x14c80)) writes
+        , WatchClass (Window (0xd0000,0xddaa0)) writes
+        ]
+      normalizeClass (WatchClass range kinds) = WatchClass range (sort kinds)
+      rule cores kind mode spans =
+        Rule cores kind mode spans [snapshot | snapshot@(TcmSnapshot core _ _) <- expectedTcm, core `elem` cores]
       readSpans = [physical 0xddaa0 0xdf0cc] ++ if role == Owned then [physical 0xd0430 0xd09ac,physical 0xd00c8 0xd00fc] else []
       expectedRules =
-        [ Rule [1] CpuWrite Allow [physical 0xddaa0 0xdf0cc, physical (0xf3410 - fromIntegral scratch) 0xf3410]
-        , Rule [0] CpuWrite Forbid [physical 0xddaa0 0xf3420,physical 0x10000 0x14c80,physical 0xd0000 0xddaa0]
+        [ rule [1] CpuWrite Allow [physical 0xddaa0 0xdf0cc, physical (0xf3410 - fromIntegral scratch) 0xf3410]
+        , rule [0] CpuWrite Forbid [physical 0xddaa0 0xf3420,physical 0x10000 0x14c80,physical 0xd0000 0xddaa0]
         ]
-          ++ [Rule [1] CpuFetch Forbid (map (uncurry physical) [(0xd0430,0xd09ac),(0xd0020,0xd00c8),(0xd09ac,0xd09d0),(0xd0a44,0xd0a64)]) | role == Owned]
-          ++ [Rule [1] CpuRead Forbid readSpans]
-      normalize (Rule cores kind mode spans) = Rule cores kind mode (sort spans)
+          ++ [rule [1] CpuFetch Forbid (map (uncurry physical) [(0xd0430,0xd09ac),(0xd0020,0xd00c8),(0xd09ac,0xd09d0),(0xd0a44,0xd0a64)]) | role == Owned]
+          ++ [rule [1] CpuRead Forbid readSpans]
+      normalize (Rule cores kind mode spans describedTcm) = Rule cores kind mode (sort spans) (sort describedTcm)
+  require (sort (map normalizeClass classes) == sort (map normalizeClass expectedClasses))
+    "initializer watch source classes differ from the publication and retained-resource scope"
   require (map normalize rules == map normalize expectedRules) "initializer continuous confinement roles differ"
   require (length events == 1419 && length publications == 1419 && length stores == 1419) "initializer publication coverage differs"
   let lower = sum enteringCounts

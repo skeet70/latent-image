@@ -569,6 +569,7 @@ haskell_library(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:classic-chrome",
         "//host:containers",
         "//host:first-stage",
         "//host:json",
