@@ -107,7 +107,7 @@ pub const CAPTURE_OBSERVATION_BOUNDS: CaptureObservationBounds = CaptureObservat
     retained_memory_bytes: CAPTURE_MEMORY_BYTES,
     charged_storage_bytes: std::mem::size_of::<CaptureEvent>() * CAPTURE_DETAIL_LIMIT
         + std::mem::size_of::<SiteObservation>() * CAPTURE_SITE_LIMIT
-        + std::mem::size_of::<CaptureObservation>() + CAPTURE_OVERHEAD_BYTES,
+        + std::mem::size_of::<CaptureObservation>() + CAPTURE_OVERHEAD_BYTES + CAPTURE_MAP_STORAGE_BYTES,
 };
 
 #[derive(Clone, Copy, Serialize)]
@@ -229,15 +229,16 @@ pub struct CaptureMemory {
 
 impl CaptureMemory {
     /// The graph must be the one used to construct the observed session.
-    pub fn from_graph(graph: &Graph) -> Result<Self, String> {
+    pub fn from_graph(graph: Graph) -> Result<Self, String> {
         graph.validate()?;
         if graph.mappings.len() > CAPTURE_MAP_LIMIT {
             return Err("capture memory graph exceeds its mapping bound".into());
         }
         let mut decoder_windows = Vec::new();
-        for decoder in &graph.decoders {
-            let choice = decoder.choices.get(decoder.initial).ok_or("capture memory decoder choice absent")?;
-            for map in &choice.processors {
+        // Graph::validate_decoders requires every choice's (core, address, size) set to equal the initial choice's set.
+        for decoder in graph.decoders {
+            let choice = decoder.choices.into_iter().nth(decoder.initial).ok_or("capture memory decoder choice absent")?;
+            for map in choice.processors {
                 if decoder_windows.len() == CAPTURE_MAP_LIMIT {
                     return Err("capture memory graph exceeds its decoder-window bound".into());
                 }
@@ -248,14 +249,13 @@ impl CaptureMemory {
                 });
             }
         }
-        Ok(Self { maps: graph.mappings.clone().into_boxed_slice(), decoder_windows: decoder_windows.into_boxed_slice() })
+        Ok(Self { maps: graph.mappings.into_boxed_slice(), decoder_windows: decoder_windows.into_boxed_slice() })
     }
 
     fn physical(&self, core: MemoryCore, address: Guest, length: usize, tcm: &TcmViews) -> Option<RamAddress> {
         let physical = RamAddress::parse(address.0, length)?;
         let start = u64::from(address.0);
         let end = start.checked_add(length as u64)?;
-        // Decoder choices preserve window geometry.
         if self.decoder_windows.iter().any(|window| window.core.0 == core.0 && start < window.end.0 && window.start.0 < end)
             || tcm.windows.iter().flatten().any(|&(low, high)| start < high && low < end) {
             return None;
@@ -265,9 +265,8 @@ impl CaptureMemory {
     }
 }
 
-const _: () = assert!(
-    CAPTURE_MAP_LIMIT * (std::mem::size_of::<MemoryMap>() + std::mem::size_of::<DecoderWindow>()) <= 16 * 1024
-);
+const CAPTURE_MAP_STORAGE_BYTES: usize = std::mem::size_of::<CaptureMemory>()
+    + CAPTURE_MAP_LIMIT * (std::mem::size_of::<MemoryMap>() + std::mem::size_of::<DecoderWindow>());
 
 struct TcmViews {
     windows: [Option<(u64, u64)>; 2],
@@ -545,12 +544,7 @@ struct CaptureObservation {
     ram_incomplete: bool,
 }
 
-const _: () = assert!(
-    std::mem::size_of::<CaptureEvent>() * CAPTURE_DETAIL_LIMIT
-        + std::mem::size_of::<SiteObservation>() * CAPTURE_SITE_LIMIT
-        + std::mem::size_of::<CaptureObservation>()
-        + CAPTURE_OVERHEAD_BYTES <= CAPTURE_MEMORY_BYTES
-);
+const _: () = assert!(CAPTURE_OBSERVATION_BOUNDS.charged_storage_bytes <= CAPTURE_MEMORY_BYTES);
 
 #[derive(Serialize)]
 struct CaptureEventView<'a> {

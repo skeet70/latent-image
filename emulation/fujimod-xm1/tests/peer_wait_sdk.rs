@@ -15,9 +15,10 @@ fn machine(program: &[u32]) -> Machine {
     machine_with_ram(program, 0x4000, RamViews::Physical)
 }
 
+#[derive(Clone, Copy)]
 enum RamViews { Physical, AliasedWithDecoder }
 
-fn machine_with_ram(program: &[u32], ram_bytes: usize, views: RamViews) -> Machine {
+fn fixture_graph(ram_bytes: usize, views: RamViews) -> Graph {
     let mut mappings = Vec::new();
     let mut decoder_maps = Vec::new();
     for core in 0..2 {
@@ -39,9 +40,7 @@ fn machine_with_ram(program: &[u32], ram_bytes: usize, views: RamViews) -> Machi
             Choice { processors: alternate, dma: vec![] },
         ] }]
     };
-    fujimod_emulator_exr2_board::register_board_builder();
-    fujimod_emulator_models::register();
-    let graph = Graph {
+    Graph {
         processors: (0..2).map(|core| Processor {
             model: Model::CortexR5F, rprofile: Some(Default::default()), mprofile: None, released: true,
             registers: vec![(Register::Pc, 0x1000 + core as u64 * 0x1000), (Register::Pstate, 0xd3)],
@@ -50,9 +49,14 @@ fn machine_with_ram(program: &[u32], ram_bytes: usize, views: RamViews) -> Machi
         dma_mappings: vec![BusMapping::ram(0, ram_bytes)], decoders, peripherals: vec![],
         mappings,
         instructions_per_tick: Ratio::new(24, 1).unwrap(),
-    };
-    let memory = CaptureMemory::from_graph(&graph).unwrap();
-    let mut board = graph.build(factory::Options { engine: factory::Engine::Unicorn, translation_cache_bytes: 1 << 20 }, Bus::new(Mode::Strict), None).unwrap();
+    }
+}
+
+fn machine_with_ram(program: &[u32], ram_bytes: usize, views: RamViews) -> Machine {
+    fujimod_emulator_exr2_board::register_board_builder();
+    fujimod_emulator_models::register();
+    let mut board = fixture_graph(ram_bytes, views)
+        .build(factory::Options { engine: factory::Engine::Unicorn, translation_cache_bytes: 1 << 20 }, Bus::new(Mode::Strict), None).unwrap();
     board.set_execution_policy(ExecutionPolicy::Exact).unwrap();
     let code: Vec<u8> = program.iter().flat_map(|word| word.to_le_bytes()).collect();
     for address in [0x1000, 0x2000] { board.write_physical(address, &code).unwrap(); }
@@ -62,6 +66,7 @@ fn machine_with_ram(program: &[u32], ram_bytes: usize, views: RamViews) -> Machi
     };
     let document = RunDocument::parse(include_bytes!("../data/xm1-150.json")).unwrap();
     let mut machine = Machine::new(document, session).unwrap();
+    let memory = CaptureMemory::from_graph(fixture_graph(ram_bytes, views)).unwrap();
     machine.traces = TraceSites::with_memory(&machine.session, memory);
     machine
 }

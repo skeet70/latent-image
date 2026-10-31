@@ -119,7 +119,7 @@ impl Machine {
     pub(crate) fn begin_capture_observation(&mut self) -> Result<(), String> {
         if self.traces.needs_capture_memory() {
             let (_, graph) = crate::run::graph(&self.document)?;
-            self.traces.prepare_memory(&self.session, CaptureMemory::from_graph(&graph)?);
+            self.traces.prepare_memory(&self.session, CaptureMemory::from_graph(graph)?);
         }
         self.traces.begin_capture_observation()
     }
