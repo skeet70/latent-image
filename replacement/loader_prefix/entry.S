@@ -7,6 +7,18 @@
     .type xm1_loader_prefix_entry, %function
 xm1_loader_prefix_entry:
     mov r5, r0
+#ifdef XM1_LOADER_PREFIX_RETIRED_FETCH_FAULT
+    ldr r12, =xm1_loader_b_stock_entry
+    .global xm1_loader_prefix_retired_fetch_fault
+xm1_loader_prefix_retired_fetch_fault:
+    bx r12
+#endif
+#ifdef XM1_LOADER_PREFIX_WRITE_CONFINEMENT_FAULT
+    ldr r12, =xm1_loader_b_image_start
+    .global xm1_loader_prefix_write_confinement_fault
+xm1_loader_prefix_write_confinement_fault:
+    str r5, [r12]
+#endif
     bl xm1_loader_prefix_install
     mov r6, r0
 #ifdef XM1_LOADER_PREFIX_STACK_FAULT

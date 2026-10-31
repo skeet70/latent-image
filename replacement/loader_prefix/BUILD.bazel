@@ -41,7 +41,9 @@ _RUST_FAULTS = {
 
 _ASM_FAULTS = {
     "frame-fault": "XM1_LOADER_PREFIX_FRAME_FAULT",
+    "retired-fetch-fault": "XM1_LOADER_PREFIX_RETIRED_FETCH_FAULT",
     "stack-fault": "XM1_LOADER_PREFIX_STACK_FAULT",
+    "write-confinement-fault": "XM1_LOADER_PREFIX_WRITE_CONFINEMENT_FAULT",
 }
 
 [
