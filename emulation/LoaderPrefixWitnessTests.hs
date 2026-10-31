@@ -1,19 +1,21 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | Schema-4 contract and receipt acceptance over the linked owned prefix and
--- synthetic receipts. The receipts exercise the host consumer, not an
--- observation.
+-- | Synthetic receipts exercise the host admission boundary.
 module Main where
 
 import Control.Monad (unless)
-import Data.Aeson (Value, encode, object, (.=))
+import Data.Aeson (Value (..), encode, object, (.=))
+import qualified Data.Aeson.Key as K
+import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits ((.|.))
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Word (Word32, Word64)
+import qualified Data.Vector as V
 import Emulation.FirstStageWitness (encodeLeWord)
 import Emulation.LoaderPrefixWitness
 import Emulation.PollPeriod (PollPeriod (..))
+import qualified Emulation.PeerStartupWitness as S
 import qualified FujiAF.CompletionControl as C
 import qualified FujiAF.FirstStage as F
 import System.Environment (getArgs)
@@ -78,11 +80,12 @@ data Knobs = Knobs
   , knobTcm :: [[Word32]]
   -- | Core-1 ATCM moved at the last waiting post-load stop.
   , knobTcmMoved :: Bool
+  , knobFirstStageAfterSecondary :: Bool
   }
 
 knobs :: Knobs
 knobs = Knobs False 0x5660 0xd00c0 0x200001d3 False False False False 8 4 Nothing False (Just (0, 0, 0), Just 0) 201 0
-  [[0x70000011, 0], [0x70000011, 0]] False
+  [[0x70000011, 0], [0x70000011, 0]] False False
 
 writes :: [String]
 writes = ["cpu-write", "host-write", "model-bus-write"]
@@ -90,10 +93,16 @@ writes = ["cpu-write", "host-write", "model-bus-write"]
 spanOf :: Word64 -> Word64 -> [Word64]
 spanOf low high = [low, high]
 
--- | A receipt the schema-4 contract for @facts@ accepts, before any knob.
 receipt :: Scenario -> ProgramKind -> ProgramFacts -> Knobs -> B.ByteString
-receipt scenario kind facts knob = BL.toStrict (encode document)
+receipt = receiptFor Nothing
+
+receiptFor :: Maybe Value -> Scenario -> ProgramKind -> ProgramFacts -> Knobs -> B.ByteString
+receiptFor startup scenario kind facts knob = BL.toStrict (encode (receiptDocument startup scenario kind facts knob))
+
+receiptDocument :: Maybe Value -> Scenario -> ProgramKind -> ProgramFacts -> Knobs -> Value
+receiptDocument startup scenario kind facts knob = document
   where
+    composed = isJust startup
     Guest handoffSite = factHandoff facts
     Guest entrySite = factEntry facts
     Guest loadSite = factLoad facts
@@ -131,10 +140,15 @@ receipt scenario kind facts knob = BL.toStrict (encode document)
       [ stop "delay-entry" C.veneerEntry 0 (2000, 300 + 4 * period) (replace 5 0 base) 0x700007d0 (C.heldGate + 4) cpsr (Just (4, 4, 0)) (Just 0)
       , stop "delay-release" C.veneerRelease 0 (3000, 300 + 4 * period + 10) (replace 5 0 base) 0x700007d0 (C.heldGate + 4) cpsr (Just (storeCount, storeCount, 0)) (Just 0) ]
     exitRegisters = replace 4 argument (replace 5 argument (replace 6 0xffff0000 (replace 8 (knobExitR8 knob) (replace 11 0x400f341c base))))
-    stops = [ stop "record-1-entry" 0x1800 0 (10, 0) base 0xfff00f00 0 cpsr Nothing Nothing
-            , stop "record-2-handoff" handoffSite 1 (800, 200) base 0x70000800 0 cpsr Nothing Nothing
-            , stop "prefix-entry" entrySite 1 (810, knobEntryCore1 knob) base 0x70000800 0 cpsr (fst (knobEntryObservation knob)) (snd (knobEntryObservation knob)) ]
-      ++ waitingPosts
+    startupStops =
+      [ stop "first-stage-handoff" 0x6100 0 (if knobFirstStageAfterSecondary knob then (500, 20) else (100, 10))
+          (replace 2 0x40020 base) 0x70000800 0 cpsr Nothing Nothing
+      , stop "secondary-entry" 0x10400 1 (if knobFirstStageAfterSecondary knob then (100, 10) else (500, 20))
+          base 0xfff00f00 0 cpsr Nothing Nothing ]
+    stops = [stop "record-1-entry" (if composed then 0x6000 else 0x1800) 0 (10, 0) base 0xfff00f00 0 cpsr Nothing Nothing]
+      ++ (if composed then (if knobFirstStageAfterSecondary knob then reverse startupStops else startupStops) else [])
+      ++ [ stop "record-2-handoff" handoffSite 1 (800, 200) base 0x70000800 0 cpsr Nothing Nothing
+         , stop "prefix-entry" entrySite 1 (810, knobEntryCore1 knob) base 0x70000800 0 cpsr (fst (knobEntryObservation knob)) (snd (knobEntryObservation knob)) ]
       ++ (if held
             then stop "held-gate" C.heldGate 0 (9000, 300 + 5 * period) base 0x700007d0 0 cpsr (Just (5, 5, 0)) (Just 0) : heldPosts
             else (if delayed then delayStops else [])
@@ -168,22 +182,34 @@ receipt scenario kind facts knob = BL.toStrict (encode document)
       , "map" .= object ["core" .= (1 :: Int), "address" .= address, "physical" .= physicalBase, "size" .= mapSize] ]
     rule :: [Int] -> String -> String -> [Value] -> Value
     rule cores kindName mode spans = object ["cores" .= cores, "kind" .= kindName, "mode" .= mode, "spans" .= spans, "tcm" .= map snapshot cores]
+    firstFetch = [physical 0x1800 0x1804 | composed]
+    secondaryFetch = [physical low high | composed, S.Interval low high <- S.forbidFetchIntervals]
+    secondaryRead = [physical low high | composed, S.Interval low high <- S.forbidReadIntervals]
+    immutable = [physical low high | composed, (low, high) <- [(0, 0x40), (0x6000, 0x6800)]]
     ownedRules = if kind == OwnedProgram
-      then [ rule [1] "cpu-fetch" "forbid" [physical 0xd0020 0xd00c8, physical 0xd09ac 0xd09d0, physical 0xd0a44 0xd0a64]
-           , rule [1] "cpu-read" "forbid" [physical 0xd00c8 0xd00fc] ]
+      then [ rule [1] "cpu-fetch" "forbid" ([physical 0xd0020 0xd00c8, physical 0xd09ac 0xd09d0, physical 0xd0a44 0xd0a64] ++ firstFetch ++ secondaryFetch)
+           , rule [1] "cpu-read" "forbid" (physical 0xd00c8 0xd00fc : secondaryRead) ]
+        ++ [entry | composed, entry <- [rule [0] "cpu-fetch" "forbid" (firstFetch ++ secondaryFetch), rule [0] "cpu-read" "forbid" secondaryRead]]
       else []
     writeClass low high = object ["range" .= spanOf low high, "kinds" .= writes]
+    startupClasses =
+      [writeClass low high | composed, (low, high) <- [(0x6000, 0x6800), (0, 0x40)]]
+      ++ [object ["range" .= spanOf 0x1800 0x1804, "kinds" .= ["cpu-fetch" :: String]] | composed]
+      ++ [object ["range" .= spanOf low high, "kinds" .= [access]]
+         | composed, (access, spans) <- [("cpu-fetch" :: String, S.forbidFetchIntervals), ("cpu-read", S.forbidReadIntervals)]
+         , S.Interval low high <- spans]
     classes = [ writeClass 0xa00c4 0xa00c8, writeClass 0xd0000 0xddaa0, writeClass 0x10000 0x14c80
               , writeClass 0x40a00 0x40a10, writeClass 0x40afc 0x40b00
               , object ["range" .= spanOf 0xddaa0 0xf3420, "kinds" .= ["host-write", "model-bus-write" :: String]] ]
       ++ [writeClass 0x180 0x19c | delayed]
+      ++ startupClasses
     scoped = object
       [ "enabled" .= False, "ranges" .= ([] :: [[Int]]), "records" .= [writer | not held && not (knobNoWriter knob)]
       , "violation" .= (Nothing :: Maybe String), "classes" .= classes, "views" .= ("fixed" :: String)
       , "fault" .= (if knobFault knob then Just (object ["kind" .= ("decoding-changed" :: String)]) else Nothing)
       , "tcm" .= [snapshot 0, snapshot 1]
       , "confinement" .= ([ rule [1] "cpu-write" "allow" [physical 0xddaa0 0xf3420, physical 0x3fff0024 0x3fff0040, stackSpan]
-                          , rule [0] "cpu-write" "forbid" [physical 0xddaa0 0xf3420] ] ++ ownedRules)
+                          , rule [0] "cpu-write" "forbid" (physical 0xddaa0 0xf3420 : immutable) ] ++ ownedRules)
       , "counters" .= [object
           [ "cores" .= [1 :: Int], "cell" .= spanOf 0xa00c4 0xa00c8, "head_bound" .= (8 :: Int), "tail_bound" .= (2 :: Int)
           , "count" .= count, "zero_count" .= (count - nonzero), "nonzero_count" .= nonzero
@@ -206,12 +232,13 @@ receipt scenario kind facts knob = BL.toStrict (encode document)
     instruction = if scenario == NonOne then 0xe58330c4 else 0xe58350c4 :: Word32
     core1AtCommit = 300 + 5 * period
     commitStep = object ["before" .= [5000, core1AtCommit], "after" .= [5001, core1AtCommit + if knobCore1MovesAtCommit knob then 1 else 0], "cell" .= stored]
-    document = object
-      [ "schema" .= (4 :: Int), "scenario" .= object ["kind" .= scenarioName scenario], "program" .= programKindName kind
+    document = object $
+      [ "schema" .= (if composed then 5 else 4 :: Int), "scenario" .= object ["kind" .= scenarioName scenario], "program" .= programKindName kind
       , "result" .= ("passed" :: String), "error" .= (Nothing :: Maybe String), "machine_failure" .= (Nothing :: Maybe String)
       , "instructions" .= (30000 :: Int), "cp14_identities" .= [0x4003, 0x5003 :: Word32]
       , "boot_watch" .= classified [] [writeClass 0xa00c4 0xa00c8]
-      , "loaded_watch" .= classified [record1Clear] ([writeClass 0xa00c4 0xa00c8] ++ [writeClass 0x180 0x19c | delayed])
+      , "loaded_watch" .= setField "views" (String (if composed then "fixed" else "observe"))
+          (classified [record1Clear] ([writeClass 0xa00c4 0xa00c8] ++ [writeClass 0x180 0x19c | delayed] ++ startupClasses))
       , "scoped_watch" .= scoped, "stops" .= stops
       , "bindings" .= object
           [ "vector_slots" .= bound 0xffff0024 28 0xffff0000 0x3fff0000 0x10000, "stack_window" .= stackSpan
@@ -230,10 +257,51 @@ receipt scenario kind facts knob = BL.toStrict (encode document)
       , "final_primary" .= (if held then Just (object
           [ "address" .= C.heldGate, "registers" .= base, "sp" .= (0x700007d0 :: Word32), "lr" .= (0 :: Word32)
           , "cpsr" .= cpsr, "instructions" .= (25000 :: Int) ]) else Nothing)
-      ]
+      ] ++ ["startup" .= selected | Just selected <- [startup]]
 
 validate :: Contract -> B.ByteString -> Either String ()
 validate contract bytes = parseReceipt bytes >>= validateReceipt contract >> pure ()
+
+startupFixture :: Value
+startupFixture = object
+  [ "kind" .= ("composed" :: String), "record1_sha256" .= replicate 64 '1'
+  , "image_sha256" .= replicate 64 '2', "symbols_sha256" .= replicate 64 '3', "source_sha256" .= replicate 64 '4'
+  , "image" .= spanOf 0x6000 0x6800, "entry" .= (0x6000 :: Word32), "handoff" .= (0x6100 :: Word32)
+  , "handoff_target" .= (0x40020 :: Word32), "handoff_argument" .= argument, "secondary_entry" .= (0x10400 :: Word32)
+  , "secondary_image_sha256" .= replicate 64 '5', "secondary_symbols_sha256" .= replicate 64 '6'
+  , "secondary_source_sha256" .= replicate 64 '4'
+  ]
+
+setField :: String -> Value -> Value -> Value
+setField name value (Object fields) = Object (KM.insert (K.fromString name) value fields)
+setField _ _ value = value
+
+changeField :: String -> (Value -> Value) -> Value -> Value
+changeField name change (Object fields) = Object (case KM.lookup key fields of
+  Just value -> KM.insert key (change value) fields
+  Nothing -> fields)
+  where key = K.fromString name
+changeField _ _ value = value
+
+composedContract :: Scenario -> ProgramFacts -> Value -> Either String Contract
+composedContract scenario facts startup =
+  parseContract . BL.toStrict . encode . setField "startup" startup . setField "schema" (Number 5) $
+    contractValue (Contract scenario (Program OwnedProgram facts))
+
+filterArray :: (Value -> Bool) -> Value -> Value
+filterArray predicate (Array values) = Array (V.filter predicate values)
+filterArray _ value = value
+
+hasField :: String -> Value -> Value -> Bool
+hasField name expected (Object fields) = KM.lookup (K.fromString name) fields == Just expected
+hasField _ _ _ = False
+
+changeStop :: String -> (Value -> Value) -> Value -> Value
+changeStop label change = changeField "stops" (mapArray (\value -> if hasField "label" (String (fromString label)) value then change value else value))
+  where
+    fromString = K.toText . K.fromString
+    mapArray f (Array values) = Array (V.map f values)
+    mapArray _ value = value
 
 main :: IO ()
 main = do
@@ -292,8 +360,10 @@ main = do
   expect "a held core-0 TCM window over the completion cell is refused" (not (accepted (held knobs {knobTcm = cellTcm})))
   expect "a core-0 TCM window over the delayed veneer is refused" (not (accepted (delayedWith knobs {knobTcm = [[0x70000011, 0x00000011], [0x70000011, 0]]})))
   retained <- either fail pure (retainedContract Natural)
-  let Contract _ (Program _ retainedProgramFacts) = retained
-      retainedReceipt = receipt Natural RetainedProgram retainedProgramFacts
+  retainedProgramFacts <- case retained of
+    Contract _ (Program _ selectedFacts) -> pure selectedFacts
+    ComposedContract {} -> fail "retained fixture names composed startup"
+  let retainedReceipt = receipt Natural RetainedProgram retainedProgramFacts
   expect "natural retained receipt accepted" (accepted (validate retained (retainedReceipt knobs)))
   let pairOf contract bytes = (,) contract <$> parseReceipt bytes
       compareWith ownedKnobs = do
@@ -306,4 +376,60 @@ main = do
     left <- pairOf (owned Natural) (ownedReceipt Natural knobs)
     right <- pairOf retained (retainedReceipt knobs)
     compareReceipts left right)))
+  composed <- either fail pure (composedContract Natural facts startupFixture)
+  let composedBytes scenario knob = receiptFor (Just startupFixture) scenario OwnedProgram facts knob
+      altered change = BL.toStrict (encode (change (receiptDocument (Just startupFixture) Natural OwnedProgram facts knobs)))
+      removeClass span' = changeField "classes" (filterArray (not . hasField "range" span'))
+      withoutImageGuard = removeClass (toJSONSpan 0x6000 0x6800)
+      toJSONSpan low high = Array (V.fromList [Number low, Number high])
+      missingStop label = changeField "stops" (filterArray (not . hasField "label" (String label)))
+      refuses label change = expect label (not (accepted (validate composed (altered change))))
+      refusesStartup label change = expect label (not (accepted (composedContract Natural facts (change startupFixture))))
+      expectRefused label result = expect label (not (accepted result))
+      parseDocument = parseContract . BL.toStrict . encode
+      addImageWrite (Array rows) = Array (V.snoc rows (object
+        [ "source" .= ("host-write" :: String), "address" .= (0x40006000 :: Word64), "physical" .= (0x6000 :: Word64), "size" .= (4 :: Int)
+        , "core" .= Null, "pc" .= Null, "instructions" .= Null, "tick" .= Null ]))
+      addImageWrite value = value
+      setTarget (Array registers) = Array (registers V.// [(2, Number 0x40024)])
+      setTarget value = value
+  expect "composed contract round trip" (parseContract (BL.toStrict (encode (contractValue composed))) == Right composed)
+  mapM_ (\scenario -> do
+    selected <- either fail pure (composedContract scenario facts startupFixture)
+    expect ("composed " ++ scenarioName scenario ++ " accepted") (accepted (validate selected (composedBytes scenario knobs)))) [Natural, Held, Delayed, NonOne]
+  expect "secondary entry can precede the firststage handoff" (accepted (validate composed (composedBytes Natural knobs {knobFirstStageAfterSecondary = True})))
+  expect "standalone receipt cannot establish composed startup" (not (accepted (validate composed (ownedReceipt Natural knobs))))
+  expect "composed receipt cannot establish standalone startup" (not (accepted (validate (owned Natural) (composedBytes Natural knobs))))
+  expectRefused "retained roles are refused under schema5"
+    (parseDocument (setField "startup" startupFixture (setField "schema" (Number 5) (contractValue retained))))
+  expectRefused "schema4 refuses composed startup fields"
+    (parseDocument (setField "startup" startupFixture (contractValue (owned Natural))))
+  refusesStartup "composed admission refuses the stock firststage entry" (setField "entry" (Number 0x1800))
+  refusesStartup "composed admission refuses a firststage image outside record 1" (setField "image" (toJSONSpan 0x6000 0x10004))
+  refusesStartup "composed admission refuses different original DAT identities"
+    (setField "secondary_source_sha256" (String (K.toText (K.fromString (replicate 64 '7')))))
+  refuses "composed receipt binds the firststage symbols"
+    (changeField "startup" (setField "symbols_sha256" (String (K.toText (K.fromString (replicate 64 '7'))))))
+  refuses "endpoint identity does not replace the firststage interval guard" (changeField "loaded_watch" withoutImageGuard)
+  refuses "firststage image remains guarded after prefix entry" (changeField "scoped_watch" withoutImageGuard)
+  refuses "firststage vectors remain guarded after prefix entry" (changeField "scoped_watch" (removeClass (toJSONSpan 0 0x40)))
+  refuses "secondary retired fetches are guarded before the handoff"
+    (changeField "loaded_watch" (removeClass (toJSONSpan 0x11800 0x11854)))
+  refuses "firststage handoff must be observed" (missingStop "first-stage-handoff")
+  refuses "secondary entry must be observed" (missingStop "secondary-entry")
+  refuses "firststage handoff must name its source-bound site" (changeStop "first-stage-handoff" (setField "address" (Number 0x6104)))
+  refuses "firststage handoff must name its source-bound target" (changeStop "first-stage-handoff" (changeField "registers" setTarget))
+  refuses "secondary entry must name its source-bound site" (changeStop "secondary-entry" (setField "address" (Number 0x10404)))
+  refuses "stock firststage entry is not a composed entry observation" (changeStop "record-1-entry" (setField "address" (Number 0x1800)))
+  refuses "restored endpoint bytes do not excuse an earlier image write" (changeField "loaded_watch" (changeField "records" addImageWrite))
+  refuses "restored endpoint bytes do not excuse an image write during prefix execution" (changeField "scoped_watch" (changeField "records" addImageWrite))
+  refuses "decoder observation does not replace fixed composed decoding" (changeField "loaded_watch" (setField "views" (String "observe")))
+  expectRefused "an endpoint TCM window over the firststage image is refused"
+    (validate composed (composedBytes Natural knobs {knobTcm = [[0x70000011, 0x0000600d], [0x70000011, 0]]}))
+  expectRefused "an endpoint TCM window over the firststage alias is refused"
+    (validate composed (composedBytes Natural knobs {knobTcm = [[0x70000011, 0x4000600d], [0x70000011, 0]]}))
+  expect "retained and composed boundaries compare equal" (accepted (do
+    left <- pairOf retained (retainedReceipt knobs)
+    right <- pairOf composed (composedBytes Natural knobs)
+    compareReceipts left right))
   putStrLn "loader-prefix witness tests pass"

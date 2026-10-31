@@ -1,14 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | Schema-4 observation of the loader-B core-1 prefix from the paused
--- record-2 handoff to pre-execution 0xd0aac: typed contract, program facts
--- from linked and staged bytes, receipt acceptance and the retained/owned
--- comparison.
+-- | Standalone schema-4 and composed schema-5 loader-prefix observations.
 module Emulation.LoaderPrefixWitness
   ( Scenario (..), scenarioName, parseScenario, scenarioControl
   , Guest (..), Span (..), RegisterIndex, registerIndex
   , ProgramKind (..), programKindName, Program (..), ProgramFacts (..)
-  , Contract (..), budget, contractValue, parseContract
+  , Contract (..), StartupFacts, budget, contractValue, parseContract, isComposed
   , retainedFacts, deriveOwnedFacts, StagedImages (..), stagedImages, verifyStagedOwned
+  , deriveComposedContract
   , Receipt, ValidatedReceipt, receiptArgument, parseReceipt, validateReceipt, compareReceipts
   , maxReceiptBytes
   ) where
@@ -35,6 +33,7 @@ import qualified FujiAF.FirstStage as F
 import FujiAF.JSON (decodeStrictIntegers)
 import qualified FujiAF.UpdateContainer as U
 import Numeric (showHex)
+import qualified StartupStageContract as Stage
 
 -- * Contract
 
@@ -92,7 +91,22 @@ data ProgramFacts = ProgramFacts
 
 data Program = Program ProgramKind ProgramFacts deriving (Eq, Show)
 
-data Contract = Contract Scenario Program deriving (Eq, Show)
+data Contract = Contract Scenario Program | ComposedContract Scenario ProgramFacts StartupFacts deriving (Eq, Show)
+
+data StartupFacts = StartupFacts
+  { startupRecord :: F.Sha256, startupImageDigest :: F.Sha256, startupSymbols :: F.Sha256
+  , startupSource :: F.Sha256, startupImage :: Span, startupEntry :: Guest, startupHandoff :: Guest
+  , startupTarget :: Guest, startupArgument :: Guest, startupSecondary :: Guest
+  , startupSecondaryImage :: F.Sha256, startupSecondarySymbols :: F.Sha256, startupSecondarySource :: F.Sha256
+  } deriving (Eq, Show)
+
+isComposed :: Contract -> Bool
+isComposed ComposedContract {} = True
+isComposed Contract {} = False
+
+contractParts :: Contract -> (Scenario, Program, Maybe StartupFacts)
+contractParts (Contract scenario program) = (scenario, program, Nothing)
+contractParts (ComposedContract scenario facts startup) = (scenario, Program OwnedProgram facts, Just startup)
 
 budget :: Word64
 budget = 50000000
@@ -162,8 +176,8 @@ guestWord :: Guest -> Word32
 guestWord (Guest value) = value
 
 contractValue :: Contract -> Value
-contractValue (Contract scenario (Program kind facts)) = object
-  [ "schema" .= (4 :: Int), "budget" .= budget
+contractValue contract = object $
+  [ "schema" .= (if isComposed contract then 5 else 4 :: Int), "budget" .= budget
   , "scenario" .= object ["kind" .= scenarioName scenario]
   , "program" .= object
       [ "kind" .= programKindName kind
@@ -175,20 +189,65 @@ contractValue (Contract scenario (Program kind facts)) = object
       , "image" .= fmap spanValue (factImage facts), "refusal" .= fmap guestWord (factRefusal facts)
       , "forbid_fetch" .= map spanValue (factForbidFetch facts), "forbid_read" .= map spanValue (factForbidRead facts)
       ]
+  ] ++ ["startup" .= startupValue startup | Just startup <- [selected]]
+  where
+    (scenario, Program kind facts, selected) = contractParts contract
+
+startupValue :: StartupFacts -> Value
+startupValue facts = object
+  [ "kind" .= ("composed" :: String), "record1_sha256" .= F.sha256Hex (startupRecord facts)
+  , "image_sha256" .= F.sha256Hex (startupImageDigest facts), "symbols_sha256" .= F.sha256Hex (startupSymbols facts)
+  , "source_sha256" .= F.sha256Hex (startupSource facts), "image" .= spanValue (startupImage facts)
+  , "entry" .= guestWord (startupEntry facts), "handoff" .= guestWord (startupHandoff facts)
+  , "handoff_target" .= guestWord (startupTarget facts), "handoff_argument" .= guestWord (startupArgument facts)
+  , "secondary_entry" .= guestWord (startupSecondary facts)
+  , "secondary_image_sha256" .= F.sha256Hex (startupSecondaryImage facts)
+  , "secondary_symbols_sha256" .= F.sha256Hex (startupSecondarySymbols facts)
+  , "secondary_source_sha256" .= F.sha256Hex (startupSecondarySource facts)
   ]
+
+parseStartup :: Value -> Either String StartupFacts
+parseStartup value = do
+  row <- fields ["kind", "record1_sha256", "image_sha256", "symbols_sha256", "source_sha256", "image", "entry", "handoff"
+    , "handoff_target", "handoff_argument", "secondary_entry", "secondary_image_sha256", "secondary_symbols_sha256", "secondary_source_sha256"] value
+  kind <- get row "kind" :: Either String String
+  require (kind == "composed") "startup kind is not composed"
+  let digest name = get row name >>= F.parseSha256
+  facts <- StartupFacts <$> digest "record1_sha256" <*> digest "image_sha256" <*> digest "symbols_sha256" <*> digest "source_sha256"
+    <*> (field row "image" >>= parseSpan) <*> guestField row "entry" <*> guestField row "handoff"
+    <*> guestField row "handoff_target" <*> guestField row "handoff_argument" <*> guestField row "secondary_entry"
+    <*> digest "secondary_image_sha256" <*> digest "secondary_symbols_sha256" <*> digest "secondary_source_sha256"
+  let Span low high = startupImage facts
+      inside (Guest address) = fromIntegral address >= low && fromIntegral address < high && address .&. 3 == 0
+      Guest target = startupTarget facts
+  require (low == 0x6000 && high <= 0x10000 && high .&. 3 == 0
+    && startupEntry facts == Guest 0x6000 && inside (startupHandoff facts) && startupHandoff facts /= startupEntry facts)
+    "composed firststage sites or image extent differ"
+  require (target >= 0x40000 && target < 0x50000 && target .&. 3 == 0 && startupArgument facts == Guest argumentWord
+    && startupSecondary facts == Guest 0x10400) "composed handoff or secondary entry differs"
+  require (startupSource facts == startupSecondarySource facts) "composed images name different source DATs"
+  pure facts
 
 parseContract :: B.ByteString -> Either String Contract
 parseContract bytes = do
   require (B.length bytes <= 1024 * 1024) "loader-prefix contract exceeds 1 MiB"
   value <- decodeStrictIntegers bytes
-  row <- fields ["schema", "budget", "scenario", "program"] value
-  schema <- get row "schema" :: Either String Word32
-  require (schema == 4) "unsupported loader-prefix contract schema"
+  initial <- objectOf value
+  schema <- get initial "schema" :: Either String Word32
+  require (schema `elem` [4, 5]) "unsupported loader-prefix contract schema"
+  row <- fields (["schema", "budget", "scenario", "program"] ++ ["startup" | schema == 5]) value
   stated <- get row "budget"
   require (stated == budget) "loader-prefix contract budget differs"
   scenario <- field row "scenario" >>= parseScenarioObject
   program <- field row "program" >>= parseProgram
-  pure (Contract scenario program)
+  case schema of
+    4 -> pure (Contract scenario program)
+    _ -> do
+      startup <- field row "startup" >>= parseStartup
+      let Program kind facts = program
+      require (kind == OwnedProgram && maybe False (\(Span low _) -> low == 0x10400) (factImage facts))
+        "composed startup requires the owned secondary-plus-prefix image at 0x10400"
+      pure (ComposedContract scenario facts startup)
 
 parseScenarioObject :: Value -> Either String Scenario
 parseScenarioObject value = fields ["kind"] value >>= \row -> get row "kind" >>= parseScenario
@@ -264,12 +323,14 @@ deriveOwnedFacts bin symbolBytes (StagedImages record loader) = do
         let low = F.symbolAddress found
         require (F.symbolSize found > 0 && low .&. 3 == 0) (name ++ " has no size or is not word aligned")
         pure (low, low + F.symbolSize found)
+  start <- at "__secondary_stage_start"
   entry <- at "xm1_secondary_entry"
   end <- at "__secondary_stage_end"
-  require (entry == 0x10400 && not (B.null bin) && B.length bin `mod` 4 == 0 && entry + fromIntegral (B.length bin) == end)
-    "owned image does not span [xm1_secondary_entry, __secondary_stage_end)"
-  require (B.take (B.length bin) (B.drop (fromIntegral entry - 0x10000) record) == bin) "staged record 2 does not hold the owned image"
-  let code = CodeImage entry bin
+  require (start == 0x10400 && entry >= start && entry < end && not (B.null bin) && B.length bin `mod` 4 == 0
+    && toInteger start + toInteger (B.length bin) == toInteger end)
+    "owned image does not span [__secondary_stage_start, __secondary_stage_end)"
+  require (B.take (B.length bin) (B.drop (fromIntegral start - 0x10000) record) == bin) "staged record 2 does not hold the owned image"
+  let code = CodeImage start bin
       wordAt location = maybe (Left ("owned word outside the image at " ++ hex location)) Right (imageWord code location)
       decodeExtent (low, high) = mapM (\location -> (,) location . A32.decode location <$> wordAt location) [low, low + 4 .. high - 4]
   handoff <- at "xm1_secondary_handoff_vector"
@@ -308,7 +369,7 @@ deriveOwnedFacts bin symbolBytes (StagedImages record loader) = do
   let facts = ProgramFacts
         { factRecord = recordDigest, factLoader = loaderDigest, factHandoff = Guest handoff, factEntry = Guest prefixEntry
         , factLoad = Guest load, factPostLoad = Guest (call + 4), factLoaded = RegisterIndex 0, factPeriod = period
-        , factImage = Just (Span (fromIntegral entry) (fromIntegral end)), factRefusal = refusal
+        , factImage = Just (Span (fromIntegral start) (fromIntegral end)), factRefusal = refusal
         , factForbidFetch = sort fetchSpans, factForbidRead = sort readSpans
         }
   checkFacts OwnedProgram facts
@@ -333,7 +394,10 @@ forbidSpans rows prefix = do
 data StagedImages = StagedImages {stagedRecord :: B.ByteString, stagedLoader :: B.ByteString}
 
 stagedImages :: B.ByteString -> Either String StagedImages
-stagedImages dat = do
+stagedImages = stagedImagesFor record1Entry
+
+stagedImagesFor :: Word32 -> B.ByteString -> Either String StagedImages
+stagedImagesFor selectedEntry dat = do
   parsed <- U.parseContainer dat
   let mainStart = U.stagingLength + fromIntegral (U.hMainOffset (U.parsedHeader parsed))
       media start size = B.map complement (B.take size (B.drop start dat))
@@ -343,7 +407,7 @@ stagedImages dat = do
   require (U.segLoad segment == 0xd0000 && U.segSize segment == 0xdaa0) "loader-B segment extent differs"
   let flash = mainStart + fromIntegral (U.segFlash segment)
   require (mainStart + F.recordSlotOffset F.SecondRecord + 0x4c80 <= B.length dat && flash + 0xdaa0 <= B.length dat) "DAT does not hold record 2 and loader B"
-  require (U.mediaWordAt dat (mainStart + F.firstRecordSlotOffset + F.resetVectorWordOffset) == record1Entry) "record-1 reset literal differs from 0x1800"
+  require (U.mediaWordAt dat (mainStart + F.firstRecordSlotOffset + F.resetVectorWordOffset) == selectedEntry) "record-1 reset literal differs from the selected contract"
   pure (StagedImages (media (mainStart + F.recordSlotOffset F.SecondRecord) 0x4c80) (media flash 0xdaa0))
 
 -- | Staged equals the reference (the source DAT or its completion control)
@@ -353,6 +417,7 @@ verifyStagedOwned :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteStrin
 verifyStagedOwned reference staged bin symbolBytes = do
   rows <- F.parseSymbols symbolBytes
   entry <- F.symbolAddress <$> F.lookupSymbol rows "xm1_secondary_entry"
+  start <- F.symbolAddress <$> F.lookupSymbol rows "__secondary_stage_start"
   prefixEntry <- F.symbolAddress <$> F.lookupSymbol rows "xm1_loader_prefix_entry"
   referenceParsed <- U.parseContainer reference
   stagedParsed <- U.parseContainer staged
@@ -362,7 +427,7 @@ verifyStagedOwned reference staged bin symbolBytes = do
     "staged DAT length or main offset differs"
   let mainStart = U.stagingLength + fromIntegral (U.hMainOffset (U.parsedHeader referenceParsed))
       slot = mainStart + F.recordSlotOffset F.SecondRecord
-      load = fromIntegral entry - F.recordGuestBase F.SecondRecord
+      load = fromIntegral start - F.recordGuestBase F.SecondRecord
   stock <- F.armEntry 0xd0020
   published <- F.armEntry prefixEntry
   publication <- F.loaderEntryPublication (F.LoaderId 1) 0xd0000 stock published
@@ -374,6 +439,49 @@ verifyStagedOwned reference staged bin symbolBytes = do
   require (B.map complement (B.take (B.length bin) (B.drop (slot + load) staged)) == bin) "staged record-2 image differs from the linked image"
   require (U.mediaWordAt staged header == prefixEntry) "staged loader-B header does not publish the prefix entry"
   stagedImages staged
+
+deriveComposedContract :: Scenario -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Guest -> Either String Contract
+deriveComposedContract scenario original staged firstBin firstSymbols secondBin secondSymbols (Guest argument) = do
+  require (argument == argumentWord) "composed image-4 argument differs from 0x69cdf8"
+  reference <- case scenarioControl scenario of
+    Nothing -> Right original
+    Just control -> C.controlBytes <$> C.buildCompletionControl control original
+  firstRows <- F.parseSymbols firstSymbols
+  secondRows <- F.parseSymbols secondSymbols
+  plan <- Stage.composedPlans firstBin firstRows secondBin secondRows
+  sourceParsed <- U.parseContainer reference
+  finalParsed <- U.parseContainer staged
+  F.verifyComposedRecords plan sourceParsed finalParsed
+  images <- stagedImagesFor 0x6000 staged
+  facts <- deriveOwnedFacts secondBin secondSymbols images
+  let firstPlan = F.composedFirstPlan plan
+      firstStart = F.recordGuestBase F.FirstRecord + F.slotOffsetBytes (F.planLoadOffset firstPlan)
+      firstEntry = F.armEntryAddress (F.planEntry firstPlan)
+      firstEnd = firstStart + B.length firstBin
+      at rows name = F.symbolAddress <$> F.lookupSymbol rows name
+      digest = F.parseSha256 . sha256Hex
+  handoff <- at firstRows "xm1_first_stage_handoff_vector"
+  require (leWordAt firstBin (fromIntegral handoff - firstStart) == Right 0xe1a0f002)
+    "firststage handoff vector is not MOV PC, R2"
+  secondary <- at secondRows "xm1_secondary_entry"
+  record <- B.map complement <$> F.recordSlotBytes F.FirstRecord (U.parsedParts finalParsed)
+  loaderA <- case filter ((== 0) . U.segId) (U.partSegments (U.parsedParts finalParsed)) of
+    [segment] -> do
+      let offset = fromIntegral (U.segFlash segment)
+          size = fromIntegral (U.segSize segment)
+          bytes = U.partPreTable (U.parsedParts finalParsed)
+      require (U.segLoad segment == 0x40000 && offset + size <= B.length bytes && size >= 0x10)
+        "composed loader-A extent differs"
+      pure (B.map complement (B.take size (B.drop offset bytes)))
+    _ -> Left "composed loader-A segment is not unique"
+  target <- leWordAt loaderA 0xc
+  startup <- StartupFacts <$> digest record <*> digest firstBin <*> digest firstSymbols <*> digest original
+    <*> pure (Span (fromIntegral firstStart) (fromIntegral firstEnd)) <*> pure (Guest firstEntry) <*> pure (Guest handoff)
+    <*> pure (Guest target) <*> pure (Guest argument) <*> pure (Guest secondary)
+    <*> digest secondBin <*> digest secondSymbols <*> digest original
+  checked <- parseStartup (startupValue startup)
+  require (firstStart == 0x6000 && secondary == 0x10400) "composed source-defined image starts or entries differ"
+  pure (ComposedContract scenario facts checked)
 
 -- | The two strings are equal outside the sorted, disjoint (offset, length) extents.
 equalOutside :: [(Int, Int)] -> B.ByteString -> B.ByteString -> Bool
@@ -419,7 +527,9 @@ data Row = Row
 
 data ClassState = ClassState Span [Access] deriving (Eq, Ord, Show)
 
-data ClassifiedWatch = ClassifiedWatch [ClassState] [Row] deriving (Eq, Show)
+data ClassifiedViews = ObserveViews | FixedViews deriving (Eq, Show)
+
+data ClassifiedWatch = ClassifiedWatch ClassifiedViews [ClassState] [Row] deriving (Eq, Show)
 
 data Mode = Allow | Forbid deriving (Eq, Ord, Show, Enum, Bounded)
 
@@ -448,12 +558,14 @@ data ScopedWatch = ScopedWatch
   } deriving (Eq, Show)
 
 data Label
-  = Record1Entry | Record2Handoff | PrefixEntry | PostLoad | HeldGate | DelayEntry | DelayRelease | CompletionStore | PrefixExit | Refusal
+  = Record1Entry | FirstStageHandoff | SecondaryEntry | Record2Handoff | PrefixEntry | PostLoad | HeldGate | DelayEntry | DelayRelease | CompletionStore | PrefixExit | Refusal
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 labelName :: Label -> String
 labelName label = case label of
   Record1Entry -> "record-1-entry"
+  FirstStageHandoff -> "first-stage-handoff"
+  SecondaryEntry -> "secondary-entry"
   Record2Handoff -> "record-2-handoff"
   PrefixEntry -> "prefix-entry"
   PostLoad -> "post-load"
@@ -466,7 +578,7 @@ labelName label = case label of
 
 labelCore :: Label -> Core
 labelCore label
-  | label `elem` [Record1Entry, HeldGate, DelayEntry, DelayRelease, CompletionStore] = Core0
+  | label `elem` [Record1Entry, FirstStageHandoff, HeldGate, DelayEntry, DelayRelease, CompletionStore] = Core0
   | otherwise = Core1
 
 -- | ATCM and BTCM region registers of core 0, then core 1.
@@ -517,7 +629,7 @@ data Receipt = Receipt
   , receiptError :: Maybe String, receiptMachineFailure :: Maybe String, receiptIdentities :: (Word32, Word32)
   , receiptBoot :: ClassifiedWatch, receiptLoaded :: ClassifiedWatch, receiptScoped :: Maybe ScopedWatch, receiptStops :: [Stop]
   , receiptBindings :: Maybe Bindings, receiptStore :: Maybe CommittedStore, receiptEndpoint :: Maybe Endpoint
-  , receiptPrimary :: Maybe Primary
+  , receiptPrimary :: Maybe Primary, receiptStartup :: Maybe StartupFacts
   } deriving (Eq, Show)
 
 -- | A receipt accepted under its contract.
@@ -533,10 +645,12 @@ parseReceipt :: B.ByteString -> Either String Receipt
 parseReceipt bytes = do
   require (B.length bytes <= maxReceiptBytes) "loader-prefix receipt exceeds 16 MiB"
   value <- decodeStrictIntegers bytes
-  row <- fields ["schema", "scenario", "program", "result", "error", "machine_failure", "instructions", "cp14_identities"
-    , "boot_watch", "loaded_watch", "scoped_watch", "stops", "bindings", "completion", "endpoint", "final_primary"] value
-  schema <- get row "schema" :: Either String Word32
-  require (schema == 4) "unsupported loader-prefix receipt schema"
+  initial <- objectOf value
+  schema <- get initial "schema" :: Either String Word32
+  require (schema `elem` [4, 5]) "unsupported loader-prefix receipt schema"
+  row <- fields (["schema", "scenario", "program", "result", "error", "machine_failure", "instructions", "cp14_identities"
+    , "boot_watch", "loaded_watch", "scoped_watch", "stops", "bindings", "completion", "endpoint", "final_primary"]
+    ++ ["startup" | schema == 5]) value
   scenario <- field row "scenario" >>= parseScenarioObject
   program <- get row "program" >>= closed programKindName "loader-prefix program"
   result <- get row "result" >>= \text -> case text :: String of
@@ -552,6 +666,7 @@ parseReceipt bytes = do
     <*> (field row "scoped_watch" >>= nullable parseScoped) <*> pure stops
     <*> (field row "bindings" >>= nullable parseBindings) <*> (field row "completion" >>= nullable parseStore)
     <*> (field row "endpoint" >>= nullable parseEndpoint) <*> (field row "final_primary" >>= nullable parsePrimary)
+    <*> (if schema == 5 then Just <$> (field row "startup" >>= parseStartup) else pure Nothing)
 
 twoOf :: String -> [a] -> Either String (a, a)
 twoOf _ [a, b] = Right (a, b)
@@ -615,9 +730,12 @@ parseClassified :: Value -> Either String ClassifiedWatch
 parseClassified value = do
   row <- fields ["enabled", "ranges", "records", "violation", "classes", "views"] value
   noViolation row
-  views <- get row "views" :: Either String String
-  require (views == "observe") "classified watch views differ"
-  ClassifiedWatch <$> (field row "classes" >>= parseClasses) <*> (field row "records" >>= json >>= mapM parseRow)
+  stated <- get row "views" :: Either String String
+  views <- case stated of
+    "observe" -> Right ObserveViews
+    "fixed" -> Right FixedViews
+    _ -> Left "unknown classified watch views"
+  ClassifiedWatch views <$> (field row "classes" >>= parseClasses) <*> (field row "records" >>= json >>= mapM parseRow)
 
 parseScopeSpan :: Value -> Either String ScopeSpan
 parseScopeSpan value = do
@@ -766,13 +884,31 @@ expectedClasses scenario = sort $
   , ClassState loaderACompletion writes, ClassState loaderALiteral writes ]
     ++ [ClassState veneerSpan writes | scenario == Delayed]
 
-expectedConfinement :: ProgramKind -> Word64 -> ScopeSpan -> [Confinement]
-expectedConfinement kind slots window = sort $
+secondaryFetch, secondaryRead :: [Span]
+secondaryFetch = [Span low high | S.Interval low high <- S.forbidFetchIntervals]
+secondaryRead = [Span low high | S.Interval low high <- S.forbidReadIntervals]
+
+startupClasses :: Maybe StartupFacts -> [ClassState]
+startupClasses Nothing = []
+startupClasses (Just facts) =
+  [ClassState (startupImage facts) writes, ClassState (Span 0 0x40) writes, ClassState (Span 0x1800 0x1804) [CpuFetch]]
+    ++ [ClassState span' [CpuFetch] | span' <- secondaryFetch]
+    ++ [ClassState span' [CpuRead] | span' <- secondaryRead]
+
+expectedConfinement :: ProgramKind -> Maybe StartupFacts -> Word64 -> ScopeSpan -> [Confinement]
+expectedConfinement kind selected slots window = sort $
   [ Confinement [1] CpuWrite Allow (sort [PhysicalSpan zeroRange, PhysicalSpan (Span slots (slots + 28)), window])
-  , Confinement [0] CpuWrite Forbid [PhysicalSpan zeroRange] ]
+  , Confinement [0] CpuWrite Forbid (sort (PhysicalSpan zeroRange : immutable)) ]
     ++ case kind of
       RetainedProgram -> []
-      OwnedProgram -> [Confinement [1] CpuFetch Forbid (map PhysicalSpan replacedCode), Confinement [1] CpuRead Forbid [PhysicalSpan entryPool]]
+      OwnedProgram ->
+        [ Confinement [1] CpuFetch Forbid (sort (map PhysicalSpan replacedCode ++ fetches))
+        , Confinement [1] CpuRead Forbid (sort (PhysicalSpan entryPool : reads)) ]
+        ++ [rule | isJust selected, rule <- [Confinement [0] CpuFetch Forbid fetches, Confinement [0] CpuRead Forbid reads]]
+  where
+    immutable = [PhysicalSpan span' | Just startup <- [selected], span' <- [startupImage startup, Span 0 0x40]]
+    fetches = [PhysicalSpan span' | isJust selected, span' <- Span 0x1800 0x1804 : secondaryFetch]
+    reads = [PhysicalSpan span' | isJust selected, span' <- secondaryRead]
 
 -- | A physical CPU write's core, PC, physical address and preimage.
 cpuWrite :: Row -> Maybe (Core, Word32, Word64, B.ByteString)
@@ -831,14 +967,17 @@ requiredLabels scenario = [Record1Entry, Record2Handoff, PrefixEntry] ++ case sc
   _ -> [CompletionStore, PrefixExit]
 
 validateReceipt :: Contract -> Receipt -> Either String ValidatedReceipt
-validateReceipt contract@(Contract scenario (Program kind facts)) receipt = do
+validateReceipt contract receipt = do
+  let (scenario, Program kind facts, selected) = contractParts contract
+  require (receiptStartup receipt == selected) "receipt startup identity or schema differs from its contract"
   require (receiptScenario receipt == scenario && receiptProgram receipt == kind) "receipt scenario or program differs from its contract"
   let stops = receiptStops receipt
   require (Refusal `notElem` map stopLabel stops) "core-1 prefix refusal reached"
   require (receiptResult receipt == Passed && isNothing (receiptError receipt) && isNothing (receiptMachineFailure receipt))
     ("loader-prefix receipt did not pass: " ++ fromMaybe "" (receiptError receipt))
   require (receiptIdentities receipt == (0x4003, 0x5003)) "CP14 identities differ"
-  require (sort [stopLabel stop | stop <- stops, stopLabel stop /= PostLoad] == sort (requiredLabels scenario))
+  require (sort [stopLabel stop | stop <- stops, stopLabel stop /= PostLoad]
+    == sort (requiredLabels scenario ++ [label | isJust selected, label <- [FirstStageHandoff, SecondaryEntry]]))
     "stop labels differ from the scenario"
   forM_ stops $ \stop -> require (stopCore stop == labelCore (stopLabel stop)) "stop has the wrong core"
   let pairs = zip stops (drop 1 stops)
@@ -849,21 +988,37 @@ validateReceipt contract@(Contract scenario (Program kind facts)) receipt = do
     "counter snapshots decreased between stops"
   scoped <- maybe (Left "scoped watch evidence absent") Right (receiptScoped receipt)
   bindings <- maybe (Left "handoff bindings absent") Right (receiptBindings receipt)
-  let ClassifiedWatch bootClasses bootRows = receiptBoot receipt
-      ClassifiedWatch loadedClasses loadedRows = receiptLoaded receipt
+  let ClassifiedWatch bootViews bootClasses bootRows = receiptBoot receipt
+      ClassifiedWatch loadedViews loadedClasses loadedRows = receiptLoaded receipt
+  require (bootViews == ObserveViews && loadedViews == (if isJust selected then FixedViews else ObserveViews))
+    "classified watch views differ from the startup role"
   require (bootClasses == [ClassState cellSpan writes] && null bootRows) "boot watch classes differ or it recorded a write"
-  require (loadedClasses == sort (ClassState cellSpan writes : [ClassState veneerSpan writes | scenario == Delayed])) "loaded watch classes differ"
+  require (loadedClasses == sort (ClassState cellSpan writes : [ClassState veneerSpan writes | scenario == Delayed] ++ startupClasses selected))
+    "loaded watch classes differ"
   case loadedRows of
     [row] | Just (Core0, 0x1fec, physical, before) <- cpuWrite row, physical == completionCell, rowValue row == Just 0
       , before == B.replicate 4 0 -> pure ()
     _ -> Left "loaded watch does not hold exactly record 1's zero write of the completion cell"
   record1 <- uniqueStop stops Record1Entry
-  require (stopAddress record1 == Guest record1Entry && take 1 stops == [record1] && isNothing (stopCounter record1)) "record-1 entry is not the first stop"
+  let selectedEntry = maybe (Guest record1Entry) startupEntry selected
+  require (stopAddress record1 == selectedEntry && take 1 stops == [record1] && isNothing (stopCounter record1)) "record-1 entry is not the first stop"
   handoff <- uniqueStop stops Record2Handoff
   require (stopAddress handoff == factHandoff facts && masked (stopCpsr handoff)) "handoff site or mode differs"
   require (r3 (stopRegisters handoff) == guestWord (factEntry facts) && r0 (stopRegisters handoff) == argumentWord && stopCompletion handoff == 0)
     "handoff target, argument or completion cell differs"
   require (isNothing (stopCounter handoff)) "handoff stop carries a scoped counter"
+  forM_ selected $ \startup -> do
+    firstHandoff <- uniqueStop stops FirstStageHandoff
+    secondary <- uniqueStop stops SecondaryEntry
+    let beforeHandoff = takeWhile ((/= Record2Handoff) . stopLabel) stops
+    require (firstHandoff `elem` beforeHandoff && secondary `elem` beforeHandoff)
+      "composed chain lacks firststage handoff or secondary entry before record-2 handoff"
+    require (stopAddress firstHandoff == startupHandoff startup && masked (stopCpsr firstHandoff)
+      && r2 (stopRegisters firstHandoff) == guestWord (startupTarget startup)
+      && r0 (stopRegisters firstHandoff) == guestWord (startupArgument startup)
+      && isNothing (stopCounter firstHandoff)) "firststage handoff context differs"
+    require (stopAddress secondary == startupSecondary startup && masked (stopCpsr secondary) && isNothing (stopCounter secondary))
+      "secondary entry context differs"
   window <- stackWindow handoff
   require (bindingStackWindow bindings == window) "bound entry-stack window differs from the handoff SP and TCM"
   zeroPhysical <- through (bindingZeroMap bindings) 0x400ddaa0 0x15980
@@ -873,6 +1028,7 @@ validateReceipt contract@(Contract scenario (Program kind facts)) receipt = do
   forM_ (dropWhile (/= handoff) stops) $ \stop -> require (stopTcm stop == stopTcm handoff) "TCM registers changed after the handoff"
   -- Identity and 0x40000000-alias views of every guarded span, on either core.
   let guardedViews = [view | guardedSpan <- [cellSpan, record2, loaderB, loaderACompletion, loaderALiteral] ++ [veneerSpan | scenario == Delayed]
+                               ++ [span' | ClassState span' _ <- startupClasses selected]
                            , view <- [guardedSpan, aliased guardedSpan]]
       aliased (Span start end) = Span (start + 0x40000000) (end + 0x40000000)
       meets (Span start end) (Span otherStart otherEnd) = start < otherEnd && otherStart < end
@@ -892,9 +1048,9 @@ validateReceipt contract@(Contract scenario (Program kind facts)) receipt = do
   require (snd (stopCounts entry) == snd (stopCounts handoff) + 1) "prefix entry is not the core-1 instruction after the handoff"
   require (stopCounter entry == Just (CounterTotals 0 0 0) && stopCursor entry == Just 0)
     "scoped watch was not active and empty at the prefix entry"
-  require (scopedClasses scoped == expectedClasses scenario) "scoped watch classes differ"
+  require (scopedClasses scoped == sort (expectedClasses scenario ++ startupClasses selected)) "scoped watch classes differ"
   slots <- through (bindingSlotsMap bindings) (fromIntegral vectorBase + 0x24) 28
-  require (scopedConfinement scoped == expectedConfinement kind slots (bindingStackWindow bindings)) "scoped confinement rules differ"
+  require (scopedConfinement scoped == expectedConfinement kind selected slots (bindingStackWindow bindings)) "scoped confinement rules differ"
   counter <- case scopedCounters scoped of
     [found] | counterCores found == [1] && counterCell found == cellSpan && counterHeadBound found == headBound
       && counterTailBound found == tailBound -> Right found
@@ -1021,8 +1177,8 @@ acceptCompletion scenario facts expected scoped counter stops receipt handoff = 
 -- state, frame, vectors, zero range, stored value and coverage agree.
 compareReceipts :: (Contract, Receipt) -> (Contract, Receipt) -> Either String ()
 compareReceipts (retainedContract, retainedReceipt) (ownedContract, ownedReceipt) = do
-  let Contract retainedScenario (Program retainedKind _) = retainedContract
-      Contract ownedScenario (Program ownedKind _) = ownedContract
+  let (retainedScenario, Program retainedKind _, _) = contractParts retainedContract
+      (ownedScenario, Program ownedKind _, _) = contractParts ownedContract
   require (retainedKind == RetainedProgram && ownedKind == OwnedProgram) "comparison requires a retained and an owned contract"
   require (retainedScenario == ownedScenario) "compared contracts differ in scenario"
   ValidatedReceipt _ retained <- validateReceipt retainedContract retainedReceipt

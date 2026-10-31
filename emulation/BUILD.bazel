@@ -553,6 +553,7 @@ haskell_library(
         "//host:json",
         "//host:update-container",
         "//host/firmware:bank-allowlist",
+        "//host/firmware:startup-stage-contract",
     ],
 )
 
@@ -577,6 +578,7 @@ haskell_test(
         ":first-stage-witness-lib",
         ":loader-prefix-witness-lib",
         ":peer-stage-witness-lib",
+        ":peer-startup-witness-lib",
         ":poll-period-lib",
         "//host:aeson",
         "//host:base",
