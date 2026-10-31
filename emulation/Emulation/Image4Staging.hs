@@ -44,7 +44,7 @@ runTool root executable arguments = do
         { cwd = Just root
         , env = Just (("TMPDIR",root) : filter ((/= "TMPDIR") . fst) inherited)
         }
-  (stopped,status,_,errors) <- H.runBoundedProcess 600000000 (1024*1024) process B.empty
+  (stopped,status,_,errors) <- H.runBoundedProcess (H.ProcessTimeoutMicros 600000000) (H.OutputCapBytes (1024*1024)) process B.empty
   H.ensure (not stopped && status == ExitSuccess) ("image4 staging tool failed: " ++ C.unpack errors)
 
 validateScratchDirectory :: FilePath -> IO ScratchDirectory
