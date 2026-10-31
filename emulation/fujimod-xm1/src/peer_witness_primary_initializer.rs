@@ -15,9 +15,6 @@ const ROM_SHA: &str = "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec
 #[serde(rename_all = "kebab-case")]
 enum PrimaryRole { RetainedPrimary }
 
-#[derive(Default)]
-enum InputAdmission { #[default] Pending, Verified }
-
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::peer_witness) struct PrimaryContract {
@@ -27,17 +24,13 @@ pub(in crate::peer_witness) struct PrimaryContract {
     loader_a_sha256: Sha256Digest,
     run_sha256: Sha256Digest,
     boot_rom_sha256: Sha256Digest,
-    #[serde(skip)]
-    inputs: InputAdmission,
 }
 
 impl PrimaryContract {
-    pub(in crate::peer_witness) fn validate_inputs(&mut self, run: &[u8], update: &[u8], boot_rom: &[u8]) -> Result<(), String> {
-        self.inputs = InputAdmission::Pending;
-        require(Sha256Digest::of(update) == self.source_sha256 && Sha256Digest::of(run) == self.run_sha256
-            && Sha256Digest::of(boot_rom) == self.boot_rom_sha256, "primary observation whole input identities differ")?;
-        self.inputs = InputAdmission::Verified;
-        Ok(())
+    pub(in crate::peer_witness) fn admit(&self, machine: &Machine) -> Result<(), String> {
+        let inputs = machine.session.source_inputs().ok_or("primary session lacks whole-input provenance")?;
+        require(inputs.update.0 == self.source_sha256.0 && inputs.run.0 == self.run_sha256.0
+            && inputs.boot_rom.0 == self.boot_rom_sha256.0, "primary session whole input identities differ")
     }
 
     fn identity(&self) -> ContractIdentityPrimary {
@@ -96,7 +89,7 @@ struct ContractIdentityPrimary {
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum ObservationStatus { Observed, Absent, Unreachable }
+enum ObservationStatus { Observed, Absent, Refused }
 
 #[derive(Serialize)]
 struct PrimaryReceipt<'a> {
@@ -190,7 +183,7 @@ fn stop(machine: &mut Machine, boundary: PrimaryBoundary, boundaries: &mut Vec<B
     machine.require_running()?;
     let hits = &machine.traces.hits[previous..];
     if hits.is_empty() {
-        require(machine.instructions() == BUDGET, "primary boundary unreachable before finite deadline")?;
+        require(machine.instructions() == BUDGET, "primary boundary stopped before finite deadline")?;
         return Ok(None);
     }
     require(hits.len() == 1 && hits[0].core == 0 && hits[0].site == boundary.label()
@@ -298,7 +291,7 @@ pub(in crate::peer_witness) fn run(mut machine: Machine, contract: &PrimaryContr
     let mut identities = [Identity(0); 2];
     let mut boundaries = Vec::with_capacity(4);
     let outcome = (|| {
-        require(matches!(contract.inputs, InputAdmission::Verified), "primary complete inputs were not admitted")?;
+        contract.admit(&machine)?;
         require(wait::counts(&machine)?.0 == [0, 0] && !machine.traces.armed() && machine.traces.hits.is_empty(),
             "primary observation must arm before either core executes")?;
         let (maps, configured) = bindings(&machine.document)?;
@@ -312,7 +305,7 @@ pub(in crate::peer_witness) fn run(mut machine: Machine, contract: &PrimaryContr
     let (status, primary, outcome) = match outcome {
         Ok(Some(receipt)) => (ObservationStatus::Observed, Some(receipt), Ok(())),
         Ok(None) => (ObservationStatus::Absent, None, Err("primary observation absent at finite instruction deadline".to_owned())),
-        Err(error) => (ObservationStatus::Unreachable, None, Err(error)),
+        Err(error) => (ObservationStatus::Refused, None, Err(error)),
     };
     let receipt = PrimaryReceipt { schema: 8, role: PrimaryRole::RetainedPrimary,
         contract: contract.identity(),

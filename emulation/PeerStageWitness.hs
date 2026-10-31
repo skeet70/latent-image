@@ -944,7 +944,7 @@ main = do
           (_, _, contract) <- primaryInitializerContract root firmwarePath run rom
           consumePrimaryInitializer (resolve root receipt) contract
         PreparePrimaryInitializer firmwarePath fflzd output run rom execution -> do
-          case execution of
-            PreparePrimaryOnly -> pure ()
-            LaunchPrimary _ -> slotPolicyFromEnvironment >>= \policy -> reexecInSlot policy args
+          enterSlot args $ case execution of
+            PreparePrimaryOnly -> PrepareOnly
+            LaunchPrimary driver -> Launch driver run rom
           preparePrimaryInitializer root firmwarePath fflzd output run rom execution

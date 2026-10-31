@@ -337,6 +337,24 @@ fn primary_initializer_requires_retained_source_and_whole_input_bindings() {
     ] {
         assert!(PeerContract::parse(invalid.as_bytes()).is_err());
     }
-    let mut contract = PeerContract::parse(valid.as_bytes()).expect("retained primary contract");
-    assert!(contract.validate_inputs(b"run", b"not the source DAT", b"ROM").is_err());
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn primary_constructor_refuses_synthetic_inputs_accepted_by_existing_peer_mode() {
+    use fujimod_xm1::run::{RunDocument, ValidatedUpdate};
+    fujimod_emulator_exr2_board::register_board_builder();
+    fujimod_emulator_models::register();
+    let run = include_bytes!("../data/xm1-150.json");
+    let document = RunDocument::parse(run).expect("public natural-reset run");
+    let update = ValidatedUpdate(vec![0xff; document.update_flash_offset + 2048]);
+    let mut rom = vec![0; document.boot_rom.bytes];
+    for instruction in rom.chunks_exact_mut(4) {
+        instruction.copy_from_slice(&0xeafffffe_u32.to_le_bytes());
+    }
+    let primary = PeerContract::parse(primary_initializer().as_bytes()).expect("retained primary contract");
+    assert!(primary.open_machine(run, &update, &rom).is_err());
+    let natural = PeerContract::parse(br#"{"schema":1,"budget":1}"#).expect("natural peer contract");
+    let machine = natural.open_machine(run, &update, &rom).expect("synthetic inputs for existing peer mode");
+    assert_eq!(machine.instructions(), 0);
 }

@@ -33,7 +33,7 @@ newtype Instructions = Instructions Word64 deriving (Eq, Ord)
 newtype Tick = Tick Word64 deriving (Eq, Ord)
 newtype AccessBytes = AccessBytes B.ByteString deriving (Eq)
 data Role = RetainedPrimary deriving (Eq)
-data Status = Observed | Absent | Unreachable deriving (Eq, Show)
+data Status = Observed | Absent | Refused deriving (Eq, Show)
 data Result = Passed | Failed deriving (Eq)
 data Boundary = Caller | Before | Entered | After deriving (Eq, Ord)
 data Stop = Stop Boundary Context deriving (Eq)
@@ -360,7 +360,7 @@ parseReceipt bytes = do
   status <- case statusName of
     "observed" -> Right Observed
     "absent" -> Right Absent
-    "unreachable" -> Right Unreachable
+    "refused" -> Right Refused
     _ -> Left "unsupported primary status"
   failure <- get row "error"
   machineFailure <- get row "machine_failure"
@@ -387,7 +387,7 @@ parseReceipt bytes = do
         "primary boundary contexts or final context differ from the observation"
     Absent -> require (result == Failed && failure /= Nothing && machineFailure == Nothing && instructions == budget
       && length boundaries < 4 && absent primary) "primary absence is not a finite unobserved deadline"
-    Unreachable -> require (result == Failed && failure /= Nothing && absent primary) "primary unreachable result carries accepted evidence"
+    Refused -> require (result == Failed && failure /= Nothing && absent primary) "primary refused result carries accepted evidence"
   pure (Receipt receiptIdentity result status failure machineFailure (Instructions instructions) identities final boundaries primary)
   where
     absent Nothing = True
@@ -418,12 +418,13 @@ validateReceipt contract (Receipt receiptIdentity result status failure machineF
       Context outgoingPc outgoing outgoingSp outgoingLr outgoingCpsr outgoingCounts outgoingTcm = afterContext observation
       FramePremise (Guest top) (Guest expectedSp) (Guest expectedFp) = framePremise contract
       Instructions leafCount = leafInstructions contract
+      admittedCpsr value = value .&. 0x07f0feff == 0xd3
   require (callerPc == 0x409ac && callerSp == top && caller !! 4 == top && callerLr == 0x400c0 && caller !! 0 == 0x69cdf8
-    && callerCpsr .&. 0x010002ff == 0xd3 && callerTcm == tcm)
+    && admittedCpsr callerCpsr && callerTcm == tcm)
     "primary natural caller stack or entry argument differs from source"
   require (incomingPc == 0x409dc && sp == expectedSp && incoming !! 11 == expectedFp && incoming !! 4 == caller !! 0
     && incoming !! 5 == caller !! 5 && take 5 (drop 6 incoming) == take 5 (drop 6 caller)
-    && incomingLr == 0x409dc && cpsr .&. 0x010002ff == 0xd3 && callerCpsr .&. 0x0fffffff == cpsr .&. 0x0fffffff)
+    && incomingLr == 0x409dc && admittedCpsr cpsr && callerCpsr .&. 0x0fffffff == cpsr .&. 0x0fffffff)
     "primary pre-BL caller frame or preserved registers differ"
   require (enteringPc == 0x40430 && entering == incoming && enteringSp == sp && enteringLr == 0x409e0
     && enteringCpsr == cpsr && enteringTcm == tcm) "primary BL changed state beyond PC/LR"

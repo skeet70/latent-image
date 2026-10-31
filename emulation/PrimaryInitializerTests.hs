@@ -55,14 +55,14 @@ assert label condition = unless condition (fail label)
 main :: IO ()
 main = do
   let finite = nonobservation "absent" 50000000
-      unreachable = nonobservation "unreachable" 12
+      refused = nonobservation "refused" 12
       callerStop = object ["boundary" .= ("caller" :: String), "context" .= replace "pc" (Number 0x409ac) (context 10)]
       finiteAfterCaller = replace "boundaries" (toJSON [callerStop]) finite
   case parse finite of
     Right receipt -> assert "finite absence remains distinct" (receiptStatus receipt == Absent)
     Left problem -> fail problem
-  case parse unreachable of
-    Right receipt -> assert "unreachable remains distinct" (receiptStatus receipt == Unreachable)
+  case parse refused of
+    Right receipt -> assert "refusal remains distinct" (receiptStatus receipt == Refused)
     Left problem -> fail problem
   case parse finiteAfterCaller of
     Right receipt -> assert "partial caller progress remains finite absence" (receiptStatus receipt == Absent)
@@ -73,6 +73,7 @@ main = do
     [ nonobservation "absent" 49999999
     , nonobservation "absent" 50000001
     , nonobservation "unknown" 50000000
+    , nonobservation "unreachable" 12
     , replace "status" (String "observed") finite
     , replace "result" (String "passed") finite
     , replace "role" (String "owned") finite

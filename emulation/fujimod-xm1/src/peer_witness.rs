@@ -155,13 +155,17 @@ impl PeerContract {
         }
     }
 
-    pub fn validate_inputs(&mut self, run: &[u8], update: &[u8], boot_rom: &[u8]) -> Result<(), String> {
+    pub fn open_machine(&self, run_bytes: &[u8], update: &run::ValidatedUpdate, boot_rom: &[u8]) -> Result<Machine, String> {
         #[cfg(feature = "scoped-watch")]
-        if let Some(primary) = &mut self.primary {
-            return primary.validate_inputs(run, update, boot_rom);
+        if let Some(primary) = &self.primary {
+            let machine = Machine::open(run_bytes, update, boot_rom)?;
+            primary.admit(&machine)?;
+            return Ok(machine);
         }
-        let _ = (run, update, boot_rom);
-        Ok(())
+        let document = RunDocument::parse(run_bytes)?;
+        let mut session = run::open(&document, update, boot_rom)?;
+        session.board.set_execution_policy(document.execution_policy.into())?;
+        Machine::new(document, session)
     }
 }
 
