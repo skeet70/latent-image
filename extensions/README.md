@@ -41,3 +41,7 @@ Steps run in container order: the image-4 patch set, the image-5 patch set, the 
 ## Adding an extension
 
 Add the manifest and its parts to this directory, or reference existing parts by relative path. Set `output_sha256` from an independently reviewed build. Add a row to the top-level README table once the extension has worked on a physical camera.
+
+## RAM payload inputs
+
+`ram-inputs/` holds the parameter files the RAM payload relinkers read besides the decoded official firmware: `classic-chrome-candidate.json` (the fitted Classic Chrome parameters, [model report](../reports/classic-chrome-model.md)), `recipe-bank-spec.json` (the recipe bank's slots and placement) and `recipe-d3-compiled.json` (the D3 recipes). Their bytes equal the inputs the reviewed RAM payloads were pinned from. They are development inputs and appear in no published extension; [experimenting on your own X-M1](../docs/experimenting-on-your-x-m1.md) copies them into place.

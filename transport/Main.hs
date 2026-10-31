@@ -461,6 +461,8 @@ ramSession :: String -> PinPolicy -> Payload -> Maybe FilePath -> IO ()
 ramSession kind policy payload requested = do
   let size = payloadAllocationSize payload
       (referenceBase, _) = payloadReferenceBases payload
+  workspace <- workspaceRoot
+  createDirectoryIfMissing True (workspace </> payloadBuildRoot payload)
   relinker <- runfilesRelinker payload
   case policy of
     RequirePins -> do
