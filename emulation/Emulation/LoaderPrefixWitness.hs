@@ -102,7 +102,28 @@ data StartupFacts = StartupFacts
   , startupSource :: F.Sha256, startupImage :: Span, startupEntry :: Guest, startupHandoff :: Guest
   , startupTarget :: Guest, startupArgument :: Guest, startupSecondary :: Guest
   , startupSecondaryImage :: F.Sha256, startupSecondarySymbols :: F.Sha256, startupSecondarySource :: F.Sha256
+  , startupCompletionZero :: CompletionZero, startupKernelInstall :: KernelInstallFacts
   } deriving (Eq, Show)
+
+data CompletionZero = CompletionZero {zeroSite :: Guest, zeroInstruction :: Word32, zeroLiteral :: Guest}
+  deriving (Eq, Show)
+
+data KernelCode = KernelCode Span F.Sha256 deriving (Eq, Show)
+
+data InstallStep = InstallStep Guest Guest Word32 Word32 deriving (Eq, Show)
+
+data KernelInstallFacts = KernelInstallFacts
+  { kernelEntry :: Guest, kernelInstalled :: Guest, kernelBootstrap :: [Word32]
+  , kernelCode :: [KernelCode], kernelSteps :: [InstallStep]
+  } deriving (Eq, Show)
+
+kernelCodeSpans :: [Span]
+kernelCodeSpans = [Span 0x40020 0x40100, Span 0x427b8 0x427d4]
+
+canonicalSteps :: [InstallStep]
+canonicalSteps = zipWith3 (\site slot (before, value) -> InstallStep (Guest site) (Guest slot) before value)
+  [0x4003c, 0x40048, 0x40054, 0x40060, 0x4006c, 0x40078, 0x40084] [0x24, 0x28 .. 0x3c]
+  [(76, 0x40100), (100, 0x401b4), (80, 0x40128), (88, 0x40148), (96, 0x40168), (192, 0x40204), (144, 0x40184)]
 
 isComposed :: Contract -> Bool
 isComposed ComposedContract {} = True
@@ -210,12 +231,56 @@ startupValue facts = object
   , "secondary_image_sha256" .= F.sha256Hex (startupSecondaryImage facts)
   , "secondary_symbols_sha256" .= F.sha256Hex (startupSecondarySymbols facts)
   , "secondary_source_sha256" .= F.sha256Hex (startupSecondarySource facts)
+  , "completion_zero" .= completionZeroValue (startupCompletionZero facts)
+  , "kernel_vector_install" .= kernelFactsValue (startupKernelInstall facts)
   ]
+
+completionZeroValue :: CompletionZero -> Value
+completionZeroValue (CompletionZero site instruction literal) = object
+  ["site" .= guestWord site, "instruction" .= instruction, "literal" .= guestWord literal]
+
+kernelFactsValue :: KernelInstallFacts -> Value
+kernelFactsValue facts = object
+  [ "entry" .= guestWord (kernelEntry facts), "installed" .= guestWord (kernelInstalled facts)
+  , "bootstrap" .= kernelBootstrap facts
+  , "code" .= [object ["span" .= spanValue span', "sha256" .= F.sha256Hex digest] | KernelCode span' digest <- kernelCode facts]
+  , "steps" .= [object ["site" .= guestWord site, "slot" .= guestWord slot, "before" .= before, "value" .= value]
+               | InstallStep site slot before value <- kernelSteps facts] ]
+
+parseCompletionZero :: Value -> Either String CompletionZero
+parseCompletionZero value = do
+  row <- fields ["site", "instruction", "literal"] value
+  fact <- CompletionZero <$> guestField row "site" <*> get row "instruction" <*> guestField row "literal"
+  require (case A32.decode (guestWord (zeroSite fact)) (zeroInstruction fact) of
+    Store (Cond 14) Word (Reg value) (Reg base) (OffsetImmediate 0) OffsetOnly ->
+      value >= 0 && value <= 12 && base >= 0 && base <= 12
+    _ -> False) "completion-zero instruction is not an unconditional address-forming word store"
+  pure fact
+
+parseKernelFacts :: Value -> Either String KernelInstallFacts
+parseKernelFacts value = do
+  row <- fields ["entry", "installed", "bootstrap", "code", "steps"] value
+  let parseCode entry = do
+        code <- fields ["span", "sha256"] entry
+        KernelCode <$> (field code "span" >>= parseSpan) <*> (get code "sha256" >>= F.parseSha256)
+      parseStep entry = do
+        step <- fields ["site", "slot", "before", "value"] entry
+        InstallStep <$> guestField step "site" <*> guestField step "slot" <*> get step "before" <*> get step "value"
+  facts <- KernelInstallFacts <$> guestField row "entry" <*> guestField row "installed" <*> get row "bootstrap"
+    <*> (get row "code" >>= mapM parseCode) <*> (get row "steps" >>= mapM parseStep)
+  require (kernelEntry facts == Guest 0x40020 && kernelInstalled facts == Guest 0x40088
+    && map (\(KernelCode span' _) -> span') (kernelCode facts) == kernelCodeSpans
+    && kernelSteps facts == canonicalSteps && length (kernelBootstrap facts) == 16)
+    "kernel vector installation facts differ from the seven-step protocol"
+  forM_ canonicalSteps $ \(InstallStep _ (Guest slot) before _) ->
+    require (kernelBootstrap facts !! fromIntegral (slot `div` 4) == before) "bootstrap handler preimage differs"
+  pure facts
 
 parseStartup :: Value -> Either String StartupFacts
 parseStartup value = do
   row <- fields ["kind", "record1_sha256", "image_sha256", "symbols_sha256", "source_sha256", "image", "entry", "handoff"
-    , "handoff_target", "handoff_argument", "secondary_entry", "secondary_image_sha256", "secondary_symbols_sha256", "secondary_source_sha256"] value
+    , "handoff_target", "handoff_argument", "secondary_entry", "secondary_image_sha256", "secondary_symbols_sha256", "secondary_source_sha256"
+    , "completion_zero", "kernel_vector_install"] value
   kind <- get row "kind" :: Either String String
   require (kind == "composed") "startup kind is not composed"
   let digest name = get row name >>= F.parseSha256
@@ -223,6 +288,7 @@ parseStartup value = do
     <*> (field row "image" >>= parseSpan) <*> guestField row "entry" <*> guestField row "handoff"
     <*> guestField row "handoff_target" <*> guestField row "handoff_argument" <*> guestField row "secondary_entry"
     <*> digest "secondary_image_sha256" <*> digest "secondary_symbols_sha256" <*> digest "secondary_source_sha256"
+    <*> (field row "completion_zero" >>= parseCompletionZero) <*> (field row "kernel_vector_install" >>= parseKernelFacts)
   let Span low high = startupImage facts
       inside (Guest address) = fromIntegral address >= low && fromIntegral address < high && address .&. 3 == 0
       Guest target = startupTarget facts
@@ -232,6 +298,11 @@ parseStartup value = do
   require (target >= 0x40000 && target < 0x50000 && target .&. 3 == 0 && startupArgument facts == Guest argumentWord
     && startupSecondary facts == Guest 0x10400) "composed handoff or secondary entry differs"
   require (startupSource facts == startupSecondarySource facts) "composed images name different source DATs"
+  require (inside (zeroSite (startupCompletionZero facts)) && inside (zeroLiteral (startupCompletionZero facts)))
+    "completion-zero proof leaves the owned firststage image"
+  require (startupTarget facts == kernelEntry (startupKernelInstall facts)) "firststage target differs from kernel installation entry"
+  require (kernelBootstrap (startupKernelInstall facts) !! 8 == guestWord (startupEntry facts))
+    "bootstrap reset target differs from the selected firststage entry"
   pure facts
 
 parseContract :: B.ByteString -> Either String Contract
@@ -500,6 +571,8 @@ deriveComposedContract scenario input (Guest argument) = do
     "firststage handoff vector is not MOV PC, R2"
   secondary <- at secondRows "xm1_secondary_entry"
   record <- B.map complement <$> F.recordSlotBytes F.FirstRecord (U.parsedParts finalParsed)
+  completionZero <- deriveCompletionZero first
+  kernel <- deriveKernelInstall original finalParsed record
   recordDigest <- F.parseSha256 (sha256Hex record)
   loaderA <- loaderSegment (F.LoaderId 0) (U.parsedParts finalParsed)
   require (U.segLoad loaderA == 0x40000 && U.segSize loaderA >= 0x10) "composed loader-A extent differs"
@@ -515,10 +588,99 @@ deriveComposedContract scenario input (Guest argument) = do
         , startupSecondaryImage = Stage.secondaryPrefixArtifactImageDigest second
         , startupSecondarySymbols = Stage.secondaryPrefixArtifactSymbolsDigest second
         , startupSecondarySource = Stage.originalStartupDigest original
+        , startupCompletionZero = completionZero, startupKernelInstall = kernel
         }
   checked <- parseStartup (startupValue startup)
   require (firstStart == 0x6000 && secondary == 0x10400) "composed source-defined image starts or entries differ"
   pure (ComposedContract scenario facts checked)
+
+deriveCompletionZero :: Stage.FirstStageArtifact -> Either String CompletionZero
+deriveCompletionZero artifact = do
+  let plan = Stage.firstStageArtifactPlan artifact
+      bytes = U.mediaImageBytes (F.planImage plan)
+      start = fromIntegral (F.recordGuestBase F.FirstRecord + F.slotOffsetBytes (F.planLoadOffset plan))
+      image = CodeImage start bytes
+      decoded = [(site, word, A32.decode site word) | site <- [start, start + 4 .. start + fromIntegral (B.length bytes) - 4]
+                  , Just word <- [imageWord image site]]
+      owner site symbol = F.symbolSize symbol > 0 && F.symbolAddress symbol <= site
+        && toInteger site + 4 <= toInteger (F.symbolAddress symbol) + toInteger (F.symbolSize symbol)
+      candidates =
+        [ CompletionZero (Guest site) word (Guest literal)
+        | (site, word, Store (Cond 14) Word (Reg value) base@(Reg register) (OffsetImmediate 0) OffsetOnly) <- decoded
+        , value >= 0 && value <= 12, register >= 0 && register <= 12
+        , load <- [site - 12, site - 8, site - 4], load >= start
+        , Just loadWord <- [imageWord image load]
+        , Load (Cond 14) Word False destination source (OffsetImmediate offset) OffsetOnly <- [A32.decode load loadWord]
+        , destination == base, source == A32.pc
+        , any (\symbol -> owner load symbol && owner site symbol) (Stage.firstStageArtifactSymbols artifact)
+        , all (\(_, _, instruction) -> preservesBase base instruction) [item | item@(at, _, _) <- decoded, at > load && at < site]
+        , let literal = load + 8 + fromIntegral offset
+        , Just address <- [imageWord image literal]
+        , address == 0x40000000 + fromIntegral completionCell ]
+  case nub candidates of
+    [fact] -> Right fact
+    _ -> Left "owned firststage lacks a unique completion-cell address-forming word store"
+  where
+    preservesBase base instruction = case instruction of
+      DataProcessing _ _ _ destination _ _ -> destination /= base && destination /= A32.pc
+      MoveWide _ destination _ -> destination /= base
+      MoveTop _ destination _ -> destination /= base
+      ZeroExtend _ destination _ _ _ -> destination /= base
+      Multiply _ destination _ _ _ -> destination /= base
+      Compute _ destinations -> base `notElem` destinations && A32.pc `notElem` destinations
+      Load _ _ _ destination source _ indexing -> destination /= base && destination /= A32.pc && (source /= base || indexing == OffsetOnly)
+      Store _ _ _ source _ indexing -> source /= base || indexing == OffsetOnly
+      LoadMultiple _ source _ writeback destinations -> base `notElem` destinations && A32.pc `notElem` destinations && (not writeback || source /= base)
+      StoreMultiple _ source _ writeback _ -> not writeback || source /= base
+      Hint _ -> True
+      _ -> False
+
+deriveKernelInstall :: Stage.OriginalStartupDat -> U.Parsed -> B.ByteString -> Either String KernelInstallFacts
+deriveKernelInstall original staged record = do
+  let source = Stage.originalStartupParsed original
+  originalSegment <- loaderSegment (F.LoaderId 0) (U.parsedParts source)
+  stagedSegment <- loaderSegment (F.LoaderId 0) (U.parsedParts staged)
+  let originalBytes = B.map complement (B.take (fromIntegral (U.segSize originalSegment))
+        (B.drop (fromIntegral (U.segFlash originalSegment)) (U.partPreTable (U.parsedParts source))))
+      image = CodeImage 0x40000 originalBytes
+  validateKernelCode [image]
+  let codeBytes parsed segment (Span low high) = do
+        require (U.segLoad segment == 0x40000 && high <= 0x40000 + fromIntegral (U.segSize segment)) "kernel code leaves loader A"
+        let offset = fromIntegral (U.segFlash segment) + fromIntegral low - 0x40000
+        pure (B.map complement (B.take (fromIntegral (high - low)) (B.drop offset (U.partPreTable (U.parsedParts parsed)))))
+  code <- forM kernelCodeSpans $ \span' -> do
+    canonical <- codeBytes source originalSegment span'
+    observed <- codeBytes staged stagedSegment span'
+    require (observed == canonical) "staged kernel vector installer differs from the original DAT"
+    KernelCode span' <$> F.parseSha256 (sha256Hex canonical)
+  bootstrap <- mapM (leWordAt record) [0, 4 .. 60]
+  parseKernelFacts (kernelFactsValue (KernelInstallFacts (Guest 0x40020) (Guest 0x40088) bootstrap code canonicalSteps))
+
+validateKernelCode :: [CodeImage] -> Either String ()
+validateKernelCode images = do
+  let wordAt site = case [word | image <- images, Just word <- [imageWord image site]] of
+        [word] -> Right word
+        _ -> Left "canonical kernel word lacks a unique code image"
+      exactWords start expected = zipWithM_ (\site expectedWord -> do
+        actual <- wordAt site
+        require (actual == expectedWord) "kernel prologue or CP14 selector differs") [start, start + 4 ..] expected
+  exactWords 0x40020 [0xe1a05000, 0xeb0009e3, 0xe3500000, 0x03a06000, 0x159f60a4, 0xe3a03024]
+  exactWords 0x427b8 [0xee121e10, 0xe3a02901, 0xe2822003, 0xe1510002, 0x03a00000, 0x13a00001, 0xe12fff1e]
+  exactWords 0x40088 [0xe1a00005]
+  exactWords 0x400dc [0xffff0000]
+  forM_ canonicalSteps $ \(InstallStep (Guest site) (Guest slot) _ value) -> do
+    move <- A32.decode (site - 8) <$> wordAt (site - 8)
+    load <- A32.decode (site - 4) <$> wordAt (site - 4)
+    store <- wordAt site
+    require (case move of
+      DataProcessing (Cond 14) A32.MOV False (Reg 3) _ (A32.Immediate immediate) -> immediate == slot && store == 0xe7834006
+      _ -> False) "kernel vector store form differs"
+    case load of
+      Load (Cond 14) Word False (Reg 4) base (OffsetImmediate offset) OffsetOnly | base == A32.pc -> do
+        literal <- wordAt (site + 4 + fromIntegral offset)
+        require (site + 4 + fromIntegral offset == 0x400e0 + (slot - 0x24) && literal == value)
+          "kernel vector handler pool or literal differs"
+      _ -> Left "kernel vector handler load is not a literal word load"
 
 -- | The two strings are equal outside the sorted, disjoint (offset, length) extents.
 equalOutside :: [(Int, Int)] -> B.ByteString -> B.ByteString -> Bool
@@ -560,6 +722,7 @@ data Attribution = Attribution Core Word32 Word64 Word64 deriving (Eq, Show)
 data Row = Row
   { rowAccess :: Access, rowLocation :: ScopeSpan, rowValue :: Maybe Word64
   , rowBefore :: Maybe B.ByteString, rowAttribution :: Maybe Attribution
+  , rowGuest :: Maybe Guest
   } deriving (Eq, Show)
 
 data ClassState = ClassState Span [Access] deriving (Eq, Ord, Show)
@@ -595,13 +758,14 @@ data ScopedWatch = ScopedWatch
   } deriving (Eq, Show)
 
 data Label
-  = Record1Entry | FirstStageHandoff | SecondaryEntry | Record2Handoff | PrefixEntry | PostLoad | HeldGate | DelayEntry | DelayRelease | CompletionStore | PrefixExit | Refusal
+  = Record1Entry | FirstStageHandoff | KernelVectorsInstalled | SecondaryEntry | Record2Handoff | PrefixEntry | PostLoad | HeldGate | DelayEntry | DelayRelease | CompletionStore | PrefixExit | Refusal
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 labelName :: Label -> String
 labelName label = case label of
   Record1Entry -> "record-1-entry"
   FirstStageHandoff -> "first-stage-handoff"
+  KernelVectorsInstalled -> "kernel-vectors-installed"
   SecondaryEntry -> "secondary-entry"
   Record2Handoff -> "record-2-handoff"
   PrefixEntry -> "prefix-entry"
@@ -615,7 +779,7 @@ labelName label = case label of
 
 labelCore :: Label -> Core
 labelCore label
-  | label `elem` [Record1Entry, FirstStageHandoff, HeldGate, DelayEntry, DelayRelease, CompletionStore] = Core0
+  | label `elem` [Record1Entry, FirstStageHandoff, KernelVectorsInstalled, HeldGate, DelayEntry, DelayRelease, CompletionStore] = Core0
   | otherwise = Core1
 
 -- | ATCM and BTCM region registers of core 0, then core 1.
@@ -625,7 +789,7 @@ data Stop = Stop
   { stopLabel :: Label, stopAddress :: Guest, stopCore :: Core, stopCounts :: (Word64, Word64)
   , stopRegisters :: Registers, stopSp :: Word32, stopLr :: Word32, stopCpsr :: Cpsr
   , stopCompletion :: Word32, stopTcm :: TcmWords, stopCounter :: Maybe CounterTotals
-  -- | Scoped-watch row count at the stop.
+  -- | Active-epoch row count; schema 4 carries only scoped cursors.
   , stopCursor :: Maybe Int
   } deriving (Eq, Show)
 
@@ -661,6 +825,31 @@ data Endpoint = Endpoint
 -- | Core-0 PC, registers, SP, LR and CPSR.
 data Primary = Primary Word32 Registers Word32 Word32 Cpsr deriving (Eq, Show)
 
+data HistoryEpoch = LoadedHistory | ScopedHistory deriving (Eq, Ord, Show)
+
+newtype RowCursor = RowCursor Int deriving (Eq, Ord, Show)
+
+data HistoryRef = HistoryRef HistoryEpoch RowCursor deriving (Eq, Ord, Show)
+
+data VectorSnapshot = VectorSnapshot
+  { vectorMatched :: Int, vectorViews :: (B.ByteString, B.ByteString), vectorTcm :: TcmWords
+  } deriving (Eq, Show)
+
+data KernelSnapshot = KernelSnapshot VectorSnapshot [(Span, (B.ByteString, B.ByteString))] deriving (Eq, Show)
+
+data InstallState = NotBound | Installing | Installed deriving (Eq, Show, Enum, Bounded)
+
+installStateName :: InstallState -> String
+installStateName NotBound = "not-bound"
+installStateName Installing = "installing"
+installStateName Installed = "installed"
+
+data KernelInstallProof = KernelInstallProof
+  { installState :: InstallState, installBinding :: Maybe KernelSnapshot, installEvents :: [HistoryRef]
+  , installRecord2 :: Maybe VectorSnapshot, installStop :: Maybe Int
+  , installReadback :: Maybe KernelSnapshot, installTerminal :: Maybe KernelSnapshot
+  } deriving (Eq, Show)
+
 data Receipt = Receipt
   { receiptScenario :: Scenario, receiptProgram :: ProgramKind, receiptResult :: WitnessResult
   , receiptError :: Maybe String, receiptMachineFailure :: Maybe String, receiptIdentities :: (Word32, Word32)
@@ -668,6 +857,7 @@ data Receipt = Receipt
   , receiptBindings :: Maybe Bindings, receiptStore :: Maybe CommittedStore, receiptEndpoint :: Maybe Endpoint
   , receiptPrimary :: Maybe Primary, receiptStartup :: Maybe StartupFacts
   , receiptInitialRecord :: Maybe F.Sha256, receiptHandoffRecordImmutable :: Maybe F.Sha256
+  , receiptFirststageZero :: Maybe HistoryRef, receiptKernelInstall :: Maybe KernelInstallProof
   } deriving (Eq, Show)
 
 -- | A receipt accepted under its contract.
@@ -689,7 +879,7 @@ parseReceipt bytes = do
   row <- fields (["schema", "scenario", "program", "result", "error", "machine_failure", "instructions", "cp14_identities"
     , "boot_watch", "loaded_watch", "scoped_watch", "stops", "bindings", "completion", "endpoint", "final_primary"
     , "initial_record_sha256", "handoff_record_immutable_sha256"]
-    ++ ["startup" | schema == 5]) value
+    ++ (if schema == 5 then ["startup", "firststage_zero", "kernel_vector_install"] else [])) value
   scenario <- field row "scenario" >>= parseScenarioObject
   program <- get row "program" >>= closed programKindName "loader-prefix program"
   result <- get row "result" >>= \text -> case text :: String of
@@ -700,14 +890,86 @@ parseReceipt bytes = do
   _ <- get row "instructions" :: Either String Word64
   stops <- field row "stops" >>= json >>= mapM parseStop
   require (length stops <= maxStops) "loader-prefix stop bound exceeded"
+  let transferPolicy = if schema == 5 then WideStagingTransfers else CpuSizedTransfers
   Receipt scenario program result <$> get row "error" <*> get row "machine_failure" <*> pure identities
-    <*> (field row "boot_watch" >>= parseClassified) <*> (field row "loaded_watch" >>= parseClassified)
-    <*> (field row "scoped_watch" >>= nullable parseScoped) <*> pure stops
+    <*> (field row "boot_watch" >>= parseClassified transferPolicy) <*> (field row "loaded_watch" >>= parseClassified transferPolicy)
+    <*> (field row "scoped_watch" >>= nullable (parseScoped transferPolicy)) <*> pure stops
     <*> (field row "bindings" >>= nullable parseBindings) <*> (field row "completion" >>= nullable parseStore)
     <*> (field row "endpoint" >>= nullable parseEndpoint) <*> (field row "final_primary" >>= nullable parsePrimary)
     <*> (if schema == 5 then Just <$> (field row "startup" >>= parseStartup) else pure Nothing)
     <*> (field row "initial_record_sha256" >>= nullable (\entry -> json entry >>= F.parseSha256))
     <*> (field row "handoff_record_immutable_sha256" >>= nullable (\entry -> json entry >>= F.parseSha256))
+    <*> (if schema == 5 then field row "firststage_zero" >>= nullable parseHistoryRef else pure Nothing)
+    <*> (if schema == 5 then Just <$> (field row "kernel_vector_install" >>= parseInstallProof) else pure Nothing)
+
+parseRowCursor :: Value -> Either String RowCursor
+parseRowCursor value = do
+  index <- json value
+  require (index >= 0 && index <= 16384) "history cursor leaves the bounded watch"
+  pure (RowCursor index)
+
+parseHistoryRef :: Value -> Either String HistoryRef
+parseHistoryRef value = do
+  row <- fields ["epoch", "index"] value
+  name <- get row "epoch" :: Either String String
+  epoch <- case name of
+    "loaded" -> Right LoadedHistory
+    "scoped" -> Right ScopedHistory
+    _ -> Left "history epoch is neither loaded nor scoped"
+  index@(RowCursor cursor) <- field row "index" >>= parseRowCursor
+  require (cursor < 16384) "history reference exceeds the last row"
+  pure (HistoryRef epoch index)
+
+parseTcmWords :: Value -> Either String TcmWords
+parseTcmWords value = json value >>= \list -> case list of
+  [[a0, b0], [a1, b1]] -> Right (TcmWords (a0, b0) (a1, b1))
+  _ -> Left "TCM words must hold two banks per core"
+
+parseVectorSnapshotFields :: Object -> Either String VectorSnapshot
+parseVectorSnapshotFields row = do
+  matched <- get row "matched"
+  require (matched >= 0 && matched <= 7) "vector prefix is outside 0..7"
+  decoder <- field row "decoder" >>= fields ["choices", "pending", "failure"]
+  choices <- get decoder "choices" :: Either String [Word32]
+  pending <- get decoder "pending" :: Either String [Maybe Word32]
+  failure <- field decoder "failure"
+  require (choices == [1] && pending == [Nothing] && failure == Null) "vector snapshot decoder is not committed to RAM"
+  VectorSnapshot matched <$> (field row "vectors" >>= viewPair 64) <*> (field row "tcm" >>= parseTcmWords)
+
+parseVectorSnapshot :: Value -> Either String VectorSnapshot
+parseVectorSnapshot value = fields ["matched", "vectors", "decoder", "tcm"] value >>= parseVectorSnapshotFields
+
+parseKernelSnapshot :: Value -> Either String KernelSnapshot
+parseKernelSnapshot value = do
+  row <- fields ["matched", "vectors", "decoder", "tcm", "code"] value
+  vectors <- parseVectorSnapshotFields row
+  let parseCode entry = do
+        code <- fields ["span", "bytes"] entry
+        span'@(Span low high) <- field code "span" >>= parseSpan
+        require (span' `elem` kernelCodeSpans) "snapshot code span differs"
+        bytes <- field code "bytes" >>= viewPair (fromIntegral (high - low))
+        pure (span', bytes)
+  code <- get row "code" >>= mapM parseCode
+  require (map fst code == kernelCodeSpans) "snapshot code regions differ"
+  pure (KernelSnapshot vectors code)
+
+parseInstallProof :: Value -> Either String KernelInstallProof
+parseInstallProof value = do
+  row <- fields ["state", "binding", "events", "record2_handoff", "installed_stop", "installed_readback", "terminal_readback"] value
+  state <- get row "state" >>= closed installStateName "kernel installation state"
+  events <- get row "events" >>= mapM parseHistoryRef
+  require (length events <= 7 && length (nub events) == length events) "kernel installation events exceed or repeat the seven steps"
+  stop <- get row "installed_stop"
+  require (maybe True (\index -> index >= 0 && index < maxStops) stop) "installed stop index exceeds the stop bound"
+  proof <- KernelInstallProof state <$> (field row "binding" >>= nullable parseKernelSnapshot) <*> pure events
+    <*> (field row "record2_handoff" >>= nullable parseVectorSnapshot) <*> pure stop
+    <*> (field row "installed_readback" >>= nullable parseKernelSnapshot) <*> (field row "terminal_readback" >>= nullable parseKernelSnapshot)
+  require (case state of
+    NotBound -> isNothing (installBinding proof) && null events && isNothing stop && isNothing (installReadback proof)
+    Installing -> isJust (installBinding proof) && isNothing stop && isNothing (installReadback proof)
+    Installed -> isJust (installBinding proof) && length events == 7 && isJust stop && isJust (installReadback proof))
+    "kernel installation state and proof fields disagree"
+  pure proof
 
 twoOf :: String -> [a] -> Either String (a, a)
 twoOf _ [a, b] = Right (a, b)
@@ -718,17 +980,27 @@ parseCore 0 = Right Core0
 parseCore 1 = Right Core1
 parseCore _ = Left "core must be 0 or 1"
 
+data TransferPolicy = CpuSizedTransfers | WideStagingTransfers deriving (Eq)
+
 parseRow :: Value -> Either String Row
-parseRow value = do
+parseRow = parseRowWith CpuSizedTransfers
+
+parseRowWith :: TransferPolicy -> Value -> Either String Row
+parseRowWith transferPolicy value = do
   row <- objectOf value
   access <- get row "source" >>= closed accessName "watch access"
   let cpu = access `elem` [CpuRead, CpuWrite, CpuFetch]
       tcmRow = isJust (KM.lookup "tcm" row)
   _ <- fields (["source", "address", "physical", "size", "core", "pc", "instructions", "tick"]
     ++ (if cpu then ["value", "before", "byte_order"] else []) ++ ["tcm" | tcmRow]) value
-  _ <- get row "address" :: Either String Word64
+  address <- get row "address" :: Either String Word64
   size <- get row "size" :: Either String Word64
-  require (size > 0 && size <= 16) "watch row width differs"
+  require (size > 0 && (size <= 16 || (transferPolicy == WideStagingTransfers && not cpu))) "watch row width differs"
+  let checkedSpan low = do
+        when (transferPolicy == WideStagingTransfers) $
+          require (low < 0x100000000 && size <= 0x100000000 - low) "watch row span wraps or leaves 4 GiB"
+        pure (Span low (low + size))
+  _ <- checkedSpan address
   location <- if tcmRow
     then do
       physical <- field row "physical"
@@ -736,8 +1008,8 @@ parseRow value = do
       tcm <- field row "tcm" >>= fields ["bank", "offset"]
       bank <- get tcm "bank" >>= closed bankName "TCM bank"
       offset <- get tcm "offset"
-      pure (TcmSpan bank (Span offset (offset + size)))
-    else (\physical -> PhysicalSpan (Span physical (physical + size))) <$> get row "physical"
+      TcmSpan bank <$> checkedSpan offset
+    else PhysicalSpan <$> (get row "physical" >>= checkedSpan)
   if cpu
     then do
       byteOrder <- get row "byte_order" :: Either String String
@@ -747,12 +1019,13 @@ parseRow value = do
       core <- get row "core" >>= parseCore
       cpuAttribution <- Attribution core <$> get row "pc" <*> get row "instructions" <*> get row "tick"
       valueField <- get row "value"
-      pure (Row access location valueField (B.pack <$> before) (Just cpuAttribution))
+      guest <- guestField row "address"
+      pure (Row access location valueField (B.pack <$> before) (Just cpuAttribution) (Just guest))
     else do
       forM_ ["core", "pc", "instructions", "tick"] $ \name -> do
         entry <- field row name
         require (entry == Null) "transfer row carries CPU attribution"
-      pure (Row access location Nothing Nothing Nothing)
+      pure (Row access location Nothing Nothing Nothing Nothing)
 
 parseClasses :: Value -> Either String [ClassState]
 parseClasses value = json value >>= fmap sort . mapM parseClass
@@ -767,8 +1040,8 @@ noViolation row = do
   violation <- get row "violation" :: Either String (Maybe String)
   require (isNothing violation) ("memory watch violation: " ++ fromMaybe "" violation)
 
-parseClassified :: Value -> Either String ClassifiedWatch
-parseClassified value = do
+parseClassified :: TransferPolicy -> Value -> Either String ClassifiedWatch
+parseClassified transferPolicy value = do
   row <- fields ["enabled", "ranges", "records", "violation", "classes", "views"] value
   noViolation row
   stated <- get row "views" :: Either String String
@@ -776,7 +1049,7 @@ parseClassified value = do
     "observe" -> Right ObserveViews
     "fixed" -> Right FixedViews
     _ -> Left "unknown classified watch views"
-  ClassifiedWatch views <$> (field row "classes" >>= parseClasses) <*> (field row "records" >>= json >>= mapM parseRow)
+  ClassifiedWatch views <$> (field row "classes" >>= parseClasses) <*> (field row "records" >>= json >>= mapM (parseRowWith transferPolicy))
 
 parseScopeSpan :: Value -> Either String ScopeSpan
 parseScopeSpan value = do
@@ -800,8 +1073,8 @@ parseSnapshot value = do
   let register name = field row name >>= fields ["register", "window"] >>= \bank -> get bank "register"
   TcmSnapshot <$> get row "core" <*> register "atcm" <*> register "btcm"
 
-parseScoped :: Value -> Either String ScopedWatch
-parseScoped value = do
+parseScoped :: TransferPolicy -> Value -> Either String ScopedWatch
+parseScoped transferPolicy value = do
   row <- fields ["enabled", "ranges", "records", "violation", "classes", "views", "fault", "tcm", "confinement", "counters", "coverage"] value
   noViolation row
   fault <- field row "fault"
@@ -838,7 +1111,7 @@ parseScoped value = do
   counters <- get row "counters" >>= mapM parseCounter
   coverage <- get row "coverage" >>= mapM parseCoverage
   classes <- field row "classes" >>= parseClasses
-  records <- field row "records" >>= json >>= mapM parseRow
+  records <- field row "records" >>= json >>= mapM (parseRowWith transferPolicy)
   pure (ScopedWatch classes records (sort snapshot) (sort confinement) counters coverage)
 
 parseStop :: Value -> Either String Stop
@@ -933,6 +1206,7 @@ startupClasses :: Maybe StartupFacts -> [ClassState]
 startupClasses Nothing = []
 startupClasses (Just facts) =
   [ClassState (startupImage facts) writes, ClassState (Span 0 0x40) writes, ClassState (Span 0x1800 0x1804) [CpuFetch]]
+    ++ [ClassState span' writes | span' <- kernelCodeSpans]
     ++ [ClassState span' [CpuFetch] | span' <- secondaryFetch]
     ++ [ClassState span' [CpuRead] | span' <- secondaryRead]
 
@@ -947,7 +1221,7 @@ expectedConfinement kind selected slots window = sort $
         , Confinement [1] CpuRead Forbid (sort (PhysicalSpan entryPool : readSpans)) ]
         ++ [rule | isJust selected, rule <- [Confinement [0] CpuFetch Forbid fetches, Confinement [0] CpuRead Forbid readSpans]]
   where
-    immutable = [PhysicalSpan span' | Just startup <- [selected], span' <- [startupImage startup, Span 0 0x40]]
+    immutable = [PhysicalSpan span' | Just startup <- [selected], span' <- [startupImage startup, Span 0 0x24]]
     fetches = [PhysicalSpan span' | isJust selected, span' <- Span 0x1800 0x1804 : secondaryFetch]
     readSpans = [PhysicalSpan span' | isJust selected, span' <- secondaryRead]
 
@@ -1018,7 +1292,7 @@ validateReceipt contract receipt = do
     ("loader-prefix receipt did not pass: " ++ fromMaybe "" (receiptError receipt))
   require (receiptIdentities receipt == (0x4003, 0x5003)) "CP14 identities differ"
   require (sort [stopLabel stop | stop <- stops, stopLabel stop /= PostLoad]
-    == sort (requiredLabels scenario ++ [FirstStageHandoff | isJust selected]))
+    == sort (requiredLabels scenario ++ [label | isJust selected, label <- [FirstStageHandoff, KernelVectorsInstalled]]))
     "stop labels differ from the scenario"
   forM_ stops $ \stop -> require (stopCore stop == labelCore (stopLabel stop)) "stop has the wrong core"
   let pairs = zip stops (drop 1 stops)
@@ -1036,10 +1310,12 @@ validateReceipt contract receipt = do
   require (bootClasses == [ClassState cellSpan writes] && null bootRows) "boot watch classes differ or it recorded a write"
   require (loadedClasses == sort (ClassState cellSpan writes : [ClassState veneerSpan writes | scenario == Delayed] ++ startupClasses selected))
     "loaded watch classes differ"
-  case loadedRows of
-    [row] | Just (Core0, 0x1fec, physical, before) <- cpuWrite row, physical == completionCell, rowValue row == Just 0
-      , before == B.replicate 4 0 -> pure ()
-    _ -> Left "loaded watch does not hold exactly record 1's zero write of the completion cell"
+  case selected of
+    Nothing -> case loadedRows of
+      [row] | Just (Core0, 0x1fec, physical, before) <- cpuWrite row, physical == completionCell
+        , rowLocation row == PhysicalSpan cellSpan, rowValue row == Just 0, before == B.replicate 4 0 -> pure ()
+      _ -> Left "loaded watch does not hold exactly record 1's zero write of the completion cell"
+    Just _ -> pure ()
   record1 <- uniqueStop stops Record1Entry
   let selectedEntry = maybe (Guest record1Entry) startupEntry selected
   require (stopAddress record1 == selectedEntry && take 1 stops == [record1] && isNothing (stopCounter record1)) "record-1 entry is not the first stop"
@@ -1064,11 +1340,11 @@ validateReceipt contract receipt = do
       && r2 (stopRegisters firstHandoff) == guestWord (startupTarget startup)
       && r0 (stopRegisters firstHandoff) == guestWord (startupArgument startup)) "firststage handoff context differs"
     if firstHandoff `elem` beforeHandoff
-      then require (isNothing (stopCounter firstHandoff) && isNothing (stopCursor firstHandoff))
-        "pre-scoped firststage handoff carries scoped evidence"
+      then require (isNothing (stopCounter firstHandoff) && isJust (stopCursor firstHandoff))
+        "loaded firststage handoff lacks its history cursor or carries a scoped counter"
       else do
         loads <- counterAt firstHandoff
-        require (totalNonzero loads == 0 && stopCursor firstHandoff == Just 0)
+        require (totalNonzero loads == 0 && isJust (stopCursor firstHandoff))
           "scoped firststage handoff lacks its pre-completion observation"
   window <- stackWindow handoff
   require (bindingStackWindow bindings == window) "bound entry-stack window differs from the handoff SP and TCM"
@@ -1098,8 +1374,9 @@ validateReceipt contract receipt = do
     && stopCpsr entry == stopCpsr handoff && registerRange 6 11 (stopRegisters entry) == registerRange 6 11 (stopRegisters handoff))
     "prefix entry differs from the handoff context"
   require (snd (stopCounts entry) == snd (stopCounts handoff) + 1) "prefix entry is not the core-1 instruction after the handoff"
-  require (stopCounter entry == Just (CounterTotals 0 0 0) && stopCursor entry == Just 0)
-    "scoped watch was not active and empty at the prefix entry"
+  require (stopCounter entry == Just (CounterTotals 0 0 0)
+    && (if isJust selected then isJust (stopCursor entry) else stopCursor entry == Just 0))
+    "scoped watch was not active with an empty counter at the prefix entry"
   require (scopedClasses scoped == sort (expectedClasses scenario ++ startupClasses selected)) "scoped watch classes differ"
   slots <- through (bindingSlotsMap bindings) (fromIntegral vectorBase + 0x24) 28
   require (scopedConfinement scoped == expectedConfinement kind selected slots (bindingStackWindow bindings)) "scoped confinement rules differ"
@@ -1141,10 +1418,155 @@ validateReceipt contract receipt = do
       when (totalNonzero b == 0) $
         require (snd (stopCounts later) - snd (stopCounts earlier) == period) "consecutive waiting loads differ from the poll period")
       (zip group loads) (drop 1 (zip group loads))
+  completionRows <- case selected of
+    Nothing -> pure (scopedRows scoped)
+    Just startup -> validateKernelInstall startup receipt scoped
+  let completionScope = scoped {scopedRows = completionRows}
   if scenario == Held
-    then acceptHeld scoped counter stops receipt
-    else acceptCompletion scenario facts expected scoped counter stops receipt handoff
+    then acceptHeld completionScope counter stops receipt
+    else acceptCompletion scenario facts expected completionScope counter stops receipt handoff
   pure (ValidatedReceipt contract receipt)
+
+stopInstructions :: Stop -> Word64
+stopInstructions stop = uncurry (+) (stopCounts stop)
+
+rowInstructions :: Row -> Either String Word64
+rowInstructions row = do
+  Attribution _ _ instructions _ <- attribution row
+  pure instructions
+
+validateKernelInstall :: StartupFacts -> Receipt -> ScopedWatch -> Either String [Row]
+validateKernelInstall startup receipt scoped = do
+  proof <- maybe (Left "kernel installation proof absent") Right (receiptKernelInstall receipt)
+  zeroRef <- maybe (Left "firststage completion-zero reference absent") Right (receiptFirststageZero receipt)
+  first <- uniqueStop stops FirstStageHandoff
+  record2Stop <- uniqueStop stops Record2Handoff
+  installed <- uniqueStop stops KernelVectorsInstalled
+  let facts = startupKernelInstall startup
+      ClassifiedWatch _ loadedClasses loaded = receiptLoaded receipt
+      histories = [(HistoryRef epoch (RowCursor index), row) | (epoch, rows) <- [(LoadedHistory, loaded), (ScopedHistory, scopedRows scoped)]
+                    , (index, row) <- zip [0 ..] rows]
+      lookupRow ref = maybe (Left "protocol reference leaves its history") Right (lookup ref histories)
+      loadedStops = takeWhile ((/= Record2Handoff) . stopLabel) stops ++ [record2Stop]
+      epochOf stop = if stop `elem` loadedStops then LoadedHistory else ScopedHistory
+      historyRows LoadedHistory = loaded
+      historyRows ScopedHistory = scopedRows scoped
+      boundary stop = do
+        cursor <- maybe (Left "stop omits its active history cursor") Right (stopCursor stop)
+        let epoch = epochOf stop
+        require (cursor >= 0 && cursor <= 16384 && cursor <= length (historyRows epoch)) "stop cursor leaves its active history"
+        pure (HistoryRef epoch (RowCursor cursor))
+      isCompletion row = case cpuWrite row of
+        Just (Core0, 0x40a08, _, _) -> rowLocation row == PhysicalSpan cellSpan
+        _ -> False
+      overlaps row spans = case rowLocation row of
+        PhysicalSpan (Span low high) -> any (\(Span start end) -> low < end && start < high) spans
+        _ -> False
+      protected epoch = [span' | ClassState span' _ <- if epoch == LoadedHistory then loadedClasses else scopedClasses scoped
+                              , span' `notElem` kernelCodeSpans]
+        ++ [zeroRange, entryPool] ++ replacedCode ++ secondaryFetch ++ secondaryRead
+      codeStaging epoch row = overlaps row kernelCodeSpans && not (overlaps row (protected epoch))
+        && case (rowAccess row, rowAttribution row) of
+          (CpuWrite, Just (Attribution Core0 _ _ _)) -> True
+          (ModelBusWrite, Nothing) -> True
+          _ -> False
+  require (length loaded <= 16384 && length (scopedRows scoped) <= 16384) "active history exceeds the watch row bound"
+  require (isNothing (stopCursor (head stops))) "boot stop carries a history cursor"
+  boundaries <- forM (drop 1 stops) $ \stop -> do
+    ref <- boundary stop
+    when (epochOf stop == LoadedHistory) $
+      require (isNothing (stopCounter stop)) "loaded stop carries a scoped counter"
+    pure (stop, ref)
+  forM_ [LoadedHistory, ScopedHistory] $ \epoch -> do
+    let cursors = [cursor | (_, HistoryRef current (RowCursor cursor)) <- boundaries, current == epoch]
+    require (and (zipWith (<=) cursors (drop 1 cursors))) "active-epoch history cursors decrease"
+  record2Boundary <- boundary record2Stop
+  require (record2Boundary == HistoryRef LoadedHistory (RowCursor (length loaded))) "record-2 cursor does not close the loaded history"
+  terminalBoundary <- boundary (last stops)
+  require (terminalBoundary == HistoryRef ScopedHistory (RowCursor (length (scopedRows scoped))))
+    "terminal cursor does not close the scoped history"
+  firstBoundary <- boundary first
+  installedBoundary <- boundary installed
+  require (installState proof == Installed && installStop proof == lookup KernelVectorsInstalled (zip (map stopLabel stops) [0 ..]))
+    "kernel installation did not reach its indexed installed stop"
+  require (stopAddress installed == kernelInstalled facts && masked (stopCpsr installed)
+    && r5 (stopRegisters installed) == guestWord (startupArgument startup) && r6 (stopRegisters installed) == 0
+    && stopCompletion installed == 0 && stopInstructions first < stopInstructions installed)
+    "kernel installed stop context or order differs"
+  require (installed `elem` takeWhile ((`notElem` [HeldGate, DelayEntry, CompletionStore]) . stopLabel) stops)
+    "core-0 continuation precedes kernel vector installation"
+  zero <- lookupRow zeroRef
+  require (case cpuWrite zero of
+    Just (Core0, pc, _, before) -> pc == guestWord (zeroSite (startupCompletionZero startup))
+      && rowLocation zero == PhysicalSpan cellSpan && rowValue zero == Just 0 && before == B.replicate 4 0
+    _ -> False) "firststage completion-zero row differs from its derived effect"
+  require (zeroRef < firstBoundary) "firststage completion-zero row follows its handoff"
+  eventRows <- mapM lookupRow (installEvents proof)
+  require (length eventRows == 7 && installEvents proof == sort (installEvents proof)
+    && zeroRef `notElem` installEvents proof) "kernel installation history order differs"
+  forM_ (zip3 (kernelSteps facts) eventRows (installEvents proof)) $ \(InstallStep site slot before value, row, ref) -> do
+    instructions <- rowInstructions row
+    require (case cpuWrite row of
+      Just (Core0, pc, _, old) -> pc == guestWord site && rowLocation row == PhysicalSpan (Span (fromIntegral (guestWord slot)) (fromIntegral (guestWord slot) + 4))
+        && rowGuest row == Just slot && old == encodeLeWord before && rowValue row == Just (fromIntegral value)
+      _ -> False) "kernel vector row source, site, slot, width, preimage or value differs"
+    require (instructions > stopInstructions first && instructions <= stopInstructions installed
+      && ref >= firstBoundary && ref < installedBoundary)
+      "kernel vector row lies outside the installation interval"
+  times <- mapM rowInstructions eventRows
+  require (and (zipWith (<) times (drop 1 times))) "kernel vector events do not advance in order"
+  forM_ histories $ \(ref@(HistoryRef epoch _), row) -> do
+    forM_ (rowAttribution row) $ \(Attribution _ _ instructions _) -> do
+      require (instructions > stopInstructions (head stops)
+        && (case epoch of LoadedHistory -> instructions <= stopInstructions record2Stop; ScopedHistory -> instructions > stopInstructions record2Stop))
+        "CPU history row lies outside its observer epoch"
+      forM_ boundaries $ \(stop, limit@(HistoryRef current _)) -> when (current == epoch) $
+        require ((ref < limit) == (instructions <= stopInstructions stop)) "CPU row and active-epoch stop cursor disagree"
+    unless (ref == zeroRef || ref `elem` installEvents proof || (epoch == ScopedHistory && isCompletion row)) $
+      require (ref < firstBoundary && codeStaging epoch row) "history row is neither protocol data nor protected-overlap-free pre-handoff code staging"
+  forM_ [loaded, scopedRows scoped] $ \rows -> do
+    let chronology = [instructions | row <- rows, Just (Attribution _ _ instructions _) <- [rowAttribution row]]
+    require (and (zipWith (<=) chronology (drop 1 chronology))) "CPU watch history instruction counts decrease"
+  bound <- maybe (Left "kernel binding snapshot absent") Right (installBinding proof)
+  readback <- maybe (Left "installed full readback absent") Right (installReadback proof)
+  terminal <- maybe (Left "terminal full readback absent") Right (installTerminal proof)
+  record2Snapshot <- maybe (Left "record-2 vector snapshot absent") Right (installRecord2 proof)
+  validateKernelSnapshot facts (stopTcm first) 0 bound
+  validateKernelSnapshot facts (stopTcm installed) 7 readback
+  validateKernelSnapshot facts (stopTcm record2Stop) 7 terminal
+  let handoffPrefix = length [() | HistoryRef LoadedHistory _ <- installEvents proof]
+  validateVectorSnapshot facts (stopTcm record2Stop) handoffPrefix record2Snapshot
+  forM_ [vectors | KernelSnapshot vectors _ <- [bound, readback, terminal]] (validateSnapshotTcm startup)
+  validateSnapshotTcm startup record2Snapshot
+  pure [row | row <- scopedRows scoped, isCompletion row]
+  where
+    stops = receiptStops receipt
+
+
+validateVectorSnapshot :: KernelInstallFacts -> TcmWords -> Int -> VectorSnapshot -> Either String ()
+validateVectorSnapshot facts tcm matched snapshot = do
+  let replacements = [(fromIntegral (guestWord slot `div` 4), value) | InstallStep _ slot _ value <- take matched (kernelSteps facts)]
+      words' = [fromMaybe word (lookup index replacements) | (index, word) <- zip [0 :: Int ..] (kernelBootstrap facts)]
+      bytes = B.concat (map encodeLeWord words')
+  require (vectorMatched snapshot == matched && vectorViews snapshot == (bytes, bytes) && vectorTcm snapshot == tcm)
+    "vector snapshot differs from its exact installed prefix or boundary TCM"
+
+validateKernelSnapshot :: KernelInstallFacts -> TcmWords -> Int -> KernelSnapshot -> Either String ()
+validateKernelSnapshot facts tcm matched (KernelSnapshot snapshot code) = do
+  validateVectorSnapshot facts tcm matched snapshot
+  forM_ (zip (kernelCode facts) code) $ \(KernelCode span' digest, (observedSpan, (virtualBytes, physicalBytes))) ->
+    require (observedSpan == span' && virtualBytes == physicalBytes && sha256Hex virtualBytes == F.sha256Hex digest)
+      "kernel code identity or views changed"
+  validateKernelCode [CodeImage (fromIntegral low) virtualBytes | (Span low _, (virtualBytes, _)) <- code]
+
+validateSnapshotTcm :: StartupFacts -> VectorSnapshot -> Either String ()
+validateSnapshotTcm startup snapshot = do
+  let TcmWords (a0, b0) (a1, b1) = vectorTcm snapshot
+      spans = [cellSpan, record2, loaderB, loaderACompletion, loaderALiteral, startupImage startup, Span 0 0x40] ++ kernelCodeSpans
+      views = spans ++ [Span (low + 0x40000000) (high + 0x40000000) | Span low high <- spans]
+      meets (Span low high) (Span start end) = low < end && start < high
+  regions <- mapM tcmWindow [a0, b0, a1, b1]
+  require (and [not (meets region view) | Just region <- regions, view <- views]) "snapshot TCM overlaps a guarded view"
 
 acceptHeld :: ScopedWatch -> CounterState -> [Stop] -> Receipt -> Either String ()
 acceptHeld scoped counter stops receipt = do
@@ -1163,7 +1585,7 @@ acceptCompletion scenario facts expected scoped counter stops receipt handoff = 
   let totals = counterTotals counter
   case scopedRows scoped of
     [row] | Just (Core0, 0x40a08, physical, before) <- cpuWrite row, physical == completionCell
-      , before == B.replicate 4 0, rowValue row == Just expected -> pure ()
+      , rowLocation row == PhysicalSpan cellSpan, before == B.replicate 4 0, rowValue row == Just expected -> pure ()
     _ -> Left "scoped watch does not hold exactly the original 0x40a08 completion store"
   store <- uniqueStop stops CompletionStore
   require (stopAddress store == Guest 0x40a08 && stopCompletion store == 0 && r3 (stopRegisters store) == 0x400a0000 && r5 (stopRegisters store) == 1)
@@ -1185,8 +1607,18 @@ acceptCompletion scenario facts expected scoped counter stops receipt handoff = 
     && all (\(Microstep _ _ cell) -> cell == 0) (init steps)) "the original store did not commit in one core-0 step with core 1 paused"
   let after = storeCounter committed
   storeCursor' <- maybe (Left "completion-store stop lacks its watch cursor") Right (stopCursor store)
-  require (totalNonzero after == 0 && totalCount after >= totalCount storeCount && storeCursor' == 0 && storeCursor committed == 1)
+  let rawRows = maybe [] scopedRows (receiptScoped receipt)
+  require (totalNonzero after == 0 && totalCount after >= totalCount storeCount
+    && storeCursor' >= 0 && storeCursor' < length rawRows && storeCursor committed == storeCursor' + 1
+    && [rawRows !! storeCursor'] == scopedRows scoped)
     "the original store row or a nonzero load lies outside the commit window"
+  when (isJust (receiptStartup receipt)) $ do
+    let Microstep initial _ _ = head steps
+        chain (Microstep _ earlier _) (Microstep later _ _) = earlier == later
+    require (initial == stopCounts store && and (zipWith chain steps (drop 1 steps)))
+      "completion microsteps do not continue the captured stop"
+    committedAt <- rowInstructions (rawRows !! storeCursor')
+    require (committedAt == after0 + after1) "completion row is not the committing instruction"
   (first, index) <- maybe (Left "no nonzero completion load") Right (counterFirstNonzero counter)
   Attribution firstCore firstPc _ _ <- attribution first
   require (totalNonzero totals == 1 && index == totalCount totals - 1 && index >= totalCount after)

@@ -101,13 +101,28 @@ fn loader_program() -> String {
         digest = "ab".repeat(32))
 }
 
+fn vector_install() -> String {
+    format!(r#""completion_zero":{{"site":24596,"instruction":3851063296,"literal":24624}},
+        "kernel_vector_install":{{"entry":262176,"installed":262280,
+        "bootstrap":[3852464152,3852464152,3852464152,3852464152,3852464152,3852464152,3852464152,3852464152,24576,76,100,80,88,96,192,144],
+        "code":[{{"span":[262176,262400],"sha256":"{digest}"}},{{"span":[272312,272340],"sha256":"{digest}"}}],
+        "steps":[{{"site":262204,"slot":36,"before":76,"value":262400}},
+        {{"site":262216,"slot":40,"before":100,"value":262580}},
+        {{"site":262228,"slot":44,"before":80,"value":262440}},
+        {{"site":262240,"slot":48,"before":88,"value":262472}},
+        {{"site":262252,"slot":52,"before":96,"value":262504}},
+        {{"site":262264,"slot":56,"before":192,"value":262660}},
+        {{"site":262276,"slot":60,"before":144,"value":262532}}]}}"#,
+        digest = "ab".repeat(32))
+}
+
 fn composed(scenario: &str) -> String {
     format!(r#"{{"schema":5,"budget":50000000,"scenario":{{"kind":"{scenario}" }},{program},
         "startup":{{"kind":"composed","record1_sha256":"{digest}","image_sha256":"{digest}",
         "symbols_sha256":"{digest}","source_sha256":"{digest}","image":[24576,25088],"entry":24576,"handoff":24608,
         "handoff_target":262176,"handoff_argument":6934008,"secondary_entry":66560,"secondary_image_sha256":"{digest}",
-        "secondary_symbols_sha256":"{digest}","secondary_source_sha256":"{digest}"}}}}"#,
-        program = loader_program(), digest = "ab".repeat(32))
+        "secondary_symbols_sha256":"{digest}","secondary_source_sha256":"{digest}",{vectors}}}}}"#,
+        program = loader_program(), digest = "ab".repeat(32), vectors = vector_install())
 }
 
 #[cfg(not(feature = "scoped-watch"))]
@@ -161,6 +176,52 @@ fn composed_startup_rejects_role_identity_extent_and_guard_changes() {
     }
     let standalone = format!(r#"{{"schema":5,"budget":50000000,"scenario":{{"kind":"natural"}},{}}}"#, loader_program());
     assert!(PeerContract::parse(standalone.as_bytes()).is_err());
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn composed_requires_complete_zero_writer_and_seven_slot_installation_facts() {
+    let valid = composed("held");
+    let zero = r#""completion_zero":{"site":24596,"instruction":3851063296,"literal":24624},"#;
+    for invalid in [
+        valid.replace(zero, ""),
+        valid.replace(zero, &(zero.to_owned() + zero)),
+        valid.replace("\"completion_zero\":{", "\"completion_zero\":null,\"obsolete_zero\":{"),
+        valid.replace("\"site\":24596", "\"site\":24597"),
+        valid.replace("\"site\":24596", "\"site\":25088"),
+        valid.replace("\"instruction\":3851063296", "\"instruction\":0"),
+        valid.replace("\"instruction\":3851063296", "\"instruction\":3855261696"),
+        valid.replace("\"literal\":24624", "\"literal\":24625"),
+        valid.replace("\"literal\":24624", "\"literal\":25088"),
+        valid.replace("\"kernel_vector_install\":{", "\"obsolete_vector_install\":{"),
+        valid.replace("\"bootstrap\":", "\"obsolete_bootstrap\":"),
+        valid.replace("\"code\":", "\"obsolete_code\":"),
+        valid.replace("\"steps\":", "\"obsolete_steps\":"),
+        valid.replace("\"installed\":262280", "\"installed\":262284"),
+        valid.replace("\"entry\":262176", "\"entry\":262180"),
+        valid.replace("[262176,262400]", "[262180,262400]"),
+        valid.replace("[272312,272340]", "[272312,272336]"),
+        valid.replace("\"sha256\":\"abab", "\"sha256\":\"ABAB"),
+        valid.replace("\"sha256\":\"abab", "\"sha256\":\"zzzz"),
+        valid.replace("24576,76,100,80", "24576,76,100"),
+        valid.replace("\"site\":262204", "\"site\":262208"),
+        valid.replace("\"slot\":36", "\"slot\":40"),
+        valid.replace("\"before\":76", "\"before\":77"),
+        valid.replace("\"value\":262400", "\"value\":262404"),
+        valid.replace(r#"{"site":262204,"slot":36,"before":76,"value":262400},"#, ""),
+        valid.replace(r#"{"site":262204,"slot":36,"before":76,"value":262400}"#, r#"{"site":262216,"slot":40,"before":100,"value":262580}"#),
+    ] {
+        assert!(PeerContract::parse(invalid.as_bytes()).is_err(), "{invalid}");
+    }
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn standalone_schema_four_does_not_admit_composed_protocol_fields() {
+    let valid = format!(r#"{{"schema":4,"budget":50000000,"scenario":{{"kind":"held"}},{}}}"#, loader_program());
+    assert!(PeerContract::parse(valid.as_bytes()).is_ok());
+    let invalid = valid.strip_suffix('}').unwrap().to_owned() + "," + &vector_install() + "}";
+    assert!(PeerContract::parse(invalid.as_bytes()).is_err());
 }
 
 #[cfg(feature = "scoped-watch")]
