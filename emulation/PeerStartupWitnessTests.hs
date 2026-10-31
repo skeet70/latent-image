@@ -115,10 +115,13 @@ data Knobs = Knobs
   -- later by delta core-0 instructions.
   , knobShifts :: [(Word64, Word64)]
   , knobPollValue :: Word32
+  -- | Core-1 ATCM register at held-release and startup-entry.
+  , knobHeldAtcm1 :: Word32
   }
 
+-- | Core-1 ATCM 0xffff8011 at held-release is the value the retained natural reset showed.
 plain :: Knobs
-plain = Knobs 0 [] (B.replicate 0x548 0x5a) [] 0
+plain = Knobs 0 [] (B.replicate 0x548 0x5a) [] 0 0xffff8011
 
 hexText :: B.ByteString -> String
 hexText = concatMap (\byte -> let digits = showHex byte "" in replicate (2 - length digits) '0' ++ digits) . B.unpack
@@ -139,6 +142,16 @@ sizedTransferRow :: String -> Word32 -> Word32 -> Value
 sizedTransferRow source physical size = object
   [ "source" .= source, "address" .= physical, "physical" .= physical, "size" .= size
   , "core" .= Null, "pc" .= Null, "instructions" .= Null, "tick" .= Null ]
+
+-- | A model-bus write with the bus-alias address the classified watch records.
+busWrite :: Word32 -> Word32 -> Value
+busWrite physical size = object
+  [ "source" .= ("model-bus-write" :: String), "address" .= (physical + 0x40000000), "physical" .= physical, "size" .= size
+  , "core" .= Null, "pc" .= Null, "instructions" .= Null, "tick" .= Null ]
+
+-- | The two 0x800-byte boot transfers the retained natural reset recorded in the reset epoch.
+bootBulkWrites :: [Value]
+bootBulkWrites = [busWrite 0x14800 0x800, busWrite 0x20000 0x800]
 
 peerState :: Word32 -> Word32 -> Word32 -> Word32 -> Value
 peerState first second dest arg = object ["cell0" .= first, "cell1" .= second, "completion" .= (0 :: Int), "target" .= dest, "argument" .= arg]
@@ -268,7 +281,7 @@ receiptFor scenario program siteWords knobs = object
     gateRegisters = 0x1234 : replicate 12 (0 :: Word32)
     preclearRegisters = [0x1234, 0, 0, 0x40020000] ++ replicate 9 (0 :: Word32)
     loadRegisters value = [if slot == register then value else 0 | slot <- [0 .. 12]]
-    heldTcm = [[0x70000011, 0], [0, 0]] :: [[Word32]]
+    heldTcm = [[0x70000011, 0], [knobHeldAtcm1 knobs, 0]] :: [[Word32]]
     mainTcm = [[0x70000011, 0], [0x70000011, 0]] :: [[Word32]]
     globals = hexText (B.replicate 0x40 0x11)
     endpointState = Just (object ["globals" .= globals, "companion" .= hexText (knobCompanion knobs)])
@@ -278,6 +291,8 @@ receiptFor scenario program siteWords knobs = object
       | otherwise = countsTime (uniformCounts period (knobSkew knobs) 1) + 10
     poll = knobPollValue knobs
     rawRows =
+      [(5, const row) | row <- bootBulkWrites]
+      ++
       [ (10, const (transferRow "model-bus-write" 0xa00c4))
       , (20, cpuRow "cpu-write" 0 0x1e64 0x40020000 0x20000 0x22b 0x22b)
       , (21, cpuRow "cpu-write" 0 0x1e68 0x40020004 0x20004 0x22b 0x22b)
@@ -508,6 +523,24 @@ main = do
   assertLeft "snapshot reads beyond the endpoint stops" (startup (Natural Handoff) owned
     (receipt (Natural Handoff) owned plain {knobExtraRows = [(exitTime (Natural Handoff) + 50, globalsRead)]}))
   assertLeft "held gate binding count differs" (startup HeldSentinel owned (change "gate" (set "instructions" (number 1071)) ownedHeld))
+
+  -- Reset-epoch boot transfers: every synthetic receipt above carries the two 0x800-byte boot writes.
+  let resetRefusals =
+        [ ("boot-sized bus write after the 0x1e68 sentinel", 25, busWrite 0x20000 0x800)
+        , ("boot-sized bus write in the released epoch", 1050, busWrite 0x14800 0x800)
+        , ("straddling host read in the reset epoch", 15, sizedTransferRow "host-read" 0x1fffc 8)
+        , ("straddling model-bus read in the reset epoch", 15, sizedTransferRow "model-bus-read" 0x20000 0x800)
+        , ("straddling CPU write in the reset epoch", 15, cpuRow "cpu-write" 0 0x1e64 0x40014c86 0x14c86 0 0 15)
+        ]
+  forM_ resetRefusals $ \(label, time, row) ->
+    assertLeft label (startup (Natural LoaderEntry) owned (receipt (Natural LoaderEntry) owned plain {knobExtraRows = [(time, row)]}))
+
+  -- Held-release TCM: enabled windows are accepted only when disjoint from every guarded view.
+  forM_ [("disabled", 0), ("enabled at 0x70000000", 0x70000011)] $ \(label, atcm) ->
+    assertRight ("held-release core-1 ATCM " ++ label) (startup (Natural LoaderEntry) owned (receipt (Natural LoaderEntry) owned plain {knobHeldAtcm1 = atcm}))
+  forM_ [ ("over record 2", 0x00010011), ("over the peer-cell alias", 0x40020011), ("with a reserved size", 0xffff803d)
+        , ("misaligned", 0x70001011) ] $ \(label, atcm) ->
+    assertLeft ("held-release core-1 ATCM " ++ label) (startup (Natural LoaderEntry) owned (receipt (Natural LoaderEntry) owned plain {knobHeldAtcm1 = atcm}))
 
   -- Phase bounds: accepted at each bound, refused one instruction past it.
   let heldGap = heldFinalTime period - gateTime

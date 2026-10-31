@@ -1170,6 +1170,8 @@ validateEpoch expected end snapshots epoch = do
       fixed = epochName epoch /= ResetEpoch
       afterStart row = not fixed || W.cpuInstructions row > epochStart epoch
       snapshot row = epochName epoch == PublishedEpoch && rowKind row == KindHostRead && rowExtent row `elem` endpointSnapshots
+      -- The model records a reset-epoch bulk bus write at its whole transferred extent.
+      resetBusWrite row = epochName epoch == ResetEpoch && rowKind row == KindModelBusWrite
       contained (Interval low high) = any (\(Interval rangeLow rangeHigh) -> rangeLow <= low && high <= rangeHigh) protocolRanges
   require (W.watchEnabled watch && isNothing (W.watchViolation watch)) (name ++ " watch is disabled or violated")
   require (sort (epochClasses epoch) == sort expected) (name ++ " watch classes differ")
@@ -1185,7 +1187,7 @@ validateEpoch expected end snapshots epoch = do
         kind = rowKind row
     require (any (\(WatchClass classExtent kinds) -> overlaps classExtent extent && kind `elem` kinds) expected) (name ++ " row is not watched by an overlapping class")
     require (kind /= KindHostWrite) "host write in startup receipt"
-    require (snapshot row || contained extent) (name ++ " row lies outside a single protocol range")
+    require (snapshot row || resetBusWrite row || contained extent) (name ++ " row lies outside a single protocol range")
 
 validateCursor :: [W.WatchRecord] -> Instructions -> WatchCursor -> Either String ()
 validateCursor rows time (WatchCursor offset) = do
@@ -1323,11 +1325,10 @@ checkStartupReceipt scenario program receipt = do
     require (isJust (stopProgramState stop) == (stopLabel stop `elem` [StartupHandoff, LoaderBEntry])) "program state presence differs"
   -- 1. held-release
   Bindings choices maps bindingTcm <- maybe (Left "held-release bindings missing") Right (receiptBindings receipt)
-  let TcmBank heldCore0 (Tcm heldAtcm1 heldBtcm1) = stopTcm heldRelease
+  let TcmBank heldCore0 (Tcm _ heldBtcm1) = stopTcm heldRelease
   require (choices == [1]) "decoder choices differ"
   require (sameSet maps requiredMaps) "held-release identity maps differ"
   require (bindingTcm == stopTcm heldRelease) "binding TCM registers differ from the held-release stop"
-  require (not (testBit heldAtcm1 0) && not (testBit heldBtcm1 0)) "core-1 TCM enabled at held-release"
   -- 2. startup-entry record evidence
   RecordEvidence recordDigest siteWords <- maybe (Left "startup-entry record evidence missing") Right (receiptRecord receipt)
   require (F.sha256Hex recordDigest == programRecordHex program) "staged record-2 digest differs from the contract"
@@ -1362,16 +1363,19 @@ checkStartupReceipt scenario program receipt = do
   require (all (isWordLoad . decodedAt . plain) [siteTargetLoad, siteArgumentLoad]) "load site word is not a word LDR"
   -- 3. startup-main
   let TcmBank mainCore0 (Tcm mainAtcm1 mainBtcm1) = stopTcm mainStop
-      TcmBank (Tcm atcm0 btcm0) (Tcm atcm1 btcm1) = stopTcm mainStop
+      banks (TcmBank (Tcm atcm0 btcm0) (Tcm atcm1 btcm1)) = [atcm0, btcm0, atcm1, btcm1]
   require (cpsrMasked (stopCpsr mainStop)) "startup-main CPSR is not masked A32 little-endian SVC"
   require (stopSp mainStop == GuestAddress 0x70000800) "startup-main SP differs"
   require (mainAtcm1 == 0x70000011 && mainBtcm1 == heldBtcm1 && mainCore0 == heldCore0) "startup-main TCM transition differs"
+  forM_ (drop 1 (dropWhile (/= heldRelease) (takeWhile (/= mainStop) stops))) $ \stop ->
+    require (stopTcm stop == stopTcm heldRelease) ("TCM registers changed before startup-main: " ++ labelText (stopLabel stop))
   forM_ [stop | stop <- stops, stopCount stop > stopCount mainStop] $ \stop ->
     require (stopTcm stop == stopTcm mainStop) ("TCM registers changed after startup-main: " ++ labelText (stopLabel stop))
+  -- Guest views of every guarded extent: physical identity, the 0x40000000 alias and every bound map.
   let guarded = concat [[extent, alias extent] | (_, expected) <- classesByEpoch, WatchClass extent _ <- expected]
         ++ [Interval (fromIntegral guest) (fromIntegral guest + fromIntegral size) | MemoryMap _ guest _ size <- maps]
       alias (Interval low high) = Interval (low + 0x40000000) (high + 0x40000000)
-  windows <- mapM tcmWindow [atcm0, btcm0, atcm1, btcm1]
+  windows <- mapM tcmWindow (banks (stopTcm heldRelease) ++ banks (stopTcm mainStop))
   require (and [not (overlaps window extent) | Just window <- windows, extent <- guarded]) "enabled TCM window overlaps a guarded guest view"
   -- 4. peer-loaded pairs
   let releasedRows = rowsOf ReleasedEpoch
@@ -1549,15 +1553,18 @@ requiredMaps =
   [ MemoryMap Core1 0x10000 0x10000 0x4ca0, MemoryMap Core1 0x40020000 0x20000 0x8, MemoryMap Core1 0xd0000 0xd0000 0xdaa0
   , MemoryMap Core1 0x61c000 0x61c000 0x4, MemoryMap Core1 0x61c40c 0x61c40c 0x4 ]
 
--- | Cortex-R TCM region register: base [31:12], size [6:2], enable [0].
+-- | Cortex-R TCM region register: base [31:12], size code [6:2] (@0@ none, @3..14@ 4 KiB..8 MiB), enable [0].
+-- The base must be aligned to the size.
 tcmWindow :: Word32 -> Either String (Maybe Interval)
 tcmWindow value
   | not (testBit value 0) || code == 0 = Right Nothing
-  | code >= 3 && code <= 14 = Right (Just (Interval base (base + bit (code + 9))))
-  | otherwise = Left "TCM region size encoding is reserved"
+  | code < 3 || code > 14 = Left "TCM region size encoding is reserved"
+  | base `mod` size /= 0 || base + size > bit 32 = Left "TCM region is misaligned or extends past 4 GiB"
+  | otherwise = Right (Just (Interval base (base + size)))
   where
     code = fromIntegral ((value `shiftR` 2) .&. 0x1f) :: Int
     base = fromIntegral (value .&. 0xfffff000) :: Word64
+    size = bit (code + 9) :: Word64
 
 validateMicrosteps :: StartupStop -> ClearReadback -> Either String CoreCounts
 validateMicrosteps preclear readback = do
