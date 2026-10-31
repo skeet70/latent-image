@@ -160,7 +160,11 @@ adapterProof image symbols = do
 -- Frame offsets are below incoming SP; Scratch fields occupy [SP, SP+28).
 data Address = FrameAddress Int | ScratchAddress Int | InterfaceAddress Core Int deriving (Eq, Ord)
 data ScratchField = ScratchR0 | ScratchR1 | ScratchR2 | ScratchR3 | ScratchR12 | ScratchLr | ScratchCpsr
-  deriving (Eq, Ord, Enum, Bounded)
+  deriving (Eq, Ord, Enum)
+
+allScratchFields :: [ScratchField]
+allScratchFields = [ScratchR0,ScratchR1,ScratchR2,ScratchR3,ScratchR12,ScratchLr,ScratchCpsr]
+
 data ServiceKind = MaskIrq | RestoreIrq | IdentifyCore | RetryExclusive | ReleaseExclusive | ObserveWord
   deriving (Eq, Ord)
 data PublishedTarget = PublishedTarget Core ServiceKind deriving (Eq, Ord)
@@ -348,7 +352,7 @@ memoryAddresses value = case value of
   _ -> Left "critical-pair Rust memory target has no confined provenance"
 
 scratchField :: Int -> Either String ScratchField
-scratchField offset = case lookup offset [(4*fromEnum field,field) | field <- [minBound..maxBound]] of
+scratchField offset = case lookup offset [(4*fromEnum field,field) | field <- allScratchFields] of
   Just field -> pure field
   Nothing -> Left "critical-pair Rust access leaves the defined Scratch fields"
 
@@ -413,7 +417,7 @@ bridgeSummary frame = do
     Just (PublishedTargets values) | not (Set.null values) -> pure (Set.toList values)
     _ -> Left "critical-pair Rust bridge target lacks closed publication provenance"
   outcomes <- mapM summarize targets
-  fields <- forM [minBound..maxBound] $ \field -> do
+  fields <- forM allScratchFields $ \field -> do
     value <- joinWords [M.findWithDefault UnknownWord field outcome | outcome <- outcomes]
     pure (field,value)
   pure frame
