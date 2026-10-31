@@ -1,4 +1,4 @@
-{ pkgs ? import ./nixpkgs.nix { config = { }; overlays = [ ]; } }:
+{ pkgs ? import ./nixpkgs.nix { config = { }; overlays = [ ]; }, extraPatches ? [ ] }:
 # jitl (justjake)'s FujiMod via skeet70's fork, unlicensed (LICENSING.md);
 # statically links vendored skeet70/unicorn ba96845e.
 let
@@ -18,7 +18,7 @@ let
     patches = [
       ./fujimod-unicorn-context-align.patch
       ./fujimod-classified-watch.patch
-    ];
+    ] ++ extraPatches;
   };
   # Upstream's mise.toml pins Rust 1.99.1; cargo 1.98 rejects the workspace's
   # `default-features = false` overrides of inherited dependencies.
