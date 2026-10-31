@@ -320,7 +320,7 @@ receiptFor scenario program siteWords knobs = object
            [ (exitTime + 10, cpuRow "cpu-write" 1 (site siteTargetStore) 0x14c80 0x14c80 0xd0020 0)
            , (exitTime + 20, cpuRow "cpu-write" 1 (site siteArgumentStore) 0x14c84 0x14c84 argumentWord 0)
            , (exitTime + 30, cpuRow "cpu-read" 1 (site siteTargetLoad) 0x14c80 0x14c80 0xd0020 0xd0020)
-           , (exitTime + 40, cpuRow "cpu-read" 1 (site siteArgumentLoad) 0x14c84 0x14c84 argumentWord argumentWord) ]
+           , (exitTime + 100, cpuRow "cpu-read" 1 (site siteArgumentLoad) 0x14c84 0x14c84 argumentWord argumentWord) ]
            ++ [ (exitTime + offset, cpuRow "cpu-read" 1 pc (tableGuestRoot + tableOffset) (tablePhysicalRoot + tableOffset) value value)
               | knobTableReads knobs, (offset, pc, tableOffset, value) <- [(3, 0x13588, 0, 7), (5, 0x135b4, 36, 1), (7, 0x11f90, 40, 0x700000)] ]
            ++ concat [ [(time, const (sizedTransferRow "host-read" 0x14c60 0x40)), (time, const (sizedTransferRow "host-read" 0xa0000 0x548))]
