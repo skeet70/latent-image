@@ -22,6 +22,28 @@ index eea30e6..d4ba888 100644
          let mut state = self
              .state
              .try_borrow_mut()
+diff --git a/crates/emulator/src/board/memory.rs b/crates/emulator/src/board/memory.rs
+index ea20a6b..24bba4d 100644
+--- a/crates/emulator/src/board/memory.rs
++++ b/crates/emulator/src/board/memory.rs
+@@ -72,6 +72,9 @@ pub struct Memory {
+     mappings: RefCell<Vec<BusMapping>>,
+     trackers: Vec<fujimod_emulator_cpu::memory::pages::Tracker>,
+     pub(super) observation: RefCell<Option<std::rc::Weak<RefCell<super::observation::Records>>>>,
++    /// Legacy memory watches begun and not yet completely ended, including
++    /// replaced ones that no longer own `observation`.
++    pub(super) armed_watches: std::cell::Cell<usize>,
+     pub(super) preservation:
+         RefCell<Option<std::rc::Weak<RefCell<super::preservation::PreservationRecords>>>>,
+ }
+@@ -329,6 +332,7 @@ impl Memory {
+             mappings: RefCell::new(mappings),
+             trackers,
+             observation: Default::default(),
++            armed_watches: Default::default(),
+             preservation: Default::default(),
+             continuation: Default::default(),
+         })
 diff --git a/crates/emulator/src/board/mod.rs b/crates/emulator/src/board/mod.rs
 index 01d5dee..e03ea34 100644
 --- a/crates/emulator/src/board/mod.rs
@@ -36,7 +58,7 @@ index 01d5dee..e03ea34 100644
  #[cfg(test)]
  mod tests;
 diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/board/observation.rs
-index c919039..c4bd54a 100644
+index c919039..d0e7bcf 100644
 --- a/crates/emulator/src/board/observation.rs
 +++ b/crates/emulator/src/board/observation.rs
 @@ -1,5 +1,6 @@
@@ -105,7 +127,23 @@ index c919039..c4bd54a 100644
          state
      }
  }
-@@ -149,7 +162,74 @@ struct MemoryContext {
+@@ -141,6 +154,15 @@ pub struct MemoryWatch {
+     pub records: Rc<RefCell<Records>>,
+     contexts: Vec<Box<MemoryContext>>,
+     hooks: Vec<(usize, HookId)>,
++    lifetime: WatchLifetime,
++}
++/// Whether a legacy watch still counts in `Memory::armed_watches`.
++#[derive(Clone, Copy, PartialEq, Eq)]
++enum WatchLifetime {
++    Armed,
++    Ended,
++    /// A hook removal failed; the watch stays counted.
++    Stuck,
+ }
+ struct MemoryContext {
+     state: Weak<RefCell<State>>,
+@@ -149,7 +171,74 @@ struct MemoryContext {
      maps: Vec<MemoryMap>,
      core: usize,
  }
@@ -180,7 +218,7 @@ index c919039..c4bd54a 100644
      fn record(
          &self,
          source: &str,
-@@ -161,18 +241,7 @@ impl MemoryContext {
+@@ -161,18 +250,7 @@ impl MemoryContext {
              return Ok(());
          };
          let state = state.borrow();
@@ -200,7 +238,7 @@ index c919039..c4bd54a 100644
          let mut records = self.records.borrow_mut();
          let Some(physical) = physical else {
              return if records.views == ViewPolicy::Fixed {
-@@ -187,11 +256,7 @@ impl MemoryContext {
+@@ -187,11 +265,7 @@ impl MemoryContext {
          if tcm_overlap(&*cpu, address, size)? {
              return Err("Memory watch intersects a CPU-private TCM overlay".into());
          }
@@ -213,7 +251,7 @@ index c919039..c4bd54a 100644
          let before = if source != "cpu-fetch" {
              if !(1..=16).contains(&size) {
                  return Err("Memory watch cannot capture this CPU access width".into());
-@@ -203,37 +268,16 @@ impl MemoryContext {
+@@ -203,37 +277,16 @@ impl MemoryContext {
              None
          };
          let value = if source == "cpu-read" && size <= 8 {
@@ -255,7 +293,7 @@ index c919039..c4bd54a 100644
          );
          Ok(())
      }
-@@ -354,6 +398,9 @@ impl Board {
+@@ -354,6 +407,9 @@ impl Board {
          if self.preservation_active() {
              return Err("A preservation observation conflicts with memory watch".into());
          }
@@ -265,7 +303,20 @@ index c919039..c4bd54a 100644
          let ranges = union(ranges);
          self.watch_backing(&ranges)?;
          let records = Rc::new(RefCell::new(Records {
-@@ -470,6 +517,9 @@ impl Board {
+@@ -361,11 +417,7 @@ impl Board {
+             limit,
+             ..Default::default()
+         }));
+-        let mut watch = Box::new(MemoryWatch {
+-            records: records.clone(),
+-            contexts: vec![],
+-            hooks: vec![],
+-        });
++        let mut watch = self.armed_watch(records.clone());
+         for (core, cpu) in self.cpus.iter().enumerate() {
+             let mut views = maps
+                 .iter()
+@@ -470,6 +522,9 @@ impl Board {
          if self.preservation_active() {
              return Err("A preservation observation conflicts with memory watch".into());
          }
@@ -275,23 +326,59 @@ index c919039..c4bd54a 100644
          let ranges = union(classes.iter().map(|range| (range.start, range.end)).collect());
          self.watch_backing(&ranges)?;
          let records = Rc::new(RefCell::new(Records {
-@@ -558,7 +608,9 @@ impl Board {
+@@ -479,11 +534,7 @@ impl Board {
+             views,
+             ..Default::default()
+         }));
+-        let mut watch = Box::new(MemoryWatch {
+-            records: records.clone(),
+-            contexts: vec![],
+-            hooks: vec![],
+-        });
++        let mut watch = self.armed_watch(records.clone());
+         for (core, cpu) in self.cpus.iter().enumerate() {
+             let mut processor_views = maps
+                 .iter()
+@@ -554,11 +605,31 @@ impl Board {
+             .replace(Some(Rc::downgrade(&records)));
+         Ok(watch)
+     }
++    fn armed_watch(&self, records: Rc<RefCell<Records>>) -> Box<MemoryWatch> {
++        let armed = &self.physical_memory.armed_watches;
++        armed.set(armed.get() + 1);
++        Box::new(MemoryWatch {
++            records,
++            contexts: vec![],
++            hooks: vec![],
++            lifetime: WatchLifetime::Armed,
++        })
++    }
+     pub fn memory_watch_end(&self, watch: &mut MemoryWatch) -> Result<(), String> {
          for (core, hook) in watch.hooks.drain(..) {
-             self.cpus[core].remove_hook(hook)?;
-         }
--        self.physical_memory.observation.replace(None);
+-            self.cpus[core].remove_hook(hook)?;
++            if let Err(error) = self.cpus[core].remove_hook(hook) {
++                watch.lifetime = WatchLifetime::Stuck;
++                return Err(error);
++            }
++        }
++        if watch.lifetime == WatchLifetime::Armed {
++            watch.lifetime = WatchLifetime::Ended;
++            let armed = &self.physical_memory.armed_watches;
++            armed.set(armed.get().saturating_sub(1));
++        }
 +        if !self.scoped_watch_active() {
 +            self.physical_memory.observation.replace(None);
-+        }
+         }
+-        self.physical_memory.observation.replace(None);
          Ok(())
      }
  }
 diff --git a/crates/emulator/src/board/observation/scoped.rs b/crates/emulator/src/board/observation/scoped.rs
 new file mode 100644
-index 0000000..9268ecb
+index 0000000..9183e0e
 --- /dev/null
 +++ b/crates/emulator/src/board/observation/scoped.rs
-@@ -0,0 +1,1312 @@
+@@ -0,0 +1,1319 @@
 +//! A fixed-view memory watch with core-filtered confinement, word-read
 +//! counters and zero-fill coverage beside the logged classes.
 +//!
@@ -1317,8 +1404,11 @@ index 0000000..9268ecb
 +
 +    /// Views are [`ViewPolicy::Fixed`] and execution must stay
 +    /// [`ExecutionPolicy::Exact`]. A read sample's `value` is RAM at hook
-+    /// time, before the instruction's load. Refuses while any memory watch or
-+    /// preservation observation is active; refused calls install nothing.
++    /// time, before the instruction's load. Refuses while any memory watch,
++    /// including a replaced one not yet ended, or a preservation observation
++    /// is active. A refusal leaves no hooks, except when a hook installation
++    /// fails and so does its rollback; the board then stays as if this watch
++    /// were active.
 +    pub fn memory_watch_begin_scoped(
 +        &self,
 +        watch: ScopedWatch,
@@ -1340,6 +1430,7 @@ index 0000000..9268ecb
 +            return Err("Scoped memory watch requires R-profile processors".into());
 +        }
 +        if self.preservation_active()
++            || self.physical_memory.armed_watches.get() != 0
 +            || self
 +                .physical_memory
 +                .observation
@@ -1559,6 +1650,10 @@ index 0000000..9268ecb
 +            hooks: vec![],
 +            broken: false,
 +        });
++        // A failed rollback leaves this slot armed.
++        self.physical_memory
++            .observation
++            .replace(Some(Rc::downgrade(&records)));
 +        for ((core, cpu), plan) in self.cpus.iter().enumerate().zip(plans) {
 +            watch.contexts.push(Box::new(MemoryContext {
 +                state: Rc::downgrade(&self.state),
@@ -1588,15 +1683,14 @@ index 0000000..9268ecb
 +                match unsafe { cpu.install_hook(hook) } {
 +                    Ok(id) => watch.hooks.push((Rc::downgrade(cpu), id)),
 +                    Err(error) => {
-+                        watch.end()?;
-+                        return Err(error);
++                        return Err(match watch.end() {
++                            Ok(()) => error,
++                            Err(cleanup) => format!("{error}; scoped watch rollback failed: {cleanup}"),
++                        });
 +                    }
 +                }
 +            }
 +        }
-+        self.physical_memory
-+            .observation
-+            .replace(Some(Rc::downgrade(&records)));
 +        Ok(watch)
 +    }
 +
@@ -1606,10 +1700,10 @@ index 0000000..9268ecb
 +}
 diff --git a/crates/emulator/src/board/scoped_watch_tests.rs b/crates/emulator/src/board/scoped_watch_tests.rs
 new file mode 100644
-index 0000000..296516a
+index 0000000..de651cf
 --- /dev/null
 +++ b/crates/emulator/src/board/scoped_watch_tests.rs
-@@ -0,0 +1,590 @@
+@@ -0,0 +1,620 @@
 +use super::bus::{Bus, Mode};
 +use super::factory::{Engine, Graph, MemoryMap, Options, Processor, Ram};
 +use super::memory::BusMapping;
@@ -2185,18 +2279,48 @@ index 0000000..296516a
 +}
 +
 +#[test]
-+fn ending_a_replaced_legacy_watch_leaves_the_scoped_watch_armed() {
++fn a_replaced_legacy_watch_refuses_scoped_watches_until_it_ends() {
 +    let board = board();
 +    let maps = board.mappings().to_vec();
 +    let range = vec![(SHARED_PHYSICAL, SHARED_PHYSICAL + 4)];
 +    let mut replaced = board.memory_watch_begin(range.clone(), 8, maps.clone()).unwrap();
-+    let mut current = board.memory_watch_begin(range, 8, maps).unwrap();
++    let mut current = board.memory_watch_begin(range, 8, maps.clone()).unwrap();
 +    board.memory_watch_end(&mut current).unwrap();
++    board.memory_watch_end(&mut current).unwrap();
++    assert!(board.memory_watch_begin_scoped(host_writes(), maps.clone()).is_err());
++    board.memory_watch_end(&mut replaced).unwrap();
 +    let scoped = begin(&board, host_writes());
 +    board.memory_watch_end(&mut replaced).unwrap();
++    board.memory_watch_end(&mut current).unwrap();
 +    board.write_physical(SHARED_PHYSICAL, &[1, 0, 0, 0]).unwrap();
 +    assert_eq!(rows(&scoped.state()["records"]).len(), 1);
 +    assert!(board.checkpoint(None).is_err());
 +    drop(scoped);
 +    assert!(board.checkpoint(None).is_ok());
++}
++
++#[test]
++fn a_host_only_legacy_watch_counts_until_ended_even_without_cpu_hooks() {
++    let board = board();
++    let maps = board.mappings().to_vec();
++    let host_only = || {
++        board
++            .memory_watch_begin_classified(
++                vec![WatchRange {
++                    start: SHARED_PHYSICAL,
++                    end: SHARED_PHYSICAL + 4,
++                    kinds: WatchKinds::HOST_WRITE,
++                }],
++                8,
++                maps.clone(),
++                ViewPolicy::Fixed,
++            )
++            .unwrap()
++    };
++    let mut ended = host_only();
++    board.memory_watch_end(&mut ended).unwrap();
++    board.memory_watch_end(&mut ended).unwrap();
++    begin(&board, host_writes()).end().unwrap();
++    drop(host_only());
++    assert!(board.memory_watch_begin_scoped(host_writes(), maps.clone()).is_err());
 +}
