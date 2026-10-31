@@ -16,7 +16,7 @@ module Emulation.CaptureStream
   ) where
 
 import Control.DeepSeq (NFData, force)
-import Control.Exception (bracketOnError, finally)
+import Control.Exception (bracket, bracketOnError, finally)
 import Control.Monad (unless, when)
 import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), object, encode, (.:), (.=))
 import qualified Data.Aeson as A
@@ -25,14 +25,15 @@ import Data.Aeson.Key (Key)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
-import Data.List (nub)
+import Data.List (foldl', nub)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Word (Word32, Word64)
 import GHC.Generics (Generic)
 import GHC.IO.Handle (hDuplicate)
+import System.FilePath (takeDirectory)
 import System.IO (Handle, IOMode (WriteMode), hClose, hFlush, openBinaryFile)
-import System.Posix.IO (closeFd, handleToFd)
+import System.Posix.IO (OpenMode (ReadOnly), closeFd, defaultFileFlags, handleToFd, openFd)
 import System.Posix.Types (Fd)
 import System.Posix.Unistd (fileSynchronise)
 
@@ -154,10 +155,18 @@ parseAdvance operation = A.parseEither $ A.withObject "capture advancement" $ \o
               && instructionValue finish - instructionValue start == budget
           adjacent (PhaseObservation _ _ finish) (PhaseObservation _ start _) = finish == start
           phaseCount = case current of HalfInitial -> 0; FullHeld -> 1; HalfFinal -> 2; ReleasedFinal -> 3
+          currentBudget = case current of HalfInitial -> 8000000; FullHeld -> 8000000; HalfFinal -> 4000000; ReleasedFinal -> 4000000
+          endpointCount = instructionValue endpoint
+          lastFinish = foldl' (\_ (PhaseObservation _ _ finish) -> Just finish) Nothing phases
       unless (length phases == (if state == Completed then 4 else phaseCount)
           && and (zipWith validPhase phases specs)
           && and (zipWith adjacent phases (drop 1 phases)))
         (fail "invalid shutter phase observations")
+      unless (endpointCount >= currentBudget) (fail "shutter phase endpoint precedes its budget")
+      let currentStart = Instructions (endpointCount - currentBudget)
+          expectedTail = case state of Completed -> endpoint; DrainRequired -> currentStart
+      unless (at >= currentStart && maybe (state == DrainRequired) (== expectedTail) lastFinish)
+        (fail "shutter phase evidence disagrees with its instruction boundary")
       pure (Just current)
   pure (Advance state at endpoint phase)
 
@@ -292,11 +301,14 @@ pageValue page = object
   , "sites" .= map siteValue (pageSites page), "hits" .= map eventValue (pageHits page) ]
 
 data Interval = Interval Instructions Instructions deriving (Eq, Generic, NFData)
-data InstrumentationGap = NoObservedGap | ObservedGap | UnknownGap deriving (Eq, Generic, NFData)
+data EventContextGap = NoObservedGap | ObservedGap | UnknownGap deriving (Eq, Generic, NFData)
+data InstrumentationCoverage = ArmedSitesOnly
+instance ToJSON InstrumentationCoverage where
+  toJSON ArmedSitesOnly = object ["scope" .= ("armed-sites-only" :: T.Text), "uninstrumented_gap" .= Null]
 data Coverage = Coverage
   { coverageBegin :: Instructions, coverageCollected :: Maybe Instructions
   , coveragePending :: Maybe Interval, coverageObserved :: Instructions
-  , coverageDetailLoss :: Bool, coverageInstrumentationGap :: InstrumentationGap
+  , coverageDetailLoss :: Bool, coverageEventContextGap :: EventContextGap
   } deriving (Generic, NFData)
 startCoverage :: Instructions -> Coverage
 startCoverage at = Coverage at Nothing Nothing at False UnknownGap
@@ -337,14 +349,14 @@ collectBoundary page coverage = do
     { coverageCollected = if complete then Just (pageThrough page) else coverageCollected coverage
     , coverageObserved = pageThrough page, coveragePending = pending
     , coverageDetailLoss = coverageDetailLoss coverage || pageDropped page /= 0
-    , coverageInstrumentationGap =
-        if coverageInstrumentationGap coverage == ObservedGap || any eventRamIncomplete (pageHits page)
+    , coverageEventContextGap =
+        if coverageEventContextGap coverage == ObservedGap || any eventRamIncomplete (pageHits page)
             || (pageIncomplete page && pageDropped page == 0)
           then ObservedGap
           else if pageDropped page /= 0 || not (pageBoundaryComplete page) then UnknownGap else NoObservedGap }
 coverageIncomplete :: Coverage -> Bool
 coverageIncomplete coverage = coverageCollected coverage == Nothing || coveragePending coverage /= Nothing || coverageDetailLoss coverage
-  || coverageInstrumentationGap coverage /= NoObservedGap
+  || coverageEventContextGap coverage /= NoObservedGap
 coverageValue :: Coverage -> Value
 coverageValue coverage = object
   [ "from_instructions" .= coverageBegin coverage, "through_instructions" .= coverageCollected coverage
@@ -352,8 +364,9 @@ coverageValue coverage = object
   , "pending_uncollected_interval" .= fmap intervalValue (coveragePending coverage)
   , "observed_through_instructions" .= coverageObserved coverage
   , "detail_loss" .= coverageDetailLoss coverage
-  , "ram_context_or_instrumentation_gap" .= (case coverageInstrumentationGap coverage of
+  , "retained_event_ram_context_gap" .= (case coverageEventContextGap coverage of
       NoObservedGap -> Just False; ObservedGap -> Just True; UnknownGap -> Nothing :: Maybe Bool)
+  , "instrumentation_coverage" .= ArmedSitesOnly
   , "incomplete" .= coverageIncomplete coverage ]
   where intervalValue (Interval from endpoint) = object ["from_instructions" .= from, "intended_endpoint" .= endpoint]
 
@@ -378,9 +391,15 @@ readBoundedLine (BoundedReader handle buffered) = readIORef buffered >>= go [] 0
 
 data Journal = Journal Handle Fd
 openJournal :: FilePath -> IO Journal
-openJournal path = bracketOnError (openBinaryFile path WriteMode) hClose $ \handle -> do
-  fd <- hDuplicate handle >>= handleToFd
-  pure (Journal handle fd)
+openJournal path = bracketOnError (openBinaryFile path WriteMode) hClose $ \handle ->
+  bracketOnError (bracketOnError (hDuplicate handle) hClose handleToFd) closeFd $ \fd -> do
+    fileSynchronise fd
+    let directory = takeDirectory path
+        parent = takeDirectory directory
+        syncDirectory name = bracket (openFd name ReadOnly defaultFileFlags) closeFd fileSynchronise
+    syncDirectory directory
+    when (parent /= directory) (syncDirectory parent)
+    pure (Journal handle fd)
 note :: Journal -> T.Text -> Value -> IO ()
 note (Journal handle _) label value = do
   BL.hPut handle (encode (object ["label" .= label, "value" .= value]) <> "\n")

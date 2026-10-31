@@ -1,9 +1,10 @@
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 -- | Stock media-route diagnostics through the RAM-push bridge.
 module Main (main) where
 
 import Control.Applicative ((<|>))
-import Control.DeepSeq (rnf)
+import Control.DeepSeq (NFData (..), force)
 import Control.Exception (Exception, IOException, SomeException, displayException, evaluate, throwIO, try)
 import Control.Monad (forM, forM_, unless, when)
 import qualified Crypto.Hash.SHA256 as SHA256
@@ -17,13 +18,14 @@ import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import Data.Foldable (toList)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
-import Data.List (find, isInfixOf, isPrefixOf, nub)
+import Data.List (find, foldl', isInfixOf, isPrefixOf, nub)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Word (Word32, Word64, Word8)
 import qualified Emulation.CaptureStream as CS
+import GHC.Generics (Generic)
 import Numeric (readHex, showHex)
 import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesFileExist, doesPathExist, makeAbsolute)
 import System.Environment (getArgs, getEnvironment)
@@ -804,6 +806,8 @@ captureContinuationSites =
   ]
 
 data Hit = Hit { hitLabel :: T.Text, hitRegisters :: [Maybe Word32], hitInstructions :: Maybe Integer, hitRaw :: Value }
+  deriving (Generic)
+instance NFData Hit
 
 hitR :: Int -> Hit -> Maybe Word32
 hitR index hit = case drop index (hitRegisters hit) of
@@ -884,7 +888,7 @@ captureObservationHits bridge journal observed = do
         if complete then do
           modifyIORef' (obsLedger observed) $ \ledger ->
             let totals = Map.fromList [(CS.siteLabel s, toInteger (CS.siteTotal s)) | s <- CS.pageSites metadata]
-            in ledger { ledgerCounts = Map.union (Map.unionWith (+) totals (ledgerBeforePress ledger)) (ledgerCounts ledger) }
+            in force ledger { ledgerCounts = Map.union (Map.unionWith (+) totals (ledgerBeforePress ledger)) (ledgerCounts ledger) }
           collected <- readIORef (obsCapture observed)
           note journal "capture-observation-interval" (maybe Null captureProgressValue collected)
           pure (CS.pageTotal page > previousTotal || CS.pageIncomplete page)
@@ -928,14 +932,22 @@ foldCaptureHits observed fullHits = do
         , "image-input-channel-2-enable-call", "raw-client-post", "ui-notification-post", "reccont-15-df2378-call"
         , "reccont-15-df2378-result", "reccont-4d-completion-inputs", "reccont-4e-message", "reccont-15-command"
         , "reccont-submit", "reccont-4e-state-9-query", "modal-4a-97-state-8-return", "file-read" ]
-  writeIORef (obsLedger observed) ledger'
+  evaluatedLedger <- evaluate (force ledger')
+  writeIORef (obsLedger observed) evaluatedLedger
   compactHits <- forM (filter ((`elem` evidenceLabels) . hitLabel) kept) $ \hit -> do
     let label = hitLabel hit
         registers = hitRegisters hit
         at = hitInstructions hit
         compact = object ["site" .= label, "registers" .= registers, "instructions" .= at]
     evaluate (rnf (label, registers, at, compact) `seq` Hit label registers at compact)
-  modifyIORef' (obsHits observed) (++ compactHits)
+  appendKeptHits (obsHits observed) compactHits
+
+appendKeptHits :: IORef [Hit] -> [Hit] -> IO ()
+appendKeptHits _ [] = pure ()
+appendKeptHits ref hits = do
+  previous <- readIORef ref
+  combined <- evaluate (force (previous ++ hits))
+  writeIORef ref combined
 
 hitsAt :: T.Text -> [Hit] -> [Hit]
 hitsAt label = filter ((== label) . hitLabel)
@@ -962,6 +974,8 @@ imageInputBase = 0xfff10000
 
 -- | The traced configuration as of a line-36 handler entry.
 data Line36 = Line36 { line36Instructions :: Integer, line36Configuration :: TracedConfiguration }
+  deriving (Generic)
+instance NFData Line36
 
 data TracePhase = BeforePress | AfterPress
 
@@ -972,6 +986,8 @@ data TraceLedger = TraceLedger
   , ledgerFirstLine36 :: Maybe Line36
   , ledgerLastLine36 :: Maybe Line36
   }
+  deriving (Generic)
+instance NFData TraceLedger
 
 emptyLedger :: TraceLedger
 emptyLedger = TraceLedger Map.empty Map.empty Map.empty Nothing Nothing
@@ -982,7 +998,9 @@ sincePress ledger label = Map.findWithDefault 0 label (ledgerCounts ledger) - Ma
 
 -- | Folds one window's hits in order; returns the ledger and the hits kept from this window.
 absorb :: TraceLedger -> [Hit] -> (TraceLedger, [Hit])
-absorb start = foldl step (start, [])
+absorb start hits =
+  let (ledger, reversed) = foldl' step (start, []) hits
+  in (ledger, reverse reversed)
   where
     step (ledger, kept) hit =
       let label = hitLabel hit
@@ -999,7 +1017,7 @@ absorb start = foldl step (start, [])
             , ledgerConfiguration = registers
             , ledgerFirstLine36 = if isLine36 && isNothing (ledgerFirstLine36 ledger) then Just line36 else ledgerFirstLine36 ledger
             , ledgerLastLine36 = if isLine36 then Just line36 else ledgerLastLine36 ledger }
-      in (ledger', if seen < fromIntegral hitCap then kept ++ [hit] else kept)
+      in (ledger', if seen < fromIntegral hitCap then hit : kept else kept)
 
 tracedConfigurationValue :: TracedConfiguration -> Value
 tracedConfigurationValue file = object
@@ -1087,13 +1105,14 @@ foldHits observed phase hits = do
   ledger <- readIORef (obsLedger observed)
   let (ledger', kept) = absorb ledger hits
       counts = Map.fromListWith (+) [(hitLabel hit, 1 :: Int) | hit <- hits]
+  evaluatedLedger <- evaluate (force ledger')
   case phase of
     BeforePress -> do
-      writeIORef (obsLedger observed) ledger' { ledgerBeforePress = ledgerCounts ledger' }
-      modifyIORef' (obsBeforeHits observed) (++ kept)
+      writeIORef (obsLedger observed) evaluatedLedger { ledgerBeforePress = ledgerCounts evaluatedLedger }
+      appendKeptHits (obsBeforeHits observed) kept
     AfterPress -> do
-      writeIORef (obsLedger observed) ledger'
-      modifyIORef' (obsHits observed) (++ kept)
+      writeIORef (obsLedger observed) evaluatedLedger
+      appendKeptHits (obsHits observed) kept
   pure (object [ "trace_hits_kept" .= map hitRaw kept, "trace_hit_counts" .= counts
                , "trace_hits_over_cap" .= (length hits - length kept) ])
 

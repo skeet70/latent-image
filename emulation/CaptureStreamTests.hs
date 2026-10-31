@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
-import Control.Exception (IOException, bracket, try)
+import Control.Exception (IOException, bracket, bracket_, try)
 import Control.Monad (forM_, unless)
 import Data.Aeson (Value (..), eitherDecodeStrict', object, toJSON, (.=))
 import qualified Data.Aeson.Key as K
@@ -11,8 +11,11 @@ import Data.Either (isLeft)
 import qualified Data.Text as T
 import Data.Word (Word64)
 import Emulation.CaptureStream
-import System.Directory (getTemporaryDirectory, removeFile)
+import System.Directory (createDirectory, getTemporaryDirectory, removeDirectoryRecursive, removeFile)
+import System.FilePath ((</>))
 import System.IO (IOMode (ReadMode), hClose, openBinaryTempFile, withBinaryFile)
+import System.IO.Error (isPermissionError)
+import System.Posix.Files (setFileMode)
 
 check :: String -> Bool -> IO ()
 check name holds = unless holds (fail name)
@@ -141,6 +144,10 @@ coverageTests = do
   check "begin state is not a successfully collected interval" (field "last_successful_collected_through" (coverageValue unobserved) == Just Null)
   check "advancement requires initial empty boundary" (isLeft (openInterval ShutterSequence unobserved))
   initialCoverage <- right (collectBoundary initialPage unobserved)
+  check "complete retained-event boundary does not prove instrumentation coverage"
+    (field "retained_event_ram_context_gap" (coverageValue initialCoverage) == Just (Bool False)
+      && field "instrumentation_coverage" (coverageValue initialCoverage)
+        == Just (object ["scope" .= ("armed-sites-only" :: T.Text), "uninstrumented_gap" .= Null]))
   started <- right (openInterval ShutterSequence initialCoverage)
   paused <- right (parseAdvance ShutterSequence (sequenceProgress "drain-required" 8000100 8000100 0 "half" []))
   right (validateAdvance paused started)
@@ -152,6 +159,25 @@ coverageTests = do
   check "fixed physical sequence completes at 24M" (advanceState sequenceDone == Completed && instructionValue (advanceInstructions sequenceDone) == 24000100)
   check "changed physical contact rejected" (isLeft (parseAdvance ShutterSequence (sequenceProgress "drain-required" 100 8000100 0 "full" [])))
   check "changed phase budget rejected" (isLeft (parseAdvance ShutterSequence (sequenceProgress "completed" 24000100 24000100 3 "released" (phase "half" 100 8000101 : drop 1 phaseRows))))
+  let shiftedRows = [phase "half" 1000 8001000, phase "full" 8001000 16001000, phase "half" 16001000 20001000, phase "released" 20001000 24001000]
+  check "completed phase tail must match declared endpoint" (isLeft (parseAdvance ShutterSequence
+    (sequenceProgress "completed" 24000100 24000100 3 "released" shiftedRows)))
+  shiftedOperation <- right (parseAdvance ShutterSequence
+    (sequenceProgress "completed" 24001000 24001000 3 "released" shiftedRows))
+  check "completed phase range must match opened interval" (isLeft (validateAdvance shiftedOperation started))
+  check "phase-zero current cannot precede operation start" (isLeft (parseAdvance ShutterSequence
+    (sequenceProgress "drain-required" 99 8000100 0 "half" [])))
+  check "paused current cannot precede current phase start" (isLeft (parseAdvance ShutterSequence
+    (sequenceProgress "drain-required" 8000099 16000100 1 "full" (take 1 phaseRows))))
+  check "paused previous phase tail must match current phase start" (isLeft (parseAdvance ShutterSequence
+    (sequenceProgress "drain-required" 8000100 16000100 1 "full" (take 1 shiftedRows))))
+  forM_ [(0, "half", 100, 8000100, []), (1, "full", 8000100, 16000100, take 1 phaseRows)
+        ,(1, "full", 16000100, 16000100, take 1 phaseRows)] $ \(phaseIndex, contact, at, endpoint, previous) -> do
+    validPause <- right (parseAdvance ShutterSequence
+      (sequenceProgress "drain-required" at endpoint phaseIndex contact previous))
+    right (validateAdvance validPause started)
+    check "phase starts and exact endpoints remain valid pauses"
+      (advanceState validPause == DrainRequired && instructionValue (advanceInstructions validPause) == at)
   first <- right (parsePage initialCursor (page 0 64 64 8000100 True [event n 8000100 (n `mod` 2) | n <- [0..63]]))
   uncollected <- right (collectBoundary first started)
   check "nonempty page does not claim interval collected" (field "last_successful_collected_through" (coverageValue uncollected) == Just (Number 100))
@@ -181,18 +207,18 @@ coverageTests = do
   incompleteEmpty <- right (parsePage initialCursor (page 0 0 0 101 False []))
   incompleteCoverage <- right (collectBoundary incompleteEmpty initialCoverage)
   check "held hooks do not advance successful boundary" (field "last_successful_collected_through" (coverageValue incompleteCoverage) == Just (Number 100))
-  check "held-hook instrumentation remains unknown" (field "ram_context_or_instrumentation_gap" (coverageValue incompleteCoverage) == Just Null)
+  check "held-hook event context remains unknown" (field "retained_event_ram_context_gap" (coverageValue incompleteCoverage) == Just Null)
   let lostFixture = replace "total" (Number 1) $ replace "dropped" (Number 1) $ replace "incomplete" (Bool True)
         $ replace "sites" (toJSON [site 4096 1 0 1 100]) (page 0 0 0 100 True [])
   lostPage <- right (parsePage initialCursor lostFixture)
   lost <- right (collectBoundary lostPage (startCoverage (pageThrough initialPage)))
   check "detail loss does not imply known RAM completeness" (field "detail_loss" (coverageValue lost) == Just (Bool True)
-    && field "ram_context_or_instrumentation_gap" (coverageValue lost) == Just Null)
+    && field "retained_event_ram_context_gap" (coverageValue lost) == Just Null)
   let ramGapFixture = replace "incomplete" (Bool True) $ page 0 1 1 100 True [replace "ram_incomplete" (Bool True) (event 0 100 0)]
   ramGapPage <- right (parsePage initialCursor ramGapFixture)
   ramGap <- right (collectBoundary ramGapPage (startCoverage (pageThrough initialPage)))
   check "RAM gap stays separate from detail loss" (field "detail_loss" (coverageValue ramGap) == Just (Bool False)
-    && field "ram_context_or_instrumentation_gap" (coverageValue ramGap) == Just (Bool True))
+    && field "retained_event_ram_context_gap" (coverageValue ramGap) == Just (Bool True))
 
 ioTests :: IO ()
 ioTests = do
@@ -210,6 +236,25 @@ ioTests = do
     closeJournal journal
     failed <- try (journalPage journal initialCursor fixture) :: IO (Either IOException Page)
     check "journal failure cannot yield an acknowledgeable page" (isLeft failed)
+  withTemp $ \base -> do
+    let parent = base ++ ".directory"
+        output = parent </> "fresh-output"
+        path = output </> "observations.jsonl"
+    bracket_ (createDirectory parent) (removeDirectoryRecursive parent) $ do
+      createDirectory output
+      refused <- bracket_ (setFileMode parent 0o100) (setFileMode parent 0o700)
+        (try (openJournal path) :: IO (Either IOException Journal))
+      case refused of
+        Left err -> check "unreadable output parent refuses journal acquisition" (isPermissionError err)
+        Right journal -> closeJournal journal >> fail "journal acquired without synchronizing its parent directory"
+      untouched <- B.readFile path
+      check "directory synchronization failure publishes no page" (B.null untouched)
+      bracket (openJournal path) closeJournal $ \journal -> do
+        let fixture = page 0 1 1 100 True [event 0 100 0]
+        _ <- journalPage journal initialCursor fixture
+        persisted <- B.readFile path >>= right . eitherDecodeStrict'
+        check "fresh output directory preserves its complete page"
+          (persisted == object ["label" .= ("capture-observation-page" :: T.Text), "value" .= fixture])
   forM_ [0,4095,4096,1048576] $ \size -> withTemp $ \path -> do
     let line = B.replicate size 120
     B.writeFile path (line <> "\nsecond\n")

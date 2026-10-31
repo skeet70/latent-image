@@ -2261,6 +2261,7 @@ haskell_library(
         "//host:base",
         "//host:bytestring",
         "//host:deepseq",
+        "//host:filepath",
         "//host:text",
         "//host:unix",
     ],
@@ -2298,6 +2299,8 @@ haskell_test(
         "//host:base",
         "//host:bytestring",
         "//host:directory",
+        "//host:filepath",
         "//host:text",
+        "//host:unix",
     ],
 )
