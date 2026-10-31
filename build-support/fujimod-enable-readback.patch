@@ -1,20 +1,41 @@
 diff --git a/crates/emulator-exr2-isp-input/src/input.rs b/crates/emulator-exr2-isp-input/src/input.rs
-index d44b667..a71397b 100644
 --- a/crates/emulator-exr2-isp-input/src/input.rs
 +++ b/crates/emulator-exr2-isp-input/src/input.rs
-@@ -10,7 +10,7 @@ use fujimod_emulator_parts_sensor::sensor::Sensor;
+@@ -10,7 +10,7 @@
  use fujimod_emulator_imaging::scene::FrameEdge;
  use fujimod_emulator_devices::{Cx, Device};
  use serde::{Deserialize, Serialize};
 -use fujimod_emulator_imaging::exr2_isp::options::input::{Options, Command, PhaseAck, ClockMode, ClockSource};
-+use fujimod_emulator_imaging::exr2_isp::options::input::{Options, Command, PhaseAck, ClockMode, ClockSource, EnableReadback};
++use fujimod_emulator_imaging::exr2_isp::options::input::{Options, Command, PhaseAck, ClockMode, ClockSource, EnableReadback, InputEnablePrimaryGate};
  
  pub struct Wiring {
      pub frame_period: Option<fujimod_emulator_imaging::timing::FramePeriod>,
-@@ -183,6 +183,15 @@ impl ImageInput {
-             ],
+@@ -163,13 +163,16 @@
          }
-     }
+         let mask = r[0x38c / 4];
+         match c.mode {
+-            ClockMode::InputEnable => {
+-                if r[0x48 / 4] & 1 == 0 || r[0x70 / 4] & 1 != 0 || mask & 0x10000 == 0 {
++            ClockMode::InputEnable { primary_gate } => {
++                if r[0x48 / 4] & 1 == 0 || r[0x70 / 4] & 1 != 0 {
+                     return [false; 2];
+                 }
+                 [
+-                    mask & 1 != 0,
++                    mask & 1 != 0
++                        && (primary_gate == InputEnablePrimaryGate::SourceBit0
++                            || mask & 0x10000 != 0),
+                     c.secondary
++                        && mask & 0x10000 != 0
+                         && (mask & 1 == 0 && mask & 2 != 0
+                             || c.companion_secondary && mask & 2 != 0),
+                 ]
+@@ -181,6 +184,15 @@
+                     && mask & 0x202 != 0
+                     && (c.mode == ClockMode::SourceMask || r[0x24 / 4] != 0),
+             ],
++        }
++    }
 +    fn enable_readback(&self) -> u32 {
 +        let mask = self.state.r[0x38c / 4];
 +        match self.options.enable_readback {
@@ -22,12 +43,36 @@ index d44b667..a71397b 100644
 +            EnableReadback::ExchangedSourceBits => {
 +                (mask & !0x202) | ((mask & 2) << 8) | ((mask & 0x200) >> 8)
 +            }
-+        }
-+    }
+         }
+     }
      fn sync_clocks(&mut self, now: u64) -> Result<(), String> {
-         let gates = self.clock_gates();
-         let period = self.phase_period()?;
-@@ -978,6 +987,9 @@ impl Device for ImageInput {
+@@ -209,7 +221,7 @@
+             // Source masks gate delivery from one input scan clock. Enabling
+             // another source joins its next edge; command transport and
+             // comparator acknowledgments do not restart that physical clock.
+-            let input_edge = if c.mode == ClockMode::InputEnable {
++            let input_edge = if matches!(c.mode, ClockMode::InputEnable { .. }) {
+                 self.state.phase_due.iter().flatten().copied().min()
+             } else {
+                 None
+@@ -262,14 +274,14 @@
+         let clock = self.options.clock.as_ref().unwrap();
+         let flags = if i == 0 {
+             1
+-        } else if clock.mode != ClockMode::InputEnable {
++        } else if !matches!(clock.mode, ClockMode::InputEnable { .. }) {
+             (u32::from(self.state.r[0x38c / 4] & 0x200 != 0) * 2)
+                 | (u32::from(self.state.r[0x38c / 4] & 2 != 0) * 0x200)
+         } else {
+             2
+         };
+         self.state.phase_pending[i] = flags;
+-        if clock.mode != ClockMode::InputEnable {
++        if !matches!(clock.mode, ClockMode::InputEnable { .. }) {
+             self.state.r[0x384 / 4] |= flags;
+         }
+         self.wiring.phase_irqs[i].raise(cx)
+@@ -978,6 +990,9 @@
              cx.fail("active command DMA status is unmodeled");
              return 0;
          }
@@ -38,10 +83,17 @@ index d44b667..a71397b 100644
      }
      fn write(&mut self, cx: &mut Cx<'_>, a: u64, s: u8, v: u64) {
 diff --git a/crates/emulator-exr2-isp-input/src/tests/input.rs b/crates/emulator-exr2-isp-input/src/tests/input.rs
-index f09c3b1..4aa09a6 100644
 --- a/crates/emulator-exr2-isp-input/src/tests/input.rs
 +++ b/crates/emulator-exr2-isp-input/src/tests/input.rs
-@@ -62,6 +62,7 @@ fn input_options() -> fujimod_emulator_imaging::exr2_isp::options::input::Option
+@@ -3,6 +3,7 @@
+ use fujimod_emulator_devices::Device;
+ use fujimod_emulator_imaging::exr2_isp::*;
+ use fujimod_emulator_devices::test_host::*;
++use fujimod_emulator_imaging::exr2_isp::options::input::InputEnablePrimaryGate;
+ 
+ #[test]
+ fn raw_readback_keeps_neutral_light_across_sensor_window_origins() {
+@@ -62,6 +63,7 @@
          raw_dma_ticks: 5,
          readback_ticks: 7,
          cfa: Some(cfa()),
@@ -49,7 +101,62 @@ index f09c3b1..4aa09a6 100644
      }
  }
  fn input_wiring() -> input::Wiring {
-@@ -1396,3 +1397,111 @@ fn raw_window_crops_sensor_coordinates_and_preserves_aligned_row_padding() {
+@@ -172,7 +174,9 @@
+     let mut h = TestHost::new();
+     let mut o = input_options();
+     o.clock = Some(fujimod_emulator_imaging::exr2_isp::options::input::Clock {
+-        mode: fujimod_emulator_imaging::exr2_isp::options::input::ClockMode::InputEnable,
++        mode: fujimod_emulator_imaging::exr2_isp::options::input::ClockMode::InputEnable {
++            primary_gate: InputEnablePrimaryGate::SharedBit16,
++        },
+         source: fujimod_emulator_imaging::exr2_isp::options::input::ClockSource::Periodic {
+             period_ticks: 10,
+             first_delay_ticks: None,
+@@ -211,7 +215,9 @@
+     let mut o = input_options();
+     o.command_ticks = 20;
+     o.clock = Some(fujimod_emulator_imaging::exr2_isp::options::input::Clock {
+-        mode: fujimod_emulator_imaging::exr2_isp::options::input::ClockMode::InputEnable,
++        mode: fujimod_emulator_imaging::exr2_isp::options::input::ClockMode::InputEnable {
++            primary_gate: InputEnablePrimaryGate::SharedBit16,
++        },
+         source: fujimod_emulator_imaging::exr2_isp::options::input::ClockSource::Periodic {
+             period_ticks: 10,
+             first_delay_ticks: None,
+@@ -278,7 +284,9 @@
+     let mut o = input_options();
+     o.sensor_period_ticks = Some(100);
+     o.clock = Some(fujimod_emulator_imaging::exr2_isp::options::input::Clock {
+-        mode: fujimod_emulator_imaging::exr2_isp::options::input::ClockMode::InputEnable,
++        mode: fujimod_emulator_imaging::exr2_isp::options::input::ClockMode::InputEnable {
++            primary_gate: InputEnablePrimaryGate::SharedBit16,
++        },
+         source: fujimod_emulator_imaging::exr2_isp::options::input::ClockSource::Sensor {},
+         secondary: true,
+         companion_secondary: true,
+@@ -356,7 +364,9 @@
+     let mut o = input_options();
+     o.sensor_period_ticks = Some(100);
+     o.clock = Some(fujimod_emulator_imaging::exr2_isp::options::input::Clock {
+-        mode: fujimod_emulator_imaging::exr2_isp::options::input::ClockMode::InputEnable,
++        mode: fujimod_emulator_imaging::exr2_isp::options::input::ClockMode::InputEnable {
++            primary_gate: InputEnablePrimaryGate::SharedBit16,
++        },
+         source: fujimod_emulator_imaging::exr2_isp::options::input::ClockSource::Sensor {},
+         secondary: false,
+         companion_secondary: false,
+@@ -1293,7 +1303,9 @@
+ fn physical_scan_period_changes_phase_edges_without_host_observation_effects() {
+     let mut o = input_options();
+     o.clock = Some(fujimod_emulator_imaging::exr2_isp::options::input::Clock {
+-        mode: fujimod_emulator_imaging::exr2_isp::options::input::ClockMode::InputEnable,
++        mode: fujimod_emulator_imaging::exr2_isp::options::input::ClockMode::InputEnable {
++            primary_gate: InputEnablePrimaryGate::SharedBit16,
++        },
+         source: fujimod_emulator_imaging::exr2_isp::options::input::ClockSource::Periodic {
+             period_ticks: 100,
+             first_delay_ticks: Some(90),
+@@ -1396,3 +1408,286 @@
          assert!(h.effects.is_empty());
      }
  }
@@ -161,14 +268,267 @@ index f09c3b1..4aa09a6 100644
 +    let plan = input_enable_plan(Some("exchanged_all_bits"));
 +    assert!(serde_json::from_value::<options::input::Options>(plan).is_err());
 +}
++
++fn primary_gate_device(primary_gate: Option<InputEnablePrimaryGate>) -> ImageInput {
++    let mut plan = input_enable_plan(Some("exchanged_source_bits"));
++    if let Some(gate) = primary_gate {
++        plan["clock"]["primary_gate"] = serde_json::to_value(gate).unwrap();
++    }
++    ImageInput::new(serde_json::from_value(plan).unwrap(), input_wiring()).unwrap()
++}
++#[test]
++fn primary_bit0_delivers_irq39_stops_at_zero_and_restarts_at_one_without_irq41() {
++    let mut h = TestHost::new();
++    let mut d = primary_gate_device(Some(InputEnablePrimaryGate::SourceBit0));
++    for (o, v) in [(0x48, 1), (0x38c, 1)] {
++        write(&mut d, &mut h, 0xfff10000 + o, v);
++    }
++    assert_eq!(read(&mut d, &mut h, 0xfff10000), 0);
++    assert_eq!(read(&mut d, &mut h, 0xfff1038c), 1);
++    advance(&mut d, &mut h, 9);
++    assert!(h.irqs.is_empty());
++    advance(&mut d, &mut h, 10);
++    assert_eq!(h.irqs, [(0, 39)]);
++    advance(&mut d, &mut h, 20);
++    assert_eq!(h.irqs, [(0, 39)]);
++    write(&mut d, &mut h, 0xfff10388, 1);
++    advance(&mut d, &mut h, 29);
++    assert_eq!(h.irqs, [(0, 39)]);
++    write(&mut d, &mut h, 0xfff1038c, 0);
++    assert_eq!(read(&mut d, &mut h, 0xfff1038c), 0);
++    advance(&mut d, &mut h, 40);
++    assert_eq!(h.irqs, [(0, 39)]);
++    write(&mut d, &mut h, 0xfff1038c, 1);
++    advance(&mut d, &mut h, 49);
++    assert_eq!(h.irqs, [(0, 39)]);
++    advance(&mut d, &mut h, 50);
++    assert_eq!(read(&mut d, &mut h, 0xfff1038c), 1);
++    assert_eq!(h.irqs, [(0, 39), (0, 39)]);
++}
++#[test]
++fn shared_bit16_explicit_and_default_leave_both_sources_off_at_one() {
++    for gate in [None, Some(InputEnablePrimaryGate::SharedBit16)] {
++        let mut h = TestHost::new();
++        let mut d = primary_gate_device(gate);
++        write(&mut d, &mut h, 0xfff10048, 1);
++        write(&mut d, &mut h, 0xfff1038c, 1);
++        assert_eq!(read(&mut d, &mut h, 0xfff1038c), 1);
++        advance(&mut d, &mut h, 20);
++        assert!(h.irqs.is_empty());
++    }
++}
++#[test]
++fn primary_bit0_common_gates_cancel_edges_and_resume_after_the_original_delay() {
++    for (offset, closed, open) in [(0x48, 0, 1), (0x70, 1, 0)] {
++        for (mask, expected) in [
++            (1, &[(0, 39)][..]),
++            (0x10003, &[(0, 39), (1, 41)][..]),
++        ] {
++            let mut h = TestHost::new();
++            let mut d = primary_gate_device(Some(InputEnablePrimaryGate::SourceBit0));
++            write(&mut d, &mut h, 0xfff10048, 1);
++            write(&mut d, &mut h, 0xfff1038c, mask);
++            advance(&mut d, &mut h, 5);
++            write(&mut d, &mut h, 0xfff10000 + offset, closed);
++            assert_eq!(read(&mut d, &mut h, 0xfff10000 + offset), u64::from(closed));
++            advance(&mut d, &mut h, 15);
++            assert!(h.irqs.is_empty());
++            write(&mut d, &mut h, 0xfff10000 + offset, open);
++            advance(&mut d, &mut h, 24);
++            assert!(h.irqs.is_empty());
++            advance(&mut d, &mut h, 25);
++            assert_eq!(h.irqs, expected);
++        }
++    }
++}
++#[test]
++fn primary_bit0_reset_cancels_edges_and_restarts_after_reset_completion() {
++    for (mask, expected) in [
++        (1, &[(0, 39)][..]),
++        (0x10003, &[(0, 39), (1, 41)][..]),
++    ] {
++        let mut h = TestHost::new();
++        let mut d = primary_gate_device(Some(InputEnablePrimaryGate::SourceBit0));
++        write(&mut d, &mut h, 0xfff10048, 1);
++        write(&mut d, &mut h, 0xfff1038c, mask);
++        advance(&mut d, &mut h, 9);
++        write(&mut d, &mut h, 0xfff10000, 0);
++        advance(&mut d, &mut h, 10);
++        assert_eq!(read(&mut d, &mut h, 0xfff10000), 0);
++        assert!(h.irqs.is_empty());
++        advance(&mut d, &mut h, 11);
++        assert_eq!(read(&mut d, &mut h, 0xfff10000), 1);
++        assert_eq!(read(&mut d, &mut h, 0xfff1038c), u64::from(mask));
++        advance(&mut d, &mut h, 20);
++        assert!(h.irqs.is_empty());
++        advance(&mut d, &mut h, 21);
++        assert_eq!(h.irqs, expected);
++    }
++}
++#[test]
++fn primary_gate_choice_preserves_source1_stored_bits_secondary_and_companion_gates() {
++    for gate in [InputEnablePrimaryGate::SharedBit16, InputEnablePrimaryGate::SourceBit0] {
++        for (mask, secondary, companion, enabled) in [
++            (1, true, true, false),
++            (2, true, true, false),
++            (0x200, true, true, false),
++            (0x202, true, true, false),
++            (0x10002, true, false, true),
++            (0x10003, true, false, false),
++            (0x10003, true, true, true),
++            (0x10002, false, true, false),
++            (0x10003, false, true, false),
++            (0x10200, true, true, false),
++            (0x10201, true, true, false),
++            (0x10202, true, true, true),
++            (0x10203, true, true, true),
++        ] {
++            let mut plan = input_enable_plan(Some("exchanged_source_bits"));
++            plan["clock"]["primary_gate"] = serde_json::to_value(gate).unwrap();
++            plan["clock"]["secondary"] = serde_json::json!(secondary);
++            plan["clock"]["companion_secondary"] = serde_json::json!(companion);
++            let mut d = ImageInput::new(serde_json::from_value(plan).unwrap(), input_wiring()).unwrap();
++            let mut h = TestHost::new();
++            write(&mut d, &mut h, 0xfff10048, 1);
++            write(&mut d, &mut h, 0xfff1038c, mask);
++            advance(&mut d, &mut h, 10);
++            assert_eq!(h.irqs.contains(&(1, 41)), enabled);
++            write(&mut d, &mut h, 0xfff10388, 0);
++            advance(&mut d, &mut h, 20);
++            assert_eq!(h.irqs.iter().filter(|irq| **irq == (1, 41)).count(), if enabled { 2 } else { 0 });
++        }
++    }
++}
++#[test]
++fn primary_bit0_still_refuses_unselected_bit16_without_mutating_the_enable_word() {
++    for unsupported in [0x10000, 0x10001] {
++        let mut h = TestHost::new();
++        let mut d = primary_gate_device(Some(InputEnablePrimaryGate::SourceBit0));
++        write(&mut d, &mut h, 0xfff10048, 1);
++        write(&mut d, &mut h, 0xfff1038c, 1);
++        {
++            let mut cx = h.cx();
++            d.write(&mut cx, 0xfff1038c, 4, unsupported);
++            assert!(cx.refusal().is_some());
++        }
++        assert_eq!(read(&mut d, &mut h, 0xfff1038c), 1);
++        advance(&mut d, &mut h, 10);
++        assert_eq!(h.irqs, [(0, 39)]);
++    }
++}
++#[test]
++fn primary_gate_json_preserves_legacy_clock_shape_and_omits_the_default() {
++    let legacy = input_enable_plan(None)["clock"].clone();
++    let clock: options::input::Clock = serde_json::from_value(legacy.clone()).unwrap();
++    assert_eq!(serde_json::to_value(clock).unwrap(), legacy);
++    for gate in [InputEnablePrimaryGate::SharedBit16, InputEnablePrimaryGate::SourceBit0] {
++        let mut explicit = legacy.clone();
++        explicit["primary_gate"] = serde_json::to_value(gate).unwrap();
++        let clock: options::input::Clock = serde_json::from_value(explicit.clone()).unwrap();
++        let expected = if gate == InputEnablePrimaryGate::SharedBit16 { &legacy } else { &explicit };
++        assert_eq!(&serde_json::to_value(clock).unwrap(), expected);
++    }
++    for mode in ["register_periods", "source_mask"] {
++        let mut plan = legacy.clone();
++        plan["mode"] = serde_json::json!(mode);
++        let clock: options::input::Clock = serde_json::from_value(plan.clone()).unwrap();
++        assert_eq!(serde_json::to_value(clock).unwrap(), plan);
++        plan["primary_gate"] = serde_json::json!("source_bit0");
++        assert!(serde_json::from_value::<options::input::Clock>(plan).is_err());
++    }
++    let mut unknown = legacy.clone();
++    unknown["primary_gate"] = serde_json::json!("unmodeled_gate");
++    assert!(serde_json::from_value::<options::input::Clock>(unknown).is_err());
++    let mut unknown = legacy;
++    unknown["unmodeled_gate"] = serde_json::json!(true);
++    assert!(serde_json::from_value::<options::input::Clock>(unknown).is_err());
++}
 diff --git a/crates/emulator-imaging/src/exr2_isp/options/input.rs b/crates/emulator-imaging/src/exr2_isp/options/input.rs
-index e4a0dba..a8f2434 100644
 --- a/crates/emulator-imaging/src/exr2_isp/options/input.rs
 +++ b/crates/emulator-imaging/src/exr2_isp/options/input.rs
-@@ -44,6 +44,18 @@ pub struct Clock {
-     pub companion_secondary: bool,
+@@ -18,11 +18,29 @@
  }
  
+ #[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+-#[serde(rename_all = "snake_case")]
++#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+ pub enum ClockMode {
+-    InputEnable,
++    InputEnable {
++        #[serde(default, skip_serializing_if = "InputEnablePrimaryGate::is_default")]
++        primary_gate: InputEnablePrimaryGate,
++    },
+     RegisterPeriods,
+     SourceMask,
++}
++
++/// Opt-in primary clock hypothesis; not a silicon fidelity claim.
++#[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
++#[serde(rename_all = "snake_case")]
++pub enum InputEnablePrimaryGate {
++    #[default]
++    SharedBit16,
++    /// Source 0 ignores bit 16; source 1 retains the shared gate.
++    SourceBit0,
++}
++impl InputEnablePrimaryGate {
++    fn is_default(&self) -> bool {
++        *self == Self::SharedBit16
++    }
+ }
+ 
+ #[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+@@ -35,13 +53,61 @@
+     Sensor {},
+ }
+ 
+-#[derive(Clone, Deserialize)]
+-#[serde(deny_unknown_fields)]
++#[derive(Clone, Deserialize, Serialize)]
++#[serde(from = "ClockPlan")]
+ pub struct Clock {
++    #[serde(flatten)]
+     pub mode: ClockMode,
+     pub source: ClockSource,
+     pub secondary: bool,
+     pub companion_secondary: bool,
++}
++
++#[derive(Deserialize)]
++#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
++enum ClockPlan {
++    InputEnable {
++        #[serde(default)]
++        primary_gate: InputEnablePrimaryGate,
++        source: ClockSource,
++        secondary: bool,
++        companion_secondary: bool,
++    },
++    RegisterPeriods {
++        source: ClockSource,
++        secondary: bool,
++        companion_secondary: bool,
++    },
++    SourceMask {
++        source: ClockSource,
++        secondary: bool,
++        companion_secondary: bool,
++    },
++}
++impl From<ClockPlan> for Clock {
++    fn from(plan: ClockPlan) -> Self {
++        let (mode, source, secondary, companion_secondary) = match plan {
++            ClockPlan::InputEnable { primary_gate, source, secondary, companion_secondary } =>
++                (ClockMode::InputEnable { primary_gate }, source, secondary, companion_secondary),
++            ClockPlan::RegisterPeriods { source, secondary, companion_secondary } =>
++                (ClockMode::RegisterPeriods, source, secondary, companion_secondary),
++            ClockPlan::SourceMask { source, secondary, companion_secondary } =>
++                (ClockMode::SourceMask, source, secondary, companion_secondary),
++        };
++        Self { mode, source, secondary, companion_secondary }
++    }
++}
++
 +/// Guest reads of the input-enable mask `0x38c`. Stores and the clock gates
 +/// use the stored word under either law.
 +#[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -179,12 +539,10 @@ index e4a0dba..a8f2434 100644
 +    /// Reads exchange bits 1 and 9. X-M1 1.50 emulation hypothesis,
 +    /// unobserved on hardware.
 +    ExchangedSourceBits,
-+}
-+
+ }
+ 
  #[derive(Clone, Deserialize)]
- #[serde(deny_unknown_fields)]
- pub struct Options {
-@@ -58,4 +70,6 @@ pub struct Options {
+@@ -58,4 +124,6 @@
      pub raw_dma_ticks: u64,
      pub readback_ticks: u64,
      pub cfa: Option<Vec<u8>>,
