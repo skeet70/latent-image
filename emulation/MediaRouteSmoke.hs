@@ -57,6 +57,16 @@ newtype RunDocumentPath = RunDocumentPath FilePath
 -- | Row width of a `raw16-index-ramp12` sensor raster: sample i of the row-major raster holds i mod 4096.
 newtype RampRasterWidth = RampRasterWidth Int deriving (Show)
 
+data CaptureObservation = NoCaptureObservation | ContinuationObservation | SecondFilterObservation deriving (Eq)
+
+captureObservationEnabled :: CaptureObservation -> Bool
+captureObservationEnabled = (/= NoCaptureObservation)
+
+captureObservationName :: CaptureObservation -> T.Text
+captureObservationName NoCaptureObservation = "none"
+captureObservationName ContinuationObservation = "continuation"
+captureObservationName SecondFilterObservation = "second-filter"
+
 data Options = Options
   { optSdk :: FilePath
   , optBridgeSha :: Digest
@@ -72,7 +82,7 @@ data Options = Options
   , optRunDocument :: Maybe RunDocumentPath
   , optRunDocumentSha :: Maybe Digest
   , optRamp :: Maybe RampRasterWidth
-  , optCaptureContinuationObservation :: Bool
+  , optCaptureObservation :: CaptureObservation
   }
 
 usage :: String
@@ -80,7 +90,8 @@ usage = unlines
   [ "media-route-smoke --sdk STORE --bridge-sha256 HEX --route play|s2|s1-s2 --output NEW_PRIVATE_DIR"
   , "  [--checkpoints DIR] [--windows N] [--shoot-without-lens] [--card IMG] [--firmware DAT]"
   , "  [--installed-nand NAND] [--boot-rom ROM] [--run-document JSON [--run-document-sha256 HEX]]"
-  , "  [--expect-ramp12-width N] [--capture-continuation-observation (requires --route s1-s2 --windows 1)]"
+  , "  [--expect-ramp12-width N]"
+  , "  [--capture-continuation-observation | --capture-second-filter-observation] (requires --route s1-s2 --windows 1)"
   , "Without --checkpoints the bridge cold-boots with --fresh-boot into OUTPUT/checkpoints."
   , "With it, the bridge restores its keyed attach checkpoint there or cold-boots and saves one."
   , "Without --run-document the bridge runs the SDK's share/fujimod-xm1/xm1-150.json." ]
@@ -90,11 +101,11 @@ parseOptions = go Nothing Nothing Nothing Nothing defaults
   where
     defaults = Options "" (Digest "") "private-data/scratch/issue117-camera-fixture/DSCF3095-DCIM.img"
       "private-data/firmware/x-m1-1.50/FWUP0002.DAT" "private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand"
-      "private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin" "" PlayRoute Nothing 12 False Nothing Nothing Nothing False
+      "private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin" "" PlayRoute Nothing 12 False Nothing Nothing Nothing NoCaptureObservation
     hex v = length v == 64 && all (`elem` ("0123456789abcdef" :: String)) v
     go (Just sdk) (Just sha) (Just output) (Just route) o []
-      | optCaptureContinuationObservation o && (route /= ShutterSequenceRoute || optWindows o /= 1) =
-          usageError "--capture-continuation-observation requires --route s1-s2 --windows 1"
+      | captureObservationEnabled (optCaptureObservation o) && (route /= ShutterSequenceRoute || optWindows o /= 1) =
+          usageError "capture observation requires --route s1-s2 --windows 1"
       | otherwise = pure o { optSdk = sdk, optBridgeSha = sha, optOutput = output, optRoute = route }
     go _ _ _ _ _ [] = usageError "--sdk, --bridge-sha256, --output and --route are required"
     go _ h out r o ("--sdk" : v : rest) = go (Just v) h out r o rest
@@ -108,7 +119,10 @@ parseOptions = go Nothing Nothing Nothing Nothing defaults
     go s h out r o ("--windows" : v : rest)
       | [(n, "")] <- reads v, n >= 1, n <= 30 = go s h out r o { optWindows = n } rest
     go s h out r o ("--shoot-without-lens" : rest) = go s h out r o { optShootWithoutLens = True } rest
-    go s h out r o ("--capture-continuation-observation" : rest) = go s h out r o { optCaptureContinuationObservation = True } rest
+    go s h out r o ("--capture-continuation-observation" : rest) =
+      selectObservation ContinuationObservation s h out r o rest
+    go s h out r o ("--capture-second-filter-observation" : rest) =
+      selectObservation SecondFilterObservation s h out r o rest
     go s h out r o ("--card" : v : rest) = go s h out r o { optCard = v } rest
     go s h out r o ("--firmware" : v : rest) = go s h out r o { optFirmware = v } rest
     go s h out r o ("--installed-nand" : v : rest) = go s h out r o { optNand = v } rest
@@ -119,6 +133,10 @@ parseOptions = go Nothing Nothing Nothing Nothing defaults
     go s h out r o ("--expect-ramp12-width" : v : rest)
       | [(n, "")] <- reads v, n >= 2, n <= 0x4000 = go s h out r o { optRamp = Just (RampRasterWidth n) } rest
     go _ _ _ _ _ (argument : _) = usageError ("unknown or invalid argument " ++ argument)
+    selectObservation selected s h out r o rest
+      | optCaptureObservation o == NoCaptureObservation || optCaptureObservation o == selected =
+          go s h out r o { optCaptureObservation = selected } rest
+      | otherwise = usageError "--capture-continuation-observation and --capture-second-filter-observation conflict"
     usageError message = ioError (userError (message ++ "\n" ++ usage))
 
 -- | DCIM/963_FUJI/DSCF3095.JPG as independently verified on the host.
@@ -805,6 +823,42 @@ captureContinuationSites =
   , Site 0x00e86a30 "capture-receipt-set-bit-1" "image5 eb00a91a BL eb0ea0; r1=1"
   ]
 
+secondFilterSites :: [Site]
+secondFilterSites =
+  [ Site 0x00da426c "second-filter-descriptor" "image5 A32 e92d48f0; descriptor r0 before prologue"
+  , Site 0x00da4300 "second-filter-selector-call" "image5 A32 ebe3937c BL 006890f8; selector pointee r3"
+  , Site 0x00689114 "second-filter-selector-read" "image4 A32 e50b3008; r3 is the existing selector read result"
+  , Site 0x00689140 "second-filter-selector-store" "image4 A32 e5832000; proposed selector store r2 to [r3]"
+  , Site 0x00da4308 "second-filter-operand-call" "image5 A32 ebe39439 BL 006893f4; operand pointee r0"
+  , Site 0x00689444 "second-filter-low10" "image4 A32 e6ff3073; r3 is the final loaded P+12 word"
+  , Site 0x00689468 "second-filter-low13" "image4 A32 e6ff3073; r3 is the final loaded P+8 word"
+  , Site 0x00689490 "second-filter-store" "image4 A32 e5832000; proposed strict store r2 to [r3]"
+  ]
+
+captureObservationSites :: Route -> CaptureObservation -> [Site]
+captureObservationSites _ NoCaptureObservation = []
+captureObservationSites route observation = routeSites route ++ captureContinuationSites
+  ++ case observation of
+    SecondFilterObservation -> secondFilterSites
+    _ -> []
+
+siteValue :: Site -> Value
+siteValue site = object
+  [ "address" .= hex32 (siteAddress site), "label" .= siteLabel site, "source" .= siteSource site ]
+
+captureObservationValue :: Route -> CaptureObservation -> Value
+captureObservationValue route observation = object
+  [ "mode" .= captureObservationName observation
+  , "sites" .= map siteValue (captureObservationSites route observation)
+  , "second_filter_scope" .= (case observation of
+      SecondFilterObservation -> object
+        [ "scope" .= ("X-M1 1.50 source-bound preexecution operands and RAM pointers; not a device law or successful capture" :: T.Text)
+        , "contemporaneous_selector_state" .= ("unknown" :: T.Text)
+        , "contemporaneous_routing_state" .= ("unknown" :: T.Text)
+        , "pointer_lifetime_causal_closure" .= ("unknown" :: T.Text) ]
+      _ -> Null)
+  ]
+
 data Hit = Hit { hitLabel :: T.Text, hitRegisters :: [Maybe Word32], hitInstructions :: Maybe Integer, hitRaw :: Value }
   deriving (Generic)
 instance NFData Hit
@@ -1310,7 +1364,7 @@ runRoute options directory bridge journal observed = do
   let route = optRoute options
       sites = routeSites route
   _ <- call bridge (command "trace-sites" ["sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]])
-  note journal "trace-sites" (toJSON [object ["address" .= hex32 (siteAddress s), "label" .= siteLabel s, "source" .= siteSource s] | s <- sites])
+  note journal "trace-sites" (toJSON (map siteValue sites))
   before <- walkCard bridge
   note journal "card-before" (viewValue before)
   (target, fixture) <- verifyFixture before
@@ -1340,14 +1394,14 @@ runRoute options directory bridge journal observed = do
   note journal "image-input-before-press" (Object fingerprint0)
   recorderServiceState bridge >>= note journal "recorder-service-before-press" . recorderServiceValue
   rawSamples bridge (optRamp options) input0 >>= note journal "raw-samples-before-press" . maybe Null snd
-  when (optCaptureContinuationObservation options) $ do
-    let armed = sites ++ captureContinuationSites
+  when (captureObservationEnabled (optCaptureObservation options)) $ do
+    let armed = captureObservationSites route (optCaptureObservation options)
     -- The SDK also arms nine fixed instruction sites.
     require (length armed + 9 <= 256 && all ((<= 64) . B.length . TE.encodeUtf8 . siteLabel) armed)
-      "capture continuation sites exceed the SDK site or UTF-8 label bound"
+      "capture observation sites exceed the SDK site or UTF-8 label bound"
     _ <- call bridge (command "trace-sites" ["sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- armed]])
-    note journal "capture-continuation-sites" (toJSON
-      [object ["address" .= hex32 (siteAddress s), "label" .= siteLabel s, "source" .= siteSource s] | s <- captureContinuationSites])
+    note journal "capture-continuation-sites" (toJSON (map siteValue captureContinuationSites))
+    note journal "capture-observation-selection" (captureObservationValue route (optCaptureObservation options))
     (_, remaining) <- traceHits bridge startHits
     foldHits observed BeforePress remaining >>= note journal "trace-before-observation"
     begun <- call bridge CS.beginRequest
@@ -1360,12 +1414,12 @@ runRoute options directory bridge journal observed = do
     writeIORef (obsCapture observed) (Just (CaptureProgress (CS.startCoverage at) Nothing CS.initialCursor False))
     _ <- captureObservationHits bridge journal observed
     pure ()
-  pressed <- if optCaptureContinuationObservation options
+  pressed <- if captureObservationEnabled (optCaptureObservation options)
     then captureAdvance bridge journal observed CS.ShutterSequence (routeInput route)
     else call bridge (routeInput route)
   writeIORef (obsPressReply observed) (Just pressed)
   note journal "press" (object ["input" .= routeInput route, "reply" .= Object pressed])
-  when (optCaptureContinuationObservation options) $
+  when (captureObservationEnabled (optCaptureObservation options)) $
     note journal "capture-observation-phases" (fromMaybe Null (KM.lookup "phases" pressed))
   cells1 <- readCells bridge
   writeIORef (obsCellsAfterPress observed) (Just cells1)
@@ -1378,14 +1432,14 @@ runRoute options directory bridge journal observed = do
         | index > optWindows options || quiet >= 2 = pure previous
         | otherwise = do
             (sdFields, sd) <- if index == 0 then mediaState bridge else do
-              reply <- if optCaptureContinuationObservation options
+              reply <- if captureObservationEnabled (optCaptureObservation options)
                 then captureAdvance bridge journal observed CS.Window (command "capture-observation-window" [])
                 else call bridge (command "capture-observation-window" [])
               note journal "capture-observation-window" (object ["window" .= index, "reply" .= Object reply])
               mediaState bridge
             values <- readCells bridge
             (count, traced, otherLabels, traceActive) <-
-              if optCaptureContinuationObservation options then do
+              if captureObservationEnabled (optCaptureObservation options) then do
                 activity <- captureObservationHits bridge journal observed
                 progress <- readIORef (obsCapture observed)
                 pure (hitIndex, maybe Null captureProgressValue progress, Null, activity)
@@ -1398,7 +1452,7 @@ runRoute options directory bridge journal observed = do
                 active = sdCompleted sd /= sdCompleted previous || sdAccepted sd /= sdAccepted previous || traceActive
             modifyIORef' (obsCommands observed) (++ [(index, c) | c <- seen])
             modifyIORef' (obsLost observed) (+ lost)
-            unless (optCaptureContinuationObservation options) $
+            unless (captureObservationEnabled (optCaptureObservation options)) $
               writeIORef (obsHitIndex observed) (Just count)
             writeIORef (obsCellsFinal observed) (Just values)
             (device, fingerprint) <- imageInputState bridge
@@ -1454,8 +1508,32 @@ judgedValue (Judged f unknown) = object
   , "holds" .= (if isJust unknown then Nothing else Just (findingHolds f)), "unknown" .= unknown
   , "detail" .= findingDetail f, "source" .= findingSource f ]
 
+
+newtype GateName = GateName T.Text
+
+data StopBoundary
+  = MachineStop
+  | BridgeCommandFailure
+  | HarnessFailure
+  | BridgeExitFailure
+  | OriginalCardChanged
+  | DiagnosticGateNotHeld GateName
+
+stopBoundaryName :: StopBoundary -> T.Text
+stopBoundaryName MachineStop = "machine-stop"
+stopBoundaryName BridgeCommandFailure = "bridge-command-failure"
+stopBoundaryName HarnessFailure = "harness-error"
+stopBoundaryName BridgeExitFailure = "bridge-exit"
+stopBoundaryName OriginalCardChanged = "card-original-changed"
+stopBoundaryName (DiagnosticGateNotHeld (GateName name)) = name
+
+sessionStopBoundary :: Value -> Maybe StopBoundary
+sessionStopBoundary (Object fields)
+  | Just (String _) <- objectAt "boundary" fields >>= KM.lookup "failure" = Just MachineStop
+  | Just (String _) <- KM.lookup "bridge_error" fields = Just BridgeCommandFailure
+sessionStopBoundary _ = Nothing
 -- | Ordered findings; the first gate that does not hold, or is unknown, names where the route stopped.
-verdict :: Route -> Bool -> Observed -> IO ([Judged], Maybe T.Text)
+verdict :: Route -> Bool -> Observed -> IO ([Judged], Maybe GateName)
 verdict route lensOn observed = do
   pressReply <- readIORef (obsPressReply observed)
   stop <- readIORef (obsStop observed)
@@ -1601,7 +1679,7 @@ verdict route lensOn observed = do
            , name <- ["admitted", "save-chain-entered", "raw-open-requested", "raw-open-returned-success", "raw-irq-handler-entered", "ui-816-posted-after-press"] ]
       judged = [Judged f (lookup (findingName f) reasons) | f <- findings]
       undecided (Judged f unknown) = findingRole f == Gate && (isJust unknown || not (findingHolds f))
-  pure (judged, (\(Judged f _) -> findingName f) <$> find undecided judged)
+  pure (judged, (\(Judged f _) -> GateName (findingName f)) <$> find undecided judged)
 
 -- Main ----------------------------------------------------------------------------------------
 
@@ -1675,7 +1753,8 @@ main = do
     , "expect_ramp12_width" .= fmap (\(RampRasterWidth w) -> w) (optRamp options)
     , "arguments" .= arguments, "card_original" .= card, "card_original_stat" .= statValue originalBefore
     , "card_copy_stat" .= statValue copyStat, "windows" .= optWindows options
-    , "capture_continuation_observation" .= optCaptureContinuationObservation options
+    , "capture_continuation_observation" .= captureObservationEnabled (optCaptureObservation options)
+    , "capture_observation" .= captureObservationValue (optRoute options) (optCaptureObservation options)
     , "shoot_without_lens" .= optShootWithoutLens options, "window_dial" .= windowDial ])
   (Just input, Just output, _, process) <- createProcess (proc bridgePath arguments)
     { std_in = CreatePipe, std_out = CreatePipe, std_err = UseHandle errors, cwd = Just directory
@@ -1723,7 +1802,7 @@ main = do
   case (stopMessage, hitIndex, session) of
     (Just _, Just from, Object o)
       | Just (Array contexts) <- KM.lookup "contexts" o, from <= length contexts
-      , not (optCaptureContinuationObservation options)
+      , not (captureObservationEnabled (optCaptureObservation options))
       , rest <- drop from (toList contexts), parsed <- mapMaybe parseHit rest, length parsed == length rest -> do
           let sites = map siteLabel (routeSites (optRoute options))
           traced <- foldHits observed AfterPress (filter ((`elem` sites) . hitLabel) parsed)
@@ -1740,7 +1819,13 @@ main = do
   forM_ captureProgress (note journal "capture-observation-interval" . captureProgressValue)
   let unchanged = originalAfter == originalBefore
       bridgeSucceeded = exit == ExitSuccess
-      reached = harnessError == Nothing && stopMessage == Nothing && stopped == Nothing && unchanged && bridgeSucceeded
+      stoppedAt = sessionStopBoundary session
+        <|> (BridgeCommandFailure <$ stopMessage)
+        <|> (HarnessFailure <$ harnessError)
+        <|> (if bridgeSucceeded then Nothing else Just BridgeExitFailure)
+        <|> (if unchanged then Nothing else Just OriginalCardChanged)
+        <|> fmap DiagnosticGateNotHeld stopped
+      reached = isNothing stoppedAt
       sessionField name = case session of
         Object o -> KM.lookup name o
         _ -> Nothing
@@ -1758,9 +1843,10 @@ main = do
     , "trace_hit_counts" .= ledgerCounts ledger, "trace_hit_counts_before_press" .= ledgerBeforePress ledger
     , "trace_hits_kept_per_label_after_press" .= hitCap
     , "capture_continuation_observation" .= fmap captureProgressValue captureProgress
+    , "capture_observation" .= captureObservationValue (optRoute options) (optCaptureObservation options)
     , "diagnostic_reachability" .= reached
     , "acceptance" .= String "none: a changed frame with target reads can be READ ERROR or BUSY; rendered-JPEG playback and capture fidelity need inspection of the PNGs and receipts"
-    , "stopped_at" .= (if reached then Nothing else stopped <|> (if bridgeSucceeded then Nothing else Just "bridge-exit"))
+    , "stopped_at" .= fmap stopBoundaryName stoppedAt
     , "trace_hits_recovered_from_session" .= recoveredCount
     , "findings" .= map judgedValue findings
     , "harness_error" .= harnessError
@@ -1769,6 +1855,7 @@ main = do
     , "bridge_exit_success" .= bridgeSucceeded
     , "bridge_boundary" .= sessionField "boundary"
     , "bridge_error" .= sessionField "bridge_error"
+    , "capture_evidence_error" .= sessionField "capture_evidence_error"
     , "checkpoint" .= sessionField "checkpoint"
     , "card_original_unchanged" .= unchanged ])
   forM_ findings $ \(Judged f unknown) -> putStrLn
@@ -1781,5 +1868,5 @@ main = do
     (Just e, _) -> hPutStrLn stderr ("media-route-smoke: " ++ e) >> exitWith (ExitFailure 1)
     (Nothing, True) -> putStrLn "media-route-smoke: every diagnostic gate held; no playback or capture acceptance"
     (Nothing, False) -> do
-      hPutStrLn stderr ("media-route-smoke: route stopped at " ++ maybe (if bridgeSucceeded then "card-original-changed" else "bridge-exit") T.unpack stopped)
+      hPutStrLn stderr ("media-route-smoke: route stopped at " ++ maybe "unknown" (T.unpack . stopBoundaryName) stoppedAt)
       exitWith (ExitFailure 3)

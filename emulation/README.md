@@ -1251,6 +1251,57 @@ Advancement returns `operation`, `state` (`completed` or `drain-required`), `ins
 
 On a strict machine stop, the bridge still permits tail page collection, acknowledgements, read-only capture state and `finish`; it does not resume the failed machine or replace its failure. The host attempts a final drain and retains the original bridge error and any tail/finish errors. `capture_continuation_observation` in `result.json` distinguishes `last_successful_collected_through`, `observed_through_instructions` and `pending_uncollected_interval` with its original `intended_endpoint`. `detail_loss`, `retained_event_ram_context_gap`, `incomplete` and per-page `dropped` remain explicit. A missing final interval is not zero hits. `instrumentation_coverage.scope` is `armed-sites-only`, with `uninstrumented_gap: null`; even a fully drained interval does not establish uninstrumented execution coverage.
 
+**Opt-in second-filter operand diagnostic**
+
+`--capture-second-filter-observation` selects the same production collector and protocol-2 continuation route, with the full existing host site plan plus exactly eight preexecution sites registered through `trace-sites` before begin freezes registration. It is a typed alternative to `--capture-continuation-observation`; selecting both refuses at the CLI boundary. Either mode requires `--route s1-s2 --windows 1`. The normal flag and non-observation routes remain supported.
+
+After separate source/package review and guest qualification approval, invoke the reviewed built launchers as follows. `EMULATOR_SLOT` and `MEDIA_ROUTE_SMOKE` are absolute paths to the prebuilt `//emulation:emulator-slot` and `//emulation:media-route-smoke` launchers; `SDK` and `BRIDGE_SHA256` identify the matching reviewed SDK and bridge. Use the existing resource guard with the granted CPU affinity/quota and fresh below-70°C Tctl admission described above. This invocation omits `--checkpoints` and selects a fresh output directory:
+
+```sh
+XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=4G \
+  "$EMULATOR_SLOT" "$MEDIA_ROUTE_SMOKE" \
+  --sdk "$SDK" --bridge-sha256 "$BRIDGE_SHA256" \
+  --route s1-s2 --windows 1 --capture-second-filter-observation \
+  --card "$CARD" --firmware "$FIRMWARE_DAT" \
+  --installed-nand "$INSTALLED_NAND" --boot-rom "$BOOT_ROM" \
+  --run-document "$RUN_DOCUMENT" --run-document-sha256 "$RUN_DOCUMENT_SHA256" \
+  --shoot-without-lens \
+  --output private-data/scratch/second-filter-observation-new
+```
+
+The selected run document is an input, not a profile or timing-budget change. A changed SDK/run-document cohort needs its own checkpoint qualification; this command neither reuses nor relabels the fixed A/B collector cohort. The following bindings come from actual decoded X-M1 1.50 id4/id5 bytes: id4 SHA-256 `f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16`, id5 SHA-256 `3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a`. Decode provenance is inherited from the retained `lz/ranges.txt`; these bindings are not a new DAT extraction or a sibling-camera address inference.
+
+| Preexecution PC | Label | A32 word | Operand/context at this boundary |
+| --- | --- | --- | --- |
+| `0x00da426c` | `second-filter-descriptor` | `0xe92d48f0` | id5 descriptor entry, `r0 = D`, before the prologue |
+| `0x00da4300` | `second-filter-selector-call` | `0xebe3937c` | id5 call to `0x006890f8`, selector argument `r0`, pointee `r3` |
+| `0x00689114` | `second-filter-selector-read` | `0xe50b3008` | id4, `r3` is the result of the firmware's existing `0xfff30000` read at `0x00689110` |
+| `0x00689140` | `second-filter-selector-store` | `0xe5832000` | id4, proposed selector store `r2` to `[r3]` |
+| `0x00da4308` | `second-filter-operand-call` | `0xebe39439` | id5 call to `0x006893f4`, freshly reloaded operand pointer `r0` |
+| `0x00689444` | `second-filter-low10` | `0xe6ff3073` | id4, `r3` is the final unmasked word loaded from `P+12` |
+| `0x00689468` | `second-filter-low13` | `0xe6ff3073` | id4, `r3` is the final unmasked word loaded from `P+8` |
+| `0x00689490` | `second-filter-store` | `0xe5832000` | id4 strict-store boundary, exact pending operand `r2` and destination `r3` |
+
+Each event retains the existing core, instruction boundary, `r0`-`r3`, SP/LR/CPSR and per-event RAM. The SDK selects the diagnostic RAM views by exact site address, without a new begin field:
+
+| Site(s) | RAM requests in priority order, before existing common context |
+| --- | --- |
+| Descriptor entry | 240 bytes at `D = r0`; 16 bytes at `P = read32(D+0xc8)`; 100-byte row at `0x00da52c0 + 100 * read32(D)` |
+| Selector call | 16 bytes at `r3`; 24 bytes at SP |
+| Selector read/store | 24 bytes at SP |
+| Operand call | 16 bytes at `r0`; 24 bytes at SP |
+| Low10/low13/strict store | 24 bytes at SP; 16 bytes at saved `P = read32(SP+4)` |
+
+Descriptor entry adds no unproven caller-stack view. RAM aliases are physical-normalized before retained-word lookup or pointer following. Normalization alone does not establish guest decoder or TCM mapping. The SDK serves a dynamic view only when its guest range has a unique readable contiguous static translation equal to the normalized RAM address, misses every decoder-owned guest window and misses the observed core's live TCM windows. A refused view retains an empty `read-failed` span and sets `ram_incomplete`; register operands remain available and existing common physical context is unchanged. Pointer/index arithmetic is checked; overflow, unavailable pointer words and outside-RAM requests remain explicit gaps, not fabricated addresses or zero-filled data. The diagnostic issues no MMIO reads and adds no backing-state inspection capability.
+
+Bounds remain 256 sites, 64 UTF-8 bytes per label, 64 pending details per site, 2,048 pending details overall, 64 details per page, 512 RAM bytes and 24 spans per event, and 2 MiB retained storage. The SDK charges site statistics for all 256 sites regardless of the armed count. Descriptor views can consume space previously available to common context; `ram_incomplete` and gap records report missing views rather than expanding any limit. Protocol-2 draining, acknowledgement durability, the 64-sample verdict cap, streamed journal and original strict-stop/tail-error handling remain unchanged. The instruction/contact plan is still Half/Full/Half/Released at 8M/8M/4M/4M plus one 40M window.
+
+`invocation.json` and `result.json` add `capture_observation` with the selected `mode` (`none`, `continuation` or `second-filter`), the full host-registered `sites` and, for this diagnostic, `second_filter_scope`. `observations.jsonl` records the same selection as `capture-observation-selection` before begin. The existing `capture_continuation_observation` invocation flag and result progress retain their collector meaning for either observation mode; the new mode field distinguishes them. SDK-fixed sites remain visible in the collected per-site statistics.
+
+Failure reporting gives execution and integrity boundaries priority over diagnostic gate names. `stopped_at` is `machine-stop` when the session's structured `boundary.failure` reports a failure, or `bridge-command-failure` for a structured session bridge error or caught failed bridge command without that machine marker. Remaining failures are classified as `harness-error`, `bridge-exit` or `card-original-changed` before falling back to the first failed or unknown diagnostic gate. Classification does not parse error-message text. Raw `original_bridge_error`, `bridge_error` and `capture_evidence_error` remain separate; tail/finish errors stay in the journal and do not replace the original stop.
+
+This diagnostic binds exercised register operands and current pointer values, with pointee-byte evidence subject to the mapping requirement above. Earlier selector-read/proposed-write events do not establish contemporaneous selector or routing state at the strict store, and a pointer/byte match does not close allocation, mutation, free or reuse history. The outputs keep those states and pointer-lifetime causal closure `unknown`. Exact operand observation establishes neither the physical second-filter law nor successful capture. The `0xfff30010` store remains a strict refusal, #139's device-law work remains open, and this source addition makes no compilation, SDK-package or firmware-qualification claim.
+
 Current #138 source/package qualification includes the Haskell capture-stream suite and canonical SDK checks: 96 default, 101 scoped and 96 readback checks, 102 distinct names, including twelve capture regressions per variant. The three unchanged model packages were cached, with no new engine tests. Synthetic native/engine programs execute in SDK unit tests; those are not firmware runtime qualification. Installed no-input CLI smokes only reject usage before machine construction.
 
 `E-CAPTURE-LOSSLESS-HOST-150` additionally accepts four actual public Haskell CLI stress executions against a synthetic external protocol-2 bridge, with an identified chronological prelude and real fixture-card traversal. Each stream ran once, without retries or an extra stream. The retained before-collector OOM is an executed failure, not an unrun case. Both fixed workloads complete, including the fourfold event load:
