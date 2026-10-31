@@ -517,7 +517,7 @@ The zero-discriminator path performs primary table/staging work, copies A and B,
 
 `E-FIRSTRECORD-CORE-SELECTOR-HANDOFF-SOURCE-150` records this source boundary. The execution origin and shared-staging provenance of the first-record nonzero-discriminator path remain unproved; it is separate from the ordinary record-2 peer route. The identified direct edges `0x1838 -> 0x1e4c` and `0x1fc8 -> 0x1d08` do not close computed callers, formed pointers, interior entries or restored contexts. [#141](https://github.com/skeet70/latent-image/issues/141) retains the route, root/pointer and lifetime obligations before whole-loader-B initializer retirement. This listing review establishes neither two naturally executed B calls nor a physical resume route.
 
-### 8.8 Bounded task-storage source increment (#143)
+### 8.9 Bounded task-storage source increment (#143)
 
 `replacement/task_storage` supplies source-only Rust for the reservation/reuse transition `[0x725cc4,0x725da8)` inside helper `[0x725c6c,0x725dd0)`, with an A32 adapter preserving the retained helper's register boundary. The original selector/IRQ/synchronization prelude and release/restore epilogue, conditional task wrapper `[0x725dd8,0x726098)`, its retained services and later state-release helper `0x726098` remain executable dependencies. No build, linked-size result, natural-caller witness, task creation or retirement is accepted by this increment.
 
