@@ -184,6 +184,34 @@ impl Serialize for CaptureRam {
 }
 
 #[derive(Clone, Copy)]
+enum SecondFilterSite {
+    Descriptor,
+    SelectorCall,
+    SelectorRead,
+    SelectorStore,
+    OperandCall,
+    Low10,
+    Low13,
+    Store,
+}
+
+impl SecondFilterSite {
+    fn at(address: Guest) -> Option<Self> {
+        match address.0 {
+            0x00da426c => Some(Self::Descriptor),
+            0x00da4300 => Some(Self::SelectorCall),
+            0x00689114 => Some(Self::SelectorRead),
+            0x00689140 => Some(Self::SelectorStore),
+            0x00da4308 => Some(Self::OperandCall),
+            0x00689444 => Some(Self::Low10),
+            0x00689468 => Some(Self::Low13),
+            0x00689490 => Some(Self::Store),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 struct RamAddress(u32);
 
 impl RamAddress {
@@ -236,8 +264,10 @@ impl CaptureRam {
         self.count += 1;
     }
 
-    fn word(&self, address: u32) -> Option<u32> {
+    fn word(&self, address: Guest) -> Option<u32> {
+        let address = RamAddress::parse(address.0, 4)?.0;
         self.spans[..self.count].iter().find_map(|span| {
+            if !matches!(span.status, RamStatus::Complete) { return None; }
             let relative = address.checked_sub(span.address)? as usize;
             if relative.checked_add(4)? > usize::from(span.length) { return None; }
             let start = usize::from(span.offset) + relative;
@@ -259,11 +289,11 @@ impl CaptureRam {
     }
 
     fn recorder(&mut self, session: &Session) {
-        if self.word(0x015ad53c).is_none() {
+        if self.word(Guest(0x015ad53c)).is_none() {
             self.read(session, 0x015ad53c, 4);
         }
         self.read(session, 0x015ad430, 32);
-        let Some(index) = self.word(0x015ad53c).filter(|&index| index <= 200) else {
+        let Some(index) = self.word(Guest(0x015ad53c)).filter(|&index| index <= 200) else {
             self.incomplete = true;
             return;
         };
@@ -280,10 +310,10 @@ impl CaptureRam {
             return;
         };
         self.read(session, physical, 12);
-        if let (Some(length), Some(payload)) = (self.word(physical + 4), self.word(physical + 8)) {
+        if let (Some(length), Some(payload)) = (self.word(Guest(physical + 4)), self.word(Guest(physical + 8))) {
             self.read(session, payload, length as usize);
         }
-        if self.word(physical).is_some_and(|word| word & 0xffff == 0x137e) {
+        if self.word(Guest(physical)).is_some_and(|word| word & 0xffff == 0x137e) {
             self.recorder(session);
         }
     }
@@ -297,9 +327,54 @@ impl CaptureRam {
         self.read(session, 0x0170389c, 4);
     }
 
-    fn event(session: &Session, address: u32, registers: &[u32; 4]) -> Self {
+    fn follow(&mut self, session: &Session, pointer: Option<Guest>, length: usize) {
+        if let Some(pointer) = pointer {
+            self.read(session, pointer.0, length);
+        } else {
+            self.incomplete = true;
+        }
+    }
+
+    fn pointer(&self, base: Guest, offset: u32) -> Option<Guest> {
+        self.word(Guest(base.0.checked_add(offset)?)).map(Guest)
+    }
+
+    fn second_filter(&mut self, session: &Session, site: SecondFilterSite, registers: &[u32; 4], sp: Guest) {
+        match site {
+            SecondFilterSite::Descriptor => {
+                let descriptor = Guest(registers[0]);
+                self.read(session, descriptor.0, 240);
+                self.follow(session, self.pointer(descriptor, 0xc8), 16);
+                let row = self.word(descriptor)
+                    .and_then(|index| index.checked_mul(100))
+                    .and_then(|offset| 0x00da52c0u32.checked_add(offset))
+                    .map(Guest);
+                self.follow(session, row, 100);
+            }
+            SecondFilterSite::SelectorCall => {
+                self.read(session, registers[3], 16);
+                self.read(session, sp.0, 24);
+            }
+            SecondFilterSite::SelectorRead | SecondFilterSite::SelectorStore => {
+                self.read(session, sp.0, 24);
+            }
+            SecondFilterSite::OperandCall => {
+                self.read(session, registers[0], 16);
+                self.read(session, sp.0, 24);
+            }
+            SecondFilterSite::Low10 | SecondFilterSite::Low13 | SecondFilterSite::Store => {
+                self.read(session, sp.0, 24);
+                self.follow(session, self.pointer(sp, 4), 16);
+            }
+        }
+    }
+
+    fn event(session: &Session, address: Guest, registers: &[u32; 4], sp: Guest) -> Self {
         let mut ram = Self::default();
-        match address {
+        if let Some(site) = SecondFilterSite::at(address) {
+            ram.second_filter(session, site, registers, sp);
+        }
+        match address.0 {
             0x0072503c | 0x00ef9ae0 | 0x01039e18 | 0x00fe95bc |
             0x00e7fca0 | 0x00e6f0e0 | 0x00e6f260 | 0x00e6c490 => ram.message(session, registers[1]),
             0x00ef9a94 | 0x00fe9580 => ram.read(session, registers[1], registers[2] as usize),
@@ -742,10 +817,11 @@ impl TraceSites {
                     register(session, *core, arm::Register::R(2))?,
                     register(session, *core, arm::Register::R(3))?,
                 ];
-                let ram = CaptureRam::event(session, address, &registers);
+                let sp = register(session, *core, arm::Register::R(13))?;
+                let ram = CaptureRam::event(session, Guest(address), &registers, Guest(sp));
                 let event = CaptureEvent {
                     sequence, site_index: index, core: *core, instructions, registers,
-                    sp: register(session, *core, arm::Register::R(13))?,
+                    sp,
                     lr: register(session, *core, arm::Register::R(14))?,
                     cpsr: register(session, *core, arm::Register::Cpsr)?,
                     ram,
