@@ -185,9 +185,9 @@ instance FromJSON Receipt where
   parseJSON = withObject "consumer receipt" $ \row -> Receipt <$> row .: "schema" <*> row .: "result" <*> row .: "error" <*> row .: "machine_failure" <*> row .: "initializer" <*> row .: "consumer"
 
 viewsBytes :: Views -> Either String B.ByteString
-viewsBytes (Views virtual physical) = do
-  require (virtual == physical) "consumer virtual and physical readback differs"
-  pure (B.pack physical)
+viewsBytes (Views virtual committed) = do
+  require (virtual == committed) "consumer virtual and physical readback differs"
+  pure (B.pack committed)
 
 contextCounts :: Context -> [Word64]
 contextCounts (Context _ _ _ _ _ counts _) = counts
@@ -342,10 +342,10 @@ validatePrelude start dispatch table events = do
         ++ [0x69ceec,0x69cef0 .. 0x69cf34]
         ++ [0x725dd8,0x725ddc .. 0x725dfc]
         ++ [0x7235d8,0x7235dc .. 0x723600]
-      core1Reads = [(address,value,pc) | ConsumerEvent (Event CpuRead (Just 1) address _ _ (Just value) (Just pc) _ _) _ _ _ <- events]
+      core1Reads = [(translated,value,pc) | ConsumerEvent (Event CpuRead (Just 1) _ (Just translated) _ (Just value) (Just pc) _ _) _ _ _ <- events]
       roots = [(address,value,pc) | (address,value,pc) <- core1Reads,address >= 0x96bd20 && address < 0x96bd28]
       selector = [(address,value,pc) | (address,value,pc) <- core1Reads,address == 0x7caf34]
-      magic = [(value,pc) | (address,value,pc) <- core1Reads,address == 0x400c080c]
+      magic = [(value,pc) | (address,value,pc) <- core1Reads,address == 0xc080c]
   require (fetched == expectedFetches) "consumer prelude source execution path differs"
   require (roots == [(0x96bd20,0x4004dae0,0x7235e8),(0x96bd24,0x400ddaa0,0x7235fc)]
     && selector == [(0x7caf34,2,0x725df8)]) "consumer prelude root or task103 selector reads differ"
@@ -389,6 +389,7 @@ validateEvents dispatch entered returned after incoming frame events = case even
     require (length clocks == 3 && and (zipWith (<) clocks (drop 1 clocks)) && sum (contextCounts returned) < sum (contextCounts after)) "consumer event instruction clocks differ"
   _ -> Left "consumer CPU data events are not exactly slot-read, saved-r11 write and saved-r11 read"
   where
+    check :: ConsumerEvent -> Source -> Word64 -> Word64 -> Word32 -> Word32 -> Word64 -> Word64 -> Either String ()
     check (ConsumerEvent (Event source core address physicalAddress width value pc clock order) _ _ _) expectedSource guest physicalAddress' expectedValue expectedPc lower upper =
       require (source == expectedSource && core == Just 1 && address == guest && physicalAddress == Just physicalAddress' && width == 4
         && value == Just (fromIntegral expectedValue) && pc == Just expectedPc && order == Just LittleEndian && maybe False (\n -> n >= lower && n < upper) clock) "consumer CPU data event attribution or value differs"
