@@ -210,6 +210,8 @@ The scoped-watch SDK's typed producer follows the authentic natural record1/reco
 
 The independent initializer consumer requires the exact CPU/host/model write class set, fixed observation views, no watch fault and watch/per-rule TCM snapshots matching the validated prefix context, including register-derived bank windows.
 
+Schema6 bounds all three two-core count vectors to 50,000,000 instructions per core and globally before count arithmetic. Both the producer and independent consumer require incoming `CPSR & 0x07f0feff == 0xd3`, including clear IT state. The existing exact continuation of the independently validated prefix context remains mandatory. These additional guards are source-only pending new archive qualification and genuine receipt-based budget/wrap/IT mutations.
+
 The SDK parses its vendor watch JSON once into a typed serializable snapshot and uses that state for validation and receipt output, including event preimages/ticks, fault details, classes, views and TCM scopes. Preimages use an inline sixteen-byte buffer; the caller frame uses a four-word array. At each stopped boundary, physical record/loader/workspace bytes and their digests are captured once and reused across both cores' aliases. Receipt ordering remains boundary, core, resource, alias.
 
 Prospective qualification, only after a separate build/run grant:

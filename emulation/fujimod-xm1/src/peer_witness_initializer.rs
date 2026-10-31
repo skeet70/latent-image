@@ -360,7 +360,7 @@ pub(super) fn observe(machine: &mut Machine, runner: &Runner<'_>, contract: &Con
     let before = context(machine)?;
     require(before.pc.0 == EXIT && before.sp.0 == FRAME as u32
         && before.registers[11].0 == 0x400f341c && before.registers[4].0 == ARGUMENT
-        && before.cpsr.0 & 0x0100_02ff == 0xd3, "initializer did not inherit the admitted core-1 caller frame")?;
+        && before.cpsr.0 & 0x07f0_feff == 0xd3, "initializer did not inherit the admitted core-1 caller frame")?;
     let original_prefix = runner.stops.iter().find(|stop| stop.label == Label::PrefixEntry).ok_or("initializer prefix entry absent")?;
     let frame_before = runner.views(machine, 1, FRAME, 16)?;
     equal_views(&frame_before)?;
