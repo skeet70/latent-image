@@ -289,7 +289,7 @@ validatePrelude start dispatch table events = do
         ++ [0x69ce44,0x69ce48,0x69ce90,0x69ce94,0x69ce98,0x69ce9c,0x69cea0,0x69cea4]
         ++ [0x69ceec,0x69cef0 .. 0x69cf34]
         ++ [0x725dd8,0x725ddc .. 0x725dfc]
-        ++ [0x7235d8,0x7235dc .. 0x7235fc]
+        ++ [0x7235d8,0x7235dc .. 0x723600]
       core1Reads = [(address,value,pc) | Event CpuRead (Just 1) address _ _ (Just value) (Just pc) _ _ <- events]
       roots = [(address,value,pc) | (address,value,pc) <- core1Reads,address >= 0x96bd20 && address < 0x96bd28]
       selector = [(address,value,pc) | (address,value,pc) <- core1Reads,address == 0x7caf34]
@@ -299,11 +299,13 @@ validatePrelude start dispatch table events = do
     && selector == [(0x7caf34,2,0x725df8)]) "consumer prelude root or task103 selector reads differ"
   require (not (null magic) && last magic == (0x87654321,0xd391c)
     && all (\(_,pc) -> pc `elem` [0xd38b8,0xd38cc,0xd391c]) magic) "consumer prelude lacks the natural peer magic wait completion"
-  require (length clocks == length events && all (\clock -> clock >= lower && clock < upper) clocks
+  require (length clocks == length events && all (>= lower) clocks
     && and (zipWith (<=) clocks (drop 1 clocks))) "consumer prelude event clocks differ"
-  forM_ events $ \(Event source core address physicalAddress width value pc _ order) -> do
+  forM_ events $ \(Event source core address physicalAddress width value pc clock order) -> do
     require (core == Just 0 || core == Just 1) "consumer prelude event has no supported CPU attribution"
     require (width == 4 && order == Just LittleEndian) "consumer prelude access width or byte order differs"
+    let terminalFetch = source == CpuFetch && core == Just 1 && pc == Just 0x723600
+    require (if terminalFetch then clock == Just (upper + 1) else maybe False (<= upper) clock) "consumer preexecution fetch or completed instruction clock differs"
     case source of
       CpuFetch -> do
         let declared = any (\(low,high) -> address >= low && address < high && address .&. 3 == 0) ((0xd0ab0,0xd0af0):take 3 codeSpans)
