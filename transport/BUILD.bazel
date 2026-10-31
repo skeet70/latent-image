@@ -71,6 +71,7 @@ haskell_library(
         "//host/firmware:classic-chrome-icon-ram-relinker",
         "//host/firmware:classic-chrome-ram-relinker",
         "//host/firmware:ram-push-relinker",
+        "//host/firmware:experiment-ram-relinker",
         "//host/firmware:usb-toggle-ram-relinker",
         "//menu:usb-toggle-ram-relink-sources",
     ],

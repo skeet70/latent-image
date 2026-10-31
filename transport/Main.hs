@@ -147,6 +147,7 @@ parse ["rehearse","ram-push",state,manifest] = Just (Rehearse (RamPush state man
 parse ["rehearse","ram-free",state] = Just (Rehearse (RamFree state))
 parse ["rehearse","ram-unload",state] = Just (Rehearse (RamUnload state))
 parse ("debug-flag":step:rest) = DebugFlag <$> debugFlagStep step <*> output rest
+parse ("ram-session":"experiment":name:rest) = RamSession ("experiment-"++name) WaivePins <$> experimentSession name <*> output rest
 parse ("ram-session":kind:"--waive-pins":rest) = RamSession kind WaivePins <$> sessionPayload kind <*> output rest
 parse ("ram-session":kind:rest) = RamSession kind RequirePins <$> sessionPayload kind <*> output rest
 parse _ = Nothing
@@ -170,6 +171,13 @@ sessionPayloads =
 
 sessionPayload :: String -> Maybe Payload
 sessionPayload kind = lookup kind sessionPayloads
+
+-- | The experiment under experiments/NAME; NAME is a directory name of
+-- lowercase letters, digits, '-' and '_'.
+experimentSession :: String -> Maybe Payload
+experimentSession name
+  | not (null name) && all (`elem` (['a'..'z'] ++ ['0'..'9'] ++ "-_")) name = Just (experimentPayload name)
+  | otherwise = Nothing
 
 dispatch :: Command -> IO ()
 dispatch Help = putStr $ unlines
@@ -204,6 +212,7 @@ dispatch Help = putStr $ unlines
   , "debug-flag enable [OUTDIR]    commit-f7-enable with the kept reference"
   , "debug-flag disable [OUTDIR]   commit-f7-restore with the kept reference"
   , "ram-session KIND [--waive-pins] [OUTDIR] relink KIND at its reference base against the compiled pins, then ram-alloc, ram-relink and ram-push into OUTDIR/alloc, OUTDIR/link and OUTDIR/push; KIND is recipe-bank, classic-chrome, classic-chrome-icon or usb-toggle. --waive-pins skips the source-identity and publication-contract comparison and pushes the relink as built; the builders' own input checks, the bank ELF allowlist, the compiled installer entry offsets and the installer's old-word checks still apply"
+  , "ram-session experiment NAME [OUTDIR] the same sequence for the developer experiment in experiments/NAME, which has no pins: hook-site, layout, entry-offset and old-word checks only; remove it by taking out the battery"
   , "rehearse identify|read-config PLAN_JSON|end-setting|probe-ram|read-log|probe-bootrom|probe-area2|probe-straps|probe-code|probe-ownership|probe-routes fixed|probe-routes derived PLAN_JSON|dump-ram SEGMENT|read-media|arm-auto-act|commit-f7-enable REFERENCE_BIN|commit-f7-restore REFERENCE_BIN|read-ram PLAN_JSON [--repeat N --interval-ms M]|probe-sd-host [--repeat N --interval-ms M]|read-bulk ADDRESS LENGTH|ram-alloc SIZE|ram-push STATE MANIFEST|ram-free STATE|ram-unload STATE"
   , "--help"
   , "OUTDIR must be absolute and must not exist; it is created with mode 0700."
@@ -330,14 +339,14 @@ dispatch (Live operation requested) = case operation of
       RamAllocUncertain reason -> P.reject ("ram-alloc uncertain: "++reason++";send nothing further and power off")
   RamRelink path -> do
     allocation <- readRetainedAllocation path
-    refuseAfRingLive (allocSize (retainedAllocation allocation))
+    refuseUnpinnedKindLive (allocSize (retainedAllocation allocation))
     withOutput operation requested $ \directory -> do
       manifest <- runRamRelink (contractFor (allocSize (retainedAllocation allocation))) allocation directory
       pure ("ram-relink: manifest="++manifest)
   RamPush statePath manifestPath -> do
     allocation <- readRetainedAllocation statePath
     manifest <- readRamPushManifest manifestPath
-    refuseAfRingLive (allocSize (retainedAllocation allocation))
+    refuseUnpinnedKindLive (allocSize (retainedAllocation allocation))
     withOutput operation requested $ \directory -> do
       runRamPush (contractFor (allocSize (retainedAllocation allocation))) allocation manifest realClock nativeApi directory >>= ramPushLine
   RamFree path -> do
@@ -350,7 +359,7 @@ dispatch (Live operation requested) = case operation of
         RamFreeUncertain reason -> P.reject ("ram-free uncertain: "++reason++";send nothing further and power off")
   RamUnload path -> do
     state <- readRamPushState path
-    refuseAfRingLive (stateSize state)
+    refuseUnpinnedKindLive (stateSize state)
     when (fmap payloadKind (payloadOfSize (stateSize state)) == Just UsbToggle)
       (P.reject "ram-unload refused: USB toggle requires full battery removal; a suspended stub frame cannot be rolled back in place")
     withOutput operation requested $ \directory -> do
@@ -368,9 +377,13 @@ contractFor size = case payloadKind <$> payloadOfSize size of
   Just UsbToggle -> reviewedToggleContract
   _ -> reviewedContract
 
-refuseAfRingLive :: Int -> IO ()
-refuseAfRingLive size = when (fmap payloadKind (payloadOfSize size) == Just AfRing)
-  (P.reject "AF ring has no approved live reviewed contract; use the host-only AF ring harness")
+-- | Refuses `ram-relink`, `ram-push` and `ram-unload` for the payload kinds
+-- that have no review record.
+refuseUnpinnedKindLive :: Int -> IO ()
+refuseUnpinnedKindLive size = case payloadKind <$> payloadOfSize size of
+  Just AfRing -> P.reject "AF ring has no approved live reviewed contract; use the host-only AF ring harness"
+  Just Experiment -> P.reject "experiments relink and push only through ram-session experiment NAME, and come out by removing the battery"
+  _ -> pure ()
 
 -- | The kept at-rest capture of config window 0x000000 that debug-flag enable
 -- and disable pass to commit-f7 as REFERENCE_BIN.
@@ -461,7 +474,9 @@ ramSession kind policy payload requested = do
       putStrLn ("ram-session: "++kind++" relinks at 0x"++showHex referenceBase ""++" and matches the compiled pins")
     WaivePins -> do
       withRelinkedBuildUsing relinker EnforceAllowlist (Address referenceBase) (requireCompiledEntries (Address referenceBase))
-      putStrLn ("ram-session: "++kind++" relinks at 0x"++showHex referenceBase ""++"; pins waived, so the build is not compared with the compiled source identity or publication contract")
+      putStrLn ("ram-session: "++kind++" relinks at 0x"++showHex referenceBase ""++case payloadKind payload of
+        Experiment -> "; experiments carry no pins"
+        _ -> "; pins waived, so the build is not compared with the compiled source identity or publication contract")
   root <- resolveNamed ("ram-session-"++kind) requested
   createOutput root
   let allocation = root </> "alloc"
@@ -485,7 +500,12 @@ ramSession kind policy payload requested = do
           requireCompiledEntries base built
           writePrivateBytes (linked </> "runtime.bin") (pinnedRuntime built)
           writePrivateBytes manifestPath (pinnedDocument built)
-        putStrLn ("ram-relink: manifest="++manifestPath++";pins waived")
+          let metadata = pinnedDirectory built </> "experiment.json"
+          present <- doesFileExist metadata
+          when present (B.readFile metadata >>= writePrivateBytes (linked </> "experiment.json"))
+        putStrLn ("ram-relink: manifest="++manifestPath++case payloadKind payload of
+          Experiment -> ";symbol addresses in "++(linked </> "experiment.json")
+          _ -> ";pins waived")
         manifest <- readRamPushManifest manifestPath
         createOutput pushed
         pure (retained, manifest)) `onException` retainedNotice

@@ -44,4 +44,28 @@ Add the manifest and its parts to this directory, or reference existing parts by
 
 ## RAM payload inputs
 
-`ram-inputs/` holds the parameter files the RAM payload relinkers read besides the decoded official firmware: `classic-chrome-candidate.json` (the fitted Classic Chrome parameters, [model report](../reports/classic-chrome-model.md)), `recipe-bank-spec.json` (the recipe bank's slots and placement) and `recipe-d3-compiled.json` (the D3 recipes). Their bytes equal the inputs the reviewed RAM payloads were pinned from. They are development inputs and appear in no published extension; [experimenting on your own X-M1](../docs/experimenting-on-your-x-m1.md) copies them into place.
+`ram-inputs/` holds the parameter files the project's RAM payload relinkers read besides the decoded official firmware: `classic-chrome-candidate.json` (the fitted Classic Chrome parameters, [model report](../reports/classic-chrome-model.md)), `recipe-bank-spec.json` (the recipe bank's slots and placement) and `recipe-d3-compiled.json` (the D3 recipes). Their bytes equal the inputs the reviewed RAM payloads were pinned from. They are development inputs and appear in no published extension.
+
+After the stock decodes of [step 1 of the experiment guide](../docs/experimenting-on-your-x-m1.md#1-set-up-once), these commands produce every input `ram-session recipe-bank|classic-chrome|classic-chrome-icon|usb-toggle` relinks from. Each checks its inputs against pinned hashes. The USB toggle needs only the stock image-5 decode; the others need RC0 installed on the camera.
+
+```sh
+D=private-data/firmware/x-m1-1.50/FWUP0002.DAT
+R=private-data/analysis/x-m1-1.50
+P=private-data/analysis/classic-chrome
+C=private-data/analysis/classic-chrome-patch/candidate-build-1
+mkdir -p "$R/update/prefix" "$R/filmsim" "$R/recipes/rc-complete-20261013" "$P" private-data/analysis/classic-chrome-patch
+bazel build //host/firmware:apply-patch-set //host/firmware:rebuild-update
+bazel-bin/host/firmware/apply-patch-set recovery/rc0-patch-set.json "$R/lz/id4-0061c400.bin" "$R/update/prefix/id4-patched.bin"
+bazel-bin/host/firmware/rebuild-update extract-image2 "$D" "$R/filmsim/id2-00130000.bin"
+# Classic Chrome and its icon variant
+cp extensions/ram-inputs/classic-chrome-candidate.json "$P/candidate.json"
+bazel run //host/firmware:build-classic-chrome -- "$P/candidate.json" "$C"
+bazel-bin/host/firmware/apply-patch-set "$C/cc-image4.json" "$R/lz/id4-0061c400.bin" "$C/patched-id4.bin"
+bazel-bin/host/firmware/apply-patch-set "$C/cc-image5.json" "$R/lz/id5-00bf1a00.bin" "$C/patched-id5.bin"
+bazel-bin/host/firmware/apply-patch-set "$C/cc-plain.json" "$R/lz/plain-01100000.bin" "$C/patched-plain.bin"
+bazel run //extensions:build-extension -- extensions/rc0.json "$D" private-data/analysis/classic-chrome-patch/rc0-regression
+# the recipe bank
+cp extensions/ram-inputs/recipe-bank-spec.json "$R/recipes/bank-spec.json"
+cp extensions/ram-inputs/recipe-d3-compiled.json "$R/recipes/d3-compiled.json"
+bazel run //host/firmware:build-recipe-package -- "$R/recipes/rc-complete-20261013/package-field-marker"
+```

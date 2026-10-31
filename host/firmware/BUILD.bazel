@@ -1919,6 +1919,66 @@ filegroup(
     ],
 )
 
+haskell_binary(
+    name = "build-experiment-ram",
+    srcs = [
+        "BuildExperimentRam.hs",
+        "ExperimentHook.hs",
+    ],
+    main_file = "BuildExperimentRam.hs",
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-threaded"],
+    deps = [
+        ":bank-allowlist",
+        ":ram-push-toolchain",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:text",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "experiment-hook-tests",
+    srcs = [
+        "ExperimentHook.hs",
+        "ExperimentHookTest.hs",
+    ],
+    ghcopts = ["-Wall", "-Werror", "-XGHC2021"],
+    main_file = "ExperimentHookTest.hs",
+    deps = [
+        ":bank-allowlist",
+        "//host:base",
+    ],
+)
+
+# The pinned armv7r-none-eabi rustc wrapper; it execs its Nix store paths, so a
+# copy runs from any runfiles tree.
+genrule(
+    name = "experiment-rustc",
+    srcs = ["@lab_xm1_rust//:bin/rustc"],
+    outs = ["experiment-rustc"],
+    cmd = "cp $(location @lab_xm1_rust//:bin/rustc) $@ && chmod 0755 $@",
+    executable = True,
+)
+
+filegroup(
+    name = "experiment-ram-relinker",
+    srcs = [
+        "build-experiment-ram.sh",
+        ":build-experiment-ram",
+        ":experiment-rustc",
+    ],
+    visibility = [
+        "//emulation:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
 haskell_library(
     name = "usb-toggle-ram-model",
     srcs = [

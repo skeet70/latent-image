@@ -168,7 +168,7 @@ for step in enable disable; do
   if BUILD_WORKSPACE_DIRECTORY="$tmpdir" "$binary" debug-flag "$step" "$tmpdir/flag-out"; then exit 1; fi
   test ! -e "$tmpdir/flag-out"
 done
-for bad in "ram-session" "ram-session af-ring" "ram-session bogus" "rehearse ram-session usb-toggle" "ram-session --waive-pins usb-toggle" "ram-session usb-toggle --waive-pins /a /b" "ram-session usb-toggle /a --waive-pins"; do
+for bad in "ram-session" "ram-session af-ring" "ram-session bogus" "rehearse ram-session usb-toggle" "ram-session --waive-pins usb-toggle" "ram-session usb-toggle --waive-pins /a /b" "ram-session usb-toggle /a --waive-pins" "ram-session experiment" "ram-session experiment ../hello" "ram-session experiment Hello" "ram-session experiment hello /a /b" "ram-session experiment hello --waive-pins"; do
   if "$binary" $bad; then exit 1; fi
 done
 
