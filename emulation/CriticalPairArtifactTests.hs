@@ -70,6 +70,56 @@ scenarios =
       [0xe30b2d20,0xe3402096,0xe5922000,0xe3013624,0xe7820003,0xe12fff1e]))
   , Scenario (CaseName "literal code address cannot replace bridge publication provenance") Refuse (\boundary -> Program
       [0xe92d4010,0xe3011304,0xe340100d,0xe3a02000,0xe5802000,literalTargetCall boundary,0xe8bd8010])
+  , Scenario (CaseName "single-store post-index writeback cannot overlap its source") Refuse (const (Program
+      [0xe4800004,0xe5101004,0xe5812000,0xe12fff1e]))
+  , Scenario (CaseName "single-store pre-index writeback cannot overlap its source") Refuse (const (Program
+      [0xe5a00004,0xe12fff1e]))
+  , Scenario (CaseName "dual-store writeback cannot overlap its first source") Refuse (const (Program
+      [0xe0c000f8,0xe12fff1e]))
+  , Scenario (CaseName "dual-store writeback cannot overlap its second source") Refuse (const (Program
+      [0xe1a01000,0xe0c100f8,0xe12fff1e]))
+  , Scenario (CaseName "word store cannot use PC as a shifted register index") Refuse (const (Program
+      [0xe7801faf,0xe12fff1e]))
+  , Scenario (CaseName "word load cannot use PC as a shifted register index") Refuse (const (Program
+      [0xe7901faf,0xe12fff1e]))
+  , Scenario (CaseName "dual load cannot use PC as a register index") Refuse (const (Program
+      [0xe040000f,0xe18020df,0xe12fff1e]))
+  , Scenario (CaseName "dual store cannot use PC as a register index") Refuse (const (Program
+      [0xe040000f,0xe18020ff,0xe12fff1e]))
+  , Scenario (CaseName "block load cannot use PC as its base") Refuse (const (Program
+      [0xe89f0001,0xe12fff1e]))
+  , Scenario (CaseName "dual-load index cannot overlap its first destination") Refuse (const (Program
+      [0xe3a02000,0xe18020d2,0xe12fff1e]))
+  , Scenario (CaseName "dual-load index cannot overlap its second destination") Refuse (const (Program
+      [0xe3a03000,0xe18020d3,0xe12fff1e]))
+  , Scenario (CaseName "dual register load requires zero reserved high-offset bits") Refuse (const (Program
+      [0xe3a01000,0xe18021d1,0xe12fff1e]))
+  , Scenario (CaseName "dual register store requires zero reserved high-offset bits") Refuse (const (Program
+      [0xe3a01000,0xe18021f1,0xe12fff1e]))
+  , Scenario (CaseName "block user-register load cannot receive ordinary load effects") Refuse (const (Program
+      [0xe8d00002,0xe12fff1e]))
+  , Scenario (CaseName "block user-register store cannot receive ordinary store effects") Refuse (const (Program
+      [0xe8c00002,0xe12fff1e]))
+  , Scenario (CaseName "block exception return cannot receive an ordinary return proof") Refuse (const (Program
+      [0xe92d4010,0xe8fd8010]))
+  , Scenario (CaseName "unprivileged immediate store cannot receive ordinary store effects") Refuse (const (Program
+      [0xe4a01004,0xe12fff1e]))
+  , Scenario (CaseName "unprivileged immediate load cannot receive ordinary load effects") Refuse (const (Program
+      [0xe4b01004,0xe12fff1e]))
+  , Scenario (CaseName "unprivileged register store cannot receive ordinary store effects") Refuse (const (Program
+      [0xe3a02004,0xe6a01002,0xe12fff1e]))
+  , Scenario (CaseName "unprivileged register load cannot receive ordinary load effects") Refuse (const (Program
+      [0xe3a02004,0xe6b01002,0xe12fff1e]))
+  , Scenario (CaseName "dual-store P-zero W-one form remains outside admission") Refuse (const (Program
+      [0xe0e020f8,0xe12fff1e]))
+  , Scenario (CaseName "dual-load P-zero W-one form remains outside admission") Refuse (const (Program
+      [0xe0e020d8,0xe12fff1e]))
+  , Scenario (CaseName "non-PC shifted index preserves confined word transfers") Admit (const (Program
+      [0xe3a02001,0xe7901102,0xe7801102,0xe12fff1e]))
+  , Scenario (CaseName "nonoverlapping dual register load remains admissible") Admit (const (Program
+      [0xe3a01000,0xe18020d1,0xe12fff1e]))
+  , Scenario (CaseName "nonoverlapping dual register store remains admissible") Admit (const (Program
+      [0xe3a01000,0xe18020f1,0xe12fff1e]))
   ]
 
 validControl :: Program
