@@ -11,6 +11,7 @@ import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Data.List (sort)
+import qualified Data.Set as Set
 import Data.Word (Word8, Word32, Word64)
 import qualified Emulation.LoaderPrefixWitness as P
 import Emulation.FirstStageWitness (Cpsr (..), leWordAt, sha256Hex)
@@ -69,9 +70,13 @@ adapterExtent image symbols = do
   require (F.symbolSize adapter == 68 && observed == expected) "initializer adapter does not implement its admitted eight-byte frame and exact return ABI"
   pure 8
 
--- Stack offsets are relative to the Rust function's incoming SP.
--- Unmodeled stack-alias propagation refuses staging.
-type StackState = M.Map A.Reg Integer
+-- Stack and return-slot offsets are relative to the Rust function's incoming SP.
+-- Unmodeled stack-alias propagation and unresolved returns refuse staging.
+data StackState = StackState
+  { stackAliases :: M.Map A.Reg Integer
+  , incomingReturns :: Set.Set A.Reg
+  , savedReturns :: Set.Set Integer
+  } deriving (Eq)
 
 operandRegisters :: A.Operand -> [A.Reg]
 operandRegisters operand = case operand of
@@ -90,104 +95,177 @@ stackExtent image symbols = do
   let start = F.symbolAddress symbol
       end = toInteger start + toInteger (F.symbolSize symbol)
       word address = leWordAt image (fromIntegral address - fromIntegral origin)
-      initial = M.singleton A.sp 0 :: StackState
+      initial = StackState (M.singleton A.sp 0) (Set.singleton A.lr) Set.empty
       walk [] _ deepest returns = do
         require (returns > (0 :: Int)) "initializer Rust function has no admitted return"
         require (deepest <= 0x400) "initializer compiler stack exceeds the admitted workspace scratch budget"
         pure (fromInteger deepest)
       walk ((pc, state):pending) visited deepest returns = do
         require (pc >= start && toInteger pc < end && pc .&. 3 == 0) "initializer branch leaves its function"
-        sp <- maybe (Left "initializer compiler SP is not statically derived") Right (M.lookup A.sp state)
-        require (sp <= 0) "initializer compiler SP enters the caller frame"
         case M.lookup pc visited of
+          Nothing -> advance pc state pending visited deepest returns
           Just previous -> do
-            require (previous == state) "initializer compiler loop has inconsistent stack aliases"
-            walk pending visited deepest returns
-          Nothing -> do
-            instruction <- A.decode pc <$> word pc
-            let next updated = [(pc + 4, updated)]
-                forget registers = foldr M.delete state registers
-                returning updated = do
-                  require (M.lookup A.sp updated == Just 0) "initializer compiler return does not restore SP"
-                  pure ([], updated, 0, True)
-                regular condition registers = do
-                  require (A.sp `notElem` registers && A.pc `notElem` registers) "unadmitted compiler SP or PC write"
-                  require (condition == A.Cond 14 || all (`M.notMember` state) registers)
-                    "conditional compiler write leaves an unresolved stack alias"
-                  let updated = forget registers
-                  pure (next updated, updated, 0, False)
-                frameAddress base offset bytes = case M.lookup base state of
-                  Nothing -> Right 0
-                  Just relative -> do
-                    let low = relative + toInteger offset
-                    require (low >= sp && low + bytes <= 0) "initializer compiler access leaves its allocated frame"
-                    pure (negate low)
-            (successors, updated, used, returned) <- case instruction of
-              A.StoreMultiple (A.Cond 14) base A.DecrementBefore True registers | base == A.sp -> do
-                require (A.sp `notElem` registers && A.pc `notElem` registers) "initializer compiler push contains SP or PC"
-                require (all (`M.notMember` state) registers) "initializer compiler push spills a stack alias"
-                let updated = M.insert A.sp (sp - 4 * toInteger (length registers)) state
-                pure (next updated, updated, 0, False)
-              A.LoadMultiple (A.Cond 14) base A.IncrementAfter True registers | base == A.sp -> do
-                require (A.sp `notElem` registers) "initializer compiler pop loads SP"
-                let updated = M.insert A.sp (sp + 4 * toInteger (length registers)) (forget registers)
-                require (M.lookup A.sp updated <= Just 0) "initializer compiler pop enters the caller frame"
-                if A.pc `elem` registers then returning updated else pure (next updated, updated, 0, False)
-              A.DataProcessing condition operation _ destination source operand
-                | operation `elem` [A.CMP, A.CMN, A.TST, A.TEQ] -> pure (next state, state, 0, False)
-                | condition == A.Cond 14 -> do
-                    let inputs = operandRegisters operand ++ [source | operation `notElem` [A.MOV, A.MVN]]
-                        value = case (operation, operand) of
-                          (A.MOV, A.ShiftedImmediate register A.LSL 0) -> M.lookup register state
-                          (A.ADD, A.Immediate amount) -> (+ toInteger amount) <$> M.lookup source state
-                          (A.SUB, A.Immediate amount) -> subtract (toInteger amount) <$> M.lookup source state
-                          _ -> Nothing
-                    require (all (`M.notMember` state) inputs || maybe False (const True) value)
-                      "unadmitted compiler stack-derived computation"
-                    let updated = maybe (M.delete destination state) (\offset -> M.insert destination offset state) value
-                    require (destination /= A.pc && (destination /= A.sp || maybe False (<= 0) value)) "unadmitted compiler SP or PC computation"
-                    pure (next updated, updated, 0, False)
-                | otherwise -> do
-                    let inputs = operandRegisters operand ++ [source | operation `notElem` [A.MOV, A.MVN]]
-                    require (all (`M.notMember` state) inputs) "conditional compiler computation propagates a stack alias"
-                    regular condition [destination]
-              A.MoveWide condition register _ -> regular condition [register]
-              A.MoveTop condition register _ -> do
-                require (M.notMember register state) "initializer compiler MOVT transforms a stack alias"
-                regular condition [register]
-              A.ZeroExtend condition register source _ _ -> do
-                require (M.notMember source state) "initializer compiler extension transforms a stack alias"
-                regular condition [register]
-              A.Multiply condition register left right accumulator -> do
-                require (all (`M.notMember` state) ([left,right] ++ maybe [] pure accumulator))
-                  "initializer compiler multiply transforms a stack alias"
-                regular condition [register]
-              A.Load condition width _ destination base (A.OffsetImmediate offset) A.OffsetOnly -> do
-                let bytes = case width of A.Byte -> 1; A.Half -> 2; A.Word -> 4; A.Dual -> 8
-                    registers = case (width, destination) of (A.Dual, A.Reg index) -> [destination,A.Reg (index + 1)]; _ -> [destination]
-                used <- frameAddress base offset bytes
-                (successors, updated, _, returned) <- regular condition registers
-                pure (successors, updated, used, returned)
-              A.Store _ A.Word source base (A.OffsetImmediate offset) A.OffsetOnly -> do
-                require (M.notMember source state) "initializer compiler store spills a stack alias"
-                used <- frameAddress base offset 4
-                pure (next state, state, used, False)
-              A.Load condition width _ destination base offset indexing -> do
-                require (all (`M.notMember` state) (base : offsetRegisters offset) && indexing == A.OffsetOnly)
-                  "unadmitted indexed compiler frame load"
-                regular condition (case (width, destination) of (A.Dual, A.Reg index) -> [destination,A.Reg (index + 1)]; _ -> [destination])
-              A.Store _ A.Word source base offset indexing -> do
-                require (M.notMember source state) "initializer compiler store spills a stack alias"
-                require (all (`M.notMember` state) (base : offsetRegisters offset) && indexing == A.OffsetOnly)
-                  "unadmitted indexed compiler frame store"
-                pure (next state, state, 0, False)
-              A.Branch condition False target -> pure
-                ((target, state) : [(pc + 4, state) | condition /= A.Cond 14], state, 0, False)
-              A.BranchExchange (A.Cond 14) False register | register == A.lr -> returning state
-              A.Hint _ -> pure (next state, state, 0, False)
-              _ -> Left "initializer Rust code has an unadmitted instruction, call or stack effect"
-            let usedSp = maybe 0 negate (M.lookup A.sp updated)
-            walk (successors ++ pending) (M.insert pc state visited) (maximum [deepest, used, usedSp]) (returns + if returned then 1 else 0)
+            require (stackAliases previous == stackAliases state) "initializer compiler loop has inconsistent stack aliases"
+            let common = state
+                  { incomingReturns = Set.intersection (incomingReturns previous) (incomingReturns state)
+                  , savedReturns = Set.intersection (savedReturns previous) (savedReturns state)
+                  }
+            if common == previous
+              then walk pending visited deepest returns
+              else advance pc common pending visited deepest returns
+      advance pc state pending visited deepest returns = do
+        sp <- maybe (Left "initializer compiler SP is not statically derived") Right (M.lookup A.sp (stackAliases state))
+        require (sp <= 0 && sp >= -0x400) "initializer compiler SP leaves its admitted frame budget"
+        require (sp `mod` 4 == 0) "initializer compiler SP is not word aligned"
+        instruction <- A.decode pc <$> word pc
+        let aliases = stackAliases state
+            returnRegisters = incomingReturns state
+            slots = savedReturns state
+            next updated = [(pc + 4, updated)]
+            forget registers = state
+              { stackAliases = foldr M.delete aliases registers
+              , incomingReturns = Set.difference returnRegisters (Set.fromList registers)
+              }
+            returning condition proven updated = do
+              require proven "initializer compiler indirect target is not its incoming return address"
+              require (M.lookup A.sp (stackAliases updated) == Just 0) "initializer compiler return does not restore SP"
+              pure ([(pc + 4, updated) | condition /= A.Cond 14], updated, 0, True)
+            regular condition registers = do
+              require (A.sp `notElem` registers && A.pc `notElem` registers) "unadmitted compiler SP or PC write"
+              require (condition == A.Cond 14 || all (`M.notMember` aliases) registers)
+                "conditional compiler write leaves an unresolved stack alias"
+              let updated = forget registers
+              pure (next updated, updated, 0, False)
+            frameAddress base offset bytes = case M.lookup base aliases of
+              Nothing -> Right (Nothing, 0)
+              Just relative -> do
+                let low = relative + toInteger offset
+                require (low >= sp && low + bytes <= 0) "initializer compiler access leaves its allocated frame"
+                pure (Just low, negate low)
+            clearSlots low bytes = Set.filter (\saved -> saved + 4 <= low || low + bytes <= saved)
+            trimSlots newSp = Set.filter (>= newSp)
+            storeReturn condition source location = case location of
+              Nothing -> state
+              Just low ->
+                let cleared = clearSlots low 4 slots
+                    updatedSlots =
+                      if condition == A.Cond 14 && Set.member source returnRegisters && low `mod` 4 == 0
+                        then Set.insert low cleared
+                        else cleared
+                 in state {savedReturns = updatedSlots}
+            valueIsReturn operation source operand = case (operation, operand) of
+              (A.MOV, A.ShiftedImmediate register A.LSL 0) -> Set.member register returnRegisters
+              (A.ADD, A.Immediate 0) -> Set.member source returnRegisters
+              (A.SUB, A.Immediate 0) -> Set.member source returnRegisters
+              _ -> False
+            assignReturn condition destination known updated =
+              let definite = known && (condition == A.Cond 14 || Set.member destination returnRegisters)
+                  changed = if definite then Set.insert destination else Set.delete destination
+               in updated {incomingReturns = changed (incomingReturns updated)}
+        (successors, updated, used, returned) <- case instruction of
+          A.StoreMultiple (A.Cond 14) base A.DecrementBefore True registers | base == A.sp -> do
+            require (not (null registers) && A.sp `notElem` registers && A.pc `notElem` registers) "initializer compiler push has unadmitted registers"
+            require (all (`M.notMember` aliases) registers) "initializer compiler push spills a stack alias"
+            let bytes = 4 * toInteger (length registers)
+                low = sp - bytes
+                saved = Set.fromList [offset | (register,offset) <- zip registers [low,low + 4..], Set.member register returnRegisters]
+                changed = state
+                  { stackAliases = M.insert A.sp low aliases
+                  , savedReturns = Set.union saved (clearSlots low bytes slots)
+                  }
+            pure (next changed, changed, 0, False)
+          A.LoadMultiple (A.Cond 14) base A.IncrementAfter True registers | base == A.sp -> do
+            require (not (null registers) && A.sp `notElem` registers) "initializer compiler pop has unadmitted registers"
+            let newSp = sp + 4 * toInteger (length registers)
+                restored = [(register,Set.member offset slots) | (register,offset) <- zip registers [sp,sp + 4..]]
+                loaded = Set.fromList [register | (register,True) <- restored, register /= A.pc]
+                forgotten = forget registers
+                changed = forgotten
+                  { stackAliases = M.insert A.sp newSp (stackAliases forgotten)
+                  , incomingReturns = Set.union loaded (incomingReturns forgotten)
+                  , savedReturns = trimSlots newSp slots
+                  }
+            require (newSp <= 0) "initializer compiler pop enters the caller frame"
+            if A.pc `elem` registers
+              then returning (A.Cond 14) (lookup A.pc restored == Just True) changed
+              else pure (next changed, changed, 0, False)
+          A.DataProcessing condition operation flags destination source operand
+            | operation `elem` [A.CMP, A.CMN, A.TST, A.TEQ] -> pure (next state, state, 0, False)
+            | destination == A.pc -> do
+                require (not flags) "initializer compiler return writes CPSR"
+                returning condition (valueIsReturn operation source operand) state
+            | condition == A.Cond 14 -> do
+                let inputs = operandRegisters operand ++ [source | operation `notElem` [A.MOV, A.MVN]]
+                    value = case (operation, operand) of
+                      (A.MOV, A.ShiftedImmediate register A.LSL 0) -> M.lookup register aliases
+                      (A.ADD, A.Immediate amount) -> (+ toInteger amount) <$> M.lookup source aliases
+                      (A.SUB, A.Immediate amount) -> subtract (toInteger amount) <$> M.lookup source aliases
+                      _ -> Nothing
+                require (all (`M.notMember` aliases) inputs || maybe False (const True) value)
+                  "unadmitted compiler stack-derived computation"
+                require (destination /= A.sp || maybe False (<= 0) value) "unadmitted compiler SP computation"
+                let changedAliases = maybe (M.delete destination aliases) (\offset -> M.insert destination offset aliases) value
+                    changed = assignReturn condition destination (valueIsReturn operation source operand)
+                      (state {stackAliases = changedAliases})
+                    bounded = case M.lookup A.sp changedAliases of
+                      Just newSp -> changed {savedReturns = trimSlots newSp slots}
+                      Nothing -> changed
+                pure (next bounded, bounded, 0, False)
+            | otherwise -> do
+                let inputs = operandRegisters operand ++ [source | operation `notElem` [A.MOV, A.MVN]]
+                require (all (`M.notMember` aliases) inputs) "conditional compiler computation propagates a stack alias"
+                (following, changed, used, returned) <- regular condition [destination]
+                let restored = assignReturn condition destination (valueIsReturn operation source operand) changed
+                pure (map (\(address,_) -> (address,restored)) following, restored, used, returned)
+          A.MoveWide condition register _ -> regular condition [register]
+          A.MoveTop condition register _ -> do
+            require (M.notMember register aliases) "initializer compiler MOVT transforms a stack alias"
+            regular condition [register]
+          A.ZeroExtend condition register source _ _ -> do
+            require (M.notMember source aliases) "initializer compiler extension transforms a stack alias"
+            regular condition [register]
+          A.Multiply condition register left right accumulator -> do
+            require (all (`M.notMember` aliases) ([left,right] ++ maybe [] pure accumulator))
+              "initializer compiler multiply transforms a stack alias"
+            regular condition [register]
+          A.Load condition width _ destination base (A.OffsetImmediate offset) A.OffsetOnly -> do
+            let bytes = case width of A.Byte -> 1; A.Half -> 2; A.Word -> 4; A.Dual -> 8
+                registers = case (width, destination) of (A.Dual, A.Reg index) -> [destination,A.Reg (index + 1)]; _ -> [destination]
+            (location, used) <- frameAddress base offset bytes
+            let loaded index = case location of
+                  Just low | width `elem` [A.Word,A.Dual] -> Set.member (low + 4 * index) slots
+                  _ -> False
+            if A.pc `elem` registers
+              then do
+                require (width == A.Word) "initializer compiler wide load writes PC"
+                (following, changed, _, returned) <- returning condition (loaded 0) state
+                pure (following, changed, used, returned)
+              else do
+                (_, changed, _, returned) <- regular condition registers
+                let restored = foldl (\current (register,index) -> assignReturn condition register (loaded index) current)
+                      changed (zip registers [0..])
+                pure (next restored, restored, used, returned)
+          A.Store condition A.Word source base (A.OffsetImmediate offset) A.OffsetOnly -> do
+            require (M.notMember source aliases) "initializer compiler store spills a stack alias"
+            (location, used) <- frameAddress base offset 4
+            let changed = storeReturn condition source location
+            pure (next changed, changed, used, False)
+          A.Load condition width _ destination base offset indexing -> do
+            require (all (`M.notMember` aliases) (base : offsetRegisters offset) && indexing == A.OffsetOnly)
+              "unadmitted indexed compiler frame load"
+            regular condition (case (width, destination) of (A.Dual, A.Reg index) -> [destination,A.Reg (index + 1)]; _ -> [destination])
+          A.Store _ A.Word source base offset indexing -> do
+            require (M.notMember source aliases) "initializer compiler store spills a stack alias"
+            require (all (`M.notMember` aliases) (base : offsetRegisters offset) && indexing == A.OffsetOnly)
+              "unadmitted indexed compiler frame store"
+            pure (next state, state, 0, False)
+          A.Branch condition False target -> pure
+            ((target, state) : [(pc + 4, state) | condition /= A.Cond 14], state, 0, False)
+          A.BranchExchange condition False register -> returning condition (Set.member register returnRegisters) state
+          A.Hint _ -> pure (next state, state, 0, False)
+          _ -> Left "initializer Rust code has an unadmitted instruction, call or stack effect"
+        let usedSp = maybe 0 negate (M.lookup A.sp (stackAliases updated))
+        walk (successors ++ pending) (M.insert pc state visited) (maximum [deepest, used, usedSp]) (returns + if returned then 1 else 0)
   require (F.symbolSize symbol > 0 && end <= toInteger origin + toInteger (B.length image)) "initializer Rust symbol leaves the image"
   walk [(start, initial)] M.empty 0 0
 
