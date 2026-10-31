@@ -163,7 +163,6 @@ fn composed_startup_rejects_role_identity_extent_and_guard_changes() {
     assert!(PeerContract::parse(standalone.as_bytes()).is_err());
 }
 
-#[cfg(feature = "scoped-watch")]
 fn retained_loader() -> String {
     r#"{"schema":4,"budget":50000000,"scenario":{"kind":"natural"},"program":{"kind":"retained",
         "record_sha256":"2f1bf3f0e483b892d2890599679c1b515cfc1be8b8c27cbb06d4d913e428abb4",
@@ -206,4 +205,101 @@ fn schema_four_and_five_require_explicit_well_formed_immutable_identity() {
             assert!(PeerContract::parse(invalid.as_bytes()).is_err(), "{invalid}");
         }
     }
+}
+
+fn retained_initializer() -> String {
+    format!(r#"{{"schema":6,"prefix":{},"initializer":{{"role":"retained","entry":{},"rust":[{},{}],
+        "scratch_bytes":12,"image_sha256":"60aeb6c0c68717940fef3771f3387540a2c87276d7c947a9f3d276dd51fe850d",
+        "symbols_sha256":null,"source_sha256":"43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"}}}}"#,
+        retained_loader(), 0xd0430, 0xd0430, 0xd09ac)
+}
+
+#[cfg(feature = "scoped-watch")]
+fn owned_initializer() -> String {
+    let prefix = format!(r#"{{"schema":4,"budget":50000000,"scenario":{{"kind":"natural"}},{}}}"#, loader_program());
+    format!(r#"{{"schema":6,"prefix":{prefix},"initializer":{{"role":"owned","entry":{},"rust":[{},{}],
+        "scratch_bytes":8,"image_sha256":"{digest}","symbols_sha256":"{digest}",
+        "source_sha256":"43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"}}}}"#,
+        0x10800, 0x10800, 0x10840, digest = "ab".repeat(32))
+}
+
+fn consumer_code() -> String {
+    let regions: &[(u32, &[u32])] = &[
+        (0x69cdf8, &[
+            0xe92d4830,0xe28db00c,0xe24dd020,0xe3500000,0x1a00000d,0xebfee8dc,0xe3500001,0x1a000006,
+            0xe3022e00,0xe3402035,0xe30e0c00,0xe3400089,0xe3a01000,0xe1a02122,0xeb0214da,0xeb0222f2,
+            0xe3500000,0x0a00004c,0xeafffffe,0xe3500001,0x1a000010,0xe3a03068,0xe50b3028,0xe3013960,
+            0xe3403078,0xe50b3024,0xe3a03001,0xe50b3020,0xe3a03b01,0xe50b301c,0xe30d3160,0xe3403069,
+            0xe50b3018,0xe3a04000,0xe50b4014,0xe24b0028,0xeb0223d2,0xea000039,0xe3500002,0x030c4c6c,
+            0x03404069,0x0a000035,0xe3500003,0x1a000010,0xe3a03066,0xe50b3028,0xe3013968,0xe3403078,
+            0xe50b3024,0xe3a0300f,0xe50b3020,0xe3a03b01,0xe50b301c,0xe30c3bf0,0xe3403069,0xe50b3018,
+            0xe3a04000,0xe50b4014,0xe24b0028,0xeb0223bb,0xea000022,0xe3500004,0x13a04000,0x1a00001f,
+            0xe3a03067,0xe50b3028,0xe3013970,0xe3403078,0xe50b3024,0xe3a0300f,0xe50b3020,0xe3a05b01,
+            0xe50b501c,0xe30c3bf0,0xe3403069,0xe50b3018,0xe3a04000,0xe50b4014,0xe24b0028,0xeb0223a7]),
+        (0x725dd8, &[0xe92d48f0,0xe28db014,0xe24dd020,0xe1a04000,0xe30a3d9c,0xe340307c,
+            0xe1d020b0,0xe2422001,0xe7936102,0xebfff5f5,0xe1a07000]),
+        (0x7235d8, &[0xe92d4df0,0xe28db01c,0xe30b5d20,0xe3405096,0xe5952000,0xe3013618,
+            0xe7923003,0xe12fff33,0xe1a04000,0xe7953100,0xe5933164,0xe12fff33,0xe1a0a000]),
+        (0xd1140, &[0xe52db004,0xe28db000,0xe10f0000,0xe3801080,0xe121f001,0xe2000080,
+            0xe28bd000,0xe8bd0800,0xe12fff1e]),
+    ];
+    format!("[{}]", regions.iter().map(|(start, words)|
+        format!(r#"{{"start":{start},"words":{}}}"#, serde_json::to_string(words).unwrap())).collect::<Vec<_>>().join(","))
+}
+
+fn consumer_contract(initializer: &str) -> String {
+    format!(r#"{{"schema":7,"initializer":{initializer},"consumer":{{"kind":"interrupt-mask",
+        "source_sha256":"43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490",
+        "loader_b_sha256":"8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+        "image4_sha256":"f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16","code":{}}}}}"#,
+        consumer_code())
+}
+
+#[cfg(not(feature = "scoped-watch"))]
+#[test]
+fn ordinary_sdk_rejects_initializer_and_consumer_scopes() {
+    let initializer = retained_initializer();
+    assert!(PeerContract::parse(initializer.as_bytes()).is_err());
+    assert!(PeerContract::parse(consumer_contract(&initializer).as_bytes()).is_err());
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn consumer_scope_preserves_both_initializer_roles_and_schema_six() {
+    for initializer in [retained_initializer(), owned_initializer()] {
+        assert!(PeerContract::parse(initializer.as_bytes()).is_ok());
+        assert!(PeerContract::parse(consumer_contract(&initializer).as_bytes()).is_ok());
+    }
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn consumer_scope_rejects_retargeted_source_code_and_nested_contracts() {
+    let valid = consumer_contract(&retained_initializer());
+    for invalid in [
+        valid.replacen(r#""schema":7"#, r#""schema":6"#, 1),
+        valid.replace(r#""schema":6"#, r#""schema":7"#),
+        valid.replace(r#""schema":4"#, r#""schema":5"#),
+        valid.replace(r#""kind":"interrupt-mask""#, r#""kind":"retained""#),
+        valid.replace(r#""kind":"interrupt-mask""#, r#""kind":"irq-enable""#),
+        valid.replace(r#""kind":"interrupt-mask""#, r#""kind":"interrupt-mask","entry":856384"#),
+        valid.replace(r#""source_sha256":"43d6"#, r#""source_sha256":"53d6"#),
+        valid.replace(r#""loader_b_sha256":"8fb0"#, r#""loader_b_sha256":"9fb0"#),
+        valid.replace(r#""image4_sha256":"f2e2"#, r#""image4_sha256":"f2e3"#),
+        valid.replace(&format!(r#""start":{}"#, 0xd1140), &format!(r#""start":{}"#, 0xd1144)),
+        valid.replace(&0xe121f001_u32.to_string(), &0xe1a00000_u32.to_string()),
+        valid.replace(&0xe12fff1e_u32.to_string(), "0"),
+        valid.replace(r#""scratch_bytes":12"#, r#""scratch_bytes":8"#),
+        valid.replace(&consumer_code(), "[]"),
+        valid.replace(r#""kind":"natural""#, r#""kind":"held""#),
+        valid.replace(r#""budget":50000000"#, r#""budget":49999999"#),
+        valid.replace(r#""initializer":{"schema":6"#, r#""initializer":{"schema":6,"consumer":null"#),
+        valid.replacen(r#""schema":7"#, r#""schema":7,"budget":50000000"#, 1),
+        valid.replacen(r#""schema":7"#, r#""schema":7,"schema":7"#, 1),
+        valid.replace(r#""words":["#, r#""extra":0,"words":["#),
+    ] {
+        assert!(PeerContract::parse(invalid.as_bytes()).is_err(), "{invalid}");
+    }
+    let without_initializer = format!(r#"{{"schema":7,"initializer":{},"consumer":{{"kind":"interrupt-mask"}}}}"#, retained_loader());
+    assert!(PeerContract::parse(without_initializer.as_bytes()).is_err());
 }

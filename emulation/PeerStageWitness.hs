@@ -13,6 +13,7 @@ import Emulation.PeerStageWitness
 import qualified Emulation.PeerWaitWitness as W
 import qualified Emulation.LoaderPrefixWitness as L
 import qualified Emulation.InterfaceInitializer as I
+import qualified Emulation.InterfaceInitializerConsumer as IC
 import qualified Emulation.PeerStartupWitness as S
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Runtime (..), Workspace, freshRuntime, resolve, validateFirmware, workspace)
 import qualified FujiAF.FirstStage as F
@@ -47,7 +48,17 @@ data LoaderProgram = RetainedLoader | OwnedLoader FilePath FilePath FilePath
 
 data ComposedProgram = ComposedProgram FilePath FilePath FilePath FilePath FilePath
 
-data InitializerProgram = RetainedInitializer | OwnedInitializer FilePath FilePath FilePath
+data OwnedInitializerInputs = OwnedInitializerInputs
+  { initializerImagePath :: FilePath
+  , initializerSymbolsPath :: FilePath
+  , initializerSourcePath :: FilePath
+  }
+
+data InitializerProgram = RetainedInitializer | OwnedInitializer OwnedInitializerInputs
+
+data InitializerBoundary = InitializerEndpoint | RetainedServiceBoundary IC.ConsumerKind
+
+data InitializerWitness = InitializerWitness I.Contract | InitializerConsumerWitness IC.Contract
 
 data LoaderRoute = StandalonePrefix | ComposedStartup deriving (Eq)
 
@@ -68,8 +79,9 @@ data Options
   | ConsumeComposed FilePath FilePath
   | CompareComposed FilePath FilePath FilePath FilePath
   | PrepareComposed FilePath FilePath FilePath L.Scenario ComposedProgram Launch
-  | PrepareInitializer FilePath FilePath FilePath InitializerProgram Launch
-  | ConsumeInitializer FilePath FilePath InitializerProgram
+  | PrepareInitializer FilePath FilePath FilePath InitializerProgram InitializerBoundary Launch
+  | ConsumeInitializer FilePath FilePath InitializerProgram InitializerBoundary
+  | CompareInitializerConsumer FilePath FilePath FilePath OwnedInitializerInputs IC.ConsumerKind
 
 usage :: String
 usage = unlines
@@ -89,6 +101,9 @@ usage = unlines
   , "       peer-stage-witness --compare-composed-startup RETAINED_RECEIPT RETAINED_CONTRACT COMPOSED_RECEIPT COMPOSED_CONTRACT"
   , "       peer-stage-witness --interface-initializer retained|owned --firmware DAT --fflzd FFLZD --output DIR [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT] [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
   , "       peer-stage-witness --interface-initializer retained|owned --firmware DAT --initializer-receipt FILE [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT]"
+  , "       peer-stage-witness --interface-initializer retained|owned --initializer-consumer interrupt-mask --firmware DAT --fflzd FFLZD --output DIR [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT] [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
+  , "       peer-stage-witness --interface-initializer retained|owned --initializer-consumer interrupt-mask --firmware DAT --initializer-receipt FILE [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT]"
+  , "       peer-stage-witness --compare-initializer-consumer RETAINED_RECEIPT OWNED_RECEIPT --initializer-consumer interrupt-mask --firmware OWNED_DAT --candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT"
   , "Natural preparation writes peer-witness-contract.json and peer-witness-expected.json without starting an emulator."
   , "Launch requires an explicit driver, run description and captured 16 KiB ROM."
   , "Control preparation preserves the input and writes peer-witness-contract.json, peer-control.DAT and peer-control-manifest.json instead of the natural expected-policy file."
@@ -98,6 +113,8 @@ usage = unlines
   , "Loader-prefix preparation writes a schema-4 peer-witness-contract.json and loader-prefix-expected.json. Retained --firmware is the original DAT; held, delayed and non-one write their completion control as loader-prefix-control.DAT. Owned --firmware is the DAT build-loader-prefix staged onto the original or that control DAT."
   , "Composed preparation verifies both record images and loader-B publication against the original or selected completion-control DAT. It writes a schema-5 peer-witness-contract.json and composed-startup-expected.json without launching."
   , "Interface initialization uses distinct schema 6 and the natural source only; receipt consumption rederives the source/image/symbol contract."
+  , "Explicit --initializer-consumer interrupt-mask selects schema 7 and independently consumes complete schema-6 initializer evidence before the retained service window."
+  , "Initializer-consumer comparison rederives both contracts from the original DAT and actual owned staging inputs."
   ]
 
 data Flag
@@ -108,7 +125,7 @@ data Flag
   | LoaderCompareRetainedFile | LoaderCompareRetainedContract | LoaderCompareOwnedFile | LoaderCompareOwnedContract
   | ComposedMode | FirstStageImageFile | FirstStageSymbolsFile | ComposedReceiptFile | ComposedContractFile
   | ComposedCompareRetainedFile | ComposedCompareRetainedContract | ComposedCompareOwnedFile | ComposedCompareOwnedContract
-  | InitializerMode | InitializerReceiptFile
+  | InitializerMode | InitializerReceiptFile | InitializerConsumerKind | InitializerCompareRetainedFile | InitializerCompareOwnedFile
   deriving (Eq)
 
 parseOptions :: [String] -> Either String Options
@@ -126,25 +143,39 @@ parseOptions arguments = do
       startupFlags = candidateFlags ++ [StartupFaultName]
       loaderFlags = [LoaderPrefixMode,LoaderPrefixReceiptFile,LoaderPrefixContractFile,LoaderCompareRetainedFile]
       composedFlags = [ComposedMode,ComposedReceiptFile,ComposedContractFile,ComposedCompareRetainedFile,FirstStageImageFile,FirstStageSymbolsFile]
-      initializerOptions = do
-        mode <- need "--interface-initializer" InitializerMode
-        chosen <- case mode of
-          "retained" -> do
-            unless (all ((`notElem` candidateFlags) . fst) values) (Left "retained initializer refuses owned artifact inputs")
-            pure RetainedInitializer
-          "owned" -> OwnedInitializer <$> need "--candidate-image" CandidateImageFile
-            <*> need "--candidate-symbols" CandidateSymbolsFile <*> need "--source-firmware" SourceFirmwareFile
-          _ -> Left "--interface-initializer must be retained or owned"
-        firmware <- need "--firmware" FirmwareFile
-        case value InitializerReceiptFile of
-          Just receipt -> do
-            only ([InitializerMode,InitializerReceiptFile,FirmwareFile] ++ candidateFlags)
-            when launch (Left "initializer receipt mode cannot launch")
-            pure (ConsumeInitializer firmware receipt chosen)
-          Nothing -> do
-            only ([InitializerMode,FirmwareFile,FflzdFile,OutputDirectory,DriverFile,RunFile,RomFile] ++ candidateFlags)
-            PrepareInitializer firmware <$> need "--fflzd" FflzdFile <*> need "--output" OutputDirectory
-              <*> pure chosen <*> launchMode
+      ownedInitializerInputs = OwnedInitializerInputs <$> need "--candidate-image" CandidateImageFile
+        <*> need "--candidate-symbols" CandidateSymbolsFile <*> need "--source-firmware" SourceFirmwareFile
+      initializerConsumer = case value InitializerConsumerKind of
+        Just "interrupt-mask" -> Right IC.InterruptMask
+        Just _ -> Left "--initializer-consumer must be interrupt-mask"
+        Nothing -> Left "--initializer-consumer is required for initializer-consumer comparison"
+      initializerOptions = case value InitializerCompareRetainedFile of
+        Just retained -> do
+          only ([InitializerCompareRetainedFile,InitializerCompareOwnedFile,InitializerConsumerKind,FirmwareFile] ++ candidateFlags)
+          when launch (Left "initializer-consumer comparison cannot launch")
+          CompareInitializerConsumer retained <$> need "--compare-initializer-consumer" InitializerCompareOwnedFile
+            <*> need "--firmware" FirmwareFile <*> ownedInitializerInputs <*> initializerConsumer
+        Nothing -> do
+          mode <- need "--interface-initializer" InitializerMode
+          chosen <- case mode of
+            "retained" -> do
+              unless (all ((`notElem` candidateFlags) . fst) values) (Left "retained initializer refuses owned artifact inputs")
+              pure RetainedInitializer
+            "owned" -> OwnedInitializer <$> ownedInitializerInputs
+            _ -> Left "--interface-initializer must be retained or owned"
+          boundary <- case value InitializerConsumerKind of
+            Nothing -> Right InitializerEndpoint
+            Just _ -> RetainedServiceBoundary <$> initializerConsumer
+          firmware <- need "--firmware" FirmwareFile
+          case value InitializerReceiptFile of
+            Just receipt -> do
+              only ([InitializerMode,InitializerReceiptFile,InitializerConsumerKind,FirmwareFile] ++ candidateFlags)
+              when launch (Left "initializer receipt mode cannot launch")
+              pure (ConsumeInitializer firmware receipt chosen boundary)
+            Nothing -> do
+              only ([InitializerMode,InitializerConsumerKind,FirmwareFile,FflzdFile,OutputDirectory,DriverFile,RunFile,RomFile] ++ candidateFlags)
+              PrepareInitializer firmware <$> need "--fflzd" FflzdFile <*> need "--output" OutputDirectory
+                <*> pure chosen <*> pure boundary <*> launchMode
       loaderProgram mode = case mode of
         "retained" -> do
           unless (all ((`notElem` candidateFlags) . fst) values) (Left "retained loader prefix refuses --candidate-image, --candidate-symbols and --source-firmware")
@@ -188,7 +219,7 @@ parseOptions arguments = do
           CompareComposed retained <$> need "--compare-composed-startup" ComposedCompareRetainedContract
             <*> need "--compare-composed-startup" ComposedCompareOwnedFile <*> need "--compare-composed-startup" ComposedCompareOwnedContract
         _ -> Left ("composed preparation, receipt and comparison modes are mutually exclusive\n" ++ usage)
-  if any ((`elem` [InitializerMode,InitializerReceiptFile]) . fst) values then initializerOptions
+  if any ((`elem` [InitializerMode,InitializerReceiptFile,InitializerConsumerKind,InitializerCompareRetainedFile]) . fst) values then initializerOptions
   else if any ((`elem` composedFlags) . fst) values then composedOptions
   else if any ((`elem` loaderFlags) . fst) values then loaderOptions else case (value StartupReceiptFile, value CompareRetainedFile, value StartupMode) of
     (Nothing, Nothing, Nothing) -> case (value ReceiptFile, value ControlReceiptFile) of
@@ -251,6 +282,13 @@ parseOptions arguments = do
       when (ComposedCompareRetainedFile `elem` map fst values) (Left "duplicate option: --compare-composed-startup")
       collect ((ComposedCompareOwnedContract,ownedContract):(ComposedCompareOwnedFile,owned):(ComposedCompareRetainedContract,retainedContract):(ComposedCompareRetainedFile,retained):values) launch rest
     collect _ _ ("--compare-composed-startup":_) = Left ("--compare-composed-startup requires " ++ compareOperands ++ "\n" ++ usage)
+    collect values launch ("--compare-initializer-consumer":retained:owned:rest) = do
+      when (any (\entry -> null entry || take 2 entry == "--") [retained,owned])
+        (Left "--compare-initializer-consumer requires RETAINED_RECEIPT OWNED_RECEIPT")
+      when (InitializerCompareRetainedFile `elem` map fst values) (Left "duplicate option: --compare-initializer-consumer")
+      collect ((InitializerCompareOwnedFile,owned):(InitializerCompareRetainedFile,retained):values) launch rest
+    collect _ _ ("--compare-initializer-consumer":_) =
+      Left ("--compare-initializer-consumer requires RETAINED_RECEIPT OWNED_RECEIPT\n" ++ usage)
     collect values launch (name:entry:rest) = do
       flag <- case name of
         "--receipt" -> Right ReceiptFile
@@ -281,6 +319,7 @@ parseOptions arguments = do
         "--composed-startup-contract" -> Right ComposedContractFile
         "--interface-initializer" -> Right InitializerMode
         "--initializer-receipt" -> Right InitializerReceiptFile
+        "--initializer-consumer" -> Right InitializerConsumerKind
         "--firststage-image" -> Right FirstStageImageFile
         "--firststage-symbols" -> Right FirstStageSymbolsFile
         _ -> Left ("unknown option: " ++ name ++ "\n" ++ usage)
@@ -685,37 +724,63 @@ initializerContract root firmwarePath choice = do
     RetainedInitializer -> do
       validateFirmware (Firmware datPath)
       pure (I.Retained, dat, B.empty, B.empty)
-    OwnedInitializer imagePath symbolsPath sourcePath -> do
-      originalPath <- canonicalizePath (resolve root sourcePath)
+    OwnedInitializer inputs -> do
+      originalPath <- canonicalizePath (resolve root (initializerSourcePath inputs))
       validateFirmware (Firmware originalPath)
       source <- H.readRegular maxContainer originalPath
-      image <- H.readRegular maxCandidateImage (resolve root imagePath)
-      symbols <- H.readRegular maxCandidateSymbols (resolve root symbolsPath)
+      image <- H.readRegular maxCandidateImage (resolve root (initializerImagePath inputs))
+      symbols <- H.readRegular maxCandidateSymbols (resolve root (initializerSymbolsPath inputs))
       pure (I.Owned, source, image, symbols)
   contract <- either H.failH pure (I.deriveContract role source dat image symbols)
   pure (Firmware datPath, dat, contract)
 
-consumeInitializer :: FilePath -> I.Contract -> IO ()
-consumeInitializer path contract = do
-  bytes <- H.readRegular (16 * 1024 * 1024) path
-  either H.failH pure (I.validateReceipt contract bytes)
+initializerWitness :: InitializerBoundary -> I.Contract -> Either String InitializerWitness
+initializerWitness InitializerEndpoint contract = Right (InitializerWitness contract)
+initializerWitness (RetainedServiceBoundary IC.InterruptMask) contract =
+  InitializerConsumerWitness <$> IC.deriveContract contract
+
+consumeInitializer :: FilePath -> InitializerWitness -> IO ()
+consumeInitializer path selected = do
+  bytes <- case selected of
+    InitializerWitness _ -> H.readRegular (16 * 1024 * 1024) path
+    InitializerConsumerWitness _ -> H.readRegular (32 * 1024 * 1024) path
+  case selected of
+    InitializerWitness contract -> either H.failH pure (I.validateReceipt contract bytes)
+    InitializerConsumerWitness contract -> either H.failH pure (IC.validateReceipt contract bytes)
   putStrLn ("interface-initializer receipt accepted: " ++ path)
 
-prepareInitializer :: Workspace -> FilePath -> FilePath -> FilePath -> InitializerProgram -> Launch -> IO ()
-prepareInitializer root firmwarePath fflzdPath outputPath choice execution = do
+compareInitializerConsumer :: Workspace -> FilePath -> FilePath -> FilePath -> OwnedInitializerInputs -> IC.ConsumerKind -> IO ()
+compareInitializerConsumer root retainedPath ownedPath firmware inputs IC.InterruptMask = do
+  (_, _, retainedInitializer) <- initializerContract root (initializerSourcePath inputs) RetainedInitializer
+  (_, _, ownedInitializer) <- initializerContract root firmware (OwnedInitializer inputs)
+  retained <- either H.failH pure (IC.deriveContract retainedInitializer)
+  owned <- either H.failH pure (IC.deriveContract ownedInitializer)
+  retainedBytes <- H.readRegular (32 * 1024 * 1024) (resolve root retainedPath)
+  ownedBytes <- H.readRegular (32 * 1024 * 1024) (resolve root ownedPath)
+  either H.failH pure (IC.compareReceipts (retained,retainedBytes) (owned,ownedBytes))
+  putStrLn "retained/owned interrupt-mask consumer comparison accepted"
+
+prepareInitializer :: Workspace -> FilePath -> FilePath -> FilePath -> InitializerProgram -> InitializerBoundary -> Launch -> IO ()
+prepareInitializer root firmwarePath fflzdPath outputPath choice boundary execution = do
   (firmware, dat, contract) <- initializerContract root firmwarePath choice
+  selected <- either H.failH pure (initializerWitness boundary contract)
   parsed <- either H.failH pure (U.parseContainer dat)
   Runtime output <- freshRuntime root (Just (Runtime outputPath)) (UniqueRuntime "interface-initializer")
   image4 <- decodeImage4 (resolve root fflzdPath) output (U.parsedParts parsed)
   argument <- either H.failH pure (leWordAt image4 0xc)
   H.ensure (argument == 0x69cdf8) "initializer image-4 argument differs from its admitted source"
+  document <- case selected of
+    InitializerWitness current -> pure (I.contractValue current)
+    InitializerConsumerWitness current -> do
+      either H.failH pure (IC.validateImage4 current image4)
+      pure (IC.contractValue current)
   let contractPath = output </> "peer-witness-contract.json"
       receipt = output </> "peer-witness.json"
-  BL.writeFile contractPath (encode (I.contractValue contract))
+  BL.writeFile contractPath (encode document)
   case execution of
     PrepareOnly -> putStrLn ("interface-initializer preparation: " ++ output)
     Launch driver run rom ->
-      launchDriver root output contractPath receipt firmware driver run rom (consumeInitializer receipt contract)
+      launchDriver root output contractPath receipt firmware driver run rom (consumeInitializer receipt selected)
 
 main :: IO ()
 main = do
@@ -794,9 +859,12 @@ main = do
         PrepareComposed firmwarePath fflzdPath outputPath scenario program execution -> do
           enterSlot args execution
           prepareComposed root firmwarePath fflzdPath outputPath scenario program execution
-        ConsumeInitializer firmwarePath receipt choice -> do
+        ConsumeInitializer firmwarePath receipt choice boundary -> do
           (_, _, contract) <- initializerContract root firmwarePath choice
-          consumeInitializer (resolve root receipt) contract
-        PrepareInitializer firmwarePath fflzd output choice execution -> do
+          selected <- either H.failH pure (initializerWitness boundary contract)
+          consumeInitializer (resolve root receipt) selected
+        PrepareInitializer firmwarePath fflzd output choice boundary execution -> do
           enterSlot args execution
-          prepareInitializer root firmwarePath fflzd output choice execution
+          prepareInitializer root firmwarePath fflzd output choice boundary execution
+        CompareInitializerConsumer retained owned firmware inputs kind ->
+          compareInitializerConsumer root retained owned firmware inputs kind

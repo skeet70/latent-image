@@ -17,6 +17,7 @@ use std::collections::BTreeSet;
 #[path = "peer_witness_initializer.rs"]
 mod initializer;
 pub(super) use initializer::InitializerWire;
+pub(super) use initializer::interrupt_mask::ConsumerWire;
 
 const BUDGET: u64 = 50_000_000;
 const QUANTUM: u64 = 1_000;
@@ -193,6 +194,7 @@ pub(super) struct LoaderContract {
     image: Option<(Guest, Guest)>,
     startup: Option<ComposedStartup>,
     initializer: Option<initializer::Contract>,
+    consumer: Option<initializer::interrupt_mask::Contract>,
 }
 impl LoaderContract {
     pub(super) fn budget(&self) -> Instructions {
@@ -272,7 +274,7 @@ impl LoaderWire {
             scenario: self.scenario.kind, kind: program.kind, record, record_immutable: program.record_immutable_sha256, loader,
             handoff: program.handoff, entry: program.entry, post_load: program.post_load,
             loaded: program.loaded_register, refusal: program.refusal,
-            image: program.image, startup: None, initializer: None,
+            image: program.image, startup: None, initializer: None, consumer: None,
         })
     }
 }
@@ -1111,22 +1113,40 @@ pub(super) fn run(mut machine: Machine, contract: &LoaderContract, output: &Path
         Ok(())
     })();
     let outcome = runner.finish(&mut machine, outcome);
+    let initializer_instructions = Instructions(machine.instructions());
+    let initializer_failure = machine.failure.clone();
+    let mut consumer_receipt = None;
+    let consumer_outcome = if outcome.is_ok() {
+        match (&contract.consumer, &initializer_receipt) {
+            (Some(consumer), Some(initializer)) => initializer::interrupt_mask::observe(&mut machine, &runner, initializer, consumer)
+                .map(|receipt| { consumer_receipt = Some(receipt); }),
+            (Some(_), None) => Err("consumer complete initializer receipt absent".into()),
+            (None, _) => Ok(()),
+        }
+    } else { Err(outcome.as_ref().err().cloned().unwrap_or_default()) };
     let receipt = Receipt {
         schema: if contract.initializer.is_some() { 6 } else if contract.startup.is_some() { 5 } else { 4 },
         scenario: ScenarioWire { kind: contract.scenario }, program: contract.kind,
         result: if outcome.is_ok() { WitnessResult::Passed } else { WitnessResult::Failed },
-        error: outcome.as_ref().err().map(String::as_str), machine_failure: machine.failure.as_deref(),
-        instructions: Instructions(machine.instructions()), cp14_identities: identities,
+        error: outcome.as_ref().err().map(String::as_str), machine_failure: initializer_failure.as_deref(),
+        instructions: initializer_instructions, cp14_identities: identities,
         boot_watch: &runner.boot_watch, loaded_watch: &runner.loaded_watch, scoped_watch: &runner.scoped_watch,
         stops: &runner.stops, bindings: &runner.bindings, completion: &runner.completion, endpoint: &runner.endpoint,
         final_primary: &runner.final_primary, startup: &contract.startup,
         initial_record_sha256: &runner.initial_record_sha256, handoff_record_immutable_sha256: &runner.handoff_record_immutable_sha256,
         initializer: &initializer_receipt,
     };
-    let bytes = serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?;
+    let final_outcome = outcome.as_ref().map(|_| ()).map_err(Clone::clone).and(consumer_outcome);
+    let bytes = if contract.consumer.is_some() {
+        serde_json::to_vec_pretty(&initializer::interrupt_mask::OuterReceipt {
+            schema: 7, result: if final_outcome.is_ok() { WitnessResult::Passed } else { WitnessResult::Failed },
+            error: final_outcome.as_ref().err().map(String::as_str), machine_failure: machine.failure.as_deref(),
+            initializer: &receipt, consumer: &consumer_receipt,
+        })
+    } else { serde_json::to_vec_pretty(&receipt) }.map_err(|error| error.to_string())?;
     require(bytes.len() <= MAX_RECEIPT, "loader-prefix receipt exceeds 16 MiB")?;
     let path = output.join("peer-witness.json");
     std::fs::write(&path, bytes).map_err(|error| format!("{}: {error}", path.display()))?;
     println!("{}", path.display());
-    outcome
+    final_outcome
 }

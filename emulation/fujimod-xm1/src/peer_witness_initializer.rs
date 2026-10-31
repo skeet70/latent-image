@@ -1,6 +1,9 @@
 //! The distinct core-1 interface boundary ending before 0xd0ab0.
 use super::*;
 
+#[path = "peer_witness_interrupt_mask.rs"]
+pub(super) mod interrupt_mask;
+
 pub(super) const BODY: (u64, u64) = (0xd0430, 0xd09ac);
 const TABLE: (u64, u64) = (0xddaa0, 0xdf0cc);
 const TABLE_GUEST: u64 = 0x400d_daa0;

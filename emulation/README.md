@@ -188,7 +188,7 @@ The earlier SDK attempts remain failures: `6aa5c92` stops during initial Graph m
 
 ### Core-1 interface initializer witness (schema 6)
 
-[#140](https://github.com/skeet70/latent-image/issues/140) owns the complete interface/descriptor leaf invoked by core1 at `0xd0aac`, ending at preexecution `0xd0ab0`, in `replacement/interface_initializer`. This is a source-only increment. No new image, stager, SDK observer or receipt consumer has been built or executed for this boundary. Schema4/5 endpoints, their existing guards and prior frozen artifacts remain unchanged.
+[#140](https://github.com/skeet70/latent-image/issues/140) owns the complete interface/descriptor leaf invoked by core1 at `0xd0aac`, ending at preexecution `0xd0ab0`, in `replacement/interface_initializer`. This is a source-only increment. No new image, stager, SDK observer or receipt consumer is qualified for this boundary. Schema4/5 endpoints, their existing guards and prior frozen artifacts remain unchanged.
 
 The original contract is bound independently to the pinned X-M1 1.50 DAT. Its complemented main-range segment-1 entry is `{id=1, load=0xd0000, size=0xdaa0, flash=0xa0000}`; the extracted loader matches SHA256 `8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec`. Leaf `[0xd0430,0xd09ac)` has SHA256 `60aeb6c0c68717940fef3771f3387540a2c87276d7c947a9f3d276dd51fe850d`, and the invocation word at `0xd0aac` is `0xebfffe5f`. This binding came from actual DAT-derived bytes, not the indexed assembly listing.
 
@@ -248,6 +248,54 @@ Admission regression qualification uses a throwaway Haskell harness with the pri
 - Require `bxeq lr; sub sp,sp,#1024; str r0,[sp]; add sp,sp,#1024; bx lr` to derive 1032 total scratch bytes, including the adapter. A conditional return must not hide the untaken fallthrough's frame.
 - Require `push {lr}; popeq {pc}; sub sp,sp,#1024; str r0,[sp]; add sp,sp,#1024; pop {pc}` to refuse. The untaken conditional return must not hide a compiler frame exceeding the 1024-byte budget.
 - First require `validateReceipt` to accept the unchanged receipt under its independently derived contract. In separate copies, delete each workspace/record/loader host/model write class, change `views` to `observe`, set a non-null fault, change or delete watch TCM snapshots, and change or delete each rule's TCM snapshot. Alter both raw bank registers and window bounds independently. Require each consumer call to refuse without changing prefix evidence, publications or readbacks.
+
+### Retained interrupt-mask consumer witness (schema 7)
+
+The explicit `--initializer-consumer interrupt-mask` option selects a distinct schema7 contract and receipt. Absence of that option preserves the schema6 preexecution `0xd0ab0` endpoint. The outer contract contains the complete schema6 initializer contract; the receipt contains its complete schema6 evidence. `Emulation/InterfaceInitializerConsumer.hs` independently validates that inner evidence before admitting the retained consumer observation. `fujimod-xm1/src/peer_witness_interrupt_mask.rs` owns the native observation. This is source-only implementation, not a compiled, executed or accepted positive.
+
+The selected consumer remains original code. From the authentic initializer return, the retained loader runs its existing kernel, pool and IRQ setup, waits for the peer's natural `0x87654321` publication, calls image4 stage4 at `0x69cdf8`, and reaches the task103 wrapper at `0x725dd8`. Before any task allocation, helper `0x7235d8` selects the secondary interface root. Observation stops before its `0x723600` slot load, executes the actual `0x723604` BLX, observes all nine original instructions at `[0xd1140,0xd1164)`, then executes the caller's `MOV r10,r0` and stops before `0x72360c`. The assertion is twelve core1 instructions, not twelve aggregate scheduler instructions. The existing fifty-million-instruction total budget is unchanged.
+
+The source declaration pins the canonical DAT, original loader B SHA256 `8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec` and full decoded image4 SHA256 `f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16`. Normal preparation checks the actual decoded image4 against that pin. Runtime checks bind immutable stage4, wrapper, dispatch and service code projections, not a claim that mutable runtime image4 still has its source digest. The service words independently read from the original loader are `e52db004 e28db000 e10f0000 e3801080 e121f001 e2000080 e28bd000 e8bd0800 e12fff1e`. The requested `dd` operation for loader offset4416/count36 piped to SHA256 was approval-denied before execution. No service subhash was computed, and this increment does not retry or reroute that operation.
+
+The prelude refuses a core1 read of the secondary published table before the stopped target reader, rather than discarding an earlier read. Owned-role core1 fetch/read exclusion of the original initializer body persists. The twelve-instruction window permits one core1 word write, `[0x400f3384,0x400f3388)`, and protects the table, caller frame and selected code from peer, host and model changes. Evidence includes the actual roots `[0x4004dae0,0x400ddaa0]`, slot `0x400ddc04 -> 0xd1140`, all 1419 unchanged table words, ordered CPU slot-read/save-r11/read-r11 effects, physical/virtual committed readbacks, full register frames, decoder choices and both cores' raw TCM/window identities.
+
+Alias evidence has 56 digest bindings for roots, slot, frame, table and the three image4 code regions. Eight separate `service_aliases` entries carry direct nine-word service readbacks, ordered dispatch/final, core0/core1, low/high. They bind actual physical addresses and TCM disjointness without a service-leaf digest. The consumer parses all event preimages, ticks and optional TCM locations; physical-RAM admissions reject TCM events. The save's preimage must equal the committed frame-before word. Comparison retains those fields and relative tick deltas.
+
+The pinned instruction hook increments accounting before calling observers, and the preexecution stop rolls that increment back. Prelude evidence retains the terminal `0x723600` fetch with event attribution one above the stopped aggregate count; it does not execute the slot read. The independent consumer requires that exact terminal fetch and the complete preceding selected-code fetch sequence. The later twelve-instruction assertion uses the rolled-back actual per-core counts.
+
+The admitted dispatch frame is SP `0x400f3388`, r11 `0x400f33a4` and LR `0x7235f8`; these are checked actual observations, not supplied register state. For admitted A32 little-endian SVC CPSR `C`, the service returns `r0=C&0x80`, `r1=C|0x80`, CPSR `C|0x80` and LR `0x723608`, preserving r2..r12, SP and r11. The caller then copies returned r0 into r10. The saved-r11 word reads back as `0x400f33a4`; the remaining caller frame is unchanged.
+
+After the ordinary initializer image/stager/SDK build and separate grants described above, the additional genuine positive and comparison plan is:
+
+```sh
+XM1_EMULATOR_SLOTS=1 "$PEER_STAGE_WITNESS" \
+  --interface-initializer retained --initializer-consumer interrupt-mask \
+  --firmware "$DAT" --fflzd "$FFLZD" --output "$RETAINED_CONSUMER_OUTPUT" \
+  --launch --driver "$SCOPED_DRIVER" --run "$RUN_JSON" --boot-rom "$BOOT_ROM"
+XM1_EMULATOR_SLOTS=1 "$PEER_STAGE_WITNESS" \
+  --interface-initializer owned --initializer-consumer interrupt-mask \
+  --firmware "$INITIALIZER_DAT" --fflzd "$FFLZD" --output "$OWNED_CONSUMER_OUTPUT" \
+  --candidate-image bazel-bin/replacement/interface_initializer/interface-initializer-image.bin \
+  --candidate-symbols bazel-bin/replacement/interface_initializer/interface-initializer-image.symbols \
+  --source-firmware "$DAT" \
+  --launch --driver "$SCOPED_DRIVER" --run "$RUN_JSON" --boot-rom "$BOOT_ROM"
+"$PEER_STAGE_WITNESS" --interface-initializer owned --initializer-consumer interrupt-mask \
+  --firmware "$INITIALIZER_DAT" --source-firmware "$DAT" \
+  --candidate-image bazel-bin/replacement/interface_initializer/interface-initializer-image.bin \
+  --candidate-symbols bazel-bin/replacement/interface_initializer/interface-initializer-image.symbols \
+  --initializer-receipt "$OWNED_CONSUMER_OUTPUT/peer-witness.json"
+"$PEER_STAGE_WITNESS" --compare-initializer-consumer \
+  "$RETAINED_CONSUMER_OUTPUT/peer-witness.json" "$OWNED_CONSUMER_OUTPUT/peer-witness.json" \
+  --initializer-consumer interrupt-mask --firmware "$INITIALIZER_DAT" \
+  --candidate-image bazel-bin/replacement/interface_initializer/interface-initializer-image.bin \
+  --candidate-symbols bazel-bin/replacement/interface_initializer/interface-initializer-image.symbols \
+  --source-firmware "$DAT"
+```
+
+Comparison rederives the retained contract from the original DAT and the owned contract from the actual staged DAT/image/symbols. It validates both complete receipts and compares observed consumer inputs, outputs and effects with timing/count origins normalized. Qualification must also mutate nested initializer evidence, source bindings, roots/slot/code/frame/table bytes, event order/attribution, per-core counts, CPSR, watch classes/rules and decoder/TCM/alias identities, and require refusal through the production consumer. No new negative launcher or guest execution is part of this source phase.
+
+The original schema6 endpoint and its acceptance requirement remain separate from this later retained-consumer observation. Schema7 does not accept task creation, descriptor use, IRQ delivery, timer/device fidelity, kernel/model ownership, later startup, hardware or retirement. The authentication-held secondary `0x12960`, prefix and composed fault preparations/executions remain unattempted and unrouted.
+
 
 # Bounded selected-queue experiment
 
