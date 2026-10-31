@@ -579,6 +579,33 @@ checkDmaStaging contract facts = do
   expect "schema4 standalone receipts keep their existing admission" (accepted (validate standaloneContract (BL.toStrict (encode standalone))))
   expect "schema4 does not gain wide transfer parsing" (not (accepted (parseReceipt PrefixBoundary (BL.toStrict (encode wideStandalone)))))
 
+newtype CompletionLoads = CompletionLoads Word64
+
+checkCompletionProgress :: ProgramFacts -> IO ()
+checkCompletionProgress facts = do
+  selected <- either fail pure (composedContract Delayed facts startupFixture)
+  let document = receiptDocument (Just startupFixture) Delayed OwnedProgram facts knobs {knobDelayLoads = 4}
+      consume = validate selected . BL.toStrict . encode
+      inflate (CompletionLoads completed) =
+        let before = object ["count" .= completed, "zero_count" .= completed, "nonzero_count" .= (0 :: Word64)]
+            after = object ["count" .= (completed + 1), "zero_count" .= completed, "nonzero_count" .= (1 :: Word64)]
+            finalCounter = setField "count" (toJSON (completed + 1))
+              . setField "zero_count" (toJSON completed)
+              . setField "nonzero_count" (toJSON (1 :: Word64))
+              . setField "first_nonzero_index" (toJSON completed)
+        in changeStop "completion-store" (setField "counter" before)
+          . changeField "completion" (setField "counter" before)
+          . changeStop "prefix-exit" (setField "counter" after)
+          . changeField "scoped_watch" (changeField "counters" (toJSON . map finalCounter . arrayValues))
+      cases =
+        [ ("composed completion load count cannot exceed the instruction budget", CompletionLoads 50000000)
+        , ("composed completion load count within budget cannot exceed core1 progress", CompletionLoads 2000)
+        ]
+  expect "composed delayed completion-progress baseline accepted" (accepted (consume document))
+  let failures = [label | (label,completed) <- cases, accepted (consume (inflate completed document))]
+  mapM_ (putStrLn . ("FAIL " ++)) failures
+  expect "composed completion counters follow bounded core1 progress" (null failures)
+
 runReceiptCases :: ProgramFacts -> IO ()
 runReceiptCases facts = do
   let owned scenario = Contract scenario (Program OwnedProgram facts)
@@ -686,6 +713,7 @@ runReceiptCases facts = do
   mapM_ (\scenario -> do
     selected <- either fail pure (composedContract scenario facts startupFixture)
     expect ("composed " ++ scenarioName scenario ++ " accepted") (accepted (validate selected (composedBytes scenario knobs)))) [Natural, Held, Delayed, NonOne]
+  checkCompletionProgress facts
   mapM_ (\scenario -> do
     selected <- either fail pure (composedContract scenario facts startupFixture)
     mapM_ (\order -> expect ("composed " ++ scenarioName scenario ++ " handoff " ++ show order ++ " accepted")

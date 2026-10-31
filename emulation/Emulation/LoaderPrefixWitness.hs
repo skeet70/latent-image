@@ -253,8 +253,8 @@ parseCompletionZero value = do
   row <- fields ["site", "instruction", "literal"] value
   fact <- CompletionZero <$> guestField row "site" <*> get row "instruction" <*> guestField row "literal"
   require (case A32.decode (guestWord (zeroSite fact)) (zeroInstruction fact) of
-    Store (Cond 14) Word (Reg value) (Reg base) (OffsetImmediate 0) OffsetOnly ->
-      value >= 0 && value <= 12 && base >= 0 && base <= 12
+    Store (Cond 14) Word (Reg stored) (Reg base) (OffsetImmediate 0) OffsetOnly ->
+      stored >= 0 && stored <= 12 && base >= 0 && base <= 12
     _ -> False) "completion-zero instruction is not an unconditional address-forming word store"
   pure fact
 
@@ -1513,6 +1513,9 @@ validateKernelInstall scenario startup receipt scoped = do
   first <- uniqueStop stops FirstStageHandoff
   record2Stop <- uniqueStop stops Record2Handoff
   installed <- uniqueStop stops KernelVectorsInstalled
+  firstStop <- case stops of
+    found : _ -> Right found
+    [] -> Left "stop labels differ from the scenario"
   let facts = startupKernelInstall startup
       ClassifiedWatch _ loadedClasses loaded = receiptLoaded receipt
       histories = [(HistoryRef epoch (RowCursor index), row) | (epoch, rows) <- [(LoadedHistory, loaded), (ScopedHistory, scopedRows scoped)]
@@ -1542,7 +1545,7 @@ validateKernelInstall scenario startup receipt scoped = do
           (ModelBusWrite, Nothing) -> True
           _ -> False
   require (length loaded <= 16384 && length (scopedRows scoped) <= 16384) "active history exceeds the watch row bound"
-  require (isNothing (stopCursor (head stops))) "boot stop carries a history cursor"
+  require (isNothing (stopCursor firstStop)) "boot stop carries a history cursor"
   boundaries <- forM (drop 1 stops) $ \stop -> do
     ref <- boundary stop
     when (epochOf stop == LoadedHistory) $
@@ -1588,7 +1591,7 @@ validateKernelInstall scenario startup receipt scoped = do
   require (and (zipWith (<) times (drop 1 times))) "kernel vector events do not advance in order"
   forM_ histories $ \(ref@(HistoryRef epoch _), row) -> do
     forM_ (rowAttribution row) $ \(Attribution _ _ instructions _) -> do
-      require (instructions > stopInstructions (head stops)
+      require (instructions > stopInstructions firstStop
         && (case epoch of LoadedHistory -> instructions <= stopInstructions record2Stop; ScopedHistory -> instructions > stopInstructions record2Stop))
         "CPU history row lies outside its observer epoch"
       forM_ boundaries $ \(stop, limit@(HistoryRef current _)) -> when (current == epoch) $
@@ -1669,6 +1672,9 @@ acceptCompletion scenario facts expected scoped counter stops receipt handoff = 
   require (storeInstruction committed == (instruction, instruction) && storeBeforePc committed == 0x40a08 && storeAfterPc committed == 0x40a0c
     && storeCpsr committed == (stopCpsr store, stopCpsr store) && storeReadback committed == (value, value))
     "original store lacks its instruction, completion PC or immediate readback"
+  initialStep <- case storeSteps committed of
+    found : _ -> Right found
+    [] -> Left "committed store microstep bound exceeded"
   -- Core 1 stays paused across the committing step: its count is unchanged
   -- and no nonzero load precedes the post-commit snapshot.
   let steps = storeSteps committed
@@ -1684,7 +1690,7 @@ acceptCompletion scenario facts expected scoped counter stops receipt handoff = 
     && [rawRows !! storeCursor'] == scopedRows scoped)
     "the original store row or a nonzero load lies outside the commit window"
   when (isJust (receiptStartup receipt)) $ do
-    let Microstep initial _ _ = head steps
+    let Microstep initial _ _ = initialStep
         chain (Microstep _ earlier _) (Microstep later _ _) = earlier == later
     require (initial == stopCounts store && and (zipWith chain steps (drop 1 steps)))
       "completion microsteps do not continue the captured stop"
