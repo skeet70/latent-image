@@ -85,12 +85,12 @@ pub(in crate::peer_witness::loader) struct Receipt {
     aliases: Vec<AliasBinding>, service_aliases: Vec<ServiceAlias>, prelude_watch: WatchState, watch: WatchState,
 }
 #[derive(Serialize)]
-pub(in crate::peer_witness::loader) struct OuterReceipt<'a, I: Serialize> {
+pub(in crate::peer_witness::loader) struct OuterReceipt<'a, 'initializer> {
     pub schema: u32,
     pub result: WitnessResult,
     pub error: Option<&'a str>,
     pub machine_failure: Option<&'a str>,
-    pub initializer: &'a I,
+    pub initializer: &'a super::super::Receipt<'initializer>,
     pub consumer: &'a Option<Receipt>,
 }
 
@@ -226,6 +226,10 @@ fn observed(watch: &ScopedMemoryWatch) -> Result<WatchState, String> {
     require(state.enabled && state.violation.is_none() && state.fault.is_none(), "consumer watch faulted")?;
     Ok(state)
 }
+fn preimage_is(event: &Event, bytes: &[u8]) -> bool {
+    event.before.as_ref().is_some_and(|before|
+        usize::from(before.len) == bytes.len() && before.bytes[..usize::from(before.len)] == *bytes)
+}
 fn validate_prelude(state: &WatchState, start: &Context, dispatch: &Context) -> Result<(), String> {
     let mut fetches = (0xd0ab0_u64..0xd0af0).step_by(4)
         .chain((0x69cdf8..0x69ce0c).step_by(4))
@@ -239,18 +243,29 @@ fn validate_prelude(state: &WatchState, start: &Context, dispatch: &Context) -> 
     let mut secondary = false;
     let mut last_instruction: u64 = start.counts.0.iter().sum();
     let dispatch_instructions: u64 = dispatch.counts.0.iter().sum();
+    let mut last_tick = 0;
     for event in &state.records {
         require(!matches!(event.source, Source::CpuWrite | Source::HostWrite | Source::ModelBusWrite), "consumer prelude protected write")?;
         let instructions = event.instructions.ok_or("consumer prelude instruction attribution absent")?;
+        let tick = event.tick.as_ref().ok_or("consumer prelude tick attribution absent")?.0;
         // The fetch observer precedes the instruction point's count rollback.
         let stopped_fetch = matches!(event.source, Source::CpuFetch) && event.pc == Some(u64::from(DISPATCH));
         let upper_bound = dispatch_instructions + u64::from(stopped_fetch);
-        require(event.size == 4 && event.byte_order == Some(ByteOrder::Little) && event.pc.is_some() && event.tick.is_some()
+        require(event.size == 4 && event.byte_order == Some(ByteOrder::Little) && event.pc.is_some() && event.tcm.is_none()
             && matches!(event.core, Some(0 | 1)) && matches!(event.source, Source::CpuRead | Source::CpuFetch)
             && event.physical.is_some_and(|physical| event.address == physical || event.address == ZERO_GUEST + physical)
-            && instructions >= last_instruction && instructions <= upper_bound,
+            && instructions >= last_instruction && instructions <= upper_bound && tick >= last_tick,
             "consumer prelude event attribution differs")?;
         last_instruction = instructions;
+        last_tick = tick;
+        match event.source {
+            Source::CpuFetch => require(event.before.is_none() && event.value.is_none(), "consumer fetch metadata differs")?,
+            Source::CpuRead => {
+                let value = event.value.and_then(|value| u32::try_from(value).ok()).ok_or("consumer read value absent or too wide")?;
+                require(preimage_is(event, &value.to_le_bytes()), "consumer read preimage differs")?;
+            }
+            _ => return Err("consumer prelude unexpected event source".into()),
+        }
         if event.core != Some(1) { continue; }
         if matches!(event.source, Source::CpuFetch) {
             let expected = fetches.next().ok_or("consumer prelude executed extra selected instructions")?;
@@ -375,17 +390,22 @@ pub(in crate::peer_witness::loader) fn observe(machine: &mut Machine, runner: &R
         let state = observed(&watch)?;
         require(state.records.len() == 3, "consumer data effect count differs")?;
         let mut last_instruction: u64 = dispatch.counts.0.iter().sum();
-        for (event, (source, physical, pc, value)) in state.records.iter().zip([
-            (Source::CpuRead,SLOT.0,u64::from(DISPATCH),ENTERED),
-            (Source::CpuWrite,CALL_FRAME.0,u64::from(ENTERED),entered.registers[11].0),
-            (Source::CpuRead,CALL_FRAME.0,0xd115c,entered.registers[11].0)]) {
+        let mut last_tick = prelude_watch.records.last().and_then(|event| event.tick.as_ref())
+            .ok_or("consumer prelude final tick absent")?.0;
+        let saved_before: [u8; 4] = frame_before.physical[..4].try_into().map_err(|_| "consumer saved-r11 preimage extent differs")?;
+        for (event, (source, physical, pc, value, before)) in state.records.iter().zip([
+            (Source::CpuRead,SLOT.0,u64::from(DISPATCH),ENTERED,ENTERED.to_le_bytes()),
+            (Source::CpuWrite,CALL_FRAME.0,u64::from(ENTERED),entered.registers[11].0,saved_before),
+            (Source::CpuRead,CALL_FRAME.0,0xd115c,entered.registers[11].0,entered.registers[11].0.to_le_bytes())]) {
+            let tick = event.tick.as_ref().ok_or("consumer data tick attribution absent")?.0;
             require(event.source == source && event.core == Some(1)
                 && event.address == ZERO_GUEST + physical && event.physical == Some(physical) && event.size == 4
                 && event.pc == Some(pc) && event.value == Some(u64::from(value)) && event.byte_order == Some(ByteOrder::Little)
-                && event.tick.is_some() && event.instructions.is_some_and(|count|
+                && event.tcm.is_none() && preimage_is(event, &before) && tick >= last_tick && event.instructions.is_some_and(|count|
                     count >= last_instruction && count < after.counts.0.iter().sum()),
                 "consumer data effect origin, value or attribution differs")?;
             last_instruction = event.instructions.ok_or("consumer instruction attribution absent")?;
+            last_tick = tick;
         }
         Ok(Receipt { kind: ConsumerKind::InterruptMask, start, dispatch, entered, returned, after,
             roots, slot_before, slot_after, frame_before, frame_after, table_before, table_after, code, decoder: decoder_before,
