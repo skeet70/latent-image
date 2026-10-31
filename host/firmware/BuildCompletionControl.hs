@@ -21,7 +21,7 @@ main = do
     _ -> H.failH "usage: build-completion-control SOURCE_DAT OUT_DAT --control held|delayed|non-one"
   bytes <- H.readRegular maxContainer source
   parsed <- either H.failH pure (U.parseContainer bytes)
-  artifact <- either H.failH pure (buildCompletionControl control bytes)
+  artifact <- either H.failH pure (buildCompletionControl control parsed)
   let mainStart = U.stagingLength + fromIntegral (U.hMainOffset (U.parsedHeader parsed))
   forM_ (controlLoaderPatches artifact) $ \patch -> do
     offset <- either H.failH pure (loaderWordPatchOffset (U.parsedParts parsed) patch)

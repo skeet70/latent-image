@@ -14,6 +14,7 @@ module FujiAF.CompletionControl
   , delayIterations
   , ControlArtifact
   , controlBytes
+  , controlParsed
   , controlLoaderPatches
   , controlVeneerExtent
   , buildCompletionControl
@@ -106,6 +107,7 @@ validateDelayVeneer bytes symbols = do
 
 data ControlArtifact = ControlArtifact
   { controlBytes :: B.ByteString
+  , controlParsed :: U.Parsed
   , controlLoaderPatches :: [LoaderWordPatch]
   -- | Record-1 slot offset and length of the veneer, if any.
   , controlVeneerExtent :: Maybe (Int, Int)
@@ -130,9 +132,8 @@ veneerPatch _ = Right Nothing
 checksPass :: [U.Check] -> Either String ()
 checksPass results = forM_ results $ \check -> require (U.checkPassed check) ("container contract: " ++ U.checkField check)
 
-buildCompletionControl :: CompletionControl -> B.ByteString -> Either String ControlArtifact
-buildCompletionControl control source = do
-  parsed <- U.parseContainer source
+buildCompletionControl :: CompletionControl -> U.Parsed -> Either String ControlArtifact
+buildCompletionControl control parsed = do
   checksPass (U.checks parsed ++ U.carriedChecks parsed)
   patch <- loaderPatch control
   veneer <- veneerPatch control
@@ -148,8 +149,8 @@ buildCompletionControl control source = do
     slot <- firstRecordSlotBytes (U.parsedParts reparsed)
     require (B.map complement (B.take size (B.drop offset slot)) == Image.veneerBytes)
       "staged completion delay veneer differs from the linked bytes"
-  require (B.length rebuilt == B.length source) "completion control DAT length differs"
-  pure (ControlArtifact rebuilt [patch] extent)
+  require (B.length rebuilt == U.parsedFileLength parsed) "completion control DAT length differs"
+  pure (ControlArtifact rebuilt reparsed [patch] extent)
 
 require :: Bool -> String -> Either String ()
 require condition message = unless condition (Left message)

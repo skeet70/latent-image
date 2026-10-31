@@ -1,12 +1,33 @@
 module StartupStageContract
   ( firstStageDeclarations
   , loaderPrefixDeclarations
-  , firstStagePlan
-  , loaderPrefixPlan
+  , OriginalStartupDat
+  , StagedStartupDat
+  , parseOriginalStartupDat
+  , parseStagedStartupDat
+  , originalStartupParsed
+  , originalStartupDigest
+  , stagedStartupParsed
+  , stagedStartupDigest
+  , FirstStageArtifact
+  , SecondaryPrefixArtifact
+  , parseFirstStageArtifact
+  , parseSecondaryPrefixArtifact
+  , firstStageArtifactPlan
+  , firstStageArtifactSymbols
+  , firstStageArtifactImageDigest
+  , firstStageArtifactSymbolsDigest
+  , secondaryPrefixArtifactPlan
+  , secondaryPrefixArtifactSymbols
+  , secondaryPrefixArtifactImageDigest
+  , secondaryPrefixArtifactSymbolsDigest
+  , ComposedArtifacts (..)
+  , ComposedStartupInput (..)
   , composedPlans
   ) where
 
 import Control.Monad (forM, forM_, unless, when)
+import qualified Crypto.Hash.SHA256 as SHA256
 import qualified Data.ByteString as B
 import Data.List (sortOn)
 import Data.Word (Word32)
@@ -14,6 +35,7 @@ import FujiAF.FirstStage
 import qualified FujiAF.UpdateContainer as U
 import SecondaryStageContract
 import StageBuild
+import Numeric (showHex)
 
 loaderB :: LoaderId
 loaderB = LoaderId 1
@@ -165,24 +187,84 @@ firstStageDeclarations symbols = do
         else pure ()
   pure (StageDeclarations [beforeExtent, afterExtent, bodyExtent, dataExtent] [] [])
 
-firstStagePlan :: B.ByteString -> [Symbol] -> Either String StagePlan
-firstStagePlan image symbols = do
-  declarations <- firstStageDeclarations symbols
-  linkedPlan FirstStageImage declarations image symbols
+data OriginalStartupDat = OriginalStartupDat
+  { originalStartupParsed :: U.Parsed
+  , originalStartupDigest :: Sha256
+  }
 
-loaderPrefixPlan :: B.ByteString -> [Symbol] -> Either String (StagePlan, LoaderWordPatch)
-loaderPrefixPlan image symbols = do
+data StagedStartupDat = StagedStartupDat
+  { stagedStartupParsed :: U.Parsed
+  , stagedStartupDigest :: Sha256
+  }
+
+parseOriginalStartupDat :: B.ByteString -> Either String OriginalStartupDat
+parseOriginalStartupDat bytes = OriginalStartupDat <$> parseStartupDat bytes <*> digest bytes
+
+parseStagedStartupDat :: B.ByteString -> Either String StagedStartupDat
+parseStagedStartupDat bytes = StagedStartupDat <$> parseStartupDat bytes <*> digest bytes
+
+parseStartupDat :: B.ByteString -> Either String U.Parsed
+parseStartupDat bytes = do
+  parsed <- U.parseContainer bytes
+  forM_ (U.checks parsed ++ U.carriedChecks parsed) $ \check ->
+    unless (U.checkPassed check) (Left ("startup DAT check failed: " ++ U.checkField check))
+  pure parsed
+
+digest :: B.ByteString -> Either String Sha256
+digest = parseSha256 . concatMap hexByte . B.unpack . SHA256.hash
+  where
+    hexByte byte = case showHex byte "" of
+      [digit] -> ['0', digit]
+      digits -> digits
+
+data FirstStageArtifact = FirstStageArtifact
+  { firstStageArtifactPlan :: StagePlan
+  , firstStageArtifactSymbols :: [Symbol]
+  , firstStageArtifactImageDigest :: Sha256
+  , firstStageArtifactSymbolsDigest :: Sha256
+  }
+
+data SecondaryPrefixArtifact = SecondaryPrefixArtifact
+  { secondaryPrefixArtifactPlan :: StagePlan
+  , secondaryPrefixArtifactSymbols :: [Symbol]
+  , secondaryPrefixArtifactImageDigest :: Sha256
+  , secondaryPrefixArtifactSymbolsDigest :: Sha256
+  , secondaryPrefixPublication :: LoaderWordPatch
+  }
+
+parseFirstStageArtifact :: U.MediaImage -> B.ByteString -> Either String FirstStageArtifact
+parseFirstStageArtifact image symbolBytes = do
+  symbols <- parseSymbols symbolBytes
+  declarations <- firstStageDeclarations symbols
+  plan <- linkedPlan FirstStageImage declarations image symbols
+  FirstStageArtifact plan symbols <$> digest (U.mediaImageBytes image) <*> digest symbolBytes
+
+parseSecondaryPrefixArtifact :: U.MediaImage -> B.ByteString -> Either String SecondaryPrefixArtifact
+parseSecondaryPrefixArtifact image symbolBytes = do
+  symbols <- parseSymbols symbolBytes
   declarations <- loaderPrefixDeclarations symbols
   plan <- linkedPlan SecondaryPrefixImage declarations image symbols
-  case declaredLoaderPatches declarations of
-    [publication] -> pure (plan, publication)
+  publication <- case declaredLoaderPatches declarations of
+    [patch] -> Right patch
     _ -> Left "combined secondary/prefix image lacks its unique loader-B publication"
+  SecondaryPrefixArtifact plan symbols <$> digest (U.mediaImageBytes image) <*> digest symbolBytes <*> pure publication
 
-composedPlans :: B.ByteString -> [Symbol] -> B.ByteString -> [Symbol] -> Either String ComposedStagePlan
-composedPlans first firstSymbols second secondSymbols = do
-  firstPlan <- firstStagePlan first firstSymbols
-  (secondPlan, publication) <- loaderPrefixPlan second secondSymbols
-  composedStagePlan firstPlan secondPlan publication
+data ComposedArtifacts = ComposedArtifacts
+  { firstStageArtifact :: FirstStageArtifact
+  , secondaryPrefixArtifact :: SecondaryPrefixArtifact
+  }
+
+data ComposedStartupInput = ComposedStartupInput
+  { originalStartupInput :: OriginalStartupDat
+  , stagedStartupInput :: StagedStartupDat
+  , startupArtifacts :: ComposedArtifacts
+  }
+
+composedPlans :: ComposedArtifacts -> Either String ComposedStagePlan
+composedPlans artifacts = composedStagePlan
+  (firstStageArtifactPlan (firstStageArtifact artifacts))
+  (secondaryPrefixArtifactPlan (secondaryPrefixArtifact artifacts))
+  (secondaryPrefixPublication (secondaryPrefixArtifact artifacts))
 
 data LinkedImage = FirstStageImage | SecondaryPrefixImage
 
@@ -202,7 +284,7 @@ linkedSymbolName image symbol = case symbol of
       FirstStageImage -> ("first_stage", "xm1_first_stage_")
       SecondaryPrefixImage -> ("secondary_stage", "xm1_secondary_")
 
-linkedPlan :: LinkedImage -> StageDeclarations -> B.ByteString -> [Symbol] -> Either String StagePlan
+linkedPlan :: LinkedImage -> StageDeclarations -> U.MediaImage -> [Symbol] -> Either String StagePlan
 linkedPlan kind declarations image symbols = do
   let name = linkedSymbolName kind
       address symbol = symbolAddress <$> lookupSymbol symbols (name symbol)
@@ -212,7 +294,7 @@ linkedPlan kind declarations image symbols = do
   start <- address LinkedStart
   end <- address LinkedEnd
   entrySymbol <- lookupSymbol symbols (name LinkedEntry)
-  let imageEnd = toInteger start + toInteger (B.length image)
+  let imageEnd = toInteger start + toInteger (B.length (U.mediaImageBytes image))
   unless (start == expectedStart && imageEnd == toInteger end && end <= capacityEnd)
     (Left "linked startup image extent differs from its declared padding or flat image")
   unless (symbolSize entrySymbol > 0) (Left "linked startup entry has zero size")
@@ -222,4 +304,4 @@ linkedPlan kind declarations image symbols = do
       (Left (name symbol ++ " is not an aligned site in the linked startup image"))
   entry <- armEntry (symbolAddress entrySymbol)
   load <- slotOffset (fromIntegral start - recordGuestBase record)
-  stagePlan record entry load (U.MediaImage image) (declaredRetained declarations)
+  stagePlan record entry load image (declaredRetained declarations)

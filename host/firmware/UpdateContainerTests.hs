@@ -12,6 +12,7 @@ import Data.List (isInfixOf)
 import Data.Word (Word32)
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
+import qualified StartupStageContract as Stage
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
 
@@ -382,7 +383,9 @@ composedStageTests checked fixture = do
         entry <- F.armEntry entryAddress
         load <- F.slotOffset loadOffset
         F.stagePlan record entry load (U.MediaImage image) []
-  source <- admit (U.rebuildContainer fixture sourceParts >>= U.parseContainer)
+  sourceBytes <- admit (U.rebuildContainer fixture sourceParts)
+  original <- admit (Stage.parseOriginalStartupDat sourceBytes)
+  let source = Stage.originalStartupParsed original
   first <- admit (makePlan F.FirstRecord 0x6004 0x6000)
   second <- admit (makePlan F.SecondRecord 0x10400 0x400)
   stock <- admit (F.armEntry 0xd0020)
@@ -390,7 +393,9 @@ composedStageTests checked fixture = do
   publication <- admit (F.loaderEntryPublication (F.LoaderId 1) 0xd0000 stock target)
   plan <- admit (F.composedStagePlan first second publication)
   stagedParts <- admit (F.replaceComposedRecords plan (U.parsedParts source))
-  staged <- admit (U.rebuildContainer source stagedParts >>= U.parseContainer)
+  stagedBytes <- admit (U.rebuildContainer source stagedParts)
+  final <- admit (Stage.parseStagedStartupDat stagedBytes)
+  let staged = Stage.stagedStartupParsed final
   admit (F.verifyComposedRecords plan source staged)
   expectTrue checked "composed final DAT admitted" True
   firstSlot <- admit (F.recordSlotBytes F.FirstRecord (U.parsedParts staged))
@@ -420,6 +425,11 @@ composedStageTests checked fixture = do
   let header = U.parsedHeader staged
       invalidChecksum = staged {U.parsedHeader = header {U.hMainChecksum = U.hMainChecksum header `xor` 1}}
   reject "composed final checksum" (F.verifyComposedRecords plan source invalidChecksum)
+  let corrupt = B.take U.mainChecksumOffset stagedBytes
+        <> U.putWord32 (U.hMainChecksum header `xor` 1)
+        <> B.drop (U.mainChecksumOffset + 4) stagedBytes
+  reject "typed staged DAT checksum admission" (Stage.parseStagedStartupDat corrupt)
+  reject "typed source DAT checksum admission" (Stage.parseOriginalStartupDat corrupt)
 
 main :: IO ()
 main = do

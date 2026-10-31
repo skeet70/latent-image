@@ -154,6 +154,7 @@ haskell_test(
         "-threaded",
     ],
     deps = [
+        ":startup-stage-contract",
         "//host:base",
         "//host:bytestring",
         "//host:first-stage",
@@ -260,6 +261,7 @@ haskell_library(
         ":stage-build",
         "//host:base",
         "//host:bytestring",
+        "//host:cryptohash-sha256",
         "//host:first-stage",
         "//host:update-container",
     ],
