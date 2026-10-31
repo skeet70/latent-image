@@ -7,8 +7,9 @@ import Emulation.Ff80Rehearsal (runFujiModRehearsal)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
-import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), OverrideReason (..), PushMode (..), RelinkMode (..), UiConversionProfile (..), bankD3Payload, classicChromeIconPayload, classicChromePayload, runRamPushE2E, warmAttachCheckpoint)
+import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, classicChromeIconPayload, classicChromePayload, experimentPayload, parseSymbolRead, runRamPushE2E, warmAttachCheckpoint)
 import Data.List (isPrefixOf, nub)
+import Data.Char (isAscii, isAlphaNum)
 import qualified Data.Text as T
 import Data.Word (Word16)
 import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, listDirectory, pathIsSymbolicLink)
@@ -34,7 +35,8 @@ data CardSelection = WithCard | WithoutCard deriving (Eq)
 data RuntimeChoice = RetainedChoice | FujiModChoice deriving (Eq)
 
 -- | The RAM payload `--ram-push-e2e` pushes.
-data RamPayloadChoice = BankD3Choice | ClassicChromeChoice | ClassicChromeIconChoice deriving (Eq)
+newtype ExperimentName = ExperimentName String deriving (Eq)
+data RamPayloadChoice = BankD3Choice | ClassicChromeChoice | ClassicChromeIconChoice | ExperimentChoice ExperimentName deriving (Eq)
 
 data Options = Options
   { workspaceOption :: Maybe Workspace
@@ -52,6 +54,7 @@ data Options = Options
   , pushModeOption :: PushMode
   , trajectoriesOption :: Maybe TrajectoryFile
   , ramPayloadOption :: RamPayloadChoice
+  , readSymbolsOption :: [SymbolRead]
   , attachHoldOption :: AttachHold
   , uiConversionProfileOption :: UiConversionProfile
   , fixedSceneFrameOption :: Maybe FixedSceneFrame
@@ -99,6 +102,8 @@ usage = unlines
   , "                         bank; boot it and run every segment (or --segments) without the RAM push"
   , "  --classic-chrome       --ram-push-e2e: push the Classic Chrome payload in place of the recipe bank and D3"
   , "  --classic-chrome-icon  --ram-push-e2e: push the Classic Chrome payload with its icon and live-view words"
+  , "  --experiment NAME      --ram-push-e2e: push experiments/NAME with no card unless --sd-card-image is supplied"
+  , "  --read SYMBOL[:LENGTH] Read an experiment export after its trajectory (repeatable; default LENGTH 64)"
   , "  --attach-hold-q        --ram-push-e2e: hold Q across the attach edge of every boot (USB-toggle candidates)"
   , "  --trajectories PATH    --ram-push-e2e trajectory file (default: emulation/ram-push-e2e-trajectories.json,"
   , "                         emulation/ram-push-cc-e2e-trajectories.json with --classic-chrome,"
@@ -123,7 +128,7 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False
     go options [] = pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
@@ -174,6 +179,14 @@ parseCommand args
     go options ("--classic-chrome-icon" : rest) = do
       require (ramPayloadOption options == BankD3Choice) "--classic-chrome and --classic-chrome-icon are exclusive"
       go options { ramPayloadOption = ClassicChromeIconChoice } rest
+    go options ("--experiment" : value : rest) = do
+      require (not (null value) && all (\char -> isAscii char && (isAlphaNum char || char `elem` "_-")) value)
+        "--experiment must be a directory name containing only ASCII letters, digits, underscores and hyphens"
+      require (ramPayloadOption options == BankD3Choice) "RAM payload selections are exclusive"
+      go options { ramPayloadOption = ExperimentChoice (ExperimentName value) } rest
+    go options ("--read" : value : rest) = do
+      request <- either (ioError . userError) pure (parseSymbolRead value)
+      go options { readSymbolsOption = readSymbolsOption options ++ [request] } rest
     go options ("--attach-hold-q" : rest) =
       go options { attachHoldOption = AttachHoldQ } rest
     go options ("--installed-nand" : value : rest) = do
@@ -246,17 +259,21 @@ launch options = do
   receipt <- traverse (freshReceiptDirectory root) (receiptDirectoryOption options)
   let ff80 = ff80RehearsalOption options
       e2e = ramPushE2EOption options
-      cardless = cardModeOption options == WithoutCard
+      experiment = case ramPayloadOption options of ExperimentChoice _ -> True; _ -> False
+      cardless = cardModeOption options == WithoutCard || (experiment && media == Nothing)
+      selectedCard = if cardless then WithoutCard else WithCard
   require (not (ff80 && e2e)) "--ff80-rehearsal and --ram-push-e2e are exclusive"
   require (e2e || not cardless) "--cardless belongs to --ram-push-e2e"
   require (runtimeOption options == RetainedChoice || ff80 || (e2e && pushModeOption options == RamPush))
     "--fujimod belongs to --ram-push-e2e or --ff80-rehearsal"
+  require (null (readSymbolsOption options) || (e2e && experiment)) "--read belongs to --ram-push-e2e --experiment"
+  require (not experiment || allowlistOverrideOption options == Nothing) "experiments do not accept --allowlist-override"
   when ff80 $ do
     require (media == Nothing) "--ff80-rehearsal does not accept an SD-card image"
     require (nand /= Nothing) "--ff80-rehearsal requires --installed-nand"
     require (receipt /= Nothing) "--ff80-rehearsal requires --receipt-output"
   when e2e $ do
-    case cardModeOption options of
+    case selectedCard of
       WithCard -> require (media /= Nothing) "--ram-push-e2e requires --sd-card-image"
       WithoutCard -> do
         require (media == Nothing) "--cardless boots without --sd-card-image"
@@ -269,7 +286,7 @@ launch options = do
           "--warm-checkpoint runs no trajectory"
       else require (receipt /= Nothing) "--ram-push-e2e requires --receipt-output"
     require (case firmwareOption options of Just _ -> True; Nothing -> False)
-      "--ram-push-e2e requires the RC0 --firmware input"
+      "--ram-push-e2e requires --firmware"
   when (not ff80 && not e2e) $ do
     require (nand == Nothing) "--installed-nand belongs to a closed emulator rehearsal"
     require (receipt == Nothing) "--receipt-output belongs to a closed emulator rehearsal"
@@ -280,10 +297,10 @@ launch options = do
     require (bootModeOption options == CheckpointedBoot) "--fresh-boot belongs to --ram-push-e2e"
     require (segmentsOption options == Nothing) "--segments belongs to --ram-push-e2e"
     require (pushModeOption options == RamPush) "--flash-candidate belongs to --ram-push-e2e"
-    require (ramPayloadOption options == BankD3Choice) "--classic-chrome and --classic-chrome-icon belong to --ram-push-e2e"
+    require (ramPayloadOption options == BankD3Choice) "RAM payload selections belong to --ram-push-e2e"
     require (attachHoldOption options == NoAttachHold) "--attach-hold-q belongs to --ram-push-e2e"
   require (ramPayloadOption options == BankD3Choice || pushModeOption options /= FlashCandidate)
-    "--classic-chrome and --classic-chrome-icon push a RAM payload; --flash-candidate pushes none"
+    "RAM payload selections cannot be combined with --flash-candidate"
   require (allowlistOverrideOption options == Nothing || relinkModeOption options /= ReviewedRelink)
     "--allowlist-override belongs to --unreviewed-relink"
   -- Without `--output`, `--ram-push-e2e` restages into one fixed directory.
@@ -324,10 +341,9 @@ launch options = do
               (RamPush, BankD3Choice) -> "emulation/ram-push-e2e-trajectories.json"
               (RamPush, ClassicChromeChoice) -> "emulation/ram-push-cc-e2e-trajectories.json"
               (RamPush, ClassicChromeIconChoice) -> "emulation/ram-push-cc-icon-e2e-trajectories.json"
+              (RamPush, ExperimentChoice (ExperimentName name)) -> "experiments" </> name </> "trajectory.json"
               (FlashCandidate, _) -> "emulation/ui-trajectories.json"
-            TrajectoryFile trajectories = maybe (TrajectoryFile defaultTrajectories) id
-              (trajectoriesOption options)
-            checkpointRootPath = resolve root $ case (runtimeOption options, cardModeOption options) of
+            checkpointRootPath = resolve root $ case (runtimeOption options, selectedCard) of
               (FujiModChoice, WithCard) -> "private-data/emulator-checkpoints/xm1-ram-push-fujimod"
               (FujiModChoice, WithoutCard) -> "private-data/emulator-checkpoints/xm1-ram-push-fujimod-cardless"
               (RetainedChoice, WithCard) -> "private-data/emulator-checkpoints/xm1-ram-push"
@@ -336,21 +352,28 @@ launch options = do
               RetainedChoice -> RetainedRuntime
               FujiModChoice -> FujiModRuntime (FujiModBridge fujimodRamPushBridge fujimodRun
                 (resolve root "private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin"))
-            relinkMode = case (relinkModeOption options, allowlistOverrideOption options) of
-              (UnreviewedRelink _, Just reason) -> UnreviewedRelink (OverrideAllowlist reason)
-              (mode, _) -> mode
+            relinkMode = if experiment then UnreviewedRelink EnforceAllowlist else
+              case (relinkModeOption options, allowlistOverrideOption options) of
+                (UnreviewedRelink _, Just reason) -> UnreviewedRelink (OverrideAllowlist reason)
+                (mode, _) -> mode
             settings = E2ESettings relinkMode (bootModeOption options)
               checkpointRootPath (segmentsOption options)
               (pushModeOption options)
               (case ramPayloadOption options of
                 BankD3Choice -> bankD3Payload
                 ClassicChromeChoice -> classicChromePayload
-                ClassicChromeIconChoice -> classicChromeIconPayload)
+                ClassicChromeIconChoice -> classicChromeIconPayload
+                ExperimentChoice (ExperimentName name) -> experimentPayload name)
               (attachHoldOption options)
-              (uiConversionProfileOption options) cardInput (fixedSceneFrameOption options) Nothing runtime dat
+              (uiConversionProfileOption options) cardInput (fixedSceneFrameOption options) Nothing runtime dat (readSymbolsOption options)
+        trajectory <- case trajectoriesOption options of
+          Just (TrajectoryFile path) -> pure (Just (resolve root path))
+          Nothing -> do
+            present <- doesFileExist (resolve root defaultTrajectories)
+            pure (if experiment && not present then Nothing else Just (resolve root defaultTrajectories))
         if warmCheckpointOption options
           then warmAttachCheckpoint settings executable stagedFirmwarePath nandPath (destination </> "warm-attach")
-          else runRamPushE2E settings executable workspacePath (resolve root trajectories) stagedFirmwarePath nandPath receiptPath
+          else runRamPushE2E settings executable workspacePath trajectory stagedFirmwarePath nandPath receiptPath
       else do
         let Port port = portOption options
             mediaArguments = case media of

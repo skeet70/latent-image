@@ -8,7 +8,7 @@ module FujiAF.RamPush
   , callbackTablePointerAddress, callbackTableAddress, callbackStockWord
   , queryOutputAddress, configGateIndex, mailboxBytes
   , reviewedAllocationSize, installerAbiVersion, publicationCount, setupCount, activationCount
-  , PayloadKind(..), Payload(..), bankD3Payload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
+  , PayloadKind(..), Payload(..), bankD3Payload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload, experimentHookCapacity, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
   , readRamPushManifest, parseRamPushManifest, readRamAllocState, readRetainedAllocation, readRamPushState
   , consumedMarkerPath, writeAllocStateFile, writeStateFile
   , ramAllocArguments, ramPushArguments, ramFreeArguments, ramUnloadArguments, ramRelinkArguments
@@ -31,7 +31,7 @@ import Data.Bits ((.&.), (.|.), shiftR)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.Char (digitToInt)
-import Data.List (sort)
+import Data.List (isPrefixOf, sort)
 import Data.Scientific (toBoundedInteger)
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -145,7 +145,7 @@ data ReviewedContract = ReviewedContract
   , reviewedPublicationContractDigest :: String
   }
 
-data PayloadKind = RecipeBankD3 | ClassicChrome | ClassicChromeIcon | UsbToggle | AfRing deriving (Eq, Show)
+data PayloadKind = RecipeBankD3 | ClassicChrome | ClassicChromeIcon | UsbToggle | AfRing | Experiment deriving (Eq, Show)
 
 -- | What a payload kind's relink links, and the allocation, ABI word, counts
 -- and installer start it has. A runtime's allocation size names its kind.
@@ -263,8 +263,36 @@ afRingPayload = Payload
   , payloadLinksBank = False
   }
 
+-- | Hook slots an experiment payload has; each hook is one setup and one
+-- activation publication.
+experimentHookCapacity :: Int
+experimentHookCapacity = 8
+
+-- | A developer experiment under experiments/NAME, relinked from the
+-- workspace sources with no review record.
+experimentPayload :: String -> Payload
+experimentPayload name = Payload
+  { payloadKind = Experiment
+  , payloadAllocationSize = 0x8000
+  , payloadAbiVersion = 7
+  , payloadSetupCount = experimentHookCapacity
+  , payloadActivationCount = experimentHookCapacity
+  , payloadInstallerStart = \base -> (base + 0x5000 + 31) .&. 0xffffffe0
+  , payloadReferenceBases = (0x00c40000, 0x00c4fc88)
+  , payloadRelinkScript = "build-experiment-ram.sh"
+  , payloadRelinkBuilder = "build-experiment-ram"
+  , payloadBuildRoot = "private-data/analysis/x-m1-1.50/experiments/ram-push"
+  , payloadRelinkInputs =
+      [ ("EXPERIMENT", "experiments" </> name)
+      , ("STOCK_ID4", "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin")
+      , ("STOCK_ID5", "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin")
+      , ("STOCK_PLAIN", "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin")
+      ]
+  , payloadLinksBank = False
+  }
+
 payloads :: [Payload]
-payloads = [bankD3Payload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload]
+payloads = [bankD3Payload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload ""]
 
 payloadOfSize :: Int -> Maybe Payload
 payloadOfSize size = case filter ((== size) . payloadAllocationSize) payloads of
@@ -1152,11 +1180,17 @@ withRelinkedBuildUsing relinker policy base action = withReviewedBuildDirectory 
             [ ("USB_TOGGLE_STUB", takeDirectory (relinkerScript relinker) </> "usb-toggle-stub.bin")
             , ("USB_TOGGLE_STUB_SYMBOLS", takeDirectory (relinkerScript relinker) </> "usb-toggle-stub.sym")
             ]
+          Experiment -> [("RUSTC", takeDirectory (relinkerScript relinker) </> "experiment-rustc")]
           _ -> []
       command = (proc (toolBash tools) [relinkerScript relinker,hexWord (unAddress base),directory])
         { env = Just environment, cwd = Just root }
   (exitCode,_,errors) <- readCreateProcessWithExitCode command ""
-  require (exitCode == ExitSuccess) ("pinned RAM-push builder failed before USB: "++drop (length errors - 1024) errors)
+  let diagnostics = unlines (dropBacktraces (filter (not . isPrefixOf "Warning: supplying the --target") (lines errors)))
+      dropBacktraces stderrLines = case stderrLines of
+        "HasCallStack backtrace:" : rest -> dropBacktraces (dropWhile (isPrefixOf "  ") rest)
+        line : rest -> line : dropBacktraces rest
+        [] -> []
+  require (exitCode == ExitSuccess) ("pinned RAM-push builder failed before USB: "++drop (length diagnostics - 4096) diagnostics)
   let output = root </> directory
   let reviewedManifestPath = output </> "ram-push-manifest.json"
       reviewedRuntimePath = output </> "runtime.bin"

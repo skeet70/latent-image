@@ -2,6 +2,8 @@ module Main where
 
 import Control.Exception
 import Control.Monad (unless, when)
+import qualified Data.ByteString as B
+import Numeric (showHex)
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import System.Directory
@@ -31,7 +33,10 @@ import FujiAF.Routes
 import FujiAF.ReadRam
 import FujiAF.ReadBulk
 import FujiAF.RamPush
-import FujiAF.PlanDocument (readPlanFile, readRoutePlanFile)
+import FujiAF.PlanDocument (privateRegular, readPlanFile, readRoutePlanFile)
+import FujiAF.AdjustmentTables (sha256Of)
+import FujiAF.JSON (encodeCanonical)
+import qualified FujiAF.ReadPlan as Plan
 import FujiAF.Native (nativeApi)
 import FujiAF.Rehearsal
 import qualified FujiAF.Broker as P
@@ -42,7 +47,13 @@ import RamPushToggleReviewedPins (reviewedToggleContract)
 
 data RouteSource = RoutesFixed | RoutesDerived FilePath
 data Operation = Identify | ReadConfig FilePath | EndSetting | ProbeRam | ReadLog | ProbeBootRom | ProbeArea2 | ProbeStraps | ProbeCode | ProbeOwnership | ProbeRoutes RouteSource | DumpRam DumpSegment | ReadMedia | ArmAutoAct DeviceStart | CommitF7 CommitDirection FilePath | ReadRam FilePath (Maybe (Int,Int)) | ProbeSdHost (Maybe (Int,Int)) | ReadBulk Int Int | RamAlloc Int | RamRelink FilePath | RamPush FilePath FilePath | RamFree FilePath | RamUnload FilePath
-data Command = Help | Live Operation (Maybe FilePath) | Rehearse Operation
+data Command = Help | Live Operation (Maybe FilePath) | Rehearse Operation | DebugFlag DebugFlagStep (Maybe FilePath) | RamSession String PinPolicy Payload (Maybe FilePath)
+
+-- | The guided debug-flag steps, each built from read-config or commit-f7.
+data DebugFlagStep = FlagStatus | FlagBackup | FlagEnable | FlagDisable
+
+-- | Whether a ram-session requires the relink to match the compiled pins.
+data PinPolicy = RequirePins | WaivePins
 
 operationName :: Operation -> String
 operationName Identify = "identify"
@@ -135,12 +146,38 @@ parse ["rehearse","ram-alloc",size] = case ramAllocArguments [size] of
 parse ["rehearse","ram-push",state,manifest] = Just (Rehearse (RamPush state manifest))
 parse ["rehearse","ram-free",state] = Just (Rehearse (RamFree state))
 parse ["rehearse","ram-unload",state] = Just (Rehearse (RamUnload state))
+parse ("debug-flag":step:rest) = DebugFlag <$> debugFlagStep step <*> output rest
+parse ("ram-session":"experiment":name:rest) = RamSession ("experiment-"++name) WaivePins <$> experimentSession name <*> output rest
+parse ("ram-session":kind:"--waive-pins":rest) = RamSession kind WaivePins <$> sessionPayload kind <*> output rest
+parse ("ram-session":kind:rest) = RamSession kind RequirePins <$> sessionPayload kind <*> output rest
 parse _ = Nothing
 
 output :: [String] -> Maybe (Maybe FilePath)
 output [] = Just Nothing
 output [directory] = Just (Just directory)
 output _ = Nothing
+
+debugFlagStep :: String -> Maybe DebugFlagStep
+debugFlagStep step = lookup step [("status",FlagStatus),("backup",FlagBackup),("enable",FlagEnable),("disable",FlagDisable)]
+
+-- | The payload kinds a ram-session pushes, by name; the AF ring has no live contract.
+sessionPayloads :: [(String, Payload)]
+sessionPayloads =
+  [ ("recipe-bank", bankD3Payload)
+  , ("classic-chrome", classicChromePayload)
+  , ("classic-chrome-icon", classicChromeIconPayload)
+  , ("usb-toggle", usbTogglePayload)
+  ]
+
+sessionPayload :: String -> Maybe Payload
+sessionPayload kind = lookup kind sessionPayloads
+
+-- | The experiment under experiments/NAME; NAME is a directory name of
+-- lowercase letters, digits, '-' and '_'.
+experimentSession :: String -> Maybe Payload
+experimentSession name
+  | not (null name) && all (`elem` (['a'..'z'] ++ ['0'..'9'] ++ "-_")) name = Just (experimentPayload name)
+  | otherwise = Nothing
 
 dispatch :: Command -> IO ()
 dispatch Help = putStr $ unlines
@@ -170,6 +207,12 @@ dispatch Help = putStr $ unlines
   , "ram-push STATE MANIFEST [OUTDIR] upload a manifest linked to the retained allocation, install and write ram-push-state.json"
   , "ram-free STATE [OUTDIR]       free a retained allocation that was not installed"
   , "ram-unload STATE [OUTDIR]     rollback and verify the exact active publication set; allocation remains retained"
+  , "debug-flag status [OUTDIR]    read-config of the gate-byte plan; prints adjustment bytes 0xf7, 0x80, 0x81 and 0xa2"
+  , "debug-flag backup [OUTDIR]    read-config of the adjustment-42000 plan, the whole adjustment area; keeps window 0x000000 as private-data/debug-flag/reference-000000.bin when none is kept, else requires it to match outside 0x80/0x81/0xf7"
+  , "debug-flag enable [OUTDIR]    commit-f7-enable with the kept reference"
+  , "debug-flag disable [OUTDIR]   commit-f7-restore with the kept reference"
+  , "ram-session KIND [--waive-pins] [OUTDIR] relink KIND at its reference base against the compiled pins, then ram-alloc, ram-relink and ram-push into OUTDIR/alloc, OUTDIR/link and OUTDIR/push; KIND is recipe-bank, classic-chrome, classic-chrome-icon or usb-toggle. --waive-pins skips the source-identity and publication-contract comparison and pushes the relink as built; the builders' own input checks, the bank ELF allowlist, the compiled installer entry offsets and the installer's old-word checks still apply"
+  , "ram-session experiment NAME [OUTDIR] the same sequence for the developer experiment in experiments/NAME, which has no pins: hook-site, layout, entry-offset and old-word checks only; remove it by taking out the battery"
   , "rehearse identify|read-config PLAN_JSON|end-setting|probe-ram|read-log|probe-bootrom|probe-area2|probe-straps|probe-code|probe-ownership|probe-routes fixed|probe-routes derived PLAN_JSON|dump-ram SEGMENT|read-media|arm-auto-act|commit-f7-enable REFERENCE_BIN|commit-f7-restore REFERENCE_BIN|read-ram PLAN_JSON [--repeat N --interval-ms M]|probe-sd-host [--repeat N --interval-ms M]|read-bulk ADDRESS LENGTH|ram-alloc SIZE|ram-push STATE MANIFEST|ram-free STATE|ram-unload STATE"
   , "--help"
   , "OUTDIR must be absolute and must not exist; it is created with mode 0700."
@@ -207,6 +250,8 @@ dispatch (Rehearse (RamPush state manifest)) = do
 dispatch (Rehearse (RamFree path)) = readRamAllocState path >>= rehearseRamFree
 dispatch (Rehearse (RamUnload path)) = readRamPushState path >>= rehearseRamUnload
 dispatch (Rehearse (RamRelink _)) = P.reject "ram-relink has no rehearsal"
+dispatch (DebugFlag step requested) = debugFlag step requested
+dispatch (RamSession kind policy payload requested) = ramSession kind policy payload requested
 dispatch (Live operation requested) = case operation of
   Identify -> withOutput operation requested $ \directory -> do
     ProductModel model <- runIdentify realClock nativeApi directory
@@ -294,20 +339,16 @@ dispatch (Live operation requested) = case operation of
       RamAllocUncertain reason -> P.reject ("ram-alloc uncertain: "++reason++";send nothing further and power off")
   RamRelink path -> do
     allocation <- readRetainedAllocation path
-    refuseAfRingLive (allocSize (retainedAllocation allocation))
+    refuseUnpinnedKindLive (allocSize (retainedAllocation allocation))
     withOutput operation requested $ \directory -> do
       manifest <- runRamRelink (contractFor (allocSize (retainedAllocation allocation))) allocation directory
       pure ("ram-relink: manifest="++manifest)
   RamPush statePath manifestPath -> do
     allocation <- readRetainedAllocation statePath
     manifest <- readRamPushManifest manifestPath
-    refuseAfRingLive (allocSize (retainedAllocation allocation))
+    refuseUnpinnedKindLive (allocSize (retainedAllocation allocation))
     withOutput operation requested $ \directory -> do
-      outcome <- runRamPush (contractFor (allocSize (retainedAllocation allocation))) allocation manifest realClock nativeApi directory
-      case outcome of
-        RamPushInstalled state -> pure ("ram-push: installed;state="++state++";exit requires full power removal and stock recovery checks")
-        RamPushRefused reason -> P.reject ("ram-push refused: "++reason)
-        RamPushUncertain reason -> P.reject ("ram-push uncertain: "++reason++";send nothing further and power off")
+      runRamPush (contractFor (allocSize (retainedAllocation allocation))) allocation manifest realClock nativeApi directory >>= ramPushLine
   RamFree path -> do
     allocation <- readRetainedAllocation path
     withOutput operation requested $ \directory -> do
@@ -318,7 +359,7 @@ dispatch (Live operation requested) = case operation of
         RamFreeUncertain reason -> P.reject ("ram-free uncertain: "++reason++";send nothing further and power off")
   RamUnload path -> do
     state <- readRamPushState path
-    refuseAfRingLive (stateSize state)
+    refuseUnpinnedKindLive (stateSize state)
     when (fmap payloadKind (payloadOfSize (stateSize state)) == Just UsbToggle)
       (P.reject "ram-unload refused: USB toggle requires full battery removal; a suspended stub frame cannot be rolled back in place")
     withOutput operation requested $ \directory -> do
@@ -336,9 +377,145 @@ contractFor size = case payloadKind <$> payloadOfSize size of
   Just UsbToggle -> reviewedToggleContract
   _ -> reviewedContract
 
-refuseAfRingLive :: Int -> IO ()
-refuseAfRingLive size = when (fmap payloadKind (payloadOfSize size) == Just AfRing)
-  (P.reject "AF ring has no approved live reviewed contract; use the host-only AF ring harness")
+-- | Refuses `ram-relink`, `ram-push` and `ram-unload` for the payload kinds
+-- that have no review record.
+refuseUnpinnedKindLive :: Int -> IO ()
+refuseUnpinnedKindLive size = case payloadKind <$> payloadOfSize size of
+  Just AfRing -> P.reject "AF ring has no approved live reviewed contract; use the host-only AF ring harness"
+  Just Experiment -> P.reject "experiments relink and push only through ram-session experiment NAME, and come out by removing the battery"
+  _ -> pure ()
+
+-- | The kept at-rest capture of config window 0x000000 that debug-flag enable
+-- and disable pass to commit-f7 as REFERENCE_BIN.
+referencePath :: FilePath -> FilePath
+referencePath workspace = workspace </> "private-data" </> "debug-flag" </> "reference-000000.bin"
+
+debugFlag :: DebugFlagStep -> Maybe FilePath -> IO ()
+debugFlag step requested = do
+  workspace <- workspaceRoot
+  let reference = referencePath workspace
+  case step of
+    FlagStatus -> do
+      window <- readFixedPlan workspace Plan.GateByte "debug-flag-status"
+      putStrLn ("debug-flag: "++gateBytes window)
+    FlagBackup -> do
+      window <- readFixedPlan workspace Plan.Adjustment42000 "debug-flag-backup"
+      putStrLn ("debug-flag: "++gateBytes window)
+      kept <- doesPathExist reference
+      if kept
+        then do
+          old <- privateRegular "reference" reference 256
+          let differing = [offset | (offset,a,b) <- zip3 [0 :: Int ..] (B.unpack old) (B.unpack window), a /= b, offset `notElem` [0x80,0x81,0xf7]]
+          unless (B.length old == 256 && null differing) $
+            P.reject ("window 0x000000 differs from the kept reference "++reference++" outside 0x80, 0x81 and 0xf7 at "
+              ++unwords (map (\offset -> "0x"++showHex offset "") differing)++"; the reference was not replaced")
+          putStrLn ("debug-flag: window 0x000000 matches the kept reference "++reference++" outside 0x80, 0x81 and 0xf7")
+        else do
+          ensurePrivateDirectory (takeDirectory reference)
+          writePrivateBytes reference window
+          putStrLn ("debug-flag: kept window 0x000000 as the reference "++reference)
+    FlagEnable -> commit EnableStoredGate reference
+    FlagDisable -> commit RestoreStoredGate reference
+  where
+    commit direction reference = do
+      kept <- doesPathExist reference
+      unless kept (P.reject ("no kept reference at "++reference++"; run debug-flag backup first"))
+      dispatch (Live (CommitF7 direction reference) requested)
+    readFixedPlan workspace scope name = do
+      directory <- resolveNamed name requested
+      plan <- fixedPlan workspace scope
+      dispatch (Live (ReadConfig plan) (Just directory))
+      window <- privateRegular "window" (directory </> "windows" </> "000000.bin") 256
+      unless (B.length window == 256) (P.reject "config window 0x000000 is not 256 bytes")
+      pure window
+
+-- | The adjustment bytes the stored-gate route reads and the commit writes.
+gateBytes :: B.ByteString -> String
+gateBytes window = unwords [name++"="++hexByte (B.index window index) | (name,index) <- [("0xf7",0xf7),("0x80",0x80),("0x81",0x81),("0xa2",0xa2)]]
+  ++ (if B.index window 0xf7 /= 0 then ";debug flag set" else ";debug flag clear")
+  where hexByte value = let digits = showHex value "" in replicate (2-length digits) '0' ++ digits
+
+-- | The fixed-range read plan of `scope` at private-data/read-plans/SCOPE.json,
+-- generated there when absent.
+fixedPlan :: FilePath -> Plan.Scope -> IO FilePath
+fixedPlan workspace scope = do
+  let directory = workspace </> "private-data" </> "read-plans"
+      path = directory </> (Plan.scopeName scope++".json")
+  present <- doesPathExist path
+  unless present $ do
+    name <- either P.reject pure (Plan.planId ("read-"++Plan.scopeName scope++"-v1"))
+    generator <- sha256Of <$> (getExecutablePath >>= P.readBounded (256*1024*1024))
+    plan <- either P.reject pure (Plan.buildPlan scope name generator [])
+    document <- either P.reject pure (Plan.planValue plan)
+    createDirectoryIfMissing True directory
+    writePrivateBytes path (encodeCanonical document)
+    putStrLn ("plan: "++path)
+  pure path
+
+ramPushLine :: RamPushOutcome -> IO String
+ramPushLine outcome = case outcome of
+  RamPushInstalled state -> pure ("ram-push: installed;state="++state++";exit requires full power removal and stock recovery checks")
+  RamPushRefused reason -> P.reject ("ram-push refused: "++reason)
+  RamPushUncertain reason -> P.reject ("ram-push uncertain: "++reason++";send nothing further and power off")
+
+-- | One payload kind's alloc, relink and push in one session directory, after
+-- a relink at the reference base that must match the compiled pins unless
+-- they are waived.
+ramSession :: String -> PinPolicy -> Payload -> Maybe FilePath -> IO ()
+ramSession kind policy payload requested = do
+  let size = payloadAllocationSize payload
+      (referenceBase, _) = payloadReferenceBases payload
+  workspace <- workspaceRoot
+  createDirectoryIfMissing True (workspace </> payloadBuildRoot payload)
+  relinker <- runfilesRelinker payload
+  case policy of
+    RequirePins -> do
+      withPinnedReviewedBuildUsing (contractFor size) relinker (Address referenceBase) (\_ -> pure ())
+      putStrLn ("ram-session: "++kind++" relinks at 0x"++showHex referenceBase ""++" and matches the compiled pins")
+    WaivePins -> do
+      withRelinkedBuildUsing relinker EnforceAllowlist (Address referenceBase) (requireCompiledEntries (Address referenceBase))
+      putStrLn ("ram-session: "++kind++" relinks at 0x"++showHex referenceBase ""++case payloadKind payload of
+        Experiment -> "; experiments carry no pins"
+        _ -> "; pins waived, so the build is not compared with the compiled source identity or publication contract")
+  root <- resolveNamed ("ram-session-"++kind) requested
+  createOutput root
+  let allocation = root </> "alloc"
+      linked = root </> "link"
+      pushed = root </> "push"
+      state = allocation </> "ram-alloc-state.json"
+      manifestPath = linked </> "ram-push-manifest.json"
+      retainedNotice = hPutStrLn stderr ("ram-session: the allocation in "++state++" is retained and not installed; ram-free it or remove all power")
+  dispatch (Live (RamAlloc size) (Just allocation))
+  case policy of
+    RequirePins -> do
+      dispatch (Live (RamRelink state) (Just linked)) `onException` retainedNotice
+      (readRetainedAllocation state >> readRamPushManifest manifestPath >> pure ()) `onException` retainedNotice
+      dispatch (Live (RamPush state manifestPath) (Just pushed))
+    WaivePins -> do
+      (retained, manifest) <- (do
+        retained <- readRetainedAllocation state
+        let base = allocBase (retainedAllocation retained)
+        createOutput linked
+        withRelinkedBuildUsing relinker EnforceAllowlist base $ \built -> do
+          requireCompiledEntries base built
+          writePrivateBytes (linked </> "runtime.bin") (pinnedRuntime built)
+          writePrivateBytes manifestPath (pinnedDocument built)
+          let metadata = pinnedDirectory built </> "experiment.json"
+          present <- doesFileExist metadata
+          when present (B.readFile metadata >>= writePrivateBytes (linked </> "experiment.json"))
+        putStrLn ("ram-relink: manifest="++manifestPath++case payloadKind payload of
+          Experiment -> ";symbol addresses in "++(linked </> "experiment.json")
+          _ -> ";pins waived")
+        manifest <- readRamPushManifest manifestPath
+        createOutput pushed
+        pure (retained, manifest)) `onException` retainedNotice
+      putStrLn ("output: "++pushed)
+      runRamPushWith xm1PeerCacheAvailability (retainedAllocation retained) manifest realClock nativeApi pushed >>= ramPushLine >>= putStrLn
+  where
+    -- Waiving the pins keeps the compiled installer entry offsets.
+    requireCompiledEntries base built =
+      unless (manifestEntries (pinnedManifest built) == payloadEntries payload base)
+        (P.reject "relinked installer entry offsets differ from the compiled installer layout")
 
 ramWatch :: FilePath -> Maybe (Int,Int) -> IO RamWatch
 ramWatch path pacing = do
@@ -357,15 +534,23 @@ withOutput operation requested action = do
   action directory >>= putStrLn
 
 resolveOutput :: Operation -> Maybe FilePath -> IO FilePath
-resolveOutput _ (Just directory) = do
+resolveOutput operation = resolveNamed (operationName operation)
+
+resolveNamed :: String -> Maybe FilePath -> IO FilePath
+resolveNamed _ (Just directory) = do
   unless (isAbsolute directory) (P.reject "OUTDIR must be an absolute path")
   pure directory
-resolveOutput operation Nothing = do
-  workspace <- lookupEnv "BUILD_WORKSPACE_DIRECTORY"
-  root <- maybe (P.reject "no OUTDIR given and BUILD_WORKSPACE_DIRECTORY is unset") pure workspace
-  unless (isAbsolute root) (P.reject "BUILD_WORKSPACE_DIRECTORY must be an absolute path")
+resolveNamed name Nothing = do
+  root <- workspaceRoot
   stamp <- formatTime defaultTimeLocale "%Y%m%dT%H%M%SZ" <$> getCurrentTime
-  pure (root </> "private-data" </> "sessions" </> (stamp++"-"++operationName operation))
+  pure (root </> "private-data" </> "sessions" </> (stamp++"-"++name))
+
+workspaceRoot :: IO FilePath
+workspaceRoot = do
+  workspace <- lookupEnv "BUILD_WORKSPACE_DIRECTORY"
+  root <- maybe (P.reject "BUILD_WORKSPACE_DIRECTORY is unset; give OUTDIR or run with bazel run") pure workspace
+  unless (isAbsolute root) (P.reject "BUILD_WORKSPACE_DIRECTORY must be an absolute path")
+  pure root
 
 createOutput :: FilePath -> IO ()
 createOutput directory = do

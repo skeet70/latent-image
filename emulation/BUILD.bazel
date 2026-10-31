@@ -840,12 +840,30 @@ haskell_binary(
 )
 
 haskell_binary(
+    name = "experiment-nand",
+    srcs = ["ExperimentNand.hs"],
+    main_file = "ExperimentNand.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        "//host:base",
+        "//host:aeson",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//transport:camera-core",
+    ],
+)
+
+haskell_binary(
     name = "xm1-viewer",
     srcs = [
         "Xm1RamPushE2E.hs",
         "Xm1Viewer.hs",
     ],
-    data = [":xm1-upstream", ":cardless-ram-push-bridge", ":thermal-guard"],
+    data = [":xm1-upstream", ":cardless-ram-push-bridge", ":thermal-guard", "//host/firmware:experiment-ram-relinker"],
     main_file = "Xm1Viewer.hs",
     ghcopts = [
         "-XGHC2021",
