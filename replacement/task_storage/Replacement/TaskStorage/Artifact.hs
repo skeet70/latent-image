@@ -122,9 +122,9 @@ stageImage4 source@(CanonicalSource _ original _ _ _ _) artifact@(LinkedArtifact
 stagedBytes :: StagedImage4 -> B.ByteString
 stagedBytes (StagedImage4 _ _ bytes) = bytes
 
-stageCandidate :: Image4.Tools -> StagedImage4 -> IO StagedCandidate
-stageCandidate tools staged@(StagedImage4 (CanonicalSource original _ _ _ _ _) _ image) = do
-  candidate <- Image4.runImage4Staging tools original original image
+stageCandidate :: Image4.Tools -> Image4.ScratchDirectory -> StagedImage4 -> IO StagedCandidate
+stageCandidate tools scratch staged@(StagedImage4 (CanonicalSource original _ _ _ _ _) _ image) = do
+  candidate <- Image4.runImage4Staging tools scratch original original image
   pure (StagedCandidate staged candidate)
 
 candidateBytes :: StagedCandidate -> B.ByteString

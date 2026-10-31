@@ -12,7 +12,7 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    [encoder,rebuild,decoder,datPath,imagePath,loaderAPath,loaderBPath,linkedPath,symbolsPath,outputPath,contractPath] -> do
+    [encoder,rebuild,decoder,datPath,imagePath,loaderAPath,loaderBPath,linkedPath,symbolsPath,scratchPath,outputPath,contractPath] -> do
       dat <- H.readRegular (64 * 1024 * 1024) datPath
       image <- H.readRegular 0x300000 imagePath
       loaderA <- H.readRegular 0x20000 loaderAPath
@@ -22,7 +22,8 @@ main = do
       source <- either H.failH pure (canonicalSource dat image loaderA loaderB)
       artifact <- either H.failH pure (deriveArtifact linked symbols)
       let staged = stageImage4 source artifact
-      candidate <- stageCandidate (Image4.Tools encoder rebuild decoder) staged
+      scratch <- Image4.validateScratchDirectory scratchPath
+      candidate <- stageCandidate (Image4.Tools encoder rebuild decoder) scratch staged
       B.writeFile outputPath (candidateBytes candidate)
       L.writeFile contractPath (J.encode (candidateContractValue candidate))
-    _ -> H.failH "usage: stage-task-storage ENCODER REBUILD DECODER SOURCE_DAT IMAGE4 LOADER_A LOADER_B LINKED_BIN SYMBOLS OUT_DAT OUT_CONTRACT"
+    _ -> H.failH "usage: stage-task-storage ENCODER REBUILD DECODER SOURCE_DAT IMAGE4 LOADER_A LOADER_B LINKED_BIN SYMBOLS SCRATCH_DIR OUT_DAT OUT_CONTRACT"
