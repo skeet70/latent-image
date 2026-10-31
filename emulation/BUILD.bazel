@@ -2423,3 +2423,16 @@ haskell_binary(
         "//host:host-support",
     ],
 )
+
+haskell_test(
+    name = "critical-pair-artifact-tests",
+    size = "small",
+    srcs = ["CriticalPairArtifactTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":critical-pair-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:update-container",
+    ],
+)
