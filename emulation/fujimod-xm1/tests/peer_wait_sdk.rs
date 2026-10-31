@@ -929,8 +929,9 @@ mod composed_interleaving {
             (0x10400, 0xee091f31),
             (0x10404, branch(0x10404, 0x10420)),
             (0x10420, 0xe1a0f003),
-            (0x1042c, 0xe59500c4), // LDR r0,[r5,#0xc4].
-            (0x10430, branch(0x10430, 0x1042c)),
+            (0x1042c, 0xe1a00000),
+            (0x10430, 0xe59500c4), // LDR r0,[r5,#0xc4].
+            (0x10434, branch(0x10434, 0x10430)),
             (0x4000c, 0x40020),
             (0x40020, branch(0x40020, 0x40a00)),
             (0x40a00, 0xeafffffe),
@@ -956,7 +957,7 @@ mod composed_interleaving {
         let identity = "ab".repeat(32);
         let contract = format!(r#"{{"schema":5,"budget":50000000,"scenario":{{"kind":"held"}},
             "program":{{"kind":"owned","record_sha256":"{record2}","record_immutable_sha256":"{immutable}",
-            "loader_sha256":"{loader}","handoff":66592,"entry":66604,"load":66604,"post_load":66608,
+            "loader_sha256":"{loader}","handoff":66592,"entry":66604,"load":66608,"post_load":66612,
             "loaded_register":0,"poll_period":256,"image":[66560,66816],"refusal":null,
             "forbid_fetch":[[852000,852168],[854444,854480],[854596,854628]],"forbid_read":[[852168,852220]]}},
             "startup":{{"kind":"composed","record1_sha256":"{record1}","image_sha256":"{first_image}",
@@ -1015,6 +1016,10 @@ mod composed_interleaving {
             assert_eq!(
                 receipt.stops.iter().any(|stop| stop.label == Label::FirstStageHandoff),
                 matches!(order, FirstHandoff::Invalid),
+            );
+            assert_eq!(
+                receipt.stops.last().map(|stop| &stop.label),
+                Some(&if matches!(order, FirstHandoff::Missing) { Label::HeldGate } else { Label::FirstStageHandoff }),
             );
             assert!(receipt.scoped_watch.unwrap().violation.is_none());
         }
