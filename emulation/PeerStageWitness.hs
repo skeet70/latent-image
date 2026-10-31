@@ -400,7 +400,7 @@ prepareStartup root firmwarePath fflzdPath outputPath scenario choice execution 
     , "firmware" .= launchedPath, "firmware_sha256" .= sha256Hex launchedBytes
     , "record_sha256" .= S.programRecordHex program, "argument" .= argumentWord
     , "loader_b_entry" .= (0xd0020 :: Word32)
-    ] ++ maybe [] (\expectedFault -> ["expected_refusal" .= expectedFault]) faultExpectation)))
+    ] ++ maybe [] (\expectedFault -> ["expected_refusal" .= startupFaultValue expectedFault]) faultExpectation)))
   case execution of
     PrepareOnly -> do
       putStrLn ("peer-startup preparation: " ++ output)
@@ -413,6 +413,13 @@ prepareStartup root firmwarePath fflzdPath outputPath scenario choice execution 
         _ -> do
           observed <- either H.failH pure (S.startupArgument accepted)
           H.ensure (observed == expected) "handoff argument differs from the decoded image-4 argument"
+  where
+    startupFaultValue :: S.StartupFault -> Value
+    startupFaultValue S.RetiredStockFetch = object
+      [ "kind" .= ("retired-stock-fetch" :: String), "label" .= ("forbidden-fetch" :: String)
+      , "core" .= (1 :: Int), "address" .= (0x12960 :: Word32)
+      , "error" .= ("startup forbidden fetch of retired stock code at 0x12960 on core 1" :: String)
+      ]
 
 main :: IO ()
 main = do

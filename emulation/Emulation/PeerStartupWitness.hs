@@ -389,7 +389,7 @@ deriveOwnedFacts bin symbolBytes (StagedRecord staged) = do
   checkOwnedFacts facts
   pure facts
 
-startupFaultExpectation :: StartupFault -> Scenario -> B.ByteString -> OwnedFacts -> Either String Value
+startupFaultExpectation :: StartupFault -> Scenario -> B.ByteString -> OwnedFacts -> Either String StartupFault
 startupFaultExpectation RetiredStockFetch scenario bin facts = do
   require (scenario == Natural Handoff) "retired-stock-fetch requires natural startup with the handoff endpoint"
   let GuestAddress entry = siteEntry (ownedSites facts)
@@ -399,11 +399,7 @@ startupFaultExpectation RetiredStockFetch scenario bin facts = do
     "retired-stock-fetch candidate must call stock stub_a immediately after main returns"
   require (Interval (fromIntegral target) 0x12974 `elem` ownedForbidFetch facts)
     "retired-stock-fetch target is not guarded by the declared stock stub_a interval"
-  pure (object
-    [ "kind" .= ("retired-stock-fetch" :: String), "label" .= ("forbidden-fetch" :: String)
-    , "core" .= (1 :: Int), "address" .= target
-    , "error" .= ("startup forbidden fetch of retired stock code at 0x12960 on core 1" :: String)
-    ])
+  pure RetiredStockFetch
 
 forbidSet :: [F.Symbol] -> String -> Either String [Interval]
 forbidSet rows prefix = do
