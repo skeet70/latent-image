@@ -363,7 +363,9 @@ installDocument _ knob document =
   $ document
   where
     originalStops = arrayValues (valueField "stops" document)
-    selected label = head [stop | stop <- originalStops, hasField "label" (String label) stop]
+    selected label = case [stop | stop <- originalStops, hasField "label" (String label) stop] of
+      found : _ -> found
+      [] -> error "fixture required stop is absent"
     counts stop = map wordValue (arrayValues (valueField "counts" stop))
     time stop = sum (counts stop)
     first = selected "first-stage-handoff"
@@ -527,8 +529,10 @@ checkDmaStaging contract facts = do
         where rows = toJSON . map (\row -> if hasField "source" (String "model-bus-write") row then change row else row) . arrayValues
       replaceDma address size = changeDma (const (dmaRow address size))
       consume document change = validate contract (BL.toStrict (encode (change document)))
-      firstTime document = sum . map wordValue . arrayValues . valueField "counts" . head $
-        [stop | stop <- arrayValues (valueField "stops" document), hasField "label" (String "first-stage-handoff") stop]
+      firstTime document = case
+        [stop | stop <- arrayValues (valueField "stops" document), hasField "label" (String "first-stage-handoff") stop] of
+          found : _ -> sum (map wordValue (arrayValues (valueField "counts" found)))
+          [] -> error "fixture firststage handoff is absent"
       cpuStaging document core size = changeDma (\_ -> object
         [ "source" .= ("cpu-write" :: String), "address" .= (0x40020 :: Word32), "physical" .= (0x40020 :: Word32), "size" .= (size :: Int)
         , "core" .= (core :: Int), "pc" .= (0x1d08 :: Word32), "instructions" .= (firstTime document - 2)
@@ -739,7 +743,9 @@ runReceiptCases facts = do
             case bytes of Array values -> Array (values V.// [(0, Number 0xff)]); other -> other))))
           extraTailRow = case arrayValues (valueField "records" (valueField "loaded_watch" partial))
               ++ arrayValues (valueField "records" (valueField "scoped_watch" partial)) of
-            rows -> head [row | row <- rows, hasField "pc" (toJSON (0x4003c :: Word32)) row]
+            rows -> case [row | row <- rows, hasField "pc" (toJSON (0x4003c :: Word32)) row] of
+              found : _ -> found
+              [] -> error "fixture vector store is absent"
           stopTime stop = case valueField "instructions" stop of
             Number count -> count
             _ -> error "fixture stop instructions must be numeric"
