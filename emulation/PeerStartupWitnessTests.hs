@@ -117,11 +117,15 @@ data Knobs = Knobs
   , knobPollValue :: Word32
   -- | Core-1 ATCM register at held-release and startup-entry.
   , knobHeldAtcm1 :: Word32
+  -- | Segment table guest root and the physical address its core-1 mapping gives.
+  , knobTable :: (Word32, Word32)
+  -- | Whether core 1 reads the id-1 record's id and header words through the table mapping.
+  , knobTableReads :: Bool
   }
 
--- | Core-1 ATCM 0xffff8011 at held-release is the value the retained natural reset showed.
+-- | Core-1 ATCM 0xffff8011 at held-release and the segment root 0x4061c040 at physical 0x61c040 are the values the retained natural reset showed.
 plain :: Knobs
-plain = Knobs 0 [] (B.replicate 0x548 0x5a) [] 0 0xffff8011
+plain = Knobs 0 [] (B.replicate 0x548 0x5a) [] 0 0xffff8011 (0x4061c040, 0x61c040) True
 
 hexText :: B.ByteString -> String
 hexText = concatMap (\byte -> let digits = showHex byte "" in replicate (2 - length digits) '0' ++ digits) . B.unpack
@@ -172,7 +176,7 @@ retainedSiteWords =
 
 ownedSiteWords :: B.ByteString -> OwnedFacts -> Either String [(Word32, Word32)]
 ownedSiteWords bin facts = mapM (\location -> (,) location <$> leWordAt bin (fromIntegral (location - entry)))
-  [ entry, entry + 4, entry + 8, site sitePeerLoad, site sitePeerLoaded - 4, site siteClearStore, site siteTargetStore
+  [ entry, entry + 4, entry + 8, site sitePeerLoad, site sitePeerLoaded - 4, site sitePeerLoad + 4, site siteClearStore, site siteTargetStore
   , site siteArgumentStore, site siteTargetLoad, site siteArgumentLoad, site siteHandoff ]
   where
     sites = ownedSites facts
@@ -250,8 +254,9 @@ receiptFor scenario program siteWords knobs = object
       [ "address" .= (0x1ff4 :: Word32), "registers" .= gateRegisters, "sp" .= (0x700007f0 :: Word32)
       , "lr" .= (0x1234 :: Word32), "cpsr" .= (0xd3 :: Word32), "instructions" .= total ] else Null)
   , "segment" .= (if held then Null else object
-      [ "root" .= (0x620000 :: Word32), "index" .= (1 :: Int), "record" .= (0x620024 :: Word32), "header" .= (0x700000 :: Word32)
-      , "entry" .= (0xd0020 :: Word32), "argument" .= argumentWord, "loader_sha256" .= loaderDigest, "loader_entry" .= (0xd0020 :: Word32) ])
+      [ "root" .= tableGuestRoot, "index" .= (1 :: Int), "record" .= (tableGuestRoot + 36), "header" .= (0x700000 :: Word32)
+      , "entry" .= (0xd0020 :: Word32), "argument" .= argumentWord, "loader_sha256" .= loaderDigest, "loader_entry" .= (0xd0020 :: Word32)
+      , "table" .= object ["core" .= (1 :: Int), "address" .= tableGuestRoot, "physical" .= tablePhysicalRoot, "size" .= (72 :: Word32)] ])
   , "record" .= object ["sha256" .= programRecordHex program, "site_words" .= [[location, word] | (location, word) <- siteWords]]
   ]
   where
@@ -280,7 +285,9 @@ receiptFor scenario program siteWords knobs = object
     endpointRegisters = [argumentWord, 0, 0, 0xd0020, 0, 0, 6, 7, 8, 9, 10, 11, 0] :: [Word32]
     gateRegisters = 0x1234 : replicate 12 (0 :: Word32)
     preclearRegisters = [0x1234, 0, 0, 0x40020000] ++ replicate 9 (0 :: Word32)
-    loadRegisters value = [if slot == register then value else 0 | slot <- [0 .. 12]]
+    -- The retained peer load is ldr r3,[r1]; the owned one loads through its destination.
+    loadRegisters value = [if slot == register then value else if slot == 1 && program == Retained then 0x40020000 else 0 | slot <- [0 .. 12]]
+    (tableGuestRoot, tablePhysicalRoot) = knobTable knobs
     heldTcm = [[0x70000011, 0], [knobHeldAtcm1 knobs, 0]] :: [[Word32]]
     mainTcm = [[0x70000011, 0], [0x70000011, 0]] :: [[Word32]]
     globals = hexText (B.replicate 0x40 0x11)
@@ -313,6 +320,8 @@ receiptFor scenario program siteWords knobs = object
            , (exitTime + 20, cpuRow "cpu-write" 1 (site siteArgumentStore) 0x14c84 0x14c84 argumentWord 0)
            , (exitTime + 30, cpuRow "cpu-read" 1 (site siteTargetLoad) 0x14c80 0x14c80 0xd0020 0xd0020)
            , (exitTime + 40, cpuRow "cpu-read" 1 (site siteArgumentLoad) 0x14c84 0x14c84 argumentWord argumentWord) ]
+           ++ [ (exitTime + offset, cpuRow "cpu-read" 1 pc (tableGuestRoot + tableOffset) (tablePhysicalRoot + tableOffset) value value)
+              | knobTableReads knobs, (offset, pc, tableOffset, value) <- [(3, 0x13588, 0, 7), (5, 0x135b4, 36, 1), (7, 0x11f90, 40, 0x700000)] ]
            ++ concat [ [(time, const (sizedTransferRow "host-read" 0x14c60 0x40)), (time, const (sizedTransferRow "host-read" 0xa0000 0x548))]
                      | time <- exitTime + 100 : [exitTime + 120 | loaderEndpoint] ])
       ++ [(time, const value) | (time, value) <- knobExtraRows knobs]
@@ -364,7 +373,8 @@ receiptFor scenario program siteWords knobs = object
       ++ [(intervalPair extent, "cpu-read" : "cpu-fetch" : "model-bus-read" : writes) | extent <- fetchSet ++ readSet]
       ++ [(extent, ["host-write", "model-bus-write"]) | extent <- [(0x14c60, 0x14c6c), (0x14c88, 0x14ca0), (0xa0000, 0xa00c4), (0xa00c8, 0xa0548)]]
     publishedClasses = releasedClasses
-      ++ [(extent, writes) | extent <- [(0xd0000, 0xddaa0), (0x61c40c, 0x61c410), (0x61c000, 0x61c004), (0x620000, 0x620000 + 36 * 2)]]
+      ++ [(extent, writes) | extent <- [(0xd0000, 0xddaa0), (0x61c40c, 0x61c410), (0x61c000, 0x61c004)]]
+      ++ [((fromIntegral tablePhysicalRoot, fromIntegral tablePhysicalRoot + 72), "cpu-read" : writes)]
     epochValue name start classes views = object
       [ "epoch" .= (name :: String), "instructions" .= (start :: Word64)
       , "memory_watch" .= object
@@ -541,6 +551,30 @@ main = do
   forM_ [ ("over record 2", 0x00010011), ("over the peer-cell alias", 0x40020011), ("with a reserved size", 0xffff803d)
         , ("misaligned", 0x70001011) ] $ \(label, atcm) ->
     assertLeft ("held-release core-1 ATCM " ++ label) (startup (Natural LoaderEntry) owned (receipt (Natural LoaderEntry) owned plain {knobHeldAtcm1 = atcm}))
+
+  -- Segment table: the aliased root above, an identity root, and refusals of a mapping the same-run reads do not bear out.
+  _ <- assertRight "identity segment table root" (startup (Natural LoaderEntry) owned (receipt (Natural LoaderEntry) owned plain {knobTable = (0x620000, 0x620000)}))
+  let tableField name value = change "segment" (change "table" (set name (number value)))
+      exitNatural = exitTime (Natural LoaderEntry)
+      tableRefusals =
+        [ ("table mapping guest differs from the root", tableField "address" 0x4061c044 ownedNatural)
+        , ("table mapping size differs from root to record end", tableField "size" 36 ownedNatural)
+        , ("table mapping on core 0", tableField "core" 0 ownedNatural)
+        , ("table physical differs from the reads", tableField "physical" 0x62c040 ownedNatural)
+        , ("no id or header reads through the table mapping", receipt (Natural LoaderEntry) owned plain {knobTableReads = False})
+        , ("table read whose guest address the mapping does not give", receipt (Natural LoaderEntry) owned plain
+            {knobExtraRows = [(exitNatural + 4, cpuRow "cpu-read" 1 0x135b4 0x4061c048 0x61c04c 0 0 (exitNatural + 4))]})
+        , ("table write", receipt (Natural LoaderEntry) owned plain
+            {knobExtraRows = [(exitNatural + 4, cpuRow "cpu-write" 1 0x135b4 0x4061c048 0x61c048 0 0 (exitNatural + 4))]})
+        ]
+  forM_ tableRefusals $ \(label, value) -> assertLeft label (startup (Natural LoaderEntry) owned value)
+
+  -- Peer load bound to its stop by base register and decoded return.
+  assertLeft "retained base register differs from the peer-cell address"
+    (startup (Natural LoaderEntry) Retained (labelled "peer-loaded" 0 (change "registers" (at 1 (const (number 0x40020004)))) retainedNatural))
+  let afterLoad = addressOf (sitePeerLoad sites) + 4
+      reloadingReturn = [(location, if location == afterLoad then 0xe8bd0801 else word) | (location, word) <- ownedWords]
+  assertLeft "owned return reloads the loaded register" (startup (Natural LoaderEntry) owned (receiptFor (Natural LoaderEntry) owned reloadingReturn plain))
 
   -- Phase bounds: accepted at each bound, refused one instruction past it.
   let heldGap = heldFinalTime period - gateTime

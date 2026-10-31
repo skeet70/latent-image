@@ -314,7 +314,7 @@ struct StartupStop {
     watch_records: usize,
     program_state: Option<ProgramState>,
 }
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct BoundMap {
     core: usize,
     address: Address,
@@ -337,6 +337,8 @@ struct Segment {
     argument: Word,
     loader_sha256: String,
     loader_entry: Word,
+    /// The core-1 static mapping of the table extent `[root, record + 36)`.
+    table: BoundMap,
 }
 #[derive(Serialize)]
 struct RecordCheck {
@@ -384,6 +386,10 @@ struct Phase {
     release_tcm: Option<TcmWords>,
     main_tcm: Option<TcmWords>,
     published: Vec<(u64, u64)>,
+    /// Base register of the peer-load instruction.
+    load_base: Option<u32>,
+    /// Physical extent of the segment table up to the id-1 record, watched for core-1 reads.
+    table: Option<(u64, u64)>,
 }
 
 fn word_at(bytes: &[u8], address: u32) -> Result<Word, String> {
@@ -404,6 +410,28 @@ fn load_register(word: Word) -> Option<(u32, u32)> {
 
 fn is_store(word: Word) -> bool {
     word.0 & 0xfe50_0000 == 0xe400_0000
+}
+
+/// Target of an A32 B or BL under any condition.
+fn branch_target(word: Word, at: u32) -> Option<u32> {
+    (word.0 >> 28 != 0xf && word.0 & 0x0e00_0000 == 0x0a00_0000)
+        .then(|| at.wrapping_add(8).wrapping_add((((word.0 << 8) as i32) >> 6) as u32))
+}
+
+/// `bx lr`, or `pop {..., pc}` that leaves `register` unwritten.
+fn returns_without(word: Word, register: u32) -> bool {
+    word.0 == 0xe12f_ff1e || (word.0 & 0xffff_0000 == 0xe8bd_0000 && word.0 & 0x8000 != 0 && word.0 & (1 << register) == 0)
+}
+
+/// A core-1 little-endian word read inside the table extent whose guest address the bound mapping translates to its physical address.
+fn table_read(table: &BoundMap, cpu: &CpuAttempt) -> bool {
+    let end = table.physical.0 + table.size;
+    let before = cpu.before.as_ref().and_then(|bytes| <[u8; 4]>::try_from(bytes.as_slice()).ok());
+    cpu.core == WitnessCore::Core1 && matches!(cpu.source, CpuAccess::CpuRead) && cpu.size == 4
+        && matches!(cpu.byte_order, ByteOrder::Little)
+        && cpu.physical.0 >= table.physical.0 && cpu.physical.0 + 4 <= end
+        && cpu.address.0 == table.address.0 + (cpu.physical.0 - table.physical.0)
+        && before.is_some_and(|bytes| cpu.value == Some(u64::from(u32::from_le_bytes(bytes))))
 }
 
 fn tcm_words(machine: &Machine) -> Result<TcmWords, String> {
@@ -498,6 +526,7 @@ impl<'a> Runner<'a> {
         classes.extend(MUTABLE.iter().map(|&span| range(span, WatchKinds::HOST_WRITE.union(WatchKinds::MODEL_BUS_WRITE))));
         if epoch == Epoch::Published {
             classes.extend(self.phase.published.iter().map(|&span| range(span, WatchKinds::WRITES)));
+            classes.extend(self.phase.table.map(|span| range(span, WatchKinds::WRITES.union(WatchKinds::CPU_READ))));
         }
         classes
     }
@@ -639,12 +668,20 @@ impl<'a> Runner<'a> {
         }
     }
 
-    fn physical_of(&self, guest: u32, length: u64) -> Result<u64, String> {
+    /// The guest extent `[guest, guest + length)` through the single readable core-1 static mapping overlapping it.
+    fn bound_map(&self, guest: u32, length: u64) -> Result<BoundMap, String> {
         let guest = u64::from(guest);
-        self.maps.iter().find(|map| map.core == 1 && map.address <= guest
-            && guest + length <= map.address + map.size as u64 && map.permissions & 1 != 0)
-            .map(|map| map.physical + guest - map.address)
-            .ok_or_else(|| format!("startup address {guest:#x} has no core-1 static mapping"))
+        let end = guest.checked_add(length).ok_or("startup guest extent overflows")?;
+        let mut found = self.maps.iter().filter(|map| map.core == 1 && map.address < end && guest < map.address + map.size as u64);
+        let map = found.next().ok_or_else(|| format!("startup address {guest:#x} has no core-1 static mapping"))?;
+        require(found.next().is_none(), "startup guest extent overlaps more than one core-1 mapping")?;
+        require(map.address <= guest && end <= map.address + map.size as u64 && map.permissions & 1 != 0,
+            "startup guest extent is not inside one readable core-1 mapping")?;
+        Ok(BoundMap { core: 1, address: Address(guest), physical: Address(map.physical + guest - map.address), size: length })
+    }
+
+    fn physical_of(&self, guest: u32, length: u64) -> Result<u64, String> {
+        Ok(self.bound_map(guest, length)?.physical.0)
     }
 
     fn rows<'w>(&'w self, current: &'w ClassifiedWatch) -> Result<Vec<(Epoch, &'w MemoryEvent)>, String> {
@@ -689,7 +726,7 @@ impl<'a> Runner<'a> {
             "startup watch observed a write to immutable record-2 bytes"
         } else if MUTABLE.iter().any(|&span| overlaps(extent, span)) {
             "startup watch observed a host or model-bus write to declared guest-mutable state"
-        } else if self.phase.published.iter().any(|&span| overlaps(extent, span)) {
+        } else if self.phase.published.iter().chain(&self.phase.table).any(|&span| overlaps(extent, span)) {
             "startup watch observed a write to published loader, segment or argument bytes"
         } else {
             "startup watch observed a row outside every watched range"
@@ -717,6 +754,14 @@ impl<'a> Runner<'a> {
         let mut snapshot_reads = [0; 2];
         for (index, (epoch, row)) in rows.iter().enumerate() {
             let extent = row_extent(row);
+            if let (Some(table), MemoryEvent::Cpu(cpu)) = (self.segment.as_ref().map(|segment| &segment.table), row) {
+                if *epoch == Epoch::Published && overlaps(extent, (table.physical.0, table.physical.0 + table.size)) {
+                    require(table_read(table, cpu), "startup segment-table row is not a core-1 word read through the bound table mapping")?;
+                    require(cpu.instructions.0 >= previous.0 && cpu.tick >= previous.1, "startup CPU attempt chronology differs")?;
+                    previous = (cpu.instructions.0, cpu.tick);
+                    continue;
+                }
+            }
             let protocol = WATCH_RANGES.iter().any(|&span| overlaps(extent, span));
             if !protocol {
                 return Err(self.describe(extent).into());
@@ -841,6 +886,14 @@ impl<'a> Runner<'a> {
             .is_some_and(|cpu| cpu.value == Some(0))).ok_or("startup released peer-cell load absent")?;
         require(clear_index < exit_read && exit_read < target_index && target_index < argument_index
             && target.instructions.0 < argument.instructions.0, "startup publication order differs")?;
+        let segment = self.segment.as_ref().ok_or("startup segment binding absent")?;
+        let record_physical = segment.table.physical.0 + u64::from(segment.index * SEGMENT_RECORD);
+        let table_value = |physical: u64, value: Word| rows.iter().enumerate().any(|(index, &(epoch, row))| epoch == Epoch::Published
+            && exit_read < index && index < target_index
+            && matches!(row, MemoryEvent::Cpu(cpu) if table_read(&segment.table, cpu) && cpu.physical.0 == physical
+                && cpu.value == Some(u64::from(value.0))));
+        require(table_value(record_physical, Word(1)) && table_value(record_physical + 4, segment.header),
+            "startup segment-table id and header reads through the bound mapping are absent")?;
         if let Some(ack) = self.phase.ack {
             let ack = self.global(&self.stops[ack])?;
             require(rows.get(peer_index + 1..ack).is_some_and(|interval| interval.iter().any(|(_, row)|
@@ -869,6 +922,7 @@ impl<'a> Runner<'a> {
         let third = if program.kind == ProgramKind::Owned { Some(site(entry + 8)?) } else { None };
         let load = site(sites.peer_load.0)?;
         let call = if program.kind == ProgramKind::Owned { Some(site(sites.peer_loaded.0 - 4)?) } else { None };
+        let after_load = if program.kind == ProgramKind::Owned { Some(site(sites.peer_load.0 + 4)?) } else { None };
         let stores = [site(sites.clear_store.0)?, site(sites.target_store.0)?, site(sites.argument_store.0)?];
         let loads = [site(sites.target_load.0)?, site(sites.argument_load.0)?];
         let handoff = site(sites.handoff.0)?;
@@ -878,12 +932,19 @@ impl<'a> Runner<'a> {
         require(bl_target(first, entry) == Some(0x11854) && bl_target(second, entry + 4) == Some(0x118b8)
             && third.is_none_or(|word| bl_target(word, entry + 8) == Some(sites.main.0)),
             "startup entry does not call the retained state and stack services before main")?;
-        require(load_register(load).is_some_and(|(rt, _)| rt == u32::from(program.loaded)), "startup peer load site is not a word load into its register")?;
-        require(match call {
-            None => sites.peer_loaded.0 == sites.peer_load.0 + 4,
-            Some(word) => bl_target(word, sites.peer_loaded.0 - 4)
-                .is_some_and(|target| target <= sites.peer_load.0 && sites.peer_load.0 < target + 32),
+        let (rt, rn) = load_register(load).filter(|&(rt, rn)| rt == u32::from(program.loaded) && rn < 13)
+            .ok_or("startup peer load site is not a word load into its register")?;
+        require(match (call, after_load) {
+            (None, _) => sites.peer_loaded.0 == sites.peer_load.0 + 4,
+            (Some(word), Some(next)) => bl_target(word, sites.peer_loaded.0 - 4)
+                .is_some_and(|target| target <= sites.peer_load.0 && sites.peer_load.0 < target + 32)
+                && returns_without(next, rt),
+            (Some(_), None) => false,
         }, "startup peer-loaded site does not follow the peer load")?;
+        let (low, high) = program.startup;
+        require((low..high).step_by(4).all(|at| word_at(&physical, at).is_ok_and(|word| branch_target(word, at) != Some(sites.peer_loaded.0))),
+            "startup code branches directly to the peer-loaded site")?;
+        self.phase.load_base = Some(rn);
         require(stores.iter().all(|&word| is_store(word)), "startup store site is not a word store")?;
         require(loads.iter().all(|&word| load_register(word).is_some_and(|(rt, rn)| rt == rn)), "startup handoff load site differs")?;
         require(handoff.0 == 0xe1a0_f003, "startup handoff site is not mov pc,r3")
@@ -906,24 +967,23 @@ impl<'a> Runner<'a> {
             }
         }
         let (index, record) = found.ok_or("startup segment id 1 lies beyond the bounded scan")?;
-        let record_physical = self.physical_of(record, 8)?;
+        let table = self.bound_map(root.0, u64::from((index + 1) * SEGMENT_RECORD))?;
+        let record_physical = table.physical.0 + u64::from(index * SEGMENT_RECORD);
         let header = word(machine, record_physical + 4)?;
         let entry = word(machine, self.physical_of(header.0, 16)? + 0xc)?;
         wait::verify_image(machine, wait::OriginalImage::LoaderB)?;
         let loader = machine.read(LOADER_B.0, (LOADER_B.1 - LOADER_B.0) as usize)?;
         let loader_entry = word(machine, LOADER_B.0 + 0xc)?;
+        let table_span = (table.physical.0, table.physical.0 + table.size);
+        self.phase.table = Some(table_span);
         self.segment = Some(Segment {
             root, index, record: Word(record), header, entry, argument,
-            loader_sha256: encode_hex(&Sha256::digest(&loader)), loader_entry,
+            loader_sha256: encode_hex(&Sha256::digest(&loader)), loader_entry, table,
         });
         require(entry.0 == LOADER_ENTRY && loader_entry.0 == LOADER_ENTRY, "startup segment id 1 entry differs from the loader-B header entry")?;
-        let root_physical = self.physical_of(root.0, 4)?;
-        self.phase.published = vec![
-            LOADER_B,
-            (ARGUMENT_SOURCE, ARGUMENT_SOURCE + 4),
-            (SEGMENT_ROOT, SEGMENT_ROOT + 4),
-            (root_physical, record_physical + u64::from(SEGMENT_RECORD)),
-        ];
+        self.phase.published = vec![LOADER_B, (ARGUMENT_SOURCE, ARGUMENT_SOURCE + 4), (SEGMENT_ROOT, SEGMENT_ROOT + 4)];
+        require(self.classes(Epoch::Released).iter().map(|range| (range.start, range.end)).chain(self.phase.published.iter().copied())
+            .all(|span| !overlaps(span, table_span)), "startup segment table overlaps another watched extent")?;
         Ok(())
     }
 
@@ -1027,7 +1087,15 @@ impl<'a> Runner<'a> {
                 let value = u32::from_le_bytes(before);
                 require(read.address.0 == 0x4002_0000 && read.size == 4 && read.value == Some(u64::from(value))
                     && read.instructions.0 <= stop.instructions.0, "startup pair load attribution differs")?;
+                let last_core1 = interval.iter().rev().find_map(|row| match row {
+                    MemoryEvent::Cpu(cpu) if cpu.core == WitnessCore::Core1 => Some(cpu),
+                    _ => None,
+                });
+                require(last_core1.is_some_and(|cpu| std::ptr::eq(cpu, read)), "startup core-1 access intervenes between the peer load and its stop")?;
                 require(stop.registers[usize::from(program.loaded)].0 == value, "startup pair register differs from the loaded peer-cell value")?;
+                let base = self.phase.load_base.ok_or("startup peer load base is unbound")?;
+                require(base == u32::from(program.loaded) || u64::from(stop.registers[base as usize].0) == read.address.0,
+                    "startup pair base register differs from the loaded peer-cell address")?;
                 let core1 = stop.counts.0[1];
                 self.phase.pairs += 1 + skipped;
                 self.phase.last_pair = stop.watch_records;

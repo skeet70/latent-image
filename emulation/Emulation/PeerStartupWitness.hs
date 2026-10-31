@@ -341,6 +341,12 @@ deriveOwnedFacts bin symbolBytes (StagedRecord staged) = do
   rendezvousWords <- decodeExtent rendezvous
   peerLoaded <- single "rendezvous call of xm1_secondary_peer_cell"
     [location + 4 | (location, Branch (Cond 14) True callee) <- rendezvousWords, callee == fst peerCell]
+  afterLoad <- decodeAt (peerLoad + 4)
+  require (returnsWithout (Reg loadedNumber) (Just afterLoad)) "peer-cell load is not followed by a return that keeps the loaded register"
+  imageWords <- decodeExtent (entry, imageEnd)
+  require (length [() | (_, Branch _ _ callee) <- imageWords, callee == fst peerCell] == 1)
+    "candidate reaches xm1_secondary_peer_cell by more than its one rendezvous call"
+  require (null [() | (_, Branch _ _ target) <- imageWords, target == peerLoaded]) "candidate branches directly to the peer-loaded site"
   clearStore <- single "rendezvous word store" [location | (location, Store (Cond 14) Word _ _ _ _) <- rendezvousWords]
   publishWords <- extent "xm1_secondary_publish" >>= decodeExtent
   (targetStore, argumentStore) <- case [location | (location, Store (Cond 14) Word _ _ _ _) <- publishWords] of
@@ -764,8 +770,9 @@ data MemoryMap = MemoryMap Core Word32 Word32 Word32 deriving (Eq, Show)
 data Bindings = Bindings [Word32] [MemoryMap] TcmBank deriving (Eq, Show)
 
 -- | Root, index, record, header, entry, image-4 argument word, loader-B
--- digest, loader-B header word +0xc.
-data Segment = Segment Word32 Word32 Word32 Word32 Word32 Word32 F.Sha256 Word32 deriving (Eq, Show)
+-- digest, loader-B header word +0xc, and the core-1 mapping of the table
+-- extent @[root, record + 36)@.
+data Segment = Segment Word32 Word32 Word32 Word32 Word32 Word32 F.Sha256 Word32 MemoryMap deriving (Eq, Show)
 
 -- | Record-2 digest and the site words read at @startup-entry@.
 data RecordEvidence = RecordEvidence F.Sha256 [(GuestAddress, Word32)] deriving (Eq, Show)
@@ -919,16 +926,18 @@ parseBindings value = do
   row <- fields ["decoder_choices", "maps", "tcm"] value
   maps <- field row "maps" >>= json >>= mapM parseMap
   Bindings <$> get row "decoder_choices" <*> pure maps <*> (field row "tcm" >>= parseTcm)
-  where
-    parseMap entry = do
-      mapping <- fields ["core", "address", "physical", "size"] entry
-      MemoryMap <$> parseCore mapping "core" <*> get mapping "address" <*> get mapping "physical" <*> get mapping "size"
+
+parseMap :: Value -> Either String MemoryMap
+parseMap entry = do
+  mapping <- fields ["core", "address", "physical", "size"] entry
+  MemoryMap <$> parseCore mapping "core" <*> get mapping "address" <*> get mapping "physical" <*> get mapping "size"
 
 parseSegment :: Value -> Either String Segment
 parseSegment value = do
-  row <- fields ["root", "index", "record", "header", "entry", "argument", "loader_sha256", "loader_entry"] value
+  row <- fields ["root", "index", "record", "header", "entry", "argument", "loader_sha256", "loader_entry", "table"] value
   Segment <$> get row "root" <*> get row "index" <*> get row "record" <*> get row "header" <*> get row "entry"
     <*> get row "argument" <*> (get row "loader_sha256" >>= F.parseSha256) <*> get row "loader_entry"
+    <*> (field row "table" >>= parseMap)
 
 parseRecord :: Value -> Either String RecordEvidence
 parseRecord value = do
@@ -1095,14 +1104,31 @@ core0Labels scenario = case scenario of
 protocolRanges :: [Interval]
 protocolRanges = [Interval 0x14c80 0x14c88, Interval 0x20000 0x20008, Interval 0xa00c4 0xa00c8]
 
+tablePhysical, tableGuest :: Segment -> Interval
+tablePhysical (Segment _ _ _ _ _ _ _ _ (MemoryMap _ _ physical size)) = Interval (fromIntegral physical) (fromIntegral physical + fromIntegral size)
+tableGuest (Segment _ _ _ _ _ _ _ _ (MemoryMap _ guest _ size)) = Interval (fromIntegral guest) (fromIntegral guest + fromIntegral size)
+
+-- | A core-1 little-endian word read inside the table whose guest address the bound mapping translates to its physical address.
+tableRead :: Segment -> W.WatchRecord -> Bool
+tableRead found row = case row of
+  W.CpuRecord {} ->
+    let Interval low high = tablePhysical found
+        Interval guest _ = tableGuest found
+        physical = fromIntegral (W.watchAddressValue (W.cpuPhysical row)) :: Word64
+        address = fromIntegral (W.watchAddressValue (W.cpuAddress row)) :: Word64
+     in W.cpuCore row == W.Core1 && W.cpuAccess row == W.CpuRead && W.watchBytesValue (W.cpuBytes row) == 4
+          && W.cpuByteOrder row == W.LittleEndian && physical >= low && physical + 4 <= high && address == guest + (physical - low)
+          && maybe False (\value -> value <= 0xffffffff && W.cpuBefore row == Just (encodeLeWord (fromIntegral value))) (W.cpuValue row)
+  W.TransferRecord {} -> False
+
 expectedClasses :: Facts -> Maybe Segment -> EpochName -> Either String [WatchClass]
 expectedClasses facts segment name = case name of
   ResetEpoch -> Right reset
   ReleasedEpoch -> Right released
   PublishedEpoch -> case segment of
-    Just (Segment root index _ _ _ _ _ _) ->
-      let low = fromIntegral root :: Word64
-       in Right (released ++ [WatchClass extent writes | extent <- [Interval 0xd0000 0xddaa0, Interval 0x61c40c 0x61c410, Interval 0x61c000 0x61c004, Interval low (low + 36 * (fromIntegral index + 1))]])
+    Just found ->
+      Right (released ++ [WatchClass extent writes | extent <- [Interval 0xd0000 0xddaa0, Interval 0x61c40c 0x61c410, Interval 0x61c000 0x61c004]]
+        ++ [WatchClass (tablePhysical found) (sort (KindCpuRead : writes))])
     Nothing -> Left "published epoch requires the segment binding"
   where
     allKinds = [minBound .. maxBound]
@@ -1160,8 +1186,8 @@ endpointSnapshots :: [Interval]
 endpointSnapshots = [Interval 0x14c60 0x14ca0, Interval 0xa0000 0xa0548]
 
 -- | @snapshots@ bounds the endpoint snapshot reads of each extent in the epoch.
-validateEpoch :: [WatchClass] -> Instructions -> Int -> Epoch -> Either String ()
-validateEpoch expected end snapshots epoch = do
+validateEpoch :: Maybe Segment -> [WatchClass] -> Instructions -> Int -> Epoch -> Either String ()
+validateEpoch segment expected end snapshots epoch = do
   let watch = epochWatch epoch
       rows = W.watchRecords watch
       cpus = [row | row@W.CpuRecord {} <- rows]
@@ -1173,6 +1199,7 @@ validateEpoch expected end snapshots epoch = do
       -- The model records a reset-epoch bulk bus write at its whole transferred extent.
       resetBusWrite row = epochName epoch == ResetEpoch && rowKind row == KindModelBusWrite
       contained (Interval low high) = any (\(Interval rangeLow rangeHigh) -> rangeLow <= low && high <= rangeHigh) protocolRanges
+      segmentRead row = epochName epoch == PublishedEpoch && maybe False (`tableRead` row) segment
   require (W.watchEnabled watch && isNothing (W.watchViolation watch)) (name ++ " watch is disabled or violated")
   require (sort (epochClasses epoch) == sort expected) (name ++ " watch classes differ")
   require (epochViews epoch == (if fixed then FixedViews else ObserveViews)) (name ++ " watch view policy differs")
@@ -1187,7 +1214,7 @@ validateEpoch expected end snapshots epoch = do
         kind = rowKind row
     require (any (\(WatchClass classExtent kinds) -> overlaps classExtent extent && kind `elem` kinds) expected) (name ++ " row is not watched by an overlapping class")
     require (kind /= KindHostWrite) "host write in startup receipt"
-    require (snapshot row || resetBusWrite row || contained extent) (name ++ " row lies outside a single protocol range")
+    require (snapshot row || resetBusWrite row || segmentRead row || contained extent) (name ++ " row lies outside a single protocol range")
 
 validateCursor :: [W.WatchRecord] -> Instructions -> WatchCursor -> Either String ()
 validateCursor rows time (WatchCursor offset) = do
@@ -1201,7 +1228,7 @@ validateCursor rows time (WatchCursor offset) = do
 
 data CpuRole
   = Sentinel0 | Sentinel1 | CompletionWrite | PrimaryClearWrite | VeneerPoll | VeneerRead
-  | PeerPair | PeerClear | CellInit Word32 | TargetStore | ArgumentStore | TargetLoad | ArgumentLoad
+  | PeerPair | PeerClear | CellInit Word32 | TargetStore | ArgumentStore | TargetLoad | ArgumentLoad | TableRead
   deriving (Eq, Show)
 
 data TransferRole = HostObservation | BusWrite | BusRead deriving (Eq, Show)
@@ -1213,13 +1240,14 @@ data Located = Located {locatedEpoch :: EpochName, locatedIndex :: Int, locatedT
 siteWatch :: GuestAddress -> W.WatchAddress
 siteWatch (GuestAddress value) = W.watchAddress (fromIntegral value)
 
-classifyRow :: Facts -> Maybe (Word32, Word32) -> W.WatchRecord -> Either String Role
-classifyRow facts publication row = case row of
+classifyRow :: Facts -> Maybe (Word32, Word32) -> Maybe Segment -> W.WatchRecord -> Either String Role
+classifyRow facts publication segment row = case row of
   W.TransferRecord {W.transferAccess = access} -> case access of
     W.HostRead -> Right (TransferRole HostObservation)
     W.HostWrite -> Left "host write in startup receipt"
     W.ModelBusWrite -> Right (TransferRole BusWrite)
     W.ModelBusRead -> Right (TransferRole BusRead)
+  W.CpuRecord {} | maybe False (`tableRead` row) segment -> Right (CpuRole TableRead)
   W.CpuRecord {} -> case [role | (role, matched) <- candidates, matched] of
     role : _ -> Right (CpuRole role)
     [] -> Left ("unexplained CPU attempt in protocol memory at pc " ++ hex (W.watchAddressValue (W.cpuPc row)))
@@ -1305,17 +1333,24 @@ checkStartupReceipt scenario program receipt = do
   require (map epochStart epochs == startsExpected) "startup epoch start counts differ"
   segment <- case (held, receiptSegment receipt) of
     (True, Nothing) -> Right Nothing
-    (False, Just found@(Segment root index record _ entry _ loaderDigest loaderEntry)) -> do
+    (False, Just found@(Segment root index record _ entry _ loaderDigest loaderEntry (MemoryMap tableCore tableGuestBase tablePhysicalBase tableSize))) -> do
       require (entry == 0xd0020 && loaderEntry == entry) "segment entry differs from the loader-B header entry 0xd0020"
       require (F.sha256Hex loaderDigest == loaderBDigestHex) "loader B digest differs"
       require (toInteger record == toInteger root + 36 * toInteger index) "segment record is not root + 36 * index"
+      require (tableCore == Core1 && tableGuestBase == root && toInteger tableSize == 36 * (toInteger index + 1)
+        && toInteger tableGuestBase + toInteger tableSize <= 2 ^ (32 :: Int) && toInteger tablePhysicalBase + toInteger tableSize <= 2 ^ (32 :: Int))
+        "segment table mapping differs from [root, record + 36) on core 1"
       pure (Just found)
     _ -> Left "segment binding presence differs from the scenario"
   classesByEpoch <- forM epochs $ \epoch -> (,) epoch <$> expectedClasses facts segment (epochName epoch)
+  forM_ segment $ \found ->
+    require (and [not (overlaps (tablePhysical found) extent) | Right classes <- [expectedClasses facts Nothing ReleasedEpoch], WatchClass extent _ <- classes]
+      && not (any (overlaps (tablePhysical found)) [Interval 0xd0000 0xddaa0, Interval 0x61c40c 0x61c410, Interval 0x61c000 0x61c004]))
+      "segment table overlaps another watched extent"
   require (sum [length (W.watchRecords (epochWatch epoch)) | epoch <- epochs] <= maxWatchRows) "startup watch rows exceed the aggregate bound"
   let endpointStops name = length [() | stop <- stops, stopEpoch stop == name, stopLabel stop `elem` [StartupHandoff, LoaderBEntry]]
   forM_ (zip classesByEpoch (map epochStart (drop 1 epochs) ++ [total])) $ \((epoch, expected), end) ->
-    validateEpoch expected end (endpointStops (epochName epoch)) epoch
+    validateEpoch segment expected end (endpointStops (epochName epoch)) epoch
   forM_ stops $ \stop -> do
     require (stopEpoch stop `elem` epochsFor stop) ("stop epoch differs: " ++ labelText (stopLabel stop))
     validateCursor (rowsOf (stopEpoch stop)) (stopCount stop) (stopCursor stop)
@@ -1336,7 +1371,7 @@ checkStartupReceipt scenario program receipt = do
       plain = offsetSite 0
       expectedSites = case program of
         Retained -> [plain siteEntry, offsetSite 4 siteEntry, plain sitePeerLoad] ++ common
-        Owned _ -> [plain siteEntry, offsetSite 4 siteEntry, offsetSite 8 siteEntry, plain sitePeerLoad, GuestAddress (addressWord (sitePeerLoaded sites) - 4)] ++ common
+        Owned _ -> [plain siteEntry, offsetSite 4 siteEntry, offsetSite 8 siteEntry, plain sitePeerLoad, GuestAddress (addressWord (sitePeerLoaded sites) - 4), offsetSite 4 sitePeerLoad] ++ common
       common = map plain [siteClearStore, siteTargetStore, siteArgumentStore, siteTargetLoad, siteArgumentLoad, siteHandoff]
       wordAt location = lookup location siteWords
       decodedAt location@(GuestAddress value) = A32.decode (fromIntegral value) <$> wordAt location
@@ -1355,10 +1390,13 @@ checkStartupReceipt scenario program receipt = do
       require (case decodedAt (GuestAddress (addressWord (sitePeerLoaded sites) - 4)) of
         Just (Branch (Cond 14) True _) -> True
         _ -> False) "owned word before peer_loaded is not a BL"
+      require (returnsWithout (Reg (registerIndexValue (factRegister facts))) (decodedAt (offsetSite 4 sitePeerLoad)))
+        "owned word after peer_load is not a return that keeps the loaded register"
   require (wordAt (plain siteHandoff) == Just 0xe1a0f003) "handoff word differs from MOV PC, R3"
-  require (case decodedAt (plain sitePeerLoad) of
-    Just (Load (Cond 14) Word False (Reg number) _ _ _) -> number == registerIndexValue (factRegister facts)
-    _ -> False) "peer_load is not a word LDR into the loaded register"
+  loadBase <- case decodedAt (plain sitePeerLoad) of
+    Just (Load (Cond 14) Word False (Reg number) (Reg base) (OffsetImmediate 0) OffsetOnly)
+      | number == registerIndexValue (factRegister facts) && base < 13 -> registerIndex base
+    _ -> Left "peer_load is not a word LDR [rn] into the loaded register"
   require (all (isWordStore . decodedAt . plain) [siteClearStore, siteTargetStore, siteArgumentStore]) "store site word is not a word STR"
   require (all (isWordLoad . decodedAt . plain) [siteTargetLoad, siteArgumentLoad]) "load site word is not a word LDR"
   -- 3. startup-main
@@ -1374,6 +1412,7 @@ checkStartupReceipt scenario program receipt = do
   -- Guest views of every guarded extent: physical identity, the 0x40000000 alias and every bound map.
   let guarded = concat [[extent, alias extent] | (_, expected) <- classesByEpoch, WatchClass extent _ <- expected]
         ++ [Interval (fromIntegral guest) (fromIntegral guest + fromIntegral size) | MemoryMap _ guest _ size <- maps]
+        ++ [tableGuest found | Just found <- [segment]]
       alias (Interval low high) = Interval (low + 0x40000000) (high + 0x40000000)
   windows <- mapM tcmWindow (banks (stopTcm heldRelease) ++ banks (stopTcm mainStop))
   require (and [not (overlaps window extent) | Just window <- windows, extent <- guarded]) "enabled TCM window overlaps a guarded guest view"
@@ -1397,7 +1436,10 @@ checkStartupReceipt scenario program receipt = do
       _ -> Left "peer-loaded stop lacks exactly one peer_load read since the previous cursor"
     require (all attributed (row : unstopped)) "peer_load read attribution differs"
     require (all ((== Just 0x22b) . W.cpuValue) unstopped) "peer_load read without a stop is not waiting"
+    require (lastOf [cpu | cpu@W.CpuRecord {} <- window, W.cpuCore cpu == W.Core1] == Just row) "core-1 access intervenes between the peer load and its stop"
     require (W.cpuValue row == Just (fromIntegral (registerAt (factRegister facts) (stopRegisters stop)))) "loaded register differs from the read value"
+    require (loadBase == factRegister facts || registerAt loadBase (stopRegisters stop) == W.watchAddressValue (W.cpuAddress row))
+      "peer_load base register differs from the loaded peer-cell address"
     pure (W.cpuValue row == Just 0x22b, length unstopped)
   let loadedValues = map fst pairing
       pairCount = length loads + sum (map snd pairing)
@@ -1411,7 +1453,7 @@ checkStartupReceipt scenario program receipt = do
       (require (core1Of (stopCounts after) - core1Of (stopCounts before) == period) "waiting stops differ from the poll period")
   -- 6, 7. endpoints
   publication <- case (endpoints, segment) of
-    (_ : _, Just (Segment _ _ _ _ entry value _ _)) -> Right (Just (entry, value))
+    (_ : _, Just (Segment _ _ _ _ entry value _ _ _)) -> Right (Just (entry, value))
     ([], Nothing) -> Right Nothing
     _ -> Left "endpoint stops and segment binding disagree"
   forM_ endpoints $ \stop -> do
@@ -1428,7 +1470,7 @@ checkStartupReceipt scenario program receipt = do
   -- 8. protocol rows
   located <- fmap concat . forM epochs $ \epoch ->
     forM (zip [0 ..] (W.watchRecords (epochWatch epoch))) $ \(index, row) -> do
-      role <- classifyRow facts publication row
+      role <- classifyRow facts publication segment row
       pure (role, epochName epoch, index, row)
   let having wanted = [Located name index (W.cpuInstructions row) row | (CpuRole role, name, index, row) <- located, role == wanted]
       transfers wanted = [(name, index) | (TransferRole role, name, index, _) <- located, role == wanted]
@@ -1462,6 +1504,16 @@ checkStartupReceipt scenario program receipt = do
       require (all ((> stopCount exit) . locatedTime) [targetStore, argumentStore]) "publication precedes the exit pair"
       require (locatedTime targetStore < locatedTime targetLoad && locatedTime argumentStore < locatedTime argumentLoad
         && all ((< stopCount handoffStop) . locatedTime) [targetLoad, argumentLoad]) "publication loads are out of order"
+      bound@(Segment _ segmentIndex _ segmentHeader _ _ _ _ _) <- maybe (Left "non-held scenario lacks the segment binding") Right segment
+      let Interval tableLow _ = tablePhysical bound
+          recordPhysical = tableLow + 36 * fromIntegral segmentIndex
+          tableValue physical value = any (\tableRow -> locatedEpoch tableRow == PublishedEpoch
+              && locatedTime tableRow > stopCount exit && locatedTime tableRow < locatedTime targetStore
+              && fromIntegral (W.watchAddressValue (W.cpuPhysical (locatedRow tableRow))) == physical
+              && W.cpuValue (locatedRow tableRow) == Just (fromIntegral (value :: Word32)))
+            (having TableRead)
+      require (tableValue recordPhysical 1 && tableValue (recordPhysical + 4) segmentHeader)
+        "segment-table id and header reads through the bound mapping are absent"
       case scenario of
         Natural _ -> mapM_ absent [VeneerPoll, VeneerRead]
         _ -> pure ()
@@ -1552,6 +1604,13 @@ requiredMaps :: [MemoryMap]
 requiredMaps =
   [ MemoryMap Core1 0x10000 0x10000 0x4ca0, MemoryMap Core1 0x40020000 0x20000 0x8, MemoryMap Core1 0xd0000 0xd0000 0xdaa0
   , MemoryMap Core1 0x61c000 0x61c000 0x4, MemoryMap Core1 0x61c40c 0x61c40c 0x4 ]
+
+-- | @bx lr@, or @pop {..., pc}@ that leaves @register@ unwritten.
+returnsWithout :: Reg -> Maybe Instruction -> Bool
+returnsWithout register instruction = case instruction of
+  Just (BranchExchange (Cond 14) False (Reg 14)) -> True
+  Just (LoadMultiple (Cond 14) (Reg 13) IncrementAfter True list) -> A32.pc `elem` list && register `notElem` list
+  _ -> False
 
 -- | Cortex-R TCM region register: base [31:12], size code [6:2] (@0@ none, @3..14@ 4 KiB..8 MiB), enable [0].
 -- The base must be aligned to the size.
