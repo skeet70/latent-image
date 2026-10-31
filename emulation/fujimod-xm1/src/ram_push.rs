@@ -7,7 +7,7 @@ use fujimod_xm1::adjustment::AdjustmentNand;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, load_card, menu_value, read, restore, sha256, write};
 use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, encode_hex};
 use fujimod_xm1::guest::{DialTurn, ModeDialPosition, PhysicalShutterPosition, Press, RouteKey};
-use fujimod_xm1::machine::{KeyPulse, Machine, MENU_PULSE, ReleaseSegment};
+use fujimod_xm1::machine::{KeyPulse, Machine, MENU_PULSE, ReleaseSegment, RunOutcome};
 use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::run::{self, NodeName};
 use fujimod_emulator::board::observation::MemoryWatch;
@@ -15,14 +15,14 @@ use fujimod_emulator::board::preservation::{
     PhysicalRange, Preservation, PreservationState, ProtectedRanges,
 };
 use fujimod_xm1::sd_host::{Backing, MediaImage, SectorAddress, SectorCount};
-use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureSnapshot};
+use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureSnapshot, InstructionCount};
 use serde::{Deserialize, Serialize};
 use fujimod_emulator_devices::Device;
 use fujimod_emulator_exr2_isp_input::ImageInput;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
-    io::BufRead,
+    io::{BufRead, Write},
     path::{Path, PathBuf},
     process::ExitCode,
     time::Instant,
@@ -289,7 +289,9 @@ enum Request {
     TraceSites { sites: BTreeMap<String, String> },
     TraceHits { from: usize },
     CaptureObservationBegin,
-    CaptureObservationHits { from: usize },
+    CaptureObservationHits { from: CaptureCursor },
+    CaptureObservationAck { next: CaptureCursor },
+    CaptureObservationResume,
     CaptureObservationState,
     Key { key: String, hold_instructions: Option<u64>, release_instructions: Option<u64>, settle_instructions: Option<u64> },
     ShutterSequence,
@@ -318,6 +320,8 @@ enum RequestKind {
     TraceHits,
     CaptureObservationBegin,
     CaptureObservationHits,
+    CaptureObservationAck,
+    CaptureObservationResume,
     CaptureObservationState,
     Key,
     ShutterSequence,
@@ -346,6 +350,8 @@ impl Request {
             Request::TraceHits { .. } => RequestKind::TraceHits,
             Request::CaptureObservationBegin => RequestKind::CaptureObservationBegin,
             Request::CaptureObservationHits { .. } => RequestKind::CaptureObservationHits,
+            Request::CaptureObservationAck { .. } => RequestKind::CaptureObservationAck,
+            Request::CaptureObservationResume => RequestKind::CaptureObservationResume,
             Request::CaptureObservationState => RequestKind::CaptureObservationState,
             Request::Key { .. } => RequestKind::Key,
             Request::ShutterSequence => RequestKind::ShutterSequence,
@@ -407,6 +413,7 @@ struct Server {
     key_log: Vec<Value>,
     requests: RequestProfile,
     rendezvous: RendezvousInputs,
+    pending_capture: Option<PendingCapture>,
 }
 
 fn parse_address(text: &str) -> Result<u32, String> {
@@ -577,7 +584,173 @@ fn shutter_phase(
     })
 }
 
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum CaptureOperation {
+    ShutterSequence,
+    Window,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum CaptureProgressState {
+    Completed,
+    DrainRequired,
+}
+
+#[derive(Clone, Copy)]
+enum ShutterPhaseIndex {
+    HalfLead,
+    Full,
+    HalfRelease,
+    Released,
+}
+
+impl Serialize for ShutterPhaseIndex {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u8(match self {
+            Self::HalfLead => 0, Self::Full => 1, Self::HalfRelease => 2, Self::Released => 3,
+        })
+    }
+}
+
+impl ShutterPhaseIndex {
+    fn position(self) -> PhysicalShutterPosition {
+        match self {
+            Self::HalfLead | Self::HalfRelease => PhysicalShutterPosition::Half,
+            Self::Full => PhysicalShutterPosition::Full,
+            Self::Released => PhysicalShutterPosition::Released,
+        }
+    }
+
+    fn duration(self) -> GuestInstructions {
+        GuestInstructions(match self {
+            Self::HalfLead | Self::Full => GPIO_PULSE.hold,
+            Self::HalfRelease | Self::Released => GPIO_PULSE.release / 2,
+        })
+    }
+
+    fn next(self) -> Option<Self> {
+        match self {
+            Self::HalfLead => Some(Self::Full),
+            Self::Full => Some(Self::HalfRelease),
+            Self::HalfRelease => Some(Self::Released),
+            Self::Released => None,
+        }
+    }
+}
+
+struct PendingShutterPhase {
+    index: ShutterPhaseIndex,
+    started: GuestInstructions,
+    before: CaptureObservationState,
+}
+
+struct PendingCapture {
+    operation: CaptureOperation,
+    endpoint: GuestInstructions,
+    phases: Vec<ShutterPhaseObservation>,
+    current: Option<PendingShutterPhase>,
+}
+
+#[derive(Serialize)]
+struct CaptureProgress<'a> {
+    state: CaptureProgressState,
+    operation: CaptureOperation,
+    instructions: GuestInstructions,
+    intended_endpoint: GuestInstructions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_phase: Option<ShutterPhaseIndex>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    position: Option<PhysicalShutterPosition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    phases: Option<&'a [ShutterPhaseObservation]>,
+}
+
 impl Server {
+    fn start_capture_operation(&mut self, operation: CaptureOperation) -> Result<Value, String> {
+        self.bridge.machine.require_running()?;
+        if !self.bridge.machine.traces.capture_observation_active() {
+            return Err("capture progress requires an active observation".into());
+        }
+        if self.pending_capture.is_some() || self.bridge.machine.traces.capture_page_outstanding() {
+            return Err("capture operation requires no pending continuation or published page".into());
+        }
+        let pending = match operation {
+            CaptureOperation::Window => PendingCapture {
+                operation,
+                endpoint: GuestInstructions(self.bridge.machine.instructions().checked_add(CAPTURE_OBSERVATION_WINDOW.0)
+                    .ok_or("capture instruction endpoint exceeds 64 bits")?),
+                phases: Vec::new(), current: None,
+            },
+            CaptureOperation::ShutterSequence => self.start_capture_phase(ShutterPhaseIndex::HalfLead, Vec::with_capacity(4))?,
+        };
+        self.continue_capture(pending)
+    }
+
+    fn start_capture_phase(&mut self, index: ShutterPhaseIndex, phases: Vec<ShutterPhaseObservation>) -> Result<PendingCapture, String> {
+        let started = GuestInstructions(self.bridge.machine.instructions());
+        let endpoint = GuestInstructions(started.0.checked_add(index.duration().0)
+            .ok_or("capture instruction endpoint exceeds 64 bits")?);
+        let before = capture_observation_state(&self.bridge.machine)?;
+        self.bridge.machine.set_shutter_position(index.position())?;
+        Ok(PendingCapture {
+            operation: CaptureOperation::ShutterSequence, endpoint, phases,
+            current: Some(PendingShutterPhase { index, started, before }),
+        })
+    }
+
+    fn continue_capture(&mut self, mut pending: PendingCapture) -> Result<Value, String> {
+        loop {
+            let remaining = pending.endpoint.0.saturating_sub(self.bridge.machine.instructions());
+            let outcome = match self.bridge.advance(remaining) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    self.pending_capture = Some(pending);
+                    return Err(error);
+                }
+            };
+            let drained = outcome == RunOutcome::DrainRequired;
+            if !drained {
+                if let Some(current) = pending.current.take() {
+                    pending.phases.push(ShutterPhaseObservation {
+                        position: current.index.position(), started: current.started,
+                        finished: GuestInstructions(self.bridge.machine.instructions()),
+                        before: Some(current.before),
+                        after: Some(capture_observation_state(&self.bridge.machine)?),
+                    });
+                    if let Some(next) = current.index.next() {
+                        pending = self.start_capture_phase(next, pending.phases)?;
+                        continue;
+                    }
+                }
+            }
+            let progress = CaptureProgress {
+                state: if drained { CaptureProgressState::DrainRequired } else { CaptureProgressState::Completed },
+                operation: pending.operation,
+                instructions: GuestInstructions(self.bridge.machine.instructions()),
+                intended_endpoint: pending.endpoint,
+                current_phase: pending.current.as_ref().map(|phase| phase.index),
+                position: pending.current.as_ref().map(|phase| phase.index.position()),
+                phases: matches!(pending.operation, CaptureOperation::ShutterSequence).then_some(pending.phases.as_slice()),
+            };
+            let response = serde_json::to_value(progress).map_err(|error| format!("capture progress: {error}"))?;
+            if drained {
+                self.pending_capture = Some(pending);
+            }
+            return Ok(response);
+        }
+    }
+
+    fn collect_capture_tail(&mut self) -> Result<(), String> {
+        let machine = &mut self.bridge.machine;
+        if machine.traces.capture_observation_active() && !machine.traces.capture_page_outstanding() {
+            let instructions = InstructionCount::from_board(&machine.session)?;
+            machine.traces.collect(&machine.session, instructions)?;
+        }
+        Ok(())
+    }
+
     fn arm(&mut self, requested: &BTreeMap<String, String>) -> Result<usize, String> {
         let mut sites: BTreeMap<u32, String> =
             FIXED_SITES.iter().map(|(address, label)| (*address, (*label).to_owned())).collect();
@@ -595,6 +768,22 @@ impl Server {
     }
 
     fn handle(&mut self, request: Request) -> Result<Option<Value>, String> {
+        let tail_request = matches!(&request, Request::CaptureObservationHits { .. } | Request::CaptureObservationAck { .. }
+            | Request::CaptureObservationState | Request::Finish);
+        if self.bridge.machine.failure.is_some() && !tail_request {
+            return Err(self.bridge.machine.failure.as_ref().ok_or("terminal failure disappeared")?.clone());
+        }
+        let read_only = tail_request || matches!(&request, Request::List | Request::TraceHits { .. }
+            | Request::ImageInputFingerprint { .. } | Request::ReadMemory { .. } | Request::MediaRead { .. }
+            | Request::WatchState | Request::PreservationState | Request::MediaState);
+        if (self.pending_capture.is_some() || self.bridge.machine.traces.capture_page_outstanding())
+            && !read_only && !matches!(&request, Request::CaptureObservationResume) {
+            return Err("capture continuation must be drained and resumed before mutation".into());
+        }
+        if self.bridge.machine.traces.capture_observation_active() && !read_only
+            && !matches!(&request, Request::ShutterSequence | Request::CaptureObservationWindow | Request::CaptureObservationResume) {
+            return Err("active capture admits only resumable shutter and window advancement".into());
+        }
         Ok(Some(match request {
             Request::List => {
                 let c = &self.attachment.configuration;
@@ -618,13 +807,27 @@ impl Server {
             }
             Request::CaptureObservationBegin => {
                 self.bridge.begin_capture_observation()?;
-                json!({"active": true, "bounds": CAPTURE_OBSERVATION_BOUNDS})
+                json!({"protocol": 2, "active": true, "bounds": CAPTURE_OBSERVATION_BOUNDS})
             }
             Request::CaptureObservationHits { from } => {
-                serde_json::to_value(self.bridge.machine.traces.capture_observation_page(from)?)
+                self.collect_capture_tail()?;
+                serde_json::to_value(self.bridge.machine.traces.capture_observation_page(from).map_err(|error| error.to_string())?)
                     .map_err(|error| format!("capture-observation-hits: {error}"))?
             }
+            Request::CaptureObservationAck { next } => {
+                serde_json::to_value(self.bridge.machine.traces.acknowledge_capture_observation(next)
+                    .map_err(|error| error.to_string())?).map_err(|error| error.to_string())?
+            }
+            Request::CaptureObservationResume => {
+                self.bridge.machine.require_running()?;
+                if !self.bridge.machine.traces.capture_drained() {
+                    return Err("capture resume requires a drained boundary-complete snapshot".into());
+                }
+                let pending = self.pending_capture.take().ok_or("no capture continuation is pending")?;
+                self.continue_capture(pending)?
+            }
             Request::CaptureObservationState => {
+                self.collect_capture_tail()?;
                 serde_json::to_value(capture_observation_state(&self.bridge.machine)?)
                     .map_err(|error| format!("capture-observation-state: {error}"))?
             }
@@ -655,6 +858,9 @@ impl Server {
                 json!({"menu": menu_value(self.bridge.machine.menu()?), "settle": settle})
             }
             Request::ShutterSequence => {
+                if self.bridge.machine.traces.capture_observation_active() {
+                    return Ok(Some(self.start_capture_operation(CaptureOperation::ShutterSequence)?));
+                }
                 let phases = [
                     shutter_phase(&mut self.bridge, PhysicalShutterPosition::Half, GuestInstructions(GPIO_PULSE.hold))?,
                     shutter_phase(&mut self.bridge, PhysicalShutterPosition::Full, GuestInstructions(GPIO_PULSE.hold))?,
@@ -675,6 +881,9 @@ impl Server {
                 json!({"instructions": machine.instructions(), "fingerprint": fingerprint})
             }
             Request::CaptureObservationWindow => {
+                if self.bridge.machine.traces.capture_observation_active() {
+                    return Ok(Some(self.start_capture_operation(CaptureOperation::Window)?));
+                }
                 self.bridge.advance(CAPTURE_OBSERVATION_WINDOW.0)?;
                 json!({"instructions": GuestInstructions(self.bridge.machine.instructions())})
             }
@@ -789,7 +998,7 @@ impl Server {
         }))
     }
 
-    fn receipt(&self, error: Option<&str>) -> Result<Value, String> {
+    fn receipt(&self, error: Option<&str>, evidence_error: Option<&str>) -> Result<Value, String> {
         let card = match self.rendezvous {
             RendezvousInputs::MenuUpAndWriteProtect => "card-backed",
             RendezvousInputs::MenuUp => "cardless",
@@ -808,6 +1017,7 @@ impl Server {
             "configuration_descriptor": encode_hex(&self.attachment.configuration),
             "checkpoint": self.checkpoint,
             "bridge_error": error,
+            "capture_evidence_error": evidence_error,
             "key_log": self.key_log,
             "transfer_log": self.bridge.transfer_log,
             "transfer_profile": self.bridge.profile,
@@ -824,13 +1034,32 @@ impl Server {
     }
 
     fn serve(&mut self) -> Result<(), String> {
+        self.serve_io(std::io::stdin().lock(), std::io::stdout().lock())
+    }
+
+    fn serve_io(&mut self, input: impl BufRead, mut output: impl Write) -> Result<(), String> {
+        let mut emit = |value: &Value| -> Result<(), String> {
+            serde_json::to_writer(&mut output, value).map_err(|error| error.to_string())?;
+            output.write_all(b"\n").and_then(|()| output.flush()).map_err(|error| error.to_string())
+        };
         emit(&json!({"ok": true, "event": "ready", "device": encode_hex(&self.attachment.device),
             "configuration": encode_hex(&self.attachment.configuration),
             "pre_attach": self.attachment.pre_attach, "checkpoint": self.checkpoint}))?;
         let mut error = None;
+        let mut evidence_error = None;
         let mut waiting = Instant::now();
-        for line in std::io::stdin().lock().lines() {
-            let line = line.map_err(|e| e.to_string())?;
+        for line in input.lines() {
+            let line = match line {
+                Ok(line) => line,
+                Err(io_error) => {
+                    if error.is_some() {
+                        evidence_error.get_or_insert(io_error.to_string());
+                    } else {
+                        error = Some(io_error.to_string());
+                    }
+                    break;
+                }
+            };
             self.requests.host_wait_seconds += waiting.elapsed().as_secs_f64();
             let result = serde_json::from_str::<Request>(&line)
                 .map_err(|e| format!("invalid RAM-push bridge request: {e}"))
@@ -843,25 +1072,41 @@ impl Server {
                     profile.seconds += started.elapsed().as_secs_f64();
                     result
                 });
-            match result {
+            let (response, finished) = match result {
                 Ok(Some(mut value)) => {
                     value.as_object_mut().ok_or("response must be an object")?.insert("ok".into(), json!(true));
-                    emit(&value)?;
-                    waiting = Instant::now();
+                    (value, false)
                 }
                 Ok(None) => {
-                    emit(&json!({"ok": true, "finished": true}))?;
-                    break;
+                    let response = match &error {
+                        Some(message) => json!({"ok": false, "error": "BridgeError", "message": message, "finished": true}),
+                        None => json!({"ok": true, "finished": true}),
+                    };
+                    (response, true)
                 }
                 Err(message) => {
-                    emit(&json!({"ok": false, "error": "BridgeError", "message": message}))?;
-                    error = Some(message);
-                    break;
+                    let response = json!({"ok": false, "error": "BridgeError", "message": message});
+                    if error.is_some() {
+                        evidence_error.get_or_insert(message);
+                    } else if self.bridge.machine.failure.is_some() || !self.bridge.machine.traces.capture_observation_active() {
+                        error = Some(message);
+                    }
+                    (response, !self.bridge.machine.traces.capture_observation_active())
                 }
+            };
+            if let Err(io_error) = emit(&response) {
+                if error.is_some() {
+                    evidence_error.get_or_insert(io_error);
+                } else {
+                    error = Some(io_error);
+                }
+                break;
             }
+            if finished { break; }
+            waiting = Instant::now();
         }
         std::fs::create_dir_all(&self.output).map_err(|e| e.to_string())?;
-        let receipt = self.receipt(error.as_deref())?;
+        let receipt = self.receipt(error.as_deref(), evidence_error.as_deref())?;
         write(&self.output.join("emulator-session.json"), format!("{receipt:#}\n").as_bytes())
     }
 }
@@ -967,6 +1212,7 @@ fn drive() -> Result<(), String> {
         key_log: Vec::new(),
         requests: RequestProfile::default(),
         rendezvous,
+        pending_capture: None,
     };
     server.arm(&BTreeMap::new())?;
     server.serve()
@@ -979,5 +1225,200 @@ fn main() -> ExitCode {
             eprintln!("fujimod-xm1-ram-push: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fujimod_xm1::run::{RunDocument, ValidatedUpdate};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[derive(Debug, Deserialize, Eq, PartialEq)]
+    #[serde(rename_all = "kebab-case")]
+    enum ProgressState {
+        Completed,
+        DrainRequired,
+    }
+
+    #[derive(Deserialize)]
+    struct Phase {
+        position: PhysicalShutterPosition,
+        started: u64,
+        finished: u64,
+    }
+
+    #[derive(Deserialize)]
+    struct Response {
+        ok: bool,
+        message: Option<String>,
+        protocol: Option<u32>,
+        state: Option<ProgressState>,
+        current_phase: Option<u8>,
+        instructions: Option<u64>,
+        intended_endpoint: Option<u64>,
+        next: Option<CaptureCursor>,
+        boundary_complete: Option<bool>,
+        finished: Option<bool>,
+        phases: Option<Vec<Phase>>,
+    }
+
+    #[derive(Deserialize)]
+    struct Boundary {
+        instructions: u64,
+        failure: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct Receipt {
+        bridge_error: Option<String>,
+        capture_evidence_error: Option<String>,
+        boundary: Boundary,
+    }
+
+    fn server(program: &[u32]) -> Server {
+        static SERIAL: AtomicU64 = AtomicU64::new(0);
+        fujimod_emulator_exr2_board::register_board_builder();
+        fujimod_emulator_models::register();
+        let document = RunDocument::parse(include_bytes!("../data/xm1-150.json")).unwrap();
+        let mut rom = vec![0; 16384];
+        for (index, word) in program.iter().enumerate() {
+            rom[index * 4..index * 4 + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        let update = ValidatedUpdate(vec![0xff; document.update_flash_offset + 2048]);
+        let mut session = run::open(&document, &update, &rom).unwrap();
+        session.board.set_execution_policy(document.execution_policy.into()).unwrap();
+        let machine = Machine::new(document, session).unwrap();
+        let table = &machine.document.firmware.key_table;
+        for (code, binding, interrupt) in [
+            (7u32, &machine.document.firmware.shutter.half, 31u16),
+            (8, &machine.document.firmware.shutter.full, 33),
+        ] {
+            let mut descriptor = [0; 28];
+            descriptor[..4].copy_from_slice(&code.to_le_bytes());
+            descriptor[9] = 4;
+            descriptor[12..16].copy_from_slice(&u32::from(binding.pad.pin).to_le_bytes());
+            descriptor[16..18].copy_from_slice(&1u16.to_le_bytes());
+            descriptor[18..20].copy_from_slice(&interrupt.to_le_bytes());
+            machine.session.board.write_physical(table.base.0 + binding.row.get() * table.row_bytes, &descriptor).unwrap();
+        }
+        let output = std::env::temp_dir().join(format!("capture-stream-{}-{}", std::process::id(), SERIAL.fetch_add(1, Ordering::Relaxed)));
+        Server {
+            bridge: Ff80::new(machine, RendezvousInputs::MenuUp),
+            attachment: Attachment { pre_attach: Value::Null, device: Vec::new(), configuration: Vec::new() },
+            checkpoint: Value::Null,
+            key: BootKey { key: CheckpointKey("synthetic-capture".into()), inputs: Value::Null },
+            root: output.clone(), output,
+            screenshots: Vec::new(), watch: None, preservation: None,
+            key_log: Vec::new(), requests: RequestProfile::default(),
+            rendezvous: RendezvousInputs::MenuUp, pending_capture: None,
+        }
+    }
+
+    fn exchange(server: &mut Server, input: &str) -> (Vec<Response>, Receipt) {
+        exchange_bytes(server, input.as_bytes())
+    }
+
+    fn exchange_bytes(server: &mut Server, input: &[u8]) -> (Vec<Response>, Receipt) {
+        let mut output = Vec::new();
+        server.serve_io(input, &mut output).unwrap();
+        let responses = output.split(|byte| *byte == b'\n').filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice(line).unwrap()).collect();
+        let receipt = serde_json::from_slice(&std::fs::read(server.output.join("emulator-session.json")).unwrap()).unwrap();
+        std::fs::remove_dir_all(&server.output).unwrap();
+        (responses, receipt)
+    }
+
+    const DRAIN_FIRST_PAUSE: &str = concat!(
+        "{\"command\":\"trace-sites\",\"sites\":{\"0xffff0004\":\"loop\"}}\n",
+        "{\"command\":\"capture-observation-begin\"}\n",
+        "{\"command\":\"shutter-sequence\"}\n",
+        "{\"command\":\"capture-observation-resume\"}\n",
+        "{\"command\":\"capture-observation-hits\",\"from\":0}\n",
+        "{\"command\":\"capture-observation-ack\",\"next\":64}\n",
+        "{\"command\":\"capture-observation-hits\",\"from\":64}\n",
+        "{\"command\":\"capture-observation-ack\",\"next\":65}\n",
+        "{\"command\":\"capture-observation-resume\"}\n",
+        "{\"command\":\"capture-observation-hits\",\"from\":65}\n",
+        "{\"command\":\"capture-observation-resume\"}\n",
+    );
+
+    #[test]
+    fn shutter_resume_retains_contacts_phase_observations_and_the_fixed_24m_endpoint() {
+        let mut server = server(&[0xe3a00000, 0xe2800001, 0xe3500041, 0x9afffffc, 0xeafffffe]);
+        let (responses, receipt) = exchange(&mut server, &format!("{DRAIN_FIRST_PAUSE}{{\"command\":\"finish\"}}\n"));
+        assert_eq!(responses.iter().find_map(|response| response.protocol), Some(2));
+        let pause = responses.iter().find(|response| response.state == Some(ProgressState::DrainRequired)).unwrap();
+        assert_eq!(pause.current_phase, Some(0));
+        assert_eq!(pause.intended_endpoint, Some(8_000_000));
+        assert!(pause.instructions.unwrap() < 8_000_000);
+        assert_eq!(responses.iter().filter(|response| !response.ok).count(), 2);
+        let completed = responses.iter().find(|response| response.state == Some(ProgressState::Completed)).unwrap();
+        assert_eq!(completed.instructions, Some(24_000_000));
+        assert_eq!(completed.intended_endpoint, completed.instructions);
+        let phases = completed.phases.as_ref().unwrap();
+        assert_eq!(phases.iter().map(|phase| (phase.started, phase.finished)).collect::<Vec<_>>(),
+            [(0, 8_000_000), (8_000_000, 16_000_000), (16_000_000, 20_000_000), (20_000_000, 24_000_000)]);
+        assert_eq!(phases.iter().map(|phase| phase.position).collect::<Vec<_>>(),
+            [PhysicalShutterPosition::Half, PhysicalShutterPosition::Full, PhysicalShutterPosition::Half, PhysicalShutterPosition::Released]);
+        assert!(responses.last().unwrap().ok);
+        assert_eq!(responses.last().unwrap().finished, Some(true));
+        assert!(receipt.bridge_error.is_none());
+        assert!(receipt.boundary.failure.is_none());
+    }
+
+    #[test]
+    fn window_resume_completes_at_the_fixed_40m_endpoint() {
+        let mut server = server(&[0xe3a00000, 0xe2800001, 0xe3500041, 0x9afffffc, 0xeafffffe]);
+        let script = DRAIN_FIRST_PAUSE.replace("\"shutter-sequence\"", "\"capture-observation-window\"");
+        let (responses, receipt) = exchange(&mut server, &format!("{script}{{\"command\":\"finish\"}}\n"));
+        let pause = responses.iter().find(|response| response.state == Some(ProgressState::DrainRequired)).unwrap();
+        assert_eq!(pause.intended_endpoint, Some(40_000_000));
+        assert!(pause.current_phase.is_none());
+        let completed = responses.iter().find(|response| response.state == Some(ProgressState::Completed)).unwrap();
+        assert_eq!(completed.instructions, Some(40_000_000));
+        assert_eq!(completed.intended_endpoint, completed.instructions);
+        assert!(completed.phases.is_none());
+        assert_eq!(receipt.boundary.instructions, 40_000_000);
+        assert!(receipt.bridge_error.is_none());
+    }
+
+    #[test]
+    fn terminal_eof_and_invalid_evidence_input_preserve_the_original_strict_error() {
+        for malformed_input in [false, true] {
+            let mut server = server(&[0xe3a00000, 0xe2800001, 0xe3500041, 0x9afffffc, 0xe3a01006, 0xe3a02003, 0xe710f211]);
+            let mut input = DRAIN_FIRST_PAUSE.as_bytes().to_vec();
+            if malformed_input { input.extend_from_slice(b"\xff\n"); }
+            let (responses, receipt) = exchange_bytes(&mut server, &input);
+            assert!(receipt.bridge_error.is_some());
+            assert_eq!(responses.last().unwrap().message, receipt.bridge_error);
+            assert_eq!(receipt.boundary.failure, server.bridge.machine.failure);
+            assert_eq!(receipt.capture_evidence_error.is_some(), malformed_input);
+            assert!(responses.iter().all(|response| response.finished.is_none()));
+        }
+    }
+
+    #[test]
+    fn strict_failure_allows_tail_journaling_and_finish_without_overwriting_the_original_error() {
+        let mut server = server(&[0xe3a00000, 0xe2800001, 0xe3500041, 0x9afffffc, 0xe3a01006, 0xe3a02003, 0xe710f211]);
+        let input = format!("{DRAIN_FIRST_PAUSE}{}\n{}\n{}\n{}\n",
+            r#"{"command":"capture-observation-hits","from":65}"#,
+            r#"{"command":"capture-observation-ack","next":67}"#,
+            r#"{"command":"capture-observation-ack","next":66}"#,
+            r#"{"command":"capture-observation-hits","from":66}"#);
+        let (responses, receipt) = exchange(&mut server, &format!("{input}{{\"command\":\"finish\"}}\n"));
+        let terminal = responses.iter().find(|response| !response.ok && response.message.as_ref() == receipt.bridge_error.as_ref()).unwrap();
+        assert!(receipt.boundary.failure.is_some());
+        assert_eq!(receipt.boundary.failure, server.bridge.machine.failure);
+        let tail = responses.iter().rev().find(|response| response.next.is_some()).unwrap();
+        assert_eq!(tail.next, Some(CaptureCursor::new(66)));
+        assert_eq!(tail.boundary_complete, Some(true));
+        let finish = responses.last().unwrap();
+        assert!(!finish.ok);
+        assert_eq!(finish.finished, Some(true));
+        assert_eq!(finish.message, terminal.message);
+        assert!(receipt.capture_evidence_error.is_some());
+        assert_eq!(receipt.boundary.instructions, server.bridge.machine.instructions());
+        assert!(server.bridge.machine.instructions() < 8_000_000);
     }
 }

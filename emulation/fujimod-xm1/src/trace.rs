@@ -4,8 +4,8 @@ use crate::provenance::Guest;
 use fujimod_emulator::board::observation::InstructionPoints;
 use fujimod_emulator::session::Session;
 use fujimod_emulator_cpu::{Register, arm};
-use serde::{Serialize, Serializer, ser::SerializeSeq};
-use std::collections::{BTreeMap, BTreeSet};
+use serde::{Deserialize, Serialize, Serializer, ser::SerializeSeq};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// One entry into an armed site, before its instruction executes.
 #[derive(Clone, Debug, Serialize)]
@@ -29,16 +29,58 @@ const CAPTURE_PAGE_LIMIT: usize = 64;
 const CAPTURE_MEMORY_BYTES: usize = 2 * 1024 * 1024;
 const CAPTURE_OVERHEAD_BYTES: usize = 128 * 1024;
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct CaptureCursor(u64);
+
+impl CaptureCursor {
+    pub const fn new(value: u64) -> Self { Self(value) }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CollectionOutcome {
+    Continue,
+    Stop,
+    DrainRequired,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CaptureProtocolError {
+    Inactive,
+    WrongCursor,
+    NoPublishedPage,
+    WrongAcknowledgement,
+}
+
+impl std::fmt::Display for CaptureProtocolError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Inactive => "capture observation is not active",
+            Self::WrongCursor => "capture cursor must equal the acknowledged cursor",
+            Self::NoPublishedPage => "no capture page is published",
+            Self::WrongAcknowledgement => "acknowledgement must equal the published next cursor",
+        })
+    }
+}
+
+#[derive(Serialize)]
+pub struct CaptureAcknowledgement {
+    acknowledged: CaptureCursor,
+    pending: usize,
+}
+
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
-struct InstructionCount(u64);
+pub struct InstructionCount(u64);
 
 impl InstructionCount {
-    fn from_board(session: &Session) -> Result<Self, String> {
+    pub fn from_board(session: &Session) -> Result<Self, String> {
         session.board.instruction_counts().into_iter()
             .try_fold(0u64, |sum, count| sum.checked_add(count))
             .map(Self).ok_or_else(|| "aggregate instruction count exceeds 64 bits".into())
     }
+
+    pub(crate) fn value(self) -> u64 { self.0 }
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -288,7 +330,8 @@ struct SiteObservation {
     address: u32,
     total: u64,
     dropped: u64,
-    retained: u64,
+    captured: u64,
+    pending: u64,
     first_instructions: Option<InstructionCount>,
     last_instructions: Option<InstructionCount>,
     first_dropped_instructions: Option<InstructionCount>,
@@ -296,6 +339,7 @@ struct SiteObservation {
 }
 
 struct CaptureEvent {
+    sequence: CaptureCursor,
     site_index: usize,
     core: usize,
     instructions: InstructionCount,
@@ -308,7 +352,13 @@ struct CaptureEvent {
 
 struct CaptureObservation {
     sites: Vec<SiteObservation>,
-    events: Vec<CaptureEvent>,
+    events: VecDeque<CaptureEvent>,
+    acknowledged: CaptureCursor,
+    next_sequence: CaptureCursor,
+    published: Option<CaptureCursor>,
+    through_instructions: InstructionCount,
+    boundary_complete: bool,
+    drained_boundary_observed: bool,
     ram_incomplete: bool,
 }
 
@@ -321,6 +371,7 @@ const _: () = assert!(
 
 #[derive(Serialize)]
 struct CaptureEventView<'a> {
+    sequence: CaptureCursor,
     site: &'a str,
     address: u32,
     core: usize,
@@ -336,17 +387,16 @@ struct CaptureEventView<'a> {
 struct CaptureEvents<'a> {
     observation: &'a CaptureObservation,
     labels: &'a BTreeMap<u32, String>,
-    from: usize,
-    next: usize,
+    count: usize,
 }
 
 impl Serialize for CaptureEvents<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut sequence = serializer.serialize_seq(Some(self.next - self.from))?;
-        for event in &self.observation.events[self.from..self.next] {
+        let mut sequence = serializer.serialize_seq(Some(self.count))?;
+        for event in self.observation.events.iter().take(self.count) {
             let address = self.observation.sites[event.site_index].address;
             sequence.serialize_element(&CaptureEventView {
-                site: &self.labels[&address], address, core: event.core,
+                sequence: event.sequence, site: &self.labels[&address], address, core: event.core,
                 instructions: event.instructions, registers: &event.registers,
                 sp: event.sp, lr: event.lr, cpsr: event.cpsr,
                 ram: &event.ram, ram_incomplete: event.ram.incomplete,
@@ -380,9 +430,13 @@ impl Serialize for CaptureSites<'_> {
 
 #[derive(Serialize)]
 pub struct CaptureObservationPage<'a> {
-    from: usize,
-    next: usize,
-    retained: usize,
+    from: CaptureCursor,
+    next: CaptureCursor,
+    acknowledged: CaptureCursor,
+    pending: usize,
+    captured: u64,
+    through_instructions: InstructionCount,
+    boundary_complete: bool,
     total: u64,
     dropped: u64,
     incomplete: bool,
@@ -423,6 +477,7 @@ pub struct TraceSites {
     cores: CoreSelection,
     resumed: BTreeMap<usize, ResumeMarker>,
     capture_observation: Option<CaptureObservation>,
+    pending_points: Vec<Option<u64>>,
 }
 
 fn register(session: &Session, core: usize, register: arm::Register) -> Result<u32, String> {
@@ -439,8 +494,9 @@ impl TraceSites {
         if self.capture_observation.is_some() {
             return Err("capture observation is already active".into());
         }
-        if self.sites.len() > CAPTURE_SITE_LIMIT || self.sites.values().any(|label| label.len() > 64) {
-            return Err("capture observation exceeds the site or label bound".into());
+        if self.sites.len() > CAPTURE_SITE_LIMIT || self.points.len() > CAPTURE_SITE_LIMIT
+            || self.sites.values().any(|label| label.len() > 64) {
+            return Err("capture observation exceeds the site, core or label bound".into());
         }
         for label in self.sites.values_mut() {
             if label.capacity() > 64 {
@@ -450,27 +506,44 @@ impl TraceSites {
                 }
             }
         }
+        self.points.shrink_to_fit();
+        self.pending_points.shrink_to_fit();
         let mut sites = Vec::with_capacity(CAPTURE_SITE_LIMIT);
         sites.extend(self.sites.keys().map(|&address| SiteObservation { address, ..Default::default() }));
         self.hits = Vec::new();
         self.capture_observation = Some(CaptureObservation {
             sites,
-            events: Vec::with_capacity(CAPTURE_DETAIL_LIMIT),
+            events: VecDeque::with_capacity(CAPTURE_DETAIL_LIMIT),
+            acknowledged: CaptureCursor::default(),
+            next_sequence: CaptureCursor::default(),
+            published: None,
+            through_instructions: InstructionCount(0),
+            boundary_complete: false,
+            drained_boundary_observed: false,
             ram_incomplete: false,
         });
         Ok(())
     }
 
-    pub fn capture_observation_page(&self, from: usize) -> Result<CaptureObservationPage<'_>, String> {
-        let observation = self.capture_observation.as_ref().ok_or("capture observation is not active")?;
-        let retained = observation.events.len();
-        if from > retained {
-            return Err("capture observation offset exceeds retained details".into());
+    pub fn capture_observation_page(&mut self, from: CaptureCursor) -> Result<CaptureObservationPage<'_>, CaptureProtocolError> {
+        let observation = self.capture_observation.as_mut().ok_or(CaptureProtocolError::Inactive)?;
+        if from != observation.acknowledged {
+            return Err(CaptureProtocolError::WrongCursor);
         }
-        let next = retained.min(from + CAPTURE_PAGE_LIMIT);
+        let count = observation.events.len().min(CAPTURE_PAGE_LIMIT);
+        let next = CaptureCursor(from.0 + count as u64);
+        if count != 0 {
+            observation.published.get_or_insert(next);
+        } else if observation.boundary_complete {
+            observation.drained_boundary_observed = true;
+        }
         let dropped = observation.sites.iter().map(|site| site.dropped).sum();
         Ok(CaptureObservationPage {
-            from, next, retained,
+            from, next, acknowledged: observation.acknowledged,
+            pending: observation.events.len(),
+            captured: observation.next_sequence.0,
+            through_instructions: observation.through_instructions,
+            boundary_complete: observation.boundary_complete,
             total: observation.sites.iter().map(|site| site.total).sum(),
             dropped,
             incomplete: dropped != 0 || observation.ram_incomplete,
@@ -478,8 +551,41 @@ impl TraceSites {
             last_instructions: observation.sites.iter().filter_map(|site| site.last_instructions).max(),
             bounds: CAPTURE_OBSERVATION_BOUNDS,
             sites: CaptureSites { observation, labels: &self.sites },
-            hits: CaptureEvents { observation, labels: &self.sites, from, next },
+            hits: CaptureEvents { observation, labels: &self.sites, count },
         })
+    }
+
+    pub fn acknowledge_capture_observation(&mut self, next: CaptureCursor) -> Result<CaptureAcknowledgement, CaptureProtocolError> {
+        let observation = self.capture_observation.as_mut().ok_or(CaptureProtocolError::Inactive)?;
+        let published = observation.published.ok_or(CaptureProtocolError::NoPublishedPage)?;
+        if next != published {
+            return Err(CaptureProtocolError::WrongAcknowledgement);
+        }
+        for _ in observation.acknowledged.0..next.0 {
+            if let Some(event) = observation.events.pop_front() {
+                observation.sites[event.site_index].pending -= 1;
+            }
+        }
+        observation.acknowledged = next;
+        observation.published = None;
+        Ok(CaptureAcknowledgement { acknowledged: next, pending: observation.events.len() })
+    }
+
+    pub fn capture_page_outstanding(&self) -> bool {
+        self.capture_observation.as_ref().is_some_and(|observation| observation.published.is_some())
+    }
+
+    pub fn capture_drained(&self) -> bool {
+        self.capture_observation.as_ref().is_some_and(|observation| {
+            observation.events.is_empty() && observation.boundary_complete && observation.drained_boundary_observed
+        })
+    }
+
+    pub(crate) fn begin_advance(&mut self) {
+        if let Some(observation) = &mut self.capture_observation {
+            observation.boundary_complete = false;
+            observation.drained_boundary_observed = false;
+        }
     }
 
     pub fn capture_snapshot(&self, session: &Session) -> Result<Option<CaptureSnapshot>, String> {
@@ -527,6 +633,7 @@ impl TraceSites {
         for (core, mut points) in self.points.drain(..) {
             session.board.instruction_points_end(core, &mut points)?;
         }
+        self.pending_points.clear();
         Ok(())
     }
 
@@ -591,16 +698,28 @@ impl TraceSites {
             }
             let points = session.board.instruction_points_begin(core, addresses.clone())?;
             self.points.push((core, points));
+            self.pending_points.push(None);
         }
         Ok(())
     }
 
-    /// Records pending entries and lets their instructions run on resume.
-    /// Returns whether one of them is a stop label.
-    pub fn collect(&mut self, session: &Session) -> Result<bool, String> {
+    /// Pending hooks are retained until their details fit in the capture arena.
+    pub fn collect(&mut self, session: &Session, instructions: InstructionCount) -> Result<CollectionOutcome, String> {
+        if self.capture_page_outstanding() {
+            return Ok(CollectionOutcome::DrainRequired);
+        }
+        if let Some(observation) = &mut self.capture_observation {
+            observation.through_instructions = instructions;
+            observation.boundary_complete = false;
+        }
         let mut stop = false;
-        for (core, points) in &self.points {
-            let Some(pc) = points.event() else { continue };
+        for (index, (_, points)) in self.points.iter().enumerate() {
+            if self.pending_points[index].is_none() {
+                self.pending_points[index] = points.event();
+            }
+        }
+        for (point_index, (core, points)) in self.points.iter().enumerate() {
+            let Some(pc) = self.pending_points[point_index] else { continue };
             let address = u32::try_from(pc).map_err(|_| "trace site exceeds 32 bits")?;
             let site = self.sites.get(&address).ok_or("instruction point outside the armed sites")?;
             stop |= self.stop_labels.contains(site);
@@ -608,36 +727,41 @@ impl TraceSites {
                 if self.stop_labels.contains(site) {
                     return Err("capture observation encountered a rendezvous stop".into());
                 }
-                let instructions = InstructionCount::from_board(session)?;
+                let instructions = observation.through_instructions;
                 let index = observation.sites.binary_search_by_key(&address, |site| site.address)
                     .map_err(|_| "capture observation site is missing")?;
+                if observation.sites[index].pending == CAPTURE_DETAILS_PER_SITE
+                    || observation.events.len() == CAPTURE_DETAIL_LIMIT {
+                    return Ok(CollectionOutcome::DrainRequired);
+                }
+                let sequence = observation.next_sequence;
+                let next_sequence = sequence.0.checked_add(1).ok_or("capture event sequence exceeds 64 bits")?;
+                let registers = [
+                    register(session, *core, arm::Register::R(0))?,
+                    register(session, *core, arm::Register::R(1))?,
+                    register(session, *core, arm::Register::R(2))?,
+                    register(session, *core, arm::Register::R(3))?,
+                ];
+                let ram = CaptureRam::event(session, address, &registers);
+                let event = CaptureEvent {
+                    sequence, site_index: index, core: *core, instructions, registers,
+                    sp: register(session, *core, arm::Register::R(13))?,
+                    lr: register(session, *core, arm::Register::R(14))?,
+                    cpsr: register(session, *core, arm::Register::Cpsr)?,
+                    ram,
+                };
+                let current = session.board.read_register(*core, Register::Pc)?;
+                observation.ram_incomplete |= event.ram.incomplete;
+                observation.events.push_back(event);
+                observation.next_sequence = CaptureCursor(next_sequence);
                 let counts = &mut observation.sites[index];
                 counts.total += 1;
+                counts.captured += 1;
+                counts.pending += 1;
                 counts.first_instructions.get_or_insert(instructions);
                 counts.last_instructions = Some(instructions);
-                if counts.retained == CAPTURE_DETAILS_PER_SITE || observation.events.len() == CAPTURE_DETAIL_LIMIT {
-                    counts.dropped += 1;
-                    counts.first_dropped_instructions.get_or_insert(instructions);
-                    counts.last_dropped_instructions = Some(instructions);
-                } else {
-                    let registers = [
-                        register(session, *core, arm::Register::R(0))?,
-                        register(session, *core, arm::Register::R(1))?,
-                        register(session, *core, arm::Register::R(2))?,
-                        register(session, *core, arm::Register::R(3))?,
-                    ];
-                    let ram = CaptureRam::event(session, address, &registers);
-                    observation.ram_incomplete |= ram.incomplete;
-                    observation.events.push(CaptureEvent {
-                        site_index: index, core: *core, instructions, registers,
-                        sp: register(session, *core, arm::Register::R(13))?,
-                        lr: register(session, *core, arm::Register::R(14))?,
-                        cpsr: register(session, *core, arm::Register::Cpsr)?,
-                        ram,
-                    });
-                    counts.retained += 1;
-                }
-                let current = session.board.read_register(*core, Register::Pc)?;
+                observation.drained_boundary_observed = false;
+                self.pending_points[point_index] = None;
                 points.resume(current, pc);
                 continue;
             }
@@ -662,26 +786,30 @@ impl TraceSites {
             });
             let current = session.board.read_register(*core, Register::Pc)?;
             points.resume(current, pc);
+            self.pending_points[point_index] = None;
             if current == pc {
                 self.resumed.insert(*core, ResumeMarker { pc: Guest(address), entered: EnteredInstructions(counts[*core]) });
             } else {
                 self.resumed.remove(core);
             }
         }
-        Ok(stop)
+        if let Some(observation) = &mut self.capture_observation {
+            observation.boundary_complete = true;
+        }
+        Ok(if stop { CollectionOutcome::Stop } else { CollectionOutcome::Continue })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::TraceSites;
+    use super::{CaptureCursor, CaptureProtocolError, TraceSites};
 
     #[test]
     fn observation_rejects_inactive_cursor_invalid_cursor_and_duplicate_begin() {
         let mut traces = TraceSites::default();
-        assert!(traces.capture_observation_page(0).is_err());
+        assert!(matches!(traces.capture_observation_page(CaptureCursor::new(0)), Err(CaptureProtocolError::Inactive)));
         traces.begin_capture_observation().unwrap();
-        assert!(traces.capture_observation_page(1).is_err());
+        assert!(matches!(traces.capture_observation_page(CaptureCursor::new(1)), Err(CaptureProtocolError::WrongCursor)));
         assert!(traces.begin_capture_observation().is_err());
     }
 }

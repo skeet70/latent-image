@@ -4,6 +4,8 @@ use fujimod_emulator_cpu::{ExecutionPolicy, Model, Register, arm, timeline::Rati
 use fujimod_emulator_exr2_plan::Resources;
 use fujimod_xm1::{machine::Machine, peer_witness::{self, PeerContract}, run::RunDocument};
 use fujimod_xm1::provenance::Guest;
+use fujimod_xm1::machine::RunOutcome;
+use fujimod_xm1::trace::{CaptureCursor, CaptureProtocolError, InstructionCount};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -193,12 +195,195 @@ fn rejected_site_removal_preserves_active_capture_observations() {
     assert!(machine.traces.remove_site(&machine.session, Guest(0x1000)).is_err());
     machine.run(3);
     machine.require_running().unwrap();
-    let page = machine.traces.capture_observation_page(0).unwrap();
+    let page = machine.traces.capture_observation_page(CaptureCursor::new(0)).unwrap();
     let totals: CaptureTotals = serde_json::from_value(serde_json::to_value(page).unwrap()).unwrap();
     assert_eq!(totals.total, 2);
     assert_eq!(machine.instructions(), 3);
     assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 2);
     assert!(machine.traces.capture_observation_active());
+}
+
+#[derive(Debug, Deserialize, Eq, PartialEq)]
+struct StreamHit {
+    sequence: CaptureCursor,
+    core: usize,
+    instructions: u64,
+    registers: [u32; 4],
+}
+
+#[derive(Debug, Deserialize, Eq, PartialEq)]
+struct StreamSite {
+    total: u64,
+    captured: u64,
+    pending: u64,
+    dropped: u64,
+}
+
+#[derive(Debug, Deserialize, Eq, PartialEq)]
+struct StreamPage {
+    from: CaptureCursor,
+    next: CaptureCursor,
+    acknowledged: CaptureCursor,
+    total: u64,
+    captured: u64,
+    pending: usize,
+    dropped: u64,
+    through_instructions: u64,
+    boundary_complete: bool,
+    hits: Vec<StreamHit>,
+    sites: Vec<StreamSite>,
+}
+
+fn stream_page(machine: &mut Machine, cursor: CaptureCursor) -> StreamPage {
+    let page = machine.traces.capture_observation_page(cursor).unwrap();
+    serde_json::from_value(serde_json::to_value(page).unwrap()).unwrap()
+}
+
+fn drain_stream(machine: &mut Machine, cursor: &mut CaptureCursor, output: &mut Vec<StreamHit>) {
+    loop {
+        let instructions = InstructionCount::from_board(&machine.session).unwrap();
+        machine.traces.collect(&machine.session, instructions).unwrap();
+        let page = stream_page(machine, *cursor);
+        assert_eq!(page.from, *cursor);
+        assert_eq!(page.acknowledged, *cursor);
+        assert_eq!(page.dropped, 0);
+        assert!(page.sites.iter().all(|site| site.total == site.captured + site.dropped));
+        assert!(page.sites.iter().all(|site| site.pending <= 64));
+        assert!(page.pending <= 2048);
+        assert!(page.hits.len() <= 64);
+        if page.hits.is_empty() {
+            assert!(page.boundary_complete);
+            assert_eq!(page.through_instructions, machine.instructions());
+            assert!(machine.traces.capture_drained());
+            return;
+        }
+        output.extend(page.hits);
+        machine.traces.acknowledge_capture_observation(page.next).unwrap();
+        *cursor = page.next;
+    }
+}
+
+#[test]
+fn stream_pages_survive_wrong_and_duplicate_acknowledgements_without_reexecution() {
+    let mut observed = machine(&[0xe2800001, 0xeafffffd]);
+    observed.traces.arm(&observed.session, BTreeMap::from([(0x1000, "loop".into())])).unwrap();
+    observed.traces.begin_capture_observation().unwrap();
+    assert!(matches!(observed.traces.acknowledge_capture_observation(CaptureCursor::new(0)), Err(CaptureProtocolError::NoPublishedPage)));
+    assert_eq!(observed.run(1000), RunOutcome::DrainRequired);
+    let before = (observed.instructions(), context(&observed));
+    let page = stream_page(&mut observed, CaptureCursor::new(0));
+    assert_eq!(page.pending, 64);
+    assert_eq!(page.captured, 64);
+    assert!(!page.boundary_complete);
+    assert_eq!(page.hits.iter().map(|hit| hit.sequence).collect::<Vec<_>>(),
+        (0..64).map(CaptureCursor::new).collect::<Vec<_>>());
+    assert!(matches!(observed.traces.acknowledge_capture_observation(CaptureCursor::new(63)), Err(CaptureProtocolError::WrongAcknowledgement)));
+    assert!(matches!(observed.traces.capture_observation_page(CaptureCursor::new(1)), Err(CaptureProtocolError::WrongCursor)));
+    assert_eq!(observed.run(1000), RunOutcome::DrainRequired);
+    assert_eq!(stream_page(&mut observed, CaptureCursor::new(0)), page);
+    assert_eq!((observed.instructions(), context(&observed)), before);
+    observed.traces.acknowledge_capture_observation(page.next).unwrap();
+    assert!(matches!(observed.traces.acknowledge_capture_observation(page.next), Err(CaptureProtocolError::NoPublishedPage)));
+    assert!(!observed.traces.capture_drained());
+    let mut events = page.hits;
+    let mut cursor = page.next;
+    drain_stream(&mut observed, &mut cursor, &mut events);
+    assert_eq!(events.len(), 65);
+    assert_eq!(events.last().unwrap().sequence, CaptureCursor::new(64));
+    assert_eq!((observed.instructions(), context(&observed)), before);
+}
+
+#[test]
+fn multicore_backpressure_preserves_order_counts_and_guest_state_beyond_sixty_four_hits() {
+    let program = [0xe2800001, 0xeafffffd];
+    let mut observed = machine(&program);
+    let mut uninterrupted = machine(&program);
+    let sites = BTreeMap::from([(0x1000, "primary".into()), (0x2000, "secondary".into())]);
+    observed.traces.arm(&observed.session, sites.clone()).unwrap();
+    uninterrupted.traces.arm(&uninterrupted.session, sites).unwrap();
+    observed.traces.begin_capture_observation().unwrap();
+    let endpoint = 5001;
+    uninterrupted.run(endpoint);
+    uninterrupted.require_running().unwrap();
+    let mut events = Vec::new();
+    let mut cursor = CaptureCursor::new(0);
+    while observed.instructions() < endpoint {
+        let outcome = observed.run(endpoint - observed.instructions());
+        assert!(matches!(outcome, RunOutcome::Completed | RunOutcome::DrainRequired));
+        drain_stream(&mut observed, &mut cursor, &mut events);
+    }
+    assert_eq!(observed.session.board.instruction_counts(), uninterrupted.session.board.instruction_counts());
+    assert_eq!(context(&observed), context(&uninterrupted));
+    assert!(events.len() > 64);
+    assert!(events.iter().any(|hit| hit.core == 0));
+    assert!(events.iter().any(|hit| hit.core == 1));
+    assert_eq!(events.len(), uninterrupted.traces.hits.len());
+    for (index, (event, expected)) in events.iter().zip(&uninterrupted.traces.hits).enumerate() {
+        assert_eq!(event.sequence, CaptureCursor::new(index as u64));
+        assert_eq!((event.core, event.instructions), (expected.core, expected.instructions));
+        assert_eq!(event.registers[0], u32::from_str_radix(expected.registers["r0"].trim_start_matches("0x"), 16).unwrap());
+    }
+}
+
+#[test]
+fn aggregate_arena_yields_at_2048_details_and_reuses_only_acknowledged_storage() {
+    let mut program = vec![0xe2800001; 33];
+    program.push(0xeaffffdd);
+    let mut observed = machine(&program);
+    let sites = [0x1000, 0x2000].into_iter().flat_map(|base| {
+        (0..33).map(move |index| (base + index * 4, format!("entry-{base:x}-{index}")))
+    }).collect();
+    observed.traces.arm(&observed.session, sites).unwrap();
+    observed.traces.begin_capture_observation().unwrap();
+    assert_eq!(observed.run(10_000), RunOutcome::DrainRequired);
+    let page = stream_page(&mut observed, CaptureCursor::new(0));
+    assert_eq!(page.pending, 2048);
+    assert_eq!(page.hits.len(), 64);
+    assert!(page.sites.iter().all(|site| site.pending < 64));
+    let before = (observed.instructions(), context(&observed));
+    observed.traces.acknowledge_capture_observation(page.next).unwrap();
+    let mut events = page.hits;
+    let mut cursor = page.next;
+    drain_stream(&mut observed, &mut cursor, &mut events);
+    assert!(events.len() > 2048);
+    assert_eq!((observed.instructions(), context(&observed)), before);
+    assert_eq!(events.iter().map(|hit| hit.sequence).collect::<Vec<_>>(),
+        (0..events.len() as u64).map(CaptureCursor::new).collect::<Vec<_>>());
+}
+
+#[test]
+fn finite_entry_endpoints_and_terminal_tail_collection_do_not_advance_the_guest() {
+    let program = [0xe2800001, 0xeafffffd];
+    let mut observed = machine(&program);
+    let mut uninterrupted = machine(&program);
+    observed.traces.arm(&observed.session, BTreeMap::from([(0x1000, "add".into()), (0x1004, "branch".into())])).unwrap();
+    observed.traces.begin_capture_observation().unwrap();
+    let mut events = Vec::new();
+    let mut cursor = CaptureCursor::new(0);
+    for endpoint in 1..=260 {
+        observed.run(endpoint - observed.instructions());
+        drain_stream(&mut observed, &mut cursor, &mut events);
+        assert_eq!(observed.instructions(), endpoint);
+    }
+    uninterrupted.run(260);
+    assert_eq!(context(&observed), context(&uninterrupted));
+    assert_eq!(observed.session.board.instruction_counts(), uninterrupted.session.board.instruction_counts());
+    assert_eq!(events.iter().map(|event| event.sequence).collect::<Vec<_>>(),
+        (0..events.len() as u64).map(CaptureCursor::new).collect::<Vec<_>>());
+
+    let mut failed = machine(&[0xe3a01902, 0xe5910000]);
+    failed.traces.arm(&failed.session, BTreeMap::from([(0x1000, "prepare".into()), (0x1004, "unmapped-load".into())])).unwrap();
+    failed.traces.begin_capture_observation().unwrap();
+    assert_eq!(failed.run(100), RunOutcome::Failed);
+    let failure = failed.failure.clone();
+    let boundary = (failed.instructions(), context(&failed));
+    let mut cursor = CaptureCursor::new(0);
+    let mut tail = Vec::new();
+    drain_stream(&mut failed, &mut cursor, &mut tail);
+    assert_eq!(tail.iter().map(|hit| hit.registers[1]).collect::<Vec<_>>(), [0, 0x8000]);
+    assert_eq!(failed.run(100), RunOutcome::Failed);
+    assert_eq!(failed.failure, failure);
+    assert_eq!((failed.instructions(), context(&failed)), boundary);
 }
 
 #[derive(Deserialize, PartialEq, Eq, Debug)]
@@ -339,4 +524,47 @@ fn standalone_configuration_refusal_keeps_initial_and_handoff_identity_unobserve
     assert_eq!(receipt.instructions, 0);
     receipt.initial_record_sha256.assert_unobserved();
     receipt.handoff_record_immutable_sha256.assert_unobserved();
+}
+
+#[test]
+fn strict_stop_pending_hook_is_collected_read_only_before_claiming_a_complete_boundary() {
+    let mut observed = machine(&[0xe3a01006, 0xe3a02003, 0xe710f211]);
+    observed.traces.arm(&observed.session, BTreeMap::from([(0x1008, "strict-stop".into())])).unwrap();
+    observed.traces.begin_capture_observation().unwrap();
+    assert_eq!(observed.run(100), RunOutcome::Failed);
+    let failure = observed.failure.clone();
+    let boundary = (observed.instructions(), context(&observed));
+    let before = stream_page(&mut observed, CaptureCursor::new(0));
+    assert!(before.hits.is_empty());
+    assert!(!before.boundary_complete);
+    let mut events = Vec::new();
+    let mut cursor = CaptureCursor::new(0);
+    drain_stream(&mut observed, &mut cursor, &mut events);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].registers[1..3], [6, 3]);
+    assert_eq!(events[0].instructions, boundary.0);
+    assert_eq!(observed.failure, failure);
+    assert_eq!((observed.instructions(), context(&observed)), boundary);
+}
+
+#[test]
+fn ff80_advance_returns_backpressure_and_reaches_the_original_endpoint_after_drain() {
+    use fujimod_xm1::ff80::{Ff80, RendezvousInputs};
+    let mut observed = machine(&[0xe2800001, 0xeafffffd]);
+    observed.traces.arm(&observed.session, BTreeMap::from([(0x1000, "loop".into())])).unwrap();
+    let mut bridge = Ff80::new(observed, RendezvousInputs::MenuUp);
+    bridge.begin_capture_observation().unwrap();
+    assert_eq!(bridge.advance(301).unwrap(), RunOutcome::DrainRequired);
+    let mut cursor = CaptureCursor::new(0);
+    let mut events = Vec::new();
+    loop {
+        drain_stream(&mut bridge.machine, &mut cursor, &mut events);
+        let remaining = 301 - bridge.machine.instructions();
+        if bridge.advance(remaining).unwrap() == RunOutcome::Completed { break; }
+    }
+    drain_stream(&mut bridge.machine, &mut cursor, &mut events);
+    assert_eq!(bridge.machine.instructions(), 301);
+    assert_eq!(bridge.machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 151);
+    assert_eq!(events.len(), 151);
+    assert!(bridge.machine.failure.is_none());
 }

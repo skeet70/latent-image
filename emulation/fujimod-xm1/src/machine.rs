@@ -5,7 +5,7 @@ use crate::guest::{DialTurn, GpioKey, MenuState, ModeDialPosition, ModeDialWindo
 use crate::r4f::Guard;
 use crate::run::RunDocument;
 use crate::sd_host::{Contacts, MediaRead, RetainedCard, SectorAddress, SectorCount, SdHost};
-use crate::trace::TraceSites;
+use crate::trace::{CollectionOutcome, InstructionCount, TraceSites};
 use fujimod_emulator::session::Session;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -16,6 +16,14 @@ const PHASE_POLL: u64 = 20_000;
 /// Longest run between two guard scans.
 const GUARD_WINDOW: u64 = 1_000_000;
 
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RunOutcome {
+    Completed,
+    Stopped,
+    DrainRequired,
+    Failed,
+}
 /// Fixed hold and debounced-release cap in guest instructions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeyPulse {
@@ -153,23 +161,59 @@ impl Machine {
     }
 
     /// Records every armed site entered, and returns early after a stop label's entry.
-    pub fn run(&mut self, count: u64) {
-        if self.failure.is_some() || count == 0 {
-            return;
+    pub fn run(&mut self, count: u64) -> RunOutcome {
+        if self.failure.is_some() {
+            return RunOutcome::Failed;
         }
-        let end = self.instructions().saturating_add(count);
-        while self.failure.is_none() && self.instructions() < end {
-            let window = end.min(self.instructions().saturating_add(GUARD_WINDOW));
+        if self.traces.capture_page_outstanding() {
+            return RunOutcome::DrainRequired;
+        }
+        let mut current = match InstructionCount::from_board(&self.session) {
+            Ok(current) => current,
+            Err(error) => {
+                self.failure = Some(error);
+                return RunOutcome::Failed;
+            }
+        };
+        let end = current.value().saturating_add(count);
+        if self.traces.capture_observation_active() {
+            match self.traces.collect(&self.session, current) {
+                Ok(CollectionOutcome::DrainRequired) => return RunOutcome::DrainRequired,
+                Ok(CollectionOutcome::Stop) => return RunOutcome::Stopped,
+                Ok(CollectionOutcome::Continue) => {}
+                Err(error) => {
+                    self.failure = Some(error);
+                    return RunOutcome::Failed;
+                }
+            }
+        }
+        loop {
+            if current.value() >= end {
+                return RunOutcome::Completed;
+            }
+            let window = end.min(current.value().saturating_add(GUARD_WINDOW));
+            self.traces.begin_advance();
             let result = self.session.board.run_window(window, self.document.execution.quantum, None, None);
             let refused = self.guard.scan(&self.session.board);
             if let Err(error) = refused.and(result) {
                 self.failure = Some(error);
-                break;
+                return RunOutcome::Failed;
             }
-            match self.traces.collect(&self.session) {
-                Ok(true) => break,
-                Ok(false) => {}
-                Err(error) => self.failure = Some(error),
+            current = match InstructionCount::from_board(&self.session) {
+                Ok(current) => current,
+                Err(error) => {
+                    self.failure = Some(error);
+                    return RunOutcome::Failed;
+                }
+            };
+            match self.traces.collect(&self.session, current) {
+                Ok(CollectionOutcome::Stop) => return RunOutcome::Stopped,
+                Ok(CollectionOutcome::DrainRequired) => return RunOutcome::DrainRequired,
+                Ok(CollectionOutcome::Continue) => {}
+                Err(error) => {
+                    self.failure = Some(error);
+                    return RunOutcome::Failed;
+                }
             }
         }
     }

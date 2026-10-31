@@ -4,7 +4,7 @@
 //! bridge (`tools/continue_rec_scanout.py`, `_FF80EndpointBridge`).
 
 use crate::guest::{Press, RouteKey};
-use crate::machine::{KeyPulse, Machine};
+use crate::machine::{KeyPulse, Machine, RunOutcome};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Instant;
@@ -224,6 +224,7 @@ impl Ff80 {
     }
 
     pub fn begin_capture_observation(&mut self) -> Result<(), String> {
+        self.machine.require_running()?;
         if self.rendezvous_complete || self.rendezvous.last().is_some_and(|event| event.released_instructions.is_none()) {
             return Err("capture observation cannot replace an active rendezvous trace".into());
         }
@@ -295,14 +296,25 @@ impl Ff80 {
         Ok(())
     }
 
-    pub fn advance(&mut self, count: u64) -> Result<(), String> {
-        let end = self.machine.instructions().saturating_add(count);
-        while self.machine.instructions() < end {
+    pub fn advance(&mut self, count: u64) -> Result<RunOutcome, String> {
+        if count == 0 && !self.machine.traces.capture_observation_active() {
             self.machine.require_running()?;
-            self.machine.run(end - self.machine.instructions());
-            self.observe()?;
+            return Ok(RunOutcome::Completed);
         }
-        self.machine.require_running()
+        let end = self.machine.instructions().saturating_add(count);
+        loop {
+            self.machine.require_running()?;
+            let remaining = end.saturating_sub(self.machine.instructions());
+            let outcome = self.machine.run(remaining);
+            self.machine.require_running()?;
+            self.observe()?;
+            if outcome == RunOutcome::DrainRequired {
+                return Ok(outcome);
+            }
+            if self.machine.instructions() >= end {
+                return Ok(RunOutcome::Completed);
+            }
+        }
     }
 
     /// Runs until `ready` holds.
