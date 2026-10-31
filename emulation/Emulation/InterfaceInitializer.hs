@@ -144,8 +144,9 @@ stackExtent image symbols = do
                 pure (Just low, negate low)
             clearSlots low bytes = Set.filter (\saved -> saved + 4 <= low || low + bytes <= saved)
             trimSlots newSp = Set.filter (>= newSp)
+            unresolvedStore = state {savedReturns = Set.empty}
             storeReturn condition source location = case location of
-              Nothing -> state
+              Nothing -> unresolvedStore
               Just low ->
                 let cleared = clearSlots low 4 slots
                     updatedSlots =
@@ -258,7 +259,7 @@ stackExtent image symbols = do
             require (M.notMember source aliases) "initializer compiler store spills a stack alias"
             require (all (`M.notMember` aliases) (base : offsetRegisters offset) && indexing == A.OffsetOnly)
               "unadmitted indexed compiler frame store"
-            pure (next state, state, 0, False)
+            pure (next unresolvedStore, unresolvedStore, 0, False)
           A.Branch condition False target -> pure
             ((target, state) : [(pc + 4, state) | condition /= A.Cond 14], state, 0, False)
           A.BranchExchange condition False register -> returning condition (Set.member register returnRegisters) state
