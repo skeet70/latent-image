@@ -8,6 +8,7 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.Text as T
+import qualified Data.Vector as V
 import System.Directory (createDirectory, doesPathExist, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitFailure)
@@ -17,6 +18,14 @@ import System.Process (proc, readCreateProcessWithExitCode)
 
 check :: String -> Bool -> IO ()
 check label passed = unless passed (putStrLn ("FAIL: " ++ label) >> exitFailure)
+
+require :: String -> Maybe a -> IO a
+require label = maybe (putStrLn ("FAIL: " ++ label) >> exitFailure) pure
+
+decodedObject :: String -> B.ByteString -> IO (KM.KeyMap Value)
+decodedObject label bytes = require (label ++ " decodes as a JSON object") $ case decodeStrict bytes of
+  Just (Object o) -> Just o
+  _ -> Nothing
 
 -- | A base run document whose input clock has the given mode; the extra
 -- options text, if any, ends with a comma.
@@ -48,20 +57,23 @@ fixture = fixtureDeclaring "\"schema\":1"
 readbackFixture :: B.ByteString -> B.ByteString
 readbackFixture law = fixtureDeclaring ("\"schema\":2,\"enable_readback\":\"" <> law <> "\"") 4096 2
 
-overOptions :: (KM.KeyMap Value -> KM.KeyMap Value) -> Value -> Value
-overOptions f = at "devices" (at "nodes" eachNode)
+-- | The options of the single image_input node, and the document with them
+-- replaced.
+imageInputOptions :: KM.KeyMap Value -> Maybe (KM.KeyMap Value, KM.KeyMap Value -> KM.KeyMap Value)
+imageInputOptions document = do
+  Object devices <- KM.lookup "devices" document
+  Array nodes <- KM.lookup "nodes" devices
+  [index] <- Just (V.toList (V.findIndices named nodes))
+  Object node <- Just (nodes V.! index)
+  Object model <- KM.lookup "model" node
+  Object options <- KM.lookup "options" model
+  let replace options' =
+        let node' = KM.insert "model" (Object (KM.insert "options" (Object options') model)) node
+         in KM.insert "devices" (Object (KM.insert "nodes" (Array (nodes V.// [(index, Object node')])) devices)) document
+  pure (options, replace)
  where
-  eachNode (Array nodes) = Array (fmap (at "model" (at "options" options)) nodes)
-  eachNode value = value
-  options (Object o) = Object (f o)
-  options value = value
-  at key g (Object o) = Object (KM.mapWithKey (\k v -> if k == key then g v else v) o)
-  at _ _ value = value
-
-identityReadback :: String -> Maybe Value
-identityReadback out = case decodeStrict (C8.pack out) of
-  Just (Object record) -> KM.lookup "enable_readback" record
-  _ -> Nothing
+  named (Object o) = KM.lookup "name" o == Just (String "image_input")
+  named _ = False
 
 main :: IO ()
 main = do
@@ -98,21 +110,25 @@ main = do
   written <- doesPathExist refused
   check ("a raster whose byte count overflows Int is refused: " ++ overflowErr) (overflow /= ExitSuccess && null overflowOut && not written)
 
-  let schema1Document = decodeStrict bytes :: Maybe Value
-  check "a schema-1 document has no enable_readback option" (fmap (overOptions (KM.delete "enable_readback")) schema1Document == schema1Document)
-  check "a schema-1 identity record has no enable_readback" (identityReadback out == Nothing)
+  schema1Document <- decodedObject "the schema-1 document" bytes
+  (schema1Options, _) <- require "the schema-1 document has image_input options" (imageInputOptions schema1Document)
+  check "the schema-1 options have no enable_readback" (not (KM.member "enable_readback" schema1Options))
+  schema1Record <- decodedObject "the schema-1 identity record" (C8.pack out)
+  check "the schema-1 identity record has no enable_readback" (not (KM.member "enable_readback" schema1Record))
   forM_ ["identity", "exchanged_source_bits"] $ \law -> do
     let lawFixture = root </> ("readback-" ++ C8.unpack law ++ ".json")
         lawDocument = root </> ("derived-" ++ C8.unpack law ++ ".json")
         lawValue = String (T.pack (C8.unpack law))
+        named label = "the " ++ C8.unpack law ++ " " ++ label
     B.writeFile lawFixture (readbackFixture law)
     (lawCode, lawOut, lawErr) <- write run lawFixture lawDocument
-    check ("a schema-2 " ++ C8.unpack law ++ " fixture derives: " ++ lawErr) (lawCode == ExitSuccess)
-    document <- decodeStrict <$> B.readFile lawDocument
-    check
-      ("the " ++ C8.unpack law ++ " document differs from the schema-1 document only by options.enable_readback")
-      (document == fmap (overOptions (KM.insert "enable_readback" lawValue)) schema1Document)
-    check ("the " ++ C8.unpack law ++ " identity record carries the law") (identityReadback lawOut == Just lawValue)
+    check (named "fixture derives: " ++ lawErr) (lawCode == ExitSuccess)
+    document <- B.readFile lawDocument >>= decodedObject (named "document")
+    (options, replaceOptions) <- require (named "document has image_input options") (imageInputOptions document)
+    check (named "options carry enable_readback") (KM.lookup "enable_readback" options == Just lawValue)
+    check (named "document otherwise equals the schema-1 document") (replaceOptions (KM.delete "enable_readback" options) == schema1Document)
+    record <- decodedObject (named "identity record") (C8.pack lawOut)
+    check (named "identity record carries the law") (KM.lookup "enable_readback" record == Just lawValue)
 
   let exchanged = root </> "readback-exchanged_source_bits.json"
       unknownLaw = root </> "unknown-law.json"
