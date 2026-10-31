@@ -374,7 +374,8 @@
     {"address":"0x0095047c","bytes":4,"name":"modal selection word","source":"replacement/owned_menu/src/lifecycle.rs; class 5 paths write one byte"},
     {"address":"0x009503c0","bytes":4,"name":"modal dialog word","source":"replacement/owned_menu/src/lifecycle.rs"},
     {"address":"0x0095201c","bytes":4,"name":"modal mode request","source":"replacement/owned_menu/src/lifecycle.rs"},
-    {"address":"0x00950104","bytes":8,"name":"modal mode flags","source":"replacement/owned_menu/src/lifecycle.rs"},
+    {"address":"0x00950104","bytes":4,"name":"modal mode select flag","source":"replacement/owned_menu/src/lifecycle.rs"},
+    {"address":"0x00950108","bytes":4,"name":"modal mode apply flag","source":"replacement/owned_menu/src/lifecycle.rs"},
     {"address":"0x009537f8","bytes":4,"name":"modal mode latch","source":"replacement/owned_menu/src/lifecycle.rs"},
     {"address":"0x01514220","bytes":4,"name":"CC RAW request film","source":"menu/classic_chrome_ram.S cc_ram_raw_request"},
     {
