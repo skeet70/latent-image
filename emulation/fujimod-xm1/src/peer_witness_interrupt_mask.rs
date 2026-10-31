@@ -75,7 +75,7 @@ impl ConsumerWire {
 #[derive(Serialize)]
 struct CodeViews { start: Guest, views: Views }
 #[derive(Serialize)]
-struct ServiceAlias { core: usize, guest: Address, physical: Address, words: [Word; 9] }
+struct ServiceAlias { core: WitnessCore, guest: Address, physical: Address, words: [Word; 9] }
 #[derive(Serialize)]
 pub(in crate::peer_witness::loader) struct Receipt {
     kind: ConsumerKind,
@@ -100,14 +100,17 @@ fn span((start, end): (u64, u64)) -> Result<ScopeSpan, String> {
 fn code_spans() -> impl Iterator<Item = (u64, u64)> {
     CODE.into_iter().map(|(start, words)| (u64::from(start), u64::from(start) + words.len() as u64 * 4))
 }
-fn protected(frame: bool) -> Vec<(u64, u64)> {
+#[derive(Clone, Copy)]
+enum Phase { Prelude, Consumer }
+fn protected(phase: Phase) -> Vec<(u64, u64)> {
     let mut spans = vec![TABLE, ROOTS, SELECTOR];
     spans.extend(code_spans());
     spans.push((0xd0ab0, 0xd0af0));
-    if frame { spans.push(CALL_FRAME); }
+    if matches!(phase, Phase::Consumer) { spans.push(CALL_FRAME); }
     spans
 }
-fn begin(machine: &mut Machine, runner: &Runner<'_>, prelude: bool) -> Result<Box<ScopedMemoryWatch>, String> {
+fn begin(machine: &mut Machine, runner: &Runner<'_>, phase: Phase) -> Result<Box<ScopedMemoryWatch>, String> {
+    let prelude = matches!(phase, Phase::Prelude);
     let class = |(start, end), kinds| WatchRange { start, end, kinds };
     let mut classes = vec![class(TABLE, WatchKinds::CPU_READ.union(WatchKinds::WRITES)),
         class(ROOTS, if prelude { WatchKinds::CPU_READ.union(WatchKinds::WRITES) } else { WatchKinds::WRITES })];
@@ -120,7 +123,7 @@ fn begin(machine: &mut Machine, runner: &Runner<'_>, prelude: bool) -> Result<Bo
     if prelude {
         classes.extend([class(SELECTOR, WatchKinds::CPU_READ.union(WatchKinds::WRITES)), class(MAGIC, WatchKinds::CPU_READ)]);
     }
-    let guarded = protected(!prelude);
+    let guarded = protected(phase);
     let owned = runner.contract.initializer.as_ref().is_some_and(ContractInitializer::owns_body);
     let mut forbidden_reads = Vec::with_capacity(2);
     if prelude { forbidden_reads.push(span(TABLE)?); }
@@ -207,6 +210,7 @@ fn service_aliases(machine: &Machine, runner: &Runner<'_>, tcm: &TcmWords,
     tcm_disjoint_views(&runner.committed, tcm, &[(start, start + 36)])?;
     let mut bytes = [0; 36];
     for core in 0..2 {
+        let observed_core = WitnessCore::from_index(core)?;
         for guest in [start, ZERO_GUEST + start] {
             require(runner.physical_of(core, guest, 36)? == start, "consumer service alias mapping differs")?;
             machine.session.board.read_memory(core, guest, &mut bytes)?;
@@ -216,7 +220,7 @@ fn service_aliases(machine: &Machine, runner: &Runner<'_>, tcm: &TcmWords,
             });
             require(words.iter().zip(SERVICE).all(|(actual, expected)| actual.0 == *expected),
                 "consumer service alias words differ")?;
-            result.push(ServiceAlias { core, guest: Address(guest), physical: Address(start), words });
+            result.push(ServiceAlias { core: observed_core, guest: Address(guest), physical: Address(start), words });
         }
     }
     Ok(())
@@ -305,7 +309,7 @@ pub(in crate::peer_witness::loader) fn observe(machine: &mut Machine, runner: &R
     require(start.pc == initializer.after.pc && start.registers == initializer.after.registers && start.sp == initializer.after.sp
         && start.lr == initializer.after.lr && start.cpsr == initializer.after.cpsr && start.counts.0 == initializer.after.counts.0
         && start.tcm == initializer.after.tcm, "consumer does not continue the complete initializer exit")?;
-    let mut prelude = begin(machine, runner, true)?;
+    let mut prelude = begin(machine, runner, Phase::Prelude)?;
     let prelude_outcome = (|| {
         let dispatch = stop(machine, DISPATCH)?;
         require(dispatch.registers[0].0 == 1 && dispatch.registers[3].0 == TABLE_GUEST as u32
@@ -347,7 +351,7 @@ pub(in crate::peer_witness::loader) fn observe(machine: &mut Machine, runner: &R
     let mut hashes: [Sha256Digest; 7] = std::array::from_fn(|index| Sha256Digest::of(&resources[index].1.physical));
     aliases(machine, runner, &dispatch.tcm, &resources, &hashes, &mut bindings)?;
     service_aliases(machine, runner, &dispatch.tcm, &mut service_bindings)?;
-    let mut watch = begin(machine, runner, false)?;
+    let mut watch = begin(machine, runner, Phase::Consumer)?;
     let outcome = (|| {
         let entered = stop(machine, ENTERED)?;
         let returned = stop(machine, RETURNED)?;
