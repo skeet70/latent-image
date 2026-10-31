@@ -234,3 +234,56 @@ fn control_configuration_failure_still_writes_a_schema_two_receipt() {
         assert!(receipt.clear_readback.is_none());
     }
 }
+
+#[cfg(feature = "scoped-watch")]
+#[derive(Deserialize)]
+struct ComposedFailure {
+    schema: u32,
+    result: ResultStatus,
+    instructions: u64,
+    startup: ComposedBinding,
+}
+
+#[cfg(feature = "scoped-watch")]
+#[derive(Deserialize)]
+struct ComposedBinding {
+    kind: ComposedKind,
+    entry: u32,
+    secondary_entry: u32,
+    record1_sha256: String,
+}
+
+#[cfg(feature = "scoped-watch")]
+#[derive(Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum ComposedKind { Composed }
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn composed_configuration_refusal_keeps_its_schema_and_selected_startup_identity() {
+    let mut machine = machine(&[0xeafffffe]);
+    machine.document.execution.quantum = 999;
+    let digest = "ab".repeat(32);
+    let contract = format!(r#"{{"schema":5,"budget":50000000,"scenario":{{"kind":"natural"}},
+        "program":{{"kind":"owned","record_sha256":"{digest}","loader_sha256":"{digest}",
+        "handoff":66592,"entry":66604,"load":66700,"post_load":66704,"loaded_register":0,"poll_period":256,
+        "image":[66560,68096],"refusal":null,"forbid_fetch":[[852000,852168],[854444,854480],[854596,854628]],
+        "forbid_read":[[852168,852220]]}},
+        "startup":{{"kind":"composed","record1_sha256":"{digest}","image_sha256":"{digest}",
+        "symbols_sha256":"{digest}","source_sha256":"{digest}","image":[24576,25088],"entry":24576,"handoff":24608,
+        "handoff_target":262176,"handoff_argument":6934008,"secondary_entry":66560,"secondary_image_sha256":"{digest}",
+        "secondary_symbols_sha256":"{digest}","secondary_source_sha256":"{digest}"}}}}"#);
+    let output = std::env::temp_dir().join(format!("peer-composed-{}-{}", std::process::id(), OUTPUT.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir(&output).unwrap();
+    let result = peer_witness::run(machine, PeerContract::parse(contract.as_bytes()).unwrap(), &output);
+    let receipt: ComposedFailure = serde_json::from_slice(&std::fs::read(output.join("peer-witness.json")).unwrap()).unwrap();
+    std::fs::remove_dir_all(&output).unwrap();
+    assert!(result.is_err());
+    assert_eq!(receipt.schema, 5);
+    assert_eq!(receipt.result, ResultStatus::Failed);
+    assert_eq!(receipt.instructions, 0);
+    assert_eq!(receipt.startup.kind, ComposedKind::Composed);
+    assert_eq!(receipt.startup.entry, 0x6000);
+    assert_eq!(receipt.startup.secondary_entry, 0x10400);
+    assert_eq!(receipt.startup.record1_sha256, digest);
+}

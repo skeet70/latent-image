@@ -1,6 +1,4 @@
-//! Schema-4 observation of the loader-B core-1 prefix, retained or owned, from
-//! the paused record-2 handoff to pre-execution 0xd0aac under the scoped
-//! memory watch, with classified watches from reset to the handoff.
+//! Standalone and composed loader-B prefix observation from natural reset.
 use super::*;
 use super::startup::{tcm_disjoint_views, tcm_window};
 use super::wait::{self, BoardState, CoreCounts, LOADER_B_SHA256, RECORD2_SHA256, require};
@@ -46,6 +44,17 @@ const HEAD_BOUND: u8 = 8;
 const TAIL_BOUND: u8 = 2;
 const MICROSTEPS: usize = 2048;
 const MAX_STOPS: usize = 64;
+
+const FIRST_ENTRY: u32 = 0x6000;
+const SECOND_ENTRY: u32 = 0x10400;
+const FIRST_RECORD: (u64, u64) = (0, 0x10000);
+const FIRST_VECTORS: (u64, u64) = (0, 0x40);
+const FIRST_REPLACED: (u64, u64) = (0x1800, 0x1804);
+const SECOND_REPLACED: [(u64, u64); 7] = [
+    (0x11800, 0x11854), (0x119e4, 0x11abc), (0x11cc0, 0x11fe4), (0x12960, 0x12974),
+    (0x12abc, 0x12ad0), (0x13490, 0x13574), (0x1386c, 0x138ac),
+];
+const SECOND_POOLS: [(u64, u64); 3] = [(0x11ac4, 0x11acc), (0x11ad4, 0x11ae8), (0x11fe4, 0x11fec)];
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -98,6 +107,60 @@ pub(super) struct LoaderWire {
     program: ProgramWire,
 }
 
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum StartupKind { Composed }
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ComposedStartup {
+    kind: StartupKind,
+    record1_sha256: Sha256Digest,
+    image_sha256: Sha256Digest,
+    symbols_sha256: Sha256Digest,
+    source_sha256: Sha256Digest,
+    image: (Guest, Guest),
+    entry: Guest,
+    handoff: Guest,
+    handoff_target: Guest,
+    handoff_argument: Word,
+    secondary_entry: Guest,
+    secondary_image_sha256: Sha256Digest,
+    secondary_symbols_sha256: Sha256Digest,
+    secondary_source_sha256: Sha256Digest,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ComposedWire {
+    schema: u32,
+    budget: Instructions,
+    scenario: ScenarioWire,
+    program: ProgramWire,
+    startup: ComposedStartup,
+}
+
+impl ComposedWire {
+    pub(super) fn validate(self) -> Result<LoaderContract, String> {
+        require(self.schema == 5, "composed startup requires schema 5")?;
+        let startup = self.startup;
+        let mut contract = LoaderWire { schema: 4, budget: self.budget, scenario: self.scenario, program: self.program }.validate()?;
+        require(contract.kind == ProgramKind::Owned, "composed startup requires the owned secondary and prefix image")?;
+        let (start, end) = (startup.image.0 .0, startup.image.1 .0);
+        require(start == FIRST_ENTRY && start < end && end <= FIRST_RECORD.1 as u32 && end % 4 == 0
+            && startup.entry == Guest(FIRST_ENTRY) && startup.secondary_entry == Guest(SECOND_ENTRY),
+            "composed startup image or entries differ from the linked origins")?;
+        require(startup.handoff.0 % 4 == 0 && (start..end).contains(&startup.handoff.0) && startup.handoff != startup.entry
+            && startup.handoff_target.0 % 4 == 0 && startup.handoff_target.0 != 0
+            && startup.handoff_argument.0 == ARGUMENT, "composed first-stage handoff sites or argument differ")?;
+        require(contract.image.is_some_and(|(start, _)| start == Guest(SECOND_ENTRY))
+            && startup.source_sha256 == startup.secondary_source_sha256,
+            "composed startup secondary origin or source identities differ")?;
+        contract.startup = Some(startup);
+        Ok(contract)
+    }
+}
+
 pub(super) struct LoaderContract {
     scenario: Scenario,
     kind: ProgramKind,
@@ -108,10 +171,39 @@ pub(super) struct LoaderContract {
     post_load: Guest,
     loaded: RegisterIndex,
     refusal: Option<Guest>,
+    image: Option<(Guest, Guest)>,
+    startup: Option<ComposedStartup>,
 }
 impl LoaderContract {
     pub(super) fn budget(&self) -> Instructions {
         Instructions(BUDGET)
+    }
+    fn record1_entry(&self) -> u32 {
+        self.startup.as_ref().map_or(RECORD1_ENTRY, |startup| startup.entry.0)
+    }
+    fn append_composed_classes(&self, classes: &mut Vec<WatchRange>) {
+        let Some(startup) = &self.startup else { return };
+        let class = |(start, end), kinds| WatchRange { start, end, kinds };
+        classes.extend([
+            class((u64::from(startup.image.0 .0), u64::from(startup.image.1 .0)), WatchKinds::WRITES),
+            class(FIRST_VECTORS, WatchKinds::WRITES),
+            class(FIRST_REPLACED, WatchKinds::CPU_FETCH),
+        ]);
+        classes.extend(SECOND_REPLACED.into_iter().map(|span| class(span, WatchKinds::CPU_FETCH)));
+        classes.extend(SECOND_POOLS.into_iter().map(|span| class(span, WatchKinds::CPU_READ)));
+    }
+
+    fn composed_event_forbidden(&self, event: &GuardEvent) -> bool {
+        let Some(startup) = &self.startup else { return false };
+        let Some(Address(physical)) = event.physical else { return true };
+        let overlaps = |(start, end)| physical < end && start < physical.saturating_add(event.size);
+        match event.source {
+            GuardSource::CpuWrite | GuardSource::HostWrite | GuardSource::ModelBusWrite =>
+                [FIRST_VECTORS, (u64::from(startup.image.0 .0), u64::from(startup.image.1 .0))].into_iter().any(overlaps),
+            GuardSource::CpuFetch => std::iter::once(FIRST_REPLACED).chain(SECOND_REPLACED).any(overlaps),
+            GuardSource::CpuRead => SECOND_POOLS.into_iter().any(overlaps),
+            GuardSource::HostRead | GuardSource::ModelBusRead => false,
+        }
     }
 }
 
@@ -150,6 +242,7 @@ impl LoaderWire {
             scenario: self.scenario.kind, kind: program.kind, record, loader,
             handoff: program.handoff, entry: program.entry, post_load: program.post_load,
             loaded: program.loaded_register, refusal: program.refusal,
+            image: program.image, startup: None,
         })
     }
 }
@@ -159,6 +252,8 @@ impl LoaderWire {
 enum Label {
     #[serde(rename = "record-1-entry")]
     Record1Entry,
+    FirstStageHandoff,
+    SecondaryEntry,
     #[serde(rename = "record-2-handoff")]
     Record2Handoff,
     PrefixEntry,
@@ -174,6 +269,8 @@ impl Label {
     fn name(self) -> &'static str {
         match self {
             Self::Record1Entry => "record-1-entry",
+            Self::FirstStageHandoff => "first-stage-handoff",
+            Self::SecondaryEntry => "secondary-entry",
             Self::Record2Handoff => "record-2-handoff",
             Self::PrefixEntry => "prefix-entry",
             Self::PostLoad => "post-load",
@@ -187,7 +284,7 @@ impl Label {
     }
     fn core(self) -> WitnessCore {
         match self {
-            Self::Record1Entry | Self::HeldGate | Self::DelayEntry | Self::DelayRelease | Self::CompletionStore => WitnessCore::Core0,
+            Self::Record1Entry | Self::FirstStageHandoff | Self::HeldGate | Self::DelayEntry | Self::DelayRelease | Self::CompletionStore => WitnessCore::Core0,
             _ => WitnessCore::Core1,
         }
     }
@@ -196,11 +293,22 @@ impl Label {
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 struct Totals { count: u64, zero_count: u64, nonzero_count: u64 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum GuardSource { CpuRead, CpuWrite, CpuFetch, HostRead, HostWrite, ModelBusRead, ModelBusWrite }
+
+#[derive(Deserialize)]
+struct GuardEvent {
+    source: GuardSource,
+    physical: Option<Address>,
+    size: u64,
+}
+
 /// The scoped state fields read at stops.
 #[derive(Deserialize)]
 struct ScopedView {
     violation: Option<String>,
-    records: Vec<Value>,
+    records: Vec<GuardEvent>,
     counters: Vec<Totals>,
 }
 
@@ -208,6 +316,7 @@ struct ScopedView {
 #[derive(Deserialize)]
 struct ClassifiedView {
     violation: Option<String>,
+    records: Vec<GuardEvent>,
 }
 
 type TcmWords = [[Word; 2]; 2];
@@ -296,6 +405,8 @@ struct Receipt<'a> {
     completion: &'a Option<CommittedStore>,
     endpoint: &'a Option<Endpoint>,
     final_primary: &'a Option<wait::Primary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    startup: &'a Option<ComposedStartup>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -384,11 +495,15 @@ impl<'a> Runner<'a> {
             classes.extend([LOADER_B, RECORD, LOADER_A_COMPLETION, LOADER_A_LITERAL].map(|span| range(span, WatchKinds::WRITES)));
             classes.push(range(ZERO, WatchKinds::HOST_WRITE.union(WatchKinds::MODEL_BUS_WRITE)));
         }
+        if epoch != Epoch::Boot {
+            self.contract.append_composed_classes(&mut classes);
+        }
         classes
     }
 
     fn begin_classified(&mut self, machine: &mut Machine, epoch: Epoch) -> Result<(), String> {
-        self.classified = Some(machine.session.board.memory_watch_begin_classified(self.classes(epoch), WATCH_LIMIT, self.maps.clone(), ViewPolicy::Observe)?);
+        let policy = if self.contract.startup.is_some() && epoch != Epoch::Boot { ViewPolicy::Fixed } else { ViewPolicy::Observe };
+        self.classified = Some(machine.session.board.memory_watch_begin_classified(self.classes(epoch), WATCH_LIMIT, self.maps.clone(), policy)?);
         self.epoch = epoch;
         Ok(())
     }
@@ -402,6 +517,10 @@ impl<'a> Runner<'a> {
         if let Some(violation) = view.violation {
             return Err(format!("loader-prefix classified watch violation: {violation}"));
         }
+        if self.epoch != Epoch::Boot {
+            require(!view.records.iter().any(|event| self.contract.composed_event_forbidden(event)),
+                "composed startup immutable write or retired code/literal access observed")?;
+        }
         Ok(state)
     }
 
@@ -410,7 +529,11 @@ impl<'a> Runner<'a> {
             let view: ScopedView = serde_json::from_value(watch.state()).map_err(|error| format!("loader-prefix scoped watch: {error}"))?;
             match &view.violation {
                 Some(violation) => Err(format!("loader-prefix scoped watch violation: {violation}")),
-                None => Ok(view),
+                None => {
+                    require(!view.records.iter().any(|event| self.contract.composed_event_forbidden(event)),
+                        "composed scoped immutable write or retired code/literal access observed")?;
+                    Ok(view)
+                }
             }
         }).transpose()
     }
@@ -441,11 +564,62 @@ impl<'a> Runner<'a> {
         Ok(Views { r#virtual: wait::bytes(machine, core, guest, length)?, physical: machine.read(physical, length)? })
     }
 
+    fn bind_composed_views(&self, machine: &Machine, start: u64, views: &mut Views) -> Result<(), String> {
+        for core in 0..2 {
+            for guest in [start, ZERO_GUEST + start] {
+                require(self.physical_of(core, guest, views.physical.len() as u64)? == start,
+                    "composed record identity or alias mapping differs")?;
+                machine.session.board.read_memory(core, guest, &mut views.r#virtual)?;
+                require(views.r#virtual == views.physical, "composed record virtual or alias bytes differ from physical memory")?;
+            }
+        }
+        Ok(())
+    }
+
+    fn bind_firststage(&self, machine: &Machine, stop: &LoaderStop, startup: &ComposedStartup) -> Result<(), String> {
+        let observed: BoardState = serde_json::from_value(machine.session.board.state()).map_err(|error| error.to_string())?;
+        require(observed.memory_decoders.choices == [1] && observed.memory_decoders.pending == [None] && observed.memory_decoders.failure.is_none(),
+            "composed first-stage entry requires the committed RAM decoder")?;
+        for core in 0..2 {
+            for (start, end) in [FIRST_RECORD, RECORD] {
+                for guest in [start, ZERO_GUEST + start] {
+                    require(self.physical_of(core, guest, end - start)? == start, "composed record identity or alias mapping differs")?;
+                }
+            }
+        }
+        tcm_disjoint_views(&self.committed, &stop.tcm, &[FIRST_RECORD, RECORD])?;
+        let mut record = self.views(machine, 0, FIRST_RECORD.0, FIRST_RECORD.1 as usize)?;
+        self.bind_composed_views(machine, FIRST_RECORD.0, &mut record)?;
+        require(Sha256Digest::of(&record.physical) == startup.record1_sha256
+            && word(machine, 0x20)?.0 == startup.entry.0, "composed record-1 bytes or reset entry differ")?;
+        require(Sha256Digest::of(&record.physical[startup.image.0 .0 as usize..startup.image.1 .0 as usize]) == startup.image_sha256,
+            "composed first-stage image bytes differ from their selected identity")?;
+        require(word(machine, u64::from(startup.handoff.0))?.0 == 0xe1a0_f002,
+            "composed first-stage handoff is not MOV PC,R2")
+    }
+
+    fn bind_secondary(&self, machine: &Machine, startup: &ComposedStartup) -> Result<(), String> {
+        let mut record = self.views(machine, 1, RECORD.0, (RECORD.1 - RECORD.0) as usize)?;
+        self.bind_composed_views(machine, RECORD.0, &mut record)?;
+        require(Sha256Digest::of(&record.physical) == self.contract.record
+            && word(machine, 0x10020)?.0 == startup.secondary_entry.0, "composed record-2 bytes or reset entry differ")?;
+        let (start, end) = self.contract.image.ok_or("composed secondary image absent")?;
+        require(Sha256Digest::of(&record.physical[(u64::from(start.0) - RECORD.0) as usize..(u64::from(end.0) - RECORD.0) as usize])
+            == startup.secondary_image_sha256, "composed secondary image bytes differ from their selected identity")?;
+        require(word(machine, u64::from(self.contract.handoff.0))?.0 == 0xe1a0_f003,
+            "composed secondary handoff is not MOV PC,R3")
+    }
+
     /// Physical spans no enabled TCM window may overlay in any committed view.
     fn guarded(&self) -> Vec<(u64, u64)> {
         let mut spans = vec![(CELL, CELL + 4), RECORD, LOADER_B, LOADER_A_COMPLETION, LOADER_A_LITERAL];
         if self.contract.scenario == Scenario::Delayed {
             spans.push(VENEER);
+        }
+        if let Some(startup) = &self.contract.startup {
+            spans.extend([FIRST_VECTORS, (u64::from(startup.image.0 .0), u64::from(startup.image.1 .0)), FIRST_REPLACED]);
+            spans.extend(SECOND_REPLACED);
+            spans.extend(SECOND_POOLS);
         }
         spans
     }
@@ -516,16 +690,33 @@ impl<'a> Runner<'a> {
 
     fn scoped_rules(&self, window: ScopeSpan, slots: u64) -> Result<ScopedWatch, String> {
         let physical = |(start, end): (u64, u64)| PhysicalRange::new(start, end).map(ScopeSpan::Physical);
+        let composed = self.contract.startup.as_ref();
+        let mut core0_writes = vec![physical(ZERO)?];
+        if let Some(startup) = composed {
+            core0_writes.extend([FIRST_VECTORS, (u64::from(startup.image.0 .0), u64::from(startup.image.1 .0))]
+                .into_iter().map(physical).collect::<Result<Vec<_>, _>>()?);
+        }
         let mut confinement = vec![
             ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Write,
                 rule: Confinement::Allow(vec![physical(ZERO)?, physical((slots, slots + VECTOR_BYTES as u64))?, window]) },
-            ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Write, rule: Confinement::Forbid(vec![physical(ZERO)?]) },
+            ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Write, rule: Confinement::Forbid(core0_writes) },
         ];
         if self.contract.kind == ProgramKind::Owned {
+            let mut fetch = REPLACED.to_vec();
+            let mut read = vec![ENTRY_POOL];
+            if composed.is_some() {
+                fetch.extend(std::iter::once(FIRST_REPLACED).chain(SECOND_REPLACED));
+                read.extend(SECOND_POOLS);
+                confinement.push(ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Fetch,
+                    rule: Confinement::Forbid(std::iter::once(FIRST_REPLACED).chain(SECOND_REPLACED)
+                        .map(physical).collect::<Result<_, _>>()?) });
+                confinement.push(ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Read,
+                    rule: Confinement::Forbid(SECOND_POOLS.into_iter().map(physical).collect::<Result<_, _>>()?) });
+            }
             confinement.push(ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Fetch,
-                rule: Confinement::Forbid(REPLACED.iter().map(|&span| physical(span)).collect::<Result<_, _>>()?) });
+                rule: Confinement::Forbid(fetch.into_iter().map(physical).collect::<Result<_, _>>()?) });
             confinement.push(ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Read,
-                rule: Confinement::Forbid(vec![physical(ENTRY_POOL)?]) });
+                rule: Confinement::Forbid(read.into_iter().map(physical).collect::<Result<_, _>>()?) });
         }
         Ok(ScopedWatch {
             classes: self.classes(Epoch::Scoped),
@@ -599,6 +790,7 @@ impl<'a> Runner<'a> {
     }
 
     fn end_scoped(&mut self, machine: &mut Machine) -> Result<(), String> {
+        self.scoped_view()?;
         if let Some(mut watch) = self.scoped.take() {
             machine.session.board.memory_watch_end_scoped(&mut watch)?;
             self.scoped_watch = Some(watch.state());
@@ -613,6 +805,14 @@ impl<'a> Runner<'a> {
         require(hit.site == label.name(), "loader-prefix trace label differs from its armed site")?;
         let snapshot = self.snapshot(machine, label, hit)?;
         require(snapshot.core == label.core(), "loader-prefix stop has the wrong core")?;
+        if self.contract.startup.is_some() {
+            for (core, expected) in [(0, 0x4003), (1, 0x5003)] {
+                require(machine.session.board.cpu(core)?.rprofile_identity(None)? == expected, "composed active CP14 identity changed")?;
+            }
+            if self.epoch != Epoch::Boot {
+                tcm_disjoint_views(&self.committed, &snapshot.tcm, &self.guarded())?;
+            }
+        }
         require(self.stops.len() < MAX_STOPS, "loader-prefix stop bound exceeded")?;
         self.stops.push(snapshot);
         let index = self.stops.len() - 1;
@@ -624,11 +824,38 @@ impl<'a> Runner<'a> {
                 require(self.epoch == Epoch::Boot, "record-1 entry out of phase")?;
                 self.boot_watch = self.end_classified(machine)?;
                 self.begin_classified(machine, Epoch::Loaded)?;
-                self.remove(machine, RECORD1_ENTRY)?;
+                self.remove(machine, contract.record1_entry())?;
+                if let Some(startup) = &contract.startup {
+                    self.bind_firststage(machine, &self.stops[index], startup)?;
+                    self.add(machine, &[(startup.handoff.0, Label::FirstStageHandoff), (startup.secondary_entry.0, Label::SecondaryEntry)])?;
+                }
                 self.add(machine, &[(contract.handoff.0, Label::Record2Handoff)])?;
+            }
+            Label::FirstStageHandoff => {
+                require(self.epoch == Epoch::Loaded, "first-stage handoff out of phase")?;
+                let startup = contract.startup.as_ref().ok_or("standalone contract reached composed handoff")?;
+                let stop = &self.stops[index];
+                require(stop.registers[2].0 == startup.handoff_target.0 && stop.registers[0] == startup.handoff_argument
+                    && stop.cpsr.0 & 0x0100_02ff == 0xd3 && word(machine, 0x4300)?.0 == startup.handoff_target.0
+                    && word(machine, 0x4304)? == startup.handoff_argument
+                    && word(machine, 0x4000c)?.0 == startup.handoff_target.0 && word(machine, 0x61c40c)? == startup.handoff_argument,
+                    "composed first-stage handoff context or staged header differs")?;
+                self.remove(machine, startup.handoff.0)?;
+            }
+            Label::SecondaryEntry => {
+                require(self.epoch == Epoch::Loaded, "secondary entry out of phase")?;
+                let startup = contract.startup.as_ref().ok_or("standalone contract reached composed secondary entry")?;
+                tcm_disjoint_views(&self.committed, &self.stops[index].tcm, &self.guarded())?;
+                self.bind_secondary(machine, startup)?;
+                self.remove(machine, startup.secondary_entry.0)?;
             }
             Label::Record2Handoff => {
                 require(self.epoch == Epoch::Loaded, "record-2 handoff out of phase")?;
+                if contract.startup.is_some() {
+                    require([Label::FirstStageHandoff, Label::SecondaryEntry].into_iter()
+                        .all(|label| self.stops.iter().filter(|stop| stop.label == label).count() == 1),
+                        "composed record-2 handoff precedes the observed first-stage handoff or secondary entry")?;
+                }
                 let stop = &self.stops[index];
                 require(stop.registers[3].0 == contract.entry.0 && stop.registers[0].0 == ARGUMENT && stop.completion.0 == 0
                     && stop.cpsr.0 & 0x0100_02ff == 0xd3, "record-2 handoff target, argument, cell or mode differs")?;
@@ -812,18 +1039,18 @@ pub(super) fn run(mut machine: Machine, contract: &LoaderContract, output: &Path
         runner.committed = ram_decoded(&machine.document, &maps)?;
         runner.maps = maps;
         runner.begin_classified(&mut machine, Epoch::Boot)?;
-        runner.arm(&mut machine, &[(RECORD1_ENTRY, Label::Record1Entry)])?;
+        runner.arm(&mut machine, &[(contract.record1_entry(), Label::Record1Entry)])?;
         runner.execute(&mut machine)
     })();
     let outcome = runner.finish(&mut machine, outcome);
     let receipt = Receipt {
-        schema: 4, scenario: ScenarioWire { kind: contract.scenario }, program: contract.kind,
+        schema: if contract.startup.is_some() { 5 } else { 4 }, scenario: ScenarioWire { kind: contract.scenario }, program: contract.kind,
         result: if outcome.is_ok() { WitnessResult::Passed } else { WitnessResult::Failed },
         error: outcome.as_ref().err().map(String::as_str), machine_failure: machine.failure.as_deref(),
         instructions: Instructions(machine.instructions()), cp14_identities: identities,
         boot_watch: &runner.boot_watch, loaded_watch: &runner.loaded_watch, scoped_watch: &runner.scoped_watch,
         stops: &runner.stops, bindings: &runner.bindings, completion: &runner.completion, endpoint: &runner.endpoint,
-        final_primary: &runner.final_primary,
+        final_primary: &runner.final_primary, startup: &contract.startup,
     };
     let bytes = serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?;
     require(bytes.len() <= MAX_RECEIPT, "loader-prefix receipt exceeds 16 MiB")?;

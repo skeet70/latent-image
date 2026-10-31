@@ -64,6 +64,12 @@ impl Serialize for Sha256Digest {
         serializer.serialize_str(&crate::witness::encode_hex(&self.0))
     }
 }
+impl<'de> Deserialize<'de> for Sha256Digest {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::parse(&String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,6 +86,8 @@ enum ContractWire {
     Startup(startup::StartupWire),
     #[cfg(feature = "scoped-watch")]
     Loader(loader::LoaderWire),
+    #[cfg(feature = "scoped-watch")]
+    Composed(loader::ComposedWire),
 }
 
 pub struct PeerContract {
@@ -110,6 +118,11 @@ impl PeerContract {
             }
             #[cfg(feature = "scoped-watch")]
             ContractWire::Loader(wire) => {
+                let contract = wire.validate()?;
+                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract) })
+            }
+            #[cfg(feature = "scoped-watch")]
+            ContractWire::Composed(wire) => {
                 let contract = wire.validate()?;
                 Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract) })
             }

@@ -92,3 +92,73 @@ fn rejects_retargeted_or_reduced_startup_guards() {
         assert!(PeerContract::parse(contract.as_bytes()).is_err(), "{contract}");
     }
 }
+
+fn loader_program() -> String {
+    format!(r#""program":{{"kind":"owned","record_sha256":"{digest}","loader_sha256":"{digest}",
+        "handoff":66592,"entry":66604,"load":66700,"post_load":66704,"loaded_register":0,"poll_period":256,
+        "image":[66560,68096],"refusal":null,
+        "forbid_fetch":[[852000,852168],[854444,854480],[854596,854628]],"forbid_read":[[852168,852220]]}}"#,
+        digest = "ab".repeat(32))
+}
+
+fn composed(scenario: &str) -> String {
+    format!(r#"{{"schema":5,"budget":50000000,"scenario":{{"kind":"{scenario}" }},{program},
+        "startup":{{"kind":"composed","record1_sha256":"{digest}","image_sha256":"{digest}",
+        "symbols_sha256":"{digest}","source_sha256":"{digest}","image":[24576,25088],"entry":24576,"handoff":24608,
+        "handoff_target":262176,"handoff_argument":6934008,"secondary_entry":66560,"secondary_image_sha256":"{digest}",
+        "secondary_symbols_sha256":"{digest}","secondary_source_sha256":"{digest}"}}}}"#,
+        program = loader_program(), digest = "ab".repeat(32))
+}
+
+#[cfg(not(feature = "scoped-watch"))]
+#[test]
+fn default_sdk_refuses_composed_startup() {
+    for scenario in ["natural", "held", "delayed", "non-one"] {
+        assert!(PeerContract::parse(composed(scenario).as_bytes()).is_err());
+    }
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn scoped_sdk_admits_composed_controls_and_preserves_standalone_schema_four() {
+    for scenario in ["natural", "held", "delayed", "non-one"] {
+        assert!(PeerContract::parse(composed(scenario).as_bytes()).is_ok());
+        let standalone = format!(r#"{{"schema":4,"budget":50000000,"scenario":{{"kind":"{scenario}"}},{}}}"#, loader_program());
+        assert!(PeerContract::parse(standalone.as_bytes()).is_ok());
+    }
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn composed_startup_rejects_role_identity_extent_and_guard_changes() {
+    let valid = composed("natural");
+    for invalid in [
+        valid.replace("\"schema\":5", "\"schema\":4"),
+        valid.replace("\"kind\":\"owned\"", "\"kind\":\"retained\""),
+        valid.replace("\"kind\":\"natural\"", "\"kind\":\"forced\""),
+        valid.replace("\"budget\":50000000", "\"budget\":49999999"),
+        valid.replace("\"kind\":\"composed\"", "\"kind\":\"retained\""),
+        valid.replace("\"entry\":24576", "\"entry\":6144"),
+        valid.replace("\"entry\":24576", "\"entry\":24580"),
+        valid.replace("\"handoff\":24608", "\"handoff\":25088"),
+        valid.replace("\"handoff\":24608", "\"handoff\":24576"),
+        valid.replace("\"handoff_target\":262176", "\"handoff_target\":262177"),
+        valid.replace("\"handoff_argument\":6934008", "\"handoff_argument\":0"),
+        valid.replace("\"secondary_entry\":66560", "\"secondary_entry\":71680"),
+        valid.replace("\"image\":[24576,25088]", "\"image\":[24572,25088]"),
+        valid.replace("\"image\":[24576,25088]", "\"image\":[24576,65540]"),
+        valid.replace("\"image\":[24576,25088]", "\"image\":[24576,25087]"),
+        valid.replace("\"image\":[66560,68096]", "\"image\":[66556,68096]"),
+        valid.replace("\"image\":[66560,68096]", "\"image\":[66560,71684]"),
+        valid.replace("\"secondary_source_sha256\":\"abab", "\"secondary_source_sha256\":\"cdcd"),
+        valid.replace("\"symbols_sha256\":\"abab", "\"symbols_sha256\":\"ABAB"),
+        valid.replace("[852000,852168],", ""),
+        valid.replace("[852168,852220]", "[852172,852220]"),
+        valid.replace("\"loaded_register\":0", "\"loaded_register\":3"),
+        valid.replace("\"secondary_entry\":66560", "\"secondary_entry\":66560,\"core\":1"),
+    ] {
+        assert!(PeerContract::parse(invalid.as_bytes()).is_err(), "{invalid}");
+    }
+    let standalone = format!(r#"{{"schema":5,"budget":50000000,"scenario":{{"kind":"natural"}},{}}}"#, loader_program());
+    assert!(PeerContract::parse(standalone.as_bytes()).is_err());
+}
