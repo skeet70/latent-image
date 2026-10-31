@@ -13,65 +13,113 @@ import StageBuild
 loaderB :: LoaderId
 loaderB = LoaderId 1
 
-prefixSymbols :: [String]
-prefixSymbols =
-  [ "xm1_loader_prefix_entry"
-  , "xm1_loader_prefix_install"
-  , "xm1_loader_prefix_clear_workspace"
-  , "xm1_loader_prefix_completion_cell"
-  , "xm1_loader_prefix_dispatch"
-  , "xm1_loader_prefix_exit"
-  ]
+data PrefixSymbol
+  = PrefixEntry
+  | PrefixInstall
+  | PrefixClearWorkspace
+  | PrefixCompletionCell
+  | PrefixDispatch
+  | PrefixExit
+  deriving (Bounded, Enum)
 
-forbiddenExtents :: [(String, String)]
-forbiddenExtents =
-  [ ("fetch", "entry")
-  , ("read", "entry_pool")
-  , ("fetch", "decision")
-  , ("fetch", "wait")
-  ]
+data ImageBound = ImageStart | ImageEnd
 
-continuations :: [String]
-continuations = ["xm1_loader_b_core0_continuation", "xm1_loader_b_core1_continuation"]
+data LoaderSymbol
+  = LoaderImage ImageBound
+  | LoaderStockEntry
+  | LoaderContinuation Continuation
+  | LoaderForbidden Forbidden ImageBound
+
+data Continuation = Core0Continuation | Core1Continuation
+  deriving (Bounded, Enum)
+
+data Access = FetchAccess | ReadAccess
+
+data Replaced = ReplacedEntry | ReplacedEntryPool | ReplacedDecision | ReplacedWait
+  deriving (Bounded, Enum)
+
+data Forbidden = Forbidden Access Replaced
+
+forbidden :: Replaced -> Forbidden
+forbidden replaced = Forbidden (access replaced) replaced
+  where
+    access ReplacedEntryPool = ReadAccess
+    access _ = FetchAccess
+
+accessText :: Access -> String
+accessText FetchAccess = "fetch"
+accessText ReadAccess = "read"
+
+replacedText :: Replaced -> String
+replacedText ReplacedEntry = "entry"
+replacedText ReplacedEntryPool = "entry_pool"
+replacedText ReplacedDecision = "decision"
+replacedText ReplacedWait = "wait"
+
+boundText :: ImageBound -> String
+boundText ImageStart = "start"
+boundText ImageEnd = "end"
+
+prefixSymbolName :: PrefixSymbol -> String
+prefixSymbolName symbol = "xm1_loader_prefix_" ++ suffix symbol
+  where
+    suffix PrefixEntry = "entry"
+    suffix PrefixInstall = "install"
+    suffix PrefixClearWorkspace = "clear_workspace"
+    suffix PrefixCompletionCell = "completion_cell"
+    suffix PrefixDispatch = "dispatch"
+    suffix PrefixExit = "exit"
+
+loaderSymbolName :: LoaderSymbol -> String
+loaderSymbolName symbol = "xm1_loader_b_" ++ suffix symbol
+  where
+    suffix (LoaderImage bound) = "image_" ++ boundText bound
+    suffix LoaderStockEntry = "stock_entry"
+    suffix (LoaderContinuation Core0Continuation) = "core0_continuation"
+    suffix (LoaderContinuation Core1Continuation) = "core1_continuation"
+    suffix (LoaderForbidden (Forbidden access replaced) bound) =
+      "forbid_" ++ accessText access ++ "_" ++ replacedText replaced ++ "_" ++ boundText bound
 
 inside :: (Word32, Word32) -> Word32 -> Bool
-inside range value = within (both fromIntegral range) (fromIntegral value)
-  where
-    both f (start, end) = (f start, f end)
+inside (start, end) value = within (fromIntegral start, fromIntegral end) (fromIntegral value)
 
 declarations :: [Symbol] -> Either String StageDeclarations
 declarations symbols = do
   secondary <- secondaryDeclarations symbols
   let address name = symbolAddress <$> lookupSymbol symbols name
+      loaderAddress = address . loaderSymbolName
   image <- (,) <$> address "xm1_secondary_entry" <*> address "__secondary_stage_end"
-  forM_ prefixSymbols $ \name -> do
-    location <- address name
-    unless (inside image location) (Left (name ++ " is outside the owned record-2 image"))
-  loader <- (,) <$> address "xm1_loader_b_image_start" <*> address "xm1_loader_b_image_end"
-  forbidden <- forM forbiddenExtents $ \(kind, name) -> do
-    let prefix = "xm1_loader_b_forbid_" ++ kind ++ "_" ++ name
-    range@(start, end) <- (,) <$> address (prefix ++ "_start") <*> address (prefix ++ "_end")
+  forM_ [minBound .. maxBound] $ \symbol -> do
+    location <- address (prefixSymbolName symbol)
+    unless (inside image location) (Left (prefixSymbolName symbol ++ " is outside the owned record-2 image"))
+  loader <- (,) <$> loaderAddress (LoaderImage ImageStart) <*> loaderAddress (LoaderImage ImageEnd)
+  spans <- forM [minBound .. maxBound] $ \replaced -> do
+    let kind = forbidden replaced
+        bound = loaderSymbolName . LoaderForbidden kind
+    range@(start, end) <- (,) <$> loaderAddress (LoaderForbidden kind ImageStart) <*> loaderAddress (LoaderForbidden kind ImageEnd)
     unless (fst loader <= start && start < end && end <= snd loader)
-      (Left (prefix ++ " is empty or outside loader B"))
-    pure (kind, name, range)
-  let ordered = sortOn (\(_, _, range) -> range) forbidden
-  forM_ (zip ordered (drop 1 ordered)) $ \((_, name, (_, end)), (_, next, (start, _))) ->
-    when (end > start) (Left ("loader-B forbidden " ++ name ++ " overlaps " ++ next))
-  retained <- forM continuations $ \name -> do
+      (Left (bound ImageStart ++ " is empty or outside loader B"))
+    pure (kind, range)
+  let ordered = sortOn snd spans
+      describe (Forbidden access replaced) = accessText access ++ " " ++ replacedText replaced
+  forM_ (zip ordered (drop 1 ordered)) $ \((kind, (_, end)), (next, (start, _))) ->
+    when (end > start) (Left ("loader-B forbidden " ++ describe kind ++ " overlaps " ++ describe next))
+  retained <- forM [minBound .. maxBound] $ \continuation -> do
+    let name = loaderSymbolName (LoaderContinuation continuation)
     location <- address name
     unless (inside loader location) (Left (name ++ " is outside loader B"))
-    when (any (\(_, _, range) -> inside range location) forbidden) (Left (name ++ " is inside a forbidden extent"))
+    when (any (\(_, range) -> inside range location) spans) (Left (name ++ " is inside a forbidden extent"))
     pure (name, location)
-  stockEntry <- address "xm1_loader_b_stock_entry"
-  unless ([start | ("fetch", "entry", (start, _)) <- forbidden] == [stockEntry])
-    (Left "the stock loader-B entry does not start the forbidden entry extent")
+  stockEntry <- loaderAddress LoaderStockEntry
+  entrySpan <- loaderAddress (LoaderForbidden (forbidden ReplacedEntry) ImageStart)
+  unless (entrySpan == stockEntry) (Left "the stock loader-B entry does not start the forbidden entry extent")
   stock <- armEntry stockEntry
-  entry <- address "xm1_loader_prefix_entry" >>= armEntry
+  entry <- address (prefixSymbolName PrefixEntry) >>= armEntry
   publication <- loaderEntryPublication loaderB (fst loader) stock entry
   let summary =
         ["retained loader-B continuation " ++ name ++ " " ++ U.showHexWord location | (name, location) <- retained]
-          ++ [ "candidate loader-B forbidden " ++ kind ++ " " ++ name ++ " [" ++ U.showHexWord start ++ "," ++ U.showHexWord end ++ ")"
-             | (kind, name, (start, end)) <- forbidden
+          ++ [ "candidate loader-B forbidden " ++ describe kind ++ " [" ++ U.showHexWord start ++ "," ++ U.showHexWord end ++ ")"
+             | (kind, (start, end)) <- spans
              ]
   pure
     secondary

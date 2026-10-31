@@ -83,18 +83,6 @@ unsafe fn stack_top() -> u32 {
     addr_of!(xm1_loader_b_stack_top) as u32
 }
 
-/// Halts before any effect when the identity is not the one this control
-/// declares.
-#[cfg(loader_prefix_core_refusal)]
-unsafe fn refuse_unexpected_core() {
-    if Core::current() != Core::Zero {
-        xm1_loader_prefix_refusal()
-    }
-}
-
-#[cfg(not(loader_prefix_core_refusal))]
-unsafe fn refuse_unexpected_core() {}
-
 #[cfg(loader_prefix_core_refusal)]
 #[no_mangle]
 #[inline(never)]
@@ -108,7 +96,10 @@ pub(crate) extern "C" fn xm1_loader_prefix_refusal() -> ! {
 /// on the entry stack.
 #[no_mangle]
 pub(crate) unsafe extern "C" fn xm1_loader_prefix_install() -> VectorBase {
-    refuse_unexpected_core();
+    #[cfg(loader_prefix_core_refusal)]
+    if Core::current() != Core::Zero {
+        xm1_loader_prefix_refusal()
+    }
     let base = Core::current().vector_base();
     install_vectors(base);
     vector_barrier();
