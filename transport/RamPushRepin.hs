@@ -51,10 +51,16 @@ main = do
   manifest <- withRelinkedBuildUsing relinker EnforceAllowlist (Address (fst (payloadReferenceBases payload))) (pure . pinnedManifest)
   let built = sourceIdentity manifest
       recorded = [identity | pin <- recordPins record, let PinIdentity identity = pinIdentity pin]
-  forM_ [name | (name, _) <- built, name `notElem` recorded] $ \name ->
+  let unrecorded = [name | (name, _) <- built, name `notElem` recorded]
+      unbuilt = [name | name <- recorded, name `notElem` map fst built]
+  forM_ unrecorded $ \name ->
     putStrLn ("the relink's manifest names " ++ name ++ ", which the record lacks; add its entry first")
-  forM_ [name | name <- recorded, name `notElem` map fst built] $ \name ->
+  forM_ unbuilt $ \name ->
     putStrLn ("the record pins " ++ name ++ ", which the relink's manifest does not name")
+  case requested of
+    Changed | not (null unrecorded && null unbuilt) ->
+      die "--changed re-pins existing entries only; the camera refuses this relink until the record and the manifest name the same identities"
+    _ -> pure ()
   let contract = publicationContractDigest (manifestPublications manifest)
       changed = [PinSubject (pinIdentity pin) | pin <- recordPins record, Just digest <- [lookup (unPinIdentity (pinIdentity pin)) built], digest /= unSha256Hex (pinDigest pin)]
         ++ [ContractSubject | contract /= unSha256Hex (contractDigest (recordContract record))]

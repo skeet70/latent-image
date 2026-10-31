@@ -13,7 +13,6 @@ import System.FilePath
 import System.IO (hPutStrLn, stderr, stdout, hFlush)
 import System.Posix.Files (setFileMode)
 import System.Posix.IO
-import qualified System.Posix.IO.ByteString as PB
 import System.Posix.Unistd (fileSynchronise)
 import FujiAF.Transport
 import FujiAF.Identify
@@ -204,7 +203,7 @@ dispatch Help = putStr $ unlines
   , "debug-flag backup [OUTDIR]    read-config of the adjustment-42000 plan, the whole adjustment area; keeps window 0x000000 as private-data/debug-flag/reference-000000.bin when none is kept, else requires it to match outside 0x80/0x81/0xf7"
   , "debug-flag enable [OUTDIR]    commit-f7-enable with the kept reference"
   , "debug-flag disable [OUTDIR]   commit-f7-restore with the kept reference"
-  , "ram-session KIND [--waive-pins] [OUTDIR] relink KIND at its reference base against the compiled pins, then ram-alloc, ram-relink and ram-push into OUTDIR/alloc, OUTDIR/link and OUTDIR/push; KIND is recipe-bank, classic-chrome, classic-chrome-icon or usb-toggle. --waive-pins skips the source-identity and publication-contract comparison and pushes the relink as built; the builders' own input checks, the bank ELF allowlist and the installer's old-word checks still run"
+  , "ram-session KIND [--waive-pins] [OUTDIR] relink KIND at its reference base against the compiled pins, then ram-alloc, ram-relink and ram-push into OUTDIR/alloc, OUTDIR/link and OUTDIR/push; KIND is recipe-bank, classic-chrome, classic-chrome-icon or usb-toggle. --waive-pins skips the source-identity and publication-contract comparison and pushes the relink as built; the builders' own input checks, the bank ELF allowlist, the compiled installer entry offsets and the installer's old-word checks still apply"
   , "rehearse identify|read-config PLAN_JSON|end-setting|probe-ram|read-log|probe-bootrom|probe-area2|probe-straps|probe-code|probe-ownership|probe-routes fixed|probe-routes derived PLAN_JSON|dump-ram SEGMENT|read-media|arm-auto-act|commit-f7-enable REFERENCE_BIN|commit-f7-restore REFERENCE_BIN|read-ram PLAN_JSON [--repeat N --interval-ms M]|probe-sd-host [--repeat N --interval-ms M]|read-bulk ADDRESS LENGTH|ram-alloc SIZE|ram-push STATE MANIFEST|ram-free STATE|ram-unload STATE"
   , "--help"
   , "OUTDIR must be absolute and must not exist; it is created with mode 0700."
@@ -399,9 +398,8 @@ debugFlag step requested = do
               ++unwords (map (\offset -> "0x"++showHex offset "") differing)++"; the reference was not replaced")
           putStrLn ("debug-flag: window 0x000000 matches the kept reference "++reference++" outside 0x80, 0x81 and 0xf7")
         else do
-          createDirectoryIfMissing True (takeDirectory reference)
-          setFileMode (takeDirectory reference) 0o700
-          writeNewPrivate reference window
+          ensurePrivateDirectory (takeDirectory reference)
+          writePrivateBytes reference window
           putStrLn ("debug-flag: kept window 0x000000 as the reference "++reference)
     FlagEnable -> commit EnableStoredGate reference
     FlagDisable -> commit RestoreStoredGate reference
@@ -437,16 +435,9 @@ fixedPlan workspace scope = do
     plan <- either P.reject pure (Plan.buildPlan scope name generator [])
     document <- either P.reject pure (Plan.planValue plan)
     createDirectoryIfMissing True directory
-    writeNewPrivate path (encodeCanonical document)
+    writePrivateBytes path (encodeCanonical document)
     putStrLn ("plan: "++path)
   pure path
-
-writeNewPrivate :: FilePath -> B.ByteString -> IO ()
-writeNewPrivate path bytes =
-  bracket (openFd path WriteOnly defaultFileFlags {creat = Just 0o600, exclusive = True, nofollow = True, cloexec = True}) closeFd $ \fd -> do
-    written <- PB.fdWrite fd bytes
-    unless (fromIntegral written == B.length bytes) (P.reject ("short write to "++path))
-    fileSynchronise fd
 
 ramPushLine :: RamPushOutcome -> IO String
 ramPushLine outcome = case outcome of
@@ -469,7 +460,7 @@ ramSession kind policy payload requested = do
       withPinnedReviewedBuildUsing (contractFor size) relinker (Address referenceBase) (\_ -> pure ())
       putStrLn ("ram-session: "++kind++" relinks at 0x"++showHex referenceBase ""++" and matches the compiled pins")
     WaivePins -> do
-      withRelinkedBuildUsing relinker EnforceAllowlist (Address referenceBase) (\_ -> pure ())
+      withRelinkedBuildUsing relinker EnforceAllowlist (Address referenceBase) (requireCompiledEntries (Address referenceBase))
       putStrLn ("ram-session: "++kind++" relinks at 0x"++showHex referenceBase ""++"; pins waived, so the build is not compared with the compiled source identity or publication contract")
   root <- resolveNamed ("ram-session-"++kind) requested
   createOutput root
@@ -483,18 +474,28 @@ ramSession kind policy payload requested = do
   case policy of
     RequirePins -> do
       dispatch (Live (RamRelink state) (Just linked)) `onException` retainedNotice
+      (readRetainedAllocation state >> readRamPushManifest manifestPath >> pure ()) `onException` retainedNotice
       dispatch (Live (RamPush state manifestPath) (Just pushed))
     WaivePins -> do
-      retained <- readRetainedAllocation state
-      (do createOutput linked
-          withRelinkedBuildUsing relinker EnforceAllowlist (allocBase (retainedAllocation retained)) $ \built -> do
-            writeNewPrivate (linked </> "runtime.bin") (pinnedRuntime built)
-            writeNewPrivate manifestPath (pinnedDocument built)
-          putStrLn ("ram-relink: manifest="++manifestPath++";pins waived")) `onException` retainedNotice
-      manifest <- readRamPushManifest manifestPath
-      createOutput pushed
+      (retained, manifest) <- (do
+        retained <- readRetainedAllocation state
+        let base = allocBase (retainedAllocation retained)
+        createOutput linked
+        withRelinkedBuildUsing relinker EnforceAllowlist base $ \built -> do
+          requireCompiledEntries base built
+          writePrivateBytes (linked </> "runtime.bin") (pinnedRuntime built)
+          writePrivateBytes manifestPath (pinnedDocument built)
+        putStrLn ("ram-relink: manifest="++manifestPath++";pins waived")
+        manifest <- readRamPushManifest manifestPath
+        createOutput pushed
+        pure (retained, manifest)) `onException` retainedNotice
       putStrLn ("output: "++pushed)
       runRamPushWith xm1PeerCacheAvailability (retainedAllocation retained) manifest realClock nativeApi pushed >>= ramPushLine >>= putStrLn
+  where
+    -- Waiving the pins keeps the compiled installer entry offsets.
+    requireCompiledEntries base built =
+      unless (manifestEntries (pinnedManifest built) == payloadEntries payload base)
+        (P.reject "relinked installer entry offsets differ from the compiled installer layout")
 
 ramWatch :: FilePath -> Maybe (Int,Int) -> IO RamWatch
 ramWatch path pacing = do
