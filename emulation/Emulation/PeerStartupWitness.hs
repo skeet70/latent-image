@@ -1340,7 +1340,7 @@ requiredMaps =
 returnsWithout :: Reg -> Maybe Instruction -> Bool
 returnsWithout register instruction = case instruction of
   Just (BranchExchange (Cond 14) False (Reg 14)) -> True
-  Just (LoadMultiple (Cond 14) (Reg 13) IncrementAfter True list) -> A32.pc `elem` list && register `notElem` list
+  Just (LoadMultiple (Cond 14) (Reg 13) A32.IncrementAfter True list) -> A32.pc `elem` list && register `notElem` list
   _ -> False
 
 -- | Cortex-R TCM region register: base [31:12], size code [6:2] (@0@ none, @3..14@ 4 KiB..8 MiB), enable [0].
