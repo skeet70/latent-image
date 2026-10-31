@@ -10,7 +10,7 @@ import qualified Data.ByteString as B
 import Data.List (mapAccumL)
 import Data.Unique (hashUnique, newUnique)
 import Data.Word (Word32)
-import Emulation.EmulatorSlot (attachGuard, reexecInSlot, slotPolicyFromEnvironment)
+import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import qualified FujiAF.Host as H
 import qualified FujiAF.JSON as J
 import Numeric.Natural (Natural)
@@ -170,18 +170,16 @@ main = do
     ["--guarded", engine, root] -> do
       policy <- slotPolicyFromEnvironment
       reexecInSlot policy arguments
-      attachGuard arguments
       runCases (EnginePath engine) root
-    [engine, guard, worker] -> bracket privateDirectory removeDirectoryRecursive $ \root -> do
+    [engine] -> bracket privateDirectory removeDirectoryRecursive $ \root -> do
       enginePath <- canonicalizePath engine
       executable <- getExecutablePath
       let launcher = root </> "audit-tests"
-      forM_ [(executable, launcher), (guard, root </> "thermal-guard"), (worker, root </> "thermal-guard-worker")] $ \(source, destination) -> do
-        copyFile source destination
-        setFileMode destination 0o700
+      copyFile executable launcher
+      setFileMode launcher 0o700
       (_, _, _, process) <- createProcess (proc launcher ["--admit", enginePath, root])
       waitForProcess process >>= exitWith
-    _ -> ioError (userError "usage: recovery-bootstrap-audit-tests ENGINE GUARD WORKER")
+    _ -> ioError (userError "usage: recovery-bootstrap-audit-tests ENGINE")
 
 privateDirectory :: IO FilePath
 privateDirectory = do
