@@ -586,6 +586,8 @@ haskell_test(
         "//host:completion-control",
         "//host:first-stage",
         "//host:vector",
+        "//host:update-container",
+        "//host/firmware:startup-stage-contract",
     ],
 )
 
@@ -614,6 +616,7 @@ haskell_binary(
         "//host:peer-wait-control",
         "//host:process",
         "//host:update-container",
+        "//host/firmware:startup-stage-contract",
     ],
 )
 

@@ -315,8 +315,12 @@ retainedFacts (StagedImages record loader) = do
 -- | Owned facts from the linked image and symbols and the staged record 2
 -- and loader B.
 deriveOwnedFacts :: B.ByteString -> B.ByteString -> StagedImages -> Either String ProgramFacts
-deriveOwnedFacts bin symbolBytes (StagedImages record loader) = do
+deriveOwnedFacts bin symbolBytes images = do
   rows <- F.parseSymbols symbolBytes
+  deriveOwnedFactsParsed (U.MediaImage bin) rows images
+
+deriveOwnedFactsParsed :: U.MediaImage -> [F.Symbol] -> StagedImages -> Either String ProgramFacts
+deriveOwnedFactsParsed (U.MediaImage bin) rows (StagedImages record loader) = do
   let at name = F.symbolAddress <$> F.lookupSymbol rows name
       extentOf name = do
         found <- F.lookupSymbol rows name
@@ -394,21 +398,28 @@ forbidSpans rows prefix = do
 data StagedImages = StagedImages {stagedRecord :: B.ByteString, stagedLoader :: B.ByteString}
 
 stagedImages :: B.ByteString -> Either String StagedImages
-stagedImages = stagedImagesFor record1Entry
+stagedImages dat = U.parseContainer dat >>= stagedImagesFromParts (Guest record1Entry) . U.parsedParts
 
-stagedImagesFor :: Word32 -> B.ByteString -> Either String StagedImages
-stagedImagesFor selectedEntry dat = do
-  parsed <- U.parseContainer dat
-  let mainStart = U.stagingLength + fromIntegral (U.hMainOffset (U.parsedHeader parsed))
-      media start size = B.map complement (B.take size (B.drop start dat))
-  segment <- case filter ((== 1) . U.segId) (U.partSegments (U.parsedParts parsed)) of
-    [found] -> Right found
-    _ -> Left "loader-B segment is not unique"
+stagedImagesFromParts :: Guest -> U.Parts -> Either String StagedImages
+stagedImagesFromParts (Guest selectedEntry) parts = do
+  first <- F.recordSlotBytes F.FirstRecord parts
+  second <- F.recordSlotBytes F.SecondRecord parts
+  segment <- loaderSegment (F.LoaderId 1) parts
   require (U.segLoad segment == 0xd0000 && U.segSize segment == 0xdaa0) "loader-B segment extent differs"
-  let flash = mainStart + fromIntegral (U.segFlash segment)
-  require (mainStart + F.recordSlotOffset F.SecondRecord + 0x4c80 <= B.length dat && flash + 0xdaa0 <= B.length dat) "DAT does not hold record 2 and loader B"
-  require (U.mediaWordAt dat (mainStart + F.firstRecordSlotOffset + F.resetVectorWordOffset) == selectedEntry) "record-1 reset literal differs from the selected contract"
-  pure (StagedImages (media (mainStart + F.recordSlotOffset F.SecondRecord) 0x4c80) (media flash 0xdaa0))
+  let loader = B.map complement (B.take 0xdaa0 (B.drop (fromIntegral (U.segFlash segment)) (U.partPreTable parts)))
+  require (U.mediaWordAt first F.resetVectorWordOffset == selectedEntry) "record-1 reset literal differs from the selected contract"
+  pure (StagedImages (B.map complement (B.take 0x4c80 second)) loader)
+
+loaderSegment :: F.LoaderId -> U.Parts -> Either String U.SegmentEntry
+loaderSegment (F.LoaderId wanted) parts = do
+  segment <- case filter ((== wanted) . U.segId) (U.partSegments parts) of
+    [found] -> Right found
+    _ -> Left "loader segment is not unique"
+  let offset = fromIntegral (U.segFlash segment)
+      size = fromIntegral (U.segSize segment)
+      bytes = U.partPreTable parts
+  require (size > 0 && offset + size <= B.length bytes) "loader segment exceeds its carrier pre-table"
+  pure segment
 
 -- | Staged equals the reference (the source DAT or its completion control)
 -- outside the main checksum word, the record-2 reset vector word, the
@@ -438,47 +449,52 @@ verifyStagedOwned reference staged bin symbolBytes = do
   require (U.mediaWordAt staged (slot + F.resetVectorWordOffset) == entry) "staged reset vector does not name the record-2 entry"
   require (B.map complement (B.take (B.length bin) (B.drop (slot + load) staged)) == bin) "staged record-2 image differs from the linked image"
   require (U.mediaWordAt staged header == prefixEntry) "staged loader-B header does not publish the prefix entry"
-  stagedImages staged
+  stagedImagesFromParts (Guest record1Entry) (U.parsedParts stagedParsed)
 
-deriveComposedContract :: Scenario -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Guest -> Either String Contract
-deriveComposedContract scenario original staged firstBin firstSymbols secondBin secondSymbols (Guest argument) = do
+deriveComposedContract :: Scenario -> Stage.ComposedStartupInput -> Guest -> Either String Contract
+deriveComposedContract scenario input (Guest argument) = do
   require (argument == argumentWord) "composed image-4 argument differs from 0x69cdf8"
-  reference <- case scenarioControl scenario of
-    Nothing -> Right original
-    Just control -> C.controlBytes <$> C.buildCompletionControl control original
-  firstRows <- F.parseSymbols firstSymbols
-  secondRows <- F.parseSymbols secondSymbols
-  plan <- Stage.composedPlans firstBin firstRows secondBin secondRows
-  sourceParsed <- U.parseContainer reference
-  finalParsed <- U.parseContainer staged
-  F.verifyComposedRecords plan sourceParsed finalParsed
-  images <- stagedImagesFor 0x6000 staged
-  facts <- deriveOwnedFacts secondBin secondSymbols images
-  let firstPlan = F.composedFirstPlan plan
+  let original = Stage.originalStartupInput input
+      finalParsed = Stage.stagedStartupParsed (Stage.stagedStartupInput input)
+      artifacts = Stage.startupArtifacts input
+      first = Stage.firstStageArtifact artifacts
+      second = Stage.secondaryPrefixArtifact artifacts
+      firstPlan = Stage.firstStageArtifactPlan first
+      firstBin = U.mediaImageBytes (F.planImage firstPlan)
+      firstRows = Stage.firstStageArtifactSymbols first
+      secondRows = Stage.secondaryPrefixArtifactSymbols second
       firstStart = F.recordGuestBase F.FirstRecord + F.slotOffsetBytes (F.planLoadOffset firstPlan)
       firstEntry = F.armEntryAddress (F.planEntry firstPlan)
       firstEnd = firstStart + B.length firstBin
       at rows name = F.symbolAddress <$> F.lookupSymbol rows name
-      digest = F.parseSha256 . sha256Hex
+  reference <- case scenarioControl scenario of
+    Nothing -> Right (Stage.originalStartupParsed original)
+    Just control -> C.controlParsed <$> C.buildCompletionControl control (Stage.originalStartupParsed original)
+  plan <- Stage.composedPlans artifacts
+  F.verifyComposedRecords plan reference finalParsed
+  images <- stagedImagesFromParts (Guest firstEntry) (U.parsedParts finalParsed)
+  facts <- deriveOwnedFactsParsed (F.planImage (Stage.secondaryPrefixArtifactPlan second)) secondRows images
   handoff <- at firstRows "xm1_first_stage_handoff_vector"
   require (leWordAt firstBin (fromIntegral handoff - firstStart) == Right 0xe1a0f002)
     "firststage handoff vector is not MOV PC, R2"
   secondary <- at secondRows "xm1_secondary_entry"
   record <- B.map complement <$> F.recordSlotBytes F.FirstRecord (U.parsedParts finalParsed)
-  loaderA <- case filter ((== 0) . U.segId) (U.partSegments (U.parsedParts finalParsed)) of
-    [segment] -> do
-      let offset = fromIntegral (U.segFlash segment)
-          size = fromIntegral (U.segSize segment)
-          bytes = U.partPreTable (U.parsedParts finalParsed)
-      require (U.segLoad segment == 0x40000 && offset + size <= B.length bytes && size >= 0x10)
-        "composed loader-A extent differs"
-      pure (B.map complement (B.take size (B.drop offset bytes)))
-    _ -> Left "composed loader-A segment is not unique"
-  target <- leWordAt loaderA 0xc
-  startup <- StartupFacts <$> digest record <*> digest firstBin <*> digest firstSymbols <*> digest original
-    <*> pure (Span (fromIntegral firstStart) (fromIntegral firstEnd)) <*> pure (Guest firstEntry) <*> pure (Guest handoff)
-    <*> pure (Guest target) <*> pure (Guest argument) <*> pure (Guest secondary)
-    <*> digest secondBin <*> digest secondSymbols <*> digest original
+  recordDigest <- F.parseSha256 (sha256Hex record)
+  loaderA <- loaderSegment (F.LoaderId 0) (U.parsedParts finalParsed)
+  require (U.segLoad loaderA == 0x40000 && U.segSize loaderA >= 0x10) "composed loader-A extent differs"
+  let target = U.mediaWordAt (U.partPreTable (U.parsedParts finalParsed)) (fromIntegral (U.segFlash loaderA) + 0xc)
+  let startup = StartupFacts
+        { startupRecord = recordDigest
+        , startupImageDigest = Stage.firstStageArtifactImageDigest first
+        , startupSymbols = Stage.firstStageArtifactSymbolsDigest first
+        , startupSource = Stage.originalStartupDigest original
+        , startupImage = Span (fromIntegral firstStart) (fromIntegral firstEnd)
+        , startupEntry = Guest firstEntry, startupHandoff = Guest handoff
+        , startupTarget = Guest target, startupArgument = Guest argument, startupSecondary = Guest secondary
+        , startupSecondaryImage = Stage.secondaryPrefixArtifactImageDigest second
+        , startupSecondarySymbols = Stage.secondaryPrefixArtifactSymbolsDigest second
+        , startupSecondarySource = Stage.originalStartupDigest original
+        }
   checked <- parseStartup (startupValue startup)
   require (firstStart == 0x6000 && secondary == 0x10400) "composed source-defined image starts or entries differ"
   pure (ComposedContract scenario facts checked)

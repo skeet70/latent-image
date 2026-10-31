@@ -18,8 +18,10 @@ import Emulation.PollPeriod (PollPeriod (..))
 import qualified Emulation.PeerStartupWitness as S
 import qualified FujiAF.CompletionControl as C
 import qualified FujiAF.FirstStage as F
+import qualified FujiAF.UpdateContainer as U
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
+import qualified StartupStageContract as Stage
 
 expect :: String -> Bool -> IO ()
 expect label ok = unless ok (putStrLn ("FAIL " ++ label) >> exitFailure)
@@ -312,6 +314,12 @@ main = do
   prefixEntry <- symbolAt symbols "xm1_loader_prefix_entry"
   dispatch <- symbolAt symbols "xm1_loader_prefix_dispatch"
   facts <- either fail pure (deriveOwnedFacts bin symbols (stagedFor bin prefixEntry))
+  expect "combined prefix artifact is admitted at its typed boundary"
+    (accepted (Stage.parseSecondaryPrefixArtifact (U.MediaImage bin) symbols))
+  expect "secondary artifact cannot be admitted as a firststage artifact"
+    (not (accepted (Stage.parseFirstStageArtifact (U.MediaImage bin) symbols)))
+  expect "truncated secondary artifact is refused at its typed boundary"
+    (not (accepted (Stage.parseSecondaryPrefixArtifact (U.MediaImage (B.take (B.length bin - 4) bin)) symbols)))
   let Guest entry = factEntry facts
       Guest post = factPostLoad facts
       PollPeriod period = factPeriod facts

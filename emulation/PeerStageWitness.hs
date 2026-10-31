@@ -25,6 +25,7 @@ import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO (stderr)
 import System.Process (showCommandForUser)
+import qualified StartupStageContract as Stage
 
 newtype Driver = Driver FilePath
 newtype RunDescription = RunDescription FilePath
@@ -544,10 +545,10 @@ compareLoaderPrefix route retainedPath retainedContractPath ownedPath ownedContr
 loaderReference :: FilePath -> L.Scenario -> IO B.ByteString
 loaderReference originalPath scenario = do
   original <- H.readRegular maxContainer originalPath
-  _ <- qualifySource NaturalBaseline (Firmware originalPath) original
+  source <- qualifySource NaturalBaseline (Firmware originalPath) original
   case L.scenarioControl scenario of
     Nothing -> pure original
-    Just control -> Completion.controlBytes <$> either H.failH pure (Completion.buildCompletionControl control original)
+    Just control -> Completion.controlBytes <$> either H.failH pure (Completion.buildCompletionControl control (sourceParsed source))
 
 prepareLoaderPrefix :: Workspace -> FilePath -> FilePath -> FilePath -> L.Scenario -> LoaderProgram -> Launch -> IO ()
 prepareLoaderPrefix root firmwarePath fflzdPath outputPath scenario choice execution = do
@@ -602,25 +603,36 @@ prepareComposed :: Workspace -> FilePath -> FilePath -> FilePath -> L.Scenario -
 prepareComposed root firmwarePath fflzdPath outputPath scenario (ComposedProgram firstImage firstSymbols secondImage secondSymbols sourcePath) execution = do
   datPath <- canonicalizePath (resolve root firmwarePath)
   originalPath <- canonicalizePath (resolve root sourcePath)
-  original <- H.readRegular maxContainer originalPath
-  _ <- qualifySource NaturalBaseline (Firmware originalPath) original
-  staged <- H.readRegular maxContainer datPath
-  firstBin <- H.readRegular maxCandidateImage (resolve root firstImage)
+  validateFirmware (Firmware originalPath)
+  originalBytes <- H.readRegular maxContainer originalPath
+  original <- either H.failH pure (Stage.parseOriginalStartupDat originalBytes)
+  forM_ (U.stockChecks (Stage.originalStartupParsed original)) $ \check ->
+    H.ensure (U.checkPassed check) ("original container contract: " ++ U.checkField check)
+  stagedBytes <- H.readRegular maxContainer datPath
+  staged <- either H.failH pure (Stage.parseStagedStartupDat stagedBytes)
+  firstBin <- U.MediaImage <$> H.readRegular maxCandidateImage (resolve root firstImage)
   firstSyms <- H.readRegular maxCandidateSymbols (resolve root firstSymbols)
-  secondBin <- H.readRegular maxCandidateImage (resolve root secondImage)
+  first <- either H.failH pure (Stage.parseFirstStageArtifact firstBin firstSyms)
+  secondBin <- U.MediaImage <$> H.readRegular maxCandidateImage (resolve root secondImage)
   secondSyms <- H.readRegular maxCandidateSymbols (resolve root secondSymbols)
-  contract <- either H.failH pure (L.deriveComposedContract scenario original staged firstBin firstSyms secondBin secondSyms (L.Guest 0x69cdf8))
-  parsed <- either H.failH pure (U.parseContainer staged)
+  second <- either H.failH pure (Stage.parseSecondaryPrefixArtifact secondBin secondSyms)
+  let input = Stage.ComposedStartupInput
+        { Stage.originalStartupInput = original
+        , Stage.stagedStartupInput = staged
+        , Stage.startupArtifacts = Stage.ComposedArtifacts
+            { Stage.firstStageArtifact = first, Stage.secondaryPrefixArtifact = second }
+        }
+  contract <- either H.failH pure (L.deriveComposedContract scenario input (L.Guest 0x69cdf8))
   Runtime output <- freshRuntime root (Just (Runtime outputPath)) (UniqueRuntime "peer-stage-witness")
-  image4 <- decodeImage4 (resolve root fflzdPath) output (U.parsedParts parsed)
+  image4 <- decodeImage4 (resolve root fflzdPath) output (U.parsedParts (Stage.stagedStartupParsed staged))
   argumentWord <- either H.failH pure (leWordAt image4 0xc)
   H.ensure (argumentWord == 0x69cdf8) "decoded composed image-4 argument differs from 0x69cdf8"
   let contractPath = output </> "peer-witness-contract.json"
       receipt = output </> "peer-witness.json"
   BL.writeFile contractPath (encode (L.contractValue contract))
   BL.writeFile (output </> "composed-startup-expected.json") (encode (object
-    [ "schema" .= (5 :: Int), "firmware" .= datPath, "firmware_sha256" .= sha256Hex staged
-    , "source_firmware" .= originalPath, "source_sha256" .= sha256Hex original
+    [ "schema" .= (5 :: Int), "firmware" .= datPath, "firmware_sha256" .= F.sha256Hex (Stage.stagedStartupDigest staged)
+    , "source_firmware" .= originalPath, "source_sha256" .= F.sha256Hex (Stage.originalStartupDigest original)
     , "contract" .= L.contractValue contract, "argument" .= argumentWord
     ]))
   case execution of
