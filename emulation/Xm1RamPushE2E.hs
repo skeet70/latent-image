@@ -1,10 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), E2ESettings (..), Payload, bankD3Payload, classicChromePayload, classicChromeIconPayload, runRamPushE2E, warmAttachCheckpoint) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), E2ESettings (..), SymbolRead, parseSymbolRead, Payload, bankD3Payload, classicChromePayload, classicChromeIconPayload, experimentPayload, runRamPushE2E, warmAttachCheckpoint) where
 
 import Control.Applicative ((<|>))
-import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, try)
+import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, throwIO, try)
 import Control.Monad (forM, forM_, unless, when)
-import Data.Aeson (FromJSON (..), Value (..), encode, object, withObject, (.:), (.=))
+import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', encode, object, withObject, (.:), (.=))
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (nub, sort)
@@ -14,18 +14,20 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Char8 as C
 import GHC.Clock (getMonotonicTime)
 import qualified Data.Aeson.Key as K
+import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (shiftL, shiftR, (.|.))
 import Data.Int (Int32)
 import Data.Word (Word32)
-import Numeric (showFFloat, showHex)
+import Numeric (readHex, showFFloat, showHex)
 import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectory, removeDirectoryRecursive, setCurrentDirectory)
 import System.Environment (getExecutablePath, lookupEnv)
 import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stdout)
 import System.Posix.Files (setFileMode)
 import System.Posix.Temp (mkdtemp)
+import Text.Read (readMaybe)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, hostProcedure, procedureHex, routeKey, routeKeyHex)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.SegmentReceipt (SegmentReceipt (..), SegmentResult (..), elapsedSeconds, segmentName, segmentNameText)
@@ -100,6 +102,32 @@ data FujiModBridge = FujiModBridge
 -- | The engine behind the bridge protocol: the retained Python/native closure or jitl's FujiMod.
 data EmulationRuntime = RetainedRuntime | FujiModRuntime FujiModBridge deriving (Eq, Show)
 
+newtype ExportedSymbol = ExportedSymbol T.Text deriving (Eq, Show)
+newtype ReadLength = ReadLength Int deriving (Eq, Show)
+data SymbolRead = SymbolRead ExportedSymbol ReadLength deriving (Eq, Show)
+
+parseSymbolRead :: String -> Either String SymbolRead
+parseSymbolRead text = do
+  let (name, suffix) = break (== ':') text
+  unless (not (null name)) (Left "--read needs a symbol name")
+  count <- case suffix of
+    "" -> Right 64
+    ':' : digits | Just value <- readMaybe digits, value > 0, value <= 65536 -> Right value
+    _ -> Left "--read LENGTH must be an integer from 1 through 65536"
+  pure (SymbolRead (ExportedSymbol (T.pack name)) (ReadLength count))
+
+newtype ExperimentMetadata = ExperimentMetadata [(ExportedSymbol, Address)]
+
+instance FromJSON ExperimentMetadata where
+  parseJSON = withObject "experiment metadata" $ \fields -> do
+    symbols <- fields .: "symbols"
+    ExperimentMetadata <$> forM (KM.toList symbols) (\(name, value) -> do
+      text <- parseJSON value
+      address <- case text of
+        '0' : 'x' : digits | not (null digits), length digits <= 8, [(word, "")] <- readHex digits -> pure (Address word)
+        _ -> fail "experiment symbol address must be a 32-bit 0x-hex address"
+      pure (ExportedSymbol (K.toText name), address))
+
 data E2ESettings = E2ESettings
   { relinkMode :: RelinkMode
   , bootMode :: BootMode
@@ -116,6 +144,7 @@ data E2ESettings = E2ESettings
   , emulationRuntime :: EmulationRuntime
   -- | The DAT the user supplied, which a flash candidate's symbol table sits beside.
   , firmwareSource :: FilePath
+  , experimentReads :: [SymbolRead]
   }
 
 -- | The card attach checkpoint key: the staged guest state and the session's inputs.
@@ -203,6 +232,7 @@ payloadText p = case payloadKind p of
   ClassicChromeIcon -> "classic-chrome-icon"
   AfRing -> "af-ring"
   UsbToggle -> "usb-toggle"
+  Experiment -> "experiment"
 
 payloadContract :: Payload -> ReviewedContract
 payloadContract p = case payloadKind p of
@@ -211,6 +241,7 @@ payloadContract p = case payloadKind p of
   ClassicChromeIcon -> reviewedCcIconContract
   AfRing -> error "AF ring has no live reviewed contract; use //emulation:xm1-af-ring-e2e"
   UsbToggle -> reviewedToggleContract
+  Experiment -> error "experiments have no reviewed contract"
 
 -- | Whether the payload carries the Classic Chrome publications.
 carriesClassicChrome :: Payload -> Bool
@@ -392,6 +423,7 @@ data Relinked = Relinked
   , relinkedDisasm :: B.ByteString
   , relinkedManifest :: RamPushManifest
   , relinkedAllowlist :: AllowlistOutcome
+  , relinkedExperiment :: Maybe B.ByteString
   }
 
 -- | What an install checkpoint carries for the host: the allocation and install state files, the
@@ -448,11 +480,20 @@ warmAttachCheckpoint given python installedMedia adjustmentNand output = do
 
 -- | Runs the whole trajectory in one process, or with `segmentSelection` each named segment (and
 -- what it requires) in its own process from the install checkpoint, under RECEIPT/segment-NAME.
-runRamPushE2E :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+runRamPushE2E :: E2ESettings -> FilePath -> FilePath -> Maybe FilePath -> FilePath -> FilePath -> FilePath -> IO ()
 runRamPushE2E given python workspace trajectoryFile installedMedia adjustmentNand receipt = do
+  outcome <- try (runRamPushE2EUsing given python workspace trajectoryFile installedMedia adjustmentNand receipt)
+  case outcome of
+    Right () -> putStrLn ("receipt " ++ receipt ++ ": PASS (install, trajectory, unload)")
+    Left (failure :: SomeException) -> do
+      putStrLn ("receipt " ++ receipt ++ ": FAIL (install, trajectory, unload): " ++ displayException failure)
+      throwIO failure
+
+runRamPushE2EUsing :: E2ESettings -> FilePath -> FilePath -> Maybe FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+runRamPushE2EUsing given python workspace trajectoryFile installedMedia adjustmentNand receipt = do
   hSetBuffering stdout LineBuffering
-  trajectories <- B.readFile trajectoryFile
-    >>= either (ioError . userError . ("invalid RAM-push e2e trajectories: " ++)) pure . decodeTrajectories
+  bytes <- maybe (pure defaultExperimentTrajectory) B.readFile trajectoryFile
+  trajectories <- either (ioError . userError . ("invalid RAM-push e2e trajectories: " ++)) pure (decodeTrajectories bytes)
   let settleCaps = [ () | segment <- beforeUnload trajectories ++ afterUnload trajectories
                         , step <- segmentSteps segment, isJust (keyTimingSettle (stepTiming step)) ]
   case emulationRuntime given of
@@ -497,6 +538,9 @@ runRamPushE2E given python workspace trajectoryFile installedMedia adjustmentNan
       writePrivateBytes (receipt </> "e2e-segments.json") (BL.toStrict (encode (map fst outcomes)) <> "\n")
       require (all (null . snd) outcomes) "one or more trajectory segments failed"
 
+defaultExperimentTrajectory :: B.ByteString
+defaultExperimentTrajectory = "{\"schema\":1,\"before_unload\":[{\"phase\":\"experiment-menu\",\"observe\":true,\"capture\":\"experiment-menu\",\"steps\":[[\"menu\",0,0,0],[\"menu\",0,0,0],[\"down\",0,0,0],[\"up\",0,0,0],[\"right\",0,0,0],[\"left\",0,0,0]]},{\"phase\":\"experiment-back\",\"observe\":true,\"capture\":\"experiment-back\",\"steps\":[[\"back\",0,0,0]]}],\"after_unload\":[{\"phase\":\"experiment-unloaded\",\"observe\":true,\"capture\":\"experiment-unloaded\",\"steps\":[]}]}"
+
 seconds :: Double -> String
 seconds value = showFFloat (Just 1) value " s"
 
@@ -520,21 +564,31 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         putStrLn ("phase " ++ T.unpack label ++ ": " ++ seconds (ended - started))
         pure result
       selected = e2ePayload settings
-      relinkAt base = case relinkMode settings of
-        ReviewedRelink -> withPinnedReviewedBuild (payloadContract selected) selected base
-        UnreviewedRelink policy -> withUnreviewedBuild selected policy base
-      pushWith = case relinkMode settings of
-        ReviewedRelink -> runRamPush (payloadContract selected)
-        UnreviewedRelink _ -> runUnreviewedRamPush
-      unloadWith = case relinkMode settings of
-        ReviewedRelink -> runRamUnload (payloadContract selected)
-        UnreviewedRelink _ -> runUnreviewedRamUnload
+      experimental = payloadKind selected == Experiment
+      relinkAt base action
+        | experimental = do
+            relinker <- runfilesRelinker selected
+            withRelinkedBuildUsing relinker EnforceAllowlist base action
+        | otherwise = case relinkMode settings of
+            ReviewedRelink -> withPinnedReviewedBuild (payloadContract selected) selected base action
+            UnreviewedRelink policy -> withUnreviewedBuild selected policy base action
+      pushWith retained
+        | experimental = runRamPushWith xm1PeerCacheAvailability (retainedAllocation retained)
+        | otherwise = case relinkMode settings of
+            ReviewedRelink -> runRamPush (payloadContract selected) retained
+            UnreviewedRelink _ -> runUnreviewedRamPush retained
+      unloadWith
+        | experimental = runRamUnloadWith xm1PeerCacheAvailability
+        | otherwise = case relinkMode settings of
+            ReviewedRelink -> runRamUnload (payloadContract selected)
+            UnreviewedRelink _ -> runUnreviewedRamUnload
       fetchSites = if carriesClassicChrome selected then classicChromeFetchSites else []
       relinkFiles base = relinkAt base $ \pinned -> Relinked (pinnedDocument pinned) (pinnedRuntime pinned)
         <$> B.readFile (pinnedDirectory pinned </> "kernel.syms")
         <*> B.readFile (pinnedDirectory pinned </> "kernel.disasm")
         <*> pure (pinnedManifest pinned)
         <*> pure (pinnedAllowlist pinned)
+        <*> (if experimental then Just <$> B.readFile (pinnedDirectory pinned </> "experiment.json") else pure Nothing)
       choose candidates
         | not (planFromInstall plan) || bootMode settings == FreshBoot = pure (Nothing, Nothing)
         | otherwise = do
@@ -566,6 +620,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           writePrivateBytes (relinkDirectory </> "ram-push-manifest.json") (relinkedDocument relinked)
           writePrivateBytes (relinkDirectory </> "kernel.syms") (relinkedSyms relinked)
           writePrivateBytes (relinkDirectory </> "kernel.disasm") (relinkedDisasm relinked)
+          forM_ (relinkedExperiment relinked) (writePrivateBytes (relinkDirectory </> "experiment.json"))
           let allowlist = allowlistReceipt (relinkedAllowlist relinked)
           writePrivateBytes (relinkDirectory </> "bank-allowlist.json") (BL.toStrict (encode allowlist) <> "\n")
           pure allowlist
@@ -613,6 +668,15 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           pure (fromIntegral address)
     declaredTraceSites <- resolveTraceSites resolveName (planTraceSites plan)
     symbolsDigest <- sha256File symbolsPath
+    exported <- if experimental
+      then do
+        metadata <- B.readFile (relinkDirectory </> "experiment.json")
+        ExperimentMetadata symbols <- either (ioError . userError . ("invalid experiment.json: " ++)) pure (eitherDecodeStrict' metadata)
+        forM (experimentReads settings) $ \(SymbolRead name@(ExportedSymbol text) (ReadLength count)) -> do
+          address <- maybe (ioError (userError ("experiment exports no symbol " ++ T.unpack text))) pure (lookup name symbols)
+          require (toInteger (unAddress address) + toInteger count <= 0x100000000) "--read window overflows the guest address space"
+          pure (text, address, count)
+      else pure []
     let readAddress = resolveAddress
     let readMailbox = mailboxReport <$> emulatorReadMemory emulator mailbox 104
         stop phase message = do
@@ -677,7 +741,18 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     preservationAck <- case protection of
       PreservationProtection ranges -> Just <$> emulatorPreservationBegin emulator ranges
       _ -> pure Nothing
-    capturedBefore <- segments (planBefore plan)
+    trajectoryOutcome <- try $ do
+      captured <- segments (planBefore plan)
+      windows <- forM exported $ \(name, Address address, count) -> do
+        bytes <- emulatorReadMemory emulator address count
+        putStrLn ("read " ++ T.unpack name ++ " " ++ hexAddress address ++ " (" ++ show count ++ " bytes): " ++ hexBytes bytes)
+        pure (object ["symbol" .= name, "address" .= hexAddress address, "length" .= count, "bytes" .= hexBytes bytes])
+      pure (captured, windows)
+    (capturedBefore, symbolReads, trajectoryFailure) <- case trajectoryOutcome of
+      Right (captured, windows) -> pure (captured, windows, Nothing)
+      Left (failure :: SomeException)
+        | experimental -> pure ([], [], Just (displayException failure))
+        | otherwise -> throwIO failure
     unloadMailbox <- if planUnload plan
       then do
         privateDirectory unloadDirectory
@@ -769,6 +844,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           , "trajectories" .= map (\name -> object ["name" .= name, "result" .= String "matched"])
               (nub (map segmentPhase (filter (not . segmentObserve) (planBefore plan ++ planAfter plan))))
           , "observations" .= (observed :: [Value])
+          , "reads" .= symbolReads
+          , "checks" .= object ["install" .= String "PASS", "trajectory" .= maybe (String "PASS") (const (String "FAIL")) trajectoryFailure, "unload" .= (if planUnload plan then String "PASS" else String "NOT_RUN")]
+          , "trajectory_failure" .= trajectoryFailure
           , "mailbox" .= object ["install" .= installMailbox, "rollback" .= unloadMailbox,
                                  "address" .= hexAddress mailbox]
           , "outcome" .= judgement
@@ -788,6 +866,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         when stale (stop "protected-writes" "control output contains a stale e2e-result.json")
         writePrivateBytes (e2e </> "e2e-control.json") (BL.toStrict (encode result) <> "\n")
         ioError (userError "control refused as expected")
+    forM_ trajectoryFailure (ioError . userError)
     pure (manifestPublications manifest)
   when (planUnload plan && carriesClassicChrome selected) $
     timed "cold-restart-read" (coldRestartRead settings python runtime installedMedia adjustmentNand published e2e)
