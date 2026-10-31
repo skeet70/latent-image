@@ -70,6 +70,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/lib.rs",
     "//emulation:fujimod-xm1/src/machine.rs",
     "//emulation:fujimod-xm1/src/main.rs",
+    "//emulation:fujimod-xm1/src/memory_view.rs",
     "//emulation:fujimod-xm1/src/nand_image.rs",
     "//emulation:fujimod-xm1/src/native_case.rs",
     "//emulation:fujimod-xm1/src/native_case_main.rs",

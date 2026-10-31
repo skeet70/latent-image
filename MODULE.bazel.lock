@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "msl57/T3rZ/UOKaq+1alg+3ycd1QvsQtxXPohK83Wlo=",
+        "bzlTransitiveDigest": "5LCd3QisWcH9aSKRKY9jc7Dlk9TJIDTgt/87bt5oFtE=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -495,6 +495,7 @@
                 "@@//emulation:fujimod-xm1/src/lib.rs": "//emulation:fujimod-xm1/src/lib.rs",
                 "@@//emulation:fujimod-xm1/src/machine.rs": "//emulation:fujimod-xm1/src/machine.rs",
                 "@@//emulation:fujimod-xm1/src/main.rs": "//emulation:fujimod-xm1/src/main.rs",
+                "@@//emulation:fujimod-xm1/src/memory_view.rs": "//emulation:fujimod-xm1/src/memory_view.rs",
                 "@@//emulation:fujimod-xm1/src/nand_image.rs": "//emulation:fujimod-xm1/src/nand_image.rs",
                 "@@//emulation:fujimod-xm1/src/native_case.rs": "//emulation:fujimod-xm1/src/native_case.rs",
                 "@@//emulation:fujimod-xm1/src/native_case_main.rs": "//emulation:fujimod-xm1/src/native_case_main.rs",

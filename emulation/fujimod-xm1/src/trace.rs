@@ -1,6 +1,8 @@
 //! Labelled instruction points on every core and the entries recorded at them.
 
 use crate::provenance::Guest;
+use crate::memory_view::{MemoryAddress, MemoryCore, TcmRegister, static_span, tcm_window};
+use fujimod_emulator::board::factory::{Graph, MemoryMap};
 use fujimod_emulator::board::observation::InstructionPoints;
 use fujimod_emulator::session::Session;
 use fujimod_emulator_cpu::{Register, arm};
@@ -105,7 +107,7 @@ pub const CAPTURE_OBSERVATION_BOUNDS: CaptureObservationBounds = CaptureObservat
     retained_memory_bytes: CAPTURE_MEMORY_BYTES,
     charged_storage_bytes: std::mem::size_of::<CaptureEvent>() * CAPTURE_DETAIL_LIMIT
         + std::mem::size_of::<SiteObservation>() * CAPTURE_SITE_LIMIT
-        + std::mem::size_of::<CaptureObservation>() + CAPTURE_OVERHEAD_BYTES,
+        + std::mem::size_of::<CaptureObservation>() + CAPTURE_OVERHEAD_BYTES + CAPTURE_MAP_STORAGE_BYTES,
 };
 
 #[derive(Clone, Copy, Serialize)]
@@ -184,6 +186,114 @@ impl Serialize for CaptureRam {
 }
 
 #[derive(Clone, Copy)]
+enum SecondFilterSite {
+    Descriptor,
+    SelectorCall,
+    SelectorRead,
+    SelectorStore,
+    OperandCall,
+    Low10,
+    Low13,
+    Store,
+}
+
+impl SecondFilterSite {
+    fn at(address: Guest) -> Option<Self> {
+        match address.0 {
+            0x00da426c => Some(Self::Descriptor),
+            0x00da4300 => Some(Self::SelectorCall),
+            0x00689114 => Some(Self::SelectorRead),
+            0x00689140 => Some(Self::SelectorStore),
+            0x00da4308 => Some(Self::OperandCall),
+            0x00689444 => Some(Self::Low10),
+            0x00689468 => Some(Self::Low13),
+            0x00689490 => Some(Self::Store),
+            _ => None,
+        }
+    }
+}
+
+const CAPTURE_MAP_LIMIT: usize = 256;
+
+struct DecoderWindow {
+    core: MemoryCore,
+    start: MemoryAddress,
+    end: MemoryAddress,
+}
+
+/// Graph-owned RAM views for event-time pointer observations.
+pub struct CaptureMemory {
+    maps: Box<[MemoryMap]>,
+    decoder_windows: Box<[DecoderWindow]>,
+}
+
+impl CaptureMemory {
+    /// The graph must be the one used to construct the observed session.
+    pub fn from_graph(graph: Graph) -> Result<Self, String> {
+        graph.validate()?;
+        if graph.mappings.len() > CAPTURE_MAP_LIMIT {
+            return Err("capture memory graph exceeds its mapping bound".into());
+        }
+        let mut decoder_windows = Vec::new();
+        // Graph::validate_decoders requires every choice's (core, address, size) set to equal the initial choice's set.
+        for decoder in graph.decoders {
+            let choice = decoder.choices.into_iter().nth(decoder.initial).ok_or("capture memory decoder choice absent")?;
+            for map in choice.processors {
+                if decoder_windows.len() == CAPTURE_MAP_LIMIT {
+                    return Err("capture memory graph exceeds its decoder-window bound".into());
+                }
+                decoder_windows.push(DecoderWindow {
+                    core: MemoryCore(map.core),
+                    start: MemoryAddress(map.address),
+                    end: MemoryAddress(map.address.checked_add(map.size as u64).ok_or("capture decoder window overflows")?),
+                });
+            }
+        }
+        Ok(Self { maps: graph.mappings.into_boxed_slice(), decoder_windows: decoder_windows.into_boxed_slice() })
+    }
+
+    fn physical(&self, core: MemoryCore, address: Guest, length: usize, tcm: &TcmViews) -> Option<RamAddress> {
+        let physical = RamAddress::parse(address.0, length)?;
+        let start = u64::from(address.0);
+        let end = start.checked_add(length as u64)?;
+        if self.decoder_windows.iter().any(|window| window.core.0 == core.0 && start < window.end.0 && window.start.0 < end)
+            || tcm.windows.iter().flatten().any(|&(low, high)| start < high && low < end) {
+            return None;
+        }
+        let span = static_span(&self.maps, core, MemoryAddress(start)..MemoryAddress(end)).ok()?;
+        (span.physical.0 == u64::from(physical.0)).then_some(physical)
+    }
+}
+
+const CAPTURE_MAP_STORAGE_BYTES: usize = std::mem::size_of::<CaptureMemory>()
+    + CAPTURE_MAP_LIMIT * (std::mem::size_of::<MemoryMap>() + std::mem::size_of::<DecoderWindow>());
+
+struct TcmViews {
+    windows: [Option<(u64, u64)>; 2],
+}
+
+impl TcmViews {
+    fn read(session: &Session, core: MemoryCore) -> Result<Self, String> {
+        let cpu = session.board.cpu(core.0)?;
+        let mut windows = [None; 2];
+        for (bank, window) in windows.iter_mut().enumerate() {
+            let register = cpu.coprocessor(arm::Coprocessor {
+                cp: 15, opc1: 0, crn: 9, crm: 1, opc2: bank as u32, secure: 0, wide: false,
+            }, None)?;
+            let register = u32::try_from(register).map_err(|_| "capture TCM register exceeds 32 bits")?;
+            *window = tcm_window(TcmRegister(register))?;
+        }
+        Ok(Self { windows })
+    }
+}
+
+struct DiagnosticViews<'a> {
+    memory: Option<&'a CaptureMemory>,
+    core: MemoryCore,
+    tcm: Option<TcmViews>,
+}
+
+#[derive(Clone, Copy)]
 struct RamAddress(u32);
 
 impl RamAddress {
@@ -236,8 +346,10 @@ impl CaptureRam {
         self.count += 1;
     }
 
-    fn word(&self, address: u32) -> Option<u32> {
+    fn word(&self, address: Guest) -> Option<u32> {
+        let address = RamAddress::parse(address.0, 4)?.0;
         self.spans[..self.count].iter().find_map(|span| {
+            if !matches!(span.status, RamStatus::Complete) { return None; }
             let relative = address.checked_sub(span.address)? as usize;
             if relative.checked_add(4)? > usize::from(span.length) { return None; }
             let start = usize::from(span.offset) + relative;
@@ -259,11 +371,11 @@ impl CaptureRam {
     }
 
     fn recorder(&mut self, session: &Session) {
-        if self.word(0x015ad53c).is_none() {
+        if self.word(Guest(0x015ad53c)).is_none() {
             self.read(session, 0x015ad53c, 4);
         }
         self.read(session, 0x015ad430, 32);
-        let Some(index) = self.word(0x015ad53c).filter(|&index| index <= 200) else {
+        let Some(index) = self.word(Guest(0x015ad53c)).filter(|&index| index <= 200) else {
             self.incomplete = true;
             return;
         };
@@ -280,10 +392,10 @@ impl CaptureRam {
             return;
         };
         self.read(session, physical, 12);
-        if let (Some(length), Some(payload)) = (self.word(physical + 4), self.word(physical + 8)) {
+        if let (Some(length), Some(payload)) = (self.word(Guest(physical + 4)), self.word(Guest(physical + 8))) {
             self.read(session, payload, length as usize);
         }
-        if self.word(physical).is_some_and(|word| word & 0xffff == 0x137e) {
+        if self.word(Guest(physical)).is_some_and(|word| word & 0xffff == 0x137e) {
             self.recorder(session);
         }
     }
@@ -297,9 +409,79 @@ impl CaptureRam {
         self.read(session, 0x0170389c, 4);
     }
 
-    fn event(session: &Session, address: u32, registers: &[u32; 4]) -> Self {
+    fn unavailable(&mut self, address: Guest, length: usize) {
+        self.incomplete = true;
+        if self.count == CAPTURE_SPAN_LIMIT { return; }
+        self.spans[self.count] = CapturedSpan {
+            address: address.0, offset: self.used as u16, length: 0,
+            requested: length.min(u16::MAX as usize) as u16, status: RamStatus::ReadFailed,
+        };
+        self.count += 1;
+    }
+
+    fn view(&mut self, session: &Session, views: &DiagnosticViews<'_>, address: Guest, length: usize) {
+        if RamAddress::parse(address.0, length).is_none() {
+            self.read(session, address.0, length);
+            return;
+        }
+        let physical = views.memory.zip(views.tcm.as_ref())
+            .and_then(|(memory, tcm)| memory.physical(views.core, address, length, tcm));
+        if let Some(physical) = physical {
+            self.read(session, physical.0, length);
+        } else {
+            self.unavailable(address, length);
+        }
+    }
+
+    fn follow(&mut self, session: &Session, views: &DiagnosticViews<'_>, pointer: Option<Guest>, length: usize) {
+        if let Some(pointer) = pointer {
+            self.view(session, views, pointer, length);
+        } else {
+            self.incomplete = true;
+        }
+    }
+
+    fn pointer(&self, base: Guest, offset: u32) -> Option<Guest> {
+        self.word(Guest(base.0.checked_add(offset)?)).map(Guest)
+    }
+
+    fn second_filter(&mut self, session: &Session, views: &DiagnosticViews<'_>, site: SecondFilterSite, registers: &[u32; 4], sp: Guest) {
+        match site {
+            SecondFilterSite::Descriptor => {
+                let descriptor = Guest(registers[0]);
+                self.view(session, views, descriptor, 240);
+                self.follow(session, views, self.pointer(descriptor, 0xc8), 16);
+                let row = self.word(descriptor)
+                    .and_then(|index| index.checked_mul(100))
+                    .and_then(|offset| 0x00da52c0u32.checked_add(offset))
+                    .map(Guest);
+                self.follow(session, views, row, 100);
+            }
+            SecondFilterSite::SelectorCall => {
+                self.view(session, views, Guest(registers[3]), 16);
+                self.view(session, views, sp, 24);
+            }
+            SecondFilterSite::SelectorRead | SecondFilterSite::SelectorStore => {
+                self.view(session, views, sp, 24);
+            }
+            SecondFilterSite::OperandCall => {
+                self.view(session, views, Guest(registers[0]), 16);
+                self.view(session, views, sp, 24);
+            }
+            SecondFilterSite::Low10 | SecondFilterSite::Low13 | SecondFilterSite::Store => {
+                self.view(session, views, sp, 24);
+                self.follow(session, views, self.pointer(sp, 4), 16);
+            }
+        }
+    }
+
+    fn event(session: &Session, memory: Option<&CaptureMemory>, core: MemoryCore, address: Guest, registers: &[u32; 4], sp: Guest) -> Self {
         let mut ram = Self::default();
-        match address {
+        if let Some(site) = SecondFilterSite::at(address) {
+            let views = DiagnosticViews { memory, core, tcm: TcmViews::read(session, core).ok() };
+            ram.second_filter(session, &views, site, registers, sp);
+        }
+        match address.0 {
             0x0072503c | 0x00ef9ae0 | 0x01039e18 | 0x00fe95bc |
             0x00e7fca0 | 0x00e6f0e0 | 0x00e6f260 | 0x00e6c490 => ram.message(session, registers[1]),
             0x00ef9a94 | 0x00fe9580 => ram.read(session, registers[1], registers[2] as usize),
@@ -362,12 +544,7 @@ struct CaptureObservation {
     ram_incomplete: bool,
 }
 
-const _: () = assert!(
-    std::mem::size_of::<CaptureEvent>() * CAPTURE_DETAIL_LIMIT
-        + std::mem::size_of::<SiteObservation>() * CAPTURE_SITE_LIMIT
-        + std::mem::size_of::<CaptureObservation>()
-        + CAPTURE_OVERHEAD_BYTES <= CAPTURE_MEMORY_BYTES
-);
+const _: () = assert!(CAPTURE_OBSERVATION_BOUNDS.charged_storage_bytes <= CAPTURE_MEMORY_BYTES);
 
 #[derive(Serialize)]
 struct CaptureEventView<'a> {
@@ -478,6 +655,7 @@ pub struct TraceSites {
     resumed: BTreeMap<usize, ResumeMarker>,
     capture_observation: Option<CaptureObservation>,
     pending_points: Vec<Option<u64>>,
+    capture_memory: Option<CaptureMemory>,
 }
 
 fn register(session: &Session, core: usize, register: arm::Register) -> Result<u32, String> {
@@ -486,6 +664,21 @@ fn register(session: &Session, core: usize, register: arm::Register) -> Result<u
 }
 
 impl TraceSites {
+    pub fn with_memory(session: &Session, memory: CaptureMemory) -> Self {
+        let mut traces = Self::default();
+        traces.prepare_memory(session, memory);
+        traces
+    }
+
+    pub(crate) fn needs_capture_memory(&self) -> bool {
+        self.capture_memory.is_none() && self.capture_observation.is_none()
+            && self.sites.keys().any(|&address| SecondFilterSite::at(Guest(address)).is_some())
+    }
+
+    pub(crate) fn prepare_memory(&mut self, session: &Session, memory: CaptureMemory) {
+        self.capture_memory = (session.board.mappings() == memory.maps.as_ref()).then_some(memory);
+    }
+
     pub fn capture_observation_active(&self) -> bool {
         self.capture_observation.is_some()
     }
@@ -742,10 +935,11 @@ impl TraceSites {
                     register(session, *core, arm::Register::R(2))?,
                     register(session, *core, arm::Register::R(3))?,
                 ];
-                let ram = CaptureRam::event(session, address, &registers);
+                let sp = register(session, *core, arm::Register::R(13))?;
+                let ram = CaptureRam::event(session, self.capture_memory.as_ref(), MemoryCore(*core), Guest(address), &registers, Guest(sp));
                 let event = CaptureEvent {
                     sequence, site_index: index, core: *core, instructions, registers,
-                    sp: register(session, *core, arm::Register::R(13))?,
+                    sp,
                     lr: register(session, *core, arm::Register::R(14))?,
                     cpsr: register(session, *core, arm::Register::Cpsr)?,
                     ram,

@@ -231,7 +231,7 @@ impl Ff80 {
         if self.hits_seen != self.machine.traces.hits.len() {
             return Err("capture observation requires consumed rendezvous trace hits".into());
         }
-        self.machine.traces.begin_capture_observation()?;
+        self.machine.begin_capture_observation()?;
         self.hits_seen = 0;
         Ok(())
     }
