@@ -119,6 +119,8 @@ Read the relevant package README and [project principles](docs/principles.md) be
 
 Live camera access is separate from the host quickstart and exposed through explicit commands under `//transport:camera`. Camera operations can change state or damage a device; passing host tests or emulator cases does not establish safe installation, successful recovery, or hardware acceptance. Recovery tooling is not a universal repair method. Review the [operation classes](spec/07-governance-and-handoff.md#32-operation-classes) and [hardware safety rules](spec/07-governance-and-handoff.md#33-standing-rules) before connecting hardware.
 
+To set the debug flag on your own body and RAM-push a payload you are changing, follow [experimenting on your own X-M1](docs/experimenting-on-your-x-m1.md).
+
 Publish tools, implementations, and detailed firmware findings, not proprietary inputs. Firmware, extracted proprietary code/data, dumps, calibration, private identities, raw camera logs, and local artifacts belong under ignored `private-data/`, not in issues or pull requests. Firmware-backed commands require independently obtained inputs and their documented identity checks. See the [publication boundary](docs/principles.md#publication-and-asset-boundaries) and each tool's input requirements.
 
 ## License and credits

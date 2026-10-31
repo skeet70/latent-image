@@ -156,6 +156,21 @@ for op in commit-f7-enable commit-f7-restore; do
 done
 if "$binary" commit-f7; then exit 1; fi
 if "$binary" rehearse commit-f7 "$reference"; then exit 1; fi
+for bad in "debug-flag" "debug-flag bogus" "debug-flag reference" "rehearse debug-flag status"; do
+  if "$binary" $bad; then exit 1; fi
+done
+if env -u BUILD_WORKSPACE_DIRECTORY "$binary" debug-flag status "$tmpdir/flag-out"; then exit 1; fi
+test ! -e "$tmpdir/flag-out"
+if BUILD_WORKSPACE_DIRECTORY="$tmpdir" "$binary" debug-flag status "$tmpdir/one" "$tmpdir/two"; then exit 1; fi
+if (cd "$tmpdir" && BUILD_WORKSPACE_DIRECTORY="$tmpdir" "$binary" debug-flag status relative-session); then exit 1; fi
+test ! -e "$tmpdir/relative-session"
+for step in enable disable; do
+  if BUILD_WORKSPACE_DIRECTORY="$tmpdir" "$binary" debug-flag "$step" "$tmpdir/flag-out"; then exit 1; fi
+  test ! -e "$tmpdir/flag-out"
+done
+for bad in "ram-session" "ram-session af-ring" "ram-session bogus" "rehearse ram-session usb-toggle"; do
+  if "$binary" $bad; then exit 1; fi
+done
 
 ramplan="$tmpdir/read-ram-plan.json"
 printf '{"windows":[{"index":0,"address":"0x400a0800","length":64,"purpose":"log store header"},{"index":1,"address":"0x400c0800","length":4,"purpose":"boot tick cell"},{"index":2,"address":"0x009571d0","length":16,"purpose":"menu frame and cursor"}]}\n' > "$ramplan"

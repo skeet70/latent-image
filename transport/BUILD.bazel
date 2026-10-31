@@ -186,10 +186,13 @@ haskell_binary(
         ":ram-push-toggle-pins",
         "//host:base",
         "//broker:core",
+        "//host:bytestring",
         "//host:directory",
         "//host:filepath",
+        "//host:json",
         "//host:unix",
         "//host:time",
+        "//readplan:readplan-core",
     ],
 )
 

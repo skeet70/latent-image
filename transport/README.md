@@ -1,6 +1,6 @@
 # `//transport:camera`
 
-The closed X-M1 service operations and the narrow native USB provider behind them. Building, `--help` and `rehearse` never load libusb, and of the tests only `//transport:native-usb-tests` does: it enumerates the host bus to exercise the lister, with no camera attached and no device opened, claimed or transferred. The live `identify`, `read-config`, `end-setting`, `probe-ram`, `read-log`, `probe-bootrom`, `probe-area2`, `probe-straps`, `probe-code`, `probe-ownership`, `probe-routes`, `dump-ram`, `read-media`, `arm-auto-act`, `commit-f7-enable`, `commit-f7-restore`, `read-ram`, `read-bulk`, `ram-push` and `ram-unload` commands are the only paths that open a device or transfer. Running one is a camera run and follows [the camera-run procedure](../spec/07-governance-and-handoff.md#3-camera-runs).
+The closed X-M1 service operations and the narrow native USB provider behind them. Building, `--help` and `rehearse` never load libusb, and of the tests only `//transport:native-usb-tests` does: it enumerates the host bus to exercise the lister, with no camera attached and no device opened, claimed or transferred. The live `identify`, `read-config`, `end-setting`, `probe-ram`, `read-log`, `probe-bootrom`, `probe-area2`, `probe-straps`, `probe-code`, `probe-ownership`, `probe-routes`, `dump-ram`, `read-media`, `arm-auto-act`, `commit-f7-enable`, `commit-f7-restore`, `read-ram`, `read-bulk`, `ram-push` and `ram-unload` commands, and the `debug-flag` and `ram-session` commands built from them, are the only paths that open a device or transfer. Running one is a camera run and follows [the camera-run procedure](../spec/07-governance-and-handoff.md#3-camera-runs).
 
 ```sh
 devenv shell -- bazel build --lockfile_mode=error --repository_disable_download //transport:camera
@@ -32,6 +32,8 @@ probe-sd-host [--repeat N --interval-ms M] [OUTDIR]
 read-bulk ADDRESS LENGTH [OUTDIR]
 ram-push MANIFEST [OUTDIR]
 ram-unload STATE [OUTDIR]
+debug-flag status|backup|enable|disable [OUTDIR]
+ram-session recipe-bank|classic-chrome|classic-chrome-icon|usb-toggle [OUTDIR]
 rehearse identify|read-config PLAN_JSON|end-setting|probe-ram|read-log|probe-bootrom|probe-area2|probe-straps|probe-code|probe-ownership|probe-routes fixed|probe-routes derived PLAN_JSON|dump-ram SEGMENT|read-media|arm-auto-act|commit-f7-enable REFERENCE_BIN|commit-f7-restore REFERENCE_BIN|read-ram PLAN_JSON [--repeat N --interval-ms M]|probe-sd-host [--repeat N --interval-ms M]|read-bulk ADDRESS LENGTH|ram-push MANIFEST|ram-unload STATE
 --help
 ```
@@ -252,6 +254,14 @@ The request-owned peer-prepare bootstrap invokes stock synchronous core-1 range 
 
 No argument of any command can set an opcode, function, mailbox, parameter, text, endpoint or transfer order. Plan files set config window offsets (`read-config`) and RAM window addresses and lengths (`probe-routes derived`, `read-ram`), `read-bulk` takes one window's address and length, and `read-ram` and `probe-sd-host` take a bounded pass count and interval; no other argument sets a length or address, and `probe-sd-host`'s peripheral windows are compiled in. There is no raw, debug, firmware, detach, reset or retry command.
 
+## Guided commands
+
+These compose the operations above for [experimenting on your own X-M1](../docs/experimenting-on-your-x-m1.md); each step sends the bytes of the operation it names and nothing else.
+
+**`debug-flag status`** runs `read-config` over `private-data/read-plans/gate-byte.json` and prints adjustment bytes `0xf7`, `0x80`, `0x81` and `0xa2` from window `0x000000`. **`debug-flag backup`** runs `read-config` over `private-data/read-plans/adjustment-42000.json`, the whole adjustment area. When `private-data/debug-flag/reference-000000.bin` is absent it writes window `0x000000` there, mode 0600; otherwise it stops unless the window equals that file outside `0x80`, `0x81` and `0xf7`. Either plan is generated with the [`//readplan:read-plan`](../readplan/README.md) scope of the same name when absent. **`debug-flag enable`** and **`debug-flag disable`** run `commit-f7-enable` and `commit-f7-restore` with that file as `REFERENCE_BIN` and refuse before USB when it is absent. Without OUTDIR the reads write to `private-data/sessions/<UTC>-debug-flag-status` or `-debug-flag-backup`, and the commits to the commit operation's own default.
+
+**`ram-session KIND`** first relinks KIND at its lowest reference base through the compiled contract, the check `ram-relink` applies, and refuses before USB on any difference. It then runs `ram-alloc` with KIND's allocation size into `OUTDIR/alloc`, `ram-relink` into `OUTDIR/link` and `ram-push` into `OUTDIR/push`, stopping at the first refusal. A relink failure after the allocation leaves the block retained and uninstalled, and the command names its state file. Without OUTDIR it writes to `private-data/sessions/<UTC>-ram-session-KIND`.
+
 ## RAM-push review record
 
 `transport/ram-push-review.json` is the only source of the RAM-push pins. At build time `//transport:ram-push-pins-module` runs `//transport:ram-push-pins-generator` over it and writes the module `RamPushReviewedPins`, whose `reviewedContract` holds the source-identity map and publication contract digest that `ram-relink`, `ram-push` and `ram-unload` require. That module is the library `//transport:ram-push-pins`; `//transport:camera`, `//transport:ram-push-camera-pins`, `//transport:ram-push-reviewed-build-check` and the emulator e2e's reviewed relink link it, and `//transport:camera-core` does not, so a re-pin recompiles one module. A record that does not parse fails the build. The generator compiles every entry whatever its status: the camera binary does not read verdicts, so a pin recorded `unreviewed` is accepted like an approved one, and the pre-go gate below is the check that the pinned bytes were reviewed.
@@ -281,7 +291,7 @@ The three `ram-push{,-cc,-cc-icon}-review-bytes` gates run under `bazel test //.
 ### Re-pin
 
 1. Add the approving review to `reviews`, or the passed candidate to `content_checks`. A new manifest identity also needs its `pins` entry (`identity`, `source`, `component`) and, for a workspace file, a place in `//transport:ram-push-pinned-workspace-files`.
-2. Run `devenv shell -- bazel run //transport:ram-push-repin -- approved REVIEW_ID COMMIT SUBJECT...`, `content-checked CHECK_ID SUBJECT...` or `unreviewed COMMIT SUBJECT...`, where `SUBJECT` is a pin identity or `publication-contract`. It relinks the current tree at the payload's first reference base (`0x00c40000` for the bank, `0x00c20000` for Classic Chrome) from private-data, takes each subject's digest from that build's manifest, sets the status, rewrites the record and prints the remaining verdict findings and any identity on which the manifest and the record disagree.
+2. Run `devenv shell -- bazel run //transport:ram-push-repin -- approved REVIEW_ID COMMIT SUBJECT...`, `content-checked CHECK_ID SUBJECT...` or `unreviewed COMMIT SUBJECT...`, where `SUBJECT` is a pin identity or `publication-contract`; `--changed` in place of the subjects selects every pin and the contract whose recorded digest differs from the relink, and re-pins nothing when none does. It relinks the current tree at the payload's first reference base (`0x00c40000` for the bank, `0x00c20000` for Classic Chrome) from private-data, takes each subject's digest from that build's manifest, sets the status, rewrites the record and prints each re-pinned subject, the remaining verdict findings and any identity on which the manifest and the record disagree.
 3. Commit the record with the change it pins.
 
 ### Current state
