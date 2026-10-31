@@ -1,6 +1,7 @@
 //! Standalone and composed loader-B prefix observation from natural reset.
 use super::*;
-use super::startup::{tcm_disjoint_views, tcm_window};
+use super::startup::tcm_disjoint_views;
+use crate::memory_view::{MemoryAddress, MemoryCore, TcmRegister, static_span, tcm_window};
 use super::wait::{self, BoardState, CoreCounts, LOADER_B_SHA256, RECORD2_SHA256, require};
 use fujimod_catalog::configuration::RunEngine;
 use fujimod_emulator::board::observation::scoped::{
@@ -453,55 +454,6 @@ fn tcm_words(machine: &Machine) -> Result<TcmWords, String> {
     ])
 }
 
-struct StaticSpan<'a> {
-    physical: Address,
-    single: Option<&'a factory::MemoryMap>,
-}
-
-/// Unique readable coverage with one affine physical translation.
-fn static_span(maps: &[factory::MemoryMap], core: WitnessCore, extent: std::ops::Range<Address>) -> Result<StaticSpan<'_>, String> {
-    let core = match core { WitnessCore::Core0 => 0, WitnessCore::Core1 => 1 };
-    let (start, end) = (extent.start.0, extent.end.0);
-    require(start < end && end <= 1 << 32, "loader-prefix static extent is empty or exceeds 32 bits")?;
-    let mut cursor = start;
-    let mut physical: Option<u64> = None;
-    let mut single = None;
-    while cursor < end {
-        let mut selected = None;
-        let mut next = end;
-        for map in maps.iter().filter(|map| map.core == core) {
-            let map_end = map.address.checked_add(map.size as u64).ok_or("loader-prefix static mapping address overflows")?;
-            let physical_end = map.physical.checked_add(map.size as u64).ok_or("loader-prefix static mapping physical extent overflows")?;
-            require(map.size != 0 && map_end <= 1 << 32 && physical_end <= 1 << 32,
-                "loader-prefix static mapping is empty or exceeds 32 bits")?;
-            if map.address >= end || map_end <= start {
-                continue;
-            }
-            require(map.permissions & 1 != 0, "loader-prefix static extent includes an unreadable mapping")?;
-            if map.address > cursor {
-                next = next.min(map.address);
-            } else if cursor < map_end {
-                require(selected.is_none(), "loader-prefix static extent has overlapping mappings")?;
-                selected = Some(map);
-                next = next.min(map_end);
-            }
-        }
-        let map = selected.ok_or_else(|| format!("loader-prefix address {cursor:#x} has no core-{core} static mapping"))?;
-        let translated = map.physical.checked_add(cursor - map.address).ok_or("loader-prefix static translation overflows")?;
-        if let Some(base) = physical {
-            require(base.checked_add(cursor - start) == Some(translated),
-                "loader-prefix static extent has noncontiguous physical translation")?;
-        } else {
-            physical = Some(translated);
-            single = Some(map);
-        }
-        if next < end {
-            single = None;
-        }
-        cursor = next;
-    }
-    Ok(StaticSpan { physical: Address(physical.ok_or("loader-prefix static extent has no translation")?), single })
-}
 
 struct Runner<'a> {
     contract: &'a LoaderContract,
@@ -616,13 +568,13 @@ impl<'a> Runner<'a> {
     /// which must contain it.
     fn static_map(&self, core: usize, guest: u64, length: u64) -> Result<&factory::MemoryMap, String> {
         let end = guest.checked_add(length).ok_or("loader-prefix static extent overflows")?;
-        static_span(&self.committed, WitnessCore::from_index(core)?, Address(guest)..Address(end))?
+        static_span(&self.committed, MemoryCore(core), MemoryAddress(guest)..MemoryAddress(end))?
             .single.ok_or_else(|| "loader-prefix extent overlaps several static mappings or leaves its mapping".into())
     }
 
     fn physical_of(&self, core: usize, guest: u64, length: u64) -> Result<u64, String> {
         let end = guest.checked_add(length).ok_or("loader-prefix static extent overflows")?;
-        Ok(static_span(&self.committed, WitnessCore::from_index(core)?, Address(guest)..Address(end))?.physical.0)
+        Ok(static_span(&self.committed, MemoryCore(core), MemoryAddress(guest)..MemoryAddress(end))?.physical.0)
     }
 
     fn bound(&self, guest: u64, length: u64) -> Result<Bound, String> {
@@ -739,7 +691,7 @@ impl<'a> Runner<'a> {
         let low = top.checked_sub(ENTRY_STACK_BYTES).ok_or("loader-prefix entry stack underflows")?;
         let mut holding = Vec::new();
         for (bank, register) in [(TcmBank::Atcm, stop.tcm[1][0]), (TcmBank::Btcm, stop.tcm[1][1])] {
-            if let Some((base, end)) = tcm_window(register)? {
+            if let Some((base, end)) = tcm_window(TcmRegister(register.0))? {
                 if low >= base && top <= end {
                     holding.push((bank, base));
                 }
