@@ -378,11 +378,11 @@ env XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=8G \
     "$PWD/private-data/analysis/issue16-closure/queue-boundary-new"
 ```
 
-After the build lease ends, require no compiler or Bazel server and a fresh actual Tctl below 70°C before acquiring the exclusive guest lease. Execute the generated normal launcher without another Bazel invocation:
+Finish CPU-heavy builds before guest execution. Execute the built normal launcher through the emulator slot without another Bazel invocation:
 
 ```sh
 env XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=8G \
-  "$EMULATOR_SLOT" taskset -c 0-3 \
+  "$EMULATOR_SLOT" \
   "$PWD/private-data/analysis/issue16-closure/queue-boundary-launcher.sh"
 ```
 
@@ -850,7 +850,7 @@ devenv shell -- bazel run //emulation:xm1-viewer -- --port 0
 
 Open the printed loopback URL. The default inputs are `private-data/firmware/x-m1-1.50/FWUP0002.DAT` and the captured ROM at `private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin`. Their declared identities are checked. `--output` may name a fresh directory beneath `private-data/`; without it, the launcher chooses one. `--port 0` chooses an available port. `--firmware PATH` selects a compatible X-M1 1.50 DAT, including modified candidates, using the same validation as the browser picker. Compatibility is limited to the retained layout and bounded image-4 prefix; a valid container is not proof that its application boots.
 
-The viewer exits after 15 minutes with no HTTP request, or after 240 minutes with no request other than an open page's `/api/state` poll. `tools/start_setup_viewer.py` takes `--idle-exit-minutes` and `--untouched-exit-minutes` (0 disables either); the launcher uses the defaults. The launcher runs inside an [emulator slot](../build-support/README.md#commands) with a memory cap. The service is named for the slot, so a second launcher cannot admit another viewer while the first service survives a killed client. The viewer's slot policy is unchanged. A missing or invalid guard fails closed.
+The viewer exits after 15 minutes with no HTTP request, or after 240 minutes with no request other than an open page's `/api/state` poll. `tools/start_setup_viewer.py` takes `--idle-exit-minutes` and `--untouched-exit-minutes` (0 disables either); the launcher uses the defaults. The launcher holds a host-wide [emulator slot](../build-support/README.md#commands) for the lease-owning process's lifetime. When a systemd user manager answers, the launcher enters a transient user scope with the configured memory cap, 8G by default, and zero swap. Without an answering manager it prints the uncapped fallback and continues. The scope is not a service named for the slot.
 
 `--sd-card-image PATH` starts with a raw, whole-sector virtual SD image. The launcher requires a regular file beneath `private-data/`. The guest mounts and accesses its filesystem through the modeled controller; the launcher does not preload recipe state or filesystem readiness. Guest sector writes remain in the emulated card, not the source image file.
 
@@ -1415,7 +1415,7 @@ The source-controlled `//emulation:media-route-smoke` is the supported Haskell e
 
 The output directory must be new beneath `private-data/` with an existing parent. The CLI verifies the selected bridge digest, copies the declared 4 GiB fixture card to a distinct output file and drives only that copy. Without `--checkpoints`, it cold-boots with `--fresh-boot` into `OUTPUT/checkpoints`; an explicit checkpoint directory permits a matching keyed attach restore or a cold boot. A changed bridge/run-document identity requires its own checkpoint qualification; the old SourceBit0 A checkpoint is not a new-cohort result.
 
-Build the public target through the checked-in devenv/Bazel graph with a separate agent output base. Finish CPU-heavy compilation before any separately authorized guest execution under the reviewed resource guard. This CLI does not acquire an emulator slot internally. Execute its reviewed built launcher through the existing [emulator-slot contract](../build-support/README.md#commands), with one slot, the unchanged 4 GiB memory cap and zero swap, the granted affinity/quota and a fresh below-70°C Tctl admission. Do not bypass the guard or use sudo or a containment workaround. Emulated contact inputs are not physical camera authority; this diagnostic route does not authorize camera/USB operations or state-changing hardware commands.
+Build the public target through the checked-in devenv/Bazel graph with a separate agent output base. Finish CPU-heavy compilation before guest execution. This CLI does not acquire an emulator slot internally. Execute its reviewed built launcher through the canonical [emulator-slot contract](../build-support/README.md#commands) with one slot. An answering systemd user manager provides the configured memory cap, 8G by default, and zero swap; otherwise the launcher reports its uncapped fallback. Recorded thermal, CPU-affinity and quota values describe their frozen cohorts, not requirements for new runs. Emulated contact inputs are not physical camera authority; this diagnostic route does not authorize camera/USB operations or state-changing hardware commands.
 
 The source observer retains the following read-only contract; its implementation adds no device behavior:
 
@@ -1438,10 +1438,10 @@ On a strict machine stop, the bridge still permits tail page collection, acknowl
 
 `--capture-second-filter-observation` selects the same production collector and protocol-2 continuation route, with the full existing host site plan plus exactly eight preexecution sites registered through `trace-sites` before begin freezes registration. It is a typed alternative to `--capture-continuation-observation`; selecting both refuses at the CLI boundary. Either mode requires `--route s1-s2 --windows 1`. The normal flag and non-observation routes remain supported.
 
-After separate source/package review and guest qualification approval, invoke the reviewed built launchers as follows. `EMULATOR_SLOT` and `MEDIA_ROUTE_SMOKE` are absolute paths to the prebuilt `//emulation:emulator-slot` and `//emulation:media-route-smoke` launchers; `SDK` and `BRIDGE_SHA256` identify the matching reviewed SDK and bridge. Use the existing resource guard with the granted CPU affinity/quota and fresh below-70°C Tctl admission described above. This invocation omits `--checkpoints` and selects a fresh output directory:
+After separate source/package review and guest qualification approval, invoke the reviewed built launchers as follows. `EMULATOR_SLOT` and `MEDIA_ROUTE_SMOKE` are absolute paths to the prebuilt `//emulation:emulator-slot` and `//emulation:media-route-smoke` launchers; `SDK` and `BRIDGE_SHA256` identify the matching reviewed SDK and bridge. The invocation uses the canonical slot policy above, omits `--checkpoints` and selects a fresh output directory:
 
 ```sh
-XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=4G \
+XM1_EMULATOR_SLOTS=1 \
   "$EMULATOR_SLOT" "$MEDIA_ROUTE_SMOKE" \
   --sdk "$SDK" --bridge-sha256 "$BRIDGE_SHA256" \
   --route s1-s2 --windows 1 --capture-second-filter-observation \
