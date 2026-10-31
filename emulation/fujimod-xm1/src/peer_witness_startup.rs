@@ -424,6 +424,27 @@ fn row_extent(event: &MemoryEvent) -> (u64, u64) {
     }
 }
 
+/// A reset-epoch model-bus write keeps the whole extent the model transferred; every other row lies inside one protocol range.
+fn extent_admitted(epoch: Epoch, event: &MemoryEvent) -> bool {
+    let extent = row_extent(event);
+    matches!((epoch, event), (Epoch::Reset, MemoryEvent::Transfer(row)) if matches!(row.source, TransferAccess::ModelBusWrite))
+        || WATCH_RANGES.iter().any(|&(lo, hi)| extent.0 >= lo && extent.1 <= hi)
+}
+
+/// Cortex-R TCM region register: base [31:12], size code [6:2] (`0` none, `3..=14` 4 KiB..8 MiB), enable [0].
+/// The base must be aligned to the size.
+fn tcm_window(bank: Word) -> Result<Option<(u64, u64)>, String> {
+    let code = (bank.0 >> 2) & 0x1f;
+    if bank.0 & 1 == 0 || code == 0 {
+        return Ok(None);
+    }
+    require((3..=14).contains(&code), "startup TCM region size encoding is reserved")?;
+    let base = u64::from(bank.0 & 0xffff_f000);
+    let size = 512u64 << code;
+    require(base % size == 0 && base + size <= 1 << 32, "startup TCM region is misaligned or extends past 4 GiB")?;
+    Ok(Some((base, base + size)))
+}
+
 fn cpu_row(event: &MemoryEvent, core: WitnessCore, pc: u32, physical: u64, access: CpuAccess) -> Option<&CpuAttempt> {
     match event {
         MemoryEvent::Cpu(row) if row.core == core && row.pc.0 == pc && row.physical.0 == physical
@@ -592,9 +613,8 @@ impl<'a> Runner<'a> {
     fn tcm_disjoint(&self, tcm: &TcmWords) -> Result<(), String> {
         let guarded = self.guarded();
         for (core, banks) in tcm.iter().enumerate() {
-            for bank in banks.iter().filter(|bank| bank.0 & 1 != 0) {
-                let base = u64::from(bank.0 & 0xffff_f000);
-                let window = (base, base + (512u64 << ((bank.0 >> 2) & 31)));
+            for bank in banks {
+                let Some(window) = tcm_window(*bank)? else { continue };
                 for map in self.maps.iter().filter(|map| map.core == core) {
                     for &(lo, hi) in &guarded {
                         let start = lo.max(map.physical);
@@ -708,7 +728,7 @@ impl<'a> Runner<'a> {
                 require(snapshot_reads[which] <= endpoints, "startup endpoint snapshot reads exceed the endpoint stops")?;
                 continue;
             }
-            require(WATCH_RANGES.iter().any(|&(lo, hi)| extent.0 >= lo && extent.1 <= hi), "startup row straddles a protocol range")?;
+            require(extent_admitted(*epoch, row), "startup row straddles a protocol range")?;
             match row {
                 MemoryEvent::Transfer(transfer) => match transfer.source {
                     TransferAccess::HostWrite => return Err("startup watch contains a host write".into()),
@@ -1195,4 +1215,36 @@ pub(super) fn run(mut machine: Machine, contract: &StartupContract, output: &Pat
     std::fs::write(&path, bytes).map_err(|error| format!("{}: {error}", path.display()))?;
     println!("{}", path.display());
     outcome
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(row: &str) -> MemoryEvent {
+        serde_json::from_str(row).unwrap()
+    }
+
+    // Rows as the classified watch recorded them during the retained natural reset.
+    const BULK_RECORD2: &str = r#"{"source":"model-bus-write","address":1073825792,"physical":83968,"size":2048,"core":null,"pc":null,"instructions":null,"tick":null}"#;
+    const BULK_PEER_CELLS: &str = r#"{"source":"model-bus-write","address":1073872896,"physical":131072,"size":2048,"core":null,"pc":null,"instructions":null,"tick":null}"#;
+
+    #[test]
+    fn only_reset_model_bus_writes_extend_past_a_protocol_range() {
+        for row in [BULK_RECORD2, BULK_PEER_CELLS] {
+            assert!(extent_admitted(Epoch::Reset, &event(row)));
+            assert!(!extent_admitted(Epoch::Released, &event(row)));
+            assert!(!extent_admitted(Epoch::Published, &event(row)));
+        }
+        let straddling = [
+            r#"{"source":"host-read","address":131068,"physical":131068,"size":8,"core":null,"pc":null,"instructions":null,"tick":null}"#,
+            r#"{"source":"model-bus-read","address":131072,"physical":131072,"size":2048,"core":null,"pc":null,"instructions":null,"tick":null}"#,
+            r#"{"source":"cpu-write","address":1073872900,"physical":131076,"size":8,"value":555,"before":[43,2,0,0,43,2,0,0],"byte_order":"little","core":0,"pc":7784,"instructions":67750,"tick":2822}"#,
+        ];
+        for row in straddling {
+            assert!(!extent_admitted(Epoch::Reset, &event(row)), "{row}");
+        }
+        let inside = r#"{"source":"cpu-write","address":1073872896,"physical":131072,"size":4,"value":555,"before":[43,2,0,0],"byte_order":"little","core":0,"pc":7780,"instructions":67749,"tick":2822}"#;
+        assert!(extent_admitted(Epoch::Released, &event(inside)));
+    }
 }
