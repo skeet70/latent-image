@@ -983,7 +983,8 @@ impl<'a> Runner<'a> {
                 require(!self.phase.entry && stop.registers[0].0 == ARGUMENT && stop.sp == handoff.sp && stop.cpsr == handoff.cpsr
                     && stop.registers[6..12] == handoff.registers[6..12], "prefix entry differs from the handoff context")?;
                 require(stop.counts.0[1] == handoff.counts.0[1] + 1, "prefix entry is not the core-1 instruction after the handoff")?;
-                require(stop.counter == Some(Totals { count: 0, zero_count: 0, nonzero_count: 0 }),
+                require(stop.counter == Some(Totals { count: 0, zero_count: 0, nonzero_count: 0 })
+                    && (contract.startup.is_some() || stop.watch_records == Some(0)),
                     "scoped watch was not active and empty at the prefix entry")?;
                 self.phase.entry = true;
                 self.remove(machine, contract.entry.0)?;

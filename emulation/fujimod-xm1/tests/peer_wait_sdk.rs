@@ -837,8 +837,13 @@ fn second_filter_tcm_overlap_is_core_qualified_and_never_returns_underlying_ram(
 }
 
 #[cfg(feature = "scoped-watch")]
+#[path = "support/composed_nand_fixture.rs"]
+mod composed_nand_fixture;
+
+#[cfg(feature = "scoped-watch")]
 mod composed_interleaving {
     use super::*;
+    use super::composed_nand_fixture::{Timing, Transfer};
     use fujimod_catalog::configuration::ResolvedConfiguration;
     use serde::Serialize;
     use sha2::{Digest, Sha256};
@@ -847,11 +852,20 @@ mod composed_interleaving {
     enum FirstHandoff { Early, Late, Missing, Invalid, Partial(usize) }
 
     #[derive(Clone, Copy)]
+    enum Scenario { Held, Natural, Delayed }
+
+    impl Scenario {
+        fn name(self) -> &'static str {
+            match self { Self::Held => "held", Self::Natural => "natural", Self::Delayed => "delayed" }
+        }
+    }
+
+    #[derive(Clone, Copy)]
     enum Mutation {
         None, BeforeHandoff, AfterInstall, WrongCore, WrongWidth, WrongOrder,
         WrongValue, WrongPreimage, CodeStaging, CodeRestore, OpcodeWrite, ResetWrite,
         BootstrapOpcode, BootstrapReset, BootstrapHandler, CodeHash, SelectorHash,
-        ZeroLiteral, ZeroWriter,
+        ZeroLiteral, ZeroWriter, NandBeforeHandoff, NandAfterInstall, NandProtectedOverlap,
     }
 
     #[derive(Clone, Copy, Serialize)]
@@ -894,6 +908,10 @@ mod composed_interleaving {
         PrefixEntry,
         PostLoad,
         HeldGate,
+        DelayEntry,
+        DelayRelease,
+        CompletionStore,
+        PrefixExit,
     }
 
     #[derive(Deserialize)]
@@ -902,11 +920,16 @@ mod composed_interleaving {
         address: u32,
         core: usize,
         counts: [u64; 2],
+        registers: [u32; 13],
+        sp: u32,
+        lr: u32,
+        cpsr: u32,
+        completion: u32,
         counter: Option<Counter>,
         watch_records: Option<usize>,
     }
 
-    #[derive(Deserialize)]
+    #[derive(Deserialize, Debug, PartialEq, Eq)]
     struct Counter { count: u64, zero_count: u64, nonzero_count: u64 }
 
     #[derive(Deserialize, Debug, PartialEq, Eq)]
@@ -950,9 +973,15 @@ mod composed_interleaving {
         terminal_readback: Option<KernelSnapshot>,
     }
 
+    #[derive(Deserialize, Debug, PartialEq, Eq)]
+    #[serde(rename_all = "lowercase")]
+    enum ByteOrder { Little, Big }
+
     #[derive(Deserialize)]
     struct ProtocolRow {
         source: Source,
+        address: Option<u64>,
+        byte_order: Option<ByteOrder>,
         core: Option<usize>,
         pc: Option<u64>,
         instructions: Option<u64>,
@@ -969,6 +998,8 @@ mod composed_interleaving {
     struct CounterSamples {
         count: u64, zero_count: u64, nonzero_count: u64,
         head: Vec<ProtocolRow>, tail: Vec<ProtocolRow>,
+        first_nonzero: Option<ProtocolRow>,
+        first_nonzero_index: Option<u64>,
     }
 
     #[derive(Deserialize)]
@@ -982,6 +1013,32 @@ mod composed_interleaving {
         coverage: Vec<Coverage>,
     }
 
+
+    #[derive(Deserialize)]
+    struct WordViews { r#virtual: u32, physical: u32 }
+
+    #[derive(Deserialize)]
+    struct Microstep { before: [u64; 2], after: [u64; 2], cell: u32 }
+
+    #[derive(Deserialize)]
+    struct Completion {
+        instruction: WordViews,
+        before_pc: u32, after_pc: u32,
+        before_cpsr: u32, after_cpsr: u32,
+        microsteps: Vec<Microstep>,
+        readback: WordViews,
+        counter: Counter,
+        watch_records: usize,
+    }
+
+    #[derive(Deserialize)]
+    struct ZeroReadback { range: [u64; 2], first_nonzero: Option<u64> }
+
+    #[derive(Deserialize)]
+    struct Endpoint {
+        frame: Views, vectors: Views, zero: ZeroReadback,
+        record_immutable_sha256: String, loader_sha256: String,
+    }
     #[derive(Deserialize)]
     struct Receipt {
         schema: u32,
@@ -995,6 +1052,8 @@ mod composed_interleaving {
         scoped_watch: Option<ScopedHistory>,
         firststage_zero: Option<HistoryRef>,
         kernel_vector_install: Installation,
+        completion: Option<Completion>,
+        endpoint: Option<Endpoint>,
     }
 
     impl Receipt {
@@ -1023,6 +1082,10 @@ mod composed_interleaving {
 
     // The fixture executes handwritten ARM instructions, not recovered firmware.
     fn observe(order: FirstHandoff, mutation: Mutation) -> (Result<(), String>, Receipt) {
+        observe_scenario(order, mutation, Scenario::Held)
+    }
+
+    fn observe_scenario(order: FirstHandoff, mutation: Mutation, scenario: Scenario) -> (Result<(), String>, Receipt) {
         fujimod_emulator_exr2_board::register_board_builder();
         fujimod_emulator_models::register();
         let document = RunDocument::parse(include_bytes!("../data/xm1-150.json")).unwrap();
@@ -1047,18 +1110,13 @@ mod composed_interleaving {
                 (arm::CORE[1], 0x70000011),
                 (arm::CORE[2], if matches!(order, FirstHandoff::Invalid) { 0x40024 } else { 0x40020 }),
                 (arm::CORE[3], 0x1042c),
-                (arm::CORE[4], if matches!(order, FirstHandoff::Early) { 1 } else { 600 }),
+                (arm::CORE[4], if matches!(order, FirstHandoff::Early) { 1 } else if matches!(scenario, Scenario::Held) { 600 } else { 40_000 }),
                 (arm::CORE[5], 0x400a0000),
                 (arm::CORE[6], 0x24),
                 (arm::CORE[7], 0x40100),
                 (arm::CORE[13], 0x70000800),
             ];
         }
-        let mut board = graph.build(
-            factory::Options { engine: factory::Engine::Unicorn, translation_cache_bytes: 1 << 20 },
-            Bus::new(Mode::Strict), None,
-        ).unwrap();
-        board.set_execution_policy(ExecutionPolicy::Exact).unwrap();
         let mut memory = vec![0; 0x61c410];
         for (index, value) in BOOTSTRAP.into_iter().enumerate() {
             put_word(&mut memory, 4 * index, value);
@@ -1123,7 +1181,7 @@ mod composed_interleaving {
             put_word(&mut memory, back as usize, branch(back, 0x600c));
         }
         match mutation {
-            Mutation::None | Mutation::CodeHash | Mutation::SelectorHash => (),
+            Mutation::None | Mutation::CodeHash | Mutation::SelectorHash | Mutation::NandBeforeHandoff | Mutation::NandAfterInstall | Mutation::NandProtectedOverlap => (),
             Mutation::BeforeHandoff => put_word(&mut memory, 0x6018, 0xe5867000),
             Mutation::WrongCore => {
                 put_word(&mut memory, 0x10404, 0xe5867000);
@@ -1175,6 +1233,98 @@ mod composed_interleaving {
                 }
             }
         }
+        if !matches!(scenario, Scenario::Held) {
+            memory[0xddaa0..0xf3420].fill(0xa5);
+            for (address, value) in [
+                (0x1042c, branch(0x1042c, 0x10440)),
+                (0x10430, 0xe59c00c4),
+                (0x10434, 0xe3500000),
+                (0x10438, branch(0x10438, 0x10600) & 0x0fffffff | 0x10000000),
+                (0x1043c, branch(0x1043c, 0x11000)),
+                (0x10440, 0xe1a04000),
+                (0x10444, 0xe1a05000),
+                (0x10448, 0xe59f1090),
+                (0x1044c, 0xe59f2090),
+                (0x10450, 0xe3a03000),
+                (0x10454, 0xe4813004),
+                (0x10458, 0xe1510002),
+                (0x1045c, 0x1afffffc),
+                (0x10460, 0xe59fc080),
+                (0x10464, branch(0x10464, 0x10430)),
+                (0x104e0, 0x400ddaa0),
+                (0x104e4, 0x400f3420),
+                (0x104e8, 0x400a0000),
+                (0x10600, 0xe59f10d8),
+                (0x10604, 0xe59f60d8),
+                (0x10608, 0xe3a03007),
+                (0x1060c, 0xe4912004),
+                (0x10610, 0xe4862004),
+                (0x10614, 0xe2533001),
+                (0x10618, 0x1afffffb),
+                (0x1061c, 0xe59f10c4),
+                (0x10620, 0xe59f20c4),
+                (0x10624, 0xe5812000),
+                (0x10628, 0xe5814004),
+                (0x1062c, 0xe581b008),
+                (0x10630, 0xe59f20b8),
+                (0x10634, 0xe581200c),
+                (0x10638, 0xe281b00c),
+                (0x1063c, 0xe1a0d001),
+                (0x10640, 0xe59f60ac),
+                (0x10644, 0xe59fe0ac),
+                (0x10648, branch(0x10648, 0xd0aac)),
+                (0x106e0, 0x10700),
+                (0x106e4, 0xffff0024),
+                (0x106e8, 0x400f3410),
+                (0x106ec, 0x400f3420),
+                (0x106f0, 0xd00c0),
+                (0x106f4, 0xffff0000),
+                (0x106f8, 0xd09bc),
+                (0x40a00, if matches!(scenario, Scenario::Delayed) { branch(0x40a00, 0x180) | 0x01000000 } else { 0xe3a05001 }),
+                (0x40a04, 0xe59f30f0),
+                (0x40a08, 0xe58350c4),
+                (0x40a0c, 0xeafffffe),
+                (0x40afc, 0x400a0000),
+            ] {
+                put_word(&mut memory, address, value);
+            }
+            for (index, word) in [0xd0100, 0xd01b4, 0xd0128, 0xd0148, 0xd0168, 0xd0204, 0xd0184].into_iter().enumerate() {
+                put_word(&mut memory, 0x10700 + 4 * index, word);
+            }
+            for index in 0..251 {
+                put_word(&mut memory, 0x11000 + 4 * index, 0xe1a00000);
+            }
+            put_word(&mut memory, 0x113ec, branch(0x113ec, 0x10430));
+            if matches!(scenario, Scenario::Delayed) {
+                for (index, word) in [0xe10f3000, 0xe3a05801, 0xe2555001, 0x1afffffd, 0xe128f003, 0xe3a05001, 0xe12fff1e].into_iter().enumerate() {
+                    put_word(&mut memory, 0x180 + 4 * index, word);
+                }
+            }
+        }
+        let bus = match mutation {
+            Mutation::NandBeforeHandoff | Mutation::NandAfterInstall | Mutation::NandProtectedOverlap => {
+                graph.peripherals.push(fujimod_emulator::board::factory::Peripheral {
+                    core: 0, address: 0xfff52000, physical: 0xfff52000, size: 0x1000,
+                });
+                let timing = if matches!(mutation, Mutation::NandAfterInstall) {
+                    Timing::AfterInstall
+                } else {
+                    Timing::BeforeHandoff
+                };
+                let transfer = if matches!(mutation, Mutation::NandProtectedOverlap) {
+                    Transfer::CompletionGuards
+                } else {
+                    Transfer::Installer
+                };
+                super::composed_nand_fixture::build_bus(&mut memory, timing, transfer)
+            }
+            _ => Bus::new(Mode::Strict),
+        };
+        let mut board = graph.build(
+            factory::Options { engine: factory::Engine::Unicorn, translation_cache_bytes: 1 << 20 },
+            bus, None,
+        ).unwrap();
+        board.set_execution_policy(ExecutionPolicy::Exact).unwrap();
         let mut immutable = Sha256::new();
         immutable.update(&memory[0x10000..0x14c60]);
         immutable.update(&memory[0x14c6c..0x14c80]);
@@ -1182,7 +1332,8 @@ mod composed_interleaving {
         let record1 = digest(&memory[..0x10000]);
         let first_image = digest(&memory[0x6000..0x7100]);
         let record2 = digest(&memory[0x10000..0x14c80]);
-        let second_image = digest(&memory[0x10400..0x10500]);
+        let image_end = if matches!(scenario, Scenario::Held) { 0x10500 } else { 0x11400 };
+        let second_image = digest(&memory[0x10400..image_end]);
         let loader = digest(&memory[0xd0000..0xddaa0]);
         let code = [
             if matches!(mutation, Mutation::CodeHash) { "ab".repeat(32) } else { digest(&memory[0x40020..0x40100]) },
@@ -1196,10 +1347,11 @@ mod composed_interleaving {
         };
         let machine = Machine::new(document, session).unwrap();
         let identity = "ab".repeat(32);
-        let contract = format!(r#"{{"schema":5,"budget":50000000,"scenario":{{"kind":"held"}},
+        let scenario_name = scenario.name();
+        let contract = format!(r#"{{"schema":5,"budget":50000000,"scenario":{{"kind":"{scenario_name}"}},
             "program":{{"kind":"owned","record_sha256":"{record2}","record_immutable_sha256":"{immutable}",
             "loader_sha256":"{loader}","handoff":66592,"entry":66604,"load":66608,"post_load":66612,
-            "loaded_register":0,"poll_period":256,"image":[66560,66816],"refusal":null,
+            "loaded_register":0,"poll_period":256,"image":[66560,{image_end}],"refusal":null,
             "forbid_fetch":[[852000,852168],[854444,854480],[854596,854628]],"forbid_read":[[852168,852220]]}},
             "startup":{{"kind":"composed","record1_sha256":"{record1}","image_sha256":"{first_image}",
             "symbols_sha256":"{identity}","source_sha256":"{identity}","image":[24576,28928],"entry":24576,
@@ -1233,7 +1385,7 @@ mod composed_interleaving {
         assert!(snapshot.decoder.failure.is_none());
     }
 
-    fn assert_accepted(receipt: &Receipt, at_handoff: usize) {
+    fn assert_installation(receipt: &Receipt, at_handoff: usize, continuation: Label) {
         assert_eq!(receipt.schema, 5);
         assert_eq!(receipt.result, ResultStatus::Passed);
         assert!(receipt.error.is_none());
@@ -1259,7 +1411,7 @@ mod composed_interleaving {
         assert_eq!(stop.address, 0x40088);
         assert_eq!(stop.core, 0);
         assert!(receipt.position(Label::FirstStageHandoff) < installation.installed_stop.unwrap());
-        assert!(installation.installed_stop.unwrap() < receipt.position(Label::HeldGate));
+        assert!(installation.installed_stop.unwrap() < receipt.position(continuation));
         for code in &installed.code {
             assert_eq!(code.bytes.r#virtual, code.bytes.physical);
             assert_eq!(code.bytes.physical.len(), (code.span[1] - code.span[0]) as usize);
@@ -1287,6 +1439,10 @@ mod composed_interleaving {
         }
         assert!(zero.instructions.unwrap() < receipt.row(&installation.events[0]).instructions.unwrap());
         assert!(!installation.events.contains(receipt.firststage_zero.as_ref().unwrap()));
+    }
+
+    fn assert_accepted(receipt: &Receipt, at_handoff: usize) {
+        assert_installation(receipt, at_handoff, Label::HeldGate);
         let record1 = receipt.position(Label::Record1Entry);
         let record2 = receipt.position(Label::Record2Handoff);
         assert!(receipt.stops[record1].watch_records.is_none());
@@ -1296,8 +1452,8 @@ mod composed_interleaving {
             let cursor = stop.watch_records.unwrap();
             assert!(cursor <= receipt.loaded_watch.records.len());
             let through: u64 = stop.counts.iter().sum();
-            assert!(receipt.loaded_watch.records[..cursor].iter().all(|row| row.instructions.unwrap() <= through));
-            assert!(receipt.loaded_watch.records[cursor..].iter().all(|row| row.instructions.unwrap() > through));
+            assert!(receipt.loaded_watch.records[..cursor].iter().filter_map(|row| row.instructions).all(|instructions| instructions <= through));
+            assert!(receipt.loaded_watch.records[cursor..].iter().filter_map(|row| row.instructions).all(|instructions| instructions > through));
         }
         for pair in loaded_stops.windows(2) {
             assert!(pair[0].watch_records.unwrap() <= pair[1].watch_records.unwrap());
@@ -1331,6 +1487,251 @@ mod composed_interleaving {
         assert_eq!(last.counter.as_ref().unwrap().zero_count, counter.count);
         assert_eq!(last.counter.as_ref().unwrap().nonzero_count, 0);
         assert_eq!(last.watch_records, Some(scoped.history.records.len()));
+    }
+
+    fn assert_completed(receipt: &Receipt, scenario: Scenario) {
+        assert_installation(receipt, 0, Label::CompletionStore);
+        let installation = &receipt.kernel_vector_install;
+        assert_eq!(receipt.firststage_zero.as_ref().unwrap().epoch, HistoryEpoch::Scoped);
+        assert!(installation.events.iter().all(|reference| reference.epoch == HistoryEpoch::Scoped));
+        assert!(receipt.loaded_watch.records.is_empty());
+        assert!(receipt.loaded_watch.violation.is_none());
+        let scoped = receipt.scoped_watch.as_ref().unwrap();
+        assert!(scoped.history.violation.is_none());
+        let pre = &receipt.stops[receipt.position(Label::CompletionStore)];
+        assert_eq!((pre.core, pre.address, pre.completion), (0, 0x40a08, 0));
+        assert_eq!((pre.registers[3], pre.registers[5]), (0x400a0000, 1));
+        let cursor = pre.watch_records.unwrap();
+        assert!(cursor > 0);
+        assert_eq!(cursor, installation.events.last().unwrap().index + 1);
+        assert_eq!(scoped.history.records.len(), cursor + 1);
+        let committed = receipt.completion.as_ref().unwrap();
+        assert_eq!(committed.watch_records, cursor + 1);
+        assert_eq!((committed.instruction.r#virtual, committed.instruction.physical), (0xe58350c4, 0xe58350c4));
+        assert_eq!((committed.before_pc, committed.after_pc), (0x40a08, 0x40a0c));
+        assert_eq!(committed.before_cpsr, pre.cpsr);
+        assert_eq!(committed.after_cpsr, pre.cpsr);
+        assert_eq!((committed.readback.r#virtual, committed.readback.physical), (1, 1));
+        assert!(!committed.microsteps.is_empty());
+        assert_eq!(committed.microsteps[0].before, pre.counts);
+        for pair in committed.microsteps.windows(2) {
+            assert_eq!(pair[0].after, pair[1].before);
+        }
+        for step in &committed.microsteps {
+            assert!(step.after == [step.before[0] + 1, step.before[1]]
+                || step.after == [step.before[0], step.before[1] + 1]);
+        }
+        let last = committed.microsteps.last().unwrap();
+        assert_eq!(last.after, [last.before[0] + 1, last.before[1]]);
+        assert_eq!(last.cell, 1);
+        assert!(committed.microsteps[..committed.microsteps.len() - 1].iter().all(|step| step.cell == 0));
+        let row = &scoped.history.records[cursor];
+        assert_eq!(row.source, Source::CpuWrite);
+        assert_eq!((row.core, row.pc, row.instructions), (Some(0), Some(0x40a08), Some(last.after.iter().sum())));
+        assert_eq!((row.physical, row.size, row.value), (0xa00c4, 4, Some(1)));
+        assert_eq!(row.before.as_deref(), Some(&[0, 0, 0, 0][..]));
+        assert_eq!(row.address, Some(0x400a00c4));
+        assert_eq!(row.byte_order, Some(ByteOrder::Little));
+        let [counter] = scoped.counters.as_slice() else { panic!("one completion counter required") };
+        assert!(counter.zero_count >= 4);
+        assert_eq!(counter.nonzero_count, 1);
+        assert_eq!(counter.count, counter.zero_count + counter.nonzero_count);
+        assert_eq!(counter.head.len(), counter.count.min(8) as usize);
+        assert_eq!(counter.tail.len(), counter.count.min(2) as usize);
+        for sample in counter.head.iter().chain(&counter.tail) {
+            assert_eq!(sample.source, Source::CpuRead);
+            assert_eq!((sample.core, sample.pc, sample.physical, sample.size), (Some(1), Some(0x10430), 0xa00c4, 4));
+            assert!(matches!(sample.value, Some(0 | 1)));
+        }
+        let first = counter.first_nonzero.as_ref().unwrap();
+        assert_eq!(counter.first_nonzero_index, Some(counter.count - 1));
+        assert_eq!(first.source, Source::CpuRead);
+        assert_eq!((first.core, first.pc, first.physical, first.size, first.value), (Some(1), Some(0x10430), 0xa00c4, 4, Some(1)));
+        assert_eq!(first.before.as_deref(), Some(&[1, 0, 0, 0][..]));
+        assert!(first.instructions.unwrap() > row.instructions.unwrap());
+        assert_eq!(counter.tail.last().unwrap().value, Some(1));
+        assert_eq!(committed.counter.nonzero_count, 0);
+        assert_eq!(committed.counter.count, committed.counter.zero_count);
+        assert!(committed.counter.count >= pre.counter.as_ref().unwrap().count);
+        assert!(counter.zero_count >= committed.counter.count);
+        let [coverage] = scoped.coverage.as_slice() else { panic!("one zero coverage rule required") };
+        assert_eq!(coverage.covered_words, (0xf3420 - 0xddaa0) / 4);
+        assert!(coverage.first_uncovered.is_none());
+        let posts: Vec<_> = receipt.stops.iter().filter(|stop| stop.label == Label::PostLoad).collect();
+        assert_eq!(posts.len(), 4);
+        for pair in posts.windows(2) {
+            assert_eq!(pair[1].counts[1] - pair[0].counts[1], 256);
+            assert_eq!(pair[1].counter.as_ref().unwrap().count, pair[0].counter.as_ref().unwrap().count + 1);
+        }
+        for stop in &posts {
+            assert_eq!(stop.registers[0], 0);
+            assert_eq!(stop.counter.as_ref().unwrap().nonzero_count, 0);
+        }
+        for stop in receipt.stops.iter().filter(|stop| stop.counter.is_some()) {
+            let cursor = stop.watch_records.unwrap();
+            let through = stop.counts.iter().sum::<u64>();
+            assert!(scoped.history.records[..cursor].iter().all(|row| row.instructions.unwrap() <= through));
+            assert!(scoped.history.records[cursor..].iter().all(|row| row.instructions.unwrap() > through));
+        }
+        let exit = &receipt.stops[receipt.position(Label::PrefixExit)];
+        let handoff = &receipt.stops[receipt.position(Label::Record2Handoff)];
+        assert_eq!((exit.core, exit.address, exit.sp, exit.lr), (1, 0xd0aac, 0x400f3410, 0xd09bc));
+        assert!(exit.counts[0] >= last.after[0]);
+        assert!(exit.counts[1] > last.after[1]);
+        assert_eq!(&exit.registers[4..7], &[0x69cdf8, 0x69cdf8, 0xffff0000]);
+        assert_eq!(&exit.registers[7..11], &handoff.registers[7..11]);
+        assert_eq!(exit.registers[11], 0x400f341c);
+        assert_eq!(exit.cpsr & !0xf0000000, handoff.cpsr & !0xf0000000);
+        assert_eq!(exit.watch_records, Some(scoped.history.records.len()));
+        assert_eq!(exit.counter.as_ref().unwrap(), &Counter { count: counter.count, zero_count: counter.zero_count, nonzero_count: counter.nonzero_count });
+        let endpoint = receipt.endpoint.as_ref().unwrap();
+        let frame: Vec<_> = [0x400f3420u32, 0x69cdf8, handoff.registers[11], 0xd00c0].into_iter().flat_map(u32::to_le_bytes).collect();
+        let vectors: Vec<_> = [0xd0100u32, 0xd01b4, 0xd0128, 0xd0148, 0xd0168, 0xd0204, 0xd0184].into_iter().flat_map(u32::to_le_bytes).collect();
+        assert_eq!(endpoint.frame.r#virtual, frame);
+        assert_eq!(endpoint.frame.physical, frame);
+        assert_eq!(endpoint.vectors.r#virtual, vectors);
+        assert_eq!(endpoint.vectors.physical, vectors);
+        assert_eq!(endpoint.zero.range, [0xddaa0, 0xf33ec]);
+        assert!(endpoint.zero.first_nonzero.is_none());
+        assert_eq!(Some(&endpoint.record_immutable_sha256), receipt.handoff_record_immutable_sha256.as_ref());
+        assert_eq!(endpoint.loader_sha256, digest(&vec![0; 0xddaa0 - 0xd0000]));
+        if matches!(scenario, Scenario::Delayed) {
+            let entry = &receipt.stops[receipt.position(Label::DelayEntry)];
+            let release = &receipt.stops[receipt.position(Label::DelayRelease)];
+            assert_eq!((entry.address, entry.core, entry.lr), (0x180, 0, 0x40a04));
+            assert_eq!((release.address, release.core), (0x194, 0));
+            assert_eq!((release.sp, release.registers[11]), (entry.sp, entry.registers[11]));
+            assert_eq!(release.cpsr & 0xf8000000, entry.cpsr & 0xf8000000);
+            assert!(pre.counter.as_ref().unwrap().count >= entry.counter.as_ref().unwrap().count + 4);
+            assert!(receipt.position(Label::DelayEntry) < receipt.position(Label::DelayRelease));
+            assert!(receipt.position(Label::DelayRelease) < receipt.position(Label::CompletionStore));
+        } else {
+            assert!(!receipt.stops.iter().any(|stop| matches!(stop.label, Label::DelayEntry | Label::DelayRelease)));
+        }
+    }
+
+    #[test]
+    fn natural_and_delayed_composed_producers_commit_after_nonempty_scoped_protocol_history() {
+        for scenario in [Scenario::Natural, Scenario::Delayed] {
+            let (result, receipt) = observe_scenario(FirstHandoff::Late, Mutation::None, scenario);
+            assert!(result.is_ok(), "{result:?}");
+            assert_completed(&receipt, scenario);
+        }
+    }
+
+    fn assert_nand_row(row: &ProtocolRow, transfer: Transfer) {
+        assert_eq!(row.source, Source::ModelBusWrite);
+        let size = match transfer { Transfer::Installer => 512, Transfer::CompletionGuards => 3072 };
+        assert_eq!((row.physical, row.size), (0x40000, size));
+        assert_eq!((row.core, row.pc, row.instructions, row.value), (None, None, None, None));
+        assert_eq!(row.address, Some(0x40000));
+        assert!(row.byte_order.is_none());
+        assert!(row.before.is_none());
+    }
+
+    #[test]
+    fn real_nand_staging_write_is_accepted_before_binding_and_refused_after_installation() {
+        let (result, receipt) = observe(FirstHandoff::Early, Mutation::NandBeforeHandoff);
+        assert!(result.is_ok(), "{result:?}");
+        assert_accepted(&receipt, 7);
+        let rows = &receipt.loaded_watch.records;
+        let transfers: Vec<_> = rows.iter().enumerate().filter(|(_, row)| row.source == Source::ModelBusWrite).collect();
+        let [(index, transfer)] = transfers.as_slice() else { panic!("one NAND staging transfer required") };
+        assert_nand_row(transfer, Transfer::Installer);
+        let first = &receipt.stops[receipt.position(Label::FirstStageHandoff)];
+        assert!(*index < first.watch_records.unwrap());
+        assert_eq!(receipt.firststage_zero.as_ref().unwrap().epoch, HistoryEpoch::Loaded);
+        assert!(receipt.firststage_zero.as_ref().unwrap().index < *index);
+        assert!(receipt.scoped_watch.as_ref().unwrap().history.records.is_empty());
+
+        let (result, receipt) = observe(FirstHandoff::Early, Mutation::NandAfterInstall);
+        assert_refused(result, &receipt);
+        assert!(receipt.machine_failure.is_none());
+        let installation = &receipt.kernel_vector_install;
+        assert_eq!(installation.state, InstallState::Installed);
+        assert_eq!(installation.events.len(), 7);
+        let installed_stop = &receipt.stops[installation.installed_stop.unwrap()];
+        assert_eq!((installed_stop.label == Label::KernelVectorsInstalled, installed_stop.core, installed_stop.address), (true, 0, 0x40088));
+        let installed = installation.installed_readback.as_ref().unwrap();
+        assert_vectors(&installed.vectors, 7);
+        assert_eq!(installed.code, installation.binding.as_ref().unwrap().code);
+        assert!(installation.terminal_readback.is_none());
+        assert!(receipt.completion.is_none());
+        assert!(receipt.endpoint.is_none());
+        assert!(receipt.loaded_watch.violation.is_none());
+        let scoped = receipt.scoped_watch.as_ref().map(|watch| &watch.history);
+        assert!(scoped.is_none_or(|history| history.violation.is_none()));
+        let transfers: Vec<_> = receipt.loaded_watch.records.iter().chain(scoped.into_iter().flat_map(|history| &history.records))
+            .filter(|row| row.source == Source::ModelBusWrite).collect();
+        let [transfer] = transfers.as_slice() else { panic!("one refused NAND transfer required") };
+        assert_nand_row(transfer, Transfer::Installer);
+        assert!(installation.events.iter().all(|reference| reference.epoch == HistoryEpoch::Loaded));
+        let transfer_index = receipt.loaded_watch.records.iter().position(|row| row.source == Source::ModelBusWrite).unwrap();
+        assert!(transfer_index >= installed_stop.watch_records.unwrap());
+        assert!(installation.events.iter().all(|reference| reference.index < transfer_index));
+        for (reference, step) in installation.events.iter().zip(STEPS) {
+            let row = receipt.row(reference);
+            assert_eq!(row.pc, Some(u64::from(step.site)));
+            assert_eq!(row.value, Some(u64::from(step.value)));
+        }
+    }
+
+    #[test]
+    fn real_nand_staging_transfer_must_not_overlap_scoped_completion_code_or_literal() {
+        let (result, accepted) = observe(FirstHandoff::Late, Mutation::NandBeforeHandoff);
+        assert!(result.is_ok(), "{result:?}");
+        assert_accepted(&accepted, 0);
+        assert!(accepted.loaded_watch.records.is_empty());
+        let accepted_history = &accepted.scoped_watch.as_ref().unwrap().history;
+        let accepted_transfers: Vec<_> = accepted_history.records.iter().enumerate()
+            .filter(|(_, row)| row.source == Source::ModelBusWrite).collect();
+        let [(accepted_index, accepted_transfer)] = accepted_transfers.as_slice() else { panic!("one accepted scoped NAND transfer required") };
+        assert_nand_row(accepted_transfer, Transfer::Installer);
+        let handoff = &accepted.stops[accepted.position(Label::FirstStageHandoff)];
+        assert!(*accepted_index < handoff.watch_records.unwrap());
+        let zero_ref = accepted.firststage_zero.as_ref().unwrap();
+        assert_eq!(zero_ref.epoch, HistoryEpoch::Scoped);
+        assert!(zero_ref.index < *accepted_index);
+        assert!(accepted.kernel_vector_install.events.iter().all(|reference|
+            reference.epoch == HistoryEpoch::Scoped && reference.index > *accepted_index));
+        let installed = accepted.kernel_vector_install.installed_readback.as_ref().unwrap();
+        assert_eq!(installed.code, accepted.kernel_vector_install.binding.as_ref().unwrap().code);
+
+        let (result, refused) = observe(FirstHandoff::Late, Mutation::NandProtectedOverlap);
+        assert_refused(result, &refused);
+        assert!(refused.machine_failure.is_none());
+        assert_eq!(refused.initial_record_sha256, accepted.initial_record_sha256);
+        assert_eq!(refused.handoff_record_immutable_sha256, accepted.handoff_record_immutable_sha256);
+        assert!(refused.loaded_watch.records.is_empty());
+        assert!(refused.loaded_watch.violation.is_none());
+        let history = &refused.scoped_watch.as_ref().unwrap().history;
+        assert!(history.violation.is_none());
+        let transfers: Vec<_> = history.records.iter().enumerate()
+            .filter(|(_, row)| row.source == Source::ModelBusWrite).collect();
+        let [(index, transfer)] = transfers.as_slice() else { panic!("one refused compound NAND transfer required") };
+        assert_nand_row(transfer, Transfer::CompletionGuards);
+        assert_eq!(transfer.physical + transfer.size, 0x40c00);
+        let refused_zero_ref = refused.firststage_zero.as_ref().unwrap();
+        assert_eq!(refused_zero_ref.epoch, HistoryEpoch::Scoped);
+        assert!(refused_zero_ref.index < *index);
+        let accepted_zero = accepted.row(zero_ref);
+        let refused_zero = refused.row(refused_zero_ref);
+        assert_eq!(refused_zero.source, Source::CpuWrite);
+        assert_eq!((refused_zero.core, refused_zero.pc, refused_zero.physical, refused_zero.size, refused_zero.value),
+            (accepted_zero.core, accepted_zero.pc, accepted_zero.physical, accepted_zero.size, accepted_zero.value));
+        assert_eq!(refused_zero.before, accepted_zero.before);
+        assert_eq!(history.records.len(), 2);
+        assert!(!refused.stops.iter().any(|stop| stop.label == Label::FirstStageHandoff));
+        assert!(refused.stops.iter().any(|stop| stop.label == Label::PrefixEntry));
+        let installation = &refused.kernel_vector_install;
+        assert_eq!(installation.state, InstallState::NotBound);
+        assert!(installation.binding.is_none());
+        assert!(installation.events.is_empty());
+        assert!(installation.installed_stop.is_none());
+        assert!(installation.installed_readback.is_none());
+        assert!(installation.terminal_readback.is_none());
+        assert!(refused.completion.is_none());
+        assert!(refused.endpoint.is_none());
     }
 
     fn assert_refused(result: Result<(), String>, receipt: &Receipt) {
@@ -1463,7 +1864,7 @@ mod composed_interleaving {
             assert!(receipt.kernel_vector_install.installed_stop.is_some());
             let installed = receipt.kernel_vector_install.installed_readback.as_ref().unwrap();
             assert_vectors(&installed.vectors, 7);
-            assert_eq!(receipt.kernel_vector_install.terminal_readback.as_ref(), Some(installed));
+            assert!(receipt.kernel_vector_install.terminal_readback.is_none());
             let history = &receipt.scoped_watch.as_ref().unwrap().history;
             assert!(history.violation.is_none());
             let target = if matches!(mutation, Mutation::AfterInstall) { 0x24 } else { 0x427b8 };

@@ -677,7 +677,25 @@ main = do
       addImageWrite value = value
       setTarget (Array registers) = Array (registers V.// [(2, Number 0x40024)])
       setTarget value = value
+      mapDocumentArray change = toJSON . map change . arrayValues
+      offsetCount value = case value of
+        Number count -> Number (count + fromInteger (2 ^ (63 :: Int)))
+        _ -> error "fixture instruction counts must be numeric"
+      offsetCounts = toJSON . map offsetCount . arrayValues
+      offsetTimeline = changeField "stops" (mapDocumentArray (changeField "counts" offsetCounts))
+        . changeField "completion" (changeField "microsteps" (mapDocumentArray
+            (changeField "before" offsetCounts . changeField "after" offsetCounts)))
+      nextInstruction value = case value of
+        Number count -> Number (count + 1)
+        _ -> error "fixture instructions must be numeric"
   expect "composed contract round trip" (parseContract (BL.toStrict (encode (contractValue composed))) == Right composed)
+  refuses "composed core-count sums cannot wrap their original wire instruction coordinates" offsetTimeline
+  refuses "composed stop instructions must equal the checked sum of both core counts"
+    (changeStop "first-stage-handoff" (changeField "instructions" nextInstruction))
+  refuses "composed global instructions cannot exceed the contract budget"
+    (setField "instructions" (toJSON (budget + 1)))
+  refuses "composed stop progress cannot exceed the final instruction coordinate"
+    (setField "instructions" (toJSON (0 :: Word64)))
   mapM_ (\scenario -> do
     selected <- either fail pure (composedContract scenario facts startupFixture)
     expect ("composed " ++ scenarioName scenario ++ " accepted") (accepted (validate selected (composedBytes scenario knobs)))) [Natural, Held, Delayed, NonOne]
@@ -707,13 +725,24 @@ main = do
           extraTailRow = case arrayValues (valueField "records" (valueField "loaded_watch" partial))
               ++ arrayValues (valueField "records" (valueField "scoped_watch" partial)) of
             rows -> head [row | row <- rows, hasField "pc" (toJSON (0x4003c :: Word32)) row]
-          appendTail = changeField "scoped_watch" (changeField "records" (\rows -> toJSON
-            (arrayValues rows ++ [setField "instructions" (toJSON (20000 :: Word64)) extraTailRow])))
-          appendCode = changeField "scoped_watch" (changeField "records" (\rows -> toJSON
-            (arrayValues rows ++ [setField "pc" (toJSON (0x1d08 :: Word32))
-              . setField "physical" (toJSON (0x40020 :: Word32)) . setField "address" (toJSON (0x40020 :: Word32))
-              . setField "value" (toJSON (0xe1a05000 :: Word32))
-              . setField "instructions" (toJSON (20000 :: Word64)) $ extraTailRow])))
+          stopTime stop = case valueField "instructions" stop of
+            Number count -> count
+            _ -> error "fixture stop instructions must be numeric"
+          lateTime = stopTime (last (arrayValues (valueField "stops" partial)))
+          appendLate row = changeField "scoped_watch" (changeField "records" (\rows -> toJSON
+            (arrayValues rows ++ [setField "instructions" (Number lateTime) . setField "tick" (Number lateTime) $ row])))
+            . changeField "stops" (mapValues (\stop -> if stopTime stop >= lateTime
+                then changeField "watch_records" (\cursor -> case cursor of
+                  Number count -> Number (count + 1)
+                  _ -> error "fixture scoped stop must carry a cursor") stop
+                else stop))
+          appendTail = appendLate (setField "before" (toJSON (B.unpack (encodeLeWord 0x40100))) extraTailRow)
+          appendCode = appendLate (setField "pc" (toJSON (0x1d08 :: Word32))
+            . setField "physical" (toJSON (0x40020 :: Word32)) . setField "address" (toJSON (0x40020 :: Word32))
+            . setField "before" (toJSON (B.unpack (encodeLeWord 0xe1a05000)))
+            . setField "value" (toJSON (0xe1a05000 :: Word32)) $ extraTailRow)
+          bindingTcm tcm = proofField "binding" (setField "tcm" tcm)
+            . changeStop "first-stage-handoff" (setField "tcm" tcm)
       expect ("composed " ++ scenarioName scenario ++ " partial installation " ++ show matched ++ " accepted") (accepted (consume id))
       refusesPartial "partial vector corruption is refused" (proofField "record2_handoff" corruptViews)
       refusesPartial "wrong matched prefix is refused" (proofField "record2_handoff" (setField "matched" (toJSON ((matched + 1) `mod` 8))))
@@ -732,7 +761,9 @@ main = do
       refusesPartial "a zero reference outside its history is refused"
         (changeField "firststage_zero" (setField "index" (toJSON (16384 :: Int))))
       refusesPartial "a TCM window covering kernel code is refused"
-        (proofField "binding" (setField "tcm" (toJSON [[0x00040011, 0], [0x70000011, 0] :: [Word32]])))
+        (bindingTcm (toJSON [[0x00040011, 0], [0x70000011, 0] :: [Word32]]))
+      mapM_ (\btcm -> refusesPartial "a binding TCM window covering the retired entry or alias is refused"
+        (bindingTcm (toJSON [[0x70000011, btcm], [0x70000011, 0] :: [Word32]]))) [0x0000100d, 0x4000100d]
       refusesPartial "a short vector store is refused"
         (mutateVector (setField "size" (toJSON (2 :: Int)) . setField "before" (toJSON [76, 0 :: Int])))
       refusesPartial "a vector write before firststage handoff is refused"

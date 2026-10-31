@@ -791,6 +791,7 @@ data Stop = Stop
   , stopCompletion :: Word32, stopTcm :: TcmWords, stopCounter :: Maybe CounterTotals
   -- | Active-epoch row count; schema 4 carries only scoped cursors.
   , stopCursor :: Maybe Int
+  , stopInstructionCount :: P.Instructions
   } deriving (Eq, Show)
 
 -- | A readable core-1 static mapping: guest address, physical address, size.
@@ -869,6 +870,14 @@ maxReceiptBytes = 16 * 1024 * 1024
 maxStops :: Int
 maxStops = 64
 
+data Timeline = StandaloneTimeline | ComposedTimeline P.Instructions
+
+checkedProgress :: P.Instructions -> P.Instructions -> P.Instructions -> Either String P.Instructions
+checkedProgress (P.Instructions final) (P.Instructions core0) (P.Instructions core1) = do
+  let total = toInteger core0 + toInteger core1
+  require (total <= toInteger budget && total <= toInteger final) "composed instruction progress exceeds its receipt or budget"
+  pure (P.Instructions (fromInteger total))
+
 parseReceipt :: B.ByteString -> Either String Receipt
 parseReceipt bytes = do
   require (B.length bytes <= maxReceiptBytes) "loader-prefix receipt exceeds 16 MiB"
@@ -887,14 +896,16 @@ parseReceipt bytes = do
     "failed" -> Right Failed
     _ -> Left "unknown receipt result"
   identities <- get row "cp14_identities" >>= twoOf "cp14_identities"
-  _ <- get row "instructions" :: Either String Word64
-  stops <- field row "stops" >>= json >>= mapM parseStop
+  instructions@(P.Instructions final) <- P.Instructions <$> get row "instructions"
+  when (schema == 5) $ require (final <= budget) "composed receipt exceeds its instruction budget"
+  let timeline = if schema == 5 then ComposedTimeline instructions else StandaloneTimeline
+  stops <- field row "stops" >>= json >>= mapM (parseStop timeline)
   require (length stops <= maxStops) "loader-prefix stop bound exceeded"
   let transferPolicy = if schema == 5 then WideStagingTransfers else CpuSizedTransfers
   Receipt scenario program result <$> get row "error" <*> get row "machine_failure" <*> pure identities
     <*> (field row "boot_watch" >>= parseClassified transferPolicy) <*> (field row "loaded_watch" >>= parseClassified transferPolicy)
     <*> (field row "scoped_watch" >>= nullable (parseScoped transferPolicy)) <*> pure stops
-    <*> (field row "bindings" >>= nullable parseBindings) <*> (field row "completion" >>= nullable parseStore)
+    <*> (field row "bindings" >>= nullable parseBindings) <*> (field row "completion" >>= nullable (parseStore timeline))
     <*> (field row "endpoint" >>= nullable parseEndpoint) <*> (field row "final_primary" >>= nullable parsePrimary)
     <*> (if schema == 5 then Just <$> (field row "startup" >>= parseStartup) else pure Nothing)
     <*> (field row "initial_record_sha256" >>= nullable (\entry -> json entry >>= F.parseSha256))
@@ -1114,8 +1125,8 @@ parseScoped transferPolicy value = do
   records <- field row "records" >>= json >>= mapM (parseRowWith transferPolicy)
   pure (ScopedWatch classes records (sort snapshot) (sort confinement) counters coverage)
 
-parseStop :: Value -> Either String Stop
-parseStop value = do
+parseStop :: Timeline -> Value -> Either String Stop
+parseStop timeline value = do
   row <- fields ["label", "address", "core", "instructions", "counts", "registers", "sp", "lr", "cpsr", "completion", "tcm", "counter", "watch_records"] value
   label <- get row "label" >>= closed labelName "loader-prefix stop label"
   core <- get row "core" >>= parseCore
@@ -1123,11 +1134,17 @@ parseStop value = do
   tcm <- get row "tcm" >>= \list -> case list of
     [[a0, b0], [a1, b1]] -> Right (TcmWords (a0, b0) (a1, b1))
     _ -> Left "stop TCM words must hold two banks per core"
-  _ <- get row "instructions" :: Either String Word64
+  instructions <- P.Instructions <$> get row "instructions"
+  case timeline of
+    StandaloneTimeline -> pure ()
+    ComposedTimeline final -> do
+      let (core0, core1) = counts
+      total <- checkedProgress final (P.Instructions core0) (P.Instructions core1)
+      require (instructions == total) "composed stop instructions differ from its checked core counts"
   Stop label <$> guestField row "address" <*> pure core <*> pure counts <*> (field row "registers" >>= P.parseRegisters)
     <*> get row "sp" <*> get row "lr" <*> (Cpsr <$> get row "cpsr") <*> get row "completion" <*> pure tcm
     <*> (field row "counter" >>= nullable (\entry -> fields ["count", "zero_count", "nonzero_count"] entry >>= parseTotals))
-    <*> get row "watch_records"
+    <*> get row "watch_records" <*> pure instructions
 
 bytesField :: Object -> String -> Int -> Either String B.ByteString
 bytesField row name size = do
@@ -1160,8 +1177,8 @@ parseBindings value = do
   Bindings slotsMap <$> (field row "stack_window" >>= parseScopeSpan) <*> pure zeroMap
     <*> (field row "veneer" >>= nullable (viewPair (fromIntegral (C.veneerEnd - C.veneerEntry))))
 
-parseStore :: Value -> Either String CommittedStore
-parseStore value = do
+parseStore :: Timeline -> Value -> Either String CommittedStore
+parseStore timeline value = do
   row <- fields ["instruction", "before_pc", "after_pc", "before_cpsr", "after_cpsr", "microsteps", "readback", "counter", "watch_records"] value
   instruction <- field row "instruction" >>= fields ["virtual", "physical"]
   readback <- field row "readback" >>= fields ["virtual", "physical"]
@@ -1174,7 +1191,13 @@ parseStore value = do
   where
     parseStep entry = do
       step <- fields ["before", "after", "cell"] entry
-      Microstep <$> (get step "before" >>= twoOf "microstep counts") <*> (get step "after" >>= twoOf "microstep counts") <*> get step "cell"
+      before <- get step "before" >>= twoOf "microstep counts"
+      after <- get step "after" >>= twoOf "microstep counts"
+      case timeline of
+        StandaloneTimeline -> pure ()
+        ComposedTimeline final -> forM_ [before, after] $ \(core0, core1) ->
+          checkedProgress final (P.Instructions core0) (P.Instructions core1) >> pure ()
+      Microstep before after <$> get step "cell"
 
 parseEndpoint :: Value -> Either String Endpoint
 parseEndpoint value = do
@@ -1209,6 +1232,11 @@ startupClasses (Just facts) =
     ++ [ClassState span' writes | span' <- kernelCodeSpans]
     ++ [ClassState span' [CpuFetch] | span' <- secondaryFetch]
     ++ [ClassState span' [CpuRead] | span' <- secondaryRead]
+
+guardedSpans :: Scenario -> Maybe StartupFacts -> [Span]
+guardedSpans scenario selected =
+  [cellSpan, record2, loaderB, loaderACompletion, loaderALiteral] ++ [veneerSpan | scenario == Delayed]
+    ++ [span' | ClassState span' _ <- startupClasses selected]
 
 expectedConfinement :: ProgramKind -> Maybe StartupFacts -> Word64 -> ScopeSpan -> [Confinement]
 expectedConfinement kind selected slots window = sort $
@@ -1354,8 +1382,7 @@ validateReceipt contract receipt = do
   require (scopedTcm scoped == sort [TcmSnapshot 0 atcm0 btcm0, TcmSnapshot 1 atcm1 btcm1]) "scoped TCM snapshot differs from the handoff TCM"
   forM_ (dropWhile (/= handoff) stops) $ \stop -> require (stopTcm stop == stopTcm handoff) "TCM registers changed after the handoff"
   -- Identity and 0x40000000-alias views of every guarded span, on either core.
-  let guardedViews = [view | guardedSpan <- [cellSpan, record2, loaderB, loaderACompletion, loaderALiteral] ++ [veneerSpan | scenario == Delayed]
-                               ++ [span' | ClassState span' _ <- startupClasses selected]
+  let guardedViews = [view | guardedSpan <- guardedSpans scenario selected
                            , view <- [guardedSpan, aliased guardedSpan]]
       aliased (Span start end) = Span (start + 0x40000000) (end + 0x40000000)
       meets (Span start end) (Span otherStart otherEnd) = start < otherEnd && otherStart < end
@@ -1420,7 +1447,7 @@ validateReceipt contract receipt = do
       (zip group loads) (drop 1 (zip group loads))
   completionRows <- case selected of
     Nothing -> pure (scopedRows scoped)
-    Just startup -> validateKernelInstall startup receipt scoped
+    Just startup -> validateKernelInstall scenario startup receipt scoped
   let completionScope = scoped {scopedRows = completionRows}
   if scenario == Held
     then acceptHeld completionScope counter stops receipt
@@ -1428,15 +1455,15 @@ validateReceipt contract receipt = do
   pure (ValidatedReceipt contract receipt)
 
 stopInstructions :: Stop -> Word64
-stopInstructions stop = uncurry (+) (stopCounts stop)
+stopInstructions stop = case stopInstructionCount stop of P.Instructions count -> count
 
 rowInstructions :: Row -> Either String Word64
 rowInstructions row = do
   Attribution _ _ instructions _ <- attribution row
   pure instructions
 
-validateKernelInstall :: StartupFacts -> Receipt -> ScopedWatch -> Either String [Row]
-validateKernelInstall startup receipt scoped = do
+validateKernelInstall :: Scenario -> StartupFacts -> Receipt -> ScopedWatch -> Either String [Row]
+validateKernelInstall scenario startup receipt scoped = do
   proof <- maybe (Left "kernel installation proof absent") Right (receiptKernelInstall receipt)
   zeroRef <- maybe (Left "firststage completion-zero reference absent") Right (receiptFirststageZero receipt)
   first <- uniqueStop stops FirstStageHandoff
@@ -1536,8 +1563,8 @@ validateKernelInstall startup receipt scoped = do
   validateKernelSnapshot facts (stopTcm record2Stop) 7 terminal
   let handoffPrefix = length [() | HistoryRef LoadedHistory _ <- installEvents proof]
   validateVectorSnapshot facts (stopTcm record2Stop) handoffPrefix record2Snapshot
-  forM_ [vectors | KernelSnapshot vectors _ <- [bound, readback, terminal]] (validateSnapshotTcm startup)
-  validateSnapshotTcm startup record2Snapshot
+  forM_ [vectors | KernelSnapshot vectors _ <- [bound, readback, terminal]] (validateSnapshotTcm scenario startup)
+  validateSnapshotTcm scenario startup record2Snapshot
   pure [row | row <- scopedRows scoped, isCompletion row]
   where
     stops = receiptStops receipt
@@ -1559,10 +1586,10 @@ validateKernelSnapshot facts tcm matched (KernelSnapshot snapshot code) = do
       "kernel code identity or views changed"
   validateKernelCode [CodeImage (fromIntegral low) virtualBytes | (Span low _, (virtualBytes, _)) <- code]
 
-validateSnapshotTcm :: StartupFacts -> VectorSnapshot -> Either String ()
-validateSnapshotTcm startup snapshot = do
+validateSnapshotTcm :: Scenario -> StartupFacts -> VectorSnapshot -> Either String ()
+validateSnapshotTcm scenario startup snapshot = do
   let TcmWords (a0, b0) (a1, b1) = vectorTcm snapshot
-      spans = [cellSpan, record2, loaderB, loaderACompletion, loaderALiteral, startupImage startup, Span 0 0x40] ++ kernelCodeSpans
+      spans = guardedSpans scenario (Just startup)
       views = spans ++ [Span (low + 0x40000000) (high + 0x40000000) | Span low high <- spans]
       meets (Span low high) (Span start end) = low < end && start < high
   regions <- mapM tcmWindow [a0, b0, a1, b1]
