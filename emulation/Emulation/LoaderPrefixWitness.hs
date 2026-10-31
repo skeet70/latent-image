@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | Standalone schema-4 and composed schema-5 loader-prefix observations.
+-- | Loader-prefix evidence at the schema-4/5 and schema-6 boundaries.
 module Emulation.LoaderPrefixWitness
   ( Scenario (..), scenarioName, parseScenario, scenarioControl
   , Guest (..), Span (..), RegisterIndex, registerIndex
@@ -7,7 +7,8 @@ module Emulation.LoaderPrefixWitness
   , Contract (..), StartupFacts, budget, contractValue, parseContract, isComposed
   , retainedFacts, deriveOwnedFacts, StagedImages (..), stagedImages, verifyStagedOwned
   , deriveComposedContract
-  , Receipt, ValidatedReceipt, receiptArgument, parseReceipt, validateReceipt, compareReceipts
+  , ReceiptScope (..), Receipt, ValidatedReceipt, receiptArgument, parseReceipt, validateReceipt, compareReceipts
+  , PrefixExitContext (..), prefixExitContext
   , maxReceiptBytes
   ) where
 
@@ -661,6 +662,8 @@ data Endpoint = Endpoint
 -- | Core-0 PC, registers, SP, LR and CPSR.
 data Primary = Primary Word32 Registers Word32 Word32 Cpsr deriving (Eq, Show)
 
+data ReceiptScope = PrefixBoundary | InitializerBoundary deriving (Eq, Show)
+
 data Receipt = Receipt
   { receiptScenario :: Scenario, receiptProgram :: ProgramKind, receiptResult :: WitnessResult
   , receiptError :: Maybe String, receiptMachineFailure :: Maybe String, receiptIdentities :: (Word32, Word32)
@@ -668,10 +671,26 @@ data Receipt = Receipt
   , receiptBindings :: Maybe Bindings, receiptStore :: Maybe CommittedStore, receiptEndpoint :: Maybe Endpoint
   , receiptPrimary :: Maybe Primary, receiptStartup :: Maybe StartupFacts
   , receiptInitialRecord :: Maybe F.Sha256, receiptHandoffRecordImmutable :: Maybe F.Sha256
+  , receiptScope :: ReceiptScope
   } deriving (Eq, Show)
 
 -- | A receipt accepted under its contract.
 data ValidatedReceipt = ValidatedReceipt Contract Receipt
+
+data PrefixExitContext = PrefixExitContext
+  { prefixExitRegisters :: Registers, prefixExitSp :: Word32, prefixExitLr :: Word32, prefixExitCpsr :: Cpsr
+  , prefixExitCounts :: (Word64, Word64), prefixExitTcm :: ((Word32, Word32), (Word32, Word32))
+  , prefixExitFrame :: (B.ByteString, B.ByteString)
+  } deriving (Eq, Show)
+
+prefixExitContext :: ValidatedReceipt -> Either String PrefixExitContext
+prefixExitContext (ValidatedReceipt _ receipt) = do
+  require (receiptScope receipt == InitializerBoundary) "prefix-exit context requires the initializer boundary"
+  exit <- uniqueStop (receiptStops receipt) PrefixExit
+  endpoint <- maybe (Left "prefix endpoint absent") Right (receiptEndpoint receipt)
+  let TcmWords core0 core1 = stopTcm exit
+  pure (PrefixExitContext (stopRegisters exit) (stopSp exit) (stopLr exit) (stopCpsr exit)
+    (stopCounts exit) (core0, core1) (endpointFrame endpoint))
 
 maxReceiptBytes :: Int
 maxReceiptBytes = 16 * 1024 * 1024
@@ -679,17 +698,18 @@ maxReceiptBytes = 16 * 1024 * 1024
 maxStops :: Int
 maxStops = 64
 
-parseReceipt :: B.ByteString -> Either String Receipt
-parseReceipt bytes = do
+parseReceipt :: ReceiptScope -> B.ByteString -> Either String Receipt
+parseReceipt scope bytes = do
   require (B.length bytes <= maxReceiptBytes) "loader-prefix receipt exceeds 16 MiB"
   value <- decodeStrictIntegers bytes
   initial <- objectOf value
   schema <- get initial "schema" :: Either String Word32
-  require (schema `elem` [4, 5]) "unsupported loader-prefix receipt schema"
+  require (case scope of PrefixBoundary -> schema `elem` [4, 5]; InitializerBoundary -> schema == 6)
+    "unsupported loader-prefix receipt schema for the selected boundary"
   row <- fields (["schema", "scenario", "program", "result", "error", "machine_failure", "instructions", "cp14_identities"
     , "boot_watch", "loaded_watch", "scoped_watch", "stops", "bindings", "completion", "endpoint", "final_primary"
     , "initial_record_sha256", "handoff_record_immutable_sha256"]
-    ++ ["startup" | schema == 5]) value
+    ++ ["startup" | schema == 5] ++ ["initializer" | scope == InitializerBoundary]) value
   scenario <- field row "scenario" >>= parseScenarioObject
   program <- get row "program" >>= closed programKindName "loader-prefix program"
   result <- get row "result" >>= \text -> case text :: String of
@@ -708,6 +728,7 @@ parseReceipt bytes = do
     <*> (if schema == 5 then Just <$> (field row "startup" >>= parseStartup) else pure Nothing)
     <*> (field row "initial_record_sha256" >>= nullable (\entry -> json entry >>= F.parseSha256))
     <*> (field row "handoff_record_immutable_sha256" >>= nullable (\entry -> json entry >>= F.parseSha256))
+    <*> pure scope
 
 twoOf :: String -> [a] -> Either String (a, a)
 twoOf _ [a, b] = Right (a, b)
@@ -936,17 +957,33 @@ startupClasses (Just facts) =
     ++ [ClassState span' [CpuFetch] | span' <- secondaryFetch]
     ++ [ClassState span' [CpuRead] | span' <- secondaryRead]
 
-expectedConfinement :: ProgramKind -> Maybe StartupFacts -> Word64 -> ScopeSpan -> [Confinement]
-expectedConfinement kind selected slots window = sort $
+initializerBody :: Span
+initializerBody = Span 0xd0430 0xd09ac
+
+initializerClasses :: ReceiptScope -> ProgramKind -> [ClassState]
+initializerClasses InitializerBoundary OwnedProgram = [ClassState initializerBody [CpuRead, CpuFetch]]
+initializerClasses _ _ = []
+
+retainedInitializerAccess :: ReceiptScope -> ProgramKind -> Row -> Bool
+retainedInitializerAccess InitializerBoundary OwnedProgram row =
+  case (rowAccess row, rowLocation row, rowAttribution row) of
+    (access, PhysicalSpan (Span start end), Just (Attribution Core0 _ _ _)) ->
+      access `elem` [CpuRead, CpuFetch] && start >= 0xd0430 && end <= 0xd09ac
+    _ -> False
+retainedInitializerAccess _ _ _ = False
+
+expectedConfinement :: ReceiptScope -> ProgramKind -> Maybe StartupFacts -> Word64 -> ScopeSpan -> [Confinement]
+expectedConfinement scope kind selected slots window = sort $
   [ Confinement [1] CpuWrite Allow (sort [PhysicalSpan zeroRange, PhysicalSpan (Span slots (slots + 28)), window])
   , Confinement [0] CpuWrite Forbid (sort (PhysicalSpan zeroRange : immutable)) ]
     ++ case kind of
       RetainedProgram -> []
       OwnedProgram ->
-        [ Confinement [1] CpuFetch Forbid (sort (map PhysicalSpan replacedCode ++ fetches))
-        , Confinement [1] CpuRead Forbid (sort (PhysicalSpan entryPool : readSpans)) ]
+        [ Confinement [1] CpuFetch Forbid (sort (map PhysicalSpan replacedCode ++ fetches ++ body))
+        , Confinement [1] CpuRead Forbid (sort (PhysicalSpan entryPool : readSpans ++ body)) ]
         ++ [rule | isJust selected, rule <- [Confinement [0] CpuFetch Forbid fetches, Confinement [0] CpuRead Forbid readSpans]]
   where
+    body = [PhysicalSpan span' | ClassState span' _ <- initializerClasses scope kind]
     immutable = [PhysicalSpan span' | Just startup <- [selected], span' <- [startupImage startup, Span 0 0x40]]
     fetches = [PhysicalSpan span' | isJust selected, span' <- Span 0x1800 0x1804 : secondaryFetch]
     readSpans = [PhysicalSpan span' | isJust selected, span' <- secondaryRead]
@@ -1010,6 +1047,11 @@ requiredLabels scenario = [Record1Entry, SecondaryEntry, Record2Handoff, PrefixE
 validateReceipt :: Contract -> Receipt -> Either String ValidatedReceipt
 validateReceipt contract receipt = do
   let (scenario, Program kind facts, selected) = contractParts contract
+      scope = receiptScope receipt
+      bodyClasses = initializerClasses scope kind
+      retainedBodyAccess = retainedInitializerAccess scope kind
+  require (scope /= InitializerBoundary || (scenario == Natural && isNothing selected))
+    "initializer prefix evidence requires standalone natural startup"
   require (receiptStartup receipt == selected) "receipt startup identity or schema differs from its contract"
   require (receiptScenario receipt == scenario && receiptProgram receipt == kind) "receipt scenario or program differs from its contract"
   let stops = receiptStops receipt
@@ -1027,16 +1069,17 @@ validateReceipt contract receipt = do
     "a core's entered-instruction count decreased between stops"
   require (and (zipWith (\a b -> totalCount a <= totalCount b && totalNonzero a <= totalNonzero b) snapshots (drop 1 snapshots)))
     "counter snapshots decreased between stops"
-  scoped <- maybe (Left "scoped watch evidence absent") Right (receiptScoped receipt)
+  observedScoped <- maybe (Left "scoped watch evidence absent") Right (receiptScoped receipt)
+  let scoped = observedScoped {scopedRows = filter (not . retainedBodyAccess) (scopedRows observedScoped)}
   bindings <- maybe (Left "handoff bindings absent") Right (receiptBindings receipt)
   let ClassifiedWatch bootViews bootClasses bootRows = receiptBoot receipt
       ClassifiedWatch loadedViews loadedClasses loadedRows = receiptLoaded receipt
   require (bootViews == ObserveViews && loadedViews == (if isJust selected then FixedViews else ObserveViews))
     "classified watch views differ from the startup role"
   require (bootClasses == [ClassState cellSpan writes] && null bootRows) "boot watch classes differ or it recorded a write"
-  require (loadedClasses == sort (ClassState cellSpan writes : [ClassState veneerSpan writes | scenario == Delayed] ++ startupClasses selected))
+  require (loadedClasses == sort (ClassState cellSpan writes : [ClassState veneerSpan writes | scenario == Delayed] ++ startupClasses selected ++ bodyClasses))
     "loaded watch classes differ"
-  case loadedRows of
+  case filter (not . retainedBodyAccess) loadedRows of
     [row] | Just (Core0, 0x1fec, physical, before) <- cpuWrite row, physical == completionCell, rowValue row == Just 0
       , before == B.replicate 4 0 -> pure ()
     _ -> Left "loaded watch does not hold exactly record 1's zero write of the completion cell"
@@ -1092,9 +1135,9 @@ validateReceipt contract receipt = do
   require (snd (stopCounts entry) == snd (stopCounts handoff) + 1) "prefix entry is not the core-1 instruction after the handoff"
   require (stopCounter entry == Just (CounterTotals 0 0 0) && stopCursor entry == Just 0)
     "scoped watch was not active and empty at the prefix entry"
-  require (scopedClasses scoped == sort (expectedClasses scenario ++ startupClasses selected)) "scoped watch classes differ"
+  require (scopedClasses scoped == sort (expectedClasses scenario ++ startupClasses selected ++ bodyClasses)) "scoped watch classes differ"
   slots <- through (bindingSlotsMap bindings) (fromIntegral vectorBase + 0x24) 28
-  require (scopedConfinement scoped == expectedConfinement kind selected slots (bindingStackWindow bindings)) "scoped confinement rules differ"
+  require (scopedConfinement scoped == expectedConfinement scope kind selected slots (bindingStackWindow bindings)) "scoped confinement rules differ"
   counter <- case scopedCounters scoped of
     [found] | counterCores found == [1] && counterCell found == cellSpan && counterHeadBound found == headBound
       && counterTailBound found == tailBound -> Right found

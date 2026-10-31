@@ -12,6 +12,7 @@ import Emulation.FirstStageWitness (leWordAt, sha256Hex)
 import Emulation.PeerStageWitness
 import qualified Emulation.PeerWaitWitness as W
 import qualified Emulation.LoaderPrefixWitness as L
+import qualified Emulation.InterfaceInitializer as I
 import qualified Emulation.PeerStartupWitness as S
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Runtime (..), Workspace, freshRuntime, resolve, validateFirmware, workspace)
 import qualified FujiAF.FirstStage as F
@@ -46,6 +47,8 @@ data LoaderProgram = RetainedLoader | OwnedLoader FilePath FilePath FilePath
 
 data ComposedProgram = ComposedProgram FilePath FilePath FilePath FilePath FilePath
 
+data InitializerProgram = RetainedInitializer | OwnedInitializer FilePath FilePath FilePath
+
 data LoaderRoute = StandalonePrefix | ComposedStartup deriving (Eq)
 
 loaderRouteName :: LoaderRoute -> String
@@ -65,6 +68,8 @@ data Options
   | ConsumeComposed FilePath FilePath
   | CompareComposed FilePath FilePath FilePath FilePath
   | PrepareComposed FilePath FilePath FilePath L.Scenario ComposedProgram Launch
+  | PrepareInitializer FilePath FilePath FilePath InitializerProgram Launch
+  | ConsumeInitializer FilePath FilePath InitializerProgram
 
 usage :: String
 usage = unlines
@@ -82,6 +87,8 @@ usage = unlines
   , "       peer-stage-witness --composed-startup owned --scenario natural|held|delayed|non-one --firmware DAT --fflzd FFLZD --output DIR --firststage-image BIN --firststage-symbols SYMS --candidate-image SECONDARY_PREFIX_BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
   , "       peer-stage-witness --composed-startup-receipt FILE --composed-startup-contract FILE"
   , "       peer-stage-witness --compare-composed-startup RETAINED_RECEIPT RETAINED_CONTRACT COMPOSED_RECEIPT COMPOSED_CONTRACT"
+  , "       peer-stage-witness --interface-initializer retained|owned --firmware DAT --fflzd FFLZD --output DIR [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT] [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
+  , "       peer-stage-witness --interface-initializer retained|owned --firmware DAT --initializer-receipt FILE [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT]"
   , "Natural preparation writes peer-witness-contract.json and peer-witness-expected.json without starting an emulator."
   , "Launch requires an explicit driver, run description and captured 16 KiB ROM."
   , "Control preparation preserves the input and writes peer-witness-contract.json, peer-control.DAT and peer-control-manifest.json instead of the natural expected-policy file."
@@ -90,6 +97,7 @@ usage = unlines
   , "Owned --startup-fault retired-stock-fetch requires --scenario natural --endpoint handoff and a candidate calling retired stock stub_a; the schema-3 producer must refuse it on core 1 at 0x12960."
   , "Loader-prefix preparation writes a schema-4 peer-witness-contract.json and loader-prefix-expected.json. Retained --firmware is the original DAT; held, delayed and non-one write their completion control as loader-prefix-control.DAT. Owned --firmware is the DAT build-loader-prefix staged onto the original or that control DAT."
   , "Composed preparation verifies both record images and loader-B publication against the original or selected completion-control DAT. It writes a schema-5 peer-witness-contract.json and composed-startup-expected.json without launching."
+  , "Interface initialization uses distinct schema 6 and the natural source only; receipt consumption rederives the source/image/symbol contract."
   ]
 
 data Flag
@@ -100,6 +108,7 @@ data Flag
   | LoaderCompareRetainedFile | LoaderCompareRetainedContract | LoaderCompareOwnedFile | LoaderCompareOwnedContract
   | ComposedMode | FirstStageImageFile | FirstStageSymbolsFile | ComposedReceiptFile | ComposedContractFile
   | ComposedCompareRetainedFile | ComposedCompareRetainedContract | ComposedCompareOwnedFile | ComposedCompareOwnedContract
+  | InitializerMode | InitializerReceiptFile
   deriving (Eq)
 
 parseOptions :: [String] -> Either String Options
@@ -117,6 +126,25 @@ parseOptions arguments = do
       startupFlags = candidateFlags ++ [StartupFaultName]
       loaderFlags = [LoaderPrefixMode,LoaderPrefixReceiptFile,LoaderPrefixContractFile,LoaderCompareRetainedFile]
       composedFlags = [ComposedMode,ComposedReceiptFile,ComposedContractFile,ComposedCompareRetainedFile,FirstStageImageFile,FirstStageSymbolsFile]
+      initializerOptions = do
+        mode <- need "--interface-initializer" InitializerMode
+        chosen <- case mode of
+          "retained" -> do
+            unless (all ((`notElem` candidateFlags) . fst) values) (Left "retained initializer refuses owned artifact inputs")
+            pure RetainedInitializer
+          "owned" -> OwnedInitializer <$> need "--candidate-image" CandidateImageFile
+            <*> need "--candidate-symbols" CandidateSymbolsFile <*> need "--source-firmware" SourceFirmwareFile
+          _ -> Left "--interface-initializer must be retained or owned"
+        firmware <- need "--firmware" FirmwareFile
+        case value InitializerReceiptFile of
+          Just receipt -> do
+            only ([InitializerMode,InitializerReceiptFile,FirmwareFile] ++ candidateFlags)
+            when launch (Left "initializer receipt mode cannot launch")
+            pure (ConsumeInitializer firmware receipt chosen)
+          Nothing -> do
+            only ([InitializerMode,FirmwareFile,FflzdFile,OutputDirectory,DriverFile,RunFile,RomFile] ++ candidateFlags)
+            PrepareInitializer firmware <$> need "--fflzd" FflzdFile <*> need "--output" OutputDirectory
+              <*> pure chosen <*> launchMode
       loaderProgram mode = case mode of
         "retained" -> do
           unless (all ((`notElem` candidateFlags) . fst) values) (Left "retained loader prefix refuses --candidate-image, --candidate-symbols and --source-firmware")
@@ -160,7 +188,8 @@ parseOptions arguments = do
           CompareComposed retained <$> need "--compare-composed-startup" ComposedCompareRetainedContract
             <*> need "--compare-composed-startup" ComposedCompareOwnedFile <*> need "--compare-composed-startup" ComposedCompareOwnedContract
         _ -> Left ("composed preparation, receipt and comparison modes are mutually exclusive\n" ++ usage)
-  if any ((`elem` composedFlags) . fst) values then composedOptions
+  if any ((`elem` [InitializerMode,InitializerReceiptFile]) . fst) values then initializerOptions
+  else if any ((`elem` composedFlags) . fst) values then composedOptions
   else if any ((`elem` loaderFlags) . fst) values then loaderOptions else case (value StartupReceiptFile, value CompareRetainedFile, value StartupMode) of
     (Nothing, Nothing, Nothing) -> case (value ReceiptFile, value ControlReceiptFile) of
       (Just path, Nothing) -> do
@@ -250,6 +279,8 @@ parseOptions arguments = do
         "--composed-startup" -> Right ComposedMode
         "--composed-startup-receipt" -> Right ComposedReceiptFile
         "--composed-startup-contract" -> Right ComposedContractFile
+        "--interface-initializer" -> Right InitializerMode
+        "--initializer-receipt" -> Right InitializerReceiptFile
         "--firststage-image" -> Right FirstStageImageFile
         "--firststage-symbols" -> Right FirstStageSymbolsFile
         _ -> Left ("unknown option: " ++ name ++ "\n" ++ usage)
@@ -521,7 +552,7 @@ readLoaderContract :: FilePath -> IO L.Contract
 readLoaderContract path = H.readRegular (1024 * 1024) path >>= either H.failH pure . L.parseContract
 
 readLoaderReceipt :: FilePath -> IO L.Receipt
-readLoaderReceipt path = H.readRegular L.maxReceiptBytes path >>= either H.failH pure . L.parseReceipt
+readLoaderReceipt path = H.readRegular L.maxReceiptBytes path >>= either H.failH pure . L.parseReceipt L.PrefixBoundary
 
 consumeLoaderPrefix :: LoaderRoute -> FilePath -> L.Contract -> IO L.ValidatedReceipt
 consumeLoaderPrefix route path contract = do
@@ -646,6 +677,46 @@ prepareComposed root firmwarePath fflzdPath outputPath scenario (ComposedProgram
       observed <- either H.failH pure (L.receiptArgument accepted)
       H.ensure (observed == argumentWord) "composed handoff argument differs from the decoded image-4 argument"
 
+initializerContract :: Workspace -> FilePath -> InitializerProgram -> IO (Firmware, B.ByteString, I.Contract)
+initializerContract root firmwarePath choice = do
+  datPath <- canonicalizePath (resolve root firmwarePath)
+  dat <- H.readRegular maxContainer datPath
+  (role, source, image, symbols) <- case choice of
+    RetainedInitializer -> do
+      validateFirmware (Firmware datPath)
+      pure (I.Retained, dat, B.empty, B.empty)
+    OwnedInitializer imagePath symbolsPath sourcePath -> do
+      originalPath <- canonicalizePath (resolve root sourcePath)
+      validateFirmware (Firmware originalPath)
+      source <- H.readRegular maxContainer originalPath
+      image <- H.readRegular maxCandidateImage (resolve root imagePath)
+      symbols <- H.readRegular maxCandidateSymbols (resolve root symbolsPath)
+      pure (I.Owned, source, image, symbols)
+  contract <- either H.failH pure (I.deriveContract role source dat image symbols)
+  pure (Firmware datPath, dat, contract)
+
+consumeInitializer :: FilePath -> I.Contract -> IO ()
+consumeInitializer path contract = do
+  bytes <- H.readRegular (16 * 1024 * 1024) path
+  either H.failH pure (I.validateReceipt contract bytes)
+  putStrLn ("interface-initializer receipt accepted: " ++ path)
+
+prepareInitializer :: Workspace -> FilePath -> FilePath -> FilePath -> InitializerProgram -> Launch -> IO ()
+prepareInitializer root firmwarePath fflzdPath outputPath choice execution = do
+  (firmware, dat, contract) <- initializerContract root firmwarePath choice
+  parsed <- either H.failH pure (U.parseContainer dat)
+  Runtime output <- freshRuntime root (Just (Runtime outputPath)) (UniqueRuntime "interface-initializer")
+  image4 <- decodeImage4 (resolve root fflzdPath) output (U.parsedParts parsed)
+  argument <- either H.failH pure (leWordAt image4 0xc)
+  H.ensure (argument == 0x69cdf8) "initializer image-4 argument differs from its admitted source"
+  let contractPath = output </> "peer-witness-contract.json"
+      receipt = output </> "peer-witness.json"
+  BL.writeFile contractPath (encode (I.contractValue contract))
+  case execution of
+    PrepareOnly -> putStrLn ("interface-initializer preparation: " ++ output)
+    Launch driver run rom ->
+      launchDriver root output contractPath receipt firmware driver run rom (consumeInitializer receipt contract)
+
 main :: IO ()
 main = do
   args <- getArgs
@@ -723,3 +794,9 @@ main = do
         PrepareComposed firmwarePath fflzdPath outputPath scenario program execution -> do
           enterSlot args execution
           prepareComposed root firmwarePath fflzdPath outputPath scenario program execution
+        ConsumeInitializer firmwarePath receipt choice -> do
+          (_, _, contract) <- initializerContract root firmwarePath choice
+          consumeInitializer (resolve root receipt) contract
+        PrepareInitializer firmwarePath fflzd output choice execution -> do
+          enterSlot args execution
+          prepareInitializer root firmwarePath fflzd output choice execution

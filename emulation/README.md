@@ -178,6 +178,48 @@ The same evidence records 84 default, 89 scoped and 84 readback SDK package chec
 
 Composed qualification remains source/packaging-only. The preserved runtime attempt stopped at owned record1 entry before first-stage handoff, secondary entry or record2 handoff; no prefix, completion or endpoint observation and no retained-schema4 comparison were reached. The remaining scenarios were not started. Source inspection identifies the observer's single-static-mapping assumption for record identity spans crossing adjacent mappings with contiguous physical translation. Source fix `8c8ad50` admits uniquely covered readable spans with that translation and still refuses gaps, overlaps and discontinuities. Its fresh default/scoped/readback SDK packages pass 96/101/96 checks, 102 distinct logical-target-qualified names; three unchanged engine packages are cached, with zero fresh engine tests (`E-SDK-CONTIGUOUS-SPAN-150`). A separate disposable four-case probe exercises the actual resolver across both cores and aliases, split mappings and rejected boundaries; it is not additional canonical product coverage. No after-fix composed firmware positive or comparison is accepted yet. Qualifying all four scenarios and matching comparisons still requires the corrected initial/live identities and independent receipt consumption. Discriminating composed fault controls remain authentication-held and unaccepted. Standalone schema4 acceptance cannot substitute for either composed positives or negative controls. No firmware guest, launcher, service, slot, camera or thermal operation was performed in either source qualification.
 
+### Core-1 interface initializer witness (schema 6)
+
+[#140](https://github.com/skeet70/latent-image/issues/140) owns the complete interface/descriptor leaf invoked by core1 at `0xd0aac`, ending at preexecution `0xd0ab0`, in `replacement/interface_initializer`. This is a source-only increment. No new image, stager, SDK observer or receipt consumer has been built or executed for this boundary. Schema4/5 endpoints, their existing guards and prior frozen artifacts remain unchanged.
+
+The original contract is bound independently to the pinned X-M1 1.50 DAT. Its complemented main-range segment-1 entry is `{id=1, load=0xd0000, size=0xdaa0, flash=0xa0000}`; the extracted loader matches SHA256 `8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec`. Leaf `[0xd0430,0xd09ac)` has SHA256 `60aeb6c0c68717940fef3771f3387540a2c87276d7c947a9f3d276dd51fe850d`, and the invocation word at `0xd0aac` is `0xebfffe5f`. This binding came from actual DAT-derived bytes, not the indexed assembly listing.
+
+The Rust body performs 1419 volatile word stores over `[0x400ddaa0,0x400df0cc)`, without an initial table read, exclusive shared-memory reference or new barrier. Order is 93 retained service targets at `+0x000..+0x170`, tick-cell pointer `0x400c0800` at `+0x174`, five extension words at `+0x1618..+0x1628`, then 120 eleven-word descriptors. Descriptor `i` publishes `i+1`, eight pointers `0x400ebe6c+40*i+4*j`, and `0x400efecc+56*i+24/+28`. Every invocation repeats these stores. The service targets, extension targets `0xd12bc/0xd12cc/0xd12e8/0xd1304`, tick cell, descriptor pools, loader stack, original core0 invocation `0xd09dc -> 0xd0430`, and kernel continuation `0xd0ab0 -> 0xd1354` are retained resources.
+
+At return, `r0/r1/r2/r3/r12` are exactly `0x400ebe6c/0x400ed120/0x400f18f0/0x400def40/120`; `r4..r11`, SP and the caller frame are preserved; LR is `0xd0ab0`. NZCV is `0110`, while Q and every other captured CPSR bit are preserved. The A32 adapter saves eight bytes before the Rust call and reconstructs these scratch outputs. Staging checks its actual emitted instructions and derives the Rust leaf's stack extent from its emitted control-flow graph. The admitted scratch span is the derived Rust extent plus those eight adapter bytes, not stock's twelve-byte save. Compiler calls, unresolved stack effects, inconsistent stack aliases or a compiler frame exceeding the declared 1024-byte budget refuse staging.
+
+`//emulation:build-interface-initializer` stages the linked secondary/prefix/initializer image and emits its typed schema6 contract. It verifies the original DAT identity, the complete staged image and retained extents, exact loader header publication and the single core1 BL replacement, and unchanged original initializer bytes before writing outputs. The retained role takes no owned image or symbols. The owned role binds the actual image and symbol digests. Neither role admits completion controls or composed first-stage startup.
+
+The scoped-watch SDK's typed producer follows the authentic natural record1/record2/prefix route, keeps the existing prefix acceptance transition, then observes the initializer BL, interior entry and exact return. It binds committed RAM decoding, both cores' CP14/TCM state and both physical/virtual aliases of complete record2, loader B and workspace. It checks all 1419 independently committed readback words against the original-byte-derived contract, exact CPU1 store order/value/PC/instruction attribution, caller-frame/pool/tail readback and continuous write confinement. Core1 table reads refuse; owned-role original-body fetch/read guards are core1-scoped and leave core0's original call retained. `--initializer-receipt` rederives the contract from the actual DAT/image/symbol inputs and independently consumes the complete prefix evidence before binding its validated exit context to the initializer evidence. The typed prefix receipt scope admits schema6 only for this natural initializer boundary; existing schema4/5 callers retain their old strict scope. The initializer consumer then checks publication, readback, frame/CPSR, confinement and alias evidence.
+
+Prospective qualification, only after a separate build/run grant:
+
+```sh
+devenv shell -- bazel build --jobs=2 \
+  //replacement/interface_initializer:interface-initializer-image \
+  //emulation:build-interface-initializer //emulation:peer-stage-witness
+devenv shell -- bazel run --jobs=2 //emulation:build-interface-initializer -- owned \
+  "$DAT" bazel-bin/replacement/interface_initializer/interface-initializer-image.bin \
+  bazel-bin/replacement/interface_initializer/interface-initializer-image.symbols \
+  "$INITIALIZER_DAT" "$INITIALIZER_CONTRACT"
+nix-build build-support/fujimod-xm1-scoped-watch.nix --max-jobs 1 --cores 2
+XM1_EMULATOR_SLOTS=1 "$PEER_STAGE_WITNESS" \
+  --interface-initializer retained --firmware "$DAT" --fflzd "$FFLZD" --output "$RETAINED_OUTPUT" \
+  --launch --driver "$SCOPED_DRIVER" --run "$RUN_JSON" --boot-rom "$BOOT_ROM"
+XM1_EMULATOR_SLOTS=1 "$PEER_STAGE_WITNESS" \
+  --interface-initializer owned --firmware "$INITIALIZER_DAT" --fflzd "$FFLZD" --output "$OWNED_OUTPUT" \
+  --candidate-image bazel-bin/replacement/interface_initializer/interface-initializer-image.bin \
+  --candidate-symbols bazel-bin/replacement/interface_initializer/interface-initializer-image.symbols \
+  --source-firmware "$DAT" \
+  --launch --driver "$SCOPED_DRIVER" --run "$RUN_JSON" --boot-rom "$BOOT_ROM"
+"$PEER_STAGE_WITNESS" --interface-initializer owned --firmware "$INITIALIZER_DAT" \
+  --candidate-image bazel-bin/replacement/interface_initializer/interface-initializer-image.bin \
+  --candidate-symbols bazel-bin/replacement/interface_initializer/interface-initializer-image.symbols \
+  --source-firmware "$DAT" --initializer-receipt "$OWNED_OUTPUT/peer-witness.json"
+```
+
+Freeze the source/toolchain/SDK/run/ROM/DAT/image/symbol/contract identities before either positive, inspect the stager-derived compiler scratch extent, and require genuine retained and owned receipts plus independent consumption. The endpoint is preexecution `0xd0ab0`; observation of retained service/descriptor consumers remains a separate requirement of #140. No initializer negative launcher is introduced. The separately authentication-held secondary `0x12960`, prefix and composed controls remain unattempted and unrouted. This boundary does not accept those controls, global original-body retirement, later initialization, kernel/application ownership, physical alias/cache fidelity, asynchronous-observer safety or hardware startup.
+
 # Bounded selected-queue experiment
 
 `//emulation:queue-boundary` runs the original stock `0x0072503c` caller from entry, including allocation, through the existing pinned FujiMod `Machine` API. It does not extend the native-case profile, change either runtime's CPU admission guard, qualify a runtime cutover or prove boot acceptance.

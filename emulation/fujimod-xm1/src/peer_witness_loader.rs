@@ -13,6 +13,10 @@ use fujimod_emulator_cpu::Access;
 use serde_json::Value;
 use std::collections::BTreeSet;
 
+#[path = "peer_witness_initializer.rs"]
+mod initializer;
+pub(super) use initializer::InitializerWire;
+
 const BUDGET: u64 = 50_000_000;
 const QUANTUM: u64 = 1_000;
 const ARGUMENT: u32 = 0x69cdf8;
@@ -187,6 +191,7 @@ pub(super) struct LoaderContract {
     refusal: Option<Guest>,
     image: Option<(Guest, Guest)>,
     startup: Option<ComposedStartup>,
+    initializer: Option<initializer::Contract>,
 }
 impl LoaderContract {
     pub(super) fn budget(&self) -> Instructions {
@@ -211,6 +216,12 @@ impl LoaderContract {
     }
 
     fn composed_event_forbidden(&self, event: &GuardEvent) -> bool {
+        if self.initializer.as_ref().is_some_and(initializer::Contract::owns_body)
+            && event.core == Some(1) && event.physical.is_some_and(|Address(address)|
+                address < initializer::BODY.1 && initializer::BODY.0 < address.saturating_add(event.size))
+            && matches!(event.source, GuardSource::CpuFetch | GuardSource::CpuRead) {
+            return true;
+        }
         let Some(startup) = &self.startup else { return false };
         let Some(Address(physical)) = event.physical else { return true };
         let overlaps = |(start, end)| physical < end && start < physical.saturating_add(event.size);
@@ -260,7 +271,7 @@ impl LoaderWire {
             scenario: self.scenario.kind, kind: program.kind, record, record_immutable: program.record_immutable_sha256, loader,
             handoff: program.handoff, entry: program.entry, post_load: program.post_load,
             loaded: program.loaded_register, refusal: program.refusal,
-            image: program.image, startup: None,
+            image: program.image, startup: None, initializer: None,
         })
     }
 }
@@ -320,6 +331,7 @@ struct GuardEvent {
     source: GuardSource,
     physical: Option<Address>,
     size: u64,
+    core: Option<usize>,
 }
 
 /// The scoped state fields read at stops.
@@ -427,6 +439,8 @@ struct Receipt<'a> {
     final_primary: &'a Option<wait::Primary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     startup: &'a Option<ComposedStartup>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    initializer: &'a Option<initializer::Receipt>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -567,6 +581,9 @@ impl<'a> Runner<'a> {
         if epoch == Epoch::Scoped {
             classes.extend([LOADER_B, RECORD, LOADER_A_COMPLETION, LOADER_A_LITERAL].map(|span| range(span, WatchKinds::WRITES)));
             classes.push(range(ZERO, WatchKinds::HOST_WRITE.union(WatchKinds::MODEL_BUS_WRITE)));
+        }
+        if epoch != Epoch::Boot && self.contract.initializer.as_ref().is_some_and(initializer::Contract::owns_body) {
+            classes.push(range(initializer::BODY, WatchKinds::CPU_FETCH.union(WatchKinds::CPU_READ)));
         }
         if epoch != Epoch::Boot {
             self.contract.append_composed_classes(&mut classes);
@@ -780,6 +797,10 @@ impl<'a> Runner<'a> {
         if self.contract.kind == ProgramKind::Owned {
             let mut fetch = REPLACED.to_vec();
             let mut read = vec![ENTRY_POOL];
+            if self.contract.initializer.as_ref().is_some_and(initializer::Contract::owns_body) {
+                fetch.push(initializer::BODY);
+                read.push(initializer::BODY);
+            }
             if composed.is_some() {
                 fetch.extend(std::iter::once(FIRST_REPLACED).chain(SECOND_REPLACED));
                 read.extend(SECOND_POOLS);
@@ -1113,6 +1134,7 @@ fn ram_decoded(document: &RunDocument, maps: &[factory::MemoryMap]) -> Result<Ve
 pub(super) fn run(mut machine: Machine, contract: &LoaderContract, output: &Path) -> Result<(), String> {
     let mut identities = [Identity(0); 2];
     let mut runner = Runner::new(contract);
+    let mut initializer_receipt = None;
     let outcome = (|| {
         require(wait::counts(&machine)?.0 == [0, 0] && !machine.traces.armed() && machine.traces.hits.is_empty(),
             "loader-prefix witness must arm before either core executes")?;
@@ -1128,11 +1150,16 @@ pub(super) fn run(mut machine: Machine, contract: &LoaderContract, output: &Path
         runner.maps = maps;
         runner.begin_classified(&mut machine, Epoch::Boot)?;
         runner.arm(&mut machine, &[(contract.record1_entry(), Label::Record1Entry)])?;
-        runner.execute(&mut machine)
+        runner.execute(&mut machine)?;
+        if let Some(contract) = &contract.initializer {
+            initializer_receipt = Some(initializer::observe(&mut machine, &runner, contract)?);
+        }
+        Ok(())
     })();
     let outcome = runner.finish(&mut machine, outcome);
     let receipt = Receipt {
-        schema: if contract.startup.is_some() { 5 } else { 4 }, scenario: ScenarioWire { kind: contract.scenario }, program: contract.kind,
+        schema: if contract.initializer.is_some() { 6 } else if contract.startup.is_some() { 5 } else { 4 },
+        scenario: ScenarioWire { kind: contract.scenario }, program: contract.kind,
         result: if outcome.is_ok() { WitnessResult::Passed } else { WitnessResult::Failed },
         error: outcome.as_ref().err().map(String::as_str), machine_failure: machine.failure.as_deref(),
         instructions: Instructions(machine.instructions()), cp14_identities: identities,
@@ -1140,6 +1167,7 @@ pub(super) fn run(mut machine: Machine, contract: &LoaderContract, output: &Path
         stops: &runner.stops, bindings: &runner.bindings, completion: &runner.completion, endpoint: &runner.endpoint,
         final_primary: &runner.final_primary, startup: &contract.startup,
         initial_record_sha256: &runner.initial_record_sha256, handoff_record_immutable_sha256: &runner.handoff_record_immutable_sha256,
+        initializer: &initializer_receipt,
     };
     let bytes = serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?;
     require(bytes.len() <= MAX_RECEIPT, "loader-prefix receipt exceeds 16 MiB")?;

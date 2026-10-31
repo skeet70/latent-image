@@ -558,6 +558,45 @@ haskell_library(
     ],
 )
 
+haskell_library(
+    name = "interface-initializer-lib",
+    srcs = ["Emulation/InterfaceInitializer.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":loader-prefix-witness-lib",
+        ":peer-stage-witness-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:json",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+        "//host/firmware:stage-build",
+        "//host/firmware:startup-stage-contract",
+    ],
+)
+
+haskell_binary(
+    name = "build-interface-initializer",
+    srcs = ["BuildInterfaceInitializer.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":interface-initializer-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host:update-container",
+        "//host/firmware:stage-build",
+        "//host/firmware:startup-stage-contract",
+    ],
+)
+
 haskell_test(
     name = "loader-prefix-witness-tests",
     size = "small",
@@ -602,6 +641,7 @@ haskell_binary(
         ":emulator-slot-lib",
         ":first-stage-witness-lib",
         ":loader-prefix-witness-lib",
+        ":interface-initializer-lib",
         ":peer-stage-witness-lib",
         ":peer-startup-witness-lib",
         ":peer-wait-witness-lib",
