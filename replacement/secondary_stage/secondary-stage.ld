@@ -4,6 +4,7 @@ ENTRY(xm1_secondary_entry)
 SECTIONS
 {
   . = 0x10400;
+  __secondary_stage_start = .;
   .text : {
     KEEP(*(.text.entry))
     *(.text*)

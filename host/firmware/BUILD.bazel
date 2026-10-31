@@ -156,6 +156,7 @@ haskell_test(
     deps = [
         "//host:base",
         "//host:bytestring",
+        "//host:first-stage",
         "//host:host-support",
         "//host:update-container",
     ],
@@ -191,6 +192,7 @@ haskell_binary(
     ],
     deps = [
         ":stage-build",
+        ":startup-stage-contract",
         "//host:base",
         "//host:first-stage",
     ],
@@ -242,10 +244,38 @@ haskell_binary(
         "-threaded",
     ],
     deps = [
+        ":stage-build",
+        ":startup-stage-contract",
+        "//host:base",
+        "//host:first-stage",
+    ],
+)
+
+haskell_library(
+    name = "startup-stage-contract",
+    srcs = ["StartupStageContract.hs"],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021"],
+    deps = [
         ":secondary-stage-contract",
         ":stage-build",
         "//host:base",
+        "//host:bytestring",
         "//host:first-stage",
+        "//host:update-container",
+    ],
+)
+
+haskell_binary(
+    name = "build-composed-startup",
+    srcs = ["BuildComposedStartup.hs"],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-threaded"],
+    deps = [
+        ":startup-stage-contract",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:host-support",
         "//host:update-container",
     ],
 )

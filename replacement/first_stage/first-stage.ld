@@ -4,12 +4,14 @@ ENTRY(xm1_first_stage_entry)
 SECTIONS
 {
   . = 0x6000;
+  __first_stage_start = .;
   .text : {
     KEEP(*(.text.entry))
     *(.text*)
   }
   .rodata : { *(.rodata*) }
   .data : { *(.data*) }
+  .bss : { *(.bss*) *(COMMON) }
   . = ALIGN(4);
   __first_stage_end = .;
   /DISCARD/ : {
@@ -19,6 +21,8 @@ SECTIONS
     *(.comment*)
   }
 }
+ASSERT(SIZEOF(.data) == 0 && SIZEOF(.bss) == 0, "owned first-stage image has writable statics")
+ASSERT(__first_stage_end <= 0x10000, "owned first-stage image exceeds the first record")
 
 xm1_vector_table_start = 0x0;
 xm1_vector_before_reset_end = 0x20;

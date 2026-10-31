@@ -38,6 +38,13 @@ module FujiAF.FirstStage
   , planPatches
   , replaceRecordSlot
   , verifyStagedRecord
+  , ComposedStagePlan
+  , composedStagePlan
+  , composedFirstPlan
+  , composedSecondPlan
+  , composedPublication
+  , replaceComposedRecords
+  , verifyComposedRecords
   , LoaderId (..)
   , LoaderWordPatch
   , loaderPatchId
@@ -79,6 +86,9 @@ data BootRecord = FirstRecord | SecondRecord
   deriving (Eq, Show)
 
 data StagePlan = StagePlan BootRecord ArmEntry SlotOffset MediaImage [RetainedExtent]
+  deriving (Eq, Show)
+
+data ComposedStagePlan = ComposedStagePlan StagePlan StagePlan LoaderWordPatch
   deriving (Eq, Show)
 
 data ExpectedMediaPatch = ExpectedMediaPatch SlotOffset MediaImage MediaImage
@@ -354,6 +364,73 @@ verifyStagedRecord plan loaderPatches source rebuilt = do
       load = slotOffsetBytes (planLoadOffset plan)
   unless (B.map complement (B.take (B.length image) (B.drop load stagedSlot)) == image)
     (Left "staged bytes differ from the candidate image")
+
+composedStagePlan :: StagePlan -> StagePlan -> LoaderWordPatch -> Either String ComposedStagePlan
+composedStagePlan first second publication = do
+  unless (planRecord first == FirstRecord && planRecord second == SecondRecord)
+    (Left "composed startup requires distinct first and second record plans")
+  _ <- planPatches first
+  _ <- planPatches second
+  let load = toInteger (recordGuestBase SecondRecord + slotOffsetBytes (planLoadOffset second))
+      end = load + toInteger (B.length (mediaImageBytes (planImage second)))
+      target = toInteger (loaderPatchReplacement publication)
+  unless (loaderPatchId publication == LoaderId 1 && loaderPatchAddress publication == 0xd000c
+      && loaderPatchExpected publication == 0xd0020 && target `mod` 4 == 0 && target >= load && target < end)
+    (Left "composed startup requires loader-B entry publication into the second image")
+  pure (ComposedStagePlan first second publication)
+
+composedFirstPlan :: ComposedStagePlan -> StagePlan
+composedFirstPlan (ComposedStagePlan first _ _) = first
+
+composedSecondPlan :: ComposedStagePlan -> StagePlan
+composedSecondPlan (ComposedStagePlan _ second _) = second
+
+composedPublication :: ComposedStagePlan -> LoaderWordPatch
+composedPublication (ComposedStagePlan _ _ publication) = publication
+
+replaceComposedRecords :: ComposedStagePlan -> Parts -> Either String Parts
+replaceComposedRecords (ComposedStagePlan first second publication) source = do
+  _ <- composedLoaderOffset source publication
+  replaceRecordSlot first source >>= replaceRecordSlot second >>= applyLoaderWordPatches [publication]
+
+composedLoaderOffset :: Parts -> LoaderWordPatch -> Either String Int
+composedLoaderOffset parts publication = do
+  case filter ((== 1) . U.segId) (partSegments parts) of
+    [segment] | U.segLoad segment == 0xd0000 -> pure ()
+    _ -> Left "composed startup requires loader B loaded at its declared base"
+  loaderWordPatchOffset parts publication
+
+verifyComposedRecords :: ComposedStagePlan -> U.Parsed -> U.Parsed -> Either String ()
+verifyComposedRecords plan source rebuilt = do
+  forM_ [source, rebuilt] $ \parsed ->
+    forM_ (U.checks parsed ++ U.carriedChecks parsed) $ \check ->
+      unless (U.checkPassed check) (Left ("composed container check failed: " ++ U.checkField check))
+  let plans = [composedFirstPlan plan, composedSecondPlan plan]
+      publication = composedPublication plan
+      sourceParts = U.parsedParts source
+  patches <- fmap concat $ forM plans $ \recordPlan -> do
+    patches <- planPatches recordPlan
+    pure [(recordSlotOffset (planRecord recordPlan) + offset, bytes) | (offset, bytes) <- patches]
+  offset <- composedLoaderOffset sourceParts publication
+  unless (U.mediaWordAt (partPreTable sourceParts) offset == loaderPatchExpected publication)
+    (Left "composed loader-B publication preimage differs")
+  verifyPreTablePatches [(start, B.length bytes) | (start, bytes) <- patches] [publication] source rebuilt
+  let rebuiltPre = partPreTable (U.parsedParts rebuilt)
+  forM_ patches $ \(start, bytes) ->
+    unless (B.take (B.length bytes) (B.drop start rebuiltPre) == bytes)
+      (Left "composed record patch differs from its planned bytes")
+  forM_ plans $ \recordPlan -> do
+    let record = planRecord recordPlan
+    before <- recordSlotBytes record sourceParts
+    after <- recordSlotBytes record (U.parsedParts rebuilt)
+    let image = mediaImageBytes (planImage recordPlan)
+        load = slotOffsetBytes (planLoadOffset recordPlan)
+    unless (B.map complement (B.take (B.length image) (B.drop load after)) == image)
+      (Left "composed extracted image differs from its linked bytes")
+    forM_ (planRetainedExtents recordPlan) $ \extent -> do
+      let (start, end) = retainedExtentRange extent
+          window = B.take (end - start) . B.drop start
+      unless (window before == window after) (Left "composed retained record bytes changed")
 
 -- | Checks a rebuilt container against its source: only the loader words
 -- change, each to its replacement.
