@@ -7,7 +7,8 @@ use crate::witness::{WitnessCore, WitnessResult, hit_address};
 use fujimod_emulator::board::{factory, observation::MemoryWatch};
 use fujimod_emulator_cpu::{Model as CpuModel, Register, arm};
 use fujimod_emulator_exr2_plan::{Model, Plan};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -39,6 +40,32 @@ struct Word(u32);
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(transparent)]
 struct Address(u64);
+
+/// Serialized as 64 lowercase hexadecimal characters.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Sha256Digest([u8; 32]);
+impl Sha256Digest {
+    fn of(bytes: &[u8]) -> Self {
+        let mut digest = [0; 32];
+        digest.copy_from_slice(&Sha256::digest(bytes));
+        Self(digest)
+    }
+    fn parse(text: &str) -> Result<Self, String> {
+        if text.len() != 64 || !text.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')) {
+            return Err("SHA-256 digest must be 64 lowercase hexadecimal characters".into());
+        }
+        let mut bytes = [0; 32];
+        for (index, value) in bytes.iter_mut().enumerate() {
+            *value = u8::from_str_radix(&text[2 * index..2 * index + 2], 16).map_err(|error| error.to_string())?;
+        }
+        Ok(Self(bytes))
+    }
+}
+impl Serialize for Sha256Digest {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&crate::witness::encode_hex(&self.0))
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

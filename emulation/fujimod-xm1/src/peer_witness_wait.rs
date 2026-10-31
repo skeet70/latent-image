@@ -1,6 +1,5 @@
 use super::*;
 use fujimod_catalog::configuration::RunEngine;
-use sha2::{Digest, Sha256};
 
 pub(super) const BUDGET: u64 = 10_000_000;
 pub(super) const PREFIX: u64 = 4_000_000;
@@ -204,14 +203,14 @@ pub(super) fn bytes(machine: &Machine, core: usize, address: u64, length: usize)
     Ok(result)
 }
 pub(super) enum OriginalImage { Record2, LoaderB }
-pub(super) const RECORD2_SHA256: [u8; 32] = [
+pub(super) const RECORD2_SHA256: Sha256Digest = Sha256Digest([
     0x2f,0x1b,0xf3,0xf0,0xe4,0x83,0xb8,0x92,0xd2,0x89,0x05,0x99,0x67,0x9c,0x1b,0x51,
-    0x5c,0xfc,0x1b,0xe8,0xb8,0xc2,0x7c,0xbb,0x06,0xd4,0xd9,0x13,0xe4,0x28,0xab,0xb4];
-pub(super) const LOADER_B_SHA256: [u8; 32] = [
+    0x5c,0xfc,0x1b,0xe8,0xb8,0xc2,0x7c,0xbb,0x06,0xd4,0xd9,0x13,0xe4,0x28,0xab,0xb4]);
+pub(super) const LOADER_B_SHA256: Sha256Digest = Sha256Digest([
     0x8f,0xb0,0xc3,0x22,0xa2,0x24,0x43,0xa3,0x78,0x3c,0xda,0xb9,0x07,0x1d,0xb1,0x72,
-    0x12,0xa5,0x62,0x9f,0x63,0x75,0x64,0x62,0x18,0xac,0x1e,0x04,0x3d,0xc6,0x72,0xec];
+    0x12,0xa5,0x62,0x9f,0x63,0x75,0x64,0x62,0x18,0xac,0x1e,0x04,0x3d,0xc6,0x72,0xec]);
 pub(super) fn verify_image(machine: &Machine, image: OriginalImage) -> Result<(), String> {
-    let (address, length, expected): (u64, usize, [u8; 32]) = match image {
+    let (address, length, expected) = match image {
         OriginalImage::Record2 => (0x10000, 0x4c80, RECORD2_SHA256),
         OriginalImage::LoaderB => (0xd0000, 0xdaa0, LOADER_B_SHA256),
     };
@@ -225,7 +224,7 @@ pub(super) fn verify_image(machine: &Machine, image: OriginalImage) -> Result<()
     let mut physical = vec![0; length];
     machine.session.board.read_physical(address, &mut physical)?;
     let virtual_bytes = bytes(machine, 1, address, length)?;
-    require(virtual_bytes == physical && Sha256::digest(&physical)[..] == expected[..],
+    require(virtual_bytes == physical && Sha256Digest::of(&physical) == expected,
         "control original guest image digest or active alias differs")
 }
 pub(super) enum TcmBank { Btcm, Atcm }

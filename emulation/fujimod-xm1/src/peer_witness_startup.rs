@@ -1,11 +1,10 @@
 //! Schema-3 core-1 record-2 startup observation of the retained program or an
 //! owned candidate, with classified memory watches per epoch.
 use super::*;
-use super::wait::{self, BoardState, ClearReadback, Control, CoreCounts, GateBindings, Primary, TcmBank, WatchCursor, require};
+use super::wait::{self, BoardState, ClearReadback, Control, CoreCounts, GateBindings, Primary, RECORD2_SHA256, TcmBank, WatchCursor, require};
 use fujimod_catalog::configuration::RunEngine;
 use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
 use crate::witness::encode_hex;
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 const NATURAL_BUDGET: u64 = 20_000_000;
@@ -38,10 +37,6 @@ const FORBID_FETCH: [(u32, u32); 7] = [
     (0x12abc, 0x12ad0), (0x13490, 0x13574), (0x1386c, 0x138ac),
 ];
 const FORBID_READ: [(u32, u32); 3] = [(0x11ac4, 0x11acc), (0x11ad4, 0x11ae8), (0x11fe4, 0x11fec)];
-const RETAINED_RECORD: [u8; 32] = [
-    0x2f, 0x1b, 0xf3, 0xf0, 0xe4, 0x83, 0xb8, 0x92, 0xd2, 0x89, 0x05, 0x99, 0x67, 0x9c, 0x1b, 0x51,
-    0x5c, 0xfc, 0x1b, 0xe8, 0xb8, 0xc2, 0x7c, 0xbb, 0x06, 0xd4, 0xd9, 0x13, 0xe4, 0x28, 0xab, 0xb4,
-];
 /// Core-1 guest, physical and length of each mapping the startup relies on.
 const REQUIRED_MAPS: [(u64, u64, u64); 5] = [
     (0x10000, 0x10000, 0x4ca0), (0x4002_0000, 0x20000, 8), (0xd0000, 0xd0000, 0xdaa0),
@@ -129,7 +124,7 @@ enum ProgramKind { Retained, Owned }
 
 struct Program {
     kind: ProgramKind,
-    record: [u8; 32],
+    record: Sha256Digest,
     startup: (u32, u32),
     sites: Sites,
     loaded: u8,
@@ -151,7 +146,7 @@ impl StartupContract {
 fn retained() -> Program {
     Program {
         kind: ProgramKind::Retained,
-        record: RETAINED_RECORD,
+        record: RECORD2_SHA256,
         startup: (0x11800, 0x11fec),
         sites: Sites {
             entry: Guest(0x11800), main: Guest(0x11808), peer_load: Guest(0x11f74), peer_loaded: Guest(0x11f78),
@@ -163,16 +158,6 @@ fn retained() -> Program {
         forbid_fetch: Vec::new(),
         forbid_read: Vec::new(),
     }
-}
-
-pub(super) fn digest(text: &str) -> Result<[u8; 32], String> {
-    require(text.len() == 64 && text.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')),
-        "record digest must be 64 lowercase hexadecimal characters")?;
-    let mut bytes = [0; 32];
-    for (index, value) in bytes.iter_mut().enumerate() {
-        *value = u8::from_str_radix(&text[2 * index..2 * index + 2], 16).map_err(|error| error.to_string())?;
-    }
-    Ok(bytes)
 }
 
 fn exact_set(observed: &[(Guest, Guest)], expected: &[(u32, u32)]) -> Result<Vec<(u32, u32)>, String> {
@@ -198,7 +183,7 @@ impl StartupWire {
                 require(loaded_register <= 12 && (1..=100_000).contains(&poll_period), "startup owned register or poll period is out of range")?;
                 Program {
                     kind: ProgramKind::Owned,
-                    record: digest(&record_sha256)?,
+                    record: Sha256Digest::parse(&record_sha256)?,
                     startup: (start, end),
                     sites,
                     loaded: loaded_register,
@@ -335,14 +320,14 @@ struct Segment {
     header: Word,
     entry: Word,
     argument: Word,
-    loader_sha256: String,
+    loader_sha256: Sha256Digest,
     loader_entry: Word,
     /// The core-1 static mapping of the table extent `[root, record + 36)`.
     table: BoundMap,
 }
 #[derive(Serialize)]
 struct RecordCheck {
-    sha256: String,
+    sha256: Sha256Digest,
     site_words: Vec<(Guest, Word)>,
 }
 #[derive(Serialize)]
@@ -462,10 +447,10 @@ pub(super) fn tcm_window(bank: Word) -> Result<Option<(u64, u64)>, String> {
     if bank.0 & 1 == 0 || code == 0 {
         return Ok(None);
     }
-    require((3..=14).contains(&code), "startup TCM region size encoding is reserved")?;
+    require((3..=14).contains(&code), "TCM region size encoding is reserved")?;
     let base = u64::from(bank.0 & 0xffff_f000);
     let size = 512u64 << code;
-    require(base % size == 0 && base + size <= 1 << 32, "startup TCM region is misaligned or extends past 4 GiB")?;
+    require(base % size == 0 && base + size <= 1 << 32, "TCM region is misaligned or extends past 4 GiB")?;
     Ok(Some((base, base + size)))
 }
 
@@ -935,7 +920,7 @@ impl<'a> Runner<'a> {
         let length = (RECORD.1 - RECORD.0) as usize;
         let guest = wait::bytes(machine, 1, RECORD.0, length)?;
         let physical = machine.read(RECORD.0, length)?;
-        let observed = Sha256::digest(&physical);
+        let observed = Sha256Digest::of(&physical);
         let program = self.program();
         let sites = program.sites;
         let mut checked = Vec::new();
@@ -954,8 +939,8 @@ impl<'a> Runner<'a> {
         let stores = [site(sites.clear_store.0)?, site(sites.target_store.0)?, site(sites.argument_store.0)?];
         let loads = [site(sites.target_load.0)?, site(sites.argument_load.0)?];
         let handoff = site(sites.handoff.0)?;
-        self.record = Some(RecordCheck { sha256: encode_hex(&observed), site_words: checked });
-        require(guest == physical && observed[..] == program.record[..],
+        self.record = Some(RecordCheck { sha256: observed, site_words: checked });
+        require(guest == physical && observed == program.record,
             "startup record-2 bytes or the active core-1 view differ from the contract digest")?;
         require(bl_target(first, entry) == Some(0x11854) && bl_target(second, entry + 4) == Some(0x118b8)
             && third.is_none_or(|word| bl_target(word, entry + 8) == Some(sites.main.0)),
@@ -1006,7 +991,7 @@ impl<'a> Runner<'a> {
         let loader_entry = word(machine, LOADER_B.0 + 0xc)?;
         let segment = Segment {
             root, index, record: Word(record), header, entry, argument,
-            loader_sha256: encode_hex(&Sha256::digest(&loader)), loader_entry, table,
+            loader_sha256: Sha256Digest::of(&loader), loader_entry, table,
         };
         let table_span = segment.table_span();
         self.segment = Some(segment);

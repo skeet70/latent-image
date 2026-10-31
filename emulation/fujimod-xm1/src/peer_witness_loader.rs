@@ -2,7 +2,7 @@
 //! the paused record-2 handoff to pre-execution 0xd0aac under the scoped
 //! memory watch, with classified watches from reset to the handoff.
 use super::*;
-use super::startup::{digest, tcm_disjoint_views, tcm_window};
+use super::startup::{tcm_disjoint_views, tcm_window};
 use super::wait::{self, BoardState, CoreCounts, LOADER_B_SHA256, RECORD2_SHA256, require};
 use fujimod_catalog::configuration::RunEngine;
 use fujimod_emulator::board::observation::scoped::{
@@ -12,9 +12,7 @@ use fujimod_emulator::board::observation::scoped::{
 use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
 use fujimod_emulator::board::preservation::PhysicalRange;
 use fujimod_emulator_cpu::Access;
-use crate::witness::encode_hex;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 const BUDGET: u64 = 50_000_000;
@@ -103,8 +101,8 @@ pub(super) struct LoaderWire {
 pub(super) struct LoaderContract {
     scenario: Scenario,
     kind: ProgramKind,
-    record: [u8; 32],
-    loader: [u8; 32],
+    record: Sha256Digest,
+    loader: Sha256Digest,
     handoff: Guest,
     entry: Guest,
     post_load: Guest,
@@ -126,8 +124,8 @@ impl LoaderWire {
         require(self.schema == 4 && self.budget.0 == BUDGET, "loader-prefix witness requires schema 4 and budget 50000000")?;
         let program = self.program;
         require((1..=100_000).contains(&program.poll_period), "loader-prefix poll period is out of range")?;
-        let record = digest(&program.record_sha256)?;
-        let loader = digest(&program.loader_sha256)?;
+        let record = Sha256Digest::parse(&program.record_sha256)?;
+        let loader = Sha256Digest::parse(&program.loader_sha256)?;
         match program.kind {
             ProgramKind::Retained => require(record == RECORD2_SHA256 && loader == LOADER_B_SHA256
                 && program.handoff == Guest(0x11850) && program.entry == Guest(0xd0020) && program.load == Guest(0xd0a44)
@@ -276,8 +274,8 @@ struct Endpoint {
     frame: Views,
     vectors: Views,
     zero: ZeroReadback,
-    record_sha256: String,
-    loader_sha256: String,
+    record_sha256: Sha256Digest,
+    loader_sha256: Sha256Digest,
 }
 
 #[derive(Serialize)]
@@ -321,10 +319,6 @@ fn tcm_words(machine: &Machine) -> Result<TcmWords, String> {
         [wait::tcm(machine, WitnessCore::Core0, wait::TcmBank::Atcm)?, wait::tcm(machine, WitnessCore::Core0, wait::TcmBank::Btcm)?],
         [wait::tcm(machine, WitnessCore::Core1, wait::TcmBank::Atcm)?, wait::tcm(machine, WitnessCore::Core1, wait::TcmBank::Btcm)?],
     ])
-}
-
-fn digest_hex(bytes: &[u8]) -> String {
-    encode_hex(&Sha256::digest(bytes))
 }
 
 struct Runner<'a> {
@@ -599,8 +593,8 @@ impl<'a> Runner<'a> {
                 range: (Address(ZERO.0), Address(ZERO_CLAIM_END)),
                 first_nonzero: zero.iter().position(|&byte| byte != 0).map(|offset| Address(ZERO.0 + offset as u64)),
             },
-            record_sha256: digest_hex(&machine.read(RECORD.0, (RECORD.1 - RECORD.0) as usize)?),
-            loader_sha256: digest_hex(&machine.read(LOADER_B.0, (LOADER_B.1 - LOADER_B.0) as usize)?),
+            record_sha256: Sha256Digest::of(&machine.read(RECORD.0, (RECORD.1 - RECORD.0) as usize)?),
+            loader_sha256: Sha256Digest::of(&machine.read(LOADER_B.0, (LOADER_B.1 - LOADER_B.0) as usize)?),
         })
     }
 
@@ -641,7 +635,7 @@ impl<'a> Runner<'a> {
                 let record = machine.read(RECORD.0, (RECORD.1 - RECORD.0) as usize)?;
                 let loader = machine.read(LOADER_B.0, (LOADER_B.1 - LOADER_B.0) as usize)?;
                 require(wait::bytes(machine, 1, RECORD.0, record.len())? == record && wait::bytes(machine, 1, LOADER_B.0, loader.len())? == loader
-                    && Sha256::digest(&record)[..] == contract.record && Sha256::digest(&loader)[..] == contract.loader,
+                    && Sha256Digest::of(&record) == contract.record && Sha256Digest::of(&loader) == contract.loader,
                     "record-2 or loader-B bytes or their core-1 views differ from the contract")?;
                 let (window, bindings) = self.handoff_bindings(machine, &self.stops[index])?;
                 tcm_disjoint_views(&self.committed, &self.stops[index].tcm, &self.guarded())?;
