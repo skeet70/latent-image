@@ -141,9 +141,30 @@ bazel-bin/emulation/peer-stage-witness --compare RETAINED_RECEIPT RETAINED_CONTR
 
 The scoped observer enforces immutable bytes, forbidden stock-prefix fetches and core1 write confinement over its declared interval, with explicit static-map, decoder and both-core TCM refusals. It binds entry to one instruction after record2 handoff, an empty scoped watch/counter history, linked polling sites and the downstream vector, cleared-memory, frame and live-state boundary. It does not claim global exception/caller closure, invisible alias behavior or hardware identity.
 
-`E-LOADER-B-PREFIX-HOST-SCOPED-SDK-150` records host tests, actual control/candidate staging and independent preservation proofs, the same83 package checks in each default/scoped SDK, and a non-executing schema4 admission/refusal. The eight retained/owned runtime cases and discriminating fault controls remain unqualified. The smoke document intentionally uses quantum1; real observations require the packaged quantum1000 and24:1 timing.
+`E-LOADER-B-PREFIX-HOST-SCOPED-SDK-150` records host tests, actual control/candidate staging and independent preservation proofs, the same 83 package checks in each default/scoped SDK, and non-executing schema4 admission/refusal. The smoke document intentionally uses quantum1; real observations require the packaged quantum1000 and 24:1 timing.
+
+The first retained-natural runtime attempt failed at record2 handoff before prefix entry or scoped-watch arming (`E-LOADER-B-PREFIX-INITIAL-REFUSAL-150`). Its compound identity refusal did not identify which term failed. Source review distinguishes the full staged identity at preexecution secondary entry from the live immutable projection, which excludes exactly the twelve log-global bytes `[0x14c60,0x14c6c)` and retains the final twenty bytes through `0x14c80`. The corrected schema4/5 observer requires both observations; owned cases, comparisons and discriminating fault controls still need a fresh admitted cohort.
 
 The combined secondary-plus-prefix image is one crate and link in record2. Schema4 retains stock record1 entry `0x1800`; [#137](https://github.com/skeet70/latent-image/issues/137) tracks the distinct composed route with an owned record1 image. Neither standalone receipts nor image concatenation establish composed startup.
+
+### Composed startup witness (schema 5)
+
+[#137](https://github.com/skeet70/latent-image/issues/137) uses `//host/firmware:build-composed-startup` to stage the owned first-stage image in record1 at `0x6000` and the single linked secondary-plus-prefix image in record2 at `0x10400`. The builder requires the source DAT and both stored-slot digests, validates linked image bounds and retained extents, and checks both record patches plus the loader-B publication as one aggregate change. It does not overlay a standalone secondary image onto the combined image.
+
+Preparation selects the route explicitly and does not start an emulator:
+
+```sh
+bazel run //emulation:peer-stage-witness -- \
+  --composed-startup owned --scenario natural \
+  --firmware "$COMPOSED_DAT" --fflzd "$FFLZD" --output "$PRIVATE_OUTPUT" \
+  --firststage-image "$FIRST_BIN" --firststage-symbols "$FIRST_SYMBOLS" \
+  --candidate-image "$SECONDARY_PREFIX_BIN" --candidate-symbols "$SECONDARY_PREFIX_SYMBOLS" \
+  --source-firmware "$ORIGINAL_DAT"
+```
+
+The schema5 contract binds both linked images and symbol digests, the source identity, the selected first-stage entry and its handoff, preexecution secondary entry, full initial record2 identity and the later immutable projection. It requires the scoped-watch SDK; the default SDK refuses this schema. `--composed-startup-receipt`/`--composed-startup-contract` consume it; `--compare-composed-startup` compares its endpoint with a matching retained schema4 scenario. Held, delayed and non-one scenarios stage onto their selected completion-control DAT while retaining the original DAT as the witness source.
+
+The composed loaded watch protects the selected first-stage image and vectors, retires only the first stock entry instruction `[0x1800,0x1804)`, and observes the declared secondary forbidden fetch/read classes. First-stage handoff and secondary entry must each precede record2 handoff; their relative order is not fixed. The classified-to-scoped transition executes no guest instruction. This is not the full schema3 secondary guard, a pre-handoff record2 immutability proof, retirement of the retained first-stage body, or full startup acceptance. Source integration alone does not qualify a composed guest run.
 
 # Bounded selected-queue experiment
 
@@ -1241,6 +1262,10 @@ bazel run //emulation:fujimod-xm1-sensor-fixture -- verify --run BASE.json --fix
 Both print the identity record: fixture id and SHA-256, base and derived run-document SHA-256, and the sensor's frames name, raster, scene, asset and period. `verify` fails unless the document is byte-identical to the derivation. A run uses the derived document as the bridge's `--run`.
 
 Fixture schema 2 adds a required `enable_readback` of `identity` or `exchanged_source_bits`, the image-input option of `fujimod-enable-readback.patch` ([build support](../build-support/README.md)). The derivation inserts it as `image_input.options.enable_readback` and refuses a base whose options already hold that key or whose input clock mode is not `input_enable`; the identity record adds `enable_readback`. Schema-1 derivations are unchanged and carry no such key. The pinned image-input `Options` deny unknown fields, so the default SDK is expected to refuse a schema-2 document (source-inspected, unexercised); it is meant for `build-support/fujimod-xm1-enable-readback.nix`. `fixtures/fujimod-sensor/xm1-150-raw16-ramp12-exchanged-readback.json` is the ramp12 fixture below with its own id and `exchanged_source_bits`, the [IRQ41 readback hypothesis](#irq41-stop-in-physical-1).
+
+Fixture schema 3 additionally requires `primary_gate` of `shared_bit16` or `source_bit0` and inserts it as `image_input.options.clock.primary_gate`. The opt-in patch retains `shared_bit16` as the absent-key default. `source_bit0` removes the stored bit-16 prerequisite only for primary source0; the common gates, source1 prerequisites and exchanged-readback law are unchanged. `fixtures/fujimod-sensor/xm1-150-raw16-ramp12-exchanged-readback-primary-bit0.json` selects the explicit hypothesis. Schema-1/2 output bytes remain unchanged.
+
+`E-CAPTURE-PRIMARY-BIT0-HOST-150` records the model, SDK and producer qualification. `E-CAPTURE-PRIMARY-BIT0-CHECKPOINT-150` accepts one fresh checkpoint at 302,500,000 preattach instructions, not capture. The later route strictly refuses an unowned `0xfff30010` word store at CPU0 PC `0x00689490`; its 366 dropped details and incomplete observation remain coverage limits. No restored route, JPEG capture or physical behavior is qualified by that checkpoint.
 
 Attachment contract (source-inspected, FujiMod `9bb8bd90`): the image-input model takes an optional `sensor` of `frames`, `options` and `controls` (`crates/emulator-exr2-isp-input/src/construct.rs`), whose frames come from a scene `sensors` entry of width, height, `raw16` or `rgb24` pixels and a generated asset (`crates/emulator/src/session/preparation.rs`). `options.sensor_period_ticks` runs a sensor clock beside the periodic phase clock. At each sensor period `frame()` (`input.rs`) latches the frame and arms RAW channel 2 when bit 0 of `0x004` and bit 0 of `0x35c` are set, no channel-2 completion is pending and no transfer is active; channel 3 arms the same way on `0x378`. Channel 2 needs format `0x354` bits 20-22 of 3 or 4 and bit 1 of `0x004` clear; bit 16 of `0x004` selects Packed12, otherwise U16. The window is left `0x014` bits 16-29, top `0x018` bits 16-29, height `0x018` bits 0-13 plus 1 and width `0x024` bits 0-13, even and at most `0x014` bits 0-12 plus 1, and must lie inside the sensor raster. The transfer writes the window's rows to `0x358` over `raw_dma_ticks` (153,600) with pitch `row_bytes(width rounded up to (4 if Packed12 else 1) << (format + 3) samples) + 0x360`. Completion raises core 0 line 36 when `0x354` bit 28 is set, and line 37 for channel 3 with `0x370` bit 28; bit 0 of the guest's `0x350`/`0x36c` ACK rearms the channel. The fixture attaches no sensor controls, so every readout is valid, sensor commands and timing are ignored and no exposure, aperture or projection applies.
 
