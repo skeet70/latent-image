@@ -5,7 +5,7 @@ use crate::guest::{DialTurn, GpioKey, MenuState, ModeDialPosition, ModeDialWindo
 use crate::r4f::Guard;
 use crate::run::RunDocument;
 use crate::sd_host::{Contacts, MediaRead, RetainedCard, SectorAddress, SectorCount, SdHost};
-use crate::trace::{CollectionOutcome, InstructionCount, TraceSites};
+use crate::trace::{CaptureMemory, CollectionOutcome, InstructionCount, TraceSites};
 use fujimod_emulator::session::Session;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -114,6 +114,14 @@ impl Machine {
             },
             release_log: std::env::var_os("XM1_KEY_RELEASE_LOG").map(PathBuf::from),
         })
+    }
+
+    pub(crate) fn begin_capture_observation(&mut self) -> Result<(), String> {
+        if self.traces.needs_capture_memory() {
+            let (_, graph) = crate::run::graph(&self.document)?;
+            self.traces.prepare_memory(&self.session, CaptureMemory::from_graph(&graph)?);
+        }
+        self.traces.begin_capture_observation()
     }
 
     pub fn set_release_context(&mut self, segment: Option<ReleaseSegment>) {

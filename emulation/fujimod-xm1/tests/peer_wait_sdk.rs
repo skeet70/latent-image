@@ -1,20 +1,44 @@
 use fujimod_emulator::board::{bus::{Bus, Mode}, factory::{self, Graph, MemoryMap, Processor, Ram}, memory::BusMapping};
+use fujimod_emulator::board::decoder::{Choice, Decoder};
 use fujimod_emulator::session::Session;
 use fujimod_emulator_cpu::{ExecutionPolicy, Model, Register, arm, timeline::Ratio};
 use fujimod_emulator_exr2_plan::Resources;
 use fujimod_xm1::{machine::Machine, peer_witness::{self, PeerContract}, run::RunDocument};
 use fujimod_xm1::provenance::Guest;
 use fujimod_xm1::machine::RunOutcome;
-use fujimod_xm1::trace::{CaptureCursor, CaptureProtocolError, InstructionCount};
+use fujimod_xm1::trace::{CaptureCursor, CaptureMemory, CaptureProtocolError, InstructionCount, TraceSites};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 fn machine(program: &[u32]) -> Machine {
-    machine_with_ram(program, 0x4000)
+    machine_with_ram(program, 0x4000, RamViews::Physical)
 }
 
-fn machine_with_ram(program: &[u32], ram_bytes: usize) -> Machine {
+enum RamViews { Physical, AliasedWithDecoder }
+
+fn machine_with_ram(program: &[u32], ram_bytes: usize, views: RamViews) -> Machine {
+    let mut mappings = Vec::new();
+    let mut decoder_maps = Vec::new();
+    for core in 0..2 {
+        match views {
+            RamViews::Physical => mappings.push(MemoryMap { core, address: 0, physical: 0, size: ram_bytes, permissions: 7 }),
+            RamViews::AliasedWithDecoder => {
+                let low = MemoryMap { core, address: 0, physical: 0, size: 0x1000, permissions: 7 };
+                mappings.push(low.clone());
+                decoder_maps.push(low);
+                mappings.push(MemoryMap { core, address: 0x1000, physical: 0x1000, size: ram_bytes - 0x1000, permissions: 7 });
+                mappings.push(MemoryMap { core, address: 0x40000000, physical: 0, size: ram_bytes, permissions: 7 });
+            }
+        }
+    }
+    let decoders = if decoder_maps.is_empty() { vec![] } else {
+        let alternate = decoder_maps.iter().map(|map| MemoryMap { physical: 0x4000, ..map.clone() }).collect();
+        vec![Decoder { initial: 0, choices: vec![
+            Choice { processors: decoder_maps, dma: vec![] },
+            Choice { processors: alternate, dma: vec![] },
+        ] }]
+    };
     fujimod_emulator_exr2_board::register_board_builder();
     fujimod_emulator_models::register();
     let graph = Graph {
@@ -23,10 +47,11 @@ fn machine_with_ram(program: &[u32], ram_bytes: usize) -> Machine {
             registers: vec![(Register::Pc, 0x1000 + core as u64 * 0x1000), (Register::Pstate, 0xd3)],
         }).collect(),
         ram: vec![Ram { base: 0, size: ram_bytes }],
-        dma_mappings: vec![BusMapping::ram(0, ram_bytes)], decoders: vec![], peripherals: vec![],
-        mappings: (0..2).map(|core| MemoryMap { core, address: 0, physical: 0, size: ram_bytes, permissions: 7 }).collect(),
+        dma_mappings: vec![BusMapping::ram(0, ram_bytes)], decoders, peripherals: vec![],
+        mappings,
         instructions_per_tick: Ratio::new(24, 1).unwrap(),
     };
+    let memory = CaptureMemory::from_graph(&graph).unwrap();
     let mut board = graph.build(factory::Options { engine: factory::Engine::Unicorn, translation_cache_bytes: 1 << 20 }, Bus::new(Mode::Strict), None).unwrap();
     board.set_execution_policy(ExecutionPolicy::Exact).unwrap();
     let code: Vec<u8> = program.iter().flat_map(|word| word.to_le_bytes()).collect();
@@ -36,7 +61,9 @@ fn machine_with_ram(program: &[u32], ram_bytes: usize) -> Machine {
         resources: Resources::default(), nodes: BTreeMap::new(), contacts: BTreeMap::new(), recording_frames: Default::default(),
     };
     let document = RunDocument::parse(include_bytes!("../data/xm1-150.json")).unwrap();
-    Machine::new(document, session).unwrap()
+    let mut machine = Machine::new(document, session).unwrap();
+    machine.traces = TraceSites::with_memory(&machine.session, memory);
+    machine
 }
 fn context(machine: &Machine) -> Vec<(u64, u64)> {
     (0..2).map(|core| (
@@ -606,7 +633,7 @@ struct DiagnosticPage {
 }
 
 fn diagnostic_machine(site: Guest, argument: Guest, sp: Guest) -> Machine {
-    let mut observed = machine_with_ram(&[0xeafffffe], 0x01800000);
+    let mut observed = machine_with_ram(&[0xeafffffe], 0x01800000, RamViews::AliasedWithDecoder);
     // Handwritten A32 self-branch and synthetic RAM, with no firmware bytes.
     observed.session.board.write_physical(u64::from(site.0), &0xeafffffeu32.to_le_bytes()).unwrap();
     observed.session.board.write_register(0, Register::Pc, u64::from(site.0)).unwrap();
@@ -742,6 +769,52 @@ fn second_filter_unavailable_parent_and_overflowing_row_never_fabricate_context(
         assert!(hit.ram_incomplete);
         assert!(page.incomplete);
         assert!(hit.ram.iter().all(|span| span.requested != 100 || span.bytes.0.is_empty()));
+    }
+}
+
+#[test]
+fn second_filter_decoder_window_is_a_gap_without_preempting_proven_stack() {
+    let mut observed = diagnostic_machine(Guest(0x00da4308), Guest(0x500), Guest(0x40003500));
+    observed.session.board.write_physical(0x500, &[0xf4; 16]).unwrap();
+    observed.session.board.write_physical(0x3500, &[0xc7; 24]).unwrap();
+    let page = diagnostic_page(&mut observed);
+    let hit = &page.hits[0];
+    assert_eq!(hit.registers[0], 0x500);
+    let gap = hit.ram.iter().find(|span| span.address == Guest(0x500)).unwrap();
+    assert_eq!(gap.status, ObservedRamStatus::ReadFailed);
+    assert!(gap.bytes.0.is_empty());
+    assert_observed_bytes(hit, Guest(0x3500), &[0xc7; 24]);
+    assert!(hit.ram_incomplete);
+    assert!(page.incomplete);
+}
+
+#[test]
+fn second_filter_tcm_overlap_is_core_qualified_and_never_returns_underlying_ram() {
+    for core in 0..2 {
+        let mut observed = diagnostic_machine(Guest(0x00da4308), Guest(0x40003400), Guest(0x40003500));
+        observed.session.board.write_physical(0x3400, &[0x9a; 16]).unwrap();
+        observed.session.board.write_physical(0x3500, &[0x72; 24]).unwrap();
+        observed.session.board.cpu(core).unwrap().coprocessor(arm::Coprocessor {
+            cp: 15, opc1: 0, crn: 9, crm: 1, opc2: 1, secure: 0, wide: false,
+        }, Some(0x4000300d)).unwrap();
+        let page = diagnostic_page(&mut observed);
+        let hit = &page.hits[0];
+        assert_eq!(hit.registers[0], 0x40003400);
+        assert_eq!(hit.sp, Guest(0x40003500));
+        if core == 0 {
+            for address in [Guest(0x40003400), Guest(0x40003500)] {
+                let gap = hit.ram.iter().find(|span| span.address == address).unwrap();
+                assert_eq!(gap.status, ObservedRamStatus::ReadFailed);
+                assert!(gap.bytes.0.is_empty());
+            }
+            assert!(hit.ram_incomplete);
+            assert!(page.incomplete);
+        } else {
+            assert_observed_bytes(hit, Guest(0x3400), &[0x9a; 16]);
+            assert_observed_bytes(hit, Guest(0x3500), &[0x72; 24]);
+            assert!(!hit.ram_incomplete);
+            assert!(!page.incomplete);
+        }
     }
 }
 

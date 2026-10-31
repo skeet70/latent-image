@@ -440,26 +440,13 @@ fn extent_admitted(epoch: Epoch, event: &MemoryEvent) -> bool {
         || WATCH_RANGES.iter().any(|&(lo, hi)| extent.0 >= lo && extent.1 <= hi)
 }
 
-/// Cortex-R TCM region register: base [31:12], size code [6:2] (`0` none, `3..=14` 4 KiB..8 MiB), enable [0].
-/// The base must be aligned to the size.
-pub(super) fn tcm_window(bank: Word) -> Result<Option<(u64, u64)>, String> {
-    let code = (bank.0 >> 2) & 0x1f;
-    if bank.0 & 1 == 0 || code == 0 {
-        return Ok(None);
-    }
-    require((3..=14).contains(&code), "TCM region size encoding is reserved")?;
-    let base = u64::from(bank.0 & 0xffff_f000);
-    let size = 512u64 << code;
-    require(base % size == 0 && base + size <= 1 << 32, "TCM region is misaligned or extends past 4 GiB")?;
-    Ok(Some((base, base + size)))
-}
 
 /// Every enabled window of each core is well formed and misses that core's
 /// static views of every guarded physical span.
 pub(super) fn tcm_disjoint_views(maps: &[factory::MemoryMap], tcm: &TcmWords, guarded: &[(u64, u64)]) -> Result<(), String> {
     for (core, banks) in tcm.iter().enumerate() {
         for bank in banks {
-            let Some(window) = tcm_window(*bank)? else { continue };
+            let Some(window) = crate::memory_view::tcm_window(crate::memory_view::TcmRegister(bank.0))? else { continue };
             for map in maps.iter().filter(|map| map.core == core) {
                 for &(lo, hi) in guarded {
                     let start = lo.max(map.physical);
