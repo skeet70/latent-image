@@ -466,12 +466,26 @@ haskell_test(
 )
 
 haskell_library(
+    name = "poll-period-lib",
+    srcs = ["Emulation/PollPeriod.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_library(
     name = "peer-startup-witness-lib",
     srcs = ["Emulation/PeerStartupWitness.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":first-stage-witness-lib",
         ":peer-stage-witness-lib",
+        ":poll-period-lib",
         ":watch-observation",
         "//host:aeson",
         "//host:base",
