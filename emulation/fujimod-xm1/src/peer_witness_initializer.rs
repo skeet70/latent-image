@@ -93,7 +93,7 @@ fn context(machine: &Machine) -> Result<Context, String> {
 #[serde(rename_all = "kebab-case")]
 enum Source { CpuWrite, CpuRead, CpuFetch, HostWrite, HostRead, ModelBusWrite, ModelBusRead }
 
-#[derive(Deserialize, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 enum ByteOrder { Little, Big }
 
@@ -111,13 +111,146 @@ impl Boundary {
         }
     }
 }
-#[derive(Deserialize)]
+struct WatchBytes {
+    bytes: [u8; 16],
+    len: u8,
+}
+
+impl Serialize for WatchBytes {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.bytes[..usize::from(self.len)].serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for WatchBytes {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct BytesVisitor;
+        impl<'de> serde::de::Visitor<'de> for BytesVisitor {
+            type Value = WatchBytes;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("at most sixteen watched bytes")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut sequence: A) -> Result<Self::Value, A::Error> {
+                let mut result = WatchBytes { bytes: [0; 16], len: 0 };
+                while let Some(byte) = sequence.next_element::<u8>()? {
+                    if usize::from(result.len) == result.bytes.len() {
+                        return Err(serde::de::Error::invalid_length(17, &self));
+                    }
+                    result.bytes[usize::from(result.len)] = byte;
+                    result.len += 1;
+                }
+                Ok(result)
+            }
+        }
+        deserializer.deserialize_seq(BytesVisitor)
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(transparent)]
+struct WatchTick(u64);
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum SnapshotBank { Atcm, Btcm }
+
+#[derive(Serialize)]
+#[serde(transparent)]
+struct SnapshotCore(WitnessCore);
+impl<'de> Deserialize<'de> for SnapshotCore {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        WitnessCore::from_index(usize::deserialize(deserializer)?).map(Self).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(transparent)]
+struct BankOffset(u64);
+
+#[derive(Deserialize, Serialize)]
+#[serde(transparent)]
+struct AccessBytes(u64);
+
+#[derive(Deserialize, Serialize)]
+#[serde(transparent)]
+struct ObservedTcmRegister(u64);
+
+#[derive(Deserialize, Serialize)]
+#[serde(transparent)]
+struct RecordLimit(usize);
+
+#[derive(Deserialize, Serialize)]
+struct TcmLocation { bank: SnapshotBank, offset: BankOffset }
+
+#[derive(Deserialize, Serialize)]
 struct Event {
     source: Source, core: Option<usize>, address: u64, physical: Option<u64>, size: u64,
-    value: Option<u64>, pc: Option<u64>, instructions: Option<u64>, byte_order: Option<ByteOrder>,
+    value: Option<u64>, before: Option<WatchBytes>, pc: Option<u64>, instructions: Option<u64>,
+    byte_order: Option<ByteOrder>, tick: Option<WatchTick>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tcm: Option<TcmLocation>,
 }
-#[derive(Deserialize)]
-struct WatchState { violation: Option<String>, records: Vec<Event> }
+
+#[derive(Deserialize, Serialize)]
+struct WatchSite { core: SnapshotCore, source: Source, address: Address, size: AccessBytes }
+
+#[derive(Deserialize, Serialize)]
+#[serde(transparent)]
+struct RuleIndex(usize);
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum WatchFault {
+    Confinement { rule: RuleIndex, sample: Event },
+    CounterAccess { rule: RuleIndex, sample: Event },
+    CounterOverflow { rule: RuleIndex },
+    CoverageWidth { rule: RuleIndex, #[serde(flatten)] site: WatchSite },
+    UnsupportedWidth { #[serde(flatten)] site: WatchSite },
+    Unresolved { #[serde(flatten)] site: WatchSite },
+    TcmStraddle { #[serde(flatten)] site: WatchSite, bank: SnapshotBank },
+    TcmChanged { core: SnapshotCore, bank: SnapshotBank, expected: Word, observed: ObservedTcmRegister },
+    PolicyChanged { core: SnapshotCore },
+    Inspection { #[serde(flatten)] site: WatchSite, message: String },
+    DecodingChanged,
+    LogLimit { limit: RecordLimit },
+}
+
+#[derive(Deserialize, Serialize)]
+struct BankSnapshot { register: Word, window: Option<(Address, Address)> }
+
+#[derive(Deserialize, Serialize)]
+struct TcmSnapshot { core: SnapshotCore, atcm: BankSnapshot, btcm: BankSnapshot }
+
+#[derive(Deserialize, Serialize)]
+struct WatchClass { range: (Address, Address), kinds: Vec<Source> }
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum WatchViews { Fixed, Observe }
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum WatchMode { Allow, Forbid }
+
+#[derive(Deserialize, Serialize)]
+struct TcmSpan { bank: SnapshotBank, offsets: (BankOffset, BankOffset) }
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+enum WatchSpan { Physical { physical: (Address, Address) }, Tcm { tcm: TcmSpan } }
+
+#[derive(Deserialize, Serialize)]
+struct WatchRule {
+    cores: Vec<SnapshotCore>, kind: Source, mode: WatchMode, spans: Vec<WatchSpan>, tcm: Vec<TcmSnapshot>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct WatchState {
+    enabled: bool, ranges: Vec<(Address, Address)>, violation: Option<String>, records: Vec<Event>,
+    classes: Vec<WatchClass>, views: WatchViews, fault: Option<WatchFault>, tcm: Vec<TcmSnapshot>,
+    confinement: Vec<WatchRule>, counters: [(); 0], coverage: [(); 0],
+}
 
 #[derive(Serialize)]
 struct Publication { guest: Guest, physical: Address, value: Word, pc: Guest, instructions: Instructions }
@@ -136,7 +269,7 @@ pub(super) struct Receipt {
     pools_before: Views, pools_after: Views,
     decoder: Decoder, aliases: Vec<AliasBinding>,
     publications: Vec<Publication>,
-    watch: Value,
+    watch: WatchState,
 }
 
 #[derive(Serialize)]
@@ -158,25 +291,38 @@ fn equal_views(views: &Views) -> Result<(), String> {
     require(views.r#virtual == views.physical, "initializer virtual and physical committed bytes differ")
 }
 
-fn aliases(machine: &Machine, runner: &Runner<'_>, tcm: &TcmWords) -> Result<Vec<AliasBinding>, String> {
+struct AliasResource {
+    span: std::ops::Range<Address>,
+    bytes: Vec<u8>,
+    sha256: Sha256Digest,
+}
+
+fn append_aliases(machine: &Machine, runner: &Runner<'_>, tcm: &TcmWords, result: &mut Vec<AliasBinding>) -> Result<(), String> {
     let mut guarded = runner.guarded();
     guarded.push(ZERO);
     tcm_disjoint_views(&runner.committed, tcm, &guarded)?;
-    let mut result = Vec::new();
+    let snapshot = |(start, end): (u64, u64)| -> Result<AliasResource, String> {
+        let bytes = machine.read(start, (end - start) as usize)?;
+        let sha256 = Sha256Digest::of(&bytes);
+        Ok(AliasResource { span: Address(start)..Address(end), bytes, sha256 })
+    };
+    let resources = [snapshot(RECORD)?, snapshot(LOADER_B)?, snapshot(ZERO)?];
     for core in 0..2 {
         require(machine.session.board.cpu(core)?.rprofile_identity(None)? == [0x4003, 0x5003][core],
             "initializer CP14 identity changed")?;
-        for (start, end) in [RECORD, LOADER_B, ZERO] {
-            let physical = machine.read(start, (end - start) as usize)?;
+        for resource in &resources {
+            let start = resource.span.start.0;
+            let size = resource.span.end.0 - start;
             for guest in [start, ZERO_GUEST + start] {
-                require(runner.physical_of(core, guest, end - start)? == start, "initializer resource alias mapping differs")?;
-                require(wait::bytes(machine, core, guest, physical.len())? == physical, "initializer resource alias bytes differ")?;
-                result.push(AliasBinding { core, guest: Address(guest), physical: Address(start), size: end - start,
-                    sha256: Sha256Digest::of(&physical) });
+                require(runner.physical_of(core, guest, size)? == start, "initializer resource alias mapping differs")?;
+                require(wait::bytes(machine, core, guest, resource.bytes.len())?.as_slice() == resource.bytes.as_slice(),
+                    "initializer resource alias bytes differ")?;
+                result.push(AliasBinding { core, guest: Address(guest), physical: resource.span.start, size,
+                    sha256: resource.sha256 });
             }
         }
     }
-    Ok(result)
+    Ok(())
 }
 
 fn expected(machine: &Machine) -> Result<Vec<(u64, u32)>, String> {
@@ -215,10 +361,15 @@ pub(super) fn observe(machine: &mut Machine, runner: &Runner<'_>, contract: &Con
     let original_prefix = runner.stops.iter().find(|stop| stop.label == Label::PrefixEntry).ok_or("initializer prefix entry absent")?;
     let frame_before = runner.views(machine, 1, FRAME, 16)?;
     equal_views(&frame_before)?;
-    let frame_words: Vec<u32> = frame_before.physical.chunks_exact(4).map(|bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])).collect();
+    let frame_bytes: &[u8; 16] = frame_before.physical.as_slice().try_into().map_err(|_| "initializer caller frame extent differs")?;
+    let frame_words: [u32; 4] = std::array::from_fn(|index| {
+        let offset = index * 4;
+        u32::from_le_bytes([frame_bytes[offset], frame_bytes[offset + 1], frame_bytes[offset + 2], frame_bytes[offset + 3]])
+    });
     require(frame_words == [0x400f3420, ARGUMENT, original_prefix.registers[11].0, 0xd00c0], "initializer caller frame differs")?;
     let decoder_before = decoder(machine)?;
-    let mut bindings = aliases(machine, runner, &before.tcm)?;
+    let mut bindings = Vec::with_capacity(24);
+    append_aliases(machine, runner, &before.tcm, &mut bindings)?;
     let expected = expected(machine)?;
     let loader = machine.read(LOADER_B.0, (LOADER_B.1 - LOADER_B.0) as usize)?;
     let call = u32::from_le_bytes([loader[0xaac], loader[0xaad], loader[0xaae], loader[0xaaf]]);
@@ -297,7 +448,7 @@ pub(super) fn observe(machine: &mut Machine, runner: &Runner<'_>, contract: &Con
             && after.registers[12].0 == 120 && after.cpsr.0 == ((before.cpsr.0 & 0x0fff_ffff) | 0x6000_0000)
             && after.tcm == before.tcm, "initializer exact return frame, scratch outputs or CPSR differ")?;
         decoder(machine)?;
-        bindings.extend(aliases(machine, runner, &after.tcm)?);
+        append_aliases(machine, runner, &after.tcm, &mut bindings)?;
         let frame_after = runner.views(machine, 1, FRAME, 16)?;
         let table_after = runner.views(machine, 1, TABLE_GUEST, (TABLE.1 - TABLE.0) as usize)?;
         let tail_after = runner.views(machine, 1, TABLE_GUEST + TABLE.1 - TABLE.0, 16)?;
@@ -305,8 +456,7 @@ pub(super) fn observe(machine: &mut Machine, runner: &Runner<'_>, contract: &Con
         for views in [&frame_after, &table_after, &tail_after, &pools_after] { equal_views(views)?; }
         require(frame_after.physical == frame_before.physical && tail_after.physical == tail_before.physical
             && pools_after.physical == pools_before.physical, "initializer changed its caller frame, tail guard or retained pools")?;
-        let state = watch.state();
-        let observed: WatchState = serde_json::from_value(state.clone()).map_err(|error| error.to_string())?;
+        let observed: WatchState = serde_json::from_value(watch.state()).map_err(|error| error.to_string())?;
         require(observed.violation.is_none() && observed.records.len() == expected.len(), "initializer store count or confinement differs")?;
         let mut publications = Vec::with_capacity(expected.len());
         let mut last_instruction: u64 = entered.counts.0.iter().sum();
@@ -330,7 +480,7 @@ pub(super) fn observe(machine: &mut Machine, runner: &Runner<'_>, contract: &Con
         Ok(Receipt { contract: ContractIdentity { role: contract.role, entry: contract.entry, rust: contract.rust, scratch_bytes: contract.scratch_bytes,
             source_sha256: contract.source_sha256, image_sha256: contract.image_sha256, symbols_sha256: contract.symbols_sha256,
             body_sha256: Sha256Digest::parse(BODY_SHA)? }, before, entered, after, frame_before, frame_after, table_before, table_after,
-            tail_before, tail_after, pools_before, pools_after, decoder: decoder_before, aliases: bindings, publications, watch: state })
+            tail_before, tail_after, pools_before, pools_after, decoder: decoder_before, aliases: bindings, publications, watch: observed })
     })();
     let end = machine.session.board.memory_watch_end_scoped(&mut watch);
     match outcome { Ok(receipt) => end.map(|()| receipt), Err(error) => { let _ = end; Err(error) } }
