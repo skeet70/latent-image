@@ -232,19 +232,23 @@ fn validate_prelude(state: &WatchState, start: &Context, dispatch: &Context) -> 
         .chain([0x69ce44,0x69ce48,0x69ce90,0x69ce94,0x69ce98,0x69ce9c,0x69cea0,0x69cea4])
         .chain((0x69ceec..0x69cf38).step_by(4))
         .chain((0x725dd8..0x725e00).step_by(4))
-        .chain((0x7235d8..0x723600).step_by(4));
+        .chain((0x7235d8..0x723604).step_by(4));
     let mut selector = false;
     let mut magic = false;
     let mut primary = false;
     let mut secondary = false;
     let mut last_instruction: u64 = start.counts.0.iter().sum();
+    let dispatch_instructions: u64 = dispatch.counts.0.iter().sum();
     for event in &state.records {
         require(!matches!(event.source, Source::CpuWrite | Source::HostWrite | Source::ModelBusWrite), "consumer prelude protected write")?;
         let instructions = event.instructions.ok_or("consumer prelude instruction attribution absent")?;
+        // The fetch observer precedes the instruction point's count rollback.
+        let stopped_fetch = matches!(event.source, Source::CpuFetch) && event.pc == Some(u64::from(DISPATCH));
+        let upper_bound = dispatch_instructions + u64::from(stopped_fetch);
         require(event.size == 4 && event.byte_order == Some(ByteOrder::Little) && event.pc.is_some() && event.tick.is_some()
             && matches!(event.core, Some(0 | 1)) && matches!(event.source, Source::CpuRead | Source::CpuFetch)
             && event.physical.is_some_and(|physical| event.address == physical || event.address == ZERO_GUEST + physical)
-            && instructions >= last_instruction && instructions < dispatch.counts.0.iter().sum(),
+            && instructions >= last_instruction && instructions <= upper_bound,
             "consumer prelude event attribution differs")?;
         last_instruction = instructions;
         if event.core != Some(1) { continue; }
@@ -252,6 +256,9 @@ fn validate_prelude(state: &WatchState, start: &Context, dispatch: &Context) -> 
             let expected = fetches.next().ok_or("consumer prelude executed extra selected instructions")?;
             require(event.pc == Some(expected) && event.address == expected && event.physical == Some(expected),
                 "consumer authentic source fetch order differs")?;
+            if expected == u64::from(DISPATCH) {
+                require(instructions == dispatch_instructions + 1, "consumer stopped fetch attribution differs")?;
+            }
         } else if matches!(event.source, Source::CpuRead) {
             match event.physical {
                 Some(address) if address == SELECTOR.0 => {
