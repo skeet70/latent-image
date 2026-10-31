@@ -106,7 +106,7 @@ receipt scenario kind facts knob = BL.toStrict (encode document)
     base = [argument, 0x400a0000, 0, entrySite, 4, 5, 1, 7, 8, 9, 10, 0x700007fc, 12]
     replace index value list = take index list ++ [value] ++ drop (index + 1) list
     tcm = knobTcm knob
-    totals (count, zero, nonzero) = object ["count" .= (count :: Word64), "zero_count" .= (zero :: Word64), "nonzero_count" .= (nonzero :: Word64)]
+    totals (totalLoads, zeroLoads, nonzeroLoads) = object ["count" .= (totalLoads :: Word64), "zero_count" .= (zeroLoads :: Word64), "nonzero_count" .= (nonzeroLoads :: Word64)]
     stop :: String -> Word32 -> Int -> (Word64, Word64) -> [Word32] -> Word32 -> Word32 -> Word32 -> Maybe (Word64, Word64, Word64) -> Maybe Int -> Value
     stop = stopWith tcm
     stopWith :: [[Word32]] -> String -> Word32 -> Int -> (Word64, Word64) -> [Word32] -> Word32 -> Word32 -> Word32 -> Maybe (Word64, Word64, Word64) -> Maybe Int -> Value
