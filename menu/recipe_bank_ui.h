@@ -364,7 +364,6 @@ extern uint32_t rb_call_editor_confirm(void);
  * and the confirm exit is rb_call_stage_open(0xf, 0x1d) then rb_call_transition(). */
 extern void rb_call_stage_open(uint32_t kind, uint32_t id); /* FUN_00d3d858 */
 extern uint32_t rb_call_transition(void);                   /* FUN_00c12aac */
-extern void rb_call_snapshot_store(RbMenuRoot root);        /* FUN_0061ceac */
 extern void rb_call_postlude(uint32_t code);                /* FUN_00d38f34 */
 extern void rb_call_redraw(uint32_t code);
 extern void rb_call_stock_present(uint32_t event);
@@ -394,7 +393,11 @@ extern void rb_call_name_label_position(uint32_t label, int8_t *x, int8_t *y);
 extern uint32_t rb_call_backdrop_suppressed(void);
 extern uint32_t rb_call_stock_key_right(void);
 extern uint32_t rb_call_stock_key_left(void);
-extern uint32_t rb_call_editor_cancel(void);
+/* Owned modal-75 editor-cancel action replacing FUN_00c77794. */
+extern uint32_t rb_ui_editor_cancel(void);
+/* Owned menu-frame snapshot store replacing FUN_0061ceac; returns 1 once
+ * written, 0 when the indexed slot address is null. */
+extern uint32_t rb_menu_frame_store(RbMenuRoot root);
 extern uint32_t rb_name_edit_cancel(void);
 void rb_bank_draw_root(uint32_t root);
 /* Points RB_UI_CURRENT_ROW_CELL at the open field list's staged row. */

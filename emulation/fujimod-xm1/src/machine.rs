@@ -1,11 +1,11 @@
 //! A strict X-M1 session and its run document; runs record armed instruction
 //! points and stop at the R4F guard's refusals.
 
-use crate::guest::{DialTurn, MenuState, ModeDialPosition, ModeDialWindow, Press, RouteKey, set_adc};
+use crate::guest::{DialTurn, GpioKey, MenuState, ModeDialPosition, ModeDialWindow, PhysicalShutterPosition, Press, RouteKey, ShutterStage, set_adc};
 use crate::r4f::Guard;
 use crate::run::RunDocument;
-use crate::sd_host::{Contacts, RetainedCard, SdHost};
-use crate::trace::TraceSites;
+use crate::sd_host::{Contacts, MediaRead, RetainedCard, SectorAddress, SectorCount, SdHost};
+use crate::trace::{CaptureMemory, CollectionOutcome, InstructionCount, TraceSites};
 use fujimod_emulator::session::Session;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -16,6 +16,14 @@ const PHASE_POLL: u64 = 20_000;
 /// Longest run between two guard scans.
 const GUARD_WINDOW: u64 = 1_000_000;
 
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RunOutcome {
+    Completed,
+    Stopped,
+    DrainRequired,
+    Failed,
+}
 /// Fixed hold and debounced-release cap in guest instructions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeyPulse {
@@ -50,10 +58,12 @@ struct KeyRow(u64);
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum GpioReleaseKey {
+    Play,
     DialPush,
     DialLeft,
     DialRight,
     HalfPress,
+    FullPress,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -106,6 +116,14 @@ impl Machine {
         })
     }
 
+    pub(crate) fn begin_capture_observation(&mut self) -> Result<(), String> {
+        if self.traces.needs_capture_memory() {
+            let (_, graph) = crate::run::graph(&self.document)?;
+            self.traces.prepare_memory(&self.session, CaptureMemory::from_graph(graph)?);
+        }
+        self.traces.begin_capture_observation()
+    }
+
     pub fn set_release_context(&mut self, segment: Option<ReleaseSegment>) {
         self.release_context.segment = segment;
     }
@@ -151,23 +169,59 @@ impl Machine {
     }
 
     /// Records every armed site entered, and returns early after a stop label's entry.
-    pub fn run(&mut self, count: u64) {
-        if self.failure.is_some() || count == 0 {
-            return;
+    pub fn run(&mut self, count: u64) -> RunOutcome {
+        if self.failure.is_some() {
+            return RunOutcome::Failed;
         }
-        let end = self.instructions().saturating_add(count);
-        while self.failure.is_none() && self.instructions() < end {
-            let window = end.min(self.instructions().saturating_add(GUARD_WINDOW));
+        if self.traces.capture_page_outstanding() {
+            return RunOutcome::DrainRequired;
+        }
+        let mut current = match InstructionCount::from_board(&self.session) {
+            Ok(current) => current,
+            Err(error) => {
+                self.failure = Some(error);
+                return RunOutcome::Failed;
+            }
+        };
+        let end = current.value().saturating_add(count);
+        if self.traces.capture_observation_active() {
+            match self.traces.collect(&self.session, current) {
+                Ok(CollectionOutcome::DrainRequired) => return RunOutcome::DrainRequired,
+                Ok(CollectionOutcome::Stop) => return RunOutcome::Stopped,
+                Ok(CollectionOutcome::Continue) => {}
+                Err(error) => {
+                    self.failure = Some(error);
+                    return RunOutcome::Failed;
+                }
+            }
+        }
+        loop {
+            if current.value() >= end {
+                return RunOutcome::Completed;
+            }
+            let window = end.min(current.value().saturating_add(GUARD_WINDOW));
+            self.traces.begin_advance();
             let result = self.session.board.run_window(window, self.document.execution.quantum, None, None);
             let refused = self.guard.scan(&self.session.board);
             if let Err(error) = refused.and(result) {
                 self.failure = Some(error);
-                break;
+                return RunOutcome::Failed;
             }
-            match self.traces.collect(&self.session) {
-                Ok(true) => break,
-                Ok(false) => {}
-                Err(error) => self.failure = Some(error),
+            current = match InstructionCount::from_board(&self.session) {
+                Ok(current) => current,
+                Err(error) => {
+                    self.failure = Some(error);
+                    return RunOutcome::Failed;
+                }
+            };
+            match self.traces.collect(&self.session, current) {
+                Ok(CollectionOutcome::Stop) => return RunOutcome::Stopped,
+                Ok(CollectionOutcome::DrainRequired) => return RunOutcome::DrainRequired,
+                Ok(CollectionOutcome::Continue) => {}
+                Err(error) => {
+                    self.failure = Some(error);
+                    return RunOutcome::Failed;
+                }
             }
         }
     }
@@ -175,26 +229,51 @@ impl Machine {
     pub fn dial_push(&mut self, pulse: KeyPulse) -> Result<(), String> {
         self.require_running()?;
         let key = self.document.firmware.dial_push(&self.session)?;
-        let (port, pin, pressed, row) = (key.port, key.pin, key.pressed_high, KeyRow(key.row));
-        let gpio = self.document.gpio.0.clone();
-        self.session.gpio(&gpio, port, pin, pressed)?;
-        self.run(pulse.hold);
-        self.session.gpio(&gpio, port, pin, !pressed)?;
-        let start = self.instructions();
-        while self.failure.is_none() && !self.document.firmware.dial_push_released(&self.session)? {
-            let spent = self.instructions() - start;
-            if spent >= pulse.release {
-                self.observe_incomplete_release(ReleaseKey::Gpio(GpioReleaseKey::DialPush), Some(row), pulse.release, start);
-                break;
-            }
-            self.run((pulse.release - spent).min(RELEASE_POLL));
-        }
-        self.require_running()
+        self.gpio_press(key, GpioReleaseKey::DialPush, pulse)
     }
 
-    pub fn half_press(&mut self, pulse: KeyPulse) -> Result<(), String> {
+    pub fn play(&mut self, pulse: KeyPulse) -> Result<(), String> {
         self.require_running()?;
-        let key = self.document.firmware.half_press(&self.session)?;
+        let key = self.document.firmware.play(&self.session)?;
+        self.gpio_press(key, GpioReleaseKey::Play, pulse)
+    }
+
+    pub fn shutter(&mut self, stage: ShutterStage, pulse: KeyPulse) -> Result<(), String> {
+        self.require_running()?;
+        let key = self.document.firmware.shutter(&self.session, stage)?;
+        let release = match stage {
+            ShutterStage::Half => GpioReleaseKey::HalfPress,
+            ShutterStage::Full => GpioReleaseKey::FullPress,
+        };
+        self.gpio_press(key, release, pulse)
+    }
+
+    pub fn set_shutter_position(&mut self, position: PhysicalShutterPosition) -> Result<(), String> {
+        self.require_running()?;
+        let half = self.document.firmware.shutter(&self.session, ShutterStage::Half)?;
+        let full = self.document.firmware.shutter(&self.session, ShutterStage::Full)?;
+        let gpio = &self.document.gpio.0;
+        let mut drive = |key: GpioKey, pressed| {
+            self.session.gpio(gpio, key.port, key.pin, if pressed { key.pressed_high } else { !key.pressed_high })
+        };
+        match position {
+            PhysicalShutterPosition::Released => {
+                drive(full, false)?;
+                drive(half, false)
+            }
+            PhysicalShutterPosition::Half => {
+                drive(full, false)?;
+                drive(half, true)
+            }
+            PhysicalShutterPosition::Full => {
+                drive(half, true)?;
+                drive(full, true)
+            }
+        }
+    }
+
+    /// Releases the pad after the hold and waits for the row's debounced release byte.
+    fn gpio_press(&mut self, key: GpioKey, release: GpioReleaseKey, pulse: KeyPulse) -> Result<(), String> {
         let released = self.document.firmware.key_table.base.0
             + key.row * self.document.firmware.key_table.row_bytes
             + self.document.firmware.key_table.released_offset;
@@ -210,7 +289,7 @@ impl Machine {
             }
             let spent = self.instructions() - start;
             if spent >= pulse.release {
-                self.observe_incomplete_release(ReleaseKey::Gpio(GpioReleaseKey::HalfPress), Some(KeyRow(key.row)), pulse.release, start);
+                self.observe_incomplete_release(ReleaseKey::Gpio(release), Some(KeyRow(key.row)), pulse.release, start);
                 break;
             }
             self.run((pulse.release - spent).min(RELEASE_POLL));
@@ -233,7 +312,8 @@ impl Machine {
         match press {
             Press::Key(key) => self.key(key, pulse),
             Press::Dial(turn) => self.turn_dial(turn, pulse),
-            Press::HalfPress => self.half_press(pulse),
+            Press::Shutter(stage) => self.shutter(stage, pulse),
+            Press::Play => self.play(pulse),
         }
     }
 
@@ -400,5 +480,81 @@ impl Machine {
     /// The SD host's diagnostic state: presence, card state, counters and recent commands.
     pub fn card_state(&self) -> Result<serde_json::Value, String> {
         self.session.board.device_save(self.session.node(&self.document.sd.0)?)
+    }
+
+    pub fn read_media(&self, first: SectorAddress, count: SectorCount) -> Result<MediaRead, String> {
+        let node = self.session.node(&self.document.sd.0)?;
+        self.session.board.inspect_device::<SdHost, _>(node, |host| host.read_sectors(first, count))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::run::ValidatedUpdate;
+
+    const RUN: &[u8] = include_bytes!("../data/xm1-150.json");
+    const ROM_BYTES: usize = 16384;
+    const SPIN: u32 = 0xeaff_fffe;
+
+    fn machine() -> Machine {
+        fujimod_emulator_exr2_board::register_board_builder();
+        fujimod_emulator_models::register();
+        let document = RunDocument::parse(RUN).unwrap();
+        let mut rom = vec![0u8; ROM_BYTES];
+        rom[0..4].copy_from_slice(&SPIN.to_le_bytes());
+        let update = ValidatedUpdate(vec![0xff; document.update_flash_offset + 2048]);
+        let mut session = crate::run::open(&document, &update, &rom).unwrap();
+        session.board.set_execution_policy(document.execution_policy.into()).unwrap();
+        Machine::new(document, session).unwrap()
+    }
+
+    fn write_row(machine: &Machine, row: u64, record: &[u8; 28]) {
+        let table = &machine.document.firmware.key_table;
+        machine.session.board.write_physical(table.base.0 + row * table.row_bytes, record).unwrap();
+    }
+
+    fn play_record(released_byte: u8) -> [u8; 28] {
+        let mut record = [0u8; 28];
+        record[0..4].copy_from_slice(&11u32.to_le_bytes());
+        record[9] = 2;
+        record[12..16].copy_from_slice(&(2u32 << 16 | 9).to_le_bytes());
+        record[21] = released_byte;
+        record
+    }
+
+    fn full_press_record(released_byte: u8) -> [u8; 28] {
+        let mut record = [0u8; 28];
+        record[0..4].copy_from_slice(&8u32.to_le_bytes());
+        record[9] = 4;
+        record[12..16].copy_from_slice(&3u32.to_le_bytes());
+        record[16..18].copy_from_slice(&1u16.to_le_bytes());
+        record[18..20].copy_from_slice(&33u16.to_le_bytes());
+        record[21] = released_byte;
+        record
+    }
+
+    #[test]
+    fn full_press_reports_its_row_and_bounded_release_cap() {
+        let mut machine = machine();
+        let row = machine.document.firmware.shutter.full.row.get();
+        write_row(&machine, row, &full_press_record(1));
+        machine.shutter(ShutterStage::Full, KeyPulse { hold: 0, release: 3 }).unwrap();
+        let observed = serde_json::to_value(&machine.key_release_observations).unwrap();
+        assert_eq!(observed.as_array().unwrap().len(), 1);
+        assert_eq!(observed[0]["key"].as_str(), Some("full-press"));
+        assert_eq!(observed[0]["row"], row);
+        assert_eq!(observed[0]["cap"], 3u64);
+        assert_eq!(observed[0]["instructions_used"], 3u64);
+    }
+
+    #[test]
+    fn a_row_outside_its_declared_binding_is_refused() {
+        let mut machine = machine();
+        let row = machine.document.firmware.play.row.get();
+        let mut record = play_record(0);
+        record[9] = 3;
+        write_row(&machine, row, &record);
+        assert!(machine.play(KeyPulse { hold: 0, release: 0 }).is_err());
     }
 }

@@ -88,7 +88,7 @@ kernelSources :: [FilePath]
 kernelSources =
   [ "menu/recipe_bank_arm.S", "menu/recipe_bank_probe.c", "menu/recipe_bank_hook.c"
   , "menu/recipe_bank_storage.c", "menu/recipe_bank_actions.c", "menu/recipe_bank_edit.c"
-  , "replacement/service/rb_service_stock.S" ]
+  , "replacement/service/rb_service_stock.S", "replacement/capture/rb_capture_stock.S" ]
 
 fixedSources :: [FilePath]
 fixedSources =
@@ -106,7 +106,8 @@ manifestSources =
   , "menu/recipe_bank_edit.h", "menu/recipe_bank_diagnostic.h"
   , "replacement/bank/lib.rs", "replacement/service/lib.rs"
   , "replacement/service/rb_service_stock.S", "replacement/service/rb_service.h"
-  , "replacement/recipe_ui/src/lib.rs" ]
+  , "replacement/recipe_ui/src/lib.rs", "replacement/owned_menu/src/lib.rs"
+  , "replacement/capture/src/lib.rs", "replacement/capture/rb_capture_stock.S" ]
 
 build :: Tools -> OutDir -> FilePath -> FilePath -> FilePath -> Sha256 -> IO ()
 build t (OutDir out) stock spec d3Spec (Sha256 stockDigest) = do

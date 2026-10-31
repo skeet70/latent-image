@@ -1,9 +1,10 @@
 //! Cold-boots X-M1 1.50 on FujiMod's EXR II runtime and answers the
 //! interactive protocol of `tools/probe_setup_menus.py`, so
 //! `Emulation.FlashBootRoute.judgeProbeOutput` judges its transcript.
-use fujimod_xm1::guest::RouteKey;
+use fujimod_xm1::guest::Press;
 use fujimod_xm1::machine::{KeyPulse, Machine};
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
+use fujimod_xm1::{peer_witness, witness};
 use sha2::{Digest, Sha256};
 use std::{
     io::{BufRead, Write},
@@ -11,7 +12,7 @@ use std::{
     process::ExitCode,
 };
 
-const USAGE: &str = "Usage: fujimod-xm1 --run RUN.json --update DAT --boot-rom ROM --output DIR\n\
+const USAGE: &str = "Usage: fujimod-xm1 --run RUN.json --update DAT --boot-rom ROM --output DIR [--witness CONTRACT.json | --peer-witness CONTRACT.json]\n\
 The caller validates DAT as X-M1 1.50-compatible. Commands on stdin:\n\
   key NAME HOLD RELEASE | run COUNT | quit\n";
 
@@ -23,6 +24,8 @@ struct Arguments {
     update: PathBuf,
     boot_rom: PathBuf,
     output: PathBuf,
+    witness: Option<PathBuf>,
+    peer_witness: Option<PathBuf>,
 }
 
 fn arguments() -> Result<Arguments, String> {
@@ -30,6 +33,8 @@ fn arguments() -> Result<Arguments, String> {
     let mut update = None;
     let mut boot_rom = None;
     let mut output = None;
+    let mut witness = None;
+    let mut peer_witness = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(flag) = args.next() {
         let value = args.next().map(PathBuf::from).ok_or_else(|| USAGE.to_owned())?;
@@ -38,11 +43,18 @@ fn arguments() -> Result<Arguments, String> {
             Some("--update") => update = Some(value),
             Some("--boot-rom") => boot_rom = Some(value),
             Some("--output") => output = Some(value),
+            Some("--witness") => witness = Some(value),
+            Some("--peer-witness") => peer_witness = Some(value),
             _ => return Err(USAGE.into()),
         }
     }
+    if witness.is_some() && peer_witness.is_some() {
+        return Err("first-stage and peer witnesses are mutually exclusive".into());
+    }
     match (run, update, boot_rom, output) {
-        (Some(run), Some(update), Some(boot_rom), Some(output)) => Ok(Arguments { run, update, boot_rom, output }),
+        (Some(run), Some(update), Some(boot_rom), Some(output)) => {
+            Ok(Arguments { run, update, boot_rom, output, witness, peer_witness })
+        }
         _ => Err(USAGE.into()),
     }
 }
@@ -113,8 +125,8 @@ fn command(driver: &mut Driver, line: &str) -> Result<bool, String> {
             Ok(true)
         }
         ["key", name, hold, release] => {
-            let key = RouteKey::parse(name)?;
-            driver.machine.key(key, KeyPulse { hold: count(hold)?, release: count(release)? })?;
+            let key = Press::parse(name)?;
+            driver.machine.press_once(key, KeyPulse { hold: count(hold)?, release: count(release)? })?;
             Ok(true)
         }
         _ => Err(format!("unknown command: {line}")),
@@ -132,7 +144,17 @@ fn drive() -> Result<(), String> {
     let mut session = run::open(&document, &update, &boot_rom)?;
     session.board.set_execution_policy(document.execution_policy.into())?;
     let boot = document.boot_instructions;
-    let mut driver = Driver { machine: Machine::new(document, session)?, output: arguments.output, frames: 0 };
+    let machine = Machine::new(document, session)?;
+    let output = arguments.output;
+    if let Some(contract_path) = &arguments.witness {
+        let contract = witness::WitnessContract::parse(&read(contract_path)?)?;
+        return witness::run(machine, contract, &output);
+    }
+    if let Some(contract_path) = &arguments.peer_witness {
+        let contract = peer_witness::PeerContract::parse(&read(contract_path)?)?;
+        return peer_witness::run(machine, contract, &output);
+    }
+    let mut driver = Driver { machine, output, frames: 0 };
     driver.machine.run(boot);
     let stdout = std::io::stdout();
     let mut out = stdout.lock();

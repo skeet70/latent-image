@@ -3,6 +3,8 @@ module Main where
 import Control.Monad (unless)
 import Data.Bits ((.&.))
 import qualified Data.ByteString as B
+import Data.Either (isLeft)
+import Data.List (sort)
 import Data.Word (Word32)
 import System.Exit (exitFailure)
 
@@ -26,16 +28,26 @@ main = do
     (all (<= runtimeAllocationSize) allocationExtents)
   check "allocation includes aligned installer and relocated recipe tables"
     (all (\base -> runtimeInstallerBase base - base + runtimeInstallerExtent <= runtimeAllocationSize) alignedBases)
-  check "the order is a permutation of every logical publication"
-    (length safePublicationOrder == publicationCount
-      && all (`elem` safePublicationOrder) [0 .. publicationCount - 1])
-  check "bank setup publications use dependency-closed order"
-    (take 69 safePublicationOrder == [0 .. 35] <> [55 .. 68] <> [88] <> [36 .. 53])
-  check "Classic Chrome setup precedes all activation"
-    (drop 69 (take publicationSetupCount safePublicationOrder) == [97 .. 158])
-  check "root discovery follows processing and compiled-recipe activation"
-    (last safePublicationOrder == 54
-      && all (\index -> index `elem` take (publicationCount - 1) safePublicationOrder) [97 .. 221])
+  let testAddresses =
+        [PublicationAddress (0x00100000 + 4 * fromIntegral index) | index <- [0 .. 221]]
+          <> [captureHookAddress]
+      order = either error id (safePublicationOrderFor testAddresses)
+      addressAt index = testAddresses !! publicationIndex index
+  check "the derived order names every logical publication once"
+    (length order == publicationCount
+      && sort (map publicationIndex order) == [0 .. publicationCount - 1]
+      && sort (map addressAt order) == sort testAddresses)
+  check "the capture hook is the first activation publication"
+    (addressAt (order !! publicationSetupCount) == captureHookAddress
+      && publicationSetupCount + publicationActivationCount == publicationCount)
+  check "a missing capture hook is rejected"
+    (isLeft (safePublicationOrderFor (init testAddresses)))
+  check "a duplicate capture hook is rejected"
+    (isLeft (safePublicationOrderFor (testAddresses <> [captureHookAddress])))
+  check "a duplicate logical address is rejected"
+    (isLeft (safePublicationOrderFor (take 221 testAddresses <> [head testAddresses, last testAddresses])))
+  check "a missing hook record at a different extra address is rejected"
+    (isLeft (safePublicationOrderFor (init testAddresses <> [PublicationAddress 0x00e9e03c])))
   let completeInstaller = unlines
         [ "00000000 <ram_push_install>:"
         , "  bl 0x10 <execute_operation>"

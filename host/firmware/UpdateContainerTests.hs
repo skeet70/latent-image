@@ -10,7 +10,9 @@ import qualified Data.ByteString as B
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.List (isInfixOf)
 import Data.Word (Word32)
+import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
+import qualified StartupStageContract as Stage
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
 
@@ -365,6 +367,70 @@ windowAdmissionCases checked stock stockBytes compact compactBytes = do
   expectGeometryRefused checked "plain outside carrier rebuild" (U.rebuildContainer outsideCarrier (U.parsedParts outsideCarrier))
   expectGeometryRefused checked "plain outside carrier compact admission" (U.compactRecorderControl outsideCarrier)
 
+composedStageTests :: IORef Int -> U.Parsed -> IO ()
+composedStageTests checked fixture = do
+  let originalParts = U.parsedParts fixture
+      sourceParts = originalParts
+        { U.partSegments = [if U.segId segment == 1 then segment {U.segLoad = 0xd0000} else segment | segment <- U.partSegments originalParts]
+        , U.partPreTable = patchMediaWord 0x3100c 0xd0020 (U.partPreTable originalParts)
+        }
+      admit = either H.failH pure
+      reject label result = case result of
+        Left _ -> expectTrue checked label True
+        Right _ -> H.failH (label ++ ": unexpected admission")
+      image = B.pack [0x12, 0x23, 0x34, 0x45, 0x56, 0x67, 0x78, 0x89]
+      makePlan record entryAddress loadOffset = do
+        entry <- F.armEntry entryAddress
+        load <- F.slotOffset loadOffset
+        F.stagePlan record entry load (U.MediaImage image) []
+  sourceBytes <- admit (U.rebuildContainer fixture sourceParts)
+  original <- admit (Stage.parseOriginalStartupDat sourceBytes)
+  let source = Stage.originalStartupParsed original
+  first <- admit (makePlan F.FirstRecord 0x6004 0x6000)
+  second <- admit (makePlan F.SecondRecord 0x10400 0x400)
+  stock <- admit (F.armEntry 0xd0020)
+  target <- admit (F.armEntry 0x10404)
+  publication <- admit (F.loaderEntryPublication (F.LoaderId 1) 0xd0000 stock target)
+  plan <- admit (F.composedStagePlan first second publication)
+  stagedParts <- admit (F.replaceComposedRecords plan (U.parsedParts source))
+  stagedBytes <- admit (U.rebuildContainer source stagedParts)
+  final <- admit (Stage.parseStagedStartupDat stagedBytes)
+  let staged = Stage.stagedStartupParsed final
+  admit (F.verifyComposedRecords plan source staged)
+  expectTrue checked "composed final DAT admitted" True
+  firstSlot <- admit (F.recordSlotBytes F.FirstRecord (U.parsedParts staged))
+  secondSlot <- admit (F.recordSlotBytes F.SecondRecord (U.parsedParts staged))
+  expectTrue checked "composed distinct entries and image extraction" $
+    U.mediaWordAt firstSlot 0x20 == 0x6004 && U.mediaWordAt secondSlot 0x20 == 0x10400
+      && B.map complement (B.take 8 (B.drop 0x6000 firstSlot)) == image
+      && B.map complement (B.take 8 (B.drop 0x400 secondSlot)) == image
+  reject "composed swapped record roles" (F.composedStagePlan second first publication)
+  reject "composed duplicate record roles" (F.composedStagePlan first first publication)
+  outside <- admit (F.armEntry 0x10408)
+  outsidePublication <- admit (F.loaderEntryPublication (F.LoaderId 1) 0xd0000 stock outside)
+  reject "composed publication beyond combined image" (F.composedStagePlan first second outsidePublication)
+  unaligned <- admit (F.loaderWordPatch (F.LoaderId 1) 0xd000c 0xd0020 0x10401)
+  reject "composed unaligned publication target" (F.composedStagePlan first second unaligned)
+  let wrongLoader = sourceParts
+        {U.partSegments = [if U.segId segment == 1 then segment {U.segLoad = 0xcfffc} else segment | segment <- U.partSegments sourceParts]}
+  reject "composed publication is not the loader header" (F.replaceComposedRecords plan wrongLoader)
+  let mutated offset = stagedParts {U.partPreTable = patchMediaWord offset 0 (U.partPreTable stagedParts)}
+  forM_ [(0x46000, "composed altered declared image"), (0x46008, "composed undeclared first-record byte"), (0x50408, "composed undeclared second-record byte")] $ \(offset, label) -> do
+    tampered <- admit (U.rebuildContainer source (mutated offset) >>= U.parseContainer)
+    reject label (F.verifyComposedRecords plan source tampered)
+  let before = U.parsedParts source
+      wrongPreimage = before {U.partPreTable = patchMediaWord 0x3100c 0xd0024 (U.partPreTable before)}
+  wrongSource <- admit (U.rebuildContainer source wrongPreimage >>= U.parseContainer)
+  reject "composed original publication preimage" (F.verifyComposedRecords plan wrongSource staged)
+  let header = U.parsedHeader staged
+      invalidChecksum = staged {U.parsedHeader = header {U.hMainChecksum = U.hMainChecksum header `xor` 1}}
+  reject "composed final checksum" (F.verifyComposedRecords plan source invalidChecksum)
+  let corrupt = B.take U.mainChecksumOffset stagedBytes
+        <> U.putWord32 (U.hMainChecksum header `xor` 1)
+        <> B.drop (U.mainChecksumOffset + 4) stagedBytes
+  reject "typed staged DAT checksum admission" (Stage.parseStagedStartupDat corrupt)
+  reject "typed source DAT checksum admission" (Stage.parseOriginalStartupDat corrupt)
+
 main :: IO ()
 main = do
   outcome <- try run
@@ -377,6 +443,7 @@ run = do
   checked <- newIORef (0 :: Int)
   parsed <- expectAccepted checked "fixture" fixtureBytes
   let parts = U.parsedParts parsed
+  composedStageTests checked parsed
   expectTrue checked "identity bytes" (U.partIdentity parts == fixtureIdentity)
   expectTrue checked "version words" (U.partVersionMajor parts == 1 && U.partVersionMinor parts == 0x50)
   expectTrue checked "selector word" (U.partSelector parts == 1)

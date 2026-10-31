@@ -2,7 +2,7 @@
  * section 1): action-table word 0xd04084 := rb_bank_interpose and three cells
  * (the browsing SET, the editor confirm, the leaving edge) := action index 1.
  * Rows the module does not claim leave through the stock handler of the state
- * and event it was entered from.
+ * and event it was entered from; the editor-cancel action is owned in Rust.
  */
 #include "recipe_bank_ui.h"
 #include "recipe_bank_diagnostic.h"
@@ -504,7 +504,7 @@ uint32_t rb_ui_child_enter(void)
   }
   if (cls == RB_UI_CLASS_SELECT) {
     /* The stock push saved its snapshot before the entry cursor adjustment. */
-    rb_call_snapshot_store((RbMenuRoot){rb_ui_word(child + RB_NODE_ID)});
+    (void)rb_menu_frame_store((RbMenuRoot){rb_ui_word(child + RB_NODE_ID)});
   }
 #ifdef RB_RAM_DIAGNOSTICS
   rb_select_diag_publish();
@@ -546,7 +546,7 @@ static uint32_t rb_ui_stock(uint32_t state, uint32_t event)
 {
   if (event == RB_UI_EVENT_LEAVE) {
     if (state == RB_UI_STATE_EDITOR) {
-      return rb_call_editor_cancel();
+      return rb_ui_editor_cancel();
     }
     return (state == RB_UI_STATE_BROWSE) ? rb_call_leave_edge()
                                          : rb_call_set_dispatch();

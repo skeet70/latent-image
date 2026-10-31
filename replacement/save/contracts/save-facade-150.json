@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "subject": "X-M1 1.50 save request facade FUN_00e518c0, completion FUN_00e4e5dc, phase-two FUN_00e50e4c and FUN_00e4e5a8",
+  "image": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin",
+    "size": 5185120,
+    "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+    "base": "0x00bf1a00"
+  },
+  "slices": [
+    {
+      "name": "facade",
+      "address": "0x00e518c0",
+      "offset": "0x0025fec0",
+      "length": 732,
+      "sha256": "e11a4184a6e98cd8e55ccbf2b620bf6393c54b3958188f47e884cb5076d8ffbc"
+    },
+    {
+      "name": "override",
+      "address": "0x00e51858",
+      "offset": "0x0025fe58",
+      "length": 104,
+      "sha256": "aefb0fcb4a7fbd468d22af943f846541770d3858f3a3acdb2afd24c67b66d69f"
+    },
+    {
+      "name": "callbacks",
+      "address": "0x00e4e5a8",
+      "offset": "0x0025cba8",
+      "length": 10492,
+      "sha256": "0f39e21c85b07af455d2af961d6bf11e5de0041eb19e4f346534927069ecd194"
+    }
+  ],
+  "models": {
+    "storage": "0x011d5600",
+    "storage_kind_three": "0x011d5688",
+    "storage_common": "0x011d5a00",
+    "release": "0x011d5714",
+    "wait": "0x007243a8",
+    "stage": "0x006fae80"
+  },
+  "entry_hook": {
+    "site": "0x00e99e8c",
+    "old_word": "0xebfede8b",
+    "old_target": "0x00e518c0",
+    "new_target": "xm1_save_facade",
+    "entry_address": "0x00e518c0",
+    "scope": "replace only the single save callsite; do not redirect 0x00e51858 callers"
+  },
+  "stock_calls": [
+    {"address": "0x0073abec", "name": "service present", "role": "stub"},
+    {"address": "0x0073ac60", "name": "service profile", "role": "stub"},
+    {"address": "0x0069f8fc", "name": "service byte", "role": "stub"},
+    {"address": "0x00e4e0b4", "name": "save metadata preparation", "role": "stub"},
+    {"address": "0x011d5850", "name": "extent preset", "role": "stub"},
+    {"address": "0x011d5934", "name": "extent name", "role": "stub"},
+    {"address": "0x011d591c", "name": "extent name copy", "role": "stub"},
+    {"address": "0x007101e4", "name": "cached state query", "role": "stub"},
+    {"address": "0x00723cb8", "name": "current task", "role": "stub"},
+    {"address": "0x00724558", "name": "task signal", "role": "stub"},
+    {"address": "0x011d5600", "name": "storage direct entry", "role": "model"},
+    {"address": "0x011d5688", "name": "storage kind-three entry", "role": "model"},
+    {"address": "0x011d5714", "name": "release completion registration", "role": "model"},
+    {"address": "0x007243a8", "name": "event wait", "role": "model"},
+    {"address": "0x006fae80", "name": "activity stage", "role": "model"},
+    {"address": "0x00e4e5dc", "name": "phase-one completion callback", "role": "stock closure"},
+    {"address": "0x00e4e5a8", "name": "phase-two completion callback", "role": "stock closure"},
+    {"address": "0x00e50e4c", "name": "phase-two wait", "role": "stock closure"}
+  ],
+  "lifecycle": {
+    "allocation": "the bank payload allocation is retained until poweroff",
+    "publication_restore": "restoring publication words does not free or relocate the payload, so a pending callback's code and data stay mapped",
+    "delayed_callback": "the callback reads its task slot on entry; after the facade cleared the slot it writes status and does not signal",
+    "unsupported": "freeing or remapping the payload while a callback or task slot is live"
+  },
+  "retained": {
+    "storage_machine": "0x014ddbfc",
+    "action_table": "0x011d5dac",
+    "message": "0x2b01",
+    "release_message": "0x2b18",
+    "status_word": "0x0154d970",
+    "phase_one_task": "0x0155ccb8",
+    "phase_two_task": "0x0155ccbc"
+  },
+  "exclusions": [
+    "Synthetic Cortex-R5F user-mode ARM execution only; no X-M1 hardware, interrupt, DMA, cache or timing behaviour",
+    "Retained storage machine, RTOS waits and signals and the metadata filler are boundary models here; their internal effects are not qualified",
+    "No develop step advances a save kind, no card image is written and no file is produced",
+    "The stock facade is executed with register-only stubs for every non-callback service and guest models for the storage entry, wait and activity points"
+  ]
+}

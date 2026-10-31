@@ -154,10 +154,220 @@ haskell_test(
         "-threaded",
     ],
     deps = [
+        ":startup-stage-contract",
         "//host:base",
         "//host:bytestring",
+        "//host:first-stage",
         "//host:host-support",
         "//host:update-container",
+    ],
+)
+
+haskell_library(
+    name = "stage-build",
+    srcs = ["StageBuild.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
+haskell_binary(
+    name = "build-first-stage",
+    srcs = ["BuildFirstStage.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        ":stage-build",
+        ":startup-stage-contract",
+        "//host:base",
+        "//host:first-stage",
+    ],
+)
+
+haskell_library(
+    name = "secondary-stage-contract",
+    srcs = ["SecondaryStageContract.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    deps = [
+        ":stage-build",
+        "//host:base",
+        "//host:first-stage",
+        "//host:update-container",
+    ],
+)
+
+haskell_binary(
+    name = "build-secondary-stage",
+    srcs = ["BuildSecondaryStage.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        ":secondary-stage-contract",
+        ":stage-build",
+        "//host:base",
+        "//host:first-stage",
+    ],
+)
+
+haskell_binary(
+    name = "build-loader-prefix",
+    srcs = ["BuildLoaderPrefix.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        ":stage-build",
+        ":startup-stage-contract",
+        "//host:base",
+        "//host:first-stage",
+    ],
+)
+
+haskell_library(
+    name = "startup-stage-contract",
+    srcs = ["StartupStageContract.hs"],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021"],
+    deps = [
+        ":secondary-stage-contract",
+        ":stage-build",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:first-stage",
+        "//host:update-container",
+    ],
+)
+
+haskell_binary(
+    name = "build-composed-startup",
+    srcs = ["BuildComposedStartup.hs"],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-threaded"],
+    deps = [
+        ":startup-stage-contract",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
+haskell_binary(
+    name = "build-completion-control",
+    srcs = ["BuildCompletionControl.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:completion-control",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
+haskell_test(
+    name = "first-stage-tests",
+    srcs = ["FirstStageTests.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+        "-threaded",
+    ],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
+haskell_test(
+    name = "peer-wait-control-tests",
+    srcs = ["PeerWaitControlTests.hs"],
+    args = [
+        "$(location //replacement/peer_wait_control:peer-wait-control-image.bin)",
+        "$(location //replacement/peer_wait_control:peer-wait-control-image.symbols)",
+    ],
+    data = [
+        "//replacement/peer_wait_control:peer-wait-control-image.bin",
+        "//replacement/peer_wait_control:peer-wait-control-image.symbols",
+    ],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:first-stage",
+        "//host:json",
+        "//host:peer-wait-control",
+        "//host:update-container",
+        "//host:vector",
+    ],
+)
+
+haskell_binary(
+    name = "peer-wait-control-artifact-tests",
+    srcs = ["PeerWaitControlTests.hs"],
+    args = [
+        "$(location //replacement/peer_wait_control:peer-wait-control-image.bin)",
+        "$(location //replacement/peer_wait_control:peer-wait-control-image.symbols)",
+    ],
+    data = [
+        "//replacement/peer_wait_control:peer-wait-control-image.bin",
+        "//replacement/peer_wait_control:peer-wait-control-image.symbols",
+    ],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:first-stage",
+        "//host:json",
+        "//host:peer-wait-control",
+        "//host:update-container",
+        "//host:vector",
     ],
 )
 

@@ -4,11 +4,11 @@
 -- worker. Canonical callers reach this entry through the pinned guard.
 module Main (main) where
 
-import Control.Exception (SomeException, onException, try)
-import Data.Char (isDigit)
+import Control.Exception (IOException, SomeException, catch, onException, try)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.List (stripPrefix)
 import Data.Unique (hashUnique, newUnique)
-import Emulation.ThermalGuard (callerMemoryProperties)
+import Emulation.ThermalGuard (callerCpuProperties, callerMemoryProperties)
 import System.Directory (canonicalizePath, doesFileExist, getCurrentDirectory)
 import System.Environment (getArgs, getEnvironment, getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure, exitWith)
@@ -37,6 +37,7 @@ startService command rest = do
   present <- doesFileExist worker
   if not present then failClosed ("internal worker is missing: " ++ worker) else do
     memory <- callerMemoryProperties
+    cpus <- callerCpuProperties `catch` \failure -> failClosed (show (failure :: IOException))
     environment <- getEnvironment
     working <- getCurrentDirectory
     pid <- getProcessID
@@ -46,14 +47,18 @@ startService command rest = do
       Nothing -> do
         unique <- hashUnique <$> newUnique
         pure ("thermal-guard-" ++ show pid ++ "-" ++ show unique ++ ".service")
-    let environmentArgs = [ "--setenv=" ++ key | (key, _) <- environment ]
+    let environmentArgs =
+          [ "--setenv=" ++ variable
+          | (key, _) <- environment
+          , Just (EnvironmentName variable) <- [parseEnvironmentName key]
+          ]
         arguments =
           [ "--user", "--wait", "--pipe", "--collect"
           , "--unit=" ++ unit
           , "--property=KillMode=control-group"
           , "--property=TimeoutStopSec=10s"
           , "--property=WorkingDirectory=" ++ working
-          ] ++ memory
+          ] ++ memory ++ cpus
           ++ environmentArgs
           ++ ["--", worker, "--", command] ++ rest
         cleanup = do
@@ -72,3 +77,14 @@ failClosed :: String -> IO a
 failClosed reason = do
   hPutStrLn stderr ("thermal-guard: " ++ reason)
   exitWith (ExitFailure 75)
+
+-- | A name in systemd's environment-name grammar: ASCII letters, digits and
+-- @_@, not starting with a digit. systemd-run rejects any other @--setenv@ name.
+newtype EnvironmentName = EnvironmentName String
+
+parseEnvironmentName :: String -> Maybe EnvironmentName
+parseEnvironmentName name = case name of
+  first : _ | not (isDigit first) && all allowed name -> Just (EnvironmentName name)
+  _ -> Nothing
+  where
+    allowed character = isAsciiUpper character || isAsciiLower character || isDigit character || character == '_'

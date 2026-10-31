@@ -96,17 +96,21 @@ def xm1_rust_elf(
         rust_staticlib,
         c_srcs = [],
         asm_srcs = [],
+        asm_defines = [],
         link_script = None,
+        link_includes = [],
         entry = None,
         extra_ldflags = [],
         testonly = False,
         visibility = None):
     """Links a Rust staticlib with C/assembly into an ELF, flat image and symbol list.
 
-    The linker script owns the load addresses. The outputs are <name>.elf,
-    <name>.bin, <name>.symbols and <name>.disasm in the caller's package.
+    The linker script owns the load addresses. `link_includes` are scripts it
+    `INCLUDE`s by file name. `asm_defines` are `-D` names for
+    the preprocessed assembly sources. The outputs are <name>.elf, <name>.bin,
+    <name>.symbols and <name>.disasm in the caller's package.
     """
-    srcs = [rust_staticlib] + c_srcs + asm_srcs
+    srcs = [rust_staticlib] + c_srcs + asm_srcs + link_includes
     if link_script != None:
         srcs.append(link_script)
 
@@ -123,8 +127,8 @@ def xm1_rust_elf(
     for src in asm_srcs:
         obj = "$$tmp/%d.o" % index
         commands.append(
-            "NIX_HARDENING_ENABLE= $(location %s) --target=armv7r-none-eabi -march=armv7-r -marm -c $(location %s) -o %s" %
-            (_CLANG, src, obj),
+            "NIX_HARDENING_ENABLE= $(location %s) --target=armv7r-none-eabi -march=armv7-r -marm%s -c $(location %s) -o %s" %
+            (_CLANG, "".join([" -D" + define for define in asm_defines]), src, obj),
         )
         commands.append("objects=\"$$objects %s\"" % obj)
         index += 1
@@ -136,6 +140,7 @@ def xm1_rust_elf(
     ]
     if link_script != None:
         link.append("-Wl,-T,$(location %s)" % link_script)
+    link += ["-Wl,-L,$$(dirname $(location %s))" % include for include in link_includes]
     if entry != None:
         link.append("-Wl,-e,%s" % entry)
     link += extra_ldflags

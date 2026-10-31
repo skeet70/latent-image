@@ -431,16 +431,13 @@ kernelMain rawArgs = do
     "classic-chrome" -> pure ClassicChromeFilms
     _ -> fail "--film-encoding must be d3 or classic-chrome"
   let candidateDir = fromMaybe "private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/package-20261024b/image" (opt "candidate")
-      kernelBase = hexI (fromMaybe "0x00be1f00" (opt "rb-base"))
+      kernelBase = hexI (fromMaybe "0x00be0000" (opt "rb-base"))
       id4Base = hexI (fromMaybe "0x0061c400" (opt "id4-base"))
   createDirectoryIfMissing True out
   ks <- parseSyms (build </> "kernel.syms")
   unless (addr ks "__rb_image_start" == kernelBase) (fail "--rb-base differs from linked __rb_image_start")
   ms <- parseSyms (build </> "model.syms")
-  let fieldCountAddress = addr ms "rbm_field_count"
-  unless (fieldCountAddress >= modelScratchBase
-          && fieldCountAddress < modelScratchBase + fromIntegral modelScratchSize)
-    (fail "model symbols are outside the native fixture region; rebuild with the relocated model storage")
+  dataSpan <- either fail pure (modelDataSpan ms)
   kbin <- B.readFile (build </> "kernel.bin")
   ktext <- B.readFile (build </> "kernel-text.bin")
   mdataRaw <- B.readFile (build </> "model-data.bin")
@@ -537,7 +534,7 @@ kernelMain rawArgs = do
   when (null specs) (fail "--case did not name a case")
   results <- mapBounded jobs (\sp -> do
     let loop s fuel = do
-          r <- runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable getter setter mediaImg tabImg mediaLo s
+          r <- runSpec bankMode build out runner ks ms dataSpan kbin ktextLen kdataLen mdataRaw fTable getter setter mediaImg tabImg mediaLo s
           let missing = parseMaybe (withObject "r" (\o -> o .: "missing_fn" >>= withText "t" (pure . T.unpack))) r
           case missing of
             -- a volatile case declares its foreign boundary; an undeclared call fails it
@@ -608,18 +605,22 @@ packTables id4 entries = (B.concat (map snd pieces), M.fromList (zip (map fst pi
     base = 0x61c400 :: Integer
     pieces = [(pr, B.take (fromIntegral (12 * n)) (B.drop (fromIntegral (t - base)) id4)) | (pr, t) <- entries, let n = length (take 64 (takeWhile (\i -> readU32 id4 (fromIntegral (t - base) + 12 * i) /= 0xffff) [0 :: Int ..]))]
 
--- | The real-stock slices the kernel's field walk and code scan execute (the
--- storage lane's real-byte contract and the D3 row-path cases): the chain and
--- dispatcher code with the two copy wrappers replaced by one bx lr each, the
--- conversion tables and pointer block at their stock addresses, the cells
--- block with the mode cell 0x21 and the settings mirror with the not-found
--- Native-fixture-only model storage. 0x7f000000 is invented for the bounded
--- case, not an X-M1 address or a RAM-push reservation.
-modelScratchBase :: Integer
-modelScratchBase = 0x7f000000
+newtype ModelDataBytes = ModelDataBytes Int
+data ModelDataSpan = MediaStateTail | NativeFixtureScratch
 
-modelScratchSize :: Int
-modelScratchSize = 0x1000
+modelDataSpan :: Syms -> Either String ModelDataSpan
+modelDataSpan ms = case (addr ms "rbm_data_base", addr ms "rbm_data_limit") of
+  (0x00910340, 0x00910424) -> Right MediaStateTail
+  (0x7f000000, 0x7f001000) -> Right NativeFixtureScratch
+  _ -> Left "model data span is not a declared native-case span"
+
+dataSpanBase :: ModelDataSpan -> GuestAddress
+dataSpanBase MediaStateTail = GuestAddress 0x00910340
+dataSpanBase NativeFixtureScratch = GuestAddress 0x7f000000
+
+dataSpanSize :: ModelDataSpan -> ModelDataBytes
+dataSpanSize MediaStateTail = ModelDataBytes 0xe4
+dataSpanSize NativeFixtureScratch = ModelDataBytes 0x1000
 
 fieldTableAddress :: Integer
 fieldTableAddress = 0x970800
@@ -627,6 +628,11 @@ fieldTableAddress = 0x970800
 liveBaseAddress :: Integer
 liveBaseAddress = 0x96cc64
 
+-- | The real-stock slices the kernel's field walk and code scan execute (the
+-- storage lane's real-byte contract and the D3 row-path cases): the chain and
+-- dispatcher code with the two copy wrappers replaced by one bx lr each, the
+-- conversion tables and pointer block at their stock addresses, the cells
+-- block with the mode cell 0x21 and the settings mirror with the not-found
 -- flag set. The menu, mode and availability tables share one region, and the
 -- id5 slice runs on through the render probe FUN_00d52684. The synthetic
 -- getter and setter retire: 0x0061e110 and 0x00624694 are the real code
@@ -2565,17 +2571,19 @@ specSet filmEncoding ks ms fields tabs hostBank (StockFailureRedraw failureRedra
       , volSelectC1, volSelectNone, volSelectAtC, volSelectUnset
       , volStaleSession, volInvalidStageCode ]
 
-runSpec :: BankMode -> FilePath -> FilePath -> FilePath -> Syms -> Syms -> B.ByteString -> Int -> Int -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Integer -> Spec -> IO Value
-runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable getter setter mediaImg tabImg mediaLo sp = do
+runSpec :: BankMode -> FilePath -> FilePath -> FilePath -> Syms -> Syms -> ModelDataSpan -> B.ByteString -> Int -> Int -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Integer -> Spec -> IO Value
+runSpec bankMode build out runner ks ms dataSpan kbin ktextLen kdataLen mdataRaw fTable getter setter mediaImg tabImg mediaLo sp = do
   let dir = out </> spId sp
   createDirectoryIfMissing True dir
   let modeCell = B.replicate 0x24 0 <> u32le (mMode (spModel sp))
-      mdata = overlay mdataRaw ([ (addr ms n - modelScratchBase, u32le v) | (n, v) <- M.toList (mCells (spModel sp))]
-        ++ [(addr ms "rbm_field_count" - modelScratchBase, u32le (fromIntegral (B.length fTable `div` 20)))])
+      GuestAddress dataBase = dataSpanBase dataSpan
+      ModelDataBytes dataSize = dataSpanSize dataSpan
+      mdata = overlay mdataRaw ([ (addr ms n - dataBase, u32le v) | (n, v) <- M.toList (mCells (spModel sp))]
+        ++ [(addr ms "rbm_field_count" - dataBase, u32le (fromIntegral (B.length fTable `div` 20)))])
       mdata' =
-        if B.length mdata > modelScratchSize
+        if B.length mdata > dataSize
           then error "model data exceeds its native fixture region"
-          else mdata <> B.replicate (modelScratchSize - B.length mdata) 0
+          else mdata <> B.replicate (dataSize - B.length mdata) 0
       overlay base ps = foldl (\b (o, v) -> B.take (fromIntegral o) b <> v <> B.drop (fromIntegral o + B.length v) b) base ps
       cardImg = mCard (spModel sp)
       cardLength = max cardBytes (B.length cardImg)
@@ -2608,7 +2616,7 @@ runSpec bankMode build out runner ks ms kbin ktextLen kdataLen mdataRaw fTable g
         [ reg "ktext" kernelBase ktextLen "rx" (Just "kernel.bin") 0 ktextLen
         , reg "kdata" (kernelBase + fromIntegral ktextLen) kdataLen "rw" (Just "kernel.bin") ktextLen kdataLen
         , reg "media" mediaLo (B.length mediaImg') "rx" (Just "media.bin") 0 (B.length mediaImg')
-        , reg "model-scratch" modelScratchBase modelScratchSize "rw" (Just "model-data.bin") 0 modelScratchSize
+        , reg "model-scratch" dataBase dataSize "rw" (Just "model-data.bin") 0 dataSize
         , reg "live-state" liveBaseAddress (B.length liveImg') "rw" (Just "live.bin") 0 (B.length liveImg')
         , reg "card" 0x00980000 cardLength "rw" (Just "card.bin") 0 (B.length cardImg)
         , reg "casebuf" 0x009a0000 0x2000 "rw" (if B.null caseImg then Nothing else Just "case.bin") 0 (B.length caseImg) ]

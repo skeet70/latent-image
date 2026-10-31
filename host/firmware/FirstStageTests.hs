@@ -1,0 +1,231 @@
+{-# LANGUAGE OverloadedStrings #-}
+-- Behavioural tests for boot-record staging in the opaque pre-table part;
+-- fixtures are synthetic Parts values and no private container is read.
+module Main where
+
+import Control.Monad (unless)
+import qualified Data.ByteString as B
+import Data.Bits (complement)
+import Data.Word (Word32)
+import FujiAF.FirstStage
+import qualified FujiAF.Host as H
+import qualified FujiAF.UpdateContainer as U
+
+syntheticParts :: B.ByteString -> U.Parts
+syntheticParts preTable =
+  U.Parts
+    { U.partIdentity = B.cons 1 (B.replicate 511 0)
+    , U.partVersionMajor = 1
+    , U.partVersionMinor = 0
+    , U.partSelector = 1
+    , U.partRangeFill = B.replicate 40 0xff
+    , U.partPreTable = preTable
+    , U.partTableLayout = U.Stock
+    , U.partSegments = [segment k | k <- [0 .. 7]]
+    , U.partTableTail = B.empty
+    , U.partRecord4 = record
+    , U.partGap45 = B.empty
+    , U.partRecord5 = record
+    , U.partPostHead = B.empty
+    , U.partImage2 = B.singleton 0
+    , U.partPostTail = B.empty
+    , U.partTrailer = U.Trailer 0 0 0 0 0 0 0 0 0xaaaa
+    , U.partAux1 = []
+    , U.partAux2 = []
+    }
+  where
+    segment k =
+      U.SegmentEntry
+        { U.segId = k
+        , U.segLoad = 0
+        , U.segSize = 0
+        , U.segBss = 0
+        , U.segBssLen = 0
+        , U.segFlash = 0
+        , U.segFlashLen = 0
+        , U.segWord7 = 0
+        , U.segFlag = 0
+        }
+    record = U.CompressedRecord (U.RecordHeader 0 20 1 0x4000 4) B.empty Nothing
+
+sourcePreTable :: B.ByteString
+sourcePreTable = payload
+  where
+    size = 0x140040 :: Int
+    base = B.replicate size 0x11
+    withSlot = B.take 0x40000 base <> B.replicate 0x10000 0 <> B.drop 0x50000 base
+    withRecord2 = replace 0x50000 (B.pack [0xb6, 0xb6, 0xb6, 0xb6]) withSlot
+    payload = replace 0x60000 (B.pack [0xc7, 0xc7]) withRecord2
+    replace offset bytes value =
+      B.take offset value <> bytes <> B.drop (offset + B.length bytes) value
+
+retained :: Either String RetainedExtent
+retained = do
+  start <- slotOffset 0
+  end <- slotOffset 0x5280
+  retainedExtent start end
+
+validPlan :: B.ByteString -> IO StagePlan
+validPlan image = do
+  entry <- either H.failH pure (armEntry 0x6000)
+  load <- either H.failH pure (slotOffset 0x6000)
+  extent <- either H.failH pure retained
+  either H.failH pure (stagePlan FirstRecord entry load (U.MediaImage image) [extent])
+
+invalidPlan :: B.ByteString -> Word32 -> Int -> Either String StagePlan
+invalidPlan image entryValue loadValue = do
+  entry <- armEntry entryValue
+  load <- slotOffset loadValue
+  extent <- retained
+  stagePlan FirstRecord entry load (U.MediaImage image) [extent]
+
+secondRecordPlan :: B.ByteString -> Word32 -> Int -> Either String StagePlan
+secondRecordPlan image entryValue loadValue = do
+  entry <- armEntry entryValue
+  load <- slotOffset loadValue
+  bodyStart <- slotOffset 0x1800
+  bodyEnd <- slotOffset 0x4c80
+  body <- retainedExtent bodyStart bodyEnd
+  stagePlan SecondRecord entry load (U.MediaImage image) [body]
+
+assertTrue :: String -> Bool -> IO ()
+assertTrue label ok = unless ok (H.failH (label ++ ": failed"))
+
+assertLeft :: Show a => String -> Either String a -> IO ()
+assertLeft label result = case result of
+  Left _ -> pure ()
+  Right value -> H.failH (label ++ ": expected refusal, got " ++ show value)
+
+syntheticParsed :: U.Parts -> U.Parsed
+syntheticParsed = U.Parsed 0 (U.Header 0 0 0 0 0 0 0 0 0 0)
+
+-- | Loader B as segment id 1: loaded at 0xd0000 from media 0xa0000, header
+-- entry word 0xd0020.
+withLoaderB :: U.Parts -> U.Parts
+withLoaderB parts =
+  parts
+    { U.partSegments = map place (U.partSegments parts)
+    , U.partPreTable = B.take 0xa000c pre <> U.putMediaWord 0xd0020 <> B.drop 0xa0010 pre
+    }
+  where
+    pre = U.partPreTable parts
+    place segment
+      | U.segId segment == 1 = segment {U.segLoad = 0xd0000, U.segSize = 0x100, U.segFlash = 0xa0000}
+      | otherwise = segment
+
+publication :: Word32 -> Word32 -> Either String LoaderWordPatch
+publication stockValue entryValue = do
+  stock <- armEntry stockValue
+  entry <- armEntry entryValue
+  loaderEntryPublication (LoaderId 1) 0xd0000 stock entry
+
+loaderPatchTests :: B.ByteString -> IO ()
+loaderPatchTests image = do
+  let source = withLoaderB (syntheticParts sourcePreTable)
+      sourcePre = U.partPreTable source
+  published <- either H.failH pure (publication 0xd0020 0x10600)
+  patched <- either H.failH pure (applyLoaderWordPatches [published] source)
+  let patchedPre = U.partPreTable patched
+  assertTrue "published loader entry word" (U.mediaWordAt patchedPre 0xa000c == 0x10600)
+  assertTrue "only the loader entry word changes" $
+    B.take 0xa000c patchedPre == B.take 0xa000c sourcePre && B.drop 0xa0010 patchedPre == B.drop 0xa0010 sourcePre
+  assertTrue "published container verifies" (verifyLoaderWordPatches [published] (syntheticParsed source) (syntheticParsed patched) == Right ())
+  let tampered = patched {U.partPreTable = B.take 0xa0010 patchedPre <> B.singleton 0 <> B.drop 0xa0011 patchedPre}
+  assertLeft "undeclared loader byte change" (verifyLoaderWordPatches [published] (syntheticParsed source) (syntheticParsed tampered))
+  assertLeft "declared loader word left unpublished" (verifyLoaderWordPatches [published] (syntheticParsed source) (syntheticParsed source))
+  assertLeft "publication over a different stock entry" (publication 0xd0024 0x10600 >>= \patch -> applyLoaderWordPatches [patch] source)
+  assertLeft "loader word past the loader image" (loaderWordPatch (LoaderId 1) 0xd0100 0 1 >>= \patch -> applyLoaderWordPatches [patch] source)
+  assertLeft "absent loader id" (loaderWordPatch (LoaderId 9) 0xd000c 0xd0020 0x10600 >>= \patch -> applyLoaderWordPatches [patch] source)
+  assertLeft "unaligned loader word" (loaderWordPatch (LoaderId 1) 0xd000e 0xd0020 0x10600)
+  assertLeft "loader word replaced by itself" (publication 0xd0020 0xd0020)
+  plan <- either H.failH pure (secondRecordPlan image 0x10400 0x400)
+  slotted <- either H.failH pure (replaceRecordSlot plan source)
+  staged <- either H.failH pure (applyLoaderWordPatches [published] slotted)
+  assertTrue "record 2 staged with its publication verifies" $
+    verifyStagedRecord plan [published] (syntheticParsed source) (syntheticParsed staged) == Right ()
+  assertLeft "record 2 publication undeclared" (verifyStagedRecord plan [] (syntheticParsed source) (syntheticParsed staged))
+
+main :: IO ()
+main = do
+  let parts = syntheticParts sourcePreTable
+      image = B.pack [0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04]
+  slot <- either H.failH pure (firstRecordSlotBytes parts)
+  plan <- validPlan image
+  staged <- either H.failH pure (replaceRecordSlot plan parts)
+  let stagedPre = U.partPreTable staged
+      stagedSlot = B.take firstRecordSlotLength (B.drop firstRecordSlotOffset stagedPre)
+      storedImage = B.map complement (B.take (B.length image) (B.drop (slotOffsetBytes (planLoadOffset plan)) stagedSlot))
+  assertTrue "prefix before slot" (B.take firstRecordSlotOffset stagedPre == B.take firstRecordSlotOffset sourcePreTable)
+  assertTrue "suffix after slot" (B.drop (firstRecordSlotOffset + firstRecordSlotLength) stagedPre == B.drop (firstRecordSlotOffset + firstRecordSlotLength) sourcePreTable)
+  assertTrue "record 2 marker" (B.take 4 (B.drop 0x50000 stagedPre) == B.pack [0xb6, 0xb6, 0xb6, 0xb6])
+  assertTrue "carrier marker" (B.take 2 (B.drop 0x60000 stagedPre) == B.pack [0xc7, 0xc7])
+  assertTrue "reset target" (U.mediaWordAt stagedSlot resetVectorWordOffset == armEntryAddress (planEntry plan))
+  assertTrue "retained body below image" (B.take 0x20 stagedSlot == B.take 0x20 slot)
+  assertTrue "retained body between vector and image" (B.drop 0x24 (B.take 0x6000 stagedSlot) == B.drop 0x24 (B.take 0x6000 slot))
+  assertTrue "image bytes" (storedImage == image)
+  assertTrue "unrelated parts unchanged" (U.partIdentity staged == U.partIdentity parts && U.partSelector staged == U.partSelector parts)
+  assertLeft "empty image" (invalidPlan B.empty 0x6000 0x6000)
+  assertLeft "entry outside image" (invalidPlan image 0x6400 0x6000)
+  assertLeft "unaligned entry" (invalidPlan image 0x6002 0x6000)
+  assertLeft "image past slot" (invalidPlan image 0xfffc 0xfffc)
+  assertLeft "image overlaps retained" (invalidPlan image 0x5000 0x5000)
+  assertLeft "image overlaps vector" (invalidPlan image 0x20 0x20)
+  assertLeft "retained extent outside slot" (slotOffset 0x20000)
+  assertLeft "short carrier" (firstRecordSlotBytes (parts {U.partPreTable = B.replicate 0x40000 0}))
+  secondPlan <- either H.failH pure (secondRecordPlan image 0x10400 0x400)
+  secondStaged <- either H.failH pure (replaceRecordSlot secondPlan parts)
+  secondSlot <- either H.failH pure (recordSlotBytes SecondRecord secondStaged)
+  let secondPre = U.partPreTable secondStaged
+  assertTrue "second record leaves the first slot and carrier" $
+    B.take 0x50000 secondPre == B.take 0x50000 sourcePreTable
+      && B.drop 0x60000 secondPre == B.drop 0x60000 sourcePreTable
+  assertTrue "second record reset target is the guest entry" (U.mediaWordAt secondSlot resetVectorWordOffset == 0x10400)
+  assertTrue "second record image at its slot offset" (B.map complement (B.take (B.length image) (B.drop 0x400 secondSlot)) == image)
+  assertTrue "second record marker before the vector word" (B.take 4 secondSlot == B.pack [0xb6, 0xb6, 0xb6, 0xb6])
+  assertLeft "second record entry named by slot offset" (secondRecordPlan image 0x400 0x400)
+  assertLeft "second record image overlaps its body" (secondRecordPlan image 0x11800 0x1800)
+  assertTrue "second record symbol offsets are guest-relative" $
+    case parseSymbols "00011800 00000000 A xm1_retained_body_start\n" of
+      Right rows -> fmap slotOffsetBytes (symbolSlotOffset SecondRecord rows "xm1_retained_body_start") == Right 0x1800
+      Left _ -> False
+  assertLeft "second record symbol below its load address" $
+    parseSymbols "00000800 00000000 A xm1_retained_body_start\n" >>= \rows -> symbolSlotOffset SecondRecord rows "xm1_retained_body_start"
+  assertTrue "ABS symbol rows" $
+    case parseSymbols "00000000 00000000 A xm1_vector_table_start\n00000020 00000004 A xm1_vector_before_reset_end\n" of
+      Right [first, second] ->
+        symbolAddress first == 0
+          && symbolAddress second == 0x20
+          && symbolSize second == 4
+      _ -> False
+  assertLeft "three-column symbol row" (parseSymbols "00000000 A xm1_vector_table_start")
+  patchOffset <- either H.failH pure (slotOffset 0x100)
+  gateOffset <- either H.failH pure (slotOffset 0x1ff4)
+  let expected = U.MediaImage (B.replicate 8 0xff)
+      replacement = U.MediaImage image
+      makePatch offset before after = expectedMediaPatch offset (U.MediaImage before) (U.MediaImage after)
+  patch <- either H.failH pure (expectedMediaPatch patchOffset expected replacement)
+  gate <- either H.failH pure (makePatch gateOffset (B.replicate 4 0xff) (U.putWord32 0xeafffffe))
+  controlled <- either H.failH pure (replaceExpectedFirstRecord [gate,patch] parts)
+  controlledSlot <- either H.failH pure (firstRecordSlotBytes controlled)
+  assertTrue "expected-media replacement" (B.take 8 (B.drop 0x100 controlledSlot) == B.map complement image)
+  assertTrue "expected-media outside extents" $
+    B.take 0x100 slot == B.take 0x100 controlledSlot
+      && B.take (0x1ff4 - 0x108) (B.drop 0x108 slot) == B.take (0x1ff4 - 0x108) (B.drop 0x108 controlledSlot)
+      && B.drop 0x1ff8 slot == B.drop 0x1ff8 controlledSlot
+      && B.drop 0x50000 (U.partPreTable parts) == B.drop 0x50000 (U.partPreTable controlled)
+  wrongPreimage <- either H.failH pure (makePatch patchOffset (B.replicate 8 0) image)
+  assertLeft "wrong expected media" (replaceExpectedFirstRecord [wrongPreimage] parts)
+  assertLeft "repeated patch extent" (replaceExpectedFirstRecord [patch,patch] parts)
+  overlapOffset <- either H.failH pure (slotOffset 0x104)
+  overlapping <- either H.failH pure (expectedMediaPatch overlapOffset expected replacement)
+  assertLeft "overlapping expected patches" (replaceExpectedFirstRecord [patch,overlapping] parts)
+  assertLeft "empty expected patch" (makePatch patchOffset B.empty B.empty)
+  assertLeft "unequal expected replacement lengths" (makePatch patchOffset (B.replicate 4 0xff) image)
+  unaligned <- either H.failH pure (slotOffset 0x102)
+  assertLeft "unaligned expected extent" (makePatch unaligned (B.replicate 8 0xff) image)
+  assertLeft "partial media word" (makePatch patchOffset (B.replicate 3 0xff) (B.replicate 3 0))
+  pastEnd <- either H.failH pure (slotOffset 0xfffc)
+  assertLeft "expected extent past slot" (expectedMediaPatch pastEnd expected replacement)
+  assertLeft "expected patch short carrier" (replaceExpectedFirstRecord [patch] (parts {U.partPreTable = B.empty}))
+  loaderPatchTests image
+  putStrLn "first-stage staging tests pass"

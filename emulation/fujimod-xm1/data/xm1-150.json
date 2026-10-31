@@ -2746,6 +2746,37 @@
       "pin": 10,
       "pressed_high": false
     },
+    "play": {
+      "code": "play",
+      "row": 12,
+      "pad": {
+        "port": 2,
+        "pin": 9
+      },
+      "pressed_high": false
+    },
+    "shutter": {
+      "half": {
+        "code": "s1",
+        "row": 5,
+        "pad": {
+          "port": 0,
+          "pin": 2
+        },
+        "pressed_high": false,
+        "interrupt_index": 31
+      },
+      "full": {
+        "code": "s2",
+        "row": 6,
+        "pad": {
+          "port": 0,
+          "pin": 3
+        },
+        "pressed_high": false,
+        "interrupt_index": 33
+      }
+    },
     "subcommand": {
       "descriptor": 8172004,
       "transitions": 8172032,

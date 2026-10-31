@@ -1,0 +1,434 @@
+diff --git a/crates/emulator/src/board/decoder.rs b/crates/emulator/src/board/decoder.rs
+index 8ad1db6..9bf1bfd 100644
+--- a/crates/emulator/src/board/decoder.rs
++++ b/crates/emulator/src/board/decoder.rs
+@@ -173,6 +173,7 @@ impl Decoders {
+             }
+             slot.selected = choice;
+             slot.pending = None;
++            memory.observe_view_change();
+         }
+         Ok(())
+     }
+diff --git a/crates/emulator/src/board/decoder_tests.rs b/crates/emulator/src/board/decoder_tests.rs
+index 9ecf155..83f7d9b 100644
+--- a/crates/emulator/src/board/decoder_tests.rs
++++ b/crates/emulator/src/board/decoder_tests.rs
+@@ -346,3 +346,96 @@ fn decoder_choices_require_existing_unique_windows_and_valid_backing() {
+         assert!(g.validate().is_err(), "case {case}");
+     }
+ }
++fn sources(state: &serde_json::Value) -> Vec<(String, u64)> {
++    state["records"]
++        .as_array()
++        .unwrap()
++        .iter()
++        .map(|row| (row["source"].as_str().unwrap().to_owned(), row["physical"].as_u64().unwrap()))
++        .collect()
++}
++#[test]
++fn fixed_view_watch_reports_a_committed_decode_even_after_its_restoration() {
++    use observation::{ViewPolicy, WatchKinds, WatchRange};
++    let watched = || vec![WatchRange { start: 0x10020, end: 0x10024, kinds: WatchKinds::ALL }];
++    let (mut b, _) = board_with_event(false, Some((4, 0)));
++    let mut watch = b
++        .memory_watch_begin_classified(watched(), 64, b.mappings().to_vec(), ViewPolicy::Fixed)
++        .unwrap();
++    b.run_until(10, 1).unwrap();
++    let state = watch.records.borrow().state();
++    b.memory_watch_end(&mut watch).unwrap();
++    assert_eq!(b.state()["memory_decoders"]["choices"], json!([0]));
++    assert!(state["violation"].is_string());
++    for classified in [true, false] {
++        let (mut b, _) = board_with_event(false, Some((4, 0)));
++        let mut watch = if classified {
++            b.memory_watch_begin_classified(watched(), 64, b.mappings().to_vec(), ViewPolicy::Observe)
++        } else {
++            b.memory_watch_begin(vec![(0x10020, 0x10024)], 64, b.mappings().to_vec())
++        }
++        .unwrap();
++        b.run_until(10, 1).unwrap();
++        let state = watch.records.borrow().state();
++        b.memory_watch_end(&mut watch).unwrap();
++        assert!(state["violation"].is_null());
++        assert_eq!(state.get("classes").is_some(), classified);
++        assert_eq!(state.get("views").is_some(), classified);
++        assert!(sources(&state).contains(&("model-bus-write".into(), 0x10020)));
++    }
++}
++#[test]
++fn overlapping_classified_ranges_record_only_the_sources_each_lists() {
++    use observation::{ViewPolicy, WatchKinds, WatchRange};
++    let (mut b, _) = board(false);
++    let classes = vec![
++        WatchRange { start: 0x10000, end: 0x10008, kinds: WatchKinds::HOST_WRITE },
++        WatchRange { start: 0x10004, end: 0x1000c, kinds: WatchKinds::HOST_READ },
++        WatchRange { start: 0x10020, end: 0x10024, kinds: WatchKinds::MODEL_BUS_WRITE },
++    ];
++    let mut watch = b
++        .memory_watch_begin_classified(classes, 64, b.mappings().to_vec(), ViewPolicy::Observe)
++        .unwrap();
++    b.run_until(10, 1).unwrap();
++    b.write_physical(0x40000000, &[0; 4]).unwrap();
++    b.write_physical(0x40000008, &[0; 4]).unwrap();
++    let mut bytes = [0; 4];
++    b.read_physical(0x40000004, &mut bytes).unwrap();
++    b.read_physical(0x40000020, &mut bytes).unwrap();
++    let state = watch.records.borrow().state();
++    b.memory_watch_end(&mut watch).unwrap();
++    assert!(state["violation"].is_null());
++    assert_eq!(
++        sources(&state),
++        [("model-bus-write".into(), 0x10020), ("host-write".into(), 0x10000), ("host-read".into(), 0x10004)]
++    );
++    assert_eq!(state["classes"][1]["kinds"], json!(["host-read"]));
++    assert_eq!(state["ranges"], json!([[0x10000, 0x1000c], [0x10020, 0x10024]]));
++}
++#[test]
++fn a_refused_classified_watch_leaves_the_board_able_to_watch_again() {
++    use observation::{ViewPolicy, WatchKinds, WatchRange};
++    let (b, _) = board(false);
++    for classes in [
++        vec![],
++        vec![WatchRange { start: 0x20000, end: 0x20004, kinds: WatchKinds::ALL }],
++        vec![WatchRange { start: 0x10004, end: 0x10000, kinds: WatchKinds::ALL }],
++    ] {
++        assert!(
++            b.memory_watch_begin_classified(classes, 64, b.mappings().to_vec(), ViewPolicy::Fixed)
++                .is_err()
++        );
++        let valid = vec![WatchRange { start: 0x10000, end: 0x10004, kinds: WatchKinds::HOST_WRITE }];
++        let mut watch = b
++            .memory_watch_begin_classified(valid, 64, b.mappings().to_vec(), ViewPolicy::Fixed)
++            .unwrap();
++        b.write_physical(0x40000000, &[1, 2, 3, 4]).unwrap();
++        let state = watch.records.borrow().state();
++        b.memory_watch_end(&mut watch).unwrap();
++        assert!(state["violation"].is_null());
++        assert_eq!(sources(&state), [("host-write".into(), 0x10000)]);
++        let mut bytes = [0; 4];
++        b.read_physical(0x40000000, &mut bytes).unwrap();
++        assert_eq!(bytes, [1, 2, 3, 4]);
++    }
++}
+diff --git a/crates/emulator/src/board/memory.rs b/crates/emulator/src/board/memory.rs
+index 9d12e4f..ea20a6b 100644
+--- a/crates/emulator/src/board/memory.rs
++++ b/crates/emulator/src/board/memory.rs
+@@ -113,6 +113,16 @@ impl Memory {
+             offset += len as u64;
+         }
+     }
++    pub(super) fn observe_view_change(&self) {
++        if let Some(observer) = self
++            .observation
++            .borrow()
++            .as_ref()
++            .and_then(std::rc::Weak::upgrade)
++        {
++            observer.borrow_mut().view_changed();
++        }
++    }
+     fn observe_preservation_write(
+         &self,
+         source: super::preservation::PreservationBusSource,
+diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/board/observation.rs
+index 93290c8..c919039 100644
+--- a/crates/emulator/src/board/observation.rs
++++ b/crates/emulator/src/board/observation.rs
+@@ -9,12 +9,72 @@ use std::{
+     rc::{Rc, Weak},
+ };
+ type Span = (u64, u64);
++/// Access sources one classified watch range records.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct WatchKinds(u8);
++impl WatchKinds {
++    pub const CPU_READ: Self = Self(1 << 0);
++    pub const CPU_WRITE: Self = Self(1 << 1);
++    pub const CPU_FETCH: Self = Self(1 << 2);
++    pub const HOST_READ: Self = Self(1 << 3);
++    pub const HOST_WRITE: Self = Self(1 << 4);
++    pub const MODEL_BUS_READ: Self = Self(1 << 5);
++    pub const MODEL_BUS_WRITE: Self = Self(1 << 6);
++    pub const ALL: Self = Self(0x7f);
++    pub const WRITES: Self = Self(Self::CPU_WRITE.0 | Self::HOST_WRITE.0 | Self::MODEL_BUS_WRITE.0);
++    const NAMES: [(Self, &'static str); 7] = [
++        (Self::CPU_READ, "cpu-read"),
++        (Self::CPU_WRITE, "cpu-write"),
++        (Self::CPU_FETCH, "cpu-fetch"),
++        (Self::HOST_READ, "host-read"),
++        (Self::HOST_WRITE, "host-write"),
++        (Self::MODEL_BUS_READ, "model-bus-read"),
++        (Self::MODEL_BUS_WRITE, "model-bus-write"),
++    ];
++    pub const fn union(self, other: Self) -> Self {
++        Self(self.0 | other.0)
++    }
++    pub const fn contains(self, other: Self) -> bool {
++        self.0 & other.0 == other.0
++    }
++    fn from_source(source: &str) -> Option<Self> {
++        Self::NAMES
++            .iter()
++            .find(|(_, name)| *name == source)
++            .map(|&(kind, _)| kind)
++    }
++    fn names(self) -> Vec<&'static str> {
++        Self::NAMES
++            .iter()
++            .filter(|(kind, _)| self.contains(*kind))
++            .map(|&(_, name)| name)
++            .collect()
++    }
++}
++/// Physical, half-open.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct WatchRange {
++    pub start: u64,
++    pub end: u64,
++    pub kinds: WatchKinds,
++}
++/// `Fixed` makes a committed memory-decoding change, or a hooked CPU access
++/// that resolves to no physical address, a watch violation.
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub enum ViewPolicy {
++    #[default]
++    Observe,
++    Fixed,
++}
+ #[derive(Default)]
+ pub struct Records {
+     ranges: Vec<Span>,
+     limit: usize,
+     rows: Vec<Value>,
+     violation: Option<String>,
++    /// Empty for an unclassified watch, which records every source.
++    classes: Vec<WatchRange>,
++    views: ViewPolicy,
+ }
+ impl Records {
+     fn overlaps(&self, address: u64, bytes: u64) -> bool {
+@@ -22,6 +82,17 @@ impl Records {
+             .iter()
+             .any(|&(lo, hi)| address < hi && lo < address.saturating_add(bytes))
+     }
++    fn wants(&self, source: &str, address: u64, bytes: u64) -> bool {
++        if self.classes.is_empty() {
++            return self.overlaps(address, bytes);
++        }
++        let Some(kind) = WatchKinds::from_source(source) else {
++            return false;
++        };
++        self.classes.iter().any(|range| {
++            range.kinds.contains(kind) && address < range.end && range.start < address.saturating_add(bytes)
++        })
++    }
+     fn push(&mut self, row: Value) {
+         if self.violation.is_some() {
+             return;
+@@ -36,15 +107,34 @@ impl Records {
+         }
+     }
+     pub(super) fn transfer(&mut self, source: &str, physical: u64, address: u64, bytes: usize) {
+-        if self.overlaps(physical, bytes as u64) {
++        if self.wants(source, physical, bytes as u64) {
+             self.push(
+                 json!({"source":source,"physical":physical,"address":address,
+                 "size":bytes,"core":null,"pc":null,"instructions":null,"tick":null}),
+             );
+         }
+     }
++    pub(super) fn view_changed(&mut self) {
++        if self.views == ViewPolicy::Fixed {
++            self.violation
++                .get_or_insert_with(|| "Memory decoding changed under a fixed-view memory watch".into());
++        }
++    }
+     pub fn state(&self) -> Value {
+-        json!({"enabled":true,"ranges":self.ranges,"records":self.rows,"violation":self.violation})
++        let mut state =
++            json!({"enabled":true,"ranges":self.ranges,"records":self.rows,"violation":self.violation});
++        if !self.classes.is_empty() {
++            state["classes"] = self
++                .classes
++                .iter()
++                .map(|range| json!({"range":[range.start, range.end],"kinds":range.kinds.names()}))
++                .collect();
++            state["views"] = json!(match self.views {
++                ViewPolicy::Observe => "observe",
++                ViewPolicy::Fixed => "fixed",
++            });
++        }
++        state
+     }
+ }
+ pub struct MemoryWatch {
+@@ -83,11 +173,15 @@ impl MemoryContext {
+                     })
+                     .map(|m| m.physical + address - m.address)
+             });
++        let mut records = self.records.borrow_mut();
+         let Some(physical) = physical else {
+-            return Ok(());
++            return if records.views == ViewPolicy::Fixed {
++                Err(format!("Memory watch cannot resolve CPU{} access at {address:#x} to physical memory", self.core))
++            } else {
++                Ok(())
++            };
+         };
+-        let mut records = self.records.borrow_mut();
+-        if !records.overlaps(physical, size) {
++        if !records.wants(source, physical, size) {
+             return Ok(());
+         }
+         if tcm_overlap(&*cpu, address, size)? {
+@@ -261,18 +355,7 @@ impl Board {
+             return Err("A preservation observation conflicts with memory watch".into());
+         }
+         let ranges = union(ranges);
+-        for &(lo, hi) in &ranges {
+-            let mut cursor = lo;
+-            while cursor < hi {
+-                let (base, backing) = self
+-                    .physical_memory
+-                    .regions()
+-                    .iter()
+-                    .find(|(base, b)| *base <= cursor && cursor < *base + b.len() as u64)
+-                    .ok_or("Memory watch range has no complete physical backing")?;
+-                cursor = hi.min(*base + backing.len() as u64);
+-            }
+-        }
++        self.watch_backing(&ranges)?;
+         let records = Rc::new(RefCell::new(Records {
+             ranges: ranges.clone(),
+             limit,
+@@ -349,6 +432,128 @@ impl Board {
+             .replace(Some(Rc::downgrade(&records)));
+         Ok(watch)
+     }
++    fn watch_backing(&self, ranges: &[Span]) -> Result<(), String> {
++        for &(lo, hi) in ranges {
++            let mut cursor = lo;
++            while cursor < hi {
++                let (base, backing) = self
++                    .physical_memory
++                    .regions()
++                    .iter()
++                    .find(|(base, b)| *base <= cursor && cursor < *base + b.len() as u64)
++                    .ok_or("Memory watch range has no complete physical backing")?;
++                cursor = hi.min(*base + backing.len() as u64);
++            }
++        }
++        Ok(())
++    }
++    /// Records, per range, only the access sources its kinds name. CPU hooks
++    /// cover the given maps and every decoder choice's processor views.
++    pub fn memory_watch_begin_classified(
++        &self,
++        classes: Vec<WatchRange>,
++        limit: usize,
++        maps: Vec<MemoryMap>,
++        views: ViewPolicy,
++    ) -> Result<Box<MemoryWatch>, String> {
++        if classes.is_empty()
++            || classes.len() > 256
++            || limit == 0
++            || limit > 1 << 22
++            || classes
++                .iter()
++                .any(|range| range.start >= range.end || range.end > 1 << 32 || range.kinds.0 == 0)
++            || self.cpus.iter().any(|cpu| cpu.model() != Model::CortexR5F)
++        {
++            return Err("Memory watch requires bounded classified ranges and R-profile processors".into());
++        }
++        if self.preservation_active() {
++            return Err("A preservation observation conflicts with memory watch".into());
++        }
++        let ranges = union(classes.iter().map(|range| (range.start, range.end)).collect());
++        self.watch_backing(&ranges)?;
++        let records = Rc::new(RefCell::new(Records {
++            ranges,
++            limit,
++            classes,
++            views,
++            ..Default::default()
++        }));
++        let mut watch = Box::new(MemoryWatch {
++            records: records.clone(),
++            contexts: vec![],
++            hooks: vec![],
++        });
++        for (core, cpu) in self.cpus.iter().enumerate() {
++            let mut processor_views = maps
++                .iter()
++                .filter(|m| m.core == core)
++                .cloned()
++                .collect::<Vec<_>>();
++            processor_views.extend(self.state.borrow().decoders.observation_maps(core));
++            let (mut reads, mut writes, mut fetches) = (vec![], vec![], vec![]);
++            for map in &processor_views {
++                for range in &records.borrow().classes {
++                    let start = range.start.max(map.physical);
++                    let end = range.end.min(map.physical + map.size as u64);
++                    if start < end {
++                        let span = (
++                            (map.address + start - map.physical).saturating_sub(15),
++                            map.address + end - map.physical,
++                        );
++                        if range.kinds.contains(WatchKinds::CPU_READ) {
++                            reads.push(span);
++                        }
++                        if range.kinds.contains(WatchKinds::CPU_WRITE) {
++                            writes.push(span);
++                        }
++                        if range.kinds.contains(WatchKinds::CPU_FETCH) {
++                            fetches.push(span);
++                        }
++                    }
++                }
++            }
++            watch.contexts.push(Box::new(MemoryContext {
++                state: Rc::downgrade(&self.state),
++                cpu: Rc::downgrade(cpu),
++                records: records.clone(),
++                maps: maps.iter().filter(|m| m.core == core).cloned().collect(),
++                core,
++            }));
++            let data = (&**watch.contexts.last().unwrap() as *const MemoryContext)
++                .cast_mut()
++                .cast();
++            let memory = move |(begin, end): Span, read: bool| Hook::Memory {
++                callback: access,
++                data,
++                read,
++                write: !read,
++                range: HookRange::Inclusive { begin, end: end - 1 },
++            };
++            let hooks = union(reads)
++                .into_iter()
++                .map(|span| memory(span, true))
++                .chain(union(writes).into_iter().map(|span| memory(span, false)))
++                .chain(union(fetches).into_iter().map(|(begin, end)| Hook::Instruction {
++                    callback: fetch,
++                    data,
++                    range: HookRange::Inclusive { begin, end: end - 1 },
++                }));
++            for hook in hooks {
++                match unsafe { cpu.install_hook(hook) } {
++                    Ok(id) => watch.hooks.push((core, id)),
++                    Err(error) => {
++                        self.memory_watch_end(&mut watch)?;
++                        return Err(error);
++                    }
++                }
++            }
++        }
++        self.physical_memory
++            .observation
++            .replace(Some(Rc::downgrade(&records)));
++        Ok(watch)
++    }
+     pub fn memory_watch_end(&self, watch: &mut MemoryWatch) -> Result<(), String> {
+         for (core, hook) in watch.hooks.drain(..) {
+             self.cpus[core].remove_hook(hook)?;

@@ -1,0 +1,133 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+filegroup(
+    name = "module",
+    srcs = [
+        "src/dispatch.S",
+        "src/lib.rs",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//replacement/bank:__pkg__",
+    ],
+)
+
+filegroup(
+    name = "relink-sources",
+    srcs = [
+        "src/dispatch.S",
+        "src/lib.rs",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//menu:__pkg__",
+        "//replacement/bank:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
+haskell_library(
+    name = "qualification",
+    srcs = ["Replacement/ModalRuntime/Qualify.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+haskell_binary(
+    name = "qualify",
+    srcs = ["ModalRuntimeQualifyMain.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-threaded",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":qualification",
+        "//host:base",
+    ],
+)
+
+haskell_library(
+    name = "closure",
+    srcs = ["Replacement/ModalRuntime/Closure.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "modal-closure",
+    srcs = ["ModalClosureMain.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-threaded",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":closure",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:json",
+        "//host:text",
+        "//host:vector",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_test(
+    name = "closure-soundness-tests",
+    srcs = ["ClosureSoundnessTests.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+    ],
+    deps = [
+        ":closure",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+        "//host:vector",
+    ],
+)

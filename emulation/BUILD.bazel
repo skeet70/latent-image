@@ -188,6 +188,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         "//host:base",
+        "//host:directory",
         "//host:process",
         "//host:unix",
     ],
@@ -207,8 +208,18 @@ haskell_test(
     name = "thermal-guard-tests",
     size = "small",
     srcs = ["ThermalGuardTests.hs"],
-    args = ["$(rootpath :thermal-guard-test-worker)", "$(rootpath :thermal-guard-fixture)"],
-    data = [":thermal-guard-test-worker", ":thermal-guard-fixture"],
+    args = [
+        "$(rootpath :thermal-guard-test-worker)",
+        "$(rootpath :thermal-guard-fixture)",
+        "$(rootpath :thermal-guard)",
+        "$(rootpath :thermal-guard-worker)",
+    ],
+    data = [
+        ":thermal-guard-test-worker",
+        ":thermal-guard-fixture",
+        ":thermal-guard",
+        ":thermal-guard-worker",
+    ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     tags = ["no-sandbox"],
     deps = [
@@ -335,6 +346,281 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "first-stage-witness-lib",
+    srcs = ["Emulation/FirstStageWitness.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:cryptohash-sha256",
+        "//host:first-stage",
+        "//host:json",
+        "//host:text",
+    ],
+)
+
+haskell_test(
+    name = "first-stage-witness-tests",
+    size = "small",
+    srcs = ["FirstStageWitnessTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:vector",
+    ],
+)
+
+haskell_binary(
+    name = "first-stage-witness",
+    srcs = ["FirstStageWitness.hs"],
+    args = ["--fflzd", "$(location //lz:fflzd)"],
+    data = ["//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":emulator-slot-lib",
+        ":first-stage-witness-lib",
+        ":fujimod-paths",
+        ":native-observation",
+        ":viewer-runtime-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host:process",
+        "//host:update-container",
+    ],
+)
+
+haskell_library(
+    name = "peer-stage-witness-lib",
+    srcs = ["Emulation/PeerStageWitness.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":watch-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:json",
+    ],
+)
+
+haskell_test(
+    name = "peer-stage-witness-tests",
+    size = "small",
+    srcs = ["PeerStageWitnessTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":peer-stage-witness-lib",
+        ":watch-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:vector",
+    ],
+)
+
+haskell_library(
+    name = "peer-wait-witness-lib",
+    srcs = ["Emulation/PeerWaitWitness.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":peer-stage-witness-lib",
+        ":watch-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:json",
+        "//host:peer-wait-control",
+    ],
+)
+
+haskell_test(
+    name = "peer-wait-witness-tests",
+    size = "small",
+    srcs = ["PeerWaitWitnessTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":peer-stage-witness-lib",
+        ":peer-wait-witness-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:peer-wait-control",
+        "//host:vector",
+    ],
+)
+
+haskell_library(
+    name = "poll-period-lib",
+    srcs = ["Emulation/PollPeriod.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_library(
+    name = "peer-startup-witness-lib",
+    srcs = ["Emulation/PeerStartupWitness.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":peer-stage-witness-lib",
+        ":poll-period-lib",
+        ":watch-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:json",
+        "//host:peer-wait-control",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_test(
+    name = "peer-startup-witness-tests",
+    size = "small",
+    srcs = ["PeerStartupWitnessTests.hs"],
+    args = [
+        "$(location //replacement/secondary_stage:secondary-stage-image.bin)",
+        "$(location //replacement/secondary_stage:secondary-stage-image.symbols)",
+        "$(location //replacement/secondary_stage:secondary-stage-publication-fault-image.bin)",
+        "$(location //replacement/secondary_stage:secondary-stage-publication-fault-image.symbols)",
+        "$(location //replacement/secondary_stage:secondary-stage-stack-fault-image.bin)",
+        "$(location //replacement/secondary_stage:secondary-stage-stack-fault-image.symbols)",
+        "$(location //replacement/secondary_stage:secondary-stage-forbidden-fetch-fault-image.bin)",
+        "$(location //replacement/secondary_stage:secondary-stage-forbidden-fetch-fault-image.symbols)",
+    ],
+    data = [
+        "//replacement/secondary_stage:secondary-stage-image.bin",
+        "//replacement/secondary_stage:secondary-stage-image.symbols",
+        "//replacement/secondary_stage:secondary-stage-publication-fault-image.bin",
+        "//replacement/secondary_stage:secondary-stage-publication-fault-image.symbols",
+        "//replacement/secondary_stage:secondary-stage-stack-fault-image.bin",
+        "//replacement/secondary_stage:secondary-stage-stack-fault-image.symbols",
+        "//replacement/secondary_stage:secondary-stage-forbidden-fetch-fault-image.bin",
+        "//replacement/secondary_stage:secondary-stage-forbidden-fetch-fault-image.symbols",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":peer-startup-witness-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:vector",
+    ],
+)
+
+haskell_library(
+    name = "loader-prefix-witness-lib",
+    srcs = ["Emulation/LoaderPrefixWitness.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":peer-stage-witness-lib",
+        ":peer-startup-witness-lib",
+        ":poll-period-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:completion-control",
+        "//host:containers",
+        "//host:cryptohash-sha256",
+        "//host:first-stage",
+        "//host:json",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+        "//host/firmware:startup-stage-contract",
+    ],
+)
+
+haskell_test(
+    name = "loader-prefix-witness-tests",
+    size = "small",
+    srcs = ["LoaderPrefixWitnessTests.hs"],
+    args = [
+        "$(location //replacement/loader_prefix:loader-prefix-image.bin)",
+        "$(location //replacement/loader_prefix:loader-prefix-image.symbols)",
+        "$(location //replacement/loader_prefix:loader-prefix-core-refusal-image.bin)",
+        "$(location //replacement/loader_prefix:loader-prefix-core-refusal-image.symbols)",
+    ],
+    data = [
+        "//replacement/loader_prefix:loader-prefix-core-refusal-image.bin",
+        "//replacement/loader_prefix:loader-prefix-core-refusal-image.symbols",
+        "//replacement/loader_prefix:loader-prefix-image.bin",
+        "//replacement/loader_prefix:loader-prefix-image.symbols",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":loader-prefix-witness-lib",
+        ":peer-stage-witness-lib",
+        ":peer-startup-witness-lib",
+        ":poll-period-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:completion-control",
+        "//host:first-stage",
+        "//host:vector",
+        "//host:update-container",
+        "//host/firmware:startup-stage-contract",
+    ],
+)
+
+haskell_binary(
+    name = "peer-stage-witness",
+    srcs = ["PeerStageWitness.hs"],
+    data = [":thermal-guard"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":emulator-slot-lib",
+        ":first-stage-witness-lib",
+        ":loader-prefix-witness-lib",
+        ":peer-stage-witness-lib",
+        ":peer-startup-witness-lib",
+        ":peer-wait-witness-lib",
+        ":viewer-runtime-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:completion-control",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host:peer-wait-control",
+        "//host:process",
+        "//host:update-container",
+        "//host/firmware:startup-stage-contract",
+    ],
+)
+
 # The updater-f7 route on FujiMod; see README "updater-f7 on FujiMod".
 sh_binary(
     name = "fujimod-updater-f7",
@@ -359,6 +645,50 @@ sh_binary(
     args = ["--run", "$(rootpath @lab_fujimod_xm1//:share/fujimod-xm1/xm1-150.json)"],
     data = ["@lab_fujimod_xm1//:share/fujimod-xm1/xm1-150.json"],
     visibility = ["//visibility:public"],
+)
+
+# Derives the X-M1 run document with a declared synthetic RAW16 sensor source; see
+# README "Synthetic sensor source on FujiMod".
+haskell_binary(
+    name = "fujimod-xm1-sensor-fixture",
+    srcs = ["FujiModSensorFixture.hs"],
+    data = [
+        "//fixtures/fujimod-sensor:xm1-150-raw16-ramp12.json",
+        "//fixtures/fujimod-sensor:xm1-150-raw16-ramp12-exchanged-readback.json",
+        "//fixtures/fujimod-sensor:xm1-150-raw16-ramp12-exchanged-readback-primary-bit0.json",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:json",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_test(
+    name = "fujimod-xm1-sensor-fixture-tests",
+    size = "small",
+    srcs = ["FujiModSensorFixtureTests.hs"],
+    args = ["$(rootpath :fujimod-xm1-sensor-fixture)"],
+    data = [":fujimod-xm1-sensor-fixture"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+        "//host:vector",
+    ],
 )
 
 haskell_test(
@@ -789,17 +1119,11 @@ cc_binary(
     deps = ["@lab_unicorn//:unicorn"],
 )
 
-cc_binary(
+# The bounded native-case runner: FUJI_NATIVE_V1 on stdin, one observation on stdout.
+sh_binary(
     name = "native-runner",
-    srcs = ["native-runner.c"],
-    copts = [
-        "-std=c11",
-        "-Wall",
-        "-Wextra",
-        "-Werror",
-    ],
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-native-case"],
     visibility = ["//visibility:public"],
-    deps = ["@lab_unicorn//:unicorn"],
 )
 
 cc_binary(
@@ -1374,6 +1698,98 @@ sh_test(
     data = [":recipe-bank-ui-cases"],
 )
 
+haskell_library(
+    name = "owned-case",
+    srcs = ["Emulation/OwnedCase.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":case-sha256",
+        ":native-adapter",
+        ":native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+haskell_binary(
+    name = "owned-menu-cases",
+    srcs = ["OwnedMenuCases.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-O2",
+        "-threaded",
+    ],
+    main_file = "OwnedMenuCases.hs",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":native-observation",
+        ":owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//host:json",
+    ],
+)
+
+haskell_binary(
+    name = "controller-lifecycle-cases",
+    srcs = ["ControllerLifecycleCases.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-O2", "-threaded"],
+    main_file = "ControllerLifecycleCases.hs",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":native-adapter",
+        ":native-observation",
+        ":owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//host:json",
+    ],
+)
+
+# Original-versus-owned menu-frame snapshot cases (replacement/owned_menu).
+haskell_binary(
+    name = "menu-frame-cases",
+    srcs = ["MenuFrameCases.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-O2",
+        "-threaded",
+    ],
+    main_file = "MenuFrameCases.hs",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":native-observation",
+        ":owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//host:json",
+    ],
+)
+
 # Recipe-bank kernel behavior cases: builds each case from the pinned blob and
 # model, runs it through the bounded runner and writes results plus findings.
 haskell_binary(
@@ -1833,4 +2249,58 @@ sh_test(
     srcs = ["recovery-task-state-tests.sh"],
     args = ["$(location :recovery-gpu-startup-test-bin)"],
     data = [":recovery-gpu-startup-test-bin"],
+)
+
+haskell_library(
+    name = "capture-stream-lib",
+    srcs = ["Emulation/CaptureStream.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:deepseq",
+        "//host:filepath",
+        "//host:text",
+        "//host:unix",
+    ],
+)
+
+haskell_binary(
+    name = "media-route-smoke",
+    srcs = ["MediaRouteSmoke.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":capture-stream-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:cryptohash-sha256",
+        "//host:deepseq",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "capture-stream-tests",
+    size = "small",
+    srcs = ["CaptureStreamTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":capture-stream-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:unix",
+    ],
 )

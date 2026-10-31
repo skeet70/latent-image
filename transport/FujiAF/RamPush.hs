@@ -14,7 +14,7 @@ module FujiAF.RamPush
   , ramAllocArguments, ramPushArguments, ramFreeArguments, ramUnloadArguments, ramRelinkArguments
   , ramAllocJournalCapBytes, ramPushJournalCapBytes, ramFreeJournalCapBytes, ramUnloadJournalCapBytes
   , validateReviewedContract, requireReviewedBytes, requireReviewedState, ReviewedContract(..), publicationContractDigest
-  , RamPushRelinker(..), runfilesRelinker, PinnedBuild(..)
+  , RamPushRelinker(..), RustBankInputs(..), runfilesRelinker, PinnedBuild(..)
   , AllowlistPolicy(..), OverrideReason(..), AllowlistOutcome(..), allowlistReceipt
   , pinnedReviewedManifest, withPinnedReviewedBuild, withPinnedReviewedBuildUsing, withRelinkedBuildUsing
   , runRamAlloc, runRamAllocWith, runRamPush, runRamPushWith, runRamRelink
@@ -297,9 +297,9 @@ installerAbiVersion = 5
 
 -- | Bank, relocated compiled recipes and Classic Chrome publications.
 publicationCount, setupCount, activationCount :: Int
-publicationCount = 222
+publicationCount = 223
 setupCount = 131
-activationCount = 91
+activationCount = 92
 
 rendezvousSpinBound :: Word32
 rendezvousSpinBound = 0x80000
@@ -1024,13 +1024,20 @@ withReviewedBuildDirectory payload action = do
       setFileMode path 0o700
       pure (makeRelative root path)
 
--- | The relink script, builder and toolchain a pinned build runs, and the
--- payload they build.
+-- | The relink script, builder and toolchain a pinned build runs, the
+-- payload they build and, for the bank, its Rust inputs.
 data RamPushRelinker = RamPushRelinker
   { relinkerScript :: FilePath
   , relinkerBuilder :: FilePath
   , relinkerToolchain :: RamPushToolchain
   , relinkerPayload :: Payload
+  , relinkerRust :: Maybe RustBankInputs
+  }
+
+-- | The bank's compiled Rust archive and the cross-toolchain's build facts.
+data RustBankInputs = RustBankInputs
+  { rustBankArchive :: FilePath
+  , rustBankBuildFacts :: FilePath
   }
 
 -- | From the running executable's runfiles, which `//transport:camera-core`
@@ -1039,7 +1046,10 @@ runfilesRelinker :: Payload -> IO RamPushRelinker
 runfilesRelinker payload = do
   executable <- getExecutablePath
   let firmware = (executable ++ ".runfiles") </> "_main" </> "host" </> "firmware"
-      relinker = RamPushRelinker (firmware </> payloadRelinkScript payload) (firmware </> payloadRelinkBuilder payload) ramPushToolchain payload
+  rust <- case payloadKind payload of
+    RecipeBankD3 -> Just <$> (RustBankInputs <$> rustServiceObject <*> rustServiceFacts)
+    _ -> pure Nothing
+  let relinker = RamPushRelinker (firmware </> payloadRelinkScript payload) (firmware </> payloadRelinkBuilder payload) ramPushToolchain payload rust
   forM_ [relinkerScript relinker, relinkerBuilder relinker] $ \path -> do
     present <- doesFileExist path
     require present ("RAM-push relinker is missing from this binary's runfiles: "++path)
@@ -1129,13 +1139,7 @@ withPinnedReviewedBuildUsing contract relinker base action = withRelinkedBuildUs
 withRelinkedBuildUsing :: RamPushRelinker -> AllowlistPolicy -> Address -> (PinnedBuild -> IO a) -> IO a
 withRelinkedBuildUsing relinker policy base action = withReviewedBuildDirectory payload $ \root directory -> do
   let tools = relinkerToolchain relinker
-  rustObject <- case payloadKind payload of
-    RecipeBankD3 -> Just <$> rustServiceObject
-    _ -> pure Nothing
-  rustFacts <- case payloadKind payload of
-    RecipeBankD3 -> Just <$> rustServiceFacts
-    _ -> pure Nothing
-  let environment =
+      environment =
         [ ("PATH",toolCoreutilsBin tools)
         , ("RAM_PUSH_BUILDER",relinkerBuilder relinker)
         , ("RAM_PUSH_CLANG",toolClang tools)
@@ -1143,7 +1147,7 @@ withRelinkedBuildUsing relinker policy base action = withReviewedBuildDirectory 
         , ("RAM_PUSH_OBJCOPY",toolObjcopy tools)
         , ("RAM_PUSH_NM",toolNm tools)
         , ("RAM_PUSH_OBJDUMP",toolObjdump tools)
-        ] ++ payloadRelinkInputs payload ++ [("RB_RUST_ARCHIVE", path) | Just path <- [rustObject]] ++ [("RB_RUST_BUILD_FACTS", path) | Just path <- [rustFacts]] ++ case payloadKind payload of
+        ] ++ payloadRelinkInputs payload ++ concat [[("RB_RUST_ARCHIVE", rustBankArchive rust), ("RB_RUST_BUILD_FACTS", rustBankBuildFacts rust)] | Just rust <- [relinkerRust relinker]] ++ case payloadKind payload of
           UsbToggle ->
             [ ("USB_TOGGLE_STUB", takeDirectory (relinkerScript relinker) </> "usb-toggle-stub.bin")
             , ("USB_TOGGLE_STUB_SYMBOLS", takeDirectory (relinkerScript relinker) </> "usb-toggle-stub.sym")

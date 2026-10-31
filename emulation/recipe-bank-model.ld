@@ -1,4 +1,6 @@
-/* Foreign calls retain stock addresses; host helpers occupy a separate span. */
+/* Foreign calls retain stock addresses; host helpers occupy a separate span.
+ * Model data links at the native-case span [rbm_data_base, rbm_data_limit)
+ * that the build script supplies with --defsym. */
 ENTRY(rbm_open)
 SECTIONS {
   . = 0x0061e110;
@@ -27,7 +29,7 @@ SECTIONS {
   .text.tagrelease : { *(.text.rbm_tag_release) }
   . = 0x00730000;
   .text.helpers : { *(.text*) }
-  . = 0x00910340;
+  . = rbm_data_base;
   .data : { *(.data*) *(.bss*) *(COMMON) *(.rodata*) }
   /DISCARD/ : { *(.ARM.attributes) *(.comment) *(.note*) *(.ARM.exidx*) }
 }
@@ -43,4 +45,11 @@ ASSERT(rbm_index_free == 0x0071e9ec, "index free at stock address")
 ASSERT(rbm_mapping_delete == 0x0071eaac, "mapping delete at stock address")
 ASSERT(rbm_resolve == 0x0071eb28, "resolve at stock address")
 ASSERT(rbm_tag_release == 0x0071eff4, "tag release at stock address")
-ASSERT(ADDR(.data) + SIZEOF(.data) <= 0x00910424, "model data fits its exact media-state tail")
+ASSERT(ADDR(.data) == rbm_data_base, "model data starts at its native-case span")
+ASSERT(ADDR(.data) + SIZEOF(.data) <= rbm_data_limit, "model data fits its native-case span")
+ASSERT((rbm_data_base == 0x00910340 && rbm_data_limit == 0x00910424) ||
+       (rbm_data_base == 0x7f000000 && rbm_data_limit == 0x7f001000),
+       "model data uses a declared native-case span")
+ASSERT(rbm_data_base != 0x00910340 ||
+       ADDR(.data) + SIZEOF(.data) <= 0x00910424,
+       "model data fits its exact media-state tail")

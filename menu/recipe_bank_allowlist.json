@@ -1,6 +1,36 @@
 {
   "schema": 1,
   "stock_calls": [
+    {"address":"0x00c72e10","name":"rb_call_set_dispatch","source":"menu/recipe_bank_arm.S; retained pending #133 differential qualification and bank cutover"},
+    {"address":"0x00c75ed4","name":"rb_call_editor_confirm","source":"menu/recipe_bank_arm.S; retained pending #133 differential qualification and bank cutover"},
+    {"address":"0x00c76650","name":"rb_call_leave_edge","source":"menu/recipe_bank_arm.S; retained pending #133 differential qualification and bank cutover"},
+    {"address":"0x0061d154","name":"rb_lifecycle_node","source":"menu/recipe_bank_arm.S; retained frame accessor"},
+    {"address":"0x0061d1f4","name":"rb_lifecycle_class","source":"menu/recipe_bank_arm.S; retained frame accessor"},
+    {"address":"0x0061d244","name":"rb_lifecycle_token","source":"menu/recipe_bank_arm.S; retained frame accessor"},
+    {"address":"0x006394d0","name":"rb_lifecycle_mode_d0","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x006394e8","name":"rb_lifecycle_mode_e8","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d4ad38","name":"rb_lifecycle_confirm","source":"menu/recipe_bank_arm.S; retained editor operation"},
+    {"address":"0x00635b60","name":"rb_lifecycle_reset","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d19cfc","name":"rb_lifecycle_prepare","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d3c9d8","name":"rb_lifecycle_refresh","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00637894","name":"rb_lifecycle_enable","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00639438","name":"rb_lifecycle_mode_refresh_a","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00639468","name":"rb_lifecycle_mode_refresh_b","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d350c4","name":"rb_lifecycle_mode_apply","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x006357dc","name":"rb_lifecycle_mode_flag_a","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00635800","name":"rb_lifecycle_mode_flag_b","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00635824","name":"rb_lifecycle_mode_flag_c","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d425cc","name":"rb_lifecycle_select_29","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d42450","name":"rb_lifecycle_select_30","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d3bc34","name":"rb_lifecycle_prepare_2a","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d45ce4","name":"rb_lifecycle_edit_prepare","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00d45cf8","name":"rb_lifecycle_edit_open","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00722a50","name":"rb_lifecycle_buffer_copy","source":"menu/recipe_bank_arm.S; retained bounded editor buffer operation"},
+    {"address":"0x00722178","name":"rb_lifecycle_buffer_clear","source":"menu/recipe_bank_arm.S; retained bounded editor buffer operation"},
+    {"address":"0x007221c8","name":"rb_lifecycle_words_clear","source":"menu/recipe_bank_arm.S; retained editor word clear"},
+    {"address":"0x006378dc","name":"rb_lifecycle_mode_set","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x0064257c","name":"rb_lifecycle_wb_ready","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
+    {"address":"0x00638010","name":"rb_lifecycle_wb_enable","source":"menu/recipe_bank_arm.S; X-M1 1.50 modal lifecycle"},
     {"address":"0x00eab350","name":"cc_stock_filmmode_return","source":"menu/classic_chrome_ram_stock.ld"},
     {"address":"0x00eab314","name":"cc_stock_filmmode_zero","source":"menu/classic_chrome_ram_stock.ld"},
     {"address":"0x00eaacc8","name":"cc_stock_saturation_mode_arm","source":"menu/classic_chrome_ram_stock.ld"},
@@ -14,6 +44,11 @@
     {"address":"0x00d60cc4","name":"cc_stock_chroma_read","source":"menu/classic_chrome_ram_stock.ld"},
     {"address":"0x00690924","name":"cc_stock_tone_read","source":"menu/classic_chrome_ram_stock.ld"},
     {
+      "address": "0x0004d978",
+      "name": "rb_call_loader_uidiv",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_loader_uidiv; X-M1 1.50 loader unsigned divide FUN_0004d978, the page-word divide of the owned menu-frame snapshot in replacement/owned_menu/src/lib.rs"
+    },
+    {
       "address": "0x0061c91c",
       "name": "RB_WRITE",
       "source": "menu/recipe_bank_storage.c #define RB_WRITE"
@@ -22,11 +57,6 @@
       "address": "0x0061c93c",
       "name": "RB_CURRENT",
       "source": "menu/recipe_bank_storage.c #define RB_CURRENT"
-    },
-    {
-      "address": "0x0061ceac",
-      "name": "rb_call_snapshot_store",
-      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_snapshot_store; X-M1 1.50 FUN_0061ceac stores FUN_0061cd14's 0x2c-byte frame snapshot by root and depth (reports/recipe-design.md section 17.13)"
     },
     {
       "address": "0x0061d514",
@@ -154,24 +184,9 @@
       "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_stock_key_right"
     },
     {
-      "address": "0x00c72e10",
-      "name": "rb_call_set_dispatch",
-      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_set_dispatch"
-    },
-    {
-      "address": "0x00c75ed4",
-      "name": "rb_call_editor_confirm",
-      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_editor_confirm"
-    },
-    {
-      "address": "0x00c76650",
-      "name": "rb_call_leave_edge",
-      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_leave_edge"
-    },
-    {
-      "address": "0x00c77794",
-      "name": "rb_call_editor_cancel",
-      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_editor_cancel"
+      "address": "0x0063a0f8",
+      "name": "rb_call_modal_query",
+      "source": "menu/recipe_bank_arm.S RB_TRAMPOLINE rb_call_modal_query"
     },
     {
       "address": "0x00d1a7d8",
@@ -317,9 +332,50 @@
       "address": "0x0116768c",
       "name": "stock action-list drawer",
       "source": "menu/recipe_bank_arm.S rb_call_draw_action_list (movw/movt)"
+    },
+    {
+      "address": "0x007243a8",
+      "name": "rb_capture_stock_wait",
+      "source": "replacement/capture/rb_capture_stock.S rb_capture_stock_wait"
+    },
+    {
+      "address": "0x00724638",
+      "name": "rb_capture_stock_release",
+      "source": "replacement/capture/rb_capture_stock.S rb_capture_stock_release"
+    },
+    {
+      "address": "0x00e91810",
+      "name": "rb_capture_stock_step_plan",
+      "source": "replacement/capture/rb_capture_stock.S rb_capture_stock_step_plan"
+    },
+    {
+      "address": "0x00e93664",
+      "name": "rb_capture_stock_clear",
+      "source": "replacement/capture/rb_capture_stock.S rb_capture_stock_clear"
+    },
+    {
+      "address": "0x00e9390c",
+      "name": "rb_capture_stock_advance",
+      "source": "replacement/capture/rb_capture_stock.S rb_capture_stock_advance"
+    },
+    {
+      "address": "0x00e93bdc",
+      "name": "rb_capture_stock_check",
+      "source": "replacement/capture/rb_capture_stock.S rb_capture_stock_check"
+    },
+    {
+      "address": "0x00e9db80",
+      "name": "rb_capture_stock_log",
+      "source": "replacement/capture/rb_capture_stock.S rb_capture_stock_log"
     }
   ],
   "stock_stores": [
+    {"address":"0x00954cf4","bytes":4,"name":"modal editor choice","source":"replacement/owned_menu/src/lifecycle.rs"},
+    {"address":"0x0095047c","bytes":4,"name":"modal selection word","source":"replacement/owned_menu/src/lifecycle.rs; class 5 paths write one byte"},
+    {"address":"0x009503c0","bytes":4,"name":"modal dialog word","source":"replacement/owned_menu/src/lifecycle.rs"},
+    {"address":"0x0095201c","bytes":4,"name":"modal mode request","source":"replacement/owned_menu/src/lifecycle.rs"},
+    {"address":"0x00950104","bytes":8,"name":"modal mode flags","source":"replacement/owned_menu/src/lifecycle.rs"},
+    {"address":"0x009537f8","bytes":4,"name":"modal mode latch","source":"replacement/owned_menu/src/lifecycle.rs"},
     {"address":"0x01514220","bytes":4,"name":"CC RAW request film","source":"menu/classic_chrome_ram.S cc_ram_raw_request"},
     {
       "address": "0x0089edc8",
@@ -352,6 +408,12 @@
       "source": "menu/recipe_bank_ui.h #define RB_UI_VISIBLE_CURSOR_CELL"
     },
     {
+      "address": "0x00944414",
+      "bytes": 44,
+      "name": "depth-0 menu-frame snapshot slot",
+      "source": "replacement/owned_menu/src/lib.rs frame::ROOT_SNAPSHOT; X-M1 1.50 FUN_0061ceac depth-0 destination"
+    },
+    {
       "address": "0x0095732c",
       "bytes": 4,
       "name": "RB_UI_CURRENT_ROW_CELL",
@@ -360,8 +422,8 @@
     {
       "address": "0x0146761e",
       "bytes": 2,
-      "name": "RB_UI_STATE_CELL (RB_EDIT_MODE)",
-      "source": "menu/recipe_bank_ui.h #define RB_UI_STATE_CELL"
+      "name": "RB_UI_STATE_CELL (RB_EDIT_MODE, owned editor-cancel)",
+      "source": "menu/recipe_bank_ui.h #define RB_UI_STATE_CELL; replacement/owned_menu/src/lib.rs ModalState::AfterCancel"
     },
     {
       "address": "0x01467a08",
@@ -378,6 +440,9 @@
     {"function":"cc_ram_copy","access":"store","through":{"argument":"r0"},"reason":"writes zero-extended halfwords to the stage destination"},
     {"function":"cc_ram_tone","access":"store","through":{"argument":"r1"},"reason":"writes the nine-byte tone head"},
     {"function":"cc_ram_tone","access":"store","through":{"argument":"r2"},"reason":"writes the 28-halfword tone curve"},
+    {"function":"rb_menu_frame_snapshot","access":"store","through":{"argument":"r0"},"reason":"writes the eleven-word FUN_0061cd14 snapshot to the caller's destination"},
+    {"function":"rb_menu_frame_store_first_depth","access":"store","through":{"index":"0x0093eb74"},"reason":"passes the depth-1 snapshot slot 0x0093eb74 + root * 0x2c, unbounded as in FUN_0061ceac, to rb_menu_frame_snapshot"},
+    {"function":"rb_menu_frame_store_second_depth","access":"store","through":{"index":"0x009412d4"},"reason":"passes the depth-2 snapshot slot 0x009412d4 + root * 0x2c, unbounded as in FUN_0061ceac, to rb_menu_frame_snapshot"},
     {
       "function": "rb_activation_now",
       "access": "store",
@@ -667,18 +732,6 @@
         }
       },
       "reason": "stamps the request identity into the stock message's payload"
-    },
-    {
-      "function": "rb_media_request_post",
-      "access": "store",
-      "through": {
-        "deref": {
-          "deref": {
-            "argument": "r0"
-          }
-        }
-      },
-      "reason": "completes a refused open through the stock request's completion words"
     },
     {
       "function": "rb_media_write_guard_entry",

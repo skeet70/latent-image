@@ -837,7 +837,8 @@ emitPackage spec sources plan kernel boot d3 stockPath out = do
     "rb_bank_current_value_label",
     "rb_media_request_post", "rb_media_open_guard_entry",
     "rb_media_write_guard_entry", "rb_media_close_guard_entry",
-    "rb_media_epoch_entry_a", "rb_media_epoch_entry_b", "rb_stage_edit_get_arm", "rb_stage_edit_set_arm"] $ \name -> do
+    "rb_media_epoch_entry_a", "rb_media_epoch_entry_b", "rb_stage_edit_get_arm", "rb_stage_edit_set_arm",
+    "rb_capture_develop_wait"] $ \name -> do
       address <- linked symbols name
       unless (begin <= address && address < textEnd && address .&. 3 == 0) $
         H.failH ("package: executable symbol outside A32 text: " ++ name)
@@ -1136,7 +1137,6 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
         | ramAddress publication >= 0x01100000 = 0
         | otherwise = 1
       legacyOrdered = sortOn (\publication -> (legacyPriority publication, ramAddress publication)) publicationPairs
-      safeOrder = safePublicationOrder
       publicationCore index
         | index >= 97 = "unknown"
         | index <= 35 || index >= 54 && index <= 71 || index >= 75 = "cpu0"
@@ -1183,20 +1183,26 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
   parameterPath <- maybe "private-data/analysis/classic-chrome/candidate.json" id <$> lookupEnv "CC_PARAMETERS"
   parameters <- either H.failH pure . CC.parseParameters =<< B.readFile parameterPath
   ccData <- linked symbols "cc_ram_data"
-  let reserved = map ramAddress (legacyOrdered ++ d3Activation)
+  captureTarget <- linked symbols "rb_capture_develop_wait"
+  captureWord <- either H.failH pure (armTailBranchWord 0x00e9e038 captureTarget)
+  unless (readWord rc0Id5 0x00bf1a00 0x00e9e038 == 0xe92d4870) $
+    H.failH "ram-push: stock develop wait entry differs at 0x00e9e038"
+  let capturePublication = RamPublication 0x00e9e038 0xe92d4870 captureWord
+      reserved = map ramAddress (legacyOrdered ++ d3Activation)
       ccKept = [p | p <- ccPublications, let CC.Address address = CC.publicationAddress p,
         address `notElem` reserved]
       convert p = let CC.Address address = CC.publicationAddress p
                    in RamPublication address (CC.publicationOld p) (CC.publicationNew p)
       ccSetup = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Setup]
       ccActivation = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Activation]
-      logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra
-      ordered = [logical !! index | index <- safeOrder]
+      logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra <> [capturePublication]
+  safeOrder <- either H.failH pure (safePublicationOrderFor (map (PublicationAddress . ramAddress) logical))
+  let ordered = [logical !! publicationIndex index | index <- safeOrder]
       allocationEnd = toInteger base + toInteger runtimeAllocationSize
   unless
     ( length logical == publicationCount
         && length safeOrder == publicationCount
-        && sortOn id safeOrder == [0 .. publicationCount - 1]
+        && sortOn publicationIndex safeOrder == map PublicationIndex [0 .. publicationCount - 1]
         && length ccSetup == publicationSetupCount - 69
         && length (nub (map ramAddress logical)) == publicationCount
         && all (\p -> toInteger (ramAddress p) + 4 <= toInteger base || toInteger (ramAddress p) >= allocationEnd) logical
@@ -1254,6 +1260,9 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
         , "replacement/service/rb_service_stock.S"
         , "replacement/service/rb_service.h"
         , "replacement/recipe_ui/src/lib.rs"
+        , "replacement/owned_menu/src/lib.rs"
+        , "replacement/capture/src/lib.rs"
+        , "replacement/capture/rb_capture_stock.S"
         , "menu/ram_push_installer.c"
         , "menu/ram_push_abi.h"
         , "menu/recipe_bank_ram.ld"
@@ -1312,12 +1321,12 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
         ])
     , ("publications", H.arr
         [ H.obj
-            [ ("index", H.n (fromIntegral logicalIndex))
+            [ ("index", H.n (fromIntegral (publicationIndex logicalIndex)))
             , ("phase", H.s (if position < publicationSetupCount then "setup" else "activation"))
             , ("address", H.s (hex32 (ramAddress publication)))
             , ("old", H.s (hex32 (ramOld publication)))
             , ("new", H.s (hex32 (ramNew publication)))
-            , ("core", H.s (publicationCore logicalIndex))
+            , ("core", H.s (publicationCore (publicationIndex logicalIndex)))
             ]
         | (position, logicalIndex, publication) <- zip3 [0 :: Int ..] safeOrder ordered
         ])

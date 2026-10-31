@@ -224,7 +224,7 @@ rb_call_draw_action_list:
 
 RB_TRAMPOLINE rb_call_stage_open,  0x00d3d858
 RB_TRAMPOLINE rb_call_transition,  0x00c12aac
-RB_TRAMPOLINE rb_call_snapshot_store, 0x0061ceac
+RB_TRAMPOLINE rb_call_loader_uidiv, 0x0004d978
 RB_TRAMPOLINE rb_call_redraw,      0x00d38d98
 RB_TRAMPOLINE rb_call_stock_redraw_dispatch, 0x00d38e1c
 RB_TRAMPOLINE rb_call_set_dispatch, 0x00c72e10
@@ -234,7 +234,7 @@ RB_TRAMPOLINE rb_call_leave_edge, 0x00c76650
 RB_TRAMPOLINE rb_call_draw_root_prepare, 0x01166200
 RB_TRAMPOLINE rb_call_stock_key_right, 0x00c70528
 RB_TRAMPOLINE rb_call_stock_key_left, 0x00c6f14c
-RB_TRAMPOLINE rb_call_editor_cancel, 0x00c77794
+RB_TRAMPOLINE rb_call_modal_query, 0x0063a0f8
 RB_TRAMPOLINE rb_call_name_style, 0x01130e68
 RB_TRAMPOLINE rb_call_draw_mode, 0x01112b2c
 RB_TRAMPOLINE rb_call_name_background, 0x0112db04
@@ -249,6 +249,43 @@ RB_TRAMPOLINE rb_call_name_ascii, 0x011301ac
 RB_TRAMPOLINE rb_call_name_footer, 0x0112e7fc
 RB_TRAMPOLINE rb_call_name_label_position, 0x0111299c
 RB_TRAMPOLINE rb_call_backdrop_suppressed, 0x01135db0
+RB_TRAMPOLINE rb_lifecycle_class, 0x0061d1f4
+RB_TRAMPOLINE rb_lifecycle_token, 0x0061d244
+RB_TRAMPOLINE rb_lifecycle_node, 0x0061d154
+RB_TRAMPOLINE rb_lifecycle_mode_d0, 0x006394d0
+RB_TRAMPOLINE rb_lifecycle_mode_e8, 0x006394e8
+RB_TRAMPOLINE rb_lifecycle_confirm, 0x00d4ad38
+RB_TRAMPOLINE rb_lifecycle_current, 0x0061c93c
+RB_TRAMPOLINE rb_lifecycle_reset, 0x00635b60
+RB_TRAMPOLINE rb_lifecycle_prepare, 0x00d19cfc
+RB_TRAMPOLINE rb_lifecycle_refresh, 0x00d3c9d8
+RB_TRAMPOLINE rb_lifecycle_enable, 0x00637894
+RB_TRAMPOLINE rb_lifecycle_mode_refresh_a, 0x00639438
+RB_TRAMPOLINE rb_lifecycle_mode_refresh_b, 0x00639468
+RB_TRAMPOLINE rb_lifecycle_mode_apply, 0x00d350c4
+RB_TRAMPOLINE rb_lifecycle_mode_flag_a, 0x006357dc
+RB_TRAMPOLINE rb_lifecycle_mode_flag_b, 0x00635800
+RB_TRAMPOLINE rb_lifecycle_mode_flag_c, 0x00635824
+RB_TRAMPOLINE rb_lifecycle_select_29, 0x00d425cc
+RB_TRAMPOLINE rb_lifecycle_select_30, 0x00d42450
+RB_TRAMPOLINE rb_lifecycle_prepare_2a, 0x00d3bc34
+RB_TRAMPOLINE rb_lifecycle_edit_prepare, 0x00d45ce4
+RB_TRAMPOLINE rb_lifecycle_edit_open, 0x00d45cf8
+RB_TRAMPOLINE rb_lifecycle_buffer_copy, 0x00722a50
+RB_TRAMPOLINE rb_lifecycle_buffer_clear, 0x00722178
+RB_TRAMPOLINE rb_lifecycle_words_clear, 0x007221c8
+RB_TRAMPOLINE rb_lifecycle_mode_set, 0x006378dc
+RB_TRAMPOLINE rb_lifecycle_wb_ready, 0x0064257c
+RB_TRAMPOLINE rb_lifecycle_wb_enable, 0x00638010
+
+@ The owned editor-cancel action's fixed stage open, 0xf/0x1a.
+.global rb_open_editor_cancel_stage
+.type rb_open_editor_cancel_stage,%function
+rb_open_editor_cancel_stage:
+    mov     r0, #15
+    mov     r1, #26
+    b       rb_call_stage_open
+.size rb_open_editor_cancel_stage, .-rb_open_editor_cancel_stage
 
 @ The render probe's interposed entry: entered with r5 = property, r6 = row
 @ token, returns through the stock probe epilogue 0x00d5868c with the state in

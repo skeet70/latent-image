@@ -152,7 +152,7 @@ Already present, not missing: cardless and card-backed RAM-push, ff80 endpoint t
 
 Pinned FujiMod `crates/usb` already covers `device_info`, `ReadConfiguration`, `ReadMemory`, `WriteMemory`, `diagnostic_query` and C4 `close`. It is a different client from our Haskell transport, which also runs `//transport:camera` on the body. Its `Session::open`, `Io` and `Backend` are crate-private, and its production backends provide USB/proxy access, not an emulator endpoint. The rehearsal therefore keeps Haskell orchestration, journals and receipts local. A public emulator-endpoint backend is an upstream contribution candidate, not a reason to replace the client under test.
 
-The bounded C/Unicorn native-case and recovery-bootstrap tools are separate execution contracts. `native-volatile` and `native-sd` should remain independent gates, not be silently replaced by full-system FujiMod passes. Replacing necessary C engine boundaries is outside this runtime decision. Neither engine has established physical lens/AF accuracy, coherent sensor-backed AF observations or complete silicon behavior; those are not retained features FujiMod has lost.
+The bounded native-case runner and the C/Unicorn recovery-bootstrap tools are separate execution contracts. `native-volatile` and `native-sd` should remain independent gates, not be silently replaced by full-system FujiMod passes. Replacing necessary C engine boundaries is outside this runtime decision. Neither engine has established physical lens/AF accuracy, coherent sensor-backed AF observations or complete silicon behavior; those are not retained features FujiMod has lost.
 
 ## Licence status
 

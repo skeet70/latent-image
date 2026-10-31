@@ -587,6 +587,9 @@ filegroup(
         "//host:FujiAF/ClassicChrome.hs",
         "//host:FujiAF/ClassicChromeRam.hs",
         "//menu:ram-push-relink-sources",
+        "//replacement/bank:bank",
+        "//replacement/bank:build-facts",
+        "//replacement/bank:relink-sources",
     ],
 )
 
@@ -658,6 +661,27 @@ haskell_test(
     ],
     ghcopts = _GHCOPTS,
     deps = _GATE_DEPS,
+)
+
+haskell_binary(
+    name = "ram-push-review-gate",
+    srcs = ["RamPushReviewGate.hs"],
+    ghcopts = _GHCOPTS,
+    deps = _GATE_DEPS,
+)
+
+haskell_test(
+    name = "ram-push-review-gate-tests",
+    srcs = ["RamPushReviewGateTest.hs"],
+    args = ["$(location :ram-push-review-gate)"],
+    data = [":ram-push-review-gate"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+    ],
 )
 
 haskell_test(

@@ -1,6 +1,5 @@
-//! Read-only classification of the recipe bank's menu pages and row tokens.
-//!
-//! No service calls and no non-stack stores.
+//! Read-only classification of the recipe bank's menu pages and row tokens; no
+//! service calls and no non-stack stores.
 
 pub const VERBS_PER_SLOT: u32 = 4;
 pub const BANK_SLOTS: u32 = 7;

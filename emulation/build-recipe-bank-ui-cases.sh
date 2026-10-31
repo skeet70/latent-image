@@ -3,7 +3,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-RB_BASE="${RB_BASE:-0x00be1f00}"
+# The bank image [RB_BASE, __rb_image_end) must end at or below the package
+# plan's name record RB_NAME_RECORD.
+RB_BASE="${RB_BASE:-0x00be0000}"
 RB_NAME_RECORD="${RB_NAME_RECORD:-0x00beb784u}"
 BUILD_DIR="${BUILD_DIR:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/ui-build}"
 OUT_DIR="${OUT_DIR:-private-data/analysis/x-m1-1.50/recipes/rc-complete-20261013/ui-cases}"
@@ -34,7 +36,7 @@ else
   OBJS=()
   for src in menu/recipe_bank_arm.S menu/recipe_bank_probe.c menu/recipe_bank_hook.c \
     menu/recipe_bank_storage.c menu/recipe_bank_actions.c menu/recipe_bank_edit.c \
-    replacement/service/rb_service_stock.S; do
+    replacement/service/rb_service_stock.S replacement/capture/rb_capture_stock.S; do
     obj="$BUILD_DIR/$(basename "${src%.*}").o"
     case "$src" in
       *.c) env $HARDEN clang "${ARM[@]}" "${FREESTANDING[@]}" -Oz -Wall -Wextra -I. \
@@ -51,8 +53,16 @@ else
   llvm-objcopy -j .text -O binary "$BUILD_DIR/kernel.elf" "$BUILD_DIR/kernel-text.bin"
   llvm-nm --defined-only --print-size --numeric-sort "$BUILD_DIR/kernel.elf" > "$BUILD_DIR/kernel.syms"
 fi
+RB_IMAGE_END="$(llvm-nm "$BUILD_DIR/kernel.elf" | awk '$3 == "__rb_image_end" {print $1}')"
+if (( 16#$RB_IMAGE_END > ${RB_NAME_RECORD%u} )); then
+  printf 'kernel image [%s, 0x%s) overlaps RB_NAME_RECORD %s\n' "$RB_BASE" "$RB_IMAGE_END" "${RB_NAME_RECORD%u}" >&2
+  exit 1
+fi
 llvm-readelf --symbols --wide "$BUILD_DIR/kernel.elf" > "$BUILD_DIR/kernel.symbols"
 sha256sum "$BUILD_DIR/kernel.bin"
+if [[ "${BUILD_ONLY:-0}" == 1 ]]; then
+  exit 0
+fi
 
 # Undefined references are read from the freshly compiled ABI model.
 env $HARDEN clang "${ARM[@]}" "${FREESTANDING[@]}" -Oz -Wall -Wextra \
@@ -65,8 +75,10 @@ while read -r sym; do
   if [ -z "$addr" ]; then echo "kernel symbol missing: $sym" >&2; exit 1; fi
   DEFSYMS+=("-Wl,--defsym=$sym=$addr")
 done < <(llvm-nm --undefined-only "$BUILD_DIR/model.o" | awk '{print $2}')
+# The media-only model's data span is the 0xe4 bytes after the original 0x200 media-state window at 0x00910140, a native-case mapping, not a camera reservation.
 env $HARDEN clang "${ARM[@]}" -nostdlib -static -fuse-ld=lld \
   -Wl,--no-dynamic-linker -Wl,--build-id=none \
+  -Wl,--defsym=rbm_data_base=0x00910340 -Wl,--defsym=rbm_data_limit=0x00910424 \
   -Wl,-T,emulation/recipe-bank-model.ld "${DEFSYMS[@]}" "$BUILD_DIR/model.o" \
   -o "$BUILD_DIR/model.elf"
 llvm-nm --defined-only --print-size --numeric-sort "$BUILD_DIR/model.elf" > "$BUILD_DIR/model.syms"
