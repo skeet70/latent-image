@@ -20,7 +20,7 @@ import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON, Object, Result (..), Value (..), fromJSON, object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import Data.Bits (bit, complement, shiftR, testBit, (.&.), (.|.))
+import Data.Bits (bit, complement, shiftR, testBit, (.&.))
 import qualified Data.ByteString as B
 import Data.Char (digitToInt)
 import Data.List (nub, sort, stripPrefix)
