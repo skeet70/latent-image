@@ -11,7 +11,7 @@ import qualified A32 as A
 import Control.Monad (forM, forM_, unless)
 import Data.Aeson (FromJSON (..), Value, object, withObject, withText, (.:), (.=))
 import qualified Data.Aeson as J
-import Data.Bits (shiftL, shiftR, (.&.), (.|.))
+import Data.Bits (shiftL, shiftR, testBit, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Data.List (sort)
@@ -20,6 +20,7 @@ import Data.Word (Word8, Word32, Word64)
 import qualified Emulation.LoaderPrefixWitness as P
 import Emulation.FirstStageWitness (Cpsr (..), leWordAt, sha256Hex)
 import qualified Emulation.PeerStageWitness as W
+import qualified Emulation.PollPeriod as K
 import FujiAF.ClassicChrome (stockFirmwareSha256)
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
@@ -32,13 +33,13 @@ data Role = Retained | Owned deriving (Eq, Show)
 
 newtype StackBytes = StackBytes Word32
 data ExpectedStore = ExpectedStore P.Guest Word32
-data Contract = Contract Role P.Contract P.Guest P.Span StackBytes F.Sha256 (Maybe F.Sha256) F.Sha256 [ExpectedStore]
+data Contract = Contract Role P.Contract P.Guest P.Span StackBytes F.Sha256 (Maybe F.Sha256) F.Sha256 CallerFramePremise [ExpectedStore]
 
 contractRole :: Contract -> Role
-contractRole (Contract role _ _ _ _ _ _ _ _) = role
+contractRole (Contract role _ _ _ _ _ _ _ _ _) = role
 
 contractSourceSha256 :: Contract -> F.Sha256
-contractSourceSha256 (Contract _ _ _ _ _ _ _ source _) = source
+contractSourceSha256 (Contract _ _ _ _ _ _ _ source _ _) = source
 
 require :: Bool -> String -> Either String ()
 require condition message = unless condition (Left message)
@@ -80,13 +81,70 @@ adapterExtent image symbols = do
   require (F.symbolSize adapter == 68 && observed == expected) "initializer adapter does not implement its admitted eight-byte frame and exact return ABI"
   pure 8
 
+data CallerFramePremise = CallerFramePremise
+  { callerStackTop :: P.Guest
+  , callerEntrySp :: P.Guest
+  , callerFramePointer :: P.Guest
+  }
+
+callerFramePremise :: B.ByteString -> Either String CallerFramePremise
+callerFramePremise loader = do
+  load <- A.decode 0xd00a8 <$> leWordAt loader 0xa8
+  literal <- case load of
+    A.Load (A.Cond 14) A.Word False (A.Reg 4) base (A.OffsetImmediate offset) A.OffsetOnly | base == A.pc ->
+      pure (0xb0 + toInteger offset)
+    _ -> Left "initializer caller stack literal load differs"
+  require (literal >= 0 && literal + 4 <= toInteger (B.length loader)) "initializer caller stack literal leaves loader B"
+  top <- leWordAt loader (fromInteger literal)
+  move <- A.decode 0xd00ac <$> leWordAt loader 0xac
+  push <- A.decode 0xd09ac <$> leWordAt loader 0x9ac
+  frame <- A.decode 0xd09b0 <$> leWordAt loader 0x9b0
+  require (case move of
+    A.DataProcessing (A.Cond 14) A.MOV False destination _ (A.ShiftedImmediate source A.LSL 0) ->
+      destination == A.sp && source == A.Reg 4
+    _ -> False) "initializer caller does not install its stack literal"
+  registers <- case push of
+    A.StoreMultiple (A.Cond 14) base A.DecrementBefore True registers
+      | base == A.sp && registers == [A.Reg 4,A.Reg 5,A.Reg 11,A.lr] -> pure registers
+    _ -> Left "initializer caller frame differs"
+  let bytes = 4 * fromIntegral (length registers)
+      entry = top - bytes
+  require (top >= 0x40000418 && top < 0x40100000 && top .&. 3 == 0) "initializer caller stack leaves its linear alias window"
+  require (case frame of
+    A.DataProcessing (A.Cond 14) A.ADD False (A.Reg 11) base (A.Immediate offset) ->
+      base == A.sp && offset + 4 == bytes
+    _ -> False) "initializer caller frame pointer differs"
+  pure (CallerFramePremise (P.Guest top) (P.Guest entry) (P.Guest (entry + bytes - 4)))
+
+physicalAlias :: Word32 -> Maybe Integer
+physicalAlias address
+  | address < 0x100000 = Just (toInteger address)
+  | address >= 0x40000000 && address < 0x40100000 = Just (toInteger address - 0x40000000)
+  | otherwise = Nothing
+
+data KnownWord = UnknownWord | KnownWord Word32 deriving (Eq, Ord)
+
+wordValue :: KnownWord -> Maybe Word32
+wordValue UnknownWord = Nothing
+wordValue (KnownWord value) = Just value
+
+knownWord :: Maybe Word32 -> KnownWord
+knownWord = maybe UnknownWord KnownWord
+
 -- Stack and return-slot offsets are relative to the Rust function's incoming SP.
--- Unmodeled stack-alias propagation and unresolved returns refuse staging.
 data StackState = StackState
   { stackAliases :: M.Map A.Reg Integer
   , incomingReturns :: Set.Set A.Reg
   , savedReturns :: Set.Set Integer
+  , scalarWords :: M.Map A.Reg KnownWord
+  , scalarFlags :: K.Flags
   } deriving (Eq)
+
+data ControlContext = ControlContext P.Guest (M.Map A.Reg KnownWord) K.Flags deriving (Eq, Ord)
+data BaseUpdate = BaseUpdate KnownWord (Maybe Integer)
+data AddressWrap = UnwrappedAddress | WrappedAddress deriving (Eq)
+data AddressPlan = AddressPlan KnownWord (Maybe Integer) (Maybe BaseUpdate) AddressWrap
+data StoreTarget = FrameStore Integer | PublicationStore
 
 operandRegisters :: A.Operand -> [A.Reg]
 operandRegisters operand = case operand of
@@ -98,43 +156,65 @@ offsetRegisters :: A.Offset -> [A.Reg]
 offsetRegisters (A.OffsetImmediate _) = []
 offsetRegisters (A.OffsetRegister _ register _ _) = [register]
 
-stackExtent :: B.ByteString -> [F.Symbol] -> Either String Word32
-stackExtent image symbols = do
+stackExtent :: CallerFramePremise -> StackBytes -> [ExpectedStore] -> B.ByteString -> [F.Symbol] -> Either String Word32
+stackExtent caller (StackBytes adapterBytes) stores image symbols = do
   origin <- at symbols "__secondary_stage_start"
   symbol <- F.lookupSymbol symbols "xm1_interface_initializer_publish"
+  let P.Guest callerSp = callerEntrySp caller
+      P.Guest stackTop = callerStackTop caller
+      incomingSp = callerSp - adapterBytes
+  incomingPhysical <- maybe (Left "initializer Rust stack lacks its physical alias") Right (physicalAlias incomingSp)
+  topPhysical <- maybe (Left "initializer caller stack lacks its physical alias") Right (physicalAlias stackTop)
+  publications <- Set.fromList <$> mapM (\(ExpectedStore (P.Guest guest) _) ->
+    maybe (Left "initializer publication lacks its physical alias") Right (physicalAlias guest)) stores
+  require (all (\address -> address .&. 3 == 0 && (address + 4 <= incomingPhysical - 0x400 || address >= topPhysical))
+    (Set.toList publications)) "initializer publication overlaps the Rust, adapter or caller stack"
   let start = F.symbolAddress symbol
       end = toInteger start + toInteger (F.symbolSize symbol)
-      word address = leWordAt image (fromIntegral address - fromIntegral origin)
+      code = K.CodeImage origin image
+      unknownFlags = K.Flags Nothing Nothing Nothing Nothing
       initial = StackState (M.singleton A.sp 0) (Set.singleton A.lr) Set.empty
-      walk [] _ deepest returns = do
+        (M.fromList [(A.Reg index, if index == 13 then KnownWord incomingSp else UnknownWord) | index <- [0..14]]) unknownFlags
+      setWord register value state = state {scalarWords = M.insert register (knownWord value) (scalarWords state)}
+      setSp offset state = setWord A.sp (Just (fromInteger (toInteger incomingSp + offset))) state
+      walk [] _ _ _ deepest returns = do
         require (returns > (0 :: Int)) "initializer Rust function has no admitted return"
         require (deepest <= 0x400) "initializer compiler stack exceeds the admitted workspace scratch budget"
         pure (fromInteger deepest)
-      walk ((pc, state):pending) visited deepest returns = do
+      walk ((pc, state):pending) visited aliasVisits steps deepest returns = do
+        require (steps < (100000 :: Int)) "initializer compiler proof exceeded 100000 value contexts"
         require (pc >= start && toInteger pc < end && pc .&. 3 == 0) "initializer branch leaves its function"
-        case M.lookup pc visited of
-          Nothing -> advance pc state pending visited deepest returns
+        case M.lookup pc aliasVisits of
+          Just previous -> require (previous == stackAliases state) "initializer compiler loop has inconsistent stack aliases"
+          Nothing -> pure ()
+        let context = ControlContext (P.Guest pc) (scalarWords state) (scalarFlags state)
+            aliasesSeen = M.insert pc (stackAliases state) aliasVisits
+        case M.lookup context visited of
+          Nothing -> advance pc context state pending visited aliasesSeen steps deepest returns
           Just previous -> do
-            require (stackAliases previous == stackAliases state) "initializer compiler loop has inconsistent stack aliases"
             let common = state
                   { incomingReturns = Set.intersection (incomingReturns previous) (incomingReturns state)
                   , savedReturns = Set.intersection (savedReturns previous) (savedReturns state)
                   }
             if common == previous
-              then walk pending visited deepest returns
-              else advance pc common pending visited deepest returns
-      advance pc state pending visited deepest returns = do
+              then walk pending visited aliasesSeen (steps + 1) deepest returns
+              else advance pc context common pending visited aliasesSeen steps deepest returns
+      advance pc context state pending visited aliasVisits steps deepest returns = do
         sp <- maybe (Left "initializer compiler SP is not statically derived") Right (M.lookup A.sp (stackAliases state))
         require (sp <= 0 && sp >= -0x400) "initializer compiler SP leaves its admitted frame budget"
         require (sp `mod` 4 == 0) "initializer compiler SP is not word aligned"
-        instruction <- A.decode pc <$> word pc
-        let aliases = stackAliases state
+        instructionWord <- maybe (Left "initializer instruction leaves its image") Right (K.imageWord code pc)
+        let instruction = A.decode pc instructionWord
+            aliases = stackAliases state
             returnRegisters = incomingReturns state
             slots = savedReturns state
+            flags = scalarFlags state
+            readWord register = if register == A.pc then Just (pc + 8) else M.lookup register (scalarWords state) >>= wordValue
             next updated = [(pc + 4, updated)]
             forget registers = state
               { stackAliases = foldr M.delete aliases registers
               , incomingReturns = Set.difference returnRegisters (Set.fromList registers)
+              , scalarWords = foldr (\register -> M.insert register UnknownWord) (scalarWords state) registers
               }
             returning condition proven updated = do
               require proven "initializer compiler indirect target is not its incoming return address"
@@ -146,24 +226,8 @@ stackExtent image symbols = do
                 "conditional compiler write leaves an unresolved stack alias"
               let updated = forget registers
               pure (next updated, updated, (0 :: Integer), False)
-            frameAddress base offset bytes = case M.lookup base aliases of
-              Nothing -> Right (Nothing, 0)
-              Just relative -> do
-                let low = relative + toInteger offset
-                require (low >= sp && low + bytes <= 0) "initializer compiler access leaves its allocated frame"
-                pure (Just low, negate low)
             clearSlots low bytes = Set.filter (\saved -> saved + 4 <= low || low + bytes <= saved)
             trimSlots newSp = Set.filter (>= newSp)
-            unresolvedStore = state {savedReturns = Set.empty}
-            storeReturn condition source location = case location of
-              Nothing -> unresolvedStore
-              Just low ->
-                let cleared = clearSlots low 4 slots
-                    updatedSlots =
-                      if condition == A.Cond 14 && Set.member source returnRegisters && low `mod` 4 == 0
-                        then Set.insert low cleared
-                        else cleared
-                 in state {savedReturns = updatedSlots}
             valueIsReturn operation source operand = case (operation, operand) of
               (A.MOV, A.ShiftedImmediate register A.LSL 0) -> Set.member register returnRegisters
               (A.ADD, A.Immediate 0) -> Set.member source returnRegisters
@@ -173,6 +237,60 @@ stackExtent image symbols = do
               let definite = known && (condition == A.Cond 14 || Set.member destination returnRegisters)
                   changed = if definite then Set.insert destination else Set.delete destination
                in updated {incomingReturns = changed (incomingReturns updated)}
+            operandValue operand = case operand of
+              A.Immediate value -> (Just value, if (instructionWord `shiftR` 8) .&. 0xf == 0 then K.flagC flags else Just (testBit value 31))
+              A.ShiftedImmediate register shift amount -> K.shiftImmediateKnown shift amount (readWord register) (K.flagC flags)
+              A.ShiftedRegister _ _ _ -> (Nothing, Nothing)
+            addressPlan base offset indexing = do
+              require (indexing == A.OffsetOnly || base /= A.pc) "initializer compiler writes back PC"
+              require (A.pc `notElem` offsetRegisters offset) "initializer compiler address uses PC as its register index"
+              require (all (`M.notMember` aliases) (offsetRegisters offset)) "initializer compiler address uses a stack-derived index"
+              let displacement = case offset of
+                    A.OffsetImmediate amount -> Just (toInteger amount)
+                    A.OffsetRegister up register shift amount ->
+                      (\value -> if up then toInteger value else negate (toInteger value))
+                        <$> fst (K.shiftImmediateKnown shift amount (readWord register) (K.flagC flags))
+                  raw = (+) <$> (toInteger <$> readWord base) <*> displacement
+                  effective = fromInteger <$> raw
+                  relative = (+) <$> M.lookup base aliases <*> displacement
+                  target = if indexing == A.PostIndexed then readWord base else effective
+                  location = if indexing == A.PostIndexed then M.lookup base aliases else relative
+                  update = if indexing == A.OffsetOnly then Nothing else Just (BaseUpdate (knownWord effective) relative)
+                  wrapped = if maybe False (\value -> value < 0 || value > 0xffffffff) raw then WrappedAddress else UnwrappedAddress
+              require (M.notMember base aliases || displacement /= Nothing) "initializer compiler frame index is unresolved"
+              pure (AddressPlan (knownWord target) location update wrapped)
+            writeback condition base plan updated = case plan of
+              AddressPlan _ _ Nothing _ -> pure updated
+              AddressPlan _ _ (Just (BaseUpdate value relative)) _ -> do
+                require (condition == A.Cond 14 || M.notMember base aliases) "initializer compiler conditional stack writeback"
+                require (base /= A.sp || (condition == A.Cond 14 && maybe False (\offset -> offset >= -0x400 && offset <= 0 && offset `mod` 4 == 0) relative))
+                  "initializer compiler SP writeback is unresolved or unbounded"
+                let changedAliases = if condition == A.Cond 14
+                      then maybe (M.delete base (stackAliases updated)) (\offset -> M.insert base offset (stackAliases updated)) relative
+                      else M.delete base (stackAliases updated)
+                    changed = updated
+                      { stackAliases = changedAliases
+                      , incomingReturns = Set.delete base (incomingReturns updated)
+                      , scalarWords = M.insert base (if condition == A.Cond 14 then value else UnknownWord) (scalarWords updated)
+                      }
+                pure (if base == A.sp then changed {savedReturns = maybe Set.empty (\offset -> trimSlots offset (savedReturns changed)) relative} else changed)
+            frameLocation allocation bytes (AddressPlan value relative _ _) = case relative of
+              Just low -> do
+                require (low >= allocation && low + bytes <= 0) "initializer compiler access leaves its allocated frame"
+                pure (Just low)
+              Nothing -> pure $ do
+                physical <- wordValue value >>= physicalAlias
+                let low = physical - incomingPhysical
+                if low >= allocation && low + bytes <= 0 then Just low else Nothing
+            storeTarget allocation plan@(AddressPlan value _ _ wrapped) = do
+              require (wrapped == UnwrappedAddress) "initializer compiler store address wraps"
+              location <- frameLocation allocation 4 plan
+              case location of
+                Just low -> pure (FrameStore low)
+                Nothing -> do
+                  physical <- maybe (Left "initializer compiler store address is unproved") Right (wordValue value >>= physicalAlias)
+                  require (Set.member physical publications) "initializer compiler store leaves its Rust frame and publication words"
+                  pure PublicationStore
         (successors, updated, used, returned) <- case instruction of
           A.StoreMultiple (A.Cond 14) base A.DecrementBefore True registers | base == A.sp -> do
             require (not (null registers) && A.sp `notElem` registers && A.pc `notElem` registers) "initializer compiler push has unadmitted registers"
@@ -180,18 +298,19 @@ stackExtent image symbols = do
             let bytes = 4 * toInteger (length registers)
                 low = sp - bytes
                 saved = Set.fromList [offset | (register,offset) <- zip registers [low,low + 4..], Set.member register returnRegisters]
-                changed = state
+                changed = setSp low state
                   { stackAliases = M.insert A.sp low aliases
                   , savedReturns = Set.union saved (clearSlots low bytes slots)
                   }
-            pure (next changed, changed, 0, False)
+            require (low >= -0x400) "initializer compiler push exceeds its Rust frame"
+            pure (next changed, changed, negate low, False)
           A.LoadMultiple (A.Cond 14) base A.IncrementAfter True registers | base == A.sp -> do
             require (not (null registers) && A.sp `notElem` registers) "initializer compiler pop has unadmitted registers"
             let newSp = sp + 4 * toInteger (length registers)
                 restored = [(register,Set.member offset slots) | (register,offset) <- zip registers [sp,sp + 4..]]
                 loaded = Set.fromList [register | (register,True) <- restored, register /= A.pc]
                 forgotten = forget registers
-                changed = forgotten
+                changed = setSp newSp forgotten
                   { stackAliases = M.insert A.sp newSp (stackAliases forgotten)
                   , incomingReturns = Set.union loaded (incomingReturns forgotten)
                   , savedReturns = trimSlots newSp slots
@@ -200,85 +319,124 @@ stackExtent image symbols = do
             if A.pc `elem` registers
               then returning (A.Cond 14) (lookup A.pc restored == Just True) changed
               else pure (next changed, changed, 0, False)
-          A.DataProcessing condition operation flags destination source operand
-            | operation `elem` [A.CMP, A.CMN, A.TST, A.TEQ] -> pure (next state, state, 0, False)
-            | destination == A.pc -> do
-                require (not flags) "initializer compiler return writes CPSR"
-                returning condition (valueIsReturn operation source operand) state
-            | condition == A.Cond 14 -> do
-                let inputs = operandRegisters operand ++ [source | operation `notElem` [A.MOV, A.MVN]]
-                    value = case (operation, operand) of
-                      (A.MOV, A.ShiftedImmediate register A.LSL 0) -> M.lookup register aliases
-                      (A.ADD, A.Immediate amount) -> (+ toInteger amount) <$> M.lookup source aliases
-                      (A.SUB, A.Immediate amount) -> subtract (toInteger amount) <$> M.lookup source aliases
-                      _ -> Nothing
-                require (all (`M.notMember` aliases) inputs || maybe False (const True) value)
-                  "unadmitted compiler stack-derived computation"
-                require (destination /= A.sp || maybe False (<= 0) value) "unadmitted compiler SP computation"
-                let changedAliases = maybe (M.delete destination aliases) (\offset -> M.insert destination offset aliases) value
-                    changed = assignReturn condition destination (valueIsReturn operation source operand)
-                      (state {stackAliases = changedAliases})
-                    bounded = case M.lookup A.sp changedAliases of
-                      Just newSp -> changed {savedReturns = trimSlots newSp slots}
-                      Nothing -> changed
-                pure (next bounded, bounded, 0, False)
-            | otherwise -> do
-                let inputs = operandRegisters operand ++ [source | operation `notElem` [A.MOV, A.MVN]]
-                require (all (`M.notMember` aliases) inputs) "conditional compiler computation propagates a stack alias"
-                (following, changed, used, returned) <- regular condition [destination]
-                let restored = assignReturn condition destination (valueIsReturn operation source operand) changed
-                pure (map (\(address,_) -> (address,restored)) following, restored, used, returned)
-          A.MoveWide condition register _ -> regular condition [register]
-          A.MoveTop condition register _ -> do
+          A.DataProcessing condition operation writesFlags destination source operand -> do
+            let (operand2, carry) = operandValue operand
+                (result, calculatedFlags) = K.alu operation (readWord source) operand2 carry flags
+                updateFlags changed = if writesFlags
+                  then changed {scalarFlags = if condition == A.Cond 14 then calculatedFlags else unknownFlags}
+                  else changed
+                updateScalar changed = updateFlags (setWord destination (if condition == A.Cond 14 then result else Nothing) changed)
+            if operation `elem` [A.CMP, A.CMN, A.TST, A.TEQ]
+              then let changed = updateFlags state in pure (next changed, changed, 0, False)
+              else if destination == A.pc
+                then do
+                  require (not writesFlags) "initializer compiler return writes CPSR"
+                  returning condition (valueIsReturn operation source operand) state
+                else if condition == A.Cond 14
+                  then do
+                    let inputs = operandRegisters operand ++ [source | operation `notElem` [A.MOV, A.MVN]]
+                        value = case (operation, operand) of
+                          (A.MOV, A.ShiftedImmediate register A.LSL 0) -> M.lookup register aliases
+                          (A.ADD, A.Immediate amount) -> (+ toInteger amount) <$> M.lookup source aliases
+                          (A.SUB, A.Immediate amount) -> subtract (toInteger amount) <$> M.lookup source aliases
+                          _ -> Nothing
+                    require (all (`M.notMember` aliases) inputs || value /= Nothing) "unadmitted compiler stack-derived computation"
+                    require (destination /= A.sp || maybe False (<= 0) value) "unadmitted compiler SP computation"
+                    let changedAliases = maybe (M.delete destination aliases) (\offset -> M.insert destination offset aliases) value
+                        changed = updateScalar (assignReturn condition destination (valueIsReturn operation source operand)
+                          (state {stackAliases = changedAliases}))
+                        bounded = case M.lookup A.sp changedAliases of
+                          Just newSp -> changed {savedReturns = trimSlots newSp slots}
+                          Nothing -> changed
+                    pure (next bounded, bounded, 0, False)
+                  else do
+                    let inputs = operandRegisters operand ++ [source | operation `notElem` [A.MOV, A.MVN]]
+                    require (all (`M.notMember` aliases) inputs) "conditional compiler computation propagates a stack alias"
+                    (_, changed, _, _) <- regular condition [destination]
+                    let restored = updateScalar (assignReturn condition destination (valueIsReturn operation source operand) changed)
+                    pure (next restored, restored, 0, False)
+          A.MoveWide condition register value -> do
+            (_, changed, _, _) <- regular condition [register]
+            let scalar = setWord register (if condition == A.Cond 14 then Just value else Nothing) changed
+            pure (next scalar, scalar, 0, False)
+          A.MoveTop condition register value -> do
             require (M.notMember register aliases) "initializer compiler MOVT transforms a stack alias"
-            regular condition [register]
+            (_, changed, _, _) <- regular condition [register]
+            let result = (\low -> (low .&. 0xffff) .|. (value `shiftL` 16)) <$> readWord register
+                scalar = setWord register (if condition == A.Cond 14 then result else Nothing) changed
+            pure (next scalar, scalar, 0, False)
           A.ZeroExtend condition register source _ _ -> do
+            require (source /= A.pc) "initializer compiler extension reads PC"
             require (M.notMember source aliases) "initializer compiler extension transforms a stack alias"
             regular condition [register]
           A.Multiply condition register left right accumulator -> do
-            require (all (`M.notMember` aliases) ([left,right] ++ maybe [] pure accumulator))
-              "initializer compiler multiply transforms a stack alias"
-            regular condition [register]
-          A.Load condition width _ destination base (A.OffsetImmediate offset) A.OffsetOnly -> do
+            require (A.pc `notElem` ([left,right] ++ maybe [] pure accumulator)) "initializer compiler multiply reads PC"
+            require (all (`M.notMember` aliases) ([left,right] ++ maybe [] pure accumulator)) "initializer compiler multiply transforms a stack alias"
+            (_, changed, _, _) <- regular condition [register]
+            let productValue = (*) <$> readWord left <*> readWord right
+                result = maybe productValue (\acc -> (+) <$> productValue <*> readWord acc) accumulator
+                scalar = setWord register (if condition == A.Cond 14 then result else Nothing) changed
+            pure (next scalar, scalar, 0, False)
+          A.Load condition width signed destination base offset indexing -> do
             let bytes = case width of A.Byte -> 1; A.Half -> 2; A.Word -> 4; A.Dual -> 8
                 registers = case (width, destination) of (A.Dual, A.Reg index) -> [destination,A.Reg (index + 1)]; _ -> [destination]
-            (location, used) <- frameAddress base offset bytes
+            require (case (width,destination) of
+              (A.Dual,A.Reg index) -> even index && index <= 12
+              _ -> True) "initializer compiler dual load has an unpredictable register pair"
+            require (indexing == A.OffsetOnly || base `notElem` registers) "initializer compiler load writeback overlaps its destination"
+            plan <- addressPlan base offset indexing
+            changedBase <- writeback condition base plan state
+            let allocation = if indexing == A.PreIndexed then maybe sp id (M.lookup A.sp (stackAliases changedBase)) else sp
+            location <- frameLocation allocation bytes plan
             let loaded index = case location of
                   Just low | width `elem` [A.Word,A.Dual] -> Set.member (low + 4 * index) slots
                   _ -> False
             if A.pc `elem` registers
               then do
-                require (width == A.Word) "initializer compiler wide load writes PC"
-                (following, changed, _, returned) <- returning condition (loaded 0) state
-                pure (following, changed, used, returned)
+                require (width == A.Word && indexing == A.OffsetOnly) "initializer compiler load return has unadmitted width or writeback"
+                returning condition (loaded 0) state
               else do
-                (_, changed, _, returned) <- regular condition registers
+                (_, forgotten, _, _) <- regular condition registers
                 let restored = foldl (\current (register,index) -> assignReturn condition register (loaded index) current)
-                      changed (zip registers [0..])
-                pure (next restored, restored, used, returned)
-          A.Store condition A.Word source base (A.OffsetImmediate offset) A.OffsetOnly -> do
+                      forgotten (zip registers [0..])
+                    literal = case plan of
+                      AddressPlan value _ _ _ | base == A.pc && width == A.Word && not signed && indexing == A.OffsetOnly ->
+                        wordValue value >>= K.imageWord code
+                      _ -> Nothing
+                    scalar = setWord destination (if condition == A.Cond 14 then literal else Nothing) restored
+                final <- writeback condition base plan scalar
+                pure (next final, final, maybe 0 negate location, False)
+          A.Store condition A.Word source base offset indexing -> do
             require (M.notMember source aliases) "initializer compiler store spills a stack alias"
-            (location, used) <- frameAddress base offset 4
-            let changed = storeReturn condition source location
-            pure (next changed, changed, used, False)
-          A.Load condition width _ destination base offset indexing -> do
-            require (all (`M.notMember` aliases) (base : offsetRegisters offset) && indexing == A.OffsetOnly)
-              "unadmitted indexed compiler frame load"
-            regular condition (case (width, destination) of (A.Dual, A.Reg index) -> [destination,A.Reg (index + 1)]; _ -> [destination])
-          A.Store _ A.Word source base offset indexing -> do
-            require (M.notMember source aliases) "initializer compiler store spills a stack alias"
-            require (all (`M.notMember` aliases) (base : offsetRegisters offset) && indexing == A.OffsetOnly)
-              "unadmitted indexed compiler frame store"
-            pure (next unresolvedStore, unresolvedStore, 0, False)
-          A.Branch condition False target -> pure
-            ((target, state) : [(pc + 4, state) | condition /= A.Cond 14], state, 0, False)
+            require (indexing == A.OffsetOnly || source /= base) "initializer compiler store writeback overlaps its source"
+            plan <- addressPlan base offset indexing
+            changedBase <- writeback condition base plan state
+            let allocation = if indexing == A.PreIndexed then maybe sp id (M.lookup A.sp (stackAliases changedBase)) else sp
+            target <- storeTarget allocation plan
+            let storeState = case target of
+                  PublicationStore -> state
+                  FrameStore low ->
+                    let cleared = clearSlots low 4 slots
+                        updatedSlots = if condition == A.Cond 14 && Set.member source returnRegisters && low `mod` 4 == 0
+                          then Set.insert low cleared else cleared
+                     in state {savedReturns = updatedSlots}
+                usedFrame = case target of FrameStore low -> negate low; PublicationStore -> 0
+            final <- writeback condition base plan storeState
+            pure (next final, final, usedFrame, False)
+          A.Branch condition False target ->
+            let successors = case K.holds flags condition of
+                  Just True -> [(target,state)]
+                  Just False -> next state
+                  Nothing -> (target,state) : next state
+             in pure (successors, state, 0, False)
           A.BranchExchange condition False register -> returning condition (Set.member register returnRegisters) state
           A.Hint _ -> pure (next state, state, 0, False)
           _ -> Left "initializer Rust code has an unadmitted instruction, call or stack effect"
         let usedSp = maybe 0 negate (M.lookup A.sp (stackAliases updated))
-        walk (successors ++ pending) (M.insert pc state visited) (maximum [deepest, used, usedSp]) (returns + if returned then 1 else 0)
+        walk (successors ++ pending) (M.insert context state visited) aliasVisits (steps + 1)
+          (maximum [deepest, used, usedSp]) (returns + if returned then 1 else 0)
   require (F.symbolSize symbol > 0 && end <= toInteger origin + toInteger (B.length image)) "initializer Rust symbol leaves the image"
-  walk [(start, initial)] M.empty 0 0
+  walk [(start, initial)] M.empty M.empty 0 0 0
 
 parseOriginalSource :: B.ByteString -> Either String S.OriginalStartupDat
 parseOriginalSource bytes = do
@@ -296,6 +454,8 @@ deriveContract role reference staged image symbolBytes = do
   let loader = P.stagedLoader images
   require (sha256Hex (B.take 0x57c (B.drop 0x430 loader)) == "60aeb6c0c68717940fef3771f3387540a2c87276d7c947a9f3d276dd51fe850d")
     "retained initializer body differs from the pinned DAT bytes"
+  caller <- callerFramePremise loader
+  stores <- originalStores loader
   (facts, entry, rustStart, rustEnd, scratch) <- case role of
     Retained -> do
       require (B.null image && B.null symbolBytes) "retained initializer refuses owned artifact inputs"
@@ -314,17 +474,16 @@ deriveContract role reference staged image symbolBytes = do
       adapter <- at symbols "xm1_interface_initializer_entry"
       rust <- F.lookupSymbol symbols "xm1_interface_initializer_publish"
       adapterStack <- adapterExtent image symbols
-      compilerStack <- stackExtent image symbols
+      compilerStack <- stackExtent caller (StackBytes adapterStack) stores image symbols
       pure (facts, adapter, F.symbolAddress rust, F.symbolAddress rust + F.symbolSize rust, compilerStack + adapterStack)
   imageDigest <- F.parseSha256 (sha256Hex (if role == Retained then B.take 0x57c (B.drop 0x430 loader) else image))
-  stores <- originalStores loader
   symbolsDigest <- if role == Retained then pure Nothing else Just <$> F.parseSha256 (sha256Hex symbolBytes)
   pure (Contract role (P.Contract P.Natural (P.Program (if role == Owned then P.OwnedProgram else P.RetainedProgram) facts))
     (P.Guest entry) (P.Span (fromIntegral rustStart) (fromIntegral rustEnd)) (StackBytes scratch)
-    imageDigest symbolsDigest (S.originalStartupDigest original) stores)
+    imageDigest symbolsDigest (S.originalStartupDigest original) caller stores)
 
 contractValue :: Contract -> Value
-contractValue (Contract role prefix (P.Guest entry) (P.Span rustStart rustEnd) (StackBytes scratch) imageDigest symbolsDigest source _) = object
+contractValue (Contract role prefix (P.Guest entry) (P.Span rustStart rustEnd) (StackBytes scratch) imageDigest symbolsDigest source _ _) = object
   [ "schema" .= (6 :: Int), "prefix" .= P.contractValue prefix
   , "initializer" .= object
       [ "role" .= (if role == Owned then "owned" else "retained" :: String)
@@ -513,7 +672,7 @@ data ValidatedInitializer = ValidatedInitializer
   }
 
 validateReceiptEvidence :: Contract -> B.ByteString -> Either String ValidatedInitializer
-validateReceiptEvidence (Contract role prefix (P.Guest entry) (P.Span rustStart rustEnd) (StackBytes scratch) imageDigest symbolsDigest source stores) bytes = do
+validateReceiptEvidence (Contract role prefix (P.Guest entry) (P.Span rustStart rustEnd) (StackBytes scratch) imageDigest symbolsDigest source caller stores) bytes = do
   require (B.length bytes <= 16 * 1024 * 1024) "initializer receipt exceeds 16 MiB"
   verifiedPrefix <- P.parseReceipt P.InitializerBoundary bytes >>= P.validateReceipt prefix
   P.PrefixExitContext prefixRegisters prefixSp prefixLr (Cpsr prefixCpsr) (prefixCount0,prefixCount1)
@@ -530,9 +689,13 @@ validateReceiptEvidence (Contract role prefix (P.Guest entry) (P.Span rustStart 
       Context incomingPc incoming sp _ cpsr counts tcm = before
       Context enteringPc entering enteringSp enteringLr enteringCpsr enteringCounts enteringTcm = entered
       Context outgoingPc outgoing outgoingSp outgoingLr outgoingCpsr outgoingCounts outgoingTcm = after
+      P.Guest expectedSp = callerEntrySp caller
+      P.Guest expectedFrame = callerFramePointer caller
+      P.Guest expectedTop = callerStackTop caller
       views (Views virtual physical) = do
         require (virtual == physical) "initializer committed virtual/physical readback differs"
         pure (B.pack physical)
+  stackPhysical <- maybe (Left "initializer entry stack lacks its physical alias") (Right . fromInteger) (physicalAlias expectedSp)
   require (before == Context 0xd0aac (W.registerWords prefixRegisters) prefixSp prefixLr prefixCpsr [prefixCount0,prefixCount1]
     [[prefixAtcm0,prefixBtcm0],[prefixAtcm1,prefixBtcm1]]
     && frameBefore == Views (B.unpack prefixVirtual) (B.unpack prefixPhysical))
@@ -541,7 +704,7 @@ validateReceiptEvidence (Contract role prefix (P.Guest entry) (P.Span rustStart 
   require (observedRole == role && observedEntry == entry && rust == map fromIntegral [rustStart,rustEnd]
     && observedScratch == scratch && observedSource == source && observedImage == imageDigest && observedSymbols == symbolsDigest && body == expectedBody)
     "initializer receipt differs from its source-bound contract"
-  require (length incoming == 13 && length outgoing == 13 && incomingPc == 0xd0aac && sp == 0x400f3410 && incoming !! 11 == 0x400f341c
+  require (length incoming == 13 && length outgoing == 13 && incomingPc == 0xd0aac && sp == expectedSp && incoming !! 11 == expectedFrame
     && incoming !! 4 == 0x69cdf8 && cpsr .&. 0x010002ff == 0xd3) "initializer incoming frame or mode differs"
   require (enteringPc == entry && entering == incoming && enteringSp == sp && enteringLr == 0xd0ab0 && enteringCpsr == cpsr && enteringTcm == tcm)
     "initializer BL changed registers, SP, CPSR or TCM"
@@ -555,7 +718,7 @@ validateReceiptEvidence (Contract role prefix (P.Guest entry) (P.Span rustStart 
   require (length tcm == 2 && all ((== 2) . length) tcm) "initializer TCM context is absent"
   frame <- views frameBefore
   _ <- views frameAfter
-  require (frameBefore == frameAfter && B.length frame == 16 && leWordAt frame 0 == Right 0x400f3420
+  require (frameBefore == frameAfter && B.length frame == 16 && leWordAt frame 0 == Right expectedTop
     && leWordAt frame 4 == Right 0x69cdf8 && leWordAt frame 12 == Right 0xd00c0) "initializer caller frame changed"
   prestate <- views tableBefore
   committed <- views tableAfter
@@ -568,6 +731,14 @@ validateReceiptEvidence (Contract role prefix (P.Guest entry) (P.Span rustStart 
     , TcmSnapshot 1 <$> bankSnapshot prefixAtcm1 <*> bankSnapshot prefixBtcm1
     ]
   require (sort snapshots == sort expectedTcm) "initializer watch TCM scope differs from the validated prefix context"
+  let linearWindows = [Window (alias + low,alias + high) | alias <- [0,0x40000000], (low,high) <- [(0x10000,0x14c80),(0xd0000,0xddaa0),(0xddaa0,0xf3420)]]
+      disjoint (Window (low,high)) (Window (otherLow,otherHigh)) = high <= otherLow || otherHigh <= low
+  if role == Owned
+    then forM_ expectedTcm $ \(TcmSnapshot _ atcm btcm) ->
+      forM_ [atcm,btcm] $ \(BankSnapshot _ window) ->
+        forM_ window $ \active -> require (all (disjoint active) linearWindows)
+          "initializer TCM remaps a code, publication or stack alias"
+    else pure ()
   let physical low high = PhysicalSpan [low,high]
       writes = [CpuWrite,HostWrite,ModelBusWrite]
       expectedClasses =
@@ -581,7 +752,7 @@ validateReceiptEvidence (Contract role prefix (P.Guest entry) (P.Span rustStart 
         Rule cores kind mode spans [snapshot | snapshot@(TcmSnapshot core _ _) <- expectedTcm, core `elem` cores]
       readSpans = [physical 0xddaa0 0xdf0cc] ++ if role == Owned then [physical 0xd0430 0xd09ac,physical 0xd00c8 0xd00fc] else []
       expectedRules =
-        [ rule [1] CpuWrite Allow [physical 0xddaa0 0xdf0cc, physical (0xf3410 - fromIntegral scratch) 0xf3410]
+        [ rule [1] CpuWrite Allow [physical 0xddaa0 0xdf0cc, physical (stackPhysical - fromIntegral scratch) stackPhysical]
         , rule [0] CpuWrite Forbid [physical 0xddaa0 0xf3420,physical 0x10000 0x14c80,physical 0xd0000 0xddaa0]
         ]
           ++ [rule [1] CpuFetch Forbid (map (uncurry physical) [(0xd0430,0xd09ac),(0xd0020,0xd00c8),(0xd09ac,0xd09d0),(0xd0a44,0xd0a64)]) | role == Owned]

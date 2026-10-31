@@ -569,6 +569,7 @@ haskell_library(
         ":first-stage-witness-lib",
         ":loader-prefix-witness-lib",
         ":peer-stage-witness-lib",
+        ":poll-period-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
