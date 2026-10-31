@@ -4,7 +4,7 @@
 
 You write a feature as an **experiment**: a small Rust or C program in `experiments/<name>/`, plus a `hooks.json` naming the stock firmware functions it should run in front of. The tools link it into 32 KiB of camera RAM and redirect those functions through it. You try it in the emulator, then push it to your camera over USB. Nothing is written to the camera's flash, and taking the battery out removes it.
 
-You combine the project's code with Fujifilm's official firmware, which you download yourself. Run every command from your checkout inside `devenv shell`. Everything you generate goes under the ignored `private-data/`; keep it out of issues and pull requests.
+You combine the project's code with Fujifilm's official firmware, which you download yourself. Work in a fork and run every command from your checkout inside `devenv shell`. Firmware decodes, camera captures and run output land in the ignored `private-data/`. Pull requests with your experiments and fixes are welcome; [the principles](principles.md#publication-and-asset-boundaries) say what belongs in the repository and what stays private.
 
 ## 1. Set up once
 
