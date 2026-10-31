@@ -510,6 +510,75 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "loader-prefix-receipt-fixtures",
+    testonly = True,
+    srcs = ["Emulation/LoaderPrefixReceiptFixtures.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":loader-prefix-witness-lib",
+        ":peer-startup-witness-lib",
+        ":poll-period-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:completion-control",
+        "//host:first-stage",
+        "//host:vector",
+    ],
+)
+
+haskell_library(
+    name = "loader-prefix-artifact-checks",
+    testonly = True,
+    srcs = ["Emulation/LoaderPrefixArtifactChecks.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":loader-prefix-receipt-fixtures",
+        ":loader-prefix-witness-lib",
+        ":poll-period-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:update-container",
+        "//host/firmware:startup-stage-contract",
+    ],
+)
+
+haskell_test(
+    name = "loader-prefix-receipt-tests",
+    size = "small",
+    srcs = ["LoaderPrefixReceiptTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":loader-prefix-receipt-fixtures",
+        "//host:base",
+    ],
+)
+
+haskell_test(
+    name = "loader-prefix-positive-artifact-tests",
+    size = "small",
+    srcs = ["LoaderPrefixPositiveArtifactTests.hs"],
+    args = [
+        "$(location //replacement/loader_prefix:loader-prefix-image.bin)",
+        "$(location //replacement/loader_prefix:loader-prefix-image.symbols)",
+    ],
+    data = [
+        "//replacement/loader_prefix:loader-prefix-image.bin",
+        "//replacement/loader_prefix:loader-prefix-image.symbols",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":loader-prefix-artifact-checks",
+        "//host:base",
+        "//host:bytestring",
+        "//host:update-container",
+    ],
+)
+
 haskell_test(
     name = "loader-prefix-witness-tests",
     size = "small",
@@ -528,19 +597,11 @@ haskell_test(
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
-        ":first-stage-witness-lib",
-        ":loader-prefix-witness-lib",
-        ":peer-stage-witness-lib",
-        ":peer-startup-witness-lib",
-        ":poll-period-lib",
-        "//host:aeson",
+        ":loader-prefix-artifact-checks",
+        ":loader-prefix-receipt-fixtures",
         "//host:base",
         "//host:bytestring",
-        "//host:completion-control",
-        "//host:first-stage",
-        "//host:vector",
         "//host:update-container",
-        "//host/firmware:startup-stage-contract",
     ],
 )
 
