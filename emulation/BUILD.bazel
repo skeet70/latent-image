@@ -496,6 +496,8 @@ haskell_test(
         "$(location //replacement/secondary_stage:secondary-stage-publication-fault-image.symbols)",
         "$(location //replacement/secondary_stage:secondary-stage-stack-fault-image.bin)",
         "$(location //replacement/secondary_stage:secondary-stage-stack-fault-image.symbols)",
+        "$(location //replacement/secondary_stage:secondary-stage-forbidden-fetch-fault-image.bin)",
+        "$(location //replacement/secondary_stage:secondary-stage-forbidden-fetch-fault-image.symbols)",
     ],
     data = [
         "//replacement/secondary_stage:secondary-stage-image.bin",
@@ -504,6 +506,8 @@ haskell_test(
         "//replacement/secondary_stage:secondary-stage-publication-fault-image.symbols",
         "//replacement/secondary_stage:secondary-stage-stack-fault-image.bin",
         "//replacement/secondary_stage:secondary-stage-stack-fault-image.symbols",
+        "//replacement/secondary_stage:secondary-stage-forbidden-fetch-fault-image.bin",
+        "//replacement/secondary_stage:secondary-stage-forbidden-fetch-fault-image.symbols",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [

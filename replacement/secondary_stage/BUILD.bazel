@@ -47,3 +47,13 @@ xm1_rust_elf(
     link_script = "secondary-stage.ld",
     rust_staticlib = ":secondary-stage-rust",
 )
+
+xm1_rust_elf(
+    name = "secondary-stage-forbidden-fetch-fault-image",
+    testonly = True,
+    asm_defines = ["XM1_SECONDARY_FORBIDDEN_FETCH_FAULT"],
+    asm_srcs = ["entry.S"],
+    entry = "xm1_secondary_entry",
+    link_script = "secondary-stage.ld",
+    rust_staticlib = ":secondary-stage-rust",
+)

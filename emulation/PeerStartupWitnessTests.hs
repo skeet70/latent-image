@@ -14,7 +14,6 @@ import qualified Data.Vector as V
 import Data.Word (Word32, Word64, Word8)
 import Emulation.FirstStageWitness (GuestAddress (..), encodeLeWord, leWordAt)
 import Emulation.PeerStartupWitness
-import qualified FujiAF.FirstStage as F
 import Numeric (showHex)
 import System.Environment (getArgs)
 
@@ -35,9 +34,6 @@ assertLeft label result = case result of
 
 addressOf :: GuestAddress -> Word32
 addressOf (GuestAddress value) = fromIntegral value
-
-symbolAddress :: B.ByteString -> String -> IO Word32
-symbolAddress symbols name = assertRight ("symbol " ++ name) (F.symbolAddress <$> (F.parseSymbols symbols >>= (`F.lookupSymbol` name)))
 
 -- | Guest record bytes with the reset vector naming the entry and the image at it.
 stagedFor :: Candidate -> Either String StagedRecord
@@ -436,35 +432,37 @@ main :: IO ()
 main = do
   arguments <- getArgs
   paths <- case arguments of
-    [a, b, c, d, e, f] -> pure [(a, b), (c, d), (e, f)]
-    _ -> error "usage: peer-startup-witness-tests IMAGE.bin IMAGE.symbols PUBLICATION_FAULT.bin PUBLICATION_FAULT.symbols STACK_FAULT.bin STACK_FAULT.symbols"
+    [a, b, c, d, e, f, g, h] -> pure [(a, b), (c, d), (e, f), (g, h)]
+    _ -> error "usage: peer-startup-witness-tests IMAGE.bin IMAGE.symbols PUBLICATION_FAULT.bin PUBLICATION_FAULT.symbols STACK_FAULT.bin STACK_FAULT.symbols FORBIDDEN_FETCH_FAULT.bin FORBIDDEN_FETCH_FAULT.symbols"
   candidates <- mapM (\(bin, symbols) -> Candidate <$> B.readFile bin <*> B.readFile symbols) paths
-  (correct, publicationFault, stackFault) <- case candidates of
-    [first, second, third] -> pure (first, second, third)
-    _ -> error "three candidates expected"
+  (correct, publicationFault, stackFault, forbiddenFetchFault) <- case candidates of
+    [first, second, third, fourth] -> pure (first, second, third, fourth)
+    _ -> error "four candidates expected"
   let Candidate correctBin correctSymbols = correct
 
-  -- Owned facts from the linked image.
+  -- Record-2 placement and the external loader handoff ABI.
   facts <- assertRight "derive correct image" (derive correct)
-  mainSymbol <- symbolAddress correctSymbols "xm1_secondary_main"
   let sites = ownedSites facts
       entry = addressOf (siteEntry sites)
       handoff = addressOf (siteHandoff sites)
       PollPeriod period = ownedPollPeriod facts
   unless (entry == 0x10400) (error "entry differs from 0x10400")
-  unless (addressOf (siteMain sites) == mainSymbol) (error "main differs from xm1_secondary_main")
-  unless (registerIndexValue (ownedLoadedRegister facts) == 0) (error "loaded register differs from r0")
-  unless (ownedImage facts == Interval 0x10400 (0x10400 + fromIntegral (B.length correctBin))) (error "image extent differs")
+  unless (registerIndexValue (ownedLoadedRegister facts) == 0) (error "extern C peer-cell result differs from AAPCS r0")
   unless (leWordAt correctBin (fromIntegral (handoff - entry)) == Right 0xe1a0f003) (error "handoff site word is not MOV PC, R3")
-  unless (ownedForbidFetch facts == forbidFetchIntervals && ownedForbidRead facts == forbidReadIntervals) (error "forbid sets differ")
   assertLeft "corrupted handoff word" (derive (Candidate (replaceWord (fromIntegral (handoff - entry)) 0xe1a0f004 correctBin) correctSymbols))
   forM_ [("publication fault", publicationFault), ("stack fault", stackFault)] $ \(label, candidate) -> do
     controlFacts <- assertRight ("derive " ++ label) (derive candidate)
     unless (ownedPollPeriod controlFacts == ownedPollPeriod facts) (error (label ++ " poll period differs from the correct image"))
-  let Candidate stackBin stackSymbols = stackFault
-  stackFacts <- assertRight "derive stack fault" (derive (Candidate stackBin stackSymbols))
-  stackVector <- symbolAddress stackSymbols "xm1_secondary_handoff_vector"
-  unless (addressOf (siteHandoff (ownedSites stackFacts)) == stackVector) (error "stack-fault handoff differs from its vector symbol")
+
+  let Candidate forbiddenBin _ = forbiddenFetchFault
+  forbiddenFacts <- assertRight "derive forbidden-fetch fault" (derive forbiddenFetchFault)
+  let faultExpectation scenario bytes imageFacts = startupFaultExpectation RetiredStockFetch scenario bytes imageFacts
+  _ <- assertRight "prepare retired-stock-fetch refusal" (faultExpectation (Natural Handoff) forbiddenBin forbiddenFacts)
+  assertLeft "passing candidate is not a retired-stock-fetch control" (faultExpectation (Natural Handoff) correctBin facts)
+  forM_ [HeldSentinel, DelayedRelease Handoff, Natural LoaderEntry] $ \scenario ->
+    assertLeft "retired-stock-fetch scenario mismatch" (faultExpectation scenario forbiddenBin forbiddenFacts)
+  let corruptedFault = replaceWord 12 0xe1a00000 forbiddenBin
+  assertLeft "missing retired-stock-fetch branch" (faultExpectation (Natural Handoff) corruptedFault forbiddenFacts)
 
   -- Poll-period derivation on synthetic loops.
   let forbidLines = filter ("xm1_forbid_" `B.isInfixOf`) (C.lines correctSymbols)

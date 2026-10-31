@@ -9,6 +9,7 @@ module Emulation.PeerStartupWitness
   , forbidFetchIntervals, forbidReadIntervals, retainedSites
   , contractValue, parseStartupContract
   , candidateEntry, deriveOwnedFacts, verifyStagedOwned
+  , StartupFault (..), parseStartupFault, startupFaultExpectation
   , StartupReceipt, ValidatedStartupReceipt, parseStartupReceipt, validateStartupReceipt, compareStartupReceipts, startupArgument
   , maxStartupReceiptBytes
   ) where
@@ -71,6 +72,12 @@ data OwnedFacts = OwnedFacts
   } deriving (Eq, Show)
 
 data Program = Retained | Owned OwnedFacts deriving (Eq, Show)
+
+data StartupFault = RetiredStockFetch deriving (Eq, Show)
+
+parseStartupFault :: String -> Either String StartupFault
+parseStartupFault "retired-stock-fetch" = Right RetiredStockFetch
+parseStartupFault _ = Left "--startup-fault must be retired-stock-fetch"
 
 registerIndex :: Int -> Either String RegisterIndex
 registerIndex value
@@ -381,6 +388,22 @@ deriveOwnedFacts bin symbolBytes (StagedRecord staged) = do
         }
   checkOwnedFacts facts
   pure facts
+
+startupFaultExpectation :: StartupFault -> Scenario -> B.ByteString -> OwnedFacts -> Either String Value
+startupFaultExpectation RetiredStockFetch scenario bin facts = do
+  require (scenario == Natural Handoff) "retired-stock-fetch requires natural startup with the handoff endpoint"
+  let GuestAddress entry = siteEntry (ownedSites facts)
+      call = fromIntegral entry + 12
+      target = 0x12960
+  require ((A32.decode call <$> imageWord (CodeImage (fromIntegral entry) bin) call) == Just (Branch (Cond 14) True target))
+    "retired-stock-fetch candidate must call stock stub_a immediately after main returns"
+  require (Interval (fromIntegral target) 0x12974 `elem` ownedForbidFetch facts)
+    "retired-stock-fetch target is not guarded by the declared stock stub_a interval"
+  pure (object
+    [ "kind" .= ("retired-stock-fetch" :: String), "label" .= ("forbidden-fetch" :: String)
+    , "core" .= (1 :: Int), "address" .= target
+    , "error" .= ("startup forbidden fetch of retired stock code at 0x12960 on core 1" :: String)
+    ])
 
 forbidSet :: [F.Symbol] -> String -> Either String [Interval]
 forbidSet rows prefix = do

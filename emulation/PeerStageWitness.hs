@@ -37,7 +37,7 @@ data PeerInput = NaturalInput Firmware | ControlledInput Firmware C.ControlManif
 data SourceInput = StockSource U.Parsed | ControlledSource C.ControlArtifact
 
 -- | Candidate image, candidate symbols and source DAT for an owned program.
-data StartupProgram = RetainedStartup | OwnedStartup FilePath FilePath FilePath
+data StartupProgram = RetainedStartup | OwnedStartup FilePath FilePath FilePath (Maybe S.StartupFault)
 
 data Options
   = Consume FilePath Argument
@@ -62,11 +62,12 @@ usage = unlines
   , "Control preparation preserves the input and writes peer-witness-contract.json, peer-control.DAT and peer-control-manifest.json instead of the natural expected-policy file."
   , "Startup preparation writes a schema-3 peer-witness-contract.json and peer-startup-expected.json; --endpoint is required for natural and delayed-release and refused for held-sentinel."
   , "Owned startup requires --firmware to be the owned-staged DAT (staged on the control DAT for controls) and the candidate image, symbols and original DAT it was staged from."
+  , "Owned --startup-fault retired-stock-fetch requires --scenario natural --endpoint handoff and a candidate calling retired stock stub_a; the schema-3 producer must refuse it on core 1 at 0x12960."
   ]
 
 data Flag
   = ReceiptFile | ArgumentWord | ControlReceiptFile | ControlManifestFile | ControlMode | FirmwareFile | FflzdFile | OutputDirectory | DriverFile | RunFile | RomFile
-  | StartupMode | ScenarioKind | EndpointName | CandidateImageFile | CandidateSymbolsFile | SourceFirmwareFile
+  | StartupMode | ScenarioKind | EndpointName | CandidateImageFile | CandidateSymbolsFile | SourceFirmwareFile | StartupFaultName
   | StartupReceiptFile | StartupContractFile | CompareRetainedFile | CompareRetainedContract | CompareOwnedFile | CompareOwnedContract
   deriving (Eq)
 
@@ -81,7 +82,7 @@ parseOptions arguments = do
         else do
           unless (all ((`notElem` [DriverFile,RunFile,RomFile]) . fst) values) (Left "driver/run/ROM require --launch")
           pure PrepareOnly
-      candidateFlags = [CandidateImageFile,CandidateSymbolsFile,SourceFirmwareFile]
+      candidateFlags = [CandidateImageFile,CandidateSymbolsFile,SourceFirmwareFile,StartupFaultName]
   case (value StartupReceiptFile, value CompareRetainedFile, value StartupMode) of
     (Nothing, Nothing, Nothing) -> case (value ReceiptFile, value ControlReceiptFile) of
       (Just path, Nothing) -> do
@@ -114,10 +115,10 @@ parseOptions arguments = do
       scenario <- need "--scenario" ScenarioKind >>= \kind -> startupScenario kind (value EndpointName)
       program <- case mode of
         "retained" -> do
-          unless (all ((`notElem` candidateFlags) . fst) values) (Left "retained startup refuses --candidate-image, --candidate-symbols and --source-firmware")
+          unless (all ((`notElem` candidateFlags) . fst) values) (Left "retained startup refuses candidate and startup-fault options")
           pure RetainedStartup
         "owned" -> OwnedStartup <$> need "--candidate-image" CandidateImageFile <*> need "--candidate-symbols" CandidateSymbolsFile
-          <*> need "--source-firmware" SourceFirmwareFile
+          <*> need "--source-firmware" SourceFirmwareFile <*> traverse S.parseStartupFault (value StartupFaultName)
         _ -> Left "--startup must be retained or owned"
       firmware <- need "--firmware" FirmwareFile
       fflzd <- need "--fflzd" FflzdFile
@@ -152,6 +153,7 @@ parseOptions arguments = do
         "--candidate-image" -> Right CandidateImageFile
         "--candidate-symbols" -> Right CandidateSymbolsFile
         "--source-firmware" -> Right SourceFirmwareFile
+        "--startup-fault" -> Right StartupFaultName
         "--startup-receipt" -> Right StartupReceiptFile
         "--startup-contract" -> Right StartupContractFile
         _ -> Left ("unknown option: " ++ name ++ "\n" ++ usage)
@@ -360,15 +362,15 @@ prepareStartup root firmwarePath fflzdPath outputPath scenario choice execution 
   let fflzd = resolve root fflzdPath
       control = scenarioControl scenario
   dat <- H.readRegular maxContainer datPath
-  (parsed, program, retainedSource) <- case choice of
+  (parsed, program, retainedSource, faultExpectation) <- case choice of
     RetainedStartup -> do
       source <- qualifySource (maybe NaturalBaseline WaitControl control) (Firmware datPath) dat
       let parsed = sourceParsed source
           mainStart = U.stagingLength + fromIntegral (U.hMainOffset (U.parsedHeader parsed))
       record2 <- mediaSlice dat mainStart 0x50000 0x4c80
       H.ensure (sha256Hex record2 == pinnedRecord2) "record2 is not the original peer boot record"
-      pure (parsed, S.Retained, Just source)
-    OwnedStartup imagePath symbolsPath originalPath -> do
+      pure (parsed, S.Retained, Just source, Nothing)
+    OwnedStartup imagePath symbolsPath originalPath fault -> do
       originalCanonical <- canonicalizePath (resolve root originalPath)
       original <- H.readRegular maxContainer originalCanonical
       _ <- qualifySource NaturalBaseline (Firmware originalCanonical) original
@@ -377,8 +379,9 @@ prepareStartup root firmwarePath fflzdPath outputPath scenario choice execution 
       entry <- either H.failH pure (S.candidateEntry symbols)
       staged <- either H.failH pure (S.verifyStagedOwned original dat bin entry control)
       facts <- either H.failH pure (S.deriveOwnedFacts bin symbols staged)
+      faultExpectation <- traverse (\selected -> either H.failH pure (S.startupFaultExpectation selected scenario bin facts)) fault
       parsed <- either H.failH pure (U.parseContainer dat)
-      pure (parsed, S.Owned facts, Nothing)
+      pure (parsed, S.Owned facts, Nothing, faultExpectation)
   _ <- qualifyBindings dat parsed
   Runtime output <- freshRuntime root (Just (Runtime outputPath)) (UniqueRuntime "peer-stage-witness")
   image4 <- decodeImage4 fflzd output (U.parsedParts parsed)
@@ -392,12 +395,12 @@ prepareStartup root firmwarePath fflzdPath outputPath scenario choice execution 
       receipt = output </> "peer-witness.json"
   launchedBytes <- if launchedPath == datPath then pure dat else H.readRegular maxContainer launchedPath
   BL.writeFile contract (encode (S.contractValue scenario program))
-  BL.writeFile (output </> "peer-startup-expected.json") (encode (object
+  BL.writeFile (output </> "peer-startup-expected.json") (encode (object (
     [ "schema" .= (3 :: Int), "scenario" .= S.scenarioValue scenario, "program" .= S.programName program
     , "firmware" .= launchedPath, "firmware_sha256" .= sha256Hex launchedBytes
     , "record_sha256" .= S.programRecordHex program, "argument" .= argumentWord
     , "loader_b_entry" .= (0xd0020 :: Word32)
-    ]))
+    ] ++ maybe [] (\expectedFault -> ["expected_refusal" .= expectedFault]) faultExpectation)))
   case execution of
     PrepareOnly -> do
       putStrLn ("peer-startup preparation: " ++ output)

@@ -9,6 +9,9 @@ xm1_secondary_entry:
     bl xm1_retained_execution_state
     bl xm1_retained_tcm_stacks
     bl xm1_secondary_main
+#ifdef XM1_SECONDARY_FORBIDDEN_FETCH_FAULT
+    bl xm1_forbid_fetch_stub_a_start
+#endif
     .size xm1_secondary_entry, . - xm1_secondary_entry
 
     @ Stock 0x1183c-0x11850 handoff, reached by falling through from the entry.
