@@ -129,13 +129,13 @@ stackExtent image symbols = do
             returning condition proven updated = do
               require proven "initializer compiler indirect target is not its incoming return address"
               require (M.lookup A.sp (stackAliases updated) == Just 0) "initializer compiler return does not restore SP"
-              pure ([(pc + 4, updated) | condition /= A.Cond 14], updated, 0, True)
+              pure ([(pc + 4, updated) | condition /= A.Cond 14], updated, (0 :: Integer), True)
             regular condition registers = do
               require (A.sp `notElem` registers && A.pc `notElem` registers) "unadmitted compiler SP or PC write"
               require (condition == A.Cond 14 || all (`M.notMember` aliases) registers)
                 "conditional compiler write leaves an unresolved stack alias"
               let updated = forget registers
-              pure (next updated, updated, 0, False)
+              pure (next updated, updated, (0 :: Integer), False)
             frameAddress base offset bytes = case M.lookup base aliases of
               Nothing -> Right (Nothing, 0)
               Just relative -> do
