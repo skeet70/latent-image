@@ -356,9 +356,11 @@ stackExtent caller (StackBytes adapterBytes) stores image symbols = do
                 scalar = setWord register (if condition == A.Cond 14 then result else Nothing) changed
             pure (next scalar, scalar, 0, False)
           A.ZeroExtend condition register source _ _ -> do
+            require (source /= A.pc) "initializer compiler extension reads PC"
             require (M.notMember source aliases) "initializer compiler extension transforms a stack alias"
             regular condition [register]
           A.Multiply condition register left right accumulator -> do
+            require (A.pc `notElem` ([left,right] ++ maybe [] pure accumulator)) "initializer compiler multiply reads PC"
             require (all (`M.notMember` aliases) ([left,right] ++ maybe [] pure accumulator)) "initializer compiler multiply transforms a stack alias"
             (_, changed, _, _) <- regular condition [register]
             let productValue = (*) <$> readWord left <*> readWord right
@@ -368,6 +370,9 @@ stackExtent caller (StackBytes adapterBytes) stores image symbols = do
           A.Load condition width signed destination base offset indexing -> do
             let bytes = case width of A.Byte -> 1; A.Half -> 2; A.Word -> 4; A.Dual -> 8
                 registers = case (width, destination) of (A.Dual, A.Reg index) -> [destination,A.Reg (index + 1)]; _ -> [destination]
+            require (case (width,destination) of
+              (A.Dual,A.Reg index) -> even index && index <= 12
+              _ -> True) "initializer compiler dual load has an unpredictable register pair"
             require (indexing == A.OffsetOnly || base `notElem` registers) "initializer compiler load writeback overlaps its destination"
             plan <- addressPlan base offset indexing
             changedBase <- writeback condition base plan state
