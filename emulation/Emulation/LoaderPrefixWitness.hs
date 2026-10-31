@@ -589,9 +589,9 @@ parseRow value = do
       before <- get row "before" :: Either String (Maybe [Word8])
       require (maybe (access == CpuFetch) ((== fromIntegral size) . length) before) "watch row before bytes differ from its width"
       core <- get row "core" >>= parseCore
-      attribution <- Attribution core <$> get row "pc" <*> get row "instructions" <*> get row "tick"
+      cpuAttribution <- Attribution core <$> get row "pc" <*> get row "instructions" <*> get row "tick"
       valueField <- get row "value"
-      pure (Row access location valueField (B.pack <$> before) (Just attribution))
+      pure (Row access location valueField (B.pack <$> before) (Just cpuAttribution))
     else do
       forM_ ["core", "pc", "instructions", "tick"] $ \name -> do
         entry <- field row name
