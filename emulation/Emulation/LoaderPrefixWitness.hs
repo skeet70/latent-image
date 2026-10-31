@@ -1057,12 +1057,19 @@ validateReceipt contract receipt = do
   require (receiptHandoffRecordImmutable receipt == Just (factRecordImmutable facts)) "handoff immutable record-2 identity differs"
   forM_ selected $ \startup -> do
     firstHandoff <- uniqueStop stops FirstStageHandoff
-    require (firstHandoff `elem` beforeHandoff)
-      "firststage handoff does not precede record-2 handoff"
+    let beforeCore0Continuation = takeWhile ((`notElem` [HeldGate, DelayEntry, CompletionStore]) . stopLabel) stops
+    require (firstHandoff `elem` beforeCore0Continuation)
+      "firststage handoff does not precede core-0 continuation"
     require (stopAddress firstHandoff == startupHandoff startup && masked (stopCpsr firstHandoff)
       && r2 (stopRegisters firstHandoff) == guestWord (startupTarget startup)
-      && r0 (stopRegisters firstHandoff) == guestWord (startupArgument startup)
-      && isNothing (stopCounter firstHandoff)) "firststage handoff context differs"
+      && r0 (stopRegisters firstHandoff) == guestWord (startupArgument startup)) "firststage handoff context differs"
+    if firstHandoff `elem` beforeHandoff
+      then require (isNothing (stopCounter firstHandoff) && isNothing (stopCursor firstHandoff))
+        "pre-scoped firststage handoff carries scoped evidence"
+      else do
+        loads <- counterAt firstHandoff
+        require (totalNonzero loads == 0 && stopCursor firstHandoff == Just 0)
+          "scoped firststage handoff lacks its pre-completion observation"
   window <- stackWindow handoff
   require (bindingStackWindow bindings == window) "bound entry-stack window differs from the handoff SP and TCM"
   zeroPhysical <- through (bindingZeroMap bindings) 0x400ddaa0 0x15980
@@ -1086,6 +1093,7 @@ validateReceipt contract receipt = do
     (_, Just _) -> Left "veneer binding outside the delayed control"
     _ -> pure ()
   entry <- uniqueStop stops PrefixEntry
+  require (entry `elem` drop 1 (dropWhile (/= handoff) stops)) "prefix entry does not follow record-2 handoff"
   require (stopAddress entry == factEntry facts && r0 (stopRegisters entry) == argumentWord && stopSp entry == stopSp handoff
     && stopCpsr entry == stopCpsr handoff && registerRange 6 11 (stopRegisters entry) == registerRange 6 11 (stopRegisters handoff))
     "prefix entry differs from the handoff context"

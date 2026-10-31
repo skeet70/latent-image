@@ -62,6 +62,9 @@ retainedContract scenario = parseContract . BL.toStrict . encode $ object
       ]
   ]
 
+data FirstStageOrder = BeforeSecondary | BeforeRecord2 | BeforePrefix | AfterPrefix | AfterWaiting | AfterContinuation
+  deriving (Eq, Show)
+
 data Knobs = Knobs
   { knobNonzeroBeforeLast :: Bool
   , knobCovered :: Word64
@@ -84,12 +87,12 @@ data Knobs = Knobs
   , knobTcm :: [[Word32]]
   -- | Core-1 ATCM moved at the last waiting post-load stop.
   , knobTcmMoved :: Bool
-  , knobFirstStageAfterSecondary :: Bool
+  , knobFirstStageOrder :: FirstStageOrder
   }
 
 knobs :: Knobs
 knobs = Knobs False 0x5660 0xd00c0 0x200001d3 False False False False 8 4 Nothing False (Just (0, 0, 0), Just 0) 201 0
-  [[0x70000011, 0], [0x70000011, 0]] False False
+  [[0x70000011, 0], [0x70000011, 0]] False BeforeSecondary
 
 writes :: [String]
 writes = ["cpu-write", "host-write", "model-bus-write"]
@@ -142,25 +145,34 @@ receiptDocument startup scenario kind facts knob = document
     delayLoads = knobDelayLoads knob
     storeCount = if delayed then 4 + delayLoads else 6
     delayStops =
-      [ stop "delay-entry" C.veneerEntry 0 (2000, 300 + 4 * period) (replace 5 0 base) 0x700007d0 (C.heldGate + 4) cpsr (Just (4, 4, 0)) (Just 0)
-      , stop "delay-release" C.veneerRelease 0 (3000, 300 + 4 * period + 10) (replace 5 0 base) 0x700007d0 (C.heldGate + 4) cpsr (Just (storeCount, storeCount, 0)) (Just 0) ]
+      [stop "delay-entry" C.veneerEntry 0 (2000, 300 + 4 * period) (replace 5 0 base) 0x700007d0 (C.heldGate + 4) cpsr (Just (4, 4, 0)) (Just 0)]
+      ++ firstStageAt AfterContinuation (2000, 300 + 4 * period) (Just (4, 4, 0)) (Just 0)
+      ++ [stop "delay-release" C.veneerRelease 0 (3000, 300 + 4 * period + 10) (replace 5 0 base) 0x700007d0 (C.heldGate + 4) cpsr (Just (storeCount, storeCount, 0)) (Just 0)]
     exitRegisters = replace 4 argument (replace 5 argument (replace 6 0xffff0000 (replace 8 (knobExitR8 knob) (replace 11 0x400f341c base))))
-    startupStops =
-      [ stop "first-stage-handoff" 0x6100 0 (if knobFirstStageAfterSecondary knob then (500, 20) else (100, 10))
-          (replace 2 0x40020 base) 0x70000800 0 cpsr Nothing Nothing
-      , stop "secondary-entry" 0x10400 1 (if knobFirstStageAfterSecondary knob then (100, 10) else (500, 20))
-          base 0xfff00f00 0 cpsr Nothing Nothing ]
+    firstStage counts counter cursor = stop "first-stage-handoff" 0x6100 0 counts
+      (replace 2 0x40020 base) 0x70000800 0 cpsr counter cursor
+    order = knobFirstStageOrder knob
+    firstStageAt position counts counter cursor =
+      [firstStage counts counter cursor | composed && order == position]
+    secondary = stop "secondary-entry" secondarySite 1 (500, 20) base 0xfff00f00 0 cpsr Nothing Nothing
     stops = [stop "record-1-entry" (if composed then 0x6000 else 0x1800) 0 (10, 0) base 0xfff00f00 0 cpsr Nothing Nothing]
-      ++ (if composed then (if knobFirstStageAfterSecondary knob then reverse startupStops else startupStops)
-          else [stop "secondary-entry" secondarySite 1 (500, 20) base 0xfff00f00 0 cpsr Nothing Nothing])
-      ++ [ stop "record-2-handoff" handoffSite 1 (800, 200) base 0x70000800 0 cpsr Nothing Nothing
-         , stop "prefix-entry" entrySite 1 (810, knobEntryCore1 knob) base 0x70000800 0 cpsr (fst (knobEntryObservation knob)) (snd (knobEntryObservation knob)) ]
+      ++ firstStageAt BeforeSecondary (100, 10) Nothing Nothing
+      ++ [secondary]
+      ++ firstStageAt BeforeRecord2 (600, 30) Nothing Nothing
+      ++ [stop "record-2-handoff" handoffSite 1 (800, 200) base 0x70000800 0 cpsr Nothing Nothing]
+      ++ firstStageAt BeforePrefix (805, 200) (Just (0, 0, 0)) (Just 0)
+      ++ [stop "prefix-entry" entrySite 1 (810, knobEntryCore1 knob) base 0x70000800 0 cpsr (fst (knobEntryObservation knob)) (snd (knobEntryObservation knob))]
+      ++ firstStageAt AfterPrefix (900, knobEntryCore1 knob) (Just (0, 0, 0)) (Just 0)
       ++ waitingPosts
+      ++ firstStageAt AfterWaiting (1500, 300 + period * lastWaiting) (Just (4, 4, 0)) (Just 0)
       ++ (if held
-            then stop "held-gate" C.heldGate 0 (9000, 300 + 5 * period) base 0x700007d0 0 cpsr (Just (5, 5, 0)) (Just 0) : heldPosts
+            then [stop "held-gate" C.heldGate 0 (9000, 300 + 5 * period) base 0x700007d0 0 cpsr (Just (5, 5, 0)) (Just 0)]
+              ++ firstStageAt AfterContinuation (9000, 300 + 5 * period) (Just (5, 5, 0)) (Just 0)
+              ++ heldPosts
             else (if delayed then delayStops else [])
-              ++ [ stop "completion-store" 0x40a08 0 (5000, 300 + 5 * period) (replace 5 1 (replace 3 0x400a0000 base)) 0x700007d0 0x40a04 cpsr (Just (storeCount, storeCount, 0)) (Just 0)
-                 , stop "prefix-exit" 0xd0aac 1 (5010, 300 + 6 * period) exitRegisters 0x400f3410 0xd09bc (knobExitCpsr knob) (Just (storeCount + 1, storeCount, 1)) (Just 1) ])
+              ++ [stop "completion-store" 0x40a08 0 (5000, 300 + 5 * period) (replace 5 1 (replace 3 0x400a0000 base)) 0x700007d0 0x40a04 cpsr (Just (storeCount, storeCount, 0)) (Just 0)]
+              ++ (if delayed then [] else firstStageAt AfterContinuation (5000, 300 + 5 * period) (Just (storeCount, storeCount, 0)) (Just 0))
+              ++ [stop "prefix-exit" 0xd0aac 1 (5010, 300 + 6 * period) exitRegisters 0x400f3410 0xd09bc (knobExitCpsr knob) (Just (storeCount + 1, storeCount, 1)) (Just 1)])
     load :: Int -> Word32 -> Value
     load index value = object
       [ "source" .= ("cpu-read" :: String), "address" .= (0x400a00c4 :: Word32), "physical" .= (0xa00c4 :: Word32), "size" .= (4 :: Int)
@@ -472,7 +484,24 @@ main = do
   mapM_ (\scenario -> do
     selected <- either fail pure (composedContract scenario facts startupFixture)
     expect ("composed " ++ scenarioName scenario ++ " accepted") (accepted (validate selected (composedBytes scenario knobs)))) [Natural, Held, Delayed, NonOne]
-  expect "secondary entry can precede the firststage handoff" (accepted (validate composed (composedBytes Natural knobs {knobFirstStageAfterSecondary = True})))
+  mapM_ (\scenario -> do
+    selected <- either fail pure (composedContract scenario facts startupFixture)
+    mapM_ (\order -> expect ("composed " ++ scenarioName scenario ++ " handoff " ++ show order ++ " accepted")
+      (accepted (validate selected (composedBytes scenario knobs {knobFirstStageOrder = order}))))
+      [BeforeRecord2, BeforePrefix, AfterPrefix, AfterWaiting]) [Natural, Held, Delayed, NonOne]
+  mapM_ (\scenario -> do
+    selected <- either fail pure (composedContract scenario facts startupFixture)
+    expect ("composed " ++ scenarioName scenario ++ " firststage handoff after core-0 continuation refused")
+      (not (accepted (validate selected (composedBytes scenario knobs {knobFirstStageOrder = AfterContinuation}))))) [Natural, Held, Delayed, NonOne]
+  let scopedHandoff change = BL.toStrict (encode (change
+        (receiptDocument (Just startupFixture) Natural OwnedProgram facts knobs {knobFirstStageOrder = AfterPrefix})))
+      refusesScoped label change = expect label (not (accepted (validate composed (scopedHandoff change))))
+  refusesScoped "scoped firststage handoff still must be observed" (missingStop "first-stage-handoff")
+  refusesScoped "scoped firststage handoff requires its counter" (changeStop "first-stage-handoff" (setField "counter" Null))
+  refusesScoped "scoped firststage handoff requires its watch cursor" (changeStop "first-stage-handoff" (setField "watch_records" Null))
+  refusesScoped "scoped firststage handoff still binds its target" (changeStop "first-stage-handoff" (changeField "registers" setTarget))
+  refusesScoped "scoped firststage handoff still binds its source site" (changeStop "first-stage-handoff" (setField "address" (Number 0x6104)))
+  refusesScoped "a scoped firststage handoff does not excuse an image write" (changeField "scoped_watch" (changeField "records" addImageWrite))
   expect "standalone receipt cannot establish composed startup" (not (accepted (validate composed (ownedReceipt Natural knobs))))
   expect "composed receipt cannot establish standalone startup" (not (accepted (validate (owned Natural) (composedBytes Natural knobs))))
   expectRefused "retained roles are refused under schema5"
