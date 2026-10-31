@@ -104,7 +104,7 @@ artifactMetadata :: Artifact -> ArtifactMetadata
 artifactMetadata (Artifact metadata _) = metadata
 
 require :: Bool -> String -> Either String ()
-require condition message = unless condition (Left message)
+require instructionCondition message = unless instructionCondition (Left message)
 
 digest :: B.ByteString -> Either String F.Sha256
 digest = F.parseSha256 . sha256Hex
@@ -113,21 +113,21 @@ digestHash :: B.ByteString -> Either String F.Sha256
 digestHash = F.parseSha256 . BLC.unpack . BB.toLazyByteString . BB.byteStringHex
 
 word :: Guest -> Word32
-word (Guest address) = address
+word (Guest instructionAddress) = instructionAddress
 
 count :: ByteCount -> Word32
 count (ByteCount bytes) = bytes
 
 physical :: Word32 -> Maybe Word32
-physical address
-  | address < 0x100000 = Just address
-  | address >= 0x40000000 && address < 0x40100000 = Just (address - 0x40000000)
+physical instructionAddress
+  | instructionAddress < 0x100000 = Just instructionAddress
+  | instructionAddress >= 0x40000000 && instructionAddress < 0x40100000 = Just (instructionAddress - 0x40000000)
   | otherwise = Nothing
 
 checkedAddress :: Integer -> Either String Word32
-checkedAddress address = do
-  require (address >= 0 && address <= 0xffffffff) "primary initializer address wraps"
-  pure (fromInteger address)
+checkedAddress instructionAddress = do
+  require (instructionAddress >= 0 && instructionAddress <= 0xffffffff) "primary initializer address wraps"
+  pure (fromInteger instructionAddress)
 
 -- Incoming words retain their identity through spills and register moves.
 data ProofWord = Constant Word32 | Incoming A.Reg | StackAddress Integer | ReturnAddress | Unknown
@@ -183,7 +183,7 @@ condition instruction = case instruction of
   A.StoreMultiple cond _ _ _ _ -> pure cond
   A.Branch cond _ _ -> pure cond
   A.BranchExchange cond _ _ -> pure cond
-  A.Compute cond _ -> pure cond
+  A.Multiply cond _ _ _ _ -> pure cond
   _ -> Left "primary initializer contains an unsupported instruction"
 
 known :: Maybe a -> Either String a
@@ -365,26 +365,15 @@ prove source bytes rust = go initial
           case target of
             Just destination -> finish destination based
             Nothing -> advance based
-        A.Compute _ _
-          | instructionWord .&. 0x0fc000f0 == 0x00000090 -> do
-              let register shift = A.Reg (fromIntegral ((instructionWord `shiftR` shift) .&. 15))
-                  destination = register 16
-                  accumulator = register 12
-                  rightRegister = register 8
-                  leftRegister = register 0
-                  accumulates = testBit instructionWord 21
-                  operands = [leftRegister,rightRegister] ++ [accumulator | accumulates]
-              require (destination /= A.pc && A.pc `notElem` operands
-                && (accumulates || accumulator == A.Reg 0)) "primary initializer uses unpredictable multiply registers"
-              left <- known (scalar (readRegister machine leftRegister))
-              right <- known (scalar (readRegister machine rightRegister))
-              extra <- if accumulates then known (scalar (readRegister machine accumulator)) else pure 0
-              let result = left * right + extra
-                  flags = machineFlags machine
-                  next = if testBit instructionWord 20
-                    then entered {machineFlags = flags {K.flagN = Just (testBit result 31),K.flagZ = Just (result == 0)}}
-                    else entered
-              setRegister destination (Constant result) next >>= advance
+        -- Multiply carries only non-flag-setting MUL/MLA.
+        A.Multiply _ destination leftRegister rightRegister accumulator -> do
+          require (destination /= A.pc && leftRegister /= A.pc && rightRegister /= A.pc
+            && maybe True (/= A.pc) accumulator) "primary initializer uses unpredictable multiply registers"
+          require (maybe (instructionWord .&. 0x0000f000 == 0) (const True) accumulator) "primary initializer MUL has a nonzero reserved accumulator field"
+          left <- known (scalar (readRegister machine leftRegister))
+          right <- known (scalar (readRegister machine rightRegister))
+          extra <- maybe (pure 0) (known . scalar . readRegister machine) accumulator
+          setRegister destination (Constant (left * right + extra)) entered >>= advance
         A.Branch _ False destination -> branch destination entered
         A.BranchExchange _ False register -> do
           require (register /= A.pc) "primary initializer branches through PC"
