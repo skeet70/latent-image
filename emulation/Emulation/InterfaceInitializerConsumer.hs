@@ -131,7 +131,11 @@ instance FromJSON Result where
     "failed" -> pure Failed
     _ -> fail "unknown consumer result"
 
-data Receipt = Receipt Word32 Result (Maybe String) (Maybe String) Value (Maybe Value)
+newtype InitializerEvidence = InitializerEvidence B.ByteString
+instance FromJSON InitializerEvidence where
+  parseJSON value = pure (InitializerEvidence (L.toStrict (J.encode value)))
+
+data Receipt = Receipt Word32 Result (Maybe String) (Maybe String) InitializerEvidence (Maybe ConsumerReceipt)
 instance FromJSON Receipt where
   parseJSON = withObject "consumer receipt" $ \row -> Receipt <$> row .: "schema" <*> row .: "result" <*> row .: "error" <*> row .: "machine_failure" <*> row .: "initializer" <*> row .: "consumer"
 
@@ -179,15 +183,12 @@ validateEvidence :: Contract -> B.ByteString -> Either String ConsumerReceipt
 validateEvidence (Contract initializer _ _ _) bytes = do
   require (B.length bytes <= 32 * 1024 * 1024) "consumer receipt exceeds 32 MiB"
   document <- decodeStrictIntegers bytes
-  Receipt schema result failure machineFailure nested evidence <- case J.fromJSON document of
+  Receipt schema result failure machineFailure (InitializerEvidence nested) evidence <- case J.fromJSON document of
     J.Error message -> Left message
     J.Success receipt -> Right receipt
-  validated <- I.validateReceiptEvidence initializer (L.toStrict (J.encode nested))
+  validated <- I.validateReceiptEvidence initializer nested
   require (schema == 7 && result == Passed && failure == Nothing && machineFailure == Nothing) "consumer receipt did not pass its distinct schema-7 role"
-  consumerValue <- maybe (Left "consumer evidence is absent") Right evidence
-  consumer <- case J.fromJSON consumerValue of
-    J.Error message -> Left message
-    J.Success receipt -> Right receipt
+  consumer <- maybe (Left "consumer evidence is absent") Right evidence
   validateConsumer initializer validated consumer
   pure consumer
 
