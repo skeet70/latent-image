@@ -49,6 +49,7 @@ module FujiAF.FirstStage
   , loaderWordPatchOffset
   , applyLoaderWordPatches
   , verifyLoaderWordPatches
+  , verifyPreTablePatches
   , ExpectedMediaPatch
   , expectedMediaPatch
   , replaceExpectedFirstRecord
@@ -359,6 +360,8 @@ verifyStagedRecord plan loaderPatches source rebuilt = do
 verifyLoaderWordPatches :: [LoaderWordPatch] -> U.Parsed -> U.Parsed -> Either String ()
 verifyLoaderWordPatches = verifyPreTablePatches []
 
+-- | As 'verifyLoaderWordPatches', also admitting (pre-table offset, length)
+-- extents, whose contents the caller checks.
 verifyPreTablePatches :: [(Int, Int)] -> [LoaderWordPatch] -> U.Parsed -> U.Parsed -> Either String ()
 verifyPreTablePatches extents loaderPatches source rebuilt = do
   let sourceParts = U.parsedParts source

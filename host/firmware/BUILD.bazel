@@ -262,6 +262,7 @@ haskell_binary(
     ],
     deps = [
         "//host:base",
+        "//host:completion-control",
         "//host:bytestring",
         "//host:first-stage",
         "//host:host-support",

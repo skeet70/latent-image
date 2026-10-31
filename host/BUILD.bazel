@@ -95,6 +95,37 @@ haskell_library(
 )
 
 genrule(
+    name = "completion-delay-linked-image",
+    srcs = [
+        "//replacement/completion_delay:completion-delay-image.bin",
+        "//replacement/completion_delay:completion-delay-image.symbols",
+    ],
+    outs = ["FujiAF/CompletionDelayImage.hs"],
+    cmd = "{ printf 'module FujiAF.CompletionDelayImage (veneerBytes, veneerSymbols) where\\nimport qualified Data.ByteString as B\\nveneerBytes, veneerSymbols :: B.ByteString\\nveneerBytes = B.pack [' && od -An -v -tu1 $(location //replacement/completion_delay:completion-delay-image.bin) | awk '{ for (i = 1; i <= NF; i++) printf \"%s%s\", (n++ ? \",\" : \"\"), $$i }' && printf ']\\nveneerSymbols = B.pack [' && od -An -v -tu1 $(location //replacement/completion_delay:completion-delay-image.symbols) | awk '{ for (i = 1; i <= NF; i++) printf \"%s%s\", (n++ ? \",\" : \"\"), $$i }' && printf ']\\n'; } > $@",
+)
+
+haskell_library(
+    name = "completion-control",
+    srcs = [
+        "FujiAF/CompletionControl.hs",
+        ":completion-delay-linked-image",
+    ],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    src_strip_prefix = ".",
+    deps = [
+        ":base",
+        ":bytestring",
+        ":first-stage",
+        ":update-container",
+    ],
+)
+
+genrule(
     name = "peer-wait-control-linked-image",
     srcs = [
         "//replacement/peer_wait_control:peer-wait-control-image.bin",
