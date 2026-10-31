@@ -101,8 +101,10 @@ readRegular = readRegularWith (pure ()) True
 -- Readers always drain concurrently, retain a finite prefix, and request process
 -- termination at the cap. The timeout kills and reaps the child, preserving bytes.
 runBounded :: Int -> Int -> FilePath -> [String] -> B.ByteString -> IO (Bool,ExitCode,B.ByteString,B.ByteString)
-runBounded micros cap executable arguments input = mask $ \restore -> do
-  (Just hin,Just hout,Just herr,ph) <- createProcess (proc executable arguments){std_in=CreatePipe,std_out=CreatePipe,std_err=CreatePipe,create_group=True}
+runBounded micros cap executable arguments = runBoundedProcess micros cap (proc executable arguments)
+runBoundedProcess :: Int -> Int -> CreateProcess -> B.ByteString -> IO (Bool,ExitCode,B.ByteString,B.ByteString)
+runBoundedProcess micros cap process input = mask $ \restore -> do
+  (Just hin,Just hout,Just herr,ph) <- createProcess process{std_in=CreatePipe,std_out=CreatePipe,std_err=CreatePipe,create_group=True}
   hSetBuffering hin NoBuffering
   processPid <- getPid ph
   out <- newIORef B.empty; err <- newIORef B.empty
@@ -141,8 +143,9 @@ sha256 bytes = do
   ensure (not timed && code == ExitSuccess && length (BC.unpack out) >= 64) "SHA256 helper failed"
   pure (take 64 (BC.unpack out))
 withTemporary :: String -> (FilePath -> IO a) -> IO a
-withTemporary prefix action = do
-  base <- getTemporaryDirectory
+withTemporary prefix action = getTemporaryDirectory >>= \base -> withTemporaryAt base prefix action
+withTemporaryAt :: FilePath -> String -> (FilePath -> IO a) -> IO a
+withTemporaryAt base prefix action =
   bracket (do (p,h) <- openTempFile base prefix; hClose h; removeFile p; createDirectory p; pure p) removeDirectoryRecursive action
 schemaCheck :: FilePath -> FilePath -> [Value] -> IO ()
 schemaCheck checker schema documents = withTemporary "fuji-af-schema" $ \root -> do
