@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Derives a separately identified X-M1 FujiMod run document whose
--- image_input carries a declared synthetic RAW16 frame source. verify fails
--- unless the document is byte-identical to the derivation.
+-- image_input carries a declared synthetic RAW16 frame source and, from
+-- fixture schema 2, an enable_readback law. verify fails unless the document
+-- is byte-identical to the derivation.
 module Main (main) where
 
 import Control.Monad (unless, when)
@@ -11,9 +12,11 @@ import qualified Data.Aeson.KeyMap as KM
 import Data.Bits (shiftR, (.&.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C8
-import Data.List (sort)
+import Data.List (find, sort)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Scientific (toBoundedInteger)
 import qualified Data.Text as T
+import Data.Traversable (for)
 import qualified Data.Vector as V
 import Data.Word (Word16, Word64, Word8)
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -52,6 +55,10 @@ data Scene
 -- reference white; RAW16 input bypasses them.
 data Response = Response Word16 Word16 (Word16, Word16, Word16)
 
+-- | The image input's @0x38c@ guest-read law, FujiMod's @EnableReadback@.
+data EnableReadback = IdentityReadback | ExchangedSourceBits
+  deriving (Bounded, Enum)
+
 data Fixture = Fixture
   { fixtureId :: FixtureId
   , fixtureNode :: NodeName
@@ -61,6 +68,8 @@ data Fixture = Fixture
   , fixtureScene :: Scene
   , fixtureSensorPeriod :: Ticks
   , fixtureResponse :: Response
+  , -- | Declared by schema 2; schema 1 leaves the options without the key.
+    fixtureEnableReadback :: Maybe EnableReadback
   }
 
 type Parse = Either String
@@ -74,6 +83,10 @@ sceneName IndexRamp12 = "raw16-index-ramp12"
 
 scenePattern :: Scene -> [Word8]
 scenePattern IndexRamp12 = concat [[fromIntegral (s .&. 0xff), fromIntegral (s `shiftR` 8)] | s <- [0 .. 4095 :: Int]]
+
+enableReadbackName :: EnableReadback -> T.Text
+enableReadbackName IdentityReadback = "identity"
+enableReadbackName ExchangedSourceBits = "exchanged_source_bits"
 
 assetBytes :: Raster -> Int
 assetBytes raster = rasterWidth raster * rasterHeight raster * 2
@@ -105,9 +118,12 @@ exactKeys what keys o =
 parseFixture :: Value -> Parse Fixture
 parseFixture value = do
   o <- asObject "fixture" value
-  exactKeys "fixture" ["schema", "id", "image_input", "frames", "asset", "raster", "scene", "sensor_period_ticks", "response"] o
   schema <- field "fixture" "schema" o >>= asBounded "fixture schema"
-  unless (schema == (1 :: Int)) (Left "fixture schema must be 1")
+  enableReadback <- case schema :: Int of
+    1 -> Right Nothing
+    2 -> Just <$> (field "fixture" "enable_readback" o >>= asText "fixture enable_readback" >>= parseEnableReadback)
+    _ -> Left "fixture schema must be 1 or 2"
+  exactKeys "fixture" (["schema", "id", "image_input", "frames", "asset", "raster", "scene", "sensor_period_ticks", "response"] ++ ["enable_readback" | isJust enableReadback]) o
   identifier <- FixtureId <$> (field "fixture" "id" o >>= asText "fixture id")
   node <- NodeName <$> (field "fixture" "image_input" o >>= asText "fixture image_input")
   frames <- FramesName <$> (field "fixture" "frames" o >>= asText "fixture frames")
@@ -123,7 +139,12 @@ parseFixture value = do
   period <- Ticks <$> (field "fixture" "sensor_period_ticks" o >>= asBounded "fixture sensor_period_ticks")
   when (period == Ticks 0) (Left "fixture sensor_period_ticks must be positive")
   response <- field "fixture" "response" o >>= parseResponse
-  pure (Fixture identifier node frames asset raster scene period response)
+  pure (Fixture identifier node frames asset raster scene period response enableReadback)
+
+parseEnableReadback :: T.Text -> Parse EnableReadback
+parseEnableReadback name =
+  maybe (Left ("unknown fixture enable_readback " ++ T.unpack name)) Right $
+    find ((== name) . enableReadbackName) [minBound .. maxBound]
 
 parseRaster :: Value -> Parse Raster
 parseRaster value = do
@@ -178,11 +199,17 @@ derive fixture base = do
   options <- field "image input model" "options" model >>= asObject "image input options"
   sensorPeriod <- field "image input options" "sensor_period_ticks" options
   unless (sensorPeriod == Null) (Left (T.unpack node ++ " already has a sensor period"))
-  clockSource <- field "image input options" "clock" options >>= asObject "input clock" >>= field "input clock" "source" >>= asObject "input clock source"
+  clock <- field "image input options" "clock" options >>= asObject "input clock"
+  clockSource <- field "input clock" "source" clock >>= asObject "input clock source"
   sourceKind <- field "input clock source" "kind" clockSource >>= asText "input clock source kind"
   phasePeriod <- field "input clock source" "period_ticks" clockSource >>= asBounded "input clock period"
   unless (sourceKind == "periodic" && phasePeriod == period) $
     Left ("the fixture sensor period " ++ show period ++ " is not the base periodic input clock period")
+  insertReadback <- for (fixtureEnableReadback fixture) $ \law -> do
+    mode <- field "input clock" "mode" clock >>= asText "input clock mode"
+    unless (mode == "input_enable") (Left (T.unpack node ++ " input clock mode is not input_enable"))
+    when (KM.member "enable_readback" options) (Left (T.unpack node ++ " already has an enable_readback option"))
+    pure (KM.insert "enable_readback" (String (enableReadbackName law)))
   cfa <- field "image input options" "cfa" options
   let sensorAttachment =
         object
@@ -201,7 +228,7 @@ derive fixture base = do
           ]
       model' =
         KM.insert "sensor" sensorAttachment $
-          KM.insert "options" (Object (KM.insert "sensor_period_ticks" (Number (fromIntegral period)) options)) model
+          KM.insert "options" (Object (fromMaybe id insertReadback (KM.insert "sensor_period_ticks" (Number (fromIntegral period)) options))) model
       nodes' = nodes V.// [(index, Object (KM.insert "model" (Object model') nodeObject))]
   scene <- field "run document" "scene" document >>= asObject "scene"
   sensors <- maybe (Right KM.empty) (asObject "scene sensors") (KM.lookup "sensors" scene)
@@ -226,7 +253,7 @@ derive fixture base = do
 
 identity :: Fixture -> B.ByteString -> B.ByteString -> B.ByteString -> Value
 identity fixture fixtureBytes baseBytes derivedBytes =
-  object
+  object $
     [ "fixture" .= object ["id" .= fixtureText, "sha256" .= hex fixtureBytes]
     , "base_run_document_sha256" .= hex baseBytes
     , "run_document_sha256" .= hex derivedBytes
@@ -242,6 +269,7 @@ identity fixture fixtureBytes baseBytes derivedBytes =
           , "sensor_period_ticks" .= period
           ]
     ]
+      ++ foldMap (\law -> ["enable_readback" .= enableReadbackName law]) (fixtureEnableReadback fixture)
  where
   FixtureId fixtureText = fixtureId fixture
   NodeName node = fixtureNode fixture
