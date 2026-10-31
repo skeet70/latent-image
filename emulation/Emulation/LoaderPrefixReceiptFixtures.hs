@@ -609,6 +609,25 @@ checkCompletionProgress facts = do
   let failures = [label | (label,completed) <- cases, accepted (consume (inflate completed document))]
   mapM_ (putStrLn . ("FAIL " ++)) failures
   expect "composed completion counters follow bounded core1 progress" (null failures)
+  let parseMutation change = parseReceipt PrefixBoundary (BL.toStrict (encode (change document)))
+      scopedCounter change = changeField "scoped_watch" (changeField "counters" (toJSON . map change . arrayValues))
+      committed = object ["count" .= (2000 :: Word64), "zero_count" .= (2000 :: Word64), "nonzero_count" .= (0 :: Word64)]
+      refusesParsed label change = expect label (not (accepted (parseMutation change)))
+  refusesParsed "composed counter addition cannot wrap" $
+    scopedCounter (setField "zero_count" (toJSON (maxBound :: Word64)) . setField "nonzero_count" (toJSON (10 :: Word64)))
+  refusesParsed "composed first nonzero index stays inside its bounded counter" $
+    scopedCounter (setField "first_nonzero_index" (toJSON (50000000 :: Word64)))
+  refusesParsed "parsed stop counter cannot exceed that stop core1 progress" $
+    changeStop "completion-store" (setField "counter" committed)
+  refusesParsed "parsed committed counter cannot exceed after-core1 progress" $
+    changeField "completion" (setField "counter" committed)
+  heldContract <- either fail pure (composedContract Held facts startupFixture)
+  let heldDocument = receiptDocument (Just startupFixture) Held OwnedProgram facts knobs
+      inflatedHeld = scopedCounter (setField "count" (toJSON (4000 :: Word64))
+        . setField "zero_count" (toJSON (4000 :: Word64))) heldDocument
+  expect "composed held completion-progress baseline accepted" (accepted (validate heldContract (BL.toStrict (encode heldDocument))))
+  expect "held final counter cannot exceed terminal core1 progress"
+    (not (accepted (validate heldContract (BL.toStrict (encode inflatedHeld)))))
 
 runReceiptCases :: ProgramFacts -> IO ()
 runReceiptCases facts = do
@@ -656,8 +675,33 @@ runReceiptCases facts = do
   expect "natural retained receipt accepted" (accepted (validate retained (retainedReceipt knobs)))
   expect "schema4 prefix evidence cannot qualify the initializer boundary"
     (not (accepted (parseReceipt InitializerBoundary (retainedReceipt knobs) >>= validateReceipt retained)))
-  let initializerDocument = setField "schema" (Number 6) . setField "initializer" Null $
-        receiptDocument Nothing Natural RetainedProgram retainedProgramFacts knobs
+  let initializerBase = receiptDocument Nothing Natural RetainedProgram retainedProgramFacts knobs
+      initializerCommittedAt = case arrayValues (valueField "microsteps" (valueField "completion" initializerBase)) of
+        [] -> error "initializer-prefix fixture has no committed step"
+        steps -> sum (map wordValue (arrayValues (valueField "after" (last steps))))
+      normalizeWriter row = if hasField "pc" (toJSON (0x40a08 :: Word32)) row
+        then setField "instructions" (toJSON initializerCommittedAt) . setField "tick" (toJSON initializerCommittedAt) $ row
+        else row
+      initializerDocument = setField "schema" (Number 6) . setField "initializer" Null
+        . changeField "scoped_watch" (changeField "records" (toJSON . map normalizeWriter . arrayValues)) $ initializerBase
+      consumeInitializer value = parseReceipt InitializerBoundary (BL.toStrict (encode value)) >>= validateReceipt retained
+      parseInitializer change = parseReceipt InitializerBoundary (BL.toStrict (encode (change initializerDocument)))
+      refusesInitializer label change = expect label (not (accepted (parseInitializer change)))
+  expect "initializer-prefix-only baseline accepted" (accepted (consumeInitializer initializerDocument))
+  refusesInitializer "initializer-prefix budget is bounded" $
+    setField "instructions" (toJSON (budget + 1))
+  refusesInitializer "initializer-prefix core counts cannot wrap" $
+    changeStop "prefix-exit" (setField "counts" (toJSON [maxBound, 1 :: Word64]) . setField "instructions" (toJSON (0 :: Word64)))
+  refusesInitializer "initializer-prefix microstep counts cannot exceed the budget" $
+    changeField "completion" (changeField "microsteps" (toJSON . map (setField "after" (toJSON [maxBound, 1 :: Word64])) . arrayValues))
+  let shiftedCommit = changeField "completion" (changeField "microsteps" (toJSON . map
+        (setField "before" (toJSON [5000, 1824 :: Word64]) . setField "after" (toJSON [5001, 1824 :: Word64])) . arrayValues))
+        . changeField "scoped_watch" (changeField "records" (toJSON . map (\row ->
+            if hasField "pc" (toJSON (0x40a08 :: Word32)) row then
+              setField "instructions" (toJSON (initializerCommittedAt - 1)) . setField "tick" (toJSON (initializerCommittedAt - 1)) $ row
+            else row) . arrayValues))
+  expect "initializer-prefix commit must continue its captured stop"
+    (not (accepted (consumeInitializer (shiftedCommit initializerDocument))))
   expect "schema6 cannot broaden the old accepted prefix endpoint"
     (not (accepted (parseReceipt PrefixBoundary (BL.toStrict (encode initializerDocument)))))
   expect "initializer prefix evidence still requires the authentic prefix entry"
