@@ -15,6 +15,10 @@ pub struct RequestedBytes(u32);
 #[derive(Clone, Copy)]
 pub struct GuestAddress(u32);
 
+extern "C" {
+    static xm1_task_storage_pool_base_literal: GuestAddress;
+}
+
 #[repr(i32)]
 pub enum ReservationResult {
     Reserved = 0,
@@ -73,7 +77,14 @@ pub unsafe extern "C" fn xm1_task_storage_transition(
 
     let cursor = GuestAddress(0x4089_ea98);
     let current = unsafe { cursor.load() };
-    if current.wrapping_sub(0x40a1_0200).wrapping_add(requested.0) > 0x4b000 {
+    let pool_base = unsafe {
+        let value;
+        asm!("ldr {value}, {literal}", value = out(reg) value,
+            literal = sym xm1_task_storage_pool_base_literal,
+            options(nostack, preserves_flags));
+        GuestAddress(value)
+    };
+    if current.wrapping_sub(pool_base.0).wrapping_add(requested.0) > 0x4b000 {
         return ReservationResult::SizeOrCapacity;
     }
     unsafe {

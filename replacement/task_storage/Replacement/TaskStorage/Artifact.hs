@@ -99,6 +99,8 @@ deriveArtifact image symbolBytes = do
   entry <- F.lookupSymbol symbols "xm1_task_storage_entry"
   rust <- F.lookupSymbol symbols "xm1_task_storage_transition"
   resume <- at "xm1_task_storage_resume"
+  poolLiteral <- at "xm1_task_storage_pool_base_literal"
+  require (poolLiteral == 0x725dd4) "task storage retained pool-base literal differs"
   require (start == transitionStart && end <= transitionEnd && end > start && end .&. 3 == 0
     && toInteger (B.length image) == toInteger end - toInteger start) "task storage linked extent leaves its owned window"
   require (F.symbolAddress entry == start && F.symbolSize entry == 24 && resume == transitionEnd) "task storage adapter boundary differs"
@@ -158,6 +160,8 @@ contractValue (StagedImage4 (CanonicalSource _ _ source original primary seconda
     , "patch" .= object ["start" .= transitionStart, "end" .= transitionEnd]
     , "rust" .= [addressValue rustStart,addressValue rustEnd]
     , "retained_helper" .= ([0x725c6c,0x725cc4,0x725da8,0x725dd8] :: [Word32])
+    , "retained_pool_base_literal" .= object
+        ["guest" .= (0x725dd4 :: Word32), "expected_word" .= (0x40a10200 :: Word32)]
     , "retained_caller" .= ([0x725dd8,0x726098] :: [Word32])
     , "synchronization" .= object
         [ "selector_root" .= (0x96bd20 :: Word32), "selector_slot" .= (0x1618 :: Word32)

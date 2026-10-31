@@ -1,5 +1,6 @@
 ENTRY(xm1_task_storage_entry)
 xm1_task_storage_resume = 0x725da8;
+xm1_task_storage_pool_base_literal = 0x725dd4;
 SECTIONS
 {
   . = 0x725cc4;
