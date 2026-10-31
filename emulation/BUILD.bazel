@@ -617,6 +617,74 @@ haskell_test(
     ],
 )
 
+haskell_library(
+    name = "primary-initializer-source-lib",
+    srcs = [
+        "Emulation/PrimaryInitializerSource.hs",
+        "Emulation/PrimaryInitializerConsumerSource.hs",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":interface-initializer-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+        "//host/firmware:startup-stage-contract",
+    ],
+)
+
+haskell_test(
+    name = "primary-initializer-source-tests",
+    size = "small",
+    srcs = ["PrimaryInitializerSourceTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":primary-initializer-source-lib",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_library(
+    name = "primary-initializer-artifact-lib",
+    srcs = ["Emulation/PrimaryInitializerArtifact.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":poll-period-lib",
+        ":primary-initializer-source-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:cryptohash-sha256",
+        "//host:first-stage",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "build-primary-initializer",
+    srcs = ["BuildPrimaryInitializer.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":primary-initializer-artifact-lib",
+        ":primary-initializer-source-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
 haskell_binary(
     name = "build-interface-initializer",
     srcs = ["BuildInterfaceInitializer.hs"],
