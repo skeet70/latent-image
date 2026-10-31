@@ -1,0 +1,59 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "task-storage-rust",
+    src = "src.rs",
+    crate_name = "xm1_task_storage",
+)
+
+xm1_rust_elf(
+    name = "task-storage-image",
+    rust_staticlib = ":task-storage-rust",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_task_storage_entry",
+    link_script = "task-storage.ld",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
+
+haskell_library(
+    name = "task-storage-artifact",
+    srcs = ["Replacement/TaskStorage/Artifact.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:update-container",
+    ],
+)
+
+haskell_binary(
+    name = "stage-task-storage",
+    srcs = ["StageMain.hs"],
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+    ],
+    data = [
+        "//lz:lz-encode",
+        "//host/firmware:rebuild-update",
+        "//lz:fflzd",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":task-storage-artifact",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
