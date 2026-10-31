@@ -109,6 +109,7 @@ receipt scenario kind facts knob = BL.toStrict (encode document)
     totals (count, zero, nonzero) = object ["count" .= (count :: Word64), "zero_count" .= (zero :: Word64), "nonzero_count" .= (nonzero :: Word64)]
     stop :: String -> Word32 -> Int -> (Word64, Word64) -> [Word32] -> Word32 -> Word32 -> Word32 -> Maybe (Word64, Word64, Word64) -> Maybe Int -> Value
     stop = stopWith tcm
+    stopWith :: [[Word32]] -> String -> Word32 -> Int -> (Word64, Word64) -> [Word32] -> Word32 -> Word32 -> Word32 -> Maybe (Word64, Word64, Word64) -> Maybe Int -> Value
     stopWith tcmWords label address core (core0, core1) registers sp lr flags counter cursor = object
       [ "label" .= label, "address" .= address, "core" .= core
       , "instructions" .= (core0 + core1), "counts" .= [core0, core1], "registers" .= registers
