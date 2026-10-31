@@ -37,7 +37,7 @@ struct Identity(u32);
 #[serde(transparent)]
 struct Word(u32);
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(transparent)]
 struct Address(u64);
 
