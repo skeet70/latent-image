@@ -75,12 +75,14 @@ impl ConsumerWire {
 #[derive(Serialize)]
 struct CodeViews { start: Guest, views: Views }
 #[derive(Serialize)]
+struct ServiceAlias { core: usize, guest: Address, physical: Address, words: [Word; 9] }
+#[derive(Serialize)]
 pub(in crate::peer_witness::loader) struct Receipt {
     kind: ConsumerKind,
     start: Context, dispatch: Context, entered: Context, returned: Context, after: Context,
     roots: Views, slot_before: Views, slot_after: Views, frame_before: Views, frame_after: Views,
     table_before: Views, table_after: Views, code: Vec<CodeViews>, decoder: Decoder,
-    aliases: Vec<AliasBinding>, prelude_watch: WatchState, watch: WatchState,
+    aliases: Vec<AliasBinding>, service_aliases: Vec<ServiceAlias>, prelude_watch: WatchState, watch: WatchState,
 }
 #[derive(Serialize)]
 pub(in crate::peer_witness::loader) struct OuterReceipt<'a, I: Serialize> {
@@ -169,8 +171,8 @@ fn snapshot(machine: &Machine, runner: &Runner<'_>, extent: (u64, u64)) -> Resul
     equal_views(&views)?;
     Ok(views)
 }
-fn alias_resources<'a>(roots: &'a Views, slot: &'a Views, frame: &'a Views, table: &'a Views,
-    code: &'a [CodeViews]) -> [((u64, u64), &'a Views); 8] {
+fn digest_resources<'a>(roots: &'a Views, slot: &'a Views, frame: &'a Views, table: &'a Views,
+    code: &'a [CodeViews]) -> [((u64, u64), &'a Views); 7] {
     std::array::from_fn(|index| match index {
         0 => (ROOTS, roots), 1 => (SLOT, slot), 2 => (CALL_FRAME, frame), 3 => (TABLE, table),
         _ => {
@@ -181,8 +183,8 @@ fn alias_resources<'a>(roots: &'a Views, slot: &'a Views, frame: &'a Views, tabl
     })
 }
 fn aliases(machine: &Machine, runner: &Runner<'_>, tcm: &TcmWords,
-    resources: &[((u64, u64), &Views); 8], hashes: &[Sha256Digest; 8], result: &mut Vec<AliasBinding>) -> Result<(), String> {
-    let guarded: [(u64, u64); 8] = std::array::from_fn(|index| resources[index].0);
+    resources: &[((u64, u64), &Views); 7], hashes: &[Sha256Digest; 7], result: &mut Vec<AliasBinding>) -> Result<(), String> {
+    let guarded: [(u64, u64); 7] = std::array::from_fn(|index| resources[index].0);
     tcm_disjoint_views(&runner.committed, tcm, &guarded)?;
     let mut buffer = [0; (TABLE.1 - TABLE.0) as usize];
     for core in 0..2 {
@@ -195,6 +197,26 @@ fn aliases(machine: &Machine, runner: &Runner<'_>, tcm: &TcmWords,
                 require(buffer == views.physical.as_slice(), "consumer alias bytes differ")?;
                 result.push(AliasBinding { core, guest: Address(guest), physical: Address(start), size: end - start, sha256: *hash });
             }
+        }
+    }
+    Ok(())
+}
+fn service_aliases(machine: &Machine, runner: &Runner<'_>, tcm: &TcmWords,
+    result: &mut Vec<ServiceAlias>) -> Result<(), String> {
+    let start = u64::from(ENTERED);
+    tcm_disjoint_views(&runner.committed, tcm, &[(start, start + 36)])?;
+    let mut bytes = [0; 36];
+    for core in 0..2 {
+        for guest in [start, ZERO_GUEST + start] {
+            require(runner.physical_of(core, guest, 36)? == start, "consumer service alias mapping differs")?;
+            machine.session.board.read_memory(core, guest, &mut bytes)?;
+            let words: [Word; 9] = std::array::from_fn(|index| {
+                let offset = index * 4;
+                Word(u32::from_le_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]]))
+            });
+            require(words.iter().zip(SERVICE).all(|(actual, expected)| actual.0 == *expected),
+                "consumer service alias words differ")?;
+            result.push(ServiceAlias { core, guest: Address(guest), physical: Address(start), words });
         }
     }
     Ok(())
@@ -297,10 +319,12 @@ pub(in crate::peer_witness::loader) fn observe(machine: &mut Machine, runner: &R
             "consumer source instruction readback differs")?;
         code.push(CodeViews { start: source.start, views });
     }
-    let mut bindings = Vec::with_capacity(64);
-    let resources = alias_resources(&roots, &slot_before, &frame_before, &table_before, &code);
-    let mut hashes: [Sha256Digest; 8] = std::array::from_fn(|index| Sha256Digest::of(&resources[index].1.physical));
+    let mut bindings = Vec::with_capacity(56);
+    let mut service_bindings = Vec::with_capacity(8);
+    let resources = digest_resources(&roots, &slot_before, &frame_before, &table_before, &code);
+    let mut hashes: [Sha256Digest; 7] = std::array::from_fn(|index| Sha256Digest::of(&resources[index].1.physical));
     aliases(machine, runner, &dispatch.tcm, &resources, &hashes, &mut bindings)?;
+    service_aliases(machine, runner, &dispatch.tcm, &mut service_bindings)?;
     let mut watch = begin(machine, runner, false)?;
     let outcome = (|| {
         let entered = stop(machine, ENTERED)?;
@@ -337,9 +361,10 @@ pub(in crate::peer_witness::loader) fn observe(machine: &mut Machine, runner: &R
                 "consumer code changed during execution")?;
         }
         require(snapshot(machine, runner, ROOTS)?.physical == roots.physical, "consumer roots changed")?;
-        let resources = alias_resources(&roots, &slot_after, &frame_after, &table_after, &code);
+        let resources = digest_resources(&roots, &slot_after, &frame_after, &table_after, &code);
         hashes[2] = Sha256Digest::of(&frame_after.physical);
         aliases(machine, runner, &after.tcm, &resources, &hashes, &mut bindings)?;
+        service_aliases(machine, runner, &after.tcm, &mut service_bindings)?;
         let state = observed(&watch)?;
         require(state.records.len() == 3, "consumer data effect count differs")?;
         let mut last_instruction: u64 = dispatch.counts.0.iter().sum();
@@ -357,7 +382,7 @@ pub(in crate::peer_witness::loader) fn observe(machine: &mut Machine, runner: &R
         }
         Ok(Receipt { kind: ConsumerKind::InterruptMask, start, dispatch, entered, returned, after,
             roots, slot_before, slot_after, frame_before, frame_after, table_before, table_after, code, decoder: decoder_before,
-            aliases: bindings, prelude_watch, watch: state })
+            aliases: bindings, service_aliases: service_bindings, prelude_watch, watch: state })
     })();
     let end = machine.session.board.memory_watch_end_scoped(&mut watch);
     match outcome { Ok(receipt) => end.map(|()| receipt), Err(error) => { let _ = end; Err(error) } }
