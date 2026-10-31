@@ -92,7 +92,7 @@ fn context(machine: &Machine) -> Result<Context, String> {
         cpsr: register(machine, 1, arm::Register::Cpsr)?, counts: wait::counts(machine)?, tcm: tcm_words(machine)? })
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 enum Source { CpuWrite, CpuRead, CpuFetch, HostWrite, HostRead, ModelBusWrite, ModelBusRead }
 
