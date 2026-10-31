@@ -2250,3 +2250,54 @@ sh_test(
     args = ["$(location :recovery-gpu-startup-test-bin)"],
     data = [":recovery-gpu-startup-test-bin"],
 )
+
+haskell_library(
+    name = "capture-stream-lib",
+    srcs = ["Emulation/CaptureStream.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:deepseq",
+        "//host:text",
+        "//host:unix",
+    ],
+)
+
+haskell_binary(
+    name = "media-route-smoke",
+    srcs = ["MediaRouteSmoke.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":capture-stream-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:cryptohash-sha256",
+        "//host:deepseq",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "capture-stream-tests",
+    size = "small",
+    srcs = ["CaptureStreamTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":capture-stream-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:text",
+    ],
+)
