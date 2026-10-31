@@ -1144,7 +1144,11 @@ pub(super) fn run(mut machine: Machine, contract: &LoaderContract, output: &Path
             initializer: &receipt, consumer: &consumer_receipt,
         })
     } else { serde_json::to_vec_pretty(&receipt) }.map_err(|error| error.to_string())?;
-    require(bytes.len() <= MAX_RECEIPT, "loader-prefix receipt exceeds 16 MiB")?;
+    if contract.consumer.is_some() {
+        require(bytes.len() <= (32 << 20), "initializer-consumer receipt exceeds 32 MiB")?;
+    } else {
+        require(bytes.len() <= MAX_RECEIPT, "loader-prefix receipt exceeds 16 MiB")?;
+    }
     let path = output.join("peer-witness.json");
     std::fs::write(&path, bytes).map_err(|error| format!("{}: {error}", path.display()))?;
     println!("{}", path.display());
