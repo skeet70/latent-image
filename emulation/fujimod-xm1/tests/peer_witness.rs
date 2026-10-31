@@ -364,3 +364,57 @@ fn consumer_scope_rejects_retargeted_source_code_and_nested_contracts() {
     let without_initializer = format!(r#"{{"schema":7,"initializer":{},"consumer":{{"kind":"interrupt-mask"}}}}"#, retained_loader());
     assert!(PeerContract::parse(without_initializer.as_bytes()).is_err());
 }
+
+fn primary_initializer() -> String {
+    r#"{"schema":8,"primary":{"role":"retained-primary","budget":50000000,
+        "source_sha256":"43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490",
+        "loader_a_sha256":"21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+        "run_sha256":"efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef",
+        "boot_rom_sha256":"4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be"}}"#.into()
+}
+
+#[cfg(not(feature = "scoped-watch"))]
+#[test]
+fn default_sdk_refuses_primary_initializer_observation() {
+    assert!(PeerContract::parse(primary_initializer().as_bytes()).is_err());
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn primary_initializer_requires_retained_source_and_whole_input_bindings() {
+    let valid = primary_initializer();
+    assert!(PeerContract::parse(valid.as_bytes()).is_ok());
+    for invalid in [
+        valid.replace("\"retained-primary\"", "\"owned\""),
+        valid.replace("\"budget\":50000000", "\"budget\":49999999"),
+        valid.replace("\"source_sha256\":\"43d6", "\"source_sha256\":\"53d6"),
+        valid.replace("\"loader_a_sha256\":\"2136", "\"loader_a_sha256\":\"3136"),
+        valid.replace("\"run_sha256\":\"efa3", "\"run_sha256\":\"ffa3"),
+        valid.replace("\"boot_rom_sha256\":\"4ece", "\"boot_rom_sha256\":\"5ece"),
+        valid.replace("\"run_sha256\":", "\"missing_run_sha256\":"),
+        valid.replace("\"boot_rom_sha256\":", "\"missing_boot_rom_sha256\":"),
+        valid.replace("\"schema\":8", "\"schema\":8,\"schema\":8"),
+        valid.replace("\"role\":\"retained-primary\"", "\"role\":\"retained-primary\",\"consumer\":null"),
+    ] {
+        assert!(PeerContract::parse(invalid.as_bytes()).is_err());
+    }
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn primary_constructor_refuses_synthetic_inputs_accepted_by_existing_peer_mode() {
+    use fujimod_xm1::run::{RunDocument, ValidatedUpdate};
+    fujimod_emulator_exr2_board::register_board_builder();
+    fujimod_emulator_models::register();
+    let run = include_bytes!("../data/xm1-150.json");
+    let document = RunDocument::parse(run).expect("public natural-reset run");
+    let update = ValidatedUpdate(vec![0xff; document.update_flash_offset + 2048]);
+    let mut rom = vec![0; document.boot_rom.bytes];
+    for instruction in rom.chunks_exact_mut(4) {
+        instruction.copy_from_slice(&0xeafffffe_u32.to_le_bytes());
+    }
+    let primary = PeerContract::parse(primary_initializer().as_bytes()).expect("retained primary contract");
+    assert!(primary.open_machine(run, &update, &rom).is_err());
+    let natural = PeerContract::parse(br#"{"schema":1,"budget":1}"#).expect("natural peer contract");
+    assert!(natural.open_machine(run, &update, &rom).is_ok());
+}

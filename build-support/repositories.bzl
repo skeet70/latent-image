@@ -56,7 +56,7 @@ _FUJIMOD_NIX_DEPS = [
     "//build-support:nixpkgs.nix",
 ]
 
-# Every file of the driver crate; its Nix build sees only these.
+# Bazel invalidation dependencies for the crate copied by fujimod-xm1.nix.
 _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/Cargo.lock",
     "//emulation:fujimod-xm1/Cargo.toml",
@@ -75,7 +75,10 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/native_case.rs",
     "//emulation:fujimod-xm1/src/native_case_main.rs",
     "//emulation:fujimod-xm1/src/peer_witness.rs",
+    "//emulation:fujimod-xm1/src/peer_witness_initializer.rs",
+    "//emulation:fujimod-xm1/src/peer_witness_interrupt_mask.rs",
     "//emulation:fujimod-xm1/src/peer_witness_loader.rs",
+    "//emulation:fujimod-xm1/src/peer_witness_primary_initializer.rs",
     "//emulation:fujimod-xm1/src/peer_witness_startup.rs",
     "//emulation:fujimod-xm1/src/peer_witness_vectors.rs",
     "//emulation:fujimod-xm1/src/peer_witness_wait.rs",

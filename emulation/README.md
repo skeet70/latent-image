@@ -321,6 +321,39 @@ Comparison rederives the retained contract from the original DAT and the owned c
 
 The original schema6 endpoint and its acceptance requirement remain separate from this later retained-consumer observation. Schema7 does not accept task creation, descriptor use, IRQ delivery, timer/device fidelity, kernel/model ownership, later startup, hardware or retirement. The authentication-held secondary `0x12960`, prefix and composed fault preparations/executions remain unattempted and unrouted.
 
+### Retained-primary initializer observation (schema 8)
+
+`--primary-initializer retained` selects the separate loader-A observation prerequisite for [#144](https://github.com/skeet70/latent-image/issues/144). It accepts only the canonical original X-M1 1.50 DAT, an explicit natural-reset run document and the captured 16 KiB ROM. Preparation reuses the existing bounded FFLZD image4 decoding convention, writes `peer-witness-contract.json`, and starts no SDK or guest. There is no owned role, root-0 consumer, completion control, prefix/composed prerequisite or dependency on a prior CPU1 receipt. Schemas 4/5/6/7 and default/scoped/readback profile behavior remain unchanged.
+
+The schema8 contract pins the whole canonical DAT and original loader A, the checked-in `emulation/fujimod-xm1/data/xm1-150.json` run document SHA-256 `efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef`, and the captured ROM SHA-256 `4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be`. `Emulation.PrimaryInitializer.deriveContract` independently derives loader-A publications and caller/frame premises from A bytes. The intended natural observation is core0 caller entry `0x409ac`, pre-BL `0x409dc`, initializer entry `0x40430` exactly one core0 instruction after that BL, and return before executing `0x409e0`. The producer publishes 1,419 ordered words at root `0x4004dae0`. Its 12-byte callee scratch and caller SP/FP `0x40063450/0x4006345c` are source premises until the machine evidence validates them.
+
+Receipt checking rederives the contract from the original DAT/run/ROM and calls the public `parseReceipt` and `validateReceipt` APIs, rather than consuming producer-private state. Only an `observed` receipt with complete publication values/order/preimages, caller preservation, scoped watch, decoder/TCM and virtual/physical alias evidence is accepted. Finite-budget `absent` and nondeadline `refused` remain distinct parsed outcomes, neither accepted as initialization. Schema8 receipt input is bounded to 32 MiB.
+
+The following commands are an unexecuted qualification proposal. `PRIMARY_PREP` and `PRIMARY_RUN` must be distinct fresh directories. Freeze the source, host, scoped SDK, decoder, original DAT, run-document, ROM and generated contract identities before qualification. Integrate the current public emulator-slot implementation before launching this source branch. The earlier qualified SDK artifacts are not qualification of schema8.
+
+After a genuine observed receipt is independently accepted, qualification should coherently set CPSR bit 25 in every caller/pre-BL/entry/return, boundary and final context, then require rejection through the public `validateReceipt` API. Caller and pre-BL admission share the producer's `0x07f0feff` mask and `0xd3` value; equal control bits across contexts do not admit IT state. The checked-in parser tests establish no observed-receipt validation coverage, and proprietary inputs remain outside CI.
+
+`PeerContract::open_machine` returns an opaque owned `WitnessMachine`. For schema8, its private machine and typed whole-input identities come from the same complete run/DAT/ROM buffers used for Session construction. It exposes no raw machine, Session, document, trace or guard reference, mutable or shared. Public `peer_witness::run` consumes it and checks its bound identities before entering the observer. Existing model and fixture callers explicitly use `WitnessMachine::from_unbound`, which schema8 refuses; other peer modes retain their unbound behavior without whole-input hashing.
+
+Private qualification should admit canonical inputs through the public constructor, then independently change only the DAT prefix before `update_flash_offset`, only the run JSON whitespace, and only one ROM byte. Each mismatched input must refuse before guest execution. Reuse the same parsed contract across these constructions. Separately construct and mutate a raw machine through the public Board APIs, wrap it with `WitnessMachine::from_unbound`, and require schema8 refusal. Bound machines have no public state-access path. These cases require the owner-supplied canonical DAT/ROM; an all-invalid synthetic fixture does not cover independent run/ROM identity checks.
+
+```sh
+RUN_JSON="$REPOSITORY/emulation/fujimod-xm1/data/xm1-150.json"
+"$PEER_STAGE_WITNESS" --primary-initializer retained \
+  --firmware "$DAT" --fflzd "$FFLZD" --output "$PRIMARY_PREP" \
+  --run "$RUN_JSON" --boot-rom "$BOOT_ROM"
+XM1_EMULATOR_SLOTS=1 "$PEER_STAGE_WITNESS" --primary-initializer retained \
+  --firmware "$DAT" --fflzd "$FFLZD" --output "$PRIMARY_RUN" \
+  --run "$RUN_JSON" --boot-rom "$BOOT_ROM" --launch --driver "$SCOPED_DRIVER"
+"$PEER_STAGE_WITNESS" --primary-initializer retained \
+  --firmware "$DAT" --run "$RUN_JSON" --boot-rom "$BOOT_ROM" \
+  --primary-initializer-receipt "$PRIMARY_RUN/peer-witness.json"
+```
+
+The launch path acquires the public emulator slot and uses the ordinary bounded SDK command `DRIVER --run RUN_JSON --update DAT --boot-rom ROM --output DIR --peer-witness DIR/peer-witness-contract.json`; receipt validation also runs after launch. The source-only addition establishes no compilation, SDK or guest acceptance. Loader-A ownership, the alternate static caller at `0x40aac`, root-0 installation/selection, descriptor consumers, retained service ownership and physical behavior remain open. No initializer negative preparation/execution or held IRQ-leaf digest work is introduced.
+
+`build-support/fujimod-xm1.nix` copies the complete local adapter crate through `builtins.path`, excluding only entries named `target`. Bazel separately invalidates that source through `_FUJIMOD_XM1_CRATE` in `build-support/repositories.bzl`, including `peer_witness_primary_initializer.rs` and the loader, initializer and interrupt-mask modules. The new Haskell library is declared in `emulation/BUILD.bazel` and linked into the public `peer-stage-witness` command.
+
 
 # Bounded selected-queue experiment
 

@@ -18,6 +18,11 @@ use std::collections::BTreeSet;
 mod initializer;
 pub(super) use initializer::InitializerWire;
 pub(super) use initializer::interrupt_mask::ConsumerWire;
+pub(super) use initializer::primary::{PrimaryContract, PrimaryWire};
+
+pub(super) fn run_primary(machine: Machine, contract: &PrimaryContract, output: &Path) -> Result<(), String> {
+    initializer::primary::run(machine, contract, output)
+}
 
 #[path = "peer_witness_vectors.rs"]
 mod vectors;

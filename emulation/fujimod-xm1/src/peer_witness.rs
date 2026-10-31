@@ -92,6 +92,8 @@ enum ContractWire {
     Initializer(loader::InitializerWire),
     #[cfg(feature = "scoped-watch")]
     InitializerConsumer(loader::ConsumerWire),
+    #[cfg(feature = "scoped-watch")]
+    PrimaryInitializer(loader::PrimaryWire),
 }
 
 pub struct PeerContract {
@@ -100,6 +102,30 @@ pub struct PeerContract {
     startup: Option<startup::StartupContract>,
     #[cfg(feature = "scoped-watch")]
     loader: Option<loader::LoaderContract>,
+    #[cfg(feature = "scoped-watch")]
+    primary: Option<loader::PrimaryContract>,
+}
+
+#[cfg(feature = "scoped-watch")]
+struct InputIdentities {
+    run: Sha256Digest,
+    update: Sha256Digest,
+    boot_rom: Sha256Digest,
+}
+
+#[cfg(feature = "scoped-watch")]
+enum InputBinding { Unbound, Bound(InputIdentities) }
+
+pub struct WitnessMachine {
+    machine: Machine,
+    #[cfg(feature = "scoped-watch")]
+    inputs: InputBinding,
+}
+
+impl WitnessMachine {
+    pub fn from_unbound(machine: Machine) -> Self {
+        Self { machine, #[cfg(feature = "scoped-watch")] inputs: InputBinding::Unbound }
+    }
 }
 
 impl PeerContract {
@@ -110,37 +136,63 @@ impl PeerContract {
                 if contract.schema != 1 || !(1..=MAX_BUDGET).contains(&contract.budget.0) {
                     return Err("peer contract requires schema 1 and budget 1..50000000".into());
                 }
-                Ok(Self { budget: contract.budget, control: None, startup: None, #[cfg(feature = "scoped-watch")] loader: None })
+                Ok(Self { budget: contract.budget, control: None, startup: None, #[cfg(feature = "scoped-watch")] loader: None,
+                    #[cfg(feature = "scoped-watch")] primary: None })
             }
             ContractWire::Control(contract) => {
                 contract.validate()?;
-                Ok(Self { budget: contract.budget, control: Some(contract.control), startup: None, #[cfg(feature = "scoped-watch")] loader: None })
+                Ok(Self { budget: contract.budget, control: Some(contract.control), startup: None, #[cfg(feature = "scoped-watch")] loader: None,
+                    #[cfg(feature = "scoped-watch")] primary: None })
             }
             ContractWire::Startup(wire) => {
                 let contract = wire.validate()?;
-                Ok(Self { budget: contract.budget(), control: None, startup: Some(contract), #[cfg(feature = "scoped-watch")] loader: None })
+                Ok(Self { budget: contract.budget(), control: None, startup: Some(contract), #[cfg(feature = "scoped-watch")] loader: None,
+                    #[cfg(feature = "scoped-watch")] primary: None })
             }
             #[cfg(feature = "scoped-watch")]
             ContractWire::Loader(wire) => {
                 let contract = wire.validate()?;
-                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract) })
+                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract), primary: None })
             }
             #[cfg(feature = "scoped-watch")]
             ContractWire::Composed(wire) => {
                 let contract = wire.validate()?;
-                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract) })
+                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract), primary: None })
             }
             #[cfg(feature = "scoped-watch")]
             ContractWire::Initializer(wire) => {
                 let contract = wire.validate()?;
-                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract) })
+                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract), primary: None })
             }
             #[cfg(feature = "scoped-watch")]
             ContractWire::InitializerConsumer(wire) => {
                 let contract = wire.validate()?;
-                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract) })
+                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract), primary: None })
+            }
+            #[cfg(feature = "scoped-watch")]
+            ContractWire::PrimaryInitializer(wire) => {
+                let contract = wire.validate()?;
+                Ok(Self { budget: Instructions(MAX_BUDGET), control: None, startup: None, loader: None, primary: Some(contract) })
             }
         }
+    }
+
+    pub fn open_machine(&self, run_bytes: &[u8], update: &run::ValidatedUpdate, boot_rom: &[u8]) -> Result<WitnessMachine, String> {
+        let document = RunDocument::parse(run_bytes)?;
+        let mut session = run::open(&document, update, boot_rom)?;
+        session.board.set_execution_policy(document.execution_policy.into())?;
+        let machine = Machine::new(document, session)?;
+        #[cfg(feature = "scoped-watch")]
+        let inputs = if let Some(primary) = &self.primary {
+            let identities = InputIdentities {
+                run: Sha256Digest::of(run_bytes), update: Sha256Digest::of(&update.0), boot_rom: Sha256Digest::of(boot_rom),
+            };
+            primary.admit(&identities)?;
+            InputBinding::Bound(identities)
+        } else {
+            InputBinding::Unbound
+        };
+        Ok(WitnessMachine { machine, #[cfg(feature = "scoped-watch")] inputs })
     }
 }
 
@@ -445,7 +497,18 @@ fn execute(machine: &mut Machine, contract: &PeerContract, stops: &mut Vec<PeerH
     Ok(())
 }
 
-pub fn run(mut machine: Machine, contract: PeerContract, output: &Path) -> Result<(), String> {
+pub fn run(prepared: WitnessMachine, contract: PeerContract, output: &Path) -> Result<(), String> {
+    #[cfg(feature = "scoped-watch")]
+    let inputs = prepared.inputs;
+    let mut machine = prepared.machine;
+    #[cfg(feature = "scoped-watch")]
+    if let Some(primary) = &contract.primary {
+        let InputBinding::Bound(identities) = inputs else {
+            return Err("primary witness machine lacks whole-input provenance".into());
+        };
+        primary.admit(&identities)?;
+        return loader::run_primary(machine, primary, output);
+    }
     #[cfg(feature = "scoped-watch")]
     if let Some(loader) = &contract.loader {
         return loader::run(machine, loader, output);

@@ -4,6 +4,9 @@ use super::*;
 #[path = "peer_witness_interrupt_mask.rs"]
 pub(super) mod interrupt_mask;
 
+#[path = "peer_witness_primary_initializer.rs"]
+pub(in crate::peer_witness) mod primary;
+
 pub(super) const BODY: (u64, u64) = (0xd0430, 0xd09ac);
 const TABLE: (u64, u64) = (0xddaa0, 0xdf0cc);
 const TABLE_GUEST: u64 = 0x400d_daa0;
@@ -77,19 +80,23 @@ impl InitializerWire {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct Context {
     pc: Word, registers: [Word; 13], sp: Word, lr: Word, cpsr: Word, counts: CoreCounts, tcm: TcmWords,
 }
 
 fn context(machine: &Machine) -> Result<Context, String> {
+    context_for(machine, 1)
+}
+
+fn context_for(machine: &Machine, core: usize) -> Result<Context, String> {
     let mut registers = [Word(0); 13];
     for (index, value) in registers.iter_mut().enumerate() {
-        *value = register(machine, 1, arm::Register::R(index as u8))?;
+        *value = register(machine, core, arm::Register::R(index as u8))?;
     }
-    Ok(Context { pc: register(machine, 1, arm::Register::R(15))?, registers,
-        sp: register(machine, 1, arm::Register::R(13))?, lr: register(machine, 1, arm::Register::R(14))?,
-        cpsr: register(machine, 1, arm::Register::Cpsr)?, counts: wait::counts(machine)?, tcm: tcm_words(machine)? })
+    Ok(Context { pc: register(machine, core, arm::Register::R(15))?, registers,
+        sp: register(machine, core, arm::Register::R(13))?, lr: register(machine, core, arm::Register::R(14))?,
+        cpsr: register(machine, core, arm::Register::Cpsr)?, counts: wait::counts(machine)?, tcm: tcm_words(machine)? })
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Eq)]

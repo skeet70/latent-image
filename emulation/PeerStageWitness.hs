@@ -14,6 +14,7 @@ import qualified Emulation.PeerWaitWitness as W
 import qualified Emulation.LoaderPrefixWitness as L
 import qualified Emulation.InterfaceInitializer as I
 import qualified Emulation.InterfaceInitializerConsumer as IC
+import qualified Emulation.PrimaryInitializer as PI
 import qualified Emulation.PeerStartupWitness as S
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Runtime (..), Workspace, freshRuntime, resolve, validateFirmware, workspace)
 import qualified FujiAF.FirstStage as F
@@ -34,6 +35,8 @@ newtype RunDescription = RunDescription FilePath
 newtype BootRom = BootRom FilePath
 
 data Launch = PrepareOnly | Launch Driver RunDescription BootRom
+
+data PrimaryExecution = PreparePrimaryOnly | LaunchPrimary Driver
 
 data Observation = NaturalBaseline | WaitControl C.PeerControl
 
@@ -82,6 +85,8 @@ data Options
   | PrepareInitializer FilePath FilePath FilePath InitializerProgram InitializerBoundary Launch
   | ConsumeInitializer FilePath FilePath InitializerProgram InitializerBoundary
   | CompareInitializerConsumer FilePath FilePath FilePath OwnedInitializerInputs IC.ConsumerKind
+  | PreparePrimaryInitializer FilePath FilePath FilePath RunDescription BootRom PrimaryExecution
+  | ConsumePrimaryInitializer FilePath FilePath RunDescription BootRom
 
 usage :: String
 usage = unlines
@@ -104,6 +109,8 @@ usage = unlines
   , "       peer-stage-witness --interface-initializer retained|owned --initializer-consumer interrupt-mask --firmware DAT --fflzd FFLZD --output DIR [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT] [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
   , "       peer-stage-witness --interface-initializer retained|owned --initializer-consumer interrupt-mask --firmware DAT --initializer-receipt FILE [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT]"
   , "       peer-stage-witness --compare-initializer-consumer RETAINED_RECEIPT OWNED_RECEIPT --initializer-consumer interrupt-mask --firmware OWNED_DAT --candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT"
+  , "       peer-stage-witness --primary-initializer retained --firmware ORIGINAL_DAT --fflzd FFLZD --output DIR --run RUN_JSON --boot-rom ROM [--launch --driver DRIVER]"
+  , "       peer-stage-witness --primary-initializer retained --firmware ORIGINAL_DAT --run RUN_JSON --boot-rom ROM --primary-initializer-receipt FILE"
   , "Natural preparation writes peer-witness-contract.json and peer-witness-expected.json without starting an emulator."
   , "Launch requires an explicit driver, run description and captured 16 KiB ROM."
   , "Control preparation preserves the input and writes peer-witness-contract.json, peer-control.DAT and peer-control-manifest.json instead of the natural expected-policy file."
@@ -115,6 +122,7 @@ usage = unlines
   , "Interface initialization uses distinct schema 6 and the natural source only; receipt consumption rederives the source/image/symbol contract."
   , "Explicit --initializer-consumer interrupt-mask selects schema 7 and independently consumes complete schema-6 initializer evidence before the retained service window."
   , "Initializer-consumer comparison rederives both contracts from the original DAT and actual owned staging inputs."
+  , "Retained primary initialization uses schema 8, binds the canonical DAT/run/ROM, and has no owned or root-0 consumer option."
   ]
 
 data Flag
@@ -126,6 +134,7 @@ data Flag
   | ComposedMode | FirstStageImageFile | FirstStageSymbolsFile | ComposedReceiptFile | ComposedContractFile
   | ComposedCompareRetainedFile | ComposedCompareRetainedContract | ComposedCompareOwnedFile | ComposedCompareOwnedContract
   | InitializerMode | InitializerReceiptFile | InitializerConsumerKind | InitializerCompareRetainedFile | InitializerCompareOwnedFile
+  | PrimaryInitializerMode | PrimaryInitializerReceiptFile
   deriving (Eq)
 
 parseOptions :: [String] -> Either String Options
@@ -149,6 +158,26 @@ parseOptions arguments = do
         Just "interrupt-mask" -> Right IC.InterruptMask
         Just _ -> Left "--initializer-consumer must be interrupt-mask"
         Nothing -> Left "--initializer-consumer is required for initializer-consumer comparison"
+      primaryOptions = do
+        mode <- need "--primary-initializer" PrimaryInitializerMode
+        unless (mode == "retained") (Left "--primary-initializer must be retained")
+        firmware <- need "--firmware" FirmwareFile
+        run <- RunDescription <$> need "--run" RunFile
+        rom <- BootRom <$> need "--boot-rom" RomFile
+        case value PrimaryInitializerReceiptFile of
+          Just receipt -> do
+            only [PrimaryInitializerMode,PrimaryInitializerReceiptFile,FirmwareFile,RunFile,RomFile]
+            when launch (Left "primary initializer receipt mode cannot launch")
+            pure (ConsumePrimaryInitializer firmware receipt run rom)
+          Nothing -> do
+            only [PrimaryInitializerMode,FirmwareFile,FflzdFile,OutputDirectory,RunFile,RomFile,DriverFile]
+            execution <- if launch
+              then LaunchPrimary . Driver <$> need "--driver" DriverFile
+              else do
+                when (value DriverFile /= Nothing) (Left "--driver requires --launch")
+                pure PreparePrimaryOnly
+            PreparePrimaryInitializer firmware <$> need "--fflzd" FflzdFile <*> need "--output" OutputDirectory
+              <*> pure run <*> pure rom <*> pure execution
       initializerOptions = case value InitializerCompareRetainedFile of
         Just retained -> do
           only ([InitializerCompareRetainedFile,InitializerCompareOwnedFile,InitializerConsumerKind,FirmwareFile] ++ candidateFlags)
@@ -219,7 +248,8 @@ parseOptions arguments = do
           CompareComposed retained <$> need "--compare-composed-startup" ComposedCompareRetainedContract
             <*> need "--compare-composed-startup" ComposedCompareOwnedFile <*> need "--compare-composed-startup" ComposedCompareOwnedContract
         _ -> Left ("composed preparation, receipt and comparison modes are mutually exclusive\n" ++ usage)
-  if any ((`elem` [InitializerMode,InitializerReceiptFile,InitializerConsumerKind,InitializerCompareRetainedFile]) . fst) values then initializerOptions
+  if any ((`elem` [PrimaryInitializerMode,PrimaryInitializerReceiptFile]) . fst) values then primaryOptions
+  else if any ((`elem` [InitializerMode,InitializerReceiptFile,InitializerConsumerKind,InitializerCompareRetainedFile]) . fst) values then initializerOptions
   else if any ((`elem` composedFlags) . fst) values then composedOptions
   else if any ((`elem` loaderFlags) . fst) values then loaderOptions else case (value StartupReceiptFile, value CompareRetainedFile, value StartupMode) of
     (Nothing, Nothing, Nothing) -> case (value ReceiptFile, value ControlReceiptFile) of
@@ -320,6 +350,8 @@ parseOptions arguments = do
         "--interface-initializer" -> Right InitializerMode
         "--initializer-receipt" -> Right InitializerReceiptFile
         "--initializer-consumer" -> Right InitializerConsumerKind
+        "--primary-initializer" -> Right PrimaryInitializerMode
+        "--primary-initializer-receipt" -> Right PrimaryInitializerReceiptFile
         "--firststage-image" -> Right FirstStageImageFile
         "--firststage-symbols" -> Right FirstStageSymbolsFile
         _ -> Left ("unknown option: " ++ name ++ "\n" ++ usage)
@@ -781,6 +813,46 @@ prepareInitializer root firmwarePath fflzdPath outputPath choice boundary execut
     Launch driver run rom ->
       launchDriver root output contractPath receipt firmware driver run rom (consumeInitializer receipt selected)
 
+primaryInitializerContract :: Workspace -> FilePath -> RunDescription -> BootRom -> IO (Firmware, B.ByteString, PI.Contract)
+primaryInitializerContract root firmwarePath (RunDescription runPath) (BootRom romPath) = do
+  datPath <- canonicalizePath (resolve root firmwarePath)
+  dat <- H.readRegular maxContainer datPath
+  run <- H.readRegular (1024 * 1024) (resolve root runPath)
+  rom <- H.readRegular 0x4000 (resolve root romPath)
+  contract <- either H.failH pure (PI.deriveContract dat run rom)
+  pure (Firmware datPath, dat, contract)
+
+consumePrimaryInitializer :: FilePath -> PI.Contract -> IO ()
+consumePrimaryInitializer path contract = do
+  bytes <- H.readRegular (32 * 1024 * 1024) path
+  receipt <- either H.failH pure (PI.parseReceipt bytes)
+  either H.failH pure (PI.validateReceipt contract receipt)
+  putStrLn ("retained-primary initializer receipt accepted: " ++ path)
+
+preparePrimaryInitializer :: Workspace -> FilePath -> FilePath -> FilePath -> RunDescription -> BootRom -> PrimaryExecution -> IO ()
+preparePrimaryInitializer root firmwarePath fflzdPath outputPath run rom execution = do
+  (firmware, dat, contract) <- primaryInitializerContract root firmwarePath run rom
+  parsed <- either H.failH pure (U.parseContainer dat)
+  Runtime output <- freshRuntime root (Just (Runtime outputPath)) (UniqueRuntime "primary-initializer")
+  image4 <- decodeImage4 (resolve root fflzdPath) output (U.parsedParts parsed)
+  argument <- either H.failH pure (leWordAt image4 0xc)
+  H.ensure (argument == 0x69cdf8) "primary initializer image-4 argument differs from its admitted source"
+  let contractPath = output </> "peer-witness-contract.json"
+      receipt = output </> "peer-witness.json"
+  BL.writeFile contractPath (encode (PI.contractValue contract))
+  case execution of
+    PreparePrimaryOnly -> do
+      let Firmware datPath = firmware
+          RunDescription runPath = run
+          BootRom romPath = rom
+          consumerArgs = ["--primary-initializer","retained","--firmware",datPath
+            ,"--run",resolve root runPath,"--boot-rom",resolve root romPath,"--primary-initializer-receipt",receipt]
+      putStrLn ("retained-primary initializer preparation: " ++ output)
+      putStrLn ("receipt consumer: " ++ showCommandForUser "peer-stage-witness" consumerArgs)
+      putStrLn "launch requires a separate explicit --launch invocation with --driver"
+    LaunchPrimary driver ->
+      launchDriver root output contractPath receipt firmware driver run rom (consumePrimaryInitializer receipt contract)
+
 main :: IO ()
 main = do
   args <- getArgs
@@ -867,3 +939,11 @@ main = do
           prepareInitializer root firmwarePath fflzd output choice boundary execution
         CompareInitializerConsumer retained owned firmware inputs kind ->
           compareInitializerConsumer root retained owned firmware inputs kind
+        ConsumePrimaryInitializer firmwarePath receipt run rom -> do
+          (_, _, contract) <- primaryInitializerContract root firmwarePath run rom
+          consumePrimaryInitializer (resolve root receipt) contract
+        PreparePrimaryInitializer firmwarePath fflzd output run rom execution -> do
+          enterSlot args $ case execution of
+            PreparePrimaryOnly -> PrepareOnly
+            LaunchPrimary driver -> Launch driver run rom
+          preparePrimaryInitializer root firmwarePath fflzd output run rom execution

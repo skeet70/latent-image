@@ -137,10 +137,16 @@ fn drive() -> Result<(), String> {
     fujimod_emulator_exr2_board::register_board_builder();
     fujimod_emulator_models::register();
     let arguments = arguments()?;
-    let document = RunDocument::parse(&read(&arguments.run)?)?;
+    let run_bytes = read(&arguments.run)?;
     let update = ValidatedUpdate(read(&arguments.update)?);
     let boot_rom = read(&arguments.boot_rom)?;
     std::fs::create_dir_all(&arguments.output).map_err(|e| format!("{}: {e}", arguments.output.display()))?;
+    if let Some(path) = &arguments.peer_witness {
+        let contract = peer_witness::PeerContract::parse(&read(path)?)?;
+        let machine = contract.open_machine(&run_bytes, &update, &boot_rom)?;
+        return peer_witness::run(machine, contract, &arguments.output);
+    }
+    let document = RunDocument::parse(&run_bytes)?;
     let mut session = run::open(&document, &update, &boot_rom)?;
     session.board.set_execution_policy(document.execution_policy.into())?;
     let boot = document.boot_instructions;
@@ -149,10 +155,6 @@ fn drive() -> Result<(), String> {
     if let Some(contract_path) = &arguments.witness {
         let contract = witness::WitnessContract::parse(&read(contract_path)?)?;
         return witness::run(machine, contract, &output);
-    }
-    if let Some(contract_path) = &arguments.peer_witness {
-        let contract = peer_witness::PeerContract::parse(&read(contract_path)?)?;
-        return peer_witness::run(machine, contract, &output);
     }
     let mut driver = Driver { machine, output, frames: 0 };
     driver.machine.run(boot);

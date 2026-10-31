@@ -492,6 +492,39 @@ haskell_library(
     ],
 )
 
+haskell_library(
+    name = "primary-initializer-lib",
+    srcs = ["Emulation/PrimaryInitializer.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":interface-initializer-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:json",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+        "//host/firmware:startup-stage-contract",
+    ],
+)
+
+haskell_test(
+    name = "primary-initializer-tests",
+    size = "small",
+    srcs = ["PrimaryInitializerTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":primary-initializer-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
 haskell_binary(
     name = "build-interface-initializer",
     srcs = ["BuildInterfaceInitializer.hs"],
@@ -618,6 +651,7 @@ haskell_binary(
         ":peer-stage-witness-lib",
         ":peer-startup-witness-lib",
         ":peer-wait-witness-lib",
+        ":primary-initializer-lib",
         ":viewer-runtime-lib",
         "//host:aeson",
         "//host:base",

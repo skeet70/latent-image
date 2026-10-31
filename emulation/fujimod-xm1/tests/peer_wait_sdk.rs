@@ -455,7 +455,7 @@ fn control_configuration_failure_still_writes_a_schema_two_receipt() {
         let contract = format!(r#"{{"schema":2,"control":"{name}","budget":10000000}}"#);
         let output = std::env::temp_dir().join(format!("peer-control-{}-{}", std::process::id(), OUTPUT.fetch_add(1, Ordering::Relaxed)));
         std::fs::create_dir(&output).unwrap();
-        let result = peer_witness::run(machine, PeerContract::parse(contract.as_bytes()).unwrap(), &output);
+        let result = peer_witness::run(peer_witness::WitnessMachine::from_unbound(machine), PeerContract::parse(contract.as_bytes()).unwrap(), &output);
         let receipt: FailedReceipt = serde_json::from_slice(&std::fs::read(output.join("peer-witness.json")).unwrap()).unwrap();
         std::fs::remove_dir_all(&output).unwrap();
         assert!(result.is_err());
@@ -526,7 +526,7 @@ fn composed_configuration_refusal_keeps_its_schema_and_selected_startup_identity
         "secondary_symbols_sha256":"{digest}","secondary_source_sha256":"{digest}",{protocol}}}}}"#);
     let output = std::env::temp_dir().join(format!("peer-composed-{}-{}", std::process::id(), OUTPUT.fetch_add(1, Ordering::Relaxed)));
     std::fs::create_dir(&output).unwrap();
-    let result = peer_witness::run(machine, PeerContract::parse(contract.as_bytes()).unwrap(), &output);
+    let result = peer_witness::run(peer_witness::WitnessMachine::from_unbound(machine), PeerContract::parse(contract.as_bytes()).unwrap(), &output);
     let receipt: ComposedFailure = serde_json::from_slice(&std::fs::read(output.join("peer-witness.json")).unwrap()).unwrap();
     std::fs::remove_dir_all(&output).unwrap();
     assert!(result.is_err());
@@ -564,7 +564,7 @@ fn standalone_configuration_refusal_keeps_initial_and_handoff_identity_unobserve
         "forbid_read":[[852168,852220]]}}}}"#);
     let output = std::env::temp_dir().join(format!("peer-loader-identity-{}-{}", std::process::id(), OUTPUT.fetch_add(1, Ordering::Relaxed)));
     std::fs::create_dir(&output).unwrap();
-    let result = peer_witness::run(machine, PeerContract::parse(contract.as_bytes()).unwrap(), &output);
+    let result = peer_witness::run(peer_witness::WitnessMachine::from_unbound(machine), PeerContract::parse(contract.as_bytes()).unwrap(), &output);
     let receipt: LoaderIdentityFailure = serde_json::from_slice(&std::fs::read(output.join("peer-witness.json")).unwrap()).unwrap();
     std::fs::remove_dir_all(&output).unwrap();
     assert!(result.is_err());
@@ -1400,7 +1400,7 @@ mod composed_interleaving {
             "peer-composed-order-{}-{}", std::process::id(), OUTPUT.fetch_add(1, Ordering::Relaxed),
         ));
         std::fs::create_dir(&output).unwrap();
-        let result = peer_witness::run(machine, PeerContract::parse(contract.as_bytes()).unwrap(), &output);
+        let result = peer_witness::run(peer_witness::WitnessMachine::from_unbound(machine), PeerContract::parse(contract.as_bytes()).unwrap(), &output);
         let receipt = serde_json::from_slice(&std::fs::read(output.join("peer-witness.json")).unwrap()).unwrap();
         std::fs::remove_dir_all(output).unwrap();
         (result, receipt)
