@@ -6,7 +6,7 @@
 //! `0x00cd5e78`, `0x01467588`; prehook shadow `0x0095037e`.
 
 #[cfg(target_arch = "arm")]
-core::arch::global_asm!(include_str!("dispatch.S"));
+core::arch::global_asm!(include_str!("dispatch.S"), options(raw));
 
 const CELL_POINTERS: u32 = 0x00cf_58b8;
 const ACTION_POINTERS: u32 = 0x00cf_e2a8;
