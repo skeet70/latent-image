@@ -375,10 +375,10 @@ index c919039..d0e7bcf 100644
  }
 diff --git a/crates/emulator/src/board/observation/scoped.rs b/crates/emulator/src/board/observation/scoped.rs
 new file mode 100644
-index 0000000..9183e0e
+index 0000000..ce3d646
 --- /dev/null
 +++ b/crates/emulator/src/board/observation/scoped.rs
-@@ -0,0 +1,1319 @@
+@@ -0,0 +1,1318 @@
 +//! A fixed-view memory watch with core-filtered confinement, word-read
 +//! counters and zero-fill coverage beside the logged classes.
 +//!
@@ -386,6 +386,10 @@ index 0000000..9183e0e
 +//! bank offset and reaches only confinement rules. Any other access resolves
 +//! to a physical address through the decoder's selected views and the given
 +//! maps; accesses through addresses outside those views are not observed.
++//!
++//! TCM region registers are compared with the snapshot only on that core's
++//! hooked accesses. A bank move followed by a restore with no hooked access
++//! between them is not observed.
 +use super::{
 +    super::{Board, State, memory::Memory, preservation::PhysicalRange},
 +    Attribution, ByteOrder, MemoryContext, Records, Span, ViewPolicy, WatchKinds, WatchRange,
@@ -1580,27 +1584,22 @@ index 0000000..9183e0e
 +                (Access::Fetch, WatchKinds::CPU_FETCH),
 +            ] {
 +                let rule = by_core[core][slot(access)].map(|index| &confined[index]);
-+                if rule.is_some_and(|rule| rule.allow) {
++                // A CP15 bank move takes TCM offsets away from their begin-time
++                // addresses; hooking every access lets classify report it.
++                if rule.is_some_and(|rule| {
++                    rule.allow
++                        || rule
++                            .spans()
++                            .iter()
++                            .any(|span| matches!(span, ScopeSpan::Tcm(_)))
++                }) {
 +                    plan.push((access, HookRange::All));
 +                    continue;
 +                }
 +                let mut spans = vec![];
-+                if let Some(rule) = rule {
-+                    for span in rule.spans() {
-+                        match *span {
-+                            ScopeSpan::Physical(range) => {
-+                                spans.extend(view_spans(&views, (range.start(), range.end())))
-+                            }
-+                            ScopeSpan::Tcm(range) => {
-+                                if let Some((base, _)) = tcm[core].0[range.bank.index()].window {
-+                                    spans.push((
-+                                        (base + u64::from(range.start))
-+                                            .saturating_sub(MAX_WIDTH - 1),
-+                                        base + u64::from(range.end),
-+                                    ));
-+                                }
-+                            }
-+                        }
++                for span in rule.map_or(&[][..], Confined::spans) {
++                    if let ScopeSpan::Physical(range) = *span {
++                        spans.extend(view_spans(&views, (range.start(), range.end())));
 +                    }
 +                }
 +                if access == Access::Read {
@@ -1700,10 +1699,10 @@ index 0000000..9183e0e
 +}
 diff --git a/crates/emulator/src/board/scoped_watch_tests.rs b/crates/emulator/src/board/scoped_watch_tests.rs
 new file mode 100644
-index 0000000..de651cf
+index 0000000..4322667
 --- /dev/null
 +++ b/crates/emulator/src/board/scoped_watch_tests.rs
-@@ -0,0 +1,620 @@
+@@ -0,0 +1,654 @@
 +use super::bus::{Bus, Mode};
 +use super::factory::{Engine, Graph, MemoryMap, Options, Processor, Ram};
 +use super::memory::BusMapping;
@@ -1958,6 +1957,40 @@ index 0000000..de651cf
 +    let state = watch.state();
 +    assert_eq!(state["fault"]["kind"], "tcm-changed");
 +    assert_eq!(state["fault"]["bank"], "atcm");
++}
++
++#[test]
++fn a_forbidden_tcm_offset_reached_through_a_moved_bank_is_a_fault() {
++    for (register, target, moved) in [(ATCM | 1, 0x31010, false), (0x40001, 0x40010, true)] {
++        let mut board = board();
++        code(&board, 0, &[B_SELF]);
++        // mcr p15, 0, r0, c9, c1, 1; str r2, [r3]
++        code(&board, 1, &[0xee090f31, 0xe5832000, B_SELF]);
++        set(&board, 1, 0, register);
++        set(&board, 1, 2, 7);
++        set(&board, 1, 3, target);
++        let watch = begin(
++            &board,
++            rules(vec![confine(
++                1,
++                Access::Write,
++                Confinement::Forbid(vec![atcm(0x10, 0x14)]),
++            )]),
++        );
++        run(&mut board, 8);
++        let state = watch.state();
++        let mut bytes = [0; 4];
++        board.read_memory(1, u64::from(target), &mut bytes).unwrap();
++        assert_eq!(bytes, [7, 0, 0, 0]);
++        if moved {
++            assert_eq!(
++                (&state["fault"]["kind"], &state["fault"]["bank"]),
++                (&json!("tcm-changed"), &json!("atcm"))
++            );
++        } else {
++            assert_eq!(state["fault"], Value::Null);
++        }
++    }
 +}
 +
 +#[test]
