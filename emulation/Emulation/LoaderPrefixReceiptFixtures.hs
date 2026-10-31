@@ -390,7 +390,7 @@ installDocument _ knob document =
       [ "source" .= ("cpu-write" :: String), "address" .= physical, "physical" .= physical, "size" .= (4 :: Int)
       , "core" .= (0 :: Int), "pc" .= (pc :: Word32), "instructions" .= (instructions :: Word64), "tick" .= instructions
       , "before" .= B.unpack (encodeLeWord before), "value" .= (value :: Word32), "byte_order" .= ("little" :: String) ]
-    zero = row 0x6080 0xa00c4 0 0 zeroTime
+    zero = row 0x6080 (0xa00c4 :: Word32) 0 0 zeroTime
     staging = dmaRow 0x40020 0xe0
     vectorRows = zipWith (\(site, slot, before, value) instructions -> row site slot before value instructions) installSteps eventTimes
     protocolRows = sortOn fst ((zeroTime, zero) : (stagingTime, staging) : zip eventTimes vectorRows)
