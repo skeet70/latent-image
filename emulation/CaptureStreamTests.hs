@@ -63,7 +63,9 @@ progress state operation at endpoint = object
 
 sequenceProgress :: T.Text -> Word64 -> Word64 -> Int -> T.Text -> [Value] -> Value
 sequenceProgress state at endpoint phase position phases = case progress state "shutter-sequence" at endpoint of
-  Object o -> Object (o <> KM.fromList ["current_phase" .= phase, "position" .= position, "phases" .= phases])
+  Object o -> Object (o <> KM.fromList (["phases" .= phases]
+    ++ ["current_phase" .= phase | state == "drain-required"]
+    ++ ["position" .= position | state == "drain-required"]))
   other -> other
 
 withTemp :: (FilePath -> IO a) -> IO a

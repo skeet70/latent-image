@@ -134,27 +134,31 @@ parseAdvance operation = A.parseEither $ A.withObject "capture advancement" $ \o
   at <- o .: "instructions"
   endpoint <- o .: "intended_endpoint"
   unless (at <= endpoint && (state /= Completed || at == endpoint)) (fail "invalid capture advancement endpoint")
-  phase <- if operation == ShutterSequence then do
-    current <- o .: "current_phase" >>= \p -> case (p :: Word64) of
-      0 -> pure HalfInitial; 1 -> pure FullHeld; 2 -> pure HalfFinal; 3 -> pure ReleasedFinal
-      _ -> fail "unknown shutter phase"
-    contact <- o .: "position"
-    unless (contact == case current of HalfInitial -> Half; FullHeld -> Full; HalfFinal -> Half; ReleasedFinal -> Released)
-      (fail "shutter phase and contact disagree")
-    phases <- o .: "phases"
-    let specs = [(Half,8000000),(Full,8000000),(Half,4000000),(Released,4000000)]
-        validPhase (PhaseObservation actual start finish) (expected, budget) =
-          actual == expected && instructionValue finish >= instructionValue start
-            && instructionValue finish - instructionValue start == budget
-        adjacent (PhaseObservation _ _ finish) (PhaseObservation _ start _) = finish == start
-        phaseCount = case current of HalfInitial -> 0; FullHeld -> 1; HalfFinal -> 2; ReleasedFinal -> 3
-    unless (length phases == (if state == Completed then 4 else phaseCount)
-        && and (zipWith validPhase phases specs)
-        && and (zipWith adjacent phases (drop 1 phases))
-        && (state /= Completed || current == ReleasedFinal))
-      (fail "invalid shutter phase observations")
-    pure (Just current)
-    else pure Nothing
+  phase <- case operation of
+    Window -> pure Nothing
+    ShutterSequence -> do
+      (current, contact) <- case state of
+        Completed -> pure (ReleasedFinal, Released)
+        DrainRequired -> do
+          current <- o .: "current_phase" >>= \p -> case (p :: Word64) of
+            0 -> pure HalfInitial; 1 -> pure FullHeld; 2 -> pure HalfFinal; 3 -> pure ReleasedFinal
+            _ -> fail "unknown shutter phase"
+          contact <- o .: "position"
+          pure (current, contact)
+      unless (contact == case current of HalfInitial -> Half; FullHeld -> Full; HalfFinal -> Half; ReleasedFinal -> Released)
+        (fail "shutter phase and contact disagree")
+      phases <- o .: "phases"
+      let specs = [(Half,8000000),(Full,8000000),(Half,4000000),(Released,4000000)]
+          validPhase (PhaseObservation actual start finish) (expected, budget) =
+            actual == expected && instructionValue finish >= instructionValue start
+              && instructionValue finish - instructionValue start == budget
+          adjacent (PhaseObservation _ _ finish) (PhaseObservation _ start _) = finish == start
+          phaseCount = case current of HalfInitial -> 0; FullHeld -> 1; HalfFinal -> 2; ReleasedFinal -> 3
+      unless (length phases == (if state == Completed then 4 else phaseCount)
+          && and (zipWith validPhase phases specs)
+          && and (zipWith adjacent phases (drop 1 phases)))
+        (fail "invalid shutter phase observations")
+      pure (Just current)
   pure (Advance state at endpoint phase)
 
 data RamStatus = Complete | OutsideRam | ReadFailed | ByteLimit deriving (Eq, Generic, NFData)
