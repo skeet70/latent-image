@@ -2,6 +2,7 @@ use fujimod_emulator::board::{bus::{Bus, Mode}, factory::{self, Graph, MemoryMap
 use fujimod_emulator::board::decoder::{Choice, Decoder};
 use fujimod_emulator::session::Session;
 use fujimod_emulator_cpu::{ExecutionPolicy, Model, Register, arm, timeline::Ratio};
+use fujimod_emulator_cpu_unicorn::rprofile;
 use fujimod_emulator_exr2_plan::Resources;
 use fujimod_xm1::{machine::Machine, peer_witness::{self, PeerContract}, run::RunDocument};
 use fujimod_xm1::provenance::Guest;
@@ -42,7 +43,18 @@ fn fixture_graph(ram_bytes: usize, views: RamViews) -> Graph {
     };
     Graph {
         processors: (0..2).map(|core| Processor {
-            model: Model::CortexR5F, rprofile: Some(Default::default()), mprofile: None, released: true,
+            model: Model::CortexR5F,
+            rprofile: Some(match views {
+                RamViews::Physical => Default::default(),
+                RamViews::AliasedWithDecoder => rprofile::core::Options {
+                    tcm: rprofile::tcm::Options {
+                        atcm: rprofile::tcm::BankOptions { bytes: 0x1000, reset: 0 },
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            }),
+            mprofile: None, released: true,
             registers: vec![(Register::Pc, 0x1000 + core as u64 * 0x1000), (Register::Pstate, 0xd3)],
         }).collect(),
         ram: vec![Ram { base: 0, size: ram_bytes }],
