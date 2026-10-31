@@ -69,10 +69,20 @@ data Knobs = Knobs
   , knobDelayLoads :: Word64
   , knobStoredValue :: Maybe Word32
   , knobPostLoadSkips :: Bool
+  -- | Counter totals and scoped row count at the prefix entry.
+  , knobEntryObservation :: (Maybe (Word64, Word64, Word64), Maybe Int)
+  , knobEntryCore1 :: Word64
+  -- | Added to the last waiting post-load stop's core-1 count.
+  , knobWaitSkew :: Word64
+  -- | ATCM and BTCM region registers of cores 0 and 1 at every stop.
+  , knobTcm :: [[Word32]]
+  -- | Core-1 ATCM moved at the last waiting post-load stop.
+  , knobTcmMoved :: Bool
   }
 
 knobs :: Knobs
-knobs = Knobs False 0x5660 0xd00c0 0x200001d3 False False False False 8 4 Nothing False
+knobs = Knobs False 0x5660 0xd00c0 0x200001d3 False False False False 8 4 Nothing False (Just (0, 0, 0), Just 0) 201 0
+  [[0x70000011, 0], [0x70000011, 0]] False
 
 writes :: [String]
 writes = ["cpu-write", "host-write", "model-bus-write"]
@@ -95,16 +105,24 @@ receipt scenario kind facts knob = BL.toStrict (encode document)
     stored = fromMaybe (if scenario == NonOne then 0x400a0000 else 1) (knobStoredValue knob)
     base = [argument, 0x400a0000, 0, entrySite, 4, 5, 1, 7, 8, 9, 10, 0x700007fc, 12]
     replace index value list = take index list ++ [value] ++ drop (index + 1) list
-    tcm = [[0x70000011, 0], [0x70000011, 0 :: Word32]]
+    tcm = knobTcm knob
     totals (count, zero, nonzero) = object ["count" .= (count :: Word64), "zero_count" .= (zero :: Word64), "nonzero_count" .= (nonzero :: Word64)]
     stop :: String -> Word32 -> Int -> (Word64, Word64) -> [Word32] -> Word32 -> Word32 -> Word32 -> Maybe (Word64, Word64, Word64) -> Maybe Int -> Value
-    stop label address core (core0, core1) registers sp lr flags counter cursor = object
+    stop = stopWith tcm
+    stopWith tcmWords label address core (core0, core1) registers sp lr flags counter cursor = object
       [ "label" .= label, "address" .= address, "core" .= core
       , "instructions" .= (core0 + core1), "counts" .= [core0, core1], "registers" .= registers
       , "sp" .= sp, "lr" .= lr, "cpsr" .= flags, "completion" .= (0 :: Word32)
-      , "tcm" .= tcm, "counter" .= fmap totals counter, "watch_records" .= cursor ]
-    postLoad index counts = stop "post-load" postSite 1 counts (replace loaded 0 base) 0x400f3400 0 cpsr (Just (index, index, 0)) (Just 0)
-    waitingPosts = [postLoad (i + 1 + (if knobPostLoadSkips knob && i >= 2 then 1 else 0)) (1000 + 100 * i, 300 + period * i) | i <- [0 .. 3]]
+      , "tcm" .= (tcmWords :: [[Word32]]), "counter" .= fmap totals counter, "watch_records" .= cursor ]
+    postLoadWith tcmWords index counts = stopWith tcmWords "post-load" postSite 1 counts (replace loaded 0 base) 0x400f3400 0 cpsr (Just (index, index, 0)) (Just 0)
+    postLoad = postLoadWith tcm
+    lastWaiting = 3 :: Word64
+    movedTcm = take 1 tcm ++ [[0x70004011, 0]]
+    waitingPosts =
+      [ postLoadWith (if knobTcmMoved knob && i == lastWaiting then movedTcm else tcm)
+          (i + 1 + (if knobPostLoadSkips knob && i >= 2 then 1 else 0))
+          (1000 + 100 * i, 300 + period * i + (if i == lastWaiting then knobWaitSkew knob else 0))
+      | i <- [0 .. lastWaiting] ]
     heldPosts = [postLoad (i + 6) (20000 + 100 * i, 300 + period * (i + 10)) | i <- [0 .. 3]]
     delayLoads = knobDelayLoads knob
     storeCount = if delayed then 4 + delayLoads else 6
@@ -114,7 +132,7 @@ receipt scenario kind facts knob = BL.toStrict (encode document)
     exitRegisters = replace 4 argument (replace 5 argument (replace 6 0xffff0000 (replace 8 (knobExitR8 knob) (replace 11 0x400f341c base))))
     stops = [ stop "record-1-entry" 0x1800 0 (10, 0) base 0xfff00f00 0 cpsr Nothing Nothing
             , stop "record-2-handoff" handoffSite 1 (800, 200) base 0x70000800 0 cpsr Nothing Nothing
-            , stop "prefix-entry" entrySite 1 (810, 201) base 0x70000800 0 cpsr (Just (0, 0, 0)) (Just 0) ]
+            , stop "prefix-entry" entrySite 1 (810, knobEntryCore1 knob) base 0x70000800 0 cpsr (fst (knobEntryObservation knob)) (snd (knobEntryObservation knob)) ]
       ++ waitingPosts
       ++ (if held
             then stop "held-gate" C.heldGate 0 (9000, 300 + 5 * period) base 0x700007d0 0 cpsr (Just (5, 5, 0)) (Just 0) : heldPosts
@@ -140,8 +158,8 @@ receipt scenario kind facts knob = BL.toStrict (encode document)
       , "value" .= stored, "before" .= [0, 0, 0, 0 :: Int], "byte_order" .= ("little" :: String), "core" .= (0 :: Int)
       , "pc" .= (0x40a08 :: Word32), "instructions" .= (5301 :: Int), "tick" .= (220 :: Int) ]
     physical low high = object ["physical" .= spanOf low high]
-    snapshot core = object ["core" .= (core :: Int), "btcm" .= object ["register" .= (0 :: Word32), "window" .= (Nothing :: Maybe [Int])]
-      , "atcm" .= object ["register" .= (0x70000011 :: Word32), "window" .= spanOf 0x70000000 0x70002000]]
+    snapshot core = object ["core" .= (core :: Int), "btcm" .= object ["register" .= (tcm !! core !! 1), "window" .= (Nothing :: Maybe [Int])]
+      , "atcm" .= object ["register" .= (tcm !! core !! 0), "window" .= spanOf 0x70000000 0x70002000]]
     stackSpan = object ["tcm" .= object ["bank" .= ("atcm" :: String), "offsets" .= spanOf 0x7cc 0x800]]
     bound :: Word64 -> Word64 -> Word64 -> Word64 -> Word64 -> Value
     bound guest size address physicalBase mapSize = object
@@ -257,6 +275,21 @@ main = do
   expect "a store of 1 under the non-one contract is refused" (not (accepted (validate (owned NonOne) (ownedReceipt NonOne knobs {knobStoredValue = Just 1}))))
   expect "delayed owned receipt accepted" (accepted (validate (owned Delayed) (ownedReceipt Delayed knobs)))
   expect "a delay with three zero loads is refused" (not (accepted (validate (owned Delayed) (ownedReceipt Delayed knobs {knobDelayLoads = 3}))))
+  let held = validate (owned Held) . ownedReceipt Held
+      delayedWith = validate (owned Delayed) . ownedReceipt Delayed
+      cellTcm = [[0x70000011, 0x000a0015], [0x70000011, 0]]
+  expect "a prefix entry without a scoped counter is refused" (not (accepted (natural knobs {knobEntryObservation = (Nothing, Nothing)})))
+  expect "a prefix entry with a nonempty scoped counter is refused" (not (accepted (natural knobs {knobEntryObservation = (Just (1, 1, 0), Just 0)})))
+  expect "a prefix entry with scoped rows is refused" (not (accepted (natural knobs {knobEntryObservation = (Just (0, 0, 0), Just 1)})))
+  expect "a prefix entry two core-1 instructions after the handoff is refused" (not (accepted (natural knobs {knobEntryCore1 = 202})))
+  expect "a waiting poll off the derived period is refused" (not (accepted (natural knobs {knobWaitSkew = 1})))
+  expect "a held waiting poll off the derived period is refused" (not (accepted (held knobs {knobWaitSkew = 1})))
+  expect "TCM moved after the handoff is refused" (not (accepted (natural knobs {knobTcmMoved = True})))
+  expect "a held TCM moved after the handoff is refused" (not (accepted (held knobs {knobTcmMoved = True})))
+  expect "a core-0 TCM window away from every guarded view is accepted" (accepted (natural knobs {knobTcm = [[0x70000011, 0x60000011], [0x70000011, 0]]}))
+  expect "a core-0 TCM window over the completion cell is refused" (not (accepted (natural knobs {knobTcm = cellTcm})))
+  expect "a held core-0 TCM window over the completion cell is refused" (not (accepted (held knobs {knobTcm = cellTcm})))
+  expect "a core-0 TCM window over the delayed veneer is refused" (not (accepted (delayedWith knobs {knobTcm = [[0x70000011, 0x00000011], [0x70000011, 0]]})))
   retained <- either fail pure (retainedContract Natural)
   let Contract _ (Program _ retainedProgramFacts) = retained
       retainedReceipt = receipt Natural RetainedProgram retainedProgramFacts

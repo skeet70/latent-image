@@ -542,6 +542,7 @@ haskell_library(
     deps = [
         ":first-stage-witness-lib",
         ":peer-stage-witness-lib",
+        ":peer-startup-witness-lib",
         ":poll-period-lib",
         "//host:aeson",
         "//host:base",

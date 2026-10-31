@@ -11,7 +11,7 @@ module Emulation.PeerStartupWitness
   , candidateEntry, deriveOwnedFacts, verifyStagedOwned
   , StartupFault (..), parseStartupFault, startupFaultExpectation
   , StartupReceipt, ValidatedStartupReceipt, parseStartupReceipt, validateStartupReceipt, compareStartupReceipts, startupArgument
-  , maxStartupReceiptBytes
+  , maxStartupReceiptBytes, tcmWindow
   ) where
 
 import A32 (Cond (..), Indexing (..), Instruction (..), Offset (..), Reg (..), Width (..))

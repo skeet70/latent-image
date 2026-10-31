@@ -19,7 +19,7 @@ import Control.Monad (forM, forM_, unless, when, zipWithM_)
 import Data.Aeson (FromJSON, Object, Result (..), Value (..), fromJSON, object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import Data.Bits (complement, shiftR, testBit, (.&.))
+import Data.Bits (complement, (.&.))
 import qualified Data.ByteString as B
 import Data.List (nub, sort, sortOn, stripPrefix)
 import qualified Data.Map.Strict as M
@@ -28,6 +28,7 @@ import Data.Word (Word32, Word64, Word8)
 import Emulation.FirstStageWitness (Core (..), Cpsr (..), WitnessResult (..), encodeLeWord, leWordAt, sha256Hex)
 import Emulation.PeerStageWitness (Registers (..))
 import qualified Emulation.PeerStageWitness as P
+import qualified Emulation.PeerStartupWitness as S
 import Emulation.PollPeriod (CodeImage (..), PollModel (..), PollPeriod (..), imageWord, pollPeriod)
 import qualified FujiAF.CompletionControl as C
 import qualified FujiAF.FirstStage as F
@@ -615,8 +616,8 @@ parseClassified value = do
   row <- fields ["enabled", "ranges", "records", "violation", "classes", "views"] value
   noViolation row
   views <- get row "views" :: Either String String
-  require (views == "observe") "reset watch views differ"
-  ResetWatch <$> (field row "classes" >>= parseClasses) <*> (field row "records" >>= json >>= mapM parseRow)
+  require (views == "observe") "classified watch views differ"
+  ClassifiedWatch <$> (field row "classes" >>= parseClasses) <*> (field row "records" >>= json >>= mapM parseRow)
 
 parseScopeSpan :: Value -> Either String ScopeSpan
 parseScopeSpan value = do
@@ -808,15 +809,7 @@ registerRange :: Int -> Int -> Registers -> [Word32]
 registerRange low high = take (high - low + 1) . drop low . registerList
 
 tcmWindow :: Word32 -> Either String (Maybe Span)
-tcmWindow value
-  | not (testBit value 0) || code == 0 = Right Nothing
-  | code < 3 || code > 14 = Left "TCM region size encoding is reserved"
-  | base `mod` size /= 0 || base + size > 0x100000000 = Left "TCM region is misaligned or extends past 4 GiB"
-  | otherwise = Right (Just (Span base (base + size)))
-  where
-    code = fromIntegral ((value `shiftR` 2) .&. 0x1f) :: Int
-    base = fromIntegral (value .&. 0xfffff000) :: Word64
-    size = 512 * 2 ^ code :: Word64
+tcmWindow value = fmap (\(S.Interval low high) -> Span low high) <$> S.tcmWindow value
 
 -- | The entry-stack window below the handoff SP as offsets in the core-1 TCM
 -- bank holding it.
@@ -878,6 +871,13 @@ validateReceipt contract@(Contract scenario (Program kind facts)) receipt = do
   let TcmWords (atcm0, btcm0) (atcm1, btcm1) = stopTcm handoff
   require (scopedTcm scoped == sort [TcmSnapshot 0 atcm0 btcm0, TcmSnapshot 1 atcm1 btcm1]) "scoped TCM snapshot differs from the handoff TCM"
   forM_ (dropWhile (/= handoff) stops) $ \stop -> require (stopTcm stop == stopTcm handoff) "TCM registers changed after the handoff"
+  -- Identity and 0x40000000-alias views of every guarded span, on either core.
+  let guardedViews = [view | guardedSpan <- [cellSpan, record2, loaderB, loaderACompletion, loaderALiteral] ++ [veneerSpan | scenario == Delayed]
+                           , view <- [guardedSpan, aliased guardedSpan]]
+      aliased (Span start end) = Span (start + 0x40000000) (end + 0x40000000)
+      meets (Span start end) (Span otherStart otherEnd) = start < otherEnd && otherStart < end
+  tcmRegions <- mapM tcmWindow [atcm0, btcm0, atcm1, btcm1]
+  require (and [not (meets region view) | Just region <- tcmRegions, view <- guardedViews]) "enabled TCM window overlaps a guarded guest view"
   case (scenario, bindingVeneer bindings) of
     (Delayed, Just (virtualBytes, physicalBytes)) -> do
       veneer <- C.delayVeneer
@@ -889,6 +889,9 @@ validateReceipt contract@(Contract scenario (Program kind facts)) receipt = do
   require (stopAddress entry == factEntry facts && r0 (stopRegisters entry) == argumentWord && stopSp entry == stopSp handoff
     && stopCpsr entry == stopCpsr handoff && registerRange 6 11 (stopRegisters entry) == registerRange 6 11 (stopRegisters handoff))
     "prefix entry differs from the handoff context"
+  require (snd (stopCounts entry) == snd (stopCounts handoff) + 1) "prefix entry is not the core-1 instruction after the handoff"
+  require (stopCounter entry == Just (CounterTotals 0 0 0) && stopCursor entry == Just 0)
+    "scoped watch was not active and empty at the prefix entry"
   require (scopedClasses scoped == expectedClasses scenario) "scoped watch classes differ"
   slots <- through (bindingSlotsMap bindings) (fromIntegral vectorBase + 0x24) 28
   require (scopedConfinement scoped == expectedConfinement kind slots (bindingStackWindow bindings)) "scoped confinement rules differ"

@@ -2,7 +2,8 @@
 //! the paused record-2 handoff to pre-execution 0xd0aac under the scoped
 //! memory watch, with classified watches from reset to the handoff.
 use super::*;
-use super::wait::{self, BoardState, CoreCounts, require};
+use super::startup::{digest, tcm_disjoint_views, tcm_window};
+use super::wait::{self, BoardState, CoreCounts, LOADER_B_SHA256, RECORD2_SHA256, require};
 use fujimod_catalog::configuration::RunEngine;
 use fujimod_emulator::board::observation::scoped::{
     Confinement, ConfinementRule, CoreSet, CounterRule, CoverageRule, PhysicalWord, SampleBound, ScopeSpan,
@@ -47,8 +48,6 @@ const HEAD_BOUND: u8 = 8;
 const TAIL_BOUND: u8 = 2;
 const MICROSTEPS: usize = 2048;
 const MAX_STOPS: usize = 64;
-const RETAINED_RECORD: &str = "2f1bf3f0e483b892d2890599679c1b515cfc1be8b8c27cbb06d4d913e428abb4";
-const LOADER_B_DIGEST: &str = "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec";
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -62,6 +61,18 @@ struct ScenarioWire { kind: Scenario }
 #[serde(rename_all = "kebab-case")]
 enum ProgramKind { Retained, Owned }
 
+/// Index into r0..r12.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(try_from = "u8")]
+struct RegisterIndex(u8);
+impl TryFrom<u8> for RegisterIndex {
+    type Error = String;
+    fn try_from(index: u8) -> Result<Self, String> {
+        require(index <= 12, "loader-prefix loaded register is not r0..r12")?;
+        Ok(Self(index))
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProgramWire {
@@ -72,12 +83,12 @@ struct ProgramWire {
     entry: Guest,
     load: Guest,
     post_load: Guest,
-    loaded_register: u8,
+    loaded_register: RegisterIndex,
     poll_period: u64,
     image: Option<(Guest, Guest)>,
     refusal: Option<Guest>,
-    forbid_fetch: Vec<(u64, u64)>,
-    forbid_read: Vec<(u64, u64)>,
+    forbid_fetch: Vec<(Guest, Guest)>,
+    forbid_read: Vec<(Guest, Guest)>,
 }
 
 #[derive(Deserialize)]
@@ -92,13 +103,13 @@ pub(super) struct LoaderWire {
 pub(super) struct LoaderContract {
     scenario: Scenario,
     kind: ProgramKind,
-    record: String,
-    loader: String,
-    handoff: u32,
-    entry: u32,
-    post_load: u32,
-    loaded: u8,
-    refusal: Option<u32>,
+    record: [u8; 32],
+    loader: [u8; 32],
+    handoff: Guest,
+    entry: Guest,
+    post_load: Guest,
+    loaded: RegisterIndex,
+    refusal: Option<Guest>,
 }
 impl LoaderContract {
     pub(super) fn budget(&self) -> Instructions {
@@ -106,22 +117,21 @@ impl LoaderContract {
     }
 }
 
-fn hex_digest(text: &str) -> Result<String, String> {
-    require(text.len() == 64 && text.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')),
-        "loader-prefix digest must be 64 lowercase hexadecimal characters")?;
-    Ok(text.into())
+fn spans(spans: &[(Guest, Guest)]) -> BTreeSet<(u64, u64)> {
+    spans.iter().map(|&(start, end)| (u64::from(start.0), u64::from(end.0))).collect()
 }
 
 impl LoaderWire {
     pub(super) fn validate(self) -> Result<LoaderContract, String> {
         require(self.schema == 4 && self.budget.0 == BUDGET, "loader-prefix witness requires schema 4 and budget 50000000")?;
         let program = self.program;
-        require((1..=100_000).contains(&program.poll_period) && program.loaded_register <= 12,
-            "loader-prefix poll period or loaded register is out of range")?;
+        require((1..=100_000).contains(&program.poll_period), "loader-prefix poll period is out of range")?;
+        let record = digest(&program.record_sha256)?;
+        let loader = digest(&program.loader_sha256)?;
         match program.kind {
-            ProgramKind::Retained => require(program.record_sha256 == RETAINED_RECORD && program.loader_sha256 == LOADER_B_DIGEST
-                && program.handoff.0 == 0x11850 && program.entry.0 == 0xd0020 && program.load.0 == 0xd0a44
-                && program.post_load.0 == 0xd0a48 && program.loaded_register == 3 && program.image.is_none()
+            ProgramKind::Retained => require(record == RECORD2_SHA256 && loader == LOADER_B_SHA256
+                && program.handoff == Guest(0x11850) && program.entry == Guest(0xd0020) && program.load == Guest(0xd0a44)
+                && program.post_load == Guest(0xd0a48) && program.loaded_register.0 == 3 && program.image.is_none()
                 && program.refusal.is_none() && program.forbid_fetch.is_empty() && program.forbid_read.is_empty(),
                 "retained loader-prefix program differs from the stock sites")?,
             ProgramKind::Owned => {
@@ -132,16 +142,16 @@ impl LoaderWire {
                     .chain(program.refusal).map(|site| site.0).collect();
                 require(sites.iter().all(|site| site % 4 == 0 && (start..end).contains(site))
                     && sites.iter().collect::<BTreeSet<_>>().len() == sites.len(), "owned loader-prefix sites must be distinct aligned image addresses")?;
-                let fetch: BTreeSet<(u64, u64)> = program.forbid_fetch.iter().copied().collect();
-                require(program.loaded_register == 0 && fetch == REPLACED.iter().copied().collect()
-                    && program.forbid_read == [ENTRY_POOL], "owned loader-prefix register or forbidden spans differ")?;
+                require(program.loaded_register.0 == 0 && program.forbid_fetch.len() == REPLACED.len()
+                    && spans(&program.forbid_fetch) == BTreeSet::from(REPLACED)
+                    && program.forbid_read.len() == 1 && spans(&program.forbid_read) == BTreeSet::from([ENTRY_POOL]),
+                    "owned loader-prefix register or forbidden spans differ")?;
             }
         }
         Ok(LoaderContract {
-            scenario: self.scenario.kind, kind: program.kind,
-            record: hex_digest(&program.record_sha256)?, loader: hex_digest(&program.loader_sha256)?,
-            handoff: program.handoff.0, entry: program.entry.0, post_load: program.post_load.0,
-            loaded: program.loaded_register, refusal: program.refusal.map(|site| site.0),
+            scenario: self.scenario.kind, kind: program.kind, record, loader,
+            handoff: program.handoff, entry: program.entry, post_load: program.post_load,
+            loaded: program.loaded_register, refusal: program.refusal,
         })
     }
 }
@@ -232,10 +242,14 @@ impl Bound {
 }
 #[derive(Serialize)]
 struct Views { r#virtual: Vec<u8>, physical: Vec<u8> }
+/// Offsets within the core-1 TCM bank.
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum StackWindow { Tcm { bank: TcmBank, offsets: (u32, u32) } }
 #[derive(Serialize)]
 struct Bindings {
     vector_slots: Bound,
-    stack_window: Value,
+    stack_window: StackWindow,
     zero_range: Bound,
     veneer: Option<Views>,
 }
@@ -309,15 +323,6 @@ fn tcm_words(machine: &Machine) -> Result<TcmWords, String> {
     ])
 }
 
-/// Cortex-R TCM region register: base [31:12], size code [6:2], enable [0].
-fn tcm_window(register: Word) -> Option<(u64, u64)> {
-    let code = (register.0 >> 2) & 0x1f;
-    (register.0 & 1 != 0 && code != 0).then(|| {
-        let base = u64::from(register.0 & 0xffff_f000);
-        (base, base + (512u64 << code))
-    })
-}
-
 fn digest_hex(bytes: &[u8]) -> String {
     encode_hex(&Sha256::digest(bytes))
 }
@@ -325,6 +330,8 @@ fn digest_hex(bytes: &[u8]) -> String {
 struct Runner<'a> {
     contract: &'a LoaderContract,
     maps: Vec<factory::MemoryMap>,
+    /// `maps` with the low-memory decoder at its RAM choice 1.
+    committed: Vec<factory::MemoryMap>,
     sites: BTreeMap<u32, Label>,
     epoch: Epoch,
     classified: Option<Box<MemoryWatch>>,
@@ -343,7 +350,7 @@ struct Runner<'a> {
 impl<'a> Runner<'a> {
     fn new(contract: &'a LoaderContract) -> Self {
         Self {
-            contract, maps: Vec::new(), sites: BTreeMap::new(), epoch: Epoch::Boot, classified: None, scoped: None,
+            contract, maps: Vec::new(), committed: Vec::new(), sites: BTreeMap::new(), epoch: Epoch::Boot, classified: None, scoped: None,
             boot_watch: Value::Null, loaded_watch: Value::Null, scoped_watch: None, stops: Vec::new(), bindings: None,
             completion: None, endpoint: None, final_primary: None, phase: Phase::default(),
         }
@@ -414,10 +421,10 @@ impl<'a> Runner<'a> {
         }).transpose()
     }
 
-    /// The single readable static mapping of `core` overlapping the extent,
+    /// The single readable committed mapping of `core` overlapping the extent,
     /// which must contain it.
     fn static_map(&self, core: usize, guest: u64, length: u64) -> Result<&factory::MemoryMap, String> {
-        let mut overlapping = self.maps.iter().filter(|map| map.core == core && map.permissions & 1 != 0
+        let mut overlapping = self.committed.iter().filter(|map| map.core == core && map.permissions & 1 != 0
             && map.address < guest + length && guest < map.address + map.size as u64);
         let map = overlapping.next().ok_or_else(|| format!("loader-prefix address {guest:#x} has no core-{core} static mapping"))?;
         require(overlapping.next().is_none() && map.address <= guest && guest + length <= map.address + map.size as u64,
@@ -438,6 +445,15 @@ impl<'a> Runner<'a> {
     fn views(&self, machine: &Machine, core: usize, guest: u64, length: usize) -> Result<Views, String> {
         let physical = self.physical_of(core, guest, length as u64)?;
         Ok(Views { r#virtual: wait::bytes(machine, core, guest, length)?, physical: machine.read(physical, length)? })
+    }
+
+    /// Physical spans no enabled TCM window may overlay in any committed view.
+    fn guarded(&self) -> Vec<(u64, u64)> {
+        let mut spans = vec![(CELL, CELL + 4), RECORD, LOADER_B, LOADER_A_COMPLETION, LOADER_A_LITERAL];
+        if self.contract.scenario == Scenario::Delayed {
+            spans.push(VENEER);
+        }
+        spans
     }
 
     fn snapshot(&self, machine: &Machine, label: Label, hit: &Hit) -> Result<LoaderStop, String> {
@@ -476,12 +492,20 @@ impl<'a> Runner<'a> {
         let vector_slots = self.bound(VECTOR_SLOTS, VECTOR_BYTES as u64)?;
         let top = u64::from(stop.sp.0);
         let low = top.checked_sub(ENTRY_STACK_BYTES).ok_or("loader-prefix entry stack underflows")?;
-        let banks = [(TcmBank::Atcm, stop.tcm[1][0]), (TcmBank::Btcm, stop.tcm[1][1])];
-        let (bank, base) = banks.iter().find_map(|&(bank, register)| {
-            tcm_window(register).filter(|&(base, end)| low >= base && top <= end).map(|(base, _)| (bank, base))
-        }).ok_or("loader-prefix entry-stack window does not lie in one core-1 TCM bank")?;
-        let window = ScopeSpan::Tcm(TcmRange::new(bank, (low - base) as u32, (top - base) as u32)?);
-        let description = serde_json::json!({"tcm": {"bank": bank, "offsets": [low - base, top - base]}});
+        let mut holding = Vec::new();
+        for (bank, register) in [(TcmBank::Atcm, stop.tcm[1][0]), (TcmBank::Btcm, stop.tcm[1][1])] {
+            if let Some((base, end)) = tcm_window(register)? {
+                if low >= base && top <= end {
+                    holding.push((bank, base));
+                }
+            }
+        }
+        let &[(bank, base)] = holding.as_slice() else {
+            return Err("loader-prefix entry-stack window does not lie in one core-1 TCM bank".into());
+        };
+        let offsets = ((low - base) as u32, (top - base) as u32);
+        let window = ScopeSpan::Tcm(TcmRange::new(bank, offsets.0, offsets.1)?);
+        let description = StackWindow::Tcm { bank, offsets };
         let veneer = if self.contract.scenario == Scenario::Delayed {
             require(self.physical_of(0, VENEER.0, VENEER.1 - VENEER.0)? == VENEER.0, "loader-prefix veneer mapping is not identity")?;
             Some(self.views(machine, 0, VENEER.0, (VENEER.1 - VENEER.0) as usize)?)
@@ -607,27 +631,28 @@ impl<'a> Runner<'a> {
                 self.boot_watch = self.end_classified(machine)?;
                 self.begin_classified(machine, Epoch::Loaded)?;
                 self.remove(machine, RECORD1_ENTRY)?;
-                self.add(machine, &[(contract.handoff, Label::Record2Handoff)])?;
+                self.add(machine, &[(contract.handoff.0, Label::Record2Handoff)])?;
             }
             Label::Record2Handoff => {
                 require(self.epoch == Epoch::Loaded, "record-2 handoff out of phase")?;
                 let stop = &self.stops[index];
-                require(stop.registers[3].0 == contract.entry && stop.registers[0].0 == ARGUMENT && stop.completion.0 == 0
+                require(stop.registers[3].0 == contract.entry.0 && stop.registers[0].0 == ARGUMENT && stop.completion.0 == 0
                     && stop.cpsr.0 & 0x0100_02ff == 0xd3, "record-2 handoff target, argument, cell or mode differs")?;
                 let record = machine.read(RECORD.0, (RECORD.1 - RECORD.0) as usize)?;
                 let loader = machine.read(LOADER_B.0, (LOADER_B.1 - LOADER_B.0) as usize)?;
                 require(wait::bytes(machine, 1, RECORD.0, record.len())? == record && wait::bytes(machine, 1, LOADER_B.0, loader.len())? == loader
-                    && digest_hex(&record) == contract.record && digest_hex(&loader) == contract.loader,
+                    && Sha256::digest(&record)[..] == contract.record && Sha256::digest(&loader)[..] == contract.loader,
                     "record-2 or loader-B bytes or their core-1 views differ from the contract")?;
                 let (window, bindings) = self.handoff_bindings(machine, &self.stops[index])?;
+                tcm_disjoint_views(&self.committed, &self.stops[index].tcm, &self.guarded())?;
                 let slots = bindings.vector_slots.physical();
                 self.bindings = Some(bindings);
                 self.loaded_watch = self.end_classified(machine)?;
                 self.scoped = Some(machine.session.board.memory_watch_begin_scoped(self.scoped_rules(window, slots)?, self.maps.clone())?);
                 self.epoch = Epoch::Scoped;
-                self.remove(machine, contract.handoff)?;
-                let mut add = vec![(contract.entry, Label::PrefixEntry), (contract.post_load, Label::PostLoad), (EXIT, Label::PrefixExit)];
-                add.extend(contract.refusal.map(|site| (site, Label::Refusal)));
+                self.remove(machine, contract.handoff.0)?;
+                let mut add = vec![(contract.entry.0, Label::PrefixEntry), (contract.post_load.0, Label::PostLoad), (EXIT, Label::PrefixExit)];
+                add.extend(contract.refusal.map(|site| (site.0, Label::Refusal)));
                 add.extend(match scenario {
                     Scenario::Held => vec![(HELD_GATE, Label::HeldGate)],
                     Scenario::Delayed => vec![(DELAY_ENTRY, Label::DelayEntry), (DELAY_RELEASE, Label::DelayRelease), (STORE, Label::CompletionStore)],
@@ -640,13 +665,16 @@ impl<'a> Runner<'a> {
                 let stop = &self.stops[index];
                 require(!self.phase.entry && stop.registers[0].0 == ARGUMENT && stop.sp == handoff.sp && stop.cpsr == handoff.cpsr
                     && stop.registers[6..12] == handoff.registers[6..12], "prefix entry differs from the handoff context")?;
+                require(stop.counts.0[1] == handoff.counts.0[1] + 1, "prefix entry is not the core-1 instruction after the handoff")?;
+                require(stop.counter == Some(Totals { count: 0, zero_count: 0, nonzero_count: 0 }) && stop.watch_records == Some(0),
+                    "scoped watch was not active and empty at the prefix entry")?;
                 self.phase.entry = true;
-                self.remove(machine, contract.entry)?;
+                self.remove(machine, contract.entry.0)?;
             }
             Label::PostLoad => {
                 require(self.phase.entry && !self.phase.exit, "post-load stop out of phase")?;
                 let stop = &self.stops[index];
-                let loaded = stop.registers[usize::from(contract.loaded)].0;
+                let loaded = stop.registers[usize::from(contract.loaded.0)].0;
                 let counter = stop.counter.ok_or("post-load stop lacks its counter")?;
                 require(loaded == 0 || counter.nonzero_count == 1, "post-load register holds a nonzero value without a nonzero load")?;
                 if let Some(previous) = self.phase.last_post {
@@ -664,7 +692,7 @@ impl<'a> Runner<'a> {
                 } else {
                     self.phase.posts += 1;
                     if self.phase.posts == HEAD_POLLS {
-                        self.remove(machine, contract.post_load)?;
+                        self.remove(machine, contract.post_load.0)?;
                     }
                 }
             }
@@ -676,8 +704,8 @@ impl<'a> Runner<'a> {
                 self.phase.gate = true;
                 self.phase.last_post = None;
                 self.remove(machine, HELD_GATE)?;
-                if !self.sites.contains_key(&contract.post_load) {
-                    self.add(machine, &[(contract.post_load, Label::PostLoad)])?;
+                if !self.sites.contains_key(&contract.post_load.0) {
+                    self.add(machine, &[(contract.post_load.0, Label::PostLoad)])?;
                 }
             }
             Label::DelayEntry => {
@@ -706,7 +734,7 @@ impl<'a> Runner<'a> {
                 }
                 let cpsr = self.stops[index].cpsr;
                 self.remove(machine, STORE)?;
-                self.remove(machine, contract.post_load)?;
+                self.remove(machine, contract.post_load.0)?;
                 let committed = self.commit(machine, cpsr)?;
                 self.completion = Some(committed);
                 self.phase.stored = true;
@@ -762,6 +790,17 @@ impl<'a> Runner<'a> {
     }
 }
 
+/// `maps` with the single low-memory decoder's initial choice replaced by its RAM choice 1.
+fn ram_decoded(document: &RunDocument, maps: &[factory::MemoryMap]) -> Result<Vec<factory::MemoryMap>, String> {
+    let (_, graph) = run::graph(document)?;
+    let [decoder] = graph.decoders.as_slice() else {
+        return Err("loader-prefix run requires one memory decoder".into());
+    };
+    let initial = &decoder.choices.get(decoder.initial).ok_or("loader-prefix initial decoder choice absent")?.processors;
+    let ram = &decoder.choices.get(1).ok_or("loader-prefix RAM decoder choice absent")?.processors;
+    Ok(maps.iter().filter(|map| !initial.contains(*map)).chain(ram).cloned().collect())
+}
+
 pub(super) fn run(mut machine: Machine, contract: &LoaderContract, output: &Path) -> Result<(), String> {
     let mut identities = [Identity(0); 2];
     let mut runner = Runner::new(contract);
@@ -776,6 +815,7 @@ pub(super) fn run(mut machine: Machine, contract: &LoaderContract, output: &Path
         for (core, expected) in identities.iter().enumerate() {
             require(machine.session.board.cpu(core)?.rprofile_identity(None)? == expected.0, "loader-prefix active CP14 identity differs")?;
         }
+        runner.committed = ram_decoded(&machine.document, &maps)?;
         runner.maps = maps;
         runner.begin_classified(&mut machine, Epoch::Boot)?;
         runner.arm(&mut machine, &[(RECORD1_ENTRY, Label::Record1Entry)])?;

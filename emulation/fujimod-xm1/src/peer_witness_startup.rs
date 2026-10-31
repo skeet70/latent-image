@@ -165,9 +165,9 @@ fn retained() -> Program {
     }
 }
 
-fn digest(text: &str) -> Result<[u8; 32], String> {
+pub(super) fn digest(text: &str) -> Result<[u8; 32], String> {
     require(text.len() == 64 && text.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')),
-        "startup record digest must be 64 lowercase hexadecimal characters")?;
+        "record digest must be 64 lowercase hexadecimal characters")?;
     let mut bytes = [0; 32];
     for (index, value) in bytes.iter_mut().enumerate() {
         *value = u8::from_str_radix(&text[2 * index..2 * index + 2], 16).map_err(|error| error.to_string())?;
@@ -457,7 +457,7 @@ fn extent_admitted(epoch: Epoch, event: &MemoryEvent) -> bool {
 
 /// Cortex-R TCM region register: base [31:12], size code [6:2] (`0` none, `3..=14` 4 KiB..8 MiB), enable [0].
 /// The base must be aligned to the size.
-fn tcm_window(bank: Word) -> Result<Option<(u64, u64)>, String> {
+pub(super) fn tcm_window(bank: Word) -> Result<Option<(u64, u64)>, String> {
     let code = (bank.0 >> 2) & 0x1f;
     if bank.0 & 1 == 0 || code == 0 {
         return Ok(None);
@@ -467,6 +467,27 @@ fn tcm_window(bank: Word) -> Result<Option<(u64, u64)>, String> {
     let size = 512u64 << code;
     require(base % size == 0 && base + size <= 1 << 32, "startup TCM region is misaligned or extends past 4 GiB")?;
     Ok(Some((base, base + size)))
+}
+
+/// Every enabled window of each core is well formed and misses that core's
+/// static views of every guarded physical span.
+pub(super) fn tcm_disjoint_views(maps: &[factory::MemoryMap], tcm: &TcmWords, guarded: &[(u64, u64)]) -> Result<(), String> {
+    for (core, banks) in tcm.iter().enumerate() {
+        for bank in banks {
+            let Some(window) = tcm_window(*bank)? else { continue };
+            for map in maps.iter().filter(|map| map.core == core) {
+                for &(lo, hi) in guarded {
+                    let start = lo.max(map.physical);
+                    let end = hi.min(map.physical + map.size as u64);
+                    if start < end {
+                        let view = (map.address + start - map.physical, map.address + end - map.physical);
+                        require(!overlaps(view, window), "TCM window overlays a guarded memory view")?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn cpu_row(event: &MemoryEvent, core: WitnessCore, pc: u32, physical: u64, access: CpuAccess) -> Option<&CpuAttempt> {
@@ -663,23 +684,7 @@ impl<'a> Runner<'a> {
     }
 
     fn tcm_disjoint(&self, tcm: &TcmWords) -> Result<(), String> {
-        let guarded = self.guarded();
-        for (core, banks) in tcm.iter().enumerate() {
-            for bank in banks {
-                let Some(window) = tcm_window(*bank)? else { continue };
-                for map in self.maps.iter().filter(|map| map.core == core) {
-                    for &(lo, hi) in &guarded {
-                        let start = lo.max(map.physical);
-                        let end = hi.min(map.physical + map.size as u64);
-                        if start < end {
-                            let view = (map.address + start - map.physical, map.address + end - map.physical);
-                            require(!overlaps(view, window), "startup TCM window overlays a guarded memory view")?;
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
+        tcm_disjoint_views(&self.maps, tcm, &self.guarded())
     }
 
     fn tcm_stable(&self, tcm: &TcmWords) -> Result<(), String> {
