@@ -46,9 +46,7 @@ struct Address(u64);
 struct Sha256Digest([u8; 32]);
 impl Sha256Digest {
     fn of(bytes: &[u8]) -> Self {
-        let mut digest = [0; 32];
-        digest.copy_from_slice(&Sha256::digest(bytes));
-        Self(digest)
+        Self(Sha256::digest(bytes).into())
     }
     fn parse(text: &str) -> Result<Self, String> {
         if text.len() != 64 || !text.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')) {
