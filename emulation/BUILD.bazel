@@ -560,7 +560,10 @@ haskell_library(
 
 haskell_library(
     name = "interface-initializer-lib",
-    srcs = ["Emulation/InterfaceInitializer.hs"],
+    srcs = [
+        "Emulation/InterfaceInitializer.hs",
+        "Emulation/InterfaceInitializerConsumer.hs",
+    ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":first-stage-witness-lib",

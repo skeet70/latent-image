@@ -1,6 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.InterfaceInitializer
   ( Role (..), Contract, parseOriginalSource, deriveContract, contractValue, declarations, validateReceipt
+  , contractRole, contractSourceSha256, ValidatedInitializer, initializerExit, initializerTable, validateReceiptEvidence
+  , Context (..), Views (..), Source (..), ByteOrder (..), Event (..), Mode (..)
+  , PhysicalSpan (..), Window (..), BankSnapshot (..), TcmSnapshot (..), bankSnapshot
+  , WatchClass (..), FixedViews (..), NoFault (..), Rule (..), Watch (..), Alias (..), Decoder (..)
   ) where
 
 import qualified A32 as A
@@ -29,6 +33,12 @@ data Role = Retained | Owned deriving (Eq, Show)
 newtype StackBytes = StackBytes Word32
 data ExpectedStore = ExpectedStore P.Guest Word32
 data Contract = Contract Role P.Contract P.Guest P.Span StackBytes F.Sha256 (Maybe F.Sha256) F.Sha256 [ExpectedStore]
+
+contractRole :: Contract -> Role
+contractRole (Contract role _ _ _ _ _ _ _ _) = role
+
+contractSourceSha256 :: Contract -> F.Sha256
+contractSourceSha256 (Contract _ _ _ _ _ _ _ source _) = source
 
 require :: Bool -> String -> Either String ()
 require condition message = unless condition (Left message)
@@ -397,7 +407,7 @@ instance FromJSON ByteOrder where
     "big" -> pure BigEndian
     _ -> fail "unknown initializer byte order"
 
-data Event = Event Source (Maybe Int) Word64 (Maybe Word64) Word64 (Maybe Word64) (Maybe Word32) (Maybe Word64) (Maybe ByteOrder)
+data Event = Event Source (Maybe Int) Word64 (Maybe Word64) Word64 (Maybe Word64) (Maybe Word32) (Maybe Word64) (Maybe ByteOrder) deriving (Eq)
 instance FromJSON Event where
   parseJSON = withObject "initializer event" $ \row ->
     Event <$> row .: "source" <*> row .: "core" <*> row .: "address" <*> row .: "physical" <*> row .: "size"
@@ -442,12 +452,12 @@ data WatchClass = WatchClass Window [Source] deriving (Eq, Ord)
 instance FromJSON WatchClass where
   parseJSON = withObject "initializer watch class" $ \row -> WatchClass <$> row .: "range" <*> row .: "kinds"
 
-data FixedViews = FixedViews
+data FixedViews = FixedViews deriving (Eq)
 instance FromJSON FixedViews where
   parseJSON = withText "initializer watch views" $ \value ->
     if value == "fixed" then pure FixedViews else fail "initializer watch views are not fixed"
 
-data NoFault = NoFault
+data NoFault = NoFault deriving (Eq)
 instance FromJSON NoFault where
   parseJSON J.Null = pure NoFault
   parseJSON _ = fail "initializer watch recorded a fault"
@@ -457,19 +467,19 @@ instance FromJSON Rule where
   parseJSON = withObject "initializer confinement rule" $ \row ->
     Rule <$> row .: "cores" <*> row .: "kind" <*> row .: "mode" <*> row .: "spans" <*> row .: "tcm"
 
-data Watch = Watch Bool (Maybe String) [Event] [Rule] [WatchClass] FixedViews NoFault [TcmSnapshot]
+data Watch = Watch Bool (Maybe String) [Event] [Rule] [WatchClass] FixedViews NoFault [TcmSnapshot] deriving (Eq)
 instance FromJSON Watch where
   parseJSON = withObject "initializer scoped watch" $ \row ->
     Watch <$> row .: "enabled" <*> row .: "violation" <*> row .: "records" <*> row .: "confinement"
       <*> row .: "classes" <*> row .: "views" <*> row .: "fault" <*> row .: "tcm"
 
-data Alias = Alias Int Word64 Word64 Word64 F.Sha256
+data Alias = Alias Int Word64 Word64 Word64 F.Sha256 deriving (Eq)
 instance FromJSON Alias where
   parseJSON = withObject "initializer alias binding" $ \row -> do
     digest <- row .: "sha256" >>= either fail pure . F.parseSha256
     Alias <$> row .: "core" <*> row .: "guest" <*> row .: "physical" <*> row .: "size" <*> pure digest
 
-data Decoder = Decoder [Int] [Maybe Int]
+data Decoder = Decoder [Int] [Maybe Int] deriving (Eq)
 instance FromJSON Decoder where
   parseJSON = withObject "initializer decoder" $ \row -> Decoder <$> row .: "choices" <*> row .: "pending"
 
@@ -495,7 +505,15 @@ instance FromJSON Receipt where
       <*> row .: "cp14_identities" <*> row .: "initializer"
 
 validateReceipt :: Contract -> B.ByteString -> Either String ()
-validateReceipt (Contract role prefix (P.Guest entry) (P.Span rustStart rustEnd) (StackBytes scratch) imageDigest symbolsDigest source stores) bytes = do
+validateReceipt contract bytes = validateReceiptEvidence contract bytes >> pure ()
+
+data ValidatedInitializer = ValidatedInitializer
+  { initializerExit :: Context
+  , initializerTable :: Views
+  }
+
+validateReceiptEvidence :: Contract -> B.ByteString -> Either String ValidatedInitializer
+validateReceiptEvidence (Contract role prefix (P.Guest entry) (P.Span rustStart rustEnd) (StackBytes scratch) imageDigest symbolsDigest source stores) bytes = do
   require (B.length bytes <= 16 * 1024 * 1024) "initializer receipt exceeds 16 MiB"
   verifiedPrefix <- P.parseReceipt P.InitializerBoundary bytes >>= P.validateReceipt prefix
   P.PrefixExitContext prefixRegisters prefixSp prefixLr (Cpsr prefixCpsr) (prefixCount0,prefixCount1)
@@ -598,3 +616,4 @@ validateReceipt (Contract role prefix (P.Guest entry) (P.Span rustStart rustEnd)
   require (all (== P.factLoader prefixFacts) (digestFor 0xd0000 aliases)
     && consistent (digestFor 0x10000 aliases) && consistent (digestFor 0xddaa0 (take 12 aliases))
     && consistent (digestFor 0xddaa0 (drop 12 aliases))) "initializer full-image or workspace alias identity differs"
+  pure (ValidatedInitializer after tableAfter)
