@@ -490,12 +490,12 @@ validateWatch contract observation tcm prestate committed enteringCounts outgoin
   require (length events == 1419 && length observedPublications == 1419 && length stores == 1419) "primary publication coverage differs"
   forM_ (zip3 stores observedPublications events) $ \(Store (Guest guest) value expectedPc (Instructions ordinal),
       Publication observedGuest observedPhysical observedValue pc (Instructions instructions),
-      RawEvent (Event kind core address physical width eventValue eventPc eventInstructions order) (AccessBytes before) _) -> do
+      RawEvent (Event kind core address rawPhysical width eventValue eventPc eventInstructions order) (AccessBytes before) _) -> do
     let physicalAddress = fromIntegral guest - 0x40000000
         offset = fromIntegral (guest - 0x4004dae0)
     require (observedGuest == Guest guest && observedPhysical == Physical physicalAddress && observedValue == value && pc == expectedPc
       && instructions >= sum enteringCounts + ordinal && instructions < sum outgoingCounts
-      && kind == CpuWrite && core == Just 0 && address == fromIntegral guest && physical == Just physicalAddress && width == 4
+      && kind == CpuWrite && core == Just 0 && address == fromIntegral guest && rawPhysical == Just physicalAddress && width == 4
       && eventValue == Just (fromIntegral value) && eventPc == Just (let Guest location = pc in location)
       && eventInstructions == Just instructions && order == Just LittleEndian)
       "primary publication order, value, source PC or raw attribution differs"
