@@ -7,6 +7,10 @@ module Emulation.PollPeriod
   , CodeImage (..)
   , imageWord
   , pollPeriod
+  , Flags (..)
+  , holds
+  , alu
+  , shiftImmediateKnown
   ) where
 
 import A32 (BlockMode (..), Cond (..), DataOp (..), Forbidden (Barrier), Indexing (..), Instruction (..), Offset (..), Operand (..), Reg (..), Shift (..), Width (..))
@@ -48,6 +52,7 @@ require condition message = unless condition (Left message)
 
 -- | 'Nothing' is an incoming flag or one computed from an unknown value.
 data Flags = Flags {flagN :: Maybe Bool, flagZ :: Maybe Bool, flagC :: Maybe Bool, flagV :: Maybe Bool}
+  deriving (Eq, Ord)
 
 -- | An absent register, or a 'Nothing' stack word, holds an incoming or derived unknown value.
 data Machine = Machine

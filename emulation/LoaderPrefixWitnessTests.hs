@@ -281,7 +281,7 @@ receiptDocument startup scenario kind facts knob = document
       ] ++ ["startup" .= selected | Just selected <- [startup]]
 
 validate :: Contract -> B.ByteString -> Either String ()
-validate contract bytes = parseReceipt bytes >>= validateReceipt contract >> pure ()
+validate contract bytes = parseReceipt PrefixBoundary bytes >>= validateReceipt contract >> pure ()
 
 startupFixture :: Value
 startupFixture = object
@@ -448,7 +448,16 @@ main = do
     ComposedContract {} -> fail "retained fixture names composed startup"
   let retainedReceipt = receipt Natural RetainedProgram retainedProgramFacts
   expect "natural retained receipt accepted" (accepted (validate retained (retainedReceipt knobs)))
-  let pairOf contract bytes = (,) contract <$> parseReceipt bytes
+  expect "schema4 prefix evidence cannot qualify the initializer boundary"
+    (not (accepted (parseReceipt InitializerBoundary (retainedReceipt knobs) >>= validateReceipt retained)))
+  let initializerDocument = setField "schema" (Number 6) . setField "initializer" Null $
+        receiptDocument Nothing Natural RetainedProgram retainedProgramFacts knobs
+  expect "schema6 cannot broaden the old accepted prefix endpoint"
+    (not (accepted (parseReceipt PrefixBoundary (BL.toStrict (encode initializerDocument)))))
+  expect "initializer prefix evidence still requires the authentic prefix entry"
+    (not (accepted (parseReceipt InitializerBoundary (BL.toStrict (encode
+      (changeStop "prefix-entry" (setField "address" (Number 0xd0048)) initializerDocument))) >>= validateReceipt retained)))
+  let pairOf contract bytes = (,) contract <$> parseReceipt PrefixBoundary bytes
       compareWith ownedKnobs = do
         left <- pairOf retained (retainedReceipt knobs)
         right <- pairOf (owned Natural) (ownedReceipt Natural ownedKnobs)

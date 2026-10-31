@@ -836,6 +836,44 @@ fn second_filter_tcm_overlap_is_core_qualified_and_never_returns_underlying_ram(
 }
 
 #[cfg(feature = "scoped-watch")]
+fn initializer_contract(scratch_bytes: u32) -> String {
+    let digest = "ab".repeat(32);
+    format!(r#"{{"schema":6,"prefix":{{"schema":4,"budget":50000000,"scenario":{{"kind":"natural"}},
+        "program":{{"kind":"owned","record_sha256":"{digest}","record_immutable_sha256":"{digest}","loader_sha256":"{digest}",
+        "handoff":66592,"entry":66604,"load":66700,"post_load":66704,"loaded_register":0,"poll_period":256,
+        "image":[66560,68096],"refusal":null,"forbid_fetch":[[852000,852168],[854444,854480],[854596,854628]],
+        "forbid_read":[[852168,852220]]}}}},
+        "initializer":{{"role":"owned","entry":67584,"rust":[67616,67712],"scratch_bytes":{scratch_bytes},
+        "image_sha256":"{digest}","symbols_sha256":"{digest}",
+        "source_sha256":"43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"}}}}"#)
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn initializer_admission_requires_its_natural_source_and_owned_symbol_identity() {
+    let contract = initializer_contract(40);
+    assert!(PeerContract::parse(contract.as_bytes()).is_ok());
+    for invalid in [
+        contract.replace(r#""kind":"natural""#, r#""kind":"held""#),
+        contract.replace("43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490", &"cd".repeat(32)),
+        contract.replace(&format!(r#""symbols_sha256":"{}""#, "ab".repeat(32)), r#""symbols_sha256":null"#),
+    ] {
+        assert!(PeerContract::parse(invalid.as_bytes()).is_err());
+    }
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn initializer_admission_allows_word_aligned_leaf_frames_without_assuming_stock_twelve_bytes() {
+    for bytes in [8, 12, 40, 1032] {
+        assert!(PeerContract::parse(initializer_contract(bytes).as_bytes()).is_ok());
+    }
+    for bytes in [0, 4, 10, 1036] {
+        assert!(PeerContract::parse(initializer_contract(bytes).as_bytes()).is_err());
+    }
+}
+
+#[cfg(feature = "scoped-watch")]
 mod composed_interleaving {
     use super::*;
     use fujimod_catalog::configuration::ResolvedConfiguration;

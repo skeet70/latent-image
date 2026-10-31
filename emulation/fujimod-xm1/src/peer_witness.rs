@@ -88,6 +88,10 @@ enum ContractWire {
     Loader(loader::LoaderWire),
     #[cfg(feature = "scoped-watch")]
     Composed(loader::ComposedWire),
+    #[cfg(feature = "scoped-watch")]
+    Initializer(loader::InitializerWire),
+    #[cfg(feature = "scoped-watch")]
+    InitializerConsumer(loader::ConsumerWire),
 }
 
 pub struct PeerContract {
@@ -123,6 +127,16 @@ impl PeerContract {
             }
             #[cfg(feature = "scoped-watch")]
             ContractWire::Composed(wire) => {
+                let contract = wire.validate()?;
+                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract) })
+            }
+            #[cfg(feature = "scoped-watch")]
+            ContractWire::Initializer(wire) => {
+                let contract = wire.validate()?;
+                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract) })
+            }
+            #[cfg(feature = "scoped-watch")]
+            ContractWire::InitializerConsumer(wire) => {
                 let contract = wire.validate()?;
                 Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract) })
             }
