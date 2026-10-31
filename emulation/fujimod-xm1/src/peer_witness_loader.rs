@@ -222,14 +222,21 @@ struct LoaderStop {
 }
 
 #[derive(Serialize)]
-struct Slots { guest: Address, physical: Address }
+struct BoundMap { core: usize, address: Address, physical: Address, size: u64 }
+#[derive(Serialize)]
+struct Bound { guest: Address, size: u64, map: BoundMap }
+impl Bound {
+    fn physical(&self) -> u64 {
+        self.map.physical.0 + self.guest.0 - self.map.address.0
+    }
+}
 #[derive(Serialize)]
 struct Views { r#virtual: Vec<u8>, physical: Vec<u8> }
 #[derive(Serialize)]
 struct Bindings {
-    vector_slots: Slots,
+    vector_slots: Bound,
     stack_window: Value,
-    zero_guest: (Address, Address),
+    zero_range: Bound,
     veneer: Option<Views>,
 }
 #[derive(Serialize)]
@@ -288,6 +295,7 @@ struct Phase {
     posts: usize,
     gate: bool,
     posts_after_gate: usize,
+    last_post: Option<u64>,
     delay_entry: Option<usize>,
     released: bool,
     stored: bool,
@@ -406,10 +414,25 @@ impl<'a> Runner<'a> {
         }).transpose()
     }
 
+    /// The single readable static mapping of `core` overlapping the extent,
+    /// which must contain it.
+    fn static_map(&self, core: usize, guest: u64, length: u64) -> Result<&factory::MemoryMap, String> {
+        let mut overlapping = self.maps.iter().filter(|map| map.core == core && map.permissions & 1 != 0
+            && map.address < guest + length && guest < map.address + map.size as u64);
+        let map = overlapping.next().ok_or_else(|| format!("loader-prefix address {guest:#x} has no core-{core} static mapping"))?;
+        require(overlapping.next().is_none() && map.address <= guest && guest + length <= map.address + map.size as u64,
+            "loader-prefix extent overlaps several static mappings or leaves its mapping")?;
+        Ok(map)
+    }
+
     fn physical_of(&self, core: usize, guest: u64, length: u64) -> Result<u64, String> {
-        self.maps.iter().find(|map| map.core == core && map.address <= guest && guest + length <= map.address + map.size as u64)
-            .map(|map| map.physical + guest - map.address)
-            .ok_or_else(|| format!("loader-prefix address {guest:#x} has no core-{core} static mapping"))
+        self.static_map(core, guest, length).map(|map| map.physical + guest - map.address)
+    }
+
+    fn bound(&self, guest: u64, length: u64) -> Result<Bound, String> {
+        let map = self.static_map(1, guest, length)?;
+        Ok(Bound { guest: Address(guest), size: length,
+            map: BoundMap { core: 1, address: Address(map.address), physical: Address(map.physical), size: map.size as u64 } })
     }
 
     fn views(&self, machine: &Machine, core: usize, guest: u64, length: usize) -> Result<Views, String> {
@@ -448,24 +471,17 @@ impl<'a> Runner<'a> {
             (0, LOADER_A_COMPLETION.0, 16), (0, LOADER_A_LITERAL.0, 4)] {
             require(self.physical_of(core, guest, length)? == guest, "loader-prefix code mapping is not identity")?;
         }
-        require(self.physical_of(1, ZERO_GUEST + ZERO.0, ZERO.1 - ZERO.0)? == ZERO.0, "loader-prefix zero range alias differs")?;
-        let slots = self.physical_of(1, VECTOR_SLOTS, VECTOR_BYTES as u64)?;
+        let zero_range = self.bound(ZERO_GUEST + ZERO.0, ZERO.1 - ZERO.0)?;
+        require(zero_range.physical() == ZERO.0, "loader-prefix zero range does not map to physical [0xddaa0,0xf3420)")?;
+        let vector_slots = self.bound(VECTOR_SLOTS, VECTOR_BYTES as u64)?;
         let top = u64::from(stop.sp.0);
         let low = top.checked_sub(ENTRY_STACK_BYTES).ok_or("loader-prefix entry stack underflows")?;
         let banks = [(TcmBank::Atcm, stop.tcm[1][0]), (TcmBank::Btcm, stop.tcm[1][1])];
-        let (window, description) = match banks.iter().find_map(|&(bank, register)| {
+        let (bank, base) = banks.iter().find_map(|&(bank, register)| {
             tcm_window(register).filter(|&(base, end)| low >= base && top <= end).map(|(base, _)| (bank, base))
-        }) {
-            Some((bank, base)) => (
-                ScopeSpan::Tcm(TcmRange::new(bank, (low - base) as u32, (top - base) as u32)?),
-                serde_json::json!({"tcm": {"bank": bank, "offsets": [low - base, top - base]}}),
-            ),
-            None => {
-                let physical = self.physical_of(1, low, ENTRY_STACK_BYTES)?;
-                (ScopeSpan::Physical(PhysicalRange::new(physical, physical + ENTRY_STACK_BYTES)?),
-                    serde_json::json!({"physical": [physical, physical + ENTRY_STACK_BYTES]}))
-            }
-        };
+        }).ok_or("loader-prefix entry-stack window does not lie in one core-1 TCM bank")?;
+        let window = ScopeSpan::Tcm(TcmRange::new(bank, (low - base) as u32, (top - base) as u32)?);
+        let description = serde_json::json!({"tcm": {"bank": bank, "offsets": [low - base, top - base]}});
         let veneer = if self.contract.scenario == Scenario::Delayed {
             require(self.physical_of(0, VENEER.0, VENEER.1 - VENEER.0)? == VENEER.0, "loader-prefix veneer mapping is not identity")?;
             Some(self.views(machine, 0, VENEER.0, (VENEER.1 - VENEER.0) as usize)?)
@@ -473,9 +489,9 @@ impl<'a> Runner<'a> {
             None
         };
         Ok((window, Bindings {
-            vector_slots: Slots { guest: Address(VECTOR_SLOTS), physical: Address(slots) },
+            vector_slots,
             stack_window: description,
-            zero_guest: (Address(ZERO_GUEST + ZERO.0), Address(ZERO_GUEST + ZERO.1)),
+            zero_range,
             veneer,
         }))
     }
@@ -551,7 +567,7 @@ impl<'a> Runner<'a> {
 
     fn endpoint(&self, machine: &Machine) -> Result<Endpoint, String> {
         let zero = machine.read(ZERO.0, (ZERO_CLAIM_END - ZERO.0) as usize)?;
-        let slots = self.bindings.as_ref().ok_or("loader-prefix bindings absent")?.vector_slots.physical.0;
+        let slots = self.bindings.as_ref().ok_or("loader-prefix bindings absent")?.vector_slots.physical();
         Ok(Endpoint {
             frame: self.views(machine, 1, FRAME, 16)?,
             vectors: Views { r#virtual: wait::bytes(machine, 1, VECTOR_SLOTS, VECTOR_BYTES)?, physical: machine.read(slots, VECTOR_BYTES)? },
@@ -604,7 +620,7 @@ impl<'a> Runner<'a> {
                     && digest_hex(&record) == contract.record && digest_hex(&loader) == contract.loader,
                     "record-2 or loader-B bytes or their core-1 views differ from the contract")?;
                 let (window, bindings) = self.handoff_bindings(machine, &self.stops[index])?;
-                let slots = bindings.vector_slots.physical.0;
+                let slots = bindings.vector_slots.physical();
                 self.bindings = Some(bindings);
                 self.loaded_watch = self.end_classified(machine)?;
                 self.scoped = Some(machine.session.board.memory_watch_begin_scoped(self.scoped_rules(window, slots)?, self.maps.clone())?);
@@ -633,6 +649,10 @@ impl<'a> Runner<'a> {
                 let loaded = stop.registers[usize::from(contract.loaded)].0;
                 let counter = stop.counter.ok_or("post-load stop lacks its counter")?;
                 require(loaded == 0 || counter.nonzero_count == 1, "post-load register holds a nonzero value without a nonzero load")?;
+                if let Some(previous) = self.phase.last_post {
+                    require(counter.count == previous + 1, "consecutive post-load stops do not pair with exactly one completed load")?;
+                }
+                self.phase.last_post = Some(counter.count);
                 if self.phase.gate {
                     self.phase.posts_after_gate += 1;
                     if self.phase.posts_after_gate == HEAD_POLLS {
@@ -654,6 +674,7 @@ impl<'a> Runner<'a> {
                 machine.session.board.read_memory(0, u64::from(HELD_GATE), &mut gate)?;
                 require(u32::from_le_bytes(gate) == 0xeafffffe, "held gate is not a self-branch")?;
                 self.phase.gate = true;
+                self.phase.last_post = None;
                 self.remove(machine, HELD_GATE)?;
                 if !self.sites.contains_key(&contract.post_load) {
                     self.add(machine, &[(contract.post_load, Label::PostLoad)])?;

@@ -68,10 +68,11 @@ data Knobs = Knobs
   , knobExitR8 :: Word32
   , knobDelayLoads :: Word64
   , knobStoredValue :: Maybe Word32
+  , knobPostLoadSkips :: Bool
   }
 
 knobs :: Knobs
-knobs = Knobs False 0x5660 0xd00c0 0x200001d3 False False False False 8 4 Nothing
+knobs = Knobs False 0x5660 0xd00c0 0x200001d3 False False False False 8 4 Nothing False
 
 writes :: [String]
 writes = ["cpu-write", "host-write", "model-bus-write"]
@@ -92,7 +93,7 @@ receipt scenario kind facts knob = BL.toStrict (encode document)
     held = scenario == Held
     delayed = scenario == Delayed
     stored = fromMaybe (if scenario == NonOne then 0x400a0000 else 1) (knobStoredValue knob)
-    base = [argument, 0, 0, entrySite, 4, 5, 1, 7, 8, 9, 10, 0x700007fc, 12]
+    base = [argument, 0x400a0000, 0, entrySite, 4, 5, 1, 7, 8, 9, 10, 0x700007fc, 12]
     replace index value list = take index list ++ [value] ++ drop (index + 1) list
     tcm = [[0x70000011, 0], [0x70000011, 0 :: Word32]]
     totals (count, zero, nonzero) = object ["count" .= (count :: Word64), "zero_count" .= (zero :: Word64), "nonzero_count" .= (nonzero :: Word64)]
@@ -103,7 +104,7 @@ receipt scenario kind facts knob = BL.toStrict (encode document)
       , "sp" .= sp, "lr" .= lr, "cpsr" .= flags, "completion" .= (0 :: Word32)
       , "tcm" .= tcm, "counter" .= fmap totals counter, "watch_records" .= cursor ]
     postLoad index counts = stop "post-load" postSite 1 counts (replace loaded 0 base) 0x400f3400 0 cpsr (Just (index, index, 0)) (Just 0)
-    waitingPosts = [postLoad (i + 1) (1000 + 100 * i, 300 + period * i) | i <- [0 .. 3]]
+    waitingPosts = [postLoad (i + 1 + (if knobPostLoadSkips knob && i >= 2 then 1 else 0)) (1000 + 100 * i, 300 + period * i) | i <- [0 .. 3]]
     heldPosts = [postLoad (i + 6) (20000 + 100 * i, 300 + period * (i + 10)) | i <- [0 .. 3]]
     delayLoads = knobDelayLoads knob
     storeCount = if delayed then 4 + delayLoads else 6
@@ -142,6 +143,10 @@ receipt scenario kind facts knob = BL.toStrict (encode document)
     snapshot core = object ["core" .= (core :: Int), "btcm" .= object ["register" .= (0 :: Word32), "window" .= (Nothing :: Maybe [Int])]
       , "atcm" .= object ["register" .= (0x70000011 :: Word32), "window" .= spanOf 0x70000000 0x70002000]]
     stackSpan = object ["tcm" .= object ["bank" .= ("atcm" :: String), "offsets" .= spanOf 0x7cc 0x800]]
+    bound :: Word64 -> Word64 -> Word64 -> Word64 -> Word64 -> Value
+    bound guest size address physicalBase mapSize = object
+      [ "guest" .= guest, "size" .= size
+      , "map" .= object ["core" .= (1 :: Int), "address" .= address, "physical" .= physicalBase, "size" .= mapSize] ]
     rule :: [Int] -> String -> String -> [Value] -> Value
     rule cores kindName mode spans = object ["cores" .= cores, "kind" .= kindName, "mode" .= mode, "spans" .= spans, "tcm" .= map snapshot cores]
     ownedRules = if kind == OwnedProgram
@@ -190,8 +195,8 @@ receipt scenario kind facts knob = BL.toStrict (encode document)
       , "loaded_watch" .= classified [record1Clear] ([writeClass 0xa00c4 0xa00c8] ++ [writeClass 0x180 0x19c | delayed])
       , "scoped_watch" .= scoped, "stops" .= stops
       , "bindings" .= object
-          [ "vector_slots" .= object ["guest" .= (0xffff0024 :: Word32), "physical" .= (0x3fff0024 :: Word64)], "stack_window" .= stackSpan
-          , "zero_guest" .= spanOf 0x400ddaa0 0x400f3420
+          [ "vector_slots" .= bound 0xffff0024 28 0xffff0000 0x3fff0000 0x10000, "stack_window" .= stackSpan
+          , "zero_range" .= bound 0x400ddaa0 0x15980 0x40000000 0 0x10000000
           , "veneer" .= (if delayed then Just (object ["virtual" .= B.unpack veneer, "physical" .= B.unpack veneer]) else Nothing) ]
       , "completion" .= (if held then Nothing else Just (object
           [ "instruction" .= object ["virtual" .= instruction, "physical" .= instruction], "before_pc" .= (0x40a08 :: Word32)
@@ -244,6 +249,7 @@ main = do
   expect "a missing original store is refused" (not (accepted (natural knobs {knobNoWriter = True})))
   expect "a store row outside the commit window is refused" (not (accepted (natural knobs {knobStoreOutsideCommit = True})))
   expect "a commit during which core 1 advances is refused" (not (accepted (natural knobs {knobCore1MovesAtCommit = True})))
+  expect "a post-load stop pairing with two loads is refused" (not (accepted (natural knobs {knobPostLoadSkips = True})))
   expect "a scoped fault is refused" (not (accepted (natural knobs {knobFault = True})))
   expect "a natural receipt under the held contract is refused" (not (accepted (validate (owned Held) (ownedReceipt Natural knobs))))
   expect "held owned receipt accepted" (accepted (validate (owned Held) (ownedReceipt Held knobs)))

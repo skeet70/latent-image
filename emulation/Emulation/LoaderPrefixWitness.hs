@@ -247,6 +247,9 @@ retainedFacts (StagedImages record loader) = do
   forM_ [(0xd09c0, 0x13001000), (0xd09c4, 0x1344100a), (0xd09c8, 0x13a02064)] $ \(address, expected) ->
     require (leWordAt loader (address - 0xd0000) == Right expected) "stock wait register setup differs"
   let model = completionModel (0, 0) (M.fromList [(1, 0x400a0000), (2, 100)])
+  let branchesTo target = [() | offset <- [0, 4 .. B.length loader - 4], Right word <- [leWordAt loader offset]
+        , Branch _ _ destination <- [A32.decode (0xd0000 + fromIntegral offset) word], destination == target]
+  require (null (branchesTo 0xd0a48)) "a stock branch enters the retained post-load site"
   pollPeriod model (CodeImage 0xd0000 loader) 0xd0a44 0xd0a48 >>= retainedProgramFacts
 
 -- | Owned facts from the linked image and symbols and the staged record 2
@@ -285,10 +288,16 @@ deriveOwnedFacts bin symbolBytes (StagedImages record loader) = do
       require (literal == 0x40000000 + fromIntegral completionCell) "completion-cell literal is not 0x400a00c4"
       pure location
     _ -> Left "completion cell is not one literal base and one word load into r0"
+  returnWord <- A32.decode (load + 4) <$> wordAt (load + 4)
+  require (case returnWord of
+    LoadMultiple (Cond 14) rn _ _ list -> rn == A32.sp && A32.pc `elem` list && Reg 0 `notElem` list
+    BranchExchange (Cond 14) False rm -> rm == A32.lr
+    _ -> False) "completion-cell load is not followed by its return"
   dispatchWords <- extentOf "xm1_loader_prefix_dispatch" >>= decodeExtent
   call <- case [location | (location, Branch (Cond 14) True callee) <- dispatchWords, callee == fst cell] of
     [location] -> Right location
     _ -> Left "dispatch does not call the completion cell exactly once"
+  require (null [() | (_, Branch _ _ destination) <- dispatchWords, destination == call + 4]) "a branch enters the owned post-load site"
   period <- pollPeriod (completionModel (0x400f3000, stackTop) (M.singleton 13 0x400f3400)) code call (call + 4)
   let refusal = either (const Nothing) (Just . Guest . F.symbolAddress) (F.lookupSymbol rows "xm1_loader_prefix_refusal")
   fetchSpans <- forbidSpans rows "xm1_loader_b_forbid_fetch_"
@@ -470,9 +479,18 @@ data Stop = Stop
   , stopCursor :: Maybe Int
   } deriving (Eq, Show)
 
+-- | A readable core-1 static mapping: guest address, physical address, size.
+data StaticMap = StaticMap Word64 Word64 Word64 deriving (Eq, Show)
+
+-- | The physical address of guest [address, address + size) through the map.
+through :: StaticMap -> Word64 -> Word64 -> Either String Word64
+through (StaticMap guest physical size) address extent
+  | address >= guest && address + extent <= guest + size = Right (physical + address - guest)
+  | otherwise = Left "bound extent leaves its static mapping"
+
 data Bindings = Bindings
-  { bindingVectorSlots :: (Word32, Word64), bindingStackWindow :: ScopeSpan
-  , bindingZeroGuest :: Span, bindingVeneer :: Maybe (B.ByteString, B.ByteString)
+  { bindingSlotsMap :: StaticMap, bindingStackWindow :: ScopeSpan
+  , bindingZeroMap :: StaticMap, bindingVeneer :: Maybe (B.ByteString, B.ByteString)
   } deriving (Eq, Show)
 
 -- | Core counts before and after one entered instruction, and the completion
@@ -691,10 +709,23 @@ viewPair size value = do
 
 parseBindings :: Value -> Either String Bindings
 parseBindings value = do
-  row <- fields ["vector_slots", "stack_window", "zero_guest", "veneer"] value
-  slots <- field row "vector_slots" >>= fields ["guest", "physical"]
-  Bindings <$> ((,) <$> get slots "guest" <*> get slots "physical") <*> (field row "stack_window" >>= parseScopeSpan)
-    <*> (field row "zero_guest" >>= parseSpan) <*> (field row "veneer" >>= nullable (viewPair (fromIntegral (C.veneerEnd - C.veneerEntry))))
+  row <- fields ["vector_slots", "stack_window", "zero_range", "veneer"] value
+  let bound name = do
+        entry <- field row name >>= fields ["guest", "size", "map"]
+        inner <- field entry "map" >>= fields ["core", "address", "physical", "size"]
+        core <- get inner "core" :: Either String Int
+        require (core == 1) (name ++ " map is not core 1's")
+        mapped <- StaticMap <$> get inner "address" <*> get inner "physical" <*> get inner "size"
+        guest <- get entry "guest"
+        size <- get entry "size"
+        _ <- through mapped guest size
+        pure ((guest, size), mapped)
+  ((slotsGuest, slotsSize), slotsMap) <- bound "vector_slots"
+  ((zeroGuest, zeroSize), zeroMap) <- bound "zero_range"
+  require (slotsGuest == fromIntegral vectorBase + 0x24 && slotsSize == 28 && zeroGuest == 0x400ddaa0 && zeroSize == 0x15980)
+    "bound vector-slot or zero-range extent differs"
+  Bindings slotsMap <$> (field row "stack_window" >>= parseScopeSpan) <*> pure zeroMap
+    <*> (field row "veneer" >>= nullable (viewPair (fromIntegral (C.veneerEnd - C.veneerEntry))))
 
 parseStore :: Value -> Either String CommittedStore
 parseStore value = do
@@ -734,15 +765,13 @@ expectedClasses scenario = sort $
   , ClassState loaderACompletion writes, ClassState loaderALiteral writes ]
     ++ [ClassState veneerSpan writes | scenario == Delayed]
 
-expectedConfinement :: ProgramKind -> Bindings -> [Confinement]
-expectedConfinement kind bindings = sort $
-  [ Confinement [1] CpuWrite Allow (sort [PhysicalSpan zeroRange, PhysicalSpan (Span slots (slots + 28)), bindingStackWindow bindings])
+expectedConfinement :: ProgramKind -> Word64 -> ScopeSpan -> [Confinement]
+expectedConfinement kind slots window = sort $
+  [ Confinement [1] CpuWrite Allow (sort [PhysicalSpan zeroRange, PhysicalSpan (Span slots (slots + 28)), window])
   , Confinement [0] CpuWrite Forbid [PhysicalSpan zeroRange] ]
     ++ case kind of
       RetainedProgram -> []
       OwnedProgram -> [Confinement [1] CpuFetch Forbid (map PhysicalSpan replacedCode), Confinement [1] CpuRead Forbid [PhysicalSpan entryPool]]
-  where
-    slots = snd (bindingVectorSlots bindings)
 
 -- | A physical CPU write's core, PC, physical address and preimage.
 cpuWrite :: Row -> Maybe (Core, Word32, Word64, B.ByteString)
@@ -789,8 +818,8 @@ tcmWindow value
     base = fromIntegral (value .&. 0xfffff000) :: Word64
     size = 512 * 2 ^ code :: Word64
 
--- | The entry-stack window below the handoff SP: offsets in the core-1 TCM
--- bank holding it, else physical through the bit-30 DRAM alias.
+-- | The entry-stack window below the handoff SP as offsets in the core-1 TCM
+-- bank holding it.
 stackWindow :: Stop -> Either String ScopeSpan
 stackWindow handoff = do
   let TcmWords _ (atcm, btcm) = stopTcm handoff
@@ -799,8 +828,7 @@ stackWindow handoff = do
   windows <- forM [(Atcm, atcm), (Btcm, btcm)] $ \(bank, register) -> fmap ((,) bank) <$> tcmWindow register
   case [(bank, base) | Just (bank, Span base end) <- windows, low >= base && top <= end] of
     [(bank, base)] -> Right (TcmSpan bank (Span (low - base) (top - base)))
-    [] | low >= 0x40000000 && top <= 0x80000000 -> Right (PhysicalSpan (Span (low - 0x40000000) (top - 0x40000000)))
-    _ -> Left "entry-stack window lies in neither one TCM bank nor the DRAM alias"
+    _ -> Left "entry-stack window does not lie in one core-1 TCM bank"
 
 -- | Labels each scenario requires exactly once, beyond any number of post-load stops.
 requiredLabels :: Scenario -> [Label]
@@ -845,8 +873,8 @@ validateReceipt contract@(Contract scenario (Program kind facts)) receipt = do
   require (isNothing (stopCounter handoff)) "handoff stop carries a scoped counter"
   window <- stackWindow handoff
   require (bindingStackWindow bindings == window) "bound entry-stack window differs from the handoff SP and TCM"
-  require (fst (bindingVectorSlots bindings) == vectorBase + 0x24 && bindingZeroGuest bindings == Span 0x400ddaa0 0x400f3420)
-    "bound vector slots or zero range differ"
+  zeroPhysical <- through (bindingZeroMap bindings) 0x400ddaa0 0x15980
+  require (Span zeroPhysical (zeroPhysical + 0x15980) == zeroRange) "bound zero range does not map to physical [0xddaa0,0xf3420)"
   let TcmWords (atcm0, btcm0) (atcm1, btcm1) = stopTcm handoff
   require (scopedTcm scoped == sort [TcmSnapshot 0 atcm0 btcm0, TcmSnapshot 1 atcm1 btcm1]) "scoped TCM snapshot differs from the handoff TCM"
   forM_ (dropWhile (/= handoff) stops) $ \stop -> require (stopTcm stop == stopTcm handoff) "TCM registers changed after the handoff"
@@ -862,7 +890,8 @@ validateReceipt contract@(Contract scenario (Program kind facts)) receipt = do
     && stopCpsr entry == stopCpsr handoff && registerRange 6 11 (stopRegisters entry) == registerRange 6 11 (stopRegisters handoff))
     "prefix entry differs from the handoff context"
   require (scopedClasses scoped == expectedClasses scenario) "scoped watch classes differ"
-  require (scopedConfinement scoped == expectedConfinement kind bindings) "scoped confinement rules differ"
+  slots <- through (bindingSlotsMap bindings) (fromIntegral vectorBase + 0x24) 28
+  require (scopedConfinement scoped == expectedConfinement kind slots (bindingStackWindow bindings)) "scoped confinement rules differ"
   counter <- case scopedCounters scoped of
     [found] | counterCores found == [1] && counterCell found == cellSpan && counterHeadBound found == headBound
       && counterTailBound found == tailBound -> Right found
@@ -885,13 +914,22 @@ validateReceipt contract@(Contract scenario (Program kind facts)) receipt = do
   let posts = filter ((== PostLoad) . stopLabel) stops
   postCounts <- mapM counterAt posts
   forM_ (zip posts postCounts) $ \(stop, loads) -> do
-    require (stopAddress stop == factPostLoad facts) "post-load stop site differs"
+    require (stopAddress stop == factPostLoad facts && totalCount loads > 0) "post-load stop site differs or precedes every load"
     require (registerAt (factLoaded facts) (stopRegisters stop) == fromIntegral (if totalNonzero loads == 0 then 0 else expected))
       "post-load register differs from the loaded completion value"
+    when (kind == RetainedProgram) $
+      require (r1 (stopRegisters stop) + 0xc4 == 0x40000000 + fromIntegral completionCell) "retained load base register differs"
   let waiting = [(stop, loads) | (stop, loads) <- zip posts postCounts, totalNonzero loads == 0]
+      (beforeGate, fromGate) = break ((== HeldGate) . stopLabel) stops
+      armed = [filter ((== PostLoad) . stopLabel) group | group <- beforeGate : [drop 1 fromGate | not (null fromGate)]]
   require (length waiting >= min headPolls (fromIntegral (totalZero totals))) "fewer waiting post-load stops than head polls"
-  zipWithM_ (\(earlier, a) (later, b) -> when (totalCount b == totalCount a + 1) $
-    require (snd (stopCounts later) - snd (stopCounts earlier) == period) "consecutive waiting loads differ from the poll period") waiting (drop 1 waiting)
+  forM_ armed $ \group -> do
+    loads <- mapM counterAt group
+    zipWithM_ (\(earlier, a) (later, b) -> do
+      require (totalCount b == totalCount a + 1) "consecutive post-load stops do not pair with exactly one completed load"
+      when (totalNonzero b == 0) $
+        require (snd (stopCounts later) - snd (stopCounts earlier) == period) "consecutive waiting loads differ from the poll period")
+      (zip group loads) (drop 1 (zip group loads))
   if scenario == Held
     then acceptHeld scoped counter stops receipt
     else acceptCompletion scenario facts expected scoped counter stops receipt handoff
