@@ -1,0 +1,2202 @@
+diff --git a/crates/emulator/src/board/keyframe.rs b/crates/emulator/src/board/keyframe.rs
+index eea30e6..d4ba888 100644
+--- a/crates/emulator/src/board/keyframe.rs
++++ b/crates/emulator/src/board/keyframe.rs
+@@ -225,6 +225,9 @@ impl Board {
+         Ok(())
+     }
+     pub fn checkpoint(&self, previous: Option<&Keyframe>) -> Result<Keyframe, String> {
++        if self.scoped_watch_active() {
++            return Err("keyframe refuses an active scoped memory watch".into());
++        }
+         let state = self
+             .state
+             .try_borrow()
+@@ -275,6 +278,9 @@ impl Board {
+     }
+     pub fn restore_keyframe(&mut self, saved: &Keyframe) -> Result<(), String> {
+         self.keyframe_owner(saved)?;
++        if self.scoped_watch_active() {
++            return Err("keyframe refuses an active scoped memory watch".into());
++        }
+         let mut state = self
+             .state
+             .try_borrow_mut()
+diff --git a/crates/emulator/src/board/mod.rs b/crates/emulator/src/board/mod.rs
+index 01d5dee..e03ea34 100644
+--- a/crates/emulator/src/board/mod.rs
++++ b/crates/emulator/src/board/mod.rs
+@@ -24,6 +24,8 @@ mod preservation_tests;
+ mod observe;
+ mod schedule;
+ #[cfg(test)]
++mod scoped_watch_tests;
++#[cfg(test)]
+ mod schedule_tests;
+ #[cfg(test)]
+ mod tests;
+diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/board/observation.rs
+index c919039..c4bd54a 100644
+--- a/crates/emulator/src/board/observation.rs
++++ b/crates/emulator/src/board/observation.rs
+@@ -1,5 +1,6 @@
+ //! Explicit, bounded CPU/bus observation. No device consumes these records.
+ pub mod calls;
++pub mod scoped;
+ use super::{Board, State, factory::MemoryMap, scalar};
+ use fujimod_emulator_cpu::{Access, Cpu, Hook, HookId, HookRange, Model, Register, arm};
+ use serde_json::{Value, json};
+@@ -75,6 +76,7 @@ pub struct Records {
+     /// Empty for an unclassified watch, which records every source.
+     classes: Vec<WatchRange>,
+     views: ViewPolicy,
++    scoped: Option<Box<scoped::Scoped>>,
+ }
+ impl Records {
+     fn overlaps(&self, address: u64, bytes: u64) -> bool {
+@@ -98,10 +100,14 @@ impl Records {
+             return;
+         }
+         if self.rows.len() == self.limit {
+-            self.violation = Some(format!(
+-                "Memory watch exceeded its {} record bound",
+-                self.limit
+-            ));
++            if self.scoped.is_some() {
++                self.fail_scoped(scoped::Fault::LogLimit { limit: self.limit });
++            } else {
++                self.violation = Some(format!(
++                    "Memory watch exceeded its {} record bound",
++                    self.limit
++                ));
++            }
+         } else {
+             self.rows.push(row);
+         }
+@@ -116,14 +122,18 @@ impl Records {
+     }
+     pub(super) fn view_changed(&mut self) {
+         if self.views == ViewPolicy::Fixed {
+-            self.violation
+-                .get_or_insert_with(|| "Memory decoding changed under a fixed-view memory watch".into());
++            if self.scoped.is_some() {
++                self.fail_scoped(scoped::Fault::DecodingChanged);
++            } else {
++                self.violation
++                    .get_or_insert_with(|| "Memory decoding changed under a fixed-view memory watch".into());
++            }
+         }
+     }
+     pub fn state(&self) -> Value {
+         let mut state =
+             json!({"enabled":true,"ranges":self.ranges,"records":self.rows,"violation":self.violation});
+-        if !self.classes.is_empty() {
++        if !self.classes.is_empty() || self.scoped.is_some() {
+             state["classes"] = self
+                 .classes
+                 .iter()
+@@ -134,6 +144,9 @@ impl Records {
+                 ViewPolicy::Fixed => "fixed",
+             });
+         }
++        if let Some(scoped) = &self.scoped {
++            scoped.describe(&mut state);
++        }
+         state
+     }
+ }
+@@ -149,7 +162,74 @@ struct MemoryContext {
+     maps: Vec<MemoryMap>,
+     core: usize,
+ }
++#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
++#[serde(rename_all = "lowercase")]
++enum ByteOrder {
++    Little,
++    Big,
++}
++impl ByteOrder {
++    fn of(cpu: &dyn Cpu) -> Result<Self, String> {
++        Ok(if scalar(cpu, Register::Pstate)? & (1 << 9) != 0 {
++            Self::Big
++        } else {
++            Self::Little
++        })
++    }
++    fn decode(self, bytes: &[u8]) -> u64 {
++        match self {
++            Self::Little => bytes
++                .iter()
++                .rev()
++                .fold(0u64, |v, b| (v << 8) | u64::from(*b)),
++            Self::Big => bytes.iter().fold(0u64, |v, b| (v << 8) | u64::from(*b)),
++        }
++    }
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++struct Attribution {
++    pc: u64,
++    instructions: u64,
++    tick: u64,
++}
++impl Attribution {
++    fn capture(state: &State, cpu: &dyn Cpu, core: usize) -> Result<Self, String> {
++        let extra = cpu
++            .instruction_progress()
++            .unwrap_or(state.accounted[core])
++            .saturating_sub(state.accounted[core]);
++        let instructions = state.instructions.iter().sum::<u64>().saturating_add(extra);
++        let elapsed = state
++            .timeline
++            .ratio()
++            .advance_phase(state.timeline.phase(), extra)?
++            .0;
++        let tick = state
++            .timeline
++            .now()
++            .saturating_add(elapsed.min(u64::MAX as u128) as u64);
++        Ok(Self {
++            pc: scalar(cpu, Register::Pc)?,
++            instructions,
++            tick,
++        })
++    }
++}
+ impl MemoryContext {
++    fn physical(&self, state: &State, address: u64, size: u64) -> Option<u64> {
++        state
++            .decoders
++            .observed_physical(self.core, address, size)
++            .or_else(|| {
++                self.maps
++                    .iter()
++                    .find(|m| {
++                        m.address <= address
++                            && address.saturating_add(size) <= m.address + m.size as u64
++                    })
++                    .map(|m| m.physical + address - m.address)
++            })
++    }
+     fn record(
+         &self,
+         source: &str,
+@@ -161,18 +241,7 @@ impl MemoryContext {
+             return Ok(());
+         };
+         let state = state.borrow();
+-        let physical = state
+-            .decoders
+-            .observed_physical(self.core, address, size)
+-            .or_else(|| {
+-                self.maps
+-                    .iter()
+-                    .find(|m| {
+-                        m.address <= address
+-                            && address.saturating_add(size) <= m.address + m.size as u64
+-                    })
+-                    .map(|m| m.physical + address - m.address)
+-            });
++        let physical = self.physical(&state, address, size);
+         let mut records = self.records.borrow_mut();
+         let Some(physical) = physical else {
+             return if records.views == ViewPolicy::Fixed {
+@@ -187,11 +256,7 @@ impl MemoryContext {
+         if tcm_overlap(&*cpu, address, size)? {
+             return Err("Memory watch intersects a CPU-private TCM overlay".into());
+         }
+-        let byte_order = if scalar(&*cpu, Register::Pstate)? & (1 << 9) != 0 {
+-            "big"
+-        } else {
+-            "little"
+-        };
++        let byte_order = ByteOrder::of(&*cpu)?;
+         let before = if source != "cpu-fetch" {
+             if !(1..=16).contains(&size) {
+                 return Err("Memory watch cannot capture this CPU access width".into());
+@@ -203,37 +268,16 @@ impl MemoryContext {
+             None
+         };
+         let value = if source == "cpu-read" && size <= 8 {
+-            let bytes = before.as_ref().unwrap();
+-            Some(if byte_order == "little" {
+-                bytes
+-                    .iter()
+-                    .rev()
+-                    .fold(0u64, |v, b| (v << 8) | u64::from(*b))
+-            } else {
+-                bytes.iter().fold(0u64, |v, b| (v << 8) | u64::from(*b))
+-            })
++            Some(byte_order.decode(before.as_ref().unwrap()))
+         } else {
+             value
+         };
+-        let extra = cpu
+-            .instruction_progress()
+-            .unwrap_or(state.accounted[self.core])
+-            .saturating_sub(state.accounted[self.core]);
+-        let instructions = state.instructions.iter().sum::<u64>().saturating_add(extra);
+-        let elapsed = state
+-            .timeline
+-            .ratio()
+-            .advance_phase(state.timeline.phase(), extra)?
+-            .0;
+-        let tick = state
+-            .timeline
+-            .now()
+-            .saturating_add(elapsed.min(u64::MAX as u128) as u64);
++        let attribution = Attribution::capture(&state, &*cpu, self.core)?;
+         records.push(
+             json!({"source":source,"address":address,"physical":physical,"size":size,
+             "value":value,"before":before,"byte_order":byte_order,
+-            "core":self.core,"pc":scalar(&*cpu,Register::Pc)?,
+-            "instructions":instructions,"tick":tick}),
++            "core":self.core,"pc":attribution.pc,
++            "instructions":attribution.instructions,"tick":attribution.tick}),
+         );
+         Ok(())
+     }
+@@ -354,6 +398,9 @@ impl Board {
+         if self.preservation_active() {
+             return Err("A preservation observation conflicts with memory watch".into());
+         }
++        if self.scoped_watch_active() {
++            return Err("A scoped memory watch conflicts with memory watch".into());
++        }
+         let ranges = union(ranges);
+         self.watch_backing(&ranges)?;
+         let records = Rc::new(RefCell::new(Records {
+@@ -470,6 +517,9 @@ impl Board {
+         if self.preservation_active() {
+             return Err("A preservation observation conflicts with memory watch".into());
+         }
++        if self.scoped_watch_active() {
++            return Err("A scoped memory watch conflicts with memory watch".into());
++        }
+         let ranges = union(classes.iter().map(|range| (range.start, range.end)).collect());
+         self.watch_backing(&ranges)?;
+         let records = Rc::new(RefCell::new(Records {
+@@ -558,7 +608,9 @@ impl Board {
+         for (core, hook) in watch.hooks.drain(..) {
+             self.cpus[core].remove_hook(hook)?;
+         }
+-        self.physical_memory.observation.replace(None);
++        if !self.scoped_watch_active() {
++            self.physical_memory.observation.replace(None);
++        }
+         Ok(())
+     }
+ }
+diff --git a/crates/emulator/src/board/observation/scoped.rs b/crates/emulator/src/board/observation/scoped.rs
+new file mode 100644
+index 0000000..9268ecb
+--- /dev/null
++++ b/crates/emulator/src/board/observation/scoped.rs
+@@ -0,0 +1,1312 @@
++//! A fixed-view memory watch with core-filtered confinement, word-read
++//! counters and zero-fill coverage beside the logged classes.
++//!
++//! An access wholly inside a TCM window snapshotted at begin is located by
++//! bank offset and reaches only confinement rules. Any other access resolves
++//! to a physical address through the decoder's selected views and the given
++//! maps; accesses through addresses outside those views are not observed.
++use super::{
++    super::{Board, State, memory::Memory, preservation::PhysicalRange},
++    Attribution, ByteOrder, MemoryContext, Records, Span, ViewPolicy, WatchKinds, WatchRange,
++    union,
++};
++use crate::board::factory::MemoryMap;
++use fujimod_emulator_cpu::{Access, Cpu, ExecutionPolicy, Hook, HookId, HookRange, Model, arm};
++use serde::{Serialize, Serializer};
++use serde_json::{Value, json};
++use std::{
++    cell::RefCell,
++    ffi::c_void,
++    fmt,
++    rc::{Rc, Weak},
++};
++
++const MAX_RULES: usize = 64;
++const MAX_SPANS: usize = 64;
++const MAX_CLASSES: usize = 256;
++const MAX_LIMIT: usize = 1 << 22;
++const MAX_SAMPLES: u8 = 64;
++const MAX_COVERAGE_WORDS: u64 = 1 << 20;
++/// Hooks select an access by its first byte; wider accesses are faults.
++const MAX_WIDTH: u64 = 16;
++/// Store values reach hooks truncated to this many bytes.
++const MAX_VALUE_WIDTH: u64 = 8;
++const WORD: u64 = 4;
++
++/// Processor indices below 8.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct CoreSet(u8);
++
++impl CoreSet {
++    pub fn new(cores: &[usize]) -> Result<Self, String> {
++        let bits = cores.iter().try_fold(0u8, |bits, &core| {
++            u32::try_from(core)
++                .ok()
++                .and_then(|shift| 1u8.checked_shl(shift))
++                .map(|bit| bits | bit)
++                .ok_or_else(|| format!("core {core} is outside a scoped core set"))
++        })?;
++        if bits == 0 {
++            return Err("a scoped core set must be nonempty".into());
++        }
++        Ok(Self(bits))
++    }
++    pub fn contains(self, core: usize) -> bool {
++        core < 8 && self.0 & (1 << core) != 0
++    }
++    fn cores(self) -> impl Iterator<Item = usize> {
++        (0..8).filter(move |&core| self.contains(core))
++    }
++    fn intersects(self, other: Self) -> bool {
++        self.0 & other.0 != 0
++    }
++}
++
++impl Serialize for CoreSet {
++    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
++        serializer.collect_seq(self.cores())
++    }
++}
++
++/// Cortex-R5 TCM interface. The `c9, c1` region register with `opc2` 0
++/// describes BTCM and with `opc2` 1 describes ATCM.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
++#[serde(rename_all = "lowercase")]
++pub enum TcmBank {
++    Btcm,
++    Atcm,
++}
++
++impl TcmBank {
++    const ALL: [Self; 2] = [Self::Btcm, Self::Atcm];
++    fn index(self) -> usize {
++        match self {
++            Self::Btcm => 0,
++            Self::Atcm => 1,
++        }
++    }
++    fn register(self) -> arm::Coprocessor {
++        arm::Coprocessor {
++            cp: 15,
++            opc1: 0,
++            crn: 9,
++            crm: 1,
++            opc2: self.index() as u32,
++            secure: 0,
++            wide: false,
++        }
++    }
++}
++
++impl fmt::Display for TcmBank {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.write_str(match self {
++            Self::Btcm => "BTCM",
++            Self::Atcm => "ATCM",
++        })
++    }
++}
++
++/// Half-open byte offsets into one bank's window.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct TcmRange {
++    bank: TcmBank,
++    start: u32,
++    end: u32,
++}
++
++impl TcmRange {
++    pub fn new(bank: TcmBank, start: u32, end: u32) -> Result<Self, String> {
++        if start >= end {
++            return Err("TCM range must be nonempty".into());
++        }
++        Ok(Self { bank, start, end })
++    }
++    pub fn bank(self) -> TcmBank {
++        self.bank
++    }
++    pub fn start(self) -> u32 {
++        self.start
++    }
++    pub fn end(self) -> u32 {
++        self.end
++    }
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum ScopeSpan {
++    Physical(PhysicalRange),
++    Tcm(TcmRange),
++}
++
++impl ScopeSpan {
++    fn describe(self) -> Value {
++        match self {
++            Self::Physical(range) => json!({"physical": [range.start(), range.end()]}),
++            Self::Tcm(range) => {
++                json!({"tcm": {"bank": range.bank, "offsets": [range.start, range.end]}})
++            }
++        }
++    }
++}
++
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub enum Confinement {
++    /// A matching access outside every span is a fault.
++    Allow(Vec<ScopeSpan>),
++    /// A matching access intersecting any span is a fault.
++    Forbid(Vec<ScopeSpan>),
++}
++
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct ConfinementRule {
++    pub cores: CoreSet,
++    pub access: Access,
++    pub rule: Confinement,
++}
++
++/// A 4-byte-aligned physical word.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
++pub struct PhysicalWord(u32);
++
++impl PhysicalWord {
++    pub fn new(address: u64) -> Result<Self, String> {
++        u32::try_from(address)
++            .ok()
++            .filter(|address| u64::from(*address).is_multiple_of(WORD))
++            .map(Self)
++            .ok_or_else(|| "physical word must be a 4-byte-aligned 32-bit address".into())
++    }
++    pub fn get(self) -> u64 {
++        u64::from(self.0)
++    }
++}
++
++/// Retained samples, at most 64.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct SampleBound(u8);
++
++impl SampleBound {
++    pub fn new(bound: u8) -> Result<Self, String> {
++        if bound > MAX_SAMPLES {
++            return Err(format!("sample bound exceeds {MAX_SAMPLES}"));
++        }
++        Ok(Self(bound))
++    }
++    pub fn get(self) -> usize {
++        usize::from(self.0)
++    }
++}
++
++/// CPU reads of `cell`; any read intersecting it must be exactly the aligned
++/// four-byte word.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct CounterRule {
++    pub cores: CoreSet,
++    pub cell: PhysicalWord,
++    pub head: SampleBound,
++    pub tail: SampleBound,
++}
++
++/// Word-aligned and at most 1 << 20 words.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct WordRange(PhysicalRange);
++
++impl WordRange {
++    pub fn new(start: u64, end: u64) -> Result<Self, String> {
++        let range = PhysicalRange::new(start, end)?;
++        if !start.is_multiple_of(WORD)
++            || !end.is_multiple_of(WORD)
++            || (end - start) / WORD > MAX_COVERAGE_WORDS
++        {
++            return Err("coverage range must be word-aligned and at most 1 << 20 words".into());
++        }
++        Ok(Self(range))
++    }
++    pub fn start(self) -> u64 {
++        self.0.start()
++    }
++    pub fn end(self) -> u64 {
++        self.0.end()
++    }
++    fn words(self) -> u64 {
++        (self.end() - self.start()) / WORD
++    }
++}
++
++/// CPU stores whose intended bytes cover a whole word with zeros.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct CoverageRule {
++    pub cores: CoreSet,
++    pub range: WordRange,
++}
++
++pub struct ScopedWatch {
++    /// Logged rows with the classified watch's meaning, physical accesses only.
++    pub classes: Vec<WatchRange>,
++    pub limit: usize,
++    pub confinement: Vec<ConfinementRule>,
++    pub counters: Vec<CounterRule>,
++    pub coverage: Vec<CoverageRule>,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++struct TcmRegion {
++    register: u32,
++    window: Option<Span>,
++}
++
++impl TcmRegion {
++    fn parse(register: u64) -> Result<Self, String> {
++        let register =
++            u32::try_from(register).map_err(|_| "TCM region register exceeds 32 bits")?;
++        if register & 1 == 0 {
++            return Ok(Self {
++                register,
++                window: None,
++            });
++        }
++        let bytes = 512u64 << ((register >> 2) & 31);
++        let base = u64::from(register & 0xfffff000);
++        if !(0x1000..=0x800000).contains(&bytes) || !base.is_multiple_of(bytes) {
++            return Err("TCM region register has an unsupported size or alignment".into());
++        }
++        Ok(Self {
++            register,
++            window: Some((base, base + bytes)),
++        })
++    }
++    fn describe(self) -> Value {
++        json!({"register": self.register, "window": self.window.map(|(base, end)| [base, end])})
++    }
++}
++
++/// Indexed by [`TcmBank::index`].
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++struct TcmSnapshot([TcmRegion; 2]);
++
++impl TcmSnapshot {
++    fn describe(self, core: usize) -> Value {
++        json!({"core": core, "btcm": self.0[0].describe(), "atcm": self.0[1].describe()})
++    }
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) enum Location {
++    Physical(u64),
++    Tcm { bank: TcmBank, offset: u64 },
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) struct Site {
++    core: usize,
++    access: Access,
++    address: u64,
++    size: u64,
++}
++
++impl Site {
++    fn describe(self) -> Value {
++        json!({"core": self.core, "source": source(self.access), "address": self.address, "size": self.size})
++    }
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) struct Bytes {
++    bytes: [u8; MAX_WIDTH as usize],
++    len: u8,
++}
++
++impl Bytes {
++    fn as_slice(&self) -> &[u8] {
++        &self.bytes[..usize::from(self.len)]
++    }
++}
++
++/// One CPU access in the classified watch's row shape.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) struct Sample {
++    site: Site,
++    location: Location,
++    value: Option<u64>,
++    before: Option<Bytes>,
++    byte_order: ByteOrder,
++    attribution: Attribution,
++}
++
++impl Sample {
++    fn row(&self) -> Value {
++        let physical = match self.location {
++            Location::Physical(physical) => Some(physical),
++            Location::Tcm { .. } => None,
++        };
++        let mut row = json!({"source": source(self.site.access), "address": self.site.address,
++            "physical": physical, "size": self.site.size, "value": self.value,
++            "before": self.before.as_ref().map(Bytes::as_slice), "byte_order": self.byte_order,
++            "core": self.site.core, "pc": self.attribution.pc,
++            "instructions": self.attribution.instructions, "tick": self.attribution.tick});
++        if let Location::Tcm { bank, offset } = self.location {
++            row["tcm"] = json!({"bank": bank, "offset": offset});
++        }
++        row
++    }
++}
++
++/// The first violation of a scoped watch.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub(super) enum Fault {
++    Confinement { rule: usize, sample: Sample },
++    CounterAccess { rule: usize, sample: Sample },
++    CounterOverflow { rule: usize },
++    CoverageWidth { rule: usize, site: Site },
++    UnsupportedWidth(Site),
++    Unresolved(Site),
++    TcmStraddle { site: Site, bank: TcmBank },
++    TcmChanged { core: usize, bank: TcmBank, expected: u32, observed: u64 },
++    PolicyChanged { core: usize },
++    Inspection { site: Site, message: String },
++    DecodingChanged,
++    LogLimit { limit: usize },
++}
++
++impl Fault {
++    fn describe(&self) -> Value {
++        let (kind, mut detail) = match self {
++            Self::Confinement { rule, sample } => {
++                ("confinement", json!({"rule": rule, "sample": sample.row()}))
++            }
++            Self::CounterAccess { rule, sample } => {
++                ("counter-access", json!({"rule": rule, "sample": sample.row()}))
++            }
++            Self::CounterOverflow { rule } => ("counter-overflow", json!({"rule": rule})),
++            Self::CoverageWidth { rule, site } => {
++                let mut detail = site.describe();
++                detail["rule"] = json!(rule);
++                ("coverage-width", detail)
++            }
++            Self::UnsupportedWidth(site) => ("unsupported-width", site.describe()),
++            Self::Unresolved(site) => ("unresolved", site.describe()),
++            Self::TcmStraddle { site, bank } => {
++                let mut detail = site.describe();
++                detail["bank"] = json!(bank);
++                ("tcm-straddle", detail)
++            }
++            Self::TcmChanged {
++                core,
++                bank,
++                expected,
++                observed,
++            } => (
++                "tcm-changed",
++                json!({"core": core, "bank": bank, "expected": expected, "observed": observed}),
++            ),
++            Self::PolicyChanged { core } => ("policy-changed", json!({"core": core})),
++            Self::Inspection { site, message } => {
++                let mut detail = site.describe();
++                detail["message"] = json!(message);
++                ("inspection", detail)
++            }
++            Self::DecodingChanged => ("decoding-changed", json!({})),
++            Self::LogLimit { limit } => ("log-limit", json!({"limit": limit})),
++        };
++        detail["kind"] = json!(kind);
++        detail
++    }
++}
++
++impl fmt::Display for Fault {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::Confinement { rule, sample } => write!(
++                f,
++                "CPU{} {} at {:#x} breaks scoped confinement rule {rule}",
++                sample.site.core,
++                source(sample.site.access),
++                sample.site.address
++            ),
++            Self::CounterAccess { rule, sample } => write!(
++                f,
++                "CPU{} {}-byte read at {:#x} is not counter {rule}'s aligned word",
++                sample.site.core, sample.site.size, sample.site.address
++            ),
++            Self::CounterOverflow { rule } => write!(f, "Scoped counter {rule} overflowed"),
++            Self::CoverageWidth { rule, site } => write!(
++                f,
++                "CPU{} {}-byte store at {:#x} exceeds coverage rule {rule}'s known value width",
++                site.core, site.size, site.address
++            ),
++            Self::UnsupportedWidth(site) => write!(
++                f,
++                "Scoped memory watch cannot observe a {}-byte CPU{} {} at {:#x}",
++                site.size,
++                site.core,
++                source(site.access),
++                site.address
++            ),
++            Self::Unresolved(site) => write!(
++                f,
++                "Memory watch cannot resolve CPU{} access at {:#x} to physical memory",
++                site.core, site.address
++            ),
++            Self::TcmStraddle { site, bank } => write!(
++                f,
++                "CPU{} {} at {:#x} straddles its {bank} window",
++                site.core,
++                source(site.access),
++                site.address
++            ),
++            Self::TcmChanged {
++                core,
++                bank,
++                expected,
++                observed,
++            } => write!(
++                f,
++                "CPU{core} {bank} region register changed from {expected:#x} to {observed:#x} under a scoped memory watch"
++            ),
++            Self::PolicyChanged { core } => write!(
++                f,
++                "CPU{core} ran without Exact execution under a scoped memory watch"
++            ),
++            Self::Inspection { site, message } => write!(
++                f,
++                "Scoped memory watch could not inspect CPU{}: {message}",
++                site.core
++            ),
++            Self::DecodingChanged => {
++                f.write_str("Memory decoding changed under a fixed-view memory watch")
++            }
++            Self::LogLimit { limit } => {
++                write!(f, "Memory watch exceeded its {limit} record bound")
++            }
++        }
++    }
++}
++
++fn source(access: Access) -> &'static str {
++    match access {
++        Access::Read => "cpu-read",
++        Access::Write => "cpu-write",
++        Access::Fetch => "cpu-fetch",
++    }
++}
++
++fn slot(access: Access) -> usize {
++    match access {
++        Access::Read => 0,
++        Access::Write => 1,
++        Access::Fetch => 2,
++    }
++}
++
++/// Sorted, disjoint, with adjacent spans merged.
++fn contains(spans: &[Span], start: u64, end: u64) -> bool {
++    let index = spans.partition_point(|&(lo, _)| lo <= start);
++    index > 0 && end <= spans[index - 1].1
++}
++
++fn intersects(spans: &[Span], start: u64, end: u64) -> bool {
++    let index = spans.partition_point(|&(_, hi)| hi <= start);
++    spans.get(index).is_some_and(|&(lo, _)| lo < end)
++}
++
++fn disjoint(mut spans: Vec<Span>) -> Result<Vec<Span>, String> {
++    spans.sort_unstable();
++    if spans.windows(2).any(|pair| pair[1].0 < pair[0].1) {
++        return Err("Spans within one scoped confinement rule overlap".into());
++    }
++    Ok(union(spans))
++}
++
++struct Confined {
++    rule: ConfinementRule,
++    allow: bool,
++    physical: Vec<Span>,
++    /// Bank-relative, indexed by [`TcmBank::index`].
++    tcm: [Vec<Span>; 2],
++}
++
++impl Confined {
++    fn spans(&self) -> &[ScopeSpan] {
++        match &self.rule.rule {
++            Confinement::Allow(spans) | Confinement::Forbid(spans) => spans,
++        }
++    }
++    fn breaks(&self, location: Location, size: u64) -> bool {
++        let (spans, start) = match location {
++            Location::Physical(physical) => (&self.physical, physical),
++            Location::Tcm { bank, offset } => (&self.tcm[bank.index()], offset),
++        };
++        let end = start + size;
++        if self.allow {
++            !contains(spans, start, end)
++        } else {
++            intersects(spans, start, end)
++        }
++    }
++}
++
++struct Counter {
++    rule: CounterRule,
++    count: u64,
++    zero: u64,
++    nonzero: u64,
++    first_nonzero: Option<(u64, Sample)>,
++    head: Vec<Sample>,
++    /// A ring once full; `next` is then its oldest sample.
++    tail: Vec<Sample>,
++    next: usize,
++}
++
++impl Counter {
++    fn new(rule: CounterRule) -> Self {
++        Self {
++            rule,
++            count: 0,
++            zero: 0,
++            nonzero: 0,
++            first_nonzero: None,
++            head: Vec::with_capacity(rule.head.get()),
++            tail: Vec::with_capacity(rule.tail.get()),
++            next: 0,
++        }
++    }
++    fn intersects(&self, physical: u64, size: u64) -> bool {
++        let cell = self.rule.cell.get();
++        physical < cell + WORD && cell < physical + size
++    }
++    /// Leaves every field unchanged on overflow.
++    fn record(&mut self, sample: Sample) -> Result<(), ()> {
++        let count = self.count.checked_add(1).ok_or(())?;
++        let nonzero = sample.value != Some(0);
++        let (zero, nonzero_count) = if nonzero {
++            (self.zero, self.nonzero.checked_add(1).ok_or(())?)
++        } else {
++            (self.zero.checked_add(1).ok_or(())?, self.nonzero)
++        };
++        if nonzero && self.first_nonzero.is_none() {
++            self.first_nonzero = Some((self.count, sample));
++        }
++        if self.head.len() < self.rule.head.get() {
++            self.head.push(sample);
++        }
++        let tail = self.rule.tail.get();
++        if self.tail.len() < tail {
++            self.tail.push(sample);
++        } else if tail != 0 {
++            self.tail[self.next] = sample;
++            self.next = (self.next + 1) % tail;
++        }
++        self.count = count;
++        self.zero = zero;
++        self.nonzero = nonzero_count;
++        Ok(())
++    }
++    fn describe(&self) -> Value {
++        let cell = self.rule.cell.get();
++        json!({"cores": self.rule.cores, "cell": [cell, cell + WORD],
++            "head_bound": self.rule.head.get(), "tail_bound": self.rule.tail.get(),
++            "count": self.count, "zero_count": self.zero, "nonzero_count": self.nonzero,
++            "first_nonzero": self.first_nonzero.map(|(_, sample)| sample.row()),
++            "first_nonzero_index": self.first_nonzero.map(|(index, _)| index),
++            "head": self.head.iter().map(Sample::row).collect::<Vec<_>>(),
++            "tail": self.tail[self.next..].iter().chain(&self.tail[..self.next])
++                .map(Sample::row).collect::<Vec<_>>()})
++    }
++}
++
++struct Covered {
++    rule: CoverageRule,
++    /// One bit per word of `rule.range`.
++    bits: Vec<u64>,
++}
++
++impl Covered {
++    fn new(rule: CoverageRule) -> Self {
++        Self {
++            rule,
++            bits: vec![0; rule.range.words().div_ceil(64) as usize],
++        }
++    }
++    fn covers(&self, site: Site, physical: u64) -> bool {
++        site.access == Access::Write
++            && self.rule.cores.contains(site.core)
++            && physical < self.rule.range.end()
++            && self.rule.range.start() < physical + site.size
++    }
++    /// `bytes` are the intended store bytes in address order from `physical`.
++    fn credit(&mut self, physical: u64, bytes: &[u8]) {
++        let start = physical.max(self.rule.range.start()).next_multiple_of(WORD);
++        let end = (physical + bytes.len() as u64).min(self.rule.range.end()) & !(WORD - 1);
++        for word in (start..end).step_by(WORD as usize) {
++            let offset = (word - physical) as usize;
++            if bytes[offset..offset + WORD as usize] == [0; WORD as usize] {
++                let index = (word - self.rule.range.start()) / WORD;
++                self.bits[(index / 64) as usize] |= 1 << (index % 64);
++            }
++        }
++    }
++    fn first_uncovered(&self) -> Option<u64> {
++        self.bits
++            .iter()
++            .enumerate()
++            .find(|(_, bits)| **bits != u64::MAX)
++            .map(|(index, bits)| index as u64 * 64 + u64::from(bits.trailing_ones()))
++            .filter(|&word| word < self.rule.range.words())
++            .map(|word| self.rule.range.start() + word * WORD)
++    }
++    fn describe(&self) -> Value {
++        json!({"cores": self.rule.cores, "range": [self.rule.range.start(), self.rule.range.end()],
++            "covered_words": self.bits.iter().map(|bits| u64::from(bits.count_ones())).sum::<u64>(),
++            "first_uncovered": self.first_uncovered()})
++    }
++}
++
++pub(super) struct Scoped {
++    active: bool,
++    /// Indexed by core.
++    tcm: Vec<TcmSnapshot>,
++    confined: Vec<Confined>,
++    /// Per core, the confinement rule for each access kind by [`slot`].
++    by_core: Vec<[Option<usize>; 3]>,
++    counters: Vec<Counter>,
++    coverage: Vec<Covered>,
++    fault: Option<Fault>,
++}
++
++impl Scoped {
++    pub(super) fn describe(&self, state: &mut Value) {
++        let tcm = |core: usize| self.tcm[core].describe(core);
++        state["enabled"] = json!(self.active);
++        state["fault"] = self.fault.as_ref().map_or(Value::Null, Fault::describe);
++        state["tcm"] = (0..self.tcm.len()).map(tcm).collect();
++        state["confinement"] = self
++            .confined
++            .iter()
++            .map(|confined| {
++                let mode = if confined.allow { "allow" } else { "forbid" };
++                let spans = confined.spans().iter().map(|span| span.describe()).collect::<Vec<_>>();
++                json!({"cores": confined.rule.cores, "kind": source(confined.rule.access),
++                    "mode": mode, "spans": spans,
++                    "tcm": confined.rule.cores.cores().map(tcm).collect::<Vec<_>>()})
++            })
++            .collect();
++        state["counters"] = self.counters.iter().map(Counter::describe).collect();
++        state["coverage"] = self.coverage.iter().map(Covered::describe).collect();
++    }
++    fn classify(
++        &self,
++        context: &MemoryContext,
++        state: &State,
++        cpu: &dyn Cpu,
++        site: Site,
++    ) -> Result<Location, Fault> {
++        let end = site.address.saturating_add(site.size);
++        let mut location = None;
++        for bank in TcmBank::ALL {
++            let expected = self.tcm[site.core].0[bank.index()];
++            let observed = cpu
++                .coprocessor(bank.register(), None)
++                .map_err(|message| Fault::Inspection { site, message })?;
++            if observed != u64::from(expected.register) {
++                return Err(Fault::TcmChanged {
++                    core: site.core,
++                    bank,
++                    expected: expected.register,
++                    observed,
++                });
++            }
++            if let Some((base, top)) = expected.window {
++                if base <= site.address && end <= top {
++                    location = Some(Location::Tcm {
++                        bank,
++                        offset: site.address - base,
++                    });
++                } else if site.address < top && base < end {
++                    return Err(Fault::TcmStraddle { site, bank });
++                }
++            }
++        }
++        match location {
++            Some(location) => Ok(location),
++            None => context
++                .physical(state, site.address, site.size)
++                .map(Location::Physical)
++                .ok_or(Fault::Unresolved(site)),
++        }
++    }
++}
++
++impl Records {
++    pub(super) fn fail_scoped(&mut self, fault: Fault) {
++        if self.violation.is_some() {
++            return;
++        }
++        self.violation = Some(fault.to_string());
++        if let Some(scoped) = self.scoped.as_deref_mut() {
++            scoped.fault = Some(fault);
++        }
++    }
++}
++
++fn capture(
++    state: &State,
++    cpu: &dyn Cpu,
++    site: Site,
++    location: Location,
++    value: Option<u64>,
++) -> Result<Sample, Fault> {
++    let inspection = |message| Fault::Inspection { site, message };
++    let byte_order = ByteOrder::of(cpu).map_err(inspection)?;
++    let before = if site.access == Access::Fetch {
++        None
++    } else {
++        let mut before = Bytes {
++            bytes: [0; MAX_WIDTH as usize],
++            len: site.size as u8,
++        };
++        cpu.read_memory(site.address, &mut before.bytes[..site.size as usize])
++            .map_err(inspection)?;
++        Some(before)
++    };
++    let value = match before {
++        Some(before) if site.access == Access::Read && site.size <= MAX_VALUE_WIDTH => {
++            Some(byte_order.decode(before.as_slice()))
++        }
++        _ => value,
++    };
++    Ok(Sample {
++        site,
++        location,
++        value,
++        before,
++        byte_order,
++        attribution: Attribution::capture(state, cpu, site.core).map_err(inspection)?,
++    })
++}
++
++fn store_bytes(order: ByteOrder, value: u64, size: u64) -> [u8; MAX_VALUE_WIDTH as usize] {
++    let mut bytes = [0; MAX_VALUE_WIDTH as usize];
++    for (index, byte) in bytes.iter_mut().take(size as usize).enumerate() {
++        let shift = match order {
++            ByteOrder::Little => index as u64 * 8,
++            ByteOrder::Big => (size - 1 - index as u64) * 8,
++        };
++        *byte = (value >> shift) as u8;
++    }
++    bytes
++}
++
++/// `value` is the masked store value for stores of at most 8 bytes.
++fn apply(
++    context: &MemoryContext,
++    state: &State,
++    cpu: &dyn Cpu,
++    records: &mut Records,
++    site: Site,
++    value: Option<u64>,
++) -> Result<(), Fault> {
++    if !(1..=MAX_WIDTH).contains(&site.size) {
++        return Err(Fault::UnsupportedWidth(site));
++    }
++    if state.execution_policy != ExecutionPolicy::Exact {
++        return Err(Fault::PolicyChanged { core: site.core });
++    }
++    let Some(scoped) = records.scoped.as_deref() else {
++        return Ok(());
++    };
++    let location = scoped.classify(context, state, cpu, site)?;
++    if let Some(rule) = scoped.by_core[site.core][slot(site.access)]
++        && scoped.confined[rule].breaks(location, site.size)
++    {
++        return Err(Fault::Confinement {
++            rule,
++            sample: capture(state, cpu, site, location, value)?,
++        });
++    }
++    let Location::Physical(physical) = location else {
++        return Ok(());
++    };
++    let mut counted = None;
++    if site.access == Access::Read {
++        for (rule, counter) in scoped.counters.iter().enumerate() {
++            if counter.rule.cores.contains(site.core) && counter.intersects(physical, site.size) {
++                if physical != counter.rule.cell.get() || site.size != WORD {
++                    return Err(Fault::CounterAccess {
++                        rule,
++                        sample: capture(state, cpu, site, location, value)?,
++                    });
++                }
++                counted = Some(rule);
++            }
++        }
++    }
++    let stored = match scoped
++        .coverage
++        .iter()
++        .position(|covered| covered.covers(site, physical))
++    {
++        None => None,
++        Some(rule) => {
++            let value = value.ok_or(Fault::CoverageWidth { rule, site })?;
++            let order = if value == 0 {
++                ByteOrder::Little
++            } else {
++                ByteOrder::of(cpu).map_err(|message| Fault::Inspection { site, message })?
++            };
++            Some(store_bytes(order, value, site.size))
++        }
++    };
++    let logged = records.wants(source(site.access), physical, site.size);
++    if logged && records.rows.len() == records.limit {
++        return Err(Fault::LogLimit {
++            limit: records.limit,
++        });
++    }
++    let sample = if counted.is_some() || logged {
++        Some(capture(state, cpu, site, location, value)?)
++    } else {
++        None
++    };
++    let Some(scoped) = records.scoped.as_deref_mut() else {
++        return Ok(());
++    };
++    if let (Some(rule), Some(sample)) = (counted, sample) {
++        scoped.counters[rule]
++            .record(sample)
++            .map_err(|()| Fault::CounterOverflow { rule })?;
++    }
++    if let Some(stored) = stored {
++        for covered in scoped.coverage.iter_mut() {
++            if !covered.covers(site, physical) {
++                continue;
++            }
++            covered.credit(physical, &stored[..site.size as usize]);
++        }
++    }
++    if let (true, Some(sample)) = (logged, sample) {
++        records.push(sample.row());
++    }
++    Ok(())
++}
++
++fn observe(context: &MemoryContext, site: Site, value: Option<u64>) {
++    let (Some(state), Some(cpu)) = (context.state.upgrade(), context.cpu.upgrade()) else {
++        return;
++    };
++    let state = state.borrow();
++    let mut records = context.records.borrow_mut();
++    if records.violation.is_some() {
++        return;
++    }
++    if let Err(fault) = apply(context, &state, &*cpu, &mut records, site, value) {
++        records.fail_scoped(fault);
++    }
++}
++
++unsafe fn scoped_access(access: Access, address: u64, size: i32, value: i64, data: *mut c_void) {
++    let context = unsafe { &*data.cast::<MemoryContext>() };
++    let access = if access == Access::Write {
++        Access::Write
++    } else {
++        Access::Read
++    };
++    let size = u64::try_from(size).unwrap_or(0);
++    let value = (access == Access::Write && (1..=MAX_VALUE_WIDTH).contains(&size))
++        .then(|| value as u64 & (u64::MAX >> (64 - size * 8)));
++    let site = Site {
++        core: context.core,
++        access,
++        address,
++        size,
++    };
++    observe(context, site, value);
++}
++
++unsafe fn scoped_fetch(address: u64, size: u32, data: *mut c_void) {
++    let context = unsafe { &*data.cast::<MemoryContext>() };
++    let site = Site {
++        core: context.core,
++        access: Access::Fetch,
++        address,
++        size: u64::from(size),
++    };
++    observe(context, site, None);
++}
++
++/// Ends on drop. [`ScopedMemoryWatch::state`] stays readable after the end.
++pub struct ScopedMemoryWatch {
++    memory: Weak<Memory>,
++    records: Rc<RefCell<Records>>,
++    contexts: Vec<Box<MemoryContext>>,
++    hooks: Vec<(Weak<dyn Cpu>, HookId)>,
++    broken: bool,
++}
++
++impl ScopedMemoryWatch {
++    pub fn state(&self) -> Value {
++        self.records.borrow().state()
++    }
++    /// After a hook removal failure the watch stays armed and every later
++    /// call fails.
++    pub fn end(&mut self) -> Result<(), String> {
++        if self.broken {
++            return Err("scoped memory watch cleanup previously failed".into());
++        }
++        let mut failure = None;
++        for (cpu, hook) in std::mem::take(&mut self.hooks) {
++            if let Some(cpu) = cpu.upgrade()
++                && let Err(error) = cpu.remove_hook(hook)
++            {
++                failure.get_or_insert(error);
++            }
++        }
++        if let Some(error) = failure {
++            self.broken = true;
++            std::mem::forget(std::mem::take(&mut self.contexts));
++            return Err(error);
++        }
++        self.contexts.clear();
++        if let Some(memory) = self.memory.upgrade() {
++            let mut slot = memory.observation.borrow_mut();
++            if slot
++                .as_ref()
++                .and_then(Weak::upgrade)
++                .is_some_and(|current| Rc::ptr_eq(&current, &self.records))
++            {
++                *slot = None;
++            }
++        }
++        if let Some(scoped) = self.records.borrow_mut().scoped.as_deref_mut() {
++            scoped.active = false;
++        }
++        Ok(())
++    }
++}
++
++impl Drop for ScopedMemoryWatch {
++    fn drop(&mut self) {
++        let _ = self.end();
++    }
++}
++
++/// CPU spans that can reach physical `range` through `views`, widened so a
++/// hook sees accesses that start below the range.
++fn view_spans(views: &[MemoryMap], (start, end): Span) -> impl Iterator<Item = Span> + '_ {
++    views.iter().filter_map(move |map| {
++        let lo = start.max(map.physical);
++        let hi = end.min(map.physical + map.size as u64);
++        (lo < hi).then(|| {
++            (
++                (map.address + lo - map.physical).saturating_sub(MAX_WIDTH - 1),
++                map.address + hi - map.physical,
++            )
++        })
++    })
++}
++
++impl Board {
++    pub(in crate::board) fn scoped_watch_active(&self) -> bool {
++        self.physical_memory
++            .observation
++            .borrow()
++            .as_ref()
++            .and_then(Weak::upgrade)
++            .is_some_and(|records| {
++                records
++                    .borrow()
++                    .scoped
++                    .as_ref()
++                    .is_some_and(|scoped| scoped.active)
++            })
++    }
++
++    /// Views are [`ViewPolicy::Fixed`] and execution must stay
++    /// [`ExecutionPolicy::Exact`]. A read sample's `value` is RAM at hook
++    /// time, before the instruction's load. Refuses while any memory watch or
++    /// preservation observation is active; refused calls install nothing.
++    pub fn memory_watch_begin_scoped(
++        &self,
++        watch: ScopedWatch,
++        maps: Vec<MemoryMap>,
++    ) -> Result<Box<ScopedMemoryWatch>, String> {
++        {
++            let state = self
++                .state
++                .try_borrow_mut()
++                .map_err(|_| "Scoped memory watch requires a paused board")?;
++            if state.active_slice.is_some() || state.parallel.is_some() || state.memory_access {
++                return Err("Scoped memory watch requires a paused board".into());
++            }
++            if state.execution_policy != ExecutionPolicy::Exact {
++                return Err("Scoped memory watch requires Exact execution".into());
++            }
++        }
++        if self.cpus.iter().any(|cpu| cpu.model() != Model::CortexR5F) {
++            return Err("Scoped memory watch requires R-profile processors".into());
++        }
++        if self.preservation_active()
++            || self
++                .physical_memory
++                .observation
++                .borrow()
++                .as_ref()
++                .and_then(Weak::upgrade)
++                .is_some()
++        {
++            return Err("Scoped memory watch conflicts with an active observation".into());
++        }
++        let ScopedWatch {
++            classes,
++            limit,
++            confinement,
++            counters,
++            coverage,
++        } = watch;
++        if classes.is_empty() && confinement.is_empty() && counters.is_empty() && coverage.is_empty()
++        {
++            return Err("Scoped memory watch requires at least one rule or class".into());
++        }
++        if classes.len() > MAX_CLASSES
++            || confinement.len() > MAX_RULES
++            || counters.len() > MAX_RULES
++            || coverage.len() > MAX_RULES
++            || !(1..=MAX_LIMIT).contains(&limit)
++            || classes
++                .iter()
++                .any(|range| range.start >= range.end || range.end > 1 << 32 || range.kinds.0 == 0)
++        {
++            return Err("Scoped memory watch requires bounded rules, classes and limit".into());
++        }
++        let cores = self.cpus.len();
++        let known = |set: CoreSet| {
++            if set.cores().all(|core| core < cores) {
++                Ok(())
++            } else {
++                Err("Scoped core set names an absent processor".to_owned())
++            }
++        };
++        let tcm = self
++            .cpus
++            .iter()
++            .map(|cpu| {
++                let region = |bank: TcmBank| {
++                    TcmRegion::parse(cpu.coprocessor(bank.register(), None)?)
++                };
++                Ok(TcmSnapshot([region(TcmBank::Btcm)?, region(TcmBank::Atcm)?]))
++            })
++            .collect::<Result<Vec<_>, String>>()?;
++
++        let mut by_core = vec![[None; 3]; cores];
++        let mut confined = Vec::with_capacity(confinement.len());
++        for (index, rule) in confinement.into_iter().enumerate() {
++            known(rule.cores)?;
++            let (allow, spans) = match &rule.rule {
++                Confinement::Allow(spans) => (true, spans),
++                Confinement::Forbid(spans) => (false, spans),
++            };
++            if allow && rule.access == Access::Fetch {
++                return Err("Scoped fetch confinement supports Forbid only".into());
++            }
++            if spans.is_empty() || spans.len() > MAX_SPANS {
++                return Err("Scoped confinement rule requires 1..=64 spans".into());
++            }
++            let mut physical = vec![];
++            let mut banked = [vec![], vec![]];
++            for span in spans {
++                match *span {
++                    ScopeSpan::Physical(range) => physical.push((range.start(), range.end())),
++                    ScopeSpan::Tcm(range) => {
++                        for core in rule.cores.cores() {
++                            let (base, top) = tcm[core].0[range.bank.index()].window.ok_or(
++                                "Scoped TCM span names a bank its core has disabled",
++                            )?;
++                            if u64::from(range.end) > top - base {
++                                return Err("Scoped TCM span exceeds its bank".into());
++                            }
++                        }
++                        banked[range.bank.index()]
++                            .push((u64::from(range.start), u64::from(range.end)));
++                    }
++                }
++            }
++            let physical = disjoint(physical)?;
++            self.watch_backing(&physical)?;
++            let [btcm, atcm] = banked;
++            let banked = [disjoint(btcm)?, disjoint(atcm)?];
++            for core in rule.cores.cores() {
++                let entry = &mut by_core[core][slot(rule.access)];
++                if entry.is_some() {
++                    return Err(
++                        "Two scoped confinement rules share a processor and access kind".into(),
++                    );
++                }
++                *entry = Some(index);
++            }
++            confined.push(Confined {
++                rule,
++                allow,
++                physical,
++                tcm: banked,
++            });
++        }
++        for (index, rule) in counters.iter().enumerate() {
++            known(rule.cores)?;
++            let cell = rule.cell.get();
++            self.watch_backing(&[(cell, cell + WORD)])?;
++            if classes.iter().any(|class| {
++                class.kinds.contains(WatchKinds::CPU_READ) && class.start < cell + WORD && cell < class.end
++            }) {
++                return Err("Scoped counter cell is also a logged CPU-read class".into());
++            }
++            if counters[..index]
++                .iter()
++                .any(|other| other.cell == rule.cell && other.cores.intersects(rule.cores))
++            {
++                return Err("Two scoped counters share a processor and cell".into());
++            }
++        }
++        for (index, rule) in coverage.iter().enumerate() {
++            known(rule.cores)?;
++            self.watch_backing(&[(rule.range.start(), rule.range.end())])?;
++            if coverage[..index].iter().any(|other| {
++                other.cores.intersects(rule.cores)
++                    && other.range.start() < rule.range.end()
++                    && rule.range.start() < other.range.end()
++            }) {
++                return Err("Two scoped coverage ranges share a processor and words".into());
++            }
++        }
++        let ranges = union(classes.iter().map(|range| (range.start, range.end)).collect());
++        self.watch_backing(&ranges)?;
++
++        let mut plans = Vec::with_capacity(cores);
++        for core in 0..cores {
++            let mut views = maps
++                .iter()
++                .filter(|map| map.core == core)
++                .cloned()
++                .collect::<Vec<_>>();
++            views.extend(self.state.borrow().decoders.observation_maps(core));
++            let mut plan = vec![];
++            for (access, kind) in [
++                (Access::Read, WatchKinds::CPU_READ),
++                (Access::Write, WatchKinds::CPU_WRITE),
++                (Access::Fetch, WatchKinds::CPU_FETCH),
++            ] {
++                let rule = by_core[core][slot(access)].map(|index| &confined[index]);
++                if rule.is_some_and(|rule| rule.allow) {
++                    plan.push((access, HookRange::All));
++                    continue;
++                }
++                let mut spans = vec![];
++                if let Some(rule) = rule {
++                    for span in rule.spans() {
++                        match *span {
++                            ScopeSpan::Physical(range) => {
++                                spans.extend(view_spans(&views, (range.start(), range.end())))
++                            }
++                            ScopeSpan::Tcm(range) => {
++                                if let Some((base, _)) = tcm[core].0[range.bank.index()].window {
++                                    spans.push((
++                                        (base + u64::from(range.start))
++                                            .saturating_sub(MAX_WIDTH - 1),
++                                        base + u64::from(range.end),
++                                    ));
++                                }
++                            }
++                        }
++                    }
++                }
++                if access == Access::Read {
++                    for counter in counters.iter().filter(|counter| counter.cores.contains(core)) {
++                        let cell = counter.cell.get();
++                        spans.extend(view_spans(&views, (cell, cell + WORD)));
++                    }
++                }
++                if access == Access::Write {
++                    for covered in coverage.iter().filter(|covered| covered.cores.contains(core)) {
++                        spans.extend(view_spans(
++                            &views,
++                            (covered.range.start(), covered.range.end()),
++                        ));
++                    }
++                }
++                for class in classes.iter().filter(|class| class.kinds.contains(kind)) {
++                    spans.extend(view_spans(&views, (class.start, class.end)));
++                }
++                plan.extend(union(spans).into_iter().map(|(begin, end)| {
++                    (access, HookRange::Inclusive { begin, end: end - 1 })
++                }));
++            }
++            plans.push(plan);
++        }
++
++        let records = Rc::new(RefCell::new(Records {
++            ranges,
++            limit,
++            classes,
++            views: ViewPolicy::Fixed,
++            scoped: Some(Box::new(Scoped {
++                active: true,
++                tcm,
++                confined,
++                by_core,
++                counters: counters.into_iter().map(Counter::new).collect(),
++                coverage: coverage.into_iter().map(Covered::new).collect(),
++                fault: None,
++            })),
++            ..Default::default()
++        }));
++        let mut watch = Box::new(ScopedMemoryWatch {
++            memory: Rc::downgrade(&self.physical_memory),
++            records: records.clone(),
++            contexts: Vec::with_capacity(cores),
++            hooks: vec![],
++            broken: false,
++        });
++        for ((core, cpu), plan) in self.cpus.iter().enumerate().zip(plans) {
++            watch.contexts.push(Box::new(MemoryContext {
++                state: Rc::downgrade(&self.state),
++                cpu: Rc::downgrade(cpu),
++                records: records.clone(),
++                maps: maps.iter().filter(|map| map.core == core).cloned().collect(),
++                core,
++            }));
++            let data = (&**watch.contexts.last().unwrap() as *const MemoryContext)
++                .cast_mut()
++                .cast();
++            for (access, range) in plan {
++                let hook = match access {
++                    Access::Fetch => Hook::Instruction {
++                        callback: scoped_fetch,
++                        data,
++                        range,
++                    },
++                    _ => Hook::Memory {
++                        callback: scoped_access,
++                        data,
++                        read: access == Access::Read,
++                        write: access == Access::Write,
++                        range,
++                    },
++                };
++                match unsafe { cpu.install_hook(hook) } {
++                    Ok(id) => watch.hooks.push((Rc::downgrade(cpu), id)),
++                    Err(error) => {
++                        watch.end()?;
++                        return Err(error);
++                    }
++                }
++            }
++        }
++        self.physical_memory
++            .observation
++            .replace(Some(Rc::downgrade(&records)));
++        Ok(watch)
++    }
++
++    pub fn memory_watch_end_scoped(&self, watch: &mut ScopedMemoryWatch) -> Result<(), String> {
++        watch.end()
++    }
++}
+diff --git a/crates/emulator/src/board/scoped_watch_tests.rs b/crates/emulator/src/board/scoped_watch_tests.rs
+new file mode 100644
+index 0000000..296516a
+--- /dev/null
++++ b/crates/emulator/src/board/scoped_watch_tests.rs
+@@ -0,0 +1,590 @@
++use super::bus::{Bus, Mode};
++use super::factory::{Engine, Graph, MemoryMap, Options, Processor, Ram};
++use super::memory::BusMapping;
++use super::observation::scoped::{
++    Confinement, ConfinementRule, CoreSet, CounterRule, CoverageRule, PhysicalWord, SampleBound,
++    ScopeSpan, ScopedMemoryWatch, ScopedWatch, TcmBank, TcmRange, WordRange,
++};
++use super::observation::{ViewPolicy, WatchKinds, WatchRange};
++use super::preservation::{PhysicalRange, ProtectedRanges};
++use super::*;
++use fujimod_emulator_cpu::{Access, ExecutionPolicy, Model, Register, arm, timeline::Ratio};
++use fujimod_emulator_cpu_unicorn::rprofile;
++use serde_json::{Value, json};
++
++/// Each core's code is at CPU address 0x10000; core 0's at physical 0x10000,
++/// core 1's at 0x11000.
++const CORE1_CODE: u64 = 0x11000;
++const SHARED: u32 = 0x20000;
++const SHARED_PHYSICAL: u64 = 0x12000;
++/// Core 1's ATCM window; core 1 also maps CPU 0x31000 to physical 0x13000.
++const ATCM: u32 = 0x30000;
++
++const B_SELF: u32 = 0xeafffffe;
++const NOP: u32 = 0xe320f000;
++const STR_R0_R1: u32 = 0xe5810000;
++const LDR_R0_R1: u32 = 0xe5910000;
++
++fn map(core: usize, address: u64, physical: u64) -> MemoryMap {
++    MemoryMap {
++        core,
++        address,
++        physical,
++        size: 0x1000,
++        permissions: 7,
++    }
++}
++
++fn board() -> Board {
++    let processor = |tcm| Processor {
++        model: Model::CortexR5F,
++        registers: vec![(Register::Pc, 0x10000)],
++        released: true,
++        mprofile: None,
++        rprofile: Some(rprofile::core::Options {
++            tcm,
++            ..Default::default()
++        }),
++    };
++    Graph {
++        processors: vec![
++            processor(Default::default()),
++            processor(rprofile::tcm::Options {
++                atcm: rprofile::tcm::BankOptions {
++                    bytes: 0x1000,
++                    reset: ATCM | 1,
++                },
++                ..Default::default()
++            }),
++        ],
++        ram: vec![Ram {
++            base: 0x10000,
++            size: 0x8000,
++        }],
++        dma_mappings: vec![BusMapping::ram(0x10000, 0x8000)],
++        decoders: vec![],
++        mappings: vec![
++            map(0, 0x10000, 0x10000),
++            map(0, u64::from(SHARED), SHARED_PHYSICAL),
++            map(1, 0x10000, CORE1_CODE),
++            map(1, u64::from(SHARED), SHARED_PHYSICAL),
++            map(1, 0x31000, 0x13000),
++        ],
++        peripherals: vec![],
++        instructions_per_tick: Ratio::new(1, 1).unwrap(),
++    }
++    .build(
++        Options {
++            engine: Engine::Unicorn,
++            translation_cache_bytes: 1 << 20,
++        },
++        Bus::new(Mode::Strict),
++        None,
++    )
++    .unwrap()
++}
++
++fn code(board: &Board, core: usize, words: &[u32]) {
++    let bytes = words
++        .iter()
++        .flat_map(|word| word.to_le_bytes())
++        .collect::<Vec<_>>();
++    board
++        .cpu(core)
++        .unwrap()
++        .write_memory(0x10000, &bytes)
++        .unwrap();
++}
++
++fn set(board: &Board, core: usize, register: u8, value: u32) {
++    board
++        .write_register(core, Register::Arm32(arm::Register::R(register)), u64::from(value))
++        .unwrap();
++}
++
++fn get(board: &Board, core: usize, register: u8) -> u64 {
++    scalar(
++        board.cpu(core).unwrap(),
++        Register::Arm32(arm::Register::R(register)),
++    )
++    .unwrap()
++}
++
++fn run(board: &mut Board, instructions: u64) {
++    board.run_for_instructions(instructions, 1).unwrap();
++}
++
++fn cores(cores: &[usize]) -> CoreSet {
++    CoreSet::new(cores).unwrap()
++}
++
++fn physical(start: u64, end: u64) -> ScopeSpan {
++    ScopeSpan::Physical(PhysicalRange::new(start, end).unwrap())
++}
++
++fn atcm(start: u32, end: u32) -> ScopeSpan {
++    ScopeSpan::Tcm(TcmRange::new(TcmBank::Atcm, start, end).unwrap())
++}
++
++fn confine(core: usize, access: Access, rule: Confinement) -> ConfinementRule {
++    ConfinementRule {
++        cores: cores(&[core]),
++        access,
++        rule,
++    }
++}
++
++fn rules(confinement: Vec<ConfinementRule>) -> ScopedWatch {
++    ScopedWatch {
++        classes: vec![],
++        limit: 64,
++        confinement,
++        counters: vec![],
++        coverage: vec![],
++    }
++}
++
++fn host_writes() -> ScopedWatch {
++    ScopedWatch {
++        classes: vec![WatchRange {
++            start: SHARED_PHYSICAL,
++            end: SHARED_PHYSICAL + 4,
++            kinds: WatchKinds::HOST_WRITE,
++        }],
++        ..rules(vec![])
++    }
++}
++
++fn begin(board: &Board, watch: ScopedWatch) -> Box<ScopedMemoryWatch> {
++    board
++        .memory_watch_begin_scoped(watch, board.mappings().to_vec())
++        .unwrap()
++}
++
++fn rows(value: &Value) -> &Vec<Value> {
++    value.as_array().unwrap()
++}
++
++#[test]
++fn write_confinement_faults_only_for_its_cores() {
++    for core1_stores in [false, true] {
++        let mut board = board();
++        code(&board, 0, &[STR_R0_R1, B_SELF]);
++        code(
++            &board,
++            1,
++            &[if core1_stores { STR_R0_R1 } else { NOP }, B_SELF],
++        );
++        set(&board, 0, 1, SHARED);
++        set(&board, 1, 1, SHARED);
++        let watch = begin(
++            &board,
++            rules(vec![confine(
++                1,
++                Access::Write,
++                Confinement::Allow(vec![physical(0x13000, 0x13100)]),
++            )]),
++        );
++        run(&mut board, 8);
++        let state = watch.state();
++        if core1_stores {
++            assert_eq!(state["fault"]["kind"], "confinement");
++            assert_eq!(state["fault"]["sample"]["core"], 1);
++            assert_eq!(state["fault"]["sample"]["physical"], SHARED_PHYSICAL);
++            assert!(state["violation"].is_string());
++        } else {
++            assert_eq!((&state["fault"], &state["violation"]), (&Value::Null, &Value::Null));
++        }
++    }
++}
++
++#[test]
++fn tcm_stores_are_confined_by_bank_offset_without_a_physical_address() {
++    for (allowed, faults) in [((0x10, 0x14), false), ((0x20, 0x24), true)] {
++        let mut board = board();
++        code(&board, 0, &[B_SELF]);
++        code(&board, 1, &[STR_R0_R1, B_SELF]);
++        set(&board, 1, 0, 5);
++        set(&board, 1, 1, ATCM + 0x10);
++        let watch = begin(
++            &board,
++            rules(vec![confine(
++                1,
++                Access::Write,
++                Confinement::Allow(vec![atcm(allowed.0, allowed.1)]),
++            )]),
++        );
++        run(&mut board, 6);
++        let state = watch.state();
++        let mut bytes = [0; 4];
++        board.read_memory(1, u64::from(ATCM) + 0x10, &mut bytes).unwrap();
++        assert_eq!(bytes, [5, 0, 0, 0]);
++        if faults {
++            let sample = &state["fault"]["sample"];
++            assert_eq!(state["fault"]["kind"], "confinement");
++            assert_eq!(sample["physical"], Value::Null);
++            assert_eq!(sample["tcm"], json!({"bank": "atcm", "offset": 0x10}));
++            assert_eq!(sample["value"], 5);
++        } else {
++            assert_eq!(state["fault"], Value::Null);
++        }
++        assert_eq!(state["tcm"][1]["atcm"]["window"], json!([ATCM, ATCM + 0x1000]));
++    }
++}
++
++#[test]
++fn moving_a_tcm_window_under_the_watch_is_a_fault() {
++    let mut board = board();
++    code(&board, 0, &[B_SELF]);
++    // mcr p15, 0, r0, c9, c1, 1; str r2, [r3]
++    code(&board, 1, &[0xee090f31, 0xe5832000, B_SELF]);
++    set(&board, 1, 0, 0x40001);
++    set(&board, 1, 3, 0x40000);
++    let watch = begin(
++        &board,
++        rules(vec![confine(
++            1,
++            Access::Write,
++            Confinement::Allow(vec![atcm(0, 0x1000)]),
++        )]),
++    );
++    run(&mut board, 8);
++    let state = watch.state();
++    assert_eq!(state["fault"]["kind"], "tcm-changed");
++    assert_eq!(state["fault"]["bank"], "atcm");
++}
++
++#[test]
++fn a_store_straddling_a_tcm_edge_is_a_fault_even_when_both_sides_are_allowed() {
++    let mut board = board();
++    code(&board, 0, &[B_SELF]);
++    code(&board, 1, &[STR_R0_R1, B_SELF]);
++    set(&board, 1, 1, ATCM + 0xffe);
++    let watch = begin(
++        &board,
++        rules(vec![confine(
++            1,
++            Access::Write,
++            Confinement::Allow(vec![atcm(0, 0x1000), physical(0x13000, 0x14000)]),
++        )]),
++    );
++    run(&mut board, 6);
++    let state = watch.state();
++    assert_eq!(state["fault"]["kind"], "tcm-straddle");
++    assert_eq!(state["fault"]["bank"], "atcm");
++}
++
++#[test]
++fn forbidden_fetch_reports_the_fetching_instruction() {
++    let mut board = board();
++    code(&board, 0, &[B_SELF]);
++    code(&board, 1, &[NOP, NOP, NOP, B_SELF]);
++    let watch = begin(
++        &board,
++        rules(vec![confine(
++            1,
++            Access::Fetch,
++            Confinement::Forbid(vec![physical(CORE1_CODE + 8, CORE1_CODE + 12)]),
++        )]),
++    );
++    run(&mut board, 10);
++    let sample = &watch.state()["fault"]["sample"];
++    assert_eq!(
++        (&sample["source"], &sample["physical"], &sample["pc"]),
++        (&json!("cpu-fetch"), &json!(CORE1_CODE + 8), &json!(0x10008))
++    );
++}
++
++fn poll(board: &mut Board, writer: &[u32], instructions: u64) -> (Value, u64) {
++    code(board, 0, writer);
++    // add r3, r3, #1; ldr r0, [r1]; cmp r0, #0; beq 0x10000
++    code(board, 1, &[0xe2833001, LDR_R0_R1, 0xe3500000, 0x0afffffb, B_SELF]);
++    for core in 0..2 {
++        set(board, core, 1, SHARED);
++    }
++    set(board, 1, 3, 0);
++    let watch = begin(
++        board,
++        ScopedWatch {
++            classes: vec![WatchRange {
++                start: SHARED_PHYSICAL,
++                end: SHARED_PHYSICAL + 4,
++                kinds: WatchKinds::WRITES,
++            }],
++            counters: vec![CounterRule {
++                cores: cores(&[1]),
++                cell: PhysicalWord::new(SHARED_PHYSICAL).unwrap(),
++                head: SampleBound::new(64).unwrap(),
++                tail: SampleBound::new(64).unwrap(),
++            }],
++            ..rules(vec![])
++        },
++    );
++    run(board, instructions);
++    (watch.state(), get(board, 1, 3))
++}
++
++#[test]
++fn completion_counter_counts_every_poll_and_keeps_bounded_head_and_tail() {
++    let mut board = board();
++    // mov r2, #0x400; subs r2, r2, #1; bne 0x10004; mov r0, #1; str r0, [r1]
++    let writer = [0xe3a02b01, 0xe2522001, 0x1afffffd, 0xe3a00001, STR_R0_R1, B_SELF];
++    let (state, polls) = poll(&mut board, &writer, 6000);
++    assert_eq!(state["violation"], Value::Null);
++    let counter = &state["counters"][0];
++    let count = counter["count"].as_u64().unwrap();
++    assert_eq!(count, polls);
++    assert!(count > 128, "{count} polls");
++    assert_eq!(
++        (&counter["zero_count"], &counter["nonzero_count"], &counter["first_nonzero_index"]),
++        (&json!(count - 1), &json!(1), &json!(count - 1))
++    );
++    assert_eq!(counter["first_nonzero"]["value"], 1);
++    let (head, tail) = (rows(&counter["head"]), rows(&counter["tail"]));
++    assert_eq!((head.len(), tail.len()), (64, 64));
++    assert!(head.iter().chain(&tail[..63]).all(|row| row["value"] == 0
++        && row["core"] == 1
++        && row["size"] == 4
++        && row["physical"] == SHARED_PHYSICAL));
++    assert_eq!(tail[63], counter["first_nonzero"]);
++    let instructions =
++        |rows: &[Value]| rows.iter().map(|row| row["instructions"].as_u64().unwrap()).collect::<Vec<_>>();
++    let order = instructions(head).into_iter().chain(instructions(tail)).collect::<Vec<_>>();
++    assert!(order.windows(2).all(|pair| pair[0] < pair[1]));
++    let records = rows(&state["records"]);
++    assert_eq!(records.len(), 1);
++    assert_eq!(
++        (&records[0]["source"], &records[0]["core"], &records[0]["value"], &records[0]["before"]),
++        (&json!("cpu-write"), &json!(0), &json!(1), &json!([0, 0, 0, 0]))
++    );
++    assert!(records[0]["instructions"].as_u64() < counter["first_nonzero"]["instructions"].as_u64());
++}
++
++#[test]
++fn held_completion_counter_has_no_nonzero_read() {
++    let mut board = board();
++    let (state, polls) = poll(&mut board, &[B_SELF], 2000);
++    let counter = &state["counters"][0];
++    assert_eq!(
++        (&counter["count"], &counter["zero_count"], &counter["nonzero_count"]),
++        (&json!(polls), &json!(polls), &json!(0))
++    );
++    assert_eq!((&counter["first_nonzero"], &state["violation"]), (&Value::Null, &Value::Null));
++    assert_eq!(rows(&state["records"]).len(), 0);
++}
++
++#[test]
++fn a_byte_read_of_a_counter_cell_is_a_fault_not_a_count() {
++    let mut board = board();
++    code(&board, 0, &[B_SELF]);
++    // ldrb r0, [r1]
++    code(&board, 1, &[0xe5d10000, B_SELF]);
++    set(&board, 1, 1, SHARED);
++    let watch = begin(
++        &board,
++        ScopedWatch {
++            counters: vec![CounterRule {
++                cores: cores(&[1]),
++                cell: PhysicalWord::new(SHARED_PHYSICAL).unwrap(),
++                head: SampleBound::new(4).unwrap(),
++                tail: SampleBound::new(4).unwrap(),
++            }],
++            ..rules(vec![])
++        },
++    );
++    run(&mut board, 6);
++    let state = watch.state();
++    assert_eq!(state["fault"]["kind"], "counter-access");
++    assert_eq!(state["counters"][0]["count"], 0);
++}
++
++#[test]
++fn zero_fill_coverage_credits_only_whole_zero_words_from_its_cores() {
++    let mut board = board();
++    // mov r0, #0; str r0, [r1, #4]
++    code(&board, 0, &[0xe3a00000, 0xe5810004, B_SELF]);
++    code(
++        &board,
++        1,
++        &[
++            0xe3a00000, // mov r0, #0
++            0xe3a04007, // mov r4, #7
++            0xe3a02000, // mov r2, #0
++            0xe3a03000, // mov r3, #0
++            STR_R0_R1,  // word 0: zero
++            0xe5c10004, // strb r0, [r1, #4]: word 1 partial
++            0xe5814008, // str r4, [r1, #8]: word 2 nonzero
++            0xe1c120fc, // strd r2, r3, [r1, #12]: words 3 and 4 zero
++            0xe5810014, // str r0, [r1, #20]: word 5 zero
++            0xe5814014, // str r4, [r1, #20]: word 5 nonzero afterwards
++            B_SELF,
++        ],
++    );
++    set(&board, 0, 1, SHARED);
++    set(&board, 1, 1, SHARED);
++    let watch = begin(
++        &board,
++        ScopedWatch {
++            coverage: vec![CoverageRule {
++                cores: cores(&[1]),
++                range: WordRange::new(SHARED_PHYSICAL, SHARED_PHYSICAL + 24).unwrap(),
++            }],
++            ..rules(vec![])
++        },
++    );
++    run(&mut board, 30);
++    let state = watch.state();
++    assert_eq!(state["violation"], Value::Null);
++    assert_eq!(
++        (&state["coverage"][0]["covered_words"], &state["coverage"][0]["first_uncovered"]),
++        (&json!(4), &json!(SHARED_PHYSICAL + 4))
++    );
++}
++
++#[test]
++fn malformed_scoped_watches_are_refused_without_disarming_the_board() {
++    let mut board = board();
++    let rule = |cores_: &[usize], access, rule| ConfinementRule {
++        cores: cores(cores_),
++        access,
++        rule,
++    };
++    let write_allow = || rule(&[1], Access::Write, Confinement::Allow(vec![physical(0x13000, 0x13100)]));
++    let counter = || CounterRule {
++        cores: cores(&[1]),
++        cell: PhysicalWord::new(SHARED_PHYSICAL).unwrap(),
++        head: SampleBound::new(1).unwrap(),
++        tail: SampleBound::new(1).unwrap(),
++    };
++    let coverage = |start, end| CoverageRule {
++        cores: cores(&[1]),
++        range: WordRange::new(start, end).unwrap(),
++    };
++    let refused = [
++        rules(vec![]),
++        rules(vec![rule(&[1], Access::Fetch, Confinement::Allow(vec![physical(0x11000, 0x11100)]))]),
++        rules(vec![write_allow(), write_allow()]),
++        rules(vec![rule(
++            &[1],
++            Access::Read,
++            Confinement::Forbid(vec![physical(0x11000, 0x11100), physical(0x110f0, 0x11200)]),
++        )]),
++        rules(vec![rule(&[0], Access::Write, Confinement::Allow(vec![atcm(0, 4)]))]),
++        rules(vec![rule(&[1], Access::Write, Confinement::Allow(vec![atcm(0, 0x1004)]))]),
++        rules(vec![rule(&[1], Access::Write, Confinement::Allow(vec![physical(0x40000, 0x40004)]))]),
++        rules(vec![rule(&[2], Access::Write, Confinement::Allow(vec![physical(0x13000, 0x13100)]))]),
++        ScopedWatch {
++            classes: vec![WatchRange {
++                start: SHARED_PHYSICAL,
++                end: SHARED_PHYSICAL + 4,
++                kinds: WatchKinds::CPU_READ,
++            }],
++            counters: vec![counter()],
++            ..rules(vec![])
++        },
++        ScopedWatch {
++            counters: vec![counter(), counter()],
++            ..rules(vec![])
++        },
++        ScopedWatch {
++            coverage: vec![
++                coverage(SHARED_PHYSICAL, SHARED_PHYSICAL + 8),
++                coverage(SHARED_PHYSICAL + 4, SHARED_PHYSICAL + 12),
++            ],
++            ..rules(vec![])
++        },
++        ScopedWatch {
++            limit: 0,
++            ..rules(vec![write_allow()])
++        },
++    ];
++    for (case, watch) in refused.into_iter().enumerate() {
++        assert!(
++            board.memory_watch_begin_scoped(watch, board.mappings().to_vec()).is_err(),
++            "case {case}"
++        );
++        let mut accepted = begin(&board, host_writes());
++        board.write_physical(SHARED_PHYSICAL, &[1, 2, 3, 4]).unwrap();
++        assert_eq!(rows(&accepted.state()["records"]).len(), 1, "case {case}");
++        accepted.end().unwrap();
++    }
++    assert!(CoreSet::new(&[]).is_err());
++    assert!(CoreSet::new(&[8]).is_err());
++    assert!(TcmRange::new(TcmBank::Btcm, 4, 4).is_err());
++    assert!(PhysicalWord::new(SHARED_PHYSICAL + 2).is_err());
++    assert!(SampleBound::new(65).is_err());
++    assert!(WordRange::new(SHARED_PHYSICAL, SHARED_PHYSICAL + 6).is_err());
++    assert!(WordRange::new(0, (1 << 22) + 4).is_err());
++    board.set_execution_policy(ExecutionPolicy::Interactive).unwrap();
++    assert!(
++        board
++            .memory_watch_begin_scoped(host_writes(), board.mappings().to_vec())
++            .is_err()
++    );
++}
++
++#[test]
++fn an_active_scoped_watch_excludes_other_observers_and_keyframes() {
++    let mut board = board();
++    let maps = board.mappings().to_vec();
++    let legacy_range = vec![(SHARED_PHYSICAL, SHARED_PHYSICAL + 4)];
++    let protected = || {
++        ProtectedRanges::new(vec![PhysicalRange::new(SHARED_PHYSICAL, SHARED_PHYSICAL + 4).unwrap()])
++            .unwrap()
++    };
++    let keyframe = board.checkpoint(None).unwrap();
++    let mut legacy = board.memory_watch_begin(legacy_range.clone(), 8, maps.clone()).unwrap();
++    assert!(board.memory_watch_begin_scoped(host_writes(), maps.clone()).is_err());
++    board.memory_watch_end(&mut legacy).unwrap();
++    let preservation = board.preservation_begin(protected()).unwrap();
++    assert!(board.memory_watch_begin_scoped(host_writes(), maps.clone()).is_err());
++    drop(preservation);
++
++    let mut scoped = begin(&board, host_writes());
++    assert!(board.memory_watch_begin(legacy_range.clone(), 8, maps.clone()).is_err());
++    assert!(
++        board
++            .memory_watch_begin_classified(
++                vec![WatchRange {
++                    start: SHARED_PHYSICAL,
++                    end: SHARED_PHYSICAL + 4,
++                    kinds: WatchKinds::ALL,
++                }],
++                8,
++                maps.clone(),
++                ViewPolicy::Fixed,
++            )
++            .is_err()
++    );
++    assert!(board.preservation_begin(protected()).is_err());
++    assert!(board.memory_watch_begin_scoped(host_writes(), maps.clone()).is_err());
++    assert!(board.checkpoint(None).is_err());
++    assert!(board.restore_keyframe(&keyframe).is_err());
++    board.write_physical(SHARED_PHYSICAL, &[1, 0, 0, 0]).unwrap();
++    board.memory_watch_end_scoped(&mut scoped).unwrap();
++    board.write_physical(SHARED_PHYSICAL, &[2, 0, 0, 0]).unwrap();
++    let state = scoped.state();
++    assert_eq!(state["enabled"], false);
++    assert_eq!(rows(&state["records"]).len(), 1);
++
++    board.restore_keyframe(&keyframe).unwrap();
++    let mut legacy = board.memory_watch_begin(legacy_range, 8, maps).unwrap();
++    board.memory_watch_end(&mut legacy).unwrap();
++}
++
++#[test]
++fn ending_a_replaced_legacy_watch_leaves_the_scoped_watch_armed() {
++    let board = board();
++    let maps = board.mappings().to_vec();
++    let range = vec![(SHARED_PHYSICAL, SHARED_PHYSICAL + 4)];
++    let mut replaced = board.memory_watch_begin(range.clone(), 8, maps.clone()).unwrap();
++    let mut current = board.memory_watch_begin(range, 8, maps).unwrap();
++    board.memory_watch_end(&mut current).unwrap();
++    let scoped = begin(&board, host_writes());
++    board.memory_watch_end(&mut replaced).unwrap();
++    board.write_physical(SHARED_PHYSICAL, &[1, 0, 0, 0]).unwrap();
++    assert_eq!(rows(&scoped.state()["records"]).len(), 1);
++    assert!(board.checkpoint(None).is_err());
++    drop(scoped);
++    assert!(board.checkpoint(None).is_ok());
++}
