@@ -1508,8 +1508,32 @@ judgedValue (Judged f unknown) = object
   , "holds" .= (if isJust unknown then Nothing else Just (findingHolds f)), "unknown" .= unknown
   , "detail" .= findingDetail f, "source" .= findingSource f ]
 
+
+newtype GateName = GateName T.Text
+
+data StopBoundary
+  = MachineStop
+  | BridgeCommandFailure
+  | HarnessFailure
+  | BridgeExitFailure
+  | OriginalCardChanged
+  | DiagnosticGateNotHeld GateName
+
+stopBoundaryName :: StopBoundary -> T.Text
+stopBoundaryName MachineStop = "machine-stop"
+stopBoundaryName BridgeCommandFailure = "bridge-command-failure"
+stopBoundaryName HarnessFailure = "harness-error"
+stopBoundaryName BridgeExitFailure = "bridge-exit"
+stopBoundaryName OriginalCardChanged = "card-original-changed"
+stopBoundaryName (DiagnosticGateNotHeld (GateName name)) = name
+
+sessionStopBoundary :: Value -> Maybe StopBoundary
+sessionStopBoundary (Object fields)
+  | Just (String _) <- objectAt "boundary" fields >>= KM.lookup "failure" = Just MachineStop
+  | Just (String _) <- KM.lookup "bridge_error" fields = Just BridgeCommandFailure
+sessionStopBoundary _ = Nothing
 -- | Ordered findings; the first gate that does not hold, or is unknown, names where the route stopped.
-verdict :: Route -> Bool -> Observed -> IO ([Judged], Maybe T.Text)
+verdict :: Route -> Bool -> Observed -> IO ([Judged], Maybe GateName)
 verdict route lensOn observed = do
   pressReply <- readIORef (obsPressReply observed)
   stop <- readIORef (obsStop observed)
@@ -1655,7 +1679,7 @@ verdict route lensOn observed = do
            , name <- ["admitted", "save-chain-entered", "raw-open-requested", "raw-open-returned-success", "raw-irq-handler-entered", "ui-816-posted-after-press"] ]
       judged = [Judged f (lookup (findingName f) reasons) | f <- findings]
       undecided (Judged f unknown) = findingRole f == Gate && (isJust unknown || not (findingHolds f))
-  pure (judged, (\(Judged f _) -> findingName f) <$> find undecided judged)
+  pure (judged, (\(Judged f _) -> GateName (findingName f)) <$> find undecided judged)
 
 -- Main ----------------------------------------------------------------------------------------
 
@@ -1795,7 +1819,13 @@ main = do
   forM_ captureProgress (note journal "capture-observation-interval" . captureProgressValue)
   let unchanged = originalAfter == originalBefore
       bridgeSucceeded = exit == ExitSuccess
-      reached = harnessError == Nothing && stopMessage == Nothing && stopped == Nothing && unchanged && bridgeSucceeded
+      stoppedAt = sessionStopBoundary session
+        <|> (BridgeCommandFailure <$ stopMessage)
+        <|> (HarnessFailure <$ harnessError)
+        <|> (if bridgeSucceeded then Nothing else Just BridgeExitFailure)
+        <|> (if unchanged then Nothing else Just OriginalCardChanged)
+        <|> fmap DiagnosticGateNotHeld stopped
+      reached = isNothing stoppedAt
       sessionField name = case session of
         Object o -> KM.lookup name o
         _ -> Nothing
@@ -1816,7 +1846,7 @@ main = do
     , "capture_observation" .= captureObservationValue (optRoute options) (optCaptureObservation options)
     , "diagnostic_reachability" .= reached
     , "acceptance" .= String "none: a changed frame with target reads can be READ ERROR or BUSY; rendered-JPEG playback and capture fidelity need inspection of the PNGs and receipts"
-    , "stopped_at" .= (if reached then Nothing else stopped <|> (if bridgeSucceeded then Nothing else Just "bridge-exit"))
+    , "stopped_at" .= fmap stopBoundaryName stoppedAt
     , "trace_hits_recovered_from_session" .= recoveredCount
     , "findings" .= map judgedValue findings
     , "harness_error" .= harnessError
@@ -1825,6 +1855,7 @@ main = do
     , "bridge_exit_success" .= bridgeSucceeded
     , "bridge_boundary" .= sessionField "boundary"
     , "bridge_error" .= sessionField "bridge_error"
+    , "capture_evidence_error" .= sessionField "capture_evidence_error"
     , "checkpoint" .= sessionField "checkpoint"
     , "card_original_unchanged" .= unchanged ])
   forM_ findings $ \(Judged f unknown) -> putStrLn
@@ -1837,5 +1868,5 @@ main = do
     (Just e, _) -> hPutStrLn stderr ("media-route-smoke: " ++ e) >> exitWith (ExitFailure 1)
     (Nothing, True) -> putStrLn "media-route-smoke: every diagnostic gate held; no playback or capture acceptance"
     (Nothing, False) -> do
-      hPutStrLn stderr ("media-route-smoke: route stopped at " ++ maybe (if bridgeSucceeded then "card-original-changed" else "bridge-exit") T.unpack stopped)
+      hPutStrLn stderr ("media-route-smoke: route stopped at " ++ maybe "unknown" (T.unpack . stopBoundaryName) stoppedAt)
       exitWith (ExitFailure 3)
