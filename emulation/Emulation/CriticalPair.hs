@@ -5,12 +5,13 @@ module Emulation.CriticalPair
   ) where
 
 import qualified A32 as A
-import Control.Monad (forM, forM_, unless)
+import Control.Monad (foldM, forM, forM_, unless)
 import Data.Aeson (Value, object, (.=))
-import Data.Bits (complement, shiftL, shiftR, (.&.), (.|.))
+import Data.Bits (complement, rotateR, shiftL, shiftR, xor, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
+import Data.Int (Int32)
 import Data.Word (Word32)
 import Emulation.FirstStageWitness (leWordAt, sha256Hex)
 import qualified Emulation.InterfaceInitializer as I
@@ -24,7 +25,7 @@ newtype FrameBytes = FrameBytes Int
 newtype InterfaceOffset = InterfaceOffset Word32
 newtype RetainedCode = RetainedCode Word32
 newtype ImageWordPatch = ImageWordPatch (Guest, Word32, Word32)
-data Core = Core0 | Core1
+data Core = Core0 | Core1 deriving (Eq, Ord)
 
 data Services = Services Core Guest F.Sha256 [(InterfaceOffset, RetainedCode)]
 data Original = Original B.ByteString S.OriginalStartupDat B.ByteString [Services]
@@ -156,125 +157,418 @@ adapterProof image symbols = do
   check "xm1_critical_retained_call" [0xe92d4070,0xe1a04000,0xe1a05001,0xe594e018,0xe12cf00e
     ,0xe894100f,0xe12fff35,0xe884100f,0xe10f0000,0xe5840018,0xe8bd8070]
 
--- Offsets are relative to each Rust function's incoming SP.
-data Origin = Caller A.Reg | ReturnAddress deriving (Eq, Ord)
-data Frame = Frame (M.Map A.Reg Int) (M.Map A.Reg Origin) (M.Map Int Origin) deriving (Eq, Ord)
+-- Frame offsets are below incoming SP; Scratch fields occupy [SP, SP+28).
+data Address = FrameAddress Int | ScratchAddress Int | InterfaceAddress Core Int deriving (Eq, Ord)
+data ScratchField = ScratchR0 | ScratchR1 | ScratchR2 | ScratchR3 | ScratchR12 | ScratchLr | ScratchCpsr
+  deriving (Eq, Ord, Enum, Bounded)
+data ServiceKind = MaskIrq | RestoreIrq | IdentifyCore | RetryExclusive | ReleaseExclusive | ObserveWord
+  deriving (Eq, Ord)
+data PublishedTarget = PublishedTarget Core ServiceKind deriving (Eq, Ord)
+data AbstractWord
+  = UnknownWord
+  | KnownWords (Set.Set Word32)
+  | Addresses (Set.Set Address)
+  | PublishedTargets (Set.Set PublishedTarget)
+  | CallerWord A.Reg
+  | ReturnWord
+  deriving (Eq, Ord)
+data Frame = Frame
+  { frameRegisters :: M.Map A.Reg AbstractWord
+  , frameWords :: M.Map Int AbstractWord
+  , scratchWords :: M.Map ScratchField AbstractWord
+  } deriving (Eq, Ord)
+data Body = EntryBody | ExitBody
+data MemoryAddress = Relative Address | Absolute Word32 deriving (Eq, Ord)
+data TransferPlan = TransferPlan AbstractWord (Maybe AbstractWord)
 
-frameExtent :: B.ByteString -> [F.Symbol] -> String -> Either String FrameBytes
-frameExtent image symbols name = do
+bodyName :: Body -> String
+bodyName EntryBody = "xm1_critical_enter_continue"
+bodyName ExitBody = "xm1_critical_exit"
+
+knownWord :: Word32 -> AbstractWord
+knownWord = KnownWords . Set.singleton
+
+addressWord :: Address -> AbstractWord
+addressWord = Addresses . Set.singleton
+
+boundedWords :: Set.Set Word32 -> AbstractWord
+boundedWords values
+  | Set.null values || Set.size values > 16 = UnknownWord
+  | otherwise = KnownWords values
+
+joinWords :: [AbstractWord] -> Either String AbstractWord
+joinWords [] = Left "critical-pair Rust read has no possible target"
+joinWords values@(first:rest)
+  | all (== first) rest = pure first
+  | all isNumber values = pure (boundedWords (Set.unions [words' | KnownWords words' <- values]))
+  | all isAddress values = do
+      let addresses = Set.unions [addresses' | Addresses addresses' <- values]
+      require (Set.size addresses <= 16) "critical-pair Rust address alternatives exceed its proof"
+      pure (Addresses addresses)
+  | all isPublished values = pure (PublishedTargets (Set.unions [targets | PublishedTargets targets <- values]))
+  | otherwise = pure UnknownWord
+  where
+    isNumber (KnownWords _) = True
+    isNumber _ = False
+    isAddress (Addresses _) = True
+    isAddress _ = False
+    isPublished (PublishedTargets _) = True
+    isPublished _ = False
+
+hasAddressProvenance :: AbstractWord -> Bool
+hasAddressProvenance (Addresses _) = True
+hasAddressProvenance (PublishedTargets _) = True
+hasAddressProvenance ReturnWord = True
+hasAddressProvenance _ = False
+
+scalarUnary :: (Word32 -> Word32) -> AbstractWord -> Either String AbstractWord
+scalarUnary operation value = do
+  require (not (hasAddressProvenance value)) "critical-pair Rust transforms address provenance outside its proof"
+  pure $ case value of
+    KnownWords words' -> boundedWords (Set.map operation words')
+    _ -> UnknownWord
+
+scalarBinary :: (Word32 -> Word32 -> Word32) -> AbstractWord -> AbstractWord -> Either String AbstractWord
+scalarBinary operation left right = do
+  require (not (hasAddressProvenance left || hasAddressProvenance right))
+    "critical-pair Rust combines address provenance outside its proof"
+  pure $ case (left,right) of
+    (KnownWords xs,KnownWords ys) -> boundedWords (Set.fromList [operation x y | x <- Set.toList xs,y <- Set.toList ys])
+    _ -> UnknownWord
+
+advanceAddress :: Address -> Word32 -> Either String Address
+advanceAddress address delta = do
+  let signed = toInteger (fromIntegral delta :: Int32)
+      old = case address of
+        FrameAddress previous -> previous
+        ScratchAddress previous -> previous
+        InterfaceAddress _ previous -> previous
+      offset = toInteger old + signed
+  require (offset >= -0x80000000 && offset <= 0x7fffffff) "critical-pair Rust relative address wraps outside its proof"
+  pure $ case address of
+    FrameAddress _ -> FrameAddress (fromInteger offset)
+    ScratchAddress _ -> ScratchAddress (fromInteger offset)
+    InterfaceAddress core _ -> InterfaceAddress core (fromInteger offset)
+
+addWords :: AbstractWord -> AbstractWord -> Either String AbstractWord
+addWords (Addresses addresses) (KnownWords offsets) = do
+  advanced <- Set.fromList <$> mapM (uncurry advanceAddress)
+    [(address,offset) | address <- Set.toList addresses,offset <- Set.toList offsets]
+  require (not (Set.null advanced) && Set.size advanced <= 16) "critical-pair Rust address alternatives exceed its proof"
+  pure (Addresses advanced)
+addWords numbers@(KnownWords _) addresses@(Addresses _) = addWords addresses numbers
+addWords left right = scalarBinary (+) left right
+
+dataResult :: A.DataOp -> AbstractWord -> AbstractWord -> Either String AbstractWord
+dataResult operation left right = case operation of
+  A.MOV -> pure right
+  A.MVN -> scalarUnary complement right
+  A.ADD -> addWords left right
+  A.SUB -> scalarUnary negate right >>= addWords left
+  A.RSB -> dataResult A.SUB right left
+  A.AND -> scalarBinary (.&.) left right
+  A.EOR -> scalarBinary xor left right
+  A.ORR -> scalarBinary (.|.) left right
+  A.BIC -> scalarBinary (\x y -> x .&. complement y) left right
+  _ -> do
+    require (not (hasAddressProvenance left || hasAddressProvenance right))
+      "critical-pair Rust arithmetic loses address provenance"
+    pure UnknownWord
+
+readRegister :: Word32 -> Frame -> A.Reg -> AbstractWord
+readRegister pc frame register
+  | register == A.pc = knownWord (pc+8)
+  | otherwise = M.findWithDefault UnknownWord register (frameRegisters frame)
+
+stackOffset :: Frame -> Either String Int
+stackOffset frame = case M.lookup A.sp (frameRegisters frame) of
+  Just (Addresses addresses) | [FrameAddress offset] <- Set.toList addresses -> do
+    require (offset <= 0 && offset >= -0x400 && offset `mod` 4 == 0)
+      "critical-pair Rust SP leaves its admitted frame"
+    pure offset
+  _ -> Left "critical-pair Rust SP has no unique frame provenance"
+
+insertWord :: Ord key => key -> AbstractWord -> M.Map key AbstractWord -> M.Map key AbstractWord
+insertWord key UnknownWord = M.delete key
+insertWord key value = M.insert key value
+
+writeRegister :: A.Reg -> AbstractWord -> Frame -> Either String Frame
+writeRegister register value frame = do
+  require (register /= A.pc) "critical-pair Rust writes PC outside an admitted return"
+  let updated = frame {frameRegisters = insertWord register value (frameRegisters frame)}
+  if register == A.sp then do
+    offset <- stackOffset updated
+    pure updated {frameWords = M.filterWithKey (\address _ -> address >= offset) (frameWords updated)}
+  else pure updated
+
+shiftScalar :: A.Shift -> Int -> Word32 -> Word32
+shiftScalar operation amount value = case operation of
+  A.LSL -> if amount >= 32 then 0 else value `shiftL` amount
+  A.LSR -> if amount >= 32 then 0 else value `shiftR` amount
+  A.ASR -> fromIntegral ((fromIntegral value :: Int32) `shiftR` min amount 31)
+  A.ROR -> rotateR value amount
+
+operandWord :: Word32 -> Frame -> A.Operand -> Either String AbstractWord
+operandWord pc frame operand = case operand of
+  A.Immediate value -> pure (knownWord value)
+  A.ShiftedImmediate register A.LSL 0 -> pure (readRegister pc frame register)
+  A.ShiftedImmediate register operation amount -> do
+    let value = readRegister pc frame register
+    if operation == A.ROR && amount == 0 then do
+      require (not (hasAddressProvenance value)) "critical-pair Rust RRX loses address provenance"
+      pure UnknownWord
+    else scalarUnary (shiftScalar operation (if amount == 0 then 32 else amount)) value
+  A.ShiftedRegister register operation shiftRegister -> do
+    require (register /= A.pc && shiftRegister /= A.pc) "critical-pair Rust register shift uses an unadmitted PC operand"
+    let value = readRegister pc frame register
+        shift = readRegister pc frame shiftRegister
+    require (not (hasAddressProvenance value || hasAddressProvenance shift))
+      "critical-pair Rust register shift loses address provenance"
+    pure $ case (value,shift) of
+      (KnownWords values,KnownWords amounts) -> boundedWords (Set.fromList
+        [shiftScalar operation (fromIntegral (amount .&. 0xff)) word | word <- Set.toList values,amount <- Set.toList amounts])
+      _ -> UnknownWord
+
+transferPlan :: Word32 -> Frame -> A.Reg -> A.Offset -> A.Indexing -> Either String TransferPlan
+transferPlan pc frame base offset indexing = do
+  delta <- case offset of
+    A.OffsetImmediate value -> pure (knownWord (fromIntegral value))
+    A.OffsetRegister positive register shift amount -> do
+      value <- operandWord pc frame (A.ShiftedImmediate register shift amount)
+      if positive then pure value else scalarUnary negate value
+  let original = readRegister pc frame base
+  adjusted <- addWords original delta
+  pure (TransferPlan (if indexing == A.PostIndexed then original else adjusted)
+    (if indexing == A.OffsetOnly then Nothing else Just adjusted))
+
+memoryAddresses :: AbstractWord -> Either String [MemoryAddress]
+memoryAddresses value = case value of
+  Addresses addresses | not (Set.null addresses) -> pure (map Relative (Set.toList addresses))
+  KnownWords addresses | not (Set.null addresses) -> pure (map Absolute (Set.toList addresses))
+  _ -> Left "critical-pair Rust memory target has no confined provenance"
+
+scratchField :: Int -> Either String ScratchField
+scratchField offset = case lookup offset [(4*fromEnum field,field) | field <- [minBound..maxBound]] of
+  Just field -> pure field
+  Nothing -> Left "critical-pair Rust access leaves the defined Scratch fields"
+
+publishedKind :: Int -> Either String ServiceKind
+publishedKind offset = case lookup offset
+  [(0x164,MaskIrq),(0x168,RestoreIrq),(0x1618,IdentifyCore),(0x161c,RetryExclusive),(0x1620,ReleaseExclusive),(0x1624,ObserveWord)] of
+  Just kind -> pure kind
+  Nothing -> Left "critical-pair Rust reads an unbound interface slot"
+
+loadWord :: Word32 -> B.ByteString -> Frame -> AbstractWord -> Either String AbstractWord
+loadWord origin image frame pointer = memoryAddresses pointer >>= mapM load >>= joinWords
+  where
+    load address = case address of
+      Relative (FrameAddress offset) -> do
+        sp <- stackOffset frame
+        require (offset >= sp && offset+4 <= 0 && offset `mod` 4 == 0) "critical-pair Rust read leaves its allocated frame"
+        pure (M.findWithDefault UnknownWord offset (frameWords frame))
+      Relative (ScratchAddress offset) -> do
+        field <- scratchField offset
+        pure (M.findWithDefault UnknownWord field (scratchWords frame))
+      Relative (InterfaceAddress core offset) ->
+        PublishedTargets . Set.singleton . PublishedTarget core <$> publishedKind offset
+      Absolute address'
+        | address' == 0x96bd20 -> pure (addressWord (InterfaceAddress Core0 0))
+        | address' == 0x96bd24 -> pure (addressWord (InterfaceAddress Core1 0))
+        | address' == 0x40a0f824 -> pure UnknownWord
+        | address' >= origin && toInteger address'+4 <= toInteger origin+toInteger (B.length image) && address' .&. 3 == 0 ->
+            knownWord <$> leWordAt image (fromIntegral (address'-origin))
+        | otherwise -> Left "critical-pair Rust read leaves its admitted source memory"
+
+storeWord :: Frame -> AbstractWord -> AbstractWord -> Either String Frame
+storeWord frame pointer value = do
+  addresses <- memoryAddresses pointer
+  address <- case addresses of
+    [single] -> pure single
+    _ -> Left "critical-pair Rust store has multiple possible targets"
+  case address of
+    Relative (FrameAddress offset) -> do
+      sp <- stackOffset frame
+      require (offset >= sp && offset+4 <= 0 && offset `mod` 4 == 0) "critical-pair Rust store leaves its allocated frame"
+      pure frame {frameWords = insertWord offset value (frameWords frame)}
+    Relative (ScratchAddress offset) -> do
+      field <- scratchField offset
+      pure frame {scratchWords = insertWord field value (scratchWords frame)}
+    Absolute 0x40a0f824 -> pure frame
+    _ -> Left "critical-pair Rust store leaves frame, Scratch and counter"
+
+applyWriteback :: A.Reg -> Maybe AbstractWord -> Frame -> Either String Frame
+applyWriteback _ Nothing frame = pure frame
+applyWriteback base (Just value) frame = writeRegister base value frame
+
+transferRegisters :: A.Width -> A.Reg -> Either String [A.Reg]
+transferRegisters A.Word register = pure [register]
+transferRegisters A.Dual (A.Reg register) | even register && register < 12 = pure [A.Reg register,A.Reg (register+1)]
+transferRegisters _ _ = Left "critical-pair Rust transfer width is outside its provenance proof"
+
+bridgeSummary :: Frame -> Either String Frame
+bridgeSummary frame = do
+  require (M.lookup (A.Reg 0) (frameRegisters frame) == Just (addressWord (ScratchAddress 0)))
+    "critical-pair Rust bridge argument is not the admitted Scratch base"
+  targets <- case M.lookup (A.Reg 1) (frameRegisters frame) of
+    Just (PublishedTargets values) | not (Set.null values) -> pure (Set.toList values)
+    _ -> Left "critical-pair Rust bridge target lacks closed publication provenance"
+  outcomes <- mapM summarize targets
+  fields <- forM [minBound..maxBound] $ \field -> do
+    value <- joinWords [M.findWithDefault UnknownWord field outcome | outcome <- outcomes]
+    pure (field,value)
+  pure frame
+    { frameRegisters = foldr M.delete (frameRegisters frame) [A.Reg 0,A.Reg 1,A.Reg 2,A.Reg 3,A.Reg 12,A.lr]
+    , scratchWords = M.fromList [(field,value) | (field,value) <- fields,value /= UnknownWord]
+    }
+  where
+    before = scratchWords frame
+    memoryArgument = case M.findWithDefault UnknownWord ScratchR0 before of
+      KnownWords values -> not (Set.null values) && all (`elem` [0,0x400c0804]) (Set.toList values)
+      _ -> False
+    summarize (PublishedTarget _ kind) = do
+      require (kind `notElem` [RetryExclusive,ReleaseExclusive,ObserveWord] || memoryArgument)
+        "critical-pair Rust retained memory service can escape its admitted lock cell"
+      let assign fields = foldl (\words' (field,value) -> insertWord field value words') before fields
+          unknown = [(ScratchR0,UnknownWord),(ScratchCpsr,UnknownWord)]
+      pure $ case kind of
+        IdentifyCore -> assign (unknown ++ [(ScratchR0,KnownWords (Set.fromList [0,1])),(ScratchR1,UnknownWord),(ScratchR2,knownWord 0x4003)])
+        MaskIrq -> assign (unknown ++ [(ScratchR0,KnownWords (Set.fromList [0,0x80])),(ScratchR1,UnknownWord)])
+        RestoreIrq -> assign (unknown ++ [(ScratchR1,UnknownWord)])
+        ObserveWord -> assign unknown
+        RetryExclusive -> assign (unknown ++ [(ScratchR0,KnownWords (Set.fromList [0,0xffffffff])),(ScratchR2,UnknownWord)])
+        ReleaseExclusive -> assign (unknown ++ [(ScratchR0,KnownWords (Set.fromList [0,0xffffffff])),(ScratchR1,knownWord 0),(ScratchR2,knownWord 0)])
+
+blockPlan :: A.BlockMode -> Int -> AbstractWord -> Either String ([AbstractWord],AbstractWord)
+blockPlan mode count base = do
+  let bytes = 4*count
+      first = case mode of
+        A.IncrementAfter -> 0
+        A.IncrementBefore -> 4
+        A.DecrementAfter -> 4-bytes
+        A.DecrementBefore -> -bytes
+      change = case mode of
+        A.IncrementAfter -> bytes
+        A.IncrementBefore -> bytes
+        A.DecrementAfter -> -bytes
+        A.DecrementBefore -> -bytes
+  addresses <- mapM (addWords base . knownWord . fromIntegral) [first,first+4..first+bytes-4]
+  updated <- addWords base (knownWord (fromIntegral change))
+  pure (addresses,updated)
+
+frameExtent :: B.ByteString -> [F.Symbol] -> Body -> Either String FrameBytes
+frameExtent image symbols body = do
   origin <- at symbols "__secondary_stage_start"
   helper <- at symbols "xm1_critical_retained_call"
-  symbol <- F.lookupSymbol symbols name
+  symbol <- F.lookupSymbol symbols (bodyName body)
   let start = F.symbolAddress symbol
-      end = start + F.symbolSize symbol
+      end = start+F.symbolSize symbol
       preserved = map A.Reg [4..11]
-      initial = Frame (M.singleton A.sp 0) (M.fromList ((A.lr,ReturnAddress) : [(r,Caller r) | r <- preserved])) M.empty
-      finish (Frame aliases values _) = do
-        require (M.lookup A.sp aliases == Just 0) "critical-pair Rust return changes SP"
-        require (all (\r -> M.lookup r values == Just (Caller r)) preserved) "critical-pair Rust return changes a preserved register"
+      coreArgument = case body of EntryBody -> [(A.Reg 1,KnownWords (Set.fromList [0,1]))]; ExitBody -> []
+      savedScratch = case body of
+        EntryBody -> M.singleton ScratchR3 (PublishedTargets (Set.fromList [PublishedTarget Core0 MaskIrq,PublishedTarget Core1 MaskIrq]))
+        ExitBody -> M.empty
+      initial = Frame (M.fromList ((A.sp,addressWord (FrameAddress 0)) : (A.Reg 0,addressWord (ScratchAddress 0))
+        : (A.lr,ReturnWord) : [(register,CallerWord register) | register <- preserved] ++ coreArgument)) M.empty savedScratch
+      finish frame = do
+        sp <- stackOffset frame
+        require (sp == 0) "critical-pair Rust return changes SP"
+        require (all (\register -> M.lookup register (frameRegisters frame) == Just (CallerWord register)) preserved)
+          "critical-pair Rust return changes a preserved register"
       walk [] _ deepest returns = do
         require (returns > (0 :: Int)) "critical-pair Rust has no admitted return"
         pure (FrameBytes deepest)
-      walk ((pc,state@(Frame aliases values slots)):pending) seen deepest returns
-        | Set.member (pc,state) seen = walk pending seen deepest returns
+      walk ((pc,frame):pending) seen deepest returns
+        | Set.member (pc,frame) seen = walk pending seen deepest returns
         | otherwise = do
           require (Set.size seen < 20000 && pc >= start && pc < end && pc .&. 3 == 0)
-            "critical-pair Rust control flow leaves its frame proof"
-          sp <- maybe (Left "critical-pair Rust SP is unknown") Right (M.lookup A.sp aliases)
-          require (sp <= 0 && sp >= -0x400 && sp `mod` 4 == 0) "critical-pair Rust frame leaves the admitted scratch budget"
-          word <- leWordAt image (fromIntegral (pc - origin))
-          let decoded = A.decode pc word
-              visited = Set.insert (pc,state) seen
+            "critical-pair Rust control flow leaves its provenance proof"
+          sp <- stackOffset frame
+          word <- leWordAt image (fromIntegral (pc-origin))
+          let visited = Set.insert (pc,frame) seen
               deepest' = max deepest (-sp)
-              next updated = walk ((pc+4,updated):pending) visited deepest' returns
-              conditional (A.Cond condition) updated =
-                walk ((pc+4,updated) : [(pc+4,state) | condition /= 14] ++ pending) visited deepest' returns
-              clear registers = Frame (foldr M.delete aliases registers) (foldr M.delete values registers) slots
-              set destination alias value = do
-                require (destination /= A.pc) "critical-pair Rust writes PC outside an admitted return"
-                require (destination /= A.sp || alias /= Nothing) "critical-pair Rust loses its SP alias"
-                let insertMaybe key = maybe (M.delete key) (M.insert key)
-                pure (Frame (insertMaybe destination alias aliases) (insertMaybe destination value values) slots)
-              address base offset indexing = case (M.lookup base aliases,offset) of
-                (Just baseAlias,A.OffsetImmediate value) -> do
-                  let delta = fromIntegral value
-                      effective = baseAlias + (if indexing == A.PostIndexed then 0 else delta)
-                      updated = if indexing == A.OffsetOnly then aliases else M.insert base (baseAlias+delta) aliases
-                  pure (Just effective,updated)
-                (Just _,_) -> Left "critical-pair Rust indexes a stack alias dynamically"
-                (Nothing,_) -> pure (Nothing,aliases)
+              readReg = readRegister pc frame
+              skipped condition = [(pc+4,frame) | condition /= A.Cond 14]
+              next condition updated = walk ((pc+4,updated):skipped condition ++ pending) visited deepest' returns
+              returned condition updated value = do
+                require (value == ReturnWord) "critical-pair Rust return has no caller-return provenance"
+                finish updated
+                walk (skipped condition ++ pending) visited deepest' (returns+1)
+              assign condition register value = if register == A.pc then returned condition frame value
+                else writeRegister register value frame >>= next condition
               call condition target tailCall = do
-                require (target == helper && sp `mod` 8 == 0) "critical-pair Rust calls an unbound service or misaligns SP"
+                require (target == helper && sp `mod` 8 == 0) "critical-pair Rust calls an unbound bridge or misaligns SP"
+                summarized <- bridgeSummary frame
                 let depth = max deepest' (24-sp)
                 if tailCall then do
-                  finish state
-                  require (M.lookup A.lr values == Just ReturnAddress) "critical-pair Rust tail call loses its return"
-                  walk pending visited depth (returns+1)
-                else let Frame nextAliases nextValues nextSlots = clear [A.Reg 0,A.Reg 1,A.Reg 2,A.Reg 3,A.Reg 12,A.lr]
-                      in walk ((pc+4,Frame (M.insert A.sp sp nextAliases) nextValues nextSlots)
-                        : [(pc+4,state) | condition /= A.Cond 14] ++ pending) visited depth returns
-          case decoded of
+                  finish frame
+                  require (readReg A.lr == ReturnWord) "critical-pair Rust tail call loses its caller return"
+                  walk (skipped condition ++ pending) visited depth (returns+1)
+                else walk ((pc+4,summarized):skipped condition ++ pending) visited depth returns
+              loadRegisters condition base writeback registers addresses = do
+                require (not (null registers) && A.sp `notElem` registers) "critical-pair Rust loads an unbound SP"
+                require (writeback == Nothing || base `notElem` registers) "critical-pair Rust load writeback overlaps its destination"
+                values <- mapM (loadWord origin image frame) addresses
+                updated <- foldM (\state (register,value) -> if register == A.pc then pure state else writeRegister register value state)
+                  frame (zip registers values)
+                restored <- applyWriteback base writeback updated
+                case lookup A.pc (zip registers values) of
+                  Just value -> returned condition restored value
+                  Nothing -> next condition restored
+              storeRegisters condition base writeback registers addresses = do
+                require (not (null registers) && A.pc `notElem` registers) "critical-pair Rust stores an unbound PC"
+                let values = map readReg registers
+                updated <- applyWriteback base writeback frame
+                oldSp <- stackOffset frame
+                newSp <- stackOffset updated
+                let memoryFrame = if newSp < oldSp then updated else frame
+                stored <- foldM (\state (address,value) -> storeWord state address value) memoryFrame (zip addresses values)
+                final <- applyWriteback base writeback stored
+                next condition final
+          case A.decode pc word of
             A.Branch condition link target
               | link -> call condition target False
               | target < start || target >= end -> call condition target True
-              | otherwise -> walk ((target,state):[(pc+4,state) | condition /= A.Cond 14] ++ pending) visited deepest' returns
-            A.BranchExchange condition False register | register == A.lr -> do
-              finish state
-              require (M.lookup A.lr values == Just ReturnAddress) "critical-pair Rust loses LR"
-              walk ([(pc+4,state) | condition /= A.Cond 14] ++ pending) visited deepest' (returns+1)
-            A.StoreMultiple condition base A.DecrementBefore True registers | base == A.sp -> do
-              require (condition == A.Cond 14) "critical-pair Rust conditionally changes its stack"
-              let newSp = sp - 4 * length registers
-                  addresses = zip registers [newSp,newSp+4..]
-                  saved = foldr (\(r,offset) -> maybe (M.delete offset) (M.insert offset) (M.lookup r values)) slots addresses
-              next (Frame (M.insert A.sp newSp aliases) values saved)
-            A.LoadMultiple condition base A.IncrementAfter True registers | base == A.sp -> do
-              let loaded = zip registers [sp,sp+4..]
-                  updated = foldr (\(r,offset) -> maybe (M.delete r) (M.insert r) (M.lookup offset slots)) values loaded
-                  aliases' = M.insert A.sp (sp+4*length registers) (foldr M.delete aliases registers)
-                  result = Frame aliases' updated slots
-              if A.pc `elem` registers then do
-                finish result
-                require (M.lookup A.pc updated == Just ReturnAddress) "critical-pair Rust pop loses its return"
-                walk ([(pc+4,state) | condition /= A.Cond 14] ++ pending) visited deepest' (returns+1)
-              else conditional condition result
-            A.StoreMultiple condition base _ writeback registers | M.notMember base aliases -> do
-              require (A.pc `notElem` registers && A.sp `notElem` registers) "critical-pair Rust exports a control register"
-              conditional condition (if writeback then clear [base] else state)
-            A.LoadMultiple condition base _ writeback registers | M.notMember base aliases -> do
-              require (A.pc `notElem` registers && A.sp `notElem` registers) "critical-pair Rust loads unbound control registers"
-              conditional condition (clear (registers ++ [base | writeback]))
-            A.DataProcessing condition op _ destination base operand
-              | op `elem` [A.CMP,A.CMN,A.TST,A.TEQ] -> next state
+              | otherwise -> walk ((target,frame):skipped condition ++ pending) visited deepest' returns
+            A.BranchExchange condition False register -> returned condition frame (readReg register)
+            A.DataProcessing condition operation _ destination base operand
+              | operation `elem` [A.CMP,A.CMN,A.TST,A.TEQ] -> next (A.Cond 14) frame
               | otherwise -> do
-                  let (alias,value) = case (op,operand) of
-                        (A.MOV,A.ShiftedImmediate source A.LSL 0) -> (M.lookup source aliases,M.lookup source values)
-                        (A.ADD,A.Immediate amount) -> ((+fromIntegral amount) <$> M.lookup base aliases,Nothing)
-                        (A.SUB,A.Immediate amount) -> ((subtract (fromIntegral amount)) <$> M.lookup base aliases,Nothing)
-                        _ -> (Nothing,Nothing)
-                  updated <- set destination alias value
-                  conditional condition updated
-            A.Load condition A.Word False destination base offset indexing -> do
-              (effective,aliases') <- address base offset indexing
-              let value = effective >>= (`M.lookup` slots)
-                  Frame _ values' slots' = clear [destination]
-                  result = Frame (M.delete destination aliases') (maybe values' (\v -> M.insert destination v values') value) slots'
-              require (destination /= A.pc && destination /= A.sp) "critical-pair Rust loads an unbound control register"
-              conditional condition result
-            A.Store condition A.Word source base offset indexing -> do
-              (effective,aliases') <- address base offset indexing
-              let allocated = M.findWithDefault sp A.sp aliases'
-              forM_ effective $ \offset' -> require (offset' >= allocated && offset'+4 <= 0) "critical-pair Rust store leaves its allocated frame"
-              let saved = maybe slots (\offset' -> maybe (M.delete offset' slots) (\v -> M.insert offset' v slots) (M.lookup source values)) effective
-              conditional condition (Frame aliases' values saved)
-            A.MoveWide condition destination _ -> set destination Nothing Nothing >>= conditional condition
-            A.MoveTop condition destination _ -> set destination Nothing Nothing >>= conditional condition
-            A.ZeroExtend condition destination _ _ _ -> set destination Nothing Nothing >>= conditional condition
-            A.Compute condition destinations -> do
-              require (A.sp `notElem` destinations && A.pc `notElem` destinations) "critical-pair Rust computes a control register"
-              conditional condition (clear destinations)
-            A.Hint _ -> next state
-            _ -> Left ("critical-pair Rust instruction is outside its frame proof: " ++ show decoded)
+                  require (case operand of A.ShiftedRegister _ _ _ -> base /= A.pc; _ -> True)
+                    "critical-pair Rust register-shift arithmetic uses an unadmitted PC base"
+                  operandWord pc frame operand >>= dataResult operation (readReg base) >>= assign condition destination
+            A.MoveWide condition destination value -> assign condition destination (knownWord value)
+            A.MoveTop condition destination value ->
+              scalarUnary (\low -> (low .&. 0xffff) .|. (value `shiftL` 16)) (readReg destination) >>= assign condition destination
+            A.ZeroExtend condition destination source rotation width -> do
+              require (source /= A.pc) "critical-pair Rust extension uses an unadmitted PC operand"
+              scalarUnary (\value -> rotateR value rotation .&. ((1 `shiftL` width)-1)) (readReg source) >>= assign condition destination
+            A.Multiply condition destination left right accumulator -> do
+              require (A.pc `notElem` [destination,left,right] && accumulator /= Just A.pc)
+                "critical-pair Rust multiply uses an unadmitted PC operand"
+              product' <- scalarBinary (*) (readReg left) (readReg right)
+              value <- maybe (pure product') (\register -> addWords product' (readReg register)) accumulator
+              assign condition destination value
+            A.Load condition width False destination base offset indexing -> do
+              registers <- transferRegisters width destination
+              TransferPlan address writeback <- transferPlan pc frame base offset indexing
+              addresses <- mapM (addWords address . knownWord . fromIntegral) [0,4..4*length registers-4]
+              loadRegisters condition base writeback registers addresses
+            A.Store condition width source base offset indexing -> do
+              registers <- transferRegisters width source
+              TransferPlan address writeback <- transferPlan pc frame base offset indexing
+              addresses <- mapM (addWords address . knownWord . fromIntegral) [0,4..4*length registers-4]
+              storeRegisters condition base writeback registers addresses
+            A.StoreMultiple condition base mode writeback registers -> do
+              require (not writeback || base `notElem` registers) "critical-pair Rust block-store writeback overlaps its source"
+              (addresses,updated) <- blockPlan mode (length registers) (readReg base)
+              storeRegisters condition base (if writeback then Just updated else Nothing) registers addresses
+            A.LoadMultiple condition base mode writeback registers -> do
+              (addresses,updated) <- blockPlan mode (length registers) (readReg base)
+              loadRegisters condition base (if writeback then Just updated else Nothing) registers addresses
+            A.Hint _ -> do
+              require (word .&. 0x0fffffff == 0x0320f000) "critical-pair Rust hint is outside its provenance proof"
+              next (A.Cond 14) frame
+            instruction -> Left ("critical-pair Rust instruction is outside its provenance proof: " ++ show instruction)
   walk [(start,initial)] Set.empty 0 0
 
 deriveLinkedArtifact :: B.ByteString -> B.ByteString -> Either String LinkedArtifact
@@ -293,8 +587,8 @@ deriveLinkedArtifact image symbolBytes = do
   adapterProof image symbols
   enter <- Guest <$> at symbols "xm1_critical_enter_adapter"
   exit <- Guest <$> at symbols "xm1_critical_exit_adapter"
-  enterFrame <- frameExtent image symbols "xm1_critical_enter_continue"
-  exitFrame <- frameExtent image symbols "xm1_critical_exit"
+  enterFrame <- frameExtent image symbols EntryBody
+  exitFrame <- frameExtent image symbols ExitBody
   pure (LinkedArtifact image symbolBytes symbols enter exit enterFrame exitFrame)
 
 stageStartup :: Original -> LinkedArtifact -> Either String Staging

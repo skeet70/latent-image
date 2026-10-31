@@ -10,6 +10,8 @@ import qualified FujiAF.UpdateContainer as U
 import Numeric (showHex)
 
 data Boundary = Entry | Exit deriving (Show)
+data PublicationRoot = PrimaryRoot | SecondaryRoot
+data PublishedCall = ObserveZero | NullScratch | RetryOwnFrame | RetryScratch
 data Admission = Admit | Refuse deriving (Eq)
 newtype CaseName = CaseName String
 newtype Program = Program [Word32]
@@ -51,6 +53,23 @@ scenarios =
       [0xe92d4010,0xe3a01000,unboundCall boundary,0xe8bd8010])
   , Scenario (CaseName "bridge call requires the adapter Scratch argument") Refuse (\boundary -> Program
       [0xe92d4010,0xe3a00000,0xe3011304,0xe340100d,wrongScratchCall boundary,0xe8bd8010])
+  , Scenario (CaseName "primary publication supplies a closed word-observation target") Admit (publishedMemoryCall PrimaryRoot ObserveZero)
+  , Scenario (CaseName "secondary publication supplies a closed word-observation target") Admit (publishedMemoryCall SecondaryRoot ObserveZero)
+  , Scenario (CaseName "fixed counter load and wrapping increment stay confined") Admit (const (Program
+      [0xe30f2824,0xe34420a0,0xe5921000,0xe2811001,0xe5821000,0xe12fff1e]))
+  , Scenario (CaseName "load writeback on a saved Scratch alias preserves the caller") Admit (const (Program
+      [0xe92d4010,0xe1a04000,0xe4941004,0xe5041004,0xe8bd8010]))
+  , Scenario (CaseName "store writeback on a saved Scratch alias preserves the caller") Admit (const (Program
+      [0xe92d4010,0xe1a04000,0xe5941000,0xe4841004,0xe8bd8010]))
+  , Scenario (CaseName "published service still requires the host Scratch argument") Refuse (publishedMemoryCall PrimaryRoot NullScratch)
+  , Scenario (CaseName "retained exclusive callback cannot write the caller frame") Refuse (publishedMemoryCall PrimaryRoot RetryOwnFrame)
+  , Scenario (CaseName "retained exclusive callback cannot write Scratch") Refuse (publishedMemoryCall SecondaryRoot RetryScratch)
+  , Scenario (CaseName "Rust cannot overwrite interface root publication") Refuse (const (Program
+      [0xe30b2d20,0xe3402096,0xe5820000,0xe12fff1e]))
+  , Scenario (CaseName "Rust cannot overwrite a published service slot") Refuse (const (Program
+      [0xe30b2d20,0xe3402096,0xe5922000,0xe3013624,0xe7820003,0xe12fff1e]))
+  , Scenario (CaseName "literal code address cannot replace bridge publication provenance") Refuse (\boundary -> Program
+      [0xe92d4010,0xe3011304,0xe340100d,0xe3a02000,0xe5802000,literalTargetCall boundary,0xe8bd8010])
   ]
 
 validControl :: Program
@@ -69,6 +88,21 @@ unboundCall Exit = 0xebffffa7
 wrongScratchCall :: Boundary -> Word32
 wrongScratchCall Entry = 0xebffffe5
 wrongScratchCall Exit = 0xebffffa5
+
+literalTargetCall :: Boundary -> Word32
+literalTargetCall Entry = 0xebffffe4
+literalTargetCall Exit = 0xebffffa4
+
+publishedMemoryCall :: PublicationRoot -> PublishedCall -> Boundary -> Program
+publishedMemoryCall root flavor boundary =
+  let rootLoad = case root of PrimaryRoot -> 0xe5922000; SecondaryRoot -> 0xe5922004
+      slot = case flavor of RetryOwnFrame -> 0xe301161c; RetryScratch -> 0xe301161c; _ -> 0xe3011624
+      virtualArgument = case flavor of RetryOwnFrame -> 0xe1a0300d; RetryScratch -> 0xe1a03004; _ -> 0xe3a03000
+      scratchArgument = case flavor of NullScratch -> 0xe3a00000; _ -> 0xe1a00004
+      call = case boundary of Entry -> 0xebffffdf; Exit -> 0xebffff9f
+   in Program
+        [0xe92d4010,0xe1a04000,0xe30b2d20,0xe3402096,rootLoad,slot,0xe7921001
+        ,virtualArgument,0xe5843000,scratchArgument,call,0xe8bd8010]
 
 -- Adapter bodies and symbol names encode the external A32 artifact ABI.
 artifact :: Boundary -> Program -> Artifact
