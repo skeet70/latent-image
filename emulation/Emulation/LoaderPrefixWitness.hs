@@ -14,11 +14,14 @@ module Emulation.LoaderPrefixWitness
 import A32 (Cond (..), Indexing (..), Instruction (..), Offset (..), Reg (..), Width (..))
 import qualified A32
 import Control.Monad (forM, forM_, unless, when, zipWithM_)
+import qualified Crypto.Hash.SHA256 as SHA256
 import Data.Aeson (FromJSON, Object, Result (..), Value (..), fromJSON, object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.Bits (complement, (.&.))
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Builder as BB
+import qualified Data.ByteString.Lazy.Char8 as BLC
 import Data.List (nub, sort, sortOn, stripPrefix)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust, isNothing)
@@ -76,6 +79,7 @@ programKindName OwnedProgram = "owned"
 
 data ProgramFacts = ProgramFacts
   { factRecord :: F.Sha256
+  , factRecordImmutable :: F.Sha256
   , factLoader :: F.Sha256
   , factHandoff :: Guest
   , factEntry :: Guest
@@ -165,8 +169,9 @@ delayedZeroLoads = 4
 record1Entry :: Word32
 record1Entry = 0x1800
 
-retainedRecordHex, loaderBHex :: String
+retainedRecordHex, retainedRecordImmutableHex, loaderBHex :: String
 retainedRecordHex = "2f1bf3f0e483b892d2890599679c1b515cfc1be8b8c27cbb06d4d913e428abb4"
+retainedRecordImmutableHex = "0c10e1264bccdd36fe167cd4c22a3df48134945a710f2554817f9cafd76b83d0"
 loaderBHex = "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
 
 spanValue :: Span -> [Word64]
@@ -182,6 +187,7 @@ contractValue contract = object $
   , "program" .= object
       [ "kind" .= programKindName kind
       , "record_sha256" .= F.sha256Hex (factRecord facts), "loader_sha256" .= F.sha256Hex (factLoader facts)
+      , "record_immutable_sha256" .= F.sha256Hex (factRecordImmutable facts)
       , "handoff" .= guestWord (factHandoff facts), "entry" .= guestWord (factEntry facts)
       , "load" .= guestWord (factLoad facts), "post_load" .= guestWord (factPostLoad facts)
       , "loaded_register" .= let RegisterIndex value = factLoaded facts in value
@@ -254,10 +260,11 @@ parseScenarioObject value = fields ["kind"] value >>= \row -> get row "kind" >>=
 
 parseProgram :: Value -> Either String Program
 parseProgram value = do
-  row <- fields ["kind", "record_sha256", "loader_sha256", "handoff", "entry", "load", "post_load", "loaded_register"
+  row <- fields ["kind", "record_sha256", "record_immutable_sha256", "loader_sha256", "handoff", "entry", "load", "post_load", "loaded_register"
     , "poll_period", "image", "refusal", "forbid_fetch", "forbid_read"] value
   kind <- get row "kind" >>= closed programKindName "loader-prefix program"
-  facts <- ProgramFacts <$> (get row "record_sha256" >>= F.parseSha256) <*> (get row "loader_sha256" >>= F.parseSha256)
+  facts <- ProgramFacts <$> (get row "record_sha256" >>= F.parseSha256) <*> (get row "record_immutable_sha256" >>= F.parseSha256)
+    <*> (get row "loader_sha256" >>= F.parseSha256)
     <*> guestField row "handoff" <*> guestField row "entry" <*> guestField row "load" <*> guestField row "post_load"
     <*> (get row "loaded_register" >>= registerIndex) <*> (PollPeriod <$> get row "poll_period")
     <*> (field row "image" >>= nullable parseSpan) <*> (field row "refusal" >>= nullable (fmap Guest . json))
@@ -268,9 +275,10 @@ parseProgram value = do
 retainedProgramFacts :: PollPeriod -> Either String ProgramFacts
 retainedProgramFacts period = do
   record <- F.parseSha256 retainedRecordHex
+  immutable <- F.parseSha256 retainedRecordImmutableHex
   loader <- F.parseSha256 loaderBHex
   pure ProgramFacts
-    { factRecord = record, factLoader = loader, factHandoff = Guest 0x11850, factEntry = Guest 0xd0020
+    { factRecord = record, factRecordImmutable = immutable, factLoader = loader, factHandoff = Guest 0x11850, factEntry = Guest 0xd0020
     , factLoad = Guest 0xd0a44, factPostLoad = Guest 0xd0a48, factLoaded = RegisterIndex 3, factPeriod = period
     , factImage = Nothing, factRefusal = Nothing, factForbidFetch = [], factForbidRead = []
     }
@@ -290,6 +298,8 @@ checkFacts kind facts = do
       require (low >= 0x103e8 && high <= 0x11800 && low < high && low .&. 3 == 0 && high .&. 3 == 0)
         "owned image lies outside record-2 padding [0x103e8,0x11800)"
       require (all inside sites && length (nub sites) == length sites) "owned sites lie outside the image or repeat"
+      require (low <= 0x10400 && high > 0x10400) "owned image omits the secondary entry at 0x10400"
+      require (all (/= Guest 0x10400) sites) "owned witness site collides with the secondary entry"
       require (factLoaded facts == RegisterIndex 0) "owned completion value is not returned in r0"
       require (sort (factForbidFetch facts) == replacedCode && factForbidRead facts == [entryPool])
         "owned forbidden spans differ from the replaced loader-B code and pool"
@@ -299,10 +309,20 @@ checkFacts kind facts = do
 completionModel :: (Word32, Word32) -> M.Map Int Word32 -> PollModel
 completionModel = PollModel (0x40000000 + fromIntegral completionCell) 0
 
+-- | Record-2 log globals occupy [0x14c60,0x14c6c).
+recordImmutableDigest :: B.ByteString -> Either String F.Sha256
+recordImmutableDigest record = do
+  require (B.length record == 0x4c80) "record-2 image does not span [0x10000,0x14c80)"
+  let prefix = SHA256.update SHA256.init (B.take 0x4c60 record)
+      context = SHA256.update prefix (B.drop 0x4c6c record)
+  F.parseSha256 (BLC.unpack (BB.toLazyByteString (BB.byteStringHex (SHA256.finalize context))))
+
 -- | Retained facts from the staged record 2 and loader B, both pinned.
 retainedFacts :: StagedImages -> Either String ProgramFacts
 retainedFacts (StagedImages record loader) = do
   require (sha256Hex record == retainedRecordHex) "retained record 2 differs from the original"
+  immutable <- recordImmutableDigest record
+  require (F.sha256Hex immutable == retainedRecordImmutableHex) "retained immutable record 2 differs from the original"
   require (sha256Hex loader == loaderBHex) "retained loader B differs from the original"
   forM_ [(0xd09c0, 0x13001000), (0xd09c4, 0x1344100a), (0xd09c8, 0x13a02064)] $ \(address, expected) ->
     require (leWordAt loader (address - 0xd0000) == Right expected) "stock wait register setup differs"
@@ -369,9 +389,10 @@ deriveOwnedFactsParsed (U.MediaImage bin) rows (StagedImages record loader) = do
   fetchSpans <- forbidSpans rows "xm1_loader_b_forbid_fetch_"
   readSpans <- forbidSpans rows "xm1_loader_b_forbid_read_"
   recordDigest <- F.parseSha256 (sha256Hex record)
+  recordImmutable <- recordImmutableDigest record
   loaderDigest <- F.parseSha256 (sha256Hex loader)
   let facts = ProgramFacts
-        { factRecord = recordDigest, factLoader = loaderDigest, factHandoff = Guest handoff, factEntry = Guest prefixEntry
+        { factRecord = recordDigest, factRecordImmutable = recordImmutable, factLoader = loaderDigest, factHandoff = Guest handoff, factEntry = Guest prefixEntry
         , factLoad = Guest load, factPostLoad = Guest (call + 4), factLoaded = RegisterIndex 0, factPeriod = period
         , factImage = Just (Span (fromIntegral start) (fromIntegral end)), factRefusal = refusal
         , factForbidFetch = sort fetchSpans, factForbidRead = sort readSpans
@@ -634,7 +655,7 @@ data CommittedStore = CommittedStore
 
 data Endpoint = Endpoint
   { endpointFrame :: (B.ByteString, B.ByteString), endpointVectors :: (B.ByteString, B.ByteString)
-  , endpointZero :: (Span, Maybe Word64), endpointRecord :: F.Sha256, endpointLoader :: F.Sha256
+  , endpointZero :: (Span, Maybe Word64), endpointRecordImmutable :: F.Sha256, endpointLoader :: F.Sha256
   } deriving (Eq, Show)
 
 -- | Core-0 PC, registers, SP, LR and CPSR.
@@ -646,6 +667,7 @@ data Receipt = Receipt
   , receiptBoot :: ClassifiedWatch, receiptLoaded :: ClassifiedWatch, receiptScoped :: Maybe ScopedWatch, receiptStops :: [Stop]
   , receiptBindings :: Maybe Bindings, receiptStore :: Maybe CommittedStore, receiptEndpoint :: Maybe Endpoint
   , receiptPrimary :: Maybe Primary, receiptStartup :: Maybe StartupFacts
+  , receiptInitialRecord :: Maybe F.Sha256, receiptHandoffRecordImmutable :: Maybe F.Sha256
   } deriving (Eq, Show)
 
 -- | A receipt accepted under its contract.
@@ -665,7 +687,8 @@ parseReceipt bytes = do
   schema <- get initial "schema" :: Either String Word32
   require (schema `elem` [4, 5]) "unsupported loader-prefix receipt schema"
   row <- fields (["schema", "scenario", "program", "result", "error", "machine_failure", "instructions", "cp14_identities"
-    , "boot_watch", "loaded_watch", "scoped_watch", "stops", "bindings", "completion", "endpoint", "final_primary"]
+    , "boot_watch", "loaded_watch", "scoped_watch", "stops", "bindings", "completion", "endpoint", "final_primary"
+    , "initial_record_sha256", "handoff_record_immutable_sha256"]
     ++ ["startup" | schema == 5]) value
   scenario <- field row "scenario" >>= parseScenarioObject
   program <- get row "program" >>= closed programKindName "loader-prefix program"
@@ -683,6 +706,8 @@ parseReceipt bytes = do
     <*> (field row "bindings" >>= nullable parseBindings) <*> (field row "completion" >>= nullable parseStore)
     <*> (field row "endpoint" >>= nullable parseEndpoint) <*> (field row "final_primary" >>= nullable parsePrimary)
     <*> (if schema == 5 then Just <$> (field row "startup" >>= parseStartup) else pure Nothing)
+    <*> (field row "initial_record_sha256" >>= nullable (\entry -> json entry >>= F.parseSha256))
+    <*> (field row "handoff_record_immutable_sha256" >>= nullable (\entry -> json entry >>= F.parseSha256))
 
 twoOf :: String -> [a] -> Either String (a, a)
 twoOf _ [a, b] = Right (a, b)
@@ -880,11 +905,11 @@ parseStore value = do
 
 parseEndpoint :: Value -> Either String Endpoint
 parseEndpoint value = do
-  row <- fields ["frame", "vectors", "zero", "record_sha256", "loader_sha256"] value
+  row <- fields ["frame", "vectors", "zero", "record_immutable_sha256", "loader_sha256"] value
   zero <- field row "zero" >>= fields ["range", "first_nonzero"]
   Endpoint <$> (field row "frame" >>= viewPair 16) <*> (field row "vectors" >>= viewPair 28)
     <*> ((,) <$> (field zero "range" >>= parseSpan) <*> get zero "first_nonzero")
-    <*> (get row "record_sha256" >>= F.parseSha256) <*> (get row "loader_sha256" >>= F.parseSha256)
+    <*> (get row "record_immutable_sha256" >>= F.parseSha256) <*> (get row "loader_sha256" >>= F.parseSha256)
 
 parsePrimary :: Value -> Either String Primary
 parsePrimary value = do
@@ -977,7 +1002,7 @@ stackWindow handoff = do
 
 -- | Labels each scenario requires exactly once, beyond any number of post-load stops.
 requiredLabels :: Scenario -> [Label]
-requiredLabels scenario = [Record1Entry, Record2Handoff, PrefixEntry] ++ case scenario of
+requiredLabels scenario = [Record1Entry, SecondaryEntry, Record2Handoff, PrefixEntry] ++ case scenario of
   Held -> [HeldGate]
   Delayed -> [DelayEntry, DelayRelease, CompletionStore, PrefixExit]
   _ -> [CompletionStore, PrefixExit]
@@ -993,7 +1018,7 @@ validateReceipt contract receipt = do
     ("loader-prefix receipt did not pass: " ++ fromMaybe "" (receiptError receipt))
   require (receiptIdentities receipt == (0x4003, 0x5003)) "CP14 identities differ"
   require (sort [stopLabel stop | stop <- stops, stopLabel stop /= PostLoad]
-    == sort (requiredLabels scenario ++ [label | isJust selected, label <- [FirstStageHandoff, SecondaryEntry]]))
+    == sort (requiredLabels scenario ++ [FirstStageHandoff | isJust selected]))
     "stop labels differ from the scenario"
   forM_ stops $ \stop -> require (stopCore stop == labelCore (stopLabel stop)) "stop has the wrong core"
   let pairs = zip stops (drop 1 stops)
@@ -1023,18 +1048,21 @@ validateReceipt contract receipt = do
   require (r3 (stopRegisters handoff) == guestWord (factEntry facts) && r0 (stopRegisters handoff) == argumentWord && stopCompletion handoff == 0)
     "handoff target, argument or completion cell differs"
   require (isNothing (stopCounter handoff)) "handoff stop carries a scoped counter"
+  secondary <- uniqueStop stops SecondaryEntry
+  let secondaryAddress = case kind of RetainedProgram -> Guest 0x11800; OwnedProgram -> Guest 0x10400
+      beforeHandoff = takeWhile ((/= Record2Handoff) . stopLabel) stops
+  require (secondary `elem` beforeHandoff && stopAddress secondary == secondaryAddress) "secondary entry site or order differs"
+  require (masked (stopCpsr secondary) && isNothing (stopCounter secondary)) "secondary entry context differs"
+  require (receiptInitialRecord receipt == Just (factRecord facts)) "initial full record-2 identity differs"
+  require (receiptHandoffRecordImmutable receipt == Just (factRecordImmutable facts)) "handoff immutable record-2 identity differs"
   forM_ selected $ \startup -> do
     firstHandoff <- uniqueStop stops FirstStageHandoff
-    secondary <- uniqueStop stops SecondaryEntry
-    let beforeHandoff = takeWhile ((/= Record2Handoff) . stopLabel) stops
-    require (firstHandoff `elem` beforeHandoff && secondary `elem` beforeHandoff)
-      "composed chain lacks firststage handoff or secondary entry before record-2 handoff"
+    require (firstHandoff `elem` beforeHandoff)
+      "firststage handoff does not precede record-2 handoff"
     require (stopAddress firstHandoff == startupHandoff startup && masked (stopCpsr firstHandoff)
       && r2 (stopRegisters firstHandoff) == guestWord (startupTarget startup)
       && r0 (stopRegisters firstHandoff) == guestWord (startupArgument startup)
       && isNothing (stopCounter firstHandoff)) "firststage handoff context differs"
-    require (stopAddress secondary == startupSecondary startup && masked (stopCpsr secondary) && isNothing (stopCounter secondary))
-      "secondary entry context differs"
   window <- stackWindow handoff
   require (bindingStackWindow bindings == window) "bound entry-stack window differs from the handoff SP and TCM"
   zeroPhysical <- through (bindingZeroMap bindings) 0x400ddaa0 0x15980
@@ -1184,7 +1212,8 @@ acceptCompletion scenario facts expected scoped counter stops receipt handoff = 
   require (endpointFrame endpoint == (frame, frame)) "exit frame differs"
   require (endpointVectors endpoint == (vectors, vectors)) "exit vector slots differ"
   require (endpointZero endpoint == (zeroClaim, Nothing)) "exit zero range holds a nonzero byte"
-  require (endpointRecord endpoint == factRecord facts && endpointLoader endpoint == factLoader facts) "exit record-2 or loader-B bytes differ from the contract"
+  require (endpointRecordImmutable endpoint == factRecordImmutable facts) "exit immutable record-2 bytes differ from the contract"
+  require (endpointLoader endpoint == factLoader facts) "exit loader-B bytes differ from the contract"
   require (isNothing (receiptPrimary receipt)) "completion scenario carries a held primary context"
   where
     lastOf list = if null list then Nothing else Just (last list)

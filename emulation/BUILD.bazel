@@ -549,6 +549,7 @@ haskell_library(
         "//host:bytestring",
         "//host:completion-control",
         "//host:containers",
+        "//host:cryptohash-sha256",
         "//host:first-stage",
         "//host:json",
         "//host:update-container",

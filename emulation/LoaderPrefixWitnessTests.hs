@@ -3,12 +3,12 @@
 module Main where
 
 import Control.Monad (unless)
-import Data.Aeson (Value (..), encode, object, (.=))
+import Data.Aeson (Value (..), encode, object, toJSON, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import Data.Bits ((.|.))
+import Data.Bits (xor, (.|.))
 import Data.Maybe (fromMaybe, isJust)
 import Data.Word (Word32, Word64)
 import qualified Data.Vector as V
@@ -35,8 +35,9 @@ stackTop = 0x400f3420
 -- | Masked SVC, A32 little-endian, Z set.
 cpsr = 0x400001d3
 
-retainedRecord, loaderB :: String
+retainedRecord, retainedRecordImmutable, loaderB :: String
 retainedRecord = "2f1bf3f0e483b892d2890599679c1b515cfc1be8b8c27cbb06d4d913e428abb4"
+retainedRecordImmutable = "0c10e1264bccdd36fe167cd4c22a3df48134945a710f2554817f9cafd76b83d0"
 loaderB = "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
 
 symbolAt :: B.ByteString -> String -> IO Word32
@@ -54,6 +55,7 @@ retainedContract scenario = parseContract . BL.toStrict . encode $ object
   [ "schema" .= (4 :: Int), "budget" .= (50000000 :: Int), "scenario" .= object ["kind" .= scenarioName scenario]
   , "program" .= object
       [ "kind" .= ("retained" :: String), "record_sha256" .= retainedRecord, "loader_sha256" .= loaderB
+      , "record_immutable_sha256" .= retainedRecordImmutable
       , "handoff" .= (0x11850 :: Int), "entry" .= (0xd0020 :: Int), "load" .= (0xd0a44 :: Int), "post_load" .= (0xd0a48 :: Int)
       , "loaded_register" .= (3 :: Int), "poll_period" .= (305 :: Int), "image" .= (Nothing :: Maybe [Int])
       , "refusal" .= (Nothing :: Maybe Int), "forbid_fetch" .= ([] :: [[Int]]), "forbid_read" .= ([] :: [[Int]])
@@ -111,6 +113,7 @@ receiptDocument startup scenario kind facts knob = document
     Guest postSite = factPostLoad facts
     PollPeriod period = factPeriod facts
     loaded = if kind == OwnedProgram then 0 else 3 :: Int
+    secondarySite = if kind == RetainedProgram then 0x11800 else 0x10400
     held = scenario == Held
     delayed = scenario == Delayed
     stored = fromMaybe (if scenario == NonOne then 0x400a0000 else 1) (knobStoredValue knob)
@@ -148,7 +151,8 @@ receiptDocument startup scenario kind facts knob = document
       , stop "secondary-entry" 0x10400 1 (if knobFirstStageAfterSecondary knob then (100, 10) else (500, 20))
           base 0xfff00f00 0 cpsr Nothing Nothing ]
     stops = [stop "record-1-entry" (if composed then 0x6000 else 0x1800) 0 (10, 0) base 0xfff00f00 0 cpsr Nothing Nothing]
-      ++ (if composed then (if knobFirstStageAfterSecondary knob then reverse startupStops else startupStops) else [])
+      ++ (if composed then (if knobFirstStageAfterSecondary knob then reverse startupStops else startupStops)
+          else [stop "secondary-entry" secondarySite 1 (500, 20) base 0xfff00f00 0 cpsr Nothing Nothing])
       ++ [ stop "record-2-handoff" handoffSite 1 (800, 200) base 0x70000800 0 cpsr Nothing Nothing
          , stop "prefix-entry" entrySite 1 (810, knobEntryCore1 knob) base 0x70000800 0 cpsr (fst (knobEntryObservation knob)) (snd (knobEntryObservation knob)) ]
       ++ (if held
@@ -238,6 +242,8 @@ receiptDocument startup scenario kind facts knob = document
       [ "schema" .= (if composed then 5 else 4 :: Int), "scenario" .= object ["kind" .= scenarioName scenario], "program" .= programKindName kind
       , "result" .= ("passed" :: String), "error" .= (Nothing :: Maybe String), "machine_failure" .= (Nothing :: Maybe String)
       , "instructions" .= (30000 :: Int), "cp14_identities" .= [0x4003, 0x5003 :: Word32]
+      , "initial_record_sha256" .= F.sha256Hex (factRecord facts)
+      , "handoff_record_immutable_sha256" .= F.sha256Hex (factRecordImmutable facts)
       , "boot_watch" .= classified [] [writeClass 0xa00c4 0xa00c8]
       , "loaded_watch" .= setField "views" (String (if composed then "fixed" else "observe"))
           (classified [record1Clear] ([writeClass 0xa00c4 0xa00c8] ++ [writeClass 0x180 0x19c | delayed] ++ startupClasses))
@@ -255,7 +261,7 @@ receiptDocument startup scenario kind facts knob = document
       , "endpoint" .= (if held then Nothing else Just (object
           [ "frame" .= object ["virtual" .= frame, "physical" .= frame], "vectors" .= object ["virtual" .= vectors, "physical" .= vectors]
           , "zero" .= object ["range" .= spanOf 0xddaa0 0xf33ec, "first_nonzero" .= (Nothing :: Maybe Int)]
-          , "record_sha256" .= F.sha256Hex (factRecord facts), "loader_sha256" .= F.sha256Hex (factLoader facts) ]))
+          , "record_immutable_sha256" .= F.sha256Hex (factRecordImmutable facts), "loader_sha256" .= F.sha256Hex (factLoader facts) ]))
       , "final_primary" .= (if held then Just (object
           [ "address" .= C.heldGate, "registers" .= base, "sp" .= (0x700007d0 :: Word32), "lr" .= (0 :: Word32)
           , "cpsr" .= cpsr, "instructions" .= (25000 :: Int) ]) else Nothing)
@@ -285,6 +291,10 @@ changeField name change (Object fields) = Object (case KM.lookup key fields of
   where key = K.fromString name
 changeField _ _ value = value
 
+deleteField :: String -> Value -> Value
+deleteField name (Object fields) = Object (KM.delete (K.fromString name) fields)
+deleteField _ value = value
+
 composedContract :: Scenario -> ProgramFacts -> Value -> Either String Contract
 composedContract scenario facts startup =
   parseContract . BL.toStrict . encode . setField "startup" startup . setField "schema" (Number 5) $
@@ -304,6 +314,58 @@ changeStop label change = changeField "stops" (mapArray (\value -> if hasField "
     fromString = K.toText . K.fromString
     mapArray f (Array values) = Array (V.map f values)
     mapArray _ value = value
+
+checkIdentityAdmission :: Contract -> ProgramKind -> ProgramFacts -> Maybe Value -> IO ()
+checkIdentityAdmission contract kind facts startup = do
+  let document = receiptDocument startup Natural kind facts knobs
+      consume change = validate contract (BL.toStrict (encode (change document)))
+      refuses label change = expect label (not (accepted (consume change)))
+      missingSecondary = changeField "stops" (filterArray (not . hasField "label" (String "secondary-entry")))
+      wrongSecondary = if kind == RetainedProgram then 0x10400 else 0x11800
+      parseDocument = parseContract . BL.toStrict . encode
+  refuses "secondary entry is mandatory" missingSecondary
+  refuses "secondary entry must match the program role" (changeStop "secondary-entry" (setField "address" (Number wrongSecondary)))
+  refuses "initial full identity evidence cannot be omitted" (deleteField "initial_record_sha256")
+  refuses "passed receipt requires an observed initial full identity" (setField "initial_record_sha256" Null)
+  refuses "passed receipt requires an observed handoff projection" (setField "handoff_record_immutable_sha256" Null)
+  refuses "old endpoint full-record field is not accepted as a projection"
+    (changeField "endpoint" (setField "record_sha256" (toJSON (F.sha256Hex (factRecord facts))) . deleteField "record_immutable_sha256"))
+  expect "immutable program identity is required"
+    (not (accepted (parseDocument (changeField "program" (deleteField "record_immutable_sha256") (contractValue contract)))))
+  expect "witness sites cannot collide with the secondary entry"
+    (not (accepted (parseDocument (changeField "program" (setField "entry" (Number 0x10400)) (contractValue contract)))))
+
+data RecordByteClass = MutableLogByte | ImmutableRecordByte deriving (Eq)
+
+checkRecordProjection :: B.ByteString -> B.ByteString -> Word32 -> ProgramFacts -> Contract -> IO ()
+checkRecordProjection bin symbols prefix facts composed = do
+  let images = stagedFor bin prefix
+      original = stagedRecord images
+      locations = [(offset, MutableLogByte) | offset <- [0x4c60 .. 0x4c6b]]
+        ++ [(offset, ImmutableRecordByte) | offset <- 0x4c5f : [0x4c6c .. 0x4c7f]]
+      routes = [(Contract Natural (Program OwnedProgram facts), Nothing), (composed, Just startupFixture)]
+  mapM_ (\(offset, classification) -> do
+    let changedBytes = B.take offset original <> B.singleton (B.index original offset `xor` 1) <> B.drop (offset + 1) original
+    changed <- either fail pure (deriveOwnedFacts bin symbols (images {stagedRecord = changedBytes}))
+    expect ("initial full identity binds record byte " ++ show offset) (factRecord changed /= factRecord facts)
+    expect ("immutable projection class at record byte " ++ show offset)
+      ((factRecordImmutable changed == factRecordImmutable facts) == (classification == MutableLogByte))
+    mapM_ (\(contract, startup) -> do
+      let document = receiptDocument startup Natural OwnedProgram facts knobs
+          consume change = validate contract (BL.toStrict (encode (change document)))
+          refuses label change = expect label (not (accepted (consume change)))
+          observed = toJSON (F.sha256Hex (factRecordImmutable changed))
+          atHandoff = setField "handoff_record_immutable_sha256" observed
+          atEndpoint = changeField "endpoint" (setField "record_immutable_sha256" observed)
+          acceptedChange = classification == MutableLogByte
+      expect ("handoff projection admission at record byte " ++ show offset)
+        (accepted (consume atHandoff) == acceptedChange)
+      expect ("endpoint projection admission at record byte " ++ show offset)
+        (accepted (consume atEndpoint) == acceptedChange)
+      refuses "wrong initial full identity is refused independently of its projection"
+        (setField "initial_record_sha256" (toJSON (F.sha256Hex (factRecord changed))))
+      ) routes
+    ) locations
 
 main :: IO ()
 main = do
@@ -385,6 +447,10 @@ main = do
     right <- pairOf retained (retainedReceipt knobs)
     compareReceipts left right)))
   composed <- either fail pure (composedContract Natural facts startupFixture)
+  checkIdentityAdmission retained RetainedProgram retainedProgramFacts Nothing
+  checkIdentityAdmission (owned Natural) OwnedProgram facts Nothing
+  checkIdentityAdmission composed OwnedProgram facts (Just startupFixture)
+  checkRecordProjection bin symbols prefixEntry facts composed
   let composedBytes scenario knob = receiptFor (Just startupFixture) scenario OwnedProgram facts knob
       altered change = BL.toStrict (encode (change (receiptDocument (Just startupFixture) Natural OwnedProgram facts knobs)))
       removeClass span' = changeField "classes" (filterArray (not . hasField "range" span'))

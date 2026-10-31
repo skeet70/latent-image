@@ -587,6 +587,7 @@ prepareLoaderPrefix root firmwarePath fflzdPath outputPath scenario choice execu
     [ "schema" .= (4 :: Int), "scenario" .= L.scenarioName scenario, "program" .= L.programKindName kind
     , "firmware" .= launchedPath, "firmware_sha256" .= sha256Hex launchedBytes
     , "record_sha256" .= F.sha256Hex (L.factRecord facts), "loader_sha256" .= F.sha256Hex (L.factLoader facts)
+    , "record_immutable_sha256" .= F.sha256Hex (L.factRecordImmutable facts)
     , "argument" .= argumentWord
     ]))
   case execution of
