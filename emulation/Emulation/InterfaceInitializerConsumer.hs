@@ -106,6 +106,18 @@ data CodeViews = CodeViews CodeSite Views deriving (Eq)
 instance FromJSON CodeViews where
   parseJSON = withObject "consumer code views" $ \row -> CodeViews <$> row .: "start" <*> row .: "views"
 
+newtype ServiceWords = ServiceWords [Word32] deriving (Eq)
+instance FromJSON ServiceWords where
+  parseJSON value = do
+    words' <- parseJSON value
+    let expected = [word | CodeRegion Service words'' <- codeRegions,word <- words'']
+    if words' == expected then pure (ServiceWords words') else fail "consumer service alias words differ"
+
+data ServiceAlias = ServiceAlias Int Word64 Word64 ServiceWords deriving (Eq)
+instance FromJSON ServiceAlias where
+  parseJSON = withObject "consumer service alias" $ \row ->
+    ServiceAlias <$> row .: "core" <*> row .: "guest" <*> row .: "physical" <*> row .: "words"
+
 data EmptyEvidence = EmptyEvidence deriving (Eq)
 instance FromJSON EmptyEvidence where
   parseJSON = J.withArray "empty consumer evidence" $ \items ->
@@ -116,13 +128,13 @@ instance FromJSON ConsumerWatch where
   parseJSON value = withObject "complete consumer watch" (\row ->
     ConsumerWatch <$> parseJSON value <*> row .: "ranges" <*> row .: "counters" <*> row .: "coverage") value
 
-data ConsumerReceipt = ConsumerReceipt ConsumerKind Context Context Context Context Context Views Views Views Views Views Views Views [CodeViews] Decoder [Alias] ConsumerWatch ConsumerWatch deriving (Eq)
+data ConsumerReceipt = ConsumerReceipt ConsumerKind Context Context Context Context Context Views Views Views Views Views Views Views [CodeViews] Decoder [Alias] [ServiceAlias] ConsumerWatch ConsumerWatch deriving (Eq)
 instance FromJSON ConsumerReceipt where
   parseJSON = withObject "initializer consumer evidence" $ \row ->
     ConsumerReceipt <$> row .: "kind" <*> row .: "start" <*> row .: "dispatch" <*> row .: "entered" <*> row .: "returned" <*> row .: "after"
       <*> row .: "roots" <*> row .: "slot_before" <*> row .: "slot_after" <*> row .: "frame_before" <*> row .: "frame_after"
       <*> row .: "table_before" <*> row .: "table_after" <*> row .: "code" <*> row .: "decoder" <*> row .: "aliases"
-      <*> row .: "prelude_watch" <*> row .: "watch"
+      <*> row .: "service_aliases" <*> row .: "prelude_watch" <*> row .: "watch"
 
 data Result = Passed | Failed deriving (Eq)
 instance FromJSON Result where
@@ -193,7 +205,7 @@ validateEvidence (Contract initializer _ _ _) bytes = do
   pure consumer
 
 validateConsumer :: I.Contract -> I.ValidatedInitializer -> ConsumerReceipt -> Either String ()
-validateConsumer initializer validated (ConsumerReceipt InterruptMask start dispatch entered returned after roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code decoder aliases prelude watch) = do
+validateConsumer initializer validated (ConsumerReceipt InterruptMask start dispatch entered returned after roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code decoder aliases serviceAliases prelude watch) = do
   require (start == I.initializerExit validated) "consumer does not continue the independently validated initializer exit"
   let Context dispatchPc incoming sp lr cpsr dispatchCounts tcm = dispatch
       Context enteringPc entering enteringSp enteringLr enteringCpsr enteringCounts enteringTcm = entered
@@ -241,7 +253,7 @@ validateConsumer initializer validated (ConsumerReceipt InterruptMask start disp
     require (observed == source && B.length body == 4 * length words' && actual == words') "consumer code source readback differs"
   require (decoder == Decoder [1] [Nothing]) "consumer decoder identity or pending conversion differs"
   expectedTcm <- snapshotsFor start
-  validateAliases expectedTcm roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code aliases
+  validateAliases expectedTcm roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code aliases serviceAliases
   let rule cores kind mode spans = Rule cores kind mode spans [snapshot | snapshot@(TcmSnapshot core _ _) <- expectedTcm,core `elem` cores]
       writes = [CpuWrite,HostWrite,ModelBusWrite]
       immutable = map (uncurry physical) ([(0xddaa0,0xdf0cc),(0x96bd20,0x96bd28),(0x7caf34,0x7caf38)] ++ codeSpans ++ [(0xd0ab0,0xd0af0)])
@@ -324,13 +336,17 @@ validateEvents dispatch entered returned after incoming events = case events of
       require (source == expectedSource && core == Just 1 && address == guest && physicalAddress == Just physicalAddress' && width == 4
         && value == Just (fromIntegral expectedValue) && pc == Just expectedPc && order == Just LittleEndian && maybe False (\n -> n >= lower && n < upper) clock) "consumer CPU data event attribution or value differs"
 
-validateAliases :: [TcmSnapshot] -> Views -> Views -> Views -> Views -> Views -> Views -> Views -> [CodeViews] -> [Alias] -> Either String ()
-validateAliases snapshots roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code aliases = do
-  let resources slot frame table = [(0x96bd20,roots),(0xddc04,slot),(0xf3384,frame),(0xddaa0,table)] ++ [(fromIntegral (codeStart site),views) | CodeViews site views <- code]
+validateAliases :: [TcmSnapshot] -> Views -> Views -> Views -> Views -> Views -> Views -> Views -> [CodeViews] -> [Alias] -> [ServiceAlias] -> Either String ()
+validateAliases snapshots roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code aliases serviceAliases = do
+  let resources slot frame table = [(0x96bd20,roots),(0xddc04,slot),(0xf3384,frame),(0xddaa0,table)] ++ [(fromIntegral (codeStart site),views) | CodeViews site views <- code,site /= Service]
   before <- bindings (resources slotBefore frameBefore tableBefore)
   after <- bindings (resources slotAfter frameAfter tableAfter)
   require (aliases == before ++ after) "consumer dispatch/final low/high alias bindings differ from actual physical readbacks"
-  forM_ aliases $ \(Alias core guest _ size _) ->
+  let words' = ServiceWords [word | CodeRegion Service instructions <- codeRegions,word <- instructions]
+      expectedService = concat (replicate 2 [ServiceAlias core (0xd1140 + alias) 0xd1140 words' | core <- [0,1],alias <- [0,0x40000000]])
+      extents = [(core,guest,size) | Alias core guest _ size _ <- aliases] ++ [(core,guest,36) | ServiceAlias core guest _ _ <- serviceAliases]
+  require (serviceAliases == expectedService) "consumer dispatch/final direct-word service alias bindings differ"
+  forM_ extents $ \(core,guest,size) ->
     forM_ [bank | TcmSnapshot selected atcm btcm <- snapshots,selected == core,bank <- [atcm,btcm]] $ \bank -> case bank of
       BankSnapshot _ Nothing -> pure ()
       BankSnapshot _ (Just (Window (low,high))) ->
@@ -343,7 +359,7 @@ validateAliases snapshots roots slotBefore slotAfter frameBefore frameAfter tabl
         pure (base,fromIntegral (B.length bytes),digest)) resources
       pure [Alias core (base + alias) base size digest | core <- [0,1],(base,size,digest) <- digests,alias <- [0,0x40000000]]
 
-data ConsumerSemantics = ConsumerSemantics Context Context Context Context Views Views Views Views Views Views Views [CodeViews] Decoder [Alias] [Event] deriving (Eq)
+data ConsumerSemantics = ConsumerSemantics Context Context Context Context Views Views Views Views Views Views Views [CodeViews] Decoder [Alias] [ServiceAlias] [Event] deriving (Eq)
 
 compareReceipts :: (Contract,B.ByteString) -> (Contract,B.ByteString) -> Either String ()
 compareReceipts (retained@(Contract first _ _ _),retainedBytes) (owned@(Contract second _ _ _),ownedBytes) = do
@@ -352,9 +368,9 @@ compareReceipts (retained@(Contract first _ _ _),retainedBytes) (owned@(Contract
   secondEvidence <- validateEvidence owned ownedBytes
   require (semantic firstEvidence == semantic secondEvidence) "retained and owned actual consumer inputs, outputs or effects differ"
   where
-    semantic (ConsumerReceipt InterruptMask _ dispatch entered returned after roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code decoder aliases _ (ConsumerWatch (Watch _ _ events _ _ _ _ _) _ _ _)) =
+    semantic (ConsumerReceipt InterruptMask _ dispatch entered returned after roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code decoder aliases serviceAliases _ (ConsumerWatch (Watch _ _ events _ _ _ _ _) _ _ _)) =
       let origin = contextCounts dispatch
           relative = relativeContext origin
-       in ConsumerSemantics (relative dispatch) (relative entered) (relative returned) (relative after) roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code decoder aliases (map (relativeEvent (sum origin)) events)
+       in ConsumerSemantics (relative dispatch) (relative entered) (relative returned) (relative after) roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code decoder aliases serviceAliases (map (relativeEvent (sum origin)) events)
     relativeContext origin (Context pc registers sp lr cpsr counts tcm) = Context pc registers sp lr cpsr (zipWith (-) counts origin) tcm
     relativeEvent origin (Event source core address physicalAddress size value pc clock order) = Event source core address physicalAddress size value pc (subtract origin <$> clock) order
