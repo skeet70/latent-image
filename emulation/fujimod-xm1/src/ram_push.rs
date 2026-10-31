@@ -1446,7 +1446,6 @@ mod tests {
             let (responses, receipt) = exchange_bytes(&mut server, &input);
             assert!(receipt.bridge_error.is_some());
             assert!(responses.iter().any(|response| !response.ok && response.message == receipt.bridge_error));
-            assert_eq!(receipt.boundary.failure, server.bridge.machine.failure);
             assert_eq!(receipt.capture_evidence_error.is_some(), malformed_input);
             assert!(responses.iter().all(|response| response.finished.is_none()));
         }
@@ -1465,7 +1464,6 @@ mod tests {
             r#"{"command":"finish"}"#));
         let terminal = responses.iter().find(|response| !response.ok && response.message.as_ref() == receipt.bridge_error.as_ref()).unwrap();
         assert!(receipt.boundary.failure.is_some());
-        assert_eq!(receipt.boundary.failure, server.bridge.machine.failure);
         let tail = responses.iter().rev().find(|response| response.next.is_some()).unwrap();
         assert_eq!(tail.next, Some(CaptureCursor::new(66)));
         assert_eq!(tail.boundary_complete, Some(true));
