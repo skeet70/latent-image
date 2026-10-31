@@ -8,7 +8,7 @@ You combine the project's code with Fujifilm's official firmware, which you down
 
 ## 1. Set up once
 
-You need Linux x86_64 with [Nix and devenv](../README.md#try-it-on-your-host), an X-M1 on firmware 1.50, a USB micro-B cable, and a battery or dummy-battery supply you can pull with the camera on.
+You need Linux x86_64 with [Nix and devenv](../README.md#try-it-on-your-host), an X-M1 on firmware 1.50, a USB micro-B cable, and a battery or dummy-battery supply you can pull with the camera on. The emulator runs under a systemd user session and stops if it can't read the CPU temperature, so it needs an AMD (`k10temp`) or Intel (`coretemp`) sensor in `/sys/class/hwmon`; most virtual machines and WSL have neither.
 
 Download the official 1.50 `FWUP0002.DAT` from [Fujifilm](https://www.fujifilm-x.com/global/support/download/firmware/cameras/x-m1/) (SHA-256 `43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490`) to `private-data/firmware/x-m1-1.50/FWUP0002.DAT`, then decode the three firmware images experiments hook into:
 
