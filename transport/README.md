@@ -315,6 +315,8 @@ The preceding volatile bank used 253 publications (E-RAM-PUSH253-VOLATILE-RECOVE
 
 One installer and ABI header serve every payload kind (RAM-PUSH-MECHANISM-CONVERGE-01, #89). Each relinker specializes publication counts and ABI version with compiler definitions; the header refuses missing definitions. `RamPushLayout.hs` owns installer entry offsets and extent calculations, and the bank placement. `FujiAF.RamPush` carries the transport-side layout contract, checked against that module by `//transport:ram-push-tests`. Historical mechanism reviews do not approve the combined bank/Classic Chrome ABI 5 candidate.
 
+`RamPushLayoutProvenanceRefresh` covers the standalone Classic Chrome and icon builder identities; `ToggleMainProvenanceRefresh` covers the USB-toggle builder and shared BUILD/layout identities. Reference-base relinks preserve their reviewed runtime bytes and publication contracts. These reviews do not approve the combined bank.
+
 ## Classic Chrome payload
 
 Standalone Classic Chrome uses allocation `0x1560` with ABI 3, 84 setup and 47 activation publications. Its icon candidate uses `0x21fc`. These remain separate from the combined bank candidate. The standalone relinker uses `build-classic-chrome-ram.sh` and `build-classic-chrome-ram`; it links only `classic_chrome_ram.S` and the generic installer, checks the pinned RC0-to-flash delta shape through `FujiAF.ClassicChromeRam`, and overlays the parameter block at `cc_ram_data`. No bank ELF allowlist applies to the standalone payload.
