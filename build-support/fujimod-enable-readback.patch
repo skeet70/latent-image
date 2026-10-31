@@ -343,9 +343,9 @@ diff --git a/crates/emulator-exr2-isp-input/src/tests/input.rs b/crates/emulator
 +}
 +#[test]
 +fn primary_bit0_reset_cancels_edges_and_restarts_after_reset_completion() {
-+    for (mask, expected) in [
-+        (1, &[(0, 39)][..]),
-+        (0x10003, &[(0, 39), (1, 41)][..]),
++    for (mask, expected_readback, expected) in [
++        (1, 1, &[(0, 39)][..]),
++        (0x10003, 0x10201, &[(0, 39), (1, 41)][..]),
 +    ] {
 +        let mut h = TestHost::new();
 +        let mut d = primary_gate_device(Some(InputEnablePrimaryGate::SourceBit0));
@@ -358,7 +358,7 @@ diff --git a/crates/emulator-exr2-isp-input/src/tests/input.rs b/crates/emulator
 +        assert!(h.irqs.is_empty());
 +        advance(&mut d, &mut h, 11);
 +        assert_eq!(read(&mut d, &mut h, 0xfff10000), 1);
-+        assert_eq!(read(&mut d, &mut h, 0xfff1038c), u64::from(mask));
++        assert_eq!(read(&mut d, &mut h, 0xfff1038c), expected_readback);
 +        advance(&mut d, &mut h, 20);
 +        assert!(h.irqs.is_empty());
 +        advance(&mut d, &mut h, 21);
