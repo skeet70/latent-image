@@ -11,10 +11,12 @@ import Emulation.EmulatorSlot (attachGuard, reexecInSlot, slotPolicyFromEnvironm
 import Emulation.FirstStageWitness (leWordAt, sha256Hex)
 import Emulation.PeerStageWitness
 import qualified Emulation.PeerWaitWitness as W
+import qualified Emulation.LoaderPrefixWitness as L
 import qualified Emulation.PeerStartupWitness as S
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Runtime (..), Workspace, freshRuntime, resolve, validateFirmware, workspace)
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.Host as H
+import qualified FujiAF.CompletionControl as Completion
 import qualified FujiAF.PeerWaitControl as C
 import qualified FujiAF.UpdateContainer as U
 import System.Directory (canonicalizePath, doesFileExist)
@@ -39,6 +41,8 @@ data SourceInput = StockSource U.Parsed | ControlledSource C.ControlArtifact
 -- | Candidate image, candidate symbols and source DAT for an owned program.
 data StartupProgram = RetainedStartup | OwnedStartup FilePath FilePath FilePath (Maybe S.StartupFault)
 
+data LoaderProgram = RetainedLoader | OwnedLoader FilePath FilePath FilePath
+
 data Options
   = Consume FilePath Argument
   | ConsumeControl FilePath FilePath
@@ -46,6 +50,9 @@ data Options
   | ConsumeStartup FilePath FilePath
   | CompareStartup FilePath FilePath FilePath FilePath
   | PrepareStartup FilePath FilePath FilePath S.Scenario StartupProgram Launch
+  | ConsumeLoaderPrefix FilePath FilePath
+  | CompareLoaderPrefix FilePath FilePath FilePath FilePath
+  | PrepareLoaderPrefix FilePath FilePath FilePath L.Scenario LoaderProgram Launch
 
 usage :: String
 usage = unlines
@@ -57,18 +64,24 @@ usage = unlines
   , "       peer-stage-witness --startup retained|owned --scenario natural|held-sentinel|delayed-release [--endpoint handoff|loader-entry] --firmware DAT --fflzd FFLZD --output DIR [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT] [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
   , "       peer-stage-witness --startup-receipt FILE --startup-contract FILE"
   , "       peer-stage-witness --compare RETAINED_RECEIPT RETAINED_CONTRACT OWNED_RECEIPT OWNED_CONTRACT"
+  , "       peer-stage-witness --loader-prefix retained|owned --scenario natural|held|delayed|non-one --firmware DAT --fflzd FFLZD --output DIR [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT] [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
+  , "       peer-stage-witness --loader-prefix-receipt FILE --loader-prefix-contract FILE"
+  , "       peer-stage-witness --compare-loader-prefix RETAINED_RECEIPT RETAINED_CONTRACT OWNED_RECEIPT OWNED_CONTRACT"
   , "Natural preparation writes peer-witness-contract.json and peer-witness-expected.json without starting an emulator."
   , "Launch requires an explicit driver, run description and captured 16 KiB ROM."
   , "Control preparation preserves the input and writes peer-witness-contract.json, peer-control.DAT and peer-control-manifest.json instead of the natural expected-policy file."
   , "Startup preparation writes a schema-3 peer-witness-contract.json and peer-startup-expected.json; --endpoint is required for natural and delayed-release and refused for held-sentinel."
   , "Owned startup requires --firmware to be the owned-staged DAT (staged on the control DAT for controls) and the candidate image, symbols and original DAT it was staged from."
   , "Owned --startup-fault retired-stock-fetch requires --scenario natural --endpoint handoff and a candidate calling retired stock stub_a; the schema-3 producer must refuse it on core 1 at 0x12960."
+  , "Loader-prefix preparation writes a schema-4 peer-witness-contract.json and loader-prefix-expected.json. Retained --firmware is the original DAT; held, delayed and non-one write their completion control as loader-prefix-control.DAT. Owned --firmware is the DAT build-loader-prefix staged onto the original or that control DAT."
   ]
 
 data Flag
   = ReceiptFile | ArgumentWord | ControlReceiptFile | ControlManifestFile | ControlMode | FirmwareFile | FflzdFile | OutputDirectory | DriverFile | RunFile | RomFile
   | StartupMode | ScenarioKind | EndpointName | CandidateImageFile | CandidateSymbolsFile | SourceFirmwareFile | StartupFaultName
   | StartupReceiptFile | StartupContractFile | CompareRetainedFile | CompareRetainedContract | CompareOwnedFile | CompareOwnedContract
+  | LoaderPrefixMode | LoaderPrefixReceiptFile | LoaderPrefixContractFile
+  | LoaderCompareRetainedFile | LoaderCompareRetainedContract | LoaderCompareOwnedFile | LoaderCompareOwnedContract
   deriving (Eq)
 
 parseOptions :: [String] -> Either String Options
@@ -82,8 +95,34 @@ parseOptions arguments = do
         else do
           unless (all ((`notElem` [DriverFile,RunFile,RomFile]) . fst) values) (Left "driver/run/ROM require --launch")
           pure PrepareOnly
-      candidateFlags = [CandidateImageFile,CandidateSymbolsFile,SourceFirmwareFile,StartupFaultName]
-  case (value StartupReceiptFile, value CompareRetainedFile, value StartupMode) of
+      candidateFlags = [CandidateImageFile,CandidateSymbolsFile,SourceFirmwareFile]
+      startupFlags = candidateFlags ++ [StartupFaultName]
+      loaderFlags = [LoaderPrefixMode,LoaderPrefixReceiptFile,LoaderPrefixContractFile,LoaderCompareRetainedFile]
+      loaderProgram mode = case mode of
+        "retained" -> do
+          unless (all ((`notElem` candidateFlags) . fst) values) (Left "retained loader prefix refuses --candidate-image, --candidate-symbols and --source-firmware")
+          pure RetainedLoader
+        "owned" -> OwnedLoader <$> need "--candidate-image" CandidateImageFile <*> need "--candidate-symbols" CandidateSymbolsFile
+          <*> need "--source-firmware" SourceFirmwareFile
+        _ -> Left "--loader-prefix must be retained or owned"
+      loaderOptions = case (value LoaderPrefixMode, value LoaderPrefixReceiptFile, value LoaderCompareRetainedFile) of
+        (Just mode, Nothing, Nothing) -> do
+          only ([FirmwareFile,FflzdFile,OutputDirectory,DriverFile,RunFile,RomFile,LoaderPrefixMode,ScenarioKind] ++ candidateFlags)
+          scenario <- need "--scenario" ScenarioKind >>= L.parseScenario
+          chosen <- loaderProgram mode
+          PrepareLoaderPrefix <$> need "--firmware" FirmwareFile <*> need "--fflzd" FflzdFile <*> need "--output" OutputDirectory
+            <*> pure scenario <*> pure chosen <*> launchMode
+        (Nothing, Just path, Nothing) -> do
+          only [LoaderPrefixReceiptFile,LoaderPrefixContractFile]
+          when launch (Left "receipt mode cannot launch")
+          ConsumeLoaderPrefix path <$> need "--loader-prefix-contract" LoaderPrefixContractFile
+        (Nothing, Nothing, Just retained) -> do
+          only [LoaderCompareRetainedFile,LoaderCompareRetainedContract,LoaderCompareOwnedFile,LoaderCompareOwnedContract]
+          when launch (Left "comparison mode cannot launch")
+          CompareLoaderPrefix retained <$> need "--compare-loader-prefix" LoaderCompareRetainedContract
+            <*> need "--compare-loader-prefix" LoaderCompareOwnedFile <*> need "--compare-loader-prefix" LoaderCompareOwnedContract
+        _ -> Left ("loader-prefix preparation, receipt and comparison modes are mutually exclusive\n" ++ usage)
+  if any ((`elem` loaderFlags) . fst) values then loaderOptions else case (value StartupReceiptFile, value CompareRetainedFile, value StartupMode) of
     (Nothing, Nothing, Nothing) -> case (value ReceiptFile, value ControlReceiptFile) of
       (Just path, Nothing) -> do
         only [ReceiptFile,ArgumentWord]
@@ -111,11 +150,11 @@ parseOptions arguments = do
       when launch (Left "comparison mode cannot launch")
       CompareStartup retained <$> need "--compare" CompareRetainedContract <*> need "--compare" CompareOwnedFile <*> need "--compare" CompareOwnedContract
     (Nothing, Nothing, Just mode) -> do
-      only ([FirmwareFile,FflzdFile,OutputDirectory,DriverFile,RunFile,RomFile,StartupMode,ScenarioKind,EndpointName] ++ candidateFlags)
+      only ([FirmwareFile,FflzdFile,OutputDirectory,DriverFile,RunFile,RomFile,StartupMode,ScenarioKind,EndpointName] ++ startupFlags)
       scenario <- need "--scenario" ScenarioKind >>= \kind -> startupScenario kind (value EndpointName)
-      program <- case mode of
+      startupProgram <- case mode of
         "retained" -> do
-          unless (all ((`notElem` candidateFlags) . fst) values) (Left "retained startup refuses candidate and startup-fault options")
+          unless (all ((`notElem` startupFlags) . fst) values) (Left "retained startup refuses candidate and startup-fault options")
           pure RetainedStartup
         "owned" -> OwnedStartup <$> need "--candidate-image" CandidateImageFile <*> need "--candidate-symbols" CandidateSymbolsFile
           <*> need "--source-firmware" SourceFirmwareFile <*> traverse S.parseStartupFault (value StartupFaultName)
@@ -123,7 +162,7 @@ parseOptions arguments = do
       firmware <- need "--firmware" FirmwareFile
       fflzd <- need "--fflzd" FflzdFile
       output <- need "--output" OutputDirectory
-      PrepareStartup firmware fflzd output scenario program <$> launchMode
+      PrepareStartup firmware fflzd output scenario startupProgram <$> launchMode
     _ -> Left "startup receipt, comparison and startup preparation modes are mutually exclusive"
   where
     collect values launch [] = Right (values,launch)
@@ -134,6 +173,11 @@ parseOptions arguments = do
       when (CompareRetainedFile `elem` map fst values) (Left "duplicate option: --compare")
       collect ((CompareOwnedContract,ownedContract):(CompareOwnedFile,owned):(CompareRetainedContract,retainedContract):(CompareRetainedFile,retained):values) launch rest
     collect _ _ ("--compare":_) = Left ("--compare requires " ++ compareOperands ++ "\n" ++ usage)
+    collect values launch ("--compare-loader-prefix":retained:retainedContract:owned:ownedContract:rest) = do
+      when (any (\entry -> null entry || take 2 entry == "--") [retained,retainedContract,owned,ownedContract]) (Left ("--compare-loader-prefix requires " ++ compareOperands))
+      when (LoaderCompareRetainedFile `elem` map fst values) (Left "duplicate option: --compare-loader-prefix")
+      collect ((LoaderCompareOwnedContract,ownedContract):(LoaderCompareOwnedFile,owned):(LoaderCompareRetainedContract,retainedContract):(LoaderCompareRetainedFile,retained):values) launch rest
+    collect _ _ ("--compare-loader-prefix":_) = Left ("--compare-loader-prefix requires " ++ compareOperands ++ "\n" ++ usage)
     collect values launch (name:entry:rest) = do
       flag <- case name of
         "--receipt" -> Right ReceiptFile
@@ -156,6 +200,9 @@ parseOptions arguments = do
         "--startup-fault" -> Right StartupFaultName
         "--startup-receipt" -> Right StartupReceiptFile
         "--startup-contract" -> Right StartupContractFile
+        "--loader-prefix" -> Right LoaderPrefixMode
+        "--loader-prefix-receipt" -> Right LoaderPrefixReceiptFile
+        "--loader-prefix-contract" -> Right LoaderPrefixContractFile
         _ -> Left ("unknown option: " ++ name ++ "\n" ++ usage)
       when (null entry || take 2 entry == "--") (Left ("missing value for " ++ name))
       when (flag `elem` map fst values) (Left ("duplicate option: " ++ name))
@@ -421,6 +468,85 @@ prepareStartup root firmwarePath fflzdPath outputPath scenario choice execution 
       , "error" .= ("startup forbidden fetch of retired stock code at 0x12960 on core 1" :: String)
       ]
 
+readLoaderContract :: FilePath -> IO L.Contract
+readLoaderContract path = H.readRegular (1024 * 1024) path >>= either H.failH pure . L.parseContract
+
+readLoaderReceipt :: FilePath -> IO L.Receipt
+readLoaderReceipt path = H.readRegular L.maxReceiptBytes path >>= either H.failH pure . L.parseReceipt
+
+consumeLoaderPrefix :: FilePath -> L.Contract -> IO L.ValidatedReceipt
+consumeLoaderPrefix path contract = do
+  receipt <- readLoaderReceipt path
+  accepted <- either H.failH pure (L.validateReceipt contract receipt)
+  putStrLn ("loader-prefix receipt accepted: " ++ path)
+  pure accepted
+
+compareLoaderPrefix :: FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+compareLoaderPrefix retainedPath retainedContractPath ownedPath ownedContractPath = do
+  retained <- (,) <$> readLoaderContract retainedContractPath <*> readLoaderReceipt retainedPath
+  owned <- (,) <$> readLoaderContract ownedContractPath <*> readLoaderReceipt ownedPath
+  either H.failH pure (L.compareReceipts retained owned)
+  putStrLn ("loader-prefix comparison accepted: " ++ retainedPath ++ " " ++ ownedPath)
+
+-- | The original DAT, qualified, and the DAT the scenario's completion control
+-- makes of it.
+loaderReference :: FilePath -> L.Scenario -> IO B.ByteString
+loaderReference originalPath scenario = do
+  original <- H.readRegular maxContainer originalPath
+  _ <- qualifySource NaturalBaseline (Firmware originalPath) original
+  case L.scenarioControl scenario of
+    Nothing -> pure original
+    Just control -> Completion.controlBytes <$> either H.failH pure (Completion.buildCompletionControl control original)
+
+prepareLoaderPrefix :: Workspace -> FilePath -> FilePath -> FilePath -> L.Scenario -> LoaderProgram -> Launch -> IO ()
+prepareLoaderPrefix root firmwarePath fflzdPath outputPath scenario choice execution = do
+  datPath <- canonicalizePath (resolve root firmwarePath)
+  let fflzd = resolve root fflzdPath
+  Runtime output <- freshRuntime root (Just (Runtime outputPath)) (UniqueRuntime "peer-stage-witness")
+  (launchedPath, launchedBytes, kind, facts) <- case choice of
+    RetainedLoader -> do
+      reference <- loaderReference datPath scenario
+      launched <- case L.scenarioControl scenario of
+        Nothing -> pure datPath
+        Just _ -> do
+          let path = output </> "loader-prefix-control.DAT"
+          B.writeFile path reference
+          pure path
+      images <- either H.failH pure (L.stagedImages reference)
+      facts <- either H.failH pure (L.retainedFacts images)
+      pure (launched, reference, L.RetainedProgram, facts)
+    OwnedLoader imagePath symbolsPath originalPath -> do
+      reference <- canonicalizePath (resolve root originalPath) >>= \path -> loaderReference path scenario
+      staged <- H.readRegular maxContainer datPath
+      bin <- H.readRegular maxCandidateImage (resolve root imagePath)
+      symbols <- H.readRegular maxCandidateSymbols (resolve root symbolsPath)
+      images <- either H.failH pure (L.verifyStagedOwned reference staged bin symbols)
+      facts <- either H.failH pure (L.deriveOwnedFacts bin symbols images)
+      pure (datPath, staged, L.OwnedProgram, facts)
+  parsed <- either H.failH pure (U.parseContainer launchedBytes)
+  image4 <- decodeImage4 fflzd output (U.parsedParts parsed)
+  argumentWord <- either H.failH pure (leWordAt image4 0xc)
+  H.ensure (argumentWord == 0x69cdf8) "decoded image-4 argument differs from 0x69cdf8"
+  let contract = L.Contract scenario (L.Program kind facts)
+      contractPath = output </> "peer-witness-contract.json"
+      receipt = output </> "peer-witness.json"
+  BL.writeFile contractPath (encode (L.contractValue contract))
+  BL.writeFile (output </> "loader-prefix-expected.json") (encode (object
+    [ "schema" .= (4 :: Int), "scenario" .= L.scenarioName scenario, "program" .= L.programKindName kind
+    , "firmware" .= launchedPath, "firmware_sha256" .= sha256Hex launchedBytes
+    , "record_sha256" .= F.sha256Hex (L.factRecord facts), "loader_sha256" .= F.sha256Hex (L.factLoader facts)
+    , "argument" .= argumentWord
+    ]))
+  case execution of
+    PrepareOnly -> do
+      putStrLn ("loader-prefix preparation: " ++ output)
+      putStrLn ("receipt consumer: " ++ showCommandForUser "peer-stage-witness" ["--loader-prefix-receipt",receipt,"--loader-prefix-contract",contractPath])
+      putStrLn "launch requires a separate explicit --launch invocation with --driver, --run and --boot-rom"
+    Launch driver run rom -> launchDriver root output contractPath receipt (Firmware launchedPath) driver run rom $ do
+      accepted <- consumeLoaderPrefix receipt contract
+      observed <- either H.failH pure (L.receiptArgument accepted)
+      H.ensure (observed == argumentWord) "handoff argument differs from the decoded image-4 argument"
+
 main :: IO ()
 main = do
   args <- getArgs
@@ -480,3 +606,12 @@ main = do
         PrepareStartup firmwarePath fflzdPath outputPath scenario program execution -> do
           enterSlot args execution
           prepareStartup root firmwarePath fflzdPath outputPath scenario program execution
+        ConsumeLoaderPrefix path contractPath -> do
+          contract <- readLoaderContract (resolve root contractPath)
+          _ <- consumeLoaderPrefix (resolve root path) contract
+          pure ()
+        CompareLoaderPrefix retainedPath retainedContractPath ownedPath ownedContractPath ->
+          compareLoaderPrefix (resolve root retainedPath) (resolve root retainedContractPath) (resolve root ownedPath) (resolve root ownedContractPath)
+        PrepareLoaderPrefix firmwarePath fflzdPath outputPath scenario program execution -> do
+          enterSlot args execution
+          prepareLoaderPrefix root firmwarePath fflzdPath outputPath scenario program execution

@@ -535,6 +535,57 @@ haskell_test(
     ],
 )
 
+haskell_library(
+    name = "loader-prefix-witness-lib",
+    srcs = ["Emulation/LoaderPrefixWitness.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":peer-stage-witness-lib",
+        ":poll-period-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:completion-control",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:json",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_test(
+    name = "loader-prefix-witness-tests",
+    size = "small",
+    srcs = ["LoaderPrefixWitnessTests.hs"],
+    args = [
+        "$(location //replacement/loader_prefix:loader-prefix-image.bin)",
+        "$(location //replacement/loader_prefix:loader-prefix-image.symbols)",
+        "$(location //replacement/loader_prefix:loader-prefix-core-refusal-image.bin)",
+        "$(location //replacement/loader_prefix:loader-prefix-core-refusal-image.symbols)",
+    ],
+    data = [
+        "//replacement/loader_prefix:loader-prefix-core-refusal-image.bin",
+        "//replacement/loader_prefix:loader-prefix-core-refusal-image.symbols",
+        "//replacement/loader_prefix:loader-prefix-image.bin",
+        "//replacement/loader_prefix:loader-prefix-image.symbols",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":loader-prefix-witness-lib",
+        ":peer-stage-witness-lib",
+        ":poll-period-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:completion-control",
+        "//host:first-stage",
+        "//host:vector",
+    ],
+)
+
 haskell_binary(
     name = "peer-stage-witness",
     srcs = ["PeerStageWitness.hs"],
@@ -544,6 +595,7 @@ haskell_binary(
     deps = [
         ":emulator-slot-lib",
         ":first-stage-witness-lib",
+        ":loader-prefix-witness-lib",
         ":peer-stage-witness-lib",
         ":peer-startup-witness-lib",
         ":peer-wait-witness-lib",
@@ -553,6 +605,7 @@ haskell_binary(
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
+        "//host:completion-control",
         "//host:first-stage",
         "//host:host-support",
         "//host:peer-wait-control",
