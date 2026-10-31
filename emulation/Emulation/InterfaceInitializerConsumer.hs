@@ -304,8 +304,9 @@ validatePrelude start dispatch table events = do
   forM_ events $ \(Event source core address physicalAddress width value pc clock order) -> do
     require (core == Just 0 || core == Just 1) "consumer prelude event has no supported CPU attribution"
     require (width == 4 && order == Just LittleEndian) "consumer prelude access width or byte order differs"
-    let terminalFetch = source == CpuFetch && core == Just 1 && pc == Just 0x723600
-    require (if terminalFetch then clock == Just (upper + 1) else maybe False (<= upper) clock) "consumer preexecution fetch or completed instruction clock differs"
+    let targetFetch = source == CpuFetch && pc == Just 0x723600
+        upperBound = upper + if targetFetch then 1 else 0
+    require (if targetFetch && core == Just 1 then clock == Just (upper + 1) else maybe False (<= upperBound) clock) "consumer preexecution fetch or completed instruction clock differs"
     case source of
       CpuFetch -> do
         let declared = any (\(low,high) -> address >= low && address < high && address .&. 3 == 0) ((0xd0ab0,0xd0af0):take 3 codeSpans)
