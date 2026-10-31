@@ -143,7 +143,7 @@ addressValue :: GuestAddress -> Word32
 addressValue (GuestAddress address) = address
 
 aliasValue :: GuestAddress -> Value
-aliasValue guest = object ["guest" .= addressValue guest, "physical" .= (addressValue guest .&. 0xbfffffff)]
+aliasValue guest = object ["guest" .= addressValue guest, "candidate_physical" .= (addressValue guest .&. 0xbfffffff)]
 
 contractValue :: StagedImage4 -> Value
 contractValue (StagedImage4 (CanonicalSource _ _ source original primary secondary) (LinkedArtifact _ linked symbols rustStart rustEnd) staged) =
