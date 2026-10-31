@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.CaptureStream
   ( Cursor, initialCursor, cursorValue, Instructions, instructionValue
@@ -25,7 +26,7 @@ import Data.Aeson.Key (Key)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
-import Data.List (foldl', nub)
+import Data.List (nub)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Word (Word32, Word64)
@@ -37,14 +38,14 @@ import System.Posix.IO (OpenMode (ReadOnly), closeFd, defaultFileFlags, handleTo
 import System.Posix.Types (Fd)
 import System.Posix.Unistd (fileSynchronise)
 
-newtype Cursor = Cursor Word64 deriving (Eq, Ord, Show, Generic, NFData)
-newtype Instructions = Instructions Word64 deriving (Eq, Ord, Show, Generic, NFData)
-newtype SiteLabel = SiteLabel T.Text deriving (Eq, Ord, Generic, NFData)
-newtype Address = Address Word32 deriving (Eq, Ord, Generic, NFData)
-newtype Core = Core Word64 deriving (Generic, NFData)
-newtype Register = Register Word32 deriving (Generic, NFData)
-newtype RamBytes = RamBytes T.Text deriving (Generic, NFData)
-newtype RequestedBytes = RequestedBytes Word64 deriving (Generic, NFData)
+newtype Cursor = Cursor Word64 deriving stock (Eq, Ord, Show, Generic) deriving newtype NFData
+newtype Instructions = Instructions Word64 deriving stock (Eq, Ord, Show, Generic) deriving newtype NFData
+newtype SiteLabel = SiteLabel T.Text deriving stock (Eq, Ord, Generic) deriving newtype NFData
+newtype Address = Address Word32 deriving stock (Eq, Ord, Generic) deriving newtype NFData
+newtype Core = Core Word64 deriving stock Generic deriving newtype NFData
+newtype Register = Register Word32 deriving stock Generic deriving newtype NFData
+newtype RamBytes = RamBytes T.Text deriving stock Generic deriving newtype NFData
+newtype RequestedBytes = RequestedBytes Word64 deriving stock Generic deriving newtype NFData
 
 instance FromJSON Cursor where parseJSON v = Cursor <$> parseJSON v
 instance ToJSON Cursor where toJSON = toJSON . cursorValue

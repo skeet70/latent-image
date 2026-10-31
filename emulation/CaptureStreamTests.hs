@@ -14,8 +14,10 @@ import Emulation.CaptureStream
 import System.Directory (createDirectory, getTemporaryDirectory, removeDirectoryRecursive, removeFile)
 import System.FilePath ((</>))
 import System.IO (IOMode (ReadMode), hClose, openBinaryTempFile, withBinaryFile)
-import System.IO.Error (isPermissionError)
+import System.IO.Error (catchIOError, isEOFError, isPermissionError)
 import System.Posix.Files (setFileMode)
+import System.Posix.IO (OpenMode (ReadOnly), closeFd, defaultFileFlags, openFd)
+import System.Posix.IO.ByteString (fdRead)
 
 check :: String -> Bool -> IO ()
 check name holds = unless holds (fail name)
@@ -220,18 +222,25 @@ coverageTests = do
   check "RAM gap stays separate from detail loss" (field "detail_loss" (coverageValue ramGap) == Just (Bool False)
     && field "retained_event_ram_context_gap" (coverageValue ramGap) == Just (Bool True))
 
+readOpenJournal :: FilePath -> IO B.ByteString
+readOpenJournal path = bracket (openFd path ReadOnly defaultFileFlags) closeFd $ \fd ->
+  let collect chunks = do
+        chunk <- catchIOError (fdRead fd 4096) (\err -> if isEOFError err then pure B.empty else ioError err)
+        if B.null chunk then pure (B.concat (reverse chunks)) else collect (chunk : chunks)
+  in collect []
+
 ioTests :: IO ()
 ioTests = do
   withTemp $ \path -> do
     journal <- openJournal path
     let fixture = page 0 1 1 100 True [event 0 100 0]
     parsed <- journalPage journal initialCursor fixture
-    persisted <- B.readFile path >>= right . eitherDecodeStrict'
+    persisted <- readOpenJournal path >>= right . eitherDecodeStrict'
     check "complete page persisted before acknowledgement becomes available" (persisted == object ["label" .= ("capture-observation-page" :: T.Text), "value" .= fixture])
     check "durable page yields exact acknowledgement cursor" (ackRequest (pageNext parsed) == object ["command" .= ("capture-observation-ack" :: T.Text), "next" .= (1 :: Int)])
     check "refused acknowledgement leaves journal evidence intact" (isLeft (validateAck (pageNext parsed) 0
       (object ["acknowledged" .= (0 :: Int), "pending" .= (1 :: Int)])))
-    afterRefusal <- B.readFile path >>= right . eitherDecodeStrict'
+    afterRefusal <- readOpenJournal path >>= right . eitherDecodeStrict'
     check "acknowledgement refusal does not erase or replace the page" (afterRefusal == persisted)
     closeJournal journal
     failed <- try (journalPage journal initialCursor fixture) :: IO (Either IOException Page)
@@ -252,7 +261,7 @@ ioTests = do
       bracket (openJournal path) closeJournal $ \journal -> do
         let fixture = page 0 1 1 100 True [event 0 100 0]
         _ <- journalPage journal initialCursor fixture
-        persisted <- B.readFile path >>= right . eitherDecodeStrict'
+        persisted <- readOpenJournal path >>= right . eitherDecodeStrict'
         check "fresh output directory preserves its complete page"
           (persisted == object ["label" .= ("capture-observation-page" :: T.Text), "value" .= fixture])
   forM_ [0,4095,4096,1048576] $ \size -> withTemp $ \path -> do
