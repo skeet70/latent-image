@@ -434,6 +434,7 @@ enum Epoch { Boot, Loaded, Scoped }
 
 #[derive(Default)]
 struct Phase {
+    firststage_handoff: bool,
     entry: bool,
     posts: usize,
     gate: bool,
@@ -903,6 +904,9 @@ impl<'a> Runner<'a> {
         let contract = self.contract;
         let scenario = contract.scenario;
         let mut accepted = false;
+        if contract.startup.is_some() && matches!(label, Label::HeldGate | Label::DelayEntry | Label::CompletionStore) {
+            require(self.phase.firststage_handoff, "composed core-0 continuation precedes the observed first-stage handoff")?;
+        }
         match label {
             Label::Record1Entry => {
                 require(self.epoch == Epoch::Boot, "record-1 entry out of phase")?;
@@ -916,7 +920,7 @@ impl<'a> Runner<'a> {
                 self.add(machine, &[(contract.secondary_entry().0, Label::SecondaryEntry), (contract.handoff.0, Label::Record2Handoff)])?;
             }
             Label::FirstStageHandoff => {
-                require(self.epoch == Epoch::Loaded, "first-stage handoff out of phase")?;
+                require(self.epoch != Epoch::Boot && !self.phase.firststage_handoff, "first-stage handoff out of phase")?;
                 let startup = contract.startup.as_ref().ok_or("standalone contract reached composed handoff")?;
                 let stop = &self.stops[index];
                 require(stop.registers[2].0 == startup.handoff_target.0 && stop.registers[0] == startup.handoff_argument
@@ -924,6 +928,7 @@ impl<'a> Runner<'a> {
                     && word(machine, 0x4304)? == startup.handoff_argument
                     && word(machine, 0x4000c)?.0 == startup.handoff_target.0 && word(machine, 0x61c40c)? == startup.handoff_argument,
                     "composed first-stage handoff context or staged header differs")?;
+                self.phase.firststage_handoff = true;
                 self.remove(machine, startup.handoff.0)?;
             }
             Label::SecondaryEntry => {
@@ -936,11 +941,6 @@ impl<'a> Runner<'a> {
                 require(self.epoch == Epoch::Loaded, "record-2 handoff out of phase")?;
                 require(self.stops.iter().filter(|stop| stop.label == Label::SecondaryEntry).count() == 1
                     && self.initial_record_sha256.is_some(), "record-2 handoff precedes the full secondary-entry identity binding")?;
-                if contract.startup.is_some() {
-                    require([Label::FirstStageHandoff, Label::SecondaryEntry].into_iter()
-                        .all(|label| self.stops.iter().filter(|stop| stop.label == label).count() == 1),
-                        "composed record-2 handoff precedes the observed first-stage handoff or secondary entry")?;
-                }
                 let stop = &self.stops[index];
                 require(stop.registers[3].0 == contract.entry.0 && stop.registers[0].0 == ARGUMENT && stop.completion.0 == 0
                     && stop.cpsr.0 & 0x0100_02ff == 0xd3, "record-2 handoff target, argument, cell or mode differs")?;
@@ -1061,6 +1061,8 @@ impl<'a> Runner<'a> {
             require(self.stops[index].tcm == tcm || label == Label::Record2Handoff, "TCM registers changed after the handoff")?;
         }
         if accepted {
+            require(contract.startup.is_none() || self.phase.firststage_handoff,
+                "composed endpoint lacks the observed first-stage handoff")?;
             self.end_scoped(machine)?;
         }
         Ok(accepted)

@@ -568,3 +568,194 @@ fn ff80_advance_returns_backpressure_and_reaches_the_original_endpoint_after_dra
     assert_eq!(events.len(), 151);
     assert!(bridge.machine.failure.is_none());
 }
+
+#[cfg(feature = "scoped-watch")]
+mod composed_interleaving {
+    use super::*;
+    use fujimod_catalog::configuration::ResolvedConfiguration;
+    use sha2::{Digest, Sha256};
+
+    #[derive(Clone, Copy)]
+    enum FirstHandoff { Early, Late, Missing, Invalid }
+
+    #[derive(Deserialize, Debug, PartialEq, Eq)]
+    #[serde(rename_all = "kebab-case")]
+    enum Label {
+        #[serde(rename = "record-1-entry")]
+        Record1Entry,
+        FirstStageHandoff,
+        SecondaryEntry,
+        #[serde(rename = "record-2-handoff")]
+        Record2Handoff,
+        PrefixEntry,
+        PostLoad,
+        HeldGate,
+    }
+
+    #[derive(Deserialize)]
+    struct Stop {
+        label: Label,
+        core: usize,
+        counter: Option<Counter>,
+        watch_records: Option<usize>,
+    }
+
+    #[derive(Deserialize)]
+    struct Counter { count: u64, nonzero_count: u64 }
+
+    #[derive(Deserialize)]
+    struct Receipt {
+        result: ResultStatus,
+        machine_failure: Option<String>,
+        stops: Vec<Stop>,
+        initial_record_sha256: Option<String>,
+        handoff_record_immutable_sha256: Option<String>,
+        scoped_watch: Option<Watch>,
+    }
+
+    fn digest(bytes: &[u8]) -> String {
+        format!("{:x}", Sha256::digest(bytes))
+    }
+
+    fn branch(from: u32, to: u32) -> u32 {
+        0xea00_0000 | ((to.wrapping_sub(from + 8) >> 2) & 0x00ff_ffff)
+    }
+
+    fn put_word(bytes: &mut [u8], address: usize, value: u32) {
+        bytes[address..address + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    // The fixture executes handwritten ARM instructions, not recovered firmware.
+    fn observe(order: FirstHandoff) -> (Result<(), String>, Receipt) {
+        fujimod_emulator_exr2_board::register_board_builder();
+        fujimod_emulator_models::register();
+        let document = RunDocument::parse(include_bytes!("../data/xm1-150.json")).unwrap();
+        let resolved = ResolvedConfiguration::with_overlays(&document.catalog_configuration.0, &[]).unwrap();
+        let mut graph = fujimod_emulator::boot::graph::assemble_with_starts(
+            &resolved.reference, document.execution.instructions_per_tick, None, &[],
+        ).unwrap();
+        graph.decoders[0].initial = 1;
+        for (core, processor) in graph.processors.iter_mut().enumerate() {
+            processor.released = true;
+            processor.registers = vec![
+                (Register::Pc, if core == 0 { 0x6000 } else { 0x10400 }),
+                (Register::Pstate, 0xd3),
+                (arm::CORE[0], 0x69cdf8),
+                (arm::CORE[1], 0x70000011),
+                (arm::CORE[2], if matches!(order, FirstHandoff::Invalid) { 0x40024 } else { 0x40020 }),
+                (arm::CORE[3], 0x1042c),
+                (arm::CORE[4], if matches!(order, FirstHandoff::Early) { 1 } else { 600 }),
+                (arm::CORE[5], 0x400a0000),
+                (arm::CORE[13], 0x70000800),
+            ];
+        }
+        let mut board = graph.build(
+            factory::Options { engine: factory::Engine::Unicorn, translation_cache_bytes: 1 << 20 },
+            Bus::new(Mode::Strict), None,
+        ).unwrap();
+        board.set_execution_policy(ExecutionPolicy::Exact).unwrap();
+        let mut memory = vec![0; 0x61c410];
+        for (address, value) in [
+            (0x20, 0x6000),
+            (0x4300, 0x40020),
+            (0x4304, 0x69cdf8),
+            (0x6000, 0xee091f31), // MCR p15,0,r1,c9,c1,1.
+            (0x6004, 0xe2544001), // SUBS r4,r4,#1.
+            (0x6008, 0x1afffffd), // BNE 0x6004.
+            (0x600c, branch(0x600c, if matches!(order, FirstHandoff::Missing) { 0x40020 } else { 0x6020 })),
+            (0x6020, 0xe1a0f002),
+            (0x10020, 0x10400),
+            (0x10400, 0xee091f31),
+            (0x10404, branch(0x10404, 0x10420)),
+            (0x10420, 0xe1a0f003),
+            (0x1042c, 0xe59500c4), // LDR r0,[r5,#0xc4].
+            (0x10430, branch(0x10430, 0x1042c)),
+            (0x4000c, 0x40020),
+            (0x40020, branch(0x40020, 0x40a00)),
+            (0x40a00, 0xeafffffe),
+            (0x61c40c, 0x69cdf8),
+        ] {
+            put_word(&mut memory, address, value);
+        }
+        let mut immutable = Sha256::new();
+        immutable.update(&memory[0x10000..0x14c60]);
+        immutable.update(&memory[0x14c6c..0x14c80]);
+        let immutable = format!("{:x}", immutable.finalize());
+        let record1 = digest(&memory[..0x10000]);
+        let first_image = digest(&memory[0x6000..0x6040]);
+        let record2 = digest(&memory[0x10000..0x14c80]);
+        let second_image = digest(&memory[0x10400..0x10500]);
+        let loader = digest(&memory[0xd0000..0xddaa0]);
+        board.write_physical(0, &memory).unwrap();
+        let session = Session {
+            definition: serde_json::Value::Null, board, controls: None, contact_driver: None,
+            resources: Resources::default(), nodes: BTreeMap::new(), contacts: BTreeMap::new(), recording_frames: Default::default(),
+        };
+        let machine = Machine::new(document, session).unwrap();
+        let identity = "ab".repeat(32);
+        let contract = format!(r#"{{"schema":5,"budget":50000000,"scenario":{{"kind":"held"}},
+            "program":{{"kind":"owned","record_sha256":"{record2}","record_immutable_sha256":"{immutable}",
+            "loader_sha256":"{loader}","handoff":66592,"entry":66604,"load":66604,"post_load":66608,
+            "loaded_register":0,"poll_period":256,"image":[66560,66816],"refusal":null,
+            "forbid_fetch":[[852000,852168],[854444,854480],[854596,854628]],"forbid_read":[[852168,852220]]}},
+            "startup":{{"kind":"composed","record1_sha256":"{record1}","image_sha256":"{first_image}",
+            "symbols_sha256":"{identity}","source_sha256":"{identity}","image":[24576,24640],"entry":24576,
+            "handoff":24608,"handoff_target":262176,"handoff_argument":6934008,"secondary_entry":66560,
+            "secondary_image_sha256":"{second_image}","secondary_symbols_sha256":"{identity}",
+            "secondary_source_sha256":"{identity}"}}}}"#);
+        let output = std::env::temp_dir().join(format!(
+            "peer-composed-order-{}-{}", std::process::id(), OUTPUT.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir(&output).unwrap();
+        let result = peer_witness::run(machine, PeerContract::parse(contract.as_bytes()).unwrap(), &output);
+        let receipt = serde_json::from_slice(&std::fs::read(output.join("peer-witness.json")).unwrap()).unwrap();
+        std::fs::remove_dir_all(output).unwrap();
+        (result, receipt)
+    }
+
+    #[test]
+    fn composed_observation_accepts_both_cross_core_handoff_orders() {
+        for order in [FirstHandoff::Early, FirstHandoff::Late] {
+            let (result, receipt) = observe(order);
+            assert!(result.is_ok(), "{result:?}");
+            assert_eq!(receipt.result, ResultStatus::Passed);
+            assert!(receipt.machine_failure.is_none());
+            assert!(receipt.initial_record_sha256.is_some());
+            assert!(receipt.handoff_record_immutable_sha256.is_some());
+            let position = |label| receipt.stops.iter().position(|stop| stop.label == label).unwrap();
+            let first = position(Label::FirstStageHandoff);
+            let second = position(Label::Record2Handoff);
+            assert!(position(Label::Record1Entry) < first);
+            assert!(position(Label::SecondaryEntry) < second);
+            assert!(second < position(Label::PrefixEntry));
+            assert!(first < position(Label::HeldGate));
+            assert_eq!(first < second, matches!(order, FirstHandoff::Early));
+            assert_eq!(receipt.stops[first].core, 0);
+            if matches!(order, FirstHandoff::Late) {
+                assert!(position(Label::PrefixEntry) < first);
+                assert!(receipt.stops[first].counter.as_ref().is_some_and(|counter| counter.count > 0 && counter.nonzero_count == 0));
+                assert!(receipt.stops[first].watch_records.is_some());
+            } else {
+                assert!(receipt.stops[first].counter.is_none());
+            }
+            assert!(receipt.scoped_watch.unwrap().violation.is_none());
+        }
+    }
+
+    #[test]
+    fn composed_observation_refuses_missing_or_invalid_first_stage_handoff() {
+        for order in [FirstHandoff::Missing, FirstHandoff::Invalid] {
+            let (result, receipt) = observe(order);
+            assert!(result.is_err());
+            assert_eq!(receipt.result, ResultStatus::Failed);
+            assert!(receipt.machine_failure.is_none());
+            assert!(receipt.stops.iter().any(|stop| stop.label == Label::Record2Handoff));
+            assert!(receipt.stops.iter().any(|stop| stop.label == Label::PrefixEntry));
+            assert_eq!(
+                receipt.stops.iter().any(|stop| stop.label == Label::FirstStageHandoff),
+                matches!(order, FirstHandoff::Invalid),
+            );
+            assert!(receipt.scoped_watch.unwrap().violation.is_none());
+        }
+    }
+}
