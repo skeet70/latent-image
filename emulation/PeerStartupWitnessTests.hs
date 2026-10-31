@@ -310,6 +310,7 @@ receiptFor scenario program siteWords knobs = object
       , (1040, cpuRow "cpu-write" 1 (site siteClearStore) 0x40020004 0x20004 0 0x22b) ]
       ++ concat [(countsTime counts - 5, peerRead value) : [(time, peerRead 0x22b) | time <- earlier] | Load counts value earlier <- loads]
       ++ [(primaryClearTime, cpuRow "cpu-write" 0 0x1ff8 0x40020000 0x20000 0 0x22b) | not held]
+      ++ [(time, cpuRow "cpu-read" 0 0x2020 0x40020004 0x20004 0x22b 0x22b) | not control, time <- [1035, 1036]]
       ++ (if delayed then
            [(1100, cpuRow "cpu-read" 0 0x114 0x40020004 0x20004 poll poll)]
            ++ [(preclearTime period + 1, const (transferRow "host-read" physical)) | physical <- [0x20000, 0x20000, 0x20000, 0x20004, 0xa00c4, 0x14c80, 0x14c84]]
@@ -544,6 +545,9 @@ main = do
         ]
   forM_ resetRefusals $ \(label, time, row) ->
     assertLeft label (startup (Natural LoaderEntry) owned (receipt (Natural LoaderEntry) owned plain {knobExtraRows = [(time, row)]}))
+  forM_ [ ("primary peer-clear poll reads zero before the core-1 clear", cpuRow "cpu-read" 0 0x2020 0x40020004 0x20004 0 0 1037, 1037)
+        , ("primary peer-clear poll reads the sentinel after the core-1 clear", cpuRow "cpu-read" 0 0x2020 0x40020004 0x20004 0x22b 0x22b 1045, 1045) ] $
+    \(label, row, time) -> assertLeft label (startup (Natural LoaderEntry) owned (receipt (Natural LoaderEntry) owned plain {knobExtraRows = [(time, row)]}))
 
   -- Held-release TCM: enabled windows are accepted only when disjoint from every guarded view.
   forM_ [("disabled", 0), ("enabled at 0x70000000", 0x70000011)] $ \(label, atcm) ->

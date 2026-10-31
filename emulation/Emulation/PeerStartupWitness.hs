@@ -1227,7 +1227,7 @@ validateCursor rows time (WatchCursor offset) = do
       W.TransferRecord {} -> True
 
 data CpuRole
-  = Sentinel0 | Sentinel1 | CompletionWrite | PrimaryClearWrite | VeneerPoll | VeneerRead
+  = Sentinel0 | Sentinel1 | CompletionWrite | PrimaryClearWrite | VeneerPoll | PeerClearPoll
   | PeerPair | PeerClear | CellInit Word32 | TargetStore | ArgumentStore | TargetLoad | ArgumentLoad | TableRead
   deriving (Eq, Show)
 
@@ -1270,7 +1270,7 @@ classifyRow facts publication segment row = case row of
       , (CompletionWrite, at 0x1fec && attempt W.CpuWrite W.Core0 0xa00c4 0x400a00c4 0 0)
       , (PrimaryClearWrite, at 0x1ff8 && attempt W.CpuWrite W.Core0 0x20000 0x40020000 0 0x22b)
       , (VeneerPoll, at 0x114 && any (\value -> attempt W.CpuRead W.Core0 0x20004 0x40020004 value value) [0, 0x22b])
-      , (VeneerRead, at 0x2020 && attempt W.CpuRead W.Core0 0x20004 0x40020004 0 0)
+      , (PeerClearPoll, at 0x2020 && any (\value -> attempt W.CpuRead W.Core0 0x20004 0x40020004 value value) [0, 0x22b])
       , (PeerPair, atSite sitePeerLoad && W.cpuAccess row == W.CpuRead)
       , (PeerClear, atSite siteClearStore && attempt W.CpuWrite W.Core1 0x20004 0x40020004 0 0x22b)
       , (TargetStore, atSite siteTargetStore && publishes (\(entry, _) -> attempt W.CpuWrite W.Core1 0x14c80 0x14c80 entry 0))
@@ -1492,8 +1492,11 @@ checkStartupReceipt scenario program receipt = do
   require (length (having PeerPair) == pairCount) "peer_load reads outside the peer-loaded pairs"
   require (locatedTime peerClear > stopCount mainStop && locatedTime peerClear < stopCount firstLoad) "peer clear lies outside startup-main..first peer-loaded"
   require (locatedTime initTarget < locatedTime peerClear && locatedTime initArgument < locatedTime peerClear) "publication cells initialised after the peer clear"
+  require (all (\poll -> let pollTime = locatedTime poll; pollValue = W.cpuValue (locatedRow poll) in
+      (pollValue == Just 0x22b && pollTime < locatedTime peerClear) || (pollValue == Just 0 && pollTime > locatedTime peerClear)) (having PeerClearPoll))
+    "primary peer-clear poll value differs from the core-1 clear order"
   case (scenario, exitStop, endpoints) of
-    (HeldSentinel, _, _) -> mapM_ absent [PrimaryClearWrite, VeneerPoll, VeneerRead, TargetStore, ArgumentStore, TargetLoad, ArgumentLoad]
+    (HeldSentinel, _, _) -> mapM_ absent [PrimaryClearWrite, VeneerPoll, PeerClearPoll, TargetStore, ArgumentStore, TargetLoad, ArgumentLoad]
     (_, Just exit, handoffStop : _) -> do
       primaryClear <- unique PrimaryClearWrite
       targetStore <- unique TargetStore
@@ -1515,7 +1518,7 @@ checkStartupReceipt scenario program receipt = do
       require (tableValue recordPhysical 1 && tableValue (recordPhysical + 4) segmentHeader)
         "segment-table id and header reads through the bound mapping are absent"
       case scenario of
-        Natural _ -> mapM_ absent [VeneerPoll, VeneerRead]
+        Natural _ -> absent VeneerPoll
         _ -> pure ()
     _ -> Left "non-held scenario lacks the exit pair or handoff"
   -- 9, 10. controls
@@ -1577,7 +1580,7 @@ checkStartupReceipt scenario program receipt = do
         "CPU attempt intervenes before the committed clear readback"
       let polls = having VeneerPoll
       require (length polls <= 8192 && all ((> stopCount gate) . locatedTime) polls) "veneer polls exceed their bound or precede the gate"
-      require (all ((> readbackCount readback) . locatedTime) (having VeneerRead)) "veneer completion read precedes the committed clear"
+      require (all ((> readbackCount readback) . locatedTime) (having PeerClearPoll)) "primary peer-clear poll precedes the committed clear"
       require (locatedTime peerClear < stopCount ack) "acknowledgment precedes the peer clear"
       require (any (\poll -> W.cpuValue (locatedRow poll) == Just 0 && locatedTime poll > locatedTime peerClear && locatedTime poll < stopCount ack) polls)
         "acknowledgment lacks a veneer zero load after the peer clear"
