@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "tier": "RC1",
+  "origin": "host-authored",
+  "target": {
+    "model": "X-M1",
+    "firmware_version": "1.50",
+    "firmware_sha256": "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"
+  },
+  "recipes": [
+    {
+      "id": "warm-standard",
+      "name": "WARM STANDARD",
+      "film_simulation": "PROVIA/STANDARD",
+      "parameters": {
+        "dynamic_range": "200",
+        "highlight_tone": "MEDIUM HARD",
+        "shadow_tone": "MEDIUM SOFT",
+        "color": "HIGH",
+        "sharpness": "STANDARD",
+        "noise_reduction": "MEDIUM LOW",
+        "white_balance": { "mode": "AUTO" },
+        "iso": "400"
+      }
+    },
+    {
+      "id": "second-velvia",
+      "film_simulation": "Velvia/VIVID",
+      "parameters": {
+        "dynamic_range": "100",
+        "highlight_tone": "STANDARD",
+        "shadow_tone": "STANDARD",
+        "color": "MEDIUM HIGH",
+        "sharpness": "MEDIUM SOFT",
+        "noise_reduction": "LOW",
+        "white_balance": { "mode": "AUTO" },
+        "iso": "200"
+      }
+    }
+  ]
+}

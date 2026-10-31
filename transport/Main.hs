@@ -48,10 +48,13 @@ import RamPushToggleReviewedPins (reviewedToggleContract)
 
 data RouteSource = RoutesFixed | RoutesDerived FilePath
 data Operation = Identify | ReadConfig FilePath | EndSetting | ProbeRam | ReadLog | ProbeBootRom | ProbeArea2 | ProbeStraps | ProbeCode | ProbeOwnership | ProbeRoutes RouteSource | DumpRam DumpSegment | ReadMedia | ArmAutoAct DeviceStart | CommitF7 CommitDirection FilePath | ReadRam FilePath (Maybe (Int,Int)) | ProbeSdHost (Maybe (Int,Int)) | ReadBulk Int Int | RamAlloc Int | RamRelink FilePath | RamPush FilePath FilePath | RamFree FilePath | RamUnload FilePath
-data Command = Help | Live Operation (Maybe FilePath) | Rehearse Operation | DebugFlag DebugFlagStep (Maybe FilePath) | RamSession String Payload (Maybe FilePath)
+data Command = Help | Live Operation (Maybe FilePath) | Rehearse Operation | DebugFlag DebugFlagStep (Maybe FilePath) | RamSession String PinPolicy Payload (Maybe FilePath)
 
 -- | The guided debug-flag steps, each built from read-config or commit-f7.
 data DebugFlagStep = FlagStatus | FlagBackup | FlagEnable | FlagDisable
+
+-- | Whether a ram-session requires the relink to match the compiled pins.
+data PinPolicy = RequirePins | WaivePins
 
 operationName :: Operation -> String
 operationName Identify = "identify"
@@ -145,7 +148,8 @@ parse ["rehearse","ram-push",state,manifest] = Just (Rehearse (RamPush state man
 parse ["rehearse","ram-free",state] = Just (Rehearse (RamFree state))
 parse ["rehearse","ram-unload",state] = Just (Rehearse (RamUnload state))
 parse ("debug-flag":step:rest) = DebugFlag <$> debugFlagStep step <*> output rest
-parse ("ram-session":kind:rest) = RamSession kind <$> sessionPayload kind <*> output rest
+parse ("ram-session":kind:"--waive-pins":rest) = RamSession kind WaivePins <$> sessionPayload kind <*> output rest
+parse ("ram-session":kind:rest) = RamSession kind RequirePins <$> sessionPayload kind <*> output rest
 parse _ = Nothing
 
 output :: [String] -> Maybe (Maybe FilePath)
@@ -200,7 +204,7 @@ dispatch Help = putStr $ unlines
   , "debug-flag backup [OUTDIR]    read-config of the adjustment-42000 plan, the whole adjustment area; keeps window 0x000000 as private-data/debug-flag/reference-000000.bin when none is kept, else requires it to match outside 0x80/0x81/0xf7"
   , "debug-flag enable [OUTDIR]    commit-f7-enable with the kept reference"
   , "debug-flag disable [OUTDIR]   commit-f7-restore with the kept reference"
-  , "ram-session KIND [OUTDIR]     relink KIND at its reference base against the compiled pins, then ram-alloc, ram-relink and ram-push into OUTDIR/alloc, OUTDIR/link and OUTDIR/push; KIND is recipe-bank, classic-chrome, classic-chrome-icon or usb-toggle"
+  , "ram-session KIND [--waive-pins] [OUTDIR] relink KIND at its reference base against the compiled pins, then ram-alloc, ram-relink and ram-push into OUTDIR/alloc, OUTDIR/link and OUTDIR/push; KIND is recipe-bank, classic-chrome, classic-chrome-icon or usb-toggle. --waive-pins skips the source-identity and publication-contract comparison and pushes the relink as built; the builders' own input checks, the bank ELF allowlist and the installer's old-word checks still run"
   , "rehearse identify|read-config PLAN_JSON|end-setting|probe-ram|read-log|probe-bootrom|probe-area2|probe-straps|probe-code|probe-ownership|probe-routes fixed|probe-routes derived PLAN_JSON|dump-ram SEGMENT|read-media|arm-auto-act|commit-f7-enable REFERENCE_BIN|commit-f7-restore REFERENCE_BIN|read-ram PLAN_JSON [--repeat N --interval-ms M]|probe-sd-host [--repeat N --interval-ms M]|read-bulk ADDRESS LENGTH|ram-alloc SIZE|ram-push STATE MANIFEST|ram-free STATE|ram-unload STATE"
   , "--help"
   , "OUTDIR must be absolute and must not exist; it is created with mode 0700."
@@ -239,7 +243,7 @@ dispatch (Rehearse (RamFree path)) = readRamAllocState path >>= rehearseRamFree
 dispatch (Rehearse (RamUnload path)) = readRamPushState path >>= rehearseRamUnload
 dispatch (Rehearse (RamRelink _)) = P.reject "ram-relink has no rehearsal"
 dispatch (DebugFlag step requested) = debugFlag step requested
-dispatch (RamSession kind payload requested) = ramSession kind payload requested
+dispatch (RamSession kind policy payload requested) = ramSession kind policy payload requested
 dispatch (Live operation requested) = case operation of
   Identify -> withOutput operation requested $ \directory -> do
     ProductModel model <- runIdentify realClock nativeApi directory
@@ -336,11 +340,7 @@ dispatch (Live operation requested) = case operation of
     manifest <- readRamPushManifest manifestPath
     refuseAfRingLive (allocSize (retainedAllocation allocation))
     withOutput operation requested $ \directory -> do
-      outcome <- runRamPush (contractFor (allocSize (retainedAllocation allocation))) allocation manifest realClock nativeApi directory
-      case outcome of
-        RamPushInstalled state -> pure ("ram-push: installed;state="++state++";exit requires full power removal and stock recovery checks")
-        RamPushRefused reason -> P.reject ("ram-push refused: "++reason)
-        RamPushUncertain reason -> P.reject ("ram-push uncertain: "++reason++";send nothing further and power off")
+      runRamPush (contractFor (allocSize (retainedAllocation allocation))) allocation manifest realClock nativeApi directory >>= ramPushLine
   RamFree path -> do
     allocation <- readRetainedAllocation path
     withOutput operation requested $ \directory -> do
@@ -448,23 +448,51 @@ writeNewPrivate path bytes =
     unless (fromIntegral written == B.length bytes) (P.reject ("short write to "++path))
     fileSynchronise fd
 
--- | One payload kind's alloc, relink and push in one session directory,
--- after a relink at the reference base that must match the compiled pins.
-ramSession :: String -> Payload -> Maybe FilePath -> IO ()
-ramSession kind payload requested = do
+ramPushLine :: RamPushOutcome -> IO String
+ramPushLine outcome = case outcome of
+  RamPushInstalled state -> pure ("ram-push: installed;state="++state++";exit requires full power removal and stock recovery checks")
+  RamPushRefused reason -> P.reject ("ram-push refused: "++reason)
+  RamPushUncertain reason -> P.reject ("ram-push uncertain: "++reason++";send nothing further and power off")
+
+-- | One payload kind's alloc, relink and push in one session directory, after
+-- a relink at the reference base that must match the compiled pins unless
+-- they are waived.
+ramSession :: String -> PinPolicy -> Payload -> Maybe FilePath -> IO ()
+ramSession kind policy payload requested = do
   let size = payloadAllocationSize payload
       (referenceBase, _) = payloadReferenceBases payload
-  withPinnedReviewedBuild (contractFor size) payload (Address referenceBase) (\_ -> pure ())
-  putStrLn ("ram-session: "++kind++" relinks at 0x"++showHex referenceBase ""++" and matches the compiled pins")
+  relinker <- runfilesRelinker payload
+  case policy of
+    RequirePins -> do
+      withPinnedReviewedBuildUsing (contractFor size) relinker (Address referenceBase) (\_ -> pure ())
+      putStrLn ("ram-session: "++kind++" relinks at 0x"++showHex referenceBase ""++" and matches the compiled pins")
+    WaivePins -> do
+      withRelinkedBuildUsing relinker EnforceAllowlist (Address referenceBase) (\_ -> pure ())
+      putStrLn ("ram-session: "++kind++" relinks at 0x"++showHex referenceBase ""++"; pins waived, so the build is not compared with the compiled source identity or publication contract")
   root <- resolveNamed ("ram-session-"++kind) requested
   createOutput root
   let allocation = root </> "alloc"
       linked = root </> "link"
+      pushed = root </> "push"
       state = allocation </> "ram-alloc-state.json"
+      manifestPath = linked </> "ram-push-manifest.json"
+      retainedNotice = hPutStrLn stderr ("ram-session: the allocation in "++state++" is retained and not installed; ram-free it or remove all power")
   dispatch (Live (RamAlloc size) (Just allocation))
-  dispatch (Live (RamRelink state) (Just linked)) `onException`
-    hPutStrLn stderr ("ram-session: the allocation in "++state++" is retained and not installed; ram-free it or remove all power")
-  dispatch (Live (RamPush state (linked </> "ram-push-manifest.json")) (Just (root </> "push")))
+  case policy of
+    RequirePins -> do
+      dispatch (Live (RamRelink state) (Just linked)) `onException` retainedNotice
+      dispatch (Live (RamPush state manifestPath) (Just pushed))
+    WaivePins -> do
+      retained <- readRetainedAllocation state
+      (do createOutput linked
+          withRelinkedBuildUsing relinker EnforceAllowlist (allocBase (retainedAllocation retained)) $ \built -> do
+            writeNewPrivate (linked </> "runtime.bin") (pinnedRuntime built)
+            writeNewPrivate manifestPath (pinnedDocument built)
+          putStrLn ("ram-relink: manifest="++manifestPath++";pins waived")) `onException` retainedNotice
+      manifest <- readRamPushManifest manifestPath
+      createOutput pushed
+      putStrLn ("output: "++pushed)
+      runRamPushWith xm1PeerCacheAvailability (retainedAllocation retained) manifest realClock nativeApi pushed >>= ramPushLine >>= putStrLn
 
 ramWatch :: FilePath -> Maybe (Int,Int) -> IO RamWatch
 ramWatch path pacing = do
