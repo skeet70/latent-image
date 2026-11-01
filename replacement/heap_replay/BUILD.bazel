@@ -1,0 +1,23 @@
+load(":replay.bzl", "heap_replay_subject")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "Cargo.lock",
+    "Cargo.toml",
+    "entry.S",
+    "heap-replay.ld",
+    "heap-replay.nix",
+    "observations.rs",
+    "replay.bzl",
+    "src.rs",
+])
+
+heap_replay_subject(name = "heap-replay-rlsf", backend = "rlsf")
+heap_replay_subject(name = "heap-replay-talc", backend = "talc")
+heap_replay_subject(name = "heap-replay-buddy", backend = "buddy")
+
+filegroup(
+    name = "subjects",
+    srcs = [":heap-replay-rlsf", ":heap-replay-talc", ":heap-replay-buddy"],
+)

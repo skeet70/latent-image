@@ -65,6 +65,10 @@ path = "src/heap_observe.rs"
 name = "fujimod-xm1-loader-continuations"
 path = "src/loader_continuations.rs"
 
+[[bin]]
+name = "fujimod-xm1-heap-replay"
+path = "src/heap_replay.rs"
+
 # Compiles the schema-4 loader-prefix observer against an engine carrying
 # build-support/fujimod-scoped-watch.patch.
 [features]

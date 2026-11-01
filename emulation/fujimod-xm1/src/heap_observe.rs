@@ -1,8 +1,10 @@
+mod heap_accesses;
 mod heap_state;
 #[path = "memory_view.rs"]
 mod memory_view;
 
 use heap_state::{Address, ContextKey, Core, Image5CodeStatus, Image5Lifecycle, Image5Phase, Operation, Recorder, Snapshot, TaskId, IMAGE5_HEAP_CODE, IMAGE5_LOAD_POINTS};
+use heap_accesses::{Digest, Limits as AccessLimits, Reader as AccessReader, Writer as AccessWriter, LIMITS as ACCESS_LIMITS, METADATA_LIMIT};
 use fujimod_emulator::board::factory::MemoryMap;
 use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
 use fujimod_emulator_cpu::{Register, arm};
@@ -13,7 +15,7 @@ use fujimod_xm1::provenance::Guest;
 use memory_view::{MemoryAddress, MemoryCore, TcmRegister, static_span, tcm_window};
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
 use serde::{Deserialize, Serialize};
-use std::{collections::{BTreeMap, BTreeSet}, fs::OpenOptions, io::{BufWriter, Write}, path::PathBuf, process::ExitCode};
+use std::{collections::{BTreeMap, BTreeSet}, fs::{File, OpenOptions}, io::{BufWriter, Read, Seek, SeekFrom, Write}, path::{Path, PathBuf}, process::ExitCode};
 
 const USAGE: &str = "heap-observe --run RUN --update DAT --boot-rom ROM --analysis ROOT --observer enabled|disabled --output DIR";
 const ENTRIES: [u32; 8] = [0x89cde4, 0x89e560, 0x89da64, 0xbf1c44, 0x89e464, 0x72b110, 0x72b164, 0x72b1cc];
@@ -26,28 +28,26 @@ const CODE: [(u32, u32); 21] = [(0x89cda4, 0x89d4f8), (0x89da3c, 0x89dfc0), (0x8
 const HEAP_START: u32 = 0xa71a00;
 const HEAP_END: u32 = 0xbf1a00;
 const WATCH_LIMIT: usize = 65_536;
-const EVENT_LIMIT: usize = 32_768;
+const BOUNDARY_LIMIT: usize = 262_144;
 const ROUTE_INSTRUCTIONS: u64 = 80_000_000 + 15 * 16_000_000 + 40_000_000 + 90_000_000;
 
-struct ArtifactBytes(u64);
-struct WatchOutput { writer: BufWriter<std::fs::File>, used: ArtifactBytes }
-impl WatchOutput {
-    fn new(path: &std::path::Path) -> Result<Self, String> {
-        Ok(Self { writer: BufWriter::new(OpenOptions::new().create_new(true).write(true).open(path).map_err(|error| error.to_string())?), used: ArtifactBytes(0) })
-    }
-    fn append(&mut self, bytes: &[u8]) -> Result<(), String> {
-        let next = self.used.0.checked_add(bytes.len() as u64 + 1).ok_or("watch byte count overflow")?;
-        require(next <= 256 * 1024 * 1024, "watch output exceeds byte bound")?;
-        self.writer.write_all(bytes).and_then(|_| self.writer.write_all(b"\n")).map_err(|error| error.to_string())?;
-        self.used = ArtifactBytes(next);
-        Ok(())
-    }
-    fn flush(&mut self) -> Result<(), String> { self.writer.flush().map_err(|error| error.to_string()) }
+fn access_writer(path: &Path) -> Result<AccessWriter<BufWriter<File>>, String> {
+    let file = OpenOptions::new().create_new(true).write(true).open(path).map_err(|error| error.to_string())?;
+    Ok(AccessWriter::new(BufWriter::new(file), ACCESS_LIMITS))
 }
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(transparent)]
-struct Digest(String);
+fn append_accesses(writer: &mut AccessWriter<BufWriter<File>>, output: &Path, terminal: &mut Option<Digest>, bytes: &[u8]) -> Result<(), String> {
+    match writer.append(bytes) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if bytes.len() as u64 > ACCESS_LIMITS.line().get() {
+                return Err(format!("{error}; terminal batch exceeds preservation byte bound"));
+            }
+            write(&output.join("terminal-access-batch.json"), bytes).map_err(|save| format!("{error}; terminal batch: {save}"))?;
+            *terminal = Some(Digest(sha256(bytes)));
+            Err(error.to_string())
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum ObserverMode { Enabled, Disabled }
@@ -140,6 +140,9 @@ struct Receipt {
     external_header_reads: usize,
     guest_code_writes: usize,
     watch_end_error: Option<String>,
+    watch_finish_error: Option<String>,
+    terminal_access_sha256: Option<Digest>,
+    access_limits: AccessLimits,
     events_sha256: Digest,
     hits_sha256: Digest,
     boundaries_sha256: Digest,
@@ -152,12 +155,15 @@ struct Receipt {
 }
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", content = "detail", rename_all = "kebab-case")]
-enum AdmissionFailure { BoundaryRegisters, WatchClasses, WatchRanges, MissingFetch, FinalCounters, Image5Lifecycle(Image5AdmissionFailure), Other(String) }
+enum AdmissionFailure { IncompleteObservation, BoundaryRegisters, WatchClasses, WatchRanges, MissingFetch, FinalCounters, Image5Lifecycle(Image5AdmissionFailure), WatchStream(heap_accesses::Error), Other(String) }
 impl std::fmt::Display for AdmissionFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(formatter, "{self:?}") }
 }
 impl From<String> for AdmissionFailure { fn from(error: String) -> Self { Self::Other(error) } }
 impl From<&str> for AdmissionFailure { fn from(error: &str) -> Self { Self::Other(error.into()) } }
+impl From<heap_accesses::Error> for AdmissionFailure {
+    fn from(error: heap_accesses::Error) -> Self { Self::WatchStream(error) }
+}
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum Image5AdmissionFailure {
@@ -432,6 +438,7 @@ fn menu(machine: &Machine) -> Result<Option<[u32; 3]>, String> {
 }
 fn admit_batch(batch: &AccessBatch, phase: Image5Phase) -> Result<usize, String> {
     require(batch.enabled && batch.violation.is_none(), "memory watch overflowed or refused")?;
+    require(batch.records.len() <= WATCH_LIMIT, "memory watch row count exceeds bound")?;
     let mut code_writes = 0;
     for row in &batch.records {
         if matches!(row.source, Access::CpuFetch | Access::CpuRead | Access::CpuWrite) {
@@ -453,21 +460,24 @@ fn bounded_read(path: &std::path::Path, limit: u64) -> Result<Vec<u8>, String> {
 }
 fn admit_receipt(directory: &std::path::Path, images: &[Image], expected_mode: ObserverMode) -> Result<Receipt, AdmissionFailure> {
     let receipt: Receipt = serde_json::from_slice(&bounded_read(&directory.join("heap-observation.json"), 65_536)?).map_err(|error| error.to_string())?;
-    require(receipt.schema == 2 && receipt.mode == expected_mode && receipt.complete && receipt.error.is_none()
-        && receipt.machine_failure.is_none() && receipt.watch_end_error.is_none() && receipt.guest_code_writes == 0, "observation receipt is not complete")?;
+    if !(receipt.schema == 3 && receipt.mode == expected_mode && receipt.complete && receipt.error.is_none()
+        && receipt.machine_failure.is_none() && receipt.watch_end_error.is_none() && receipt.watch_finish_error.is_none()
+        && receipt.terminal_access_sha256.is_none() && receipt.access_limits == ACCESS_LIMITS
+        && receipt.guest_code_writes == 0) { return Err(AdmissionFailure::IncompleteObservation); }
     require(receipt.menus == [Some([69, 52, 12]), Some([1, 5, 2])] && receipt.frame.is_some(), "observation endpoints differ")?;
     require(receipt.identity.observer.0 == sha256(&read(&std::env::current_exe().map_err(|error| error.to_string())?)?), "receipt producer differs from consumer")?;
-    let event_bytes = bounded_read(&directory.join("events.json"), 64 * 1024 * 1024)?;
-    let boundary_bytes = bounded_read(&directory.join("boundaries.json"), 64 * 1024 * 1024)?;
-    let access_bytes = bounded_read(&directory.join("accesses.jsonl"), 256 * 1024 * 1024)?;
+    let event_bytes = bounded_read(&directory.join("events.json"), METADATA_LIMIT.get())?;
+    let boundary_bytes = bounded_read(&directory.join("boundaries.json"), METADATA_LIMIT.get())?;
+    let access_path = directory.join("accesses.jsonl.gz");
+    let access_digest = heap_accesses::digest_file(&access_path, ACCESS_LIMITS.compressed())?;
     let summary_bytes = bounded_read(&directory.join("summary.json"), 4 * 1024 * 1024)?;
-    let hit_bytes = bounded_read(&directory.join("trace-hits.json"), 64 * 1024 * 1024)?;
+    let hit_bytes = bounded_read(&directory.join("trace-hits.json"), METADATA_LIMIT.get())?;
     require(sha256(&event_bytes) == receipt.events_sha256.0 && sha256(&boundary_bytes) == receipt.boundaries_sha256.0
-        && sha256(&access_bytes) == receipt.accesses_sha256.0 && sha256(&summary_bytes) == receipt.summary_sha256.0
+        && access_digest == receipt.accesses_sha256 && sha256(&summary_bytes) == receipt.summary_sha256.0
         && sha256(&hit_bytes) == receipt.hits_sha256.0
         && sha256(&bounded_read(&directory.join("reset.fujimod"), 128 * 1024 * 1024)?) == receipt.checkpoint.0, "receipt artifact digest differs")?;
     let boundaries: Vec<Boundary> = serde_json::from_slice(&boundary_bytes).map_err(|error| error.to_string())?;
-    require(boundaries.len() <= EVENT_LIMIT, "boundary count exceeds storage bound")?;
+    require(boundaries.len() <= BOUNDARY_LIMIT, "boundary count exceeds storage bound")?;
     let hits: Vec<RecordedHit> = serde_json::from_slice(&hit_bytes).map_err(|error| error.to_string())?;
     require(hits.len() == boundaries.len(), "instruction hits and sampled boundaries differ")?;
     for (hit, boundary) in hits.iter().zip(&boundaries) {
@@ -479,7 +489,7 @@ fn admit_receipt(directory: &std::path::Path, images: &[Image], expected_mode: O
             || hit.cpsr != boundary.snapshot.cpsr { return Err(AdmissionFailure::BoundaryRegisters); }
     }
     admit_final(receipt.instructions, &boundaries)?;
-    let mut batch_lines = access_bytes.split(|byte| *byte == b'\n').filter(|line| !line.is_empty());
+    let mut batch_lines = AccessReader::new(File::open(&access_path).map_err(|error| error.to_string())?, ACCESS_LIMITS);
     let mut batches = 0;
     let mut reads = 0;
     let mut writes = 0;
@@ -497,7 +507,7 @@ fn admit_receipt(directory: &std::path::Path, images: &[Image], expected_mode: O
         let code = admit_image5(boundary, images, image5.phase(), index == 0)?;
         image5.observe(snapshot, code).map_err(|failure| Image5AdmissionFailure::Transition { failure })?;
         replay.observe(snapshot.clone()).map_err(|error| error.to_string())?;
-        let batch: AccessBatch = serde_json::from_slice(batch_lines.next().ok_or(AdmissionFailure::MissingFetch)?).map_err(|error| error.to_string())?;
+        let batch: AccessBatch = serde_json::from_slice(batch_lines.next_line()?.ok_or(AdmissionFailure::MissingFetch)?).map_err(|error| error.to_string())?;
         let (batch_reads, batch_writes) = admit_interval(&batch, &watch_classes(&replay), &replay.live_headers(), image5.phase(), boundary, boundaries.get(index + 1), receipt.instructions)?;
         reads += batch_reads;
         writes += batch_writes;
@@ -506,7 +516,7 @@ fn admit_receipt(directory: &std::path::Path, images: &[Image], expected_mode: O
     require(serde_json::to_vec(replay.records()).map_err(|error| error.to_string())? == event_bytes
         && replay.records().len() == receipt.events && replay.pending_count() == receipt.pending, "event replay differs")?;
     require(serde_json::to_vec(&replay.summary()).map_err(|error| error.to_string())? == summary_bytes, "lifetime summary replay differs")?;
-    if batch_lines.next().is_some() { return Err(AdmissionFailure::MissingFetch); }
+    if batch_lines.next_line()?.is_some() { return Err(AdmissionFailure::MissingFetch); }
     require((batches, reads, writes) == (receipt.watch_batches, receipt.external_header_reads, receipt.guest_code_writes), "memory-watch projection differs")?;
     if receipt.image5_phase != image5.phase() {
         return Err(Image5AdmissionFailure::Phase { expected: image5.phase(), observed: receipt.image5_phase }.into());
@@ -538,20 +548,25 @@ fn compare(arguments: &[std::ffi::OsString]) -> Result<(), String> {
 }
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum ReceiptFault { BoundarySize, RemovedClass, OmittedFetch, FinalCounter, PrematureImage5Fetch, Image5Code }
+enum ReceiptFault { BoundarySize, RemovedClass, OmittedFetch, FinalCounter, PrematureImage5Fetch, Image5Code, TruncatedGzip, CorruptGzipCrc, OverlongWatchLine, FinishFailureMarker }
 impl ReceiptFault {
     fn directory(self) -> &'static str {
         match self {
             Self::BoundarySize => "boundary-size", Self::RemovedClass => "removed-class",
             Self::OmittedFetch => "omitted-fetch", Self::FinalCounter => "final-counter",
             Self::PrematureImage5Fetch => "premature-image5-fetch", Self::Image5Code => "image5-code",
+            Self::TruncatedGzip => "truncated-gzip", Self::CorruptGzipCrc => "corrupt-gzip-crc",
+            Self::OverlongWatchLine => "overlong-watch-line", Self::FinishFailureMarker => "finish-failure-marker",
         }
     }
     fn targets(self, error: &AdmissionFailure) -> bool {
         matches!((self, error), (Self::BoundarySize, AdmissionFailure::BoundaryRegisters)
             | (Self::RemovedClass, AdmissionFailure::WatchClasses) | (Self::OmittedFetch, AdmissionFailure::MissingFetch)
             | (Self::FinalCounter, AdmissionFailure::FinalCounters)
-            | (Self::PrematureImage5Fetch | Self::Image5Code, AdmissionFailure::Image5Lifecycle(_)))
+            | (Self::PrematureImage5Fetch | Self::Image5Code, AdmissionFailure::Image5Lifecycle(_))
+            | (Self::TruncatedGzip | Self::CorruptGzipCrc, AdmissionFailure::WatchStream(heap_accesses::Error::Codec(_)))
+            | (Self::OverlongWatchLine, AdmissionFailure::WatchStream(heap_accesses::Error::LineLimit { .. }))
+            | (Self::FinishFailureMarker, AdmissionFailure::IncompleteObservation))
     }
 }
 #[derive(Serialize)]
@@ -565,25 +580,26 @@ fn refusal_controls(arguments: &[std::ffi::OsString]) -> Result<(), String> {
     compare(&comparison)?;
     let (images, _) = source_images(std::path::Path::new(&arguments[3]))?;
     let mut results = Vec::new();
-    for fault in [ReceiptFault::BoundarySize, ReceiptFault::RemovedClass, ReceiptFault::OmittedFetch, ReceiptFault::FinalCounter, ReceiptFault::PrematureImage5Fetch, ReceiptFault::Image5Code] {
+    for fault in [ReceiptFault::BoundarySize, ReceiptFault::RemovedClass, ReceiptFault::OmittedFetch, ReceiptFault::FinalCounter, ReceiptFault::PrematureImage5Fetch, ReceiptFault::Image5Code,
+        ReceiptFault::TruncatedGzip, ReceiptFault::CorruptGzipCrc, ReceiptFault::OverlongWatchLine, ReceiptFault::FinishFailureMarker] {
         let directory = output.join(fault.directory());
         std::fs::create_dir(&directory).map_err(|error| error.to_string())?;
         let mut receipt: Receipt = serde_json::from_slice(&bounded_read(&source.join("heap-observation.json"), 65_536)?).map_err(|error| error.to_string())?;
         let changed: &[&str] = match fault {
             ReceiptFault::BoundarySize => &["boundaries.json", "events.json", "summary.json"],
-            ReceiptFault::RemovedClass | ReceiptFault::OmittedFetch => &["accesses.jsonl"],
-            ReceiptFault::FinalCounter => &[],
+            ReceiptFault::RemovedClass | ReceiptFault::OmittedFetch | ReceiptFault::TruncatedGzip | ReceiptFault::CorruptGzipCrc | ReceiptFault::OverlongWatchLine => &["accesses.jsonl.gz"],
+            ReceiptFault::FinalCounter | ReceiptFault::FinishFailureMarker => &[],
             ReceiptFault::PrematureImage5Fetch => &["boundaries.json", "trace-hits.json"],
             ReceiptFault::Image5Code => &["boundaries.json"],
         };
-        for name in ["boundaries.json", "events.json", "summary.json", "accesses.jsonl", "trace-hits.json", "reset.fujimod"] {
+        for name in ["boundaries.json", "events.json", "summary.json", "accesses.jsonl.gz", "trace-hits.json", "reset.fujimod"] {
             if !changed.contains(&name) { std::fs::hard_link(source.join(name), directory.join(name)).map_err(|error| error.to_string())?; }
         }
         match fault {
             ReceiptFault::BoundarySize => {
-                let events: Vec<heap_state::Event> = serde_json::from_slice(&bounded_read(&source.join("events.json"), 64 * 1024 * 1024)?).map_err(|error| error.to_string())?;
+                let events: Vec<heap_state::Event> = serde_json::from_slice(&bounded_read(&source.join("events.json"), METADATA_LIMIT.get())?).map_err(|error| error.to_string())?;
                 let origin = events.iter().find(|event| matches!(&event.boundary, heap_state::Boundary::Enter { operation: Operation::Malloc, parent: None, .. })).ok_or("control needs a logical malloc entry")?;
-                let mut boundaries: Vec<Boundary> = serde_json::from_slice(&bounded_read(&source.join("boundaries.json"), 64 * 1024 * 1024)?).map_err(|error| error.to_string())?;
+                let mut boundaries: Vec<Boundary> = serde_json::from_slice(&bounded_read(&source.join("boundaries.json"), METADATA_LIMIT.get())?).map_err(|error| error.to_string())?;
                 let boundary = boundaries.iter_mut().find(|boundary| boundary.snapshot == origin.snapshot).ok_or("control malloc boundary absent")?;
                 boundary.snapshot.registers[1] = if boundary.snapshot.registers[1] == 0 { 1 } else { boundary.snapshot.registers[1] - 1 };
                 let mut replay = Recorder::new();
@@ -600,10 +616,11 @@ fn refusal_controls(arguments: &[std::ffi::OsString]) -> Result<(), String> {
                 receipt.summary_sha256 = Digest(sha256(&summary_bytes));
             }
             ReceiptFault::RemovedClass | ReceiptFault::OmittedFetch => {
-                let access_bytes = bounded_read(&source.join("accesses.jsonl"), 256 * 1024 * 1024)?;
-                let mut output_bytes = Vec::with_capacity(access_bytes.len());
+                let mut input = AccessReader::new(File::open(source.join("accesses.jsonl.gz")).map_err(|error| error.to_string())?, ACCESS_LIMITS);
+                let destination = directory.join("accesses.jsonl.gz");
+                let mut output_accesses = access_writer(&destination)?;
                 let mut changed = false;
-                for line in access_bytes.split(|byte| *byte == b'\n').filter(|line| !line.is_empty()) {
+                while let Some(line) = input.next_line().map_err(|error| error.to_string())? {
                     let mut batch: AccessBatch = serde_json::from_slice(line).map_err(|error| error.to_string())?;
                     if !changed {
                         match fault {
@@ -614,25 +631,68 @@ fn refusal_controls(arguments: &[std::ffi::OsString]) -> Result<(), String> {
                             _ => {}
                         }
                     }
-                    serde_json::to_writer(&mut output_bytes, &batch).map_err(|error| error.to_string())?;
-                    output_bytes.push(b'\n');
+                    output_accesses.append(&serde_json::to_vec(&batch).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
                 }
                 require(changed, "control has no suitable watch row or class")?;
-                write(&directory.join("accesses.jsonl"), &output_bytes)?;
-                receipt.accesses_sha256 = Digest(sha256(&output_bytes));
+                output_accesses.finish().map_err(|error| error.to_string())?;
+                receipt.accesses_sha256 = heap_accesses::digest_file(&destination, ACCESS_LIMITS.compressed()).map_err(|error| error.to_string())?;
             }
             ReceiptFault::FinalCounter => {
                 receipt.instructions[0] = receipt.instructions[0].checked_sub(1).ok_or("control needs a primary instruction")?;
             }
+            ReceiptFault::TruncatedGzip | ReceiptFault::CorruptGzipCrc => {
+                let destination = directory.join("accesses.jsonl.gz");
+                std::fs::copy(source.join("accesses.jsonl.gz"), &destination).map_err(|error| error.to_string())?;
+                let mut file = OpenOptions::new().read(true).write(true).open(&destination).map_err(|error| error.to_string())?;
+                let bytes = file.metadata().map_err(|error| error.to_string())?.len();
+                let trailer = bytes.checked_sub(8).ok_or("control needs a gzip trailer")?;
+                match fault {
+                    ReceiptFault::TruncatedGzip => file.set_len(trailer).map_err(|error| error.to_string())?,
+                    _ => {
+                        file.seek(SeekFrom::Start(trailer)).map_err(|error| error.to_string())?;
+                        let mut crc = [0];
+                        file.read_exact(&mut crc).map_err(|error| error.to_string())?;
+                        crc[0] ^= 1;
+                        file.seek(SeekFrom::Start(trailer)).map_err(|error| error.to_string())?;
+                        file.write_all(&crc).map_err(|error| error.to_string())?;
+                    }
+                }
+                drop(file);
+                receipt.accesses_sha256 = heap_accesses::digest_file(&destination, ACCESS_LIMITS.compressed()).map_err(|error| error.to_string())?;
+            }
+            ReceiptFault::OverlongWatchLine => {
+                let mut input = AccessReader::new(File::open(source.join("accesses.jsonl.gz")).map_err(|error| error.to_string())?, ACCESS_LIMITS);
+                let destination = directory.join("accesses.jsonl.gz");
+                let file = OpenOptions::new().create_new(true).write(true).open(&destination).map_err(|error| error.to_string())?;
+                let mut gzip = flate2::GzBuilder::new().mtime(0).operating_system(255).write(BufWriter::new(file), flate2::Compression::default());
+                let first = input.next_line().map_err(|error| error.to_string())?.ok_or("control needs a watch batch")?;
+                gzip.write_all(first.strip_suffix(b"\n").ok_or("watch line is incomplete")?).map_err(|error| error.to_string())?;
+                let mut remaining = ACCESS_LIMITS.line().get().checked_add(1).and_then(|limit| limit.checked_sub(first.len() as u64)).ok_or("control line bound overflow")?;
+                let spaces = [b' '; 8192];
+                while remaining != 0 {
+                    let bytes = usize::try_from(remaining.min(spaces.len() as u64)).map_err(|error| error.to_string())?;
+                    gzip.write_all(&spaces[..bytes]).map_err(|error| error.to_string())?;
+                    remaining -= bytes as u64;
+                }
+                gzip.write_all(b"\n").map_err(|error| error.to_string())?;
+                while let Some(line) = input.next_line().map_err(|error| error.to_string())? {
+                    gzip.write_all(line).map_err(|error| error.to_string())?;
+                }
+                gzip.finish().map_err(|error| error.to_string())?.flush().map_err(|error| error.to_string())?;
+                receipt.accesses_sha256 = heap_accesses::digest_file(&destination, ACCESS_LIMITS.compressed()).map_err(|error| error.to_string())?;
+            }
+            ReceiptFault::FinishFailureMarker => {
+                receipt.watch_finish_error = Some("declared watch finish failure".into());
+            }
             ReceiptFault::PrematureImage5Fetch | ReceiptFault::Image5Code => {
-                let mut boundaries: Vec<Boundary> = serde_json::from_slice(&bounded_read(&source.join("boundaries.json"), 64 * 1024 * 1024)?).map_err(|error| error.to_string())?;
+                let mut boundaries: Vec<Boundary> = serde_json::from_slice(&bounded_read(&source.join("boundaries.json"), METADATA_LIMIT.get())?).map_err(|error| error.to_string())?;
                 let first = boundaries.first_mut().ok_or("control needs an initial boundary")?;
                 match fault {
                     ReceiptFault::PrematureImage5Fetch => {
                         first.snapshot.pc = Address(0xbf1c44);
                         first.snapshot.registers[15] = 0xbf1c44;
                         first.code_word = expected(&images, 0xbf1c44)?;
-                        let mut hits: Vec<RecordedHit> = serde_json::from_slice(&bounded_read(&source.join("trace-hits.json"), 64 * 1024 * 1024)?).map_err(|error| error.to_string())?;
+                        let mut hits: Vec<RecordedHit> = serde_json::from_slice(&bounded_read(&source.join("trace-hits.json"), METADATA_LIMIT.get())?).map_err(|error| error.to_string())?;
                         hits.first_mut().ok_or("control needs an initial hit")?.address = HexAddress("0xbf1c44".into());
                         let bytes = serde_json::to_vec(&hits).map_err(|error| error.to_string())?;
                         write(&directory.join("trace-hits.json"), &bytes)?;
@@ -684,8 +744,8 @@ fn drive() -> Result<(), String> {
         && identity.update.0 == "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"
         && identity.boot_rom.0 == "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be", "observer requires canonical no-card inputs")?;
     std::fs::create_dir(&output).map_err(|error| error.to_string())?;
-    let access_path = output.join("accesses.jsonl");
-    let mut accesses = WatchOutput::new(&access_path)?;
+    let access_path = output.join("accesses.jsonl.gz");
+    let mut accesses = access_writer(&access_path)?;
     fujimod_emulator_exr2_board::register_board_builder();
     fujimod_emulator_models::register();
     let document = RunDocument::parse(&run_bytes)?;
@@ -711,7 +771,7 @@ fn drive() -> Result<(), String> {
         ENTRIES.into_iter().chain(IMAGE5_LOAD_POINTS).chain(shadow_sites.iter().map(|address| address.0)).collect()
     } else { BTreeSet::new() };
     if mode == ObserverMode::Enabled {
-        machine.traces.bound_full_registers(std::num::NonZeroUsize::new(EVENT_LIMIT).ok_or("invalid hit bound")?);
+        machine.traces.bound_full_registers(std::num::NonZeroUsize::new(BOUNDARY_LIMIT).ok_or("invalid hit bound")?);
         machine.traces.arm(&machine.session, armed.iter().map(|address| (*address, "heap".into())).collect())?;
         machine.traces.stop_labels = ["heap".into()].into_iter().collect();
     }
@@ -720,6 +780,7 @@ fn drive() -> Result<(), String> {
     let mut external_header_reads = 0;
     let mut guest_code_writes = 0;
     let mut watch_end_error = None;
+    let mut terminal_access_sha256 = None;
     let mut menus = Vec::new();
     let result = (|| -> Result<(), String> {
         let mut processed = 0;
@@ -733,7 +794,7 @@ fn drive() -> Result<(), String> {
                 require(hits.len() == 1, "instruction boundary contains multiple unsampled hits")?;
                 let boundary = sample(machine, &maps, &images, &recorder, &image5, boundaries.is_empty(), hits[0].core)?;
                 let code = admit_image5(&boundary, &images, image5.phase(), boundaries.is_empty()).map_err(|error| error.to_string())?;
-                require(format!("{:#x}", boundary.snapshot.pc.0) == hits[0].address, "stopped PC differs from recorded hit")?;
+                require(boundary.snapshot.pc.0 == u32::from_str_radix(hits[0].address.strip_prefix("0x").ok_or("raw hit address is not hexadecimal")?, 16).map_err(|error| error.to_string())?, "stopped PC differs from recorded hit")?;
                 if watch.is_none() {
                     for (start, end) in CODE {
                         if (start, end) == IMAGE5_HEAP_CODE && image5.phase() != Image5Phase::Admitted { continue; }
@@ -744,10 +805,10 @@ fn drive() -> Result<(), String> {
                 }
                 if let Some(mut active) = watch.take() {
                     let raw = active.records.borrow().state();
-                    let batch: AccessBatch = serde_json::from_value(raw.clone()).map_err(|error| error.to_string())?;
                     let bytes = serde_json::to_vec(&raw).map_err(|error| error.to_string())?;
+                    let batch: AccessBatch = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
                     machine.session.board.memory_watch_end(&mut active)?;
-                    accesses.append(&bytes)?;
+                    append_accesses(&mut accesses, &output, &mut terminal_access_sha256, &bytes)?;
                     watch_batches += 1;
                     let start = boundaries.last().ok_or("watch has no initial boundary")?;
                     let (reads, writes) = admit_interval(&batch, &watch_classes(&recorder), &recorder.live_headers(), image5.phase(), start, Some(&boundary), boundary.snapshot.counts).map_err(|error| error.to_string())?;
@@ -797,9 +858,10 @@ fn drive() -> Result<(), String> {
         let raw = active.records.borrow().state();
         watch_end_error = machine.session.board.memory_watch_end(&mut active).err();
         let final_batch = (|| -> Result<(usize, usize), String> {
-            accesses.append(&serde_json::to_vec(&raw).map_err(|error| error.to_string())?)?;
+            let bytes = serde_json::to_vec(&raw).map_err(|error| error.to_string())?;
+            append_accesses(&mut accesses, &output, &mut terminal_access_sha256, &bytes)?;
             watch_batches += 1;
-            let batch = serde_json::from_value(raw).map_err(|error| error.to_string())?;
+            let batch: AccessBatch = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
             let counts = machine.session.board.instruction_counts().try_into().map_err(|_| "expected two instruction counters")?;
             admit_interval(&batch, &watch_classes(&recorder), &recorder.live_headers(), image5.phase(), boundaries.last().ok_or("final watch has no initial boundary")?, None, counts).map_err(|error| error.to_string())
         })();
@@ -808,7 +870,8 @@ fn drive() -> Result<(), String> {
             Err(error) => watch_end_error = Some(error),
         }
     }
-    accesses.flush()?;
+    let watch_finish_error = accesses.finish().err().map(|error| error.to_string());
+    let access_digest = heap_accesses::digest_file(&access_path, ACCESS_LIMITS.compressed()).map_err(|error| error.to_string())?;
     let event_bytes = serde_json::to_vec(recorder.records()).map_err(|error| error.to_string())?;
     let boundary_bytes = serde_json::to_vec(&boundaries).map_err(|error| error.to_string())?;
     let summary_bytes = serde_json::to_vec(&recorder.summary()).map_err(|error| error.to_string())?;
@@ -820,7 +883,8 @@ fn drive() -> Result<(), String> {
     let frame = machine.frame().map(|value| value.map(|bytes| Digest(sha256(&bytes))));
     let counts: [u64; 2] = machine.session.board.instruction_counts().try_into().map_err(|_| "expected two instruction counters")?;
     let final_counters = admit_final(counts, &boundaries);
-    let complete = result.is_ok() && frame.is_ok() && final_counters.is_ok() && watch_end_error.is_none() && guest_code_writes == 0;
+    let complete = result.is_ok() && frame.is_ok() && final_counters.is_ok() && watch_end_error.is_none()
+        && watch_finish_error.is_none() && terminal_access_sha256.is_none() && guest_code_writes == 0;
     let (failure_checkpoint, failure_checkpoint_error) = if complete { (None, None) } else {
         let saved = (|| -> Result<Digest, String> {
             machine.disarm()?;
@@ -830,13 +894,14 @@ fn drive() -> Result<(), String> {
         })();
         match saved { Ok(digest) => (Some(digest), None), Err(error) => (None, Some(error)) }
     };
-    let receipt = Receipt { schema: 2, scope: "canonical-natural-reset-no-card-menu-roundtrip-general-heap".into(), mode, identity,
-        checkpoint: Digest(sha256(&checkpoint)), complete, error: result.err().or_else(|| frame.as_ref().err().cloned()).or_else(|| final_counters.err().map(|error| error.to_string())), machine_failure: machine.failure.clone(),
+    let receipt = Receipt { schema: 3, scope: "canonical-natural-reset-no-card-menu-roundtrip-general-heap".into(), mode, identity,
+        checkpoint: Digest(sha256(&checkpoint)), complete, error: result.err().or_else(|| frame.as_ref().err().cloned()).or_else(|| final_counters.err().map(|error| error.to_string())).or_else(|| watch_finish_error.clone()), machine_failure: machine.failure.clone(),
         instructions: counts, menus,
         frame: frame.ok().flatten(), events: recorder.records().len(), pending: recorder.pending_count(), watch_batches,
         external_header_reads, guest_code_writes, watch_end_error, events_sha256: Digest(sha256(&event_bytes)), boundaries_sha256: Digest(sha256(&boundary_bytes)),
+        watch_finish_error, terminal_access_sha256, access_limits: ACCESS_LIMITS,
         hits_sha256: Digest(sha256(&hit_bytes)),
-        accesses_sha256: Digest(sha256(&read(&access_path)?)), summary_sha256: Digest(sha256(&summary_bytes)),
+        accesses_sha256: access_digest, summary_sha256: Digest(sha256(&summary_bytes)),
         failure_checkpoint, failure_checkpoint_error,
         image5_phase: image5.phase(),
         limitations: vec!["Finite no-card boot/menu route, not capture, development or storage workload coverage.".into(),
