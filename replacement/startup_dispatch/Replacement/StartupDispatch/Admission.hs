@@ -103,7 +103,7 @@ compareFlags left right = case (bounds left, bounds right) of
 
 operand :: Machine -> A.Operand -> Either AdmissionError Scalar
 operand _ (A.Immediate word) = Right (Constant word)
-operand machine (A.ShiftedImmediate register _ 0) = Right (get machine register)
+operand machine (A.ShiftedImmediate register A.LSL 0) = Right (get machine register)
 operand machine (A.ShiftedImmediate register shift amount) | amount > 0 && amount < 32 = do
   word <- known (get machine register)
   case shift of

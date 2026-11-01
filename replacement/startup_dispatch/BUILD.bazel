@@ -81,6 +81,11 @@ haskell_test(
     name = "startup-dispatch-regressions",
     srcs = ["Fixtures.hs", "RegressionTests.hs"],
     main_file = "RegressionTests.hs",
+    args = [
+        "$(rootpath :startup-dispatch-image.bin)",
+        "$(rootpath :startup-dispatch-image.symbols)",
+    ],
+    data = [":startup-dispatch-image.bin", ":startup-dispatch-image.symbols"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":startup-dispatch-artifact",
