@@ -109,7 +109,7 @@ setRegister selected value frame = do
         "task-storage emitted SP leaves its bounded own-frame policy"
       pure frame
         { registers = M.insert selected value (registers frame)
-        , frameWords = M.filterWithKey (\location _ -> location >= offset && location < 0) (frameWords frame)
+        , frameWords = M.filterWithKey (\wordOffset _ -> wordOffset >= offset && wordOffset < 0) (frameWords frame)
         , deepest = max (deepest frame) (negate offset)
         }
     (A.Reg 13,_) -> Left "task-storage emitted SP loses incoming-stack provenance"
