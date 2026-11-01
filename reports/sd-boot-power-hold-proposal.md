@@ -57,3 +57,52 @@ Stop on any unexpected display, sound, heat or smell: remove the battery. A blin
 ## Review record
 
 Independent review of commit `6003a71` and image `aec1d2b3…`, 2026-10-24: **APPROVE WITH LIMITATIONS**, no blocking finding. The reviewer reproduced the two-byte difference, censused every ROM store to `0xfff88084` (including the mode-7 teardown caller and reader `0x80000b04`), confirmed `+0x10` has no reader beyond bit 0, bit 1 and bits 10:8, confirmed the apply always returns 0 so its faults are hangs after `0x80000330`, and re-ran `verify` on the existing startup-restored, after-apply, before-memory-wait and halt-control images plus `--power-hold verify` and both negative controls. Residual unknowns: what bit 0 controls on X-M1, whether supply follows bit 0, the switch or a companion controller, whether the apply waits complete on cold starts, which ROM route entries use, and the effects of the unchanged MBR-overlap register words. The reviewer classed the value as not guessed under spec 07 section 3.3. The review is not an owner go.
+
+## Running it on another X-M1
+
+The fast-toggle requirement has only been seen on XM1-body-01 (E-SDBOOT-ENTRY-TIMING-150). An X-M1 with a working SD slot can test both the requirement and the hold bit with two cards that differ only in `+0x10` bit 0. Nothing here installs firmware: the ROM path issues no write to the card or internal memory, and the 512-byte card program sets `0xfff88084` = 1 and blinks the red LED. Whether to run it on your camera is your decision; read [Stops and risks](#stops-and-risks) first.
+
+### Build the two cards
+
+You need Linux x86_64 with Nix and devenv ([host setup](../README.md#try-it-on-your-host)), an expendable SD card of at least 18 MB and a host card reader. Download the official X-M1 1.50 firmware from [Fujifilm's X-M1 page](https://www.fujifilm-x.com/global/support/download/firmware/cameras/x-m1/) into `private-data/` in your checkout. The builder refuses any other file; its SHA-256 is `43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490`. From the repository root:
+
+```sh
+mkdir -p private-data/scratch
+devenv shell -- bazel build //host/firmware:diagnostic-blink-startup
+devenv shell -- bazel run //host/firmware:build-boot-card -- build private-data/FWUP0002.DAT bazel-bin/host/firmware/diagnostic-blink-startup.bin private-data/scratch/baseline-card
+devenv shell -- bazel run //host/firmware:build-boot-card -- --power-hold build private-data/FWUP0002.DAT bazel-bin/host/firmware/diagnostic-blink-startup.bin private-data/scratch/power-hold-card
+```
+
+Each command writes `diagnostic-sd.img` (17,826,304 bytes) into its directory and prints its SHA-256:
+
+| Card | `diagnostic-sd.img` SHA-256 |
+| --- | --- |
+| Baseline: stock `ffsys.bin`, bit 0 clear, the image run on XM1-body-01 | `4f1c632cd9ea6247899e2e97c2ed4ee5d3a1b179ea33b28908d4b974090ddbb0` |
+| Power hold: bit 0 set | `aec1d2b3a6b1521d10cb751a32732a8f23bc48ca4eb8152d9e353cac6886d27d` |
+
+Stop if either digest differs. Write each image raw to the card with the guarded write-and-readback block in [card-entry section 2.8](sd-boot-card-entry.md#28-spare-card-preparation-and-conditional-camera-procedure), setting `IMG` to the image path and `EXPECTED` to its digest. Stop unless it prints `PASS`. Don't mount, format or copy files onto the card afterward: formatting loses the raw layout.
+
+### Procedure
+
+Fully charged battery, USB disconnected. Film the rear LED with sound throughout if you can. The card program's pattern is three short red intervals then one long one, repeating.
+
+1. **Baseline card, at most five cold starts.** For each: battery out for at least 30 seconds, battery in, switch OFF, card in. Hold Fn and press the rear sub-command dial inward, move the switch ON once, keep both held for 10 seconds, then watch for 60 seconds. Don't toggle. Note dark, the LED pattern or a normal boot. Remove the battery after each start.
+2. **Power-hold card, the same five cold starts.**
+3. **Switch test, once, only while the pattern runs.** Release the buttons, wait one full cycle, move the switch OFF once and watch for 20 seconds without touching anything. Then remove the battery.
+4. **Toggled start, only if every start in steps 1 and 2 stayed dark.** With the power-hold card and the battery in, hold the same two controls and move the switch about every 0.75 seconds, OFF transitions included, at most 40 times, ending ON. Stop at the first LED and do step 3. If nothing lights by the 40th transition, switch OFF and remove the battery.
+5. **Return.** Normal card in, ordinary start with no buttons held, one shot and its playback, then check date, time and settings.
+
+### What the results mean
+
+| Observation | Reading |
+| --- | --- |
+| The baseline card enters on a cold start | the toggle requirement is particular to XM1-body-01, so this camera cannot test the hold bit against it |
+| Baseline dark, power-hold card enters on a cold start | the release at `0x80000330` is the likely cause of the requirement |
+| Both dark on cold starts, power-hold card enters when toggled | the release does not explain the requirement |
+| Both dark on cold starts, nothing enters when toggled | no reading; host analysis follows |
+| The pattern continues after switch OFF | bit 0 keeps the camera powered against the switch |
+| The pattern stops within 20 seconds of switch OFF | the switch removes power regardless of bit 0 |
+
+### What to report
+
+Post on [#60](https://github.com/skeet70/latent-image/issues/60): the body firmware version, the card make and capacity, both printed image digests, the outcome of each start in order, the switch-test result and whether the return check passed. Video helps when the pattern is hard to count.
