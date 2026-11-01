@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_test")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 filegroup(
@@ -75,9 +75,22 @@ xm1_rust_elf(
     visibility = ["//visibility:public"],
 )
 
+haskell_library(
+    name = "stock-inventory",
+    srcs = ["StockInventory.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
 haskell_binary(
     name = "media-permit-qualification",
-    srcs = ["MediaPermitQualifyMain.hs", "StockInventory.hs"],
+    srcs = ["MediaPermitQualifyMain.hs"],
     main_file = "MediaPermitQualifyMain.hs",
     ghcopts = [
         "-XGHC2021",
@@ -88,6 +101,7 @@ haskell_binary(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":stock-inventory",
         "//emulation:case-sha256",
         "//emulation:native-adapter",
         "//emulation:native-observation",
@@ -106,10 +120,11 @@ haskell_binary(
 
 haskell_test(
     name = "stock-inventory-tests",
-    srcs = ["StockInventoryTests.hs", "StockInventory.hs"],
+    srcs = ["StockInventoryTests.hs"],
     main_file = "StockInventoryTests.hs",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
+        ":stock-inventory",
         "//host:base",
         "//host:bytestring",
         "//host:containers",

@@ -6,8 +6,11 @@
 module Replacement.ModalRuntime.Qualify
   ( Options (..)
   , runQualification
+  , CaseSelection
+  , parseCaseSelection
   ) where
 
+import qualified ArmElf as E
 import Control.Exception (SomeException, try)
 import Control.Monad (forM_, unless, when)
 import Data.Aeson (Value (..), object, (.=))
@@ -42,6 +45,7 @@ import Emulation.NativeObservation
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host (ensure, get, jsonRead, num, runBounded)
 import FujiAF.JSON (encodeCanonical)
+import qualified StockInventory as SI
 import Numeric (showHex)
 import System.Directory (createDirectoryIfMissing, doesPathExist)
 import System.Exit (ExitCode (..))
@@ -55,7 +59,31 @@ data Options = Options
   , optionId5Base :: Word32
   , optionKernelTextSha256 :: String
   , optionKernelSymsSha256 :: String
+  , optionCases :: CaseSelection
   }
+
+newtype CaseId = CaseId String deriving (Eq, Ord)
+
+data CaseSelection = AllCases | SelectedCases (S.Set CaseId)
+
+controlIds :: [CaseId]
+controlIds = map CaseId ["control-return", "control-state", "control-abi", "control-caller-stack", "control-body-plus-four"]
+
+parseCaseSelection :: [String] -> Either String CaseSelection
+parseCaseSelection [] = Right AllCases
+parseCaseSelection names = do
+  let selected = S.fromList (map CaseId names)
+      known = S.fromList (map (CaseId . scenarioId) scenarios ++ controlIds)
+  unless (S.size selected == length names) (Left "duplicate case selection")
+  unless (selected `S.isSubsetOf` known) (Left "unknown case selection")
+  forM_ [("control-return", "mr-action-nonpositive"), ("control-state", "mr-mutate-to-negative"), ("control-abi", "mr-action-nonpositive"), ("control-caller-stack", "mr-action-nonpositive")] $ \(control, prerequisite) ->
+    unless (not (S.member (CaseId control) selected) || S.member (CaseId prerequisite) selected) $
+      Left ("selected control requires scenario " ++ prerequisite)
+  pure (SelectedCases selected)
+
+selectedCase :: CaseSelection -> CaseId -> Bool
+selectedCase AllCases _ = True
+selectedCase (SelectedCases selected) name = S.member name selected
 
 controllerId :: Word32
 controllerId = 75
@@ -67,7 +95,7 @@ prehookAddr = 0x00d0cc68
 noopAddr = 0x00d3cde8
 
 stockSize, prehookSize, noopSize :: Int
-stockSize = 0xf8
+stockSize = 0xfc
 prehookSize = 0x34
 noopSize = 0x14
 
@@ -208,6 +236,7 @@ data Mutation = Mutation
 data ActionPlan
   = NoAction
   | ActionCall Word32 Word32 (Maybe Mutation)
+  | ActionReentry Word32 Word32
 
 data Fault
   = NoFault
@@ -262,6 +291,7 @@ actionPresent scenario =
   case scenarioAction scenario of
     NoAction -> False
     ActionCall _ _ _ -> True
+    ActionReentry _ _ -> True
 
 transitionCalled :: Scenario -> Bool
 transitionCalled scenario = highAfterAction scenario > 0 && scenarioTransition scenario
@@ -310,12 +340,13 @@ expectedOf scenario =
           actionLog =
             case scenarioAction scenario of
               NoAction -> replicate 4 logSentinel
-              ActionCall _ _ _ ->
+              _ ->
                 [controllerId, 1, fromIntegral (scenarioEvent scenario), actionFunctionAddr]
           transitionLog
             | transitionCalled scenario =
                 case scenarioAction scenario of
                   ActionCall result leftover _ -> [result, leftover, transitionTableBase, transitionFunctionAddr]
+                  ActionReentry result leftover -> [result, leftover, transitionTableBase, transitionFunctionAddr]
                   NoAction -> [controllerId, 1, transitionTableBase, transitionFunctionAddr]
             | otherwise = replicate 4 logSentinel
           prehookLog
@@ -327,6 +358,7 @@ expectedOf scenario =
                 case scenarioAction scenario of
                   NoAction -> 0
                   ActionCall result _ _ -> result
+                  ActionReentry result _ -> result
             , expectedState = scenarioExpectedState scenario
             , expectedShadow = [fromIntegral controllerId, scenarioState scenario, scenarioEvent scenario]
             , expectedActionLog = actionLog
@@ -348,10 +380,27 @@ modeledPrehook =
     , [bxLr]
     ]
 
-actionFunction :: Scenario -> [Word32]
-actionFunction scenario =
+actionFunction :: Word32 -> Scenario -> [Word32]
+actionFunction entry scenario =
   case scenarioAction scenario of
     NoAction -> [bxLr]
+    ActionReentry result leftover ->
+      let callSite = actionFunctionAddr + 4 * fromIntegral (length prefix)
+          prefix =
+            [0xe92d4010]
+              ++ movImm 12 callbackLogBase
+              ++ [strImmediate 0 0, strImmediate 1 4, strImmediate 2 8, strImmediate 3 12]
+              ++ movImm 12 (cellAddress scenario)
+              ++ [0xe3a02000, strhImmediate 2 0]
+              ++ movImm 0 controllerId
+          suffix =
+            movImm 12 (cellAddress scenario)
+              ++ movImm 2 (fromIntegral (scenarioActionSlot scenario))
+              ++ [strhImmediate 2 0]
+              ++ movImm 0 result
+              ++ movImm 1 leftover
+              ++ [0xe8bd8010]
+       in prefix ++ [branchWord callSite entry .|. 0x01000000] ++ suffix
     ActionCall result leftover mutation ->
       let returned =
             case scenarioFault scenario of
@@ -419,6 +468,7 @@ fixtureBytes scenario =
         case scenarioAction scenario of
           NoAction -> cell
           ActionCall _ _ _ -> patchWord cell (0x1000 + 4 * fromIntegral (scenarioActionSlot scenario)) actionFunctionAddr
+          ActionReentry _ _ -> patchWord cell (0x1000 + 4 * fromIntegral (scenarioActionSlot scenario)) actionFunctionAddr
       high = highAfterAction scenario
       transitionEntry bytes
         | scenarioTransition scenario && high > 0 =
@@ -451,9 +501,9 @@ fixtureBytes scenario =
           else logged
    in probed
 
-fixtureCodeBytes :: Scenario -> B.ByteString
-fixtureCodeBytes scenario =
-  let action = assemble (actionFunction scenario)
+fixtureCodeBytes :: Word32 -> Scenario -> B.ByteString
+fixtureCodeBytes entry scenario =
+  let action = assemble (actionFunction entry scenario)
       transition = assemble (transitionFunction scenario)
    in if B.length action > 0x200
         then error "action fixture exceeds its slot"
@@ -533,7 +583,7 @@ caseValue spec =
           , "memory" .= ([] :: [Value])
           , "events" .= ([] :: [Value])
           ]
-    , "exclusions" .= (["single dispatcher call; retained prehook, tables and generated action/transition callbacks; no scheduler, interrupt, frame or device path"] :: [String])
+    , "exclusions" .= (["bounded dispatcher calls with one declared callback reentry; retained prehook, tables and generated callbacks; no scheduler, interrupt or device path"] :: [String])
     ]
 
 regionJson :: CaseRegion -> Value
@@ -619,6 +669,7 @@ data Context = Context
   }
 
 data Symbol = Symbol Word32 Word32
+  deriving (Eq)
 
 requiredSymbols :: [String]
 requiredSymbols =
@@ -657,15 +708,15 @@ symbolFunction context name = case M.lookup name (contextSymbols context) of
     | otherwise -> (address, size)
   Nothing -> error ("kernel symbol missing: " ++ name)
 
-commonRegions :: Context -> Scenario -> [CaseRegion]
-commonRegions context scenario =
+commonRegions :: Context -> Variant -> Scenario -> [CaseRegion]
+commonRegions context variant scenario =
   [ mkRegion (RegionId "prehook") prehookAddr prehookSize ReadExecute (prehookBytes context scenario)
   , mkRegion (RegionId "noop") noopAddr noopSize ReadExecute (contextNoop context)
   , mkRegion (RegionId "cell-pointers") cellPointers 0x200 ReadWrite (pointerTableBytes (fromMaybe 0 (scenarioCellBase scenario)))
   , mkRegion (RegionId "action-pointers") actionPointers 0x200 ReadWrite (pointerTableBytes actionTableBase)
   , mkRegion (RegionId "transition-pointers") transitionPointers 0x200 ReadWrite (pointerTableBytes transitionTableBase)
   , mkRegion (RegionId "fixtures") fixtureRamBase 0x4000 ReadWrite (fixtureBytes scenario)
-  , mkRegion (RegionId "fixture-code") fixtureCodeBase 0x1000 ReadExecute (fixtureCodeBytes scenario)
+  , mkRegion (RegionId "fixture-code") fixtureCodeBase 0x1000 ReadExecute (fixtureCodeBytes (dispatchEntry context variant) scenario)
   , mkRegion (RegionId "stack") stackBase (fromIntegral stackSize) ReadWrite (B.replicate (fromIntegral stackSize) 0)
   , mkRegion (RegionId "exit") exitAddr 4 ReadExecute (word32le bxLr)
   , mkRegion (RegionId "shadow") shadowBase 8 ReadWrite shadowBytes
@@ -678,11 +729,15 @@ prehookBytes :: Context -> Scenario -> B.ByteString
 prehookBytes context scenario =
   if scenarioProbePrehook scenario then assemble modeledPrehook else contextPrehook context
 
-fixtureFunctionSizes :: Scenario -> [(Word32, Word32)]
-fixtureFunctionSizes scenario =
-  [ (actionFunctionAddr, fromIntegral (length (actionFunction scenario)) * 4)
+fixtureFunctionSizes :: Word32 -> Scenario -> [(Word32, Word32)]
+fixtureFunctionSizes entry scenario =
+  [ (actionFunctionAddr, fromIntegral (length (actionFunction entry scenario)) * 4)
   , (transitionFunctionAddr, fromIntegral (length (transitionFunction scenario)) * 4)
   ]
+
+dispatchEntry :: Context -> Variant -> Word32
+dispatchEntry _ StockVariant = stockEntry
+dispatchEntry context OwnedVariant = fst (symbolFunction context "rb_modal_dispatch")
 
 buildCase :: Context -> Variant -> Scenario -> CaseSpec
 buildCase context variant scenario =
@@ -691,8 +746,8 @@ buildCase context variant scenario =
       CaseSpec
         { caseSpecId = scenarioId scenario ++ "-stock"
         , caseSpecEntry = stockEntry
-        , caseSpecRegions = commonRegions context scenario ++ [mkRegion (RegionId "stock") stockEntry stockSize ReadExecute (contextStock context)]
-        , caseSpecFunctions = (stockEntry, fromIntegral stockSize) : (prehookAddr, fromIntegral prehookSize) : (noopAddr, fromIntegral noopSize) : fixtureFunctionSizes scenario
+        , caseSpecRegions = commonRegions context variant scenario ++ [mkRegion (RegionId "stock") stockEntry stockSize ReadExecute (contextStock context)]
+        , caseSpecFunctions = (stockEntry, fromIntegral stockSize) : (prehookAddr, fromIntegral prehookSize) : (noopAddr, fromIntegral noopSize) : fixtureFunctionSizes stockEntry scenario
         , caseSpecStatus = Returned
         }
     OwnedVariant ->
@@ -701,7 +756,7 @@ buildCase context variant scenario =
        in CaseSpec
             { caseSpecId = scenarioId scenario ++ "-owned"
             , caseSpecEntry = entry
-            , caseSpecRegions = commonRegions context scenario ++ [mkRegion (RegionId "ktext") imageStart (B.length (contextKernelText context)) ReadExecute (contextKernelText context)]
+            , caseSpecRegions = commonRegions context variant scenario ++ [mkRegion (RegionId "ktext") imageStart (B.length (contextKernelText context)) ReadExecute (contextKernelText context)]
             , caseSpecFunctions =
                 [ symbolFunction context "rb_modal_dispatch"
                 , symbolFunction context "rb_modal_call_prehook"
@@ -709,7 +764,7 @@ buildCase context variant scenario =
                 , (prehookAddr, fromIntegral prehookSize)
                 , (noopAddr, fromIntegral noopSize)
                 ]
-                  ++ fixtureFunctionSizes scenario
+                  ++ fixtureFunctionSizes entry scenario
             , caseSpecStatus = Returned
             }
 
@@ -848,10 +903,11 @@ allowedWriteIntervals scenario =
     ++ stateInterval
     ++ cellHighInterval
     ++ actionLogIntervals
+    ++ [(cellAddress scenario, 2) | ActionReentry _ _ <- [scenarioAction scenario]]
     ++ transitionLogIntervals
     ++ pointerIntervals
     ++ prehookLogInterval
-    ++ [(stackBase, stackSize)]
+    ++ [(stackBase, stackTop - stackBase)]
  where
   hasCell = case scenarioCellBase scenario of
     Nothing -> False
@@ -887,6 +943,7 @@ data Diff
   | RegisterDiff Register
   | CpsrDiff
   | MemoryDiff RegionId
+  | CallerStackDiff
   | ProvenanceDiff
   deriving (Eq)
 
@@ -895,7 +952,8 @@ renderDiff StatusDiff = "status"
 renderDiff (RegisterDiff register) = "register " ++ registerLabel register
 renderDiff CpsrDiff = "cpsr control"
 renderDiff (MemoryDiff ident) = "memory " ++ regionName ident
-renderDiff ProvenanceDiff = "non-stack write set"
+renderDiff CallerStackDiff = "caller-owned stack"
+renderDiff ProvenanceDiff = "ordered non-stack writes"
 
 sameNonStackWrites :: NativeObservation -> NativeObservation -> Bool
 sameNonStackWrites oracle candidate =
@@ -904,11 +962,10 @@ sameNonStackWrites oracle candidate =
     _ -> False
  where
   nonStack writes =
-    S.fromList
-      [ (fromIntegral address :: Word32, fromIntegral size :: Word32)
+    [ (fromIntegral address :: Word32, fromIntegral size :: Word32)
       | Write (GuestAddress address) (WriteBytes size) <- writes
-      , not (stackBase <= fromIntegral address && fromIntegral address + fromIntegral size <= stackBase + stackSize)
-      ]
+      , not (stackBase <= fromIntegral address && fromIntegral address + fromIntegral size <= stackTop)
+    ]
 
 compareObservations :: NativeObservation -> NativeObservation -> [Diff]
 compareObservations oracle candidate
@@ -923,7 +980,11 @@ compareObservations oracle candidate
            | ident <- sharedRegions
            , regionBytesOf oracle ident /= regionBytesOf candidate ident
            ]
+        ++ [CallerStackDiff | callerStack oracle /= callerStack candidate]
         ++ [ProvenanceDiff | not (sameNonStackWrites oracle candidate)]
+
+callerStack :: NativeObservation -> B.ByteString
+callerStack observation = B.drop (fromIntegral (stackTop - stackBase)) (regionBytesOf observation (RegionId "stack"))
 
 data Outcome = Outcome
   { outcomeId :: String
@@ -983,6 +1044,37 @@ controlState context oracle = do
       faulty = base { scenarioId = "control-state", scenarioFault = FaultHigh wrongHigh }
   runOwnedControl context faulty oracle [MemoryDiff (RegionId "fixtures"), MemoryDiff (RegionId "state-cells")]
 
+controlOutput :: Context -> NativeObservation -> String -> [Word32] -> [Diff] -> IO (Bool, String)
+controlOutput context oracle name mutation expectedDiffs = do
+  let scenario = (findScenario "mr-action-nonpositive") {scenarioId = name}
+      spec = buildCase context OwnedVariant scenario
+      wrapper = fixtureCodeBase + 0x800
+      entry = caseSpecEntry spec
+      words_ =
+        [0xe92d4008, branchWord (wrapper + 4) entry .|. 0x01000000]
+          ++ mutation ++ [0xe8bd8008]
+      install region@(CaseRegion bytes permission)
+        | regionIdOf bytes == RegionId "fixture-code" =
+            CaseRegion
+              bytes
+                { regionBytes =
+                    B.take 0x800 (regionBytes bytes)
+                      <> assemble words_
+                      <> B.drop (0x800 + 4 * length words_) (regionBytes bytes)
+                }
+              permission
+        | otherwise = region
+      faulty =
+        spec
+          { caseSpecEntry = wrapper
+          , caseSpecRegions = map install (caseSpecRegions spec)
+          , caseSpecFunctions = (wrapper, fromIntegral (4 * length words_)) : caseSpecFunctions spec
+          }
+  path <- writeCase (contextOutput context </> scenarioId scenario) faulty
+  candidate <- loadObserved (contextRunner context) path
+  let diffs = compareObservations oracle candidate
+  pure (diffs == expectedDiffs, "diffs: " ++ show (map renderDiff diffs))
+
 differentFrom :: Word32 -> Word32 -> Word32
 differentFrom value fallback = if value == fallback then value + 1 else fallback
 
@@ -1011,6 +1103,17 @@ renderedReport :: [Outcome] -> [(String, Bool, String)] -> Value
 renderedReport outcomes controls =
   object
     [ "qualified" .= (all outcomeOk outcomes && all (\(_, ok, _) -> ok) controls)
+    , "complete_matrix" .= (length outcomes == length scenarios && length controls == length controlIds)
+    , "scope" .= ("bounded dispatcher semantics and AAPCS preservation over generated callbacks" :: String)
+    , "global_admission" .= False
+    , "open_contracts" .=
+        ( [ "all-controller registration, target and state-storage closure"
+          , "callback register roles, LR identity and dispatcher-frame reads"
+          , "caller-live volatile registers and flags"
+          , "exception, asynchronous-writer and code-integrity premises"
+          , "natural device-driven entry, cancellation, repeated use and handback"
+          ] :: [String]
+        )
     , "cases" .=
         [ object
             [ "id" .= outcomeId outcome
@@ -1048,8 +1151,22 @@ runQualification options = do
   unless (optionId5Base options == id5BaseValue) $ error "id5 base differs from the pinned image base"
   id5 <- readExact (optionId5 options) (fromIntegral id5Size)
   unless (sha256Hex (sha256 id5) == id5Digest) $ error "id5 digest differs from the pinned image"
-  kernelText <- readBounded (optionBuild options </> "kernel-text.bin") kernelTextLimit
-  unless (sha256Hex (sha256 kernelText) == optionKernelTextSha256 options) $ error "kernel-text digest mismatch"
+  let declarations = [(stockEntry, stockSize), (prehookAddr, prehookSize), (noopAddr, noopSize)]
+      windows = [(stockEntry, 0x00bfb124), (prehookAddr, 0x00d0cc9c), (noopAddr, 0x00d3cdfc)]
+      declaration (address, size) = SI.FunctionDeclaration (SI.GuestAddress address) (SI.FunctionSize size)
+  derived <- either error pure $
+    mapM (\(low, high) -> SI.deriveFunction (SI.GuestAddress id5BaseValue) id5 (SI.FunctionWindow (SI.GuestAddress low) (SI.GuestAddress high)) []) windows
+  either error pure (SI.checkDeclarations (map declaration declarations) (map declaration derived))
+  kernelBytes <- readBounded (optionBuild options </> "kernel.elf") (2 * 1024 * 1024)
+  unless (sha256Hex (sha256 kernelBytes) == "6cb32ec04b97a21df40b7420f5e59a4aee7cdd5fc91f3bcd160b05f94c35a48d") $
+    error "kernel.elf differs from E-MODAL-DISPATCHER-LINKED-ABI-150"
+  kernel <- either error pure (E.parseElf kernelBytes)
+  textSection <- case [section | section <- E.elfSections kernel, E.sectionName section == ".text", E.sectionExecutable section] of
+    [section] -> pure section
+    _ -> error "exactly one executable .text section required"
+  let kernelText = B.take (fromIntegral (E.sectionSize textSection)) (B.drop (fromIntegral (E.sectionOffset textSection)) kernelBytes)
+  unless (not (B.null kernelText) && B.length kernelText <= kernelTextLimit && sha256Hex (sha256 kernelText) == optionKernelTextSha256 options) $
+    error "ELF .text digest or size mismatch"
   symsBytes <- readBounded (optionBuild options </> "kernel.syms") kernelSymsLimit
   unless (sha256Hex (sha256 symsBytes) == optionKernelSymsSha256 options) $ error "kernel.syms digest mismatch"
   let symbols = parseSymbols requiredSymbols (BC.unpack symsBytes)
@@ -1058,49 +1175,50 @@ runQualification options = do
       noop = sliceAt id5 (optionId5Base options) noopAddr noopSize
       context = Context (optionRunner options) (optionOutput options) symbols kernelText stock prehook noop
       imageStart = symbolAddress context "__rb_image_start"
+  unless (imageStart == E.sectionAddress textSection) $
+    error "__rb_image_start differs from ELF .text"
+  forM_ requiredSymbols $ \name -> do
+    let supplied = symbols M.! name
+    case [(E.symbolValue symbol, E.symbolSize symbol) | symbol <- E.elfSymbols kernel, E.symbolName symbol == name] of
+      [(address, size)] | Symbol address size == supplied -> pure ()
+      _ -> error ("kernel.syms differs from bound ELF: " ++ name)
   forM_ ["rb_modal_dispatch", "rb_modal_call_prehook", "rb_modal_call"] $ \name -> do
     let (address, size) = symbolFunction context name
     unless (imageStart <= address && address + size <= imageStart + fromIntegral (B.length kernelText)) $
       error ("owned symbol outside kernel-text.bin: " ++ name)
   createDirectoryIfMissing True (optionOutput options)
-  outcomes <- runCases context scenarios []
+  let selection = optionCases options
+      selectedScenarios = filter (selectedCase selection . CaseId . scenarioId) scenarios
+  outcomes <- runCases context selectedScenarios []
   case outcomes of
-    Left failed -> do
-      writeFailed context [failed] []
-      pure False
+    Left failed -> writeFailed context failed [] >> pure False
     Right completed -> do
-      let baseReturn = findScenario "mr-action-nonpositive"
-          baseState = findScenario "mr-mutate-to-negative"
-          oracleOf ident =
-            case [stockObservation | outcome <- completed, outcomeId outcome == scenarioId ident, Just stockObservation <- [outcomeStock outcome]] of
-              (observation : _) -> observation
-              [] -> error ("no stock observation for " ++ scenarioId ident)
-      returnControl <- runControl (controlReturn context (oracleOf baseReturn))
-      if not (fst returnControl)
-        then writeFailed context completed [("control-return", fst returnControl, snd returnControl)] >> pure False
-        else do
-          stateControl <- runControl (controlState context (oracleOf baseState))
-          if not (fst stateControl)
-            then writeFailed context completed [("control-state", fst stateControl, snd stateControl)] >> pure False
-            else do
-              guardControl <- runControl $ do
-                path <- writeCase (contextOutput context </> "control-body-plus-four") guardCase
-                observation <- loadObserved (contextRunner context) path
-                let pc = registerValue observation Pc
-                pure
-                  ( nativeStatus observation == FetchGuard && pc == bodyPlusFour
-                  , "status " ++ runnerStatusLabel (nativeStatus observation) ++ "; pc " ++ hex pc
-                  )
-              let controls =
-                    [ ("control-return", fst returnControl, snd returnControl)
-                    , ("control-state", fst stateControl, snd stateControl)
-                    , ("control-body-plus-four", fst guardControl, snd guardControl)
-                    ]
-                  qualified = all (\(_, ok, _) -> ok) controls
-                  report = renderedReport completed controls
-              writeReport context completed controls
-              unless qualified $ retainFailures (contextOutput context) completed controls report
-              pure qualified
+      let oracleOf ident =
+            case [stockObservation | outcome <- completed, outcomeId outcome == ident, Just stockObservation <- [outcomeStock outcome]] of
+              observation : _ -> pure observation
+              [] -> error ("no stock observation for " ++ ident)
+          action (CaseId name) = case name of
+            "control-return" -> oracleOf "mr-action-nonpositive" >>= controlReturn context
+            "control-state" -> oracleOf "mr-mutate-to-negative" >>= controlState context
+            "control-abi" -> oracleOf "mr-action-nonpositive" >>= \oracle -> controlOutput context oracle name [0xe3a04000] [RegisterDiff R4]
+            "control-caller-stack" -> oracleOf "mr-action-nonpositive" >>= \oracle -> controlOutput context oracle name [0xe58d0008] [CallerStackDiff, ProvenanceDiff]
+            "control-body-plus-four" -> do
+              path <- writeCase (contextOutput context </> name) guardCase
+              observation <- loadObserved (contextRunner context) path
+              let pc = registerValue observation Pc
+              pure (nativeStatus observation == FetchGuard && pc == bodyPlusFour, "status " ++ runnerStatusLabel (nativeStatus observation) ++ "; pc " ++ hex pc)
+            _ -> error "invalid validated control"
+          runControls [] collected = pure (reverse collected)
+          runControls (ident@(CaseId name) : rest) collected = do
+            (ok, detail) <- runControl (action ident)
+            let result = (name, ok, detail)
+            if ok then runControls rest (result : collected) else pure (reverse (result : collected))
+      controls <- runControls (filter (selectedCase selection) controlIds) []
+      let qualified = all (\(_, ok, _) -> ok) controls
+          report = renderedReport completed controls
+      writeReport context completed controls
+      unless qualified $ retainFailures (contextOutput context) completed controls report
+      pure qualified
  where
   writeFailed context completed controls = do
     let outcomes = completed
@@ -1110,13 +1228,13 @@ runQualification options = do
   writeReport context outcomes controls =
     B.writeFile (contextOutput context </> "modal-runtime-results.json") (encodeCanonical (renderedReport outcomes controls))
 
-runCases :: Context -> [Scenario] -> [Outcome] -> IO (Either Outcome [Outcome])
+runCases :: Context -> [Scenario] -> [Outcome] -> IO (Either [Outcome] [Outcome])
 runCases _ [] completed = pure (Right (reverse completed))
 runCases context (scenario : rest) completed = do
   outcome <- runScenario context scenario
   if outcomeOk outcome
     then runCases context rest (outcome : completed)
-    else pure (Left outcome)
+    else pure (Left (reverse (outcome : completed)))
 
 readExact :: FilePath -> Int -> IO B.ByteString
 readExact path expected = do
@@ -1150,5 +1268,6 @@ scenarios =
   , Scenario "mr-mutate-to-positive" 3 4 5 (Just fixtureRamBase) 17 5 0 (ActionCall 0x40414243 0x44454647 (Just (Mutation (Just 2) Nothing Nothing Nothing))) True 0x55565758 False False NoFault 5
   , Scenario "mr-capture-pointers" 3 4 5 (Just fixtureRamBase) 17 5 1 (ActionCall 0x50515253 0x54555657 (Just (Mutation (Just 2) (Just bogusCellBase) (Just 0) (Just bogusTransitionBase)))) False 0 True False NoFault 5
   , Scenario "mr-negative-event-abi" 0xffff 0x0000 0x0000 (Just fixtureRamBase) 0 5 (-1) (ActionCall 0x60616263 0x64656667 Nothing) False 0 False True NoFault 1
-  , Scenario "mr-negative-state-abi" 0x0000 0x0000 0x8000 (Just fixtureRamBase) 0 5 (-1) (ActionCall 0x70717273 0x74757677 Nothing) False 0 False True NoFault 1
+  , Scenario "mr-negative-state-abi" 0x8000 0x0001 0x8000 (Just fixtureRamBase) 0 5 (-1) (ActionCall 0x70717273 0x74757677 Nothing) False 0 False True NoFault 1
+  , Scenario "mr-reentry" 0 1 0 (Just fixtureRamBase) 0 5 (-1) (ActionReentry 0x31323334 0x35363738) False 0 False False NoFault 1
   ]

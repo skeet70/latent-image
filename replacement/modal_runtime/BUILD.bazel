@@ -39,6 +39,7 @@ haskell_library(
     visibility = ["//visibility:public"],
     deps = [
         "//emulation:case-sha256",
+        "//replacement/media_permit:stock-inventory",
         "//emulation:native-adapter",
         "//emulation:native-observation",
         "//host:aeson",
@@ -49,6 +50,7 @@ haskell_library(
         "//host:filepath",
         "//host:host-support",
         "//host:json",
+        "//host/firmware:bank-allowlist",
     ],
 )
 
@@ -129,5 +131,15 @@ haskell_test(
         "//host:bytestring",
         "//host:text",
         "//host:vector",
+    ],
+)
+
+haskell_test(
+    name = "selection-tests",
+    srcs = ["SelectionTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        ":qualification",
+        "//host:base",
     ],
 )
