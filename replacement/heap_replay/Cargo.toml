@@ -1,0 +1,26 @@
+[package]
+name = "xm1-heap-replay"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src.rs"
+crate-type = ["staticlib"]
+
+[features]
+rlsf = ["dep:rlsf"]
+talc = ["dep:talc"]
+buddy = ["dep:buddy-alloc"]
+
+[dependencies]
+rlsf = { version = "=0.2.3", default-features = false, features = ["unstable"], optional = true }
+talc = { version = "=5.1.1", default-features = false, optional = true }
+buddy-alloc = { version = "=0.6.0", default-features = false, optional = true }
+
+[profile.release]
+opt-level = 3
+panic = "abort"
+codegen-units = 1
+debug = false
+lto = false
