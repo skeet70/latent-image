@@ -35,6 +35,7 @@ cases =
   , RefusalCase "entry-stack" (context "entry" "incoming" [field "sp"]) (FlipWord 8)
   , RefusalCase "entry-prior-irq" (context "entry" "returned" [field "registers",Element 0]) (FlipWord 0x80)
   , RefusalCase "entry-masked-irq" (context "entry" "returned" [field "cpsr"]) (FlipWord 0x80)
+  , RefusalCase "entry-synthetic-blx-continuation" (context "entry" "returned" [field "lr"]) (ReplaceValue (J.toJSON (0x72368c :: Word64)))
   , RefusalCase "exit-saved-mask" (context "exit" "incoming" [field "registers",Element 0]) (FlipWord 0x80)
   , RefusalCase "exit-restored-irq" (context "exit" "returned" [field "cpsr"]) (FlipWord 0x80)
   , RefusalCase "entry-watch-classes" (watch "entry" [field "classes"]) Remove

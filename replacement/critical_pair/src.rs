@@ -101,17 +101,16 @@ impl Scratch {
     }
 
     #[inline(always)]
-    unsafe fn call(&mut self, continuation: GuestAddress) {
+    unsafe fn call(&mut self) {
         xm1_critical_retained_call(self, RetainedCode(self.r3));
-        self.lr = continuation.0;
     }
 
     #[inline(always)]
-    unsafe fn observe(&mut self, core: CoreIndex, continuation: GuestAddress) -> Tag {
+    unsafe fn observe(&mut self, core: CoreIndex) -> Tag {
         self.r2 = core.root().0;
         self.r3 = GuestAddress(self.r2.wrapping_add(OBSERVE.0)).load();
         self.r0 = 0;
-        self.call(continuation);
+        self.call();
         Tag(self.r0)
     }
 
@@ -127,7 +126,8 @@ impl Scratch {
         self.r3 = core.root().0;
         self.r3 = GuestAddress(self.r3.wrapping_add(RESTORE_IRQ.0)).load();
         self.r0 = prior.0;
-        self.call(continuation);
+        self.call();
+        self.lr = continuation.0;
     }
 }
 
@@ -138,11 +138,11 @@ pub(crate) unsafe extern "C" fn xm1_critical_enter_continue(
     core: CoreIndex,
     prior: PriorIrqMask,
 ) {
-    let first = scratch.observe(core, GuestAddress(0x723620));
+    let first = scratch.observe(core);
     scratch.r3 = core.tag(TagKind::Direct).0;
     scratch.compare(first.0, scratch.r3);
     if first.0 != scratch.r3 {
-        let second = scratch.observe(core, GuestAddress(0x723644));
+        let second = scratch.observe(core);
         let tag = core.tag(TagKind::Counted);
         scratch.compare(second.0, tag.0);
         if second.0 != tag.0 {
@@ -151,7 +151,7 @@ pub(crate) unsafe extern "C" fn xm1_critical_enter_continue(
                 scratch.r3 = GuestAddress(scratch.r3.wrapping_add(RETRY.0)).load();
                 scratch.r0 = 0;
                 scratch.r1 = tag.0;
-                scratch.call(GuestAddress(0x72368c));
+                scratch.call();
                 scratch.compare(scratch.r0, 0);
                 if scratch.r0 == 0 {
                     break;
@@ -168,9 +168,9 @@ pub(crate) unsafe extern "C" fn xm1_critical_exit(scratch: &mut Scratch) {
     let prior = PriorIrqMask(scratch.r0);
     scratch.r2 = CoreIndex(0).root().0;
     scratch.r3 = GuestAddress(scratch.r2.wrapping_add(IDENTITY.0)).load();
-    scratch.call(GuestAddress(0x7236d4));
+    scratch.call();
     let core = CoreIndex(scratch.r0);
-    let observed = scratch.observe(core, GuestAddress(0x7236ec));
+    let observed = scratch.observe(core);
     scratch.r3 = core.tag(TagKind::Direct).0;
     scratch.compare(observed.0, scratch.r3);
     if observed.0 == scratch.r3 {
@@ -192,7 +192,7 @@ pub(crate) unsafe extern "C" fn xm1_critical_exit(scratch: &mut Scratch) {
         scratch.r2 = scratch.r3;
         scratch.r3 = GuestAddress(scratch.r2.wrapping_add(RELEASE.0)).load();
         scratch.r0 = 0;
-        scratch.call(GuestAddress(0x723774));
+        scratch.call();
     }
     scratch.restore(core, prior, GuestAddress(0x72378c));
 }

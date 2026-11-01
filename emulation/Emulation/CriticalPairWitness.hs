@@ -247,9 +247,16 @@ immutableLoaderResources base bytes = mapM (\(low,high) ->
   resource low <$> slice (fromIntegral (low-base)) (fromIntegral (high-low)) bytes)
   (loaderSpans base (fromIntegral (B.length bytes)))
 
+loaderCodeSpans :: [(Word64,Word64)]
+loaderCodeSpans = loaderSpans 0x40000 0xdae0 ++ loaderSpans 0xd0000 0xdaa0
+
+retainedLoaderInstruction :: Word32 -> Bool
+retainedLoaderInstruction pc = let address = fromIntegral pc
+  in pc .&. 3 == 0 && any (\(low,high) -> address >= low && address < high) loaderCodeSpans
+
 spans :: [(Word64,Word64)]
 spans = [(0x10400,0x11800),(0x7235d8,0x723790),(0x725dd8,0x726098),(0x96bd20,0x96bd28),(0x4dae0,0x4f10c),(0xddaa0,0xdf0cc),(0xa0f824,0xa0f828),(0xc0804,0xc0808)]
-  ++ loaderSpans 0x40000 0xdae0 ++ loaderSpans 0xd0000 0xdaa0
+  ++ loaderCodeSpans
   ++ [(0x69cdf8,0x69cf38),(0xd0ab0,0xd0af0)]
 
 commonResourceCount :: Int
@@ -717,7 +724,7 @@ validateTransition entered exit events entryAfter exitBefore = do
     && snd (last tailFetches) == sum (countsOf exit)+1
     && all (\(_,clock) -> clock >= sum (countsOf entered) && clock <= sum (countsOf exit)) (init tailFetches))
     "critical wrapper saved-mask MOV, stopped BL fetch, executed BL and exit fetch differ"
-  require (all (\(site,_) -> (site >= 0x725e00 && site < 0x726098) || site == 0x7236b0) fetched) "critical transition fetched outside the original wrapper and exit endpoint"
+  require (all (\(site,_) -> (site >= 0x725e00 && site < 0x726098) || site == 0x7236b0 || retainedLoaderInstruction site) fetched) "critical transition fetched outside the original wrapper, retained loaders and exit endpoint"
   require (sum (countsOf entered) < sum (countsOf exit) && tcmOf entered == tcmOf exit) "critical wrapper transition counters or TCM differ"
   require (take commonResourceCount entryAfter == take commonResourceCount exitBefore && not (null exitBefore)) "critical wrapper changed a protected resource between boundaries"
   require (not (null events)) "critical wrapper transition evidence is absent"
@@ -726,7 +733,7 @@ validateCaller :: Context -> Context -> [PairEvent] -> Either String ()
 validateCaller exited final events = do
   let fetched = [site | PairEvent (Event CpuFetch (Just 1) _ _ _ _ (Just site) _ _) _ _ <- events]
   require (reverse (take 2 (reverse fetched)) == [0x726090,0x726094]) "critical original wrapper epilogue was not executed"
-  require (all (\site -> site >= pcOf exited && site < 0x726098) fetched && sum (countsOf exited) < sum (countsOf final)) "critical caller continuation route or counters differ"
+  require (all (\site -> (site >= pcOf exited && site < 0x726098) || retainedLoaderInstruction site) fetched && sum (countsOf exited) < sum (countsOf final)) "critical caller continuation route or counters differ"
   require (not (null events)) "critical caller continuation evidence is absent"
   let loads = [(address,physical,width,value,clock,before) |
         PairEvent (Event CpuRead (Just 1) address physical width value (Just 0x726094) clock _) before _ <- wordEvents events]
@@ -849,7 +856,7 @@ validateSourceEntry (Boundary incoming _ steps before after _) returned events =
       if direct then do
         require (null remaining && new == old) "critical direct-tag entry performed an extra observation, retry or counter update"
         counterEffects old old False events
-        sourceScratch returned [prior,inherited,0x400ddaa0,0x12,preservedR12] 0x723620 status
+        sourceScratch returned [prior,inherited,0x400ddaa0,0x12,preservedR12] 0xd131c status
       else case remaining of
         second:retries -> do
           checkService Observe second
@@ -861,7 +868,7 @@ validateSourceEntry (Boundary incoming _ steps before after _) returned events =
             require (all ((/= 0) . callValue) (init retries) && callValue (last retries) == 0) "critical retry loop did not stop on its first observed success"
           require (new == old+1) "critical entry counter increment is not wrapping u32 addition"
           counterEffects old new True events
-          sourceScratch returned [prior,if counted then inherited else 0x22,new,0x40a0f3d0,preservedR12] (if counted then 0x723644 else 0x72368c) status
+          sourceScratch returned [prior,if counted then inherited else 0x22,new,0x40a0f3d0,preservedR12] (if counted then 0xd131c else 0xd12e4) status
         [] -> Left "critical entry collapsed the source's separate first and second observations"
     _ -> Left "critical entry omitted its identity, mask or first observation service"
 
