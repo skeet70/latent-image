@@ -1325,6 +1325,12 @@ sh_binary(
 )
 
 sh_binary(
+    name = "startup-tasks",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-startup-tasks"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
     name = "kernel-install-observe",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-kernel-install"],
     visibility = ["//visibility:public"],
@@ -2655,5 +2661,43 @@ haskell_binary(
         "//host:host-support",
         "//host:json",
         "//host:vector",
+    ],
+)
+
+haskell_library(
+    name = "startup-task-witness-lib",
+    srcs = [
+        "Emulation/StartupTaskControls.hs",
+        "Emulation/StartupTaskWire.hs",
+        "Emulation/StartupTaskWitness.hs",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:json",
+        "//host:update-container",
+        "//host:vector",
+        "//replacement/kernel_install:kernel-install-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "startup-task-check",
+    srcs = ["StartupTaskWitnessMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":startup-task-witness-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
     ],
 )

@@ -46,6 +46,10 @@ name = "fujimod-xm1-task-storage"
 path = "src/task_storage.rs"
 
 [[bin]]
+name = "fujimod-xm1-startup-tasks"
+path = "src/startup_tasks.rs"
+
+[[bin]]
 name = "fujimod-xm1-kernel-install"
 path = "src/kernel_install.rs"
 
