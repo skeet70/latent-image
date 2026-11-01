@@ -890,17 +890,21 @@ impl TraceSites {
         Ok(())
     }
 
-    pub fn remove_site(&mut self, session: &Session, address: Guest) -> Result<(), String> {
+    pub fn remove_sites(&mut self, session: &Session, addresses: &[Guest]) -> Result<(), String> {
         if self.capture_observation_active() {
             return Err("capture observation sites are frozen until the session ends".into());
         }
-        if !self.sites.contains_key(&address.0) {
+        if addresses.is_empty() { return Ok(()); }
+        if addresses.iter().any(|address| !self.sites.contains_key(&address.0)) {
             return Err("trace site is not armed".into());
         }
         self.disarm(session)?;
-        let label = self.sites.remove(&address.0).ok_or("trace site disappeared")?;
-        if !self.sites.values().any(|other| other == &label) {
-            self.stop_labels.remove(&label);
+        for address in addresses {
+            if let Some(label) = self.sites.remove(&address.0) {
+                if !self.sites.values().any(|other| other == &label) {
+                    self.stop_labels.remove(&label);
+                }
+            }
         }
         self.rearm(session)?;
         self.restore_resume(session)

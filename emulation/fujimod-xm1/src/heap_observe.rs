@@ -2,13 +2,14 @@ mod heap_state;
 #[path = "memory_view.rs"]
 mod memory_view;
 
-use heap_state::{Address, ContextKey, Core, Operation, Recorder, Snapshot, TaskId};
+use heap_state::{Address, ContextKey, Core, Image5CodeStatus, Image5Lifecycle, Image5Phase, Operation, Recorder, Snapshot, TaskId, IMAGE5_HEAP_CODE, IMAGE5_LOAD_POINTS};
 use fujimod_emulator::board::factory::MemoryMap;
 use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
 use fujimod_emulator_cpu::{Register, arm};
 use fujimod_xm1::bridge::{read, sha256, write};
 use fujimod_xm1::guest::RouteKey;
 use fujimod_xm1::machine::{Machine, RunOutcome};
+use fujimod_xm1::provenance::Guest;
 use memory_view::{MemoryAddress, MemoryCore, TcmRegister, static_span, tcm_window};
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
 use serde::{Deserialize, Serialize};
@@ -16,11 +17,12 @@ use std::{collections::{BTreeMap, BTreeSet}, fs::OpenOptions, io::{BufWriter, Wr
 
 const USAGE: &str = "heap-observe --run RUN --update DAT --boot-rom ROM --analysis ROOT --observer enabled|disabled --output DIR";
 const ENTRIES: [u32; 8] = [0x89cde4, 0x89e560, 0x89da64, 0xbf1c44, 0x89e464, 0x72b110, 0x72b164, 0x72b1cc];
-const CODE: [(u32, u32); 17] = [(0x89cda4, 0x89d4f8), (0x89da3c, 0x89dfbc), (0x89e464, 0x89e7c4),
-    (0xbf1c1c, 0xbf1cd4), (0x72b110, 0x72b210), (0x723cb8, 0x723ce8), (0x890ed8, 0x890f04),
+const CODE: [(u32, u32); 21] = [(0x89cda4, 0x89d4f8), (0x89da3c, 0x89dfbc), (0x89e464, 0x89e7c4),
+    IMAGE5_HEAP_CODE, (0x72b110, 0x72b210), (0x723cb8, 0x723ce8), (0x890ed8, 0x890f04),
     (0x4118c, 0x411cc), (0xd118c, 0xd11cc), (0x412bc, 0x412cc), (0xd12bc, 0xd12cc),
     (0x427b8, 0x427d4), (0xd27b8, 0xd27d4), (0x4c620, 0x4c6a8), (0xdc5e0, 0xdc668),
-    (0x4cbd8, 0x4cc00), (0xdcb98, 0xdcbc0)];
+    (0x4cbd8, 0x4cc00), (0xdcb98, 0xdcbc0), (0x6a96c0, 0x6a9844), (0x6ae360, 0x6ae500),
+    (0x69d2b4, 0x69d2e8), (0x73b4ac, 0x73b4b4)];
 const HEAP_START: u32 = 0xa71a00;
 const HEAP_END: u32 = 0xbf1a00;
 const WATCH_LIMIT: usize = 65_536;
@@ -52,7 +54,7 @@ enum ObserverMode { Enabled, Disabled }
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 struct Identity { run: Digest, update: Digest, boot_rom: Digest, observer: Digest, images: Vec<Digest> }
 struct Image { base: u32, bytes: Vec<u8> }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(transparent)]
 struct HexAddress(String);
 impl HexAddress {
@@ -60,7 +62,7 @@ impl HexAddress {
         u32::from_str_radix(self.0.strip_prefix("0x").ok_or("trace word is not hexadecimal")?, 16).map_err(|error| error.to_string())
     }
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct HitRegisters {
     r0: HexAddress, r1: HexAddress, r2: HexAddress, r3: HexAddress, r4: HexAddress, r5: HexAddress, r6: HexAddress,
     r7: HexAddress, r8: HexAddress, r9: HexAddress, r10: HexAddress, r11: HexAddress, r12: HexAddress,
@@ -72,9 +74,13 @@ impl HitRegisters {
             self.r10.decode()?, self.r11.decode()?, self.r12.decode()?])
     }
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum HitSite { Heap }
+#[derive(Deserialize, Serialize)]
 struct RecordedHit {
     address: HexAddress, core: Core, instructions: heap_state::Counter,
+    site: HitSite,
     registers: HitRegisters, sp: HexAddress, lr: HexAddress, cpsr: u32,
 }
 #[derive(Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
@@ -95,6 +101,13 @@ struct AccessBatch {
     classes: Vec<WatchClass>, ranges: Vec<[u64; 2]>, views: Views,
 }
 #[derive(Deserialize, Serialize)]
+struct Image5Word {
+    address: Address,
+    physical: u32,
+    low: [u32; 2],
+    high: [u32; 2],
+}
+#[derive(Deserialize, Serialize)]
 struct Boundary {
     snapshot: Snapshot,
     identities: [u32; 2],
@@ -103,6 +116,10 @@ struct Boundary {
     context_word: u32,
     task_record_word: Address,
     code_word: u32,
+    image5_phase: Image5Phase,
+    image5_code: Option<Vec<Image5Word>>,
+    image5_done: Option<u32>,
+    image5_saved_return: Option<Address>,
 }
 #[derive(Deserialize, Serialize)]
 struct Receipt {
@@ -130,16 +147,31 @@ struct Receipt {
     summary_sha256: Digest,
     failure_checkpoint: Option<Digest>,
     failure_checkpoint_error: Option<String>,
+    image5_phase: Image5Phase,
     limitations: Vec<String>,
 }
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", content = "detail", rename_all = "kebab-case")]
-enum AdmissionFailure { BoundaryRegisters, WatchClasses, WatchRanges, MissingFetch, FinalCounters, Other(String) }
+enum AdmissionFailure { BoundaryRegisters, WatchClasses, WatchRanges, MissingFetch, FinalCounters, Image5Lifecycle(Image5AdmissionFailure), Other(String) }
 impl std::fmt::Display for AdmissionFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(formatter, "{self:?}") }
 }
 impl From<String> for AdmissionFailure { fn from(error: String) -> Self { Self::Other(error) } }
 impl From<&str> for AdmissionFailure { fn from(error: &str) -> Self { Self::Other(error.into()) } }
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum Image5AdmissionFailure {
+    Phase { expected: Image5Phase, observed: Image5Phase },
+    Shape,
+    Frame,
+    CodeWord { address: Address, expected: u32, observed: u32 },
+    Aliases { address: Address, physical: u32, low: [u32; 2], high: [u32; 2] },
+    TcmOverlap { address: Address, register: u32 },
+    Transition { failure: heap_state::Image5Failure },
+}
+impl From<Image5AdmissionFailure> for AdmissionFailure {
+    fn from(error: Image5AdmissionFailure) -> Self { Self::Image5Lifecycle(error) }
+}
 fn require(condition: bool, reason: &str) -> Result<(), String> {
     if condition { Ok(()) } else { Err(reason.into()) }
 }
@@ -197,7 +229,62 @@ fn chunk(machine: &Machine, maps: &[MemoryMap], banks: &[[u32; 2]; 2], core: usi
     require(bytes >= 12 && physical.checked_add(bytes).is_some_and(|end| end <= HEAP_END - 32), "chunk usable extent leaves heap")?;
     Ok(Some(bytes))
 }
-fn sample(machine: &Machine, maps: &[MemoryMap], images: &[Image], recorder: &Recorder, core: usize) -> Result<Boundary, String> {
+fn image5_addresses() -> impl Iterator<Item = u32> {
+    (0xbf1a00..0xbf1a20).step_by(4).chain((IMAGE5_HEAP_CODE.0..IMAGE5_HEAP_CODE.1).step_by(4))
+}
+fn image5_view(machine: &Machine, maps: &[MemoryMap], banks: &[[u32; 2]; 2]) -> Result<Vec<Image5Word>, String> {
+    let mut words = Vec::with_capacity(image5_addresses().count());
+    for address in image5_addresses() {
+        let mut bytes = [0; 4];
+        machine.session.board.read_physical(u64::from(address), &mut bytes)?;
+        let mut low = [0; 2];
+        let mut high = [0; 2];
+        for core in 0..2 {
+            low[core] = word(machine, maps, banks, core, address)?;
+            high[core] = word(machine, maps, banks, core, address | 0x40000000)?;
+        }
+        words.push(Image5Word { address: Address(address), physical: u32::from_le_bytes(bytes), low, high });
+    }
+    Ok(words)
+}
+fn admit_image5(boundary: &Boundary, images: &[Image], phase: Image5Phase, initial: bool) -> Result<Image5CodeStatus, AdmissionFailure> {
+    if boundary.image5_phase != phase {
+        return Err(Image5AdmissionFailure::Phase { expected: phase, observed: boundary.image5_phase }.into());
+    }
+    let pc = boundary.snapshot.pc.0 & !0x40000000;
+    let canonical = matches!(pc, 0x6a9840 | 0x69d2e0);
+    if boundary.image5_code.is_some() != (initial || canonical) { return Err(Image5AdmissionFailure::Shape.into()); }
+    if boundary.image5_done != (pc == 0x69d2e0).then_some(1)
+        || boundary.image5_saved_return != (pc == 0x6a9840).then_some(Address(0x73b4b0)) {
+        return Err(Image5AdmissionFailure::Frame.into());
+    }
+    if let Some(words) = &boundary.image5_code {
+        if words.len() != image5_addresses().count() { return Err(Image5AdmissionFailure::Shape.into()); }
+        for (view, address) in words.iter().zip(image5_addresses()) {
+            if view.address.0 != address { return Err(Image5AdmissionFailure::Shape.into()); }
+            if view.low != [view.physical; 2] || view.high != [view.physical; 2] {
+                return Err(Image5AdmissionFailure::Aliases { address: view.address, physical: view.physical, low: view.low, high: view.high }.into());
+            }
+            for register in boundary.tcm.into_iter().flatten() {
+                if let Some((low, high)) = tcm_window(TcmRegister(register))? {
+                    if [address, address | 0x40000000].into_iter().any(|guest| u64::from(guest) < high && low < u64::from(guest) + 4) {
+                        return Err(Image5AdmissionFailure::TcmOverlap { address: view.address, register }.into());
+                    }
+                }
+            }
+            let wanted = if canonical { Some(expected(images, address)?) }
+                else if initial && (IMAGE5_HEAP_CODE.0..IMAGE5_HEAP_CODE.1).contains(&address) { Some(0) }
+                else { None };
+            if let Some(wanted) = wanted {
+                if view.physical != wanted {
+                    return Err(Image5AdmissionFailure::CodeWord { address: view.address, expected: wanted, observed: view.physical }.into());
+                }
+            }
+        }
+    }
+    Ok(if canonical { Image5CodeStatus::Canonical } else { Image5CodeStatus::NotSampled })
+}
+fn sample(machine: &Machine, maps: &[MemoryMap], images: &[Image], recorder: &Recorder, image5: &Image5Lifecycle, initial: bool, core: usize) -> Result<Boundary, String> {
     require(core < 2, "unexpected instruction-point core")?;
     let banks = tcm(machine)?;
     let mut identities = [0; 2];
@@ -219,6 +306,7 @@ fn sample(machine: &Machine, maps: &[MemoryMap], images: &[Image], recorder: &Re
     let cpsr = register(machine, core, arm::Register::Cpsr)?;
     let context = ContextKey { domain: Core(domain), task: TaskId(offset / 56 + 1), task_record: Address(task_record_word), mode: (cpsr & 31) as u8, exception_depth: context_word };
     let pc = Address(registers[15]);
+    image5.check_fetch(pc).map_err(|error| format!("image5 heap code admission: {error:?}"))?;
     let returning = recorder.return_operation(context, pc, Address(registers[13]));
     let operation = returning.or_else(|| heap_state::entry(pc));
     let context_pointer = if returning.is_some() {
@@ -235,15 +323,20 @@ fn sample(machine: &Machine, maps: &[MemoryMap], images: &[Image], recorder: &Re
     Ok(Boundary { snapshot: Snapshot { pc, core: Core(core), context, registers, cpsr,
         counts: machine.session.board.instruction_counts().try_into().map_err(|_| "expected two instruction counters")?, errno, chunk: observed_chunk,
         heap_break: word(machine, maps, &banks, core, 0x829a08)?, owner: word(machine, maps, &banks, core, 0x40a6c7d8)?, depth: word(machine, maps, &banks, core, 0x40a6c7dc)? },
-        identities, tcm: banks, root: Address(root), context_word, task_record_word: Address(task_record_word), code_word })
+        identities, tcm: banks, root: Address(root), context_word, task_record_word: Address(task_record_word), code_word,
+        image5_phase: image5.phase(),
+        image5_code: (initial || matches!(pc.0, 0x6a9840 | 0x69d2e0)).then(|| image5_view(machine, maps, &banks)).transpose()?,
+        image5_done: (pc.0 == 0x69d2e0).then(|| word(machine, maps, &banks, core, 0x944440)).transpose()?,
+        image5_saved_return: (pc.0 == 0x6a9840).then(|| word(machine, maps, &banks, core, registers[13].checked_add(24).ok_or("producer frame overflow")?).map(Address)).transpose()? })
 }
 fn watch_classes(recorder: &Recorder) -> Vec<WatchClass> {
     let mut classes: Vec<_> = CODE.into_iter().map(|(start, end)| WatchClass { range: [u64::from(start), u64::from(end)], kinds: vec![Access::CpuWrite, Access::HostWrite, Access::ModelBusWrite] }).collect();
     classes.extend(ENTRIES.into_iter().map(|start| WatchClass { range: [u64::from(start), u64::from(start + 4)], kinds: vec![Access::CpuFetch] }));
+    classes.extend(IMAGE5_LOAD_POINTS.into_iter().map(|start| WatchClass { range: [u64::from(start), u64::from(start + 4)], kinds: vec![Access::CpuFetch] }));
     let mut headers: Vec<_> = recorder.live_headers().into_iter().map(|address| address.0 & !0x40000000).collect();
     headers.sort_unstable();
     headers.dedup();
-    let group = headers.len().div_ceil(256 - CODE.len() - ENTRIES.len()).max(1);
+    let group = headers.len().div_ceil(256 - CODE.len() - ENTRIES.len() - IMAGE5_LOAD_POINTS.len()).max(1);
     classes.extend(headers.chunks(group).map(|chunk| WatchClass {
         range: [u64::from(chunk[0]), u64::from(chunk[chunk.len() - 1]) + 4], kinds: vec![Access::CpuRead],
     }));
@@ -272,7 +365,7 @@ fn admit_final(counts: [u64; 2], boundaries: &[Boundary]) -> Result<(), Admissio
     }
     Ok(())
 }
-fn admit_interval(batch: &AccessBatch, classes: &[WatchClass], headers: &[Address], start: &Boundary, next: Option<&Boundary>, final_counts: [u64; 2]) -> Result<(usize, usize), AdmissionFailure> {
+fn admit_interval(batch: &AccessBatch, classes: &[WatchClass], headers: &[Address], phase: Image5Phase, start: &Boundary, next: Option<&Boundary>, final_counts: [u64; 2]) -> Result<(usize, usize), AdmissionFailure> {
     if batch.classes != classes || batch.views != Views::Observe { return Err(AdmissionFailure::WatchClasses); }
     if batch.ranges != merged_ranges(classes) { return Err(AdmissionFailure::WatchRanges); }
     let begin = start.snapshot.counts[0].checked_add(start.snapshot.counts[1]).ok_or(AdmissionFailure::FinalCounters)?;
@@ -281,7 +374,7 @@ fn admit_interval(batch: &AccessBatch, classes: &[WatchClass], headers: &[Addres
     if end < begin || start.snapshot.counts.iter().zip(end_counts).any(|(before, after)| *before > after) { return Err(AdmissionFailure::FinalCounters); }
     let mut expected = Vec::new();
     for boundary in std::iter::once(start).chain(next) {
-        if ENTRIES.contains(&boundary.snapshot.pc.0) {
+        if ENTRIES.contains(&boundary.snapshot.pc.0) || IMAGE5_LOAD_POINTS.contains(&boundary.snapshot.pc.0) {
             expected.push(FetchStamp { core: boundary.snapshot.core, pc: boundary.snapshot.pc,
                 clock: boundary.snapshot.counts[0].checked_add(boundary.snapshot.counts[1]).and_then(|clock| clock.checked_add(1)).ok_or(AdmissionFailure::FinalCounters)? });
         }
@@ -308,7 +401,7 @@ fn admit_interval(batch: &AccessBatch, classes: &[WatchClass], headers: &[Addres
             && row.pc.is_some_and(|pc| !CODE.iter().any(|(low, high)| u64::from(*low) <= (pc & !0x40000000) && (pc & !0x40000000) < u64::from(*high))) { external_reads += 1; }
     }
     if fetches != expected { return Err(AdmissionFailure::MissingFetch); }
-    Ok((external_reads, admit_batch(batch)?))
+    Ok((external_reads, admit_batch(batch, phase)?))
 }
 fn source_images(analysis: &std::path::Path) -> Result<(Vec<Image>, Vec<Digest>), String> {
     let sources = [
@@ -335,7 +428,7 @@ fn source_images(analysis: &std::path::Path) -> Result<(Vec<Image>, Vec<Digest>)
 fn menu(machine: &Machine) -> Result<Option<[u32; 3]>, String> {
     machine.menu().map(|value| value.map(|value| [value.menu_id, value.setting_id, value.cursor]))
 }
-fn admit_batch(batch: &AccessBatch) -> Result<usize, String> {
+fn admit_batch(batch: &AccessBatch, phase: Image5Phase) -> Result<usize, String> {
     require(batch.enabled && batch.violation.is_none(), "memory watch overflowed or refused")?;
     let mut code_writes = 0;
     for row in &batch.records {
@@ -344,6 +437,8 @@ fn admit_batch(batch: &AccessBatch) -> Result<usize, String> {
         }
         match row.source {
             Access::CpuFetch => require(row.address == row.physical && row.size == 4, "unsampled allocator executable alias")?,
+            Access::ModelBusWrite if phase == Image5Phase::Installing && row.physical >= 0xbf1a00
+                && row.physical.checked_add(row.size).is_some_and(|end| end <= 0x10e3860) => {}
             Access::CpuWrite | Access::HostWrite | Access::ModelBusWrite => code_writes += 1,
             _ => {}
         }
@@ -356,7 +451,7 @@ fn bounded_read(path: &std::path::Path, limit: u64) -> Result<Vec<u8>, String> {
 }
 fn admit_receipt(directory: &std::path::Path, images: &[Image], expected_mode: ObserverMode) -> Result<Receipt, AdmissionFailure> {
     let receipt: Receipt = serde_json::from_slice(&bounded_read(&directory.join("heap-observation.json"), 65_536)?).map_err(|error| error.to_string())?;
-    require(receipt.schema == 1 && receipt.mode == expected_mode && receipt.complete && receipt.error.is_none()
+    require(receipt.schema == 2 && receipt.mode == expected_mode && receipt.complete && receipt.error.is_none()
         && receipt.machine_failure.is_none() && receipt.watch_end_error.is_none() && receipt.guest_code_writes == 0, "observation receipt is not complete")?;
     require(receipt.menus == [Some([69, 52, 12]), Some([1, 5, 2])] && receipt.frame.is_some(), "observation endpoints differ")?;
     require(receipt.identity.observer.0 == sha256(&read(&std::env::current_exe().map_err(|error| error.to_string())?)?), "receipt producer differs from consumer")?;
@@ -387,6 +482,7 @@ fn admit_receipt(directory: &std::path::Path, images: &[Image], expected_mode: O
     let mut reads = 0;
     let mut writes = 0;
     let mut replay = Recorder::new();
+    let mut image5 = Image5Lifecycle::default();
     for (index, boundary) in boundaries.iter().enumerate() {
         let snapshot = &boundary.snapshot;
         require(snapshot.core.0 < 2 && matches!(boundary.identities[snapshot.core.0], 0x4003 | 0x5003), "boundary core identity differs")?;
@@ -396,9 +492,11 @@ fn admit_receipt(directory: &std::path::Path, images: &[Image], expected_mode: O
         let offset = boundary.task_record_word.0.checked_sub([0x4005ff0c, 0x400efecc][domain]).ok_or("task record precedes table")?;
         require(offset % 56 == 0 && offset / 56 < 120 && snapshot.context.task.0 == offset / 56 + 1, "boundary task index differs")?;
         require(boundary.code_word == expected(images, snapshot.pc.0)? && snapshot.registers[15] == snapshot.pc.0, "boundary instruction binding differs")?;
+        let code = admit_image5(boundary, images, image5.phase(), index == 0)?;
+        image5.observe(snapshot, code).map_err(|failure| Image5AdmissionFailure::Transition { failure })?;
         replay.observe(snapshot.clone()).map_err(|error| error.to_string())?;
         let batch: AccessBatch = serde_json::from_slice(batch_lines.next().ok_or(AdmissionFailure::MissingFetch)?).map_err(|error| error.to_string())?;
-        let (batch_reads, batch_writes) = admit_interval(&batch, &watch_classes(&replay), &replay.live_headers(), boundary, boundaries.get(index + 1), receipt.instructions)?;
+        let (batch_reads, batch_writes) = admit_interval(&batch, &watch_classes(&replay), &replay.live_headers(), image5.phase(), boundary, boundaries.get(index + 1), receipt.instructions)?;
         reads += batch_reads;
         writes += batch_writes;
         batches += 1;
@@ -408,6 +506,9 @@ fn admit_receipt(directory: &std::path::Path, images: &[Image], expected_mode: O
     require(serde_json::to_vec(&replay.summary()).map_err(|error| error.to_string())? == summary_bytes, "lifetime summary replay differs")?;
     if batch_lines.next().is_some() { return Err(AdmissionFailure::MissingFetch); }
     require((batches, reads, writes) == (receipt.watch_batches, receipt.external_header_reads, receipt.guest_code_writes), "memory-watch projection differs")?;
+    if receipt.image5_phase != image5.phase() {
+        return Err(Image5AdmissionFailure::Phase { expected: image5.phase(), observed: receipt.image5_phase }.into());
+    }
     match expected_mode {
         ObserverMode::Enabled => {
             require(receipt.events > 0 && receipt.pending == 0 && batches == boundaries.len(), "enabled observation has missing intervals")?;
@@ -435,15 +536,20 @@ fn compare(arguments: &[std::ffi::OsString]) -> Result<(), String> {
 }
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum ReceiptFault { BoundarySize, RemovedClass, OmittedFetch, FinalCounter }
+enum ReceiptFault { BoundarySize, RemovedClass, OmittedFetch, FinalCounter, PrematureImage5Fetch, Image5Code }
 impl ReceiptFault {
     fn directory(self) -> &'static str {
-        match self { Self::BoundarySize => "boundary-size", Self::RemovedClass => "removed-class", Self::OmittedFetch => "omitted-fetch", Self::FinalCounter => "final-counter" }
+        match self {
+            Self::BoundarySize => "boundary-size", Self::RemovedClass => "removed-class",
+            Self::OmittedFetch => "omitted-fetch", Self::FinalCounter => "final-counter",
+            Self::PrematureImage5Fetch => "premature-image5-fetch", Self::Image5Code => "image5-code",
+        }
     }
     fn targets(self, error: &AdmissionFailure) -> bool {
         matches!((self, error), (Self::BoundarySize, AdmissionFailure::BoundaryRegisters)
             | (Self::RemovedClass, AdmissionFailure::WatchClasses) | (Self::OmittedFetch, AdmissionFailure::MissingFetch)
-            | (Self::FinalCounter, AdmissionFailure::FinalCounters))
+            | (Self::FinalCounter, AdmissionFailure::FinalCounters)
+            | (Self::PrematureImage5Fetch | Self::Image5Code, AdmissionFailure::Image5Lifecycle(_)))
     }
 }
 #[derive(Serialize)]
@@ -457,7 +563,7 @@ fn refusal_controls(arguments: &[std::ffi::OsString]) -> Result<(), String> {
     compare(&comparison)?;
     let (images, _) = source_images(std::path::Path::new(&arguments[3]))?;
     let mut results = Vec::new();
-    for fault in [ReceiptFault::BoundarySize, ReceiptFault::RemovedClass, ReceiptFault::OmittedFetch, ReceiptFault::FinalCounter] {
+    for fault in [ReceiptFault::BoundarySize, ReceiptFault::RemovedClass, ReceiptFault::OmittedFetch, ReceiptFault::FinalCounter, ReceiptFault::PrematureImage5Fetch, ReceiptFault::Image5Code] {
         let directory = output.join(fault.directory());
         std::fs::create_dir(&directory).map_err(|error| error.to_string())?;
         let mut receipt: Receipt = serde_json::from_slice(&bounded_read(&source.join("heap-observation.json"), 65_536)?).map_err(|error| error.to_string())?;
@@ -465,6 +571,8 @@ fn refusal_controls(arguments: &[std::ffi::OsString]) -> Result<(), String> {
             ReceiptFault::BoundarySize => &["boundaries.json", "events.json", "summary.json"],
             ReceiptFault::RemovedClass | ReceiptFault::OmittedFetch => &["accesses.jsonl"],
             ReceiptFault::FinalCounter => &[],
+            ReceiptFault::PrematureImage5Fetch => &["boundaries.json", "trace-hits.json"],
+            ReceiptFault::Image5Code => &["boundaries.json"],
         };
         for name in ["boundaries.json", "events.json", "summary.json", "accesses.jsonl", "trace-hits.json", "reset.fujimod"] {
             if !changed.contains(&name) { std::fs::hard_link(source.join(name), directory.join(name)).map_err(|error| error.to_string())?; }
@@ -513,6 +621,31 @@ fn refusal_controls(arguments: &[std::ffi::OsString]) -> Result<(), String> {
             }
             ReceiptFault::FinalCounter => {
                 receipt.instructions[0] = receipt.instructions[0].checked_sub(1).ok_or("control needs a primary instruction")?;
+            }
+            ReceiptFault::PrematureImage5Fetch | ReceiptFault::Image5Code => {
+                let mut boundaries: Vec<Boundary> = serde_json::from_slice(&bounded_read(&source.join("boundaries.json"), 64 * 1024 * 1024)?).map_err(|error| error.to_string())?;
+                let first = boundaries.first_mut().ok_or("control needs an initial boundary")?;
+                match fault {
+                    ReceiptFault::PrematureImage5Fetch => {
+                        first.snapshot.pc = Address(0xbf1c44);
+                        first.snapshot.registers[15] = 0xbf1c44;
+                        first.code_word = expected(&images, 0xbf1c44)?;
+                        let mut hits: Vec<RecordedHit> = serde_json::from_slice(&bounded_read(&source.join("trace-hits.json"), 64 * 1024 * 1024)?).map_err(|error| error.to_string())?;
+                        hits.first_mut().ok_or("control needs an initial hit")?.address = HexAddress("0xbf1c44".into());
+                        let bytes = serde_json::to_vec(&hits).map_err(|error| error.to_string())?;
+                        write(&directory.join("trace-hits.json"), &bytes)?;
+                        receipt.hits_sha256 = Digest(sha256(&bytes));
+                    }
+                    _ => {
+                        let view = first.image5_code.as_mut().and_then(|words| words.iter_mut().find(|view| view.address.0 == IMAGE5_HEAP_CODE.0)).ok_or("control needs initial image5 code evidence")?;
+                        view.physical ^= 1;
+                        view.low = [view.physical; 2];
+                        view.high = [view.physical; 2];
+                    }
+                }
+                let bytes = serde_json::to_vec(&boundaries).map_err(|error| error.to_string())?;
+                write(&directory.join("boundaries.json"), &bytes)?;
+                receipt.boundaries_sha256 = Digest(sha256(&bytes));
             }
         }
         write(&directory.join("heap-observation.json"), &serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?)?;
@@ -566,8 +699,15 @@ fn drive() -> Result<(), String> {
     machine.rearm()?;
     require(machine.instructions() == 0, "checkpoint is not preexecution reset")?;
     let mut recorder = Recorder::new();
+    let mut image5 = Image5Lifecycle::default();
     let mut boundaries = Vec::new();
-    let mut armed: BTreeSet<_> = ENTRIES.into_iter().collect();
+    let shadow_sites: Vec<_> = if mode == ObserverMode::Enabled {
+        (IMAGE5_HEAP_CODE.0..IMAGE5_HEAP_CODE.1).step_by(2).flat_map(|address| [Guest(address), Guest(address | 0x40000000)])
+            .filter(|address| !ENTRIES.contains(&address.0)).collect()
+    } else { Vec::new() };
+    let mut armed: BTreeSet<_> = if mode == ObserverMode::Enabled {
+        ENTRIES.into_iter().chain(IMAGE5_LOAD_POINTS).chain(shadow_sites.iter().map(|address| address.0)).collect()
+    } else { BTreeSet::new() };
     if mode == ObserverMode::Enabled {
         machine.traces.bound_full_registers(std::num::NonZeroUsize::new(EVENT_LIMIT).ok_or("invalid hit bound")?);
         machine.traces.arm(&machine.session, armed.iter().map(|address| (*address, "heap".into())).collect())?;
@@ -589,10 +729,12 @@ fn drive() -> Result<(), String> {
                 if outcome != RunOutcome::Stopped { break; }
                 let hits = &machine.traces.hits[processed..];
                 require(hits.len() == 1, "instruction boundary contains multiple unsampled hits")?;
-                let boundary = sample(machine, &maps, &images, &recorder, hits[0].core)?;
+                let boundary = sample(machine, &maps, &images, &recorder, &image5, boundaries.is_empty(), hits[0].core)?;
+                let code = admit_image5(&boundary, &images, image5.phase(), boundaries.is_empty()).map_err(|error| error.to_string())?;
                 require(format!("{:#x}", boundary.snapshot.pc.0) == hits[0].address, "stopped PC differs from recorded hit")?;
                 if watch.is_none() {
                     for (start, end) in CODE {
+                        if (start, end) == IMAGE5_HEAP_CODE && image5.phase() != Image5Phase::Admitted { continue; }
                         for address in (start..end).step_by(4) {
                             for core in 0..2 { code_word(machine, &maps, &boundary.tcm, &images, core, address)?; }
                         }
@@ -606,10 +748,16 @@ fn drive() -> Result<(), String> {
                     accesses.append(&bytes)?;
                     watch_batches += 1;
                     let start = boundaries.last().ok_or("watch has no initial boundary")?;
-                    let (reads, writes) = admit_interval(&batch, &watch_classes(&recorder), &recorder.live_headers(), start, Some(&boundary), boundary.snapshot.counts).map_err(|error| error.to_string())?;
+                    let (reads, writes) = admit_interval(&batch, &watch_classes(&recorder), &recorder.live_headers(), image5.phase(), start, Some(&boundary), boundary.snapshot.counts).map_err(|error| error.to_string())?;
                     external_header_reads += reads;
                     guest_code_writes += writes;
                     require(writes == 0, "allocator code changed during observation")?;
+                }
+                let before = image5.phase();
+                image5.observe(&boundary.snapshot, code).map_err(|error| format!("image5 heap code admission: {error:?}"))?;
+                if before != Image5Phase::Admitted && image5.phase() == Image5Phase::Admitted {
+                    machine.traces.remove_sites(&machine.session, &shadow_sites)?;
+                    for address in &shadow_sites { armed.remove(&address.0); }
                 }
                 boundaries.push(boundary);
                 recorder.observe(boundaries.last().ok_or("boundary disappeared")?.snapshot.clone()).map_err(|error| error.to_string())?;
@@ -651,7 +799,7 @@ fn drive() -> Result<(), String> {
             watch_batches += 1;
             let batch = serde_json::from_value(raw).map_err(|error| error.to_string())?;
             let counts = machine.session.board.instruction_counts().try_into().map_err(|_| "expected two instruction counters")?;
-            admit_interval(&batch, &watch_classes(&recorder), &recorder.live_headers(), boundaries.last().ok_or("final watch has no initial boundary")?, None, counts).map_err(|error| error.to_string())
+            admit_interval(&batch, &watch_classes(&recorder), &recorder.live_headers(), image5.phase(), boundaries.last().ok_or("final watch has no initial boundary")?, None, counts).map_err(|error| error.to_string())
         })();
         match final_batch {
             Ok((reads, writes)) => { external_header_reads += reads; guest_code_writes += writes; }
@@ -680,7 +828,7 @@ fn drive() -> Result<(), String> {
         })();
         match saved { Ok(digest) => (Some(digest), None), Err(error) => (None, Some(error)) }
     };
-    let receipt = Receipt { schema: 1, scope: "canonical-natural-reset-no-card-menu-roundtrip-general-heap".into(), mode, identity,
+    let receipt = Receipt { schema: 2, scope: "canonical-natural-reset-no-card-menu-roundtrip-general-heap".into(), mode, identity,
         checkpoint: Digest(sha256(&checkpoint)), complete, error: result.err().or_else(|| frame.as_ref().err().cloned()).or_else(|| final_counters.err().map(|error| error.to_string())), machine_failure: machine.failure.clone(),
         instructions: counts, menus,
         frame: frame.ok().flatten(), events: recorder.records().len(), pending: recorder.pending_count(), watch_batches,
@@ -688,6 +836,7 @@ fn drive() -> Result<(), String> {
         hits_sha256: Digest(sha256(&hit_bytes)),
         accesses_sha256: Digest(sha256(&read(&access_path)?)), summary_sha256: Digest(sha256(&summary_bytes)),
         failure_checkpoint, failure_checkpoint_error,
+        image5_phase: image5.phase(),
         limitations: vec!["Finite no-card boot/menu route, not capture, development or storage workload coverage.".into(),
             "Instruction counters are not silicon cycles; event intervals include preemption and lock waits.".into(),
             "Header watches cover returned live allocations, not unreturned internal split chunks or pre-return pointer escapes.".into(),

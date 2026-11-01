@@ -69,6 +69,88 @@ pub struct Snapshot {
     pub depth: u32,
 }
 
+pub const IMAGE5_LOAD_POINTS: [u32; 6] = [0x6a96c0, 0x6ae360, 0x6a97bc, 0x6a9840, 0x69d2e0, 0xd985a4];
+pub const IMAGE5_HEAP_CODE: (u32, u32) = (0xbf1c1c, 0xbf1cd4);
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Image5Phase { Unloaded, Installing, Admitted }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Image5CodeStatus { NotSampled, Canonical }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Image5Decoder { NotConfigured, Active, Drained }
+#[derive(Clone, Copy, Debug)]
+enum Image5Installation {
+    Unloaded,
+    Installing { context: ContextKey, entry_sp: Address, decoder: Image5Decoder },
+    Admitted,
+}
+#[derive(Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Image5Failure { Order, Context, Frame, DecoderArguments, ProducerStatus, CodeIdentity, PrepublicationFetch }
+pub struct Image5Lifecycle { state: Image5Installation }
+impl Default for Image5Lifecycle {
+    fn default() -> Self { Self { state: Image5Installation::Unloaded } }
+}
+impl Image5Lifecycle {
+    pub fn phase(&self) -> Image5Phase {
+        match self.state {
+            Image5Installation::Unloaded => Image5Phase::Unloaded,
+            Image5Installation::Installing { .. } => Image5Phase::Installing,
+            Image5Installation::Admitted => Image5Phase::Admitted,
+        }
+    }
+    pub fn check_fetch(&self, address: Address) -> Result<(), Image5Failure> {
+        let pc = address.0 & !0x40000000;
+        if ((IMAGE5_HEAP_CODE.0..IMAGE5_HEAP_CODE.1).contains(&pc) || pc == 0xd985a4) && self.phase() != Image5Phase::Admitted {
+            return Err(Image5Failure::PrepublicationFetch);
+        }
+        Ok(())
+    }
+    pub fn observe(&mut self, snapshot: &Snapshot, code: Image5CodeStatus) -> Result<(), Image5Failure> {
+        let pc = snapshot.pc.0 & !0x40000000;
+        self.check_fetch(snapshot.pc)?;
+        match pc {
+            0x6a96c0 => {
+                if self.phase() != Image5Phase::Unloaded { return Err(Image5Failure::Order); }
+                if snapshot.registers[14] != 0x73b4b0 { return Err(Image5Failure::Frame); }
+                self.state = Image5Installation::Installing { context: snapshot.context, entry_sp: Address(snapshot.registers[13]), decoder: Image5Decoder::NotConfigured };
+            }
+            0x6ae360 | 0x6a97bc | 0x6a9840 => {
+                let Image5Installation::Installing { context, entry_sp, decoder } = &mut self.state else { return Err(Image5Failure::Order); };
+                if snapshot.context != *context { return Err(Image5Failure::Context); }
+                match pc {
+                    0x6ae360 => {
+                        if *decoder != Image5Decoder::NotConfigured { return Err(Image5Failure::Order); }
+                        if snapshot.registers[0] != 0xbf1a00 || snapshot.registers[1] != 0x43e40000 || snapshot.registers[14] != 0x6a977c {
+                            return Err(Image5Failure::DecoderArguments);
+                        }
+                        *decoder = Image5Decoder::Active;
+                    }
+                    0x6a97bc => {
+                        if *decoder != Image5Decoder::Active { return Err(Image5Failure::Order); }
+                        *decoder = Image5Decoder::Drained;
+                    }
+                    _ => {
+                        if *decoder != Image5Decoder::Drained { return Err(Image5Failure::Order); }
+                        if entry_sp.0.checked_sub(28) != Some(snapshot.registers[13]) { return Err(Image5Failure::Frame); }
+                        if snapshot.registers[0] != 0 { return Err(Image5Failure::ProducerStatus); }
+                        if code != Image5CodeStatus::Canonical { return Err(Image5Failure::CodeIdentity); }
+                        self.state = Image5Installation::Admitted;
+                    }
+                }
+            }
+            0x69d2e0 => {
+                if self.phase() != Image5Phase::Admitted { return Err(Image5Failure::Order); }
+                if snapshot.registers[3] != 0xd985a4 { return Err(Image5Failure::Frame); }
+                if code != Image5CodeStatus::Canonical { return Err(Image5Failure::CodeIdentity); }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FreeKind { Client, Nested, Internal, Null }
@@ -1009,5 +1091,113 @@ mod tests {
         assert_eq!(summary.backing_highwater_break, Some(Address(0xa72a00)));
         assert_eq!(summary.requested_peak, Counter(0));
         assert_eq!(summary.usable_peak, Counter(0));
+    }
+
+    fn image5_load() -> [Snapshot; 4] {
+        let mut entered = sample(0x6a96c0, 60, 1);
+        entered.registers[14] = 0x73b4b0;
+        let mut configured = sample(0x6ae360, 60, 2);
+        configured.registers[0] = 0xbf1a00;
+        configured.registers[1] = 0x43e40000;
+        configured.registers[14] = 0x6a977c;
+        let drained = sample(0x6a97bc, 60, 3);
+        let mut produced = sample(0x6a9840, 60, 4);
+        produced.registers[0] = 0;
+        produced.registers[13] = entered.registers[13] - 28;
+        [entered, configured, drained, produced]
+    }
+
+    #[test]
+    fn image5_heap_fetches_require_completed_code_admission_in_both_aliases() {
+        let loader = Image5Lifecycle::default();
+        for address in [0xbf1c1c, 0xbf1c1e, 0xbf1c44, 0x40bf1c1c, 0x40bf1c1e, 0x40bf1c44, 0xd985a4] {
+            assert_eq!(loader.check_fetch(Address(address)), Err(Image5Failure::PrepublicationFetch));
+        }
+    }
+
+    #[test]
+    fn image5_successful_producer_and_code_identity_admit_heap_calls() {
+        let mut loader = Image5Lifecycle::default();
+        let load = image5_load();
+        for boundary in &load[..3] { loader.observe(boundary, Image5CodeStatus::NotSampled).unwrap(); }
+        loader.observe(&load[3], Image5CodeStatus::Canonical).unwrap();
+        assert_eq!(loader.phase(), Image5Phase::Admitted);
+        loader.check_fetch(Address(0xbf1c44)).unwrap();
+        loader.check_fetch(Address(0x40bf1c44)).unwrap();
+        let mut transfer = sample(0x69d2e0, 95, 5);
+        transfer.registers[3] = 0xd985a4;
+        loader.observe(&transfer, Image5CodeStatus::Canonical).unwrap();
+    }
+
+    #[test]
+    fn image5_success_status_without_code_identity_does_not_admit_execution() {
+        let mut loader = Image5Lifecycle::default();
+        let load = image5_load();
+        for boundary in &load[..3] { loader.observe(boundary, Image5CodeStatus::NotSampled).unwrap(); }
+        assert_eq!(loader.observe(&load[3], Image5CodeStatus::NotSampled), Err(Image5Failure::CodeIdentity));
+        assert_eq!(loader.check_fetch(Address(0xbf1c44)), Err(Image5Failure::PrepublicationFetch));
+    }
+
+    #[test]
+    fn image5_producer_completion_from_another_task_refuses() {
+        let mut loader = Image5Lifecycle::default();
+        let mut load = image5_load();
+        for boundary in &load[..3] { loader.observe(boundary, Image5CodeStatus::NotSampled).unwrap(); }
+        load[3].context = context(59);
+        assert_eq!(loader.observe(&load[3], Image5CodeStatus::Canonical), Err(Image5Failure::Context));
+    }
+
+    #[test]
+    fn image5_storage_failure_refuses_even_with_canonical_code() {
+        let mut loader = Image5Lifecycle::default();
+        let mut load = image5_load();
+        for boundary in &load[..3] { loader.observe(boundary, Image5CodeStatus::NotSampled).unwrap(); }
+        load[3].registers[0] = u32::MAX;
+        assert_eq!(loader.observe(&load[3], Image5CodeStatus::Canonical), Err(Image5Failure::ProducerStatus));
+    }
+
+    #[test]
+    fn image5_producer_cannot_skip_decoder_configuration_or_drain() {
+        for skip in [1, 2] {
+            let mut loader = Image5Lifecycle::default();
+            let load = image5_load();
+            for (index, boundary) in load.iter().enumerate().take(3) {
+                if index != skip {
+                    let result = loader.observe(boundary, Image5CodeStatus::NotSampled);
+                    if index == 2 && skip == 1 { assert_eq!(result, Err(Image5Failure::Order)); }
+                    else { result.unwrap(); }
+                }
+            }
+            assert_eq!(loader.observe(&load[3], Image5CodeStatus::Canonical), Err(Image5Failure::Order));
+        }
+    }
+
+    #[test]
+    fn image5_producer_return_requires_its_saved_frame() {
+        let mut loader = Image5Lifecycle::default();
+        let mut load = image5_load();
+        for boundary in &load[..3] { loader.observe(boundary, Image5CodeStatus::NotSampled).unwrap(); }
+        load[3].registers[13] += 4;
+        assert_eq!(loader.observe(&load[3], Image5CodeStatus::Canonical), Err(Image5Failure::Frame));
+    }
+
+    #[test]
+    fn image5_decoder_requires_the_original_destination_staging_and_callsite() {
+        for register in [0, 1, 14] {
+            let mut loader = Image5Lifecycle::default();
+            let mut load = image5_load();
+            loader.observe(&load[0], Image5CodeStatus::NotSampled).unwrap();
+            load[1].registers[register] ^= 4;
+            assert_eq!(loader.observe(&load[1], Image5CodeStatus::NotSampled), Err(Image5Failure::DecoderArguments));
+        }
+    }
+
+    #[test]
+    fn image5_reinstallation_cannot_reopen_a_frozen_code_guard() {
+        let mut loader = Image5Lifecycle::default();
+        let load = image5_load();
+        for boundary in &load[..3] { loader.observe(boundary, Image5CodeStatus::NotSampled).unwrap(); }
+        loader.observe(&load[3], Image5CodeStatus::Canonical).unwrap();
+        assert_eq!(loader.observe(&load[0], Image5CodeStatus::NotSampled), Err(Image5Failure::Order));
     }
 }

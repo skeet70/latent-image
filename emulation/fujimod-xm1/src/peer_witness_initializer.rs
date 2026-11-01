@@ -445,7 +445,7 @@ pub(super) fn observe(machine: &mut Machine, runner: &Runner<'_>, contract: &Con
                             && entry.cpsr == before.cpsr && entry.tcm == before.tcm,
                             "initializer entry is not the unchanged context after its core-1 BL")?;
                         entered = Some(entry);
-                        machine.traces.remove_site(&machine.session, contract.entry)?;
+                        machine.traces.remove_sites(&machine.session, &[contract.entry])?;
                     }
                     Boundary::Exit => {
                         require(hit_address(&hit)? == END && entered.is_some(), "initializer return precedes entry")?;
