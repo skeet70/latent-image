@@ -355,7 +355,7 @@ impl ModalTrace {
         }
     }
 
-    pub(crate) fn finish(&mut self) -> Result<(), String> {
+    pub(crate) fn check_finish(&mut self) -> Result<(), String> {
         if !self.enabled { return Err("modal observation is not active".into()); }
         if let Some(failure) = &self.failure { return Err(failure.clone()); }
         if let Err(failure) = self.monitor.finish() {
@@ -363,8 +363,11 @@ impl ModalTrace {
             self.failure = Some(failure.clone());
             return Err(failure);
         }
-        self.enabled = false;
         Ok(())
+    }
+
+    pub(crate) fn disable(&mut self) {
+        self.enabled = false;
     }
 }
 

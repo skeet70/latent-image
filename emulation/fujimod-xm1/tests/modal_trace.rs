@@ -328,3 +328,33 @@ fn stock_handoff_checks_registers_outside_the_captured_domain() {
     assert_eq!(report.counts.active_frames, 1);
     assert!(report.failure.is_some());
 }
+
+#[test]
+fn failed_user_point_rearm_retains_active_modal_evidence_and_refuses_advancement() {
+    let mut machine = machine([true, false], false);
+    let config = baseline(&machine);
+    machine.traces.begin_modal_observation(&machine.session, config).unwrap();
+    assert!(matches!(machine.run(8), RunOutcome::Completed));
+    machine.require_running().unwrap();
+    machine.traces.sites.insert(0x1001, "unaligned-user-site".into());
+    assert!(machine.traces.end_modal_observation(&machine.session).is_err());
+    let report = machine.traces.modal_observation_report();
+    assert!(report.enabled);
+    assert_eq!(report.counts.entries, 1);
+    assert_eq!(report.counts.returns, 1);
+    assert_eq!(report.counts.active_frames, 0);
+    assert_eq!(report.stock_fetches.len(), 2);
+    assert_eq!(report.captured_domains.len(), 1);
+    let failure = report.failure.unwrap().to_owned();
+    assert!(machine.traces.end_modal_observation(&machine.session).is_err());
+    assert_eq!(machine.traces.modal_observation_report().failure, Some(failure.as_str()));
+    let instructions = machine.instructions();
+    assert!(matches!(machine.run(1), RunOutcome::Failed));
+    assert_eq!(machine.instructions(), instructions);
+    let report = machine.traces.modal_observation_report();
+    assert!(report.enabled);
+    assert_eq!(report.failure, Some(failure.as_str()));
+    assert_eq!(report.counts.returns, 1);
+    assert_eq!(report.stock_fetches.len(), 2);
+    assert_eq!(report.captured_domains.len(), 1);
+}

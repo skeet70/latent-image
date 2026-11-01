@@ -736,6 +736,11 @@ enum CoreSelection {
     Primary,
 }
 
+enum PointScope {
+    User,
+    UserAndModal,
+}
+
 struct EnteredInstructions(u64);
 struct ResumeMarker {
     pc: Guest,
@@ -826,10 +831,21 @@ impl TraceSites {
     }
 
     pub fn end_modal_observation(&mut self, session: &Session) -> Result<(), String> {
-        self.modal_observation.as_mut().ok_or("modal observation has not begun")?.finish()?;
-        self.end_points(session)?;
-        self.rearm(session)?;
-        self.restore_resume(session)
+        self.modal_observation.as_mut().ok_or("modal observation has not begun")?.check_finish()?;
+        let teardown = self.end_points(session)
+            .and_then(|()| self.rearm_scope(session, PointScope::User))
+            .and_then(|()| self.restore_resume(session));
+        let modal = self.modal_observation.as_mut().ok_or("modal observation disappeared")?;
+        match teardown {
+            Ok(()) => {
+                modal.disable();
+                Ok(())
+            }
+            Err(failure) => {
+                modal.fail(failure.clone());
+                Err(failure)
+            }
+        }
     }
 
     pub fn capture_observation_active(&self) -> bool {
@@ -1046,10 +1062,15 @@ impl TraceSites {
     }
 
     pub fn rearm(&mut self, session: &Session) -> Result<(), String> {
+        self.rearm_scope(session, PointScope::UserAndModal)
+    }
+
+    fn rearm_scope(&mut self, session: &Session, scope: PointScope) -> Result<(), String> {
         if !self.points.is_empty() {
             return Err("trace sites are already armed".into());
         }
-        let modal = self.modal_observation.as_ref().filter(|modal| modal.active());
+        let modal = self.modal_observation.as_ref()
+            .filter(|modal| matches!(scope, PointScope::UserAndModal) && modal.active());
         let mut addresses: BTreeSet<u64> = self.sites.keys().map(|&address| u64::from(address)).collect();
         if let Some(modal) = modal {
             addresses.extend(modal.sites().map(|pc| u64::from(pc.0)));
