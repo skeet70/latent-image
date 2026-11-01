@@ -6,7 +6,7 @@
 //! Engine pages carry the union of the permissions of the regions they touch.
 //! The memory hook admits each access against exact logical regions and
 //! alignment, and refuses any other through `Cpu::refuse_access` before the
-//! access happens. At the first access of an LDM/STM or a pre-indexed
+//! access happens. At the first access of an LDM/STM or a
 //! LDRD/STRD it admits the instruction's whole transfer, so a
 //! refused transfer has no effect. Unmapped accesses fault and are refused.
 //!
@@ -956,7 +956,7 @@ struct Frame {
     caller: usize,
 }
 
-/// The words of an LDM/STM or pre-indexed LDRD/STRD, admitted
+/// The words of an LDM/STM or LDRD/STRD, admitted
 /// together at the first address, which the engine accesses first.
 #[derive(Clone, Copy)]
 struct Transfer {
@@ -970,7 +970,7 @@ impl Transfer {
         if word >> 25 & 7 == 4 {
             return Some(Self { words: (word & 0xffff).count_ones(), need: load(word & 1 << 20 != 0) });
         }
-        (word & 0x0f10_00d0 == 0x0100_00d0).then(|| Self { words: 2, need: load(word & 0x20 == 0) })
+        (word & 0x0e10_00d0 == 0x0000_00d0).then(|| Self { words: 2, need: load(word & 0x20 == 0) })
     }
 
     fn admitted(self, case: &Case, first: u64) -> bool {
@@ -1537,6 +1537,7 @@ fn unpredictable(word: u32) -> bool {
             if !load && word & 0x40 != 0 {
                 let load_dual = word & 0x20 == 0;
                 rt == 14
+                    || word & 0x0120_0000 == 0x0020_0000
                     || writeback_conflict(&[rt, rt + 1])
                     || (register && (rm == 15 || (load_dual && (rm == rt || rm == rt + 1))))
             } else {
