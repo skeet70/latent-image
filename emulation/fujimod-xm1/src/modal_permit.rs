@@ -4,8 +4,9 @@
 //! body, and every return site reported by `Observation::Entry`. Arm that return
 //! site before advancing the guest. Stock-frame words are read at the observed SP
 //! in ascending address order. A policy change requires successful `finish` and
-//! instruction-point rearming. Only downward-growing, LIFO contexts are admitted;
-//! scheduler and thread-switch safety remain unproved.
+//! instruction-point rearming. Only downward-growing, LIFO contexts are admitted.
+//! Scheduler/thread switching is unproved; same-route migration onto a core
+//! already holding a running permit is not detected.
 
 use crate::provenance::Guest;
 use std::{fmt, num::NonZeroU64};
