@@ -1383,6 +1383,22 @@ Admission separately checks all four descriptor/caller/creation/activation/error
 
 `E-STARTUP-TASK-STOCK-QUALIFIED-150` records successful independent admission of the 60-snapshot, 17,624-row stock receipt, all four explicit activation refusals and both first prologues: B93 and A104. One 38-case serialized refusal invocation passes, including missing stopped-fetch translation, malformed stopped address/width and coherently wrapped per-core counts. Its earlier CLI attempt refused the 89,854-byte canonical run document at an undersized 64 KiB input cap; the capped reader now permits 1 MiB and canonical digest admission remains unchanged. These are stock baseline and host-side refusal results, not owned task qualification or global wrapper retirement.
 
+#### Loader and returned-code continuation observation (#149, #153)
+
+`//emulation:loader-continuations` observes only the canonical retained reset route. Independently review the observer and its raw receipt consumer before building or running it. The [loader continuation contract](../reports/replacement-inventory-baseline.md#816-loader-orchestration-and-returned-code-continuations-149) separates the recovered source graph, unresolved callers and proposed owned boundary.
+
+Build after review with `devenv shell -- bazel --batch build --jobs=2 //emulation:loader-continuations //emulation:emulator-slot`. Invoke the resulting observer only under `//emulation:emulator-slot`, with `XM1_EMULATOR_SLOTS=1`, using `--run RUN --update ORIGINAL_DAT --boot-rom ROM --analysis ROOT --output NEW_DIRECTORY`. The output directory must not exist. This mode admits no owned DAT, forced frame, phase override or diagnostic entry.
+
+`loader-continuations --source-calls NEW_DIRECTORY --analysis ROOT` emits the separately source-bound call model without guest execution. `loader-continuations --verify OBSERVATION_DIRECTORY --analysis ROOT` independently consumes raw boundary registers, classified accesses, checkpoint identity, committed data/code projections and file bindings. The verifier does not call the producer's verdict or qualify owned code.
+
+The observer exports and restores its zero-instruction checkpoint, captures actual retained call entries and LR/SP returns, first scheduler/trampoline transfers and original saved loader frames, and continues through the fixed cold-menu key route. Later producer, decoder, BSS callback, extent hook/done and image5 constructor/interface boundaries have separate observations. Whole image5/plain and BSS projections use both guest views and physical bytes; first differences against immutable sources are retained, not mislabeled as loader failure when a legitimate initializer has changed data.
+
+The initial eight-million-instruction watch logs carrier/shared-resource writes and binds both complete loader carriers at entry. Stopped call/return words cover this interval; every peer-poll fetch is not logged. Its gapless tail adds physical loader-carrier fetch watches through final shooting-menu `(1,5,2)`. Diagnostic fetch/write watches span both epochs and both cores. Limits are 16,384 raw register hits and 65,536 classified rows per epoch. Refusal retains partial trace, observations and raw watches when available.
+
+ADC holds and release polls match the existing cold-menu route, including Menu after the forty-million settle interval. The receipt distinguishes completed debounce from a release-cap observation. `inputs.json`, `reset.fujimod`, `source-graph.json`, `trace.json`, `watch-prefix.json`, `watch-tail.json`, `continuations.json` and resource projections bind the observation; `verification.json` exists only after consumer success. `observer-error.json` records failure, including setup failure before a primary receipt exists.
+
+This observer neither intentionally executes diagnostic code nor proves global SVC0/computed/interior/Thumb/alias caller closure. Paused decoder/TCM/byte equality does not prove uninterrupted mapping, resource lifetime, physical cache behavior or silicon timing. A retained natural result is not a paired owned qualification or a retired-body confinement receipt.
+
 ### Owned first-stage witness
 
 `//emulation:first-stage-witness` starts from the captured ROM reset with the packaged DAT. It arms five core-0 instruction stops before execution and reads twelve memory extents at the owned handoff vector. Its 20,000,000-instruction budget is separate from the cold-menu route. It does not import a stock-initialization checkpoint or force an execution frame.
