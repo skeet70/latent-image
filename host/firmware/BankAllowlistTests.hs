@@ -143,8 +143,8 @@ main = do
       wide opcode half = opcode .|. ((half .&. 0xf000) `shiftL` 4) .|. (half .&. 0xfff)
       completeProgram rootInstruction middle root tailInstruction =
         functionProgram ([wide 0xe3002000 root,wide 0xe3402000 (root `shiftR` 16),rootInstruction] ++ middle
-          ++ replicate (fromIntegral ((snd (function "rb_assert_one") - statusFunction) `div` 4) - 7) 0xe320f000
-          ++ [tailInstruction])
+          ++ [tailInstruction]
+          ++ replicate (fromIntegral ((snd (function "rb_assert_one") - statusFunction) `div` 4) - 7) 0xe320f000)
       storeProgram rootInstruction root = completeProgram rootInstruction [0xe1a01080,0xe0811002,0xe1c130b0] root 0xe12fff1e
       callProgram rootInstruction root = completeProgram rootInstruction [0xe7922100,0xe1a01723,0xe7910002] root 0xe12fff10
       rootRefusal finding = case findingReason finding of
