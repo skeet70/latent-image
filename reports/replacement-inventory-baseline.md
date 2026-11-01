@@ -1140,6 +1140,20 @@ Eligible extent hooks can run before the whole raw read returns. Hook-created ta
 
 Image5 staging remains live through final decode completion. Decoder source/destination/count globals are not withdrawn at teardown, and the fixed range has no allocation/free marker. Resource `0x48` coordinates feed/drain, while `0x2b` controls engine ownership; their callback/error concurrency and cross-core visibility remain separate obligations. Plain extent resources carry readiness, not indefinite protection from later writes. Code, data, callback tables, MPU/alias configuration and backing must survive their actual consumers; reset or a changed mapping invalidates a checkpoint admitted under a prior interval. None of these source facts establishes physical cache coherence.
 
+`E-LATER-DECODER-CONTEXT-SOURCE-150` resolves the decoder's `0x723cb8` result. The wrapper selects the current core through root0 `+0x1618`, then calls that root's `+0x16c` task-id query. It returns zero for a nonzero per-core context predicate or lower query failure. The lower query refuses CPSR.I=1; otherwise it temporarily masks IRQ, derives a local id from the current task node and restores IRQ enabled. For a valid 56-byte-aligned node, the result is its index plus 1. The query does not validate that node pointer. This is a task-context query, not a boolean kernel-present test.
+
+| Current-core service | A | B |
+| --- | --- | --- |
+| Root `+0x16c` task-id query | `0x4118c -> 0x4c620` | `0xd118c -> 0xdc5e0` |
+| Context word / current-task word | `0x400545a4 / 0x40054760` | `0x400e4564 / 0x400e4720` |
+| Task-node base | `0x4005ff0c` | `0x400efecc` |
+| Resource take `+0x7c` | `0x47dd0` | `0xd7d90` |
+| Resource give `+0x6c` / contextual give `+0x70` | `0x47604 / 0x47844` | `0xd75c4 / 0xd7804` |
+
+Decoder initialization stores the query result at `0x409c2f58`. Final callback `0x6ae310` releases resource `0x48` only if that saved initialization-time result is nonzero; it is not testing the callback's current task identity. Resource wrapper `0x724c00` chooses `+0x70` when the selected root's `+0x148` context predicate returns 1, otherwise `+0x6c`. Resource ids through169 use class words at `0x93e6f4` for encoding. Live class words, current-node invariants, selected service bytes and callback-time context must be bound independently; source selection does not establish successful semaphore ownership, initial/max counts, wakeup order or coherent completion.
+
+`E-LATER-IMAGE5-EARLY-RESIDENCY-150` reuses a preserved incomplete natural observation without executing another guest. At aggregate instruction29,399,554, its first recorded core0 heap site is `0x89cde4`; the observer's preflight probes image5 word `0xbf1c1c` and reads zero instead of linked instruction `0xe1a02001`. The preflight address is not an image5 instruction-entry hit. No heap event or menu endpoint is admitted. This establishes one early nonresident code word, not an entirely zero image, a universal load order or a failed image5 producer. Early and installed executable admission must be separate lifecycle phases.
+
 #### First owned increment and acceptance boundary
 
 Own the complete finite **plain-image orchestration** `[0x6a9844,0x6a9938)`, 244 original bytes. Retain the storage/cache adapter, progress producer, resource/delay services, MPU/companion worker, initialization hooks and task consumers as named dependencies. This avoids prematurely owning the image5 decoder's asynchronous completion protocol.
