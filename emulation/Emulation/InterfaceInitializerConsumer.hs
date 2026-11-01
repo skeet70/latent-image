@@ -31,13 +31,15 @@ instance FromJSON ConsumerKind where
 
 data Contract = Contract I.Contract F.Sha256 F.Sha256 F.Sha256
 
-data CodeSite = Stage4 | Wrapper | Dispatch | Service deriving (Eq)
+data CodeSite = Stage4 | Wrapper | Dispatch | IdentityWrapper | IdentityHelper | Service deriving (Eq)
 
 codeStart :: CodeSite -> Word32
 codeStart site = case site of
   Stage4 -> 0x69cdf8
   Wrapper -> 0x725dd8
   Dispatch -> 0x7235d8
+  IdentityWrapper -> 0x412bc
+  IdentityHelper -> 0x427b8
   Service -> 0xd1140
 
 instance FromJSON CodeSite where
@@ -47,6 +49,8 @@ instance FromJSON CodeSite where
       0x69cdf8 -> pure Stage4
       0x725dd8 -> pure Wrapper
       0x7235d8 -> pure Dispatch
+      0x412bc -> pure IdentityWrapper
+      0x427b8 -> pure IdentityHelper
       0xd1140 -> pure Service
       _ -> fail "unsupported consumer code region"
 
@@ -70,6 +74,8 @@ codeRegions =
       [0xe92d48f0,0xe28db014,0xe24dd020,0xe1a04000,0xe30a3d9c,0xe340307c,0xe1d020b0,0xe2422001,0xe7936102,0xebfff5f5,0xe1a07000]
   , CodeRegion Dispatch
       [0xe92d4df0,0xe28db01c,0xe30b5d20,0xe3405096,0xe5952000,0xe3013618,0xe7923003,0xe12fff33,0xe1a04000,0xe7953100,0xe5933164,0xe12fff33,0xe1a0a000]
+  , CodeRegion IdentityWrapper [0xe92d4800,0xe28db004,0xeb00053b,0xe8bd8800]
+  , CodeRegion IdentityHelper [0xee121e10,0xe3a02901,0xe2822003,0xe1510002,0x03a00000,0x13a00001,0xe12fff1e]
   , CodeRegion Service
       [0xe52db004,0xe28db000,0xe10f0000,0xe3801080,0xe121f001,0xe2000080,0xe28bd000,0xe8bd0800,0xe12fff1e]
   ]
@@ -260,7 +266,7 @@ validateConsumer initializer validated (ConsumerReceipt InterruptMask start disp
       Context returnedPc outgoing outgoingSp outgoingLr outgoingCpsr returnedCounts returnedTcm = returned
       Context afterPc final finalSp finalLr finalCpsr afterCounts finalTcm = after
   require (length incoming == 13 && length entering == 13 && length outgoing == 13 && length final == 13) "consumer register width differs"
-  require (dispatchPc == 0x723600 && sp == 0x400f3388 && lr == 0x7235f8 && incoming !! 11 == 0x400f33a4
+  require (dispatchPc == 0x723600 && sp == 0x400f3388 && lr == 0x412c8 && incoming !! 11 == 0x400f33a4
     && incoming !! 0 == 1 && incoming !! 3 == 0x400ddaa0 && incoming !! 4 == 1 && incoming !! 5 == 0x96bd20
     && cpsr .&. 0x07f0fe20 == 0 && cpsr .&. 0xdf == 0xd3) "consumer source dispatch inputs or supported A32 little-endian SVC CPSR differ"
   let targetRegisters = take 3 incoming ++ [0xd1140] ++ drop 4 incoming
@@ -310,7 +316,7 @@ validateConsumer initializer validated (ConsumerReceipt InterruptMask start disp
       protection = [WatchClass (Window span') writes | span' <- codeSpans ++ [(0xd0ab0,0xd0af0)]]
       preludeClasses =
         [WatchClass (Window (0xddaa0,0xdf0cc)) (CpuRead:writes),WatchClass (Window (0x96bd20,0x96bd28)) (CpuRead:writes)]
-        ++ [WatchClass (Window span') (CpuFetch:writes) | span' <- take 3 codeSpans]
+        ++ [WatchClass (Window span') (CpuFetch:writes) | span' <- init codeSpans]
         ++ [WatchClass (Window (0xd1140,0xd1164)) writes,WatchClass (Window (0xd0ab0,0xd0af0)) (CpuFetch:writes)
            ,WatchClass (Window (0x7caf34,0x7caf38)) (CpuRead:writes),WatchClass (Window (0xc080c,0xc0810)) [CpuRead]]
       preludeRules =
@@ -341,7 +347,10 @@ validatePrelude start dispatch table events = do
         ++ [0x69ce44,0x69ce48,0x69ce90,0x69ce94,0x69ce98,0x69ce9c,0x69cea0,0x69cea4]
         ++ [0x69ceec,0x69cef0 .. 0x69cf34]
         ++ [0x725dd8,0x725ddc .. 0x725dfc]
-        ++ [0x7235d8,0x7235dc .. 0x723600]
+        ++ [0x7235d8,0x7235dc .. 0x7235f4]
+        ++ [0x412bc,0x412c0,0x412c4]
+        ++ [0x427b8,0x427bc .. 0x427d0]
+        ++ [0x412c8,0x7235f8,0x7235fc,0x723600]
       core1Reads = [(translated,value,pc) | ConsumerEvent (Event CpuRead (Just 1) _ (Just translated) _ (Just value) (Just pc) _ _) _ _ _ <- events]
       roots = [(address,value,pc) | (address,value,pc) <- core1Reads,address >= 0x96bd20 && address < 0x96bd28]
       selector = [(address,value,pc) | (address,value,pc) <- core1Reads,address == 0x7caf34]
@@ -361,7 +370,7 @@ validatePrelude start dispatch table events = do
     require (if targetFetch && core == Just 1 then clock == Just (upper + 1) else maybe False (<= upperBound) clock) "consumer preexecution fetch or completed instruction clock differs"
     case source of
       CpuFetch -> do
-        let declared = any (\(low,high) -> address >= low && address < high && address .&. 3 == 0) ((0xd0ab0,0xd0af0):take 3 codeSpans)
+        let declared = any (\(low,high) -> address >= low && address < high && address .&. 3 == 0) ((0xd0ab0,0xd0af0):init codeSpans)
         require (physicalAddress == Just address && pc == Just (fromIntegral address) && declared) "consumer prelude fetched outside its source declarations"
       CpuRead -> do
         require (pc /= Nothing && value /= Nothing) "consumer prelude read attribution is incomplete"
