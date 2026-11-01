@@ -283,6 +283,9 @@ fn watch_ranges() -> Vec<WatchRange> {
     let mut ranges = vec![
         WatchRange { start: 0x40000, end: 0x4dae0, kinds: WatchKinds::WRITES },
         WatchRange { start: 0xd0000, end: 0xddaa0, kinds: WatchKinds::WRITES },
+        WatchRange { start: 0x40000, end: 0x4dae0, kinds: WatchKinds::CPU_FETCH },
+        WatchRange { start: 0xd0000, end: 0xddaa0, kinds: WatchKinds::CPU_FETCH },
+        WatchRange { start: 0x7221a0, end: 0x722218, kinds: WatchKinds::CPU_FETCH },
         WatchRange { start: u64::from(IMAGE_BASE), end: u64::from(IMAGE_IMMUTABLE_END), kinds: WatchKinds::WRITES },
         WatchRange { start: u64::from(ENTRY), end: u64::from(LIMIT), kinds: WatchKinds::CPU_FETCH },
         WatchRange { start: 0x725dd8, end: 0x725ddc, kinds: WatchKinds::CPU_FETCH },
@@ -355,11 +358,12 @@ impl Producer {
             life.phase = Phase::IrqEntered;
         }
         if sample.boundary == Boundary::IrqFrame && life.phase == Phase::IrqEntered {
-            require(active && state.cpsr.0 & 0x1f == 0x13 && state.sp.0.checked_add(32) == Some(wait.sp.0), "idle IRQ source frame context differs")?;
+            require(active && state.cpsr.0 & 0xbf == 0x93 && state.sp.0.checked_add(32) == Some(wait.sp.0), "idle IRQ source frame context differs")?;
             require(frame::<8>(sample)? == [wait.cpsr.0, wait.registers[0].0, wait.registers[1].0, wait.registers[2].0, wait.registers[3].0, wait.registers[12].0, wait.lr.0, self.resume.0], "idle IRQ source frame differs")?;
             life.phase = Phase::Framed;
         }
         if sample.boundary == Boundary::IrqReturn && life.phase == Phase::Framed && active && state.sp.0.checked_add(28) == Some(wait.sp.0) {
+            require(state.cpsr.0 & 0xbf == 0x93, "idle IRQ return has wrong source control bits")?;
             require(state.spsr == wait.cpsr && frame::<7>(sample)? == [wait.registers[0].0, wait.registers[1].0, wait.registers[2].0, wait.registers[3].0, wait.registers[12].0, wait.lr.0, self.resume.0], "idle IRQ return frame differs")?;
             life.phase = Phase::Returned;
         }
@@ -550,6 +554,7 @@ mod tests {
             wait.context.registers[2].0, wait.context.registers[3].0, wait.context.registers[12].0, wait.context.lr.0, RESUME.0,
         ];
         let mut frame = synthetic_sample(core, Boundary::IrqFrame, Address(source + 0x234), 30);
+        frame.context.cpsr = Word(0xd3);
         frame.context.sp = Address(wait.context.sp.0 - 32);
         let mut stack = vec![0; 1024];
         let offset = (frame.context.sp.0 - core.layout().stack) as usize;
@@ -559,6 +564,7 @@ mod tests {
             aliases: std::array::from_fn(|_| std::array::from_fn(|_| Digest("0".repeat(64)))),
         });
         let mut returned = synthetic_sample(core, Boundary::IrqReturn, Address(source + if scheduler_return { 0x37d8 } else { 0x364 }), 40);
+        returned.context.cpsr = Word(0xd3);
         returned.context.sp = Address(wait.context.sp.0 - 28); returned.context.spsr = wait.context.cpsr;
         returned.views = frame.views.iter().map(|view| View {
             object: view.object, core: view.core, physical: view.physical, bytes: view.bytes.clone(), aliases: view.aliases.clone(),
@@ -632,6 +638,32 @@ mod tests {
         let offset = (frame.context.sp.0 - Core::Primary.layout().stack) as usize;
         frame.views[0].bytes[offset] ^= 1;
         assert!(producer.observe(&frame).is_err());
+    }
+
+    #[test]
+    fn irq_frame_and_return_require_masked_svc_control() {
+        for core in [Core::Primary, Core::Secondary] {
+            for scheduler_return in [false, true] {
+                for unmasked_boundary in [Boundary::IrqFrame, Boundary::IrqReturn] {
+                    let mut producer = Producer::new(WFI, RESUME);
+                    let [entry, wait] = synthetic_entry_and_wait(core);
+                    producer.observe(&entry).unwrap();
+                    producer.observe(&wait).unwrap();
+                    producer.fetched(core, WFI, 13);
+                    let [irq, mut frame, mut returned] = synthetic_irq(core, &wait, scheduler_return);
+                    producer.observe(&irq).unwrap();
+                    if unmasked_boundary == Boundary::IrqFrame {
+                        frame.context.cpsr.0 &= !0x80;
+                        assert!(producer.observe(&frame).is_err());
+                    } else {
+                        producer.observe(&frame).unwrap();
+                        returned.context.cpsr.0 &= !0x80;
+                        assert!(producer.observe(&returned).is_err());
+                    }
+                    assert!(!producer.complete());
+                }
+            }
+        }
     }
 
     #[test]

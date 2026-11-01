@@ -23,8 +23,8 @@ import qualified Replacement.KernelInstall.Wire as W
 
 data Control = WrongSource | WrongArtifact | WrongCandidate | WrongContract | DuplicateReceiptKey | RefusedOutcome | WrongObserver
   | WrongReset | WrongRawSidecar | DisabledWatch | WrongWatchClasses | MissingSample | WrongAlias | WrongCodeWord
-  | WrongWriterCore | ForeignWriter | CodeWrite | WrongKnownPreimage | MalformedStoppedFetch | WrongStoppedClock
-  | WrappedCounts | WrongTask | WrongEntryContext | WrongIrqStatus | WrongIrqFrame | WrongIrqReturn | WrongRestoredRegister
+  | WrongWriterCore | OtherWriterCore | ForeignWriter | CodeWrite | WrongKnownPreimage | MalformedStoppedFetch | WrongStoppedClock
+  | WrappedCounts | WrongTask | WrongEntryContext | WrongIrqStatus | WrongIrqFrame | UnmaskedIrqFrame | WrongIrqReturn | UnmaskedIrqReturn | WrongRestoredRegister
   | MissingRepeatedWait deriving (Eq, Show, Enum, Bounded)
 data ControlError = BaselineRejected WitnessError | MutationRejected Control | WrongRefusal Control WitnessError (Maybe WitnessError) deriving (Eq, Show)
 data Part = Field K.Key | Element Int
@@ -62,6 +62,7 @@ expected control = case control of
   DuplicateReceiptKey -> ReceiptDecodeRejected; RefusedOutcome -> StatusRejected; WrongObserver -> IdentityRejected; WrongReset -> ResetRejected
   WrongRawSidecar -> RawWatchRejected; DisabledWatch -> WatchRejected; WrongWatchClasses -> WatchRejected; MissingSample -> SnapshotRejected
   WrongAlias -> AliasRejected; WrongCodeWord -> CodeRejected; WrongWriterCore -> FetchRejected; ForeignWriter -> ForeignWriterRejected
+  OtherWriterCore -> WriteRejected; UnmaskedIrqFrame -> FrameRejected; UnmaskedIrqReturn -> FrameRejected
   CodeWrite -> WriteRejected; WrongKnownPreimage -> PreimageRejected; MalformedStoppedFetch -> FetchRejected; WrongStoppedClock -> FetchRejected
   WrappedCounts -> ClockRejected; WrongTask -> TaskRejected; WrongEntryContext -> EntryRejected; WrongIrqStatus -> IrqRejected
   WrongIrqFrame -> FrameRejected; WrongIrqReturn -> ReturnRejected; WrongRestoredRegister -> ReturnRejected; MissingRepeatedWait -> RepetitionRejected
@@ -161,6 +162,10 @@ refusalControls role sources original = do
         WrongAlias -> set control [field "samples",Element 0,field "views",Element 0,field "aliases",Element 0,Element 0] zeroDigest receiptValue >>= plain
         WrongCodeWord -> set control [field "samples",Element 0,field "code_word"] (0 :: Word32) receiptValue >>= plain
         WrongWriterCore -> do index <- firstWrite; set control [field "records",Element index,field "core"] J.Null watchValue >>= changedWatch
+        OtherWriterCore -> do
+          index <- firstWrite
+          old <- pathAt control [field "records",Element index,field "core"] watchValue >>= parse control :: Either ControlError Int
+          set control [field "records",Element index,field "core"] (1-old) watchValue >>= changedWatch
         ForeignWriter -> do index <- firstWrite; set control [field "records",Element index,field "source"] ("host-write" :: String) watchValue >>= changedWatch
         CodeWrite -> do
           index <- firstWrite
@@ -187,10 +192,18 @@ refusalControls role sources original = do
         WrongIrqFrame -> do
           entered <- irq; index <- after entered IrqFrame
           changeContext control index "sp" (address (W.contextSp (state (receiptSamples receipt !! index)))+4) receiptValue >>= plain
+        UnmaskedIrqFrame -> do
+          entered <- irq; index <- after entered IrqFrame
+          let old = word (W.contextCpsr (state (receiptSamples receipt !! index)))
+          changeContext control index "cpsr" (old .&. 0xffffff7f) receiptValue >>= plain
         WrongIrqReturn -> do
           entered <- irq; index <- matchingReturn entered
           let old = word (contextSpsr (sampleContext (receiptSamples receipt !! index)))
           changeContext control index "spsr" (old `xor` 0x20000000) receiptValue >>= plain
+        UnmaskedIrqReturn -> do
+          entered <- irq; index <- matchingReturn entered
+          let old = word (W.contextCpsr (state (receiptSamples receipt !! index)))
+          changeContext control index "cpsr" (old .&. 0xffffff7f) receiptValue >>= plain
         WrongRestoredRegister -> do
           entered <- irq; returned <- matchingReturn entered
           let core = contextCore (sampleContext (receiptSamples receipt !! returned))

@@ -84,8 +84,11 @@ sites :: M.Map W.Address Boundary
 sites = M.fromList [(W.Address pc,boundary) | (boundary,pcs) <-
   [(Start,[0x725dd8]),(IdleEntry,[0x69cbf0]),(IdleInstruction,[0x69cbf4,0x69cbf8,0x69cbfc])
   ,(IrqEntry,[0x40204,0xd0204]),(IrqFrame,[0x40234,0xd0234]),(IrqReturn,[0x40364,0xd0364,0x437d8,0xd37d8])],pc <- pcs]
+fetchRanges :: [(Word64,Word64)]
+fetchRanges = [(0x40000,0x4dae0),(0xd0000,0xddaa0),(0x7221a0,0x722218)]
 watchClasses :: [W.WatchClass]
 watchClasses = [W.WatchClass [start,end] writes | (start,end) <- immutableRanges ++ dynamic]
+  ++ [W.WatchClass [start,end] [W.CpuFetch] | (start,end) <- fetchRanges]
   ++ [W.WatchClass [fromIntegral pc,fromIntegral pc+4] [W.CpuFetch] | W.Address pc <- M.keys sites]
   where
     writes = [W.CpuWrite,W.HostWrite,W.ModelBusWrite]
@@ -240,19 +243,24 @@ checkFetch event = do
   (core,pc,_,target) <- eventShape event
   require (W.eventSource event == W.CpuFetch && W.eventAddress event == fromIntegral (address pc)
     && target == fromIntegral (address pc) && W.eventSize event == 4
-    && W.eventValue event == Nothing && W.eventBefore event == Nothing && M.member pc sites) FetchRejected
+    && W.eventValue event == Nothing && W.eventBefore event == Nothing
+    && (M.member pc sites || any (\(start,end) -> target >= start && target+4 <= end) fetchRanges)) FetchRejected
   let location = address pc
-  require (not (location >= 0x40000 && location < 0x50000) || core == W.Primary) FetchRejected
-  require (not (location >= 0xd0000 && location < 0xe0000) || core == W.Secondary) FetchRejected
-advance :: Inputs -> Word64 -> Word64 -> (Memory,Word64) -> W.MemoryEvent -> Either WitnessError (Memory,Word64)
-advance inputs lower upper (memory,previousClock) event = do
+      irqSite = M.lookup pc sites `elem` map Just [IrqEntry,IrqFrame,IrqReturn]
+  require (not irqSite || if location < 0xd0000 then core == W.Primary else core == W.Secondary) FetchRejected
+advance :: Inputs -> [Word64] -> [Word64] -> Word64 -> Word64
+  -> (Memory,Word64,M.Map W.Core (W.Address,Word64)) -> W.MemoryEvent
+  -> Either WitnessError (Memory,Word64,M.Map W.Core (W.Address,Word64))
+advance inputs previousCounts nextCounts lower upper (memory,previousClock,fetches) event = do
   require (W.eventSource event /= W.HostWrite && W.eventSource event /= W.ModelBusWrite) ForeignWriterRejected
-  (_,pc,clock,target) <- eventShape event
+  (core,pc,clock,target) <- eventShape event
   require (clock > lower && clock >= previousClock && clock <= upper) ClockRejected
   _ <- sourceWord inputs (address pc)
   case W.eventSource event of
-    W.CpuFetch -> checkFetch event >> pure (memory,clock)
+    W.CpuFetch -> checkFetch event >> pure (memory,clock,M.insert core (pc,clock) fetches)
     W.CpuWrite -> do
+      let index = case core of W.Primary -> 0; W.Secondary -> 1
+      require (previousCounts !! index < nextCounts !! index && M.lookup core fetches == Just (pc,clock)) WriteRejected
       require (not (any (\(start,end) -> target < end && start < target+W.eventSize event) immutableRanges)) WriteRejected
       let size = W.eventSize event
       require (size `elem` [1,2,4,8]) WriteRejected
@@ -263,7 +271,7 @@ advance inputs lower upper (memory,previousClock) event = do
       require (actual == before) PreimageRejected
       let after = B.pack [fromIntegral (value `shiftR` fromIntegral (8*i)) | i <- [0..size-1]]
           Memory old = memory
-      pure (Memory (foldl (\contents (offset,byte) -> M.insert (fromIntegral target+offset) byte contents) old (zip [0..] (B.unpack after))),clock)
+      pure (Memory (foldl (\contents (offset,byte) -> M.insert (fromIntegral target+offset) byte contents) old (zip [0..] (B.unpack after))),clock,fetches)
     _ -> Left WatchRejected
 
 checkWatch :: W.Watch -> Either WitnessError ()
@@ -305,7 +313,7 @@ replay inputs receipt watch = do
       let context = sampleContext sample; state = contextState context
       require (W.eventCore stopped == Just (S.watchCore (contextCore context)) && W.eventPc stopped == Just (W.contextPc state)
         && W.eventInstructions stopped == Just (W.Count upper)) FetchRejected
-      (updated,_) <- foldM (advance inputs lower upper) (memory,lower) (init segment)
+      (updated,_,_) <- foldM (advance inputs oldCounts newCounts lower upper) (memory,lower,M.empty) (init segment)
       checked <- checkSample inputs hit index sample updated
       pure (sample,end,rest,checked,checked:memories)
 
@@ -336,7 +344,7 @@ checkFrame :: A.IdleProof -> Sample -> Sample -> Memory -> Bool -> Either Witnes
 checkFrame proof waiting sample memory exiting = do
   let saved = stateOf waiting; actual = stateOf sample; displacement = if exiting then 28 else 32
       expectedSp = toInteger (address (W.contextSp saved))-displacement
-  require (expectedSp >= 0 && toInteger (address (W.contextSp actual)) == expectedSp && word (W.contextCpsr actual) .&. 0x3f == 0x13) FrameRejected
+  require (expectedSp >= 0 && toInteger (address (W.contextSp actual)) == expectedSp && word (W.contextCpsr actual) .&. 0xbf == 0x93) FrameRejected
   payload <- savedWords waiting
   let expected = if exiting then payload else word (W.contextCpsr saved):payload
   actualWords <- frameWords memory sample (length expected)
