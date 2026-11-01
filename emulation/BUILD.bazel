@@ -554,6 +554,7 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":primary-initializer-consumer-lib",
+        ":interface-initializer-lib",
         ":primary-initializer-source-lib",
         "//host:aeson",
         "//host:base",

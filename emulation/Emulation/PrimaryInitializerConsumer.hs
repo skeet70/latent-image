@@ -2,6 +2,7 @@
 module Emulation.PrimaryInitializerConsumer
   ( Contract, Receipt, Status (..), deriveContract, contractValue, parseReceipt
   , validateReceipt, compareReceipts, receiptStatus
+  , ConsumerStack, admitConsumerStack
   ) where
 
 import Control.Monad (foldM, forM, forM_, unless)
@@ -14,12 +15,12 @@ import qualified Data.ByteString as B
 import Data.List (sort)
 import qualified Data.Map.Strict as M
 import Data.Word (Word8, Word32, Word64)
-import Emulation.FirstStageWitness (leWordAt, sha256Hex)
+import Emulation.FirstStageWitness (encodeLeWord, leWordAt, sha256Hex)
 import qualified Emulation.InterfaceInitializer as I
 import Emulation.InterfaceInitializer
   ( Context (..), Views (..), Source (..), ByteOrder (..), Event (..), Mode (..)
   , PhysicalSpan (..), Window (..), BankSnapshot (..), TcmSnapshot (..), WatchClass (..)
-  , FixedViews (..), NoFault (..), Rule (..), Watch (..), Alias (..), Decoder (..)
+  , FixedViews (..), Alias (..), Decoder (..)
   )
 import qualified Emulation.PrimaryInitializer as PI
 import qualified Emulation.PrimaryInitializerConsumerSource as PSC
@@ -62,7 +63,10 @@ data WatchFault
   | DecodingChanged
   | LogLimit RecordLimit
   deriving (Eq)
-data RawWatch = RawWatch (Watch RawEvent) [Window] (Maybe WatchFault)
+data ScopeSpan = PhysicalScope PhysicalSpan | TcmScope TcmBank BankOffset BankOffset deriving (Eq)
+data ScopedRule = ScopedRule [Int] Source Mode [ScopeSpan] [TcmSnapshot] deriving (Eq)
+data ScopedState = ScopedState Bool (Maybe String) [RawEvent] [ScopedRule] [WatchClass] FixedViews [TcmSnapshot]
+data RawWatch = RawWatch ScopedState [Window] (Maybe WatchFault)
 data CodeView = CodeView PSC.CodeSite Views deriving (Eq)
 
 data Continuation = Continuation
@@ -72,6 +76,19 @@ data Continuation = Continuation
   , boundedWatch :: Maybe RawWatch
   }
 
+data ConsumerStack = ConsumerStack PS.Guest PS.Guest
+data StackOperation = CallerSave | SelectorSave | SelectorRestore deriving (Eq)
+data StackStep = StackStep StackOperation Context Context AccessBytes AccessBytes
+data StackEvidence = StackEvidence Core TcmBank BankOffset BankOffset AccessBytes AccessBytes [StackStep]
+
+admitConsumerStack :: Context -> Either String ConsumerStack
+admitConsumerStack (Context _ _ sp _ cpsr _ banks) = do
+  require (sp >= 0x70000020 && sp <= 0x70002000 && sp .&. 3 == 0 && cpsr .&. 0x07f0ffff == 0x153)
+    "primary root0 private stack or SVC interrupt context differs"
+  case banks of
+    [0x70000011,0]:_ -> pure (ConsumerStack (PS.Guest (sp - 32)) (PS.Guest sp))
+    _ -> Left "primary root0 stack is not backed by core0 ATCM"
+
 data Consumer = Consumer
   { entryContext :: Context
   , selectedContext :: Context
@@ -80,8 +97,7 @@ data Consumer = Consumer
   , rootsAfter :: Views
   , tableBefore :: Views
   , tableAfter :: Views
-  , stackBefore :: Views
-  , stackAfter :: Views
+  , stackEvidence :: StackEvidence
   , poolBefore :: Views
   , poolAfter :: Views
   , codeViews :: [CodeView]
@@ -162,13 +178,26 @@ parseSnapshot value = do
   forM_ ["atcm","btcm"] $ \name -> field row name >>= fields ["register","window"] >> pure ()
   json value
 
-parseRule :: Value -> Either String Rule
+parseScope :: Value -> Either String ScopeSpan
+parseScope value@(Object row)
+  | KM.member "physical" row = fields ["physical"] value >> PhysicalScope <$> json value
+  | otherwise = do
+      _ <- fields ["tcm"] value
+      tcmValue <- field row "tcm"
+      tcm <- fields ["bank","offsets"] tcmValue
+      bank <- field tcm "bank" >>= parseBank
+      offsets <- get tcm "offsets" :: Either String [Word64]
+      case offsets of
+        [low,high] | low < high -> pure (TcmScope bank (BankOffset low) (BankOffset high))
+        _ -> Left "primary root0 TCM scope offsets differ"
+parseScope _ = Left "primary root0 scope is not an object"
+
+parseRule :: Value -> Either String ScopedRule
 parseRule value = do
   row <- fields ["cores","kind","mode","spans","tcm"] value
-  spans <- get row "spans" :: Either String [Value]
-  forM_ spans $ \span' -> fields ["physical"] span' >> pure ()
+  spans <- get row "spans" >>= mapM parseScope
   snapshots <- get row "tcm" >>= mapM parseSnapshot
-  Rule <$> get row "cores" <*> get row "kind" <*> get row "mode" <*> get row "spans" <*> pure snapshots
+  ScopedRule <$> get row "cores" <*> get row "kind" <*> get row "mode" <*> pure spans <*> pure snapshots
 
 parseBank :: Value -> Either String TcmBank
 parseBank value = do
@@ -250,8 +279,8 @@ parseWatch value = do
   events <- get row "records" >>= mapM parseEvent
   rules <- get row "confinement" >>= mapM parseRule
   snapshots <- get row "tcm" >>= mapM parseSnapshot
-  watch <- Watch <$> get row "enabled" <*> get row "violation" <*> pure events <*> pure rules <*> get row "classes"
-    <*> get row "views" <*> pure NoFault <*> pure snapshots
+  watch <- ScopedState <$> get row "enabled" <*> get row "violation" <*> pure events <*> pure rules <*> get row "classes"
+    <*> get row "views" <*> pure snapshots
   RawWatch watch <$> get row "ranges" <*> (field row "fault" >>= nullable parseFault)
 
 parseCodeView :: Value -> Either String CodeView
@@ -275,16 +304,38 @@ parseContinuation value = do
   Continuation <$> (field row "start" >>= parseContext) <*> (field row "roots_start" >>= parseViews)
     <*> (field row "prelude_watch" >>= parseWatch) <*> (field row "watch" >>= nullable parseWatch)
 
+parseStack :: Value -> Either String StackEvidence
+parseStack value = do
+  row <- fields ["core","bank","offsets","before","after","steps"] value
+  core <- field row "core" >>= parseCore
+  bank <- field row "bank" >>= parseBank
+  offsets <- get row "offsets" :: Either String [Word64]
+  (low,high) <- case offsets of
+    [low,high] | low < high -> pure (BankOffset low,BankOffset high)
+    _ -> Left "primary root0 stack offsets differ"
+  let bytes object' name = AccessBytes . B.pack <$> (get object' name :: Either String [Word8])
+      step input = do
+        item <- fields ["operation","before","after","before_bytes","after_bytes"] input
+        name <- get item "operation" :: Either String String
+        operation <- case name of
+          "caller-save" -> pure CallerSave
+          "selector-save" -> pure SelectorSave
+          "selector-restore" -> pure SelectorRestore
+          _ -> Left "unsupported primary root0 stack operation"
+        StackStep operation <$> (field item "before" >>= parseContext) <*> (field item "after" >>= parseContext)
+          <*> bytes item "before_bytes" <*> bytes item "after_bytes"
+  StackEvidence core bank low high <$> bytes row "before" <*> bytes row "after" <*> (get row "steps" >>= mapM step)
+
 parseConsumer :: Value -> Either String Consumer
 parseConsumer value = do
-  row <- fields ["entry","selected","after","roots_before","roots_after","table_before","table_after","stack_before","stack_after"
+  row <- fields ["entry","selected","after","roots_before","roots_after","table_before","table_after","stack"
     ,"pool_before","pool_after","code","decoder","aliases"] value
   let context name = field row name >>= parseContext
       views name = field row name >>= parseViews
   decoderValue <- field row "decoder"
   _ <- fields ["choices","pending"] decoderValue
   Consumer <$> context "entry" <*> context "selected" <*> context "after" <*> views "roots_before" <*> views "roots_after"
-    <*> views "table_before" <*> views "table_after" <*> views "stack_before" <*> views "stack_after" <*> views "pool_before" <*> views "pool_after"
+    <*> views "table_before" <*> views "table_after" <*> (field row "stack" >>= parseStack) <*> views "pool_before" <*> views "pool_after"
     <*> (get row "code" >>= mapM parseCodeView) <*> json decoderValue <*> (get row "aliases" >>= mapM parseAlias)
 
 parseStop :: Value -> Either String Stop
@@ -401,9 +452,12 @@ headers = [(0x40010,0x40014),(0xd0010,0xd0014)]
 writes :: [Source]
 writes = [CpuWrite,HostWrite,ModelBusWrite]
 
-watchRules :: [TcmSnapshot] -> [Int] -> Source -> Mode -> [(Word64,Word64)] -> Rule
-watchRules snapshots cores kind mode spans = Rule cores kind mode [PhysicalSpan [low,high] | (low,high) <- spans]
+watchRules :: [TcmSnapshot] -> [Int] -> Source -> Mode -> [ScopeSpan] -> ScopedRule
+watchRules snapshots cores kind mode spans = ScopedRule cores kind mode spans
   [snapshot | snapshot@(TcmSnapshot core _ _) <- snapshots,core `elem` cores]
+
+physicalScopes :: [(Word64,Word64)] -> [ScopeSpan]
+physicalScopes = map (\(low,high) -> PhysicalScope (PhysicalSpan [low,high]))
 
 normalizedRanges :: [Window] -> [Window]
 normalizedRanges = foldr merge [] . sort
@@ -413,15 +467,15 @@ normalizedRanges = foldr merge [] . sort
     merge window rest = window:rest
 
 rawRecords :: RawWatch -> [RawEvent]
-rawRecords (RawWatch (Watch _ _ events _ _ _ _ _) _ _) = events
+rawRecords (RawWatch (ScopedState _ _ events _ _ _ _) _ _) = events
 
 healthyWatch :: RawWatch -> Bool
-healthyWatch (RawWatch (Watch enabled violation _ _ _ _ _ _) _ fault) =
+healthyWatch (RawWatch (ScopedState enabled violation _ _ _ _ _) _ fault) =
   enabled && violation == Nothing && fault == Nothing
 
 
-validateWatch :: [TcmSnapshot] -> [WatchClass] -> [Rule] -> RawWatch -> Either String [RawEvent]
-validateWatch expectedTcm expectedClasses expectedRules (RawWatch (Watch enabled violation events rules classes FixedViews NoFault snapshots) ranges fault) = do
+validateWatch :: [TcmSnapshot] -> [WatchClass] -> [ScopedRule] -> RawWatch -> Either String [RawEvent]
+validateWatch expectedTcm expectedClasses expectedRules (RawWatch (ScopedState enabled violation events rules classes FixedViews snapshots) ranges fault) = do
   require (enabled && violation == Nothing && fault == Nothing && snapshots == expectedTcm && rules == expectedRules
     && classes == expectedClasses && ranges == normalizedRanges [range | WatchClass range _ <- expectedClasses]) "primary root0 watch scope or confinement differs"
   forM_ events $ \(RawEvent (Event source core address physical size value pc clock order) before _ location) -> do
@@ -453,6 +507,46 @@ validateChronology events = do
   require (length clocks == length events && and (zipWith (<=) clocks (drop 1 clocks)) && and (zipWith (<=) ticks (drop 1 ticks)))
     "primary root0 raw event chronology decreased"
 
+validateStack :: Context -> Context -> StackEvidence -> Either String ()
+validateStack entry@(Context _ incoming sp lr cpsr entryCounts tcm) selected
+    (StackEvidence core bank low high (AccessBytes initial) (AccessBytes final) steps) = do
+  ConsumerStack (PS.Guest lowGuest) (PS.Guest highGuest) <- admitConsumerStack entry
+  require (core == Core0 && bank == Atcm && low == BankOffset (fromIntegral lowGuest - 0x70000000)
+    && high == BankOffset (fromIntegral highGuest - 0x70000000) && B.length initial == 32 && B.length final == 32
+    && length steps == 3) "primary root0 private stack binding or coverage differs"
+  case (entryCounts,counts selected) of
+    ([entry0,entry1],[_,selected1]) -> do
+      (expected,_) <- foldM (step entry0 selected1) (initial,entry1)
+        (zip [CallerSave,SelectorSave,SelectorRestore] steps)
+      require (final == expected) "primary root0 private stack final readback differs"
+    _ -> Left "primary root0 private stack count width differs"
+  where
+    saved = [incoming !! 4,incoming !! 5,incoming !! 6,incoming !! 7,incoming !! 11,lr]
+    selectorRegisters = [incoming !! 0,incoming !! 1,0x4004dae0,0x412bc,0x96bd20,incoming !! 0,incoming !! 6]
+      ++ take 4 (drop 7 incoming) ++ [sp - 4,incoming !! 12]
+    restoreRegisters = [0,0x4003,0x4003,0x412bc,0x96bd20,incoming !! 0,incoming !! 6]
+      ++ take 4 (drop 7 incoming) ++ [sp - 28,incoming !! 12]
+    returnRegisters = take 11 restoreRegisters ++ [sp - 4,incoming !! 12]
+    returnedCpsr = (cpsr .&. 0x0fffffff) .|. 0x60000000
+    context pc registers stack link status = SemanticContext pc registers stack link status tcm
+    step entry0 selected1 (memory,lastPeer) (operation,StackStep observed before after (AccessBytes beforeBytes) (AccessBytes afterBytes)) = do
+      let (ordinal,beforeState,afterState,next) = case operation of
+            CallerSave -> (0,context 0x725b74 incoming sp lr cpsr,context 0x725b78 incoming (sp - 24) lr cpsr
+              ,B.take 8 memory <> B.concat (map encodeLeWord saved))
+            SelectorSave -> (9,context 0x412bc selectorRegisters (sp - 24) 0x725b98 cpsr
+              ,context 0x412c0 selectorRegisters (sp - 32) 0x725b98 cpsr
+              ,encodeLeWord (sp - 4) <> encodeLeWord 0x725b98 <> B.drop 8 memory)
+            SelectorRestore -> (19,context 0x412c8 restoreRegisters (sp - 32) 0x412c8 returnedCpsr
+              ,context 0x725b98 returnRegisters (sp - 24) 0x412c8 returnedCpsr,memory)
+      require (observed == operation && semanticContext before == beforeState && semanticContext after == afterState
+        && beforeBytes == memory && afterBytes == next) "primary root0 private stack instruction context or effect differs"
+      case (counts before,counts after) of
+        ([before0,before1],[after0,after1]) -> do
+          require (before0 == entry0 + ordinal && after0 == before0 + 1 && before1 >= lastPeer
+            && after1 >= before1 && after1 <= selected1) "primary root0 private stack instruction progress differs"
+          pure (next,after1)
+        _ -> Left "primary root0 private stack instruction count width differs"
+
 validateReceipt :: Contract -> Receipt -> Either String ()
 validateReceipt (Contract initializer source) receipt = do
   PI.receiptInputIdentityMatches initializer (nestedInitializer receipt)
@@ -462,7 +556,7 @@ validateReceipt (Contract initializer source) receipt = do
   body <- maybe (Left "primary root0 consumer is absent") Right (consumer receipt)
   start <- PI.receiptAfter (nestedInitializer receipt)
   require (continuationStart next == start) "primary root0 producer continuity differs"
-  let entry@(Context _ incoming sp _ cpsr _ _) = entryContext body
+  let entry@(Context _ incoming _ _ _ _ _) = entryContext body
       selected = selectedContext body
       after = afterContext body
   identifier <- case incoming of
@@ -472,10 +566,8 @@ validateReceipt (Contract initializer source) receipt = do
   let PSC.DescriptorAccess (PS.Guest tableGuest) (PS.Guest poolGuest) = PSC.descriptorAccess source ident
       descriptorPhysical = fromIntegral tableGuest - 0x40000000
       poolPhysical = fromIntegral poolGuest - 0x40000000
-  require (sp >= 0x40000020 && sp <= 0x40100000 && sp .&. 3 == 0 && cpsr .&. 0x07f0feff == 0xd3)
-    "primary root0 dynamic stack or A32 little-endian SVC context differs"
-  let stackPhysical = fromIntegral sp - 0x40000000 - 32
-      stackSpan = (stackPhysical,stackPhysical + 32)
+  ConsumerStack (PS.Guest stackLow) (PS.Guest stackHigh) <- admitConsumerStack entry
+  let stackSpan = (fromIntegral stackLow,fromIntegral stackHigh)
       protected = [(0x4dae0,0x4f10c),(0x96bd20,0x96bd28),(poolPhysical,poolPhysical + 4)] ++ codeSpans source ++ headers
   require (all (disjoint stackSpan) protected) "primary root0 dynamic stack overlaps a protected resource"
   forM_ (continuationStart next : [context | Stop _ context <- boundaries receipt]) $ \context ->
@@ -489,8 +581,7 @@ validateReceipt (Contract initializer source) receipt = do
   require (tableBefore body == tableAfter body && leWordAt beforeTable 0x1618 == Right 0x412bc
     && leWordAt beforeTable (fromIntegral (descriptorPhysical - 0x4dae0)) == Right poolGuest)
     "primary root0 selected descriptor or selector differs from source publication"
-  beforeStack <- viewBytes 32 (stackBefore body)
-  afterStack <- viewBytes 32 (stackAfter body)
+  validateStack entry selected (stackEvidence body)
   pool <- viewBytes 4 (poolBefore body)
   _ <- viewBytes 4 (poolAfter body)
   require (poolBefore body == poolAfter body) "primary root0 bounded pool word changed"
@@ -498,19 +589,20 @@ validateReceipt (Contract initializer source) receipt = do
   validateContexts ident poolValue entry selected after
   code <- validateCode source (codeViews body)
   require (decoder body == Decoder [1] [Nothing]) "primary root0 live decoder differs"
-  let beforeResources = [(0x96bd20,roots),(0x4dae0,beforeTable),(stackPhysical,beforeStack),(poolPhysical,pool)] ++ code
-      afterResources = [(0x96bd20,roots),(0x4dae0,beforeTable),(stackPhysical,afterStack),(poolPhysical,pool)] ++ code
+  let beforeResources = [(0x96bd20,roots),(0x4dae0,beforeTable),(poolPhysical,pool)] ++ code
+      afterResources = beforeResources
   validateAliases expectedTcm beforeResources afterResources (aliases body)
   let preludeClasses = [WatchClass (Window span') (CpuRead:writes) | span' <- [(0x4dae0,0x4f10c),(0x96bd20,0x96bd28)] ++ headers]
         ++ [WatchClass (Window span') ((if index < (2 :: Int) then [CpuFetch] else []) ++ writes)
            | (index,span') <- zip [0..] (codeSpans source)]
-      preludeRules = [watchRules expectedTcm [0,1] CpuWrite Forbid (headers ++ drop 2 (codeSpans source))]
-      resources = [(0x4dae0,0x4f10c),(0x96bd20,0x96bd28),stackSpan,(poolPhysical,poolPhysical + 4)] ++ codeSpans source ++ headers
-      bodyClasses = [WatchClass (Window span') (CpuRead:writes) | span' <- take 4 resources]
-        ++ [WatchClass (Window span') writes | span' <- drop 4 resources]
-      bodyRules = [watchRules expectedTcm [0] CpuWrite Allow [stackSpan]
-        ,watchRules expectedTcm [1] CpuWrite Forbid resources
-        ,watchRules expectedTcm [0] CpuRead Allow [stackSpan,(0x96bd20,0x96bd28),(0x4dae0,0x4f10c),(poolPhysical,poolPhysical + 4)]]
+      preludeRules = [watchRules expectedTcm [0,1] CpuWrite Forbid (physicalScopes (headers ++ drop 2 (codeSpans source)))]
+      resources = [(0x4dae0,0x4f10c),(0x96bd20,0x96bd28),(poolPhysical,poolPhysical + 4)] ++ codeSpans source ++ headers
+      bodyClasses = [WatchClass (Window span') (CpuRead:writes) | span' <- take 3 resources]
+        ++ [WatchClass (Window span') writes | span' <- drop 3 resources]
+      stackScope = TcmScope Atcm (BankOffset (fromIntegral stackLow - 0x70000000)) (BankOffset (fromIntegral stackHigh - 0x70000000))
+      bodyRules = [watchRules expectedTcm [0] CpuWrite Allow [stackScope]
+        ,watchRules expectedTcm [1] CpuWrite Forbid (physicalScopes resources)
+        ,watchRules expectedTcm [0] CpuRead Allow (stackScope : physicalScopes [(0x96bd20,0x96bd28),(0x4dae0,0x4f10c),(poolPhysical,poolPhysical + 4)])]
   prelude <- validateWatch expectedTcm preludeClasses preludeRules (preludeWatch next)
   watch <- maybe (Left "primary root0 bounded watch is absent") Right (boundedWatch next)
   events <- validateWatch expectedTcm bodyClasses bodyRules watch
@@ -519,7 +611,7 @@ validateReceipt (Contract initializer source) receipt = do
     Stop Installation context:_ -> Right context
     _ -> Left "primary root0 installation boundary is missing"
   validatePrelude source start installation entry descriptorPhysical producerTable next body prelude
-  validateBody entry selected after poolGuest descriptorPhysical beforeStack afterStack roots beforeTable pool events
+  validateBody entry selected after poolGuest descriptorPhysical roots beforeTable pool events
   validateChronology (prelude ++ events)
 
 validateContexts :: PSC.DescriptorId -> Word32 -> Context -> Context -> Context -> Either String ()
@@ -667,23 +759,16 @@ newtype Ordinal = Ordinal Word64
 
 data ExpectedAccess = ExpectedAccess Source Word64 Word64 Word32 Word32 Ordinal
 
-validateBody :: Context -> Context -> Context -> Word32 -> Word64 -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> [RawEvent] -> Either String ()
-validateBody entry@(Context _ incoming sp lr _ _ _) selected after poolGuest descriptorPhysical beforeStack afterStack roots table pool events = do
+validateBody :: Context -> Context -> Context -> Word32 -> Word64 -> B.ByteString -> B.ByteString -> B.ByteString -> [RawEvent] -> Either String ()
+validateBody entry selected after poolGuest descriptorPhysical roots table pool events = do
   (entryCore0,selectedCore1,afterCore1) <- case (counts entry,counts selected,counts after) of
     ([core0,_],[_,selectedPeer],[_,afterPeer]) -> pure (core0,selectedPeer,afterPeer)
     _ -> Left "primary root0 body core count width differs"
-  let stackPhysical = fromIntegral sp - 0x40000000 - 32
-      stackGuest = fromIntegral sp - 32
-      write offset value pc ordinal = ExpectedAccess CpuWrite (stackGuest + offset) (stackPhysical + offset) value pc (Ordinal ordinal)
-      readStack offset value = ExpectedAccess CpuRead (stackGuest + offset) (stackPhysical + offset) value 0x412c8 (Ordinal 19)
-      saved = [incoming !! 4,incoming !! 5,incoming !! 6,incoming !! 7,incoming !! 11,lr]
-      expected = zipWith (\offset value -> write offset value 0x725b74 0) [8,12..28] saved
-        ++ [ExpectedAccess CpuRead 0x96bd20 0x96bd20 0x4004dae0 0x725b88 (Ordinal 5)
-           ,ExpectedAccess CpuRead 0x4004f0f8 0x4f0f8 0x412bc 0x725b90 (Ordinal 7)
-           ,write 0 (sp - 4) 0x412bc 9,write 4 0x725b98 0x412bc 9
-           ,readStack 0 (sp - 4),readStack 4 0x725b98
-           ,ExpectedAccess CpuRead 0x96bd20 0x96bd20 0x4004dae0 0x725b9c (Ordinal 21)
-           ,ExpectedAccess CpuRead (descriptorPhysical + 0x40000000) descriptorPhysical poolGuest 0x725bac (Ordinal 25)]
+  let expected =
+        [ExpectedAccess CpuRead 0x96bd20 0x96bd20 0x4004dae0 0x725b88 (Ordinal 5)
+        ,ExpectedAccess CpuRead 0x4004f0f8 0x4f0f8 0x412bc 0x725b90 (Ordinal 7)
+        ,ExpectedAccess CpuRead 0x96bd20 0x96bd20 0x4004dae0 0x725b9c (Ordinal 21)
+        ,ExpectedAccess CpuRead (descriptorPhysical + 0x40000000) descriptorPhysical poolGuest 0x725bac (Ordinal 25)]
   poolValue <- leWordAt pool 0
   let allExpected = expected ++ [ExpectedAccess CpuRead (fromIntegral poolGuest) (fromIntegral poolGuest - 0x40000000) poolValue 0x725bb0 (Ordinal 26)]
   require (length events == length allExpected) "primary root0 ordered data access coverage differs"
@@ -702,23 +787,30 @@ validateBody entry@(Context _ incoming sp lr _ _ _) selected after poolGuest des
       "primary root0 data instruction groups have inconsistent clocks"
   let peerCounts = [clock - entryCore0 - ordinal - 1 | (ordinal,clock) <- clocks]
   require (and (zipWith (<=) peerCounts (drop 1 peerCounts))) "primary root0 reconstructed peer progress decreased"
-  regions <- sequence [memoryRegion stackPhysical beforeStack,memoryRegion 0x96bd20 roots,memoryRegion 0x4dae0 table
+  regions <- sequence [memoryRegion 0x96bd20 roots,memoryRegion 0x4dae0 table
     ,memoryRegion (fromIntegral poolGuest - 0x40000000) pool]
-  finalMemory <- foldM replay (M.unions regions) events
-  expectedStack <- memoryRegion stackPhysical afterStack
-  require (all (\(key,value) -> M.lookup key finalMemory == Just value) (M.toList expectedStack)) "primary root0 dynamic saved-word readback differs"
+  _ <- foldM replay (M.unions regions) events
+  pure ()
 
 data SemanticContext = SemanticContext Word32 [Word32] Word32 Word32 Word32 [[Word32]] deriving (Eq)
 
 semanticContext :: Context -> SemanticContext
 semanticContext (Context pc registers sp lr cpsr _ banks) = SemanticContext pc registers sp lr cpsr banks
 
-data Semantics = Semantics SemanticContext SemanticContext SemanticContext [Views] [CodeView] Decoder [Alias] deriving (Eq)
+data StackSemantics = StackSemantics Core TcmBank BankOffset BankOffset AccessBytes AccessBytes
+  [(StackOperation,SemanticContext,SemanticContext,AccessBytes,AccessBytes)] deriving (Eq)
+
+stackSemantics :: StackEvidence -> StackSemantics
+stackSemantics (StackEvidence core bank low high before after steps) = StackSemantics core bank low high before after
+  [(operation,semanticContext incoming,semanticContext outgoing,preimage,readback)
+    | StackStep operation incoming outgoing preimage readback <- steps]
+
+data Semantics = Semantics SemanticContext SemanticContext SemanticContext [Views] StackSemantics [CodeView] Decoder [Alias] deriving (Eq)
 
 semantics :: Consumer -> Semantics
 semantics body = Semantics (semanticContext (entryContext body)) (semanticContext (selectedContext body)) (semanticContext (afterContext body))
-  [rootsBefore body,rootsAfter body,tableBefore body,tableAfter body,stackBefore body,stackAfter body,poolBefore body,poolAfter body]
-  (codeViews body) (decoder body) (aliases body)
+  [rootsBefore body,rootsAfter body,tableBefore body,tableAfter body,poolBefore body,poolAfter body]
+  (stackSemantics (stackEvidence body)) (codeViews body) (decoder body) (aliases body)
 
 compareReceipts :: Contract -> Receipt -> Contract -> Receipt -> Either String ()
 compareReceipts first@(Contract retained _) firstReceipt second@(Contract owned _) secondReceipt = do
