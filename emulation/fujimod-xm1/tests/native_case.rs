@@ -433,6 +433,117 @@ fn register_offset_doublewords_admit_four_byte_aligned_transfers() {
 }
 
 #[test]
+fn post_indexed_doubleword_stores_refuse_the_whole_transfer_before_writeback() {
+    for word in [0xe0c2_00f8, 0xe082_00f3] {
+        let observed = Case::new(&[word, BX_LR])
+            .shared_page()
+            .register(0, 0x1122_3344)
+            .register(1, 0xaabb_ccdd)
+            .register(2, 0x4004)
+            .register(3, 8)
+            .run();
+        observed.assert_stopped(Status::MemoryGuard, CODE);
+        assert_eq!(observed.bytes(0x4000), "44332211", "{word:#010x}");
+        assert_eq!(observed.bytes(0x4004), "00000000", "{word:#010x}");
+        assert_eq!(observed.bytes(0x4008), "ddccbbaa", "{word:#010x}");
+        assert_eq!(observed.bytes(0x4010), "01020304", "{word:#010x}");
+        assert_eq!(observed.register("r0"), 0x1122_3344, "{word:#010x}");
+        assert_eq!(observed.register("r1"), 0xaabb_ccdd, "{word:#010x}");
+        assert_eq!(observed.register("r2"), 0x4004, "{word:#010x}");
+        assert_eq!(observed.register("r3"), 8, "{word:#010x}");
+        assert_eq!(observed.observation.memory_provenance_total, "0", "{word:#010x}");
+    }
+}
+
+#[test]
+fn post_indexed_doubleword_loads_refuse_the_whole_transfer_before_writeback() {
+    for word in [0xe0c2_00d8, 0xe082_00d3] {
+        let observed = Case::new(&[word, BX_LR])
+            .shared_page()
+            .register(0, 0x77)
+            .register(1, 0x88)
+            .register(2, 0x4008)
+            .register(3, 8)
+            .run();
+        observed.assert_stopped(Status::MemoryGuard, CODE);
+        assert_eq!(observed.bytes(0x4000), "44332211", "{word:#010x}");
+        assert_eq!(observed.bytes(0x4004), "00000000", "{word:#010x}");
+        assert_eq!(observed.bytes(0x4008), "ddccbbaa", "{word:#010x}");
+        assert_eq!(observed.bytes(0x4010), "01020304", "{word:#010x}");
+        assert_eq!(observed.register("r0"), 0x77, "{word:#010x}");
+        assert_eq!(observed.register("r1"), 0x88, "{word:#010x}");
+        assert_eq!(observed.register("r2"), 0x4008, "{word:#010x}");
+        assert_eq!(observed.register("r3"), 8, "{word:#010x}");
+        assert_eq!(observed.observation.memory_provenance_total, "0", "{word:#010x}");
+    }
+}
+
+#[test]
+fn post_indexed_doubleword_stores_write_both_words_then_update_the_base() {
+    for (word, base) in [(0xe0c2_00f8, 0x400c), (0xe082_00f3, 0x400c), (0xe082_00f2, 0x8008)] {
+        let observed = Case::new(&[word, BX_LR])
+            .region(0x4004, READ_WRITE, &[0; 8])
+            .register(0, 0x1122_3344)
+            .register(1, 0xaabb_ccdd)
+            .register(2, 0x4004)
+            .register(3, 8)
+            .run();
+        observed.assert_returned();
+        assert_eq!(observed.bytes(0x4004), "44332211ddccbbaa", "{word:#010x}");
+        assert_eq!(observed.register("r0"), 0x1122_3344, "{word:#010x}");
+        assert_eq!(observed.register("r1"), 0xaabb_ccdd, "{word:#010x}");
+        assert_eq!(observed.register("r2"), base, "{word:#010x}");
+        assert_eq!(observed.register("r3"), 8, "{word:#010x}");
+        assert_eq!(observed.observation.memory_provenance_total, "2", "{word:#010x}");
+    }
+}
+
+#[test]
+fn post_indexed_doubleword_loads_read_both_words_then_update_the_base() {
+    for (word, base) in [(0xe0c2_00d8, 0x400c), (0xe082_00d3, 0x400c), (0xe082_00d2, 0x8008)] {
+        let observed = Case::new(&[word, BX_LR])
+            .region(0x4004, READ, &[0x44, 0x33, 0x22, 0x11, 0xdd, 0xcc, 0xbb, 0xaa])
+            .register(0, 0x77)
+            .register(1, 0x88)
+            .register(2, 0x4004)
+            .register(3, 8)
+            .run();
+        observed.assert_returned();
+        assert_eq!(observed.bytes(0x4004), "44332211ddccbbaa", "{word:#010x}");
+        assert_eq!(observed.register("r0"), 0x1122_3344, "{word:#010x}");
+        assert_eq!(observed.register("r1"), 0xaabb_ccdd, "{word:#010x}");
+        assert_eq!(observed.register("r2"), base, "{word:#010x}");
+        assert_eq!(observed.register("r3"), 8, "{word:#010x}");
+        assert_eq!(observed.observation.memory_provenance_total, "2", "{word:#010x}");
+    }
+}
+
+#[test]
+fn unpredictable_post_indexed_doublewords_are_refused_without_effects() {
+    for word in [
+        0xe0c0_00d8, 0xe0c1_00d8, 0xe0c0_00f8, 0xe0c1_00f8,
+        0xe080_00d3, 0xe081_00d3, 0xe080_00f3, 0xe081_00f3,
+        0xe082_00d0, 0xe082_00d1,
+        0xe0e2_00d8, 0xe0e2_00f8, 0xe0a2_00d3, 0xe0a2_00f3,
+    ] {
+        let observed = Case::new(&[word, BX_LR])
+            .region(0x4004, READ_WRITE, &[0; 16])
+            .register(0, 0x4004)
+            .register(1, 0x4004)
+            .register(2, 0x4004)
+            .register(3, 8)
+            .run();
+        observed.assert_stopped(Status::UnsupportedInstruction, CODE);
+        assert_eq!(observed.bytes(0x4004), "00000000000000000000000000000000", "{word:#010x}");
+        assert_eq!(observed.register("r0"), 0x4004, "{word:#010x}");
+        assert_eq!(observed.register("r1"), 0x4004, "{word:#010x}");
+        assert_eq!(observed.register("r2"), 0x4004, "{word:#010x}");
+        assert_eq!(observed.register("r3"), 8, "{word:#010x}");
+        assert_eq!(observed.observation.memory_provenance_total, "0", "{word:#010x}");
+    }
+}
+
+#[test]
 fn a_register_doubleword_store_reaching_read_only_memory_has_no_first_store() {
     let observed = Case::new(&[0xe182_00f3, BX_LR])
         .shared_page()
