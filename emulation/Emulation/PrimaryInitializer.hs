@@ -646,7 +646,7 @@ validateWatch contract observation tcm prestate committed enteringCounts outgoin
       (Physical scratchLow,Physical scratchHigh) = scratchBounds contract
       expectedRules =
         [ rule [0] CpuWrite Allow [physical 0x4dae0 0x4f10c,physical scratchLow scratchHigh]
-        , rule [1] CpuWrite Forbid [physical 0x4dae0 0x63460,physical 0x40000 0x4dae0]
+        , rule [1] CpuWrite Forbid [physical 0x4dae0 0x4f10c,physical 0x4f10c 0x63460,physical 0x40000 0x4dae0]
         , case program contract of
             RetainedProgram _ -> rule [0] CpuRead Forbid [physical 0x4dae0 0x4f10c]
             OwnedProgram _ _ _ -> rule [0] CpuRead Allow [physical 0x40430 0x409ac,physical scratchLow scratchHigh]

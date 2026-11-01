@@ -295,7 +295,7 @@ fn observe(machine: &mut Machine, contract: &PrimaryContract, maps: &[factory::M
     let mut confinement = vec![
         ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Write, rule: Confinement::Allow(std::mem::take(&mut allowed)) },
         ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Write,
-            rule: Confinement::Forbid(vec![physical(WORKSPACE)?, physical(LOADER)?]) },
+            rule: Confinement::Forbid(vec![physical(PRIMARY_TABLE)?, physical((PRIMARY_TABLE.1, WORKSPACE.1))?, physical(LOADER)?]) },
         ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Read,
             rule: match scratch {
                 Some(extent) => Confinement::Allow(vec![physical((u64::from(LEAF.0), u64::from(LEAF.1)))?, physical(extent)?]),
