@@ -6,7 +6,7 @@ module Replacement.StartupDispatch.Admission
 
 import qualified A32 as A
 import Control.Monad (foldM, unless)
-import Data.Bits (complement, shiftL, shiftR, (.&.), (.|.))
+import Data.Bits (complement, rotateR, shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
@@ -25,7 +25,7 @@ data Effect = ModeRead | ClearWords | Install | Submit Descriptor deriving (Eq, 
 data PathProof = PathProof Phase [Effect] Bool deriving (Eq, Show)
 data FrameProof = FrameProof Int [PathProof]
 
-data Scalar = Constant Word32 | Interval Word32 Word32 | Stack Int | Incoming A.Reg | ReturnAddress | Unknown deriving (Eq, Show)
+data Scalar = Constant Word32 | Interval Word32 Word32 | Stack Int | Incoming A.Reg | ReturnAddress | CodeAddress Word32 | Unknown deriving (Eq, Show)
 data Flags = Flags (Maybe Bool) (Maybe Bool) (Maybe Bool) (Maybe Bool)
 data Machine = Machine
   { registers :: M.Map A.Reg Scalar, memory :: M.Map Int Scalar
@@ -54,13 +54,20 @@ known _ = Left (AdmissionError "A32 operand is not a proven constant")
 get :: Machine -> A.Reg -> Scalar
 get machine register = M.findWithDefault Unknown register (registers machine)
 
-put :: A.Reg -> Scalar -> Machine -> Machine
-put register value machine = machine
-  { registers = M.insert register value (registers machine)
-  , low = case (register,value) of
-      (A.Reg 13,Stack offset) -> min (low machine) offset
-      _ -> low machine
-  }
+-- Deallocated words lose stored-value and saved-return provenance.
+put :: A.Reg -> Scalar -> Machine -> Either AdmissionError Machine
+put register value machine = case (register,value) of
+  (A.Reg 13,Stack offset) -> do
+    require (offset >= -4096 && offset <= 0 && offset .&. 3 == 0)
+      "A32 SP is misaligned or outside the admitted stack"
+    pure machine
+      { registers = M.insert register value (registers machine)
+      , memory = M.filterWithKey (\address _ -> address >= offset) (memory machine)
+      , pending = filter ((>= offset) . fst) (pending machine)
+      , low = min (low machine) offset
+      }
+  (A.Reg 13,_) -> Left (AdmissionError "A32 SP loses incoming-stack provenance")
+  _ -> pure machine {registers = M.insert register value (registers machine)}
 
 condition :: Flags -> A.Cond -> Either AdmissionError Bool
 condition (Flags n z c v) (A.Cond code) = case code of
@@ -104,6 +111,18 @@ operand machine (A.ShiftedImmediate register shift amount) | amount > 0 && amoun
     A.LSR -> Right (Constant (word `shiftR` amount))
     _ -> Left (AdmissionError "A32 shift is outside admission")
 operand _ _ = Left (AdmissionError "A32 register shift is outside admission")
+extendScalar :: Int -> Int -> Scalar -> Either AdmissionError Scalar
+extendScalar rotation width value = do
+  require (rotation `elem` [0,8,16,24] && width `elem` [8,16])
+    "A32 zero extension has an unsupported rotation or width"
+  let mask = (1 `shiftL` width) - 1
+  case value of
+    Constant word -> pure (Constant (rotateR word rotation .&. mask))
+    Interval _ lastWord | rotation == 0 && lastWord <= mask -> pure value
+    Interval _ _ -> pure (Interval 0 mask)
+    Unknown -> pure (Interval 0 mask)
+    _ -> Left (AdmissionError "A32 zero extension loses capability provenance")
+
 
 arithmetic :: A.DataOp -> Scalar -> Scalar -> Either AdmissionError Scalar
 arithmetic A.MOV _ right = Right right
@@ -120,12 +139,18 @@ arithmetic operation (Constant left) (Constant right) = Constant <$> case operat
 arithmetic A.SUB (Interval first lastWord) (Constant word) | first >= word = Right (Interval (first-word) (lastWord-word))
 arithmetic _ _ _ = Left (AdmissionError "A32 arithmetic loses a symbolic premise")
 
+allocatedWord :: Int -> Machine -> Either AdmissionError ()
+allocatedWord address machine = do
+  case get machine A.sp of
+    Stack offset -> require (offset >= -4096 && offset <= 0 && offset .&. 3 == 0 && address >= offset)
+      "A32 word access leaves the allocated stack"
+    _ -> Left (AdmissionError "A32 word access has no proven SP")
+  require (address .&. 3 == 0 && address < 0 && address /= -20)
+    "A32 word access touches the unknown word or leaves the admitted stack"
+
 writeStack :: Int -> Scalar -> Machine -> Either AdmissionError Machine
 writeStack address value machine = do
-  require (address .&. 3 == 0 && address < 0 && address /= -20 && address >= -4096)
-    "A32 store touches the unknown word or leaves the admitted stack"
-  require (address <= -48 || address `elem` [-44,-40,-36,-32,-28,-24,-16,-12,-8,-4])
-    "A32 store touches an unowned frame word"
+  allocatedWord address machine
   writes <- if address `elem` [-44,-40,-36,-32,-28,-24] then do
     word <- known value
     pure (pending machine ++ [(address,word)])
@@ -133,7 +158,9 @@ writeStack address value machine = do
   pure machine {memory = M.insert address value (memory machine), pending = writes, low = min (low machine) address}
 
 readStack :: Int -> Machine -> Either AdmissionError Scalar
-readStack address machine = maybe (Left (AdmissionError "A32 reads an uninitialized or alias-visible frame word")) Right (M.lookup address (memory machine))
+readStack address machine = do
+  allocatedWord address machine
+  maybe (Left (AdmissionError "A32 reads an uninitialized or alias-visible frame word")) Right (M.lookup address (memory machine))
 
 entry :: Word32
 entry = 0x69cdf8
@@ -189,8 +216,9 @@ deriveFrameProof bytes = do
                 submitted <- descriptor (map snd (pending machine))
                 pure (Submit submitted,Unknown)
               _ -> Left (AdmissionError "A32 external call is not a retained startup service")
-            let clobbered = foldr (\register -> put register Unknown) machine (map A.Reg [0,1,2,3,12] ++ [A.lr])
-            pure ((put (A.Reg 0) result clobbered)
+            clobbered <- foldM (\state register -> put register Unknown state) machine (map A.Reg [0,1,2,3,12] ++ [A.lr])
+            changed <- put (A.Reg 0) result clobbered
+            pure (changed
               { effects = effects machine ++ [effect], pending = [], flags = Flags Nothing Nothing Nothing Nothing
               , memory = if target == 0x725dd8 then foldr M.delete (memory machine) [-44,-40,-36,-32,-28,-24] else memory machine
               })
@@ -199,9 +227,10 @@ deriveFrameProof bytes = do
             decoded <- instruction pc
             let advanced = machine {steps = steps machine + 1}
                 next = walk (pc+4)
-                assign register value = if register == A.pc then transfer value advanced else next (put register value advanced)
+                assign register value = if register == A.pc then transfer value advanced else put register value advanced >>= next
                 execute cond action = condition (flags machine) cond >>= \taken -> if taken then action else next advanced
                 transfer ReturnAddress returned = finish False returned
+                transfer (CodeAddress target) changed = walk target changed
                 transfer (Constant target) changed = walk target changed
                 transfer _ _ = Left (AdmissionError "A32 indirect transfer has unknown provenance")
                 offset base displacement = case (get machine base,displacement) of
@@ -212,6 +241,11 @@ deriveFrameProof bytes = do
               A.MoveTop cond destination word -> execute cond $ do
                 previous <- known (get machine destination)
                 assign destination (Constant ((previous .&. 0xffff) .|. (word `shiftL` 16)))
+              A.ZeroExtend cond destination source rotation width -> execute cond $ do
+                require (destination /= A.sp && destination /= A.pc && source /= A.pc)
+                  "A32 zero extension cannot use SP or PC as a destination or PC as a source"
+                value <- extendScalar rotation width (get machine source)
+                assign destination value
               A.DataProcessing cond operation updates destination source value -> execute cond $ do
                 right <- operand machine value
                 if operation == A.CMP && updates then do
@@ -222,11 +256,15 @@ deriveFrameProof bytes = do
                   result <- arithmetic operation (get machine source) right
                   assign destination result
               A.Store cond A.Word source base displacement indexing -> execute cond $ do
+                require (indexing == A.OffsetOnly || base /= source) "A32 store writeback overlaps its source"
                 address <- offset base displacement
                 let actual = if indexing == A.PostIndexed then case get machine base of Stack root -> root; _ -> address else address
-                changed <- writeStack actual (get machine source) advanced
-                next (if indexing == A.OffsetOnly then changed else put base (Stack address) changed)
+                allocated <- if base == A.sp && indexing == A.PreIndexed then put base (Stack address) advanced else pure advanced
+                changed <- writeStack actual (get machine source) allocated
+                updated <- if indexing == A.OffsetOnly then pure changed else put base (Stack address) changed
+                next updated
               A.Load cond A.Word False destination base displacement indexing -> execute cond $ do
+                require (indexing == A.OffsetOnly || base /= destination) "A32 load writeback overlaps its destination"
                 if base == A.pc && indexing == A.OffsetOnly then case displacement of
                   A.OffsetImmediate delta -> do
                     let address = toInteger pc + 8 + toInteger delta
@@ -236,24 +274,29 @@ deriveFrameProof bytes = do
                 else do
                   address <- offset base displacement
                   let actual = if indexing == A.PostIndexed then case get machine base of Stack root -> root; _ -> address else address
-                  value <- readStack actual machine
-                  let changed = if indexing == A.OffsetOnly then advanced else put base (Stack address) advanced
-                  if destination == A.pc then transfer value changed else next (put destination value changed)
+                  allocated <- if base == A.sp && indexing == A.PreIndexed then put base (Stack address) advanced else pure advanced
+                  value <- readStack actual allocated
+                  changed <- if indexing == A.OffsetOnly then pure allocated else put base (Stack address) allocated
+                  if destination == A.pc then transfer value changed else put destination value changed >>= next
               A.StoreMultiple cond base A.DecrementBefore True saved -> execute cond $ do
                 root <- case get machine base of Stack address -> Right address; _ -> Left (AdmissionError "A32 push has unknown base")
-                require (base == A.sp && not (null saved)) "A32 block store is not a stack save"
+                require (base == A.sp && not (null saved) && base `notElem` saved && A.pc `notElem` saved)
+                  "A32 block store has an unsupported base or register list"
                 let bottom = root - 4 * length saved
-                changed <- foldM (\state (address,register) -> writeStack address (get machine register) state) advanced (zip [bottom,bottom+4..] saved)
-                next (put A.sp (Stack bottom) changed)
+                allocated <- put A.sp (Stack bottom) advanced
+                changed <- foldM (\state (address,register) -> writeStack address (get machine register) state) allocated (zip [bottom,bottom+4..] saved)
+                next changed
               A.LoadMultiple cond base A.IncrementAfter True restored -> execute cond $ do
                 root <- case get machine base of Stack address -> Right address; _ -> Left (AdmissionError "A32 pop has unknown base")
-                require (base == A.sp && not (null restored)) "A32 block load is not a stack restore"
+                require (base == A.sp && not (null restored) && base `notElem` restored)
+                  "A32 block load has an unsupported base or register list"
                 values <- mapM (`readStack` machine) (take (length restored) [root,root+4..])
-                let changed = foldr (uncurry put) (put A.sp (Stack (root+4*length restored)) advanced) (zip restored values)
+                loaded <- foldM (\state (register,value) -> put register value state) advanced (zip restored values)
+                changed <- put A.sp (Stack (root+4*length restored)) loaded
                 if A.pc `elem` restored then transfer (get changed A.pc) changed else next changed
               A.Branch cond link target -> execute cond $ do
                 if link then do
-                  let called = put A.lr (Constant (pc+4)) advanced
+                  called <- put A.lr (CodeAddress (pc+4)) advanced
                   if target >= entry && target < entry + fromIntegral (B.length bytes) then walk target called
                   else retained target called >>= next
                 else if target == pc then finish True advanced
@@ -262,8 +305,9 @@ deriveFrameProof bytes = do
               A.BranchExchange cond link register -> execute cond $ do
                 require (not link) "A32 computed call is not admitted"
                 transfer (get machine register) advanced
-              A.Hint cond -> execute cond (next advanced)
+              A.Hint cond | U.word32At bytes (fromIntegral (pc-entry)) == 0xe320f000 -> execute cond (next advanced)
               _ -> Left (AdmissionError ("A32 instruction is outside startup admission: " ++ show decoded))
-      walk entry (put (A.Reg 0) input initial) >>= \(bottom,path) -> do
+      started <- put (A.Reg 0) input initial
+      walk entry started >>= \(bottom,path) -> do
         require (bottom <= -48) "A32 adapter does not establish the original guest frame"
         pure (bottom,path)

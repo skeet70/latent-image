@@ -11,6 +11,7 @@ import Numeric (showHex)
 -- Original synthetic A32 encodings; no firmware instructions were copied.
 data Fault = Control | BelowSpStore | BelowSpLoad | ResurrectFrame | MisalignedSp | UnprovenSp | OutsideSp
   | StoreWritebackOverlap | LoadWritebackOverlap | PushSp | PopSp | YieldHint | WaitHint | UnknownWordStore | UnknownWordLoad
+  | ScalarExtend | RotatedExtend | ConditionalExtend | CapabilityExtend | ReturnExtend | ExtendSp | ExtendPc | InternalReturnExtend
   deriving (Eq, Show, Enum, Bounded)
 data Label = Body | Setup | Install | Spin | Root | Idle0 | Diagnostic | Zero | Return | Submit deriving (Eq, Ord, Show)
 data Instruction = Word Word32 | Mark Label | Branch Word32 Label | Call Word32
@@ -34,7 +35,9 @@ carrier fault =
            ,Branch 0x1a000000 Install,Word (wide 0 0xec00),Word (top 0 0x89),Word 0xe3a01000
            ,Word (wide 2 0x4b80),Word (top 2 0xd),Call 0x7221a0,Mark Install,Call 0x725a04
            ,Word 0xe3500000,Branch 0x1a000000 Spin,Branch 0xea000000 Zero,Mark Spin,Branch 0xea000000 Spin
-           ,Mark Submit,Word 0xe92d4020,Word 0xe5840000,Word 0xe5841004,Word 0xe5842008
+           ,Mark Submit]
+        ++ [Word 0xe6efc07e | fault == InternalReturnExtend]
+        ++ [Word 0xe92d4020,Word 0xe5840000,Word 0xe5841004,Word 0xe5842008
            ,Word 0xe3a05b01,Word 0xe584500c,Word 0xe5843010,Word 0xe3a05000,Word 0xe5845014
            ,Word 0xe1a00004,Call 0x725dd8,Word 0xe8bd8020]
       (_,labels) = foldl locate (origin,M.empty) program
@@ -56,7 +59,11 @@ carrier fault =
   in (bytes,symbols)
   where
     task taskId name priority entry =
-      map Word [0xe3a00000 .|. taskId,wide 1 name,top 1 0x78,0xe3a02000 .|. priority,wide 3 entry,top 3 0x69]
+      map Word (case fault of
+        ScalarExtend -> [wide 0 (taskId .|. 0xab00),0xe6ef0070]
+        RotatedExtend -> [wide 0 ((taskId `shiftL` 8) .|. 0xab),0xe6ef0470]
+        _ -> [0xe3a00000 .|. taskId])
+      ++ map Word [wide 1 name,top 1 0x78,0xe3a02000 .|. priority,wide 3 entry,top 3 0x69]
       ++ [Branch 0xeb000000 Submit]
     wide register value = 0xe3000000 .|. (register `shiftL` 12) .|. ((value .&. 0xf000) `shiftL` 4) .|. (value .&. 0xfff)
     top register value = 0xe3400000 .|. (register `shiftL` 12) .|. ((value .&. 0xf000) `shiftL` 4) .|. (value .&. 0xfff)
@@ -84,4 +91,12 @@ injection fault =
         WaitHint -> [(5,0xe320f003)]
         UnknownWordStore -> [(5,0xe58d001c)]
         UnknownWordLoad -> [(5,0xe59dc01c)]
+        ScalarExtend -> []
+        RotatedExtend -> []
+        ConditionalExtend -> [(5,0xe3a0c000),(6,0xe35c0000),(7,0x16efc074)]
+        CapabilityExtend -> [(5,0xe6efc074)]
+        ReturnExtend -> [(5,0xe6efc07e)]
+        ExtendSp -> [(5,0xe6efd070)]
+        ExtendPc -> [(5,0xe6eff070)]
+        InternalReturnExtend -> []
   in [maybe word id (lookup index changes) | (index,word) <- zip [0 :: Int ..] control]

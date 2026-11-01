@@ -6,14 +6,14 @@ import Replacement.StartupDispatch.Artifact
 
 main :: IO ()
 main = do
-  outcomes <- forM [Control .. UnknownWordLoad] $ \fault -> do
+  outcomes <- forM [minBound .. maxBound] $ \fault -> do
     let (bytes,symbols) = carrier fault
         result = deriveArtifact bytes symbols
-        expected = if fault == Control then "admitted" else "CodeRejected"
-        passed = case (fault,result) of
-          (Control,Right _) -> True
-          (Control,Left _) -> False
-          (_,Left (CodeRejected _)) -> True
+        admits = fault `elem` [Control,ScalarExtend,RotatedExtend,ConditionalExtend]
+        expected = if admits then "admitted" else "CodeRejected"
+        passed = case result of
+          Right _ -> admits
+          Left (CodeRejected _) -> not admits
           _ -> False
         actual = either show (const "admitted") result
     putStrLn (show fault ++ ": expected=" ++ expected ++ "; actual=" ++ actual)
