@@ -248,6 +248,10 @@ pub unsafe extern "C" fn xm1_first_stage_main() -> ! {
     configure_mpu(core);
     peer_rendezvous(core);
     stage_retained_next(core);
+    #[cfg(first_stage_handler_tail_fault)]
+    if core == Core::Zero {
+        xm1_first_stage_handler_tail_fault();
+    }
     inject_fault();
     xm1_first_stage_handoff()
 }
@@ -259,3 +263,11 @@ unsafe fn inject_fault() {
 
 #[cfg(not(first_stage_fault))]
 unsafe fn inject_fault() {}
+
+// Synthetic handler-tail fault: a core-0 write outside the seven-store protocol.
+#[cfg(first_stage_handler_tail_fault)]
+#[no_mangle]
+#[inline(never)]
+unsafe extern "C" fn xm1_first_stage_handler_tail_fault() {
+    write(0x24 as *mut u32, 0xdead_be00);
+}

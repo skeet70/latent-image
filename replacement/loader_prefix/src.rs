@@ -52,16 +52,12 @@ impl CompletionWord {
         self.0 != 0
     }
 
+    // Synthetic predicate fault: accept the initial zero completion load.
     #[cfg(loader_prefix_predicate_fault)]
     fn is_complete(self) -> bool {
-        self.0 == 1
+        self.0 == 0
     }
 }
-
-#[cfg(not(loader_prefix_fill_fault))]
-const WORKSPACE_SHORTFALL: u32 = 0;
-#[cfg(loader_prefix_fill_fault)]
-const WORKSPACE_SHORTFALL: u32 = 4;
 
 unsafe fn clear_words(start: u32, end: u32) {
     (0..(end - start) / 4).for_each(|word| write_volatile((start + 4 * word) as *mut u32, 0));
@@ -83,6 +79,7 @@ unsafe fn stack_top() -> u32 {
     addr_of!(xm1_loader_b_stack_top) as u32
 }
 
+// Synthetic core-refusal fault: reject the qualified core-1 discriminator.
 #[cfg(loader_prefix_core_refusal)]
 #[no_mangle]
 #[inline(never)]
@@ -110,7 +107,17 @@ pub(crate) unsafe extern "C" fn xm1_loader_prefix_install() -> VectorBase {
 /// Stock `0xd00b0`-`0xd00c0`, on the loader-B stack.
 #[no_mangle]
 pub(crate) unsafe extern "C" fn xm1_loader_prefix_clear_workspace() {
-    clear_words(WORKSPACE_START, STACK_WINDOW_START - WORKSPACE_SHORTFALL);
+    clear_words(WORKSPACE_START, STACK_WINDOW_START);
+    // Synthetic fill fault: leave the last workspace word nonzero.
+    #[cfg(loader_prefix_fill_fault)]
+    xm1_loader_prefix_fill_fault();
+}
+
+#[cfg(loader_prefix_fill_fault)]
+#[no_mangle]
+#[inline(never)]
+unsafe extern "C" fn xm1_loader_prefix_fill_fault() {
+    write_volatile((STACK_WINDOW_START - 4) as *mut u32, 1);
 }
 
 #[no_mangle]

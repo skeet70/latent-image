@@ -22,6 +22,9 @@ xm1_loader_prefix_write_confinement_fault:
     bl xm1_loader_prefix_install
     mov r6, r0
 #ifdef XM1_LOADER_PREFIX_STACK_FAULT
+    @ Synthetic stack fault: move the loader-B stack top down two words.
+    .global xm1_loader_prefix_stack_fault
+xm1_loader_prefix_stack_fault:
     ldr r4, =xm1_loader_b_stack_top - 8
 #else
     ldr r4, =xm1_loader_b_stack_top
