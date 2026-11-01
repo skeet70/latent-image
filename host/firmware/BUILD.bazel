@@ -1767,8 +1767,18 @@ haskell_library(
 haskell_test(
     name = "bank-allowlist-composition-tests",
     srcs = ["BankAllowlistCompositionTests.hs"],
-    args = ["$(location //menu:recipe_bank_allowlist.json)"],
-    data = ["//menu:recipe_bank_allowlist.json"],
+    args = [
+        "$(location //menu:recipe_bank_allowlist.json)",
+        "$(location //menu:recipe_bank_modal_allowlist_fragment.json)",
+        "$(location :modal-00c40000/kernel.elf)",
+        "$(location :modal-00c4fc88/kernel.elf)",
+    ],
+    data = [
+        "//menu:recipe_bank_allowlist.json",
+        "//menu:recipe_bank_modal_allowlist_fragment.json",
+        ":modal-00c40000/kernel.elf",
+        ":modal-00c4fc88/kernel.elf",
+    ],
     ghcopts = ["-Wall", "-Werror", "-XGHC2021"],
     deps = [
         ":bank-allowlist",

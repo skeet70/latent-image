@@ -1,9 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
+import ArmElf (parseElf)
 import BankAllowlist
 import BankAllowlistComposition
-import Control.Monad (unless)
+import Control.Monad (forM_, unless)
 import qualified Crypto.Hash.SHA256 as SHA256
 import Data.Aeson (Value, object, (.=))
 import qualified Data.ByteString as B
@@ -36,7 +37,7 @@ indirect name reason = object
 
 main :: IO ()
 main = do
-  [sourceBasePath] <- getArgs
+  [sourceBasePath, sourceModalPath, modalLow, modalHigh] <- getArgs
   frozenBase <- B.readFile sourceBasePath
   let basePath = "menu/recipe_bank_allowlist.json"
       lifecyclePath = "menu/recipe_bank_allowlist.lifecycle.json"
@@ -48,8 +49,16 @@ main = do
       composed = composeBankAllowlist modalLifecycleBankVariant sources
   let hexByte byte = let digits = showHex byte "" in replicate (2 - length digits) '0' ++ digits
   check "default allowlist preserves f0b8386 byte identity"
-    (concatMap hexByte (B.unpack (SHA256.hash frozenBase)) == "2fc3c50a094d287f86136f405e9e93ac272c03ce327ce785677dab90d44fcfc9"
+    (concatMap hexByte (B.unpack (SHA256.hash frozenBase)) == "c06f3bf3202e41efca6d4232dc88df974bfd9dbfd29aac696f9fa79b4e22ce8a"
       && composeBankAllowlist standardBankVariant [(basePath, frozenBase)] == Right frozenBase)
+  sourceModal <- B.readFile sourceModalPath
+  emittedPolicy <- either fail pure
+    (composeBankAllowlist modalScopedBankVariant [(basePath, frozenBase), (modalPath, sourceModal)] >>= parseAllowlist)
+  forM_ [modalLow, modalHigh] $ \path -> do
+    emitted <- B.readFile path
+    report <- either fail pure (parseElf emitted >>= checkBank emittedPolicy)
+    check ("modal224 emitted declaration policy: " ++ path ++ ": " ++ show (map renderFinding (violations report)))
+      (null (violations report))
   check "default composition preserves exact input bytes"
     (composeBankAllowlist standardBankVariant [(basePath, base)] == Right base)
   check "selected source paths follow canonical group order"
