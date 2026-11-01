@@ -2713,3 +2713,24 @@ haskell_binary(
         "//host:host-support",
     ],
 )
+
+haskell_binary(
+    name = "loader-continuation-controls",
+    srcs = ["LoaderContinuationControls.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:text",
+        "//host:unix",
+        "//host:vector",
+    ],
+)
