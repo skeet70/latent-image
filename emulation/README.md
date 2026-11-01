@@ -1327,6 +1327,8 @@ Schema 2 adds closed image-5 heap-code admission states and source-bound loader 
 
 Receipt admission compares r0-r12, SP, LR and CPSR against the raw instruction hits before lifetime replay. It reconstructs each interval's exact code/header classes and merged ranges, reconciles executed and stopped-only heap-entry fetches, and requires the checked final aggregate endpoint of 450,000,000 instructions to dominate every boundary counter. Header watches group neighboring headers when needed to stay inside the runtime's 256-class limit; raw payload reads inside those conservative spans are retained but do not count as header reads. An interval with no expected entry fetch can be empty; omitting an expected fetch refuses admission.
 
+Instruction points are armed before the fetch watches. The pinned SDK increments before instruction hooks, rolls back a stopped entry in the point hook and continues through the later fetch hook. A resumed start fetch is stamped `begin+1`; the stopped next fetch is stamped `end`. Both can share one entered coordinate. Exact ordered matching requires both records; an interval with no progress has no resumed start fetch. All CPU rows remain within the checked interval endpoint.
+
 After both real receipts admit, `heap-observe --refusal-controls ENABLED_DIRECTORY DISABLED_DIRECTORY ANALYSIS_ROOT NEW_OUTPUT_DIRECTORY` preserves six serialized controls and requires the intended typed refusals: a boundary-size change with events/summary regenerated, a removed watch class, an omitted entry fetch, an altered final counter, a coherent premature image-5 calloc fetch and coherent corruption of the initial image-5 code view. It executes no guest. The original sidecars remain unchanged.
 
 #### Task-storage observation

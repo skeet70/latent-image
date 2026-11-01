@@ -373,11 +373,14 @@ fn admit_interval(batch: &AccessBatch, classes: &[WatchClass], headers: &[Addres
     let end = end_counts[0].checked_add(end_counts[1]).ok_or(AdmissionFailure::FinalCounters)?;
     if end < begin || start.snapshot.counts.iter().zip(end_counts).any(|(before, after)| *before > after) { return Err(AdmissionFailure::FinalCounters); }
     let mut expected = Vec::new();
-    for boundary in std::iter::once(start).chain(next) {
-        if ENTRIES.contains(&boundary.snapshot.pc.0) || IMAGE5_LOAD_POINTS.contains(&boundary.snapshot.pc.0) {
-            expected.push(FetchStamp { core: boundary.snapshot.core, pc: boundary.snapshot.pc,
-                clock: boundary.snapshot.counts[0].checked_add(boundary.snapshot.counts[1]).and_then(|clock| clock.checked_add(1)).ok_or(AdmissionFailure::FinalCounters)? });
-        }
+    // SDK3d90035d continues later hooks after stop_before_instruction rolls back the entry count.
+    // Points are armed before fetch watches; tests/peer_wait_sdk.rs:205-233 qualifies the shared entered coordinate.
+    if begin < end && (ENTRIES.contains(&start.snapshot.pc.0) || IMAGE5_LOAD_POINTS.contains(&start.snapshot.pc.0)) {
+        expected.push(FetchStamp { core: start.snapshot.core, pc: start.snapshot.pc,
+            clock: begin.checked_add(1).ok_or(AdmissionFailure::FinalCounters)? });
+    }
+    if let Some(boundary) = next.filter(|boundary| ENTRIES.contains(&boundary.snapshot.pc.0) || IMAGE5_LOAD_POINTS.contains(&boundary.snapshot.pc.0)) {
+        expected.push(FetchStamp { core: boundary.snapshot.core, pc: boundary.snapshot.pc, clock: end });
     }
     let mut fetches = Vec::new();
     let mut previous_clock = begin;
@@ -388,8 +391,7 @@ fn admit_interval(batch: &AccessBatch, classes: &[WatchClass], headers: &[Addres
         require(classes.iter().any(|class| class.range[0] < high && row.physical < class.range[1] && class.kinds.contains(&row.source)), "memory event is outside declared classes")?;
         if matches!(row.source, Access::CpuFetch | Access::CpuRead | Access::CpuWrite) {
             let clock = row.instructions.ok_or(AdmissionFailure::MissingFetch)?;
-            let upper = if matches!(row.source, Access::CpuFetch) { end.checked_add(1).ok_or(AdmissionFailure::FinalCounters)? } else { end };
-            if clock <= begin || clock > upper || clock < previous_clock { return Err(AdmissionFailure::FinalCounters); }
+            if clock <= begin || clock > end || clock < previous_clock { return Err(AdmissionFailure::FinalCounters); }
             previous_clock = clock;
         }
         if matches!(row.source, Access::CpuFetch) {
