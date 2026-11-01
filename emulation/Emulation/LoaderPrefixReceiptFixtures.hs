@@ -603,9 +603,15 @@ checkCompletionProgress facts = do
           . changeField "completion" (setField "counter" before)
           . changeStop "prefix-exit" (setField "counter" after)
           . changeField "scoped_watch" (changeField "counters" (toJSON . map finalCounter . arrayValues))
+      stopCore1 label = case [stop | stop <- arrayValues (valueField "stops" document), hasField "label" (String label) stop] of
+        found : _ -> case map wordValue (arrayValues (valueField "counts" found)) of
+          [_, core1] -> core1
+          _ -> error "fixture stop counts are not per core"
+        [] -> error "fixture stop is absent"
+      storeCore1 = stopCore1 "completion-store"
       cases =
         [ ("composed completion load count cannot exceed the instruction budget", CompletionLoads 50000000)
-        , ("composed completion load count within budget cannot exceed core1 progress", CompletionLoads 2000)
+        , ("composed completion load count within budget cannot exceed core1 progress", CompletionLoads (storeCore1 + 1))
         ]
   expect "composed delayed completion-progress baseline accepted" (accepted (consume document))
   let failures = [label | (label,completed) <- cases, accepted (consume (inflate completed document))]
@@ -613,7 +619,8 @@ checkCompletionProgress facts = do
   expect "composed completion counters follow bounded core1 progress" (null failures)
   let parseMutation change = parseReceipt PrefixBoundary (BL.toStrict (encode (change document)))
       scopedCounter change = changeField "scoped_watch" (changeField "counters" (toJSON . map change . arrayValues))
-      committed = object ["count" .= (2000 :: Word64), "zero_count" .= (2000 :: Word64), "nonzero_count" .= (0 :: Word64)]
+      beyondExit = stopCore1 "prefix-exit" + 1
+      committed = object ["count" .= beyondExit, "zero_count" .= beyondExit, "nonzero_count" .= (0 :: Word64)]
       refusesParsed label change = expect label (not (accepted (parseMutation change)))
   refusesParsed "composed counter addition cannot wrap" $
     scopedCounter (setField "zero_count" (toJSON (maxBound :: Word64)) . setField "nonzero_count" (toJSON (10 :: Word64)))
@@ -625,8 +632,10 @@ checkCompletionProgress facts = do
     changeField "completion" (setField "counter" committed)
   heldContract <- either fail pure (composedContract Held facts startupFixture)
   let heldDocument = receiptDocument (Just startupFixture) Held OwnedProgram facts knobs
-      inflatedHeld = scopedCounter (setField "count" (toJSON (4000 :: Word64))
-        . setField "zero_count" (toJSON (4000 :: Word64))) heldDocument
+      heldBeyond = 1 + maximum [core1 | stop <- arrayValues (valueField "stops" heldDocument)
+        , [_, core1] <- [map wordValue (arrayValues (valueField "counts" stop))]]
+      inflatedHeld = scopedCounter (setField "count" (toJSON heldBeyond)
+        . setField "zero_count" (toJSON heldBeyond)) heldDocument
   expect "composed held completion-progress baseline accepted" (accepted (validate heldContract (BL.toStrict (encode heldDocument))))
   expect "held final counter cannot exceed terminal core1 progress"
     (not (accepted (validate heldContract (BL.toStrict (encode inflatedHeld)))))
