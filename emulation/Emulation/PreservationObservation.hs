@@ -5,6 +5,7 @@ module Emulation.PreservationObservation
   ( PreservationRanges
   , preservationRanges
   , preservationRangesJson
+  , preservationRangeList
   , checkPreservationRangeCount
   , PreservationCounters
   , PreservationViolation
@@ -61,6 +62,9 @@ preservationRangesJson :: PreservationRanges -> Value
 preservationRangesJson (PreservationRanges ranges) = Array (V.fromList
   [ Array (V.fromList [Number (fromIntegral lo), Number (fromIntegral hi)])
   | range <- ranges, let (lo, hi) = watchRangeBounds range ])
+
+preservationRangeList :: PreservationRanges -> [WatchRange]
+preservationRangeList (PreservationRanges ranges) = ranges
 
 newtype IdentityCpuWrites = IdentityCpuWrites { identityCpuWritesValue :: Word64 } deriving (Eq, Show)
 newtype ChangedCpuWrites = ChangedCpuWrites { changedCpuWritesValue :: Word64 } deriving (Eq, Show)

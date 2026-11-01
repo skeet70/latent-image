@@ -8,6 +8,11 @@ module Emulation.UiTrajectory
   , filmStoredCode
   , Step (..)
   , Segment (..)
+  , ReadExpectation (..)
+  , ReadPreservation (..)
+  , checkReadExpectation
+  , ExecutionInterval (..)
+  , executionIntervalLabel
   , TraceSite (..)
   , Trajectories (..)
   , TrajectoryProtection (..)
@@ -28,8 +33,8 @@ import Data.Foldable (toList)
 import Data.List (nub, sort, stripPrefix)
 import qualified Data.Text as T
 import Data.Word (Word32)
-import Emulation.PreservationObservation (PreservationRanges, checkPreservationRangeCount, preservationRanges)
-import Emulation.WatchObservation (WatchAddress, WatchRange, watchAddress, watchRange)
+import Emulation.PreservationObservation (PreservationRanges, checkPreservationRangeCount, preservationRangeList, preservationRanges)
+import Emulation.WatchObservation (ExecutionInterval (..), executionIntervalLabel, WatchAddress, WatchRange, unionWatchRanges, watchAddress, watchAddressValue, watchRange, watchRangeBounds)
 import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming, modeDialName)
 import Numeric (readHex)
 
@@ -64,10 +69,41 @@ filmStoredCode row = case row of
   WarmStandard -> 13
   RecipeB -> 14
 
--- | One key press and the menu state required (or, in an observing segment, recorded) after it.
--- The press timing is the only part of a step a FujiMod trajectory variant may change: a
--- fifth element {"hold_instructions", "release_instructions", "settle_instructions"} overrides
--- the segment's key pulse and the bridge's settle cap for this key.
+
+data ReadExpectation = ReadExpectation
+  { expectedReadLabel :: String
+  , expectedReadBytes :: B.ByteString
+  } deriving (Eq, Show)
+
+checkReadExpectation :: ReadExpectation -> B.ByteString -> Either String ()
+checkReadExpectation expected actual =
+  unless (expectedReadBytes expected == actual) (Left ("read bytes differ: " ++ expectedReadLabel expected))
+
+data ReadPreservation = ReadPreservation
+  { preservedReadLabel :: String
+  , preservedSourcePhase :: T.Text
+  , preservedSourceRead :: String
+  } deriving (Eq, Show)
+
+instance FromJSON ReadPreservation where
+  parseJSON = withObject "read preservation" $ \entry -> do
+    unless (sort (KM.keys entry) == ["phase", "read", "source_read"])
+      (fail "read preservation takes exactly read, phase and source_read")
+    ReadPreservation <$> entry .: "read" <*> entry .: "phase" <*> entry .: "source_read"
+
+instance FromJSON ReadExpectation where
+  parseJSON = withObject "read expectation" $ \entry -> do
+    unless (sort (KM.keys entry) == ["hex", "read"]) (fail "read expectation takes exactly read and hex")
+    label <- entry .: "read"
+    text <- entry .: "hex"
+    unless (not (T.null text) && even (T.length text) && T.all (`elem` ("0123456789abcdef" :: String)) text)
+      (fail "read expectation hex must be nonempty lowercase contiguous byte hex")
+    let bytes [] = pure []
+        bytes (a : b : rest) = case readHex [a, b] of
+          [(byte, "")] -> (byte :) <$> bytes rest
+          _ -> fail "invalid read expectation byte"
+        bytes _ = fail "incomplete read expectation byte"
+    ReadExpectation label . B.pack <$> bytes (T.unpack text)
 data Step = Step { stepKey :: String, stepExpected :: MenuState, stepTiming :: KeyTiming } deriving (Eq, Show)
 
 instance FromJSON Step where
@@ -106,20 +142,36 @@ data Segment = Segment
   , segmentRequires :: [T.Text]
   , segmentFilmRow :: Maybe FilmRow
   , segmentKeyPulse :: Maybe KeyPulse
+  , segmentReadExpectations :: [ReadExpectation]
+  , segmentReadPreservations :: [ReadPreservation]
   }
 
 instance FromJSON Segment where
-  parseJSON = withObject "segment" $ \segment -> Segment
-    <$> segment .: "phase"
-    <*> (traverse modeDial =<< segment .:? "mode_dial")
-    <*> segment .:? "capture"
-    <*> segment .: "steps"
-    <*> segment .:? "messages" .!= []
-    <*> segment .:? "observe" .!= False
-    <*> (mapM window =<< segment .:? "reads" .!= [])
-    <*> segment .:? "requires" .!= []
-    <*> segment .:? "film_row"
-    <*> (traverse keyPulse =<< segment .:? "key_pulse")
+  parseJSON = withObject "segment" $ \segment -> do
+    result <- Segment
+      <$> segment .: "phase"
+      <*> (traverse modeDial =<< segment .:? "mode_dial")
+      <*> segment .:? "capture"
+      <*> segment .: "steps"
+      <*> segment .:? "messages" .!= []
+      <*> segment .:? "observe" .!= False
+      <*> (mapM window =<< segment .:? "reads" .!= [])
+      <*> segment .:? "requires" .!= []
+      <*> segment .:? "film_row"
+      <*> (traverse keyPulse =<< segment .:? "key_pulse")
+      <*> segment .:? "read_expectations" .!= []
+      <*> segment .:? "read_preservations" .!= []
+    let expectations = segmentReadExpectations result
+        labels = map expectedReadLabel expectations
+    unless (length (nub labels) == length labels) (fail "read expectation labels must be unique")
+    mapM_ (\expectation -> case [len | (label, _, len) <- segmentReads result, label == expectedReadLabel expectation] of
+      [len] | len == B.length (expectedReadBytes expectation) -> pure ()
+      _ -> fail "read expectation must name exactly one same-segment read of equal length") expectations
+    let preserved = map preservedReadLabel (segmentReadPreservations result)
+    unless (length (nub preserved) == length preserved) (fail "read preservation labels must be unique")
+    mapM_ (\label -> unless (length [() | (name, _, _) <- segmentReads result, name == label] == 1)
+      (fail "read preservation must name exactly one same-segment read")) preserved
+    pure result
     where
       modeDial position = case lookup (T.unpack position) [(modeDialName p, p) | p <- [minBound .. maxBound]] of
         Just p -> pure p
@@ -183,12 +235,16 @@ expectLabel :: TrajectoryExpect -> T.Text
 expectLabel ExpectClean = "clean"
 expectLabel ExpectRefused = "refused"
 
+
 data Trajectories = Trajectories
   { beforeUnload :: [Segment]
   , afterUnload :: [Segment]
   , trajectoryTraceSites :: [TraceSite]
   , trajectoryProtection :: TrajectoryProtection
   , trajectoryExpect :: TrajectoryExpect
+  , trajectoryForbiddenExecution :: [WatchRange]
+  , trajectoryExecutionInterval :: ExecutionInterval
+  , trajectoryExecutionControlPc :: Maybe WatchAddress
   }
 
 instance FromJSON Trajectories where
@@ -212,9 +268,32 @@ instance FromJSON Trajectories where
       "clean" -> pure ExpectClean
       "refused" -> pure ExpectRefused
       _ -> fail "expect must be clean or refused"
-    when (expect == ExpectRefused && protection == Unprotected)
-      (fail "expect refused requires protected_writes or protected_memory")
+    execution <- mapM hexRange =<< document .:? "forbidden_execution" .!= []
+    when (length execution > 8 || length (nub execution) /= length execution)
+      (fail "forbidden_execution requires at most eight distinct ranges")
+    intervalText <- document .:? "forbidden_execution_interval" .!= ("before-unload" :: T.Text)
+    interval <- case intervalText of
+      "before-unload" -> pure BeforeUnload
+      "through-after-unload" | expect == ExpectRefused && not (null execution) -> pure ThroughAfterUnload
+      _ -> fail "forbidden_execution_interval must be before-unload, or through-after-unload for a fetch refusal control"
+    when (expect == ExpectRefused && protection == Unprotected && null execution)
+      (fail "expect refused requires protected_writes, protected_memory or forbidden_execution")
+    let writeRanges = case protection of
+          WatchProtection ranges -> ranges
+          PreservationProtection ranges -> preservationRangeList ranges
+          Unprotected -> []
+    when (length (unionWatchRanges (writeRanges ++ execution)) > 8)
+      (fail "combined write and execution watch exceeds eight ranges")
+    controlPc <- traverse hexWord =<< document .:? "forbidden_execution_control_pc"
+    case (expect, controlPc) of
+      (ExpectRefused, Just pc) | not (null execution) ->
+        unless (any (\range -> let (low, high) = watchRangeBounds range
+                              in fromIntegral (watchAddressValue pc) >= low && fromIntegral (watchAddressValue pc) < high) execution)
+          (fail "forbidden_execution_control_pc is outside forbidden_execution")
+      (_, Nothing) | null execution || expect == ExpectClean -> pure ()
+      _ -> fail "fetch refusal requires forbidden_execution_control_pc and clean trajectories must omit it"
     Trajectories <$> document .: "before_unload" <*> document .: "after_unload" <*> pure sites <*> pure protection <*> pure expect
+      <*> pure execution <*> pure interval <*> pure controlPc
     where
       distinct items = length (nub items) == length items
 
@@ -249,6 +328,17 @@ phaseNames trajectories = nub (map segmentPhase (beforeUnload trajectories ++ af
 decodeTrajectories :: B.ByteString -> Either String Trajectories
 decodeTrajectories bytes = do
   trajectories <- eitherDecodeStrict' bytes
+  let entries = beforeUnload trajectories ++ afterUnload trajectories
+  mapM_ (\(index, entry) -> mapM_ (\preservation -> do
+    let sources = [(sourceIndex, len) | (sourceIndex, source) <- zip [0 :: Int ..] entries
+                                     , segmentPhase source == preservedSourcePhase preservation
+                                     , (label, _, len) <- segmentReads source, label == preservedSourceRead preservation]
+        target = [len | (label, _, len) <- segmentReads entry, label == preservedReadLabel preservation]
+    case (sources, target) of
+      ([(sourceIndex, sourceLength)], [targetLength])
+        | sourceIndex < index && sourceLength > 0 && sourceLength == targetLength -> Right ()
+      _ -> Left "read preservation source is missing, forward, ambiguous or has a different length")
+    (segmentReadPreservations entry)) (zip [0 :: Int ..] entries)
   case [ phase | entry <- beforeUnload trajectories ++ afterUnload trajectories
                , phase <- segmentRequires entry, phase `notElem` phaseNames trajectories ] of
     [] -> Right trajectories
@@ -261,6 +351,9 @@ variantMismatches retained variant =
   [ "trace sites differ" | trajectoryTraceSites retained /= trajectoryTraceSites variant ]
   ++ [ "protection differs" | trajectoryProtection retained /= trajectoryProtection variant ]
   ++ [ "expect differs" | trajectoryExpect retained /= trajectoryExpect variant ]
+  ++ [ "forbidden execution differs" | trajectoryForbiddenExecution retained /= trajectoryForbiddenExecution variant ]
+  ++ [ "execution interval differs" | trajectoryExecutionInterval retained /= trajectoryExecutionInterval variant ]
+  ++ [ "execution control PC differs" | trajectoryExecutionControlPc retained /= trajectoryExecutionControlPc variant ]
   ++ segments "before_unload" (beforeUnload retained) (beforeUnload variant)
   ++ segments "after_unload" (afterUnload retained) (afterUnload variant)
   where
@@ -277,6 +370,8 @@ variantMismatches retained variant =
       , ("messages", segmentMessages a == segmentMessages b)
       , ("observe", segmentObserve a == segmentObserve b)
       , ("reads", segmentReads a == segmentReads b)
+      , ("read_expectations", segmentReadExpectations a == segmentReadExpectations b)
+      , ("read_preservations", segmentReadPreservations a == segmentReadPreservations b)
       , ("requires", segmentRequires a == segmentRequires b)
       , ("film_row", segmentFilmRow a == segmentFilmRow b) ]
     assertion step = (stepKey step, stepExpected step)

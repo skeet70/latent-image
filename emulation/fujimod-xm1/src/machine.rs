@@ -1,12 +1,14 @@
 //! A strict X-M1 session and its run document; runs record armed instruction
 //! points and stop at the R4F guard's refusals.
 
+use crate::frame_capture::CapturedFrame;
 use crate::guest::{DialTurn, GpioKey, MenuState, ModeDialPosition, ModeDialWindow, PhysicalShutterPosition, Press, RouteKey, ShutterStage, set_adc};
 use crate::r4f::Guard;
 use crate::run::RunDocument;
 use crate::sd_host::{Contacts, MediaRead, RetainedCard, SectorAddress, SectorCount, SdHost};
 use crate::trace::{CaptureMemory, CollectionOutcome, InstructionCount, TraceSites};
 use fujimod_emulator::session::Session;
+use fujimod_emulator_devices::exr2::scanout_frame::Frame as ScanoutFrame;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::PathBuf;
@@ -413,6 +415,21 @@ impl Machine {
 
     /// PNG of the first scanout output presenting configured graphics.
     pub fn frame(&self) -> Result<Option<Vec<u8>>, String> {
+        let Some((_, _, frame)) = self.observed_frame()? else {
+            return Ok(None);
+        };
+        let rgb = frame.rgb.ok_or("scanout did not return RGB")?;
+        let width = u32::try_from(frame.width).map_err(|_| "frame width")?;
+        let height = u32::try_from(frame.height).map_err(|_| "frame height")?;
+        Ok(Some(fujimod_recording::Frame::rgb(width, height, rgb)?.png()?.to_vec()))
+    }
+
+    pub fn capture_frame(&self) -> Result<CapturedFrame, String> {
+        let (state, instance, frame) = self.observed_frame()?.ok_or("no display plane to capture")?;
+        CapturedFrame::new(self.document.scanout.clone(), instance, InstructionCount::from_board(&self.session)?, state, frame)
+    }
+
+    fn observed_frame(&self) -> Result<Option<(serde_json::Value, usize, ScanoutFrame)>, String> {
         let name = &self.document.scanout.0;
         let state = self.session.scanout_state(name)?;
         let presented = state["instances"].as_array().into_iter().flatten().find(|instance| {
@@ -435,10 +452,7 @@ impl Machine {
         let Some(frame) = self.session.scanout(name, instance, true, false)? else {
             return Ok(None);
         };
-        let rgb = frame.rgb.ok_or("scanout did not return RGB")?;
-        let width = u32::try_from(frame.width).map_err(|_| "frame width")?;
-        let height = u32::try_from(frame.height).map_err(|_| "frame height")?;
-        Ok(Some(fujimod_recording::Frame::rgb(width, height, rgb)?.png()?.to_vec()))
+        Ok(Some((state, instance, frame)))
     }
 
     pub fn read(&self, address: u64, count: usize) -> Result<Vec<u8>, String> {

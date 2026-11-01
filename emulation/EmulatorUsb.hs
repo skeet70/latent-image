@@ -28,6 +28,8 @@ module EmulatorUsb
   , emulatorReadMemory
   , emulatorWatchBegin
   , emulatorWatchObservation
+  , emulatorExecutionWatchBegin
+  , emulatorWatchStateRaw
   , emulatorPreservationBegin
   , emulatorPreservationState
   , emulatorMediaState
@@ -103,6 +105,14 @@ exchangeLocked emulator request = do
 
 rpc :: Emulator -> Value -> IO (M.KeyMap Value)
 rpc = bridgeRpc . exchangeLine
+
+watchRpc :: Emulator -> Value -> IO Value
+watchRpc emulator request = do
+  line <- exchangeLine emulator (encode request)
+  pure $ case eitherDecodeStrict' line of
+    Left problem -> object ["wire_bytes" .= B.unpack line, "decode_error" .= problem]
+    Right (Object fields) | M.lookup "ok" fields == Just (Bool True) -> Object (M.delete "ok" fields)
+    Right value -> value
 
 -- Caller holds emulatorLock.
 rpcLocked :: Emulator -> Value -> IO (M.KeyMap Value)
@@ -368,6 +378,20 @@ emulatorWatchObservation :: Emulator -> WatchLimit -> IO (Either String WatchObs
 emulatorWatchObservation emulator limit = do
   fields <- rpc emulator (object ["command" .= String "watch-state"])
   pure (parseWatchObservation limit (Object fields))
+
+emulatorExecutionWatchBegin :: Emulator -> [WatchRange] -> [WatchRange] -> WatchLimit -> IO Value
+emulatorExecutionWatchBegin emulator protected forbidden limit = watchRpc emulator (object
+  [ "command" .= String "watch-begin"
+  , "ranges" .= bounds (unionWatchRanges (protected ++ forbidden))
+  , "write_ranges" .= bounds protected
+  , "fetch_ranges" .= bounds forbidden
+  , "limit" .= watchLimitValue limit
+  , "views" .= String "fixed" ])
+  where
+    bounds ranges = [[lo, hi] | range <- ranges, let (lo, hi) = watchRangeBounds range]
+
+emulatorWatchStateRaw :: Emulator -> IO Value
+emulatorWatchStateRaw emulator = watchRpc emulator (object ["command" .= String "watch-state"])
 
 emulatorPreservationBegin :: Emulator -> PreservationRanges -> IO PreservationAck
 emulatorPreservationBegin emulator ranges = do

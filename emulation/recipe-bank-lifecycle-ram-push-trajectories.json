@@ -1,0 +1,120 @@
+{
+  "schema": 1,
+  "protected_memory": {"kind": "ram-byte-preservation", "ranges": [["0096cc64", "0096ce26"]]},
+  "forbidden_execution": [["00c72e10", "00c742a8"], ["00c75ed4", "00c75f38"], ["00c76650", "00c76a64"], ["00c77794", "00c777fc"]],
+  "trace_sites": [["runtime:rb_ui_set","owned-set"], ["runtime:rb_ui_editor_confirm","owned-editor-confirm"], ["runtime:rb_ui_leave","owned-leave"]],
+  "expect": "clean",
+  "entry": "Cardless RB_VOLATILE_BANK RAM push with an empty resident bank. Physical keys alone Save Current into slot 0, stage A and cancel, reopen the unchanged empty stored name, stage B and confirm, reopen B, cancel and hand back to the shooting menu. No host write seeds any menu frame, session, modal state, name, slot or resident-bank cell. No selection, live-setting change, card I/O or persistence is requested.",
+  "source_bindings": [
+    {"source": "emulation/recipe-bank-route-ram-push-trajectories.json:7", "expectation": "The first twelve physical keys are the unchanged qualified cardless menu prefix, ending at menu 0x61, class 0x281, slot-row index 0."},
+    {"source": "host/firmware/BuildRecipeBank.hs:489-511; menu/recipe_bank_ui.h:39-59,86-95", "expectation": "Slot 0 opens root 0x61/class 0x270 with Save Current row 0 and Rename row 1. Rename opens root 0x6a/class 0x131. All step cursors are selected row indices, not the text insertion cursor."},
+    {"source": "menu/recipe_bank_actions.c:449-504; menu/recipe_bank_hook.c:153-188", "expectation": "Each successful editor child entry selects keyboard row 0. Opening Rename clears all fourteen buffer-A bytes, copies only the stored name, writes insertion cursor 0 at 0x00954384 and modal state 0x1e at 0x0146761e."},
+    {"source": "extensions/ram-inputs/recipe-bank-spec.json:434-440; X-M1 1.50 image4 0x0078bac8 row array and conversion table 0x00779a18, selected by pointer 0x0081b560", "expectation": "The installed editor uses the original 43-row array with tokens 0 through 42. Conversion row 0 is ASCII A and row 1 is ASCII B. These expected characters are synthetic test input, not copied firmware bytes."},
+    {"source": "private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c:540906-540962,541306-541426,541933-541959,542149-542190", "expectation": "For class 0x131, DOWN uses forward stride 13 except the documented bottom-edge cases; RIGHT uses stride 1 without the alternate-class horizontal boundary handling. From B row 1, DOWN reaches 14, 27 and 40; RIGHT reaches Delete row 41 then Confirm row 42. Navigation alone does not invoke those row operations. SET on A or B inserts at buffer A's insertion cursor and advances it to 1."},
+    {"source": "menu/recipe_bank_actions.c:352-364,584-620,711-739; menu/recipe_bank_hook.c:216-261", "expectation": "Ordinary character SET reaches the owned editor-confirm action and retained stock row operation. Bank BACK discards the name-edit slot and pops to the verb page in browse state; bank Confirm row 42 commits the UTF-16LE name and pops to that page. Both bank exit paths use rb_ui_pop, not the generic owned editor-cancel action. Reopening after cancellation must discard A; reopening after confirmation must show B."},
+    {"source": "menu/recipe_bank_storage.c:783-795,1172-1190,1397-1429,1526-1539,1651-1667,2968-3005", "expectation": "The unloaded resident starts zero-filled. Save Current publishes volatile generation 1 with slot mask 1, empty slot-0 name and saved/working live snapshots. Cancel leaves generation 1 and the stored name unchanged. Rename publishes generation 2 and changes only slot 0's 26-byte UTF-16LE name. Name starts at resident+0x68; saved/working payloads occupy resident+0x82 through resident+0xd2. Selection remains zero; no activation is requested. RB_VOLATILE_BANK validates and publishes resident RAM without file writes."},
+    {"source": "menu/recipe_bank_ram.ld:__rb_name_records; menu/recipe_bank_hook.c:22-45,52-68; reports/recipe-design.md:429-446", "expectation": "RAM-push name records follow the package allocation. Slot 0's inline label is runtime:__rb_name_records+0xc6, three stock records of 0x42 bytes beyond the linked base. Empty stored name displays CUSTOM 1; committed B displays B. Captures require the complete NAME keyboard with selection and text caret, then the returned verb page and refreshed slot list. Frame hashes and pixels are observations, not pre-recorded expected firmware output."},
+    {"source": "private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c:21739-21785,21829-21870,28427-28461; replacement/owned_menu/src/lifecycle.rs:125-139,180-185; reports/recipe-bank-ui-ownership.md:117-123,133-135", "expectation": "Read query-0x53 inputs, editor session and all four SET gates without host alteration or invented zero expectations. Query is active if 0x009544f0 is nonzero, event bank 0x0094f888 has bit 9 set, or bank 0x0094f890/94 has bits other than low bits 3 and 14 set; otherwise 0x009514c4==1 admits, and absent that override low bits 3 or 14 activate the query. SET and generic leave require inactive query; ordinary character confirm admits active query only when session 0x00954d08 is 1. This route records its natural admission branch, not coverage of every gate combination."},
+    {"source": "emulation/Emulation/UiTrajectory.hs:protected_memory; emulation/Emulation/WatchObservation.hs:PreserveProtectedBytes; emulation/Xm1RamPushE2E.hs", "expectation": "The positive declares per-store RAM-byte preservation for ordinary-settings range [0x0096cc64,0x0096ce26) alongside forbidden_execution. One both-core Fixed classified observer records cpu-write, host-write and model-bus-write on ordinary settings and only cpu-fetch on original-body spans. Every CPU store requires complete before bytes and a verifiable value, width and byte order. Each protected physical byte must retain its before value, including stores straddling range boundaries; changes outside protected bytes are not prohibited. Identity stores remain counted. The first changed protected byte rejects even if a later store restores it. Unverifiable CPU stores, host/model-bus writes, forbidden fetches, overflow and observer/view faults reject. The receipt binds preserve-protected-bytes and classified store observations, not legacy preservation counters. Resident read-preservation assertions remain separate."},
+    {"source": "reports/recipe-bank-ui-ownership.md:40-46,117,133; emulation/ram-push-e2e-trajectories.json:48,57-59; replacement/owned_menu/src/lifecycle.rs:142-147", "expectation": "Scoped original-body CPU-fetch exclusion covers the complete SET, confirm, leave and cancel body spans. Named runtime entry traces distinguish owned SET and ordinary character confirm from the bank-specific pop paths. After handback, stock-root BACK delegates to owned leave, whose class-5 branch uses stage (2,0x1d); MENU reopens the retained shooting frame. These traces record executed entry identities, not helper-call-count qualification. The separate refusal control requires a restored original SET fetch after unloading."}
+  ],
+  "before_unload": [
+    {
+      "phase": "empty-slot-list", "capture": "lifecycle-empty-slot-list",
+      "steps": [["menu",67,56,0],["menu",1,5,2],["left",0,5,0],["down",0,5,1],["down",0,5,2],["down",0,5,3],["down",0,5,4],["right",1,5,30],["down",1,5,31],["down",1,5,32],["down",1,5,33],["ok",97,641,0]],
+      "reads": [["resident","runtime:rb_resident",1024],["activation","runtime:rb_activation",8],["generation","runtime:rb_current_gen",4],["mask","runtime:rb_resident+0x1c",2],["stored-name","runtime:rb_resident+0x68",26],["state","0146761e",2],["query-latch","009544f0",4],["query-event-banks","0094f888",16],["query-override","009514c4",4],["set-activation-gate","009544f8",4],["set-mode-gates-ab","00950474",8],["set-mode-gate-c","00954500",4],["editor-session","00954d08",4]],
+      "read_expectations": [{"read":"generation","hex":"00000000"},{"read":"mask","hex":"0000"},{"read":"stored-name","hex":"0000000000000000000000000000000000000000000000000000"},{"read":"state","hex":"0000"}]
+    },
+    {
+      "phase": "save-current-ready", "requires": ["empty-slot-list"], "capture": "lifecycle-save-current-ready",
+      "steps": [["ok",97,624,0]],
+      "reads": [["state","0146761e",2],["query-latch","009544f0",4],["query-event-banks","0094f888",16],["query-override","009514c4",4],["set-activation-gate","009544f8",4],["set-mode-gates-ab","00950474",8],["set-mode-gate-c","00954500",4],["editor-session","00954d08",4]],
+      "read_expectations": [{"read":"state","hex":"0000"}]
+    },
+    {
+      "phase": "saved-slot", "requires": ["save-current-ready"], "capture": "lifecycle-saved-slot",
+      "steps": [["ok",97,641,0]],
+      "reads": [["resident","runtime:rb_resident",1024],["generation","runtime:rb_current_gen",4],["resident-generation","runtime:rb_resident+0x10",4],["mask","runtime:rb_resident+0x1c",2],["selection","runtime:rb_resident+0x20",4],["stored-name","runtime:rb_resident+0x68",26],["slot0-payloads","runtime:rb_resident+0x82",80],["slot-label","runtime:__rb_name_records+0xc6",26],["state","0146761e",2]],
+      "read_expectations": [{"read":"generation","hex":"01000000"},{"read":"resident-generation","hex":"01000000"},{"read":"mask","hex":"0100"},{"read":"selection","hex":"00000000"},{"read":"stored-name","hex":"0000000000000000000000000000000000000000000000000000"},{"read":"slot-label","hex":"43005500530054004f004d002000310000000000000000000000"},{"read":"state","hex":"0000"}]
+    },
+    {
+      "phase": "rename-first-open", "requires": ["saved-slot"], "capture": "lifecycle-rename-first-open",
+      "steps": [["ok",97,624,0],["down",97,624,1],["ok",106,305,0]],
+      "reads": [["state","0146761e",2],["text-cursor-buffer","00954384",15],["stored-name","runtime:rb_resident+0x68",26],["query-latch","009544f0",4],["query-event-banks","0094f888",16],["query-override","009514c4",4],["editor-session","00954d08",4]],
+      "read_expectations": [{"read":"state","hex":"1e00"},{"read":"text-cursor-buffer","hex":"000000000000000000000000000000"},{"read":"stored-name","hex":"0000000000000000000000000000000000000000000000000000"}]
+    },
+    {
+      "phase": "rename-staged-a", "requires": ["rename-first-open"], "capture": "lifecycle-rename-staged-a",
+      "steps": [["ok",106,305,0]],
+      "reads": [["state","0146761e",2],["text-cursor-buffer","00954384",15],["generation","runtime:rb_current_gen",4],["stored-name","runtime:rb_resident+0x68",26],["query-latch","009544f0",4],["query-event-banks","0094f888",16],["query-override","009514c4",4],["editor-session","00954d08",4]],
+      "read_expectations": [{"read":"state","hex":"1e00"},{"read":"text-cursor-buffer","hex":"014100000000000000000000000000"},{"read":"generation","hex":"01000000"},{"read":"stored-name","hex":"0000000000000000000000000000000000000000000000000000"}]
+    },
+    {
+      "phase": "rename-cancelled", "requires": ["rename-staged-a"], "capture": "lifecycle-rename-cancelled",
+      "steps": [["back",97,624,1]],
+      "reads": [["resident","runtime:rb_resident",1024],["state","0146761e",2],["generation","runtime:rb_current_gen",4],["mask","runtime:rb_resident+0x1c",2],["stored-name","runtime:rb_resident+0x68",26],["slot0-payloads","runtime:rb_resident+0x82",80],["slot-label","runtime:__rb_name_records+0xc6",26],["editor-session","00954d08",4]],
+      "read_preservations": [{"read":"resident","phase":"saved-slot","source_read":"resident"},{"read":"slot0-payloads","phase":"saved-slot","source_read":"slot0-payloads"}],
+      "read_expectations": [{"read":"state","hex":"0000"},{"read":"generation","hex":"01000000"},{"read":"mask","hex":"0100"},{"read":"stored-name","hex":"0000000000000000000000000000000000000000000000000000"},{"read":"slot-label","hex":"43005500530054004f004d002000310000000000000000000000"}]
+    },
+    {
+      "phase": "rename-reopened-unchanged", "requires": ["rename-cancelled"], "capture": "lifecycle-rename-reopened-unchanged",
+      "steps": [["ok",106,305,0]],
+      "reads": [["state","0146761e",2],["text-cursor-buffer","00954384",15],["generation","runtime:rb_current_gen",4],["stored-name","runtime:rb_resident+0x68",26],["editor-session","00954d08",4]],
+      "read_expectations": [{"read":"state","hex":"1e00"},{"read":"text-cursor-buffer","hex":"000000000000000000000000000000"},{"read":"generation","hex":"01000000"},{"read":"stored-name","hex":"0000000000000000000000000000000000000000000000000000"}]
+    },
+    {
+      "phase": "rename-staged-b", "requires": ["rename-reopened-unchanged"], "capture": "lifecycle-rename-staged-b",
+      "steps": [["right",106,305,1],["ok",106,305,1]],
+      "reads": [["state","0146761e",2],["text-cursor-buffer","00954384",15],["generation","runtime:rb_current_gen",4],["stored-name","runtime:rb_resident+0x68",26],["query-latch","009544f0",4],["query-event-banks","0094f888",16],["query-override","009514c4",4],["editor-session","00954d08",4]],
+      "read_expectations": [{"read":"state","hex":"1e00"},{"read":"text-cursor-buffer","hex":"014200000000000000000000000000"},{"read":"generation","hex":"01000000"},{"read":"stored-name","hex":"0000000000000000000000000000000000000000000000000000"}]
+    },
+    {
+      "phase": "rename-confirm-ready", "requires": ["rename-staged-b"], "capture": "lifecycle-rename-confirm-ready",
+      "steps": [["down",106,305,14],["down",106,305,27],["down",106,305,40],["right",106,305,41],["right",106,305,42]],
+      "reads": [["state","0146761e",2],["text-cursor-buffer","00954384",15],["generation","runtime:rb_current_gen",4]],
+      "read_expectations": [{"read":"state","hex":"1e00"},{"read":"text-cursor-buffer","hex":"014200000000000000000000000000"},{"read":"generation","hex":"01000000"}]
+    },
+    {
+      "phase": "rename-committed", "requires": ["rename-confirm-ready"], "capture": "lifecycle-rename-committed",
+      "steps": [["ok",97,624,1]],
+      "reads": [["resident","runtime:rb_resident",1024],["generation","runtime:rb_current_gen",4],["resident-generation","runtime:rb_resident+0x10",4],["mask","runtime:rb_resident+0x1c",2],["selection","runtime:rb_resident+0x20",4],["stored-name","runtime:rb_resident+0x68",26],["slot0-payloads","runtime:rb_resident+0x82",80],["slot-label","runtime:__rb_name_records+0xc6",26],["state","0146761e",2],["editor-session","00954d08",4]],
+      "read_preservations": [{"read":"slot0-payloads","phase":"saved-slot","source_read":"slot0-payloads"}],
+      "read_expectations": [{"read":"generation","hex":"02000000"},{"read":"resident-generation","hex":"02000000"},{"read":"mask","hex":"0100"},{"read":"selection","hex":"00000000"},{"read":"stored-name","hex":"4200000000000000000000000000000000000000000000000000"},{"read":"slot-label","hex":"4200000000000000000000000000000000000000000000000000"},{"read":"state","hex":"0000"}]
+    },
+    {
+      "phase": "rename-readback", "requires": ["rename-committed"], "capture": "lifecycle-rename-readback",
+      "steps": [["ok",106,305,0]],
+      "reads": [["state","0146761e",2],["text-cursor-buffer","00954384",15],["stored-name","runtime:rb_resident+0x68",26],["generation","runtime:rb_current_gen",4],["editor-session","00954d08",4]],
+      "read_expectations": [{"read":"state","hex":"1e00"},{"read":"text-cursor-buffer","hex":"004200000000000000000000000000"},{"read":"stored-name","hex":"4200000000000000000000000000000000000000000000000000"},{"read":"generation","hex":"02000000"}]
+    },
+    {
+      "phase": "named-slot-list", "requires": ["rename-readback"], "capture": "lifecycle-named-slot-list",
+      "steps": [["back",97,624,1],["back",97,641,0]],
+      "reads": [["state","0146761e",2],["stored-name","runtime:rb_resident+0x68",26],["slot-label","runtime:__rb_name_records+0xc6",26],["slot0-payloads","runtime:rb_resident+0x82",80],["generation","runtime:rb_current_gen",4]],
+      "read_preservations": [{"read":"slot0-payloads","phase":"saved-slot","source_read":"slot0-payloads"}],
+      "read_expectations": [{"read":"state","hex":"0000"},{"read":"stored-name","hex":"4200000000000000000000000000000000000000000000000000"},{"read":"slot-label","hex":"4200000000000000000000000000000000000000000000000000"},{"read":"generation","hex":"02000000"}]
+    },
+    {
+      "phase": "lifecycle-handback", "requires": ["named-slot-list"], "capture": "lifecycle-handback",
+      "steps": [["back",1,5,33],["down",1,5,34]],
+      "reads": [["resident","runtime:rb_resident",1024],["activation","runtime:rb_activation",8],["generation","runtime:rb_current_gen",4],["mask","runtime:rb_resident+0x1c",2],["selection","runtime:rb_resident+0x20",4],["stored-name","runtime:rb_resident+0x68",26],["slot0-payloads","runtime:rb_resident+0x82",80],["state","0146761e",2],["query-latch","009544f0",4],["query-event-banks","0094f888",16],["query-override","009514c4",4],["set-activation-gate","009544f8",4],["set-mode-gates-ab","00950474",8],["set-mode-gate-c","00954500",4],["editor-session","00954d08",4]],
+      "read_preservations": [{"read":"slot0-payloads","phase":"saved-slot","source_read":"slot0-payloads"},{"read":"resident","phase":"rename-committed","source_read":"resident"},{"read":"activation","phase":"empty-slot-list","source_read":"activation"}],
+      "read_expectations": [{"read":"generation","hex":"02000000"},{"read":"mask","hex":"0100"},{"read":"selection","hex":"00000000"},{"read":"stored-name","hex":"4200000000000000000000000000000000000000000000000000"},{"read":"state","hex":"0000"}]
+    },
+    {
+      "phase": "owned-stock-root-leave", "requires": ["lifecycle-handback"], "capture": "lifecycle-stock-root-left",
+      "steps": [["back",1,5,34]],
+      "reads": [["resident","runtime:rb_resident",1024],["generation","runtime:rb_current_gen",4],["query-latch","009544f0",4],["query-event-banks","0094f888",16],["query-override","009514c4",4],["editor-session","00954d08",4]],
+      "read_preservations": [{"read":"resident","phase":"rename-committed","source_read":"resident"}],
+      "read_expectations": [{"read":"generation","hex":"02000000"}]
+    },
+    {
+      "phase": "owned-stock-root-reentered", "requires": ["owned-stock-root-leave"], "capture": "lifecycle-stock-root-reentered",
+      "steps": [["menu",1,5,34]],
+      "reads": [["resident","runtime:rb_resident",1024],["generation","runtime:rb_current_gen",4],["state","0146761e",2],["stored-name","runtime:rb_resident+0x68",26]],
+      "read_preservations": [{"read":"resident","phase":"rename-committed","source_read":"resident"}],
+      "read_expectations": [{"read":"generation","hex":"02000000"},{"read":"state","hex":"0000"},{"read":"stored-name","hex":"4200000000000000000000000000000000000000000000000000"}]
+    }
+  ],
+  "after_unload": []
+}

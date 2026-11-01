@@ -3,6 +3,7 @@ pub mod adapters;
 pub mod adjustment;
 pub mod bridge;
 pub mod ff80;
+pub mod frame_capture;
 pub mod guest;
 pub mod handoff;
 pub mod machine;
