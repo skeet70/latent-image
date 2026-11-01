@@ -369,6 +369,42 @@ The launch path acquires the public emulator slot and uses the ordinary bounded 
 
 `build-support/fujimod-xm1.nix` copies the complete local adapter crate through `builtins.path`, excluding only entries named `target`. Bazel separately invalidates that source through `_FUJIMOD_XM1_CRATE` in `build-support/repositories.bzl`, including `peer_witness_primary_initializer.rs` and the loader, initializer and interrupt-mask modules. The new Haskell library is declared in `emulation/BUILD.bazel` and linked into the public `peer-stage-witness` command.
 
+
+### Owned primary in-place source artifact
+
+`//replacement/primary_initializer:primary-initializer-image` implements the complete A-specific publication in independent `no_std` Rust, with the private A32 return adapter at `0x40430`. The linker confines code, constants and zero padding to the entire original leaf `[0x40430,0x409ac)`, exactly `0x57c` bytes, and rejects overflow, writable statics and unexpected sections. ELF symbol/string metadata is outside the carrier; residual relocation/dynamic sections are rejected. Unwind metadata is omitted under the toolchain's `panic=abort` contract. No record-2 carrier, caller-BL patch, truncation or alternate placement is used. Linking has produced a 1,404-byte carrier with 708 payload bytes and 696 padding bytes; the emitted Rust publisher saves 24 stack bytes. Artifact admission and DAT staging remain unqualified.
+
+`Emulation.PrimaryInitializerSource` binds canonical DAT and whole loader-A identities, the actual segment-zero geometry, A-specific publication values, source stack premises and both known direct calls. `Emulation.PrimaryInitializerArtifact` admits actual linked bytes and symbols, checks the exact adapter and interprets the Rust function with incoming-register/return provenance. Admission requires all 1,419 source-ordered word stores, restored AAPCS preserved registers and SP, a proved return, and confined allocated-stack/image accesses. Compiler scratch is derived from the emitted instructions below the adapter's eight bytes, not assumed to equal the original leaf's twelve bytes. The static proof admits supported A32 scalar arithmetic, immediate shifts, non-flag-setting MUL/MLA with known scalar operands, word transfers, block transfers and proved returns; unresolved values/control, helper calls and unsupported instructions refuse admission. Its limits are 100,000 Rust instructions and `0x400` Rust scratch bytes.
+
+The standalone builder takes `SOURCE_DAT IMAGE4 IMAGE_BIN IMAGE_SYMBOLS OUT_DAT OUT_CONTRACT`. `IMAGE4` is the canonical owner-supplied decoded image, not a program-generated receipt. The builder derives the DAT offset as `stagingLength + header.mainOffset + segment0.flash + (ownedStart - segment0.load)`, complements the full admitted image and rebuilds the existing container checksum. It requires unchanged DAT length and every byte outside the owned window and the main-checksum word to remain identical. Loader headers, both caller BLs, all other segments, restore lists and B's independent root remain unchanged.
+
+The emitted metadata has separate `source`, `artifact` and `consumer_source` objects. It is not an owned SDK receipt or a new runtime schema. The schema8 observer remains retained-only; an owned natural producer/consumer protocol is a separate next step after the current SDK qualification.
+
+| Resource | Source contract and retained limit |
+| --- | --- |
+| `[0x40430,0x409ac)` | Full in-place owned code/constants/padding carrier; future observation must bind immutable owned bytes at these same fetch addresses, not forbid fetching the old address range. |
+| `[0x4004dae0,0x4004f10c)` | Complete 1,419-word publication, repeated in the original service/tick/extension/descriptor order. |
+| `[0x4005beac,0x4005d16c)` and `[0x4005ff0c,0x4006194c)` | Retained descriptor pools. Publishing their pointers does not own their contents or establish their later backing/lifetime. |
+| `[0x40063450,0x40063460)` | Source-derived primary caller frame. Actual SP/FP, saved words and backing require natural machine evidence. |
+| `[derived scratch low,0x40063450)` | Actual emitted Rust allocation plus the eight-byte adapter frame; current aliases, both TCM exclusions and lifetime remain unproved. |
+| `0x96bd20` / `0x96bd24` | Source image4 installation reads unchanged A/B header words `0x40010` / `0xd0010`; actual installation remains unobserved. |
+| `0x725b74` through preexecution `0x725bb4` | Bounded source consumer selects through `+0x1618 -> 0x412bc -> 0x427b8`, requires the primary CP14 selection, reads descriptor `+0x184`, then the retained pool word. Its actual identifier, caller stack, read value and natural arrival remain unobserved. |
+
+`Emulation.PrimaryInitializerConsumerSource` binds that installation/selection/descriptor code to canonical image4 and A inputs. Its opaque descriptor identifier admits only `1..120`; the source contract names the live caller-stack, decoder, both-core aliases/TCM, immutable publication, retained-pool and fetchability premises. Known calls `0x409dc` and `0x40aac` still target `0x40430`. The alternate call's reachability and computed-reference closure remain open, so no whole-leaf retirement or release of retained services, pools or later initialization is claimed.
+
+An unexecuted qualification proposal is to build the bounded image and standalone host builder, stop and report any linker overflow or unsupported emitted proof instruction, then admit and stage the actual artifact with canonical owner inputs. Independently compare every outside byte and checksum, read the resulting compiler scratch/access metadata, and qualify public refusal of incorrect publication order/value, lost return provenance, caller-frame or image writes and out-of-range scratch. Existing schema6/7 contracts remain separate. Natural owned producer/consumer execution is not part of this source-only addition.
+
+```sh
+devenv shell -- bazel --batch build --jobs=2 \
+  //replacement/primary_initializer:primary-initializer-image \
+  //emulation:build-primary-initializer
+bazel-bin/emulation/build-primary-initializer "$DAT" "$IMAGE4" \
+  bazel-bin/replacement/primary_initializer/primary-initializer-image.bin \
+  bazel-bin/replacement/primary_initializer/primary-initializer-image.symbols \
+  "$OWNED_DAT" "$OWNED_SOURCE_CONTRACT"
+```
+
+The public `primary-initializer-source-tests` cover descriptor-identifier admission and noncanonical-source refusal only. They provide no linked-artifact, firmware-stager, natural-route or consumer qualification, and proprietary inputs are not CI fixtures.
 # Bounded selected-queue experiment
 
 `//emulation:queue-boundary` runs the original stock `0x0072503c` caller from entry, including allocation, through the existing pinned FujiMod `Machine` API. It does not extend the native-case profile, change either runtime's CPU admission guard, qualify a runtime cutover or prove boot acceptance.
