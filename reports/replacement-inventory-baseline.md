@@ -624,3 +624,11 @@ Acceptance for that increment requires all of the following:
 
 Current acceptance is source recovery plus inherited bounded caller/consumer evidence. Owned installation, full write confinement, original/owned consumer agreement, failure controls, lifetime guards and packaged cutover remain open.
 
+#### Owned installation artifact
+
+`replacement/kernel_install` implements the finite publication/bookkeeping increment in Rust with a 52-byte A32 private-ABI adapter. The emitted artifact occupies exactly `[0x725a04,0x725b54)`, 336 bytes including code and literals. It retains only cache service `0x42634`, preserves the original two saved caller-frame words, and restores the specified success registers, SP, LR and NZCV. Its deepest compiler/adapter frame is installer SP minus 40, versus the retained body's minus 8.
+
+Host admission checks the emitted instruction behavior for marker 3 and the complete symbolic not-3 class, including all ordered root reads/publications, cache arguments, 1,455 bookkeeping stores, source/literal reads, allocated stack accesses, return state and invalid-marker nonreturning outcome. The artifact test accepts the emitted image and three independent project-owned positive fixtures and refuses 25 malformed cases at their typed error constructors. Independent review corrected zero-encoded shift handling and replaced a bound-exhausting refusal fixture with one that actually unwinds and returns. Only `LSL #0` is admitted as a zero-shift identity.
+
+The public `stage-kernel-install` command rebuilds the canonical image4 record, checks the carried decode and confines changes to the declared 336-byte decoded window and its container record/checksum. Actual staging succeeds. This is reviewed native/artifact/staging qualification, not natural owned execution; the natural observer and independent receipt consumer remain required before accepting this increment.
+
