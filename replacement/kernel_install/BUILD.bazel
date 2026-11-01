@@ -1,0 +1,78 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "kernel-install-rust",
+    src = "src.rs",
+    crate_name = "xm1_kernel_install",
+)
+
+xm1_rust_elf(
+    name = "kernel-install-image",
+    rust_staticlib = ":kernel-install-rust",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_kernel_install_entry",
+    link_script = "kernel-install.ld",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
+
+haskell_library(
+    name = "kernel-install-artifact",
+    srcs = [
+        "Replacement/KernelInstall/Admission.hs",
+        "Replacement/KernelInstall/Artifact.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "stage-kernel-install",
+    srcs = ["StageMain.hs"],
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+    ],
+    data = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":kernel-install-artifact",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "kernel-install-tests",
+    srcs = ["Tests.hs", "Fixtures.hs"],
+    main_file = "Tests.hs",
+    args = [
+        "$(rootpath :kernel-install-image.bin)",
+        "$(rootpath :kernel-install-image.symbols)",
+    ],
+    data = [":kernel-install-image.bin", ":kernel-install-image.symbols"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":kernel-install-artifact",
+        "//host:base",
+        "//host:bytestring",
+        "//host:update-container",
+    ],
+)
