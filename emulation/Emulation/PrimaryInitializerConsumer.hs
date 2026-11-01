@@ -92,7 +92,6 @@ data Consumer = Consumer
 data Receipt = Receipt
   { receiptStatus :: Status
   , nestedInitializer :: PI.Receipt
-  , receiptFinal :: Context
   , boundaries :: [Stop]
   , continuation :: Maybe Continuation
   , consumer :: Maybe Consumer
@@ -148,9 +147,9 @@ nullable parse value = Just <$> parse value
 parseContext :: Value -> Either String Context
 parseContext value = do
   _ <- fields ["pc","registers","sp","lr","cpsr","counts","tcm"] value
-  context@(Context pc registers sp _ _ counts tcm) <- json value
-  require (length registers == 13 && length counts == 2 && map length tcm == [2,2]) "primary root0 context width differs"
-  require (pc .&. 3 == 0 && sp .&. 3 == 0 && all (<= budget) counts && sum counts <= budget)
+  context@(Context pc registers sp _ _ clocks tcm) <- json value
+  require (length registers == 13 && length clocks == 2 && map length tcm == [2,2]) "primary root0 context width differs"
+  require (pc .&. 3 == 0 && sp .&. 3 == 0 && all (<= budget) clocks && sum clocks <= budget)
     "primary root0 context alignment or global budget differs"
   pure context
 
@@ -362,7 +361,7 @@ parseReceipt bytes = do
     Absent -> require (result == Failed && failure /= Nothing && machineFailure == Nothing && instructions == budget
       && length stops < 4 && absent observed) "primary root0 absence is not an incomplete finite deadline"
     Refused -> require (result == Failed && failure /= Nothing && absent observed) "primary root0 refusal carries accepted consumer evidence"
-  pure (Receipt status initializer final stops continued observed)
+  pure (Receipt status initializer stops continued observed)
   where
     absent Nothing = True
     absent (Just _) = False
@@ -466,7 +465,10 @@ validateReceipt (Contract initializer source) receipt = do
   let entry@(Context _ incoming sp _ cpsr _ _) = entryContext body
       selected = selectedContext body
       after = afterContext body
-  ident <- PSC.descriptorId (head incoming)
+  identifier <- case incoming of
+    value:_ -> pure value
+    [] -> Left "primary root0 entry has no argument register"
+  ident <- PSC.descriptorId identifier
   let PSC.DescriptorAccess (PS.Guest tableGuest) (PS.Guest poolGuest) = PSC.descriptorAccess source ident
       descriptorPhysical = fromIntegral tableGuest - 0x40000000
       poolPhysical = fromIntegral poolGuest - 0x40000000
@@ -594,6 +596,9 @@ checkWindow first lastContext (RawEvent (Event _ _ _ _ _ _ _ clock _) _ _ _) =
 
 validatePrelude :: PSC.ConsumerSource -> Context -> Context -> Context -> Word64 -> B.ByteString -> Continuation -> Consumer -> [RawEvent] -> Either String ()
 validatePrelude source start installation entry selectedPhysical producerTable next body events = do
+  (installationCore0,entryCore1) <- case (counts installation,counts entry) of
+    ([core0,_],[_,core1]) -> pure (core0,core1)
+    _ -> Left "primary root0 installation core count width differs"
   rootBytes <- viewBytes 8 (rootsStart next)
   initialTable <- memoryRegion 0x4dae0 producerTable
   initialRoots <- memoryRegion 0x96bd20 rootBytes
@@ -610,13 +615,16 @@ validatePrelude source start installation entry selectedPhysical producerTable n
   let fetched = [(address,clock) | RawEvent (Event CpuFetch (Just 0) address _ _ _ _ clock _) _ _ _ <- events]
       expectedFetches = 0x725a04 : ([0x725a04,0x725a08 .. 0x725a30] ++ [0x725b74])
       installerFetches = take 12 (drop 1 fetched)
-  require (map fst fetched == expectedFetches && head fetched == (0x725a04,Just (total installation + 1))
+  firstFetch <- case fetched of
+    first:_ -> pure first
+    [] -> Left "primary root0 installation fetch is absent"
+  require (map fst fetched == expectedFetches && firstFetch == (0x725a04,Just (total installation + 1))
     && last fetched == (0x725b74,Just (total entry + 1))) "primary root0 first installation or consumer fetch differs"
   forM_ (zip [0..] installerFetches) $ \(ordinal,(_,clock)) ->
     require (maybe False (\value -> value >= total installation + ordinal + 1
-      && value <= head (counts installation) + ordinal + 1 + last (counts entry)) clock)
+      && value <= installationCore0 + ordinal + 1 + entryCore1) clock)
       "primary root0 installation fetch progress differs"
-  let installerPeers = [clock - head (counts installation) - ordinal - 1
+  let installerPeers = [clock - installationCore0 - ordinal - 1
         | (ordinal,(_,Just clock)) <- zip [0..] installerFetches]
   require (and (zipWith (<=) installerPeers (drop 1 installerPeers)))
     "primary root0 installation peer progress decreased"
@@ -661,6 +669,9 @@ data ExpectedAccess = ExpectedAccess Source Word64 Word64 Word32 Word32 Ordinal
 
 validateBody :: Context -> Context -> Context -> Word32 -> Word64 -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> [RawEvent] -> Either String ()
 validateBody entry@(Context _ incoming sp lr _ _ _) selected after poolGuest descriptorPhysical beforeStack afterStack roots table pool events = do
+  (entryCore0,selectedCore1,afterCore1) <- case (counts entry,counts selected,counts after) of
+    ([core0,_],[_,selectedPeer],[_,afterPeer]) -> pure (core0,selectedPeer,afterPeer)
+    _ -> Left "primary root0 body core count width differs"
   let stackPhysical = fromIntegral sp - 0x40000000 - 32
       stackGuest = fromIntegral sp - 32
       write offset value pc ordinal = ExpectedAccess CpuWrite (stackGuest + offset) (stackPhysical + offset) value pc (Ordinal ordinal)
@@ -680,16 +691,16 @@ validateBody entry@(Context _ incoming sp lr _ _ _) selected after poolGuest des
     require (actualKind == kind && core == Just 0 && address == guest && actualPhysical == Just physical && size == 4
       && actualValue == Just (fromIntegral value) && actualPc == Just pc
       && maybe False (\clock -> clock >= total entry + ordinal + 1
-        && clock <= head (counts entry) + ordinal + 1 + last (counts after)
-        && (if ordinal < 21 then clock <= head (counts entry) + ordinal + 1 + last (counts selected)
-            else clock >= head (counts entry) + ordinal + 1 + last (counts selected))) actualClock)
+        && clock <= entryCore0 + ordinal + 1 + afterCore1
+        && (if ordinal < 21 then clock <= entryCore0 + ordinal + 1 + selectedCore1
+            else clock >= entryCore0 + ordinal + 1 + selectedCore1)) actualClock)
       "primary root0 data access order, source instruction or live value differs"
     checkWindow entry after event
   let clocks = [(ordinal,clock) | (ExpectedAccess _ _ _ _ _ (Ordinal ordinal),RawEvent (Event _ _ _ _ _ _ _ (Just clock) _) _ _ _) <- zip allExpected events]
   forM_ (zip clocks (drop 1 clocks)) $ \((firstOrdinal,firstClock),(secondOrdinal,secondClock)) ->
     require (if firstOrdinal == secondOrdinal then firstClock == secondClock else firstClock < secondClock)
       "primary root0 data instruction groups have inconsistent clocks"
-  let peerCounts = [clock - head (counts entry) - ordinal - 1 | (ordinal,clock) <- clocks]
+  let peerCounts = [clock - entryCore0 - ordinal - 1 | (ordinal,clock) <- clocks]
   require (and (zipWith (<=) peerCounts (drop 1 peerCounts))) "primary root0 reconstructed peer progress decreased"
   regions <- sequence [memoryRegion stackPhysical beforeStack,memoryRegion 0x96bd20 roots,memoryRegion 0x4dae0 table
     ,memoryRegion (fromIntegral poolGuest - 0x40000000) pool]
