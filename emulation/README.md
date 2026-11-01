@@ -833,6 +833,8 @@ devenv shell -- bash emulation/build-recipe-bank-cases.sh
 
 The UI behavior family uses the bank's public sources plus owner-supplied image 4 and a private bank specification. From the repository root:
 
+The UI function inventory comes from the linked kernel, media-model and UI-model `STT_FUNC` spans plus explicit stock spans. It excludes the existing modeled drawing/media entry boundaries, all `rb_capture_*` functions, and the unused owned modal lifecycle entries `rb_ui_set`, `rb_ui_editor_confirm`, `rb_ui_leave` and their `rb_lifecycle_*` stock trampolines. These trajectories never enter capture and keep SET, confirm and leave behind the synthetic UI delegates. The bank's reached owned editor-cancel and menu-frame store remain declared, as do their dependencies. Every generated case must stay within the public native-case limit of 256 functions; the generator refuses an oversized inventory before emitting it. This selection changes neither the linked kernel bytes nor the public bound.
+
 ```sh
 devenv shell -- bazel build //emulation:native-runner //emulation:recipe-bank-ui-cases //host/firmware:build-recipe-bank
 devenv shell -- bash emulation/build-recipe-bank-ui-cases.sh

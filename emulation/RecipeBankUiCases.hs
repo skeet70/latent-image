@@ -18,7 +18,7 @@ import Data.List
 import Data.Maybe
 import Data.String (fromString)
 import Data.Word
-import Emulation.NativeCase (Region (..), runCase)
+import Emulation.NativeCase (Region (..), functionCount, runCase)
 import qualified Emulation.NativeObservation as N
 import Emulation.ParallelCases (mapBounded, readJobs)
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -164,24 +164,31 @@ parseFunctions inventory path = do
         | section /= "UND" -> case reads bytes of
             [(size, "")] | size > 0 ->
               pure $
-                if inventory == KernelUiInventory && name `elem`
-                  [ "rb_bank_draw_selected", "rb_bank_emit_failure_from_stock"
-                  , "rb_bank_redraw_dispatch", "rb_call_stock_redraw_dispatch"
-                  , "rb_call_draw_action_list"
-                  , "rb_bank_current_value_label"
-                  , "rb_bank_draw_name", "rb_call_name_style"
-                  , "rb_call_name_background", "rb_call_name_title"
-                  , "rb_call_name_shell", "rb_call_name_label", "rb_call_name_material"
-                  , "rb_call_name_utf16", "rb_call_name_stretch", "rb_call_name_ascii"
-                  , "rb_call_name_footer", "rb_call_name_label_position"
-                  , "rb_media_epoch_entry_a"
-                  , "rb_media_epoch_entry_b", "rb_media_open_guard_entry", "rb_media_write_guard_entry"
-                  ]
+                if inventory == KernelUiInventory && excludedKernelFunction name
                 then Nothing
                 else Just (hexI address, size)
             _ -> fail ("invalid function size in " ++ path)
       fields | "FUNC" `elem` fields -> fail ("invalid function metadata in " ++ path)
       _ -> pure Nothing
+
+-- Capture is outside the UI trajectories; SET, confirm and leave use the
+-- synthetic delegates, not the unqualified owned lifecycle or its trampolines.
+excludedKernelFunction :: String -> Bool
+excludedKernelFunction name =
+  any (`isPrefixOf` name) ["rb_capture_", "rb_lifecycle_"]
+    || name `elem`
+      [ "rb_ui_set", "rb_ui_editor_confirm", "rb_ui_leave"
+      , "rb_bank_draw_selected", "rb_bank_emit_failure_from_stock"
+      , "rb_bank_redraw_dispatch", "rb_call_stock_redraw_dispatch"
+      , "rb_call_draw_action_list", "rb_bank_current_value_label"
+      , "rb_bank_draw_name", "rb_call_name_style"
+      , "rb_call_name_background", "rb_call_name_title"
+      , "rb_call_name_shell", "rb_call_name_label", "rb_call_name_material"
+      , "rb_call_name_utf16", "rb_call_name_stretch", "rb_call_name_ascii"
+      , "rb_call_name_footer", "rb_call_name_label_position"
+      , "rb_media_epoch_entry_a", "rb_media_epoch_entry_b"
+      , "rb_media_open_guard_entry", "rb_media_write_guard_entry"
+      ]
 
 overlay :: B.ByteString -> [(Int, B.ByteString)] -> B.ByteString
 overlay = foldl (\b (o, v) -> B.take o b <> v <> B.drop (o + B.length v) b)
@@ -2259,7 +2266,10 @@ stubDefs =
     bindings bs = object [fromString k .= hex (fromIntegral v) | (k, v) <- bs]
 
 functionSpans :: Inputs -> Spec -> [(Integer, Integer)]
-functionSpans in' sp = map validate (sortOn fst declared)
+functionSpans in' sp
+  | length declared > functionCount =
+      error (spId sp ++ ": UI function inventory exceeds native-case bound " ++ show functionCount)
+  | otherwise = map validate (sortOn fst declared)
   where
     profile = regionProfile (envFrom in') sp
     omitted (a, z) =
