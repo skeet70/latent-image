@@ -221,8 +221,12 @@ fn begin(machine: &mut Machine, maps: &[factory::MemoryMap], body: Option<(Consu
         classes.extend(HEADERS.map(|extent| class(extent, data)));
         classes.extend(code_spans().enumerate().map(|(index, extent)| class(extent,
             if index < 2 { WatchKinds::CPU_FETCH.union(WatchKinds::WRITES) } else { WatchKinds::WRITES })));
-        vec![ConfinementRule { cores: CoreSet::new(&[0,1])?, access: Access::Write,
-            rule: Confinement::Forbid(HEADERS.into_iter().chain(code_spans().skip(2)).map(span).collect::<Result<_, _>>()?) }]
+        let protected = HEADERS.into_iter().chain(code_spans().skip(2)).map(span).collect::<Result<Vec<_>, _>>()?;
+        let mut core1_protected = Vec::with_capacity(protected.len() + 1);
+        core1_protected.push(span(PRIMARY_TABLE)?);
+        core1_protected.extend_from_slice(&protected);
+        vec![ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Write, rule: Confinement::Forbid(protected) },
+            ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Write, rule: Confinement::Forbid(core1_protected) }]
     };
     machine.session.board.memory_watch_begin_scoped(ScopedWatch { classes, limit: WATCH_LIMIT, confinement,
         counters: Vec::new(), coverage: Vec::new() }, maps.to_vec())

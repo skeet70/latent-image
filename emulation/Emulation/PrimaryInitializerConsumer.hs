@@ -595,7 +595,9 @@ validateReceipt (Contract initializer source) receipt = do
   let preludeClasses = [WatchClass (Window span') (CpuRead:writes) | span' <- [(0x4dae0,0x4f10c),(0x96bd20,0x96bd28)] ++ headers]
         ++ [WatchClass (Window span') (if index < (2 :: Int) then [CpuWrite,CpuFetch,HostWrite,ModelBusWrite] else writes)
            | (index,span') <- zip [0..] (codeSpans source)]
-      preludeRules = [watchRules expectedTcm [0,1] CpuWrite Forbid (physicalScopes (headers ++ drop 2 (codeSpans source)))]
+      preludeProtected = headers ++ drop 2 (codeSpans source)
+      preludeRules = [watchRules expectedTcm [0] CpuWrite Forbid (physicalScopes preludeProtected)
+        ,watchRules expectedTcm [1] CpuWrite Forbid (physicalScopes ((0x4dae0,0x4f10c) : preludeProtected))]
       resources = [(0x4dae0,0x4f10c),(0x96bd20,0x96bd28),(poolPhysical,poolPhysical + 4)] ++ codeSpans source ++ headers
       bodyClasses = [WatchClass (Window span') (CpuRead:writes) | span' <- take 3 resources]
         ++ [WatchClass (Window span') writes | span' <- drop 3 resources]
