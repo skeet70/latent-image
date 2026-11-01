@@ -1925,6 +1925,8 @@ Fixed-view classified watches connect initializer return, entry, wrapper transit
 
 The independent Haskell consumer rederives source and staging contracts, validates the complete nested initializer evidence, replays admitted instruction and classified-memory effects and checks the source-conditional service/counter contract. Original-versus-owned comparison admits only the declared code patches, internal scratch effects and timing/count origins, not differences in caller-visible state, counter/lock effects or restored IRQ state. Receipt refusal cases require genuine accepted retained and owned receipts; their source does not manufacture successful fixtures.
 
+The prepared machine retains its actual DAT identity, which schema10 checks again at dispatch; an unbound or differently bound machine refuses. Watch range validation uses the sorted merged union of the exact class extents while retaining each class's access-kind check. Transition validation retains the stopped and resumed fetches of the exit-call BL as two attempts at one executed instruction. Caller-return validation requires all six attributed saved-frame loads by the canonical `0x726094` epilogue.
+
 Independent mechanism review precedes execution. Neither this new protocol source nor the revalidated schema7 receipts accept the pair. Unobserved branch paths, contention, retained exclusive-monitor/barrier semantics, general caller closure, task allocation and scheduler ownership remain separately scoped.
 
 After independent review and the source/SDK builds, the supported commands are:
@@ -1941,7 +1943,7 @@ XM1_EMULATOR_SLOTS=1 "$CRITICAL_PAIR_WITNESS" launch owned "$DAT" "$PAIR_DAT" "$
 
 `CRITICAL_PAIR_WITNESS` is `//emulation:critical-pair-witness`. Each preparation or launch output must be a new private output directory. Independent consumption/comparison takes an existing private scratch directory and independently decodes the DAT inputs before deriving its contracts. The launch command holds one emulator slot and consumes any produced receipt. Each retained or owned guest input executes once; retain a refusal, diagnose it and change the source or input before another run.
 
-`//emulation:critical-pair-receipt-cases` takes canonical DAT/image4, staged DAT/decoded staged image4, linked binary/symbols, genuine retained/owned receipt paths and an output JSON path. It requires both unmodified receipts and their comparison to pass before testing single-field wrong publication, counter, IRQ, frame, watch, decoder and alias evidence. These are independent consumer cases, not guest fault inputs or product switches.
+`//emulation:critical-pair-receipt-cases` takes canonical DAT/image4, staged DAT/decoded staged image4, linked binary/symbols, genuine retained/owned receipt paths and an output JSON path. It requires both unmodified receipts and their comparison to pass before testing wrong publication, counter, IRQ, frame, watch, decoder and alias evidence. Counter, publication, carrier and saved-frame mutations keep physical and virtual views coherent and assert typed semantic refusal categories. Epilogue cases delete all six saved-frame reads and each read individually. These are independent consumer cases, not guest fault inputs or product switches.
 
 
 

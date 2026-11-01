@@ -247,8 +247,8 @@ impl LoaderContract {
     pub(super) fn budget(&self) -> Instructions {
         Instructions(BUDGET)
     }
-    pub(super) fn admit_update(&self, bytes: &[u8]) -> Result<(), String> {
-        self.critical_pair.as_ref().map_or(Ok(()), |pair| pair.admit_update(bytes))
+    pub(super) fn admit_prepared_update(&self, digest: Option<Sha256Digest>) -> Result<(), String> {
+        self.critical_pair.as_ref().map_or(Ok(()), |pair| pair.admit_prepared_update(digest))
     }
     fn record1_entry(&self) -> u32 {
         self.startup.as_ref().map_or(RECORD1_ENTRY, |startup| startup.entry.0)

@@ -124,11 +124,14 @@ pub struct WitnessMachine {
     machine: Machine,
     #[cfg(feature = "scoped-watch")]
     inputs: InputBinding,
+    #[cfg(feature = "scoped-watch")]
+    update: Option<Sha256Digest>,
 }
 
 impl WitnessMachine {
     pub fn from_unbound(machine: Machine) -> Self {
-        Self { machine, #[cfg(feature = "scoped-watch")] inputs: InputBinding::Unbound }
+        Self { machine, #[cfg(feature = "scoped-watch")] inputs: InputBinding::Unbound,
+            #[cfg(feature = "scoped-watch")] update: None }
     }
 }
 
@@ -193,9 +196,11 @@ impl PeerContract {
 
     pub fn open_machine(&self, run_bytes: &[u8], update: &run::ValidatedUpdate, boot_rom: &[u8]) -> Result<WitnessMachine, String> {
         #[cfg(feature = "scoped-watch")]
+        let update_digest = Sha256Digest::of(&update.0);
+        #[cfg(feature = "scoped-watch")]
         let inputs = if let Some(primary) = &self.primary {
             let identities = InputIdentities {
-                run: Sha256Digest::of(run_bytes), update: Sha256Digest::of(&update.0), boot_rom: Sha256Digest::of(boot_rom),
+                run: Sha256Digest::of(run_bytes), update: update_digest, boot_rom: Sha256Digest::of(boot_rom),
             };
             primary.admit(&identities)?;
             primary.admit_update(&update.0)?;
@@ -204,12 +209,13 @@ impl PeerContract {
             InputBinding::Unbound
         };
         #[cfg(feature = "scoped-watch")]
-        if let Some(loader) = &self.loader { loader.admit_update(&update.0)?; }
+        if let Some(loader) = &self.loader { loader.admit_prepared_update(Some(update_digest))?; }
         let document = RunDocument::parse(run_bytes)?;
         let mut session = run::open(&document, update, boot_rom)?;
         session.board.set_execution_policy(document.execution_policy.into())?;
         let machine = Machine::new(document, session)?;
-        Ok(WitnessMachine { machine, #[cfg(feature = "scoped-watch")] inputs })
+        Ok(WitnessMachine { machine, #[cfg(feature = "scoped-watch")] inputs,
+            #[cfg(feature = "scoped-watch")] update: Some(update_digest) })
     }
 }
 
@@ -528,6 +534,7 @@ pub fn run(prepared: WitnessMachine, contract: PeerContract, output: &Path) -> R
     }
     #[cfg(feature = "scoped-watch")]
     if let Some(loader) = &contract.loader {
+        loader.admit_prepared_update(prepared.update)?;
         return loader::run(machine, loader, output);
     }
     if let Some(startup) = &contract.startup {

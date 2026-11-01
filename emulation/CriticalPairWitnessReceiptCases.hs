@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import Control.Monad (forM, unless)
+import Control.Monad (foldM, forM, unless)
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as J
 import qualified Data.Aeson.Key as K
@@ -9,7 +9,8 @@ import qualified Data.Aeson.Types as JT
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import Data.Bits (xor)
+import Data.Bits (shiftR, xor, (.&.))
+import Data.Word (Word64)
 import qualified Data.Vector as V
 import qualified Emulation.CriticalPairWitness as W
 import qualified Emulation.InterfaceInitializer as I
@@ -20,7 +21,7 @@ import System.Environment (getArgs)
 
 data Segment = Field K.Key | Element Int
 newtype ReceiptPath = ReceiptPath [Segment]
-data Change = FlipWord Integer | Remove
+data Change = FlipWord Integer | Remove | ReplaceValue Value
 
 data RefusalCase = RefusalCase String ReceiptPath Change
 
@@ -36,18 +37,12 @@ cases =
   , RefusalCase "entry-masked-irq" (context "entry" "returned" [field "cpsr"]) (FlipWord 0x80)
   , RefusalCase "exit-saved-mask" (context "exit" "incoming" [field "registers",Element 0]) (FlipWord 0x80)
   , RefusalCase "exit-restored-irq" (context "exit" "returned" [field "cpsr"]) (FlipWord 0x80)
-  , RefusalCase "entry-counter-effect" (resource "entry" "after" 6 [field "views",field "physical",Element 0]) (FlipWord 1)
-  , RefusalCase "exit-counter-effect" (resource "exit" "after" 6 [field "views",field "physical",Element 0]) (FlipWord 1)
-  , RefusalCase "secondary-observation-publication" (resource "entry" "before" 5 [field "views",field "physical",Element 0x1624]) (FlipWord 4)
-  , RefusalCase "secondary-restoration-publication" (resource "exit" "before" 5 [field "views",field "physical",Element 0x168]) (FlipWord 4)
-  , RefusalCase "carrier-readback" (resource "entry" "before" 0 [field "views",field "physical",Element 0]) (FlipWord 1)
   , RefusalCase "entry-watch-classes" (watch "entry" [field "classes"]) Remove
   , RefusalCase "exit-watch-confinement" (watch "exit" [field "confinement"]) Remove
   , RefusalCase "entry-watch-tcm" (watch "entry" [field "tcm"]) Remove
   , RefusalCase "exit-watch-views" (watch "exit" [field "views"]) Remove
   , RefusalCase "entry-instruction-evidence" (ReceiptPath [field "pair",field "entry",field "steps"]) Remove
   , RefusalCase "exit-instruction-evidence" (ReceiptPath [field "pair",field "exit",field "steps"]) Remove
-  , RefusalCase "caller-saved-frame" (ReceiptPath [field "pair",field "caller_frame_after",field "views",field "physical",Element 32]) (FlipWord 1)
   , RefusalCase "caller-watch-classes" (ReceiptPath [field "pair",field "caller_watch",field "classes"]) Remove
   , RefusalCase "prelude-watch-confinement" (ReceiptPath [field "pair",field "prelude_watch",field "confinement"]) Remove
   , RefusalCase "fixed-decoder" (ReceiptPath [field "pair",field "decoder",field "choices",Element 0]) (FlipWord 1)
@@ -55,12 +50,86 @@ cases =
   ]
   where
     context boundary side suffix = ReceiptPath ([field "pair",field boundary,field side] ++ suffix)
-    resource boundary side index suffix = ReceiptPath ([field "pair",field boundary,field side,Element index] ++ suffix)
     watch boundary suffix = ReceiptPath ([field "pair",field boundary,field "watch"] ++ suffix)
+
+data SemanticCase = SemanticCase String [ReceiptPath] Integer W.RefusalCategory
+
+semanticCases :: [SemanticCase]
+semanticCases =
+  [ SemanticCase "entry-counter-effect" (snapshot "entry" "after" 6 0) 1 W.InstructionEffectsMismatch
+  , SemanticCase "exit-counter-effect" (snapshot "exit" "after" 6 0) 1 W.InstructionEffectsMismatch
+  , SemanticCase "secondary-observation-publication" (initial 5 0x1624) 4 W.PublicationMismatch
+  , SemanticCase "secondary-restoration-publication" (initial 5 0x168) 4 W.PublicationMismatch
+  , SemanticCase "carrier-source-binding" (initial 0 0) 1 W.SourceBindingMismatch
+  , SemanticCase "caller-saved-frame" [ReceiptPath [field "pair",field "caller_frame_after",field "views",field view,Element 32] | view <- ["virtual","physical"]] 1 W.CallerFrameMismatch
+  ]
+  where
+    views prefix index offset = [ReceiptPath (prefix ++ [Element index,field "views",field view,Element offset]) | view <- ["virtual","physical"]]
+    snapshot boundary side = views [field "pair",field boundary,field side]
+    initial index offset = views [field "pair",field "resources"] index offset ++ snapshot "entry" "before" index offset
+
+lookupAt :: ReceiptPath -> Value -> Either String Value
+lookupAt (ReceiptPath path) = descend path
+  where
+    descend [] value = Right value
+    descend (Field key:rest) (Object values) =
+      maybe (Left "lookup field is absent") (descend rest) (KM.lookup key values)
+    descend (Element index:rest) (Array values) =
+      maybe (Left "lookup element is absent") (descend rest) (values V.!? index)
+    descend _ _ = Left "lookup path has the wrong JSON type"
+
+event :: Value -> Either String I.Event
+event value = case J.fromJSON value of
+  J.Error problem -> Left problem
+  J.Success observed -> Right observed
+
+epilogueAddress :: Value -> Either String (Maybe Word64)
+epilogueAddress value = do
+  observed <- event value
+  pure $ case observed of
+    I.Event I.CpuRead (Just 1) _ physical 4 _ (Just 0x726094) _ _ -> physical
+    _ -> Nothing
+
+splitEpilogue :: Value -> Either String [Value]
+splitEpilogue value = do
+  observed <- event value
+  case observed of
+    I.Event I.CpuRead (Just 1) address (Just physical) 8 (Just word) (Just 0x726094) _ _ -> do
+      before <- lookupAt (ReceiptPath [field "before"]) value
+      bytes <- case before of
+        Array bytes | V.length bytes == 8 -> Right bytes
+        _ -> Left "wide epilogue read lacks its eight-byte preimage"
+      forM [0,4] $ \offset -> foldM (\current (key,changed) ->
+          mutate (ReceiptPath [field key]) (ReplaceValue changed) current) value
+        [ ("address",J.toJSON (address+offset)),("physical",J.toJSON (physical+offset)),("size",J.toJSON (4 :: Int))
+        , ("value",J.toJSON ((word `shiftR` fromIntegral (offset*8)) .&. 0xffffffff))
+        , ("before",Array (V.slice (fromIntegral offset) 4 bytes))
+        ]
+    _ -> pure [value]
+
+withoutEpilogueReads :: Maybe Word64 -> Value -> Either String Value
+withoutEpilogueReads selected value = do
+  let path = ReceiptPath [field "pair",field "caller_watch",field "records"]
+  records <- lookupAt path value
+  rows <- case records of
+    Array rows -> pure (V.toList rows)
+    _ -> Left "caller records are not an array"
+  normalized <- concat <$> mapM splitEpilogue rows
+  tagged <- mapM (\row -> (row,) <$> epilogueAddress row) normalized
+  let addresses = [address | (_,Just address) <- tagged]
+      removed address = case address of
+        Nothing -> False
+        Just physical -> maybe True (== physical) selected
+      kept = [row | (row,address) <- tagged,not (removed address)]
+      expectedRemoved = maybe 6 (const 1) selected
+  unless (addresses == [0xf33c8,0xf33cc..0xf33dc] && length tagged-length kept == expectedRemoved)
+    (Left "genuine epilogue load evidence differs from the refusal case input")
+  mutate path (ReplaceValue (J.toJSON kept)) value
 
 mutate :: ReceiptPath -> Change -> Value -> Either String Value
 mutate (ReceiptPath path) change = descend path
   where
+    descend [] _ | ReplaceValue replacement <- change = Right replacement
     descend [] (Number number) | FlipWord bits <- change = do
       integer <- JT.parseEither J.parseJSON (Number number)
       pure (J.toJSON ((integer :: Integer) `xor` bits))
@@ -83,12 +152,24 @@ strict bytes = either H.failH pure (decodeStrictIntegers bytes)
 
 runCases :: String -> W.Contract -> B.ByteString -> IO [Value]
 runCases role contract receipt = do
-  either H.failH pure (W.validateReceipt contract receipt)
+  either (H.failH . show) pure (W.validateReceipt contract receipt)
   value <- strict receipt
-  forM cases $ \(RefusalCase name path change) -> do
+  generic <- forM cases $ \(RefusalCase name path change) -> do
     changed <- either H.failH pure (mutate path change value)
-    case W.validateReceipt contract (BL.toStrict (J.encode changed)) of
-      Left _ -> pure (object ["role" .= role,"case" .= name,"result" .= ("refused" :: String)])
+    refuse name Nothing changed
+  coherent <- forM semanticCases $ \(SemanticCase name paths bits category) -> do
+    changed <- either H.failH pure (foldM (\current path -> mutate path (FlipWord bits) current) value paths)
+    refuse name (Just category) changed
+  epilogue <- forM (Nothing:map Just [0xf33c8,0xf33cc..0xf33dc]) $ \selected -> do
+    changed <- either H.failH pure (withoutEpilogueReads selected value)
+    refuse ("caller-epilogue-loads-" ++ maybe "all" show selected) (Just W.CallerEpilogueMismatch) changed
+  pure (generic++coherent++epilogue)
+  where
+    refuse name expected changed = case W.validateReceipt contract (BL.toStrict (J.encode changed)) of
+      Left (W.ReceiptFailure category _) -> do
+        unless (maybe True (== category) expected)
+          (H.failH (role ++ " receipt refused " ++ name ++ " at " ++ show category ++ ", expected " ++ show expected))
+        pure (object ["role" .= role,"case" .= name,"result" .= ("refused" :: String),"category" .= show category])
       Right () -> H.failH (role ++ " receipt admitted " ++ name)
 
 main :: IO ()
@@ -108,8 +189,9 @@ main = do
       ownedContract <- either H.failH pure (W.deriveContract I.Owned source sourceImage4 candidate candidateImage4 image symbols)
       originalCases <- runCases "retained" originalContract retained
       ownedCases <- runCases "owned" ownedContract owned
-      either H.failH pure (W.compareReceipts (originalContract,retained) (ownedContract,owned))
-      unless (length originalCases == length cases && length ownedCases == length cases) (H.failH "receipt case count differs")
+      either (H.failH . show) pure (W.compareReceipts (originalContract,retained) (ownedContract,owned))
+      let expectedCases = length cases+length semanticCases+7
+      unless (length originalCases == expectedCases && length ownedCases == expectedCases) (H.failH "receipt case count differs")
       BL.writeFile outputPath (J.encode (object
         [ "schema" .= (1 :: Int),"positive_receipts" .= (2 :: Int),"comparison" .= ("matched" :: String)
         , "cases" .= (originalCases ++ ownedCases)

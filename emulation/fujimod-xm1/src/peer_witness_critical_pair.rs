@@ -56,8 +56,8 @@ pub(in crate::peer_witness::loader) struct Contract {
     loader_b: Vec<u8>,
 }
 impl Contract {
-    pub(in crate::peer_witness::loader) fn admit_update(&self, bytes: &[u8]) -> Result<(), String> {
-        require(Sha256Digest::of(bytes) == self.input_sha256
+    pub(in crate::peer_witness::loader) fn admit_prepared_update(&self, digest: Option<Sha256Digest>) -> Result<(), String> {
+        require(digest == Some(self.input_sha256)
             && (self.role == Role::Owned || self.input_sha256 == self.source_sha256), "critical whole-DAT input identity differs")
     }
 }

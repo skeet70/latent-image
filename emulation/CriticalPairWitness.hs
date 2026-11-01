@@ -91,7 +91,7 @@ main = do
         (_,owned) <- derive inputs decoder scratch
         a <- H.readRegular W.maxReceiptBytes first
         b <- H.readRegular W.maxReceiptBytes second
-        either H.failH pure (W.compareReceipts (retained,a) (owned,b))
+        either (H.failH . show) pure (W.compareReceipts (retained,a) (owned,b))
         putStrLn "critical pair retained/owned caller and effect comparison accepted"
     Compare {} -> H.failH "critical comparison requires an owned artifact"
 
@@ -159,7 +159,7 @@ decodeImage4 (Decoder decoderPath) scratch label dat = do
 consume :: W.Contract -> FilePath -> IO ()
 consume contract path = do
   bytes <- H.readRegular W.maxReceiptBytes path
-  either H.failH pure (W.validateReceipt contract bytes)
+  either (H.failH . show) pure (W.validateReceipt contract bytes)
   putStrLn ("critical pair receipt independently accepted: " ++ path)
 
 launchDriver :: Launch -> FilePath -> FilePath -> FilePath -> FilePath -> W.Contract -> IO ()

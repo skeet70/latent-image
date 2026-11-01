@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.CriticalPairWitness
   ( Contract, deriveContract, contractValue, validateReceipt, compareReceipts, maxReceiptBytes
+  , RefusalCategory (..), ReceiptFailure (..)
   ) where
 
 import qualified A32 as A
@@ -56,6 +57,17 @@ data Contract = Contract
 
 require :: Bool -> String -> Either String ()
 require condition message = unless condition (Left message)
+
+data RefusalCategory
+  = MalformedEvidence | SourceBindingMismatch | PublicationMismatch | InstructionEffectsMismatch
+  | SourceContractMismatch | TransitionMismatch | CallerFrameMismatch | CallerEpilogueMismatch
+  | AliasEvidenceMismatch | ComparisonMismatch
+  deriving (Eq, Show)
+
+data ReceiptFailure = ReceiptFailure RefusalCategory String deriving (Show)
+
+checked :: RefusalCategory -> Either String a -> Either ReceiptFailure a
+checked category = either (Left . ReceiptFailure category) Right
 
 slice :: Int -> Int -> B.ByteString -> Either String B.ByteString
 slice start count bytes = do
@@ -223,8 +235,8 @@ immutableSpans = [span' | (index,span') <- zip [0 :: Int ..] spans,index /= 6 &&
 resourceBytes :: Resource -> Either String (Word64,B.ByteString)
 resourceBytes (Resource (Physical address) views) = (address,) <$> viewsBytes views
 
-validateResources :: Contract -> I.ValidatedInitializer -> [Resource] -> Either String ()
-validateResources contract initializer resources = do
+validateResources :: Contract -> [Resource] -> Either String ()
+validateResources contract resources = do
   require (length resources == 12) "critical common resource coverage differs"
   zipWithM_ (\(low,high) observed -> do
     (address,bytes) <- resourceBytes observed
@@ -233,6 +245,9 @@ validateResources contract initializer resources = do
     (_,bytes) <- resourceBytes expected
     (_,actual) <- resourceBytes observed
     require (B.null bytes || actual == bytes) "critical resource differs from the admitted source/staged bytes") (expectedResources contract) resources
+
+validatePublications :: Contract -> I.ValidatedInitializer -> [Resource] -> Either String ()
+validatePublications contract initializer resources = do
   case drop 5 resources of
     Resource _ table:_ -> require (table == I.initializerTable initializer) "critical tableB differs from the independently validated initializer"
     _ -> Left "critical tableB is absent"
@@ -298,12 +313,19 @@ watchRules contract phase banks = let
     Transition -> [rule [1] CpuWrite Forbid (disjoint immutableSpans++record),rule [0] CpuWrite Forbid (disjoint spans++[(0xf33a8,0xf33e0)]++record)]
   in primary ++ [rule [1] kind Forbid [(0xd0430,0xd09ac)] | pairRole contract == I.Owned,kind <- [CpuRead,CpuFetch]]
 
+mergedRanges :: [(Word64,Word64)] -> [(Word64,Word64)]
+mergedRanges = foldr merge [] . sort
+  where
+    merge (low,high) ((nextLow,nextHigh):rest)
+      | high >= nextLow = merge (low,max high nextHigh) rest
+    merge span' rest = span':rest
+
 validateWatch :: Contract -> Phase -> Context -> PairWatch -> Either String [PairEvent]
 validateWatch contract phase origin (PairWatch (Watch enabled violation events rules classes FixedViews NoFault banks) ranges Empty Empty) = do
   expectedBanks <- snapshots origin
   require (enabled && violation == Nothing && sort banks == sort expectedBanks) "critical watch was disabled, violated or changed TCM scope"
   let normalize (WatchClass window kinds) = WatchClass window (sort kinds)
-  require (sort (map normalize classes) == sort (map normalize (watchClasses phase)) && sort ranges == sort [range | WatchClass (Window range) _ <- classes]) "critical watch classes or ranges differ"
+  require (sort (map normalize classes) == sort (map normalize (watchClasses phase)) && sort ranges == mergedRanges [range | WatchClass (Window range) _ <- classes]) "critical watch classes or ranges differ"
   require (rules == watchRules contract phase expectedBanks) "critical confinement rules differ"
   let ticks = [tick | PairEvent _ _ tick <- events]
   require (and (zipWith (<=) ticks (drop 1 ticks))) "critical watch ticks decreased"
@@ -596,65 +618,78 @@ validateAliases origin snapshots' observed = do
 
 data Accepted = Accepted Context Context Context Context Context [Resource] [Resource]
 
-validateReceipt :: Contract -> B.ByteString -> Either String ()
+validateReceipt :: Contract -> B.ByteString -> Either ReceiptFailure ()
 validateReceipt contract bytes = validateEvidence contract bytes >> pure ()
 
-validateEvidence :: Contract -> B.ByteString -> Either String Accepted
+validateEvidence :: Contract -> B.ByteString -> Either ReceiptFailure Accepted
 validateEvidence contract bytes = do
-  require (B.length bytes <= maxReceiptBytes) "critical receipt exceeds 64 MiB"
-  document <- decodeStrictIntegers bytes
-  Receipt schema result failure machineFailure (InitializerEvidence nested) evidence <- case J.fromJSON document of
-    J.Error problem -> Left problem
-    J.Success receipt -> pure receipt
-  initializer <- I.validateReceiptEvidence (initializerContract contract) nested
-  require (schema == 10 && result == Passed && failure == Nothing && machineFailure == Nothing) "critical receipt did not pass its distinct schema10 role"
-  PairReceipt role origin entryEvidence transitionEvidence exitEvidence finalEvidence preludeEvidence callerEvidence resources callerBeforeEvidence callerAfterEvidence decoder aliases <- maybe (Left "critical pair evidence is absent") Right evidence
-  require (role == pairRole contract && origin == I.initializerExit initializer && decoder == Decoder [1] [Nothing]) "critical role, initializer continuation or decoder identity differs"
-  entry <- maybe (Left "critical entry evidence is absent") Right entryEvidence
-  exit <- maybe (Left "critical exit evidence is absent") Right exitEvidence
-  final <- maybe (Left "critical original caller return is absent") Right finalEvidence
-  prelude <- maybe (Left "critical prelude watch is absent") Right preludeEvidence
-  transition <- maybe (Left "critical wrapper watch is absent") Right transitionEvidence
-  caller <- maybe (Left "critical caller watch is absent") Right callerEvidence
-  callerBefore <- maybe (Left "critical saved caller frame is absent") Right callerBeforeEvidence
-  callerAfter <- maybe (Left "critical final caller frame is absent") Right callerAfterEvidence
+  (initializer,evidence) <- checked MalformedEvidence $ do
+    require (B.length bytes <= maxReceiptBytes) "critical receipt exceeds 64 MiB"
+    document <- decodeStrictIntegers bytes
+    Receipt schema result failure machineFailure (InitializerEvidence nested) evidence <- case J.fromJSON document of
+      J.Error problem -> Left problem
+      J.Success receipt -> pure receipt
+    initializer <- I.validateReceiptEvidence (initializerContract contract) nested
+    require (schema == 10 && result == Passed && failure == Nothing && machineFailure == Nothing) "critical receipt did not pass its distinct schema10 role"
+    pure (initializer,evidence)
+  PairReceipt role origin entryEvidence transitionEvidence exitEvidence finalEvidence preludeEvidence callerEvidence resources callerBeforeEvidence callerAfterEvidence decoder aliases <-
+    checked MalformedEvidence (maybe (Left "critical pair evidence is absent") Right evidence)
+  (entry,exit,final,prelude,transition,caller,callerBefore,callerAfter) <- checked MalformedEvidence $ do
+    require (role == pairRole contract && origin == I.initializerExit initializer && decoder == Decoder [1] [Nothing]) "critical role, initializer continuation or decoder identity differs"
+    entry <- maybe (Left "critical entry evidence is absent") Right entryEvidence
+    exit <- maybe (Left "critical exit evidence is absent") Right exitEvidence
+    final <- maybe (Left "critical original caller return is absent") Right finalEvidence
+    prelude <- maybe (Left "critical prelude watch is absent") Right preludeEvidence
+    transition <- maybe (Left "critical wrapper watch is absent") Right transitionEvidence
+    caller <- maybe (Left "critical caller watch is absent") Right callerEvidence
+    callerBefore <- maybe (Left "critical saved caller frame is absent") Right callerBeforeEvidence
+    callerAfter <- maybe (Left "critical final caller frame is absent") Right callerAfterEvidence
+    pure (entry,exit,final,prelude,transition,caller,callerBefore,callerAfter)
   let incoming = boundaryIncoming entry; exitIncoming = boundaryIncoming exit
-  mapM_ contextShape [origin,incoming,exitIncoming,final]
-  require (pcOf incoming == 0x7235d8 && register incoming A.sp == 0x400f33a8 && register incoming A.lr == 0x725e00 && register incoming A.sp .&. 7 == 0 && cpsrOf incoming .&. 0x80 == 0x80) "critical entry was not the admitted natural original caller boundary"
-  validateResources contract initializer resources
-  let Boundary _ _ _ entryBefore entryAfter _ = entry
+      Boundary _ _ _ entryBefore entryAfter _ = entry
       Boundary _ _ _ exitBefore exitAfter _ = exit
-  require (take 12 entryBefore == resources) "critical initial resources differ from entry snapshots"
-  preludeEvents <- validateWatch contract Prelude origin prelude
-  validatePrelude origin incoming resources preludeEvents
-  (entryReturned,_,entryEvents) <- validateBoundary contract callerBefore preludeEvents (entryFrame contract) entry
-  validateSourceEntry entry entryReturned entryEvents
-  require (pcOf entryReturned == 0x725e00 && register entryReturned (A.Reg 0) == cpsrOf incoming .&. 0x80 && cpsrOf entryReturned .&. 0x80 == 0x80) "critical entry prior-mask result or masked IRQ state differs"
-  require (pcOf exitIncoming == 0x7236b0 && register exitIncoming A.lr `elem` [0x725e88,0x725fb8,0x726068]
-    && register exitIncoming A.sp == register incoming A.sp && register exitIncoming (A.Reg 0) == register entryReturned (A.Reg 0)
-    && register exitIncoming (A.Reg 7) == register entryReturned (A.Reg 0)) "critical exit lacks an actual wrapper call and saved prior mask"
-  transitionEvents <- validateWatch contract Transition entryReturned transition
-  transitionFrame <- replayWrapper entryReturned exitIncoming entryAfter callerBefore transitionEvents
-  validateTransition entryReturned exitIncoming transitionEvents entryAfter exitBefore
-  (exitReturned,_,exitEvents) <- validateBoundary contract transitionFrame transitionEvents (exitFrame contract) exit
-  validateSourceExit exit exitReturned exitEvents
-  callerEvents <- validateWatch contract Transition exitReturned caller
-  finalFrame <- replayWrapper exitReturned final exitAfter transitionFrame callerEvents
-  require (finalFrame == callerAfter) "critical wrapper final committed frame differs from its chronological effects"
-  validateCrossWindowTicks [preludeEvents,entryEvents,transitionEvents,exitEvents,callerEvents]
-  validateCaller exitReturned final callerEvents
-  require (pcOf exitReturned == register exitIncoming A.lr && cpsrOf exitReturned .&. 0x80 == register exitIncoming (A.Reg 0) .&. 0x80) "critical exit did not restore the prior IRQ mask at its actual caller return"
-  require (pcOf final == 0x69cf38 && register final A.sp == 0x400f33e0 && tcmOf final == tcmOf origin) "critical original wrapper epilogue did not return to its caller"
-  validateCallerFrame incoming final callerBefore callerAfter
-  validateAliases origin [resources,[callerBefore],entryBefore,entryAfter,exitBefore,exitAfter,take 12 exitAfter,[callerAfter]] aliases
+  checked MalformedEvidence $ do
+    mapM_ contextShape [origin,incoming,exitIncoming,final]
+    require (pcOf incoming == 0x7235d8 && register incoming A.sp == 0x400f33a8 && register incoming A.lr == 0x725e00 && register incoming A.sp .&. 7 == 0 && cpsrOf incoming .&. 0x80 == 0x80) "critical entry was not the admitted natural original caller boundary"
+  checked SourceBindingMismatch (validateResources contract resources)
+  checked PublicationMismatch (validatePublications contract initializer resources)
+  checked SourceBindingMismatch (require (take 12 entryBefore == resources) "critical initial resources differ from entry snapshots")
+  preludeEvents <- checked MalformedEvidence (validateWatch contract Prelude origin prelude)
+  checked MalformedEvidence (validatePrelude origin incoming resources preludeEvents)
+  (entryReturned,_,entryEvents) <- checked InstructionEffectsMismatch (validateBoundary contract callerBefore preludeEvents (entryFrame contract) entry)
+  checked SourceContractMismatch $ do
+    validateSourceEntry entry entryReturned entryEvents
+    require (pcOf entryReturned == 0x725e00 && register entryReturned (A.Reg 0) == cpsrOf incoming .&. 0x80 && cpsrOf entryReturned .&. 0x80 == 0x80) "critical entry prior-mask result or masked IRQ state differs"
+    require (pcOf exitIncoming == 0x7236b0 && register exitIncoming A.lr `elem` [0x725e88,0x725fb8,0x726068]
+      && register exitIncoming A.sp == register incoming A.sp && register exitIncoming (A.Reg 0) == register entryReturned (A.Reg 0)
+      && register exitIncoming (A.Reg 7) == register entryReturned (A.Reg 0)) "critical exit lacks an actual wrapper call and saved prior mask"
+  transitionEvents <- checked TransitionMismatch (validateWatch contract Transition entryReturned transition)
+  transitionFrame <- checked TransitionMismatch (replayWrapper entryReturned exitIncoming entryAfter callerBefore transitionEvents)
+  checked TransitionMismatch (validateTransition entryReturned exitIncoming transitionEvents entryAfter exitBefore)
+  (exitReturned,_,exitEvents) <- checked InstructionEffectsMismatch (validateBoundary contract transitionFrame transitionEvents (exitFrame contract) exit)
+  checked SourceContractMismatch (validateSourceExit exit exitReturned exitEvents)
+  callerEvents <- checked MalformedEvidence (validateWatch contract Transition exitReturned caller)
+  finalFrame <- checked InstructionEffectsMismatch (replayWrapper exitReturned final exitAfter transitionFrame callerEvents)
+  checked CallerFrameMismatch (require (finalFrame == callerAfter) "critical wrapper final committed frame differs from its chronological effects")
+  checked MalformedEvidence (validateCrossWindowTicks [preludeEvents,entryEvents,transitionEvents,exitEvents,callerEvents])
+  checked CallerEpilogueMismatch (validateCaller exitReturned final callerEvents)
+  checked SourceContractMismatch $ do
+    require (pcOf exitReturned == register exitIncoming A.lr && cpsrOf exitReturned .&. 0x80 == register exitIncoming (A.Reg 0) .&. 0x80) "critical exit did not restore the prior IRQ mask at its actual caller return"
+    require (pcOf final == 0x69cf38 && register final A.sp == 0x400f33e0 && tcmOf final == tcmOf origin) "critical original wrapper epilogue did not return to its caller"
+  checked CallerFrameMismatch (validateCallerFrame incoming final callerBefore callerAfter)
+  checked AliasEvidenceMismatch (validateAliases origin [resources,[callerBefore],entryBefore,entryAfter,exitBefore,exitAfter,take 12 exitAfter,[callerAfter]] aliases)
   pure (Accepted incoming entryReturned exitIncoming exitReturned final entryAfter exitAfter)
 
 validateTransition :: Context -> Context -> [PairEvent] -> [Resource] -> [Resource] -> Either String ()
 validateTransition entered exit events entryAfter exitBefore = do
-  let fetched = [site | PairEvent (Event CpuFetch (Just 1) _ _ _ _ (Just site) _ _) _ _ <- events]
+  let fetched = [(site,clock) | PairEvent (Event CpuFetch (Just 1) _ _ _ _ (Just site) (Just clock) _) _ _ <- events]
       callsite = register exit A.lr-4
-  require (reverse (take 3 (reverse fetched)) == [callsite-4,callsite,0x7236b0]) "critical wrapper did not execute its saved-mask MOV, actual BL and natural exit fetch"
-  require (all (\site -> (site >= 0x725e00 && site < 0x726098) || site == 0x7236b0) fetched) "critical transition fetched outside the original wrapper and exit endpoint"
+      tailFetches = reverse (take 4 (reverse fetched))
+  require (map fst tailFetches == [callsite-4,callsite,callsite,0x7236b0]
+    && snd (last tailFetches) == sum (countsOf exit)+1
+    && all (\(_,clock) -> clock >= sum (countsOf entered) && clock <= sum (countsOf exit)) (init tailFetches))
+    "critical wrapper saved-mask MOV, stopped BL fetch, executed BL and exit fetch differ"
+  require (all (\(site,_) -> (site >= 0x725e00 && site < 0x726098) || site == 0x7236b0) fetched) "critical transition fetched outside the original wrapper and exit endpoint"
   require (sum (countsOf entered) < sum (countsOf exit) && tcmOf entered == tcmOf exit) "critical wrapper transition counters or TCM differ"
   require (take 12 entryAfter == take 12 exitBefore && not (null exitBefore)) "critical wrapper changed a protected resource between boundaries"
   require (not (null events)) "critical wrapper transition evidence is absent"
@@ -665,6 +700,17 @@ validateCaller exited final events = do
   require (reverse (take 2 (reverse fetched)) == [0x726090,0x726094]) "critical original wrapper epilogue was not executed"
   require (all (\site -> site >= pcOf exited && site < 0x726098) fetched && sum (countsOf exited) < sum (countsOf final)) "critical caller continuation route or counters differ"
   require (not (null events)) "critical caller continuation evidence is absent"
+  let loads = [(address,physical,width,value,clock,before) |
+        PairEvent (Event CpuRead (Just 1) address physical width value (Just 0x726094) clock _) before _ <- wordEvents events]
+  loadClock <- case loads of
+    (_,_,_,_,Just clock,_):_ -> pure clock
+    _ -> Left "critical caller epilogue saved-frame loads are absent"
+  require (loadClock >= sum (countsOf exited) && loadClock <= sum (countsOf final)) "critical caller epilogue load clock is outside its window"
+  let values = map (register final . A.Reg) [4,5,6,7,11] ++ [pcOf final]
+      expected = [(0x400f33c8+offset,Just (0xf33c8+offset),4,Just (fromIntegral value),
+        Just loadClock,Just (AccessBytes (B.unpack (U.putWord32 value)))) |
+        (offset,value) <- zip [0,4..20] values]
+  require (loads == expected) "critical caller epilogue saved-frame loads differ"
 
 validateCallerFrame :: Context -> Context -> Resource -> Resource -> Either String ()
 validateCallerFrame incoming final before after = do
@@ -676,14 +722,14 @@ validateCallerFrame incoming final before after = do
   zipWithM_ (\offset value -> require (leWordAt bytes offset == Right value) "critical original caller callee-saved restore differs") [32,36,40,44,48,52]
     [register final (A.Reg 4),register final (A.Reg 5),register final (A.Reg 6),register final (A.Reg 7),register final (A.Reg 11),pcOf final]
 
-compareReceipts :: (Contract,B.ByteString) -> (Contract,B.ByteString) -> Either String ()
+compareReceipts :: (Contract,B.ByteString) -> (Contract,B.ByteString) -> Either ReceiptFailure ()
 compareReceipts (retained,retainedBytes) (owned,ownedBytes) = do
-  require (pairRole retained == I.Retained && pairRole owned == I.Owned) "critical comparison requires retained then owned contracts"
+  checked ComparisonMismatch (require (pairRole retained == I.Retained && pairRole owned == I.Owned) "critical comparison requires retained then owned contracts")
   Accepted a b c d e before after <- validateEvidence retained retainedBytes
   Accepted a' b' c' d' e' before' after' <- validateEvidence owned ownedBytes
   let visible context = (pcOf context,regsOf context,cpsrOf context,tcmOf context)
       effects resources = [(address,views) | Resource address@(Physical start) views <- resources,start `elem` [0x96bd20,0x4dae0,0xddaa0,0xa0f824,0xc0804]]
-  require (map visible [a,b,c,d,e] == map visible [a',b',c',d',e'] && effects before == effects before' && effects after == effects after') "critical retained/owned caller ABI, counter, lock or publication effects differ"
+  checked ComparisonMismatch (require (map visible [a,b,c,d,e] == map visible [a',b',c',d',e'] && effects before == effects before' && effects after == effects after') "critical retained/owned caller ABI, counter, lock or publication effects differ")
 
 replayWrapper :: Context -> Context -> [Resource] -> Resource -> [PairEvent] -> Either String Resource
 replayWrapper origin returned resources frame events = do
@@ -815,7 +861,7 @@ validateSourceExit (Boundary incoming _ steps before after _) returned events = 
       require (register restoreIncoming (A.Reg 0) == register incoming (A.Reg 0)) "critical restore service did not receive the caller's saved prior mask"
       require (new == expectedCounter) "critical exit counter decrement or zero/direct skip differs"
       counterEffects old new decrement events
-      sourceScratch returned [status,status .&. complement 0x80,r2,0xd1164,register incoming (A.Reg 12)] lr status
+      sourceScratch returned [status,status .&. complement 0x80,r2,register incoming (A.Reg 3),register incoming (A.Reg 12)] lr status
     _ -> Left "critical exit omitted source identity or observation"
 
 validateBoundaryFetches :: Context -> Context -> [Context] -> [PairEvent] -> [PairEvent] -> Either String ()
