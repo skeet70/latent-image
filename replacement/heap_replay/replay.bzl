@@ -30,7 +30,7 @@ cp "$$output/lib/libxm1_heap_replay.a" "$@"
         asm_srcs = ["entry.S"],
         link_script = "heap-replay.ld",
         entry = "heap_replay_init",
-        extra_ldflags = ["-Wl,--undefined=" + symbol for symbol in [
+        extra_ldflags = ["-Wl,--gc-sections"] + ["-Wl,--undefined=" + symbol for symbol in [
             "heap_replay_init", "heap_replay_alloc", "heap_replay_free", "heap_replay_footprint",
             "heap_replay_stats", "heap_replay_zero", "heap_replay_copy", "heap_replay_status", "heap_replay_panic",
         ]],

@@ -92,16 +92,17 @@ fn symbols(bytes: &[u8], payload_bytes: usize) -> Result<BTreeMap<Symbol, Addres
     }
     let required = [Symbol::Init, Symbol::Allocate, Symbol::Free, Symbol::Footprint, Symbol::Statistics,
         Symbol::Zero, Symbol::Copy, Symbol::Status, Symbol::Panic, Symbol::TextStart, Symbol::TextEnd,
-        Symbol::ImageStart, Symbol::ImageEnd, Symbol::BssStart, Symbol::BssEnd];
+        Symbol::ReadOnlyEnd, Symbol::ImageStart, Symbol::ImageEnd, Symbol::BssStart, Symbol::BssEnd];
     if required.iter().any(|symbol| !symbols.contains_key(symbol)) { return Err(Failure::Symbols); }
     let address = |symbol| symbols.get(&symbol).copied().ok_or(Failure::Symbols);
     let text_start = address(Symbol::TextStart)?.0;
     let text_end = address(Symbol::TextEnd)?.0;
+    let read_only_end = address(Symbol::ReadOnlyEnd)?.0;
     let bss_start = address(Symbol::BssStart)?.0;
     let bss_end = address(Symbol::BssEnd)?.0;
     if address(Symbol::ImageStart)?.0 != IMAGE_BASE || text_start != IMAGE_BASE || text_start >= text_end
-        || text_end > bss_start || bss_start > bss_end || bss_end != address(Symbol::ImageEnd)?.0
-        || bss_end > IMAGE_LIMIT || payload_bytes > (bss_start - IMAGE_BASE) as usize {
+        || text_end > read_only_end || read_only_end > bss_start || bss_start > bss_end || bss_end != address(Symbol::ImageEnd)?.0
+        || bss_end > IMAGE_LIMIT || payload_bytes > (bss_start - IMAGE_BASE) as usize || (read_only_end - IMAGE_BASE) as usize > payload_bytes {
         return Err(Failure::Symbols);
     }
     for symbol in [Symbol::Init, Symbol::Allocate, Symbol::Free, Symbol::Footprint, Symbol::Statistics, Symbol::Zero, Symbol::Copy, Symbol::Panic] {

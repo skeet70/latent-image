@@ -1345,6 +1345,8 @@ Every call preserves raw AAPCS/context/count/guard evidence. Timing brackets enc
 
 All subjects execute under the preserved isolated task-73 frame. Original task identities remain bound trace attributions, not recreated scheduling. The admitted sequence has no overlapping logical calls; these runs therefore compare uncontended operations, not task switching or a multi-core lock policy.
 
+The isolated calls retain the pinned run document's processor quantum, 1,000 instructions. Subject links use section garbage collection with explicit exported ABI roots. Immutable bindings and write watches cover text, read-only constants and unwind tables; mutable data and BSS remain outside those immutable ranges.
+
 `--mode check --case CASE_JSON` re-admits existing evidence without execution. `--mode refusal-controls --case CASE_JSON` preserves eight genuine serialized mutations after positive admission: missing step, allocation result, footprint, statistics, counters, diagnostic role, payload data and code-watch evidence. Both modes retain the same pinned input arguments and fresh output directory. No replay run or refusal-control result is claimed by this source description.
 
 #### Task-storage observation

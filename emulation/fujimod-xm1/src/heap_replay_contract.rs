@@ -55,13 +55,13 @@ impl Span {
 }
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum Symbol { Init, Allocate, Free, Footprint, Statistics, Zero, Copy, Status, Panic, TextStart, TextEnd, ImageStart, ImageEnd, BssStart, BssEnd }
+pub enum Symbol { Init, Allocate, Free, Footprint, Statistics, Zero, Copy, Status, Panic, TextStart, TextEnd, ReadOnlyEnd, ImageStart, ImageEnd, BssStart, BssEnd }
 impl Symbol {
     pub fn parse(name: &str) -> Option<Self> {
         Some(match name { "heap_replay_init" => Self::Init, "heap_replay_alloc" => Self::Allocate, "heap_replay_free" => Self::Free,
             "heap_replay_footprint" => Self::Footprint, "heap_replay_stats" => Self::Statistics, "heap_replay_zero" => Self::Zero,
             "heap_replay_copy" => Self::Copy, "heap_replay_status" => Self::Status, "heap_replay_panic" => Self::Panic,
-            "__text_start" => Self::TextStart, "__text_end" => Self::TextEnd, "__image_start" => Self::ImageStart,
+            "__text_start" => Self::TextStart, "__text_end" => Self::TextEnd, "__read_only_end" => Self::ReadOnlyEnd, "__image_start" => Self::ImageStart,
             "__image_end" => Self::ImageEnd, "__bss_start" => Self::BssStart, "__bss_end" => Self::BssEnd, _ => return None })
     }
 }
@@ -79,6 +79,7 @@ impl Inputs {
         Ok(image.bytes[(span.start.0 - image.base.0) as usize..(span.end.0 - image.base.0) as usize].to_vec())
     }
     pub fn payload_text(&self) -> Result<Span, Failure> { Ok(Span { start: self.symbol(Symbol::TextStart)?, end: self.symbol(Symbol::TextEnd)? }) }
+    pub fn payload_read_only(&self) -> Result<Span, Failure> { Ok(Span { start: self.symbol(Symbol::TextStart)?, end: self.symbol(Symbol::ReadOnlyEnd)? }) }
 }
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -188,7 +189,7 @@ pub fn code_spans(inputs: &Inputs, tape: &Tape) -> Result<Vec<Span>, Failure> {
         Span { start: Address(0x724b68), end: Address(0x724cbc) },
         Span { start: Address(0x89cda4), end: Address(0x89d4f8) },
         Span { start: Address(0x89d908), end: Address(0x89e7c4) },
-        inputs.payload_text()?,
+        inputs.payload_read_only()?,
     ];
     if tape.steps().iter().any(|step| matches!(&step.request, crate::heap_replay_state::Request::Calloc { .. })) {
         spans.push(Span { start: Address(0xbf1c1c), end: Address(0xbf1cd4) });
@@ -205,8 +206,8 @@ pub fn code_spans(inputs: &Inputs, tape: &Tape) -> Result<Vec<Span>, Failure> {
     Ok(merged)
 }
 pub fn expected_code(inputs: &Inputs, span: Span, capacity: Capacity) -> Result<Vec<u8>, Failure> {
-    let text = inputs.payload_text()?;
-    let mut bytes = if text.contains(span.start, span.bytes()) {
+    let read_only = inputs.payload_read_only()?;
+    let mut bytes = if read_only.contains(span.start, span.bytes()) {
         let start = span.start.0.checked_sub(IMAGE_BASE).ok_or(Failure::CodeExtent)? as usize;
         let end = start.checked_add(span.bytes().0 as usize).ok_or(Failure::CodeExtent)?;
         inputs.payload.get(start..end).ok_or(Failure::CodeExtent)?.to_vec()

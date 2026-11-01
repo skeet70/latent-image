@@ -18,6 +18,7 @@ SECTIONS
     .rodata : ALIGN(4) { *(.rodata .rodata.*) } > REPLAY
     .ARM.extab : ALIGN(4) { *(.ARM.extab*) } > REPLAY
     .ARM.exidx : ALIGN(4) { *(.ARM.exidx*) } > REPLAY
+    __read_only_end = .;
     .data : ALIGN(4) { *(.data .data.* .got .got.*) } > REPLAY
     .bss (NOLOAD) : ALIGN(16)
     {

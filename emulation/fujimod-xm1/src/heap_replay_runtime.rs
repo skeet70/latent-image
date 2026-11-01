@@ -90,6 +90,7 @@ fn vfp(board: &Board) -> Result<[u64; 8], Failure> {
 }
 #[derive(Clone, Copy)]
 struct Live { pointer: Address, layout: Layout, footprint: Bytes }
+struct ProcessorQuantum(std::num::NonZeroUsize);
 struct Runtime<'a> {
     inputs: &'a Inputs,
     output: &'a Path,
@@ -102,6 +103,7 @@ struct Runtime<'a> {
     scratch: Vec<u8>,
     physical_scratch: Vec<u8>,
     peer_identity: u32,
+    quantum: ProcessorQuantum,
 }
 impl Runtime<'_> {
     fn call(&mut self, case: &mut Case, role: CallRole, function: Address, arguments: [u32; 4], candidate: bool) -> Result<CallId, Failure> {
@@ -125,7 +127,7 @@ impl Runtime<'_> {
         board.harness_interrupt_delivery(0, false);
         board.harness_interrupt_delivery(1, false);
         let end = before.counts[0].0.checked_add(before.counts[1].0).and_then(|total| total.checked_add(CALL_BUDGET)).ok_or(Failure::Clock)?;
-        let run_result = self.session.board.run_window(end, 4096, None, None).map_err(execution);
+        let run_result = self.session.board.run_window(end, self.quantum.0.get(), None, None).map_err(execution);
         let status_word = candidate.then(|| word(&self.session.board, &self.maps, self.inputs.symbol(Symbol::Status)?.0)).transpose()?;
         let raw = serde_json::to_vec(&harness.state())?;
         let end_result = self.session.board.harness_end(&mut harness).map_err(execution);
@@ -486,7 +488,8 @@ fn prepare<'a>(inputs: &'a Inputs, tape: &Tape, output: &'a Path, case: &mut Cas
     let peer_identity = session.board.cpu(1).map_err(execution)?.rprofile_identity(None).map_err(execution)?;
     require(peer_identity == 0x5003, Failure::Context)?;
     let mut runtime = Runtime { inputs, output, session, maps, guard: Guard::default(), watch: None, ranges: Vec::new(), live: BTreeMap::new(),
-        scratch: Vec::with_capacity(tape.maximum_request().0 as usize), physical_scratch: Vec::with_capacity(tape.maximum_request().0 as usize), peer_identity };
+        scratch: Vec::with_capacity(tape.maximum_request().0 as usize), physical_scratch: Vec::with_capacity(tape.maximum_request().0 as usize), peer_identity,
+        quantum: ProcessorQuantum(std::num::NonZeroUsize::new(document.execution.quantum).ok_or(Failure::Context)?) };
     let bound = word(&runtime.session.board, &runtime.maps, 0x72b130)?;
     require(bound.0 == Capacity::Original.bound_word(), Failure::CodeWord { address: Address(0x72b130), expected: Word(Capacity::Original.bound_word()), actual: bound })?;
     if case.capacity == Capacity::Recipe {
