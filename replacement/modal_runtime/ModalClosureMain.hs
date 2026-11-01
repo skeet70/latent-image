@@ -63,7 +63,9 @@ main = do
   kernel <- either failWith pure . parseElf =<< B.readFile =<< required arguments "--kernel-elf"
   manifest <- either failWith pure . decodeStrictIntegers =<< B.readFile =<< required arguments "--manifest"
   publications <- either failWith pure (parsePublications manifest)
-  let proof = buildProof (Inputs (images ++ bankRegions kernel) publications (bankFunctions kernel))
+  selected <- diagnosticController arguments
+  let inputs = Inputs (images ++ bankRegions kernel) publications (bankFunctions kernel)
+      proof = maybe (buildProof inputs) (\controller -> buildControllerDiagnostic [controller] inputs) selected
   B.writeFile output (encodeCanonical (proofValue proof))
   if proofAdmitted proof then exitSuccess else exitFailure
 
@@ -105,6 +107,17 @@ parsePublications document = case document of
       , [(value, "")] <- readHex digits ->
           Right value
     _ -> Left ("manifest: eight-digit hex " ++ key ++ " required")
+
+diagnosticController :: [String] -> IO (Maybe ControllerId)
+diagnosticController arguments = case dropWhile (/= "--diagnostic-controller") arguments of
+  [] -> pure Nothing
+  _ : value : rest
+    | "--diagnostic-controller" `notElem` rest
+    , '0' : 'x' : digits <- value
+    , not (null digits) && length digits <= 8
+    , [(index, "")] <- readHex digits
+    , index < 174 -> pure (Just (ControllerId index))
+  _ -> failWith "one diagnostic controller in 0x00..0xad required"
 
 required :: [String] -> String -> IO String
 required arguments name = case dropWhile (/= name) arguments of

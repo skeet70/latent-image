@@ -12,6 +12,8 @@ module Replacement.ModalRuntime.Closure
   , BankFunction (..)
   , Inputs (..)
   , Proof (..)
+  , ControllerId (..)
+  , buildControllerDiagnostic
   , buildProof
   ) where
 
@@ -1792,15 +1794,17 @@ data Protected = Protected
 halves :: Word32 -> Word32 -> [Word32]
 halves start bytes = takeWhile (< start + bytes) [start, start + 2 ..]
 
-protect :: [Controller] -> Protected
-protect controllers = Protected (S.fromList (layout ++ entries)) (S.fromList (layout ++ objects))
+protect :: S.Set Word32 -> [Controller] -> Protected
+protect indices controllers = Protected (S.fromList (layout ++ entries)) (S.fromList (layout ++ objects))
  where
-  count = controllerCount
   layout =
-    halves cellPointers (4 * count)
-      ++ halves actionPointers (4 * count)
-      ++ halves transitionPointers (4 * count)
-      ++ halves widthCells (2 * count)
+    concat
+      [ halves (cellPointers + 4 * index) 4
+          ++ halves (actionPointers + 4 * index) 4
+          ++ halves (transitionPointers + 4 * index) 4
+          ++ halves (widthCells + 2 * index) 2
+      | index <- S.toList indices
+      ]
   entries =
     concat
       [ concatMap (\slot -> halves (table + 4 * fromIntegral slot) 4) (M.keys slots)
@@ -1945,12 +1949,25 @@ arrayWrites analysis fact = case (factAddress fact, factSize fact, factValues fa
 data Target = RetainedTarget Word32 | OwnedTarget String Word32 deriving (Eq, Ord)
 
 buildProof :: Inputs -> Proof
-buildProof inputs =
+buildProof = buildProofWithin Nothing
+
+buildControllerDiagnostic :: [ControllerId] -> Inputs -> Proof
+buildControllerDiagnostic controllers = buildProofWithin (Just (S.fromList [index | ControllerId index <- controllers]))
+
+buildProofWithin :: Maybe (S.Set Word32) -> Inputs -> Proof
+buildProofWithin scope inputs =
   Proof
-    (null obligations && null refusals)
+    (scope == Nothing && null obligations && null refusals)
     ( object
         [ "schema" .= ("modal-dispatcher-closure-1" :: String)
-        , "admitted" .= (null obligations && null refusals)
+        , "admitted" .= (scope == Nothing && null obligations && null refusals)
+        , "controller_diagnostic"
+            .= fmap (\indices -> object
+              [ "controllers" .= S.toList indices
+              , "fallback_qualified" .= False
+              , "pending_fallback_obligations" .= (["entry routing and exact stock handoff, including flags and temporary stack lifetime"] :: [String])
+              , "conservative_residuals" .= ("unattributed escapes, computed accesses, initial-array and constant-coverage obligations remain" :: String)
+              ]) scope
         , "dispatcher"
             .= object
               [ "stock_entry" .= hex dispatcherEntry
@@ -1982,8 +1999,8 @@ buildProof inputs =
               ]
         , "callers"
             .= object
-              [ "sites" .= length callers
-              , "controllers" .= [object ["controller" .= controller, "sites" .= sites] | (controller, sites) <- M.toList siteCounts]
+              [ "sites" .= length scopedCallers
+              , "controllers" .= [object ["controller" .= controller, "sites" .= sites] | (controller, sites) <- M.toList siteCounts, active controller]
               ]
         , "caller_abi"
             .= object
@@ -1991,10 +2008,10 @@ buildProof inputs =
               , "registers" .= map (regName . Reg) [1, 2, 3, 12, 14]
               , "continuations"
                   .= [ continuationValue (continuation analysis site (Reg register))
-                     | (site, Branch _ True _) <- callers
+                     | (site, Branch _ True _) <- scopedCallers
                      , register <- [1, 2, 3, 12, 14]
                      ]
-              , "non_link_sites" .= [hex site | (site, Branch _ False _) <- callers]
+              , "non_link_sites" .= [hex site | (site, Branch _ False _) <- scopedCallers]
               , "residual_premises"
                   .= ( [ "all non-direct and alias entries"
                        , "NZCV and carry-dependent operand consumption"
@@ -2080,14 +2097,23 @@ buildProof inputs =
     , not (insideDispatcher site)
     ]
   callerResults = [(site, resolveValues analysis site (Reg 0) (instructionCond instruction) 3) | (site, instruction) <- callers]
+  active index = maybe True (S.member index) scope
+  scopedCallers =
+    [ caller
+    | caller@(site, _) <- callers
+    , case lookup site callerResults of
+        Just (Right values) -> any active values
+        _ -> True
+    ]
   callerObligations =
     concat
       [ case result of
-          Right values -> [CallerOutsideTables site value | value <- values, value >= controllerCount]
+          Right values -> [CallerOutsideTables site value | value <- values, value >= controllerCount, active value]
           Left (knowns, why) -> [CallerUnresolved site knowns why]
       | (site, result) <- callerResults
       ]
-  calledControllers = S.fromList [value | (_, Right values) <- callerResults, value <- values, value < controllerCount]
+  allCalledControllers = S.fromList [value | (_, Right values) <- callerResults, value <- values, value < controllerCount]
+  calledControllers = maybe allCalledControllers id scope
   siteCounts = M.fromListWith (+) [(value, 1 :: Int) | (_, Right values) <- callerResults, value <- values, value < controllerCount]
   arrayTracking =
     Tracking
@@ -2097,21 +2123,41 @@ buildProof inputs =
       }
   arraySites = materializations analysis bssStart (arraysEnd + 0x1000)
   arrayCensus = census analysis arrayTracking insideDispatcher arraySites
-  arrayOutcomes = concatMap (arrayWrites analysis) [fact | fact <- S.toList (censusFacts arrayCensus), factStore fact]
+  arrayOutcomeFacts =
+    [(fact, arrayWrites analysis fact) | fact <- S.toList (censusFacts arrayCensus), factStore fact]
+  arrayOutcomes =
+    filter relevantOutcome $
+      concat
+        [ outcomes
+        | (fact, outcomes) <- arrayOutcomeFacts
+        , maybe True (\address -> overlapsAdmitted address (factSize fact)) (factAddress fact)
+        ]
+  overlapsAdmitted address size = case scope of
+    Nothing -> True
+    Just indices -> any (\index -> any (\base -> toInteger address < toInteger (base + 2 * index + 2) && toInteger address + toInteger size > toInteger (base + 2 * index)) [stateCells, eventCells]) (S.toList indices)
+  relevantOutcome outcome = case outcome of
+    Right write -> active (arrayWriteController write)
+    Left (StoreValueUnresolved _ _ controller _ _) -> active controller
+    _ -> True
   writes = [w | Right w <- arrayOutcomes]
-  valuesOf kind controller = S.fromList [arrayWriteValue w | w <- writes, arrayWriteKind w == kind, arrayWriteController w == controller]
-  closureOver mem = [controllerClosure mem controller (valuesOf EventArray controller) (valuesOf StateArray controller) | controller <- S.toList calledControllers]
-  closures = closureOver memory
-  stockClosures = closureOver stockMemory
-  protectedSet = protect (closures ++ stockClosures)
-  tableLow = S.findMin (protectedEntries protectedSet) - 0x1000
-  tableHigh = S.findMax (protectedEntries protectedSet) + 0x1004
+  globalWrites = [write | (_, outcomes) <- arrayOutcomeFacts, Right write <- outcomes]
+  valuesOf kind controller = S.fromList [arrayWriteValue write | write <- globalWrites, arrayWriteKind write == kind, arrayWriteController write == controller]
+  closureOver indices mem = [controllerClosure mem controller (valuesOf EventArray controller) (valuesOf StateArray controller) | controller <- S.toList indices]
+  censusControllers = S.union allCalledControllers calledControllers
+  allClosures = closureOver censusControllers memory
+  allStockClosures = closureOver censusControllers stockMemory
+  closures = filter (active . controllerIndex) allClosures
+  stockClosures = filter (active . controllerIndex) allStockClosures
+  protectedSet = protect (maybe (S.fromList [0 .. controllerCount - 1]) id scope) (closures ++ stockClosures)
+  censusProtectedSet = protect (S.fromList [0 .. controllerCount - 1]) (allClosures ++ allStockClosures)
+  tableLow = S.findMin (protectedEntries censusProtectedSet) - 0x1000
+  tableHigh = S.findMax (protectedEntries censusProtectedSet) + 0x1004
   tableTracking =
     Tracking
       { trackingTracked = \value -> tableLow <= value && value < tableHigh
-      , trackingPointer = \value -> S.member (value .&. complement 1) (protectedObjects protectedSet)
+      , trackingPointer = \value -> S.member (value .&. complement 1) (protectedObjects censusProtectedSet)
       , trackingHit = \address size ->
-          any (`S.member` protectedEntries protectedSet) (takeWhile (< address + size) [address .&. complement 1, (address .&. complement 1) + 2 ..])
+          any (`S.member` protectedEntries censusProtectedSet) (takeWhile (< address + size) [address .&. complement 1, (address .&. complement 1) + 2 ..])
       }
   tableSites = materializations analysis tableLow tableHigh
   tableCensus = census analysis tableTracking insideDispatcher tableSites
@@ -2131,7 +2177,14 @@ buildProof inputs =
     | S.member (word .&. complement 1) (protectedObjects protectedSet) = Just "dispatcher table"
     | otherwise = Nothing
   tableObligations =
-    [TableStore (factSite fact) address | fact <- S.toList (censusFacts tableCensus), factStore fact, Just address <- [factAddress fact]]
+    [ TableStore (factSite fact) address
+    | fact <- S.toList (censusFacts tableCensus)
+    , factStore fact
+    , Just address <- [factAddress fact]
+    , case S.lookupGE (address .&. complement 1) (protectedEntries protectedSet) of
+        Just entry -> toInteger entry < toInteger address + toInteger (factSize fact)
+        Nothing -> False
+    ]
       ++ [ComputedStore (factSite fact) "dispatcher table" | fact <- S.toList (censusFacts tableCensus), factStore fact, factAddress fact == Nothing]
   classify controller target
     | target == 0 = Nothing
