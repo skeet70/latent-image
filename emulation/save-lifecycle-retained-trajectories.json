@@ -3,7 +3,10 @@
   "before_unload": [
     {
       "phase": "save-lifecycle",
-      "steps": [],
+      "steps": [
+        ["menu", 67, 56, 0],
+        ["menu", 1, 5, 2]
+      ],
       "save_lifecycle": {
         "image5": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin",
         "image6": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",

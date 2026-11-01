@@ -34,6 +34,7 @@ import Emulation.SegmentReceipt (SegmentReceipt (..), SegmentResult (..), elapse
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
 import Emulation.PreservationObservation
 import Emulation.ModalObservation
+import qualified Emulation.CaptureStream as CaptureJournal
 import qualified Emulation.SaveLifecycle as SaveLifecycle
 import Emulation.SaveLifecycleRun (runSaveLifecycle)
 import Emulation.UiTrajectory
@@ -360,34 +361,41 @@ observe emulator pulse = mapM $ \step -> do
                , "expected" .= [em, es, ec], "actual" .= [am, as, ac]
                , "matched" .= (MenuState am as ac == stepExpected step), "seconds" .= (ended - started) ])
 
-data LensPreparation = OpenLensMenu | FindLensRow | OpenLensSetting | SelectLensOn | CommitLensSetting | CloseLensMenu
+data LensPreparation = FindLensRow | OpenLensSetting | SelectLensOn | CommitLensSetting | CloseLensMenu
   deriving (Show)
 
-prepareLifecycleCapture :: Emulator -> IO Value
-prepareLifecycleCapture emulator = do
-  keys <- forM [OpenLensMenu,FindLensRow,OpenLensSetting,SelectLensOn,CommitLensSetting,CloseLensMenu] $ \step -> do
-    let key = case step of
-          OpenLensMenu -> "ok"
-          FindLensRow -> "cursor:down:20:64"
-          OpenLensSetting -> "right"
-          SelectLensOn -> "up"
-          CommitLensSetting -> "ok"
-          CloseLensMenu -> "back"
-    (pressed,MenuState menu setting cursor) <- pressStep emulator defaultKeyTiming key
-    case step of
-      FindLensRow -> require (cursor == 20) "shooting-menu row 20 was not reached"
-      OpenLensSetting -> require (setting == 0xa3) "SHOOT WITHOUT LENS setting was not opened"
-      SelectLensOn -> require (cursor == 0) "SHOOT WITHOUT LENS ON was not selected"
-      _ -> pure ()
-    pure (object ["step" .= show step,"pressed" .= pressed,"menu" .= [menu,setting,cursor]])
-  dialFirst <- emulatorModeDial emulator ModeDialProgram
-  first <- emulatorCapture emulator "lifecycle-pre-press-a"
-  dialSecond <- emulatorModeDial emulator ModeDialProgram
-  second <- emulatorCapture emulator "lifecycle-pre-press"
-  lens0 <- emulatorReadMemory emulator 0x009504d4 4
-  lens1 <- emulatorReadMemory emulator 0x00950508 4
-  pure (object ["keys" .= keys,"mode_dial" .= modeDialName ModeDialProgram
-    ,"dial_replies" .= [dialFirst,dialSecond],"captures" .= [first,second],"lens_words" .= map hexBytes [lens0,lens1]])
+prepareLifecycleCapture :: FilePath -> Emulator -> IO Value
+prepareLifecycleCapture output emulator =
+  bracket (CaptureJournal.openJournal (output </> "preparation.jsonl")) CaptureJournal.closeJournal $ \journal -> do
+    keys <- forM [FindLensRow,OpenLensSetting,SelectLensOn,CommitLensSetting,CloseLensMenu] $ \step -> do
+      let key = case step of
+            FindLensRow -> "cursor:down:20:64"
+            OpenLensSetting -> "right"
+            SelectLensOn -> "up"
+            CommitLensSetting -> "ok"
+            CloseLensMenu -> "back"
+      (pressed,actual@(MenuState menu setting cursor)) <- pressStep emulator defaultKeyTiming key
+      let record = object ["step" .= show step,"pressed" .= pressed,"menu" .= [menu,setting,cursor]]
+      CaptureJournal.note journal "menu-step" record
+      CaptureJournal.synchronizeJournal journal
+      case step of
+        FindLensRow -> require (cursor == 20) ("shooting-menu row 20 was not reached: " ++ show actual)
+        OpenLensSetting -> require (setting == 0xa3) "SHOOT WITHOUT LENS setting was not opened"
+        SelectLensOn -> require (cursor == 0) "SHOOT WITHOUT LENS ON was not selected"
+        _ -> pure ()
+      pure record
+    dialFirst <- emulatorModeDial emulator ModeDialProgram
+    first <- emulatorCapture emulator "lifecycle-pre-press-a"
+    CaptureJournal.note journal "pre-press-a" (object ["mode_dial" .= dialFirst,"capture" .= first])
+    CaptureJournal.synchronizeJournal journal
+    dialSecond <- emulatorModeDial emulator ModeDialProgram
+    second <- emulatorCapture emulator "lifecycle-pre-press"
+    CaptureJournal.note journal "pre-press" (object ["mode_dial" .= dialSecond,"capture" .= second])
+    CaptureJournal.synchronizeJournal journal
+    lens0 <- emulatorReadMemory emulator 0x009504d4 4
+    lens1 <- emulatorReadMemory emulator 0x00950508 4
+    pure (object ["keys" .= keys,"mode_dial" .= modeDialName ModeDialProgram
+      ,"dial_replies" .= [dialFirst,dialSecond],"captures" .= [first,second],"lens_words" .= map hexBytes [lens0,lens1]])
 
 hexAddress :: Word32 -> String
 hexAddress value = "0x" ++ replicate (8 - length digits) '0' ++ digits where digits = showHex value ""
@@ -1158,7 +1166,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         windows <- forM exported $ \(name, Address address, count) -> do
           bytes <- emulatorReadMemory emulator address count
           pure (object ["symbol" .= name,"address" .= hexAddress address,"length" .= count,"bytes" .= hexBytes bytes])
-        preparation <- prepareLifecycleCapture emulator
+        preparation <- prepareLifecycleCapture output emulator
         writePrivateBytes (output </> "preparation.json") (BL.toStrict (encode preparation) <> "\n")
         witness <- runSaveLifecycle emulator output source program
         observed <- readIORef (runnerObservations runner)

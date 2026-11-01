@@ -1052,6 +1052,7 @@ haskell_binary(
         ":watch-observation",
         ":modal-observation",
         ":ui-trajectory-lib",
+        ":capture-stream-lib",
         ":save-lifecycle-lib",
         ":save-lifecycle-run",
         ":segment-receipt-lib",

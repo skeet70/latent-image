@@ -2185,7 +2185,7 @@ The trajectory field `save_lifecycle` takes canonical `image5` and `image6` sour
 
 Both roles use `--unreviewed-relink` with the enforced allowlist and no override. The retained role omits `--ram-push-lifecycle`. A virtual-card lifecycle run requires an explicit trajectory; modal composition remains cardless. The viewer takes the emulator slot itself.
 
-Preparation opens SHOOT WITHOUT LENS through physical keys, requires shooting-menu cursor 20, setting `0xa3` and ON cursor 0, commits and closes it, then repeats the existing P-dial and pre-press capture sequence. The preparation receipt records the actual keys, menu states, captures and lens words. Capture uses the existing physical S1/S2 sequence of 8M/8M/4M/4M entered instructions followed by one 40M window.
+The ordinary trajectory first uses the existing packaged route's two physical MENU pulses, requiring menu/setting/cursor states `[67,56,0]` and `[1,5,2]`. Preparation then opens SHOOT WITHOUT LENS through physical keys, requires shooting-menu cursor 20, setting `0xa3` and ON cursor 0, commits and closes it, then repeats the existing P-dial and pre-press capture sequence. `preparation.jsonl` synchronizes each menu-step result before its assertion, and retains the pre-press dial/capture replies; `preparation.json` records the completed keys, menu states, captures and lens words. Capture uses the existing physical S1/S2 sequence of 8M/8M/4M/4M entered instructions followed by one 40M window.
 
 `--fujimod-run-document PATH` selects the declared run document and participates in the existing SDK/checkpoint input binding. A changed SDK or run document requires its matching checkpoint qualification. This option supplies an input document; it adds no peripheral behavior.
 
