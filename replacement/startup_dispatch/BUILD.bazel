@@ -1,0 +1,78 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "startup-dispatch-rust",
+    src = "src.rs",
+    crate_name = "xm1_startup_dispatch",
+    rustc_flags = ["-C", "jump-tables=no"],
+)
+
+xm1_rust_elf(
+    name = "startup-dispatch-image",
+    rust_staticlib = ":startup-dispatch-rust",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_startup_dispatch_entry",
+    link_script = "startup-dispatch.ld",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
+
+haskell_library(
+    name = "startup-dispatch-artifact",
+    srcs = [
+        "Replacement/StartupDispatch/Admission.hs",
+        "Replacement/StartupDispatch/Artifact.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "stage-startup-dispatch",
+    srcs = ["StageMain.hs"],
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+    ],
+    data = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":startup-dispatch-artifact",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "startup-dispatch-tests",
+    srcs = ["Tests.hs"],
+    args = [
+        "$(rootpath :startup-dispatch-image.bin)",
+        "$(rootpath :startup-dispatch-image.symbols)",
+    ],
+    data = [":startup-dispatch-image"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":startup-dispatch-artifact",
+        "//host:base",
+        "//host:bytestring",
+        "//host:update-container",
+    ],
+)
