@@ -41,6 +41,10 @@ path = "src/native_case_main.rs"
 name = "fujimod-xm1-startup-callers"
 path = "src/startup_callers.rs"
 
+[[bin]]
+name = "fujimod-xm1-kernel-install"
+path = "src/kernel_install.rs"
+
 # Compiles the schema-4 loader-prefix observer against an engine carrying
 # build-support/fujimod-scoped-watch.patch.
 [features]

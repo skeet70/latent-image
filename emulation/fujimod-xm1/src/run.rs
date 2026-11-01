@@ -151,6 +151,10 @@ pub fn memory_maps(document: &RunDocument) -> Result<Vec<factory::MemoryMap>, St
     Ok(graph(document)?.1.mappings)
 }
 
+pub fn memory_backings(document: &RunDocument) -> Result<Vec<factory::Ram>, String> {
+    Ok(graph(document)?.1.ram)
+}
+
 /// Construct an unexecuted strict board. Mirrors `fujimod_emulator::boot::open_prepared`
 /// with the catalog DAT identity check replaced by the caller's validation.
 pub fn open(document: &RunDocument, update: &ValidatedUpdate, boot_rom: &[u8]) -> Result<Session, String> {
