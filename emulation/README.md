@@ -2179,6 +2179,8 @@ This mechanism qualifies only the finite installation interval and the explicit 
 
 The lifecycle builder emits `save-lifecycle-program.json` with the actual linked entry and completion symbols and the complete uploaded runtime extent. `Emulation.SaveLifecycle` admits that metadata against the runtime bytes. The observer reads all three live publication words before capture and requires the selected retained or owned instructions.
 
+The retained media-permission lookup converts its nullable result into a nonzero `FrameContext` at the adapter boundary. Null still means no context. This type establishes no selected-count, backing or lifetime guarantee.
+
 The trajectory field `save_lifecycle` takes canonical `image5` and `image6` source paths and `program: "retained" | "owned"`. Select exactly one terminal before-unload segment with `--segments save-lifecycle`; this mode neither unloads nor accepts separate preservation, write-watch or forbidden-fetch claims. `save-lifecycle-retained-trajectories.json` selects the default package reference, and `save-lifecycle-owned-trajectories.json` selects the lifecycle variant. Both use ordinary post-install input, not a forced function entry.
 
 Both roles use `--unreviewed-relink` with the enforced allowlist and no override. The retained role omits `--ram-push-lifecycle`. A virtual-card lifecycle run requires an explicit trajectory; modal composition remains cardless. The viewer takes the emulator slot itself.

@@ -3,6 +3,7 @@
 #![allow(unexpected_cfgs)]
 
 use core::cmp::Ordering;
+use core::num::NonZeroUsize;
 
 /// `FUN_00e77168`'s slot bound: slots `0..=200`.
 pub const SLOT_BOUND: u32 = 0xc9;
@@ -125,11 +126,20 @@ impl FrameCommand {
     pub const ZERO: Self = FrameCommand(0);
 }
 
-/// The retained `FUN_00e87ad4(slot)` result, `word[0x0157dd3c] + slot * 0x326c`,
-/// captured at the stock use point.
+/// The nonzero retained `FUN_00e87ad4(slot)` result.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct FrameContext(pub(crate) usize);
+pub struct FrameContext(NonZeroUsize);
+
+impl FrameContext {
+    pub(crate) fn from_address(address: usize) -> Option<Self> {
+        NonZeroUsize::new(address).map(Self)
+    }
+
+    pub(crate) fn address(self) -> usize {
+        self.0.get()
+    }
+}
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
