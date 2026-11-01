@@ -117,13 +117,13 @@ fn removing_another_site_preserves_only_an_unconsumed_entry() {
     machine.run(10);
     assert_eq!(machine.instructions(), 0);
     assert_eq!(machine.traces.hits.len(), 1);
-    machine.traces.remove_site(&machine.session, Guest(0x1020)).unwrap();
+    machine.traces.remove_sites(&machine.session, &[Guest(0x1020)]).unwrap();
     machine.run(1);
     assert_eq!(machine.instructions(), 1);
     assert_eq!(machine.traces.hits.len(), 1);
     machine.run(1);
     assert_eq!(machine.instructions(), 2);
-    machine.traces.remove_site(&machine.session, Guest(0x1030)).unwrap();
+    machine.traces.remove_sites(&machine.session, &[Guest(0x1030)]).unwrap();
     machine.run(1);
     assert_eq!(machine.instructions(), 2);
     assert_eq!(machine.traces.hits.len(), 2);
@@ -240,7 +240,7 @@ fn rejected_site_removal_preserves_active_capture_observations() {
     let mut machine = machine(&[0xe2800001, 0xeafffffd]);
     machine.traces.arm(&machine.session, BTreeMap::from([(0x1000, "loop".into())])).unwrap();
     machine.traces.begin_capture_observation().unwrap();
-    assert!(machine.traces.remove_site(&machine.session, Guest(0x1000)).is_err());
+    assert!(machine.traces.remove_sites(&machine.session, &[Guest(0x1000)]).is_err());
     machine.run(3);
     machine.require_running().unwrap();
     let page = machine.traces.capture_observation_page(CaptureCursor::new(0)).unwrap();
