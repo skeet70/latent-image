@@ -119,6 +119,35 @@ main = do
   writeCardReceipts movedRoot True False
   coldCardMetadataChanged <- observe cardSpec (ReceiptDirectory movedRoot)
 
+  let nativeSpec = ObservationSpec [filePattern "results.json"] [] []
+      nativeCase name state = object
+        [ "id" .= (name :: T.Text)
+        , "status" .= (state :: T.Text)
+        , "mismatches" .= ([] :: [Value])
+        , "details" .= object ["registers" .= ([1, 2] :: [Int])] ]
+      a = nativeCase "a" "passed"
+      b = nativeCase "b" "passed"
+      c = nativeCase "c" "passed"
+      inserted = nativeCase "inserted" "passed"
+      changed = nativeCase "c" "failed"
+      nativeReceipt :: [Value] -> IO Observation
+      nativeReceipt cases = do
+        BL.writeFile (root </> "results.json") (encode (object
+          ["bank_mode" .= String "sd", "cases" .= cases]))
+        observe nativeSpec receipt
+  nativeOriginal <- nativeReceipt [a, b, c]
+  nativeStored <- either (\problem -> putStrLn problem >> exitFailure) pure
+    (decodeBaseline (encodeBaseline (Baseline "native-sd" "synthetic" root nativeOriginal)))
+  nativeInserted <- nativeReceipt [a, inserted, b, c]
+  nativeChanged <- nativeReceipt [a, inserted, changed]
+  nativeReordered <- nativeReceipt [c, a, b]
+  nativeEmpty <- nativeReceipt []
+  nativeMissingId <- nativeReceipt [object ["status" .= String "passed"]]
+  nativeDuplicate <- nativeReceipt [a, a]
+  let compareNative = compareNativeObservations (baselineFields nativeStored)
+      nativeDifferences = compareNative nativeChanged
+      caseField name = FieldName "results.json" (Just [Key "cases", Key name])
+
   outcomes <- sequence
     [ check "a stored baseline matches the run it was recorded from" (null (compareObservations (baselineFields stored) recorded))
     , check "unobserved files are not fields" (all ((/= "unobserved.log") . fieldFile . fieldName) recorded)
@@ -161,6 +190,21 @@ main = do
     , check "cold-restart card presence remains compared against historical fields"
         (map (renderFieldName . differenceField)
           (compareObservations (withoutExcluded cardSpec (baselineFields historicalCardBaseline)) coldCardMetadataChanged)
-          == ["cold-restart/e2e-cold-restart.json#/card/present"]) ]
+          == ["cold-restart/e2e-cold-restart.json#/card/present"])
+    , check "a middle native insertion reports only the added case"
+        (compareNative nativeInserted == Right [AbsentFromBaseline (caseField "inserted") inserted])
+    , check "native cases report additions, removals and exact changes independently"
+        (nativeDifferences == Right
+          [AbsentFromRun (caseField "b") b, Changed (caseField "c") c changed,
+           AbsentFromBaseline (caseField "inserted") inserted])
+    , check "native case ordering alone does not differ"
+        (compareNative nativeReordered == Right [])
+    , check "native duplicate identities are refused"
+        (case compareNative nativeDuplicate of Left _ -> True; Right _ -> False)
+    , check "native missing identities are refused"
+        (case compareNative nativeMissingId of Left _ -> True; Right _ -> False)
+    , check "removing every native case reports each removed case"
+        (compareNative nativeEmpty == Right
+          [AbsentFromRun (caseField "a") a, AbsentFromRun (caseField "b") b, AbsentFromRun (caseField "c") c]) ]
   unless (and outcomes) exitFailure
   putStrLn ("passed " ++ show (length outcomes) ++ " checks")

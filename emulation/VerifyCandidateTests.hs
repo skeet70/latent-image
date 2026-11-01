@@ -370,6 +370,36 @@ segmentedBaselineChecks tool = withWorkspace $ \root -> do
   check "a failed command leaves the segmented baseline unchanged"
     (failedExit == ExitFailure 1 && first == fifth && second == fifth)
 
+nativeBaselineChecks :: FilePath -> IO ()
+nativeBaselineChecks tool = withWorkspace $ \root -> do
+  let earlier = root </> "private-data/earlier"
+      original = earlier </> "receipts/native-sd"
+      current = earlier </> "receipts/current"
+      baselines = root </> "private-data/baselines"
+      output name = root </> ("private-data/" ++ name)
+      seed directory findings = do
+        createDirectoryIfMissing True directory
+        jsonFile (directory </> "results.json") (object
+          ["cases" .= [object ["id" .= String "same", "status" .= String "passed"]]])
+        writeFile (directory </> "findings.txt") findings
+  seed original "header\nsame: passed\n"
+  seed current "header\nnew explanation\nsame: passed\n"
+  jsonFile (earlier </> "report.json") (object ["routes" .= [object
+    ["route" .= String "native-sd", "seconds" .= (0 :: Double), "log" .= (earlier </> "synthetic.log")
+    , "exit_code" .= (0 :: Int)]]])
+  inherited <- getEnvironment
+  let run name extra = readCreateProcessWithExitCode ((proc tool
+        (["--routes", "native-sd", "--from-run", earlier, "--baselines", baselines, "--output", output name] ++ extra))
+        { cwd = Just root
+        , env = Just (("BUILD_WORKSPACE_DIRECTORY", root) : filter ((/= "BUILD_WORKSPACE_DIRECTORY") . fst) inherited) }) ""
+  (recordedExit, _, _) <- run "record" ["--record-baseline"]
+  check "a synthetic native receipt records" (recordedExit == ExitSuccess)
+  (changedExit, _, _) <- run "compare" ["--receipt", "native-sd=" ++ current]
+  check "changed findings fail native comparison" (changedExit == ExitFailure 1)
+  diff <- readFile (output "compare" </> "differences/native-sd.findings.diff")
+  check "native findings report the added line"
+    ("+new explanation" `elem` lines diff && " same: passed" `elem` lines diff)
+
 main :: IO ()
 main = do
   [toolArgument] <- getArgs
@@ -426,6 +456,7 @@ main = do
   check ("a null command exit does not record a baseline: " ++ show nullExit)
     (case nullExit of (ExitFailure _, Nothing) -> True; _ -> False)
   segmentedBaselineChecks tool
+  nativeBaselineChecks tool
   (replaceExit, before, after, secondReport) <- recordReplacement tool
   check ("a failed record reports failure and does not replace an existing baseline: " ++ show replaceExit)
     (replaceExit /= ExitSuccess && before == after && reportResult secondReport == Just "fail")

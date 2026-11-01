@@ -599,7 +599,14 @@ differenceJson difference =
         Changed {} -> "changed" :: T.Text
         AbsentFromRun {} -> "absent-from-run"
         AbsentFromBaseline {} -> "absent-from-baseline"
-   in object ["field" .= renderFieldName (differenceField difference), "kind" .= kind, "baseline" .= expected, "run" .= actual]
+      caseKind = case differenceField difference of
+        FieldName "results.json" (Just [Key "cases", Key _]) -> case difference of
+          Changed {} -> Just ("changed" :: T.Text)
+          AbsentFromRun {} -> Just "removed"
+          AbsentFromBaseline {} -> Just "added"
+        _ -> Nothing
+   in object (["field" .= renderFieldName (differenceField difference), "kind" .= kind, "baseline" .= expected, "run" .= actual]
+     ++ maybe [] (\value -> ["case_change" .= value]) caseKind)
 
 outcomeJson :: Outcome -> Value
 outcomeJson outcome = object
@@ -724,9 +731,37 @@ judge judging route execution = do
                 case parsed of
                   Left problem -> pure (outcome "fail" (Just ("unreadable baseline: " ++ problem)) [])
                   Right baseline -> do
-                    let differences = compareObservations (withoutExcluded spec (baselineFields baseline)) observed
-                        passed = null differences && not (isJust failedRun)
-                    pure (outcome (if passed then "pass" else "fail") failedRun differences)
+                    let expected = withoutExcluded spec (baselineFields baseline)
+                        comparison = if routeHost route == NativeSuite
+                          then compareNativeObservations expected observed
+                          else Right (compareObservations expected observed)
+                    case comparison of
+                      Left problem -> pure (outcome "fail" (Just problem) [])
+                      Right differences -> do
+                        when (routeHost route == NativeSuite && any ((== FieldName "findings.txt" Nothing) . differenceField) differences) $
+                          writeFindingsDiff judging route baseline receipt
+                        let passed = null differences && not (isJust failedRun)
+                        pure (outcome (if passed then "pass" else "fail") failedRun differences)
+
+writeFindingsDiff :: Judging -> Route -> Baseline -> FilePath -> IO ()
+writeFindingsDiff judging route baseline receipt = do
+  let spec = ObservationSpec [filePattern "findings.txt"] [] []
+      source = baselineRecordedFrom baseline
+      expected = [field | field <- baselineFields baseline, fieldName field == FieldName "findings.txt" Nothing]
+      directory = judgingOutput judging </> "differences"
+  original <- observe spec (ReceiptDirectory source)
+  report <- if null expected || original /= expected
+    then pure ("Line diff unavailable: recorded findings.txt is missing or no longer matches the baseline at " ++ source ++ "\n")
+    else do
+      (code, out, err) <- readProcessWithExitCode "diff"
+        ["-u", "--label", "baseline/findings.txt", "--label", "run/findings.txt", "--",
+         source </> "findings.txt", receipt </> "findings.txt"] ""
+      pure $ case code of
+        ExitSuccess -> out
+        ExitFailure 1 -> out
+        _ -> "Line diff unavailable: " ++ err
+  createDirectoryIfMissing True directory
+  writeFile (directory </> (routeName route ++ ".findings.diff")) report
 
 -- | Removes what a passing route staged beside its observed files: its viewer
 -- runtime, native build directory, native case directories and updater

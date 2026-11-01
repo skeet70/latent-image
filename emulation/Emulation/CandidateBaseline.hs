@@ -24,6 +24,7 @@ module Emulation.CandidateBaseline
   , Difference (..)
   , differenceField
   , compareObservations
+  , compareNativeObservations
   , renderFieldName
   , Baseline (..)
   , encodeBaseline
@@ -39,7 +40,7 @@ import Data.Aeson.Types (Parser, parseEither, withArray, withObject, (.:))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
-import Data.List (isSuffixOf, sort, sortOn, stripPrefix)
+import Data.List (groupBy, isSuffixOf, sort, sortOn, stripPrefix)
 import Data.Scientific (toBoundedInteger)
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -232,6 +233,55 @@ compareObservations baseline observed = go (sortOn fieldName baseline) (sortOn f
          | otherwise -> Changed name expected actual : go lefts rights
       LT -> AbsentFromRun name expected : go lefts right
       GT -> AbsentFromBaseline name' actual : go left rights
+
+newtype NativeCaseId = NativeCaseId T.Text
+  deriving (Eq, Ord)
+
+-- | Aligns native cases by id, including baselines recorded with positional pointers.
+compareNativeObservations :: Observation -> Observation -> Either String [Difference]
+compareNativeObservations baseline observed =
+  compareObservations <$> nativeCases baseline <*> nativeCases observed
+
+nativeCases :: Observation -> Either String Observation
+nativeCases fields = do
+  cases <- traverse oneCase grouped
+  let ordered = sortOn fst cases
+  unless (all ((== 1) . length) (groupBy (\a b -> fst a == fst b) ordered))
+    (Left "duplicate native case id")
+  pure (other ++ map snd ordered)
+  where
+    caseFields =
+      [ (index, (pointer, value))
+      | Field (FieldName "results.json" (Just (Key "cases" : Index index : pointer))) value <- fields ]
+    grouped = groupBy (\a b -> fst a == fst b) (sortOn fst caseFields)
+    other = [field | field <- fields, not (isCaseField field)]
+    isCaseField (Field (FieldName "results.json" (Just (Key "cases" : Index _ : _))) _) = True
+    isCaseField (Field (FieldName "results.json" (Just [Key "cases"])) (Array items)) = V.null items
+    isCaseField _ = False
+    oneCase entries = do
+      let leaves = map snd entries
+      identity <- case [value | ([Key "id"], value) <- leaves] of
+        [String name] | not (T.null name) -> Right (NativeCaseId name)
+        _ -> Left "native case requires one nonempty string id"
+      value <- assemble leaves
+      let NativeCaseId name = identity
+      pure (identity, Field (FieldName "results.json" (Just [Key "cases", Key name])) value)
+    assemble [([], value)] = Right value
+    assemble leaves = do
+      unless (all (not . null . fst) leaves) (Left "overlapping native case fields")
+      let children = groupBy (\a b -> fst a == fst b)
+            (sortOn fst [(segment, (rest, value)) | (segment : rest, value) <- leaves])
+      values <- traverse (\entries -> case entries of
+        (segment, _) : _ -> (,) segment <$> assemble (map snd entries)
+        [] -> Left "empty native case field group") children
+      case values of
+        (Key _, _) : _ | all isKey values ->
+          Right (Object (KM.fromList [(K.fromText key, value) | (Key key, value) <- values]))
+        (Index _, _) : _ | map fst values == map Index [0 .. length values - 1] ->
+          Right (Array (V.fromList (map snd values)))
+        _ -> Left "invalid native case field tree"
+    isKey (Key _, _) = True
+    isKey _ = False
 
 renderFieldName :: FieldName -> T.Text
 renderFieldName (FieldName file Nothing) = T.pack file
