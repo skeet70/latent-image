@@ -321,7 +321,7 @@ fn validate_prelude(state: &WatchState, start: &Context, incoming: &Context) -> 
     }
     require(fetches.next().is_none() && selector && magic, "critical natural prelude evidence incomplete")
 }
-fn source_bindings(machine: &Machine, contract: &Contract) -> Result<(), String> {
+fn source_bindings(machine: &Machine, runner: &Runner<'_>, contract: &Contract) -> Result<(), String> {
     require(machine.read(CARRIER.0, contract.carrier.len())? == contract.carrier
         && machine.read(WRAPPER.0, contract.wrapper.len())? == contract.wrapper, "critical carrier or wrapper source differs")?;
     let mut expected_pair = contract.original_pair.clone();
@@ -334,16 +334,23 @@ fn source_bindings(machine: &Machine, contract: &Contract) -> Result<(), String>
         }
     }
     require(machine.read(PAIR.0, expected_pair.len())? == expected_pair, "critical original or branch-patched pair differs")?;
+    let initializer = runner.contract.initializer.as_ref().ok_or("critical initializer absent")?;
+    let loader_entry = runner.contract.entry.0.to_le_bytes();
+    let displacement = i64::from(initializer.entry.0) - (0xd0aac + 8);
+    let initializer_call = (0xeb00_0000_u32 | (((displacement >> 2) as u32) & 0x00ff_ffff)).to_le_bytes();
     for (extent, canonical) in [(LOADER_A, &contract.loader_a), (LOADER_B, &contract.loader_b)] {
         for (start, end) in immutable_loader_spans(extent.0, extent.1) {
             let actual = machine.read(start, (end - start) as usize)?;
             for (offset, &byte) in actual.iter().enumerate() {
                 let address = start + offset as u64;
-                let replaced = contract.role == Role::Owned && [REPLACED[0], REPLACED[1], REPLACED[2],
-                    (0xd0aac, 0xd0ab0), LOADER_A_COMPLETION, LOADER_A_LITERAL]
-                    .iter().any(|&(low, high)| (low..high).contains(&address));
-                require(replaced || byte == canonical[(address - extent.0) as usize],
-                    "critical immutable loader source bytes differ")?;
+                let expected = match address {
+                    0xd000c..=0xd000f => loader_entry[(address - 0xd000c) as usize],
+                    0xd0aac..=0xd0aaf => initializer_call[(address - 0xd0aac) as usize],
+                    _ => canonical[(address - extent.0) as usize],
+                };
+                if byte != expected {
+                    return Err(format!("critical immutable loader source bytes differ at {address:#x}"));
+                }
             }
         }
     }
@@ -435,7 +442,7 @@ pub(in crate::peer_witness::loader) fn observe(machine: &mut Machine, runner: &R
     let outcome = stop(machine, ENTER).and_then(|incoming| {
         require(incoming.sp.0 == 0x400f33a8 && incoming.lr.0 == ENTRY_RETURN && incoming.cpsr.0 & 0xdf == 0xd3
             && incoming.tcm == receipt.prelude_start.tcm, "critical natural entry context differs")?;
-        source_bindings(machine, contract)?;
+        source_bindings(machine, runner, contract)?;
         let state = capture(&prelude)?;
         validate_prelude(&state, &receipt.prelude_start, &incoming)?;
         receipt.resources = resources(machine, runner, None)?;
@@ -482,7 +489,7 @@ pub(in crate::peer_witness::loader) fn observe(machine: &mut Machine, runner: &R
     let mut continuation = begin(machine, runner, Phase::Transition, None)?;
     let outcome = stop(machine, CALLER_RETURN).and_then(|returned| {
         receipt.returned = Some(returned);
-        source_bindings(machine, contract)?;
+        source_bindings(machine, runner, contract)?;
         aliases(machine, runner, &resources(machine, runner, None)?, &mut receipt.aliases)?;
         let caller_frame = resource(machine, runner, CALLER_FRAME)?;
         aliases(machine, runner, std::slice::from_ref(&caller_frame), &mut receipt.aliases)?;
