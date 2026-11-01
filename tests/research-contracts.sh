@@ -17,11 +17,22 @@ for fuji_af_pair in sources:sources camera:camera firmware:firmware memory-map:m
   fi
 done
 
-"$fuji_af_jq" -s '.' docs/evidence.jsonl > "$TEST_TMPDIR/evidence.json"
 "$fuji_af_jq" -n --arg schema "file://$PWD/schemas/evidence.schema.json" \
-  '{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"array","items":{"$ref":$schema}}' \
+  '{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"array","minItems":1,"items":{"$ref":$schema}}' \
   > "$TEST_TMPDIR/evidence-array.schema.json"
-"$fuji_af_schema_checker" --schemafile "$TEST_TMPDIR/evidence-array.schema.json" "$TEST_TMPDIR/evidence.json"
+fuji_af_check_evidence_ledger() {
+  "$fuji_af_jq" -s '.' "$1" > "$TEST_TMPDIR/evidence.json" &&
+    "$fuji_af_schema_checker" --schemafile "$TEST_TMPDIR/evidence-array.schema.json" "$TEST_TMPDIR/evidence.json"
+}
+fuji_af_check_evidence_ledger docs/evidence.jsonl
+
+for fuji_af_empty_ledger in '' $' \t\n\n'; do
+  printf '%s' "$fuji_af_empty_ledger" > "$TEST_TMPDIR/empty-evidence.jsonl"
+  if fuji_af_check_evidence_ledger "$TEST_TMPDIR/empty-evidence.jsonl"; then
+    echo 'Record-less evidence ledger incorrectly accepted' >&2
+    exit 1
+  fi
+done
 
 "$fuji_af_jq" '.sources[0].revision = null' manifests/sources.json > "$TEST_TMPDIR/invalid.json"
 if "$fuji_af_schema_checker" --schemafile schemas/sources.schema.json "$TEST_TMPDIR/invalid.json"; then
