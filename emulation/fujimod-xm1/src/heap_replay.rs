@@ -130,7 +130,8 @@ fn prepare(arguments: &Arguments) -> Result<(Inputs, Tape), Failure> {
     let symbols = symbols(&symbol_bytes, payload.len())?;
     let payload_digest = Digest(sha256(&payload));
     let symbols_digest = Digest(sha256(&symbol_bytes));
-    let replay_producer = heap_accesses::digest_file(&std::env::current_exe()?, LIMIT).map_err(|_| Failure::InputIdentity)?;
+    let limit = heap_accesses::ByteLimit::new(LIMIT).ok_or(Failure::Evidence)?;
+    let replay_producer = heap_accesses::digest_file(&std::env::current_exe()?, limit).map_err(|_| Failure::InputIdentity)?;
     let mut images = Vec::with_capacity(3);
     for (path, base, wanted) in [
         ("decode/loader-40000.bin", 0x00040000, "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"),

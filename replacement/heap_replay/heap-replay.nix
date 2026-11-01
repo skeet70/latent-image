@@ -18,9 +18,11 @@ in
 pkgs.stdenv.mkDerivation {
   pname = "xm1-heap-replay-${admittedBackend}";
   version = "0.1.0";
-  src = pkgs.lib.fileset.toSource {
-    root = ./.;
-    fileset = pkgs.lib.fileset.unions [ ./Cargo.toml ./Cargo.lock ./src.rs ./observations.rs ];
+  src = builtins.path {
+    path = ./.;
+    name = "xm1-heap-replay-source";
+    filter = path: type: type == "directory" || builtins.elem (builtins.baseNameOf path)
+      [ "Cargo.toml" "Cargo.lock" "src.rs" "observations.rs" ];
   };
   nativeBuildInputs = [ pkgs.cargo toolchain ];
   doCheck = false;
