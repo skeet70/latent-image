@@ -745,6 +745,23 @@ prune (RunDirectory run) outcome = do
     directory <- doesDirectoryExist path
     when directory (removeDirectoryRecursive path)
 
+prunePassedCases :: Outcome -> IO ()
+prunePassedCases outcome = when (routeHost (outcomeRoute outcome) == NativeSuite) $ do
+  let receipt = outcomeReceipt outcome
+  present <- doesFileExist (receipt </> "results.json")
+  when present $ do
+    parsed <- eitherDecodeStrict' <$> B.readFile (receipt </> "results.json")
+    let passedIds = either (const []) id (parsed >>= parseEither (withObject "results" $ \o -> do
+          cases <- o .: "cases"
+          statuses <- forM cases $ \c -> withObject "case" (\v -> (,) <$> v .: "id" <*> v .: "status") c
+          pure [caseId | (caseId, status) <- statuses, status == ("passed" :: T.Text)]))
+    forM_ passedIds $ \caseId -> when (safeCaseId caseId) $ do
+      let path = receipt </> T.unpack caseId
+      directory <- doesDirectoryExist path
+      when directory (removeDirectoryRecursive path)
+  where
+    safeCaseId caseId = not (T.null caseId) && T.all (\c -> c `elem` ("-_." :: String) || c `elem` ['a' .. 'z'] || c `elem` ['A' .. 'Z'] || c `elem` ['0' .. '9']) caseId && caseId `notElem` [".", ".."]
+
 main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
@@ -797,8 +814,10 @@ main = do
         pure records
       else readReleaseObservationReceipt receipt
     pure outcome {outcomeIncompleteReleases = observations}
-  forM_ outcomes $ \outcome -> when (outcomeRoute outcome `elem` toExecute && outcomeResult outcome `elem` ["pass", "recorded", "reference"]) $
-    prune (RunDirectory run) outcome
+  forM_ outcomes $ \outcome -> when (outcomeRoute outcome `elem` toExecute) $
+    if outcomeResult outcome `elem` ["pass", "recorded", "reference"]
+      then prune (RunDirectory run) outcome
+      else prunePassedCases outcome
   forM_ outcomes $ \outcome -> unless (null (outcomeDifferences outcome)) $ do
     createDirectoryIfMissing True (run </> "differences")
     BL.writeFile (run </> "differences" </> (routeName (outcomeRoute outcome) ++ ".json"))
