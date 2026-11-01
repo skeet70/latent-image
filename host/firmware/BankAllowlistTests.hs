@@ -1,9 +1,7 @@
 -- | bank-allowlist-tests ALLOWLIST CHECKER ELF_00C20000 ELF_00C21F88
 --
--- The ELFs are //host/firmware:bank-elf-*, the relink script's output for the
--- current bank sources. Each synthetic fixture is the 0x00c40000 ELF with one
--- word replaced at a site located by symbol, so it differs from a clean build
--- in exactly the violation it names.
+-- The ELFs are //host/firmware:bank-elf-* outputs for the current bank sources.
+-- Fixtures replace function words in the 0x00c40000 ELF.
 module Main (main) where
 
 import A32 (Forbidden (..), Reg (..))
@@ -11,7 +9,7 @@ import qualified A32
 import ArmElf
 import BankAllowlist
 import Control.Monad (forM_, unless)
-import Data.Bits (shiftR, (.&.), (.|.))
+import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import Data.List (find)
 import Data.Word (Word32)
@@ -142,9 +140,10 @@ main = do
         {declarations = declarations allowlist ++
           [Declaration "rb_assert_one" StoreAccess (Index (StockAddress stateRoot)) "synthetic indexed state store"
           ,Declaration "rb_assert_one" BranchAccess (Deref (Deref (Index (StockAddress actionRoot)))) "synthetic captured action slot"]}
+      wide opcode half = opcode .|. ((half .&. 0xf000) `shiftL` 4) .|. (half .&. 0xfff)
       completeProgram rootInstruction middle root tailInstruction =
-        functionProgram ([0xe59f2010,rootInstruction] ++ middle ++ [0xea000000,root]
-          ++ replicate (fromIntegral ((snd (function "rb_assert_one") - statusFunction) `div` 4) - 8) 0xe320f000
+        functionProgram ([wide 0xe3002000 root,wide 0xe3402000 (root `shiftR` 16),rootInstruction] ++ middle
+          ++ replicate (fromIntegral ((snd (function "rb_assert_one") - statusFunction) `div` 4) - 7) 0xe320f000
           ++ [tailInstruction])
       storeProgram rootInstruction root = completeProgram rootInstruction [0xe1a01080,0xe0811002,0xe1c130b0] root 0xe12fff1e
       callProgram rootInstruction root = completeProgram rootInstruction [0xe7922100,0xe1a01723,0xe7910002] root 0xe12fff10
