@@ -492,18 +492,6 @@ haskell_library(
     ],
 )
 
-haskell_binary(
-    name = "interface-initializer-consumer-regression",
-    srcs = ["InterfaceInitializerConsumerRegression.hs"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    deps = [
-        ":interface-initializer-lib",
-        "//host:aeson",
-        "//host:base",
-        "//host:bytestring",
-    ],
-)
-
 haskell_library(
     name = "primary-initializer-lib",
     srcs = ["Emulation/PrimaryInitializer.hs"],
