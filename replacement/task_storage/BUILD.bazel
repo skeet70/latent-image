@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
@@ -55,5 +55,17 @@ haskell_binary(
         "//host:base",
         "//host:bytestring",
         "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "task-storage-artifact-tests",
+    srcs = ["ArtifactTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":task-storage-artifact",
+        "//host:base",
+        "//host:bytestring",
+        "//host:update-container",
     ],
 )
