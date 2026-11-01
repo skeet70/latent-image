@@ -9,7 +9,7 @@ use fujimod_xm1::trace::Hit;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::{Path, PathBuf}, process::ExitCode};
 
-const USAGE: &str = "fujimod-xm1-startup-callers --run RUN --update DAT --boot-rom ROM --analysis ROOT --output DIR";
+const USAGE: &str = "fujimod-xm1-startup-callers --run RUN --update DAT --boot-rom ROM --analysis ROOT --output DIR [--primary-image BIN [--primary-leaf-reads]]";
 const LIMIT: usize = 4096;
 const SOURCES: [(&str, u32, &str); 7] = [
     ("decode/boot-40048.bin", 0, "c2da900dcd3f193b05b5ae968dfcb87723571462eafd84c0fed8467f66f7dff3"),
@@ -39,6 +39,9 @@ struct Identity { run: Digest, update: Digest, boot_rom: Digest, observer: Diges
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum PrimaryRole { Retained, OwnedV10 }
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum LeafDataReads { Disabled, Observe }
 #[derive(Serialize)]
 struct PrimaryImage { role: PrimaryRole, image_sha256: Option<Digest> }
 #[derive(Deserialize)]
@@ -51,14 +54,14 @@ struct WatchAddress(u64);
 #[serde(transparent)]
 struct WatchLength(u64);
 #[derive(Deserialize)]
-struct Record { source: Access, address: WatchAddress, physical: WatchAddress, size: WatchLength, core: Option<usize> }
+struct Record { source: Access, address: WatchAddress, physical: WatchAddress, size: WatchLength, core: Option<usize>, pc: Option<WatchAddress> }
 #[derive(Serialize)]
-struct CodeConfinement { fetches: [usize; 2], word_samples: [usize; 2], invocations: [usize; 2] }
+struct CodeConfinement { fetches: [usize; 2], word_samples: [usize; 2], invocations: [usize; 2], data_reads: [usize; 2] }
 
 fn confinement(state: &serde_json::Value, hits: &[Hit]) -> Result<CodeConfinement, String> {
     let rows = state.get("records").and_then(serde_json::Value::as_array).ok_or("watch records are missing")?;
     let mut observed = false;
-    let mut counts = CodeConfinement { fetches: [0; 2], word_samples: [0; 2], invocations: [0; 2] };
+    let mut counts = CodeConfinement { fetches: [0; 2], word_samples: [0; 2], invocations: [0; 2], data_reads: [0; 2] };
     for raw in rows {
         let row = Record::deserialize(raw).map_err(|error| error.to_string())?;
         if row.physical.0 >= 0x409ac || row.physical.0.checked_add(row.size.0).ok_or("watch span overflow")? <= 0x40430 { continue; }
@@ -67,6 +70,10 @@ fn confinement(state: &serde_json::Value, hits: &[Hit]) -> Result<CodeConfinemen
             let core = row.core.filter(|core| *core < 2).ok_or("leaf fetch has invalid core")?;
             counts.fetches[core] += 1;
             observed = true;
+        } else if matches!(row.source, Access::CpuRead) {
+            let core = row.core.filter(|core| *core < 2).ok_or("leaf data read has invalid core")?;
+            if !row.pc.is_some_and(|pc| u32::try_from(pc.0).is_ok()) { return Err("leaf data read lacks a valid reader PC".into()); }
+            counts.data_reads[core] += 1;
         } else if observed && matches!(row.source, Access::CpuWrite | Access::HostWrite | Access::ModelBusWrite) {
             return Err("primary image write after its first observed fetch".into());
         }
@@ -90,6 +97,7 @@ struct Receipt<'a> {
     machine_failure: Option<&'a str>, instructions: u64, identity: &'a Identity,
     checkpoint_sha256: Digest, checkpoint_reused: bool, sites: &'a BTreeMap<u32, String>,
     primary: PrimaryImage, primary_code: Option<Result<CodeConfinement, String>>,
+    primary_leaf_reads: LeafDataReads,
     hits: &'a [Hit], watch: Result<WatchSummary, String>, watch_end_error: Option<String>,
     final_menu: Result<Option<[u32; 3]>, String>,
 }
@@ -172,9 +180,15 @@ fn route(machine: &mut Machine) -> Result<Outcome, String> {
 
 fn drive() -> Result<(), String> {
     let mut arguments = BTreeMap::new();
+    let mut leaf_data_reads = LeafDataReads::Disabled;
     let mut args = std::env::args_os().skip(1);
     while let Some(flag) = args.next() {
         let flag = flag.into_string().map_err(|_| USAGE)?;
+        if flag == "--primary-leaf-reads" {
+            if matches!(leaf_data_reads, LeafDataReads::Observe) { return Err(USAGE.into()); }
+            leaf_data_reads = LeafDataReads::Observe;
+            continue;
+        }
         if !["--run", "--update", "--boot-rom", "--analysis", "--output", "--primary-image"].contains(&flag.as_str())
             || arguments.insert(flag, PathBuf::from(args.next().ok_or(USAGE)?)).is_some() { return Err(USAGE.into()); }
     }
@@ -211,6 +225,9 @@ fn drive() -> Result<(), String> {
         },
         _ => return Err("primary image argument does not match the selected DAT role".into()),
     };
+    if matches!(leaf_data_reads, LeafDataReads::Observe) && !matches!(primary.role, PrimaryRole::OwnedV10) {
+        return Err("--primary-leaf-reads requires the owned primary image".into());
+    }
     fujimod_emulator_exr2_board::register_board_builder();
     fujimod_emulator_models::register();
     let document = RunDocument::parse(&run_bytes)?;
@@ -245,7 +262,12 @@ fn drive() -> Result<(), String> {
         (0x16d7370,0x16d7374), (0x16d8284,0x16d8288), (0x16d7d20,0x16d7d24)].map(|(start,end)| WatchRange {
         start, end, kinds: WatchKinds::WRITES,
     }).to_vec();
-    classes.push(WatchRange { start: 0x40430, end: 0x409ac, kinds: WatchKinds::CPU_FETCH.union(WatchKinds::WRITES) });
+    let leaf_kinds = WatchKinds::CPU_FETCH.union(WatchKinds::WRITES);
+    let leaf_kinds = match leaf_data_reads {
+        LeafDataReads::Disabled => leaf_kinds,
+        LeafDataReads::Observe => leaf_kinds.union(WatchKinds::CPU_READ),
+    };
+    classes.push(WatchRange { start: 0x40430, end: 0x409ac, kinds: leaf_kinds });
     if matches!(primary.role, PrimaryRole::OwnedV10) {
         classes.extend([(0x61c008,0x61c00c),(0x40010,0x40014),(0xd0010,0xd0014),(0x7caf3c,0x7caf40)]
             .map(|(start,end)| WatchRange { start, end, kinds: WatchKinds::CPU_READ }));
@@ -270,7 +292,7 @@ fn drive() -> Result<(), String> {
     let receipt = Receipt { schema: 1, scope: "one-canonical-natural-reset-to-menu-route-only", outcome: result,
         error: outcome.as_ref().err().map(String::as_str), machine_failure: machine.failure.as_deref(), instructions: machine.instructions(),
         identity: &identity, checkpoint_sha256: Digest(sha256(&snapshot)), checkpoint_reused: true, sites: &sites,
-        primary, primary_code,
+        primary, primary_code, primary_leaf_reads: leaf_data_reads,
         hits: &machine.traces.hits, watch: summary, watch_end_error, final_menu };
     write(&output.join("startup-callers.json"), &serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?)?;
     match result {
@@ -301,5 +323,16 @@ mod tests {
         let alias = json!({"records":[{"source":"cpu-fetch","core":0,"address":0x40040430,"physical":0x40430,"size":4}]});
         assert!(confinement(&canonical, std::slice::from_ref(&hit)).is_ok());
         assert!(confinement(&alias, std::slice::from_ref(&hit)).is_err());
+        let mut reads = json!({"records":[
+            {"source":"cpu-fetch","core":0,"address":0x40430,"physical":0x40430,"size":4},
+            {"source":"cpu-read","core":0,"pc":0x40488,"address":0x40564,"physical":0x40564,"size":4},
+            {"source":"cpu-read","core":1,"pc":0xd090c,"address":0x40040564,"physical":0x40564,"size":4}
+        ]});
+        assert_eq!(confinement(&reads, std::slice::from_ref(&hit)).unwrap().data_reads, [1, 1]);
+        reads["records"][1]["pc"] = serde_json::Value::Null;
+        assert!(confinement(&reads, std::slice::from_ref(&hit)).is_err());
+        reads["records"][1]["pc"] = json!(0x40488);
+        reads["records"][1]["core"] = serde_json::Value::Null;
+        assert!(confinement(&reads, std::slice::from_ref(&hit)).is_err());
     }
 }
