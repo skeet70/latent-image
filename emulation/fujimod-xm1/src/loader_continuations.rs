@@ -92,7 +92,7 @@ struct Epoch {start:Count,end:Count,enabled:bool,refused:bool,teardown_error:Opt
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all="kebab-case")]
 enum Key { Up, Ok, Menu }
-impl Key {fn guest(self)->RouteKey{match self{Self::Up=>RouteKey::Up,Self::Ok=>RouteKey::Ok,Self::Menu=>RouteKey::Menu}}}
+impl Key {fn guest(self)->RouteKey{match self{Self::Up=>RouteKey::Up,Self::Ok|Self::Menu=>RouteKey::Ok}}}
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all="kebab-case")]
 enum ReleaseOutcome { Debounced, Deadline }
@@ -264,7 +264,7 @@ fn drive()->Result<(),String>{
         if identity.run.as_str()!="efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"||identity.update.as_str()!="43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"||identity.rom.as_str()!="4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be"{return Err("observer inputs differ from the canonical reset route".into());}
         persist(&output.join("inputs.json"),&identity)?;let calls=startup_calls(&catalog)?;persist(&output.join("source-graph.json"),&calls)?;
         fujimod_emulator_exr2_board::register_board_builder();fujimod_emulator_models::register();let document=RunDocument::parse(&run_bytes)?;let maps=run::memory_maps(&document)?;
-        let session=run::open(&document,&ValidatedUpdate(update),&rom)?;session.board.set_execution_policy(document.execution_policy.into())?;let mut machine=Machine::new(document,session)?;
+        let mut session=run::open(&document,&ValidatedUpdate(update),&rom)?;session.board.set_execution_policy(document.execution_policy.into())?;let mut machine=Machine::new(document,session)?;
         machine.disarm()?;let checkpoint=machine.session.checkpoint(None)?.export()?;write(&output.join("reset.fujimod"),&checkpoint)?;let restored=machine.session.import_snapshot(&checkpoint)?;machine.session.restore(&restored)?;machine.rearm()?;
         if machine.instructions()!=0{return Err("saved reset checkpoint is not preexecution".into());}
         let permanent=sites(&calls);machine.traces.bound_full_registers(NonZeroUsize::new(TRACE_LIMIT).ok_or("zero trace bound")?);machine.traces.stop_labels=permanent.values().cloned().chain(["temporary-boundary".into()]).collect();machine.traces.arm(&machine.session,permanent.clone())?;
