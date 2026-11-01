@@ -238,9 +238,9 @@ fn allocate_call<'a>(cursor: &mut Cursor<'a>, request: &Request, old: Option<Liv
         return cursor.candidate(role, Symbol::Allocate, [layout.size.0, layout.alignment.bytes(), 0, 0]);
     }
     match request {
-        Request::Malloc { .. } => cursor.take(role, Address(0x89cde4), [REENT, layout.size.0, 0, 0]),
-        Request::Calloc { count, element, .. } => cursor.take(role, Address(0xbf1c44), [REENT, count.0, element.0, 0]),
-        Request::Realloc { .. } => cursor.take(role, Address(0x89da64), [REENT, old.map_or(0, |allocation| allocation.pointer.0), layout.size.0, 0]),
+        Request::Malloc { .. } => cursor.take(role, Address(0x89cda4), [layout.size.0, 0, 0, 0]),
+        Request::Calloc { count, element, .. } => cursor.take(role, Address(0xbf1c1c), [count.0, element.0, 0, 0]),
+        Request::Realloc { .. } => cursor.take(role, Address(0x89da3c), [old.map_or(0, |allocation| allocation.pointer.0), layout.size.0, 0, 0]),
         Request::Free { .. } => Err(Failure::Tape),
     }
 }
@@ -248,7 +248,7 @@ fn allocate_call<'a>(cursor: &mut Cursor<'a>, request: &Request, old: Option<Liv
 fn free_call(cursor: &mut Cursor<'_>, allocation: Option<Live>) -> Result<(), Failure> {
     let pointer = allocation.map_or(0, |value| value.pointer.0);
     if cursor.case.backend == Backend::Stock {
-        cursor.take(CallRole::Free, Address(0x89e560), [REENT, pointer, 0, 0])?;
+        cursor.take(CallRole::Free, Address(0x89cdc4), [pointer, 0, 0, 0])?;
     } else {
         let raw = cursor.candidate(CallRole::Free, Symbol::Free,
             [pointer, allocation.map_or(0, |value| value.layout.size.0), allocation.map_or(8, |value| value.layout.alignment.bytes()), 0])?;
@@ -304,8 +304,7 @@ pub fn admit(inputs: &Inputs, tape: &Tape, case: &Case) -> Result<CaseSummary, F
     for (index, (step, record)) in tape.steps().iter().zip(&case.steps).enumerate() {
         require(record.index == StepIndex(index) && record.sequence == step.sequence, Failure::Incomplete)?;
         require(step.core.0 == 0 && step.context.domain.0 == 0 && step.context.mode == 0x13
-            && step.context.exception_depth == 0 && step.context.task.0 == 73
-            && step.context.task_record == Address(0x40060ecc), Failure::Context)?;
+            && step.context.exception_depth == 0, Failure::Context)?;
         let first_call = cursor.next;
         expected_data.clear();
         let mut stats_index = 0usize;

@@ -295,7 +295,7 @@ impl Runtime<'_> {
                     require(chunks.len() < case.capacity.bytes().0 as usize / 16, Failure::Statistics)?;
                     let header_address = cursor.checked_add(4).ok_or(Failure::Statistics)?;
                     let header = word(&self.session.board, &self.maps, header_address)?;
-                    chunks.push(ChunkHeader { address: Address(header_address), word: header });
+                    chunks.push(ChunkHeader { address: Address(cursor), word: header });
                     let bytes = header.0 & !3;
                     require(header.0 & 2 == 0 && bytes >= 16 && bytes % 8 == 0, Failure::Statistics)?;
                     let next = cursor.checked_add(bytes).ok_or(Failure::Statistics)?;

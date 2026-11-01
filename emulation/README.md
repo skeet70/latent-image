@@ -1343,6 +1343,8 @@ Run only through `//emulation:emulator-slot` with `XM1_EMULATOR_SLOTS=1`. The ho
 
 Every call preserves raw AAPCS/context/count/guard evidence. Timing brackets enclose allocator calls, including their actual uncontended retained lock, but exclude diagnostics, host payload fills and target zero/copy composition. Measurements are emulated instructions, not silicon cycles or lock-contention deadlines. Diagnostics and raw stock chunk walks establish physical block/free-space metrics separately from requested bytes. The source-reconstructed stock allocator-state extent is 1,092 bytes, excluding its backing cursor and the shared recursive-lock cells.
 
+All subjects execute under the preserved isolated task-73 frame. Original task identities remain bound trace attributions, not recreated scheduling. The admitted sequence has no overlapping logical calls; these runs therefore compare uncontended operations, not task switching or a multi-core lock policy.
+
 `--mode check --case CASE_JSON` re-admits existing evidence without execution. `--mode refusal-controls --case CASE_JSON` preserves eight genuine serialized mutations after positive admission: missing step, allocation result, footprint, statistics, counters, diagnostic role, payload data and code-watch evidence. Both modes retain the same pinned input arguments and fresh output directory. No replay run or refusal-control result is claimed by this source description.
 
 #### Task-storage observation
