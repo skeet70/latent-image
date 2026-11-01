@@ -33,7 +33,7 @@ fn artifact(root:&Path,binding:&FileBinding)->Result<std::path::PathBuf,String>{
 fn mapping(value:&Mapping)->Result<(),String>{
     require(value.bytes.0>0 && u64::from(value.guest.0)+u64::from(value.bytes.0)<=1u64<<32,"projection extent differs")?;
     require(value.physical.0==value.guest.0&!0x40000000,"projection physical translation differs")?;
-    for bank in value.tcm.into_iter().flatten(){if bank&1==0{continue;}let size=(bank>>2)&31;if size==0{continue;}require((3..=14).contains(&size),"projection has a reserved TCM size")?;let low=u64::from(bank&0xfffff000);let end=low+(512u64<<size);require(end<=u64::from(value.guest.0)||u64::from(value.guest.0)+u64::from(value.bytes.0)<=low,"projection intersects TCM")?;}
+    for bank in value.tcm.into_iter().flatten(){if bank&1==0{continue;}let size=(bank>>2)&31;if size==0{continue;}require((3..=14).contains(&size),"projection has a reserved TCM size")?;let bytes=512u64<<size;let low=u64::from(bank&0xfffff000);let end=low+bytes;require(low%bytes==0&&end<=1u64<<32,"projection TCM window has invalid alignment or endpoint")?;require(end<=u64::from(value.guest.0)||u64::from(value.guest.0)+u64::from(value.bytes.0)<=low,"projection intersects TCM")?;}
     Ok(())
 }
 fn words(value:&Words)->Result<(),String>{mapping(&value.mapping)?;require(value.mapping.bytes.0 as usize==4*value.values.len()&&value.guest_equal==[true;2],"word projection lacks equal committed views")}
@@ -83,6 +83,27 @@ fn route(report:&Report)->Result<(),String>{
     require(position.checked_add(90_000_000)==Some(report.instructions.0)&&matches!(&report.menu,Ok(Some([1,5,2]))),"natural menu endpoint differs")
 }
 
+fn projections(report:&Report)->Result<(),String>{
+    let mut required=Vec::new();let mut image5=false;let mut plain=[false;3];
+    for observed in &report.events {
+        let resources:&[Resource]=match observed.pc.0{
+            0x409ac=>&[Resource::LoaderA],0xd09ac=>&[Resource::LoaderB],
+            0x6a8c04|0x6a9734=>&[Resource::Image5Bss],
+            0x6a9840=>&[Resource::Image5,Resource::Image5Bss],0x6a9934=>&[Resource::Plain],
+            0xd985a4 if !image5=>{image5=true;&[Resource::Image5,Resource::Image5Bss,Resource::Plain]},_=>&[],
+        };
+        required.extend(resources.iter().map(|resource|(observed.id.0,*resource)));
+        if matches!(observed.pc.0,0x73be5c|0x73be70){
+            let (index,resource)=match observed.registers.r[7]{0=>(0,Resource::Plain0),2=>(1,Resource::Plain2),3=>(2,Resource::Plain3),_=>return Err("observed extent is outside the canonical three-entry table".into())};
+            if !plain[index]{plain[index]=true;required.push((observed.id.0,resource));}
+        }
+    }
+    require(image5&&plain==[true;3],"first image5 entry or plain extent publication absent")?;
+    require(required.len()==report.snapshots.len(),"resource projection census differs")?;
+    for (event,resource) in required{require(report.snapshots.iter().filter(|sample|sample.event.0==event&&sample.resource==resource).count()==1,"required boundary/resource projection absent or repeated")?;}
+    Ok(())
+}
+
 pub(super) fn check(root:&Path,catalog:&Catalog)->Result<Verification,String>{
     let receipt=read(&root.join("continuations.json"))?;let report:Report=serde_json::from_slice(&receipt).map_err(|error|error.to_string())?;
     require(report.schema==1&&report.error.is_none()&&report.machine_failure.is_none(),"observation did not complete")?;
@@ -112,9 +133,10 @@ pub(super) fn check(root:&Path,catalog:&Catalog)->Result<Verification,String>{
         for span in [[0x409ac,0x40b00],[0xd09ac,0xd0b00]]{require(guarded(&raw.classes,span,epoch.start.0!=0),"loader carrier watch coverage absent")?;}
         for span in [[0x61c000,0x61c220],[0x40000,0x40020],[0xd0000,0xd0020],[0x4f10c,0x4f118],[0xdf0cc,0xdf0d8],[0x89f794,0x89f798],[0xa00c4,0xa00c8],[0x5927c,0x59280],[0xe923c,0xe9240],[0x96bd20,0x96bd28],[0x89f8ac,0x89f8b0],[0x944440,0x944464],[0x914834,0x914838],[0x972e88,0x972e94],[0x14c100c,0x14c1010],[0x14c1018,0x14c101c],[0x14c113c,0x14c1140],[0x9662d4,0x9662d8],[0x89f784,0x89f788],[0x89f78c,0x89f790]]{require(guarded(&raw.classes,span,false),"shared publication watch coverage absent")?;}
         if epoch.start.0==0{for span in [[0x63450,0x63460],[0xf3410,0xf3420]]{require(guarded(&raw.classes,span,false),"saved loader frame watch coverage absent")?;}}
+        let mut previous_cpu=epoch.start.0;
         for row in &raw.records {
             require(in_class(row,&raw.classes)?,"raw access lies outside its declared classes")?;
-            if matches!(row.source,Access::CpuRead|Access::CpuFetch|Access::CpuWrite){require(row.core.is_some()&&row.pc.is_some()&&row.instructions.is_some_and(|count|epoch.start.0<=count.0&&count.0<=epoch.end.0),"CPU access attribution is incomplete")?;}
+            if matches!(row.source,Access::CpuRead|Access::CpuFetch|Access::CpuWrite){let count=row.instructions.ok_or("CPU access clock absent")?.0;require(row.core.is_some()&&row.pc.is_some()&&epoch.start.0<count&&count<=epoch.end.0&&previous_cpu<=count,"CPU access attribution or clock differs")?;previous_cpu=count;}
             let end=u64::from(row.physical.0)+row.size;
             if matches!(row.source,Access::CpuFetch){for &(start,finish) in &super::DIAGNOSTICS{require(end<=u64::from(start)||u64::from(finish)<=u64::from(row.physical.0),"diagnostic instruction fetch observed")?;}}
             for (start,finish,core) in [(0x409ac,0x40b00,Core::Primary),(0xd09ac,0xd0b00,Core::Secondary)] {
@@ -136,7 +158,7 @@ pub(super) fn check(root:&Path,catalog:&Catalog)->Result<Verification,String>{
             }
         }
     }
-    let mut phases=[Vec::new(),Vec::new()];let mut loader_calls=0;let mut task_calls=0;
+    let mut loader_calls=0;let mut task_calls=0;
     for call in &report.calls {
         let entered=event(&report,call.entry.ok_or("observed call lacks its actual entry")?)?;
         require(entered.pc==call.target&&entered.core==call.core&&entered.registers.sp==call.sp&&entered.registers.lr==call.continuation,"callee entry context differs")?;
@@ -145,7 +167,7 @@ pub(super) fn check(root:&Path,catalog:&Catalog)->Result<Verification,String>{
             if call.kind==CallKind::Loader {
                 loader_calls+=1;let (core,sp)=if (0x409ac..0x40af4).contains(&before.pc.0){(Core::Primary,0x40063450)}else if (0xd09ac..0xd0af4).contains(&before.pc.0){(Core::Secondary,0x400f3410)}else{return Err("loader call origin differs".into());};
                 require(call.core==core&&before.registers.sp.0==sp&&before.registers.r[11]==sp+12&&before.registers.cpsr&0xff==0xd3,"canonical loader caller context differs")?;
-                let phase=match before.pc.0&0xffff{0x09fc=>Some(0),0x0a34=>Some(1),0x0a3c=>Some(3),0x0a68=>Some(2),0x0aec=>Some(4),_=>None};if let Some(phase)=phase{require(call.target.0==0x69cdf8&&entered.registers.r[0]==phase,"phase argument or target differs")?;phases[usize::from(call.core)].push(phase);}
+                let phase=match before.pc.0&0xffff{0x09fc=>Some(0),0x0a34=>Some(1),0x0a3c=>Some(3),0x0a68=>Some(2),0x0aec=>Some(4),_=>None};if let Some(phase)=phase{require(call.target.0==0x69cdf8&&entered.registers.r[0]==phase,"phase argument or target differs")?;}
             }
             if call.kind==CallKind::PlainHook {let hook=Guest(before.registers.r[10]);let (_,expected)=catalog.word(hook)?;require(expected==call.target.0&&matches!(before.registers.r[7],0|3),"plain hook does not match its source list")?;}
             if call.kind==CallKind::Image5Entry {let descriptor=before.state.iter().find(|state|state.mapping.guest.0==before.registers.r[0]&&state.values.len()==2).ok_or("image5 descriptor view absent")?;let header=before.state.iter().find(|state|state.mapping.guest.0==descriptor.values[1]&&state.values.len()==4).ok_or("image5 header view absent")?;require(header.values[3]==call.target.0&&call.target.0==0xd985a4,"image5 header transfer differs")?;}
@@ -157,19 +179,37 @@ pub(super) fn check(root:&Path,catalog:&Catalog)->Result<Verification,String>{
             if call.kind==CallKind::Task{task_calls+=1;let descriptor=entered.descriptor.as_ref().ok_or("task descriptor entry absent")?;let after=returned.descriptor.as_ref().ok_or("task descriptor return absent")?;require(descriptor.values.len()==7&&after.values.len()==7&&descriptor.mapping.guest.0==entered.registers.r[0]&&after.mapping.guest==descriptor.mapping.guest&&call.descriptor==Some(descriptor.mapping.guest),"task descriptor alias/extent differs")?;}
         }else{require(call.kind==CallKind::Loader&&matches!(call.target.0,0x43688|0xd3688),"a required retained call has not returned")?;}
     }
+    let mut phases=[Vec::new(),Vec::new()];let mut constructors=Vec::new();
+    for observed in &report.events {
+        let counted=((0x409ac..0x40af4).contains(&observed.pc.0)||(0xd09ac..0xd0af4).contains(&observed.pc.0)||(0xd985a4..0xd986ac).contains(&observed.pc.0)||(0x6a9844..0x6a9934).contains(&observed.pc.0)||matches!(observed.pc.0,0x73b554|0x69d2e0|0xd9858c|0x73be5c|0x73beac))&&branch(observed,catalog).is_ok();
+        if counted{require(report.calls.iter().filter(|call|call.before.is_some_and(|id|id.0==observed.id.0)).count()==1,"observed source call was omitted or repeated")?;}
+        if observed.pc.0==0x725dd8{require(report.calls.iter().filter(|call|call.kind==CallKind::Task&&call.entry.is_some_and(|id|id.0==observed.id.0)).count()==1,"observed task entry was omitted or repeated")?;}
+        if matches!(observed.pc.0,0x409fc|0x40a34|0x40a3c|0x40a68|0x40aec|0xd09fc|0xd0a34|0xd0a3c|0xd0a68|0xd0aec){phases[usize::from(observed.core)].push(observed.registers.r[0]);}
+        if observed.pc.0==0xd9858c{constructors.push(branch(observed,catalog)?.0);}
+    }
     require(phases==[vec![0,1,3,2],vec![4,2]],"natural loader phase sequence differs")?;
-    for observed in &report.events {if ((0x409ac..0x40af4).contains(&observed.pc.0)||(0xd09ac..0xd0af4).contains(&observed.pc.0)||(0xd985a4..0xd986ac).contains(&observed.pc.0)||(0x6a9844..0x6a9934).contains(&observed.pc.0)||observed.pc.0==0x73b554)&&branch(observed,catalog).is_ok(){require(report.calls.iter().filter(|call|call.before.is_some_and(|id|id.0==observed.id.0)).count()==1,"observed source call was omitted or repeated")?;}}
+    require(constructors==[0x107277c,0x1066304,0x1062114],"image5 reverse constructor order differs")?;
     for (base,core,sp,cell) in [(0x40000,Core::Primary,0x40063450,0x4f114),(0xd0000,Core::Secondary,0x400f3410,0xdf0d4)] {
         let entry=report.events.iter().find(|event|event.pc.0==base+0x9ac&&event.core==core).ok_or("startup function entry absent")?;require(entry.registers.r[0]==0x69cdf8&&entry.registers.sp.0==sp+16,"startup caller argument/frame differs")?;
         let handoff=report.events.iter().find(|event|event.pc.0==base+0x36e8&&event.core==core).ok_or("initial scheduler context transfer absent")?;
         let saved=handoff.state.iter().find(|state|state.mapping.guest.0==sp&&state.values.len()==4).ok_or("saved loader frame at handoff absent")?;require(saved.values==[entry.registers.r[4],entry.registers.r[5],entry.registers.r[11],entry.registers.lr.0],"saved loader frame changed before handoff")?;
         let context_address=handoff.registers.r[1].checked_add(24).ok_or("selected context address overflows")?;let context=handoff.state.iter().find(|state|state.mapping.guest.0==context_address&&state.values.len()==2).ok_or("selected context absent")?;require(context.values[0]==handoff.registers.sp.0&&context.values[1]==base+0x3728,"first loaded context differs")?;
+        let load=report.events.iter().find(|event|event.pc.0==base+0x36e4&&event.core==core).ok_or("initial saved-SP load absent")?;
+        require(load.id.0<handoff.id.0&&load.instructions.0<handoff.instructions.0&&load.registers.r==handoff.registers.r&&load.registers.lr==handoff.registers.lr&&load.registers.cpsr==handoff.registers.cpsr,"saved-SP load context or chronology differs")?;
+        let trampoline=report.events.iter().find(|event|event.pc.0==base+0x3728&&event.core==core&&event.id.0>handoff.id.0).ok_or("initial trampoline entry absent")?;
+        require(trampoline.instructions.0>handoff.instructions.0&&trampoline.registers.sp==handoff.registers.sp&&trampoline.registers.r==handoff.registers.r&&trampoline.registers.lr==handoff.registers.lr&&trampoline.registers.cpsr==handoff.registers.cpsr,"loaded trampoline context differs")?;
+        let jump=report.events.iter().find(|event|event.pc.0==base+0x3758&&event.core==core&&event.id.0>trampoline.id.0).ok_or("initial C-entry transfer absent")?;
+        let creation=jump.state.iter().find(|view|view.mapping.guest.0==jump.registers.r[2]&&view.values.len()==3).ok_or("initial creation record absent")?;
+        let link=jump.registers.r[1].checked_add(8).ok_or("creation link address overflows")?;
+        let cleanup=if core==Core::Primary{0x453f0}else{0xd53b0};
+        require(jump.instructions.0>trampoline.instructions.0&&jump.registers.r[1]==handoff.registers.r[1]&&at(jump,link)?==jump.registers.r[2]&&jump.registers.sp==trampoline.registers.sp&&jump.registers.r[0]==creation.values[1]&&jump.registers.lr.0==cleanup,"C-record argument, caller or cleanup context differs")?;
+        let entered=report.events.iter().find(|event|event.core==core&&event.pc.0==creation.values[2]&&event.id.0>jump.id.0).ok_or("initial C function entry absent")?;
+        require(entered.instructions.0>jump.instructions.0&&entered.registers.sp==jump.registers.sp&&entered.registers.r==jump.registers.r&&entered.registers.lr==jump.registers.lr&&entered.registers.cpsr==jump.registers.cpsr,"initial C-entry target or context differs")?;
         let callback=report.events.iter().find(|event|event.pc.0==base+0xa70&&event.core==core).ok_or("callback publisher return absent")?;require(at(callback,cell)?==0x69cc6c,"committed diagnostic callback differs")?;
     }
+    projections(&report)?;
     for sample in &report.snapshots {require(sample.event.0<report.events.len(),"snapshot event absent")?;snapshot(root,sample,catalog)?;}
-    for (resource,pc) in [(Resource::LoaderA,0x409ac),(Resource::LoaderB,0xd09ac),(Resource::Image5,0x6a9840),(Resource::Image5Bss,0x6a9840),(Resource::Plain,0x6a9934)]{require(report.snapshots.iter().any(|sample|sample.resource.extent()==resource.extent()&&report.events[sample.event.0].pc.0==pc),"required producer snapshot absent")?;}
     require(report.calls.iter().filter(|call|call.kind==CallKind::Image5Entry).count()==1,"image5 header call extent differs")?;
-    let constructors:Vec<_>=report.calls.iter().filter(|call|call.kind==CallKind::Image5Constructor).map(|call|call.target.0).collect();require(constructors==[0x107277c,0x1066304,0x1062114],"image5 reverse constructor order differs")?;
     let setters:Vec<_>=report.calls.iter().filter(|call|call.kind==CallKind::Image5Service&&call.target.0==0x69cf84).collect();require(setters.len()==1,"diagnostic callback setter call census differs")?;
     let setter=event(&report,setters[0].entry.ok_or("setter entry absent")?)?;let setter_return=event(&report,setters[0].returned.ok_or("setter return absent")?)?;require(setter.registers.r[0]==0xed4a8c&&at(setter_return,0x89f794)?==0xed4a8c,"installed diagnostic callback or committed cell differs")?;
     Ok(Verification {schema:1,scope:Scope::CanonicalNaturalObservation,receipt:Digest::of(&receipt),events:report.events.len(),loader_calls,task_calls,snapshots:report.snapshots.len(),source_differences:report.snapshots.iter().filter(|sample|!sample.expected_equal).count()})

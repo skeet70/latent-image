@@ -55,7 +55,7 @@ pub(super) struct Words {
     pub guest_equal: [bool; 2],
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum Resource {
     LoaderA,

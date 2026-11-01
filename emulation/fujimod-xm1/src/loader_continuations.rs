@@ -200,7 +200,7 @@ impl Observation {
                 let target=Guest(context.values[1]);self.events[id.0].state.push(context);self.target(machine,catalog,target)?;
                 let addresses=if pc.0==0x436e8{[Guest(0x43688),Guest(0x436e4),Guest(0x436e8)]}else{[Guest(0xd3688),Guest(0xd36e4),Guest(0xd36e8)]};machine.traces.remove_sites(&machine.session,&addresses)?;
             }
-            if matches!(pc.0,0x43758|0xd3758){let task=continuation_view::words(&machine.session,maps,Guest(regs.r[2]),3)?;self.target(machine,catalog,Guest(task.values[2]))?;self.events[id.0].state.push(task);machine.traces.remove_sites(&machine.session,&[pc])?;}
+            if matches!(pc.0,0x43758|0xd3758){let task=continuation_view::words(&machine.session,maps,Guest(regs.r[2]),3)?;let link=continuation_view::words(&machine.session,maps,Guest(regs.r[1].checked_add(8).ok_or("task creation-record link overflows")?),1)?;if link.values[0]!=regs.r[2]{return Err("current task creation-record link differs".into());}self.target(machine,catalog,Guest(task.values[2]))?;self.events[id.0].state.extend([task,link]);machine.traces.remove_sites(&machine.session,&[pc])?;}
             let resources:Vec<Resource>=match pc.0 {
                 0x409ac=>vec![Resource::LoaderA],0xd09ac=>vec![Resource::LoaderB],
                 0x6a8c04=>vec![Resource::Image5Bss],

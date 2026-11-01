@@ -1399,6 +1399,10 @@ ADC holds and release polls match the existing cold-menu route, including Menu a
 
 This observer neither intentionally executes diagnostic code nor proves global SVC0/computed/interior/Thumb/alias caller closure. Paused decoder/TCM/byte equality does not prove uninterrupted mapping, resource lifetime, physical cache behavior or silicon timing. A retained natural result is not a paired owned qualification or a retired-body confinement receipt.
 
+Dynamic call-entry/return sites use `TraceSites::add_sites`. Added labels are stopping labels even after the last earlier site with that label has drained. The public SDK regression exercises two consecutive remove/add transitions and checks the stopped guest PC, register value and entered count.
+
+After a complete retained receipt passes `--verify`, run `devenv shell -- python3 emulation/loader_continuations_controls.py --observer OBSERVER --analysis ROOT --baseline OBSERVATION_DIRECTORY --output NEW_DIRECTORY`. These controls invoke only the public host verifier, never a guest. They reconcile all observed call categories, raw phase/constructor chronology, required boundary projections, initial saved-context/C-entry transfers, CPU clock intervals/order, TCM alignment/endpoints and the named wrong-argument/target/return/write cases. Changed trace/watch files receive new bindings; unchanged resource files are hard-linked without mutation. The manifest distinguishes actual-observation mutations from serialized synthetic examples, including the deferred-call case. A synthetic admission is a validator control, not an observed firmware outcome.
+
 ### Owned first-stage witness
 
 `//emulation:first-stage-witness` starts from the captured ROM reset with the packaged DAT. It arms five core-0 instruction stops before execution and reads twelve memory extents at the owned handoff vector. Its 20,000,000-instruction budget is separate from the cold-menu route. It does not import a stock-initialization checkpoint or force an execution frame.
