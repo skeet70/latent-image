@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "X3C8/nTPdAx6Qi5NprhgiIDFyOm/Uynmw2AzoVuo5tM=",
+        "bzlTransitiveDigest": "gbMeBhzrJckeCris2zbHug1rdMplIpd7QZ6mW9BmsEQ=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -517,6 +517,9 @@
                 "@@//emulation:fujimod-xm1/src/render.rs": "//emulation:fujimod-xm1/src/render.rs",
                 "@@//emulation:fujimod-xm1/src/run.rs": "//emulation:fujimod-xm1/src/run.rs",
                 "@@//emulation:fujimod-xm1/src/sd_host.rs": "//emulation:fujimod-xm1/src/sd_host.rs",
+                "@@//emulation:fujimod-xm1/src/startup_callers.rs": "//emulation:fujimod-xm1/src/startup_callers.rs",
+                "@@//emulation:fujimod-xm1/src/startup_dispatch.rs": "//emulation:fujimod-xm1/src/startup_dispatch.rs",
+                "@@//emulation:fujimod-xm1/src/startup_dispatch_check.rs": "//emulation:fujimod-xm1/src/startup_dispatch_check.rs",
                 "@@//emulation:fujimod-xm1/src/toggle.rs": "//emulation:fujimod-xm1/src/toggle.rs",
                 "@@//emulation:fujimod-xm1/src/trace.rs": "//emulation:fujimod-xm1/src/trace.rs",
                 "@@//emulation:fujimod-xm1/src/ui_conversion.rs": "//emulation:fujimod-xm1/src/ui_conversion.rs",
@@ -532,7 +535,7 @@
               "nix_license_path": "",
               "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
               "repositories": {},
-              "build_file_content": "exports_files([\"bin/fujimod-xm1\", \"bin/fujimod-xm1-native-case\", \"bin/fujimod-xm1-provenance\", \"bin/fujimod-xm1-queue-boundary\", \"bin/fujimod-xm1-ram-push\", \"bin/fujimod-xm1-toggle\", \"bin/fujimod-xm1-updater\", \"share/fujimod-xm1/store-path\", \"share/fujimod-xm1/xm1-150.json\"], visibility = [\"//visibility:public\"])\nfilegroup(name = \"test-harnesses\", srcs = glob([\"libexec/fujimod-xm1-tests/*\"]), visibility = [\"//visibility:public\"])\nfilegroup(name = \"test-manifest\", srcs = [\"libexec/fujimod-xm1-tests/manifest\"], visibility = [\"//visibility:public\"])",
+              "build_file_content": "exports_files([\"bin/fujimod-xm1\", \"bin/fujimod-xm1-native-case\", \"bin/fujimod-xm1-provenance\", \"bin/fujimod-xm1-queue-boundary\", \"bin/fujimod-xm1-ram-push\", \"bin/fujimod-xm1-startup-callers\", \"bin/fujimod-xm1-startup-dispatch\", \"bin/fujimod-xm1-toggle\", \"bin/fujimod-xm1-updater\", \"share/fujimod-xm1/store-path\", \"share/fujimod-xm1/xm1-150.json\"], visibility = [\"//visibility:public\"])\nfilegroup(name = \"test-harnesses\", srcs = glob([\"libexec/fujimod-xm1-tests/*\"]), visibility = [\"//visibility:public\"])\nfilegroup(name = \"test-manifest\", srcs = [\"libexec/fujimod-xm1-tests/manifest\"], visibility = [\"//visibility:public\"])",
               "nixopts": [
                 "--max-jobs",
                 "1",
