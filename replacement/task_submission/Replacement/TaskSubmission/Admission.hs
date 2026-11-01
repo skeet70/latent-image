@@ -42,24 +42,26 @@ data AdmissionError = InvalidCarrier | EscapingControlFlow | UnsupportedInstruct
   | StackAliasConflict | ArithmeticProvenanceLost | UnsupportedShift | ReadProvenanceRejected
   | WriteProvenanceRejected | LiteralExecuted | BadReturn | PreservedRegisterDiffers
   | CallStackUnaligned | ExternalCallRejected | CallContractRejected | WorklistBoundExceeded
-  | IncompatibleFrames | MissingReturn | MissingCallBoundary | InvalidStackContext | MissingCalleeDemand
+  | IncompatibleFrames CodeAddress | MissingReturn | MissingCallBoundary | InvalidStackContext | MissingCalleeDemand
   | NestedStackOverlap | StackBackingExceeded | StackAddressOverflow
   deriving (Eq, Show)
 
 data Guest = Descriptor | ClassTable | Wrapper | State | Roots | Root | ErrorWord | Lock deriving (Eq, Ord, Show)
 data Scalar = Unknown | Constant Word32 | Incoming A.Reg | Stack Integer | ReturnAddress
-  | InternalReturn Word32 | Guest Guest (Maybe Integer) | Service CallTarget
+  | InternalReturn Word32 | Guest Guest (Maybe Integer) | Service CallTarget | ConflictingCapability
   deriving (Eq, Ord, Show)
 
-provenance :: Scalar -> ArgumentProvenance
+provenance :: Scalar -> Either AdmissionError ArgumentProvenance
 provenance value = case value of
-  Unknown -> ScalarArgument
-  Constant word -> ConstantArgument word
-  Incoming register -> SavedRegisterArgument register
-  Stack offset -> StackArgument (StackOffset offset)
-  Guest _ _ -> NonstackArgument
-  Service target -> ServiceArgument target
-  _ -> ReturnCapabilityArgument
+  Unknown -> Right ScalarArgument
+  Constant word -> Right (ConstantArgument word)
+  Incoming register -> Right (SavedRegisterArgument register)
+  Stack offset -> Right (StackArgument (StackOffset offset))
+  Guest _ _ -> Right NonstackArgument
+  Service target -> Right (ServiceArgument target)
+  ReturnAddress -> Right ReturnCapabilityArgument
+  InternalReturn _ -> Right ReturnCapabilityArgument
+  ConflictingCapability -> Left CallContractRejected
 
 data ReturnFrame = ReturnFrame Word32 Integer [Scalar] deriving (Eq, Ord, Show)
 data Machine = Machine { regs :: M.Map A.Reg Scalar, wordsAt :: M.Map Integer Scalar, returns :: [ReturnFrame] }
@@ -88,15 +90,15 @@ end = 0x72612c
 lockLiteral = 0x726128
 
 fixed :: Word32 -> Maybe CallTarget
-fixed address = FixedService <$> lookup address
+fixed location = FixedService <$> lookup location
   [(0x7235d8,CriticalEnter),(0x7236b0,CriticalExit),(0x725c6c,Reservation)
   ,(0x7221c8,Fill),(0x42634,Cache),(0x41a34,Log),(0x723398,ErrorCallback)
   ,(0x427d4,TryLock),(0x427fc,Unlock)]
 
 constant :: Word32 -> Scalar
-constant address = case lookup address [(0x7cad9c,ClassTable),(0x40a5b204,Wrapper),(0x40a0fc44,State),(0x96bd20,Roots),(0x40a0f82c,ErrorWord),(0x409c280c,Lock)] of
+constant location = case lookup location [(0x7cad9c,ClassTable),(0x40a5b204,Wrapper),(0x40a0fc44,State),(0x96bd20,Roots),(0x40a0f82c,ErrorWord),(0x409c280c,Lock)] of
   Just root -> Guest root (Just 0)
-  Nothing -> Constant address
+  Nothing -> Constant location
 
 get :: Word32 -> Machine -> A.Reg -> Scalar
 get pc machine register
@@ -140,6 +142,7 @@ capability value = case value of
   InternalReturn _ -> True
   Guest _ _ -> True
   Service _ -> True
+  ConflictingCapability -> True
   _ -> False
 
 shifted :: A.Shift -> Int -> Scalar -> Either AdmissionError Scalar
@@ -246,19 +249,19 @@ store width location value machine = do
       pure machine
     _ -> Left WriteProvenanceRejected
 
-mergeScalar :: Scalar -> Scalar -> Either AdmissionError Scalar
+mergeScalar :: Scalar -> Scalar -> Scalar
 mergeScalar left right
-  | left == right = Right left
-mergeScalar (Guest root _) (Guest other _) | root == other = Right (Guest root Nothing)
-mergeScalar left right = do
-  require (not (capability left || capability right)) IncompatibleFrames
-  pure Unknown
+  | left == right = left
+mergeScalar (Guest root _) (Guest other _) | root == other = Guest root Nothing
+mergeScalar left right
+  | capability left || capability right = ConflictingCapability
+  | otherwise = Unknown
 
-mergeMachine :: Machine -> Machine -> Either AdmissionError Machine
-mergeMachine old new = do
-  require (returns old == returns new) IncompatibleFrames
-  registers <- M.traverseWithKey (\register value -> mergeScalar value (M.findWithDefault Unknown register (regs new))) (regs old)
-  stack <- M.traverseWithKey (\slot value -> mergeScalar value (wordsAt new M.! slot)) (M.intersection (wordsAt old) (wordsAt new))
+mergeMachine :: Word32 -> Machine -> Machine -> Either AdmissionError Machine
+mergeMachine pc old new = do
+  require (returns old == returns new && M.lookup A.sp (regs old) == M.lookup A.sp (regs new)) (IncompatibleFrames (CodeAddress pc))
+  let registers = M.mapWithKey (\register value -> mergeScalar value (M.findWithDefault Unknown register (regs new))) (regs old)
+      stack = M.intersectionWith mergeScalar (wordsAt old) (wordsAt new)
   pure (Machine registers stack (returns old))
 
 initial :: EntryPoint -> Machine
@@ -292,12 +295,11 @@ deriveFrameProof layout bytes = do
       result <- walk entry (Walk M.empty [(start,initial entry)] S.empty S.empty S.empty S.empty 0 False 0)
       require (returned result) MissingReturn
       pure result
-    walk _ work | null (pending work) = Right work
-    walk entry work = do
+    walk _ work@Walk{pending=[]} = Right work
+    walk entry work@Walk{pending=(pc,incoming):rest} = do
       require (iterations work < 20000) WorklistBoundExceeded
-      let ((pc,incoming):rest) = pending work
-          key = (pc,returns incoming)
-      machine <- maybe (Right incoming) (`mergeMachine` incoming) (M.lookup key (seen work))
+      let key = (pc,returns incoming)
+      machine <- maybe (Right incoming) (\old -> mergeMachine pc old incoming) (M.lookup key (seen work))
       if M.lookup key (seen work) == Just machine then walk entry work {pending = rest}
       else do
         require (inside layout pc) EscapingControlFlow
@@ -335,10 +337,12 @@ deriveFrameProof layout bytes = do
           _ <- readStack machine slot
           pure ()
         _ -> pure ()) [get pc machine (A.Reg n) | n <- [0..3]]
+      require (target `notElem` map FixedService [Reservation,Fill,Log]
+        || get pc machine (A.Reg 2) /= ConflictingCapability) CallContractRejected
       let parameters count = do
             slot <- case get pc machine (A.Reg 1) of Stack value -> Right value; _ -> Left CallContractRejected
             values <- mapM (readStack machine) (take count [slot,slot+4..])
-            pure (zipWith (\offset value -> ParameterWord (StackOffset offset) (provenance value)) [slot,slot+4..] values)
+            mapM (\(offset,value) -> ParameterWord (StackOffset offset) <$> provenance value) (zip [slot,slot+4..] values)
       arguments <- case target of
         FixedService _ -> pure []
         _ -> do
@@ -348,8 +352,10 @@ deriveFrameProof layout bytes = do
             AuxiliaryService -> parameters 2
             CreationService -> parameters 6
             _ -> pure []
+      firstArgument <- provenance (get pc machine (A.Reg 0))
+      secondArgument <- provenance (get pc machine (A.Reg 1))
       let boundary = CallBoundary entry (CodeAddress pc) (CodeAddress (pc+4)) target targetRegister
-            (provenance (get pc machine (A.Reg 0))) (provenance (get pc machine (A.Reg 1))) arguments
+            firstArgument secondArgument arguments
             (StackOffset bottom) (map (StackOffset . fst) (M.toAscList (wordsAt machine)))
           changed = machine {regs = foldr (\register -> M.insert register Unknown) (regs machine) (map A.Reg [0,1,2,3,12,14])}
       pure (enqueue (pc+4) changed work {calls = S.insert boundary (calls work)})
@@ -404,6 +410,13 @@ deriveFrameProof layout bytes = do
         updated <- if indexing == A.OffsetOnly then Right stored else put base location stored
         let observed = case actual of Guest _ _ -> work {writes=S.insert (CodeAddress pc) (writes work)}; _ -> work
         pure (cond,enqueue (pc+4) updated observed)
+      A.StoreMultiple (A.Cond cond) base A.IncrementAfter writeback saved -> do
+        require (not (null saved) && A.pc `notElem` saved
+          && (not writeback || (base /= A.sp && base `notElem` saved))) UnsupportedInstruction
+        first <- case get pc machine base of Stack slot -> Right slot; _ -> Left WriteProvenanceRejected
+        stored <- foldM (\state (slot,register) -> writeStack state slot (get pc machine register)) machine (zip [first,first+4..] saved)
+        updated <- if writeback then put base (Stack (first+4*toInteger (length saved))) stored else Right stored
+        pure (cond,enqueue (pc+4) updated work)
       A.StoreMultiple (A.Cond cond) base A.DecrementBefore True saved -> do
         require (base == A.sp && not (null saved) && base `notElem` saved && A.pc `notElem` saved) UnsupportedInstruction
         bottom <- spAt machine

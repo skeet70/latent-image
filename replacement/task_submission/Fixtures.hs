@@ -8,12 +8,14 @@ import qualified FujiAF.UpdateContainer as U
 import Numeric (showHex)
 
 -- These project-owned instructions exercise the published carrier and service-call ABI.
-data Fault = Control | EquivalentMove | UnexecutedPadding | AlternateTargetRegister | GuestWrite | UnknownOffsetGuestWrite
+data Fault = Control | EquivalentMove | UnexecutedPadding | AlternateTargetRegister | GuestWrite | UnknownOffsetGuestWrite | ParameterBlockStore | DeadCapabilityJoin
   | MisalignedCall | BelowSpWrite | UninitializedParameter | WrongSave | EscapingBranch
   | ExecutedPadding | UnsupportedOpcode | BadReturn | UnknownServiceTarget
   | BadFunctionExtent | WrongDependency | DuplicateSymbol | ShortCarrier | LongCarrier
   | WrongLiteral | SpillExecution | ForgedServiceTarget | MissingParameterTail
-  | WrongDirectDependency | WrongIndirectDependency
+  | WrongDirectDependency | WrongIndirectDependency | EscapingBlockStore | UnprovenBlockBase
+  | EscapingCapabilityJoin | CapabilityArgumentJoin | CapabilityArithmeticJoin
+  | CapabilityFillCountJoin | CapabilityReservationOutputJoin | CapabilityLogStatusJoin
   deriving (Eq, Show, Enum, Bounded)
 
 canonicalPaths :: [FilePath]
@@ -50,6 +52,8 @@ fixture fault = (carrier,names)
       AlternateTargetRegister -> [(52,0xe594c080),(64,0xe12fff3c)]
       GuestWrite -> guestWrite 0xe3a00b01
       UnknownOffsetGuestWrite -> guestWrite 0xe0822180
+      ParameterBlockStore -> [(16,0xe1a0c00d),(20,0xe8ac000c)]
+      DeadCapabilityJoin -> capabilityJoin [0xe3a0c000,0xe1a00000,0xe1a00000]
       MisalignedCall -> [(8,0xe24dd014)]
       BelowSpWrite -> [(16,0xe50d3004)]
       UninitializedParameter -> [(16,0xe1a03003)]
@@ -65,10 +69,20 @@ fixture fault = (carrier,names)
       MissingParameterTail -> [(36,0xe1a03003)]
       WrongDirectDependency -> [(128,branch (base+128) 0x7235dc)]
       WrongIndirectDependency -> [(132,0xe30336b4)]
+      EscapingBlockStore -> [(16,0xe28dc028),(20,0xe8ac000c)]
+      UnprovenBlockBase -> [(16,0xe3a0c000),(20,0xe8ac000c)]
+      EscapingCapabilityJoin -> capabilityJoin [0xe30b2204,0xe34420a5,0xe582c004]
+      CapabilityArgumentJoin -> capabilityJoin [0xe1a0000c,branch (base+208) 0x7235d8,0xe3a00000]
+      CapabilityArithmeticJoin -> capabilityJoin [0xe20c00ff,0xe1a00000,0xe1a00000]
+      CapabilityFillCountJoin -> capabilityJoin [0xe1a0200c,branch (base+208) 0x7221c8,0xe1a00000]
+      CapabilityReservationOutputJoin -> capabilityJoin [0xe1a0200c,branch (base+208) 0x725c6c,0xe1a00000]
+      CapabilityLogStatusJoin -> capabilityJoin [0xe1a0200c,branch (base+208) 0x41a34,0xe1a00000]
       _ -> []
-    guestFixture = fault `elem` [GuestWrite,UnknownOffsetGuestWrite]
+    guestFixture = fault `elem` [GuestWrite,UnknownOffsetGuestWrite,DeadCapabilityJoin,EscapingCapabilityJoin,CapabilityArgumentJoin,CapabilityArithmeticJoin,CapabilityFillCountJoin,CapabilityReservationOutputJoin,CapabilityLogStatusJoin]
     guestWrite argument = [(144,branch (base+144) (base+200)-0x01000000)
       ,(200,0xe30b2204),(204,0xe34420a5),(208,argument),(212,0xe5820004),(216,0xe28dd018),(220,0xe8bd8830)]
+    capabilityJoin instructions = [(144,branch (base+144) (base+200)-0x01000000),(200,0x01a0c00d)]
+      ++ zip [204,208,212] instructions ++ [(216,0xe28dd018),(220,0xe8bd8830)]
     full = B.concat [U.putWord32 (maybe (maybe 0 id (lookup offset program)) id (lookup offset changes)) | offset <- [0,4..848]]
     carrier = case fault of ShortCarrier -> B.take 848 full; LongCarrier -> full <> U.putWord32 0; _ -> full
     row :: Word32 -> Word32 -> String -> String -> String

@@ -39,7 +39,7 @@ data ControlEnvelope = ControlEnvelope { controlReceipt :: Receipt, controlProbe
   deriving (Eq, Show)
 
 closed :: [String] -> Object -> Parser ()
-closed names object = unless (all ((`elem` names) . K.toString) (KM.keys object)) (fail "unknown probe field")
+closed names fields = unless (all ((`elem` names) . K.toString) (KM.keys fields)) (fail "unknown probe field")
 
 instance FromJSON ProbeCase where
   parseJSON = withText "probe case" $ \value -> case value of

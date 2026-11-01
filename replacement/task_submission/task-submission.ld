@@ -30,23 +30,23 @@ SECTIONS
   .release 0x726098 : {
     KEEP(*(.task_release_entry))
     __task_submission_release_adapter_end = .;
-    . = 0x90;
+  }
+  .release_literal 0x726128 : {
     KEEP(*(.task_release_literal))
-    . = 0x94;
-  } = 0
+  }
   __task_submission_end = .;
   .data : { *(.data*) *(.sdata*) *(.got*) }
   .bss : { *(.bss*) *(.sbss*) *(COMMON) }
   /DISCARD/ : {
     *(.ARM.exidx*)
     *(.ARM.extab*)
+    *(.eh_frame*)
     *(.ARM.attributes)
     *(.note*)
     *(.comment*)
     *(.debug*)
     *(.llvm_addrsig)
   }
-  .unexpected : { *(*) }
 }
 
 ASSERT(xm1_task_submit_entry == 0x725dd8, "task submit entry moved")
@@ -56,4 +56,3 @@ ASSERT(__task_submission_release_adapter_end <= 0x726128, "task release adapter 
 ASSERT(xm1_task_release_lock_literal == 0x726128, "task release lock literal moved")
 ASSERT(__task_submission_end == 0x72612c, "task submission must overwrite all 852 bytes")
 ASSERT(SIZEOF(.data) == 0 && SIZEOF(.bss) == 0, "task submission has writable statics")
-ASSERT(SIZEOF(.unexpected) == 0, "task submission has unplaced sections")

@@ -41,8 +41,6 @@ physical :: Word32 -> Word32
 physical value = value .&. 0x3fffffff
 contents :: W.Bytes -> B.ByteString
 contents (W.Bytes value) = value
-hitNumber :: HitIndex -> Int
-hitNumber (HitIndex value) = value
 cursorNumber :: Cursor -> Int
 cursorNumber (Cursor value) = value
 state :: Sample -> W.Context
@@ -122,9 +120,9 @@ checkPhase receipt probe = do
   root <- unique ControlPhaseRejected (filter ((==PrimaryKernel) . firstCore) (receiptFirstTasks receipt))
   ensure ControlPhaseRejected (firstId root == TaskId 104 && contextCore (probeBefore probe) == PrimaryKernel
     && sampleContext initial == probeBefore probe && W.contextPc before == W.Address 0x69d164
-    && addr (firstStackTop root) >= 16 && W.contextSp before == W.Address (addr (firstStackTop root)-16)
+    && addr (firstStackTop root) >= 992 && W.contextSp before == W.Address (addr (firstStackTop root)-16)
     && W.contextCpsr before == W.WordValue 0x53
-    && probeDescriptor probe == W.Address 0x40063424 && probeReturnPc probe == W.Address 0x69d164
+    && probeDescriptor probe == W.Address (addr (firstStackTop root)-992) && probeReturnPc probe == W.Address 0x69d164
     && probeTarget probe == (if isRelease (probeCase probe) then DeletionTarget else SubmissionTarget)
     && probeTask probe == TaskId (if isFresh (probeCase probe) then 1 else 102))
   pure initial
@@ -156,17 +154,18 @@ patchStage receipt probe patch
 checkPatches :: Receipt -> W.Watch -> ProbeRecord -> Sample -> Either ControlError ()
 checkPatches receipt watch probe initial = do
   memory <- memoryAt initial
-  let kind = probeCase probe; initialHit = probeInitialHit probe
+  let kind = probeCase probe; initialHit = probeInitialHit probe; TaskId task = probeTask probe
       descriptor = physical (addr (probeDescriptor probe))
-      fresh = zipWith (\offset value -> (InitialStage,descriptor+offset,value)) [0,4..24]
-        [1,0x781968,15,1024,0x69cbf0,0,if kind == SentinelFresh then 0xa5f0a5f0 else 1]
-      initialEdits = (if isFresh kind then fresh else [])
+      descriptorEdits = zipWith (\offset value -> (InitialStage,descriptor+offset,value)) [0,4..24]
+        [fromIntegral task,0x781968,15,1024,0x69cbf0,0,if kind == SentinelFresh then 0xa5f0a5f0 else 1]
+      initialEdits = (if probeTarget probe == SubmissionTarget then descriptorEdits else [])
         ++ (if isRefusal kind then [(InitialStage,0xa5b204+8*101,0),(InitialStage,0xa5b208+8*101,0)] else [])
         ++ (if kind == PartialPair then [(InitialStage,0xa5b208+8*101,0)] else [])
         ++ (if kind == CallbackUnreturned then [(InitialStage,0x89ea8c,0x69cbf0)] else [])
-      laterEdits = case kind of ReleasePeerLock -> [(ReleaseEntryStage,0x9c280c,2)]
-                               ReleaseUnlockRefusal -> [(UnlockCallStage,0x9c280c,0)]
-                               _ -> []
+      laterEdits = case kind of
+        ReleasePeerLock -> [(ReleaseEntryStage,0x9c280c,2)]
+        ReleaseUnlockRefusal -> [(UnlockCallStage,0x9c280c,0)]
+        _ -> []
   (_,expectedInitial) <- foldM (\(current,edits) edit@(_,address,value) -> do
     old <- readWord ControlPatchRejected current address
     pure (putWord address value current,edits ++ [edit | old /= value])) (memory,[]) initialEdits
@@ -298,17 +297,15 @@ checkSubmission receipt watch probe initial samples = do
   ensure ControlContextRejected (sampleBoundary incoming == SubmissionEntry && configuredEntry (probeConfigured probe) (sampleContext incoming)
     && probeDeleteEntryHit probe == Nothing && probeReleaseEntryHit probe == Nothing && probeReleaseReturnHit probe == Nothing)
   before <- memoryAt incoming
-  natural <- memoryAt initial
   let kind = probeCase probe; TaskId number = probeTask probe; i = fromIntegral number-1
       wrapper = 0xa5b204+8*i; storage = 0xa0fc44+12*i
-  descriptor <- wordsAt ControlDescriptorRejected before 0x63424 7
-  if isFresh kind then ensure ControlDescriptorRejected (descriptor == [1,0x781968,15,1024,0x69cbf0,0,if kind == SentinelFresh then 0xa5f0a5f0 else 1])
-    else do original <- wordsAt ControlDescriptorRejected natural 0x63424 7
-            ensure ControlDescriptorRejected (descriptor == original && take 6 descriptor == [102,0x781968,15,1024,0x69cbf0,0])
+      descriptorAddress = physical (addr (probeDescriptor probe))
+  descriptor <- wordsAt ControlDescriptorRejected before descriptorAddress 7
+  ensure ControlDescriptorRejected (descriptor == [fromIntegral number,0x781968,15,1024,0x69cbf0,0,if kind == SentinelFresh then 0xa5f0a5f0 else 1])
   end <- if kind == CallbackUnreturned then need ControlCallbackRejected (probeCallbackEnteredHit probe) >>= sampleAt receipt
     else need ControlSequenceRejected (probeReturnHit probe) >>= sampleAt receipt
   after <- memoryAt end
-  sameRegion ControlDescriptorRejected before after 0x63424 28
+  sameRegion ControlDescriptorRejected before after descriptorAddress 28
   sameRegion ControlStorageRejected before after 0x89ea8c 4
   ensure ControlSequenceRejected (sampleHit incoming > sampleHit initial && sampleHit end == sampleHit (last samples))
   if kind == CallbackUnreturned then checkCallback receipt watch probe samples
@@ -424,7 +421,7 @@ checkCreated probe before after samples = do
     sameRegion ControlAuxiliaryRejected expectedAuxiliary after 0x624b4 1920
     checkActivation kind before after samples
     else do
-      mapM_ (\(start,length) -> sameRegion ControlCreationRejected before after start length)
+      mapM_ (\(start,regionBytes) -> sameRegion ControlCreationRejected before after start regionBytes)
         [(0x5beac,4800),(0x5ff0c,6720),(0x5d178,1440),(0x624b4,1920),(0x89ea98,4),(storage,12),(wrapper,8)]
 
 checkActivation :: ProbeCase -> Memory -> Memory -> [Sample] -> Either ControlError ()
@@ -441,7 +438,7 @@ checkActivation kind before after samples = do
       (concatMap kernelViews (filter ((==PrimaryKernel) . kernelCore) (sampleKernels returned))))
   identity <- one IdentityReturn samples
   statusAt identity 0
-  if kind == FreshMasked then mapM_ (\(start,length) -> sameRegion ControlRunnableRejected callMemory returnedMemory start length)
+  if kind == FreshMasked then mapM_ (\(start,size) -> sameRegion ControlRunnableRejected callMemory returnedMemory start size)
     [(0x5ff0c,6720),(0x545cc,264)]
     else do
       kernelBefore <- kernelAt call PrimaryKernel; kernelAfter <- kernelAt returned PrimaryKernel
@@ -529,7 +526,7 @@ checkRelease receipt watch probe samples = do
   restored True (state entry) (state returned)
   restored False (state deleted) (state outer)
   let interval = filter (\sample -> sampleHit sample >= entryIndex && sampleHit sample <= returnIndex) samples
-  ensure ControlSequenceRejected (map sampleBoundary interval == [ReleaseEntry,IdentityCall,IdentityReturn,SaveMaskCall,SaveMaskReturn
+  ensure ControlSequenceRejected (map sampleBoundary (filter ((/=NativeWrite) . sampleBoundary) interval) == [ReleaseEntry,IdentityCall,IdentityReturn,SaveMaskCall,SaveMaskReturn
     ,TryLockCall,TryLockReturn,UnlockCall,UnlockReturn,RestoreMaskCall,RestoreMaskReturn,ReleaseReturn])
   identity <- one IdentityReturn interval; statusAt identity 0
   saved <- one SaveMaskReturn interval; savedMask <- reg 0 (state saved)

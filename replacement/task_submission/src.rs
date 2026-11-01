@@ -107,21 +107,22 @@ impl GuestAddress {
     unsafe fn load<const OFFSET: u32>(self) -> u32 {
         let value;
         unsafe {
-            asm!("ldr {value}, [{address}, #{offset}]", value = out(reg) value,
-                address = in(reg) self.0, offset = const OFFSET,
-                options(nostack, preserves_flags));
+            if OFFSET < 4096 {
+                asm!("ldr {value}, [{address}, #{offset}]", value = lateout(reg) value,
+                    address = in(reg) self.0, offset = const OFFSET,
+                    options(nostack, preserves_flags));
+            } else {
+                asm!("ldr {value}, [{address}, {offset}]", value = lateout(reg) value,
+                    address = in(reg) self.0, offset = in(reg) OFFSET,
+                    options(nostack, preserves_flags));
+            }
         }
         value
     }
 
     #[inline(always)]
     unsafe fn low_id(self) -> TaskId {
-        let value: u32;
-        unsafe {
-            asm!("ldrh {value}, [{address}]", value = out(reg) value,
-                address = in(reg) self.0, options(nostack, preserves_flags));
-        }
-        TaskId(value as u16)
+        TaskId(unsafe { core::ptr::read_volatile(self.0 as *const u16) })
     }
 
     #[inline(always)]
@@ -164,7 +165,13 @@ unsafe fn root(index: RootIndex) -> GuestAddress {
 
 #[inline(always)]
 fn encoded(id: TaskId, class: TaskClass) -> EncodedTaskId {
-    EncodedTaskId((id.0 as u32) | class.0.wrapping_shl(16))
+    let value;
+    unsafe {
+        asm!("orr {value}, {id}, {class}, lsl #16", value = lateout(reg) value,
+            id = in(reg) u32::from(id.0), class = in(reg) class.0,
+            options(pure, nomem, nostack, preserves_flags));
+    }
+    EncodedTaskId(value)
 }
 
 #[inline(always)]

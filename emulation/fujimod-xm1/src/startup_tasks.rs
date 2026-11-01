@@ -277,7 +277,7 @@ fn drive() -> Result<(), String> {
                 let natural_binding = submissions.iter().rev().find(|item| item.core == core && (item.return_hit.is_none() || item.return_hit == Some(index)))
                     .map(|item| Binding { id: item.id, core, descriptor: item.descriptor, caller_sp: item.caller_sp });
                 let prospective = if probe_case != ProbeCase::Natural && probe.is_none() && core == Core::Primary && address == 0x69d164 {
-                    Some(Binding { id: probe_case.task(), core, descriptor: Address(0x40063424), caller_sp: state.sp })
+                    Some(Binding { id: probe_case.task(), core, descriptor: task_submission_control::descriptor_address(state.sp)?, caller_sp: state.sp })
                 } else { None };
                 let active = if probe.is_some() && core == Core::Primary { probe_binding } else { natural_binding.or(prospective) };
                 let instruction = code_word(&machine, &maps, &state, &code)?;
@@ -339,7 +339,7 @@ fn drive() -> Result<(), String> {
                 let anchor = samples.last().ok_or("natural anchor absent")?;
                 require(anchor.context.core == Core::Primary && anchor.context.pc == Address(0x69d164), "controlled probe lacks paused primary root anchor")?;
                 let initial = anchor.context.clone();
-                probe_binding = Some(Binding { id: probe_case.task(), core: Core::Primary, descriptor: Address(0x40063424), caller_sp: initial.sp });
+                probe_binding = Some(Binding { id: probe_case.task(), core: Core::Primary, descriptor: task_submission_control::descriptor_address(initial.sp)?, caller_sp: initial.sp });
                 let handle = watch.as_ref().ok_or("startup watch absent")?;
                 probe = Some(task_submission_control::prepare(&mut machine, &maps, probe_case, initial, anchor.hit,
                     || handle.records.borrow().state().get("records").and_then(serde_json::Value::as_array).map(Vec::len).ok_or_else(|| "watch records absent".into()))?);

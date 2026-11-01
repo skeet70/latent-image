@@ -33,6 +33,7 @@ data WitnessError = SourceRejected | ReceiptDecodeRejected | StatusRejected | Id
   | WatchRejected | ClockRejected | FetchRejected | WriteRejected | PreimageRejected | ForeignWriterRejected
   | SnapshotRejected | AliasRejected | ContextRejected | CodeRejected | KernelRejected | TaskRejected
   | SubmissionRejected | RunnableRejected | FirstTaskRejected | PrologueRejected | RawWatchRejected | ProgramRejected | ControlRejected
+  | ProgramSampleRejected HitIndex P.ProgramError
   deriving (Eq, Show)
 
 require :: Bool -> WitnessError -> Either WitnessError ()
@@ -323,7 +324,7 @@ checkSample inputs@(Inputs _ _ program) receipt probe sample previous = do
   memory <- validateViews sample previous
   mapM_ (checkKernel memory) (sampleKernels sample)
   checkLocalShape inputs receipt probe sample memory
-  either (const (Left (if receiptSchema receipt == LegacyStockProtocol then SubmissionRejected else ProgramRejected))) Right (P.checkProgramSample program receipt sample)
+  either (\problem -> Left (if receiptSchema receipt == LegacyStockProtocol then SubmissionRejected else ProgramSampleRejected (sampleHit sample) problem)) Right (P.checkProgramSample program receipt sample)
   readWord SnapshotRejected memory 0x96bd20 >>= \root -> require (root == 0x4004dae0) SnapshotRejected
   readWord SnapshotRejected memory 0x96bd24 >>= \root -> require (root == 0x400ddaa0) SnapshotRejected
   pure memory
@@ -375,7 +376,7 @@ noteSnapshot inputs@(Inputs _ _ program) receipt probe sample progress = do
     counter <- at ClockRejected (W.contextCounts state) (coreIndex (contextCore (sampleContext sample)))
     require (M.notMember core (progressStops noted)) ContextRejected
     require (M.notMember core (progressStores noted)) WriteRejected
-    store <- either (const (Left ProgramRejected)) Right (P.programGuestStore program sample)
+    store <- either (Left . ProgramSampleRejected (sampleHit sample)) Right (P.programGuestStore program sample)
     case store of
       Nothing -> pure ()
       Just actual -> do
@@ -842,7 +843,7 @@ checkFirst receipt watch first = do
 
 admitReceipt :: Inputs -> ObservedFiles -> Either WitnessError QualifiedReceipt
 admitReceipt inputs@(Inputs _ expectedIdentity program) observed = do
-  require (B.length (observedReceipt observed) <= 128*1024*1024 && B.length (observedWatch observed) <= 32*1024*1024) ReceiptDecodeRejected
+  require (B.length (observedReceipt observed) <= 512*1024*1024 && B.length (observedWatch observed) <= 32*1024*1024) ReceiptDecodeRejected
   C.ControlEnvelope receipt probe <- decode ReceiptDecodeRejected (observedReceipt observed)
   watch <- decode RawWatchRejected (observedWatch observed)
   either (const (Left StatusRejected)) Right (P.checkProgramHeader program receipt)

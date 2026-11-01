@@ -88,7 +88,7 @@ sourceFiles (SourcePaths (InputFile dat) (InputFile run) (InputFile rom) (Analys
 
 observedFiles :: ObservationDirectory -> IO ObservedFiles
 observedFiles (ObservationDirectory directory) = ObservedFiles
-  <$> H.readRegular 0x8000000 (directory </> "startup-tasks.json")
+  <$> H.readRegular 0x20000000 (directory </> "startup-tasks.json")
   <*> H.readRegular 0x2000000 (directory </> "memory-watch.json")
   <*> H.readRegular 0x10000000 (directory </> "reset.fujimod")
 

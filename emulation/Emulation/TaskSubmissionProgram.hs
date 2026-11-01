@@ -219,11 +219,15 @@ wordAt sample location = do
       candidates = [U.word32At raw (fromIntegral (start-base)) | view <- views sample
         , let base = address (viewPhysical view), let raw = bytes (viewBytes view)
         , start >= base, toInteger start+4 <= toInteger base+toInteger (B.length raw)]
-  require (location .&. 3 == 0 && not (null candidates) && all (==head candidates) candidates) ViewRejected
-  pure (head candidates)
+  case candidates of
+    first:rest -> do
+      require (location .&. 3 == 0 && all (==first) rest) ViewRejected
+      pure first
+    [] -> Left ViewRejected
 objectWord :: Sample -> ObjectKind -> Word32 -> Either ProgramError Word32
 objectWord sample kind location = do
-  require (any (\view -> viewObject view == kind && address (viewPhysical view) == physical location && B.length (bytes (viewBytes view)) >= 4) (views sample)) ViewRejected
+  require (any (\view -> viewObject view == kind && physical location >= address (viewPhysical view)
+    && toInteger (physical location)+4 <= toInteger (address (viewPhysical view))+toInteger (B.length (bytes (viewBytes view)))) (views sample)) ViewRejected
   wordAt sample location
 condition :: Word32 -> Word32 -> Either ProgramError Bool
 condition instruction cpsr = case instruction `shiftR` 28 of
@@ -261,13 +265,28 @@ classOf sample ident = do
   let expected = if ident `elem` [45,46,62,65,66,88,89,90,93,103] then 2 else 1
   require (actual == expected) CallArgumentsRejected
   pure actual
-descriptor :: Sample -> Sample -> Either ProgramError (Word32,[Word32])
+data TaskDescriptor = TaskDescriptor
+  { descriptorIdentifier :: TaskId
+  , descriptorPriority :: W.WordValue
+  , descriptorEntry :: W.Address
+  , descriptorArgument :: W.WordValue
+  , descriptorTail :: W.WordValue
+  }
+descriptorNumber :: TaskDescriptor -> Word32
+descriptorNumber snapshot = case descriptorIdentifier snapshot of TaskId ident -> fromIntegral ident
+descriptor :: Sample -> Sample -> Either ProgramError TaskDescriptor
 descriptor entry sample = do
   pointer <- reg entry 0
   require (pointer .&. 3 == 0) CallArgumentsRejected
-  wordsRead <- mapM (wordAt sample . (pointer+)) [0,4..24]
-  require (head wordsRead >= 1 && head wordsRead <= 104) CallArgumentsRejected
-  pure (pointer,wordsRead)
+  ident <- wordAt sample pointer
+  require (ident >= 1 && ident <= 104) CallArgumentsRejected
+  _ <- wordAt sample (pointer+4)
+  priority <- W.WordValue <$> wordAt sample (pointer+8)
+  _ <- wordAt sample (pointer+12)
+  start <- W.Address <$> wordAt sample (pointer+16)
+  argument <- W.WordValue <$> wordAt sample (pointer+20)
+  tailWord <- W.WordValue <$> wordAt sample (pointer+24)
+  pure (TaskDescriptor (TaskId (fromIntegral ident)) priority start argument tailWord)
 expectedTarget :: Sample -> Sample -> N.CallTarget -> Either ProgramError Word32
 expectedTarget entry sample target = case target of
   N.FixedService fixed -> pure (case fixed of
@@ -281,16 +300,19 @@ expectedTarget entry sample target = case target of
       N.CurrentCoreService -> pure (0,0x1618,0x412bc)
       N.SaveMaskService -> pure (coreIndex (core sample),0x164,if core sample == PrimaryKernel then 0x41140 else 0xd1140)
       N.RestoreMaskService -> pure (coreIndex (core sample),0x168,if core sample == PrimaryKernel then 0x41164 else 0xd1164)
-      _ -> Left CallTargetRejected
     root <- objectWord sample InterfaceRoots (0x96bd20+4*fromIntegral rootIndex)
     require (root == if rootIndex == 0 then 0x4004dae0 else 0x400ddaa0) CallTargetRejected
     actual <- wordAt sample (root+slot)
     require (actual == pinned) CallTargetRejected
     pure actual
   where selected slot targets = do
-          (_,initial) <- descriptor entry entry
-          selectedClass <- classOf entry (head initial .&. 0xffff)
-          pure (fromIntegral selectedClass-1,slot,targets !! (fromIntegral selectedClass-1))
+          initial <- descriptor entry entry
+          selectedClass <- classOf entry (descriptorNumber initial)
+          selectedTarget <- case (selectedClass,targets) of
+            (1,primary:_) -> pure primary
+            (2,_:secondary:_) -> pure secondary
+            _ -> Left CallTargetRejected
+          pure (fromIntegral selectedClass-1,slot,selectedTarget)
 
 checkProvenance :: Sample -> Sample -> N.ArgumentProvenance -> Word32 -> Either ProgramError ()
 checkProvenance entry sample provenance actual = case provenance of
@@ -331,19 +353,19 @@ checkArguments receipt entry sample kind target = case target of
   N.FixedService N.CriticalExit -> do saved <- latest receipt sample entry CriticalEnterReturn; reg saved 0 >>= \token -> arguments sample [token]
   _ -> do
     require (kind == N.Submission) CallArgumentsRejected
-    (_,d) <- descriptor entry sample
-    let ident = head d; index = ident-1; wrapper = 0x40a5b204+8*index
+    d <- descriptor entry sample
+    let ident = descriptorNumber d; index = ident-1; wrapper = 0x40a5b204+8*index
     taskClass <- classOf sample ident
     case target of
       N.AuxiliaryService -> do
         r0 <- reg sample 0; require (r0 == taskClass `shiftL` 16 .|. ident) CallArgumentsRejected
         actual <- parameters entry sample 2
-        require (actual == [if d !! 6 == 0xa5f0a5f0 then 0 else 4,0]) CallArgumentsRejected
+        require (actual == [if descriptorTail d == W.WordValue 0xa5f0a5f0 then 0 else 4,0]) CallArgumentsRejected
       N.CreationService -> do
         r0 <- reg sample 0; require (r0 == taskClass `shiftL` 16 .|. ident) CallArgumentsRejected
         base <- wordAt sample wrapper; size <- wordAt sample (wrapper+4)
         actual <- parameters entry sample 6
-        require (actual == [2,d !! 5,d !! 4,d !! 2,size,base]) CallArgumentsRejected
+        require (actual == [2,value (descriptorArgument d),address (descriptorEntry d),value (descriptorPriority d),size,base]) CallArgumentsRejected
       N.ActivationService -> arguments sample [taskClass `shiftL` 16 .|. ident]
       N.FixedService N.Reservation -> do size <- wordAt sample (wrapper+4); arguments sample [index,size,wrapper]
       N.FixedService N.Fill -> do base <- wordAt sample wrapper; size <- wordAt sample (wrapper+4); arguments sample [base,ident .&. 0xff,size]
@@ -360,7 +382,6 @@ checkArguments receipt entry sample kind target = case target of
         loggedStatus <- reg logged 2
         require (status == loggedStatus) CallArgumentsRejected
         arguments sample [status]
-      _ -> Left CallArgumentsRejected
 
 maximumDemand :: N.CallTarget -> Integer
 maximumDemand target = case target of
@@ -388,13 +409,13 @@ actualDemand entry sample target = case target of
         require (callback `elem` [0,0x6470fc]) UnsupportedCallback
         pure (if callback == 0 then 40 else 160)
   N.ActivationService -> if testBit (value (W.contextCpsr (state sample))) 7 then pure 24 else do
-    (_,d) <- descriptor entry sample
+    d <- descriptor entry sample
     kernel <- one UnsupportedActivation (filter ((==core sample) . kernelCore) (sampleKernels sample))
     current <- one UnsupportedActivation (filter ((==kernelCurrent kernel) . taskNode) (kernelTasks kernel))
     selected <- one UnsupportedActivation (filter ((==kernelSelected kernel) . taskNode) (kernelTasks kernel))
     fresh <- one UnsupportedActivation (filter ((==TaskId 1) . taskId) (kernelTasks kernel))
     contextWord <- wordAt sample (if core sample == PrimaryKernel then 0x400545a4 else 0x400e4564)
-    require (core sample == PrimaryKernel && head d == 1 && d !! 2 == 15 && contextWord == 0
+    require (core sample == PrimaryKernel && descriptorIdentifier d == TaskId 1 && descriptorPriority d == W.WordValue 15 && contextWord == 0
       && taskId current == TaskId 104 && taskId selected == TaskId 104
       && taskEffectivePriority current == 0 && taskEffectivePriority selected == 0
       && taskCreated fresh == W.WordValue 1 && taskState fresh == 0 && taskPending fresh .&. 1 == 0
@@ -516,8 +537,8 @@ checkLegacyCall receipt sample target = do
   taken <- condition (value (sampleCodeWord sample)) (value (W.contextCpsr (state sample)))
   require taken CallDispositionRejected
   (actual,_) <- actualTarget sample
-  (_,d) <- descriptor entry sample
-  let ident = head d
+  d <- descriptor entry sample
+  let ident = descriptorNumber d
       taskClass = if ident `elem` [45,46,62,65,66,88,89,90,93,103] then 2 else 1
       encoded = taskClass `shiftL` 16 .|. ident
   case target of
@@ -529,7 +550,7 @@ checkLegacyCall receipt sample target = do
       base <- wordAt sample (0x40a5b204+8*(ident-1))
       size <- wordAt sample (0x40a5b208+8*(ident-1))
       actualParameters <- mapM (wordAt sample . (pointer+)) [0,4..20]
-      require (actualParameters == [2,d !! 5,d !! 4,d !! 2,size,base]) CallArgumentsRejected
+      require (actualParameters == [2,value (descriptorArgument d),address (descriptorEntry d),value (descriptorPriority d),size,base]) CallArgumentsRejected
     N.ActivationService -> do
       require (actual == if core sample == PrimaryKernel then 0x44f2c else 0xd4eec) CallTargetRejected
       arguments sample [encoded]

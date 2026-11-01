@@ -199,7 +199,7 @@ compareProbe retained owned left right = do
   mapM_ (\(start,size) -> do
     original <- readBytes leftMemory start size; replacement <- readBytes rightMemory start size
     ensure problem (original == replacement))
-    [(0xa0f82c,4),(0x89ea8c,4),(0x89ea98,4),(0x9c280c,4),(0x63424,28)
+    [(0xa0f82c,4),(0x89ea8c,4),(0x89ea98,4),(0x9c280c,4),(physical (addr (probeDescriptor left)),28)
     ,(0x5d178+12*(fromIntegral number-1),12),(0x624b4+16*(fromIntegral number-1),16)]
   leftKernel <- kernelAt before PrimaryKernel; rightKernel <- kernelAt after PrimaryKernel
   let queueViews kernel = sortOn (\(object,address,_) -> (object,address))

@@ -2709,3 +2709,21 @@ haskell_binary(
         "//replacement/task_submission:task-submission-artifact",
     ],
 )
+
+haskell_test(
+    name = "task-submission-control-regressions",
+    srcs = ["TaskSubmissionControlTests.hs"],
+    main_file = "TaskSubmissionControlTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    tags = ["manual", "local"],
+    deps = [
+        ":startup-task-witness-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//replacement/kernel_install:kernel-install-artifact",
+    ],
+)

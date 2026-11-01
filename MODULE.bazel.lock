@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "/zgqa3C9+LQzuA66pmG+WLAs9YH2gDMyMmXvg30YEdY=",
+        "bzlTransitiveDigest": "TRDN3PeB7Wb54JjqU0YyrPJVf8qMRgJvhiK/magD9H4=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -523,6 +523,9 @@
                 "@@//emulation:fujimod-xm1/src/startup_tasks.rs": "//emulation:fujimod-xm1/src/startup_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/task_storage.rs": "//emulation:fujimod-xm1/src/task_storage.rs",
                 "@@//emulation:fujimod-xm1/src/task_storage_check.rs": "//emulation:fujimod-xm1/src/task_storage_check.rs",
+                "@@//emulation:fujimod-xm1/src/task_submission_control.rs": "//emulation:fujimod-xm1/src/task_submission_control.rs",
+                "@@//emulation:fujimod-xm1/src/task_submission_program.rs": "//emulation:fujimod-xm1/src/task_submission_program.rs",
+                "@@//emulation:fujimod-xm1/src/task_submission_runtime.rs": "//emulation:fujimod-xm1/src/task_submission_runtime.rs",
                 "@@//emulation:fujimod-xm1/src/toggle.rs": "//emulation:fujimod-xm1/src/toggle.rs",
                 "@@//emulation:fujimod-xm1/src/trace.rs": "//emulation:fujimod-xm1/src/trace.rs",
                 "@@//emulation:fujimod-xm1/src/ui_conversion.rs": "//emulation:fujimod-xm1/src/ui_conversion.rs",

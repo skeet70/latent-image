@@ -73,6 +73,7 @@ haskell_test(
         ":task-submission-artifact",
         "//host:base",
         "//host:bytestring",
+        "//host:directory",
         "//host:host-support",
         "//host:update-container",
     ],

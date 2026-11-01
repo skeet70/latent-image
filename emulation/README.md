@@ -1343,6 +1343,8 @@ The source extension replaces only `[0x725dd8,0x72612c)` with the complete 852-b
 
 The observer source accepts `--contract CANDIDATE_CONTRACT --native NATIVE_IMAGE` for an owned candidate and `--case CASE` for a controlled retained or owned observation. Natural observations continue through the existing menu endpoint. Controlled observations start after all four natural submission returns and both first prologues, keep the watch armed, invoke the real wrapper or retained deletion path and stop at their declared return or callback-prologue endpoint without menu continuation. Lock/error controls record their exact register and one-word memory mutations; service results are executed, not synthesized.
 
+Controlled submissions construct their seven-word descriptor in bytes 32..60 of the genuine current104 allocation, derived from its admitted post-prologue SP. The consumer protects that live interval when joining native and retained frames. Each changed word records its preimage and aliases; deletion controls make no descriptor patch. The boot caller's old descriptor is not retained after scheduling. Receipt inputs are capped at 512 MiB and watch inputs at 32 MiB.
+
 The checker adds three explicit modes. `bazel run //emulation:startup-task-check -- ...` supplies `ENCODER REBUILD DECODER`; a directly invoked binary needs those three tool paths before the mode. Historical direct stock commands still work without them.
 
 ```text

@@ -8,6 +8,7 @@ import Fixtures
 import qualified FujiAF.Host as H
 import Replacement.TaskSubmission.Admission
 import Replacement.TaskSubmission.Artifact
+import System.Directory (canonicalizePath)
 import System.Environment (getArgs)
 
 assert :: Bool -> String -> IO ()
@@ -27,10 +28,10 @@ main = do
 
 nativeTests :: FilePath -> FilePath -> IO ()
 nativeTests nativePath symbolPath = do
-  native <- H.readRegular 852 nativePath
-  symbols <- H.readRegular 0x10000 symbolPath
+  native <- canonicalizePath nativePath >>= H.readRegular 852
+  symbols <- canonicalizePath symbolPath >>= H.readRegular 0x10000
   _ <- admit (native,symbols)
-  forM_ [Control,EquivalentMove,UnexecutedPadding,AlternateTargetRegister] $ \control -> do
+  forM_ [Control,EquivalentMove,UnexecutedPadding,AlternateTargetRegister,ParameterBlockStore,DeadCapabilityJoin] $ \control -> do
     _ <- admit (fixture control)
     pure ()
   forM_ [GuestWrite,UnknownOffsetGuestWrite] $ \control -> do

@@ -5,7 +5,6 @@ use fujimod_xm1::machine::Machine;
 use serde::{Serialize, Serializer};
 use std::str::FromStr;
 
-const DESCRIPTOR: Address = Address(0x40063424);
 const RETURN_PC: Address = Address(0x69d164);
 const SUBMISSION_ENTRY: Address = Address(0x725dd8);
 const DELETION_ENTRY: Address = Address(0x72612c);
@@ -16,6 +15,11 @@ const CALLBACK_ENTERED: Address = Address(0x69cbf4);
 const LOCK: Address = Address(0x409c280c);
 const CALLBACK_WORD: Address = Address(0x4089ea8c);
 const IRQ_MASK: u32 = 0x80;
+
+// The controlled descriptor occupies root104 backing bytes 32..60.
+pub(super) fn descriptor_address(caller_sp: Address) -> Result<Address, String> {
+    caller_sp.0.checked_sub(976).map(Address).ok_or_else(|| "controlled descriptor address wraps".into())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -257,10 +261,9 @@ pub(super) fn prepare(
     require(root_base != 0 && root_size == 1024
         && root_base.checked_add(root_size).and_then(|top| top.checked_sub(16)).map(|sp| sp & !0x40000000) == Some(initial.sp.0 & !0x40000000),
         "control probe root104 stack differs from its natural allocation")?;
-    let descriptor = view(machine, maps, &initial, Object::Descriptor, DESCRIPTOR.0, 28)?;
-    for (offset, expected) in [102, 0x781968, 15, 1024, CALLBACK_ENTRY.0, 0, 1].into_iter().enumerate() {
-        require(word(&descriptor.bytes, offset * 4)? == expected, "control probe requires the unchanged natural idle102 descriptor")?;
-    }
+    let descriptor = descriptor_address(initial.sp)?;
+    require(root_base.checked_add(32).map(|address| address & !0x40000000) == Some(descriptor.0 & !0x40000000),
+        "controlled descriptor leaves its root104 backing placement")?;
     let idle = view(machine, maps, &initial, Object::Wrapper, wrapper(TaskId(102)).0, 8)?;
     let idle_state = view(machine, maps, &initial, Object::Storage, storage(TaskId(102)).0, 12)?;
     let idle_base = word(&idle.bytes, 0)?;
@@ -276,10 +279,10 @@ pub(super) fn prepare(
         require(read_word(machine, maps, &initial, Address(0x7cad9c))? == Word(1), "fresh control task does not select class1")?;
     }
     let mut patches = Vec::new();
-    if case.task() == TaskId(1) {
+    if case.target() == ProbeTarget::Submission {
         let tail = if case == ProbeCase::SentinelFresh { 0xa5f0a5f0 } else { 1 };
-        for (offset, value) in [1, 0x781968, 15, 1024, CALLBACK_ENTRY.0, 0, tail].into_iter().enumerate() {
-            patch_word(machine, maps, &initial, initial_hit, Address(DESCRIPTOR.0 + 4 * offset as u32), Word(value), &cursor, &mut patches)?;
+        for (offset, value) in [u32::from(case.task().0), 0x781968, 15, 1024, CALLBACK_ENTRY.0, 0, tail].into_iter().enumerate() {
+            patch_word(machine, maps, &initial, initial_hit, Address(descriptor.0 + 4 * offset as u32), Word(value), &cursor, &mut patches)?;
         }
     }
     match case {
@@ -297,7 +300,7 @@ pub(super) fn prepare(
     }
     let target = case.target();
     let argument = match target {
-        ProbeTarget::Submission => DESCRIPTOR.0,
+        ProbeTarget::Submission => descriptor.0,
         ProbeTarget::Deletion => u32::from(case.task().0),
     };
     let entry = match target {
@@ -328,7 +331,7 @@ pub(super) fn prepare(
     require(same_context(&configured, &expected), "control configuration changed an undeclared register or context field")?;
     Ok(PreparedProbe {
         record: ProbeRecord {
-            case, target, task: case.task(), descriptor: DESCRIPTOR, return_pc: RETURN_PC,
+            case, target, task: case.task(), descriptor, return_pc: RETURN_PC,
             initial_hit, before: initial, configured, entry_hit: None, delete_entry_hit: None,
             return_hit: None, release_entry_hit: None, release_return_hit: None,
             callback_entry_hit: None, callback_entered_hit: None, register_changes, patches,
