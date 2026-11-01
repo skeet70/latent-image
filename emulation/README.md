@@ -1437,6 +1437,14 @@ Admission separately checks all four descriptor/caller/creation/activation/error
 
 `E-STARTUP-TASK-STOCK-QUALIFIED-150` records successful independent admission of the 60-snapshot, 17,624-row stock receipt, all four explicit activation refusals and both first prologues: B93 and A104. One 38-case serialized refusal invocation passes, including missing stopped-fetch translation, malformed stopped address/width and coherently wrapped per-core counts. Its earlier CLI attempt refused the 89,854-byte canonical run document at an undersized 64 KiB input cap; the capped reader now permits 1 MiB and canonical digest admission remains unchanged. These are stock baseline and host-side refusal results, not owned task qualification or global wrapper retirement.
 
+#### Initial task-body boundary (#152)
+
+[The initial task-body contract](../reports/replacement-inventory-baseline.md#817-initial-root-idle-and-standby-task-bodies-152) source-binds root104 `[0x69d160,0x69d2b4)`, shared idle102/103 `[0x69cbf0,0x69cc00)` and standby93 `[0x69cd58,0x69cdf8)`. It reuses the admitted #151 receipt without another guest. B103 reaches a recorded WFI fetch before the watch closes; A102's entry, a repeated idle wait/wake interval, root104's retained calls and a successful standby hardware cycle remain outside that qualification.
+
+Idle102/103 have no body-local shared predicate or service call: they repeat WFI and its backedge. Standby93 instead waits on its task-associated event mask1 through `0x724480`, accepts only an entire output word equal to1, then performs the recovered IRQ/cache/MMIO wait/restore sequence. Its concrete flag producer and hardware wake source remain unidentified. Root104 creates five early executor workers and, on its nonzero branch, submits the later elfloader/flashloader/initcont chain; the later executable-publication contract belongs to #153.
+
+The proposed first owned increment replaces only the complete16-byte shared idle body. It requires a separately reviewed extension of these existing observers/consumers past A104's first prologue, actual A102/B103 entry, independently compared IRQ preemption/return and repeated waits, identity/context/effect refusals and continuous owned-code/resource admission. The current stock-only producer and consumer do not admit an owned candidate or that longer interval. The user-ARM native-case profile refuses WFI; do not replace natural full-system execution with a native success.
+
 ### Owned first-stage witness
 
 `//emulation:first-stage-witness` starts from the captured ROM reset with the packaged DAT. It arms five core-0 instruction stops before execution and reads twelve memory extents at the owned handoff vector. Its 20,000,000-instruction budget is separate from the cold-menu route. It does not import a stock-initialization checkpoint or force an execution frame.
