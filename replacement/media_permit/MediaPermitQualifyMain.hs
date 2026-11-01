@@ -6,6 +6,7 @@ module Main where
 
 import Control.Exception (IOException, try)
 import Control.Monad (forM_, unless, when)
+import qualified ArmElf as E
 import Data.Aeson (Value, encode, object, (.=))
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
@@ -18,6 +19,7 @@ import qualified Emulation.NativeObservation as N
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host hiding (sha256)
 import Numeric (showHex)
+import StockInventory (checkedStockFunctions)
 import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, listDirectory)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
@@ -43,7 +45,7 @@ senderSize = 0x1000
 frameBase = 0x00e73000
 frameSize = 0x00e86c00 - frameBase
 midBase = 0x00e86d00
-midSize = 0x530
+midSize = 0x00e87264 - midBase
 ctxBase = 0x00e87ad4
 ctxSize = 0x40
 
@@ -356,37 +358,6 @@ scenarios =
       (\e -> e {eHandback = (10, 1), eFaults = 1})
   ]
 
-stockFunctions :: [(Word32, Int)]
-stockFunctions =
-  [ (0x00e67750, 0x80)
-  , (0x00e73a74, 0x30)
-  , (0x00e74a34, 0x30)
-  , (0x00e748c8, 0x90)
-  , (0x00e74c68, 0x80)
-  , (0x00e75490, 0x70)
-  , (0x00e755d0, 0x98)
-  , (0x00e77168, 0x1a0)
-  , (0x00e7e95c, 0x2f0)
-  , (0x00e7ee84, 0x200)
-  , (0x00e7f324, 0x10)
-  , (0x00e8659c, 0x1c0)
-  , (0x00e86d30, 0x10)
-  , (0x00e87114, 0xb0)
-  , (0x00e871c4, 0x60)
-  , (0x00e87ad4, 0x40)
-  , (0x00e886ec, 0x100)
-  , (0x00e88804, 0xb0)
-  , (0x00e88e1c, 0x60)
-  , (0x00e88ed0, 0x80)
-  , (0x00eb0ea0, 0x40)
-  , (0x00722054, 0x80)
-  , (0x00726658, 0x40)
-  , (0x00e87404, 0x40)
-  , (0x00e87944, 0x80)
-  , (0x00e881e8, 0x80)
-  , (0x00e8d82c, 0x80)
-  , (0x00e6e368, 0x80)
-  ]
 
 data Side = Original | Candidate | DefectCandidate deriving (Eq, Show)
 
@@ -406,6 +377,8 @@ data Inputs = Inputs
   , inCancel :: B.ByteString
   , inCount :: B.ByteString
   , inStock :: B.ByteString
+  , inFunctions :: [(Word32, Int)]
+  , inCountFunctions :: [(Word32, Int)]
   }
 
 loadInputs :: FilePath -> FilePath -> IO Inputs
@@ -434,8 +407,13 @@ loadInputs build stockElf = do
     ioError (userError "service model bin is empty")
   when (B.length count > 0x80) $
     ioError (userError "count model exceeds the stock subframe-count span")
+  unless (sha256Hex (sha256 (B.take 5185120 (B.drop 0xe8 stock))) == "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a") $
+    ioError (userError "stock ELF does not contain the pinned image-5 bytes")
   when (any (\(address, expected) -> stockWord stock address /= expected) stockEntries) $
     ioError (userError "stock ELF does not carry the admitted entry words")
+  stockCode <- either (ioError . userError) pure (checkedStockFunctions (B.take 5185120 (B.drop 0xe8 stock)))
+  models <- concat <$> mapM (linkedFunctions build) [LowModel, HandbackModel, FatalLogModel, FatalModel, CommandModel, CancelModel]
+  countFunctions <- linkedFunctions build CountModel
   pure
     Inputs
       { inCandidate = candidate
@@ -448,7 +426,41 @@ loadInputs build stockElf = do
       , inCancel = cancel
       , inCount = count
       , inStock = stock
+      , inFunctions = stockCode ++ models
+      , inCountFunctions = countFunctions
       }
+
+data ServiceModel = LowModel | HandbackModel | FatalLogModel | FatalModel | CommandModel | CancelModel | CountModel
+
+linkedFunctions :: FilePath -> ServiceModel -> IO [(Word32, Int)]
+linkedFunctions build model = do
+  bytes <- B.readFile (artifactPath ++ ".elf")
+  flat <- B.readFile (artifactPath ++ ".bin")
+  elf <- either (ioError . userError) pure (E.parseElf bytes)
+  text <- case [section | section <- E.elfSections elf, E.sectionExecutable section, E.sectionAllocated section] of
+    [section] -> pure section
+    _ -> ioError (userError "service model requires one executable section")
+  let linked = B.take (fromIntegral (E.sectionSize text)) (B.drop (fromIntegral (E.sectionOffset text)) bytes)
+  unless (flat == linked) (ioError (userError "service model ELF and flat image differ"))
+  mapM (one text (E.elfSymbols elf)) names
+  where
+    (artifact, names) = case model of
+      LowModel -> ("low", ["rb_mp_memcpy", "rb_mp_log"])
+      HandbackModel -> ("side-a", ["rb_mp_handback"])
+      FatalLogModel -> ("fatal2", ["rb_mp_fatal2"])
+      FatalModel -> ("side-b", ["rb_mp_fatal"])
+      CommandModel -> ("command", ["rb_mp_command"])
+      CancelModel -> ("cancel", ["rb_mp_cancel"])
+      CountModel -> ("count", ["rb_mp_subframe_count"])
+    artifactPath = build </> "replacement/media_permit/services" </> artifact
+    one text symbols name =
+      case [symbol | symbol <- symbols, E.symbolName symbol == name, E.symbolKind symbol == E.FunctionSymbol, E.symbolSize symbol > 0] of
+        [symbol]
+          | E.symbolValue symbol >= E.sectionAddress text
+          , toInteger (E.symbolValue symbol) + toInteger (E.symbolSize symbol) <= toInteger (E.sectionAddress text) + toInteger (E.sectionSize text)
+          , E.symbolValue symbol .&. 3 == 0
+          , E.symbolSize symbol .&. 3 == 0 -> pure (E.symbolValue symbol, fromIntegral (E.symbolSize symbol))
+        _ -> ioError (userError ("missing unique bounded service-model function " ++ name))
 
 stockEntries :: [(Word32, Word32)]
 stockEntries =
@@ -651,7 +663,9 @@ caseJsonAt inputs scenario side entry regions =
     , "registers" .= initialRegisters scenario side
     , "regions" .= [regionJson ident base size bytes | (ident, base, size, bytes) <- regions]
     , "functions" .=
-        ( [object ["address" .= hex address, "size" .= size] | (address, size) <- stockFunctions]
+        ( [ object ["address" .= hex address, "size" .= admittedSize address size]
+          | (address, size) <- functions
+          ]
             ++ [object ["address" .= hex address, "size" .= size] | (address, size) <- candidateSpans inputs side]
         )
     , "stubs" .= ([] :: [Value])
@@ -678,6 +692,13 @@ caseJsonAt inputs scenario side entry regions =
           ] :: [String]
         )
     ]
+  where
+    functions
+      | scCountModel scenario = filter ((/= 0x00e74c68) . fst) (inFunctions inputs) ++ inCountFunctions inputs
+      | otherwise = inFunctions inputs
+    admittedSize address size
+      | side /= Original && scFamily scenario == Message && address == 0x00e77168 = 4
+      | otherwise = size
 
 data ResultStatus = ResultPassed | ResultFailed | ResultInvalidCase | ResultInvalidOutput | ResultHostTimeout
   deriving (Eq, Show)
@@ -847,7 +868,7 @@ runSide runner root inputs scenario side =
                               _ -> Nothing
                        in pure (Result (if null problems then ResultPassed else ResultFailed) problems (Just observation) effects)
 
--- The control traps at the poisoned word after the stock entry veneer.
+-- The retired resolver body is outside the candidate message case's declared code.
 runForbiddenBody :: FilePath -> FilePath -> Inputs -> Scenario -> IO Result
 runForbiddenBody runner root inputs scenario =
   case regionBytes inputs Candidate control of
@@ -880,8 +901,9 @@ runForbiddenBody runner root inputs scenario =
                     Right observation ->
                       let pc = M.lookup N.Pc (N.nativeRegisters observation)
                           refused =
-                            N.nativeStatus observation `elem` [N.UnsupportedInstruction, N.FetchGuard]
+                            N.nativeStatus observation == N.UnknownCall
                               && pc == Just 0x00e7716c
+                              && N.nativeProvenance observation == N.Complete (N.ProvenanceTotal 0) []
                        in pure
                             ( Result
                                 (if refused then ResultPassed else ResultFailed)
@@ -926,8 +948,42 @@ faultWitness scenario result =
           && effects == expectedDefect scenario
       _ -> False
 
-report :: [(Scenario, Result, Result)] -> Scenario -> Result -> Result -> Value
-report results faultScenario fault forbidden =
+runBoundaryControls :: FilePath -> FilePath -> Inputs -> IO [Control]
+runBoundaryControls runner root inputs = do
+  let scenario = scenarioById "primary-slot0"
+      altered words' = inputs {inCandidate = B.concat (map u32le words') <> B.drop (4 * length words') (inCandidate inputs)}
+      isaInputs = altered [0xe710f110]
+  abi <- runSide runner (root </> "abi-control") (altered [0xe3a04000, 0xe3a00000, 0xe12fff1e]) scenario Candidate
+  isa <- runSide runner (root </> "isa-control") isaInputs scenario Candidate
+  let abiRefused = case resultObservation abi of
+        Just observation ->
+          resultStatus abi == ResultFailed
+            && N.nativeStatus observation == N.Returned
+            && M.lookup N.R4 (N.nativeRegisters observation) == Just 0
+            && length (checkAbi observation) == 1
+            && null (checkEffects scenario observation)
+            && null (checkWrites observation)
+        Nothing -> False
+      isaRefused = case (resultObservation isa, regionBytes isaInputs Candidate scenario) of
+        (Just observation, Right regions) ->
+          N.nativeStatus observation == N.UnsupportedInstruction
+            && M.lookup N.Pc (N.nativeRegisters observation) == Just candidateBase
+            && N.nativeProvenance observation == N.Complete (N.ProvenanceTotal 0) []
+            && and
+              [ M.lookup register (N.nativeRegisters observation) == N.parseWord32 (str (get (initialRegisters scenario Candidate) (N.registerLabel register)))
+              | register <- N.registerLabels
+              , register /= N.Pc
+              ]
+            && and
+              [ lookup (N.RegionId ident) (N.nativeMemory observation) == Just (pad (fromIntegral size) bytes)
+              | (ident, _, size, bytes) <- regions
+              ]
+        _ -> False
+      control name refused result = Control name (if refused then "refused" else "accepted") (resultProblems result)
+  pure [control "callee-saved-register" abiRefused abi, control "unsupported-isa-before-effect" isaRefused isa]
+
+report :: [(Scenario, Result, Result)] -> Scenario -> Result -> Result -> [Control] -> Value
+report results faultScenario fault forbidden boundaryControls =
   object
     [ "schema_version" .= (1 :: Int)
     , "profile" .= ("media-permit" :: String)
@@ -942,9 +998,11 @@ report results faultScenario fault forbidden =
         | (scenario, original, candidate) <- results
         ]
     , "controls" .=
-        [ controlJson (Control "defect-candidate" (if faultWitness faultScenario fault then "refused" else "accepted") (resultProblems fault))
-        , controlJson (Control "forbidden-body" (if forbiddenWitness forbidden then "refused" else "accepted") (resultProblems forbidden))
-        ]
+        ( [ controlJson (Control "defect-candidate" (if faultWitness faultScenario fault then "refused" else "accepted") (resultProblems fault))
+          , controlJson (Control "forbidden-body" (if forbiddenWitness forbidden then "refused" else "accepted") (resultProblems forbidden))
+          ]
+            ++ map controlJson boundaryControls
+        )
     , "status" .= ((if qualified then "qualified" else "failed") :: String)
     ]
   where
@@ -952,12 +1010,19 @@ report results faultScenario fault forbidden =
       all (\(_, original, candidate) -> resultStatus original == ResultPassed && resultStatus candidate == ResultPassed) results
         && faultWitness faultScenario fault
         && forbiddenWitness forbidden
+        && all ((== "refused") . controlStatus) boundaryControls
     resultJson result = object ["status" .= resultStatusLabel (resultStatus result), "problems" .= resultProblems result]
 
 main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
+    ["--inventory-only", stockElf] -> do
+      stock <- B.readFile stockElf
+      unless (sha256Hex (sha256 (B.take 5185120 (B.drop 0xe8 stock))) == "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a") $
+        ioError (userError "stock ELF does not contain the pinned image-5 bytes")
+      functions <- either (ioError . userError) pure (checkedStockFunctions (B.take 5185120 (B.drop 0xe8 stock)))
+      jsonPrint (object ["functions" .= [object ["address" .= hex address, "size" .= size] | (address,size) <- functions]])
     [runner, build, out, stockElf] -> run runner build out stockElf
     _ -> putStrLn "usage: media-permit-qualification RUNNER BAZEL_BIN OUT_DIR STOCK_ELF" >> exitFailure
 
@@ -984,12 +1049,14 @@ run runner build out stockElf = do
   createDirectoryIfMissing True faultRoot
   fault <- runSide runner faultRoot inputs faultScenario DefectCandidate
   forbidden <- runForbiddenBody runner out inputs forbiddenScenario
-  let output = report results faultScenario fault forbidden
+  boundaryControls <- runBoundaryControls runner out inputs
+  let output = report results faultScenario fault forbidden boundaryControls
       qualified =
         length results == length scenarios
           && all (\(_, original, candidate) -> resultStatus original == ResultPassed && resultStatus candidate == ResultPassed) results
           && faultWitness faultScenario fault
           && forbiddenWitness forbidden
+          && all ((== "refused") . controlStatus) boundaryControls
   BL.writeFile (out </> "results.json") (encode output)
   let passed = length [() | (_, original, candidate) <- results, resultStatus original == ResultPassed, resultStatus candidate == ResultPassed]
   putStrLn ("media permit: " ++ show passed ++ "/" ++ show (length results) ++ " differential cases passed")

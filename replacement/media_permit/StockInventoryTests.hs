@@ -1,0 +1,61 @@
+{-# LANGUAGE GHC2021 #-}
+module Main (main) where
+
+import Control.Monad (unless)
+import Data.Bits (shiftR)
+import qualified Data.ByteString as B
+import Data.Word (Word32)
+import StockInventory
+
+bytes :: [Word32] -> B.ByteString
+bytes = B.pack . concatMap (\word -> [fromIntegral (word `shiftR` shift) | shift <- [0,8,16,24]])
+
+check :: String -> Bool -> IO ()
+check label accepted = unless accepted (fail label)
+
+derive :: [Word32] -> Either String (Word32, Int)
+derive = deriveWith []
+
+deriveWith :: [Word32] -> [Word32] -> Either String (Word32, Int)
+deriveWith tails words' = deriveFunction (GuestAddress 0x1000) (bytes words')
+  (FunctionWindow (GuestAddress 0x1000) (GuestAddress (0x1000 + 4 * fromIntegral (length words'))))
+  (map GuestAddress tails)
+
+refused :: Either String a -> Bool
+refused (Left _) = True
+refused (Right _) = False
+
+main :: IO ()
+main = do
+  check "a return is code" (derive [0xe12fff1e] == Right (0x1000,4))
+  check "a referenced trailing literal is not executable, even when it encodes a return"
+    (derive [0xe59f0000,0xe12fff1e,0xe12fff1e] == Right (0x1000,8))
+  check "an error tail after a conditional return remains code"
+    (deriveWith [0x1100] [0xe3500000,0x012fff1e,0xea00003c] == Right (0x1000,12))
+  check "all switch targets are code and table words are data"
+    (derive [0xe3500001,0x979ff100,0xe12fff1e,0x1014,0x1018,0xe3a00000,0xe12fff1e] == Right (0x1000,28))
+  check "unreferenced trailing words refuse rather than widening code"
+    (refused (derive [0xe12fff1e,0x12345678]))
+  check "unreachable instruction-looking words refuse"
+    (refused (derive [0xea000000,0xe1a00000,0xe12fff1e]))
+  check "a dispatch without an immediate dominating bound refuses"
+    (refused (derive [0x979ff100,0xe12fff1e,0x1004]))
+  check "a literal outside the inspected function window refuses"
+    (refused (derive [0xe59f0000,0xe12fff1e]))
+  check "an unsupported reachable instruction refuses"
+    (refused (derive [0xe710f110,0xe12fff1e]))
+  check "a shortened window cannot silently discard its omitted epilogue"
+    (refused (deriveFunction (GuestAddress 0x1000) (bytes [0xea000000,0xe1a00000,0xe12fff1e])
+      (FunctionWindow (GuestAddress 0x1000) (GuestAddress 0x1004)) []))
+  check "an undeclared external tail refuses"
+    (refused (derive [0xea00003e]))
+  check "a permitted external destination still requires ARM alignment"
+    (refused (deriveWith [0x1101] [0x159ff000,0xe12fff1e,0x1101]))
+  check "a branch into a dispatch cannot bypass its adjacent comparison"
+    (refused (derive [0x0a000001,0xe1a00000,0xe3500001,0x979ff100,0xe12fff1e,0x101c,0x1020,0xe3a00000,0xe12fff1e]))
+  derived <- either fail pure (derive [0xe59f0000,0xe12fff1e,0x12345678])
+  let declaration (address, size) = FunctionDeclaration (GuestAddress address) (FunctionSize size)
+      compareExtent size = checkDeclarations [FunctionDeclaration (GuestAddress 0x1000) (FunctionSize size)] [declaration derived]
+  check "the production comparison accepts the independently specified code extent" (compareExtent 8 == Right ())
+  check "the production comparison rejects a shortened declaration" (refused (compareExtent 4))
+  check "the production comparison rejects a declaration that includes the literal" (refused (compareExtent 12))
