@@ -243,7 +243,7 @@ run [runnerPath, id5Path, kernelPath, entryPath, outputPath] = do
   kernelElf <- either error pure (E.parseElf kernel)
   let (textBase, text) = section kernelElf kernel
   unless (symbol kernelElf "rb_modal_dispatch" == (ownedEntry, 272)) $ error "owned seam target mismatch"
-  entry <- readBound entryPath 16384
+  entry <- readBound entryPath 65536
   entryElf <- either error pure (E.parseElf entry)
   let (mechanismBase, mechanism) = section entryElf entry
   unless (mechanismBase == entryBase && B.length mechanism == 56 && symbol entryElf "rb_modal_entry" == (entryBase, 56)
