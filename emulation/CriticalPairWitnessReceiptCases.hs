@@ -61,10 +61,14 @@ semanticCases =
   , SemanticCase "secondary-observation-publication" (initial 5 0x1624) 4 W.PublicationMismatch
   , SemanticCase "secondary-restoration-publication" (initial 5 0x168) 4 W.PublicationMismatch
   , SemanticCase "carrier-source-binding" (initial 0 0) 1 W.SourceBindingMismatch
-  , SemanticCase "primary-services-source-binding" (initial 8 0) 1 W.SourceBindingMismatch
-  , SemanticCase "primary-primitives-source-binding" (initial 9 0) 1 W.SourceBindingMismatch
-  , SemanticCase "secondary-services-source-binding" (initial 10 0) 1 W.SourceBindingMismatch
-  , SemanticCase "secondary-primitives-source-binding" (initial 11 0) 1 W.SourceBindingMismatch
+  , SemanticCase "primary-services-source-binding" (initial 15 (0x1140-0x404)) 1 W.SourceBindingMismatch
+  , SemanticCase "primary-primitives-source-binding" (initial 15 (0x27b8-0x404)) 1 W.SourceBindingMismatch
+  , SemanticCase "secondary-services-source-binding" (initial 23 (0x1140-0x404)) 1 W.SourceBindingMismatch
+  , SemanticCase "secondary-primitives-source-binding" (initial 23 (0x27b8-0x404)) 1 W.SourceBindingMismatch
+  , SemanticCase "primary-prelude-code-binding" (initial 15 (0x3910-0x404)) 3 W.SourceBindingMismatch
+  , SemanticCase "secondary-prelude-code-binding" (initial 23 (0x3910-0x404)) 3 W.SourceBindingMismatch
+  , SemanticCase "primary-mutable-target-table-binding" (initial 8 0x380) 1 W.SourceBindingMismatch
+  , SemanticCase "secondary-mutable-target-table-binding" (initial 16 0x380) 1 W.SourceBindingMismatch
   , SemanticCase "caller-saved-frame" [ReceiptPath [field "pair",field "caller_frame_after",field "views",field view,Element 32] | view <- ["virtual","physical"]] 1 W.CallerFrameMismatch
   ]
   where

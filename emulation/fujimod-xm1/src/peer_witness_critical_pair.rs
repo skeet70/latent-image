@@ -18,10 +18,25 @@ const LEAVE: u32 = 0x7236b0;
 const ENTRY_RETURN: u32 = 0x725e00;
 const CALLER_RETURN: u32 = 0x69cf38;
 const EXIT_CALLS: [u32; 3] = [0x725e84, 0x725fb4, 0x726064];
-const SERVICE_CODE: [(u64, u64); 4] = [(0x41140, 0x41320), (0x427b8, 0x42830),
-    (0xd1140, 0xd1320), (0xd27b8, 0xd2830)];
-const COMMON: [(u64, u64); 14] = [CARRIER, PAIR, WRAPPER, ROOTS, TABLE_A, TABLE, COUNTER, LOCK,
-    SERVICE_CODE[0], SERVICE_CODE[1], SERVICE_CODE[2], SERVICE_CODE[3], STAGE4, TAIL];
+const MUTABLE_TABLE_OFFSETS: [u64; 8] = [0x3a0, 0x3b0, 0x3c0, 0x3d0, 0x3e0, 0x3a0, 0x3f0, 0x400];
+const fn immutable_loader_spans(base: u64, end: u64) -> [(u64, u64); 8] {
+    let mut spans = [(0, 0); 8];
+    let mut start = base;
+    let mut index = 0;
+    while index < 7 {
+        let cell = base + 0x3a0 + index as u64 * 0x10;
+        spans[index] = (start, cell);
+        start = cell + 4;
+        index += 1;
+    }
+    spans[7] = (start, end);
+    spans
+}
+const CODE_A: [(u64, u64); 8] = immutable_loader_spans(LOADER_A.0, LOADER_A.1);
+const CODE_B: [(u64, u64); 8] = immutable_loader_spans(LOADER_B.0, LOADER_B.1);
+const COMMON: [(u64, u64); 26] = [CARRIER, PAIR, WRAPPER, ROOTS, TABLE_A, TABLE, COUNTER, LOCK,
+    CODE_A[0], CODE_A[1], CODE_A[2], CODE_A[3], CODE_A[4], CODE_A[5], CODE_A[6], CODE_A[7],
+    CODE_B[0], CODE_B[1], CODE_B[2], CODE_B[3], CODE_B[4], CODE_B[5], CODE_B[6], CODE_B[7], STAGE4, TAIL];
 const PAIR_SHA: &str = "8d0b5366c29252bf28baf514f77921cc379d3f519836aba6589ccc977cdbb62a";
 const WRAPPER_SHA: &str = "1432c11311a1a15437364f8d69372bec69a2e06357c94ca56e00c402fe96cf43";
 const LOADER_A_SHA: &str = "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882";
@@ -84,6 +99,13 @@ impl CriticalPairWire {
             (&pair.loader_a, LOADER_A, Sha256Digest::parse(LOADER_A_SHA)?), (&pair.loader_b, LOADER_B, LOADER_B_SHA256)] {
             require(bytes.len() == (extent.1 - extent.0) as usize && Sha256Digest::of(bytes) == digest,
                 "critical pair independent canonical source pin differs")?;
+        }
+        for (base, bytes) in [(LOADER_A.0, &pair.loader_a), (LOADER_B.0, &pair.loader_b)] {
+            for (index, target) in MUTABLE_TABLE_OFFSETS.into_iter().enumerate() {
+                let offset = 0x380 + index * 4;
+                let word = u32::from_le_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]]);
+                require(u64::from(word) == base + target, "critical mutable-cell source table differs")?;
+            }
         }
         let initializer = prefix.initializer.as_ref().ok_or("critical initializer absent")?;
         require(pair.role == initializer.role, "critical pair and initializer roles differ")?;
@@ -192,19 +214,19 @@ fn begin(machine: &mut Machine, runner: &Runner<'_>, phase: Phase, frame: Option
         classes.push(WatchRange { start: CALLER_FRAME.0, end: CALLER_FRAME.1, kinds: WatchKinds::CPU_READ.union(WatchKinds::WRITES) });
     }
     classes.push(WatchRange { start: RECORD.0, end: RECORD.1, kinds: WatchKinds::WRITES });
-    let immutable: Vec<_> = COMMON.into_iter().filter(|extent| ![COUNTER, LOCK, CARRIER].contains(extent)).collect();
+    let immutable: Vec<_> = COMMON.into_iter().filter(|extent| ![COUNTER, LOCK, CARRIER, TAIL].contains(extent)).collect();
     let mut confinement = if matches!(phase, Phase::Boundary) {
         vec![ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Write,
             rule: Confinement::Allow([Some(COUNTER), Some(LOCK), frame].into_iter().flatten().map(span).collect::<Result<_, _>>()?) },
             ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Write,
-                rule: Confinement::Forbid(COMMON.into_iter().filter(|extent| *extent != CARRIER)
+                rule: Confinement::Forbid(COMMON.into_iter().filter(|extent| ![CARRIER, TAIL].contains(extent))
                     .chain(frame).chain([CALLER_FRAME, RECORD]).map(span).collect::<Result<_, _>>()?) }]
     } else {
         vec![ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Write,
             rule: Confinement::Forbid(immutable.into_iter().chain(if prelude { Some(SELECTOR) } else { None })
                 .chain(Some(RECORD)).map(span).collect::<Result<_, _>>()?) },
             ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Write,
-                rule: Confinement::Forbid(COMMON.into_iter().filter(|extent| *extent != CARRIER)
+                rule: Confinement::Forbid(COMMON.into_iter().filter(|extent| ![CARRIER, TAIL].contains(extent))
                     .chain(Some(if prelude { SELECTOR } else { CALLER_FRAME }))
                     .chain(Some(RECORD)).map(span).collect::<Result<_, _>>()?) }]
     };
@@ -313,9 +335,16 @@ fn source_bindings(machine: &Machine, contract: &Contract) -> Result<(), String>
     }
     require(machine.read(PAIR.0, expected_pair.len())? == expected_pair, "critical original or branch-patched pair differs")?;
     for (extent, canonical) in [(LOADER_A, &contract.loader_a), (LOADER_B, &contract.loader_b)] {
-        for (start, end) in [(0x1140_usize, 0x1320_usize), (0x27b8, 0x2830)] {
-            require(machine.read(extent.0 + start as u64, end - start)? == canonical[start..end],
-                "critical independent retained service bytes differ")?;
+        for (start, end) in immutable_loader_spans(extent.0, extent.1) {
+            let actual = machine.read(start, (end - start) as usize)?;
+            for (offset, &byte) in actual.iter().enumerate() {
+                let address = start + offset as u64;
+                let replaced = contract.role == Role::Owned && [REPLACED[0], REPLACED[1], REPLACED[2],
+                    (0xd0aac, 0xd0ab0), LOADER_A_COMPLETION, LOADER_A_LITERAL]
+                    .iter().any(|&(low, high)| (low..high).contains(&address));
+                require(replaced || byte == canonical[(address - extent.0) as usize],
+                    "critical immutable loader source bytes differ")?;
+            }
         }
     }
     for (root, table, base) in [(ROOTS.0, TABLE_A.0, LOADER_A.0), (ROOTS.0 + 4, TABLE.0, LOADER_B.0)] {

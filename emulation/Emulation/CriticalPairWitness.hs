@@ -13,7 +13,7 @@ import Data.Bits (complement, rotateR, shiftL, shiftR, testBit, xor, (.&.), (.|.
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as L
 import Data.Int (Int32)
-import Data.List (sort)
+import Data.List (nub, sort)
 import qualified Data.Map.Strict as M
 import Data.Word (Word8, Word32, Word64)
 import qualified Emulation.CriticalPair as C
@@ -107,6 +107,8 @@ deriveContract role source image4 candidate decoded image symbolBytes = do
   let sourceParts = U.parsedParts parsedSource
   loaderA <- loaderBytes sourceParts 0
   loaderB <- loaderBytes sourceParts 1
+  bindMutableTable 0x40000 loaderA
+  bindMutableTable 0xd0000 loaderB
   stagedA <- loaderBytes parts 0
   stagedB <- loaderBytes parts 1
   pair <- slice (0x7235d8 - 0x61c400) 440 image4
@@ -114,10 +116,8 @@ deriveContract role source image4 candidate decoded image symbolBytes = do
   livePair <- slice (0x7235d8 - 0x61c400) 440 decoded
   phase4 <- slice (0x69cdf8 - 0x61c400) (0x69cf38 - 0x69cdf8) decoded
   tailBytes <- slice 0xab0 0x40 stagedB
-  primaryServices <- slice 0x1140 0x1e0 stagedA
-  primaryPrimitives <- slice 0x27b8 0x78 stagedA
-  secondaryServices <- slice 0x1140 0x1e0 stagedB
-  secondaryPrimitives <- slice 0x27b8 0x78 stagedB
+  primaryCode <- immutableLoaderResources 0x40000 stagedA
+  secondaryCode <- immutableLoaderResources 0xd0000 stagedB
   sourceHash <- SourceDigest <$> F.parseSha256 (sha256Hex source)
   inputHash <- SourceDigest <$> F.parseSha256 (sha256Hex candidate)
   imageHash <- ImageDigest <$> F.parseSha256 (sha256Hex image4)
@@ -125,11 +125,9 @@ deriveContract role source image4 candidate decoded image symbolBytes = do
   symbolsHash <- if role == I.Retained then pure Nothing else Just . SymbolDigest <$> F.parseSha256 (sha256Hex symbolBytes)
   pure (Contract initializer role sourceHash inputHash imageHash carrierHash symbolsHash enter exit (FrameBytes enterBytes) (FrameBytes exitBytes)
     (CodeBytes carrier) (CodeBytes pair) (CodeBytes wrapper) (CodeBytes loaderA) (CodeBytes loaderB)
-    [resource 0x10400 carrier,resource 0x7235d8 livePair,resource 0x725dd8 wrapper,resource 0x96bd20 (wordBytes [0x4004dae0,0x400ddaa0])
+    ([resource 0x10400 carrier,resource 0x7235d8 livePair,resource 0x725dd8 wrapper,resource 0x96bd20 (wordBytes [0x4004dae0,0x400ddaa0])
     ,resource 0x4dae0 B.empty,resource 0xddaa0 B.empty,resource 0xa0f824 B.empty,resource 0xc0804 B.empty
-    ,resource 0x41140 primaryServices,resource 0x427b8 primaryPrimitives
-    ,resource 0xd1140 secondaryServices,resource 0xd27b8 secondaryPrimitives
-    ,resource 0x69cdf8 phase4,resource 0xd0ab0 tailBytes])
+    ] ++ primaryCode ++ secondaryCode ++ [resource 0x69cdf8 phase4,resource 0xd0ab0 tailBytes]))
 
 roleName :: I.Role -> String
 roleName I.Retained = "retained"
@@ -232,8 +230,27 @@ snapshots context = case tcmOf context of
   [[a,b],[c,d]] -> sequence [TcmSnapshot 0 <$> I.bankSnapshot a <*> I.bankSnapshot b,TcmSnapshot 1 <$> I.bankSnapshot c <*> I.bankSnapshot d]
   _ -> Left "critical context lacks both-core raw TCM registers"
 
+mutableTableOffsets :: [Word64]
+mutableTableOffsets = [0x3a0,0x3b0,0x3c0,0x3d0,0x3e0,0x3a0,0x3f0,0x400]
+
+bindMutableTable :: Word64 -> B.ByteString -> Either String ()
+bindMutableTable base bytes = do
+  targets <- mapM (leWordAt bytes . (0x380+) . (*4)) [0..7]
+  require (map fromIntegral targets == map (base+) mutableTableOffsets) "critical mutable-cell source table differs"
+
+loaderSpans :: Word64 -> Word64 -> [(Word64,Word64)]
+loaderSpans base extent = let cells = map (base+) (sort (nub mutableTableOffsets))
+  in zip (base:map (+4) cells) (cells++[base+extent])
+
+immutableLoaderResources :: Word64 -> B.ByteString -> Either String [Resource]
+immutableLoaderResources base bytes = mapM (\(low,high) ->
+  resource low <$> slice (fromIntegral (low-base)) (fromIntegral (high-low)) bytes)
+  (loaderSpans base (fromIntegral (B.length bytes)))
+
 spans :: [(Word64,Word64)]
-spans = [(0x10400,0x11800),(0x7235d8,0x723790),(0x725dd8,0x726098),(0x96bd20,0x96bd28),(0x4dae0,0x4f10c),(0xddaa0,0xdf0cc),(0xa0f824,0xa0f828),(0xc0804,0xc0808),(0x41140,0x41320),(0x427b8,0x42830),(0xd1140,0xd1320),(0xd27b8,0xd2830),(0x69cdf8,0x69cf38),(0xd0ab0,0xd0af0)]
+spans = [(0x10400,0x11800),(0x7235d8,0x723790),(0x725dd8,0x726098),(0x96bd20,0x96bd28),(0x4dae0,0x4f10c),(0xddaa0,0xdf0cc),(0xa0f824,0xa0f828),(0xc0804,0xc0808)]
+  ++ loaderSpans 0x40000 0xdae0 ++ loaderSpans 0xd0000 0xdaa0
+  ++ [(0x69cdf8,0x69cf38),(0xd0ab0,0xd0af0)]
 
 commonResourceCount :: Int
 commonResourceCount = length spans
@@ -302,7 +319,7 @@ watchClasses phase = let
   kinds index
     | boundary = CpuFetch:CpuRead:writes
     | index `elem` [3,4,5,6,7] = CpuRead:writes
-    | index `elem` [0,1,2,12,13] = CpuFetch:writes
+    | index `elem` [0,1,2,commonResourceCount-2,commonResourceCount-1] = CpuFetch:writes
     | otherwise = writes
   base = [WatchClass (Window span') (kinds index) | (index,span') <- zip [0 :: Int ..] spans]
   extra = case phase of
@@ -315,7 +332,7 @@ watchRules :: Contract -> Phase -> [TcmSnapshot] -> [Rule]
 watchRules contract phase banks = let
   rule cores kind mode ranges = Rule cores kind mode [PhysicalSpan [low,high] | (low,high) <- ranges] [bank | bank@(TcmSnapshot core _ _) <- banks,core `elem` cores]
   record = [(0x10000,0x14c80)]
-  disjoint = filter (/= (0x10400,0x11800))
+  disjoint = filter (`notElem` [(0x10400,0x11800),(0xd0ab0,0xd0af0)])
   primary = case phase of
     BoundaryPhase low high -> [rule [1] CpuWrite Allow [(0xa0f824,0xa0f828),(0xc0804,0xc0808),(low,high)],rule [0] CpuWrite Forbid (disjoint spans++[(low,high),(0xf33a8,0xf33e0)]++record)]
     Prelude -> [rule [1] CpuWrite Forbid (disjoint immutableSpans++[(0x7caf34,0x7caf38)]++record),rule [0] CpuWrite Forbid (disjoint spans++[(0x7caf34,0x7caf38)]++record)]
