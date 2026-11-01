@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Main where
 
 import Control.Exception (SomeException, try)
@@ -6,7 +7,11 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.IORef
 import Data.List (isInfixOf)
+import Data.Aeson (encode, object, (.=))
+import qualified Data.Aeson.Key as K
+import qualified Data.ByteString.Lazy as BL
 import Data.Word (Word32)
+import Numeric (showHex)
 import System.Directory
 import System.FilePath
 import System.Posix.Files (fileMode, getFileStatus, intersectFileModes, setFileMode)
@@ -15,7 +20,7 @@ import FujiAF.RamPush
 import FujiAF.SHA256 (sha256)
 import FujiAF.Rehearsal (rehearseRamAlloc, rehearseRamPush, rehearseRamFree, rehearseRamUnload)
 import FujiAF.Transport
-import RamPushLayout (installerInstallOffset, installerRollbackOffset, installerStatusOffset, runtimeAllocationSize, runtimeInstallerBase)
+import RamPushLayout (installerInstallOffset, installerRollbackOffset, installerStatusOffset, runtimeAllocationSize, runtimeAllocationSizeFor, runtimeInstallerBase, standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant)
 import RamPushModel
 
 contract :: ReviewedContract
@@ -31,6 +36,30 @@ runAlloc directory model = runRamAllocWith PeerCacheBound reviewedAllocationSize
 
 runPush :: FilePath -> Model -> RamAllocState -> IO RamPushOutcome
 runPush directory model state = runRamPushWith PeerCacheBound state manifest (Clock (pure 0)) (modelApi model) directory
+
+manifestDocument :: RamPushManifest -> B.ByteString
+manifestDocument candidate = BL.toStrict (encode (object
+  [ "schema" .= (1 :: Int)
+  , "base" .= unAddressHex (allocationBase candidate)
+  , "size" .= allocationSize candidate
+  , "runtime_sha256" .= runtimeDigest candidate
+  , "source_identity" .= object [K.fromString name .= digest | (name,digest) <- sourceIdentity candidate]
+  , "entry" .= object
+      [ "install" .= unAddressHex (installEntry entries)
+      , "rollback" .= unAddressHex (rollbackEntry entries)
+      , "status" .= unAddressHex (statusEntry entries) ]
+  , "publications" .= map publication (manifestPublications candidate) ]))
+  where
+    entries = manifestEntries candidate
+    unAddressHex = hexWord . unAddress
+    hexWord value = "0x" ++ replicate (8 - length digits) '0' ++ digits where digits = showHex value ""
+    publication p = object
+      [ "index" .= publicationIndex p
+      , "phase" .= (case publicationPhase p of Setup -> "setup" :: String; Activation -> "activation")
+      , "address" .= unAddressHex (publicationAddress p)
+      , "old" .= hexWord (unWordValue (publicationOld p))
+      , "new" .= hexWord (unWordValue (publicationNew p))
+      , "core" .= (case publicationCore p of Cpu0 -> "cpu0" :: String; Cpu1 -> "cpu1"; Both -> "both"; UnknownCore -> "unknown") ]
 
 main :: IO ()
 main = do
@@ -76,6 +105,99 @@ main = do
     (all (\at -> toInteger (payloadInstallerStart usbTogglePayload at) + 0xd00
         <= toInteger at + toInteger (payloadAllocationSize usbTogglePayload)) alignedBases)
 
+  check "the standard bank contract is unchanged"
+    (fmap payloadKind (payloadOfSize 0x1dc98) == Just RecipeBankD3
+      && publicationCount == 223 && setupCount == 131 && activationCount == 92 && reviewedAllocationSize == 0x1dc98)
+  check "the standard bank selects the base allowlist variant"
+    (payloadBankVariant bankD3Payload == Just standardBankVariant)
+  check "nonbank payloads select no bank allowlist"
+    (all ((== Nothing) . payloadBankVariant)
+      [classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload "synthetic"])
+  standardRelinker <- runfilesRelinker bankD3Payload
+  check "the standard bank retains its Rust archive"
+    (fmap (takeFileName . rustBankArchive) (relinkerRust standardRelinker) == Just "bank.a")
+  let standard = manifest { manifestEntries = payloadEntries bankD3Payload (Address base) }
+      parse candidate = parseRamPushManifest "/synthetic/ram-push-manifest.json" (manifestDocument candidate) (runtimeBytes candidate)
+      refusesManifest label candidate = do
+        result <- try (parse candidate) :: IO (Either SomeException RamPushManifest)
+        check label (case result of Left _ -> True; Right _ -> False)
+      matchingContract candidate = ReviewedContract (sourceIdentity candidate) (publicationContractDigest (manifestPublications candidate))
+      variants =
+        [ (bankModal75Payload, modalScopedBankVariant, RecipeBankModal75, 0x1dcb8, 224, "build-recipe-bank-modal-ram.sh", "bank-modal.a")
+        , (bankLifecyclePayload, lifecycleBankVariant, RecipeBankLifecycle, 0x1dcd8, 226, "build-recipe-bank-lifecycle-ram.sh", "bank-lifecycle.a")
+        , (bankModalLifecyclePayload, modalLifecycleBankVariant, RecipeBankModalLifecycle, 0x1dcf8, 227, "build-recipe-bank-modal-lifecycle-ram.sh", "bank-modal-lifecycle.a") ]
+  _ <- parse standard
+  let fullIdentity = [("synthetic-source-" ++ show index, replicate 64 'a') | index <- [1..68 :: Int]]
+  fullIdentityManifest <- parse (standard { sourceIdentity = fullIdentity })
+  check "manifest accepts the complete 68-entry source identity"
+    (length (sourceIdentity fullIdentityManifest) == 68)
+  refusesManifest "manifest refuses 69 source identities"
+    (standard { sourceIdentity = ("synthetic-extra", replicate 64 'a') : fullIdentity })
+  validateReviewedContract (matchingContract standard) standard
+  forM_ variants $ \(selected, variant, kind, size, count, script, archive) -> do
+    let label = show kind
+        checkVariant suffix = check (label ++ ": " ++ suffix)
+    checkVariant "has a distinct allocation size and kind"
+      (fmap payloadKind (payloadOfSize size) == Just kind
+        && ramAllocArguments [show size] == Just (size, Nothing))
+    checkVariant "publishes the selected activation group"
+      (payloadSetupCount selected == 131 && payloadActivationCount selected == count - 131
+        && payloadPublicationCount selected == count && payloadAbiVersion selected == 5)
+    checkVariant "allocation matches the builder layout"
+      (payloadAllocationSize selected == size && size == fromIntegral (runtimeAllocationSizeFor variant))
+    checkVariant "selects its publication group's allowlist composition"
+      (payloadBankVariant selected == Just variant)
+    checkVariant "keeps the bank installer placement"
+      (all (\at -> payloadInstallerStart selected at == runtimeInstallerBase at) alignedBases)
+    relinker <- runfilesRelinker selected
+    checkVariant "selects its own script and Rust archive"
+      (takeFileName (relinkerScript relinker) == script
+        && fmap (takeFileName . rustBankArchive) (relinkerRust relinker) == Just archive)
+    let selectedRuntime = B.replicate size 0
+        selectedPublications = publications ++
+          [Publication index Activation (Address (0x00630000 + 4 * fromIntegral index))
+            (WordValue 0xe1000000) (WordValue 0xea000010) Both | index <- [223..count-1]]
+        candidate = manifest
+          { allocationSize = size, runtimeBytes = selectedRuntime, runtimeDigest = sha256 selectedRuntime
+          , manifestEntries = payloadEntries selected (Address base), manifestPublications = selectedPublications }
+        selectedAllocation = allocation { allocSize = size }
+        selectedState = RamPushState (manifestDigest candidate) (runtimeDigest candidate) (Address base) size
+          (manifestEntries candidate) selectedPublications callbackStockWord bootstrapBytes 1
+    parsed <- parse candidate
+    checkVariant "manifest retains its size and publication contract"
+      (allocationSize parsed == size && manifestPublications parsed == selectedPublications)
+    refusesManifest (label ++ ": refuses the normal publication list") (candidate { manifestPublications = publications })
+    refusesManifest (label ++ ": cannot replace the normal publication list") (standard { manifestPublications = selectedPublications })
+    refusesManifest (label ++ ": refuses a default-sized runtime") (candidate { runtimeBytes = runtime, runtimeDigest = sha256 runtime })
+    reviewed <- try (validateReviewedContract (matchingContract candidate) candidate) :: IO (Either SomeException ())
+    checkVariant "matching identities and publication digest do not grant review"
+      (case reviewed of Left _ -> True; Right _ -> False)
+    let stateDirectory = root </> (label ++ "-state")
+    makeDir stateDirectory
+    selectedStatePath <- writeStateFile stateDirectory selectedState
+    readRamPushState selectedStatePath >>= checkVariant "state retains its size and publications" . (== selectedState)
+    let invalidStateDirectory = root </> (label ++ "-state-invalid")
+    makeDir invalidStateDirectory
+    invalidStatePath <- writeStateFile invalidStateDirectory (selectedState { statePublications = publications })
+    invalidState <- try (readRamPushState invalidStatePath) :: IO (Either SomeException RamPushState)
+    checkVariant "state refuses the normal publication count" (case invalidState of Left _ -> True; Right _ -> False)
+    liveModel <- newModel Nothing
+    let liveDirectory = root </> (label ++ "-live")
+        selectedRetained = RetainedAllocation (liveDirectory </> "ram-alloc-state.json") selectedAllocation
+        clock = Clock (pure 0)
+        api = modelApi liveModel
+    makeDir liveDirectory
+    liveAlloc <- runRamAlloc size clock api liveDirectory
+    checkVariant "live allocation refuses" (case liveAlloc of RamAllocRefused _ -> True; _ -> False)
+    livePush <- runRamPush (matchingContract candidate) selectedRetained candidate clock api liveDirectory
+    checkVariant "live push refuses" (case livePush of RamPushRefused _ -> True; _ -> False)
+    liveFree <- runRamFree selectedRetained clock api liveDirectory
+    checkVariant "live free refuses" (case liveFree of RamFreeRefused _ -> True; _ -> False)
+    liveUnload <- runRamUnload (matchingContract candidate) selectedState clock api liveDirectory
+    checkVariant "live unload refuses" (case liveUnload of RamUnloadRefused _ -> True; _ -> False)
+    liveRelink <- try (runRamRelink (matchingContract candidate) selectedRetained liveDirectory) :: IO (Either SomeException FilePath)
+    checkVariant "live relink refuses" (case liveRelink of Left _ -> True; Right _ -> False)
+    readIORef (modelUsbCalls liveModel) >>= checkVariant "live refusals make no USB calls" . (== 0)
   requireReviewedBytes (C.pack "manifest") (C.pack "runtime") (C.pack "manifest") (C.pack "runtime")
   changedRuntime <- try (requireReviewedBytes (C.pack "manifest") (C.pack "runtime") (C.pack "manifest") (C.pack "changed"))
     :: IO (Either SomeException ())

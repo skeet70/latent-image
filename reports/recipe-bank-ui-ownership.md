@@ -170,13 +170,37 @@ For admitted modal 75, cheap callback/return-seam equivalence and consumer closu
 
 ### Modal entry seam mechanism
 
-`replacement/modal_runtime/src/entry.S` implements the fourteen-instruction routing mechanism; `//replacement/modal_runtime:entry-seam-image` links its 56 bytes at a native-only address. Its linker script resolves owned policy to the unchanged E-MODAL-DISPATCHER-LINKED-ABI-150 export and the fallback to stock+4. It is not linked into the default bank, installed, or an admission override. Independent source review accepted the entry and observer before the corrected native cohort. E-MODAL-ENTRY-SEAM-150 records eight real stock-prefix oracles, twelve candidates and five discriminating controls, all passing in 25 native invocations.
+`replacement/modal_runtime/src/entry.S` implements the fourteen-instruction routing mechanism. E-MODAL-ENTRY-SEAM-150 used a standalone 56-byte native-only image bound to the unchanged E-MODAL-DISPATCHER-LINKED-ABI-150 export and stock+4. Independent source review accepted that mechanism and observer before eight stock-prefix oracles, twelve candidates and five controls passed in 25 native invocations. Those artifacts remain historical evidence. The separately selected modal package now links the seam into its actual ELF; the default223 archive does not.
 
-`//replacement/modal_runtime:qualify-entry` binds the #125 backend, pinned image5 and original linked kernel, and derives the full stock extent with the shared `StockInventory` checker. Eight nonadmitted controller words cover ordinary IDs, the known upper boundary, out-of-range values and two words whose low bits equal 75; four admitted fixtures vary flags and stack alignment. Fallback runs compare every register, complete stack bytes and complete ordered write histories with a real stock first-instruction execution. The admitted fixtures check the original incoming context before owned policy executes. Both protect the complete incoming-SP-and-up caller interval. Five real entry-byte controls remove flag restoration on each route, remove r12 restoration, write caller-owned stack and select the wrong stock continuation.
+The current `//replacement/modal_runtime:qualify-entry` requires an explicit kernel ELF digest and extracts the actual linked seam and dispatcher addresses from that ELF. It binds the qualified #125 backend and pinned image5, and derives the stock extent with `StockInventory`. Eight nonadmitted controller words cover ordinary IDs, the known upper boundary, out-of-range values and two words whose low bits equal75; four admitted fixtures vary flags and stack alignment. Fallback cases compare every register, complete stack bytes and complete ordered write histories with a stock first-instruction oracle. Admitted cases check the original incoming context before owned policy executes. Both protect the complete incoming-SP-and-up caller interval. Controls remove flag restoration on each route, remove r12 restoration, write caller-owned stack and select the wrong stock continuation. The actual-ELF cohort requires fresh qualification; it does not inherit the historical result.
 
-The native wire profile requires eight-byte initial SP, LR equal to its exit and NZCV-only initial flags. A six-instruction, read-only literal prelude establishes the desired seam SP, LR and NZCVQ/GE without changing stack memory. Only the four-byte original push is declared as the stock prefix function; stock+4 stays mapped. Both handoff endpoints are outside declared functions and intentionally stop as `unknown_call`, not as returned calls. Qualification requires the exact endpoint, complete register/stack state, zero engine error, instruction count (stock 7, fallback 17, admitted 16) and complete provenance (stock 13, fallback 17, admitted 8 total data accesses, with exact projected ordered writes). The isolated caller-write control adds one instruction and one caller-memory store while preserving SP and registers.
+The native wire profile requires eight-byte initial SP, LR equal to its exit and NZCV-only initial flags. A six-instruction, read-only literal prelude establishes the desired seam SP, LR and NZCVQ/GE without changing stack memory. Only the four-byte original push is declared as the stock prefix function; stock+4 stays mapped. Both handoff endpoints are outside declared functions and stop as `unknown_call`. Qualification requires the exact endpoint, complete register/stack state, zero engine error, canonical instruction count (stock7, fallback17, admitted16) and complete provenance (stock13, fallback17, admitted8 total data accesses, with exact projected ordered writes). The current caller-write control adds an isolated `STR r0,[sp]; B actual_seam` stub, two instructions and one caller-memory store, without changing the seam, SP, registers or flags. The historical control added one instruction.
 
 The original #125 backend excludes all register MSR instructions, including the mechanism's legal user flags restoration. E-NATIVE-APSR-MSR-150 independently reviews and qualifies the extension admitting only CPSR flag-field masks 8 and 12. The seam cohort pins that backend's `b51544c6...75da2860` executable identity. A prior host-only input refusal found the linked ELF's 32,944-byte envelope exceeded the harness's 16,384-byte file bound; raising the bounded envelope to 65,536 leaves the exact 56-byte executable section and symbol checks intact. No guest ran in that refused attempt, and the corrected cohort executed once.
+
+### Explicit native artifact binding
+
+Dispatcher and cancellation drivers require `--kernel-elf-sha256`, `--kernel-text-sha256` and `--kernel-syms-sha256` for the selected build directory. They extract `.text` from that ELF, compare the supplied `kernel-text.bin`, and check symbol addresses, sizes and complete function extents against the same ELF. The relinker writes `kernel-text.bin` to a separate output. `inputs.json` records expected and actual identities; existing receipts remain bound to their original artifacts.
+
+```sh
+bazel-bin/replacement/modal_runtime/qualify \
+  --runner "$RUNNER" --build "$BUILD" --out "$DISPATCH_OUT" \
+  --id5 "$ID5" --id5-base 0x00bf1a00 \
+  --kernel-elf-sha256 "$ELF_SHA256" \
+  --kernel-text-sha256 "$TEXT_SHA256" --kernel-syms-sha256 "$SYMS_SHA256"
+bazel-bin/emulation/owned-menu-cases \
+  --runner "$RUNNER" --build "$BUILD" --out "$CANCEL_OUT" \
+  --id5 "$ID5" --id5-base 0x00bf1a00 \
+  --kernel-elf-sha256 "$ELF_SHA256" \
+  --kernel-text-sha256 "$TEXT_SHA256" --kernel-syms-sha256 "$SYMS_SHA256"
+bazel-bin/replacement/modal_runtime/qualify-entry \
+  --runner "$RUNNER" --id5 "$ID5" --kernel-elf "$BUILD/kernel.elf" \
+  --kernel-elf-sha256 "$ELF_SHA256" --out "$ENTRY_OUT"
+```
+
+The emitted-code checker admits CPSR reads and register-form APSR_nzcvq writes. Reads invalidate the destination's abstract value; writes invalidate comparison facts. CPSR control writes, SPSR access, immediate MSR forms, other field masks and PC operands remain rejected. The native backend's separately qualified mask12 support does not broaden this bank checker.
+
+### Published modal storage obligations
 
 Modal75 storage is loaded image5 data, not an established read-only hardware region. Its cell table spans `[0x00cd1ae4,0x00cd3f8c)`, action table `[0x00d04080,0x00d0452c)` and transition table `[0x00d01370,0x00d01378)`; the next controller-table bases match these upper bounds. Root pointer words are `0x00cf59e4`, `0x00cfe3d4` and `0x00d00268`; width is the halfword at `0x00cd5f0e`. Bank publication deliberately changes cell/action words. The static census reports no resolved direct table store but does not establish absence of stores through unresolved pointers. All 286 computed-store obligations concern the state/event arrays.
 

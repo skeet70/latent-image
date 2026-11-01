@@ -1,5 +1,5 @@
 -- | In-process SHA-256; FujiAF.Host.sha256 forks a `sha256sum` per digest.
-module Emulation.Sha256 (Sha256, sha256, sha256File, sha256Hex) where
+module Emulation.Sha256 (Sha256, sha256, sha256File, sha256Hex, parseSha256Hex) where
 
 import Control.Exception (evaluate)
 import qualified Crypto.Hash.SHA256 as SHA256
@@ -18,6 +18,15 @@ newtype Sha256 = Sha256 B.ByteString
 
 sha256 :: B.ByteString -> Sha256
 sha256 = Sha256 . SHA256.hash
+
+parseSha256Hex :: String -> Either String Sha256
+parseSha256Hex encoded
+  | length encoded /= 64 || not (all lowerHex encoded) = Left "SHA256 requires64 lowercase hexadecimal digits"
+  | otherwise = case hexBytes encoded of
+      Just bytes -> Right (Sha256 (B.pack bytes))
+      Nothing -> Left "SHA256 hexadecimal decoding failed"
+ where
+  lowerHex digit = digit >= '0' && digit <= '9' || digit >= 'a' && digit <= 'f'
 
 -- | Files from 256 MiB, such as 4 GiB card images, go to the devenv OpenSSL
 -- (`XM1_OPENSSL`), about ten times faster than this library on hosts with SHA

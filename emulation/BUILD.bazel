@@ -1050,6 +1050,7 @@ haskell_binary(
         ":emulator-usb",
         ":preservation-observation",
         ":watch-observation",
+        ":modal-observation",
         ":ui-trajectory-lib",
         ":segment-receipt-lib",
         ":ram-push-unreviewed",
@@ -1944,9 +1945,11 @@ haskell_binary(
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host:directory",
         "//host:filepath",
         "//host:json",
         "//replacement/media_permit:stock-inventory",
+        "//replacement/modal_runtime:kernel-binding",
     ],
 )
 
@@ -2184,6 +2187,43 @@ haskell_library(
     ],
 )
 
+haskell_library(
+    name = "modal-observation",
+    srcs = ["Emulation/ModalObservation.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        "//host/firmware:bank-allowlist",
+        ":watch-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_test(
+    name = "modal-observation-tests",
+    size = "small",
+    srcs = ["ModalObservationTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":emulator-usb",
+        ":case-sha256",
+        ":modal-observation",
+        ":ui-trajectory-lib",
+        ":watch-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
 # The emulator bridge's USB provider; //transport:provider-parity drives it.
 haskell_library(
     name = "emulator-usb",
@@ -2200,6 +2240,7 @@ haskell_library(
         ":key-release-observations",
         ":preservation-observation",
         ":watch-observation",
+        ":modal-observation",
         "//broker:core",
         "//host:aeson",
         "//host:base",

@@ -1,6 +1,7 @@
 module Main where
 
 import Data.Word (Word32)
+import Emulation.Sha256 (parseSha256Hex)
 import Numeric (readHex)
 import Replacement.ModalRuntime.Qualify (Options (..), parseCaseSelection, runQualification)
 import System.Environment (getArgs)
@@ -14,8 +15,9 @@ main = do
   output <- required arguments "--out"
   id5 <- required arguments "--id5"
   id5Base <- parseAddress (required arguments "--id5-base")
-  textDigest <- required arguments "--kernel-text-sha256"
-  symsDigest <- required arguments "--kernel-syms-sha256"
+  elfDigest <- required arguments "--kernel-elf-sha256" >>= either error pure . parseSha256Hex
+  textDigest <- required arguments "--kernel-text-sha256" >>= either error pure . parseSha256Hex
+  symsDigest <- required arguments "--kernel-syms-sha256" >>= either error pure . parseSha256Hex
   selected <- either error pure (parseCaseSelection (values arguments "--case"))
   qualified <-
     runQualification
@@ -25,6 +27,7 @@ main = do
         , optionOutput = output
         , optionId5 = id5
         , optionId5Base = id5Base
+        , optionKernelElfSha256 = elfDigest
         , optionKernelTextSha256 = textDigest
         , optionKernelSymsSha256 = symsDigest
         , optionCases = selected

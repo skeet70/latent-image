@@ -46,7 +46,7 @@ import qualified Data.Vector as V
 import Data.Word (Word32)
 import FujiAF.JSON (decodeStrictIntegers)
 import Numeric (readHex, showHex)
-import RamPushLayout (runtimeAllocationSize, runtimeBankEnd, runtimeDataBase, runtimeExecutableBase, runtimeInstallerBase)
+import RamPushLayout (standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant, runtimeAllocationSizeFor, runtimeBankEnd, runtimeDataBase, runtimeExecutableBase, runtimeInstallerBase)
 
 -- * Allowlist
 
@@ -345,14 +345,22 @@ readLayout elf = do
   image <- symbol "__rb_image_end"
   installer <- symbol "__ram_push_installer_start"
   runtime <- symbol "__ram_push_end"
+  count <- absolute "RAM_PUSH_LINK_PUBLICATION_COUNT"
+  variant <- case count of
+    223 -> Right standardBankVariant
+    224 -> Right modalScopedBankVariant
+    226 -> Right lifecycleBankVariant
+    227 -> Right modalLifecycleBankVariant
+    _ -> Left "layout: unsupported bank publication count"
+  let allocationSize = runtimeAllocationSizeFor variant
   dataSection <- case [s | s <- elfSections elf, sectionName s == ".data"] of
     [s] -> Right s
     _ -> Left "layout: exactly one .data section required"
-  unless (toInteger base + toInteger runtimeAllocationSize <= 0xffffffff) (Left "layout: allocation leaves the address space")
+  unless (toInteger base + toInteger allocationSize <= 0xffffffff) (Left "layout: allocation leaves the address space")
   pure
     Layout
       { allocationBase = base
-      , allocationEnd = base + runtimeAllocationSize
+      , allocationEnd = base + allocationSize
       , textStart = start
       , textEnd = text
       , dataStart = sectionAddress dataSection
@@ -766,6 +774,8 @@ execute context function address instruction state = case instruction of
    where
     result s = dataResult context op (registerValue address s rn) (operandValue address s operand)
   MoveWide cond rd value -> conditional cond (\s -> continue (setRegister rd (exact value) s)) id
+  ReadStatus cond rd -> conditional cond (\s -> continue (setRegister rd Unknown s)) id
+  WriteApplicationFlags cond _ -> conditional cond (\s -> continue (flags True s)) id
   Multiply cond rd rn rm accumulator ->
     let factors s = case (pointwise (*) (registerValue address s rn) (registerValue address s rm), bounds (registerValue address s rn), bounds (registerValue address s rm)) of
           (Just v, _, _) -> v

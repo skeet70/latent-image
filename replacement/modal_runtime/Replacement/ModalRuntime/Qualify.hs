@@ -20,7 +20,6 @@ module Replacement.ModalRuntime.Qualify
   , hex
   ) where
 
-import qualified ArmElf as E
 import Control.Exception (SomeException, try)
 import Control.Monad (forM_, unless, when)
 import Data.Aeson (Value (..), object, (.=))
@@ -46,13 +45,13 @@ import Emulation.NativeObservation
   , WriteBytes (..)
   , lookupRegister
   , observeNative
-  , parseWord32
   , regionIdOf
   , registerLabel
   , renderObservationError
   , runnerStatusLabel
   )
-import Emulation.Sha256 (sha256, sha256Hex)
+import Emulation.Sha256 (Sha256, sha256, sha256Hex)
+import Replacement.ModalRuntime.KernelBinding (KernelDigests (..), KernelSymbol (..), BoundKernel (..), bindKernel)
 import FujiAF.Host (ensure, get, jsonRead, num, runBounded)
 import FujiAF.JSON (encodeCanonical)
 import qualified StockInventory as SI
@@ -67,8 +66,9 @@ data Options = Options
   , optionOutput :: FilePath
   , optionId5 :: FilePath
   , optionId5Base :: Word32
-  , optionKernelTextSha256 :: String
-  , optionKernelSymsSha256 :: String
+  , optionKernelElfSha256 :: Sha256
+  , optionKernelTextSha256 :: Sha256
+  , optionKernelSymsSha256 :: Sha256
   , optionCases :: CaseSelection
   }
 
@@ -693,30 +693,8 @@ data Context = Context
 data Symbol = Symbol Word32 Word32
   deriving (Eq)
 
-requiredSymbols :: [String]
-requiredSymbols =
-  [ "__rb_image_start"
-  , "rb_modal_dispatch"
-  , "rb_modal_call_prehook"
-  , "rb_modal_call"
-  ]
-
-parseSymbols :: [String] -> String -> M.Map String Symbol
-parseSymbols required contents =
-  foldl add M.empty (zip [1 :: Int ..] (lines contents))
- where
-  add symbols (lineNumber, line) = case words line of
-    [address, size, _kind, name] -> insert symbols lineNumber name address size
-    [address, _kind, name] -> insert symbols lineNumber name address "0"
-    _ -> symbols
-  insert symbols lineNumber name address size
-    | name `notElem` required = symbols
-    | otherwise =
-        case (parseWord32 address, parseWord32 size) of
-          (Just value, Just extent)
-            | M.member name symbols -> error ("duplicate symbol " ++ name ++ " at line " ++ show lineNumber)
-            | otherwise -> M.insert name (Symbol value extent) symbols
-          _ -> error ("invalid symbol line " ++ show lineNumber)
+requiredFunctions :: [String]
+requiredFunctions = ["rb_modal_dispatch", "rb_modal_call_prehook", "rb_modal_call"]
 
 symbolAddress :: Context -> String -> Word32
 symbolAddress context name = case M.lookup name (contextSymbols context) of
@@ -1171,6 +1149,9 @@ runQualification options = do
   exists <- doesPathExist (optionOutput options)
   when exists $ error "output path already exists"
   unless (optionId5Base options == id5BaseValue) $ error "id5 base differs from the pinned image base"
+  backend <- readBounded (optionRunner options) (64 * 1024 * 1024)
+  unless (sha256Hex (sha256 backend) == "b51544c62053d1bf31816d2c3e4b439e3847296b2eef1f99c8f17b5d75da2860") $
+    error "runner differs from E-NATIVE-APSR-MSR-150"
   id5 <- readExact (optionId5 options) (fromIntegral id5Size)
   unless (sha256Hex (sha256 id5) == id5Digest) $ error "id5 digest differs from the pinned image"
   let declarations = [(stockEntry, stockSize), (prehookAddr, prehookSize), (noopAddr, noopSize)]
@@ -1180,35 +1161,29 @@ runQualification options = do
     mapM (\(low, high) -> SI.deriveFunction (SI.GuestAddress id5BaseValue) id5 (SI.FunctionWindow (SI.GuestAddress low) (SI.GuestAddress high)) []) windows
   either error pure (SI.checkDeclarations (map declaration declarations) (map declaration derived))
   kernelBytes <- readBounded (optionBuild options </> "kernel.elf") (2 * 1024 * 1024)
-  unless (sha256Hex (sha256 kernelBytes) == "6cb32ec04b97a21df40b7420f5e59a4aee7cdd5fc91f3bcd160b05f94c35a48d") $
-    error "kernel.elf differs from E-MODAL-DISPATCHER-LINKED-ABI-150"
-  kernel <- either error pure (E.parseElf kernelBytes)
-  textSection <- case [section | section <- E.elfSections kernel, E.sectionName section == ".text", E.sectionExecutable section] of
-    [section] -> pure section
-    _ -> error "exactly one executable .text section required"
-  let kernelText = B.take (fromIntegral (E.sectionSize textSection)) (B.drop (fromIntegral (E.sectionOffset textSection)) kernelBytes)
-  unless (not (B.null kernelText) && B.length kernelText <= kernelTextLimit && sha256Hex (sha256 kernelText) == optionKernelTextSha256 options) $
-    error "ELF .text digest or size mismatch"
+  suppliedText <- readBounded (optionBuild options </> "kernel-text.bin") kernelTextLimit
   symsBytes <- readBounded (optionBuild options </> "kernel.syms") kernelSymsLimit
-  unless (sha256Hex (sha256 symsBytes) == optionKernelSymsSha256 options) $ error "kernel.syms digest mismatch"
-  let symbols = parseSymbols requiredSymbols (BC.unpack symsBytes)
+  let expected = KernelDigests (optionKernelElfSha256 options) (optionKernelTextSha256 options) (optionKernelSymsSha256 options)
+  bound <- either error pure (bindKernel expected requiredFunctions kernelBytes suppliedText symsBytes)
+  let symbols = M.map (\(KernelSymbol address size) -> Symbol address size) (boundSymbols bound)
+      kernelText = boundText bound
       stock = sliceAt id5 (optionId5Base options) stockEntry stockSize
       prehook = sliceAt id5 (optionId5Base options) prehookAddr prehookSize
       noop = sliceAt id5 (optionId5Base options) noopAddr noopSize
       context = Context (optionRunner options) (optionOutput options) symbols kernelText stock prehook noop
-      imageStart = symbolAddress context "__rb_image_start"
-  unless (imageStart == E.sectionAddress textSection) $
-    error "__rb_image_start differs from ELF .text"
-  forM_ requiredSymbols $ \name -> do
-    let supplied = symbols M.! name
-    case [(E.symbolValue symbol, E.symbolSize symbol) | symbol <- E.elfSymbols kernel, E.symbolName symbol == name] of
-      [(address, size)] | Symbol address size == supplied -> pure ()
-      _ -> error ("kernel.syms differs from bound ELF: " ++ name)
-  forM_ ["rb_modal_dispatch", "rb_modal_call_prehook", "rb_modal_call"] $ \name -> do
-    let (address, size) = symbolFunction context name
-    unless (imageStart <= address && address + size <= imageStart + fromIntegral (B.length kernelText)) $
-      error ("owned symbol outside kernel-text.bin: " ++ name)
   createDirectoryIfMissing True (optionOutput options)
+  let artifact path expectedDigest bytes = object ["path" .= path, "expected_sha256" .= (expectedDigest :: String), "sha256" .= sha256Hex (sha256 bytes)]
+      expectedArtifact path digest bytes = object ["path" .= path, "expected_sha256" .= sha256Hex digest, "sha256" .= sha256Hex (sha256 bytes)]
+  B.writeFile (optionOutput options </> "inputs.json") $ encodeCanonical $ object
+    [ "runner" .= artifact (optionRunner options) "b51544c62053d1bf31816d2c3e4b439e3847296b2eef1f99c8f17b5d75da2860" backend
+    , "id5" .= artifact (optionId5 options) id5Digest id5
+    , "kernel" .= expectedArtifact (optionBuild options </> "kernel.elf") (expectedElf expected) kernelBytes
+    , "kernel_text" .= expectedArtifact (optionBuild options </> "kernel-text.bin") (expectedText expected) suppliedText
+    , "kernel_symbols" .= expectedArtifact (optionBuild options </> "kernel.syms") (expectedSymbols expected) symsBytes
+    , "elf_text_sha256" .= sha256Hex (sha256 kernelText)
+    , "elf_text_address" .= hex (boundTextAddress bound)
+    , "global_admission" .= False
+    ]
   let selection = optionCases options
       selectedScenarios = filter (selectedCase selection . CaseId . scenarioId) scenarios
   outcomes <- runCases context selectedScenarios []

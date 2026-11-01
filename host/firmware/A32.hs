@@ -108,6 +108,8 @@ data Instruction
   = DataProcessing Cond DataOp Bool Reg Reg Operand
   | MoveWide Cond Reg Word32
   | MoveTop Cond Reg Word32
+  | ReadStatus Cond Reg
+  | WriteApplicationFlags Cond Reg
   | ZeroExtend Cond Reg Reg Int Int
   | -- | MUL or MLA: destination, the two factors and the accumulator.
     Multiply Cond Reg Reg Reg (Maybe Reg)
@@ -204,6 +206,8 @@ decode address word
     | word .&. 0x0fff0ff0 == 0x016f0f10 = Compute cond [reg 12 word]
     | word .&. 0x0ff000f0 == 0x01200070 = Rejected Breakpoint
     | word .&. 0x0ff000f0 == 0x01600070 = Rejected ExceptionReturn
+    | word .&. 0x0fff0fff == 0x010f0000 && reg 12 word /= pc = ReadStatus cond (reg 12 word)
+    | word .&. 0x0ffffff0 == 0x0128f000 && reg 0 word /= pc = WriteApplicationFlags cond (reg 0 word)
     | testBit word 7 = halfwordMultiply
     | field 7 4 word == 0 = Rejected SystemRegister
     | otherwise = Rejected Unadmitted

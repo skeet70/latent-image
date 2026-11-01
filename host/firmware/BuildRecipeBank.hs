@@ -26,6 +26,8 @@ import qualified FujiAF.ClassicChrome as CC
 import qualified FujiAF.ClassicChromeRam as CC
 import RamPushLayout
 import RamPushToolchain
+import qualified ArmElf as ELF
+import BankAllowlistComposition (bankAllowlistSourcePaths, composeBankAllowlist)
 
 -- | The four label texts the submenu pages carry, in the order the actions
 -- contract lists them.
@@ -40,7 +42,7 @@ uiTexts =
 data BuildMode
   = PreBootstrap
   | FlashPackage FilePath FilePath FilePath FilePath
-  | RamPush Word32 FilePath FilePath FilePath FilePath
+  | RamPush BankVariant Word32 FilePath FilePath FilePath FilePath
 
 runtimeMode :: BuildMode -> Bool
 runtimeMode PreBootstrap = False
@@ -49,7 +51,7 @@ runtimeMode _ = True
 modeKernel :: BuildMode -> Maybe FilePath
 modeKernel PreBootstrap = Nothing
 modeKernel (FlashPackage kernel _ _ _) = Just kernel
-modeKernel (RamPush _ linkedDir _ _ _) = Just linkedDir
+modeKernel (RamPush _ _ linkedDir _ _ _) = Just linkedDir
 
 -- | Refuses unless the relink script ran with exactly the compiled tool paths.
 requirePinnedToolchain :: IO ()
@@ -75,26 +77,31 @@ main = do
   when (arguments == ["--ram-push-allocation-size"]) $ do
     putStrLn (hex32 runtimeAllocationSize)
     exitSuccess
+  case arguments of
+    ["--ram-push-variant-allocation-size", groups] -> do
+      variant <- either H.failH pure (parseBankVariant groups)
+      putStrLn (hex32 (runtimeAllocationSizeFor variant))
+      exitSuccess
+    _ -> pure ()
   (specPath, outPath, outDir, buildMode) <- case arguments of
     [s, o, d] -> pure (s, o, d, PreBootstrap)
     ["--complete", s, o, d, kernel, boot, d3, stock] ->
       pure (s, o, d, FlashPackage kernel boot d3 stock)
     ["--ram-push", base, s, o, d, linkedDir, rc0Id4, rc0Id5, rc0Plain] -> do
       requirePinnedToolchain
-      pure
-        ( s
-        , o
-        , d
-        , RamPush (hexValue base) linkedDir rc0Id4 rc0Id5 rc0Plain
-        )
+      pure (s, o, d, RamPush standardBankVariant (hexValue base) linkedDir rc0Id4 rc0Id5 rc0Plain)
+    ["--ram-push-variant", groups, base, s, o, d, linkedDir, rc0Id4, rc0Id5, rc0Plain] -> do
+      variant <- either H.failH pure (parseBankVariant groups)
+      requirePinnedToolchain
+      pure (s, o, d, RamPush variant (hexValue base) linkedDir rc0Id4 rc0Id5 rc0Plain)
     _ ->
       H.failH
-        "usage: build-recipe-bank SPEC.json OUT.json OUT_DIR | --complete SPEC.json OUT.json OUT_DIR KERNEL_DIR BOOT_DIR D3_DIR STOCK_DAT | --ram-push-allocation-size | --ram-push BASE SPEC.json OUT.json OUT_DIR LINKED_DIR RC0_ID4 RC0_ID5 RC0_PLAIN"
+        "usage: build-recipe-bank SPEC.json OUT.json OUT_DIR | --complete SPEC.json OUT.json OUT_DIR KERNEL_DIR BOOT_DIR D3_DIR STOCK_DAT | --ram-push-allocation-size | --ram-push-variant-allocation-size GROUPS | --ram-push BASE SPEC.json OUT.json OUT_DIR LINKED_DIR RC0_ID4 RC0_ID5 RC0_PLAIN | --ram-push-variant GROUPS BASE SPEC.json OUT.json OUT_DIR LINKED_DIR RC0_ID4 RC0_ID5 RC0_PLAIN (GROUPS: lifecycle | modal75 | lifecycle,modal75)"
   original <- H.jsonRead =<< B.readFile specPath
   spec <- case buildMode of
     PreBootstrap -> pure original
     FlashPackage kernel _ d3 _ -> carveSpec original kernel d3
-    RamPush base linkedDir _ _ _ ->
+    RamPush _ base linkedDir _ _ _ ->
       carveSpecAt (RamCarve (RuntimeBase base)) original linkedDir ramNameImagePath
   H.fields spec "schema image4 image4_base image5 image5_base image2 image2_base image2_compiled_name boot slots placement payload_defaults" "recipe bank spec"
   unless (H.str (H.get spec "schema") == "recipe-bank-spec-1") $
@@ -670,8 +677,8 @@ main = do
     PreBootstrap -> pure ()
     FlashPackage kernel boot d3 stock ->
       emitPackage spec sources plan kernel boot d3 stock outDir
-    RamPush base linkedDir rc0Id4 rc0Id5 rc0Plain ->
-      emitRamPush base plan specPath linkedDir rc0Id4 rc0Id5 rc0Plain outDir
+    RamPush variant base linkedDir rc0Id4 rc0Id5 rc0Plain ->
+      emitRamPush variant base plan specPath linkedDir rc0Id4 rc0Id5 rc0Plain outDir
   putStrLn
     ( "recipe-bank: "
         ++ show count
@@ -1053,10 +1060,10 @@ relocatedD3 base rc0Id4 rc0Id5 d3Id4 = do
        [RamPublication 0x00d50a48 (readWord rc0Id5 0x00bf1a00 0x00d50a48) branch,
         RamPublication 0x00d5a088 (readWord rc0Id5 0x00bf1a00 0x00d5a088) 0xe320f000])
 
-emitRamPush :: Word32 -> WritePlan -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
-emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out = do
+emitRamPush :: BankVariant -> Word32 -> WritePlan -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out = do
   setFileMode out 0o700
-  unless (base .&. 7 == 0 && base <= maxBound - runtimeAllocationSize) $
+  unless (base .&. 7 == 0 && base <= maxBound - runtimeAllocationSizeFor variant) $
     H.failH "ram-push: base must be 8-byte aligned with room for the fixed allocation"
   rc0Id4 <- B.readFile rc0Id4Path
   rc0Id5 <- B.readFile rc0Id5Path
@@ -1077,11 +1084,11 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
         && rbEnd <= runtimeDataBase base
         && installerStart == runtimeInstallerBase base
         && installerStart < linkedEnd
-        && linkedEnd - installerStart == runtimeInstallerExtent
-        && linkedEnd - base <= runtimeAllocationSize
+        && linkedEnd - installerStart == runtimeInstallerExtentFor variant
+        && linkedEnd - base <= runtimeAllocationSizeFor variant
     ) $
     H.failH "ram-push: linked runtime does not match the fixed allocation contract"
-  let size = runtimeAllocationSize
+  let size = runtimeAllocationSizeFor variant
       runtimeRegions = ["menu_values", "menu_labels", "name_records", "menu_parent", "edit_half"]
       runtimeWrites =
         [w | w <- planWrites plan, writeRegion w `elem` runtimeRegions]
@@ -1187,6 +1194,15 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
   captureWord <- either H.failH pure (armTailBranchWord 0x00e9e038 captureTarget)
   unless (readWord rc0Id5 0x00bf1a00 0x00e9e038 == 0xe92d4870) $
     H.failH "ram-push: stock develop wait entry differs at 0x00e9e038"
+  modalPublications <- if hasPublicationGroup Modal75Publication variant
+    then do
+      target <- linked symbols "rb_modal_entry"
+      word <- either H.failH pure (modalHookWordFor variant base target (readWord rc0Id5 0x00bf1a00 0x00bfb028))
+      pure [RamPublication 0x00bfb028 0xe92d4ff0 word]
+    else do
+      when (any ((== "rb_modal_entry") . symbolName) symbols) $
+        H.failH "ram-push: unselected scoped modal entry is linked"
+      pure []
   let capturePublication = RamPublication 0x00e9e038 0xe92d4870 captureWord
       reserved = map ramAddress (legacyOrdered ++ d3Activation)
       ccKept = [p | p <- ccPublications, let CC.Address address = CC.publicationAddress p,
@@ -1195,16 +1211,16 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
                    in RamPublication address (CC.publicationOld p) (CC.publicationNew p)
       ccSetup = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Setup]
       ccActivation = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Activation]
-      logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra <> [capturePublication]
-  safeOrder <- either H.failH pure (safePublicationOrderFor (map (PublicationAddress . ramAddress) logical))
+      logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra <> [capturePublication] <> modalPublications
+  safeOrder <- either H.failH pure (safePublicationOrderForVariant variant (map (PublicationAddress . ramAddress) logical))
   let ordered = [logical !! publicationIndex index | index <- safeOrder]
-      allocationEnd = toInteger base + toInteger runtimeAllocationSize
+      allocationEnd = toInteger base + toInteger size
   unless
-    ( length logical == publicationCount
-        && length safeOrder == publicationCount
-        && sortOn publicationIndex safeOrder == map PublicationIndex [0 .. publicationCount - 1]
+    ( length logical == publicationCountFor variant
+        && length safeOrder == publicationCountFor variant
+        && sortOn publicationIndex safeOrder == map PublicationIndex [0 .. publicationCountFor variant - 1]
         && length ccSetup == publicationSetupCount - 69
-        && length (nub (map ramAddress logical)) == publicationCount
+        && length (nub (map ramAddress logical)) == publicationCountFor variant
         && all (\p -> toInteger (ramAddress p) + 4 <= toInteger base || toInteger (ramAddress p) >= allocationEnd) logical
     ) $
     H.failH "ram-push: publication order or destinations differ from the combined bank/Classic Chrome contract"
@@ -1225,6 +1241,9 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
   linkedBytes <- B.readFile (linkedDir ++ "/linked.bin")
   unless (B.length linkedBytes == fromIntegral (linkedEnd - linkedStart)) $
     H.failH "ram-push: linked binary extent differs from its symbols"
+  modalScope <- if hasPublicationGroup Modal75Publication variant
+    then Just <$> modalScopeMetadata base linkedDir symbols linkedStart linkedBytes
+    else pure Nothing
   publicationsStart <- linked symbols "__ram_push_publications_start"
   publicationsEnd <- linked symbols "__ram_push_publications_end"
   unless
@@ -1243,6 +1262,11 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
   when (base /= carveBase && not (null (staleFixedReferences carveBase 0x00bebb20 runtime))) $
     H.failH "ram-push: relinked runtime retains an absolute reference into the fixed bank range"
   runtimeHash <- H.sha256 runtime
+  allowlistSources <- forM (bankAllowlistSourcePaths variant) $ \path -> (path,) <$> B.readFile path
+  composedAllowlist <- either H.failH pure (composeBankAllowlist variant allowlistSources)
+  composedAllowlistHash <- H.sha256 composedAllowlist
+  B.writeFile (out ++ "/bank-allowlist-input.json") composedAllowlist
+  setFileMode (out ++ "/bank-allowlist-input.json") 0o600
   let sourcePaths =
         [ "menu/recipe_bank_arm.S"
         , "menu/recipe_bank_probe.c"
@@ -1266,7 +1290,6 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
         , "menu/ram_push_installer.c"
         , "menu/ram_push_abi.h"
         , "menu/recipe_bank_ram.ld"
-        , "menu/recipe_bank_allowlist.json"
         , "menu/recipe_bank_boot.S"
         , "menu/recipe_bank_boot.ld"
         , "host/firmware/BuildRecipeBank.hs"
@@ -1282,8 +1305,18 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
         , "host/firmware/classic-chrome-liveview-image5.json"
         , "host/firmware/classic-chrome-frames-image5.json"
         , parameterPath
-        ] ++ map fst ccInputsRead
-  sourceIdentity <- forM sourcePaths $ \path -> do
+        ] ++ map fst ccInputsRead ++ bankAllowlistSourcePaths variant
+          ++ [path | hasPublicationGroup Modal75Publication variant, path <-
+            [ "replacement/modal_runtime/src/lib.rs"
+            , "replacement/modal_runtime/src/dispatch.S"
+            , "replacement/modal_runtime/src/entry.S"
+            ]]
+          ++ case publicationGroups variant of
+            [] -> []
+            [Modal75Publication] -> ["host/firmware/build-recipe-bank-modal-ram.sh"]
+            [LifecyclePublications] -> ["host/firmware/build-recipe-bank-lifecycle-ram.sh"]
+            _ -> ["host/firmware/build-recipe-bank-modal-lifecycle-ram.sh"]
+  sourceIdentity <- forM (nub sourcePaths) $ \path -> do
     digest <- H.sha256 =<< B.readFile path
     pure (path, H.s digest)
   rc0Identity <- forM
@@ -1310,7 +1343,8 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
   setFileMode (out ++ "/runtime.bin") 0o600
   B.writeFile (out ++ "/ram-push-manifest.json") (encodeCanonical (H.obj
     [ ("schema", H.n 1)
-    , ("source_identity", H.obj (sourceIdentity <> rc0Identity <> rustIdentity <> toolIdentity))
+    , ("source_identity", H.obj (sourceIdentity <> rc0Identity <> rustIdentity <> toolIdentity
+        <> [("bank_allowlist_composed_sha256", H.s composedAllowlistHash)]))
     , ("base", H.s (hex32 base))
     , ("size", H.n (fromIntegral size))
     , ("runtime_sha256", H.s runtimeHash)
@@ -1332,6 +1366,60 @@ emitRamPush base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out 
         ])
     ]))
   setFileMode (out ++ "/ram-push-manifest.json") 0o600
+  forM_ modalScope $ \scope -> do
+    B.writeFile (out ++ "/modal-scope.json") (encodeCanonical (H.obj
+      [ ("schema", H.n 1)
+      , ("global_admission", Bool False)
+      , ("controller", H.n 75)
+      , ("stock_entry", H.s "0x00bfb028")
+      , ("stock_resume", H.s "0x00bfb02c")
+      , ("runtime_sha256", H.s runtimeHash)
+      , ("bound_elf", scope)
+      ]))
+    setFileMode (out ++ "/modal-scope.json") 0o600
+
+modalScopeMetadata :: Word32 -> FilePath -> [LinkSymbol] -> Word32 -> B.ByteString -> IO Value
+modalScopeMetadata base linkedDir symbols linkedStart linkedBytes = do
+  elfBytes <- B.readFile (linkedDir ++ "/kernel.elf")
+  elf <- either H.failH pure (ELF.parseElf elfBytes)
+  elfHash <- H.sha256 elfBytes
+  ranges <- forM ["rb_modal_entry", "rb_modal_dispatch", "rb_modal_call_prehook", "rb_modal_call"] $ \name -> do
+    symbol <- case filter ((== name) . ELF.symbolName) (ELF.elfSymbols elf) of
+      [one] -> pure one
+      _ -> H.failH ("ram-push: bound ELF requires one " ++ name)
+    listedAddress <- linked symbols name
+    let address = ELF.symbolValue symbol
+        bytes = ELF.symbolSize symbol
+        end = toInteger address + toInteger bytes
+        textContains section =
+          ELF.sectionName section == ".text" && ELF.sectionExecutable section
+            && not (ELF.sectionWritable section)
+            && ELF.sectionAddress section <= address
+            && end <= toInteger (ELF.sectionAddress section) + toInteger (ELF.sectionSize section)
+    unless (ELF.symbolKind symbol == ELF.FunctionSymbol && bytes > 0
+        && address .&. 3 == 0 && bytes .&. 3 == 0 && listedAddress == address
+        && runtimeExecutableBase base <= address && end <= toInteger (runtimeDataBase base)
+        && any textContains (ELF.elfSections elf)) $
+      H.failH ("ram-push: invalid bound modal function extent: " ++ name)
+    when (name == "rb_modal_entry" && bytes /= 56) $
+      H.failH "ram-push: modal entry seam must be exactly 56 bytes"
+    unless (and
+        [ ELF.byteAt elf at == Just (B.index linkedBytes (fromIntegral (at - linkedStart)))
+        | at <- [address .. address + bytes - 1]
+        ]) $
+      H.failH ("ram-push: bound ELF differs from linked modal bytes: " ++ name)
+    pure (name, H.obj [("address", H.s (hex32 address)), ("size", H.n (fromIntegral bytes))])
+  resume <- linked symbols "__rb_modal_stock_resume"
+  unless (resume == 0x00bfb02c) $
+    H.failH "ram-push: modal stock resume moved"
+  pure (H.obj [("sha256", H.s elfHash), ("functions", H.obj ranges)])
+
+parseBankVariant :: String -> Either String BankVariant
+parseBankVariant text = case text of
+  "lifecycle" -> bankVariant [LifecyclePublications]
+  "modal75" -> bankVariant [Modal75Publication]
+  "lifecycle,modal75" -> bankVariant [LifecyclePublications, Modal75Publication]
+  _ -> Left "publication groups must be lifecycle, modal75 or lifecycle,modal75"
 
 assemble :: Word32 -> [(Word32, B.ByteString)] -> IO B.ByteString
 assemble size chunks = do

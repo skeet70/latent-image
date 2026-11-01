@@ -17,6 +17,68 @@ xm1_rust_staticlib(
     ],
 )
 
+xm1_rust_staticlib(
+    name = "bank-modal",
+    src = "lib.rs",
+    crate_name = "bank",
+    rustc_flags = ["--cfg", "rb_modal_scoped"],
+    data = [
+        "//replacement/capture:module",
+        "//replacement/modal_runtime:module",
+        "//replacement/owned_menu:module",
+        "//replacement/recipe_ui:module",
+        "//replacement/service:module",
+    ],
+    visibility = [
+        "//emulation:__pkg__",
+        "//host/firmware:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
+xm1_rust_staticlib(
+    name = "bank-lifecycle",
+    src = "lib.rs",
+    crate_name = "bank",
+    rustc_flags = ["--cfg", "rb_lifecycle_scoped"],
+    data = [
+        "//replacement/capture:module",
+        "//replacement/media_permit:adapter",
+        "//replacement/media_permit:module",
+        "//replacement/owned_menu:module",
+        "//replacement/recipe_ui:module",
+        "//replacement/save:module",
+        "//replacement/service:module",
+    ],
+    visibility = [
+        "//emulation:__pkg__",
+        "//host/firmware:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
+xm1_rust_staticlib(
+    name = "bank-modal-lifecycle",
+    src = "lib.rs",
+    crate_name = "bank",
+    rustc_flags = ["--cfg", "rb_modal_scoped", "--cfg", "rb_lifecycle_scoped"],
+    data = [
+        "//replacement/capture:module",
+        "//replacement/media_permit:adapter",
+        "//replacement/media_permit:module",
+        "//replacement/modal_runtime:module",
+        "//replacement/owned_menu:module",
+        "//replacement/recipe_ui:module",
+        "//replacement/save:module",
+        "//replacement/service:module",
+    ],
+    visibility = [
+        "//emulation:__pkg__",
+        "//host/firmware:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
 genrule(
     name = "build-facts",
     srcs = ["@lab_xm1_rust//:share/xm1-rust/build-facts.txt"],
@@ -40,6 +102,44 @@ filegroup(
     visibility = [
         "//host/firmware:__pkg__",
         "//menu:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
+filegroup(
+    name = "modal-relink-sources",
+    srcs = [
+        ":relink-sources",
+        "//replacement/modal_runtime:relink-sources",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
+filegroup(
+    name = "lifecycle-relink-sources",
+    srcs = [
+        ":relink-sources",
+        "//replacement/media_permit:relink-sources",
+        "//replacement/save:relink-sources",
+        "//menu:recipe_bank_allowlist.lifecycle.json",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
+filegroup(
+    name = "modal-lifecycle-relink-sources",
+    srcs = [
+        ":lifecycle-relink-sources",
+        "//replacement/modal_runtime:relink-sources",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
         "//transport:__pkg__",
     ],
 )

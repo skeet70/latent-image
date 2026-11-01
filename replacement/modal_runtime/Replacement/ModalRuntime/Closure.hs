@@ -290,6 +290,8 @@ instructionCond instruction = case instruction of
   DataProcessing c _ _ _ _ _ -> c
   MoveWide c _ _ -> c
   MoveTop c _ _ -> c
+  ReadStatus c _ -> c
+  WriteApplicationFlags c _ -> c
   ZeroExtend c _ _ _ _ -> c
   Multiply c _ _ _ _ -> c
   Compute c _ -> c
@@ -452,6 +454,8 @@ execute analysis address word instruction regs = case instruction of
               else (plain (setReg rd result regs)) {effectSetsFlags = setsFlags}
   MoveWide _ rd value -> plain (setReg rd (Known value) regs)
   MoveTop _ rd value -> plain (setReg rd (mapKnown (\old -> (value `shiftL` 16) .|. (old .&. 0xffff)) (regAt regs rd)) regs)
+  ReadStatus _ rd -> plain (setReg rd Unknown regs)
+  WriteApplicationFlags _ _ -> (plain regs) {effectSetsFlags = True}
   ZeroExtend _ rd rm rotation width ->
     plain (setReg rd (mapKnown (\v -> rotateR v rotation .&. (bit width - 1)) (readReg address regs rm)) regs)
   Multiply _ rd rm rs accumulator ->
@@ -1296,6 +1300,8 @@ instructionReads instruction = case instruction of
   DataProcessing _ op _ _ rn operand -> Just ([rn | op `notElem` [MOV, MVN]] ++ operandRegs operand)
   MoveWide {} -> Just []
   MoveTop _ rd _ -> Just [rd]
+  ReadStatus {} -> Just []
+  WriteApplicationFlags _ source -> Just [source]
   ZeroExtend _ _ rm _ _ -> Just [rm]
   Multiply _ _ rm rs accumulator -> Just ([rm, rs] ++ maybe [] pure accumulator)
   Load _ _ _ _ rn offset _ -> Just (rn : offsetRegs offset)
@@ -1313,6 +1319,7 @@ instructionWrites instruction = case instruction of
   DataProcessing _ op _ rd _ _ -> [rd | op `notElem` [TST, TEQ, CMP, CMN]]
   MoveWide _ rd _ -> [rd]
   MoveTop _ rd _ -> [rd]
+  ReadStatus _ destination -> [destination]
   ZeroExtend _ rd _ _ _ -> [rd]
   Multiply _ rd _ _ _ -> [rd]
   Load _ width _ rt rn _ indexing -> [rt] ++ [nextReg rt | width == Dual] ++ [rn | indexing /= OffsetOnly]

@@ -7,7 +7,7 @@ import Emulation.Ff80Rehearsal (runFujiModRehearsal)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
-import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, classicChromeIconPayload, classicChromePayload, experimentPayload, parseSymbolRead, runRamPushE2E, warmAttachCheckpoint)
+import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, experimentPayload, parseSymbolRead, runRamPushE2E, warmAttachCheckpoint)
 import Data.List (isPrefixOf, nub)
 import Data.Char (isAscii, isAlphaNum)
 import qualified Data.Text as T
@@ -36,7 +36,7 @@ data RuntimeChoice = RetainedChoice | FujiModChoice deriving (Eq)
 
 -- | The RAM payload `--ram-push-e2e` pushes.
 newtype ExperimentName = ExperimentName String deriving (Eq)
-data RamPayloadChoice = BankD3Choice | ClassicChromeChoice | ClassicChromeIconChoice | ExperimentChoice ExperimentName deriving (Eq)
+data RamPayloadChoice = BankD3Choice | BankModal75Choice | BankLifecycleChoice | BankModalLifecycleChoice | ClassicChromeChoice | ClassicChromeIconChoice | ExperimentChoice ExperimentName deriving (Eq)
 
 data Options = Options
   { workspaceOption :: Maybe Workspace
@@ -63,6 +63,7 @@ data Options = Options
   , portOption :: Port
   , bindOption :: Bind
   , warmCheckpointOption :: Bool
+  , modalDiagnosticOption :: ModalDiagnostic
   }
 
 data Command = Help | Validate Firmware | Launch Options
@@ -100,9 +101,16 @@ usage = unlines
   , "  --receipt-output PATH  Fresh receipt directory beneath private-data/"
   , "  --flash-candidate      --ram-push-e2e: boot the supplied firmware and run segments without a RAM push"
   , "                         --cardless --fujimod also accepts stock firmware for no-install observations"
+  , "  --modal-observation    Opt-in stock FILMSIM canonical permit and physical writer audit"
+  , "                         Requires --ram-push-e2e --cardless --fujimod --flash-candidate"
   , "  --classic-chrome       --ram-push-e2e: push the Classic Chrome payload in place of the recipe bank and D3"
   , "  --classic-chrome-icon  --ram-push-e2e: push the Classic Chrome payload with its icon and live-view words"
   , "  --experiment NAME      --ram-push-e2e: push experiments/NAME with no card unless --sd-card-image is supplied"
+  , "  --ram-push-modal-scoped Select the separate unqualified 224-publication scoped modal bank"
+  , "                         Requires --ram-push-e2e --cardless --fujimod --unreviewed-relink"
+  , "  --ram-push-lifecycle   Select the unqualified 226-publication lifecycle variant"
+  , "                         Composes with --ram-push-modal-scoped for the 227-publication variant"
+  , "                         Requires --ram-push-e2e --cardless --fujimod --unreviewed-relink"
   , "  --read SYMBOL[:LENGTH] Read an experiment export after its trajectory (repeatable; default LENGTH 64)"
   , "  --attach-hold-q        --ram-push-e2e: hold Q across the attach edge of every boot (USB-toggle candidates)"
   , "  --trajectories PATH    --ram-push-e2e trajectory file (default: emulation/ram-push-e2e-trajectories.json,"
@@ -128,7 +136,7 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False NoModalDiagnostic
     go options [] = pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
@@ -173,11 +181,25 @@ parseCommand args
       go options { segmentsOption = Just names } rest
     go options ("--flash-candidate" : rest) =
       go options { pushModeOption = FlashCandidate } rest
+    go options ("--modal-observation" : rest) =
+      go options { modalDiagnosticOption = RetainedFilmModalDiagnostic } rest
+    go options ("--ram-push-modal-scoped" : rest) = do
+      selected <- case ramPayloadOption options of
+        BankD3Choice -> pure BankModal75Choice
+        BankLifecycleChoice -> pure BankModalLifecycleChoice
+        _ -> ioError (userError "--ram-push-modal-scoped requires a bank selection and may appear only once")
+      go options { ramPayloadOption = selected } rest
+    go options ("--ram-push-lifecycle" : rest) = do
+      selected <- case ramPayloadOption options of
+        BankD3Choice -> pure BankLifecycleChoice
+        BankModal75Choice -> pure BankModalLifecycleChoice
+        _ -> ioError (userError "--ram-push-lifecycle requires a bank selection and may appear only once")
+      go options { ramPayloadOption = selected } rest
     go options ("--classic-chrome" : rest) = do
-      require (ramPayloadOption options == BankD3Choice) "--classic-chrome and --classic-chrome-icon are exclusive"
+      require (ramPayloadOption options == BankD3Choice) "RAM payload selections are exclusive"
       go options { ramPayloadOption = ClassicChromeChoice } rest
     go options ("--classic-chrome-icon" : rest) = do
-      require (ramPayloadOption options == BankD3Choice) "--classic-chrome and --classic-chrome-icon are exclusive"
+      require (ramPayloadOption options == BankD3Choice) "RAM payload selections are exclusive"
       go options { ramPayloadOption = ClassicChromeIconChoice } rest
     go options ("--experiment" : value : rest) = do
       require (not (null value) && all (\char -> isAscii char && (isAlphaNum char || char `elem` "_-")) value)
@@ -266,6 +288,16 @@ launch options = do
   require (runtimeOption options == RetainedChoice || ff80 || (e2e && (pushModeOption options == RamPush || cardless)))
     "--fujimod belongs to --ram-push-e2e or --ff80-rehearsal"
   require (null (readSymbolsOption options) || (e2e && experiment)) "--read belongs to --ram-push-e2e --experiment"
+  when (modalDiagnosticOption options == RetainedFilmModalDiagnostic) $ do
+    require (e2e && cardless && runtimeOption options == FujiModChoice && pushModeOption options == FlashCandidate)
+      "--modal-observation requires --ram-push-e2e --cardless --fujimod --flash-candidate"
+    require (not (warmCheckpointOption options)) "--modal-observation runs a physical-key route, not --warm-checkpoint"
+    require (trajectoriesOption options /= Nothing) "--modal-observation requires --trajectories emulation/modal75-stock-route-trajectories.json"
+  when (ramPayloadOption options `elem` [BankModal75Choice, BankLifecycleChoice, BankModalLifecycleChoice]) $ do
+    require (e2e && cardless && runtimeOption options == FujiModChoice && pushModeOption options == RamPush)
+      "unqualified bank variants require --ram-push-e2e --cardless --fujimod"
+    require (relinkModeOption options == UnreviewedRelink EnforceAllowlist && allowlistOverrideOption options == Nothing)
+      "unqualified bank variants require --unreviewed-relink without an allowlist override"
   require (not experiment || allowlistOverrideOption options == Nothing) "experiments do not accept --allowlist-override"
   when ff80 $ do
     require (media == Nothing) "--ff80-rehearsal does not accept an SD-card image"
@@ -339,6 +371,9 @@ launch options = do
             Workspace workspacePath = root
             defaultTrajectories = case (pushModeOption options, ramPayloadOption options) of
               (RamPush, BankD3Choice) -> "emulation/ram-push-e2e-trajectories.json"
+              (RamPush, BankModal75Choice) -> "emulation/modal75-stock-route-trajectories.json"
+              (RamPush, BankLifecycleChoice) -> "emulation/ram-push-e2e-trajectories.json"
+              (RamPush, BankModalLifecycleChoice) -> "emulation/modal75-stock-route-trajectories.json"
               (RamPush, ClassicChromeChoice) -> "emulation/ram-push-cc-e2e-trajectories.json"
               (RamPush, ClassicChromeIconChoice) -> "emulation/ram-push-cc-icon-e2e-trajectories.json"
               (RamPush, ExperimentChoice (ExperimentName name)) -> "experiments" </> name </> "trajectory.json"
@@ -361,11 +396,14 @@ launch options = do
               (pushModeOption options)
               (case ramPayloadOption options of
                 BankD3Choice -> bankD3Payload
+                BankModal75Choice -> bankModal75Payload
+                BankLifecycleChoice -> bankLifecyclePayload
+                BankModalLifecycleChoice -> bankModalLifecyclePayload
                 ClassicChromeChoice -> classicChromePayload
                 ClassicChromeIconChoice -> classicChromeIconPayload
                 ExperimentChoice (ExperimentName name) -> experimentPayload name)
               (attachHoldOption options)
-              (uiConversionProfileOption options) cardInput (fixedSceneFrameOption options) Nothing runtime dat (readSymbolsOption options)
+              (uiConversionProfileOption options) cardInput (fixedSceneFrameOption options) Nothing runtime dat (readSymbolsOption options) (modalDiagnosticOption options)
         trajectory <- case trajectoriesOption options of
           Just (TrajectoryFile path) -> pure (Just (resolve root path))
           Nothing -> do

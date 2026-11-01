@@ -1053,7 +1053,59 @@ UI iteration does not need the RAM push: `bazel run //emulation:xm1-viewer -- --
 
 FujiMod also accepts `--cardless --fujimod --flash-candidate` for no-install menu observations. With the stock DAT and fixed-address trajectory reads and trace sites, this route neither allocates nor installs a bank and needs no bank symbol table. The retained engine still rejects the cardless combination. Protected-memory watches and refusal controls remain unsupported on this path.
 
+The opt-in `--modal-observation` diagnostic uses only that cardless FujiMod no-install route and the `retained-film-route` physical-key segments. It pins the selected DAT to official X-M1 1.50 and takes the complete dispatcher bytes `[0x00bfb028,0x00bfb124)` from the SHA-256-pinned image-5 decode at `private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin`. The SDK binds those bytes to the current guest before observation. No state or event cell is seeded.
+
+After independent source review, the baseline command is:
+
+```sh
+XM1_EMULATOR_SLOTS=1 devenv shell -- bazel run --jobs=2 //emulation:xm1-viewer -- \
+  --ram-push-e2e --cardless --fujimod --flash-candidate --modal-observation \
+  --firmware private-data/firmware/x-m1-1.50/FWUP0002.DAT \
+  --installed-nand private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand \
+  --trajectories emulation/modal75-stock-route-trajectories.json \
+  --segments retained-film-route \
+  --receipt-output private-data/verify-candidate/runs/modal75-stock-observation
+```
+
+The NAND argument names the saved adjustment-NAND fixture for the attach route. The diagnostic arms an independent Fixed-view WRITES observer over both complete modal arrays `[0x01467588,0x01467840)` and the stock-baseline modal permit observer before the first physical key, then ends the permit observer after the route. An existing physical or modal observer refuses the begin rather than being replaced. Writer attribution uses physical addresses, including aliases, and retains CPU core/PC, host/model writers, partial cells and boundary-crossing stores. Writes are audit evidence; their strict protected-write classification is retained, not judged as a no-write admission.
+
+`e2e-modal-observation.json` retains the raw writer acknowledgement, armed/final states, and permit reports before begin, at begin, before end, at end and after end, with parse/transport errors and the route failure. End requires a zero-frame monitor finish; failed end leaves the monitor active and the next report retains its evidence. The result is `diagnostic-observed`, not qualification. Machine-readable `physical_fetch_coverage:false` and `task_identity_verified:false` remain false: canonical dispatcher points miss physical instruction aliases, and same-route migration onto a core that already has a permit is undetected. This diagnostic does not establish whole-system modal coverage or a controller/state/event domain.
+
+`--ram-push-modal-scoped` selects a separate, unqualified 224-publication RAM bank while the default remains the 223-publication package. It requires `--ram-push-e2e --cardless --fujimod --unreviewed-relink`, refuses allowlist overrides, and defaults to `emulation/modal75-stock-route-trajectories.json`. It is not the stock `--modal-observation` route and cannot use `--flash-candidate`.
+
+`--ram-push-lifecycle` is independently composable with `--ram-push-modal-scoped`, in either order. All three opt-in variants require cardless FujiMod, unreviewed relink and no allowlist override; none may use `--flash-candidate`. The flags select these relinked artifacts without asserting lifecycle behavior:
+
+| Modal flag | Lifecycle flag | Payload kind | Publications | Observation |
+| --- | --- | --- | ---: | --- |
+| absent | absent | `RecipeBankD3` | 223 | Existing default route and gates |
+| absent | present | `RecipeBankLifecycle` | 226 | Unqualified emulated variant, no modal source receipt |
+| present | absent | `RecipeBankModal75` | 224 | Scoped modal interval diagnostic |
+| present | present | `RecipeBankModalLifecycle` | 227 | Scoped modal interval diagnostic |
+
+Lifecycle-only selection defaults to `emulation/ram-push-e2e-trajectories.json` and records `unqualified-lifecycle-variant`, not qualification. Both modal selections default to the FILMSIM trajectory and use the same bound-source validation and observation interval below. Add `--ram-push-lifecycle` to the scoped FILMSIM command to select the combined artifact; omit `--ram-push-modal-scoped` for lifecycle-only selection. Ordinary default invocation remains the 223-publication package.
+
+The scoped route validates `modal-scope.json` against the actual relinked `kernel.elf` and `runtime.bin`, retains both metadata and ELF in the receipt, and requires the manifest function extents to match ELF symbols. The linked instruction source is the bound ELF's read-only executable `.text`, byte-matched to the uploaded runtime, not a guest snapshot. Stock source remains the complete pinned 252-byte resident dispatcher. After successful install or a matching installed-checkpoint restore, it arms the canonical scoped permit producer and the complete-array physical WRITES audit only around the selected post-install physical-key segments. A successful zero-frame end precedes rollback; a failed observation or end retains raw evidence and aborts before rollback. After-unload segments and installation are outside this observation interval. The physical writer observer may remain armed until process exit; the saved audit ends before rollback.
+
+Scoped trajectories that configure another protected-memory observer, forbidden-execution observer or refusal control are rejected instead of replacing or dropping those guards. The ordinary 223-publication routes retain their existing guard behavior. The scoped result is `unqualified-scoped-diagnostic`; `e2e-modal-observation.json` and its result reference record interval boundaries, `physical_fetch_coverage:false`, `task_identity_verified:false` and `whole_installed_lifetime_coverage:false`. Neither installation nor a bounded observation establishes admission, table immutability, task migration detection or global modal ownership.
+
+After independent review and execution authorization, the first scoped FILMSIM command is:
+
+```sh
+XM1_EMULATOR_SLOTS=1 devenv shell -- bazel run --jobs=2 //emulation:xm1-viewer -- \
+  --ram-push-e2e --cardless --fujimod --ram-push-modal-scoped --unreviewed-relink \
+  --firmware private-data/analysis/x-m1-1.50/update/prefix/FWUP0002-prefix.DAT \
+  --installed-nand private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand \
+  --trajectories emulation/modal75-stock-route-trajectories.json \
+  --receipt-output private-data/verify-candidate/runs/modal75-scoped-observation
+```
+
+The full-route invocation above requests rollback after the observed keys. `--segments` retains its existing semantics: a selected pre-unload-only plan does not itself request rollback, and the receipt records `rollback_requested`.
+
+Public protocol and writer-audit behavior tests are registered as `//emulation:modal-observation-tests`. After independent review, the host-only checks are `devenv shell -- bazel test --jobs=2 //emulation:modal-observation-tests //emulation:ui-trajectory-tests` and `devenv shell -- bazel build --jobs=2 //emulation:xm1-viewer`. No run evidence is implied by these source changes.
+
 `--unreviewed-relink` relinks at the allocated base with the same runfiles builder and toolchain but without the compiled source-identity and publication-contract pins, then pushes and unloads that build without re-authenticating it (`emulation/Xm1UnreviewedRelink.hs`, linked only by `//emulation`). Use it to run a candidate whose bank or installer sources differ from the reviewed pins. Every relink, reviewed or not, runs the [bank ELF allowlist](../transport/README.md#bank-elf-allowlist) check and refuses a failing bank; `--allowlist-override REASON` (only with `--unreviewed-relink`) pushes it anyway. `e2e-result.json` records `"relink": {"mode": "unreviewed"}` with the build's source identity and the allowlist outcome (`"result": "pass"`, or `"overridden"` with the reason and every violation), also written to `relinked/bank-allowlist.json`; a reviewed run records `"reviewed"`.
+
+For every bank variant, `relinked/bank-allowlist-input.json` independently retains the actual composed checker input from the relinker. Transport recomposes the selected source fragments and checks that input against `source_identity.bank_allowlist_composed_sha256` before returning the build. `relinked/bank-allowlist.json` remains the checker receipt; neither artifact overwrites the other. Existing default receipt comparison filenames are unchanged.
 
 `--classic-chrome` pushes the Classic Chrome payload (transport/README.md "Classic Chrome payload") in place of the bank and D3: it allocates `0x1560` bytes, relinks with the Classic Chrome relinker and runs `emulation/ram-push-cc-e2e-trajectories.json` (FILM SIMULATION rows, the CLASSIC CHROME commit with the film cells read, the reopened list, a stock film selected again, the stock HIGHLIGHT TONE path, and the seven-row list after unload). From a fresh allocation it arms trace sites on the eight entry words and five hook sites before `ram-alloc` and writes their entries up to the end of `ram-push` to `e2e-fetch-watch.json`; observations list later entries under `classic_chrome_site_entries`. After unload it cold-boots the same inputs with `--fresh-boot` and reads every publication word against its old word (`cold-restart/e2e-cold-restart.json`). Without `--unreviewed-relink` the relinked build must match `reviewedCcContract`.
 

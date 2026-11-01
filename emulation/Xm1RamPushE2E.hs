@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), E2ESettings (..), SymbolRead, parseSymbolRead, Payload, bankD3Payload, classicChromePayload, classicChromeIconPayload, experimentPayload, runRamPushE2E, warmAttachCheckpoint) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), E2ESettings (..), SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runRamPushE2E, warmAttachCheckpoint) where
 
 import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, throwIO, try)
@@ -33,6 +33,7 @@ import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.SegmentReceipt (SegmentReceipt (..), SegmentResult (..), elapsedSeconds, segmentName, segmentNameText)
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
 import Emulation.PreservationObservation
+import Emulation.ModalObservation
 import Emulation.UiTrajectory
 import Emulation.WatchObservation
 import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
@@ -145,6 +146,7 @@ data E2ESettings = E2ESettings
   -- | The DAT the user supplied, which a flash candidate's symbol table sits beside.
   , firmwareSource :: FilePath
   , experimentReads :: [SymbolRead]
+  , modalDiagnostic :: ModalDiagnostic
   }
 
 -- | The card attach checkpoint key: the staged guest state and the session's inputs.
@@ -228,6 +230,9 @@ sessionBridge settings python installedMedia adjustmentNand boot output = case (
 payloadText :: Payload -> T.Text
 payloadText p = case payloadKind p of
   RecipeBankD3 -> "recipe-bank-d3"
+  RecipeBankModal75 -> "recipe-bank-modal75"
+  RecipeBankLifecycle -> "recipe-bank-lifecycle"
+  RecipeBankModalLifecycle -> "recipe-bank-modal-lifecycle"
   ClassicChrome -> "classic-chrome"
   ClassicChromeIcon -> "classic-chrome-icon"
   AfRing -> "af-ring"
@@ -237,6 +242,9 @@ payloadText p = case payloadKind p of
 payloadContract :: Payload -> ReviewedContract
 payloadContract p = case payloadKind p of
   RecipeBankD3 -> reviewedContract
+  RecipeBankModal75 -> error "scoped modal bank has no reviewed live contract"
+  RecipeBankLifecycle -> error "lifecycle bank has no reviewed live contract"
+  RecipeBankModalLifecycle -> error "modal lifecycle bank has no reviewed live contract"
   ClassicChrome -> reviewedCcContract
   ClassicChromeIcon -> reviewedCcIconContract
   AfRing -> error "AF ring has no live reviewed contract; use //emulation:xm1-af-ring-e2e"
@@ -433,6 +441,13 @@ data Relinked = Relinked
   , relinkedManifest :: RamPushManifest
   , relinkedAllowlist :: AllowlistOutcome
   , relinkedExperiment :: Maybe B.ByteString
+  , relinkedModal :: Maybe RelinkedModal
+  , relinkedAllowlistInput :: Maybe B.ByteString
+  }
+
+data RelinkedModal = RelinkedModal
+  { relinkedModalScope :: B.ByteString
+  , relinkedModalElf :: B.ByteString
   }
 
 -- | What an install checkpoint carries for the host: the allocation and install state files, the
@@ -503,6 +518,23 @@ runRamPushE2EUsing given python workspace trajectoryFile installedMedia adjustme
   hSetBuffering stdout LineBuffering
   bytes <- maybe (pure defaultExperimentTrajectory) B.readFile trajectoryFile
   trajectories <- either (ioError . userError . ("invalid RAM-push e2e trajectories: " ++)) pure (decodeTrajectories bytes)
+  when (payloadKind (e2ePayload given) `elem` [RecipeBankModal75, RecipeBankLifecycle, RecipeBankModalLifecycle]) $ do
+    require (pushMode given == RamPush && emulationCardMode given == Cardless
+      && case emulationRuntime given of FujiModRuntime _ -> True; _ -> False)
+      "unqualified bank variants require --ram-push-e2e --cardless --fujimod"
+    require (relinkMode given == UnreviewedRelink EnforceAllowlist)
+      "unqualified bank variants require --unreviewed-relink without an allowlist override"
+    require (modalDiagnostic given == NoModalDiagnostic) "--modal-observation is a stock no-install diagnostic"
+  when (payloadKind (e2ePayload given) `elem` [RecipeBankModal75, RecipeBankModalLifecycle]) $
+    either (ioError . userError) pure (checkModalObserverConfiguration trajectories)
+  when (modalDiagnostic given == RetainedFilmModalDiagnostic) $ do
+    require (pushMode given == FlashCandidate && emulationCardMode given == Cardless
+      && case emulationRuntime given of FujiModRuntime _ -> True; _ -> False)
+      "modal observation requires the no-install --cardless --fujimod --flash-candidate route"
+    either (ioError . userError) pure (checkModalObserverConfiguration trajectories)
+    require (not (null (beforeUnload trajectories)) && null (afterUnload trajectories)
+      && all ((== "retained-film-route") . segmentPhase) (beforeUnload trajectories))
+      "modal observation requires the retained-film-route physical-key trajectory"
   let settleCaps = [ () | segment <- beforeUnload trajectories ++ afterUnload trajectories
                         , step <- segmentSteps segment, isJust (keyTimingSettle (stepTiming step)) ]
   case emulationRuntime given of
@@ -577,6 +609,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         pure result
       selected = e2ePayload settings
       experimental = payloadKind selected == Experiment
+      scoped = payloadKind selected `elem` [RecipeBankModal75, RecipeBankModalLifecycle]
+      unreviewedBank = payloadKind selected `elem` [RecipeBankModal75, RecipeBankLifecycle, RecipeBankModalLifecycle]
       relinkAt base action
         | experimental = do
             relinker <- runfilesRelinker selected
@@ -601,6 +635,12 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         <*> pure (pinnedManifest pinned)
         <*> pure (pinnedAllowlist pinned)
         <*> (if experimental then Just <$> B.readFile (pinnedDirectory pinned </> "experiment.json") else pure Nothing)
+        <*> (if scoped then Just <$> (RelinkedModal
+          <$> B.readFile (pinnedDirectory pinned </> "modal-scope.json")
+          <*> B.readFile (pinnedDirectory pinned </> "kernel.elf")) else pure Nothing)
+        <*> (if isJust (payloadBankVariant selected)
+          then Just <$> B.readFile (pinnedDirectory pinned </> "bank-allowlist-input.json")
+          else pure Nothing)
       choose candidates
         | not (planFromInstall plan) || bootMode settings == FreshBoot = pure (Nothing, Nothing)
         | otherwise = do
@@ -615,6 +655,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
             pure (case matches of
               (candidate, relinked) : _ -> (Just candidate, Just (candidate, relinked))
               [] -> (Nothing, Nothing))
+  when scoped $
+    require (any (not . null . segmentSteps) (planBefore plan))
+      "scoped modal observation requires selected post-install physical-key segments"
   (executable, arguments) <- sessionBridge settings python installedMedia adjustmentNand (bootMode settings) e2e
   published <- bracket (timed "emulator-start" (startEmulator executable runtime arguments choose)) (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, installed) -> do
     putStrLn ("emulator start: " ++ show (bootStart start) ++ "; relink: " ++ T.unpack (relinkModeText (relinkMode settings))
@@ -633,6 +676,10 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           writePrivateBytes (relinkDirectory </> "kernel.syms") (relinkedSyms relinked)
           writePrivateBytes (relinkDirectory </> "kernel.disasm") (relinkedDisasm relinked)
           forM_ (relinkedExperiment relinked) (writePrivateBytes (relinkDirectory </> "experiment.json"))
+          forM_ (relinkedModal relinked) $ \modal -> do
+            writePrivateBytes (relinkDirectory </> "modal-scope.json") (relinkedModalScope modal)
+            writePrivateBytes (relinkDirectory </> "kernel.elf") (relinkedModalElf modal)
+          forM_ (relinkedAllowlistInput relinked) (writePrivateBytes (relinkDirectory </> "bank-allowlist-input.json"))
           let allowlist = allowlistReceipt (relinkedAllowlist relinked)
           writePrivateBytes (relinkDirectory </> "bank-allowlist.json") (BL.toStrict (encode allowlist) <> "\n")
           pure allowlist
@@ -654,7 +701,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           emulatorTraceSites emulator fetchSites
           Just . fst <$> emulatorTraceHits emulator 0
         breakBefore <- heapBreak
-        allocationPath <- timed "ram-alloc" (stagedSession allocationDirectory (runRamAlloc allocationBytes realClock api)) >>= \outcome -> case outcome of
+        allocationPath <- timed "ram-alloc" (stagedSession allocationDirectory
+          ((if unreviewedBank then runRamAllocWith xm1PeerCacheAvailability else runRamAlloc)
+            allocationBytes realClock api)) >>= \outcome -> case outcome of
           RamAllocated path -> pure (allocationDirectory </> takeFileName path)
           other -> ioError (userError ("ram-alloc failed: " ++ show other))
         retained <- readRetainedAllocation allocationPath
@@ -665,6 +714,18 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         allocationPath = retainedStatePath retained
         Address base = allocBase allocation
     manifest <- readRamPushManifest (relinkDirectory </> "ram-push-manifest.json")
+    modalObservation <- if scoped then do
+      metadata <- B.readFile (relinkDirectory </> "modal-scope.json")
+        >>= either (ioError . userError . ("invalid modal scope metadata: " ++)) pure . eitherDecodeStrict'
+      runtimeBytes <- B.readFile (relinkDirectory </> "runtime.bin")
+      elfBytes <- B.readFile (relinkDirectory </> "kernel.elf")
+      source <- either (ioError . userError) pure (parseScopedModalSource (watchAddress base) runtimeBytes elfBytes metadata)
+      (stock, stockSource) <- loadModalStock
+      installedDigest <- sha256File (runtime </> installedMedia)
+      request <- either (ioError . userError) pure (scopedModalRequest stock (either error id (modalLimit 65536)) source)
+      pure (Just (request, object ["stock" .= stockSource, "linked" .= scopedModalSourceJson source
+        , "installed_dat_sha256" .= sha256Hex installedDigest]))
+      else pure Nothing
     rendezvous <- symbolAddress (relinkDirectory </> "kernel.syms") "ram_push_rendezvous_locked"
     cpu0Exit <- symbolAddress (relinkDirectory </> "kernel.syms") "ram_push_cpu0_window_exit"
     cpu1Exit <- symbolAddress (relinkDirectory </> "kernel.syms") "ram_push_cpu1_window_exit"
@@ -827,7 +888,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
       PreservationProtection ranges | not executionGuarded -> Just <$> emulatorPreservationBegin emulator ranges
       _ -> pure Nothing
     trajectoryOutcome <- try $ do
-      captured <- segments (planBefore plan)
+      captured <- case modalObservation of
+        Nothing -> segments (planBefore plan)
+        Just (request, source) -> observeModalInterval emulator e2e request source InstalledScopedRoute (segments (planBefore plan))
       windows <- forM exported $ \(name, Address address, count) -> do
         bytes <- emulatorReadMemory emulator address count
         putStrLn ("read " ++ T.unpack name ++ " " ++ hexAddress address ++ " (" ++ show count ++ " bytes): " ++ hexBytes bytes)
@@ -980,7 +1043,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           , "trajectory_failure" .= trajectoryFailure
           , "mailbox" .= object ["install" .= installMailbox, "rollback" .= unloadMailbox,
                                  "address" .= hexAddress mailbox]
-          , "outcome" .= (if executionGuarded && expect == ExpectRefused then String "control-refused" else toJSON judgement)
+          , "outcome" .= (if scoped then String "unqualified-scoped-diagnostic"
+              else if executionGuarded && expect == ExpectRefused then String "control-refused"
+              else if unreviewedBank then String "unqualified-lifecycle-variant" else toJSON judgement)
           , "forbidden_execution" .= executionReceipt
           , "media" .= object
               [ "scope" .= String scopeText
@@ -990,7 +1055,16 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           , "unload" .= (if planUnload plan
               then Just (String (T.pack (show (length (manifestPublications manifest)) ++ " old words verified; allocation retained until power-off")))
               else Nothing)
-          ] ++ protectionFields
+          ] ++ protectionFields ++
+          [ "modal_observation" .= object
+              [ "receipt" .= (e2e </> "e2e-modal-observation.json")
+              , "interval" .= String "post-install selected physical-key segments only"
+              , "physical_fetch_coverage" .= False
+              , "task_identity_verified" .= False
+              , "whole_installed_lifetime_coverage" .= False
+              , "rollback_requested" .= planUnload plan
+              ]
+          | scoped ]
     forM_ trajectoryFailure $ \problem -> do
       writePrivateBytes (e2e </> "e2e-failure.json") (BL.toStrict (encode result) <> "\n")
       ioError (userError problem)
@@ -1187,6 +1261,14 @@ runFlashSession settings python runtime installedMedia adjustmentNand plan e2e =
   require (planProtection plan == Unprotected) "a protected-memory watch is unsupported on the flash-candidate path"
   require (planExpect plan == ExpectClean) "a refused-watch control is unsupported on the flash-candidate path"
   require (null (planForbiddenExecution plan)) "forbidden execution is unsupported on the flash-candidate path"
+  modalSource <- case modalDiagnostic settings of
+    NoModalDiagnostic -> pure Nothing
+    RetainedFilmModalDiagnostic -> do
+      datDigest <- sha256File (runtime </> installedMedia)
+      require (sha256Hex datDigest == "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490")
+        "retained modal diagnostic requires the pinned stock X-M1 1.50 DAT"
+      (stock, source) <- loadModalStock
+      pure (Just (stock, object ["dat_sha256" .= sha256Hex datDigest, "stock" .= source]))
   phases <- newIORef []
   let timed :: T.Text -> IO a -> IO a
       timed label action = do
@@ -1227,7 +1309,9 @@ runFlashSession settings python runtime installedMedia adjustmentNand plan e2e =
             [ "phase" .= String phase, "message" .= message ])) <> "\n")
           ioError (userError (show phase ++ " failed: " ++ message))
     runner <- newSegmentRunner emulator e2e (\label action -> timed label action) readAddress stop plan
-    captured <- runSegments runner (planBefore plan)
+    captured <- case modalSource of
+      Nothing -> runSegments runner (planBefore plan)
+      Just (stock, source) -> observeRetainedModal emulator e2e stock source (runSegments runner (planBefore plan))
     observed <- readIORef (runnerObservations runner)
     phaseTimes <- readIORef phases
     writePrivateBytes (e2e </> "e2e-result.json") (BL.toStrict (encode (object
@@ -1237,10 +1321,115 @@ runFlashSession settings python runtime installedMedia adjustmentNand plan e2e =
       , "emulator_start" .= startRecord start
       , "runtime" .= object ["symbols_sha256" .= fmap sha256Hex symbolsDigest]
       , "declared_trace_sites" .= traceSiteValues declaredTraceSites
-      , "outcome" .= CandidateQualified
+      , "outcome" .= (case modalDiagnostic settings of NoModalDiagnostic -> toJSON CandidateQualified; RetainedFilmModalDiagnostic -> String "diagnostic-observed")
       , "phases" .= (phaseTimes :: [Value])
       , "menu_receipts" .= catMaybes captured
       , "trajectories" .= map (\name -> object ["name" .= name, "result" .= String "matched"])
           (nub (map segmentPhase (filter (not . segmentObserve) (planBefore plan))))
       , "observations" .= (observed :: [Value])
       ])) <> "\n")
+
+data ModalObservationInterval = RetainedStockRoute | InstalledScopedRoute
+
+observeRetainedModal :: Emulator -> FilePath -> ModalStock -> Value -> IO a -> IO a
+observeRetainedModal emulator receipt stock source =
+  observeModalInterval emulator receipt request source RetainedStockRoute
+ where
+  request = either error id (modalRequest stock Nothing (either error id (modalLimit 65536)))
+
+observeModalInterval :: Emulator -> FilePath -> ModalRequest -> Value -> ModalObservationInterval -> IO a -> IO a
+observeModalInterval emulator receipt request source interval action = do
+  let limit = modalRequestLimit request
+      writerLimit = either error id (watchLimit 65536)
+      captureModal call = (Right <$> call) `catch` \(failure :: SomeException) -> pure (Left (displayException failure))
+      parsed response = response >>= modalParsedResponse
+      rawResponse response = either (const Null) modalRawResponse response
+      responseError response = either Just (either Just (const Nothing) . modalParsedResponse) response
+  initialPermit <- captureModal (emulatorModalObservationReport emulator limit)
+  initialWatch <- rawWatch (emulatorWatchStateRaw emulator)
+  let idle = do
+        report <- parsed initialPermit
+        unless (not (modalReportEnabled report)) (Left "another modal observer is active")
+  writerAck <- case idle of
+    Left problem -> pure (Left problem)
+    Right () -> rawWatch (emulatorExecutionWatchBegin emulator [modalArrayRange] [] writerLimit)
+  armedWatch <- rawWatch (emulatorWatchStateRaw emulator)
+  let writerReport state = do
+        acknowledgement <- writerAck >>= parseFixedWatchAck
+        observation <- state >>= parseFixedWatchObservation writerLimit
+        summarizeArrayWrites writerLimit [modalArrayRange] [] acknowledgement observation
+  begin <- case writerReport armedWatch of
+    Left problem -> pure (Left problem)
+    Right _ -> captureModal (emulatorModalObservationBegin emulator request)
+  route <- try $ do
+    either (ioError . userError) (const (pure ())) (parsed begin)
+    action
+  finalWatch <- rawWatch (emulatorWatchStateRaw emulator)
+  beforeEnd <- captureModal (emulatorModalObservationReport emulator limit)
+  ended <- case parsed begin of
+    Left problem -> pure (Left ("modal observation was not armed: " ++ problem))
+    Right _ -> captureModal (emulatorModalObservationEnd emulator limit)
+  afterEnd <- captureModal (emulatorModalObservationReport emulator limit)
+  let audit = writerReport finalWatch
+      checked = do
+        _ <- parsed begin
+        _ <- audit
+        report <- parsed beforeEnd
+        forM_ (modalReportFailure report) (Left . T.unpack)
+        _ <- parsed ended
+        finalReport <- parsed afterEnd
+        checkModalEnd finalReport
+      routeFailure = either (Just . displayException) (const Nothing) route
+      evidence = object
+        [ "schema" .= (1 :: Int)
+        , "scope" .= String "selected physical-key route, canonical modal points and physical array writer audit"
+        , "source" .= source
+        , "policy" .= (case interval of RetainedStockRoute -> String "stock-baseline"; InstalledScopedRoute -> String "scoped-owned75")
+        , "start" .= (case interval of RetainedStockRoute -> String "before-selected-physical-key-segments"; InstalledScopedRoute -> String "post-install-before-selected-physical-key-segments")
+        , "end" .= (case interval of RetainedStockRoute -> String "after-selected-physical-key-segments"; InstalledScopedRoute -> String "after-selected-physical-key-segments-before-rollback")
+        , "whole_installed_lifetime_coverage" .= False
+        , "physical_fetch_coverage" .= False
+        , "task_identity_verified" .= False
+        , "same_route_migration_to_core_with_existing_permit_detected" .= False
+        , "writer_semantics" .= String "write attempts are audit evidence, not no-write admission"
+        , "writer_ranges" .= [let (low, high) = watchRangeBounds modalArrayRange in [low, high]]
+        , "writer_limit" .= watchLimitValue writerLimit
+        , "permit_limit" .= modalLimitValue limit
+        , "watch_before" .= either (const Null) id initialWatch
+        , "watch_before_error" .= either Just (const Nothing) initialWatch
+        , "watch_acknowledgement" .= either (const Null) id writerAck
+        , "watch_acknowledgement_error" .= either Just (const Nothing) writerAck
+        , "watch_armed" .= either (const Null) id armedWatch
+        , "watch_armed_error" .= either Just (const Nothing) armedWatch
+        , "watch_final" .= either (const Null) id finalWatch
+        , "watch_final_error" .= either Just (const Nothing) finalWatch
+        , "array_write_audit" .= either (const Null) arrayWriteReportJson audit
+        , "array_write_audit_error" .= either Just (const Nothing) audit
+        , "permit_before" .= rawResponse initialPermit
+        , "permit_before_error" .= responseError initialPermit
+        , "permit_begin" .= rawResponse begin
+        , "permit_begin_error" .= responseError begin
+        , "permit_before_end" .= rawResponse beforeEnd
+        , "permit_before_end_error" .= responseError beforeEnd
+        , "permit_end" .= rawResponse ended
+        , "permit_end_error" .= responseError ended
+        , "permit_after_end" .= rawResponse afterEnd
+        , "permit_after_end_error" .= responseError afterEnd
+        , "trajectory_failure" .= routeFailure
+        , "observation_error" .= either Just (const Nothing) checked
+        ]
+  writePrivateBytes (receipt </> "e2e-modal-observation.json") (BL.toStrict (encode evidence) <> "\n")
+  case route of
+    Left (failure :: SomeException) -> throwIO failure
+    Right result -> either (ioError . userError) (const (pure result)) checked
+
+loadModalStock :: IO (ModalStock, Value)
+loadModalStock = do
+  let imagePath = "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin"
+  imageDigest <- sha256File imagePath
+  require (sha256Hex imageDigest == "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a")
+    "modal stock source differs from the pinned complete image-5 decode"
+  image <- B.readFile imagePath
+  stock <- either (ioError . userError) pure (modalStock (B.take 0xfc (B.drop (0x00bfb028 - 0x00bf1a00) image)))
+  pure (stock, object ["image5_sha256" .= sha256Hex imageDigest
+    , "stock_start" .= (0x00bfb028 :: Word32), "stock_bytes" .= (0xfc :: Int)])

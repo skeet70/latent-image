@@ -3,6 +3,36 @@
 # `//transport:camera` from the workspace root with Bazel-provided tool paths.
 set -euo pipefail
 
+builder_mode=(--ram-push)
+allocation_size=0x1dc98
+publication_count=223
+activation_count=92
+modal_link=()
+case "${RB_PUBLICATION_GROUPS:-}" in
+  "") ;;
+  modal75)
+    builder_mode=(--ram-push-variant modal75)
+    allocation_size=0x1dcb8
+    publication_count=224
+    activation_count=93
+    modal_link=(-Wl,--undefined=rb_modal_entry)
+    ;;
+  lifecycle)
+    builder_mode=(--ram-push-variant lifecycle)
+    allocation_size=0x1dcd8
+    publication_count=226
+    activation_count=95
+    ;;
+  lifecycle,modal75)
+    builder_mode=(--ram-push-variant lifecycle,modal75)
+    allocation_size=0x1dcf8
+    publication_count=227
+    activation_count=96
+    modal_link=(-Wl,--undefined=rb_modal_entry)
+    ;;
+  *) printf 'invalid RB_PUBLICATION_GROUPS selection\n' >&2; exit 1 ;;
+esac
+
 BASE="${1:?usage: build-recipe-bank-ram.sh BASE OUT_DIR}"
 OUT="${2:?usage: build-recipe-bank-ram.sh BASE OUT_DIR}"
 BUILDER="${RAM_PUSH_BUILDER:?}"
@@ -25,7 +55,7 @@ esac
 [[ -f "$RB_RUST_ARCHIVE" ]] || { printf 'service archive must be a regular file\n' >&2; exit 1; }
 
 base_value=$((BASE))
-(( base_value >= 0 && base_value <= 0xffffffff - 0x1dc98 )) || {
+(( base_value >= 0 && base_value <= 0xffffffff - allocation_size )) || {
   printf 'base leaves the 32-bit RAM address space\n' >&2; exit 1;
 }
 (( (base_value & 7) == 0 )) || {
@@ -61,8 +91,8 @@ for src in menu/recipe_bank_arm.S menu/recipe_bank_probe.c menu/recipe_bank_hook
 done
 objects+=("$RB_RUST_ARCHIVE")
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${FREE[@]}" -Oz -Wall -Wextra \
-  -DRAM_PUSH_PUBLICATION_COUNT=223u -DRAM_PUSH_SETUP_COUNT=131u \
-  -DRAM_PUSH_ACTIVATION_COUNT=92u -DRAM_PUSH_ABI_VERSION=5u \
+  -DRAM_PUSH_PUBLICATION_COUNT="${publication_count}u" -DRAM_PUSH_SETUP_COUNT=131u \
+  -DRAM_PUSH_ACTIVATION_COUNT="${activation_count}u" -DRAM_PUSH_ABI_VERSION=5u \
   -ffunction-sections -fdata-sections -c menu/ram_push_installer.c \
   -o "$OUT/ram_push_installer.o"
 objects+=("$OUT/ram_push_installer.o")
@@ -71,9 +101,11 @@ objects+=("$OUT/classic_chrome_ram.o")
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${LINK[@]}" -Wl,-T,menu/recipe_bank_ram.ld \
   -Wl,--defsym=RAM_PUSH_BASE="$BASE" -Wl,--defsym=RAM_PUSH_BANK_END="$rb_bank_end" \
   -Wl,--defsym=RAM_PUSH_INSTALLER_START="$rb_installer_start" \
+  -Wl,--defsym=RAM_PUSH_PUBLICATION_COUNT="$publication_count" "${modal_link[@]}" \
   -Wl,menu/classic_chrome_ram_stock.ld -Wl,--emit-relocs \
   "${objects[@]}" -o "$OUT/kernel.elf"
 "$OBJCOPY" -O binary "$OUT/kernel.elf" "$OUT/linked.bin"
+"$OBJCOPY" -j .text -O binary "$OUT/kernel.elf" "$OUT/kernel-text.bin"
 "$NM" --defined-only --print-size --numeric-sort "$OUT/kernel.elf" > "$OUT/kernel.syms"
 "$OBJDUMP" -d --triple=armv7-none-eabi "$OUT/kernel.elf" > "$OUT/kernel.disasm"
 
@@ -86,6 +118,6 @@ NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${LINK[@]}" -Wl,-T,menu/recipe_bank_
   "$OUT/boot.o" -o "$OUT/boot.elf"
 "$OBJCOPY" -j .text.rb_boot_store -O binary "$OUT/boot.elf" "$OUT/store.bin"
 
-"$BUILDER" --ram-push "$BASE" "$SPEC" \
+"$BUILDER" "${builder_mode[@]}" "$BASE" "$SPEC" \
   "$OUT/bank-plan.json" "$OUT" "$OUT" "$RC0_ID4" "$RC0_ID5" "$RC0_PLAIN"
 printf 'runtime: %s/runtime.bin\nmanifest: %s/ram-push-manifest.json\n' "$OUT" "$OUT"

@@ -21,6 +21,7 @@ module Emulation.UiTrajectory
   , phaseNames
   , decodeTrajectories
   , variantMismatches
+  , checkModalObserverConfiguration
   ) where
 
 import Control.Monad (unless, when)
@@ -375,3 +376,9 @@ variantMismatches retained variant =
       , ("requires", segmentRequires a == segmentRequires b)
       , ("film_row", segmentFilmRow a == segmentFilmRow b) ]
     assertion step = (stepKey step, stepExpected step)
+
+checkModalObserverConfiguration :: Trajectories -> Either String ()
+checkModalObserverConfiguration trajectories =
+  unless (trajectoryProtection trajectories == Unprotected && null (trajectoryForbiddenExecution trajectories)
+    && trajectoryExpect trajectories == ExpectClean)
+    (Left "modal observation refuses another memory/execution observer or refusal control")

@@ -23,6 +23,7 @@ haskell_binary(
 )
 
 exports_files([
+    "BankAllowlistComposition.hs",
     "classic-chrome-icon.txt",
     "classic-chrome-q-tile.txt",
 ])
@@ -506,7 +507,6 @@ haskell_binary(
     name = "build-recipe-bank",
     srcs = [
         "BuildRecipeBank.hs",
-        "RamPushLayout.hs",
     ],
     ghcopts = [
         "-Wall",
@@ -517,6 +517,9 @@ haskell_binary(
     ],
     main_file = "BuildRecipeBank.hs",
     deps = [
+        ":bank-allowlist",
+        ":bank-allowlist-composition",
+        ":ram-push-layout",
         ":ram-push-toolchain",
         "//host:aeson",
         "//host:base",
@@ -1519,7 +1522,6 @@ haskell_library(
         "A32.hs",
         "ArmElf.hs",
         "BankAllowlist.hs",
-        "RamPushLayout.hs",
     ],
     ghcopts = [
         "-Wall",
@@ -1528,6 +1530,7 @@ haskell_library(
         "-XGHC2021",
     ],
     deps = [
+        ":ram-push-layout",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -1544,6 +1547,7 @@ haskell_library(
     ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-XOverloadedStrings"],
     deps = [
         ":bank-allowlist",
+        ":ram-push-layout",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -1570,7 +1574,9 @@ haskell_test(
     srcs = ["RuntimeRelocationCompareTests.hs"],
     ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-XOverloadedStrings"],
     deps = [
+        ":bank-allowlist",
         ":runtime-relocation-compare",
+        ":ram-push-layout",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -1614,6 +1620,8 @@ haskell_test(
         "BuildRecipeBankRamTests.hs",
         "RamPushLayout.hs",
     ],
+    args = ["$(location //replacement/bank:bank)"],
+    data = ["//replacement/bank:bank"],
     ghcopts = [
         "-Wall",
         "-Werror",
@@ -1625,6 +1633,7 @@ haskell_test(
     deps = [
         "//host:base",
         "//host:bytestring",
+        "//host:cryptohash-sha256",
     ],
 )
 
@@ -1633,6 +1642,10 @@ filegroup(
     name = "build-recipe-bank-sources",
     srcs = [
         "BuildRecipeBank.hs",
+        "A32.hs",
+        "BankAllowlist.hs",
+        "BankAllowlistComposition.hs",
+        "ArmElf.hs",
         "RamPushLayout.hs",
         "classic-chrome-liveview-image5.json",
         "classic-chrome-frames-image5.json",
@@ -1673,6 +1686,87 @@ filegroup(
         ":build-recipe-bank",
         "//replacement/bank:bank",
         "//replacement/bank:build-facts",
+    ],
+)
+
+filegroup(
+    name = "ram-push-modal-relinker",
+    srcs = [
+        "build-recipe-bank-modal-ram.sh",
+        "build-recipe-bank-ram.sh",
+        ":build-recipe-bank",
+        "//replacement/bank:bank-modal",
+        "//replacement/bank:build-facts",
+        "//menu:recipe_bank_modal_allowlist_fragment.json",
+    ],
+)
+
+filegroup(
+    name = "ram-push-lifecycle-relinker",
+    srcs = [
+        "build-recipe-bank-lifecycle-ram.sh",
+        "build-recipe-bank-ram.sh",
+        ":build-recipe-bank",
+        "//replacement/bank:bank-lifecycle",
+        "//replacement/bank:build-facts",
+        "//menu:recipe_bank_allowlist.lifecycle.json",
+    ],
+)
+
+filegroup(
+    name = "ram-push-modal-lifecycle-relinker",
+    srcs = [
+        "build-recipe-bank-modal-lifecycle-ram.sh",
+        "build-recipe-bank-ram.sh",
+        ":build-recipe-bank",
+        "//replacement/bank:bank-modal-lifecycle",
+        "//replacement/bank:build-facts",
+        "//menu:recipe_bank_modal_allowlist_fragment.json",
+        "//menu:recipe_bank_allowlist.lifecycle.json",
+    ],
+)
+
+haskell_library(
+    name = "ram-push-layout",
+    srcs = ["RamPushLayout.hs"],
+    ghcopts = ["-Wall", "-Werror", "-XGHC2021"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_library(
+    name = "bank-allowlist-composition",
+    srcs = ["BankAllowlistComposition.hs"],
+    ghcopts = ["-Wall", "-Werror", "-XGHC2021"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":bank-allowlist",
+        ":ram-push-layout",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:json",
+    ],
+)
+
+haskell_test(
+    name = "bank-allowlist-composition-tests",
+    srcs = ["BankAllowlistCompositionTests.hs"],
+    args = ["$(location //menu:recipe_bank_allowlist.json)"],
+    data = ["//menu:recipe_bank_allowlist.json"],
+    ghcopts = ["-Wall", "-Werror", "-XGHC2021"],
+    deps = [
+        ":bank-allowlist",
+        ":bank-allowlist-composition",
+        ":ram-push-layout",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:json",
     ],
 )
 

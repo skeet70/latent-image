@@ -46,6 +46,7 @@ module Emulation.WatchObservation
   , judgeWatch
   , FixedWatchAck
   , FixedWatchObservation
+  , fixedWatchRecords
   , parseFixedWatchAck
   , parseFixedWatchObservation
   , ForbiddenFetch (..)
@@ -192,6 +193,9 @@ data GuardAccess = GuardWrites | GuardFetches deriving (Eq, Show)
 data GuardClass = GuardClass WatchRange GuardAccess deriving (Eq, Show)
 data FixedWatchAck = FixedWatchAck WatchAck [GuardClass] deriving (Eq, Show)
 data FixedWatchObservation = FixedWatchObservation WatchObservation [GuardClass] deriving (Eq, Show)
+
+fixedWatchRecords :: FixedWatchObservation -> [WatchRecord]
+fixedWatchRecords (FixedWatchObservation observation _) = watchRecords observation
 
 data ForbiddenFetch = ForbiddenFetch
   { forbiddenFetchCore :: CoreId

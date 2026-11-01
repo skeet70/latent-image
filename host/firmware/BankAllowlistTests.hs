@@ -7,6 +7,7 @@
 module Main (main) where
 
 import A32 (Forbidden (..), Reg (..))
+import qualified A32
 import ArmElf
 import BankAllowlist
 import Control.Monad (forM_, unless)
@@ -114,6 +115,27 @@ main = do
     [(frameSetup, ForbiddenInstruction Unadmitted)]
   expect "UMULLS" (fixture frameSetup 0xe0932190)
     [(frameSetup, ForbiddenInstruction Unadmitted)]
+  expect "read CPSR" (fixture frameSetup 0xe10fc000) []
+  expect "write application flags" (fixture frameSetup 0xe128f00c) []
+  forM_ [0xe12cf00c,0xe121f00c,0xe168f00c,0xe328f001,0xe128f00f,0xe10ff000,0xe14fc000,0xe124f00c] $ \word ->
+    check ("privileged or unsupported status encoding refuses: " ++ show word)
+      (A32.decode frameSetup word == A32.Rejected SystemRegister)
+  let statusFunction = fst (function "rb_assert_one")
+      statusBranch = statusFunction + 12
+      forbiddenTarget = 0x00700000
+      conditionalBranch = 0x1a000000 .|. (((forbiddenTarget - statusBranch - 8) `shiftR` 2) .&. 0x00ffffff)
+      statusProgram words_ = patchBytes cleanElf clean statusFunction
+        (B.pack [fromIntegral (word `shiftR` shift) | word <- words_, shift <- [0,8,16,24 :: Int]])
+      statusFinding report = any (\finding -> findingAddress finding == statusBranch
+        && findingReason finding == UndeclaredStockTarget forbiddenTarget) (violations report)
+  invalidated <- run allowlist (statusProgram [0xe3a00000,0xe3500000,0xe128f001,conditionalBranch,0xe12fff1e])
+  check "restoring application flags invalidates the preceding comparison" (statusFinding invalidated)
+  overwritten <- run allowlist (statusProgram [0xe3a00000,0xe10f0000,0xe3500000,conditionalBranch,0xe12fff1e])
+  check "reading status replaces the destination value" (statusFinding overwritten)
+  preserved <- run allowlist (statusProgram [0xe3a00000,0xe3500000,0xe10f1000,conditionalBranch,0xe12fff1e])
+  check "reading status preserves comparison flags" (not (statusFinding preserved))
+  skipped <- run allowlist (statusProgram [0xe3a00000,0xe3500000,0x1128f001,conditionalBranch,0xe12fff1e])
+  check "a skipped status write preserves comparison flags" (not (statusFinding skipped))
   -- rb_assert_one's `cmp rN, #0` replaced by `mov r0, r0`: the 0 trace
   -- reaches its store.
   expect "untested 0 argument" (fixture zeroTest 0xe1a00000)
@@ -140,13 +162,17 @@ branchLink site target = 0xeb000000 .|. (((target - site - 8) `shiftR` 2) .&. 0x
 
 -- | The ELF with the word at a loaded address replaced.
 patch :: Elf -> B.ByteString -> Word32 -> Word32 -> B.ByteString
-patch elf bytes address word =
+patch elf bytes address word = patchBytes elf bytes address
+  (B.pack [fromIntegral (word `shiftR` (8 * i)) | i <- [0 .. 3 :: Int]])
+
+patchBytes :: Elf -> B.ByteString -> Word32 -> B.ByteString -> B.ByteString
+patchBytes elf bytes address fresh =
   case find holds (elfSections elf) of
     Just section ->
       let offset = fromIntegral (sectionOffset section + address - sectionAddress section)
-       in B.take offset bytes <> B.pack [fromIntegral (word `shiftR` (8 * i)) | i <- [0 .. 3 :: Int]] <> B.drop (offset + 4) bytes
+       in B.take offset bytes <> fresh <> B.drop (offset + B.length fresh) bytes
     Nothing -> error ("no section holds " ++ show address)
  where
   holds section =
     sectionAllocated section && sectionAddress section <= address
-      && toInteger address + 4 <= toInteger (sectionAddress section) + toInteger (sectionSize section)
+      && toInteger address + toInteger (B.length fresh) <= toInteger (sectionAddress section) + toInteger (sectionSize section)

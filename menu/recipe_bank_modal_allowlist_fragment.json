@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "stock_calls": [
+    {"address":"0x00bfb02c","name":"__rb_modal_stock_resume","source":"replacement/modal_runtime/src/entry.S; stock dispatcher after push r4-r11,lr"}
+  ],
+  "stock_stores": [],
+  "unproven": [
+    {"function":"rb_modal_call","access":"branch","through":{"argument":"r0"},"reason":"calls the selected modal action or transition entry"},
+    {"function":"rb_modal_dispatch","access":"branch","through":{"deref":{"index":"0x00cfe2a8"}},"reason":"calls an action through the controller's captured action table"},
+    {"function":"rb_modal_dispatch","access":"branch","through":{"deref":{"index":"0x00d0013c"}},"reason":"calls a transition through the controller's captured transition table"},
+    {"function":"rb_modal_dispatch","access":"store","through":{"index":"0x01467588"},"reason":"stores the negated nonpositive cell high halfword in the controller state"}
+  ]
+}

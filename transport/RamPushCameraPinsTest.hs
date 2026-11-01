@@ -4,7 +4,7 @@
 -- A leading payload flag selects its allocation size and compiled contract.
 module Main where
 
-import Control.Monad (unless)
+import Control.Monad (forM_, unless)
 import Data.Aeson (Value(..), encode, object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.ByteString as B
@@ -123,3 +123,36 @@ main = do
   refuses camera "ram-unload is refused before USB"
     ["ram-unload", statePath, root </> "unload-refused"]
     unloadReason
+
+  forM_
+    [ (bankModal75Payload, "scoped modal-75 payload has no approved live reviewed contract")
+    , (bankLifecyclePayload, "lifecycle payload has no approved live reviewed contract")
+    , (bankModalLifecyclePayload, "modal lifecycle payload has no approved live reviewed contract") ] $ \(selected, refusal) -> do
+    let name = show (payloadKind selected)
+        selectedRoot = root </> name
+        selectedRuntime = runtime selected
+    _ <- privateDirectory selectedRoot
+    selectedAllocDir <- privateDirectory (selectedRoot </> "alloc")
+    selectedAllocPath <- writeAllocStateFile selectedAllocDir
+      (RamAllocState (Address base) (payloadAllocationSize selected) 0x4003 callbackTableAddress callbackStockWord bootstrapBytes (replicate 64 '0') "X-M1" 1)
+    selectedLinkDir <- privateDirectory (selectedRoot </> "link")
+    let selectedManifestPath = selectedLinkDir </> "ram-push-manifest.json"
+        selectedDocument = manifestDocument (Target selected contract offset) [("synthetic-unreviewed-source", replicate 64 'a')]
+    writePrivateBytes (selectedLinkDir </> "runtime.bin") selectedRuntime
+    writePrivateBytes selectedManifestPath selectedDocument
+    _ <- readRamPushManifest selectedManifestPath
+    selectedStateDir <- privateDirectory (selectedRoot </> "state")
+    selectedStatePath <- writeStateFile selectedStateDir
+      (RamPushState (replicate 64 'a') (sha256 selectedRuntime) (Address base)
+        (payloadAllocationSize selected) (entries offset) (publications selected) callbackStockWord bootstrapBytes 1)
+    _ <- readRamPushState selectedStatePath
+    refuses camera (name ++ ": live allocation is refused")
+      ["ram-alloc", show (payloadAllocationSize selected), selectedRoot </> "allocate-refused"] refusal
+    refuses camera (name ++ ": live relink is refused")
+      ["ram-relink", selectedAllocPath, selectedRoot </> "relink-refused"] refusal
+    refuses camera (name ++ ": live push is refused")
+      ["ram-push", selectedAllocPath, selectedManifestPath, selectedRoot </> "push-refused"] refusal
+    refuses camera (name ++ ": live free is refused")
+      ["ram-free", selectedAllocPath, selectedRoot </> "free-refused"] refusal
+    refuses camera (name ++ ": live unload is refused")
+      ["ram-unload", selectedStatePath, selectedRoot </> "unload-refused"] refusal
