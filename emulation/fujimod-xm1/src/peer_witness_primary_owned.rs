@@ -42,9 +42,46 @@ struct Scratch { low: Guest, high: Guest, rust_bytes: u32, adapter_bytes: u32 }
 #[serde(rename_all = "kebab-case")]
 enum AccessKind { ScratchRead, ScratchWrite, ImageRead, PublicationWrite }
 
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(try_from = "u8", into = "u8")]
+struct EnteredRegister(u8);
+
+impl TryFrom<u8> for EnteredRegister {
+    type Error = &'static str;
+    fn try_from(register: u8) -> Result<Self, Self::Error> {
+        if register <= 12 { Ok(Self(register)) } else { Err("owned primary entered register exceeds r12") }
+    }
+}
+
+impl From<EnteredRegister> for u8 {
+    fn from(register: EnteredRegister) -> Self { register.0 }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+enum ScratchValue {
+    Constant { value: Word },
+    EnteredRegister { register: EnteredRegister },
+    EnteredLr,
+    EnteredCpsr,
+    Unknown,
+}
+
+impl ScratchValue {
+    fn expected(self, entered: &Context) -> Option<Word> {
+        match self {
+            Self::Constant { value } => Some(value),
+            Self::EnteredRegister { register } => Some(entered.registers[usize::from(register.0)]),
+            Self::EnteredLr => Some(entered.lr),
+            Self::EnteredCpsr => Some(entered.cpsr),
+            Self::Unknown => None,
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct EmittedAccess { guest: Guest, pc: Guest, ordinal: Instructions, kind: AccessKind }
+struct EmittedAccess { guest: Guest, pc: Guest, ordinal: Instructions, kind: AccessKind, scratch_value: Option<ScratchValue> }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -101,6 +138,8 @@ impl OwnedProgram {
                 && (LEAF.0..LEAF.1).contains(&access.pc.0) && access.pc.0 % 4 == 0 && access.guest.0 % 4 == 0,
                 "owned primary access chronology or instruction address differs")?;
             previous = access.ordinal.0;
+            require(access.scratch_value.is_some() == (access.kind == AccessKind::ScratchWrite),
+                "owned primary scratch value provenance role differs")?;
             match access.kind {
                 AccessKind::ScratchRead | AccessKind::ScratchWrite => {
                     require(access.guest.0 >= self.scratch.low.0 && access.guest.0 <= self.scratch.high.0 - 4,
@@ -122,7 +161,9 @@ impl OwnedProgram {
         require(adapter(&self.accesses[0], STACK as u32 - 8, LEAF.0, 0, AccessKind::ScratchWrite)
             && adapter(&self.accesses[1], STACK as u32 - 4, LEAF.0, 0, AccessKind::ScratchWrite)
             && adapter(&self.accesses[n - 2], STACK as u32 - 8, LEAF.0 + 24, self.instructions.0 - 11, AccessKind::ScratchRead)
-            && adapter(&self.accesses[n - 1], STACK as u32 - 4, LEAF.0 + 24, self.instructions.0 - 11, AccessKind::ScratchRead),
+            && adapter(&self.accesses[n - 1], STACK as u32 - 4, LEAF.0 + 24, self.instructions.0 - 11, AccessKind::ScratchRead)
+            && self.accesses[0].scratch_value == Some(ScratchValue::EnteredRegister { register: EnteredRegister(4) })
+            && self.accesses[1].scratch_value == Some(ScratchValue::EnteredLr),
             "owned primary adapter access sites differ")?;
         self.validate_symbols()?;
         let mut hash = Sha256::new();
@@ -228,6 +269,9 @@ impl OwnedProgram {
                 "owned primary raw access attribution or chronology differs")?;
             let value = event.value.ok_or("owned primary access lacks value")?;
             require(value <= u64::from(u32::MAX), "owned primary access value exceeds word")?;
+            if let Some(expected) = access.scratch_value.and_then(|provenance| provenance.expected(entered)) {
+                require(value == u64::from(expected.0), "owned primary scratch write differs from entered value provenance")?;
+            }
             let value = (value as u32).to_le_bytes();
             let preimage = |expected: &[u8]| -> Result<(), String> {
                 let raw = event.before.as_ref().ok_or("owned primary write lacks preimage")?;

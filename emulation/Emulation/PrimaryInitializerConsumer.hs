@@ -63,7 +63,7 @@ data WatchFault
   | LogLimit RecordLimit
   deriving (Eq)
 data RawWatch = RawWatch (Watch RawEvent) [Window] (Maybe WatchFault)
-data CodeView = CodeView PSC.CodeSite Views
+data CodeView = CodeView PSC.CodeSite Views deriving (Eq)
 
 data Continuation = Continuation
   { continuationStart :: Context
@@ -702,11 +702,12 @@ data SemanticContext = SemanticContext Word32 [Word32] Word32 Word32 Word32 [[Wo
 semanticContext :: Context -> SemanticContext
 semanticContext (Context pc registers sp lr cpsr _ banks) = SemanticContext pc registers sp lr cpsr banks
 
-data Semantics = Semantics SemanticContext SemanticContext SemanticContext Views Views Views Views Views deriving (Eq)
+data Semantics = Semantics SemanticContext SemanticContext SemanticContext [Views] [CodeView] Decoder [Alias] deriving (Eq)
 
 semantics :: Consumer -> Semantics
 semantics body = Semantics (semanticContext (entryContext body)) (semanticContext (selectedContext body)) (semanticContext (afterContext body))
-  (rootsBefore body) (tableBefore body) (tableAfter body) (poolBefore body) (stackAfter body)
+  [rootsBefore body,rootsAfter body,tableBefore body,tableAfter body,stackBefore body,stackAfter body,poolBefore body,poolAfter body]
+  (codeViews body) (decoder body) (aliases body)
 
 compareReceipts :: Contract -> Receipt -> Contract -> Receipt -> Either String ()
 compareReceipts first@(Contract retained _) firstReceipt second@(Contract owned _) secondReceipt = do
@@ -717,4 +718,7 @@ compareReceipts first@(Contract retained _) firstReceipt second@(Contract owned 
   PI.compareReceipts retained (nestedInitializer firstReceipt) owned (nestedInitializer secondReceipt)
   firstBody <- maybe (Left "retained primary root0 consumer is absent") Right (consumer firstReceipt)
   secondBody <- maybe (Left "owned primary root0 consumer is absent") Right (consumer secondReceipt)
+  firstContinuation <- maybe (Left "retained primary root0 continuation is absent") Right (continuation firstReceipt)
+  secondContinuation <- maybe (Left "owned primary root0 continuation is absent") Right (continuation secondReceipt)
+  require (rootsStart firstContinuation == rootsStart secondContinuation) "primary root0 continuation root preimage differs"
   require (semantics firstBody == semantics secondBody) "primary root0 consumer semantic output differs"

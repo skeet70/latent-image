@@ -292,18 +292,23 @@ fn observe(machine: &mut Machine, contract: &PrimaryContract, maps: &[factory::M
         classes.push(WatchRange { start: u64::from(LEAF.0), end: u64::from(LEAF.1), kinds: WatchKinds::CPU_READ });
         classes.push(WatchRange { start: low, end: high, kinds: WatchKinds::CPU_READ.union(WatchKinds::CPU_WRITE) });
     }
+    let mut confinement = vec![
+        ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Write, rule: Confinement::Allow(std::mem::take(&mut allowed)) },
+        ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Write,
+            rule: Confinement::Forbid(vec![physical(WORKSPACE)?, physical(LOADER)?]) },
+        ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Read,
+            rule: match scratch {
+                Some(extent) => Confinement::Allow(vec![physical((u64::from(LEAF.0), u64::from(LEAF.1)))?, physical(extent)?]),
+                None => Confinement::Forbid(vec![physical(PRIMARY_TABLE)?]),
+            } },
+    ];
+    if scratch.is_some() {
+        confinement.push(ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Fetch,
+            rule: Confinement::Forbid(vec![physical((u64::from(LEAF.0), u64::from(LEAF.1)))?]) });
+    }
     let mut watch = machine.session.board.memory_watch_begin_scoped(ScopedWatch {
         classes, limit: WATCH_LIMIT,
-        confinement: vec![
-            ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Write, rule: Confinement::Allow(std::mem::take(&mut allowed)) },
-            ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Write,
-                rule: Confinement::Forbid(vec![physical(WORKSPACE)?, physical(LOADER)?]) },
-            ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Read,
-                rule: match scratch {
-                    Some(extent) => Confinement::Allow(vec![physical((u64::from(LEAF.0), u64::from(LEAF.1)))?, physical(extent)?]),
-                    None => Confinement::Forbid(vec![physical(PRIMARY_TABLE)?]),
-                } },
-        ], counters: Vec::new(), coverage: Vec::new(),
+        confinement, counters: Vec::new(), coverage: Vec::new(),
     }, maps.to_vec())?;
     let outcome = (|| {
         let Some(entered) = stop(machine, PrimaryBoundary::Entered, boundaries)? else { return Ok(None) };

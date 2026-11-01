@@ -6,6 +6,7 @@ module Emulation.PrimaryInitializerArtifact
   , Scratch (..)
   , Access (..)
   , AccessKind (..)
+  , ScratchValue (..)
   , Obligation (..)
   , PublicationWords (..)
   , InstructionCount (..)
@@ -21,7 +22,7 @@ module Emulation.PrimaryInitializerArtifact
 import qualified A32 as A
 import Control.Monad (foldM, forM_, unless)
 import qualified Crypto.Hash.SHA256 as SHA256
-import Data.Aeson (Value, object, (.=))
+import Data.Aeson (ToJSON (..), Value, object, (.=))
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR, testBit)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Builder as BB
@@ -68,11 +69,23 @@ data Scratch = Scratch
 data AccessKind = ScratchRead | ScratchWrite | ImageRead | PublicationWrite
   deriving (Eq, Show)
 
+data ScratchValue = ScratchConstant Word32 | EnteredRegister A.Reg | EnteredLr | EnteredCpsr | UnknownScratch
+  deriving (Eq, Show)
+
+instance ToJSON ScratchValue where
+  toJSON value = case value of
+    ScratchConstant wordValue -> object ["kind" .= ("constant" :: String),"value" .= wordValue]
+    EnteredRegister (A.Reg register) -> object ["kind" .= ("entered-register" :: String),"register" .= register]
+    EnteredLr -> object ["kind" .= ("entered-lr" :: String)]
+    EnteredCpsr -> object ["kind" .= ("entered-cpsr" :: String)]
+    UnknownScratch -> object ["kind" .= ("unknown" :: String)]
+
 data Access = Access
   { accessPc :: Guest
   , accessGuest :: Guest
   , accessKind :: AccessKind
   , accessOrdinal :: InstructionCount
+  , accessScratchValue :: Maybe ScratchValue
   } deriving (Eq, Show)
 
 data Obligation
@@ -247,8 +260,9 @@ address machine base offset indexing = do
   pure (if indexing == A.PostIndexed then readRegister machine base else updated, updated)
 
 -- The Rust step count includes this instruction; three adapter instructions precede Rust.
-recordAccess :: Word32 -> Word32 -> AccessKind -> Machine -> Machine
-recordAccess pc location kind machine = machine {machineAccesses = Access (Guest pc) (Guest location) kind (InstructionCount (machineSteps machine + 2)) : machineAccesses machine}
+recordAccess :: Word32 -> Word32 -> AccessKind -> Maybe ScratchValue -> Machine -> Machine
+recordAccess pc location kind value machine = machine
+  {machineAccesses = Access (Guest pc) (Guest location) kind (InstructionCount (machineSteps machine + 2)) value : machineAccesses machine}
 
 frameAddress :: Word32 -> Machine -> Integer -> Either String Word32
 frameAddress incomingSp machine relative = do
@@ -261,10 +275,10 @@ load image incomingSp location machine = case location of
   StackAddress relative -> do
     guest <- frameAddress incomingSp machine relative
     value <- maybe (Left "primary initializer reads an unwritten Rust stack word") Right (M.lookup relative (machineStack machine))
-    pure (value, recordAccess here guest ScratchRead machine)
+    pure (value, recordAccess here guest ScratchRead Nothing machine)
   Constant guest -> do
     value <- maybe (Left "primary initializer reads outside its linked immutable image") Right (K.imageWord image guest)
-    pure (Constant value, recordAccess here guest ImageRead machine)
+    pure (Constant value, recordAccess here guest ImageRead Nothing machine)
   _ -> Left "primary initializer load address is unproved"
   where here = machinePc machine
 
@@ -273,12 +287,19 @@ store incomingSp location value machine = case location of
   StackAddress relative -> do
     guest <- frameAddress incomingSp machine relative
     require (case value of StackAddress _ -> False; _ -> True) "primary initializer spills a stack alias"
-    pure (recordAccess here guest ScratchWrite machine) {machineStack = M.insert relative value (machineStack machine)}
+    let expected = case value of
+          Constant wordValue -> ScratchConstant wordValue
+          Incoming (A.Reg 4) -> EnteredCpsr
+          Incoming register -> EnteredRegister register
+          ReturnAddress -> ScratchConstant (ownedStart + 12)
+          _ -> UnknownScratch
+    pure (recordAccess here guest ScratchWrite (Just expected) machine)
+      {machineStack = M.insert relative value (machineStack machine)}
   Constant guest -> case machineRemaining machine of
     expected : rest -> do
       actual <- known (scalar value)
       require (guest == word (publicationGuest expected) && actual == publicationValue expected) "primary initializer store differs from the complete ordered source publication"
-      pure (recordAccess here guest PublicationWrite machine) {machineRemaining = rest}
+      pure (recordAccess here guest PublicationWrite Nothing machine) {machineRemaining = rest}
     [] -> Left "primary initializer writes beyond its complete source publication"
   _ -> Left "primary initializer store address is unproved"
   where here = machinePc machine
@@ -477,8 +498,9 @@ deriveArtifact source image symbolBytes = do
       placement = Placement (Guest ownedStart) (Guest ownedEnd) (Guest end) (Guest rustStart) (Guest (fromInteger rustEnd)) (ContainerOffset (container + displacement)) (Physical (flash + displacement))
       obligations = [NaturalCallerContext,BothCoreLowHighRamAliases,CurrentRamDecoder,BothCoreItcmExclusion,BothCoreDtcmExclusion,EarlyCarrierLifetime,ScratchLifetime]
       adapterSlots = [word (callerSp (sourceCaller source)) - 8, word (callerSp (sourceCaller source)) - 4]
-      adapterWrites = [Access (Guest ownedStart) (Guest location) ScratchWrite (InstructionCount 0) | location <- adapterSlots]
-      adapterReads = [Access (Guest (ownedStart + 24)) (Guest location) ScratchRead (InstructionCount (steps + 6)) | location <- adapterSlots]
+      adapterWrites = [Access (Guest ownedStart) (Guest location) ScratchWrite (InstructionCount 0) (Just value)
+        | (location,value) <- zip adapterSlots [EnteredRegister (A.Reg 4),EnteredLr]]
+      adapterReads = [Access (Guest (ownedStart + 24)) (Guest location) ScratchRead (InstructionCount (steps + 6)) Nothing | location <- adapterSlots]
       metadata = ArtifactMetadata identity placement scratch (sourceCaller source) returns (map Guest callerSites)
         (adapterWrites ++ accesses ++ adapterReads) (InstructionCount (steps + 17)) (PublicationWords 1419) obligations
       emitted = [EmittedPublication (accessGuest access) (publicationValue sourceWord) (accessPc access) (accessOrdinal access)
@@ -567,7 +589,8 @@ artifactValue (Artifact metadata _ _ _) = object
     PublicationWords publicationWords = metadataPublicationWords metadata
     InstructionCount instructions = metadataInstructions metadata
     Physical flash = placementFlash placement
-    accessValue access = object ["pc" .= word (accessPc access), "guest" .= word (accessGuest access), "kind" .= accessName (accessKind access), "bytes" .= (4 :: Int)]
+    accessValue access = object ["pc" .= word (accessPc access), "guest" .= word (accessGuest access), "kind" .= accessName (accessKind access)
+      , "bytes" .= (4 :: Int), "scratch_value" .= accessScratchValue access]
     accessName kind = case kind of
       ScratchRead -> "scratch-read" :: String
       ScratchWrite -> "scratch-write"

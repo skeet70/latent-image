@@ -303,7 +303,8 @@ ownedContractValue source artifact hashes = object (ownedHashFields hashes ++
       ,"pc" .= guest (PA.emittedPc publication),"ordinal" .= ordinal (PA.emittedOrdinal publication)]
       | publication <- PA.artifactPublications artifact]
   , "accesses" .= [object ["guest" .= guest (PA.accessGuest access),"pc" .= guest (PA.accessPc access)
-      ,"ordinal" .= ordinal (PA.accessOrdinal access),"kind" .= accessName (PA.accessKind access)]
+      ,"ordinal" .= ordinal (PA.accessOrdinal access),"kind" .= accessName (PA.accessKind access)
+      ,"scratch_value" .= PA.accessScratchValue access]
       | access <- PA.artifactAccesses artifact]
   ])
   where
@@ -537,6 +538,24 @@ receiptInputIdentityMatches :: Contract -> Receipt -> Either String ()
 receiptInputIdentityMatches contract (Receipt bound _ _ _ _ _ _ _ _ _) =
   require (bound == identity contract) "primary receipt whole-input identity differs"
 
+data SemanticContext = SemanticContext Word32 [Word32] Word32 Word32 Word32 [[Word32]] deriving (Eq)
+
+semanticContext :: Context -> SemanticContext
+semanticContext (Context pc registers sp lr cpsr _ banks) = SemanticContext pc registers sp lr cpsr banks
+
+data Semantics = Semantics SemanticContext SemanticContext SemanticContext SemanticContext [Views] [(B.ByteString,B.ByteString)] deriving (Eq)
+
+semantics :: Receipt -> Either String Semantics
+semantics (Receipt _ _ _ _ _ _ _ _ _ evidence) = do
+  observation <- maybe (Left "primary comparison lacks an observation") Right evidence
+  code <- forM [codeBefore observation,codeAfter observation] $ \view -> do
+    bytes <- viewBytes 0xdae0 view
+    pure (B.take 0x430 bytes,B.drop 0x9ac bytes)
+  pure (Semantics (semanticContext (callerContext observation)) (semanticContext (beforeContext observation))
+    (semanticContext (enteredContext observation)) (semanticContext (afterContext observation))
+    [frameBefore observation,frameAfter observation,tableBefore observation,tableAfter observation
+    ,tailBefore observation,tailAfter observation,poolsBefore observation,poolsAfter observation] code)
+
 compareReceipts :: Contract -> Receipt -> Contract -> Receipt -> Either String ()
 compareReceipts retained before owned after = do
   require (contractRole retained == RetainedPrimary && contractRole owned == OwnedPrimary)
@@ -545,10 +564,9 @@ compareReceipts retained before owned after = do
   validateReceipt owned after
   require (PS.sourceDigest (contractSource retained) == PS.sourceDigest (contractSource owned))
     "primary comparison canonical source differs"
-  left <- receiptTableAfter before
-  right <- receiptTableAfter after
-  require (left == right && expectedReturn retained == expectedReturn owned)
-    "primary comparison publication or return semantics differ"
+  left <- semantics before
+  right <- semantics after
+  require (left == right) "primary comparison caller, preserved state or memory semantics differ"
 
 progressing :: Context -> Context -> Either String ()
 progressing (Context _ _ _ _ _ before _) (Context _ _ _ _ _ after _) =
@@ -632,7 +650,9 @@ validateWatch contract observation tcm prestate committed enteringCounts outgoin
         , case program contract of
             RetainedProgram _ -> rule [0] CpuRead Forbid [physical 0x4dae0 0x4f10c]
             OwnedProgram _ _ _ -> rule [0] CpuRead Allow [physical 0x40430 0x409ac,physical scratchLow scratchHigh]
-        ]
+        ] ++ case program contract of
+          RetainedProgram _ -> []
+          OwnedProgram _ _ _ -> [rule [1] CpuFetch Forbid [physical 0x40430 0x409ac]]
       writes = [CpuWrite,HostWrite,ModelBusWrite]
       expectedClasses =
         [ WatchClass (Window (0x4dae0,0x4f10c)) writes
@@ -741,6 +761,16 @@ validateProgramMemory contract observation events prestate committed enteringCou
         PA.ScratchWrite -> do
           old <- maybe (Left "owned primary scratch write leaves its admitted frame") Right (M.lookup guest memory)
           require (before == encodeLeWord old) "owned primary scratch write preimage differs"
+          provenance <- maybe (Left "owned primary scratch write lacks value provenance") Right (PA.accessScratchValue access)
+          let Context _ registers _ lr cpsr _ _ = enteredContext observation
+              expectedValue = case provenance of
+                PA.ScratchConstant word -> Just word
+                PA.EnteredRegister (A.Reg register) -> Just (registers !! fromIntegral register)
+                PA.EnteredLr -> Just lr
+                PA.EnteredCpsr -> Just cpsr
+                PA.UnknownScratch -> Nothing
+          forM_ expectedValue $ \expected ->
+            require (wordValue == expected) "owned primary scratch write differs from its entered value provenance"
           pure (M.insert guest wordValue memory)
         PA.ScratchRead -> do
           old <- maybe (Left "owned primary scratch read leaves its admitted frame") Right (M.lookup guest memory)
