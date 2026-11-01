@@ -23,6 +23,9 @@ haskell_library(
     srcs = [
         "Replacement/KernelInstall/Admission.hs",
         "Replacement/KernelInstall/Artifact.hs",
+        "Replacement/KernelInstall/Wire.hs",
+        "Replacement/KernelInstall/Witness.hs",
+        "Replacement/KernelInstall/WitnessControls.hs",
     ],
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
@@ -74,5 +77,26 @@ haskell_test(
         "//host:base",
         "//host:bytestring",
         "//host:update-container",
+    ],
+)
+
+haskell_binary(
+    name = "kernel-install-check",
+    srcs = ["WitnessMain.hs"],
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+    ],
+    data = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":kernel-install-artifact",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+        "//host:host-support",
     ],
 )

@@ -1969,3 +1969,38 @@ The same source's native image links to `[0x10400,0x11120)`, 3,360 bytes within 
 
 Task103 at `0x725dd8` saves six words and allocates 32 local bytes, calls entry at `0x725dfc`, and retains its mask in `r7`. Exit calls at `0x725e84`, `0x725fb4` and `0x726064` receive that `r7` value; the wrapper returns through `0x726090..0x726098`. Qualification still needs the natural caller's writable eight-byte-aligned stack and physical alias separation from code, roots, tables, counter and retained lock; record-2 carrier execution permission, coherence and lifetime through this later caller; stable publication/identity; and the retained services' concurrency and ordering premises. Source inspection supplies no general caller/interior-entry closure, finite contention result or scheduler ownership. Later reads at `0x725e04/0x725e1c` and conditional storage helper `0x725e74 -> 0x725c6c` remain outside this pair.
 
+## Image4 phase-zero interface installation (#150)
+
+`//replacement/kernel_install:kernel-install-image` emits the finite interface-root publication and bookkeeping initializer with its A32 private-ABI adapter inside `[0x725a04,0x725b54)`. `//replacement/kernel_install:kernel-install-tests` admits the emitted instructions, accepts three project-owned positive fixtures and checks 25 typed malformed-artifact refusals. The artifact retains cache service `0x42634`, preserves the original saved frame and success register/flag contract, and requires writable scratch down to installer SP minus 40. It does not own a kernel, scheduler, table producer or the optional BSS clear.
+
+`//replacement/kernel_install:stage-kernel-install` takes `SOURCE_DAT IMAGE4 LOADER_A LOADER_B LINKED_BIN SYMBOLS SCRATCH_DIR OUT_DAT OUT_CONTRACT`. The launcher supplies the existing encoder, updater and decoder. Source identities are admitted independently; staging rebuilds the canonical record4 container, independently checks its carried decode and confines decoded changes to the declared installation window.
+
+Build the observer and receipt checker separately from execution:
+
+```sh
+devenv shell -- bazel --batch build --jobs=2 \
+  //emulation:kernel-install-observe //emulation:emulator-slot \
+  //replacement/kernel_install:kernel-install-check
+```
+
+`//emulation:kernel-install-observe` accepts `--program retained|owned --scenario natural|invalid-marker --run RUN --update DAT --boot-rom ROM --analysis ANALYSIS_ROOT --image LINKED_BIN --symbols SYMBOLS --contract CONTRACT --output NEW_DIRECTORY`. Each invocation imports its own saved preexecution reset and takes the natural canonical primary route to installation entry. It stops at the cache call, cache return and either the original caller continuation or the admitted failure self-loop. The invalid-marker control changes the canonical marker from 3 to 0 before the watched interval. Retained uses the canonical DAT; owned uses the admitted staged DAT. Both roles use the same admitted native artifact and contract as comparison inputs.
+
+Run each selected role/scenario once in a fresh output directory under an emulator slot. Builds do not hold the slot:
+
+```sh
+XM1_EMULATOR_SLOTS=1 devenv shell -- bazel-bin/emulation/emulator-slot \
+  bazel-bin/emulation/kernel-install-observe \
+  --program retained --scenario natural \
+  --run "$RUN" --update "$SOURCE_DAT" --boot-rom "$BOOT_ROM" \
+  --analysis "$ANALYSIS_ROOT" --image "$LINKED_BIN" --symbols "$SYMBOLS" \
+  --contract "$CONTRACT" --output "$NEW_DIRECTORY"
+```
+
+The observer saves `installation.json`, the unmodified classified `memory-watch.json` and `reset.fujimod`. It derives classified coverage from the selected board graph's actual physical backings: DRAM `[0,0x20000000)`, secondary SRAM `[0x3fff0000,0x3fff1000)`, ROM `[0x80000000,0x80004000)`, shared SRAM `[0x90000000,0x90020000)` and system SRAM `[0xfff00000,0xfff01000)`. Reads/fetches and CPU/host/model writes are recorded across those backings. Unbacked MMIO and unrelated non-RAM model state are not runtime-write-guard claims. The pinned installer/cache/peer instruction paths supply the separate CPU effect contract.
+
+`//replacement/kernel_install:kernel-install-check` takes `compare|refusal-controls SOURCE_DAT IMAGE4 LOADER_A LOADER_B LINKED_BIN SYMBOLS SCRATCH_DIR CANDIDATE_DAT CONTRACT OBSERVER_EXECUTABLE RETAINED_DIRECTORY OWNED_DIRECTORY OUT_JSON`. The single-receipt `qualify` mode uses one `OBSERVATION_DIRECTORY` instead of the retained/owned directory pair. It independently admits and restages the candidate, binds producer/input/raw-watch/reset identities, and checks the complete ordered 1,457-store success or two-root invalid-marker effect, every read/write preimage, alias readback, preservation gaps, code/cache/peer bytes, cache ABI and caller frame/register/flag state. It reconciles exactly one stopped-only fetch at each recorded cache-entry/cache-return/terminal boundary before reproducing the remaining exact serialized fetch clocks and both per-core instruction totals. CPU data accesses must follow the same core's fetched instruction.
+
+The comparison requires matching natural input context, common resource inputs/outputs and the 16-byte original caller saved frame at installer SP plus 32. It does not compare owned code, private installer frames, unused caller locals or other stack guard bytes across runs. Each run still checks every captured byte against its own replay and rejects writes outside admitted own scratch or declared destinations. `refusal-controls` changes serialized public inputs and checks 21 exact rejection reasons per program, including missing stopped fetch, duplicated executed fetch and incorrect stop counter. These host controls execute no guest.
+
+This mechanism qualifies only the finite installation interval and the explicit marker control. Later startup consumers, allocation/lifetime behavior, menu continuation, optional BSS execution, general entry closure and silicon cache coherence remain separate acceptance obligations.
+

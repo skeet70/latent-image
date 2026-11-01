@@ -45,6 +45,10 @@ path = "src/startup_callers.rs"
 name = "fujimod-xm1-task-storage"
 path = "src/task_storage.rs"
 
+[[bin]]
+name = "fujimod-xm1-kernel-install"
+path = "src/kernel_install.rs"
+
 # Compiles the schema-4 loader-prefix observer against an engine carrying
 # build-support/fujimod-scoped-watch.patch.
 [features]
