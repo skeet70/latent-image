@@ -919,7 +919,11 @@ impl TraceSites {
             return Err("trace site is already armed".into());
         }
         self.disarm(session)?;
-        self.stop_labels.extend(sites.values().cloned());
+        for label in sites.values() {
+            if !self.stop_labels.contains(label) {
+                self.stop_labels.insert(label.clone());
+            }
+        }
         self.sites.extend(sites);
         self.rearm(session)?;
         self.restore_resume(session)
