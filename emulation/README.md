@@ -1443,7 +1443,34 @@ Admission separately checks all four descriptor/caller/creation/activation/error
 
 Idle102/103 have no body-local shared predicate or service call: they repeat WFI and its backedge. Standby93 instead waits on its task-associated event mask1 through `0x724480`, accepts only an entire output word equal to1, then performs the recovered IRQ/cache/MMIO wait/restore sequence. Its concrete flag producer and hardware wake source remain unidentified. Root104 creates five early executor workers and, on its nonzero branch, submits the later elfloader/flashloader/initcont chain; the later executable-publication contract belongs to #153.
 
-The proposed first owned increment replaces only the complete16-byte shared idle body. It requires a separately reviewed extension of these existing observers/consumers past A104's first prologue, actual A102/B103 entry, independently compared IRQ preemption/return and repeated waits, identity/context/effect refusals and continuous owned-code/resource admission. The current stock-only producer and consumer do not admit an owned candidate or that longer interval. The user-ARM native-case profile refuses WFI; do not replace natural full-system execution with a native success.
+The first owned increment's source now replaces only the complete16-byte shared idle body. `//emulation:idle-tasks` is its separate retained/owned observer; `startup_tasks.rs` and the stock #151 checker are unchanged. The new source has not been built, tested, staged or run, and requires independent review before execution. The user-ARM native-case profile still refuses WFI.
+
+The observer takes `--role retained|owned --run RUN --update DAT --boot-rom ROM --analysis ROOT --linked BIN --symbols SYMBOLS --contract CONTRACT --output NEW_DIRECTORY`. Both roles bind the actual linked bytes, symbols and staging contract, as well as run, DAT, ROM, observer and three separate canonical source images. Retained uses the original DAT; owned uses the candidate. It starts from a saved/restored zero-instruction reset and never writes a CPU/task context or forces an interrupt.
+
+Watching begins at the first admitted startup wrapper, with committed loaded-code views of both complete loaders and the immutable staged image4 prefix. Every lifecycle sample includes actual registers/CPSR/current-bank SPSR, both cores' identity/TCM state, both idle task creation/node/current/selected words, initial pool preimages, live stacks, interface roots/tables and code-word/core/alias/physical views. Classified writes cover those resources and immutable code; fetches cover every idle word, the initial wrapper and the source IRQ entry/frame/return boundaries. The80-million-instruction deadline,16,384-hit bound and1,048,576-row watch cap refuse incomplete observations.
+
+Source IRQ entry points are `0x40204 / 0xd0204`, frame points `0x40234 / 0xd0234`, and direct or scheduler-resumed return points `0x40364 / 0xd0364 / 0x437d8 / 0xd37d8`. The IRQ-frame contract preserves the actual interrupted idle registers, task SP/LR/CPSR and resume PC. Completion needs both idle entries, an executed first WFI, an actual correlated IRQ/frame/return, restored resume and an executed repeated WFI. A stopped-only fetch is not execution. Watching closes only after both lifecycles; the fixed erased-settings menu continuation is then unwatched. Failure preserves the partial receipt, raw watch and reset.
+
+`//emulation:idle-task-check` independently derives emitted admission and decoded candidate confinement, checks all identity/source/alias/view shapes, replays attributed writes and known preimages, validates stopped-only fetches, and reconstructs both IRQ/wait lifecycles from committed bytes. It does not trust the producer's derived kernel summaries or completion decision. It compares retained/owned task/core/stack identity and the independently validated preservation/repetition behavior without requiring identical compiler frames or instruction counts. Serialized refusal controls start only from an admitted actual baseline.
+
+After the separate source review, build the targets documented in [`replacement`](../replacement/README.md#shared-initial-idle-task-152). Invoke the actual immutable observer executable under `//emulation:emulator-slot`, with `XM1_EMULATOR_SLOTS=1`, once per separately bound retained/owned input. Checker commands are:
+
+```sh
+devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
+  //emulation:idle-task-check -- qualify "$ROLE" \
+  "$SOURCE_DAT" "$DAT" "$RUN" "$ROM" "$ANALYSIS" "$OBSERVER" \
+  "$LINKED_BIN" "$SYMBOLS" "$CONTRACT" "$OBSERVATIONS" "$SCRATCH" "$OUTPUT"
+devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
+  //emulation:idle-task-check -- refusal-controls "$ROLE" \
+  "$SOURCE_DAT" "$DAT" "$RUN" "$ROM" "$ANALYSIS" "$OBSERVER" \
+  "$LINKED_BIN" "$SYMBOLS" "$CONTRACT" "$OBSERVATIONS" "$SCRATCH" "$OUTPUT"
+devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
+  //emulation:idle-task-check -- compare \
+  "$SOURCE_DAT" "$RETAINED_DAT" "$OWNED_DAT" "$RUN" "$ROM" "$ANALYSIS" "$OBSERVER" \
+  "$LINKED_BIN" "$SYMBOLS" "$CONTRACT" "$RETAINED_OBSERVATIONS" "$OWNED_OBSERVATIONS" "$SCRATCH" "$OUTPUT"
+```
+
+The checker decodes the carried record through the existing bounded LZ tool in a temporary directory below `private-data/scratch`; comparison admits each captured observation independently. No check above is recorded as exercised yet. The runtime interval, natural wake reachability, original-copy/global caller closure, complete retained IRQ service lifetimes and all root/standby acceptance remain unqualified.
 
 ### Owned first-stage witness
 

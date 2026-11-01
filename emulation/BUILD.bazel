@@ -1332,6 +1332,12 @@ sh_binary(
 )
 
 sh_binary(
+    name = "idle-tasks",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-idle-tasks"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
     name = "kernel-install-observe",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-kernel-install"],
     visibility = ["//visibility:public"],
@@ -2746,5 +2752,50 @@ haskell_binary(
         "//host:directory",
         "//host:filepath",
         "//host:host-support",
+    ],
+)
+
+haskell_library(
+    name = "idle-task-witness-lib",
+    srcs = [
+        "Emulation/IdleTaskControls.hs",
+        "Emulation/IdleTaskWire.hs",
+        "Emulation/IdleTaskWitness.hs",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":startup-task-witness-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:json",
+        "//host:update-container",
+        "//host:vector",
+        "//replacement/idle_task:idle-task-artifact",
+        "//replacement/kernel_install:kernel-install-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "idle-task-check",
+    srcs = ["IdleTaskWitnessMain.hs"],
+    args = ["$(rootpath //lz:fflzd)"],
+    data = ["//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":idle-task-witness-lib",
+        ":image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:process",
+        "//host:update-container",
     ],
 )

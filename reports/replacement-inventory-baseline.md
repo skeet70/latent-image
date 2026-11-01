@@ -1225,7 +1225,7 @@ Retained stock enters only the compatibility front end at the complete recovered
 
 ### 8.17 Initial root, idle and standby task bodies (#152)
 
-`E-INITIAL-TASK-BODIES-SOURCE-150` binds the complete X-M1 1.50 image4 bodies, their retained service boundaries and a read-only projection of the admitted #151 stock receipt. This is source recovery and an owned-increment proposal. It adds no owned task artifact or natural task-body qualification.
+`E-INITIAL-TASK-BODIES-SOURCE-150` binds the complete X-M1 1.50 image4 bodies, their retained service boundaries and a read-only projection of the admitted #151 stock receipt. The first owned idle mechanism is now implemented in source, under `E-INITIAL-IDLE-MECHANISM-SOURCE-150`; it adds no measured artifact or natural task-body qualification.
 
 #### Entries, frames and observed startup contexts
 
@@ -1313,12 +1313,15 @@ Own the complete **shared idle102/103 body** in place over `[0x69cbf0,0x69cc00)`
 7. Extend watching past A104's first prologue for separately bound retained/owned observations. The existing cutoff cannot qualify A102 entry or any idle wake iteration. B93 can block and B103 can run before A102 creation; the four phase submissions are not a global barrier.
 8. Keep root/standby replacement, general scheduler and IRQ/device ownership, later executable publication and application startup open. Passing this increment does not close #152.
 
+`replacement/idle_task` supplies the Rust loop, strict carrier/writable-section assertions, fixed-site emitted-code proof, public artifact tests and one-DAT stager. `emulation/fujimod-xm1/src/idle_tasks.rs` is a separate retained/owned producer, leaving the #151 observer unchanged. Its first snapshot carries the complete loaded loader views and immutable image4 prefix; its longer watched interval captures task identity, live pool/stack views and real IRQ entry/frame/return plus resumed/repeated waits. The independently authored Haskell wire/consumer/comparison and serialized controls are under `Emulation/IdleTask*`. Neither compiler fit nor any host or guest result is observed. Independent review precedes all execution.
+
+
 | #152 acceptance criterion | Current status and exact remaining fact |
 | --- | --- |
 | Bound entries, task/core/context, loop/handback and retained services | Complete bodies and the existing initial contexts are source-bound. A102 entry, root service/handback execution and standby wake/hardware routing remain unobserved. |
-| Natural owned root104/idle102/idle103/standby93 execution | Unmet. No owned task-body artifact or run is introduced here. |
+| Natural owned root104/idle102/idle103/standby93 execution | Unmet. Idle artifact, staging and observation source exist, but no emitted artifact or run is admitted. Root/standby remain retained. |
 | Independent actions, task/IRQ, blocking/wakeup, repetition and handback comparisons | Existing stock admission reaches B93/A104 first prologues only. New retained/owned interval comparisons are required. |
-| Wrong identity/context, lost coordination, forbidden effects and false-completion refusals | Proposed for the idle increment. Concrete B93 flag producer and hardware wake contract remain prerequisites for standby controls. |
+| Wrong identity/context, lost coordination, forbidden effects and false-completion refusals | Idle emitted-code, producer and serialized refusal controls are implemented but unexercised. Concrete B93 flag producer and hardware wake contract remain prerequisites for standby controls. |
 | Continuous body guards and shared-data/callback/stack/task lifetimes | Unmet. Source extents and persistent consumers are named; runtime exclusion, wake/restoration and release are unqualified. |
 | Inventory, startup documentation and ledger separate later application, scheduler and device dependencies | Recorded here and in the startup observer documentation; no larger ownership claim is added. |
 

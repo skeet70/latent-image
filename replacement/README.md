@@ -137,3 +137,27 @@ The JSON contract's `plain_load.call_sites` contains numeric `{pc,target}` pairs
 The checker compares emitted instructions with an independently written ordered source-effect oracle over a finite tagged-input corpus. It includes canonical input values, rounding/overflow boundaries, changed offset/destination/final length, all recovered raw-reader error statuses, fixed ignored failures and per-call-varying results. Nonaliasing segment/extent words, aligned incoming SP and retained AAPCS callee saves are premises. Dependency tags are not algebraic equality, and unsampled scalar values or unreachable instructions are not universally quantified. Outside writers, actual returned-service effects and the complete retained callee frames still need runtime admission.
 
 `E-LATER-PLAIN-PRODUCER-SIZE-REFUSALS-150` preserves three failed host link attempts without relaxing the 244-byte bound. The final source uses a plain divergent loop for the missing-segment halt; opaque noreturn assembly left an unreachable trap, and disabling frame pointers did not reduce code size. ADR replaces the adapter's two absolute LR-materialization instructions. The independent review accepts the narrow nonflag PC-relative admission path and its positive, wrong-offset and flag-writing controls. `E-LATER-PLAIN-PRODUCER-HOST-150` records the final build, both passing test targets and the single staged DAT.
+
+## Shared initial idle task (#152)
+
+`replacement/idle_task` implements the complete shared idle102/103 entry `[0x69cbf0,0x69cc00)` as a Rust divergent WFI loop. The linker enforces the16-byte carrier and excludes writable sections. There is no production stock fallback, allocation, shared predicate, retained service call or return. Root104, standby93, task creation, scheduler/trampolines and interrupt/device services remain retained.
+
+`deriveIdleProof` interprets WFI only in this fixed-site proof; the user-ARM native profile is unchanged. Symbolic incoming registers/SP, a source-effect model and a repeated-state check admit safe entry-only private frames, require exactly one WFI with a direct resume backedge, and reject calls, data/MMIO access, returns, other hints, a pre-wait cycle, register/flag corruption, stack escape/drift and unreachable linked bytes. The stager derives actual wait/resume PCs, reachable PCs and scratch from linked bytes, pads only the remaining carrier, and reuses the shared one-DAT image4 confinement checks.
+
+Source is unexercised. Independent review precedes building, tests, staging and natural execution. The supported host commands are:
+
+```sh
+devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" build --jobs=2 \
+  //replacement/idle_task:idle-task-image //replacement/idle_task:stage-idle-task \
+  //emulation:idle-tasks //emulation:idle-task-check //emulation:emulator-slot
+devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" test --jobs=2 \
+  //replacement/idle_task:idle-task-tests
+devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
+  //replacement/idle_task:stage-idle-task -- \
+  "$SOURCE_DAT" "$IMAGE4" "$LINKED_BIN" "$SYMBOLS" "$SCRATCH" "$OUT_DAT" "$OUT_CONTRACT"
+```
+
+Tests exercise public artifact derivation with alternate valid arrangements and malformed behaviors, plus the actual linked artifact. Optional canonical DAT/image4 inputs check decoded-image confinement. A strict linker assertion is not a measured fit until the artifact builds; no emitted size, host pass, staged DAT or natural qualification is recorded yet.
+
+The contract's `idle_task` object contains `entry`, `replaced_extent`, `linked_bytes`, `linked_sha256`, `symbols_sha256`, `staged_image4_sha256`, `scratch_low_from_entry_sp`, `execution_pcs`, `wfi_pc` and `resume_pc`. The outer contract binds candidate DAT/image4 identities. [The idle lifecycle observer and independent checker](../emulation/README.md#initial-task-body-boundary-152) consume these actual identities without borrowing an earlier run's pins.
+
