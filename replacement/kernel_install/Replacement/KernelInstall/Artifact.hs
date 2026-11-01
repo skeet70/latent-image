@@ -3,10 +3,12 @@ module Replacement.KernelInstall.Artifact
   ( CanonicalSource, LinkedArtifact, StagedImage4, StagedCandidate, ArtifactError (..)
   , canonicalSource, deriveArtifact, stageImage4, stagedBytes, contractValue
   , stageCandidate, candidateBytes, candidateContractValue
+  , linkedBytes, installationProof, artifactValue
   ) where
 
 import Control.Monad (unless)
 import Data.Aeson (Value, object, (.=))
+import Data.Aeson.Types (Pair)
 import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import Data.Word (Word32)
@@ -84,12 +86,27 @@ candidateContractValue (StagedCandidate staged candidate) = object
   , "candidate_image4_sha256" .= Image4.candidateImage4Sha256 candidate
   ]
 
+linkedBytes :: LinkedArtifact -> B.ByteString
+linkedBytes (LinkedArtifact bytes _ _ _ _) = bytes
+
+installationProof :: LinkedArtifact -> InstallationProof
+installationProof (LinkedArtifact _ _ _ _ proof) = proof
+
+artifactValue :: LinkedArtifact -> Value
+artifactValue = object . artifactFields
+
 contractValue :: StagedImage4 -> Value
-contractValue (StagedImage4 (CanonicalSource _ _ sources) (LinkedArtifact linked linkedIdentity symbols (CodeAddress rust) proof) staged) = object
+contractValue (StagedImage4 (CanonicalSource _ _ sources) artifact staged) = object
+  (artifactFields artifact ++
+    [ "source_dat_image4_loader_a_loader_b_sha256" .= map identityText sources
+    , "staged_image4_sha256" .= identityText (identity staged)
+    ])
+
+artifactFields :: LinkedArtifact -> [Pair]
+artifactFields (LinkedArtifact linked linkedIdentity symbols (CodeAddress rust) proof) =
   [ "schema" .= (1 :: Int), "qualification" .= ("conditional-host-admission" :: String)
-  , "source_dat_image4_loader_a_loader_b_sha256" .= map identityText sources
   , "linked_sha256" .= identityText linkedIdentity, "symbols_sha256" .= identityText symbols
-  , "linked_bytes" .= B.length linked, "staged_image4_sha256" .= identityText (identity staged)
+  , "linked_bytes" .= B.length linked
   , "patch" .= ([0x725a04,0x725b54] :: [Word32]), "rust_entry" .= rust
   , "scratch_low_from_installer_sp" .= scratchLow proof, "invalid_marker_loop" .= refusalPc proof
   , "execution_pcs" .= executionPcs proof, "retained_calls" .= ([0x42634] :: [Word32])

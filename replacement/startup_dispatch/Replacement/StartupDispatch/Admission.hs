@@ -2,6 +2,8 @@ module Replacement.StartupDispatch.Admission
   ( AdmissionError (..), FrameProof, Phase (..), PathProof (..), Effect (..)
   , deriveFrameProof, proofPaths, scratchLow
   , Descriptor (..), TaskId (..), NameAddress (..), Priority (..), StackBytes (..), EntryAddress (..), Argument (..)
+  , CallBoundary, callBoundaries, callPhase, callInstruction, callContinuation, callEffect, callStack, callLiveWords
+  , StackOffset, stackOffsetValue, InstructionAddress, instructionAddressValue
   ) where
 
 import qualified A32 as A
@@ -23,21 +25,36 @@ newtype Argument = Argument Word32 deriving (Eq, Show)
 data Descriptor = Descriptor TaskId NameAddress Priority StackBytes EntryAddress Argument deriving (Eq, Show)
 data Effect = ModeRead | ClearWords | Install | Submit Descriptor deriving (Eq, Show)
 data PathProof = PathProof Phase [Effect] Bool deriving (Eq, Show)
-data FrameProof = FrameProof Int [PathProof]
+newtype StackOffset = StackOffset Int deriving (Eq, Ord, Show)
+newtype InstructionAddress = InstructionAddress Word32 deriving (Eq, Ord, Show)
+data CallBoundary = CallBoundary
+  { callPhase :: Phase, callInstruction :: InstructionAddress, callContinuation :: Maybe InstructionAddress
+  , callEffect :: Effect, callStack :: StackOffset, callLiveWords :: [StackOffset]
+  } deriving (Eq, Show)
+data FrameProof = FrameProof Int [PathProof] [CallBoundary]
 
 data Scalar = Constant Word32 | Interval Word32 Word32 | Stack Int | Incoming A.Reg | ReturnAddress | CodeAddress Word32 | Unknown deriving (Eq, Show)
 data Flags = Flags (Maybe Bool) (Maybe Bool) (Maybe Bool) (Maybe Bool)
 data Machine = Machine
   { registers :: M.Map A.Reg Scalar, memory :: M.Map Int Scalar
-  , flags :: Flags, effects :: [Effect], pending :: [(Int, Word32)]
+  , flags :: Flags, effects :: [Effect], pending :: [(Int, Word32)], calls :: [CallBoundary]
   , low :: Int, steps :: Int
   }
 
 proofPaths :: FrameProof -> [PathProof]
-proofPaths (FrameProof _ paths) = paths
+proofPaths (FrameProof _ paths _) = paths
 
 scratchLow :: FrameProof -> Int
-scratchLow (FrameProof bottom _) = bottom
+scratchLow (FrameProof bottom _ _) = bottom
+
+callBoundaries :: FrameProof -> [CallBoundary]
+callBoundaries (FrameProof _ _ boundaries) = boundaries
+
+stackOffsetValue :: StackOffset -> Int
+stackOffsetValue (StackOffset offset) = offset
+
+instructionAddressValue :: InstructionAddress -> Word32
+instructionAddressValue (InstructionAddress address) = address
 
 descriptor :: [Word32] -> Either AdmissionError Descriptor
 descriptor [task,name,priority,stack,code,argument] =
@@ -171,7 +188,8 @@ deriveFrameProof bytes = do
   paths <- sequence [run phase mode status | phase <- [Setup,Root,Diagnostic,Idle0,Idle1AndStandby,Other]
     , mode <- if phase == Setup then [Constant 0,Constant 1,Interval 2 maxBound] else [Unknown]
     , status <- if phase == Setup then [Constant 0,Interval 1 maxBound] else [Unknown]]
-  pure (FrameProof (minimum (map fst paths)) (map snd paths))
+  pure (FrameProof (minimum [bottom | (bottom,_,_) <- paths]) [path | (_,path,_) <- paths]
+    (concat [boundaries | (_,_,boundaries) <- paths]))
   where
     instruction pc = do
       require (pc >= entry && toInteger pc + 4 <= toInteger entry + toInteger (B.length bytes) && pc .&. 3 == 0)
@@ -182,7 +200,7 @@ deriveFrameProof bytes = do
             Setup -> Constant 0; Root -> Constant 1; Diagnostic -> Constant 2
             Idle0 -> Constant 3; Idle1AndStandby -> Constant 4; Other -> Interval 5 maxBound
           initial = Machine (M.fromList ([(A.Reg n,Incoming (A.Reg n)) | n <- [0..12]] ++ [(A.sp,Stack 0),(A.lr,ReturnAddress)]))
-            M.empty (Flags Nothing Nothing Nothing Nothing) [] [] 0 0
+            M.empty (Flags Nothing Nothing Nothing Nothing) [] [] [] 0 0
           expected = case phase of
             Setup -> [ModeRead] ++ [ClearWords | mode == Constant 1] ++ [Install]
             Root -> [Submit (Descriptor (TaskId 104) (NameAddress 0x781960) (Priority 1) (StackBytes 0x400) (EntryAddress 0x69d160) (Argument 0))]
@@ -200,9 +218,11 @@ deriveFrameProof bytes = do
               require (get machine A.sp == Stack 0) "A32 return changes incoming SP"
               require (all (\n -> get machine (A.Reg n) == Incoming (A.Reg n)) [4..11]) "A32 return changes a caller-live register"
               require (get machine (A.Reg 0) == Constant (if phase == Diagnostic then 0x69cc6c else 0)) "A32 dispatch return differs"
-            pure (low machine,PathProof phase (effects machine) spins)
-          retained target machine = do
-            require (case get machine A.sp of Stack offset -> offset <= -48; _ -> False) "A32 retained call overlaps the guest frame"
+            pure (low machine,PathProof phase (effects machine) spins,calls machine)
+          retained at target machine = do
+            offset <- case get machine A.sp of
+              Stack value | value <= -48 -> Right value
+              _ -> Left (AdmissionError "A32 retained call overlaps the guest frame")
             require (target == 0x725dd8 || null (pending machine)) "A32 descriptor writes precede an unrelated service"
             (effect, result) <- case target of
               0x657184 -> pure (ModeRead,mode)
@@ -216,10 +236,14 @@ deriveFrameProof bytes = do
                 submitted <- descriptor (map snd (pending machine))
                 pure (Submit submitted,Unknown)
               _ -> Left (AdmissionError "A32 external call is not a retained startup service")
+            let continuation = case get machine A.lr of CodeAddress address -> Just (InstructionAddress address); _ -> Nothing
+                boundary = CallBoundary phase (InstructionAddress at) continuation effect
+                  (StackOffset offset) (map StackOffset (M.keys (memory machine)))
             clobbered <- foldM (\state register -> put register Unknown state) machine (map A.Reg [0,1,2,3,12] ++ [A.lr])
             changed <- put (A.Reg 0) result clobbered
             pure (changed
               { effects = effects machine ++ [effect], pending = [], flags = Flags Nothing Nothing Nothing Nothing
+              , calls = calls machine ++ [boundary]
               , memory = if target == 0x725dd8 then foldr M.delete (memory machine) [-44,-40,-36,-32,-28,-24] else memory machine
               })
           walk pc machine = do
@@ -298,16 +322,16 @@ deriveFrameProof bytes = do
                 if link then do
                   called <- put A.lr (CodeAddress (pc+4)) advanced
                   if target >= entry && target < entry + fromIntegral (B.length bytes) then walk target called
-                  else retained target called >>= next
+                  else retained pc target called >>= next
                 else if target == pc then finish True advanced
                 else if target >= entry && target < entry + fromIntegral (B.length bytes) then walk target advanced
-                else retained target advanced >>= transfer (get advanced A.lr)
+                else retained pc target advanced >>= transfer (get advanced A.lr)
               A.BranchExchange cond link register -> execute cond $ do
                 require (not link) "A32 computed call is not admitted"
                 transfer (get machine register) advanced
               A.Hint cond | U.word32At bytes (fromIntegral (pc-entry)) == 0xe320f000 -> execute cond (next advanced)
               _ -> Left (AdmissionError ("A32 instruction is outside startup admission: " ++ show decoded))
       started <- put (A.Reg 0) input initial
-      walk entry started >>= \(bottom,path) -> do
+      walk entry started >>= \(bottom,path,boundaries) -> do
         require (bottom <= -48) "A32 adapter does not establish the original guest frame"
-        pure (bottom,path)
+        pure (bottom,path,boundaries)

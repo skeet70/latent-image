@@ -4,6 +4,7 @@ module Emulation.PrimaryInitializerSource
   , Source, Geometry (..), CallerFrame (..), Publication (..), ReturnValues (..), RootPair (..)
   , parseSource, sourceDigest, sourceLoaderDigest, sourceLoader, sourceGeometry, sourceBytes, sourceContainer
   , sourceCaller, sourcePublications, sourceReturn, sourceRoots, sourceValue
+  , publications
   ) where
 
 import qualified A32 as A
