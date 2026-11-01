@@ -107,6 +107,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/task_storage_check.rs",
     "//emulation:fujimod-xm1/src/toggle.rs",
     "//emulation:fujimod-xm1/src/trace.rs",
+    "//emulation:fujimod-xm1/src/trace_save_lifecycle.rs",
     "//emulation:fujimod-xm1/src/ui_conversion.rs",
     "//emulation:fujimod-xm1/src/updater.rs",
     "//emulation:fujimod-xm1/src/witness.rs",

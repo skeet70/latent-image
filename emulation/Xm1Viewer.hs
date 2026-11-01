@@ -33,6 +33,7 @@ data Bind = IPv4Loopback
 data CardSelection = WithCard | WithoutCard deriving (Eq)
 
 data RuntimeChoice = RetainedChoice | FujiModChoice deriving (Eq)
+newtype FujiModRunFile = FujiModRunFile FilePath deriving (Eq)
 
 -- | The RAM payload `--ram-push-e2e` pushes.
 newtype ExperimentName = ExperimentName String deriving (Eq)
@@ -64,6 +65,7 @@ data Options = Options
   , bindOption :: Bind
   , warmCheckpointOption :: Bool
   , modalDiagnosticOption :: ModalDiagnostic
+  , runDocumentOption :: Maybe FujiModRunFile
   }
 
 data Command = Help | Validate Firmware | Launch Options
@@ -110,7 +112,9 @@ usage = unlines
   , "                         Requires --ram-push-e2e --cardless --fujimod --unreviewed-relink"
   , "  --ram-push-lifecycle   Select the unqualified 226-publication lifecycle variant"
   , "                         Composes with --ram-push-modal-scoped for the 227-publication variant"
-  , "                         Requires --ram-push-e2e --cardless --fujimod --unreviewed-relink"
+  , "                         Requires --ram-push-e2e --fujimod --unreviewed-relink"
+  , "                         Virtual-card capture requires a terminal save_lifecycle trajectory; modal composition is cardless"
+  , "  --fujimod-run-document PATH  Select a run document for the FujiMod RAM-push e2e"
   , "  --read SYMBOL[:LENGTH] Read an experiment export after its trajectory (repeatable; default LENGTH 64)"
   , "  --attach-hold-q        --ram-push-e2e: hold Q across the attach edge of every boot (USB-toggle candidates)"
   , "  --trajectories PATH    --ram-push-e2e trajectory file (default: emulation/ram-push-e2e-trajectories.json,"
@@ -136,7 +140,7 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False NoModalDiagnostic
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False NoModalDiagnostic Nothing
     go options [] = pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
@@ -162,6 +166,9 @@ parseCommand args
       go options { cardModeOption = WithoutCard } rest
     go options ("--fujimod" : rest) =
       go options { runtimeOption = FujiModChoice } rest
+    go options ("--fujimod-run-document" : value : rest) = do
+      require (not (null value)) "--fujimod-run-document must be nonempty"
+      go options { runDocumentOption = Just (FujiModRunFile value) } rest
     go options ("--ff80-rehearsal" : rest) =
       go options { ff80RehearsalOption = True } rest
     go options ("--ram-push-e2e" : rest) =
@@ -287,6 +294,8 @@ launch options = do
   require (e2e || not cardless) "--cardless belongs to --ram-push-e2e"
   require (runtimeOption options == RetainedChoice || ff80 || (e2e && (pushModeOption options == RamPush || cardless)))
     "--fujimod belongs to --ram-push-e2e or --ff80-rehearsal"
+  require (runDocumentOption options == Nothing || (e2e && runtimeOption options == FujiModChoice))
+    "--fujimod-run-document requires --ram-push-e2e --fujimod"
   require (null (readSymbolsOption options) || (e2e && experiment)) "--read belongs to --ram-push-e2e --experiment"
   when (modalDiagnosticOption options == RetainedFilmModalDiagnostic) $ do
     require (e2e && cardless && runtimeOption options == FujiModChoice && pushModeOption options == FlashCandidate)
@@ -294,8 +303,10 @@ launch options = do
     require (not (warmCheckpointOption options)) "--modal-observation runs a physical-key route, not --warm-checkpoint"
     require (trajectoriesOption options /= Nothing) "--modal-observation requires --trajectories emulation/modal75-stock-route-trajectories.json"
   when (ramPayloadOption options `elem` [BankModal75Choice, BankLifecycleChoice, BankModalLifecycleChoice]) $ do
-    require (e2e && cardless && runtimeOption options == FujiModChoice && pushModeOption options == RamPush)
-      "unqualified bank variants require --ram-push-e2e --cardless --fujimod"
+    require (e2e && (cardless || (ramPayloadOption options == BankLifecycleChoice
+      && trajectoriesOption options /= Nothing && media /= Nothing))
+      && runtimeOption options == FujiModChoice && pushModeOption options == RamPush)
+      "unqualified bank variants require FujiMod RAM push; virtual-card lifecycle needs an explicit capture trajectory"
     require (relinkModeOption options == UnreviewedRelink EnforceAllowlist && allowlistOverrideOption options == Nothing)
       "unqualified bank variants require --unreviewed-relink without an allowlist override"
   require (not experiment || allowlistOverrideOption options == Nothing) "experiments do not accept --allowlist-override"
@@ -385,7 +396,8 @@ launch options = do
               (RetainedChoice, WithoutCard) -> "private-data/emulator-checkpoints/xm1-ram-push-cardless"
             runtime = case runtimeOption options of
               RetainedChoice -> RetainedRuntime
-              FujiModChoice -> FujiModRuntime (FujiModBridge fujimodRamPushBridge fujimodRun
+              FujiModChoice -> FujiModRuntime (FujiModBridge fujimodRamPushBridge
+                (maybe fujimodRun (\(FujiModRunFile path) -> resolve root path) (runDocumentOption options))
                 (resolve root "private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin"))
             relinkMode = if experiment then UnreviewedRelink EnforceAllowlist else
               case (relinkModeOption options, allowlistOverrideOption options) of

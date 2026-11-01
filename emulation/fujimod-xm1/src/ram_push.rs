@@ -16,7 +16,7 @@ use fujimod_emulator::board::preservation::{
     PhysicalRange, Preservation, PreservationState, ProtectedRanges,
 };
 use fujimod_xm1::sd_host::{Backing, MediaImage, SectorAddress, SectorCount};
-use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureSnapshot, InstructionCount};
+use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, InstructionCount};
 use serde::{Deserialize, Serialize};
 use fujimod_emulator_devices::Device;
 use fujimod_emulator_exr2_isp_input::ImageInput;
@@ -300,7 +300,7 @@ enum Request {
     ModalObservationBegin(ModalBeginRequest),
     ModalObservationReport,
     ModalObservationEnd,
-    CaptureObservationBegin,
+    CaptureObservationBegin { #[serde(default)] scope: CaptureScope },
     CaptureObservationHits { from: CaptureCursor },
     CaptureObservationAck { next: CaptureCursor },
     CaptureObservationResume,
@@ -371,7 +371,7 @@ impl Request {
             Request::ModalObservationBegin(_) => RequestKind::ModalObservationBegin,
             Request::ModalObservationReport => RequestKind::ModalObservationReport,
             Request::ModalObservationEnd => RequestKind::ModalObservationEnd,
-            Request::CaptureObservationBegin => RequestKind::CaptureObservationBegin,
+            Request::CaptureObservationBegin { .. } => RequestKind::CaptureObservationBegin,
             Request::CaptureObservationHits { .. } => RequestKind::CaptureObservationHits,
             Request::CaptureObservationAck { .. } => RequestKind::CaptureObservationAck,
             Request::CaptureObservationResume => RequestKind::CaptureObservationResume,
@@ -869,9 +869,9 @@ impl Server {
                 serde_json::to_value(machine.traces.modal_observation_report())
                     .map_err(|failure| format!("modal-observation-end: {failure}"))?
             }
-            Request::CaptureObservationBegin => {
-                self.bridge.begin_capture_observation()?;
-                json!({"protocol": 2, "active": true, "bounds": CAPTURE_OBSERVATION_BOUNDS})
+            Request::CaptureObservationBegin { scope } => {
+                self.bridge.begin_capture_observation(scope)?;
+                json!({"protocol": 2, "active": true, "scope": scope, "bounds": CAPTURE_OBSERVATION_BOUNDS})
             }
             Request::CaptureObservationHits { from } => {
                 self.collect_capture_tail();

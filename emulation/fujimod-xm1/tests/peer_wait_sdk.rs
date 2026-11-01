@@ -272,7 +272,7 @@ struct CaptureTotals { total: u64 }
 fn rejected_site_removal_preserves_active_capture_observations() {
     let mut machine = machine(&[0xe2800001, 0xeafffffd]);
     machine.traces.arm(&machine.session, BTreeMap::from([(0x1000, "loop".into())])).unwrap();
-    machine.traces.begin_capture_observation().unwrap();
+    machine.traces.begin_capture_observation(fujimod_xm1::trace::CaptureScope::Capture).unwrap();
     assert!(machine.traces.remove_sites(&machine.session, &[Guest(0x1000)]).is_err());
     machine.run(3);
     machine.require_running().unwrap();
@@ -348,7 +348,7 @@ fn drain_stream(machine: &mut Machine, cursor: &mut CaptureCursor, output: &mut 
 fn stream_pages_survive_wrong_and_duplicate_acknowledgements_without_reexecution() {
     let mut observed = machine(&[0xe2800001, 0xeafffffd]);
     observed.traces.arm(&observed.session, BTreeMap::from([(0x1000, "loop".into())])).unwrap();
-    observed.traces.begin_capture_observation().unwrap();
+    observed.traces.begin_capture_observation(fujimod_xm1::trace::CaptureScope::Capture).unwrap();
     assert!(matches!(observed.traces.acknowledge_capture_observation(CaptureCursor::new(0)), Err(CaptureProtocolError::NoPublishedPage)));
     assert_eq!(observed.run(1000), RunOutcome::DrainRequired);
     let before = (observed.instructions(), context(&observed));
@@ -382,7 +382,7 @@ fn multicore_backpressure_preserves_order_counts_and_guest_state_beyond_sixty_fo
     let sites = BTreeMap::from([(0x1000, "primary".into()), (0x2000, "secondary".into())]);
     observed.traces.arm(&observed.session, sites.clone()).unwrap();
     uninterrupted.traces.arm(&uninterrupted.session, sites).unwrap();
-    observed.traces.begin_capture_observation().unwrap();
+    observed.traces.begin_capture_observation(fujimod_xm1::trace::CaptureScope::Capture).unwrap();
     let endpoint = 5001;
     uninterrupted.run(endpoint);
     uninterrupted.require_running().unwrap();
@@ -415,7 +415,7 @@ fn aggregate_arena_yields_at_2048_details_and_reuses_only_acknowledged_storage()
         (0..33).map(move |index| (base + index * 4, format!("entry-{base:x}-{index}")))
     }).collect();
     observed.traces.arm(&observed.session, sites).unwrap();
-    observed.traces.begin_capture_observation().unwrap();
+    observed.traces.begin_capture_observation(fujimod_xm1::trace::CaptureScope::Capture).unwrap();
     assert_eq!(observed.run(10_000), RunOutcome::DrainRequired);
     let page = stream_page(&mut observed, CaptureCursor::new(0));
     assert_eq!(page.pending, 2048);
@@ -438,7 +438,7 @@ fn finite_entry_endpoints_and_terminal_tail_collection_do_not_advance_the_guest(
     let mut observed = machine(&program);
     let mut uninterrupted = machine(&program);
     observed.traces.arm(&observed.session, BTreeMap::from([(0x1000, "add".into()), (0x1004, "branch".into())])).unwrap();
-    observed.traces.begin_capture_observation().unwrap();
+    observed.traces.begin_capture_observation(fujimod_xm1::trace::CaptureScope::Capture).unwrap();
     let mut events = Vec::new();
     let mut cursor = CaptureCursor::new(0);
     for endpoint in 1..=260 {
@@ -454,7 +454,7 @@ fn finite_entry_endpoints_and_terminal_tail_collection_do_not_advance_the_guest(
 
     let mut failed = machine(&[0xe3a01902, 0xe5910000]);
     failed.traces.arm(&failed.session, BTreeMap::from([(0x1000, "prepare".into()), (0x1004, "unmapped-load".into())])).unwrap();
-    failed.traces.begin_capture_observation().unwrap();
+    failed.traces.begin_capture_observation(fujimod_xm1::trace::CaptureScope::Capture).unwrap();
     assert_eq!(failed.run(100), RunOutcome::Failed);
     let failure = failed.failure.clone();
     let boundary = (failed.instructions(), context(&failed));
@@ -612,7 +612,7 @@ fn standalone_configuration_refusal_keeps_initial_and_handoff_identity_unobserve
 fn strict_stop_pending_hook_is_collected_read_only_before_claiming_a_complete_boundary() {
     let mut observed = machine(&[0xe3a01006, 0xe3a02003, 0xe710f211]);
     observed.traces.arm(&observed.session, BTreeMap::from([(0x1008, "strict-stop".into())])).unwrap();
-    observed.traces.begin_capture_observation().unwrap();
+    observed.traces.begin_capture_observation(fujimod_xm1::trace::CaptureScope::Capture).unwrap();
     assert_eq!(observed.run(100), RunOutcome::Failed);
     let failure = observed.failure.clone();
     let boundary = (observed.instructions(), context(&observed));
@@ -635,7 +635,7 @@ fn ff80_advance_returns_backpressure_and_reaches_the_original_endpoint_after_dra
     let mut observed = machine(&[0xe2800001, 0xeafffffd]);
     observed.traces.arm(&observed.session, BTreeMap::from([(0x1000, "loop".into())])).unwrap();
     let mut bridge = Ff80::new(observed, RendezvousInputs::MenuUp);
-    bridge.begin_capture_observation().unwrap();
+    bridge.begin_capture_observation(fujimod_xm1::trace::CaptureScope::Capture).unwrap();
     assert_eq!(bridge.advance(301).unwrap(), RunOutcome::DrainRequired);
     let mut cursor = CaptureCursor::new(0);
     let mut events = Vec::new();
@@ -668,12 +668,29 @@ struct ObservedRamSpan {
 }
 
 #[derive(Deserialize)]
+struct ObservedLifecycle {
+    r4: u32,
+    r5: u32,
+    r11: u32,
+    tcm: [u32; 2],
+}
+
+#[derive(Deserialize)]
 struct DiagnosticHit {
     address: Guest,
     sp: Guest,
     registers: [u32; 4],
     ram: Vec<ObservedRamSpan>,
     ram_incomplete: bool,
+    lifecycle: Option<ObservedLifecycle>,
+}
+
+#[derive(Deserialize)]
+struct ObservedLifecycleSnapshot {
+    core: usize,
+    ram: Vec<ObservedRamSpan>,
+    ram_incomplete: bool,
+    lifecycle: ObservedLifecycle,
 }
 
 #[derive(Deserialize)]
@@ -693,7 +710,7 @@ fn diagnostic_machine(site: Guest, argument: Guest, sp: Guest) -> Machine {
     }
     observed.session.board.write_register(0, arm::CORE[13], u64::from(sp.0)).unwrap();
     observed.traces.arm_primary(&observed.session, BTreeMap::from([(site.0, "synthetic-diagnostic".into())])).unwrap();
-    observed.traces.begin_capture_observation().unwrap();
+    observed.traces.begin_capture_observation(fujimod_xm1::trace::CaptureScope::Capture).unwrap();
     observed
 }
 
@@ -711,8 +728,89 @@ fn diagnostic_page(observed: &mut Machine) -> DiagnosticPage {
     page
 }
 
+fn synthetic_lifecycle_machine(site: Guest) -> Machine {
+    let mut observed = machine_with_ram(&[0xeafffffe], 0x04a00000, RamViews::AliasedWithDecoder);
+    observed.session.board.write_physical(u64::from(site.0), &0xeafffffeu32.to_le_bytes()).unwrap();
+    observed.session.board.write_register(0, Register::Pc, u64::from(site.0)).unwrap();
+    for (address, value) in [
+        (0x0157dd3c, 0x04988600u32), (0x015ad53c, u32::MAX), (0x0498b868, 1),
+    ] {
+        observed.session.board.write_physical(address, &value.to_le_bytes()).unwrap();
+    }
+    observed.traces.arm_primary(&observed.session, BTreeMap::from([(site.0, "synthetic-lifecycle".into())])).unwrap();
+    observed.traces.begin_capture_observation(fujimod_xm1::trace::CaptureScope::SaveLifecycle {
+        program: fujimod_xm1::trace::LifecycleProgram::Retained,
+    }).unwrap();
+    observed
+}
+
+#[test]
+fn lifecycle_allocation_observation_distinguishes_backed_count_from_slot_namespace() {
+    let mut backed = synthetic_lifecycle_machine(Guest(0x00e88e18));
+    let page = diagnostic_page(&mut backed);
+    assert!(!page.incomplete);
+    assert!(!page.hits[0].ram_incomplete);
+    assert_observed_bytes(&page.hits[0], Guest(0x0498b860), &[0,0,0,0,0,0,0,0,1,0,0,0]);
+
+    let mut unbacked = synthetic_lifecycle_machine(Guest(0x00e88e18));
+    unbacked.session.board.write_register(0, arm::CORE[0], 1).unwrap();
+    let page = diagnostic_page(&mut unbacked);
+    assert!(page.incomplete);
+    assert!(page.hits[0].ram_incomplete);
+    assert!(page.hits[0].ram.iter().all(|span| span.address.0 < 0x04988600));
+}
+
+#[test]
+fn unrelated_capture_site_does_not_follow_the_lifecycle_active_frame() {
+    let mut observed = synthetic_lifecycle_machine(Guest(0x04a00000));
+    observed.session.board.write_physical(0x015ad53c, &201u32.to_le_bytes()).unwrap();
+    let page = diagnostic_page(&mut observed);
+    assert!(!page.incomplete);
+    assert!(!page.hits[0].ram_incomplete);
+    assert_observed_bytes(&page.hits[0], Guest(0x015ad53c), &201u32.to_le_bytes());
+    assert!(page.hits[0].ram.iter().all(|span| span.address.0 < 0x04988600));
+}
+
+#[test]
+fn lifecycle_void_producer_observation_uses_published_output_cells() {
+    let mut observed = synthetic_lifecycle_machine(Guest(0x00e80e7c));
+    for (register, value) in [(0, 0xdeadbeef), (4, 0x3000), (5, 0x3004), (11, 0x40003500)] {
+        observed.session.board.write_register(0, arm::CORE[register], value).unwrap();
+    }
+    observed.session.board.write_physical(0x3000, &0u32.to_le_bytes()).unwrap();
+    observed.session.board.write_physical(0x3004, &0x04988600u32.to_le_bytes()).unwrap();
+    let page = diagnostic_page(&mut observed);
+    let hit = &page.hits[0];
+    assert!(!hit.ram_incomplete);
+    assert_eq!(hit.registers[0], 0xdeadbeef);
+    assert_observed_bytes(hit, Guest(0x0498b860), &[0,0,0,0,0,0,0,0,1,0,0,0]);
+    let context = hit.lifecycle.as_ref().unwrap();
+    assert_eq!((context.r4, context.r5, context.r11), (0x3000, 0x3004, 0x40003500));
+    assert_eq!(context.tcm, [0,0]);
+}
+
+#[test]
+fn lifecycle_stopped_snapshot_retains_callback_and_task_words_without_advancing() {
+    let mut observed = synthetic_lifecycle_machine(Guest(0x00e88e18));
+    observed.session.board.write_physical(0x014ddc1c, &0x00a81234u32.to_le_bytes()).unwrap();
+    observed.session.board.write_physical(0x0155ccb8, &0x45u32.to_le_bytes()).unwrap();
+    let before = (observed.instructions(), context(&observed));
+    let snapshot = observed.traces.capture_snapshot(&observed.session).unwrap().unwrap();
+    let snapshot: ObservedLifecycleSnapshot = serde_json::from_value(serde_json::to_value(snapshot).unwrap()).unwrap();
+    assert_eq!(snapshot.core, 0);
+    assert!(!snapshot.ram_incomplete);
+    assert_eq!(snapshot.lifecycle.tcm, [0,0]);
+    assert_span_bytes(&snapshot.ram, Guest(0x014ddc1c), &[0x34,0x12,0xa8,0,0,0,0,0,0,0,0,0]);
+    assert_span_bytes(&snapshot.ram, Guest(0x0155ccb8), &[0x45,0,0,0,0,0,0,0]);
+    assert_eq!((observed.instructions(), context(&observed)), before);
+}
+
 fn assert_observed_bytes(hit: &DiagnosticHit, address: Guest, expected: &[u8]) {
-    let span = hit.ram.iter().find(|span| span.address == address && span.requested == expected.len()).unwrap();
+    assert_span_bytes(&hit.ram, address, expected);
+}
+
+fn assert_span_bytes(spans: &[ObservedRamSpan], address: Guest, expected: &[u8]) {
+    let span = spans.iter().find(|span| span.address == address && span.requested == expected.len()).unwrap();
     assert_eq!(span.status, ObservedRamStatus::Complete);
     let expected: String = expected.iter().map(|byte| format!("{byte:02x}")).collect();
     assert_eq!(span.bytes.0, expected);

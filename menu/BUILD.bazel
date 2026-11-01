@@ -102,6 +102,14 @@ exports_files(
     visibility = ["//host/firmware:__pkg__"],
 )
 
+exports_files(
+    ["recipe_bank_allowlist.lifecycle.json"],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//replacement/bank:__pkg__",
+    ],
+)
+
 filegroup(
     name = "af-ring-ram-relink-sources",
     srcs = [

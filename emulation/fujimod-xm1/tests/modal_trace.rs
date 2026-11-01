@@ -8,6 +8,7 @@ use fujimod_xm1::{
     modal_trace::{BeginRequest, Config, SourceImage},
     provenance::Guest,
     run::RunDocument,
+    trace::CaptureScope,
 };
 use std::{collections::BTreeMap, num::{NonZeroU64, NonZeroUsize}};
 
@@ -106,7 +107,7 @@ fn active_modal_refuses_point_mutation_and_capture_without_losing_evidence() {
     assert!(machine.traces.add_sites(&machine.session, BTreeMap::from([(0x2000, "other".into())])).is_err());
     assert!(machine.traces.remove_sites(&machine.session, &[Guest(0x1000)]).is_err());
     assert!(machine.traces.disarm(&machine.session).is_err());
-    assert!(machine.traces.begin_capture_observation().is_err());
+    assert!(machine.traces.begin_capture_observation(CaptureScope::Capture).is_err());
     let config = baseline(&machine);
     assert!(machine.traces.begin_modal_observation(&machine.session, config).is_err());
     assert_eq!(machine.traces.sites, sites);
@@ -118,7 +119,7 @@ fn active_modal_refuses_point_mutation_and_capture_without_losing_evidence() {
 #[test]
 fn capture_observation_refuses_modal_begin() {
     let mut machine = machine([false, false], false);
-    machine.traces.begin_capture_observation().unwrap();
+    machine.traces.begin_capture_observation(CaptureScope::Capture).unwrap();
     let config = baseline(&machine);
     assert!(machine.traces.begin_modal_observation(&machine.session, config).is_err());
     assert!(!machine.traces.modal_observation_active());

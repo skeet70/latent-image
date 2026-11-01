@@ -8,6 +8,8 @@ module Emulation.UiTrajectory
   , filmStoredCode
   , Step (..)
   , Segment (..)
+  , LifecycleAction (..)
+  , LifecycleRole (..)
   , ReadExpectation (..)
   , ReadPreservation (..)
   , checkReadExpectation
@@ -125,6 +127,25 @@ instance FromJSON Step where
         when (settle == Just 0) (fail "settle_instructions must be positive")
         pure (KeyTiming pulse (SettleBudget <$> settle))
 
+data LifecycleRole = RetainedLifecycle | OwnedLifecycle deriving (Eq, Show)
+data LifecycleAction = LifecycleAction
+  { lifecycleImage5 :: FilePath
+  , lifecycleImage6 :: FilePath
+  , lifecycleRole :: LifecycleRole
+  } deriving (Eq, Show)
+
+instance FromJSON LifecycleRole where
+  parseJSON value = do
+    role <- parseJSON value
+    case role :: T.Text of
+      "retained" -> pure RetainedLifecycle
+      "owned" -> pure OwnedLifecycle
+      _ -> fail "lifecycle program must be retained or owned"
+
+instance FromJSON LifecycleAction where
+  parseJSON = withObject "save lifecycle" $ \row ->
+    LifecycleAction <$> row .: "image5" <*> row .: "image6" <*> row .: "program"
+
 -- | One trajectory segment: its phase name, the mode-dial detent set before its first key, the
 -- steps, the message ids the menu message drawer is entered with during the segment (none when
 -- absent), and an optional capture label taken after the last key. An observing segment records
@@ -145,6 +166,7 @@ data Segment = Segment
   , segmentKeyPulse :: Maybe KeyPulse
   , segmentReadExpectations :: [ReadExpectation]
   , segmentReadPreservations :: [ReadPreservation]
+  , segmentSaveLifecycle :: Maybe LifecycleAction
   }
 
 instance FromJSON Segment where
@@ -162,6 +184,7 @@ instance FromJSON Segment where
       <*> (traverse keyPulse =<< segment .:? "key_pulse")
       <*> segment .:? "read_expectations" .!= []
       <*> segment .:? "read_preservations" .!= []
+      <*> segment .:? "save_lifecycle"
     let expectations = segmentReadExpectations result
         labels = map expectedReadLabel expectations
     unless (length (nub labels) == length labels) (fail "read expectation labels must be unique")
@@ -374,7 +397,8 @@ variantMismatches retained variant =
       , ("read_expectations", segmentReadExpectations a == segmentReadExpectations b)
       , ("read_preservations", segmentReadPreservations a == segmentReadPreservations b)
       , ("requires", segmentRequires a == segmentRequires b)
-      , ("film_row", segmentFilmRow a == segmentFilmRow b) ]
+      , ("film_row", segmentFilmRow a == segmentFilmRow b)
+      , ("save_lifecycle", segmentSaveLifecycle a == segmentSaveLifecycle b) ]
     assertion step = (stepKey step, stepExpected step)
 
 checkModalObserverConfiguration :: Trajectories -> Either String ()

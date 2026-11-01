@@ -6,7 +6,7 @@ use crate::guest::{DialTurn, GpioKey, MenuState, ModeDialPosition, ModeDialWindo
 use crate::r4f::Guard;
 use crate::run::RunDocument;
 use crate::sd_host::{Contacts, MediaRead, RetainedCard, SectorAddress, SectorCount, SdHost};
-use crate::trace::{CaptureMemory, CollectionOutcome, InstructionCount, TraceSites};
+use crate::trace::{CaptureMemory, CaptureScope, CollectionOutcome, InstructionCount, TraceSites};
 use fujimod_emulator::session::Session;
 use fujimod_emulator_devices::exr2::scanout_frame::Frame as ScanoutFrame;
 use serde::{Deserialize, Serialize};
@@ -118,12 +118,12 @@ impl Machine {
         })
     }
 
-    pub(crate) fn begin_capture_observation(&mut self) -> Result<(), String> {
-        if self.traces.needs_capture_memory() {
+    pub(crate) fn begin_capture_observation(&mut self, scope: CaptureScope) -> Result<(), String> {
+        if self.traces.needs_capture_memory(scope) {
             let (_, graph) = crate::run::graph(&self.document)?;
             self.traces.prepare_memory(&self.session, CaptureMemory::from_graph(graph)?);
         }
-        self.traces.begin_capture_observation()
+        self.traces.begin_capture_observation(scope)
     }
 
     pub fn set_release_context(&mut self, segment: Option<ReleaseSegment>) {

@@ -1052,6 +1052,8 @@ haskell_binary(
         ":watch-observation",
         ":modal-observation",
         ":ui-trajectory-lib",
+        ":save-lifecycle-lib",
+        ":save-lifecycle-run",
         ":segment-receipt-lib",
         ":ram-push-unreviewed",
         ":ram-push-procedure",
@@ -1656,6 +1658,9 @@ genrule(
         "CardlessRamPush.hs",
         "EmulatorUsb.hs",
         "Xm1RamPushE2E.hs",
+        "Emulation/CaptureStream.hs",
+        "Emulation/SaveLifecycle.hs",
+        "Emulation/SaveLifecycleRun.hs",
         "//transport:FujiAF/RamPush.hs",
         "//transport:FujiAF/Transport.hs",
     ],
@@ -2253,6 +2258,8 @@ haskell_library(
         ":preservation-observation",
         ":watch-observation",
         ":modal-observation",
+        ":capture-stream-lib",
+        ":save-lifecycle-lib",
         "//broker:core",
         "//host:aeson",
         "//host:base",
@@ -2746,5 +2753,58 @@ haskell_binary(
         "//host:directory",
         "//host:filepath",
         "//host:host-support",
+    ],
+)
+
+haskell_library(
+    name = "save-lifecycle-lib",
+    srcs = ["Emulation/SaveLifecycle.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":capture-stream-lib",
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
+        "//replacement/media_permit:stock-inventory",
+    ],
+)
+
+haskell_binary(
+    name = "save-lifecycle-receipt-cases",
+    srcs = ["SaveLifecycleReceiptCases.hs"],
+    main_file = "SaveLifecycleReceiptCases.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":save-lifecycle-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:json",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_library(
+    name = "save-lifecycle-run",
+    srcs = ["Emulation/SaveLifecycleRun.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":capture-stream-lib",
+        ":emulator-usb",
+        ":save-lifecycle-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
     ],
 )

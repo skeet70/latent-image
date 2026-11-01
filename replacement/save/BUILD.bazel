@@ -25,6 +25,7 @@ filegroup(
     srcs = _MODULE_SRCS + [
         "save_abi.h",
         "save_stock.S",
+        "stock_calls.json",
     ],
     visibility = [
         "//host/firmware:__pkg__",

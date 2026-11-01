@@ -40,6 +40,8 @@ module EmulatorUsb
   , emulatorPreservationBegin
   , emulatorPreservationState
   , emulatorMediaState
+  , CaptureCommand (..)
+  , emulatorCaptureCommand
   ) where
 
 import Control.Concurrent.MVar
@@ -55,6 +57,8 @@ import qualified Data.Text.Encoding as TE
 import Emulation.PreservationObservation
 import Emulation.ModalObservation
 import Emulation.WatchObservation
+import qualified Emulation.CaptureStream as Capture
+import qualified Emulation.SaveLifecycle as Lifecycle
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (shiftL, (.|.))
 import Data.Word (Word32)
@@ -71,6 +75,7 @@ data Emulator = Emulator
   , emulatorOutput :: Handle
   , emulatorProcess :: ProcessHandle
   , emulatorLock :: MVar ()
+  , emulatorCaptureReader :: Capture.BoundedReader
   }
 
 -- | How the emulator reached its first host command.
@@ -105,11 +110,14 @@ exchangeLine emulator request = withMVar (emulatorLock emulator) $ \_ -> exchang
 
 -- Caller holds emulatorLock.
 exchangeLocked :: Emulator -> BridgeExchange
-exchangeLocked emulator request = do
+exchangeLocked emulator = exchangeLockedReading emulator (C.hGetLine (emulatorOutput emulator))
+
+exchangeLockedReading :: Emulator -> IO B.ByteString -> BridgeExchange
+exchangeLockedReading emulator response request = do
   BL.hPutStr (emulatorInput emulator) request
   B.hPut (emulatorInput emulator) "\n"
   hFlush (emulatorInput emulator)
-  C.hGetLine (emulatorOutput emulator)
+  response
 
 rpc :: Emulator -> Value -> IO (M.KeyMap Value)
 rpc = bridgeRpc . exchangeLine
@@ -124,6 +132,31 @@ bridgeWatchRpc exchange request = do
     Left problem -> object ["wire_bytes" .= B.unpack line, "decode_error" .= problem]
     Right (Object fields) | M.lookup "ok" fields == Just (Bool True) -> Object (M.delete "ok" fields)
     Right value -> value
+
+data CaptureCommand
+  = BeginSaveLifecycle Lifecycle.Program
+  | CapturePage Capture.Cursor
+  | AcknowledgeCapture Capture.Cursor
+  | ResumeCapture
+  | CaptureState
+  | ShutterSequence
+  | CaptureWindow
+
+emulatorCaptureCommand :: Emulator -> CaptureCommand -> IO Value
+emulatorCaptureCommand emulator = bridgeWatchRpc exchange . request
+  where
+    exchange encoded = withMVar (emulatorLock emulator) $ \_ ->
+      exchangeLockedReading emulator
+        (Capture.readBoundedLine (1024 * 1024) (emulatorCaptureReader emulator) (emulatorOutput emulator)) encoded
+    request command = case command of
+      BeginSaveLifecycle program -> object
+        ["command" .= ("capture-observation-begin" :: T.Text), "scope" .= Lifecycle.scopeValue program]
+      CapturePage cursor -> Capture.hitsRequest cursor
+      AcknowledgeCapture cursor -> Capture.ackRequest cursor
+      ResumeCapture -> Capture.resumeRequest
+      CaptureState -> object ["command" .= ("capture-observation-state" :: T.Text)]
+      ShutterSequence -> object ["command" .= ("shutter-sequence" :: T.Text)]
+      CaptureWindow -> object ["command" .= ("capture-observation-window" :: T.Text)]
 
 -- Caller holds emulatorLock.
 rpcLocked :: Emulator -> Value -> IO (M.KeyMap Value)
@@ -176,7 +209,8 @@ startEmulator python directory arguments choose = bracketOnError create stopEmul
       hSetBinaryMode output True
       hSetBuffering input NoBuffering
       lock <- newMVar ()
-      pure (Emulator input output process lock)
+      captureReader <- Capture.newBoundedReader output
+      pure (Emulator input output process lock captureReader)
     event emulator name = do
       line <- C.hGetLine (emulatorOutput emulator)
       value <- either (ioError . userError . (("invalid emulator " ++ name ++ " event: ") ++)) pure (eitherDecodeStrict' line)

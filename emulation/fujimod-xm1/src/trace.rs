@@ -10,6 +10,11 @@ use fujimod_emulator_cpu::{Register, arm};
 use serde::{Deserialize, Serialize, Serializer, ser::SerializeSeq};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+#[path = "trace_save_lifecycle.rs"]
+mod save_lifecycle;
+pub use save_lifecycle::{CaptureScope, LifecycleProgram};
+use save_lifecycle::LifecycleContext;
+
 /// One entry into an armed site, before its instruction executes.
 #[derive(Clone, Debug, Serialize)]
 pub struct Hit {
@@ -368,20 +373,23 @@ const CAPTURE_MAP_STORAGE_BYTES: usize = std::mem::size_of::<CaptureMemory>()
 
 struct TcmViews {
     windows: [Option<(u64, u64)>; 2],
+    registers: [u32; 2],
 }
 
 impl TcmViews {
     fn read(session: &Session, core: MemoryCore) -> Result<Self, String> {
         let cpu = session.board.cpu(core.0)?;
         let mut windows = [None; 2];
+        let mut registers = [0; 2];
         for (bank, window) in windows.iter_mut().enumerate() {
             let register = cpu.coprocessor(arm::Coprocessor {
                 cp: 15, opc1: 0, crn: 9, crm: 1, opc2: bank as u32, secure: 0, wide: false,
             }, None)?;
             let register = u32::try_from(register).map_err(|_| "capture TCM register exceeds 32 bits")?;
+            registers[bank] = register;
             *window = tcm_window(TcmRegister(register))?;
         }
-        Ok(Self { windows })
+        Ok(Self { windows, registers })
     }
 }
 
@@ -628,6 +636,7 @@ struct CaptureEvent {
     lr: u32,
     cpsr: u32,
     ram: CaptureRam,
+    lifecycle: Option<LifecycleContext>,
 }
 
 struct CaptureObservation {
@@ -640,6 +649,7 @@ struct CaptureObservation {
     boundary_complete: bool,
     drained_boundary_observed: bool,
     ram_incomplete: bool,
+    scope: CaptureScope,
 }
 
 const _: () = assert!(CAPTURE_OBSERVATION_BOUNDS.charged_storage_bytes <= CAPTURE_MEMORY_BYTES);
@@ -657,6 +667,8 @@ struct CaptureEventView<'a> {
     cpsr: u32,
     ram: &'a CaptureRam,
     ram_incomplete: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lifecycle: Option<&'a LifecycleContext>,
 }
 
 struct CaptureEvents<'a> {
@@ -675,6 +687,7 @@ impl Serialize for CaptureEvents<'_> {
                 instructions: event.instructions, registers: &event.registers,
                 sp: event.sp, lr: event.lr, cpsr: event.cpsr,
                 ram: &event.ram, ram_incomplete: event.ram.incomplete,
+                lifecycle: event.lifecycle.as_ref(),
             })?;
         }
         sequence.end()
@@ -727,6 +740,10 @@ pub struct CaptureSnapshot {
     instructions: InstructionCount,
     ram: CaptureRam,
     ram_incomplete: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lifecycle: Option<LifecycleContext>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    core: Option<usize>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -789,9 +806,9 @@ impl TraceSites {
         traces
     }
 
-    pub(crate) fn needs_capture_memory(&self) -> bool {
+    pub(crate) fn needs_capture_memory(&self, scope: CaptureScope) -> bool {
         self.capture_memory.is_none() && self.capture_observation.is_none()
-            && self.sites.keys().any(|&address| SecondFilterSite::at(Guest(address)).is_some())
+            && (scope.lifecycle() || self.sites.keys().any(|&address| SecondFilterSite::at(Guest(address)).is_some()))
     }
 
     pub(crate) fn prepare_memory(&mut self, session: &Session, memory: CaptureMemory) {
@@ -852,13 +869,14 @@ impl TraceSites {
         self.capture_observation.is_some()
     }
 
-    pub fn begin_capture_observation(&mut self) -> Result<(), String> {
+    pub fn begin_capture_observation(&mut self, scope: CaptureScope) -> Result<(), String> {
         if self.modal_observation_active() {
             return Err("capture observation refuses an active modal observation".into());
         }
         if self.capture_observation.is_some() {
             return Err("capture observation is already active".into());
         }
+        scope.validate(&self.sites)?;
         if self.sites.len() > CAPTURE_SITE_LIMIT || self.points.len() > CAPTURE_SITE_LIMIT
             || self.sites.values().any(|label| label.len() > 64) {
             return Err("capture observation exceeds the site, core or label bound".into());
@@ -886,6 +904,7 @@ impl TraceSites {
             boundary_complete: false,
             drained_boundary_observed: false,
             ram_incomplete: false,
+            scope,
         });
         Ok(())
     }
@@ -954,14 +973,22 @@ impl TraceSites {
     }
 
     pub fn capture_snapshot(&self, session: &Session) -> Result<Option<CaptureSnapshot>, String> {
-        if !self.capture_observation_active() { return Ok(None); }
-        let mut ram = CaptureRam::default();
-        ram.common(session);
-        ram.recorder(session);
+        let Some(observation) = &self.capture_observation else { return Ok(None); };
+        let (ram, lifecycle, core) = if observation.scope.lifecycle() {
+            let (ram, context) = save_lifecycle::snapshot(session, self.capture_memory.as_ref())?;
+            (ram, Some(context), Some(0))
+        } else {
+            let mut ram = CaptureRam::default();
+            ram.common(session);
+            ram.recorder(session);
+            (ram, None, None)
+        };
         Ok(Some(CaptureSnapshot {
             instructions: InstructionCount::from_board(session)?,
             ram_incomplete: ram.incomplete,
             ram,
+            lifecycle,
+            core,
         }))
     }
 
@@ -1161,13 +1188,20 @@ impl TraceSites {
                     register(session, *core, arm::Register::R(3))?,
                 ];
                 let sp = register(session, *core, arm::Register::R(13))?;
-                let ram = CaptureRam::event(session, self.capture_memory.as_ref(), MemoryCore(*core), Guest(address), &registers, Guest(sp));
+                let (ram, lifecycle) = if observation.scope.lifecycle() {
+                    let (ram, context) = save_lifecycle::event(observation.scope, session, self.capture_memory.as_ref(),
+                        MemoryCore(*core), Guest(address), &registers)?;
+                    (ram, Some(context))
+                } else {
+                    (CaptureRam::event(session, self.capture_memory.as_ref(), MemoryCore(*core), Guest(address), &registers, Guest(sp)), None)
+                };
                 let event = CaptureEvent {
                     sequence, site_index: index, core: *core, instructions, registers,
                     sp,
                     lr: register(session, *core, arm::Register::R(14))?,
                     cpsr: register(session, *core, arm::Register::Cpsr)?,
                     ram,
+                    lifecycle,
                 };
                 let current = session.board.read_register(*core, Register::Pc)?;
                 observation.ram_incomplete |= event.ram.incomplete;
@@ -1241,14 +1275,14 @@ impl TraceSites {
 
 #[cfg(test)]
 mod tests {
-    use super::{CaptureCursor, CaptureProtocolError, TraceSites};
+    use super::{CaptureCursor, CaptureProtocolError, CaptureScope, TraceSites};
 
     #[test]
     fn observation_rejects_inactive_cursor_invalid_cursor_and_duplicate_begin() {
         let mut traces = TraceSites::default();
         assert!(matches!(traces.capture_observation_page(CaptureCursor::new(0)), Err(CaptureProtocolError::Inactive)));
-        traces.begin_capture_observation().unwrap();
+        traces.begin_capture_observation(CaptureScope::Capture).unwrap();
         assert!(matches!(traces.capture_observation_page(CaptureCursor::new(1)), Err(CaptureProtocolError::WrongCursor)));
-        assert!(traces.begin_capture_observation().is_err());
+        assert!(traces.begin_capture_observation(CaptureScope::Capture).is_err());
     }
 }

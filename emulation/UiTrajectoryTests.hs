@@ -94,6 +94,16 @@ main = do
           == Just [TraceSite (FixedAddress 0x0114b6c4) "film-icon"]
     , expect "a file without trace sites declares none" $
         sitesOf (C.pack "{\"schema\":1,\"before_unload\":[],\"after_unload\":[]}") == Just []
+    , expect "a retained save lifecycle action retains its source paths" $
+        (segmentSaveLifecycle =<< segmentOf (segmentDocument ",\"save_lifecycle\":{\"image5\":\"image5.bin\",\"image6\":\"image6.bin\",\"program\":\"retained\"}"))
+          == Just (LifecycleAction "image5.bin" "image6.bin" RetainedLifecycle)
+    , expect "an owned save lifecycle action selects the owned program" $
+        (segmentSaveLifecycle =<< segmentOf (segmentDocument ",\"save_lifecycle\":{\"image5\":\"image5.bin\",\"image6\":\"image6.bin\",\"program\":\"owned\"}"))
+          == Just (LifecycleAction "image5.bin" "image6.bin" OwnedLifecycle)
+    , expect "an unknown save lifecycle program is refused" $
+        refused (segmentDocument ",\"save_lifecycle\":{\"image5\":\"image5.bin\",\"image6\":\"image6.bin\",\"program\":\"both\"}")
+    , expect "a save lifecycle action without image6 is refused" $
+        refused (segmentDocument ",\"save_lifecycle\":{\"image5\":\"image5.bin\",\"program\":\"owned\"}")
     , expect "an unaligned trace site is refused" $
         refused (document "[[\"0114b6c6\",\"film-icon\"]]" "[]")
     , expect "a trace site address with 0x is refused" $

@@ -19,6 +19,7 @@ filegroup(
         "rb_media_permit_stock.S",
         "src/lib.rs",
         "src/stock.rs",
+        "stock_calls.json",
     ],
     visibility = ["//replacement/bank:__pkg__"],
 )
