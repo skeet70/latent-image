@@ -894,3 +894,113 @@ The marker-0 run publishes exactly the two roots and executes the same retained 
 
 The finite mode-0 publication/bookkeeping transition now has natural caller/backing, byte-confinement, private-ABI, retained/owned comparison and bad-marker evidence. It has not reached the later primary completion store or root1 initializer/consumer, first task/storage/message consumers, mode 1, distinct nonzero resource preimages, post-installation pool/storage lifetimes or packaged production cutover. The seven acceptance requirements above are unchanged. No general kernel/table/service ownership, post-return scheduler equivalence, later consumer agreement or silicon cache-coherence result is credited.
 
+### 8.13 Startup task consumption and first scheduling contract (#151)
+
+`E-STARTUP-TASK-WRAPPER-SOURCE-150` binds image4 wrapper `[0x725dd8,0x726098)` and reservation-release helper `[0x726098,0x726128)`, with lock literal `[0x726128,0x72612c)`, to canonical X-M1 1.50 image4 and both loader listings. `E-STARTUP-FIRST-RUNNABLE-SOURCE-150` follows the selected-root creation services, current-core activation services and later startup auto-ready/dispatch paths. These are distinct transitions. Existing natural task103 receipts return `-25` from explicit activation after successful storage reservation; they do not qualify successful activation or first execution. The source/receipt projection is retained under `private-data/scratch/tasks151/source-and-existing-receipts.json`; it is analysis of existing evidence, not a new observer or independent receipt checker.
+
+#### Descriptor, frame and per-core selection
+
+For dispatcher incoming SP `S`, descriptor `D=S-44` has seven words. The dispatcher writes id, name pointer, priority, requested stack bytes, entry and argument at offsets `0,4,8,12,16,20`. It leaves `D+24` untouched. All four requests use 1,024 stack bytes and argument zero. The wrapper does not consume the name pointer. It compares the full untouched word with `0xa5f0a5f0`: equal supplies auxiliary flags 0, otherwise 4. This is separate from the constant task creation flags 2.
+
+| Phase/submission | Id and class | Name pointer | Priority / zero-based scheduler priority | Entry | Source continuation |
+| --- | --- | --- | --- | --- | --- |
+| A phase1 | 104, class1 | `0x781960` | 1 / 0 | `0x69d160` | `0x69ce8c` |
+| A phase3 | 102, class1 | `0x781968` | 15 / 14 | `0x69cbf0` | `0x69cee8` |
+| B phase4 first | 103, class2 | `0x781970` | 15 / 14 | `0x69cbf0` | `0x69cf38` |
+| B phase4 second | 93, class2 | `0x781978` | 13 / 12 | `0x69cd58` | `0x69cf70` |
+
+Phase4 overwrites the same descriptor only after the task103 wrapper returns; it preserves the untouched word for task93. The phases discard every wrapper status and return zero. An error return does not suppress the next phase4 submission or the later scheduler startup. Source: image4 `0x69ce44..0x69cf74`.
+
+For wrapper-entry SP `P`, the wrapper saves `{r4,r5,r6,r7,r11,lr}`, sets `r11=P-4` and reserves another 32 bytes. Its allocated frame is `[P-56,P)`. Auxiliary parameters are two words at `P-56`; creation parameters are six words at `P-48`. The epilogue restores SP and the six saved registers, returning the saved status in r0. Retained calls may use additional stack. No finite deepest-stack bound follows from this local 56-byte frame without the critical, storage, error callback and scheduler callee contracts.
+
+The first class lookup uses `u16[D]`, then the wrapper uses full `u32[D]-1` for its wrapper/storage indexing. Later class/id encoding again uses `u16[D]`. There is no id or pointer validation here. Admit the four full ids exactly, not arbitrary upper-half bits with the same low id. Class is read before entering the critical section and retained in r6 for root selection; later descriptor/class-table loads are not one atomic snapshot. Descriptor, class-table and root writers must be excluded for the admitted interval.
+
+Class1 selects published root0 `u32[0x96bd20]`, class2 root1 `u32[0x96bd24]`. The original A/B initializers publish the following service pointers through their stores at loader offsets `0x440..0x46c` and `0x5c0..0x5c8`; they are runtime-populated tables, not file-resident tables at those root addresses.
+
+| Service | A root `0x4004dae0` | B root `0x400ddaa0` | Wrapper selection |
+| --- | --- | --- | --- |
+| `+0x80`, auxiliary record registration | `0x4d39c` | `0xdd360` | Descriptor's initially selected class |
+| `+0`, task record creation | `0x4d094` | `0xdd054` | Same selected class |
+| `+0xc`, explicit activation | `0x44f2c` | `0xd4eec` | Current-core identity, recomputed after critical exit |
+
+Current-core selection calls root0 `+0x1618`, retained `0x412bc -> 0x427b8`, returning 0 exactly for CP14 c2 `0x4003`, otherwise 1. It is not the descriptor class. All three service calls receive `(class << 16) | id`; registration and creation truncate to the low 16 bits, while activation decodes the class to a scheduler domain. Wrong class/current-core pairing cannot be repaired by assuming these dispatch mechanisms are interchangeable.
+
+#### Complete wrapper outcomes and reservation release
+
+For `i=u32[D]-1`, the eight-byte wrapper is `W=0x40a5b204+8*i`, with base at `W` and size at `W+4`. Under the #142 critical pair, if either word is nonzero the wrapper skips reservation and uses the old pair. Only when both are zero does it first publish requested size to `W+4` and call `0x725c6c(i,size,W)`. #143 owns that helper's bounded transition, not this wrapper or the downstream task object.
+
+| Stage | Exact effect and status handling |
+| --- | --- |
+| Storage refusal | Nonzero helper status exits the critical pair, logs `(37,u32[D],status)` through `0x41a34`, writes status to `0x40a0f82c`, invokes callback `u32[0x4089ea8c]` through `0x723398`, then returns status if the callback returns. The earlier wrapper-size publication is not undone. |
+| Auxiliary registration | Parameters are `[tail == 0xa5f0a5f0 ? 0 : 4, 0]`. Selected-root `+0x80` status 0 or `-41` permits creation; any other status exits the critical pair, logs event3, publishes the same error word, invokes the callback and returns status. |
+| Stack fill and cache | Creation parameters are `[2,u32[D+20],u32[D+16],u32[D+8],u32[W+4],u32[W]]`. `0x7221c8(base,u8[u32[D]],size)` fills the full stored size with the low id byte. `0x42634(base & ~0x40000000,size)` performs the retained cache operation. Stored size/base are reloaded, not recomputed from the request. |
+| Creation | Selected-root `+0` receives the six-word parameters. Its status is saved across critical exit. Nonzero follows the event3/error-word/callback path and returns it; there is no auxiliary unregister or storage rollback. |
+| Activation | Only a zero creation result reaches current-root `+0xc` after the original IRQ mask has been restored. Zero returns zero; nonzero logs event3, publishes the error word, invokes the callback and returns status. The created task and reserved storage remain. |
+
+Every finite error arm invokes critical exit exactly once before its error callback; activation runs after that exit and does not enter another wrapper critical section. Error callback `0x723330` is initially a returning stub, but the callback word is writable and later root initialization changes it. Nonreturning or faulting callbacks are not successful wrapper returns. The wrapper's ordinary creation/activation errors are not calls to the release helper.
+
+Release `0x726098` accepts the **zero-based storage index**, not an encoded task id. Its 32-byte save frame preserves r3-r8/r11/LR. It recomputes current-core identity, saves the selected root's IRQ mask through `+0x164`, calls `0x427d4(0x409c280c,identity ? 2 : 1)`, writes only zero to `0x40a0fc44+12*i+8`, calls `0x427fc(0x409c280c)`, and restores the saved IRQ mask through the same root's `+0x168`. It returns zero if these calls return. It preserves base, size, both wrapper words, cursor and backing bytes. It neither deletes the kernel task nor unlinks a runnable node.
+
+The release helper ignores both lock-service results. `0x427d4` returns `-1` immediately if the lock is nonzero and retries only failed exclusive stores against a zero lock; `0x427fc` can also return `-1` for zero. Therefore release does not prove lock ownership or cross-core exclusion merely by reaching its clear. Its admitted caller must establish the required lock/context premise or preserve this failure-side behavior explicitly. The later deletion wrapper subtracts 1 before its call at `0x72623c`; deletion, reclamation and general task lifetime are outside this initial increment.
+
+#### Committed task representation and initial runnable path
+
+Let `j=u16[encoded_id]-1`. Creation first masks IRQ/FIQ through `0x42560` or `0xd2560`, and restores the returned prior mask through `0x42568` or `0xd2568`. Each kernel has separate objects:
+
+| Object | A base | B base | Layout/stride |
+| --- | --- | --- | --- |
+| Task creation record `C` | `0x4005beac` | `0x400ebe6c` | 40 bytes per j |
+| Scheduler task node `T` | `0x4005ff0c` | `0x400efecc` | 56 bytes per j |
+| Creation/id map | `0x400622d4` | `0x400f2294` | Four bytes per j |
+| Auxiliary parameters | `0x4005d178` | `0x400ed138` | 12 bytes per j |
+| Auxiliary list node | `0x400624b4` | `0x400f2474` | 16 bytes per j |
+| Current scheduler-domain pointer | `0x400545c8` | `0x400e4588` | A selects first domain `0x400545cc`; B selects second domain `0x400e4610` in its 132-byte array beginning `0x400e458c` |
+| Current task / selected runnable / dispatch enable | `0x40054760 / 0x40054768 / 0x40054764` | `0x400e4720 / 0x400e4728 / 0x400e4724` | Three separate words |
+
+Auxiliary registration rejects an already nonzero record `+8` with `-41`. Otherwise it copies its two input words to `+0/+4`, sets `+8=1`, self-links list-node `+0/+4`, and obtains node `+12` from its existing `+8` object's `+4`. It allocates no stack and makes no task runnable. These existing pointers are retained prerequisites.
+
+Task creation rejects `C+36 != 0` with `-41` before the creation writes. Success writes `C={flags,arg,entry,priority-1,(size+3)&~3,base,0,0,id,1}` in that order, then writes id to the map. It preserves T's links and `T+8` creation-record pointer, clears byte14 bits0..2 while preserving the others, stores domain tag 1 for A or 2 for B at `T+32`, zeros `T+36,+40,+44,+48`, sets byte13 from `C+12`, byte12 to zero and `T+16=0`. Both services return zero after restoring the prior IRQ/FIQ mask. They do not set `T+24` stack-top, `T+28` resume PC or any runnable queue link. For these four sizes/priorities the aligned size is 1,024 and priorities are 0,14,14,12; general overflow and invalid priorities are not silently validated.
+
+Explicit activation `0x44f2c` / `0xd4eec` first rejects a nonzero per-core context word (`0x400545a4` / `0x400e4564`) or CPSR.I=1 with `-25`. It then validates signed class/id/domain capacity, returning `-18` on invalid selections, `-42` if the selected creation record is absent, and `-43` if an already active node already has its pending-activation bit set. Id0 means current task; it is not one of the four startup ids. Under the selected domain's retained lock callbacks it either prepares a dormant node through `0x43f70` / `0xd3f2c`, or sets byte14 bit0 for a non-dormant node. A successful ready transition may request inter-core notification through `0x433e4` / `0xd33e4`, or switch through `0x43640` / `0xd3640`. Lock retry, notification MMIO, IRQ restoration and resumption remain part of any activation ownership contract.
+
+**Startup auto-ready is a different producer.** After phase2 callback publication at `0x40a6c` / `0xd0a6c`, the loaders call `0x43f9c` / `0xd3f58`. Each reads its canonical count 120 and creation/id map, tests each creation record's flags bit1, and prepares matching nodes regardless of the earlier explicit activation return. The wrapper supplies flags2 to all four tasks. Preparation sets `T+24=base+aligned_size`, `T+28=u32[domain+0x7c]`, then calls ready insertion `0x43ca4` / `0xd3c60`. This code writes byte12=1, appends T to its priority's doubly-linked queue, sets the priority bitmap bit and updates selected-runnable when empty or when the new priority is strictly lower. Equal priority retains the earlier selection. The bitmap/head selector at `0x43c48` / `0xd3c04` is a retained dependency for later selection changes.
+
+The domain producer `0x43ac0` / `0xd3a7c` copies each shared-domain word `+0x68` to domain `+0x7c`. Primary setup `0x43a58` selects shared domain `0x400c0818` and first local domain `0x400545cc`; secondary setup `0xd3a0c` selects shared domain `0x400c0888` and second local domain `0x400e4610`. Scheduler initialization `0x43e18` / `0xd3dd4` installs the selected shared word as trampoline `0x43728` / `0xd3728` before the domain copy. T's original `+8` must still point to its own C. This source chain, not the descriptor entry alone, establishes the initial resume PC. Among these four tasks, root104 outranks idle102 on A and standby93 outranks idle103 on B. Selecting either as the first task requires the complete competing auto-ready set; it is not an observed first-PC claim or a claim that every registered task has run.
+
+Both loader tails perform further retained initialization, then call `0x43688` / `0xd3688` at `0x40a94` / `0xd0a94`. That path clears the per-core context word, selects SVC with IRQ masked while preserving F, copies selected-runnable into current-task, and for a nonnull task writes `C+32` to CP15 c13,c0,2 and calls `0x4252c` / `0xd252c` to disable FPEXC when configured. It loads SP from `T+24` and PC from `T+28`. Null selection uses its separate idle-stack loop (`0xa0000` / `0x130000`); it is not entry to idle102/103.
+
+At first-entry trampoline `0x43728` / `0xd3728`, `MSR CPSR_fc` receives `0x53` OR the old F bit, which is already set in `0x53`. It enables IRQ, sets FIQ masked, A32 SVC mode and clears the written flag byte. LR becomes task-return service `0x453f0` / `0xd53b0`; `T+48` is cleared; r0 becomes C's argument; r1 is T and r2 is C; PC loads C's entry. SP is the stack-top, not a fabricated restored exception frame. Other incoming registers and nonwritten CPSR fields require the actual prior context, not a zero-register assumption. Later IRQ/context resumes instead use saved continuation/stack state and the `SPSR`/`LDM^` path at `0x437c0..0x437d8` / `0xd37c0..0xd37d8`; that path must not be conflated with first entry.
+
+#### Existing natural receipts and exact observation gap
+
+`E-STARTUP-TASK-EXISTING-RECEIPTS-150` reuses the existing caller, task-storage and critical-pair evidence. No guest is added. The retained caller route records wrapper entries in order B103 at6,433,547, A104 at6,434,283, B93 at6,437,285, A102 at6,442,657. The corrected owned-A route records the same order at6,441,816;6,442,480;6,445,554;6,452,664. A uses D `0x40063424`, wrapper P `0x40063420`; B uses D `0x400f33e4`, wrapper P `0x400f33e0`. All four original entry observations have CPSR `0x600000d3`, including IRQ masked. Cross-core interleaving is observed for these routes, not imposed as a universal total order.
+
+The selected retained task103 storage route independently samples D's words as `[103,0x781970,15,1024,0x69cbf0,0,1]` on both core/alias views. Reservation returns zero at6,433,804; the state becomes `[0xa10200,1024,1]`, wrapper base becomes `0xa10200`, and the cursor advances `0x40a10200 -> 0x40a10600`. The 1,024-byte pool snapshot changes from zero to repeated byte103 after fill and remains so at wrapper return. This grounds reservation and the untouched tail value 1 in that run, not all descriptors' tails.
+
+At6,435,913, the constructor callsite has encoded id `0x20067`, six-word parameter pointer `0x400f33b0`, selected target `0xdd054`, wrapper SP `0x400f33a8` and CPSR `0x600000d3`. At6,437,120, the activation callsite has target `0xd4eec`, encoded id `0x20067` and CPSR `0x200000d3`. Reaching activation establishes that the wrapper took its zero-constructor-result branch under the bound source, but no sampled kernel C/T committed readback is supplied by this observer. The wrapper returns `0xffffffe7` (`-25`) at6,437,271 to `0x69cf38`, restoring its caller SP `0x400f33e0`.
+
+The owned-storage counterpart ends at6,437,277 with the same reservation, fill and `-25` wrapper result. Critical-pair retained/owned receipts separately preserve saved/restored IRQ mask `0x80`, critical counter `0 -> 1 -> 0` and the same error return; their consumer qualification is recorded in `critical142/qualification-v5.json`. These are different owned components, not an owned task wrapper, constructor, activation or scheduler. They do not discharge #151's required successful runnable transition.
+
+None of these selected receipts watches every kernel C/T/auxiliary/list/bitmap object or captures each core's first stack/PC load and task-entry context. The caller observer's menu endpoint is not such a witness. The exact remaining facts are committed task/queue views for all four submissions, complete competing startup runnable sets, auto-ready ordering, first selected task and entered PC/SP/registers on each core, and code/resource survival through that entry. A prospective observer must start from these existing natural caller contexts, bind the installed service producers and actual map/TCM/alias views, preserve the observed masked-context refusals, and capture the later auto-ready path rather than force explicit activation to return zero. Any new observer/checker requires independent review before its first run.
+
+#### Proposed first owned increment and acceptance
+
+Own the finite **image4 task-submission wrapper and reservation-release adapter** in place over `[0x725dd8,0x72612c)`, including the release lock literal. The complete 852-byte original boundary comprises 704 wrapper bytes and 148 release bytes/literal. Retain the #142 critical pair, #143 reservation transition, fill/cache/log/error callback services, A/B auxiliary/task-record creation, current-core activation, initial auto-ready and scheduler trampolines as named dependencies. This increment consumes the four descriptors but does not retire kernel creation or qualify the whole #151 goal.
+
+1. Bind canonical image4, both loader/header/initializer/service bytes and emitted owned bytes; stage the complete finite in-place boundary with no selectable production stock fallback. Admit every reachable production caller before global cutover; qualifying only the four phase contexts does not retire a wrapper that later root tasks also call.
+2. Use typed full task id, class, storage index, descriptor-tail policy, encoded service id, status and per-core context. Admit the exact natural A/B caller frames, separate D/W/state/pool/kernel objects and live retained callback/return paths. Preserve temporal loads, ignored statuses, phase4 descriptor reuse and the distinction between class-root creation and current-root activation.
+3. Independently replay retained/owned natural effects through each wrapper return: every reservation publication, full fill/cache effect, auxiliary/creation parameters and committed kernel objects, restored caller/IRQ state, log/error-word/callback effects and status. The existing task103 `-25` outcome is an expected context refusal, not a control to suppress. Compare caller-visible state, not compiler frames or counts.
+4. Cover fresh/reused wrapper pairs, partial nonzero pairs, helper refusals, auxiliary `-41` continuation and other failures, duplicate creation, explicit activation refusal/success/pending behavior, sentinel/non-sentinel tails and callback outcomes. Allocation, wrong descriptor/class/core, early activation and peer-lock controls must refuse at their actual boundary without rolling back source-required error-side effects.
+5. Qualify release separately with a genuine caller: zero-based index, saved mask, successful/failed acquisition and release, reservation-only clear, unchanged wrapper/base/size/cursor and all alias views. Do not strengthen its ignored-lock-result behavior into an unsupported lock guarantee.
+6. Continuously exclude the original wrapper/release bodies and retained copies on both cores/all executable aliases, admit complete replacement bytes and stack extent, attribute CPU/peer/host/model writers, and preserve resource mappings/TCM/backing through the endpoint. A source-bound window or branch patch alone is not confinement.
+7. For the subsequent kernel-creation/initial-scheduler increment, independently compare both programs' complete four task objects, auto-ready list/bitmap/order, first task transfer on each core and required blocked/wakeup/resume effects, with complete competing runnable sets and descriptor/storage/callback lifetimes. Preserve explicit masked-context errors while proving successful startup auto-ready. Task bodies, general scheduling, deletion and long-term reclamation remain separate ownership.
+
+| #151 acceptance criterion | Current status and evidence |
+| --- | --- |
+| Bind descriptor consumers, create/activate and initial scheduling with per-core context | Source contract recovered for the four phase submissions and the finite service/auto-ready/first-transfer graph above. Every additional production/computed caller and full scheduler/IRQ closure remains unqualified. |
+| Natural owned creation, successful activation and actual execution on both cores | Unmet. Existing natural storage/critical routes show task103 reservation and explicit activation refusal `-25`, not owned creation/auto-ready/first-entry receipts. |
+| Independent retained/owned task state, runnable/blocked/wakeup/failure/reuse/order comparisons | Unmet for #151. Existing comparisons own only #142/#143 effects and caller provenance. |
+| Allocation/context/early-activation/cross-core controls preserving IRQ/error effects | Specified for the proposed increment; no new #151 mechanism or control run. |
+| Continuous create/activate/initial-scheduler exclusion and initial resource lifetimes | Unmet. No task wrapper/kernel/scheduler cutover is staged or guarded by this analysis. |
+| Inventory/ledger distinguish initial scheduling from general scheduler/release/body ownership | Met by this section and its three scoped ledger records. Release semantics are recovered, not accepted reclamation. The issue remains open. |
+
