@@ -98,8 +98,8 @@ usage = unlines
   , "                         requires, in its own process from the post-install checkpoint"
   , "  --installed-nand PATH  Committed f7=1 NAND input for --ff80-rehearsal"
   , "  --receipt-output PATH  Fresh receipt directory beneath private-data/"
-  , "  --flash-candidate      --ram-push-e2e: --firmware is a flash candidate whose loader publishes the"
-  , "                         bank; boot it and run every segment (or --segments) without the RAM push"
+  , "  --flash-candidate      --ram-push-e2e: boot the supplied firmware and run segments without a RAM push"
+  , "                         --cardless --fujimod also accepts stock firmware for no-install observations"
   , "  --classic-chrome       --ram-push-e2e: push the Classic Chrome payload in place of the recipe bank and D3"
   , "  --classic-chrome-icon  --ram-push-e2e: push the Classic Chrome payload with its icon and live-view words"
   , "  --experiment NAME      --ram-push-e2e: push experiments/NAME with no card unless --sd-card-image is supplied"
@@ -263,7 +263,7 @@ launch options = do
       selectedCard = if cardless then WithoutCard else WithCard
   require (not (ff80 && e2e)) "--ff80-rehearsal and --ram-push-e2e are exclusive"
   require (e2e || not cardless) "--cardless belongs to --ram-push-e2e"
-  require (runtimeOption options == RetainedChoice || ff80 || (e2e && pushModeOption options == RamPush))
+  require (runtimeOption options == RetainedChoice || ff80 || (e2e && (pushModeOption options == RamPush || cardless)))
     "--fujimod belongs to --ram-push-e2e or --ff80-rehearsal"
   require (null (readSymbolsOption options) || (e2e && experiment)) "--read belongs to --ram-push-e2e --experiment"
   require (not experiment || allowlistOverrideOption options == Nothing) "experiments do not accept --allowlist-override"
@@ -276,7 +276,8 @@ launch options = do
       WithCard -> require (media /= Nothing) "--ram-push-e2e requires --sd-card-image"
       WithoutCard -> do
         require (media == Nothing) "--cardless boots without --sd-card-image"
-        require (pushModeOption options == RamPush) "--cardless belongs to the RAM push, not --flash-candidate"
+        require (pushModeOption options == RamPush || runtimeOption options == FujiModChoice)
+          "--cardless --flash-candidate requires --fujimod"
     require (nand /= Nothing) "--ram-push-e2e requires --installed-nand"
     if warmCheckpointOption options
       then do
