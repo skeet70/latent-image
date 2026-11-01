@@ -1,4 +1,4 @@
--- | Source-bound comparison of the composed223 RAM-push runtime format.
+-- | Source-bound comparison of the composed RAM-push bank variants.
 -- Section addresses come from ELF; generated spans come from the bank plan and
 -- BuildRecipeBank.relocatedD3. No byte is excluded from the comparison.
 module RuntimeRelocationCompare
@@ -43,7 +43,7 @@ data Publication = Publication
   } deriving (Eq, Show)
 data EntryKind = InstallEntry | RollbackEntry | StatusEntry deriving (Eq, Show)
 data EntryPoint = EntryPoint EntryKind Address
-data Manifest = Manifest Address Int [Publication] [EntryPoint]
+data Manifest = Manifest Address Int [Publication] [EntryPoint] L.BankVariant
 data PlanWrite = PlanWrite PlanRegion Address B.ByteString B.ByteString String
 newtype Plan = Plan [PlanWrite]
 data Image = Image E.Elf B.ByteString Manifest Plan
@@ -63,6 +63,7 @@ data Comparison = Comparison
   , comparisonDifferences :: [Value]
   , comparisonRawDifferences :: [Value]
   , comparisonCapture :: [Value]
+  , comparisonModal :: [Value]
   , comparisonSourceCompanions :: [Value]
   , comparisonGeneratedOverlays :: [Value]
   , comparisonPointerFields :: [Value]
@@ -102,7 +103,11 @@ instance FromJSON Manifest where
     unless (schema == 1) (fail "manifest schema 1 required")
     entries <- o .: "entry" >>= withObject "entry" (\e -> sequence
       [EntryPoint InstallEntry <$> e .: "install", EntryPoint RollbackEntry <$> e .: "rollback", EntryPoint StatusEntry <$> e .: "status"])
-    Manifest <$> o .: "base" <*> o .: "size" <*> o .: "publications" <*> pure entries
+    size <- o .: "size"
+    variant <- case [variant | variant <- [L.standardBankVariant, L.modalScopedBankVariant, L.lifecycleBankVariant, L.modalLifecycleBankVariant], size == fromIntegral (L.runtimeAllocationSizeFor variant)] of
+      [variant] -> pure variant
+      _ -> fail "unknown composed bank allocation extent"
+    Manifest <$> o .: "base" <*> pure size <*> o .: "publications" <*> pure entries <*> pure variant
 instance FromJSON PlanRegion where
   parseJSON = withText "plan region" $ \text -> case T.unpack text of
     "menu_values" -> pure MenuValues
@@ -140,12 +145,16 @@ decodeHex = fmap B.pack . go . T.unpack
 parseImage :: PackageBytes -> Either String Image
 parseImage (PackageBytes elfBytes runtime manifestBytes planBytes) = do
   elf <- E.parseElf elfBytes
-  manifest@(Manifest base size publications entries) <- eitherDecodeStrict' manifestBytes
+  manifest@(Manifest base size publications entries variant) <- eitherDecodeStrict' manifestBytes
   plan <- eitherDecodeStrict' planBytes
-  unless (size == fromIntegral L.runtimeAllocationSize && size == B.length runtime) (Left "runtime allocation extent mismatch")
+  unless (size == B.length runtime) (Left "runtime allocation extent mismatch")
   unless (toIntegerAddress base + toInteger size <= 0x100000000) (Left "runtime extent wraps")
-  unless (sort (map publicationIndex publications) == [0 .. L.publicationCount - 1]) (Left "publication indices are not the composed223 permutation")
-  unless (length (nub (map publicationAddress publications)) == L.publicationCount) (Left "duplicate publication address")
+  let logical = sortOn publicationIndex publications
+  unless (map publicationIndex logical == [0 .. L.publicationCountFor variant - 1]) (Left "publication indices are not the selected bank permutation")
+  unless (length (nub (map publicationAddress publications)) == L.publicationCountFor variant) (Left "duplicate publication address")
+  order <- L.safePublicationOrderForVariant variant
+    [L.PublicationAddress address | publication <- logical, let Address address = publicationAddress publication]
+  unless (map L.publicationIndex order == map publicationIndex publications) (Left "physical publication records do not follow the selected group order")
   forM_ entries $ \(EntryPoint kind address) -> do
     let name = case kind of InstallEntry -> "ram_push_install"; RollbackEntry -> "ram_push_rollback"; StatusEntry -> "ram_push_status"
     symbol elf name >>= \value -> unless (value == address) (Left ("manifest entry mismatch: " ++ name))
@@ -159,13 +168,15 @@ symbol elf name = case [Address (E.symbolValue s) | s <- E.elfSymbols elf, E.sym
   _ -> Left ("unique ELF symbol required: " ++ name)
 
 imageBase :: Image -> Address
-imageBase (Image _ _ (Manifest base _ _ _) _) = base
+imageBase (Image _ _ (Manifest base _ _ _ _) _) = base
 imageBytes :: Image -> B.ByteString
 imageBytes (Image _ bytes _ _) = bytes
 imageElf :: Image -> E.Elf
 imageElf (Image elf _ _ _) = elf
 imagePublications :: Image -> [Publication]
-imagePublications (Image _ _ (Manifest _ _ publications _) _) = publications
+imagePublications (Image _ _ (Manifest _ _ publications _ _) _) = publications
+imageVariant :: Image -> L.BankVariant
+imageVariant (Image _ _ (Manifest _ _ _ _ variant) _) = variant
 
 -- An absent publication has an unchanged companion only when the plan carries it.
 installedCompanion :: Image -> Address -> Maybe Word32
@@ -454,7 +465,7 @@ publicationChecks image = do
       publications = imagePublications image
   start <- symbol elf "__ram_push_publications_start"
   end <- symbol elf "__ram_push_publications_end"
-  unless (distance end start == L.publicationCount * 16) (Left "publication table extent changed")
+  unless (distance end start == L.publicationCountFor (imageVariant image) * 16) (Left "publication table extent changed")
   forM_ (zip [0 :: Int ..] publications) $ \(position, publication) -> do
     bytes <- slice image (add start (16 * position)) 16
     unless ([word bytes n | n <- [0,4,8,12]] ==
@@ -485,6 +496,64 @@ publicationChecks image = do
     _ -> Left "capture publication must be unconditional A32 B to rb_capture_develop_wait"
   pure (object ["table_record" .= addressValue (add start (16 * position)), "table_word" .= addressValue field, "installed_site" .= hex 0x00e9e038, "word" .= hex captureWord, "manifest_word" .= hex (publicationNew capture), "kind" .= ("B/AL" :: String), "target" .= addressValue target, "symbol" .= ("rb_capture_develop_wait" :: String)])
 
+modalPublicationChecks :: Image -> Either String [Value]
+modalPublicationChecks image
+  | not (L.hasPublicationGroup L.Modal75Publication (imageVariant image)) = do
+    unless (null hooks) (Left "bank without modal publication group contains a modal entry hook")
+    pure []
+  | otherwise = do
+    (position, hook) <- case hooks of
+      [entry] -> pure entry
+      _ -> Left "unique scoped modal publication required"
+    unless (position == length publications - 1 && publicationIndex hook == L.publicationCountFor (imageVariant image) - 1
+      && publicationOld hook == 0xe92d4ff0 && publicationPhase hook == Activation)
+      (Left "modal hook must be the final scoped activation with the original push")
+    table <- symbol elf "__ram_push_publications_start"
+    seam <- function "rb_modal_entry" (Just 56)
+    owned <- function "rb_modal_dispatch" Nothing
+    bytes <- slice image seam 56
+    let fixedWords =
+          [(0,0xe52dc004),(1,0xe10fc000),(2,0xe52dc004),(3,0xe350004b)
+          ,(4,0x0a000004),(5,0xe49dc004),(6,0xe128f00c),(7,0xe49dc004)
+          ,(8,0xe92d4ff0),(10,0xe49dc004),(11,0xe128f00c),(12,0xe49dc004)]
+    unless (all (\(index, expected) -> word bytes (index * 4) == expected) fixedWords)
+      (Left "modal seam differs from the qualified full-word controller75 selector")
+    branch (Address 0x00bfb028) (publicationNew hook) seam
+    branch (add seam 36) (word bytes 36) (Address 0x00bfb02c)
+    branch (add seam 52) (word bytes 52) owned
+    pure [object
+      ["table_record" .= addressValue (add table (16 * position))
+      ,"installed_site" .= hex 0x00bfb028, "word" .= hex (publicationNew hook)
+      ,"target" .= addressValue seam, "owned_dispatcher" .= addressValue owned
+      ,"stock_resume" .= hex 0x00bfb02c, "seam_bytes" .= (56 :: Int)
+      ,"global_admission" .= False]]
+ where
+  elf = imageElf image
+  publications = imagePublications image
+  hooks = [(position, hook) | (position, hook) <- zip [0 :: Int ..] publications, publicationAddress hook == Address 0x00bfb028]
+  function name requiredSize = do
+    entry <- case [entry | entry <- E.elfSymbols elf, E.symbolName entry == name, E.symbolSection entry /= E.Undefined] of
+      [entry] | E.symbolKind entry == E.FunctionSymbol && E.symbolSize entry > 0 -> pure entry
+      _ -> Left ("modal target must be a unique ELF function: " ++ name)
+    unless (maybe True (== E.symbolSize entry) requiredSize) (Left ("modal function extent differs: " ++ name))
+    section <- case [section | section <- E.elfSections elf, E.sectionName section == ".text"] of
+      [section] -> pure section
+      _ -> Left "modal A32 text section missing"
+    let start = Address (E.symbolValue entry)
+        end = toInteger (E.symbolValue entry) + toInteger (E.symbolSize entry)
+        text = Component (ComponentName "elf:.text") (Address (E.sectionAddress section)) (fromIntegral (E.sectionSize section)) Arm
+        modes = armMap image text
+    unless (E.symbolValue entry .&. 3 == 0 && E.symbolSize entry .&. 3 == 0
+      && contains text start && end <= toInteger (E.sectionAddress section) + toInteger (E.sectionSize section))
+      (Left ("modal function leaves aligned A32 text: " ++ name))
+    forM_ [0,4 .. fromIntegral (E.symbolSize entry) - 4] $ \offset -> do
+      isArm <- armAt modes (add start offset)
+      unless isArm (Left ("modal function includes mapped data: " ++ name))
+    pure start
+  branch (Address site) encoded target = case A.decode site encoded of
+    A.Branch (A.Cond 14) False actual | Address actual == target -> pure ()
+    _ -> Left "scoped modal branch target or condition differs"
+
 -- MOVW/MOVT evidence requires adjacent instructions with the same condition and register.
 widePair :: Address -> Word32 -> Word32 -> Maybe Word32
 widePair (Address address) low high = case (A.decode address low, A.decode (address + 4) high) of
@@ -495,6 +564,7 @@ comparePackages :: PackageBytes -> PackageBytes -> Either String Comparison
 comparePackages leftBytes rightBytes = do
   left <- parseImage leftBytes
   right <- parseImage rightBytes
+  unless (imageVariant left == imageVariant right) (Left "cannot compare different bank variants")
   leftComponents <- components left
   rightComponents <- components right
   mappings <- mapComponents leftComponents rightComponents
@@ -507,6 +577,7 @@ comparePackages leftBytes rightBytes = do
   ccLeft <- symbol (imageElf left) "cc_ram_data"
   ccRight <- symbol (imageElf right) "cc_ram_data"
   captures <- mapM publicationChecks [left, right]
+  modal <- concat <$> mapM modalPublicationChecks [left, right]
   let related = relates left right mappings
   unless (E.elfEntry (imageElf left) /= 0 && related (Address (E.elfEntry (imageElf left))) (Address (E.elfEntry (imageElf right)))) (Left "ELF entry changed")
   let symbolRows image = sortOn (\(name, size, kind, section, address) -> (name, size, show kind, show section, address)) (symbolsUnsorted image)
@@ -523,13 +594,14 @@ comparePackages leftBytes rightBytes = do
     , comparisonDifferences = map evidenceValue evidence
     , comparisonRawDifferences = raw
     , comparisonCapture = captures
+    , comparisonModal = modal
     , comparisonSourceCompanions = concatMap sourceCompanionValues [left,right]
     , comparisonGeneratedOverlays = [object ["name" .= ("cc_ram_data" :: String), "left" .= addressValue ccLeft, "right" .= addressValue ccRight, "bytes" .= (100 :: Int), "containing_component" .= ("elf:.data" :: String)]]
     , comparisonPointerFields = pointerFieldValues left leftPointers ++ pointerFieldValues right rightPointers
     , comparisonPublicationPointerFields = publicationPointerValues left leftPublicationPointers ++ publicationPointerValues right rightPublicationPointers
     , comparisonProblems = problems
     , comparisonCounts = object
-        ["runtime_bytes_each" .= B.length (imageBytes left), "components" .= length mappings, "semantic_fields" .= length evidence, "semantic_differing_bytes" .= changedBytes, "raw_differing_words" .= length raw, "raw_differing_bytes" .= length [() | (a,b) <- B.zip (imageBytes left) (imageBytes right), a /= b], "unclassified_fields" .= length [() | Evidence _ _ _ _ _ _ kind _ <- evidence, kind == Unclassified], "publication_records_checked_each" .= L.publicationCount, "pointer_fields_checked_left" .= M.size leftPointers, "pointer_fields_checked_right" .= M.size rightPointers, "publication_pointer_fields_checked_left" .= M.size leftPublicationPointers, "publication_pointer_fields_checked_right" .= M.size rightPublicationPointers
+        ["runtime_bytes_each" .= B.length (imageBytes left), "components" .= length mappings, "semantic_fields" .= length evidence, "semantic_differing_bytes" .= changedBytes, "raw_differing_words" .= length raw, "raw_differing_bytes" .= length [() | (a,b) <- B.zip (imageBytes left) (imageBytes right), a /= b], "unclassified_fields" .= length [() | Evidence _ _ _ _ _ _ kind _ <- evidence, kind == Unclassified], "publication_records_checked_each" .= L.publicationCountFor (imageVariant left), "pointer_fields_checked_left" .= M.size leftPointers, "pointer_fields_checked_right" .= M.size rightPointers, "publication_pointer_fields_checked_left" .= M.size leftPublicationPointers, "publication_pointer_fields_checked_right" .= M.size rightPublicationPointers
         ,"classifications" .= [object ["kind" .= show kind,"fields" .= length entries] | kind <- [minBound .. maxBound], let entries = [entry | entry@(Evidence _ _ _ _ _ _ actual _) <- evidence, actual == kind], not (null entries)]]
     }
  where
@@ -686,4 +758,4 @@ rawDifferences left right mappings =
 
 comparisonValue :: Comparison -> Value
 comparisonValue report = object
-  ["schema" .= ("runtime-relocation-comparison-1" :: String), "accepted" .= comparisonAccepted report, "counts" .= comparisonCounts report, "components" .= comparisonMappings report, "generated_overlays" .= comparisonGeneratedOverlays report, "pointer_fields" .= comparisonPointerFields report, "publication_pointer_fields" .= comparisonPublicationPointerFields report, "semantic_differences" .= comparisonDifferences report, "physical_differences" .= comparisonRawDifferences report, "capture_publications" .= comparisonCapture report, "unchanged_stock_companions" .= comparisonSourceCompanions report, "problems" .= comparisonProblems report]
+  ["schema" .= ("runtime-relocation-comparison-1" :: String), "accepted" .= comparisonAccepted report, "counts" .= comparisonCounts report, "components" .= comparisonMappings report, "generated_overlays" .= comparisonGeneratedOverlays report, "pointer_fields" .= comparisonPointerFields report, "publication_pointer_fields" .= comparisonPublicationPointerFields report, "semantic_differences" .= comparisonDifferences report, "physical_differences" .= comparisonRawDifferences report, "capture_publications" .= comparisonCapture report, "modal_publications" .= comparisonModal report, "unchanged_stock_companions" .= comparisonSourceCompanions report, "problems" .= comparisonProblems report]

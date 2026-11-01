@@ -23,6 +23,7 @@ haskell_binary(
 )
 
 exports_files([
+    "BankAllowlistComposition.hs",
     "classic-chrome-icon.txt",
     "classic-chrome-q-tile.txt",
 ])
@@ -506,7 +507,6 @@ haskell_binary(
     name = "build-recipe-bank",
     srcs = [
         "BuildRecipeBank.hs",
-        "RamPushLayout.hs",
     ],
     ghcopts = [
         "-Wall",
@@ -517,6 +517,9 @@ haskell_binary(
     ],
     main_file = "BuildRecipeBank.hs",
     deps = [
+        ":bank-allowlist",
+        ":bank-allowlist-composition",
+        ":ram-push-layout",
         ":ram-push-toolchain",
         "//host:aeson",
         "//host:base",
@@ -1519,7 +1522,6 @@ haskell_library(
         "A32.hs",
         "ArmElf.hs",
         "BankAllowlist.hs",
-        "RamPushLayout.hs",
     ],
     ghcopts = [
         "-Wall",
@@ -1528,6 +1530,7 @@ haskell_library(
         "-XGHC2021",
     ],
     deps = [
+        ":ram-push-layout",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -1544,6 +1547,7 @@ haskell_library(
     ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-XOverloadedStrings"],
     deps = [
         ":bank-allowlist",
+        ":ram-push-layout",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -1570,10 +1574,13 @@ haskell_test(
     srcs = ["RuntimeRelocationCompareTests.hs"],
     ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-XOverloadedStrings"],
     deps = [
+        ":bank-allowlist",
         ":runtime-relocation-compare",
+        ":ram-push-layout",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:containers",
     ],
 )
 
@@ -1614,6 +1621,18 @@ haskell_test(
         "BuildRecipeBankRamTests.hs",
         "RamPushLayout.hs",
     ],
+    args = [
+        "$(location //replacement/bank:bank)",
+        "$(location :build-recipe-bank)",
+        "$(location build-recipe-bank-ram.sh)",
+        "$(location @lab_bash//:bin/bash)",
+    ],
+    data = [
+        ":build-recipe-bank",
+        "build-recipe-bank-ram.sh",
+        "//replacement/bank:bank",
+        "@lab_bash//:bin/bash",
+    ],
     ghcopts = [
         "-Wall",
         "-Werror",
@@ -1625,6 +1644,8 @@ haskell_test(
     deps = [
         "//host:base",
         "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:process",
     ],
 )
 
@@ -1633,6 +1654,10 @@ filegroup(
     name = "build-recipe-bank-sources",
     srcs = [
         "BuildRecipeBank.hs",
+        "A32.hs",
+        "BankAllowlist.hs",
+        "BankAllowlistComposition.hs",
+        "ArmElf.hs",
         "RamPushLayout.hs",
         "classic-chrome-liveview-image5.json",
         "classic-chrome-frames-image5.json",
@@ -1676,6 +1701,97 @@ filegroup(
     ],
 )
 
+filegroup(
+    name = "ram-push-modal-relinker",
+    srcs = [
+        "build-recipe-bank-modal-ram.sh",
+        "build-recipe-bank-ram.sh",
+        ":build-recipe-bank",
+        "//replacement/bank:bank-modal",
+        "//replacement/bank:build-facts",
+        "//menu:recipe_bank_modal_allowlist_fragment.json",
+    ],
+)
+
+filegroup(
+    name = "ram-push-lifecycle-relinker",
+    srcs = [
+        "build-recipe-bank-lifecycle-ram.sh",
+        "build-recipe-bank-ram.sh",
+        ":build-recipe-bank",
+        "//replacement/bank:bank-lifecycle",
+        "//replacement/bank:build-facts",
+        "//menu:recipe_bank_allowlist.lifecycle.json",
+    ],
+)
+
+filegroup(
+    name = "ram-push-modal-lifecycle-relinker",
+    srcs = [
+        "build-recipe-bank-modal-lifecycle-ram.sh",
+        "build-recipe-bank-ram.sh",
+        ":build-recipe-bank",
+        "//replacement/bank:bank-modal-lifecycle",
+        "//replacement/bank:build-facts",
+        "//menu:recipe_bank_modal_allowlist_fragment.json",
+        "//menu:recipe_bank_allowlist.lifecycle.json",
+    ],
+)
+
+haskell_library(
+    name = "ram-push-layout",
+    srcs = ["RamPushLayout.hs"],
+    ghcopts = ["-Wall", "-Werror", "-XGHC2021"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_library(
+    name = "bank-allowlist-composition",
+    srcs = ["BankAllowlistComposition.hs"],
+    ghcopts = ["-Wall", "-Werror", "-XGHC2021"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":bank-allowlist",
+        ":ram-push-layout",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:json",
+    ],
+)
+
+haskell_test(
+    name = "bank-allowlist-composition-tests",
+    srcs = ["BankAllowlistCompositionTests.hs"],
+    args = [
+        "$(location //menu:recipe_bank_allowlist.json)",
+        "$(location //menu:recipe_bank_modal_allowlist_fragment.json)",
+        "$(location :modal-00c40000/kernel.elf)",
+        "$(location :modal-00c4fc88/kernel.elf)",
+    ],
+    data = [
+        "//menu:recipe_bank_allowlist.json",
+        "//menu:recipe_bank_modal_allowlist_fragment.json",
+        ":modal-00c40000/kernel.elf",
+        ":modal-00c4fc88/kernel.elf",
+    ],
+    ghcopts = ["-Wall", "-Werror", "-XGHC2021"],
+    deps = [
+        ":bank-allowlist",
+        ":bank-allowlist-composition",
+        ":ram-push-layout",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:json",
+    ],
+)
+
 haskell_library(
     name = "ram-push-toolchain",
     srcs = [":RamPushToolchain.hs"],
@@ -1709,37 +1825,42 @@ genrule(
     tools = ["ram-push-toolchain.sh"],
 )
 
-# The bank ELF the relink script links at the reviewed RAM push's two
-# reference bases, with a no-op builder in place of the RC0 packaging step.
+# These link-only subjects omit RC0 packaging.
 [genrule(
-    name = "bank-elf-" + base,
+    name = ("bank-elf-" if groups == "" else "bank-modal-elf-") + base,
     srcs = [
         "build-recipe-bank-ram.sh",
         "//menu:ram-push-relink-sources",
-        "//replacement/bank:bank",
-        "//replacement/bank:relink-sources",
+        archive,
+        sources,
     ],
-    outs = ["bank-elf-" + base + ".elf"],
+    outs = ["bank-elf-" + base + ".elf"] if groups == "" else [
+        "modal-" + base + "/kernel.elf",
+        "modal-" + base + "/kernel-text.bin",
+        "modal-" + base + "/kernel.syms",
+    ],
     cmd = " && ".join([
         "here=$$PWD",
         "root=$$(mktemp -d)",
         "out=private-data/analysis/x-m1-1.50/ram-push/bank-elf",
         "mkdir -p $$root/$$out",
         "for source in $(locations //menu:ram-push-relink-sources); do mkdir -p $$root/$$(dirname $$source) && ln -s $$here/$$source $$root/$$source; done",
-        "for source in $(locations //replacement/bank:relink-sources); do mkdir -p $$root/$$(dirname $$source) && ln -s $$here/$$source $$root/$$source; done",
+        "for source in $(locations " + sources + "); do mkdir -p $$root/$$(dirname $$source) && ln -s $$here/$$source $$root/$$source; done",
         "cd $$root",
         " ".join([
             "RAM_PUSH_BUILDER=true",
+            "RB_PUBLICATION_GROUPS=" + groups,
             "RAM_PUSH_CLANG=$$here/$(location @lab_clang//:bin/clang)",
             "RAM_PUSH_LD_LLD=$$here/$(location @lab_lld//:bin/ld.lld)",
             "RAM_PUSH_OBJCOPY=$$here/$(location @lab_llvm//:bin/llvm-objcopy)",
             "RAM_PUSH_NM=$$here/$(location @lab_llvm//:bin/llvm-nm)",
             "RAM_PUSH_OBJDUMP=$$here/$(location @lab_llvm//:bin/llvm-objdump)",
             "SPEC=unused RC0_ID4=unused RC0_ID5=unused RC0_PLAIN=unused",
-            "RB_RUST_ARCHIVE=$$here/$(location //replacement/bank:bank)",
+            "RB_RUST_ARCHIVE=$$here/$(location " + archive + ")",
             "$$here/$(location @lab_bash//:bin/bash) $$here/$(location build-recipe-bank-ram.sh) 0x" + base + " $$out > /dev/null",
         ]),
-        "cp $$out/kernel.elf $$here/$@",
+        "cp $$out/kernel.elf $$here/$@" if groups == "" else
+            "mkdir -p $$here/$(RULEDIR)/modal-" + base + " && cp $$out/kernel.elf $$out/kernel-text.bin $$out/kernel.syms $$here/$(RULEDIR)/modal-" + base + "/",
         "rm -rf $$root",
     ]),
     tools = [
@@ -1753,6 +1874,9 @@ genrule(
 ) for base in [
     "00c40000",
     "00c4fc88",
+] for groups, archive, sources in [
+    ("", "//replacement/bank:bank", "//replacement/bank:relink-sources"),
+    ("modal75", "//replacement/bank:bank-modal", "//replacement/bank:modal-relink-sources"),
 ]]
 
 # The Classic Chrome RAM-push builder (reports/classic-chrome-patch.md
@@ -1966,6 +2090,7 @@ haskell_binary(
     main_file = "BuildAfRingRam.hs",
     deps = [
         ":bank-allowlist",
+        ":ram-push-layout",
         ":ram-push-toolchain",
         "//host:base",
         "//host:bytestring",

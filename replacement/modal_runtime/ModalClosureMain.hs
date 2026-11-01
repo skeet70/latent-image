@@ -64,8 +64,13 @@ main = do
   manifest <- either failWith pure . decodeStrictIntegers =<< B.readFile =<< required arguments "--manifest"
   publications <- either failWith pure (parsePublications manifest)
   selected <- diagnosticController arguments
+  let filmRoute = "--diagnostic-filmsim-route" `elem` arguments
+  when (filmRoute && selected /= Nothing) $
+    failWith "choose either --diagnostic-filmsim-route or --diagnostic-controller"
   let inputs = Inputs (images ++ bankRegions kernel) publications (bankFunctions kernel)
-      proof = maybe (buildProof inputs) (\controller -> buildControllerDiagnostic [controller] inputs) selected
+      proof
+        | filmRoute = buildRouteDiagnostic Filmsim75 inputs
+        | otherwise = maybe (buildProof inputs) (\controller -> buildControllerDiagnostic [controller] inputs) selected
   B.writeFile output (encodeCanonical (proofValue proof))
   if proofAdmitted proof then exitSuccess else exitFailure
 

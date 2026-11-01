@@ -186,7 +186,7 @@ impl Machine {
             }
         };
         let end = current.value().saturating_add(count);
-        if self.traces.capture_observation_active() {
+        if self.traces.capture_observation_active() || self.traces.modal_observation_active() {
             match self.traces.collect(&self.session, current) {
                 Ok(CollectionOutcome::DrainRequired) => return RunOutcome::DrainRequired,
                 Ok(CollectionOutcome::Stop) => return RunOutcome::Stopped,

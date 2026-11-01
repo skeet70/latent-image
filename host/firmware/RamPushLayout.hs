@@ -17,6 +17,23 @@ module RamPushLayout
   , runtimeInstallerExtent
   , runtimeAllocationSize
   , safePublicationOrderFor
+  , BankVariant
+  , PublicationGroup (..)
+  , bankVariant
+  , publicationGroups
+  , hasPublicationGroup
+  , standardBankVariant
+  , modalScopedBankVariant
+  , lifecycleBankVariant
+  , modalLifecycleBankVariant
+  , publicationCountFor
+  , publicationActivationCountFor
+  , runtimeInstallerExtentFor
+  , runtimeAllocationSizeFor
+  , safePublicationOrderForVariant
+  , modalHookAddress
+  , lifecycleHookAddresses
+  , modalHookWordFor
   , captureHookAddress
   , PublicationAddress (..)
   , PublicationIndex (..)
@@ -129,6 +146,50 @@ runtimeInstallerExtent = installerExtent publicationCount
 runtimeAllocationSize :: Word32
 runtimeAllocationSize = 0x1dc98
 
+data PublicationGroup = LifecyclePublications | Modal75Publication
+  deriving (Eq, Ord, Show)
+
+newtype BankVariant = BankVariant [PublicationGroup]
+  deriving (Eq, Show)
+
+bankVariant :: [PublicationGroup] -> Either String BankVariant
+bankVariant groups = do
+  let ordered = sort groups
+  when (or (zipWith (==) ordered (drop 1 ordered))) $
+    Left "duplicate publication group"
+  pure (BankVariant ordered)
+
+publicationGroups :: BankVariant -> [PublicationGroup]
+publicationGroups (BankVariant groups) = groups
+
+hasPublicationGroup :: PublicationGroup -> BankVariant -> Bool
+hasPublicationGroup group = elem group . publicationGroups
+
+standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant :: BankVariant
+standardBankVariant = BankVariant []
+modalScopedBankVariant = BankVariant [Modal75Publication]
+lifecycleBankVariant = BankVariant [LifecyclePublications]
+modalLifecycleBankVariant = BankVariant [LifecyclePublications, Modal75Publication]
+
+publicationCountFor :: BankVariant -> Int
+publicationCountFor variant = publicationCount + sum (map groupCount (publicationGroups variant))
+ where
+  groupCount LifecyclePublications = 3
+  groupCount Modal75Publication = 1
+
+publicationActivationCountFor :: BankVariant -> Int
+publicationActivationCountFor variant = publicationCountFor variant - publicationSetupCount
+
+runtimeInstallerExtentFor :: BankVariant -> Word32
+runtimeInstallerExtentFor variant
+  | variant == standardBankVariant = runtimeInstallerExtent
+  | otherwise = installerExtent (publicationCountFor variant)
+
+runtimeAllocationSizeFor :: BankVariant -> Word32
+runtimeAllocationSizeFor variant =
+  runtimeAllocationSize + runtimeInstallerExtentFor variant - runtimeInstallerExtent
+    + if variant == modalLifecycleBankVariant then 32 else 0
+
 newtype PublicationAddress = PublicationAddress { publicationAddress :: Word32 }
   deriving (Eq, Ord, Show)
 
@@ -183,6 +244,50 @@ safePublicationOrderFor addresses = do
   when (sort (map publicationIndex order) /= [0 .. publicationCount - 1]) $
     Left "derived publication order is not a permutation"
   pure order
+
+modalHookAddress :: PublicationAddress
+modalHookAddress = PublicationAddress 0x00bfb028
+
+lifecycleHookAddresses :: [PublicationAddress]
+lifecycleHookAddresses = map PublicationAddress [0x00e99e8c, 0x00e6a754, 0x00e6bb90]
+
+safePublicationOrderForVariant :: BankVariant -> [PublicationAddress] -> Either String [PublicationIndex]
+safePublicationOrderForVariant variant addresses = do
+  when (length addresses /= publicationCountFor variant) $
+    Left "selected publication count differs"
+  let sortedAddresses = sort addresses
+  when (or (zipWith (==) sortedAddresses (drop 1 sortedAddresses))) $
+    Left "duplicate logical publication address"
+  let modalSelected = hasPublicationGroup Modal75Publication variant
+  when (modalSelected && (last addresses /= modalHookAddress || modalHookAddress `elem` init addresses)) $
+    Left "scoped modal hook must occur once at the final logical index"
+  when (not modalSelected && modalHookAddress `elem` addresses) $
+    Left "modal hook present without its publication group"
+  let lifecycleAddresses = if hasPublicationGroup LifecyclePublications variant then lifecycleHookAddresses else []
+      selectedAddresses = lifecycleAddresses <> [modalHookAddress | modalSelected]
+  when (drop publicationCount addresses /= selectedAddresses) $
+    Left "publication group destinations or logical order differ"
+  order <- safePublicationOrderFor (take publicationCount addresses)
+  pure (order <> map PublicationIndex [publicationCount .. publicationCountFor variant - 1])
+
+modalHookWordFor :: BankVariant -> Word32 -> Word32 -> Word32 -> Either String Word32
+modalHookWordFor variant base target source = do
+  when (not (hasPublicationGroup Modal75Publication variant)) $
+    Left "modal hook requires the modal75 publication group"
+  when (base .&. 7 /= 0 || base > maxBound - runtimeAllocationSizeFor variant) $
+    Left "scoped allocation leaves the aligned address domain"
+  let hook = publicationAddress modalHookAddress
+      allocationEnd = toInteger base + toInteger (runtimeAllocationSizeFor variant)
+      delta = toInteger target - toInteger hook - 8
+  when (source /= 0xe92d4ff0) $
+    Left "stock modal entry is not push r4-r11,lr"
+  when (not (toInteger hook + 4 <= toInteger base || toInteger hook >= allocationEnd)) $
+    Left "modal hook overlaps the allocation"
+  when (target .&. 3 /= 0 || target < runtimeExecutableBase base || target >= runtimeDataBase base) $
+    Left "modal target leaves bank executable storage"
+  when (delta `mod` 4 /= 0 || delta < -0x2000000 || delta > 0x1fffffc) $
+    Left "modal hook leaves the A32 branch domain"
+  pure (0xea000000 .|. (fromInteger (delta `div` 4) .&. 0x00ffffff))
 
 staleFixedReferences :: Word32 -> Word32 -> B.ByteString -> [(Int, Word32)]
 staleFixedReferences low high bytes = direct <> movPairs

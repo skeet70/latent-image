@@ -170,13 +170,47 @@ For admitted modal 75, cheap callback/return-seam equivalence and consumer closu
 
 ### Modal entry seam mechanism
 
-`replacement/modal_runtime/src/entry.S` implements the fourteen-instruction routing mechanism; `//replacement/modal_runtime:entry-seam-image` links its 56 bytes at a native-only address. Its linker script resolves owned policy to the unchanged E-MODAL-DISPATCHER-LINKED-ABI-150 export and the fallback to stock+4. It is not linked into the default bank, installed, or an admission override. Independent source review accepted the entry and observer before the corrected native cohort. E-MODAL-ENTRY-SEAM-150 records eight real stock-prefix oracles, twelve candidates and five discriminating controls, all passing in 25 native invocations.
+`replacement/modal_runtime/src/entry.S` implements the fourteen-instruction routing mechanism. E-MODAL-ENTRY-SEAM-150 used a standalone 56-byte native-only image bound to the unchanged E-MODAL-DISPATCHER-LINKED-ABI-150 export and stock+4. Independent source review accepted that mechanism and observer before eight stock-prefix oracles, twelve candidates and five controls passed in 25 native invocations. Those artifacts remain historical evidence. The separately selected modal package now links the seam into its actual ELF; the default223 archive does not.
 
-`//replacement/modal_runtime:qualify-entry` binds the #125 backend, pinned image5 and original linked kernel, and derives the full stock extent with the shared `StockInventory` checker. Eight nonadmitted controller words cover ordinary IDs, the known upper boundary, out-of-range values and two words whose low bits equal 75; four admitted fixtures vary flags and stack alignment. Fallback runs compare every register, complete stack bytes and complete ordered write histories with a real stock first-instruction execution. The admitted fixtures check the original incoming context before owned policy executes. Both protect the complete incoming-SP-and-up caller interval. Five real entry-byte controls remove flag restoration on each route, remove r12 restoration, write caller-owned stack and select the wrong stock continuation.
+The current `//replacement/modal_runtime:qualify-entry` requires an explicit kernel ELF digest and extracts the actual linked seam and dispatcher addresses from that ELF. It binds the qualified #125 backend and pinned image5, and derives the stock extent with `StockInventory`. Eight nonadmitted controller words cover ordinary IDs, the known upper boundary, out-of-range values and two words whose low bits equal75; four admitted fixtures vary flags and stack alignment. Fallback cases compare every register, complete stack bytes and complete ordered write histories with a stock first-instruction oracle. Admitted cases check the original incoming context before owned policy executes. Both protect the complete incoming-SP-and-up caller interval. Controls remove flag restoration on each route, remove r12 restoration, write caller-owned stack and select the wrong stock continuation. The actual-ELF cohort requires fresh qualification; it does not inherit the historical result.
 
-The native wire profile requires eight-byte initial SP, LR equal to its exit and NZCV-only initial flags. A six-instruction, read-only literal prelude establishes the desired seam SP, LR and NZCVQ/GE without changing stack memory. Only the four-byte original push is declared as the stock prefix function; stock+4 stays mapped. Both handoff endpoints are outside declared functions and intentionally stop as `unknown_call`, not as returned calls. Qualification requires the exact endpoint, complete register/stack state, zero engine error, instruction count (stock 7, fallback 17, admitted 16) and complete provenance (stock 13, fallback 17, admitted 8 total data accesses, with exact projected ordered writes). The isolated caller-write control adds one instruction and one caller-memory store while preserving SP and registers.
+The native wire profile requires eight-byte initial SP, LR equal to its exit and NZCV-only initial flags. A six-instruction, read-only literal prelude establishes the desired seam SP, LR and NZCVQ/GE without changing stack memory. Only the four-byte original push is declared as the stock prefix function; stock+4 stays mapped. Both handoff endpoints are outside declared functions and stop as `unknown_call`. Qualification requires the exact endpoint, complete register/stack state, zero engine error, canonical instruction count (stock7, fallback17, admitted16) and complete provenance (stock13, fallback17, admitted8 total data accesses, with exact projected ordered writes). The current caller-write control adds an isolated `STR r0,[sp]; B actual_seam` stub, two instructions and one caller-memory store, without changing the seam, SP, registers or flags. The historical control added one instruction.
 
 The original #125 backend excludes all register MSR instructions, including the mechanism's legal user flags restoration. E-NATIVE-APSR-MSR-150 independently reviews and qualifies the extension admitting only CPSR flag-field masks 8 and 12. The seam cohort pins that backend's `b51544c6...75da2860` executable identity. A prior host-only input refusal found the linked ELF's 32,944-byte envelope exceeded the harness's 16,384-byte file bound; raising the bounded envelope to 65,536 leaves the exact 56-byte executable section and symbol checks intact. No guest ran in that refused attempt, and the corrected cohort executed once.
+
+### Explicit native artifact binding
+
+Dispatcher and cancellation drivers require `--kernel-elf-sha256`, `--kernel-text-sha256` and `--kernel-syms-sha256` for the selected build directory. They extract `.text` from that ELF, compare the supplied `kernel-text.bin`, and check symbol addresses, sizes and complete function extents against the same ELF. The relinker writes `kernel-text.bin` to a separate output. `inputs.json` records expected and actual identities; existing receipts remain bound to their original artifacts.
+
+```sh
+bazel-bin/replacement/modal_runtime/qualify \
+  --runner "$RUNNER" --build "$BUILD" --out "$DISPATCH_OUT" \
+  --id5 "$ID5" --id5-base 0x00bf1a00 \
+  --kernel-elf-sha256 "$ELF_SHA256" \
+  --kernel-text-sha256 "$TEXT_SHA256" --kernel-syms-sha256 "$SYMS_SHA256"
+bazel-bin/emulation/owned-menu-cases \
+  --runner "$RUNNER" --build "$BUILD" --out "$CANCEL_OUT" \
+  --id5 "$ID5" --id5-base 0x00bf1a00 \
+  --kernel-elf-sha256 "$ELF_SHA256" \
+  --kernel-text-sha256 "$TEXT_SHA256" --kernel-syms-sha256 "$SYMS_SHA256"
+bazel-bin/replacement/modal_runtime/qualify-entry \
+  --runner "$RUNNER" --id5 "$ID5" --kernel-elf "$BUILD/kernel.elf" \
+  --kernel-elf-sha256 "$ELF_SHA256" --out "$ENTRY_OUT"
+```
+
+The emitted-code checker admits CPSR reads and register-form APSR_nzcvq writes. Reads invalidate the destination's abstract value; writes invalidate comparison facts. CPSR control writes, SPSR access, immediate MSR forms, other field masks and PC operands remain rejected. The native backend's separately qualified mask12 support does not broaden this bank checker.
+
+### Modal-only 224 requalification
+
+`E-MODAL224-HOST-QUALIFICATION-150` and `E-MODAL224-NATIVE-LIFECYCLE-150` qualify the separately selected modal-only variant's linked ELF. The default remains223 publications; modal adds one final activation publication. Lifecycle selection refuses explicitly until its three publications and stock veneers are supplied. Group destination and physical-order checks reject malformed selected groups, including identically malformed relocation pairs.
+
+The fresh native cohort executes88 invocations:17 dispatcher pairs and five controls, ten cancellation pairs and four controls, then eight stock-prefix oracles,12 entry cases and five entry controls. Every comparison matches and every control refuses at its intended boundary. ELF, extracted text and symbols are bound explicitly; previous candidate receipts remain unchanged. The synchronous stock+4 boundary preserves the complete expected register/stack state, including full-width controller selection and application flags.
+
+The host checks retain15 passing test targets across the corrected runs, including both actual modal link bases and the default archive identity control. The SDK check phase passes164 tests. The emitted-code checker retains commuted pointer roots without inventing bounds; positive and negative controls distinguish exact declarations, absent declarations, different roots and rootless unknowns. Failed host inputs and their corrections remain retained.
+
+This cohort does not execute a packaged guest route or discharge callback-frame, caller continuation, object initialization, asynchronous writer, alias-fetch or task-identity obligations. The producer and selected package interfaces are implemented, but their existence is not route admission. Natural generic state30 cancellation still needs an identified X-M1 route; wireless NAME remains controller76, not that route.
+
+### Published modal storage obligations
 
 Modal75 storage is loaded image5 data, not an established read-only hardware region. Its cell table spans `[0x00cd1ae4,0x00cd3f8c)`, action table `[0x00d04080,0x00d0452c)` and transition table `[0x00d01370,0x00d01378)`; the next controller-table bases match these upper bounds. Root pointer words are `0x00cf59e4`, `0x00cfe3d4` and `0x00d00268`; width is the halfword at `0x00cd5f0e`. Bank publication deliberately changes cell/action words. The static census reports no resolved direct table store but does not establish absence of stores through unresolved pointers. All 286 computed-store obligations concern the state/event arrays.
 
@@ -189,6 +223,23 @@ E-MODAL-RETAINED-FILM-ROUTE-150 observes a natural stock shooting-menu route wit
 Fixed instruction traces record 25 controller75 contexts, all at state0: event2 four times, event8 once, event13 once and event50 nineteen times. Their action entries are `0x00c6eb44` four times, SET `0x00c72e10` once, BACK `0x00c76650` once and `0x00c7a528` nineteen times. Other observed controllers are 0, 30, 74, 100 and 107. No entry to generic editor cancellation `0x00c77794` occurs. This proves a bounded ordinary-menu route through75, not state30 editor cancellation, callback-frame equivalence or owned dispatch.
 
 The natural wireless NAME menu is not that missing editor route. The [X-M1 manual, page87](https://dl.fujifilm-x.com/support/manual/x/fujifilm_xm1_manual_en.pdf) names WIRELESS SETTINGS → GENERAL SETTINGS → NAME. Its pinned class`0xb5`/row0 action `0x00c7ddac` writes adjacent controller76 state36 at `0x01467620`; its class`0xb6` keyboard uses bufferB and cursor positions9..23. The bufferA state30 producers `0x00c72844` and `0x00c75cdc` instead require class`0x130`/row0 after prior selection classes`0x12e`/`0x12f`. A bounded search of image4/5 literal node headers found no matching stock root. The decoded node scanner excludes kind values above16 and therefore even omits the real wireless NAME node; its omissions do not prove absence. Runtime-built nodes, other images and packed construction remain possible. No natural stock state30 route is established.
+
+### Conditional FILMSIM closure
+
+E-MODAL-FILMSIM-CONDITIONAL-150 runs `modal-closure --diagnostic-filmsim-route` over the pinned resident images, unchanged linked candidate and its published tables. It retains all6,828 controller obligations and reports `admitted=false`. Of46 resolved75 call sites, four have locally known event sets compatible with the route, two have unknown event values and remain possible route entries, and40 are outside only under their local-writer premise. Eleven unresolved controller sites also remain blockers. None of the57 sites proves its captured state/event domain.
+
+| Known compatible call site | Local event values |
+| --- | --- |
+| `0x00c0bb8c` | 2 |
+| `0x00c0bcb0` | 8 |
+| `0x00c0bddc` | 13 |
+| `0x00c0c538` | 49 or50 |
+
+The two resolved sites with unknown event values are `0x00c0c01c` and `0x00c0c0cc`; four known compatible sites are not the complete may-feed set. Local event stores neither establish captured state zero nor exclude intervening asynchronous, reentrant or alias writers.
+
+For state0 and events2/8/13/50, all four published cells have signed high halfword1 and transition slot1 is null. The published action slots are22,1,1,274, producing target set `{0x00c6eb44,0x00a86144,0x00c7a528}` in this bound candidate. Under the explicit entry-domain, root/width/table use-point immutability and linked-semantic-correspondence premises, the dispatcher transition call and direct state store are unreachable. Callback descendants, caller/frame integrity, initial contents, unknown callers and writer/escape obligations are not discharged. The candidate must be recomputed after the action cutover or relocation.
+
+`emulation/fujimod-xm1/src/modal_permit.rs` implements the pure per-core entry/handoff/return bookkeeping, with fixed-depth stacks, full handoff state, saved stock-frame checks and exact return PC/SP. Baseline policy sends every ID to stock+4; scoped policy sends only fullword75 to owned dispatch. Source review accepts this conditional component; no SDK execution qualifies it yet. It admits downward-growing LIFO observations, but same-route execution migrating onto a core already holding a running permit is not detected. Task/scheduler identity and physical fetch coverage remain separate premises, not fail-closed claims.
 
 ### Packaged scoped-hook design
 
@@ -206,9 +257,9 @@ The seven table/root/width spans above reuse the classified Fixed observer. Both
 
 A real write control can reuse an existing table restoration store: in a separate control process, withhold the rollback allowance for one declared table publication while retaining the same Fixed ranges and run the real installer rollback. Acceptance requires the actual CPU-write observation at that publication's physical address and width, its observed value and the intended strict no-write refusal. A missing allowance rejected before execution, a generic failure or a fabricated record is not that control. This avoids adding guest mutation bytes or a generic memory-write RPC. Host/model-bus source-class claims still need their corresponding reviewed SDK controls.
 
-An unconditional fetch ban over the original dispatcher body would reject required non75 fallback, including nested fallback from an owned75 callback. Scoped retirement therefore needs an entry/return-context permit, not just physical Fixed ranges: capture full controller/SP/LR at the shared entry, require75 to reach owned dispatch and non75 to reach stock+4, and permit original-body execution only in the matching live fallback frame. Per-core nested contexts must retire at the exact return PC/SP; an interior entry without a fallback permit refuses. The current fixed trace API and classified physical ranges do not implement that monitor. It is new mechanism code requiring review before a packaged run.
+An unconditional fetch ban over the original dispatcher body would reject required non75 fallback, including nested fallback from an owned75 callback. Scoped retirement therefore needs an entry/return-context permit, not just physical Fixed ranges: capture full controller/SP/LR at the shared entry, require75 to reach owned dispatch and non75 to reach stock+4, and permit original-body execution only in the matching live fallback frame. Per-core nested contexts must retire at the exact return PC/SP; an interior entry without a fallback permit refuses. The pure component above is not yet wired into the fixed trace producer. Canonical instruction points alone do not establish alias-complete physical fetch exclusion.
 
-The mechanical bank gate also needs narrowly admitted flag-save/restore forms and closed computed-call/state-store domains. Declaring the prehook or selecting the modal module does not discharge those domains. The remaining caller/frame, initialization, object-entry and asynchronous premises are unchanged by the retained FILMSIM observation. No packaged hook, phase-aware table guard or context permit is implemented or qualified by this design.
+The mechanical bank gate also needs narrowly admitted flag-save/restore forms and closed computed-call/state-store domains. Declaring the prehook or selecting the modal module does not discharge those domains. The remaining caller/frame, initialization, object-entry and asynchronous premises are unchanged by the retained FILMSIM observation. No packaged hook or phase-aware table guard is implemented or qualified by this design.
 
 
 

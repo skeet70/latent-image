@@ -14,6 +14,8 @@ module Replacement.ModalRuntime.Closure
   , Proof (..)
   , ControllerId (..)
   , buildControllerDiagnostic
+  , RouteBoundary (..)
+  , buildRouteDiagnostic
   , buildProof
   ) where
 
@@ -86,6 +88,28 @@ newtype ControllerId = ControllerId Word32 deriving (Eq, Ord, Show)
 newtype ActionSlot = ActionSlot Word16 deriving (Eq, Ord, Show)
 
 newtype CellIndex = CellIndex Word16 deriving (Eq, Ord, Show)
+
+data RouteBoundary = Filmsim75 deriving (Eq, Show)
+
+newtype RouteState = RouteState Word16 deriving (Eq, Ord)
+
+data RouteEvent = FilmEvent2 | FilmEvent8 | FilmEvent13 | FilmEvent50 deriving (Eq, Ord, Enum, Bounded)
+
+routeEventWord :: RouteEvent -> Word16
+routeEventWord event = case event of
+  FilmEvent2 -> 2
+  FilmEvent8 -> 8
+  FilmEvent13 -> 13
+  FilmEvent50 -> 50
+
+routeStates :: RouteBoundary -> S.Set RouteState
+routeStates Filmsim75 = S.singleton (RouteState 0)
+
+routeEvents :: RouteBoundary -> S.Set RouteEvent
+routeEvents Filmsim75 = S.fromList [minBound .. maxBound]
+
+routeEventWords :: RouteBoundary -> S.Set Word16
+routeEventWords = S.map routeEventWord . routeEvents
 
 -- | A published word the bank owns inside a dispatcher table.
 data Interposition
@@ -266,6 +290,8 @@ instructionCond instruction = case instruction of
   DataProcessing c _ _ _ _ _ -> c
   MoveWide c _ _ -> c
   MoveTop c _ _ -> c
+  ReadStatus c _ -> c
+  WriteApplicationFlags c _ -> c
   ZeroExtend c _ _ _ _ -> c
   Multiply c _ _ _ _ -> c
   Compute c _ -> c
@@ -428,6 +454,8 @@ execute analysis address word instruction regs = case instruction of
               else (plain (setReg rd result regs)) {effectSetsFlags = setsFlags}
   MoveWide _ rd value -> plain (setReg rd (Known value) regs)
   MoveTop _ rd value -> plain (setReg rd (mapKnown (\old -> (value `shiftL` 16) .|. (old .&. 0xffff)) (regAt regs rd)) regs)
+  ReadStatus _ rd -> plain (setReg rd Unknown regs)
+  WriteApplicationFlags _ _ -> (plain regs) {effectSetsFlags = True}
   ZeroExtend _ rd rm rotation width ->
     plain (setReg rd (mapKnown (\v -> rotateR v rotation .&. (bit width - 1)) (readReg address regs rm)) regs)
   Multiply _ rd rm rs accumulator ->
@@ -1272,6 +1300,8 @@ instructionReads instruction = case instruction of
   DataProcessing _ op _ _ rn operand -> Just ([rn | op `notElem` [MOV, MVN]] ++ operandRegs operand)
   MoveWide {} -> Just []
   MoveTop _ rd _ -> Just [rd]
+  ReadStatus {} -> Just []
+  WriteApplicationFlags _ source -> Just [source]
   ZeroExtend _ _ rm _ _ -> Just [rm]
   Multiply _ _ rm rs accumulator -> Just ([rm, rs] ++ maybe [] pure accumulator)
   Load _ _ _ _ rn offset _ -> Just (rn : offsetRegs offset)
@@ -1289,6 +1319,7 @@ instructionWrites instruction = case instruction of
   DataProcessing _ op _ rd _ _ -> [rd | op `notElem` [TST, TEQ, CMP, CMN]]
   MoveWide _ rd _ -> [rd]
   MoveTop _ rd _ -> [rd]
+  ReadStatus _ destination -> [destination]
   ZeroExtend _ rd _ _ _ -> [rd]
   Multiply _ rd _ _ _ -> [rd]
   Load _ width _ rt rn _ indexing -> [rt] ++ [nextReg rt | width == Dual] ++ [rn | indexing /= OffsetOnly]
@@ -1946,16 +1977,162 @@ arrayWrites analysis fact = case (factAddress fact, factSize fact, factValues fa
           Right values -> [Right (ArrayWrite site kind controller (fromIntegral value)) | value <- values]
           Left (knowns, entries) -> [Left (StoreValueUnresolved site kind controller knowns entries)]
 
+-- * Conditional FILMSIM route
+
+routeExtents :: [(String, Word32, Word32)]
+routeExtents =
+  [ ("cell-root", 0x00cf59e4, 0x00cf59e8)
+  , ("action-root", 0x00cfe3d4, 0x00cfe3d8)
+  , ("transition-root", 0x00d00268, 0x00d0026c)
+  , ("width", 0x00cd5f0e, 0x00cd5f10)
+  , ("cells", 0x00cd1ae4, 0x00cd3f8c)
+  , ("actions", 0x00d04080, 0x00d0452c)
+  , ("transitions", 0x00d01370, 0x00d01378)
+  ]
+
+routeExtentsValue :: Value
+routeExtentsValue = object
+  [ "extents" .= [object ["name" .= name, "start" .= hex start, "end" .= hex end] | (name, start, end) <- routeExtents]
+  , "status" .= ("undischarged-use-point-immutability-premise" :: String)
+  ]
+
+routeLayoutMatches :: Memory -> Bool
+routeLayoutMatches memory =
+  and [memoryWord memory root == Just table | (root, table) <- [(0x00cf59e4, 0x00cd1ae4), (0x00cfe3d4, 0x00d04080), (0x00d00268, 0x00d01370)]]
+    && memoryHalf memory 0x00cd5f0e == Just 46
+
+data RouteCell = RouteCell
+  { routeCellEvent :: RouteEvent
+  , routeCellIndex :: CellIndex
+  , routeCellAddress :: Maybe Word32
+  , routeCellWord :: Maybe Word32
+  , routeActionSlot :: Maybe ActionSlot
+  , routeActionTarget :: Maybe Word32
+  , routeHigh :: Maybe Int16
+  , routeTransitionTarget :: Maybe Word32
+  }
+
+routeCell :: Memory -> RouteEvent -> RouteCell
+routeCell memory event =
+  RouteCell event index address word slot action high transition
+ where
+  width = memoryHalf memory (widthCells + 150)
+  index = CellIndex (routeEventWord event * maybe 0 id width)
+  address = do
+    cells <- memoryWord memory (cellPointers + 300)
+    _ <- width
+    let CellIndex cell = index
+        at = cells + 4 * fromIntegral cell
+    if 0x00cd1ae4 <= at && at < 0x00cd3f8c then Just at else Nothing
+  word = address >>= memoryWord memory
+  slot = ActionSlot . fromIntegral <$> word
+  high = fromIntegral . (`shiftR` 16) <$> word
+  action = do
+    actions <- memoryWord memory (actionPointers + 300)
+    ActionSlot actionIndex <- slot
+    let at = actions + 4 * fromIntegral actionIndex
+    if 0x00d04080 <= at && at < 0x00d0452c then memoryWord memory at else Nothing
+  transition = do
+    transitions <- memoryWord memory (transitionPointers + 300)
+    transitionIndex <- high
+    let at = transitions + 4 * fromIntegral transitionIndex
+    if transitionIndex > 0 && 0x00d01370 <= at && at < 0x00d01378 then memoryWord memory at else Nothing
+
+routeCellReadable :: RouteCell -> Bool
+routeCellReadable cell = isJust (routeCellWord cell) && isJust (routeActionTarget cell)
+  && maybe False (\high -> high <= 0 || isJust (routeTransitionTarget cell)) (routeHigh cell)
+
+routeCellValue :: RouteCell -> Value
+routeCellValue cell = object
+  [ "state" .= (0 :: Word16)
+  , "event" .= routeEventWord (routeCellEvent cell)
+  , "index" .= let CellIndex index = routeCellIndex cell in index
+  , "address" .= fmap hex (routeCellAddress cell)
+  , "word" .= fmap hex (routeCellWord cell)
+  , "action_index" .= fmap (\(ActionSlot slot) -> slot) (routeActionSlot cell)
+  , "action_target" .= fmap hex (routeActionTarget cell)
+  , "high_signed" .= routeHigh cell
+  , "transition_index" .= (routeHigh cell >>= \high -> if high > 0 then Just high else Nothing)
+  , "transition_target" .= fmap hex (routeTransitionTarget cell)
+  , "dispatcher_state_write" .= (routeHigh cell >>= \high -> if high <= 0 then Just (fromIntegral (negate (fromIntegral high :: Int32)) :: Word16) else Nothing)
+  ]
+
+type HalfDomain = Maybe (S.Set Word16)
+
+-- | Only stores in the straight-line predecessor window establish a domain.
+localHalfDomain :: Analysis -> Word32 -> Word32 -> HalfDomain
+localHalfDomain analysis site half = go (windowStart analysis site) unknownWorlds Nothing
+ where
+  go address worlds domain
+    | address >= site = domain
+    | otherwise = case fetch analysis address of
+        Nothing -> Nothing
+        Just (word, instruction) ->
+          let outcomes =
+                [ if condPass (instructionCond instruction) flags
+                    then update domain (execute analysis address word instruction regs)
+                    else domain
+                | (regs, flags) <- S.toList worlds
+                ]
+              (_, next) = stepWorlds analysis address word instruction worlds
+           in if S.null next || S.size next > 8192 then Nothing else go (address + 4) next (joinDomains outcomes)
+  update domain effect
+    | not (effectModeled effect) = Nothing
+    | Call _ <- effectFlow effect = Nothing
+    | otherwise = foldl' store domain (effectAccesses effect)
+  store domain access
+    | not (accessStore access) = domain
+    | Nothing <- accessAddress access = Nothing
+    | Just address <- accessAddress access
+    , toInteger address < toInteger half + 2
+    , toInteger address + toInteger (accessSize access) > toInteger half =
+        case accessValues access of
+          [Known value]
+            | address <= half && toInteger address + toInteger (accessSize access) >= toInteger half + 2 ->
+                Just (S.singleton (fromIntegral (value `shiftR` (8 * fromIntegral (half - address)))))
+          _ -> Nothing
+    | otherwise = domain
+  joinDomains domains
+    | null domains || any (not . isJust) domains = Nothing
+    | otherwise = Just (S.unions [values | Just values <- domains])
+
+routeCallerValue :: Analysis -> RouteBoundary -> Word32 -> Either ([Word32], S.Set Entry) [Word32] -> Value
+routeCallerValue analysis boundary site controllers = object
+  [ "site" .= hex site
+  , "controller_resolution" .= either (const ("unknown" :: String)) (const "resolved") controllers
+  , "controllers" .= either fst id controllers
+  , "controller_entries" .= either (map entryValue . S.toList . snd) (const []) controllers
+  , "state" .= fmap S.toList states
+  , "event" .= fmap S.toList events
+  , "classification" .= classification
+  , "captured_domain_proven" .= False
+  , "facts_scope" .= ("straight-line local stores; unknown incoming memory; no asynchronous or alias-writer discharge" :: String)
+  ]
+ where
+  states = localHalfDomain analysis site (stateCells + 150)
+  events = localHalfDomain analysis site (eventCells + 150)
+  stateDomain = S.fromList [state | RouteState state <- S.toList (routeStates boundary)]
+  disjoint allowed = maybe False (S.null . S.intersection allowed)
+  classification :: String
+  classification = case controllers of
+    Left _ -> "unknown-controller-blocker"
+    Right _
+      | disjoint stateDomain states || disjoint (routeEventWords boundary) events -> "outside-route-under-local-writer-premise"
+      | otherwise -> "may-feed-route-not-proven"
+
 data Target = RetainedTarget Word32 | OwnedTarget String Word32 deriving (Eq, Ord)
 
 buildProof :: Inputs -> Proof
-buildProof = buildProofWithin Nothing
+buildProof = buildProofWithin Nothing Nothing
 
 buildControllerDiagnostic :: [ControllerId] -> Inputs -> Proof
-buildControllerDiagnostic controllers = buildProofWithin (Just (S.fromList [index | ControllerId index <- controllers]))
+buildControllerDiagnostic controllers = buildProofWithin (Just (S.fromList [index | ControllerId index <- controllers])) Nothing
 
-buildProofWithin :: Maybe (S.Set Word32) -> Inputs -> Proof
-buildProofWithin scope inputs =
+buildRouteDiagnostic :: RouteBoundary -> Inputs -> Proof
+buildRouteDiagnostic boundary = buildProofWithin (Just (S.singleton 75)) (Just boundary)
+
+buildProofWithin :: Maybe (S.Set Word32) -> Maybe RouteBoundary -> Inputs -> Proof
+buildProofWithin scope route inputs =
   Proof
     (scope == Nothing && null obligations && null refusals)
     ( object
@@ -1968,6 +2145,7 @@ buildProofWithin scope inputs =
               , "pending_fallback_obligations" .= (["entry routing and exact stock handoff, including flags and temporary stack lifetime"] :: [String])
               , "conservative_residuals" .= ("unattributed escapes, computed accesses, initial-array and constant-coverage obligations remain" :: String)
               ]) scope
+        , "route_diagnostic" .= fmap routeValue route
         , "dispatcher"
             .= object
               [ "stock_entry" .= hex dispatcherEntry
@@ -2148,8 +2326,16 @@ buildProofWithin scope inputs =
   allStockClosures = closureOver censusControllers stockMemory
   closures = filter (active . controllerIndex) allClosures
   stockClosures = filter (active . controllerIndex) allStockClosures
-  protectedSet = protect (maybe (S.fromList [0 .. controllerCount - 1]) id scope) (closures ++ stockClosures)
-  censusProtectedSet = protect (S.fromList [0 .. controllerCount - 1]) (allClosures ++ allStockClosures)
+  routeClosures =
+    [ controllerClosure memory 75 (routeEventWords boundary) (S.fromList [state | RouteState state <- S.toList (routeStates boundary)])
+    | boundary <- maybe [] pure route
+    ]
+  routeProtected = S.fromList [half | _ <- maybe [] pure route, (_, start, end) <- routeExtents, half <- halves start (end - start)]
+  extendProtected protected = Protected
+    (S.union routeProtected (protectedEntries protected))
+    (S.union routeProtected (protectedObjects protected))
+  protectedSet = extendProtected (protect (maybe (S.fromList [0 .. controllerCount - 1]) id scope) (closures ++ stockClosures ++ routeClosures))
+  censusProtectedSet = extendProtected (protect (S.fromList [0 .. controllerCount - 1]) (allClosures ++ allStockClosures ++ routeClosures))
   tableLow = S.findMin (protectedEntries censusProtectedSet) - 0x1000
   tableHigh = S.findMax (protectedEntries censusProtectedSet) + 0x1004
   tableTracking =
@@ -2229,6 +2415,48 @@ buildProofWithin scope inputs =
       ++ concatMap controllerIssues closures
       ++ [o | Left o <- classified]
       ++ [InitialArrayContents, UncoveredConstantForms]
+  routeValue boundary =
+    let cells = map (routeCell memory) (S.toList (routeEvents boundary))
+        complete = all routeCellReadable cells && routeLayoutMatches memory
+        targetIssues =
+          [ issue
+          | cell <- cells
+          , target <- maybe [] pure (routeActionTarget cell) ++ maybe [] pure (routeTransitionTarget cell)
+          , Just (Left issue) <- [classify 75 target]
+          ]
+        noStore = complete && all (maybe False (> 0) . routeHigh) cells
+        noTransition = complete && all (\cell -> maybe False (> 0) (routeHigh cell) && routeTransitionTarget cell == Just 0) cells
+     in object
+          [ "boundary" .= ("filmsim75-state0-events2-8-13-50" :: String)
+          , "admitted" .= False
+          , "controller" .= (75 :: Word32)
+          , "states" .= ([0] :: [Word16])
+          , "events" .= S.toList (routeEventWords boundary)
+          , "layout_matches" .= routeLayoutMatches memory
+          , "immutable_extents" .= routeExtentsValue
+          , "cells" .= map routeCellValue cells
+          , "conditional_conclusions"
+              .= object
+                [ "table_reads_complete" .= complete
+                , "computed_targets_classified" .= (complete && null targetIssues)
+                , "action_targets" .= map hex (S.toList (S.fromList [target | cell <- cells, Just target <- [routeActionTarget cell], target /= 0]))
+                , "transition_targets" .= map hex (S.toList (S.fromList [target | cell <- cells, Just target <- [routeTransitionTarget cell], target /= 0]))
+                , "dispatcher_state_store_unreachable" .= noStore
+                , "transition_call_unreachable" .= noTransition
+                , "all_high_halfwords_one" .= (complete && all ((== Just 1) . routeHigh) cells)
+                , "linked_dispatcher_path_correspondence_discharged" .= False
+                , "target_issues" .= map obligationValue targetIssues
+                ]
+          , "callers" .= [routeCallerValue analysis boundary site result | (site, result) <- callerResults, either (const True) (elem 75) result]
+          , "undischarged_premises"
+              .= ( [ "Every admitted capture uses fullword controller 75, state 0 and an event in {2,8,13,50}; local caller stores do not prove the captured state."
+                   , "All three pointer roots, the width halfword and the full declared table extents retain their published values through every use-point read, including across prehook, action, reentry and asynchronous execution."
+                   , "The linked dispatcher computed-call and state-store paths correspond to the recovered dispatcher semantics; this diagnostic does not prove compiled control flow."
+                   , "Selected actions, retained services and callback descendants satisfy their own caller/frame, writer, escape and computed-reference obligations."
+                   , "Unknown callers, initial-array contents, unattributed writers/escapes and uncovered constant forms remain the enclosing controller diagnostic's obligations."
+                   ] :: [String])
+          , "discharges_controller_obligations" .= False
+          ]
 
 -- | The two stock function openings: a push that saves lr, or a single
 -- register stored to the pre-decremented sp.

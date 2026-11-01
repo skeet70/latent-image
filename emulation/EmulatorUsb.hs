@@ -30,6 +30,13 @@ module EmulatorUsb
   , emulatorWatchObservation
   , emulatorExecutionWatchBegin
   , emulatorWatchStateRaw
+  , ModalResponse (..)
+  , emulatorModalObservationBegin
+  , emulatorModalObservationReport
+  , emulatorModalObservationEnd
+  , bridgeModalObservationBegin
+  , bridgeModalObservationReport
+  , bridgeModalObservationEnd
   , emulatorPreservationBegin
   , emulatorPreservationState
   , emulatorMediaState
@@ -46,6 +53,7 @@ import qualified Data.ByteString.Char8 as C
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Emulation.PreservationObservation
+import Emulation.ModalObservation
 import Emulation.WatchObservation
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (shiftL, (.|.))
@@ -107,8 +115,11 @@ rpc :: Emulator -> Value -> IO (M.KeyMap Value)
 rpc = bridgeRpc . exchangeLine
 
 watchRpc :: Emulator -> Value -> IO Value
-watchRpc emulator request = do
-  line <- exchangeLine emulator (encode request)
+watchRpc = bridgeWatchRpc . exchangeLine
+
+bridgeWatchRpc :: BridgeExchange -> Value -> IO Value
+bridgeWatchRpc exchange request = do
+  line <- exchange (encode request)
   pure $ case eitherDecodeStrict' line of
     Left problem -> object ["wire_bytes" .= B.unpack line, "decode_error" .= problem]
     Right (Object fields) | M.lookup "ok" fields == Just (Bool True) -> Object (M.delete "ok" fields)
@@ -392,6 +403,46 @@ emulatorExecutionWatchBegin emulator protected forbidden limit = watchRpc emulat
 
 emulatorWatchStateRaw :: Emulator -> IO Value
 emulatorWatchStateRaw emulator = watchRpc emulator (object ["command" .= String "watch-state"])
+
+
+data ModalResponse = ModalResponse
+  { modalRawResponse :: Value
+  , modalParsedResponse :: Either String ModalReport
+  }
+
+emulatorModalObservationBegin :: Emulator -> ModalRequest -> IO ModalResponse
+emulatorModalObservationBegin = bridgeModalObservationBegin . exchangeLine
+
+bridgeModalObservationBegin :: BridgeExchange -> ModalRequest -> IO ModalResponse
+bridgeModalObservationBegin exchange request = do
+  response <- modalRpc exchange (modalRequestLimit request) (modalBeginRequestJson request)
+  pure response { modalParsedResponse = do
+    report <- modalParsedResponse response
+    checkModalBegin request report
+    pure report }
+
+emulatorModalObservationReport :: Emulator -> ModalLimit -> IO ModalResponse
+emulatorModalObservationReport = bridgeModalObservationReport . exchangeLine
+
+bridgeModalObservationReport :: BridgeExchange -> ModalLimit -> IO ModalResponse
+bridgeModalObservationReport exchange limit =
+  modalRpc exchange limit (object ["command" .= String "modal-observation-report"])
+
+emulatorModalObservationEnd :: Emulator -> ModalLimit -> IO ModalResponse
+emulatorModalObservationEnd = bridgeModalObservationEnd . exchangeLine
+
+bridgeModalObservationEnd :: BridgeExchange -> ModalLimit -> IO ModalResponse
+bridgeModalObservationEnd exchange limit = do
+  response <- modalRpc exchange limit (object ["command" .= String "modal-observation-end"])
+  pure response { modalParsedResponse = do
+    report <- modalParsedResponse response
+    checkModalEnd report
+    pure report }
+
+modalRpc :: BridgeExchange -> ModalLimit -> Value -> IO ModalResponse
+modalRpc exchange limit request = do
+  raw <- bridgeWatchRpc exchange request
+  pure (ModalResponse raw (parseModalReport limit raw))
 
 emulatorPreservationBegin :: Emulator -> PreservationRanges -> IO PreservationAck
 emulatorPreservationBegin emulator ranges = do

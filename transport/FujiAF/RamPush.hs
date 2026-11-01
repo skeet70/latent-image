@@ -8,7 +8,7 @@ module FujiAF.RamPush
   , callbackTablePointerAddress, callbackTableAddress, callbackStockWord
   , queryOutputAddress, configGateIndex, mailboxBytes
   , reviewedAllocationSize, installerAbiVersion, publicationCount, setupCount, activationCount
-  , PayloadKind(..), Payload(..), bankD3Payload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload, experimentHookCapacity, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
+  , PayloadKind(..), Payload(..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload, experimentHookCapacity, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
   , readRamPushManifest, parseRamPushManifest, readRamAllocState, readRetainedAllocation, readRamPushState
   , consumedMarkerPath, writeAllocStateFile, writeStateFile
   , ramAllocArguments, ramPushArguments, ramFreeArguments, ramUnloadArguments, ramRelinkArguments
@@ -55,6 +55,8 @@ import FujiAF.Transport
 import qualified FujiAF.Broker as P
 import RamPushToolchain (RamPushToolchain(..), ramPushToolchain)
 import BankAllowlist (Report, checkBankFile, renderFinding, reportValue, violations)
+import BankAllowlistComposition (bankAllowlistSourcePaths, composeBankAllowlist)
+import qualified RamPushLayout as Layout
 
 newtype Address = Address { unAddress :: Word32 } deriving (Eq, Ord, Show)
 newtype WordValue = WordValue { unWordValue :: Word32 } deriving (Eq, Show)
@@ -145,7 +147,7 @@ data ReviewedContract = ReviewedContract
   , reviewedPublicationContractDigest :: String
   }
 
-data PayloadKind = RecipeBankD3 | ClassicChrome | ClassicChromeIcon | UsbToggle | AfRing | Experiment deriving (Eq, Show)
+data PayloadKind = RecipeBankD3 | RecipeBankModal75 | RecipeBankLifecycle | RecipeBankModalLifecycle | ClassicChrome | ClassicChromeIcon | UsbToggle | AfRing | Experiment deriving (Eq, Show)
 
 -- | What a payload kind's relink links, and the allocation, ABI word, counts
 -- and installer start it has. A runtime's allocation size names its kind.
@@ -162,7 +164,7 @@ data Payload = Payload
   , payloadRelinkBuilder :: FilePath
   , payloadBuildRoot :: FilePath
   , payloadRelinkInputs :: [(String,FilePath)]
-  , payloadLinksBank :: Bool
+  , payloadBankVariant :: Maybe Layout.BankVariant
   }
 
 bankD3Payload, classicChromePayload, classicChromeIconPayload :: Payload
@@ -191,8 +193,36 @@ bankD3Payload = Payload
       , ("CC_ID5","private-data/analysis/classic-chrome-patch/candidate-build-1/patched-id5.bin")
       , ("CC_PLAIN","private-data/analysis/classic-chrome-patch/candidate-build-1/patched-plain.bin")
       ]
-  , payloadLinksBank = True
+  , payloadBankVariant = Just Layout.standardBankVariant
   }
+
+bankModal75Payload :: Payload
+bankModal75Payload = bankD3Payload
+  { payloadKind = RecipeBankModal75
+  , payloadAllocationSize = fromIntegral (Layout.runtimeAllocationSizeFor Layout.modalScopedBankVariant)
+  , payloadActivationCount = Layout.publicationActivationCountFor Layout.modalScopedBankVariant
+  , payloadRelinkScript = "build-recipe-bank-modal-ram.sh"
+  , payloadBankVariant = Just Layout.modalScopedBankVariant
+  }
+
+bankLifecyclePayload :: Payload
+bankLifecyclePayload = bankD3Payload
+  { payloadKind = RecipeBankLifecycle
+  , payloadAllocationSize = fromIntegral (Layout.runtimeAllocationSizeFor Layout.lifecycleBankVariant)
+  , payloadActivationCount = Layout.publicationActivationCountFor Layout.lifecycleBankVariant
+  , payloadRelinkScript = "build-recipe-bank-lifecycle-ram.sh"
+  , payloadBankVariant = Just Layout.lifecycleBankVariant
+  }
+
+bankModalLifecyclePayload :: Payload
+bankModalLifecyclePayload = bankD3Payload
+  { payloadKind = RecipeBankModalLifecycle
+  , payloadAllocationSize = fromIntegral (Layout.runtimeAllocationSizeFor Layout.modalLifecycleBankVariant)
+  , payloadActivationCount = Layout.publicationActivationCountFor Layout.modalLifecycleBankVariant
+  , payloadRelinkScript = "build-recipe-bank-modal-lifecycle-ram.sh"
+  , payloadBankVariant = Just Layout.modalLifecycleBankVariant
+  }
+
 -- | reports/classic-chrome-patch.md section 8.2: 84 setup and 47 activation
 -- publications; menu/classic_chrome_ram.S takes 0x184 bytes at the base.
 classicChromePayload = Payload
@@ -216,7 +246,7 @@ classicChromePayload = Payload
       , ("CC_ID5","private-data/analysis/classic-chrome-patch/candidate-build-1/patched-id5.bin")
       , ("CC_PLAIN","private-data/analysis/classic-chrome-patch/candidate-build-1/patched-plain.bin")
       ]
-  , payloadLinksBank = False
+  , payloadBankVariant = Nothing
   }
 -- | The Classic Chrome payload's publications plus the icon's, built by the
 -- Classic Chrome relink script with the icon builder; the glyph record and
@@ -244,7 +274,7 @@ usbTogglePayload = Payload
   , payloadRelinkBuilder = "build-usb-toggle-ram"
   , payloadBuildRoot = "private-data/analysis/usb-toggle/ram-push"
   , payloadRelinkInputs = [("RC0_ID5","private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin")]
-  , payloadLinksBank = False
+  , payloadBankVariant = Nothing
   }
 
 afRingPayload :: Payload
@@ -260,7 +290,7 @@ afRingPayload = Payload
   , payloadRelinkBuilder = "build-af-ring-ram"
   , payloadBuildRoot = "private-data/analysis/x-m1-1.50/af-ring/ram-push"
   , payloadRelinkInputs = [("RC0_ID5","private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin")]
-  , payloadLinksBank = False
+  , payloadBankVariant = Nothing
   }
 
 -- | Hook slots an experiment payload has; each hook is one setup and one
@@ -288,11 +318,11 @@ experimentPayload name = Payload
       , ("STOCK_ID5", "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin")
       , ("STOCK_PLAIN", "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin")
       ]
-  , payloadLinksBank = False
+  , payloadBankVariant = Nothing
   }
 
 payloads :: [Payload]
-payloads = [bankD3Payload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload ""]
+payloads = [bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload ""]
 
 payloadOfSize :: Int -> Maybe Payload
 payloadOfSize size = case filter ((== size) . payloadAllocationSize) payloads of
@@ -301,6 +331,19 @@ payloadOfSize size = case filter ((== size) . payloadAllocationSize) payloads of
 
 requirePayload :: Int -> IO Payload
 requirePayload size = maybe (P.reject ("allocation size "++show size++" is no RAM-push payload's extent")) pure (payloadOfSize size)
+
+unreviewedBankRefusal :: PayloadKind -> Maybe String
+unreviewedBankRefusal kind = case kind of
+  RecipeBankModal75 -> Just "scoped modal-75 payload has no approved live reviewed contract; use the host-only --ram-push-modal-scoped --unreviewed-relink emulator path"
+  RecipeBankLifecycle -> Just "lifecycle payload has no approved live reviewed contract; use the host-only --ram-push-lifecycle --unreviewed-relink emulator path"
+  RecipeBankModalLifecycle -> Just "modal lifecycle payload has no approved live reviewed contract; use the host-only --ram-push-lifecycle --ram-push-modal-scoped --unreviewed-relink emulator path"
+  _ -> Nothing
+
+requireLivePayload :: Int -> IO Payload
+requireLivePayload size = do
+  payload <- requirePayload size
+  maybe (pure ()) P.reject (unreviewedBankRefusal (payloadKind payload))
+  pure payload
 
 payloadPublicationCount :: Payload -> Int
 payloadPublicationCount payload = payloadSetupCount payload + payloadActivationCount payload
@@ -467,7 +510,7 @@ parseRamPushManifest path document runtime = do
   require (hexDigest digest) "runtime_sha256 must be lowercase SHA256"
   identity <- case field value "source_identity" of
     Object object -> do
-      require (not (M.null object) && M.size object <= 64) "bounded nonempty source_identity required"
+      require (not (M.null object) && M.size object <= 68) "bounded nonempty source_identity required"
       forM (M.toList object) $ \(key,item) -> do
         name <- pure (K.toString key)
         hash <- text item 64
@@ -511,9 +554,9 @@ publicationContractDigest publications =
 
 validateReviewedContract :: ReviewedContract -> RamPushManifest -> IO ()
 validateReviewedContract contract manifest = do
+  payload <- requireLivePayload (allocationSize manifest)
   require (sort (sourceIdentity manifest) == sort (reviewedSourceIdentity contract)) "manifest source identity differs from the compiled reviewed contract"
   require (publicationContractDigest (manifestPublications manifest) == reviewedPublicationContractDigest contract) "manifest publication contract differs from the compiled reviewed contract"
-  payload <- requirePayload (allocationSize manifest)
   require (manifestEntries manifest == payloadEntries payload (allocationBase manifest)) "manifest entry offsets differ from the compiled reviewed layout"
 
 requireReviewedBytes :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> IO ()
@@ -980,7 +1023,9 @@ writeAllocStateFile directory state = do
   pure path
 
 runRamAlloc :: Int -> Clock -> UsbApi -> FilePath -> IO RamAllocOutcome
-runRamAlloc = runRamAllocWith xm1PeerCacheAvailability
+runRamAlloc size clock api directory
+  | Just reason <- payloadOfSize size >>= unreviewedBankRefusal . payloadKind = pure (RamAllocRefused reason)
+  | otherwise = runRamAllocWith xm1PeerCacheAvailability size clock api directory
 
 runRamAllocWith :: PeerCacheAvailability -> Int -> Clock -> UsbApi -> FilePath -> IO RamAllocOutcome
 runRamAllocWith availability size clock api directory
@@ -1075,7 +1120,10 @@ runfilesRelinker payload = do
   executable <- getExecutablePath
   let firmware = (executable ++ ".runfiles") </> "_main" </> "host" </> "firmware"
   rust <- case payloadKind payload of
-    RecipeBankD3 -> Just <$> (RustBankInputs <$> rustServiceObject <*> rustServiceFacts)
+    RecipeBankD3 -> Just <$> (RustBankInputs <$> rustServiceObject RecipeBankD3 <*> rustServiceFacts)
+    RecipeBankModal75 -> Just <$> (RustBankInputs <$> rustServiceObject RecipeBankModal75 <*> rustServiceFacts)
+    RecipeBankLifecycle -> Just <$> (RustBankInputs <$> rustServiceObject RecipeBankLifecycle <*> rustServiceFacts)
+    RecipeBankModalLifecycle -> Just <$> (RustBankInputs <$> rustServiceObject RecipeBankModalLifecycle <*> rustServiceFacts)
     _ -> pure Nothing
   let relinker = RamPushRelinker (firmware </> payloadRelinkScript payload) (firmware </> payloadRelinkBuilder payload) ramPushToolchain payload rust
   forM_ [relinkerScript relinker, relinkerBuilder relinker] $ \path -> do
@@ -1084,10 +1132,15 @@ runfilesRelinker payload = do
   pure relinker
 
 -- | The bank's compiled Rust service object, from this binary's runfiles.
-rustServiceObject :: IO FilePath
-rustServiceObject = do
+rustServiceObject :: PayloadKind -> IO FilePath
+rustServiceObject kind = do
   executable <- getExecutablePath
-  let path = (executable ++ ".runfiles") </> "_main" </> "replacement" </> "bank" </> "bank.a"
+  let archive = case kind of
+        RecipeBankModal75 -> "bank-modal.a"
+        RecipeBankLifecycle -> "bank-lifecycle.a"
+        RecipeBankModalLifecycle -> "bank-modal-lifecycle.a"
+        _ -> "bank.a"
+      path = (executable ++ ".runfiles") </> "_main" </> "replacement" </> "bank" </> archive
   present <- doesFileExist path
   require present ("the bank's Rust service object is missing from this binary's runfiles: " ++ path)
   pure path
@@ -1128,15 +1181,18 @@ allowlistReceipt (AllowlistOverridden (OverrideReason reason) report) = case rep
   other -> other
 allowlistReceipt NoBankCode = Object (M.fromList [("result", String "not-applicable"), ("reason", String "the payload links no recipe-bank object")])
 
-bankAllowlistPath :: FilePath
-bankAllowlistPath = "menu/recipe_bank_allowlist.json"
-
--- | Checks the build's kernel.elf against the workspace allowlist the
--- manifest's source identity names.
-checkRelinkedBank :: AllowlistPolicy -> FilePath -> FilePath -> RamPushManifest -> IO AllowlistOutcome
-checkRelinkedBank policy root output manifest = do
-  allowlist <- B.readFile (root </> bankAllowlistPath)
-  require (lookup bankAllowlistPath (sourceIdentity manifest) == Just (sha256 allowlist)) "bank allowlist differs from the manifest's source identity"
+-- | Checks kernel.elf against the selected source-bound allowlist composition.
+checkRelinkedBank :: Layout.BankVariant -> AllowlistPolicy -> FilePath -> FilePath -> RamPushManifest -> IO AllowlistOutcome
+checkRelinkedBank variant policy root output manifest = do
+  sources <- forM (bankAllowlistSourcePaths variant) $ \path -> do
+    bytes <- B.readFile (root </> path)
+    require (B.length bytes <= 1024*1024) "bank allowlist source exceeds its size bound"
+    require (lookup path (sourceIdentity manifest) == Just (sha256 bytes)) "bank allowlist differs from the manifest's source identity"
+    pure (path, bytes)
+  expected <- either (P.reject . ("bank allowlist composition failed before USB: " ++)) pure (composeBankAllowlist variant sources)
+  allowlist <- B.readFile (output </> "bank-allowlist-input.json")
+  require (allowlist == expected) "bank allowlist output differs from the selected source composition"
+  require (lookup "bank_allowlist_composed_sha256" (sourceIdentity manifest) == Just (sha256 allowlist)) "composed bank allowlist differs from the manifest's source identity"
   elf <- B.readFile (output </> "kernel.elf")
   require (B.length allowlist <= 1024*1024 && B.length elf <= 4*1024*1024) "bank allowlist or kernel.elf exceeds its size bound"
   report <- either (P.reject . ("bank ELF allowlist check failed before USB: "++)) pure (checkBankFile allowlist elf)
@@ -1154,13 +1210,16 @@ pinnedReviewedManifest contract payload base = withPinnedReviewedBuild contract 
 
 withPinnedReviewedBuild :: ReviewedContract -> Payload -> Address -> (PinnedBuild -> IO a) -> IO a
 withPinnedReviewedBuild contract payload base action = do
+  _ <- requireLivePayload (payloadAllocationSize payload)
   relinker <- runfilesRelinker payload
   withPinnedReviewedBuildUsing contract relinker base action
 
 withPinnedReviewedBuildUsing :: ReviewedContract -> RamPushRelinker -> Address -> (PinnedBuild -> IO a) -> IO a
-withPinnedReviewedBuildUsing contract relinker base action = withRelinkedBuildUsing relinker EnforceAllowlist base $ \built -> do
-  validateReviewedContract contract (pinnedManifest built)
-  action built
+withPinnedReviewedBuildUsing contract relinker base action = do
+  _ <- requireLivePayload (payloadAllocationSize (relinkerPayload relinker))
+  withRelinkedBuildUsing relinker EnforceAllowlist base $ \built -> do
+    validateReviewedContract contract (pinnedManifest built)
+    action built
 
 -- | The relinker's output without 'validateReviewedContract', after the bank
 -- ELF allowlist check under `policy` for a payload that links the bank.
@@ -1198,7 +1257,9 @@ withRelinkedBuildUsing relinker policy base action = withReviewedBuildDirectory 
   reviewedRuntime <- privateRegular "reviewed RAM-push runtime" reviewedRuntimePath (512*1024)
   reviewed <- parseRamPushManifest reviewedManifestPath reviewedDocument reviewedRuntime
   require (allocationSize reviewed == payloadAllocationSize payload) "relinked manifest is not the relinker's payload"
-  allowlist <- if payloadLinksBank payload then checkRelinkedBank policy root output reviewed else pure NoBankCode
+  allowlist <- case payloadBankVariant payload of
+    Just variant -> checkRelinkedBank variant policy root output reviewed
+    Nothing -> pure NoBankCode
   action (PinnedBuild reviewed reviewedDocument reviewedRuntime output allowlist)
   where payload = relinkerPayload relinker
 
@@ -1215,8 +1276,8 @@ authenticateReviewedManifest contract allocation supplied = do
 
 authenticateReviewedState :: ReviewedContract -> RamPushState -> IO ()
 authenticateReviewedState contract state = do
+  payload <- requireLivePayload (stateSize state)
   require (publicationContractDigest (statePublications state) == reviewedPublicationContractDigest contract) "installed state publication contract differs from the compiled reviewed contract"
-  payload <- requirePayload (stateSize state)
   require (stateEntries state == payloadEntries payload (stateBase state)) "installed state entry offsets differ from the compiled reviewed layout"
   withPinnedReviewedBuild contract payload (stateBase state) $ \pinned ->
     requireReviewedState state (pinnedManifest pinned)
@@ -1225,6 +1286,7 @@ authenticateReviewedState contract state = do
 -- `ram-push-manifest.json` and `runtime.bin`, mode 0600; returns the manifest path.
 runRamRelink :: ReviewedContract -> RetainedAllocation -> FilePath -> IO FilePath
 runRamRelink contract retained directory = do
+  _ <- requireLivePayload (allocSize (retainedAllocation retained))
   requireUnconsumed retained
   payload <- requirePayload (allocSize (retainedAllocation retained))
   withPinnedReviewedBuild contract payload (allocBase (retainedAllocation retained)) $ \pinned -> do
@@ -1236,7 +1298,7 @@ runRamRelink contract retained directory = do
 runRamPush :: ReviewedContract -> RetainedAllocation -> RamPushManifest -> Clock -> UsbApi -> FilePath -> IO RamPushOutcome
 runRamPush contract retained supplied clock api directory = do
   let allocation = retainedAllocation retained
-  authenticated <- try (requireUnconsumed retained >> authenticateReviewedManifest contract allocation supplied)
+  authenticated <- try (requireLivePayload (allocSize allocation) >> requireUnconsumed retained >> authenticateReviewedManifest contract allocation supplied)
   case authenticated of
     Left (failure::SomeException) -> pure (RamPushRefused (displayException failure))
     Right manifest -> runRamPushWith xm1PeerCacheAvailability allocation manifest clock api directory
@@ -1315,7 +1377,7 @@ cleanupHost held api live = do
 
 runRamFree :: RetainedAllocation -> Clock -> UsbApi -> FilePath -> IO RamFreeOutcome
 runRamFree retained clock api directory = do
-  unconsumed <- try (requireUnconsumed retained)
+  unconsumed <- try (requireLivePayload (allocSize (retainedAllocation retained)) >> requireUnconsumed retained)
   case unconsumed of
     Left (failure::SomeException) -> pure (RamFreeRefused (displayException failure))
     Right () -> do

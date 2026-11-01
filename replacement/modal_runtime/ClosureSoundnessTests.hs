@@ -6,7 +6,7 @@ import Control.Monad (forM, unless)
 import Data.Aeson (Value (..))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import Data.Bits (shiftR)
+import Data.Bits (shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -562,6 +562,90 @@ main = do
         (\entry -> field "kind" entry == Just (text "computed-index-store") && field "site" entry == Just (text "0x0040010c") && field "into" entry == Just (text "dispatcher table"))
         (array "obligations" (scoped 75))
   unless (retainsWrite (scoped 0) && not (retainsWrite (scoped 75)) && only75 && retainsUnknownOffset) exitFailure
+  routeSoundness regions
+
+-- | Synthetic table words and A32 producers, not captured firmware bytes.
+routeSoundness :: [Region] -> IO ()
+routeSoundness existing = do
+  let input = Inputs regions [] []
+      report publications = proofValue (buildRouteDiagnostic Filmsim75 input {inputPublications = publications})
+      base = report []
+      route document = maybe Null id (field "route_diagnostic" document)
+      conclusions document = maybe Null id (field "conditional_conclusions" (route document))
+      conclusion key document = field key (conclusions document) == Just (Bool True)
+      callerAt site document = [entry | entry <- array "callers" (route document), field "site" entry == Just (text (hex site))]
+      classification site expected document = any (\entry -> field "classification" entry == Just (text expected)) (callerAt site document)
+      highMutation = report [Publication 0x00cd1c54 0x00010016 0xffff0016]
+      zeroHigh = report [Publication 0x00cd1c54 0x00010016 0x00000016]
+      rootMutation = report [Publication 0x00cf59e4 0x00cd1ae4 0x00cd1ae8]
+      widthMutation = report [Publication 0x00cd5f0c 0x002e0000 0x002f0000]
+      actionMutation = report [Publication 0x00d040d8 0x00600000 0x00dead00]
+      transitionMutation = report [Publication 0x00d01374 0 0x00600030]
+      hasObligation kind site document = any
+        (\entry -> field "kind" entry == Just (text kind) && field "site" entry == Just (text (hex site)))
+        (array "obligations" document)
+      hasRefusal kind site document = any
+        (\entry -> field "kind" entry == Just (text kind) && field "site" entry == Just (text (hex site)))
+        (array "refusals" document)
+      cases =
+        [ ("route cells derive four action indices", map (field "action_index") (array "cells" (route base)) == map (Just . Number) [22, 90, 129, 274])
+        , ("route derives action targets", array "action_targets" (conclusions base) == map text ["0x00600000", "0x00600010", "0x00600020", "0x00600030"])
+        , ("positive high and null transition exclude dispatcher store and transition call conditionally", all (`conclusion` base) ["all_high_halfwords_one", "dispatcher_state_store_unreachable", "transition_call_unreachable", "computed_targets_classified"])
+        , ("negative high reopens the dispatcher state store", not (conclusion "dispatcher_state_store_unreachable" highMutation) && any (\entry -> field "dispatcher_state_write" entry == Just (Number 1)) (array "cells" (route highMutation)))
+        , ("zero high stores state zero", not (conclusion "dispatcher_state_store_unreachable" zeroHigh) && any (\entry -> field "dispatcher_state_write" entry == Just (Number 0)) (array "cells" (route zeroHigh)))
+        , ("root mutation invalidates route layout", not (conclusion "table_reads_complete" rootMutation) && not (conclusion "dispatcher_state_store_unreachable" rootMutation))
+        , ("width mutation invalidates route layout", not (conclusion "table_reads_complete" widthMutation))
+        , ("action mutation does not invent target admission", not (conclusion "computed_targets_classified" actionMutation) && hasRefusal "undeclared-table-publication" 0x00d040d8 actionMutation)
+        , ("transition mutation reopens the computed transition call", not (conclusion "transition_call_unreachable" transitionMutation) && array "transition_targets" (conclusions transitionMutation) == [text "0x00600030"])
+        , ("known route caller remains conditional", classification 0x00500024 "may-feed-route-not-proven" base)
+        , ("other event does not establish a FILMSIM caller", classification 0x00500124 "outside-route-under-local-writer-premise" base)
+        , ("other state does not establish a FILMSIM caller", classification 0x00500224 "outside-route-under-local-writer-premise" base)
+        , ("unknown incoming state remains possible", classification 0x00500314 "may-feed-route-not-proven" base && any (\entry -> field "state" entry == Just Null) (callerAt 0x00500314 base))
+        , ("unknown callers remain blockers", classification 0x00500400 "unknown-controller-blocker" base && hasObligation "caller-controller-unresolved" 0x00500400 base)
+        , ("other controller provenance retains unknown-offset table stores", hasObligation "computed-index-store" 0x0040010c base)
+        , ("route diagnostic never admits a hook", not (proofAdmitted (buildRouteDiagnostic Filmsim75 input)) && field "admitted" base == Just (Bool False))
+        , ("compiled path correspondence remains undischarged", not (conclusion "linked_dispatcher_path_correspondence_discharged" base))
+        ]
+  results <- forM cases $ \(name, ok) -> do
+    putStrLn ((if ok then "pass: " else "FAIL: ") ++ name)
+    pure ok
+  unless (and results) exitFailure
+ where
+  replaced = [0x00cf58b8, 0x00cfe2a8, 0x00d0013c, 0x00cd5e78]
+  regions = filter (\region -> regionBase region `notElem` replaced) existing
+    ++ [ Region name StockImage base (littleEndian ws)
+       | (name, base, ws) <-
+           [ ("route cell roots", 0x00cf58b8, roots 0x02001000 0x00cd1ae4)
+           , ("route action roots", 0x00cfe2a8, roots 0x02002000 0x00d04080)
+           , ("route transition roots", 0x00d0013c, roots 0x02003000 0x00d01370)
+           , ("route widths", 0x00cd5e78, 0x00010000 : replicate 36 0 ++ [0x002e0000] ++ replicate 49 0)
+           , ("synthetic route cells", 0x00cd1ae4, [cell index | index <- [0 .. 2345]])
+           , ("synthetic route actions", 0x00d04080, [action slot | slot <- [0 .. 298]])
+           , ("synthetic route transitions", 0x00d01370, [0, 0])
+           , ("synthetic route target 22", 0x00600000, [0xe92d4800, 0xe8bd8800])
+           , ("synthetic route target 90", 0x00600010, [0xe92d4800, 0xe8bd8800])
+           , ("synthetic route target 129", 0x00600020, [0xe92d4800, 0xe8bd8800])
+           , ("synthetic route target 274", 0x00600030, [0xe92d4800, 0xe8bd8800])
+           , ("state zero event two caller", 0x00500000, producer 0x00500000 0 2)
+           , ("event outside route caller", 0x00500100, producer 0x00500100 0 3)
+           , ("state outside route caller", 0x00500200, producer 0x00500200 1 2)
+           , ("unknown state caller", 0x00500300, eventProducer ++ [branchLink 0x00500314, 0xe12fff1e])
+           , ("unknown controller caller", 0x00500400, [branchLink 0x00500400, 0xe12fff1e])
+           ]
+       ]
+  roots other selected = 0 : other : replicate 73 0 ++ [selected] ++ replicate 98 0
+  cell :: Word32 -> Word32
+  cell index = case lookup index [(92, 22), (368, 90), (598, 129), (2300, 274)] of
+    Just slot -> 0x00010000 .|. slot
+    Nothing -> 0x00010000
+  action :: Word32 -> Word32
+  action slot = maybe 0 id (lookup slot [(22, 0x00600000), (90, 0x00600010), (129, 0x00600020), (274, 0x00600030)])
+  eventProducer = [0xe30736e4, 0xe3403146, 0xe3a02002, 0xe1c329b6, 0xe3a0004b]
+  producer base state event =
+    [0xe3073588, 0xe3403146, 0xe3a02000 .|. state, 0xe1c329b6,
+     0xe30736e4, 0xe3403146, 0xe3a02000 .|. event, 0xe1c329b6,
+     0xe3a0004b, branchLink (base + 0x24), 0xe12fff1e]
+  branchLink site = 0xeb000000 .|. (((0x00bfb028 - site - 8) `shiftR` 2) .&. 0x00ffffff)
 
 -- | The sites a continuation witness reports in `role`.
 roleSites :: Role -> Value -> [Value]

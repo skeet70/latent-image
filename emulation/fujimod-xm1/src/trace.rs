@@ -2,6 +2,7 @@
 
 use crate::provenance::Guest;
 use crate::memory_view::{MemoryAddress, MemoryCore, TcmRegister, static_span, tcm_window};
+use crate::modal_trace::{Config as ModalConfig, ModalTrace, Report as ModalReport};
 use fujimod_emulator::board::factory::{Graph, MemoryMap};
 use fujimod_emulator::board::observation::InstructionPoints;
 use fujimod_emulator::session::Session;
@@ -36,35 +37,87 @@ struct CodeBinding { start: Guest, bytes: Vec<u8>, maps: Vec<MemoryMap> }
 
 impl CodeBinding {
     fn sample(&self, session: &Session, core: usize, pc: u32) -> Result<Option<CodeWord>, String> {
-        let Some(offset) = pc.checked_sub(self.start.0).map(|offset| offset as usize)
-            .filter(|offset| *offset < self.bytes.len()) else { return Ok(None) };
-        if offset % 4 != 0 || session.board.read_register(core, Register::Pc)? != u64::from(pc) {
-            return Err("code word is not at its preexecution instruction point".into());
-        }
-        let end = u64::from(self.start.0) + self.bytes.len() as u64;
-        let mut tcm = [[0; 2]; 2];
-        for (index, banks) in tcm.iter_mut().enumerate() {
-            let cpu = session.board.cpu(index)?;
-            for (bank, value) in banks.iter_mut().enumerate() {
-                *value = u32::try_from(cpu.coprocessor(arm::Coprocessor {
-                    cp: 15, opc1: 0, crn: 9, crm: 1, opc2: bank as u32, secure: 0, wide: false,
-                }, None)?).map_err(|_| "code TCM register exceeds 32 bits")?;
-                if tcm_window(TcmRegister(*value))?.is_some_and(|(low, high)| low < end && u64::from(self.start.0) < high) {
-                    return Err("code binding overlaps a current TCM window".into());
-                }
+        sample_bound_word(session, core, pc, self.start.0, &self.bytes, &self.maps)
+    }
+}
+
+pub(crate) fn sample_bound_word(
+    session: &Session, core: usize, pc: u32, start: u32, bytes: &[u8], maps: &[MemoryMap],
+) -> Result<Option<CodeWord>, String> {
+    let Some(offset) = pc.checked_sub(start).map(|offset| offset as usize)
+        .filter(|offset| *offset < bytes.len()) else { return Ok(None) };
+    if offset % 4 != 0 || session.board.read_register(core, Register::Pc)? != u64::from(pc) {
+        return Err("code word is not at its preexecution instruction point".into());
+    }
+    let end = u64::from(start).checked_add(bytes.len() as u64)
+        .filter(|end| *end <= 1 << 32).ok_or("code image exceeds32bits")?;
+    let expected = bytes.get(offset..offset + 4).ok_or("code word leaves image")?;
+    let expected = u32::from_le_bytes(expected.try_into().map_err(|_| "code word leaves image")?);
+    let mut word = [0; 4];
+    let tcm = read_checked_bytes(session, core, pc, &mut word, maps,
+        ObservationBinding::IdentityCode(u64::from(start)..end))?;
+    let observed = u32::from_le_bytes(word);
+    if observed != expected { return Err("preexecution code word differs from bound image".into()); }
+    Ok(Some(CodeWord { guest: observed, physical: observed, expected, tcm }))
+}
+
+pub(crate) fn read_identity_bytes<const N: usize>(
+    session: &Session, core: usize, address: u32, bytes: &mut [u8; N], maps: &[MemoryMap],
+) -> Result<[[u32; 2]; 2], String> {
+    let end = u64::from(address).checked_add(N as u64)
+        .filter(|end| *end <= 1 << 32).ok_or("observed memory exceeds32bits")?;
+    read_checked_bytes(session, core, address, bytes, maps,
+        ObservationBinding::IdentityCode(u64::from(address)..end))
+}
+
+pub(crate) fn read_mapped_bytes<const N: usize>(
+    session: &Session, core: usize, address: u32, bytes: &mut [u8; N], maps: &[MemoryMap],
+) -> Result<(), String> {
+    read_checked_bytes(session, core, address, bytes, maps, ObservationBinding::MappedData).map(|_| ())
+}
+
+enum ObservationBinding {
+    IdentityCode(std::ops::Range<u64>),
+    MappedData,
+}
+
+fn read_checked_bytes<const N: usize>(
+    session: &Session, core: usize, address: u32, bytes: &mut [u8; N], maps: &[MemoryMap],
+    binding: ObservationBinding,
+) -> Result<[[u32; 2]; 2], String> {
+    let end = u64::from(address).checked_add(N as u64)
+        .filter(|end| *end <= 1 << 32).ok_or("observed memory exceeds32bits")?;
+    let protected = match &binding {
+        ObservationBinding::IdentityCode(range) => range.clone(),
+        ObservationBinding::MappedData => u64::from(address)..end,
+    };
+    let mut tcm = [[0; 2]; 2];
+    for (index, banks) in tcm.iter_mut().enumerate() {
+        if matches!(binding, ObservationBinding::MappedData) && index != core { continue; }
+        let cpu = session.board.cpu(index)?;
+        for (bank, value) in banks.iter_mut().enumerate() {
+            *value = u32::try_from(cpu.coprocessor(arm::Coprocessor {
+                cp: 15, opc1: 0, crn: 9, crm: 1, opc2: bank as u32, secure: 0, wide: false,
+            }, None)?).map_err(|_| "observed TCM register exceeds32bits")?;
+            if tcm_window(TcmRegister(*value))?.is_some_and(|(low, high)| {
+                low < protected.end && protected.start < high
+            }) {
+                return Err("observed memory overlaps a current TCM window".into());
             }
         }
-        let span = static_span(&self.maps, MemoryCore(core), MemoryAddress(u64::from(pc))..MemoryAddress(u64::from(pc) + 4))?;
-        if span.physical.0 != u64::from(pc) { return Err("code binding is not identity-mapped".into()); }
-        let mut guest = [0; 4];
-        let mut physical = [0; 4];
-        session.board.read_memory(core, u64::from(pc), &mut guest)?;
-        session.board.read_physical(span.physical.0, &mut physical)?;
-        let expected = u32::from_le_bytes(self.bytes[offset..offset + 4].try_into().map_err(|_| "code word leaves image")?);
-        let observed = CodeWord { guest: u32::from_le_bytes(guest), physical: u32::from_le_bytes(physical), expected, tcm };
-        if observed.guest != expected || observed.physical != expected { return Err("preexecution code word differs from bound image".into()); }
-        Ok(Some(observed))
     }
+    let span = static_span(maps, MemoryCore(core),
+        MemoryAddress(u64::from(address))..MemoryAddress(end))?;
+    if matches!(binding, ObservationBinding::IdentityCode(_)) && span.physical.0 != u64::from(address) {
+        return Err("observed code is not identity-mapped".into());
+    }
+    let mut physical = [0; N];
+    session.board.read_memory(core, u64::from(address), bytes)?;
+    session.board.read_physical(span.physical.0, &mut physical)?;
+    if bytes.as_slice() != physical.as_slice() {
+        return Err("guest and physical observation bytes differ".into());
+    }
+    Ok(tcm)
 }
 
 const CAPTURE_SITE_LIMIT: usize = 256;
@@ -683,6 +736,11 @@ enum CoreSelection {
     Primary,
 }
 
+enum PointScope {
+    User,
+    UserAndModal,
+}
+
 struct EnteredInstructions(u64);
 struct ResumeMarker {
     pc: Guest,
@@ -703,6 +761,7 @@ pub struct TraceSites {
     capture_observation: Option<CaptureObservation>,
     pending_points: Vec<Option<u64>>,
     capture_memory: Option<CaptureMemory>,
+    modal_observation: Option<ModalTrace>,
 }
 
 fn register(session: &Session, core: usize, register: arm::Register) -> Result<u32, String> {
@@ -739,11 +798,64 @@ impl TraceSites {
         self.capture_memory = (session.board.mappings() == memory.maps.as_ref()).then_some(memory);
     }
 
+    pub fn modal_observation_active(&self) -> bool {
+        self.modal_observation.as_ref().is_some_and(ModalTrace::active)
+    }
+
+    pub fn modal_observation_report(&self) -> ModalReport<'_> {
+        self.modal_observation.as_ref().map(ModalTrace::report).unwrap_or_else(ModalReport::inactive)
+    }
+
+    pub fn begin_modal_observation(&mut self, session: &Session, config: ModalConfig) -> Result<(), String> {
+        if self.modal_observation_active() || self.capture_observation_active() {
+            return Err("modal observation requires no active modal or capture observation".into());
+        }
+        let mut monitor = ModalTrace::new(config, session)?;
+        let counts = session.board.instruction_counts();
+        let instructions = InstructionCount::from_board(session)?;
+        let observed = self.resumed.iter().try_for_each(|(&core, marker)| {
+            if monitor.contains(marker.pc) && counts[core] == marker.entered.0
+                && session.board.read_register(core, Register::Pc)? == u64::from(marker.pc.0) {
+                monitor.observe(session, core, marker.pc, instructions)?;
+            }
+            Ok::<(), String>(())
+        });
+        if let Err(failure) = &observed { monitor.fail(failure.clone()); }
+        self.end_points(session)?;
+        self.modal_observation = Some(monitor);
+        if let Err(failure) = self.rearm(session).and_then(|()| self.restore_resume(session)) {
+            if let Some(modal) = &mut self.modal_observation { modal.fail(failure.clone()); }
+            return Err(failure);
+        }
+        observed
+    }
+
+    pub fn end_modal_observation(&mut self, session: &Session) -> Result<(), String> {
+        self.modal_observation.as_mut().ok_or("modal observation has not begun")?.check_finish()?;
+        let teardown = self.end_points(session)
+            .and_then(|()| self.rearm_scope(session, PointScope::User))
+            .and_then(|()| self.restore_resume(session));
+        let modal = self.modal_observation.as_mut().ok_or("modal observation disappeared")?;
+        match teardown {
+            Ok(()) => {
+                modal.disable();
+                Ok(())
+            }
+            Err(failure) => {
+                modal.fail(failure.clone());
+                Err(failure)
+            }
+        }
+    }
+
     pub fn capture_observation_active(&self) -> bool {
         self.capture_observation.is_some()
     }
 
     pub fn begin_capture_observation(&mut self) -> Result<(), String> {
+        if self.modal_observation_active() {
+            return Err("capture observation refuses an active modal observation".into());
+        }
         if self.capture_observation.is_some() {
             return Err("capture observation is already active".into());
         }
@@ -872,6 +984,9 @@ impl TraceSites {
         sites: BTreeMap<u32, String>,
         cores: CoreSelection,
     ) -> Result<(), String> {
+        if self.modal_observation_active() {
+            return Err("modal observation sites are frozen until successful finish".into());
+        }
         if self.capture_observation_active() {
             return Err("capture observation sites are frozen until the session ends".into());
         }
@@ -883,6 +998,13 @@ impl TraceSites {
     }
 
     pub fn disarm(&mut self, session: &Session) -> Result<(), String> {
+        if self.modal_observation_active() {
+            return Err("modal observation sites cannot be disarmed before successful finish".into());
+        }
+        self.end_points(session)
+    }
+
+    fn end_points(&mut self, session: &Session) -> Result<(), String> {
         for (core, mut points) in self.points.drain(..) {
             session.board.instruction_points_end(core, &mut points)?;
         }
@@ -891,6 +1013,9 @@ impl TraceSites {
     }
 
     pub fn remove_sites(&mut self, session: &Session, addresses: &[Guest]) -> Result<(), String> {
+        if self.modal_observation_active() {
+            return Err("modal observation sites are frozen until successful finish".into());
+        }
         if self.capture_observation_active() {
             return Err("capture observation sites are frozen until the session ends".into());
         }
@@ -912,6 +1037,9 @@ impl TraceSites {
 
     /// Arms more sites, keeping a core stopped at an armed site resumable.
     pub fn add_sites(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
+        if self.modal_observation_active() {
+            return Err("modal observation sites are frozen until successful finish".into());
+        }
         if self.capture_observation_active() {
             return Err("capture observation sites are frozen until the session ends".into());
         }
@@ -938,15 +1066,23 @@ impl TraceSites {
     }
 
     pub fn rearm(&mut self, session: &Session) -> Result<(), String> {
+        self.rearm_scope(session, PointScope::UserAndModal)
+    }
+
+    fn rearm_scope(&mut self, session: &Session, scope: PointScope) -> Result<(), String> {
         if !self.points.is_empty() {
             return Err("trace sites are already armed".into());
         }
-        if self.sites.is_empty() {
-            return Ok(());
+        let modal = self.modal_observation.as_ref()
+            .filter(|modal| matches!(scope, PointScope::UserAndModal) && modal.active());
+        let mut addresses: BTreeSet<u64> = self.sites.keys().map(|&address| u64::from(address)).collect();
+        if let Some(modal) = modal {
+            addresses.extend(modal.sites().map(|pc| u64::from(pc.0)));
         }
-        let addresses: Vec<u64> = self.sites.keys().map(|&address| u64::from(address)).collect();
+        if addresses.is_empty() { return Ok(()); }
+        let addresses: Vec<u64> = addresses.into_iter().collect();
         for core in 0..session.board.instruction_counts().len() {
-            let selected = match self.cores {
+            let selected = modal.is_some() || match self.cores {
                 CoreSelection::All => true,
                 CoreSelection::Primary => core == 0,
             };
@@ -962,6 +1098,11 @@ impl TraceSites {
 
     /// Pending hooks are retained until their details fit in the capture arena.
     pub fn collect(&mut self, session: &Session, instructions: InstructionCount) -> Result<CollectionOutcome, String> {
+        if self.modal_observation_active() {
+            if let Some(failure) = self.modal_observation_report().failure {
+                return Err(failure.to_owned());
+            }
+        }
         if self.capture_page_outstanding() {
             return Ok(CollectionOutcome::DrainRequired);
         }
@@ -970,6 +1111,9 @@ impl TraceSites {
             observation.boundary_complete = false;
         }
         let mut stop = false;
+        let mut new_returns = [None; 2];
+        let mut observed_modal = [None; 2];
+        let counts = session.board.instruction_counts();
         for (index, (_, points)) in self.points.iter().enumerate() {
             if self.pending_points[index].is_none() {
                 self.pending_points[index] = points.event();
@@ -978,7 +1122,24 @@ impl TraceSites {
         for (point_index, (core, points)) in self.points.iter().enumerate() {
             let Some(pc) = self.pending_points[point_index] else { continue };
             let address = u32::try_from(pc).map_err(|_| "trace site exceeds 32 bits")?;
-            let site = self.sites.get(&address).ok_or("instruction point outside the armed sites")?;
+            if let Some(modal) = self.modal_observation.as_mut().filter(|modal| modal.active()) {
+                if modal.contains(Guest(address)) {
+                    new_returns[*core] = modal.observe(session, *core, Guest(address), instructions)?;
+                    observed_modal[*core] = Some(Guest(address));
+                }
+            }
+            let selected = matches!(self.cores, CoreSelection::All) || *core == 0;
+            let Some(site) = self.sites.get(&address).filter(|_| selected) else {
+                let current = session.board.read_register(*core, Register::Pc)?;
+                points.resume(current, pc);
+                self.pending_points[point_index] = None;
+                if current == pc {
+                    self.resumed.insert(*core, ResumeMarker { pc: Guest(address), entered: EnteredInstructions(counts[*core]) });
+                } else {
+                    self.resumed.remove(core);
+                }
+                continue;
+            };
             stop |= self.stop_labels.contains(site);
             if let Some(observation) = &mut self.capture_observation {
                 if self.stop_labels.contains(site) {
@@ -1026,7 +1187,6 @@ impl TraceSites {
             if self.hit_limit.is_some_and(|limit| self.hits.len() >= limit.get()) {
                 return Err("trace hit limit reached".into());
             }
-            let counts = session.board.instruction_counts();
             let instructions = counts.iter().sum();
             let site = site.clone();
             let registers = (0..if self.hit_limit.is_some() { 13u8 } else { 4u8 })
@@ -1053,6 +1213,23 @@ impl TraceSites {
                 self.resumed.insert(*core, ResumeMarker { pc: Guest(address), entered: EnteredInstructions(counts[*core]) });
             } else {
                 self.resumed.remove(core);
+            }
+        }
+        if new_returns.iter().any(Option::is_some) {
+            if let Some(modal) = &mut self.modal_observation {
+                for (&core, marker) in &self.resumed {
+                    if new_returns.contains(&Some(marker.pc)) && observed_modal[core] != Some(marker.pc)
+                        && counts[core] == marker.entered.0
+                        && session.board.read_register(core, Register::Pc)? == u64::from(marker.pc.0) {
+                        modal.observe(session, core, marker.pc, instructions)?;
+                    }
+                }
+            }
+            let rearmed = self.end_points(session).and_then(|()| self.rearm(session))
+                .and_then(|()| self.restore_resume(session));
+            if let Err(failure) = rearmed {
+                if let Some(modal) = &mut self.modal_observation { modal.fail(failure.clone()); }
+                return Err(failure);
             }
         }
         if let Some(observation) = &mut self.capture_observation {

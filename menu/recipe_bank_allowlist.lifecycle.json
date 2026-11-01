@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "stock_calls": [
+    {"address":"0x0073abec","name":"rb_save_service_present","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_service_present"},
+    {"address":"0x0073ac60","name":"rb_save_service_profile","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_service_profile"},
+    {"address":"0x0069f8fc","name":"rb_save_service_byte","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_service_byte"},
+    {"address":"0x00e4e0b4","name":"rb_save_prepare_metadata","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_prepare_metadata"},
+    {"address":"0x011d5850","name":"rb_save_extent_preset","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_extent_preset"},
+    {"address":"0x011d5934","name":"rb_save_extent_name","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_extent_name"},
+    {"address":"0x011d591c","name":"rb_save_extent_copy","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_extent_copy"},
+    {"address":"0x007101e4","name":"rb_save_sample_cached_state","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_sample_cached_state"},
+    {"address":"0x011d5600","name":"rb_save_storage_direct","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_storage_direct; retained storage callback registration"},
+    {"address":"0x011d5688","name":"rb_save_storage_kind_three","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_storage_kind_three; retained kind-three storage callback registration"},
+    {"address":"0x011d5714","name":"rb_save_register_release","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_register_release; retained release callback registration"},
+    {"address":"0x00724558","name":"rb_save_signal","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_signal"},
+    {"address":"0x006fae80","name":"rb_save_stage","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_stage"},
+    {"address":"0x00e88e1c","name":"rb_mp_stock_mirror_read","source":"replacement/media_permit/rb_media_permit_stock.S RB_MP_TRAMPOLINE rb_mp_stock_mirror_read"},
+    {"address":"0x00e75490","name":"rb_mp_stock_frame_kind","source":"replacement/media_permit/rb_media_permit_stock.S RB_MP_TRAMPOLINE rb_mp_stock_frame_kind"},
+    {"address":"0x00eb0ea0","name":"rb_mp_stock_bit_set","source":"replacement/media_permit/rb_media_permit_stock.S RB_MP_TRAMPOLINE rb_mp_stock_bit_set"},
+    {"address":"0x00e87ad4","name":"rb_mp_stock_context","source":"replacement/media_permit/rb_media_permit_stock.S RB_MP_TRAMPOLINE rb_mp_stock_context"},
+    {"address":"0x00e74c68","name":"rb_mp_stock_subframe_count","source":"replacement/media_permit/rb_media_permit_stock.S RB_MP_TRAMPOLINE rb_mp_stock_subframe_count"},
+    {"address":"0x00e748c8","name":"rb_mp_stock_subframe","source":"replacement/media_permit/rb_media_permit_stock.S RB_MP_TRAMPOLINE rb_mp_stock_subframe"},
+    {"address":"0x00e886ec","name":"rb_mp_stock_map_subframe","source":"replacement/media_permit/rb_media_permit_stock.S RB_MP_TRAMPOLINE rb_mp_stock_map_subframe"},
+    {"address":"0x00e87114","name":"rb_mp_stock_count_kind","source":"replacement/media_permit/rb_media_permit_stock.S RB_MP_TRAMPOLINE rb_mp_stock_count_kind"},
+    {"address":"0x00e88804","name":"rb_mp_stock_frame_of_kind","source":"replacement/media_permit/rb_media_permit_stock.S RB_MP_TRAMPOLINE rb_mp_stock_frame_of_kind"},
+    {"address":"0x00e8d82c","name":"rb_mp_stock_command","source":"replacement/media_permit/rb_media_permit_stock.S RB_MP_TRAMPOLINE rb_mp_stock_command"},
+    {"address":"0x00e6e368","name":"rb_mp_stock_cancel","source":"replacement/media_permit/rb_media_permit_stock.S RB_MP_TRAMPOLINE rb_mp_stock_cancel"},
+    {"address":"0x00e881e8","name":"rb_mp_stock_fatal","source":"replacement/media_permit/rb_media_permit_stock.S RB_MP_TRAMPOLINE rb_mp_stock_fatal; unresolved key recorder retained from FUN_00e77168"}
+  ],
+  "stock_stores": [
+    {"address":"0x0154d970","bytes":4,"name":"save completion status","source":"replacement/save/src/abi.rs xm1_save_completion"},
+    {"address":"0x0155ccb8","bytes":4,"name":"save phase-one task","source":"replacement/save/src/abi.rs TaskService::set_save_task"},
+    {"address":"0x0155ccbc","bytes":4,"name":"save phase-two task","source":"replacement/save/src/abi.rs TaskService::set_save_task"},
+    {"address":"0x015ad53c","bytes":4,"name":"active frame slot","source":"replacement/media_permit/src/stock.rs PermitRuntime::set_active_slot"},
+    {"address":"0x01581f60","bytes":4,"name":"first aggregate minimum","source":"replacement/media_permit/src/stock.rs PermitRuntime::set_minimum"},
+    {"address":"0x01581f64","bytes":4,"name":"second aggregate minimum","source":"replacement/media_permit/src/stock.rs PermitRuntime::set_minimum"},
+    {"address":"0x01581f68","bytes":4,"name":"third aggregate minimum","source":"replacement/media_permit/src/stock.rs PermitRuntime::set_minimum"}
+  ],
+  "unproven": [
+    {"function":"xm1_save_facade","access":"store","through":{"argument":"r0"},"reason":"writes descriptor bank 0, 1 or 2 at frame+0x27d0+bank*0x150: save mode at +4 and zero at +0x148; caller frame catalogue identity, selected count, backing ownership and allocation liveness remain prerequisites"},
+    {"function":"xm1_save_facade","access":"store","through":{"argument":"r2"},"reason":"writes one i32 to nonnull status_out; caller ownership of the output cell remains a prerequisite"},
+    {"access":"store","function":"rb_media_permit_apply","reason":"stores zero at +0x27c8 and the permit word at +0x2fb0 of 0xe87ad4(s) = word[0x0157dd3c] + s * 0x326c for SlotIndex s 0..200; in an A32 scan of images 4, 5 and 6 (immediate branches, literal words, movw/movt and straight-line constant propagation, not Thumb or loaded-pointer addressing) the only store to 0x0157dd3c is 0xe86ea0, the +8 word of a 0xe8a338 descriptor with base 0x04988600, 0x1f9dbb60, 0x44988600, 0x49c4f480 or 0x5f9fb7e0 and frame count 1, 0x57 or 0x60; machine 0 first writes it through 0xe880dc at class 0 state 0, its only exit from the reset state; the count is read only by 0xe86e7c and 0xe6e288, slots come from 0xe88d88 (lowest free of 0..200) and the 0xe77168 key scan checks no liveness, so s below the active count is unproven","through":{"result":"0x00e87ad4"}}
+  ]
+}

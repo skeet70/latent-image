@@ -24,10 +24,12 @@ import Emulation.NativeObservation
   , runnerStatusLabel
   )
 import Emulation.OwnedCase
-import Emulation.Sha256 (sha256, sha256Hex)
+import Emulation.Sha256 (parseSha256Hex, sha256, sha256Hex)
+import Replacement.ModalRuntime.KernelBinding (KernelDigests (..), KernelSymbol (..), BoundKernel (..), bindKernel)
 import qualified StockInventory as SI
 import FujiAF.JSON (encodeCanonical)
 import Data.Aeson (object, (.=))
+import System.Directory (createDirectoryIfMissing, doesPathExist)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
@@ -63,10 +65,9 @@ guardFunction = [0xe59fc000, 0xe12fff1c, guestWord stockEntry]
 faultyAbiFunction = [0xe3a04000]
 faultyStateFunction = [0xe3a0201c, 0xe307c61e, 0xe340c146, 0xe1cc20b0]
 
-requiredSymbols :: [String]
-requiredSymbols =
-  [ "__rb_image_start"
-  , "rb_ui_editor_cancel"
+requiredFunctions :: [String]
+requiredFunctions =
+  [ "rb_ui_editor_cancel"
   , "rb_call_modal_query"
   , "rb_open_editor_cancel_stage"
   , "rb_call_stage_open"
@@ -330,12 +331,24 @@ main = do
   runner <- required arguments "--runner"
   build <- required arguments "--build"
   output <- required arguments "--out"
+  exists <- doesPathExist output
+  when exists $ error "output path already exists"
   id5Path <- required arguments "--id5"
   id5BaseArgument <- required arguments "--id5-base"
   id5Base <- pure (parseAddress "--id5-base" id5BaseArgument)
-  symbols <- parseSymbols requiredSymbols (build </> "kernel.syms")
-  kernelText <- B.readFile (build </> "kernel-text.bin")
-  unless (not (B.null kernelText)) (error "kernel-text.bin is empty")
+  elfDigest <- required arguments "--kernel-elf-sha256" >>= either error pure . parseSha256Hex
+  textDigest <- required arguments "--kernel-text-sha256" >>= either error pure . parseSha256Hex
+  symsDigest <- required arguments "--kernel-syms-sha256" >>= either error pure . parseSha256Hex
+  backend <- readBounded runner (64 * 1024 * 1024)
+  unless (sha256Hex (sha256 backend) == "b51544c62053d1bf31816d2c3e4b439e3847296b2eef1f99c8f17b5d75da2860") $
+    error "runner differs from E-NATIVE-APSR-MSR-150"
+  kernelBytes <- readBounded (build </> "kernel.elf") (2 * 1024 * 1024)
+  suppliedText <- readBounded (build </> "kernel-text.bin") 0xa300
+  symsBytes <- readBounded (build </> "kernel.syms") (1024 * 1024)
+  let expected = KernelDigests elfDigest textDigest symsDigest
+  bound <- either error pure (bindKernel expected requiredFunctions kernelBytes suppliedText symsBytes)
+  let symbols = M.map (\(KernelSymbol address size) -> Symbol address size) (boundSymbols bound)
+      kernelText = boundText bound
   id5 <- B.readFile id5Path
   unless (id5Base == 0x00bf1a00 && B.length id5 == 5185120 && sha256Hex (sha256 id5) == "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a") $
     error "id5 differs from the pinned X-M1 1.50 image"
@@ -362,6 +375,19 @@ main = do
         , ("om-q0-s0-t2", 0, 0, 2, False)
         , ("om-q0-s0-t5d", 0, 0, 0x5d, True)
         ]
+  createDirectoryIfMissing True output
+  let artifact path expectedDigest bytes = object ["path" .= path, "expected_sha256" .= (expectedDigest :: String), "sha256" .= sha256Hex (sha256 bytes)]
+      expectedArtifact path digest bytes = object ["path" .= path, "expected_sha256" .= sha256Hex digest, "sha256" .= sha256Hex (sha256 bytes)]
+  B.writeFile (output </> "inputs.json") $ encodeCanonical $ object
+    [ "runner" .= artifact runner "b51544c62053d1bf31816d2c3e4b439e3847296b2eef1f99c8f17b5d75da2860" backend
+    , "id5" .= artifact id5Path "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a" id5
+    , "kernel" .= expectedArtifact (build </> "kernel.elf") elfDigest kernelBytes
+    , "kernel_text" .= expectedArtifact (build </> "kernel-text.bin") textDigest suppliedText
+    , "kernel_symbols" .= expectedArtifact (build </> "kernel.syms") symsDigest symsBytes
+    , "elf_text_sha256" .= sha256Hex (sha256 kernelText)
+    , "elf_text_address" .= hexWord32 (boundTextAddress bound)
+    , "global_admission" .= False
+    ]
   outcomes <- forM scenarios $ \(identifier, queryResult, sessionValue, transitionResult, sessionReadOnly) ->
     runScenario context identifier queryResult sessionValue transitionResult sessionReadOnly
   let stateOutcome = fromMaybe (error "state scenario missing") (find ((== "om-q0-s0-tminus1") . outcomeId) outcomes)
@@ -423,3 +449,9 @@ main = do
     ++ show (length outcomes - length failed) ++ " matched; controls "
     ++ (if controlsOk then "refused as required" else "FAILED"))
   when (not (null failed) || not controlsOk) exitFailure
+
+readBounded :: FilePath -> Int -> IO B.ByteString
+readBounded path limit = do
+  bytes <- B.readFile path
+  unless (not (B.null bytes) && B.length bytes <= limit) (error (path ++ ": size outside (0," ++ show limit ++ "]"))
+  pure bytes
