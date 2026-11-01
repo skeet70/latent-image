@@ -1198,14 +1198,16 @@ Own the complete finite **plain-image orchestration** `[0x6a9844,0x6a9938)`, 244
 5. Admit complete replacement bytes and live stack extent with no selectable stock fallback. Continuously exclude every fetch of the replaced leaf and retained copies on both cores/all executable aliases. Preserve dependent code/data/resources, mappings and writer attribution throughout the admitted interval.
 6. Extend ownership to decoder orchestration and per-extent initialization only after independently qualifying their resource/completion/visibility contracts. A plain-loader cutover alone does not close #153.
 
+The source implementation now lives in `replacement/plain_load`: freestanding Rust, a five-instruction A32 adapter, a fixed 244-byte linker bound, typed emitted-code admission, discriminating fixtures and a one-DAT stager through the shared image4 rebuilder. It preserves the missing-segment halt, both mode branches, temporal reads and error-side final notification. The adapter restores LR=`0x6a992c` and AAPCS r4-r11/SP; r0 carries the source status, while r1-r3/r12/NZCV remain volatile. The actual caller consumes r0 immediately at `0x73b558`. Contract call-site/target pairs, scratch low, refusal and return PCs are derived from emitted code rather than guessed from the original layout. Source review, compilation, emitted-size admission, tests, staging and the separately reviewed owned natural observer remain unexercised; no ownership gate is accepted by this source handoff.
+
 | #153 acceptance criterion | Current status and exact remaining fact |
 | --- | --- |
 | Inventory later executable inputs, actual producers, transformations and publications | Source inventory recovered for the segment table and nine flashloader cases, including both later executable producers and all 15 plain hooks. Computed/alternate producer closure and actual route-dependent data-cache inputs remain unqualified. |
-| Natural owned loading with independently verified committed views and order | Unmet. The source contract stages no owned loader and supplies no fresh natural byte/publication receipt. |
+| Natural owned loading with independently verified committed views and order | Unmet. A source implementation and stager exist, but no emitted image, DAT or fresh natural owned publication receipt is admitted. |
 | Every image initializes and reaches its admitted consumer through actual loader/task execution | Source graph and exact hooks/entry recovered. Fresh natural hook/task/entry ordering and owned consumer execution remain required. |
-| Wrong image/destination/entry/callback/premature publication/out-of-range controls | Specified above, not executed. Done/progress false positives and source-required error effects must be distinguished. |
+| Wrong image/destination/entry/callback/premature publication/out-of-range controls | Typed host refusals and discriminating fixtures are implemented but unexecuted. Natural controls remain required, including done/progress false positives and source-required error effects. |
 | Executable visibility, aliases/remaps and resource lifetimes | Source ranges and readiness edges recovered. Complete committed views, callback/MPU synchronization, writer/later-reuse closure, physical coherence and reset invalidation remain unproved. |
-| Continuous replaced-body exclusion and inventory/ledger dependencies | Inventory and retained dependencies recorded. No #153 body is replaced or continuously excluded by this source-only increment. |
+| Continuous replaced-body exclusion and inventory/ledger dependencies | Inventory and retained dependencies recorded. Source targets the complete 244-byte producer; no staged body or continuous fetch exclusion is qualified yet. |
 
 ### 8.14 General heap survey and replacement boundary (#147, #148)
 
