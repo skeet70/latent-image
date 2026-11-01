@@ -575,7 +575,7 @@ observeEvent source program observer (Event site address registers sample@(Sampl
       pair <- slotFrame source sample r0
       frameRecord pair RequireAllocated Nothing observer {releaseSlots=ValidRelease (fst pair):releaseSlots observer}
     ReleaseClear -> do
-      pair@(_,frame) <- pointerFrame source sample r4
+      pair <- pointerFrame source sample r4
       require OwnershipMismatch (r0 == 0 && registers !! 3 == 0x3268) "release clear-store operands differ"
       frameRecord pair RequireAllocated Nothing observer
     ReleaseReturn -> do

@@ -380,14 +380,14 @@ prepareLifecycleCapture emulator = do
       SelectLensOn -> require (cursor == 0) "SHOOT WITHOUT LENS ON was not selected"
       _ -> pure ()
     pure (object ["step" .= show step,"pressed" .= pressed,"menu" .= [menu,setting,cursor]])
-  emulatorModeDial emulator ModeDialProgram
+  dialFirst <- emulatorModeDial emulator ModeDialProgram
   first <- emulatorCapture emulator "lifecycle-pre-press-a"
-  emulatorModeDial emulator ModeDialProgram
+  dialSecond <- emulatorModeDial emulator ModeDialProgram
   second <- emulatorCapture emulator "lifecycle-pre-press"
   lens0 <- emulatorReadMemory emulator 0x009504d4 4
   lens1 <- emulatorReadMemory emulator 0x00950508 4
   pure (object ["keys" .= keys,"mode_dial" .= modeDialName ModeDialProgram
-    ,"captures" .= [first,second],"lens_words" .= map hexBytes [lens0,lens1]])
+    ,"dial_replies" .= [dialFirst,dialSecond],"captures" .= [first,second],"lens_words" .= map hexBytes [lens0,lens1]])
 
 hexAddress :: Word32 -> String
 hexAddress value = "0x" ++ replicate (8 - length digits) '0' ++ digits where digits = showHex value ""

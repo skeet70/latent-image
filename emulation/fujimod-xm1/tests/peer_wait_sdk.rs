@@ -744,6 +744,13 @@ fn synthetic_lifecycle_machine(site: Guest) -> Machine {
     observed
 }
 
+fn raw_tcm_registers(observed: &Machine) -> [u32; 2] {
+    std::array::from_fn(|bank| u32::try_from(observed.session.board.cpu(0).unwrap().coprocessor(
+        arm::Coprocessor { cp: 15, opc1: 0, crn: 9, crm: 1, opc2: bank as u32, secure: 0, wide: false },
+        None,
+    ).unwrap()).unwrap())
+}
+
 #[test]
 fn lifecycle_allocation_observation_distinguishes_backed_count_from_slot_namespace() {
     let mut backed = synthetic_lifecycle_machine(Guest(0x00e88e18));
@@ -762,7 +769,7 @@ fn lifecycle_allocation_observation_distinguishes_backed_count_from_slot_namespa
 
 #[test]
 fn unrelated_capture_site_does_not_follow_the_lifecycle_active_frame() {
-    let mut observed = synthetic_lifecycle_machine(Guest(0x04a00000));
+    let mut observed = synthetic_lifecycle_machine(Guest(0x1000));
     observed.session.board.write_physical(0x015ad53c, &201u32.to_le_bytes()).unwrap();
     let page = diagnostic_page(&mut observed);
     assert!(!page.incomplete);
@@ -779,6 +786,7 @@ fn lifecycle_void_producer_observation_uses_published_output_cells() {
     }
     observed.session.board.write_physical(0x3000, &0u32.to_le_bytes()).unwrap();
     observed.session.board.write_physical(0x3004, &0x04988600u32.to_le_bytes()).unwrap();
+    let expected_tcm = raw_tcm_registers(&observed);
     let page = diagnostic_page(&mut observed);
     let hit = &page.hits[0];
     assert!(!hit.ram_incomplete);
@@ -786,20 +794,21 @@ fn lifecycle_void_producer_observation_uses_published_output_cells() {
     assert_observed_bytes(hit, Guest(0x0498b860), &[0,0,0,0,0,0,0,0,1,0,0,0]);
     let context = hit.lifecycle.as_ref().unwrap();
     assert_eq!((context.r4, context.r5, context.r11), (0x3000, 0x3004, 0x40003500));
-    assert_eq!(context.tcm, [0,0]);
+    assert_eq!(context.tcm, expected_tcm);
 }
 
 #[test]
 fn lifecycle_stopped_snapshot_retains_callback_and_task_words_without_advancing() {
-    let mut observed = synthetic_lifecycle_machine(Guest(0x00e88e18));
+    let observed = synthetic_lifecycle_machine(Guest(0x00e88e18));
     observed.session.board.write_physical(0x014ddc1c, &0x00a81234u32.to_le_bytes()).unwrap();
     observed.session.board.write_physical(0x0155ccb8, &0x45u32.to_le_bytes()).unwrap();
     let before = (observed.instructions(), context(&observed));
+    let expected_tcm = raw_tcm_registers(&observed);
     let snapshot = observed.traces.capture_snapshot(&observed.session).unwrap().unwrap();
     let snapshot: ObservedLifecycleSnapshot = serde_json::from_value(serde_json::to_value(snapshot).unwrap()).unwrap();
     assert_eq!(snapshot.core, 0);
     assert!(!snapshot.ram_incomplete);
-    assert_eq!(snapshot.lifecycle.tcm, [0,0]);
+    assert_eq!(snapshot.lifecycle.tcm, expected_tcm);
     assert_span_bytes(&snapshot.ram, Guest(0x014ddc1c), &[0x34,0x12,0xa8,0,0,0,0,0,0,0,0,0]);
     assert_span_bytes(&snapshot.ram, Guest(0x0155ccb8), &[0x45,0,0,0,0,0,0,0]);
     assert_eq!((observed.instructions(), context(&observed)), before);
@@ -2202,4 +2211,34 @@ mod composed_interleaving {
             assert!(receipt.scoped_watch.as_ref().unwrap().history.violation.is_some());
         }
     }
+}
+
+#[test]
+fn lifecycle_save_return_observes_its_status_output_cell() {
+    let mut observed = synthetic_lifecycle_machine(Guest(0x00e99e90));
+    observed.session.board.write_register(0, arm::CORE[11], 0x40003500).unwrap();
+    observed.session.board.write_physical(0x34e0, &2u32.to_le_bytes()).unwrap();
+    let page = diagnostic_page(&mut observed);
+    assert!(!page.hits[0].ram_incomplete);
+    assert_observed_bytes(&page.hits[0], Guest(0x34e0), &2u32.to_le_bytes());
+}
+
+#[test]
+fn lifecycle_save_return_refuses_a_status_cell_underflow_without_substitution() {
+    let mut observed = synthetic_lifecycle_machine(Guest(0x00e99e90));
+    observed.session.board.write_register(0, arm::CORE[11], 0x1f).unwrap();
+    let page = diagnostic_page(&mut observed);
+    assert!(page.hits[0].ram_incomplete);
+    assert!(page.hits[0].ram.iter().all(|span| span.address.0 != 0));
+}
+
+#[test]
+fn lifecycle_invalid_release_observes_the_stock_no_frame_branch() {
+    let mut observed = synthetic_lifecycle_machine(Guest(0x00e87d80));
+    observed.session.board.write_register(0, arm::CORE[0], 201).unwrap();
+    let page = diagnostic_page(&mut observed);
+    assert!(!page.hits[0].ram_incomplete);
+    assert_eq!(page.hits[0].registers[0], 201);
+    assert_observed_bytes(&page.hits[0], Guest(0x00e87d80), &0xeafffffeu32.to_le_bytes());
+    assert!(page.hits[0].ram.iter().all(|span| span.address.0 < 0x04988600));
 }

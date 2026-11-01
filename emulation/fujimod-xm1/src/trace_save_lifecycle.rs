@@ -280,6 +280,13 @@ pub(super) fn event(
         }
         return Ok((ram, context));
     }
+    if address.0 == 0x00e99e90 {
+        if let Some(status) = context.r11.checked_sub(0x20).map(Guest) {
+            ram.view(session, &views, status, 4);
+        } else {
+            ram.incomplete = true;
+        }
+    }
     let profile = if scope.save_entry(address) {
         let bank = DescriptorBank::from_kind(registers[1]);
         FrameProfile::Save { bank, status: (registers[2] != 0).then_some(Guest(registers[2])) }
@@ -288,6 +295,7 @@ pub(super) fn event(
     };
     let source = match address.0 {
         0x00e88e18 if registers[0] == u32::MAX => FrameSource::Slot(None),
+        0x00e87d80 if registers[0] >= 201 => FrameSource::Slot(None),
         0x00e88e18 | 0x00e80e3c | 0x00e87d80 => FrameSource::from_slot_word(registers[0]),
         0x00e80e44 | 0x00e80e78 | 0x00e4e830 | 0x00e99e8c | 0x00e518c0 => FrameSource::Pointer(Guest(registers[0])),
         0x00e4eca4 => FrameSource::Pointer(Guest(context.r5)),

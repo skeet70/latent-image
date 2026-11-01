@@ -147,7 +147,7 @@ emulatorCaptureCommand emulator = bridgeWatchRpc exchange . request
   where
     exchange encoded = withMVar (emulatorLock emulator) $ \_ ->
       exchangeLockedReading emulator
-        (Capture.readBoundedLine (1024 * 1024) (emulatorCaptureReader emulator) (emulatorOutput emulator)) encoded
+        (Capture.readBoundedLine (emulatorCaptureReader emulator)) encoded
     request command = case command of
       BeginSaveLifecycle program -> object
         ["command" .= ("capture-observation-begin" :: T.Text), "scope" .= Lifecycle.scopeValue program]

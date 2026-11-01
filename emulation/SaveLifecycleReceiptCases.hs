@@ -98,7 +98,7 @@ changeRamWord guest replacement sample = do
   Address start <- physical guest
   spans <- get "ram" sample
   changed <- forM (spans :: [Value]) $ \span' -> do
-    low <- get "address" span'
+    Address low <- Address <$> get "address" span'
     text <- get "bytes" span'
     bytes <- hexBytes text
     let replace index original =
@@ -280,7 +280,7 @@ expectRefusal kind expected result = case result of
   Right _ -> fail ("mutation " ++ show kind ++ " was accepted")
 
 required :: String -> [(String,String)] -> IO FilePath
-required name arguments = maybe (fail ("missing " ++ name)) pure (lookup name arguments)
+required name options = maybe (fail ("missing " ++ name)) pure (lookup name options)
 arguments :: [String] -> Either String [(String,String)]
 arguments [] = pure []
 arguments (name:value:rest) = do

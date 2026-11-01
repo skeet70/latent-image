@@ -15,9 +15,8 @@ import Data.List (elemIndex, nub, sort, sortOn)
 import Data.Word (Word16, Word32)
 import Numeric (showHex)
 import System.Environment (getArgs, lookupEnv)
-import System.Exit (ExitCode (..), exitSuccess, exitWith)
+import System.Exit (exitSuccess)
 import System.Posix.Files (setFileMode)
-import System.IO (hPutStrLn, stderr)
 
 import FujiAF.JSON (encodeCanonical)
 import FujiAF.RecipeBank
@@ -933,13 +932,13 @@ emitPackage spec sources plan kernel boot d3 stockPath out = do
         [base + 4 * host | base <- [0x0061e128,0x006246c8,0x0081b09c], host <- [0x267 .. 0x26f]] <>
         [0x00d04084,0x00d526fc,0x00bfa3f0,0x00bfa7ec,0x00bfacf0,0x00cd20a4,0x00cd211c,0x00cd243c,0x00d3d894,
          0x0115815c,0x011089d8,0x0116657c,0x011675c4,0x00bfb1f0,0x00d04188,0x00d04114,0x00cd24b4,
-         0x00c2dfbc,0x00c2cf88,0x00c2d278,0x00e99e8c,0x00e6a754,0x00e6bb90] <>
+         0x00c2dfbc,0x00c2cf88,0x00c2d278] <>
         [0x011122c0,0x01112448,0x01112664,0x011127e8,0x01112a74,0x0111373c,0x01113994,
          0x011640f0,0x0116bbbc,0x0116bcb4,0x01178564,0x01178694,0x01178cf4,0x01178fb8,
          0x01179a58,0x01179abc,0x01179b14,0x01179efc,0x0117a734,0x0117deb8,0x0117def4,0x0117df7c,
          0x0117dc14,0x0117dc80,0x0117dcec,0x0117dd54,0x0117ddbc,0x0117de24,0x0117de70,0x0117dfe8,
          0x0117dc34,0x0117dca0,0x0117dd0c,0x0117dd74,0x0117dddc,0x0117e014]
-  unless (length publicationPairs == 100 && sortOn id (map fst publicationPairs) == sortOn id expectedSites) $
+  unless (length publicationPairs == 97 && sortOn id (map fst publicationPairs) == sortOn id expectedSites) $
     H.failH "package: publication destinations differ from the pinned bank contract"
   let allow = [(0x0061c400, 0x00282800), (0x00bf1a00, 0x004d0020), (0x01100000, 0x00080000)]
   forM_ publicationPairs $ \(address, _) ->
