@@ -168,6 +168,16 @@ This proves a proposed synchronous handoff relation, not identical pre-handoff w
 
 For admitted modal 75, cheap callback/return-seam equivalence and consumer closure are complementary. Exact relocated LR identity is not cheap; the 294 captured action slots and single transition slot need an input-use census before selecting repairs. The controller's state/event writer and table-mutation domain remains a separate obligation. The retained dispatcher is not globally retired under this design, and unconditional fetch exclusion of its full body would reject legitimate fallback executions. Guarding must distinguish admitted execution and nested nonadmitted fallback.
 
+### Modal entry seam mechanism
+
+`src/entry.S` implements the fourteen-instruction routing mechanism; `//replacement/modal_runtime:entry-seam-image` links its 56 bytes at a native-only address. Its linker script resolves owned policy to the unchanged E-MODAL-DISPATCHER-LINKED-ABI-150 export and the fallback to stock+4. It is not linked into the default bank, installed, or an admission override. Independent source review and native seam execution are pending.
+
+`//replacement/modal_runtime:qualify-entry` binds the #125 backend, pinned image5 and original linked kernel, and derives the full stock extent with the shared `StockInventory` checker. Eight nonadmitted controller words cover ordinary IDs, the known upper boundary, out-of-range values and two words whose low bits equal 75; four admitted fixtures vary flags and stack alignment. Fallback runs compare every register, complete stack bytes and complete ordered write histories with a real stock first-instruction execution. The admitted fixtures check the original incoming context before owned policy executes. Both protect the complete incoming-SP-and-up caller interval. Five real entry-byte controls remove flag restoration on each route, remove r12 restoration, write caller-owned stack and select the wrong stock continuation.
+
+Modal75 storage is loaded image5 data, not an established read-only hardware region. Its cell table spans `[0x00cd1ae4,0x00cd3f8c)`, action table `[0x00d04080,0x00d0452c)` and transition table `[0x00d01370,0x00d01378)`; the next controller-table bases match these upper bounds. Root pointer words are `0x00cf59e4`, `0x00cfe3d4` and `0x00d00268`; width is the halfword at `0x00cd5f0e`. Bank publication deliberately changes cell/action words. The static census reports no resolved direct table store but does not establish absence of stores through unresolved pointers. All 286 computed-store obligations concern the state/event arrays.
+
+Route-bounded write observation can constrain escaped table-pointer effects, not eliminate them globally. A reset-to-menu witness needs expected loader writes followed by a post-load immutable phase; a bank editor witness needs the expected publication-adjusted bytes and a postinstall-to-preunload phase. Watches must include roots and width, cover both cores and every memory-write initiator, reject lost view/alias coverage and refuse an actual table-write control. Legitimate state/event writes need a separate value/domain observation rather than a no-write rule. The #133 bank-specific editor route remains distinct from generic owned cancellation.
+
 
 
 ### Owned editor-cancel increment

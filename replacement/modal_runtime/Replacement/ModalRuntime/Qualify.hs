@@ -8,6 +8,16 @@ module Replacement.ModalRuntime.Qualify
   , runQualification
   , CaseSelection
   , parseCaseSelection
+  , CaseSpec (..)
+  , CaseBoundary (..)
+  , Permission (..)
+  , mkRegion
+  , writeCaseWith
+  , loadObserved
+  , registerValue
+  , word32le
+  , patchWord
+  , hex
   ) where
 
 import qualified ArmElf as E
@@ -560,18 +570,25 @@ data CaseSpec = CaseSpec
   , caseSpecStatus :: RunnerStatus
   }
 
-caseValue :: CaseSpec -> Value
-caseValue spec =
+data CaseBoundary = CaseBoundary
+  { boundaryRegisters :: [(Register, Word32)]
+  , boundaryExit :: GuestAddress
+  , boundaryStack :: GuestAddress
+  , boundaryScope :: String
+  }
+
+caseValue :: CaseBoundary -> CaseSpec -> Value
+caseValue boundary spec =
   object
     [ "schema_version" .= (1 :: Int)
     , "id" .= caseSpecId spec
     , "origin" .= ("synthetic" :: String)
-    , "provenance" .= ("owned modal dispatcher differential: X-M1 1.50 FUN_00bfb028 stock body against rb_modal_dispatch with the same retained prehook, tables and generated callbacks" :: String)
+    , "provenance" .= boundaryScope boundary
     , "cpu" .= object ["architecture" .= ("arm" :: String), "model" .= ("cortex-r5f" :: String), "mode" .= ("arm" :: String), "endian" .= ("little" :: String)]
     , "artifacts" .= [artifactJson caseRegion | caseRegion@(CaseRegion region _) <- caseSpecRegions spec, not (B.all (== 0) (regionBytes region))]
     , "entry" .= hex (caseSpecEntry spec)
-    , "exit" .= hex exitAddr
-    , "registers" .= object [fromString (registerLabel register) .= hex value | (register, value) <- initialRegisters]
+    , "exit" .= hex (fromIntegral (guestAddress (boundaryExit boundary)))
+    , "registers" .= object [fromString (registerLabel register) .= hex value | (register, value) <- boundaryRegisters boundary]
     , "regions" .= map regionJson (caseSpecRegions spec)
     , "functions" .= [object ["address" .= hex address, "size" .= size] | (address, size) <- caseSpecFunctions spec]
     , "stubs" .= ([] :: [Value])
@@ -579,11 +596,11 @@ caseValue spec =
     , "expected" .=
         object
           [ "status" .= runnerStatusLabel (caseSpecStatus spec)
-          , "registers" .= object [fromString (registerLabel Sp) .= hex stackTop]
+          , "registers" .= object [fromString (registerLabel Sp) .= hex (fromIntegral (guestAddress (boundaryStack boundary)))]
           , "memory" .= ([] :: [Value])
           , "events" .= ([] :: [Value])
           ]
-    , "exclusions" .= (["bounded dispatcher calls with one declared callback reentry; retained prehook, tables and generated callbacks; no scheduler, interrupt or device path"] :: [String])
+    , "exclusions" .= (["no scheduler, interrupt, asynchronous memory access or device path"] :: [String])
     ]
 
 regionJson :: CaseRegion -> Value
@@ -614,13 +631,18 @@ artifactJson (CaseRegion region _) =
     ]
 
 writeCase :: FilePath -> CaseSpec -> IO FilePath
-writeCase directory spec = do
+writeCase = writeCaseWith $
+  CaseBoundary initialRegisters (GuestAddress (fromIntegral exitAddr)) (GuestAddress (fromIntegral stackTop))
+    "owned modal dispatcher differential: X-M1 1.50 FUN_00bfb028 stock body against rb_modal_dispatch with the same retained prehook, tables and generated callbacks"
+
+writeCaseWith :: CaseBoundary -> FilePath -> CaseSpec -> IO FilePath
+writeCaseWith boundary directory spec = do
   createDirectoryIfMissing True directory
   forM_ (caseSpecRegions spec) $ \(CaseRegion region _) ->
     when (not (B.all (== 0) (regionBytes region))) $
       B.writeFile (directory </> (regionName (regionIdOf region) ++ ".bin")) (regionBytes region)
   let path = directory </> "case.json"
-  B.writeFile path (encodeCanonical (caseValue spec))
+  B.writeFile path (encodeCanonical (caseValue boundary spec))
   pure path
 
 initialRegisters :: [(Register, Word32)]
