@@ -593,7 +593,7 @@ validateReceipt (Contract initializer source) receipt = do
       afterResources = beforeResources
   validateAliases expectedTcm beforeResources afterResources (aliases body)
   let preludeClasses = [WatchClass (Window span') (CpuRead:writes) | span' <- [(0x4dae0,0x4f10c),(0x96bd20,0x96bd28)] ++ headers]
-        ++ [WatchClass (Window span') ((if index < (2 :: Int) then [CpuFetch] else []) ++ writes)
+        ++ [WatchClass (Window span') (if index < (2 :: Int) then [CpuWrite,CpuFetch,HostWrite,ModelBusWrite] else writes)
            | (index,span') <- zip [0..] (codeSpans source)]
       preludeRules = [watchRules expectedTcm [0,1] CpuWrite Forbid (physicalScopes (headers ++ drop 2 (codeSpans source)))]
       resources = [(0x4dae0,0x4f10c),(0x96bd20,0x96bd28),(poolPhysical,poolPhysical + 4)] ++ codeSpans source ++ headers
