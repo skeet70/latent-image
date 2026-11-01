@@ -120,6 +120,7 @@ scenarios =
       [0xe3a01000,0xe18020d1,0xe12fff1e]))
   , Scenario (CaseName "nonoverlapping dual register store remains admissible") Admit (const (Program
       [0xe3a01000,0xe18020f1,0xe12fff1e]))
+  , Scenario (CaseName "retained-call LR cannot preserve a pre-call frame address") Refuse retainedLrWrite
   ]
 
 validControl :: Program
@@ -154,6 +155,14 @@ publishedMemoryCall root flavor boundary =
         [0xe92d4010,0xe1a04000,0xe30b2d20,0xe3402096,rootLoad,slot,0xe7921001
         ,virtualArgument,0xe5843000,scratchArgument,call,0xe8bd8010]
 
+retainedLrWrite :: Boundary -> Program
+retainedLrWrite boundary =
+  let call = case boundary of Entry -> 0xebffffdc; Exit -> 0xebffff9c
+   in Program
+        [0xe92d4010,0xe1a04000,0xe24dd008,0xe30b2d20,0xe3402096,0xe5922000,0xe3011624
+        ,0xe7921001,0xe3a03000,0xe5843000,0xe1a0300d,0xe5843014,0xe1a00004,call
+        ,0xe5942014,0xe5823000,0xe28dd008,0xe8bd8010]
+
 -- Adapter bodies and symbol names encode the external A32 artifact ABI.
 artifact :: Boundary -> Program -> Artifact
 artifact boundary candidate =
@@ -162,7 +171,7 @@ artifact boundary candidate =
       Program enterWords = enterBody
       Program exitWords = exitBody
       image = B.concat (map U.putWord32 (entryAdapter ++ exitAdapter ++ bridge
-        ++ replicate 10 0xe320f000
+        ++ replicate 9 0xe320f000
         ++ enterWords ++ replicate (64 - length enterWords) 0xe320f000
         ++ exitWords ++ replicate (64 - length exitWords) 0xe320f000))
       row address size name = unwords [showHex (address :: Word32) "",showHex (size :: Int) "","T",name]
@@ -171,7 +180,7 @@ artifact boundary candidate =
         , row 0x10700 0 "__secondary_stage_end"
         , row 0x10400 112 "xm1_critical_enter_adapter"
         , row 0x10470 60 "xm1_critical_exit_adapter"
-        , row 0x104ac 44 "xm1_critical_retained_call"
+        , row 0x104ac 48 "xm1_critical_retained_call"
         , row 0x10500 (4 * length enterWords) "xm1_critical_enter_continue"
         , row 0x10600 (4 * length exitWords) "xm1_critical_exit"
         ])
@@ -196,5 +205,5 @@ exitAdapter =
 bridge :: [Word32]
 bridge =
   [ 0xe92d4070,0xe1a04000,0xe1a05001,0xe594e018,0xe12cf00e
-  , 0xe894100f,0xe12fff35,0xe884100f,0xe10f0000,0xe5840018,0xe8bd8070
+  , 0xe894100f,0xe12fff35,0xe584e014,0xe884100f,0xe10f0000,0xe5840018,0xe8bd8070
   ]

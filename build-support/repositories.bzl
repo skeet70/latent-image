@@ -76,6 +76,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/native_case.rs",
     "//emulation:fujimod-xm1/src/native_case_main.rs",
     "//emulation:fujimod-xm1/src/peer_witness.rs",
+    "//emulation:fujimod-xm1/src/peer_witness_critical_pair.rs",
     "//emulation:fujimod-xm1/src/peer_witness_initializer.rs",
     "//emulation:fujimod-xm1/src/peer_witness_interrupt_mask.rs",
     "//emulation:fujimod-xm1/src/peer_witness_loader.rs",

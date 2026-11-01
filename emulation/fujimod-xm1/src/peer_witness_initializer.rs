@@ -7,6 +7,9 @@ pub(super) mod interrupt_mask;
 #[path = "peer_witness_primary_initializer.rs"]
 pub(in crate::peer_witness) mod primary;
 
+#[path = "peer_witness_critical_pair.rs"]
+pub(in crate::peer_witness::loader) mod critical_pair;
+
 pub(super) const BODY: (u64, u64) = (0xd0430, 0xd09ac);
 const TABLE: (u64, u64) = (0xddaa0, 0xdf0cc);
 const TABLE_GUEST: u64 = 0x400d_daa0;

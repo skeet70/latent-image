@@ -64,6 +64,7 @@ xm1_critical_retained_call:
     msr cpsr_fs, lr
     ldmia r4, {r0-r3, r12}
     blx r5
+    str lr, [r4, #20]
     stmia r4, {r0-r3, r12}
     mrs r0, cpsr
     str r0, [r4, #24]
