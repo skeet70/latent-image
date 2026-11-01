@@ -248,15 +248,16 @@ nativeCases fields = do
   let ordered = sortOn fst cases
   unless (all ((== 1) . length) (groupBy (\a b -> fst a == fst b) ordered))
     (Left "duplicate native case id")
-  pure (other ++ map snd ordered)
+  pure (collection ++ other ++ map snd ordered)
   where
     caseFields =
       [ (index, (pointer, value))
       | Field (FieldName "results.json" (Just (Key "cases" : Index index : pointer))) value <- fields ]
     grouped = groupBy (\a b -> fst a == fst b) (sortOn fst caseFields)
+    collection =
+      [Field (FieldName "results.json" (Just [Key "cases"])) (Array V.empty) | not (null grouped)]
     other = [field | field <- fields, not (isCaseField field)]
     isCaseField (Field (FieldName "results.json" (Just (Key "cases" : Index _ : _))) _) = True
-    isCaseField (Field (FieldName "results.json" (Just [Key "cases"])) (Array items)) = V.null items
     isCaseField _ = False
     oneCase entries = do
       let leaves = map snd entries

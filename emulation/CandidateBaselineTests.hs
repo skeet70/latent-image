@@ -2,7 +2,7 @@
 module Main (main) where
 
 import Control.Monad (unless)
-import Data.Aeson (Value (..), encode, object, (.=))
+import Data.Aeson (Value (..), encode, object, toJSON, (.=))
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
@@ -144,6 +144,8 @@ main = do
   nativeEmpty <- nativeReceipt []
   nativeMissingId <- nativeReceipt [object ["status" .= String "passed"]]
   nativeDuplicate <- nativeReceipt [a, a]
+  BL.writeFile (root </> "results.json") (encode (object ["bank_mode" .= String "sd"]))
+  nativeMissingCases <- observe nativeSpec receipt
   let compareNative = compareNativeObservations (baselineFields nativeStored)
       nativeDifferences = compareNative nativeChanged
       caseField name = FieldName "results.json" (Just [Key "cases", Key name])
@@ -205,6 +207,12 @@ main = do
         (case compareNative nativeMissingId of Left _ -> True; Right _ -> False)
     , check "removing every native case reports each removed case"
         (compareNative nativeEmpty == Right
-          [AbsentFromRun (caseField "a") a, AbsentFromRun (caseField "b") b, AbsentFromRun (caseField "c") c]) ]
+          [AbsentFromRun (caseField "a") a, AbsentFromRun (caseField "b") b, AbsentFromRun (caseField "c") c])
+    , check "an empty native case array differs from a missing collection"
+        (compareNativeObservations nativeEmpty nativeMissingCases == Right
+          [AbsentFromRun (FieldName "results.json" (Just [Key "cases"])) (toJSON ([] :: [Value]))])
+    , check "a missing native case collection differs from an empty array"
+        (compareNativeObservations nativeMissingCases nativeEmpty == Right
+          [AbsentFromBaseline (FieldName "results.json" (Just [Key "cases"])) (toJSON ([] :: [Value]))]) ]
   unless (and outcomes) exitFailure
   putStrLn ("passed " ++ show (length outcomes) ++ " checks")
