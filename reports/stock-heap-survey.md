@@ -4,7 +4,7 @@
 
 [#148](https://github.com/skeet70/latent-image/issues/148) covers the general C heap and its future Rust replacement, not every stock resource reservation. This survey establishes the newlib/dlmalloc family, concrete entry ABIs, the direct-call surface, one cross-image chunk-header dependency, backing bounds and the [#147](https://github.com/skeet70/latent-image/issues/147) resize defect. Static findings are E-STOCK-HEAP-SURVEY-150 and E-STOCK-HEAP-RESIZE-LOCK-150. One complete no-card boot/menu trace is admitted. Complete indirect-call closure, whole-firmware task/core/IRQ attribution and representative capture/development/storage traces remain open.
 
-`rlsf` is the baseline candidate for the trace-driven comparison, not a benchmark-selected or qualified replacement. No allocator is installed. The final selection remains open until reviewed observation and target-architecture measurements establish the workload, fragmentation, capacity and contention costs.
+**Select direct `rlsf` 0.2.3 as the replacement allocator core.** The reviewed, admitted comparison below establishes its finite workload costs and input-independent bookkeeping tradeoff against stock, Talc and BuddyAlloc. It is not the fastest mean or smallest native footprint on this tape. No production allocator is installed, and this backend choice does not qualify the stock compatibility front end, a cross-core lock, representative workloads or silicon deadlines.
 
 ## Implementation identification
 
@@ -104,7 +104,7 @@ These verdicts come from the published crates.io source archives, not compilatio
 
 | Candidate pin | `no_std`, ARM32 and reclaim | Time and external locking | Verdict |
 | --- | --- | --- | --- |
-| [`rlsf` 0.2.3](https://docs.rs/crate/rlsf/0.2.3/source/src/tlsf.rs) | Unconditional `no_std`, explicit 32-bit layouts, caller-provided pool, variable Layout allocation and coalescing individual free. | O(1) allocate/free bookkeeping; moving resize is O(old size). Mutable core accepts an external RTOS lock. | **Fit, preferred trace-comparison baseline.** Stock alignment recovery and front-end contracts still need implementation and qualification. |
+| [`rlsf` 0.2.3](https://docs.rs/crate/rlsf/0.2.3/source/src/tlsf.rs) | Unconditional `no_std`, explicit 32-bit layouts, caller-provided pool, variable Layout allocation and coalescing individual free. | O(1) allocate/free bookkeeping; moving resize is O(old size). Mutable core accepts an external RTOS lock. | **Fit, selected allocator core.** The admitted comparison is below; stock-front-end provenance and production locking remain qualification boundaries. |
 | [`talc` 5.1.1](https://docs.rs/crate/talc/5.1.1/source/src/base/INTERNALS.md) | `no_std` unless the optional std error scanner is enabled, supplied regions and word-sized chunks, variable allocation/free/resize. | Allocation can scan O(free chunks); fixed/manual sources permit O(1) free/in-place resize. `TalcLock` accepts `lock_api::RawMutex`; source callbacks also need bounds. | **Conditional comparator.** Not admitted as an input-independent bounded-time allocator without an explicit scan bound and deadline. |
 | [`embedded-alloc` 0.7.0](https://docs.rs/crate/embedded-alloc/0.7.0/source/src/tlsf.rs) | `no_std`; TLSF backend is `rlsf`, LLFF is linked-list first fit; both serve variable Layouts/free. | TLSF bookkeeping is O(1), LLFF scans holes. Every operation uses the process-global `critical-section` provider. Statistics walk blocks under that lock. | **Conditional TLSF wrapper, not a distinct backend.** Needs a dual-core RTOS-aware critical-section implementation. Single-core IRQ masking is insufficient. Direct `rlsf` avoids this global dependency. LLFF does not meet constant bookkeeping. |
 | [`offset-allocator` 0.2.0](https://docs.rs/crate/offset-allocator/0.2.0/source/src/lib.rs) | Unconditional `std`; metadata is two preallocated Vecs. Variable offsets and handle-based free, not Layout/pointer allocation. | O(1) two-level bin selection/split/two-neighbor merge after initialization. Mutable core can be externally locked; constructor/reset require an existing allocator. | **Unfit as released.** Fixed arrays, `no_std`, aligned pointer allocation and recoverable handles require a separate port/bridge. Metadata exhaustion can fail with free managed bytes. |
@@ -123,7 +123,7 @@ Buddy blocks are aligned relative to a post-metadata pool base; larger orders al
 
 Forge's default classes cover 8 through 1,024 bytes with fixed per-class capacities. General fallback, class exhaustion and over-alignment must have explicit reclaim/failure contracts. Its std-only mmap/guard-page/NUMA layers are not available on this RTOS. Canary adds size/padding, and poison-on-free writes the usable extent, making free size-dependent ([hardening source](https://docs.rs/crate/forge-alloc/0.3.7/source/src/hardening/poison.rs)). The upstream README reports Miri/Kani/loom and bare-metal cross-compilation; those are upstream claims, not independently exercised target evidence. The pre-1.0 API and fix history do not establish a maturity or reliability ranking.
 
-The later benchmark set is direct `rlsf`, plus an explicitly aligned/locked buddy core if its contract is completed. Talc is useful only as a labelled linear-scan fragmentation comparator with an admitted bound. Benchmark the embedded wrapper only if adopting `critical-section` is independently justified. Do not benchmark the excluded unmodified releases as if they supplied the required reclaiming heap. None of these sources supplies measured X-M1 cycles, a dual-core RTOS lock, whole-caller compatibility or a production cutover.
+The admitted comparison uses direct `rlsf`, fixed/manual Talc as a labelled linear-scan comparator, and an explicitly aligned/locked BuddyAlloc core. The embedded wrapper is not a distinct backend and its global critical-section dependency is not justified here. Excluded unmodified releases are not benchmarked as if they supplied the required reclaiming heap. These measurements do not establish silicon cycles, a dual-core RTOS lock, whole-caller compatibility or a production cutover.
 
 ## Natural allocation observer design for review
 
@@ -202,8 +202,79 @@ Every completed logical call has SVC mode, kernel context zero and IRQ unmasked.
 
 Peak requested live bytes are 115,185 and peak stock usable live bytes are 116,880. Final requested/usable live bytes are 113,309/115,052. The break grows from `0x00a71a00` to a high-water `0x00a8f000`, 120,320 backing bytes. The final reduced boundary counters `[349805630,21293810]` precede the checked route endpoint; no later observed heap call changes these lifetime totals. Lossless watch storage is 25,046,399 compressed bytes for 872,292,909 decoded bytes. These are finite menu-workload measurements, not allocator replay timing or target cycles.
 
+## Allocator selection and admitted replay
 
+The independently reviewed `ab26725` replay package builds with 227 passing SDK tests. Its replay test binary has 62 tests: 15 tape/consumer tests and 47 shared heap/reducer/I/O tests. Each exact-pinned `no_std` ARMv7-R Cortex-R4F subject builds and links. One case for each of stock, `rlsf` 0.2.3, `talc` 5.1.1 and `buddy-alloc` 0.6.0 at each original/recipe capacity admits, eight cases total (E-STOCK-HEAP-REPLAY-150). All eight genuine serialized replay controls refuse at their intended checks: missing step, allocation result, footprint, statistics, counter, diagnostic role, payload data and code watch.
+
+Every case replays the same 8,529 logical operations, including all 4,490 successful mallocs and 4,039 frees, without removing failures or changing sizes. It restores the preserved first-heap-call checkpoint and executes under isolated core 0/task 73 with interrupt delivery suppressed. Original tasks 33/72/73 remain trace attributions, not recreated scheduling. Native subjects take original owned Layouts; this is not an installed pointer-only stock bridge. The actual retained lock/unlock execute for allocator calls. Code, immutable constants/unwind data, raw frames, payload patterns, physical block statistics and instruction counts bind the receipts. Allocation-success divergence refuses the case.
+
+The initial source qualification preserves the SDK type/staging failures, the oversized non-GC Buddy link and the first stock replay's fixed-quantum refusal before any guest instruction. The corrected source retains the pinned 1,000-instruction processor quantum and links only reachable sections with all nine exported ABI roots retained. The 256 KiB isolated image window is unchanged. A Buddy recipe launcher reports a transient shell export-file warning; its command exits 0 and its actual receipt admits. No failed or superseded artifact is substituted for a passing case.
+
+### Allocator instruction costs
+
+All values below are **emulated A32 entered instructions, not silicon cycles**. They include each allocator call and its actual uncontended retained lock. Initialization, diagnostics, host payload fills and target zero/copy work are excluded. The tape has no logical resize or calloc, so their implemented composition paths supply no runtime workload samples.
+
+| Backend / operation | Samples | Mean | Median | p95 | p99 | Maximum |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Stock malloc | 4,490 | 503.3 | 497 | 510 | 639 | 1,284 |
+| Stock free | 4,039 | 494.7 | 487 | 521 | 526 | 526 |
+| rlsf malloc | 4,490 | 580.9 | 586 | 586 | 586 | 586 |
+| rlsf free | 4,039 | 550.5 | 556 | 584 | 584 | 584 |
+| Talc malloc | 4,490 | 565.3 | 569 | 579 | 583 | 583 |
+| Talc free | 4,039 | 533.0 | 536 | 555 | 555 | 555 |
+| Buddy malloc | 4,490 | 588.5 | 573 | 684 | 769 | 880 |
+| Buddy free | 4,039 | 670.9 | 645 | 847 | 988 | 1,035 |
+
+Both capacities have the displayed quantiles. Buddy malloc means are 588.470/588.487 before rounding; the other allocator means are identical across capacities. These distributions are finite observations, not worst-case execution-time proofs. Stock has the lowest means here. Talc beats rlsf's mean, free cost and observed allocation maximum on this tape, but its allocation scan remains dependent on free-list shape.
+
+### Live footprint and allocator state
+
+Requested peak/final bytes are 115,185/113,309, with 451 objects live at the final boundary. All eight cases preserve those requested lifetimes and successful outcomes. The two capacities have identical live-block metrics below.
+
+| Backend | Peak allocated block bytes | Final allocated block bytes | Final live headers/rounding bytes | External state bytes | Permanent pool reserve bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Stock | 118,640 | 116,856 | 3,547 | 1,092 | 0 |
+| rlsf | 121,168 | 119,360 | 6,051 | 1,148 | 16 |
+| Talc | 119,968 | 118,176 | 4,867 | 32 | 384 |
+| Buddy | 154,448 | 151,792 | 38,483 | 52 | 49,520 |
+
+Final live overhead is allocated block bytes minus requested bytes at that same boundary, not the difference between independent peaks. Permanent pool reserve is managed bytes minus allocated/free blocks; it includes pool metadata, sentinels and unavailable tail. Live headers are already in allocated block bytes. Native external state includes the comparison status word. Stock's 1,092 bytes are the compiled-layout reconstruction above, not a runtime symbol-size measurement. Its backing cursor and the common retained lock state remain separate support bytes.
+
+### Final free-space geometry
+
+The fraction is `(free bytes - largest free extent) / free bytes` at the final boundary. Stock's uncommitted backing is added to free bytes and coalesced geometrically with its top chunk. The stock summary's minimum-largest-free value of 16 covers only the committed break and is not comparable with full-pool candidate values. These geometric extents are not maximum serviceable payload requests, growth-page guarantees or allocation-failure probabilities.
+
+| Backend / capacity | Final free bytes | Largest free extent bytes | Geometric free fragmentation |
+| --- | ---: | ---: | ---: |
+| Stock original | 1,455,976 | 1,454,192 | 0.123% |
+| Stock recipe | 1,390,440 | 1,388,656 | 0.128% |
+| rlsf original | 1,453,456 | 1,442,464 | 0.756% |
+| rlsf recipe | 1,387,920 | 1,376,928 | 0.792% |
+| Talc original | 1,454,272 | 1,443,296 | 0.755% |
+| Talc recipe | 1,388,736 | 1,377,760 | 0.790% |
+| Buddy original | 1,371,520 | 1,048,576 | 23.546% |
+| Buddy recipe | 1,305,984 | 1,048,576 | 19.710% |
+
+Buddy's extent metric includes its power-of-two order geometry. A smaller percentage in the smaller pool is not increased capacity or better request coverage.
+
+### Linked comparison images
+
+| Native subject | `.text` bytes | Immutable payload bytes | Reserved BSS bytes | Whole image extent bytes |
+| --- | ---: | ---: | ---: | ---: |
+| rlsf | 4,224 | 4,240 | 1,152 | 5,392 |
+| Talc | 4,312 | 4,328 | 32 | 4,368 |
+| Buddy | 6,792 | 7,212 | 64 | 7,280 |
+
+These images include owned Layout adaptation, diagnostics, zero/copy and retained-lock tail-call adapters. They exclude a production stock compatibility bridge. Reserved BSS/image extents include linker alignment; they are not the same quantity as the state structure's size. Recovered stock allocator entry-body/literal extents total 4,336 bytes, with 1,496 additional copy/clear-helper bytes and 84 backing-helper bytes; the shared lock/unlock extent is 172 bytes. Those recovered extents and the native comparison images are not matched minimal production binaries. In a stock receipt, `payload_text_bytes=4224` describes the unused helper fixture, not stock allocator code.
+
+### Decision and production boundary
+
+Direct rlsf is selected for input-independent constant bookkeeping, a finite allocation maximum below stock's on this tape, and live/reserved space costs far below the measured Buddy configuration. It is not selected by mean speed: stock and Talc are faster here, and Talc uses less native allocator state. Talc remains a linear-scan comparator without an admitted deadline; Buddy's bounded-order core pays substantially more live rounding and permanent pool reserve in this configuration.
+
+The [two front-end contracts](replacement-inventory-baseline.md#814-general-heap-survey-and-replacement-boundary-147-148) remain the cutover boundary. New Rust code uses its owned Layout directly over rlsf, not the stock bridge. Stock pointer-only calls need owned layout/alignment provenance or a qualified common-alignment policy; no alignment is guessed from pointer divisibility. The complete wrapper/core/calloc/trim/callback closure must migrate together, and no retained calloc may read a foreign chunk header. Arithmetic and size checks precede locking, and every normal return releases the lock. The resize leak is not a compatibility requirement.
+
+This selects an allocator core, not a production heap installation. Representative capture/development/storage traces, over-aligned requests, real allocation failures, logical resize/calloc workloads, cross-core contention and silicon cycle/deadline evidence are not supplied. Whole-firmware indirect/address-sensitive caller closure and task/core/IRQ absence remain unproved. No camera, SD card or persistent device operation occurred.
 
 ## Reproduction and evidence anchors
 
-Owner-supplied canonical image-4 and image-5 bytes are pinned by the existing builders; raw firmware and listings are not redistributed. Private source paths, digests and static anchors are retained in the two static evidence records. The survey used listing reads and exact target searches, the pinned upstream source, and LLVM's existing objcopy/objdump to generate the missing image-2 listing with explicit scratch output paths. Reviewed observer builds and natural-run outcomes are separate from those static findings. No allocator replay benchmark has run. The integration owner should run `//tests:research-contracts` after integrating the ledger append.
+Owner-supplied canonical images, DAT and ROM are pinned; raw firmware and listings are not redistributed. The ledger preserves static anchors and source pins, the reviewed observer cohorts, the admitted natural tape, secondary-pool/state reconstruction and the eight-case replay/control manifest. Review of E-STOCK-HEAP-WATCH-BOUND-150 and E-STOCK-HEAP-NATURAL-TRACE-150 independently checked their artifact hashes, raw trace metrics and gzip EOF. E-STOCK-HEAP-REPLAY-150 binds the replay source, builds, preserved failures, frozen target artifacts, raw cases and derived measurements. The integration owner should run `//tests:research-contracts` after integrating the additive ledger records.
