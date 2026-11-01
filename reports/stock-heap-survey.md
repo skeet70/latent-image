@@ -265,7 +265,9 @@ Buddy's extent metric includes its power-of-two order geometry. A smaller percen
 | Talc | 4,312 | 4,328 | 32 | 4,368 |
 | Buddy | 6,792 | 7,212 | 64 | 7,280 |
 
-These images include owned Layout adaptation, diagnostics, zero/copy and retained-lock tail-call adapters. They exclude a production stock compatibility bridge. Reserved BSS/image extents include linker alignment; they are not the same quantity as the state structure's size. Recovered stock allocator entry-body/literal extents total 4,336 bytes, with 1,496 additional copy/clear-helper bytes and 84 backing-helper bytes; the shared lock/unlock extent is 172 bytes. Those recovered extents and the native comparison images are not matched minimal production binaries. In a stock receipt, `payload_text_bytes=4224` describes the unused helper fixture, not stock allocator code.
+These images include owned Layout adaptation, diagnostics, zero/copy and retained-lock tail-call adapters. They exclude a production stock compatibility bridge. Reserved BSS/image extents include linker alignment; they are not the same quantity as the state structure's size. Recovered stock allocator entry-body/literal extents total 4,336 bytes, with 352 additional call-derived copy/clear-helper bytes: move `[0x0089d908,0x0089da3c)` is 308 bytes and clear `[0x00043550,0x0004357c)` is 44. The backing helper is 84 bytes and shared lock/unlock 172 bytes. Those recovered extents and the native comparison images are not matched minimal production binaries. In a stock receipt, `payload_text_bytes=4224` describes the unused helper fixture, not stock allocator code.
+
+E-STOCK-HEAP-REPLAY-HELPERS-150 supersedes the earlier helper attribution. Original cited artifacts and all replay results remain unchanged.
 
 ### Decision and production boundary
 
