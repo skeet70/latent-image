@@ -64,17 +64,15 @@ enum ScratchValue {
     EnteredRegister { register: EnteredRegister },
     EnteredLr,
     EnteredCpsr,
-    Unknown,
 }
 
 impl ScratchValue {
-    fn expected(self, entered: &Context) -> Option<Word> {
+    fn expected(self, entered: &Context) -> Word {
         match self {
-            Self::Constant { value } => Some(value),
-            Self::EnteredRegister { register } => Some(entered.registers[usize::from(register.0)]),
-            Self::EnteredLr => Some(entered.lr),
-            Self::EnteredCpsr => Some(entered.cpsr),
-            Self::Unknown => None,
+            Self::Constant { value } => value,
+            Self::EnteredRegister { register } => entered.registers[usize::from(register.0)],
+            Self::EnteredLr => entered.lr,
+            Self::EnteredCpsr => entered.cpsr,
         }
     }
 }
@@ -269,7 +267,8 @@ impl OwnedProgram {
                 "owned primary raw access attribution or chronology differs")?;
             let value = event.value.ok_or("owned primary access lacks value")?;
             require(value <= u64::from(u32::MAX), "owned primary access value exceeds word")?;
-            if let Some(expected) = access.scratch_value.and_then(|provenance| provenance.expected(entered)) {
+            if access.kind == AccessKind::ScratchWrite {
+                let expected = access.scratch_value.ok_or("owned primary scratch write lacks value provenance")?.expected(entered);
                 require(value == u64::from(expected.0), "owned primary scratch write differs from entered value provenance")?;
             }
             let value = (value as u32).to_le_bytes();

@@ -69,7 +69,7 @@ data Scratch = Scratch
 data AccessKind = ScratchRead | ScratchWrite | ImageRead | PublicationWrite
   deriving (Eq, Show)
 
-data ScratchValue = ScratchConstant Word32 | EnteredRegister A.Reg | EnteredLr | EnteredCpsr | UnknownScratch
+data ScratchValue = ScratchConstant Word32 | EnteredRegister A.Reg | EnteredLr | EnteredCpsr
   deriving (Eq, Show)
 
 instance ToJSON ScratchValue where
@@ -78,7 +78,6 @@ instance ToJSON ScratchValue where
     EnteredRegister (A.Reg register) -> object ["kind" .= ("entered-register" :: String),"register" .= register]
     EnteredLr -> object ["kind" .= ("entered-lr" :: String)]
     EnteredCpsr -> object ["kind" .= ("entered-cpsr" :: String)]
-    UnknownScratch -> object ["kind" .= ("unknown" :: String)]
 
 data Access = Access
   { accessPc :: Guest
@@ -287,12 +286,12 @@ store incomingSp location value machine = case location of
   StackAddress relative -> do
     guest <- frameAddress incomingSp machine relative
     require (case value of StackAddress _ -> False; _ -> True) "primary initializer spills a stack alias"
-    let expected = case value of
-          Constant wordValue -> ScratchConstant wordValue
-          Incoming (A.Reg 4) -> EnteredCpsr
-          Incoming register -> EnteredRegister register
-          ReturnAddress -> ScratchConstant (ownedStart + 12)
-          _ -> UnknownScratch
+    expected <- case value of
+      Constant wordValue -> pure (ScratchConstant wordValue)
+      Incoming (A.Reg 4) -> pure EnteredCpsr
+      Incoming register -> pure (EnteredRegister register)
+      ReturnAddress -> pure (ScratchConstant (ownedStart + 12))
+      _ -> Left "primary initializer scratch write lacks proved value provenance"
     pure (recordAccess here guest ScratchWrite (Just expected) machine)
       {machineStack = M.insert relative value (machineStack machine)}
   Constant guest -> case machineRemaining machine of

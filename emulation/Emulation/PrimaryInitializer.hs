@@ -764,13 +764,11 @@ validateProgramMemory contract observation events prestate committed enteringCou
           provenance <- maybe (Left "owned primary scratch write lacks value provenance") Right (PA.accessScratchValue access)
           let Context _ registers _ lr cpsr _ _ = enteredContext observation
               expectedValue = case provenance of
-                PA.ScratchConstant word -> Just word
-                PA.EnteredRegister (A.Reg register) -> Just (registers !! fromIntegral register)
-                PA.EnteredLr -> Just lr
-                PA.EnteredCpsr -> Just cpsr
-                PA.UnknownScratch -> Nothing
-          forM_ expectedValue $ \expected ->
-            require (wordValue == expected) "owned primary scratch write differs from its entered value provenance"
+                PA.ScratchConstant word -> word
+                PA.EnteredRegister (A.Reg register) -> registers !! fromIntegral register
+                PA.EnteredLr -> lr
+                PA.EnteredCpsr -> cpsr
+          require (wordValue == expectedValue) "owned primary scratch write differs from its entered value provenance"
           pure (M.insert guest wordValue memory)
         PA.ScratchRead -> do
           old <- maybe (Left "owned primary scratch read leaves its admitted frame") Right (M.lookup guest memory)
