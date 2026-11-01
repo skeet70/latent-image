@@ -31,7 +31,7 @@ xm1_rust_elf(
     rust_staticlib = ":loader-prefix-rust",
 )
 
-# Controls: a Rust cfg or an assembly define per fault.
+# Original synthetic controls, each enabling one labelled owned-source fault.
 _RUST_FAULTS = {
     "core-refusal": "loader_prefix_core_refusal",
     "fill-fault": "loader_prefix_fill_fault",
