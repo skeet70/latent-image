@@ -197,9 +197,7 @@ fn sample(machine: &Machine, maps: &[MemoryMap], images: &[Image], recorder: &Re
     let banks = tcm(machine)?;
     let mut identities = [0; 2];
     for (index, value) in identities.iter_mut().enumerate() {
-        *value = u32::try_from(machine.session.board.cpu(index)?.coprocessor(arm::Coprocessor {
-            cp: 14, opc1: 0, crn: 2, crm: 0, opc2: 0, secure: 0, wide: false,
-        }, None)?).map_err(|error| error.to_string())?;
+        *value = machine.session.board.cpu(index)?.rprofile_identity(None)?;
         require(matches!(*value, 0x4003 | 0x5003), "unadmitted current CP14 identity")?;
     }
     let domain = usize::from(identities[core] != 0x4003);
