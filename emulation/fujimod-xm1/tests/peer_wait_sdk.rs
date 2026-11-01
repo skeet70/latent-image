@@ -890,11 +890,23 @@ mod composed_interleaving {
     enum FirstHandoff { Early, Late, Missing, Invalid, Partial(usize) }
 
     #[derive(Clone, Copy)]
-    enum Scenario { Held, Natural, Delayed }
+    enum Scenario {
+        Held, Natural, Delayed, NegativeInterleavedTail, NegativeInvalidCorePostLoad,
+        NegativeInvalidCoreExit, NegativeInvalidCoreRefusal, NegativePredicateZero,
+    }
 
     impl Scenario {
         fn name(self) -> &'static str {
-            match self { Self::Held => "held", Self::Natural => "natural", Self::Delayed => "delayed" }
+            match self {
+                Self::Held => "held", Self::Natural => "natural", Self::Delayed => "delayed",
+                Self::NegativeInterleavedTail => "negative-interleaved-tail",
+                Self::NegativeInvalidCorePostLoad | Self::NegativeInvalidCoreExit | Self::NegativeInvalidCoreRefusal => "negative-invalid-core",
+                Self::NegativePredicateZero => "negative-predicate-zero",
+            }
+        }
+        fn standalone(self) -> bool {
+            matches!(self, Self::NegativeInvalidCorePostLoad | Self::NegativeInvalidCoreExit
+                | Self::NegativeInvalidCoreRefusal | Self::NegativePredicateZero)
         }
     }
 
@@ -904,6 +916,7 @@ mod composed_interleaving {
         WrongValue, WrongPreimage, CodeStaging, CodeRestore, OpcodeWrite, ResetWrite,
         BootstrapOpcode, BootstrapReset, BootstrapHandler, CodeHash, SelectorHash,
         ZeroLiteral, ZeroWriter, NandBeforeHandoff, NandAfterInstall, NandProtectedOverlap,
+        InterleavedHelper, InterleavedBranch, InterleavedExtra,
     }
 
     #[derive(Clone, Copy, Serialize)]
@@ -950,6 +963,7 @@ mod composed_interleaving {
         DelayRelease,
         CompletionStore,
         PrefixExit,
+        Refusal,
     }
 
     #[derive(Deserialize)]
@@ -1094,6 +1108,22 @@ mod composed_interleaving {
         endpoint: Option<Endpoint>,
     }
 
+    #[derive(Deserialize)]
+    struct NegativeEvidence { invalid_core_identity: u32 }
+
+    #[derive(Deserialize)]
+    struct StandaloneReceipt {
+        schema: u32,
+        result: ResultStatus,
+        machine_failure: Option<String>,
+        cp14_identities: [u32; 2],
+        stops: Vec<Stop>,
+        scoped_watch: Option<ScopedHistory>,
+        negative_evidence: Option<NegativeEvidence>,
+        completion: Option<Completion>,
+        endpoint: Option<Endpoint>,
+    }
+
     impl Receipt {
         fn row(&self, reference: &HistoryRef) -> &ProtocolRow {
             match reference.epoch {
@@ -1124,6 +1154,11 @@ mod composed_interleaving {
     }
 
     fn observe_scenario(order: FirstHandoff, mutation: Mutation, scenario: Scenario) -> (Result<(), String>, Receipt) {
+        let (result, bytes) = observe_bytes(order, mutation, scenario);
+        (result, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    fn observe_bytes(order: FirstHandoff, mutation: Mutation, scenario: Scenario) -> (Result<(), String>, Vec<u8>) {
         fujimod_emulator_exr2_board::register_board_builder();
         fujimod_emulator_models::register();
         let document = RunDocument::parse(include_bytes!("../data/xm1-150.json")).unwrap();
@@ -1219,7 +1254,8 @@ mod composed_interleaving {
             put_word(&mut memory, back as usize, branch(back, 0x600c));
         }
         match mutation {
-            Mutation::None | Mutation::CodeHash | Mutation::SelectorHash | Mutation::NandBeforeHandoff | Mutation::NandAfterInstall | Mutation::NandProtectedOverlap => (),
+            Mutation::None | Mutation::CodeHash | Mutation::SelectorHash | Mutation::NandBeforeHandoff | Mutation::NandAfterInstall
+                | Mutation::NandProtectedOverlap | Mutation::InterleavedHelper | Mutation::InterleavedBranch | Mutation::InterleavedExtra => (),
             Mutation::BeforeHandoff => put_word(&mut memory, 0x6018, 0xe5867000),
             Mutation::WrongCore => {
                 put_word(&mut memory, 0x10404, 0xe5867000);
@@ -1339,6 +1375,38 @@ mod composed_interleaving {
                 }
             }
         }
+        if scenario.standalone() {
+            put_word(&mut memory, 0x6000, branch(0x6000, 0x1800));
+            put_word(&mut memory, 0x1800, 0xee091f31);
+            put_word(&mut memory, 0x1804, branch(0x1804, 0x6004));
+            put_word(&mut memory, 0x10464, branch(0x10464, 0x10500));
+            put_word(&mut memory, 0x10500, 0xee121e10);
+            let continuation = match scenario {
+                Scenario::NegativeInvalidCoreExit => 0xd0aac,
+                Scenario::NegativeInvalidCoreRefusal => 0x10510,
+                _ => 0x10430,
+            };
+            put_word(&mut memory, 0x10504, branch(0x10504, continuation));
+            put_word(&mut memory, 0x10510, 0xeafffffe);
+            if matches!(scenario, Scenario::NegativePredicateZero) {
+                put_word(&mut memory, 0x10438, branch(0x10438, 0x10600));
+            }
+        }
+        let canonical_installer = digest(&memory[0x40020..0x40100]);
+        let hook = if matches!(scenario, Scenario::NegativeInterleavedTail) {
+            let instruction = branch(0x40040, 0x6040);
+            put_word(&mut memory, 0x40040, instruction);
+            for (index, word) in [0xe3a03024, 0xe59f4008, 0xe7834006, 0xe3a03028, 0xe59ff000, 0xdeadbe00, 0x40044].into_iter().enumerate() {
+                put_word(&mut memory, 0x6040 + 4 * index, word);
+            }
+            match mutation {
+                Mutation::InterleavedHelper => put_word(&mut memory, 0x6054, 0xdeadbe04),
+                Mutation::InterleavedBranch => put_word(&mut memory, 0x40040, branch(0x40040, 0x6044)),
+                Mutation::InterleavedExtra => put_word(&mut memory, 0x400a0, 0xe1a00000),
+                _ => (),
+            }
+            format!(r#""interleaved_tail":{{"site":262208,"instruction":{instruction},"target":24640}},"#)
+        } else { String::new() };
         let bus = match mutation {
             Mutation::NandBeforeHandoff | Mutation::NandAfterInstall | Mutation::NandProtectedOverlap => {
                 let timing = if matches!(mutation, Mutation::NandAfterInstall) {
@@ -1371,7 +1439,9 @@ mod composed_interleaving {
         let second_image = digest(&memory[0x10400..image_end]);
         let loader = digest(&memory[0xd0000..0xddaa0]);
         let code = [
-            if matches!(mutation, Mutation::CodeHash) { "ab".repeat(32) } else { digest(&memory[0x40020..0x40100]) },
+            if matches!(mutation, Mutation::CodeHash) { "ab".repeat(32) }
+                else if matches!(scenario, Scenario::NegativeInterleavedTail) { canonical_installer }
+                else { digest(&memory[0x40020..0x40100]) },
             if matches!(mutation, Mutation::SelectorHash) { "ab".repeat(32) } else { digest(&memory[0x427b8..0x427d4]) },
         ];
         let protocol = protocol(code);
@@ -1392,15 +1462,65 @@ mod composed_interleaving {
             "symbols_sha256":"{identity}","source_sha256":"{identity}","image":[24576,28928],"entry":24576,
             "handoff":24608,"handoff_target":262176,"handoff_argument":6934008,"secondary_entry":66560,
             "secondary_image_sha256":"{second_image}","secondary_symbols_sha256":"{identity}",
-            "secondary_source_sha256":"{identity}",{protocol}}}}}"#);
+            "secondary_source_sha256":"{identity}",{hook}{protocol}}}}}"#);
+        let contract = if scenario.standalone() {
+            let period = if matches!(scenario, Scenario::NegativePredicateZero) { "null" } else { "256" };
+            format!(r#"{{"schema":4,"budget":50000000,"scenario":{{"kind":"{scenario_name}"}},
+                "program":{{"kind":"owned","record_sha256":"{record2}","record_immutable_sha256":"{immutable}",
+                "loader_sha256":"{loader}","handoff":66592,"entry":66604,"load":66608,"post_load":66612,
+                "loaded_register":0,"poll_period":{period},"image":[66560,{image_end}],"refusal":66832,
+                "forbid_fetch":[[852000,852168],[854444,854480],[854596,854628]],"forbid_read":[[852168,852220]]}}}}"#)
+        } else { contract };
         let output = std::env::temp_dir().join(format!(
             "peer-composed-order-{}-{}", std::process::id(), OUTPUT.fetch_add(1, Ordering::Relaxed),
         ));
         std::fs::create_dir(&output).unwrap();
         let result = peer_witness::run(peer_witness::WitnessMachine::from_unbound(machine), PeerContract::parse(contract.as_bytes()).unwrap(), &output);
-        let receipt = serde_json::from_slice(&std::fs::read(output.join("peer-witness.json")).unwrap()).unwrap();
+        let receipt = std::fs::read(output.join("peer-witness.json")).unwrap();
         std::fs::remove_dir_all(output).unwrap();
         (result, receipt)
+    }
+
+    #[test]
+    fn invalid_core_injection_executes_owned_instructions_before_refusing_each_continuation() {
+        for (scenario, boundary) in [
+            (Scenario::NegativeInvalidCorePostLoad, Label::PostLoad),
+            (Scenario::NegativeInvalidCoreExit, Label::PrefixExit),
+            (Scenario::NegativeInvalidCoreRefusal, Label::Refusal),
+        ] {
+            let (result, bytes) = observe_bytes(FirstHandoff::Late, Mutation::None, scenario);
+            let receipt: StandaloneReceipt = serde_json::from_slice(&bytes).unwrap();
+            assert!(result.is_err());
+            assert_eq!(receipt.schema, 4);
+            assert_eq!(receipt.result, ResultStatus::Failed);
+            assert!(receipt.machine_failure.is_none());
+            assert_eq!(receipt.cp14_identities, [0x4003, 0x5003]);
+            assert_eq!(receipt.negative_evidence.unwrap().invalid_core_identity, 0x6003);
+            let entry = receipt.stops.iter().find(|stop| stop.label == Label::PrefixEntry).unwrap();
+            let refused = receipt.stops.iter().find(|stop| stop.label == boundary).unwrap();
+            assert!(refused.counts[1] > entry.counts[1] + 1);
+            assert_eq!(refused.registers[1], 0x6003);
+            assert!(receipt.completion.is_none());
+            assert!(receipt.endpoint.is_none());
+        }
+    }
+
+    #[test]
+    fn zero_accepting_predicate_reaches_the_unchanged_uncommitted_prefix_exit_refusal() {
+        let (result, bytes) = observe_bytes(FirstHandoff::Late, Mutation::None, Scenario::NegativePredicateZero);
+        let receipt: StandaloneReceipt = serde_json::from_slice(&bytes).unwrap();
+        assert!(result.is_err());
+        assert_eq!(receipt.schema, 4);
+        assert_eq!(receipt.result, ResultStatus::Failed);
+        assert!(receipt.machine_failure.is_none());
+        assert!(receipt.negative_evidence.is_none());
+        let post = receipt.stops.iter().find(|stop| stop.label == Label::PostLoad).unwrap();
+        assert_eq!(post.registers[0], 0);
+        let exit = receipt.stops.iter().find(|stop| stop.label == Label::PrefixExit).unwrap();
+        assert_eq!(exit.completion, 0);
+        assert_eq!(receipt.scoped_watch.unwrap().counters[0].nonzero_count, 0);
+        assert!(receipt.completion.is_none());
+        assert!(receipt.endpoint.is_none());
     }
 
     fn assert_vectors(snapshot: &VectorSnapshot, matched: usize) {
@@ -1860,6 +1980,40 @@ mod composed_interleaving {
             assert!(receipt.machine_failure.is_none());
             assert!(receipt.kernel_vector_install.events.is_empty());
             assert!(receipt.kernel_vector_install.installed_stop.is_none());
+        }
+    }
+
+    #[test]
+    fn declared_interleaved_tail_records_the_owned_illegal_store_after_the_first_canonical_store() {
+        let (result, receipt) = observe_scenario(FirstHandoff::Early, Mutation::None, Scenario::NegativeInterleavedTail);
+        assert_refused(result, &receipt);
+        assert!(receipt.machine_failure.is_none());
+        assert_eq!(receipt.kernel_vector_install.state, InstallState::Installing);
+        assert_eq!(receipt.kernel_vector_install.events.len(), 1);
+        let first = receipt.row(&receipt.kernel_vector_install.events[0]);
+        assert_eq!((first.pc, first.physical, first.value), (Some(0x4003c), 0x24, Some(0x40100)));
+        let illegal = receipt.loaded_watch.records.iter().chain(
+            receipt.scoped_watch.iter().flat_map(|watch| &watch.history.records),
+        ).find(|row| row.pc == Some(0x6048)).unwrap();
+        assert_eq!(illegal.source, Source::CpuWrite);
+        assert_eq!((illegal.core, illegal.address, illegal.physical, illegal.size), (Some(0), Some(0x24), 0x24, 4));
+        assert_eq!(illegal.value, Some(0xdeadbe00));
+        assert_eq!(illegal.before, Some(0x40100_u32.to_le_bytes().to_vec()));
+        assert!(receipt.kernel_vector_install.installed_stop.is_none());
+        assert!(receipt.completion.is_none());
+        assert!(receipt.endpoint.is_none());
+    }
+
+    #[test]
+    fn declared_interleaved_tail_preserves_helper_branch_and_full_canonical_code_identity() {
+        for mutation in [Mutation::InterleavedHelper, Mutation::InterleavedBranch, Mutation::InterleavedExtra] {
+            let (result, receipt) = observe_scenario(FirstHandoff::Early, mutation, Scenario::NegativeInterleavedTail);
+            assert_refused(result, &receipt);
+            assert!(receipt.machine_failure.is_none());
+            assert_eq!(receipt.kernel_vector_install.state, InstallState::NotBound);
+            assert!(receipt.kernel_vector_install.events.is_empty());
+            assert!(receipt.kernel_vector_install.installed_stop.is_none());
+            assert!(receipt.loaded_watch.records.iter().all(|row| row.pc != Some(0x6048)));
         }
     }
 

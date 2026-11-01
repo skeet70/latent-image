@@ -24,11 +24,20 @@ module StartupStageContract
   , ComposedArtifacts (..)
   , ComposedStartupInput (..)
   , composedPlans
+  , InterleavedTailHook
+  , interleavedTailHook
+  , interleavedTailSite
+  , interleavedTailInstruction
+  , interleavedTailTarget
+  , applyInterleavedTailHook
+  , canonicalizeInterleavedTail
+  , verifyInterleavedTailComposed
   ) where
 
 import Control.Monad (forM, forM_, unless, when)
 import qualified Crypto.Hash.SHA256 as SHA256
 import qualified Data.ByteString as B
+import Data.Bits ((.&.), (.|.))
 import Data.List (sortOn)
 import Data.Word (Word32)
 import FujiAF.FirstStage
@@ -287,6 +296,56 @@ composedPlans artifacts = composedStagePlan
   (firstStageArtifactPlan (firstStageArtifact artifacts))
   (secondaryPrefixArtifactPlan (secondaryPrefixArtifact artifacts))
   (secondaryPrefixPublication (secondaryPrefixArtifact artifacts))
+
+newtype InterleavedTailHook = InterleavedTailHook ArmEntry
+  deriving (Eq, Show)
+
+interleavedTailSite :: InterleavedTailHook -> Word32
+interleavedTailSite _ = 0x40040
+
+interleavedTailTarget :: InterleavedTailHook -> Word32
+interleavedTailTarget (InterleavedTailHook target) = armEntryAddress target
+
+interleavedTailInstruction :: InterleavedTailHook -> Word32
+interleavedTailInstruction hook =
+  0xea000000 .|. (fromInteger ((toInteger (interleavedTailTarget hook) - 0x40048) `div` 4) .&. 0x00ffffff)
+
+interleavedTailHook :: FirstStageArtifact -> Either String InterleavedTailHook
+interleavedTailHook artifact = do
+  symbol <- lookupSymbol (firstStageArtifactSymbols artifact) "xm1_first_stage_interleaved_tail_fault"
+  let plan = firstStageArtifactPlan artifact
+      bytes = U.mediaImageBytes (planImage plan)
+      start = toInteger (recordGuestBase (planRecord plan) + slotOffsetBytes (planLoadOffset plan))
+      offset = toInteger (symbolAddress symbol) - start
+      expected = [0xe3a03024, 0xe59f4008, 0xe7834006, 0xe3a03028, 0xe59ff000, 0xdeadbe00, 0x40044]
+  unless (symbolSize symbol == 28 && offset >= 0 && offset + 28 <= toInteger (B.length bytes))
+    (Left "interleaved-tail helper leaves the owned first-stage image")
+  unless ([U.word32At bytes (fromInteger offset + index * 4) | index <- [0 .. 6]] == expected)
+    (Left "interleaved-tail helper differs from its synthetic store and displaced instruction")
+  InterleavedTailHook <$> armEntry (symbolAddress symbol)
+
+interleavedTailPatch :: InterleavedTailHook -> Either String LoaderWordPatch
+interleavedTailPatch hook =
+  loaderWordPatch (LoaderId 0) (interleavedTailSite hook) 0xe3a03028 (interleavedTailInstruction hook)
+
+applyInterleavedTailHook :: InterleavedTailHook -> U.Parts -> Either String U.Parts
+applyInterleavedTailHook hook parts = do
+  patch <- interleavedTailPatch hook
+  applyLoaderWordPatches [patch] parts
+
+canonicalizeInterleavedTail :: InterleavedTailHook -> U.Parsed -> Either String U.Parsed
+canonicalizeInterleavedTail hook parsed = do
+  patch <- loaderWordPatch (LoaderId 0) (interleavedTailSite hook) (interleavedTailInstruction hook) 0xe3a03028
+  restored <- applyLoaderWordPatches [patch] (U.parsedParts parsed)
+  bytes <- U.rebuildContainer parsed restored
+  parseStartupDat bytes
+
+verifyInterleavedTailComposed :: ComposedArtifacts -> OriginalStartupDat -> StagedStartupDat -> Either String ()
+verifyInterleavedTailComposed artifacts source staged = do
+  hook <- interleavedTailHook (firstStageArtifact artifacts)
+  canonical <- canonicalizeInterleavedTail hook (stagedStartupParsed staged)
+  plan <- composedPlans artifacts
+  verifyComposedRecords plan (originalStartupParsed source) canonical
 
 data LinkedImage = FirstStageImage | SecondaryPrefixImage
 

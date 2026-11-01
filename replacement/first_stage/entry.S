@@ -96,6 +96,21 @@ xm1_first_stage_handoff_vector:
     mov pc, r2
     .size xm1_first_stage_handoff, . - xm1_first_stage_handoff
 
+#ifdef XM1_FIRST_STAGE_INTERLEAVED_TAIL_FAULT
+    @ Original synthetic store between KernelA's first and second handler stores.
+    .global xm1_first_stage_interleaved_tail_fault
+    .type xm1_first_stage_interleaved_tail_fault, %function
+xm1_first_stage_interleaved_tail_fault:
+    mov r3, #0x24
+    ldr r4, [pc, #8]
+    str r4, [r3, r6]
+    mov r3, #0x28
+    ldr pc, [pc, #0]
+    .word 0xdeadbe00
+    .word 0x40044
+    .size xm1_first_stage_interleaved_tail_fault, . - xm1_first_stage_interleaved_tail_fault
+#endif
+
     .section .rodata
     .global xm1_first_stage_contract
 xm1_first_stage_contract:

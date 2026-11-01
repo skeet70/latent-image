@@ -231,9 +231,9 @@ unsafe fn stage_retained_next(core: Core) {
     }
     let _ = xm1_retained_storage_fini();
 
-    #[cfg(first_stage_handler_tail_fault)]
+    #[cfg(any(first_stage_handler_tail_fault, first_stage_interleaved_tail_fault))]
     xm1_first_stage_completion_zero();
-    #[cfg(not(first_stage_handler_tail_fault))]
+    #[cfg(not(any(first_stage_handler_tail_fault, first_stage_interleaved_tail_fault)))]
     write(0x400a_00c4 as *mut u32, 0);
     write(CELL_PEER0, 0);
     asm!("dsb sy");
@@ -268,7 +268,7 @@ unsafe fn inject_fault() {
 unsafe fn inject_fault() {}
 
 // Completion-zero admission requires a literal-based, zero-offset store.
-#[cfg(first_stage_handler_tail_fault)]
+#[cfg(any(first_stage_handler_tail_fault, first_stage_interleaved_tail_fault))]
 #[no_mangle]
 #[inline(never)]
 unsafe extern "C" fn xm1_first_stage_completion_zero() {

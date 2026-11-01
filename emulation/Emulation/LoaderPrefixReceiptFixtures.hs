@@ -130,7 +130,9 @@ receiptDocument startup scenario kind facts knob = maybe document (\selected -> 
     Guest entrySite = factEntry facts
     Guest loadSite = factLoad facts
     Guest postSite = factPostLoad facts
-    PollPeriod period = factPeriod facts
+    period = case factPeriod facts of
+      WaitingPoll (PollPeriod value) -> value
+      ZeroAcceptingExit -> error "polling receipt fixture requires an ordinary waiting period"
     loaded = if kind == OwnedProgram then 0 else 3 :: Int
     secondarySite = if kind == RetainedProgram then 0x11800 else 0x10400
     held = scenario == Held
@@ -629,8 +631,66 @@ checkCompletionProgress facts = do
   expect "held final counter cannot exceed terminal core1 progress"
     (not (accepted (validate heldContract (BL.toStrict (encode inflatedHeld)))))
 
+
+checkNegativeAdmission :: ProgramFacts -> IO ()
+checkNegativeAdmission facts = do
+  let parseDocument = parseContract . BL.toStrict . encode
+      parseObserved = parseReceipt PrefixBoundary . BL.toStrict . encode
+      predicateFacts = facts {factPeriod = ZeroAcceptingExit}
+      standalone scenario = Contract scenario (Program OwnedProgram (if scenario == NegativePredicateZero then predicateFacts else facts))
+      hook = object ["site" .= (0x40040 :: Word32), "instruction" .= (0xeaff186e :: Word32), "target" .= (0x6200 :: Word32)]
+      startup = setField "interleaved_tail" hook startupFixture
+      scenarioField scenario = object ["kind" .= scenarioName scenario]
+      expectRefused label = expect label . not . accepted
+  mapM_ (\scenario -> do
+    expect ("negative CLI name " ++ scenarioName scenario) (parseScenario (scenarioName scenario) == Right scenario)
+    expectRefused "negative retained route is refused" (admitScenario False RetainedProgram scenario)
+    expect "negative owned route is admitted"
+      (accepted (admitScenario (scenario == NegativeInterleavedTail) OwnedProgram scenario))
+    expectRefused "negative incorrect route is refused"
+      (admitScenario (scenario /= NegativeInterleavedTail) OwnedProgram scenario)
+    ) [NegativeInvalidCore, NegativePredicateZero, NegativeInterleavedTail]
+  mapM_ (\scenario -> do
+    let selected = standalone scenario
+        encoded = contractValue selected
+        observed = setField "scenario" (scenarioField scenario) (receiptDocument Nothing Natural OwnedProgram facts knobs)
+        withEvidence = if scenario == NegativeInvalidCore
+          then setField "negative_evidence" (object ["invalid_core_identity" .= (0x6003 :: Word32)]) observed
+          else observed
+        failed = setField "result" (String "failed") . setField "error" (String "source fault refused") $ withEvidence
+    expect "standalone negative contract round trip" (parseDocument encoded == Right selected)
+    forged <- either fail pure (parseObserved withEvidence)
+    expectRefused "forged passed negative receipt is refused" (validateReceipt selected forged)
+    expectRefused "negative receipt cannot establish ordinary evidence" (validateReceipt (Contract Natural (Program OwnedProgram facts)) forged)
+    _ <- either fail pure (parseObserved failed)
+    expectRefused "negative scenario cannot use a schema5 route" (composedContract scenario (if scenario == NegativePredicateZero then predicateFacts else facts) startupFixture)
+    let initializer = setField "schema" (Number 6) . setField "initializer" Null $ failed
+    expectRefused "initializer receipt rejects negative scenarios" (parseReceipt InitializerBoundary (BL.toStrict (encode initializer)))
+    ) [NegativeInvalidCore, NegativePredicateZero]
+  expectRefused "ordinary contract cannot carry a null polling cycle"
+    (parseDocument (contractValue (Contract Natural (Program OwnedProgram predicateFacts))))
+  expectRefused "predicate-zero contract cannot invent a polling period"
+    (parseDocument (contractValue (Contract NegativePredicateZero (Program OwnedProgram facts))))
+  mapM_ (\period -> expectRefused "ordinary polling period remains bounded"
+    (parseDocument (changeField "program" (setField "poll_period" (toJSON (period :: Word64)))
+      (contractValue (Contract Natural (Program OwnedProgram facts)))))) [0, 100001]
+  expectRefused "retained negative contracts are refused" (retainedContract NegativeInvalidCore)
+  expectRefused "interleaved-tail contract cannot use schema4" (parseDocument (contractValue (standalone NegativeInterleavedTail)))
+  selected <- either fail pure (composedContract NegativeInterleavedTail facts startup)
+  expect "composed negative contract round trip" (parseDocument (contractValue selected) == Right selected)
+  expectRefused "interleaved-tail contract requires its hook" (composedContract NegativeInterleavedTail facts startupFixture)
+  expectRefused "ordinary composed contract refuses the hook" (composedContract Natural facts startup)
+  mapM_ (\changed -> expectRefused "interleaved-tail hook requires the exact branch site and target"
+    (composedContract NegativeInterleavedTail facts (setField "interleaved_tail" changed startupFixture)))
+    [setField "site" (Number 0x40044) hook, setField "instruction" (Number 0xe3a03028) hook, setField "target" (Number 0x6204) hook]
+  let observed = receiptDocument (Just startup) NegativeInterleavedTail OwnedProgram facts knobs
+  forged <- either fail pure (parseObserved observed)
+  expectRefused "forged passed interleaved-tail receipt is refused" (validateReceipt selected forged)
+  _ <- either fail pure (parseObserved (setField "result" (String "failed") (setField "error" (String "tail write refused") observed)))
+  pure ()
 runReceiptCases :: ProgramFacts -> IO ()
 runReceiptCases facts = do
+  checkNegativeAdmission facts
   let owned scenario = Contract scenario (Program OwnedProgram facts)
       ownedReceipt scenario = receipt scenario OwnedProgram facts
       natural = validate (owned Natural) . ownedReceipt Natural

@@ -107,10 +107,10 @@ usage = unlines
   , "       peer-stage-witness --startup retained|owned --scenario natural|held-sentinel|delayed-release [--endpoint handoff|loader-entry] --firmware DAT --fflzd FFLZD --output DIR [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT] [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
   , "       peer-stage-witness --startup-receipt FILE --startup-contract FILE"
   , "       peer-stage-witness --compare RETAINED_RECEIPT RETAINED_CONTRACT OWNED_RECEIPT OWNED_CONTRACT"
-  , "       peer-stage-witness --loader-prefix retained|owned --scenario natural|held|delayed|non-one --firmware DAT --fflzd FFLZD --output DIR [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT] [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
+  , "       peer-stage-witness --loader-prefix retained|owned --scenario natural|held|delayed|non-one|negative-invalid-core|negative-predicate-zero --firmware DAT --fflzd FFLZD --output DIR [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT] [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
   , "       peer-stage-witness --loader-prefix-receipt FILE --loader-prefix-contract FILE"
   , "       peer-stage-witness --compare-loader-prefix RETAINED_RECEIPT RETAINED_CONTRACT OWNED_RECEIPT OWNED_CONTRACT"
-  , "       peer-stage-witness --composed-startup owned --scenario natural|held|delayed|non-one --firmware DAT --fflzd FFLZD --output DIR --firststage-image BIN --firststage-symbols SYMS --candidate-image SECONDARY_PREFIX_BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
+  , "       peer-stage-witness --composed-startup owned --scenario natural|held|delayed|non-one|negative-interleaved-tail --firmware DAT --fflzd FFLZD --output DIR --firststage-image BIN --firststage-symbols SYMS --candidate-image SECONDARY_PREFIX_BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
   , "       peer-stage-witness --composed-startup-receipt FILE --composed-startup-contract FILE"
   , "       peer-stage-witness --compare-composed-startup RETAINED_RECEIPT RETAINED_CONTRACT COMPOSED_RECEIPT COMPOSED_CONTRACT"
   , "       peer-stage-witness --interface-initializer retained|owned --firmware DAT --fflzd FFLZD --output DIR [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT] [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
@@ -131,6 +131,7 @@ usage = unlines
   , "Owned --startup-fault retired-stock-fetch requires --scenario natural --endpoint handoff and a candidate calling retired stock stub_a; the schema-3 producer must refuse it on core 1 at 0x12960."
   , "Loader-prefix preparation writes a schema-4 peer-witness-contract.json and loader-prefix-expected.json. Retained --firmware is the original DAT; held, delayed and non-one write their completion control as loader-prefix-control.DAT. Owned --firmware is the DAT build-loader-prefix staged onto the original or that control DAT."
   , "Composed preparation verifies both record images and loader-B publication against the original or selected completion-control DAT. It writes a schema-5 peer-witness-contract.json and composed-startup-expected.json without launching."
+  , "Negative scenarios require their owned route and dedicated source image; their receipts never establish positive startup evidence."
   , "Interface initialization uses distinct schema 6 and the natural source only; receipt consumption rederives the source/image/symbol contract."
   , "Explicit --initializer-consumer interrupt-mask selects schema 7 and independently consumes complete schema-6 initializer evidence before the retained service window."
   , "Initializer-consumer comparison rederives both contracts from the original DAT and actual owned staging inputs."
@@ -249,6 +250,7 @@ parseOptions arguments = do
           only ([FirmwareFile,FflzdFile,OutputDirectory,DriverFile,RunFile,RomFile,LoaderPrefixMode,ScenarioKind] ++ candidateFlags)
           scenario <- need "--scenario" ScenarioKind >>= L.parseScenario
           chosen <- loaderProgram mode
+          L.admitScenario False (case chosen of RetainedLoader -> L.RetainedProgram; OwnedLoader {} -> L.OwnedProgram) scenario
           PrepareLoaderPrefix <$> need "--firmware" FirmwareFile <*> need "--fflzd" FflzdFile <*> need "--output" OutputDirectory
             <*> pure scenario <*> pure chosen <*> launchMode
         (Nothing, Just path, Nothing) -> do
@@ -266,6 +268,7 @@ parseOptions arguments = do
           only ([FirmwareFile,FflzdFile,OutputDirectory,DriverFile,RunFile,RomFile,ComposedMode,ScenarioKind,FirstStageImageFile,FirstStageSymbolsFile] ++ candidateFlags)
           unless (mode == "owned") (Left "--composed-startup must be owned")
           scenario <- need "--scenario" ScenarioKind >>= L.parseScenario
+          L.admitScenario True L.OwnedProgram scenario
           chosen <- ComposedProgram <$> need "--firststage-image" FirstStageImageFile <*> need "--firststage-symbols" FirstStageSymbolsFile
             <*> need "--candidate-image" CandidateImageFile <*> need "--candidate-symbols" CandidateSymbolsFile <*> need "--source-firmware" SourceFirmwareFile
           PrepareComposed <$> need "--firmware" FirmwareFile <*> need "--fflzd" FflzdFile <*> need "--output" OutputDirectory
@@ -694,6 +697,7 @@ loaderReference originalPath scenario = do
 
 prepareLoaderPrefix :: Workspace -> FilePath -> FilePath -> FilePath -> L.Scenario -> LoaderProgram -> Launch -> IO ()
 prepareLoaderPrefix root firmwarePath fflzdPath outputPath scenario choice execution = do
+  either H.failH pure (L.admitScenario False (case choice of RetainedLoader -> L.RetainedProgram; OwnedLoader {} -> L.OwnedProgram) scenario)
   datPath <- canonicalizePath (resolve root firmwarePath)
   let fflzd = resolve root fflzdPath
   Runtime output <- freshRuntime root (Just (Runtime outputPath)) (UniqueRuntime "peer-stage-witness")
@@ -715,7 +719,7 @@ prepareLoaderPrefix root firmwarePath fflzdPath outputPath scenario choice execu
       bin <- H.readRegular maxCandidateImage (resolve root imagePath)
       symbols <- H.readRegular maxCandidateSymbols (resolve root symbolsPath)
       images <- either H.failH pure (L.verifyStagedOwned reference staged bin symbols)
-      facts <- either H.failH pure (L.deriveOwnedFacts bin symbols images)
+      facts <- either H.failH pure (L.deriveScenarioOwnedFacts scenario bin symbols images)
       pure (datPath, staged, L.OwnedProgram, facts)
   parsed <- either H.failH pure (U.parseContainer launchedBytes)
   image4 <- decodeImage4 fflzd output (U.parsedParts parsed)
@@ -744,6 +748,7 @@ prepareLoaderPrefix root firmwarePath fflzdPath outputPath scenario choice execu
 
 prepareComposed :: Workspace -> FilePath -> FilePath -> FilePath -> L.Scenario -> ComposedProgram -> Launch -> IO ()
 prepareComposed root firmwarePath fflzdPath outputPath scenario (ComposedProgram firstImage firstSymbols secondImage secondSymbols sourcePath) execution = do
+  either H.failH pure (L.admitScenario True L.OwnedProgram scenario)
   datPath <- canonicalizePath (resolve root firmwarePath)
   originalPath <- canonicalizePath (resolve root sourcePath)
   validateFirmware (Firmware originalPath)

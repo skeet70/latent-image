@@ -1,11 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Loader-prefix evidence at the schema-4/5 and schema-6 boundaries.
 module Emulation.LoaderPrefixWitness
-  ( Scenario (..), scenarioName, parseScenario, scenarioControl
+  ( Scenario (..), scenarioName, parseScenario, scenarioControl, isNegative, admitScenario
   , Guest (..), Span (..), RegisterIndex, registerIndex
-  , ProgramKind (..), programKindName, Program (..), ProgramFacts (..)
+  , ProgramKind (..), programKindName, Polling (..), Program (..), ProgramFacts (..)
   , Contract (..), StartupFacts, budget, contractValue, parseContract, isComposed
-  , retainedFacts, deriveOwnedFacts, StagedImages (..), stagedImages, verifyStagedOwned
+  , retainedFacts, deriveOwnedFacts, deriveScenarioOwnedFacts, StagedImages (..), stagedImages, verifyStagedOwned
   , deriveComposedContract
   , ReceiptScope (..), Receipt, ValidatedReceipt, receiptArgument, parseReceipt, validateReceipt, compareReceipts
   , PrefixExitContext (..), prefixExitContext
@@ -22,6 +22,7 @@ import qualified Data.Aeson.KeyMap as KM
 import Data.Bits (complement, (.&.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Builder as BB
+import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy.Char8 as BLC
 import Data.List (nub, sort, sortOn, stripPrefix)
 import qualified Data.Map.Strict as M
@@ -31,7 +32,7 @@ import Emulation.FirstStageWitness (Core (..), Cpsr (..), WitnessResult (..), en
 import Emulation.PeerStageWitness (Registers (..))
 import qualified Emulation.PeerStageWitness as P
 import qualified Emulation.PeerStartupWitness as S
-import Emulation.PollPeriod (CodeImage (..), PollModel (..), PollPeriod (..), imageWord, pollPeriod)
+import Emulation.PollPeriod (CodeImage (..), PollModel (..), PollPeriod (..), imageWord, pollPeriod, pollEarlyExit)
 import qualified FujiAF.CompletionControl as C
 import qualified FujiAF.FirstStage as F
 import FujiAF.JSON (decodeStrictIntegers)
@@ -41,13 +42,25 @@ import qualified StartupStageContract as Stage
 
 -- * Contract
 
-data Scenario = Natural | Held | Delayed | NonOne deriving (Eq, Show, Enum, Bounded)
+data Scenario = Natural | Held | Delayed | NonOne | NegativeInvalidCore | NegativePredicateZero | NegativeInterleavedTail
+  deriving (Eq, Show, Enum, Bounded)
 
 scenarioName :: Scenario -> String
 scenarioName Natural = "natural"
 scenarioName Held = "held"
 scenarioName Delayed = "delayed"
 scenarioName NonOne = "non-one"
+scenarioName NegativeInvalidCore = "negative-invalid-core"
+scenarioName NegativePredicateZero = "negative-predicate-zero"
+scenarioName NegativeInterleavedTail = "negative-interleaved-tail"
+
+isNegative :: Scenario -> Bool
+isNegative scenario = scenario `elem` [NegativeInvalidCore, NegativePredicateZero, NegativeInterleavedTail]
+
+admitScenario :: Bool -> ProgramKind -> Scenario -> Either String ()
+admitScenario composed kind scenario = when (isNegative scenario) $
+  require (kind == OwnedProgram && composed == (scenario == NegativeInterleavedTail))
+    "negative scenario requires its owned standalone or composed route"
 
 parseScenario :: String -> Either String Scenario
 parseScenario = closed scenarioName "loader-prefix scenario"
@@ -58,6 +71,9 @@ scenarioControl Natural = Nothing
 scenarioControl Held = Just C.HeldCompletion
 scenarioControl Delayed = Just C.DelayedCompletion
 scenarioControl NonOne = Just C.NonOneCompletion
+scenarioControl NegativeInvalidCore = Nothing
+scenarioControl NegativePredicateZero = Nothing
+scenarioControl NegativeInterleavedTail = Nothing
 
 newtype Guest = Guest Word32 deriving (Eq, Ord, Show)
 
@@ -78,6 +94,8 @@ programKindName :: ProgramKind -> String
 programKindName RetainedProgram = "retained"
 programKindName OwnedProgram = "owned"
 
+data Polling = WaitingPoll PollPeriod | ZeroAcceptingExit deriving (Eq, Show)
+
 data ProgramFacts = ProgramFacts
   { factRecord :: F.Sha256
   , factRecordImmutable :: F.Sha256
@@ -87,7 +105,7 @@ data ProgramFacts = ProgramFacts
   , factLoad :: Guest
   , factPostLoad :: Guest
   , factLoaded :: RegisterIndex
-  , factPeriod :: PollPeriod
+  , factPeriod :: Polling
   , factImage :: Maybe Span
   , factRefusal :: Maybe Guest
   , factForbidFetch :: [Span]
@@ -104,10 +122,13 @@ data StartupFacts = StartupFacts
   , startupTarget :: Guest, startupArgument :: Guest, startupSecondary :: Guest
   , startupSecondaryImage :: F.Sha256, startupSecondarySymbols :: F.Sha256, startupSecondarySource :: F.Sha256
   , startupCompletionZero :: CompletionZero, startupKernelInstall :: KernelInstallFacts
+  , startupInterleavedTail :: Maybe InterleavedTail
   } deriving (Eq, Show)
 
 data CompletionZero = CompletionZero {zeroSite :: Guest, zeroInstruction :: Word32, zeroLiteral :: Guest}
   deriving (Eq, Show)
+
+data InterleavedTail = InterleavedTail Guest Word32 Guest deriving (Eq, Show)
 
 data KernelCode = KernelCode Span F.Sha256 deriving (Eq, Show)
 
@@ -213,7 +234,7 @@ contractValue contract = object $
       , "handoff" .= guestWord (factHandoff facts), "entry" .= guestWord (factEntry facts)
       , "load" .= guestWord (factLoad facts), "post_load" .= guestWord (factPostLoad facts)
       , "loaded_register" .= let RegisterIndex value = factLoaded facts in value
-      , "poll_period" .= let PollPeriod value = factPeriod facts in value
+      , "poll_period" .= case factPeriod facts of WaitingPoll (PollPeriod value) -> Just value; ZeroAcceptingExit -> Nothing
       , "image" .= fmap spanValue (factImage facts), "refusal" .= fmap guestWord (factRefusal facts)
       , "forbid_fetch" .= map spanValue (factForbidFetch facts), "forbid_read" .= map spanValue (factForbidRead facts)
       ]
@@ -222,7 +243,7 @@ contractValue contract = object $
     (scenario, Program kind facts, selected) = contractParts contract
 
 startupValue :: StartupFacts -> Value
-startupValue facts = object
+startupValue facts = object $
   [ "kind" .= ("composed" :: String), "record1_sha256" .= F.sha256Hex (startupRecord facts)
   , "image_sha256" .= F.sha256Hex (startupImageDigest facts), "symbols_sha256" .= F.sha256Hex (startupSymbols facts)
   , "source_sha256" .= F.sha256Hex (startupSource facts), "image" .= spanValue (startupImage facts)
@@ -234,7 +255,21 @@ startupValue facts = object
   , "secondary_source_sha256" .= F.sha256Hex (startupSecondarySource facts)
   , "completion_zero" .= completionZeroValue (startupCompletionZero facts)
   , "kernel_vector_install" .= kernelFactsValue (startupKernelInstall facts)
-  ]
+  ] ++ ["interleaved_tail" .= interleavedTailValue hook | Just hook <- [startupInterleavedTail facts]]
+
+interleavedTailValue :: InterleavedTail -> Value
+interleavedTailValue (InterleavedTail site instruction target) = object
+  ["site" .= guestWord site, "instruction" .= instruction, "target" .= guestWord target]
+
+parseInterleavedTail :: Value -> Either String InterleavedTail
+parseInterleavedTail value = do
+  row <- fields ["site", "instruction", "target"] value
+  hook@(InterleavedTail (Guest site) instruction (Guest target)) <-
+    InterleavedTail <$> guestField row "site" <*> get row "instruction" <*> guestField row "target"
+  require (site == 0x40040 && case A32.decode site instruction of
+    Branch (Cond 14) False destination -> destination == target
+    _ -> False) "interleaved-tail hook is not the declared unconditional branch"
+  pure hook
 
 completionZeroValue :: CompletionZero -> Value
 completionZeroValue (CompletionZero site instruction literal) = object
@@ -279,9 +314,10 @@ parseKernelFacts value = do
 
 parseStartup :: Value -> Either String StartupFacts
 parseStartup value = do
-  row <- fields ["kind", "record1_sha256", "image_sha256", "symbols_sha256", "source_sha256", "image", "entry", "handoff"
+  initial <- objectOf value
+  row <- fields (["kind", "record1_sha256", "image_sha256", "symbols_sha256", "source_sha256", "image", "entry", "handoff"
     , "handoff_target", "handoff_argument", "secondary_entry", "secondary_image_sha256", "secondary_symbols_sha256", "secondary_source_sha256"
-    , "completion_zero", "kernel_vector_install"] value
+    , "completion_zero", "kernel_vector_install"] ++ ["interleaved_tail" | KM.member "interleaved_tail" initial]) value
   kind <- get row "kind" :: Either String String
   require (kind == "composed") "startup kind is not composed"
   let digest name = get row name >>= F.parseSha256
@@ -290,6 +326,7 @@ parseStartup value = do
     <*> guestField row "handoff_target" <*> guestField row "handoff_argument" <*> guestField row "secondary_entry"
     <*> digest "secondary_image_sha256" <*> digest "secondary_symbols_sha256" <*> digest "secondary_source_sha256"
     <*> (field row "completion_zero" >>= parseCompletionZero) <*> (field row "kernel_vector_install" >>= parseKernelFacts)
+    <*> traverse parseInterleavedTail (KM.lookup "interleaved_tail" row)
   let Span low high = startupImage facts
       inside (Guest address) = fromIntegral address >= low && fromIntegral address < high && address .&. 3 == 0
       Guest target = startupTarget facts
@@ -304,6 +341,9 @@ parseStartup value = do
   require (startupTarget facts == kernelEntry (startupKernelInstall facts)) "firststage target differs from kernel installation entry"
   require (kernelBootstrap (startupKernelInstall facts) !! 8 == guestWord (startupEntry facts))
     "bootstrap reset target differs from the selected firststage entry"
+  forM_ (startupInterleavedTail facts) $ \(InterleavedTail _ _ (Guest address)) ->
+    require (address .&. 3 == 0 && fromIntegral address >= low && fromIntegral address + 28 <= high)
+      "interleaved-tail helper leaves the owned firststage image"
   pure facts
 
 parseContract :: B.ByteString -> Either String Contract
@@ -317,12 +357,16 @@ parseContract bytes = do
   stated <- get row "budget"
   require (stated == budget) "loader-prefix contract budget differs"
   scenario <- field row "scenario" >>= parseScenarioObject
-  program <- field row "program" >>= parseProgram
+  program@(Program kind facts) <- field row "program" >>= parseProgram
+  admitScenario (schema == 5) kind scenario
+  require ((factPeriod facts == ZeroAcceptingExit) == (scenario == NegativePredicateZero))
+    "nullable polling is reserved for negative-predicate-zero"
   case schema of
     4 -> pure (Contract scenario program)
     _ -> do
       startup <- field row "startup" >>= parseStartup
-      let Program kind facts = program
+      require (isJust (startupInterleavedTail startup) == (scenario == NegativeInterleavedTail))
+        "interleaved-tail hook and scenario differ"
       require (kind == OwnedProgram && maybe False (\(Span low _) -> low == 0x10400) (factImage facts))
         "composed startup requires the owned secondary-plus-prefix image at 0x10400"
       pure (ComposedContract scenario facts startup)
@@ -338,7 +382,10 @@ parseProgram value = do
   facts <- ProgramFacts <$> (get row "record_sha256" >>= F.parseSha256) <*> (get row "record_immutable_sha256" >>= F.parseSha256)
     <*> (get row "loader_sha256" >>= F.parseSha256)
     <*> guestField row "handoff" <*> guestField row "entry" <*> guestField row "load" <*> guestField row "post_load"
-    <*> (get row "loaded_register" >>= registerIndex) <*> (PollPeriod <$> get row "poll_period")
+    <*> (get row "loaded_register" >>= registerIndex)
+    <*> (field row "poll_period" >>= \period -> case period of
+      Null -> Right ZeroAcceptingExit
+      _ -> WaitingPoll . PollPeriod <$> json period)
     <*> (field row "image" >>= nullable parseSpan) <*> (field row "refusal" >>= nullable (fmap Guest . json))
     <*> (field row "forbid_fetch" >>= json >>= mapM parseSpan) <*> (field row "forbid_read" >>= json >>= mapM parseSpan)
   checkFacts kind facts
@@ -351,17 +398,21 @@ retainedProgramFacts period = do
   loader <- F.parseSha256 loaderBHex
   pure ProgramFacts
     { factRecord = record, factRecordImmutable = immutable, factLoader = loader, factHandoff = Guest 0x11850, factEntry = Guest 0xd0020
-    , factLoad = Guest 0xd0a44, factPostLoad = Guest 0xd0a48, factLoaded = RegisterIndex 3, factPeriod = period
+    , factLoad = Guest 0xd0a44, factPostLoad = Guest 0xd0a48, factLoaded = RegisterIndex 3, factPeriod = WaitingPoll period
     , factImage = Nothing, factRefusal = Nothing, factForbidFetch = [], factForbidRead = []
     }
 
 checkFacts :: ProgramKind -> ProgramFacts -> Either String ()
 checkFacts kind facts = do
-  let PollPeriod period = factPeriod facts
-  require (period > 0 && period <= 100000) "poll period lies outside 1..100000"
+  case factPeriod facts of
+    WaitingPoll (PollPeriod period) -> require (period > 0 && period <= 100000) "poll period lies outside 1..100000"
+    ZeroAcceptingExit -> require (kind == OwnedProgram) "retained program cannot accept zero completion"
   case kind of
     RetainedProgram -> do
-      expected <- retainedProgramFacts (factPeriod facts)
+      period <- case factPeriod facts of
+        WaitingPoll value -> Right value
+        ZeroAcceptingExit -> Left "retained program lacks a polling cycle"
+      expected <- retainedProgramFacts period
       require (facts == expected) "retained program facts differ from the stock sites"
     OwnedProgram -> do
       Span low high <- maybe (Left "owned program lacks its record-2 image") Right (factImage facts)
@@ -407,12 +458,23 @@ retainedFacts (StagedImages record loader) = do
 -- | Owned facts from the linked image and symbols and the staged record 2
 -- and loader B.
 deriveOwnedFacts :: B.ByteString -> B.ByteString -> StagedImages -> Either String ProgramFacts
-deriveOwnedFacts bin symbolBytes images = do
-  rows <- F.parseSymbols symbolBytes
-  deriveOwnedFactsParsed (U.MediaImage bin) rows images
+deriveOwnedFacts = deriveScenarioOwnedFacts Natural
 
-deriveOwnedFactsParsed :: U.MediaImage -> [F.Symbol] -> StagedImages -> Either String ProgramFacts
-deriveOwnedFactsParsed (U.MediaImage bin) rows (StagedImages record loader) = do
+deriveScenarioOwnedFacts :: Scenario -> B.ByteString -> B.ByteString -> StagedImages -> Either String ProgramFacts
+deriveScenarioOwnedFacts scenario bin symbolBytes images = do
+  admitScenario False OwnedProgram scenario
+  rows <- F.parseSymbols symbolBytes
+  let exported name kinds = any (\line -> case BC.words line of
+        [_, _, kind, found] -> BC.unpack found == name && BC.unpack kind `elem` kinds
+        _ -> False) (BC.lines symbolBytes)
+  when (scenario == NegativeInvalidCore) $
+    require (exported "xm1_loader_prefix_invalid_core_fault" ["T"]) "invalid-core fault lacks its exported function"
+  when (scenario == NegativePredicateZero) $
+    require (exported "xm1_loader_prefix_predicate_zero_fault" ["R", "D"]) "predicate-zero fault lacks its exported data marker"
+  deriveOwnedFactsParsed scenario (U.MediaImage bin) rows images
+
+deriveOwnedFactsParsed :: Scenario -> U.MediaImage -> [F.Symbol] -> StagedImages -> Either String ProgramFacts
+deriveOwnedFactsParsed scenario (U.MediaImage bin) rows (StagedImages record loader) = do
   let at name = F.symbolAddress <$> F.lookupSymbol rows name
       extentOf name = do
         found <- F.lookupSymbol rows name
@@ -456,7 +518,37 @@ deriveOwnedFactsParsed (U.MediaImage bin) rows (StagedImages record loader) = do
     [location] -> Right location
     _ -> Left "dispatch does not call the completion cell exactly once"
   require (null [() | (_, Branch _ _ destination) <- dispatchWords, destination == call + 4]) "a branch enters the owned post-load site"
-  period <- pollPeriod (completionModel (0x400f3000, stackTop) (M.singleton 13 0x400f3400)) code call (call + 4)
+  let model = completionModel (0x400f3000, stackTop) (M.singleton 13 0x400f3400)
+      predicateMarker = "xm1_loader_prefix_predicate_zero_fault"
+      invalidCoreMarker = "xm1_loader_prefix_invalid_core_fault"
+      present name = any ((== name) . F.symbolName) rows
+  require (present predicateMarker == (scenario == NegativePredicateZero)
+    && present invalidCoreMarker == (scenario == NegativeInvalidCore)) "negative source marker and scenario differ"
+  when (scenario == NegativeInvalidCore) $ do
+    (low, high) <- extentOf invalidCoreMarker
+    require (low >= start && high <= end) "invalid-core fault function leaves the owned image"
+    _ <- decodeExtent (low, high)
+    pure ()
+  period <- if scenario == NegativePredicateZero
+    then do
+      marker <- F.lookupSymbol rows predicateMarker
+      require (F.symbolSize marker == 4) "predicate-zero marker is not one word"
+      wordAt (F.symbolAddress marker) >>= \word -> require (word == 0x50524544) "predicate-zero marker value differs"
+      continuationLoad <- maybe (Left "predicate-zero dispatch lacks its pre-call continuation load") Right (lookup (call - 4) dispatchWords)
+      case continuationLoad of
+        Load (Cond 14) Word False (Reg destination) base (OffsetImmediate offset) OffsetOnly
+          | destination >= 0 && destination <= 12 && base == A32.pc ->
+              wordAt (call + 4 + fromIntegral offset) >>= \value ->
+                require (value == exitAddress) "predicate-zero continuation literal differs"
+        _ -> Left "predicate-zero continuation is not an unconditional pre-call literal load"
+      let returns = [location | (location, instruction) <- dispatchWords, case instruction of
+            LoadMultiple (Cond 14) rn _ _ list -> rn == A32.sp && A32.pc `elem` list && Reg 0 `notElem` list
+            BranchExchange (Cond 14) False rm -> rm == A32.lr
+            _ -> False]
+      require (not (null returns)) "predicate-zero dispatch lacks an A32 return"
+      pollEarlyExit model code (call - 4) (call + 4) returns exitAddress
+      pure ZeroAcceptingExit
+    else WaitingPoll <$> pollPeriod model code call (call + 4)
   let refusal = either (const Nothing) (Just . Guest . F.symbolAddress) (F.lookupSymbol rows "xm1_loader_prefix_refusal")
   fetchSpans <- forbidSpans rows "xm1_loader_b_forbid_fetch_"
   readSpans <- forbidSpans rows "xm1_loader_b_forbid_read_"
@@ -547,6 +639,7 @@ verifyStagedOwned reference staged bin symbolBytes = do
 deriveComposedContract :: Scenario -> Stage.ComposedStartupInput -> Guest -> Either String Contract
 deriveComposedContract scenario input (Guest argument) = do
   require (argument == argumentWord) "composed image-4 argument differs from 0x69cdf8"
+  admitScenario True OwnedProgram scenario
   let original = Stage.originalStartupInput input
       finalParsed = Stage.stagedStartupParsed (Stage.stagedStartupInput input)
       artifacts = Stage.startupArtifacts input
@@ -563,17 +656,27 @@ deriveComposedContract scenario input (Guest argument) = do
   reference <- case scenarioControl scenario of
     Nothing -> Right (Stage.originalStartupParsed original)
     Just control -> C.controlParsed <$> C.buildCompletionControl control (Stage.originalStartupParsed original)
-  plan <- Stage.composedPlans artifacts
-  F.verifyComposedRecords plan reference finalParsed
+  hook <- if scenario == NegativeInterleavedTail
+    then do
+      selected <- Stage.interleavedTailHook first
+      Stage.verifyInterleavedTailComposed artifacts original (Stage.stagedStartupInput input)
+      pure (Just selected)
+    else do
+      require (all ((/= "xm1_first_stage_interleaved_tail_fault") . F.symbolName) firstRows)
+        "interleaved-tail source marker requires its negative scenario"
+      plan <- Stage.composedPlans artifacts
+      F.verifyComposedRecords plan reference finalParsed
+      pure Nothing
+  canonical <- maybe (Right finalParsed) (`Stage.canonicalizeInterleavedTail` finalParsed) hook
   images <- stagedImagesFromParts (Guest firstEntry) (U.parsedParts finalParsed)
-  facts <- deriveOwnedFactsParsed (F.planImage (Stage.secondaryPrefixArtifactPlan second)) secondRows images
+  facts <- deriveOwnedFactsParsed Natural (F.planImage (Stage.secondaryPrefixArtifactPlan second)) secondRows images
   handoff <- at firstRows "xm1_first_stage_handoff_vector"
   require (leWordAt firstBin (fromIntegral handoff - firstStart) == Right 0xe1a0f002)
     "firststage handoff vector is not MOV PC, R2"
   secondary <- at secondRows "xm1_secondary_entry"
   record <- B.map complement <$> F.recordSlotBytes F.FirstRecord (U.parsedParts finalParsed)
   completionZero <- deriveCompletionZero first
-  kernel <- deriveKernelInstall original finalParsed record
+  kernel <- deriveKernelInstall original canonical record
   recordDigest <- F.parseSha256 (sha256Hex record)
   loaderA <- loaderSegment (F.LoaderId 0) (U.parsedParts finalParsed)
   require (U.segLoad loaderA == 0x40000 && U.segSize loaderA >= 0x10) "composed loader-A extent differs"
@@ -590,6 +693,8 @@ deriveComposedContract scenario input (Guest argument) = do
         , startupSecondarySymbols = Stage.secondaryPrefixArtifactSymbolsDigest second
         , startupSecondarySource = Stage.originalStartupDigest original
         , startupCompletionZero = completionZero, startupKernelInstall = kernel
+        , startupInterleavedTail = (\selected -> InterleavedTail (Guest (Stage.interleavedTailSite selected))
+            (Stage.interleavedTailInstruction selected) (Guest (Stage.interleavedTailTarget selected))) <$> hook
         }
   checked <- parseStartup (startupValue startup)
   require (firstStart == 0x6000 && secondary == 0x10400) "composed source-defined image starts or entries differ"
@@ -863,7 +968,10 @@ data Receipt = Receipt
   , receiptInitialRecord :: Maybe F.Sha256, receiptHandoffRecordImmutable :: Maybe F.Sha256
   , receiptScope :: ReceiptScope
   , receiptFirststageZero :: Maybe HistoryRef, receiptKernelInstall :: Maybe KernelInstallProof
+  , receiptNegativeEvidence :: Maybe NegativeEvidence
   } deriving (Eq, Show)
+
+newtype NegativeEvidence = InvalidCoreIdentity Word32 deriving (Eq, Show)
 
 -- | A receipt accepted under its contract.
 data ValidatedReceipt = ValidatedReceipt Contract Receipt
@@ -909,9 +1017,12 @@ parseReceipt scope bytes = do
     , "boot_watch", "loaded_watch", "scoped_watch", "stops", "bindings", "completion", "endpoint", "final_primary"
     , "initial_record_sha256", "handoff_record_immutable_sha256"]
     ++ (if schema == 5 then ["startup", "firststage_zero", "kernel_vector_install"] else [])
-    ++ ["initializer" | scope == InitializerBoundary]) value
+    ++ ["initializer" | scope == InitializerBoundary]
+    ++ ["negative_evidence" | KM.member "negative_evidence" initial]) value
   scenario <- field row "scenario" >>= parseScenarioObject
   program <- get row "program" >>= closed programKindName "loader-prefix program"
+  admitScenario (schema == 5) program scenario
+  require (scope /= InitializerBoundary || not (isNegative scenario)) "initializer receipts do not support negative scenarios"
   result <- get row "result" >>= \text -> case text :: String of
     "passed" -> Right Passed
     "failed" -> Right Failed
@@ -934,6 +1045,15 @@ parseReceipt scope bytes = do
     <*> pure scope
     <*> (if schema == 5 then field row "firststage_zero" >>= nullable parseHistoryRef else pure Nothing)
     <*> (if schema == 5 then Just <$> (field row "kernel_vector_install" >>= parseInstallProof) else pure Nothing)
+    <*> traverse (parseNegativeEvidence scenario) (KM.lookup "negative_evidence" row)
+
+parseNegativeEvidence :: Scenario -> Value -> Either String NegativeEvidence
+parseNegativeEvidence scenario value = do
+  require (scenario == NegativeInvalidCore) "negative identity evidence requires negative-invalid-core"
+  row <- fields ["invalid_core_identity"] value
+  identity <- get row "invalid_core_identity"
+  require (identity == 0x6003) "negative core identity differs from 0x6003"
+  pure (InvalidCoreIdentity identity)
 
 parseRowCursor :: Value -> Either String RowCursor
 parseRowCursor value = do
@@ -1375,6 +1495,9 @@ validateReceipt contract receipt = do
       scope = receiptScope receipt
       bodyClasses = initializerClasses scope kind
       retainedBodyAccess = retainedInitializerAccess scope kind
+  require (not (isNegative scenario) && not (isNegative (receiptScenario receipt)))
+    "negative startup evidence cannot establish a positive receipt"
+  require (isNothing (receiptNegativeEvidence receipt)) "positive receipt contains negative evidence"
   require (scope /= InitializerBoundary || (scenario == Natural && isNothing selected))
     "initializer prefix evidence requires standalone natural startup"
   require (receiptStartup receipt == selected) "receipt startup identity or schema differs from its contract"
@@ -1483,7 +1606,9 @@ validateReceipt contract receipt = do
     _ -> Left "scoped zero coverage rule differs"
   let totals = counterTotals counter
       expected = fromIntegral (C.completionValue (scenarioControl scenario)) :: Word64
-      PollPeriod period = factPeriod facts
+  period <- case factPeriod facts of
+    WaitingPoll (PollPeriod value) -> Right value
+    ZeroAcceptingExit -> Left "positive receipt lacks a polling cycle"
   when (scope == InitializerBoundary || isJust selected) $ do
     terminal <- if scenario == Held then Right (last stops) else uniqueStop stops PrefixExit
     let core1 = snd (stopCounts terminal)
