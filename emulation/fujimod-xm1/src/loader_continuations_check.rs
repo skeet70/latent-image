@@ -1,4 +1,4 @@
-use super::{Access, CallKind, Catalog, Core, Event, Guest, Key, RawWatch, ReleaseOutcome, Report, WatchEpoch};
+use super::{Access, CallKind, Catalog, Core, Event, Guest, Key, RawWatch, ReleaseOutcome, Report};
 use super::continuation_view::{Digest, FileBinding, Mapping, Resource, Words};
 use fujimod_xm1::bridge::read;
 use serde::{Deserialize, Serialize};
@@ -83,23 +83,15 @@ fn route(report:&Report)->Result<(),String>{
     require(position.checked_add(90_000_000)==Some(report.instructions.0)&&matches!(&report.menu,Ok(Some([1,5,2]))),"natural menu endpoint differs")
 }
 
-fn positions(report:&Report,epoch:&super::Epoch,raw:&RawWatch)->Result<(),String>{
-    let mut cpu=raw.records.iter().enumerate().filter(|(_,row)|matches!(row.source,Access::CpuRead|Access::CpuFetch|Access::CpuWrite)).peekable();
-    let mut previous=0;
-    for observed in report.events.iter().filter(|event|event.watch.epoch==epoch.kind){
-        let cursor=observed.watch.rows.0;
-        require(previous<=cursor&&cursor<=raw.records.len()&&epoch.start.0<=observed.instructions.0&&observed.instructions.0<=epoch.end.0,"paused watch cursor or epoch differs")?;previous=cursor;
-        while cpu.peek().is_some_and(|(index,_)|*index<cursor){let (_,row)=cpu.next().ok_or("CPU cursor stream disappeared")?;require(row.instructions.ok_or("CPU cursor clock absent")?.0<=observed.instructions.0,"paused cursor includes a future CPU access")?;}
-        if let Some((_,row))=cpu.peek(){require(row.instructions.ok_or("CPU cursor clock absent")?.0>=observed.instructions.0,"paused cursor omits an earlier CPU access")?;}
-    }
-    Ok(())
+struct LoaderBounds<'a> {entry:&'a Event,transfer:&'a Event,copy:Guest,code:[u64;2],frame:[u64;2],core:Core}
+fn loader_bounds(report:&Report,base:Guest,frame:Guest,core:Core)->Result<LoaderBounds<'_>,String>{
+    let pc=Guest(base.0+0x9ac);let entry=report.events.iter().find(|event|event.pc==pc&&event.core==core).ok_or("loader origin absent")?;
+    let transfer=report.events.iter().find(|event|event.pc.0==base.0+0x36e8&&event.core==core).ok_or("loader frame endpoint absent")?;
+    require(entry.instructions.0<transfer.instructions.0&&transfer.instructions.0<=8_000_000,"loader lifetime is outside the prefix watch")?;
+    Ok(LoaderBounds {entry,transfer,copy:base,code:[u64::from(pc.0),u64::from(pc.0)+340],frame:[u64::from(frame.0),u64::from(frame.0)+16],core})
 }
-struct LoaderBounds<'a> {entry:&'a Event,transfer:&'a Event,code:[u64;2],frame:[u64;2],core:Core}
-fn loader_bounds(report:&Report,pc:Guest,frame:Guest,core:Core)->Result<LoaderBounds<'_>,String>{
-    let entry=report.events.iter().find(|event|event.pc==pc&&event.core==core).ok_or("loader origin absent")?;
-    let transfer=report.events.iter().find(|event|event.pc.0==pc.0+0x2d3c&&event.core==core).ok_or("loader frame endpoint absent")?;
-    require(entry.watch.epoch==WatchEpoch::Prefix&&transfer.watch.epoch==WatchEpoch::Prefix&&entry.watch.rows.0<=transfer.watch.rows.0,"loader lifetime is outside the prefix watch")?;
-    Ok(LoaderBounds {entry,transfer,code:[u64::from(pc.0),u64::from(pc.0)+340],frame:[u64::from(frame.0),u64::from(frame.0)+16],core})
+fn loader_copy(row:&super::Row,base:Guest)->bool{
+    row.source==Access::ModelBusWrite&&row.address==base&&row.physical==base&&row.size==0x20000&&row.core.is_none()&&row.pc.is_none()&&row.instructions.is_none()&&row.value.is_none()
 }
 
 fn projections(report:&Report)->Result<(),String>{
@@ -126,7 +118,7 @@ fn projections(report:&Report)->Result<(),String>{
 
 pub(super) fn check(root:&Path,catalog:&Catalog)->Result<Verification,String>{
     let receipt=read(&root.join("continuations.json"))?;let report:Report=serde_json::from_slice(&receipt).map_err(|error|error.to_string())?;
-    require(report.schema==2&&report.error.is_none()&&report.machine_failure.is_none(),"observation did not complete")?;
+    require(report.schema==1&&report.error.is_none()&&report.machine_failure.is_none(),"observation did not complete")?;
     require(report.identity.update.as_str()=="43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"&&report.identity.run.as_str()=="efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"&&report.identity.rom.as_str()=="4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be","canonical input identity differs")?;
     require(report.identity.sources.len()==catalog.0.len(),"source catalog extent differs")?;
     for image in &catalog.0 {require(report.identity.sources.iter().filter(|source|source.kind==image.binding.kind&&source.start==image.binding.start&&source.bytes.0==image.binding.bytes.0&&source.sha256.as_str()==image.binding.sha256.as_str()).count()==1,"source catalog binding differs")?;}
@@ -134,9 +126,9 @@ pub(super) fn check(root:&Path,catalog:&Catalog)->Result<Verification,String>{
     route(&report)?;
     let trace_bytes=read(&artifact(root,&report.trace)?)?;require(Digest::of(&trace_bytes).as_str()==report.trace.sha256.as_str(),"raw trace identity differs")?;
     let trace:Vec<Hit>=serde_json::from_slice(&trace_bytes).map_err(|error|error.to_string())?;require(trace.len()==report.events.len()&&trace.len()<16384,"raw/event trace coverage differs")?;
-    let mut previous=0;let mut previous_epoch=WatchEpoch::Prefix;
+    let mut previous=0;
     for (index,(hit,event)) in trace.iter().zip(&report.events).enumerate(){
-        require(event.id.0==index&&event.instructions.0>=previous&&event.instructions.0<=report.instructions.0&&previous_epoch<=event.watch.epoch,"event chronology differs")?;previous=event.instructions.0;previous_epoch=event.watch.epoch;
+        require(event.id.0==index&&event.instructions.0>=previous&&event.instructions.0<=report.instructions.0,"event chronology differs")?;previous=event.instructions.0;
         require(hit.address.0==event.pc.0&&hit.core==event.core&&hit.instructions==event.instructions&&hit.cpsr==event.registers.cpsr&&hit.sp.0==event.registers.sp.0&&hit.lr.0==event.registers.lr.0&&hit.registers.len()==13,"raw boundary differs")?;
         for register in 0..13u8{require(hit.registers.get(&RegisterNumber(register)).is_some_and(|value|value.0==event.registers.r[usize::from(register)]),"raw general register differs")?;}
         let (source,expected)=catalog.word(event.pc)?;words(&event.code)?;require(source==event.source&&event.code.mapping.guest==event.pc&&event.code.values==[expected]&&event.registers.cpsr&0x20==0,"entered source instruction differs")?;
@@ -145,8 +137,8 @@ pub(super) fn check(root:&Path,catalog:&Catalog)->Result<Verification,String>{
         require(super::DIAGNOSTICS.iter().all(|&(start,end)|physical<start||physical>=end),"diagnostic entry lies in the claimed natural route")?;
         require(!matches!(event.pc.0,0x40aa8|0xd0aa8|0x69d2d8),"source nonreturning boundary was reached")?;
     }
-    require(report.epochs.len()==2&&report.epochs[0].kind==WatchEpoch::Prefix&&report.epochs[1].kind==WatchEpoch::Tail&&report.epochs[0].start.0==0&&report.epochs[0].end.0==8_000_000&&report.epochs[1].start==report.epochs[0].end&&report.epochs[1].end==report.instructions,"classified watch interval differs")?;
-    let loaders=[loader_bounds(&report,Guest(0x409ac),Guest(0x63450),Core::Primary)?,loader_bounds(&report,Guest(0xd09ac),Guest(0xf3410),Core::Secondary)?];
+    require(report.epochs.len()==2&&report.epochs[0].start.0==0&&report.epochs[0].end.0==8_000_000&&report.epochs[1].start==report.epochs[0].end&&report.epochs[1].end==report.instructions,"classified watch interval differs")?;
+    let loaders=[loader_bounds(&report,Guest(0x40000),Guest(0x63450),Core::Primary)?,loader_bounds(&report,Guest(0xd0000),Guest(0xf3410),Core::Secondary)?];
     for epoch in &report.epochs {
         let bytes=read(&artifact(root,&epoch.file)?)?;require(Digest::of(&bytes).as_str()==epoch.file.sha256.as_str(),"raw watch identity differs")?;let raw:RawWatch=serde_json::from_slice(&bytes).map_err(|error|error.to_string())?;
         require(epoch.enabled&&!epoch.refused&&epoch.teardown_error.is_none()&&raw.enabled&&raw.violation.is_none()&&raw.records.len()==epoch.record_count,"classified watch is incomplete")?;
@@ -154,26 +146,29 @@ pub(super) fn check(root:&Path,catalog:&Catalog)->Result<Verification,String>{
         for span in [[0x409ac,0x40b00],[0xd09ac,0xd0b00]]{require(guarded(&raw.classes,span,epoch.start.0!=0),"loader carrier watch coverage absent")?;}
         for span in [[0x61c000,0x61c220],[0x40000,0x40020],[0xd0000,0xd0020],[0x4f10c,0x4f118],[0xdf0cc,0xdf0d8],[0x89f794,0x89f798],[0xa00c4,0xa00c8],[0x5927c,0x59280],[0xe923c,0xe9240],[0x96bd20,0x96bd28],[0x89f8ac,0x89f8b0],[0x944440,0x944464],[0x914834,0x914838],[0x972e88,0x972e94],[0x14c100c,0x14c1010],[0x14c1018,0x14c101c],[0x14c113c,0x14c1140],[0x9662d4,0x9662d8],[0x89f784,0x89f788],[0x89f78c,0x89f790]]{require(guarded(&raw.classes,span,false),"shared publication watch coverage absent")?;}
         if epoch.start.0==0{for span in [[0x63450,0x63460],[0xf3410,0xf3420]]{require(guarded(&raw.classes,span,false),"saved loader frame watch coverage absent")?;}}
-        let mut previous_cpu=epoch.start.0;
+        if epoch.start.0==0{for loader in &loaders{require(raw.records.iter().filter(|row|loader_copy(row,loader.copy)).count()==1,"canonical loader-copy census differs")?;}}
+        let mut future=raw.records.iter().enumerate().filter(|(_,row)|matches!(row.source,Access::CpuRead|Access::CpuFetch|Access::CpuWrite)).peekable();
+        let mut previous_cpu=epoch.start.0;let mut lower=None;
         for (index,row) in raw.records.iter().enumerate() {
             require(in_class(row,&raw.classes)?,"raw access lies outside its declared classes")?;
-            if matches!(row.source,Access::CpuRead|Access::CpuFetch|Access::CpuWrite){let count=row.instructions.ok_or("CPU access clock absent")?.0;require(row.core.is_some()&&row.pc.is_some()&&epoch.start.0<count&&count<=epoch.end.0&&previous_cpu<=count,"CPU access attribution or clock differs")?;previous_cpu=count;}
+            if matches!(row.source,Access::CpuRead|Access::CpuFetch|Access::CpuWrite){let count=row.instructions.ok_or("CPU access clock absent")?.0;require(row.core.is_some()&&row.pc.is_some()&&epoch.start.0<count&&count<=epoch.end.0&&previous_cpu<=count,"CPU access attribution or clock differs")?;previous_cpu=count;lower=Some(count);require(future.next().is_some_and(|(position,_)|position==index),"CPU clock stream differs")?;}
+            let upper=future.peek().and_then(|(_,next)|next.instructions).map(|count|count.0);
             let end=u64::from(row.physical.0)+row.size;
             if matches!(row.source,Access::CpuFetch){for &(start,finish) in &super::DIAGNOSTICS{require(end<=u64::from(start)||u64::from(finish)<=u64::from(row.physical.0),"diagnostic instruction fetch observed")?;}}
             for loader in &loaders {
                 if u64::from(row.physical.0)<loader.code[1]&&loader.code[0]<end {
                     match row.source {
                         Access::CpuFetch=>return Err("loader continuation executes after the admitted prefix".into()),
-                        Access::CpuWrite|Access::HostWrite|Access::ModelBusWrite=>require(epoch.kind==WatchEpoch::Prefix&&index<loader.entry.watch.rows.0,"loader carrier changed after its entry projection")?,
+                        Access::CpuWrite|Access::HostWrite|Access::ModelBusWrite=>require(epoch.start.0==0&&loader_copy(row,loader.copy)&&upper.is_some_and(|count|count<loader.entry.instructions.0),"loader carrier write is not a proven earlier canonical copy")?,
                         _=>{},
                     }
                 }
-                if u64::from(row.physical.0)<loader.frame[1]&&loader.frame[0]<end&&epoch.kind==WatchEpoch::Prefix&&loader.entry.watch.rows.0<=index&&index<loader.transfer.watch.rows.0 {
-                    require(matches!(row.source,Access::CpuWrite)&&row.pc==Some(loader.entry.pc)&&row.core==Some(loader.core),"foreign writer reached the live saved loader frame")?;
+                if u64::from(row.physical.0)<loader.frame[1]&&loader.frame[0]<end {
+                    if matches!(row.source,Access::HostWrite|Access::ModelBusWrite){require(upper.is_some_and(|count|count<loader.entry.instructions.0)||lower.is_some_and(|count|count>loader.transfer.instructions.0),"untimed writer could reach the live saved loader frame")?;}
+                    if row.instructions.is_some_and(|count|loader.entry.instructions.0<=count.0&&count.0<=loader.transfer.instructions.0){require(matches!(row.source,Access::CpuWrite)&&row.pc==Some(loader.entry.pc)&&row.core==Some(loader.core),"foreign writer reached the live saved loader frame")?;}
                 }
             }
         }
-        positions(&report,epoch,&raw)?;
     }
     let mut loader_calls=0;let mut task_calls=0;
     for call in &report.calls {

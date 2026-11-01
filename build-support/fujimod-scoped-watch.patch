@@ -95,7 +95,7 @@ index c919039..711e79a 100644
          } else {
              self.rows.push(row);
          }
-@@ -116,14 +122,21 @@ impl Records {
+@@ -116,14 +122,18 @@ impl Records {
      }
      pub(super) fn view_changed(&mut self) {
          if self.views == ViewPolicy::Fixed {
@@ -109,9 +109,6 @@ index c919039..711e79a 100644
 +            }
          }
      }
-+    pub fn record_count(&self) -> usize {
-+        self.rows.len()
-+    }
      pub fn state(&self) -> Value {
          let mut state =
              json!({"enabled":true,"ranges":self.ranges,"records":self.rows,"violation":self.violation});
@@ -120,7 +117,7 @@ index c919039..711e79a 100644
              state["classes"] = self
                  .classes
                  .iter()
-@@ -134,6 +147,9 @@ impl Records {
+@@ -134,6 +144,9 @@ impl Records {
                  ViewPolicy::Fixed => "fixed",
              });
          }
@@ -130,7 +127,7 @@ index c919039..711e79a 100644
          state
      }
  }
-@@ -141,6 +157,16 @@ pub struct MemoryWatch {
+@@ -141,6 +154,16 @@ pub struct MemoryWatch {
      pub records: Rc<RefCell<Records>>,
      contexts: Vec<Box<MemoryContext>>,
      hooks: Vec<(usize, HookId)>,
@@ -147,7 +144,7 @@ index c919039..711e79a 100644
  }
  struct MemoryContext {
      state: Weak<RefCell<State>>,
-@@ -149,7 +175,74 @@ struct MemoryContext {
+@@ -149,7 +172,74 @@ struct MemoryContext {
      maps: Vec<MemoryMap>,
      core: usize,
  }
@@ -222,7 +219,7 @@ index c919039..711e79a 100644
      fn record(
          &self,
          source: &str,
-@@ -161,18 +254,7 @@ impl MemoryContext {
+@@ -161,18 +251,7 @@ impl MemoryContext {
              return Ok(());
          };
          let state = state.borrow();
@@ -242,7 +239,7 @@ index c919039..711e79a 100644
          let mut records = self.records.borrow_mut();
          let Some(physical) = physical else {
              return if records.views == ViewPolicy::Fixed {
-@@ -187,11 +269,7 @@ impl MemoryContext {
+@@ -187,11 +266,7 @@ impl MemoryContext {
          if tcm_overlap(&*cpu, address, size)? {
              return Err("Memory watch intersects a CPU-private TCM overlay".into());
          }
@@ -255,7 +252,7 @@ index c919039..711e79a 100644
          let before = if source != "cpu-fetch" {
              if !(1..=16).contains(&size) {
                  return Err("Memory watch cannot capture this CPU access width".into());
-@@ -203,37 +281,16 @@ impl MemoryContext {
+@@ -203,37 +278,16 @@ impl MemoryContext {
              None
          };
          let value = if source == "cpu-read" && size <= 8 {
@@ -297,7 +294,7 @@ index c919039..711e79a 100644
          );
          Ok(())
      }
-@@ -354,6 +411,9 @@ impl Board {
+@@ -354,6 +408,9 @@ impl Board {
          if self.preservation_active() {
              return Err("A preservation observation conflicts with memory watch".into());
          }
@@ -307,7 +304,7 @@ index c919039..711e79a 100644
          let ranges = union(ranges);
          self.watch_backing(&ranges)?;
          let records = Rc::new(RefCell::new(Records {
-@@ -361,11 +421,7 @@ impl Board {
+@@ -361,11 +418,7 @@ impl Board {
              limit,
              ..Default::default()
          }));
@@ -320,7 +317,7 @@ index c919039..711e79a 100644
          for (core, cpu) in self.cpus.iter().enumerate() {
              let mut views = maps
                  .iter()
-@@ -470,6 +526,9 @@ impl Board {
+@@ -470,6 +523,9 @@ impl Board {
          if self.preservation_active() {
              return Err("A preservation observation conflicts with memory watch".into());
          }
@@ -330,7 +327,7 @@ index c919039..711e79a 100644
          let ranges = union(classes.iter().map(|range| (range.start, range.end)).collect());
          self.watch_backing(&ranges)?;
          let records = Rc::new(RefCell::new(Records {
-@@ -479,11 +538,7 @@ impl Board {
+@@ -479,11 +535,7 @@ impl Board {
              views,
              ..Default::default()
          }));
@@ -343,7 +340,7 @@ index c919039..711e79a 100644
          for (core, cpu) in self.cpus.iter().enumerate() {
              let mut processor_views = maps
                  .iter()
-@@ -554,11 +609,35 @@ impl Board {
+@@ -554,11 +606,35 @@ impl Board {
              .replace(Some(Rc::downgrade(&records)));
          Ok(watch)
      }

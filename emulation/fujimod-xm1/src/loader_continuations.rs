@@ -1,4 +1,4 @@
-use fujimod_emulator::board::{factory::MemoryMap, observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange}};
+use fujimod_emulator::board::{factory::MemoryMap, observation::{ViewPolicy, WatchKinds, WatchRange}};
 use fujimod_emulator_cpu::{Register, arm};
 use fujimod_xm1::{bridge::{read, write}, guest::RouteKey, machine::Machine, provenance::Guest, run::{self, RunDocument, ValidatedUpdate}};
 use serde::{Deserialize, Serialize};
@@ -59,18 +59,8 @@ impl TryFrom<usize> for Core {type Error=String;fn try_from(value:usize)->Result
 impl From<Core> for usize {fn from(value:Core)->Self{match value{Core::Primary=>0,Core::Secondary=>1}}}
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct Registers { r:[u32;13], sp:Guest, lr:Guest, cpsr:u32 }
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all="kebab-case")]
-enum WatchEpoch { Prefix, Tail }
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-#[serde(transparent)]
-struct RecordCursor(usize);
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-struct WatchPosition {epoch:WatchEpoch,rows:RecordCursor}
-struct ActiveWatch {epoch:WatchEpoch,handle:MemoryWatch}
-impl ActiveWatch {fn position(&self)->WatchPosition{WatchPosition {epoch:self.epoch,rows:RecordCursor(self.handle.records.borrow().record_count())}}}
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct Event { id:EventId, instructions:Count, watch:WatchPosition, core:Core, pc:Guest, source:SourceKind, code:Words, registers:Registers, frame:Result<Words,String>, state:Vec<Words>, descriptor:Option<Words>, payload:Option<Words> }
+struct Event { id:EventId, instructions:Count, core:Core, pc:Guest, source:SourceKind, code:Words, registers:Registers, frame:Result<Words,String>, state:Vec<Words>, descriptor:Option<Words>, payload:Option<Words> }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all="kebab-case")]
 enum CallKind { Loader, Image5Wait, Image5Entry, Image5Service, Image5Constructor, PlainProducer, PlainService, PlainHook, Deferred, Task }
@@ -98,7 +88,7 @@ struct Class {range:[u64;2],kinds:Vec<Access>}
 #[derive(Deserialize)]
 struct RawWatch {enabled:bool,violation:Option<serde::de::IgnoredAny>,classes:Vec<Class>,records:Vec<Row>}
 #[derive(Deserialize, Serialize)]
-struct Epoch {kind:WatchEpoch,start:Count,end:Count,enabled:bool,refused:bool,teardown_error:Option<String>,classes:Vec<Class>,record_count:usize,file:FileBinding}
+struct Epoch {start:Count,end:Count,enabled:bool,refused:bool,teardown_error:Option<String>,classes:Vec<Class>,record_count:usize,file:FileBinding}
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all="kebab-case")]
 enum Key { Up, Ok, Menu }
@@ -137,8 +127,7 @@ fn sites(calls:&[StaticCall])->BTreeMap<u32,String>{
     points.insert(0x69d2d8,"source-spin-refusal".into());
     points
 }
-fn classes(kind:WatchEpoch)->Vec<WatchRange>{
-    let early=kind==WatchEpoch::Prefix;
+fn classes(early:bool)->Vec<WatchRange>{
     let mut spans=vec![(0x61c000,0x61c220),(0x40000,0x40020),(0xd0000,0xd0020),(0xa00c4,0xa00c8),(0x5927c,0x59280),(0xe923c,0xe9240),(0x4f10c,0x4f118),(0xdf0cc,0xdf0d8),(0x89f794,0x89f798),(0x96bd20,0x96bd28),(0x89f8ac,0x89f8b0),(0x944440,0x944464),(0x914834,0x914838),(0x972e88,0x972e94),(0x14c100c,0x14c1010),(0x14c1018,0x14c101c),(0x14c113c,0x14c1140),(0x9662d4,0x9662d8)];
     spans.extend([(0x89f784,0x89f788),(0x89f78c,0x89f790)]);
     if early{spans.extend([(0x545a4,0x545a8),(0x54760,0x5476c),(0xe4564,0xe4568),(0xe4720,0xe472c),(0x63450,0x63460),(0xf3410,0xf3420),(0x63460,0x63498),(0xf3420,0xf3458),(0xa0800,0xa0838)]);}
@@ -155,7 +144,7 @@ fn persist<T:Serialize>(path:&Path,value:&T)->Result<(),String>{write(path,&serd
 fn binding(output:&Path,name:&str)->Result<FileBinding,String>{Ok(FileBinding {path:PathBuf::from(name),sha256:Digest::of(&read(&output.join(name))?)})}
 
 impl Observation {
-    fn capture(&mut self,machine:&Machine,catalog:&Catalog,maps:&[MemoryMap],core:Core,pc:Guest,watch:WatchPosition)->Result<EventId,String>{
+    fn capture(&mut self,machine:&Machine,catalog:&Catalog,maps:&[MemoryMap],core:Core,pc:Guest)->Result<EventId,String>{
         if machine.session.board.read_register(usize::from(core),Register::Pc)?!=u64::from(pc.0){return Err("event is not at the live stopped PC".into());}
         let reader=continuation_view::Reader::new(&machine.session,maps)?;let registers=registers(machine,core)?;let (source,expected)=catalog.word(pc)?;let code=reader.words(pc,1)?;
         if matches!(pc.0,0x409ac|0xd09ac){self.loader_sp[usize::from(core)]=Some(Guest(registers.sp.0.checked_sub(16).ok_or("startup frame underflow")?));}
@@ -167,7 +156,7 @@ impl Observation {
         if pc.0==0x69d2e0{let descriptor=reader.words(Guest(registers.r[0]),2)?;let header=Guest(descriptor.values[1]);state.push(descriptor);state.push(reader.words(header,4)?);}
         let descriptor=if pc.0==0x725dd8{Some(reader.words(Guest(registers.r[0]),7)?)}else if matches!(pc.0,0x73be5c|0x73be60|0x73be70|0x73be74){Some(reader.words(Guest(registers.r[4]),6)?)}else{None};
         let payload=if pc.0==0x73b9c4{Some(reader.words(Guest(registers.r[2]),1)?)}else{None};
-        self.events.push(Event {id,instructions:Count(machine.instructions()),watch,core,pc,source,code,registers,frame,state,descriptor,payload});Ok(id)
+        self.events.push(Event {id,instructions:Count(machine.instructions()),core,pc,source,code,registers,frame,state,descriptor,payload});Ok(id)
     }
     fn target(&mut self,machine:&mut Machine,catalog:&Catalog,target:Guest)->Result<(),String>{
         if target.0%4!=0{return Err("computed target is outside the admitted A32 entry set".into());}catalog.word(target)?;
@@ -175,11 +164,11 @@ impl Observation {
         if !machine.traces.sites.contains_key(&target.0){machine.traces.add_sites(&machine.session,BTreeMap::from([(target.0,"temporary-boundary".into())]))?;}
         Ok(())
     }
-    fn collect(&mut self,machine:&mut Machine,catalog:&Catalog,maps:&[MemoryMap],output:&Path,permanent:&BTreeMap<u32,String>,static_calls:&[StaticCall],watch:WatchPosition)->Result<(),String>{
+    fn collect(&mut self,machine:&mut Machine,catalog:&Catalog,maps:&[MemoryMap],output:&Path,permanent:&BTreeMap<u32,String>,static_calls:&[StaticCall])->Result<(),String>{
         while self.cursor<machine.traces.hits.len(){
             let hit=&machine.traces.hits[self.cursor];let core=Core::try_from(hit.core)?;let pc=Guest(u32::from_str_radix(hit.address.strip_prefix("0x").ok_or("trace PC prefix absent")?,16).map_err(|error|error.to_string())?);
             if hit.instructions!=machine.instructions(){return Err("stopped trace event is no longer live".into());}
-            let id=self.capture(machine,catalog,maps,core,pc,watch)?;self.cursor+=1;
+            let id=self.capture(machine,catalog,maps,core,pc)?;self.cursor+=1;
             if diagnostics(pc){return Err("natural route reached a diagnostic body before execution".into());}
             if matches!(pc.0,0x40aa8|0xd0aa8|0x69d2d8){return Err("selected route reached an unexpected returned-context or header-lookup spin".into());}
             let event=&self.events[id.0];let regs=event.registers.clone();
@@ -225,32 +214,32 @@ impl Observation {
         Ok(())
     }
 }
-fn advance(machine:&mut Machine,observation:&mut Observation,catalog:&Catalog,maps:&[MemoryMap],output:&Path,permanent:&BTreeMap<u32,String>,calls:&[StaticCall],watch:&ActiveWatch,count:u64)->Result<(),String>{
+fn advance(machine:&mut Machine,observation:&mut Observation,catalog:&Catalog,maps:&[MemoryMap],output:&Path,permanent:&BTreeMap<u32,String>,calls:&[StaticCall],count:u64)->Result<(),String>{
     let end=machine.instructions().checked_add(count).ok_or("instruction endpoint overflow")?;
-    while machine.instructions()<end{let before=machine.instructions();machine.run(end-before);observation.collect(machine,catalog,maps,output,permanent,calls,watch.position())?;machine.require_running()?;if machine.instructions()==before{return Err("observer made no entered-instruction progress".into());}}
+    while machine.instructions()<end{let before=machine.instructions();machine.run(end-before);observation.collect(machine,catalog,maps,output,permanent,calls)?;machine.require_running()?;if machine.instructions()==before{return Err("observer made no entered-instruction progress".into());}}
     Ok(())
 }
-fn pulse(machine:&mut Machine,observation:&mut Observation,catalog:&Catalog,maps:&[MemoryMap],output:&Path,permanent:&BTreeMap<u32,String>,calls:&[StaticCall],watch:&ActiveWatch,key:Key)->Result<(),String>{
+fn pulse(machine:&mut Machine,observation:&mut Observation,catalog:&Catalog,maps:&[MemoryMap],output:&Path,permanent:&BTreeMap<u32,String>,calls:&[StaticCall],key:Key)->Result<(),String>{
     machine.press(key.guest())?;let index=observation.pulses.len();observation.pulses.push(Pulse {key,pressed:Count(machine.instructions()),released:None,finished:None,outcome:None});
-    advance(machine, observation, catalog, maps, output, permanent, calls, watch, 8_000_000)?;machine.release_key(key.guest())?;let start=machine.instructions();observation.pulses[index].released=Some(Count(start));
-    let outcome=loop{if machine.document.firmware.released(&machine.session,key.guest())?{break ReleaseOutcome::Debounced;}let spent=machine.instructions()-start;if spent>=8_000_000{break ReleaseOutcome::Deadline;}advance(machine, observation, catalog, maps, output, permanent, calls, watch, (8_000_000-spent).min(250_000))?;};
+    advance(machine,observation,catalog,maps,output,permanent,calls,8_000_000)?;machine.release_key(key.guest())?;let start=machine.instructions();observation.pulses[index].released=Some(Count(start));
+    let outcome=loop{if machine.document.firmware.released(&machine.session,key.guest())?{break ReleaseOutcome::Debounced;}let spent=machine.instructions()-start;if spent>=8_000_000{break ReleaseOutcome::Deadline;}advance(machine,observation,catalog,maps,output,permanent,calls,(8_000_000-spent).min(250_000))?;};
     observation.pulses[index].finished=Some(Count(machine.instructions()));observation.pulses[index].outcome=Some(outcome);Ok(())
 }
-fn epoch(machine:&mut Machine,observation:&mut Observation,catalog:&Catalog,maps:&[MemoryMap],output:&Path,permanent:&BTreeMap<u32,String>,calls:&[StaticCall],kind:WatchEpoch)->Result<(Epoch,Result<(),String>),String>{
-    let early=kind==WatchEpoch::Prefix;let start=Count(machine.instructions());let mut active=ActiveWatch {epoch:kind,handle:machine.session.board.memory_watch_begin_classified(classes(kind),65536,maps.to_vec(),ViewPolicy::Observe)?};let watch=&active;
+fn epoch(machine:&mut Machine,observation:&mut Observation,catalog:&Catalog,maps:&[MemoryMap],output:&Path,permanent:&BTreeMap<u32,String>,calls:&[StaticCall],early:bool)->Result<(Epoch,Result<(),String>),String>{
+    let start=Count(machine.instructions());let mut watch=machine.session.board.memory_watch_begin_classified(classes(early),65536,maps.to_vec(),ViewPolicy::Observe)?;
     let result=(||->Result<(),String>{
-        if early{return advance(machine, observation, catalog, maps, output, permanent, calls, watch, 8_000_000);}
+        if early{return advance(machine,observation,catalog,maps,output,permanent,calls,8_000_000);}
         let addresses:Vec<_>=machine.traces.sites.keys().copied().filter(|address|(0x409ac..0x40b00).contains(address)||(0xd09ac..0xd0b00).contains(address)).map(Guest).collect();if !addresses.is_empty(){machine.traces.remove_sites(&machine.session,&addresses)?;}
-        advance(machine, observation, catalog, maps, output, permanent, calls, watch, 80_000_000u64.checked_sub(machine.instructions()).ok_or("prefix exceeds initial menu deadline")?)?;
+        advance(machine,observation,catalog,maps,output,permanent,calls,80_000_000u64.checked_sub(machine.instructions()).ok_or("prefix exceeds initial menu deadline")?)?;
         if !machine.menu()?.is_some_and(|menu|(menu.menu_id,menu.setting_id,menu.cursor)==(69,52,12)){return Err("natural initial cursor differs".into());}
-        for key in std::iter::repeat_n(Key::Up,12).chain([Key::Ok,Key::Ok]){pulse(machine, observation, catalog, maps, output, permanent, calls, watch, key)?;}
-        advance(machine, observation, catalog, maps, output, permanent, calls, watch, 40_000_000)?;
-        pulse(machine, observation, catalog, maps, output, permanent, calls, watch, Key::Menu)?;
-        advance(machine, observation, catalog, maps, output, permanent, calls, watch, 90_000_000)
+        for key in std::iter::repeat_n(Key::Up,12).chain([Key::Ok,Key::Ok]){pulse(machine,observation,catalog,maps,output,permanent,calls,key)?;}
+        advance(machine,observation,catalog,maps,output,permanent,calls,40_000_000)?;
+        pulse(machine,observation,catalog,maps,output,permanent,calls,Key::Menu)?;
+        advance(machine,observation,catalog,maps,output,permanent,calls,90_000_000)
     })();
-    let raw=active.handle.records.borrow().state();let name=if early{"watch-prefix.json"}else{"watch-tail.json"};persist(&output.join(name),&raw)?;
-    let teardown_error=machine.session.board.memory_watch_end(&mut active.handle).err();let state:RawWatch=serde_json::from_value(raw).map_err(|error|error.to_string())?;
-    Ok((Epoch {kind,start,end:Count(machine.instructions()),enabled:state.enabled,refused:state.violation.is_some(),teardown_error,classes:state.classes,record_count:state.records.len(),file:binding(output,name)?},result))
+    let raw=watch.records.borrow().state();let name=if early{"watch-prefix.json"}else{"watch-tail.json"};persist(&output.join(name),&raw)?;
+    let teardown_error=machine.session.board.memory_watch_end(&mut watch).err();let state:RawWatch=serde_json::from_value(raw).map_err(|error|error.to_string())?;
+    Ok((Epoch {start,end:Count(machine.instructions()),enabled:state.enabled,refused:state.violation.is_some(),teardown_error,classes:state.classes,record_count:state.records.len(),file:binding(output,name)?},result))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -280,9 +269,9 @@ fn drive()->Result<(),String>{
         if machine.instructions()!=0{return Err("saved reset checkpoint is not preexecution".into());}
         let permanent=sites(&calls);machine.traces.bound_full_registers(NonZeroUsize::new(TRACE_LIMIT).ok_or("zero trace bound")?);machine.traces.stop_labels=permanent.values().cloned().chain(["temporary-boundary".into()]).collect();machine.traces.arm(&machine.session,permanent.clone())?;
         let mut observation=Observation::default();let mut epochs=Vec::new();
-        let outcome=(||->Result<(),String>{let (prefix,result)=epoch(&mut machine,&mut observation,&catalog,&maps,&output,&permanent,&calls,WatchEpoch::Prefix)?;epochs.push(prefix);result?;let (tail,result)=epoch(&mut machine,&mut observation,&catalog,&maps,&output,&permanent,&calls,WatchEpoch::Tail)?;epochs.push(tail);result})();
+        let outcome=(||->Result<(),String>{let (prefix,result)=epoch(&mut machine,&mut observation,&catalog,&maps,&output,&permanent,&calls,true)?;epochs.push(prefix);result?;let (tail,result)=epoch(&mut machine,&mut observation,&catalog,&maps,&output,&permanent,&calls,false)?;epochs.push(tail);result})();
         persist(&output.join("trace.json"),&machine.traces.hits)?;
-        let report=Report {schema:2,identity,checkpoint:Digest::of(&checkpoint),instructions:Count(machine.instructions()),menu:machine.menu().map(|menu|menu.map(|menu|[menu.menu_id,menu.setting_id,menu.cursor])),error:outcome.err(),machine_failure:machine.failure.clone(),events:observation.events,calls:observation.calls,snapshots:observation.snapshots,pulses:observation.pulses,epochs,trace:binding(&output,"trace.json")?,static_calls:calls};
+        let report=Report {schema:1,identity,checkpoint:Digest::of(&checkpoint),instructions:Count(machine.instructions()),menu:machine.menu().map(|menu|menu.map(|menu|[menu.menu_id,menu.setting_id,menu.cursor])),error:outcome.err(),machine_failure:machine.failure.clone(),events:observation.events,calls:observation.calls,snapshots:observation.snapshots,pulses:observation.pulses,epochs,trace:binding(&output,"trace.json")?,static_calls:calls};
         persist(&output.join("continuations.json"),&report)?;
         if report.error.is_some()||report.machine_failure.is_some(){return Err("continuation observation did not complete".into());}
         let verified=loader_continuations_check::check(&output,&catalog)?;persist(&output.join("verification.json"),&verified)
