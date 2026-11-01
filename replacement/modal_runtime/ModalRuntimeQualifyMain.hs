@@ -2,7 +2,7 @@ module Main where
 
 import Data.Word (Word32)
 import Numeric (readHex)
-import Replacement.ModalRuntime.Qualify (Options (..), runQualification)
+import Replacement.ModalRuntime.Qualify (Options (..), parseCaseSelection, runQualification)
 import System.Environment (getArgs)
 import System.Exit (exitFailure, exitSuccess)
 
@@ -16,6 +16,7 @@ main = do
   id5Base <- parseAddress (required arguments "--id5-base")
   textDigest <- required arguments "--kernel-text-sha256"
   symsDigest <- required arguments "--kernel-syms-sha256"
+  selected <- either error pure (parseCaseSelection (values arguments "--case"))
   qualified <-
     runQualification
       Options
@@ -26,6 +27,7 @@ main = do
         , optionId5Base = id5Base
         , optionKernelTextSha256 = textDigest
         , optionKernelSymsSha256 = symsDigest
+        , optionCases = selected
         }
   if qualified then exitSuccess else exitFailure
 
@@ -34,6 +36,15 @@ required arguments name =
   case dropWhile (/= name) arguments of
     (_ : value : _) -> pure value
     _ -> error ("missing " ++ name)
+
+
+values :: [String] -> String -> [String]
+values [] _ = []
+values (name : rest) wanted
+  | name == wanted = case rest of
+      value : remaining -> value : values remaining wanted
+      [] -> error ("missing value for " ++ wanted)
+  | otherwise = values rest wanted
 
 parseAddress :: IO String -> IO Word32
 parseAddress value = do

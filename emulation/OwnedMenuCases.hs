@@ -5,6 +5,7 @@ module Main where
 
 import Control.Monad (forM, unless, when)
 import qualified Data.ByteString as B
+import Data.Bits ((.|.))
 import Data.List (find)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
@@ -15,11 +16,16 @@ import Emulation.NativeObservation
   , Register (..)
   , RegionId (..)
   , RunnerStatus (..)
+  , Write (..)
+  , WriteBytes (..)
   , hexWord32
   , registerLabel
+  , provenanceWrites
   , runnerStatusLabel
   )
 import Emulation.OwnedCase
+import Emulation.Sha256 (sha256, sha256Hex)
+import qualified StockInventory as SI
 import FujiAF.JSON (encodeCanonical)
 import Data.Aeson (object, (.=))
 import System.Environment (getArgs)
@@ -54,8 +60,8 @@ queryFunction = [0xe59fc00c, 0xe58c0000, 0xe59f0008, 0xe5900000, 0xe12fff1e, gue
 stageFunction = [0xe59fc008, 0xe58c0004, 0xe58c1008, 0xe12fff1e, guestWord logRegionBase]
 transitionFunction = [0xe59fc010, 0xe59c200c, 0xe2822001, 0xe58c200c, 0xe59c0010, 0xe12fff1e, guestWord logRegionBase]
 guardFunction = [0xe59fc000, 0xe12fff1c, guestWord stockEntry]
-faultyAbiFunction = [0xe3a04000, 0xe12fff1e]
-faultyStateFunction = [0xe3a0001c, 0xe59fc004, 0xe1cc00b0, 0xe12fff1e, guestWord stateBase + 2]
+faultyAbiFunction = [0xe3a04000]
+faultyStateFunction = [0xe3a0201c, 0xe307c61e, 0xe340c146, 0xe1cc20b0]
 
 requiredSymbols :: [String]
 requiredSymbols =
@@ -122,7 +128,7 @@ semanticProblems queryResult sessionValue transitionResult observation =
 
 compareObservation :: NativeObservation -> NativeObservation -> [String]
 compareObservation oracle candidate =
-  statusMismatch ++ registerMismatches ++ controlMismatches ++ memoryMismatches
+  statusMismatch ++ registerMismatches ++ controlMismatches ++ memoryMismatches ++ effectMismatches
   where
     statusMismatch = ["status is " ++ runnerStatusLabel (nativeStatus candidate) ++ ", not returned" | nativeStatus candidate /= Returned]
     registerMismatches =
@@ -147,6 +153,26 @@ compareObservation oracle candidate =
       | ident <- memoryRegions
       , regionBytesOf oracle ident /= regionBytesOf candidate ident
       ]
+        ++ ["caller-owned stack differs" | callerStack oracle /= callerStack candidate]
+    effectMismatches =
+      [ "ordered non-stack writes differ"
+      | case (nonStackWrites oracle, nonStackWrites candidate) of
+          (Just left, Just right) -> left /= right
+          _ -> True
+      ]
+
+nonStackWrites :: NativeObservation -> Maybe [(GuestAddress, Int)]
+nonStackWrites observation =
+  fmap
+    (map (\write -> (writeAddress write, fromIntegral (writeBytes (writeLength write))))
+      . filter (\write ->
+          let address = guestAddress (writeAddress write)
+              end = address + fromIntegral (writeBytes (writeLength write))
+           in not (guestAddress stackBase <= address && end <= guestAddress stackBase + fromIntegral stackSize - 16)))
+    (provenanceWrites (nativeProvenance observation))
+
+callerStack :: NativeObservation -> B.ByteString
+callerStack observation = B.drop (stackSize - 16) (regionBytesOf observation (RegionId "stack"))
 
 initialRegisters :: Word32 -> [(Register, Word32)]
 initialRegisters stack =
@@ -195,7 +221,7 @@ scenario context identifier queryResult sessionValue transitionResult sessionRea
       , caseFunctions = (stockEntry, fromIntegral stockBytesCount) : serviceFunctions
       , caseInitial = initialRegisters 0x00959ff0
       , caseExpectedStatus = Returned
-      , caseExpectedRegisters = []
+      , caseExpectedRegisters = [(Sp, 0x00959ff0)]
       , caseExpectedMemory = []
       }
     owned = CaseSpec
@@ -211,7 +237,7 @@ scenario context identifier queryResult sessionValue transitionResult sessionRea
       , caseFunctions = ownedFunctions
       , caseInitial = initialRegisters 0x00959ff0
       , caseExpectedStatus = Returned
-      , caseExpectedRegisters = []
+      , caseExpectedRegisters = [(Sp, 0x00959ff0)]
       , caseExpectedMemory = []
       }
     ownedEntry = symbolAddress (contextSymbols context) "rb_ui_editor_cancel"
@@ -239,50 +265,44 @@ data Outcome = Outcome
 runScenario :: Context -> String -> Word32 -> Word32 -> Word32 -> Bool -> IO Outcome
 runScenario context identifier queryResult sessionValue transitionResult sessionReadOnly = do
   let (stockSpec, ownedSpec) = scenario context identifier queryResult sessionValue transitionResult sessionReadOnly
-      probeSpec = stockSpec { caseId = identifier ++ "-probe", caseExpectedRegisters = [(R0, 0)], caseExpectedMemory = [] }
-  probePath <- writeCase (contextOutput context </> caseId probeSpec) probeSpec
-  probe <- loadObserved (contextRunner context) probePath
-  when (nativeStatus probe /= Returned) $
-    error (identifier ++ ": oracle did not return: " ++ runnerStatusLabel (nativeStatus probe))
-  unless (null (semanticProblems queryResult sessionValue transitionResult probe)) $
-    error (identifier ++ ": original fixture semantics: " ++ show (semanticProblems queryResult sessionValue transitionResult probe))
-  let oracleRegisters = [(register, registerValue probe register) | register <- preservedRegisters]
-      oracleMemory = [(ident, regionBytesOf probe ident) | ident <- memoryRegions]
-      stockVerified = withExpected stockSpec oracleRegisters oracleMemory
-      ownedVerified = withExpected ownedSpec oracleRegisters oracleMemory
-  stockPath <- writeCase (contextOutput context </> caseId stockVerified) stockVerified
+  stockPath <- writeCase (contextOutput context </> caseId stockSpec) stockSpec
   stock <- loadObserved (contextRunner context) stockPath
-  unless (null (compareObservation probe stock)) $
-    error (identifier ++ ": oracle is not stable: " ++ show (compareObservation probe stock))
+  when (nativeStatus stock /= Returned) $
+    error (identifier ++ ": oracle did not return: " ++ runnerStatusLabel (nativeStatus stock))
+  unless (null (semanticProblems queryResult sessionValue transitionResult stock)) $
+    error (identifier ++ ": original fixture semantics: " ++ show (semanticProblems queryResult sessionValue transitionResult stock))
+  let oracleRegisters = [(register, registerValue stock register) | register <- preservedRegisters]
+      oracleMemory = [(ident, regionBytesOf stock ident) | ident <- memoryRegions]
+      ownedVerified = withExpected ownedSpec oracleRegisters oracleMemory
   ownedPath <- writeCase (contextOutput context </> caseId ownedVerified) ownedVerified
   owned <- loadObserved (contextRunner context) ownedPath
   pure Outcome
     { outcomeId = identifier
     , outcomeStockStatus = nativeStatus stock
     , outcomeOwnedStatus = nativeStatus owned
-    , outcomeOracle = probe
+    , outcomeOracle = stock
     , outcomeOwned = owned
-    , outcomeMismatches = compareObservation probe owned
+    , outcomeMismatches = compareObservation stock owned
     }
 
-faultyCase :: String -> String -> [Word32] -> NativeObservation -> CaseSpec
-faultyCase identifier provenance words' oracle = CaseSpec
-  { caseId = identifier
-  , caseProvenance = provenance
-  , caseExclusion = exclusion
-  , caseEntry = faultyBase
-  , caseExit = exitAddr
-  , caseRegions =
-      scenarioRegions 0 0 0xffffffff ReadWrite
-        ++ [mkRegion (RegionId "faulty") faultyBase (B.length bytes) ReadExecute bytes]
-  , caseFunctions = [(faultyBase, fromIntegral (B.length bytes))]
-  , caseInitial = initialRegisters 0x00959ff0
-  , caseExpectedStatus = Returned
-  , caseExpectedRegisters = [(register, registerValue oracle register) | register <- preservedRegisters]
-  , caseExpectedMemory = [(ident, regionBytesOf oracle ident) | ident <- memoryRegions]
-  }
+faultyCase :: Context -> String -> String -> [Word32] -> NativeObservation -> CaseSpec
+faultyCase context identifier provenance mutation oracle =
+  owned
+    { caseId = identifier
+    , caseProvenance = provenance
+    , caseEntry = faultyBase
+    , caseRegions = caseRegions owned ++ [mkRegion (RegionId "faulty") faultyBase (B.length bytes) ReadExecute bytes]
+    , caseFunctions = (faultyBase, fromIntegral (B.length bytes)) : caseFunctions owned
+    , caseExpectedRegisters = [(register, registerValue oracle register) | register <- preservedRegisters]
+    , caseExpectedMemory = [(ident, regionBytesOf oracle ident) | ident <- memoryRegions]
+    }
   where
-    bytes = assemble words'
+    (_, owned) = scenario context identifier 0 0 0xffffffff False
+    entry = guestWord (caseEntry owned)
+    bytes =
+      assemble
+        ([0xe92d4008, 0xe59fc000 .|. fromIntegral (4 * (1 + length mutation)), 0xe12fff3c]
+          ++ mutation ++ [0xe8bd8008, entry])
 
 guardCase :: Context -> CaseSpec
 guardCase context = CaseSpec
@@ -317,6 +337,13 @@ main = do
   kernelText <- B.readFile (build </> "kernel-text.bin")
   unless (not (B.null kernelText)) (error "kernel-text.bin is empty")
   id5 <- B.readFile id5Path
+  unless (id5Base == 0x00bf1a00 && B.length id5 == 5185120 && sha256Hex (sha256 id5) == "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a") $
+    error "id5 differs from the pinned X-M1 1.50 image"
+  derived <- either error pure $
+    SI.deriveFunction (SI.GuestAddress id5Base) id5
+      (SI.FunctionWindow (SI.GuestAddress (guestWord stockEntry)) (SI.GuestAddress 0x00c777fc)) []
+  let declaration (address, size) = SI.FunctionDeclaration (SI.GuestAddress address) (SI.FunctionSize size)
+  either error pure (SI.checkDeclarations [declaration (guestWord stockEntry, stockBytesCount)] [declaration derived])
   unless (id5Base <= guestWord stockEntry) (error "--id5-base lies above the stock entry")
   let offset = fromIntegral (guestWord stockEntry - id5Base) :: Int
   unless (offset + stockBytesCount <= B.length id5) (error "stock bytes are truncated")
@@ -341,21 +368,44 @@ main = do
       oracle = outcomeOracle stateOutcome
       faultyAbiPath = output </> "om-faulty-abi"
       faultyStatePath = output </> "om-faulty-state"
-  faultyAbiSpec <- pure (faultyCase "om-faulty-abi" "faulty guest: mov r4,#0 then return" faultyAbiFunction oracle)
+  faultyAbiSpec <- pure (faultyCase context "om-faulty-abi" "negative control: execute owned cancellation, then change r4" faultyAbiFunction oracle)
   faultyAbiCasePath <- writeCase faultyAbiPath faultyAbiSpec
   faultyAbi <- loadObserved runner faultyAbiCasePath
-  let faultyAbiCaught = not (null (compareObservation oracle faultyAbi))
-  faultyStateSpec <- pure (faultyCase "om-faulty-state" "faulty guest: write state 0x1c then return" faultyStateFunction oracle)
+  let faultyAbiCaught =
+        nativeStatus faultyAbi == Returned
+          && registerValue faultyAbi R4 == 0
+          && null (compareObservation oracle faultyAbi {nativeRegisters = M.insert R4 (registerValue oracle R4) (nativeRegisters faultyAbi)})
+  faultyStateSpec <- pure (faultyCase context "om-faulty-state" "negative control: execute owned cancellation, then change state to 0x1c" faultyStateFunction oracle)
   faultyStateCasePath <- writeCase faultyStatePath faultyStateSpec
   faultyState <- loadObserved runner faultyStateCasePath
-  let faultyStateCaught = not (null (compareObservation oracle faultyState))
+  let stateMemory = regionBytesOf oracle (RegionId "state")
+      faultyStateCaught =
+        nativeStatus faultyState == Returned
+          && all (\register -> registerValue faultyState register == registerValue oracle register) preservedRegisters
+          && cpsrControl (registerValue faultyState Cpsr) == cpsrControl (registerValue oracle Cpsr)
+          && regionBytesOf faultyState (RegionId "state") == B.take 2 stateMemory <> B.pack [0x1c, 0] <> B.drop 4 stateMemory
+          && all (\ident -> regionBytesOf faultyState ident == regionBytesOf oracle ident) [RegionId "session", RegionId "log"]
+          && nonStackWrites faultyState == fmap (++ [(GuestAddress (guestAddress stateBase + 2), 2)]) (nonStackWrites oracle)
+          && callerStack faultyState == callerStack oracle
   guardPath <- writeCase (output </> "om-guard-fetch") (guardCase context)
   guard <- loadObserved runner guardPath
-  let guardOk = nativeStatus guard == FetchGuard
+  faultyStackPath <- writeCase (output </> "om-faulty-caller-stack")
+    (faultyCase context "om-faulty-caller-stack" "negative control: execute owned cancellation, then write at incoming SP" [0xe58d0008] oracle)
+  faultyStack <- loadObserved runner faultyStackPath
+  let guardOk = nativeStatus guard == FetchGuard && registerValue guard Pc == guestWord stockEntry
+      faultyStackCaught =
+        nativeStatus faultyStack == Returned
+          && all (\register -> registerValue faultyStack register == registerValue oracle register) preservedRegisters
+          && cpsrControl (registerValue faultyStack Cpsr) == cpsrControl (registerValue oracle Cpsr)
+          && all (\ident -> regionBytesOf faultyStack ident == regionBytesOf oracle ident) memoryRegions
+          && callerStack faultyStack == word32le (registerValue oracle R0) <> B.drop 4 (callerStack oracle)
+          && callerStack faultyStack /= callerStack oracle
+          && nonStackWrites faultyStack == fmap (++ [(GuestAddress (guestAddress stackBase + fromIntegral stackSize - 16), 4)]) (nonStackWrites oracle)
       controls :: [(String, Bool)]
       controls =
         [ ("faulty-abi", faultyAbiCaught)
         , ("faulty-state", faultyStateCaught)
+        , ("faulty-caller-stack", faultyStackCaught)
         , ("forbidden-fetch", guardOk)
         ]
       failed = [outcome | outcome <- outcomes, not (null (outcomeMismatches outcome))]

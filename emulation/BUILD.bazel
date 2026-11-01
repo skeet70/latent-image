@@ -1919,6 +1919,7 @@ haskell_binary(
     main_file = "OwnedMenuCases.hs",
     visibility = ["//visibility:public"],
     deps = [
+        ":case-sha256",
         ":native-observation",
         ":owned-case",
         "//host:aeson",
@@ -1927,6 +1928,7 @@ haskell_binary(
         "//host:containers",
         "//host:filepath",
         "//host:json",
+        "//replacement/media_permit:stock-inventory",
     ],
 )
 

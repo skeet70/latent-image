@@ -35,6 +35,8 @@ data Expect
     -- kind, whose continuation witness has this outcome, and whose witness
     -- reports each site in its role.
     WitnessAt Word32 String String [(Role, Word32)]
+  | CallerAbiAt Word32 String Role Word32
+  | TailCallerAt Word32
 
 data Role = Caller | Overwrite | ReadBeforeWrite | Unresolved | NonCallEntry
 
@@ -458,6 +460,26 @@ fixtures =
       , 0xe12fff1e -- bx lr
       ]
       (ConsumerAt 0x002d0004 "open" (Just "control-use"))
+  , Fixture
+      "a dispatcher caller consumes r3 before replacing it"
+      0x00380000
+      [0xe92d4800, 0xeb21ec07, 0xe1a00003, 0xe8bd8800]
+      (CallerAbiAt 0x00380004 "r3" ReadBeforeWrite 0x00380008)
+  , Fixture
+      "a dispatcher caller replaces r3 before reading it"
+      0x00390000
+      [0xe92d4800, 0xeb21ac07, 0xe3a03000, 0xe1a00003, 0xe8bd8800]
+      (CallerAbiAt 0x00390004 "r3" Overwrite 0x00390008)
+  , Fixture
+      "a dispatcher caller forwards r3 through an immediate return"
+      0x003a0000
+      [0xe92d4800, 0xeb216c07, 0xe8bd8800]
+      (CallerAbiAt 0x003a0004 "r3" Unresolved 0x003a0008)
+  , Fixture
+      "a non-link dispatcher transfer has no local return continuation"
+      0x003b0000
+      [0xe92d4800, 0xea212c07, 0xe1a00003, 0xe8bd8800]
+      (TailCallerAt 0x003b0004)
   ]
 
 -- | Words a fixture relies on that lie outside its own region.
@@ -500,6 +522,21 @@ main = do
                   && all (\(role, at) -> text (hex at) `elem` roleSites role (maybe Null id (field "continuation_witness" c))) roles
             )
             consumers
+        CallerAbiAt site register role at ->
+          any
+            (\entry ->
+              field "site" entry == Just (text (hex site))
+                && field "register" entry == Just (text register)
+                && case role of
+                    ReadBeforeWrite -> text (hex at) `elem` array "read" entry
+                    Overwrite -> text (hex at) `elem` array "overwritten" entry
+                    Unresolved -> any (\stop -> field "at" stop == Just (text (hex at))) (array "unresolved" entry)
+                    _ -> False)
+            (maybe [] (array "continuations") (field "caller_abi" proof))
+        TailCallerAt site ->
+          let abi = maybe Null id (field "caller_abi" proof)
+           in text (hex site) `elem` array "non_link_sites" abi
+                && all (\entry -> field "site" entry /= Just (text (hex site))) (array "continuations" abi)
   results <- forM fixtures $ \f -> do
     let ok = satisfied (fixtureExpect f)
     putStrLn ((if ok then "pass: " else "FAIL: ") ++ fixtureName f)

@@ -1,6 +1,7 @@
 {
   "schema": 1,
   "stock_calls": [
+    {"address":"0x00d0cc68","name":"rb_modal_call_prehook","source":"replacement/modal_runtime/src/dispatch.S; retained dispatcher prehook"},
     {"address":"0x00c72e10","name":"rb_call_set_dispatch","source":"menu/recipe_bank_arm.S; retained pending #133 differential qualification and bank cutover"},
     {"address":"0x00c75ed4","name":"rb_call_editor_confirm","source":"menu/recipe_bank_arm.S; retained pending #133 differential qualification and bank cutover"},
     {"address":"0x00c76650","name":"rb_call_leave_edge","source":"menu/recipe_bank_arm.S; retained pending #133 differential qualification and bank cutover"},

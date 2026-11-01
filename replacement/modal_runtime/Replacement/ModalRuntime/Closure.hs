@@ -1985,6 +1985,25 @@ buildProof inputs =
               [ "sites" .= length callers
               , "controllers" .= [object ["controller" .= controller, "sites" .= sites] | (controller, sites) <- M.toList siteCounts]
               ]
+        , "caller_abi"
+            .= object
+              [ "scope" .= ("direct A32 BL dispatcher callers, each conditional continuation explored on both paths" :: String)
+              , "registers" .= map (regName . Reg) [1, 2, 3, 12, 14]
+              , "continuations"
+                  .= [ continuationValue (continuation analysis site (Reg register))
+                     | (site, Branch _ True _) <- callers
+                     , register <- [1, 2, 3, 12, 14]
+                     ]
+              , "non_link_sites" .= [hex site | (site, Branch _ False _) <- callers]
+              , "residual_premises"
+                  .= ( [ "all non-direct and alias entries"
+                       , "NZCV and carry-dependent operand consumption"
+                       , "saved return slots, frame and asynchronous-writer integrity"
+                       , "code integrity and path-specific dispatcher return residues"
+                       ] :: [String]
+                     )
+              , "discharges_global_obligations" .= False
+              ]
         , "census"
             .= object
               [ "array_materializations" .= length arraySites
