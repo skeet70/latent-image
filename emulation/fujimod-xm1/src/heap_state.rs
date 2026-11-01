@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::{BTreeMap, BTreeSet}, fmt};
 
-const EVENT_LIMIT: usize = 32768;
+const EVENT_LIMIT: usize = 131072;
 const LIVE_LIMIT: usize = 4096;
 const PENDING_LIMIT: usize = 256;
 
@@ -1011,14 +1011,14 @@ mod tests {
     #[test]
     fn event_limit_refuses_without_replacing_old_records() {
         let mut recorder = Recorder::new();
-        for index in 0..16384 {
+        for index in 0..65536 {
             let snapshot = call(&mut recorder, 0x72b164, 1, index * 2 + 1, 0, 0);
             recorder.observe(returned(&snapshot, index * 2 + 2, 0, None)).unwrap();
         }
-        assert_eq!(recorder.observe(sample(0x72b164, 1, 32769)), Err(Failure::EventLimit { limit: 32768 }));
-        assert_eq!(recorder.records().len(), 32768);
+        assert_eq!(recorder.observe(sample(0x72b164, 1, 131073)), Err(Failure::EventLimit { limit: 131072 }));
+        assert_eq!(recorder.records().len(), 131072);
         assert_eq!(recorder.records()[0].sequence, Counter(1));
-        assert_eq!(recorder.records()[32767].sequence, Counter(32768));
+        assert_eq!(recorder.records()[131071].sequence, Counter(131072));
     }
 
     #[test]
